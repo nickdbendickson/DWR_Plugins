@@ -120,27 +120,8 @@ class SetupWizard(QWizard):
         self.addPage(RunPage(self))
 
     def params(self):
-        a = self.answers()
-        out = {
-            "DAM_ID": a.get("dam_id") or "",
-            "DAM_NAME": a.get("dam_name") or "",
-            "DAM_POINT": a.get("point") or "",
-            "DAM_LINES": a.get("lines") or "",
-            "STRUCTURE_ID": a.get("structure_id") or "",
-            "HEIGHT_FT": a.get("height") or 0,
-            "STORAGE_ACFT": a.get("storage") or 0,
-            "DEM": a.get("dem") or "",
-            "DEM_Z": {"feet": 1, "meters": 3, "auto": 0}.get(a.get("dem_z"), 0),
-            "CELL": a.get("cell") or 10,
-            "DURATION_HR": a.get("hours") or 12,
-            "PRODUCTS": bool(a.get("eap")),
-            "DAMS_FOLDER": a.get("dams_folder") or a.get("folder") or "",
-        }
-        if a.get("area"):
-            out["AREA_AC"] = a.get("area")
-        if a.get("top"):
-            out["TOP_FT"] = a.get("top")
-        return out
+        from .runner_params import build_params
+        return build_params(self.answers())
 
     def answers(self):
         return getattr(self, "_answers", {})
