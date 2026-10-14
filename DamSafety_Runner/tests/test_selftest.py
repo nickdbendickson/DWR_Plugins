@@ -361,6 +361,7 @@ def selftest_report_text_and_developer_block():
     assert st.mask_home("/root/a/b", "/root") == "~/a/b" and st.mask_home("/x", "/") == "/x"
     assert st.short_path("/a/b/nd_breach_runner/core/selftest.py") == \
         "nd_breach_runner/core/selftest.py"
+    assert st.short_path("C:\\x\\DamSafety_Runner\\core\\selftest.py") == "DamSafety_Runner/core/selftest.py"
 
 
 @test
@@ -442,7 +443,7 @@ def selftest_checks_fail_with_numbers_when_the_stand_in_misbehaves():
     b = by_name(rep)
     r = b["GDAL: GdalTerrain.read (metres and feet)"]
     assert r.status == st.FAIL and "half-cell shift" in r.detail and "AssertionError" in r.detail
-    assert r.where.startswith("nd_breach_runner/core/selftest.py"), r.where
+    assert r.where.startswith(st.PLUGIN_DIR + "/core/selftest.py"), r.where
     assert b["GDAL: warp, resample, re-project on write"].status == st.FAIL
     assert b["GDAL: VRT mosaic of two tiles"].status == st.FAIL
     with Tmp() as d, no_models(), fake_gdal(fill_bug=True):

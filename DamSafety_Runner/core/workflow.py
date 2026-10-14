@@ -52,7 +52,20 @@ from . import stoprule
 from .grid import Grid
 from .units import FT, MILE, ACFT, CFS
 
-VERSION = "3.10.8"
+def _metadata_version():
+    """The plugin version from metadata.txt (the single source of truth)."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "metadata.txt")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip().lower().startswith("version="):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return "unknown"
+
+
+VERSION = _metadata_version()
 
 TIER_LISFLOOD = "lisflood"
 TIER_BOTH = "lisflood+anuga"

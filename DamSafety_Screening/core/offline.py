@@ -75,7 +75,8 @@ def _query(url, bbox, feedback=None, name=""):
 def _to_gpkg(geojson_path, gpkg, layer_name):
     """GDAL Python, not the ogr2ogr program. QGIS always has the bindings."""
     from osgeo import gdal
-    gdal.UseExceptions()
+    # No process-wide GDAL exception switch (it would change GDAL for QGIS and
+    # every other plugin). Check the result and GDAL's last error here instead.
     exists = os.path.exists(gpkg)
     options = gdal.VectorTranslateOptions(
         format="GPKG",
@@ -83,7 +84,12 @@ def _to_gpkg(geojson_path, gpkg, layer_name):
         dstSRS="EPSG:4326",
         accessMode="append" if exists else "overwrite",
     )
-    gdal.VectorTranslate(gpkg, geojson_path, options=options)
+    gdal.ErrorReset()
+    ds = gdal.VectorTranslate(gpkg, geojson_path, options=options)
+    if ds is None:
+        raise RuntimeError("GDAL could not write {} to {}: {}".format(
+            layer_name, gpkg, gdal.GetLastErrorMsg() or "unknown error"))
+    ds = None                                     # close: flush the GeoPackage
 
 
 def download_county(gpkg, county="Eddy", feedback=None):

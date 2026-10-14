@@ -144,7 +144,7 @@ def _write_flood_polygons(outdir, dam_id, scen, r):
     """Extent, velocity class, and arrival polygons next to the screener rasters."""
     import numpy as np
     from osgeo import gdal, ogr, osr
-    gdal.UseExceptions()
+    # no process-wide GDAL exception switch: the results are checked below instead
     gt = r["gt"]
     depth = np.asarray(r["depth"], float)
     wet = np.isfinite(depth) & (depth >= 0.3048)
@@ -154,6 +154,8 @@ def _write_flood_polygons(outdir, dam_id, scen, r):
             return
         drv = gdal.GetDriverByName("MEM")
         ds = drv.Create("", mask.shape[1], mask.shape[0], 1, gdal.GDT_Byte)
+        if ds is None:
+            raise RuntimeError("GDAL could not make a mask raster: " + (gdal.GetLastErrorMsg() or "unknown error"))
         ds.SetGeoTransform(gt)
         ds.SetProjection("EPSG:5070")
         ds.GetRasterBand(1).WriteArray(mask.astype("uint8"))
@@ -161,11 +163,14 @@ def _write_flood_polygons(outdir, dam_id, scen, r):
         if os.path.exists(path):
             vdrv.DeleteDataSource(path)
         vds = vdrv.CreateDataSource(path)
+        if vds is None:
+            raise RuntimeError("GDAL could not write {}: {}".format(path, gdal.GetLastErrorMsg() or "unknown error"))
         srs = osr.SpatialReference(); srs.ImportFromEPSG(5070)
         lyr = vds.CreateLayer("flood", srs, ogr.wkbPolygon)
         lyr.CreateField(ogr.FieldDefn(field, ogr.OFTString))
         lyr.CreateField(ogr.FieldDefn("dam_id", ogr.OFTString))
-        gdal.Polygonize(ds.GetRasterBand(1), ds.GetRasterBand(1), lyr, 0, [], callback=None)
+        if gdal.Polygonize(ds.GetRasterBand(1), ds.GetRasterBand(1), lyr, 0, [], callback=None) != 0:
+            raise RuntimeError("GDAL could not polygonize {}: {}".format(path, gdal.GetLastErrorMsg() or "unknown error"))
         for feat in lyr:
             feat.SetField(field, value)
             feat.SetField("dam_id", dam_id)
