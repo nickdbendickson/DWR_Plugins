@@ -1,0 +1,55 @@
+# -*- coding: utf-8 -*-
+"""The wizard's answers as parameters of 'ndbreach:rundam'. No Qt here, so it is tested
+without QGIS (tests/test_runner_params.py).
+
+DEM_Z is an enum: an index into the Runner's choices, in the Runner's order
+(DamSafety_Runner/core/gdal_io.Z_CHOICES = auto, feet, us_feet, meters). The index is
+looked up by the unit's id, never typed by hand: a hand-typed index of 2 for 'Metres'
+made the Runner read a metre DEM as US survey feet (release on 2026-10-13)."""
+
+# The Runner's DEM_Z options in order (gdal_io.Z_CHOICES / algorithms.ZUNITS).
+RUNNER_Z_IDS = ("auto", "feet", "us_feet", "meters")
+
+# What the Setup page may hand over, by its item data, and the Runner id it means.
+_Z_ALIASES = {
+    "auto": "auto", "": "auto", None: "auto",
+    "feet": "feet", "ft": "feet", "foot": "feet",
+    "us_feet": "us_feet", "us-ft": "us_feet", "ftus": "us_feet",
+    "meters": "meters", "metres": "meters", "meter": "meters", "metre": "meters", "m": "meters",
+}
+
+
+def runner_z_id(choice):
+    """The Runner's unit id for the Setup page's choice; 'auto' when unknown (the Runner
+    then refuses to run and asks for the unit instead of guessing)."""
+    key = choice.strip().lower() if isinstance(choice, str) else choice
+    return _Z_ALIASES.get(key, "auto")
+
+
+def dem_z_index(choice):
+    """DEM_Z index for the Runner. 'meters' is 3 (Meters), never 2 (US survey feet)."""
+    return RUNNER_Z_IDS.index(runner_z_id(choice))
+
+
+def build_params(a):
+    """ndbreach:rundam parameters from the wizard answers `a`."""
+    out = {
+        "DAM_ID": a.get("dam_id") or "",
+        "DAM_NAME": a.get("dam_name") or "",
+        "DAM_POINT": a.get("point") or "",
+        "DAM_LINES": a.get("lines") or "",
+        "STRUCTURE_ID": a.get("structure_id") or "",
+        "HEIGHT_FT": a.get("height") or 0,
+        "STORAGE_ACFT": a.get("storage") or 0,
+        "DEM": a.get("dem") or "",
+        "DEM_Z": dem_z_index(a.get("dem_z")),
+        "CELL": a.get("cell") or 10,
+        "DURATION_HR": a.get("hours") or 12,
+        "PRODUCTS": bool(a.get("eap")),
+        "DAMS_FOLDER": a.get("dams_folder") or a.get("folder") or "",
+    }
+    if a.get("area"):
+        out["AREA_AC"] = a.get("area")
+    if a.get("top"):
+        out["TOP_FT"] = a.get("top")
+    return out
