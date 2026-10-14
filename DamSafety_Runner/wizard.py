@@ -434,17 +434,11 @@ def _classes():
             a = self.answers()
             fill_layers(self.dem, "raster", False, a.get("dem_id", ""))
             folder = a.get("dams_folder") or self.folder.text().strip()
-            if folder and os.path.isdir(folder):
-                hits = []
-                for root, _dirs, files in os.walk(folder):
-                    for fn in files:
-                        if fn.endswith("10m_5070.tif") or fn.endswith("1m_5070.tif"):
-                            hits.append(os.path.join(root, fn))
-                    if len(hits) >= 12:
-                        break
-                if hits:
-                    self.dem.insertItem(0, os.path.basename(hits[0]) + " (from dam folder)", hits[0])
-                    self.dem.setCurrentIndex(0)
+            # Only this dam's DEMs: never another dam's folder, never a walk from '/'.
+            hits = wl.dam_dem_candidates(folder, (a.get("dam") or {}).get("DAM_ID"))
+            if hits:
+                self.dem.insertItem(0, os.path.basename(hits[0]) + " (from dam folder)", hits[0])
+                self.dem.setCurrentIndex(0)
             fill_layers(self.nlcd, "raster", True, a.get("nlcd_id", ""))
             fill_layers(self.manning, "raster", True, a.get("manning_id", ""))
             self.z.setCurrentIndex(max(self.z.findData(a.get("z_units", "auto")), 0))
