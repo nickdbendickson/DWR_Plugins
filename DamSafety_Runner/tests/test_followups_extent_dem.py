@@ -63,3 +63,17 @@ def test_wizard_picks_up_a_fresh_download_for_the_selected_dam_only():
         assert wl.dam_dem_candidates(d, "DWR-9999") == []
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+@register
+def test_dem_download_buffer_is_half_the_run_tools_max_extent():
+    from nd_breach_runner.damsuite import suite_config as sc
+    from nd_breach_runner.tests import fake_qgis
+    fake_qgis.install()
+    import importlib
+    import nd_breach_runner.algorithms as algs
+    importlib.reload(algs)
+    assert sc.DEFAULT_MAX_EXTENT_MI == algs.DEFAULT_MAX_EXTENT_MI == workflow.RunSettings().max_extent_mi
+    assert sc.dem_buffer_mi(algs.DEFAULT_MAX_EXTENT_MI) == 10.0
+    src = open(os.path.join(PLUGIN, "wizard.py")).read()
+    assert '"BUFFER_MI": dem_buffer_mi(' in src and '"BUFFER_MI": 15.0' not in src

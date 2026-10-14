@@ -349,7 +349,7 @@ class DemPage(QWizardPage):
         county = self.wiz.page(1).county.currentData() or dam.get("county") or ""
         point = (dam.get("point") or "").split("[")[0].strip()
         # Never into the suite data folder (it may be the read-only ND_Dam_Suite_Pack).
-        from .damsuite.suite_config import safe_dams_folder
+        from .damsuite.suite_config import safe_dams_folder, dem_buffer_mi
         out = os.path.join(safe_dams_folder(), "terrain")
         names = list(ND_COUNTIES)
         params = {
@@ -357,7 +357,7 @@ class DemPage(QWizardPage):
             "RES": self.res.currentData(),
             "SCOPE": 0,
             "DAM_POINT": point,
-            "BUFFER_MI": 15.0,
+            "BUFFER_MI": dem_buffer_mi(self.wiz.page(3).max_extent.value()),   # half the max extent
             "COUNTY": names.index(county) if county in names else 0,
             "OUT": out,
             "DAM_ID": str(dam.get("id") or ""),     # names the file <DAM_ID>_10m_5070.tif

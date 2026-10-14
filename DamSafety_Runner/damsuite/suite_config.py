@@ -125,3 +125,19 @@ def safe_dams_folder(candidate=""):
         if folder and not in_suite_pack(folder):
             return folder
     return default_dams_folder()
+
+
+# Largest model domain side (Runner MAX_EXTENT_MI) and the DEM download buffer that covers it.
+DEFAULT_MAX_EXTENT_MI = 20.0
+
+
+def dem_buffer_mi(max_extent_mi=None):
+    """'Download DEM' buffer per side (mi): half the largest domain side, so the DEM is a
+    max_extent x max_extent square around the dam (10 mi at the 20 mi default)."""
+    try:
+        m = float(max_extent_mi)
+    except (TypeError, ValueError):
+        m = DEFAULT_MAX_EXTENT_MI
+    if not m > 0:
+        m = DEFAULT_MAX_EXTENT_MI
+    return m / 2.0

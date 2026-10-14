@@ -64,3 +64,24 @@ def test_both_wizards_pass_the_dam_id_to_the_download():
     assert '"DAM_ID": str((a.get("dam") or {}).get("DAM_ID")' in runner
     shot = open(os.path.join(ROOT, "DamSafety_Screening", "algorithms", "download_dem.py")).read()
     assert '"DAM_ID"' in shot and "dn.dam_scope_stem" in shot
+
+
+# ---- DEM download buffer = half the max extent (one helper in damsuite/suite_config)
+from DamSafety_Setup.damsuite import suite_config as sc  # noqa: E402
+
+
+def test_dem_buffer_is_half_the_max_extent():
+    assert sc.DEFAULT_MAX_EXTENT_MI == rp.DEFAULT_MAX_EXTENT_MI == 20.0
+    assert sc.dem_buffer_mi() == 10.0
+    assert sc.dem_buffer_mi(20.0) == 10.0
+    assert sc.dem_buffer_mi(35) == 17.5
+    for bad in (None, "", "x", 0, -5):
+        assert sc.dem_buffer_mi(bad) == 10.0, bad
+
+
+def test_both_wizards_use_the_shared_buffer_helper():
+    setup = open(os.path.join(ROOT, "DamSafety_Setup", "plugin.py")).read()
+    runner = open(os.path.join(ROOT, "DamSafety_Runner", "wizard.py")).read()
+    assert '"BUFFER_MI": dem_buffer_mi(self.wiz.page(3).max_extent.value())' in setup
+    assert '"BUFFER_MI": dem_buffer_mi(a.get("max_extent_mi"))' in runner
+    assert '"BUFFER_MI": 15.0' not in setup and '"BUFFER_MI": 15.0' not in runner

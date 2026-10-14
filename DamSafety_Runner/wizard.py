@@ -390,7 +390,7 @@ def _classes():
             self.dem_res.addItem("10 m", 0)
             self.dem_res.addItem("1 m", 1)
             self.dem_download = W.QPushButton("Download DEM for this dam")
-            self.dem_download.setToolTip("USGS 3DEP, 15 miles around the dam point, EPSG:5070 metres GeoTIFF.")
+            self.dem_download.setToolTip("USGS 3DEP, half the max extent (10 mi at the 20 mi default) on each side of the dam point, EPSG:5070 metres GeoTIFF.")
             self.dem_download.clicked.connect(self.download_dem)
             form.addRow("Download", self.dem_res)
             form.addRow("", self.dem_download)
@@ -404,6 +404,7 @@ def _classes():
         @_safe(what="the DEM download")
         def download_dem(self, *_):
             import processing
+            from .damsuite.suite_config import dem_buffer_mi
             a = self.answers()
             pt = a.get("point")
             point = "{},{}".format(pt[0], pt[1]) if pt else ""
@@ -418,7 +419,8 @@ def _classes():
                 alg = "nddam:downloaddem"
             processing.execAlgorithmDialog(alg, {
                 "SOURCE": 0, "RES": self.dem_res.currentData(), "SCOPE": 0,
-                "DAM_POINT": point, "BUFFER_MI": 15.0, "OUT": out,
+                "DAM_POINT": point, "OUT": out,
+                "BUFFER_MI": dem_buffer_mi(a.get("max_extent_mi")),     # half the max extent
                 "DAM_ID": str((a.get("dam") or {}).get("DAM_ID") or ""),
             })
             dam = a.get("dam") or {}
