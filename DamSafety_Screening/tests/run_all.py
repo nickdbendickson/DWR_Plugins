@@ -16,7 +16,9 @@ def main():
     names = sorted(n for n in os.listdir(HERE) if n.startswith("test_") and n.endswith(".py"))
     counts = {"ok": 0, "SKIP": 0, "FAIL": 0}
     for name in names:
-        p = subprocess.run([sys.executable, os.path.join(HERE, name)], cwd=HERE,
+        env = dict(os.environ)
+        env.pop("NDSUITE_SETTINGS", None)          # never the engineer's real settings file
+        p = subprocess.run([sys.executable, os.path.join(HERE, name)], cwd=HERE, env=env,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         out = p.stdout or ""
         state = "FAIL" if p.returncode else ("SKIP" if "SKIP:" in out and out.strip().startswith("SKIP:") else "ok")

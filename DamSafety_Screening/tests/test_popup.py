@@ -151,7 +151,9 @@ plug0.initGui()
 algs = {a.name(): a for a in plug0.provider.algs}
 for a in algs.values():
     a.initAlgorithm()
-assert {wf.ALG[k] for k in wf.KEYS} == set(algs)
+# the window's steps are all tools; the two download helpers (DEM, layers) are tools without a step
+assert {wf.ALG[k] for k in wf.KEYS} <= set(algs)
+assert set(algs) - {wf.ALG[k] for k in wf.KEYS} == {"downloaddem", "downloadlayers"}, sorted(set(algs))
 settings_all = {"waterbodies": "a", "structures": "b", "roads": "c", "rail": "d", "lifelines": "e", "streams": "f",
                 "dam_lines": "g", "nlcd": "h", "dwr": "i", "nid": "j", "clip": "k", "workers": 2,
                 "local_dem": "/l", "exe": "/e", "runner_dem": "/r", "chart_file": "/c", "package": PKG}

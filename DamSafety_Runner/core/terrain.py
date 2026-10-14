@@ -79,8 +79,8 @@ def trace_downstream(grid, start_xy, max_length_m):
 
 def find_inflow_point(grid, dam_xy, dam_height_m, top_m, radius_m=None):
     """The breach inflow goes in just downstream of the embankment. Look for
-    the nearest DEM cell that is clearly below the reservoir (at least half
-    the dam height below the top of dam). The first search is the usual radius.
+    the lowest DEM cell within the usual radius that is clearly below the reservoir (at least
+    half the dam height below the top of dam).
     A wide embankment can put the toe outside that ring, so a second search
     goes out to 400 m and takes the nearest qualifying cell, not the lowest
     cell in the circle (a far valley is not the toe).
@@ -109,8 +109,17 @@ def find_inflow_point(grid, dam_xy, dam_height_m, top_m, radius_m=None):
         sel = near & (z <= need)
         if not sel.any():
             continue
-        dd = np.where(sel, d, np.inf)
-        r, c = np.unravel_index(np.argmin(dd), dd.shape)
+        if rad > radius_m + 1.0:
+            # the wider search: the NEAREST low-enough cell (the lowest of a 400 m circle may
+            # be a far valley, not the toe)
+            dd = np.where(sel, d, np.inf)
+            r, c = np.unravel_index(np.argmin(dd), dd.shape)
+        else:
+            # the usual radius: the LOWEST cell, as the note says. The nearest low-enough cell
+            # can be the upstream face of the embankment or the floor of a dry reservoir
+            # (found by the synthetic-valley test: (-25, 5), upstream of the dam at x = 0)
+            zz = np.where(sel, z, np.inf)
+            r, c = np.unravel_index(np.argmin(zz), zz.shape)
         drop = (top_m - z[r, c]) / 0.3048
         if rad > radius_m + 1.0:
             note = ("toe is outside the usual {:.0f} m search; nearest ground {:.0f} m "
