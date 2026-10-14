@@ -42,9 +42,9 @@ def _terrain(resample=None):
 @register
 def dem_resample_precedence_param_over_env_over_default():
     with _Env(None):
-        assert gdal_io.resolve_resample() == ("bilinear", "default")
+        assert gdal_io.resolve_resample() == ("average", "default")
         t = _terrain()
-        assert (t.resample, t.resample_source) == ("bilinear", "default")
+        assert (t.resample, t.resample_source) == ("average", "default")
     with _Env("average"):
         assert gdal_io.resolve_resample() == ("average", "environment")
         assert gdal_io.resolve_resample("") == ("average", "environment")     # blank = not set
@@ -52,8 +52,10 @@ def dem_resample_precedence_param_over_env_over_default():
         assert (t.resample, t.resample_source) == ("average", "environment")
         t = _terrain("near")                                                  # explicit wins
         assert (t.resample, t.resample_source) == ("near", "parameter")
+    with _Env("bilinear"):
+        assert gdal_io.resolve_resample() == ("bilinear", "environment")   # env still overrides
     with _Env("  "):
-        assert gdal_io.resolve_resample() == ("bilinear", "default")
+        assert gdal_io.resolve_resample() == ("average", "default")
     assert gdal_io.resolve_resample(None, {"NDBREACH_DEM_RESAMPLE": "Average"}) == ("average", "environment")
 
 
@@ -114,3 +116,19 @@ def dem_resample_cli_key_is_validated_and_in_the_template():
         assert "average" in str(e)
     else:
         raise AssertionError("bicubic accepted")
+
+
+@register
+def dem_resample_nothing_set_is_average_and_the_manifest_says_default():
+    from nd_breach_runner import algorithms as algs
+    assert gdal_io.DEFAULT_RESAMPLE == "average"
+    with _Env(None):
+        t = _terrain(algs.dem_resample_param(0))           # the tool's "Automatic" choice
+        assert (t.resample, t.resample_source) == ("average", "default")
+        t = _terrain(cli().TEMPLATE["dem"]["resample"])    # the CLI template's null
+        assert (t.resample, t.resample_source) == ("average", "default")
+        rs = workflow._dem_resample_of(t)
+        extra = workflow._manifest_extra({"settings": {}, "dem_resample": rs}, {"final_model": "lisflood"}, [])
+        assert extra["dem_resample"] == {"method": "average", "source": "default"}
+    src = open(cli().__file__, encoding="utf-8").read()
+    assert "else average" in src and "else bilinear" not in src

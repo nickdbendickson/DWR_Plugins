@@ -21,7 +21,7 @@ The configuration is one JSON file (`template` writes all keys). Relative paths 
 relative to the file. Keys that start with an underscore are ignored, null means "not set".
 
   dem        path, z_units (auto|feet|us_feet|meters), crs (ASCII DEMs), work_crs, reader,
-             resample (GDAL name, e.g. average; null = NDBREACH_DEM_RESAMPLE, else bilinear)
+             resample (GDAL name, e.g. average; null = NDBREACH_DEM_RESAMPLE, else average)
   dam        dam_id, name, point [x, y] and inflow_point in the DEM's CRS, and the fields of
              breach.DamData (dam_height_ft, storage_top_acft, top_of_dam_ft, ...); the short
              names id, height_ft, storage_acft, top_ft, area_ac, pmf_ft, bottom_ft also work
@@ -367,8 +367,8 @@ TEMPLATE = {
         "_help": "GeoTIFF/VRT (needs GDAL) or ESRI ASCII .asc. z_units: auto|feet|us_feet|meters "
                  "(set it: auto only trusts what the raster records). crs is for .asc DEMs "
                  "(metric CRS). resample: how GeoTIFF/VRT terrain is resampled onto the model "
-                 "grid (bilinear|average|near|cubic|...); null = the NDBREACH_DEM_RESAMPLE "
-                 "environment variable, else bilinear.",
+                 "grid (average|bilinear|near|cubic|...); null = the NDBREACH_DEM_RESAMPLE "
+                 "environment variable, else average.",
         "path": "dem.tif", "z_units": "meters", "crs": None, "work_crs": None,
         "reader": "auto", "resample": None},
     "dam": {

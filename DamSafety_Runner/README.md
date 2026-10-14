@@ -40,6 +40,20 @@ optional roughness, structure and road layers, and a dam point layer.
 what the flood reaches; *Hand the results to the hazard classification* still calls the ND
 Dam Hazard plugin for you (see below). The official classification is ND DWR's.
 
+## DEM resampling onto the model grid
+
+The DEM is warped onto the model grid with the **DEM resampling** setting: the advanced
+`DEM_RESAMPLE` parameter of the run tools (the Settings grid shows it), or `"resample"` in the
+CLI's `dem` section. The default is **average**: fine terrain such as 5 m LiDAR is
+area-averaged onto a 40 m grid, the way the regression baselines were made. `bilinear` samples
+the terrain instead, and on the baselines it gave flooded areas 3-40% too large.
+
+The order is: the setting you choose, then the `NDBREACH_DEM_RESAMPLE` environment variable
+(for headless runs), then the default (average). Names are GDAL's: average, bilinear, near,
+cubic, cubicspline, lanczos, mode, min, max, med, q1, q3. A name GDAL does not know is an error.
+`run_manifest.json` records the method used and where it came from:
+`extra.dem_resample = {"method": "average", "source": "default"}` (or "parameter" / "environment").
+
 ## What is in it
 
 Algorithms are under *Processing Toolbox > ND Dam Breach Runner* and the *ND Dam Breach
