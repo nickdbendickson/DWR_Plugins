@@ -70,11 +70,12 @@ def utm_epsg(lon, lat):
 
 
 # DEM resampling onto the model grid. Precedence: an explicit value (the DEM_RESAMPLE tool
-# parameter / the CLI "dem_resample" key) > the NDBREACH_DEM_RESAMPLE environment variable >
-# DEFAULT_RESAMPLE. "average" area-averages fine terrain (e.g. 5 m to a 40 m grid);
-# "bilinear" samples it, which can miss channel bottoms and berms at coarse cells.
+# parameter / the CLI dem "resample" key) > the NDBREACH_DEM_RESAMPLE environment variable >
+# DEFAULT_RESAMPLE. "average" area-averages fine terrain (e.g. 5 m to a 40 m grid), which is
+# what the regression baselines use; "bilinear" samples it, which can miss channel bottoms and
+# berms at coarse cells (flooded areas came out 3-40% high on the baselines).
 ENV_RESAMPLE = "NDBREACH_DEM_RESAMPLE"
-DEFAULT_RESAMPLE = "bilinear"
+DEFAULT_RESAMPLE = "average"
 RESAMPLE_METHODS = ("bilinear", "average", "near", "cubic", "cubicspline", "lanczos",
                     "mode", "min", "max", "med", "q1", "q3")
 
