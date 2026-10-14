@@ -295,7 +295,11 @@ def detect_lisflood(check=None, fallback=True):
     `fallback`, when no LISFLOOD-FP is installed, the one bundled with the plugin for this
     platform, then the built-in engine (core/lisflood.py, resolve_exe)."""
     from . import lisflood as lfmod
-    extra = [lfmod.bundled_exe(), lfmod.BUILTIN_EXE] if fallback else []
+    try:
+        bundled = lfmod.bundled_exe() if fallback else None
+    except lfmod.ModelError:           # a bundled binary failing its SHA-256 check is skipped here;
+        bundled = None                 # running it (resolve_exe) reports the error
+    extra = [bundled, lfmod.BUILTIN_EXE] if fallback else []
     for p in lisflood_candidates() + [e for e in extra if e]:
         try:
             if check is None or check(p):

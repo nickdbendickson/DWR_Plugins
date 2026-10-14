@@ -5,6 +5,10 @@ from .core import GitHubRepoSource, HttpFileSource, NsiApiSource, OvertureSource
 MICROSOFT_URL = ("https://minedbuildings.z5.web.core.windows.net/legacy/"
                  "usbuildings-v2/NorthDakota.geojson.zip")
 GEOFABRIK_URL = "https://download.geofabrik.de/north-america/us/north-dakota-latest-free.gpkg.zip"
+# NSI generator pinned to one reviewed commit (main as of 2026-10-14, committed 2026-09-15) and
+# the SHA-256 of GitHub's zip of that commit. To move to a newer commit, review it and update both.
+NSI_GENERATOR_COMMIT = "87f768783302e51852e38bb622ebd35fe17eee59"
+NSI_GENERATOR_ZIP_SHA256 = "26eedf5bad62b0f47438f58ce12e2689fc2070ca29cdea58e9f7a9d32bdd0098"
 # Overture Maps buildings (conflated OSM + Microsoft + others, with height)
 # Downloaded via overturemaps CLI or S3; ND bbox: -104.05,45.94,-96.55,49.00
 OVERTURE_NOTE = "Overture buildings (ND bbox) via overturemaps download --type=building"
@@ -75,7 +79,8 @@ def build_sources(config, merger=None):
     if on("nsi_generator"):
         sources.append(GitHubRepoSource(
             "nsi_generator", SOURCE_INFO["nsi_generator"][0], "USACE-NSI", "nsi-generator",
-            "main", "nsi_generator_code", description=SOURCE_INFO["nsi_generator"][1]))
+            "main", "nsi_generator_code", description=SOURCE_INFO["nsi_generator"][1],
+            commit=NSI_GENERATOR_COMMIT, zip_sha256=NSI_GENERATOR_ZIP_SHA256))
     if on("overture"):
         sources.append(OvertureSource(
             "overture", SOURCE_INFO["overture"][0], "overture_buildings",

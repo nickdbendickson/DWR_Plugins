@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply the ND Dam Breach Runner changes to a LISFLOOD-FP 8.x source tree.
+"""Apply the ND Dam Breach Runner changes to a LISFLOOD-FP 8.x source tree (tested: 8.2, 8.3).
 
     python3 patch_lisflood.py /path/to/LISFLOOD-FP
 
@@ -40,9 +40,11 @@ EDITS = [
      "#if defined(__unix__) && defined(LISFLOOD_HAVE_NUMA)",
      "LISFLOOD_HAVE_NUMA"),
     ("CMakeLists.txt",
-     "if (UNIX)\n\tfind_package(NUMA REQUIRED)\n"
-     "\ttarget_include_directories(lisflood-base INTERFACE ${NUMA_INCLUDE_DIRS})\n"
-     "\ttarget_link_libraries(lisflood-base INTERFACE ${NUMA_LIBRARIES})\nendif()",
+     # 8.2 has "if (UNIX)"; 8.3 already has "if (UNIX AND NOT APPLE)" (NUMA still required)
+     tuple("if ({})\n\tfind_package(NUMA REQUIRED)\n"
+           "\ttarget_include_directories(lisflood-base INTERFACE ${{NUMA_INCLUDE_DIRS}})\n"
+           "\ttarget_link_libraries(lisflood-base INTERFACE ${{NUMA_LIBRARIES}})\nendif()".format(c)
+           for c in ("UNIX", "UNIX AND NOT APPLE")),
      "if (UNIX AND NOT APPLE)\n\tfind_package(NUMA)\n\tif (NUMA_FOUND)\n"
      "\t\ttarget_include_directories(lisflood-base INTERFACE ${NUMA_INCLUDE_DIRS})\n"
      "\t\ttarget_link_libraries(lisflood-base INTERFACE ${NUMA_LIBRARIES})\n"
@@ -66,6 +68,8 @@ def main(src):
         if marker in text:
             print("already  {}".format(rel))
             continue
+        if isinstance(old, tuple):  # alternatives for different 8.x releases
+            old = next((o for o in old if o in text), old[0])
         n = text.count(old)
         if n == 0:
             print("NOT FOUND in {}:\n    {}".format(rel, old.splitlines()[0]))

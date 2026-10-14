@@ -161,11 +161,21 @@ class HttpFileSource(Source):
 
     def remote_version(self, http, feedback):
         if self.version_mode == "md5":
-            text = http.get_bytes(self.url + ".md5").decode("utf-8", "replace").strip()
-            digest = text.split()[0].lower() if text else ""
-            if len(digest) != 32 or any(c not in "0123456789abcdef" for c in digest):
-                raise UpdateError(f"Unexpected checksum file contents from {self.url}.md5")
-            return "md5:" + digest
+            self._md5_missing = False
+            try:
+                text = http.get_bytes(self.url + ".md5").decode("utf-8", "replace").strip()
+            except UpdateError as e:
+                # The publisher's checksum file is not there (HTTP 404, as for Geofabrik's
+                # *-free.gpkg.zip): fall back to the header version; fetch() records and logs
+                # the download's SHA-256 instead.
+                self._md5_missing = True
+                feedback.log(f"{self.name}: no published checksum at {self.url}.md5 ({e}); "
+                             "the SHA-256 of the download will be recorded instead")
+            else:
+                digest = text.split()[0].lower() if text else ""
+                if len(digest) != 32 or any(c not in "0123456789abcdef" for c in digest):
+                    raise UpdateError(f"Unexpected checksum file contents from {self.url}.md5")
+                return "md5:" + digest
         headers = http.head(self.url)
         etag = headers.get("etag")
         if etag:
@@ -182,13 +192,17 @@ class HttpFileSource(Source):
         http.download(self.url, path, feedback)
         feedback.check_cancelled()
         version = remote_version
-        if self.version_mode == "md5":
+        sha256 = file_hash(path, "sha256")
+        feedback.log(f"{self.name}: SHA-256 of the download {sha256}")
+        with open(os.path.join(staging_dir, self.filename + ".sha256"), "w") as f:
+            f.write(f"{sha256}  {self.filename}  {self.url}\n")
+        if self.version_mode == "md5" and not getattr(self, "_md5_missing", False):
             actual = "md5:" + file_hash(path, "md5")
             if remote_version and actual != remote_version:
                 raise UpdateError(f"{self.name}: checksum mismatch after download; not installed")
             version = actual
         elif version is None:
-            version = "sha256:" + file_hash(path, "sha256")
+            version = "sha256:" + sha256
         if self.extract and self.filename.lower().endswith(".zip"):
             extract_zip(path, staging_dir, feedback)
             os.remove(path)
@@ -200,7 +214,12 @@ class GitHubRepoSource(Source):
 
     min_check_interval_hours = 0
 
-    def __init__(self, id, name, owner, repo, branch, folder, description=""):
+    def __init__(self, id, name, owner, repo, branch, folder, description="",
+                 commit=None, zip_sha256=None):
+        # commit: pin to this commit instead of following the branch; zip_sha256: the
+        # expected SHA-256 of GitHub's archive of that commit (refused on mismatch).
+        self.commit = commit
+        self.zip_sha256 = zip_sha256
         self.id = id
         self.name = name
         self.owner = owner
@@ -210,6 +229,8 @@ class GitHubRepoSource(Source):
         self.description = description
 
     def remote_version(self, http, feedback):
+        if self.commit:
+            return "git:" + self.commit          # pinned: the branch is not followed
         url = f"https://api.github.com/repos/{self.owner}/{self.repo}/commits/{self.branch}"
         try:
             data = json.loads(http.get_bytes(url, {"Accept": "application/vnd.github+json"}))
@@ -223,6 +244,11 @@ class GitHubRepoSource(Source):
         url = f"https://codeload.github.com/{self.owner}/{self.repo}/zip/{ref}"
         zip_path = os.path.join(staging_dir, "source.zip")
         http.download(url, zip_path, feedback)
+        sha256 = file_hash(zip_path, "sha256")
+        feedback.log(f"{self.name}: SHA-256 of {url} is {sha256}")
+        if self.zip_sha256 and self.commit and ref == self.commit and sha256 != self.zip_sha256:
+            raise UpdateError(f"{self.name}: SHA-256 mismatch for {self.owner}/{self.repo}@{ref} "
+                              f"(got {sha256}, expected {self.zip_sha256}); not installed")
         unpack = os.path.join(staging_dir, "_unpack")
         extract_zip(zip_path, unpack, feedback)
         os.remove(zip_path)

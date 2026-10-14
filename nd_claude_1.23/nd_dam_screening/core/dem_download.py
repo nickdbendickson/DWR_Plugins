@@ -193,69 +193,133 @@ def parse_dwr_path(text):
 
 def fetch_dwr(package, out_dir, products, feedback=None):
     """Download QL2 ASCII foot grids and/or Imagine DEMs from a staged map-site package."""
-    import ftplib
     import zipfile
     path = parse_dwr_path(package)
     wanted = [p for p in products if p in DWR_PRODUCTS]
     if not wanted:
         raise ValueError("choose ASCII_Grids_ft, DEM_Imagine, or both")
     os.makedirs(out_dir, exist_ok=True)
-    ftp = ftplib.FTP(DWR_HOST, timeout=120)
-    ftp.login(DWR_USER, DWR_PASSWORD)
-    found = []
+    ftp = _ftp()
+    try:
+        found = []
 
-    def walk(folder):
-        lines = []
-        ftp.cwd(folder)
-        ftp.retrlines("LIST", lines.append)
-        for line in lines:
-            name = line.split(None, 8)[-1]
-            if name in (".", ".."):
-                continue
-            full = folder.rstrip("/") + "/" + name
-            if line.startswith("d"):
-                walk(full)
-            elif any("/" + product + "/" in full + "/" or full.endswith("/" + product) for product in wanted):
-                if name.lower().endswith((".zip", ".img", ".asc", ".grd")):
-                    found.append(full)
+        def walk(folder):
+            lines = []
+            ftp.cwd(folder)
+            ftp.retrlines("LIST", lines.append)
+            for line in lines:
+                name = line.split(None, 8)[-1]
+                if name in (".", ".."):
+                    continue
+                full = folder.rstrip("/") + "/" + name
+                if line.startswith("d"):
+                    walk(full)
+                elif any("/" + product + "/" in full + "/" or full.endswith("/" + product) for product in wanted):
+                    if name.lower().endswith((".zip", ".img", ".asc", ".grd")):
+                        found.append(full)
 
-    walk(path)
-    if not found:
-        ftp.quit()
-        raise IOError("no {} files under {}".format(", ".join(wanted), path))
-    if feedback is not None:
-        feedback.pushInfo("{} ND LiDAR files in {}".format(len(found), path))
-    rasters = []
-    for i, remote in enumerate(found):
-        local = os.path.join(out_dir, os.path.basename(remote))
+        walk(path)
+        if not found:
+            ftp.quit()
+            raise IOError("no {} files under {}".format(", ".join(wanted), path))
         if feedback is not None:
-            feedback.pushInfo("getting {} ({}/{})".format(os.path.basename(remote), i + 1, len(found)))
-        with open(local, "wb") as f:
-            ftp.retrbinary("RETR " + remote, f.write)
-        if local.lower().endswith(".zip"):
-            dest = os.path.splitext(local)[0]
-            os.makedirs(dest, exist_ok=True)
-            with zipfile.ZipFile(local) as z:
-                safe_extract(z, dest)
-            rasters += [os.path.join(root, fn) for root, _d, files in os.walk(dest)
-                        for fn in files if fn.lower().endswith((".img", ".asc", ".grd", ".tif"))]
-        else:
-            rasters.append(local)
-    ftp.quit()
-    vrt = build_vrts(rasters, out_dir)
-    if not vrt:
-        raise IOError("no rasters in the ND LiDAR package {}".format(path))
-    return vrt
+            feedback.pushInfo("{} ND LiDAR files in {}".format(len(found), path))
+        rasters = []
+        for i, remote in enumerate(found):
+            local = os.path.join(out_dir, os.path.basename(remote))
+            if feedback is not None:
+                feedback.pushInfo("getting {} ({}/{})".format(os.path.basename(remote), i + 1, len(found)))
+            _ftp_retr(ftp, remote, local)
+            if local.lower().endswith(".zip"):
+                dest = os.path.splitext(local)[0]
+                os.makedirs(dest, exist_ok=True)
+                with zipfile.ZipFile(local) as z:
+                    safe_extract(z, dest)
+                rasters += [os.path.join(root, fn) for root, _d, files in os.walk(dest)
+                            for fn in files if fn.lower().endswith((".img", ".asc", ".grd", ".tif"))]
+            else:
+                rasters.append(local)
+        ftp.quit()
+        vrt = build_vrts(rasters, out_dir)
+        if not vrt:
+            raise IOError("no rasters in the ND LiDAR package {}".format(path))
+        return vrt
+    finally:
+        _ftp_close(ftp)
 
 
 INDEX_DIR = "LiDAR_NorthDakota_QL2"
 INDEX_NAME = "IndexLiDARNorthDakotaQL2"
 
 
+def _ftp_close(ftp):
+    """End an FTP session: QUIT when it is still open, else drop the socket. Never raises."""
+    if ftp is None or getattr(ftp, "sock", None) is None:
+        return
+    try:
+        ftp.quit()
+    except Exception:                                            # noqa - server gone: just close
+        try:
+            ftp.close()
+        except OSError:
+            pass
+
+
+def _ftp_retr(ftp, remote, local):
+    """RETR `remote` into `local`; a partial file is deleted when the transfer fails."""
+    try:
+        with open(local, "wb") as f:
+            ftp.retrbinary("RETR " + remote, f.write)
+    except BaseException:
+        try:
+            os.remove(local)
+        except OSError:
+            pass
+        raise
+
+
+# FTP to the ND LiDAR server is an explicit opt-in, off by default: it sends the (published)
+# guest login and the data in clear text. Tiles and the tile index come over HTTPS; only a staged
+# FTP package path (DWR_PATH), which HTTPS cannot list, needs FTP. Turn it on with the QGIS
+# setting below (Settings > Options > Advanced) or the environment variable ND_LIDAR_ALLOW_FTP=1.
+FTP_SETTING = "nd_dam_screening/allow_ftp_fallback"
+
+
+def ftp_allowed():
+    """True when the FTP opt-in setting (or ND_LIDAR_ALLOW_FTP=1) is on."""
+    v = os.environ.get("ND_LIDAR_ALLOW_FTP", "")
+    if not v:
+        try:
+            from qgis.core import QgsSettings
+            v = QgsSettings().value(FTP_SETTING, False)
+        except Exception:                                        # noqa - no QGIS (tests, CLI)
+            v = ""
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _log_warning(message):
+    try:
+        from qgis.core import QgsMessageLog, Qgis
+        QgsMessageLog.logMessage(str(message), "ND LiDAR", Qgis.Warning)
+    except Exception:                                            # noqa - no QGIS (tests, CLI)
+        import logging
+        logging.getLogger(__name__).warning("%s", message)
+
+
 def _ftp():
     import ftplib
+    if not ftp_allowed():
+        raise IOError("FTP to {} is off (plain-text protocol); ND LiDAR tiles and the tile index "
+                      "come over HTTPS. A staged FTP package path needs FTP: to allow it, set the "
+                      "QGIS setting {} to true (Settings > Options > Advanced) or "
+                      "ND_LIDAR_ALLOW_FTP=1.".format(DWR_HOST, FTP_SETTING))
+    _log_warning("Using plain-text FTP to {} (opt-in setting {} is on)".format(DWR_HOST, FTP_SETTING))
     ftp = ftplib.FTP(DWR_HOST, timeout=120)
-    ftp.login(DWR_USER, DWR_PASSWORD)
+    try:
+        ftp.login(DWR_USER, DWR_PASSWORD)
+    except BaseException:
+        _ftp_close(ftp)
+        raise
     return ftp
 
 
@@ -266,15 +330,17 @@ def ensure_index(cache_dir, feedback=None):
     if os.path.isfile(shp) and os.path.isfile(shp.replace(".shp", ".dbf")):
         return shp
     ftp = _ftp()
-    for ext in (".shp", ".shx", ".dbf", ".prj", ".cpg"):
-        remote = "/{}/{}{}".format(INDEX_DIR, INDEX_NAME, ext)
-        local = os.path.join(cache_dir, INDEX_NAME + ext)
-        if feedback is not None:
-            feedback.pushInfo("index {}".format(ext))
-        with open(local, "wb") as f:
-            ftp.retrbinary("RETR " + remote, f.write)
-    ftp.quit()
-    return shp
+    try:
+        for ext in (".shp", ".shx", ".dbf", ".prj", ".cpg"):
+            remote = "/{}/{}{}".format(INDEX_DIR, INDEX_NAME, ext)
+            local = os.path.join(cache_dir, INDEX_NAME + ext)
+            if feedback is not None:
+                feedback.pushInfo("index {}".format(ext))
+            _ftp_retr(ftp, remote, local)
+        ftp.quit()
+        return shp
+    finally:
+        _ftp_close(ftp)
 
 
 def _box_2266(west, south, east, north):
@@ -440,8 +506,7 @@ def fetch_dwr_area(scope, county, out_dir, products, feedback=None, cache_dir=No
                 rasters += [os.path.join(root, fn) for root, _d, files in os.walk(dest)
                             for fn in files if fn.lower().endswith((".img", ".asc", ".grd", ".tif"))]
     finally:
-        if ftp is not None:
-            ftp.quit()
+        _ftp_close(ftp)
     if failed:
         lst = os.path.join(out_dir, "failed_tiles.txt")
         with open(lst, "w") as f:
