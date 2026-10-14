@@ -191,6 +191,54 @@ def apply_dam_record(a):
 
 
 # ------------------------------------------------------------------------------- the answers
+DEM_SUFFIXES = ("_10m_5070.tif", "_1m_5070.tif")     # what 'Download DEM' writes
+
+
+def bad_dams_folder(folder):
+    """Why `folder` cannot be the Dams folder, or "" when it can. A filesystem root or a
+    path of only slashes ('/', '//', '\\', 'C:\\') is refused: a search there walks every
+    dam's folder (and the whole disk) and picked up another dam's rasters."""
+    text = str(folder or "").strip()
+    if not text:
+        return "Choose the Dams folder: each dam gets a folder named after its ID."
+    bare = text.rstrip("/\\")
+    if not bare or (len(bare) == 2 and bare[1] == ":"):
+        return "The Dams folder '{}' is a drive or filesystem root. Choose a folder for the dams.".format(text)
+    full = os.path.abspath(os.path.expanduser(text))
+    if os.path.dirname(full) == full:
+        return "The Dams folder '{}' is a drive or filesystem root. Choose a folder for the dams.".format(text)
+    return ""
+
+
+def dam_dem_candidates(dams_folder, dam_id, limit=12):
+    """DEMs for this dam only: rasters named *_10m_5070.tif / *_1m_5070.tif in
+    <Dams folder>/<dam folder>/ (any depth), then <Dams folder>/terrain/<dam ID>_*.
+    Another dam's folder is never searched; a bad Dams folder (root, '/') gives none."""
+    if not dam_id or bad_dams_folder(dams_folder):
+        return []
+    base = os.path.abspath(os.path.expanduser(str(dams_folder).strip()))
+    if not os.path.isdir(base):
+        return []
+    hits = []
+    own = os.path.join(base, damjson.folder_name(dam_id))
+    if os.path.isdir(own):
+        for root, dirs, files in os.walk(own):
+            dirs.sort()
+            hits += [os.path.join(root, fn) for fn in sorted(files) if fn.endswith(DEM_SUFFIXES)]
+            if len(hits) >= limit:
+                break
+    shared = os.path.join(base, "terrain")
+    if os.path.isdir(shared):
+        stems = {str(dam_id).replace(" ", "_"), damjson.folder_name(dam_id)}
+        hits += [os.path.join(shared, stem + suf) for stem in sorted(stems) for suf in DEM_SUFFIXES
+                 if os.path.isfile(os.path.join(shared, stem + suf))]
+    out = []
+    for h in hits:
+        if h not in out:
+            out.append(h)
+    return out[:limit]
+
+
 def default_answers(dams_folder=""):
     return {
         "layer_id": "", "feature_id": None, "mapping": {}, "dam": {},
@@ -285,8 +333,8 @@ def validate_page(page, a, exists=os.path.isfile, isdir=os.path.isdir, models=No
         if not a.get("dem_id"):
             errors.append("Choose the DEM (a GeoTIFF or a VRT mosaic loaded in QGIS).")
         folder = str(a.get("dams_folder") or "").strip()
-        if not folder:
-            errors.append("Choose the Dams folder: each dam gets a folder named after its ID.")
+        if bad_dams_folder(folder):
+            errors.append(bad_dams_folder(folder))
         elif os.path.exists(folder) and not isdir(folder):
             errors.append("The Dams folder is a file, not a folder: {}".format(folder))
         elif _in_suite_pack(folder):
