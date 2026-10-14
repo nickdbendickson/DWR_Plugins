@@ -10,6 +10,9 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _optional  # noqa: E402
+_optional.need("scipy", "below-pool volume")
 import storage  # noqa: E402
 
 cell = 5.0

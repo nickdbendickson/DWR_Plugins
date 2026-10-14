@@ -389,6 +389,7 @@ class QgsProcessingAlgorithm:
         self._params = {}
         self.sinks = {}
     def addParameter(self, p): self._params[p.name] = p; return True
+    def parameterDefinition(self, name): return self._params.get(name)     # as QGIS: None if absent
     def addOutput(self, o): return True
     def _v(self, params, k):
         if k not in self._params:

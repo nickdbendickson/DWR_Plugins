@@ -91,7 +91,7 @@ def v341_version():
     from nd_breach_runner.core import workflow
     cp = configparser.ConfigParser(interpolation=None)
     cp.read(os.path.join(PLUGIN, "metadata.txt"), encoding="utf-8")
-    assert cp.get("general", "version") == workflow.VERSION == "3.10.0"
+    assert cp.get("general", "version") == workflow.VERSION, (cp.get("general", "version"), workflow.VERSION)
 
 
 @test

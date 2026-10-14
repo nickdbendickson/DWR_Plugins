@@ -161,10 +161,25 @@ t = hz.limit_text(gaps)
 assert len(t) <= hz.FIELD_MAX and t.endswith("more)") and t.startswith("road 0:")
 print("OK (roads, railroads, lifelines, downstream dams, data gaps)")
 
+
+def _undigitized_chart_copy():
+    """The shipped chart file is digitized since REG_05.2026; the 'not digitized' path is
+    tested with a copy whose status says so."""
+    import json as _j, tempfile as _t
+    src = os.path.join(os.path.dirname(HERE), "core", "acer_tm11_charts.json")
+    d = _j.load(open(src, encoding="utf-8"))
+    d["status"] = "not digitized"
+    fd, p = _t.mkstemp(suffix="_acer_tm11_charts.json")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        _j.dump(d, fh)
+    return p
+
+
 # ---- 6. charts not digitized: nd_hazard's wording, the conservative method, not the 1D rule
+assert hz.load_ready_charts().ready                 # the shipped file is digitized and checked
 try:
-    hz.load_ready_charts()
-    raise SystemExit("the shipped chart file must not be 'digitized' yet")
+    hz.load_ready_charts(_undigitized_chart_copy())
+    raise SystemExit("a not-digitized chart file was accepted")
 except nh.ChartsNotDigitized as e:
     msg = str(e)
 assert hz.METHOD_LABELS[nh.LETHALITY_ALL_WET] in msg and "not digitized" in msg
@@ -265,9 +280,9 @@ n_err = len(fb.errors)
 rows, _ = tool8(SIM=SIM, CRIT=1)
 assert rows["DWR-1"]["hz_class"] == "High" and rows["DWR-1"]["hz_chart"] == "not used"
 assert any("only for a 1D model" in e for e in fb.errors[n_err:]) and "1D rule on a 2D result" in rows["DWR-1"]["hz_notes"]
-# the default (charts) with the shipped, not digitized file -> clear error, conservative method named
+# the default (charts) with a not-digitized file -> clear error, conservative method named
 try:
-    tool8()
+    tool8(CHART_FILE=_undigitized_chart_copy())
     raise SystemExit("tool 8 ran the chart method without digitized charts")
 except QgsProcessingException as e:
     assert hz.METHOD_LABELS[nh.LETHALITY_ALL_WET] in str(e) and hz.METHOD_LABELS[nh.LETHALITY_1D] not in str(e)

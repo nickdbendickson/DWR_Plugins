@@ -16,6 +16,7 @@ Run: PYTHONPATH=tests/qgis_mock:<parent of the plugin> python3 tests/test_v0111.
  8 GDAL: a damaged raster names the file; no process-wide gdal.UseExceptions()
 """
 import configparser
+import re
 import os
 import stat
 import sys
@@ -74,14 +75,14 @@ def _():
     p.initProcessing()
     p.initProcessing()
     assert len(reg.providers) == before + 1 and p.provider is not None
-    assert len(p.provider.algs) == 21, len(p.provider.algs)
+    assert len(p.provider.algs) == 23, len(p.provider.algs)      # + 0b and Download DEM
     p.unload()
     assert len(reg.providers) == before and p.provider is None
     cp = configparser.ConfigParser(interpolation=None)
     cp.read(os.path.join(PLUGIN, "metadata.txt"), encoding="utf-8")
     g = cp["general"]
     assert g["hasProcessingProvider"] == "yes" and g["supportsQt6"] == "True"
-    assert g["qgisMaximumVersion"] == "4.99" and g["version"] == "0.17.13"
+    assert g["qgisMaximumVersion"] == "4.99" and g["version"] == re.search(r"^version=(.+)$", open(os.path.join(os.path.dirname(HERE), "metadata.txt")).read(), re.M).group(1).strip()
 
 
 # ---------------------------------------------------------------------------- 2

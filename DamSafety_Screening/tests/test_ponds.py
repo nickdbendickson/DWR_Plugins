@@ -9,6 +9,10 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _optional  # noqa: E402
+_optional.need("scipy", "reservoir fill / storage")
+
 from core import ponds as pd  # noqa: E402
 from core import storage as st  # noqa: E402
 

@@ -277,10 +277,24 @@ except QgsProcessingException as e:
 res, _ = run7b(DAMS=ctx.add(plain), WHICH=ho.SELECT_ALL)
 assert res["DWR-1"]["rn_status"] == "done" and res["DWR-1"]["scr_class"] is None and res["DWR-1"]["rn_agree"] == "n/a"
 
-# charts method with the shipped (not digitized) chart file -> stops before any run
+
+def _undigitized_chart_copy():
+    """The shipped chart file is digitized since REG_05.2026; the 'not digitized' path is
+    tested with a copy whose status says so."""
+    import json as _j, tempfile as _t
+    src = os.path.join(os.path.dirname(HERE), "core", "acer_tm11_charts.json")
+    d = _j.load(open(src, encoding="utf-8"))
+    d["status"] = "not digitized"
+    fd, p = _t.mkstemp(suffix="_acer_tm11_charts.json")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        _j.dump(d, fh)
+    return p
+
+
+# charts method with a not-digitized chart file -> stops before any run
 del processing.CALLS[:]
 try:
-    run7b(LETHALITY=0)
+    run7b(LETHALITY=0, CHART_FILE=_undigitized_chart_copy())
     raise SystemExit("7b ran the chart method without digitized charts")
 except QgsProcessingException as e:
     assert nh.LETHALITY_LABELS[nh.LETHALITY_ALL_WET] in str(e) and nh.LETHALITY_LABELS[nh.LETHALITY_1D] not in str(e)

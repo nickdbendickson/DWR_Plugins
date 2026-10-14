@@ -21,6 +21,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 from qgis.core import (FakeSource, QgsGeometry, QgsPointXY, QgsProcessingContext,  # noqa: E402
                        QgsProcessingFeedback, make_layer)
 from osgeo import gdal, osr  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _optional  # noqa: E402
+_optional.need("scipy", "reservoir fill / storage")
+
 from nd_dam_screening.algorithms import find_ponds as fp  # noqa: E402
 from nd_dam_screening.algorithms.find_ponds import FindPonds  # noqa: E402
 from nd_dam_screening.algorithms.breach_hydrograph import BreachHydrograph  # noqa: E402

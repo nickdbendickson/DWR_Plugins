@@ -26,6 +26,8 @@ def test_charts(tol=0.01):
                        charts={"house": house.validate(), "mobile": mobile.validate()},
                        path="(test)", sha256="0" * 64)
 
+test_charts.__test__ = False     # a fixture factory used by the registry tests, not a pytest test
+
 
 @test
 def nd_hazard_zones_on_a_test_chart():
