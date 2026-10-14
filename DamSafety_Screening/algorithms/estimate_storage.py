@@ -138,6 +138,10 @@ class EstimateStorage(QgsProcessingAlgorithm):
             out = QgsFeature(fields); out.setGeometry(f.geometry())
             vals = list(f.attributes()) + [None] * len(NEW_FIELDS)
             res, note = None, ""
+            # reset per dam: the dry-dam fallback must not see the previous dam's raster, and the
+            # frame-dict lookups it used kept the frame (the output sink too) referenced on
+            # Python 3.12, so 3_dams_storage.gpkg was left without its layer
+            arr = row = col = None
             try:
                 dem_path = os.path.join(demdir, f"dam_{dam_id}.tif")
                 if not os.path.exists(dem_path):
@@ -185,8 +189,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 # Dry dam: no pool polygon. Use inventory max storage and height.
                 alt = None
                 if "no waterbody" in note:
-                    alt = self._inventory_curve(f, names, locals().get("arr"), locals().get("row"),
-                                                locals().get("col"), params, context,
+                    alt = self._inventory_curve(f, names, arr, row, col, params, context,
                                                 "no waterbody polygon")
                 if alt is not None:
                     res, note = alt, alt.notes[0]
