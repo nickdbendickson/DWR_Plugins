@@ -419,15 +419,15 @@ def _classes():
             processing.execAlgorithmDialog(alg, {
                 "SOURCE": 0, "RES": self.dem_res.currentData(), "SCOPE": 0,
                 "DAM_POINT": point, "BUFFER_MI": 15.0, "OUT": out,
+                "DAM_ID": str((a.get("dam") or {}).get("DAM_ID") or ""),
             })
             dam = a.get("dam") or {}
-            stem = str(dam.get("DAM_ID") or "dam").replace(" ", "_")
-            for name in (stem + "_10m_5070.tif", stem + "_1m_5070.tif"):
-                path = os.path.join(out, name)
-                if os.path.isfile(path):
-                    self.dem.addItem(os.path.basename(path), path)
-                    self.dem.setCurrentIndex(self.dem.count() - 1)
-                    break
+            # This dam's download only: <DAM_ID>_*m_5070.tif (or dam_<x>_<y>_* of its point)
+            hits = wl.dam_dem_candidates(folder, dam.get("DAM_ID"),
+                                         point_stem=wl.point_dem_stem(pt))
+            if hits:
+                self.dem.addItem(os.path.basename(hits[0]), hits[0])
+                self.dem.setCurrentIndex(self.dem.count() - 1)
 
         @_safe(what="the terrain page")
         def initializePage(self):

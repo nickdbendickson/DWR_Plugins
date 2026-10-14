@@ -360,18 +360,17 @@ class DemPage(QWizardPage):
             "BUFFER_MI": 15.0,
             "COUNTY": names.index(county) if county in names else 0,
             "OUT": out,
+            "DAM_ID": str(dam.get("id") or ""),     # names the file <DAM_ID>_10m_5070.tif
         }
         alg = "nddam:downloaddem"
         if QgsApplication.processingRegistry().algorithmById(alg) is None:
             alg = "ndbreach:downloaddem"
         self.note.setText("Opening {} for {}.".format(alg, dam.get("name") or county or "this dam"))
         processing.execAlgorithmDialog(alg, params)
-        stem = (dam.get("id") or county or "dam").replace(" ", "_")
-        for name in (stem + "_10m_5070.tif", stem + "_1m_5070.tif"):
-            path = os.path.join(out, name)
-            if os.path.isfile(path):
-                self.dem.setText(path)
-                break
+        from .runner_params import downloaded_dem
+        path = downloaded_dem(out, dam.get("id"), point)
+        if path:
+            self.dem.setText(path)
 
     def validatePage(self):
         return bool(self.dem.text().strip())
@@ -421,9 +420,9 @@ class RunPage(QWizardPage):
     def initializePage(self):
         dam = self.wiz.page(1).combo.currentData() or {}
         self.summary.setText(
-            "{}\nBuilt-in engine, 100 m, no EAP report, unless Advanced is opened.\n"
+            "{}\nBuilt-in engine, {:g} m grid, no EAP report, unless Advanced is opened.\n"
             "The runner dialog opens next and these values can still be changed.".format(
-                dam.get("name") or "No dam"))
+                dam.get("name") or "No dam", self.cell.value()))
 
     def validatePage(self):
         dam = self.wiz.page(1).combo.currentData() or {}

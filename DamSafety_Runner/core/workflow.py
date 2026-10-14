@@ -92,7 +92,7 @@ class RunSettings:
         self.initial_length_mi = 5.0
         self.half_width_mi = 1.0
         self.expand_step_mi = 3.0
-        self.max_extent_mi = 60.0
+        self.max_extent_mi = 20.0      # = algorithms.DEFAULT_MAX_EXTENT_MI (was 60 before 2026-10)
         self.max_iterations = 6
         self.sim_time_hr = None          # None = automatic
         self.sim_max_hr = None           # None = the built-in cap; a number is the longest clock

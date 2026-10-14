@@ -13,6 +13,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterEnum,
 
 from ..compat import NUM_DOUBLE
 from ..core import dem_download as dd
+from ..core import dem_names as dn
 
 
 class DownloadDem(QgsProcessingAlgorithm):
@@ -57,6 +58,8 @@ class DownloadDem(QgsProcessingAlgorithm):
             "SCOPE", "Area", ["Dam", "County", "State"], defaultValue=0))
         self.addParameter(QgsProcessingParameterString(
             "DAM_POINT", "Dam point, longitude,latitude", optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            "DAM_ID", "Dam ID (names the file <DAM_ID>_10m_5070.tif)", optional=True))
         self.addParameter(QgsProcessingParameterNumber(
             "BUFFER_MI", "Buffer around the dam (miles)", NUM_DOUBLE, 15.0, minValue=1.0))
         self.addParameter(QgsProcessingParameterEnum(
@@ -127,8 +130,10 @@ class DownloadDem(QgsProcessingAlgorithm):
 
     def _stem(self, parameters, context, scope):
         if scope == 0:
-            raw = (self.parameterAsString(parameters, "DAM_POINT", context) or "").strip()
-            return "dam" if not raw else "dam_{}_{}".format(*[p.strip() for p in raw.split(",")[:2]])
+            # <DAM_ID>_<cell>m_5070.tif when the dam ID is given: the wizards pick it up.
+            dam_id = self.parameterAsString(parameters, "DAM_ID", context) \
+                if "DAM_ID" in parameters else ""
+            return dn.dam_scope_stem(dam_id, self.parameterAsString(parameters, "DAM_POINT", context))
         if scope == 1:
             return self._county(parameters, context).replace(" ", "_")
         return "north_dakota"

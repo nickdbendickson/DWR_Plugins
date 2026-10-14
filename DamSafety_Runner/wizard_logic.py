@@ -210,7 +210,20 @@ def bad_dams_folder(folder):
     return ""
 
 
-def dam_dem_candidates(dams_folder, dam_id, limit=12):
+def dem_stem(dam_id):
+    """The file stem 'Download DEM' writes for a dam (Screening core/dem_names.dem_stem)."""
+    import re
+    return re.sub(r"[^\w\-]+", "_", str(dam_id or "").strip()).strip("_")
+
+
+def point_dem_stem(point):
+    """The stem of an older download named by the point: dam_<lon>_<lat>."""
+    if not point or len(point) < 2:
+        return ""
+    return "dam_{}_{}".format(point[0], point[1])
+
+
+def dam_dem_candidates(dams_folder, dam_id, limit=12, point_stem=""):
     """DEMs for this dam only: rasters named *_10m_5070.tif / *_1m_5070.tif in
     <Dams folder>/<dam folder>/ (any depth), then <Dams folder>/terrain/<dam ID>_*.
     Another dam's folder is never searched; a bad Dams folder (root, '/') gives none."""
@@ -229,7 +242,10 @@ def dam_dem_candidates(dams_folder, dam_id, limit=12):
                 break
     shared = os.path.join(base, "terrain")
     if os.path.isdir(shared):
-        stems = {str(dam_id).replace(" ", "_"), damjson.folder_name(dam_id)}
+        stems = {str(dam_id).replace(" ", "_"), damjson.folder_name(dam_id), dem_stem(dam_id)}
+        if point_stem:                  # a download named by this dam's own point
+            stems.add(point_stem)
+        stems.discard("")
         hits += [os.path.join(shared, stem + suf) for stem in sorted(stems) for suf in DEM_SUFFIXES
                  if os.path.isfile(os.path.join(shared, stem + suf))]
     out = []
