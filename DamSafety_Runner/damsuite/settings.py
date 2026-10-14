@@ -324,15 +324,18 @@ class Settings(object):
                       and (plugin is None or i[0] == plugin))
 
     # -- table
-    def rows(self, catalog=None, plugin=None):
+    def rows(self, catalog=None, plugin=None, only_set=False):
         """The Settings sheet: every catalog entry (its stored value, empty = default) and every
-        stored value the catalog does not know, as lists in COLUMNS order."""
+        stored value the catalog does not know, as lists in COLUMNS order. `only_set`: catalog
+        entries without a stored value are left out."""
         out = [list(COLUMNS)]
         seen = set()
         for s in sorted(catalog or [], key=lambda s: (s.plugin, s.group, s.tool, s.order)):
             if plugin and s.plugin != plugin:
                 continue
             v = self.values.get(s.id)
+            if only_set and (v is None or v == ""):
+                continue
             out.append([s.plugin, s.tool, s.key, s.label, s.unit, display_value(v, s),
                         display_value(s.default, s), "YES" if s.your else "", (s.help or "").strip()])
             seen.add(s.id)
@@ -384,10 +387,11 @@ class Settings(object):
                             merged[k] = self.values[k]
                         else:
                             merged.pop(k, None)
+                # only the engineer's own changes are a reason to write: a plugin version that is
+                # not yet in the About sheet rides along with the next real save, it does not
+                # rewrite the file on its own (opening a window must leave the file as it is)
                 meta_same = ((name is None or name == disk.meta.get("name"))
-                             and (note is None or note == disk.meta.get("note"))
-                             and (not versions or dict(disk.meta.get("versions") or {}, **versions)
-                                  == (disk.meta.get("versions") or {})))
+                             and (note is None or note == disk.meta.get("note")))
                 if merged == disk.values and meta_same:
                     self.values, self._base, self.path = merged, dict(merged), path
                     for k in ("name", "note", "created", "versions"):
@@ -407,7 +411,10 @@ class Settings(object):
             if versions:
                 self.meta["versions"] = dict(versions)
             self.meta["created"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            rows = self.rows(catalog)
+            # a file that exists keeps holding only stored values (each with its label from the
+            # catalog): merging into it never adds a row per default. A new file or an explicit
+            # replace is the full template, every parameter listed.
+            rows = self.rows(catalog, only_set=existing and not replace)
             ext = os.path.splitext(path)[1].lower()
             folder = os.path.dirname(os.path.abspath(path))
             tmp = os.path.join(folder, ".{}.{}.tmp{}".format(os.path.basename(path), os.getpid(), ext))

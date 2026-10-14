@@ -11,7 +11,7 @@ import tempfile
 from nd_breach_runner.damsuite import settings as DS
 from nd_breach_runner.tests.registry import test as register  # "test" would be collected by pytest
 
-PLUGIN = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PLUGIN = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 REPO = os.path.dirname(PLUGIN)
 
 
@@ -170,5 +170,44 @@ def settings_two_plugins_saving_at_once_lose_nothing():
                 assert v.get((key, "tool", "K{}".format(i))) == float(i), (key, i)
         assert v[("ndbreach", "rundam", "CELL")] == 40.0
         assert not os.path.exists(p + ".lock")
+    finally:
+        shutil.rmtree(d)
+
+
+def _catalog(n=100):
+    return [DS.Setting("ndscreen", "t%d" % (i % 9), "K%d" % i, "Param %d" % i, "number", float(i))
+            for i in range(n)]
+
+
+def _data_rows(p):
+    import csv
+    with open(p, newline="", encoding="utf-8") as fh:
+        return [r for r in csv.reader(fh) if r and r[0] not in ("about", DS.COLUMNS[0])]
+
+
+@register
+def settings_first_load_with_a_catalog_and_versions_writes_nothing():
+    """Opening a window (catalog of ~100 parameters, the plugin's version not yet in About)
+    used to rewrite a 3-value file as one row per parameter."""
+    d = _tmp()
+    try:
+        p = _file(d, {("ndbreach", "rundam", "CELL"): 40.0, ("ndscreen", "t1", "K1"): 5.0,
+                      ("ndhazard", "pop", "X"): "a"})
+        before, mtime = open(p, "rb").read(), os.path.getmtime(p)
+        s = DS.Settings.load(p)
+        s.save(p, catalog=_catalog(), versions={"ndscreen": "9.9.9"})
+        assert open(p, "rb").read() == before and os.path.getmtime(p) == mtime
+        assert not os.path.exists(p + ".bak")
+        # a real change writes that change only: no row per default parameter
+        s.set("ndscreen", "t2", "K2", 7.0)
+        s.save(p, catalog=_catalog(), versions={"ndscreen": "9.9.9"})
+        rows = _data_rows(p)
+        assert len(rows) == 4, rows
+        lbl = {(r[0], r[1], r[2]): r[3] for r in rows}
+        assert lbl[("ndscreen", "t2", "K2")] == "Param 2"           # labelled from the catalog
+        # a new file (or an explicit replace) is still the full template
+        q = os.path.join(d, "new.csv")
+        DS.Settings({}).save(q, catalog=_catalog())
+        assert len(_data_rows(q)) == 100
     finally:
         shutil.rmtree(d)
