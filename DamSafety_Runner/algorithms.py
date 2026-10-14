@@ -108,14 +108,9 @@ def _safe_name(s):
     return s or "dam"
 
 
-def _point_along_nearest(lines, xy, frac):
-    """The point `frac` (0-1) of the way along the line nearest `xy`."""
-    best, bd = None, None
-    for ln in lines:
-        p = np.asarray(ln, float)
-        d = np.min(np.hypot(p[:, 0] - xy[0], p[:, 1] - xy[1]))
-        if bd is None or d < bd:
-            best, bd = p, d
+def _point_along_line(line, frac):
+    """The point `frac` (0-1) of the way along `line`."""
+    best = np.asarray(line, float)
     seg = np.hypot(*np.diff(best, axis=0).T)
     total = float(seg.sum())
     if total <= 0:
@@ -126,6 +121,30 @@ def _point_along_nearest(lines, xy, frac):
     t = (target - cum[i]) / seg[i] if seg[i] > 0 else 0.0
     q = best[i] + t * (best[i + 1] - best[i])
     return (float(q[0]), float(q[1]))
+
+
+def _point_along_nearest(lines, xy, frac):
+    """The point `frac` (0-1) of the way along the line nearest `xy`."""
+    best, bd = None, None
+    for ln in lines:
+        p = np.asarray(ln, float)
+        d = np.min(np.hypot(p[:, 0] - xy[0], p[:, 1] - xy[1]))
+        if bd is None or d < bd:
+            best, bd = ln, d
+    return _point_along_line(best, frac)
+
+
+def _crest_line_near(lines, xy, max_m=500.0):
+    """Crest line whose midpoint is nearest `xy` within `max_m` m (else None); midpoint like `_crest_from_dam_line`."""
+    best, bd = None, None
+    for ln in lines:
+        mx, my = _point_along_line(ln, 0.5)
+        d = ((mx - xy[0]) ** 2 + (my - xy[1]) ** 2) ** 0.5
+        if bd is None or d < bd:
+            best, bd = ln, d
+    if best is None or bd > max_m:
+        return None
+    return best
 
 
 def _floats(text, default=()):
@@ -417,7 +436,7 @@ class _Base(QgsProcessingAlgorithm):
         self._layer("CREST_LINE", "Dam crest (line): with a position the breach starts there "
                     "instead of at the dam point", SOURCE_LINE, advanced=True)
         self._num("BREACH_POSITION", "Breach position along the crest line (0 = first vertex, "
-                  "1 = last)", 0.5, minimum=0.0, maximum=1.0, advanced=True)
+                  "1 = last)", optional=True, minimum=0.0, maximum=1.0, advanced=True)
         self._layer("REFINE_LINES", "ANUGA: lines the mesh follows (levees, road embankments, "
                     "channel banks)", SOURCE_LINE, advanced=True)
         self._layer("GAUGE_POINTS", "Discharge gauges: hydrograph past these points "
@@ -963,12 +982,15 @@ class _Base(QgsProcessingAlgorithm):
         if src is not None and parameters.get("BREACH_POSITION") not in (None, ""):
             a, b = tf(src)
             lines = [x[0] for x in qio.lines(src, a, b, center_xy, radius)]
-            if lines:
-                st.breach_xy = _point_along_nearest(lines, center_xy,
-                                                    self.parameterAsDouble(
-                                                        parameters, "BREACH_POSITION", context))
-                notes.append("Breach starts at {:.0f}% along the crest line".format(
-                    100 * self.parameterAsDouble(parameters, "BREACH_POSITION", context)))
+            frac = self.parameterAsDouble(parameters, "BREACH_POSITION", context)
+            crest = _crest_line_near(lines, center_xy)
+            if crest is not None:
+                st.breach_xy = _point_along_line(crest, frac)
+                notes.append("Breach starts at {:.0f}% along the crest line".format(100 * frac))
+            elif lines:
+                notes.append(
+                    "Nearest crest line is more than 500 m from the dam; "
+                    "breach position along the crest was not used.")
         src = self.parameterAsSource(parameters, "REFINE_LINES", context)
         st.refine_lines = []
         if src is not None:
