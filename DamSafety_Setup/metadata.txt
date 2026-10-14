@@ -1,0 +1,9 @@
+[general]
+name=DamSafety Setup
+qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
+supportsQt6=True
+description=Four-page setup for the DamSafety plugins: suite folder, dam, crest and inflow, then the breach run.
+about=Fills empty slots from the suite data folder and opens DamSafety Runner with the answers. Advanced settings stay editable.
+version=1.0.6
+author=N.D. Bendickson

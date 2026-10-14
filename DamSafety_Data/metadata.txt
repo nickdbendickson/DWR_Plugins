@@ -1,0 +1,26 @@
+[general]
+name=DamSafety Data
+qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
+supportsQt6=True
+description=Keeps an offline copy of North Dakota structure and building-footprint data on this computer and downloads new versions when the sources change.
+about=Downloads and maintains local North Dakota copies of the National Structure Inventory (NSI API; NSI 2026 and NSI 2022 merged into one layer by default), Microsoft building footprints, OpenStreetMap (Geofabrik), optionally FEMA/ORNL USA Structures, and optionally the USACE-NSI/nsi-generator source code. Each dataset is checked cheaply (checksum, ETag or latest commit) and only re-downloaded when it changed. Updates are staged and verified before replacing the local copy, so the data stays usable offline and an interrupted update never leaves partial files. Layers already in the project are reloaded after an update.
+version=1.3.5
+author=ND Data Updater
+email=nd-data-updater@example.com
+repository=https://example.com/nd-data-updater
+tracker=https://example.com/nd-data-updater/issues
+homepage=https://example.com/nd-data-updater
+category=Plugins
+tags=north dakota,nsi,structures,building footprints,offline,update
+icon=icon.svg
+experimental=False
+deprecated=False
+changelog=1.3.2 - Added ND 911 Site/Structure Address Points (NENA) from the ND GIS Hub FeatureServer. Downloads as address_points (GeoPackage if ogr2ogr available, otherwise NDJSON). Also added to the offline pack builder so the suite pack includes the layer. suite_fill loads address_points with structures for Hazard verification.
+  1.3.1 - Overture source now downloads and converts buildings for the ND bounding box using the overturemaps CLI (pip install overturemaps). Output is overture_buildings.gpkg (or .geojson). suite_fill recognizes the layer name.
+  1.3.0 - Added Overture Maps Buildings as an optional source. Layer name overture_buildings is recognized by suite_fill alongside NSI and USA Structures. pack_sources.py documents accepted structure layer names so Screening/Runner/Hazard correctly use pack layers.
+  1.2.1 - OSM source now uses headers mode (ETag / Last-Modified) instead of MD5 sidecar. Geofabrik does not publish an MD5 for the .gpkg.zip.
+  1.2.0 - Added Build ND Offline Pack action. Pack can include 3DHP flowlines and waterbodies (in addition to NHD) and three Aquatic Barriers layers (dams, surveyed crossings, unsurveyed crossings) for North Dakota. 3DHP is preferred hydrography; NHD retained. Aquatic Barriers from Great Plains tool (private records excluded).
+  1.1.0 - NSI now names its version (the API default switched to NSI 2026). By default NSI 2026 and NSI 2022 are merged into one layer: a 2022 point within 30 m of a 2026 point is folded into it (2026 wins; the 2022 id, occupancy, building type and a mobile-home flag are kept in nsi22_* fields), and 2022 points with no 2026 point nearby are kept with nsi_version = 2022. Settings choose merged / 2026 only / 2022 only and the match distance. nsi_summary.json in the nsi folder gives counts per county.
+  1.0.1 - OpenStreetMap now downloads as a GeoPackage (north-dakota-latest-free.gpkg.zip); only its buildings layer is added to the project.
+  1.0.0 - First release.
