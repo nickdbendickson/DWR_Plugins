@@ -1193,8 +1193,24 @@ class NDDamScreeningDialog(QDialog):
         if shutil.which("lisflood") or shutil.which("lisflood.exe"):
             self.engine.setCurrentIndex(0)
 
+    def _ensure_layout(self, work):
+        """Standard empty folders in the work folder (damsuite/layout.py): never deletes,
+        moves or overwrites; nothing inside the Dams folder."""
+        try:
+            from .damsuite import layout as LY
+            made = LY.ensure_layout(work, wf.dams_folder(work, self.settings()))
+        except Exception as e:                    # LayoutRefused / OSError: say it, go on
+            self._log("Standard folders not created: {}".format(e))
+            return
+        if made:
+            self._log("Created the standard work-folder layout ({} item(s)) in {}".format(len(made), work))
+
     def _changed(self, *args):
         self._save_state()
+        work = self.work_edit.text().strip()
+        if work and os.path.isdir(work) and work != getattr(self, "_layout_for", None):
+            self._layout_for = work
+            self._ensure_layout(work)
         self._autosave_settings()
         self.refresh()
 
@@ -1636,6 +1652,7 @@ class NDDamScreeningDialog(QDialog):
             except OSError as e:
                 QMessageBox.warning(self, TITLE, "The work folder cannot be created: {}".format(e))
                 return False
+        self._ensure_layout(work)
         params = wf.defaults(key, work, self.settings())
         aid = wf.algorithm_id(key)
         try:
@@ -2219,7 +2236,7 @@ class NDDamScreeningDialog(QDialog):
 
     def _handoff_runner(self):
         work = self.work_edit.text().strip()
-        dams = os.path.join(work, "Dams") if work else ""
+        dams = wf.dams_folder(work, self.settings()) if work else ""
         dam = self._selected_dam()
         try:
             from qgis.utils import plugins
@@ -2240,7 +2257,7 @@ class NDDamScreeningDialog(QDialog):
     def _handoff_hazard(self):
         work = self.work_edit.text().strip()
         dam = self._selected_dam()
-        folder = os.path.join(work, "Dams", dam) if work and dam else ""
+        folder = os.path.join(wf.dams_folder(work, self.settings()), dam) if work and dam else ""
         try:
             from qgis.utils import plugins
             plug = plugins.get("DamSafety_Hazard") or plugins.get("ND_Dam_Hazard_Helper")

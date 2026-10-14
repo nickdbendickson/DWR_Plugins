@@ -51,6 +51,8 @@ class SuiteStatusDock(QDockWidget):
         dams = QFileDialog.getExistingDirectory(self, "Dams folder (results)", dams_folder())
         if dams:
             set("dams_folder", dams)
+            from .plugin import ensure_dams_folder
+            ensure_dams_folder(dams)
         self.refresh()
 
     def _build_lisflood(self):

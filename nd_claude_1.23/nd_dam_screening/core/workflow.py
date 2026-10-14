@@ -15,42 +15,15 @@ that step as not done.
 import csv
 import json
 import os
+
+from ..damsuite.layout import STEP_OUTPUTS as _STEP_OUTPUTS
 import time as _time
 
 PROVIDER = "nddam"
 
 # every tool's output in the work folder (relative paths). Keys: step -> {parameter: path}
-LAYOUT = {
-    "0": {"OUT": "0_data_package.gpkg"},
-    "1": {"OUT": "1_dams.gpkg"},
-    "2": {"OUT": "2_terrain"},
-    "3": {"CURVES": "3_stage_storage", "OUT": "3_dams_storage.gpkg"},
-    "4": {"OUTP": "4_breach_points.gpkg", "OUTL": "4_flow_arrows.gpkg"},
-    "5": {"OUTDIR": "5_hydrographs", "OUT": "5_dams_breach.gpkg"},
-    "6": {"OUTDIR": "6_triage_envelopes", "OUT": "6_triage.gpkg"},
-    "7": {"OUTDIR": "7_simulations", "OUT": "7_simulations.gpkg"},
-    "7b": {"DAMS_FOLDER": "Dams", "OUT": "7b_runner_results.gpkg"},
-    "8": {"OUT": "8_hazard.gpkg", "IMP": "8_impacted.gpkg"},
-    "9": {"OUTDIR": "9_sensitivity", "OUT": "9_sensitivity.gpkg"},
-    "10": {"OUTDIR": "10_reports"},
-    # 0.11
-    "11": {"OUTDIR": "11_benchmark"},
-    "12": {"OUT_CSV": "12_runtime_estimate.csv"},
-    "13": {"OUT_CSV": "13_inventory_changes.csv", "OUT": "13_changed_dams.gpkg"},
-    "14": {"REPORT": "14_selftest_report.txt"},
-    "15": {"LOG": "15_chain_log.txt"},
-    # 0.12: ponds and dugouts (does the work of 1-4 for water bodies; use a work folder of its own)
-    "16": {"OUT": "16_ponds.gpkg", "OUTP": "16_pond_breach_points.gpkg", "OUTL": "16_pond_flow_arrows.gpkg",
-           "OUTX": "16_pond_excluded.gpkg", "TERRAIN": "16_terrain", "CURVES": "16_stage_storage"},
-    # 0.13: the preflight check; the merge of dams (1-4) and ponds (16) for the Simple tab's "Both"
-    "17": {"REPORT": "17_preflight.txt"},
-    "18": {"OUT": "18_dams_all.gpkg", "OUTP": "18_breach_points_all.gpkg", "OUTL": "18_flow_arrows_all.gpkg",
-           "CURVES": "18_stage_storage", "TERRAIN": "18_terrain"},
-    # 0.14: a proposed embankment drawn as a crest line (stands in for 1-4; its own work folder)
-    "19": {"OUT": "19_proposed.gpkg", "OUTP": "19_breach_points.gpkg", "OUTL": "19_flow_arrows.gpkg",
-           "CREST": "19_crest_lines.gpkg", "TERRAIN": "19_terrain", "CURVES": "19_stage_storage",
-           "SPEC": "19_proposed.json"},
-}
+# One table for the suite: damsuite/layout.py (also used to create the standard folders).
+LAYOUT = {_k: dict(_v) for _k, _v in _STEP_OUTPUTS.items()}
 FIXED_OUTPUTS = frozenset({"18"})          # steps whose LAYOUT files are written under fixed names (no parameters)
 RUN_SETTINGS = "settings_used.xlsx"       # 0.13: the settings a run used (the chain writes it)
 REVIEW_LOG = "review_decisions.csv"       # 0.13: the Review tab's decisions

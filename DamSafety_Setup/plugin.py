@@ -66,6 +66,7 @@ class SetupPlugin(object):
         def _save():
             set("data_folder", data.text().strip())
             set("dams_folder", dams.text().strip())
+            ensure_dams_folder(dams.text().strip())
             set("lisflood_exe", flood.text().strip())
             dlg.accept()
         save.clicked.connect(_save)
@@ -608,3 +609,17 @@ def _midpoint(part):
             a, b = part[i - 1], part[i]
             return type(a)(a.x() + t * (b.x() - a.x()), a.y() + t * (b.y() - a.y()))
     return part[len(part) // 2]
+
+
+def ensure_dams_folder(path):
+    """Create the chosen Dams folder (only that folder; damsuite/layout.py). Never raises."""
+    try:
+        from .damsuite import layout as LY
+        return LY.ensure_dams_folder(path) if path else []
+    except Exception as e:
+        try:
+            from qgis.core import QgsMessageLog, Qgis
+            QgsMessageLog.logMessage("Dams folder not created: {}".format(e), "DamSafety Setup", Qgis.Warning)
+        except Exception:
+            pass
+        return []
