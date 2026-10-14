@@ -69,11 +69,39 @@ def utm_epsg(lon, lat):
     return 26900 + zone
 
 
+# DEM resampling onto the model grid. Precedence: an explicit value (the DEM_RESAMPLE tool
+# parameter / the CLI "dem_resample" key) > the NDBREACH_DEM_RESAMPLE environment variable >
+# DEFAULT_RESAMPLE. "average" area-averages fine terrain (e.g. 5 m to a 40 m grid);
+# "bilinear" samples it, which can miss channel bottoms and berms at coarse cells.
+ENV_RESAMPLE = "NDBREACH_DEM_RESAMPLE"
+DEFAULT_RESAMPLE = "bilinear"
+RESAMPLE_METHODS = ("bilinear", "average", "near", "cubic", "cubicspline", "lanczos",
+                    "mode", "min", "max", "med", "q1", "q3")
+
+
+def check_resample(method, what="DEM resample method"):
+    """`method` lower-cased if it is a GDAL warp resampling name, else ValueError."""
+    m = str(method).strip().lower()
+    if m not in RESAMPLE_METHODS:
+        raise ValueError("{} {!r} is not one of: {}".format(what, method, ", ".join(RESAMPLE_METHODS)))
+    return m
+
+
+def resolve_resample(explicit=None, environ=None):
+    """(method, source) for the DEM warp: source is "parameter", "environment" or "default"."""
+    if explicit is not None and str(explicit).strip():
+        return check_resample(explicit), "parameter"
+    env = (os.environ if environ is None else environ).get(ENV_RESAMPLE, "")
+    if str(env).strip():
+        return check_resample(env, "{} value".format(ENV_RESAMPLE)), "environment"
+    return DEFAULT_RESAMPLE, "default"
+
+
 class GdalTerrain:
     """terrain_src for workflow.run_dam."""
 
     def __init__(self, dem_path, work_srs, z_choice=Z_AUTO, manning_path=None,
-                 default_n=0.06, resample="bilinear", manning_lut=None):
+                 default_n=0.06, resample=None, manning_lut=None):
         gdal, _ = _gdal()
         self.dem_path = dem_path
         self.work_srs = work_srs          # "EPSG:26914" or WKT
@@ -81,7 +109,7 @@ class GdalTerrain:
         self.manning_path = manning_path
         self.manning_lut = manning_lut       # set: the raster holds NLCD class codes
         self.default_n = default_n
-        self.resample = resample
+        self.resample, self.resample_source = resolve_resample(resample)
         ds = GS.open_raster(dem_path)
         self.src_nodata = ds.GetRasterBand(1).GetNoDataValue()
 
