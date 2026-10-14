@@ -90,6 +90,18 @@ def _line_midpoint(part):
     return part[len(part) // 2]
 
 
+def _dams_parent(path):
+    """The Dams folder `path`, refused when it is in the read-only ND_Dam_Suite_Pack:
+    no run writes there (dam folders, rasters, reports, dam.json)."""
+    from .damsuite.suite_config import in_suite_pack, default_dams_folder
+    if in_suite_pack(path):
+        raise QgsProcessingException(
+            "The Dams folder {} is inside the ND_Dam_Suite_Pack, which is read-only and is "
+            "never written to. Choose a Dams folder outside the pack (for example {}).".format(
+                path, default_dams_folder()))
+    return path
+
+
 def _safe_name(s):
     s = re.sub(r"[^\w\- ]+", "_", str(s)).strip()
     return s or "dam"
@@ -1077,6 +1089,7 @@ class RunDamAlgorithm(_Base):
     def dam_folder(self, parameters, context, dam_id):
         parent = self._fileparam(parameters, "DAMS_FOLDER", context) \
             if self.parameterDefinition("DAMS_FOLDER") is not None else ""
+        parent = _dams_parent(parent)
         return os.path.join(parent, _safe_name(dam_id)) if parent else ""
 
     def dam_from_params(self, parameters, context):
@@ -1193,7 +1206,8 @@ class RunDamAlgorithm(_Base):
             ip = self.parameterAsPoint(parameters, "INFLOW_POINT", context, dem.crs())
             q = to_work.transform(QgsPointXY(ip))
             inflow = (q.x(), q.y())
-        folder = os.path.join(self.parameterAsFile(parameters, "DAMS_FOLDER", context),
+        folder = os.path.join(_dams_parent(self.parameterAsFile(parameters, "DAMS_FOLDER",
+                                                                  context)),
                               _safe_name(dam.dam_id))
         feedback.pushInfo("Model CRS {}; DEM elevations in {}".format(work.authid(), src.z_note))
         for n in self.apply_features(st, parameters, context, work, (dam_xy.x(), dam_xy.y())):
@@ -1517,7 +1531,7 @@ class BatchAlgorithm(_Base):
                     "No field was found for '{}': each dam's dam.json must give it (choose "
                     "the field in the parameters otherwise).".format(
                         dict((k, d) for k, d, _n in BATCH_FIELD_KEYS)[need]), fatalError=False)
-        parent = self.parameterAsFile(parameters, "DAMS_FOLDER", context)
+        parent = _dams_parent(self.parameterAsFile(parameters, "DAMS_FOLDER", context))
         skip = self.parameterAsBool(parameters, "SKIP_DONE", context)
         dem = self.parameterAsRasterLayer(parameters, "DEM", context)
         to_dem = QgsCoordinateTransform(src_layer.sourceCrs(), dem.crs(),
@@ -1722,7 +1736,7 @@ class CascadeAlgorithm(_Base):
             feats.sort(key=lambda f: qio.num(f[order], 1e9))
         if len(feats) < 2:
             raise QgsProcessingException("A cascade needs at least two dams")
-        parent = self.parameterAsFile(parameters, "DAMS_FOLDER", context)
+        parent = _dams_parent(self.parameterAsFile(parameters, "DAMS_FOLDER", context))
         dem = self.parameterAsRasterLayer(parameters, "DEM", context)
         to_dem = QgsCoordinateTransform(src_layer.sourceCrs(), dem.crs(),
                                         context.transformContext())

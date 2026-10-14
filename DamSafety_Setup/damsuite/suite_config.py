@@ -94,3 +94,34 @@ def dams_folder():
 def data_folder():
     """Saved suite data folder, or empty."""
     return get("data_folder") or ""
+
+
+# The read-only data pack. Nothing in the suite writes into it: results, DEM downloads
+# and dam folders go to the Dams folder (default ~/DamSafety/Dams).
+PACK_NAME = "ND_Dam_Suite_Pack"
+
+
+def in_suite_pack(path):
+    """True when `path` is the ND_Dam_Suite_Pack folder or anything inside it (also its
+    _work folder). Case-insensitive, either separator, '..' and symlinks resolved."""
+    text = str(path or "").strip()
+    if not text:
+        return False
+    try:
+        full = os.path.realpath(os.path.abspath(os.path.expanduser(text)))
+    except (OSError, ValueError):
+        full = text
+    for raw in (text, full):
+        for part in raw.replace("\\", "/").split("/"):
+            if part.lower().startswith(PACK_NAME.lower()):
+                return True
+    return False
+
+
+def safe_dams_folder(candidate=""):
+    """`candidate`, else the saved Dams folder, else the default - but never a folder in
+    the read-only pack: then the default under the home directory."""
+    for folder in (str(candidate or "").strip(), get("dams_folder")):
+        if folder and not in_suite_pack(folder):
+            return folder
+    return default_dams_folder()

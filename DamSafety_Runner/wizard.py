@@ -449,8 +449,10 @@ def _classes():
             fill_layers(self.manning, "raster", True, a.get("manning_id", ""))
             self.z.setCurrentIndex(max(self.z.findData(a.get("z_units", "auto")), 0))
             self.n.setValue(a.get("manning_n", 0.06))
-            self.folder.setText(a.get("dams_folder") or os.path.join(
-                os.path.expanduser("~"), "ndbreach_dams"))
+            dams = a.get("dams_folder") or ""
+            if wl._in_suite_pack(dams):        # the pack is read-only: never default to it
+                dams = ""
+            self.folder.setText(dams or os.path.join(os.path.expanduser("~"), "ndbreach_dams"))
 
         @_safe(default=False, what="the terrain page")
         def validatePage(self):
