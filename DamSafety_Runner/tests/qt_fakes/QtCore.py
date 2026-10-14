@@ -26,6 +26,7 @@ class QMetaType(object):
 
 
 class Qt(object):
+    ScrollBarAsNeeded, ScrollBarAlwaysOff, ScrollBarAlwaysOn = 0, 1, 2      # for ui_fit
     pass
 
 
@@ -131,3 +132,19 @@ class QUrl(object):
         return getattr(self, "_local", "")
 
 
+
+
+class QSize(object):
+    """Width x height, as the plugin's window-fit code uses it."""
+
+    def __init__(self, w=0, h=0):
+        self._w, self._h = int(w), int(h)
+
+    def width(self):
+        return self._w
+
+    def height(self):
+        return self._h
+
+    def __eq__(self, other):
+        return isinstance(other, QSize) and (self._w, self._h) == (other._w, other._h)

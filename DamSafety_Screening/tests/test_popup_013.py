@@ -166,7 +166,7 @@ for slot, path in (("dwr", dwr), ("dam_lines", lines_p), ("waterbodies", wb), ("
     cb.addItem(path, path)
     cb.setCurrentIndex(cb.count() - 1)
 checks = dlg._preflight()
-assert not pf.ready(checks) and "ACER TM 11 charts" in pf.summary(checks)      # not digitized in this build
+assert pf.ready(checks), pf.summary(checks)      # the shipped ACER TM 11 charts are digitized (REG_05.2026)
 dlg.crit.setCurrentIndex(2)                                                    # the conservative method
 checks = dlg._preflight()
 assert pf.ready(checks), pf.summary(checks)

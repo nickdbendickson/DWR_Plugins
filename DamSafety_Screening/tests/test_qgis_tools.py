@@ -32,7 +32,7 @@ for a in algs.values():
     a.initAlgorithm()
 processing.REGISTRY.update(algs)
 print("tools:", ", ".join(sorted(a.displayName() for a in algs.values())))
-assert len(algs) == 21                      # 0-10, 7b, 11-18, 19 (propose a dam, 0.14)
+assert len(algs) == 23                      # 0, 0b, 1-10, 7b, 11-19, Download DEM
 
 # ---------------- synthetic world, 10 m grid, EPSG:5070-like coordinates
 cell, NY, NX = 10.0, 520, 260

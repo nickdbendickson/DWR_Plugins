@@ -547,9 +547,9 @@ def rundam_tool_reads_footprints_and_the_building_and_refine_parameters():
     for cls in (algs.RunDamAlgorithm, algs.BatchAlgorithm):
         a = cls()
         a.initAlgorithm()
-        assert a.parameterDefinition("REFINE_NEAR").kwargs["defaultValue"] is True
+        assert a.parameterDefinition("REFINE_NEAR").kwargs["defaultValue"] is False   # off by default (FV1 writes no max velocity)
         assert a.parameterDefinition("REFINE_DIST_MI").kwargs["defaultValue"] == 1.0
-        assert a.parameterDefinition("REFINE_CELL").kwargs["defaultValue"] == 10.0
+        assert a.parameterDefinition("REFINE_CELL").kwargs["defaultValue"] == 0.0     # 0 = half the model cell
     d = _tmp()
     try:
         sq = fq.FakeGeometry("polygon", [[(700.0, -40.0), (780.0, -40.0), (780.0, 40.0),

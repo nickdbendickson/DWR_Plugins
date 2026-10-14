@@ -504,8 +504,9 @@ def ndhazard_tool_is_defined_registered_and_ids_are_unique():
     names = [cls().name() for cls in algs.ALGORITHMS]
     assert len(names) == len(set(names)), sorted(n for n in names if names.count(n) > 1)
     assert names.count("ndhazardclass") == 1 and "classify" in names
-    menu = open(os.path.join(os.path.dirname(algs.__file__), "plugin.py")).read()
-    ids = re.findall(r'"ndbreach:([a-z0-9_]+)"', menu)
+    # the menu is the Runner window's tool list (popup_logic.TABS) since the single window
+    from nd_breach_runner import popup_logic as pl
+    ids = [t[0] for t in pl.ALL_TOOLS if not t[0].startswith(pl.WIZARD)]
     assert "ndhazardclass" in ids and not set(ids) - set(names), set(ids) - set(names)
     assert ids.index("ndhazardclass") == ids.index("consequences") + 1
     # the report reads the files by the names the tool writes

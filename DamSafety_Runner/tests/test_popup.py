@@ -195,6 +195,9 @@ def qt_fakes():
     a minimal QgsProject), with the plugin's window and plugin modules imported fresh."""
     pyqt = sys.modules["qgis.PyQt"]
     core = sys.modules["qgis.core"]
+    # an earlier test may have pointed the process at its own settings file: start clean
+    from nd_breach_runner.damsuite import settings as _suite_settings
+    _suite_settings._current.update(path=None, loaded=None, mtime=None)
     pkg = sys.modules["nd_breach_runner"]
     names = ("QtCore", "QtWidgets", "QtGui", "sip")
     saved = {n: (sys.modules.get("qgis.PyQt." + n), getattr(pyqt, n, None)) for n in names}
@@ -486,7 +489,7 @@ def popup_plugin_menu_entry_single_window_and_unload():
         first = iface.menu[0]
         assert first[0] == q.plugin.MENU and p.action is first[1]
         assert p.action.triggered._slots == [p.run_plugin]
-        assert len(iface.menu) > 30                                    # the old menu entries are still there
+        assert len(iface.menu) == 1                                    # one menu entry: the single window
         p.action.triggered.emit()
         w = p.dialog
         assert w is not None and w.isVisible()
@@ -555,7 +558,7 @@ def popup_adds_the_dams_results_styled_and_the_suite_home_opens():
             def messageBar(self): return types.SimpleNamespace(pushMessage=lambda *a, **k: None)
         p = q.plugin.NDBreachRunnerPlugin(Iface())
         p.initGui()
-        assert p.home_action is p.iface.menu[1][1]
+        assert len(p.iface.menu) == 1                                  # single menu entry; the suite home opens from the window
         h = p.run_home()
         assert h is p.home_dialog and h.isVisible() and "Opened from ND Dam Breach Runner" in h.plugins_label.text()
         h.dams_edit.setText(dams)

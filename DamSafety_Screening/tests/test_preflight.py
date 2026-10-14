@@ -97,7 +97,7 @@ assert t["DWR dam lines"]["status"] == pf.OK
 assert t["Dams without a dam line"]["status"] == pf.WARN and "1 of 3" in t["Dams without a dam line"]["detail"]
 assert t["Water bodies"]["status"] == pf.WARN and "geometry is point" in t["Water bodies"]["detail"]
 assert t["Structures"]["status"] == pf.WARN and "occ_cls" in t["Structures"]["detail"]
-assert t["Roads"]["status"] == pf.WARN and "Optional" in t["Roads"]["fix"]
+assert t["Roads"]["status"] == pf.WARN and "Inputs tab" in t["Roads"]["fix"]      # a warning, not a failure
 assert "roughly" in t["Disk space"]["detail"] and "3 dams" in t["Disk space"]["detail"]
 # the pond path: water bodies needed, dams not
 S5 = dict(S4, chain=["16"])

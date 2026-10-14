@@ -8,6 +8,10 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _optional  # noqa: E402
+_optional.need("scipy", "reservoir fill / storage")
+
 from core import proposed as pr  # noqa: E402
 
 FT = pr.FT

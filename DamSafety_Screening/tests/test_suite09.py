@@ -5,7 +5,7 @@ Run: PYTHONPATH=tests/qgis_mock:<parent of the plugin> python3 tests/test_suite0
 The ND Dam Hazard part (a real export by ND Dam Hazard's suiteexport.py under its own test harness,
 in a separate process) runs only when that plugin and its harness are found.
 """
-import json, os, shutil, subprocess, sys, tempfile
+import json, os, re, shutil, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.dirname(HERE)
@@ -38,7 +38,8 @@ assert idn == {"dam_id": "DWR-5289", "name": "Test Dam", "nid_id": "ND00123", "d
                "existing_hazard_class": "Significant"}, idn
 assert dri.identity({"dam_id": "NID-ND00999", "hazard_cla": "Low"}) == {
     "dam_id": "NID-ND00999", "nid_id": "ND00999", "existing_hazard_class": "Low"}
-assert dri.plugin_version() == "0.17.13"
+_meta = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "metadata.txt")).read()
+assert dri.plugin_version() == re.search(r"^version=(.+)$", _meta, re.M).group(1).strip(), dri.plugin_version()
 assert dri.screening_result({"tri_result": "clear", "hz_class": "Low"}, "tool 8")["triage"] == "clear"
 assert dri.screening_result({}, "tool 7b") == {"triage": "not run", "hz_class": None, "border": None,
                                               "gaps": None, "by": "tool 7b"}
@@ -225,7 +226,7 @@ assert abs(f1["height_ft"] - 20.0) < 1e-6 and abs(f1["storage_acft"] - 500.0) < 
 assert (f1["x"], f1["y"], f1["crs"]) == (round(BX, 3), round(BY, 3), "EPSG:5070")
 assert abs(f1["lon"] + 100.5) < 1e-6 and abs(f1["lat"] - 47.0) < 1e-6
 assert f1["existing_hazard_class"] == "Significant" and "surface_area_ac" not in f1
-assert rec.sources["height_ft"]["tool"] == "ndscreen" and rec.sources["height_ft"]["version"] == "0.17.13"
+assert rec.sources["height_ft"]["tool"] == "ndscreen" and rec.sources["height_ft"]["version"] == dri.plugin_version()
 st = rec.latest("screened")
 assert st["tool"] == "ndscreen" and st["result"]["triage"] == "needs 2D" and st["result"]["hz_class"] == "High"
 assert st["result"]["border"] == "no" and st["result"]["gaps"] == "road 3: AADT not given"
@@ -237,7 +238,9 @@ assert r2.conflicts and r2.conflicts[-1]["field"] == "height_ft" and r2.conflict
 assert any("dam DWR-2: dam.json: height_ft kept at 21.5 (from ndhazard)" in m for m in fb.log), fb.log
 assert open(os.path.join(folder, "DWR-3", "dam.json")).read() == "{broken"             # never replaced
 assert any("dam DWR-3: dam.json not updated" in m for m in fb.log)
-assert any(m.startswith("Suite: ND Dam Breach Runner not installed") for m in fb.log)
+from nd_dam_screening.damsuite import versions as _vs  # noqa: E402
+_RUNNER = _vs.LABELS["ndbreach"]          # the Runner's display name (renamed DamSafety Runner)
+assert any(m.startswith("Suite: " + _RUNNER + " not installed") for m in fb.log)
 n_status = len(dr.load(os.path.join(folder, "DWR-1")).status)
 run7b()
 assert len(dr.load(os.path.join(folder, "DWR-1")).status) == n_status          # same result: not added again
@@ -289,7 +292,7 @@ except QgsProcessingException as e:
 qutils.PLUGIN_VERSIONS["nd_breach_runner"] = "3.1.4"
 status, fb = run7b()
 assert set(status.values()) == {"done"}
-assert any("ND Dam Breach Runner 3.1.4 (needs 3.1.0+, recommended 3.7.0+: WARNING)" in m for m in fb.log)
+assert any(_RUNNER + " 3.1.4 (needs 3.1.0+, recommended 3.7.0+: WARNING)" in m for m in fb.log)
 qutils.PLUGIN_VERSIONS.clear()
 
 
@@ -308,7 +311,7 @@ plug = NDDamScreeningPlugin(iface)
 msgs = plug.check_versions({"ndscreen": "0.9.0", "ndbreach": "3.0.0", "ndhazard": "2.9.1"})
 assert [m[0] for m in msgs] == ["error", "warning"], msgs
 assert len(iface.bar.msgs) == 2 and iface.bar.msgs[0][2] == 0 and "3.1.0" in iface.bar.msgs[0][1]
-assert any(t == "ND dam suite" and "ND Dam Hazard" in m for t, _l, m in QgsMessageLog.LOG)
+assert any(t == "ND dam suite" and _vs.LABELS["ndhazard"] in m for t, _l, m in QgsMessageLog.LOG)
 assert plug.check_versions() == []                               # once per session
 assert NDDamScreeningPlugin(Iface()).check_versions({"ndscreen": "0.9.0"}) == []   # others not installed
 print("OK (version checks)")

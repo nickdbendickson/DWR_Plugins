@@ -51,6 +51,9 @@ class QWidget(QObject):
             raise AttributeError(name)
         return _NoOp()
 
+    def findChildren(self, *a, **k):
+        return []
+
     def setEnabled(self, v):
         self._enabled = bool(v)
 
@@ -124,7 +127,11 @@ class QLabel(QWidget):
         return self._text
 
 
-class QSpinBox(QWidget):
+class QAbstractSpinBox(QWidget):
+    pass
+
+
+class QSpinBox(QAbstractSpinBox):
     def __init__(self, *a):
         super().__init__()
         self._v = 0
@@ -136,7 +143,7 @@ class QSpinBox(QWidget):
         return self._v
 
 
-class QDoubleSpinBox(QWidget):
+class QDoubleSpinBox(QAbstractSpinBox):
     def __init__(self, *a):
         super().__init__()
         self._v = 0.0
@@ -204,7 +211,28 @@ class QTabWidget(QWidget):
 
     def addTab(self, w, title):
         self.titles.append(title)
+        self.__dict__.setdefault("pages", []).append(w)
         return len(self.titles) - 1
+
+    # what ui_fit.wrap_tabs uses
+    def widget(self, i):
+        pages = self.__dict__.get("pages", [])
+        return pages[i] if 0 <= i < len(pages) else None
+
+    def removeTab(self, i):
+        self.titles.pop(i)
+        self.__dict__.setdefault("pages", [None] * (len(self.titles) + 1)).pop(i)
+
+    def insertTab(self, i, w, title):
+        self.titles.insert(i, title)
+        self.__dict__.setdefault("pages", [None] * (len(self.titles) - 1)).insert(i, w)
+        return i
+
+    def currentIndex(self):
+        return self.__dict__.get("_current", 0)
+
+    def setCurrentIndex(self, i):
+        self._current = i
 
     def tabText(self, i):
         return self.titles[i] if 0 <= i < len(self.titles) else ""
@@ -268,6 +296,7 @@ class QComboBox(QWidget):
 
 
 class QScrollArea(QWidget):
+    NoFrame = 0
     def setWidget(self, w):
         self._widget = w
 
@@ -411,6 +440,11 @@ class QHeaderView(QWidget):
 
 
 class QTableWidget(QWidget):
+    # scoped enums (PyQt6, and PyQt5 >= 5.11 accept them too)
+    EditTrigger = enum.IntEnum("EditTrigger", {"NoEditTriggers": 0, "DoubleClicked": 2,
+                                               "AllEditTriggers": 31})
+    SelectionBehavior = enum.IntEnum("SelectionBehavior", {"SelectItems": 0, "SelectRows": 1,
+                                                           "SelectColumns": 2})
     def __init__(self, *a):
         super().__init__()
         self._rows, self._cols = 0, 0
@@ -619,6 +653,18 @@ class QApplication(object):
     def processEvents():
         EVENTS["processEvents"] += 1
 
+    @staticmethod
+    def primaryScreen():
+        return None                 # no screen: ui_fit.fit_window uses its preferred size
+
+
+class QSizePolicy(object):
+    Fixed, Minimum, Maximum, Preferred, Expanding, MinimumExpanding, Ignored = 0, 1, 4, 5, 7, 3, 13
+
+
+class QWizardPage(QWidget):
+    pass
+
 
 _SB = QMessageBox.StandardButton
 if not QT6:
@@ -626,3 +672,58 @@ if not QT6:
         setattr(QMessageBox, _b.name, _b)
     if FLAVOR == "3.28":
         del QMessageBox.StandardButton
+
+
+class QListWidgetItem(object):
+    def __init__(self, text="", *a):
+        self._text, self._data = text, {}
+
+    def text(self):
+        return self._text
+
+    def setText(self, t):
+        self._text = t
+
+    def setData(self, role, v):
+        self._data[role] = v
+
+    def data(self, role):
+        return self._data.get(role)
+
+    def __getattr__(self, name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return _NoOp()
+
+
+class QListWidget(QWidget):
+    def __init__(self, *a):
+        super().__init__()
+        self.items = []
+        self.currentRowChanged = _Signal()
+        self.itemSelectionChanged = _Signal()
+        self.itemDoubleClicked = _Signal()
+
+    def addItem(self, item):
+        if not isinstance(item, QListWidgetItem):
+            item = QListWidgetItem(str(item))
+        self.items.append(item)
+
+    def count(self):
+        return len(self.items)
+
+    def item(self, i):
+        return self.items[i] if 0 <= i < len(self.items) else None
+
+    def clear(self):
+        self.items = []
+
+    def currentRow(self):
+        return self.__dict__.get("_row", -1)
+
+    def setCurrentRow(self, i):
+        self._row = i
+        self.currentRowChanged.emit(i)
+
+    def currentItem(self):
+        return self.item(self.currentRow())

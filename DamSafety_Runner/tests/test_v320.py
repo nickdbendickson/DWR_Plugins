@@ -16,6 +16,16 @@ import tempfile
 import numpy as np
 
 from nd_breach_runner.tests.registry import test
+from nd_breach_runner.damsuite import versions  # noqa: E402  (display names, release set)
+
+
+def _meta_version():
+    """version= of the Runner's metadata.txt (what dam.json and the logs are stamped with)."""
+    import configparser
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "metadata.txt"),
+            encoding="utf-8")
+    return cp.get("general", "version")
 
 PLUGIN = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FT = 0.3048
@@ -431,7 +441,8 @@ def eap_map_parameter_on_the_run_tools():
     assert st.eap_map == "mapbook" and st.class_stop and st.class_stop_confirm == 2
     assert st.class_stop_threshold_ft == 2.0 and st.class_stop_station_mi == 0.5
     st = a.run_settings({}, ctx, need_models=False)
-    assert st.eap_map == "auto" and st.class_stop is True and st.class_stop_search_ft == 150.0
+    # the class-stop rule is off by default since 3.10 ("so a flood is not cut off")
+    assert st.eap_map == "auto" and st.class_stop is False and st.class_stop_search_ft == 150.0
 
 
 def _report_folder():
@@ -554,7 +565,7 @@ def damjson_never_overwrites_another_tools_value_and_reports_both():
             "set by ndhazard 2.10.0" in w, w
         rec = dr.load(d)
         assert rec.get("height_ft") == 26.0 and rec.sources["storage_acft"]["tool"] == "ndbreach"
-        assert rec.sources["storage_acft"]["version"] == damjson.plugin_version() == "3.10.0"
+        assert rec.sources["storage_acft"]["version"] == damjson.plugin_version() == _meta_version()
         st = rec.latest("modelled")
         assert st["tool"] == "ndbreach" and st["result"]["final_rasters"] == ["Depth (Max).tif"]
         lines = "\n".join(damjson.report_lines(info))
@@ -590,7 +601,7 @@ def a_run_records_what_it_used_in_dam_json():
         assert rec.get("lon") == -100.5 and rec.get("crs") == "EPSG:26914"
         m = rec.latest("modelled")
         res = m["result"]
-        assert m["tool"] == "ndbreach" and m["version"] == "3.10.0"
+        assert m["tool"] == "ndbreach" and m["version"] == _meta_version()
         assert "Depth (Max).tif" in res["final_rasters"] and res["breach_occurs"]
         assert res["manifest"] == "_breach_model/run_manifest.json"
         assert os.path.exists(os.path.join(folder, res["manifest"]))
@@ -857,7 +868,7 @@ def version_checks_at_start_up_show_in_the_message_bar_and_log():
         msgs = p.check_versions({"ndhazard": "2.9.0", "ndbreach": "3.4.0"})
         assert [k for k, _t in msgs if k != "info"] == ["error"]
         assert "2.9.1 or newer" in msgs[0][1] and len(bar) == 1 and bar[0][3] == 0
-        assert any("ND Dam Breach Runner 3.4.0 (this plugin" in t for t, _g, _l in logged)
+        assert any(versions.LABELS["ndbreach"] + " 3.4.0 (this plugin" in t for t, _g, _l in logged)
         bar.clear()
         msgs = p.check_versions({"ndhazard": "2.9.5"})
         assert [k for k, _t in msgs if k != "info"] == ["warning"] and bar[0][3] == 15
@@ -870,7 +881,7 @@ def version_checks_at_start_up_show_in_the_message_bar_and_log():
         # without ND Dam Hazard
         logged.clear()
         p.initGui()
-        assert any("ND Dam Hazard Classification Helper not installed" in t
+        assert any(versions.LABELS["ndhazard"] + " not installed" in t
                    for t, _g, _l in logged), logged
         assert p.actions and p.provider is not None
         p.unload()
@@ -914,7 +925,7 @@ def handoff_refuses_nd_dam_hazard_below_the_hard_minimum():
             fn(*args, registry=Reg(), versions={"ndhazard": "2.8.0"})
             raise AssertionError("expected HandoffError from {}".format(fn.__name__))
         except handoff.HandoffError as e:
-            assert "ND Dam Hazard" in str(e)
+            assert versions.LABELS["ndhazard"] in str(e)
     assert callable(handoff.make_classifier(registry=Reg(), versions={"ndhazard": "2.10.0"}))
 
 
@@ -927,8 +938,8 @@ def release_is_3_2_0_and_loads_without_nd_dam_hazard():
     from nd_breach_runner.damsuite import versions
     cp = configparser.ConfigParser(interpolation=None)
     cp.read(os.path.join(PLUGIN, "metadata.txt"), encoding="utf-8")
-    assert cp.get("general", "version") == workflow.VERSION == versions.RELEASE["ndbreach"] \
-        == "3.10.0"
+    assert cp.get("general", "version") == workflow.VERSION == versions.RELEASE["ndbreach"], (
+        cp.get("general", "version"), workflow.VERSION, versions.RELEASE["ndbreach"])
     assert damsuite.selfcheck() == []
     assert versions.installed("ndhazard") is None           # outside QGIS: not installed
     readme = open(os.path.join(PLUGIN, "README.md"), encoding="utf-8").read()
