@@ -26,6 +26,7 @@ ND_COUNTIES = (
     "Towner", "Traill", "Walsh", "Ward", "Wells", "Williams",
 )
 ALG = "ndbreach:rundam"
+from .runner_params import DEFAULT_MAX_EXTENT_MI  # noqa: E402  (no Qt in it)
 
 
 class SetupPlugin(object):
@@ -385,6 +386,17 @@ class RunPage(QWizardPage):
         self.summary = QLabel("")
         self.summary.setWordWrap(True)
         lay.addWidget(self.summary)
+        # Max extent is a main setting, not Advanced: it caps how far the flood is followed.
+        main = QFormLayout()
+        self.max_extent = QDoubleSpinBox()
+        self.max_extent.setRange(1, 200)
+        self.max_extent.setDecimals(1)
+        self.max_extent.setValue(DEFAULT_MAX_EXTENT_MI)
+        self.max_extent.setSuffix(" mi")
+        self.max_extent.setToolTip("Largest side of the model domain. The run stops growing the "
+                                   "domain at this size.")
+        main.addRow("Max extent (largest domain side)", self.max_extent)
+        lay.addLayout(main)
         box = QGroupBox("Advanced settings")
         box.setCheckable(True)
         box.setChecked(False)
@@ -427,6 +439,7 @@ class RunPage(QWizardPage):
             "top": dem.top.value(), "drop": dem.drop.value(),
             "cell": self.cell.value(), "engine": self.engine.currentData(),
             "hours": self.hours.value(), "eap": self.eap.isChecked(),
+            "max_extent_mi": self.max_extent.value(),
         }
         return True
 

@@ -38,6 +38,7 @@ SET_THREADS = "NDBREACH_THREADS"
 METHODS = [(m, brmod.METHOD_LABELS[m]) for m in brmod.METHODS]
 TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          (workflow.TIER_BOTH, "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)")]
+DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
 ZUNITS = [("auto", "Detect from the raster"), ("feet", "Feet"),
           ("us_feet", "US survey feet"), ("meters", "Meters")]
 # v3.2.0: one EAP map (ND Dam Hazard's map book); this tool's SVG is a preview
@@ -470,7 +471,8 @@ class _Base(QgsProcessingAlgorithm):
         self._num("HALF_WIDTH_MI", "First domain: half-width either side of the flow path (mi)",
                   1.0, minimum=0.1)
         self._num("STEP_MI", "Extension step (mi)", 3.0, minimum=0.1, advanced=True)
-        self._num("MAX_EXTENT_MI", "Largest domain side (mi)", 15.0, minimum=1.0, advanced=True)
+        # Shown in the main dialog (not Advanced): it caps how far downstream the flood is followed.
+        self._num("MAX_EXTENT_MI", "Largest domain side (mi)", DEFAULT_MAX_EXTENT_MI, minimum=1.0)
         self._num("MAX_RUNS", "Most LISFLOOD-FP runs", 6, minimum=1, integer=True, advanced=True)
         self._num("DURATION_HR", "Simulation duration (hr), 0 = automatic", 0.0, minimum=0.0)
         self._num("DURATION_MAX_HR", "Longest simulated time (hr): the clock is lengthened "
