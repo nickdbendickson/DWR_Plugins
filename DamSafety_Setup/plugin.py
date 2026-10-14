@@ -347,8 +347,9 @@ class DemPage(QWizardPage):
         dam = self.wiz.page(1)._apply_edits() or {}
         county = self.wiz.page(1).county.currentData() or dam.get("county") or ""
         point = (dam.get("point") or "").split("[")[0].strip()
-        folder = self.wiz.page(0).path.text().strip() or os.path.expanduser("~")
-        out = os.path.join(folder, "terrain")
+        # Never into the suite data folder (it may be the read-only ND_Dam_Suite_Pack).
+        from .damsuite.suite_config import safe_dams_folder
+        out = os.path.join(safe_dams_folder(), "terrain")
         names = list(ND_COUNTIES)
         params = {
             "SOURCE": 0,

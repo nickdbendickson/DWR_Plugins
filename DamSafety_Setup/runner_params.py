@@ -32,6 +32,7 @@ def dem_z_index(choice):
 
 
 def build_params(a):
+    from .damsuite.suite_config import safe_dams_folder
     """ndbreach:rundam parameters from the wizard answers `a`."""
     out = {
         "DAM_ID": a.get("dam_id") or "",
@@ -46,7 +47,9 @@ def build_params(a):
         "CELL": a.get("cell") or 10,
         "DURATION_HR": a.get("hours") or 12,
         "PRODUCTS": bool(a.get("eap")),
-        "DAMS_FOLDER": a.get("dams_folder") or a.get("folder") or "",
+        # Results go to the Dams folder, never the suite data folder (a.get("folder")),
+        # which may be the read-only ND_Dam_Suite_Pack.
+        "DAMS_FOLDER": safe_dams_folder(a.get("dams_folder")),
     }
     if a.get("area"):
         out["AREA_AC"] = a.get("area")

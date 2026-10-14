@@ -18,6 +18,7 @@ from .core import estimate as estmod
 from .core import flood as floodmod
 from .core import gdal_io
 from .core import nd_data
+from .damsuite.suite_config import in_suite_pack as _in_suite_pack
 from .core import workflow
 
 ALGORITHM_ID = "ndbreach:rundam"
@@ -288,6 +289,9 @@ def validate_page(page, a, exists=os.path.isfile, isdir=os.path.isdir, models=No
             errors.append("Choose the Dams folder: each dam gets a folder named after its ID.")
         elif os.path.exists(folder) and not isdir(folder):
             errors.append("The Dams folder is a file, not a folder: {}".format(folder))
+        elif _in_suite_pack(folder):
+            errors.append("The Dams folder is inside the read-only ND_Dam_Suite_Pack, which is "
+                          "never written to. Choose a folder outside the pack: {}".format(folder))
         n = a.get("manning_n")
         if n is None or not (0.005 <= n <= 1.0):
             errors.append("Manning's n must be between 0.005 and 1.")
