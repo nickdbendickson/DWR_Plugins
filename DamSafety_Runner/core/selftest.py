@@ -62,10 +62,15 @@ class Skip(Exception):
 # ---------------------------------------------------------------------------------------
 # reporting
 # ---------------------------------------------------------------------------------------
+# the plugin's own folder name as installed (DamSafety_Runner, or nd_breach_runner in old builds)
+PLUGIN_DIR = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PLUGIN_DIRS = tuple(dict.fromkeys((PLUGIN_DIR, "DamSafety_Runner", "nd_breach_runner")))
+
+
 def short_path(p):
     """A path for a report: the plugin-relative part for our files, else the base name."""
     p = str(p).replace("\\", "/")
-    i = p.rfind("nd_breach_runner/")
+    i = max(p.rfind(d + "/") for d in PLUGIN_DIRS)
     return p[i:] if i >= 0 else os.path.basename(p)
 
 

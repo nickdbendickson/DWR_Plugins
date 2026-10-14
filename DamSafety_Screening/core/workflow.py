@@ -521,7 +521,6 @@ def defaults(step, work, settings):
         fmap = os.path.join(work, "1_fields.json")
         if os.path.isfile(fmap):
             try:
-                import json
                 with open(fmap, encoding="utf-8") as fh:
                     loaded = json.load(fh)
                 if isinstance(loaded, dict):
