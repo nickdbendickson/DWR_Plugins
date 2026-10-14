@@ -155,6 +155,50 @@ def area_at_top_m2(curve_csv, crest_m=None, dz=0.3):
     return a if a > 0 else None
 
 
+# ported from nd_ Screening 0.28.3 (core/handoff.py SHALLOW_CURVE / area_for_runner): a curve
+# that spans less than this fraction of the dam height does not describe the whole reservoir,
+# so its area at the top is not the area at the top of dam
+SHALLOW_CURVE = 0.5
+
+
+def curve_span_m(curve_csv, crest_m=None):
+    """Elevation span (m) of a tool-3 curve up to the crest, or None."""
+    if not curve_csv or not os.path.exists(curve_csv):
+        return None
+    e = []
+    with open(curve_csv) as fh:
+        for row in csv.DictReader(fh):
+            a, b = _num(row.get("elev_m")), _num(row.get("storage_m3"))
+            if a is not None and b is not None:
+                e.append(a)
+    if len(e) < 2:
+        return None
+    e.sort()
+    top = min(crest_m, e[-1]) if crest_m is not None else e[-1]
+    return top - e[0]
+
+
+def area_for_runner(curve_csv, crest_m=None, height_m=None, dz=0.3):
+    """(surface area at the top of dam in m2 or None, note) for the Runner's AREA_AC.
+
+    None when the curve spans much less than the dam height: the Runner turns the area into
+    its storage-area exponent (area * height / storage), so an area measured over a 4 ft-deep
+    basin of a 27 ft dam gave an exponent at the Runner's cap of 6 and a peak breach flow about
+    a third too high. With no area the Runner assumes storage ~ depth squared and says so."""
+    span = curve_span_m(curve_csv, crest_m)
+    if span is None:
+        return None, ""
+    try:
+        h = float(height_m) if height_m not in (None, "") else None
+    except (TypeError, ValueError):
+        h = None
+    if h and span < SHALLOW_CURVE * h:
+        return None, ("no surface area sent: the stage-storage curve spans {:.1f} ft of the "
+                      "{:.1f} ft dam height, too little to give the area at the top of dam (the "
+                      "Runner assumes storage varies with depth squared)".format(span / FT, h / FT))
+    return area_at_top_m2(curve_csv, crest_m, dz), ""
+
+
 def write_runner_hydrograph(src_csv, dst_csv):
     """Tool-5 hydrograph (time_s, discharge_m3s) -> the runner's own-hydrograph CSV
     (time hr, discharge cfs). Returns (dst_csv, peak_cfs)."""

@@ -284,3 +284,31 @@ def storage_choice_volume(inv_norm_m3, inv_max_m3, choice=0):
     if int(choice or 0) == 2:
         return max(n, m), "larger of normal and maximum"
     return m if m > 1.0 else n, "maximum storage"
+
+
+# Shallow-basin guard (ported from nd_ Screening 0.28.3, nd_dam_screening/algorithms/
+# estimate_storage.py SHALLOW_BASIN): a basin whose curve spans less than this fraction of the
+# dam height, bed to crest, is not the reservoir of the dam.
+SHALLOW_BASIN = 0.5
+SHALLOW_BASIN_WHY = ("the basin found is only {:.1f} ft deep against a dam height of {:.1f} ft, "
+                     "so it is not the reservoir of this dam")
+FT_M = 0.3048
+
+
+def curve_span_m(res):
+    """Depth of a StorageResult's basin, bed to crest: the estimated depth below the pool plus
+    the crest above it (m). None when the result lacks the numbers."""
+    try:
+        span = float(res.crest_elev) - float(res.pool_elev) + max(float(res.max_depth_m or 0.0), 0.0)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return span if span == span else None
+
+
+def is_shallow_basin(span_m, height_m, fraction=SHALLOW_BASIN):
+    """True when a basin `span_m` deep is far shallower than a dam `height_m` high."""
+    try:
+        h = float(height_m)
+    except (TypeError, ValueError):
+        return False
+    return span_m is not None and h > 0.5 and span_m < fraction * h

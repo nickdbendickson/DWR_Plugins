@@ -81,6 +81,36 @@ class EstimateStorage(QgsProcessingAlgorithm):
         gdal.RasterizeLayer(mem, [1], lyr, burn_values=[1])
         return mem.ReadAsArray().astype(bool)
 
+    def _inventory_curve(self, f, names, arr, row, col, params, context, why):
+        """The assumed full-height curve of a dam from its inventory storage and height
+        (storage ~ depth squared from the ground at the dam to ground + height), or None when
+        the record lacks a usable storage (> 1 m3) or height (> 0.5 m)."""
+        def num(k):
+            v = f[k] if k in names else None
+            try:
+                return float(v) if v not in (None, "") else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+        inv_max, inv_norm, hh = num("inv_max_m3"), num("inv_norm_m3"), num("height_m")
+        choice = self.parameterAsEnum(params, "STORAGE_CHOICE", context) \
+            if self.parameterDefinition("STORAGE_CHOICE") else 0
+        vol, how = storage.storage_choice_volume(inv_norm, inv_max, choice)
+        if not (vol > 1.0 and hh > 0.5):
+            return None
+        ground = None
+        if arr is not None and row is not None and col is not None:
+            try:
+                ground = float(np.nanmedian(arr[max(0, row - 2):row + 3, max(0, col - 2):col + 3]))
+            except Exception:                                  # noqa
+                ground = None
+        if ground is None or ground != ground:
+            ground = 0.0
+        curve = [(ground + i * hh / 10.0, vol * (i / 10.0) ** 2) for i in range(11)]
+        note = ("dry-dam inventory curve: assumption, using {} {:.0f} m3 (normal {:.0f}, maximum "
+                "{:.0f}) and height {:.1f} m; {}").format(how, vol, inv_norm, inv_max, hh, why)
+        return storage.StorageResult(ground, ground + hh, 0.0, 0.0, vol, vol, hh, 0.0,
+                                     "inventory", curve, [note])
+
     def processAlgorithm(self, params, context, feedback):
         dams = self.parameterAsSource(params, self.DAMS, context)
         wbs = self.parameterAsSource(params, self.WB, context)
@@ -136,50 +166,31 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 res = storage.estimate_storage(arr, mask, cell, (row, col),
                                                known_height_m=h, shape_factor=shape)
                 note = "; ".join(res.notes)
+                # shallow-basin guard (ported from nd_ Screening 0.28.3): a basin whose whole
+                # curve, bed to crest, spans far less than the dam height is not the dam's
+                # reservoir (a dish on the floor of a dry flood-control dam). Stretching it to
+                # the inventory maximum puts nearly all the volume in the top few feet and hands
+                # the Runner a storage-area exponent at its cap; the full-height inventory curve
+                # is used instead when the record allows it.
+                span = storage.curve_span_m(res)
+                if storage.is_shallow_basin(span, h):
+                    alt = self._inventory_curve(f, names, arr, row, col, params, context,
+                                                storage.SHALLOW_BASIN_WHY.format(span / storage.FT_M,
+                                                                                 h / storage.FT_M))
+                    if alt is not None:
+                        res, note = alt, "{} (water body: {})".format(alt.notes[0], note)
+                        feedback.pushWarning("dam {}: {}".format(dam_id, alt.notes[0]))
             except Exception as e:  # keep going, record why
                 note = "FAILED: " + er.plain(e, dam_id, "3")
                 # Dry dam: no pool polygon. Use inventory max storage and height.
-                inv_max = f["inv_max_m3"] if "inv_max_m3" in names else None
-                inv_norm = f["inv_norm_m3"] if "inv_norm_m3" in names else None
-                hh = f["height_m"] if "height_m" in names else None
-                try:
-                    inv_max = float(inv_max) if inv_max not in (None, "") else 0.0
-                except (TypeError, ValueError):
-                    inv_max = 0.0
-                try:
-                    inv_norm = float(inv_norm) if inv_norm not in (None, "") else 0.0
-                except (TypeError, ValueError):
-                    inv_norm = 0.0
-                try:
-                    hh = float(hh) if hh not in (None, "") else 0.0
-                except (TypeError, ValueError):
-                    hh = 0.0
-                choice = self.parameterAsEnum(parameters, "STORAGE_CHOICE", context) if self.parameterDefinition("STORAGE_CHOICE") else 0
-                vol, how = storage.storage_choice_volume(inv_norm, inv_max, choice)
-                if vol > 1.0 and hh > 0.5 and "no waterbody" in note:
-                    ground = None
-                    try:
-                        ground = float(np.nanmedian(arr[max(0, row-2):row+3, max(0, col-2):col+3]))
-                    except Exception:
-                        ground = None
-                    if ground is None or ground != ground:
-                        ground = 0.0
-                    bed = ground
-                    crest_e = ground + hh
-                    curve = [(bed + i * hh / 10.0, vol * (i / 10.0) ** 2) for i in range(11)]
-                    res_note = ("dry-dam inventory curve: assumption, using {} {:.0f} m3 "
-                                "(normal {:.0f}, maximum {:.0f}) and height {:.1f} m; no waterbody polygon"
-                                ).format(how, vol, inv_norm, inv_max, hh)
-                    note = res_note
-                    class _R: pass
-                    res = _R()
-                    res.pool_elev, res.crest_elev = bed, crest_e
-                    res.surface_area_m2 = 0.0
-                    res.below_pool_m3, res.above_pool_m3 = 0.0, vol
-                    res.total_m3, res.max_depth_m = vol, hh
-                    res.shore_slope_deg, res.confidence = 0.0, "inventory"
-                    res.curve, res.notes = curve, [res_note]
-                    feedback.pushWarning("dam {}: {}".format(dam_id, res_note))
+                alt = None
+                if "no waterbody" in note:
+                    alt = self._inventory_curve(f, names, locals().get("arr"), locals().get("row"),
+                                                locals().get("col"), params, context,
+                                                "no waterbody polygon")
+                if alt is not None:
+                    res, note = alt, alt.notes[0]
+                    feedback.pushWarning("dam {}: {}".format(dam_id, note))
                 else:
                     feedback.reportError("dam {}: {}".format(dam_id, er.plain(e, dam_id, "3")))
 
@@ -190,7 +201,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 curve, scale, cnote = storage.calibrate_below_pool(
                     res.curve, res.below_pool_m3, inv)
                 if cnote: note = (note + "; " if note else "") + cnote
-                choice = self.parameterAsEnum(parameters, "STORAGE_CHOICE", context) if self.parameterDefinition("STORAGE_CHOICE") else 0
+                choice = self.parameterAsEnum(params, "STORAGE_CHOICE", context) if self.parameterDefinition("STORAGE_CHOICE") else 0
                 inv_max = f["inv_max_m3"] if "inv_max_m3" in names else None
                 try:
                     inv_max = float(inv_max) if inv_max not in (None, "") else 0.0
