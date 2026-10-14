@@ -7,6 +7,9 @@ DEM_Z is an enum: an index into the Runner's choices, in the Runner's order
 looked up by the unit's id, never typed by hand: a hand-typed index of 2 for 'Metres'
 made the Runner read a metre DEM as US survey feet (release on 2026-10-13)."""
 
+# The Runner's default largest domain side (DamSafety_Runner/algorithms.DEFAULT_MAX_EXTENT_MI).
+DEFAULT_MAX_EXTENT_MI = 20.0
+
 # The Runner's DEM_Z options in order (gdal_io.Z_CHOICES / algorithms.ZUNITS).
 RUNNER_Z_IDS = ("auto", "feet", "us_feet", "meters")
 
@@ -47,6 +50,7 @@ def build_params(a):
         "CELL": a.get("cell") or 10,
         "DURATION_HR": a.get("hours") or 12,
         "PRODUCTS": bool(a.get("eap")),
+        "MAX_EXTENT_MI": float(a.get("max_extent_mi") or DEFAULT_MAX_EXTENT_MI),
         # Results go to the Dams folder, never the suite data folder (a.get("folder")),
         # which may be the read-only ND_Dam_Suite_Pack.
         "DAMS_FOLDER": safe_dams_folder(a.get("dams_folder")),
