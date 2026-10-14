@@ -50,7 +50,7 @@ When a crest-line layer is given, the tool first picks the line properly: the li
 structure number matches this dam, else the nearest line within 500 m, else none, and it writes
 "Dam crest line not used: the nearest crest line is 8231 m from the dam point" when it refuses.
 The next block then ignores that decision. It re-reads every line in the search box, which is
-three quarters of the largest domain side (45 miles by default), picks the line with the nearest
+three quarters of the largest domain side (15 miles at the 20 mi default; 45 miles at the audit's 60 mi default), picks the line with the nearest
 single vertex, and puts the breach half way along it.
 
 That block runs whenever "Breach position" has a value, and it is declared with 0.5 already filled

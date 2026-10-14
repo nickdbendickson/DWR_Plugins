@@ -13,6 +13,8 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterEnum,
 
 from ..compat import NUM_DOUBLE
 from ..core import dem_download as dd
+from ..core import dem_names as dn
+from ..core.tile_workdir import tile_workdir
 
 
 class DownloadDem(QgsProcessingAlgorithm):
@@ -57,6 +59,8 @@ class DownloadDem(QgsProcessingAlgorithm):
             "SCOPE", "Area", ["Dam", "County", "State"], defaultValue=0))
         self.addParameter(QgsProcessingParameterString(
             "DAM_POINT", "Dam point, longitude,latitude", optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            "DAM_ID", "Dam ID (names the file <DAM_ID>_10m_5070.tif)", optional=True))
         self.addParameter(QgsProcessingParameterNumber(
             "BUFFER_MI", "Buffer around the dam (miles)", NUM_DOUBLE, 15.0, minValue=1.0))
         self.addParameter(QgsProcessingParameterEnum(
@@ -93,15 +97,18 @@ class DownloadDem(QgsProcessingAlgorithm):
         if os.path.isfile(dest) and os.path.isfile(side):
             feedback.pushInfo("reusing {} ({})".format(dest, open(side, encoding="utf-8").read().replace("\n", "; ")))
             return {"VRT": dest, "OUT": out}
-        if source_i == 1:
-            vrt, native = self._nd(parameters, context, feedback, out, scope)
-            info = dd.product_info("ndlidar", cell, native)
-        else:
-            vrt = self._usgs(parameters, context, feedback, out, scope, cell, stem)
-            info = dd.product_info("usgs", cell)
-        feedback.setProgress(90)
-        feedback.pushInfo("writing the local GeoTIFF")
-        tif, side = dd.write_local_dem(vrt, dest, cell, info, feedback)
+        # Source tiles (~30 files, ~170 MB for a dam) go to a temporary folder that is removed
+        # after the local GeoTIFF is written, on success and on failure alike.
+        with tile_workdir(out) as work:
+            if source_i == 1:
+                vrt, native = self._nd(parameters, context, feedback, work, scope, index_dir=out)
+                info = dd.product_info("ndlidar", cell, native)
+            else:
+                vrt = self._usgs(parameters, context, feedback, work, scope, cell, stem)
+                info = dd.product_info("usgs", cell)
+            feedback.setProgress(90)
+            feedback.pushInfo("writing the local GeoTIFF")
+            tif, side = dd.write_local_dem(vrt, dest, cell, info, feedback)
         feedback.setProgress(100)
         extra = _warp(tif, out, parameters, context, feedback)
         feedback.pushInfo("local DEM: {}".format(tif))
@@ -127,8 +134,10 @@ class DownloadDem(QgsProcessingAlgorithm):
 
     def _stem(self, parameters, context, scope):
         if scope == 0:
-            raw = (self.parameterAsString(parameters, "DAM_POINT", context) or "").strip()
-            return "dam" if not raw else "dam_{}_{}".format(*[p.strip() for p in raw.split(",")[:2]])
+            # <DAM_ID>_<cell>m_5070.tif when the dam ID is given: the wizards pick it up.
+            dam_id = self.parameterAsString(parameters, "DAM_ID", context) \
+                if "DAM_ID" in parameters else ""
+            return dn.dam_scope_stem(dam_id, self.parameterAsString(parameters, "DAM_POINT", context))
         if scope == 1:
             return self._county(parameters, context).replace(" ", "_")
         return "north_dakota"
@@ -152,7 +161,7 @@ class DownloadDem(QgsProcessingAlgorithm):
             extent = dd.to_5070(*dd.STATE)
         return dd.download(extent, cell, out, stem + "_src", feedback)
 
-    def _nd(self, parameters, context, feedback, out, scope):
+    def _nd(self, parameters, context, feedback, out, scope, index_dir=None):
         products = []
         if self.parameterAsBool(parameters, "IMAGINE", context):
             products.append("DEM_Imagine")
@@ -172,7 +181,7 @@ class DownloadDem(QgsProcessingAlgorithm):
                     raise QgsProcessingException(
                         "ND LiDAR for a dam needs longitude,latitude, or an FTP package from lidar.dwr.nd.gov.")
                 box = dd.point_ll_box(lon, lat, self.parameterAsDouble(parameters, "BUFFER_MI", context))
-                cache = os.path.join(out, "_index")
+                cache = os.path.join(index_dir or out, "_index")      # the index is kept
                 tiles = dd.tiles_for_box(*box, cache, feedback)
                 if feedback is not None:
                     feedback.pushInfo("{} QL2 tiles for the dam box".format(len(tiles)))

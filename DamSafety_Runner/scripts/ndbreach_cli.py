@@ -406,7 +406,7 @@ TEMPLATE = {
                  "(NDBREACH_LISFLOOD, NDBREACH_ANUGA_PYTHON, the usual install places).",
         "tier": "lisflood", "cell_size_m": 10.0, "arrival_depth_ft": 1.0,
         "edge_tolerance_ft": 1.0, "initial_length_mi": 5.0, "half_width_mi": 1.0,
-        "expand_step_mi": 3.0, "max_extent_mi": 60.0, "max_iterations": 6, "sim_time_hr": None,
+        "expand_step_mi": 3.0, "max_extent_mi": 20.0, "max_iterations": 6, "sim_time_hr": None,
         "threads": 0, "lisflood_exe": None, "anuga_python": None,
         "anuga_fine_area_m2": 100.0, "anuga_coarse_area_m2": 1000.0,
         "anuga_near_field_mi": 1.0, "anuga_buffer_m": 500.0,

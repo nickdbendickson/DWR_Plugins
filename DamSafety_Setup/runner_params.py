@@ -60,3 +60,28 @@ def build_params(a):
     if a.get("top"):
         out["TOP_FT"] = a.get("top")
     return out
+
+
+DEM_SUFFIXES = ("_10m_5070.tif", "_1m_5070.tif")
+
+
+def dem_stem(dam_id):
+    """The stem 'Download DEM' writes for a dam ID (Screening core/dem_names.dem_stem)."""
+    import re
+    return re.sub(r"[^\w\-]+", "_", str(dam_id or "").strip()).strip("_")
+
+
+def downloaded_dem(out, dam_id, point=""):
+    """The DEM 'Download DEM' just wrote for this dam in `out`, or "": <DAM_ID>_10m/1m_5070.tif,
+    else dam_<lon>_<lat>_* named by this dam's own point. Never another dam's file."""
+    import os
+    stems = [dem_stem(dam_id)]
+    raw = (point or "").strip()
+    if raw and "," in raw:
+        stems.append("dam_{}_{}".format(*[p.strip() for p in raw.split(",")[:2]]))
+    for stem in [s for s in stems if s]:
+        for suf in DEM_SUFFIXES:
+            path = os.path.join(out, stem + suf)
+            if os.path.isfile(path):
+                return path
+    return ""
