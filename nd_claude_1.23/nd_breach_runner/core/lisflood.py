@@ -46,6 +46,37 @@ BUNDLED_DIR = os.path.join(os.path.dirname(HERE), "bin")
 BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
 
 
+# SHA-256 of the bundled LISFLOOD-FP builds (bin/<platform>/<file>). bundled_exe() refuses a
+# file that does not match before making it executable or handing it out to run.
+BUNDLED_SHA256 = {
+    "linux-x64/lisflood": "a763b82fa5a09c9c30592d0c1e28e8536622f6746d1b3d0525d03f3750e112d8",
+    "windows-x64/lisflood.exe": "14005d751d35daf3f7fa0c63bbad38c4354d2ccb6e8b936d6ad7b65cb3f276bd",
+}
+_BUNDLED_OK = {}
+
+
+def verify_bundled(path):
+    """Raise ModelError unless `path` has the SHA-256 recorded in BUNDLED_SHA256."""
+    import hashlib
+    rel = os.path.relpath(path, BUNDLED_DIR).replace(os.sep, "/")
+    want = BUNDLED_SHA256.get(rel)
+    st = os.stat(path)
+    key = (path, st.st_size, st.st_mtime_ns)
+    if want and _BUNDLED_OK.get(key) == want:
+        return
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    got = h.hexdigest()
+    if not want or got != want:
+        raise ModelError("The bundled LISFLOOD-FP {} failed its integrity check (SHA-256 {}, "
+                         "expected {}) and was not run. Reinstall the plugin, or set the "
+                         "LISFLOOD-FP executable to your own build or to 'builtin'."
+                         .format(path, got, want or "none on record"))
+    _BUNDLED_OK[key] = want
+
+
 def bundled_exe():
     """The LISFLOOD-FP bundled for this computer, or None (macOS, other CPUs). On Linux the
     execute permission lost by an install from ZIP is restored."""
@@ -62,6 +93,7 @@ def bundled_exe():
         return None
     if not os.path.isfile(p):
         return None
+    verify_bundled(p)                  # SHA-256 check before chmod or run (raises ModelError)
     if os.name != "nt" and not os.access(p, os.X_OK):
         try:
             os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)

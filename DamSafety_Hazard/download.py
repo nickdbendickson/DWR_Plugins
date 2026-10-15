@@ -496,8 +496,8 @@ def offline_config():
                 path = st.value(SETTING_PACK, "") or ""
             if only is None:
                 only = st.value(SETTING_ONLY, False)
-        except Exception:
-            pass
+        except Exception as e:
+            log_message("Could not read the offline-pack settings: {}".format(e), MSG_WARNING)
     path = str(path or "").strip()
     if not path:
         path = discover_pack()
@@ -891,8 +891,8 @@ class TileCache(object):
         if self.on_tile is not None:
             try:
                 self.on_tile(dict(rec))
-            except Exception:
-                pass
+            except Exception as e:
+                log_message("Tile callback failed: {}".format(e), MSG_WARNING)
         return rec
 
     def get(self, source, url_key, bbox, fetch, marker="", label=None):
@@ -1027,8 +1027,8 @@ def purge_tile_cache(folder, max_mb=TILE_CACHE_MAX_MB):
             total -= size
             removed += 1
             freed += size
-    except Exception:                                    # noqa
-        pass
+    except Exception as e:                               # noqa
+        log_message("Tile cache clean-up stopped early: {}".format(e), MSG_WARNING)
     return removed, freed
 
 

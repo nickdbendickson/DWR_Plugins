@@ -44,15 +44,35 @@ NDHAZARD_KEYS = ("DAM_FOLDER", "STRUCTURES", "S_HABITABLE", "S_OCC", "S_MOBILE",
                  "STRUCTURES_MORE", "ROADS_MORE", "LIFELINES_MORE")
 
 # which dams to send
-SELECT_HIGH_MEDIUM, SELECT_HIGH, SELECT_CHANGED, SELECT_ALL, SELECT_SELECTED = range(5)
+SELECT_HIGH_MEDIUM, SELECT_HIGH, SELECT_CHANGED, SELECT_ALL, SELECT_SELECTED, SELECT_CLASSIFIED = range(6)
 SELECT_LABELS = ["High and Medium from tool 8 (hz_class), and dams with no class (NoData / empty: "
                  "the simulation failed, so the class is unknown)",
                  "High only (hz_class)",
                  "Borderline (hz_border = yes) or class changed vs the existing class "
                  "(hz_vs_existing)",
                  "All dams",
-                 "Selected features only"]
-NEEDS_TOOL8 = (SELECT_HIGH_MEDIUM, SELECT_HIGH, SELECT_CHANGED)
+                 "Selected features only",
+                 "High, Medium, Low and unknown (all classified dams)"]
+NEEDS_TOOL8 = (SELECT_HIGH_MEDIUM, SELECT_HIGH, SELECT_CHANGED, SELECT_CLASSIFIED)
+
+# hz_class values that mean "no class": the simulation failed or the class was never set. A
+# layer edited by hand or from another source can say Unknown / Undetermined / TBD instead of
+# leaving the field empty; all of them are treated like an empty class.
+UNKNOWN_CLASSES = ("", "nodata", "no data", "null", "none", "nan", "unknown", "undetermined",
+                   "not determined", "undet", "tbd", "to be determined", "n/a", "na", "?",
+                   "unclassified", "not classified", "pending")
+KNOWN_CLASSES = ("High", "Medium", "Low")
+
+
+def class_of(attrs):
+    """(class, unknown?): "High" / "Medium" / "Low" (any letter case) or the raw text, and
+    True when it means no class (UNKNOWN_CLASSES)."""
+    raw = attrs.get("hz_class")
+    cls = "" if raw is None else str(raw).strip()
+    for k in KNOWN_CLASSES:
+        if cls.lower() == k.lower():
+            return k, False
+    return cls, cls.lower() in UNKNOWN_CLASSES
 
 HYDRO_RUNNER, HYDRO_SCREENING = range(2)
 HYDRO_LABELS = ["Runner's own ND method (its default breach method; ND 5.1.1)",
@@ -91,7 +111,7 @@ def _pos(attrs, key):
 # ---------------------------------------------------------------------------------- selection
 def selected(attrs, mode, is_selected=False):
     """(send?, why) for one dam record; `why` says why it is sent or skipped."""
-    cls = str(attrs.get("hz_class") or "").strip()
+    cls, unknown = class_of(attrs)
     if mode == SELECT_ALL:
         return True, "all dams"
     if mode == SELECT_SELECTED:
@@ -99,9 +119,15 @@ def selected(attrs, mode, is_selected=False):
     if mode == SELECT_HIGH_MEDIUM:
         if cls in ("High", "Medium"):
             return True, "screening class {}".format(cls)
-        if cls in ("", "NoData", "NULL"):
-            return True, "no screening class (failed or missing simulation): unknown, so sent"
+        if unknown:
+            return True, "no screening class ({}): unknown, so sent".format(cls or "empty")
         return False, "screening class {}".format(cls)
+    if mode == SELECT_CLASSIFIED:
+        if cls in KNOWN_CLASSES:
+            return True, "screening class {}".format(cls)
+        if unknown:
+            return True, "no screening class ({}): unknown, so sent".format(cls or "empty")
+        return False, "screening class {!r} is not High, Medium, Low or unknown".format(cls)
     if mode == SELECT_HIGH:
         return (True, "screening class High") if cls == "High" else \
             (False, "screening class {}".format(cls or "none"))

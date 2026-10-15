@@ -28,7 +28,8 @@ MICROMAMBA_SHA256 = {
     "osx-arm64": "ec2a072f028e1a7cf20f3e2e74d5a8127cf5a5f27636375b5359811565f4e5be",
     "win-64": "a6d804394b2418991c4e29562853eaace2f2ce9d9da661a98e74e02e8dbb44b0",
 }
-PACKAGES = ["python=3.12", "anuga", "numpy", "scipy", "matplotlib"]
+# Pinned to the versions of the working env on the review box (conda list -n anuga, 2026-10-14).
+PACKAGES = ["python=3.12", "anuga=4.0.1", "numpy=2.5.3", "scipy=1.18.1", "matplotlib=3.11.2"]
 CHANNEL = "conda-forge"
 
 

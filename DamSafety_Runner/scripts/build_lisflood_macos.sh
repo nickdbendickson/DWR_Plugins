@@ -5,7 +5,7 @@
 #   ./build_lisflood_macos.sh /path/to/LISFLOOD-FP-source [install folder]
 #
 # Get the source from the official release (University of Bristol), e.g.
-# LISFLOOD-FP v8.2 on Zenodo: https://zenodo.org/records/13121102
+# LISFLOOD-FP v8.3 on Zenodo: https://zenodo.org/records/13121119 (8.2, 13121102, also works)
 # Needs Xcode command line tools (xcode-select --install) and Homebrew.
 set -euo pipefail
 
