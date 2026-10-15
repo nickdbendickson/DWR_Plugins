@@ -206,6 +206,12 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         mode = self.parameterAsEnum(params, "WHICH", context)
         hydro = self.parameterAsEnum(params, "HYDRO", context)
         folder = self.parameterAsString(params, "DAMS_FOLDER", context)
+        if folder:                            # the Dams folder itself, nothing inside it
+            try:
+                from ..damsuite import layout as LY
+                LY.ensure_dams_folder(folder)
+            except Exception as e:
+                feedback.pushWarning("Dams folder not created: {}".format(e))
         curves = self.parameterAsString(params, "CURVES", context) or None
         cell = cm.distance_m_opt(self, params, context, "CELL_FT", "CELL") or None
         lethality = self.parameterAsEnum(params, "LETHALITY", context)
