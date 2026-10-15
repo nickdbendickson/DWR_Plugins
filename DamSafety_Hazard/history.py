@@ -25,7 +25,12 @@ MATCH_FT = 30.0
 DEPTH_CHANGE_FT = 0.5
 SETTING_KEYS = ("one_d", "judgment_as_probable", "persons_per_dwelling",
                 "min_area_ft2", "near_ft", "borderline_higher", "incremental_ft",
-                "extent_buffer_ft", "access", "lifeline_as_medium", "access_as_medium")
+                "extent_buffer_ft", "access", "lifeline_as_medium", "access_as_medium",
+                # SH.1 (2.18.30): pipeline.DEFAULTS keys that also shape the result
+                "population", "pop_period", "speed_mph", "occupancy", "access_ft")
+# keys added after snapshot version 1 was set: compared only when both snapshots
+# hold them (an older snapshot without them is no "setting changed")
+_ADDED_SETTING_KEYS = ("population", "pop_period", "speed_mph", "occupancy", "access_ft")
 CHANGE_FIELDS = ["Change", "Item", "Before", "Now", "X", "Y"]
 
 
@@ -171,7 +176,9 @@ def diff(before, now, match_units):
         return lines, rows
     changed_set = [k for k in sorted(set(before.get("settings", {})) | set(now.get("settings",
                                                                                     {})))
-                   if before.get("settings", {}).get(k) != now.get("settings", {}).get(k)]
+                   if before.get("settings", {}).get(k) != now.get("settings", {}).get(k)
+                   and not (k in _ADDED_SETTING_KEYS and (
+                       k not in before.get("settings", {}) or k not in now.get("settings", {})))]
     for k in changed_set:
         rows.append(["Setting", k, before["settings"].get(k), now["settings"].get(k), "", ""])
     rchanged = [k for k in sorted(set(before.get("rasters", {})) | set(now.get("rasters", {})))
