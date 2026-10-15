@@ -234,6 +234,11 @@ class QgsProcessingFeedback:
     def pushInfo(self, m):
         self.info.append(m)
 
+    def pushWarning(self, m):                     # QGIS 3.20+
+        self.warnings = getattr(self, "warnings", [])
+        self.warnings.append(m)
+        self.info.append(m)
+
     def reportError(self, m, fatalError=False):
         self.errors.append(m)
 
@@ -344,6 +349,10 @@ class FakeFeature:
 
     def geometry(self):
         return self._g
+
+    def fields(self):                       # QgsFeature.fields().names()
+        names = list(self.attrs)
+        return type("FakeFields", (), {"names": lambda _s: list(names)})()
 
     def __getitem__(self, k):
         if k not in self.attrs:

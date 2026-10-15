@@ -581,7 +581,9 @@ def defaults(step, work, settings):
         put("CURVES", curves())
         pts = src("structures")
         pkg = package_path(work)
-        if not pts and pkg and "structure_points" in package_layers(pkg):
+        # the package's structure_points whenever the engineer named no structures layer: the
+        # package's own "structures" (polygons) used to win, so the Runner got polygons
+        if not (S.get("structures") or "").strip() and pkg and "structure_points" in package_layers(pkg):
             pts = "{}|layername=structure_points".format(pkg)     # the Runner's receptors are points
         put("BLD", pts)
         if _from_package("structures", work, S):

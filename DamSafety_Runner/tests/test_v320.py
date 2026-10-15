@@ -16,6 +16,7 @@ import tempfile
 import numpy as np
 
 from nd_breach_runner.tests.registry import test
+from nd_breach_runner.tests.preflight_stub import without_dem_and_smoke_checks
 from nd_breach_runner.damsuite import versions  # noqa: E402  (display names, release set)
 
 
@@ -675,6 +676,7 @@ def rundam_takes_empty_values_from_dam_json():
 
 
 @test
+@without_dem_and_smoke_checks
 def batch_takes_empty_values_from_dam_json():
     algs, fq = _algs()
     d = _tmp()
@@ -718,6 +720,7 @@ class _FakeRaster:
 
 
 @test
+@without_dem_and_smoke_checks
 def rundam_and_batch_tools_read_and_write_dam_json_end_to_end():
     """The Processing tools with the GIS side and LISFLOOD-FP stubbed (as the model tests
     stub the GIS side)."""
@@ -760,7 +763,8 @@ def rundam_and_batch_tools_read_and_write_dam_json_end_to_end():
                                     "LISFLOOD_EXE": sys.executable, "DAMS_FOLDER": d}, ctx, fb)
         rec = dr.load(folder)
         assert rec.get("height_ft") == 25.0 and rec.conflicts[-1]["new"] == 27.0
-        assert any("dam.json keeps height_ft = 25" in e for e in fb.errors), fb.errors
+        msgs = fb.errors + getattr(fb, "warnings", []) + fb.info     # a warning now, not an error
+        assert any("dam.json keeps height_ft = 25" in e for e in msgs), msgs
         # the batch: a dam without a height field or value takes it from dam.json
         feats = [fq.FakeFeature(fq.FakeGeometry("point", [[(0.0, 0.0)]]), NIDID="ND00123",
                                 S=500.0)]

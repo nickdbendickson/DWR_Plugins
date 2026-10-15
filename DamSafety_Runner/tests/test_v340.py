@@ -14,6 +14,7 @@ import tempfile
 import numpy as np
 
 from nd_breach_runner.tests.registry import test
+from nd_breach_runner.tests.preflight_stub import without_dem_and_smoke_checks
 from nd_breach_runner.tests.test_v320 import fake_models, _dam, _settings, _FakeRaster
 
 FT = 0.3048
@@ -527,6 +528,7 @@ def qgis_io_reads_points_and_polygon_footprints_from_one_structures_layer():
 
 
 @test
+@without_dem_and_smoke_checks
 def rundam_tool_reads_footprints_and_the_building_and_refine_parameters():
     from nd_breach_runner.tests.run_tests import _patched_algs
     from nd_breach_runner.core import conditioning as cond
