@@ -168,7 +168,7 @@ DEFAULT_SETTINGS = {
 WINDOW_KEYS = ("terrain_source", "larger_clips", "engine", "scenario", "workers", "crit", "baseline",
                "baseline_cfs", "buildings", "building_raise_ft", "building_n", "incremental", "ref_units",
                "screen_what", "chain", "dem_cell", "grid_m", "simh", "simmax", "storage_choice",
-               "runner_tier", "runner_force_anuga", "runner_refine", "culvert_kind", "culvert_width",
+               "runner_tier", "runner_refine", "culvert_kind", "culvert_width",
                "culvert_height", "culvert_barrels", "culvert_shape", "culvert_name")
 for _k, _l, _p in LAYER_SLOTS:
     DEFAULT_SETTINGS[_k] = ""
@@ -607,10 +607,11 @@ def defaults(step, work, settings):
         put("BLD_MORE", more("structures"))
         put("LIFE_MORE", more("lifelines"))
         put("CHART_FILE", S.get("chart_file"))
-        if int(S.get("runner_tier") or 0):
-            p["ENGINE"] = int(S["runner_tier"])
-        if S.get("runner_force_anuga"):
-            p["FORCE_ANUGA"] = True
+        # 0.17.22: one engine choice; an old runner_force_anuga = True means engine 1
+        from .handoff import effective_engine
+        eng = effective_engine(S.get("runner_tier"), S.get("runner_force_anuga"))
+        if eng:
+            p["ENGINE"] = eng
         if S.get("runner_refine"):
             p["REFINE_NEAR"] = True
         put("CULVERTS", src("culverts"))
@@ -809,6 +810,10 @@ def window_settings_from(sf):
                 out[k] = str(v)
         except (TypeError, ValueError):
             continue
+    # 0.17.22: the old 'force ANUGA' box is the engine choice now (not stored on its own any
+    # more, so it cannot keep forcing ANUGA unseen): True -> runner_tier 1
+    if out.pop("runner_force_anuga", False):
+        out["runner_tier"] = 1
     return out
 
 

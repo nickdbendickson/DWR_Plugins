@@ -358,6 +358,10 @@ class NDDamScreeningDialog(QDialog):
         self.status_line = QLabel("Dams not yet. DEM not yet. Screen not yet.")
         self.status_line.setWordWrap(True)
         lay.addWidget(self.status_line)
+        # 0.17.22: the Runner engine step 7b will use, always visible on the Run tab
+        self.engine_status_label = QLabel(ho.engine_status(0))
+        self.engine_status_label.setWordWrap(True)
+        lay.addWidget(self.engine_status_label)
         lay.addWidget(self._county_dem_box())
 
         for key in SG.MAIN_STEPS:
@@ -583,12 +587,11 @@ class NDDamScreeningDialog(QDialog):
                                     "dam.json there. Empty = <work folder>/Dams.")
         # step 7b: the Runner's models / solver (defaults = the Runner's own)
         self.runner_tier = self._combo(list(ho.ENGINE_LABELS))
-        self.runner_tier.setToolTip("Step 7b: the Runner's models. ANUGA uses the culvert / bridge layer "
+        self.runner_tier.setToolTip("Step 7b: the Runner's engine (one choice; 'then ANUGA' is the old "
+                                    "'force ANUGA'). Only ANUGA models the culvert / bridge layer "
                                     "(Inputs: Culverts / bridges). The default sends nothing extra.")
-        self.runner_force_anuga = QCheckBox("Step 7b: force ANUGA (final results from ANUGA)")
-        self.runner_refine = QCheckBox("Step 7b: near-dam refine with the FV1 solver")
-        for c in (self.runner_force_anuga, self.runner_refine):
-            c.toggled.connect(self._changed)
+        self.runner_refine = QCheckBox("Step 7b: near-dam refine (finer FV1 grid near the dam; slower)")
+        self.runner_refine.toggled.connect(self._changed)
         self.runner_tier.currentIndexChanged.connect(self._changed)
         self.baseline = QCheckBox("Step 7: also run a no-breach baseline (increment rasters)")
         self.baseline.setToolTip("A second simulation of each dam with only the steady ambient flow, no "
@@ -646,8 +649,7 @@ class NDDamScreeningDialog(QDialog):
             ("ACER TM 11 chart file (.json)", self.chart_file, "json"),
             ("Step 7b DEM for the Runner", self.runner_dem, "raster"),
             ("Dams folder (7b, dam.json)", self.dams_folder, "dir"),
-            ("Step 7b Runner models", self.runner_tier, None),
-            ("", self.runner_force_anuga, None),
+            ("Step 7b Runner engine", self.runner_tier, None),
             ("", self.runner_refine, None),
             ("", self.baseline, None),
             ("Baseline ambient flow (cfs)", self.baseline_cfs, None),
@@ -1107,7 +1109,7 @@ class NDDamScreeningDialog(QDialog):
     # ---------------------------------------------------------------- settings --
     _EDITS = ("local_dem", "exe", "chart_file", "runner_dem", "dams_folder", "ref_folder", "old_inventory")
     _COMBOS = ("terrain_source", "larger_clips", "engine", "scenario", "crit", "buildings", "ref_units", "runner_tier")
-    _CHECKS = ("baseline", "incremental", "runner_force_anuga", "runner_refine")
+    _CHECKS = ("baseline", "incremental", "runner_refine")
     _SPINS = ("baseline_cfs", "building_raise_ft", "building_n", "dem_cell", "grid_m", "simh", "simmax")
 
     def settings(self):
@@ -1143,6 +1145,9 @@ class NDDamScreeningDialog(QDialog):
         return 0
 
     def _apply(self, s):
+        # 0.17.22: an old 'force ANUGA' choice is the engine choice now
+        if s and s.get("runner_force_anuga"):
+            s = dict(s, runner_tier=1, runner_force_anuga=False)
         self.work_edit.setText(s.get("work", ""))
         self.package_edit.setText(s.get("package", ""))
         self.inventory_county.setCurrentText(s.get("inventory_county") or "All counties")
@@ -1546,6 +1551,15 @@ class NDDamScreeningDialog(QDialog):
         rows = wf.statuses(work, s) if have else [
             (k, wf.TITLE[k], "optional" if k in wf.OPTIONAL else "waiting", "") for k in wf.KEYS]
         what = s.get("screen_what", 0)
+        if hasattr(self, "engine_status_label"):
+            try:
+                cul = wf.slot_source("culverts", work, s) if have else ""
+            except Exception:                                    # noqa
+                cul = ""
+            txt = ho.engine_status(s.get("runner_tier"), cul)
+            self.engine_status_label.setText(txt)
+            self.engine_status_label.setStyleSheet("font-weight: bold;" if ho.effective_engine(
+                s.get("runner_tier")) else "")
         for key, _title, state, note in rows:
             self.step_state[key].setText(STATE_TEXT.get(state, state))
             self.step_note[key].setText(note)
