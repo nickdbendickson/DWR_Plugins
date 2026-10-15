@@ -26,7 +26,7 @@ def _version_from_metadata(fallback, path=None):
     return fallback
 
 
-PLUGIN_VERSION = _version_from_metadata("2.31.5")
+PLUGIN_VERSION = _version_from_metadata("2.31.6")
 OUTPUT_FOLDER_NAME = "outputs"
 
 # ------------------------------------------------------------ layer tree ----

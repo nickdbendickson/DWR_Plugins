@@ -589,6 +589,8 @@ class ReviewTabMixin(object):
 
     def _field_sheet_import(self, *args):
         """Read a marked-up field-check sheet into the engineer's review decisions."""
+        if getattr(self, "_busy", False):       # 2.31.6: a run may be reading the decisions
+            return
         try:
             from . import fieldcheck as FC
             res = getattr(self, "_last_run", None)
