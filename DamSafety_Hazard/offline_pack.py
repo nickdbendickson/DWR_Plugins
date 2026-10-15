@@ -31,6 +31,7 @@ opened (it is read-only by design); build_spatial_index() adds the R*Trees
 to a pack's work file, and the builder does so when it writes the zip.
 """
 
+import hashlib
 import json
 import os
 import pathlib
@@ -51,6 +52,25 @@ MANIFEST_NAME = "manifest.json"
 ND_BBOX = (-104.0489, 45.9351, -96.5543, 49.0000)
 DEFAULT_PAD_DEG = 0.1
 
+
+
+def _log(msg):
+    try:
+        from .helpers import log_message
+        log_message(msg)
+    except Exception:                                   # noqa: BLE001 - outside QGIS
+        pass
+
+
+_DEMOTED = set()
+
+
+def _demoted(name, why):
+    """OP.1: say once per data set that its queries use the slower btree index."""
+    if name not in _DEMOTED:
+        _DEMOTED.add(name)
+        _log("Offline pack: data set {} queried without its R*Tree ({}) - slower, "
+             "same result".format(name, why))
 
 class PackError(Exception):
     pass
@@ -555,10 +575,14 @@ class PackWriter(object):
             g = f.get("geometry") if isinstance(f, dict) else None
             bb = geom_bbox(g) if g else None
             if bb is None:
+                cur["no_geom"] = cur.get("no_geom", 0) + 1     # OP.3: counted, noted
                 continue                  # no geometry: a query could never return it
             uid = uid_of(f)
             if uid is None:
-                uid = json.dumps(g, sort_keys=True)[:400]
+                # OP.4: a hash of the WHOLE geometry (a 400-character prefix made two
+                # long lines with the same first vertices one feature)
+                uid = "g:" + hashlib.sha1(json.dumps(g, sort_keys=True).encode(
+                    "utf-8")).hexdigest()
             cur["maxw"] = max(cur["maxw"], bb[2] - bb[0])
             cur["maxh"] = max(cur["maxh"], bb[3] - bb[1])
             cur["types"].add(g.get("type"))
@@ -590,6 +614,10 @@ class PackWriter(object):
         """gaps: [(xmin, ymin, xmax, ymax)] areas that could not be read."""
         cur = self._cur
         n = self.con.execute("SELECT COUNT(*) FROM {}".format(cur["table"])).fetchone()[0]
+        if cur.get("no_geom"):                        # OP.3: into the manifest note + log
+            msg = "{} feature(s) without geometry skipped".format(cur["no_geom"])
+            note = "{}; {}".format(note, msg) if note else msg
+            _log("Offline pack {}: {}".format(cur["name"], msg))
         _drop_index(self.con, cur["name"])        # v2.9.0: the old table's R*Tree
         self.con.commit()
         self.con.execute("DROP TABLE IF EXISTS {}".format(cur["final"]))
@@ -752,9 +780,11 @@ class PackReader(object):
         for name, info in self.datasets.items():
             try:
                 if not _index_valid(con, name, info.get("count")):
+                    _demoted(name, "R*Tree missing or out of date")
                     continue
                 con.execute('SELECT id FROM "{}" LIMIT 0'.format(_rtree(name))).fetchall()
-            except sqlite3.Error:
+            except sqlite3.Error as e:
+                _demoted(name, str(e))
                 continue
             out[name] = _rtree(name)
         return out

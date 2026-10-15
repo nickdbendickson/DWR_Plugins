@@ -3,7 +3,7 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-PLUGIN_VERSION = "2.18.28"
+PLUGIN_VERSION = "2.18.29"
 OUTPUT_FOLDER_NAME = "outputs"
 
 # ------------------------------------------------------------ layer tree ----

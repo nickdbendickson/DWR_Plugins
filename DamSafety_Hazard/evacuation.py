@@ -84,7 +84,12 @@ import numpy as np
 from qgis.core import QgsCoordinateTransform, QgsFeatureRequest, QgsRectangle
 
 from . import consequences as CQ
-from .access import EXIT_MARGIN_FT, SNAP_FT, _ft, _node_line_ends, _seg_dist
+try:                    # EVC.1: private helpers of access.py - a rename must say so clearly
+    from .access import EXIT_MARGIN_FT, SNAP_FT, _ft, _node_line_ends, _seg_dist
+except ImportError as _e:                                   # pragma: no cover
+    raise ImportError("evacuation.py needs access.py's EXIT_MARGIN_FT, SNAP_FT, _ft, "
+                      "_node_line_ends and _seg_dist ({}) - the two modules are out of "
+                      "step".format(_e)) from _e
 from .constants import (
     DEFAULT_ACCESS_SEARCH_FT, DEFAULT_VEHICLE_SPEED_MPH, DEFAULT_WARNING_ISSUED_HR,
     LINE_SAMPLE_STEP_FT,
@@ -849,7 +854,8 @@ ROUTE_FIELDS = [("Persons", "d"), ("Status", "s"), ("Safe_Exit_Possible", "s"),
                 ("Exit_X", "d"), ("Exit_Y", "d")]
 CLOSURE_FIELDS = [("Edge", "i"), ("Road", "s"), ("Close_min", "d"), ("Close_hhmm", "s"),
                   ("Max_Depth_ft", "d"), ("No_Arrival_Time", "s"), ("Length_ft", "d"),
-                  ("Limits_Structures", "i"), ("Limits_Persons", "d")]
+                  ("Limits_Structures", "i"), ("Limits_Persons", "d"),
+                  ("Limits_Failing", "i")]
 
 
 def route_of(res, row):
@@ -985,7 +991,8 @@ def closures_layer(res, crs=None, name=CLOSURES_LAYER):
     there - 0 when a deep sample has no arrival time, No_Arrival_Time = Yes),
     its deepest sample (Max_Depth_ft), and how many structures / persons of the
     timing table this piece limits (Limiting_Edge in Evacuation_Timing.csv =
-    Edge here). None when nothing closes or the graph was not kept."""
+    Edge here) - EVC.5: all of them, positive margin or not (Limits_Structures,
+    Limits_Persons); Limits_Failing: those of them with a negative margin. None when nothing closes or the graph was not kept."""
     from qgis.core import QgsFeature, QgsGeometry, QgsPointXY
     from .compat import WKB_LINESTRING, NULL
     from .helpers import create_memory_layer, add_features_batched
@@ -995,22 +1002,27 @@ def closures_layer(res, crs=None, name=CLOSURES_LAYER):
     closing = np.nonzero(np.isfinite(g.eclose))[0]
     if not len(closing):
         return None
-    limits = defaultdict(lambda: [0, 0.0])
+    # EVC.5: Limits_Structures / Limits_Persons count EVERY timing row this piece
+    # limits, whatever the sign of its margin (unchanged); Limits_Failing counts only
+    # those that cannot leave in time (margin < 0)
+    limits = defaultdict(lambda: [0, 0.0, 0])
     for r in res.get("rows") or []:
         if r.get("limiting_edge") is not None and r.get("margin_min") is not None:
             limits[int(r["limiting_edge"])][0] += 1
             limits[int(r["limiting_edge"])][1] += r.get("persons") or 0.0
+            if r["margin_min"] < 0:
+                limits[int(r["limiting_edge"])][2] += 1
     lyr = create_memory_layer(name, WKB_LINESTRING, _crs_of(res, crs), _qfields(CLOSURE_FIELDS))
     feats = []
     for e in closing.tolist():
         f = QgsFeature(lyr.fields())
         f.setGeometry(QgsGeometry.fromPolylineXY([QgsPointXY(float(g.ex0[e]), float(g.ey0[e])),
                                                   QgsPointXY(float(g.ex1[e]), float(g.ey1[e]))]))
-        n, p = limits.get(e, (0, 0.0))
+        n, p, nf = limits.get(e, (0, 0.0, 0))
         f.setAttributes([int(e), _road_name(g, e) or NULL, _num(g.eclose[e]),
                          _hhmm(g.eclose[e]), _num(g.emaxd[e]),
                          "Yes" if bool(g.eunk[e]) else "No", _num(g.elen_ft[e], 1),
-                         int(n), _num(p)])
+                         int(n), _num(p), int(nf)])
         feats.append(f)
     add_features_batched(lyr.dataProvider(), feats, 5000)
     lyr.updateExtents()
