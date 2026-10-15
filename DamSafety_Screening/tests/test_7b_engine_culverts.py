@@ -33,7 +33,7 @@ p, notes = ho.engine_params(1, True, False, CUL, {"C_KIND": "kind", "C_WIDTH": "
                                                   "C_HEIGHT": "height_ft", "C_BARRELS": "barrels",
                                                   "C_SHAPE": "shape", "C_NAME": "name"})
 assert p == dict({"TIER": 1, "FORCE_ANUGA": True, "STRUCTURES": CUL}, **REF_FIELDS), p
-assert set(p) <= set(ho.RUNDAM_KEYS) and len(notes) == 3
+assert set(p) <= set(ho.RUNDAM_KEYS) and len(notes) == 3 and ho.CULVERTS_IGNORED not in notes
 p, _ = ho.engine_params(0, False, True, CUL, {"C_KIND": "", "C_NAME": "label"})
 assert p == {"REFINE_NEAR": True, "STRUCTURES": CUL, "S_NAME": "label"}, p   # empty = runner synonyms
 assert "STRUCTURES" not in ho.CULVERT_FIELDS and all(k.startswith("C_") for k, _r, _d in ho.CULVERT_FIELDS)
@@ -156,3 +156,9 @@ RunnerHandoff().run_mock(dict(base, ENGINE=1, FORCE_ANUGA=True, CULVERTS=CL, C_K
 got = {k: sent[1][k] for k in NEW if k in sent[1]}
 assert got == dict({"TIER": 1, "FORCE_ANUGA": True, "STRUCTURES": CL}, **REF_FIELDS), got
 print("OK (7b sends the engine and culverts to rundam; defaults send nothing new)")
+
+# culverts with LISFLOOD-FP only and no force: said to be unused (the Runner uses them in ANUGA only)
+_p, _n = ho.engine_params(0, False, False, CUL, {})
+assert ho.CULVERTS_IGNORED in _n and _p.get("STRUCTURES") == CUL, _n
+assert ho.CULVERTS_IGNORED not in ho.engine_params(0, True, False, CUL, {})[1]
+print("OK (culverts-ignored note)")

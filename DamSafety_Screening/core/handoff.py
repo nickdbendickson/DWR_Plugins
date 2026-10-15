@@ -44,6 +44,8 @@ RUNDAM_KEYS = ("DAM_ID", "DAM_NAME", "DAM_POINT", "HEIGHT_FT", "STORAGE_ACFT", "
 # refine (REFINE_NEAR); rundam has no other solver switch.
 ENGINE_LABELS = ["Runner default (LISFLOOD-FP only)",
                  "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"]
+CULVERTS_IGNORED = ("culverts / bridges are used only by ANUGA: with 'Runner default (LISFLOOD-FP "
+                    "only)' and 'force ANUGA' off they do not change the result")
 # 7b's culvert / bridge field parameters -> the Runner's STRUCTURES field parameters.
 # (7b's own STRUCTURES-like layer is BLD = buildings, so the culvert layer is CULVERTS here.)
 CULVERT_FIELDS = (("C_KIND", "S_KIND", "kind (culvert / bridge / notch)"),
@@ -355,6 +357,9 @@ def engine_params(tier=0, force_anuga=False, refine_near=False, culverts=None,
             if v:
                 p[rkey] = str(v)
         notes.append("culverts / bridges: {}".format(culverts))
+        if not tier and not force_anuga:
+            # the Runner uses the culvert layer only in ANUGA; say so instead of dropping it quietly
+            notes.append(CULVERTS_IGNORED)
     return p, notes
 
 
