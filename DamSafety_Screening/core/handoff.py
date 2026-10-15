@@ -411,8 +411,10 @@ def engine_params(tier=0, force_anuga=False, refine_near=False, culverts=None,
             v = (culvert_fields or {}).get(key)
             if v:
                 p[rkey] = str(v)
-        notes.append("culverts / bridges: {}{}".format(
-            culverts, "" if tier else " (IGNORED: LISFLOOD-FP only)"))
+        notes.append("culverts / bridges: {}".format(culverts))
+        if not tier:
+            # the Runner uses the culvert layer only in ANUGA; say so instead of dropping it quietly
+            notes.append(CULVERTS_IGNORED)
     return p, notes
 
 

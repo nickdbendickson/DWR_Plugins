@@ -33,7 +33,7 @@ p, notes = ho.engine_params(1, True, False, CUL, {"C_KIND": "kind", "C_WIDTH": "
                                                   "C_HEIGHT": "height_ft", "C_BARRELS": "barrels",
                                                   "C_SHAPE": "shape", "C_NAME": "name"})
 assert p == dict({"TIER": 1, "STRUCTURES": CUL}, **REF_FIELDS), p    # 0.17.21: FORCE folded into TIER
-assert set(p) <= set(ho.RUNDAM_KEYS) and len(notes) == 2
+assert set(p) <= set(ho.RUNDAM_KEYS) and len(notes) == 2 and ho.CULVERTS_IGNORED not in notes
 p, _ = ho.engine_params(0, False, True, CUL, {"C_KIND": "", "C_NAME": "label"})
 assert p == {"REFINE_NEAR": True, "STRUCTURES": CUL, "S_NAME": "label"}, p   # empty = runner synonyms
 assert "STRUCTURES" not in ho.CULVERT_FIELDS and all(k.startswith("C_") for k, _r, _d in ho.CULVERT_FIELDS)
@@ -170,6 +170,12 @@ assert got == dict({"TIER": 1, "STRUCTURES": CL}, **REF_FIELDS), got
 assert any("Runner engine (7b): LISFLOOD-FP \u2192 ANUGA" in m for m in fb.log), fb.log
 assert any("FORCE_ANUGA (before 0.17.21)" in m for m in fb.log)
 print("OK (7b sends the engine and culverts to rundam; defaults send nothing new)")
+
+# culverts with LISFLOOD-FP only and no force: said to be unused (the Runner uses them in ANUGA only)
+_p, _n = ho.engine_params(0, False, False, CUL, {})
+assert ho.CULVERTS_IGNORED in _n and _p.get("STRUCTURES") == CUL, _n
+assert ho.CULVERTS_IGNORED not in ho.engine_params(0, True, False, CUL, {})[1]
+print("OK (culverts-ignored note)")
 
 # ---- 5. 0.17.21 follow-ups (QGIS Dev's #22 review)
 # legacy FORCE_ANUGA alone = engine 1

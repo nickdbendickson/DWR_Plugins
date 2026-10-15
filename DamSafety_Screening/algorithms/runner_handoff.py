@@ -89,6 +89,15 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 "dams without a screening class (NoData or empty: failed simulation) are sent too.\n"
                 "Both plugins use the same rules module (core/nd_hazard.py, ND 5.2 / 5.3 with the ACER "
                 "TM 11 charts); the chart method needs digitized and checked charts.\n"
+                "RUNNER MODELS (ENGINE, FORCE_ANUGA, REFINE_NEAR, CULVERTS): left at their defaults nothing "
+                "extra is sent and the Runner runs LISFLOOD-FP only. 'Runner models' = LISFLOOD-FP for the "
+                "extent, then ANUGA sends TIER=1 (final results from ANUGA). 'Force ANUGA' asks for ANUGA "
+                "final results even when 'Runner models' is LISFLOOD-FP only (the Runner needs ANUGA set "
+                "up). 'Near-dam refine' re-runs the area next to the dam with the FV1 solver. CULVERTS "
+                "(lines, upstream end first) go to the Runner's STRUCTURES and are used only by ANUGA: "
+                "with LISFLOOD-FP only and force ANUGA off they are logged as not used. The C_* fields "
+                "name the culvert layer's columns; empty = the Runner matches its synonyms (kind, "
+                "width_ft, height_ft, barrels, shape, name).\n"
                 "OUTPUT: the input dams plus rn_status (done / failed: message / skipped: reason), "
                 "rn_folder, rn_class, rn_border, rn_gaps, scr_class (the screening class, hz_class), "
                 "rn_agree (agree / runner higher / runner lower) and rn_inputs (what was sent). A dam "
@@ -345,11 +354,12 @@ class RunnerHandoff(QgsProcessingAlgorithm):
             if not ho.find_anuga_python(_runner_anuga_setting, None, _runner_anuga_detect()):
                 raise QgsProcessingException(ho.ANUGA_MISSING)
         else:
-            feedback.pushInfo(status)
-            if culverts not in (None, ""):
-                _warn(feedback, ho.CULVERTS_IGNORED)
+            feedback.pushInfo(status)       # culverts on LISFLOOD-only: warned with the notes below
         for n in eng_notes:
-            feedback.pushInfo("Runner: " + n)
+            if n == ho.CULVERTS_IGNORED:
+                _warn(feedback, "Runner: " + n)
+            else:
+                feedback.pushInfo("Runner: " + n)
         engine_text = ho.ENGINE_SHORT[engine]
 
         fields, put = cm.extend_fields(dams.fields(), NEW)

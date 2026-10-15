@@ -167,7 +167,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.tab_widget.setCurrentWidget(setup_tab)
 
         # --- Data & Output tab (data_tab.py); the "Run everything" button is here (v2.9) ---
-        self.tab_widget.addTab(self._build_data_tab(), "Data and Output")
+        self.tab_widget.addTab(self._build_data_tab(), "Data && Output")   # "&&" shows one "&"
 
         # --- Hazard classification tab (classify_tab.py) ---
         self.tab_widget.addTab(self._build_classification_tab(), "Hazard Classification")
@@ -238,7 +238,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _on_tab_changed(self, index):
-        if self.tab_widget.tabText(index) in ("Hazard Classification", "Data & Output"):
+        if self.tab_widget.tabText(index).replace("&&", "&") in ("Hazard Classification", "Data & Output"):
             self._refresh_layer_combos()
 
     def _inline_row(self, edit, btn):
