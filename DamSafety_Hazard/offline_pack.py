@@ -526,6 +526,19 @@ class PackWriter(object):
         self._reset_stage(cur["name"], cur["url"], self._stage_sig(cur["name"]))
         cur.update(n=0, maxw=0.0, maxh=0.0, types=set(), resumed=0)
 
+    @property
+    def count(self):
+        """BP.3: features stored so far for the data set being fetched (0 when
+        none is being fetched) - public, instead of reading _cur["n"]."""
+        return int(self._cur["n"]) if self._cur else 0
+
+    def stage_started(self, name=None):
+        """BP.2: when the (resumed) staging of data set `name` started, as the
+        stored "YYYY-MM-DDTHH:MM:SS" text, or None."""
+        name = name or (self._cur or {}).get("name")
+        row = self.con.execute("SELECT started FROM stages WHERE name=?", (name,)).fetchone()
+        return row[0] if row and row[0] else None
+
     def _stage_sig(self, name):
         row = self.con.execute("SELECT sig FROM stages WHERE name=?", (name,)).fetchone()
         return row[0] if row else ""
