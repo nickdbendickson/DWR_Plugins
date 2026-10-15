@@ -506,6 +506,21 @@ def _write_pass_products(out_folder, dem, env, arrival_m, writer, it):
         products.write_gpkg(os.path.join(out_folder, "Breach Products.gpkg"), layers, crs)
 
 
+def model_dem(terrain_src, structures, model, bounds, cell, refill_paths=()):
+    """The DEM an engine gets: the (conditioned) terrain read at the model's cell size, the
+    refill paths, then the structure cuts applied AT THAT CELL SIZE (after any resampling,
+    so an averaged or bilinear read cannot wash a narrow cut out)."""
+    g = terrain_src.read(bounds, cell)
+    if refill_paths:
+        from . import dem_refill
+        for _p in refill_paths:
+            g = dem_refill.fill_grid(g, _p)
+    cuts = structmod.structure_edits(structures or [], cell, model)
+    if cuts:
+        g, _, _ = cond.Edits(notches=cuts).apply(g)
+    return g
+
+
 def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             progress=None, log=None, cancel=None):
     """dam: breach.DamData; dam_xy / inflow_xy in the working (metric) CRS.
@@ -556,15 +571,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     refill_paths = []
 
     def dem_for(model, bounds, cell):
-        g = terrain_src.read(bounds, cell)
-        if refill_paths:
-            from . import dem_refill
-            for _p in refill_paths:
-                g = dem_refill.fill_grid(g, _p)
-        cuts = structmod.structure_edits(st.structures, cell, model)
-        if cuts:
-            g, _, _ = cond.Edits(notches=cuts).apply(g)
-        return g
+        return model_dem(terrain_src, st.structures, model, bounds, cell, refill_paths)
 
     # --- 3.5: inventory inlet / outlet elevations against the LiDAR -------------
     if st.structures:
@@ -782,13 +789,23 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         csv_path = cgmod.write_candidates_csv(
             os.path.join(model_dir, "culvert_candidates.csv"), candidates)
         if n_match:
+            if burn:
+                burned = cgmod.matched_structures(candidates)
+                try:
+                    for n in cgmod.lidar_inverts(burned, terrain_src.read, min(cs, 1.0)):
+                        log(n)
+                except Exception as e:                           # noqa - never stop the run
+                    log("matched culvert inverts not read from the LiDAR: {}".format(e))
+                for m, b in zip([c for c in candidates if c.get("match_m") is not None],
+                                burned):
+                    m["invert_up_m"], m["invert_dn_m"] = b.invert_up_m, b.invert_dn_m
+                st.structures = list(st.structures) + burned
             report["culvert_matches"] = [
                 {"name": c["name"], "source": c["source"], "match_m": c["match_m"],
                  "width_m": c["width_m"], "height_m": c["height_m"], "barrels": c["barrels"],
-                 "shape": c["shape"], "burned": burn}
+                 "shape": c["shape"], "burned": burn,
+                 "invert_up_m": c.get("invert_up_m"), "invert_dn_m": c.get("invert_dn_m")}
                 for c in candidates if c.get("match_m") is not None]
-            if burn:
-                st.structures = list(st.structures) + cgmod.matched_structures(candidates)
             warnings.append(
                 "{} culvert guess(es) took their size from an inventory record within {:.0f} m "
                 "({}); listed in {}.".format(
@@ -1908,6 +1925,23 @@ def render_report(r):
         lines += ["- " + c["note"], ""]
     if r.get("structures"):
         lines += ["## Structures", ""] + ["- " + x for x in r["structures"]] + [""]
+    if r.get("culvert_matches"):
+        lines += ["## Culvert matches", "",
+                  "Road-crossing guesses sized from an inventory record within the match "
+                  "distance. Burned = cut into the model DEM.", "",
+                  "| Guess | Source | Match (m) | Span (ft) | Rise (ft) | Barrels | Shape | Burned "
+                  "| Inverts up / down (ft) |",
+                  "|---|---|---|---|---|---|---|---|---|"]
+        for m in r["culvert_matches"]:
+            iu, idn = m.get("invert_up_m"), m.get("invert_dn_m")
+            inv = "{:.1f} / {:.1f}".format(iu / FT, idn / FT) if (iu is not None and
+                                                                   idn is not None) else ""
+            lines.append("| {} | {} | {:.1f} | {:.1f} | {:.1f} | {} | {} | {} | {} |".format(
+                str(m.get("name", "")).replace("|", "/"), m.get("source", ""),
+                float(m.get("match_m") or 0.0), float(m.get("width_m") or 0.0) / FT,
+                float(m.get("height_m") or 0.0) / FT, m.get("barrels", ""),
+                m.get("shape", ""), "yes" if m.get("burned") else "no", inv))
+        lines.append("")
     if r.get("receptors"):
         lines += ["## Receptors", ""]
         for k, v in r["receptors"].items():

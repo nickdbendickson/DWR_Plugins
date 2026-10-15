@@ -45,12 +45,32 @@ class Structure:
     invert_inventory: Optional[tuple] = None   # (up, dn) metres as the inventory gave them
     source: str = "inventory"           # "inventory" or "guess"
     surveyed: bool = True               # a guess is not a measured culvert
+    min_cells: int = 0                  # >0: the cut line spans at least this many model cells
+                                        # (inventory-matched guesses: a short line inside one
+                                        # coarse cell has no lower ground at its ends to cut to)
+
+    def cut_line(self, cell):
+        """The line the DEM cut follows at this cell size: as given, or lengthened
+        symmetrically along its own direction to min_cells x cell."""
+        line = np.asarray(self.line, dtype=float)
+        if not self.min_cells or len(line) < 2:
+            return line
+        a, b = line[0], line[-1]
+        v = b - a
+        L = float(np.hypot(v[0], v[1]))
+        need = float(self.min_cells) * float(cell)
+        if L <= 0 or L >= need:
+            return line
+        u = v / L
+        ext = 0.5 * (need - L)
+        return np.vstack([a - u * ext, line[1:-1], b + u * ext]) if len(line) > 2 else \
+            np.array([a - u * ext, b + u * ext])
 
     def corridor_width(self, cell):
         return max(cell, self.width_m * max(1, self.barrels) * 1.1)
 
     def notch(self, cell):
-        return cond.Notch(self.line, self.corridor_width(cell), self.invert_up_m,
+        return cond.Notch(self.cut_line(cell), self.corridor_width(cell), self.invert_up_m,
                           self.invert_dn_m, name=self.name or self.kind)
 
     def to_dict(self):

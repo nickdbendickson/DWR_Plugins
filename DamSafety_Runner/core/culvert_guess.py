@@ -44,13 +44,19 @@ def _cross(a, b, c, d):
     return None
 
 
-def _first_cross(line_a, line_b):
+def _first_cross(line_a, line_b, with_seg=False):
     for i in range(len(line_a) - 1):
         for j in range(len(line_b) - 1):
             hit = _cross(line_a[i], line_a[i + 1], line_b[j], line_b[j + 1])
             if hit:
-                return hit
-    return None
+                return (hit, (line_b[j], line_b[j + 1])) if with_seg else hit
+    return (None, None) if with_seg else None
+
+
+def _unit(a, b):
+    dx, dy = float(b[0]) - float(a[0]), float(b[1]) - float(a[1])
+    n = math.hypot(dx, dy)
+    return (dx / n, dy / n) if n > 0 else None
 
 
 def write_candidates_csv(path, rows):
@@ -102,7 +108,7 @@ def guess_crossings(roads, channels, length_m=12.0):
         for ci, chan in enumerate(channels or []):
             if len(chan) < 2:
                 continue
-            hit = _first_cross(road, chan)
+            hit, seg = _first_cross(road, chan, with_seg=True)
             if not hit:
                 continue
             # a short line across the road, so the barrel has two ends
@@ -122,6 +128,8 @@ def guess_crossings(roads, channels, length_m=12.0):
                 "surveyed": False,
                 "line": [(hit[0] - px, hit[1] - py), (hit[0] + px, hit[1] + py)],
                 "note": "not surveyed; a road crossing a depression or channel",
+                "xy": (hit[0], hit[1]),
+                "chan_dir": _unit(seg[0], seg[1]),
             })
     return out
 
@@ -158,7 +166,7 @@ def inventory_record(props, xy):
         if is_culv:
             c = _nt.parse_culvert_text(ctext)
             rec.update(span_ft=c["span_ft"], rise_ft=c["rise_ft"], shape=c["shape"],
-                       barrels=c["barrels"])
+                       barrels=c["barrels"], barrel_len_ft=c["barrel_len_ft"])
             rec["notes"] += c["notes"]
             if not rec["barrels"]:
                 n = _nt._pos(p.get("total_spans"))
@@ -290,6 +298,8 @@ def match_inventory(guesses, inventory, match_m=MATCH_M):
                  note="size from {} {:.0f} m away{}".format(
                      src, d, "; inventory shape {}".format(r["shape"])
                      if r.get("shape") and r["shape"] != shape else ""))
+        if r.get("barrel_len_ft"):
+            g["barrel_len_m"] = round(float(r["barrel_len_ft"]) * FT, 2)
         used_g.add(gi)
         used_r.add(ri)
     return rows, notes
@@ -315,9 +325,34 @@ def drop_near_structures(guesses, structures, drop_m=MATCH_M):
     return kept, dropped
 
 
-def matched_structures(rows):
+BURN_MARGIN_M = 10.0           # added on each side of the barrel for the side slopes
+BURN_MIN_CELLS = 2             # the cut spans at least this many model cells
+
+
+def burn_line(g, margin_m=BURN_MARGIN_M):
+    """The cut line of a matched guess, upstream end first: along the channel through the
+    crossing point (the guess's own line is across the road chord and only 12 m long),
+    barrel length + 2 x margin long (the guess length when the inventory has no barrel
+    length)."""
+    line = [(float(p[0]), float(p[1])) for p in g["line"]]
+    xy = g.get("xy") or _mid(line)
+    d = g.get("chan_dir")
+    if d is None:
+        (ax, ay), (bx, by) = line[0], line[-1]
+        d = _unit((ax, ay), (bx, by)) or (1.0, 0.0)
+    L0 = math.hypot(line[-1][0] - line[0][0], line[-1][1] - line[0][1])
+    L = float(g["barrel_len_m"]) + 2.0 * margin_m if g.get("barrel_len_m") else L0
+    L = max(L, L0)
+    h = 0.5 * L
+    return [(xy[0] - d[0] * h, xy[1] - d[1] * h), (xy[0] + d[0] * h, xy[1] + d[1] * h)]
+
+
+def matched_structures(rows, min_cells=BURN_MIN_CELLS):
     """structures.Structure objects for the matched (surveyed) rows, for cutting into the
-    DEM. Unmatched guesses are never returned."""
+    DEM. Unmatched guesses are never returned. The line follows the channel through the
+    crossing; at each model's cell size the cut is lengthened to min_cells cells
+    (Structure.cut_line) so its ends reach the ground beside the embankment - a short line
+    inside one coarse cell sets both inverts to that cell and cuts nothing."""
     import numpy as np
     from . import structures as structmod
     out = []
@@ -325,10 +360,50 @@ def matched_structures(rows):
         if not g.get("surveyed") or g.get("match_m") is None:
             continue
         s = structmod.Structure(
-            "culvert", np.asarray(g["line"], dtype=float), float(g["width_m"]),
+            "culvert", np.asarray(burn_line(g), dtype=float), float(g["width_m"]),
             float(g["height_m"]), int(g.get("barrels") or 1), g.get("shape") or "box",
             name=g.get("name") or "")
         s.source = g.get("source") or "inventory"
         s.surveyed = True
+        s.min_cells = int(min_cells)
         out.append(s)
     return out
+
+
+def lidar_inverts(structures, read_dem, fine_cell=1.0, radius_m=None):
+    """Set the inverts of matched culverts that have none to the lowest LiDAR ground within
+    radius_m (default: the barrel span x barrels, at least 5 m) of each end, read at
+    fine_cell - BEFORE the model resamples the DEM. Without this a coarse model cell's
+    default invert is the averaged embankment cell itself and the cut does nothing.
+    read_dem(bounds, cell) -> Grid. Returns notes; the structures are updated in place."""
+    import numpy as np
+    notes = []
+    for s in structures or []:
+        if s.invert_up_m is not None or s.invert_dn_m is not None:
+            continue
+        line = np.asarray(s.line, dtype=float)
+        if len(line) < 2:
+            continue
+        r = radius_m or max(5.0, float(s.width_m) * max(1, int(s.barrels)))
+        inv = []
+        for x, y in (line[0], line[-1]):
+            g = read_dem((x - r - fine_cell, y - r - fine_cell, x + r + fine_cell,
+                          y + r + fine_cell), fine_cell)
+            z = np.asarray(g.data, dtype=float)
+            ny, nx = z.shape
+            xs = g.x0 + (np.arange(nx) + 0.5) * g.dx
+            ys = g.y0 - (np.arange(ny) + 0.5) * g.dx
+            X, Y = np.meshgrid(xs, ys)
+            ok = np.isfinite(z) & (np.hypot(X - x, Y - y) <= r)
+            nd = getattr(g, "nodata", None)
+            if nd is not None:
+                ok &= z != nd
+            inv.append(float(z[ok].min()) if ok.any() else None)
+        if None in inv:
+            notes.append("{}: no LiDAR at an end; inverts left to the model grid".format(s.name))
+            continue
+        s.invert_up_m, s.invert_dn_m = inv[0], inv[1]
+        s.invert_note = "inverts = lowest LiDAR ground within {:.0f} m of each end".format(r)
+        notes.append("{}: inverts {:.2f} / {:.2f} m from the LiDAR at {:g} m".format(
+            s.name, inv[0], inv[1], fine_cell))
+    return notes
