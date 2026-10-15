@@ -27,7 +27,6 @@ BY_NAME = (
     (r"^baseline velocity \(max\)\.tif$", "velocity_fps.qml"),
     (r"^arrival time\.tif$", "arrival_h.qml"),
     (r"^baseline arrival time\.tif$", "arrival_h.qml"),
-    (r"^hecras (depth|velocity|arrival)", None),                 # set below
     (r"_(base_)?depth\.tif$", "depth_m.qml"),                   # Screening tool 7 (m)
     (r"_incr_depth\.tif$", "depth_m.qml"),
     (r"_(base_)?vel\.tif$", "velocity_ms.qml"),
