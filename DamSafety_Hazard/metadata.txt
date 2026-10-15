@@ -5,9 +5,16 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.23
+version=2.18.24
 author=N.D. Bendickson
 changelog=
+    2.18.24 - 2026-10-15
+      * Portfolio: the ND class read from a summary drops the heading flags (they go to
+        Notes); the CSV review estimate also counts the manufactured-home notes and every
+        reviewed row.
+      * Reproduction: settings this version does not know are listed in the notes and
+        the report; one work-folder rule (refuse a non-empty folder without the
+        reproduction marker) for the dialog and every other caller.
     2.18.23 - 2026-10-15
       * Data estimate: the planned downloads match the run - no downloads under
         ND_DAM_SUITE / ND_DAM_OFFLINE, no address points when an address layer is
