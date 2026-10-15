@@ -115,7 +115,10 @@ def layer_specs():
 # ----------------------------------------------------------------------------- the steps --
 def _nonempty_folder(p):
     try:
-        return os.path.isdir(p) and any(True for _ in os.scandir(p))
+        if not os.path.isdir(p):
+            return False
+        with os.scandir(p) as it:
+            return any(True for _ in it)
     except OSError:
         return False
 
