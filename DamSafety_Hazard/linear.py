@@ -486,6 +486,10 @@ def same_direction(st, geom, max_deg=AADT_MAX_ANGLE_DEG):
         m = len(xs) // 2
         lo, hi = max(0, m - 3), min(len(xs), m + 4)
         a = _local_direction(xs[lo:hi], ys[lo:hi], xs[m], ys[m])
+        # LN.3: every failure below (degenerate stretch, no usable candidate part,
+        # an exception) returns True = "same direction": the AADT candidate is KEPT
+        # (fail-open), so a bad geometry never drops a count; along_fraction and
+        # names_conflict still filter it.
         if a is None:
             return True                       # a single sample: no direction to test
         best = None
@@ -499,6 +503,13 @@ def same_direction(st, geom, max_deg=AADT_MAX_ANGLE_DEG):
         return best is None or best >= math.cos(math.radians(max_deg))
     except Exception:
         return True
+
+
+def motorists(aadt, length_ft, speed_mph, occupancy):
+    """LN.1: persons in vehicles on a stretch at one time (TM 11): vehicles/hour
+    x hours to drive the stretch x occupancy. Shared with sensitivity._persons."""
+    vehicles = aadt / 24.0 * ((length_ft or 0.0) / 5280.0) / max(speed_mph, 1.0)
+    return vehicles * occupancy
 
 
 def best_aadt(candidates):
@@ -595,8 +606,7 @@ def analyze_roads(road_layer, samplers, analysis_crs, transform_ctx, filter_rect
                 vzone = int(classify_values(st["depth"], st["vel"], *curves).min())
         persons = None
         if veh and aadt and paved != "No" and vzone in (CLASS_HIGH, CLASS_JUDGMENT):
-            vehicles = aadt / 24.0 * (st["length_ft"] / 5280.0) / max(speed_mph, 1.0)
-            persons = vehicles * occupancy
+            persons = motorists(aadt, st["length_ft"], speed_mph, occupancy)
         results.append({
             "fid": feat.id(), "name": rname, "road_class": rclass,
             "class_basis": cbasis, "paved": paved, "paved_basis": pbasis,

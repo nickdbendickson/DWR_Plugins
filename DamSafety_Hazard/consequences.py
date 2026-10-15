@@ -48,7 +48,10 @@ SEV_LOW, SEV_MEDIUM, SEV_HIGH = "Low", "Medium", "High"
 WARN_NONE, WARN_15_60, WARN_60 = "none (<15 min)", "15-60 min", ">60 min"
 GRAHAM_RATES = {
     (SEV_HIGH, WARN_NONE, None): (0.75, 0.30, 1.00),
-    (SEV_HIGH, WARN_15_60, None): (0.75, 0.30, 1.00),     # applied to people remaining
+    # Graham applies the High rates to the people REMAINING after warning; this tool has
+    # no defined evacuated/remaining quantity, so they are applied to the full PAR
+    # (conservative). See CN.2 in plugin_analysis/audit3_lumo_verification.md.
+    (SEV_HIGH, WARN_15_60, None): (0.75, 0.30, 1.00),
     (SEV_HIGH, WARN_60, None): (0.75, 0.30, 1.00),
     (SEV_MEDIUM, WARN_NONE, None): (0.15, 0.03, 0.35),
     (SEV_MEDIUM, WARN_15_60, "vague"): (0.04, 0.01, 0.08),
@@ -217,6 +220,8 @@ def life_loss_estimate(rec, warning_issued_hr=0.0, understanding="vague",
     if high_severity:
         sev, why = SEV_HIGH, "near-instantaneous failure (user setting)"
     warn, wt = warning_category(rec.get("arrival"), warning_issued_hr)
+    if wt is None:
+        why += "; arrival unknown - treated as no warning"
     rate, lo, hi = graham_rate(sev, warn, understanding)
     par, _basis = population_at_risk(rec, period)
     # v2.7: both times of day, whatever the setting (same severity and rate)

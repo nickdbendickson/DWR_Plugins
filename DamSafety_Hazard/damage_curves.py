@@ -40,6 +40,9 @@ TEMPLATE = """# Non-residential depth-damage curves for the ND Dam Hazard Classi
 # depth_ft  : flood depth above the first floor, ft (negative = below the first floor)
 # percent   : damage, 0 - 100
 #
+# Extend each curve to the deepest flooding you expect: above its last depth the
+# last percent is used unchanged (held flat), below its first depth the damage is 0.
+#
 # THE ROWS BELOW ARE A FORMAT EXAMPLE ONLY - the numbers are NOT real curve values.
 # Delete the leading '#' after replacing them with your curve.
 #
@@ -164,6 +167,10 @@ def load(path):
         if len(depths) != len(set(depths)):
             problems.append("{} {}: a depth is given twice - not used".format(occ, kind))
             continue
+        if any(b < a for a, b in zip(depths, depths[1:])):
+            # DC.2: sorted for the interpolation, but say so (a typo is likelier)
+            problems.append("{} {}: depths are not in increasing order in the file - "
+                            "sorted by depth (check the rows)".format(occ, kind))
         ps = [v for _d, v in sorted(p)]
         if any(b < a - 1e-9 for a, b in zip(ps, ps[1:])):
             problems.append("{} {}: damage falls as the water gets deeper - check the "

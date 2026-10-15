@@ -436,7 +436,7 @@ def extra_criteria(nd, structs, res, cfg, total=False):
                 ": already counted in the higher zone" if cfg.get("borderline_higher")
                 else ""))
     wet = [s for s in structs if s.get("outcome") not in (None, OUT_DRY, OUT_TRACE)
-           and s.get("habitable") == "Yes"]
+           and s.get("habitable") == "Yes" and not s.get("dwelling_extra")]   # as totals
     dmg = sum(s.get("damage_usd") or 0 for s in wet)
     if dmg:
         for i, r in enumerate(nd["reasons"]):
