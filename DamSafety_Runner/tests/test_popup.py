@@ -560,7 +560,7 @@ def popup_adds_the_dams_results_styled_and_the_suite_home_opens():
         p.initGui()
         assert len(p.iface.menu) == 1                                  # single menu entry; the suite home opens from the window
         h = p.run_home()
-        assert h is p.home_dialog and h.isVisible() and "Opened from ND Dam Breach Runner" in h.plugins_label.text()
+        assert h is p.home_dialog and h.isVisible() and "Opened from DamSafety Runner" in h.plugins_label.text()
         h.dams_edit.setText(dams)
         h._changed()
         assert h.table.rowCount() == 1 and h.table.item(0, 0).text() == "DWR-1"
