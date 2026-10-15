@@ -298,8 +298,18 @@ class SuiteHomeDialog(QDialog):
         try:
             from .constants import PLUGIN_NAME, PLUGIN_VERSION
             info["plugin"], info["plugin_version"] = PLUGIN_NAME, PLUGIN_VERSION
-        except Exception:                                        # noqa
+        except Exception:                                        # noqa - Runner / Screening copies
             info["plugin"] = __package__ or "?"
+            try:
+                md = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata.txt")
+                with open(md, encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        if line.startswith("name="):
+                            info["plugin"] = line.split("=", 1)[1].strip()
+                        elif line.startswith("version="):
+                            info["plugin_version"] = line.split("=", 1)[1].strip()
+            except Exception:                                    # noqa
+                pass
         try:
             from qgis.core import Qgis
             info["qgis"] = Qgis.QGIS_VERSION
