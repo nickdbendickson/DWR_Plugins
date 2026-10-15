@@ -189,6 +189,17 @@ def qa_maps_param(alg, parameters, context):
     return qa_maps.normalize(int(alg.parameterAsEnum(parameters, "QA_MAPS", context)))
 
 
+def structure_points(structures):
+    """Every vertex of the culvert / bridge lines as (x, y). A Structure's line is an ndarray,
+    so it is checked against None, never with `or []` (ValueError: truth value ambiguous)."""
+    pts = []
+    for s in ([] if structures is None else structures):
+        line = getattr(s, "line", None)
+        for p in ([] if line is None else line):
+            pts.append((float(p[0]), float(p[1])))
+    return pts
+
+
 def dem_resample_param(index):
     """The DEM_RESAMPLE enum index as a GdalTerrain `resample` (None = automatic)."""
     from .core import gdal_io
@@ -1327,10 +1338,7 @@ class RunDamAlgorithm(_Base):
             gate.append(sg.lisflood_smoke(st.lisflood_exe, os.path.join(folder, "_smoke")))
         cap = float(st.max_extent_mi) * 1609.344
         box = (dam_xy[0] - cap, dam_xy[1] - cap, dam_xy[0] + cap, dam_xy[1] + cap)
-        pts = []
-        for s in getattr(st, "structures", None) or []:
-            for p in getattr(s, "line", []) or []:
-                pts.append((float(p[0]), float(p[1])))
+        pts = structure_points(getattr(st, "structures", None))
         if pts:
             gate.append(sg.structures_in_extent(pts, box))
         sg_flag = getattr(self, "_structure_gate", None)
