@@ -226,11 +226,11 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         btn_layout.addStretch()
         setup_layout.addLayout(btn_layout)
         setup_layout.addStretch()
-        self.tab_widget.addTab(_scroll_tab(setup_tab), "Setup & Run")
+        self.tab_widget.addTab(_scroll_tab(setup_tab), "Setup && Run")      # "&&" shows one "&"
         self._setup_tab_index = self.tab_widget.count() - 1
 
         # --- Data & Output tab (data_tab.py); the "Run everything" button is here (v2.9) ---
-        self.tab_widget.addTab(_scroll_tab(self._build_data_tab()), "Data & Output")
+        self.tab_widget.addTab(_scroll_tab(self._build_data_tab()), "Data && Output")
 
         # --- Hazard classification tab (classify_tab.py) ---
         self.tab_widget.addTab(_scroll_tab(self._build_classification_tab()), "Hazard Classification")
@@ -238,7 +238,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
         # --- Review tabs: structures, then roads / rail / bridges / lifelines ---
         self.tab_widget.addTab(_scroll_tab(self._build_review_tab()), "Review")
-        self.tab_widget.addTab(_scroll_tab(self._build_facility_review_tab()), FT.TAB_TITLE)
+        self.tab_widget.addTab(_scroll_tab(self._build_facility_review_tab()),
+                                FT.TAB_TITLE.replace("&", "&&"))
 
         # --- the importers: a model that has already been run (2.30.0: after Review) ---
         self.tab_widget.addTab(_scroll_tab(self._build_dsswise_tab()), "DSS-WISE Lite")
@@ -857,7 +858,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         for name in ("check_btn", "run_all_btn", "find_rasters_btn", "dam_browse_btn",
                      "depth_browse_btn", "vel_browse_btn", "arr_browse_btn",
                      "output_browse_btn", "selftest_btn", "refresh_layers_btn",
-                     "dv_browse_btn", "review_zoom_btn",
+                     "dv_browse_btn", "review_zoom_btn", "review_webmap_btn", "cache_clear_btn",
+                     "field_import_btn",       # 2.31.6: writes the review decisions, like Save
                      "review_save_btn", "review_rerun_btn", "sources_btn",
                      "review_export_btn", "review_merge_btn", "series_btn",
                      "dsw_scan_btn", "dsw_import_btn", "ras_scan_btn", "ras_import_btn",
