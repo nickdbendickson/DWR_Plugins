@@ -2193,7 +2193,8 @@ def collapse_dwellings(structs):
         for host in kept:
             # ST.3: a campground polygon often contains house footprints; neither
             # becomes an "extra" of the other on footprint alone
-            if host is rec or _is_campground(rec) or _is_campground(host) \n                    or not _footprints_overlap(rec, host):
+            if host is rec or _is_campground(rec) or _is_campground(host) \
+                    or not _footprints_overlap(rec, host):
                 continue
             _mark_dwelling_extra(rec, host, "overlapping footprint")
             n_extra += 1
