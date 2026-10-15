@@ -164,6 +164,7 @@ MODEL_KEYS = {
     "half_width_mi": ("half_width_mi", ("num", 0.1, None)),
     "expand_step_mi": ("expand_step_mi", ("num", 0.1, None)),
     "max_extent_mi": ("max_extent_mi", ("num", 1.0, None)),
+    "qa_maps": ("qa_maps", ("enum", ("off", "inflow", "inflow+depth"))),
     "max_iterations": ("max_iterations", ("int", 1, None)),
     "sim_time_hr": ("sim_time_hr", ("num", 0.0, None)),
     "threads": ("threads", ("int", 0, None)),
@@ -407,10 +408,11 @@ TEMPLATE = {
         "n": 0.06, "raster": None, "nlcd": None, "nlcd_n": None},
     "model": {
         "_help": "tier: lisflood or lisflood+anuga. Paths left empty are auto-detected "
-                 "(NDBREACH_LISFLOOD, NDBREACH_ANUGA_PYTHON, the usual install places).",
+                 "(NDBREACH_LISFLOOD, NDBREACH_ANUGA_PYTHON, the usual install places). qa_maps: "
+                 "off | inflow | inflow+depth (QA PNGs in the dam folder; default inflow+depth).",
         "tier": "lisflood", "cell_size_m": 10.0, "arrival_depth_ft": 1.0,
         "edge_tolerance_ft": 1.0, "initial_length_mi": 5.0, "half_width_mi": 1.0,
-        "expand_step_mi": 3.0, "max_extent_mi": 20.0, "max_iterations": 6, "sim_time_hr": None,
+        "expand_step_mi": 3.0, "max_extent_mi": 20.0, "qa_maps": "inflow+depth", "max_iterations": 6, "sim_time_hr": None,
         "threads": 0, "lisflood_exe": None, "anuga_python": None,
         "anuga_fine_area_m2": 100.0, "anuga_coarse_area_m2": 1000.0,
         "anuga_near_field_mi": 1.0, "anuga_buffer_m": 500.0,

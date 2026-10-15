@@ -106,6 +106,7 @@ class RunSettings:
         self.half_width_mi = 1.0
         self.expand_step_mi = 3.0
         self.max_extent_mi = 20.0      # = algorithms.DEFAULT_MAX_EXTENT_MI (was 60 before 2026-10)
+        self.qa_maps = "inflow+depth"  # QA PNGs: off | inflow | inflow+depth (core/qa_maps.py)
         self.max_iterations = 6
         self.sim_time_hr = None          # None = automatic
         self.sim_max_hr = None           # None = the built-in cap; a number is the longest clock
@@ -688,6 +689,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     h_m = dam.dam_height_ft * FT
     top_m = dam.top_of_dam_ft * FT
     plan = st.fixed_plan
+    qa_ctx = {"breach_xy": tuple(dam_xy), "local": None, "radius_m": None}
     if plan is not None:
         inflow_xy = plan["inflow_xy"]
         report["inflow_point"] = {"xy": list(inflow_xy), "how": "from the base run"}
@@ -698,6 +700,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         local = terrain_src.read((dam_xy[0] - search_rad - 30, dam_xy[1] - search_rad - 30,
                                   dam_xy[0] + search_rad + 30, dam_xy[1] + search_rad + 30),
                                  search_cell)
+        qa_ctx["local"], qa_ctx["radius_m"] = local, rad
         if inflow_xy is None:
             inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
                                                 search_cell, warnings, log)
@@ -1382,6 +1385,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         except Exception as e:          # products are extras; never lose the run for them
             warnings.append("Could not write the vector products / map: {}: {}".format(
                 type(e).__name__, e))
+    _qa_maps(report, st, dam, dam_xy, inflow_xy, top_m, qa_ctx, path, dem, fin, out_folder,
+             warnings, log)
     if st.dam_record is not None and st.write_final:
         report["dam_record"] = _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem,
                                            summary["final_model"], warnings, log, dem, d,
@@ -1644,6 +1649,35 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     return xy, why
 
 
+def _qa_maps(report, st, dam, dam_xy, inflow_xy, top_m, qa_ctx, path, dem, fin, out_folder,
+             warnings, log):
+    """The QA PNGs (core/qa_maps.py) into the dam's output folder. Never fails the run."""
+    try:
+        from . import qa_maps
+        mode = qa_maps.normalize(getattr(st, "qa_maps", None))
+        if mode == qa_maps.QA_OFF or not out_folder:
+            report["qa_maps"] = {"mode": mode}
+            return
+        depth = fin.get("depth") if isinstance(fin, dict) else None
+        if depth is not None and dem is not None and np.shape(depth) != dem.data.shape:
+            depth = None
+        info, problems = qa_maps.write_qa_maps(
+            mode, out_folder, getattr(dam, "dam_id", "") or "dam", qa_ctx.get("local") or dem,
+            tuple(dam_xy), tuple(inflow_xy) if inflow_xy is not None else None, top_m,
+            radius_m=qa_ctx.get("radius_m"), trace=path,
+            crest_line=getattr(dam, "crest_line_xy", None), breach_xy=qa_ctx.get("breach_xy"),
+            model_grid=dem, depth_m=depth)
+        report["qa_maps"] = info
+        for p in problems:
+            warnings.append(p)
+            log(p)
+        if info.get("inflow_map") or info.get("depth_map"):
+            log("QA maps ({:.1f} s): {}".format(info.get("seconds", 0.0), ", ".join(
+                os.path.basename(info[k]) for k in ("inflow_map", "depth_map") if info.get(k))))
+    except Exception as e:  # noqa: BLE001 - QA maps are extras
+        warnings.append("QA maps not written: {}: {}".format(type(e).__name__, e))
+
+
 def _dem_resample_of(terrain_src):
     """{"method", "source"} of the DEM warp (GdalTerrain, also inside a ConditionedTerrain)."""
     t = terrain_src
@@ -1670,6 +1704,8 @@ def _manifest_extra(report, summary, warnings):
             "receptors_inside": (r.get("counts") or {}).get("total")}
     if report.get("dem_resample"):
         extra["dem_resample"] = dict(report["dem_resample"])
+    if report.get("qa_maps"):
+        extra["qa_maps"] = dict(report["qa_maps"])
     c = report.get("dem_conditioning")
     if c is not None:
         extra["dem_conditioning"] = {"buildings": c["buildings"], "edits": c["edits"],

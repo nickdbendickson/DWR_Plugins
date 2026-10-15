@@ -174,6 +174,12 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         mode = self.parameterAsEnum(params, "WHICH", context)
         hydro = self.parameterAsEnum(params, "HYDRO", context)
         folder = self.parameterAsString(params, "DAMS_FOLDER", context)
+        if folder:                            # the Dams folder itself, nothing inside it
+            try:
+                from ..damsuite import layout as LY
+                LY.ensure_dams_folder(folder)
+            except Exception as e:
+                feedback.pushWarning("Dams folder not created: {}".format(e))
         curves = self.parameterAsString(params, "CURVES", context) or None
         cell = None
         if params.get("CELL") not in (None, ""):
@@ -300,12 +306,15 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                         user_csv, peak = ho.write_runner_hydrograph(str(src),
                                                                     os.path.join(dfold, ho.RUNNER_HYDRO_CSV))
                         feedback.pushInfo("tool-5 hydrograph -> {} (peak {:,.0f} cfs)".format(user_csv, peak))
-                    area = None
+                    area, anote = None, ""
                     if curves:
-                        area = ho.area_at_top_m2(os.path.join(curves, f"curve_{dam_id}.csv"),
-                                                 cm.fval(f, names, "est_crest_m", float))
+                        area, anote = ho.area_for_runner(os.path.join(curves, f"curve_{dam_id}.csv"),
+                                                         cm.fval(f, names, "est_crest_m", float),
+                                                         cm.fval(f, names, "height_m", float))
                     p, notes = ho.rundam_params(attrs, bmap[dam_id], cm.ALBERS, params.get("DEM"), folder,
                                                 cell, user_csv, area, user_idx)
+                    if anote:
+                        notes = list(notes) + [anote]
                     for key, v in receptors.items():
                         if v not in (None, ""):
                             p[key] = v
