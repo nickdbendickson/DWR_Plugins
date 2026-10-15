@@ -11,8 +11,14 @@ def _install_transform_guard():
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         mod.install()
-    except Exception:
-        pass
+    except Exception as e:
+        # Lumo v1.6: say so (QGIS log) instead of failing silently; the plugin still loads
+        try:
+            from qgis.core import Qgis, QgsMessageLog
+            QgsMessageLog.logMessage("Coordinate-transform guard not installed: {}".format(e),
+                                     "ND Dam Hazard Helper", Qgis.Warning)
+        except Exception:
+            pass
 
 
 _install_transform_guard()

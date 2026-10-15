@@ -68,19 +68,23 @@ def _is_time_step(name):
     rest = m.group("rest").strip()
     pm = PAREN_RE.match(rest)
     label = (pm.group("label") if pm else rest).strip(" _-.").lower()
-    if re.match(r"^[hdv][\s_\-]?max(?![a-z])", label):        # v2.9: "Depth_Hmax", "Velocity_Vmax"
-        return False
-    if re.search(r"(?<![a-z])[hdv]?max(?![a-z])", label):     # "Depth_x_Velocity_Hmax_Vmax"
+    # "Depth_Hmax", "Velocity_Vmax" (v2.9), "Depth_x_Velocity_Hmax_Vmax"
+    if _MAX_TOKEN_RE.search(label):
         return False
     if re.match(r"^(x|times|by)[\s_\-]*(vel|velocity|speed)(?![a-z])", label):   # D x V product
         return False
     return bool(label) and label not in SKIP_LABELS and not label.startswith("max")
 
 
+# a "max" token (Max, Hmax, Dmax, Vmax, "(Max)"), not "max" inside a word ("Maxwell",
+# "Climax"): the same word boundary as the time-step check (Lumo v1.6)
+_MAX_TOKEN_RE = re.compile(r"(?<![a-z])[hdv]?max(?![a-z])")
+
+
 def _rank(path, root):
     name = os.path.basename(path).lower()
     depth = os.path.relpath(path, root).count(os.sep)
-    return (0 if "max" in name else 1, 0 if name.endswith(".vrt") else 1, depth, len(name))
+    return (0 if _MAX_TOKEN_RE.search(os.path.splitext(name)[0]) else 1, 0 if name.endswith(".vrt") else 1, depth, len(name))
 
 
 def find_rasters(folder):
@@ -159,7 +163,8 @@ def find_rasters(folder):
 def describe(found, root):
     parts = []
     for key, label in (("depth", "depth"), ("vel", "velocity"), ("arr", "arrival"),
-                       ("dv", "D x V"), ("base_depth", "no-breach depth")):
+                       ("dv", "D x V"), ("base_depth", "no-breach depth"),
+                       ("base_vel", "no-breach velocity"), ("base_arr", "no-breach arrival")):
         if found.get(key):
             parts.append("{} = {}".format(label, os.path.relpath(found[key], root)))
     return "; ".join(parts) if parts else "no rasters recognised"
