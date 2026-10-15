@@ -632,7 +632,29 @@ def _plan_sig(sc):
             _file_sig(ps.get("dem")) if ps.get("dem") else None]
 
 
-EVAL_ENV_VARS = ("ND_DAM_SUITE", "ND_DAM_OFFLINE")
+EVAL_ENV_VARS = ("ND_DAM_SUITE", "ND_DAM_OFFLINE",
+                 # DL.2: the offline pack choice shapes the data too
+                 "ND_DAM_HAZARD_OFFLINE_PACK", "ND_DAM_HAZARD_OFFLINE_ONLY",
+                 "NDSUITE_HOME", "NDSUITE_SETTINGS")
+
+
+def _offline_pack_sig():
+    """DL.2: the offline pack a run would use (env, QGIS settings or discovery,
+    download.offline_config) by path + size + mtime, and offline-only."""
+    try:
+        from .download import offline_config
+        path, only = offline_config()
+    except Exception as e:                                       # noqa
+        return ["unknown", repr(e)]
+    sig = None
+    if path:
+        try:
+            st = os.stat(path)
+            sig = [os.path.normcase(os.path.abspath(path)), int(st.st_size),
+                   int(getattr(st, "st_mtime_ns", 0))]
+        except OSError:
+            sig = [os.path.normcase(os.path.abspath(path)), "missing"]
+    return [sig, bool(only)]
 GOVERNING_RULE = ("Governing scenario: the highest ND class; a tie goes to the higher TM 11 "
                   "lives in jeopardy (LIJ), then to the first breach scenario listed.")
 
@@ -680,6 +702,7 @@ def evaluation_key(cfg):
     # the suite / offline-pack variables switch the downloads off (run_classification), so they
     # shape the evaluation as much as a download choice does
     parts["env"] = [os.environ.get(k, "") for k in EVAL_ENV_VARS]
+    parts["offline_pack"] = _offline_pack_sig()
     try:
         blob = json.dumps(parts, sort_keys=True, default=str)
     except Exception:
