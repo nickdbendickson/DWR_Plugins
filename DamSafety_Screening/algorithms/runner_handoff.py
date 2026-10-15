@@ -17,12 +17,39 @@ from ..core import nd_hazard as nh
 from ..core import damrecord_io as dri
 from ..damsuite import versions as vs
 from . import _common as cm
-from ..compat import (FILE_FOLDER, FT_STRING, GEOM_POINT, NUM_DOUBLE, SRC_LINE, SRC_POINT, SRC_POLYGON)
+from ..compat import (FIELD_ANY, FIELD_NUMERIC, FILE_FOLDER, FT_STRING, GEOM_POINT, NUM_DOUBLE,
+                      SRC_LINE, SRC_POINT, SRC_POLYGON, set_advanced)
 
 NEW = [("rn_status", FT_STRING), ("rn_folder", FT_STRING),
        ("rn_class", FT_STRING), ("rn_border", FT_STRING),
        ("rn_gaps", FT_STRING), ("scr_class", FT_STRING),
-       ("rn_agree", FT_STRING), ("rn_inputs", FT_STRING)]
+       ("rn_agree", FT_STRING), ("rn_inputs", FT_STRING),
+       ("rn_engine", FT_STRING)]          # 0.17.21: the Runner engine this dam was run with
+
+
+def _warn(feedback, msg):
+    """A warning that stands out in the Processing log (pushWarning where QGIS has it)."""
+    fn = getattr(feedback, "pushWarning", None)
+    (fn or feedback.pushInfo)(("" if fn else "WARNING: ") + msg)
+
+
+def _runner_anuga_detect():
+    """The installed Runner's own ANUGA auto-detect, when the Runner plugin is importable."""
+    import importlib
+    for mod in ("DamSafety_Runner.core.nd_data", "nd_breach_runner.core.nd_data"):
+        try:
+            return importlib.import_module(mod).detect_anuga_python
+        except Exception:                                        # noqa
+            continue
+    return None
+
+
+def _runner_anuga_setting():
+    try:
+        from processing.core.ProcessingConfig import ProcessingConfig
+        return ProcessingConfig.getSetting(ho.ANUGA_SETTING) or ""
+    except Exception:                                            # noqa
+        return ""
 
 
 def _user_method_index(alg):
@@ -74,7 +101,22 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 "(clear / needs 2D), tool 8's class, borderline flag and data gaps. A value another "
                 "tool or the engineer put there is never overwritten (the conflict is logged and "
                 "kept in the file). The tool stops when an installed ND Dam Breach Runner is older "
-                "than this plugin needs (suite version check).")
+                "than this plugin needs (suite version check).\n"
+                "RUNNER ENGINE (0.17.21): one choice. 'LISFLOOD-FP only' (the Runner's default; "
+                "TIER 0) is the fast local-inertial 2D model. 'LISFLOOD-FP for the extent, then "
+                "ANUGA' (TIER 1) uses LISFLOOD-FP to find how far the flood goes and re-runs it with "
+                "ANUGA (unstructured mesh) for the final results; it is much slower and needs the "
+                "Runner's ANUGA environment (checked before any dam is run). This is what the old "
+                "'force ANUGA' box did; an old FORCE_ANUGA = True still selects it. The engine used "
+                "is logged as a warning when it is ANUGA and written to rn_engine.\n"
+                "NEAR-DAM REFINE: re-runs the stretch next to the dam on a finer grid with the FV1 "
+                "solver (full shallow-water equations, more accurate for the fast, steep flow near "
+                "a breach) and merges it in; adds roughly the time of one more model run.\n"
+                "CULVERTS / BRIDGES (CULVERTS): lines drawn from the UPSTREAM end to the downstream "
+                "end (the first vertex is the inlet). Fields (empty = the Runner's synonyms): kind "
+                "(culvert / bridge / notch), span or diameter (ft), rise (ft), barrels (count), "
+                "shape (box / pipe), name. Only ANUGA models them; with 'LISFLOOD-FP only' the "
+                "layer is ignored and a warning says so.")
 
     def initAlgorithm(self, config=None):
         P = self.addParameter
@@ -152,17 +194,24 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                                      "runner's own copy)", extension="json", optional=True))
         # engine choice and culverts / bridges for the Runner (defaults = the Runner's own:
         # nothing extra is sent). CULVERTS, not STRUCTURES: BLD is this tool's buildings layer.
-        P(QgsProcessingParameterEnum("ENGINE", "Runner models", ho.ENGINE_LABELS, defaultValue=0))
-        P(QgsProcessingParameterBoolean("FORCE_ANUGA", "Runner: force ANUGA (final results from "
-                                        "ANUGA even with LISFLOOD-FP only)", defaultValue=False))
-        P(QgsProcessingParameterBoolean("REFINE_NEAR", "Runner: near-dam refine with the FV1 solver",
-                                        defaultValue=False))
-        P(QgsProcessingParameterFeatureSource("CULVERTS", "Culverts and bridges for the Runner (lines, "
-                                              "upstream end first; used by ANUGA)", [ln], optional=True))
+        # 0.17.21: ONE engine choice (FORCE_ANUGA folded in; the old parameter is kept hidden so
+        # saved models and histories still work: True = option 1)
+        P(QgsProcessingParameterEnum("ENGINE", "Runner engine", ho.ENGINE_LABELS, defaultValue=0))
+        P(cm.hide(QgsProcessingParameterBoolean("FORCE_ANUGA", "(before 0.17.21) force ANUGA = Runner "
+                                                "engine 'LISFLOOD-FP then ANUGA'", defaultValue=False,
+                                                optional=True)))
+        P(QgsProcessingParameterBoolean("REFINE_NEAR", "Runner: near-dam refine (re-runs the stretch "
+                                        "near the dam on a finer grid with the FV1 full shallow-water "
+                                        "solver; slower)", defaultValue=False))
+        P(QgsProcessingParameterFeatureSource("CULVERTS", "Culverts and bridges for the Runner (lines drawn "
+                                              "upstream end first; modelled by ANUGA only)", [ln],
+                                              optional=True))
+        numeric = ("C_WIDTH", "C_HEIGHT", "C_BARRELS")
         for k, _rk, desc in ho.CULVERT_FIELDS:
-            P(QgsProcessingParameterField(k, "Culverts: {} field (empty = runner matches its "
-                                          "synonyms)".format(desc), parentLayerParameterName="CULVERTS",
-                                          optional=True))
+            P(set_advanced(QgsProcessingParameterField(
+                k, "Culverts: {} field (empty = runner matches its synonyms)".format(desc),
+                parentLayerParameterName="CULVERTS",
+                type=FIELD_NUMERIC if k in numeric else FIELD_ANY, optional=True)))
         P(QgsProcessingParameterFeatureSink("OUT", "Dams with runner results", SRC_POINT))
 
     # ------------------------------------------------------------------
@@ -282,11 +331,26 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         B = lambda k: (self.parameterDefinition(k) is not None and params.get(k) not in (None, "")
                        and self.parameterAsBool(params, k, context))
         engine = self.parameterAsEnum(params, "ENGINE", context) if params.get("ENGINE") not in (None, "") else 0
-        eng_p, eng_notes = ho.engine_params(engine, B("FORCE_ANUGA"), B("REFINE_NEAR"),
-                                            params.get("CULVERTS"),
+        engine = ho.effective_engine(engine, B("FORCE_ANUGA"))
+        culverts = params.get("CULVERTS")
+        eng_p, eng_notes = ho.engine_params(engine, False, B("REFINE_NEAR"), culverts,
                                             {k: S(k) for k, _rk, _d in ho.CULVERT_FIELDS})
+        status = ho.engine_status(engine, culverts)
+        if engine:
+            _warn(feedback, status)             # ANUGA: make it obvious, every run
+            if B("FORCE_ANUGA"):
+                _warn(feedback, "FORCE_ANUGA (before 0.17.21) is now the Runner engine choice "
+                      "'LISFLOOD-FP then ANUGA'.")
+            # early check: a missing ANUGA would only fail deep inside each rundam run
+            if not ho.find_anuga_python(_runner_anuga_setting, None, _runner_anuga_detect()):
+                raise QgsProcessingException(ho.ANUGA_MISSING)
+        else:
+            feedback.pushInfo(status)
+            if culverts not in (None, ""):
+                _warn(feedback, ho.CULVERTS_IGNORED)
         for n in eng_notes:
             feedback.pushInfo("Runner: " + n)
+        engine_text = ho.ENGINE_SHORT[engine]
 
         fields, put = cm.extend_fields(dams.fields(), NEW)
         sink, dest = self.parameterAsSink(params, "OUT", context, fields, dams.wkbType(), dams.sourceCrs())
@@ -307,7 +371,8 @@ class RunnerHandoff(QgsProcessingAlgorithm):
             dam_id = str(attrs.get("dam_id") or f.id())
             scr = attrs.get("hz_class")
             res = {"rn_status": None, "rn_folder": None, "rn_class": None, "rn_border": None,
-                   "rn_gaps": None, "scr_class": scr, "rn_agree": None, "rn_inputs": None}
+                   "rn_gaps": None, "scr_class": scr, "rn_agree": None, "rn_inputs": None,
+                   "rn_engine": None}
             if not ok:
                 res["rn_status"] = "skipped: " + why
             elif feedback.isCanceled():
@@ -343,6 +408,7 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                     p.update(eng_p)
                     notes = notes + eng_notes
                     res["rn_inputs"] = hz.limit_text(["sent: " + why] + notes)
+                    res["rn_engine"] = engine_text
                     for n in notes:
                         feedback.pushInfo(n)
                     try:                        # the suite's dam record, before the run

@@ -42,8 +42,67 @@ RUNDAM_KEYS = ("DAM_ID", "DAM_NAME", "DAM_POINT", "HEIGHT_FT", "STORAGE_ACFT", "
 # 7b engine choice (tool parameter -> rundam parameter). The Runner's TIER index 0 is
 # LISFLOOD-FP only, 1 is LISFLOOD-FP then ANUGA. "Solver" here is the Runner's near-dam FV1
 # refine (REFINE_NEAR); rundam has no other solver switch.
-ENGINE_LABELS = ["Runner default (LISFLOOD-FP only)",
-                 "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"]
+#
+# 0.17.21 (QGIS Dev's #22 review): ENGINE is the ONE engine choice. The old FORCE_ANUGA box did
+# exactly what option 1 does (the Runner turns FORCE_ANUGA into TIER 1), so it is folded in:
+# an old FORCE_ANUGA = True (saved settings, models, histories) still selects option 1, and
+# only TIER is sent. ANUGA is the only engine that models culverts / bridges.
+ENGINE_LABELS = ["LISFLOOD-FP only (Runner default; culverts / bridges not modelled)",
+                 "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA; "
+                 "= the Runner's 'force ANUGA')"]
+ENGINE_SHORT = ["LISFLOOD-FP only", "LISFLOOD-FP \u2192 ANUGA (final results from ANUGA)"]
+ANUGA_SETTING = "NDBREACH_ANUGA_PYTHON"          # the Runner's ANUGA interpreter setting / env
+ANUGA_MISSING = ("ANUGA was requested (Runner models = LISFLOOD-FP then ANUGA) but no ANUGA "
+                 "environment was found: set 'ANUGA Python interpreter' in Processing > Options > "
+                 "Providers > ND Dam Breach Runner (or the NDBREACH_ANUGA_PYTHON environment "
+                 "variable), install it with DamSafety Setup, or choose 'LISFLOOD-FP only'. "
+                 "Nothing was run.")
+CULVERTS_IGNORED = ("Culverts / bridges (CULVERTS) are only modelled by ANUGA; this run uses "
+                    "LISFLOOD-FP only, so the culvert layer is ignored. Choose 'LISFLOOD-FP for "
+                    "the extent, then ANUGA' to use it.")
+
+
+def effective_engine(engine=0, force_anuga=False):
+    """The one engine choice: 0 = LISFLOOD-FP only, 1 = LISFLOOD-FP then ANUGA. A legacy
+    FORCE_ANUGA = True means 1."""
+    try:
+        e = int(engine or 0)
+    except (TypeError, ValueError):
+        e = 0
+    return 1 if (e >= 1 or force_anuga) else 0
+
+
+def engine_status(engine, culverts=None):
+    """The one-line status the window and the log show, e.g. 'Runner engine: LISFLOOD-FP ->
+    ANUGA (final results from ANUGA)'."""
+    e = effective_engine(engine)
+    s = "Runner engine (7b): " + ENGINE_SHORT[e]
+    if culverts not in (None, ""):
+        s += "; culverts: " + ("used by ANUGA" if e else "IGNORED (LISFLOOD-FP only)")
+    return s
+
+
+def find_anuga_python(setting=None, env=None, detect=None, isfile=None):
+    """The ANUGA interpreter the Runner would use, or ''. setting(): the Runner's Processing
+    setting; env: os.environ; detect(): the Runner's own auto-detect (nd_data.detect_anuga_python);
+    isfile: os.path.isfile."""
+    isfile = isfile or os.path.isfile
+    env = os.environ if env is None else env
+    for get in (lambda: setting() if setting else "", lambda: env.get(ANUGA_SETTING, "")):
+        try:
+            v = (get() or "").strip()
+        except Exception:                                        # noqa
+            v = ""
+        if v and isfile(v):
+            return v
+    if detect is not None:
+        try:
+            v = detect() or ""
+        except Exception:                                        # noqa
+            v = ""
+        if v and isfile(v):
+            return v
+    return ""
 # 7b's culvert / bridge field parameters -> the Runner's STRUCTURES field parameters.
 # (7b's own STRUCTURES-like layer is BLD = buildings, so the culvert layer is CULVERTS here.)
 CULVERT_FIELDS = (("C_KIND", "S_KIND", "kind (culvert / bridge / notch)"),
@@ -330,6 +389,8 @@ def rundam_params(attrs, point_xy, crs_authid, dem, dams_folder, cell_m=None, us
 
 def engine_params(tier=0, force_anuga=False, refine_near=False, culverts=None,
                   culvert_fields=None):
+    # force_anuga: the legacy box, folded into tier (effective_engine); FORCE_ANUGA is no
+    # longer sent - TIER 1 is what the Runner does with it.
     """(extra 'ndbreach:rundam' parameters, notes) for 7b's engine and culvert choices.
 
     Only what differs from the Runner's own defaults is sent, so the defaults (tier 0, no
@@ -337,14 +398,10 @@ def engine_params(tier=0, force_anuga=False, refine_near=False, culverts=None,
     culvert_fields: {C_KIND, ...: field name or ''}; empty names are left out so the Runner
     matches its own synonyms (kind, width_ft, height_ft, barrels, shape, name ...)."""
     p, notes = {}, []
-    tier = int(tier or 0)
+    tier = effective_engine(tier, force_anuga)
     if tier:
         p["TIER"] = tier
-        notes.append("models: " + ENGINE_LABELS[tier] if tier < len(ENGINE_LABELS)
-                     else "models: Runner TIER {}".format(tier))
-    if force_anuga:
-        p["FORCE_ANUGA"] = True
-        notes.append("force ANUGA: final results from ANUGA")
+        notes.append("models: " + ENGINE_LABELS[tier])
     if refine_near:
         p["REFINE_NEAR"] = True
         notes.append("near-dam refine with the FV1 solver")
@@ -354,7 +411,8 @@ def engine_params(tier=0, force_anuga=False, refine_near=False, culverts=None,
             v = (culvert_fields or {}).get(key)
             if v:
                 p[rkey] = str(v)
-        notes.append("culverts / bridges: {}".format(culverts))
+        notes.append("culverts / bridges: {}{}".format(
+            culverts, "" if tier else " (IGNORED: LISFLOOD-FP only)"))
     return p, notes
 
 
