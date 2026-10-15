@@ -126,7 +126,9 @@ class SuiteDataDialog(QDialog):
         self.setMinimumWidth(920)
         try:
             from qgis.PyQt.QtWidgets import QApplication
-            self.setMaximumHeight(max(600, QApplication.primaryScreen().geometry().height() - 80))
+            screen = QApplication.primaryScreen()          # None on a start without a screen
+            if screen is not None:
+                self.setMaximumHeight(max(600, screen.geometry().height() - 80))
         except Exception:
             pass
         self._build()

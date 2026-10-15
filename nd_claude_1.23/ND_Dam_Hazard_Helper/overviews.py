@@ -138,9 +138,26 @@ def _gdal_failed(err):
         return True
 
 
+ST_BUILT, ST_NOT_NEEDED, ST_FAILED, ST_CANCELLED = "built", "not_needed", "failed", "cancelled"
+
+
+def _fail_s(text, level=MSG_WARNING, status=ST_FAILED):
+    _fail(text, level)
+    return status, text
+
+
 def build_overviews(path, resampling="NEAREST", min_size=DEFAULT_MIN_SIZE, levels=None,
                     external=True, compress="DEFLATE", progress=None):
-    """Build overviews for the raster file `path`. Returns (ok, text).
+    """(ok, text): build_overviews_status with ok = built or not needed."""
+    status, text = build_overviews_status(path, resampling, min_size, levels, external,
+                                          compress, progress)
+    return status in (ST_BUILT, ST_NOT_NEEDED), text
+
+
+def build_overviews_status(path, resampling="NEAREST", min_size=DEFAULT_MIN_SIZE, levels=None,
+                    external=True, compress="DEFLATE", progress=None):
+    """Build overviews for the raster file `path`. Returns (status, text): status ST_BUILT, ST_NOT_NEEDED, ST_FAILED or
+    ST_CANCELLED (Lumo v1.8: callers test the status, not the wording).
 
     resampling: GDAL method - NEAREST or MODE for class rasters (zones,
     bands), AVERAGE for continuous values. levels: factors, else
@@ -154,7 +171,7 @@ def build_overviews(path, resampling="NEAREST", min_size=DEFAULT_MIN_SIZE, level
     try:
         path = str(path or "").split("|")[0]
         if not path or not os.path.isfile(path):
-            return _fail("{}: not a raster file".format(name))
+            return _fail_s("{}: not a raster file".format(name))
         ext = bool(external) or not os.access(path, os.W_OK)
         if not ext:
             ds = _open(path, gdal.GA_Update)
@@ -165,7 +182,7 @@ def build_overviews(path, resampling="NEAREST", min_size=DEFAULT_MIN_SIZE, level
         if ds is None:
             ds = _open(path, gdal.GA_ReadOnly)
         if ds is None:
-            return _fail("{}: GDAL could not open it".format(name))
+            return _fail_s("{}: GDAL could not open it".format(name))
         w, h = int(ds.RasterXSize), int(ds.RasterYSize)
         if levels:
             lv = sorted({int(f) for f in levels if int(f) > 1})
@@ -173,7 +190,7 @@ def build_overviews(path, resampling="NEAREST", min_size=DEFAULT_MIN_SIZE, level
             lv = overview_levels(w, h, min_size)
         if not lv:
             ds = None
-            return True, "{}: {} x {} px - no overviews needed".format(name, w, h)
+            return ST_NOT_NEEDED, "{}: {} x {} px - no overviews needed".format(name, w, h)
         method = str(resampling or "NEAREST").upper()
         ovr = path + ".ovr"
         had_ovr = os.path.exists(ovr)
@@ -201,18 +218,18 @@ def build_overviews(path, resampling="NEAREST", min_size=DEFAULT_MIN_SIZE, level
                 except OSError:
                     pass
             if cancelled:
-                return _fail("{}: cancelled".format(name), MSG_INFO)
-            return _fail("{}: GDAL could not build them ({})".format(
+                return _fail_s("{}: cancelled".format(name), MSG_INFO, ST_CANCELLED)
+            return _fail_s("{}: GDAL could not build them ({})".format(
                 name, err if isinstance(err, Exception) else "error code {}".format(err)))
         ds = None                                     # flush and close
         text = "{}: overviews 1/{} built ({}, {})".format(
             name, ", 1/".join(str(f) for f in lv), method,
             "{}.ovr".format(name) if ext else "inside the file")
         log_message("Overviews: " + text, MSG_INFO)
-        return True, text
+        return ST_BUILT, text
     except Exception as e:
         ds = None
-        return _fail("{}: {}".format(name, e))
+        return _fail_s("{}: {}".format(name, e))
 
 
 def has_overviews(path):
@@ -292,13 +309,13 @@ def ensure_input_overviews(paths, resampling="AUTO", small=HAZARD_OVERVIEW_MIN_S
             if progress is not None:
                 def sub(pct, text, _i=i):
                     progress((100.0 * _i + pct) / len(todo), text)
-            ok, text = build_overviews(p, method, min_size=min_size, external=True,
-                                       progress=sub)
-            if not ok and text.endswith("cancelled"):
+            status, text = build_overviews_status(p, method, min_size=min_size,
+                                                  external=True, progress=sub)
+            if status == ST_CANCELLED:
                 out.append((p, "cancelled", text))
                 break
-            out.append((p, "built" if ok and "no overviews" not in text else
-                        ("small" if ok else "failed"), text))
+            out.append((p, {ST_BUILT: "built", ST_NOT_NEEDED: "small"}.get(status, "failed"),
+                        text))
         except Exception as e:                        # never raises
             out.append((p, "failed", "{}: {}".format(name, e)))
             log_message("Overviews: {}: {}".format(name, e), MSG_WARNING)

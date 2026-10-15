@@ -5,9 +5,57 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.31.1
+version=2.31.5
 author=N.D. Bendickson
 changelog=
+    2.31.5 (2026-10-15)
+      * Damage-curve file warnings name the real line in the file (comment and blank lines
+        counted).
+      * Estimate: the traffic-count downloads (HPMS years, NDDOT, county roads) are marked as an
+        upper bound (the Data tab stops at the first source that answers).
+      * EAP: no arrival-bands raster (and no summary line) when no flooded cell has an arrival
+        time.
+      * Damage estimate: the dollar figure is written when a depth-damage curve was applied
+        (a flag, not the wording of the basis text).
+      * Future-development screen: examples listed largest parcel first.
+      * Sensitivity factors: a decimal comma such as '0,8' is refused with the fix; other
+        '1,2' entries and factors outside 0.5-2 are warned (dialog and run log).
+      * Data-vintage table, version check: failures are logged instead of passing silently.
+      * Overviews and the population cross-checks use status / verdict codes instead of
+        matching message text; unread depth strips are counted in the population fraction
+        method.
+    2.31.4 (2026-10-15)
+      * Aerial imagery check: no internet request in suite / offline-pack mode (ND_DAM_SUITE,
+        ND_DAM_OFFLINE or an offline pack configured), the same rule as the layer downloads;
+        the maps are made without imagery and say so.
+      * Raster search summary lists the no-breach velocity and arrival rasters.
+      * Raster ranking: "max" must be a word (Max, Hmax, Dmax, Vmax), so a name such as
+        "Maxwell" no longer counts as a maximum grid.
+      * Road-layer area filter failure is logged (all features read instead).
+      * Code cleanups (dead pattern removed, clarifying parentheses).
+      * Coordinate-transform guard: a failure to install it is written to the QGIS log.
+    2.31.3 (2026-10-15)
+      * Processing tools: when the suite settings file cannot be applied, the tool says so (QGIS
+        log, the tool's help panel, and a warning when it runs) instead of silently using its
+        built-in defaults.
+      * Submittal cover letter lists what is NOT enclosed.
+      * Dams in series: snapshot dates/versions per dam and pair; VINTAGE flag (more than 365
+        days apart or different plugin versions); velocity/arrival rasters that fail to open
+        are noted. Run snapshots now record the plugin version.
+      * Mark reviewed: warns when the newest package is older than the last run.
+      * Settings grid: a rejected value is shown in a status line (no message box each time).
+      * No crash path when Qt reports no primary screen.
+    2.31.2 (2026-10-15)
+      * Reproduction check: the text and CSV say, per file, when SHA-256 was not used (files
+        over 1 GB, folders); folders (.gdb) are now fingerprinted file by file (older records
+        still read).
+      * Data export: features that could not be read/projected or have no geometry are counted
+        in the notes; a note when mixed geometry kinds force a POINT structures layer.
+      * Model chain check: DIFFERENT rows carry a Reason code (new CSV column); unused read_check
+        removed. Background run: an invalid or failed layer copy is logged with a warning not
+        to edit or remove that layer.
+      * DSS-WISE import warns on implausible maxima (depth > 300 ft, velocity > 100 ft/s).
+      * README privacy note for "Open in web map".
     2.31.1 (2026-10-15)
       * Suite settings tab: a settings file that does not exist or will not load is refused and
         the box goes back to the loaded file; autosave never writes while the box and the grid

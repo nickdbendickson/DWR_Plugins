@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.31.1
+ND Dam Hazard Classification Helper - Version 2.31.5
 ====================================================
 
 NEW IN 2.30.0
@@ -1158,6 +1158,11 @@ USAGE
 5. Review tab: decide the listed structures, "Save and re-run".
 6. DSS-WISE Lite tab: import a DSS-WISE package instead of (or besides)
    HEC-RAS rasters.
+
+PRIVACY
+- The Review tab's "Open in web map" button sends that one structure's location to
+  Google Maps (or the WEBMAP_URL_TEMPLATE service) only when you click it; nothing else
+  is sent there.
 
 REQUIREMENTS
 - QGIS 3.28 or later (including QGIS 4 / Qt6) on Windows, macOS or Linux.

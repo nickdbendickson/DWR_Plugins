@@ -255,7 +255,8 @@ def band_labels_text():
 
 def write_arrival_bands(path, depth_path, arrival_path):
     """Int16 GeoTIFF on the depth grid: arrival class where depth > 0 and the
-    arrival is known (NoData elsewhere). Returns the path or None."""
+    arrival is known (NoData elsewhere). Returns the path, or None (also when no
+    flooded cell has an arrival time)."""
     from .hazard import _Grid
     from .processing import _create_class_raster, _finalize_class_raster, _rows_per_block
     if not depth_path or not arrival_path:
@@ -287,7 +288,16 @@ def write_arrival_bands(path, depth_path, arrival_path):
         band = None
         out = None
         if not n:
-            log_message("EAP arrival bands: no flooded cell has an arrival time")
+            # Lumo v1.7: an all-NoData raster is not a product; no file, not listed
+            log_message("EAP arrival bands: no flooded cell has an arrival time - no bands "
+                        "raster written")
+            try:
+                for p in (path, path + ".aux.xml"):
+                    if os.path.exists(p):
+                        os.remove(p)
+            except OSError as e:
+                log_message("EAP arrival bands: empty file not removed ({})".format(e))
+            return None
         return path
     except Exception as e:
         log_message("EAP arrival bands not written: {}".format(e))

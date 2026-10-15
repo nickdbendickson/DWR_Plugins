@@ -138,7 +138,13 @@ class NDdamHazardHelperPlugin(QObject):
             from .damsuite import versions as VS
             msgs = VS.check("ndhazard", versions=versions)
             lines = VS.report_lines("ndhazard", versions=versions)
-        except Exception:
+        except Exception as e:
+            try:
+                from .helpers import log_message
+                log_message("Suite version check skipped: the version table could not be "
+                            "loaded ({})".format(e))
+            except Exception:
+                pass
             return []
         try:
             from .helpers import log_message

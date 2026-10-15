@@ -32,21 +32,37 @@ def split_files(text):
     return [t.strip() for t in str(text or "").split(";") if t.strip()]
 
 
+# verdict codes (Lumo v1.8): popsource and the run log test these, not the wording
+V_NOT_COMPARED, V_BOTH_ZERO, V_ONLY_PLUGIN = "not_compared", "both_zero", "only_plugin"
+V_CONSISTENT, V_HIGHER, V_LOWER = "consistent", "higher", "lower"
+
+
 def verdict(hcom, plugin):
     """(ratio or None, text) for one pair of numbers."""
+    _code, r, text = verdict_code(hcom, plugin)
+    return r, text
+
+
+def is_off(code, ratio=None):
+    """True when a verdict needs a look (one side counts people, or outside the band)."""
+    return code in (V_ONLY_PLUGIN, V_HIGHER, V_LOWER)
+
+
+def verdict_code(hcom, plugin):
+    """(code, ratio or None, text) for one pair of numbers."""
     if hcom is None or plugin is None:
-        return None, "not compared"
+        return V_NOT_COMPARED, None, "not compared"
     if hcom <= 0 and plugin <= 0:
-        return None, "agree (both zero)"
+        return V_BOTH_ZERO, None, "agree (both zero)"
     if hcom <= 0:
-        return None, "the plugin counts people where DSS-WISE counts none - check"
+        return V_ONLY_PLUGIN, None, "the plugin counts people where DSS-WISE counts none - check"
     r = plugin / hcom
     if RATIO_LOW <= r <= RATIO_HIGH:
-        return r, "consistent"
+        return V_CONSISTENT, r, "consistent"
     if r > RATIO_HIGH:
-        return r, "plugin higher ({:.1f}x) - check for structures outside DSS-WISE's " \
+        return V_HIGHER, r, "plugin higher ({:.1f}x) - check for structures outside DSS-WISE's " \
             "census blocks, campgrounds, or a persons-per-dwelling that is too high".format(r)
-    return r, "plugin lower ({:.1f}x of DSS-WISE) - check for missing structure data " \
+    return V_LOWER, r, "plugin lower ({:.1f}x of DSS-WISE) - check for missing structure data " \
         "(NSI / address / outline layers), or census blocks that reach past the flood".format(r)
 
 
@@ -83,12 +99,12 @@ def compare(tables, conseq, population="night"):
                          "compared".format(tot["file"], ", ".join(tot.get("header", [])[:12])))
             continue
         for qty, key, plabel, pval in prs:
-            r, text = verdict(tot.get(key), pval)
+            code, r, text = verdict_code(tot.get(key), pval)
             rows.append({"HCOM_table": tot["file"], "Quantity": qty,
                          "HCOM_value": tot.get(key), "HCOM_column": tot["columns"].get(key, ""),
                          "Plugin_value": pval, "Plugin_quantity": plabel,
                          "Ratio_plugin_to_HCOM": None if r is None else round(r, 2),
-                         "Verdict": text})
+                         "Verdict": text, "Verdict_code": code})
             lines.append("{} - {}: DSS-WISE {:,.0f} (column '{}') against the plugin's {:,.0f} "
                          "({}): {}".format(tot["file"], qty, tot.get(key) or 0,
                                            tot["columns"].get(key, "?"), pval or 0, plabel,

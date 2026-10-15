@@ -148,6 +148,32 @@ def apply_file_defaults(alg, plugin, group_of, tool=None, settings=None):
     return [(st.key, v) for st, v in applied], [(st.key, p) for st, p in bad]
 
 
+def not_applied_text(error):
+    """The message when the suite settings file could not be applied to a tool."""
+    return ("the suite settings file was NOT applied ({}: {}) - this tool shows its built-in "
+            "defaults; check the values before running".format(type(error).__name__, error))
+
+
+def _safe_tool_name(alg):
+    try:
+        return tool_name(alg)
+    except Exception:                                            # noqa
+        return type(alg).__name__
+
+
+def _log_warning(text):
+    try:
+        from qgis.core import Qgis, QgsMessageLog
+        lvl = getattr(getattr(Qgis, "MessageLevel", Qgis), "Warning", 1)
+        QgsMessageLog.logMessage(text, "Dam suite settings", lvl)
+    except Exception:                                            # noqa
+        pass
+    try:
+        print("[Dam suite settings] " + text)
+    except Exception:                                            # noqa
+        pass
+
+
 def settings_aware(cls, plugin, group_of, toolbox_group=None, step=None):
     """A subclass of a tool class whose instances take their parameter defaults from the settings
     file; `toolbox_group` = (group, group id) puts it in that Processing group. `_nd_original` is
@@ -157,16 +183,35 @@ def settings_aware(cls, plugin, group_of, toolbox_group=None, step=None):
 
     def initAlgorithm(self, config=None):
         cls.initAlgorithm(self, config)
+        self._nd_problem = ""
         try:
             self._nd_applied, self._nd_refused = apply_file_defaults(self, plugin, group_of)
-        except Exception:                                        # noqa - never stop a tool
+        except Exception as e:                                   # noqa - never stop a tool
             self._nd_applied, self._nd_refused = [], []
+            # Lumo 2.26.1: say so - the tool opens with its built-in defaults
+            self._nd_problem = not_applied_text(e)
+            _log_warning("{}: {}".format(_safe_tool_name(self), self._nd_problem))
 
     def createInstance(self):
         return type(self)()
 
+    def shortHelpString(self):
+        base = cls.shortHelpString(self) if hasattr(cls, "shortHelpString") else ""
+        prob = getattr(self, "_nd_problem", "")
+        return ("<p><b>WARNING: {}</b></p>".format(prob) + (base or "")) if prob else base
+
+    def processAlgorithm(self, parameters, context, feedback):
+        prob = getattr(self, "_nd_problem", "")
+        if prob and feedback is not None:
+            try:
+                feedback.reportError("WARNING: " + prob, False)
+            except Exception:                                    # noqa
+                pass
+        return cls.processAlgorithm(self, parameters, context, feedback)
+
     body = {"initAlgorithm": initAlgorithm, "createInstance": createInstance, "_nd_original": cls,
-            "_nd_step": step, "__module__": cls.__module__, "__doc__": cls.__doc__}
+            "_nd_step": step, "__module__": cls.__module__, "__doc__": cls.__doc__,
+            "shortHelpString": shortHelpString, "processAlgorithm": processAlgorithm}
     if toolbox_group:
         body["group"] = lambda self: toolbox_group[0]
         body["groupId"] = lambda self: toolbox_group[1]

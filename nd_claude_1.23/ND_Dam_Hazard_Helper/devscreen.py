@@ -126,7 +126,8 @@ def screen(parcel_layer, structs, samplers, analysis_crs, transform_ctx, clip=No
     hits = [c for c in cands if c.get("outcome") in trigger]
     summary["hits"] = len(hits)
     summary["acres"] = sum(c["acres"] for c in hits)
-    summary["examples"] = [c["ref"] for c in hits[:6]]
+    summary["examples"] = [c["ref"] for c in sorted(        # largest parcels first
+        hits, key=lambda c: -(c.get("acres") or 0.0))[:6]]
     if not hits:
         return None, summary
     lyr = create_memory_layer("Future_Development_Parcels", WKB_MULTIPOLYGON, analysis_crs,

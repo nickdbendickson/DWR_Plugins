@@ -105,7 +105,7 @@ def _node_line_ends(parts, snap):
                 dist, k, t, qx, qy = _project(x, y, parts[pj], sorted(ks))
                 if dist <= snap and (best is None or dist < best[0]):
                     best = (dist, pj, k, t, qx, qy)
-            if best is None or best[0] == 0.0 and _is_vertex(parts[best[1]], best[4], best[5]):
+            if best is None or (best[0] == 0.0 and _is_vertex(parts[best[1]], best[4], best[5])):
                 continue
             _d, pj, k, t, qx, qy = best
             c[end] = (qx, qy)
@@ -194,8 +194,10 @@ def access_analysis(road_layer, structs, depth_sampler, analysis_crs, transform_
         try:
             back = QgsCoordinateTransform(clip.crs, road_layer.crs(), transform_ctx)
             req.setFilterRect(big if back.isShortCircuited() else back.transformBoundingBox(big))
-        except Exception:
-            pass
+        except Exception as e:
+            # Lumo v1.6: no filter means every road feature is read (slower, same result)
+            log_message("Road layer '{}': area filter not applied, reading all features "
+                        "({})".format(road_layer.name(), e))
 
     uf = _UnionFind()
     nodes, exits = {}, set()

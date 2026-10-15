@@ -2614,10 +2614,7 @@ def _hcom_check(run, governing, d_qa, written):
             written.append(os.path.relpath(XC.write_csv(d_qa, rows), run.out))
             run.sources.append("DSS-WISE HCOM cross-check: {}".format(
                 ", ".join(os.path.basename(p) for p in files)))
-            bad = [r for r in rows if r["Ratio_plugin_to_HCOM"] is None
-                   and r["Verdict"] != "agree (both zero)" and r["Verdict"] != "not compared"
-                   or (r["Ratio_plugin_to_HCOM"] is not None
-                       and not XC.RATIO_LOW <= r["Ratio_plugin_to_HCOM"] <= XC.RATIO_HIGH)]
+            bad = [r for r in rows if XC.is_off(r.get("Verdict_code"))]
             if bad:
                 run.log(">>> NOTE: the population at risk differs from the DSS-WISE HCOM table "
                         "in {} of {} comparison(s) - see the summary / QA/{}".format(

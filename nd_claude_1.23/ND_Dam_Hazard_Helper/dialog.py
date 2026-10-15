@@ -122,8 +122,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.setMinimumSize(900, 700)
         try:
             from qgis.PyQt.QtWidgets import QApplication
-            self.setMaximumHeight(max(700, QApplication.primaryScreen().geometry().height() - 80))
-        except Exception:
+            screen = QApplication.primaryScreen()          # None on a start without a screen
+            if screen is not None:
+                self.setMaximumHeight(max(700, screen.geometry().height() - 80))
+        except Exception:                                        # noqa
             pass
         main_layout = QVBoxLayout(self)
         self.tab_widget = QTabWidget()
