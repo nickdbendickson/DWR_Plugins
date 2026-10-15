@@ -152,3 +152,120 @@ def culvert_inventory_real_gpkgs():
     rows, _ = cg.match_inventory([_guess(r["x"] + 50.0, r["y"])], a + b, 75.0)
     assert rows[0]["source"] == "NDDOT 09-116-15.0" and rows[0]["barrels"] == 2
     assert abs(rows[0]["height_m"] - 4 * FT) < 1e-3
+
+
+class _AveragedRoad(object):
+    """A 1 m terrain (prairie falling east 2 m/km, a channel along y = 0 running east, a
+    10 m wide 3 m high road embankment along x = 0) read at any cell by AVERAGING the
+    1 m cells - what an 'average' DEM resample hands the engine."""
+
+    def read(self, bounds, cell):
+        from nd_breach_runner.core.grid import Grid
+        xmin, ymin, xmax, ymax = bounds
+        k = int(round(cell))
+        nx, ny = int(round((xmax - xmin) / cell)), int(round((ymax - ymin) / cell))
+        xs = xmin + np.arange(nx * k) + 0.5
+        ys = ymax - np.arange(ny * k) - 0.5
+        X, Y = np.meshgrid(xs, ys)
+        z = 300.0 - 0.002 * X + 0.01 * np.abs(Y) - np.where(np.abs(Y) < 6, 1.0, 0.0)
+        z = z + np.where(np.abs(X) <= 5.0, 3.0, 0.0)
+        z = z.reshape(ny, k, nx, k).mean(axis=(1, 3))
+        return Grid(z, xmin, ymax, float(cell))
+
+
+def _matched_burn_case():
+    from nd_breach_runner.core import culvert_guess as cg
+    road = [(0.0, -500.0), (0.0, 500.0)]
+    chan = [(-600.0, 0.0), (600.0, 0.0)]                 # flow path, upstream first
+    guesses = cg.guess_crossings([road], [chan])
+    assert len(guesses) == 1
+    inv = [_nddot("09-118-21.1", 5.7, 0.0, "DOUBLE 16X8X52' PRECAST RCB")]
+    rows, _ = cg.match_inventory(guesses, inv, 75.0)
+    assert rows[0]["match_m"] is not None
+    return rows
+
+
+@register
+def culvert_burn_changes_the_engine_dem_at_40m():
+    """Regression (PR #30 run 2): the burn must change the DEM LISFLOOD gets at its cell size.
+    Before the fix the cut line was the guess's 12 m line across the road chord; at 40 m
+    both default inverts were the embankment cell itself and nothing was cut."""
+    from nd_breach_runner.core import culvert_guess as cg
+    from nd_breach_runner.core import structures as S
+    from nd_breach_runner.core import workflow as W
+    rows = _matched_burn_case()
+    terr = _AveragedRoad()
+    bounds = (-400.0, -400.0, 400.0, 400.0)
+    base = W.model_dem(terr, [], "lisflood", bounds, 40.0)
+    ss = cg.matched_structures(rows)
+    assert len(ss) == 1
+    notes = cg.lidar_inverts(ss, terr.read, 1.0)           # as the workflow does, before resampling
+    assert ss[0].invert_up_m is not None and ss[0].invert_up_m > ss[0].invert_dn_m, notes
+    assert ss[0].invert_up_m < 300.0 + 0.002 * 30             # the channel bed, not the road
+    line = np.asarray(ss[0].line)
+    assert abs(line[0][1]) < 1e-6 and abs(line[-1][1]) < 1e-6 and line[0][0] < line[-1][0], \
+        "the cut must follow the channel, upstream end first"
+    for cell in (40.0, 10.0):
+        b0 = base if cell == 40.0 else W.model_dem(terr, [], "lisflood", bounds, cell)
+        got = W.model_dem(terr, ss, "lisflood", bounds, cell)
+        assert got.data.shape == b0.data.shape
+        diff = b0.data - got.data
+        assert (diff >= -1e-9).all(), "a cut never raises ground"
+        r, c = b0.cell_of(0.0, 0.0) if hasattr(b0, "cell_of") else (
+            int((b0.y0 - 0.0) // cell), int((0.0 - b0.x0) // cell))
+        assert diff[r, c] > 0.3, (cell, diff[r, c])        # the road cell on the channel is cut
+        assert got.data[r, c] <= ss[0].invert_up_m + 1e-6
+        # only cells near the crossing move
+        moved = np.argwhere(diff > 1e-9)
+        assert (np.abs(moved[:, 0] - r) <= 1).all() and (np.abs(moved[:, 1] - c) <= 3).all()
+    # the old line (12 m across the road chord, no lengthening) cuts nothing at 40 m
+    old = S.Structure("culvert", np.asarray(rows[0]["line"]), 4.877, 2.438, 2, "box")
+    assert np.array_equal(W.model_dem(terr, [old], "lisflood", bounds, 40.0).data, base.data)
+    # ANUGA: culverts go to the culvert operator (not the DEM); its ends lie beyond the road
+    specs, notes = S.anuga_culverts(ss, base)
+    assert len(specs) == 1 and not notes, notes
+    (x0, _y0), (x1, _y1) = specs[0]["end_points"]
+    assert x0 < -5.0 and x1 > 5.0 and specs[0]["invert_elevations"][0] > \
+        specs[0]["invert_elevations"][1] - 1.0
+
+
+_MIN_REPORT = {
+    "hydrograph": [], "policy": [], "run_finished": [], "tool": [],
+    "inflow_point": {"xy": [0.0, 0.0], "how": "given"},
+    "lisflood_runs": [{"run": 1, "bounds": [0.0, 0.0, 4000.0, 4000.0], "size_mi": [2.49, 2.49],
+                       "cells": 10000, "dem_coverage": 1.0, "sim_time_hr": 10.0,
+                       "runtime_min": 0.2, "edge_max_depth_ft": {"N": 0.0, "S": 0.0, "W": 0.0,
+                                                                 "E": 0.0},
+                       "edges_over_tolerance": [], "latest_arrival_hr": 9.0,
+                       "stats": {"cells": 10000, "cell_size_m": 40.0, "sim_time_hr": 10.0,
+                                 "max_depth_ft": 9.0, "max_velocity_fps": 11.0,
+                                 "flooded_acres": 1000.0, "peak_inflow_cfs": 25000.0,
+                                 "max_volume_error_pct": 0.0, "worst_interval_error_pct": 0.0,
+                                 "injected_acft": 1600.0, "in_domain_acft": 1400.0,
+                                 "velocity_written": True}}],
+    "outputs": {"final": {"depth": "d.tif", "velocity": "v.tif", "arrival": "a.tif",
+                          "wse": "w.tif"}},
+    "settings": {"edge_tolerance_ft": 1.0, "expand_step_mi": 3.0},
+    "summary": {"dam_id": "T1", "final_model": "LISFLOOD-FP", "peak_breach_cfs": 25000.0,
+                "breach_method": "piping", "storage_at_failure_acft": 1600.0,
+                "flooded_acres": 1000.0, "flooded_acres_over_arrival_depth": 900.0,
+                "max_depth_ft": 9.0, "max_velocity_fps": 11.0, "latest_arrival_hr": 9.0,
+                "lisflood_runs": 1, "domain_mi": [2.49, 2.49], "units": "ft"}}
+
+
+@register
+def culvert_matches_section_in_run_report():
+    import copy
+    from nd_breach_runner.core import workflow as W
+    r = copy.deepcopy(_MIN_REPORT)
+    assert "## Culvert matches" not in W.render_report(r)
+    r["culvert_matches"] = [{"name": "NDDOT 09-118-21.1 (matched guess: road 1)",
+                             "source": "NDDOT 09-118-21.1", "match_m": 5.7,
+                             "width_m": 16 * FT, "height_m": 8 * FT, "barrels": 2,
+                             "shape": "box", "burned": True}]
+    md = W.render_report(r)
+    assert "## Culvert matches" in md
+    assert ("| NDDOT 09-118-21.1 (matched guess: road 1) | NDDOT 09-118-21.1 | 5.7 | 16.0 | "
+            "8.0 | 2 | box | yes |  |") in md, md
+    r["culvert_matches"][0].update(invert_up_m=300.0 * FT, invert_dn_m=299.5 * FT)
+    assert "| box | yes | 300.0 / 299.5 |" in W.render_report(r)
