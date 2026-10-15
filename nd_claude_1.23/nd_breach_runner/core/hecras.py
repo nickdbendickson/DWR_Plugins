@@ -162,11 +162,11 @@ def write_hydrograph_files(hy, folder, dt_min=DEFAULT_STEP_MIN, stem="HECRAS Bre
     t_hr, q_cfs, info = resample_hydrograph(hy, dt_min)
     os.makedirs(folder, exist_ok=True)
     txt = os.path.join(folder, stem + ".txt")
-    with open(txt, "w") as f:
+    with open(txt, "w", encoding="utf-8", newline="") as f:
         f.write(flow_hydrograph_block(q_cfs, interval=info["interval"] if include_interval
                                       else None))
     csv_path = os.path.join(folder, stem + ".csv")
-    with open(csv_path, "w") as f:
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
         f.write("time_hr,discharge_cfs\n")
         for t, q in zip(t_hr, q_cfs):
             f.write("{:.5f},{:.2f}\n".format(t, q))
@@ -306,7 +306,7 @@ def write_breach_table(dam, params, folder, stem="HECRAS Breach Parameters", pea
     rows = breach_parameter_rows(dam, params, peak_cfs)
     os.makedirs(folder, exist_ok=True)
     csv_path = os.path.join(folder, stem + ".csv")
-    with open(csv_path, "w", newline="") as f:
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["item", "value", "units", "basis", "note"])
         for r in rows:
@@ -330,7 +330,7 @@ def write_breach_table(dam, params, folder, stem="HECRAS Breach Parameters", pea
         md += ["", "Notes from the run:", ""] + ["- " + cell(n) for n in notes]
     md.append("")
     md_path = os.path.join(folder, stem + ".md")
-    with open(md_path, "w", encoding="utf-8") as f:
+    with open(md_path, "w", encoding="utf-8", newline="") as f:
         f.write("\n".join(md))
     return {"csv": csv_path, "md": md_path, "rows": rows}
 
@@ -347,7 +347,7 @@ def load_run(dam_folder, model_folder=MODEL_FOLDER):
     if missing:
         raise HecRasError("Not a finished breach run: missing {}".format(
             ", ".join(missing)))
-    with open(rep_path) as f:
+    with open(rep_path, encoding="utf-8") as f:
         report = json.load(f)
     if "dam" not in report or "hydrograph" not in report:
         raise HecRasError("{} has no 'dam' and 'hydrograph' entries".format(rep_path))

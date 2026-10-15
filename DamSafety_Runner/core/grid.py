@@ -107,7 +107,7 @@ class Grid:
     @staticmethod
     def read_asc(path, crs_wkt=None):
         hdr = {}
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for _ in range(6):
                 pos = f.tell()
                 line = f.readline()

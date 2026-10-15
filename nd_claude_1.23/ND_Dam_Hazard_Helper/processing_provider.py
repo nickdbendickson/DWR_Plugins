@@ -140,7 +140,7 @@ def worker_settings(cfg):
 
 def write_worker_settings(path, settings):
     import json
-    with open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w", encoding="utf-8", newline="") as fh:
         json.dump(settings, fh, indent=1, sort_keys=True)
     return path
 
@@ -186,7 +186,7 @@ def write_worker_result(path, cfg, res):
             "judgment_items": len(nd.get("judgment") or []),
             "report": str(res.get("report") or ""), "one_d": bool(cfg.get("one_d"))}
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
         json.dump(data, fh, indent=1)
     os.replace(tmp, path)
     return path

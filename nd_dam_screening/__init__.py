@@ -6,5 +6,5 @@ import os as _os
 
 __path__ = [_os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "DamSafety_Screening")]
 __file__ = _os.path.join(__path__[0], "__init__.py")
-with open(__file__) as _fh:
+with open(__file__, encoding="utf-8") as _fh:
     exec(compile(_fh.read(), __file__, "exec"))

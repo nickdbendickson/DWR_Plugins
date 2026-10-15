@@ -27,14 +27,14 @@ NLCD_N = {11: 0.035, 12: 0.030, 21: 0.040, 22: 0.080, 23: 0.120, 24: 0.150,
 # ------------------------------------------------------------------ grids
 def write_ascii_grid(path, arr, xll, yll, cell, nodata=NODATA):
     a = np.where(np.isfinite(arr), arr, nodata)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(f"ncols {a.shape[1]}\nnrows {a.shape[0]}\nxllcorner {xll:.6f}\n"
                 f"yllcorner {yll:.6f}\ncellsize {cell:.6f}\nNODATA_value {nodata:g}\n")
         np.savetxt(f, a, fmt="%.4f")
 
 
 def read_ascii_grid(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         hdr = {}
         for _ in range(6):
             k, v = f.readline().split()
@@ -83,7 +83,7 @@ def injection_points(breach_xy, flow_az_deg, bb_m, hb_m, cell, xll, yll, ncols, 
 
 
 def write_bci(path, pts, ident="bc1"):
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for x, y in pts:
             f.write(f"P {x:.3f} {y:.3f} QVAR {ident}\n")
 
@@ -92,7 +92,7 @@ def write_bdy(path, ident, t_s, q_m3s, n_points, cell):
     t, q = np.asarray(t_s, float), np.asarray(q_m3s, float)
     if q[-1] != 0.0:               # LISFLOOD-FP holds the last value forever; force it to stop
         t, q = np.append(t, t[-1] + 1.0), np.append(q, 0.0)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("breach hydrograph\n")
         f.write(f"{ident}\n{len(t)} seconds\n")
         for ti, qi in zip(t, q):
@@ -105,11 +105,11 @@ def write_sources(bci_path, bdy_path, sources, cell):
     A source that starts later (cascade: a downstream dam failing when the flood
     reaches it) gets zero inflow until start_s.
     """
-    with open(bci_path, "w") as f:
+    with open(bci_path, "w", encoding="utf-8") as f:
         for k, s in enumerate(sources, 1):
             for x, y in s["pts"]:
                 f.write(f"P {x:.3f} {y:.3f} QVAR bc{k}\n")
-    with open(bdy_path, "w") as f:
+    with open(bdy_path, "w", encoding="utf-8") as f:
         f.write("breach hydrographs\n")
         for k, s in enumerate(sources, 1):
             t = np.asarray(s["t"], float) + float(s.get("start_s", 0.0))
@@ -139,7 +139,7 @@ def write_par(path, dem, resroot, dirroot, sim_time_s, saveint_s, solver="acc",
         lines += ["acceleration", "hazard"]
     else:
         lines += ["fv1", "voutput"]
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
 

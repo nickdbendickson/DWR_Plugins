@@ -105,7 +105,7 @@ def write_snapshot(folder, snap):
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, SNAPSHOT_FILE)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
         json.dump(snap, fh, indent=1)
     os.replace(tmp, path)
     return path
@@ -320,7 +320,7 @@ def append_entry(dam_folder, entry, keep=MAX_ENTRIES):
         runs = runs[-int(keep):]
     path = history_path(dam_folder)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
         json.dump({"version": HISTORY_VERSION, "file": HISTORY_FILE, "runs": runs}, fh, indent=1)
     os.replace(tmp, path)
     return path

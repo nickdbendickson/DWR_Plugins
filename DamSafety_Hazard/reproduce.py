@@ -405,7 +405,7 @@ def write_run_settings(folder, cfg, used_inputs=None, profile=None, scenarios=No
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, RUN_SETTINGS_FILE)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
         json.dump(data, fh, indent=1, ensure_ascii=False)
     os.replace(tmp, path)
     return path
@@ -651,7 +651,7 @@ def package_inputs(run_settings, package_folder, include_rasters=False):
                                ((r[1], r[0]) for r in pk.rows)},
                      "not_packaged": not_packaged, "changed_since_run": changed}
     spath = os.path.join(package_folder, PACKAGE_SETTINGS_FILE)
-    with open(spath, "w", encoding="utf-8") as fh:
+    with open(spath, "w", encoding="utf-8", newline="") as fh:
         json.dump(rs, fh, indent=1, ensure_ascii=False)
     return {"rows": pk.rows, "settings_file": PACKAGE_SETTINGS_FILE,
             "not_packaged": not_packaged, "changed": changed}
@@ -1092,7 +1092,7 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
                          "as it was made")
     plan = plan_from_package(package_folder, work_folder, rasters_folder, as_layers)
     os.makedirs(work_folder, exist_ok=True)
-    with open(os.path.join(work_folder, WORK_MARKER), "w", encoding="utf-8") as fh:
+    with open(os.path.join(work_folder, WORK_MARKER), "w", encoding="utf-8", newline="") as fh:
         fh.write("Work folder of a reproduction of {} ({}). Its outputs may be replaced by the "
                  "next reproduction.\n".format(package_folder, time.strftime("%Y-%m-%d %H:%M")))
     old_snap = os.path.join(work_folder, SUBDIR_QA, HIS.SNAPSHOT_FILE)
@@ -1176,7 +1176,7 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
         w.writeheader()
         w.writerows(rows)
     tpath = _free_path(os.path.join(work_folder, CHECK_TEXT))
-    with open(tpath, "w", encoding="utf-8") as fh:
+    with open(tpath, "w", encoding="utf-8", newline="") as fh:
         fh.write("\n".join(str(x) for x in summary) + "\n")
     for line in summary:
         say(line)

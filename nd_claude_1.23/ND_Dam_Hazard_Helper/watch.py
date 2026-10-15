@@ -242,7 +242,7 @@ def write_reports(parent, rows, when=None, mode=None):
             w.writerows(rows)
         paths[key] = path
     hpath = prepare_output_path(os.path.join(parent, "Hazard_Creep_Watch_{}.html".format(day)))
-    with open(hpath, "w", encoding="utf-8") as fh:
+    with open(hpath, "w", encoding="utf-8", newline="") as fh:
         fh.write(_html(rows, day, mode))
     paths["html"] = hpath
     return paths
@@ -448,7 +448,7 @@ def _write_worker_log(folder, out_path, err_path, why, name=WATCH_WORKER_LOG,
     try:
         target = os.path.join(folder, OUTPUT_FOLDER_NAME, name)
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(target, "w", encoding="utf-8") as fh:
+        with open(target, "w", encoding="utf-8", newline="") as fh:
             fh.write("{} - {} worker: {}\n\n".format(PLUGIN_NAME, what, why))
             for label, path in (("standard output", out_path), ("error output", err_path)):
                 fh.write("=== {} ===\n".format(label))

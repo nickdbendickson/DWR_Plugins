@@ -1317,7 +1317,7 @@ def _work_crs(report, model_dir):
     qa = os.path.join(model_dir, "qa_dam_inflow_and_flow_path.geojson")
     if os.path.exists(qa):
         try:
-            with open(qa) as f:
+            with open(qa, encoding="utf-8") as f:
                 return json.load(f)["crs"]["properties"]["name"]
         except (KeyError, ValueError, TypeError, OSError):
             pass
@@ -1327,7 +1327,7 @@ def _work_crs(report, model_dir):
 def _flow_path(model_dir):
     qa = os.path.join(model_dir, "qa_dam_inflow_and_flow_path.geojson")
     try:
-        with open(qa) as f:
+        with open(qa, encoding="utf-8") as f:
             for ft in json.load(f)["features"]:
                 if ft["geometry"]["type"] == "LineString":
                     return np.asarray(ft["geometry"]["coordinates"], dtype=float)
@@ -1339,7 +1339,7 @@ def _flow_path(model_dir):
 def _dam_lonlat(dam_folder):
     p = os.path.join(dam_folder, "dam.json")
     try:
-        with open(p) as f:
+        with open(p, encoding="utf-8") as f:
             d = json.load(f)
         pt = d.get("point") or d.get("location") or {}
         if pt.get("lon") is not None and pt.get("lat") is not None:
@@ -1362,7 +1362,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     progress(2, "reading the run")
     hy, dam, params = hecras.load_run(dam_folder)
     model_dir = os.path.join(dam_folder, hecras.MODEL_FOLDER)
-    with open(os.path.join(model_dir, hecras.RUN_REPORT_JSON)) as f:
+    with open(os.path.join(model_dir, hecras.RUN_REPORT_JSON), encoding="utf-8") as f:
         report = json.load(f)
     settings = report.get("settings") or {}
     depth_path = os.path.join(dam_folder, "Depth (Max).tif")
@@ -1864,7 +1864,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     esri = srs.Clone()
     esri.MorphToESRI()
     paths["projection"] = os.path.join(out, "GIS", m.projection_name)
-    with open(paths["projection"], "w") as f:
+    with open(paths["projection"], "w", encoding="utf-8") as f:
         f.write(esri.ExportToWkt())
     # terrain GeoTIFF: only what the model needs (2D area and reservoir) plus a margin
     paths["terrain_tif"] = terrain_tif

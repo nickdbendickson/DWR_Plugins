@@ -214,7 +214,7 @@ def data_folder(output_folder):
     marker = os.path.join(path, DATA_MARKER_FILE)
     if not os.path.isfile(marker):
         try:
-            with open(marker, "w", encoding="utf-8") as fh:
+            with open(marker, "w", encoding="utf-8", newline="") as fh:
                 fh.write("Layers in this folder were saved by the ND Dam Hazard "
                          "Classification Helper (Data & Output tab).\n")
         except OSError:

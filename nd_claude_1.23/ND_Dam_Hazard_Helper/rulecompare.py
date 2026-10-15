@@ -739,7 +739,7 @@ def write_outputs(out, out_folder):
         p_roads = None
     else:
         p_roads = None
-    with open(p_html + ".tmp", "w", encoding="utf-8") as fh:
+    with open(p_html + ".tmp", "w", encoding="utf-8", newline="") as fh:
         fh.write(render_html(out))
     os.replace(p_html + ".tmp", p_html)
     out["csv"], out["html"], out["roads_csv"] = p_csv, p_html, p_roads

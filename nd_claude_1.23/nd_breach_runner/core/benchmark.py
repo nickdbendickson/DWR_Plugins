@@ -125,7 +125,7 @@ def write_outputs(folder, metrics, arrays, writer, grid, title="Benchmark agains
                 flat.append((prefix + k, v))
     walk("", {k: v for k, v in metrics.items() if k != "depth_class_matrix"})
     csv_path = os.path.join(folder, "Benchmark_Summary.csv")
-    with open(csv_path, "w", newline="") as f:
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["metric", "value"])
         w.writerows(flat)
@@ -143,6 +143,6 @@ def write_outputs(folder, metrics, arrays, writer, grid, title="Benchmark agains
     md += ["- " + p for p in paths.values()]
     from . import products
     html_path = os.path.join(folder, "Benchmark_Report.html")
-    with open(html_path, "w", encoding="utf-8") as f:
+    with open(html_path, "w", encoding="utf-8", newline="") as f:
         f.write(products.markdown_to_html("\n".join(md), title))
     return {"csv": csv_path, "html": html_path, "rasters": paths}

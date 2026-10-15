@@ -462,7 +462,7 @@ class FindPonds(QgsProcessingAlgorithm):
                    wb_id, wb_type, "; ".join(notes)]
             o.setAttributes(row)
             sink.addFeature(o)
-            with open(os.path.join(curves, "curve_{}.csv".format(pid)), "w") as fh:
+            with open(os.path.join(curves, "curve_{}.csv".format(pid)), "w", encoding="utf-8") as fh:
                 fh.write("elev_m,storage_m3\n")
                 for e_, v_ in res.curve:
                     fh.write("{:.3f},{:.1f}\n".format(e_, v_))

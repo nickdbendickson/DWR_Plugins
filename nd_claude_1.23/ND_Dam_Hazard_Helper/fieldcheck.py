@@ -215,7 +215,7 @@ def sheet_text(rows, dam_name="", when=None):
 
 def write_sheet(folder, dam_name, rows, name=SHEET_MD, when=None):
     path = os.path.join(folder, name)
-    with open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w", encoding="utf-8", newline="") as fh:
         fh.write(sheet_text(rows, dam_name, when))
     return path
 

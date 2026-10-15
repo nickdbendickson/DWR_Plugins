@@ -86,13 +86,20 @@ assert res["OK"] is True and res["RAN"] == "" and "nothing to run" in res["RESUL
 W2 = os.path.join(work, "w2"); os.makedirs(W2)
 W, calls = W2, []
 # with the preflight on, the missing water-body layer stops the chain before anything starts (0.13)
+# FAIL_ON_ERROR (default true, restored 2026-10): a refused chain FAILS the tool (qgis_process exits non-zero)
+try:
+    alg.run_mock({"WORK": W2, "SETTINGS": json.dumps({"dwr": "/d.gpkg", "crit": 2}), "INCLUDE": [],
+                  "DRY_RUN": False, "LOG": ""}, ctx, fb)
+    raise AssertionError("a refused chain must fail the tool by default")
+except QgsProcessingException as e:
+    assert "the chain did not finish: preflight: not ready" in str(e), e
 res = alg.run_mock({"WORK": W2, "SETTINGS": json.dumps({"dwr": "/d.gpkg", "crit": 2}), "INCLUDE": [], "DRY_RUN": False,
-                    "LOG": ""}, ctx, fb)
+                    "LOG": "", "FAIL_ON_ERROR": False}, ctx, fb)
 assert res["OK"] is False and res["RAN"] == "" and res["RESULT"].startswith("preflight: not ready") and not calls
 assert "Water bodies" in res["RESULT"] or "ND DWR dams" in res["RESULT"], res
 # with it off, the chain's own check stops at the step that lacks the input
 res = alg.run_mock({"WORK": W2, "SETTINGS": json.dumps({"dwr": "/d.gpkg"}), "INCLUDE": [], "DRY_RUN": False,
-                    "LOG": "", "PREFLIGHT": False}, ctx, fb)
+                    "LOG": "", "PREFLIGHT": False, "FAIL_ON_ERROR": False}, ctx, fb)
 assert res["OK"] is False and res["RAN"] == "1,2" and "Step 3 (Estimate reservoir storage) cannot run" in res["RESULT"]
 W3 = os.path.join(work, "w3"); os.makedirs(W3)
 W, calls = W3, []
@@ -105,7 +112,8 @@ def failing_run(aid, params, context=None, feedback=None, is_child_algorithm=Fal
 
 
 rc.processing.run = failing_run
-res = alg.run_mock({"WORK": W3, "SETTINGS": json.dumps(own), "INCLUDE": [], "DRY_RUN": False, "LOG": ""}, ctx, fb)
+res = alg.run_mock({"WORK": W3, "SETTINGS": json.dumps(own), "INCLUDE": [], "DRY_RUN": False, "LOG": "",
+                    "FAIL_ON_ERROR": False}, ctx, fb)
 assert res["OK"] is False and res["RAN"] == "1,2,3" and "did not finish: no dam line within 300 m" in res["RESULT"]
 rc.processing.run = real_run
 try:

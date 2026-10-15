@@ -25,3 +25,15 @@ def test_max_extent_is_visible_with_a_20_mi_default():
             continue
         assert p.defaultValue() == 20.0, (cls.__name__, p.defaultValue())
         assert not (p.flags() & advanced), cls.__name__ + ": MAX_EXTENT_MI is Advanced"
+
+
+@register
+def max_extent_cut_off_warning_says_truncated_and_how_to_fix():
+    """Audit 2026-10-15: a run cut at the (20 mi) cap must say TRUNCATED, name the cap, and point
+    at the setting (the default was 60 mi before 2026-10)."""
+    from nd_breach_runner.core import workflow
+    w = workflow.max_extent_warning(20.0, ["east", "south"])
+    assert w.startswith("TRUNCATED") and "20 mi" in w and "east, south" in w, w
+    assert "Largest domain side" in w and "60 mi" in w, w
+    src = open(workflow.__file__, encoding="utf-8").read()
+    assert 'stop_reason = "maximum extent' in src          # recorded in report["cut_off"]

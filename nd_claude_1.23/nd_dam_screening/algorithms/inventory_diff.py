@@ -111,7 +111,7 @@ class InventoryDiff(QgsProcessingAlgorithm):
         rows = idf.diff_inventories(old, new, **tol)
         s = idf.summary(rows)
         os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
-        with open(out_csv, "w", newline="") as fh:
+        with open(out_csv, "w", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=idf.CSV_COLUMNS)
             w.writeheader()
             for r in rows:

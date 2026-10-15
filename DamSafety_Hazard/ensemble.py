@@ -681,7 +681,7 @@ def save_result(out, key, data):
                 time=time.strftime("%Y-%m-%d %H:%M:%S"))
     os.makedirs(out, exist_ok=True)
     tmp = _result_path(out) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
         json.dump(data, fh, indent=1)
     os.replace(tmp, _result_path(out))
     return data
@@ -1209,7 +1209,7 @@ def write_outputs(qa, dam_folder, agg, results, notes, ref, text, info):
         for r in results:
             w.writerow(run_row(r, dam_folder))
     hpath = os.path.join(qa, HTML_FILE)
-    with open(hpath, "w", encoding="utf-8") as fh:
+    with open(hpath, "w", encoding="utf-8", newline="") as fh:
         fh.write(render_html(dam_folder, agg, results, notes, ref, text, info))
     return {"csv": path, "runs_csv": rpath, "html": hpath}
 

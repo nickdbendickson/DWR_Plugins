@@ -493,7 +493,7 @@ def _write_csv(path, rows):
 
 
 def _write_text(path, lines):
-    with open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w", encoding="utf-8", newline="") as fh:
         fh.write("\n".join(str(x) for x in lines) + "\n")
     return path
 
