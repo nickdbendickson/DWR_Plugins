@@ -46,6 +46,7 @@ TABS = (
          "outflow as that dam's inflow (recorded, not used on its own)."),
         ("hydrograph", "Breach hydrograph only...", "No flood model: the breach outflow hydrograph."),
         ("rainfallrunoff", "Rainfall to PMF inflow hydrograph...", "A PMF inflow from rainfall."),
+        ("spillwayadequacy", "Spillway adequacy...", "Does the dam pass its inflow design flood (no breach)?"),
     )),
     ("Data", (
         ("getdamdata", "Get data for this dam...",
