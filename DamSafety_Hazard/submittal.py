@@ -293,7 +293,9 @@ def readme(dam_name, result, rows, when, profile=None, data=None, chain="", warn
     lines += ["Files (also in {}, with SHA-256):".format(MANIFEST_NAME)]
     lines += ["  {}  -  {}".format(r["Path"], r["Description"]) for r in rows]
     lines += ["", "Cover_Letter_TEMPLATE.txt is a template: complete and sign it. Nothing here "
-              "was recalculated for the package - it is what the last run wrote."]
+              "was recalculated for the package - it is what the last run wrote.",
+              "The package (and its zip) can hold population, structure and EAP contact "
+              "details: keep the zip secured and share it only with the reviewer."]   # SM.6
     return "\n".join(lines) + "\n"
 
 
@@ -316,7 +318,7 @@ def _profile_info(out_folder, profile):
             from .reproduce import read_run_settings, RUN_SETTINGS_FILE
             rs = read_run_settings(os.path.join(out_folder, SUBDIR_QA, RUN_SETTINGS_FILE))
             profile = rs.get("settings_profile") or None
-        except (ValueError, OSError):
+        except (ValueError, OSError, ImportError):            # SM.5
             profile = None
         if not isinstance(profile, dict):
             return None, None
@@ -381,9 +383,16 @@ def build(out_folder, dam_name=None, zip_it=True, include_gis=False, dest_root=N
         for group, src, desc in items:
             dest_dir = os.path.join(folder, group)
             os.makedirs(dest_dir, exist_ok=True)
-            dest = os.path.join(dest_dir, os.path.basename(src))
+            fname = os.path.basename(src)
+            # SM.4: two sources with one name never overwrite each other
+            stem, ext = os.path.splitext(fname)
+            k = 1
+            while os.path.exists(os.path.join(dest_dir, fname)):
+                k += 1
+                fname = "{}_{}{}".format(stem, k, ext)
+            dest = os.path.join(dest_dir, fname)
             shutil.copy2(src, dest)
-            add_row("{}/{}".format(group, os.path.basename(src)), src, desc)
+            add_row("{}/{}".format(group, fname), src, desc)
         if prof:
             if prof_src:
                 name = "Settings_Profile_{}.json".format(_safe(prof.get("name")))
@@ -418,19 +427,22 @@ def build(out_folder, dam_name=None, zip_it=True, include_gis=False, dest_root=N
         zpath = None
         if zip_it:
             zpath = folder + ".zip"
-            with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+            part = zpath + ".part"            # SM.2: a whole zip or none (os.replace)
+            with zipfile.ZipFile(part, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
                 for dirpath, _d, files in os.walk(folder):
                     for f in sorted(files):
                         full = os.path.join(dirpath, f)
                         zf.write(full, os.path.join(os.path.basename(folder),
                                                     os.path.relpath(full, folder)))
+            os.replace(part, zpath)
     except Exception:
         shutil.rmtree(folder, ignore_errors=True)         # never leave half a package
-        if zip_it and os.path.exists(folder + ".zip"):
-            try:
-                os.remove(folder + ".zip")
-            except OSError:
-                pass
+        for z in (folder + ".zip.part", folder + ".zip") if zip_it else ():
+            if os.path.exists(z):
+                try:
+                    os.remove(z)
+                except OSError:
+                    pass
         raise
     return {"folder": folder, "zip": zpath, "files": rows, "missing": missing,
             "result": result, "profile": prof, "data": data, "warnings": warnings}
