@@ -61,7 +61,7 @@ from . import gpkgpack   # noqa: F401  (1.10.0)
 from . import hydro3dhp   # noqa: F401  (1.15.0)
 from . import netproxy   # noqa: F401  (1.16.2)
 
-SUITE_VERSION = "1.17.0"
+SUITE_VERSION = "1.17.1"   # 1.17.1: one canonical package for both suites (settings safe-save, layout)
 FILES_NAME = "FILES.json"
 
 __all__ = ["SUITE_VERSION", "FILES_NAME", "selfcheck", "package_files", "chain", "dam_record",
