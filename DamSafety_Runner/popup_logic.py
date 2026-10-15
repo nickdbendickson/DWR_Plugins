@@ -124,7 +124,10 @@ def _file(folder, *parts):
 def _dir(folder, *parts):
     p = os.path.join(folder, *parts)
     try:
-        return os.path.isdir(p) and any(True for _ in os.scandir(p))
+        if not os.path.isdir(p):
+            return False
+        with os.scandir(p) as it:
+            return any(True for _ in it)
     except OSError:
         return False
 

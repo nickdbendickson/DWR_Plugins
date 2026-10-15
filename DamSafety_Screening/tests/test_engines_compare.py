@@ -4,6 +4,7 @@ Needs LISFLOOD_EXE; skipped otherwise.
 """
 import glob, os, shutil, subprocess, sys, tempfile, time
 import numpy as np
+_trapz = getattr(np, "trapezoid", None) or np.trapz   # numpy < 2.0 (QGIS 3.34) has only trapz
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core import breach_hydro as bh, solver_io as sio, fv_engine as fe  # noqa: E402
 
@@ -51,7 +52,7 @@ for s in ("fv1", "acc"):
     res[s] = lisflood(s)
 
 tt = np.linspace(0, sim, 20001)
-inj = float(np.trapezoid(np.interp(tt, t, q, right=0.0), tt))          # volume injected within the run
+inj = float(_trapz(np.interp(tt, t, q, right=0.0), tt))          # volume injected within the run
 sections = [60, 110, 160]
 col = nx // 2
 print("injected within %.0f s: %.3e m3" % (sim, inj))

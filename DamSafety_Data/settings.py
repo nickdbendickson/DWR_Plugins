@@ -31,7 +31,7 @@ class Settings:
 
     @property
     def auto_check(self):
-        return self._get("auto_check", False, bool)   # off until the engineer turns it on
+        return self._get("auto_check", False, bool)   # off until the engineer turns it on (security review 2026-10-14)
 
     @auto_check.setter
     def auto_check(self, v):

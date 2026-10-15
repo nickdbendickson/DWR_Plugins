@@ -368,8 +368,8 @@ def _warm_transforms():
         ctx = QgsCoordinateTransformContext()
         for a, b in _WARM_PAIRS:
             QgsCoordinateTransform(QgsCoordinateReferenceSystem(a), QgsCoordinateReferenceSystem(b), ctx)
-    except Exception:
-        pass
+    except Exception as e:
+        log_message("Could not pre-build coordinate transformations: {}".format(e), MSG_WARNING)
 
 
 def _repair_transforms():
@@ -387,8 +387,8 @@ def _repair_transforms():
             log_message("Coordinate transformations {} were invalid after the parallel downloads "
                         "(QGIS thread race); the transform cache was cleared".format(
                             ", ".join("{}->{}".format(a, b) for a, b in bad)), MSG_WARNING)
-    except Exception:
-        pass
+    except Exception as e:
+        log_message("Could not check the coordinate transformations: {}".format(e), MSG_WARNING)
 
 
 def _park(handle):
@@ -607,8 +607,8 @@ def offline_config(fallback=True):
                 path = st.value(SETTING_PACK, "") or ""
             if only is None:
                 only = st.value(SETTING_ONLY, False)
-        except Exception:
-            pass
+        except Exception as e:
+            log_message("Could not read the offline-pack settings: {}".format(e), MSG_WARNING)
     path = str(path or "").strip()
     only = _truthy(only) if only is not None else False
     if not from_env and data_source() == "download":
@@ -1008,8 +1008,8 @@ class TileCache(object):
         if self.on_tile is not None:
             try:
                 self.on_tile(dict(rec))
-            except Exception:
-                pass
+            except Exception as e:
+                log_message("Tile callback failed: {}".format(e), MSG_WARNING)
         return rec
 
     def get(self, source, url_key, bbox, fetch, marker="", label=None):
@@ -1144,8 +1144,8 @@ def purge_tile_cache(folder, max_mb=TILE_CACHE_MAX_MB):
             total -= size
             removed += 1
             freed += size
-    except Exception:                                    # noqa
-        pass
+    except Exception as e:                               # noqa
+        log_message("Tile cache clean-up stopped early: {}".format(e), MSG_WARNING)
     return removed, freed
 
 
