@@ -675,7 +675,7 @@ The same hook classifies each sensitivity case.
 
 ## Tests
 
-Without QGIS:
+Without QGIS, but with the QGIS Python (it needs numpy and scipy, which the system `python3` may lack):
 
 ```bash
 python3 -m nd_breach_runner.tests.run_tests
