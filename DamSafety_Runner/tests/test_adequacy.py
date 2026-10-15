@@ -98,11 +98,13 @@ def adequacy_matches_route_flood_no_breach():
     ref = fl.route_flood(d, br.METHOD_PIPING if hasattr(br, "METHOD_PIPING") else "piping",
                          None, fi)
     out = AD.assess([inflow], 30.0, "high", spillway_csv=rating, crest_length_ft=800.0, dam=d,
-                    bisect=False)
+                    bisect=False, start_pool_ft=20.0)
     row = out["rows"][0]
     assert abs(row["peak_pool_ft"] - ref.summary["peak_pool_ft_no_breach"]) <= 0.011, (
         row["peak_pool_ft"], ref.summary["peak_pool_ft_no_breach"])
-    assert row["start_pool_ft"] == 20.0     # default: the rating's crest
+    dflt = AD.assess([inflow], 30.0, "high", spillway_csv=rating, crest_length_ft=800.0, dam=d,
+                     bisect=False)
+    assert dflt["rows"][0]["start_pool_ft"] == 20.5   # default: first rating row with flow
 
 
 @test
@@ -142,3 +144,101 @@ if __name__ == "__main__":
             print("FAIL", fn.__name__, e)
     shutil.rmtree(TMP, ignore_errors=True)
     sys.exit(1 if failed else 0)
+
+
+def _box(top=1020.0, z0=980.0, area=100.0):
+    return _const_area_table(z0, top + 30, area)
+
+
+@test
+def adequacy_start_pool_coarse_rating_and_outlet():   # B1
+    ss = _box()
+    rating = _w("coarse.csv", "elev_ft,q_cfs\n990,0\n1005,50\n1010,2000\n")
+    inflow = _w("b1.csv", "time_hr,flow_cfs\n0,0\n2,500\n6,0\n")
+    out = AD.assess([inflow], 1020.0, "high", spillway_csv=rating, stage_storage_csv=ss,
+                    wind_setup_runup_ft=1.0, bisect=False)
+    v = out["verdict"]
+    assert v["start_pool_ft"] == 1005.0, v
+    assert "first rating elevation with flow" in v["start_pool_rule"]
+    assert any("jumps from no flow" in n for n in out["notes"])
+    rp = os.path.join(TMP, "b1.md")
+    AD.write_report(out, rp)
+    assert "1005" in open(rp).read()
+    from nd_breach_runner.core import outlets as om
+    outs = om.parse_outlets("pipe; 1000; 2; 0.6|gated; 995; 2; 0.6; 0:0")
+    out = AD.assess([inflow], 1020.0, "high", spillway_csv=rating, stage_storage_csv=ss,
+                    wind_setup_runup_ft=1.0, outlets=outs, bisect=False)
+    v = out["verdict"]
+    assert v["start_pool_ft"] == 1000.0 and "pipe" in v["start_pool_rule"], v   # gated ignored
+
+
+@test
+def adequacy_header_units():   # B2
+    rows = "30,10\n60,20\n90,5\n"
+    tm, _, _ = AD.read_inflow_csv(_w("m.csv", "time_min,flow_cfs\n0,0\n" + rows))
+    assert list(np.round(tm / 3600.0, 6)) == [0, 0.5, 1.0, 1.5], tm
+    _, qc, _ = AD.read_inflow_csv(_w("c.csv", "time_hr,flow_cms\n0,0\n1,10\n2,1\n"))
+    assert abs(qc[1] - 10.0) < 1e-9, qc
+    ts, _, _ = AD.read_inflow_csv(_w("s.csv", "time_s,flow_cfs\n0,0\n3600,1\n"))
+    assert ts[1] == 3600.0
+    for name, head in (("u1.csv", "time,flow"), ("u2.csv", "t_x,q_y"), ("u3.csv", "time_min,flow")):
+        try:
+            AD.read_inflow_csv(_w(name, head + "\n0,0\n1,1\n"))
+            raise AssertionError(head + " accepted")
+        except AD.AdequacyError:
+            pass
+    _, _, meta = AD.read_inflow_csv(_w("nh.csv", "0,0\n1,10\n"))
+    assert any("no header" in w for w in meta["warnings"])
+
+
+@test
+def adequacy_t0_row_only_for_end_of_step():   # N2
+    t, q, m = AD.read_inflow_csv(_w("mid.csv", "time_hr,flow_cfs\n5,100\n6,100\n7,0\n"))
+    assert list(np.round(t / 3600.0, 6)) == [0, 1, 2] and q[0] / CFS == 100, (t, q)
+    assert m["warnings"]
+    t, q, _ = AD.read_inflow_csv(_w("bf.csv", "# baseflow: constant\ntime_hr,flow_cfs\n"
+                                    "1,50\n2,80\n3,50\n"))
+    assert len(t) == 4 and abs(q[0] / CFS - 50) < 1e-9, q / CFS
+
+
+@test
+def adequacy_freeboard_warnings_and_fail():   # N3, N4, high-hazard FAIL end to end
+    ss = _box()
+    inflow = _w("big.csv", "time_hr,flow_cfs\n0,0\n2,20000\n10,0\n")
+    out = AD.assess([inflow], 1020.0, "high", stage_storage_csv=ss, start_pool_ft=1010.0,
+                    bisect=True)
+    assert not out["verdict"]["passes"] and "DOES NOT PASS" in out["verdict"]["text"]
+    assert out["rows"][0]["max_multiple_passed"] < 1.0
+    assert any("no wind setup" in n for n in out["notes"])
+    assert any("NOT checked" in n and "Normal freeboard" in n for n in out["notes"])
+    out = AD.assess([inflow], 1020.0, "low", stage_storage_csv=ss, start_pool_ft=990.0,
+                    freeboard_ft=0.2, bisect=False)
+    assert out["verdict"]["freeboard_override"] and "override" in out["verdict"]["text"]
+    assert any("below the REG_05.2026 minimum" in n for n in out["notes"])
+
+
+@test
+def adequacy_start_above_allowed_multiple_zero():   # max_multiple ok(0.0) false branch
+    ss = _box()
+    inflow = _w("small.csv", "time_hr,flow_cfs\n0,0\n1,10\n2,0\n")
+    out = AD.assess([inflow], 1020.0, "low", stage_storage_csv=ss, start_pool_ft=1018.0)
+    r = out["rows"][0]
+    assert r["max_multiple_passed"] == 0.0 and not r["passes"], r
+
+
+@test
+def adequacy_long_storm_and_duplicate_ids():   # N6, N7
+    ss = _box()
+    a = _w("dupA.csv", "# storm_id: X\ntime_hr,flow_cfs\n0,0\n10,100\n300,0\n")
+    b = _w("dupB.csv", "# storm_id: X\ntime_hr,flow_cfs\n0,0\n2,50\n4,0\n")
+    rating = _w("lr.csv", "elev_ft,q_cfs\n1000,0\n1000.1,100\n1010,5000\n")
+    out = AD.assess([a, b], 1020.0, "high", spillway_csv=rating, stage_storage_csv=ss,
+                    wind_setup_runup_ft=1.0, bisect=False)
+    ids = [r["storm_id"] for r in out["rows"]]
+    assert len(set(ids)) == 2 and set(ids) == set(out["series"]), ids
+    assert out["rows"][0]["routing_complete"], out["rows"][0]
+    assert any("more than one file" in n for n in out["notes"])
+    res = AD.TableReservoir.from_csv(ss)
+    t, q, _ = AD.read_inflow_csv(a)
+    r = AD.route_no_breach(res, fl.FloodInputs(t, q, None), 1020 * FT, 1000 * FT, max_hours=240)
+    assert not r["complete"]

@@ -1,8 +1,9 @@
 """Spillway adequacy: can the dam pass its Inflow Design Flood (ND REG_05.2026)?
 
 Per inflow hydrograph (e.g. the nd_pmp storms, <out>/hydrographs/<storm_id>.csv) the flood is
-routed through the reservoir WITHOUT a breach, from the starting pool (default: the crest of
-the spillway rating, REG_05.2026 Section 9), through the spillway rating (and outlets / gates),
+routed through the reservoir WITHOUT a breach, from the starting pool (default: the lowest
+ungated spillway crest - the first rating elevation with flow - or the lowest ungated outlet
+invert if lower, REG_05.2026 Section 9), through the spillway rating (and outlets / gates),
 with flow over the embankment crest once the pool is above the top of dam. The dam passes a
 storm when the highest pool stays at or below the post-settlement top of dam minus the required
 residual freeboard (Section 8.1.1). The largest multiple of each inflow the dam passes is found by
@@ -53,8 +54,11 @@ def read_inflow_csv(path):
     nd_pmp: '#' header lines ('# key: value' kept in meta), a header row with time_hr and
     flow_cfs read BY NAME (v0.3.0 time_hr,flow_cfs,precip_in,excess_in; v0.2.0
     time_hr,precip_in,excess_in,flow_cfs), time_hr at the END of each step and no t=0 row - a
-    zero-flow t=0 point is added. Plain files: time_hr,flow_cfs (header optional; without one
-    the first two columns are time hr and flow cfs)."""
+    t=0 point is added (at the baseflow when '# baseflow:' is given) only when the first time
+    equals one time step. Plain files: a header with a time column in hours, minutes or seconds
+    (time_hr, time_min, time_s) and a flow column in cfs or cms (flow_cfs, flow_cms); headers
+    without recognised units are rejected. Without a header row the first two columns are read
+    as hours and cfs, with a warning. meta["warnings"] lists what was assumed."""
     meta, rows, header = {}, [], None
     with open(path, newline="", encoding="utf-8-sig") as f:
         for line in f:
@@ -78,33 +82,68 @@ def read_inflow_csv(path):
             rows.append(cells)
     if not rows:
         raise AdequacyError("{}: no data rows".format(path))
+    warnings = []
     if header:
-        def col(*names):
-            for n in names:
-                if n in header:
-                    return header.index(n)
-            return None
-        it = col("time_hr", "time", "hr", "hours", "t_hr")
-        iq = col("flow_cfs", "discharge_cfs", "q_cfs", "inflow_cfs", "flow", "discharge", "cfs")
+        it, ft, iq, fq = _pick(header, TIME_COLS), None, None, None
+        if it is not None:
+            it, ft = it
+        got = _pick(header, FLOW_COLS)
+        if got is not None:
+            iq, fq = got
         if it is None or iq is None:
-            if len(header) == 2:
-                it, iq = 0, 1
-            else:
-                raise AdequacyError("{}: needs columns time_hr and flow_cfs (found {})".format(
-                    path, ", ".join(header)))
+            vague = [h for h in header if h in VAGUE_COLS]
+            raise AdequacyError(
+                "{}: needs a time column in hours, minutes or seconds (time_hr, time_min, "
+                "time_s) and a flow column in cfs or cms (flow_cfs, flow_cms); found {}{}".format(
+                    path, ", ".join(header),
+                    " ('{}' has no units)".format("', '".join(vague)) if vague else ""))
     else:
-        it, iq = 0, 1
+        it, ft, iq, fq = 0, 1.0, 1, 1.0
+        warnings.append("{}: no header row; the first two columns were read as time (hours) "
+                        "and flow (cfs). Add a header (time_hr,flow_cfs) to be sure."
+                        .format(os.path.basename(path)))
     try:
-        t = np.array([float(r[it]) for r in rows])
-        q = np.array([float(r[iq]) for r in rows])
+        t = np.array([float(r[it]) for r in rows]) * ft
+        q = np.array([float(r[iq]) for r in rows]) * fq
     except (ValueError, IndexError) as e:
         raise AdequacyError("{}: unreadable number ({})".format(path, e))
     if np.any(np.diff(t) <= 0):
         raise AdequacyError("{}: times must increase".format(path))
-    if t[0] > 0:                       # end-of-step times: the record starts at 0 with no flow
-        t, q = np.r_[0.0, t], np.r_[0.0, q]
+    if t[0] > 0:
+        dt = float(np.median(np.diff(t))) if len(t) > 1 else t[0]
+        if abs(t[0] - dt) <= 0.01 * dt:
+            # nd_pmp style: times at the END of each step, no t=0 row. Start from the baseflow
+            # when the file has one, else from no flow.
+            bf = str(meta.get("baseflow", "")).strip().lower()
+            q0 = q[0] if bf and bf not in ("0", "none", "no", "false", "off") else 0.0
+            t, q = np.r_[0.0, t], np.r_[q0, q]
+        else:
+            warnings.append("{}: starts at {:g} h (not one time step); time was shifted to "
+                            "start at 0 with the first flow {:g} cfs, no zero row added."
+                            .format(os.path.basename(path), t[0], q[0]))
+    meta["warnings"] = warnings
     meta.setdefault("storm_id", os.path.splitext(os.path.basename(path))[0])
     return (t - t[0]) * 3600.0, np.clip(q, 0.0, None) * CFS, meta
+
+
+# header name -> factor to hours / cfs
+TIME_COLS = {n: 1.0 for n in ("time_hr", "t_hr", "hr", "hrs", "hours", "hour", "time_hours",
+                              "time_h", "t_h")}
+TIME_COLS.update({n: 1.0 / 60.0 for n in ("time_min", "t_min", "min", "mins", "minutes",
+                                          "time_minutes")})
+TIME_COLS.update({n: 1.0 / 3600.0 for n in ("time_s", "t_s", "time_sec", "sec", "secs",
+                                            "seconds", "time_seconds")})
+FLOW_COLS = {n: 1.0 for n in ("flow_cfs", "discharge_cfs", "q_cfs", "inflow_cfs", "cfs")}
+FLOW_COLS.update({n: 1.0 / CFS for n in ("flow_cms", "discharge_cms", "q_cms", "inflow_cms",
+                                         "cms", "flow_m3s", "q_m3s", "m3s", "m3/s")})
+VAGUE_COLS = ("time", "t", "flow", "discharge", "q", "inflow")
+
+
+def _pick(header, names):
+    for i, h in enumerate(header):
+        if h in names:
+            return i, names[h]
+    return None
 
 
 def find_inflows(folder):
@@ -177,27 +216,15 @@ def route_no_breach(res, fi, top_m, start_m, max_hours=240.0, dt_s=30.0, mult=1.
 
     t_in = max([fi.inflow_end_s] + [p[0] for p in (fi.spillway_schedule or [])]
                + [p[0] for cd in (fi.outlets or []) for p in (cd.schedule or [])])
-    v = float(res.volume(start_m))
-    ts, vs, qs = [0.0], [v], [qout(0.0, v)]
-    t, qpk = 0.0, qs[0]
-    while t < max_hours * 3600.0:
-        v = fl._step(qin, qout, t, v, dt_s)
-        t += dt_s
-        q = qout(t, v)
-        ts.append(t)
-        vs.append(v)
-        qs.append(q)
-        qpk = max(qpk, q)
-        if t > t_in and (q <= 1e-9 or q < 0.002 * qpk):
-            break
-    ts, vs, qs = np.asarray(ts), np.asarray(vs), np.asarray(qs)
+    t_max = max_hours * 3600.0
+    ts, vs, qs, t = fl.route_static(qin, qout, float(res.volume(start_m)), t_in, t_max, dt_s)
     wse = np.asarray(res.wse(vs), float)
     qi = np.array([qin(x) for x in ts])
     i = int(np.argmax(wse))
     return {"t_s": ts, "wse_m": wse, "qout_cms": qs, "qin_cms": qi,
             "peak_wse_m": float(wse[i]), "t_peak_wse_s": float(ts[i]),
             "peak_qout_cms": float(qs.max()), "peak_qin_cms": float(qi.max()),
-            "complete": bool(t <= max_hours * 3600.0 and t > t_in)}
+            "complete": bool(t < t_max and t > t_in)}
 
 
 def required_freeboard_ft(hazard, wind_ft=None, override_ft=None):
@@ -259,19 +286,51 @@ def assess(inflows, top_of_dam_ft, hazard="high", spillway_csv=None, crest_lengt
     else:
         raise AdequacyError("give a stage-storage table or the dam's storage, area and height")
     spill = fl.Spillway.from_csv(spillway_csv) if spillway_csv else None
+    if start_pool_ft is None and spill is None:
+        raise AdequacyError("give the starting pool or a spillway rating (its crest is the "
+                            "default starting pool, REG_05.2026 Section 9)")
     if start_pool_ft is None:
-        if spill is None:
-            raise AdequacyError("give the starting pool or a spillway rating (its crest is the "
-                                "default starting pool, REG_05.2026 Section 9)")
-        start_m = spill.crest_m
-        rule = "spillway crest from the rating (lowest ungated spillway, REG_05.2026 Section 9)"
+        start_m = spill.first_flow_m
+        rule = ("spillway crest {:.2f} ft = first rating elevation with flow > 0 (lowest "
+                "ungated spillway, REG_05.2026 Section 9)".format(start_m / FT))
+        gap_ft = spill.crest_gap_m / FT
+        if gap_ft > 0.5:
+            notes.append("WARNING: the spillway rating jumps from no flow to flow over {:.2f} ft "
+                         "(next lower row {:.2f} ft). The starting pool uses the upper elevation "
+                         "{:.2f} ft (conservative); give the real crest as a rating row or set "
+                         "the starting pool.".format(gap_ft, start_m / FT - gap_ft, start_m / FT))
+        ungated = [o for o in (outlets or []) if not o.schedule]
+        if ungated:
+            low = min(ungated, key=lambda o: o.invert_m)
+            if low.invert_m < start_m:
+                rule = ("invert {:.2f} ft of ungated outlet '{}', below the spillway crest "
+                        "{:.2f} ft (lowest ungated outlet, REG_05.2026 Section 9; low-flow "
+                        "facilities are excluded - set the starting pool if '{}' is one)".format(
+                            low.invert_m / FT, low.name, start_m / FT, low.name))
+                start_m = low.invert_m
+        notes.append("Starting pool: " + rule + ".")
     else:
         start_m = float(start_pool_ft) * FT
         rule = "given"
+        notes.append("Starting pool: given, {:.2f} ft.".format(start_m / FT))
     if start_m >= top_m:
         raise AdequacyError("the starting pool ({:.2f} ft) is not below the top of dam".format(
             start_m / FT))
     fb = required_freeboard_ft(hazard, wind_setup_runup_ft, freeboard_ft)
+    reg_fb = required_freeboard_ft(hazard, wind_setup_runup_ft)
+    override = freeboard_ft is not None
+    if hazard in ("high", "medium") and not wind_setup_runup_ft:
+        notes.append("WARNING: no wind setup + runup given: the required residual freeboard is "
+                     "the 1 ft floor only. Section 8.1.1a requires the greater of 1 ft and the "
+                     "wind setup + runup (10 % hourly exceedance wind) - give it.")
+    if override and fb < reg_fb - 1e-9:
+        notes.append("WARNING: the freeboard override {:g} ft is below the REG_05.2026 minimum "
+                     "{:g} ft for a {} hazard dam (Section 8.1.1). The verdict uses the override."
+                     .format(fb, reg_fb, hazard))
+    if hazard == "low":
+        notes.append("Low hazard: the 3 ft of Section 8.1.1b is applied as residual freeboard at "
+                     "the IDF peak pool (an interpretation; the rule does not say normal or "
+                     "residual).")
     allowed_m = top_m - fb * FT
     if spill is None and not outlets:
         notes.append("No spillway rating and no outlets: the only release is over the crest.")
@@ -282,16 +341,31 @@ def assess(inflows, top_of_dam_ft, hazard="high", spillway_csv=None, crest_lengt
     rows, series = [], {}
     for path in inflows:
         t, q, meta = read_inflow_csv(path)
+        notes += ["WARNING: " + w for w in meta.get("warnings", [])]
+        # route long enough for the whole inflow (a 10-day storm hits a fixed 240 h limit)
+        hrs = max(max_hours, float(t[-1]) / 3600.0 + 48.0)
         fi = fl.FloodInputs(t, q, spill, crest_length_ft=crest_length_ft)
         fi.outlets = list(outlets or [])
         fi.spillway_schedule = spillway_schedule
-        r = route_no_breach(res, fi, top_m, start_m, max_hours, dt_s)
+        r = route_no_breach(res, fi, top_m, start_m, hrs, dt_s)
         peak_ft = r["peak_wse_m"] / FT
         resid = float(top_of_dam_ft) - peak_ft
         passed = r["peak_wse_m"] <= allowed_m + 1e-9
-        mult, capped = (max_multiple(res, fi, top_m, start_m, allowed_m, dt_s, max_hours)
+        mult, capped = (max_multiple(res, fi, top_m, start_m, allowed_m, dt_s, hrs)
                         if bisect else (None, False))
         sid = meta.get("storm_id")
+        if sid in series:
+            new = "{} ({})".format(sid, os.path.basename(path))
+            k = 2
+            while new in series:
+                new = "{} ({} #{})".format(sid, os.path.basename(path), k)
+                k += 1
+            notes.append("WARNING: storm_id '{}' is used by more than one file; {} is reported "
+                         "as '{}'.".format(sid, path, new))
+            sid = new
+        if not r["complete"]:
+            notes.append("WARNING: {}: routing stopped at the {:g} h limit before the pool "
+                         "drained; the peak may be cut off.".format(sid, hrs))
         rows.append({
             "storm_id": sid, "file": path, "storm_type": meta.get("storm_type", ""),
             "duration_hr": meta.get("duration_hr", ""),
@@ -320,8 +394,11 @@ def assess(inflows, top_of_dam_ft, hazard="high", spillway_csv=None, crest_lengt
         "start_pool_ft": round(start_m / FT, 2), "start_pool_rule": rule,
         "governing_storm": gov["storm_id"], "governing_peak_pool_ft": gov["peak_pool_ft"],
         "governing_residual_freeboard_ft": gov["residual_freeboard_ft"],
-        "passes": ok,
-        "text": ("PASSES" if ok else "DOES NOT PASS") + (
+        "passes": ok, "freeboard_override": override,
+        "regulation_residual_freeboard_ft": reg_fb,
+        "routing_complete": all(x["routing_complete"] for x in rows),
+        "text": ("PASSES" if ok else "DOES NOT PASS") + (" (freeboard override)" if override
+                                                         else "") + (
             ": governing storm {} peaks at {:.2f} ft, {:.2f} ft below the top of dam {:.2f} ft "
             "(required residual freeboard {:.2f} ft, allowed peak pool {:.2f} ft).".format(
                 gov["storm_id"], gov["peak_pool_ft"], gov["residual_freeboard_ft"],
@@ -332,6 +409,10 @@ def assess(inflows, top_of_dam_ft, hazard="high", spillway_csv=None, crest_lengt
         "spillway capacity {} (not checked here). The inflow hydrographs given are taken to be "
         "that IDF (all PMP storm types and durations >= the time of concentration, with "
         "snowmelt as appropriate, Section 6.2) - check that.".format(hazard, idf, psc),
+        "Only RESIDUAL freeboard at the IDF peak is checked. Normal freeboard (Section 8.1.1a, "
+        "high / medium: the greater of 3 ft and the 100-mph wind setup + runup, normal pool to "
+        "top of dam) and the principal spillway capacity are NOT checked: a PASSES verdict is "
+        "not full freeboard compliance.",
         "Freeboard: residual freeboard = top of dam (post-settlement, roads excluded) minus the "
         "peak pool of the routed IDF (Section 8.1.1, 16).",
         "If an incremental damage analysis (Section 6.4) sets a smaller IDF, the dam must still "
