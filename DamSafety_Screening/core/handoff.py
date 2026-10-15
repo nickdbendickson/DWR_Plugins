@@ -36,7 +36,22 @@ USER_METHOD_INDEX = 9
 # every parameter name this plugin sends (verified against the runner in tests/test_handoff.py)
 RUNDAM_KEYS = ("DAM_ID", "DAM_NAME", "DAM_POINT", "HEIGHT_FT", "STORAGE_ACFT", "AREA_AC", "DEM",
                "DAMS_FOLDER", "CELL", "METHOD", "USER_CSV", "RECEPTOR_POINTS", "RECEPTOR_ROADS",
-               "RECEPTOR_RAIL", "RECEPTOR_POINTS_MORE", "RECEPTOR_ROADS_MORE")
+               "RECEPTOR_RAIL", "RECEPTOR_POINTS_MORE", "RECEPTOR_ROADS_MORE",
+               "TIER", "FORCE_ANUGA", "REFINE_NEAR", "STRUCTURES", "S_KIND", "S_WIDTH", "S_HEIGHT",
+               "S_BARRELS", "S_SHAPE", "S_NAME")
+# 7b engine choice (tool parameter -> rundam parameter). The Runner's TIER index 0 is
+# LISFLOOD-FP only, 1 is LISFLOOD-FP then ANUGA. "Solver" here is the Runner's near-dam FV1
+# refine (REFINE_NEAR); rundam has no other solver switch.
+ENGINE_LABELS = ["Runner default (LISFLOOD-FP only)",
+                 "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"]
+# 7b's culvert / bridge field parameters -> the Runner's STRUCTURES field parameters.
+# (7b's own STRUCTURES-like layer is BLD = buildings, so the culvert layer is CULVERTS here.)
+CULVERT_FIELDS = (("C_KIND", "S_KIND", "kind (culvert / bridge / notch)"),
+                  ("C_WIDTH", "S_WIDTH", "span or diameter (ft)"),
+                  ("C_HEIGHT", "S_HEIGHT", "rise (ft)"),
+                  ("C_BARRELS", "S_BARRELS", "barrels"),
+                  ("C_SHAPE", "S_SHAPE", "shape (box / pipe)"),
+                  ("C_NAME", "S_NAME", "name"))
 NDHAZARD_KEYS = ("DAM_FOLDER", "STRUCTURES", "S_HABITABLE", "S_OCC", "S_MOBILE",
                  "UNINHABITED_WORDS", "ROADS", "R_AADT", "R_CLASS", "R_SOLE", "RAIL", "T_TRAINS",
                  "T_PASSENGER", "PASSENGER_CODES", "LIFELINES", "L_KIND", "DOWNSTREAM_DAMS", "D_ID",
@@ -266,6 +281,36 @@ def rundam_params(attrs, point_xy, crs_authid, dem, dams_folder, cell_m=None, us
         notes.append("breach hydrograph: screening tool 5 ({})".format(os.path.basename(user_csv)))
     else:
         notes.append("breach hydrograph: runner's own ND method")
+    return p, notes
+
+
+def engine_params(tier=0, force_anuga=False, refine_near=False, culverts=None,
+                  culvert_fields=None):
+    """(extra 'ndbreach:rundam' parameters, notes) for 7b's engine and culvert choices.
+
+    Only what differs from the Runner's own defaults is sent, so the defaults (tier 0, no
+    force, no refine, no culverts) add nothing and the run is the same as before.
+    culvert_fields: {C_KIND, ...: field name or ''}; empty names are left out so the Runner
+    matches its own synonyms (kind, width_ft, height_ft, barrels, shape, name ...)."""
+    p, notes = {}, []
+    tier = int(tier or 0)
+    if tier:
+        p["TIER"] = tier
+        notes.append("models: " + ENGINE_LABELS[tier] if tier < len(ENGINE_LABELS)
+                     else "models: Runner TIER {}".format(tier))
+    if force_anuga:
+        p["FORCE_ANUGA"] = True
+        notes.append("force ANUGA: final results from ANUGA")
+    if refine_near:
+        p["REFINE_NEAR"] = True
+        notes.append("near-dam refine with the FV1 solver")
+    if culverts not in (None, ""):
+        p["STRUCTURES"] = culverts
+        for key, rkey, _d in CULVERT_FIELDS:
+            v = (culvert_fields or {}).get(key)
+            if v:
+                p[rkey] = str(v)
+        notes.append("culverts / bridges: {}".format(culverts))
     return p, notes
 
 

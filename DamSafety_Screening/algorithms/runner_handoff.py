@@ -8,6 +8,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterFile,
                        QgsProcessingParameterNumber, QgsProcessingParameterField,
                        QgsProcessingParameterString, QgsProcessingParameterFeatureSink,
+                       QgsProcessingParameterBoolean,
                        QgsFeature, QgsProcessingException, QgsApplication,
                        QgsProcessingMultiStepFeedback, QgsWkbTypes)
 
@@ -149,6 +150,19 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                                                minValue=hz.MIN_WET_M, optional=True)))
         P(QgsProcessingParameterFile("CHART_FILE", "Digitized ACER TM 11 chart file (.json; empty = the "
                                      "runner's own copy)", extension="json", optional=True))
+        # engine choice and culverts / bridges for the Runner (defaults = the Runner's own:
+        # nothing extra is sent). CULVERTS, not STRUCTURES: BLD is this tool's buildings layer.
+        P(QgsProcessingParameterEnum("ENGINE", "Runner models", ho.ENGINE_LABELS, defaultValue=0))
+        P(QgsProcessingParameterBoolean("FORCE_ANUGA", "Runner: force ANUGA (final results from "
+                                        "ANUGA even with LISFLOOD-FP only)", defaultValue=False))
+        P(QgsProcessingParameterBoolean("REFINE_NEAR", "Runner: near-dam refine with the FV1 solver",
+                                        defaultValue=False))
+        P(QgsProcessingParameterFeatureSource("CULVERTS", "Culverts and bridges for the Runner (lines, "
+                                              "upstream end first; used by ANUGA)", [ln], optional=True))
+        for k, _rk, desc in ho.CULVERT_FIELDS:
+            P(QgsProcessingParameterField(k, "Culverts: {} field (empty = runner matches its "
+                                          "synonyms)".format(desc), parentLayerParameterName="CULVERTS",
+                                          optional=True))
         P(QgsProcessingParameterFeatureSink("OUT", "Dams with runner results", SRC_POINT))
 
     # ------------------------------------------------------------------
@@ -265,6 +279,14 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         fields_.update({"D_ID": "dam_id" if "dam_id" in names else "", "D_CLASS": d_class})
         words = ", ".join(hz.words(S("UNINHABITED"))) or ", ".join(hz.UNINHABITED)
         user_idx = _user_method_index(run_alg)
+        B = lambda k: (self.parameterDefinition(k) is not None and params.get(k) not in (None, "")
+                       and self.parameterAsBool(params, k, context))
+        engine = self.parameterAsEnum(params, "ENGINE", context) if params.get("ENGINE") not in (None, "") else 0
+        eng_p, eng_notes = ho.engine_params(engine, B("FORCE_ANUGA"), B("REFINE_NEAR"),
+                                            params.get("CULVERTS"),
+                                            {k: S(k) for k, _rk, _d in ho.CULVERT_FIELDS})
+        for n in eng_notes:
+            feedback.pushInfo("Runner: " + n)
 
         fields, put = cm.extend_fields(dams.fields(), NEW)
         sink, dest = self.parameterAsSink(params, "OUT", context, fields, dams.wkbType(), dams.sourceCrs())
@@ -315,6 +337,8 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                     for key, v in receptors.items():
                         if v not in (None, ""):
                             p[key] = v
+                    p.update(eng_p)
+                    notes = notes + eng_notes
                     res["rn_inputs"] = hz.limit_text(["sent: " + why] + notes)
                     for n in notes:
                         feedback.pushInfo(n)
