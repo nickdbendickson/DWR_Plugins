@@ -247,6 +247,11 @@ class Sampler:
                 "vel_at_max_fts": vk, "x": float(x), "y": float(y),
                 "cells": len(cells), "how": "polygon: deepest of {} cell(s)".format(len(cells))}
 
+    def is_wet(self, x, y):
+        """Overtopped / inundated at (x, y): depth at least the wet depth (off the grid: no)."""
+        r, c, ok = self._rc(x, y)
+        return bool(ok) and float(self.d[int(r), int(c)]) >= self.wet
+
     def lines(self, parts):
         """Deepest sample along the parts, sampled every half cell."""
         step = 0.5 * self.g.dx
@@ -786,7 +791,8 @@ class NDHazardAlgorithm(_ToolBase):
             return
         ft = self.parameterAsDouble(parameters, "AADT_JOIN_FT", context)
         max_m = ft * 0.3048 if ft else aadt_join.DEFAULT_MAX_M
-        self._aadt_log = aadt_join.apply(need, parts, traffic, max_m)
+        self._aadt_log = aadt_join.apply(need, parts, traffic, max_m,
+                                         is_wet=getattr(self, "_is_wet", None))
         for j in self._aadt_log:
             feedback.pushInfo("AADT joined: {road} = {aadt:g} ({year}) from {source}".format(**j))
         feedback.pushInfo("AADT join: {} of {} road(s) without AADT matched in {}".format(
@@ -821,6 +827,7 @@ class NDHazardAlgorithm(_ToolBase):
         crs = self._raster_crs(grid.crs_wkt)
         sampler = Sampler(grid, with_f["depth"], vel, st.wet_ft)
         self._road_parts = {}
+        self._is_wet = sampler.is_wet
         rec, extra, dam_xy, inputs, fields = self._read_all(
             parameters, context, grid, crs, sampler, feedback, dam_id)
         if not inputs:
@@ -834,7 +841,7 @@ class NDHazardAlgorithm(_ToolBase):
             raise QgsProcessingException(not_digitized_message(charts) if charts else str(ex))
         except ValueError as ex:
             raise QgsProcessingException(str(ex))
-        status = aadt_join.class_status(c.hazard_class, c.data_gaps)
+        status = aadt_join.class_status(c.hazard_class, c.data_gaps, c.governing)
         hz = aadt_join.hazard_module_class(folder)
         road_check = {"hazard_class_status": status, "hazard_module_class": hz,
                       "class_to_use": hz or c.hazard_class,

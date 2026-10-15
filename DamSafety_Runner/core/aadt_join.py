@@ -31,6 +31,8 @@ NAME_NAMES = ("routename", "name", "st_name", "fs_rd_name", "station_id", "route
 DEFAULT_MAX_M = 30.0
 MAX_ANGLE_DEG = 30.0
 MIN_SHARE = 0.3
+MIN_LEN_M = 150.0       # or this much road on one value (long segments, partial overlap)
+SHORT_M = 100.0         # a road this short that no line follows takes the lines it touches
 # sibling files ND_Dam_Suite_Pack/roads/ carries (found next to the ROADS layer)
 SIBLING_PATTERNS = (re.compile(r"^hpms_nd_\d{4}\.gpkg$", re.I),
                     re.compile(r"^nddot_traffic_counts\.gpkg$", re.I),
@@ -167,50 +169,92 @@ def _bbox(parts, pad):
     return min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad
 
 
-def match(road_parts, traffic, max_m=DEFAULT_MAX_M, max_angle_deg=MAX_ANGLE_DEG):
-    """The traffic feature that gives this road its AADT, or None. road_parts: [[(x, y)...]]."""
+def _near_line(x, y, t):
+    """(distance, segment vector) from (x, y) to the nearest segment of traffic line t."""
+    dmin, dvec = float("inf"), None
+    for ln in t["parts"]:
+        for a, b in zip(ln[:-1], ln[1:]):
+            dd, v = _seg_dist(x, y, a, b)
+            if dd < dmin:
+                dmin, dvec = dd, v
+    return dmin, dvec
+
+
+def _length(parts):
+    return sum(math.hypot(b[0] - a[0], b[1] - a[1]) for ln in parts for a, b in zip(ln[:-1], ln[1:]))
+
+
+def match(road_parts, traffic, max_m=DEFAULT_MAX_M, max_angle_deg=MAX_ANGLE_DEG, is_wet=None):
+    """The traffic feature that gives this road its AADT, or None. road_parts: [[(x, y)...]].
+
+    The road is sampled every max(5 m, max_m / 2); is_wet(x, y) (optional) keeps only the
+    overtopped samples, so a long segment takes the AADT where the water crosses it. Each
+    sample takes the NEAREST traffic line within max_m that runs the same way (bearing within
+    max_angle_deg: a crossing road is never taken). Lines are grouped by their value (HPMS and
+    county files are cut into many short pieces), and a value is accepted when it covers
+    MIN_SHARE of the samples or MIN_LEN_M of road. Order: a traffic LINE before a count
+    station, then the larger share, then the newest year, then the higher AADT. A short road
+    (<= SHORT_M; an intersection jog or a curved connector) that no line follows takes the
+    traffic lines it touches (within max_m), the highest AADT on a tie (conservative). Count
+    stations count when within max_m of the (overtopped part of the) road."""
     if not road_parts or not traffic:
         return None
-    samp = _samples(road_parts, max(5.0, max_m / 2.0))
-    if not samp:
+    step = max(5.0, max_m / 2.0)
+    allsamp = _samples(road_parts, step)
+    if not allsamp:
         return None
+    samp = [s for s in allsamp if is_wet(s[0], s[1])] if is_wet else allsamp
+    samp = samp or allsamp
     rb = _bbox(road_parts, max_m)
     cos_max = math.cos(math.radians(max_angle_deg))
-    best = None
-    for t in traffic:
-        if t["kind"] == "point":
+
+    def inbox(t):
+        tb = _bbox(t["parts"], 0.0) if t["kind"] == "line" else (
+            t["parts"][0][0], t["parts"][0][1], t["parts"][0][0], t["parts"][0][1])
+        return not (tb[2] < rb[0] or tb[0] > rb[2] or tb[3] < rb[1] or tb[1] > rb[3])
+    cand = [t for t in traffic if inbox(t)]
+    lines = [t for t in cand if t["kind"] == "line"]
+    vkey = lambda t: (t["aadt"], t.get("year") or 0, t["source"], t.get("name") or "")
+    groups = {}                      # value -> [count of samples, a traffic feature]
+    for x, y, (ux, uy) in samp:
+        best = None
+        for t in lines:
+            d, v = _near_line(x, y, t)
+            if d > max_m or v is None:
+                continue
+            L = math.hypot(*v) or 1.0
+            if abs(ux * v[0] / L + uy * v[1] / L) < cos_max:
+                continue
+            if best is None or d < best[0]:
+                best = (d, t)
+        if best:
+            g = groups.setdefault(vkey(best[1]), [0, best[1]])
+            g[0] += 1
+    n = float(len(samp))
+    opts = []
+    for _k, (cnt, t) in groups.items():
+        share = cnt / n
+        if share >= MIN_SHARE or cnt * step >= MIN_LEN_M:
+            opts.append(((1, round(share, 3), t.get("year") or 0, t["aadt"]), t, share))
+    if not opts and _length(road_parts) <= SHORT_M:
+        for t in lines:
+            d = min(_near_line(x, y, t)[0] for x, y, _u in allsamp)
+            if d <= max_m:
+                opts.append(((1, 0.0, t["aadt"], t.get("year") or 0), t, 0.0))
+    if not opts:
+        pts = [(x, y) for x, y, _u in samp]
+        for t in cand:
+            if t["kind"] != "point":
+                continue
             x, y = t["parts"][0]
-            if not (rb[0] <= x <= rb[2] and rb[1] <= y <= rb[3]):
-                continue
-            d = min(_seg_dist(x, y, a, b)[0] for ln in road_parts for a, b in zip(ln[:-1], ln[1:]))
-            if d > max_m:
-                continue
-            share = 1.0
-        else:
-            tb = _bbox(t["parts"], 0.0)
-            if tb[2] < rb[0] or tb[0] > rb[2] or tb[3] < rb[1] or tb[1] > rb[3]:
-                continue
-            hit = 0
-            for x, y, (ux, uy) in samp:
-                dmin, dvec = float("inf"), None
-                for ln in t["parts"]:
-                    for a, b in zip(ln[:-1], ln[1:]):
-                        dd, v = _seg_dist(x, y, a, b)
-                        if dd < dmin:
-                            dmin, dvec = dd, v
-                if dmin <= max_m and dvec is not None:
-                    L = math.hypot(*dvec) or 1.0
-                    if abs(ux * dvec[0] / L + uy * dvec[1] / L) >= cos_max:
-                        hit += 1
-            share = hit / float(len(samp))
-            if share < MIN_SHARE:
-                continue
-        key = (t["kind"] == "line", round(share, 3), t.get("year") or 0, t["aadt"])
-        if best is None or key > best[0]:
-            best = (key, t, share)
-    if best is None:
+            d = min(min(_seg_dist(x, y, a, b)[0] for ln in road_parts
+                        for a, b in zip(ln[:-1], ln[1:])),
+                    min(math.hypot(x - px, y - py) for px, py in pts) if is_wet else float("inf"))
+            if d <= max_m:
+                opts.append(((0, 1.0, t.get("year") or 0, t["aadt"]), t, 1.0))
+    if not opts:
         return None
-    _k, t, share = best
+    _k, t, share = max(opts, key=lambda o: o[0])
     return {"aadt": t["aadt"], "year": t.get("year"), "name": t.get("name") or "",
             "source": t["source"], "share": round(share, 2)}
 
@@ -224,13 +268,20 @@ HAZARD_SUMMARY = os.path.join("outputs", "Hazard_Classification_Summary.csv")
 HAZARD_ROW = "ND classification (screening)"
 
 
-def class_status(hazard_class, data_gaps):
+def class_status(hazard_class, data_gaps, governing=None):
     """STATUS_PRELIMINARY when an overtopped road still has no AADT (its class rests on the
-    assumption) and the class is not already High (a road can not raise it above High)."""
-    if str(hazard_class).lower() == "high":
+    assumption) and that matters: the class is not High, or it is High only through such
+    assumed roads. governing: the governing findings (with .gap); when not given, a High class
+    is taken as settled by other findings."""
+    gaps = [g for g in data_gaps or () if AADT_GAP in str(g)]
+    if not gaps:
         return STATUS_COMPLETE
-    return STATUS_PRELIMINARY if any(AADT_GAP in str(g) for g in data_gaps or ()) \
-        else STATUS_COMPLETE
+    if str(hazard_class).lower() != "high":
+        return STATUS_PRELIMINARY
+    if governing is None:
+        return STATUS_COMPLETE
+    firm = [f for f in governing if AADT_GAP not in str(getattr(f, "gap", "") or "")]
+    return STATUS_COMPLETE if firm else STATUS_PRELIMINARY
 
 
 def hazard_module_class(dam_folder):
@@ -251,14 +302,14 @@ def hazard_module_class(dam_folder):
     return None
 
 
-def apply(roads, parts_by_id, traffic, max_m=DEFAULT_MAX_M):
+def apply(roads, parts_by_id, traffic, max_m=DEFAULT_MAX_M, is_wet=None):
     """Set .aadt on each road (aadt None) from its best traffic match; parts_by_id maps
     id(road) to its line parts. Returns the log [{road, aadt, year, source}]."""
     log = []
     for r in roads:
         if r.aadt is not None or id(r) not in parts_by_id:
             continue
-        m = match(parts_by_id[id(r)], traffic, max_m=max_m)
+        m = match(parts_by_id[id(r)], traffic, max_m=max_m, is_wet=is_wet)
         if m:
             r.aadt = m["aadt"]
             log.append({"road": r.id, "aadt": m["aadt"], "year": m["year"],

@@ -140,3 +140,83 @@ def aadt_ndhazard_tool_dwr3161_end_to_end():
         assert any("Use the Hazard plugin's class" in e for e in fb.errors)
     finally:
         h.close()
+
+
+# ---------------------------------------------------------------------------------------
+# Edge cases found on the real runs (Grok Bot, PR #40): the real NG911 road geometries and the
+# traffic features within 80 m, extracted read-only from ND_Dam_Suite_Pack/roads (EPSG:5070)
+def _real(oid):
+    with open(os.path.join(HERE, "data", "aadt_join_real_roads.json"), encoding="utf-8") as f:
+        r = json.load(f)["roads"][str(oid)]
+    traffic = [dict(t, parts=[[tuple(p) for p in ln] for ln in t["parts"]]) if t["kind"] == "line"
+               else dict(t, parts=[tuple(t["parts"][0])]) for t in r["traffic"]]
+    return [[tuple(p) for p in ln] for ln in r["parts"]], traffic
+
+
+@test
+def aadt_edge_a_hpms_line_beats_a_newer_station_dwr3161_88347():
+    """(a) ND-23 / 39TH ST NW (1.7 km): HPMS is cut into ~200 m pieces, so no single piece
+    covered 30 % of the road and only the 2026 station (6,671) was left. Pieces with the same
+    value are now pooled, and a line wins over a station."""
+    parts, tr = _real(88347)
+    assert any(t["kind"] == "point" and t["aadt"] == 6671.0 for t in tr)
+    pieces = [t for t in tr if t["kind"] == "line" and t["aadt"] == 10113.0]
+    assert len(pieces) > 5
+    m = AJ.match(parts, tr)
+    assert m["aadt"] == 10113.0 and m["source"].startswith("HPMS"), m
+
+
+@test
+def aadt_edge_b_long_segment_partial_overlap_dwr3161_105710():
+    """(b) 105710 (1.65 km, overtopped 3.3 ft) under HPMS: was unjoined (pieces < 30 % each).
+    Pooled pieces join it; only the overtopped part counts when the depths are known."""
+    parts, tr = _real(105710)
+    assert AJ.match(parts, tr)["aadt"] == 10113.0
+    # only a 200 m stretch overtopped, under HPMS: still joined
+    xs = [p[0] for ln in parts for p in ln]
+    x0 = min(xs)
+    m = AJ.match(parts, tr, is_wet=lambda x, y: x0 <= x <= x0 + 200.0)
+    assert m and m["aadt"] == 10113.0, m
+    # a long road with only 160 m (< 30 %) under a traffic line: accepted by length
+    road = [[(0.0, 0.0), (2000.0, 0.0)]]
+    line = [{"kind": "line", "parts": [[(0.0, 2.0), (160.0, 2.0)]], "aadt": 3000.0,
+             "year": 2024, "name": "", "source": "HPMS"}]
+    assert AJ.match(road, line)["aadt"] == 3000.0
+    assert AJ.match(road, [dict(line[0], parts=[[(0.0, 2.0), (60.0, 2.0)]])]) is None
+    # an important road left unjoined keeps the class preliminary, also when High rests on it
+    gap = "road 105710: AADT not given; classified High by assumption"
+    assumed = nh.Finding("High", "5.2.1.2", "road", "105710", "AADT unknown", gap=gap)
+    firm = nh.Finding("High", "5.2.1.2", "road", "70263", "AADT 10,113")
+    assert AJ.class_status("High", [gap], [assumed]) == AJ.STATUS_PRELIMINARY
+    assert AJ.class_status("High", [gap], [assumed, firm]) == AJ.STATUS_COMPLETE
+    assert AJ.class_status("Medium", [gap], []) == AJ.STATUS_PRELIMINARY
+
+
+@test
+def aadt_edge_c_crossing_road_rejected_and_overtopped_part_absaraka_149313():
+    """(c) 151ST AVE SE (1.6 km, N-S): ND_county_roads cuts 151ST into a northern piece
+    (AADT 66, the same value as the crossing 29TH ST) and a southern piece (AADT 10). The
+    crossing 29TH line is rejected by its bearing; the overtopped part decides the piece:
+    the Runner's flood touches 151ST only at y 2,666,761-2,666,791 (0.25 ft), on the 66
+    piece, which is also what the Hazard plugin's Roads_Inundated gives that stretch."""
+    parts, tr = _real(149313)
+    cross = [t for t in tr if t["kind"] == "line" and
+             abs(t["parts"][0][-1][0] - t["parts"][0][0][0]) > 5000]           # 29TH ST, E-W
+    assert cross and AJ.match(parts, cross) is None
+    assert AJ.match(parts, tr, is_wet=lambda x, y: 2666750 <= y <= 2666800)["aadt"] == 66.0
+    assert AJ.match(parts, tr, is_wet=lambda x, y: y <= 2666300)["aadt"] == 10.0
+
+
+@test
+def aadt_edge_d_short_curved_connector_absaraka_158229():
+    """(d) 153RD AVE SE 158229 is a 45 m curved jog between two county lines (AADT 10): it
+    touches them (0.7 m at its end) but follows neither, so the bearing test rejected every
+    sample. A short road that no line follows now takes the lines it touches."""
+    parts, tr = _real(158229)
+    m = AJ.match(parts, tr)
+    assert m and m["aadt"] == 10.0, m
+    # a long road is never joined this way (a crossing road only touches it)
+    road = [[(0.0, 0.0), (0.0, 500.0)]]
+    cross = [{"kind": "line", "parts": [[(-300.0, 250.0), (300.0, 250.0)]], "aadt": 66.0,
+              "year": None, "name": "", "source": "county"}]
+    assert AJ.match(road, cross) is None
