@@ -181,6 +181,14 @@ def _source_has_features(source):
 DEM_RESAMPLE_AUTO = "Automatic"
 
 
+def qa_maps_param(alg, parameters, context):
+    """The QA_MAPS enum as a core.qa_maps mode (the default when the tool has no QA_MAPS)."""
+    from .core import qa_maps
+    if alg.parameterDefinition("QA_MAPS") is None or parameters.get("QA_MAPS") in (None, ""):
+        return qa_maps.DEFAULT_QA_MAPS
+    return qa_maps.normalize(int(alg.parameterAsEnum(parameters, "QA_MAPS", context)))
+
+
 def dem_resample_param(index):
     """The DEM_RESAMPLE enum index as a GdalTerrain `resample` (None = automatic)."""
     from .core import gdal_io
@@ -454,6 +462,11 @@ class _Base(QgsProcessingAlgorithm):
             "DEM_RESAMPLE", "DEM resampling onto the model grid (Automatic = the {} "
             "environment variable, else {})".format(gdal_io.ENV_RESAMPLE, gdal_io.DEFAULT_RESAMPLE),
             [DEM_RESAMPLE_AUTO] + list(gdal_io.RESAMPLE_METHODS), defaultValue=0, optional=True)))
+        from .core import qa_maps
+        self.addParameter(set_advanced(QgsProcessingParameterEnum(
+            "QA_MAPS", "QA maps written into the dam folder (qa_inflow_map.png, qa_depth_map.png)",
+            list(qa_maps.QA_LABELS), defaultValue=qa_maps.QA_MODES.index(qa_maps.DEFAULT_QA_MAPS),
+            optional=True)))
         self.addParameter(QgsProcessingParameterEnum("TIER", "Models",
                                                      [t[1] for t in TIERS], defaultValue=0))
         self._bool("FORCE_ANUGA", "Force ANUGA: final results come from ANUGA even when "
@@ -593,6 +606,7 @@ class _Base(QgsProcessingAlgorithm):
             edge_tolerance_ft=g("EDGE_TOL_FT"), initial_length_mi=g("LENGTH_MI"),
             half_width_mi=g("HALF_WIDTH_MI"), expand_step_mi=g("STEP_MI"),
             max_extent_mi=g("MAX_EXTENT_MI"), max_iterations=int(g("MAX_RUNS")),
+            qa_maps=qa_maps_param(self, parameters, context),
             sim_time_hr=dur if dur > 0 else None,
             sim_max_hr=sim_max if sim_max > 0 else None, lisflood_exe=exe, anuga_python=py,
             threads=threads, anuga_fine_area_m2=g("ANUGA_FINE"),
