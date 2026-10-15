@@ -5,10 +5,10 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.14
+version=2.18.15
 author=N.D. Bendickson
 changelog=
-    2.18.14 - 2026-10-15
+    2.18.15 - 2026-10-15
       * Reproduction check: the text and CSV say, per file, when SHA-256 was not used (files
         over 1 GB, folders); folders (.gdb) are now fingerprinted file by file (older records
         still read).
@@ -20,13 +20,15 @@ changelog=
       * DSS-WISE import warns on implausible maxima (depth > 300 ft, velocity > 100 ft/s).
       * README privacy note for "Open in web map".
       * DamSafety: 'Review: roads & facilities' tab title shows its '&'.
-    2.18.13 - 2026-10-15
+    2.18.14 - 2026-10-15
       * Suite settings tab: a settings file that does not exist or will not load is refused and
         the box goes back to the loaded file; autosave never writes while the box and the grid
         disagree, and every save problem is shown under the box (Lumo 2.7.1/2.7.3/2.7.5).
       * Dam suite home: dams found by folder, not Dam ID text; Dams folder remembered per
         computer (a project's own value still wins); column widths and sort order kept;
         new 'Copy diagnostics' button. README version synced, stale consolidation steps removed.
+    2.18.13 - 2026-10-15
+      * Cross-platform (#32): text files read/written as UTF-8, CSVs written with newline='' (no blank rows on Windows), Windows conda ANUGA env python found, subprocess output decoded tolerantly.
     2.18.12 - 2026-10-15
       * Chart sign-off: 'Install in plugins' is off by default (#25).
     2.18.0 - With DamSafety Runner 3.10.0 and DamSafety Screening 0.17.0.
