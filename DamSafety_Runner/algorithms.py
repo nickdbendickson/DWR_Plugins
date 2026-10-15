@@ -420,8 +420,8 @@ class _Base(QgsProcessingAlgorithm):
                   "a datum shift, moved to the LiDAR; farther off = the LiDAR inverts are used and the run "
                   "report says so", 3.0, minimum=0.0, advanced=True)
         self._text("CULVERT_INVENTORY", "Culvert guesses: inventory GeoPackages that size them, "
-                   "separated by ;; (NDDOT bridge inventory, NTAD NBI; NBI item 43B = 19 is a "
-                   "culvert)", advanced=True)
+                   "separated by ;; (NDDOT bridge inventory, NDDOT Center Line Pipes, NTAD NBI; "
+                   "NBI item 43B = 19 is a culvert)", advanced=True)
         self._num("CULVERT_MATCH_M", "Culvert guesses: take the size of an inventory culvert "
                   "within (m; also drops a guess this close to a STRUCTURES line; starting value "
                   "75 is the engineer's, a screening value you choose)", 75.0, minimum=1.0,
@@ -918,8 +918,17 @@ class _Base(QgsProcessingAlgorithm):
                     q = ct.transform(QgsPointXY(x, y))
                     return q.x(), q.y()
                 return _f
+            def _bb(srs_id, _work=work):
+                from qgis.core import QgsRectangle
+                # the search square around the dam, in the layer's CRS (filter before parsing)
+                ct = QgsCoordinateTransform(_work, QgsCoordinateReferenceSystem(
+                    "EPSG:{}".format(srs_id)), context.transformContext())
+                r = QgsRectangle(center_xy[0] - radius, center_xy[1] - radius,
+                                 center_xy[0] + radius, center_xy[1] + radius)
+                q = ct.transformBoundingBox(r)
+                return (q.xMinimum(), q.yMinimum(), q.xMaximum(), q.yMaximum())
             try:
-                recs = read_inventory_gpkg(path, _mk)
+                recs = read_inventory_gpkg(path, _mk, _bb)
             except Exception as e:                               # noqa
                 notes.append("Culvert inventory {} not read: {}".format(path, e))
                 continue

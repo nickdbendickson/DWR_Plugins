@@ -91,7 +91,7 @@ class ChartSignOffAlgorithm(QgsProcessingAlgorithm):
                                         "engineer as checker", defaultValue=False))
         P(QgsProcessingParameterBoolean("INSTALL_IN_PLUGINS", "Install the signed-off file in "
                                         "the Breach Runner and the Screening (their "
-                                        "core/acer_tm11_charts.json)", defaultValue=True))
+                                        "core/acer_tm11_charts.json)", defaultValue=False))
         P(QgsProcessingParameterFolderDestination("OUTPUT", "Output folder"))
         self.addOutput(QgsProcessingOutputFile("CHART_JSON", "Chart file (acer_tm11_charts.json)"))
         self.addOutput(QgsProcessingOutputFile("HOUSE_SVG", "Figure 2 overlay (SVG)"))

@@ -119,6 +119,7 @@ LAYER_SLOTS = (
     ("waterbodies", "NHD waterbodies", "waterbodies"),
     ("dam_lines", "DWR dam lines", "dam_lines"),
     ("nlcd", "NLCD land cover (raster, optional)", None),
+    ("culverts", "Culverts / bridges (lines; step 7b, the Runner's ANUGA)", None),
 )
 PKG_LAYER = {k: p for k, _l, p in LAYER_SLOTS if p}
 # tool 0's own inputs for the same slots
@@ -141,6 +142,11 @@ DEFAULT_SETTINGS = {
     "pregrow": False,        # tool 7: 0 cached clips only, 1 3DEP, 2 local
     "local_dem": "", "engine": 2, "exe": "", "scenario": 0, "workers": 0,   # engine 2 = built-in (0.13: no install)
     "crit": 0, "chart_file": "", "runner_dem": "", "dams_folder": "", "clip": "",
+    # step 7b: the Runner's models (0 = LISFLOOD-FP only, its default), force ANUGA, near-dam
+    # FV1 refine and the culvert field names (empty = the Runner's synonyms)
+    "runner_tier": 0, "runner_force_anuga": False, "runner_refine": False,
+    "culvert_kind": "", "culvert_width": "", "culvert_height": "", "culvert_barrels": "",
+    "culvert_shape": "", "culvert_name": "",
     # 0.11: tool 7 no-breach baseline / buildings, tool 8 incremental, tools 11 / 13 inputs
     "baseline": False, "baseline_cfs": 0.0,
     "buildings": 0,           # 0 bare terrain, 1 raise the DEM, 2 Manning's n
@@ -161,7 +167,9 @@ DEFAULT_SETTINGS = {
 # the window's choices that go to the settings file (not paths of this project / computer)
 WINDOW_KEYS = ("terrain_source", "larger_clips", "engine", "scenario", "workers", "crit", "baseline",
                "baseline_cfs", "buildings", "building_raise_ft", "building_n", "incremental", "ref_units",
-               "screen_what", "chain", "dem_cell", "grid_m", "simh", "simmax", "storage_choice")
+               "screen_what", "chain", "dem_cell", "grid_m", "simh", "simmax", "storage_choice",
+               "runner_tier", "runner_force_anuga", "runner_refine", "culvert_kind", "culvert_width",
+               "culvert_height", "culvert_barrels", "culvert_shape", "culvert_name")
 for _k, _l, _p in LAYER_SLOTS:
     DEFAULT_SETTINGS[_k] = ""
 
@@ -599,6 +607,18 @@ def defaults(step, work, settings):
         put("BLD_MORE", more("structures"))
         put("LIFE_MORE", more("lifelines"))
         put("CHART_FILE", S.get("chart_file"))
+        if int(S.get("runner_tier") or 0):
+            p["ENGINE"] = int(S["runner_tier"])
+        if S.get("runner_force_anuga"):
+            p["FORCE_ANUGA"] = True
+        if S.get("runner_refine"):
+            p["REFINE_NEAR"] = True
+        put("CULVERTS", src("culverts"))
+        if src("culverts"):
+            for key, name in (("C_KIND", "culvert_kind"), ("C_WIDTH", "culvert_width"),
+                              ("C_HEIGHT", "culvert_height"), ("C_BARRELS", "culvert_barrels"),
+                              ("C_SHAPE", "culvert_shape"), ("C_NAME", "culvert_name")):
+                put(key, (S.get(name) or "").strip())
     elif step == "8":
         put("SIM", o("7"))
         put("BLD", src("structures"))
