@@ -810,12 +810,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                 burned):
                     m["invert_up_m"], m["invert_dn_m"] = b.invert_up_m, b.invert_dn_m
                 st.structures = list(st.structures) + burned
-            report["culvert_matches"] = [
-                {"name": c["name"], "source": c["source"], "match_m": c["match_m"],
-                 "width_m": c["width_m"], "height_m": c["height_m"], "barrels": c["barrels"],
-                 "shape": c["shape"], "burned": burn,
-                 "invert_up_m": c.get("invert_up_m"), "invert_dn_m": c.get("invert_dn_m")}
-                for c in candidates if c.get("match_m") is not None]
+            report["culvert_matches"] = cgmod.report_entries(candidates, burn)
             warnings.append(
                 "{} culvert guess(es) took their size from an inventory record within {:.0f} m "
                 "({}); listed in {}.".format(
@@ -1950,6 +1945,18 @@ def render_report(r):
                 float(m.get("match_m") or 0.0), float(m.get("width_m") or 0.0) / FT,
                 float(m.get("height_m") or 0.0) / FT, m.get("barrels", ""),
                 m.get("shape", ""), "yes" if m.get("burned") else "no", inv))
+        plan = [m for m in r["culvert_matches"] if m.get("plan_inverts_ft")]
+        if plan:
+            lines += ["", "Plan-datum inverts (NDDOT Center Line Pipes, LEFT / RIGHT_ELEV_E as "
+                      "recorded): reported only, not used - the inverts above are from the "
+                      "LiDAR.", ""]
+            for m in plan:
+                le, rt = (list(m["plan_inverts_ft"]) + [None, None])[:2]
+                lines.append("- {}: left {} ft, right {} ft ({}). {}".format(
+                    m.get("source", ""), "?" if le is None else "{:.1f}".format(le),
+                    "?" if rt is None else "{:.1f}".format(rt),
+                    "datum: " + str(m.get("invert_datum") or "plan"),
+                    m.get("plan_datum_note") or ""))
         lines.append("")
     if r.get("receptors"):
         lines += ["## Receptors", ""]

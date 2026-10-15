@@ -373,3 +373,29 @@ def clp_statewide_gpkg_bbox_filter_is_fast():
     assert 150 <= len(recs) <= 200, len(recs)               # report.md: 188 points
     assert dt < 5.0, dt
     assert all(r["source"] == "NDDOT CLP" for r in recs)
+
+
+@register
+def clp_plan_datum_inverts_reach_run_report_json_and_md():
+    import copy
+    import json
+    from nd_breach_runner.core import culvert_guess as cg
+    from nd_breach_runner.core import workflow as W
+    clp = _clp("REINFORCED CONCRETE PIPE", 42, le=938.0, re_=937.5, xy=(10.0, 0.0))
+    nd = _nddot("09-118-21.1", 900.0, 0.0, "DOUBLE 16X8X52' PRECAST RCB")
+    rows, _ = cg.match_inventory([_guess(0, 0), _guess(900, 0)], [clp, nd], 75.0)
+    ents = cg.report_entries(rows, True)
+    assert len(ents) == 2
+    e = [x for x in ents if x["source"].startswith("NDDOT CLP")][0]
+    assert e["plan_inverts_ft"] == [938.0, 937.5] and e["invert_datum"] == "plan"
+    assert "plan-datum" in e["plan_datum_note"] and e["burned"] is True
+    other = [x for x in ents if x["source"] == "NDDOT 09-118-21.1"][0]
+    assert "plan_inverts_ft" not in other
+    json.dumps(ents)                                          # run_report.json-safe
+    r = copy.deepcopy(_MIN_REPORT)
+    r["culvert_matches"] = ents
+    md = W.render_report(r)
+    assert "Plan-datum inverts" in md
+    assert "- NDDOT CLP 276:0.2466: left 938.0 ft, right 937.5 ft (datum: plan)." in md, md
+    r["culvert_matches"] = [other]
+    assert "Plan-datum inverts" not in W.render_report(r)
