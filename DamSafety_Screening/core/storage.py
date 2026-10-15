@@ -189,6 +189,12 @@ def estimate_storage(dem, water_mask, cell, dam_xy_idx=None, crest_radius_m=50.0
         if win.size:
             crest = float(np.percentile(win, 98))
             notes.append("crest from DEM near dam point")
+    if crest is not None and known_height_m and crest - pool > known_height_m + 0.3:
+        # restored from the ND copy (0.19.0): the top of dam cannot be more than the dam height
+        # above the pool; a higher DEM value near the point is a road, rail or hill
+        notes.append("DEM crest {:.1f} ft above the pool, more than the dam height: crest = pool + "
+                     "height".format((crest - pool) / 0.3048))
+        crest = pool + known_height_m
     if crest is None or crest - pool < 0.3:
         if known_height_m:
             crest = pool + 0.8 * known_height_m

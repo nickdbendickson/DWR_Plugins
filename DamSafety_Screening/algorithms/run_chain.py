@@ -70,7 +70,9 @@ class RunChain(QgsProcessingAlgorithm):
                 "data package fills the rest).\n\nqgis_process run nddam:runchain --WORK=/path/to/work "
                 "--SETTINGS=/path/to/damsuite_settings.xlsx --INCLUDE=1\n\nThe preflight check (17) runs first "
                 "and a FAIL stops the chain before anything starts (PREFLIGHT=false skips it). A copy of the "
-                "settings used goes to <work>/settings_used.xlsx. Not run in a real QGIS.")
+                "settings used goes to <work>/settings_used.xlsx. Not run in a real QGIS.\n\n"
+                "A chain that fails, is refused by the preflight or cannot start FAILS the tool, so "
+                "qgis_process exits non-zero; FAIL_ON_ERROR=false returns OK=false instead.")
 
     def initAlgorithm(self, config=None):
         P = self.addParameter
@@ -84,6 +86,10 @@ class RunChain(QgsProcessingAlgorithm):
                                      allowMultiple=True, optional=True))
         P(QgsProcessingParameterBoolean("DRY_RUN", "Only list what would run (nothing is started)",
                                         defaultValue=False))
+        # restored from the ND copy (0.28.3; audit 2026-10-15): without it a failed headless
+        # chain exited 0 and a scheduled job could not tell a finished run from a failed one
+        P(QgsProcessingParameterBoolean("FAIL_ON_ERROR", "Fail the tool when the chain fails (so "
+                                        "qgis_process exits non-zero)", defaultValue=True))
         P(QgsProcessingParameterFileDestination("LOG", "Chain log (text)", fileFilter="Text (*.txt)",
                                                 optional=True))
 
@@ -93,6 +99,8 @@ class RunChain(QgsProcessingAlgorithm):
             raise QgsProcessingException("Work folder not found: {}".format(work))
         settings = load_settings(self.parameterAsString(params, "SETTINGS", context))
         settings["work"] = work
+        self._hard = self.parameterAsBool(params, "FAIL_ON_ERROR", context) \
+            if self.parameterDefinition("FAIL_ON_ERROR") is not None else True
         try:                                  # standard empty folders (damsuite/layout.py)
             from ..damsuite import layout as LY
             made = LY.ensure_layout(work, wf.dams_folder(work, settings))
@@ -100,7 +108,11 @@ class RunChain(QgsProcessingAlgorithm):
                 feedback.pushInfo("Created the standard work-folder layout ({} item(s))".format(len(made)))
         except Exception as e:
             feedback.pushWarning("Standard folders not created: {}".format(e))
-        inc = self.parameterAsEnums(params, "INCLUDE", context) or []
+        # QGIS gives option 0 for an optional multiple enum left out (qgis_process with no
+        # --INCLUDE), which made every headless chain run step 0; nothing given = no optional step
+        raw = params.get("INCLUDE")
+        inc = [] if raw is None or raw == "" or raw == [] else \
+            (self.parameterAsEnums(params, "INCLUDE", context) or [])
         include = tuple(OPTIONAL_KEYS[i] for i in inc if 0 <= i < len(OPTIONAL_KEYS))
         dry = self.parameterAsBool(params, "DRY_RUN", context)
         log_path = self.parameterAsFileOutput(params, "LOG", context) or ""
@@ -183,4 +195,12 @@ class RunChain(QgsProcessingAlgorithm):
                     fh.write("\n".join(lines) + "\n")
             except OSError:
                 log_path = ""
-        return {"OK": bool(ok), "RAN": ",".join(ran), "RESULT": result, "LOG": log_path}
+        out = {"OK": bool(ok), "RAN": ",".join(ran), "RESULT": result, "LOG": log_path}
+        if getattr(self, "_hard", False) and not ok:
+            # an exception is what makes qgis_process exit non-zero; the log above is written first
+            raise QgsProcessingException(
+                "the chain did not finish: {}{}. Steps that ran: {}. (FAIL_ON_ERROR=false "
+                "returns OK=false instead of failing.)".format(
+                    result, " (log: {})".format(log_path) if log_path else "",
+                    ", ".join(ran) or "none"))
+        return out

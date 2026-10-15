@@ -153,6 +153,9 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 gt = ds.GetGeoTransform(); cell = abs(gt[1])
 
                 g = f.geometry(); g.transform(d2a); p = g.asPoint()
+                # grid position first: the no-waterbody (dry-dam) fallback samples the ground here;
+                # set after the waterbody lookup it stayed None and the curve started at 0 m
+                col = int((p.x() - gt[0]) / gt[1]); row = int((p.y() - gt[3]) / gt[5])
                 box = QgsRectangle(p.x() - search, p.y() - search, p.x() + search, p.y() + search)
                 box_w = a2w.transformBoundingBox(box)
                 cands = []
@@ -164,7 +167,6 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 cands.sort(key=lambda c: (round(c[0]), c[1]))
                 mask = self._rasterize([cands[0][2].asWkb()], ds)
 
-                col = int((p.x() - gt[0]) / gt[1]); row = int((p.y() - gt[3]) / gt[5])
                 h = f["height_m"] if "height_m" in names else None
                 h = float(h) if h not in (None, "") else None
                 res = storage.estimate_storage(arr, mask, cell, (row, col),

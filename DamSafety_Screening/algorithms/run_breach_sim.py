@@ -32,20 +32,90 @@ NEW_FIELDS = [("scenario", FT_STRING), ("sim_status", FT_STRING),
               ("base_max_m", FT_DOUBLE), ("incr_max_m", FT_DOUBLE),
               ("incr_tif", FT_STRING), ("buildings", FT_STRING)]
 
-def _find_lisflood(exe):
-    """Use the given path, else the first LISFLOOD-FP binary on PATH or the usual install spots."""
-    if exe and os.path.isfile(exe):
-        return exe
-    import shutil
-    found = shutil.which("lisflood") or shutil.which("lisflood.exe")
-    if found and os.path.isfile(found):
-        return found
-    for c in ("/usr/local/bin/lisflood",
-              os.path.expanduser("~/.ndbreach/bin/lisflood"),
-              "/root/.ndbreach/bin/lisflood"):
-        if os.path.isfile(c):
-            return c
+def _unsafe_dir(path):
+    """The first folder of `path`'s ancestry that another local user could write into (and so
+    swap the program): the program's own folder world-writable at all, or any ancestor
+    world-writable without the sticky bit. None when the chain is safe (or on Windows, where
+    POSIX modes say nothing)."""
+    import stat
+    if os.name == "nt":
+        return None
+    d = os.path.dirname(path)
+    first = True
+    while True:
+        try:
+            m = os.stat(d).st_mode
+        except OSError:
+            return d
+        if m & stat.S_IWOTH and (first or not m & stat.S_ISVTX):
+            return d
+        first = False
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def vet_lisflood(path):
+    """(absolute real path, None) when `path` is a real, executable file outside any
+    world-writable folder, else (None, reason). Audit 2026-10-15: a lisflood found on PATH
+    or in a well-known folder was run silently."""
+    if not path:
+        return None, "no path"
+    real = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+    if not os.path.isfile(real):
+        return None, "{} is not a file".format(real)
+    if os.name != "nt" and not os.access(real, os.X_OK):
+        return None, "{} is not executable".format(real)
+    bad = _unsafe_dir(real)
+    if bad:
+        return None, "{} is inside a world-writable folder ({})".format(real, bad)
+    return real, None
+
+
+def _find_lisflood(exe, log=None):
+    """The configured path (the EXE parameter, else NDBREACH_LISFLOOD) when it is a file;
+    else, as a fallback, the first LISFLOOD-FP on PATH or in the usual install folders that
+    passes vet_lisflood. Every choice is logged with its resolved absolute path; nothing is run
+    silently. Returns the path, or `exe` unchanged when nothing qualifies."""
+    log = log or (lambda m: None)
+    for given, how in ((exe, "the LISFLOOD-FP executable parameter"),
+                       (os.environ.get("NDBREACH_LISFLOOD"), "NDBREACH_LISFLOOD")):
+        if given and os.path.isfile(given):
+            real = os.path.realpath(os.path.abspath(given))
+            log("LISFLOOD-FP: {} (configured by {})".format(real, how))
+            return real
+        if given:
+            log("LISFLOOD-FP: {} from {} is not a file".format(given, how))
+    cands = []
+    for folder in (os.environ.get("PATH") or "").split(os.pathsep):   # every PATH entry, in order
+        for name in ("lisflood", "lisflood.exe"):
+            if folder:
+                cands.append(os.path.join(folder, name))
+    cands += ["/usr/local/bin/lisflood", os.path.expanduser("~/.ndbreach/bin/lisflood")]
+    for c in cands:
+        if not c or not os.path.exists(c):
+            continue
+        real, why = vet_lisflood(c)
+        if real:
+            log("LISFLOOD-FP: not configured; using {} found at {} (set the LISFLOOD-FP "
+                "executable to choose it explicitly)".format(real, c))
+            return real
+        log("LISFLOOD-FP: refused {}: {}".format(c, why))
     return exe
+
+
+CLIP_EDGE_WARNING = ("flood reached the edge of the cached clip and 'Terrain for larger clips' is "
+                     "'Cached clips only', so the clip could not grow: the flood extent, depths "
+                     "and consequences may be TRUNCATED (hazard can be understated). Re-run with "
+                     "'USGS 3DEP service' or 'Local DEM folder'")
+
+
+def clip_edge_warning(edge, tsrc):
+    """The warning for a run whose flood touched the clip edge with no terrain to grow into
+    (tsrc 'cache'), else None. Audit 2026-10-15: the cached-only default stopped such floods at
+    the clip edge and the run looked finished."""
+    return CLIP_EDGE_WARNING if edge and tsrc == "cache" else None
 
 
 ENGINES = ["LISFLOOD-FP ACC (fast, local inertial)", "LISFLOOD-FP FV1 (full shallow water)",
@@ -364,7 +434,7 @@ class RunBreachSim(QgsProcessingAlgorithm):
         local = self.parameterAsString(params, "LOCAL", context)
         engine = rn.ENGINES[self.parameterAsEnum(params, "ENGINE", context)]
         exe = self.parameterAsString(params, "EXE", context)
-        exe = _find_lisflood(exe)
+        exe = _find_lisflood(exe, feedback.pushInfo)
         scen = ["td", "sd"][self.parameterAsEnum(params, "SCEN", context)]
         curves = self.parameterAsString(params, "CURVES", context)
         cell = self.parameterAsDouble(params, "CELL", context)
@@ -666,6 +736,11 @@ class RunBreachSim(QgsProcessingAlgorithm):
                     edge = bool(sio.edge_flooded(np.where(valid, depth, 0)))
                 put(a, "sim_cell_m", cellm); put(a, "sim_h", (r.get("sim_s") or 0) / 3600.0 or None)
                 put(a, "sim_run_s", r.get("run_s")); put(a, "edge_flag", "YES" if edge else "no")
+                cw = clip_edge_warning(edge, tsrc)
+                if cw:
+                    feedback.pushWarning("dam {}: {}".format(rec["dam_id"], cw))
+                    notes.append(cw)
+                    put(a, "sim_notes", "; ".join(notes))
                 put(a, "max_depth_m", float(np.max(depth))); put(a, "max_vel_ms", float(np.max(vel)))
                 put(a, "max_dv_m2s", float(np.max(dv)))
                 put(a, "area_ha", float((depth > 0.05).sum() * cellm * cellm / 1e4))
