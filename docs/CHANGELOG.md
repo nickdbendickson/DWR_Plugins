@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-10-15 (later)
+- **#22 (merged 06:12Z), Screening 7b:** new options are passed to `ndbreach:rundam`:
+  - `ENGINE` ("Runner models") → TIER
+  - `FORCE_ANUGA` → FORCE_ANUGA
+  - `REFINE_NEAR` → REFINE_NEAR
+  - `CULVERTS` (line layer) → STRUCTURES
+  - `C_KIND`/`C_WIDTH`/`C_HEIGHT`/`C_BARRELS`/`C_SHAPE`/`C_NAME` → `S_*`
+
+  Only values that differ from the Runner defaults are sent, so a default 7b run is unchanged.
+- **#32 (merged 10:26Z), cross-platform fixes:**
+  - Text files are now read and written as UTF-8.
+  - CSVs are written with `newline=""`.
+  - On Windows, the conda env python is found at `<env>\python.exe`, which fixes ANUGA env auto-detect.
+  - Subprocess output is decoded with `errors="replace"`.
+  - No behaviour change on Linux/macOS. The vendored `damsuite/` copies are not yet changed.
+- **#30 (OPEN, not merged), Runner:** culvert guesses can be sized from the NDDOT/NBI inventory (CULVERT_INVENTORY, CULVERT_MATCH_M 75 m, CULVERT_BURN_MATCHED). Documented ahead of merge; see USER_GUIDE.md.
+
 Merged pull requests, 2026-10-14 to 2026-10-15 (main at e2acb76). Merge times are UTC.
 
 ## Runner (DamSafety_Runner)

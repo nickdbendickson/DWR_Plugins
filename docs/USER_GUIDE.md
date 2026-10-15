@@ -64,7 +64,34 @@ How it works:
 - Outputs are `adequacy.csv`, `adequacy.md` (the verdict, the governing storm, and notes on the Table 6.1 IDF, §6.4 IDA and the 24-hr 500-yr storm) and `governing_pool.png`.
 - The tool doesn't use the Runner's breach "failed" flag. Note that the main Runner's default peak-pool trigger assumes the dam breaches.
 
+## Tool 7b: engine and culverts (#22)
+- **"Runner models"** (`ENGINE`):
+  - "Runner default (LISFLOOD-FP only)" (the default)
+  - "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"
+- **"Runner: force ANUGA (final results from ANUGA even with LISFLOOD-FP only)"** (`FORCE_ANUGA`, default off).
+- **"Runner: near-dam refine with the FV1 solver"** (`REFINE_NEAR`, default off).
+- **"Culverts and bridges for the Runner (lines, upstream end first; used by ANUGA)"** (`CULVERTS`, optional): pick the layer in the window's Inputs. Optional field parameters (`C_KIND` ... `C_NAME`) name its kind, width, height, barrels, shape and name fields. If a field is left empty, the Runner matches its own synonyms.
+- In the Screening window, these are on the Settings tab as runner_tier, runner_force_anuga and runner_refine, and they're saved in the settings file.
+
+## Culvert matching (PR #30, NOT YET MERGED)
+Labels below are from the PR branch. These are advanced Runner parameters:
+- **`CULVERT_INVENTORY`:** "Culvert guesses: inventory GeoPackages that size them, separated by ;; (NDDOT bridge inventory, NDDOT Center Line Pipes, NTAD NBI; NBI item 43B = 19 is a culvert)". To use Center Line Pipes, download the FileGDB and convert it first (`ogr2ogr -f GPKG clp.gpkg centerlinepipes.gdb`).
+- **`CULVERT_MATCH_M`** (default **75 m**): a guessed road-crossing culvert takes the size of the nearest inventory culvert within this distance:
+  - span → width, rise → height, plus barrels and shape (an arch becomes a box)
+  - NDDOT wins over NBI
+  - bridges never size a guess
+  - a guess this close to a STRUCTURES line is dropped
+- **`CULVERT_BURN_MATCHED`** (default **off**): "Culvert guesses: cut the inventory-matched ones into the DEM (unmatched guesses are never cut)". The burn uses inverts read from the LiDAR DEM (`invert_up_m`/`invert_dn_m` in the report).
+- **Output:** the run report gains a `culvert_matches` table (name, source, match_m, size, barrels, shape, burned, inverts). `culvert_candidates.csv` gains `barrels` and `match_m`.
+
+## Cross-platform (#32)
+- The plugins now read and write text as UTF-8 on every OS, so files with names, °, or – move cleanly between Windows and Linux.
+- CSVs no longer get blank rows on Windows.
+- ANUGA conda env auto-detect now works on Windows (`<env>\python.exe`).
+- Known gap: the vendored `damsuite/` copies weren't changed.
+
 ## Not verified in this guide
 - These descriptions come from PR text and source code. None of the window steps were checked in a running QGIS.
 - The exact list of fixes in #27 and the details of #11 and #16 are summarized from PR titles and commit headlines only.
+- No window steps for #22, #30 or #32 were tried in QGIS.
 - The installed copy of the plugins may lag behind main.
