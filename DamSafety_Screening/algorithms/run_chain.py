@@ -93,6 +93,13 @@ class RunChain(QgsProcessingAlgorithm):
             raise QgsProcessingException("Work folder not found: {}".format(work))
         settings = load_settings(self.parameterAsString(params, "SETTINGS", context))
         settings["work"] = work
+        try:                                  # standard empty folders (damsuite/layout.py)
+            from ..damsuite import layout as LY
+            made = LY.ensure_layout(work, wf.dams_folder(work, settings))
+            if made:
+                feedback.pushInfo("Created the standard work-folder layout ({} item(s))".format(len(made)))
+        except Exception as e:
+            feedback.pushWarning("Standard folders not created: {}".format(e))
         inc = self.parameterAsEnums(params, "INCLUDE", context) or []
         include = tuple(OPTIONAL_KEYS[i] for i in inc if 0 <= i < len(OPTIONAL_KEYS))
         dry = self.parameterAsBool(params, "DRY_RUN", context)
