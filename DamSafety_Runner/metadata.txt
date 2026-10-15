@@ -11,6 +11,8 @@ changelog=3.10.13 (2026-10-15)
     * Optional: cut inventory-matched culverts into the DEM (CULVERT_BURN_MATCHED, off by default).
     * Guesses now run alongside a STRUCTURES layer; guesses near a STRUCTURES line are dropped.
     * NBI item 43B = 19 is read as a culvert, other types as bridges.
+    * NDDOT Center Line Pipes accepted in CULVERT_INVENTORY (auto-detected; priority bridge inventory > CLP > NBI; plan-datum inverts reported, the burn uses LiDAR inverts).
+    * Burned culverts follow the channel with LiDAR inverts so the cut reaches coarse model grids; run_report.md lists the culvert matches.
     3.10.12: installed from main c3d3d78 (spillway adequacy tool).
 author=Your Name
 email=you@example.com
