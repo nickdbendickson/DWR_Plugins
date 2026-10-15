@@ -78,8 +78,12 @@ def make_snapshot(nd, tm11, structs, roads, lifelines, crs_id, dam_name, cfg, sc
         v = cfg.get(k)
         if isinstance(v, (str, int, float, bool)) or v is None:
             settings[k] = v
+    try:
+        from .constants import PLUGIN_VERSION as _pv
+    except Exception:                                            # noqa
+        _pv = ""
     return {"version": SNAPSHOT_VERSION, "time": time.strftime("%Y-%m-%d %H:%M"),
-            "dam": dam_name, "crs": crs_id or "", "governing": governing,
+            "plugin_version": _pv, "dam": dam_name, "crs": crs_id or "", "governing": governing,
             "nd": nd.get("cls"), "tm11": tm11.get("cls"), "lij": round(float(
                 tm11.get("lij") or 0.0), 1),
             "structures": st, "roads": rd,

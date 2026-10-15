@@ -73,8 +73,8 @@ How it works:
 - **"Culverts and bridges for the Runner (lines, upstream end first; used by ANUGA)"** (`CULVERTS`, optional): pick the layer in the window's Inputs. Optional field parameters (`C_KIND` ... `C_NAME`) name its kind, width, height, barrels, shape and name fields. If a field is left empty, the Runner matches its own synonyms.
 - In the Screening window, these are on the Settings tab as runner_tier, runner_force_anuga and runner_refine, and they're saved in the settings file.
 
-## Culvert matching (PR #30, NOT YET MERGED: waiting on SWE's merge-conflict fix)
-Labels below are from the PR branch. These are advanced Runner parameters:
+## Culvert matching (#30, merged 10:34Z)
+Labels below are from main (checked at 18ae1f5). These are advanced Runner parameters:
 - **`CULVERT_INVENTORY`:** "Culvert guesses: inventory GeoPackages that size them, separated by ;; (NDDOT bridge inventory, NDDOT Center Line Pipes, NTAD NBI; NBI item 43B = 19 is a culvert)". To use Center Line Pipes, download the FileGDB and convert it first (`ogr2ogr -f GPKG clp.gpkg centerlinepipes.gdb`).
 - **`CULVERT_MATCH_M`** (default **75 m**): a guessed road-crossing culvert takes the size of the nearest inventory culvert within this distance:
   - span → width, rise → height, plus barrels and shape (an arch becomes a box)

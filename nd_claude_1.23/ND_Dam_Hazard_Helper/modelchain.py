@@ -72,7 +72,12 @@ RUN_REPORT_NAME = "run_report.json"          # v2.28: the Runner's report next t
 QA_MANIFEST_COPY = "run_manifest.json"       # the manifest the classification was checked with
 PACKAGE_RECORD_DIR = "02_Method_and_record"
 FIELDS = ["Scenario", "Raster", "Classified_Path", "Recorded_SHA256", "Current_SHA256",
-          "Manifest_Label", "Manifest_Path", "Manifest_SHA256", "Status", "Note"]
+          "Manifest_Label", "Manifest_Path", "Manifest_SHA256", "Status", "Note", "Reason"]
+# v2.18.14 / 2.31.2: why a DIFFERENT row differs, as a code (_overall groups by it; it used
+# to search the note text)
+REASON_CHANGED_AFTER_RUN = "CHANGED_AFTER_RUN"
+REASON_CHANGED_AFTER_CLASSIFICATION = "CHANGED_AFTER_CLASSIFICATION"
+REASON_NOT_RUN_OUTPUT = "NOT_RUN_OUTPUT"
 RASTER_KEYS = (("depth", "depth"), ("velocity", "velocity"), ("arrival", "arrival"),
                ("dv", "dv"))
 OVERALL = ("MATCH", "PARTIAL", "DIFFERENT", "INCOMPLETE", "MANIFEST INVALID", "NO MANIFEST",
@@ -255,7 +260,7 @@ def _row(r, **kw):
            "Classified_Path": r["recorded_path"],
            "Recorded_SHA256": (r["fingerprint"] or {}).get("sha256") or "",
            "Current_SHA256": "", "Manifest_Label": "", "Manifest_Path": "",
-           "Manifest_SHA256": "", "Status": "", "Note": ""}
+           "Manifest_SHA256": "", "Status": "", "Note": "", "Reason": ""}
     row.update(kw)
     return row
 
@@ -307,6 +312,7 @@ def compare(rasters, manifest, dam_folder=None):
                     elif how == "file name" and _same_place(
                             r["recorded_path"], hit[2].get("path"), dam_folder):
                         notes.append(CHANGED_NOTE.format(hit[1]))
+                        row["Reason"] = REASON_CHANGED_AFTER_RUN
                     else:
                         notes.append(OTHER_NOTE.format(how, hit[1]))
                 else:
@@ -339,6 +345,7 @@ def compare(rasters, manifest, dam_folder=None):
                          "compared")
             if fp.get("exists") and (fp.get("size") != now.get("size")):
                 row["Status"] = "DIFFERENT"
+                row["Reason"] = REASON_CHANGED_AFTER_CLASSIFICATION
                 notes.append("its size is not the size the classification recorded: the "
                              "file changed after the classification - the chain cannot be "
                              "proven")
@@ -351,6 +358,8 @@ def compare(rasters, manifest, dam_folder=None):
         if now.get("sampled"):
             notes.append("large file: sampled digest (start, middle, end)")
         row["Note"] = "; ".join(n for n in notes if n)
+        if row["Status"] == "DIFFERENT" and not row["Reason"]:
+            row["Reason"] = REASON_NOT_RUN_OUTPUT
         rows.append(row)
     return rows
 
@@ -370,8 +379,9 @@ def _overall(rows, manifest, man_ok):
                                     "chain cannot be proven".format(man_ok[1])), counts
     diff = [r for r in rows if r["Status"] == "DIFFERENT"]
     if diff:
-        late = [label(r) for r in diff if "changed after the classification" in r["Note"]]
-        changed = [label(r) for r in diff if "changed after the model run" in r["Note"]
+        late = [label(r) for r in diff
+                if r.get("Reason") == REASON_CHANGED_AFTER_CLASSIFICATION]
+        changed = [label(r) for r in diff if r.get("Reason") == REASON_CHANGED_AFTER_RUN
                    and label(r) not in late]
         other = [label(r) for r in diff if label(r) not in late and label(r) not in changed]
         parts = []
@@ -498,15 +508,6 @@ def _write_text(path, lines):
     with open(path, "w", encoding="utf-8", newline="") as fh:
         fh.write("\n".join(str(x) for x in lines) + "\n")
     return path
-
-
-def read_check(path):
-    """Rows of a Model_Chain_Check.csv ([] when missing / unreadable)."""
-    try:
-        with open(path, newline="", encoding="utf-8-sig") as fh:
-            return list(csv.DictReader(fh))
-    except (OSError, csv.Error):
-        return []
 
 
 # ------------------------------------------------------------ integration --

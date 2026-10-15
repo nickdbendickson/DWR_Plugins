@@ -374,7 +374,10 @@ class DemPage(QWizardPage):
             self.dem.setText(path)
 
     def validatePage(self):
-        return bool(self.dem.text().strip())
+        from .runner_params import dem_problem
+        why = dem_problem(self.dem.text())
+        self.setSubTitle(why)                 # shown on the page; empty when the DEM is fine
+        return not why
 
 
 class RunPage(QWizardPage):

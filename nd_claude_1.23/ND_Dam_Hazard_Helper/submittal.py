@@ -162,7 +162,22 @@ def read_result(out_folder):
             if snap.get(k) is not None}
 
 
-def cover_letter(result, dam_name, enclosures, when=None):
+def missing_items(rows, data_missing=()):
+    """What a package does not enclose (from its MANIFEST rows), in plain words."""
+    have = {r["Path"].split("/")[0] + "/" + os.path.basename(r["Path"]) for r in rows}
+    missing = []
+    if not any(p.endswith(".pdf") and p.startswith("01_Report") for p in have):
+        missing.append("PDF report (the run had 'PDF report' off, or it failed - see the run "
+                       "log)")
+    if not any(p.startswith("02_Method_and_record/Structure_Review") for p in have):
+        missing.append("engineer review decisions (none saved yet)")
+    if not any(p.startswith("04_EAP/EAP_Map_Book") for p in have):
+        missing.append("EAP inundation map book (off, or no arrival raster)")
+    missing.extend(data_missing or ())
+    return missing
+
+
+def cover_letter(result, dam_name, enclosures, when=None, not_enclosed=None):
     """Text of the cover-letter template, filled with the run's result. The
     engineer completes and signs it; the classification stated is the
     plugin's screening result until the engineer confirms it."""
@@ -196,7 +211,10 @@ def cover_letter(result, dam_name, enclosures, when=None):
         "listed in the report, and any structures reviewed in the field.]",
         "",
         "Enclosures:",
-    ] + ["  - {}".format(e) for e in enclosures] + [
+    ] + ["  - {}".format(e) for e in enclosures] + ([
+        "",
+        "Not enclosed:",
+    ] + ["  - {}".format(m) for m in not_enclosed] if not_enclosed else []) + [
         "",
         "Please contact me with any questions.",
         "",
@@ -356,8 +374,9 @@ def build(out_folder, dam_name=None, zip_it=True, include_gis=False, dest_root=N
         enclosures = [r["Description"] for r in rows if r["Path"].startswith(
             ("01_Report", "04_EAP")) or "Review_Decisions" in r["Path"]
             or "Run_Log" in r["Path"]]
+        missing = missing_items(rows, data_missing)       # Lumo 2.27.2: named in the letter
         with open(os.path.join(folder, COVER_NAME), "w", encoding="utf-8", newline="") as fh:
-            fh.write(cover_letter(result, dam, enclosures))
+            fh.write(cover_letter(result, dam, enclosures, not_enclosed=missing))
         with open(os.path.join(folder, MANIFEST_NAME), "w", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=["Path", "Description", "Size_bytes", "SHA256",
                                                "Source_modified"])
@@ -383,16 +402,6 @@ def build(out_folder, dam_name=None, zip_it=True, include_gis=False, dest_root=N
             except OSError:
                 pass
         raise
-    have = {r["Path"].split("/")[0] + "/" + os.path.basename(r["Path"]) for r in rows}
-    missing = []
-    if not any(p.endswith(".pdf") and p.startswith("01_Report") for p in have):
-        missing.append("PDF report (the run had 'PDF report' off, or it failed - see the run "
-                       "log)")
-    if not any(p.startswith("02_Method_and_record/Structure_Review") for p in have):
-        missing.append("engineer review decisions (none saved yet)")
-    if not any(p.startswith("04_EAP/EAP_Map_Book") for p in have):
-        missing.append("EAP inundation map book (off, or no arrival raster)")
-    missing.extend(data_missing)
     return {"folder": folder, "zip": zpath, "files": rows, "missing": missing,
             "result": result, "profile": prof, "data": data, "warnings": warnings}
 

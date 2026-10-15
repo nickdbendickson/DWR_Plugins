@@ -158,6 +158,14 @@ class SettingsGrid(QWidget):
         self.help_label.setWordWrap(True)
         self.help_label.setMinimumHeight(48)
         lay.addWidget(self.help_label)
+        # a rejected value is reported here (no message box per entry)
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        try:
+            self.status_label.setStyleSheet("color: #b42318;")
+        except Exception:                                        # noqa
+            pass
+        lay.addWidget(self.status_label)
         row = QHBoxLayout()
         self.reset_tab_btn = QPushButton("Reset this tab")
         self.reset_tab_btn.clicked.connect(lambda _c=False: self.reset_tab())
@@ -191,8 +199,7 @@ class SettingsGrid(QWidget):
                     changed = typed is not None and not DS._same(typed, s.default, s)
                     num = QTableWidgetItem(str(i + 1))
                     _set_flags(num, FLAGS_FIXED)
-                    label = QTableWidgetItem(s.label + (YOUR_MARK if s.your else "") +
-                                             ("" if not s.tool_title else ""))
+                    label = QTableWidgetItem(s.label + (YOUR_MARK if s.your else ""))
                     label.setToolTip("{} - {} ({})".format(s.tool_title or s.tool, s.key, s.help or "").strip())
                     _set_flags(label, FLAGS_FIXED)
                     unit = QTableWidgetItem(s.unit)
@@ -275,6 +282,11 @@ class SettingsGrid(QWidget):
             return
         self.set_value(sid, index, from_widget=True)
 
+    def _status(self, text):
+        lbl = getattr(self, "status_label", None)
+        if lbl is not None:
+            lbl.setText(text or "")
+
     def set_value(self, sid, raw, from_widget=False):
         """Store a value (text as typed, an enum index, or a bool); empty = back to the default.
         Returns the problem text ('' when accepted)."""
@@ -288,7 +300,8 @@ class SettingsGrid(QWidget):
             typed, problem = DS.coerce(raw, s)
             if problem:
                 if from_widget:
-                    QMessageBox.information(self, "Settings", "{}: {}".format(s.label, problem))
+                    self._status("Not accepted - {}: {} (the previous value is kept)".format(
+                        s.label, problem))
                 self._refresh_row(s)
                 return problem
             if s.kind == "enum":
@@ -296,6 +309,8 @@ class SettingsGrid(QWidget):
             else:
                 self.settings.set(*s.id, value=typed)
         self._refresh_row(s)
+        if from_widget:
+            self._status("")
         self._update_file_label()
         if self.on_change:
             self.on_change(self.settings)

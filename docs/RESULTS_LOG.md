@@ -16,7 +16,7 @@ The inflow point moved from (-106364, 2666612) at 320.46 m to (-106264, 2666572)
 
 ## Culvert burn-in (PR #30, CULVERT_BURN_MATCHED), 10-15 ~06:3x
 
-**PR #30 branch, not merged into main. #30 is waiting on SWE's merge-conflict fix.** Inventory: NDDOT bridge inventory, NTAD NBI, and NDDOT Center Line Pipes. Match distance 75 m. Source: `runs/r6pr30` and `runs/r7pr30` (run1 = burn off, run2/run3_on = burn on).
+**Run on the PR #30 branch before it merged (merged into main 10:34Z as 6ffd632).** Inventory: NDDOT bridge inventory, NTAD NBI, and NDDOT Center Line Pipes. Match distance 75 m. Source: `runs/r6pr30` and `runs/r7pr30` (run1 = burn off, run2/run3_on = burn on).
 
 | Dam | Burn | Peak (cfs) | Flooded area (ac) | Max depth (ft) | Class (in this run) |
 |---|---|---|---|---|---|

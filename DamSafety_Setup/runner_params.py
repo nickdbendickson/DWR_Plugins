@@ -85,3 +85,21 @@ def downloaded_dem(out, dam_id, point=""):
             if os.path.isfile(path):
                 return path
     return ""
+
+
+def dem_problem(text):
+    """Why the wizard's DEM entry cannot be used, or '' when it is a readable file.
+    A GDAL source with options ('path|layername=...') is checked on its path part. The wizard used
+    to accept any text (a missing file or a folder) and the Runner failed only after it started."""
+    import os
+    path = (text or "").strip()
+    if not path:
+        return "Choose the DEM (or download one)."
+    path = path.split("|", 1)[0]
+    if os.path.isdir(path):
+        return "The DEM is a folder, not a raster file: {}".format(path)
+    if not os.path.isfile(path):
+        return "The DEM file does not exist: {}".format(path)
+    if not os.access(path, os.R_OK):
+        return "The DEM file cannot be read: {}".format(path)
+    return ""
