@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.18.25
+ND Dam Hazard Classification Helper - Version 2.18.26
 ====================================================
 
 WHAT IT DOES
