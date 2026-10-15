@@ -42,7 +42,7 @@ def write_candidates_csv(path, rows):
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("name,kind,shape,width_m,height_m,source,surveyed,x1,y1,x2,y2,note\n")
         for s in rows or []:
-            line = s.get("line") or []
+            line = [] if s.get("line") is None else list(s.get("line"))  # may be an ndarray
             a = line[0] if line else ("", "")
             b = line[-1] if line else ("", "")
             fh.write("{},{},{},{},{},{},{},{},{},{},{},{}\n".format(
