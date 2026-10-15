@@ -36,6 +36,7 @@ TABS = (
         ("cascade", "Cascade failure of dams in a chain...", "Downstream dams that fail in turn."),
         ("hydrograph", "Breach hydrograph only...", "No flood model: the breach outflow hydrograph."),
         ("rainfallrunoff", "Rainfall to PMF inflow hydrograph...", "A PMF inflow from rainfall."),
+        ("spillwayadequacy", "Spillway adequacy...", "Does the dam pass its inflow design flood (no breach)?"),
     )),
     ("Data", (
         ("buildvrt", "Build a statewide LiDAR mosaic (VRT)...", "One virtual raster over DEM tiles."),

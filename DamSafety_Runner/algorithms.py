@@ -2011,6 +2011,7 @@ CORE_ALGORITHMS = (RunDamAlgorithm, BatchAlgorithm, SensitivityAlgorithm, Cascad
                    HydrographAlgorithm, EstimateAlgorithm, CheckAlgorithm)
 from .algorithms_tools import TOOL_ALGORITHMS      # noqa: E402  (they build on _Base)
 from .algorithms_hydrology import HYDROLOGY_ALGORITHMS          # noqa: E402
+from .algorithms_adequacy import ADEQUACY_ALGORITHMS          # noqa: E402
 from .algorithms_consequences import CONSEQUENCE_ALGORITHMS     # noqa: E402
 from .algorithms_ndhazard import NDHAZARD_ALGORITHMS           # noqa: E402
 from .algorithms_report import REPORT_ALGORITHMS                # noqa: E402
@@ -2021,7 +2022,7 @@ from .algorithms_verification import VERIFICATION_ALGORITHMS    # noqa: E402
 from .algorithms_provenance import PROVENANCE_ALGORITHMS        # noqa: E402
 from .algorithms_selftest import SELFTEST_ALGORITHMS            # noqa: E402
 from .algorithms_nested import NESTED_ALGORITHMS                # noqa: E402
-ALGORITHMS = (CORE_ALGORITHMS + NESTED_ALGORITHMS + PROBABILISTIC_ALGORITHMS + TOOL_ALGORITHMS + HYDROLOGY_ALGORITHMS
+ALGORITHMS = (CORE_ALGORITHMS + NESTED_ALGORITHMS + PROBABILISTIC_ALGORITHMS + TOOL_ALGORITHMS + HYDROLOGY_ALGORITHMS + ADEQUACY_ALGORITHMS
               + CONSEQUENCE_ALGORITHMS + NDHAZARD_ALGORITHMS + ANIMATION_ALGORITHMS + REPORT_ALGORITHMS
               + HECRAS_ALGORITHMS + PROVENANCE_ALGORITHMS + VERIFICATION_ALGORITHMS
               + SELFTEST_ALGORITHMS)

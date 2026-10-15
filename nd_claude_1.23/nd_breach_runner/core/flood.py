@@ -241,6 +241,12 @@ def route_flood(dam, method, overrides, fi, max_hours=240.0, dt_hydro_s=30.0):
         k_b = int(hit[0])
     else:
         raise br.BreachInputError("unknown breach trigger: {}".format(trig))
+    if trig == TRIGGER_PEAK and peak_stage_ft <= dam.top_of_dam_ft:
+        notes.append("The breach is ASSUMED at the peak pool ({:.1f} ft, {:.1f} ft below the top of "
+                     "dam): the flood scenario models a failure there, it does not find one. "
+                     "Whether the dam passes the flood is the no-breach peak pool against the top "
+                     "of dam and freeboard (tool 'Spillway adequacy').".format(
+                         peak_stage_ft, dam.top_of_dam_ft - peak_stage_ft))
     t_b = float(ts[k_b])
     v_b = float(vs_[k_b])
     wse_b = float(res.wse(v_b))
