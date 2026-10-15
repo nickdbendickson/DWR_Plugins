@@ -498,6 +498,16 @@ def _write_pass_products(out_folder, dem, env, arrival_m, writer, it):
         products.write_gpkg(os.path.join(out_folder, "Breach Products.gpkg"), layers, crs)
 
 
+def max_extent_warning(max_extent_mi, over):
+    """The warning when the domain hits the largest-domain cap with the flood still leaving.
+    The default cap is 20 mi (60 mi before 2026-10); say so, so a large dam's truncated run is
+    not read as complete (audit 2026-10-15)."""
+    return ("TRUNCATED: the domain reached the maximum extent ({:.0f} mi) with the flood still "
+            "leaving through {}; results (extent, depths, consequences) are cut off there and the "
+            "hazard may be understated. Raise 'Largest domain side (mi)' (the default was 60 mi "
+            "before 2026-10) and re-run.".format(float(max_extent_mi or 0), ", ".join(over)))
+
+
 def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             progress=None, log=None, cancel=None):
     """dam: breach.DamData; dam_xy / inflow_xy in the working (metric) CRS.
@@ -1053,9 +1063,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         new_bounds = terrain.expand_bounds(bounds, over, step)
         w, h = terrain.bounds_size(new_bounds)
         if over and (w > max_extent or h > max_extent):
-            warnings.append("The domain reached the maximum extent ({:.0f} mi) with the flood "
-                            "still leaving through {}; results are cut off there."
-                            .format(st.max_extent_mi, ", ".join(over)))
+            stop_reason = "maximum extent ({:.0f} mi)".format(st.max_extent_mi)
+            warnings.append(max_extent_warning(st.max_extent_mi, over))
             break
         if over:
             log("Flood leaves through {} deeper than {:.1f} ft; extending.".format(

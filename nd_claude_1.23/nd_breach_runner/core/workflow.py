@@ -839,7 +839,11 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         if inflow_xy is None:
             try:
                 inflow_xy, why, moved = terrain.place_inflow(terrain_src.read, dam_xy, h_m, top_m,
-                                                             cs, top_known=not top_from_dem)
+                                                             cs, top_known=not top_from_dem,
+                                                             crest_line=getattr(st, "crest_line_xy", None))
+                if why.startswith(terrain.NO_DOWNSTREAM):
+                    warnings.append("Breach inflow: {}. Give the inflow point (just below the "
+                                    "dam) if this is not the downstream toe.".format(why))
             except ValueError as e:
                 raise brmod.BreachInputError("{}: could not place the breach inflow: {}"
                                              .format(dam.dam_id, e))

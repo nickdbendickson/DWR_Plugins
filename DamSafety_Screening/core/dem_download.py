@@ -138,6 +138,57 @@ def download(extent, cell_m, out_dir, stem, feedback=None):
 DWR_HOST = "lidarftp.swc.nd.gov"
 DWR_USER = "swc"
 DWR_PASSWORD = "water"   # published guest login on the ND LiDAR download page
+FT_TO_M = 0.3048
+
+
+def _product_of(path):
+    p = path.replace("\\", "/")
+    if "/ASCII_Grids_ft/" in p or "/gft" in p.lower() or p.lower().endswith(".asc"):
+        return "ASCII_Grids_ft"
+    return "DEM_Imagine"
+
+
+def build_vrts(rasters, out_dir, feedback=None):
+    """One VRT per product, never a mosaic of feet and metres (ported from the ND copy).
+
+    The metre Imagine DEMs win when present (the foot grids are then not used for the local
+    GeoTIFF, as the ASCII_FT option says). Foot grids alone get a second VRT scaled by 0.3048, so
+    the elevations really are metres when the output is labelled metres. Returns the metres VRT,
+    or out_dir/nd_lidar.vrt (not written) when there are no rasters."""
+    rasters = [r for r in rasters if not r.lower().endswith(".rrd")]
+    by = {}
+    for r in rasters:
+        by.setdefault(_product_of(r), []).append(r)
+    if by.get("DEM_Imagine"):
+        use = os.path.join(out_dir, "nd_lidar_imagine_m.vrt")
+        gdal.BuildVRT(use, by["DEM_Imagine"])
+        ds = gdal.Open(use, gdal.GA_Update)
+        if ds is not None:
+            ds.GetRasterBand(1).SetUnitType("m")
+            ds = None
+        if by.get("ASCII_Grids_ft") and feedback is not None:
+            feedback.pushInfo("ND LiDAR: the metre Imagine DEM is used; the {} ASCII foot grid(s) "
+                              "are kept on disk but not mosaicked with it".format(len(by["ASCII_Grids_ft"])))
+        return use
+    if by.get("ASCII_Grids_ft"):
+        ft = os.path.join(out_dir, "nd_lidar_ascii_ft.vrt")
+        ds = gdal.BuildVRT(ft, by["ASCII_Grids_ft"])
+        if ds is not None:
+            ds.GetRasterBand(1).SetUnitType("ft")
+            ds = None
+        m = os.path.join(out_dir, "nd_lidar_ascii_m.vrt")
+        gdal.Translate(m, ft, format="VRT", outputType=gdal.GDT_Float32,
+                       scaleParams=[[0.0, 1.0, 0.0, FT_TO_M]])
+        ds = gdal.Open(m, gdal.GA_Update)
+        if ds is not None:
+            ds.GetRasterBand(1).SetUnitType("m")
+            ds = None
+        if feedback is not None:
+            feedback.pushInfo("ND LiDAR: ASCII foot grids converted to metres (x 0.3048)")
+        return m
+    return os.path.join(out_dir, "nd_lidar.vrt")
+
+
 DWR_PRODUCTS = ("ASCII_Grids_ft", "DEM_Imagine")
 
 
@@ -208,11 +259,7 @@ def fetch_dwr(package, out_dir, products, feedback=None):
             else:
                 rasters.append(local)
         ftp.quit()
-        rasters = [r for r in rasters if not r.lower().endswith(".rrd")]
-        vrt = os.path.join(out_dir, "nd_lidar.vrt")
-        if rasters:
-            gdal.BuildVRT(vrt, rasters)
-        return vrt
+        return build_vrts(rasters, out_dir, feedback)
     finally:
         _ftp_close(ftp)
 
@@ -456,11 +503,7 @@ def fetch_dwr_area(scope, county, out_dir, products, feedback=None, cache_dir=No
                 rasters += [os.path.join(root, fn) for root, _d, files in os.walk(dest)
                             for fn in files if fn.lower().endswith((".img", ".asc", ".grd", ".tif"))]
         _ftp_close(ftp)
-        rasters = [r for r in rasters if not r.lower().endswith(".rrd")]
-        vrt = os.path.join(out_dir, "nd_lidar.vrt")
-        if rasters:
-            gdal.BuildVRT(vrt, rasters)
-        return vrt, len(tiles)
+        return build_vrts(rasters, out_dir, feedback), len(tiles)
     finally:
         _ftp_close(ftp)
 
