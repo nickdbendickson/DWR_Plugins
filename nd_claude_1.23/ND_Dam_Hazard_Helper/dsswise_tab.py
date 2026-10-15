@@ -16,7 +16,7 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import QgsRasterLayer, QgsVectorLayer
 
 from . import dsswise as DW
-from .compat import MSG_CRITICAL
+from .compat import MSG_CRITICAL, MSG_WARNING
 from .helpers import (
     log_message, add_layer_to_project, plugin_group, dam_display_name, CancelledByUser,
 )
@@ -249,7 +249,11 @@ class DssWiseTabMixin(object):
                 if b.isValid():
                     add_layer_to_project(b, group=grp)
         text = ["Imported to {}".format(out), ""] + res["lines"] + [""] + \
+            ["WARNING: " + w_ for w_ in res.get("warnings") or []] + \
             ["NOTE: " + n for n in res["notes"]]
+        for w_ in res.get("warnings") or []:
+            self._log(">>> WARNING: " + w_)
+            log_message(w_, MSG_WARNING)
         if res.get("report"):
             text.append("DSS-WISE report: {}".format(res["report"]))
         self.dsw_result_text.setPlainText("\n".join(text))

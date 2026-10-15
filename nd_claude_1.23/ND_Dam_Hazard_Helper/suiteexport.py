@@ -327,15 +327,26 @@ def _num(v):
     return x if math.isfinite(x) else None
 
 
-def projected(features):
+def projected(features, dropped=None):
     """[(feature, geometry in EPSG:5070)] - features whose geometry cannot be read are
-    left out."""
+    left out; `dropped` (a list) gets one entry per feature left out, so the caller can
+    say how many (Lumo: a silent drop hid bad source data)."""
     out = []
     for f in features or ():
-        g = G.project_5070(f.get("geometry"))
+        try:
+            g = G.project_5070(f.get("geometry"))
+        except Exception:                                        # noqa - counted below
+            g = None
         if g is not None and G.points_of(g):
             out.append((f, g))
+        elif dropped is not None:
+            dropped.append(f)
     return out
+
+
+def dropped_note(name, n):
+    """The export note for `n` features of `name` that could not be read / projected."""
+    return "{}: {:,} feature(s) could not be read/projected and were left out".format(name, n)
 
 
 def _parts(g):
@@ -858,7 +869,11 @@ def export(out_path, source, extent=None, structures="auto", mobile_rules=None, 
         if feats is None:
             return None
         used[name] = "{} features ({})".format(len(feats), source.note(name, extent))
-        return projected(feats)
+        dropped = []
+        out = projected(feats, dropped)
+        if dropped:
+            notes.append(dropped_note(name, len(dropped)))
+        return out
 
     w = G.GpkgWriter(out_path)
     try:
@@ -879,19 +894,31 @@ def export(out_path, source, extent=None, structures="auto", mobile_rules=None, 
                                           lambda p, m: prog(2 + 0.3 * p, m))
             kinds = {G.kind(g) for g, _a in rows}
             gtype = "MULTIPOLYGON" if kinds == {"polygon"} else "POINT"
+            if gtype == "POINT" and len(kinds - {None}) > 1:
+                notes.append("structures from {}: mixed geometry kinds ({}) - the structures "
+                             "layer is written as POINT (outlines as a point on the "
+                             "surface)".format(ds, ", ".join(sorted(k for k in kinds if k))))
             lyr = w.layer("structures", gtype, STRUCTURE_FIELDS,
                           description="{} with ND Dam Hazard habitability".format(ds))
             pts = w.layer("structure_points", "POINT", STRUCTURE_FIELDS,
                           description="structures as points (receptors for ND Dam Breach Runner)")
+            no_geom = 0
+            kept = []
             for g, a in rows:
+                xy = G.point_on_surface(g) if g is not None else None
+                if xy is None:
+                    no_geom += 1                # never write a structure without a location
+                    continue
                 if gtype == "POINT" and G.kind(g) != "point":
-                    xy = G.point_on_surface(g)
-                    g2 = {"type": "Point", "coordinates": xy} if xy else None
-                    lyr.add(g2, a)
+                    lyr.add({"type": "Point", "coordinates": xy}, a)
                 else:
                     lyr.add(g, a)
-                xy = G.point_on_surface(g)
-                pts.add({"type": "Point", "coordinates": xy} if xy else None, a)
+                pts.add({"type": "Point", "coordinates": xy}, a)
+                kept.append((g, a))
+            if no_geom:
+                notes.append("structures from {}: {:,} feature(s) without a usable geometry were "
+                             "left out".format(ds, no_geom))
+            rows = kept
             counts["structures"] = counts["structure_points"] = len(rows)
             n_no = sum(1 for _g, a in rows if a["habitable"] == 0)
             n_unv = sum(1 for _g, a in rows if a["nd_habitable"] == "Unverified")

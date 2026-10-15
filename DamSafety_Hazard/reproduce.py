@@ -150,14 +150,28 @@ def fingerprint(path, hash_files=True):
            "sha256": None}
     try:
         if os.path.isdir(path):
-            size = 0
-            for dp, _d, files in os.walk(path):
-                for f in files:
+            # v2.18.14: a folder (a .gdb, a shapefile folder) is fingerprinted by its files:
+            # sorted [relative path, size, sha256] (sha256 None over HASH_MAX_BYTES), and
+            # "sha256" is the digest of that list - an edit inside the folder changes it.
+            # Records written before this have no "files" and are compared by size + date.
+            size, items = 0, []
+            for dp, dirs, files in os.walk(path):
+                dirs.sort()
+                for f in sorted(files):
+                    full = os.path.join(dp, f)
                     try:
-                        size += os.path.getsize(os.path.join(dp, f))
+                        fs = os.path.getsize(full)
                     except OSError:
-                        pass
+                        continue
+                    size += fs
+                    rel = os.path.relpath(full, path).replace(os.sep, "/")
+                    items.append([rel, fs, sha256_file(full) if hash_files else None])
+            items.sort()
             rec.update({"exists": True, "kind": "folder", "size": size})
+            if hash_files:
+                rec["files"] = items
+                rec["sha256"] = hashlib.sha256(json.dumps(items).encode("utf-8")).hexdigest()
+                rec["unhashed_files"] = sum(1 for it in items if it[2] is None)
         elif os.path.isfile(path):
             rec.update({"exists": True, "kind": "file", "size": os.path.getsize(path),
                         "sha256": sha256_file(path) if hash_files else None})
@@ -540,6 +554,34 @@ def _suffix_of(rec):
     if "suffix" in rec:
         return rec.get("suffix") or ""
     return split_source(rec.get("source") or "")[1]
+
+
+def comparison_method(fp):
+    """How a recorded file is compared: (code, text). code "sha256", "folder-sha256" (every file
+    of the folder by SHA-256), "folder-partial" (some files over the cap: size only for them),
+    "size-date-large" (a file over HASH_MAX_BYTES), "size-date-folder" (a folder recorded
+    before per-file fingerprints), "size-date" (no hash taken), "missing"."""
+    fp = fp or {}
+    if not fp.get("exists"):
+        return "missing", "did not exist when the run was made"
+    cap = "{:.0f} GB".format(HASH_MAX_BYTES / float(1 << 30))
+    if fp.get("kind") == "folder":
+        if fp.get("files") is not None and fp.get("sha256"):
+            n = int(fp.get("unhashed_files") or 0)
+            if n:
+                return "folder-partial", ("folder: per-file SHA-256, {} file(s) over {} by size "
+                                          "only".format(n, cap))
+            return "folder-sha256", "folder: every file by SHA-256"
+        return "size-date-folder", "folder: size and date only (recorded before per-file hashing)"
+    if fp.get("sha256"):
+        return "sha256", "SHA-256"
+    try:
+        big = fp.get("size") is not None and int(fp["size"]) > HASH_MAX_BYTES
+    except (TypeError, ValueError):
+        big = False
+    if big:
+        return "size-date-large", "size and date only (file over {})".format(cap)
+    return "size-date", "size and date only (no SHA-256 recorded)"
 
 
 def _changed_since_run(src, fp):
@@ -1139,6 +1181,13 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
                                             "", ""])))
     for n in plan["notes"]:
         rows.append(dict(zip(CHECK_FIELDS, ["Note", "", n, "", "", "", ""])))
+    weak = []
+    for fpath, fp in sorted((plan["record"].get("fingerprints") or {}).items()):
+        code, text = comparison_method(fp)
+        if code not in ("sha256", "folder-sha256", "missing"):
+            weak.append((fpath, text))
+            rows.append(dict(zip(CHECK_FIELDS, ["Method", "Compared by " + text, fpath, "", "",
+                                                "", ""])))
     head = {"IDENTICAL": "IDENTICAL - the reproduction gives the same result as the package "
                          "(ND {} / TM 11 {}, lives in jeopardy {})",
             "DIFFERENT": "DIFFERENT - the reproduction does not give the package's result "
@@ -1164,6 +1213,9 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
                        "(MANIFEST.csv): {}".format(len(tampered), ", ".join(
                            r for r, _p in tampered)))
     summary.extend("Note: " + n for n in plan["notes"])
+    if weak:
+        summary.append("{} recorded file(s) / folder(s) not compared by SHA-256:".format(len(weak)))
+        summary.extend("  {}: {}".format(fpath, text) for fpath, text in weak)
     summary.append("Reproduced {} with {} v{} from {} (run of {} by v{})".format(
         time.strftime("%Y-%m-%d %H:%M"), PLUGIN_NAME, PLUGIN_VERSION, package_folder,
         (before or {}).get("time") or "?", plan["record"].get("plugin_version") or "?"))
