@@ -112,6 +112,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         raster_group = QGroupBox("2. Raster Files (Classify finds them if Depth is empty)")
         raster_group.setCheckable(True)
         raster_group.setChecked(False)
+        self.raster_group = raster_group     # _set_busy: its children follow its tick
         raster_layout = QFormLayout()
         self.depth_edit = QLineEdit()
         self.depth_browse_btn = QPushButton("Browse...")
@@ -590,7 +591,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         for name in ("check_btn", "run_all_btn", "find_rasters_btn", "dam_browse_btn",
                      "depth_browse_btn", "vel_browse_btn", "arr_browse_btn",
                      "output_browse_btn", "selftest_btn", "refresh_layers_btn",
-                     "dv_browse_btn", "review_zoom_btn",
+                     "dv_browse_btn", "review_zoom_btn", "review_webmap_btn", "cache_clear_btn",
                      "review_save_btn", "review_rerun_btn", "sources_btn",
                      "review_export_btn", "review_merge_btn", "series_btn",
                      "dsw_scan_btn", "dsw_import_btn", "ras_scan_btn", "ras_import_btn",
@@ -610,6 +611,14 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                 w.setEnabled(not busy)
         if not busy and hasattr(self, "dsw_import_btn"):
             self.dsw_import_btn.setEnabled(bool(getattr(self, "_dsw_items", None)))
+        group = getattr(self, "raster_group", None)
+        if not busy and group is not None and group.isCheckable():
+            # 2.18.19: an unticked raster box keeps its browse buttons off (Qt disabled them)
+            for name in ("depth_browse_btn", "vel_browse_btn", "arr_browse_btn",
+                         "dv_browse_btn"):
+                w = getattr(self, name, None)
+                if w is not None:
+                    w.setEnabled(group.isChecked())
         self._update_button_states()
 
     def _group(self, category):
