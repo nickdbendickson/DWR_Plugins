@@ -26,11 +26,12 @@ the plugins' folder can no longer drift apart), and the lights plus each step's 
 line answer the third.
 
 Logic is damsuite.suite_home, damsuite.suitecheck and damsuite.suitedata (pure Python, tested);
-this file holds only widgets. Nothing here has been shown in a real QGIS (Qt test doubles only).
+this file holds only widgets. Built offscreen in headless QGIS 3.34; not yet
+exercised by hand in an interactive QGIS.
 """
 import os
 
-from qgis.PyQt.QtCore import QUrl
+from qgis.PyQt.QtCore import QUrl, Qt
 from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit, QPushButton, QTableWidget,
@@ -46,6 +47,56 @@ from .damsuite import versions as VS
 TITLE = "Dam suite home"
 SCOPE = "NDDamSuite"
 ENTRY = "home_dams_folder"
+# v2.18.13 / 2.31.1 (Lumo 1.6/1.7): the Dams folder is a per-computer setting; a project that
+# already stores one (older releases) keeps it as an override, so existing projects open as before
+DAMS_KEY = SCOPE + "/" + ENTRY
+HEADER_KEY = SCOPE + "/home_table_header"
+FOLDER_ROLE = getattr(Qt, "UserRole", 256)
+RECENT_ERRORS = []          # the last few problems shown to the user, for "Copy diagnostics"
+MAX_ERRORS = 20
+
+
+def note_error(text):
+    """Remember a problem for the diagnostics text (never raises)."""
+    try:
+        t = str(text or "").strip()
+        if t:
+            RECENT_ERRORS.append(t)
+            del RECENT_ERRORS[:-MAX_ERRORS]
+    except Exception:                                            # noqa
+        pass
+
+
+def resolve_dams_folder(project_value, computer_value, fallback=""):
+    """The Dams folder to show: the project's (an override kept from older releases), else this
+    computer's setting, else `fallback`."""
+    for v in (project_value, computer_value, fallback):
+        v = (v or "").strip() if isinstance(v, str) else ""
+        if v:
+            return v
+    return ""
+
+
+def diagnostics_text(info):
+    """Plain text for "Copy diagnostics" from a dict (pure, tested). Missing keys print '?'."""
+    def g(k):
+        v = info.get(k)
+        return "?" if v in (None, "") else str(v)
+    lines = ["Dam suite diagnostics",
+             "Plugin: {} {}".format(g("plugin"), g("plugin_version")),
+             "QGIS: {}".format(g("qgis")),
+             "Python: {}".format(g("python")),
+             "OS: {}".format(g("os")),
+             "Settings file: {}".format(g("settings_file")),
+             "Dams folder: {}".format(g("dams_folder"))]
+    inst = info.get("installed") or {}
+    if inst:
+        lines.append("Installed: " + "; ".join("{} {}".format(k, v or "not found")
+                                               for k, v in inst.items()))
+    errs = list(info.get("errors") or [])
+    lines.append("Recent problems: " + ("none recorded" if not errs else str(len(errs))))
+    lines.extend("  - " + e for e in errs[-MAX_ERRORS:])
+    return "\n".join(lines) + "\n"
 COLUMNS = ("Dam ID", "Name", "Class", "Existing", "Screened", "Modelled", "Classified", "Reviewed",
            "Next", "Plugin", "Notes")
 # plugin key -> (plugin folder name, how to point its window at the dam)
@@ -246,6 +297,13 @@ class SuiteHomeDialog(QDialog):
         except Exception:                                        # noqa
             pass
         self.table.cellDoubleClicked.connect(lambda r, c: self._open_for_row(r))
+        self._header_restored = self._restore_table_state()
+        try:
+            hdr = self.table.horizontalHeader()
+            hdr.sectionResized.connect(lambda *_a: self._save_table_state())
+            hdr.sortIndicatorChanged.connect(lambda *_a: self._save_table_state())
+        except Exception:                                        # noqa
+            pass
         lay.addWidget(self.table, 1)
         # two rows of buttons: six in one row truncated their labels at 900 px
         row = QHBoxLayout()
@@ -259,6 +317,12 @@ class SuiteHomeDialog(QDialog):
         self.dam_data_btn.clicked.connect(lambda _c=False: self.open_data(self.table.currentRow()))
         row.addWidget(self.open_btn)
         row.addWidget(self.folder_btn)
+        self.diag_btn = QPushButton("Copy diagnostics")
+        self.diag_btn.setToolTip("Copy plugin, QGIS and OS versions, the settings file, the Dams "
+                                 "folder and recent problems to the clipboard, to paste into a "
+                                 "support message.")
+        self.diag_btn.clicked.connect(lambda _c=False: self.copy_diagnostics())
+        row.addWidget(self.diag_btn)
         row.addWidget(self.dam_data_btn)
         row.addStretch(1)
         lay.addLayout(row)
@@ -291,13 +355,22 @@ class SuiteHomeDialog(QDialog):
 
     # --------------------------------------------------------------- settings --
     def _load(self):
+        project, computer = "", ""
         try:
             from qgis.core import QgsProject
             text, ok = QgsProject.instance().readEntry(SCOPE, ENTRY, "")
-            if ok and text:
-                self.dams_edit.setText(text)
+            project = text if ok else ""
         except Exception:                                        # noqa
             pass
+        try:
+            from qgis.core import QgsSettings
+            computer = QgsSettings().value(DAMS_KEY, "") or ""
+        except Exception:                                        # noqa
+            pass
+        self._project_override = bool((project or "").strip())
+        text = resolve_dams_folder(project, computer)
+        if text:
+            self.dams_edit.setText(text)
         if not self.dams_edit.text().strip():
             self.dams_edit.setText(SD.dams_folder())     # 1.5.0: the suite's Dams folder
         try:
@@ -306,11 +379,20 @@ class SuiteHomeDialog(QDialog):
             pass
 
     def _save(self):
+        value = self.dams_edit.text().strip()
         try:
-            from qgis.core import QgsProject
-            QgsProject.instance().writeEntry(SCOPE, ENTRY, self.dams_edit.text().strip())
-        except Exception:                                        # noqa
-            pass
+            from qgis.core import QgsSettings
+            QgsSettings().setValue(DAMS_KEY, value)
+        except Exception as e:                                   # noqa
+            note_error("Dams folder not remembered: {}".format(e))
+        if getattr(self, "_project_override", False):
+            # an older project stores its own Dams folder: keep it in step so it does not mask
+            # the choice just made
+            try:
+                from qgis.core import QgsProject
+                QgsProject.instance().writeEntry(SCOPE, ENTRY, value)
+            except Exception:                                    # noqa
+                pass
         if self.dams_edit.text().strip() and not SD.dams_folder():
             SD.set_dams_folder(self.dams_edit.text().strip())
 
@@ -461,10 +543,14 @@ class SuiteHomeDialog(QDialog):
                     r["classified"], r["reviewed"], "{}: {}".format(r["next"], r["next_text"]),
                     VS.LABELS.get(r["plugin"], r["plugin"]), "; ".join(notes))
             for j, v in enumerate(vals):
-                self.table.setItem(i, j, QTableWidgetItem(str(v)))
+                it = QTableWidgetItem(str(v))
+                if j == 0:
+                    it.setData(FOLDER_ROLE, r.get("folder") or "")
+                self.table.setItem(i, j, it)
         try:
             self.table.setSortingEnabled(True)
-            self.table.resizeColumnsToContents()
+            if not getattr(self, "_header_restored", False):
+                self.table.resizeColumnsToContents()
         except Exception:                                        # noqa
             pass
         inst = SH.installed_plugins()
@@ -476,18 +562,85 @@ class SuiteHomeDialog(QDialog):
         self.folder_btn.setEnabled(have)
 
     def row_at(self, index):
-        """The scan row shown at table row `index` (the table may be sorted)."""
+        """The scan row shown at table row `index` (the table may be sorted). Found by the dam
+        folder stored on the first cell (two folders can share a Dam ID); the ID text and then the
+        position are the fallbacks."""
         if index is None or index < 0:
             return None
+        folder, did = None, None
         try:
             item = self.table.item(index, 0)
-            did = item.text() if item is not None else None
+            if item is not None:
+                folder = item.data(FOLDER_ROLE)
+                did = item.text()
         except Exception:                                        # noqa
-            did = None
+            pass
+        if folder:
+            hit = {r.get("folder"): r for r in self.rows}.get(folder)
+            if hit is not None:
+                return hit
         for r in self.rows:
             if r["dam_id"] == did:
                 return r
         return self.rows[index] if 0 <= index < len(self.rows) else None
+
+    # ------------------------------------------------------- table state --
+    def _restore_table_state(self):
+        """Column widths and sort order from the last session; True when restored."""
+        try:
+            from qgis.core import QgsSettings
+            st = QgsSettings().value(HEADER_KEY, None)
+            if st:
+                return bool(self.table.horizontalHeader().restoreState(st))
+        except Exception:                                        # noqa
+            pass
+        return False
+
+    def _save_table_state(self):
+        try:
+            from qgis.core import QgsSettings
+            QgsSettings().setValue(HEADER_KEY, self.table.horizontalHeader().saveState())
+        except Exception:                                        # noqa
+            pass
+
+    # ------------------------------------------------------- diagnostics --
+    def diagnostics_info(self):
+        import platform
+        import sys
+        info = {"dams_folder": self.dams_edit.text().strip(), "errors": list(RECENT_ERRORS),
+                "python": sys.version.split()[0], "os": platform.platform()}
+        try:
+            from .constants import PLUGIN_NAME, PLUGIN_VERSION
+            info["plugin"], info["plugin_version"] = PLUGIN_NAME, PLUGIN_VERSION
+        except Exception:                                        # noqa
+            info["plugin"] = __package__ or "?"
+        try:
+            from qgis.core import Qgis
+            info["qgis"] = Qgis.QGIS_VERSION
+        except Exception:                                        # noqa
+            pass
+        try:
+            from .damsuite import settings as DS
+            info["settings_file"] = DS.current_path() or "(none)"
+        except Exception:                                        # noqa
+            pass
+        try:
+            info["installed"] = {VS.LABELS.get(k, k): v for k, v in SH.installed_plugins().items()}
+        except Exception:                                        # noqa
+            pass
+        return info
+
+    def copy_diagnostics(self):
+        text = diagnostics_text(self.diagnostics_info())
+        try:
+            from qgis.PyQt.QtWidgets import QApplication
+            QApplication.clipboard().setText(text)
+            QMessageBox.information(self, TITLE, "Diagnostics copied to the clipboard - paste them "
+                                                 "into your support message.")
+        except Exception as e:                                   # noqa
+            QMessageBox.warning(self, TITLE, "Could not use the clipboard ({}). The text:\n\n{}"
+                                .format(e, text))
+        return text
 
     # ------------------------------------------------------------- check text --
     def check_text(self):

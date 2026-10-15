@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.15.0
+ND Dam Hazard Classification Helper - Version 2.18.13
 ====================================================
 
 WHAT IT DOES
@@ -909,12 +909,6 @@ NEW IN 1.2.0 (performance and stability)
 - Cancel works in every stage; the progress bar never moves backwards.
 - Readme tab: "Run Self-Test" checks the install on synthetic data.
 
-BUTTON STATES
-- "Run Main Consolidation" turns green once the dam folder AND all three
-  rasters are selected. It can only be clicked while green.
-- "Run POI Consolidation" turns green once the *_POI.gpkg file exists
-  in the output folder (created by Main Consolidation).
-
 INSTALL
 1. QGIS > Plugins > Manage and Install Plugins > Install from ZIP
    - or -
@@ -932,12 +926,11 @@ USAGE
 1. Browse (or type) the Dam Project Folder; an "outputs" subfolder is
    created there.
 2. Select Depth, Velocity, and Arrival rasters.
-3. Click "Run Main Consolidation" (button turns green when ready).
-4. Place FEMA_Structures.gpkg (or {Dam}_FEMA_Structures.gpkg) in the
-   outputs folder BEFORE running Main Consolidation to enable the
-   building-outline stages (OSM_Outlines.gpkg is still read).
-5. Optional: Edit the *_POI.gpkg, save, click "Run POI Consolidation".
-6. Hazard Classification tab: load a road layer (NDDOT roads, HPMS, OSM)
+3. Optional: place FEMA_Structures.gpkg (or {Dam}_FEMA_Structures.gpkg)
+   in the outputs folder BEFORE running the classification to enable the
+   building-outline stages (OSM_Outlines.gpkg is still read). There is no
+   separate consolidation step any more: the classification run does it.
+4. Hazard Classification tab: load a road layer (NDDOT roads, HPMS, OSM)
    and optionally an AADT layer, choose the model type, then click
    "Run Hazard Classification". Internet is used for NSI, ND GIS Hub
    address points, FEMA USA Structures (optional, only without
@@ -945,11 +938,9 @@ USAGE
    Inventory of Dams and lifeline facilities unless those options are
    switched off. Enter the dam's NID ID so it is not listed as a dam in
    series.
-7. Review tab: decide the listed structures, "Save and re-run".
-8. DSS-WISE Lite tab: import a DSS-WISE package instead of (or besides)
+5. Review tab: decide the listed structures, "Save and re-run".
+6. DSS-WISE Lite tab: import a DSS-WISE package instead of (or besides)
    HEC-RAS rasters.
-   If the POI layer still has unsaved edits in QGIS you will be asked
-   whether to save them first.
 
 REQUIREMENTS
 - QGIS 3.28 or later (including QGIS 4 / Qt6) on Windows, macOS or Linux.
