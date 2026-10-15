@@ -607,7 +607,7 @@ def defaults(step, work, settings):
         put("BLD_MORE", more("structures"))
         put("LIFE_MORE", more("lifelines"))
         put("CHART_FILE", S.get("chart_file"))
-        # 0.17.21: one engine choice; an old runner_force_anuga = True means engine 1
+        # 0.17.22: one engine choice; an old runner_force_anuga = True means engine 1
         from .handoff import effective_engine
         eng = effective_engine(S.get("runner_tier"), S.get("runner_force_anuga"))
         if eng:
@@ -810,7 +810,7 @@ def window_settings_from(sf):
                 out[k] = str(v)
         except (TypeError, ValueError):
             continue
-    # 0.17.21: the old 'force ANUGA' box is the engine choice now (not stored on its own any
+    # 0.17.22: the old 'force ANUGA' box is the engine choice now (not stored on its own any
     # more, so it cannot keep forcing ANUGA unseen): True -> runner_tier 1
     if out.pop("runner_force_anuga", False):
         out["runner_tier"] = 1

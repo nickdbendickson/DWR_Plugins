@@ -32,7 +32,7 @@ assert ho.engine_params(0, False, False, None, {"C_KIND": "kind"}) == ({}, [])  
 p, notes = ho.engine_params(1, True, False, CUL, {"C_KIND": "kind", "C_WIDTH": "width_ft",
                                                   "C_HEIGHT": "height_ft", "C_BARRELS": "barrels",
                                                   "C_SHAPE": "shape", "C_NAME": "name"})
-assert p == dict({"TIER": 1, "STRUCTURES": CUL}, **REF_FIELDS), p    # 0.17.21: FORCE folded into TIER
+assert p == dict({"TIER": 1, "STRUCTURES": CUL}, **REF_FIELDS), p    # 0.17.22: FORCE folded into TIER
 assert set(p) <= set(ho.RUNDAM_KEYS) and len(notes) == 2 and ho.CULVERTS_IGNORED not in notes
 p, _ = ho.engine_params(0, False, True, CUL, {"C_KIND": "", "C_NAME": "label"})
 assert p == {"REFINE_NEAR": True, "STRUCTURES": CUL, "S_NAME": "label"}, p   # empty = runner synonyms
@@ -85,7 +85,7 @@ assert wf.DEFAULT_SETTINGS["runner_tier"] == 0 and wf.DEFAULT_SETTINGS["runner_f
 assert "culverts" in [k for k, _l, _p in wf.LAYER_SLOTS]
 for k in ("runner_tier", "runner_refine", "culvert_kind", "culvert_name"):
     assert k in wf.WINDOW_KEYS, k
-assert "runner_force_anuga" not in wf.WINDOW_KEYS          # 0.17.21: not persisted on its own
+assert "runner_force_anuga" not in wf.WINDOW_KEYS          # 0.17.22: not persisted on its own
 # an old saved force (tier 0) still gives engine 1
 assert wf.defaults("7b", W, dict(S0, runner_force_anuga=True))["ENGINE"] == 1
 
@@ -168,7 +168,7 @@ RunnerHandoff().run_mock(dict(base, ENGINE=1, FORCE_ANUGA=True, CULVERTS=CL, C_K
 got = {k: sent[1][k] for k in NEW if k in sent[1]}
 assert got == dict({"TIER": 1, "STRUCTURES": CL}, **REF_FIELDS), got
 assert any("Runner engine (7b): LISFLOOD-FP \u2192 ANUGA" in m for m in fb.log), fb.log
-assert any("FORCE_ANUGA (before 0.17.21)" in m for m in fb.log)
+assert any("FORCE_ANUGA (before 0.17.22)" in m for m in fb.log)
 print("OK (7b sends the engine and culverts to rundam; defaults send nothing new)")
 
 # culverts with LISFLOOD-FP only and no force: said to be unused (the Runner uses them in ANUGA only)
@@ -177,7 +177,7 @@ assert ho.CULVERTS_IGNORED in _n and _p.get("STRUCTURES") == CUL, _n
 assert ho.CULVERTS_IGNORED not in ho.engine_params(0, True, False, CUL, {})[1]
 print("OK (culverts-ignored note)")
 
-# ---- 5. 0.17.21 follow-ups (QGIS Dev's #22 review)
+# ---- 5. 0.17.22 follow-ups (QGIS Dev's #22 review)
 # legacy FORCE_ANUGA alone = engine 1
 n0 = len(sent)
 RunnerHandoff().run_mock(dict(base, FORCE_ANUGA=True), ctx, QgsProcessingFeedback())
@@ -217,6 +217,6 @@ help_ = alg.shortHelpString()
 for needle in ("RUNNER ENGINE", "NEAR-DAM REFINE", "UPSTREAM end", "span or diameter (ft)"):
     assert needle in help_, needle
 assert ("rn_engine" in [n for n, _t in importlib.import_module(PKG + ".algorithms.runner_handoff").NEW])
-print("OK (0.17.21: one engine choice, legacy force, culvert warning, early ANUGA check, help)")
+print("OK (0.17.22: one engine choice, legacy force, culvert warning, early ANUGA check, help)")
 
 os.environ.pop(ho.ANUGA_SETTING, None)

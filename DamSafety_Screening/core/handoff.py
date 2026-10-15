@@ -43,7 +43,7 @@ RUNDAM_KEYS = ("DAM_ID", "DAM_NAME", "DAM_POINT", "HEIGHT_FT", "STORAGE_ACFT", "
 # LISFLOOD-FP only, 1 is LISFLOOD-FP then ANUGA. "Solver" here is the Runner's near-dam FV1
 # refine (REFINE_NEAR); rundam has no other solver switch.
 #
-# 0.17.21 (QGIS Dev's #22 review): ENGINE is the ONE engine choice. The old FORCE_ANUGA box did
+# 0.17.22 (QGIS Dev's #22 review): ENGINE is the ONE engine choice. The old FORCE_ANUGA box did
 # exactly what option 1 does (the Runner turns FORCE_ANUGA into TIER 1), so it is folded in:
 # an old FORCE_ANUGA = True (saved settings, models, histories) still selects option 1, and
 # only TIER is sent. ANUGA is the only engine that models culverts / bridges.

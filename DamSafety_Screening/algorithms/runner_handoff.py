@@ -24,7 +24,7 @@ NEW = [("rn_status", FT_STRING), ("rn_folder", FT_STRING),
        ("rn_class", FT_STRING), ("rn_border", FT_STRING),
        ("rn_gaps", FT_STRING), ("scr_class", FT_STRING),
        ("rn_agree", FT_STRING), ("rn_inputs", FT_STRING),
-       ("rn_engine", FT_STRING)]          # 0.17.21: the Runner engine this dam was run with
+       ("rn_engine", FT_STRING)]          # 0.17.22: the Runner engine this dam was run with
 
 
 def _warn(feedback, msg):
@@ -111,7 +111,7 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 "tool or the engineer put there is never overwritten (the conflict is logged and "
                 "kept in the file). The tool stops when an installed ND Dam Breach Runner is older "
                 "than this plugin needs (suite version check).\n"
-                "RUNNER ENGINE (0.17.21): one choice. 'LISFLOOD-FP only' (the Runner's default; "
+                "RUNNER ENGINE (0.17.22): one choice. 'LISFLOOD-FP only' (the Runner's default; "
                 "TIER 0) is the fast local-inertial 2D model. 'LISFLOOD-FP for the extent, then "
                 "ANUGA' (TIER 1) uses LISFLOOD-FP to find how far the flood goes and re-runs it with "
                 "ANUGA (unstructured mesh) for the final results; it is much slower and needs the "
@@ -203,10 +203,10 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                                      "runner's own copy)", extension="json", optional=True))
         # engine choice and culverts / bridges for the Runner (defaults = the Runner's own:
         # nothing extra is sent). CULVERTS, not STRUCTURES: BLD is this tool's buildings layer.
-        # 0.17.21: ONE engine choice (FORCE_ANUGA folded in; the old parameter is kept hidden so
+        # 0.17.22: ONE engine choice (FORCE_ANUGA folded in; the old parameter is kept hidden so
         # saved models and histories still work: True = option 1)
         P(QgsProcessingParameterEnum("ENGINE", "Runner engine", ho.ENGINE_LABELS, defaultValue=0))
-        P(cm.hide(QgsProcessingParameterBoolean("FORCE_ANUGA", "(before 0.17.21) force ANUGA = Runner "
+        P(cm.hide(QgsProcessingParameterBoolean("FORCE_ANUGA", "(before 0.17.22) force ANUGA = Runner "
                                                 "engine 'LISFLOOD-FP then ANUGA'", defaultValue=False,
                                                 optional=True)))
         P(QgsProcessingParameterBoolean("REFINE_NEAR", "Runner: near-dam refine (re-runs the stretch "
@@ -348,7 +348,7 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         if engine:
             _warn(feedback, status)             # ANUGA: make it obvious, every run
             if B("FORCE_ANUGA"):
-                _warn(feedback, "FORCE_ANUGA (before 0.17.21) is now the Runner engine choice "
+                _warn(feedback, "FORCE_ANUGA (before 0.17.22) is now the Runner engine choice "
                       "'LISFLOOD-FP then ANUGA'.")
             # early check: a missing ANUGA would only fail deep inside each rundam run
             if not ho.find_anuga_python(_runner_anuga_setting, None, _runner_anuga_detect()):

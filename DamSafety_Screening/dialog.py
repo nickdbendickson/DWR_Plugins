@@ -358,7 +358,7 @@ class NDDamScreeningDialog(QDialog):
         self.status_line = QLabel("Dams not yet. DEM not yet. Screen not yet.")
         self.status_line.setWordWrap(True)
         lay.addWidget(self.status_line)
-        # 0.17.21: the Runner engine step 7b will use, always visible on the Run tab
+        # 0.17.22: the Runner engine step 7b will use, always visible on the Run tab
         self.engine_status_label = QLabel(ho.engine_status(0))
         self.engine_status_label.setWordWrap(True)
         lay.addWidget(self.engine_status_label)
@@ -1145,7 +1145,7 @@ class NDDamScreeningDialog(QDialog):
         return 0
 
     def _apply(self, s):
-        # 0.17.21: an old 'force ANUGA' choice is the engine choice now
+        # 0.17.22: an old 'force ANUGA' choice is the engine choice now
         if s and s.get("runner_force_anuga"):
             s = dict(s, runner_tier=1, runner_force_anuga=False)
         self.work_edit.setText(s.get("work", ""))
