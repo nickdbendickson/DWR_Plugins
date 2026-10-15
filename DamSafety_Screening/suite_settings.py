@@ -122,6 +122,8 @@ class SettingsGrid(QWidget):
         bar.addWidget(self.find_edit)
         self.only_your = QCheckBox("show only YOUR values")
         self.only_your.setToolTip("The thresholds the engineer chooses - the suite has no standard for them.")
+        # simplification change 2: open on the engineer's own values, not every parameter
+        self.only_your.setChecked(True)
         self.only_your.toggled.connect(lambda _c: self.apply_filter())
         self.only_changed = QCheckBox("show only changed")
         self.only_changed.toggled.connect(lambda _c: self.apply_filter())

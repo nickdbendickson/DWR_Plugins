@@ -317,22 +317,44 @@ def remove_suite_actions(iface, actions):
             pass
 
 
-def open_home(plugin, iface, opened_from, parent=None):
-    """One home window per plugin instance: re-created when Qt destroyed it. Returns it."""
-    dlg = getattr(plugin, "home_dialog", None)
-    alive = False
-    if dlg is not None:
+def _shared():
+    """A registry shared by the three plugins' copies of this module (each plugin imports its
+    own copy, so a module global is not shared): one home window per QGIS."""
+    import sys
+    import types
+    reg = sys.modules.get("_damsuite_shared_windows")
+    if reg is None:
+        reg = types.ModuleType("_damsuite_shared_windows")
+        reg.home = None
+        sys.modules["_damsuite_shared_windows"] = reg
+    return reg
+
+
+def _alive(dlg):
+    if dlg is None:
+        return False
+    try:
         try:
-            try:
-                from qgis.PyQt import sip
-            except ImportError:               # pragma: no cover
-                import sip
-            alive = not sip.isdeleted(dlg)
-        except Exception:                                        # noqa
-            alive = False
-    if not alive:
+            from qgis.PyQt import sip
+        except ImportError:               # pragma: no cover
+            import sip
+        return not sip.isdeleted(dlg)
+    except Exception:                                            # noqa
+        return False
+
+
+def open_home(plugin, iface, opened_from, parent=None):
+    """One Dam suite home window per QGIS, whichever plugin opens it (it used to be one per
+    plugin, so three identical homes could be open). Re-created when Qt destroyed it."""
+    reg = _shared()
+    dlg = reg.home if _alive(reg.home) else None
+    if dlg is None:
+        dlg = getattr(plugin, "home_dialog", None)
+        dlg = dlg if _alive(dlg) else None
+    if dlg is None:
         dlg = SuiteHomeDialog(parent=parent, iface=iface, opened_from=opened_from)
-        plugin.home_dialog = dlg
+    reg.home = dlg
+    plugin.home_dialog = dlg
     dlg.show()
     dlg.raise_()
     dlg.activateWindow()

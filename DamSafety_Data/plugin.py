@@ -305,6 +305,11 @@ class NdDataUpdaterPlugin:
         os.makedirs(self.settings.data_dir, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(self.settings.data_dir))
 
+    def run_plugin(self, *args):
+        """What the Dam suite home (and every other plugin) calls to open a plugin's window:
+        without it the home's data step did nothing. Opens the settings and status window."""
+        self.show_settings()
+
     def show_settings(self):
         if self.dialog is None:
             self.dialog = SettingsDialog(self.settings, self, self.iface.mainWindow())
