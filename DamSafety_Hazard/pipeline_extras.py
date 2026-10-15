@@ -377,7 +377,13 @@ def temporal_step(run, gov, suffix, d_eap):
             items.append((lyr, field, units))
     if not items:
         return ["Temporal animation not set up: no EAP arrival layer in the project"]
-    start = parse_start_time(cfg.get("temporal_breach_start"))
+    raw_start = str(cfg.get("temporal_breach_start") or "").strip()
+    start = parse_start_time(raw_start)
+    bad_start = bool(raw_start) and start is None
+    if bad_start:                                   # EX.8: not silently the nominal start
+        run.log(">>> WARNING: Temporal animation: breach start {!r} not understood "
+                "(YYYY-MM-DD HH:MM) - the nominal start 2000-01-01 00:00 is used".format(
+                    raw_start))
     try:
         step = float(cfg.get("temporal_step_min") or TP.DEFAULT_STEP_MIN)
     except (TypeError, ValueError):
@@ -390,8 +396,10 @@ def temporal_step(run, gov, suffix, d_eap):
     if not n:
         return ["Temporal animation not set up: " + "; ".join(msgs)]
     return ["Temporal Controller: {} layer(s) animated from the breach start ({}), step {:g} "
-            "min - the start is a nominal display time".format(
-                n, start.strftime("%Y-%m-%d %H:%M") if start else "2000-01-01 00:00", step)]
+            "min{}".format(
+                n, start.strftime("%Y-%m-%d %H:%M") if start else "2000-01-01 00:00", step,
+                "" if start else (" - the start is a nominal display time" + (
+                    " (the breach start given was not understood)" if bad_start else "")))]
 
 
 # ------------------------------------------------------------------ vintage --

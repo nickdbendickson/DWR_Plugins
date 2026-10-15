@@ -240,6 +240,12 @@ def section(parsed, prefix):
     return None, []
 
 
+def clean_nid(nid):
+    """FF.4: the NID id, or None for empty / "none" / '' / "" placeholders."""
+    s = str(nid or "").strip()
+    return s if s and s.lower() not in ("none", "''", '""') else None
+
+
 def summary_facts(parsed):
     """Classes, lives in jeopardy, NID and the optional-analysis lines from a
     parsed summary."""
@@ -1021,7 +1027,7 @@ def dam_row(folder, parent_watch=None, parent_series=None, screen_index=None, to
     # NID
     nid = read_location_nid(folder) or (log["settings"].get("subject_dam_nid") or "").strip() \
         or sf.get("nid") or ""
-    if nid and nid.lower() not in ("none", "''", '""'):
+    if clean_nid(nid):
         row["NID_ID"] = nid
     # last run
     row["Last_Run"] = log.get("finished") or (snap or {}).get("time") or \
