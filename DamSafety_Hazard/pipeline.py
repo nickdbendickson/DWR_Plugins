@@ -606,6 +606,22 @@ def _plan_sig(sc):
             _file_sig(ps.get("dem")) if ps.get("dem") else None]
 
 
+EVAL_ENV_VARS = ("ND_DAM_SUITE", "ND_DAM_OFFLINE")
+GOVERNING_RULE = ("Governing scenario: the highest ND class; a tie goes to the higher TM 11 "
+                  "lives in jeopardy (LIJ), then to the first breach scenario listed.")
+
+
+def _auto_point_sigs():
+    """point_sources="auto": the signatures of the project point layers the run would use
+    (discover_project_layers), so adding, editing or removing one is a new evaluation."""
+    try:
+        found = discover_project_layers()
+    except Exception as e:                                       # noqa
+        return ["undiscoverable", repr(e)]
+    return [[fam, _layer_sig(lyr)] for fam in ("NSI", "NDGISHUB")
+            for lyr in found.get(fam, [])]
+
+
 def evaluation_key(cfg):
     """Hash of everything that shapes the evaluation stage (rasters, input
     layers, download choices, the settings the sampling and the road / rail
@@ -622,6 +638,8 @@ def evaluation_key(cfg):
         v = cfg.get(k)
         if k == "point_sources" and isinstance(v, (list, tuple)):
             v = [[fam, _layer_sig(lyr)] for fam, lyr in v]
+        elif k == "point_sources" and v == "auto":
+            v = ["auto", _auto_point_sigs()]
         elif k == "osm_layer" and v not in (None, "auto"):
             v = _layer_sig(v)
         elif k == "local_data":
@@ -633,6 +651,9 @@ def evaluation_key(cfg):
     parts["dam_folder"] = os.path.normcase(os.path.abspath(cfg.get("dam_folder") or ""))
     from .constants import SOURCE_OVERRIDES
     parts["sources"] = sorted((k, str(v)) for k, v in SOURCE_OVERRIDES.items())
+    # the suite / offline-pack variables switch the downloads off (run_classification), so they
+    # shape the evaluation as much as a download choice does
+    parts["env"] = [os.environ.get(k, "") for k in EVAL_ENV_VARS]
     try:
         blob = json.dumps(parts, sort_keys=True, default=str)
     except Exception:
@@ -2593,10 +2614,7 @@ def _hcom_check(run, governing, d_qa, written):
             written.append(os.path.relpath(XC.write_csv(d_qa, rows), run.out))
             run.sources.append("DSS-WISE HCOM cross-check: {}".format(
                 ", ".join(os.path.basename(p) for p in files)))
-            bad = [r for r in rows if r["Ratio_plugin_to_HCOM"] is None
-                   and r["Verdict"] != "agree (both zero)" and r["Verdict"] != "not compared"
-                   or (r["Ratio_plugin_to_HCOM"] is not None
-                       and not XC.RATIO_LOW <= r["Ratio_plugin_to_HCOM"] <= XC.RATIO_HIGH)]
+            bad = [r for r in rows if XC.is_off(r.get("Verdict_code"))]
             if bad:
                 run.log(">>> NOTE: the population at risk differs from the DSS-WISE HCOM table "
                         "in {} of {} comparison(s) - see the summary / QA/{}".format(
@@ -2640,6 +2658,7 @@ def _extra_sections(run, breaches, gov, qa_rows, inputs):
     res = run.results[gov.name]
     sec = {}
     sec["method"] = ["ACER zones: {}".format(METHOD_LABEL)]
+    sec["method"].append(GOVERNING_RULE)
     c = res["conseq"]
     cons = []
     if c["value_exposed"]:
