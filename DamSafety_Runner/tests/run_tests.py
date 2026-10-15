@@ -1569,6 +1569,10 @@ def _load_extra_test_modules():
 
 
 def main():
+    try:
+        import scipy  # noqa: F401
+    except ImportError:
+        sys.exit("scipy is missing: run the tests with the QGIS Python (it ships scipy), not the system python3.")
     _load_extra_test_modules()
     run_models = "--models" in sys.argv
     todo = TESTS + (MODEL_TESTS if run_models else [])
