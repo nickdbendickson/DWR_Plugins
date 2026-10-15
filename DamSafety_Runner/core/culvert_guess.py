@@ -400,6 +400,7 @@ def match_inventory(guesses, inventory, match_m=MATCH_M):
                      if r.get("shape") and r["shape"] != shape else ""))
         if r.get("clp_inverts_ft"):
             g["plan_inverts_ft"] = r["clp_inverts_ft"]
+            g["invert_datum"] = r.get("invert_datum") or "plan"
             g["note"] += "; NDDOT plan-datum end elevations {} / {} ft (left / right; not used: " \
                 "the burn uses the LiDAR)".format(*r["clp_inverts_ft"])
         if r.get("barrel_len_ft"):
@@ -511,3 +512,27 @@ def lidar_inverts(structures, read_dem, fine_cell=1.0, radius_m=None):
         notes.append("{}: inverts {:.2f} / {:.2f} m from the LiDAR at {:g} m".format(
             s.name, inv[0], inv[1], fine_cell))
     return notes
+
+
+PLAN_DATUM_NOTE = ("plan-datum end elevations from NDDOT's original grading plans (possibly an "
+                   "old vertical datum); reported only - the burn uses LiDAR inverts")
+
+
+def report_entries(rows, burned):
+    """run_report.json "culvert_matches": one dict per matched row. NDDOT Center Line Pipes
+    matches also carry plan_inverts_ft (left, right as recorded), invert_datum "plan" and
+    plan_datum_note."""
+    out = []
+    for c in rows or []:
+        if c.get("match_m") is None:
+            continue
+        e = {"name": c["name"], "source": c["source"], "match_m": c["match_m"],
+             "width_m": c["width_m"], "height_m": c["height_m"], "barrels": c["barrels"],
+             "shape": c["shape"], "burned": bool(burned),
+             "invert_up_m": c.get("invert_up_m"), "invert_dn_m": c.get("invert_dn_m")}
+        if c.get("plan_inverts_ft"):
+            e["plan_inverts_ft"] = list(c["plan_inverts_ft"])
+            e["invert_datum"] = c.get("invert_datum") or "plan"
+            e["plan_datum_note"] = PLAN_DATUM_NOTE
+        out.append(e)
+    return out

@@ -5,5 +5,6 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Four-page setup for the DamSafety plugins: suite folder, dam, crest and inflow, then the breach run.
 about=Fills empty slots from the suite data folder and opens DamSafety Runner with the answers. Advanced settings stay editable.
-version=1.0.6
+version=1.0.7
+changelog=1.0.7 - Cross-platform (#32): explicit UTF-8 text I/O in the pack converter.
 author=N.D. Bendickson
