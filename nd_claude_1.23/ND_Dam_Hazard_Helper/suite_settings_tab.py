@@ -5,7 +5,7 @@ Screening) as a grid. The tools open with the file's values; the dialog's own cl
 options stay on their tabs and in the settings profiles (settings.py).
 
 Logic: damsuite.settings and suite_settings_tools (tested); the grid widget is suite_settings.py
-(the same file in the three plugins). Built offscreen in headless QGIS 3.34 (v2.18.13); not
+(the same file in the three plugins). Built offscreen in headless QGIS 3.34; not
 yet exercised by hand in an interactive QGIS.
 """
 import os
