@@ -288,7 +288,7 @@ def culvert_candidates(roads, path, structures=(), merge_m=CANDIDATE_MERGE_M):
 
 
 def write_candidates_csv(path, cands):
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("name,x,y,along_mi,road,angle_deg,source,surveyed\n")
         for c in cands:
             f.write('"{}",{},{},{},{},{},{},no\n'.format(c["name"], c["x"], c["y"], c["along_mi"],

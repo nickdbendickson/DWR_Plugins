@@ -293,7 +293,7 @@ def find_class(outputs):
 
 def _first_row(path):
     try:
-        with open(path, newline="") as f:
+        with open(path, newline="", encoding="utf-8") as f:
             return next(csv.DictReader(f), {})
     except (OSError, StopIteration, csv.Error):
         return {}
@@ -359,9 +359,9 @@ def classify_batch(parent, algorithm_id="", mapping=None, feedback=None, registr
 def merge_csv(breach_csv, class_csv, out_csv, key_breach="Dam", key_class=None):
     """One CSV with the breach summary and the classification of each dam.
     The class file's key column is the first of its columns named like a dam ID."""
-    with open(breach_csv, newline="") as f:
+    with open(breach_csv, newline="", encoding="utf-8") as f:
         a = list(csv.DictReader(f))
-    with open(class_csv, newline="") as f:
+    with open(class_csv, newline="", encoding="utf-8") as f:
         rd = csv.DictReader(f)
         b = list(rd)
         cols = rd.fieldnames or []
@@ -389,7 +389,7 @@ def merge_csv(breach_csv, class_csv, out_csv, key_breach="Dam", key_class=None):
         for k in r:
             if k not in fields:
                 fields.append(k)
-    with open(out_csv, "w", newline="") as f:
+    with open(out_csv, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         w.writerows(rows)

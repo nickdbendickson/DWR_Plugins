@@ -105,7 +105,7 @@ def write_snapshot(folder, snap):
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, SNAPSHOT_FILE)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
         json.dump(snap, fh, indent=1)
     os.replace(tmp, path)
     return path

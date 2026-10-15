@@ -734,7 +734,7 @@ def review_package(package, work_folder, reproduce=False, reviewer="", run=None,
             "reviewer": reviewer, "when": time.strftime("%Y-%m-%d %H:%M"), "notes": notes,
             "flags": flags}
     rpath = os.path.join(work_folder, REPORT_HTML)
-    with open(rpath, "w", encoding="utf-8") as fh:
+    with open(rpath, "w", encoding="utf-8", newline="") as fh:
         fh.write(render_html(info, items, files, chain, repro, ctx))
     for n in notes:
         _say(log, n)

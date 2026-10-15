@@ -306,7 +306,7 @@ def _layer_name(src, parameters, key):
 
 def _dam_id(folder):
     try:
-        with open(os.path.join(folder, "_breach_model", "run_report.json")) as f:
+        with open(os.path.join(folder, "_breach_model", "run_report.json"), encoding="utf-8") as f:
             rid = (json.load(f).get("dam") or {}).get("dam_id")
         if rid:
             return str(rid)
@@ -714,7 +714,7 @@ class NDHazardAlgorithm(_ToolBase):
             for key, mobile in (("svg_house", False), ("svg_mobile", True)):
                 ch = charts.charts[nh.CHART_MOBILE if mobile else nh.CHART_HOUSE]
                 pts = [s for s in wet if s.mobile == mobile]
-                with open(out[key], "w", encoding="utf-8") as f:
+                with open(out[key], "w", encoding="utf-8", newline="") as f:
                     f.write(nh.chart_svg(ch, pts, title="{}{} ({} structure(s))".format(
                         dam_id + ": " if dam_id else "", ch.title, len(pts))))
                 figures.append(OUTPUT_NAMES[key])
@@ -736,7 +736,7 @@ class NDHazardAlgorithm(_ToolBase):
         lines += ["- Sampling: " + SAMPLING]
         if figures:
             lines += ["- Chart figures: " + ", ".join(figures)]
-        with open(out["markdown"], "w", encoding="utf-8") as f:
+        with open(out["markdown"], "w", encoding="utf-8", newline="") as f:
             f.write(md + "\n".join(lines) + "\n")
         d = c.to_dict()
         d.update({"dam_id": dam_id, "dam_folder": folder, "inputs": inputs, "fields": fields,
@@ -745,7 +745,7 @@ class NDHazardAlgorithm(_ToolBase):
                   "tool": "ndbreach:ndhazardclass",
                   "official": "The official classification is made by the ND Department of "
                               "Water Resources."})
-        with open(out["json"], "w", encoding="utf-8") as f:
+        with open(out["json"], "w", encoding="utf-8", newline="") as f:
             json.dump(d, f, indent=1, default=str)
         with open(out["csv"], "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=nh.FINDING_COLUMNS)

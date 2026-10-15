@@ -289,7 +289,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
                             used, method, conf,
                             (inv / res.below_pool_m3) if inv and res.below_pool_m3 else None,
                             note.strip("; "), scale, cal_total, h_est, spill]
-                with open(os.path.join(curves, f"curve_{dam_id}.csv"), "w") as fh:
+                with open(os.path.join(curves, f"curve_{dam_id}.csv"), "w", encoding="utf-8") as fh:
                     fh.write("elev_m,storage_m3,elev_ft,storage_acft\n")     # calibrated curve
                     for e, v in curve: fh.write(f"{e:.3f},{v:.1f},{e / 0.3048:.2f},{v / 1233.48183754752:.3f}\n")
             else:

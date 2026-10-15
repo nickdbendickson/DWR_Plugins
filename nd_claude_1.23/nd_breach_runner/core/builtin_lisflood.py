@@ -50,7 +50,7 @@ class Cancelled(RuntimeError):
 
 def _read_asc(path):
     hdr = {}
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for _ in range(6):
             pos = f.tell()
             parts = f.readline().split()
@@ -75,7 +75,7 @@ def _write_asc(path, a, xll, yll, dx, fmt="%.3f"):
 def read_par(path):
     """{keyword: value or True} from a LISFLOOD-FP .par file."""
     par = {}
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.split("#", 1)[0].strip()
             if not line:
@@ -88,7 +88,7 @@ def read_par(path):
 def read_bdy(path):
     """{name: (t_s, value)} from a .bdy file (values per unit width for QVAR)."""
     out = {}
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         lines = [ln.strip() for ln in f]
     i = 1                                               # line 1 is a comment
     while i < len(lines):
@@ -113,7 +113,7 @@ def read_bdy(path):
 def read_bci(path):
     """(point sources [(x, y, name)], free edges {'N','S','E','W'})."""
     pts, free = [], set()
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             p = line.split()
             if not p:
@@ -127,7 +127,7 @@ def read_bci(path):
 
 
 def read_gauges(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         n = int(f.readline().split()[0])
         out = []
         for _ in range(n):
@@ -389,11 +389,11 @@ def run_par(par_path, progress=None, cancel=None, log=None):
                 out.append(sign * float(m.qy[a, b].sum()) * dx)
         return out
 
-    mass_f = open(root + ".mass", "w")
+    mass_f = open(root + ".mass", "w", encoding="utf-8")
     mass_f.write("Time         Tstep      MinTstep   NumTsteps    Area         Vol         "
                  "Qin         Hds        Qout          Qerror         Verror       "
                  "Rain-Inf+Evap\n")
-    dis_f = open(root + ".discharge", "w") if gauges else None
+    dis_f = open(root + ".discharge", "w", encoding="utf-8") if gauges else None
     if dis_f:
         dis_f.write("Time" + "".join("  gauge{}".format(i + 1) for i in range(len(gauges)))
                     + "\n")

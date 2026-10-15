@@ -567,7 +567,7 @@ class FindPonds(QgsProcessingAlgorithm):
                    wb_id, wb_type, "; ".join(notes)]
             o.setAttributes(row)
             sink.addFeature(o)
-            with open(os.path.join(curves, "curve_{}.csv".format(pid)), "w") as fh:
+            with open(os.path.join(curves, "curve_{}.csv".format(pid)), "w", encoding="utf-8") as fh:
                 fh.write("elev_m,storage_m3,elev_ft,storage_acft\n")
                 for e_, v_ in res.curve:
                     v_ *= curve_k                # 0.19.0: held to the DWR total storage

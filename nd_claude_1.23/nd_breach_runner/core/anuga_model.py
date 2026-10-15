@@ -159,10 +159,10 @@ def _launch(st, job, result, workdir, progress, cancel):
     env = worker_env(st.threads)
     log_path = os.path.join(workdir, "anuga.log")
     t0 = time.time()
-    with open(log_path, "w") as logf:
+    with open(log_path, "w", encoding="utf-8") as logf:
         proc = subprocess.Popen([st.python, "-u", WORKER, job, result], cwd=workdir, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                bufsize=1)
+                                bufsize=1, errors="replace")
         lines = queue.Queue()
 
         def pump():
@@ -200,7 +200,7 @@ def _launch(st, job, result, workdir, progress, cancel):
 def _tail_text(path, chars=2000):
     """The last `chars` characters of a text file ('' when it cannot be read)."""
     try:
-        with open(path, errors="replace") as f:
+        with open(path, errors="replace", encoding="utf-8") as f:
             return f.read()[-chars:]
     except OSError:
         return ""
@@ -291,7 +291,7 @@ def check_anuga(python, workdir):
             "import sys; print(getattr(anuga,'__version__','?'), sys.version.split()[0])")
     try:
         out = subprocess.run([python, "-c", code], capture_output=True, text=True, env=env,
-                             timeout=300)
+                             timeout=300, errors="replace")
     except Exception as e:
         return {"ok": False, "message": str(e)}
     if out.returncode != 0:

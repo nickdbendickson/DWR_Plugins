@@ -230,7 +230,7 @@ def geojson_polygons(polys, props):
 def write_geojson(path, features, crs=None):
     fc = {"type": "FeatureCollection", "features": features}
     fc.update(_crs_member(crs))
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(fc, f)
     return path
 

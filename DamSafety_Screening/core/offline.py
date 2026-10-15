@@ -31,7 +31,7 @@ def servers_path(gpkg):
 def write_servers(gpkg):
     path = servers_path(gpkg)
     json.dump({"servers": SERVERS, "vectors": [s["layer"] for s in VECTOR_SOURCES]},
-              open(path, "w"), indent=2)
+              open(path, "w", encoding="utf-8"), indent=2)
     return path
 
 
@@ -120,7 +120,7 @@ def download_county(gpkg, county="Eddy", feedback=None):
             if not feats:
                 notes.append("{}: no features in {}".format(src["layer"], key))
                 continue
-            with open(geo, "w") as handle:
+            with open(geo, "w", encoding="utf-8") as handle:
                 json.dump({"type": "FeatureCollection", "features": feats}, handle)
             _to_gpkg(geo, gpkg, src["layer"])
             notes.append("{}: {}".format(src["layer"], len(feats)))
@@ -160,7 +160,7 @@ def connect_package(gpkg):
     side = servers_path(gpkg)
     servers = SERVERS
     if os.path.isfile(side):
-        servers = json.load(open(side)).get("servers") or SERVERS
+        servers = json.load(open(side, encoding="utf-8")).get("servers") or SERVERS
     for s in servers:
         if s["kind"] == "xyz":
             src = "type=xyz&url={}&zmin=0&zmax=19".format(quote(s["url"], safe=":/{}"))

@@ -47,7 +47,7 @@ def load(outdir):
     unreadable)."""
     p = path_for(outdir)
     try:
-        with open(p) as fh:
+        with open(p, encoding="utf-8") as fh:
             d = json.load(fh)
         if isinstance(d, dict) and isinstance(d.get("dams"), dict):
             return {"version": d.get("version", VERSION), "dams": d["dams"],
@@ -66,7 +66,7 @@ def save(outdir, man):
         man.setdefault("dams", {})
         man["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
         tmp = path_for(outdir) + ".tmp"
-        with open(tmp, "w") as fh:
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(man, fh, indent=1, sort_keys=True)
         os.replace(tmp, path_for(outdir))
         return True

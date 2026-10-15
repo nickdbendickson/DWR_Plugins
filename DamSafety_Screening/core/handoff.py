@@ -157,7 +157,7 @@ def area_at_top_m2(curve_csv, crest_m=None, dz=0.3):
     if not curve_csv or not os.path.exists(curve_csv):
         return None
     e, v = [], []
-    with open(curve_csv) as fh:
+    with open(curve_csv, encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
             a, b = _num(row.get("elev_m")), _num(row.get("storage_m3"))
             if a is not None and b is not None:
@@ -192,7 +192,7 @@ def curve_span_m(curve_csv, crest_m=None):
     if not curve_csv or not os.path.exists(curve_csv):
         return None
     e = []
-    with open(curve_csv) as fh:
+    with open(curve_csv, encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
             a, b = _num(row.get("elev_m")), _num(row.get("storage_m3"))
             if a is not None and b is not None:
@@ -229,7 +229,7 @@ def write_runner_hydrograph(src_csv, dst_csv):
     """Tool-5 hydrograph (time_s, discharge_m3s) -> the runner's own-hydrograph CSV
     (time hr, discharge cfs). Returns (dst_csv, peak_cfs)."""
     rows = []
-    with open(src_csv) as fh:
+    with open(src_csv, encoding="utf-8") as fh:
         for i, line in enumerate(fh):
             parts = [p.strip() for p in line.split(",")]
             if len(parts) < 2:
@@ -245,7 +245,7 @@ def write_runner_hydrograph(src_csv, dst_csv):
     d = os.path.dirname(dst_csv)
     if d:
         os.makedirs(d, exist_ok=True)
-    with open(dst_csv, "w", newline="") as fh:
+    with open(dst_csv, "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["time_hr", "discharge_cfs"])
         for t, q in rows:

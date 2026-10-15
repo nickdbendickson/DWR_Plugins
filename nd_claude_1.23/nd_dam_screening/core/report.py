@@ -347,7 +347,7 @@ def dam_page(rec, map_png=None, hydro=None, impacts=(), out_path=None):
         body += f'<h2>Notes</h2><div class="card warn">{html.escape(notes)}</div>'
     page = _page(f"{rec.get('name') or rec.get('dam_id')} – breach screening", body)
     if out_path:
-        with open(out_path, "w", encoding="utf-8") as f:
+        with open(out_path, "w", encoding="utf-8", newline="") as f:
             f.write(page)
     return page
 
@@ -452,6 +452,6 @@ def summary(records, out_dir, title="ND dam breach screening – statewide summa
             + f'</tbody></table></div><h2>All dams</h2><input id="filter" type="search" placeholder="Filter by ID, name, class…" aria-label="Filter dams">'
             f'<div class="card scroll"><table>{head}<tbody>' + "".join(row(r) for r in records) + '</tbody></table></div>')
     idx = os.path.join(out_dir, "index.html")
-    with open(idx, "w", encoding="utf-8") as f:
+    with open(idx, "w", encoding="utf-8", newline="") as f:
         f.write(_page("Dam breach screening summary", body))
     return idx, csvp

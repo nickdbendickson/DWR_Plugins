@@ -629,7 +629,7 @@ def write_reports(parent, rows, srows, params, new_layer=None, prev_layer=None):
             w.writerow(r)
     out["structures_csv"] = path
     out["html"] = os.path.join(parent, HTML_FILE)
-    with open(out["html"], "w", encoding="utf-8") as fh:
+    with open(out["html"], "w", encoding="utf-8", newline="") as fh:
         fh.write(render_html(rows, parent, params, new_layer, prev_layer))
     return out
 

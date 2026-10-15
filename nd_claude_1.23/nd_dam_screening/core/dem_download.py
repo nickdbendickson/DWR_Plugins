@@ -509,7 +509,7 @@ def fetch_dwr_area(scope, county, out_dir, products, feedback=None, cache_dir=No
         _ftp_close(ftp)
     if failed:
         lst = os.path.join(out_dir, "failed_tiles.txt")
-        with open(lst, "w") as f:
+        with open(lst, "w", encoding="utf-8") as f:
             f.write("\n".join(failed) + "\n")
         raise IOError("{} of {} tile downloads failed (listed in {}). A DEM with holes is not "
                       "built; run the tool again to fetch the rest.".format(len(failed),

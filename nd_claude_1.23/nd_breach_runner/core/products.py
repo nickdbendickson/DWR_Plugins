@@ -253,13 +253,13 @@ def write_geojson(path, features, crs=None):
     fc = {"type": "FeatureCollection", "features": features}
     member = _crs_member(crs)
     fc.update(member)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(fc, f)
     # 3.20.3: a CRS with no EPSG code goes beside the file as a .prj, which QGIS, ArcGIS and
     # GDAL read for a .geojson, so the layer still lands in the right place
     if not member and _is_wkt(crs):
         try:
-            with open(os.path.splitext(path)[0] + ".prj", "w") as f:
+            with open(os.path.splitext(path)[0] + ".prj", "w", encoding="utf-8") as f:
                 f.write(str(crs).strip())
         except OSError:
             pass

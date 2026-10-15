@@ -229,7 +229,7 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
     dem = local_grid(dem_real)
     dem.write_asc(os.path.join(workdir, name + ".dem.asc"))
     xmin, ymin, xmax, ymax = dem.bounds
-    with open(os.path.join(workdir, name + ".bci"), "w") as f:
+    with open(os.path.join(workdir, name + ".bci"), "w", encoding="utf-8") as f:
         for rr, cc in cells:
             px, py = dem.xy(rr, cc)
             f.write("P {:.3f} {:.3f} QVAR breach\n".format(px, py))
@@ -251,11 +251,11 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
             raise ModelError("inflow '{}' is outside the DEM or on no-data".format(
                 src.get("name", sname)))
         extra.append((sname, sc, np.asarray(src["t_s"], float), np.asarray(src["q_cms"], float)))
-        with open(os.path.join(workdir, name + ".bci"), "a") as f:
+        with open(os.path.join(workdir, name + ".bci"), "a", encoding="utf-8") as f:
             for rr, cc in sc:
                 px, py = dem.xy(rr, cc)
                 f.write("P {:.3f} {:.3f} QVAR {}\n".format(px, py, sname))
-    with open(os.path.join(workdir, name + ".bdy"), "w") as f:
+    with open(os.path.join(workdir, name + ".bdy"), "w", encoding="utf-8") as f:
         f.write("breach hydrograph: m3/s / (cell size x {} inflow cells)\n".format(n))
         f.write("breach\n")
         f.write("{} seconds\n".format(len(t)))
@@ -298,7 +298,7 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
         lines.append("startfile {}.start".format(name))
     if st.gauges:
         xmin_l, ymin_l = dem.x0, dem.yll
-        with open(os.path.join(workdir, name + ".gauge"), "w") as f:
+        with open(os.path.join(workdir, name + ".gauge"), "w", encoding="utf-8") as f:
             f.write("{}\n".format(len(st.gauges)))
             for g in st.gauges:
                 gx, gy = g["xy"][0] - dem_real.x0, g["xy"][1] - dem_real.yll
@@ -312,7 +312,7 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
         lines.append("gaugefile {}.gauge".format(name))
     lines += list(st.extra_par)
     par = os.path.join(workdir, name + ".par")
-    with open(par, "w") as f:
+    with open(par, "w", encoding="utf-8") as f:
         f.write("# written by ND Dam Breach Runner\n")
         f.write("\n".join(lines) + "\n")
     return par
@@ -324,7 +324,7 @@ def _read_mass(path):
     interval error (m3)."""
     last_t, cum, vol, qin_max, worst = 0.0, 0.0, 0.0, 0.0, 0.0
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             next(f)
             for line in f:
                 p = line.split()
@@ -344,7 +344,7 @@ def _read_series(path):
     """The mass file as arrays (time s, domain volume m3, inflow m3/s, outflow m3/s)."""
     t, v, qi, qo = [], [], [], []
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             next(f)
             for line in f:
                 p = line.split()
@@ -399,7 +399,7 @@ def _run_builtin(workdir, par, st, progress=None, cancel=None, log=None):
     except bl.EngineError as e:
         raise ModelError("built-in engine: {}".format(e))
     finally:
-        with open(os.path.join(workdir, "lisflood.log"), "w") as f:
+        with open(os.path.join(workdir, "lisflood.log"), "w", encoding="utf-8") as f:
             f.write(bl.NAME + "\n" + "\n".join(lines) + "\n")
     return time.time() - t0
 
@@ -424,7 +424,7 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
     log_path = os.path.join(workdir, "lisflood.log")
     mass = os.path.join(workdir, "results", name + ".mass")
     t0 = time.time()
-    with open(log_path, "w") as logf:
+    with open(log_path, "w", encoding="utf-8") as logf:
         # 3.11.0: no console window on Windows
         flags = 0x08000000 if os.name == "nt" else 0
         proc = subprocess.Popen([exe, "-v", os.path.basename(par)], cwd=workdir, env=env,
@@ -439,7 +439,7 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
                 tt = _read_mass(mass)[0]   # (time is the first item)
                 progress(min(100.0, 100.0 * tt / st.sim_time_s),
                          "LISFLOOD-FP t = {:.2f} h".format(tt / 3600.0))
-    with open(log_path, errors="replace") as f:
+    with open(log_path, errors="replace", encoding="utf-8") as f:
         logtxt = f.read()
     if proc.returncode != 0:
         raise ModelError("LISFLOOD-FP stopped with code {}:\n{}".format(proc.returncode,
@@ -463,7 +463,7 @@ def read_gauges(workdir, st, name="run"):
     if not st.gauges or not os.path.exists(path):
         return {}
     rows = []
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             p = line.split()
             if len(p) == 1 + len(st.gauges):

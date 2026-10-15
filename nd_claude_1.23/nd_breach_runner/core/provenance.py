@@ -109,7 +109,7 @@ def build_manifest(tool_version, settings, dam, dam_xy, inflow_point, hydrograph
 
 
 def write_manifest(path, manifest):
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, default=str)
     return path
 
@@ -128,7 +128,7 @@ def verify_manifest(path, folder=None):
 
     The manifest's own digest, then each input and output against its recorded hash. Paths are
     tried as recorded and, when missing, relative to `folder` (the dam folder, if it moved)."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         m = json.load(f)
     problems = []
     if digest_of(m) != m.get("manifest_sha256"):

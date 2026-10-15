@@ -79,7 +79,7 @@ def _stop(p, grace_s=10.0):
 
 def _tail(path, chars=300):
     try:
-        with open(path, errors="replace") as f:
+        with open(path, errors="replace", encoding="utf-8") as f:
             return f.read()[-chars:]
     except OSError:
         return ""
@@ -94,7 +94,7 @@ def run_lisflood(exe, par, cwd, timeout_s, cancel=None, threads=1):
     t0 = time.time()
     from ..damsuite.keepawake import keep_awake
     with keep_awake("LISFLOOD-FP", log=None):
-        with open(log_path, "w") as logf:
+        with open(log_path, "w", encoding="utf-8") as logf:
             p = subprocess.Popen([exe, par], cwd=cwd, stdout=logf, stderr=subprocess.STDOUT, env=env)
             while p.poll() is None:
                 if cancel is not None and cancel():

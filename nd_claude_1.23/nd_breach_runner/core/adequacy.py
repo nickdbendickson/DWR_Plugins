@@ -455,7 +455,7 @@ def write_report(result, path):
               "pool {} ft.".format(v["start_pool_ft"], v["start_pool_rule"],
                                    v["required_residual_freeboard_ft"], v["allowed_peak_pool_ft"]),
               "", "## Notes", ""] + ["- " + n for n in result["notes"]]
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:
         f.write("\n".join(lines) + "\n")
     return path
 
