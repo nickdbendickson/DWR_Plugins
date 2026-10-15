@@ -938,11 +938,9 @@ class Extras290TabMixin(object):
             or self._start_dir290())
         if not work:
             return
-        if os.path.isdir(work) and os.listdir(work) and not os.path.isfile(
-                os.path.join(work, REP.WORK_MARKER)):
-            QMessageBox.warning(self, title, "The work folder is not empty:\n{}\n\nChoose an "
-                                "empty (or new) folder - the reproduction writes there and "
-                                "must never touch a dam's real outputs.".format(work))
+        problem = REP.work_folder_problem(work)          # RP.3: the module's own rule
+        if problem:
+            QMessageBox.warning(self, title, problem)
             return
         rasters = None
         if QMessageBox.question(

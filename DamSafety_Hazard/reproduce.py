@@ -848,11 +848,17 @@ def plan_from_package(package_folder, work_folder, rasters_folder=None, as_layer
     except Exception:
         known = None
     cfg = {}
+    unknown = []
     for k, v in (rec.get("settings") or {}).items():
-        if k in _PATH_SETTINGS or (known is not None and k not in known
-                                   and k != "settings_profile"):
+        if k in _PATH_SETTINGS:
+            continue
+        if known is not None and k not in known and k != "settings_profile":
+            unknown.append(k)                # RP.1: say so (a newer version's setting?)
             continue
         cfg[k] = v
+    if unknown:
+        notes.append("settings this version does not know were left out (the reproduction "
+                     "runs without them): {}".format(", ".join(sorted(unknown))))
     for k in list(cfg):
         if k.startswith("download_"):
             cfg[k] = False                       # never on the internet
@@ -1080,15 +1086,27 @@ def _free_path(path):
 WORK_MARKER = "_Reproduction_Work_Folder.txt"
 
 
-def _check_work_folder(work_folder):
-    """A work folder is empty, new, or one a reproduction made (WORK_MARKER):
-    never a dam's real outputs folder."""
+def work_folder_problem(work_folder):
+    """RP.3 (shared with the dialog): None when the work folder is new, empty,
+    or one a reproduction made (WORK_MARKER); otherwise the reason it is refused
+    - never a dam's real outputs folder, nor any other non-empty folder."""
     if not os.path.isdir(work_folder) or os.path.isfile(os.path.join(work_folder, WORK_MARKER)):
-        return
+        return None
     if os.path.exists(os.path.join(work_folder, "Hazard_Classification_Run_Log.txt")) or \
             os.path.isfile(os.path.join(work_folder, SUBDIR_QA, HIS.SNAPSHOT_FILE)):
-        raise ValueError("{} holds the outputs of a classification run - choose an empty work "
-                         "folder for the reproduction".format(work_folder))
+        return ("{} holds the outputs of a classification run - choose an empty work "
+                "folder for the reproduction".format(work_folder))
+    if os.listdir(work_folder):
+        return ("The work folder is not empty:\n{}\n\nChoose an empty (or new) folder - the "
+                "reproduction writes there and must never touch a dam's real "
+                "outputs.".format(work_folder))
+    return None
+
+
+def _check_work_folder(work_folder):
+    msg = work_folder_problem(work_folder)
+    if msg:
+        raise ValueError(msg)
 
 
 def extract_package(zip_path, work_folder):

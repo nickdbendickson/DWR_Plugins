@@ -2305,18 +2305,24 @@ def address_fields(rec):
             "ND_Address_Points": len(pts)}
 
 
+# PF.1: Notes texts portfolio.open_review_from_csv matches (keep them shared)
+NOTE_TYPE_SHAPE = ("ACER type from the footprint shape (possible single-wide manufactured "
+                   "home) - verify")
+NOTE_TYPE_PARK_LOT = "ACER type from a mobile-home park / lot address - verify"
+NOTE_MOBILE_OCCUPIED = ("mobile-home evidence on a building read as occupied non-residential "
+                        "- verify")
+
+
 def structure_notes(rec):
     notes = []
     if rec.get("type_conflict"):
         notes.append("sources disagree on structure type - verify")
     if rec.get("mobile_rule") == "shape":
-        notes.append("ACER type from the footprint shape (possible single-wide manufactured "
-                     "home) - verify")
+        notes.append(NOTE_TYPE_SHAPE)
     elif rec.get("mobile_rule") == "park_lot":
-        notes.append("ACER type from a mobile-home park / lot address - verify")
+        notes.append(NOTE_TYPE_PARK_LOT)
     if rec.get("mobile_occupied"):
-        notes.append("mobile-home evidence on a building read as occupied non-residential "
-                     "- verify")
+        notes.append(NOTE_MOBILE_OCCUPIED)
     if rec.get("vel_missing"):
         notes.append("velocity missing on some wet cells (used 0)")
     if rec["category"] == CAT_UNVERIFIED:
