@@ -46,7 +46,8 @@ def hhmm(hours):
     if hours is None:
         return ""
     m = int(round(float(hours) * 60.0))
-    return "{}:{:02d}".format(m // 60, m % 60)
+    sign, m = ("-" if m < 0 else ""), abs(m)          # vR16: -1.5 -> "-1:30"
+    return "{}{}:{:02d}".format(sign, m // 60, m % 60)
 
 
 def _point(geom):
@@ -316,14 +317,26 @@ def write_arrival_bands(path, depth_path, arrival_path):
         ds_d = None
 
 
+LAST_CONTOUR_PROBLEM = [""]      # vR16: why the last write_arrival_contours gave None
+
+
 def write_arrival_contours(path, arrival_path):
     """Arrival-time lines (GDAL ContourGenerateEx, fixed levels) to a
-    GeoPackage. None when GDAL cannot contour here."""
-    if not arrival_path or not hasattr(gdal, "ContourGenerateEx"):
+    GeoPackage. None when GDAL cannot contour here; the reason is in
+    LAST_CONTOUR_PROBLEM[0] (and logged)."""
+    LAST_CONTOUR_PROBLEM[0] = ""
+
+    def skip(why):
+        LAST_CONTOUR_PROBLEM[0] = why
+        log_message("EAP arrival contours not written: {}".format(why))
         return None
+    if not arrival_path:
+        return skip("no arrival-time raster")
+    if not hasattr(gdal, "ContourGenerateEx"):
+        return skip("this GDAL has no ContourGenerateEx (GDAL >= 2.4 needed)")
     drv = ogr.GetDriverByName("GPKG")
     if drv is None:
-        return None
+        return skip("no GPKG driver in this GDAL")
     path = prepare_output_path(path)
     try:
         with gdal_exceptions():
@@ -351,8 +364,7 @@ def write_arrival_contours(path, arrival_path):
             ds = lyr = band = src = None
         if not n:
             os.remove(path)
-            return None
+            return skip("no contour line at the fixed arrival levels")
         return path
     except Exception as e:
-        log_message("EAP arrival contours not written: {}".format(e))
-        return None
+        return skip(str(e) or type(e).__name__)

@@ -2575,6 +2575,9 @@ def _eap_maps(run, sc, suffix, dam_name, written, visible=False):
             forget_products(out, key)
             bands = EAP.write_arrival_bands(bpath, sc.depth, sc.arrival)
             contours = EAP.write_arrival_contours(cpath, sc.arrival)
+            if not contours and sc.arrival:
+                run.log(">>> NOTE: EAP arrival contours not written ({}): {}".format(
+                    sc.name, EAP.LAST_CONTOUR_PROBLEM[0] or "GDAL could not contour here"))
             if bands:          # (contours: none where the GDAL build cannot contour)
                 remember_products(out, key, esig, {k: v for k, v in (
                     ("bands", bands), ("contours", contours)) if v}, enormal)

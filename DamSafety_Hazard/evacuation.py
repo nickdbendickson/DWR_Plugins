@@ -366,17 +366,58 @@ def build_road_graph(road_layer, depth, arrival, transform_ctx, filter_rect=None
     return g
 
 
+DRY_RING_MAX_POINTS = 720        # vR16-EV.4: ring samples per node at most
+DRY_DISK_MAX_STEPS = 40          # ... and disk grid steps per axis at most
+
+
 def _dry_nodes(depth, nx, ny, r_units_ft, kx, ky):
-    """Nodes that are dry with a dry ring of radius r (ft) around them (8
-    points); NoData / outside the raster counts as dry."""
-    ang = np.arange(8) * (math.pi / 4.0)
-    xs = [nx] + [nx + r_units_ft * kx * math.cos(a) for a in ang]
-    ys = [ny] + [ny + r_units_ft * ky * math.sin(a) for a in ang]
+    """Nodes that are dry with a dry disk of radius r (ft) around them - the
+    "dry-safe" places of evac_dry_safe_ft (opt-in; 0 = off, the default).
+
+    vR16-EV.4: the disk is checked, not 8 ring points: the ring at a spacing of
+    at most one raster cell (up to DRY_RING_MAX_POINTS points) and the inside on
+    a square grid of at most one cell (up to DRY_DISK_MAX_STEPS steps per axis;
+    coarser only for a radius of more than ~20 cells). Inside the depth raster's
+    extent, NoData counts as WET (a hole in the model result is not proof of dry
+    ground); outside the extent the point counts as dry (beyond the model area)."""
+    nx = np.asarray(nx, dtype=np.float64)
+    ny = np.asarray(ny, dtype=np.float64)
+    rx, ry = r_units_ft * kx, r_units_ft * ky
+    try:
+        gt = depth.gt
+        cell = min(abs(gt[1]), abs(gt[5])) or max(rx, ry)
+        x0 = gt[0]
+        x1 = gt[0] + depth.xsize * gt[1]
+        y0 = gt[3]
+        y1 = gt[3] + depth.ysize * gt[5]
+        bx = (min(x0, x1), max(x0, x1))
+        by = (min(y0, y1), max(y0, y1))
+    except Exception:                              # noqa: BLE001 - a sampler without gt
+        cell, bx, by = max(rx, ry) / 4.0 or 1.0, None, None
+    r_max = max(rx, ry)
+    offs = [(0.0, 0.0)]
+    if r_max > 0:
+        n_ring = int(min(DRY_RING_MAX_POINTS, max(8, math.ceil(2 * math.pi * r_max / cell))))
+        for a in np.arange(n_ring) * (2 * math.pi / n_ring):
+            offs.append((rx * math.cos(a), ry * math.sin(a)))
+        steps = int(min(DRY_DISK_MAX_STEPS, max(2, math.ceil(2 * r_max / cell))))
+        for u in np.linspace(-1.0, 1.0, steps + 1):
+            for v in np.linspace(-1.0, 1.0, steps + 1):
+                if u * u + v * v <= 1.0 and (u, v) != (0.0, 0.0):
+                    offs.append((rx * u, ry * v))
     dry = np.ones(len(nx), dtype=bool)
-    for x, y in zip(xs, ys):
-        d = depth.values_at(x, y)
+    for dx, dy in offs:
+        idx = np.nonzero(dry)[0]
+        if not idx.size:
+            break
+        x, y = nx[idx] + dx, ny[idx] + dy
+        d = np.asarray(depth.values_at(x, y), dtype=np.float64)
         with np.errstate(invalid="ignore"):
-            dry &= ~(np.isfinite(d) & (d > 0))
+            wet = np.isfinite(d) & (d > 0)
+        if bx is not None:
+            inside = (x >= bx[0]) & (x <= bx[1]) & (y >= by[0]) & (y <= by[1])
+            wet |= inside & ~np.isfinite(d)          # NoData inside the model: wet
+        dry[idx[wet]] = False
     return dry
 
 
