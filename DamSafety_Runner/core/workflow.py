@@ -981,10 +981,11 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         warnings += [n for n in lf_env.notes if n not in warnings]
         # a finished pass has run.max / run.maxVc / run.inittm. Copy them now so a
         # growing domain still leaves depth, velocity, and arrival rasters and polygons.
-        try:
-            _write_pass_products(out_folder, dem, lf_env, arrival_m, writer, it)
-        except Exception as _e:
-            log("Could not write pass {} products: {}".format(it, _e))
+        if st.write_final:
+            try:
+                _write_pass_products(out_folder, dem, lf_env, arrival_m, writer, it)
+            except Exception as _e:
+                log("Could not write pass {} products: {}".format(it, _e))
         nodata = ~dem.valid()
         touch_n = 0
         if nodata.any():
