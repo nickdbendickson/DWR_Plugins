@@ -699,7 +699,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                   dam_xy[0] + search_rad + 30, dam_xy[1] + search_rad + 30),
                                  search_cell)
         if inflow_xy is None:
-            inflow_xy, why = terrain.find_inflow_point(local, dam_xy, h_m, top_m, rad)
+            inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
+                                                search_cell, warnings, log)
             if inflow_xy is None:
                 inflow_xy, crest, why = terrain.place_from_crest(local, dam_xy, h_m, top_m, search_rad)
                 if inflow_xy is None:
@@ -1459,7 +1460,8 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
         local = terrain_src.read((dam_xy[0] - search_rad - 30, dam_xy[1] - search_rad - 30,
                                   dam_xy[0] + search_rad + 30, dam_xy[1] + search_rad + 30),
                                  search_cell)
-        inflow_xy, why = terrain.find_inflow_point(local, dam_xy, h_m, top_m, rad)
+        inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
+                                            search_cell, warnings, lambda *_a: None)
         if inflow_xy is None:
             inflow_xy, crest, why = terrain.place_from_crest(local, dam_xy, h_m, top_m, search_rad)
             if inflow_xy is None:
@@ -1600,6 +1602,46 @@ def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, war
         if w not in warnings:
             warnings.append(w)
     return info
+
+
+def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, warnings, log):
+    """find_inflow_point limited to the downstream side of the crest and outside the pool
+    (core/terrain.downstream_direction, pool_mask). The pool needs terrain well past the
+    reservoir, so it is read on its own (POOL_HALF_M around the dam, at the search cell)."""
+    half = terrain.POOL_HALF_M
+    pool_grid = pool = direction = None
+    try:
+        pool_grid = terrain_src.read((dam_xy[0] - half, dam_xy[1] - half,
+                                      dam_xy[0] + half, dam_xy[1] + half), cell)
+        pool = pool_grid.like(terrain.pool_mask(pool_grid, h_m).astype(float), nodata=-1.0)
+    except Exception as e:                       # noqa: BLE001 - the pool is a refinement
+        log("Pool behind the dam not found ({}); the inflow search uses the side test only."
+            .format(e))
+    try:
+        crest_xy = None
+        if pool_grid is not None:
+            z = local.masked()
+            X, Y = np.meshgrid(local.x_centers(), local.y_centers())
+            near = (np.hypot(X - dam_xy[0], Y - dam_xy[1]) <= max(rad, 400.0)) & np.isfinite(z)
+            if near.any():
+                k = np.nanargmax(np.where(near, z, -np.inf))
+                crest_xy = (float(X.ravel()[k]), float(Y.ravel()[k]))
+        direction, how = terrain.downstream_direction(
+            pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
+            crest_xy=crest_xy)
+    except Exception as e:                       # noqa: BLE001
+        direction, how = None, "downstream direction failed: {}".format(e)
+    log("Downstream side of the crest: {}".format(
+        "({:.2f}, {:.2f}), {}".format(direction[0], direction[1], how) if direction else how))
+    xy, why = terrain.find_inflow_point(local, dam_xy, h_m, top_m, rad, downstream=direction,
+                                        pool=pool)
+    if why.startswith(terrain.NO_DOWNSTREAM):
+        warnings.append("Breach inflow: {}. Give the inflow point (just below the dam) if this "
+                        "is not the downstream toe.".format(why))
+        log(warnings[-1])
+    elif xy is not None and direction is not None:
+        why = "{}, downstream side ({})".format(why, how)
+    return xy, why
 
 
 def _dem_resample_of(terrain_src):
