@@ -1,5 +1,8 @@
 # Changelog
 
+## New plugin
+- **DamSafety_PMP 0.3.0 (internal, experimental):** the nd_pmp prototype is added as `DamSafety_PMP/`. Provider id `ndpmp` and settings keys `nd_pmp/*` are unchanged. The AWA data isn't included. Machine-specific paths were removed. Light tests are in `tests/run_tests.py`, and data-dependent tests skip when their inputs are missing. The OGR memory driver now falls back to "Memory" on GDAL < 3.11. Licensing: for SWC's exclusive use; get permission from SWC and AWA before redistributing.
+
 ## Repository
 - Removed the old nd_ plugins (`nd_claude_1.23/`, `nd_installed/`). They are archived on branch `archive/nd-plugins` and tag `archive-nd-plugins-20261015` (18ae1f5). The top-level `nd_breach_runner/` and `nd_dam_screening/` test aliases are kept.
 
