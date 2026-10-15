@@ -5,7 +5,8 @@ Screening) as a grid. The tools open with the file's values; the dialog's own cl
 options stay on their tabs and in the settings profiles (settings.py).
 
 Logic: damsuite.settings and suite_settings_tools (tested); the grid widget is suite_settings.py
-(the same file in the three plugins). Nothing here has been shown in a real QGIS.
+(the same file in the three plugins). Built offscreen in headless QGIS 3.34; not
+yet exercised by hand in an interactive QGIS.
 """
 import os
 
@@ -46,12 +47,22 @@ class SuiteSettingsTabMixin(object):
         row.addWidget(b)
         row.addWidget(n)
         lay.addLayout(row)
+        # status area: save failures, a refused file, a catalog that did not load (Lumo 2.7.1/2.7.3/2.7.5)
+        self.suite_settings_status = QLabel("")
+        self.suite_settings_status.setWordWrap(True)
+        try:
+            self.suite_settings_status.setStyleSheet("color: #b42318;")
+        except Exception:                                        # noqa
+            pass
+        lay.addWidget(self.suite_settings_status)
+        catalog_problem = ""
         try:
             from .processing_provider import Provider, settings_group, SETTINGS_TABS
             catalog = ST.full_catalog(Provider.original_classes(), PLUGIN_KEY, settings_group, SETTINGS_TABS)
             tabs = SETTINGS_TABS
         except Exception as e:                                   # noqa
             catalog, tabs = [], ()
+            catalog_problem = "The settings list could not be loaded, so the grid is empty: {}".format(e)
             log_message("Suite settings grid: {}".format(e))
         try:
             from .damsuite import versions as vs
@@ -62,33 +73,73 @@ class SuiteSettingsTabMixin(object):
                                           on_change=lambda _s: self._autosave_suite_settings(),
                                           on_file=self._suite_grid_file, versions=versions, tab_order=tabs)
         lay.addWidget(self.suite_grid, 1)
+        if catalog_problem:
+            self._suite_status(catalog_problem)
         p = self.suite_settings_file_edit.text().strip()
+        # the path the grid's values belong to; autosave writes only while the box shows it.
+        # A path that does not exist yet starts from the starting values (the first edit creates it).
+        self._suite_loaded_path = p if (p and not os.path.isfile(p)) else ""
         if p and os.path.isfile(p):
+            self._suite_loaded_path = p           # set first: load() fires on_change (autosave)
             try:
-                self.suite_grid.load(p, quiet=True)
+                if not self.suite_grid.load(p, quiet=True):
+                    self._suite_loaded_path = ""
             except Exception as e:                               # noqa
+                self._suite_loaded_path = ""
                 log_message("Suite settings file: {}".format(e))
+                self._suite_status("Suite settings file {} not loaded: {}".format(p, e))
         return w
+
+    def _suite_status(self, text, error=True):
+        lbl = getattr(self, "suite_settings_status", None)
+        if lbl is not None:
+            lbl.setText(text or "")
+        if text and error:
+            try:
+                from .suite_home import note_error
+                note_error(text)
+            except Exception:                                    # noqa
+                pass
 
     def _suite_settings_file_edited(self):
         from .damsuite import settings as DS
         p = self.suite_settings_file_edit.text().strip()
-        DS.set_current_path(p)
+        old = getattr(self, "_suite_loaded_path", "") or ""
+        if p == old:
+            return True
         if not p:
+            DS.set_current_path("")
             self.suite_grid.settings = DS.Settings()
             self.suite_grid.fill()
+            self._suite_loaded_path = ""
+            self._suite_status("")
             return False
         if not os.path.isfile(p):
-            QMessageBox.warning(self, "Suite settings", "The settings file does not exist: {}".format(p))
+            # Lumo 2.7.5: never make a missing file current - the grid still holds the old file's
+            # values and the next edit would autosave them into the typed path
+            self.suite_settings_file_edit.setText(old)
+            msg = "The settings file does not exist: {}. Still using {}.".format(p, old or "(none)")
+            self._suite_status(msg)
+            QMessageBox.warning(self, "Suite settings", msg)
             return False
-        return self.suite_grid.load(p)
+        self._suite_loaded_path = p               # set first: load() fires on_change (autosave)
+        if not self.suite_grid.load(p):
+            self._suite_loaded_path = old
+            self.suite_settings_file_edit.setText(old)
+            self._suite_status("{} could not be loaded. Still using {}.".format(p, old or "(none)"))
+            return False
+        DS.set_current_path(p)
+        self._suite_loaded_path = p
+        self._suite_status("", error=False)
+        return True
 
     def _pick_suite_settings_file(self):
         start = self.suite_settings_file_edit.text().strip() or ""
         p, _f = QFileDialog.getOpenFileName(self, "Settings file", start, FILE_FILTER)
-        if p:
-            self.suite_settings_file_edit.setText(p)
-            self._suite_settings_file_edited()
+        if not p:
+            return False
+        self.suite_settings_file_edit.setText(p)
+        return self._suite_settings_file_edited()
 
     def _new_suite_settings_file(self):
         from .damsuite import settings as DS
@@ -98,10 +149,14 @@ class SuiteSettingsTabMixin(object):
             return ""
         if not os.path.splitext(p)[1]:
             p += ".xlsx"
-        self.suite_settings_file_edit.setText(p)
         self.suite_grid.settings.path = p
-        self.suite_grid.save(p, name=os.path.splitext(os.path.basename(p))[0].replace("_", " "))
+        if not self.suite_grid.save(p, name=os.path.splitext(os.path.basename(p))[0].replace("_", " ")):
+            self._suite_status("The new settings file {} was not written.".format(p))
+            return ""
+        self.suite_settings_file_edit.setText(p)
         DS.set_current_path(p)
+        self._suite_loaded_path = p
+        self._suite_status("", error=False)
         return p
 
     def _suite_grid_file(self, path):
@@ -109,12 +164,20 @@ class SuiteSettingsTabMixin(object):
         if path and path != self.suite_settings_file_edit.text().strip():
             self.suite_settings_file_edit.setText(path)
         DS.set_current_path(path)
+        if path:
+            self._suite_loaded_path = path
 
     def _autosave_suite_settings(self):
         from .damsuite import settings as DS
         p = self.suite_settings_file_edit.text().strip()
         if not p:
-            return
+            return False
+        if p != (getattr(self, "_suite_loaded_path", None) or ""):
+            # Lumo 2.7.5: the box and the grid disagree - never write one file's values into another
+            self._suite_status("Not saved: the grid shows {} but the box says {}. Press Enter in the "
+                               "box or choose the file again.".format(
+                                   getattr(self, "_suite_loaded_path", "") or "(none)", p))
+            return False
         try:
             self.suite_grid.settings.path = p
             self.suite_grid.settings.save(p, catalog=self.suite_grid.catalog,
@@ -122,3 +185,13 @@ class SuiteSettingsTabMixin(object):
             DS.set_current_path(p)
         except DS.SettingsError as e:
             log_message("Suite settings not saved: {}".format(e))
+            self._suite_status("Suite settings not saved: {}".format(e))
+            return False
+        except Exception as e:                                   # noqa - never escape a Qt slot
+            log_message("Suite settings not saved ({}: {})".format(type(e).__name__, e))
+            self._suite_status("Suite settings not saved ({}: {})".format(type(e).__name__, e))
+            return False
+        if getattr(self, "suite_settings_status", None) is not None and \
+                self.suite_settings_status.text().startswith(("Suite settings not saved", "Not saved")):
+            self._suite_status("", error=False)
+        return True
