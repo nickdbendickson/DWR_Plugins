@@ -20,6 +20,7 @@ from .algorithms_consequences import ConsequencesAlgorithm, _attr, _txt
 from .algorithms_tools import _ToolBase
 from .compat import SOURCE_LINE, SOURCE_POINT, SOURCE_POLYGON, set_advanced
 from .core import consequences as cons
+from .core import aadt_join
 from .core import nd_hazard as nh
 
 OUTPUT_NAMES = {"markdown": "Hazard Classification (ND 5.2).md",
@@ -292,6 +293,16 @@ def _parts(g, to_r):
     return "point", [tf(p) for p in pts], None
 
 
+def _source_path(parameters, key):
+    """File path of a layer parameter (a path string or a layer), without the |layername part."""
+    v = parameters.get(key)
+    try:
+        v = v.source() if hasattr(v, "source") else v
+    except Exception:
+        return ""
+    return str(v).split("|")[0] if isinstance(v, str) and v else ""
+
+
 def _layer_name(src, parameters, key):
     try:
         n = src.sourceName()
@@ -412,6 +423,12 @@ class NDHazardAlgorithm(_ToolBase):
                    advanced=True)
         self._text("ROADS_MORE", "More road GeoPackages, separated by ;; "
                    "(county roads and any other individual file)", advanced=True)
+        self._text("AADT_LAYERS", "Traffic (AADT) GeoPackages joined to roads that carry no AADT, "
+                   "separated by ;; (HPMS, NDDOT traffic counts, county roads; empty = those found "
+                   "next to the roads file, as the Hazard plugin uses)", advanced=True)
+        self._num("AADT_JOIN_FT", "AADT join: a traffic line or count station within (ft) of "
+                  "the road (the starting value 100 ft is about the Hazard plugin's 30 m; a "
+                  "screening value you choose)", 100.0, minimum=3.0, advanced=True)
         self._text("LIFELINES_MORE", "More lifeline GeoPackages, separated by ;; "
                    "(nursing, care, assisted living, and any other individual file)",
                    advanced=True)
@@ -566,6 +583,7 @@ class NDHazardAlgorithm(_ToolBase):
                     interstate=is_interstate(_txt(_attr(f, fld["R_CLASS"])), name),
                     private=is_private(_attr(f, fld["R_PRIVATE"])),
                     sole_access=bool(_yesno(_attr(f, fld["R_SOLE"]))), x=s["x"], y=s["y"]))
+                self._keep_parts(rec["roads"][-1], f.geometry(), to_r)
             outside["roads"] = out_n
         # railroads
         got = self._source(parameters, context, "RAIL", RAIL_SYNONYMS, grid, crs, feedback,
@@ -711,6 +729,7 @@ class NDHazardAlgorithm(_ToolBase):
                             interstate=is_interstate(_txt(_attr(f, fld["R_CLASS"])), name),
                             private=is_private(_attr(f, fld["R_PRIVATE"])),
                             sole_access=bool(_yesno(_attr(f, fld["R_SOLE"]))), x=s["x"], y=s["y"]))
+                        self._keep_parts(rec["roads"][-1], f.geometry(), to_r)
                 else:
                     for f in feats:
                         s = self._sample(sampler, f.geometry(), to_r)
@@ -723,6 +742,55 @@ class NDHazardAlgorithm(_ToolBase):
                 outside[bucket] = outside.get(bucket, 0) + out_n
                 feedback.pushInfo("Extra {}: {} feature(s) from {} inside the rasters".format(
                     label, len(feats) - out_n, stem))
+
+    def _keep_parts(self, road, geom, to_r):
+        try:
+            kind, parts, _c = _parts(geom, to_r)
+        except Exception:
+            return
+        if kind == "line" and parts:
+            self.__dict__.setdefault("_road_parts", {})[id(road)] = parts
+
+    def _join_aadt(self, parameters, context, grid, crs, roads, feedback):
+        """DWR-3161: give roads without an AADT field value the AADT of the traffic layers the
+        Hazard plugin uses (HPMS, NDDOT counts, county roads), so 5.2.1.2 is the same check."""
+        self._aadt_log = []
+        parts = getattr(self, "_road_parts", {})
+        need = [r for r in roads if r.aadt is None and id(r) in parts]
+        if not need:
+            return
+        paths = [p.strip() for p in self._str(parameters, "AADT_LAYERS", context).split(";;")
+                 if p.strip()] or aadt_join.siblings(_source_path(parameters, "ROADS"))
+        if not paths:
+            feedback.reportError("Check: no AADT layer given or found next to the roads file; "
+                                 "{} road(s) have no AADT.".format(len(need)), fatalError=False)
+            return
+        from qgis.core import QgsCoordinateReferenceSystem, QgsPointXY
+        tc = context.transformContext()
+
+        def make_transform(srs):
+            t = QgsCoordinateTransform(QgsCoordinateReferenceSystem("EPSG:{}".format(srs)), crs, tc)
+            return lambda x, y: (lambda q: (q.x(), q.y()))(t.transform(QgsPointXY(x, y)))
+
+        def make_bbox(srs):
+            t = QgsCoordinateTransform(crs, QgsCoordinateReferenceSystem("EPSG:{}".format(srs)), tc)
+            xmin, ymin, xmax, ymax = grid.bounds
+            pts = [t.transform(QgsPointXY(x, y)) for x in (xmin, xmax) for y in (ymin, ymax)]
+            return (min(p.x() for p in pts), min(p.y() for p in pts),
+                    max(p.x() for p in pts), max(p.y() for p in pts))
+        try:
+            traffic = aadt_join.read_layers(paths, make_transform, make_bbox)
+        except Exception as ex:
+            feedback.reportError("Check: could not read the AADT layers ({}).".format(ex),
+                                 fatalError=False)
+            return
+        ft = self.parameterAsDouble(parameters, "AADT_JOIN_FT", context)
+        max_m = ft * 0.3048 if ft else aadt_join.DEFAULT_MAX_M
+        self._aadt_log = aadt_join.apply(need, parts, traffic, max_m)
+        for j in self._aadt_log:
+            feedback.pushInfo("AADT joined: {road} = {aadt:g} ({year}) from {source}".format(**j))
+        feedback.pushInfo("AADT join: {} of {} road(s) without AADT matched in {}".format(
+            len(self._aadt_log), len(need), ", ".join(os.path.basename(p) for p in paths)))
 
     def processAlgorithm(self, parameters, context, feedback):
         folder = self.parameterAsFile(parameters, "DAM_FOLDER", context)
@@ -752,11 +820,13 @@ class NDHazardAlgorithm(_ToolBase):
         dam_id = _dam_id(folder)
         crs = self._raster_crs(grid.crs_wkt)
         sampler = Sampler(grid, with_f["depth"], vel, st.wet_ft)
+        self._road_parts = {}
         rec, extra, dam_xy, inputs, fields = self._read_all(
             parameters, context, grid, crs, sampler, feedback, dam_id)
         if not inputs:
             feedback.reportError("Check: no receptor layer was given; the class can only come "
                                  "out Low.", fatalError=False)
+        self._join_aadt(parameters, context, grid, crs, rec["roads"], feedback)
         try:
             c = nh.classify(rec["structures"], rec["roads"], rec["railroads"], rec["lifelines"],
                             rec["dams"], settings=st, charts=charts)
@@ -764,15 +834,33 @@ class NDHazardAlgorithm(_ToolBase):
             raise QgsProcessingException(not_digitized_message(charts) if charts else str(ex))
         except ValueError as ex:
             raise QgsProcessingException(str(ex))
+        status = aadt_join.class_status(c.hazard_class, c.data_gaps)
+        hz = aadt_join.hazard_module_class(folder)
+        road_check = {"hazard_class_status": status, "hazard_module_class": hz,
+                      "class_to_use": hz or c.hazard_class,
+                      "aadt_joined": getattr(self, "_aadt_log", [])}
         for f in c.findings:
             if f.kind == "dam" and f.x is None and f.id in dam_xy:
                 f.x, f.y = dam_xy[f.id]
         try:
-            paths = self._write(folder, dam_id, c, rec, extra, inputs, fields, charts, grid)
+            paths = self._write(folder, dam_id, c, rec, extra, inputs, fields, charts, grid,
+                                road_check)
         except OSError as ex:
             raise QgsProcessingException("Could not write the results: {}".format(ex))
         feedback.pushInfo("Hazard class: {} ({}; {}).".format(
             c.hazard_class.upper(), nh.POLICY, nh.LETHALITY_LABELS[st.lethality]))
+        if status != aadt_join.STATUS_COMPLETE:
+            feedback.reportError("Check: hazard class {} is {}: an overtopped road has no AADT, "
+                                 "so the ND 5.2.1.2 road rule rests on an assumption.".format(
+                                     c.hazard_class.upper(), status), fatalError=False)
+        if hz:
+            msg = "Hazard plugin result ({}): {}.".format(aadt_join.HAZARD_SUMMARY, hz)
+            if hz.lower() != c.hazard_class.lower():
+                feedback.reportError("Check: this class ({}) differs from the ".format(
+                    c.hazard_class.upper()) + msg + " Use the Hazard plugin's class.",
+                    fatalError=False)
+            else:
+                feedback.pushInfo(msg + " Same class.")
         for r in c.reasons()[:30]:
             feedback.pushInfo("Governing: " + r)
         if len(c.governing) > 30:
@@ -801,7 +889,7 @@ class NDHazardAlgorithm(_ToolBase):
 
     # ------------------------------------------------------------------------------
     @staticmethod
-    def _write(folder, dam_id, c, rec, extra, inputs, fields, charts, grid):
+    def _write(folder, dam_id, c, rec, extra, inputs, fields, charts, grid, road_check=None):
         from .core import products
         out = {k: os.path.join(folder, v) for k, v in OUTPUT_NAMES.items()}
         figures = []
@@ -821,6 +909,8 @@ class NDHazardAlgorithm(_ToolBase):
                     os.remove(out[key])
                 out[key] = ""
         md = nh.markdown(c, dam_id, title="Hazard classification (ND 5.2)")
+        road_check = road_check or {}
+        md = md + aadt_join.markdown_lines(road_check) + "\n"
         lines = ["", "## Inputs", "", "- Dam folder: {}".format(folder)]
         for k in ("structures", "roads", "railroads", "lifelines", "downstream_dams"):
             if k in inputs:
@@ -840,6 +930,11 @@ class NDHazardAlgorithm(_ToolBase):
                   "sampling": SAMPLING, "figures": figures,
                   "lethality_label": nh.LETHALITY_LABELS.get(c.settings.get("lethality"), ""),
                   "tool": "ndbreach:ndhazardclass",
+                  "hazard_class_status": road_check.get("hazard_class_status",
+                                                        aadt_join.STATUS_COMPLETE),
+                  "hazard_module_class": road_check.get("hazard_module_class"),
+                  "class_to_use": road_check.get("class_to_use", c.hazard_class),
+                  "aadt_joined": road_check.get("aadt_joined") or [],
                   "official": "The official classification is made by the ND Department of "
                               "Water Resources."})
         with open(out["json"], "w", encoding="utf-8", newline="") as f:
