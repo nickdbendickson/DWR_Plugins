@@ -16,20 +16,20 @@ The inflow point moved from (-106364, 2666612) at 320.46 m to (-106264, 2666572)
 
 ## Culvert burn-in (PR #30, CULVERT_BURN_MATCHED), 10-15 ~06:3x
 
-**PR #30 branch, not merged into main.** Inventory: NDDOT bridge inventory, NTAD NBI, and NDDOT Center Line Pipes. Match distance 75 m. Source: `runs/r6pr30` and `runs/r7pr30` (run1 = burn off, run2/run3_on = burn on).
+**PR #30 branch, not merged into main. #30 is waiting on SWE's merge-conflict fix.** Inventory: NDDOT bridge inventory, NTAD NBI, and NDDOT Center Line Pipes. Match distance 75 m. Source: `runs/r6pr30` and `runs/r7pr30` (run1 = burn off, run2/run3_on = burn on).
 
 | Dam | Burn | Peak (cfs) | Flooded area (ac) | Max depth (ft) | Class (in this run) |
 |---|---|---|---|---|---|
 | Absaraka DWR-2801 | off | 25,800.5 | 6,939.5 | 9.38 | High |
 | Absaraka DWR-2801 | on | 25,800.5 | 6,939.1 | 10.13 (+0.75) | High |
-| DWR-3161 | off | 34,271.7 | 4,876.5 | 13.16 | **Medium** |
-| DWR-3161 | on | 34,271.7 | 4,870.9 | 11.74 (-1.42) | **Medium** |
+| DWR-3161 | off | 34,271.7 | 4,876.5 | 13.16 | High |
+| DWR-3161 | on | 34,271.7 | 4,870.9 | 11.74 (-1.42) | High |
 
-**Cause at DWR-3161:** one matched guess was burned in, `NDDOT CLP 205:49.5229`, 24.8 m from the guess (road 943 crossing channel 1). It's a double 3.048 m (120 in) pipe with LiDAR inverts of 561.03 m upstream and 560.98 m downstream.
+**Cause at DWR-3161:** one matched guess was burned in, `NDDOT CLP 205:49.5229`, 24.8 m from the guess (road 943 crossing channel 1). It's a double 3.048 m (120 in) pipe with LiDAR inverts of 561.03 m upstream and 560.98 m downstream. **The pipe is on route 205, which is ND-23 (confirmed).** In the NDDOT Center Line Pipes record (ROUTE_ID 205, ROUTE_MEASURE 49.5229), `HIGHWAY` = 23, `HWY_DIR` = E, `PIPE_DESC` = DOUBLE and `DIAMETER_E` = 120. HIGHWAY 23 is also one of the overtopped roads in the hazard summary (AADT 8,501).
 
-**Discrepancies:**
-- **DWR-3161 class:** both r7pr30 runs (burn off and burn on) report Medium, but the trusted baseline is High. The class change doesn't come from the burn-in. It probably comes from different hazard or receptor inputs in this run setup, which needs checking.
-- **ND-23:** the run files name the pipe by its CLP route ID (205), not as ND-23. I couldn't confirm "ND-23" from the run folders.
+**Hazard class source:** `outputs/Hazard_Classification_Summary.csv` in each dam folder is **the authoritative source for hazard class**, under the row "ND classification (screening)". For DWR-3161 it reads High in both runs: 3 overtopped roads with AADT > 2,000 [5.2.1.2], namely 39TH ST NW (AADT 10,113) twice and HIGHWAY 23 (AADT 8,501).
+
+The field `hazard_class` in `Hazard Classification (ND 5.2).json` in the dam folder (the Runner's own structures-only check, also printed as "Hazard class: MEDIUM" in the run log) is **not authoritative**. It reads Medium for DWR-3161, and an earlier draft of this log mistakenly used it.
 
 ## Open items
 - **The full re-baseline on main (plan steps 1-7) hasn't been run yet.** Don't replace the trusted baseline numbers without the user's approval.

@@ -15,7 +15,7 @@
   - On Windows, the conda env python is found at `<env>\python.exe`, which fixes ANUGA env auto-detect.
   - Subprocess output is decoded with `errors="replace"`.
   - No behaviour change on Linux/macOS. The vendored `damsuite/` copies are not yet changed.
-- **#30 (OPEN, not merged), Runner:** culvert guesses can be sized from the NDDOT/NBI inventory (CULVERT_INVENTORY, CULVERT_MATCH_M 75 m, CULVERT_BURN_MATCHED). Documented ahead of merge; see USER_GUIDE.md.
+- **#30 (OPEN, not merged), Runner:** culvert guesses can be sized from the NDDOT/NBI inventory (CULVERT_INVENTORY, CULVERT_MATCH_M 75 m, CULVERT_BURN_MATCHED). Waiting on SWE's merge-conflict fix. Documented ahead of merge; see USER_GUIDE.md.
 
 Merged pull requests, 2026-10-14 to 2026-10-15 (main at e2acb76). Merge times are UTC.
 
