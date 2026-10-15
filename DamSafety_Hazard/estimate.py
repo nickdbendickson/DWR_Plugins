@@ -536,6 +536,13 @@ def estimate(depth_path, velocity_path=None, extent_buffer_ft=None, downloads=No
                            "tiles": 0, "fresh": 0, "stale": 0, "missing": 0,
                            "note": "not estimated: {}".format(e)}
                 est["downloads"].append(row)
+            if sum(1 for r in est["downloads"] if r.get("name", "").startswith(
+                    ("HPMS_ND_", "NDDOT_traffic_counts", "ND_county_roads"))) > 1:
+                # Lumo v1.7: a run asks every HPMS year, NDDOT and the county roads; the
+                # Data tab's download (datafetch "traffic") stops at the first that answers
+                est["notes"].append("Traffic counts (HPMS years, NDDOT, county roads): counted "
+                                    "as separate downloads - an upper bound; the Data tab's "
+                                    "download stops at the first source that answers")
             for r in est["downloads"]:
                 counts["datasets"] += 1
                 counts["http_requests"] += r.get("requests", 0)

@@ -118,6 +118,7 @@ def economic_estimate(rec, curves=None):
         return rec
     total, bases, ffs, missing = 0.0, set(), [], 0
     nonres, nonres_used = 0.0, set()
+    curve_applied = False
     for u in units:
         key, basement = curve_for_occtype(u.get("occtype"))
         fh = _num(u.get("found_ht"))
@@ -144,11 +145,12 @@ def economic_estimate(rec, curves=None):
         if vcont is not None:
             cdmg = min(cdmg, vcont)
         total += vstruct * ps / 100.0 + cdmg
+        curve_applied = True
         bases.add(EGM_LABELS[key] + (" (basement: no-basement curve used)" if basement else ""))
         if fh is None:
             bases.add("foundation height unknown (0 ft used)")
     rec["ff_depth"] = max(ffs) if ffs else None
-    if any(b.startswith("EGM") for b in bases):
+    if curve_applied:          # Lumo v1.7: a flag, not the label text
         rec["damage_usd"] = total
     if nonres_used:
         rec["damage_nonres_usd"] = nonres

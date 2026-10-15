@@ -376,9 +376,16 @@ class ExtrasTabMixin(object):
         """Problems with the extra choices (for validate_all_inputs)."""
         problems = []
         if self.sens_check.isChecked():
-            from .pipeline_extras import parse_factors
+            from .pipeline_extras import factor_problems, parse_factors
             try:
-                if not parse_factors(self.sens_factors_edit.text()):
+                text = self.sens_factors_edit.text()
+                errs, warns = factor_problems(text)
+                problems.extend("Sensitivity: " + e for e in errs)
+                for w in warns:                         # Lumo v1.8: warn, do not block
+                    log_message("Sensitivity factors: " + w)
+                    if hasattr(self, "_log"):
+                        self._log("WARNING: sensitivity factors: " + w)
+                if not errs and not parse_factors(text):
                     problems.append("Sensitivity: no valid factor in the factors field")
             except Exception:
                 problems.append("Sensitivity: the factors could not be read (use numbers "
