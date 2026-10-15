@@ -1040,8 +1040,12 @@ def _evaluate(run, cfg, scenarios, breaches):
     reinterpret(structs, **rules)
     if inputs.get("parks") is not None:
         try:
-            n_park = ST.mark_mobile_parks(structs, inputs["parks"], acrs, run.ctx, clip=clip,
-                                          **rules)
+            # ST.4: pass the run's min_area / persons (not only the mobile-rule kwargs)
+            n_park = ST.mark_mobile_parks(
+                structs, inputs["parks"], acrs, run.ctx, clip=clip,
+                min_area_ft2=float(cfg["min_area_ft2"]),
+                persons_per_dwelling=int(cfg["persons_per_dwelling"]),
+                **rules)
             run.log(">>> {} structure(s) inside an OpenStreetMap mobile-home park".format(n_park))
         except CancelledByUser:
             raise
@@ -1381,6 +1385,9 @@ def _classify_and_write(run, cfg, state):
             n_rev, os.path.basename(store.path)))
     reinterpret(structs, float(cfg["min_area_ft2"]), int(cfg["persons_per_dwelling"]),
                 **ST.mobile_rules_from_cfg(cfg))
+    # ST.1: reinterpret restores persons on every habitable record; re-collapse so
+    # multi-outline extras stay at 0 persons (consequences / access also skip them)
+    ST.collapse_dwellings(structs)
     _parcel_hints_step(run, cfg, structs, acrs)
 
     # ---- v2.7: the engineer's depth-damage curves for non-residential structures ----
