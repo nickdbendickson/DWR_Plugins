@@ -298,7 +298,7 @@ def _write_us_rasters(outdir, dam_id, r):
                      nodata=gu.NODATA if key == "arrive_h" else None)
         wrote.append(name)
     if wrote:
-        with open(os.path.join(dest, "UNITS.txt"), "w") as f:
+        with open(os.path.join(dest, "UNITS.txt"), "w", encoding="utf-8") as f:
             f.write("Depth (Max).tif: feet\n"
                     "Velocity (Max).tif: ft/s\n"
                     "D x V (Max).tif: ft^2/s\n"

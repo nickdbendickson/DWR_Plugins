@@ -55,5 +55,5 @@ def convert_pack(src, dest):
         written.append(name)
         lines.append(name + ".gpkg")
     ds = None
-    open(os.path.join(dest, "LAYERS.txt"), "w").write("\n".join(lines) + "\n")
+    open(os.path.join(dest, "LAYERS.txt"), "w", encoding="utf-8").write("\n".join(lines) + "\n")
     return "Wrote {} layer(s) to {}. Use this as the suite data folder.".format(len(written), dest)

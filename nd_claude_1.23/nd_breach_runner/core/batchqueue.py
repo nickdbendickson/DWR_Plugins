@@ -127,7 +127,7 @@ def save(q, path=""):
     os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
     q["updated"] = _now()
     tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
         json.dump(q, fh, indent=1)
     os.replace(tmp, p)
     return p

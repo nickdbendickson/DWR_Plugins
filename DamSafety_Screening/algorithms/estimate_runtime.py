@@ -153,7 +153,7 @@ class EstimateRuntime(QgsProcessingAlgorithm):
                        "cells": sum(r["cells"] for r in rows), "workers": workers, "engine": engine,
                        "serial_typical_s": float(sum(r["typical_s"] for r in rows))})
         os.makedirs(os.path.dirname(out_csv) or ".", exist_ok=True)
-        with open(out_csv, "w", newline="") as fh:
+        with open(out_csv, "w", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=est.CSV_COLUMNS)
             w.writeheader()
             for r in est.rows_for_csv(rows):

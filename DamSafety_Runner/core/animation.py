@@ -582,7 +582,7 @@ def write_grid_sidecar(npz_path, grid, t_ref_hr=0.0, dam_xy=None, title=""):
          "crs_wkt": grid.crs_wkt, "t_ref_hr": float(t_ref_hr or 0.0),
          "dam_xy": [float(dam_xy[0]), float(dam_xy[1])] if dam_xy is not None else None,
          "title": title or ""}
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8") as f:
         json.dump(d, f, indent=1)
     return p
 
@@ -592,7 +592,7 @@ def read_grid_sidecar(npz_path):
     if not os.path.exists(p):
         return {}
     try:
-        with open(p) as f:
+        with open(p, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
@@ -1079,7 +1079,7 @@ def write_frame_index(out_dir, names, hours, times_s, t_ref_hr=0.0):
            "t_ref_hr": float(t_ref_hr or 0.0), "units": "ft",
            "interval_hr": dt, "frames": frames}
     p = os.path.join(out_dir, "Depth frames.json")
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8") as f:
         json.dump(idx, f, indent=1)
     return p
 
@@ -1087,7 +1087,7 @@ def write_frame_index(out_dir, names, hours, times_s, t_ref_hr=0.0):
 def temporal_ranges(index_path, base):
     """[(GeoTIFF path, start datetime, end datetime)] from a frame index and the
     date-time that stands for breach initiation."""
-    with open(index_path) as f:
+    with open(index_path, encoding="utf-8") as f:
         idx = json.load(f)
     folder = os.path.dirname(index_path)
     out = []

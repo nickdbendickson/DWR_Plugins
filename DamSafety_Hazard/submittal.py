@@ -356,14 +356,14 @@ def build(out_folder, dam_name=None, zip_it=True, include_gis=False, dest_root=N
         enclosures = [r["Description"] for r in rows if r["Path"].startswith(
             ("01_Report", "04_EAP")) or "Review_Decisions" in r["Path"]
             or "Run_Log" in r["Path"]]
-        with open(os.path.join(folder, COVER_NAME), "w", encoding="utf-8") as fh:
+        with open(os.path.join(folder, COVER_NAME), "w", encoding="utf-8", newline="") as fh:
             fh.write(cover_letter(result, dam, enclosures))
         with open(os.path.join(folder, MANIFEST_NAME), "w", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=["Path", "Description", "Size_bytes", "SHA256",
                                                "Source_modified"])
             w.writeheader()
             w.writerows(rows)
-        with open(os.path.join(folder, README_NAME), "w", encoding="utf-8") as fh:
+        with open(os.path.join(folder, README_NAME), "w", encoding="utf-8", newline="") as fh:
             fh.write(readme(dam, result, rows, time.strftime("%Y-%m-%d %H:%M"), prof, data,
                             chain=_chain_line(out_folder)))
         zpath = None

@@ -163,11 +163,11 @@ def write_hydrograph_files(hy, folder, dt_min=DEFAULT_STEP_MIN, stem="HECRAS Bre
     t_hr, q_cfs, info = resample_hydrograph(hy, dt_min)
     os.makedirs(folder, exist_ok=True)
     txt = os.path.join(folder, stem + ".txt")
-    with open(txt, "w") as f:
+    with open(txt, "w", encoding="utf-8", newline="") as f:
         f.write(flow_hydrograph_block(q_cfs, interval=info["interval"] if include_interval
                                       else None))
     csv_path = os.path.join(folder, stem + ".csv")
-    with open(csv_path, "w") as f:
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
         f.write("time_hr,discharge_cfs\n")
         for t, q in zip(t_hr, q_cfs):
             f.write("{:.5f},{:.2f}\n".format(t, q))
@@ -307,7 +307,7 @@ def write_breach_table(dam, params, folder, stem="HECRAS Breach Parameters", pea
     rows = breach_parameter_rows(dam, params, peak_cfs)
     os.makedirs(folder, exist_ok=True)
     csv_path = os.path.join(folder, stem + ".csv")
-    with open(csv_path, "w", newline="") as f:
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["item", "value", "units", "basis", "note"])
         for r in rows:
@@ -331,7 +331,7 @@ def write_breach_table(dam, params, folder, stem="HECRAS Breach Parameters", pea
         md += ["", "Notes from the run:", ""] + ["- " + cell(n) for n in notes]
     md.append("")
     md_path = os.path.join(folder, stem + ".md")
-    with open(md_path, "w", encoding="utf-8") as f:
+    with open(md_path, "w", encoding="utf-8", newline="") as f:
         f.write("\n".join(md))
     return {"csv": csv_path, "md": md_path, "rows": rows}
 
@@ -348,7 +348,7 @@ def load_run(dam_folder, model_folder=MODEL_FOLDER):
     if missing:
         raise HecRasError("Not a finished breach run: missing {}".format(
             ", ".join(missing)))
-    with open(rep_path) as f:
+    with open(rep_path, encoding="utf-8") as f:
         report = json.load(f)
     if "dam" not in report or "hydrograph" not in report:
         raise HecRasError("{} has no 'dam' and 'hydrograph' entries".format(rep_path))
@@ -384,7 +384,7 @@ def _trace_xy(dam_folder, model_folder):
     dam = inflow = None
     line = []
     if os.path.isfile(geo):
-        fc = json.load(open(geo))
+        fc = json.load(open(geo, encoding="utf-8"))
         for f in fc.get("features") or []:
             g = f.get("geometry") or {}
             what = (f.get("properties") or {}).get("what")
@@ -397,7 +397,7 @@ def _trace_xy(dam_folder, model_folder):
     if not line:
         csvp = os.path.join(model, "flow_trace.csv")
         if os.path.isfile(csvp):
-            for row in open(csvp):
+            for row in open(csvp, encoding="utf-8"):
                 parts = row.strip().split(",")
                 if len(parts) < 2 or parts[0] == "x":
                     continue
@@ -456,7 +456,7 @@ def write_ras_project(dam_folder, out, hydro, dam, params, model_folder=MODEL_FO
                           "geometry": {"type": "Polygon", "coordinates": [cell]}})
     json.dump({"type": "FeatureCollection",
                "crs": {"type": "name", "properties": {"name": epsg}},
-               "features": feats}, open(mesh, "w"))
+               "features": feats}, open(mesh, "w", encoding="utf-8"))
     json.dump({"type": "FeatureCollection", "features": [
         {"type": "Feature", "properties": {"what": "2D area"},
          "geometry": {"type": "Polygon", "coordinates": [ring]}},
@@ -464,11 +464,11 @@ def write_ras_project(dam_folder, out, hydro, dam, params, model_folder=MODEL_FO
          "geometry": {"type": "LineString", "coordinates": line}},
         {"type": "Feature", "properties": {"what": "dam breakline"},
          "geometry": {"type": "LineString", "coordinates": list(dam_line)}},
-    ]}, open(os.path.join(out, "geometry.geojson"), "w"))
+    ]}, open(os.path.join(out, "geometry.geojson"), "w", encoding="utf-8"))
     def xy_block(pts):
         return "\n".join("{:.3f} {:.3f}".format(x, y) for x, y in pts)
     geom = os.path.join(out, name + ".g01")
-    with open(geom, "w") as f:
+    with open(geom, "w", encoding="utf-8", newline="") as f:
         f.write("Geom Title={}\nProgram Version=6.31\n".format(name))
         f.write("Viewing Rectangle={:.3f},{:.3f},{:.3f},{:.3f}\n\n".format(xmin, xmax, ymin, ymax))
         f.write("2D Flow Area Name={}\n2D Flow Area Cell Size={:.3f}\n".format(sa, cell_m))
@@ -482,35 +482,35 @@ def write_ras_project(dam_folder, out, hydro, dam, params, model_folder=MODEL_FO
         f.write("BC Line Name=Inflow\nBC Line SA={}\nBC Line= 2\n".format(sa) + xy_block(bc_up) + "\n\n")
         f.write("BC Line Name=Downstream\nBC Line SA={}\nBC Line= 2\n".format(sa) + xy_block(bc_dn) + "\n")
     # unsteady: hydrograph on the inflow line, normal depth downstream
-    block = open(hydro["txt"]).read()
+    block = open(hydro["txt"], encoding="utf-8").read()
     hours = hydro["info"].get("duration_hr") or hydro["info"].get("hours") or 12
     unsteady = os.path.join(out, name + ".u01")
-    with open(unsteady, "w") as f:
+    with open(unsteady, "w", encoding="utf-8", newline="") as f:
         f.write("Flow Title={}\nProgram Version=6.31\n".format(name))
         f.write("Boundary Location={},Inflow\n".format(sa))
         f.write(block)
         f.write("Boundary Location={},Downstream\nFriction Slope=0.001,0\n".format(sa))
         f.write("Use Fixed Start Time\nFixed Start Date/Time=01Jan2024,0000\n")
     plan = os.path.join(out, name + ".p01")
-    with open(plan, "w") as f:
+    with open(plan, "w", encoding="utf-8", newline="") as f:
         f.write("Plan Title={}\nProgram Version=6.31\nShort Identifier=Breach\n".format(name))
         f.write("Simulation Date=01Jan2024,0000,01Jan2024,{:02d}00\n".format(min(23, int(hours) + 1)))
         f.write("Computation Interval=1MIN\nOutput Interval=15MIN\nMapping Interval=15MIN\n")
         f.write("Geometry File={}.g01\nFlow File={}.u01\n".format(name, name))
         f.write("SI Units\n")
     prj = os.path.join(out, name + ".prj")
-    with open(prj, "w") as f:
+    with open(prj, "w", encoding="utf-8", newline="") as f:
         f.write("Proj Title={}\nCurrent Plan=p01\nDefault Exp/Contr=0.1,0.3\n".format(name))
         f.write("SI Units\n")
         f.write("Geom File={}.g01\nUnsteady File={}.u01\nPlan File={}.p01\n".format(name, name, name))
     rasmap = os.path.join(out, name + ".rasmap")
-    with open(rasmap, "w") as f:
+    with open(rasmap, "w", encoding="utf-8", newline="") as f:
         f.write("<RASMapper>\n  <Terrains>\n    <Layer Name=\"Terrain\" Type=\"TerrainLayer\" Filename=\"terrain.tif\"/>\n  </Terrains>\n")
         f.write("  <Geometries>\n    <Layer Name=\"Geometry\" Type=\"GeometryLayer\" Filename=\"{}.g01\"/>\n  </Geometries>\n</RASMapper>\n".format(name))
     n_struct = _write_structures(dam_folder, model_folder, out, geom, name, river=line, sa=sa)
     terrain, epsg = _terrain_clip(dam_folder, model_folder, out, xmin, ymin, xmax, ymax)
     note = os.path.join(out, "HECRAS_README.txt")
-    with open(note, "w") as f:
+    with open(note, "w", encoding="utf-8", newline="") as f:
         f.write("CRS: {}. Set HEC-RAS to SI before computing.\n".format(epsg or "the run CRS"))
         f.write("2D area, cell {:.0f} m, {} cells in mesh.geojson.\n".format(cell_m, nx * ny))
         f.write("River centerline is the breach flow path. Dam is a breakline. Inflow is the breach hydrograph.\n")
@@ -1205,7 +1205,7 @@ def _write_structures(dam_folder, model_folder, out, geom, name, river=None, sa=
     src = os.path.join(dam_folder, model_folder, "structures.json")
     rows = []
     if os.path.isfile(src):
-        rows = json.load(open(src)) or []
+        rows = json.load(open(src, encoding="utf-8")) or []
         for s in rows:
             if "source" not in s:
                 s["source"] = "runner"
@@ -1228,7 +1228,7 @@ def _write_structures(dam_folder, model_folder, out, geom, name, river=None, sa=
     if not rows:
         return 0
     csv_path = os.path.join(out, "structures.csv")
-    with open(csv_path, "w") as f:
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
         f.write("name,kind,shape,barrels,width_m,height_m,source,surveyed,x1,y1,x2,y2,note\n")
         for s in rows:
             line = [] if s.get("line") is None else list(s.get("line"))  # may be an ndarray
@@ -1239,7 +1239,7 @@ def _write_structures(dam_folder, model_folder, out, geom, name, river=None, sa=
                 s.get("width_m"), s.get("height_m"), s.get("source") or "runner",
                 "yes" if s.get("surveyed") else "no", a[0], a[1], b[0], b[1],
                 s.get("note") or ""))
-    with open(geom, "a") as f:
+    with open(geom, "a", encoding="utf-8", newline="") as f:
         f.write("\n")
         for i, s in enumerate(rows, 1):
             line = [] if s.get("line") is None else list(s.get("line"))  # may be an ndarray
@@ -1276,7 +1276,7 @@ def _road_lines(dam_folder, model_folder):
         if not os.path.isfile(path):
             continue
         try:
-            fc = json.load(open(path))
+            fc = json.load(open(path, encoding="utf-8"))
         except (OSError, ValueError):
             return []
         lines = []

@@ -470,7 +470,7 @@ def run_sensitivity(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=
 def _load_params(base):
     import json
     try:
-        with open(base.report_json) as f:
+        with open(base.report_json, encoding="utf-8") as f:
             return json.load(f).get("hydrograph", {})
     except (OSError, ValueError):
         return {}
@@ -486,7 +486,7 @@ CSV_FIELDS = ["case", "group", "method", "cell_m", "peak_cfs", "flooded_ac",
 
 def write_outputs(out, st):
     out.summary_csv = os.path.join(out.folder, "Sensitivity_Summary.csv")
-    with open(out.summary_csv, "w", newline="") as f:
+    with open(out.summary_csv, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
         w.writeheader()
         w.writerows(out.rows)
@@ -523,5 +523,5 @@ def write_outputs(out, st):
     md += ["", "## Rasters", ""] + ["- {}".format(p) for p in out.envelope.values()]
     from . import products
     out.report_html = os.path.join(out.folder, "Sensitivity_Report.html")
-    with open(out.report_html, "w", encoding="utf-8") as f:
+    with open(out.report_html, "w", encoding="utf-8", newline="") as f:
         f.write(products.markdown_to_html("\n".join(md), "Sensitivity of the breach model"))

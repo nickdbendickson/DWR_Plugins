@@ -1750,7 +1750,7 @@ class BatchAlgorithm(_Base):
             if ex is not None:
                 ex.shutdown(wait=True, cancel_futures=True)
         path = os.path.join(parent, "Batch_Breach_Runs.csv")
-        with open(path, "w", newline="") as f:
+        with open(path, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=BATCH_FIELDS)
             w.writeheader()
             w.writerows(rows)
@@ -1952,7 +1952,7 @@ class HydrographAlgorithm(_Base):
         try:
             from .core import products
             svg = os.path.splitext(out)[0] + ".svg"
-            with open(svg, "w", encoding="utf-8") as f:
+            with open(svg, "w", encoding="utf-8", newline="") as f:
                 f.write(products.hydrograph_plot(hy))
             feedback.pushInfo("Plot: " + svg)
         except Exception as e:

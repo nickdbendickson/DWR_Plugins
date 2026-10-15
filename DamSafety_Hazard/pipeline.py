@@ -1711,7 +1711,7 @@ def _classify_and_write(run, cfg, state):
             for rr in candidates:
                 if not os.path.isfile(rr):
                     continue
-                with open(rr) as f:
+                with open(rr, encoding="utf-8") as f:
                     rdata = json.load(f)
                 if isinstance(rdata, dict) and rdata.get("cut_off"):
                     extra["cut_off"] = rdata["cut_off"]

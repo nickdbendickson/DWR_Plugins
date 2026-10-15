@@ -284,5 +284,5 @@ def _report(out, fail_rule, st):
         lines += ["", "## Check these", ""] + ["- " + w for w in out.warnings]
     lines += [""]
     out.report_md = os.path.join(out.folder, "Cascade_Report.md")
-    with open(out.report_md, "w") as f:
+    with open(out.report_md, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

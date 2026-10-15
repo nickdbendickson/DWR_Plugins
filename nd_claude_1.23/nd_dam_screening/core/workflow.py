@@ -613,7 +613,7 @@ def county_clip(work, settings, prepare=False):
     stamp = target + ".json"
     if prepare:
         try:
-            with open(stamp) as fh:
+            with open(stamp, encoding="utf-8") as fh:
                 same = json.load(fh).get("counties") == counties and os.path.isfile(target)
         except (OSError, ValueError):
             same = False
@@ -623,7 +623,7 @@ def county_clip(work, settings, prepare=False):
                 os.remove(target)
             _ds("damdata").write_features(target, "county", cty.features(counties),
                                           "ND county outlines (nd_counties.geojson)")
-            with open(stamp, "w") as fh:
+            with open(stamp, "w", encoding="utf-8") as fh:
                 json.dump({"counties": counties}, fh)
     return "{}|layername=county".format(target)
 
@@ -770,7 +770,7 @@ def _keep_clip(target, box, kind, newer_than, exact=False):
         if not os.path.isfile(target):
             return False
         try:
-            with open(target + ".box.json") as fh:
+            with open(target + ".box.json", encoding="utf-8") as fh:
                 d = json.load(fh)
             had, was = d.get("box"), d.get("from", "pack")
         except (OSError, ValueError):
@@ -790,7 +790,7 @@ def _keep_clip(target, box, kind, newer_than, exact=False):
 
 def _write_box(target, box, kind):
     try:
-        with open(target + ".box.json", "w") as fh:
+        with open(target + ".box.json", "w", encoding="utf-8") as fh:
             json.dump({"box": list(box), "from": kind}, fh)
     except OSError:
         pass

@@ -230,7 +230,7 @@ def write_location_file(folder, lon=None, lat=None, x=None, y=None, crs=None, ni
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, LOCATION_JSON)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
         json.dump(data, fh, indent=1)
     os.replace(tmp, path)
     return path
@@ -979,7 +979,7 @@ def _html(res, title="Dams in series", rows=None, dams=None, chains=None):
 def write_html(res, folder, filename=HTML_FILE):
     os.makedirs(folder, exist_ok=True)
     path = prepare_output_path(os.path.join(folder, filename))
-    with open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w", encoding="utf-8", newline="") as fh:
         fh.write(_html(res))
     return path
 
@@ -1031,6 +1031,6 @@ def _write_html_sub(sub, folder, dam, rows, chains, res):
     sub.rows, sub.dams, sub.chains = rows, [d for d in res.dams if d["Dam"] == dam], chains
     os.makedirs(folder, exist_ok=True)
     path = prepare_output_path(os.path.join(folder, HTML_FILE))
-    with open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w", encoding="utf-8", newline="") as fh:
         fh.write(_html(sub, "Dams in series - {}".format(dam), rows, sub.dams, chains))
     return path

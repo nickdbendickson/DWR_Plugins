@@ -1360,7 +1360,7 @@ def cmd_hydrograph(args):
     try:
         products = importlib.import_module(PKG + ".core.products")
         svg = os.path.splitext(out)[0] + ".svg"
-        with open(svg, "w", encoding="utf-8") as f:
+        with open(svg, "w", encoding="utf-8", newline="") as f:
             f.write(products.hydrograph_plot(hy))
         say("Plot: " + svg)
     except Exception as e:
@@ -1454,7 +1454,7 @@ def cmd_setup_anuga(args):
 def cmd_template(args):
     text = template_text()
     if args.output_file:
-        with open(args.output_file, "w", encoding="utf-8") as f:
+        with open(args.output_file, "w", encoding="utf-8", newline="") as f:
             f.write(text)
         say("Wrote " + args.output_file)
     else:

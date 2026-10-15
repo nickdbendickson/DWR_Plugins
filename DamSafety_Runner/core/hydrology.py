@@ -135,7 +135,7 @@ def read_cumulative_csv(path):
     x = time / last time; F starts at 0, never decreases and ends at 1."""
     t, f = [], []
     try:
-        fh = open(path)
+        fh = open(path, encoding="utf-8")
     except OSError as e:
         raise HydrologyError("cannot read the temporal distribution CSV: {}".format(e))
     with fh:

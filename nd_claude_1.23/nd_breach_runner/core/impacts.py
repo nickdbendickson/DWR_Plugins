@@ -208,7 +208,7 @@ def summarize(rec, grid, final, arrival_m, dv_limit=DV_DANGER_FT2S):
 
 
 def write_rows(path, rows):
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["id", "kind", "x", "y", "depth_ft", "velocity_fps",
                                           "arrival_hr"])
         w.writeheader()

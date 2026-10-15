@@ -215,7 +215,7 @@ def flatten_metrics(metrics):
 
 
 def write_summary_csv(path, metrics):
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["metric", "value"])
         w.writerows(flatten_metrics(metrics))
@@ -283,7 +283,7 @@ ALL_COLUMNS = ["dam_id", "scenario", "fit_index_F", "hit_rate", "false_alarm_rat
 
 
 def write_all_csv(path, rows):
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=ALL_COLUMNS)
         w.writeheader()
         for r in rows:

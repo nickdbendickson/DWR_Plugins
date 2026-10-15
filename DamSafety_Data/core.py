@@ -194,7 +194,7 @@ class HttpFileSource(Source):
         version = remote_version
         sha256 = file_hash(path, "sha256")
         feedback.log(f"{self.name}: SHA-256 of the download {sha256}")
-        with open(os.path.join(staging_dir, self.filename + ".sha256"), "w") as f:
+        with open(os.path.join(staging_dir, self.filename + ".sha256"), "w", encoding="utf-8") as f:
             f.write(f"{sha256}  {self.filename}  {self.url}\n")
         if self.version_mode == "md5" and not getattr(self, "_md5_missing", False):
             actual = "md5:" + file_hash(path, "md5")
@@ -258,7 +258,7 @@ class GitHubRepoSource(Source):
         for name in os.listdir(top):
             shutil.move(os.path.join(top, name), os.path.join(staging_dir, name))
         shutil.rmtree(unpack, ignore_errors=True)
-        with open(os.path.join(staging_dir, "COMMIT.txt"), "w") as f:
+        with open(os.path.join(staging_dir, "COMMIT.txt"), "w", encoding="utf-8") as f:
             f.write(f"{self.owner}/{self.repo}@{ref}\n")
         return remote_version or ("git:" + ref)
 
@@ -596,7 +596,7 @@ class OvertureSource(Source):
                 "-o", out_geojson,
             ]
             feedback.log(f"Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, errors="replace")
             if result.returncode != 0:
                 raise UpdateError(f"overturemaps CLI failed: {result.stderr[:500]}")
         else:
@@ -688,7 +688,7 @@ class ArcGISFeatureSource(Source):
         }
         offset = 0
         total = 0
-        with open(out_ndjson, "w") as fh:
+        with open(out_ndjson, "w", encoding="utf-8") as fh:
             while True:
                 feedback.check_cancelled()
                 params = dict(params_base)
@@ -733,7 +733,7 @@ class ArcGISFeatureSource(Source):
             # Fall back to a FeatureCollection GeoJSON (may be large)
             feedback.log(f"{self.name}: ogr2ogr not found; keeping NDJSON (GeoJSONSeq)")
             # Optionally write a small sidecar note
-            with open(os.path.join(staging_dir, "README.txt"), "w") as note:
+            with open(os.path.join(staging_dir, "README.txt"), "w", encoding="utf-8") as note:
                 note.write(
                     f"{self.layer_name}.ndjson is a newline-delimited GeoJSON "
                     f"(GeoJSONSeq). Load with GDAL GeoJSONSeq driver or QGIS.\n"

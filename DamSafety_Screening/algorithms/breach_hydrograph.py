@@ -123,7 +123,7 @@ class BreachHydrograph(QgsProcessingAlgorithm):
 
     @staticmethod
     def _read_curve(path):
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             rows = list(csv.DictReader(fh))
         return [float(r["elev_m"]) for r in rows], [float(r["storage_m3"]) for r in rows]
 
@@ -131,7 +131,7 @@ class BreachHydrograph(QgsProcessingAlgorithm):
     def _write_csv(path, t, q):
         idx = np.unique(np.concatenate((np.linspace(0, len(t) - 1, min(len(t), 600)).astype(int),
                                         [int(np.argmax(q))])))
-        with open(path, "w", newline="") as fh:
+        with open(path, "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh); w.writerow(["time_s", "discharge_m3s"])
             for i in idx: w.writerow([f"{t[i]:.1f}", f"{q[i]:.3f}"])
 

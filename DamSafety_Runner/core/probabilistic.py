@@ -677,7 +677,7 @@ def _stable(v):
 
 def _read_json(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError, TypeError):
         return {}
@@ -685,7 +685,7 @@ def _read_json(path):
 
 def _write_json(path, obj):
     tmp = path + ".part"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
         json.dump(obj, f, indent=1, default=workflow._json_default)
     os.replace(tmp, path)
 
@@ -1294,7 +1294,7 @@ def write_outputs(out, st, dam, grid, stats, thresholds_ft, rep, plan, t_study):
     base_vals = _base_values(out.base, rep)
     # per-run table
     out.runs_csv = os.path.join(out.folder, "Probabilistic_Runs.csv")
-    with open(out.runs_csv, "w", newline="") as f:
+    with open(out.runs_csv, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=RUN_FIELDS, extrasaction="ignore")
         w.writeheader()
         for r in out.rows:
@@ -1321,7 +1321,7 @@ def write_outputs(out, st, dam, grid, stats, thresholds_ft, rep, plan, t_study):
         extra.append({"metric": "hazard class = {}".format(c), "unit": "share of runs",
                       "runs": len(cls), "mean": round(cls.count(c) / float(len(cls)), 4)})
     out.summary_csv = os.path.join(out.folder, "Probabilistic_Summary.csv")
-    with open(out.summary_csv, "w", newline="") as f:
+    with open(out.summary_csv, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=SUMMARY_FIELDS, extrasaction="ignore")
         w.writeheader()
         w.writerows(srows + extra)
@@ -1351,7 +1351,7 @@ def write_outputs(out, st, dam, grid, stats, thresholds_ft, rep, plan, t_study):
             out.receptors_csv = os.path.join(out.folder, "Probabilistic_Receptors.csv")
             fields = (["id", "x", "y"] + ["p_depth_ge_{:g}ft".format(t) for t in thresholds_ft]
                       + ["depth_p50_ft", "depth_p90_ft", "arrival_p10_hr"])
-            with open(out.receptors_csv, "w", newline="") as f:
+            with open(out.receptors_csv, "w", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(f, fieldnames=fields)
                 w.writeheader()
                 w.writerows(rec_rows)
@@ -1366,7 +1366,7 @@ def write_outputs(out, st, dam, grid, stats, thresholds_ft, rep, plan, t_study):
             "Flooded area as runs are added", xlabel="Number of runs",
             ylabel="Flooded area (ac)")
         out.convergence_svg = os.path.join(out.folder, "Probabilistic_Convergence.svg")
-        with open(out.convergence_svg, "w", encoding="utf-8") as f:
+        with open(out.convergence_svg, "w", encoding="utf-8", newline="") as f:
             f.write(svg)
         if len(fl) >= 10:
             h = len(fl) // 2
@@ -1511,10 +1511,10 @@ def _write_report(out, st, dam, grid, thresholds_ft, plan, srows):
             extra = f.read()
     text = "\n".join(md)
     out.report_md = os.path.join(out.folder, "Probabilistic_Report.md")
-    with open(out.report_md, "w", encoding="utf-8") as f:
+    with open(out.report_md, "w", encoding="utf-8", newline="") as f:
         f.write(text)
     out.report_html = os.path.join(out.folder, "Probabilistic_Report.html")
-    with open(out.report_html, "w", encoding="utf-8") as f:
+    with open(out.report_html, "w", encoding="utf-8", newline="") as f:
         f.write(products.markdown_to_html(text, title, extra))
 
 

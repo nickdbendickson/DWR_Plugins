@@ -387,6 +387,6 @@ def _write_report(out, dam, st, fine_cell_m, folder):
               "discharge through the interface is.",
               "- The coarse model cannot send water back into the fine domain.", ""]
     p = os.path.join(out.folder, "Nested_Report.md")
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     return p

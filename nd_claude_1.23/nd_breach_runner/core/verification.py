@@ -636,7 +636,7 @@ def _run_lisflood(ctx, name, dem, inflow_xy, hydrograph, inflow_line=None, **kw)
 
 def _lisflood_version(log_path):
     try:
-        with open(log_path, errors="replace") as f:
+        with open(log_path, errors="replace", encoding="utf-8") as f:
             head = f.read(4000)
     except OSError:
         return ""
@@ -649,7 +649,7 @@ def _mass_rows(workdir, name="run"):
     Qout, Qerror, Verror, rain] per mass interval."""
     rows = []
     path = os.path.join(workdir, "results", name + ".mass")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         next(f)
         for line in f:
             p = line.split()
@@ -1698,7 +1698,7 @@ def write_plots(res):
                        spec.get("ylabel", ""), xlim=spec.get("xlim"), ylim=spec.get("ylim"),
                        vlines=spec.get("vlines"))
         p = os.path.join(d, case["id"] + ".svg")
-        with open(p, "w", encoding="utf-8") as f:
+        with open(p, "w", encoding="utf-8", newline="") as f:
             f.write(svg)
         case["plot_svg"] = p
         out[case["id"]] = p
@@ -1794,7 +1794,7 @@ def write_outputs(res, figures=True, svg_backends=None):
     from . import products
     res.files["plots"] = write_plots(res)
     md_path = os.path.join(res.out_dir, "Verification_Summary.md")
-    with open(md_path, "w", encoding="utf-8") as f:
+    with open(md_path, "w", encoding="utf-8", newline="") as f:
         f.write(summary_markdown(res))
     page = products.markdown_to_html(summary_markdown(res, plot_marks=True),
                                      "Verification of the hydraulic model codes")
@@ -1804,7 +1804,7 @@ def write_outputs(res, figures=True, svg_backends=None):
         page = page.replace("<p>@@PLOT:{}@@</p>".format(cid), '<div class="plot">{}</div>'
                             .format(svg))
     html_path = os.path.join(res.out_dir, "Verification_Summary.html")
-    with open(html_path, "w", encoding="utf-8") as f:
+    with open(html_path, "w", encoding="utf-8", newline="") as f:
         f.write(page)
     csv_path = write_csv(res, os.path.join(res.out_dir, "Verification_Metrics.csv"))
     json_path = os.path.join(res.out_dir, "Verification_Results.json")
@@ -1813,7 +1813,7 @@ def write_outputs(res, figures=True, svg_backends=None):
     docx_path = os.path.join(res.out_dir, "Verification Record.docx")
     write_record(res, docx_path, figures=figures, svg_backends=svg_backends)
     res.files["docx"] = docx_path
-    with open(json_path, "w", encoding="utf-8") as f:
+    with open(json_path, "w", encoding="utf-8", newline="") as f:
         json.dump(res.as_dict(), f, indent=1)
     return res.files
 

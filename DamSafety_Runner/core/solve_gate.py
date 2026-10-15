@@ -85,7 +85,7 @@ def hydro_stats(times_s, discharge_m3s):
 
 def hydro_stats_csv(path):
     times, flows = [], []
-    with open(path, newline="") as fh:
+    with open(path, newline="", encoding="utf-8") as fh:
         r = csv.DictReader(fh)
         for row in r:
             key_t = "time_s" if "time_s" in row else "t"
@@ -165,15 +165,15 @@ def lisflood_smoke(exe, work=None):
     try:
         os.makedirs(os.path.join(folder, "out"), exist_ok=True)
         dem = os.path.join(folder, "dem.asc")
-        with open(dem, "w") as fh:
+        with open(dem, "w", encoding="utf-8") as fh:
             fh.write("ncols 5\nnrows 5\nxllcorner 0\nyllcorner 0\ncellsize 10\nNODATA_value -9999\n")
             fh.write("\n".join(" ".join(["100"] * 5) for _ in range(5)) + "\n")
         par = os.path.join(folder, "run.par")
-        with open(par, "w") as fh:
+        with open(par, "w", encoding="utf-8") as fh:
             fh.write("DEMfile dem.asc\nresroot run\ndirroot out\nsim_time 1\ninitial_tstep 1\n"
                      "saveint 1\nmassint 1\nfpfric 0.05\nacceleration\n")
         try:
-            r = subprocess.run([exe, par], cwd=folder, capture_output=True, text=True, timeout=60)
+            r = subprocess.run([exe, par], cwd=folder, capture_output=True, text=True, timeout=60, errors="replace")
         except subprocess.TimeoutExpired:
             return check("fail", "LISFLOOD 1-second check", "no answer in 60 s",
                          "The binary did not finish a 5 by 5 grid. Do not start the dam.")
@@ -217,7 +217,7 @@ def raster_info(path):
     """
     import json
     try:
-        r = subprocess.run(["gdalinfo", "-json", path], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(["gdalinfo", "-json", path], capture_output=True, text=True, timeout=30, errors="replace")
         info = json.loads(r.stdout or "{}")
     except (OSError, subprocess.TimeoutExpired, ValueError):
         info = {}

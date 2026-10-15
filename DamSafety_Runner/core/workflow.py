@@ -375,7 +375,7 @@ class _State:
         self.data = {"key": key}
         if enabled and os.path.exists(self.path):
             try:
-                with open(self.path) as f:
+                with open(self.path, encoding="utf-8") as f:
                     old = json.load(f)
                 if old.get("key") == key:
                     self.data = old
@@ -388,7 +388,7 @@ class _State:
     def save(self, **kw):
         self.data.update(kw)
         self.data["key"] = self.key
-        with open(self.path, "w") as f:
+        with open(self.path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, default=_json_default)
 
     def get(self, k, default=None):
@@ -458,7 +458,7 @@ def _write_pass_products(out_folder, dem, env, arrival_m, writer, it):
         show["arrival"] = np.where(np.isfinite(arr) & (arr >= 0), arr / 3600.0, np.nan)
     for kind, a in show.items():
         writer(dem.like(a, np.nan), os.path.join(out_folder, names[kind]))
-    with open(os.path.join(out_folder, "pass_{}_checkpoint.txt".format(it)), "w") as f:
+    with open(os.path.join(out_folder, "pass_{}_checkpoint.txt".format(it)), "w", encoding="utf-8") as f:
         f.write("Pass {} checkpoint. These rasters are this pass, not a finished flood.\n".format(it))
     if depth is None:
         return
@@ -787,7 +787,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     if st.structures:
         report["structures"] = structmod.describe(st.structures)
         json.dump([s.to_dict() for s in st.structures],
-                  open(os.path.join(model_dir, "structures.json"), "w"), indent=2)
+                  open(os.path.join(model_dir, "structures.json"), "w", encoding="utf-8"), indent=2)
 
     # --- LISFLOOD-FP run helper -----------------------------------------------------
     def gauge_list(bnds, gauges):
@@ -1122,7 +1122,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             "note": stoprule.DEFAULTS_NOTE, "decisions": class_stop_all}
     res.gauges = dict(lf_env.gauges)
     for name, (tt, qq) in res.gauges.items():
-        with open(os.path.join(model_dir, "gauge_{}.csv".format(_safe(name))), "w") as f:
+        with open(os.path.join(model_dir, "gauge_{}.csv".format(_safe(name))), "w", encoding="utf-8") as f:
             f.write("time_hr,discharge_cfs\n")
             for a, b in zip(tt, qq):
                 f.write("{:.5f},{:.3f}\n".format(a / 3600.0, b / CFS))
@@ -1403,10 +1403,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     report["run_finished"] = datetime.datetime.now().isoformat(timespec="seconds")
     report["elapsed_min"] = round((time.time() - t_start) / 60.0, 1)
     res.report_json = os.path.join(model_dir, "run_report.json")
-    with open(res.report_json, "w") as f:
+    with open(res.report_json, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, default=_json_default)
     res.report_md = os.path.join(model_dir, "run_report.md")
-    with open(res.report_md, "w") as f:
+    with open(res.report_md, "w", encoding="utf-8") as f:
         f.write(render_report(report))
     if st.products:
         try:
@@ -1566,11 +1566,11 @@ def _write_no_breach(res, report, warnings, model_dir, hy_nb):
     if hy_nb is not None:
         hy_nb.to_csv(os.path.join(model_dir, "no_breach_hydrograph.csv"))
     res.report_json = os.path.join(model_dir, "run_report.json")
-    with open(res.report_json, "w") as f:
+    with open(res.report_json, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, default=_json_default)
     res.report_md = os.path.join(model_dir, "run_report.md")
     from . import damjson
-    with open(res.report_md, "w") as f:
+    with open(res.report_md, "w", encoding="utf-8") as f:
         f.write("# Breach model run: {}\n\nThe dam does not fail in this flood.\n\n{}\n".format(
             res.dam_id, "\n".join("- " + w for w in warnings)))
         if report.get("dam_record"):

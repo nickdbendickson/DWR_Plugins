@@ -1396,6 +1396,6 @@ def build(parent_folder, out_path=None, screening=None, today=None):
         w = csv.DictWriter(fh, fieldnames=PORTFOLIO_FIELDS)
         w.writeheader()
         w.writerows(rows)
-    with open(hpath, "w", encoding="utf-8") as fh:
+    with open(hpath, "w", encoding="utf-8", newline="") as fh:
         fh.write(render_html(rows, parent_folder, screening=sources, page_folder=folder))
     return hpath, cpath, rows

@@ -252,13 +252,13 @@ def conda_env_pythons(timeout=6.0):
         return []
     try:
         r = subprocess.run([exe, "env", "list", "--json"], capture_output=True, text=True,
-                           timeout=timeout)
+                           timeout=timeout, errors="replace")
         envs = json.loads(r.stdout).get("envs", [])
     except Exception:
         return []
     out = []
     for e in envs:
-        p = os.path.join(e, "Scripts", "python.exe") if os.name == "nt" else os.path.join(
+        p = os.path.join(e, "python.exe") if os.name == "nt" else os.path.join(
             e, "bin", "python")
         if os.path.isfile(p) and "anuga" in os.path.basename(e).lower():
             out.append(p)
