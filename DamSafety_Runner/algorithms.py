@@ -419,6 +419,15 @@ class _Base(QgsProcessingAlgorithm):
                   "this of the LiDAR bed at each end (ft; YOUR value). Both ends off by the same amount = "
                   "a datum shift, moved to the LiDAR; farther off = the LiDAR inverts are used and the run "
                   "report says so", 3.0, minimum=0.0, advanced=True)
+        self._text("CULVERT_INVENTORY", "Culvert guesses: inventory GeoPackages that size them, "
+                   "separated by ;; (NDDOT bridge inventory, NTAD NBI; NBI item 43B = 19 is a "
+                   "culvert)", advanced=True)
+        self._num("CULVERT_MATCH_M", "Culvert guesses: take the size of an inventory culvert "
+                  "within (m; also drops a guess this close to a STRUCTURES line; starting value "
+                  "75 is the engineer's, a screening value you choose)", 75.0, minimum=1.0,
+                  advanced=True)
+        self._bool("CULVERT_BURN_MATCHED", "Culvert guesses: cut the inventory-matched ones into "
+                   "the DEM (unmatched guesses are never cut)", False, advanced=True)
         # v3.4.0: building footprints as obstructions (polygons in the structures layer)
         self.addParameter(set_advanced(QgsProcessingParameterEnum(
             "BUILDINGS", "Buildings: how polygon footprints in the structures layer enter the "
@@ -889,6 +898,37 @@ class _Base(QgsProcessingAlgorithm):
         if st.receptors is not None:
             notes.append("Receptors within {:.0f} mi of the dam: {}".format(
                 radius / MILE, impmod.count_text(rec, np.ones(len(rec), bool))))
+        # culvert matching: inventory points that size the road-crossing guesses
+        match_m = (self.parameterAsDouble(parameters, "CULVERT_MATCH_M", context)
+                   if self.parameterDefinition("CULVERT_MATCH_M") is not None else 75.0) or 75.0
+        burn_matched = bool(self.parameterDefinition("CULVERT_BURN_MATCHED") is not None and
+                            self.parameterAsBool(parameters, "CULVERT_BURN_MATCHED", context))
+        inventory = []
+        for path in str(parameters.get("CULVERT_INVENTORY") or "").split(";;"):
+            path = path.strip().split("|", 1)[0]
+            if not path:
+                continue
+            from .core.culvert_guess import read_inventory_gpkg
+
+            def _mk(srs_id, _work=work):
+                ct = QgsCoordinateTransform(QgsCoordinateReferenceSystem("EPSG:{}".format(srs_id)),
+                                            _work, context.transformContext())
+
+                def _f(x, y):
+                    q = ct.transform(QgsPointXY(x, y))
+                    return q.x(), q.y()
+                return _f
+            try:
+                recs = read_inventory_gpkg(path, _mk)
+            except Exception as e:                               # noqa
+                notes.append("Culvert inventory {} not read: {}".format(path, e))
+                continue
+            recs = [r for r in recs if math.hypot(r["x"] - center_xy[0],
+                                                  r["y"] - center_xy[1]) <= radius]
+            inventory.extend(recs)
+            notes.append("Culvert inventory {}: {} record(s) within the search ({} culverts)".format(
+                os.path.basename(path), len(recs), sum(r["kind"] == "culvert" for r in recs)))
+        self._record("Culvert inventory", parameters.get("CULVERT_INVENTORY") or "")
         # structures
         src = self.parameterAsSource(parameters, "STRUCTURES", context)
         structs = []
@@ -905,9 +945,15 @@ class _Base(QgsProcessingAlgorithm):
             dw = self.parameterAsDouble(parameters, "S_DEFAULT_WIDTH_FT", context)
             dh = self.parameterAsDouble(parameters, "S_DEFAULT_HEIGHT_FT", context)
             a, b = tf(src)
+            nbi43b = {n.lower(): n for n in names}.get("structure_type_043b", "")
+            want = list(fld.values()) + ([nbi43b] if nbi43b else [])
             for i, (line, at) in enumerate(qio.lines(src, a, b, center_xy, radius,
-                                                    fields=list(fld.values()))):
+                                                    fields=want)):
                 ktxt = str(at.get(fld["S_KIND"]) or "").lower()
+                if nbi43b and at.get(nbi43b) not in (None, ""):
+                    # NBI item 43B = 19 is a culvert, any other type a bridge
+                    from .core.culvert_guess import nbi_is_culvert
+                    ktxt = "culvert" if nbi_is_culvert(at.get(nbi43b)) else "bridge"
                 kind = (structmod.KIND_BRIDGE if "bridge" in ktxt else
                         structmod.KIND_NOTCH if any(w in ktxt for w in ("notch", "breach", "open"))
                         else structmod.KIND_CULVERT if ktxt else dk)
@@ -934,7 +980,7 @@ class _Base(QgsProcessingAlgorithm):
                 self._structure_gate = "nocrs"
             elif not structs and _source_has_features(src):
                 self._structure_gate = "outside"
-        elif road_lines and not structs:
+        if road_lines:
             csrc = self.parameterAsSource(parameters, "CHANNEL_LINES", context)
             chans = []
             if csrc is not None:
@@ -945,12 +991,25 @@ class _Base(QgsProcessingAlgorithm):
                 rows = guess_crossings(
                     [[(float(p[0]), float(p[1])) for p in ln] for ln in road_lines],
                     [[(float(p[0]), float(p[1])) for p in ln] for ln in chans])
+                if structs:
+                    from .core.culvert_guess import drop_near_structures
+                    rows, _dropped = drop_near_structures(rows, structs, match_m)
+                if rows and inventory:
+                    from .core.culvert_guess import match_inventory
+                    rows, mnotes = match_inventory(rows, inventory, match_m)
+                    notes.extend(mnotes)
                 st.culvert_candidates = rows
                 if rows:
-                    notes.append("{} culvert candidate(s) where a road crosses a channel. "
-                                 "Listed in culvert_candidates.csv. Not cut into the DEM. "
-                                 "Names start with 'guess:'.".format(len(rows)))
+                    n_m = sum(1 for r in rows if r.get("match_m") is not None)
+                    notes.append("{} culvert candidate(s) where a road crosses a channel, {} sized "
+                                 "from the inventory. Listed in culvert_candidates.csv. "
+                                 "{}".format(len(rows), n_m,
+                                             "Matched ones are cut into the DEM." if
+                                             (n_m and burn_matched) else "Not cut into the DEM."))
         st.structures = structs
+        st.culvert_inventory = inventory
+        st.culvert_match_m = match_m
+        st.culvert_burn_matched = burn_matched
         try:
             st.invert_tol_m = float(self.parameterAsDouble(parameters, "S_INVERT_TOL_FT", context)) * FT
         except Exception:                                        # noqa

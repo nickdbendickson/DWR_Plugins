@@ -131,6 +131,12 @@ class RunSettings:
         self.structures = []             # structures.Structure
         self.road_lines = []             # road polylines in the work CRS (culvert guesses)
         self.culvert_candidates = []     # listed in culvert_candidates.csv; not cut into the DEM
+        # culvert matching: inventory records (culvert_guess.inventory_record dicts, work CRS)
+        # size a guess within culvert_match_m; matched guesses are cut into the DEM only
+        # when culvert_burn_matched is set (screening values chosen by the engineer)
+        self.culvert_inventory = []
+        self.culvert_match_m = 75.0
+        self.culvert_burn_matched = False
         self.invert_tol_m = 3.0 * 0.3048  # 3.5: inventory inverts within this of the LiDAR bed are used
         self.edits = None                # conditioning.Edits (channels, ponds, notches)
         self.refine_lines = []           # polylines used as ANUGA mesh edges
@@ -207,6 +213,8 @@ class RunSettings:
                          for p in np.asarray(ln)] for ln in (v or [])]
             elif k == "culvert_candidates":
                 continue
+            elif k == "culvert_inventory":
+                d[k] = len(v or [])
             elif k == "edits":
                 d[k] = None if v is None else {"channels": len(v.channels), "ponds": len(v.ponds),
                                               "notches": len(v.notches),
@@ -745,7 +753,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     np.savetxt(os.path.join(model_dir, "flow_trace.csv"), np.asarray(path), delimiter=",",
                header="x,y", comments="", fmt="%.2f")
     candidates = list(getattr(st, "culvert_candidates", None) or [])
-    if not candidates and not st.structures:
+    if not candidates:
         roads = getattr(st, "road_lines", None) or []
         if roads and len(path) >= 2:
             from .culvert_guess import guess_crossings
@@ -753,15 +761,48 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                 [[(float(p[0]), float(p[1])) for p in np.asarray(ln)] for ln in roads],
                 [[(float(p[0]), float(p[1])) for p in path]])
     if candidates:
-        from .culvert_guess import write_candidates_csv
-        csv_path = write_candidates_csv(
+        from . import culvert_guess as cgmod
+        match_m = float(getattr(st, "culvert_match_m", cgmod.MATCH_M) or cgmod.MATCH_M)
+        # guesses and STRUCTURES together: a guess near an inventory structure is dropped
+        if st.structures:
+            candidates, dropped = cgmod.drop_near_structures(candidates, st.structures, match_m)
+            if dropped:
+                log("{} culvert guess(es) within {:.0f} m of a STRUCTURES line dropped".format(
+                    len(dropped), match_m))
+        inv = getattr(st, "culvert_inventory", None) or []
+        if inv and candidates:
+            candidates, mnotes = cgmod.match_inventory(candidates, inv, match_m)
+            for n in mnotes:
+                log(n)
+                warnings.append(n)
+    if candidates:
+        from . import culvert_guess as cgmod
+        n_match = sum(1 for c in candidates if c.get("match_m") is not None)
+        burn = bool(getattr(st, "culvert_burn_matched", False))
+        csv_path = cgmod.write_candidates_csv(
             os.path.join(model_dir, "culvert_candidates.csv"), candidates)
-        warnings.append(
-            "{} culvert candidate(s) where a road crosses a channel or the flow path. "
-            "They are listed in {} and are not cut into the DEM. "
-            "The name starts with 'guess:'. They were not surveyed.".format(
-                len(candidates), os.path.basename(csv_path)))
-        log(warnings[-1])
+        if n_match:
+            report["culvert_matches"] = [
+                {"name": c["name"], "source": c["source"], "match_m": c["match_m"],
+                 "width_m": c["width_m"], "height_m": c["height_m"], "barrels": c["barrels"],
+                 "shape": c["shape"], "burned": burn}
+                for c in candidates if c.get("match_m") is not None]
+            if burn:
+                st.structures = list(st.structures) + cgmod.matched_structures(candidates)
+            warnings.append(
+                "{} culvert guess(es) took their size from an inventory record within {:.0f} m "
+                "({}); listed in {}.".format(
+                    n_match, float(getattr(st, "culvert_match_m", 75.0)),
+                    "cut into the DEM" if burn else "not cut into the DEM; set "
+                    "culvert_burn_matched to cut them", os.path.basename(csv_path)))
+            log(warnings[-1])
+        if len(candidates) > n_match:
+            warnings.append(
+                "{} culvert candidate(s) where a road crosses a channel or the flow path. "
+                "They are listed in {} and are not cut into the DEM. "
+                "The name starts with 'guess:'. They were not surveyed.".format(
+                    len(candidates) - n_match, os.path.basename(csv_path)))
+            log(warnings[-1])
     max_extent = st.max_extent_mi * MILE
     step = st.expand_step_mi * MILE
     duration_s = max(hy.duration_s, hy_nb.duration_s if hy_nb is not None else 0.0)
