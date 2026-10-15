@@ -102,7 +102,8 @@ _SLIM_KEYS = ("id", "habitable", "acer_type", "persons", "lifeline", "camp", "cu
               "cut_incremental", "incremental", "incr_note", "damage_usd", "category",
               "max_depth", "max_vel", "zone", "zone_mm", "zone_found", "zone_mobile",
               "outcome", "near", "near_raised", "zone_note", "margin_high", "margin_judg",
-              "base_depth", "base_zone")
+              "base_depth", "base_zone",
+              "dwelling_extra")                 # SX.1: classification filters on this flag
 _RELEVANT = ("Yes", "Unverified")       # "No" (not habitable) cannot change any class
 
 
@@ -265,10 +266,12 @@ def _scale_structures(structs, fd, fv, opts, changes=None, label=""):
             out[idx] = slim
             zone_or_outcome = (view.get("zone") != rec.get("zone")
                                or view.get("outcome") != rec.get("outcome"))
-            if zone_or_outcome:
+            inc_flip = (inc_new is not None and inc_new != rec.get("incremental"))
+            # SX.3: Flips_vs_Base counts the same events listed in the changes CSV
+            if zone_or_outcome or inc_flip:
                 flips += 1
             if changes is not None and len(changes) < opts["max_changes"] and \
-                    (zone_or_outcome or inc_new is not None and inc_new != rec.get("incremental")):
+                    (zone_or_outcome or inc_flip):
                 bits = []
                 if view.get("zone") != rec.get("zone"):
                     bits.append("zone")

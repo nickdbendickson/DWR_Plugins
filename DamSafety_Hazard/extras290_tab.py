@@ -59,13 +59,24 @@ _LITERAL = {
 _TIME_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S")
 
 
+_LITERAL_FALLBACK_LOGGED = []
+
+
 def _default(key):
     """Starting value of a cfg key: pipeline.DEFAULTS when it has the key, else
-    the literal above."""
+    the literal above (logged once if pipeline cannot be imported)."""
     try:
         from .pipeline import DEFAULTS
         return DEFAULTS.get(key, _LITERAL[key])
-    except Exception:
+    except Exception as e:
+        if not _LITERAL_FALLBACK_LOGGED:
+            _LITERAL_FALLBACK_LOGGED.append(True)
+            try:
+                from .helpers import log_message
+                log_message("extras290: pipeline.DEFAULTS not available ({}); "
+                            "using built-in literals".format(e))
+            except Exception:
+                pass
         return _LITERAL[key]
 
 
@@ -513,13 +524,17 @@ class Extras290TabMixin(object):
         if data != _AUTO:
             lyr = project.mapLayer(data)
             return lyr if isinstance(lyr, QgsVectorLayer) else None
+        # EX.4: same rules as classify_tab._resolve_layer (skip inundated / plugin outputs)
+        from .classify_tab import _PLUGIN_POI_RE
         for lyr in project.mapLayers().values():
             try:
                 if (isinstance(lyr, QgsVectorLayer) and lyr.isValid()
                         and lyr.geometryType() == GEOM_POLYGON and _PARCEL_RE.search(lyr.name())
                         and not _PARCEL_EXCLUDE.search(lyr.name())
                         and not is_plugin_output_name(lyr.name())
-                        and not is_downloaded_data_layer(lyr)):
+                        and not is_downloaded_data_layer(lyr)
+                        and "inundated" not in lyr.name().lower()
+                        and not _PLUGIN_POI_RE.search(lyr.name())):
                     return lyr
             except Exception:
                 continue
@@ -541,12 +556,19 @@ class Extras290TabMixin(object):
             return None
         if not uri or not isinstance(uri, str):
             return None
+        import os
+        path = uri.split("|", 1)[0]
+        try:
+            st = os.stat(path)
+            stamp = (uri, st.st_mtime_ns, st.st_size)
+        except OSError:
+            stamp = (uri, None, None)
         cached = self.__dict__.get("_folder_parcels_cache290")
-        if cached and cached[0] == uri:
+        if cached and cached[0] == stamp:
             return cached[1]
         from . import datafolder as DF
         lyr = DF.open_uri(uri)
-        self._folder_parcels_cache290 = (uri, lyr)
+        self._folder_parcels_cache290 = (stamp, lyr)
         return lyr
 
     def _refresh_parcel_fields290(self, *args):

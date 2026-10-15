@@ -65,6 +65,7 @@ from .hazard import METHOD_MAXMAX, METHOD_LABEL
 from .scenarios import (
     ROLE_BREACH, order_for_run, restore, mark_structures_incremental, raster_reuse_problems,
     line_baseline_depth, mark_lines_incremental, incremental_view, EVAL_KEYS,
+    CONSEQ_KEYS, SNAP_KEYS,
 )
 from .consequences import economic_estimate, life_loss_estimate, totals
 from .access import access_analysis
@@ -160,13 +161,6 @@ DEFAULTS.update({
 from . import modelgate as _MG          # noqa: E402  (v2.10 model gate settings)
 DEFAULTS.update(_MG.CFG_DEFAULTS)
 
-CONSEQ_KEYS = ("val_struct", "val_cont", "ff_depth", "damage_usd", "damage_basis",
-               "damage_nonres_usd", "par_night", "par_day", "lol_night", "lol_day", "severity",
-               "warning_hr", "warning_cat", "fatality_rate", "par", "lol", "lol_low",
-               "lol_high", "cut_off", "access_note", "access_unknown", "access_cut",
-               "access_raw_note", "incremental", "incr_note", "base_depth", "base_zone",
-               "cut_incremental")
-SNAP_KEYS = EVAL_KEYS + CONSEQ_KEYS
 
 
 def _eap_on(cfg, part):

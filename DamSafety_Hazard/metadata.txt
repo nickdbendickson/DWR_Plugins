@@ -5,9 +5,23 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.21
+version=2.18.22
 author=N.D. Bendickson
 changelog=
+    2.18.22 - 2026-10-15
+      * Sensitivity: dwelling_extra kept in slimmed records (class counts stay correct).
+      * Fingerprints: content digests bypass the persistent size+mtime disk cache; VRT
+        sources parsed without requiring relativeToVRT, nested VRTs followed, truncation marked.
+      * Comparison "Habitable structures flooded" counts only breach-added flooding.
+      * Incremental notes distinguish outside-baseline-raster from dry-without-breach.
+      * scenarios.snapshot keeps the same keys as pipeline (incl. cut_off).
+      * Warn when a baseline name is duplicated; subject dam: first NID match, same-NID not in series.
+      * Provisional-High wording: "within X ft of the line" for raised dwellings.
+      * Parcel auto-detect skips inundated/plugin layers; folder parcel cache keyed by mtime/size.
+      * Fast sampling: strip width capped; non-finite reach logged; per-record fast/GEOS label;
+        ONEPASS_MIN lives in constants.
+      * Eval cache: files_exist also checks the cached road path; Scenario plan_fields restored as tuple.
+      * Removed unused hazard.layer_path; sensitivity flips count matches the changes CSV.
     2.18.21 - 2026-10-15
       * Fix SyntaxError in structures.collapse_dwellings (literal \\n left by the ST.3 edit).
     2.18.20 - 2026-10-15

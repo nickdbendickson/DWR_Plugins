@@ -61,7 +61,7 @@ from .constants import (
     OSM_EDGE_BUFFER_FT, STRUCTURES_FAMILY, TM11_PERSONS_PER_DWELLING, ND_1D_DEPTH_FT,
     DEFAULT_MIN_UNVERIFIED_AREA_FT2, DEFAULT_POINT_RADIUS_FT,
     STRUCTURE_MERGE_DIST_FT, PROGRESS_INTERVAL, FEATURE_BATCH_SIZE, ADDRESS_SNAP_FT,
-    CLASS_LOW, DEFAULT_NEAR_THRESHOLD_FT,
+    CLASS_LOW, DEFAULT_NEAR_THRESHOLD_FT, ONEPASS_MIN,
 )
 from .helpers import (
     log_message, LimitedLogger, create_memory_layer, transform_geometry,
@@ -1502,7 +1502,6 @@ def _locations(xs, ys, d, v, a, dvv, vel_ok, zone_cls):
 
 # --------------------------------------------------------------- sampling --
 COARSE_TARGET = 2048          # coarse wet mask: at most this many cells per side
-ONEPASS_MIN = 8               # fewer candidates: the per-structure reads are cheaper
 
 
 def _coarse_wet_mask(sampler, rows_per_block=1024):
@@ -1935,6 +1934,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             for sid, (_shp, reach, r_disc) in fast.items():
                 if sid in fast_cells:
                     fast_wet.append(sid)
+                    by_id[sid]["sampling"] = "fast sampling (rasterised footprint)"
                     continue
                 # no valid cell in the (whole) area: the GEOS region only serves the
                 # "cell under the centre" fallback below
@@ -1945,6 +1945,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
                         rec["region_kind"] += " (no cell centre in it - whole area used)"
                         region = full
                     regions[sid] = region
+                    rec["sampling"] = "GEOS region (fast path had no cell)"
                 except Exception as e:
                     problems.log("structure {}: {}".format(sid, e))
 
@@ -2001,7 +2002,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
         wet_ids.append(sid)
         rec = by_id[sid]
         if not rec["sampling"]:
-            rec["sampling"] = "cells whose centre lies in the area"
+            rec["sampling"] = rec.get("sampling") or "GEOS region: cells whose centre lies in the area"
         rec["n_cells"] = int(cells[sid][2].size)
 
     wet_set = set(wet_ids)
