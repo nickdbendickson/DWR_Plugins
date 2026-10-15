@@ -428,7 +428,8 @@ def _plan_one(job, cache_folder, pack, offline_only, max_age, refresh, now, outp
     ans = _pack_answer(pack, name, ext)
     today = _todays_download(output_folder, name, ext)
     # ES.1(d): refresh bypasses today's file only with a tile cache (download._refresh_requested)
-    if today and (kind == "overpass" or not (refresh and cache_folder)):
+    # DL.1: OpenStreetMap downloads honour the refresh too (download._todays_file)
+    if today and not (refresh and cache_folder):
         row.update(source="today's download", note=os.path.basename(today))
         return row
     if ans == "covers":

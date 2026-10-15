@@ -70,6 +70,10 @@ class NotInPack(DownloadError):
 
 
 def http_get_bytes(url, user_agent=None):
+    """GET `url`. DL.9 (documented): no per-request timeout is set here - the
+    request uses QGIS's network timeout (Settings > Options > Network); an idle
+    transfer timeout (QNetworkRequest.setTransferTimeout) would cut off slow
+    Overpass answers that legitimately stay silent for minutes."""
     if offline_config()[1]:
         raise NotInPack("offline mode - no internet requests ({})".format(url.split("?")[0]))
     req = QgsBlockingNetworkRequest()
@@ -611,12 +615,42 @@ def _write_fc(path, features):
     # Coordinates are longitude / latitude. Without a crs member QGIS loads the
     # file with no CRS, the study-area clip rejects every point, and the
     # hazard class comes back Low from an empty inventory.
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump({
-            "type": "FeatureCollection",
-            "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
-            "features": features,
-        }, fh)
+    # DL.1: written to a temporary file and moved into place, so an interrupted
+    # run never leaves a truncated day file behind.
+    tmp = "{}.{}.part".format(path, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({
+                "type": "FeatureCollection",
+                "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+                "features": features,
+            }, fh)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def _todays_file(path, name):
+    """DL.1: today's download as a layer, or None (fetch it): none there, a
+    refresh requested (tile cache refresh), or a file that does not open (a
+    truncated file of an older version) - that one is deleted, so the normal
+    fetch (with its stale-copy fallback) runs instead of failing all day."""
+    if not os.path.exists(path) or _refresh_requested():
+        return None
+    try:
+        return _load(path, name)
+    except DownloadError as e:
+        log_message("{}: today's download cannot be read ({}) - deleted, fetched again".format(
+            name, e), MSG_WARNING)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return None
 
 
 def _load(path, name):
@@ -1192,8 +1226,8 @@ def fetch_nsi(extent_4326, output_folder, progress_cb=None):
     _check_extent(extent_4326)
     folder = download_folder(output_folder)
     path = _cache_path(folder, "NSI_structures", extent_4326)
-    if os.path.exists(path) and not _refresh_requested():
-        lyr = _load(path, "NSI (download)")
+    lyr = _todays_file(path, "NSI (download)")          # DL.1
+    if lyr is not None:
         log_message("NSI: using today's cached download {}".format(os.path.basename(path)))
         return lyr, lyr.featureCount(), path
     return _with_stale_fallback(path, "NSI (download)", lambda: _offline_first(
@@ -1272,9 +1306,14 @@ def _layer_meta(url):
         data = http_get_json(url.rstrip("/") + "?f=json")
     except CancelledByUser:
         raise
-    except Exception:
+    except Exception as e:
+        # DL.3: say why (paging off, no tile-cache version marker)
+        log_message("ArcGIS layer description not read ({}: {}) - non-paged query, no "
+                    "version marker".format(url.split("?")[0], e), MSG_INFO)
         return None, False, ARCGIS_PAGE_SIZE, ""
     if not isinstance(data, dict):
+        log_message("ArcGIS layer description not understood ({}) - non-paged query".format(
+            url.split("?")[0]), MSG_INFO)
         return None, False, ARCGIS_PAGE_SIZE, ""
     adv = data.get("advancedQueryCapabilities") or {}
     paged = bool(adv.get("supportsPagination")) if isinstance(adv, dict) else False
@@ -1308,8 +1347,8 @@ def fetch_arcgis_layer(url, extent_4326, output_folder, name, where="1=1",
     _check_extent(extent_4326)
     folder = download_folder(output_folder)
     path = _cache_path(folder, name, extent_4326)
-    if os.path.exists(path) and not _refresh_requested():
-        lyr = _load(path, name)
+    lyr = _todays_file(path, name)          # DL.1
+    if lyr is not None:
         log_message("{}: using today's cached download {}".format(name, os.path.basename(path)))
         return lyr, lyr.featureCount(), path
     live = lambda: _offline_first(path, name, extent_4326, lambda: _fetch_arcgis_live(  # noqa
@@ -1530,8 +1569,8 @@ def fetch_osm_lifelines(extent_4326, output_folder, progress_cb=None):
     _check_extent(extent_4326)
     folder = download_folder(output_folder)
     path = _cache_path(folder, "OSM_lifelines", extent_4326)
-    if os.path.exists(path):
-        lyr = _load(path, "OSM lifelines")
+    lyr = _todays_file(path, "OSM lifelines")          # DL.1
+    if lyr is not None:
         log_message("OSM lifelines: using today's cached download {}".format(
             os.path.basename(path)))
         return lyr, lyr.featureCount(), path
@@ -1572,8 +1611,8 @@ def fetch_osm_crossings(extent_4326, output_folder, progress_cb=None):
     _check_extent(extent_4326)
     folder = download_folder(output_folder)
     path = _cache_path(folder, "OSM_crossings", extent_4326)
-    if os.path.exists(path):
-        lyr = _load(path, "OSM crossings")
+    lyr = _todays_file(path, "OSM crossings")          # DL.1
+    if lyr is not None:
         return lyr, lyr.featureCount(), path
     return _with_stale_fallback(path, "OSM crossings", lambda: _offline_first(
         path, "OSM crossings", extent_4326, lambda: _fetch_osm_crossings_live(extent_4326,
@@ -1598,8 +1637,8 @@ def fetch_osm_camps(extent_4326, output_folder, progress_cb=None):
     _check_extent(extent_4326)
     folder = download_folder(output_folder)
     path = _cache_path(folder, "OSM_campgrounds", extent_4326)
-    if os.path.exists(path):
-        lyr = _load(path, "OSM campgrounds")
+    lyr = _todays_file(path, "OSM campgrounds")          # DL.1
+    if lyr is not None:
         return lyr, lyr.featureCount(), path
 
     def live():
@@ -1622,8 +1661,8 @@ def fetch_osm_trailer_parks(extent_4326, output_folder, progress_cb=None):
     _check_extent(extent_4326)
     folder = download_folder(output_folder)
     path = _cache_path(folder, "OSM_trailer_parks", extent_4326)
-    if os.path.exists(path):
-        lyr = _load(path, "OSM mobile-home parks")
+    lyr = _todays_file(path, "OSM mobile-home parks")          # DL.1
+    if lyr is not None:
         return lyr, lyr.featureCount(), path
 
     def live():
@@ -1644,8 +1683,8 @@ def fetch_osm_places(extent_4326, output_folder, progress_cb=None):
     _check_extent(extent_4326)
     folder = download_folder(output_folder)
     path = _cache_path(folder, "OSM_places", extent_4326)
-    if os.path.exists(path):
-        lyr = _load(path, "OSM places")
+    lyr = _todays_file(path, "OSM places")          # DL.1
+    if lyr is not None:
         return lyr, lyr.featureCount(), path
     q = places_query(extent_4326)
 

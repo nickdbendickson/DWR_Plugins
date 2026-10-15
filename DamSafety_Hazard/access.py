@@ -310,6 +310,9 @@ def access_analysis(road_layer, structs, depth_sampler, analysis_crs, transform_
     wet = np.array([e[4] for e in edges], dtype=bool)
     ea = np.array([e[5] for e in edges])
     cell = max(reach, 1e-9)
+    # AC.2 (kept): every cell of a segment's bounding box - exact for the 3 x 3
+    # search; _segment_grid's walk-along sampling is cheaper on long diagonals but
+    # is not provably the same set of hits, so it is not used here
     grid = {}
     for idx in range(len(E)):
         x0, y0, x1, y1 = E[idx]
