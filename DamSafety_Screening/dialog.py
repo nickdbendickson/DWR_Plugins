@@ -24,6 +24,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .core import workflow as wf
+from .core import handoff as ho
 from .core import settings_groups as SG
 from .core import preflight as pf
 from .core import review as rv
@@ -580,6 +581,15 @@ class NDDamScreeningDialog(QDialog):
         self.dams_folder.setToolTip("The folder of dam folders (one per dam) that tool 7b writes and "
                                     "ND Dam Breach Runner reads; tool 8 adds a 'screened' status to "
                                     "dam.json there. Empty = <work folder>/Dams.")
+        # step 7b: the Runner's models / solver (defaults = the Runner's own)
+        self.runner_tier = self._combo(list(ho.ENGINE_LABELS))
+        self.runner_tier.setToolTip("Step 7b: the Runner's models. ANUGA uses the culvert / bridge layer "
+                                    "(Inputs: Culverts / bridges). The default sends nothing extra.")
+        self.runner_force_anuga = QCheckBox("Step 7b: force ANUGA (final results from ANUGA)")
+        self.runner_refine = QCheckBox("Step 7b: near-dam refine with the FV1 solver")
+        for c in (self.runner_force_anuga, self.runner_refine):
+            c.toggled.connect(self._changed)
+        self.runner_tier.currentIndexChanged.connect(self._changed)
         self.baseline = QCheckBox("Step 7: also run a no-breach baseline (increment rasters)")
         self.baseline.setToolTip("A second simulation of each dam with only the steady ambient flow, no "
                                  "breach; the increment (breach minus baseline) is written too. A screening "
@@ -636,6 +646,9 @@ class NDDamScreeningDialog(QDialog):
             ("ACER TM 11 chart file (.json)", self.chart_file, "json"),
             ("Step 7b DEM for the Runner", self.runner_dem, "raster"),
             ("Dams folder (7b, dam.json)", self.dams_folder, "dir"),
+            ("Step 7b Runner models", self.runner_tier, None),
+            ("", self.runner_force_anuga, None),
+            ("", self.runner_refine, None),
             ("", self.baseline, None),
             ("Baseline ambient flow (cfs)", self.baseline_cfs, None),
             ("Step 7 buildings in the terrain", self.buildings, None),
@@ -1093,8 +1106,8 @@ class NDDamScreeningDialog(QDialog):
 
     # ---------------------------------------------------------------- settings --
     _EDITS = ("local_dem", "exe", "chart_file", "runner_dem", "dams_folder", "ref_folder", "old_inventory")
-    _COMBOS = ("terrain_source", "larger_clips", "engine", "scenario", "crit", "buildings", "ref_units")
-    _CHECKS = ("baseline", "incremental")
+    _COMBOS = ("terrain_source", "larger_clips", "engine", "scenario", "crit", "buildings", "ref_units", "runner_tier")
+    _CHECKS = ("baseline", "incremental", "runner_force_anuga", "runner_refine")
     _SPINS = ("baseline_cfs", "building_raise_ft", "building_n", "dem_cell", "grid_m", "simh", "simmax")
 
     def settings(self):
