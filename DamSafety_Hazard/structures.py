@@ -200,6 +200,21 @@ MOBILE_RULE_DEFAULTS = {
 }
 
 
+def _cfg_bool(v, dflt):
+    """True/False from a settings value. String 'false'/'0'/'no'/'off' are False
+    (plain bool('false') is True). Anything unrecognised keeps the default."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return bool(v)
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "on", "y", "t"):
+        return True
+    if s in ("0", "false", "no", "off", "n", "f", ""):
+        return False
+    return dflt
+
+
 def mobile_rules_from_cfg(cfg):
     """The manufactured-home rule arguments from a settings dict (same key
     names as MOBILE_RULE_DEFAULTS; missing / unusable values -> defaults)."""
@@ -209,7 +224,7 @@ def mobile_rules_from_cfg(cfg):
         if v is None:
             continue
         try:
-            out[k] = bool(v) if isinstance(dflt, bool) else float(v)
+            out[k] = _cfg_bool(v, dflt) if isinstance(dflt, bool) else float(v)
         except (TypeError, ValueError):
             pass
     return out
@@ -399,14 +414,18 @@ class _SourceReader(object):
                     v, " [{}]".format(phrase) if phrase and phrase != v.lower() else ""))
         if self.placement_idx is not None:
             rec["placement"] = _text(attrs[self.placement_idx]).lower() or None
-        parts = [p for p in (_text(attrs[i]) for i in self.addr_idx) if p]
-        if parts:
+        # ST.7: addr_id / address_id alone (_ADDR_NOT_STREET) is not a street address
+        # for habitability - only street_idx / NENA key fields count
+        street_parts = [p for p in (_text(attrs[i]) for i in self.street_idx) if p]
+        key_parts = [p for p in (_text(attrs[i]) for i in self.key_idx) if p]
+        if street_parts or key_parts:
             rec["address"] = True
             # NENA: number + street (+ unit) identify the address; other
             # sources (OSM addr:*, FEMA PROP_ADDR) only say "has an address"
-            key_parts = [p for p in (_text(attrs[i]) for i in self.key_idx) if p] or parts
+            id_parts = [p for p in (_text(attrs[i]) for i in self.addr_idx) if p]
+            use = key_parts or street_parts or id_parts
             rec["unit"] = " ".join(p for p in (_text(attrs[i]) for i in self.unit_idx) if p)
-            rec["addr_key"] = re.sub(r"\s+", " ", " | ".join(key_parts + [rec["unit"]]).lower())
+            rec["addr_key"] = re.sub(r"\s+", " ", " | ".join(use + [rec["unit"]]).lower())
         street = " ".join(p for p in (_text(attrs[i]) for i in self.street_idx) if p)
         if street:
             if rec["unit"]:
@@ -652,10 +671,15 @@ def _request_for(layer, clip):
 def _is_duplicate(sources, src, pt, dup_dist):
     """Same source family, same spot and the same address (or both without
     one): the same structure listed twice. Stacked address points of the
-    units of one building differ in their address and are kept."""
+    units of one building differ in their address and are kept.
+    Address keys are compared after normalize_street (ST.8), so
+    '146th Ave SE' and '146th Avenue Southeast' count as the same."""
     fd = (src.get("nsi") or {}).get("fd_id")
+    src_key = normalize_street(src.get("addr_key") or "")
     for s in sources:
-        if s.get("family") != src["family"] or s.get("addr_key") != src.get("addr_key"):
+        if s.get("family") != src["family"]:
+            continue
+        if normalize_street(s.get("addr_key") or "") != src_key:
             continue
         sfd = (s.get("nsi") or {}).get("fd_id")
         if fd is not None and sfd is not None and sfd != fd:
@@ -2129,6 +2153,11 @@ def _footprints_overlap(a, b):
         return False
 
 
+def _is_campground(rec):
+    """OpenStreetMap campground / RV park record (pipeline campground_records)."""
+    return rec.get("camp") is not None or any(s.get("camp") for s in rec.get("sources", ()))
+
+
 def collapse_dwellings(structs):
     """One household per street address, and per overlapping unaddressed footprint.
 
@@ -2162,7 +2191,9 @@ def collapse_dwellings(structs):
         if normalize_street(address_of(rec)[0]):
             continue
         for host in kept:
-            if host is rec or not _footprints_overlap(rec, host):
+            # ST.3: a campground polygon often contains house footprints; neither
+            # becomes an "extra" of the other on footprint alone
+            if host is rec or _is_campground(rec) or _is_campground(host) \n                    or not _footprints_overlap(rec, host):
                 continue
             _mark_dwelling_extra(rec, host, "overlapping footprint")
             n_extra += 1

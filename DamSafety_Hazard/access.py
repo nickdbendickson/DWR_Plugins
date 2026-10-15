@@ -376,8 +376,11 @@ def access_stats(structs, edges, edges_cut):
     stats = {"structures": 0, "cut": 0, "cut_dry": 0, "persons_cut_dry": 0, "unknown": 0,
              "edges": int(edges), "edges_cut": int(edges_cut)}
     for rec in structs:
-        if rec.get("habitable") != "Yes" or rec.get("access_unknown") \
-                or rec.get("access_cut") is None:
+        if rec.get("dwelling_extra"):             # ST.1: same household as another outline
+            rec["cut_off"] = None
+            rec["access_note"] = ""
+            continue
+        if rec.get("habitable") != "Yes" or rec.get("access_unknown")                 or rec.get("access_cut") is None:
             rec["cut_off"] = None                 # not a habitable structure / no road
             if rec.get("habitable") != "Yes":
                 rec["access_note"] = ""           # only habitable structures carry a note

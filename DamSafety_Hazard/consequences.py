@@ -211,7 +211,7 @@ def life_loss_estimate(rec, warning_issued_hr=0.0, understanding="vague",
     rec.update({"severity": None, "warning_hr": None, "fatality_rate": None,
                 "lol": None, "lol_low": None, "lol_high": None, "par": None,
                 "par_night": None, "par_day": None, "lol_night": None, "lol_day": None})
-    if rec.get("habitable") != "Yes" or not rec.get("max_depth") or rec["max_depth"] <= 0:
+    if rec.get("habitable") != "Yes" or rec.get("dwelling_extra")             or not rec.get("max_depth") or rec["max_depth"] <= 0:
         return rec
     sev, why = flood_severity(rec.get("dv_max"), rec.get("max_depth"), severity_method)
     if high_severity:
@@ -231,7 +231,9 @@ def life_loss_estimate(rec, warning_issued_hr=0.0, understanding="vague",
 
 def totals(structs):
     """Sums for the summary."""
-    wet = [s for s in structs if s.get("max_depth") and s["max_depth"] > 0]
+    # ST.1: dwelling_extra footprints are the same household (classification already skips)
+    wet = [s for s in structs if s.get("max_depth") and s["max_depth"] > 0
+           and not s.get("dwelling_extra")]
     camps = [s for s in wet if s.get("camp") is not None]
     t = {"par": sum(s.get("par") or 0 for s in wet),
          "lol": sum(s.get("lol") or 0 for s in wet),
