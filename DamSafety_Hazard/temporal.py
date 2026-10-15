@@ -218,9 +218,9 @@ def apply_arrival_animation(layer, hours_field, breach_start=None, units="hours"
         except Exception:
             pass
         start = _to_py(breach_start)
-        return True, "{}: each feature shown from breach start + {} ({}); breach start {} " \
-                     "(nominal)".format(name, fld, units,
-                                        start.strftime("%Y-%m-%d %H:%M"))
+        return True, "{}: each feature shown from breach start + {} ({}); breach start {}" \
+                     "{}".format(name, fld, units, start.strftime("%Y-%m-%d %H:%M"),
+                                 " (nominal)" if breach_start is None else "")   # TP.1
     except Exception as e:                          # noqa: BLE001 - never raises
         return False, "{}: animation not set: {}".format(name, e)
 

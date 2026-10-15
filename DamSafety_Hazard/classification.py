@@ -31,6 +31,14 @@ from .helpers import create_memory_layer, export_layer_to_formats, prepare_outpu
 from .structures import OUT_PROBABLE, OUT_JUDGMENT, OUT_ECONOMIC, TYPE_MOBILE
 
 
+PROVISIONAL_PREFIX = "PROVISIONAL - "   # FF.1: formfill skips this reason (not a criterion)
+
+
+def governing_reason(reasons):
+    """FF.1: the first ND reason that is a criterion (the provisional note skipped)."""
+    return next((r for r in reasons or [] if not str(r).startswith(PROVISIONAL_PREFIX)), None)
+
+
 def _raise(level, new):
     return new if ND_RANK[new] > ND_RANK[level] else level
 
@@ -482,7 +490,7 @@ def extra_criteria(nd, structs, res, cfg, total=False):
                    "to the higher class, 5.3(f)); confirm the buildings are habitable and "
                    "the depths before the class is final.".format(where))
             nd["judgment"].insert(0, msg)
-            nd["reasons"].insert(0, "PROVISIONAL - " + msg)
+            nd["reasons"].insert(0, PROVISIONAL_PREFIX + msg)
     result = "HIGH (provisional)" if nd.get("provisional") else nd["cls"].upper()
     crit.append({"section": "Result", "criterion": "ND hazard classification (screening)",
                  "found": "", "result": result})
