@@ -300,10 +300,19 @@ EVAL_KEYS = ("max_depth", "max_vel", "arrival", "zone_found", "zone_mobile", "zo
              "reach_ft", "region_kind", "n_cells", "sampling", "cells_xy", "_types",
              # v2.8: per-cell depth / velocity kept for the sensitivity table
              "_dv")
+# same consequence keys pipeline._snap keeps (incl. cut_off) so snapshot() is safe to use
+CONSEQ_KEYS = ("val_struct", "val_cont", "ff_depth", "damage_usd", "damage_basis",
+               "damage_nonres_usd", "par_night", "par_day", "lol_night", "lol_day", "severity",
+               "warning_hr", "warning_cat", "fatality_rate", "par", "lol", "lol_low",
+               "lol_high", "cut_off", "access_note", "access_unknown", "access_cut",
+               "access_raw_note", "incremental", "incr_note", "base_depth", "base_zone",
+               "cut_incremental")
+SNAP_KEYS = EVAL_KEYS + CONSEQ_KEYS
 
 
 def snapshot(structs):
-    return {rec["id"]: {k: rec.get(k) for k in EVAL_KEYS} for rec in structs}
+    """{id: fields} using the same keys as pipeline._snap (EVAL + CONSEQ, incl. cut_off)."""
+    return {rec["id"]: {k: rec.get(k) for k in SNAP_KEYS} for rec in structs}
 
 
 def restore(structs, snap):
@@ -337,7 +346,9 @@ def structure_increment(rec, base, min_depth_ft=DEFAULT_INCREMENTAL_DEPTH_FT,
         return False, ""
     base = base or {}
     bd = base.get("max_depth")
-    if bd is None or bd <= 0:
+    if bd is None:
+        return True, "no baseline value (outside baseline raster)"
+    if bd <= 0:
         return True, "dry without breach"
     if same_method or one_d:
         ro, bo = _outcome_rank(rec.get("outcome")), _outcome_rank(base.get("outcome"))
@@ -538,6 +549,15 @@ def rows_to_scenarios(main, rows, plan_settings=None, cache_root=None):
                   main.get("velocity"), main.get("arrival"), main.get("dv"), ROLE_BREACH,
                   (main.get("baseline") or "").strip(), main.get("plan_settings"))
     rows = clean_rows(rows)
+    from collections import Counter
+    base_name_counts = Counter(
+        (r["name"] or "").strip() for r in rows
+        if r["role"] == ROLE_BASELINE and (r["name"] or "").strip())
+    for nm, cnt in sorted(base_name_counts.items()):
+        if cnt > 1:
+            notes.append(
+                "Baseline name {!r} appears {} times - breaches that name it bind to "
+                "the first; the others were renamed".format(nm, cnt))
     wanted = {id(main_sc): main_sc.baseline}
     for i, r in enumerate(rows, 1):
         label = r["name"] or "row {}".format(i)
@@ -589,9 +609,12 @@ def comparison_rows(results, governing=None):
         views = r.get("views") or ([], [], [])
         s_view, r_view, l_view = views
         c = r.get("conseq") or {}
+        from .structures import OUT_DRY
         inc = r.get("incremental") or {}
+        # SC.2: s_view already clears non-incremental to OUT_DRY but leaves max_depth;
+        # count by outcome so "flooded" means only what the breach adds
         wet_hab = sum(1 for s in s_view if s.get("habitable") == "Yes"
-                      and (s.get("max_depth") or 0) > 0)
+                      and s.get("outcome") not in (None, OUT_DRY))
         out.append({"Scenario": name, "Baseline": inc.get("baseline") or "-",
                     "ND class": nd["cls"], "TM 11 class": tm["cls"],
                     "Lives in jeopardy": "{:.1f}".format(tm["lij"]),

@@ -3,7 +3,7 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-PLUGIN_VERSION = "2.18.21"
+PLUGIN_VERSION = "2.18.22"
 OUTPUT_FOLDER_NAME = "outputs"
 
 # ------------------------------------------------------------ layer tree ----
@@ -63,6 +63,10 @@ BTN_INACTIVE_STYLE = (
 # additionally throttles UI refreshes to PROGRESS_MIN_INTERVAL_S seconds.
 PROGRESS_INTERVAL = 50
 PROGRESS_MIN_INTERVAL_S = 0.1
+
+# Fast / one-pass structure sampling: use strip reads when at least this many
+# structures need cells (structures.py and fastsample.py share this value).
+ONEPASS_MIN = 8
 
 # Hazard raster generation works on strips of rows so memory stays bounded
 # no matter how large the depth grid is (~2 M cells per strip is roughly

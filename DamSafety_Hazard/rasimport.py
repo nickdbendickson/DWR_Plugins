@@ -488,11 +488,15 @@ def import_plan(hdf_path, out_folder, dem_path=None, cell_ft=0.0, breach_hr=0.0,
             a, b = osr.SpatialReference(), osr.SpatialReference()
             a.ImportFromWkt(info["projection"])
             b.ImportFromWkt(dem.GetProjection())
-            if not a.IsSame(b):
-                notes.append("the terrain raster's coordinate system differs from the plan's "
-                             "- nothing is reprojected; check that they match")
+            same = bool(a.IsSame(b))
         except Exception:
-            pass
+            same = True                          # cannot compare: as before (no refusal)
+        if not same:
+            # RS.4: the DEM window would be read in the plan's coordinates -> wrong depths
+            raise RasImportError(
+                "the terrain raster's coordinate system differs from the plan's - nothing "
+                "is reprojected, so the depths would be wrong. Give a terrain raster in the "
+                "plan's coordinate system (RAS Mapper projection)")
     if not wkt:
         raise RasImportError("the plan HDF has no projection (set it in RAS Mapper) - give "
                              "the terrain raster so its coordinate system can be used")
@@ -728,38 +732,22 @@ def plan_settings(settings=None):
 
 
 def _content_sig(path):
-    """[size, mtime (ns), md5 of the first and last MB]."""
-    st = os.stat(path)
-    h = hashlib.md5()
-    with open(path, "rb") as fh:
-        h.update(fh.read(_HASH_BYTES))
-        if st.st_size > 2 * _HASH_BYTES:
-            fh.seek(-_HASH_BYTES, os.SEEK_END)
-            h.update(fh.read(_HASH_BYTES))
-        elif st.st_size > _HASH_BYTES:
-            h.update(fh.read())
-    return [int(st.st_size), int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))),
-            h.hexdigest()]
+    """[size, content sha256] (RS.1: fingerprint.content_digest, no size+mtime disk
+    cache, so a same-size rewrite with a preserved time stamp is still seen)."""
+    from .fingerprint import content_digest
+    os.stat(path)                                # OSError for a missing file, as before
+    d = content_digest(path)
+    if d.get("missing"):
+        raise OSError("cannot read {}".format(path))
+    return [int(d["size"]), d["sha256"], "sampled" if d.get("sampled") else "full"]
 
 
 def _vrt_sources_sig(path):
-    """Size / mtime of the files a VRT terrain mosaic points at."""
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read(8 << 20)
-    except OSError:
-        return []
-    out = []
-    base = os.path.dirname(os.path.abspath(path))
-    for rel, name in re.findall(r'<SourceFilename[^>]*relativeToVRT="(\d)"[^>]*>([^<]+)<',
-                                text)[:5000]:
-        p = os.path.join(base, name) if rel == "1" else name
-        try:
-            st = os.stat(p)
-            out.append([name, int(st.st_size), int(getattr(st, "st_mtime_ns", 0))])
-        except OSError:
-            out.append([name, "missing"])
-    return out
+    """Content digests of the files a VRT terrain mosaic reads (RS.2: the same
+    VRT handling as fingerprint - nested VRTs, no relativeToVRT needed, a
+    truncated list marked incomplete)."""
+    from .fingerprint import _vrt_sources
+    return _vrt_sources(path, limit=5000) or []
 
 
 def plan_key(path, settings=None):
