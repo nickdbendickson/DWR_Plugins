@@ -81,9 +81,13 @@ DISCLAIMER = ("SCREENING TABLE ONLY: each row reads the UPSTREAM dam's own breac
 SERIES_FIELDS = ["Upstream", "Downstream", "Depth_ft", "First_Arrival_hr", "Velocity_fps",
                  "Max_Depth_Within_Tol_ft", "Sample_Distance_ft", "Upstream_ND",
                  "Upstream_TM11", "Downstream_ND", "Downstream_TM11", "Cascade_Candidate",
-                 "Class_Order_Flag", "Flags", "Message", "Upstream_Folder", "Downstream_Folder"]
+                 "Class_Order_Flag", "Vintage_Flag", "Upstream_Snapshot", "Downstream_Snapshot",
+                 "Flags", "Message", "Upstream_Folder", "Downstream_Folder"]
 DAM_FIELDS = ["Dam", "Folder", "Location", "Location_Source", "Depth_Raster", "Arrival_Raster",
-              "Velocity_Raster", "ND", "TM11", "Status", "Floods", "Flooded_By"]
+              "Velocity_Raster", "ND", "TM11", "Snapshot_Date", "Snapshot_Version", "Status",
+              "Floods", "Flooded_By"]
+# Lumo 2.29.1: two classifications this far apart (or by different plugin versions) are flagged
+VINTAGE_MAX_DAYS = 365
 
 _RANK = {"low": 1, "medium": 2, "significant": 2, "high": 3}
 
@@ -298,9 +302,38 @@ def _class_of(snapshot):
         except (OSError, ValueError):
             snap = None
     if not isinstance(snap, dict):
-        return {"nd": "", "tm11": "", "lij": None, "time": ""}
+        return {"nd": "", "tm11": "", "lij": None, "time": "", "plugin_version": ""}
     return {"nd": snap.get("nd") or "", "tm11": snap.get("tm11") or "",
-            "lij": snap.get("lij"), "time": snap.get("time") or ""}
+            "lij": snap.get("lij"), "time": snap.get("time") or "",
+            "plugin_version": snap.get("plugin_version") or ""}
+
+
+def _snap_date(text):
+    """datetime of a snapshot "time" ('YYYY-MM-DD HH:MM' or ISO), or None."""
+    import datetime
+    t = str(text or "").strip().replace("T", " ")
+    for fmt, n in (("%Y-%m-%d %H:%M:%S", 19), ("%Y-%m-%d %H:%M", 16), ("%Y-%m-%d", 10)):
+        try:
+            return datetime.datetime.strptime(t[:n], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def vintage_problem(up, down, max_days=VINTAGE_MAX_DAYS):
+    """Text when two dams' classifications are of different vintages ('' when comparable or
+    unknown): snapshot dates more than max_days apart, or different plugin versions."""
+    cu, cd = up.get("class") or {}, down.get("class") or {}
+    bits = []
+    du, dd = _snap_date(cu.get("time")), _snap_date(cd.get("time"))
+    if du and dd and abs((du - dd).days) > max_days:
+        bits.append("classified {} days apart ({} {}, {} {})".format(
+            abs((du - dd).days), up["name"], cu.get("time"), down["name"], cd.get("time")))
+    vu, vd = cu.get("plugin_version") or "", cd.get("plugin_version") or ""
+    if vu and vd and vu != vd:
+        bits.append("classified by different plugin versions ({} {}, {} {})".format(
+            up["name"], vu, down["name"], vd))
+    return "; ".join(bits)
 
 
 def make_entry(name, point=None, depth=None, arrival=None, velocity=None, snapshot=None,
@@ -393,6 +426,7 @@ class _Rasters(object):
         self.error = ""
         self.layers = {}
         self.samplers = {}
+        self.warnings = []                    # velocity / arrival rasters that failed to open
         for key in ("depth", "arrival", "velocity"):
             spec = entry.get(key)
             if not spec:
@@ -405,10 +439,16 @@ class _Rasters(object):
                 lyr, smp = None, None
                 if key == "depth":
                     self.error = "depth raster could not be opened ({})".format(e)
+                else:
+                    self.warnings.append("{} raster could not be opened ({})".format(key, e))
             if smp is None or not smp.ok:
                 if key == "depth" and not self.error:
                     self.error = "depth raster {} could not be read".format(
                         os.path.basename(str(spec)) if isinstance(spec, str) else "")
+                elif key != "depth" and not any(w.startswith(key + " raster")
+                                                for w in self.warnings):
+                    self.warnings.append("{} raster {} could not be read".format(
+                        key, os.path.basename(str(spec)) if isinstance(spec, str) else ""))
                 continue
             self.layers[key], self.samplers[key] = lyr, smp
         if "depth" not in self.samplers and not self.error:
@@ -660,6 +700,9 @@ def screen(entries, depth_threshold_ft=DEFAULT_DEPTH_THRESHOLD_FT,
                 log_message("Dams in series: {}: {}".format(up["name"], rs.error), MSG_WARNING)
                 continue
             up["status"] = "screened"
+            up["raster_warnings"] = list(rs.warnings)
+            for w in rs.warnings:
+                log_message("Dams in series: {}: {}".format(up["name"], w), MSG_WARNING)
             for down in located:
                 if down is up:
                     continue
@@ -726,6 +769,13 @@ def _row(up, down, got, threshold, flag_on):
         msgs.append("no arrival time at this point")
     elif not up.get("arrival"):
         msgs.append("no arrival raster for {}".format(up["name"]))
+    vint = vintage_problem(up, down)
+    if vint:
+        flags.append("VINTAGE")
+        msgs.append("the two classifications are not of the same vintage ({}): the class order "
+                    "may reflect different data or methods".format(vint))
+    for w in up.get("raster_warnings") or []:
+        msgs.append("{}'s {} - not used".format(up["name"], w))
     if not msgs:
         msgs.append("{} is inside {}'s breach flood; depth below the screening threshold".format(
             down["name"], up["name"]))
@@ -739,6 +789,9 @@ def _row(up, down, got, threshold, flag_on):
             "Downstream_TM11": (down.get("class") or {}).get("tm11", ""),
             "Cascade_Candidate": "YES" if cascade else "no",
             "Class_Order_Flag": "YES" if order else ("no" if known else "unknown"),
+            "Vintage_Flag": "YES" if vint else "no",
+            "Upstream_Snapshot": (up.get("class") or {}).get("time", ""),
+            "Downstream_Snapshot": (down.get("class") or {}).get("time", ""),
             "Flags": "; ".join(flags), "Message": ". ".join(msgs),
             "Upstream_Folder": up.get("folder", ""), "Downstream_Folder": down.get("folder", "")}
 
@@ -767,6 +820,8 @@ def _dam_rows(entries, rows):
         by = [r["Upstream"] for r in rows if r["Downstream"] == e["name"]]
         pt = e.get("point")
         status = e.get("status") or ""
+        for w in e.get("raster_warnings") or []:
+            status = (status + "; " if status else "") + w
         if pt is None:
             status = (status + "; " if status else "") + "location unknown"
         out.append({"Dam": e["name"], "Folder": e.get("folder", ""),
@@ -779,7 +834,10 @@ def _dam_rows(entries, rows):
                     "Velocity_Raster": os.path.basename(str(e["velocity"])) if isinstance(
                         e.get("velocity"), str) else ("(layer)" if e.get("velocity") else ""),
                     "ND": (e.get("class") or {}).get("nd", ""),
-                    "TM11": (e.get("class") or {}).get("tm11", ""), "Status": status,
+                    "TM11": (e.get("class") or {}).get("tm11", ""),
+                    "Snapshot_Date": (e.get("class") or {}).get("time", ""),
+                    "Snapshot_Version": (e.get("class") or {}).get("plugin_version", ""),
+                    "Status": status,
                     "Floods": "; ".join(floods), "Flooded_By": "; ".join(by)})
     return out
 
@@ -891,6 +949,12 @@ def summary_lines(res, max_rows=12):
                      "dam's - check whether {}'s incremental consequences must include {}'s "
                      "failure".format(r["Upstream"], r["Downstream"], r["Upstream"],
                                       r["Downstream"]))
+    vint = [r for r in rows if r.get("Vintage_Flag") == "YES"]
+    for r in vint[:max_rows]:
+        lines.append("VINTAGE: {} ({}) -> {} ({}): classifications not of the same vintage - "
+                     "see the Message column".format(r["Upstream"], r.get("Upstream_Snapshot") or "?",
+                                                     r["Downstream"],
+                                                     r.get("Downstream_Snapshot") or "?"))
     if len(casc) > max_rows or len(order) > max_rows:
         lines.append("... more in {}".format(CSV_FILE))
     for c in res.chains:

@@ -84,6 +84,26 @@ def _newest_package(out_folder):
     return max(zips, key=lambda f: os.path.getmtime(f))
 
 
+def package_staleness(out_folder, package):
+    """Warning text when `package` (a submittal zip) is older than the outputs' latest run
+    (QA/Last_Run_Snapshot.json), else '' (Lumo 2.23.1)."""
+    if not package:
+        return ""
+    snap = os.path.join(out_folder, "QA", "Last_Run_Snapshot.json")
+    try:
+        ts, tp = os.path.getmtime(snap), os.path.getmtime(package)
+    except OSError:
+        return ""
+    if tp + 1 < ts:
+        import time as _t
+        return ("the newest submittal package {} ({}) is OLDER than the last classification run "
+                "({}) - make a new package first, or check that this is the one that was "
+                "reviewed".format(os.path.basename(package),
+                                  _t.strftime("%Y-%m-%d %H:%M", _t.localtime(tp)),
+                                  _t.strftime("%Y-%m-%d %H:%M", _t.localtime(ts))))
+    return ""
+
+
 class SuiteTabMixin(object):
     """Group 8 of the Hazard Classification tab (v2.10)."""
 
@@ -180,6 +200,13 @@ class SuiteTabMixin(object):
             pkg = _newest_package(out)
             if pkg:
                 p["PACKAGE"] = pkg
+                stale = package_staleness(out, pkg)
+                if stale:
+                    log_message("Mark reviewed: " + stale, MSG_WARNING)
+                    try:
+                        self._log(">>> WARNING: Mark reviewed: " + stale)
+                    except Exception:                            # noqa
+                        pass
         return p
 
     def _open_suite_tool(self, alg):

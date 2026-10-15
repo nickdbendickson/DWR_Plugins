@@ -164,7 +164,9 @@ class SuiteHomeDialog(QDialog):
         self.setMinimumWidth(1000)          # 900 truncated the plugin button labels
         try:
             from qgis.PyQt.QtWidgets import QApplication
-            self.setMaximumHeight(max(600, QApplication.primaryScreen().geometry().height() - 80))
+            screen = QApplication.primaryScreen()          # None on a start without a screen
+            if screen is not None:
+                self.setMaximumHeight(max(600, screen.geometry().height() - 80))
         except Exception:                                        # noqa
             pass
         self._build()
