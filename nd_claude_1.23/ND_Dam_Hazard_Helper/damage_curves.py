@@ -123,31 +123,34 @@ def load(path):
         return None, ["curve file not found: {}".format(path)]
     try:
         with open(path, newline="", encoding="utf-8-sig", errors="replace") as fh:
-            rows = [r for r in csv.reader(fh)
+            # (file line number, row): warnings name the line in the file, counting the
+            # comment and blank lines the template has (Lumo v1.7)
+            rd = csv.reader(fh)
+            rows = [(rd.line_num, r) for r in rd
                     if r and not (r[0].strip().startswith("#") or not "".join(r).strip())]
     except OSError as e:
         return None, ["curve file not readable: {}".format(e)]
     if not rows:
         return None, ["curve file is empty: {}".format(os.path.basename(path))]
-    head = [h.strip().lower() for h in rows[0]]
+    head = [h.strip().lower() for h in rows[0][1]]
     try:
         io_, ik, idp, ip = (head.index(k) for k in ("occupancy", "kind", "depth_ft", "percent"))
     except ValueError:
         return None, ["curve file needs the columns occupancy, kind, depth_ft, percent (found: "
                       "{})".format(", ".join(head))]
     pts = {}
-    for n, r in enumerate(rows[1:], 2):
+    for n, r in rows[1:]:
         try:
             occ = r[io_].strip().upper()
             kind = r[ik].strip().lower()
             depth = float(r[idp])
             pct = float(r[ip])
         except (IndexError, ValueError):
-            problems.append("row {} skipped (not readable): {}".format(n, ",".join(r)[:60]))
+            problems.append("line {} skipped (not readable): {}".format(n, ",".join(r)[:60]))
             continue
         if not occ or kind not in KINDS or not (0.0 <= pct <= 100.0) \
                 or not np.isfinite(depth):
-            problems.append("row {} skipped (occupancy, kind structure/content, percent "
+            problems.append("line {} skipped (occupancy, kind structure/content, percent "
                             "0-100): {}".format(n, ",".join(r)[:60]))
             continue
         pts.setdefault((occ, kind), []).append((depth, pct))
