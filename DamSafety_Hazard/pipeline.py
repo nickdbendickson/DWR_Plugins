@@ -163,6 +163,38 @@ DEFAULTS.update(_MG.CFG_DEFAULTS)
 
 
 
+def downloads_disabled():
+    """ES.1(a): the suite / offline environment turns every download off."""
+    import os as _os
+    return bool(_os.environ.get("ND_DAM_SUITE") or _os.environ.get("ND_DAM_OFFLINE"))
+
+
+def resolve_point_layers(cfg, loc):
+    """[(family, layer)] of the project / data-folder point layers the run
+    uses (shared with estimate.planned_downloads, ES.1(b))."""
+    if cfg.get("point_sources", "auto") == "auto":
+        layer_dict = discover_project_layers()
+        points = []
+        for fam in ("NSI", "NDGISHUB"):          # FEMA point layers: not used (v2.2)
+            points.extend((fam, lyr) for lyr in layer_dict.get(fam, []))
+    else:
+        points = list(cfg.get("point_sources") or [])
+    if loc.get("nsi") is not None:
+        points.append(("NSI", loc["nsi"]))
+    if loc.get("address") is not None:
+        points.append(("NDGISHUB", loc["address"]))
+    return points
+
+
+def usa_structures_plan(cfg, osm, out, dam_folder, loc):
+    """ES.1(c): None (not downloaded), "usa_file" (no outline layer yet: the
+    download is kept as the outline file) or "usa" (an outline layer exists)."""
+    if not cfg.get("download_usa_structures") or "usa" in loc \
+            or is_fema_structures_layer(osm, out, dam_folder):
+        return None
+    return "usa_file" if osm is None else "usa"
+
+
 def _eap_on(cfg, part):
     """An EAP output is made when EAP outputs are on AND that output is on.
     The map book also needs the notification list and the arrival maps."""
@@ -1827,13 +1859,7 @@ def _collect_inputs(run, clip):
     for line in run.local_lines:
         run.sources.append(line)
         run.log(">>> " + line)
-    if cfg["point_sources"] == "auto":
-        layer_dict = discover_project_layers()
-        points = []
-        for fam in ("NSI", "NDGISHUB"):          # FEMA point layers: not used (v2.2)
-            points.extend((fam, lyr) for lyr in layer_dict.get(fam, []))
-    else:
-        points = list(cfg["point_sources"] or [])
+    points = resolve_point_layers(cfg, {})
     for fam, lyr in points:
         run.sources.append("{} points: project layer '{}'".format(fam, lyr.name()))
     if loc.get("nsi") is not None:
@@ -1855,8 +1881,7 @@ def _collect_inputs(run, clip):
     def want(key, label, fn, *args):
         jobs.append((key, label, fn, args))
     if ext4326 is not None:
-        import os as _os
-        if _os.environ.get("ND_DAM_SUITE") or _os.environ.get("ND_DAM_OFFLINE"):
+        if downloads_disabled():
             run.log(">>> Suite folder is set: skipping the 25-layer download. "
                     "Use the layers already in the project or the offline pack.")
             cfg["download_nsi"] = cfg["download_address"] = False
@@ -1870,9 +1895,9 @@ def _collect_inputs(run, clip):
             want("nsi", "NSI", fetch_nsi, ext4326, out)
         if not have_hub and cfg["download_address"]:
             want("address", "ND GIS Hub address points", fetch_nd_address_points, ext4326, out)
-        if cfg["download_usa_structures"] and "usa" not in loc \
-                and not is_fema_structures_layer(osm, out, dam_folder):
-            if osm is None:
+        usa_plan = usa_structures_plan(cfg, osm, out, dam_folder, loc)
+        if usa_plan:
+            if usa_plan == "usa_file":
                 # no outline file yet: download it once and keep it as the file
                 want("usa_file", "FEMA USA Structures", download_structures_file, out,
                      dam_folder, ext4326, run.ctx)

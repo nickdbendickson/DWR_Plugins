@@ -838,6 +838,7 @@ class Extras290TabMixin(object):
             return
         self._apply_state(state)
         self._restore_parcel_fields290(state)
+        ST.note_failed_keys(meta, getattr(self, "_apply_failed", None))   # SE.2
         self._remember_dir290(path)
         self._profile_state290 = state
         self._profile_meta290 = meta

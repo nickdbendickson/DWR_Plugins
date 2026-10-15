@@ -798,10 +798,12 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
     def _apply_state(self, state):
         self._restoring = True          # no raster search while settings are restored
+        self._apply_failed = []         # SE.2: keys whose value was not accepted
         try:
             for name in self._SETTING_WIDGETS:
                 if name in state and getattr(self, name, None) is not None:
-                    set_widget_value(getattr(self, name), state[name])
+                    if set_widget_value(getattr(self, name), state[name]) is False:
+                        self._apply_failed.append(name)
             if hasattr(self, "scenario_table"):
                 self._apply_scenario_state(state)
             if hasattr(self, "_restore_parcel_fields290"):
