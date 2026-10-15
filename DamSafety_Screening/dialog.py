@@ -1331,7 +1331,7 @@ class NDDamScreeningDialog(QDialog):
         if not p:
             return
         try:
-            wf.window_settings_to(self.grid.settings, self.settings())
+            wf.window_settings_to(self.grid.settings, self.settings(), defaults=not os.path.isfile(p))
             self.grid.settings.path = p
             self.grid.settings.save(p, catalog=self.grid.catalog, versions=self.grid.versions or None)
             DS.set_current_path(p)

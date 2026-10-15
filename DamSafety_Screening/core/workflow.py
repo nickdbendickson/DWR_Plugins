@@ -180,7 +180,10 @@ def dams_folder(work, settings):
 
 def _nonempty_dir(p):
     try:
-        return os.path.isdir(p) and any(True for _ in os.scandir(p))
+        if not os.path.isdir(p):
+            return False
+        with os.scandir(p) as it:
+            return any(True for _ in it)
     except OSError:
         return False
 
@@ -787,15 +790,22 @@ def window_settings_from(sf):
     return out
 
 
-def window_settings_to(sf, settings):
-    """Put the window's shareable choices into a suite settings file object."""
+def window_settings_to(sf, settings, defaults=True):
+    """Put the window's shareable choices into a suite settings file object. `defaults=False`
+    (the window's autosave into a file that exists): a choice still at its default and not yet
+    stored is left out, so only what the engineer changed goes into the shared file; a stored
+    choice is updated as usual. A run's record (write_run_settings) keeps every choice."""
     S = dict(DEFAULT_SETTINGS)
     S.update(settings or {})
     for k in WINDOW_KEYS:
         v = S.get(k)
         if k == "chain":
             v = ",".join(v or [])
-        if v in (None, ""):
+        d = DEFAULT_SETTINGS.get(k)
+        if k == "chain":
+            d = ",".join(d or [])
+        if v in (None, "") or (not defaults and v == d
+                                 and sf.values.get((PLUGIN_KEY, "window", k)) in (None, "")):
             sf.set(PLUGIN_KEY, "window", k, None)
         else:
             sf.set(PLUGIN_KEY, "window", k, v)

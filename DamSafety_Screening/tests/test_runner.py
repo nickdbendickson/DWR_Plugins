@@ -2,8 +2,12 @@
 reservoir-in-grid, parallel batch.  LISFLOOD_EXE optional (adds an ACC run)."""
 import os, sys, time
 import numpy as np
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from core import runner as rn, breach_hydro as bh, gridutil as gu  # noqa: E402
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "qgis_mock"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
+# through the package (as QGIS loads it): core/runner.py imports ..damsuite, which a bare
+# `core` top-level package cannot resolve ("attempted relative import beyond top-level package")
+from nd_dam_screening.core import runner as rn, breach_hydro as bh, gridutil as gu  # noqa: E402
 
 # ---- a 8 km x 2.5 km valley draining south, 5 m base grid, EPSG:5070-like coordinates
 base = 5.0
