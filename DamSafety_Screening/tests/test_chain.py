@@ -5,6 +5,7 @@ which proves units (m3/s -> per-unit-width) survive the whole hand-off.
 """
 import glob, os, shutil, subprocess, sys, tempfile
 import numpy as np
+_trapz = getattr(np, "trapezoid", None) or np.trapz   # numpy < 2.0 (QGIS 3.34) has only trapz
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 import breach_hydro as bh, solver_io as sio  # noqa: E402
@@ -27,7 +28,7 @@ with open(csvp, "w") as f:
     f.write("time_s,discharge_m3s\n")
     for i in idx: f.write(f"{t[i]:.1f},{q[i]:.3f}\n")
 ts, qs = sio.read_hydrograph_csv(csvp)
-csv_vol = float(np.trapezoid(qs, ts))
+csv_vol = float(_trapz(qs, ts))
 print("CSV volume %.3e (%.2f%% of released)" % (csv_vol, 100 * csv_vol / released))
 assert abs(csv_vol - released) / released < 0.02          # downsampling loses < 2%
 

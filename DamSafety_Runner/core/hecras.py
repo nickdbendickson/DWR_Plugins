@@ -1231,7 +1231,7 @@ def _write_structures(dam_folder, model_folder, out, geom, name, river=None, sa=
     with open(csv_path, "w") as f:
         f.write("name,kind,shape,barrels,width_m,height_m,source,surveyed,x1,y1,x2,y2,note\n")
         for s in rows:
-            line = s.get("line") or []
+            line = [] if s.get("line") is None else list(s.get("line"))  # may be an ndarray
             a = line[0] if line else ["", ""]
             b = line[-1] if line else ["", ""]
             f.write("{},{},{},{},{},{},{},{},{},{},{},{},{}\n".format(
@@ -1242,7 +1242,7 @@ def _write_structures(dam_folder, model_folder, out, geom, name, river=None, sa=
     with open(geom, "a") as f:
         f.write("\n")
         for i, s in enumerate(rows, 1):
-            line = s.get("line") or []
+            line = [] if s.get("line") is None else list(s.get("line"))  # may be an ndarray
             if len(line) < 2:
                 continue
             label = s.get("name") or "{}{}".format(s.get("kind"), i)

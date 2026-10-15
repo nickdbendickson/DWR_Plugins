@@ -154,7 +154,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
                     hh = float(hh) if hh not in (None, "") else 0.0
                 except (TypeError, ValueError):
                     hh = 0.0
-                choice = self.parameterAsEnum(parameters, "STORAGE_CHOICE", context) if self.parameterDefinition("STORAGE_CHOICE") else 0
+                choice = self.parameterAsEnum(params, "STORAGE_CHOICE", context) if self.parameterDefinition("STORAGE_CHOICE") else 0
                 vol, how = storage.storage_choice_volume(inv_norm, inv_max, choice)
                 if vol > 1.0 and hh > 0.5 and "no waterbody" in note:
                     ground = None
@@ -190,7 +190,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 curve, scale, cnote = storage.calibrate_below_pool(
                     res.curve, res.below_pool_m3, inv)
                 if cnote: note = (note + "; " if note else "") + cnote
-                choice = self.parameterAsEnum(parameters, "STORAGE_CHOICE", context) if self.parameterDefinition("STORAGE_CHOICE") else 0
+                choice = self.parameterAsEnum(params, "STORAGE_CHOICE", context) if self.parameterDefinition("STORAGE_CHOICE") else 0
                 inv_max = f["inv_max_m3"] if "inv_max_m3" in names else None
                 try:
                     inv_max = float(inv_max) if inv_max not in (None, "") else 0.0

@@ -10,6 +10,7 @@ import sys
 import tempfile
 
 import numpy as np
+_trapz = getattr(np, "trapezoid", None) or np.trapz   # numpy < 2.0 (QGIS 3.34) has only trapz
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core"))
 import solver_io as sio  # noqa: E402
@@ -40,7 +41,7 @@ x = (np.arange(nx) + 0.5) * cell; y = (np.arange(ny) + 0.5) * cell
 X, Y = np.meshgrid(x, y)
 Z = (100 - 0.005 * X + 0.02 * np.abs(Y - 300))[::-1]
 t = np.array([0, 600, 1800, 3600.0]); q = np.array([0, 100, 0, 0.0])
-vol_in = float(np.trapezoid(q, t))
+vol_in = float(_trapz(q, t))
 
 for solver in ("acc", "fv1"):
     d = tempfile.mkdtemp()

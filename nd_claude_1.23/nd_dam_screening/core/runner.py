@@ -52,6 +52,16 @@ DEFAULTS = dict(engine="lisflood-acc", exe=None, cell="auto", corridor=True,
                 trace_grow=False)    # v0.20.0: clip growth from the trace is opt-in (see simulate)
 
 
+def _log_suppressed(message):
+    """Log an error that is deliberately not raised (QGIS message log, else Python logging)."""
+    try:
+        from qgis.core import QgsMessageLog, Qgis
+        QgsMessageLog.logMessage(str(message), "DamSafety", Qgis.Warning)
+    except Exception:                                            # noqa - no QGIS (tests, CLI)
+        import logging
+        logging.getLogger(__name__).warning("%s", message)
+
+
 class Cancelled(Exception):
     pass
 
@@ -67,8 +77,9 @@ def _stop(p, grace_s=10.0):
         try:
             p.kill()
             p.wait(timeout=grace_s)
-        except Exception:                                        # noqa
-            pass
+        except Exception as e:                                   # noqa
+            _log_suppressed("Could not stop the solver process {}: {}".format(
+                getattr(p, "pid", "?"), e))
 
 
 def _tail(path, chars=300):
