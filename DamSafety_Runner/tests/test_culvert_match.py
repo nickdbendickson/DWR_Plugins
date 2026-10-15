@@ -269,3 +269,107 @@ def culvert_matches_section_in_run_report():
             "8.0 | 2 | box | yes |  |") in md, md
     r["culvert_matches"][0].update(invert_up_m=300.0 * FT, invert_dn_m=299.5 * FT)
     assert "| box | yes | 300.0 / 299.5 |" in W.render_report(r)
+
+
+CLP = os.path.join(SOURCES, "research", "nddot_centerline_pipes.gpkg")
+CLP_ABS = os.path.join(SOURCES, "research", "nddot_centerline_pipes_absaraka.csv")
+
+
+def _clp(desc, d, a=0, length=56, le=938.0, re_=937.5, loc="NO ERROR", rid=276, meas=0.2466,
+         xy=(0.0, 0.0)):
+    from nd_breach_runner.core import culvert_guess as cg
+    return cg.inventory_record({"ROUTE_ID": rid, "ROUTE_MEASURE": meas, "PIPE_DESC": desc,
+                                "DIAMETER_E": d, "ARCH_E": a, "LENGTH_E": length,
+                                "LEFT_ELEV_E": le, "RIGHT_ELEV_E": re_, "LOC_ERROR": loc}, xy)
+
+
+@register
+def clp_records_map_shape_barrels_sizes_and_plan_inverts():
+    r = _clp("REINFORCED CONCRETE PIPE                ", 42)
+    assert r["source"] == "NDDOT CLP" and r["id"] == "276:0.2466" and r["kind"] == "culvert"
+    assert (r["shape"], r["barrels"], r["span_ft"], r["rise_ft"]) == ("pipe", 1, 3.5, 3.5)
+    assert r["barrel_len_ft"] == 56.0 and r["clp_inverts_ft"] == (938.0, 937.5)
+    assert r["invert_datum"] == "plan" and r["loc_error"] is False
+    assert _clp("DOUBLE ROW OF CONCRETE PIPE", 36)["barrels"] == 2
+    assert _clp("TRIPLE ROW OF STEEL PIPE", 36)["barrels"] == 3
+    assert _clp("FOUR ROW CONCRETE PIPE", 36)["barrels"] == 4
+    a = _clp("REINFORCED CONCRETE PIPE ARCH", 36, 58)          # rise-first: span = larger
+    assert a["shape"] == "arch" and abs(a["span_ft"] - 58 / 12.0) < 1e-3 and \
+        abs(a["rise_ft"] - 3.0) < 1e-3
+    d = _clp("DBL REINFORCED CONCRETE PIPE ARCH", 73, 45)
+    assert d["barrels"] == 2 and d["shape"] == "arch"
+    assert _clp("ELLIPTICAL R. C. P.", 30, 19)["shape"] == "arch"
+    assert _clp("DOUBLE BOX CONCRETE PIPE", 48, 36)["shape"] == "box"
+    c = _clp("CATTLE PASS", 48, 72)                            # inches
+    assert (c["shape"], c["span_ft"], c["rise_ft"]) == ("box", 4.0, 6.0)
+    c = _clp("CATTLE PASS", 5, 0)                              # feet (NDDOT's way)
+    assert (c["shape"], c["span_ft"], c["rise_ft"]) == ("box", 5.0, 5.0)
+    assert _clp("CATTLE PASS", 0, 0) is None                   # no size: skipped
+    assert _clp("REINFORCED CONCRETE PIPE", 42, loc="ROUTE WITHOUT MEASURE")["loc_error"]
+    assert "clp_inverts_ft" not in _clp("REINFORCED CONCRETE PIPE", 42, le=0, re_=99999.9)
+
+
+@register
+def clp_priority_bridge_inventory_then_clp_then_nbi_then_loc_error():
+    from nd_breach_runner.core import culvert_guess as cg
+    nbi = cg.inventory_record({"STRUCTURE_NUMBER_008": "9", "STRUCTURE_TYPE_043B": "19",
+                               "MAIN_UNIT_SPANS_045": 2, "MAX_SPAN_LEN_MT_048": 3.0}, (1.0, 0.0))
+    bad = _clp("REINFORCED CONCRETE PIPE", 60, loc="ROUTE WITHOUT MEASURE", rid=1, meas=1.0,
+               xy=(0.5, 0.0))
+    good = _clp("DOUBLE ROW OF CONCRETE PIPE", 42, rid=276, meas=0.2466, xy=(50.0, 0.0))
+    nd = _nddot("09-118-21.1", 70.0, 0.0, "DOUBLE 16X8X52' PRECAST RCB")
+    pick = lambda inv: cg.match_inventory([_guess(0, 0)], inv, 75.0)[0][0]
+    assert pick([bad, nbi, good, nd])["source"] == "NDDOT 09-118-21.1"
+    m = pick([bad, nbi, good])
+    assert m["source"] == "NDDOT CLP 276:0.2466" and m["barrels"] == 2 and m["shape"] == "pipe"
+    assert abs(m["width_m"] - 3.5 * FT) < 1e-3 and m["width_m"] == m["height_m"]
+    assert m["plan_inverts_ft"] == (938.0, 937.5) and "plan-datum" in m["note"]
+    assert m["barrel_len_m"] == round(56 * FT, 2)
+    assert pick([bad, nbi])["source"].startswith("NBI")
+    assert pick([bad])["source"] == "NDDOT CLP 1:1"
+    # burn: plan-datum inverts are NOT used (structure inverts stay for the LiDAR)
+    s = cg.matched_structures([m])[0]
+    assert s.invert_up_m is None and s.invert_dn_m is None
+
+
+@register
+def clp_absaraka_sample_csv():
+    """The 188 CLP points around Absaraka (research/ csv, lon/lat): all read, and a guess at one
+    of them takes its size."""
+    import csv
+    from nd_breach_runner.core import culvert_guess as cg
+    if not os.path.isfile(CLP_ABS):
+        return
+    from nd_breach_runner.damsuite import suitegpkg as G
+    recs = []
+    with open(CLP_ABS, encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            xy = G.to_5070(float(row["X"]), float(row["Y"]))
+            r = cg.inventory_record(row, xy)
+            if r is not None:
+                recs.append(r)
+    assert len(recs) >= 180 and all(r["source"] == "NDDOT CLP" for r in recs)
+    first = [r for r in recs if r["id"] == "276:0.2466"][0]
+    assert first["shape"] == "pipe" and first["span_ft"] == 3.5 and first["barrel_len_ft"] == 56.0
+    rows, _ = cg.match_inventory([_guess(first["x"] + 10.0, first["y"])], recs, 75.0)
+    assert rows[0]["source"].startswith("NDDOT CLP 276:0.24"), rows[0]["source"]
+
+
+@register
+def clp_statewide_gpkg_bbox_filter_is_fast():
+    """The statewide layer (22,555 points, EPSG:4269): a bbox filters before parsing."""
+    import time
+    from nd_breach_runner.core import culvert_guess as cg
+    from nd_breach_runner.damsuite import suitegpkg as G
+    if not os.path.isfile(CLP):
+        return
+    bb = (-97.6, 46.85, -97.2, 47.10)                       # the research/ Absaraka window
+    t0 = time.time()
+    seen = []
+    recs = cg.read_inventory_gpkg(CLP, lambda srs: seen.append(srs) or
+                                  (lambda x, y: G.to_5070(x, y)), lambda srs: bb)
+    dt = time.time() - t0
+    assert seen == [4269]
+    assert 150 <= len(recs) <= 200, len(recs)               # report.md: 188 points
+    assert dt < 5.0, dt
+    assert all(r["source"] == "NDDOT CLP" for r in recs)

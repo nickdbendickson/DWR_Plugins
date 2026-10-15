@@ -11,7 +11,13 @@ span, rise, barrels and shape are copied, source becomes "NDDOT <BRIDGE_ID>" (or
 The NDDOT bridge inventory's CULVERT text ("DOUBLE, 10X7X88' RCB") is read with ND Dam
 Hazard's parser (nddot_text.py, a verbatim copy). NBI records are culverts when item
 43B (STRUCTURE_TYPE_043B) is 19 and bridges otherwise; bridges never size a guess.
-NDDOT records are preferred over NBI ones (the NBI has no rise and no shape).
+NDDOT Center Line Pipes (CLP; every pipe under a state highway, NAD83 lon/lat; download
+https://www.dot.nd.gov/gis/downloads/centerlinepipes.gdb.zip, refreshed weekly, convert the
+FileGDB to a GeoPackage, e.g. ogr2ogr -f GPKG clp.gpkg centerlinepipes.gdb) are detected by
+their fields (DIAMETER_E with PIPE_DESC / ROUTE_MEASURE / LEFT_ELEV_E); see clp_record.
+Priority when several records are within the match distance: NDDOT bridge inventory, then
+CLP, then NBI (no rise, no shape), then CLP records whose LOC_ERROR is not "NO ERROR" (their
+position is not trusted); distance decides within a rank.
 A guess near a structure from the STRUCTURES layer is dropped: that crossing is
 already modelled. Matched guesses are cut into the DEM only when the engineer asks
 for it (Settings.culvert_burn_matched); unmatched guesses never are.
@@ -157,6 +163,8 @@ def inventory_record(props, xy):
     p = _low(props)
     rec = {"x": float(xy[0]), "y": float(xy[1]), "span_ft": None, "rise_ft": None,
            "barrels": None, "shape": None, "notes": []}
+    if "diameter_e" in p and ("pipe_desc" in p or "route_measure" in p or "left_elev_e" in p):
+        return clp_record(props, xy)
     if "bridge_id" in p:
         bid = _nt._txt(p.get("bridge_id"))
         design = _nt._txt(p.get("designmaindesc"))
@@ -185,10 +193,86 @@ def inventory_record(props, xy):
     return None
 
 
-def read_inventory_gpkg(path, make_transform=None):
+CLP_CATTLE_FT_BELOW = 12.0     # a cattle pass "diameter" below this is feet (4 = 4 ft box)
+
+
+def _clp_elev(v):
+    x = _nt._num(v)
+    return round(x, 2) if x is not None and 500.0 <= x <= 4000.0 else None
+
+
+def clp_record(props, xy):
+    """An NDDOT Center Line Pipes point: PIPE_DESC -> shape and barrels (DOUBLE / TRIPLE /
+    FOUR ROW ... = 2 / 3 / 4), DIAMETER_E (inches) -> span and rise; an arch / elliptical pipe
+    takes ARCH_E (inches) as the other size (span = the larger); a cattle pass is a box when
+    it has a size (a DIAMETER_E below 12 is feet - how NDDOT records them - ARCH_E the rise),
+    else skipped (None). LENGTH_E (ft) is the barrel length. LEFT_ELEV_E / RIGHT_ELEV_E (ft) are
+    kept as plan-datum inverts (clp_inverts_ft, invert_datum "plan"): NDDOT says they come
+    from the original grading plans, possibly an old vertical datum, so the burn uses the
+    LiDAR inverts (lidar_inverts) and these are only reported. LOC_ERROR other than
+    "NO ERROR" -> loc_error set (lower priority in match_inventory)."""
+    p = _low(props)
+    desc = _nt._norm_text(p.get("pipe_desc"))
+    rid, meas = _nt._num(p.get("route_id")), _nt._num(p.get("route_measure"))
+    rid_t = "{:g}".format(rid) if rid is not None else "?"
+    meas_t = "{:.4f}".format(meas).rstrip("0").rstrip(".") if meas is not None else "?"
+    rec = {"x": float(xy[0]), "y": float(xy[1]), "source": "NDDOT CLP",
+           "id": "{}:{}".format(rid_t, meas_t), "kind": "culvert", "span_ft": None,
+           "rise_ft": None, "barrels": None, "shape": None, "notes": [], "material": desc}
+    loc = _nt._txt(p.get("loc_error")).upper()
+    rec["loc_error"] = bool(loc) and loc != "NO ERROR"
+    if rec["loc_error"]:
+        rec["notes"].append("NDDOT LOC_ERROR: {}".format(loc))
+    d_in = _nt._pos(p.get("diameter_e"))
+    a_in = _nt._pos(p.get("arch_e"))
+    n, _at = _nt._count_prefix(desc)
+    rec["barrels"] = n or 1
+    cattle = "CATTLE" in desc
+    if cattle:
+        if not d_in:
+            return None
+        span = d_in if d_in < CLP_CATTLE_FT_BELOW else d_in / 12.0
+        rise = (a_in if a_in < CLP_CATTLE_FT_BELOW else a_in / 12.0) if a_in else span
+        rec.update(shape="box", span_ft=round(span, 2), rise_ft=round(rise, 2))
+        rec["notes"].append("cattle pass: written as a box")
+    else:
+        if not d_in:
+            return rec                                   # no size: not used for sizing
+        shape = _nt._shape_words(desc) or "pipe"
+        if "BOX" in desc:
+            shape = "box"
+        if shape == "arch" and a_in:
+            span, rise = max(d_in, a_in) / 12.0, min(d_in, a_in) / 12.0
+        elif shape == "box" and a_in:
+            span, rise = d_in / 12.0, a_in / 12.0
+        else:
+            span = rise = d_in / 12.0
+            shape = "pipe" if shape == "arch" else shape
+        rec.update(shape=shape, span_ft=round(span, 3), rise_ft=round(rise, 3))
+    ln = _nt._pos(p.get("length_e"))
+    rec["barrel_len_ft"] = round(ln, 1) if ln else None
+    le, re_ = _clp_elev(p.get("left_elev_e")), _clp_elev(p.get("right_elev_e"))
+    if le is not None or re_ is not None:
+        rec["clp_inverts_ft"] = (le, re_)
+        rec["invert_datum"] = "plan"
+    return rec
+
+
+def _priority(r):
+    src = r.get("source") or ""
+    if src == "NDDOT":
+        return 0
+    if src == "NDDOT CLP":
+        return 3 if r.get("loc_error") else 1
+    return 2
+
+
+def read_inventory_gpkg(path, make_transform=None, make_bbox=None):
     """Inventory records from every point layer of a GeoPackage (pure Python, sqlite3).
     make_transform(srs_id) -> transform(x, y) -> (x, y) maps a layer's CRS to the work CRS
-    (None: coordinates as stored)."""
+    (None: coordinates as stored). make_bbox(srs_id) -> (xmin, ymin, xmax, ymax) in the
+    layer's CRS keeps only the points inside it, filtered BEFORE parsing (the layer's R-tree
+    when it has one) - the statewide CLP layer has 22,555 points."""
     import sqlite3
     from ..damsuite import suitegpkg as G
     out = []
@@ -198,7 +282,20 @@ def read_inventory_gpkg(path, make_transform=None):
                              "FROM gpkg_geometry_columns").fetchall()
         for table, gcol, srs_id in layers:
             transform = make_transform(srs_id) if make_transform is not None else None
-            cur = con.execute('SELECT * FROM "{}"'.format(table.replace('"', '""')))
+            bb = make_bbox(srs_id) if make_bbox is not None else None
+            qt = '"{}"'.format(table.replace('"', '""'))
+            rt = "rtree_{}_{}".format(table, gcol)
+            has_rt = bb is not None and con.execute(
+                "SELECT 1 FROM sqlite_master WHERE name = ?", (rt,)).fetchone() is not None
+            if has_rt:
+                pk = [r[1] for r in con.execute("PRAGMA table_info({})".format(qt)) if r[5]]
+                cur = con.execute(
+                    'SELECT t.* FROM {} t JOIN "{}" r ON t."{}" = r.id WHERE r.maxx >= ? AND '
+                    'r.minx <= ? AND r.maxy >= ? AND r.miny <= ?'.format(
+                        qt, rt.replace('"', '""'), (pk[0] if pk else "fid")),
+                    (bb[0], bb[2], bb[1], bb[3]))
+            else:
+                cur = con.execute("SELECT * FROM {}".format(qt))
             names = [d[0] for d in cur.description]
             for row in cur:
                 props = dict(zip(names, row))
@@ -207,6 +304,8 @@ def read_inventory_gpkg(path, make_transform=None):
                 if not pts:
                     continue
                 x, y = pts[0][0], pts[0][1]
+                if bb is not None and not (bb[0] <= x <= bb[2] and bb[1] <= y <= bb[3]):
+                    continue
                 if transform is not None:
                     x, y = transform(x, y)
                 rec = inventory_record(props, (x, y))
@@ -245,7 +344,8 @@ def match_inventory(guesses, inventory, match_m=MATCH_M):
     Returns (rows, notes). A matched row: span -> width_m, rise -> height_m (a pipe's rise
     is its span), barrels, shape (arch -> box), source "NDDOT <id>" / "NBI <id>",
     surveyed True, match_m, name "<source> (matched guess: ...)". An inventory culvert sizes
-    at most one guess (the nearest). NDDOT records win over NBI ones at any distance within
+    at most one guess (the nearest). Rank (NDDOT bridge inventory, CLP, NBI, CLP with a
+    LOC_ERROR) wins over distance within
     match_m. A record without a span is not used. Unmatched guesses are returned unchanged."""
     rows = [dict(g) for g in guesses or []]
     notes = []
@@ -262,7 +362,7 @@ def match_inventory(guesses, inventory, match_m=MATCH_M):
                 continue
             d = math.hypot(r["x"] - c[0], r["y"] - c[1])
             if d <= match_m:
-                cands.append((0 if r.get("source") == "NDDOT" else 1, d, gi, ri))
+                cands.append((_priority(r), d, gi, ri))
     cands.sort()
     used_g = set()
     used_r = {ri for ri, r in enumerate(inventory or []) for g in rows
@@ -298,6 +398,10 @@ def match_inventory(guesses, inventory, match_m=MATCH_M):
                  note="size from {} {:.0f} m away{}".format(
                      src, d, "; inventory shape {}".format(r["shape"])
                      if r.get("shape") and r["shape"] != shape else ""))
+        if r.get("clp_inverts_ft"):
+            g["plan_inverts_ft"] = r["clp_inverts_ft"]
+            g["note"] += "; NDDOT plan-datum end elevations {} / {} ft (left / right; not used: " \
+                "the burn uses the LiDAR)".format(*r["clp_inverts_ft"])
         if r.get("barrel_len_ft"):
             g["barrel_len_m"] = round(float(r["barrel_len_ft"]) * FT, 2)
         used_g.add(gi)
