@@ -175,7 +175,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
         # --- Review tabs: structures, then roads / rail / bridges / lifelines ---
         self.tab_widget.addTab(self._build_review_tab(), "Review")
-        self.tab_widget.addTab(self._build_facility_review_tab(), FT.TAB_TITLE)
+        self.tab_widget.addTab(self._build_facility_review_tab(), FT.TAB_TITLE.replace("&", "&&"))   # "&&" shows one "&"
         self.tab_widget.addTab(self._dss_tab, "DSS-WISE Lite")
         self.tab_widget.addTab(self._ras_tab, "HEC-RAS plan")
 
