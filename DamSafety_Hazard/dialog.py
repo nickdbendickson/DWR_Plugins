@@ -7,6 +7,7 @@ import time
 import traceback
 
 from .ui_fit import fit_window, wrap_tabs
+from .ui_check_panel import CheckPanel
 from qgis.PyQt.QtWidgets import (
     QApplication, QProgressDialog, QDialog, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog, QMessageBox, QGroupBox,
@@ -60,8 +61,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.dam_folder_edit.textChanged.connect(self._on_dam_folder_changed)
         for e in (self.depth_edit, self.vel_edit, self.arr_edit, self.dv_edit):
             e.textChanged.connect(self._update_button_states)
+            e.textChanged.connect(self.check_panel.clear)   # 2.18.32: old results are stale
         try:
             self.model_combo.currentIndexChanged.connect(self._update_button_states)
+            self.model_combo.currentIndexChanged.connect(self.check_panel.clear)
         except Exception:
             pass
         self._defaults = self._current_state()
@@ -163,6 +166,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         btn_layout.addWidget(self.classify_btn)
         btn_layout.addStretch()
         setup_layout.addLayout(btn_layout)
+        # 2.18.32: check results by severity (ui_check_panel.py)
+        self.check_panel = CheckPanel(self.check_btn, self.classify_btn, action="classifying")
+        setup_layout.addWidget(self.check_panel)
         setup_layout.addStretch()
         self.tab_widget.addTab(setup_tab, "Setup and Run")
         self.tab_widget.setCurrentWidget(setup_tab)
@@ -681,8 +687,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         n_err, n_warn = summary(results)
         self._update_status("Input check: {} error(s), {} warning(s)".format(n_err, n_warn),
                             n_err == 0)
-        box = QMessageBox.warning if n_err else QMessageBox.information
-        box(self, "Check inputs", self._checks_html(results))
+        # 2.18.32: the results are shown in the panel under the buttons (no pop-up)
+        self.check_panel.set_results(results)
         return results
 
     def _on_run_all(self, *args):
@@ -700,6 +706,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         for lvl, t in results:
             if lvl != "OK":
                 self._log(">>> CHECK {}: {}".format(lvl, t))
+        self.check_panel.set_results(results)
         if summary(results)[0]:
             QMessageBox.warning(self, "Run everything - inputs need fixing",
                                 self._checks_html([r for r in results if r[0] == ERROR]))
