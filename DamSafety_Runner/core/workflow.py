@@ -119,6 +119,10 @@ class RunSettings:
         self.anuga_near_field_mi = 1.0
         self.anuga_buffer_m = 500.0
         self.anuga_algorithm = "DE0"
+        # hidden: "default" (ANUGA's own mesh, unchanged) or "gmsh" (core/gmsh_mesher.py;
+        # needs gmsh in the ANUGA environment). NDBREACH_ANUGA_MESHER overrides the default.
+        self.anuga_mesher = os.environ.get("NDBREACH_ANUGA_MESHER", "default") or "default"
+        self.anuga_gmsh = None           # optional dict of gmsh sizes (gmsh_mesher.build_mesh)
         self.keep_model_files = True
         # scenario
         self.scenario = SCENARIO_SUNNY
@@ -225,6 +229,8 @@ class RunSettings:
                 d[k] = len(v) if k == "refine_lines" else (v is not None)
             elif k == "dam_record":
                 d[k] = v is not None
+            elif k in ("anuga_mesher", "anuga_gmsh") and v in ("default", None):
+                continue                 # default mesh: the report stays as before
             else:
                 d[k] = v
         return d
@@ -1230,6 +1236,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                   arrival_m, sim_time, 300.0, st.anuga_near_field_mi * MILE,
                                   st.anuga_fine_area_m2, st.anuga_coarse_area_m2,
                                   st.anuga_buffer_m, st.anuga_algorithm)
+        ast.mesher = getattr(st, "anuga_mesher", "default") or "default"
+        ast.gmsh = getattr(st, "anuga_gmsh", None)
         width_m = max(3 * cs, inlet_w)
         hy_a, hy_nb_a = _with_flow(hy, amb_cms, sim_time), _with_flow(hy_nb, amb_cms, sim_time)
         a_runs = []
