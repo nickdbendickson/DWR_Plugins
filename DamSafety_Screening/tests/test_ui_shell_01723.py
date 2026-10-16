@@ -97,3 +97,22 @@ if REAL:
     assert dlg.log_edit.isVisible() and dlg.log_toggle.text() == "Hide log"
     dlg.settings_window.close()
 print("test_ui_shell_01723: ok ({})".format("real Qt offscreen" if REAL else "qgis mock"))
+
+# --- 0.17.23 layout fixes (round 2)
+from nd_dam_screening import dialog as _dmod
+src = open(_dmod.__file__, encoding="utf-8").read()
+assert '"Leave these"' not in src
+assert not any(('QPushButton("' in ln or 'QLabel("' in ln) and '...' in ln for ln in src.splitlines())
+assert "Each button opens the step's Processing dialog, pre-filled." in src
+assert _dmod.NDDamScreeningDialog._short_note("x" * 100).endswith("\u2026")
+assert _dmod.NDDamScreeningDialog._short_note("needs step 1") == "needs step 1"
+if REAL:
+    import tempfile as _tf
+    d2 = D.NDDamScreeningDialog()
+    assert not d2.continue_btn.isVisible() and d2.continue_btn.isHidden()
+    w2, s2 = _tf.mkdtemp(), _tf.mkdtemp()
+    d2.work_edit.setText(w2); d2.suite_edit.setText(s2); d2._changed(); d2.refresh()
+    assert d2.pipe_btn["data"].text() == "Data \u2713", d2.pipe_btn["data"].text()
+    assert d2.continue_btn.isHidden()
+    assert len({b.minimumWidth() for b in d2.step_button.values()}) == 1
+print("ok layout round 2")
