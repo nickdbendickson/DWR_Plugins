@@ -174,11 +174,11 @@ class SettingsGrid(QWidget):
         self.reset_tab_btn.clicked.connect(lambda _c=False: self.reset_tab())
         self.reset_all_btn = QPushButton("Reset all")
         self.reset_all_btn.clicked.connect(lambda _c=False: self.reset_all())
-        self.load_btn = QPushButton("Load...")
+        self.load_btn = QPushButton("Load\u2026")
         self.load_btn.clicked.connect(lambda _c=False: self.load())
         self.save_btn = QPushButton("Save")
         self.save_btn.clicked.connect(lambda _c=False: self.save())
-        self.save_as_btn = QPushButton("Save as...")
+        self.save_as_btn = QPushButton("Save as\u2026")
         self.save_as_btn.clicked.connect(lambda _c=False: self.save_as())
         for b in (self.reset_tab_btn, self.reset_all_btn, self.load_btn, self.save_btn, self.save_as_btn):
             row.addWidget(b)

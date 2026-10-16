@@ -413,6 +413,29 @@ def stage_states(rows, has_folder, has_dam_json, dem, dam_id):
     return {"dam": dam, "terrain": terrain, "run": run, "products": products}
 
 
+STAGE_TIPS = {
+    ("dam", "yes"): "the dam folder and its dam.json record exist",
+    ("dam", "part"): "dam.json not written yet - the dam folder (or only the dam ID) is set; "
+                     "the first run, Screening tool 7b or DamSafety Hazard writes it",
+    ("dam", "no"): "set the Dams folder and the dam ID",
+    ("terrain", "yes"): "the model grids / terrain of the last run are in the dam folder",
+    ("terrain", "part"): "a DEM is chosen; the run cuts the terrain from it",
+    ("terrain", "no"): "no DEM chosen and no terrain in the dam folder yet",
+    ("run", "yes"): "a finished model run is in the dam folder",
+    ("run", "part"): "a model run is there but incomplete - see the Flood run chip",
+    ("run", "no"): "no model run yet",
+    ("products", "yes"): "the products and the hand-off to DamSafety Hazard are made",
+    ("products", "part"): "some products are made - see the chips",
+    ("products", "no"): "no products yet",
+}
+
+
+def stage_tip(key, state, has_folder=False, has_dam_json=False):
+    """The tooltip of one stage chip: '<Stage>: <state> - <why>'."""
+    return "{}: {} - {}".format(STAGE_LABELS.get(key, key), state,
+                                STAGE_TIPS.get((key, state), ""))
+
+
 def status_lines(rows):
     mark = {"yes": "✓", "part": "◐", "no": "·"}
     return ["{} {}{}".format(mark[st], label, " - " + detail if detail else "")

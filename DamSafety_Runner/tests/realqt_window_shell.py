@@ -64,9 +64,15 @@ assert [c.text() for c in dlg.strip.chips] == ["○ Dam", "○ Terrain", "○ Mo
 assert not dlg.chips_row.isVisible() and not dlg.contents_section.isVisible()
 assert not dlg.folder_btn.isEnabled() and not dlg.add_btn.isEnabled()
 assert dlg.run_dam_btn.isDefault()
+# punch list: Run is greyed until a dam is chosen; Close sits alone at the bottom right
+assert not dlg.run_dam_btn.isEnabled() and "Dams folder and the dam ID first" in dlg.run_dam_btn.toolTip()
+assert "border:none" in dlg.lis_chip.styleSheet() and type(dlg.lis_chip).__name__ == "EngineChip"
+_cb = dlg.close_btn.mapTo(dlg, dlg.close_btn.rect().topLeft())
+_lg = dlg.log_section.header.mapTo(dlg, dlg.log_section.header.rect().topLeft())
+assert _cb.y() > _lg.y() and _cb.x() + dlg.close_btn.width() > dlg.width() - 40, (_cb, _lg)
 assert dlg.lis_chip.text().split()[0] == "LISFLOOD-FP" and dlg.anuga_chip.text().split()[0] == "ANUGA"
-assert not dlg.adv_section.isExpanded() and not dlg.adv_section.inner.isVisible()
-assert not dlg.log_section.inner.isVisible()
+assert not dlg.adv_section.is_expanded() and not dlg.adv_section.inner().isVisible()
+assert not dlg.log_section.inner().isVisible()
 assert not hasattr(dlg, "adv_box") and not hasattr(dlg, "models_label")
 shot(dlg, "run_tab_empty")
 
@@ -74,17 +80,17 @@ shot(dlg, "run_tab_empty")
 t0 = dlg.adv_section.title()
 assert t0 == "Advanced  ·  grid 10 m · 12 h simulated · up to 96 h", t0
 for _ in range(3):
-    dlg.adv_section.button.click()
-assert dlg.adv_section.isExpanded() and dlg.adv_section.inner.isVisible()
-assert dlg.adv_section.button.text() == "▾  " + t0, dlg.adv_section.button.text()
+    dlg.adv_section.header.click()
+assert dlg.adv_section.is_expanded() and dlg.adv_section.inner().isVisible()
+assert dlg.adv_section.header.text() == "▾ " + t0, dlg.adv_section.header.text()
 dlg.grid_m.setValue(5.0)
 dlg.force_anuga.setChecked(True)
 assert dlg.adv_section.title() == "Advanced  ·  grid 5 m · 12 h simulated · up to 96 h · Force ANUGA"
-assert dlg.adv_section.button.text().startswith("▾  Advanced  ·  grid 5 m")
+assert dlg.adv_section.header.text().startswith("▾ Advanced  ·  grid 5 m")
 assert dlg.settings()["force_anuga"] is True
 shot(dlg, "advanced_expanded")
-dlg.adv_section.button.click()
-assert dlg.adv_section.button.text().startswith("▸  Advanced") and "▾" not in dlg.adv_section.button.text()
+dlg.adv_section.header.click()
+assert dlg.adv_section.header.text().startswith("▸ Advanced") and "▾" not in dlg.adv_section.header.text()
 dlg.force_anuga.setChecked(False)
 dlg.grid_m.setValue(10.0)
 
@@ -101,6 +107,8 @@ for k in ("depth", "velocity", "arrival"):
     open(os.path.join(f, wf.FINAL_NAMES[k]), "wb").close()
 dlg.refresh()
 assert "Dam folder " + f in dlg.status_label.text() and dlg.folder_btn.isEnabled()
+assert dlg.run_dam_btn.isEnabled() and dlg.run_dam_btn.toolTip() == D.RUN_TIP
+assert "dam.json not written yet" in dlg.strip.chips[0].toolTip()
 assert dlg.strip.states == [P, N, Y, N], dlg.strip.states
 assert dlg.card_title.text() == "<b>DWR-7</b>" and dlg.card_path.text() == f and dlg.chips_row.isVisible()
 assert dlg.card_chips["run"].text() == "✓ Flood run" and dlg.card_chips["submittal"].text() == "○ Submittal"
@@ -119,7 +127,7 @@ open(os.path.join(f, "DWR-7 submittal.docx"), "w").close()
 dlg.refresh()
 assert dlg.strip.states == [P, Y, Y, P], dlg.strip.states
 assert dlg.card_chips["submittal"].text() == "✓ Submittal" and dlg.tool_tag["submittal"].text() == "✓ done"
-dlg.contents_section.setExpanded(True)
+dlg.contents_section.set_expanded(True)
 shot(dlg, "run_tab_with_dam")
 # a DamSafety Hazard package older than the run report, and a review of another package
 import json as _json  # noqa: E402
@@ -135,18 +143,26 @@ from DamSafety_Runner.damsuite import dam_record as _DR  # noqa: E402
 _rec = _DR.load(f, create=True)
 _rec.add_status("reviewed", "DamSafety Hazard", "2.18.32", {"decision": "accepted", "package_sha256": "0" * 64})
 _rec.save()
-dlg.contents_section.setExpanded(False)
+dlg.contents_section.set_expanded(False)
 dlg.refresh()
 assert dlg.card_chips["package"].text() == "◐ Package", dlg.card_chips["package"].text()
 assert dlg.warn_label.isVisible() and "rebuild it in DamSafety Hazard" in dlg.warn_label.text()
 assert "has not been reviewed" in dlg.warn_label.text()
 assert "RESULTS CUT OFF: duration cap" in dlg.contents_edit.toPlainText()
+assert dlg.strip.states[0] == Y and "dam.json record exist" in dlg.strip.chips[0].toolTip()
+# the warning sits above the chips and wraps (no elision), visible at 980x680 without scrolling
+assert dlg.warn_label.wordWrap() and dlg.warn_label.mapTo(dlg, dlg.warn_label.rect().topLeft()).y() < dlg.chips_row.mapTo(dlg, dlg.chips_row.rect().topLeft()).y()
+if SHOTS:
+    pump()
+    _wb = dlg.warn_label.mapTo(dlg, dlg.warn_label.rect().bottomLeft())
+    assert _wb.y() < dlg.height(), (_wb, dlg.height())
+    assert dlg.warn_label.height() >= dlg.warn_label.heightForWidth(dlg.warn_label.width()) - 2, (dlg.warn_label.height(), dlg.warn_label.heightForWidth(dlg.warn_label.width()), dlg.warn_label.width(), dlg.tabs.height())
 shot(dlg, "run_tab_package_warning")
 os.remove(os.path.join(f, "dam.json"))
 shutil.rmtree(os.path.join(f, "outputs"))
 dlg.refresh()
 assert not dlg.warn_label.isVisible()
-dlg.contents_section.setExpanded(True)
+dlg.contents_section.set_expanded(True)
 # a dam with only a DEM chosen, no run yet
 dlg.dam_edit.setText("DWR-8")
 dlg._pending_dem = os.path.join(dams, "dem.tif")
@@ -157,7 +173,7 @@ dlg.dam_edit.setText("DWR-7")
 dlg.dem_combo.setCurrentIndex(0)
 dlg._changed()
 
-dlg.contents_section.setExpanded(False)
+dlg.contents_section.set_expanded(False)
 # offline-pack guard clears the card
 dlg.dams_edit.setText(os.path.join(dams, "offline_pack"))
 dlg._changed()

@@ -11,11 +11,10 @@ The logic (folder layout, status, parameters) is popup_logic.py; this file only 
 window's choices are saved with the QGIS project. The tools, the wizard and the Processing
 provider are unchanged.
 """
-import html
 import json
 import os
 
-from qgis.PyQt.QtCore import Qt, QUrl
+from qgis.PyQt.QtCore import QUrl
 from qgis.PyQt.QtGui import QDesktopServices
 from .ui_fit import fit_window, save_size
 from qgis.PyQt.QtWidgets import (
@@ -25,7 +24,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from . import popup_logic as pl
-from .ui_widgets import Collapsible, InfoBanner, StageStrip
+from .ui_widgets import Collapsible, DamCard, EngineChip, InfoBanner, StageStrip, ToolRow
 
 TITLE = "DamSafety Runner"
 SIZE_KEY = "DamSafety_Runner/window"           # QSettings: the window size, saved on close
@@ -43,6 +42,9 @@ CARD_CHIPS = (("run", "Flood run"), ("baseline", "Baseline"), ("manifest", "Mani
               ("submittal", "Submittal"), ("package", "Package"))
 CHIP_STYLE = {"yes": ("✓", "#137333"), "part": ("◐", "#b26b00"), "no": ("○", "#888888")}
 TOOL_TAG = {"yes": "✓ done", "part": "◐ partial", "no": "not run yet"}
+RUN_TIP = "Opens the breach model with this dam, DEM, grid, and hours filled in."
+RUN_TIP_NO_DAM = "Set the Dams folder and the dam ID first - the run needs a dam to write into."
+MODEL_HINT = "Model paths: Tools > Verify > Model paths."
 # the sibling plugins (their QGIS plugin folder names); ND Dam Hazard is retired
 HAZARD_PLUGIN = ("DamSafety_Hazard", "DamSafety Hazard")
 SCREENING_PLUGIN = ("DamSafety_Screening", "DamSafety Screening")
@@ -84,6 +86,7 @@ class NDBreachRunnerDialog(QDialog):
         self.resize(860, 640)
         self.tool_button = {}
         self.tool_tag = {}
+        self.tool_row = {}
         self._pending_dem = ""
         self._build()
         from qgis.PyQt.QtWidgets import QAbstractSpinBox, QComboBox
@@ -193,16 +196,18 @@ class NDBreachRunnerDialog(QDialog):
         self.run_dam_btn.setMinimumWidth(180)
         self.run_dam_btn.setStyleSheet(
             "QPushButton {background:#1a5fb4; color:white; font-weight:bold; border-radius:4px;"
-            " padding:4px 16px;} QPushButton:disabled {background:#9bb3d4;}")
-        self.run_dam_btn.setToolTip("Opens the breach model with this dam, DEM, grid, and hours filled in.")
+            " padding:4px 16px;} QPushButton:disabled {background:#d5d8dd; color:#8a9099;}")
+        self.run_dam_btn.setToolTip(RUN_TIP_NO_DAM)
+        self.run_dam_btn.setEnabled(False)          # refresh() enables it once a dam is chosen
         self.run_dam_btn.clicked.connect(lambda _c=False: self._open_tool("rundam"))
         run_row.addWidget(self.run_dam_btn)
         run_row.addSpacing(12)
-        self.lis_chip = QLabel("LISFLOOD-FP …")
-        self.anuga_chip = QLabel("ANUGA …")
+        engines = QLabel("Engines:")
+        engines.setStyleSheet("color:#666;")
+        run_row.addWidget(engines)
+        self.lis_chip = EngineChip("LISFLOOD-FP")       # status labels, not buttons
+        self.anuga_chip = EngineChip("ANUGA")
         for chip in (self.lis_chip, self.anuga_chip):
-            chip.setStyleSheet("QLabel {color:#888; padding:2px 8px; border:1px solid #bbb;"
-                               "border-radius:4px;}")
             run_row.addWidget(chip)
         run_row.addStretch(1)
         lay.addLayout(run_row)
@@ -222,7 +227,7 @@ class NDBreachRunnerDialog(QDialog):
         lay.addWidget(self.adv_section)
 
         self.tabs = QTabWidget()
-        self.tabs.setMinimumHeight(200)
+        self.tabs.setMinimumHeight(150)
         self.tabs.addTab(self._build_run_tab(), "Run")
         self.tabs.addTab(self._build_tools_tab(), "Tools")
         lay.addWidget(self.tabs, 1)
@@ -245,8 +250,9 @@ class NDBreachRunnerDialog(QDialog):
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumHeight(110)
         self.log_section = Collapsible("Log", self.log_edit)
-        row = QHBoxLayout()
-        row.addWidget(self.log_section, 1)
+        lay.addWidget(self.log_section)
+        row = QHBoxLayout()                       # Close in its own row, bottom right
+        row.addStretch(1)
         self.close_btn = QPushButton("Close")
         self.close_btn.clicked.connect(self.close)
         row.addWidget(self.close_btn)
@@ -286,54 +292,21 @@ class NDBreachRunnerDialog(QDialog):
     def _build_run_tab(self):
         w = QWidget()
         lay = QVBoxLayout()
-        card = QFrame()
-        card.setObjectName("dam_card")
-        card.setStyleSheet("QFrame#dam_card {border:1px solid #d8d8e0; border-radius:4px;"
-                           " background:#fbfbfd;}")
-        cl = QVBoxLayout(card)
-        self.card_title = QLabel("")
-        self.card_title.setTextFormat(Qt.RichText)
-        self.card_path = QLabel("")
-        self.card_path.setStyleSheet("color:#666;")
-        self.card_path.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        cl.addWidget(self.card_title)
-        cl.addWidget(self.card_path)
-        chips = QGridLayout()                     # 4 per row: eight chips do not fit one row
-        chips.setHorizontalSpacing(4)
-        chips.setVerticalSpacing(4)
-        chips.setContentsMargins(0, 0, 0, 0)
-        self.card_chips = {}
-        for n, (key, text) in enumerate(CARD_CHIPS):
-            lab = QLabel(text)
-            self.card_chips[key] = lab
-            chips.addWidget(lab, n // 4, n % 4)
-        chips.setColumnStretch(4, 1)
-        self.chips_row = QWidget()
-        self.chips_row.setLayout(chips)
-        cl.addWidget(self.chips_row)
-        self.warn_label = QLabel("")
-        self.warn_label.setWordWrap(True)
-        self.warn_label.setStyleSheet("QLabel {color:#8a5300; background:#fff4e0; border:1px solid #e0b060;"
-                                      " border-radius:4px; padding:4px;}")
-        self.warn_label.setVisible(False)
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
-        self.record_label = QLabel("")
-        self.record_label.setWordWrap(True)
-        self.record_label.setStyleSheet("color:#55555f;")
-        self.suggest_label = QLabel("")
-        self.suggest_label.setWordWrap(True)
-        self.suggest_label.setStyleSheet("font-weight:bold;")
-        cl.addWidget(self.warn_label)              # under the chips, above the fold
-        cl.addWidget(self.status_label)
-        cl.addWidget(self.record_label)
-        cl.addWidget(self.suggest_label)
+        self.card = card = DamCard(CARD_CHIPS)
+        # the names the rest of the window (and the tests) use
+        self.card_title, self.card_path = card.title_label, card.path_label
+        self.card_chips, self.chips_row, self.warn_label = card.chips, card.chips_row, card.warn_label
+        self.status_label, self.record_label = card.status_label, card.record_label
+        self.suggest_label = card.suggest_label
         self.contents_edit = QPlainTextEdit()
         self.contents_edit.setReadOnly(True)
         self.contents_edit.setMinimumHeight(150)
         self.contents_section = Collapsible("Folder contents (0)", self.contents_edit)
-        cl.addWidget(self.contents_section)
-        cl.addStretch(1)
+        card.add_section(self.contents_section)
+        card.layout_.addStretch(1)
+        # the amber warnings above the scrolled card, so they are read without scrolling
+        card.layout_.removeWidget(card.warn_label)
+        lay.addWidget(card.warn_label)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -381,24 +354,13 @@ class NDBreachRunnerDialog(QDialog):
     def _tool_row(self, lay, label, tip, slot, alg=None):
         """One tool: a left-aligned button, a status tag (tools with a status row) and its
         description in grey."""
-        btn = QPushButton(_dots(label))
-        btn.setStyleSheet("QPushButton {text-align:left; padding:3px 10px;}")
-        btn.setFixedWidth(360)                  # one column, so the tags and descriptions line up
-        btn.setMinimumHeight(26)
-        btn.clicked.connect(lambda _c=False: slot())
-        desc = QLabel(tip)
-        desc.setWordWrap(True)
-        desc.setStyleSheet("color:#666;")
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        row.addWidget(btn)
-        tag = QLabel("")                        # a fixed column, so the descriptions line up
-        tag.setFixedWidth(90)
+        row = ToolRow(_dots(label), tip)
+        row.button.clicked.connect(lambda _c=False: slot())
         if alg in pl.TOOL_STATUS_KEY:
-            self.tool_tag[alg] = tag
-        row.addWidget(tag)
-        row.addWidget(desc, 1)
-        lay.addLayout(row)
+            self.tool_tag[alg] = row.tag
+            self.tool_row[alg] = row
+        lay.addWidget(row)
+        btn = row.button
         return btn
 
     def _tool_page(self, tab, tools):
@@ -903,22 +865,11 @@ class NDBreachRunnerDialog(QDialog):
         """The dam card, the stage strip and the tool tags from the folder's status rows."""
         st = {k: (v, d) for k, _l, v, d in rows}
         did = s["dam_id"]
-        self.card_title.setText("<b>{}</b>".format(html.escape(did)) if did else
-                                "<span style='color:#888'>No dam chosen</span>")
-        self.card_path.setText(folder if have else "")
+        self.card.set_context(did, folder if have else "")
         self.chips_row.setVisible(have)
         warns = pl.package_warnings(folder) if have else []
-        self.warn_label.setText("\n".join("⚠ " + w for w in warns))
-        self.warn_label.setVisible(bool(warns))
-        labels = {k: l for k, l, _v, _d in rows}
-        for key, text in CARD_CHIPS:
-            v, d = st.get(key, ("no", ""))
-            mark, color = CHIP_STYLE.get(v, CHIP_STYLE["no"])
-            chip = self.card_chips[key]
-            chip.setText("{} {}".format(mark, text))
-            chip.setStyleSheet("QLabel {color:%s; padding:1px 6px; border:1px solid %s;"
-                               "border-radius:8px;}" % (color, color))
-            chip.setToolTip("{}: {}{}".format(labels.get(key, text), v, " - " + d if d else ""))
+        self.card.set_warnings(warns)
+        self.card.set_rows(rows)
         lines = pl.status_lines(rows)
         self.contents_edit.setPlainText("\n".join(lines))
         self.contents_section.set_title("Folder contents ({})".format(
@@ -926,11 +877,12 @@ class NDBreachRunnerDialog(QDialog):
         self.contents_section.setVisible(have)
         states = pl.stage_states(rows, have, has_json, s["dem"], did)
         self.strip.set_states([states[k] for k in pl.STAGE_KEYS],
-                              ["{}: {}".format(pl.STAGE_LABELS[k], states[k]) for k in pl.STAGE_KEYS])
-        for alg, tag in self.tool_tag.items():
-            v = pl.tool_status(alg, rows)
-            tag.setText(TOOL_TAG.get(v, "") if have else "")
-            tag.setStyleSheet("color:%s;" % CHIP_STYLE.get(v, CHIP_STYLE["no"])[1])
+                              [pl.stage_tip(k, states[k], have, has_json) for k in pl.STAGE_KEYS])
+        for alg, row in self.tool_row.items():
+            row.set_status(pl.tool_status(alg, rows), have)
+        ready = bool(s["dams_folder"] and s["dam_id"])
+        self.run_dam_btn.setEnabled(ready)
+        self.run_dam_btn.setToolTip(RUN_TIP if ready else RUN_TIP_NO_DAM)
 
     def _refresh_models(self):
         """Which of LISFLOOD-FP / ANUGA are found. Not part of refresh(): looking for a conda
@@ -938,22 +890,12 @@ class NDBreachRunnerDialog(QDialog):
         try:
             from . import wizard
             m = wizard._find_models()
-            self._set_chip(self.lis_chip, "LISFLOOD-FP", bool(m.get("lisflood")))
-            self._set_chip(self.anuga_chip, "ANUGA", bool(m.get("anuga")),
-                           "" if m.get("anuga") else "only the ANUGA tier needs it")
+            self.lis_chip.set_state(bool(m.get("lisflood")), hint=MODEL_HINT)
+            self.anuga_chip.set_state(bool(m.get("anuga")), "" if m.get("anuga") else
+                                      "only the ANUGA tier needs it", hint=MODEL_HINT)
         except Exception:                                        # noqa
-            self._set_chip(self.lis_chip, "LISFLOOD-FP", None)
-            self._set_chip(self.anuga_chip, "ANUGA", None)
-
-    def _set_chip(self, chip, name, found, note=""):
-        """found: True / False / None (could not be checked)."""
-        color = {True: "#137333", False: "#b33"}.get(found, "#888")
-        chip.setText("{} {}".format(name, {True: "✓", False: "✕"}.get(found, "?")))
-        chip.setStyleSheet("QLabel {color:%s; padding:2px 8px; border:1px solid %s;"
-                           "border-radius:4px;}" % (color, color))
-        chip.setToolTip("{}: {}{}\nModel paths: Tools > Verify > Model paths.".format(
-            name, {True: "found", False: "NOT found"}.get(found, "could not be checked"),
-            " - " + note if note else ""))
+            self.lis_chip.set_state(None, hint=MODEL_HINT)
+            self.anuga_chip.set_state(None, hint=MODEL_HINT)
 
     def eventFilter(self, obj, event):
         from qgis.PyQt.QtCore import QEvent
