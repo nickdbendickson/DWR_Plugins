@@ -6,6 +6,7 @@ is in that dam's folder, and opens the Processing dialog of any tool with the da
 the DEM chosen in the window) filled in. The tools, the wizard and the batch / qgis_process use
 are unchanged; every filled-in value can still be changed in the tool's own dialog.
 """
+import json
 import os
 
 from .core import damjson, workflow
@@ -49,10 +50,10 @@ TABS = (
         ("products", "Flood polygons and EAP map from rasters...", "Polygons, arrival contours, map."),
         ("consequences", "Life safety and damage estimate...", "Incremental life safety and damage."),
         ("ndhazardclass", "ND hazard classification (Section 5.2)...",
-         "The Runner's own preview of the ND 5.2 class with the ACER TM 11 charts. ND Dam Hazard "
-         "is the classification authority."),
+         "The Runner's own preview of the ND 5.2 class with the ACER TM 11 charts. DamSafety "
+         "Hazard is the classification authority."),
         ("classify", "Hand the results to the hazard classification...",
-         "Runs the ND Dam Hazard classification on the dam's folder (DAM_FOLDER only)."),
+         "Runs the DamSafety Hazard classification on the dam's folder (DAM_FOLDER only)."),
         ("animation", "Animation of the flood...", "GIF / MP4 / time-enabled layers."),
         ("submittal", "Submittal report (Word)...", "The report with figures, checklist and files."),
         ("benchmark", "Compare with a reference model (HEC-RAS)...", "Rasters against a reference model."),
@@ -143,7 +144,8 @@ def dam_status(folder):
     rows.append(terrain_row(folder))
     rows.append(("run", "Flood rasters (depth, velocity, arrival)",
                  "yes" if len(have) == 3 else "part" if have else "no",
-                 "" if len(have) == 3 else ("only " + ", ".join(have)) if have else "not run yet"))
+                 run_detail(folder) if len(have) == 3 else ("only " + ", ".join(have)) if have
+                 else "not run yet"))
     base = [k for k in ("depth", "velocity", "arrival") if _file(folder, workflow.BASELINE_NAMES[k])]
     rows.append(("baseline", "Baseline (no-breach) rasters", "yes" if len(base) == 3 else "part" if base else "no",
                  "" if len(base) == 3 else "none (a sunny-day run has none)" if not base else
@@ -162,7 +164,7 @@ def dam_status(folder):
                                                                          "Probabilistic_Summary.csv")
     rows.append(("ensemble", "Probabilistic runs", "yes" if ens else "no",
                  "" if _file(folder, "Probabilistic", "Runs", "index.json") or not ens else
-                 "no per-run rasters: ND Dam Hazard cannot give a class probability"))
+                 "no per-run rasters: DamSafety Hazard cannot give a class probability"))
     rows.append(("sensitivity", "Sensitivity runs", "yes" if _dir(folder, "Sensitivity") else "no", ""))
     rows.append(("nested", "Nested-grid run", "yes" if _dir(folder, "Nested") else "no", ""))
     rows.append(("preview", "ND 5.2 preview class (Runner's own)",
@@ -172,6 +174,7 @@ def dam_status(folder):
     rows.append(("animation", "Animation", "yes" if _dir(folder, "Animation") else "no", ""))
     rows.append(("hecras", "HEC-RAS files", "yes" if _dir(folder, "_hecras") else "no", ""))
     rows.append(submittal_row(folder))
+    rows.append(package_row(folder))
     return rows
 
 
@@ -191,6 +194,8 @@ def terrain_row(folder):
             continue
     if _file(model, "dem_refill.tif"):
         return ("terrain", label, "yes", "dem_refill.tif")
+    if _file(model, "run_report.json"):          # the run cut and used a clip, then removed it
+        return ("terrain", label, "yes", "run finished; model grids not kept")
     return ("terrain", label, "part", "model folder, but the clip was cleaned up after the run")
 
 
@@ -232,6 +237,165 @@ def tool_status(alg, rows):
     return None
 
 
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def run_detail(folder):
+    """One line from _breach_model/run_report.json: no breach / final model / flooded acres, and
+    'RESULTS CUT OFF: reason' when the run recorded cut_off. '' when there is no readable report."""
+    rep = _read_json(os.path.join(folder or "", workflow.MODEL_FOLDER, "run_report.json"))
+    if not rep:
+        return ""
+    summ = rep.get("summary") if isinstance(rep.get("summary"), dict) else {}
+    parts = []
+    if summ.get("breach_occurs") is False or summ.get("final_model") == "none":
+        parts.append("no breach")
+    else:
+        if summ.get("final_model"):
+            parts.append("final {}".format(summ["final_model"]))
+        if summ.get("flooded_acres") is not None:
+            try:
+                parts.append("{:,.1f} ac flooded".format(float(summ["flooded_acres"])))
+            except (TypeError, ValueError):
+                pass
+    cut = rep.get("cut_off")
+    if cut:
+        reason = cut.get("reason") if isinstance(cut, dict) else str(cut)
+        parts.append("RESULTS CUT OFF: {}".format(reason or "see the run report"))
+    return "; ".join(parts)
+
+
+# DamSafety Hazard's submittal packages (Hazard submittal.py): <dam>/outputs/Submittal/<Dam>_<date>[_n]/
+# with MANIFEST.csv (and the same folder as a .zip). A package is stale when a later
+# classification or model run wrote one of these files (all relative to the dam folder).
+HAZ_OUTPUTS = "outputs"
+PACKAGE_DIR = "Submittal"
+PACKAGE_MANIFEST = "MANIFEST.csv"
+PACKAGE_STALE_ON = (("outputs", "QA", "Run_Settings.json"), ("outputs", "QA", "Last_Run_Snapshot.json"),
+                    ("outputs", "Hazard_Classification_Run_Log.txt"),
+                    (workflow.MODEL_FOLDER, "run_report.json"))
+
+
+def _sha256_bytes(data):
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def submittal_packages(folder):
+    """[(name, built time, manifest sha256)] of the dam's Hazard submittal packages, newest first.
+    A package folder counts by its MANIFEST.csv (build time = its mtime); a .zip whose folder is
+    gone counts by the manifest inside it (build time = the zip's mtime). Never raises."""
+    import zipfile
+    root = os.path.join(folder or "", HAZ_OUTPUTS, PACKAGE_DIR)
+    out, seen = [], set()
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return out
+    for n in names:
+        p = os.path.join(root, n)
+        m = os.path.join(p, PACKAGE_MANIFEST)
+        try:
+            if os.path.isdir(p) and os.path.isfile(m):
+                with open(m, "rb") as fh:
+                    out.append((n, os.path.getmtime(m), _sha256_bytes(fh.read())))
+                seen.add(n)
+        except OSError:
+            continue
+    for n in names:
+        p = os.path.join(root, n)
+        if not n.lower().endswith(".zip") or n[:-4] in seen:
+            continue
+        try:
+            with zipfile.ZipFile(p) as zf:
+                ms = sorted((x for x in zf.namelist() if x.replace("\\", "/").split("/")[-1] == PACKAGE_MANIFEST),
+                            key=lambda x: x.replace("\\", "/").count("/"))
+                if ms:
+                    out.append((n, os.path.getmtime(p), _sha256_bytes(zf.read(ms[0]))))
+        except (OSError, zipfile.BadZipFile, KeyError):
+            continue
+    out.sort(key=lambda t: t[1], reverse=True)
+    return out
+
+
+def package_stale(folder, packages=None):
+    """'' or the name of the run file that is newer than the newest package."""
+    pk = submittal_packages(folder) if packages is None else packages
+    if not pk:
+        return ""
+    newest = None
+    for parts in PACKAGE_STALE_ON:
+        f = os.path.join(folder, *parts)
+        try:
+            t = os.path.getmtime(f)
+        except OSError:
+            continue
+        if t > pk[0][1] and (newest is None or t > newest[0]):
+            newest = (t, "/".join(parts))
+    return newest[1] if newest else ""
+
+
+def package_row(folder):
+    """('package', 'Submittal package (DamSafety Hazard)', state, detail): 'part' = older than the
+    last classification / model run."""
+    label = "Submittal package (DamSafety Hazard)"
+    pk = submittal_packages(folder)
+    if not pk:
+        return ("package", label, "no", "")
+    import time
+    detail = "{} ({})".format(pk[0][0], time.strftime("%Y-%m-%d", time.localtime(pk[0][1])))
+    stale = package_stale(folder, pk)
+    if stale:
+        return ("package", label, "part", detail + " - older than {}; rebuild it".format(stale))
+    return ("package", label, "yes", detail)
+
+
+def package_unreviewed(folder, record=None):
+    """True when dam.json's newest 'reviewed' status records a package_sha256 (Hazard
+    markreviewed.py) that is not the newest package's MANIFEST.csv SHA-256: the package the
+    reviewer saw is not the newest one. False when there is no review, no sha or no package."""
+    if record is None:
+        try:
+            from .damsuite import dam_record as DR
+            record = DR.load(folder)
+        except Exception:                                        # noqa
+            return False
+    if record is None:
+        return False
+    try:
+        rev = record.latest("reviewed")
+    except Exception:                                            # noqa
+        return False
+    res = rev.get("result") if isinstance(rev, dict) and isinstance(rev.get("result"), dict) else {}
+    sha = str(res.get("package_sha256") or "").strip().lower()
+    if not sha:
+        return False
+    pk = submittal_packages(folder)
+    return bool(pk) and pk[0][2] != sha
+
+
+def package_warnings(folder, record=None):
+    """[warning lines] about the dam's Hazard submittal package, for the dam card."""
+    out = []
+    pk = submittal_packages(folder)
+    if not pk:
+        return out
+    stale = package_stale(folder, pk)
+    if stale:
+        out.append("The newest submittal package ({}) is older than {}: rebuild it in DamSafety "
+                   "Hazard so it holds the current results.".format(pk[0][0], stale))
+    if package_unreviewed(folder, record):
+        out.append("The review recorded in dam.json is of a different package than the newest one "
+                   "({}): the newest package has not been reviewed.".format(pk[0][0]))
+    return out
+
+
 def stage_states(rows, has_folder, has_dam_json, dem, dam_id):
     """{stage key: 'yes' / 'part' / 'no'} for Dam -> Terrain -> Model run -> Products."""
     st = {k: v for k, _l, v, _d in rows}
@@ -243,7 +407,7 @@ def stage_states(rows, has_folder, has_dam_json, dem, dam_id):
     else:
         terrain = "part" if dem else "no"
     run = st.get("run", "no") if has_folder else "no"
-    prod = [st.get(k) for k in ("products", "handoff", "submittal")]
+    prod = [st.get(k) for k in ("products", "handoff", "submittal", "package")]
     products = "yes" if st.get("products") == "yes" and st.get("handoff") == "yes" else \
         "part" if any(v in ("yes", "part") for v in prod) else "no"
     return {"dam": dam, "terrain": terrain, "run": run, "products": products}

@@ -17,7 +17,7 @@ import os
 
 from qgis.PyQt.QtCore import Qt, QUrl
 from qgis.PyQt.QtGui import QDesktopServices
-from .ui_fit import fit_window
+from .ui_fit import fit_window, save_size
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget, QWidget, QLabel, QLineEdit,
     QPushButton, QComboBox, QTextEdit, QFileDialog, QMessageBox, QDoubleSpinBox, QCheckBox,
@@ -27,11 +27,12 @@ from qgis.PyQt.QtWidgets import (
 from . import popup_logic as pl
 from .ui_widgets import Collapsible, InfoBanner, StageStrip
 
-TITLE = "ND Dam Breach Runner"
+TITLE = "DamSafety Runner"
+SIZE_KEY = "DamSafety_Runner/window"           # QSettings: the window size, saved on close
 SCOPE = "NDBreachRunner"          # QgsProject entry scope
 ENTRY = "state"
 DISCLAIMER = ("Screening / engineering model results. Every threshold and parameter is the "
-              "engineer's choice. ND Dam Hazard is the classification authority; the Department "
+              "engineer's choice. DamSafety Hazard is the classification authority; the Department "
               "of Water Resources decides the official hazard class.")
 # Tools tab: pl.TABS tab name -> the name in the category rail
 CATEGORY_TITLES = {"Dam": "Run variants", "Model": "Model runs", "Data": "Terrain & data",
@@ -39,7 +40,7 @@ CATEGORY_TITLES = {"Dam": "Run variants", "Model": "Model runs", "Data": "Terrai
 # chips of the dam card: status row key -> chip text
 CARD_CHIPS = (("run", "Flood run"), ("baseline", "Baseline"), ("manifest", "Manifest"),
               ("products", "Products"), ("preview", "5.2 preview"), ("handoff", "Hand-off"),
-              ("submittal", "Submittal"))
+              ("submittal", "Submittal"), ("package", "Package"))
 CHIP_STYLE = {"yes": ("✓", "#137333"), "part": ("◐", "#b26b00"), "no": ("○", "#888888")}
 TOOL_TAG = {"yes": "✓ done", "part": "◐ partial", "no": "not run yet"}
 # the sibling plugins (their QGIS plugin folder names); ND Dam Hazard is retired
@@ -251,7 +252,7 @@ class NDBreachRunnerDialog(QDialog):
         row.addWidget(self.close_btn)
         lay.addLayout(row)
         self.setLayout(lay)
-        fit_window(self)
+        fit_window(self, key=SIZE_KEY)
         self._sync_advanced_title()
 
     def _sync_advanced_title(self, *args):
@@ -297,17 +298,24 @@ class NDBreachRunnerDialog(QDialog):
         self.card_path.setTextInteractionFlags(Qt.TextSelectableByMouse)
         cl.addWidget(self.card_title)
         cl.addWidget(self.card_path)
-        chips = QHBoxLayout()
-        chips.setSpacing(4)
+        chips = QGridLayout()                     # 4 per row: eight chips do not fit one row
+        chips.setHorizontalSpacing(4)
+        chips.setVerticalSpacing(4)
+        chips.setContentsMargins(0, 0, 0, 0)
         self.card_chips = {}
-        for key, text in CARD_CHIPS:
+        for n, (key, text) in enumerate(CARD_CHIPS):
             lab = QLabel(text)
             self.card_chips[key] = lab
-            chips.addWidget(lab)
-        chips.addStretch(1)
+            chips.addWidget(lab, n // 4, n % 4)
+        chips.setColumnStretch(4, 1)
         self.chips_row = QWidget()
         self.chips_row.setLayout(chips)
         cl.addWidget(self.chips_row)
+        self.warn_label = QLabel("")
+        self.warn_label.setWordWrap(True)
+        self.warn_label.setStyleSheet("QLabel {color:#8a5300; background:#fff4e0; border:1px solid #e0b060;"
+                                      " border-radius:4px; padding:4px;}")
+        self.warn_label.setVisible(False)
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
         self.record_label = QLabel("")
@@ -316,6 +324,7 @@ class NDBreachRunnerDialog(QDialog):
         self.suggest_label = QLabel("")
         self.suggest_label.setWordWrap(True)
         self.suggest_label.setStyleSheet("font-weight:bold;")
+        cl.addWidget(self.warn_label)              # under the chips, above the fold
         cl.addWidget(self.status_label)
         cl.addWidget(self.record_label)
         cl.addWidget(self.suggest_label)
@@ -827,7 +836,7 @@ class NDBreachRunnerDialog(QDialog):
         self.log_edit.append(str(msg))
 
     def _log_suite_versions(self):
-        """Suite problems (a too old ND Dam Hazard / Screening) are also in the message bar."""
+        """Suite problems (a too old DamSafety Hazard / Screening) are also in the message bar."""
         try:
             from .plugin import version_messages
             for level, text in version_messages():
@@ -898,6 +907,9 @@ class NDBreachRunnerDialog(QDialog):
                                 "<span style='color:#888'>No dam chosen</span>")
         self.card_path.setText(folder if have else "")
         self.chips_row.setVisible(have)
+        warns = pl.package_warnings(folder) if have else []
+        self.warn_label.setText("\n".join("⚠ " + w for w in warns))
+        self.warn_label.setVisible(bool(warns))
         labels = {k: l for k, l, _v, _d in rows}
         for key, text in CARD_CHIPS:
             v, d = st.get(key, ("no", ""))
@@ -1080,6 +1092,7 @@ class NDBreachRunnerDialog(QDialog):
 
     def closeEvent(self, event):
         self._save_state()
+        save_size(self, SIZE_KEY)
         try:
             event.accept()
         except Exception:                                        # noqa

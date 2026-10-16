@@ -6,6 +6,7 @@ Not named test_*: run_tests.py imports every test_* module into its fake-Qt proc
 Processing dialog and runs no model. With a folder argument it also saves screenshots.
 """
 import os
+import shutil
 import sys
 import tempfile
 
@@ -120,6 +121,32 @@ assert dlg.strip.states == [P, Y, Y, P], dlg.strip.states
 assert dlg.card_chips["submittal"].text() == "✓ Submittal" and dlg.tool_tag["submittal"].text() == "✓ done"
 dlg.contents_section.setExpanded(True)
 shot(dlg, "run_tab_with_dam")
+# a DamSafety Hazard package older than the run report, and a review of another package
+import json as _json  # noqa: E402
+_m = os.path.join(f, "outputs", "Submittal", "DWR-7_2026-10-01", "MANIFEST.csv")
+os.makedirs(os.path.dirname(_m))
+with open(_m, "w") as _fh:
+    _fh.write("File,SHA256\n")
+os.utime(_m, (1e8, 1e8))
+with open(os.path.join(f, wf.MODEL_FOLDER, "run_report.json"), "w") as _fh:
+    _json.dump({"summary": {"final_model": "LISFLOOD-FP", "flooded_acres": 812.4},
+                "cut_off": {"reason": "duration cap", "detail": "x"}}, _fh)
+from DamSafety_Runner.damsuite import dam_record as _DR  # noqa: E402
+_rec = _DR.load(f, create=True)
+_rec.add_status("reviewed", "DamSafety Hazard", "2.18.32", {"decision": "accepted", "package_sha256": "0" * 64})
+_rec.save()
+dlg.contents_section.setExpanded(False)
+dlg.refresh()
+assert dlg.card_chips["package"].text() == "◐ Package", dlg.card_chips["package"].text()
+assert dlg.warn_label.isVisible() and "rebuild it in DamSafety Hazard" in dlg.warn_label.text()
+assert "has not been reviewed" in dlg.warn_label.text()
+assert "RESULTS CUT OFF: duration cap" in dlg.contents_edit.toPlainText()
+shot(dlg, "run_tab_package_warning")
+os.remove(os.path.join(f, "dam.json"))
+shutil.rmtree(os.path.join(f, "outputs"))
+dlg.refresh()
+assert not dlg.warn_label.isVisible()
+dlg.contents_section.setExpanded(True)
 # a dam with only a DEM chosen, no run yet
 dlg.dam_edit.setText("DWR-8")
 dlg._pending_dem = os.path.join(dams, "dem.tif")
@@ -175,6 +202,14 @@ assert dlg.grid.set_value(cell, "5") == ""
 assert dlg.gear.text() == "⚙ 1", dlg.gear.text()
 shot(dlg.settings_dialog, "settings_dialog")
 dlg.settings_dialog.close()
+
+# 5b. the window title and the size remembered on close (QSettings of the test profile)
+assert dlg.windowTitle().startswith("DamSafety Runner"), dlg.windowTitle()
+from DamSafety_Runner import ui_fit as _uf  # noqa: E402
+dlg.resize(900, 600)
+_uf.save_size(dlg, "DamSafety_Runner_test/window")
+assert _uf._saved_size("DamSafety_Runner_test/window") == (dlg.width(), dlg.height())
+assert _uf._screen_of(dlg) is not None
 
 # 6. old saved state behaves the same: force_anuga false/true reloads as saved
 for v in (False, True):

@@ -158,7 +158,7 @@ class SettingsGrid(QWidget):
         lay.addWidget(legend)
         self.help_label = QLabel("")
         self.help_label.setWordWrap(True)
-        self.help_label.setMinimumHeight(48)
+        self.help_label.setVisible(False)
         lay.addWidget(self.help_label)
         # a rejected value is reported here (no message box per entry)
         self.status_label = QLabel("")
@@ -167,6 +167,7 @@ class SettingsGrid(QWidget):
             self.status_label.setStyleSheet("color: #b42318;")
         except Exception:                                        # noqa
             pass
+        self.status_label.setVisible(False)
         lay.addWidget(self.status_label)
         row = QHBoxLayout()
         self.reset_tab_btn = QPushButton("Reset this tab")
@@ -288,6 +289,7 @@ class SettingsGrid(QWidget):
         lbl = getattr(self, "status_label", None)
         if lbl is not None:
             lbl.setText(text or "")
+            lbl.setVisible(bool(text))        # an empty line leaves no gap under the legend
 
     def set_value(self, sid, raw, from_widget=False):
         """Store a value (text as typed, an enum index, or a bool); empty = back to the default.
@@ -378,6 +380,12 @@ class SettingsGrid(QWidget):
                 t.setRowHidden(i, hide)
             except Exception:                                    # noqa
                 pass
+            try:                 # a combo of a hidden row is not hidden with it before the
+                w = t.cellWidget(i, C_VALUE)      # table is first shown: it drew over row 1
+                if w is not None:
+                    w.setVisible(not hide)
+            except Exception:                                    # noqa
+                pass
 
     def visible_ids(self):
         """[setting id] of the rows the filter shows (for tests)."""
@@ -396,8 +404,10 @@ class SettingsGrid(QWidget):
                 self.help_label.setText("Row {} - {} - {}: {}{}".format(
                     i + 1, s.tool_title or s.tool, s.key, s.help or s.label,
                     "" if not s.your else "  YOUR value: the starting value is a working guess, not a standard."))
+                self.help_label.setVisible(True)
                 return
         self.help_label.setText("")
+        self.help_label.setVisible(False)
 
     # ------------------------------------------------------------------- reset --
     def current_group(self):

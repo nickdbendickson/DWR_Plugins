@@ -37,8 +37,11 @@ def popup_terrain_and_submittal_rows_stage_states_and_tool_status():
         assert pl.stage_states([], False, False, "", "") == \
             {"dam": "no", "terrain": "no", "run": "no", "products": "no"}
         # a model folder whose clip was cleaned up -> part; a kept clip -> yes
-        _touch(f, wf.MODEL_FOLDER, "run_report.json", mtime=time.time() - 100)
+        os.makedirs(os.path.join(f, wf.MODEL_FOLDER))
         assert st()["terrain"] == "part"
+        _touch(f, wf.MODEL_FOLDER, "run_report.json", mtime=time.time() - 100)
+        t = {k: (v, dd) for k, _l, v, dd in pl.dam_status(f)}["terrain"]
+        assert t == ("yes", "run finished; model grids not kept"), t
         _touch(f, wf.MODEL_FOLDER, "lisflood", "dam.dem.asc")
         assert st()["terrain"] == "yes"
         for k in ("depth", "velocity", "arrival"):
