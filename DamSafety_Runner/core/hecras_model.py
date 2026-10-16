@@ -1881,7 +1881,12 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             "storage_exponent": res.m, "manning_n": m.manning_n,
             "equation": EQUATIONS[m.equation][1], "scenario": report.get("scenario"),
             "edits": settings.get("edits"), "dem": dem_path, "mesh_check": mc,
-            "structures": sinfo}                # v3.12.0
+            "structures": sinfo,                # v3.12.0
+            # HEC-RAS 2D engine (hecras_engine): the inflow point and the CRSs, for the
+            # hydrograph-inflow mode and for putting the results back on the run's grid
+            "inflow_xy_model": (None if inflow_m is None else [float(v) for v in inflow_m]),
+            "model_wkt": srs.ExportToWkt(),
+            "work_wkt": (work.ExportToWkt() if work is not None else None)}
     paths["readme"] = write_readme(os.path.join(out, "README_HECRAS.md"), m, info, notes, dam,
                                    params)
     progress(100, "done")

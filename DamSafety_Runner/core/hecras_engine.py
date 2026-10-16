@@ -1,0 +1,549 @@
+"""HEC-RAS 2D as a Runner engine (design: docs/HEC-RAS_2D_engine_plan.md, PR #68).
+
+OFF BY DEFAULT. Nothing here runs unless the caller asks for it; the LISFLOOD-FP and ANUGA
+paths never import this module.
+
+    detect()          what is installed: the Wine prefix with Windows HEC-RAS 6.6, the
+                      RasMapperLib driver programs, the official Linux RasUnsteady, h5py
+    write_project()   hecras_model.build_model() + (default) the run's breach hydrograph as a
+                      2D flow-hydrograph boundary at the run's inflow point (the same forcing
+                      LISFLOOD-FP and ANUGA get), with the reservoir held below the weir
+    preprocess()      terrain HDF, geometry completion, terrain association, 2D property
+                      tables (RasMapperLib drivers under Wine), then `Ras.exe -c` under Wine,
+                      stopped as soon as the .b##/.x##/.p##.tmp.hdf run inputs exist
+    compute()         the official Linux RasUnsteady on those inputs -> <name>.p01.hdf
+    results()         the .p01.hdf maxima on the Runner grid as the workflow's final arrays
+                      (SI: m, m/s, hours after breach initiation; NaN where dry)
+    write_results()   those arrays under workflow.FINAL_NAMES (ft, ft/s, h) so ND Dam Hazard
+                      reads the same files as after a LISFLOOD-FP or ANUGA run
+
+Linux chain (proven on HEC's Muncie example, 2026-10-16, max WSE within 0.009 ft of HEC's):
+Windows HEC-RAS 6.6 installed in a 64-bit Wine prefix with .NET 4.8; `Ras.exe /regserver`
+and `RegAsm /codebase RasMapperLib.dll` done once; the VB6 OCXs from the installer
+registered; the driver programs terrain.exe, mesh.exe and drv.exe (sources in
+tools/hecras_wine/) built and copied INTO the HEC-RAS folder, next to its GDAL.
+
+TERMS AND CONDITIONS (TCU): Ras.exe shows HEC's TCU dialog and Wine does not keep the
+acceptance. This module never clicks it. Accepting it is the user's decision; a user who has
+accepted it can point NDBREACH_HECRAS_TCU_HOOK at their own script (for example one that
+clicks "I agree" with xdotool), which preprocess() starts next to Ras.exe and names in the
+log. Without it, Ras.exe waits on the dialog and preprocess() stops at its timeout with a
+message saying so.
+
+Settings (environment variables, or the `env` dict of each function):
+    NDBREACH_HECRAS_WINEPREFIX   the Wine prefix (required on Linux)
+    NDBREACH_HECRAS_WINDOWS_DIR  HEC-RAS folder inside it (default <prefix>/drive_c/HEC/RAS66)
+    NDBREACH_HECRAS_LINUX_DIR    the unzipped Linux_RAS_v66 folder (bin/, libs/)
+    NDBREACH_HECRAS_DISPLAY      X display for Wine (default :77; an Xvfb is NOT started here)
+    NDBREACH_HECRAS_TCU_HOOK     optional, see above
+    NDBREACH_HECRAS_TIMEOUT_S    per-step timeout (default 1800)
+"""
+import json
+import math
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+import numpy as np
+
+from . import hecras
+
+ENV_PREFIX = "NDBREACH_HECRAS_WINEPREFIX"
+ENV_WINDIR = "NDBREACH_HECRAS_WINDOWS_DIR"
+ENV_LINUX = "NDBREACH_HECRAS_LINUX_DIR"
+ENV_DISPLAY = "NDBREACH_HECRAS_DISPLAY"
+ENV_TCU = "NDBREACH_HECRAS_TCU_HOOK"
+ENV_TIMEOUT = "NDBREACH_HECRAS_TIMEOUT_S"
+DRIVERS = ("terrain.exe", "mesh.exe", "drv.exe")
+WINDOWS_DEFAULT_SUB = os.path.join("drive_c", "HEC", "RAS66")
+INFLOW_BC_NAME = "Breach Inflow"
+INFLOW_BC_HALF_FT = 150.0          # half-length of the inflow BC line across the flow
+INFLOW_BC_SLOPE = 0.001            # energy slope HEC-RAS distributes the inflow with
+HDF_NAME = "{name}.p01.hdf"
+
+
+class HecRasEngineError(RuntimeError):
+    """A clear, user-facing failure of the HEC-RAS 2D engine."""
+
+
+def _env(env):
+    return os.environ if env is None else env
+
+
+def _timeout(env):
+    try:
+        return float(_env(env).get(ENV_TIMEOUT) or 1800)
+    except ValueError:
+        return 1800.0
+
+
+# ============================================================================
+# detect
+# ============================================================================
+def detect(env=None, platform=None, isfile=os.path.isfile, isdir=os.path.isdir,
+           which=shutil.which):
+    """What the HEC-RAS 2D engine can use here. Returns a dict:
+    available (bool), platform, wine, prefix, windows_dir, ras_exe, drivers {name: path or ''},
+    linux_dir, rasunsteady, h5py (bool), missing [text], reason (text; '' when available)."""
+    e = _env(env)
+    plat = platform or sys.platform
+    out = {"platform": plat, "wine": "", "prefix": "", "windows_dir": "", "ras_exe": "",
+           "drivers": {}, "linux_dir": "", "rasunsteady": "", "h5py": False, "missing": []}
+    miss = out["missing"]
+    try:
+        import h5py  # noqa: F401
+        out["h5py"] = True
+    except ImportError:
+        miss.append("h5py in this Python (pip install h5py) - needed to read the results")
+    if plat.startswith("win"):
+        miss.append("native Windows runs are not wired yet (planned); use the Linux chain "
+                    "or the HEC-RAS export tool")
+    elif plat == "darwin":
+        miss.append("HEC-RAS has no macOS build; use the HEC-RAS export tool")
+    else:
+        out["wine"] = which("wine") or ""
+        if not out["wine"]:
+            miss.append("wine (64-bit) on PATH")
+        prefix = (e.get(ENV_PREFIX) or "").strip()
+        if not prefix or not isdir(prefix):
+            miss.append("{} = a Wine prefix with Windows HEC-RAS 6.6".format(ENV_PREFIX))
+        else:
+            out["prefix"] = prefix
+        wdir = (e.get(ENV_WINDIR) or "").strip() or (
+            os.path.join(prefix, WINDOWS_DEFAULT_SUB) if prefix else "")
+        if wdir and isfile(os.path.join(wdir, "Ras.exe")):
+            out["windows_dir"] = wdir
+            out["ras_exe"] = os.path.join(wdir, "Ras.exe")
+        else:
+            miss.append("Ras.exe in {} ({})".format(wdir or "<prefix>/" + WINDOWS_DEFAULT_SUB,
+                                                    ENV_WINDIR))
+        for d in DRIVERS:
+            p = os.path.join(wdir, d) if wdir else ""
+            out["drivers"][d] = p if (p and isfile(p)) else ""
+            if not out["drivers"][d]:
+                miss.append("{} in the HEC-RAS folder (build it from tools/hecras_wine/)".format(d))
+        ldir = (e.get(ENV_LINUX) or "").strip()
+        exe = os.path.join(ldir, "bin", "RasUnsteady") if ldir else ""
+        if exe and isfile(exe):
+            out["linux_dir"], out["rasunsteady"] = ldir, exe
+        else:
+            miss.append("{} = the unzipped HEC-RAS 6.6 Linux folder (bin/RasUnsteady)"
+                        .format(ENV_LINUX))
+    out["available"] = not miss
+    out["reason"] = "" if not miss else "HEC-RAS 2D is not available: " + "; ".join(miss) + "."
+    return out
+
+
+def require(env=None, **kw):
+    d = detect(env, **kw)
+    if not d["available"]:
+        raise HecRasEngineError(d["reason"] + " Nothing was run.")
+    return d
+
+
+# ============================================================================
+# project writer
+# ============================================================================
+def inflow_bc_line(xy, direction, half=INFLOW_BC_HALF_FT):
+    """A short straight BC line through `xy` across the flow `direction` (any length)."""
+    d = np.asarray(direction, dtype=float)
+    n = float(np.hypot(*d))
+    if not n:
+        raise HecRasEngineError("no flow direction at the inflow point")
+    px, py = -d[1] / n, d[0] / n
+    x, y = float(xy[0]), float(xy[1])
+    return [(x - px * half, y - py * half), (x + px * half, y + py * half)]
+
+
+def inflow_bc_geometry_lines(line, area, num, lines_xy, name32, name16):
+    """The geometry (.g01) lines of the inflow BC line, in build_model's own format."""
+    mid = ((line[0][0] + line[-1][0]) / 2.0, (line[0][1] + line[-1][1]) / 2.0)
+    return (["BC Line Name=" + name32(INFLOW_BC_NAME), "BC Line Storage Area=" + name16(area),
+             "BC Line Start Position= {} , {} ".format(num(line[0][0], 4), num(line[0][1], 4)),
+             "BC Line Middle Position= {} , {} ".format(num(mid[0], 4), num(mid[1], 4)),
+             "BC Line End Position= {} , {} ".format(num(line[-1][0], 4), num(line[-1][1], 4)),
+             "BC Line Arc= {} ".format(len(line))] + lines_xy(line, 2) +
+            ["BC Line Text Position= {} , {} ".format(num(mid[0], 4), num(mid[1], 4))])
+
+
+def add_inflow_to_geometry(text, bc_lines, cr="\r\n"):
+    """Inserts the BC line block before the geometry's closing 'LCMann Time=' lines."""
+    key = cr + "LCMann Time="
+    i = text.find(key)
+    if i < 0:
+        raise HecRasEngineError("geometry text has no 'LCMann Time=' line")
+    return text[:i] + cr + cr.join(bc_lines) + text[i:]
+
+
+def inflow_unsteady_lines(area, interval, values, lines8, name16, name32,
+                          slope=INFLOW_BC_SLOPE):
+    blank16, blank8 = " " * 16, " " * 8
+    return (["Boundary Location={},{},{},{},{},{},{},{}".format(
+        blank16, blank16, blank8, blank8, blank16, name16(area), blank16, name32(INFLOW_BC_NAME)),
+        "Interval=" + interval, "Flow Hydrograph= {} ".format(len(values))] + lines8(values) +
+        ["Flow Hydrograph Slope= {} ".format(slope), "DSS Path=", "Use DSS=False",
+         "Use Fixed Start Time=False", "Fixed Start Date/Time=,", "Is Critical Boundary=False",
+         "Critical Boundary Flow="])
+
+
+def add_inflow_to_unsteady(text, bc_lines, hold_wse=None, cr="\r\n"):
+    """Appends the flow-hydrograph BC; with `hold_wse`, sets the reservoir's initial level
+    to it (the weir crest) so the storage area adds nothing and the hydrograph is the only
+    breach flow."""
+    lines = text.split(cr)
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    if hold_wse is not None:
+        for k, l in enumerate(lines):
+            if l.startswith("Initial Storage Elev="):
+                name = l.split("=", 1)[1].split(",")[0]
+                lines[k] = "Initial Storage Elev={},{}".format(name, _num3(hold_wse))
+    i = next((k for k, l in enumerate(lines) if l.startswith("Met Point Raster Parameters")
+              or l.startswith("Precipitation Mode")), len(lines))
+    return cr.join(lines[:i] + bc_lines + lines[i:]) + cr
+
+
+def _num3(v):
+    s = "{:.3f}".format(float(v)).rstrip("0").rstrip(".")
+    return s or "0"
+
+
+def drop_breach_from_plan(text, cr="\r\n"):
+    """Removes the 'Breach Loc=' ... block so the dam does not breach in the hydrograph mode
+    (the breach is in the inflow hydrograph)."""
+    lines = text.split(cr)
+    i = next((k for k, l in enumerate(lines) if l.startswith("Breach Loc=")), None)
+    if i is None:
+        return text
+    return cr.join(lines[:i]) + cr
+
+
+def hydrograph_series(hy, units_flow, dt_min=hecras.DEFAULT_STEP_MIN):
+    """(interval label, values in project flow units) of the Runner's breach hydrograph."""
+    from .units import CFS
+    _t_hr, q_cfs, _info = hecras.resample_hydrograph(hy, dt_min)
+    return hecras.ras_interval_label(dt_min), [round(units_flow(float(v) * CFS), 2)
+                                               for v in q_cfs]
+
+
+def write_project(dam_folder, out_folder=None, options=None, inflow_mode="hydrograph",
+                  build=None, load=None, log=None):
+    """Builds the HEC-RAS project of a finished run (hecras_model.build_model) and, with
+    inflow_mode 'hydrograph' (default), forces it with the run's breach hydrograph at the
+    run's inflow point, as LISFLOOD-FP and ANUGA are. 'breach' keeps build_model's storage
+    area + SA/2D breach. Returns build_model's dict plus 'inflow_mode' and 'inflow_bc'."""
+    from . import hecras_model as hm
+    build = build or hm.build_model
+    load = load or hecras.load_run
+    log = log or (lambda m: None)
+    if inflow_mode not in ("hydrograph", "breach"):
+        raise HecRasEngineError("inflow_mode must be 'hydrograph' or 'breach'")
+    res = build(dam_folder, out_folder, options=options, log=log)
+    res["inflow_mode"] = inflow_mode
+    res["inflow_bc"] = None
+    if inflow_mode == "breach":
+        return res
+    m, info, paths = res["model"], res["info"], res["paths"]
+    xy = info.get("inflow_xy_model")
+    if xy is None:
+        raise HecRasEngineError("the run has no inflow point (run_report.json 'inflow_point'); "
+                                "use inflow_mode='breach'")
+    a, b = np.asarray(m.conn_line[0], float), np.asarray(m.conn_line[-1], float)
+    along = b - a
+    direction = np.asarray(xy, float) - (a + b) / 2.0       # dam -> inflow, downstream
+    if float(np.hypot(*direction)) < 1e-6:
+        direction = np.array([-along[1], along[0]])
+    line = inflow_bc_line(xy, direction)
+    hy = load(dam_folder)[0]
+    interval, vals = hydrograph_series(hy, m.units.flow)
+    with open(paths["g01"], encoding="ascii", newline="") as f:
+        g = f.read()
+    g = add_inflow_to_geometry(g, inflow_bc_geometry_lines(line, hm.AREA_NAME, hm.num,
+                                                           hm.lines_xy, hm.name32, hm.name16))
+    with open(paths["u01"], encoding="ascii", newline="") as f:
+        u = f.read()
+    hold = min(e for _, e in m.weir) if m.weir else None
+    u = add_inflow_to_unsteady(u, inflow_unsteady_lines(hm.AREA_NAME, interval, vals, hm.lines8,
+                                                        hm.name16, hm.name32), hold)
+    with open(paths["p01"], encoding="ascii", newline="") as f:
+        p = f.read()
+    p = drop_breach_from_plan(p)
+    for k, t in (("g01", g), ("u01", u), ("p01", p)):
+        with open(paths[k], "w", encoding="ascii", newline="") as f:
+            f.write(t)
+    res["inflow_bc"] = {"line": [list(map(float, q)) for q in line], "interval": interval,
+                        "n": len(vals), "peak": max(vals) if vals else 0.0,
+                        "t_ref_hr": float(getattr(hy, "t_ref_s", 0.0) or 0.0) / 3600.0}
+    with open(os.path.join(res["folder"], "hecras_engine.json"), "w", encoding="utf-8") as f:
+        json.dump({"inflow_mode": inflow_mode, "inflow_bc": res["inflow_bc"],
+                   "model_wkt": info.get("model_wkt"), "work_wkt": info.get("work_wkt")},
+                  f, indent=1)
+    log("HEC-RAS inflow: breach hydrograph ({} values, {}) on a BC line at the run's inflow "
+        "point; the reservoir is held at the weir crest and the plan has no breach."
+        .format(len(vals), interval))
+    return res
+
+
+# ============================================================================
+# preprocess / compute (Linux: Wine + official Linux RasUnsteady)
+# ============================================================================
+def to_wine_path(path, prefix):
+    """C:\\... for a path inside <prefix>/drive_c, else Z:\\... (Wine's root drive)."""
+    p = os.path.abspath(path)
+    dc = os.path.join(os.path.abspath(prefix), "drive_c")
+    if p == dc or p.startswith(dc + os.sep):
+        return "C:\\" + os.path.relpath(p, dc).replace("/", "\\").lstrip(".\\") \
+            if p != dc else "C:\\"
+    return "Z:" + p.replace("/", "\\")
+
+
+def wine_env(d, env=None):
+    e = dict(_env(env))
+    for k in ("PROJ_LIB", "PROJ_DATA", "GDAL_DATA", "GDAL_DRIVER_PATH", "PYTHONPATH",
+              "PYTHONHOME", "LD_LIBRARY_PATH"):
+        e.pop(k, None)
+    w = to_wine_path(d["windows_dir"], d["prefix"])
+    e.update({"WINEPREFIX": d["prefix"], "WINEDEBUG": "-all",
+              "DISPLAY": _env(env).get(ENV_DISPLAY) or ":77",
+              "WINEPATH": "{0}\\GDAL\\bin64;{0}\\x64".format(w),
+              "GDAL_DATA": "{}\\GDAL\\common\\data".format(w)})
+    return e
+
+
+def _run(cmd, cwd, env, timeout, what, ok=None, log=None):
+    log = log or (lambda m: None)
+    log("HEC-RAS: " + what)
+    try:
+        r = subprocess.run(cmd, cwd=cwd, env=env, timeout=timeout, capture_output=True,
+                           text=True, errors="replace")
+    except subprocess.TimeoutExpired:
+        raise HecRasEngineError("{} did not finish in {:.0f} s".format(what, timeout))
+    except OSError as e:
+        raise HecRasEngineError("{} could not start: {}".format(what, e))
+    text = (r.stdout or "") + (r.stderr or "")
+    if r.returncode != 0 or (ok and ok not in text) or "FAIL" in text:
+        tail = "\n".join(text.strip().splitlines()[-8:])
+        raise HecRasEngineError("{} failed (exit {}):\n{}".format(what, r.returncode, tail))
+    return text
+
+
+def write_rasmap_terrain(rasmap_path, terrain_rel="Terrain\\Terrain.hdf", name="Terrain"):
+    """Registers the terrain HDF in the project's .rasmap (replaces '<Terrains />')."""
+    with open(rasmap_path, encoding="utf-8", newline="") as f:
+        t = f.read()
+    layer = ('<Terrains Checked="True" Expanded="True">\r\n    <Layer Name="{}" Type="TerrainLayer" '
+             'Checked="True" Filename=".\\{}" />\r\n  </Terrains>').format(name, terrain_rel)
+    if "<Terrains />" in t:
+        t = t.replace("<Terrains />", layer)
+    elif "TerrainLayer" not in t:
+        raise HecRasEngineError("the .rasmap has no <Terrains /> element")
+    with open(rasmap_path, "w", encoding="utf-8", newline="") as f:
+        f.write(t)
+
+
+def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=None,
+               terrain_tif=None, prj=None, mesh=None, log=None, poll_s=2.0):
+    """Makes the run inputs <name>.p<plan>.tmp.hdf, .b<plan>, .x<plan> in `project_dir`
+    (which must be inside the Wine prefix's drive_c, as the chain was proven there).
+
+    steps (default all, in order): 'terrain' (terrain.exe from terrain_tif + prj into
+    Terrain/Terrain.hdf, registered in the .rasmap), 'mesh' (mesh.exe; `mesh` =
+    (area name, seeds csv path) - used when the geometry HDF exists, e.g. HEC's examples),
+    'complete' (drv.exe complete: geometry text -> .g##.hdf with the mesh), 'assoc' (terrain
+    association), 'props' (2D property tables), 'ras' (Ras.exe -c, stopped once the inputs
+    exist). Returns {step: seconds}."""
+    d = d or require(env)
+    e = wine_env(d, env)
+    to = _timeout(env)
+    W = lambda p: to_wine_path(p, d["prefix"])
+    wdir = d["windows_dir"]
+    nice = ["nice", "-n", "19"] if shutil.which("nice") else []
+    wine = nice + [d["wine"] or "wine"]
+    steps = list(steps or ("terrain", "complete", "assoc", "props", "ras"))
+    ghdf = os.path.join(project_dir, "{}.g{}.hdf".format(name, geom))
+    terrain_hdf = os.path.join(project_dir, "Terrain", "Terrain.hdf")
+    times = {}
+    for s in steps:
+        t0 = time.time()
+        if s == "terrain":
+            if not (terrain_tif and prj):
+                raise HecRasEngineError("terrain step needs terrain_tif and prj")
+            os.makedirs(os.path.dirname(terrain_hdf), exist_ok=True)
+            _run(wine + [os.path.join(wdir, "terrain.exe"), W(wdir), W(prj), W(terrain_tif),
+                         W(os.path.dirname(terrain_hdf)), "Terrain"], wdir, e, to,
+                 "terrain HDF (RasMapperLib, Wine)", ok="OK", log=log)
+            rm = os.path.join(project_dir, name + ".rasmap")
+            if os.path.exists(rm):
+                write_rasmap_terrain(rm)
+        elif s == "mesh":
+            area, seeds = mesh
+            _run(wine + [os.path.join(wdir, "mesh.exe"), W(ghdf), area, "csv", W(seeds)], wdir, e,
+                 to, "2D mesh (RasMapperLib, Wine)", log=log)
+        elif s == "complete":
+            _run(wine + [os.path.join(wdir, "drv.exe"), W(wdir), "complete", W(ghdf),
+                         W(os.path.join(project_dir, name + ".rasmap"))], wdir, e, to,
+                 "geometry HDF from the text geometry (RasMapperLib, Wine)", ok="OK", log=log)
+        elif s == "assoc":
+            _run(wine + [os.path.join(wdir, "drv.exe"), W(wdir), "assoc", W(ghdf), W(terrain_hdf)],
+                 wdir, e, to, "terrain association (RasMapperLib, Wine)", ok="OK", log=log)
+        elif s == "props":
+            _run(wine + [os.path.join(wdir, "drv.exe"), W(wdir), "props", W(ghdf)], wdir, e, to,
+                 "2D property tables (RasMapperLib, Wine)", ok="tables complete", log=log)
+        elif s == "ras":
+            ras_compile(project_dir, name, plan, d, e, to, log, poll_s)
+        else:
+            raise HecRasEngineError("unknown preprocess step " + repr(s))
+        times[s] = round(time.time() - t0, 1)
+    return times
+
+
+def run_inputs(project_dir, name, plan):
+    return [os.path.join(project_dir, "{}.{}".format(name, x)) for x in
+            ("b" + plan, "x" + plan, "p{}.tmp.hdf".format(plan))]
+
+
+def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0):
+    """Ras.exe -c through a .bat (Wine mangles quoted arguments otherwise); stopped
+    (wineserver -k) as soon as the run inputs exist and RasUnsteady.exe has started."""
+    log = log or (lambda m: None)
+    for p in run_inputs(project_dir, name, plan):
+        if os.path.exists(p):
+            os.remove(p)
+    bat = os.path.join(project_dir, "_ndbreach_ras_c.bat")
+    with open(bat, "w", newline="") as f:
+        f.write('"{}" -c "{}" "{}"\r\n'.format(
+            to_wine_path(d["ras_exe"], d["prefix"]),
+            to_wine_path(os.path.join(project_dir, name + ".prj"), d["prefix"]),
+            to_wine_path(os.path.join(project_dir, "{}.p{}".format(name, plan)), d["prefix"])))
+    hook = None
+    tcu = (e.get(ENV_TCU) or "").strip()
+    log("HEC-RAS: Ras.exe -c (geometry and plan compile)")
+    proc = subprocess.Popen([d["wine"] or "wine", "cmd", "/c", to_wine_path(bat, d["prefix"])],
+                            cwd=project_dir, env=e, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    t0, done = time.time(), False
+    try:
+        if tcu:
+            log("HEC-RAS: starting the user's TCU hook " + tcu)
+            cmd = ["/bin/bash", tcu] if tcu.endswith(".sh") else [tcu]
+            try:
+                hook = subprocess.Popen(cmd, env=e, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL)
+            except OSError as x:
+                raise HecRasEngineError("the TCU hook {} could not start: {}".format(tcu, x))
+        while time.time() - t0 < timeout:
+            time.sleep(poll_s)
+            if all(os.path.exists(p) and os.path.getsize(p) > 0
+                   for p in run_inputs(project_dir, name, plan)) and _rasunsteady_running():
+                time.sleep(2.0)
+                done = True
+                break
+            if proc.poll() is not None and not all(
+                    os.path.exists(p) for p in run_inputs(project_dir, name, plan)):
+                break
+    finally:
+        subprocess.run(["wineserver", "-k"], env=e, timeout=60, capture_output=True)
+        for p in (proc, hook):
+            if p is not None and p.poll() is None:
+                p.kill()
+    if not done and not all(os.path.exists(p) for p in run_inputs(project_dir, name, plan)):
+        raise HecRasEngineError(
+            "Ras.exe -c wrote no run inputs ({}) within {:.0f} s. If HEC's Terms and "
+            "Conditions dialog is waiting, it must be accepted by the user (see {}).".format(
+                ", ".join(os.path.basename(p) for p in run_inputs(project_dir, name, plan)),
+                timeout, ENV_TCU))
+
+
+def _rasunsteady_running():
+    try:
+        r = subprocess.run(["pgrep", "-fi", "rasunsteady.exe"], capture_output=True, timeout=10)
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+
+
+def strip_cr(path):
+    with open(path, "rb") as f:
+        b = f.read()
+    with open(path, "wb") as f:
+        f.write(b.replace(b"\r\n", b"\n"))
+
+
+def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=None):
+    """Official Linux RasUnsteady on the preprocessed inputs; returns the results HDF path
+    (<name>.p<plan>.hdf in work_dir, default <project>/linux_run)."""
+    d = d or require(env)
+    log = log or (lambda m: None)
+    work = work_dir or os.path.join(project_dir, "linux_run")
+    os.makedirs(work, exist_ok=True)
+    ins = run_inputs(project_dir, name, plan)
+    for p in ins:
+        if not os.path.exists(p):
+            raise HecRasEngineError("missing run input {} (run preprocess first)".format(p))
+        shutil.copy2(p, work)
+    for p in ins[:2]:
+        strip_cr(os.path.join(work, os.path.basename(p)))
+    L = d["linux_dir"]
+    e = dict(_env(env))
+    e["LD_LIBRARY_PATH"] = ":".join(os.path.join(L, s) for s in ("libs", "libs/mkl", "libs/rhel_8"))
+    tmp = os.path.basename(ins[2])
+    nice = ["nice", "-n", "19"] if shutil.which("nice") else []
+    text = _run(nice + [d["rasunsteady"], tmp, "x" + plan], work, e, _timeout(env),
+                "Linux RasUnsteady", ok="Finished Unsteady Flow Simulation", log=log)
+    with open(os.path.join(work, "run.log"), "w") as f:
+        f.write(text)
+    out = os.path.join(work, "{}.p{}.hdf".format(name, plan))
+    os.replace(os.path.join(work, tmp), out)
+    return out
+
+
+# ============================================================================
+# results -> the Runner grid
+# ============================================================================
+def results(hdf, like_grid, arrival_m=0.3048, t0_hr=0.0, to_grid_xy=None, area=None,
+            units=None, wet_m=0.003):
+    """The HEC-RAS maxima on the Runner grid as the workflow's final arrays, SI:
+    {'depth' m, 'velocity' m/s, 'wse' m, 'arrival' h after breach initiation}, NaN where
+    dry or outside the mesh. to_grid_xy(xy (n,2)) -> (n,2) maps the HEC-RAS model CRS to the
+    grid's (None when they are the same)."""
+    FT = 0.3048
+    mesh = hecras.read_mesh(hdf, area=area, units=units, arrival_depth_ft=arrival_m / FT,
+                            t0_hr=t0_hr, wet_ft=wet_m / FT)
+    if to_grid_xy is not None:
+        xy = np.asarray(to_grid_xy(np.column_stack([mesh.x, mesh.y])), dtype=float)
+        mesh.x, mesh.y = xy[:, 0], xy[:, 1]
+        mesh._nn = None
+    a = hecras.rasterise(mesh, like_grid.x0, like_grid.y0, like_grid.dx, like_grid.nx,
+                         like_grid.ny, names=("depth", "wse", "velocity", "arrival"))
+    shape = (like_grid.ny, like_grid.nx)
+    nan = np.full(shape, np.nan)
+    d = np.asarray(a.get("depth", nan), float) * FT
+    wet = np.isfinite(d) & (d > wet_m)
+    arr = np.asarray(a.get("arrival", nan), float)
+    return {"depth": np.where(wet, d, np.nan),
+            "velocity": np.where(wet, np.asarray(a.get("velocity", nan), float) * FT, np.nan),
+            "arrival": np.where(wet & np.isfinite(arr), np.clip(arr, 0.0, None), np.nan),
+            "wse": np.where(wet, np.asarray(a.get("wse", nan), float) * FT, np.nan)}
+
+
+def write_results(arrays, like_grid, writer, folder, names=None):
+    """Writes the arrays under workflow.FINAL_NAMES in ft, ft/s and hours (what ND Dam Hazard
+    reads). Returns {kind: path}."""
+    from . import workflow
+    names = names or workflow.FINAL_NAMES
+    out = {}
+    for kind, arr in arrays.items():
+        p = os.path.join(folder, names[kind])
+        writer(like_grid.like(workflow._to_us(kind, arr), np.nan), p)
+        out[kind] = p
+    return out
+
+
+def transformer(src_wkt, dst_wkt):
+    """xy (n,2) from one CRS to another with OSR (GDAL), or None when they are the same."""
+    if not src_wkt or not dst_wkt or src_wkt == dst_wkt:
+        return None
+    from . import hecras_model as hm
+    return hm.transformer(hm.srs_from(src_wkt), hm.srs_from(dst_wkt))
