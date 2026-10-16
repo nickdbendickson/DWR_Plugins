@@ -1,28 +1,31 @@
 """The ND Dam Breach Runner popup window (Plugins > ND Dam Breach Runner).
 
-One window for a dam: the Dams folder and the dam ID at the top, what is in that dam's folder, and
-every tool of the plugin on five tabs (Dam, Model, Data, Results, Checks). A button opens the
+One window for a dam: the Dams folder, the dam and the DEM at the top, a stage strip
+(Dam -> Terrain -> Model run -> Products), "Run this dam", and two tabs: Run (what is in the dam's
+folder and what to do next) and Tools (every tool of the plugin, by category). A button opens the
 tool's own Processing dialog with the dam's folder (and the DEM chosen here) filled in, so every
-value can be seen and changed before anything runs - the window runs nothing itself. The guided
-wizard is the first button of the Dam tab.
+value can be seen and changed before anything runs - the window runs nothing itself. The suite
+settings grid is behind the gear button.
 
 The logic (folder layout, status, parameters) is popup_logic.py; this file only holds widgets. The
 window's choices are saved with the QGIS project. The tools, the wizard and the Processing
 provider are unchanged.
 """
+import html
 import json
 import os
 
-from qgis.PyQt.QtCore import QUrl
+from qgis.PyQt.QtCore import Qt, QUrl
 from qgis.PyQt.QtGui import QDesktopServices
-from .ui_fit import fit_window, wrap_tabs
+from .ui_fit import fit_window
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget, QWidget, QLabel, QLineEdit,
     QPushButton, QComboBox, QTextEdit, QFileDialog, QMessageBox, QDoubleSpinBox, QCheckBox,
-    QGroupBox,
+    QFrame, QToolButton, QListWidget, QStackedWidget, QScrollArea, QPlainTextEdit,
 )
 
 from . import popup_logic as pl
+from .ui_widgets import Collapsible, InfoBanner, StageStrip
 
 TITLE = "ND Dam Breach Runner"
 SCOPE = "NDBreachRunner"          # QgsProject entry scope
@@ -30,6 +33,23 @@ ENTRY = "state"
 DISCLAIMER = ("Screening / engineering model results. Every threshold and parameter is the "
               "engineer's choice. ND Dam Hazard is the classification authority; the Department "
               "of Water Resources decides the official hazard class.")
+# Tools tab: pl.TABS tab name -> the name in the category rail
+CATEGORY_TITLES = {"Dam": "Run variants", "Model": "Model runs", "Data": "Terrain & data",
+                   "Results": "Post-process", "Checks": "Verify"}
+# chips of the dam card: status row key -> chip text
+CARD_CHIPS = (("run", "Flood run"), ("baseline", "Baseline"), ("manifest", "Manifest"),
+              ("products", "Products"), ("preview", "5.2 preview"), ("handoff", "Hand-off"),
+              ("submittal", "Submittal"))
+CHIP_STYLE = {"yes": ("✓", "#137333"), "part": ("◐", "#b26b00"), "no": ("○", "#888888")}
+TOOL_TAG = {"yes": "✓ done", "part": "◐ partial", "no": "not run yet"}
+# the sibling plugins (their QGIS plugin folder names); ND Dam Hazard is retired
+HAZARD_PLUGIN = ("DamSafety_Hazard", "DamSafety Hazard")
+SCREENING_PLUGIN = ("DamSafety_Screening", "DamSafety Screening")
+
+
+def _dots(text):
+    """One ellipsis character on the buttons."""
+    return text.replace("...", "\u2026")
 
 
 def plugin_version():
@@ -62,6 +82,7 @@ class NDBreachRunnerDialog(QDialog):
         self.setMinimumHeight(560)
         self.resize(860, 640)
         self.tool_button = {}
+        self.tool_tag = {}
         self._pending_dem = ""
         self._build()
         from qgis.PyQt.QtWidgets import QAbstractSpinBox, QComboBox
@@ -85,41 +106,61 @@ class NDBreachRunnerDialog(QDialog):
     # ------------------------------------------------------------------ build --
     def _build(self):
         lay = QVBoxLayout()
-        info = QLabel(DISCLAIMER)
-        info.setWordWrap(True)
-        lay.addWidget(info)
+        lay.setSpacing(6)
+        head = QHBoxLayout()
+        title = QLabel("DamSafety Runner {}".format(plugin_version()).strip())
+        title.setStyleSheet("font-size:15px; font-weight:bold;")
+        head.addWidget(title)
+        head.addStretch(1)
+        self.gear = QToolButton()
+        self.gear.setText("⚙")
+        self.gear.setToolTip("Settings: the suite settings file the tools open with.")
+        self.gear.clicked.connect(lambda _c=False: self._open_settings())
+        head.addWidget(self.gear)
+        lay.addLayout(head)
+        lay.addWidget(InfoBanner(DISCLAIMER))
+
+        self.strip = StageStrip([pl.STAGE_LABELS[k] for k in pl.STAGE_KEYS])
+        lay.addWidget(self.strip)
 
         grid = QGridLayout()
+        grid.setColumnStretch(1, 1)
         self.dams_edit = QLineEdit()
+        self.dams_edit.setPlaceholderText("not set yet - one folder per dam inside")
         self.dams_edit.setToolTip("The Dams folder: each dam has a folder named after its ID in it. "
                                   "Must be writable. The offline pack is not a Dams folder. "
                                   "(the Runner's own layout).")
         self.dams_edit.editingFinished.connect(self._changed)
-        b = QPushButton("Browse...")
+        b = QPushButton("Browse…")
         b.clicked.connect(lambda _c=False: self._browse_folder(self.dams_edit))
         grid.addWidget(QLabel("Dams folder:"), 0, 0)
-        grid.addWidget(self.dams_edit, 0, 1)
-        grid.addWidget(b, 0, 2)
+        grid.addWidget(self.dams_edit, 0, 1, 1, 2)
+        grid.addWidget(b, 0, 3)
 
         self.dam_edit = QLineEdit()
+        self.dam_edit.setPlaceholderText("dam ID")
         self.dam_edit.setToolTip("The dam ID: its folder is <Dams folder>/<Dam ID>.")
         self.dam_edit.editingFinished.connect(self._changed)
         self.dam_combo = QComboBox()
         self.dam_combo.setToolTip("Dams that already have a folder.")
         self.dam_combo.currentIndexChanged.connect(self._pick_dam)
-        grid.addWidget(QLabel("Dam ID:"), 1, 0)
+        grid.addWidget(QLabel("Dam:"), 1, 0)
         grid.addWidget(self.dam_edit, 1, 1)
-        grid.addWidget(self.dam_combo, 1, 2)
+        grid.addWidget(self.dam_combo, 1, 2, 1, 2)
 
         self.dem_combo = QComboBox()
         self.dem_combo.setToolTip("The DEM filled into the model tools (a raster layer of the project "
                                   "or a file). Empty: choose it in the tool's dialog.")
         self.dem_combo.currentIndexChanged.connect(self._changed)
-        b = QPushButton("File...")
+        b = QPushButton("File…")
         b.clicked.connect(lambda _c=False: self._browse_dem())
         grid.addWidget(QLabel("DEM:"), 2, 0)
-        grid.addWidget(self.dem_combo, 2, 1)
-        grid.addWidget(b, 2, 2)
+        grid.addWidget(self.dem_combo, 2, 1, 1, 2)
+        grid.addWidget(b, 2, 3)
+        lay.addLayout(grid)
+        self.dem_section = self._dem_download_box()
+        lay.addWidget(self.dem_section)
+
         self.grid_m = QDoubleSpinBox()
         self.grid_m.setRange(0.5, 500.0)
         self.grid_m.setDecimals(1)
@@ -143,58 +184,243 @@ class NDBreachRunnerDialog(QDialog):
         for sp in (self.grid_m, self.simh, self.simmax):
             sp.valueChanged.connect(self._changed)
         self.force_anuga.toggled.connect(self._changed)
-        lay.addLayout(grid)
+
         run_row = QHBoxLayout()
-        self.run_dam_btn = QPushButton("Run this dam")
-        self.run_dam_btn.setMinimumHeight(32)
+        self.run_dam_btn = QPushButton("▶  Run this dam")
+        self.run_dam_btn.setDefault(True)
+        self.run_dam_btn.setMinimumHeight(34)
+        self.run_dam_btn.setMinimumWidth(180)
+        self.run_dam_btn.setStyleSheet(
+            "QPushButton {background:#1a5fb4; color:white; font-weight:bold; border-radius:4px;"
+            " padding:4px 16px;} QPushButton:disabled {background:#9bb3d4;}")
         self.run_dam_btn.setToolTip("Opens the breach model with this dam, DEM, grid, and hours filled in.")
         self.run_dam_btn.clicked.connect(lambda _c=False: self._open_tool("rundam"))
         run_row.addWidget(self.run_dam_btn)
+        run_row.addSpacing(12)
+        self.lis_chip = QLabel("LISFLOOD-FP …")
+        self.anuga_chip = QLabel("ANUGA …")
+        for chip in (self.lis_chip, self.anuga_chip):
+            chip.setStyleSheet("QLabel {color:#888; padding:2px 8px; border:1px solid #bbb;"
+                               "border-radius:4px;}")
+            run_row.addWidget(chip)
         run_row.addStretch(1)
         lay.addLayout(run_row)
-        adv = QGroupBox("Advanced")
-        adv.setCheckable(True)
-        adv.setChecked(False)
-        adv_lay = QVBoxLayout()
-        grid2 = QGridLayout()
+
+        adv = QWidget()
+        grid2 = QGridLayout(adv)
+        grid2.setContentsMargins(16, 2, 2, 2)
         grid2.addWidget(QLabel("Grid size (m):"), 0, 0)
         grid2.addWidget(self.grid_m, 0, 1)
-        grid2.addWidget(QLabel("Simulated time (h):"), 1, 0)
-        grid2.addWidget(self.simh, 1, 1)
-        grid2.addWidget(QLabel("Longest simulated time (h):"), 2, 0)
-        grid2.addWidget(self.simmax, 2, 1)
-        adv_lay.addLayout(grid2)
-        adv_lay.addWidget(self.force_anuga)
-        adv.setLayout(adv_lay)
-        self.adv_box = adv
-        lay.addWidget(adv)
-        lay.addWidget(self._dem_download_box())
-
-        self.models_label = QLabel("")
-        self.models_label.setWordWrap(True)
-        lay.addWidget(self.models_label)
+        grid2.addWidget(QLabel("Simulated time (h):"), 0, 2)
+        grid2.addWidget(self.simh, 0, 3)
+        grid2.addWidget(QLabel("Longest simulated time (h):"), 1, 0)
+        grid2.addWidget(self.simmax, 1, 1)
+        grid2.addWidget(self.force_anuga, 1, 2, 1, 2)
+        grid2.setColumnStretch(4, 1)
+        self.adv_section = Collapsible("Advanced", adv)
+        lay.addWidget(self.adv_section)
 
         self.tabs = QTabWidget()
-        for tab, tools in pl.TABS:
-            self.tabs.addTab(self._build_tab(tab, tools), tab)
-        self.tabs.addTab(self._build_settings_tab(), "Settings")        # 3.5: the suite settings grid
-        wrap_tabs(self.tabs)
+        self.tabs.setMinimumHeight(200)
+        self.tabs.addTab(self._build_run_tab(), "Run")
+        self.tabs.addTab(self._build_tools_tab(), "Tools")
         lay.addWidget(self.tabs, 1)
-        fit_window(self)
 
-        lay.addWidget(QLabel("Log"))
+        self.settings_dialog = QDialog(self)
+        self.settings_dialog.setWindowTitle("{} - Settings".format(TITLE))
+        self.settings_dialog.setModal(False)
+        self.settings_dialog.resize(900, 620)
+        sd = QVBoxLayout()
+        sd.addWidget(self._build_settings_widget(), 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        done = QPushButton("Close")
+        done.clicked.connect(lambda _c=False: self.settings_dialog.close())
+        row.addWidget(done)
+        sd.addLayout(row)
+        self.settings_dialog.setLayout(sd)
+
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumHeight(110)
-        lay.addWidget(self.log_edit)
+        self.log_section = Collapsible("Log", self.log_edit)
         row = QHBoxLayout()
+        row.addWidget(self.log_section, 1)
         self.close_btn = QPushButton("Close")
         self.close_btn.clicked.connect(self.close)
-        row.addStretch(1)
         row.addWidget(self.close_btn)
         lay.addLayout(row)
         self.setLayout(lay)
+        fit_window(self)
+        self._sync_advanced_title()
 
+    def _sync_advanced_title(self, *args):
+        """The Advanced header shows the values, so nothing hides behind the closed section."""
+        parts = ["grid {:g} m".format(self.grid_m.value()),
+                 "{:g} h simulated".format(self.simh.value()) if self.simh.value() else
+                 "simulated time estimated",
+                 "up to {:g} h".format(self.simmax.value())]
+        if self.force_anuga.isChecked():
+            parts.append("Force ANUGA")
+        self.adv_section.set_title("Advanced  ·  " + " · ".join(parts))
+
+    def _open_settings(self):
+        self.settings_dialog.show()
+        try:
+            self.settings_dialog.raise_()
+            self.settings_dialog.activateWindow()
+        except Exception:                                        # noqa
+            pass
+
+    def _update_gear(self):
+        try:
+            n = len(self.grid.settings.changed(self.grid.catalog))
+        except Exception:                                        # noqa
+            n = 0
+        self.gear.setText("⚙ {}".format(n) if n else "⚙")
+        self.gear.setToolTip("Settings: the suite settings file the tools open with." +
+                             ("\n{} value(s) differ from the starting values.".format(n) if n else ""))
+
+    # ---------------------------------------------------------------- the tabs --
+    def _build_run_tab(self):
+        w = QWidget()
+        lay = QVBoxLayout()
+        card = QFrame()
+        card.setObjectName("dam_card")
+        card.setStyleSheet("QFrame#dam_card {border:1px solid #d8d8e0; border-radius:4px;"
+                           " background:#fbfbfd;}")
+        cl = QVBoxLayout(card)
+        self.card_title = QLabel("")
+        self.card_title.setTextFormat(Qt.RichText)
+        self.card_path = QLabel("")
+        self.card_path.setStyleSheet("color:#666;")
+        self.card_path.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        cl.addWidget(self.card_title)
+        cl.addWidget(self.card_path)
+        chips = QHBoxLayout()
+        chips.setSpacing(4)
+        self.card_chips = {}
+        for key, text in CARD_CHIPS:
+            lab = QLabel(text)
+            self.card_chips[key] = lab
+            chips.addWidget(lab)
+        chips.addStretch(1)
+        self.chips_row = QWidget()
+        self.chips_row.setLayout(chips)
+        cl.addWidget(self.chips_row)
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        self.record_label = QLabel("")
+        self.record_label.setWordWrap(True)
+        self.record_label.setStyleSheet("color:#55555f;")
+        self.suggest_label = QLabel("")
+        self.suggest_label.setWordWrap(True)
+        self.suggest_label.setStyleSheet("font-weight:bold;")
+        cl.addWidget(self.status_label)
+        cl.addWidget(self.record_label)
+        cl.addWidget(self.suggest_label)
+        self.contents_edit = QPlainTextEdit()
+        self.contents_edit.setReadOnly(True)
+        self.contents_edit.setMinimumHeight(150)
+        self.contents_section = Collapsible("Folder contents (0)", self.contents_edit)
+        cl.addWidget(self.contents_section)
+        cl.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(card)
+        lay.addWidget(scroll, 1)
+        row = QHBoxLayout()
+        self.suggest_btn = QPushButton("Open suggested tool")
+        self.suggest_btn.clicked.connect(lambda _c=False: self._open_suggested())
+        self.folder_btn = QPushButton("Open dam folder")
+        self.folder_btn.clicked.connect(lambda _c=False: self._open_dam_folder())
+        self.add_btn = QPushButton("Add results to project")
+        self.add_btn.setToolTip("The final, baseline and incremental rasters and the flood polygons of "
+                                "the dam folder, with the suite's styles (styles/*.qml), in a layer group "
+                                "named after the dam.")
+        self.add_btn.clicked.connect(lambda _c=False: self._add_results())
+        self.wizard_btn = QPushButton("Guided wizard…")
+        self.wizard_btn.setToolTip(dict((a, t) for a, _l, t in pl.ALL_TOOLS).get(pl.WIZARD, ""))
+        self.wizard_btn.clicked.connect(lambda _c=False: self._open_tool(pl.WIZARD))
+        row.addWidget(self.suggest_btn)
+        row.addWidget(self.folder_btn)
+        row.addWidget(self.add_btn)
+        row.addStretch(1)
+        row.addWidget(self.wizard_btn)
+        lay.addLayout(row)
+        w.setLayout(lay)
+        return w
+
+    def _build_tools_tab(self):
+        w = QWidget()
+        h = QHBoxLayout()
+        self.rail = QListWidget()
+        self.rail.setMaximumWidth(150)
+        self.rail.setMinimumWidth(130)
+        self.pages = QStackedWidget()
+        for tab, tools in pl.TABS:
+            self.rail.addItem(CATEGORY_TITLES.get(tab, tab))
+            self.pages.addWidget(self._tool_page(tab, tools))
+        self.rail.currentRowChanged.connect(self.pages.setCurrentIndex)
+        self.rail.setCurrentRow(0)
+        h.addWidget(self.rail)
+        h.addWidget(self.pages, 1)
+        w.setLayout(h)
+        return w
+
+    def _tool_row(self, lay, label, tip, slot, alg=None):
+        """One tool: a left-aligned button, a status tag (tools with a status row) and its
+        description in grey."""
+        btn = QPushButton(_dots(label))
+        btn.setStyleSheet("QPushButton {text-align:left; padding:3px 10px;}")
+        btn.setFixedWidth(360)                  # one column, so the tags and descriptions line up
+        btn.setMinimumHeight(26)
+        btn.clicked.connect(lambda _c=False: slot())
+        desc = QLabel(tip)
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color:#666;")
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.addWidget(btn)
+        tag = QLabel("")                        # a fixed column, so the descriptions line up
+        tag.setFixedWidth(90)
+        if alg in pl.TOOL_STATUS_KEY:
+            self.tool_tag[alg] = tag
+        row.addWidget(tag)
+        row.addWidget(desc, 1)
+        lay.addLayout(row)
+        return btn
+
+    def _tool_page(self, tab, tools):
+        w = QWidget()
+        lay = QVBoxLayout()
+        for alg, label, tip in tools:
+            btn = self._tool_row(lay, label, tip, lambda a=alg: self._open_tool(a), alg)
+            btn.setToolTip(tip + ("" if alg == pl.WIZARD else
+                                  "\n(Processing: {}:{})".format(pl.PROVIDER, alg)))
+            self.tool_button[alg] = btn
+        if tab == "Results":
+            self.hazard_btn = self._tool_row(
+                lay, "Open {}…".format(HAZARD_PLUGIN[1]),
+                "The classification authority; its 'Dam suite' group reads the same dam.json records.",
+                lambda: self._open_other(*HAZARD_PLUGIN))
+            self.screening_btn = self._tool_row(
+                lay, "Open {}…".format(SCREENING_PLUGIN[1]),
+                "County-wide screening; tool 7b hands dams to this Runner.",
+                lambda: self._open_other(*SCREENING_PLUGIN))
+        if tab == "Checks":
+            self.paths_btn = self._tool_row(lay, "Model paths (Processing options)…",
+                                            "Where LISFLOOD-FP and the ANUGA environment are.",
+                                            self._model_paths)
+            self.help_btn = self._tool_row(lay, "Help (README)", "The plugin's README.", self._open_help)
+        lay.addStretch(1)
+        w.setLayout(lay)
+        scroll = QScrollArea()                 # Post-process has twelve tools
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(w)
+        return scroll
 
     def _dem_download_box(self):
         try:
@@ -202,15 +428,14 @@ class NDBreachRunnerDialog(QDialog):
             if dd is None:
                 raise ImportError("screening")
         except Exception:
-            box = QGroupBox("Download a DEM")
+            box = QWidget()
             lay = QVBoxLayout()
             lay.addWidget(QLabel("DEM download needs DamSafety Screening or ND Dam Breach Screening. Neither import succeeded."))
             box.setLayout(lay)
-            return box
-        box = QGroupBox("Download a DEM (USGS 3DEP, metres, EPSG:5070)")
-        box.setCheckable(True)
-        box.setChecked(False)
+            return Collapsible("Download a DEM (not available)", box)
+        box = QWidget()
         grid = QGridLayout()
+        grid.setContentsMargins(16, 2, 2, 2)
         self.dem_source = QComboBox()
         self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)"])
         self.dem_ftp = QLineEdit()
@@ -244,11 +469,11 @@ class NDBreachRunnerDialog(QDialog):
         self.dem_res.currentIndexChanged.connect(lambda _i: self._dem_facts())
         self._dem_facts()
         self.dem_out = QLineEdit()
-        browse = QPushButton("Browse...")
+        browse = QPushButton("Browse…")
         browse.clicked.connect(self._browse_dem_folder)
         counties = QPushButton("Counties on the map")
         counties.clicked.connect(self._show_counties)
-        go = QPushButton("Download DEM...")
+        go = QPushButton("Download DEM…")
         go.clicked.connect(self._open_dem_download)
         grid.addWidget(QLabel("Source"), 0, 0)
         grid.addWidget(self.dem_source, 0, 1)
@@ -274,7 +499,7 @@ class NDBreachRunnerDialog(QDialog):
         grid.addWidget(counties, 6, 2, 1, 2)
         grid.addWidget(self.dem_facts, 7, 0, 1, 4)
         box.setLayout(grid)
-        return box
+        return Collapsible("Download a DEM (USGS 3DEP or ND DWR LiDAR)", box)
 
     def _dem_facts(self):
         cell = 10 if self.dem_res.currentIndex() == 0 else 1
@@ -366,73 +591,8 @@ class NDBreachRunnerDialog(QDialog):
             "OUT": folder,
         })
 
-    def _build_tab(self, tab, tools):
-        w = QWidget()
-        lay = QVBoxLayout()
-        if tab == "Dam":
-            self.status_label = QLabel("")
-            self.status_label.setWordWrap(True)
-            self.record_label = QLabel("")
-            self.record_label.setWordWrap(True)
-            self.suggest_label = QLabel("")
-            self.suggest_label.setWordWrap(True)
-            lay.addWidget(self.status_label)
-            lay.addWidget(self.record_label)
-            lay.addWidget(self.suggest_label)
-            row = QHBoxLayout()
-            self.suggest_btn = QPushButton("Open the suggested tool")
-            self.suggest_btn.clicked.connect(lambda _c=False: self._open_suggested())
-            self.folder_btn = QPushButton("Open the dam folder")
-            self.folder_btn.clicked.connect(lambda _c=False: self._open_dam_folder())
-            self.add_btn = QPushButton("Add the dam's results to the project")
-            self.add_btn.setToolTip("The final, baseline and incremental rasters and the flood polygons of "
-                                    "the dam folder, with the suite's styles (styles/*.qml), in a layer group "
-                                    "named after the dam.")
-            self.add_btn.clicked.connect(lambda _c=False: self._add_results())
-            row.addWidget(self.suggest_btn)
-            row.addWidget(self.folder_btn)
-            row.addWidget(self.add_btn)
-            row.addStretch(1)
-            lay.addLayout(row)
-        grid = QGridLayout()
-        for i, (alg, label, tip) in enumerate(tools):
-            btn = QPushButton(label)
-            btn.setToolTip(tip + ("" if alg == pl.WIZARD else
-                                  "\n(Processing: {}:{})".format(pl.PROVIDER, alg)))
-            btn.clicked.connect(lambda _c=False, a=alg: self._open_tool(a))
-            self.tool_button[alg] = btn
-            grid.addWidget(btn, i // 2, i % 2)
-        lay.addLayout(grid)
-        if tab == "Results":
-            self.hazard_btn = QPushButton("Open ND Dam Hazard...")
-            self.hazard_btn.setToolTip("The classification authority; its 'Dam suite' group reads the "
-                                       "same dam.json records.")
-            self.hazard_btn.clicked.connect(lambda _c=False: self._open_other(
-                "ND_Dam_Hazard_Helper", "ND Dam Hazard"))
-            self.screening_btn = QPushButton("Open ND Dam Breach Screening...")
-            self.screening_btn.clicked.connect(lambda _c=False: self._open_other(
-                "nd_dam_screening", "ND Dam Breach Screening"))
-            row = QHBoxLayout()
-            row.addWidget(self.hazard_btn)
-            row.addWidget(self.screening_btn)
-            row.addStretch(1)
-            lay.addLayout(row)
-        if tab == "Checks":
-            row = QHBoxLayout()
-            self.paths_btn = QPushButton("Model paths (Processing options)...")
-            self.paths_btn.clicked.connect(lambda _c=False: self._model_paths())
-            self.help_btn = QPushButton("Help (README)")
-            self.help_btn.clicked.connect(lambda _c=False: self._open_help())
-            row.addWidget(self.paths_btn)
-            row.addWidget(self.help_btn)
-            row.addStretch(1)
-            lay.addLayout(row)
-        lay.addStretch(1)
-        w.setLayout(lay)
-        return w
-
-    # ------------------------------------------------------- the settings tab --
-    def _build_settings_tab(self):
+    # --------------------------------------------------- the settings window --
+    def _build_settings_widget(self):
         """3.5: the suite settings file (every engineer-chosen value of the Runner's tools, shared
         with the other two plugins) as a grid - the tools open with its values."""
         from . import suite_settings as SS
@@ -448,9 +608,9 @@ class NDBreachRunnerDialog(QDialog):
             "the Runner's tools open with its values. Empty = the tools' own starting values. Edits in "
             "the grid are saved to the file at once.")
         self.settings_file_edit.editingFinished.connect(lambda: self._settings_file_edited())
-        b = QPushButton("File...")
+        b = QPushButton("File…")
         b.clicked.connect(lambda _c=False: self._pick_settings_file())
-        n = QPushButton("New...")
+        n = QPushButton("New…")
         n.setToolTip("Write a new settings file with the current values.")
         n.clicked.connect(lambda _c=False: self._new_settings_file())
         row.addWidget(self.settings_file_edit, 1)
@@ -512,6 +672,7 @@ class NDBreachRunnerDialog(QDialog):
         if not p:
             self.grid.settings = DS.Settings()
             self.grid.fill()
+            self._update_gear()
             return False
         if not os.path.isfile(p):
             if not quiet:
@@ -519,6 +680,7 @@ class NDBreachRunnerDialog(QDialog):
             self._log("!!! settings file not found: {}".format(p))
             return False
         ok = self.grid.load(p, quiet=quiet)
+        self._update_gear()
         if ok:
             self._log("Settings file: {} ({} value(s) differ from the starting values)".format(
                 p, len(self.grid.settings.changed(self.grid.catalog))))
@@ -544,6 +706,7 @@ class NDBreachRunnerDialog(QDialog):
             DS.set_current_path(p)
         except DS.SettingsError as e:
             self._log("!!! settings not saved: {}".format(e))
+        self._update_gear()
 
     # ---------------------------------------------------------------- settings --
     def settings(self):
@@ -552,7 +715,7 @@ class NDBreachRunnerDialog(QDialog):
                 "settings_file": self.settings_file_edit.text().strip(),
                 "grid_m": float(self.grid_m.value()), "simh": float(self.simh.value()),
                 "simmax": float(self.simmax.value()),
-                "force_anuga": bool(self.adv_box.isChecked() and self.force_anuga.isChecked())}
+                "force_anuga": bool(self.force_anuga.isChecked())}
 
     def _apply(self, s):
         self.dams_edit.setText(s.get("dams_folder", ""))
@@ -570,8 +733,6 @@ class NDBreachRunnerDialog(QDialog):
         self.simh.setValue(float(s.get("simh", pl.DEFAULT_SETTINGS["simh"])))
         self.simmax.setValue(float(s.get("simmax", pl.DEFAULT_SETTINGS["simmax"])))
         self.force_anuga.setChecked(bool(s.get("force_anuga", False)))
-        if s.get("force_anuga"):
-            self.adv_box.setChecked(True)
 
     def _save_state(self):
         if self._loading:
@@ -596,6 +757,7 @@ class NDBreachRunnerDialog(QDialog):
         self._apply(s)
 
     def _changed(self, *args):
+        self._sync_advanced_title()
         self._save_state()
         self.refresh()
 
@@ -698,7 +860,14 @@ class NDBreachRunnerDialog(QDialog):
         finally:
             self._loading = was
         if dams and ("offline_pack" in dams.lower() or dams.lower().endswith(".sqlite")):
+            self._fill_card(dict(s, dam_id="", dem=""), "", False, [], "", False)
             self.status_label.setText("The offline pack is not a Dams folder. Choose a writable folder.")
+            self.status_label.setVisible(True)
+            self.record_label.setText("")
+            self.suggest_label.setText("")
+            self._suggested = None
+            for b in (self.suggest_btn, self.folder_btn, self.add_btn):
+                b.setEnabled(False)
             return
         folder = self.folder()
         have = bool(folder and os.path.isdir(folder))
@@ -710,7 +879,7 @@ class NDBreachRunnerDialog(QDialog):
                                       "creates it.".format(s["dam_id"]))
         else:
             self.status_label.setText("Choose the Dams folder and the dam ID.")
-        text, code = pl.dam_record_text(folder) if have else ("", "")
+        text, code, has_json = pl.dam_record_info(folder) if have else ("", "", False)
         self.record_label.setText(text)
         tool, why = pl.suggest(rows, code) if have or (s["dam_id"] and have_dams) else (None, "")
         self.suggest_label.setText(("Suggestion: " + why) if why else "")
@@ -718,6 +887,38 @@ class NDBreachRunnerDialog(QDialog):
         self.suggest_btn.setEnabled(bool(tool))
         self.folder_btn.setEnabled(have)
         self.add_btn.setEnabled(have and bool(pl.result_files(folder)))
+        self.status_label.setVisible(not have)           # the chips and Folder contents show it
+        self._fill_card(s, folder, have, rows, text, has_json)
+
+    def _fill_card(self, s, folder, have, rows, record, has_json):
+        """The dam card, the stage strip and the tool tags from the folder's status rows."""
+        st = {k: (v, d) for k, _l, v, d in rows}
+        did = s["dam_id"]
+        self.card_title.setText("<b>{}</b>".format(html.escape(did)) if did else
+                                "<span style='color:#888'>No dam chosen</span>")
+        self.card_path.setText(folder if have else "")
+        self.chips_row.setVisible(have)
+        labels = {k: l for k, l, _v, _d in rows}
+        for key, text in CARD_CHIPS:
+            v, d = st.get(key, ("no", ""))
+            mark, color = CHIP_STYLE.get(v, CHIP_STYLE["no"])
+            chip = self.card_chips[key]
+            chip.setText("{} {}".format(mark, text))
+            chip.setStyleSheet("QLabel {color:%s; padding:1px 6px; border:1px solid %s;"
+                               "border-radius:8px;}" % (color, color))
+            chip.setToolTip("{}: {}{}".format(labels.get(key, text), v, " - " + d if d else ""))
+        lines = pl.status_lines(rows)
+        self.contents_edit.setPlainText("\n".join(lines))
+        self.contents_section.set_title("Folder contents ({})".format(
+            sum(1 for _k, _l, v, _d in rows if v != "no")))
+        self.contents_section.setVisible(have)
+        states = pl.stage_states(rows, have, has_json, s["dem"], did)
+        self.strip.set_states([states[k] for k in pl.STAGE_KEYS],
+                              ["{}: {}".format(pl.STAGE_LABELS[k], states[k]) for k in pl.STAGE_KEYS])
+        for alg, tag in self.tool_tag.items():
+            v = pl.tool_status(alg, rows)
+            tag.setText(TOOL_TAG.get(v, "") if have else "")
+            tag.setStyleSheet("color:%s;" % CHIP_STYLE.get(v, CHIP_STYLE["no"])[1])
 
     def _refresh_models(self):
         """Which of LISFLOOD-FP / ANUGA are found. Not part of refresh(): looking for a conda
@@ -725,11 +926,22 @@ class NDBreachRunnerDialog(QDialog):
         try:
             from . import wizard
             m = wizard._find_models()
-            self.models_label.setText("LISFLOOD-FP: {}.  ANUGA: {}.  (Model paths: Checks tab.)".format(
-                "found" if m.get("lisflood") else "NOT found",
-                "found" if m.get("anuga") else "not found (only the ANUGA tier needs it)"))
+            self._set_chip(self.lis_chip, "LISFLOOD-FP", bool(m.get("lisflood")))
+            self._set_chip(self.anuga_chip, "ANUGA", bool(m.get("anuga")),
+                           "" if m.get("anuga") else "only the ANUGA tier needs it")
         except Exception:                                        # noqa
-            self.models_label.setText("")
+            self._set_chip(self.lis_chip, "LISFLOOD-FP", None)
+            self._set_chip(self.anuga_chip, "ANUGA", None)
+
+    def _set_chip(self, chip, name, found, note=""):
+        """found: True / False / None (could not be checked)."""
+        color = {True: "#137333", False: "#b33"}.get(found, "#888")
+        chip.setText("{} {}".format(name, {True: "✓", False: "✕"}.get(found, "?")))
+        chip.setStyleSheet("QLabel {color:%s; padding:2px 8px; border:1px solid %s;"
+                           "border-radius:4px;}" % (color, color))
+        chip.setToolTip("{}: {}{}\nModel paths: Tools > Verify > Model paths.".format(
+            name, {True: "found", False: "NOT found"}.get(found, "could not be checked"),
+            " - " + note if note else ""))
 
     def eventFilter(self, obj, event):
         from qgis.PyQt.QtCore import QEvent

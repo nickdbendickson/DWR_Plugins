@@ -140,6 +140,7 @@ def dam_status(folder):
         return rows
     fin = workflow.FINAL_NAMES
     have = [k for k in ("depth", "velocity", "arrival") if _file(folder, fin[k])]
+    rows.append(terrain_row(folder))
     rows.append(("run", "Flood rasters (depth, velocity, arrival)",
                  "yes" if len(have) == 3 else "part" if have else "no",
                  "" if len(have) == 3 else ("only " + ", ".join(have)) if have else "not run yet"))
@@ -170,7 +171,82 @@ def dam_status(folder):
                  "yes" if _dir(folder, "_classification") else "no", ""))
     rows.append(("animation", "Animation", "yes" if _dir(folder, "Animation") else "no", ""))
     rows.append(("hecras", "HEC-RAS files", "yes" if _dir(folder, "_hecras") else "no", ""))
+    rows.append(submittal_row(folder))
     return rows
+
+
+def terrain_row(folder):
+    """The model's terrain clip. A run writes it as <name>.dem.asc in _breach_model/lisflood (and
+    lisflood_base); the run removes it again unless the run files are kept, so a model folder with
+    no clip is 'part' (the run report still names the DEM)."""
+    label = "Terrain clip (model DEM)"
+    model = os.path.join(folder, workflow.MODEL_FOLDER)
+    if not os.path.isdir(model):
+        return ("terrain", label, "no", "no model folder yet")
+    for sub in ("lisflood", "lisflood_base"):
+        try:
+            if any(n.endswith(".dem.asc") for n in os.listdir(os.path.join(model, sub))):
+                return ("terrain", label, "yes", "kept in {}/{}".format(workflow.MODEL_FOLDER, sub))
+        except OSError:
+            continue
+    if _file(model, "dem_refill.tif"):
+        return ("terrain", label, "yes", "dem_refill.tif")
+    return ("terrain", label, "part", "model folder, but the clip was cleaned up after the run")
+
+
+def submittal_row(folder):
+    """The Word submittal report. The tool writes a .docx wherever OUTPUT says; the dam folder's
+    own .docx files are the ones found. 'part' = older than the run report (stale)."""
+    label = "Submittal report (Word)"
+    try:
+        docs = [os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(".docx")
+                and not n.startswith("~$") and os.path.isfile(os.path.join(folder, n))]
+    except OSError:
+        docs = []
+    if not docs:
+        return ("submittal", label, "no", "")
+    newest = max(docs, key=os.path.getmtime)
+    rep = os.path.join(folder, workflow.MODEL_FOLDER, "run_report.json")
+    if os.path.isfile(rep) and os.path.getmtime(newest) < os.path.getmtime(rep):
+        return ("submittal", label, "part", "{} is older than the last run".format(os.path.basename(newest)))
+    return ("submittal", label, "yes", os.path.basename(newest))
+
+
+STAGE_KEYS = ("dam", "terrain", "run", "products")
+STAGE_LABELS = {"dam": "Dam", "terrain": "Terrain", "run": "Model run", "products": "Products"}
+# which status row tells whether a tool has been run for the dam
+TOOL_STATUS_KEY = {"rundam": "run", "batch": "run", "nested": "nested", "sensitivity": "sensitivity",
+                   "probabilistic": "ensemble", "products": "products", "ndhazardclass": "preview",
+                   "classify": "handoff", "animation": "animation", "submittal": "submittal",
+                   "hecrasexport": "hecras", "hecrasimport": "hecras"}
+
+
+def tool_status(alg, rows):
+    """'yes' / 'part' / 'no' for a tool from the dam's status rows; None = no status for it."""
+    key = TOOL_STATUS_KEY.get(alg)
+    if key is None or not rows:
+        return None
+    for k, _l, st, _d in rows:
+        if k == key:
+            return st
+    return None
+
+
+def stage_states(rows, has_folder, has_dam_json, dem, dam_id):
+    """{stage key: 'yes' / 'part' / 'no'} for Dam -> Terrain -> Model run -> Products."""
+    st = {k: v for k, _l, v, _d in rows}
+    dam = "yes" if has_folder and has_dam_json else "part" if has_folder or dam_id else "no"
+    if has_folder:
+        terrain = st.get("terrain", "no")
+        if terrain == "no" and dem:
+            terrain = "part"
+    else:
+        terrain = "part" if dem else "no"
+    run = st.get("run", "no") if has_folder else "no"
+    prod = [st.get(k) for k in ("products", "handoff", "submittal")]
+    products = "yes" if st.get("products") == "yes" and st.get("handoff") == "yes" else \
+        "part" if any(v in ("yes", "part") for v in prod) else "no"
+    return {"dam": dam, "terrain": terrain, "run": run, "products": products}
 
 
 def status_lines(rows):
@@ -181,18 +257,24 @@ def status_lines(rows):
 
 def dam_record_text(folder):
     """(one line, next-action code) of the dam folder's dam.json."""
+    text, code, _has = dam_record_info(folder)
+    return text, code
+
+
+def dam_record_info(folder):
+    """(one line, next-action code, has a readable dam.json) of the dam folder."""
     if not folder or not os.path.isdir(folder):
-        return "dam.json: no dam folder", ""
+        return "dam.json: no dam folder", "", False
     try:
         from .damsuite import dam_record as DR
         rec = DR.load(folder)
     except ValueError as e:
-        return "dam.json: cannot be read ({})".format(e), ""
+        return "dam.json: cannot be read ({})".format(e), "", False
     except Exception as e:                                       # noqa
-        return "dam.json: not available ({})".format(e), ""
+        return "dam.json: not available ({})".format(e), "", False
     if rec is None:
-        return ("dam.json: none yet (written by the next run, ND Dam Breach Screening tool 7b or "
-                "ND Dam Hazard)"), ""
+        return ("dam.json: none yet (written by the next run, DamSafety Screening tool 7b or "
+                "DamSafety Hazard)"), "", False
     code, why = DR.next_action(rec)
     steps = []
     for step in DR.STEPS:
@@ -202,7 +284,7 @@ def dam_record_text(folder):
     disputed = len([c for c in rec.conflicts if not c.get("applied")])
     return ("dam.json: {}; next: {}{}".format(
         ", ".join(steps) or "no status", why or code.upper(),
-        " - {} value(s) disputed".format(disputed) if disputed else "")), code
+        " - {} value(s) disputed".format(disputed) if disputed else "")), code, True
 
 
 def suggest(rows, code=""):
@@ -212,9 +294,9 @@ def suggest(rows, code=""):
     if not rows or st.get("run") != "yes" or code == "model":
         return "rundam", "Run the breach model."
     if code == "classify" or (st.get("handoff") != "yes" and code in ("", "none")):
-        return "classify", "Hand the results to the ND Dam Hazard classification."
+        return "classify", "Hand the results to the DamSafety Hazard classification."
     if code == "review":
-        return "classify", "Open ND Dam Hazard's reviewer's view; its classification has open review items."
+        return "classify", "Open DamSafety Hazard's reviewer's view; its classification has open review items."
     return None, "Nothing is waiting for this dam. The submittal report is on the Results tab."
 
 
