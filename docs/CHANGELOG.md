@@ -1,10 +1,28 @@
 # Changelog
 
 ## New plugin
-- **DamSafety_PMP 0.3.0 (internal, experimental):** the nd_pmp prototype is added as `DamSafety_PMP/`. Provider id `ndpmp` and settings keys `nd_pmp/*` are unchanged. The AWA data isn't included. Machine-specific paths were removed. Light tests are in `tests/run_tests.py`, and data-dependent tests skip when their inputs are missing. The OGR memory driver now falls back to "Memory" on GDAL < 3.11. Licensing: for SWC's exclusive use; get permission from SWC and AWA before redistributing.
+- **#60 (merged 10-16), DamSafety_PMP 0.3.0 (internal, experimental):** the nd_pmp prototype is added as `DamSafety_PMP/`. Provider id `ndpmp` and settings keys `nd_pmp/*` are unchanged. The AWA data isn't included. Machine-specific paths were removed. Light tests are in `tests/run_tests.py`, and data-dependent tests skip when their inputs are missing. The OGR memory driver now falls back to "Memory" on GDAL < 3.11. Licensing: for SWC's exclusive use; get permission from SWC and AWA before redistributing.
 
 ## Repository
-- Removed the old nd_ plugins (`nd_claude_1.23/`, `nd_installed/`). They are archived on branch `archive/nd-plugins` and tag `archive-nd-plugins-20261015` (18ae1f5). The top-level `nd_breach_runner/` and `nd_dam_screening/` test aliases are kept.
+- **#45 (merged 10-15 14:16Z):** Removed the old nd_ plugins (`nd_claude_1.23/`, `nd_installed/`). They are archived on branch `archive/nd-plugins` and tag `archive-nd-plugins-20261015` (18ae1f5). The top-level `nd_breach_runner/` and `nd_dam_screening/` test aliases are kept.
+
+## 2026-10-15 (later)
+- **#22 (merged 06:12Z), Screening 7b:** new options are passed to `ndbreach:rundam`:
+  - `ENGINE` ("Runner models") → TIER
+  - `FORCE_ANUGA` → FORCE_ANUGA
+  - `REFINE_NEAR` → REFINE_NEAR
+  - `CULVERTS` (line layer) → STRUCTURES
+  - `C_KIND`/`C_WIDTH`/`C_HEIGHT`/`C_BARRELS`/`C_SHAPE`/`C_NAME` → `S_*`
+
+  Only values that differ from the Runner defaults are sent, so a default 7b run is unchanged.
+- **#32 (merged 10:26Z), cross-platform fixes:**
+  - Text files are now read and written as UTF-8.
+  - CSVs are written with `newline=""`.
+  - On Windows, the conda env python is found at `<env>\python.exe`, which fixes ANUGA env auto-detect.
+  - Subprocess output is decoded with `errors="replace"`.
+  - No behaviour change on Linux/macOS. The vendored `damsuite/` copies are not yet changed.
+- **#38 (merged 14:15Z), Screening 7b follow-ups (Screening 0.17.22):** `ENGINE` is the one Runner engine choice. `FORCE_ANUGA` is folded in and hidden; an old `FORCE_ANUGA = True` still selects "LISFLOOD-FP then ANUGA". The engine is shown on the Run tab and in `rn_engine`, there's a warning when culverts are ignored, and an early check fails if ANUGA is missing.
+- **#30 (merged 10:34Z), Runner:** culvert guesses can be sized from the NDDOT/NBI inventory (CULVERT_INVENTORY, CULVERT_MATCH_M 75 m, CULVERT_BURN_MATCHED). See USER_GUIDE.md.
 
 Merged pull requests, 2026-10-14 to 2026-10-15 (main at e2acb76). Merge times are UTC.
 
