@@ -162,7 +162,7 @@ def available_values(output_folder):
     v["DAM_NAME"] = snap.get("dam") or parsed["header"].get("dam")
     nid = PF.read_location_nid(dam_folder) or (log["settings"].get("subject_dam_nid") or
                                                "").strip() or sf.get("nid")
-    v["NID_ID"] = nid if nid and nid.lower() not in ("none", "''") else None
+    v["NID_ID"] = PF.clean_nid(nid)                    # FF.4: shared with the portfolio
     if log.get("failed"):           # the last attempt failed: the values are the earlier run's
         log = {"settings": log.get("settings") or {}}
     v["RUN_DATE"] = log.get("finished") or snap.get("time") or parsed["header"].get("generated")
@@ -176,10 +176,14 @@ def available_values(output_folder):
     _h, nd_lines = PF.section(parsed, "ND HAZARD CLASSIFICATION")
     basis = [x for x in nd_lines if x.startswith("Basis:")]
     v["ND_BASIS"] = basis[0].split(":", 1)[1].strip() if basis else None
-    reasons = sf.get("nd_reasons") or []
+    # FF.1: the snapshot's reasons first (2.18.25+), else the summary; the provisional
+    # note is not the governing criterion
+    from .classification import governing_reason
+    reasons = snap.get("nd_reasons") or sf.get("nd_reasons") or []
     if reasons:
-        v["ND_GOVERNING_CRITERION"] = reasons[0]
-        m = re.search(r"\[([0-9][0-9.]*[0-9])\]", reasons[0])
+        gov_r = governing_reason(reasons)
+        v["ND_GOVERNING_CRITERION"] = gov_r
+        m = re.search(r"\[([0-9][0-9.]*[0-9])\]", gov_r or "")
         v["ND_GOVERNING_SECTION"] = m.group(1) if m else None
         v["ND_REASONS"] = "; ".join(reasons)
     # ---- TM 11

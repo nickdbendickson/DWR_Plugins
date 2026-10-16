@@ -65,6 +65,7 @@ from .hazard import METHOD_MAXMAX, METHOD_LABEL
 from .scenarios import (
     ROLE_BREACH, order_for_run, restore, mark_structures_incremental, raster_reuse_problems,
     line_baseline_depth, mark_lines_incremental, incremental_view, EVAL_KEYS,
+    CONSEQ_KEYS, SNAP_KEYS,
 )
 from .consequences import economic_estimate, life_loss_estimate, totals
 from .access import access_analysis
@@ -160,13 +161,38 @@ DEFAULTS.update({
 from . import modelgate as _MG          # noqa: E402  (v2.10 model gate settings)
 DEFAULTS.update(_MG.CFG_DEFAULTS)
 
-CONSEQ_KEYS = ("val_struct", "val_cont", "ff_depth", "damage_usd", "damage_basis",
-               "damage_nonres_usd", "par_night", "par_day", "lol_night", "lol_day", "severity",
-               "warning_hr", "warning_cat", "fatality_rate", "par", "lol", "lol_low",
-               "lol_high", "cut_off", "access_note", "access_unknown", "access_cut",
-               "access_raw_note", "incremental", "incr_note", "base_depth", "base_zone",
-               "cut_incremental")
-SNAP_KEYS = EVAL_KEYS + CONSEQ_KEYS
+
+
+def downloads_disabled():
+    """ES.1(a): the suite / offline environment turns every download off."""
+    import os as _os
+    return bool(_os.environ.get("ND_DAM_SUITE") or _os.environ.get("ND_DAM_OFFLINE"))
+
+
+def resolve_point_layers(cfg, loc):
+    """[(family, layer)] of the project / data-folder point layers the run
+    uses (shared with estimate.planned_downloads, ES.1(b))."""
+    if cfg.get("point_sources", "auto") == "auto":
+        layer_dict = discover_project_layers()
+        points = []
+        for fam in ("NSI", "NDGISHUB"):          # FEMA point layers: not used (v2.2)
+            points.extend((fam, lyr) for lyr in layer_dict.get(fam, []))
+    else:
+        points = list(cfg.get("point_sources") or [])
+    if loc.get("nsi") is not None:
+        points.append(("NSI", loc["nsi"]))
+    if loc.get("address") is not None:
+        points.append(("NDGISHUB", loc["address"]))
+    return points
+
+
+def usa_structures_plan(cfg, osm, out, dam_folder, loc):
+    """ES.1(c): None (not downloaded), "usa_file" (no outline layer yet: the
+    download is kept as the outline file) or "usa" (an outline layer exists)."""
+    if not cfg.get("download_usa_structures") or "usa" in loc \
+            or is_fema_structures_layer(osm, out, dam_folder):
+        return None
+    return "usa_file" if osm is None else "usa"
 
 
 def _eap_on(cfg, part):
@@ -606,7 +632,29 @@ def _plan_sig(sc):
             _file_sig(ps.get("dem")) if ps.get("dem") else None]
 
 
-EVAL_ENV_VARS = ("ND_DAM_SUITE", "ND_DAM_OFFLINE")
+EVAL_ENV_VARS = ("ND_DAM_SUITE", "ND_DAM_OFFLINE",
+                 # DL.2: the offline pack choice shapes the data too
+                 "ND_DAM_HAZARD_OFFLINE_PACK", "ND_DAM_HAZARD_OFFLINE_ONLY",
+                 "NDSUITE_HOME", "NDSUITE_SETTINGS")
+
+
+def _offline_pack_sig():
+    """DL.2: the offline pack a run would use (env, QGIS settings or discovery,
+    download.offline_config) by path + size + mtime, and offline-only."""
+    try:
+        from .download import offline_config
+        path, only = offline_config()
+    except Exception as e:                                       # noqa
+        return ["unknown", repr(e)]
+    sig = None
+    if path:
+        try:
+            st = os.stat(path)
+            sig = [os.path.normcase(os.path.abspath(path)), int(st.st_size),
+                   int(getattr(st, "st_mtime_ns", 0))]
+        except OSError:
+            sig = [os.path.normcase(os.path.abspath(path)), "missing"]
+    return [sig, bool(only)]
 GOVERNING_RULE = ("Governing scenario: the highest ND class; a tie goes to the higher TM 11 "
                   "lives in jeopardy (LIJ), then to the first breach scenario listed.")
 
@@ -654,6 +702,7 @@ def evaluation_key(cfg):
     # the suite / offline-pack variables switch the downloads off (run_classification), so they
     # shape the evaluation as much as a download choice does
     parts["env"] = [os.environ.get(k, "") for k in EVAL_ENV_VARS]
+    parts["offline_pack"] = _offline_pack_sig()
     try:
         blob = json.dumps(parts, sort_keys=True, default=str)
     except Exception:
@@ -1040,8 +1089,12 @@ def _evaluate(run, cfg, scenarios, breaches):
     reinterpret(structs, **rules)
     if inputs.get("parks") is not None:
         try:
-            n_park = ST.mark_mobile_parks(structs, inputs["parks"], acrs, run.ctx, clip=clip,
-                                          **rules)
+            # ST.4: pass the run's min_area / persons (not only the mobile-rule kwargs)
+            n_park = ST.mark_mobile_parks(
+                structs, inputs["parks"], acrs, run.ctx, clip=clip,
+                min_area_ft2=float(cfg["min_area_ft2"]),
+                persons_per_dwelling=int(cfg["persons_per_dwelling"]),
+                **rules)
             run.log(">>> {} structure(s) inside an OpenStreetMap mobile-home park".format(n_park))
         except CancelledByUser:
             raise
@@ -1381,6 +1434,9 @@ def _classify_and_write(run, cfg, state):
             n_rev, os.path.basename(store.path)))
     reinterpret(structs, float(cfg["min_area_ft2"]), int(cfg["persons_per_dwelling"]),
                 **ST.mobile_rules_from_cfg(cfg))
+    # ST.1: reinterpret restores persons on every habitable record; re-collapse so
+    # multi-outline extras stay at 0 persons (consequences / access also skip them)
+    ST.collapse_dwellings(structs)
     _parcel_hints_step(run, cfg, structs, acrs)
 
     # ---- v2.7: the engineer's depth-damage curves for non-residential structures ----
@@ -1826,13 +1882,7 @@ def _collect_inputs(run, clip):
     for line in run.local_lines:
         run.sources.append(line)
         run.log(">>> " + line)
-    if cfg["point_sources"] == "auto":
-        layer_dict = discover_project_layers()
-        points = []
-        for fam in ("NSI", "NDGISHUB"):          # FEMA point layers: not used (v2.2)
-            points.extend((fam, lyr) for lyr in layer_dict.get(fam, []))
-    else:
-        points = list(cfg["point_sources"] or [])
+    points = resolve_point_layers(cfg, {})
     for fam, lyr in points:
         run.sources.append("{} points: project layer '{}'".format(fam, lyr.name()))
     if loc.get("nsi") is not None:
@@ -1854,8 +1904,7 @@ def _collect_inputs(run, clip):
     def want(key, label, fn, *args):
         jobs.append((key, label, fn, args))
     if ext4326 is not None:
-        import os as _os
-        if _os.environ.get("ND_DAM_SUITE") or _os.environ.get("ND_DAM_OFFLINE"):
+        if downloads_disabled():
             run.log(">>> Suite folder is set: skipping the 25-layer download. "
                     "Use the layers already in the project or the offline pack.")
             cfg["download_nsi"] = cfg["download_address"] = False
@@ -1869,9 +1918,9 @@ def _collect_inputs(run, clip):
             want("nsi", "NSI", fetch_nsi, ext4326, out)
         if not have_hub and cfg["download_address"]:
             want("address", "ND GIS Hub address points", fetch_nd_address_points, ext4326, out)
-        if cfg["download_usa_structures"] and "usa" not in loc \
-                and not is_fema_structures_layer(osm, out, dam_folder):
-            if osm is None:
+        usa_plan = usa_structures_plan(cfg, osm, out, dam_folder, loc)
+        if usa_plan:
+            if usa_plan == "usa_file":
                 # no outline file yet: download it once and keep it as the file
                 want("usa_file", "FEMA USA Structures", download_structures_file, out,
                      dam_folder, ext4326, run.ctx)
@@ -2549,6 +2598,9 @@ def _eap_maps(run, sc, suffix, dam_name, written, visible=False):
             forget_products(out, key)
             bands = EAP.write_arrival_bands(bpath, sc.depth, sc.arrival)
             contours = EAP.write_arrival_contours(cpath, sc.arrival)
+            if not contours and sc.arrival:
+                run.log(">>> NOTE: EAP arrival contours not written ({}): {}".format(
+                    sc.name, EAP.LAST_CONTOUR_PROBLEM[0] or "GDAL could not contour here"))
             if bands:          # (contours: none where the GDAL build cannot contour)
                 remember_products(out, key, esig, {k: v for k, v in (
                     ("bands", bands), ("contours", contours)) if v}, enormal)
@@ -2614,10 +2666,7 @@ def _hcom_check(run, governing, d_qa, written):
             written.append(os.path.relpath(XC.write_csv(d_qa, rows), run.out))
             run.sources.append("DSS-WISE HCOM cross-check: {}".format(
                 ", ".join(os.path.basename(p) for p in files)))
-            bad = [r for r in rows if r["Ratio_plugin_to_HCOM"] is None
-                   and r["Verdict"] != "agree (both zero)" and r["Verdict"] != "not compared"
-                   or (r["Ratio_plugin_to_HCOM"] is not None
-                       and not XC.RATIO_LOW <= r["Ratio_plugin_to_HCOM"] <= XC.RATIO_HIGH)]
+            bad = [r for r in rows if XC.is_off(r.get("Verdict_code"))]
             if bad:
                 run.log(">>> NOTE: the population at risk differs from the DSS-WISE HCOM table "
                         "in {} of {} comparison(s) - see the summary / QA/{}".format(

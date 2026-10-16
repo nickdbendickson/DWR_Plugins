@@ -7,6 +7,7 @@ import time
 import traceback
 
 from .ui_fit import fit_window, wrap_tabs
+from .ui_check_panel import CheckPanel
 from qgis.PyQt.QtWidgets import (
     QApplication, QProgressDialog, QDialog, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog, QMessageBox, QGroupBox,
@@ -60,8 +61,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.dam_folder_edit.textChanged.connect(self._on_dam_folder_changed)
         for e in (self.depth_edit, self.vel_edit, self.arr_edit, self.dv_edit):
             e.textChanged.connect(self._update_button_states)
+            e.textChanged.connect(self.check_panel.clear)   # 2.18.32: old results are stale
         try:
             self.model_combo.currentIndexChanged.connect(self._update_button_states)
+            self.model_combo.currentIndexChanged.connect(self.check_panel.clear)
         except Exception:
             pass
         self._defaults = self._current_state()
@@ -112,6 +115,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         raster_group = QGroupBox("2. Raster Files (Classify finds them if Depth is empty)")
         raster_group.setCheckable(True)
         raster_group.setChecked(False)
+        self.raster_group = raster_group     # _set_busy: its children follow its tick
         raster_layout = QFormLayout()
         self.depth_edit = QLineEdit()
         self.depth_browse_btn = QPushButton("Browse...")
@@ -162,6 +166,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         btn_layout.addWidget(self.classify_btn)
         btn_layout.addStretch()
         setup_layout.addLayout(btn_layout)
+        # 2.18.32: check results by severity (ui_check_panel.py)
+        self.check_panel = CheckPanel(self.check_btn, self.classify_btn, action="classifying")
+        setup_layout.addWidget(self.check_panel)
         setup_layout.addStretch()
         self.tab_widget.addTab(setup_tab, "Setup and Run")
         self.tab_widget.setCurrentWidget(setup_tab)
@@ -590,7 +597,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         for name in ("check_btn", "run_all_btn", "find_rasters_btn", "dam_browse_btn",
                      "depth_browse_btn", "vel_browse_btn", "arr_browse_btn",
                      "output_browse_btn", "selftest_btn", "refresh_layers_btn",
-                     "dv_browse_btn", "review_zoom_btn",
+                     "dv_browse_btn", "review_zoom_btn", "review_webmap_btn", "cache_clear_btn",
                      "review_save_btn", "review_rerun_btn", "sources_btn",
                      "review_export_btn", "review_merge_btn", "series_btn",
                      "dsw_scan_btn", "dsw_import_btn", "ras_scan_btn", "ras_import_btn",
@@ -610,6 +617,14 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                 w.setEnabled(not busy)
         if not busy and hasattr(self, "dsw_import_btn"):
             self.dsw_import_btn.setEnabled(bool(getattr(self, "_dsw_items", None)))
+        group = getattr(self, "raster_group", None)
+        if not busy and group is not None and group.isCheckable():
+            # 2.18.19: an unticked raster box keeps its browse buttons off (Qt disabled them)
+            for name in ("depth_browse_btn", "vel_browse_btn", "arr_browse_btn",
+                         "dv_browse_btn"):
+                w = getattr(self, name, None)
+                if w is not None:
+                    w.setEnabled(group.isChecked())
         self._update_button_states()
 
     def _group(self, category):
@@ -672,8 +687,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         n_err, n_warn = summary(results)
         self._update_status("Input check: {} error(s), {} warning(s)".format(n_err, n_warn),
                             n_err == 0)
-        box = QMessageBox.warning if n_err else QMessageBox.information
-        box(self, "Check inputs", self._checks_html(results))
+        # 2.18.32: the results are shown in the panel under the buttons (no pop-up)
+        self.check_panel.set_results(results)
         return results
 
     def _on_run_all(self, *args):
@@ -691,6 +706,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         for lvl, t in results:
             if lvl != "OK":
                 self._log(">>> CHECK {}: {}".format(lvl, t))
+        self.check_panel.set_results(results)
         if summary(results)[0]:
             QMessageBox.warning(self, "Run everything - inputs need fixing",
                                 self._checks_html([r for r in results if r[0] == ERROR]))
@@ -789,10 +805,12 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
     def _apply_state(self, state):
         self._restoring = True          # no raster search while settings are restored
+        self._apply_failed = []         # SE.2: keys whose value was not accepted
         try:
             for name in self._SETTING_WIDGETS:
                 if name in state and getattr(self, name, None) is not None:
-                    set_widget_value(getattr(self, name), state[name])
+                    if set_widget_value(getattr(self, name), state[name]) is False:
+                        self._apply_failed.append(name)
             if hasattr(self, "scenario_table"):
                 self._apply_scenario_state(state)
             if hasattr(self, "_restore_parcel_fields290"):

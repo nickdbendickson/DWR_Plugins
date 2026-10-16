@@ -44,6 +44,9 @@ MANIFEST_NAME = "MANIFEST.csv"
 README_NAME = "README.txt"
 
 # (folder, [(pattern relative to outputs, description, newest only?)])
+# SB.1: "{sfx}" in a pattern = the scenario suffix of a multi-scenario run: the exact
+# name (<base>.ext) when it exists, otherwise every <base>_<scenario slug>.ext
+SFX = "{sfx}"
 _TABLE_BASES = ("Habitable_Structures", "Roads_Inundated", "Rail_Inundated", "Access_Cut_Off",
                 "Dams_In_Series", "Lifeline_Facilities", "Bridges_Culverts_Crossings",
                 "Future_Development_Parcels")
@@ -80,16 +83,27 @@ GROUPS = [
          "Run settings: every setting, the rasters and the data sets the run read (v2.9)", False),
         (SUBDIR_QA + "/Data_Vintage.csv", "Data vintage: what the results rest on, with dates",
          False),
+        # SB.1: QA products of the optional analyses
+        (SUBDIR_QA + "/Evacuation_Timing.csv", "Evacuation timing per structure (screening)",
+         False),
+        (SUBDIR_QA + "/Sensitivity.csv", "Sensitivity to depth / velocity", False),
+        (SUBDIR_QA + "/Sensitivity_Structures.csv", "Sensitivity: what changes per structure",
+         False),
+        (SUBDIR_QA + "/Sensitivity_Consequences.csv", "Sensitivity of the life-loss estimate",
+         False),
+        (SUBDIR_QA + "/Population_Source_CrossCheck.csv",
+         "Population source cross-check", False),
     ]),
     ("03_Results_tables", [
-        ("{}/{}.csv".format(SUBDIR_CLASSIFICATION, b), "{} (CSV)".format(b.replace("_", " ")),
-         False) for b in _TABLE_BASES] + [
-        ("{}/{}.xlsx".format(SUBDIR_CLASSIFICATION, b), "{} (Excel)".format(b.replace("_", " ")),
-         False) for b in _TABLE_BASES]),
+        ("{}/{}{}.csv".format(SUBDIR_CLASSIFICATION, b, SFX),
+         "{} (CSV)".format(b.replace("_", " ")), False) for b in _TABLE_BASES] + [
+        ("{}/{}{}.xlsx".format(SUBDIR_CLASSIFICATION, b, SFX),
+         "{} (Excel)".format(b.replace("_", " ")), False) for b in _TABLE_BASES]),
     ("04_EAP", [
         (SUBDIR_EAP + "/EAP_Map_Book*.pdf", "Inundation map book (PDF)", True),
-        (SUBDIR_EAP + "/EAP_Notification_List.csv", "Notification list (CSV)", False),
-        (SUBDIR_EAP + "/EAP_Notification_List.xlsx", "Notification list (Excel)", False),
+        (SUBDIR_EAP + "/EAP_Notification_List" + SFX + ".csv", "Notification list (CSV)", False),
+        (SUBDIR_EAP + "/EAP_Notification_List" + SFX + ".xlsx", "Notification list (Excel)",
+         False),
         (SUBDIR_EAP + "/EAP_Travel_Time.csv", "Travel-time table (CSV)", False),
         (SUBDIR_EAP + "/EAP_Travel_Time.xlsx", "Travel-time table (Excel)", False),
     ]),
@@ -116,6 +130,11 @@ def _sha256(path):
 
 
 def _find(out_folder, pattern, newest):
+    if SFX in pattern:                               # SB.1: exact name first
+        hits = _find(out_folder, pattern.replace(SFX, ""), newest)
+        if hits:
+            return hits
+        pattern = pattern.replace(SFX, "_*")
     hits = sorted(glob.glob(os.path.join(out_folder, pattern.replace("/", os.sep))))
     hits = [h for h in hits if os.path.isfile(h)]
     if newest and hits:
@@ -173,6 +192,9 @@ def missing_items(rows, data_missing=()):
         missing.append("engineer review decisions (none saved yet)")
     if not any(p.startswith("04_EAP/EAP_Map_Book") for p in have):
         missing.append("EAP inundation map book (off, or no arrival raster)")
+    if not any(p.startswith("03_Results_tables/Habitable_Structures") for p in have):
+        missing.append("results tables (no Habitable_Structures table found in the "
+                       "classification folder - see the run log)")       # SB.1
     missing.extend(data_missing or ())
     return missing
 
@@ -231,7 +253,8 @@ def cover_letter(result, dam_name, enclosures, when=None, not_enclosed=None):
     return "\n".join(lines) + "\n"
 
 
-def readme(dam_name, result, rows, when, profile=None, data=None, chain=""):
+def readme(dam_name, result, rows, when, profile=None, data=None, chain="", warnings=None,
+           missing=None):
     lines = ["Hazard classification submittal package - {}".format(dam_name or "dam"),
              "Made {} by {} v{} from the files of the last classification run".format(
                  when, PLUGIN_NAME, PLUGIN_VERSION), ""]
@@ -262,10 +285,17 @@ def readme(dam_name, result, rows, when, profile=None, data=None, chain=""):
             lines.append("  CHANGED since the run: {} ({}) - the package holds the file as it "
                          "is now, not as the run read it".format(c.get("what"), c.get("path")))
         lines.append("")
+    if missing or warnings:                          # SB.5: what the package lacks / warns
+        lines += ["Packaging warnings:"]
+        lines += ["  NOT ENCLOSED: " + m for m in missing or []]
+        lines += ["  WARNING: " + w for w in warnings or []]
+        lines.append("")
     lines += ["Files (also in {}, with SHA-256):".format(MANIFEST_NAME)]
     lines += ["  {}  -  {}".format(r["Path"], r["Description"]) for r in rows]
     lines += ["", "Cover_Letter_TEMPLATE.txt is a template: complete and sign it. Nothing here "
-              "was recalculated for the package - it is what the last run wrote."]
+              "was recalculated for the package - it is what the last run wrote.",
+              "The package (and its zip) can hold population, structure and EAP contact "
+              "details: keep the zip secured and share it only with the reviewer."]   # SM.6
     return "\n".join(lines) + "\n"
 
 
@@ -288,7 +318,7 @@ def _profile_info(out_folder, profile):
             from .reproduce import read_run_settings, RUN_SETTINGS_FILE
             rs = read_run_settings(os.path.join(out_folder, SUBDIR_QA, RUN_SETTINGS_FILE))
             profile = rs.get("settings_profile") or None
-        except (ValueError, OSError):
+        except (ValueError, OSError, ImportError):            # SM.5
             profile = None
         if not isinstance(profile, dict):
             return None, None
@@ -353,9 +383,16 @@ def build(out_folder, dam_name=None, zip_it=True, include_gis=False, dest_root=N
         for group, src, desc in items:
             dest_dir = os.path.join(folder, group)
             os.makedirs(dest_dir, exist_ok=True)
-            dest = os.path.join(dest_dir, os.path.basename(src))
+            fname = os.path.basename(src)
+            # SM.4: two sources with one name never overwrite each other
+            stem, ext = os.path.splitext(fname)
+            k = 1
+            while os.path.exists(os.path.join(dest_dir, fname)):
+                k += 1
+                fname = "{}_{}{}".format(stem, k, ext)
+            dest = os.path.join(dest_dir, fname)
             shutil.copy2(src, dest)
-            add_row("{}/{}".format(group, os.path.basename(src)), src, desc)
+            add_row("{}/{}".format(group, fname), src, desc)
         if prof:
             if prof_src:
                 name = "Settings_Profile_{}.json".format(_safe(prof.get("name")))
@@ -375,6 +412,8 @@ def build(out_folder, dam_name=None, zip_it=True, include_gis=False, dest_root=N
             ("01_Report", "04_EAP")) or "Review_Decisions" in r["Path"]
             or "Run_Log" in r["Path"]]
         missing = missing_items(rows, data_missing)       # Lumo 2.27.2: named in the letter
+        if any(m.startswith("results tables") for m in missing):
+            warnings.append("no results tables were packaged")                # SB.1
         with open(os.path.join(folder, COVER_NAME), "w", encoding="utf-8", newline="") as fh:
             fh.write(cover_letter(result, dam, enclosures, not_enclosed=missing))
         with open(os.path.join(folder, MANIFEST_NAME), "w", newline="", encoding="utf-8") as fh:
@@ -384,23 +423,26 @@ def build(out_folder, dam_name=None, zip_it=True, include_gis=False, dest_root=N
             w.writerows(rows)
         with open(os.path.join(folder, README_NAME), "w", encoding="utf-8", newline="") as fh:
             fh.write(readme(dam, result, rows, time.strftime("%Y-%m-%d %H:%M"), prof, data,
-                            chain=_chain_line(out_folder)))
+                            chain=_chain_line(out_folder), warnings=warnings, missing=missing))
         zpath = None
         if zip_it:
             zpath = folder + ".zip"
-            with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+            part = zpath + ".part"            # SM.2: a whole zip or none (os.replace)
+            with zipfile.ZipFile(part, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
                 for dirpath, _d, files in os.walk(folder):
                     for f in sorted(files):
                         full = os.path.join(dirpath, f)
                         zf.write(full, os.path.join(os.path.basename(folder),
                                                     os.path.relpath(full, folder)))
+            os.replace(part, zpath)
     except Exception:
         shutil.rmtree(folder, ignore_errors=True)         # never leave half a package
-        if zip_it and os.path.exists(folder + ".zip"):
-            try:
-                os.remove(folder + ".zip")
-            except OSError:
-                pass
+        for z in (folder + ".zip.part", folder + ".zip") if zip_it else ():
+            if os.path.exists(z):
+                try:
+                    os.remove(z)
+                except OSError:
+                    pass
         raise
     return {"folder": folder, "zip": zpath, "files": rows, "missing": missing,
             "result": result, "profile": prof, "data": data, "warnings": warnings}

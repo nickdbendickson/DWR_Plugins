@@ -64,11 +64,11 @@ How it works:
 - Outputs are `adequacy.csv`, `adequacy.md` (the verdict, the governing storm, and notes on the Table 6.1 IDF, §6.4 IDA and the 24-hr 500-yr storm) and `governing_pool.png`.
 - The tool doesn't use the Runner's breach "failed" flag. Note that the main Runner's default peak-pool trigger assumes the dam breaches.
 
-## Tool 7b: engine and culverts (#22)
+## Tool 7b: engine and culverts (#22, #38; Screening 0.17.22+)
 - **"Runner models"** (`ENGINE`):
-  - "Runner default (LISFLOOD-FP only)" (the default)
-  - "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"
-- **"Runner: force ANUGA (final results from ANUGA even with LISFLOOD-FP only)"** (`FORCE_ANUGA`, default off).
+  - "LISFLOOD-FP only (Runner default; culverts / bridges not modelled)" (the default)
+  - "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA; = the Runner's 'force ANUGA')"
+- `FORCE_ANUGA`: since #38 it is hidden and folded into the engine choice. An old `FORCE_ANUGA = True` (from saved settings, models or history) selects "LISFLOOD-FP then ANUGA".
 - **"Runner: near-dam refine with the FV1 solver"** (`REFINE_NEAR`, default off).
 - **"Culverts and bridges for the Runner (lines, upstream end first; used by ANUGA)"** (`CULVERTS`, optional): pick the layer in the window's Inputs. Optional field parameters (`C_KIND` ... `C_NAME`) name its kind, width, height, barrels, shape and name fields. If a field is left empty, the Runner matches its own synonyms.
 - In the Screening window, these are on the Settings tab as runner_tier, runner_force_anuga and runner_refine, and they're saved in the settings file.

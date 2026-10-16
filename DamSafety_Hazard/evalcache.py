@@ -134,7 +134,11 @@ class _Unpickler(pickle.Unpickler):
             if pid[1] not in self._scn:
                 from .scenarios import Scenario
                 sc = Scenario.__new__(Scenario)
-                sc.__dict__.update(json.loads(pid[1]))
+                data = json.loads(pid[1])
+                # EV.2: JSON turns tuples into lists; restore known tuple fields
+                if isinstance(data.get("plan_fields"), list):
+                    data["plan_fields"] = tuple(data["plan_fields"])
+                sc.__dict__.update(data)
                 self._scn[pid[1]] = sc
             return self._scn[pid[1]]
         raise pickle.UnpicklingError("unknown object kind")
@@ -237,4 +241,18 @@ def files_exist(state):
     re-used evaluation to work in stage B."""
     inp = state.get("inputs") or {}
     fl = inp.get("flowlines")
-    return not fl or os.path.isfile(fl)
+    if fl and not os.path.isfile(fl):
+        return False
+    # EV.1: evacuation timing reopens the cached road layer lazily
+    road = inp.get("roads_path")
+    if not road:
+        src = inp.get("roads_source")
+        if isinstance(src, (list, tuple)) and src:
+            road = src[0]
+        elif isinstance(src, str):
+            road = src
+    if road:
+        path = str(road).split("|", 1)[0]
+        if path and not os.path.isfile(path):
+            return False
+    return True

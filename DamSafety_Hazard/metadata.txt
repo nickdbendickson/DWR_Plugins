@@ -5,9 +5,142 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.16
+version=2.18.32
 author=N.D. Bendickson
 changelog=
+    2.18.32 - 2026-10-16
+      * Setup and Run: the "Check inputs" results show in a panel under the buttons,
+        ranked by severity - errors in a red box (Classify is blocked until they are
+        fixed or an input changes), warnings in an amber list, passed checks in one
+        collapsed line; the button shows the count. Every result is still logged.
+    2.18.31 - 2026-10-15
+      * Offline pack builder: a paged download records the service's feature count
+        (and last object id / edit date); resumed pages of a changed service are
+        fetched again, an unverifiable resume is marked PARTIAL; the age of kept
+        chunks is logged; PackWriter.count accessor.
+      * Extent clip: failed coordinate transformations are counted, logged once and
+        loudly warned about when most fail (e.g. a missing PROJ grid); an invalid
+        CRS is warned about.
+      * Submittal package: the zip is written whole or not at all (.part + rename);
+        files with one name no longer overwrite each other; README asks to keep the
+        zip secured.
+    2.18.30 - 2026-10-15
+      * Submittal package: results tables and the EAP notification list of a
+        multi-scenario run (<name>_<scenario>) are packaged (the exact name first);
+        evacuation timing, sensitivity and population cross-check tables too; missing
+        results tables and every packaging warning are named in the README.
+      * Creep watch: a missing / unreadable changes table is flagged (not counted as
+        no change).
+      * Run comparison: population, speed, occupancy and access distance are recorded;
+        an older snapshot without them shows no setting change.
+    2.18.29 - 2026-10-15
+      * Offline pack: features without an id are keyed by a hash of the whole geometry
+        (not its first 400 characters); features without geometry are counted in the
+        manifest note; a data set queried without its R*Tree is logged once.
+      * OpenStreetMap: semicolon lists ("hospital;clinic") match, locally and in the
+        Overpass queries; dotted acronyms ("M.H.P.") are read as mobile-home parks;
+        a capacity of 0 or less is unknown.
+      * Evacuation: closures layer gains Limits_Failing (limited rows with a negative
+        margin; Limits_Structures unchanged and documented); a clear error when
+        access.py's helpers are missing.
+    2.18.28 - 2026-10-15
+      * Downloads: day files written atomically (temporary file + replace); a day file
+        that does not open is deleted and fetched again (stale-copy fallback as usual);
+        OpenStreetMap downloads honour 'refresh' too; an unreadable ArcGIS layer
+        description is logged.
+      * Evaluation cache: the offline-pack variables, the QGIS offline-pack settings
+        and the pack file itself (size / time) are part of the key.
+      * Roads: the AADT of the next-nearest grade crossing is tried when the nearest
+        one's street name conflicts; facility review uses the shared motorist formula.
+    2.18.27 - 2026-10-15
+      * Evacuation (dry-safe distance, opt-in): the dry disk around a node is checked
+        densely (ring and inside at cell spacing), and NoData inside the depth raster
+        counts as wet; off by default as before.
+      * EAP: a reason is logged when the arrival contours are not written; hhmm of a
+        negative time keeps the sign ("-1:30").
+    2.18.26 - 2026-10-15
+      * Data folder: the names borrowed from other modules (and the late classify_tab
+        name rules) are looked up one by one - a missing one is logged and detection
+        degrades instead of the scan failing; CSV header and row count read with the
+        csv module (quoted multi-line cells).
+      * Web export: a KMZ that could not be coloured is reported as a warning; a missing
+        EAP termination point is noted.
+    2.18.25 - 2026-10-15
+      * Form fill: the governing ND criterion / section skip the 'PROVISIONAL' note and
+        are read from the snapshot (now holding the ND reasons) when there is one; a
+        NID stored as "" is treated as empty (one helper with the portfolio).
+      * Parcel hints: non-numeric improvement values ('N/A') count toward the
+        wrong-field warning and are noted in the summary.
+      * Temporal animation: a breach start that cannot be read logs a warning (the
+        nominal start is used); '(nominal)' is only said when the nominal start is used.
+    2.18.24 - 2026-10-15
+      * Portfolio: the ND class read from a summary drops the heading flags (they go to
+        Notes); the CSV review estimate also counts the manufactured-home notes and every
+        reviewed row.
+      * Reproduction: settings this version does not know are listed in the notes and
+        the report; one work-folder rule (refuse a non-empty folder without the
+        reproduction marker) for the dialog and every other caller.
+    2.18.23 - 2026-10-15
+      * Data estimate: the planned downloads match the run - no downloads under
+        ND_DAM_SUITE / ND_DAM_OFFLINE, no address points when an address layer is
+        available (project too), no USA Structures when the outline layer is FEMA
+        Structures, refresh bypasses today's file only with a tile cache; EAP switches
+        use the run's defaults.
+      * Settings profiles: values the dialog cannot apply are listed as warnings.
+    2.18.22 - 2026-10-15
+      * Sensitivity: dwelling_extra kept in slimmed records (class counts stay correct).
+      * Fingerprints: content digests bypass the persistent size+mtime disk cache; VRT
+        sources parsed without requiring relativeToVRT, nested VRTs followed, truncation marked.
+      * Comparison "Habitable structures flooded" counts only breach-added flooding.
+      * Incremental notes distinguish outside-baseline-raster from dry-without-breach.
+      * scenarios.snapshot keeps the same keys as pipeline (incl. cut_off).
+      * Warn when a baseline name is duplicated; subject dam: first NID match, same-NID not in series.
+      * Provisional-High wording: "within X ft of the line" for raised dwellings.
+      * Parcel auto-detect skips inundated/plugin layers; folder parcel cache keyed by mtime/size.
+      * Fast sampling: strip width capped; non-finite reach logged; per-record fast/GEOS label;
+        ONEPASS_MIN lives in constants.
+      * Eval cache: files_exist also checks the cached road path; Scenario plan_fields restored as tuple.
+      * Removed unused hazard.layer_path; sensitivity flips count matches the changes CSV.
+    2.18.21 - 2026-10-15
+      * Fix SyntaxError in structures.collapse_dwellings (literal \\n left by the ST.3 edit).
+    2.18.20 - 2026-10-15
+      * Structure extras (multi-outline dwellings): after re-typing, persons stay at 0;
+        Graham PAR/LOL and sole-access person counts skip them (same as the classification).
+      * Campground polygons no longer collapse with ordinary house footprints on overlap alone.
+      * Address-id fields (addr_id / address_id) alone do not make a structure a dwelling.
+      * Manufactured-home rule toggles: string 'false' / '0' read as off.
+      * Stage-A mobile-park typing uses the run's min-area and persons-per-dwelling.
+      * Duplicate address points compare street names after abbreviation normalisation.
+    2.18.19 - 2026-10-15
+      * During a run the 'Clear tile cache' and 'Open in web map' buttons are locked too.
+      * After a run the raster Browse buttons stay off while the 'Raster Files' box is unticked.
+    2.18.18 - 2026-10-15
+      * Damage-curve file warnings name the real line in the file (comment and blank lines
+        counted).
+      * Estimate: the traffic-count downloads (HPMS years, NDDOT, county roads) are marked as an
+        upper bound (the Data tab stops at the first source that answers).
+      * EAP: no arrival-bands raster (and no summary line) when no flooded cell has an arrival
+        time.
+      * Damage estimate: the dollar figure is written when a depth-damage curve was applied
+        (a flag, not the wording of the basis text).
+      * Future-development screen: examples listed largest parcel first.
+      * Sensitivity factors: a decimal comma such as '0,8' is refused with the fix; other
+        '1,2' entries and factors outside 0.5-2 are warned (dialog and run log).
+      * Data-vintage table, version check: failures are logged instead of passing silently.
+      * Overviews and the population cross-checks use status / verdict codes instead of
+        matching message text; unread depth strips are counted in the population fraction
+        method.
+      * Suite data folder: a failure to remember it is logged.
+      * Dead home-menu unload code removed.
+    2.18.17 - 2026-10-15
+      * Aerial imagery check: no internet request in suite / offline-pack mode (ND_DAM_SUITE,
+        ND_DAM_OFFLINE or an offline pack configured), the same rule as the layer downloads;
+        the maps are made without imagery and say so.
+      * Raster search summary lists the no-breach velocity and arrival rasters.
+      * Raster ranking: "max" must be a word (Max, Hmax, Dmax, Vmax), so a name such as
+        "Maxwell" no longer counts as a maximum grid.
+      * Road-layer area filter failure is logged (all features read instead).
+      * Code cleanups (dead pattern removed, clarifying parentheses).
     2.18.16 - 2026-10-15
       * Processing tools: when the suite settings file cannot be applied, the tool says so (QGIS
         log, the tool's help panel, and a warning when it runs) instead of silently using its

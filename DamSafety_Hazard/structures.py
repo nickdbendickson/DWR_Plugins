@@ -61,7 +61,7 @@ from .constants import (
     OSM_EDGE_BUFFER_FT, STRUCTURES_FAMILY, TM11_PERSONS_PER_DWELLING, ND_1D_DEPTH_FT,
     DEFAULT_MIN_UNVERIFIED_AREA_FT2, DEFAULT_POINT_RADIUS_FT,
     STRUCTURE_MERGE_DIST_FT, PROGRESS_INTERVAL, FEATURE_BATCH_SIZE, ADDRESS_SNAP_FT,
-    CLASS_LOW, DEFAULT_NEAR_THRESHOLD_FT,
+    CLASS_LOW, DEFAULT_NEAR_THRESHOLD_FT, ONEPASS_MIN,
 )
 from .helpers import (
     log_message, LimitedLogger, create_memory_layer, transform_geometry,
@@ -200,6 +200,21 @@ MOBILE_RULE_DEFAULTS = {
 }
 
 
+def _cfg_bool(v, dflt):
+    """True/False from a settings value. String 'false'/'0'/'no'/'off' are False
+    (plain bool('false') is True). Anything unrecognised keeps the default."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return bool(v)
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "on", "y", "t"):
+        return True
+    if s in ("0", "false", "no", "off", "n", "f", ""):
+        return False
+    return dflt
+
+
 def mobile_rules_from_cfg(cfg):
     """The manufactured-home rule arguments from a settings dict (same key
     names as MOBILE_RULE_DEFAULTS; missing / unusable values -> defaults)."""
@@ -209,7 +224,7 @@ def mobile_rules_from_cfg(cfg):
         if v is None:
             continue
         try:
-            out[k] = bool(v) if isinstance(dflt, bool) else float(v)
+            out[k] = _cfg_bool(v, dflt) if isinstance(dflt, bool) else float(v)
         except (TypeError, ValueError):
             pass
     return out
@@ -399,14 +414,18 @@ class _SourceReader(object):
                     v, " [{}]".format(phrase) if phrase and phrase != v.lower() else ""))
         if self.placement_idx is not None:
             rec["placement"] = _text(attrs[self.placement_idx]).lower() or None
-        parts = [p for p in (_text(attrs[i]) for i in self.addr_idx) if p]
-        if parts:
+        # ST.7: addr_id / address_id alone (_ADDR_NOT_STREET) is not a street address
+        # for habitability - only street_idx / NENA key fields count
+        street_parts = [p for p in (_text(attrs[i]) for i in self.street_idx) if p]
+        key_parts = [p for p in (_text(attrs[i]) for i in self.key_idx) if p]
+        if street_parts or key_parts:
             rec["address"] = True
             # NENA: number + street (+ unit) identify the address; other
             # sources (OSM addr:*, FEMA PROP_ADDR) only say "has an address"
-            key_parts = [p for p in (_text(attrs[i]) for i in self.key_idx) if p] or parts
+            id_parts = [p for p in (_text(attrs[i]) for i in self.addr_idx) if p]
+            use = key_parts or street_parts or id_parts
             rec["unit"] = " ".join(p for p in (_text(attrs[i]) for i in self.unit_idx) if p)
-            rec["addr_key"] = re.sub(r"\s+", " ", " | ".join(key_parts + [rec["unit"]]).lower())
+            rec["addr_key"] = re.sub(r"\s+", " ", " | ".join(use + [rec["unit"]]).lower())
         street = " ".join(p for p in (_text(attrs[i]) for i in self.street_idx) if p)
         if street:
             if rec["unit"]:
@@ -652,10 +671,15 @@ def _request_for(layer, clip):
 def _is_duplicate(sources, src, pt, dup_dist):
     """Same source family, same spot and the same address (or both without
     one): the same structure listed twice. Stacked address points of the
-    units of one building differ in their address and are kept."""
+    units of one building differ in their address and are kept.
+    Address keys are compared after normalize_street (ST.8), so
+    '146th Ave SE' and '146th Avenue Southeast' count as the same."""
     fd = (src.get("nsi") or {}).get("fd_id")
+    src_key = normalize_street(src.get("addr_key") or "")
     for s in sources:
-        if s.get("family") != src["family"] or s.get("addr_key") != src.get("addr_key"):
+        if s.get("family") != src["family"]:
+            continue
+        if normalize_street(s.get("addr_key") or "") != src_key:
             continue
         sfd = (s.get("nsi") or {}).get("fd_id")
         if fd is not None and sfd is not None and sfd != fd:
@@ -1478,7 +1502,6 @@ def _locations(xs, ys, d, v, a, dvv, vel_ok, zone_cls):
 
 # --------------------------------------------------------------- sampling --
 COARSE_TARGET = 2048          # coarse wet mask: at most this many cells per side
-ONEPASS_MIN = 8               # fewer candidates: the per-structure reads are cheaper
 
 
 def _coarse_wet_mask(sampler, rows_per_block=1024):
@@ -1911,6 +1934,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             for sid, (_shp, reach, r_disc) in fast.items():
                 if sid in fast_cells:
                     fast_wet.append(sid)
+                    by_id[sid]["sampling"] = "fast sampling (rasterised footprint)"
                     continue
                 # no valid cell in the (whole) area: the GEOS region only serves the
                 # "cell under the centre" fallback below
@@ -1921,6 +1945,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
                         rec["region_kind"] += " (no cell centre in it - whole area used)"
                         region = full
                     regions[sid] = region
+                    rec["sampling"] = "GEOS region (fast path had no cell)"
                 except Exception as e:
                     problems.log("structure {}: {}".format(sid, e))
 
@@ -1977,7 +2002,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
         wet_ids.append(sid)
         rec = by_id[sid]
         if not rec["sampling"]:
-            rec["sampling"] = "cells whose centre lies in the area"
+            rec["sampling"] = rec.get("sampling") or "GEOS region: cells whose centre lies in the area"
         rec["n_cells"] = int(cells[sid][2].size)
 
     wet_set = set(wet_ids)
@@ -2129,6 +2154,11 @@ def _footprints_overlap(a, b):
         return False
 
 
+def _is_campground(rec):
+    """OpenStreetMap campground / RV park record (pipeline campground_records)."""
+    return rec.get("camp") is not None or any(s.get("camp") for s in rec.get("sources", ()))
+
+
 def collapse_dwellings(structs):
     """One household per street address, and per overlapping unaddressed footprint.
 
@@ -2162,7 +2192,10 @@ def collapse_dwellings(structs):
         if normalize_street(address_of(rec)[0]):
             continue
         for host in kept:
-            if host is rec or not _footprints_overlap(rec, host):
+            # ST.3: a campground polygon often contains house footprints; neither
+            # becomes an "extra" of the other on footprint alone
+            if host is rec or _is_campground(rec) or _is_campground(host) \
+                    or not _footprints_overlap(rec, host):
                 continue
             _mark_dwelling_extra(rec, host, "overlapping footprint")
             n_extra += 1
@@ -2272,18 +2305,24 @@ def address_fields(rec):
             "ND_Address_Points": len(pts)}
 
 
+# PF.1: Notes texts portfolio.open_review_from_csv matches (keep them shared)
+NOTE_TYPE_SHAPE = ("ACER type from the footprint shape (possible single-wide manufactured "
+                   "home) - verify")
+NOTE_TYPE_PARK_LOT = "ACER type from a mobile-home park / lot address - verify"
+NOTE_MOBILE_OCCUPIED = ("mobile-home evidence on a building read as occupied non-residential "
+                        "- verify")
+
+
 def structure_notes(rec):
     notes = []
     if rec.get("type_conflict"):
         notes.append("sources disagree on structure type - verify")
     if rec.get("mobile_rule") == "shape":
-        notes.append("ACER type from the footprint shape (possible single-wide manufactured "
-                     "home) - verify")
+        notes.append(NOTE_TYPE_SHAPE)
     elif rec.get("mobile_rule") == "park_lot":
-        notes.append("ACER type from a mobile-home park / lot address - verify")
+        notes.append(NOTE_TYPE_PARK_LOT)
     if rec.get("mobile_occupied"):
-        notes.append("mobile-home evidence on a building read as occupied non-residential "
-                     "- verify")
+        notes.append(NOTE_MOBILE_OCCUPIED)
     if rec.get("vel_missing"):
         notes.append("velocity missing on some wet cells (used 0)")
     if rec["category"] == CAT_UNVERIFIED:

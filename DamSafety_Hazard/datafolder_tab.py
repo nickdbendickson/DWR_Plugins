@@ -182,8 +182,8 @@ class DataFolderTabMixin(object):
             try:
                 from .damsuite.suite_config import set as save
                 save("data_folder", pack)
-            except Exception:
-                pass
+            except Exception as e:
+                log_message("Suite data folder not remembered ({}): {}".format(pack, e))
             return
         if hasattr(self, "pack_path_edit") and not self.pack_path_edit.text().strip():
             self.pack_path_edit.setText(pack)

@@ -14,7 +14,7 @@ import numpy as np
 from osgeo import gdal
 
 from .constants import CLASS_HIGH, CLASS_JUDGMENT, CLASS_LOW
-from .helpers import evaluate_polynomial, get_layer_path
+from .helpers import evaluate_polynomial
 
 METHOD_MAXMAX = "maxmax"          # recorded in run snapshots / logs
 METHOD_LABEL = "max depth with max velocity (Dmax / Vmax, same cell)"
@@ -36,12 +36,6 @@ def zone_label(cls):
     return {CLASS_HIGH: "HIGH", CLASS_JUDGMENT: "JUDGMENT", CLASS_LOW: "LOW"}.get(cls, "DRY")
 
 
-def layer_path(layer_or_path):
-    if layer_or_path is None:
-        return None
-    if isinstance(layer_or_path, str):
-        return layer_or_path
-    return get_layer_path(layer_or_path)
 
 
 # ------------------------------------------------------------- strip reader --
