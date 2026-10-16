@@ -547,3 +547,52 @@ def transformer(src_wkt, dst_wkt):
         return None
     from . import hecras_model as hm
     return hm.transformer(hm.srs_from(src_wkt), hm.srs_from(dst_wkt))
+
+
+# ============================================================================
+# the Runner stage (TIER_HECRAS)
+# ============================================================================
+LISFLOOD_PREFIX = "LISFLOOD-FP "
+
+
+def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
+    """After a LISFLOOD-FP run (workflow.run_dam with TIER_HECRAS): keeps its final rasters
+    as 'LISFLOOD-FP <name>', builds, preprocesses and computes the HEC-RAS 2D model, and
+    writes the HEC-RAS maxima under FINAL_NAMES on the same grid. Returns {'final': {kind:
+    path}, 'warnings': [...], 'hdf': path, 'project': folder}."""
+    from . import gdal_io
+    log = log or (lambda m: None)
+    d = d or require(env)
+    dp = final_paths.get("depth")
+    if not dp or not os.path.exists(dp):
+        raise HecRasEngineError("the LISFLOOD-FP run wrote no final depth raster (write_final)")
+    like = gdal_io.read_grid(dp)
+    for kind, p in final_paths.items():
+        if p and os.path.exists(p):
+            shutil.copy2(p, os.path.join(os.path.dirname(p),
+                                         LISFLOOD_PREFIX + os.path.basename(p)))
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    proj = os.path.join(d["prefix"], "drive_c", "ndbreach",
+                        "{}_{}".format(os.path.basename(os.path.normpath(dam_folder)), stamp))
+    r = write_project(dam_folder, proj, log=log)
+    name = r["model"].name
+    times = preprocess(proj, name, d=d, env=env, terrain_tif=r["paths"]["terrain_tif"],
+                       prj=r["paths"]["projection"], log=log)
+    hdf = compute(proj, name, d=d, env=env, log=log)
+    keep = os.path.join(dam_folder, "_hecras")
+    os.makedirs(keep, exist_ok=True)
+    shutil.copy2(hdf, keep)
+    tr = transformer(r["info"].get("model_wkt"), like.crs_wkt or r["info"].get("work_wkt"))
+    arr = results(hdf, like, arrival_m=float(getattr(st, "arrival_depth_ft", 1.0)) * 0.3048,
+                  t0_hr=(r.get("inflow_bc") or {}).get("t_ref_hr", 0.0), to_grid_xy=tr)
+    final = write_results(arr, like, writer, dam_folder)
+    rep = {"engine": "hecras", "hecras_version": "6.6", "platform": d["platform"],
+           "project": proj, "results_hdf": os.path.join(keep, os.path.basename(hdf)),
+           "preprocess_s": times, "inflow_mode": r["inflow_mode"],
+           "lisflood_rasters_kept_as": LISFLOOD_PREFIX + "<name>"}
+    with open(os.path.join(keep, "hecras_stage.json"), "w", encoding="utf-8") as f:
+        json.dump(rep, f, indent=1)
+    return {"final": final, "hdf": hdf, "project": proj, "report": rep,
+            "warnings": ["Final rasters are from HEC-RAS 2D (preliminary engine; LISFLOOD-FP "
+                         "rasters kept as '{}...'). Review _hecras/hecras_stage.json."
+                         .format(LISFLOOD_PREFIX)]}

@@ -146,7 +146,8 @@ DAM_ALIASES = {"id": "dam_id", "height_ft": "dam_height_ft", "storage_acft": "st
                "top_ft": "top_of_dam_ft", "area_ac": "surface_area_top_ac",
                "pmf_ft": "pmf_max_wse_ft", "bottom_ft": "breach_bottom_ft"}
 TIER_ALIASES = {"both": workflow.TIER_BOTH, "anuga": workflow.TIER_BOTH,
-                "lisflood-only": workflow.TIER_LISFLOOD, "lisflood_only": workflow.TIER_LISFLOOD}
+                "lisflood-only": workflow.TIER_LISFLOOD, "lisflood_only": workflow.TIER_LISFLOOD,
+                "hecras": workflow.TIER_HECRAS}
 SCENARIO_TYPES = (workflow.SCENARIO_SUNNY, workflow.SCENARIO_FLOOD, "per_dam")
 READERS = ("auto", "gdal", "asc")
 

@@ -69,7 +69,10 @@ VERSION = _metadata_version()
 
 TIER_LISFLOOD = "lisflood"
 TIER_BOTH = "lisflood+anuga"
-TIERS = (TIER_LISFLOOD, TIER_BOTH)
+# HEC-RAS 2D (design #68): LISFLOOD-FP as for TIER_LISFLOOD, then the HEC-RAS 2D stage
+# (core/hecras_engine.run_stage) replaces the final rasters. Appended so 0 and 1 keep their meaning.
+TIER_HECRAS = "lisflood+hecras"
+TIERS = (TIER_LISFLOOD, TIER_BOTH, TIER_HECRAS)
 
 SCENARIO_SUNNY = "sunny"
 SCENARIO_FLOOD = "flood"

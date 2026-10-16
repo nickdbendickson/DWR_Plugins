@@ -31,7 +31,9 @@ Z_IDS = tuple(gdal_io.Z_CHOICES)
 TRIGGER_IDS = tuple(floodmod.TRIGGERS)
 
 TIER_LABELS = {workflow.TIER_LISFLOOD: "LISFLOOD-FP only",
-               workflow.TIER_BOTH: "LISFLOOD-FP for the extent, then ANUGA for the final results"}
+               workflow.TIER_BOTH: "LISFLOOD-FP for the extent, then ANUGA for the final results",
+               workflow.TIER_HECRAS: "LISFLOOD-FP, then HEC-RAS 2D for the final results "
+                                     "(needs HEC-RAS 6.6)"}
 SCENARIO_LABELS = {workflow.SCENARIO_SUNNY: "Sunny day: no inflow, breach at the top of dam",
                    workflow.SCENARIO_FLOOD: "Flood (PMF): inflow with and without the breach"}
 Z_LABELS = {"auto": "Detect from the raster", "feet": "Feet", "us_feet": "US survey feet",

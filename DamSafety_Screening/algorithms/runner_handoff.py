@@ -117,7 +117,12 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 "ANUGA (unstructured mesh) for the final results; it is much slower and needs the "
                 "Runner's ANUGA environment (checked before any dam is run). This is what the old "
                 "'force ANUGA' box did; an old FORCE_ANUGA = True still selects it. The engine used "
-                "is logged as a warning when it is ANUGA and written to rn_engine.\n"
+                "is logged as a warning when it is ANUGA and written to rn_engine. 'LISFLOOD-FP then HEC-RAS 2D' "
+                "(TIER 2, optional) builds and runs a HEC-RAS 6.6 2D model after LISFLOOD-FP (subgrid "
+                "terrain from the DEM, the breach hydrograph at the inflow point, culverts / bridges as "
+                "SA/2D connections) and writes its maxima as the final rasters; it needs the Runner's "
+                "HEC-RAS set-up (NDBREACH_HECRAS_WINEPREFIX, NDBREACH_HECRAS_LINUX_DIR; checked before "
+                "any dam is run) and HEC's Terms and Conditions accepted by the user.\n"
                 "NEAR-DAM REFINE: re-runs the stretch next to the dam on a finer grid with the FV1 "
                 "solver (full shallow-water equations, more accurate for the fast, steep flow near "
                 "a breach) and merges it in; adds roughly the time of one more model run.\n"
@@ -350,8 +355,11 @@ class RunnerHandoff(QgsProcessingAlgorithm):
             if B("FORCE_ANUGA"):
                 _warn(feedback, "FORCE_ANUGA (before 0.17.22) is now the Runner engine choice "
                       "'LISFLOOD-FP then ANUGA'.")
-            # early check: a missing ANUGA would only fail deep inside each rundam run
-            if not ho.find_anuga_python(_runner_anuga_setting, None, _runner_anuga_detect()):
+            # early check: a missing engine would only fail deep inside each rundam run
+            if engine == 2:
+                if not ho.hecras_configured():
+                    raise QgsProcessingException(ho.HECRAS_MISSING)
+            elif not ho.find_anuga_python(_runner_anuga_setting, None, _runner_anuga_detect()):
                 raise QgsProcessingException(ho.ANUGA_MISSING)
         else:
             feedback.pushInfo(status)       # culverts on LISFLOOD-only: warned with the notes below
