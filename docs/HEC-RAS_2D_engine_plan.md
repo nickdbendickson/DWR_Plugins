@@ -11,8 +11,8 @@ Hard rule: the existing choices (`LISFLOOD-FP only` = `TIER_LISFLOOD`, `LISFLOOD
   - `core/hecras.py::read_mesh / to_grids / import_as_reference` read a `.p##.hdf` (max WSE, velocity, arrival) into `Grid`s with h5py.
   - `algorithms_hecras.py` has the export and import tools. Imports are named `HECRAS Depth (Max).tif` and so on.
 - **What's missing** is the middle step: turning text files into a runnable `.p##.tmp.hdf`/`.b##`/`.x##`. That means terrain HDF, mesh generation, property tables and the geometry HDF. HEC only ships that step on Windows (Ras.exe / RAS Mapper / RasProcess.exe).
-- **Verdict:** the unsteady compute runs natively on Linux, using HEC's official build. **Terrain and mesh preprocessing can't be done natively on Linux.** It needs Windows HEC-RAS, run either natively or under Wine through ras-commander. Writing the terrain HDF or the property tables ourselves with GDAL/h5py isn't viable: it's a proprietary, versioned format.
-- **Recommended path:** (1) The engine runs natively on **Windows**, where QGIS + HEC-RAS 6.6 are installed: preprocess with RasProcess/ras-commander, then compute with `Ras.exe`/RasUnsteady. (2) **Linux:** preprocess under Wine (experimental, qualified per HEC version), then compute with the official Linux `RasUnsteady`. (3) **macOS:** not supported. The engine reports "unavailable" and the user can still export the project.
+- **Verdict (updated 2026-10-16 after Grok Bot's Linux test, §2.5):** the unsteady compute runs natively on Linux, using HEC's official build. **Terrain, mesh and property-table preprocessing also run headless on Linux, under Wine 10 with .NET Framework 4.8**, driving HEC's own RasMapperLib, the same version as the solver. On the Muncie example the results match HEC's to within 0.00006 ft maximum WSE. So preprocessing is **no longer a blocker**. One gap remains: making the `.b##` / `.x##` / `.p##.tmp.hdf` run inputs (the `Ras.exe` compile) under Wine, which is being tested now. Native Linux .NET 8 and Mono both fail, so Wine is required. Writing the terrain HDF or the property tables ourselves with GDAL/h5py is still not viable: it's a proprietary, versioned format.
+- **Recommended path:** (1) **Linux:** preprocess under Wine 10 + .NET 4.8 with small driver programs that call RasMapperLib (mesh regeneration, terrain creation, `SetGeometryAssociationCommand` + property tables), then compute with the official Linux `RasUnsteady`. Until the Wine `.b/.x/.tmp.hdf` step is proven, those three files come from a Windows `Ras.exe` compile, or the run is blocked with a clear message. (2) **Windows:** the same steps natively: RasMapperLib/ras-commander, then `Ras.exe`/RasUnsteady. (3) **macOS:** not supported. The engine reports "unavailable" and the user can still export the project.
 
 ## 2. Findings (sources checked 2026-10-16)
 
@@ -48,6 +48,22 @@ Policy: keep our own pure-numpy reader (`hecras.py`) as the path that's always a
 - HEC-RAS is US Government (USACE) software and free to download. Its distribution terms say it's provided without warranty or support. We should **not bundle** HEC binaries in the plugins or the offline pack: users install HEC-RAS themselves, and we detect it. The Linux zip comes with "no support beyond the release notes". Re-check the 7.x Linux installer's terms before recommending it.
 - Windows: full, with the HEC-RAS 6.x/7.x installer. Linux: compute natively, preprocessing under Wine (experimental). macOS: none; export only.
 
+### 2.5 Linux headless preprocessing test (Grok Bot, 2026-10-16, `/workspace/hecras_linux_test/`)
+Tested on HEC's Muncie 2D example (Example_Projects_6_6.zip), HEC-RAS 6.6:
+
+| Step | Result |
+|---|---|
+| Linux `RasGeomPreprocess` | Rebuilds the 1D cross-section tables only. It does **not** regenerate deleted 2D cell/face tables. |
+| Pure Linux .NET 8 + pythonnet | **Fails.** RasMapperLib loads, but its types need System.Windows.Forms, Microsoft.VisualBasic.ApplicationServices, System.Drawing.Common and ConfigurationManager, and GDAL/HDF5 are Windows DLLs. |
+| Mono 6.12 (Debian) | **Fails** (no Microsoft.VisualBasic). |
+| Wine 10.0 + winetricks `dotnet48`, HEC-RAS 6.6 Windows files extracted from the installer (no GUI install) | Works. Three small C# drivers (`wdrv/mesh.exe`, `drv.exe`, `terrain.exe`) call RasMapperLib directly. |
+| Mesh regeneration (`mesh.exe`) | Works, with ras-commander's file-save workaround: mark the mesh recomputed and up to date, `SetFeature`, then `geom.Save()`. |
+| Terrain creation (`terrain.exe`, `TerrainComputable` / GDALSetup from the RAS `GDAL\bin64`) | Works. |
+| Terrain association + property tables (`drv.exe assoc`) | Works. **`RasMapperLib.Scripting.SetGeometryAssociationCommand` (geometry ↔ terrain ↔ Manning's n) is required.** Without it, rebuilding the tables wipes the cell elevations. |
+| Regenerated mesh + tables, or a new terrain + tables → **Linux `RasUnsteady`** | Max WSE within **6e-5 ft** of HEC's baseline. The property tables match HEC's. |
+| Drivers' location | They **must sit in the RAS install folder next to `GDAL\`**. Run from elsewhere, they hang. |
+| `.b04` / `.x04` / `.p04.tmp.hdf` from scratch (`Ras.exe -c` under Wine) | **Still to do.** It needed VB6 OCX registration, `Ras.exe /regserver` + RegAsm for RasMapperLib, and acceptance of HEC's Terms and Conditions for Use (the user approved accepting them). The first compile attempt after that sat idle and is being retried. Until then, these files are reused from HEC's packaged Linux example. |
+
 ## 3. Architecture
 
 ```
@@ -81,9 +97,9 @@ Runner TIER (algorithms.py:490)                    Screening 7b ENGINE (core/han
 ## 5. Blockers and workarounds
 | # | Blocker | Workaround |
 |---|---|---|
-| B1 | Terrain HDF only from RAS Mapper/RasProcess (Windows) | RasProcess CreateTerrain, native or under Wine. No home-made HDF. |
-| B2 | Mesh + property tables + `.tmp.hdf` compile only from Windows .NET/Ras.exe | ras-commander GeomMesh + RasPreprocess on Windows or Wine. Fallback: a "Prepare on Windows" export that the Linux compute then runs. |
-| B3 | Linux build unsupported, 6.6 only, RHEL 8 | Detect it, smoke test it (solve_gate) and report the version. Wine prep must use the **same** HEC-RAS version as the Linux solver. |
+| B1 | Terrain HDF only from RAS Mapper/RasProcess (Windows) | **Resolved on Linux:** RasMapperLib `TerrainComputable` under Wine 10 + .NET 4.8 (driver in the RAS folder). Native on Windows. No home-made HDF. |
+| B2 | Mesh + property tables + `.tmp.hdf` compile only from Windows .NET/Ras.exe | **Mesh and tables resolved on Linux** under Wine (mesh save workaround, `SetGeometryAssociationCommand` first). **Open:** `.b/.x/.p.tmp.hdf` via `Ras.exe -c` under Wine. Fallback: a "Prepare on Windows" compile that the Linux compute then runs. |
+| B3 | Linux build unsupported, 6.6 only, RHEL 8; Wine needs .NET 4.8 (native .NET 8/Mono fail) | Detect it, smoke test it (solve_gate) and report the version. The Wine prefix uses the **same** HEC-RAS 6.6 files as the Linux solver. Qualify the prefix with the Muncie fixture (WSE within 1e-3 ft). Drivers live in the RAS folder next to GDAL. |
 | B4 | RAS text format drift across 6.x/7.x | `PROGRAM_VERSION` is pinned to 6.6 and 6.10; refuse unknown versions with a clear message. |
 | B5 | Mesh quality failures (small faces near breaklines) | GeomMesh auto-fix loop; report the cell count and fixes made. |
 | B6 | QGIS Python lacks h5py/pythonnet | Optional; detect() says how to install them; DamSafety Setup can install them later. |
@@ -103,13 +119,13 @@ Runner TIER (algorithms.py:490)                    Screening 7b ENGINE (core/han
 
 ## 8. Staged PRs
 1. **PR 1 (minimal, off by default):** `core/hecras_engine.py` with `detect()`, `write_project()` (wrapping build_model, adding the hydrograph-BC inflow mode) and `results()`; unit tests with the synthetic HDF. **No** TIER option exposed yet, and no change to workflow.py.
-2. **PR 2:** preprocessing adapters (Windows native RasProcess/ras-commander; Wine on Linux), a `hecras_prepare` Processing tool that only prepares a project, and the Linux `RasUnsteady` compute adapter behind solve_gate.
+2. **PR 2:** preprocessing adapters: Linux Wine drivers (mesh, terrain, association + tables, built from the `wdrv` sources and copied into the RAS folder, with a timeout for each step), Windows native through the same RasMapperLib calls or ras-commander, a `hecras_prepare` Processing tool that only prepares a project, the Linux `RasUnsteady` compute adapter behind solve_gate, and the Muncie qualification test. The `.b/.x/.tmp.hdf` step goes in as soon as it works under Wine, or else as a clear "compile on Windows" requirement.
 3. **PR 3:** `TIER_HECRAS` in workflow and the Runner enum (index 2), 7b `ENGINE` index 2 with an availability check like `ANUGA_MISSING`, report fields, help text and version bumps.
 4. **PR 4:** road breaklines, multiple normal-depth exits, structure connections from culvert matches, and tuning from the Absaraka comparison.
 5. **PR 5:** docs, Setup installer support (h5py, optional ras-commander) and a qualification fixture.
 
 ## 9. What Grok Bot needs to run (after PR 2/3)
 - On the box: `/workspace/hecras_probe/Linux_RAS_v66` (already downloaded; set `NDBREACH_HECRAS_LINUX_DIR`).
-- For preprocessing on Linux: Wine 8+ in a 64-bit prefix, with HEC-RAS 6.6 **Windows** installed into it and ras-commander + pythonnet. Or a project prepared on a Windows PC.
+- For preprocessing on Linux: Wine 10 with a winetricks `dotnet48` prefix, and the HEC-RAS 6.6 **Windows** files (extracted from the installer) with the drivers next to `GDAL\`. The box already has this in `/workspace/hecras_linux_test/` (wineprefix, `wdrv/`). Grok Bot still needs to finish the `Ras.exe -c` compile of `.b/.x/.tmp.hdf` under Wine. Alternatively, a project prepared on a Windows PC.
 - h5py in the Runner's Python.
 - Runs: the Muncie smoke test first, then Absaraka TIER 0/1/2, then DWR-3161.
