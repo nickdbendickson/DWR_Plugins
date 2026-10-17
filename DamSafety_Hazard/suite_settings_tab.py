@@ -30,8 +30,8 @@ class SuiteSettingsTabMixin(object):
         info = QLabel("The suite settings file: one table of the engineer-chosen values of the three "
                       "plugins' Processing tools (this plugin's are on the tabs below). The tools open "
                       "with these values; every one can still be changed in a tool's dialog. Edits here "
-                      "are saved to the file at once. The classification options of this window live on "
-                      "their own tabs and in the settings profiles, not here.")
+                      "are saved to the file at once. The classification options of the Hazard window live "
+                      "on its Classify tab and in the settings profiles, not here.")
         info.setWordWrap(True)
         lay.addWidget(info)
         row = QHBoxLayout()
@@ -54,6 +54,7 @@ class SuiteSettingsTabMixin(object):
             self.suite_settings_status.setStyleSheet("color: #b42318;")
         except Exception:                                        # noqa
             pass
+        self.suite_settings_status.setVisible(False)     # 2.18.34: no gap while empty
         lay.addWidget(self.suite_settings_status)
         catalog_problem = ""
         try:
@@ -94,6 +95,7 @@ class SuiteSettingsTabMixin(object):
         lbl = getattr(self, "suite_settings_status", None)
         if lbl is not None:
             lbl.setText(text or "")
+            lbl.setVisible(bool(text))
         if text and error:
             try:
                 from .suite_home import note_error

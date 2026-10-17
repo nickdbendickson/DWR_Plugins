@@ -14,14 +14,13 @@ import traceback
 from qgis.PyQt.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGroupBox, QFormLayout,
     QSpinBox, QDoubleSpinBox, QCheckBox, QComboBox, QTextEdit, QWidget, QMessageBox,
-    QFileDialog, QTableWidget, QTableWidgetItem, QScrollArea, QLineEdit,
+    QFileDialog, QTableWidget, QTableWidgetItem, QLineEdit,
 )
 from qgis.core import QgsProject, QgsVectorLayer
 
 from .compat import (GEOM_POINT, GEOM_LINE, GEOM_POLYGON, MSG_CRITICAL, MSG_WARNING,
                      MB_YES, MB_NO, MB_CANCEL)
 from .constants import (
-    BTN_ACTIVE_STYLE, BTN_INACTIVE_STYLE,
     TM11_PERSONS_PER_DWELLING, DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     DEFAULT_VEHICLE_OCCUPANCY, DEFAULT_VEHICLE_SPEED_MPH, vehicle_curve_available,
     DEFAULT_NEAR_THRESHOLD_FT, DEFAULT_ACCESS_SEARCH_FT,
@@ -58,32 +57,12 @@ class ClassificationTabMixin(object):
     _update_status, _set_busy, _study_area, config_* attributes)."""
 
     # ------------------------------------------------------------------ UI --
-    def _build_classification_tab(self):
-        tab = QWidget()
-        self._class_tab = tab
-        outer = QVBoxLayout(tab)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget()
-        lay = QVBoxLayout(body)
-        intro = QLabel(
-            "<h3>Hazard Classification</h3>"
-            "Finds habitable structures, overtopped roads (with the most recent AADT) and "
-            "inundated railroads (with trains/day), estimates consequences and classifies the "
-            "dam under the <b>ND Dam Safety Standards Policy REG_05.2026, Section 5.2</b> and "
-            "<b>USBR ACER TM 11</b> (ACER zones from max depth with max velocity). Uses the "
-            "dam folder and rasters from the Setup tab and the data chosen on the Data &amp; "
-            "Output tab.")
-        intro.setWordWrap(True)
-        lay.addWidget(intro)
-
-        # v2.5.1: one box shows the advanced groups (criteria, consequences and
-        # EAP outputs); their defaults apply while they are hidden
-        self.advanced_check = QCheckBox("Show advanced options (criteria, consequences and "
-                                        "EAP outputs - the ND defaults are preset)")
-        self.advanced_check.setChecked(False)
-        lay.addWidget(self.advanced_check)
-        crit = QGroupBox("1. Criteria (advanced - ND defaults)")
+    def _build_classification_options(self):
+        """2.18.34: the classification options as [(title, group, expanded)]. The dialog
+        puts each group in its own Collapsible on the Classify view; until 2.18.33 they were
+        on the Hazard Classification tab, where one 'Show advanced options' tick showed or
+        hid six of them together. Closed sections keep their ND defaults, as before."""
+        crit = QGroupBox()
         cform = QFormLayout()
         self.judgment_check = QCheckBox(
             "Count ACER judgment-zone structures as probable loss of life "
@@ -147,9 +126,8 @@ class ClassificationTabMixin(object):
                                           "are screened (larger ones are usually farmland).")
         cform.addRow("Future development - max parcel size:", self.parcel_acres_spin)
         crit.setLayout(cform)
-        lay.addWidget(crit)
 
-        rep = QGroupBox("2. Report and map outputs")
+        rep = QGroupBox()
         rform = QFormLayout()
         self.report_check = QCheckBox("PDF report with maps (print layout kept in the project)")
         self.report_check.setChecked(True)
@@ -178,8 +156,7 @@ class ClassificationTabMixin(object):
                                             " this adds the cells behind them.")
         rform.addRow("", self.sampled_cells_check)
         self.reuse_check = QCheckBox("Re-use the last run's downloads, inventory and raster "
-                                     "sampling when they are unchanged (fast re-runs after a "
-                                     "review or a setting change)")
+                                     "sampling when unchanged (fast re-runs)")
         self.reuse_check.setChecked(True)
         self.reuse_check.setToolTip(
             "A run first checks the rasters and files by their CONTENT (SHA-256 digest, "
@@ -194,9 +171,8 @@ class ClassificationTabMixin(object):
             "for a full run.")
         rform.addRow("", self.reuse_check)
         rep.setLayout(rform)
-        lay.addWidget(rep)
 
-        cons = QGroupBox("3. Consequences (advanced - screening defaults)")
+        cons = QGroupBox()
         kform = QFormLayout()
         self.lol_check = QCheckBox("Loss-of-life estimate (Graham 1999, DSO-99-06)")
         self.lol_check.setChecked(True)
@@ -228,7 +204,7 @@ class ClassificationTabMixin(object):
             "The plugin has no curves for non-residential structures (which curves to use is "
             "your choice: Hazus, USACE ...). Without a file only their value exposed is "
             "reported. 'Template' writes a file showing the format.")
-        b_browse = QPushButton("Browse...")
+        b_browse = QPushButton("Browse\u2026")
         b_browse.clicked.connect(self._damage_curves_browse)
         b_tmpl = QPushButton("Template")
         b_tmpl.clicked.connect(self._damage_curves_template)
@@ -246,7 +222,7 @@ class ClassificationTabMixin(object):
             "Compares the population at risk with DSS-WISE's own human-consequence table "
             "(day and night population by census block). A big difference is a reason to look "
             "at the structure data; it does not change the classification.")
-        b_hcom = QPushButton("Browse...")
+        b_hcom = QPushButton("Browse\u2026")
         b_hcom.clicked.connect(self._hcom_browse)
         wrow2 = QWidget()
         hrow2 = QHBoxLayout(wrow2)
@@ -267,11 +243,10 @@ class ClassificationTabMixin(object):
         self.access_medium_check.setChecked(True)
         kform.addRow("", self.access_medium_check)
         cons.setLayout(kform)
-        lay.addWidget(cons)
 
         # v2.5: every EAP output can be switched off (all of them with the
         # first box)
-        eapg = QGroupBox("4. Emergency Action Plan outputs (advanced)")
+        eapg = QGroupBox()
         eform = QFormLayout()
         self.eap_check = QCheckBox("Make Emergency Action Plan outputs")
         self.eap_check.setChecked(True)
@@ -306,16 +281,11 @@ class ClassificationTabMixin(object):
         self.station_spin.setSuffix(" mi")
         eform.addRow("Station spacing:", self.station_spin)
         eapg.setLayout(eform)
-        lay.addWidget(eapg)
         scn_group = self._build_scenario_group()
-        lay.addWidget(scn_group)
         extras_group = self._build_extras_group()            # v2.8
-        lay.addWidget(extras_group)
         extras290_group = self._build_extras290_group()      # v2.9
-        lay.addWidget(extras290_group)
         if hasattr(self, "_build_suite_group"):
             self.suite_group = self._build_suite_group()     # v2.10 (always shown)
-            lay.addWidget(self.suite_group)
         try:
             self.parcel_combo.currentIndexChanged.connect(self._refresh_parcel_fields290)
         except Exception:
@@ -325,56 +295,38 @@ class ClassificationTabMixin(object):
         self.eap_check.toggled.connect(self._eap_enable)
         self.eap_mapbook_check.toggled.connect(self._eap_enable)
         self.eap_travel_check.toggled.connect(self._eap_enable)
-        self._advanced_groups = (crit, cons, eapg, scn_group, extras_group, extras290_group)
-        for g in self._advanced_groups:
-            g.setVisible(False)
-        self.advanced_check.toggled.connect(
-            lambda on: [g.setVisible(bool(on)) for g in self._advanced_groups])
-        lay.addStretch()
-        scroll.setWidget(body)
-        outer.addWidget(scroll)
+        sections = [
+            ("Criteria \u2014 ND defaults preset", crit, False),
+            ("Report and map outputs", rep, True),
+            ("Consequences \u2014 screening defaults", cons, False),
+            ("Emergency Action Plan outputs", eapg, False),
+            ("Breach scenarios and no-breach baseline", scn_group, False),
+            ("Extra analyses and speed \u2014 all optional", extras_group, False),
+            ("Mobile homes, sampling speed, sensitivity, EAP extras \u2014 all optional",
+             extras290_group, False),
+        ]
+        for _title, grp, _open in sections:       # the Collapsible header is the title now
+            grp.setTitle("")
+            grp.setFlat(True)
+        self._eap_enable()
+        return sections
 
-        row = QHBoxLayout()
-        self.run_class_btn = QPushButton("Run Hazard Classification")
-        self.run_class_btn.clicked.connect(self._on_run_classification)
-        row.addWidget(self.run_class_btn)
-        self.open_report_btn = QPushButton("Open PDF report")
-        self.open_report_btn.setToolTip("Opens the report written by the last run (its "
-                                        "file name changes when the old PDF was open)")
-        self.open_report_btn.setEnabled(False)
-        self.open_report_btn.clicked.connect(self._open_last_report)
-        row.addWidget(self.open_report_btn)
-        self.submittal_btn = QPushButton("Make submittal package")
-        self.submittal_btn.setToolTip(
-            "Gathers the last run's report, summary, run log, review decisions, change log, "
-            "map book and result tables into a dated folder (and zip) under outputs/Submittal, "
-            "with a manifest and a cover-letter template")
-        self.submittal_btn.clicked.connect(self._make_submittal)
-        row.addWidget(self.submittal_btn)
-        self.watch_btn = QPushButton("Creep watch...")
-        self.watch_btn.setToolTip(
-            "Re-classifies every dam in a folder with fresh data and lists the dams whose "
-            "class changed or that gained flooded structures since their last run. Runs in "
-            "this QGIS session (it can take long for many dams - for those, schedule the "
-            "Processing algorithm 'Hazard creep watch' with qgis_process).")
-        self.watch_btn.clicked.connect(self._run_watch)
-        row.addWidget(self.watch_btn)
-        self.series_btn = QPushButton("Dams in series...")
-        self.series_btn.setToolTip(
-            "Screens a folder of studied dams: which dam's breach flood reaches which other "
-            "dam (depth, arrival time), cascade candidates and class-order flags. A screening "
-            "table only - it does not route a combined breach. Writes Dams_In_Series_Screen.csv / "
-            ".html.")
-        self.series_btn.clicked.connect(self._run_series)
-        row.addWidget(self.series_btn)
-        self.open_outputs_btn = QPushButton("Open outputs folder")
-        self.open_outputs_btn.clicked.connect(self._open_outputs_folder)
-        row.addWidget(self.open_outputs_btn)
-        row.addStretch()
-        outer.addLayout(row)
+    def _build_results_panel(self):
+        """2.18.34: the Results view - the classes, the criteria table, the scenario
+        comparison and the summary, with the tools that work on the last run (they were the
+        button row of the Hazard Classification tab)."""
+        from .ui_widgets import ToolRow
+        page = QWidget()
+        outer = QVBoxLayout(page)
         self.result_label = QLabel("No classification run yet")
         self.result_label.setStyleSheet("font-size: 14px; font-weight: bold; padding: 4px;")
+        self.result_label.setWordWrap(True)
         outer.addWidget(self.result_label)
+        self.result_hint = QLabel("Classify on the Classify tab: the classes, every criterion "
+                                  "and the summary of the run appear here.")
+        self.result_hint.setWordWrap(True)
+        self.result_hint.setStyleSheet("color:#666; padding: 0 4px;")
+        outer.addWidget(self.result_hint)
         self.result_table = QTableWidget()
         self.result_table.setColumnCount(len(RESULT_COLS))
         self.result_table.setHorizontalHeaderLabels(RESULT_COLS)
@@ -382,7 +334,8 @@ class ClassificationTabMixin(object):
         self.result_table.setToolTip("Double-click a row to zoom to the structures, roads or "
                                      "facilities behind it")
         self.result_table.cellDoubleClicked.connect(self._result_zoom)
-        outer.addWidget(self.result_table)
+        self.result_table.setMinimumHeight(160)
+        outer.addWidget(self.result_table, 2)
         self.scenario_result_table = QTableWidget()
         self.scenario_result_table.setColumnCount(len(COMPARE_COLS))
         self.scenario_result_table.setHorizontalHeaderLabels(COMPARE_COLS)
@@ -393,13 +346,54 @@ class ClassificationTabMixin(object):
         outer.addWidget(self.scenario_result_table)
         self.class_result_text = QTextEdit()
         self.class_result_text.setReadOnly(True)
-        self.class_result_text.setMaximumHeight(120)
+        self.class_result_text.setMinimumHeight(120)
+        self.class_result_text.setMaximumHeight(220)
+        self.class_result_text.setPlaceholderText("The run summary appears here.")
         self.class_result_text.setStyleSheet(
             "font-family: 'Menlo', 'Courier New', monospace; font-size: 11px;")
-        outer.addWidget(self.class_result_text)
-        self._refresh_layer_combos()
-        self._eap_enable()
-        return tab
+        lower = QHBoxLayout()                  # the summary beside the tools: both in sight
+        lower.addWidget(self.class_result_text, 1)
+        tools = QGroupBox("Tools for the last run")
+        tl = QVBoxLayout(tools)
+        tl.setSpacing(4)
+        self.result_tool_rows = {}
+        for attr, label, desc, tip, slot in (
+                ("open_report_btn", "Open PDF report",
+                 "The last run's report.",
+                 "Opens the report written by the last run (its file name changes when the "
+                 "old PDF was open)", self._open_last_report),
+                ("submittal_btn", "Make submittal package\u2026",
+                 "Dated folder + zip for the reviewer.",
+                 "Gathers the last run's report, summary, run log, review decisions, change "
+                 "log, map book and result tables into a dated folder (and zip) under "
+                 "outputs/Submittal, with a manifest and a cover-letter template",
+                 self._make_submittal),
+                ("open_outputs_btn", "Open outputs folder",
+                 "<dam folder>/outputs.",
+                 "Opens <dam folder>/outputs", self._open_outputs_folder),
+                ("watch_btn", "Creep watch\u2026",
+                 "Re-classify a folder of dams.",
+                 "Re-classifies every dam in a folder with fresh data and lists the dams "
+                 "whose class changed or that gained flooded structures since their last "
+                 "run. Runs in this QGIS session (it can take long for many dams - for those, "
+                 "schedule the Processing algorithm 'Hazard creep watch' with qgis_process).",
+                 self._run_watch),
+                ("series_btn", "Dams in series\u2026",
+                 "Which dam's flood reaches which.",
+                 "Screens a folder of studied dams: which dam's breach flood reaches which "
+                 "other dam (depth, arrival time), cascade candidates and class-order flags. "
+                 "A screening table only - it does not route a combined breach. Writes "
+                 "Dams_In_Series_Screen.csv / .html.", self._run_series)):
+            row = ToolRow(label, desc, tooltip=tip, button_width=240, tag_width=56)
+            row.button.clicked.connect(slot)
+            setattr(self, attr, row.button)
+            self.result_tool_rows[attr] = row
+            tl.addWidget(row)
+        self.open_report_btn.setEnabled(False)
+        tools.setMinimumWidth(480)
+        lower.addWidget(tools, 0)
+        outer.addLayout(lower)
+        return page
 
     def _damage_curves_browse(self, *args):
         start = os.path.dirname(self.damage_curves_edit.text().strip()) or getattr(
@@ -458,10 +452,10 @@ class ClassificationTabMixin(object):
     # v2.7: the Setup tab rasters are the main breach scenario; more breach
     # scenarios (sunny-day, PMF ...) and no-breach baselines are added here.
     def _build_scenario_group(self):
-        grp = QGroupBox("5. Breach scenarios and no-breach baseline (advanced)")
+        grp = QGroupBox()
         lay = QVBoxLayout()
         info = QLabel(
-            "The rasters on the Setup tab are the main breach scenario. Add further breach "
+            "The rasters under Setup are the main breach scenario. Add further breach "
             "scenarios (e.g. sunny-day and PMF failure) - each is classified separately and "
             "the most severe governs - and a <b>no-breach baseline</b> (the same flood "
             "without the dam failing): with a baseline only the consequences the breach adds "
@@ -472,8 +466,8 @@ class ClassificationTabMixin(object):
         form = QFormLayout()
         self.main_name_edit = QLineEdit()
         self.main_name_edit.setText(MAIN_NAME)
-        self.main_name_edit.setToolTip("Name of the scenario made from the Setup tab rasters")
-        form.addRow("Setup tab rasters are scenario:", self.main_name_edit)
+        self.main_name_edit.setToolTip("Name of the scenario made from the Setup rasters")
+        form.addRow("Setup rasters are scenario:", self.main_name_edit)
         self.main_baseline_combo = QComboBox()
         self.main_baseline_combo.addItem("(no baseline)", _NO_BASELINE)
         self.main_baseline_combo.setToolTip("A baseline row of the table to compare this "
@@ -492,7 +486,7 @@ class ClassificationTabMixin(object):
         self.scn_add_btn = QPushButton("Add scenario")
         self.scn_add_btn.clicked.connect(lambda *a: self._scn_add_row())
         row.addWidget(self.scn_add_btn)
-        self.scn_folder_btn = QPushButton("Add from a folder...")
+        self.scn_folder_btn = QPushButton("Add from a folder\u2026")
         self.scn_folder_btn.setToolTip("Look through a folder of one model run for its "
                                        "depth, velocity, arrival and D x V rasters")
         self.scn_folder_btn.clicked.connect(self._scn_add_from_folder)
@@ -772,11 +766,14 @@ class ClassificationTabMixin(object):
         return project.mapLayer(data)
 
     def _classification_button_state(self):
-        if not hasattr(self, "run_class_btn"):
+        """2.18.34: Classify is the one run button (the Hazard Classification tab's 'Run
+        Hazard Classification' and Data & Output's 'Run everything' did the same run). Off
+        while a run works and while the check panel shows errors (_checks_block), so a
+        finished run (_set_busy(False)) cannot switch it back on under a red banner."""
+        btn = self.__dict__.get("classify_btn")
+        if btn is None:
             return
-        ok = self._inputs_valid_for_main() and not self._busy
-        self.run_class_btn.setEnabled(ok)
-        self.run_class_btn.setStyleSheet(BTN_ACTIVE_STYLE if ok else BTN_INACTIVE_STYLE)
+        btn.setEnabled(not self._busy and not self._checks_block)
 
     # ----------------------------------------------------------------- RUN --
     def _on_run_classification(self):
@@ -784,8 +781,7 @@ class ClassificationTabMixin(object):
             return
         valid, errors = self.validate_all_inputs()
         if not valid:
-            QMessageBox.warning(self, "Input Errors",
-                                "\n".join("- {}".format(e) for e in errors))
+            self._show_input_errors(errors)
             return
         self._launch_classification()
 
@@ -905,10 +901,13 @@ class ClassificationTabMixin(object):
         if notes:
             QMessageBox.warning(self, "Hazard Classification",
                                 "<br>".join(html.escape(n) for n in notes))
-        try:
-            self.tab_widget.setCurrentIndex(self.tab_widget.indexOf(self._class_tab))
-        except Exception:
-            pass
+        if hasattr(self, "result_hint"):
+            self.result_hint.setVisible(False)
+        if hasattr(self, "result_tool_rows"):
+            self.result_tool_rows["open_report_btn"].set_status(
+                "yes", show=self.open_report_btn.isEnabled())
+        if hasattr(self, "_show_view"):
+            self._show_view("Results")
 
     def _scenarios(self):
         """The Setup tab rasters as the main breach scenario, then the
