@@ -19,6 +19,7 @@ import os
 import re
 
 from .constants import OUTPUT_FOLDER_NAME
+from . import damfolder as DF
 from .dsswise import (detect_role, R_DEPTH, R_VEL, R_DV, R_ARR, R_DEM, R_WSE, R_PEAK,
                       RASTER_EXT)
 
@@ -102,12 +103,23 @@ def find_rasters(folder):
     cands = {}
     unknown = []
     derived = []
+    own_id = DF.dam_id(root)
+    skipped_dams = []
     for dirpath, dirs, files in os.walk(root):
         rel = os.path.relpath(dirpath, root)
         level = 0 if rel == "." else rel.count(os.sep) + 1
         dirs[:] = [d for d in dirs if d.lower() not in _SKIP_DIRS and not d.startswith(".")
                    and not d.upper().startswith(("ACER_", "EAP_"))
                    and level < MAX_DEPTH_LEVELS]
+        # 2.18.35: never into another dam's folder (a Dams folder below this one, or a
+        # sub-folder with its own dam.json / named after another dam ID)
+        keep = []
+        for d in dirs:
+            if DF.is_other_dam_dir(os.path.join(dirpath, d), own_id):
+                skipped_dams.append(os.path.relpath(os.path.join(dirpath, d), root))
+            else:
+                keep.append(d)
+        dirs[:] = keep
         rasters = [f for f in files if os.path.splitext(f)[1].lower() in RASTER_EXT
                    and not f.lower().endswith((".aux.xml", ".ovr"))]
         if not rasters:
@@ -149,6 +161,10 @@ def find_rasters(folder):
                             "(incremental / rise / difference): {}".format(
                                 len(derived), ", ".join(sorted(derived)[:4]) +
                                 (" ..." if len(derived) > 4 else "")))
+    if skipped_dams:
+        out["notes"].append("{} other dam folder(s) not searched: {}".format(
+            len(skipped_dams), ", ".join(sorted(skipped_dams)[:4]) +
+            (" ..." if len(skipped_dams) > 4 else "")))
     for key, paths in cands.items():
         if key == "base_dv":
             continue

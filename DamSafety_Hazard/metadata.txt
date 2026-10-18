@@ -5,9 +5,24 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.34
+version=2.18.35
 author=N.D. Bendickson
 changelog=
+    2.18.35 - 2026-10-18
+      * The dam folder must be ONE dam's folder: the path is normalised ('//',
+        'Dams//2801/') and the file-system root, the suite's Dams folder, a folder
+        above it and any folder that holds dam folders (dam.json, run_report.json or
+        a DWR / ND ID name) are refused with a red status line (they were accepted
+        and the raster search found another dam's rasters).
+      * Switching the dam folder replaces the rasters filled from the previous
+        folder (they were kept: 2801's rasters with dam folder 9999); a raster typed
+        by hand is kept only when it is inside the new folder, otherwise it is
+        cleared with a note in the status line and the log.
+      * Check inputs fails, and Classify stays off, while a raster is outside the
+        dam folder or belongs to another dam (another dam's sub-folder, or another
+        DWR / NID ID in its name). A HEC-RAS plan (.hdf) used directly must
+        therefore be in the dam folder (or imported).
+      * The raster search never enters another dam's folder below the dam folder.
     2.18.34 - 2026-10-17
       * The window has three tabs - Classify, Results, Review - and a gear button
         (Suite settings…, Documentation, Run self-test, Edit data sources…)

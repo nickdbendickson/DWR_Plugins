@@ -773,7 +773,12 @@ class ClassificationTabMixin(object):
         btn = self.__dict__.get("classify_btn")
         if btn is None:
             return
-        btn.setEnabled(not self._busy and not self._checks_block)
+        # 2.18.35: also off while a raster is outside the dam folder or of another dam
+        own = self._raster_ownership_problems() if hasattr(self, "_raster_ownership_problems") else []
+        if "_classify_tip" not in self.__dict__:
+            self._classify_tip = btn.toolTip()
+        btn.setEnabled(not self._busy and not self._checks_block and not own)
+        btn.setToolTip("Fix first: " + own[0] if own else self._classify_tip)
 
     # ----------------------------------------------------------------- RUN --
     def _on_run_classification(self):
