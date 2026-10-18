@@ -400,7 +400,7 @@ class _SourceReader(object):
         attrs = feat.attributes()
         rec = {"family": self.family, "texts": [], "address": False, "nsi": None,
                "addr_key": None, "unit": "", "placement": None, "place_kind": None,
-               "nena": self.nena, "place_type": "", "fema": ""}
+               "nena": self.nena, "place_type": "", "fema": "", "fema_parcel": self.fema_parcel}
         if self.nguid_idx is not None:
             rec["nguid"] = _text(attrs[self.nguid_idx])
         if self.fema_idx:
@@ -1194,11 +1194,14 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     dwelling / unverified outline. rec["mobile_park"] (mark_mobile_parks)
     is used whenever it is set."""
     nsi_recs = [s["nsi"] for s in rec["sources"] if s.get("nsi")]
-    # FEMA USA Structures occupancy and street address belong to the parcel and
-    # are copied onto every building on it. They are shown, not used to decide
-    # habitability (a garage on a house lot is not a second house).
-    _parcel = {"FEMA_STRUCTURES", "USA_STRUCTURES", "FEMA"}
-    texts = " ; ".join(t for s in rec["sources"] if s.get("family") not in _parcel
+    # FEMA USA Structures occupancy and street address belong to the PARCEL and are
+    # copied onto every building on it. They are shown, not used to decide habitability
+    # (a garage on a house lot is not a second house). Suppress by the per-source
+    # fema_parcel flag (describe() sets it from the FEMA parcel fields), NOT by family
+    # name: an OSM/other outline loaded in the FEMA_STRUCTURES slot is fema_parcel=False
+    # and must keep its own building=house / addr evidence, else a real dwelling that is
+    # a parcel sibling of a 911 anchor is wrongly demoted to Not habitable (M3 fix).
+    texts = " ; ".join(t for s in rec["sources"] if not s.get("fema_parcel")
                        for t in s["texts"])
     norm = _norm_text(texts)
     mobile_basis, category, lifeline, occ_codes = [], None, False, []
@@ -1251,7 +1254,7 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     kw_occupied = bool(KW_OCCUPIED.search(norm_hab))
     kw_nonhab = bool(KW_NONHAB.search(norm))
     has_address = any(s.get("address") for s in rec["sources"]
-                      if s.get("family") not in _parcel)
+                      if not s.get("fema_parcel"))
     place_kinds = {s.get("place_kind") for s in rec["sources"]}
     if _PT_MOBILE in place_kinds and not mobile_basis:
         mobile_basis.append("address Place_Type")

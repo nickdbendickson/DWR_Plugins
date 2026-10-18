@@ -121,6 +121,24 @@ def _addr911_src():
             "place_type": "", "fema": "", "snapped": None, "nguid": "ND-911-1"}
 
 
+def _osm_house_src():
+    """A genuine OSM building outline loaded in the primary FEMA_STRUCTURES slot:
+    fema_parcel is False, so its own building=house / addr:* ARE habitability evidence
+    (describe() keeps them) and must survive _interpret's parcel suppression."""
+    return {"family": "FEMA_STRUCTURES", "fema_parcel": False, "texts": ["building=house"],
+            "address": True, "addr_key": "osm-a", "unit": "", "placement": None,
+            "place_kind": None, "nena": False, "place_type": "", "fema": "", "nsi": None}
+
+
+def _usa_parcel_src():
+    """A FEMA USA Structures outline: occupancy + PROP_ADDR are the PARCEL's
+    (fema_parcel True), shown but not habitability evidence; carries the parcel key."""
+    return {"family": "USA_STRUCTURES", "fema_parcel": True, "texts": [], "address": False,
+            "nsi": None, "addr_key": None, "unit": "", "placement": None, "place_kind": None,
+            "nena": False, "place_type": "", "fema": "Residential - Single Family Dwelling",
+            "parcel": PARCEL}
+
+
 def _footprint(rid, sources, area_ft2=1500.0):
     fams = {s["family"] for s in sources}
     return {"id": rid, "footprint": True, "area_ft2": area_ft2, "families": fams,
@@ -179,6 +197,28 @@ def test_nsi_res_without_911_anchor_stays_a_dwelling():
         assert not r.get("site_note"), r.get("site_note")
 
 
+def test_osm_house_parcel_sibling_stays_a_dwelling():
+    """Round-4 regression: a genuine OSM house (building=house, fema_parcel False) that
+    is a parcel sibling of a 911 anchor must stay a habitable dwelling. The old
+    family-name parcel filter stripped the OSM building's own evidence (because it sits
+    in the FEMA_STRUCTURES slot) and the M3 outbuilding branch then demoted it to Not
+    habitable - an unsafe under-count. The per-source fema_parcel suppression must keep
+    the OSM evidence, so it classifies as a Dwelling, matching nd_hazard."""
+    house_a = _footprint(1, [_osm_house_src(), _usa_parcel_src()])
+    anchor_b = _footprint(2, [_usa_parcel_src(), _addr911_src()])
+    structs = [house_a, anchor_b]
+    ST._mark_parcel_sites(structs, ST._Grid(200.0), 10.0, 150.0, 80.0)
+    assert house_a.get("site_anchor") and house_a["site_anchor"]["ids"] == [2], \
+        house_a.get("site_anchor")
+    assert "site_anchor" not in anchor_b, anchor_b.get("site_anchor")
+    for r in structs:
+        ST._interpret(r)
+    # the OSM house keeps its building=house evidence -> Dwelling, NOT a silent drop
+    assert house_a["category"] == ST.CAT_DWELLING, (house_a["category"], house_a.get("site_note"))
+    assert house_a["habitable"] == "Yes", house_a["habitable"]
+    assert house_a["category"] != ST.CAT_NOT_HABITABLE
+
+
 def test_review_reason_outbuilding():
     rec = {"id": 2, "outcome": "Probable loss of life", "category": ST.CAT_UNVERIFIED,
            "site_note": "outbuilding: no source says it is habitable and ...",
@@ -193,6 +233,7 @@ def test_review_reason_outbuilding():
 def main():
     tests = [test_farmstead_is_one_dwelling_not_three,
              test_nsi_res_without_911_anchor_stays_a_dwelling,
+             test_osm_house_parcel_sibling_stays_a_dwelling,
              test_review_reason_outbuilding]
     failed = 0
     print("QGIS: {}".format(MODE))
