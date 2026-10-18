@@ -22,6 +22,12 @@ import time
 import numpy as np
 
 TAG_OUTFLOW = "outflow"
+# Quality gate: the smallest triangle may be this fraction of the smallest size the
+# mesher was asked for (min_area_m2, or culvert_area_m2 when that is smaller). gmsh
+# scatters triangle sizes about +-30 % around the size field; at Absaraka (20 x 20 mi,
+# 100 m2 lines) a good mesh (min angle 31 deg) had its smallest triangle at 49.9 m2,
+# 0.4993 x 100 m2, so the old 0.5 rejected it. Slivers are caught by min_angle_deg.
+MIN_AREA_TOL = 0.45
 
 
 class MeshError(Exception):
@@ -70,6 +76,123 @@ def _dp(pts, tol):
             keep[i + 1 + k] = True
             stack += [(i, i + 1 + k), (i + 1 + k, j)]
     return pts[keep]
+
+
+def _densify(line, step):
+    p = np.asarray(line, float).reshape(-1, 2)
+    out = [p[0]]
+    for a, b in zip(p[:-1], p[1:]):
+        n = max(1, int(math.ceil(np.hypot(*(b - a)) / step)))
+        out += [a + (b - a) * k / n for k in range(1, n + 1)]
+    return np.array(out)
+
+
+class _SegIndex:
+    """Grid hash of line segments for 'what is within d of this point' queries."""
+
+    def __init__(self, cell):
+        self.cell = float(cell)
+        self.cells = {}
+        self.a, self.b, self.owner = [], [], []
+
+    def add(self, line, owner):
+        p = np.asarray(line, float)
+        for a, b in zip(p[:-1], p[1:]):
+            k = len(self.a)
+            self.a.append(a)
+            self.b.append(b)
+            self.owner.append(owner)
+            lo = np.floor(np.minimum(a, b) / self.cell).astype(int)
+            hi = np.floor(np.maximum(a, b) / self.cell).astype(int)
+            for gx in range(lo[0] - 1, hi[0] + 2):
+                for gy in range(lo[1] - 1, hi[1] + 2):
+                    self.cells.setdefault((gx, gy), []).append(k)
+
+    def near(self, p):
+        """(distance, projection, unit direction, owner) of the nearest segment, or None."""
+        ks = self.cells.get((int(math.floor(p[0] / self.cell)), int(math.floor(p[1] / self.cell))))
+        if not ks:
+            return None
+        a = np.array([self.a[k] for k in ks])
+        b = np.array([self.b[k] for k in ks])
+        ab = b - a
+        L2 = np.maximum((ab ** 2).sum(1), 1e-12)
+        t = np.clip(((p - a) * ab).sum(1) / L2, 0, 1)
+        q = a + ab * t[:, None]
+        d = np.hypot(*(p - q).T)
+        i = int(np.argmin(d))
+        return float(d[i]), q[i], ab[i] / math.sqrt(L2[i]), self.owner[ks[i]]
+
+
+def declutter(lines, gap, max_angle_deg=30.0):
+    """Make a set of breaklines safe to embed (real road and rail layers have them):
+    - a stretch of a line running within `gap` of, and within max_angle_deg of parallel
+      to, a line already kept (double tracks, sidings, a road beside the rail, divided
+      highways, the same road twice) is dropped; it would make sliver triangles;
+    - an end that stops within `gap` of another kept line (a T-junction drawn a few
+      metres short) is moved onto that line and just past it, so node_lines joins them.
+    Lines earlier in the list win. Crossings at larger angles are left to node_lines.
+    Returns [(polyline, index of the input line it came from)]."""
+    if not lines:
+        return []
+    cos_max = math.cos(math.radians(max_angle_deg))
+    idx = _SegIndex(max(4.0 * gap, 50.0))
+    runs, src = [], []
+    for li, ln in enumerate(lines):
+        p = _densify(ln, max(gap / 2.0, 1.0))
+        if len(p) < 2:
+            continue
+        t = np.gradient(p, axis=0)
+        t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-12)[:, None]
+        cov = np.zeros(len(p), bool)
+        for i, q in enumerate(p):
+            r = idx.near(q)
+            if r is not None and r[0] < gap and abs(float(np.dot(t[i], r[2]))) > cos_max:
+                cov[i] = True
+        new, i = [], 0
+        while i < len(p):
+            if cov[i]:
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(p) and not cov[j + 1]:
+                j += 1
+            seg = p[i:j + 1]
+            if len(seg) >= 2 and np.hypot(*np.diff(seg, axis=0).T).sum() >= gap:
+                new.append(seg)
+            i = j + 1
+        for seg in new:
+            idx.add(seg, len(runs))
+            runs.append(seg)
+            src.append(li)
+    # snap loose ends onto a nearby line
+    out = []
+    all_idx = _SegIndex(max(4.0 * gap, 50.0))
+    for k, r in enumerate(runs):
+        all_idx.add(r, k)
+    for k, r in enumerate(runs):
+        r = r.copy()
+        for end, prev in ((0, 1), (-1, -2)):
+            q = r[end]
+            best = None
+            ks = all_idx.cells.get((int(math.floor(q[0] / all_idx.cell)),
+                                    int(math.floor(q[1] / all_idx.cell))), [])
+            for s_ in ks:
+                if all_idx.owner[s_] == k:
+                    continue
+                a, b = all_idx.a[s_], all_idx.b[s_]
+                ab = b - a
+                tt = float(np.clip(np.dot(q - a, ab) / max(np.dot(ab, ab), 1e-12), 0, 1))
+                pr = a + ab * tt
+                d = float(np.hypot(*(q - pr)))
+                if d < gap and (best is None or d < best[0]):
+                    best = (d, pr)
+            if best is not None and best[0] > 1e-6:
+                u = best[1] - q
+                u = u / max(np.hypot(*u), 1e-12)
+                r[end] = best[1] + 0.5 * u          # just across: a proper crossing
+        out.append((r, src[k]))
+    return out
 
 
 def _seg_list(lines):
@@ -154,7 +277,62 @@ def node_lines(lines, kinds, snap_m):
         seen[key] = len(edges)
         edges.append(key)
         kind_out.append(kd)
-    return np.array(nodes), np.array(edges, int).reshape(-1, 2), kind_out
+    nodes = np.array(nodes)
+    edges, kind_out = _split_at_near_nodes(nodes, edges, kind_out, snap_m)
+    return nodes, np.array(edges, int).reshape(-1, 2), kind_out
+
+
+def _split_at_near_nodes(nodes, edges, kinds, snap_m, rounds=4):
+    """A node within snap_m of an edge it is not on (two lines that nearly cross, a line
+    passing just by another's vertex) would make a sliver: split the edge at that node."""
+    if not len(edges) or snap_m <= 0:
+        return edges, kinds
+    cell = max(4.0 * snap_m, 1.0)
+    for _ in range(rounds):
+        hashed = {}
+        for i, p in enumerate(nodes):
+            hashed.setdefault((int(math.floor(p[0] / cell)), int(math.floor(p[1] / cell))),
+                              []).append(i)
+        out_e, out_k, changed = [], [], False
+        for (a, b), kd in zip(edges, kinds):
+            pa, pb = nodes[a], nodes[b]
+            lo = np.floor((np.minimum(pa, pb) - snap_m) / cell).astype(int)
+            hi = np.floor((np.maximum(pa, pb) + snap_m) / cell).astype(int)
+            ab = pb - pa
+            L2 = float(np.dot(ab, ab))
+            hits = []
+            for gx in range(lo[0], hi[0] + 1):
+                for gy in range(lo[1], hi[1] + 1):
+                    for n in hashed.get((gx, gy), ()):
+                        if n in (a, b):
+                            continue
+                        t = float(np.dot(nodes[n] - pa, ab)) / max(L2, 1e-12)
+                        if 0.0 < t < 1.0 and np.hypot(*(nodes[n] - (pa + ab * t))) < snap_m:
+                            hits.append((t, n))
+            if not hits:
+                out_e.append((a, b))
+                out_k.append(kd)
+                continue
+            changed = True
+            chain = [a] + [n for _t, n in sorted(hits)] + [b]
+            for u, v in zip(chain[:-1], chain[1:]):
+                if u != v:
+                    out_e.append((u, v))
+                    out_k.append(kd)
+        # drop duplicates (the finer class wins)
+        seen, edges, kinds = {}, [], []
+        for (a, b), kd in zip(out_e, out_k):
+            key = (min(a, b), max(a, b))
+            if key in seen:
+                if kd == "line":
+                    kinds[seen[key]] = "line"
+                continue
+            seen[key] = len(edges)
+            edges.append(key)
+            kinds.append(kd)
+        if not changed:
+            break
+    return edges, kinds
 
 
 def _dist_to_ring(p, ring):
@@ -197,15 +375,19 @@ def build_mesh(spec):
     """spec (dict): outer [[x, y]...], lines [[...]...] (embankments, structures,
     culverts, breach, dam), channel [[...]...] (flow path), points [[x, y]...]
     (culvert ends, inflow), and sizes: min_area_m2, channel_area_m2,
-    max_area_m2, line_dist_min_m, line_dist_max_m, channel_dist_min_m,
-    channel_dist_max_m, min_angle_deg, threads.
+    max_area_m2, culvert_area_m2 (the points; None = min_area_m2), line_dist_min_m,
+    line_dist_max_m, channel_dist_min_m, channel_dist_max_m, min_angle_deg,
+    min_area_tol (gate, see MIN_AREA_TOL), threads.
     Returns dict(points, triangles (CCW), boundary [[tri, edge]...], stats)."""
     import gmsh
     g = dict(min_area_m2=100.0, channel_area_m2=250.0, max_area_m2=20000.0,
              line_dist_min_m=60.0, line_dist_max_m=1500.0, channel_dist_min_m=250.0,
              channel_dist_max_m=2500.0, point_dist_min_m=40.0, point_dist_max_m=600.0,
-             min_angle_deg=20.0, min_area_tol=0.5, threads=0)
+             min_angle_deg=20.0, min_area_tol=MIN_AREA_TOL, culvert_area_m2=None, declutter=True,
+             threads=0)
     g.update({k: v for k, v in spec.items() if k in g})
+    if g["culvert_area_m2"] is None:
+        g["culvert_area_m2"] = g["min_area_m2"]
     ring = np.asarray(spec["outer"], float)
     if np.allclose(ring[0], ring[-1]):
         ring = ring[:-1]
@@ -221,12 +403,21 @@ def build_mesh(spec):
     # gmsh triangles scatter about +-30 % around the size field, so the floor edge is
     # 1.3 x the equilateral edge of min_area: the smallest triangles then stay near min_area
     hmin = 1.3 * h_of_area(g["min_area_m2"])
+    hpt = 1.3 * h_of_area(g["culvert_area_m2"])      # culvert ends and the inflow point
     hch = max(hmin, h_of_area(g["channel_area_m2"]))
     hmax = max(hch, h_of_area(g["max_area_m2"]))
     # vertices at least 2 x the local size apart, so gmsh never splits a segment
     # into pieces shorter than the size
-    lines = [_thin(l, 2.0 * hmin) for l in spec.get("lines", []) if len(l) >= 2]
-    chans = [_thin(l, 2.0 * hch) for l in spec.get("channel", []) if len(l) >= 2]
+    # parallel near-duplicates and loose ends (road / rail layers) would make slivers
+    raw_l = [l for l in spec.get("lines", []) if len(l) >= 2]
+    raw_c = [l for l in spec.get("channel", []) if len(l) >= 2]
+    if g["declutter"]:
+        kept = declutter(raw_l + raw_c, hmin)
+        n = len(raw_l)
+        raw_l = [r for r, i in kept if i < n]
+        raw_c = [r for r, i in kept if i >= n]
+    lines = [_thin(l, 2.0 * hmin) for l in raw_l]
+    chans = [_thin(l, 2.0 * hch) for l in raw_c]
     nodes, edges, kinds = node_lines(lines + chans, ["line"] * len(lines) + ["channel"] * len(chans),
                                      snap_m=0.75 * hmin)
     edges, kinds = keep_inside(nodes, edges, kinds, ring, hmin)
@@ -281,7 +472,7 @@ def build_mesh(spec):
         ptags = free + [gp[n] for n in used if any(
             np.hypot(*(nodes[n] - p)) <= hmin / 2.0 for p in pts_in)]
         if ptags:
-            threshold({"PointsList": ptags}, hmin, g["point_dist_min_m"], g["point_dist_max_m"])
+            threshold({"PointsList": ptags}, hpt, g["point_dist_min_m"], g["point_dist_max_m"])
         fc = f.add("MathEval")
         f.setString(fc, "F", repr(hmax))
         fields.append(fc)
@@ -290,7 +481,7 @@ def build_mesh(spec):
         f.setAsBackgroundMesh(fm)
         for k in ("MeshSizeExtendFromBoundary", "MeshSizeFromPoints", "MeshSizeFromCurvature"):
             gmsh.option.setNumber("Mesh." + k, 0)
-        gmsh.option.setNumber("Mesh.MeshSizeMin", hmin)
+        gmsh.option.setNumber("Mesh.MeshSizeMin", min(hmin, hpt) if ptags else hmin)
         gmsh.option.setNumber("Mesh.MeshSizeMax", hmax)
         gmsh.option.setNumber("Mesh.Algorithm", 5)
         gmsh.model.mesh.generate(2)
@@ -330,14 +521,32 @@ def finish(tags, xy, tri_nodes, g, mesh_s=0.0, **extra):
                  mesh_s=round(mesh_s, 2), min_area_m2=round(float(area.min()), 2),
                  min_angle_deg=round(q["min_angle"], 2), p1_angle_deg=round(q["p1_angle"], 2),
                  min_inradius_m=round(q["min_inradius"], 3), boundary_edges=int(len(boundary)))
+    intended, tol, gate = gate_area(g)
+    stats.update(gate_min_area_m2=round(gate, 2), gate_intended_area_m2=round(intended, 2),
+                 min_area_tol=tol)
     stats.update(extra)
     if q["min_angle"] < g["min_angle_deg"]:
         raise MeshError("minimum angle {:.1f} deg is below {:.0f} deg".format(
             q["min_angle"], g["min_angle_deg"]))
-    if area.min() < g["min_area_m2"] * g["min_area_tol"]:
-        raise MeshError("smallest triangle {:.1f} m2 is below {:.0f} m2".format(
-            area.min(), g["min_area_m2"] * g["min_area_tol"]))
+    if area.min() < gate:
+        raise MeshError("smallest triangle {:.2f} m2 is below the {:.1f} m2 gate ({:g} x the "
+                        "smallest intended {:g} m2)".format(area.min(), gate, tol, intended))
     return dict(points=pts, triangles=tri, boundary=boundary, stats=stats)
+
+
+def gate_area(g):
+    """(smallest intended triangle area, tolerance, gate area) for the sizes in g.
+
+    The gate is relative to the smallest size the mesher was asked to make, not the
+    base min_area_m2: a smaller culvert_area_m2 makes small triangles on purpose, and
+    they must not fail the gate; what it has to catch is triangles much smaller than
+    anything requested (slivers at unnoded crossings, which also set ANUGA's timestep)."""
+    tol = float(g.get("min_area_tol", MIN_AREA_TOL))
+    intended = float(g["min_area_m2"])
+    ca = g.get("culvert_area_m2")
+    if ca is not None:
+        intended = min(intended, float(ca))
+    return intended, tol, intended * tol
 
 
 def boundary_edges(tri):

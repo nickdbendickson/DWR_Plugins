@@ -122,10 +122,21 @@ class RunSettings:
         self.anuga_near_field_mi = 1.0
         self.anuga_buffer_m = 500.0
         self.anuga_algorithm = "DE0"
-        # hidden: "default" (ANUGA's own mesh, unchanged) or "gmsh" (core/gmsh_mesher.py;
-        # needs gmsh in the ANUGA environment). NDBREACH_ANUGA_MESHER overrides the default.
-        self.anuga_mesher = os.environ.get("NDBREACH_ANUGA_MESHER", "default") or "default"
-        self.anuga_gmsh = None           # optional dict of gmsh sizes (gmsh_mesher.build_mesh)
+        # hidden: "default" (ANUGA's own mesh, unchanged), "gmsh" (core/gmsh_mesher.py; needs
+        # gmsh in the ANUGA environment; a rejected gmsh mesh stops the run) or
+        # "gmsh_or_default" (a rejected gmsh mesh falls back to the default, with a WARNING
+        # and a line in run_report). NDBREACH_ANUGA_MESHER (or ANUGA_MESHER) sets it.
+        self.anuga_mesher = (os.environ.get("NDBREACH_ANUGA_MESHER")
+                             or os.environ.get("ANUGA_MESHER") or "default")
+        # optional dict of gmsh sizes (gmsh_mesher.build_mesh, e.g. min_area_tol,
+        # culvert_area_m2) and embankment options (anuga_model.EMBANKMENT_DEFAULTS)
+        self.anuga_gmsh = None
+        _tol = os.environ.get("NDBREACH_ANUGA_GMSH_MIN_AREA_TOL")
+        if _tol:
+            try:
+                self.anuga_gmsh = {"min_area_tol": float(_tol)}
+            except ValueError:
+                pass
         self.keep_model_files = True
         # scenario
         self.scenario = SCENARIO_SUNNY
@@ -137,6 +148,7 @@ class RunSettings:
         self.impact_look_ahead_mi = 5.0
         self.structures = []             # structures.Structure
         self.road_lines = []             # road polylines in the work CRS (culvert guesses)
+        self.rail_lines = []             # rail polylines in the work CRS (gmsh embankment lines)
         self.culvert_candidates = []     # listed in culvert_candidates.csv; not cut into the DEM
         # culvert matching: inventory records (culvert_guess.inventory_record dicts, work CRS)
         # size a guess within culvert_match_m; matched guesses are cut into the DEM only
@@ -220,6 +232,9 @@ class RunSettings:
                          for p in np.asarray(ln)] for ln in (v or [])]
             elif k == "culvert_candidates":
                 continue
+            elif k == "rail_lines":
+                if v:
+                    d[k] = len(v)
             elif k == "culvert_inventory":
                 d[k] = len(v or [])
             elif k == "edits":
@@ -1251,6 +1266,12 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                   st.anuga_buffer_m, st.anuga_algorithm)
         ast.mesher = getattr(st, "anuga_mesher", "default") or "default"
         ast.gmsh = getattr(st, "anuga_gmsh", None)
+        # gmsh only: road / rail centrelines on an embankment become mesh lines
+        emb_kw = {}
+        if anmod.mesher_mode(ast) in anmod.GMSH_MESHERS:
+            emb_kw = {"embankment_lines": list(getattr(st, "road_lines", None) or [])
+                      + list(getattr(st, "rail_lines", None) or []),
+                      "terrain_read": terrain_src.read}
         width_m = max(3 * cs, inlet_w)
         hy_a, hy_nb_a = _with_flow(hy, amb_cms, sim_time), _with_flow(hy_nb, amb_cms, sim_time)
         a_runs = []
@@ -1262,7 +1283,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             an_env, outer, fine = anmod.run(
                 os.path.join(model_dir, "anuga"), dem_a, flooded, inflow_xy, direction, width_m,
                 hy_a, ast, aprog, cancel, log, structures=st.structures, initial_depth=init_grid,
-                refine_lines=st.refine_lines, reuse=reuse and k == 0)
+                refine_lines=st.refine_lines, reuse=reuse and k == 0, **emb_kw)
             a_runs.append({"buffer_m": ast.buffer_m, "stats": an_env.stats})
             warnings += [n for n in an_env.notes if n not in warnings]
             edge_ft = an_env.stats.get("max_edge_depth_ft", 0.0)
@@ -1278,6 +1299,13 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             ast.buffer_m *= 2
         state.save(anuga_done=True)
         report["anuga_runs"] = a_runs
+        anuga_mesh = _anuga_mesh_report(a_runs)
+        report["anuga_mesh"] = anuga_mesh
+        if anuga_mesh.get("rejected_line"):
+            line = anuga_mesh["rejected_line"]
+            if line in warnings:
+                warnings.remove(line)
+            warnings.insert(0, line)             # first in "Things to check"
         an_final = write_qa("", an_env, "anuga", init_grid)
         report["comparison"] = compare(lf_env, an_env, arrival_m)
         res.qa["diff"] = {}
@@ -1295,8 +1323,15 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                 os.path.join(model_dir, "anuga_base"), dem_a, fl_b, inflow_xy, direction,
                 width_m, hy_nb_a, ast, _span(progress, 82, 92), cancel, log,
                 structures=st.structures, initial_depth=init_grid, refine_lines=st.refine_lines,
-                reuse=reuse)
+                reuse=reuse, **emb_kw)
             lf_base_arrays = write_qa("_base", an_base_env, "anuga", init_grid)
+            bm = (an_base_env.stats or {}).get("mesh") or {}
+            report["anuga_mesh"]["baseline"] = bm
+            if bm.get("rejected") and bm.get("requested") in anmod.GMSH_MESHERS:
+                line = "no-breach baseline: " + anmod.rejected_line(bm["rejected"])
+                report["anuga_mesh"].setdefault("rejected_line", line)
+                if line not in warnings:
+                    warnings.insert(0, line)
 
     # --- v3.4.0: what the DEM conditioning did (report + manifest) -------------------------
     if isinstance(terrain_src, cond.ConditionedTerrain):
@@ -1443,6 +1478,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     }
     if "receptors" in report:
         summary["receptors_flooded"] = report["receptors"].get("receptors_flooded")
+    if report.get("anuga_mesh"):
+        summary["anuga_mesher"] = report["anuga_mesh"]["used"]
+        if report["anuga_mesh"].get("rejected_line"):
+            summary["anuga_mesh_rejected"] = report["anuga_mesh"]["rejected_line"]
     if "incremental" in report:
         summary["incremental_acres"] = report["incremental"]["acres_at_or_above"]
     if report.get("refine_near_dam", {}).get("applied"):
@@ -1836,6 +1875,28 @@ def _clean(model_dir):
                         pass
 
 
+def _anuga_mesh_report(a_runs):
+    """run_report["anuga_mesh"]: the mesher asked for and the one actually used (the last
+    ANUGA pass), every pass's mesh, and the 'gmsh mesh rejected: ...' line if any pass fell
+    back to the default mesh."""
+    meshes = [(r.get("stats") or {}).get("mesh") or {} for r in a_runs]
+    last = meshes[-1] if meshes else {}
+    out = {"requested": last.get("requested", "default"), "used": last.get("used", "default"),
+           "passes": meshes}
+    g = last.get("gmsh")
+    if g:
+        out["gmsh"] = g
+    if last.get("embankments"):
+        out["embankments"] = last["embankments"]
+    rej = [m.get("rejected") for m in meshes if m.get("rejected")
+           and m.get("requested") in ("gmsh", "gmsh_or_default")]
+    if rej:
+        from . import anuga_model as _am
+        out["rejected"] = rej[-1]
+        out["rejected_line"] = _am.rejected_line(rej[-1])
+    return out
+
+
 def render_report(r):
     s = r["summary"]
     h = r["hydrograph"]
@@ -1862,7 +1923,19 @@ def render_report(r):
         lines.append("| Near the dam (v3.4.0) | {} |".format(s["refine_near_dam"]))
     if s.get("buildings"):
         lines.append("| Buildings (v3.4.0) | {} |".format(s["buildings"]))
+    if s.get("anuga_mesher"):
+        am = r.get("anuga_mesh") or {}
+        g = am.get("gmsh") or {}
+        txt = s["anuga_mesher"]
+        if s["anuga_mesher"] == "gmsh" and g:
+            txt = "gmsh ({:,} triangles, smallest {:g} m2, minimum angle {:g} deg)".format(
+                g.get("triangles", 0), g.get("min_area_m2", 0), g.get("min_angle_deg", 0))
+        elif am.get("requested") not in (None, "default", s["anuga_mesher"]):
+            txt += " (asked for {})".format(am.get("requested"))
+        lines.append("| ANUGA mesh | {} |".format(txt))
     lines.append("")
+    if s.get("anuga_mesh_rejected"):
+        lines += ["## ANUGA mesh", "", "**" + s["anuga_mesh_rejected"] + "**", ""]
     warns = list(r.get("warnings") or [])
     cut = any("still" in w.lower() and ("advanc" in w.lower() or "moving" in w.lower() or "edge" in w.lower())
               for w in warns)
