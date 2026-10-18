@@ -396,8 +396,9 @@ def popup_window_shows_the_dam_and_opens_tools():
         assert dlg.status_label.text() == "Choose the Dams folder and the dam ID."
         assert dlg.lis_chip.text().startswith("LISFLOOD-FP ") and dlg.anuga_chip.text().startswith("ANUGA ")
         assert not dlg.suggest_btn.isEnabled() and not dlg.folder_btn.isEnabled()
+        RUN = {"CELL": 10.0, "DURATION_HR": 12.0, "DURATION_MAX_HR": 96.0}    # the window's run fields
         # a tool can be opened before a dam is chosen: the dialog's own empty fields
-        assert dlg._open_tool("rundam") is True and q.proc.DIALOGS[-1] == ("ndbreach:rundam", {})
+        assert dlg._open_tool("rundam") is True and q.proc.DIALOGS[-1] == ("ndbreach:rundam", RUN)
         dlg.dams_edit.setText(dams)
         dlg._changed()
         assert "Choose the Dams folder" in dlg.status_label.text()
@@ -406,7 +407,7 @@ def popup_window_shows_the_dam_and_opens_tools():
         assert "No folder for dam DWR-1 in the Dams folder yet" in dlg.status_label.text()
         assert dlg.suggest_label.text() == "Suggestion: Run the breach model." and dlg.suggest_btn.isEnabled()
         dlg._open_suggested()
-        assert q.proc.DIALOGS[-1] == ("ndbreach:rundam", {"DAMS_FOLDER": dams, "DAM_ID": "DWR-1"})
+        assert q.proc.DIALOGS[-1] == ("ndbreach:rundam", dict(RUN, DAMS_FOLDER=dams, DAM_ID="DWR-1"))
         # the DEM list holds the project's rasters; a choice reaches the tools and is saved
         cb = dlg.dem_combo
         assert [cb.itemText(i) for i in range(cb.count())] == ["(choose in the tool)", "Another DEM", "ND LiDAR 1m"]
@@ -415,7 +416,8 @@ def popup_window_shows_the_dam_and_opens_tools():
         dlg._open_tool("batch")
         assert q.proc.DIALOGS[-1] == ("ndbreach:batch", {"DAMS_FOLDER": dams, "DEM": "dem1"})
         saved = json.loads(q.project.entries[("NDBreachRunner", "state")])
-        assert saved == {"dams_folder": dams, "dam_id": "DWR-1", "dem": "dem1", "settings_file": ""}
+        assert saved == {"dams_folder": dams, "dam_id": "DWR-1", "dem": "dem1", "settings_file": "",
+                         "grid_m": 10.0, "simh": 12.0, "simmax": 96.0, "force_anuga": False}
         # the dam gets a folder: its contents are listed, the suggestion moves on
         f = make_dam(dams, "DWR-1")
         dlg.refresh()
@@ -562,7 +564,7 @@ def popup_adds_the_dams_results_styled_and_the_suite_home_opens():
         p.initGui()
         assert len(p.iface.menu) == 1                                  # single menu entry; the suite home opens from the window
         h = p.run_home()
-        assert h is p.home_dialog and h.isVisible() and "Opened from ND Dam Breach Runner" in h.plugins_label.text()
+        assert h is p.home_dialog and h.isVisible() and "Opened from DamSafety Runner" in h.plugins_label.text()
         h.dams_edit.setText(dams)
         h._changed()
         assert h.table.rowCount() == 1 and h.table.item(0, 0).text() == "DWR-1"
