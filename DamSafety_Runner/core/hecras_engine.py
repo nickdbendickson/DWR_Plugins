@@ -48,7 +48,9 @@ Settings (environment variables, or the `env` dict of each function):
     NDBREACH_HECRAS_LINUX_DIR    the unzipped Linux_RAS_v66 folder (bin/, libs/)
     NDBREACH_HECRAS_DISPLAY      X display for Wine (default :77; an Xvfb is NOT started here)
     NDBREACH_HECRAS_TCU_HOOK     optional, see above
-    NDBREACH_HECRAS_TIMEOUT_S    per-step timeout (default 1800)
+    NDBREACH_HECRAS_TIMEOUT_S    per-step timeout in s (preprocess steps: default 1800; the
+                                 RasUnsteady compute: default compute_timeout(), scaled to
+                                 the model); set, it overrides both
     NDBREACH_HECRAS_INFLOW_MODE  'auto' (default), 'hydrograph' or 'breach' (see write_project)
     NDBREACH_HECRAS_BASE_FLOW_CFS  base flow of the inflow hydrograph (default 0, see below)
     NDBREACH_HECRAS_TAIL         'recession' (default) or 'hold' (see inflow_series)
@@ -71,10 +73,13 @@ Inflow modes (write_project):
               breach on the SA/2D connection with the run's breach parameters and trigger
               (hecras_model.breach_block); no inflow BC.
 """
+import datetime
 import json
 import math
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -116,6 +121,151 @@ def _timeout(env):
         return float(_env(env).get(ENV_TIMEOUT) or 1800)
     except ValueError:
         return 1800.0
+
+
+def _timeout_override(env):
+    """NDBREACH_HECRAS_TIMEOUT_S as seconds, or None when unset / not a positive number."""
+    try:
+        v = float(_env(env).get(ENV_TIMEOUT) or 0)
+    except ValueError:
+        return None
+    return v if v > 0 else None
+
+
+# ---------------------------------------------------------------------------- compute time
+# RasUnsteady wall time ~ COMPUTE_K_S x cells x simulated seconds / base computation interval
+# (one core, SWE-ELM, adaptive Courant step; the base interval stands for the step HEC-RAS
+# starts from and halves/doubles around). Calibrated 2026-10-18 on this box (1 core):
+#   DWR-3161  68,949 cells, 32 h, 3 s base step: 65 % in 7,200 s -> ~11,100 s  k = 4.2e-6
+#   Absaraka  64,090 cells, 40 h, 6 s base step: ~21 min (1,260 s)             k = 0.8e-6
+# k is the slower of the two (a wet, flat tailwater keeps the adaptive step small); the
+# timeout is COMPUTE_SAFETY x the estimate, at least COMPUTE_MIN_S, at most COMPUTE_MAX_S.
+# The time step itself is never coarsened here: the adaptive Courant step governs.
+COMPUTE_K_S = 4.2e-6
+COMPUTE_SAFETY = 3.0
+COMPUTE_MIN_S = 2 * 3600.0
+COMPUTE_MAX_S = 48 * 3600.0
+
+
+def compute_estimate_s(cells, sim_hours, base_dt_s, k=COMPUTE_K_S):
+    """Estimated RasUnsteady wall time (s): k x cells x sim seconds / base step."""
+    return float(k) * float(cells) * float(sim_hours) * 3600.0 / max(float(base_dt_s), 1e-3)
+
+
+def compute_timeout(cells, sim_hours, base_dt_s, env=None):
+    """(timeout_s, estimate_s or None, how): NDBREACH_HECRAS_TIMEOUT_S when set, else
+    max(COMPUTE_MIN_S, COMPUTE_SAFETY x estimate) capped at COMPUTE_MAX_S; COMPUTE_MIN_S when
+    the model's size is not known."""
+    est = (compute_estimate_s(cells, sim_hours, base_dt_s)
+           if cells and sim_hours and base_dt_s else None)
+    ov = _timeout_override(env)
+    if ov is not None:
+        return ov, est, "{} (override)".format(ENV_TIMEOUT)
+    if est is None:
+        return COMPUTE_MIN_S, None, "default (model size unknown)"
+    t = min(max(COMPUTE_MIN_S, COMPUTE_SAFETY * est), COMPUTE_MAX_S)
+    how = "{:g} x the estimate, at least {:g} h, at most {:g} h".format(
+        COMPUTE_SAFETY, COMPUTE_MIN_S / 3600.0, COMPUTE_MAX_S / 3600.0)
+    return t, est, how
+
+
+def _interval_s(label):
+    """'3SEC' / '1MIN' / '1HOUR' -> seconds, or None."""
+    m = re.match(r"^\s*(\d+(?:\.\d+)?)\s*(SEC|MIN|HOUR|DAY)", str(label or "").upper())
+    if not m:
+        return None
+    return float(m.group(1)) * {"SEC": 1, "MIN": 60, "HOUR": 3600, "DAY": 86400}[m.group(2)]
+
+
+def plan_timing(project_dir, name, plan="01"):
+    """{'cells', 'sim_hours', 'base_dt_s'} of a project's plan (None for what is unknown):
+    the plan's Simulation Date and Computation Interval, the 2D cells of its geometry HDF
+    (else hecras_engine.json 'cells')."""
+    out = {"cells": None, "sim_hours": None, "base_dt_s": None}
+    geom = "01"
+    try:
+        with open(os.path.join(project_dir, "{}.p{}".format(name, plan)), encoding="ascii",
+                  errors="replace") as f:
+            txt = f.read()
+    except OSError:
+        txt = ""
+    for line in txt.splitlines():
+        k, _, v = line.partition("=")
+        if k == "Computation Interval":
+            out["base_dt_s"] = _interval_s(v)
+        elif k == "Simulation Date":
+            f_ = [x.strip() for x in v.split(",")]
+            try:
+                a = datetime.datetime.strptime(f_[0] + f_[1].zfill(4), "%d%b%Y%H%M")
+                b = datetime.datetime.strptime(f_[2] + f_[3].zfill(4), "%d%b%Y%H%M")
+                out["sim_hours"] = (b - a).total_seconds() / 3600.0
+            except (ValueError, IndexError):
+                pass
+        elif k == "Geom File":
+            geom = v.strip().lstrip("gG") or geom
+    st = geometry_hdf_state(os.path.join(project_dir, "{}.g{}.hdf".format(name, geom)))
+    if st["cells"] > 0:
+        out["cells"] = int(st["cells"])
+        return out
+    # no h5py / no HDF: the geometry text's 'Storage Area 2D Points=' (summed over 2D areas)
+    n = 0
+    try:
+        with open(os.path.join(project_dir, "{}.g{}".format(name, geom)), encoding="ascii",
+                  errors="replace") as f:
+            for line in f:
+                if line.startswith("Storage Area 2D Points="):
+                    try:
+                        n += int(line.split("=", 1)[1].strip() or 0)
+                    except ValueError:
+                        pass
+    except OSError:
+        pass
+    if n > 0:
+        out["cells"] = n
+        return out
+    try:
+        with open(os.path.join(project_dir, "hecras_engine.json"), encoding="utf-8") as f:
+            out["cells"] = json.load(f).get("cells")
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+_SIMTIME = re.compile(r"^\s*SIMTIME=\s*([0-9.Ee+-]+)\s*$", re.M)
+
+
+def last_simtime_hr(text):
+    """The last 'SIMTIME=' (hours into the simulation) RasUnsteady printed, or None."""
+    m = None
+    for m in _SIMTIME.finditer(text or ""):
+        pass
+    try:
+        return float(m.group(1)) if m else None
+    except ValueError:
+        return None
+
+
+def _hm(sec):
+    return "{:.0f} s ({:.1f} h)".format(sec, sec / 3600.0)
+
+
+def compute_timeout_message(timeout, elapsed, text, sim_hours, estimate=None):
+    """The error when RasUnsteady ran out of time: % done and the timeout that would do."""
+    t = last_simtime_hr(text)
+    frac = (t / sim_hours) if (t is not None and sim_hours) else None
+    msg = "Linux RasUnsteady did not finish in {}".format(_hm(timeout))
+    if frac and frac > 0:
+        need = elapsed / frac
+        sug = int(math.ceil(1.25 * need / 900.0) * 900)        # 25 % margin, 15 min steps
+        msg += (": it reached {:.2f} h of the {:g} h simulation ({:.0f} % done), so it needs "
+                "about {} in all. Set {}={} (or more) and re-run.".format(
+                    t, sim_hours, 100 * frac, _hm(need), ENV_TIMEOUT, sug))
+    else:
+        msg += (" and printed no simulation time (stuck before the unsteady computations?); "
+                "see run.log.")
+    if estimate:
+        msg += " (Estimate before the run: {}.)".format(_hm(estimate))
+    return msg
 
 
 # ============================================================================
@@ -599,6 +749,7 @@ def _write_engine_json(res, inflow_mode, inflow_bc, info):
     info = info or res.get("info") or {}
     with open(os.path.join(res["folder"], "hecras_engine.json"), "w", encoding="utf-8") as f:
         json.dump({"inflow_mode": inflow_mode, "inflow_bc": inflow_bc,
+                   "cells": info.get("cells"), "comp_interval": info.get("comp_interval"),
                    "inflow_mode_requested": res.get("inflow_mode_requested", inflow_mode),
                    "inflow_fallback": res.get("inflow_fallback"),
                    "time_step": info.get("time_step"), "sim_hours": info.get("sim_hours"),
@@ -649,6 +800,45 @@ def _run(cmd, cwd, env, timeout, what, ok=None, log=None):
                "exit 0 but it printed FAIL" if "FAIL" in text else
                "exit 0 but it never printed '{}'".format(ok))
         raise HecRasEngineError("{} failed ({}):\n{}".format(what, why, tail))
+    return text
+
+
+def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None):
+    """RasUnsteady with its output going to `log_path` as it runs (watchable); on a timeout
+    the process group is killed and compute_timeout_message() says how far it got."""
+    log = log or (lambda m: None)
+    what, ok = "Linux RasUnsteady", "Finished Unsteady Flow Simulation"
+    log("HEC-RAS: " + what)
+    t0 = time.time()
+    try:
+        with open(log_path, "w", errors="replace") as out:
+            p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT,
+                                 start_new_session=True)
+            try:
+                rc = p.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except (OSError, AttributeError):
+                    p.kill()
+                p.wait()
+                rc = None
+    except OSError as e:
+        raise HecRasEngineError("{} could not start: {}".format(what, e))
+    with open(log_path, errors="replace") as f:
+        text = f.read()
+    if rc is None:
+        msg = compute_timeout_message(timeout, time.time() - t0, text, sim_hours, estimate)
+        log("ERROR: " + msg)
+        raise HecRasEngineError(msg)
+    if rc != 0 or ok not in text or "FAIL" in text:
+        tail = "\n".join(text.strip().splitlines()[-8:])
+        why = ("exit {}".format(rc) if rc != 0 else
+               "exit 0 but it printed FAIL" if "FAIL" in text else
+               "exit 0 but it never printed '{}'".format(ok))
+        raise HecRasEngineError("{} failed ({}):\n{}".format(what, why, tail))
+    log("HEC-RAS compute: RasUnsteady finished in {}{}.".format(
+        _hm(time.time() - t0), " (estimate {})".format(_hm(estimate)) if estimate else ""))
     return text
 
 
@@ -981,10 +1171,16 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
     e["LD_LIBRARY_PATH"] = ":".join(os.path.join(L, s) for s in ("libs", "libs/mkl", "libs/rhel_8"))
     tmp = os.path.basename(ins[2])
     nice = ["nice", "-n", "19"] if shutil.which("nice") else []
-    text = _run(nice + [d["rasunsteady"], tmp, "x" + plan], work, e, _timeout(env),
-                "Linux RasUnsteady", ok="Finished Unsteady Flow Simulation", log=log)
-    with open(os.path.join(work, "run.log"), "w") as f:
-        f.write(text)
+    pt = plan_timing(project_dir, name, plan)
+    timeout, est, how = compute_timeout(pt["cells"], pt["sim_hours"], pt["base_dt_s"], env)
+    log("HEC-RAS compute: {} cells, {} h simulated, {} base step (adaptive Courant step "
+        "governs); estimated RasUnsteady time {}; timeout {} [{}].".format(
+            "{:,}".format(pt["cells"]) if pt["cells"] else "?",
+            "{:g}".format(pt["sim_hours"]) if pt["sim_hours"] else "?",
+            "{:g} s".format(pt["base_dt_s"]) if pt["base_dt_s"] else "?",
+            _hm(est) if est else "unknown", _hm(timeout), how))
+    text = _run_logged(nice + [d["rasunsteady"], tmp, "x" + plan], work, e, timeout,
+                       os.path.join(work, "run.log"), pt["sim_hours"], est, log=log)
     out = os.path.join(work, "{}.p{}.hdf".format(name, plan))
     os.replace(os.path.join(work, tmp), out)
     return out
