@@ -133,14 +133,42 @@ def resample_hydrograph(hy, dt_min=DEFAULT_STEP_MIN):
     return t / 3600.0, q_cfs, info
 
 
-def _field8(v, width=8):
-    """A number in a `width`-character field: as many decimals (up to 2) as fit."""
-    v = float(v)
-    for d in (2, 1, 0):
-        s = "{:.{}f}".format(v, d)
+class FixedWidthError(HecRasError):
+    """A number that does not fit a HEC-RAS fixed-width field."""
+
+
+def field8(v, width=8, max_decimals=2):
+    """`v` right-justified in exactly `width` characters (HEC-RAS's fixed-width tables:
+    .u## hydrographs, .g## elevation-volume and station-elevation tables, .p## breach
+    progression). As many decimals (up to `max_decimals`) as fit, then fewer:
+    12345.67 -> '12345.67', 123456.7 -> '123456.7', 1234567 -> ' 1234567'.
+
+    A field may use all `width` characters, so neighbouring values can touch
+    ('7895.8811063.36'); HEC-RAS reads these tables by column, and HEC's own example files
+    are written the same way (e.g. Example 18 InlineStructureE.u01, Baxter.u01). A value that
+    cannot be written in `width` characters even with no decimals raises FixedWidthError
+    (never an overflowing field or exponent notation, which would shift every later column).
+    NaN/inf raise too; callers that want a blank field pass None to their own wrapper."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        raise FixedWidthError("not a number for a HEC-RAS {}-character field: {!r}".format(
+            width, v))
+    if not math.isfinite(x):
+        raise FixedWidthError("{!r} cannot be written in a HEC-RAS {}-character field".format(
+            v, width))
+    for d in range(int(max_decimals), -1, -1):
+        s = "{:.{}f}".format(x, d)
+        if s.startswith("-") and float(s) == 0.0:
+            s = s[1:]                                   # no '-0.00'
         if len(s) <= width:
             return s.rjust(width)
-    return "{:.2e}".format(v).rjust(width)
+    raise FixedWidthError(
+        "{:g} does not fit in a HEC-RAS {}-character field (largest {}, smallest {}); "
+        "check the units or the value".format(x, width, "9" * width, "-" + "9" * (width - 1)))
+
+
+_field8 = field8                                   # older name, same formatter
 
 
 def flow_hydrograph_block(q_cfs, per_line=10, width=8, interval=None):
@@ -152,7 +180,7 @@ def flow_hydrograph_block(q_cfs, per_line=10, width=8, interval=None):
         lines.append("Interval={}".format(interval))
     lines.append("Flow Hydrograph= {}".format(len(q)))
     for i in range(0, len(q), per_line):
-        lines.append("".join(_field8(x, width) for x in q[i:i + per_line]))
+        lines.append("".join(field8(x, width) for x in q[i:i + per_line]))
     return "\n".join(lines) + "\n"
 
 

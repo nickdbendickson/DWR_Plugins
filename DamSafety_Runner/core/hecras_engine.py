@@ -7,7 +7,8 @@ paths never import this module.
                       RasMapperLib driver programs, the official Linux RasUnsteady, h5py
     write_project()   hecras_model.build_model() + (default) the run's breach hydrograph as a
                       2D flow-hydrograph boundary at the run's inflow point (the same forcing
-                      LISFLOOD-FP and ANUGA get), with the reservoir held below the weir
+                      LISFLOOD-FP and ANUGA get), to the end of the simulation, with the
+                      reservoir dry and no breach in the plan (see "Inflow modes" below)
     preprocess()      terrain HDF, geometry completion, terrain association, 2D property
                       tables (RasMapperLib drivers under Wine), then `Ras.exe -c` under Wine,
                       stopped as soon as the .b##/.x##/.p##.tmp.hdf run inputs exist
@@ -37,6 +38,22 @@ Settings (environment variables, or the `env` dict of each function):
     NDBREACH_HECRAS_DISPLAY      X display for Wine (default :77; an Xvfb is NOT started here)
     NDBREACH_HECRAS_TCU_HOOK     optional, see above
     NDBREACH_HECRAS_TIMEOUT_S    per-step timeout (default 1800)
+    NDBREACH_HECRAS_INFLOW_MODE  'hydrograph' (default) or 'breach' (see write_project)
+    NDBREACH_HECRAS_BASE_FLOW_CFS  base flow of the inflow hydrograph (default 0, see below)
+    NDBREACH_HECRAS_TAIL         'recession' (default) or 'hold' (see inflow_series)
+
+Inflow modes (write_project):
+  hydrograph  the run's breach hydrograph is a 2D flow-hydrograph BC at the run's inflow point
+              (the forcing LISFLOOD-FP and ANUGA get). The plan has NO breach and the
+              reservoir storage area starts DRY (the lowest elevation of its storage curve)
+              with no lateral inflow: the reservoir water is already in the hydrograph, so a
+              full pool would only be a second copy of it (any base flow into it, or any
+              downstream water above the crest, would spill over the weir and be counted
+              twice). The dam stays as the weir; water can only reach the dry storage area if
+              the 2D water surface rises above the dam crest.
+  breach      build_model's own dam-breach model: the pool at the run's starting level, the
+              breach on the SA/2D connection with the run's breach parameters and trigger
+              (hecras_model.breach_block); no inflow BC.
 """
 import json
 import math
@@ -61,6 +78,11 @@ WINDOWS_DEFAULT_SUB = os.path.join("drive_c", "HEC", "RAS66")
 INFLOW_BC_NAME = "Breach Inflow"
 INFLOW_BC_HALF_FT = 150.0          # half-length of the inflow BC line across the flow
 INFLOW_BC_SLOPE = 0.001            # energy slope HEC-RAS distributes the inflow with
+ENV_MODE = "NDBREACH_HECRAS_INFLOW_MODE"
+ENV_BASE = "NDBREACH_HECRAS_BASE_FLOW_CFS"
+ENV_TAIL = "NDBREACH_HECRAS_TAIL"
+INFLOW_MODES = ("hydrograph", "breach")
+TAILS = ("recession", "hold")
 HDF_NAME = "{name}.p01.hdf"
 
 
@@ -221,29 +243,151 @@ def drop_breach_from_plan(text, cr="\r\n"):
 
 
 def hydrograph_series(hy, units_flow, dt_min=hecras.DEFAULT_STEP_MIN):
-    """(interval label, values in project flow units) of the Runner's breach hydrograph."""
+    """(interval label, values in project flow units) of the Runner's breach hydrograph,
+    on the record only (no extension; see inflow_series)."""
     from .units import CFS
     _t_hr, q_cfs, _info = hecras.resample_hydrograph(hy, dt_min)
     return hecras.ras_interval_label(dt_min), [round(units_flow(float(v) * CFS), 2)
                                                for v in q_cfs]
 
 
-def write_project(dam_folder, out_folder=None, options=None, inflow_mode="hydrograph",
-                  build=None, load=None, log=None):
-    """Builds the HEC-RAS project of a finished run (hecras_model.build_model) and, with
-    inflow_mode 'hydrograph' (default), forces it with the run's breach hydrograph at the
-    run's inflow point, as LISFLOOD-FP and ANUGA are. 'breach' keeps build_model's storage
-    area + SA/2D breach. Returns build_model's dict plus 'inflow_mode' and 'inflow_bc'."""
+class _Record:
+    def __init__(self, t_s, q_cms, t_ref_s=0.0):
+        self.t_s, self.q_cms, self.t_ref_s = t_s, q_cms, t_ref_s
+
+
+def extended_record(hy, sim_hours, base_flow_cfs=0.0, tail="recession"):
+    """The breach hydrograph from time 0 to the end of the simulation (sim_hours), never
+    stepping to zero. The record's trailing zero (the Runner ends its hydrograph when the
+    reservoir is empty: Absaraka 250 -> 0 cfs at 2.47 h) is dropped and, after the last
+    positive value q_last at t_last:
+      'recession' (default)  q_last decays to the base flow at the record's own recession
+                             rate (k from the falling limb: q halves as it did before t_last),
+                             then the base flow is held; adds little volume.
+      'hold'                 the base flow is held, or q_last when no base flow is set (adds
+                             q_last x the remaining time: Absaraka ~300 cfs x 37.5 h = ~930
+                             ac-ft, more than half the breach volume - use it knowingly).
+    Every value is at least the base flow. Returns (record, info)."""
+    from .units import CFS
+    if tail not in TAILS:
+        raise HecRasEngineError("tail must be one of " + ", ".join(TAILS))
+    base = max(float(base_flow_cfs or 0.0), 0.0) * CFS
+    t = np.asarray(hy.t_s, dtype=float)
+    q = np.clip(np.asarray(hy.q_cms, dtype=float), 0.0, None)
+    end_s = float(sim_hours) * 3600.0
+    pos = np.nonzero(q > 0)[0]
+    if not len(pos):
+        raise HecRasEngineError("the breach hydrograph has no flow")
+    il = int(pos[-1])
+    t_last, q_last = float(t[il]), float(q[il])
+    t, q = t[:il + 1], q[:il + 1]
+    ip = int(np.argmax(q))
+    k = None
+    if tail == "recession" and il > ip:
+        # the recession rate over the last halving of the falling limb
+        j = ip
+        for jj in range(il - 1, ip - 1, -1):
+            if q[jj] >= 2.0 * q_last:
+                j = jj
+                break
+        if t_last > t[j] and q[j] > q_last:
+            k = math.log(q[j] / q_last) / (t_last - t[j])
+    if tail == "recession" and not (k and k > 0):
+        k = math.log(2.0) / max(t_last - float(t[ip]), 600.0)
+    hold = base if (tail == "recession" or base > 0) else q_last
+    if end_s > t_last:
+        dt = 60.0
+        tt = t_last + np.arange(1, int(math.ceil((end_s - t_last) / dt)) + 1) * dt
+        tt[-1] = max(tt[-1], end_s)
+        if tail == "recession" and q_last > hold:
+            qq = hold + (q_last - hold) * np.exp(-k * (tt - t_last))
+        else:
+            qq = np.full(len(tt), hold)
+        t, q = np.concatenate([t, tt]), np.concatenate([q, qq])
+    q = np.maximum(q, base)
+    rec = _Record(t, q, float(getattr(hy, "t_ref_s", 0.0) or 0.0))
+    vol = (lambda tt_, qq_: float(np.trapezoid(qq_, tt_)) if hasattr(np, "trapezoid")
+           else float(np.trapz(qq_, tt_)))
+    v0 = vol(np.asarray(hy.t_s, float), np.clip(np.asarray(hy.q_cms, float), 0, None))
+    from .units import ACFT
+    info = {"tail": tail, "base_flow_cfs": base / CFS, "record_end_hr": t_last / 3600.0,
+            "last_flow_cfs": q_last / CFS, "held_cfs": hold / CFS,
+            "recession_per_hr": (k * 3600.0 if (tail == "recession" and k) else None),
+            "volume_record_acft": v0 / ACFT, "volume_extended_acft": vol(t, q) / ACFT}
+    return rec, info
+
+
+def inflow_series(hy, units_flow, sim_hours, dt_min=hecras.DEFAULT_STEP_MIN, base_flow_cfs=0.0,
+                  tail="recession"):
+    """(interval label, values in project flow units, info): the breach hydrograph on the
+    HEC-RAS data interval from the simulation start to its end - exactly
+    sim_hours * 60 / dt_min + 1 values - with the tail of extended_record()."""
+    from .units import ACFT, CFS
+    lab = hecras.ras_interval_label(dt_min)
+    if lab is None:
+        raise HecRasEngineError("{:g} min is not a HEC-RAS data interval".format(dt_min))
+    rec, info = extended_record(hy, sim_hours, base_flow_cfs, tail)
+    _t_hr, q_cfs, rinfo = hecras.resample_hydrograph(rec, dt_min)
+    n = int(round(float(sim_hours) * 60.0 / float(dt_min))) + 1
+    q_cfs = np.asarray(q_cfs, float)[:n]
+    if len(q_cfs) < n:
+        q_cfs = np.concatenate([q_cfs, np.full(n - len(q_cfs), q_cfs[-1])])
+    info.update({"interval": lab, "n": n, "dt_min": float(dt_min),
+                 "sim_hours": float(sim_hours), "end_hr": (n - 1) * float(dt_min) / 60.0,
+                 "volume_exported_acft": rinfo["volume_exported_acft"],
+                 "first_cfs": float(q_cfs[0]), "final_cfs": float(q_cfs[-1])})
+    return lab, [round(units_flow(float(v) * CFS), 2) for v in q_cfs], info
+
+
+def _mode(inflow_mode, env):
+    m = (inflow_mode or (_env(env).get(ENV_MODE) or "").strip().lower() or "hydrograph")
+    if m not in INFLOW_MODES:
+        raise HecRasEngineError("inflow_mode must be 'hydrograph' or 'breach' (got {!r}; "
+                                "{})".format(m, ENV_MODE))
+    return m
+
+
+def _float_env(env, key, default):
+    v = (_env(env).get(key) or "").strip()
+    if not v:
+        return default
+    try:
+        return float(v)
+    except ValueError:
+        raise HecRasEngineError("{}={!r} is not a number".format(key, v))
+
+
+def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
+                  build=None, load=None, log=None, env=None, base_flow_cfs=None, tail=None):
+    """Builds the HEC-RAS project of a finished run (hecras_model.build_model). inflow_mode
+    (default NDBREACH_HECRAS_INFLOW_MODE, else 'hydrograph'): see the module docstring.
+    'hydrograph' forces the 2D area with the run's breach hydrograph at the run's inflow
+    point from the simulation start to its end (inflow_series), with a dry reservoir and no
+    breach; 'breach' keeps build_model's storage area + SA/2D breach unchanged. Returns
+    build_model's dict plus 'inflow_mode' and 'inflow_bc'."""
     from . import hecras_model as hm
+    import copy
     build = build or hm.build_model
     load = load or hecras.load_run
     log = log or (lambda m: None)
-    if inflow_mode not in ("hydrograph", "breach"):
-        raise HecRasEngineError("inflow_mode must be 'hydrograph' or 'breach'")
+    inflow_mode = _mode(inflow_mode, env)
+    if base_flow_cfs is None:
+        base_flow_cfs = _float_env(env, ENV_BASE, None)
+    if base_flow_cfs is None:
+        base_flow_cfs = float((options or {}).get("base_flow_cfs") or 0.0)
+    tail = (tail or (_env(env).get(ENV_TAIL) or "").strip().lower() or "recession")
+    if tail not in TAILS:
+        raise HecRasEngineError("tail must be 'recession' or 'hold' (got {!r}; {})".format(
+            tail, ENV_TAIL))
     res = build(dam_folder, out_folder, options=options, log=log)
     res["inflow_mode"] = inflow_mode
     res["inflow_bc"] = None
     if inflow_mode == "breach":
+        b = res["model"].breach or {}
+        log("HEC-RAS inflow: dam breach in the plan (SA/2D connection, trigger water surface "
+            "{}); the reservoir starts at {}.".format(b.get("trigger_wse"),
+                                                       res["model"].initial_wse))
+        _write_engine_json(res, inflow_mode, None, None)
         return res
     m, info, paths = res["model"], res["info"], res["paths"]
     xy = info.get("inflow_xy_model")
@@ -257,16 +401,21 @@ def write_project(dam_folder, out_folder=None, options=None, inflow_mode="hydrog
         direction = np.array([-along[1], along[0]])
     line = inflow_bc_line(xy, direction)
     hy = load(dam_folder)[0]
-    interval, vals = hydrograph_series(hy, m.units.flow)
+    interval, vals, sinfo = inflow_series(hy, m.units.flow, m.sim_hours,
+                                          base_flow_cfs=base_flow_cfs, tail=tail)
     with open(paths["g01"], encoding="ascii", newline="") as f:
         g = f.read()
     g = add_inflow_to_geometry(g, inflow_bc_geometry_lines(line, hm.AREA_NAME, hm.num,
                                                            hm.lines_xy, hm.name32, hm.name16))
-    with open(paths["u01"], encoding="ascii", newline="") as f:
-        u = f.read()
-    hold = min(e for _, e in m.weir) if m.weir else None
+    # the reservoir: dry, no lateral inflow (its water is in the hydrograph)
+    dry = copy.copy(m)
+    dry_wse = (min(e for e, _ in m.elev_volume) if m.elev_volume else
+               (min(e for _, e in m.weir) if m.weir else m.initial_wse))
+    dry.initial_wse = dry_wse
+    dry.inflow, dry.base_flow = None, 0.0
+    u = hm.unsteady_text(dry)
     u = add_inflow_to_unsteady(u, inflow_unsteady_lines(hm.AREA_NAME, interval, vals, hm.lines8,
-                                                        hm.name16, hm.name32), hold)
+                                                        hm.name16, hm.name32))
     with open(paths["p01"], encoding="ascii", newline="") as f:
         p = f.read()
     p = drop_breach_from_plan(p)
@@ -275,15 +424,25 @@ def write_project(dam_folder, out_folder=None, options=None, inflow_mode="hydrog
             f.write(t)
     res["inflow_bc"] = {"line": [list(map(float, q)) for q in line], "interval": interval,
                         "n": len(vals), "peak": max(vals) if vals else 0.0,
-                        "t_ref_hr": float(getattr(hy, "t_ref_s", 0.0) or 0.0) / 3600.0}
+                        "t_ref_hr": float(getattr(hy, "t_ref_s", 0.0) or 0.0) / 3600.0,
+                        "reservoir_initial_wse": dry_wse, "series": sinfo}
+    _write_engine_json(res, inflow_mode, res["inflow_bc"], info)
+    log("HEC-RAS inflow: breach hydrograph ({} values at {}, 0 to {:g} h; after the record "
+        "({:.2f} h) '{}' tail to {:.1f} cfs; volume {:.1f} ac-ft vs the record's {:.1f}) on a "
+        "BC line at the run's inflow point; the reservoir starts dry ({:.2f}) and the plan has "
+        "no breach.".format(len(vals), interval, sinfo["end_hr"], sinfo["record_end_hr"], tail,
+                            sinfo["final_cfs"], sinfo["volume_exported_acft"],
+                            sinfo["volume_record_acft"], dry_wse))
+    return res
+
+
+def _write_engine_json(res, inflow_mode, inflow_bc, info):
+    info = info or res.get("info") or {}
     with open(os.path.join(res["folder"], "hecras_engine.json"), "w", encoding="utf-8") as f:
-        json.dump({"inflow_mode": inflow_mode, "inflow_bc": res["inflow_bc"],
+        json.dump({"inflow_mode": inflow_mode, "inflow_bc": inflow_bc,
+                   "time_step": info.get("time_step"), "sim_hours": info.get("sim_hours"),
                    "model_wkt": info.get("model_wkt"), "work_wkt": info.get("work_wkt")},
                   f, indent=1)
-    log("HEC-RAS inflow: breach hydrograph ({} values, {}) on a BC line at the run's inflow "
-        "point; the reservoir is held at the weir crest and the plan has no breach."
-        .format(len(vals), interval))
-    return res
 
 
 # ============================================================================
