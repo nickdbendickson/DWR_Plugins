@@ -33,6 +33,7 @@ class NDdamHazardHelperPlugin(QObject):
         self.iface = iface
         self.action = None
         self.dialog = None
+        self.home_action = None
         self.home_dialog = None
         self.provider = None
         self._versions_checked = False
@@ -73,6 +74,11 @@ class NDdamHazardHelperPlugin(QObject):
 
         # Add to Plugins Menu
         self.iface.addPluginToMenu("Dam safety", self.action)
+        # v2.12: the Dam suite home (the same window in all three plugins)
+        self.home_action = QAction(icon, "Dam suite home...", self.iface.mainWindow())
+        self.home_action.setObjectName("NDDamHazardSuiteHomeAction")
+        self.home_action.triggered.connect(self.run_home)
+        self.iface.addPluginToMenu("Dam safety", self.home_action)
 
         # Optional: Add to a custom toolbar (uncomment if you want a dedicated toolbar)
         # self.iface.addToolBarIcon(self.action)
@@ -197,6 +203,14 @@ class NDdamHazardHelperPlugin(QObject):
                 pass
             self.action.deleteLater()
             self.action = None
+        if self.home_action is not None:
+            try:
+                self.iface.removePluginMenu("Dam safety", self.home_action)
+                self.home_action.triggered.disconnect(self.run_home)
+            except (RuntimeError, TypeError, AttributeError):
+                pass
+            self.home_action.deleteLater()
+            self.home_action = None
         if self.home_dialog is not None:
             try:
                 self.home_dialog.close()

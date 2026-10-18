@@ -40,7 +40,11 @@ def governing_reason(reasons):
 
 
 def _raise(level, new):
-    return new if ND_RANK[new] > ND_RANK[level] else level
+    # M1: an empty inventory classifies as "Not classified", a value not in
+    # ND_RANK. Treat an unknown class as below Low (rank -1) so a criterion
+    # added afterwards (flooded lifeline facility, sole-access cut-off) can
+    # still raise it, instead of a KeyError here.
+    return new if ND_RANK.get(new, -1) > ND_RANK.get(level, -1) else level
 
 
 def _drop_low_reason(nd):
@@ -50,8 +54,10 @@ def _drop_low_reason(nd):
 
 
 def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
-                roads_evaluated=True, rail_evaluated=True):
-    """Returns dict(cls, reasons[], judgment[], counts{})."""
+                roads_evaluated=True, rail_evaluated=True, structs_evaluated=True):
+    """Returns dict(cls, reasons[], judgment[], counts{}). v2.19.0: `structs_evaluated`
+    False (no structure layer was given or downloaded) shows the structure rows as
+    "not evaluated" instead of "not met" and marks the class incomplete."""
     # An empty inventory is not a Low dam. Low is only after structures,
     # roads and rail were actually tested.
     if not structs and not roads and not rails:
@@ -60,6 +66,9 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
                             "Low is used only after those layers are tested."],
                 "judgment": ["Load the suite folder or a structure layer and run again."],
                 "criteria": [], "struct_items": 0,
+                "incomplete": [n for n, ok in (("structures", structs_evaluated),
+                                               ("roads", roads_evaluated),
+                                               ("railroads", rail_evaluated)) if not ok],
                 "counts": {"habitable_probable": 0, "habitable_judgment": 0,
                            "habitable_inundated": 0, "lifeline": 0,
                            "roads_high": 0, "roads_medium": 0, "rail": 0, "rail_high": 0,
@@ -152,6 +161,10 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
                         "{}".format(
                             len(rail_unknown), examples(rail_unknown, lambda r: "{} {} ({})".format(
                                 r["railroad"], r["subdivision"], r.get("nd_basis", "")).strip())))
+    if not structs_evaluated:
+        judgment.append("No structure layer was evaluated (none given, none downloaded) - the "
+                        "habitable-structure criteria (5.2.1.1, 5.2.2) were not applied, so "
+                        "the class is a minimum and may be higher")
     if not roads_evaluated:
         judgment.append("No road layer was evaluated - ND road criteria (5.2.1.2) not applied")
     if not rail_evaluated:
@@ -164,7 +177,9 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
                     "Inventory of Dams when downloaded) must be reviewed by the engineer")
     if not reasons:
         reasons.append("LOW - no habitable structures, roads (AADT >= 500 / highways) or "
-                       "railroads affected")
+                       "railroads affected" if structs_evaluated else
+                       "LOW SO FAR - no roads (AADT >= 500 / highways) or railroads affected "
+                       "in the layers given; habitable structures were NOT evaluated")
 
     # ---- criteria table (report / summary): one row per ND 5.2 criterion ----
     def persons(items):
@@ -174,12 +189,16 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
         return result if n else "not met"
     rail_other = [r for r in rails if r["nd_class"] != ND_HIGH]
     no_aadt = [r for r in roads if r.get("nd_judgment")]
+    se = structs_evaluated
     crit = [
         ("5.2.1.1", "Probable loss of life - habitable structures {}".format(
             "with depth > 2 ft (1D model)" if one_d else "in the ACER high danger zone"),
-         "{} ({} persons)".format(len(probable), persons(probable)), met(probable, ND_HIGH)),
+         "{} ({} persons)".format(len(probable), persons(probable)) if se else "not evaluated",
+         met(probable, ND_HIGH) if se else "?"),
         ("5.2.1.1", "Habitable structures in the ACER judgment zone",
+         "not evaluated" if not se else
          "n/a (1D model)" if one_d else "{} ({} persons)".format(len(judg), persons(judg)),
+         "?" if not se else
          "not met" if not judg else (ND_HIGH + " (judgment counted)" if judgment_as_probable
                                      else "Judgment")),
         ("5.2.1.2", "Overtopped roads - Interstate or AADT > 2,000",
@@ -198,15 +217,20 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
          "{} stretch(es)".format(len(rail_other)) if rail_evaluated else "not evaluated",
          met(rail_other, ND_MEDIUM) if rail_evaluated else "?"),
         ("5.2.2", "Habitable structures inundated (economic loss)",
-         "{} ({} persons)".format(len(econ), persons(econ)), met(econ, ND_MEDIUM)),
+         "{} ({} persons)".format(len(econ), persons(econ)) if se else "not evaluated",
+         met(econ, ND_MEDIUM) if se else "?"),
         ("5.2.2", "Possible lifeline facilities inundated",
-         "{}".format(len(lifeline)), met(lifeline, ND_MEDIUM + " (verify)")),
+         "{}".format(len(lifeline)) if se else "not evaluated",
+         met(lifeline, ND_MEDIUM + " (verify)") if se else "?"),
         ("5.2.1.1", "Unverified structures (habitability unknown) in high / judgment zones",
-         "{}".format(len(unverified)), met(unverified, "Judgment")),
+         "{}".format(len(unverified)) if se else "not evaluated",
+         met(unverified, "Judgment") if se else "?"),
     ]
     criteria = [{"section": a, "criterion": b, "found": c, "result": d} for a, b, c, d in crit]
+    incomplete = [n for n, ok in (("structures", structs_evaluated), ("roads", roads_evaluated),
+                                  ("railroads", rail_evaluated)) if not ok]
     return {"cls": cls, "reasons": reasons, "judgment": judgment, "criteria": criteria,
-            "struct_items": n_struct_items,
+            "struct_items": n_struct_items, "incomplete": incomplete,
             "counts": {
                 "habitable_probable": len(probable), "habitable_judgment": len(judg),
                 "habitable_inundated": len(econ), "lifeline": len(lifeline),
