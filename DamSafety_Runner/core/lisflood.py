@@ -166,24 +166,34 @@ def raise_crest(dem, crest_xy, inflow_xy, top_m, length_m=200.0, width_m=12.0,
         vx, vy = vx / n, vy / n
         half = max(length_m, dem.dx) / 2.0
     data = dem.data
-    nraise = 0
-    for r in range(data.shape[0]):
-        for c in range(data.shape[1]):
-            x, y = dem.xy(r, c)
-            if use_line:
-                hit = _near_line(x, y, line_xy, max(width_m, dem.dx))
+    # Evaluate the same hit test on every cell at once with numpy instead of a
+    # per-cell Python double loop. x_centers()/y_centers() give the identical
+    # cell-centre coordinates dem.xy(r, c) returns, and the arithmetic mirrors
+    # the scalar path (and _near_line) exactly, so the raised DEM and the count
+    # are byte-identical to the loop -- only faster.
+    xs = dem.x_centers()[None, :]            # cell-centre x per column, shape (1, nx)
+    ys = dem.y_centers()[:, None]            # cell-centre y per row, shape (ny, 1)
+    if use_line:
+        half_line = max(width_m, dem.dx) / 2.0
+        hit = np.zeros(data.shape, dtype=bool)
+        pts = list(line_xy)
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            sx, sy = x1 - x0, y1 - y0
+            L2 = sx * sx + sy * sy
+            if L2 == 0:
+                t = 0.0
             else:
-                dx, dy = x - crest_xy[0], y - crest_xy[1]
-                along = dx * px + dy * py
-                across = abs(dx * vx + dy * vy)
-                hit = abs(along) <= half and across <= width_m / 2.0
-            if not hit:
-                continue
-            z = data[r, c]
-            if z == z and z < top_m:
-                data[r, c] = top_m
-                nraise += 1
-    return nraise
+                t = np.clip(((xs - x0) * sx + (ys - y0) * sy) / L2, 0.0, 1.0)
+            d = ((xs - (x0 + t * sx)) ** 2 + (ys - (y0 + t * sy)) ** 2) ** 0.5
+            hit |= d <= half_line
+    else:
+        dx, dy = xs - crest_xy[0], ys - crest_xy[1]
+        along = dx * px + dy * py
+        across = np.abs(dx * vx + dy * vy)
+        hit = (np.abs(along) <= half) & (across <= width_m / 2.0)
+    raise_mask = hit & (data == data) & (data < top_m)
+    data[raise_mask] = top_m
+    return int(np.count_nonzero(raise_mask))
 
 def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflow_line=None):
     os.makedirs(workdir, exist_ok=True)

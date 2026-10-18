@@ -67,6 +67,11 @@ class NDBreachRunnerPlugin:
         self.action.triggered.connect(self.run_plugin)
         self.iface.addPluginToMenu(MENU, self.action)
         self.actions.append(self.action)
+        self.home_action = QAction("Dam suite home...", self.iface.mainWindow())
+        self.home_action.setObjectName("NDBreachRunnerHomeAction")
+        self.home_action.triggered.connect(self.run_home)
+        self.iface.addPluginToMenu(MENU, self.home_action)
+        self.actions.append(self.home_action)
 
     def run_settings(self, *args):
         """Open the window on its Settings tab (the suite settings grid)."""

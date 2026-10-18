@@ -40,6 +40,7 @@ System'); the default, when none is found, is US customary. Everything returned 
 ft/s and hours.
 """
 import csv
+import datetime
 import math
 import json
 import os
@@ -527,7 +528,19 @@ def write_ras_project(dam_folder, out, hydro, dam, params, model_folder=MODEL_FO
         q_cfs = [float(ln.split(",")[1]) for ln in
                  open(hydro["csv"], encoding="utf-8").read().splitlines()[1:] if ln.strip()]
     block = flow_hydrograph_block([units.flow(float(q) * CFS) for q in q_cfs])
-    hours = hydro["info"].get("duration_hr") or hydro["info"].get("hours") or 12
+    # Size the plan window to the run's actual simulation duration -- the span of the exported
+    # breach hydrograph -- so the whole flood is simulated. The resample info dict carries no
+    # duration, so the old 'hours or 12' default always resolved to 12 and wrote a fixed 13 h
+    # window, truncating longer breach floods. Take the duration from the hydrograph itself (its
+    # final time), falling back to the reported duration_hr then 12, and let the end date roll
+    # past a single day (ported from core/hecras_model.ras_date) so long floods are not clipped.
+    t_hr = hydro.get("t_hr")
+    if t_hr is not None and len(t_hr):
+        sim_hr = float(t_hr[-1])
+    else:
+        sim_hr = float(hydro["info"].get("duration_hr") or (params or {}).get("duration_hr") or 12)
+    end_dt = (datetime.datetime(2024, 1, 1)
+              + datetime.timedelta(hours=max(1, int(math.ceil(sim_hr))) + 1))
     unsteady = os.path.join(out, name + ".u01")
     with open(unsteady, "w", encoding="utf-8", newline="") as f:
         f.write("Flow Title={}\nProgram Version=6.31\n".format(name))
@@ -538,7 +551,8 @@ def write_ras_project(dam_folder, out, hydro, dam, params, model_folder=MODEL_FO
     plan = os.path.join(out, name + ".p01")
     with open(plan, "w", encoding="utf-8", newline="") as f:
         f.write("Plan Title={}\nProgram Version=6.31\nShort Identifier=Breach\n".format(name))
-        f.write("Simulation Date=01Jan2024,0000,01Jan2024,{:02d}00\n".format(min(23, int(hours) + 1)))
+        f.write("Simulation Date=01Jan2024,0000,{},{}\n".format(
+            end_dt.strftime("%d%b%Y"), end_dt.strftime("%H%M")))
         f.write("Computation Interval=1MIN\nOutput Interval=15MIN\nMapping Interval=15MIN\n")
         f.write("Geometry File={}.g01\nFlow File={}.u01\n".format(name, name))
         f.write("{}\n".format(units.label))

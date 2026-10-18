@@ -743,3 +743,44 @@ def hecras_import_algorithm_runs_with_and_without_benchmark():
                     assert "Cells Minimum Elevation" in str(e)
     finally:
         shutil.rmtree(d)
+
+
+@test
+def hecras_plan_window_covers_the_whole_breach_flood():
+    """M12 regression: the generated HEC-RAS plan simulation window must span the run's actual
+    breach hydrograph, not a fixed 13 h. write_ras_project read hydro['info']['duration_hr'], a
+    key the resample info never has, so `hours` always fell back to 12 and every plan ran
+    01Jan2024 00:00 -> 01Jan2024 13:00 (min(23, 12 + 1)); HEC-RAS then truncated any flood longer
+    than that. The window now follows the exported hydrograph's final time and the end date rolls
+    across days, so a long flood is simulated in full."""
+    import datetime as _dt
+    d = tempfile.mkdtemp()
+    old = hecras._raster_linear_unit_m
+    try:
+        hecras._raster_linear_unit_m = lambda p: FT          # feet CRS -> English model
+        # a breach hydrograph that lasts ~30 h, well past the old 13 h cap
+        t_s = np.linspace(0.0, 30.0 * 3600.0, 61)
+        q_cms = np.concatenate([np.linspace(0.0, 500.0, 20), np.linspace(500.0, 0.0, 41)])
+        hy = br.Hydrograph(t_s, q_cms, br.METHOD_PIPING)
+        m = os.path.join(d, hecras.MODEL_FOLDER)
+        os.makedirs(m)
+        hy.to_csv(os.path.join(m, hecras.HYDROGRAPH_CSV))
+        json.dump({"dam": br.dam_to_dict(_dam()), "hydrograph": hy.summary()},
+                  open(os.path.join(m, hecras.RUN_REPORT_JSON), "w"))
+        pts = np.array([[1500000.0 + i * 160.0, 500000.0] for i in range(6)], dtype=float)
+        np.savetxt(os.path.join(m, "flow_trace.csv"), pts, delimiter=",",
+                   header="x,y", comments="", fmt="%.2f")
+        r = hecras.export_run(d, None, 5)
+        plan = open(r["plan"], encoding="utf-8").read()
+        line = [ln for ln in plan.splitlines() if ln.startswith("Simulation Date=")][0]
+        sd, stime, ed, etime = line.split("=", 1)[1].split(",")
+        start = _dt.datetime.strptime(sd + stime, "%d%b%Y%H%M")
+        end = _dt.datetime.strptime(ed + etime, "%d%b%Y%H%M")
+        window_hr = (end - start).total_seconds() / 3600.0
+        assert end > start, line
+        # must cover the whole ~30 h flood (the bug produced a fixed 13 h window)
+        assert window_hr >= 30.0, (line, window_hr)
+        assert window_hr <= 33.0, (line, window_hr)          # and not absurdly padded
+    finally:
+        hecras._raster_linear_unit_m = old
+        shutil.rmtree(d)

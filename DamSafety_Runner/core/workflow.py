@@ -614,19 +614,25 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         if err:
             raise brmod.BreachInputError("{}: {}".format(dam.dam_id, err))
     else:
+        # the 98th percentile of the DEM within 30 m, not the single highest cell (nanmax):
+        # nanmax can latch onto a nearby hill, road embankment or spike and read the crest
+        # several feet high (matching the Screener's estimate_storage percentile approach)
         sel = np.hypot(X - dam_xy[0], Y - dam_xy[1]) <= 30.0
-        crest_dem_ft = float(np.nanmax(z[sel])) / FT if np.isfinite(z[sel]).any() else None
+        fin_z = z[sel & np.isfinite(z)]
+        crest_dem_ft = float(np.nanpercentile(fin_z, 98)) / FT if fin_z.size else None
         if crest_dem_ft is None:
             raise brmod.BreachInputError("{}: no DEM data at the dam point".format(dam.dam_id))
+        report["dem_crest_from"] = "DEM near the dam point (98th percentile, 30 m)"
     report["dem_crest_ft"] = round(crest_dem_ft, 2)
     if not spec and dam.top_of_dam_ft is not None and dam.dam_height_ft:
         diff = crest_dem_ft - dam.top_of_dam_ft
         if abs(diff) > max(0.6 * dam.dam_height_ft, 8.0):
-            msg = ("{}: the highest DEM point within 30 m of the dam point is {:.1f} ft but the "
+            msg = ("{}: the crest read from the DEM ({}) is {:.1f} ft but the "
                    "top of dam is {:.1f} ft (difference {:+.1f} ft, dam height {:.1f} ft). "
                    "The inventory crest is kept. Check the datum and that the point is on the "
                    "crest. DEM units: {}."
-                   ).format(dam.dam_id, crest_dem_ft, dam.top_of_dam_ft, diff,
+                   ).format(dam.dam_id, report.get("dem_crest_from", "DEM near the dam point"),
+                            crest_dem_ft, dam.top_of_dam_ft, diff,
                             dam.dam_height_ft, z_note or "unknown")
             warnings.append(msg)
             report["crest_source"] = "inventory crest; DEM near the point differs"
@@ -641,9 +647,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     top_from_dem = dam.top_of_dam_ft is None
     if dam.top_of_dam_ft is None:
         dam.top_of_dam_ft = crest_dem_ft
-        warnings.append("Top of dam not given: taken as the highest DEM point within 30 m of "
-                        "the dam point ({:.1f} ft). Check it against the as-built crest."
-                        .format(dam.top_of_dam_ft))
+        warnings.append("Top of dam not given: estimated from the {} ({:.1f} ft). Check it "
+                        "against the as-built crest.".format(
+                            report.get("dem_crest_from", "DEM near the dam point"),
+                            dam.top_of_dam_ft))
         report["dam"]["top_of_dam_ft"] = dam.top_of_dam_ft
 
     # --- breach hydrograph(s) ------------------------------------------------------
@@ -664,7 +671,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             warnings += fr.notes
             if st.dam_record is not None and st.write_final:
                 report["dam_record"] = _record_dam(dam, st, res, dam_xy, out_folder,
-                                                   top_from_dem, "none", warnings, log)
+                                                   top_from_dem, "none", warnings, log,
+                                                   crest_from=report.get("dem_crest_from", ""))
             _write_no_breach(res, report, warnings, model_dir, hy_nb)
             return res
     else:
@@ -1010,7 +1018,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                 else:
                     tile = os.path.join(model_dir, "dem_refill.tif")
                     try:
-                        dem_refill.fetch_3dep(box, cs, tile)
+                        dem_refill.fetch_3dep(box, cs, tile, crs=getattr(dem, "crs_wkt", None))
                         refill_paths.append(tile)
                         refilled = True
                         msg = ("Wet cells sit on DEM no-data ({:,} cells). Requested one 3DEP "
@@ -1326,8 +1334,13 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     # --- final rasters for the classification plugin ------------------------------
     progress(93, "writing rasters")
     if st.write_final:
-        # a hazard classification of the previous rasters no longer applies
-        for stale in STALE_ON_RERUN:
+        # A hazard classification of the previous rasters no longer applies. A rerun that
+        # changes scenario (e.g. a sunny-day run into a folder left by a flood run) must not
+        # keep the previous run's Baseline / Incremental rasters: they belong to a different
+        # scenario and would be read as this run's. Clear them here; they are written again
+        # below only when this run actually has a baseline.
+        for stale in (list(STALE_ON_RERUN) + list(BASELINE_NAMES.values())
+                      + list(INCREMENT_NAMES.values())):
             try:
                 os.remove(os.path.join(out_folder, stale))
             except OSError:
@@ -1452,7 +1465,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     if st.dam_record is not None and st.write_final:
         report["dam_record"] = _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem,
                                            summary["final_model"], warnings, log, dem, d,
-                                           cut_off=report.get("cut_off"))
+                                           cut_off=report.get("cut_off"),
+                                           crest_from=report.get("dem_crest_from", ""))
     report["run_finished"] = datetime.datetime.now().isoformat(timespec="seconds")
     report["elapsed_min"] = round((time.time() - t_start) / 60.0, 1)
     res.report_json = os.path.join(model_dir, "run_report.json")
@@ -1631,7 +1645,7 @@ def _write_no_breach(res, report, warnings, model_dir, hy_nb):
 
 
 def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, warnings, log,
-                grid=None, depth=None, cut_off=None):
+                grid=None, depth=None, cut_off=None, crest_from=""):
     """v3.2.0: write what the run used into <dam folder>/dam.json (damjson.record_run) and add
     its "modelled" status. Conflicts with another tool's values become warnings. Never fails
     the run."""
@@ -1656,10 +1670,17 @@ def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, war
             result["extent_ft"] = damjson.extent_ft(grid, depth, dam_xy, WET_M)
             w, h = terrain.bounds_size(grid.bounds)
             result["domain_mi"] = [round(w / MILE, 2), round(h / MILE, 2)]
-        info = damjson.record_run(
-            out_folder, vals, result, dr.get("read"),
-            dem_top_note="highest DEM point within 30 m of the dam point" if top_from_dem
-            else "")
+        # a top of dam this plugin estimated from the DEM is written with a note that marks it
+        # as an estimate (and, when damjson supplies it, a "DEM estimate" datum), so a later run
+        # re-estimates it instead of trusting one run's guess as a surveyed crest
+        dem_note = ""
+        if top_from_dem:
+            fmt = getattr(damjson, "DEM_ESTIMATE_NOTE",
+                          "estimated by this plugin from the {}; not a surveyed or as-built "
+                          "crest")
+            dem_note = fmt.format(crest_from or "DEM near the dam point")
+        info = damjson.record_run(out_folder, vals, result, dr.get("read"),
+                                  dem_top_note=dem_note)
     except Exception as e:           # the record is an extra; never lose the run for it
         info = {"error": "dam.json not updated: {}: {}".format(type(e).__name__, e),
                 "warnings": [], "read": list(dr.get("read") or [])}
