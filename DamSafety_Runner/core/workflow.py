@@ -878,6 +878,15 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     def snap_for(sim_s):
         return max(60.0, round(sim_s / frames / 60.0) * 60.0) if frames > 0 else None
 
+    def closed_edges():
+        """H6 / v3.11.0: the near-dam FV1 refine run closes the box edges that face the
+        reservoir, so an FV1 free edge cannot import reservoir water into the fine grid.
+        Returns () for an ordinary run (st.close_upstream_edges unset)."""
+        if getattr(st, "close_upstream_edges", False):
+            from . import refine as refmod
+            return refmod.upstream_edges(direction)
+        return ()
+
     def lisflood_run(tag, hyd, bnds, sim_s, prog, gauges=None, snap=None):
         dem = dem_for("lisflood", bnds, cs)
         man = manning_for(bnds, cs)
@@ -887,7 +896,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                      sim_s, massint_s=st.gauge_massint_s if gl else 300.0,
                                      initial_depth=init, gauges=gl, snapshot_s=snap,
                                      extra_sources=extra_sources(sim_s),
-                                     solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC))
+                                     solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
+                                     closed_edges=closed_edges())
         wd = os.path.join(model_dir, "lisflood" + tag)
         if snap:        # snapshots of an earlier (smaller) run must not mix with these
             for _i, fp in lfmod.snapshot_files(wd):
@@ -922,7 +932,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                      sim_s, massint_s=st.gauge_massint_s if gl else 300.0,
                                      initial_depth=init, gauges=gl,
                                      extra_sources=extra_sources(sim_s),
-                                     solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC))
+                                     solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
+                                     closed_edges=closed_edges())
         return lfmod.read_results(os.path.join(model_dir, "lisflood" + tag), dem, lst, hyd), \
             dem, init
 

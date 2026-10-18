@@ -42,6 +42,22 @@ def h6_upstream_edges_face_away_from_the_flow():
 
 
 @test
+def h6_workflow_wires_closed_edges_into_the_fine_run():
+    """Regression lock for the HIGH re-audit finding: lisflood_run / load_lisflood are nested
+    closures, so the earlier tests (which mock run_dam) never caught that workflow built
+    LisfloodSettings with NO closed_edges=, leaving the fine FV1 run's upstream edges FREE. Assert
+    the wiring at the source level: the closed_edges() helper exists, reads the fine-run direction
+    via refine.upstream_edges, and is passed to BOTH real-run LisfloodSettings constructions."""
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    src = open(os.path.join(here, "..", "core", "workflow.py"), encoding="utf-8").read()
+    assert "def closed_edges():" in src, "workflow.closed_edges() helper is missing"
+    assert "upstream_edges(direction)" in src, "closed_edges() must use refine.upstream_edges(direction)"
+    assert src.count("closed_edges=closed_edges()") >= 2, \
+        "both LisfloodSettings constructions must pass closed_edges=closed_edges()"
+
+
+@test
 def h6_closed_edges_are_left_out_of_the_bci_file():
     from nd_breach_runner.core import lisflood as lf
     from nd_breach_runner.core.breach import Hydrograph
