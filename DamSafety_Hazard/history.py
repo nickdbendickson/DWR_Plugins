@@ -90,6 +90,7 @@ def make_snapshot(nd, tm11, structs, roads, lifelines, crs_id, dam_name, cfg, sc
     return {"version": SNAPSHOT_VERSION, "time": time.strftime("%Y-%m-%d %H:%M"),
             "plugin_version": _pv, "dam": dam_name, "crs": crs_id or "", "governing": governing,
             "nd": nd.get("cls"), "nd_reasons": list(nd.get("reasons") or []),
+            "incomplete": list(nd.get("incomplete") or ()),
             "tm11": tm11.get("cls"), "lij": round(float(
                 tm11.get("lij") or 0.0), 1),
             "structures": st, "roads": rd,
