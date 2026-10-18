@@ -345,8 +345,9 @@ class _Map:
 
 
 def eap_map_svg(grid, final, dam, dam_xy, receptors=None, arrival_polys=None,
-                flooded_receptors=None, title=None, note="", unit_m=1.0):
-    """Depth-class map with arrival lines. `final` holds SI arrays."""
+                flooded_receptors=None, title=None, note="", unit_m=1.0, extra_note=""):
+    """Depth-class map with arrival lines. `final` holds SI arrays. `extra_note` (e.g. the
+    HEC-RAS breach fallback) is printed in red under the subtitle."""
     d_ft = final["depth"] / FT
     valid = np.isfinite(d_ft)
     if not valid.any():
@@ -360,7 +361,12 @@ def eap_map_svg(grid, final, dam, dam_xy, receptors=None, arrival_polys=None,
     ymin = grid.y0 - (rows[-1] + 1) * grid.dx - pad_m
     xmin, xmax = min(xmin, dam_xy[0] - pad_m), max(xmax, dam_xy[0] + pad_m)
     ymin, ymax = min(ymin, dam_xy[1] - pad_m), max(ymax, dam_xy[1] + pad_m)
-    m = _Map((xmin, ymin, xmax, ymax))
+    import textwrap
+    extra = textwrap.wrap(extra_note or "", 150)
+    m = _Map((xmin, ymin, xmax, ymax), header=70 + 15 * len(extra))
+    for i, ln in enumerate(extra):
+        m.add('<text x="{}" y="{}" font-size="11" fill="#a33">{}</text>'.format(
+            m.pad, 68 + 15 * i, html.escape(ln)))
     title = title or "Dam breach inundation: {} ({})".format(dam.name or dam.dam_id, dam.dam_id)
     m.add('<text x="{}" y="30" font-size="20" font-weight="bold">{}</text>'.format(
         m.pad, html.escape(title)))
@@ -632,7 +638,7 @@ def write_products(res, report, st, dam, dam_xy, dem, fin, incr, hy, hy_nb, path
     if eap_preview_wanted(getattr(st, "eap_map", EAP_AUTO)):
         try:
             svg = eap_map_svg(dem, fin, dam, dam_xy, st.receptors, arr_polys, wet_rec,
-                              unit_m=unit_m)
+                              unit_m=unit_m, extra_note=getattr(st, "eap_note", "") or "")
             res.eap_map = os.path.join(out_folder, EAP_PREVIEW_NAME)
             with open(res.eap_map, "w", encoding="utf-8") as f:
                 f.write(svg)

@@ -476,3 +476,103 @@ def test_hecras_p0_no_valid_inflow_point_fails_with_the_real_reason():
         shutil.rmtree(d)
     # a run with no inflow point at all keeps the old message
     assert "has no inflow point" in he.inflow_missing_message({"status": "missing"})
+
+
+# ================================== inflow mode 'auto': fall back to the breach model (DWR-3161)
+def _flat_tailwater_run(d):
+    """DWR-3161-like: the ground below the dam is flat (a water surface) only 1.5 m below the
+    top of dam for the whole valley, so no point a quarter of the dam height (2.5 m) below
+    the top of dam exists downstream; the run's inflow point is on the embankment."""
+    flat = TOP_M - 1.5
+    old = globals()["_ground"]
+
+    def ground(X, Y, hill=True):
+        z = old(X, Y, hill=False)
+        return np.where((Y < Y0 - 15.0) & (np.abs(X - X0) < 1500.0), flat, z)
+    globals()["_ground"] = ground
+    try:
+        _run(d, inflow_xy=(X0, Y0 - 10.0))
+    finally:
+        globals()["_ground"] = old
+    _flow_line(d, [(X0, Y0 + 50.0 - 10.0 * k) for k in range(400)])
+    return flat
+
+
+@test
+def test_hecras_p0_auto_mode_falls_back_to_the_breach_model():
+    if _skip():
+        return
+    from nd_breach_runner.core import hecras_engine as he
+    d = tempfile.mkdtemp()
+    try:
+        flat = _flat_tailwater_run(d)
+        logs = []
+        r = he.write_project(d, os.path.join(d, "auto"), log=logs.append, env={})
+        assert r["inflow_mode_requested"] == "auto" and r["inflow_mode"] == "breach", r
+        assert r["inflow_bc"] is None
+        note = r["inflow_fallback"]["note"]
+        drop_ft = 0.25 * H_M / 0.3048
+        assert note.startswith("HEC-RAS modeled the breach at the dam"), note
+        assert "at least {:.1f} ft below the top of dam".format(drop_ft) in note, note
+        assert "within 3,000 ft downstream" in note, note
+        assert "lowest ground {:.1f} ft at".format(flat / 0.3048) in note, note
+        assert any(m.startswith("WARNING: HEC-RAS modeled the breach") for m in logs), logs
+        with open(os.path.join(d, hecras.MODEL_FOLDER, hecras.RUN_REPORT_JSON),
+                  encoding="utf-8") as f:
+            rec = json.load(f)["hecras_inflow"]
+        assert rec["status"] == "fallback_breach" and rec["fallback_from"] == "rejected", rec
+        assert "was rejected" in rec["reason"] and rec["note"] == note, rec
+        assert abs(rec["lowest_ground_ft"] - flat / 0.3048) < 0.05, rec
+        assert rec["inflow_mode_requested"] == "auto" and rec["inflow_mode"] == "breach"
+        # the breach model is build_model's: the run's pool, breach parameters and trigger
+        u = open(r["paths"]["u01"], newline="").read()
+        p = open(r["paths"]["p01"], newline="").read()
+        m = r["model"]
+        assert "Initial Storage Elev={},{}".format(hm.name16(hm.SA_NAME),
+                                                   m.initial_wse) in u, u[:300]
+        assert abs(m.initial_wse - TOP_M / 0.3048) < 0.01         # sunny day: top of dam
+        b = m.breach
+        assert "Breach Loc=" in p and "Breach Geom=" in p
+        with open(os.path.join(d, hecras.MODEL_FOLDER, hecras.RUN_REPORT_JSON),
+                  encoding="utf-8") as f:
+            hy = json.load(f)["hydrograph"]
+        assert abs(b["bottom_width"] - hy["bottom_width_ft"]) < 0.11, (b, hy)
+        assert abs(b["bottom_elev"] - hy["breach_bottom_ft"]) < 0.011, (b, hy)
+        assert abs(b["formation_hr"] - hy["formation_time_hr"]) < 0.011, (b, hy)
+        assert b["trigger_wse"] < m.initial_wse <= b["trigger_wse"] + 0.011
+        with open(os.path.join(r["folder"], "hecras_engine.json"), encoding="utf-8") as f:
+            ej = json.load(f)
+        assert ej["inflow_mode"] == "breach" and ej["inflow_mode_requested"] == "auto"
+        assert "fell back to the breach model" in open(r["paths"]["readme"]).read()
+    finally:
+        shutil.rmtree(d)
+
+
+@test
+def test_hecras_p0_strict_hydrograph_mode_still_fails():
+    """inflow_mode='hydrograph' (argument or NDBREACH_HECRAS_INFLOW_MODE) never falls back."""
+    if _skip():
+        return
+    from nd_breach_runner.core import hecras_engine as he
+    d = tempfile.mkdtemp()
+    try:
+        _flat_tailwater_run(d)
+        for kw in ({"inflow_mode": "hydrograph", "env": {}},
+                   {"env": {he.ENV_MODE: "hydrograph"}}):
+            try:
+                he.write_project(d, os.path.join(d, "hy"), log=lambda m: None, **kw)
+                raise AssertionError("strict hydrograph mode must fail: {}".format(kw))
+            except he.HecRasEngineError as e:
+                assert "was rejected" in str(e) and "3,000 ft downstream" in str(e), str(e)
+        with open(os.path.join(d, hecras.MODEL_FOLDER, hecras.RUN_REPORT_JSON),
+                  encoding="utf-8") as f:
+            assert json.load(f)["hecras_inflow"]["status"] == "rejected"
+        try:
+            he.write_project(d, os.path.join(d, "x"), env={he.ENV_MODE: "sometimes"})
+            raise AssertionError("an unknown mode must be refused")
+        except he.HecRasEngineError as e:
+            assert "'auto', 'hydrograph' or 'breach'" in str(e), str(e)
+    finally:
+        shutil.rmtree(d)
+    assert he.fallback_sentence({"status": "missing"}).endswith(
+        "because the run recorded no inflow point.")

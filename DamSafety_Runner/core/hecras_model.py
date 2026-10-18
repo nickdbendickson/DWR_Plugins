@@ -1717,6 +1717,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             else:
                 inflow_status["searched_ft"] = float(o["inflow_search_ft"])
                 inflow_status["need_ground_ft"] = round(inflow_drop_needed_m(top_m, h_m) / FT, 2)
+                inflow_status["need_drop_ft"] = round(0.25 * h_m / FT, 2)
                 if "lowest_m" in diag:
                     inflow_status.update(lowest_ground_ft=round(diag["lowest_m"] / FT, 2),
                                          lowest_xy_model=diag["lowest_xy"],

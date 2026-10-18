@@ -49,11 +49,16 @@ Settings (environment variables, or the `env` dict of each function):
     NDBREACH_HECRAS_DISPLAY      X display for Wine (default :77; an Xvfb is NOT started here)
     NDBREACH_HECRAS_TCU_HOOK     optional, see above
     NDBREACH_HECRAS_TIMEOUT_S    per-step timeout (default 1800)
-    NDBREACH_HECRAS_INFLOW_MODE  'hydrograph' (default) or 'breach' (see write_project)
+    NDBREACH_HECRAS_INFLOW_MODE  'auto' (default), 'hydrograph' or 'breach' (see write_project)
     NDBREACH_HECRAS_BASE_FLOW_CFS  base flow of the inflow hydrograph (default 0, see below)
     NDBREACH_HECRAS_TAIL         'recession' (default) or 'hold' (see inflow_series)
 
 Inflow modes (write_project):
+  auto        (the default) 'hydrograph' when the run has a usable inflow point (the run's,
+              or one walked downstream by build_model); otherwise 'breach', with the reason
+              in run_report.json 'hecras_inflow' (status 'fallback_breach'), a logged warning
+              and a sentence in the run report and the EAP preview. 'hydrograph' and 'breach'
+              set explicitly are strict: 'hydrograph' without an inflow point fails.
   hydrograph  the run's breach hydrograph is a 2D flow-hydrograph BC at the run's inflow point
               (the forcing LISFLOOD-FP and ANUGA get). The plan has NO breach and the
               reservoir storage area starts DRY (the lowest elevation of its storage curve)
@@ -92,7 +97,8 @@ INFLOW_BC_SLOPE = 0.001            # energy slope HEC-RAS distributes the inflow
 ENV_MODE = "NDBREACH_HECRAS_INFLOW_MODE"
 ENV_BASE = "NDBREACH_HECRAS_BASE_FLOW_CFS"
 ENV_TAIL = "NDBREACH_HECRAS_TAIL"
-INFLOW_MODES = ("hydrograph", "breach")
+INFLOW_MODES = ("auto", "hydrograph", "breach")
+MODE_AUTO = "auto"
 TAILS = ("recession", "hold")
 HDF_NAME = "{name}.p01.hdf"
 
@@ -351,10 +357,10 @@ def inflow_series(hy, units_flow, sim_hours, dt_min=hecras.DEFAULT_STEP_MIN, bas
 
 
 def _mode(inflow_mode, env):
-    m = (inflow_mode or (_env(env).get(ENV_MODE) or "").strip().lower() or "hydrograph")
+    m = (inflow_mode or (_env(env).get(ENV_MODE) or "").strip().lower() or MODE_AUTO)
     if m not in INFLOW_MODES:
-        raise HecRasEngineError("inflow_mode must be 'hydrograph' or 'breach' (got {!r}; "
-                                "{})".format(m, ENV_MODE))
+        raise HecRasEngineError("inflow_mode must be 'auto', 'hydrograph' or 'breach' (got "
+                                "{!r}; {})".format(m, ENV_MODE))
     return m
 
 
@@ -392,10 +398,50 @@ def inflow_missing_message(status):
             "use inflow_mode='breach'")
 
 
+def fallback_sentence(status):
+    """The report sentence for an 'auto' run that fell back to the breach model."""
+    st = status or {}
+    head = "HEC-RAS modeled the breach at the dam (no inflow hydrograph) because "
+    if st.get("searched_ft"):
+        drop = st.get("need_drop_ft")
+        msg = head + "no inflow point {}was found within {:,.0f} ft downstream".format(
+            "at least {:.1f} ft below the top of dam ".format(drop) if drop is not None else
+            "low enough below the top of dam ", st["searched_ft"])
+        if st.get("lowest_ground_ft") is not None:
+            msg += " (lowest ground {:.1f} ft at {:,.0f} ft)".format(
+                st["lowest_ground_ft"], st.get("lowest_at_ft") or 0.0)
+        return msg + "."
+    if st.get("status") == "missing" or not st:
+        return head + "the run recorded no inflow point."
+    return head + "the run's inflow point was rejected ({}).".format(st.get("why") or
+                                                                    "not usable")
+
+
+def _record_fallback(dam_folder, status, sentence, reason):
+    """run_report.json 'hecras_inflow' -> status 'fallback_breach' (keeps the search record:
+    the original status, the reason and the lowest ground found)."""
+    rp = os.path.join(dam_folder, hecras.MODEL_FOLDER, hecras.RUN_REPORT_JSON)
+    rec = dict(status or {})
+    rec.update(status="fallback_breach", fallback_from=(status or {}).get("status", "missing"),
+               reason=reason, note=sentence, inflow_mode="breach", inflow_mode_requested="auto")
+    try:
+        with open(rp, encoding="utf-8") as f:
+            r = json.load(f)
+        r["hecras_inflow"] = dict(r.get("hecras_inflow") or {}, **rec)
+        tmp = rp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(r, f, indent=2, default=str)
+        os.replace(tmp, rp)
+    except (OSError, ValueError):
+        pass
+    return rec
+
+
 def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
                   build=None, load=None, log=None, env=None, base_flow_cfs=None, tail=None):
     """Builds the HEC-RAS project of a finished run (hecras_model.build_model). inflow_mode
-    (default NDBREACH_HECRAS_INFLOW_MODE, else 'hydrograph'): see the module docstring.
+    (default NDBREACH_HECRAS_INFLOW_MODE, else 'auto'): see the module docstring. 'auto' is
+    'hydrograph' when there is an inflow point, else 'breach' (res['inflow_fallback']).
     'hydrograph' forces the 2D area with the run's breach hydrograph at the run's inflow
     point from the simulation start to its end (inflow_series), with a dry reservoir and no
     breach; 'breach' keeps build_model's storage area + SA/2D breach unchanged. Returns
@@ -415,6 +461,24 @@ def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
         raise HecRasEngineError("tail must be 'recession' or 'hold' (got {!r}; {})".format(
             tail, ENV_TAIL))
     res = build(dam_folder, out_folder, options=options, log=log)
+    res["inflow_mode_requested"] = inflow_mode
+    res["inflow_fallback"] = None
+    if inflow_mode == MODE_AUTO:
+        if res["info"].get("inflow_xy_model") is None:
+            st = res["info"].get("inflow_status") or {}
+            sentence = fallback_sentence(st)
+            reason = inflow_missing_message(st).split(". Check the dam point")[0].split(
+                "; use inflow_mode")[0]
+            res["inflow_fallback"] = _record_fallback(dam_folder, st, sentence, reason)
+            log("WARNING: " + sentence + " Reason: " + reason + ".")
+            rd = (res.get("paths") or {}).get("readme")
+            if rd and os.path.exists(rd):
+                with open(rd, "a", encoding="utf-8") as f:
+                    f.write("\n- **Inflow mode 'auto' fell back to the breach model.** {} "
+                            "Reason: {}.\n".format(sentence, reason))
+            inflow_mode = "breach"
+        else:
+            inflow_mode = "hydrograph"
     res["inflow_mode"] = inflow_mode
     res["inflow_bc"] = None
     if inflow_mode == "breach":
@@ -474,6 +538,8 @@ def _write_engine_json(res, inflow_mode, inflow_bc, info):
     info = info or res.get("info") or {}
     with open(os.path.join(res["folder"], "hecras_engine.json"), "w", encoding="utf-8") as f:
         json.dump({"inflow_mode": inflow_mode, "inflow_bc": inflow_bc,
+                   "inflow_mode_requested": res.get("inflow_mode_requested", inflow_mode),
+                   "inflow_fallback": res.get("inflow_fallback"),
                    "time_step": info.get("time_step"), "sim_hours": info.get("sim_hours"),
                    "model_wkt": info.get("model_wkt"), "work_wkt": info.get("work_wkt")},
                   f, indent=1)
@@ -953,12 +1019,16 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     rep = {"engine": "hecras", "hecras_version": "6.6", "platform": d["platform"],
            "project": proj, "results_hdf": os.path.join(keep, os.path.basename(hdf)),
            "preprocess_s": times, "inflow_mode": r["inflow_mode"],
+           "inflow_mode_requested": r.get("inflow_mode_requested"),
+           "inflow_fallback": r.get("inflow_fallback"),
            "inflow_series": (r.get("inflow_bc") or {}).get("series"),
            "time_step": r["info"].get("time_step"),
            "lisflood_rasters_kept_as": LISFLOOD_PREFIX + "<name>"}
     with open(os.path.join(keep, "hecras_stage.json"), "w", encoding="utf-8") as f:
         json.dump(rep, f, indent=1)
-    return {"final": final, "hdf": hdf, "project": proj, "report": rep,
-            "warnings": ["Final rasters are from HEC-RAS 2D (preliminary engine; LISFLOOD-FP "
-                         "rasters kept as '{}...'). Review _hecras/hecras_stage.json."
-                         .format(LISFLOOD_PREFIX)]}
+    warns = ["Final rasters are from HEC-RAS 2D (preliminary engine; LISFLOOD-FP "
+             "rasters kept as '{}...'). Review _hecras/hecras_stage.json."
+             .format(LISFLOOD_PREFIX)]
+    if r.get("inflow_fallback"):
+        warns.append(r["inflow_fallback"]["note"])
+    return {"final": final, "hdf": hdf, "project": proj, "report": rep, "warnings": warns}

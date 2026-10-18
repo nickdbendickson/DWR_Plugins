@@ -1608,6 +1608,11 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
         report["incremental"] = dict(report["incremental"], note=(
             report["incremental"].get("note", "") + ". From the LISFLOOD-FP screening pass: "
             "{} ran the breach only (no no-breach run).".format(final_model)))
+    hin = report.get("hecras_inflow") or {}
+    fallback = hin.get("note") if hin.get("status") == "fallback_breach" else ""
+    if fallback:
+        summary["hecras_inflow"] = "breach at the dam (fallback)"
+        log("WARNING: " + fallback)
     report["summary"] = summary
     report["screening_pass_lisflood"] = screening
     report["final_engine"] = {"model": final_model, "figures_from": dict(paths),
@@ -1621,7 +1626,7 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
         arrival_contours_hr=tuple(getattr(st, "arrival_contours_hr", None)
                                   or RunSettings().arrival_contours_hr),
         receptors=rec, incr_thresholds_ft=(),
-        eap_map=getattr(st, "eap_map", None) or products.EAP_AUTO)
+        eap_map=getattr(st, "eap_map", None) or products.EAP_AUTO, eap_note=fallback)
     res_ns = types.SimpleNamespace(vectors={}, eap_map="", flood=None, gauges={}, plan={})
     old_vectors = dict((report.get("outputs") or {}).get("vectors") or {})
     warnings = list(report.get("warnings") or [])
@@ -1637,6 +1642,8 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
            "vector products are kept as '{}...'.".format(final_model, SCREENING_PREFIX))
     if msg not in warnings:
         warnings.append(msg)
+    if fallback and fallback not in warnings:
+        warnings.insert(0, fallback)
     report["warnings"] = warnings
     vec = {k: v for k, v in old_vectors.items() if os.path.basename(str(v)) not in
            FINAL_VECTOR_NAMES}
@@ -2005,6 +2012,11 @@ def _clean(model_dir):
                         pass
 
 
+def scr_has_final(r):
+    """A report whose figures come from a later engine (adopt_final_engine)."""
+    return bool(r.get("final_engine") or r.get("screening_pass_lisflood"))
+
+
 def render_report(r):
     s = r["summary"]
     h = r["hydrograph"]
@@ -2032,6 +2044,14 @@ def render_report(r):
     if s.get("buildings"):
         lines.append("| Buildings (v3.4.0) | {} |".format(s["buildings"]))
     lines.append("")
+    hin = r.get("hecras_inflow") or {}
+    if scr_has_final(r) and hin.get("status") == "fallback_breach" and hin.get("note"):
+        lines += ["**HEC-RAS inflow:** " + hin["note"], ""]
+    elif scr_has_final(r) and hin.get("status") == "moved":
+        lines += ["**HEC-RAS inflow:** the run's inflow point was moved {:,.0f} ft downstream "
+                  "along {} (ground {} ft) for the HEC-RAS inflow hydrograph.".format(
+                      hin.get("moved_ft") or 0, hin.get("how", "the flow path"),
+                      hin.get("ground_ft")), ""]
     scr = r.get("screening_pass_lisflood")
     if scr:
         ss = scr.get("summary") or {}

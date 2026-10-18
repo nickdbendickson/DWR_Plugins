@@ -151,3 +151,69 @@ def hecras_tier_algorithm_adopts_the_final_engine_after_run_stage():
     i = src.index("hecras_engine.run_stage(")
     j = src.index("workflow.adopt_final_engine(", i)
     assert j > i and "res.summary = workflow.adopt_final_engine(" in src[i:j + 40]
+
+
+def _tier2_folder(d, **extra):
+    """A finished TIER 2 run folder: HEC-RAS final rasters and the LISFLOOD-FP report."""
+    import json
+    from nd_breach_runner.tests import test_report_docx as trd
+    m = os.path.join(d, "_breach_model")
+    os.makedirs(m)
+    dep = np.full((50, 50), np.nan)
+    dep[10:30, 5:35] = 2.0
+    dep[20, 20] = 12.22
+    for k, a in (("depth", dep), ("velocity", np.where(np.isfinite(dep), 3.0, np.nan)),
+                 ("arrival", np.where(np.isfinite(dep), 1.0, np.nan)),
+                 ("wse", np.where(np.isfinite(dep), 1000.0, np.nan))):
+        _tif_ft(os.path.join(d, workflow.FINAL_NAMES[k]), a)
+    with open(os.path.join(trd._run_folder(flood=False), "_breach_model", "run_report.json"),
+              encoding="utf-8") as f:
+        rep = json.load(f)
+    rep.update({"dam_xy": [500250.0, 5199900.0], "warnings": [], "outputs": {"vectors": {}}},
+               **extra)
+    with open(os.path.join(m, "run_report.json"), "w", encoding="utf-8") as f:
+        json.dump(rep, f)
+    return m
+
+
+@test
+def hecras_tier_breach_fallback_is_stated_in_the_report_and_eap_preview():
+    """Inflow mode 'auto' fell back to the breach model (DWR-3161): the reason is a sentence
+    in run_report.md/.html (with a 'Things to check' entry), the EAP preview and the log."""
+    try:
+        from osgeo import gdal  # noqa: F401
+    except ImportError:
+        return
+    import html as H
+    import json
+    import shutil
+    import tempfile
+    from nd_breach_runner.core import hecras_engine as he
+    st = {"status": "rejected", "searched_ft": 3000.0, "need_drop_ft": 7.03,
+          "need_ground_ft": 1837.42, "lowest_ground_ft": 1839.47, "lowest_at_ft": 1374.9,
+          "why": "the ground there is 1840.4 ft, only 4.0 ft below the 1844.4 ft top of dam"}
+    note = he.fallback_sentence(st)
+    assert note == ("HEC-RAS modeled the breach at the dam (no inflow hydrograph) because no "
+                    "inflow point at least 7.0 ft below the top of dam was found within 3,000 "
+                    "ft downstream (lowest ground 1839.5 ft at 1,375 ft)."), note
+    d = tempfile.mkdtemp()
+    try:
+        m = _tier2_folder(d, hecras_inflow=dict(st, status="fallback_breach", note=note,
+                                                fallback_from="rejected"))
+        logs = []
+        workflow.adopt_final_engine(d, "HEC-RAS 2D", log=logs.append)
+        assert any(x == "WARNING: " + note for x in logs), logs
+        with open(os.path.join(m, "run_report.json"), encoding="utf-8") as f:
+            r = json.load(f)
+        assert r["warnings"][0] == note and r["hecras_inflow"]["status"] == "fallback_breach"
+        md = open(os.path.join(m, "run_report.md"), encoding="utf-8").read()
+        assert "**HEC-RAS inflow:** " + note in md, md
+        assert md.split("## Things to check", 1)[1].count(note) == 1
+        page = open(os.path.join(m, "run_report.html"), encoding="utf-8").read()
+        assert "1839.5 ft at 1,375 ft" in page and "HEC-RAS modeled the breach" in page
+        svg = open(os.path.join(d, "EAP Inundation Map (preview).svg"), encoding="utf-8").read()
+        flat = " ".join(t.split(">", 1)[1].split("<", 1)[0] for t in svg.split("<text")[1:])
+        assert H.escape("HEC-RAS modeled the breach at the dam") in flat, flat[:600]
+        assert "1,375" in flat
+    finally:
+        shutil.rmtree(d)
