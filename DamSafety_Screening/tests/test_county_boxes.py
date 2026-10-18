@@ -1,4 +1,6 @@
-"""Audit 1.22 #5: every county download box covers that county's outline."""
+"""Audit 1.22 #5: every county download box covers that county's outline plus a 5 mi box
+around any point in it."""
+import math
 import os
 import sys
 
@@ -16,9 +18,11 @@ def test_each_county_box_covers_its_outline():
     for name in nd_counties.names():
         w, s, e, n = nd_counties.box([name])
         bw, bs, be, bn = dd.COUNTIES[name]
-        if not (bw <= w and bs <= s and be >= e and bn >= n):
+        dy = 5 * 1609.344 / 111195.0
+        dx = dy / math.cos(math.radians(max(abs(s), abs(n))))
+        if not (bw <= w - dx and bs <= s - dy and be >= e + dx and bn >= n + dy):
             short.append(name)
-    assert not short, "{} boxes miss part of their county: {}".format(len(short), ", ".join(short))
+    assert not short, "{} boxes miss part of their county + 5 mi: {}".format(len(short), ", ".join(short))
 
 
 if __name__ == "__main__":

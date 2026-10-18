@@ -21,9 +21,10 @@ def _safe_extract(zf, dest):
     for member in zf.infolist():
         zf.extract(member, dest)
 
-# west, south, east, north in degrees: each county's outline box, padded so a dam on the
-# county line is inside.
-COUNTIES = {name: nd_counties.box([name], 0.02) for name in nd_counties.names()}
+# west, south, east, north in degrees: each county's outline box, padded so a 5 mi box around
+# any dam in the county is inside (0.12 deg >= 5 mi of longitude up to 52 N).
+COUNTY_PAD_DEG = 0.12
+COUNTIES = {name: nd_counties.box([name], COUNTY_PAD_DEG) for name in nd_counties.names()}
 STATE = (-104.06, 45.93, -96.54, 49.01)
 MI = 1609.344
 
