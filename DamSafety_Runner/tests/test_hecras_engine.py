@@ -250,26 +250,31 @@ def hecras_engine_plan_adaptive_time_step_is_hecs_layout():
     p = hm.plan_text(m).replace("\r\n", "\n")
     want = ["Computation Time Step Use Courant=        -1",
             "Computation Time Step Use Time Series=    0",
-            "Computation Time Step Max Courant=1", "Computation Time Step Min Courant=0.5",
+            "Computation Time Step Max Courant=1", "Computation Time Step Min Courant=0.45",
             "Computation Time Step Count To Double=4", "Computation Time Step Max Doubling=3",
             "Computation Time Step Max Halving=3", "Computation Time Step Residence Courant=0"]
     assert "\n".join(want) in p, p
     assert p.index("Mapping Interval=") < p.index(want[0]) < p.index("Run HTab=")
-    m.courant = dict(hm.COURANT_DEFAULTS, max=0.9, min=0.45, max_doubling=1, max_halving=0)
+    m.courant = dict(hm.COURANT_DEFAULTS, max=0.9, min=0.4, max_doubling=1, max_halving=0)
     p = hm.plan_text(m)
-    assert "Max Courant=0.9\r\n" in p and "Min Courant=0.45\r\n" in p and "Max Halving=0\r\n" in p
+    assert "Max Courant=0.9\r\n" in p and "Min Courant=0.4\r\n" in p and "Max Halving=0\r\n" in p
     m.courant = dict(hm.COURANT_DEFAULTS, adaptive=False)
     p = hm.plan_text(m)
     assert "Use Courant=        0\r\n" in p and "Max Doubling=0\r\n" in p
-    m.courant = dict(hm.COURANT_DEFAULTS, max=1.0, min=1.5)
-    try:
-        hm.plan_text(m)
-        raise AssertionError("min above max should raise")
-    except hm.HecRasModelError:
-        pass
+    # HEC-RAS 6.6 data error unless min < 0.5 x max (Absaraka: max 1 / min 0.5 refused)
+    for bad in (dict(max=1.0, min=1.5), dict(max=1.0, min=0.5), dict(max=2.0, min=1.0),
+                dict(max=1.0, min=0.0), dict(max=1.0, min=-0.1)):
+        m.courant = dict(hm.COURANT_DEFAULTS, **bad)
+        try:
+            hm.plan_text(m)
+            raise AssertionError("{} should raise".format(bad))
+        except hm.HecRasModelError as e:
+            assert "0.5 x max" in str(e), str(e)
+    m.courant = dict(hm.COURANT_DEFAULTS, max=1.0, min=0.49)
+    assert "Min Courant=0.49\r\n" in hm.plan_text(m)
     m.equation = hm.EQ_DWE
     m.courant = dict(hm.COURANT_DEFAULTS)
-    assert "Max Courant=2\r\n" in hm.plan_text(m) and "Min Courant=1\r\n" in hm.plan_text(m)
+    assert "Max Courant=2\r\n" in hm.plan_text(m) and "Min Courant=0.9\r\n" in hm.plan_text(m)
 
 
 @test
@@ -284,3 +289,169 @@ def hecras_engine_fixed_width_tables_raise_when_a_value_cannot_fit():
     m.elev_volume = [(990.0, 0.0), (1010.0, 1234567.0)]
     g = hm.geometry_text(m).replace("\r\n", "\n")
     assert "\n  990.00    0.00 1010.00 1234567\n" in g
+
+
+# ---------------------------------------------------------------------------- preprocess order
+_FAKE_D = {"prefix": "/pfx", "windows_dir": "/pfx/drive_c/HEC/RAS66", "wine": "wine",
+           "ras_exe": "/pfx/drive_c/HEC/RAS66/Ras.exe", "platform": "linux"}
+
+
+class _Fake:
+    """Stands in for _run / ras_compile / geometry_hdf_state: records the calls and changes
+    the fake geometry HDF state the way each HEC-RAS step does (or does not)."""
+
+    def __init__(self, broken=()):
+        self.calls, self.broken = [], set(broken)
+        self.state = {"exists": False, "size": 0, "cells": 0, "areas": {}, "terrain": "",
+                      "props": False, "error": ""}
+
+    def run(self, cmd, cwd, env, timeout, what, ok=None, log=None):
+        step = "terrain" if cmd[-1] == "Terrain" else cmd[cmd.index("wine") + 3]
+        self.calls.append(step)
+        if step in self.broken:
+            return "OK " + step                     # exit 0, prints OK, writes nothing
+        if step == "terrain":
+            p = os.path.join(cmd[-2].replace("Z:", "").replace("\\", "/"), "Terrain.hdf")
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            open(p, "w").write("x")
+        elif step == "assoc":
+            self.state["terrain"] = ".\\Terrain\\Terrain.hdf"
+        elif step == "props":
+            self.state["props"] = True
+            self.state["areas"] = {"Downstream": {"cells": 65739, "props": True}}
+        return "OK " + step + (" tables complete" if step == "props" else "")
+
+    def ras(self, project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0, until=None,
+            what=None):
+        self.calls.append("ras1" if until is not None else "ras2")
+        if until is not None and "ras1" not in self.broken:
+            self.state.update(exists=True, size=1000, cells=65739,
+                              areas={"Downstream": {"cells": 65739, "props": False}})
+
+    def hdf(self, path):
+        return dict(self.state)
+
+
+def _with_fake(fake, fn):
+    saved = he._run, he.ras_compile, he.geometry_hdf_state
+    he._run, he.ras_compile, he.geometry_hdf_state = fake.run, fake.ras, fake.hdf
+    try:
+        return fn()
+    finally:
+        he._run, he.ras_compile, he.geometry_hdf_state = saved
+
+
+@test
+def hecras_engine_preprocess_step_order_on_a_new_project():
+    """A build_model project has no geometry HDF: Ras.exe -c pass 1 makes it (mesh), then
+    terrain association, property tables, Ras.exe -c pass 2 (Absaraka, 2026-10-18)."""
+    t = tempfile.mkdtemp()
+    try:
+        f = _Fake()
+        times = _with_fake(f, lambda: he.preprocess(t, "DWR_2801", d=_FAKE_D, env={},
+                                                    terrain_tif="/x/t.tif", prj="/x/p.prj"))
+        assert f.calls == ["terrain", "ras1", "assoc", "props", "ras2"], f.calls
+        assert list(times) == list(he.STEPS) == ["terrain", "geometry", "assoc", "props", "ras"]
+        # an existing geometry HDF with a mesh (HEC's examples): pass 1 is skipped
+        f2 = _Fake()
+        f2.state.update(exists=True, size=10, cells=5391)
+        _with_fake(f2, lambda: he.preprocess(t, "M", d=_FAKE_D, env={},
+                                             steps=["geometry", "assoc", "props", "ras"]))
+        assert f2.calls == ["assoc", "props", "ras2"], f2.calls
+        # drv.exe complete on a new project is refused with the reason (it writes nothing)
+        try:
+            _with_fake(_Fake(), lambda: he.preprocess(t, "N", d=_FAKE_D, env={},
+                                                      steps=["complete"]))
+            raise AssertionError("complete without a geometry HDF should raise")
+        except he.HecRasEngineError as e:
+            assert "existing" in str(e) and "'geometry' step" in str(e)
+    finally:
+        shutil.rmtree(t, ignore_errors=True)
+
+
+@test
+def hecras_engine_preprocess_fails_when_a_step_writes_nothing():
+    """Exit 0 and 'OK' are not enough: each step's output is checked."""
+    t = tempfile.mkdtemp()
+    try:
+        cases = (("ras1", "has no 2D cells", ["geometry"]),
+                 ("assoc", "no terrain associated", ["geometry", "assoc"]),
+                 ("props", "no 2D property tables", ["geometry", "assoc", "props"]),
+                 ("terrain", "was not written", ["terrain"]))
+        for broken, text, stop in cases:
+            f = _Fake(broken=[broken])
+            if broken == "ras1":
+                f.state.update(exists=True, size=10)      # an HDF without a mesh
+            try:
+                _with_fake(f, lambda: he.preprocess(t, "B", d=_FAKE_D, env={},
+                                                    terrain_tif="/x/t.tif", prj="/x/p.prj",
+                                                    steps=stop))
+                raise AssertionError(broken + " should raise")
+            except he.HecRasEngineError as e:
+                assert text in str(e), (broken, str(e))
+            assert "ras2" not in f.calls, (broken, f.calls)
+        # props on an HDF that was never written (the c232f65 failure) stops before drv.exe
+        f = _Fake()
+        try:
+            _with_fake(f, lambda: he.preprocess(t, "B", d=_FAKE_D, env={}, steps=["props"]))
+            raise AssertionError("props without a geometry HDF should raise")
+        except he.HecRasEngineError as e:
+            assert "B.g01.hdf was not written" in str(e) and f.calls == []
+        # a HEC-RAS data-errors file is quoted
+        open(os.path.join(t, "B.p01.data_errors.txt"), "w").write(
+            "The advanced time step control requires that the Minimum Courant is < 0.5 "
+            "Maximum Courant.")
+        try:
+            _with_fake(_Fake(broken=["ras1"]), lambda: he.preprocess(
+                t, "B", d=_FAKE_D, env={}, steps=["geometry"]))
+            raise AssertionError("should raise")
+        except he.HecRasEngineError as e:
+            assert "Minimum Courant is < 0.5" in str(e)
+    finally:
+        shutil.rmtree(t, ignore_errors=True)
+
+
+@test
+def hecras_engine_run_reports_exit_zero_without_the_ok_text():
+    import subprocess as sp
+    saved = sp.run
+
+    class R:
+        returncode, stdout, stderr = 0, "OK props 0.59 s", ""
+    sp.run = lambda *a, **k: R()
+    try:
+        he._run(["x"], "/", {}, 10, "2D property tables", ok="tables complete")
+        raise AssertionError("should raise")
+    except he.HecRasEngineError as e:
+        assert "exit 0 but it never printed 'tables complete'" in str(e)
+    finally:
+        sp.run = saved
+
+
+@test
+def hecras_engine_geometry_hdf_state_reads_cells_terrain_and_tables():
+    if not th._has_h5py():
+        return
+    import h5py
+    t = tempfile.mkdtemp()
+    try:
+        p = os.path.join(t, "g.g01.hdf")
+        assert he.geometry_hdf_state(p)["exists"] is False
+        dt = np.dtype([("Name", "S16"), ("Cell Count", "<i4")])
+        with h5py.File(p, "w") as f:
+            g = f.create_group("Geometry")
+            a = g.create_group("2D Flow Areas")
+            a.create_dataset("Attributes", data=np.array([(b"Downstream", 120)], dtype=dt))
+            a.create_group("Downstream")
+        st = he.geometry_hdf_state(p)
+        assert st["cells"] == 120 and st["terrain"] == "" and st["props"] is False, st
+        with h5py.File(p, "a") as f:
+            f["Geometry"].attrs["Terrain Filename"] = b".\\Terrain\\Terrain.hdf"
+            for k in he.PROPS_DATASETS:
+                f["Geometry/2D Flow Areas/Downstream"].create_dataset(k, data=np.ones((3, 2)))
+        st = he.geometry_hdf_state(p)
+        assert st["terrain"] and st["props"] is True and st["areas"]["Downstream"]["props"]
+        open(os.path.join(t, "bad.g01.hdf"), "w").write("not hdf")
+        assert he.geometry_hdf_state(os.path.join(t, "bad.g01.hdf"))["error"]
+    finally:
+        shutil.rmtree(t, ignore_errors=True)
