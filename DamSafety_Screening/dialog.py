@@ -2456,8 +2456,8 @@ class NDDamScreeningDialog(QDialog):
                     self._log("!!! {} could not be read as a layer".format(p))
             except Exception as e:                               # noqa
                 self._log("!!! {}: {}".format(p, e))
+        self._fill_layers()     # before the summary: _fill_layers can log a work-folder-layout
         self._log("Added {} result layer(s) to the project{}".format(added, " in one group" if group is not None else ""))
-        self._fill_layers()
         return added
 
 
