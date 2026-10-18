@@ -138,7 +138,12 @@ NEEDS_LAYER = {"3": ("waterbodies",), "4": ("dam_lines",), "8": ("structures",),
 DEFAULT_SETTINGS = {
     "work": "", "package": "",
     "terrain_source": 0,      # tool 2: 0 USGS 3DEP, 1 local DEM folder
-    "larger_clips": 0,
+    # H3 (2026-10-18): tool 7 "terrain for larger clips" - 1 USGS 3DEP, not 0 cached clips only.
+    # Cache only truncated floods in silence (a flood that reaches the step-2 clip edge stops
+    # there and the dam is under-classified); the default now follows the terrain source the run
+    # already uses (terrain_source default is 0 = 3DEP) so the clip can grow. Kept in the tool's
+    # own enum range (0 cache / 1 3DEP / 2 local) so the window combo round-trips it unchanged.
+    "larger_clips": 1,
     "pregrow": False,        # tool 7: 0 cached clips only, 1 3DEP, 2 local
     "local_dem": "", "engine": 2, "exe": "", "scenario": 0, "workers": 0,   # engine 2 = built-in (0.13: no install)
     "crit": 0, "chart_file": "", "runner_dem": "", "dams_folder": "", "clip": "",

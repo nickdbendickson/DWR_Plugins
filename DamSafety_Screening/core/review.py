@@ -21,6 +21,7 @@ import sqlite3
 import struct
 
 from . import workflow as wf
+from . import gpkg_sqlite
 
 LOG = wf.REVIEW_LOG
 ACTIONS = ("accept", "exclude", "set_type", "move_breach", "note")
@@ -30,6 +31,7 @@ ACTION_TEXT = {"accept": "accepted as screened", "exclude": "excluded from the s
 FIELDS = ("dam_id", "action", "value", "reviewer", "when", "note")
 REV_FIELDS = (("rev_decision", "TEXT"), ("rev_by", "TEXT"), ("rev_date", "TEXT"), ("rev_note", "TEXT"))
 POND_TYPES = ("embankment pond", "dugout", "natural depression")
+MAX_MOVE_M = 5000.0     # 0.17.0: a moved breach point farther than this from the old one is refused
 
 
 # ------------------------------------------------------------------ queue --
@@ -151,6 +153,23 @@ def _gpkg_point_blob(x, y, srs_id):
     return struct.pack("<2sBBi", b"GP", 0, 1, int(srs_id)) + struct.pack("<BIdd", 1, 1, float(x), float(y))
 
 
+def _gpkg_point_xy(blob):
+    """0.17.0: (x, y) of a GeoPackage binary point (any envelope, either byte order), else None."""
+    try:
+        blob = bytes(blob)
+        if blob[:2] != b"GP":
+            return None
+        flags = blob[3]
+        env = {0: 0, 1: 32, 2: 48, 3: 48, 4: 64}.get((flags >> 1) & 7, 0)
+        wkb = blob[8 + env:]
+        e = "<" if wkb[0] == 1 else ">"
+        if struct.unpack(e + "I", wkb[1:5])[0] % 1000 != 1:     # Point, Point Z / M / ZM
+            return None
+        return struct.unpack(e + "dd", wkb[5:21])
+    except (IndexError, TypeError, struct.error):
+        return None
+
+
 class SqliteApply(object):
     """Write decisions into GeoPackage files with sqlite3 (the work folder's own layers)."""
 
@@ -176,12 +195,28 @@ class SqliteApply(object):
         finally:
             con.close()
 
+    def point_of(self, path, dam_id):
+        """0.17.0: (x, y) of the dam's point in the layer's own CRS, or None."""
+        con = sqlite3.connect(path)
+        try:
+            t = self._table(con)
+            gcol = con.execute("SELECT column_name FROM gpkg_geometry_columns WHERE table_name=?",
+                               (t,)).fetchone()[0]
+            row = con.execute('SELECT "{}" FROM "{}" WHERE "dam_id" = ?'.format(gcol, t), (dam_id,)).fetchone()
+            return _gpkg_point_xy(row[0]) if row and row[0] is not None else None
+        finally:
+            con.close()
+
     def move_point(self, path, dam_id, x, y):
         con = sqlite3.connect(path)
         try:
             t = self._table(con)
             gcol, srs = con.execute("SELECT column_name, srs_id FROM gpkg_geometry_columns WHERE table_name=?",
                                     (t,)).fetchone()
+            # 0.29.0: a breach-point GeoPackage that QGIS wrote has rtree triggers calling
+            # ST_IsEmpty, which plain sqlite3 lacks; without this the UPDATE failed and the point
+            # never moved while the log said it had. Drop the index so the write succeeds.
+            gpkg_sqlite.disable_rtree(con, t)
             cur = con.execute('UPDATE "{}" SET "{}" = ? WHERE "dam_id" = ?'.format(t, gcol),
                               (_gpkg_point_blob(x, y, srs), dam_id))
             con.execute("UPDATE gpkg_contents SET min_x=NULL, min_y=NULL, max_x=NULL, max_y=NULL WHERE table_name=?", (t,))
@@ -189,6 +224,39 @@ class SqliteApply(object):
             return cur.rowcount
         finally:
             con.close()
+
+
+def _breach_layers(work):
+    return (wf.out(work, "4", "OUTP"), wf.out(work, "16", "OUTP"), wf.out(work, "18", "OUTP"))
+
+
+def move_xy(work, dam_id, value, applier=None):
+    """(x, y) of a move_breach value 'x, y' in EPSG:5070 metres. 0.17.0: refused (ValueError)
+    when it is more than MAX_MOVE_M from the dam's current breach point - a point typed in
+    another CRS (degrees, State Plane feet) or a wrong dam. No current point: not checked."""
+    try:
+        x, y = (float(v) for v in str(value).replace(";", ",").split(",")[:2])
+    except (TypeError, ValueError):
+        raise ValueError("move_breach needs 'x, y' in EPSG:5070 metres, got {!r}".format(value))
+    applier = applier or SqliteApply()
+    point_of = getattr(applier, "point_of", None)
+    for p in _breach_layers(work):
+        if not p or point_of is None:
+            continue
+        try:
+            old = point_of(p, dam_id)
+        except Exception:                                        # noqa - an unreadable layer: next one
+            old = None
+        if old is None:
+            continue
+        d = ((x - old[0]) ** 2 + (y - old[1]) ** 2) ** 0.5
+        if d > MAX_MOVE_M:
+            raise ValueError("The new breach point ({:.1f}, {:.1f}) is {:,.0f} m from the current one "
+                             "({:.1f}, {:.1f}); a move of more than {:,.0f} m is refused. Give 'x, y' in "
+                             "EPSG:5070 metres (not degrees or State Plane feet).".format(
+                                 x, y, d, old[0], old[1], MAX_MOVE_M))
+        break
+    return x, y
 
 
 def apply(work, row, applier=None):
@@ -218,11 +286,8 @@ def apply(work, row, applier=None):
                 except Exception as e:                           # noqa
                     done.append((p, "not written: {}".format(e)))
     elif row["action"] == "move_breach":
-        try:
-            x, y = (float(v) for v in str(row["value"]).replace(";", ",").split(",")[:2])
-        except (TypeError, ValueError):
-            raise ValueError("move_breach needs 'x, y' in EPSG:5070 metres, got {!r}".format(row["value"]))
-        for p in (wf.out(work, "4", "OUTP"), wf.out(work, "16", "OUTP"), wf.out(work, "18", "OUTP")):
+        x, y = move_xy(work, did, row["value"], applier)
+        for p in _breach_layers(work):
             if p:
                 try:
                     n = applier.move_point(p, did, x, y)
@@ -242,6 +307,8 @@ def apply(work, row, applier=None):
 
 def decide(work, dam_id, action, value="", reviewer="", note="", applier=None):
     """Record and apply a decision in one go. Returns (row, [(file, changed)])."""
+    if action == "move_breach":
+        move_xy(work, str(dam_id).strip(), value, applier)  # 0.17.0: a refused move is not logged
     row = record(work, dam_id, action, value, reviewer, note)
     return row, apply(work, row, applier)
 

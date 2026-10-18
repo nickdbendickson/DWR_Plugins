@@ -135,6 +135,30 @@ def test_clip_edge_warning():
     assert rb.clip_edge_warning(True, "3dep") is None
 
 
+def test_larger_clips_default_is_not_cache_only():
+    # H3 (2026-10-18): the "Terrain for larger clips" default must NOT be "Cached clips only"
+    # (index 0). Cache-only cannot grow, so a flood that reaches the step-2 clip edge is truncated
+    # and the dam under-classified. The default now follows the terrain source (3DEP / local).
+    from nd_dam_screening.algorithms import run_breach_sim as rb
+    from nd_dam_screening.core import workflow as wf
+    TSRC = ["cache", "3dep", "local"]                 # run_breach_sim.py:433 enum -> source mapping
+    assert rb.TERRAIN[0].startswith("Cached")         # index 0 is still the cache-only option
+    # processing-parameter default (the headless / Processing path)
+    alg = rb.RunBreachSim()
+    alg._params = {}
+    alg.initAlgorithm()
+    tsrc_default = alg.parameterDefinition("TSRC").defaultValue
+    assert tsrc_default in (1, 2) and TSRC[tsrc_default] != "cache", tsrc_default
+    # window default (put() as TSRC in workflow.py); kept in the 0/1/2 enum range so the 3-item
+    # dialog combo round-trips it unchanged (a 4th sentinel would be clobbered back to 0 = cache)
+    win = wf.DEFAULT_SETTINGS["larger_clips"]
+    assert isinstance(win, int) and 0 <= win < len(rb.TERRAIN), win
+    assert win != 0 and TSRC[win] != "cache", win
+    # truncation is STILL flagged when cache-only is chosen deliberately and the flood hits the edge
+    assert rb.clip_edge_warning(True, "cache")
+    assert rb.clip_edge_warning(True, TSRC[win]) is None
+
+
 def test_lisflood_is_vetted_and_logged():
     if os.name == "nt":
         print("SKIP: POSIX modes"); return
