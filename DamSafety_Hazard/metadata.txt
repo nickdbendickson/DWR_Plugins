@@ -5,9 +5,16 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.32
+version=2.18.33
 author=N.D. Bendickson
 changelog=
+    2.18.33 - 2026-10-16
+      * The window widgets the DamSafety plugins share (the check panel, disclosure
+        sections, stage strip, ...) are in one file, ui_widgets.py, identical in the
+        Runner, Screening and Hazard (a test checks the copies); ui_check_panel.py
+        re-exports the check panel, which behaves as in 2.18.32.
+      * Settings buttons read 'File…', 'New…', 'Load…', 'Save as…' (one ellipsis
+        character); the settings grid's first-row combo box sits in its own column.
     2.18.32 - 2026-10-16
       * Setup and Run: the "Check inputs" results show in a panel under the buttons,
         ranked by severity - errors in a red box (Classify is blocked until they are
