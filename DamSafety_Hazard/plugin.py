@@ -133,13 +133,11 @@ class NDdamHazardHelperPlugin(QObject):
             return False
 
     def run_settings(self, *args):
-        """Open the window on its Suite settings tab (v2.13)."""
+        """Open the window and its Suite settings window (v2.13 a tab; 2.18.34 the gear
+        menu's non-modal window)."""
         self.run_plugin()
         try:
-            dlg = self.dialog
-            for i in range(dlg.tab_widget.count()):
-                if dlg.tab_widget.tabText(i) == "Suite settings":
-                    dlg.tab_widget.setCurrentIndex(i)
+            self.dialog._open_suite_settings()
         except Exception:                                        # noqa
             pass
 

@@ -10,8 +10,9 @@ changelog=3.10.16 (2026-10-18)
     * Export the breach to HEC-RAS now also builds a HEC-RAS 6.x 2D dam-breach model package (core/hecras_model.build_model) in <dam>/_breach_model/hecras/<DamID>_<date>/ plus a .zip, with WINDOWS_README.txt (steps for HEC-RAS 6.6 on Windows) and PACKAGE_MANIFEST.json. Not yet opened in HEC-RAS. The old skeleton writer hecras.write_ras_project (keywords HEC-RAS does not use) is retired.
     * Inflow point fix: when no toe was found below the dam, place_from_crest took the highest ground within 400 m as the crest and could put the inflow on a nearby hill above the top of dam (DWR-3161: 1916.7 ft vs top 1844.4 ft). The crest is now ground at the top of dam (within max(3 ft, 10% of H)) and the inflow must be below the top of dam; build_model ignores an older run's inflow that is not.
     * HEC-RAS dam connection trimmed to the dam length (option, the run's crest length, or dam.json dam_length_ft) centred on the dam; run_report.json adds work_crs, dem_z_to_m and structures_used.
-    (3.10.15 is used by open PR #69.)
-    3.10.14 3.10.14 (2026-10-15)
+    3.10.15 (2026-10-16)
+    * Window redesign: muted disclaimer banner, Dam -> Terrain -> Model run -> Products stage strip, prominent 'Run this dam' with LISFLOOD-FP / ANUGA found chips, DEM download and Advanced as collapsible sections (Advanced shows its values in the header), two tabs (Run: the dam card; Tools: a category rail), Settings in its own window behind the gear button, collapsible log. 'Open Hazard / Screening' now open DamSafety Hazard / DamSafety Screening. No tool, wizard or Processing change.
+    3.10.14 (2026-10-15)
     * Cross-platform (#32): text files read/written as UTF-8, CSVs written with newline='' (no blank rows on Windows), Windows conda ANUGA env python found, subprocess output decoded tolerantly.
     * Culvert matches from NDDOT Center Line Pipes: the plan-datum end elevations and note are in run_report.md and run_report.json (reported only; the burn uses LiDAR inverts).
     3.10.13 3.10.13 (2026-10-15)
