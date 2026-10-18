@@ -22,6 +22,8 @@ from . import conditioning as cond
 from . import structures as structmod
 
 WORKER = os.path.join(os.path.dirname(__file__), "anuga_worker.py")
+MESHER = os.path.join(os.path.dirname(__file__), "gmsh_mesher.py")
+MESHERS = ("default", "gmsh")
 
 
 class AnugaSettings:
@@ -42,6 +44,11 @@ class AnugaSettings:
         self.buffer_m = buffer_m
         self.algorithm = algorithm
         self.velocity_min_depth_m = velocity_min_depth_m
+        # ANUGA_MESHER: "default" = ANUGA's own mesh (create_domain_from_regions, unchanged);
+        # "gmsh" = breakline-graded mesh from core/gmsh_mesher.py, falls back to default
+        self.mesher = "default"
+        self.gmsh = None                 # dict of gmsh_mesher sizes (None = its defaults)
+        self.gmsh_timeout_s = 600.0
 
 
 def inlet_line(inflow_xy, direction, width_m):
@@ -109,7 +116,7 @@ def clip_lines_to_polygon(lines, polygon, min_len=1):
 
 
 def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_depth=None,
-              culverts=None, breaklines=None, regions=None):
+              culverts=None, breaklines=None, regions=None, mesh=None):
     job = {
         "dem": dem.masked().astype(np.float32), "dem_x0": dem.x0, "dem_y0": dem.y0,
         "dem_dx": dem.dx, "manning_n": st.manning_n,
@@ -132,7 +139,75 @@ def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_d
         job["breaklines_json"] = json.dumps([np.asarray(b).tolist() for b in breaklines])
     if regions:
         job["regions_json"] = json.dumps(regions)
+    if mesh is not None:     # gmsh mesh: the worker uses anuga.Domain(points, vertices, boundary)
+        job["mesh_points"] = np.asarray(mesh["points"], float)
+        job["mesh_triangles"] = np.asarray(mesh["triangles"], np.int64)
+        job["mesh_boundary"] = np.asarray(mesh["boundary"], np.int64)
+        job["mesh_stats"] = json.dumps(mesh.get("stats", {}))
     np.savez(path, **job)
+
+
+def _clean_env():
+    env = dict(os.environ)
+    for k in ("PYTHONHOME", "PYTHONPATH", "QGIS_PREFIX_PATH", "PYTHONNOUSERSITE"):
+        env.pop(k, None)
+    return env
+
+
+def gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st, channel=None):
+    """The gmsh_mesher input: outer ring, breaklines (embankments, culverts, the
+    inlet/breach line), the flow path and the points that need small triangles."""
+    lines = [np.asarray(b, float).tolist() for b in (breaklines or [])]
+    lines.append(np.asarray(inlet, float).tolist())
+    pts = [list(map(float, inflow_xy))]
+    for c in culverts or []:
+        e = np.asarray(c["end_points"], float).reshape(-1, 2)
+        lines.append(e.tolist())
+        pts += e.tolist()
+    if channel is None:
+        try:
+            path, _ = terrain.trace_downstream(dem, inflow_xy, 4.0 * max(dem.nx, dem.ny) * dem.dx)
+            # clip first (vertex test), then simplify each inside piece
+            channel = [terrain.douglas_peucker(c, max(dem.dx, 10.0))
+                       for c in clip_lines_to_polygon([np.asarray(path, float)], outer)]
+        except Exception:
+            channel = []
+    spec = dict(outer=np.asarray(outer, float).tolist(), lines=lines,
+                channel=[np.asarray(c, float).tolist() for c in channel], points=pts,
+                threads=int(st.threads or 0))
+    spec.update(st.gmsh or {})
+    return spec
+
+
+def make_gmsh_mesh(workdir, spec, st):
+    """Run gmsh_mesher.py in the ANUGA interpreter with a timeout. Returns
+    (mesh dict or None, note): None means use the default mesh."""
+    sp = os.path.join(workdir, "gmsh_mesh_in.json")
+    op = os.path.join(workdir, "gmsh_mesh.npz")
+    with open(sp, "w", encoding="utf-8") as fh:
+        json.dump(spec, fh)
+    if os.path.exists(op):
+        os.remove(op)
+    try:
+        out = subprocess.run([st.python, MESHER, sp, op], capture_output=True, text=True,
+                             env=_clean_env(), timeout=float(st.gmsh_timeout_s), errors="replace")
+    except subprocess.TimeoutExpired:
+        return None, "ANUGA gmsh mesh took over {:.0f} s; the default ANUGA mesh was used.".format(
+            st.gmsh_timeout_s)
+    except Exception as e:
+        return None, "ANUGA gmsh mesh could not start ({}); the default ANUGA mesh was used.".format(e)
+    if out.returncode != 0 or not os.path.exists(op):
+        msg = (out.stdout + out.stderr).strip().splitlines()
+        why = next((m[len("MESHERROR "):] for m in msg if m.startswith("MESHERROR ")),
+                   msg[-1][:200] if msg else "code {}".format(out.returncode))
+        return None, "ANUGA gmsh mesh failed ({}); the default ANUGA mesh was used.".format(why)
+    with np.load(op) as r:
+        mesh = {"points": r["mesh_points"], "triangles": r["mesh_triangles"],
+                "boundary": r["mesh_boundary"], "stats": json.loads(str(r["mesh_stats"]))}
+    s = mesh["stats"]
+    return mesh, ("ANUGA mesh from gmsh: {} triangles, smallest {:.0f} m2, minimum angle "
+                  "{:.1f} deg.".format(s.get("triangles"), s.get("min_area_m2", 0),
+                                       s.get("min_angle_deg", 0)))
 
 
 def _launch(st, job, result, workdir, progress, cancel):
@@ -211,8 +286,17 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     step = max(5.0, float(np.sqrt(max(st.fine_area_m2, 1.0))))
     breaklines = clip_lines_to_polygon([cond.densify(np.asarray(b, float), step)
                                         for b in (refine_lines or [])], outer)
+    mesh, mnote = None, None
+    mesher = getattr(st, "mesher", "default") or "default"
+    if mesher == "gmsh":
+        mesh, mnote = make_gmsh_mesh(workdir, gmsh_spec(dem, outer, inflow_xy, inlet, culverts,
+                                                        breaklines, st), st)
+        if log and mnote:
+            log(mnote)
+    elif mesher != "default":
+        mnote = "ANUGA_MESHER {!r} is unknown; the default ANUGA mesh was used.".format(mesher)
     write_job(job, dem, outer, fine, inlet, hydrograph, st, dem, initial_depth, culverts,
-              breaklines, regions)
+              breaklines, regions, mesh=mesh)
     np.savetxt(os.path.join(workdir, "mesh_boundary.csv"), outer, delimiter=",",
                header="x,y", comments="", fmt="%.3f")
     if len(fine):
@@ -251,9 +335,11 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         log("ANUGA finished in {:.1f} min ({} triangles)".format((time.time() - t0) / 60.0,
                                                                stats.get("triangles")))
     notes = list(cnotes)
+    if mnote:
+        notes.append(mnote)
     for e in stats.get("culvert_errors", []):
         notes.append("ANUGA culvert not applied: " + e)
-    if refine_lines and not stats.get("breaklines_used") and breaklines:
+    if refine_lines and not stats.get("breaklines_used") and breaklines and mesh is None:
         notes.append("ANUGA: the embankment lines could not be used as mesh edges (they cross or "
                      "touch each other); the mesh was made without them.")
     return Envelopes(dem.like(depth, np.nan), dem.like(vel, np.nan), dem.like(arr, np.nan),
@@ -277,4 +363,25 @@ def check_anuga(python, workdir):
     if out.returncode != 0:
         return {"ok": False, "message": (out.stdout + out.stderr)[-1500:]}
     ver = out.stdout.strip().splitlines()[-1]
-    return {"ok": True, "message": "ANUGA {} (Python {})".format(*ver.split()[:2])}
+    res = {"ok": True, "message": "ANUGA {} (Python {})".format(*ver.split()[:2])}
+    res.update(check_gmsh(python, env))
+    return res
+
+
+def check_gmsh(python, env=None):
+    """Optional: is gmsh importable in the ANUGA interpreter (ANUGA_MESHER=gmsh)?
+    Never makes the ANUGA check fail."""
+    code = "import gmsh; print(gmsh.__version__)"
+    try:
+        out = subprocess.run([python, "-c", code], capture_output=True, text=True,
+                             env=env or _clean_env(), timeout=120, errors="replace")
+    except Exception as e:
+        return {"gmsh": None, "gmsh_message": "gmsh check failed: {}".format(e)}
+    if out.returncode != 0:
+        last = ((out.stdout + out.stderr).strip().splitlines() or ["?"])[-1][:200]
+        hint = (" (Linux: install libglu1-mesa libxcursor1 libxinerama1 libxft2)"
+                if "libGLU" in last or ".so" in last else " (pip install gmsh in the ANUGA env)")
+        return {"gmsh": None, "gmsh_message": "gmsh not available, optional for "
+                "ANUGA_MESHER=gmsh: {}{}".format(last, hint)}
+    v = out.stdout.strip().splitlines()[-1]
+    return {"gmsh": v, "gmsh_message": "gmsh {} (optional, for ANUGA_MESHER=gmsh)".format(v)}
