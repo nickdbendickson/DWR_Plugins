@@ -36,13 +36,28 @@ class SetupPlugin(object):
 
     def initGui(self):
         self.action = QAction("Start here...", self.iface.mainWindow())
+        self.action.setObjectName("DamSafetySetupStartAction")
         self.action.triggered.connect(self.run)
         self.iface.addPluginToMenu(MENU, self.action)
+        # Suite-configuration surface. Without these the setup/status dialog (open_status)
+        # and the always-on status dock (status_dock.SuiteStatusDock, via show_dock) were
+        # dead code: reachable from no menu, so the suite's folders, models and pack
+        # conversion could not be opened from QGIS.
+        self.setup_action = QAction("Suite setup / status...", self.iface.mainWindow())
+        self.setup_action.setObjectName("DamSafetySetupConfigAction")
+        self.setup_action.triggered.connect(self.open_status)
+        self.iface.addPluginToMenu(MENU, self.setup_action)
+        self.dock_action = QAction("Suite status dock...", self.iface.mainWindow())
+        self.dock_action.setObjectName("DamSafetySetupStatusDockAction")
+        self.dock_action.triggered.connect(self.show_dock)
+        self.iface.addPluginToMenu(MENU, self.dock_action)
         self.dock = None
 
     def unload(self):
         if self.action is not None:
             self.iface.removePluginMenu(MENU, self.action)
+        if getattr(self, "setup_action", None) is not None:
+            self.iface.removePluginMenu(MENU, self.setup_action)
         if getattr(self, "dock_action", None) is not None:
             self.iface.removePluginMenu(MENU, self.dock_action)
         if getattr(self, "dock", None) is not None:
