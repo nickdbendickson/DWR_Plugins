@@ -130,6 +130,22 @@ EQUATIONS = {EQ_SWE: (1, "Shallow water equations (SWE-ELM)"),
              EQ_DWE: (0, "Diffusion wave")}
 
 
+# v3.10.22: solver tolerances written in the plan. "default" is what 3.10.20 wrote; "tight"
+# halves the water-surface and volume tolerances and allows more iterations (option
+# tolerances), to bring the volume accounting error down (Absaraka 3.10.17 package: 1.05 %)
+TOLERANCES = {"default": {"ztol": 0.02, "zsatol": 0.02, "d2_ztol": 0.01, "d2_voltol": 0.01,
+                          "d2_maxiter": 20},
+              "tight": {"ztol": 0.01, "zsatol": 0.01, "d2_ztol": 0.005, "d2_voltol": 0.005,
+                        "d2_maxiter": 30}}
+# v3.10.22: sunny day: the breach starts at a set time after a short quiet warm-up (the pool at
+# its starting level), not by a trigger level a hundredth below the starting pool
+BREACH_WARMUP_HR = 0.25
+BREACH_START_MODES = ("time", "wse")
+HEC_BREACH_MODES = ("match_plugin", "failure_mode")
+SPILLWAY_WEIR_COEF = 2.6        # US units; the dam connection's own weir coefficient
+SPILLWAY_INTERVAL_MIN = 5       # the reservoir's warm-up inflow series
+
+
 class HecRasModelError(ValueError):
     pass
 
@@ -305,6 +321,7 @@ class Model:
         self.terrain_name = ""
         self.description = []
         self.structures = []         # v3.12.0: structure_connection() dicts
+        self.tolerances = dict(TOLERANCES["default"])   # v3.10.22: solver tolerances (plan)
 
     def bounds(self):
         pts = list(self.perimeter) + list(self.reservoir)
@@ -553,7 +570,7 @@ def breach_block(m):
     return ["Breach Loc={},{},{},True,{}".format(blank16, blank16, blank8, name16(CONN_NAME)),
             "Breach Method= 0 ",
             "Breach Geom=" + ",".join(geom),
-            "Breach Start=True,{},,,False,,,0".format(num(b["trigger_wse"], 3)),
+            breach_start_line(b),
             "Breach Progression= 2 ", f8(0) + f8(0) + f8(1) + f8(1),
             "Simplified Physical Breach Downcutting= 2 ", f8(0) + f8(0) + f8(1) + f8(1),
             "Simplified Physical Breach Widening= 2 ", f8(0) + f8(0) + f8(1) + f8(1),
@@ -564,9 +581,26 @@ def breach_block(m):
             "Breach Use User Defined Growth Ratio=0", "Breach User Defined Growth Ratio=1"]
 
 
+def breach_start_line(b):
+    """v3.10.22: 'Breach Start=' - a set time (HEC's L40_Levee_Outflow_H.p06 layout:
+    False,,<date>,<HHMM>,...) when b['start_mode'] is 'time', else the water-surface trigger
+    (BaldEagleDamBrk layout)."""
+    if b.get("start_mode") == "time":
+        d, t = ras_date(float(b.get("start_hr") or 0.0))
+        return "Breach Start=False,,{},{},False,,,0".format(d, t)
+    return "Breach Start=True,{},,,False,,,0".format(num(b["trigger_wse"], 3))
+
+
+def _g(v):
+    return "{:g}".format(float(v))
+
+
 def _d2_block(m, eq):
+    tol = getattr(m, "tolerances", None) or TOLERANCES["default"]
     return ["UNET D2 Name=" + name16(AREA_NAME), "UNET D2 Theta= 1 ", "UNET D2 Theta Warmup= 1 ",
-            "UNET D2 Z Tol= 0.01 ", "UNET D2 Volume Tol= 0.01 ", "UNET D2 Max Iterations= 20 ",
+            "UNET D2 Z Tol= {} ".format(_g(tol["d2_ztol"])),
+            "UNET D2 Volume Tol= {} ".format(_g(tol["d2_voltol"])),
+            "UNET D2 Max Iterations= {} ".format(int(tol["d2_maxiter"])),
             "UNET D2 Equation= {} ".format(eq), "UNET D2 TotalICTime=",
             "UNET D2 RampUpFraction=0.1", "UNET D2 TimeSlices= 1 ",
             "UNET D2 Turbulence Formulation=Non-Conservative (original)",
@@ -609,6 +643,7 @@ def courant_lines(c, equation=EQ_SWE):
 
 def plan_text(m):
     eq = EQUATIONS[m.equation][0]
+    tol = getattr(m, "tolerances", None) or TOLERANCES["default"]
     d1, t1 = ras_date(0.0)
     d2, t2 = ras_date(m.sim_hours)
     L = ["Plan Title=" + m.title, "Program Version=" + PROGRAM_VERSION,
@@ -628,7 +663,8 @@ def plan_text(m):
         ] + courant_lines(m.courant, m.equation) + [
         "Run HTab=-1 ", "Run UNet=-1 ", "Run Sediment= 0 ", "Run PostProcess=-1 ",
         "Run WQNet= 0 ", "Run RASMapper= 0 ",
-        "UNET Theta= 1 ", "UNET Theta Warmup= 1 ", "UNET ZTol= 0.02 ", "UNET ZSATol= 0.02 ",
+        "UNET Theta= 1 ", "UNET Theta Warmup= 1 ",
+        "UNET ZTol= {} ".format(_g(tol["ztol"])), "UNET ZSATol= {} ".format(_g(tol["zsatol"])),
         "UNET QTol=", "UNET MxIter= 20 ", "UNET Max Iter WO Improvement= 0 ",
         "UNET MaxInSteps= 0 ", "UNET DtIC= 0 ", "UNET DtMin= 0 ", "UNET MaxCRTS= 20 ",
         "UNET WFStab= 2 ", "UNET SFStab= 1 ", "UNET WFX= 1 ", "UNET SFX= 1 ",
@@ -1111,7 +1147,14 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             "time_step": None,
             "structures": True,                 # v3.12.0: the run's culverts and bridges
             # TIER 2 fix: how far a rejected inflow point may be walked downstream
-            "inflow_search_ft": 3000.0}
+            "inflow_search_ft": 3000.0,
+            # v3.10.22 (see the constants above build_model's helpers)
+            "breach_start": None,               # None: 'time' (sunny day), 'wse' (flood)
+            "breach_warmup_hr": BREACH_WARMUP_HR,
+            "hec_breach_mode": "match_plugin",  # or 'failure_mode' (HEC Piping for piping)
+            "warmup_hold": True,                # spillway: hold the pool during the warm-up
+            "tolerances": "default",            # or 'tight', or a dict (TOLERANCES keys)
+            "mesh_seeds": None}                 # None: NDBREACH_HECRAS_MESH_SEEDS, else 'grid'
 
 
 def _ogr():
@@ -1673,8 +1716,9 @@ BREACH_SHAPE_NOTE = (
     "'piping with a pipe phase' method). HEC-RAS's 'Piping' failure mode in this plan starts "
     "as a pipe at the piping elevation that grows until the top collapses, then becomes the "
     "trapezoid; 'Overtopping' deepens from the top like the plugin. Expect the HEC-RAS peak and "
-    "its timing to differ from the plugin's; set the failure mode to Overtopping in the breach "
-    "editor to compare like with like.")
+    "its timing to differ from the plugin's. Since Runner 3.10.22 the plan uses Overtopping for "
+    "the plugin's routed (weir) methods so that the peaks compare (option hec_breach_mode; "
+    "Piping only for the pipe-phase method or when asked).")
 
 
 class HecRasSiteError(HecRasModelError):
@@ -1913,6 +1957,148 @@ def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut):
     return out
 
 
+# ============================================================================
+# v3.10.22: breach start, spillway, the plugin's hydrograph on HEC-RAS's breach, solver
+# tolerances, gmsh computation points
+# ============================================================================
+SPILLWAY_KEYS = (("spillway_crest_ft", "spillway_width_ft"),
+                 ("emergency_spillway_crest_ft", "emergency_spillway_width_ft"))
+
+
+def spillway_spec(dam_folder=None, options=None):
+    """(crest ft, width ft, centre station ft or None, where from) or None: the options
+    spillway_crest_ft / spillway_width_ft (/ spillway_station_ft), else dam.json fields
+    spillway_crest_ft + spillway_width_ft (or emergency_spillway_...). The option spillway=False
+    leaves it out."""
+    o = options or {}
+    if o.get("spillway") is False:
+        return None
+    if o.get("spillway_crest_ft") is not None and o.get("spillway_width_ft") is not None:
+        return (float(o["spillway_crest_ft"]), float(o["spillway_width_ft"]),
+                None if o.get("spillway_station_ft") is None else float(o["spillway_station_ft"]),
+                "chosen")
+    if dam_folder:
+        try:
+            with open(os.path.join(dam_folder, "dam.json"), encoding="utf-8") as f:
+                fl = json.load(f).get("fields") or {}
+        except (OSError, ValueError, AttributeError):
+            fl = {}
+        for kc, kw in SPILLWAY_KEYS:
+            try:
+                c, w = fl.get(kc), fl.get(kw)
+                if c is not None and w is not None and float(w) > 0:
+                    st = fl.get("spillway_station_ft")
+                    return (float(c), float(w), None if st is None else float(st),
+                            "dam.json {} / {}".format(kc, kw))
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def spillway_stations(dam_len, width, breach_lo, breach_hi, station=None, margin=0.0):
+    """(s1, s2) of a spillway `width` wide on the dam line (stations from its left end):
+    centred on `station` when given, else at the end of the line farther from the breach
+    (breach_lo..breach_hi, its top width), `margin` in from the end. (None, reason) when it
+    does not fit without touching the breach."""
+    width, dam_len = float(width), float(dam_len)
+    if width <= 0:
+        return None, "the spillway width is not above 0"
+    if station is not None:
+        s1, s2 = float(station) - 0.5 * width, float(station) + 0.5 * width
+    elif (dam_len - breach_hi) >= breach_lo:
+        s2 = dam_len - margin
+        s1 = s2 - width
+    else:
+        s1 = margin
+        s2 = s1 + width
+    if s1 < 0 or s2 > dam_len:
+        return None, ("the spillway ({:.0f} wide) does not fit on the {:.0f} dam line"
+                      .format(width, dam_len))
+    if s2 > breach_lo and s1 < breach_hi:
+        return None, ("the spillway (stations {:.0f} to {:.0f}) would overlap the breach "
+                      "({:.0f} to {:.0f})".format(s1, s2, breach_lo, breach_hi))
+    return (s1, s2), ""
+
+
+def add_spillway_notch(weir, s1, s2, crest, wall=0.25):
+    """The weir profile [(station, elevation)] with a notch at `crest` from s1 to s2 (the
+    profile elsewhere unchanged; `wall` sets how steep its sides are)."""
+    st = np.array([a for a, _ in weir], float)
+    el = np.array([b for _, b in weir], float)
+    out = [(a, b) for a, b in weir if a < s1 - wall - 1e-9]
+    lo = max(s1 - wall, 0.0)
+    out.append((round(lo, 2), round(float(np.interp(lo, st, el)), 2)))
+    out += [(round(s1, 2), round(float(crest), 2)), (round(s2, 2), round(float(crest), 2))]
+    hi = min(s2 + wall, float(st[-1]))
+    out.append((round(hi, 2), round(float(np.interp(hi, st, el)), 2)))
+    out += [(a, b) for a, b in weir if a > s2 + wall + 1e-9]
+    clean = []
+    for a, b in out:
+        if clean and a <= clean[-1][0] + 1e-9:
+            continue
+        clean.append((a, b))
+    return clean
+
+
+def weir_flow(coef, width, head):
+    """Q = C L H^1.5 (project units; 0 for no head)."""
+    return float(coef) * float(width) * max(float(head), 0.0) ** 1.5
+
+
+def warmup_inflow(sim_hours, start_hr, hold, base=0.0, step_min=SPILLWAY_INTERVAL_MIN):
+    """(interval label, values): `hold` + base until the breach starts (it keeps the pool at
+    its starting level while the spillway runs), then the base flow only."""
+    dt = step_min / 60.0
+    n = int(math.ceil(float(sim_hours) / dt)) + 2
+    t = np.arange(n) * dt
+    q = np.where(t <= float(start_hr) + 1e-9, float(hold) + float(base), float(base))
+    return hecras.ras_interval_label(step_min), [round(float(v), 2) for v in q]
+
+
+def plugin_reference(dam, params, bvals, units, start_hr=0.0):
+    """The plugin's own breach routing (breach.routed_hydrograph) on HEC-RAS's breach: the
+    bottom elevation, bottom width, side slopes and formation time of this plan (the bottom
+    may have been raised to the toe ground), so the HEC-RAS breach flow can be compared with
+    like. Returns a dict (t_hr from the breach start, q_cfs, peak, times) or None."""
+    method = str(params.get("method") or "")
+    if method not in brmod.ROUTED_METHODS:
+        return None
+    import dataclasses
+    bottom_ft = float(bvals["bottom_elev"]) * units.L / FT
+    z = float(bvals["left_slope"])
+    hb_ft = float(dam.top_of_dam_ft) - bottom_ft
+    avg_w = float(bvals["bottom_width"]) * units.L / FT + z * hb_ft
+    d2 = dataclasses.replace(dam, breach_bottom_ft=bottom_ft)
+    ov = brmod.BreachOverrides(avg_width_ft=avg_w, formation_hr=float(bvals["formation_hr"]),
+                               side_slope_h=z)
+    hy = brmod.routed_hydrograph(d2, method, ov)
+    t_hr = np.asarray(hy.t_s, float) / 3600.0
+    q = np.asarray(hy.q_cms, float) / CFS
+    k = int(np.argmax(q))
+    return {"method": method, "bottom_ft": round(bottom_ft, 2), "avg_width_ft": round(avg_w, 1),
+            "side_slope": z, "formation_hr": float(bvals["formation_hr"]),
+            "peak_cfs": round(float(q[k]), 1), "peak_hr_after_breach": round(float(t_hr[k]), 3),
+            "peak_hr_in_plan": round(float(t_hr[k]) + float(start_hr), 3),
+            "volume_acft": round(float(hy.volume_m3) / ACFT, 1),
+            "run_peak_cfs": params.get("peak_cfs"), "start_hr": float(start_hr),
+            "t_hr": t_hr, "q_cfs": q}
+
+
+def record_run_report(report_path, key, value, log=None):
+    """v3.10.22: one entry of the run's run_report.json (written atomically)."""
+    try:
+        with open(report_path, encoding="utf-8") as f:
+            rep = json.load(f)
+        rep[key] = value
+        tmp = report_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(rep, f, indent=2, default=str)
+        os.replace(tmp, report_path)
+    except (OSError, ValueError) as e:
+        if log:
+            log("Could not record {} in {}: {}".format(key, report_path, e))
+
+
 def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=None,
                 log=None, progress=None):
     """Builds the HEC-RAS model of a finished run in `out_folder` (default
@@ -1941,6 +2127,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # --- coordinate systems --------------------------------------------------------
     gdal, ogr, osr = _ogr()
     from ..damsuite import gdalsafe as GS
+    from . import hecras_seeds as hseeds
+    seeds_mode = hseeds.mode_of(o)               # v3.10.22: raises on a bad value, before work
     dem_ds = GS.open_raster(dem_path)
     dem_wkt = dem_ds.GetProjection()
     dem_gt = dem_ds.GetGeoTransform()
@@ -2350,6 +2538,21 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         centre_how = "lowest ground at the toe near the dam point"
     bvals, wse0_ft, trig_ft, bnotes = breach_values(dam, params, units, dam_len)
     notes += bnotes
+    # v3.10.22: the HEC-RAS failure mode that opens the breach the way the plugin routed it
+    hmode = str(o.get("hec_breach_mode") or "match_plugin").strip().lower()
+    if hmode not in HEC_BREACH_MODES:
+        raise HecRasModelError("hec_breach_mode must be one of {} (got {!r})".format(
+            ", ".join(HEC_BREACH_MODES), hmode))
+    method = str(params.get("method") or "")
+    if hmode == "match_plugin" and bvals.get("piping") and method != brmod.METHOD_PIPING_ORIFICE:
+        bvals["piping"] = False
+        bvals["piping_elev"] = None
+        notes[:] = [n for n in notes if not n.startswith("Initial piping elevation")]
+        notes.append("Breach: HEC-RAS failure mode 'Overtopping' (the breach deepens from the "
+                     "top and widens linearly), because the plugin's '{}' breach is routed that "
+                     "way; HEC-RAS 'Piping' (a pipe that grows, then collapses) gives a later, "
+                     "lower peak (option hec_breach_mode='failure_mode').".format(method))
+    bvals["hec_mode"] = "piping" if bvals.get("piping") else "overtopping"
     half = 0.5 * bvals["bottom_width"] + bvals["left_slope"] * (top_u - bvals["bottom_elev"])
     sc = min(max(sc, half), max(dam_len - half, half))
     bvals["center_station"] = round(sc, 1)
@@ -2444,6 +2647,34 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                              2 * cw, toe_off + cell, bvals["bottom_elev"], cut["cells"],
                              cut["max_cut"], u=units.len_name))
     site["breach_cut"] = cut
+    # --- v3.10.22: the spillway as a notch in the dam weir ------------------------------
+    spill_info = None
+    sp = spillway_spec(dam_folder, o)
+    if sp is not None:
+        crest_u, width_u = units.from_ft(sp[0]), units.from_ft(sp[1])
+        st_u = None if sp[2] is None else units.from_ft(sp[2])
+        half_t = 0.5 * bvals["bottom_width"] + bvals["left_slope"] * (top_u - bvals["bottom_elev"])
+        if crest_u >= top_u - 1e-6:
+            notes.append("Spillway not added: its crest {:.2f} {} is not below the top of dam."
+                         .format(crest_u, units.len_name))
+        else:
+            ss_, why_ = spillway_stations(dam_len, width_u, sc - half_t, sc + half_t, st_u,
+                                          margin=min(cell, max(0.0, 0.1 * dam_len)))
+            if ss_ is None:
+                notes.append("Spillway not added: {}.".format(why_))
+            else:
+                weir = add_spillway_notch(weir, ss_[0], ss_[1], crest_u)
+                spill_info = {"crest": round(crest_u, 2), "width": round(width_u, 2),
+                              "stations": [round(ss_[0], 1), round(ss_[1], 1)],
+                              "source": sp[3], "as": "notch in the dam connection's weir",
+                              "weir_coef": units.weir_coef(SPILLWAY_WEIR_COEF)}
+                notes.append("Spillway: a {:,.0f} {u} notch at {:.2f} {u} in the dam weir, "
+                             "stations {:,.0f} to {:,.0f} ({}; {}). Its flow is the "
+                             "connection's 'Weir Flow'; the breach flow is 'Total Flow' minus "
+                             "'Weir Flow'.".format(width_u, crest_u, ss_[0], ss_[1], sp[3],
+                                                   "centred where given" if st_u is not None
+                                                   else "at the end of the dam line farther "
+                                                   "from the breach", u=units.len_name))
 
     # --- boundary: normal depth where the valley leaves the 2D area ---------------
     progress(70, "downstream boundary")
@@ -2533,6 +2764,29 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         raise HecRasModelError("the 2D area has fewer than 10 cells at {} {}; choose a "
                                "smaller cell size".format(cell, units.len_name))
 
+    # v3.10.22: gmsh point layout instead of the grid (optional; HEC-RAS still makes the cells)
+    seeds_info = {"asked": seeds_mode, "used": "grid", "grid_points": int(len(pts))}
+    if seeds_mode == "gmsh":
+        progress(82, "gmsh computation points")
+        try:
+            spts, sinf = hseeds.make_seeds(
+                perim, cell, options=o, dam_line=(A, B), downstream=d,
+                breach_xy=A + ab * sc, breach_len=toe_off + 2.0 * cell,
+                channel=(path_m if (path_m is not None and use_path_dir) else None))
+        except hseeds.SeedError as e:
+            seeds_info["why"] = str(e)
+            notes.append("gmsh computation points were asked for but not used ({}); the regular "
+                         "{:g} {} grid was used.".format(e, cell, units.len_name))
+            log("WARNING: " + notes[-1])
+        else:
+            pts = spts
+            seeds_info.update(used="gmsh", **sinf)
+            notes.append("Computation points from gmsh {} ({:,} points; spacing {:g} {u} along "
+                         "the dam and breach, {:g} along the channel, {:g} elsewhere). HEC-RAS "
+                         "makes the cells from them.".format(
+                             sinf["gmsh_version"], len(pts), sinf["sizes"]["dam_spacing"],
+                             sinf["sizes"]["channel_spacing"], cell, u=units.len_name))
+            log(notes[-1])
     mc = mesh_check(perim, pts, cell)
     if mc and mc["over_8_faces"]:
         notes.append("{} cells along the perimeter have more than 8 faces; HEC-RAS will "
@@ -2610,6 +2864,31 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     cell_ft = cell * units.L / FT
     dt = cour * cell_ft / max(vmax_fps, 5.0)
     dt_s, dt_lab = comp_interval(dt)
+    # v3.10.22: when the breach starts. Sunny day: at a set time after a short warm-up with the
+    # pool at its starting level (the plugin's breach starts at its t = 0 with the pool there,
+    # so the HEC-RAS times are the plugin's plus the warm-up); flood: the run's trigger level
+    scen = report.get("scenario")
+    smode = str(o.get("breach_start") or ("wse" if scen == "flood" else "time")).strip().lower()
+    if smode not in BREACH_START_MODES:
+        raise HecRasModelError("breach_start must be 'time' or 'wse' (got {!r})".format(smode))
+    start_hr = None
+    if smode == "time":
+        if scen == "flood":
+            start_hr = round(float(hy.t_ref_s or 0.0) / 60.0) / 60.0
+        else:
+            w = float(o.get("breach_warmup_hr") if o.get("breach_warmup_hr") is not None
+                      else BREACH_WARMUP_HR)
+            if not 0.0 <= w <= 6.0:
+                raise HecRasModelError("breach_warmup_hr must be 0 to 6 h (got {:g})".format(w))
+            start_hr = round(w * 60.0) / 60.0
+            if not o.get("sim_hours"):
+                sim += start_hr
+                sim_how = (sim_how or "") + "; plus the {:g} h warm-up before the breach".format(
+                    start_hr)
+        if o.get("sim_hours") and sim <= start_hr:
+            raise HecRasModelError("sim_hours ({:g}) must be longer than the breach start "
+                                   "({:g} h)".format(sim, start_hr))
+    bvals["start_mode"], bvals["start_hr"] = smode, start_hr
 
     # --- inflow (flood scenario) ---------------------------------------------------
     inflow_series = None
@@ -2626,10 +2905,28 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         else:
             notes.append("Flood scenario: the inflow hydrograph file was not found; the "
                          "reservoir gets the base flow only. Enter the inflow in HEC-RAS.")
-        notes.append("Flood scenario: the spillway and outlets are not in the HEC-RAS dam "
-                     "(the weir is the top of dam); add them to the connection.")
+        notes.append("Flood scenario: the outlets are not in the HEC-RAS dam; the spillway "
+                     "is the notch in the dam weir." if spill_info else
+                     "Flood scenario: the spillway and outlets are not in the HEC-RAS dam "
+                     "(the weir is the top of dam); add them to the connection, or give "
+                     "spillway_crest_ft and spillway_width_ft.")
         if flood and flood.get("normal_pool_ft") is not None and inflow_series:
             wse0_ft = float(flood["normal_pool_ft"])
+
+    hold = None
+    if (spill_info and inflow_series is None and smode == "time" and start_hr and
+            o.get("warmup_hold", True)):
+        # the spillway runs from the start; an inflow equal to its flow at the starting pool
+        # until the breach starts keeps the pool there (and wets the channel below it); then
+        # no inflow (sunny day)
+        hold = weir_flow(spill_info["weir_coef"], spill_info["width"],
+                         units.from_ft(wse0_ft) - spill_info["crest"])
+        inflow_series = warmup_inflow(sim, start_hr, hold,
+                                      units.flow(o["base_flow_cfs"] * CFS))
+        spill_info["warmup_inflow"] = round(hold, 1)
+        notes.append("Reservoir inflow {:,.0f} {} (the spillway's flow at the starting pool) "
+                     "until the breach starts at {:g} h, then none: the pool stays at its "
+                     "starting level through the warm-up.".format(hold, units.q_name, start_hr))
 
     # --- the model -----------------------------------------------------------------
     m = Model()
@@ -2667,6 +2964,22 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     m.description = ["Built by the ND Dam Breach Runner from the run in {}.".format(
         os.path.basename(os.path.normpath(dam_folder)))]
     m.structures = sinfo["exported"]            # v3.12.0
+    tol = o.get("tolerances") or "default"      # v3.10.22
+    if isinstance(tol, dict):
+        tname, tvals = "custom", dict(TOLERANCES["default"], **tol)
+    elif str(tol).lower() in TOLERANCES:
+        tname, tvals = str(tol).lower(), dict(TOLERANCES[str(tol).lower()])
+    else:
+        raise HecRasModelError("tolerances must be one of {} or a dict (got {!r})".format(
+            ", ".join(TOLERANCES), tol))
+    m.tolerances = tvals
+    # v3.10.22: the plugin's routing on this plan's breach, to compare the breach flow with
+    try:
+        pref = plugin_reference(dam, params, bvals, units, start_hr or 0.0)
+    except (brmod.BreachInputError, ValueError, TypeError, KeyError) as e:
+        pref = None
+        notes.append("The plugin's hydrograph on the HEC-RAS breach was not computed: {}"
+                     .format(e))
 
     # --- write -------------------------------------------------------------------
     progress(88, "writing files")
@@ -2699,14 +3012,25 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             # v3.10.17
             "site": site, "sim_how": sim_how, "hydrograph_end_hr": round(t_end, 2),
             "dam_line_how": dam_line_how, "breach_shape_note": BREACH_SHAPE_NOTE,
+            # v3.10.22
+            "breach_start": {"mode": smode, "start_hr": start_hr,
+                             "trigger_wse": bvals.get("trigger_wse")},
+            "hec_breach_mode": hmode, "spillway": spill_info,
+            "tolerances": {"name": tname, "values": tvals}, "mesh_seeds": seeds_info,
+            "plugin_reference": (None if pref is None else
+                                 {k: v for k, v in pref.items() if k not in ("t_hr", "q_cfs")}),
             "model_wkt": srs.ExportToWkt(),
             "work_wkt": (work.ExportToWkt() if work is not None else None)}
     paths["readme"] = write_readme(os.path.join(out, "README_HECRAS.md"), m, info, notes, dam,
                                    params)
     record_inflow_status(os.path.join(model_dir, hecras.RUN_REPORT_JSON), inflow_status,
                          srs, work, units, log)
+    # v3.10.22: the mesh-point setting (and the gmsh version) in the run's run_report.json
+    record_run_report(os.path.join(model_dir, hecras.RUN_REPORT_JSON), "hecras_mesh_seeds",
+                      dict(seeds_info, folder=out), log)
     progress(100, "done")
-    return {"folder": out, "paths": paths, "model": m, "info": info, "notes": notes}
+    return {"folder": out, "paths": paths, "model": m, "info": info, "notes": notes,
+            "plugin_reference": pref}
 
 
 def mesh_check(perimeter, points, cell):
@@ -2979,15 +3303,47 @@ def write_readme(path, m, info, notes, dam, params):
         "parameters |".format(b["bottom_width"], b["bottom_elev"], L),
         "| Side slopes | {:g} H:1V | the run |".format(b["left_slope"]),
         "| Formation time | {:g} h, linear | the run |".format(b["formation_hr"]),
-        "| Failure mode | {} | the run |".format("Piping" if b["piping"] else "Overtopping"),
+        "| Failure mode | {} | {} |".format(
+            "Piping" if b["piping"] else "Overtopping",
+            "the plugin's breach shape (hec_breach_mode match_plugin)"
+            if info.get("hec_breach_mode", "match_plugin") == "match_plugin" else "the run"),
         "| Breach weir coefficient | {:g} | the plugin's breach weir (HEC-RAS default 2.6) |"
         .format(b["weir_coef"]),
-        "| Breach trigger | water surface {:.2f} {} | {} |".format(
-            b["trigger_wse"], L, "the run's trigger" if info["scenario"] == "flood" else
-            "sunny day: the breach starts with the run"),
+        breach_start_row(b, info, L),
+        "| Spillway | {} | {} |".format(
+            "not modelled" if not info.get("spillway") else
+            "{width:g} {L} notch at {crest:.2f} {L}, stations {s0:,.0f}-{s1:,.0f}".format(
+                L=L, s0=info["spillway"]["stations"][0], s1=info["spillway"]["stations"][1],
+                **info["spillway"]),
+            "give spillway_crest_ft and spillway_width_ft (options or dam.json)"
+            if not info.get("spillway") else info["spillway"]["source"] + (
+                "; inflow {:,.0f} {} until the breach starts keeps the pool".format(
+                    info["spillway"]["warmup_inflow"], u.q_name)
+                if info["spillway"].get("warmup_inflow") else "")),
         "| Downstream boundary | normal depth, slope {:.5f} | {} |".format(
             info["bc_slope"], info["bc_slope_how"]),
         "| Time step | {} | {} |".format(info["comp_interval"], _time_step_text(m)),
+        "| Solver tolerances | {} | UNET ZTol {ztol:g}, ZSATol {zsatol:g}; 2D Z {d2_ztol:g}, "
+        "volume {d2_voltol:g}, {d2_maxiter} iterations |".format(
+            (info.get("tolerances") or {}).get("name", "default"),
+            **((info.get("tolerances") or {}).get("values") or TOLERANCES["default"])),
+        "| Computation points | {} | {} |".format(
+            "{:,} from gmsh {}".format(info["cells"], (info.get("mesh_seeds") or {}).get(
+                "gmsh_version")) if (info.get("mesh_seeds") or {}).get("used") == "gmsh" else
+            "regular {:g} {} grid".format(info["cell"], L),
+            "gmsh asked for, not available: " + info["mesh_seeds"].get("why", "")
+            if (info.get("mesh_seeds") or {}).get("asked") == "gmsh" and
+            info["mesh_seeds"].get("used") != "gmsh" else
+            "refined along the dam, breach and channel; HEC-RAS makes the cells"
+            if (info.get("mesh_seeds") or {}).get("used") == "gmsh" else "the default"),
+        "| Plugin breach peak on this breach | {} | {} |".format(
+            "{:,.0f} cfs at {:.2f} h after the breach starts".format(
+                info["plugin_reference"]["peak_cfs"],
+                info["plugin_reference"]["peak_hr_after_breach"])
+            if info.get("plugin_reference") else "not computed",
+            "the plugin's routing with this plan's breach bottom, width, slopes and time "
+            "(compare with the HEC-RAS breach flow); the run's own peak was {}".format(
+                (info.get("plugin_reference") or {}).get("run_peak_cfs"))),
         "| Mesh check (cells along the perimeter) | {} |  Voronoi cells clipped to the "
         "perimeter, as HEC-RAS builds them |".format(
             "not run (no scipy)" if not info.get("mesh_check") else
@@ -3002,8 +3358,9 @@ def write_readme(path, m, info, notes, dam, params):
         "- DEM edits made for the run (channels, ponds, notches, buildings, a proposed "
         "embankment) are not in the terrain: add them in RAS Mapper as terrain "
         "modifications if they matter.",
-        "- Spillways and outlets: the dam is a weir at the top of dam. For a flood scenario "
-        "add the spillway and outlets to the connection.",
+        ("- Outlets: not modelled; the spillway is the notch above." if info.get("spillway") else
+         "- Spillways and outlets: the dam is a weir at the top of dam. Give the spillway crest "
+         "and width (spillway_crest_ft, spillway_width_ft) to add it as a notch."),
         "- HEC-RAS routes the breach itself (weir flow through the opening); its peak will "
         "differ from the plugin's {:,.0f} cfs.".format(float(params.get("peak_cfs") or 0)),
         "- " + BREACH_SHAPE_NOTE,
@@ -3016,6 +3373,20 @@ def write_readme(path, m, info, notes, dam, params):
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     return path
+
+
+def breach_start_row(b, info, L):
+    """v3.10.22: the README row on when the breach starts."""
+    if b.get("start_mode") == "time":
+        return ("| Breach start | at {:g} h (set time) | {} |".format(
+            b.get("start_hr") or 0.0,
+            "the run's breach initiation in the flood record" if info["scenario"] == "flood"
+            else "sunny day: a {:g} h warm-up with the pool at its starting level, then the "
+            "breach; add {:g} h to the plugin's times to compare".format(
+                b.get("start_hr") or 0.0, b.get("start_hr") or 0.0)))
+    return "| Breach trigger | water surface {:.2f} {} | {} |".format(
+        b["trigger_wse"], L, "the run's trigger" if info["scenario"] == "flood" else
+        "sunny day: the breach starts with the run")
 
 
 def structures_readme(m, sinfo):

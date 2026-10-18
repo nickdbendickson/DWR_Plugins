@@ -745,6 +745,19 @@ def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
     return res
 
 
+def results_t0_hr(res):
+    """v3.10.22: the plan time (h) the arrival times count from: the breach initiation in the
+    inflow hydrograph (hydrograph mode), else the breach's set start time (build_model's
+    sunny-day warm-up), else 0."""
+    bc = res.get("inflow_bc")
+    if bc:
+        return float(bc.get("t_ref_hr") or 0.0)
+    bs = ((res.get("info") or {}).get("breach_start") or {})
+    if bs.get("mode") == "time" and bs.get("start_hr"):
+        return float(bs["start_hr"])
+    return 0.0
+
+
 def _write_engine_json(res, inflow_mode, inflow_bc, info):
     info = info or res.get("info") or {}
     with open(os.path.join(res["folder"], "hecras_engine.json"), "w", encoding="utf-8") as f:
@@ -1271,7 +1284,7 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     shutil.copy2(hdf, keep)
     tr = transformer(r["info"].get("model_wkt"), like.crs_wkt or r["info"].get("work_wkt"))
     arr = results(hdf, like, arrival_m=float(getattr(st, "arrival_depth_ft", 1.0)) * 0.3048,
-                  t0_hr=(r.get("inflow_bc") or {}).get("t_ref_hr", 0.0), to_grid_xy=tr)
+                  t0_hr=results_t0_hr(r), to_grid_xy=tr)
     final = write_results(arr, like, writer, dam_folder)
     rep = {"engine": "hecras", "hecras_version": "6.6", "platform": d["platform"],
            "project": proj, "results_hdf": os.path.join(keep, os.path.basename(hdf)),
