@@ -68,6 +68,8 @@ def source_text(source):
         return "typed in"
     if source.startswith("NID "):
         return "from NID {}".format(source.split()[1])
+    if source.startswith("estimated from DEM"):
+        return "estimated from DEM (screening only)"
     if source.startswith("DWR normal pool"):
         return "from DWR (normal pool volume)"
     return "from {}".format(source.split(" (")[0])
@@ -82,6 +84,33 @@ def values_text(dam):
         out.append("{} {}".format(label, "{:g} {}".format(val, unit) if val else "blank") +
                    (" ({})".format(src) if val and src else ""))
     return " | ".join(out)
+
+
+def run_task(work, done, progress):
+    """Run work(progress) in a QgsTask (not on the window's thread); done(result, '') or
+    done(None, error) back on the window's thread. progress(pct) follows the task."""
+    from qgis.core import QgsApplication, QgsTask
+
+    def fn(task):
+        return work(lambda pct: task.setProgress(float(pct)))
+
+    def finished(exc, result=None):
+        _TASKS.discard(task)
+        if exc is not None:
+            done(None, str(exc) or exc.__class__.__name__)
+        elif result is None:
+            done(None, "cancelled")
+        else:
+            done(result, "")
+    task = QgsTask.fromFunction("DamSafety Setup: estimate the dam from the DEM", fn,
+                                on_finished=finished)
+    task.progressChanged.connect(progress)
+    _TASKS.add(task)
+    QgsApplication.taskManager().addTask(task)
+    return task
+
+
+_TASKS = set()
 
 
 def nid_get(url, done):
@@ -380,6 +409,14 @@ class DamPage(QWizardPage):
         lay.addWidget(self.search)
         lay.addWidget(self.combo)
         lay.addWidget(self.count)
+        # records that are not a dam to model (status Breached / Removed / Not Built /
+        # Submerged, remarks 'VOID ...', 'No Dam Visible') stay off the list unless ticked
+        self.show_all = QCheckBox("Show all records")
+        self.show_all.setToolTip("Also list the DWR records that are not a dam to model: "
+                                 "status Removed, Breached, Not Built or Submerged, or remarks "
+                                 "such as 'VOID' or 'No Dam Visible'. Each shows why.")
+        self.show_all.toggled.connect(self._find)
+        lay.addWidget(self.show_all)
         self.note = QLabel("Pick a county to list its dams, or type a name.")
         self.note.setWordWrap(True)
         lay.addWidget(self.note)
@@ -429,13 +466,28 @@ class DamPage(QWizardPage):
         nrow.addWidget(self.nid_button)
         nrow.addWidget(self.nid_status, 1)
         lay.addLayout(nrow)
+        # Estimate from the DEM: screening values for a record that has no height / storage
+        self.est_button = QPushButton("Estimate from DEM")
+        self.est_button.setToolTip(
+            "Screening estimate from the DEM: height = crest along the dam line minus the "
+            "lowest ground just downstream; storage = DEM volume below the crest in the "
+            "basin upstream. Fills only blank values; a typed value always wins.")
+        self.est_button.clicked.connect(self._estimate)
+        self.est_status = QLabel("")
+        self.est_status.setWordWrap(True)
+        erow = QHBoxLayout()
+        erow.addWidget(self.est_button)
+        erow.addWidget(self.est_status, 1)
+        lay.addLayout(erow)
         self.reason = _reason_label()
         lay.addWidget(self.reason)
         self.setLayout(lay)
         self.rows = []
         self.nid_filled = 0
         self.fetch = nid_get             # (url, done(text, error)); tests replace it
+        self.run_task = run_task         # (fn(progress), done(result, error), progress(pct))
         self._busy = False
+        self._est_busy = False
         for spin in (self.height, self.storage):
             spin.valueChanged.connect(self._changed)
 
@@ -448,15 +500,25 @@ class DamPage(QWizardPage):
     def _find(self, *_a):
         county = self.county.currentData() or ""
         found = self.wiz.found
+        hidden = []
         self.rows = _dams(found.get("dwr"), self.search.text().strip(), county,
-                          lines_uri=found.get("dam_lines"))
+                          lines_uri=found.get("dam_lines"),
+                          hidden=None if self.show_all.isChecked() else hidden)
+        self.hidden = hidden
         self.nid_filled = nid_fill.fill_rows(self.rows, found.get("nid"))
         self.combo.blockSignals(True)
         self.combo.clear()
         for row in self.rows:
-            self.combo.addItem("{} ({})".format(row["name"], row.get("county") or county), row)
+            text = "{} ({})".format(row["name"], row.get("county") or county)
+            if row.get("hidden"):
+                text += " \u2013 not a dam? {}".format(row["hidden"].split(":")[0])
+            self.combo.addItem(text, row)
         self.combo.blockSignals(False)
-        self.count.setText(match_count_text(self.rows, county, self.search.text().strip()))
+        text = match_count_text(self.rows, county, self.search.text().strip())
+        if hidden:
+            text += "; {} record{} hidden (not a dam: void, removed, breached\u2026)".format(
+                len(hidden), "" if len(hidden) == 1 else "s")
+        self.count.setText(text)
         self._show()
 
     def _show(self, *_a):
@@ -470,8 +532,10 @@ class DamPage(QWizardPage):
         self.note.setText("{} | county {} | crest line {}{}".format(
             row.get("name") or "No dam", row.get("county") or "blank",
             "found" if row.get("from_line") or self.wiz.found.get("dam_lines") else "not found",
-            " | point from the dam line" if row.get("from_line") else ""))
+            " | point from the dam line" if row.get("from_line") else "") +
+            ("\nNot a dam to model? {}".format(row["hidden"]) if row.get("hidden") else ""))
         self.nid_status.setText("")
+        self.est_status.setText("")
         self._changed()
 
     def _changed(self, *_a):
@@ -483,8 +547,95 @@ class DamPage(QWizardPage):
         blank = not self.height.value() or not self.storage.value()
         self.nid_button.setEnabled(bool(row) and not row.get("error") and blank and
                                    not self._busy and bool(nid_fill.online_urls(row)))
+        dem = self.dem_for_estimate()
+        self.est_button.setText("Estimate from DEM" if dem else "Choose DEM and estimate\u2026")
+        self.est_button.setEnabled(bool(row) and not row.get("error") and blank and
+                                   not self._est_busy and bool(row.get("point")))
         _set_reason(self.reason, self.problem())
         self.completeChanged.emit()
+
+    def dem_for_estimate(self):
+        """The DEM to estimate from: the one on the DEM page when it is a readable file,
+        else one already downloaded for this dam in the Dams folder; '' when none."""
+        from .runner_params import dem_problem, downloaded_dem
+        page = self.wiz.page(DEM_PAGE)
+        text = page.dem.text().strip()
+        if text and not dem_problem(text):
+            return text
+        row = self.combo.currentData() or {}
+        if not row or row.get("error"):
+            return ""
+        point = (row.get("point") or "").split("[")[0].strip()
+        try:
+            return downloaded_dem(page._dem_folder(), row.get("id"), point)
+        except Exception:
+            return ""
+
+    def _estimate(self, *_a):
+        row = self.combo.currentData()
+        index = self.combo.currentIndex()
+        if not row or row.get("error") or self._est_busy:
+            return
+        dem = self.dem_for_estimate()
+        if not dem:
+            path, _f = QFileDialog.getOpenFileName(self, "DEM for the estimate", "",
+                                                   "Raster (*.tif *.tiff *.vrt *.img)")
+            if not path:
+                return
+            self.wiz.page(DEM_PAGE).dem.setText(path)    # the DEM page starts with it
+            dem = path
+        page = self.wiz.page(DEM_PAGE)
+        zchoice = page.zunit.currentData() if getattr(page, "visited", False) else "meters"
+        lines_uri = self.wiz.found.get("dam_lines")
+        sid = row.get("structure_id")
+        point = nid_fill.parse_point(row.get("point"))
+        self._est_busy = True
+        self.est_button.setEnabled(False)
+        self.est_status.setText("Estimating from {}\u2026 0 %".format(os.path.basename(dem)))
+
+        def work(progress):
+            from . import dem_estimate as DE
+            line = DE.dam_line(lines_uri, sid)
+            return DE.estimate(dem, point, line, zchoice,
+                               progress=lambda pct, text="": progress(pct))
+
+        def show_progress(pct):
+            if self._est_busy:
+                self.est_status.setText("Estimating from {}\u2026 {:.0f} %".format(
+                    os.path.basename(dem), pct))
+
+        def done(res, error):
+            from . import dem_estimate as DE
+            self._est_busy = False
+            now = self.combo.currentData() or {}
+            if self.combo.currentIndex() != index or now.get("id") != row.get("id"):
+                self._changed()
+                return
+            if error:
+                self.est_status.setText("No estimate: {}".format(error))
+                self._changed()
+                return
+            filled = []
+            for key, spin, val, minimum in (
+                    ("height", self.height, res.get("height_ft"), 0.5),
+                    ("storage", self.storage, res.get("storage_acft"), 0.1)):
+                if val is None or val < minimum or spin.value():
+                    continue                       # typed / record values are kept
+                row[key] = round(float(val), 1)
+                row[key + "_source"] = DE.source(key, res)
+                filled.append(key)
+            if filled:
+                self.combo.setItemData(index, row)
+                if 0 <= index < len(self.rows):
+                    self.rows[index] = row
+                for key in filled:
+                    (self.height if key == "height" else self.storage).setValue(row[key])
+            msg = ("Estimated {} from the DEM (screening only)".format(" and ".join(filled))
+                   if filled else "The DEM gave no usable value")
+            self.est_status.setText("{}. {}".format(msg, " ".join(res.get("notes", [])[1:])))
+            self.est_status.setToolTip(" ".join(res.get("notes", [])))
+            self._changed()
+        self.run_task(work, done, show_progress)
 
     def source(self, key):
         """Where the shown height / storage comes from: the record's source while the box
@@ -645,6 +796,7 @@ class DemPage(QWizardPage):
 
     def initializePage(self):
         dam = self.wiz.selected_dam()
+        self.visited = True
         self._show_target()
         self._changed()
         if dam.get("crest") and self.top.value() == 0:
@@ -817,12 +969,16 @@ def match_count_text(rows, county="", name="", limit=None):
         " - only the first {} are listed; narrow the search".format(limit) if n >= limit else "")
 
 
-def _dams(uri, name="", county="", limit=DAM_LIMIT, lines_uri=None):
+def _dams(uri, name="", county="", limit=DAM_LIMIT, lines_uri=None, hidden=None):
     """Dams in one county. Read the GeoPackage directly so a QGIS filter cannot
     return an empty list, and do not scan every dam line before the list shows.
     Height, storage and area of 0 are blank (DWR stores "not recorded" as 0). A dam
     without a point gets the midpoint of its dam line (lines_uri, else a dwr_dam_lines
-    table in the same file), only for the listed dams."""
+    table in the same file), only for the listed dams.
+    hidden: a list -> records that are not a dam to model (dam_filter: status Breached,
+    remarks 'VOID ...') go there instead of the result, each with row['hidden'] = the
+    reason. None (default) lists every record, with the reason on the hidden ones."""
+    from . import dam_filter
     rows = []
     if not uri:
         return rows
@@ -854,8 +1010,11 @@ def _dams(uri, name="", county="", limit=DAM_LIMIT, lines_uri=None):
             sql = 'SELECT * FROM "{}"'.format(table)
             if where:
                 sql += " WHERE " + " AND ".join(where)
-            sql += " LIMIT {}".format(int(limit))
+            if hidden is None:
+                sql += " LIMIT {}".format(int(limit))
             for rec in con.execute(sql, args):
+                if len(rows) >= limit:
+                    break
                 data = dict(zip(cols, rec))
                 def pick(*keys):
                     for key in keys:
@@ -885,7 +1044,13 @@ def _dams(uri, name="", county="", limit=DAM_LIMIT, lines_uri=None):
                     "area": amount("max_pool_area", "normal_area", "surface_area", "max_pool_a"),
                     "point": "{},{} [EPSG:4326]".format(lon, lat) if lon and lat else "",
                     "county": str(pick("county") or county or ""),
+                    "status": str(pick("status") or ""),
                 })
+                why = dam_filter.reason(pick("status"), pick("remarks"))
+                if why:
+                    rows[-1]["hidden"] = why
+                    if hidden is not None:
+                        hidden.append(rows.pop())
             same = next((t for t in tables if t.lower() == "dwr_dam_lines"), None)
             con.close()
             points_from_lines(rows, lines_uri or (
@@ -932,7 +1097,13 @@ def _dams(uri, name="", county="", limit=DAM_LIMIT, lines_uri=None):
                          "normal_vol": _positive(pick("normal_vol", "normal_pool_vol")),
                          "area": _positive(pick("max_pool_area", "normal_area", "surface_area")),
                          "crest": pick("crest_elev", "top_of_dam", "crest", "elev_crest"),
-                         "point": point, "county": got})
+                         "point": point, "county": got,
+                         "status": str(pick("status") or "")})
+            why = dam_filter.reason(pick("status"), pick("remarks"))
+            if why:
+                rows[-1]["hidden"] = why
+                if hidden is not None:
+                    hidden.append(rows.pop())
             if len(rows) >= limit:
                 break
     except Exception as e:
