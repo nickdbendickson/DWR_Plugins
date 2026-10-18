@@ -1980,9 +1980,12 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
                                   "dam_line_m": None if ld is None else round(ld, 1)}
     if rd is not None and rd <= ROAD_NEAR_M:
         if line:
-            msg = ("A road runs {:.0f} m from the dam point, which is on the DWR dam line: the "
-                   "road is on (or beside) this embankment; the crest comes from the dam line."
-                   .format(rd))
+            # v3.10.22: say "on the dam line" only when the dam point is (it may not be)
+            where = ("which is on the DWR dam line" if ld is not None and ld <= ROAD_NEAR_M else
+                     "{:.0f} m from the DWR dam line".format(ld) if ld is not None else
+                     "with a DWR dam line given")
+            msg = ("A road runs {:.0f} m from the dam point, {}: the road is on (or beside) "
+                   "this embankment; the crest comes from the dam line.".format(rd, where))
         else:
             msg = ("A road runs {:.0f} m from the dam point: the embankment in the DEM may be "
                    "the road's fill rather than the dam (DWR-3161 sits on the ND-23 fill). "
