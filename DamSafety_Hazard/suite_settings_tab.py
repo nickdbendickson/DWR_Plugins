@@ -30,8 +30,8 @@ class SuiteSettingsTabMixin(object):
         info = QLabel("The suite settings file: one table of the engineer-chosen values of the three "
                       "plugins' Processing tools (this plugin's are on the tabs below). The tools open "
                       "with these values; every one can still be changed in a tool's dialog. Edits here "
-                      "are saved to the file at once. The classification options of this window live on "
-                      "their own tabs and in the settings profiles, not here.")
+                      "are saved to the file at once. The classification options of the Hazard window live "
+                      "on its Classify tab and in the settings profiles, not here.")
         info.setWordWrap(True)
         lay.addWidget(info)
         row = QHBoxLayout()
@@ -39,9 +39,9 @@ class SuiteSettingsTabMixin(object):
         self.suite_settings_file_edit = QLineEdit()
         self.suite_settings_file_edit.setText(DS.current_path() or "")
         self.suite_settings_file_edit.editingFinished.connect(lambda: self._suite_settings_file_edited())
-        b = QPushButton("File...")
+        b = QPushButton("File\u2026")
         b.clicked.connect(lambda _c=False: self._pick_suite_settings_file())
-        n = QPushButton("New...")
+        n = QPushButton("New\u2026")
         n.clicked.connect(lambda _c=False: self._new_suite_settings_file())
         row.addWidget(self.suite_settings_file_edit, 1)
         row.addWidget(b)
@@ -54,6 +54,7 @@ class SuiteSettingsTabMixin(object):
             self.suite_settings_status.setStyleSheet("color: #b42318;")
         except Exception:                                        # noqa
             pass
+        self.suite_settings_status.setVisible(False)     # 2.18.34: no gap while empty
         lay.addWidget(self.suite_settings_status)
         catalog_problem = ""
         try:
@@ -94,6 +95,7 @@ class SuiteSettingsTabMixin(object):
         lbl = getattr(self, "suite_settings_status", None)
         if lbl is not None:
             lbl.setText(text or "")
+            lbl.setVisible(bool(text))
         if text and error:
             try:
                 from .suite_home import note_error

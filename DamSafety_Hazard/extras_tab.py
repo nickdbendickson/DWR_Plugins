@@ -39,7 +39,7 @@ class ExtrasTabMixin(object):
     def _build_extras_group(self):
         from .pipeline import DEFAULTS as D
         from .popsource import METHODS as POP_METHODS, RASTER_UNITS
-        grp = QGroupBox("6. Extra analyses and speed (advanced - all optional)")
+        grp = QGroupBox()
         lay = QVBoxLayout()
         note = QLabel(
             "Screening analyses run after the classification and never change it. The values "
@@ -392,7 +392,7 @@ class ExtrasTabMixin(object):
         if self.evac_check.isChecked():
             paths = getattr(self, "_raster_paths", lambda: {})() or {}
             if not paths.get("arr"):
-                problems.append("Evacuation timing needs an arrival-time raster (Setup tab)")
+                problems.append("Evacuation timing needs an arrival-time raster (Setup)")
         return problems
 
     # ---------------------------------------------------------- dams in series --

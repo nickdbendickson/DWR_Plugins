@@ -1349,6 +1349,105 @@ def _dam_lonlat(dam_folder):
     return None
 
 
+def inflow_check(ground_m, top_m, height_m):
+    """v3.10.16: why a run's breach inflow point is not below the dam ('' when it is). The
+    inflow must sit at least a quarter of the dam height below the top of dam (the Runner's own
+    rule is half; a quarter allows for a coarse DEM). Unknown ground is accepted."""
+    if ground_m is None or not np.isfinite(ground_m) or not height_m:
+        return ""
+    if ground_m > top_m - 0.25 * height_m:
+        return ("the ground there is {:.1f} ft, {} the {:.1f} ft top of dam".format(
+            ground_m / FT, "{:.1f} ft above".format((ground_m - top_m) / FT) if ground_m >= top_m
+            else "only {:.1f} ft below".format((top_m - ground_m) / FT), top_m / FT))
+    return ""
+
+
+def dam_length_ft(dam, dam_folder=None, override=None):
+    """v3.10.16: (dam crest length in ft, where it came from) or (None, ''): the option, the
+    run's crest length, else dam.json 'dam_length_ft'."""
+    for v, src in ((override, "chosen"),
+                   (getattr(dam, "crest_length_ft", None), "the run's crest length")):
+        try:
+            if v is not None and float(v) > 0:
+                return float(v), src
+        except (TypeError, ValueError):
+            pass
+    if dam_folder:
+        try:
+            with open(os.path.join(dam_folder, "dam.json"), encoding="utf-8") as f:
+                v = (json.load(f).get("fields") or {}).get("dam_length_ft")
+            if v is not None and float(v) > 0:
+                return float(v), "dam.json dam_length_ft"
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+    return None, ""
+
+
+def trim_dam_line(A, B, P, length, min_length=0.0):
+    """v3.10.16: the part of the edge A-B that is `length` long, centred on the dam point P
+    projected onto it (moved along so it stays on A-B). Returns (A', B', length', note);
+    the edge unchanged and note '' when no length is given or it is not shorter."""
+    A = np.asarray(A, float)
+    B = np.asarray(B, float)
+    full = float(np.hypot(*(B - A)))
+    if not length or full <= 0 or length >= full:
+        return A, B, full, ""
+    L = min(full, max(float(length), float(min_length)))
+    ab = (B - A) / full
+    s = float(np.dot(np.asarray(P, float) - A, ab))
+    s = min(max(s, 0.5 * L), full - 0.5 * L)
+    A2 = A + ab * (s - 0.5 * L)
+    B2 = A + ab * (s + 0.5 * L)
+    return A2, B2, L, ("{:,.0f} of the {:,.0f} long edge of the 2D area across the valley, "
+                       "centred on the dam point".format(L, full))
+
+
+def insert_on_ring(ring, pts, tol=None):
+    """v3.10.16: the ring (not closed, (n, 2)) with each point inserted as a vertex on the
+    segment it lies on (within `tol`, default 1e-6 of the ring's size); a point that is
+    already a vertex is not repeated."""
+    ring = [tuple(map(float, p)) for p in np.asarray(ring, float)]
+    a = np.asarray(ring)
+    size = float(np.ptp(a, axis=0).max()) if len(a) else 1.0
+    tol = tol if tol is not None else max(size * 1e-6, 1e-6)
+    for q in pts:
+        q = (float(q[0]), float(q[1]))
+        if any(math.hypot(q[0] - p[0], q[1] - p[1]) <= tol for p in ring):
+            continue
+        n = len(ring)
+        best = None
+        for i in range(n):
+            p0, p1 = ring[i], ring[(i + 1) % n]
+            dd = point_segment_distance(np.array([q[0]]), np.array([q[1]]), [p0, p1])[0]
+            if best is None or dd < best[0]:
+                best = (dd, i)
+        if best is not None and best[0] <= max(tol, size * 1e-4):
+            ring.insert(best[1] + 1, q)
+    return np.asarray(ring, float)
+
+
+def _dem_value_m(dem_path, srs, xy, z_to_m):
+    """v3.10.16: the DEM elevation (m) at a point in the model CRS, or None."""
+    try:
+        from ..damsuite import gdalsafe as GS
+        ds = GS.open_raster(dem_path)
+        dsrs = srs_from(ds.GetProjection())
+        x, y = transformer(srs, dsrs)([xy])[0]
+        gt = ds.GetGeoTransform()
+        c = int(math.floor((x - gt[0]) / gt[1]))
+        r = int(math.floor((y - gt[3]) / gt[5]))
+        if not (0 <= c < ds.RasterXSize and 0 <= r < ds.RasterYSize):
+            return None
+        b = ds.GetRasterBand(1)
+        v = float(b.ReadAsArray(c, r, 1, 1)[0, 0])
+        nd = b.GetNoDataValue()
+        if (nd is not None and v == nd) or not np.isfinite(v):
+            return None
+        return v * float(z_to_m)
+    except Exception:                       # noqa: BLE001 - a check, never a failure
+        return None
+
+
 def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=None,
                 log=None, progress=None):
     """Builds the HEC-RAS model of a finished run in `out_folder` (default
@@ -1405,12 +1504,28 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
          transformer(geo, srs)([lonlat])[0])
     if settings.get("breach_xy") and to_model is not None:
         P = to_model([settings["breach_xy"]])[0]
+    elif report.get("crest_xy") and to_model is not None:
+        P = to_model([report["crest_xy"]])[0]          # v3.10.16: the run moved the crest
     inflow = (report.get("inflow_point") or {}).get("xy")
     inflow_m = to_model([inflow])[0] if (inflow and to_model is not None) else None
     path_m = None
     fp = _flow_path(model_dir)
     if fp is not None and to_model is not None:
         path_m = to_model(fp)
+    # v3.10.16: an inflow point that is not below the dam (runs before 3.10.16 could put it on
+    # a hill next to the dam, DWR-3161) must not set the flow direction or the breach centre
+    use_path_dir = True
+    if inflow_m is not None:
+        g_m = _dem_value_m(dem_path, srs, inflow_m, _z_factor(report, dem_path)[0])
+        why_bad = inflow_check(g_m, dam.top_of_dam_ft * FT, dam.dam_height_ft * FT)
+        if why_bad:
+            notes.append("The run's breach inflow point was not used: {}. The flow direction "
+                         "comes from the flooded area and the breach centre from the lowest "
+                         "ground at the toe. Check the dam point and re-run the Runner (3.10.16 "
+                         "places the inflow below the dam).".format(why_bad))
+            log("Inflow point not used: " + why_bad)
+            inflow_m = None
+            use_path_dir = False          # the flow trace started at that point too
 
     # --- flooded extent in the model CRS -----------------------------------------
     progress(10, "flooded extent")
@@ -1429,8 +1544,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # flow direction at the dam: towards the inflow point, else the path, else the flood
     d = None
     for q in ([inflow_m] if inflow_m is not None else []) + (
-            [path_m[min(len(path_m) - 1, 5)]] if path_m is not None and len(path_m) > 1
-            else []):
+            [path_m[min(len(path_m) - 1, 5)]] if (path_m is not None and len(path_m) > 1
+                                                  and use_path_dir) else []):
         v = np.asarray(q, float) - P
         if np.hypot(*v) > 1e-6:
             d = v / np.hypot(*v)
@@ -1595,6 +1710,16 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
 
     # --- dam: connection line and weir profile ------------------------------------
     progress(60, "dam crest")
+    # v3.10.16: the connection is the dam's own length (dam.json / the run) when that is
+    # shorter than the 2D area's edge across the valley, centred on the dam point; the rest of
+    # that edge is a closed boundary (the reservoir reaches the 2D area over the dam only)
+    edge_A, edge_B = A, B
+    want_ft, want_src = dam_length_ft(dam, dam_folder, o.get("dam_length_ft"))
+    A, B, dam_len, tnote = trim_dam_line(edge_A, edge_B, P, units.from_ft(want_ft)
+                                         if want_ft else None, 2.0 * cell)
+    if tnote:
+        notes.append("Dam connection: {} ({}).".format(tnote, want_src))
+        perim = insert_on_ring(perim, [A, B])
     toe_off = units.from_ft((dam.ds_slope_h or 3.0) * dam.dam_height_ft +
                             0.5 * (dam.crest_width_ft or 20.0))
     wcell = tcell if dam_len / tcell <= 20000 else dam_len / 20000.0
@@ -1651,7 +1776,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     progress(70, "downstream boundary")
     dens = np.asarray(densify(perim, cell / 2.0, closed=True))
     zp = _sample(z, zx0, zy0, scell, dens)
-    dam_seg_d = point_segment_distance(dens[:, 0], dens[:, 1], [A, B])
+    dam_seg_d = point_segment_distance(dens[:, 0], dens[:, 1], [edge_A, edge_B])
     ok = np.isfinite(zp) & (dam_seg_d > side + cell)
     if not ok.any():
         raise HecRasModelError("no ground along the 2D perimeter away from the dam")
