@@ -455,3 +455,122 @@ def hecras_engine_geometry_hdf_state_reads_cells_terrain_and_tables():
         assert he.geometry_hdf_state(os.path.join(t, "bad.g01.hdf"))["error"]
     finally:
         shutil.rmtree(t, ignore_errors=True)
+
+
+# ============================================ compute timeout scaled to the model (not 7,200 s)
+@test
+def hecras_engine_compute_timeout_scales_with_the_model():
+    H = 3600.0
+    # DWR-3161: 68,949 cells, 32 h, 3 s base step; needed ~3 h (65 % at 7,200 s)
+    t, est, how = he.compute_timeout(68949, 32.0, 3.0, env={})
+    assert 2.5 * H < est < 4.0 * H, est
+    assert abs(t - he.COMPUTE_SAFETY * est) < 1e-6 and t > 7200.0 / 0.65 * 2, (t, est)
+    assert "x the estimate" in how, how
+    # Absaraka: 64,090 cells, 40 h, 6 s; ~21 min on one core: the estimate is not below it
+    t, est, _ = he.compute_timeout(64090, 40.0, 6.0, env={})
+    assert est >= 21 * 60 and t >= 3 * 21 * 60, est
+    # more cells, a longer simulation, a smaller base step: proportionally longer
+    e1 = he.compute_estimate_s(10000, 10.0, 5.0)
+    assert abs(he.compute_estimate_s(20000, 10.0, 5.0) - 2 * e1) < 1e-6
+    assert abs(he.compute_estimate_s(10000, 20.0, 5.0) - 2 * e1) < 1e-6
+    assert abs(he.compute_estimate_s(10000, 10.0, 2.5) - 2 * e1) < 1e-6
+    # floor 2 h, cap 48 h, unknown size: the floor
+    assert he.compute_timeout(2000, 6.0, 10.0, env={})[0] == he.COMPUTE_MIN_S == 2 * H
+    assert he.compute_timeout(500000, 48.0, 1.0, env={})[0] == he.COMPUTE_MAX_S == 48 * H
+    t, est, how = he.compute_timeout(None, 32.0, 3.0, env={})
+    assert t == 2 * H and est is None and "unknown" in how
+
+
+@test
+def hecras_engine_compute_timeout_env_override():
+    env = {he.ENV_TIMEOUT: "7200"}
+    t, est, how = he.compute_timeout(68949, 32.0, 3.0, env=env)
+    assert t == 7200.0 and est > 7200.0 and he.ENV_TIMEOUT in how, (t, est, how)
+    # above the cap too (the override is the user's call)
+    assert he.compute_timeout(68949, 32.0, 3.0, env={he.ENV_TIMEOUT: "200000"})[0] == 200000
+    assert he.compute_timeout(None, None, None, env={he.ENV_TIMEOUT: "90"})[0] == 90.0
+    # empty, zero or junk: the scaled default
+    for v in ("", "0", "soon"):
+        assert he.compute_timeout(68949, 32.0, 3.0, env={he.ENV_TIMEOUT: v})[0] > 7200.0, v
+    # the preprocess steps keep their own 1,800 s default
+    assert he._timeout({}) == 1800.0 and he._timeout(env) == 7200.0
+
+
+def _plan_project(t, cells=1234, sim="01JAN2000,0000,02JAN2000,0800", interval="3SEC"):
+    with open(os.path.join(t, "M.p01"), "w") as f:
+        f.write("Plan Title=x\nGeom File=g01\nSimulation Date={}\nComputation Interval={}\n"
+                .format(sim, interval))
+    with open(os.path.join(t, "M.g01"), "w") as f:
+        f.write("Storage Area=Downstream\nStorage Area Is2D=-1\nStorage Area 2D Points= {} \n"
+                .format(cells))
+
+
+@test
+def hecras_engine_plan_timing_and_timeout_message():
+    t = tempfile.mkdtemp()
+    try:
+        _plan_project(t)
+        pt = he.plan_timing(t, "M")
+        assert pt == {"cells": 1234, "sim_hours": 32.0, "base_dt_s": 3.0}, pt
+        _plan_project(t, sim="01JAN2000,0000,01JAN2000,1230", interval="1MIN")
+        pt = he.plan_timing(t, "M")
+        assert pt["sim_hours"] == 12.5 and pt["base_dt_s"] == 60.0, pt
+        assert he.plan_timing(os.path.join(t, "none"), "M") == {
+            "cells": None, "sim_hours": None, "base_dt_s": None}
+    finally:
+        shutil.rmtree(t)
+    assert he._interval_s("1HOUR") == 3600.0 and he._interval_s("x") is None
+    # DWR-3161: stopped at 7,200 s at 65 % of 32 h -> needs ~11,077 s; suggest >= that
+    text = "LABEL= Unsteady Flow Computations\n SIMTIME=        0.0009\n" \
+           " SIMTIME=       20.7900\n ABSDATE= 01JAN2000\n"
+    msg = he.compute_timeout_message(7200.0, 7200.0, text, 32.0, estimate=11120.0)
+    assert "did not finish in 7200 s (2.0 h)" in msg and "(65 % done)" in msg, msg
+    sug = int(msg.split(he.ENV_TIMEOUT + "=")[1].split()[0])
+    assert sug >= 7200 / 0.65 and sug % 900 == 0, (sug, msg)
+    assert "Estimate before the run: 11120 s" in msg, msg
+    msg = he.compute_timeout_message(60.0, 60.0, "LABEL= Reading Data\n", 32.0)
+    assert "printed no simulation time" in msg, msg
+
+
+def _fake_rasunsteady(t, body):
+    exe = os.path.join(t, "RasUnsteady")
+    with open(exe, "w") as f:
+        f.write("#!/bin/sh\n" + body)
+    os.chmod(exe, 0o755)
+    for x in ("b01", "x01", "p01.tmp.hdf"):
+        open(os.path.join(t, "M." + x), "w").close()
+    return {"linux_dir": t, "rasunsteady": exe}
+
+
+@test
+def hecras_engine_compute_logs_the_estimate_and_reports_progress_on_timeout():
+    if os.name != "posix":
+        return
+    t = tempfile.mkdtemp()
+    try:
+        _plan_project(t, cells=50000)
+        d = _fake_rasunsteady(t, "echo ' SIMTIME=        8.0000'\nsleep 30\n")
+        logs = []
+        try:
+            he.compute(t, "M", d=d, env={he.ENV_TIMEOUT: "1"}, log=logs.append)
+            raise AssertionError("must time out")
+        except he.HecRasEngineError as e:
+            msg = str(e)
+        assert "(25 % done)" in msg and he.ENV_TIMEOUT + "=" in msg, msg
+        start = [m for m in logs if m.startswith("HEC-RAS compute: 50,000 cells")]
+        assert start and "32 h simulated" in start[0] and "3 s base step" in start[0], logs
+        assert "timeout 1 s" in start[0] and "override" in start[0], start
+        assert any(m.startswith("ERROR: Linux RasUnsteady did not finish") for m in logs)
+        assert "SIMTIME" in open(os.path.join(t, "linux_run", "run.log")).read()
+        # a run that finishes: the results HDF, the timing in the log, the scaled default
+        d = _fake_rasunsteady(t, "echo ' SIMTIME=       32.0000'\n"
+                                 "echo 'Finished Unsteady Flow Simulation'\n")
+        logs = []
+        out = he.compute(t, "M", d=d, env={}, log=logs.append)
+        assert out.endswith("M.p01.hdf") and os.path.exists(out)
+        start = [m for m in logs if m.startswith("HEC-RAS compute: 50,000 cells")][0]
+        want = he.compute_timeout(50000, 32.0, 3.0, env={})[0]           # 3 x 8,064 s
+        assert "timeout {:.0f} s".format(want) in start and "x the estimate" in start, start
+        assert any("RasUnsteady finished in" in m for m in logs), logs
+    finally:
+        shutil.rmtree(t)
