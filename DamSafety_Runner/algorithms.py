@@ -490,6 +490,12 @@ class _Base(QgsProcessingAlgorithm):
             "QA_MAPS", "QA maps written into the dam folder (qa_inflow_map.png, qa_depth_map.png)",
             list(qa_maps.QA_LABELS), defaultValue=qa_maps.QA_MODES.index(qa_maps.DEFAULT_QA_MAPS),
             optional=True)))
+        from .core import reservoir_carve
+        self.addParameter(set_advanced(QgsProcessingParameterEnum(
+            "RESERVOIR_CARVE", "Reservoir bottom carved from the storage curve, for a DEM whose "
+            "reservoir is a LiDAR water surface (Off = the DEM as it is; Auto = only when the "
+            "DEM's pool holds far less than the storage curve; the source DEM is never changed)",
+            list(reservoir_carve.LABELS), defaultValue=0, optional=True)))
         self.addParameter(QgsProcessingParameterEnum("TIER", "Models",
                                                      [t[1] for t in TIERS], defaultValue=0))
         self._bool("FORCE_ANUGA", "Force ANUGA: final results come from ANUGA even when "
@@ -678,6 +684,11 @@ class _Base(QgsProcessingAlgorithm):
         if self.parameterDefinition("EAP_MAP") is not None:
             st.eap_map = EAP_MAP_CHOICES[min(len(EAP_MAP_CHOICES) - 1, self.parameterAsEnum(
                 parameters, "EAP_MAP", context))][0]
+        if self.parameterDefinition("RESERVOIR_CARVE") is not None and \
+                parameters.get("RESERVOIR_CARVE") not in (None, ""):          # v3.10.20
+            from .core import reservoir_carve
+            st.reservoir_carve = reservoir_carve.normalize(
+                int(self.parameterAsEnum(parameters, "RESERVOIR_CARVE", context)))
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0
