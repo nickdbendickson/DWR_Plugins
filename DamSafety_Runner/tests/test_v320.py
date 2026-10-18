@@ -597,7 +597,7 @@ def a_run_records_what_it_used_in_dam_json():
         assert rec.get("height_ft") == 26.0                      # another tool's: kept
         assert rec.get("storage_acft") == 500.0 and rec.sources["storage_acft"]["tool"] == \
             "ndbreach"
-        assert rec.get("top_of_dam_datum") == "DEM" and "DEM" in \
+        assert rec.get("top_of_dam_datum") == "DEM estimate" and "DEM" in \
             rec.sources["top_of_dam_ft"]["note"]
         assert rec.get("lon") == -100.5 and rec.get("crs") == "EPSG:26914"
         m = rec.latest("modelled")
