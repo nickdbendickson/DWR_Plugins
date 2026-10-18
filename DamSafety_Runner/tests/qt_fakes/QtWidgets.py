@@ -727,3 +727,69 @@ class QListWidget(QWidget):
 
     def currentItem(self):
         return self.item(self.currentRow())
+
+
+class QFrame(QWidget):
+    NoFrame = 0
+
+
+class QToolButton(QWidget):
+    def __init__(self, *a):
+        super().__init__()
+        self._text, self._checkable, self._checked = "", False, False
+        self.clicked = _Signal()
+        self.toggled = _Signal()
+
+    def setText(self, t):
+        self._text = t
+
+    def text(self):
+        return self._text
+
+    def setCheckable(self, v):
+        self._checkable = bool(v)
+
+    def isChecked(self):
+        return self._checked
+
+    def setChecked(self, v):
+        v = bool(v)
+        if v != self._checked:
+            self._checked = v
+            self.toggled.emit(v)
+
+    def click(self):
+        if self._enabled:
+            if self._checkable:
+                self.setChecked(not self._checked)
+            self.clicked.emit()
+
+
+class QStackedWidget(QWidget):
+    def __init__(self, *a):
+        super().__init__()
+        self.widgets, self._index = [], -1
+        self.currentChanged = _Signal()
+
+    def addWidget(self, w):
+        self.widgets.append(w)
+        if self._index < 0:
+            self._index = 0
+        return len(self.widgets) - 1
+
+    def count(self):
+        return len(self.widgets)
+
+    def currentIndex(self):
+        return self._index
+
+    def setCurrentIndex(self, i):
+        self._index = i
+        self.currentChanged.emit(i)
+
+    def currentWidget(self):
+        return self.widgets[self._index] if 0 <= self._index < len(self.widgets) else None
+
+
+class QPlainTextEdit(QTextEdit):
+    pass

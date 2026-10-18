@@ -69,10 +69,10 @@ class NDBreachRunnerPlugin:
         self.actions.append(self.action)
 
     def run_settings(self, *args):
-        """Open the window on its Settings tab (the suite settings grid)."""
+        """Open the window and its Settings window (the suite settings grid)."""
         self.run_plugin()
         try:
-            self.dialog.tabs.setCurrentIndex(self.dialog.tabs.count() - 1)
+            self.dialog._open_settings()
         except Exception:                                        # noqa
             pass
 

@@ -91,15 +91,21 @@ def hecras_engine_write_project_hydrograph_inflow():
         before = {k: open(p, newline="").read() for k, p in
                   build(None, os.path.join(t, "ref"))["paths"].items()}
         r = he.write_project("dam", os.path.join(t, "m"), build=build,
-                             load=lambda f: (hy, None, {}))
+                             load=lambda f: (hy, None, {}), env={})
         g = open(r["paths"]["g01"], newline="").read()
         u = open(r["paths"]["u01"], newline="").read()
         p = open(r["paths"]["p01"], newline="").read()
         assert "BC Line Name=" + hm.name32(he.INFLOW_BC_NAME) in g
         assert g.index(he.INFLOW_BC_NAME) < g.index("LCMann Time=")
         assert g.replace("\r\n", "\n").count("BC Line Name=") == 2
-        assert "Flow Hydrograph= 25 " in u and "Flow Hydrograph Slope= 0.001 " in u
-        assert "Initial Storage Elev={},1000".format(hm.name16(hm.SA_NAME)) in u
+        # the hydrograph runs the whole simulation (24 h at 5 min: 289 values), not 2 h
+        assert "Flow Hydrograph= 289 " in u and "Flow Hydrograph Slope= 0.001 " in u
+        assert r["inflow_bc"]["series"]["end_hr"] == m.sim_hours == 24.0
+        # the reservoir starts dry (lowest storage elevation) with no lateral inflow: its
+        # water is already in the hydrograph
+        assert "Initial Storage Elev={},990".format(hm.name16(hm.SA_NAME)) in u
+        lat = u.split("Lateral Inflow Hydrograph=", 1)[1].split("DSS Path=", 1)[0]
+        assert set(lat.split()[1:]) == {"0.00"}, lat
         assert "Breach Loc=" not in p and "Breach Loc=" in before["p01"]
         assert "\n" not in g.replace("\r\n", "")              # CRLF only
         line = r["inflow_bc"]["line"]
@@ -107,7 +113,8 @@ def hecras_engine_write_project_hydrograph_inflow():
         assert abs(line[0][0] - 150.0) < 1e-6                 # across the flow (+x)
         assert r["inflow_bc"]["peak"] == 5000.0
         # breach mode leaves build_model's files byte-identical
-        r2 = he.write_project("dam", os.path.join(t, "b"), inflow_mode="breach", build=build)
+        r2 = he.write_project("dam", os.path.join(t, "b"), inflow_mode="breach", build=build,
+                              env={})
         for k, pth in r2["paths"].items():
             if k in before:
                 assert open(pth, newline="").read() == before[k], k
@@ -162,3 +169,118 @@ def hecras_engine_rasmap_terrain_and_cr_strip():
         assert open(p, "rb").read() == b"a\nb\n"
     finally:
         shutil.rmtree(t, ignore_errors=True)
+
+
+def _cliff_hydrograph():
+    """A breach hydrograph that ends in a cliff, as the Runner writes it when the reservoir
+    is empty (Absaraka: 250 cfs -> 0 at 2.47 h)."""
+    t = np.array([0.0, 1800.0, 3600.0, 5400.0, 8400.0, 8880.0, 8890.0])
+    q = np.array([0.0, 25800.0, 9000.0, 2300.0, 600.0, 300.0, 0.0]) * CFS
+    return br.Hydrograph(t, q, "test")
+
+
+@test
+def hecras_engine_inflow_hydrograph_covers_the_simulation_without_a_cliff():
+    hy = _cliff_hydrograph()
+    sim = 40.0
+    lab, v, info = he.inflow_series(hy, lambda q: q / CFS, sim, dt_min=5)
+    assert lab == "5MIN" and len(v) == info["n"] == 40 * 12 + 1 and info["end_hr"] == sim
+    assert v[0] == 0.0 and max(v) == 25800.0
+    i_end = int(8880.0 // 300)                      # last sample inside the record (2.42 h)
+    tail = v[i_end:]
+    assert all(b <= a + 1e-9 for a, b in zip(tail, tail[1:]))      # recedes, never rises
+    assert all(b >= 0.25 * a for a, b in zip(tail[:12], tail[1:13]) if a > 1.0), tail[:13]
+    # no cliff: the first tail value is not 0 and the volume grows by under 2 %
+    assert tail[1] > 50.0, tail[:3]
+    assert info["volume_exported_acft"] < 1.02 * info["volume_record_acft"]
+    # a configured base flow: never below it, held to the end
+    _, vb, ib = he.inflow_series(hy, lambda q: q / CFS, sim, base_flow_cfs=40.0)
+    assert min(vb) == 40.0 and vb[-1] == 40.0 and len(vb) == 481 and ib["held_cfs"] == 40.0
+    # 'hold': the last value of the record to the end (or the base flow when set)
+    _, vh, ih = he.inflow_series(hy, lambda q: q / CFS, sim, tail="hold")
+    assert vh[-1] == 300.0 and min(vh[i_end:]) == 300.0 and ih["held_cfs"] == 300.0
+    _, vh2, _ = he.inflow_series(hy, lambda q: q / CFS, sim, tail="hold", base_flow_cfs=20.0)
+    assert vh2[-1] == 20.0
+    # the interval and count follow the window
+    _, v15, i15 = he.inflow_series(hy, lambda q: q / CFS, 6.0, dt_min=15)
+    assert len(v15) == 25 and i15["interval"] == "15MIN"
+    for bad in (dict(dt_min=7), dict(tail="cliff")):
+        try:
+            he.inflow_series(hy, lambda q: q / CFS, sim, **bad)
+            raise AssertionError(bad)
+        except he.HecRasEngineError:
+            pass
+
+
+@test
+def hecras_engine_breach_mode_plan_has_the_breach_and_a_full_pool():
+    t = tempfile.mkdtemp()
+    try:
+        m = _model()
+
+        def build(dam_folder, out, options=None, log=None):
+            return {"folder": out, "paths": hm.write_text_files(m, out), "model": m,
+                    "notes": [], "info": {"inflow_xy_model": [150.0, 550.0]}}
+        r = he.write_project("dam", os.path.join(t, "b"), build=build,
+                             env={he.ENV_MODE: "breach"})
+        assert r["inflow_mode"] == "breach" and r["inflow_bc"] is None
+        p = open(r["paths"]["p01"], newline="").read().replace("\r\n", "\n")
+        u = open(r["paths"]["u01"], newline="").read()
+        # the layout of HEC's SA/2D-connection breach (BaldEagleCrkMulti2D/BaldEagleDamBrk.p06)
+        assert "\nBreach Loc={},{},{},True,{}\n".format(" " * 16, " " * 16, " " * 8,
+                                                         hm.name16(hm.CONN_NAME)) in p
+        assert "\nBreach Geom=50,40,990,1,1,False,0.5,,0.5,2.6\n" in p
+        assert "\nBreach Start=True,1008,,,False,,,0\n" in p
+        assert "Initial Storage Elev={},1008".format(hm.name16(hm.SA_NAME)) in u
+        assert "Breach Inflow" not in u
+        try:
+            he.write_project("dam", os.path.join(t, "x"), build=build,
+                             env={he.ENV_MODE: "sideways"})
+            raise AssertionError("bad mode should raise")
+        except he.HecRasEngineError as e:
+            assert he.ENV_MODE in str(e)
+    finally:
+        shutil.rmtree(t, ignore_errors=True)
+
+
+@test
+def hecras_engine_plan_adaptive_time_step_is_hecs_layout():
+    """HEC-RAS 6.x adaptive time step, lines as in HEC's BaldEagleDamBrk.p06 (6.6 examples)."""
+    m = _model()
+    p = hm.plan_text(m).replace("\r\n", "\n")
+    want = ["Computation Time Step Use Courant=        -1",
+            "Computation Time Step Use Time Series=    0",
+            "Computation Time Step Max Courant=1", "Computation Time Step Min Courant=0.5",
+            "Computation Time Step Count To Double=4", "Computation Time Step Max Doubling=3",
+            "Computation Time Step Max Halving=3", "Computation Time Step Residence Courant=0"]
+    assert "\n".join(want) in p, p
+    assert p.index("Mapping Interval=") < p.index(want[0]) < p.index("Run HTab=")
+    m.courant = dict(hm.COURANT_DEFAULTS, max=0.9, min=0.45, max_doubling=1, max_halving=0)
+    p = hm.plan_text(m)
+    assert "Max Courant=0.9\r\n" in p and "Min Courant=0.45\r\n" in p and "Max Halving=0\r\n" in p
+    m.courant = dict(hm.COURANT_DEFAULTS, adaptive=False)
+    p = hm.plan_text(m)
+    assert "Use Courant=        0\r\n" in p and "Max Doubling=0\r\n" in p
+    m.courant = dict(hm.COURANT_DEFAULTS, max=1.0, min=1.5)
+    try:
+        hm.plan_text(m)
+        raise AssertionError("min above max should raise")
+    except hm.HecRasModelError:
+        pass
+    m.equation = hm.EQ_DWE
+    m.courant = dict(hm.COURANT_DEFAULTS)
+    assert "Max Courant=2\r\n" in hm.plan_text(m) and "Min Courant=1\r\n" in hm.plan_text(m)
+
+
+@test
+def hecras_engine_fixed_width_tables_raise_when_a_value_cannot_fit():
+    m = _model()
+    m.elev_volume = [(990.0, 0.0), (1010.0, 123456789.0)]
+    try:
+        hm.geometry_text(m)
+        raise AssertionError("a 9-digit volume should raise")
+    except hm.HecRasModelError as e:
+        assert "does not fit" in str(e)
+    m.elev_volume = [(990.0, 0.0), (1010.0, 1234567.0)]
+    g = hm.geometry_text(m).replace("\r\n", "\n")
+    assert "\n  990.00    0.00 1010.00 1234567\n" in g

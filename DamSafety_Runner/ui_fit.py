@@ -73,9 +73,57 @@ def wrap_wizard(wizard):
         scroll_page(wizard.page(page_id))
 
 
-def fit_window(dialog, prefer=(980, 680)):
-    """Size the window to the screen, and never larger than the screen."""
-    screen = QApplication.primaryScreen()
+def _screen_of(dialog):
+    """The screen the window is on (or its parent's), else the primary screen."""
+    for w in (dialog, getattr(dialog, "parentWidget", lambda: None)()):
+        try:
+            handle = w.windowHandle() if w is not None else None
+            if handle is None and w is not None and hasattr(w, "window"):
+                handle = w.window().windowHandle()
+            if handle is not None and handle.screen() is not None:
+                return handle.screen()
+        except Exception:                                        # noqa
+            continue
+    try:
+        if hasattr(dialog, "screen") and dialog.screen() is not None:
+            return dialog.screen()
+    except Exception:                                            # noqa
+        pass
+    return QApplication.primaryScreen()
+
+
+def _saved_size(key):
+    if not key:
+        return None
+    try:
+        from qgis.PyQt.QtCore import QSettings
+        v = QSettings().value(key + "/size")
+        if v is None:
+            return None
+        if hasattr(v, "width"):
+            return int(v.width()), int(v.height())
+        w, h = v
+        return int(w), int(h)
+    except Exception:                                            # noqa
+        return None
+
+
+def save_size(dialog, key):
+    """Remember the window size under QSettings `key` (call it on close)."""
+    if not key:
+        return
+    try:
+        from qgis.PyQt.QtCore import QSettings
+        QSettings().setValue(key + "/size", QSize(int(dialog.width()), int(dialog.height())))
+    except Exception:                                            # noqa
+        pass
+
+
+def fit_window(dialog, prefer=(980, 680), key=None):
+    """Size the window to its screen, and never larger than the screen. With `key`, the size
+    save_size() stored under that QSettings key is preferred (still clamped to the screen)."""
+    prefer = _saved_size(key) or prefer
+    screen = _screen_of(dialog)
     if screen is None:
         dialog.resize(prefer[0], prefer[1])
         return

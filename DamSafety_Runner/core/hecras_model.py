@@ -111,6 +111,16 @@ COMP_INTERVALS = ((0.1, "0.1SEC"), (0.2, "0.2SEC"), (0.25, "0.25SEC"), (0.3, "0.
 NICE_CELLS = (5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 200, 250, 300,
               400, 500)
 
+# Adaptive (Courant) time step of the plan, HEC-RAS 6.x 'Computation Time Step' lines. The
+# keywords, their order and the 'Use Courant=' layout are copied from HEC's own 6.x example
+# BaldEagleCrkMulti2D/BaldEagleDamBrk.p06 (Example_Projects_6_6; Max Courant=1, Min
+# Courant=0.45, Count To Double=4, Max Doubling=1, Max Halving=0). The Computation Interval is
+# the base step; HEC-RAS halves it (at most max_halving times) when the Courant number
+# passes max, and doubles it (at most max_doubling times) after count_to_double steps below
+# min. max None = the equation's Courant target (1 SWE, 2 DWE); min None = max / 2.
+COURANT_DEFAULTS = {"adaptive": True, "max": None, "min": None, "count_to_double": 4,
+                    "max_doubling": 3, "max_halving": 3, "residence": 0}
+
 EQ_SWE, EQ_DWE = "swe", "dwe"
 EQUATIONS = {EQ_SWE: (1, "Shallow water equations (SWE-ELM)"),
              EQ_DWE: (0, "Diffusion wave")}
@@ -167,10 +177,14 @@ class Units:
 # Text formatting
 # ============================================================================
 def f8(v):
-    """A number in an 8-character field."""
+    """A number in an 8-character field (hecras.field8: decimals dropped to fit; a value that
+    cannot fit raises HecRasModelError). None or NaN is a blank field."""
     if v is None or (isinstance(v, float) and not math.isfinite(v)):
         return " " * 8
-    return hecras._field8(v, 8)
+    try:
+        return hecras.field8(v, 8)
+    except hecras.FixedWidthError as e:
+        raise HecRasModelError(str(e))
 
 
 def f16(v):
@@ -276,6 +290,8 @@ class Model:
         self.base_flow = 0.0
         self.sim_hours = 24.0
         self.comp_interval = "5SEC"
+        # adaptive time step (see courant_lines()); None = fixed Computation Interval
+        self.courant = dict(COURANT_DEFAULTS)
         self.output_interval = "1MIN"
         self.mapping_interval = "5MIN"
         self.detail_interval = "1HOUR"
@@ -555,6 +571,37 @@ def _d2_block(m, eq):
             "UNET D2 Cores=0", "UNET D2 SolverType=PARDISO (Direct)"]
 
 
+def courant_lines(c, equation=EQ_SWE):
+    """The plan's 'Computation Time Step' lines (HEC's BaldEagleDamBrk.p06 layout). With
+    c['adaptive'] false (or c None) they are HEC's fixed-step lines (Muncie.p03)."""
+    if not c or not c.get("adaptive"):
+        return ["Computation Time Step Use Courant=        0",
+                "Computation Time Step Use Time Series=    0",
+                "Computation Time Step Max Courant=", "Computation Time Step Min Courant=",
+                "Computation Time Step Count To Double=0", "Computation Time Step Max Doubling=0",
+                "Computation Time Step Max Halving=0",
+                "Computation Time Step Residence Courant=0"]
+    cmax = float(c.get("max") or (1.0 if equation == EQ_SWE else 2.0))
+    cmin = float(c.get("min") if c.get("min") is not None else 0.5 * cmax)
+    if not (0 < cmin < cmax):
+        raise HecRasModelError("adaptive time step: need 0 < min Courant ({:g}) < max Courant "
+                               "({:g})".format(cmin, cmax))
+    ints = []
+    for k in ("count_to_double", "max_doubling", "max_halving"):
+        v = int(c.get(k) or 0)
+        if v < 0:
+            raise HecRasModelError("adaptive time step: {} must be 0 or more".format(k))
+        ints.append(v)
+    return ["Computation Time Step Use Courant=        -1",
+            "Computation Time Step Use Time Series=    0",
+            "Computation Time Step Max Courant=" + num(cmax, 3),
+            "Computation Time Step Min Courant=" + num(cmin, 3),
+            "Computation Time Step Count To Double={}".format(ints[0]),
+            "Computation Time Step Max Doubling={}".format(ints[1]),
+            "Computation Time Step Max Halving={}".format(ints[2]),
+            "Computation Time Step Residence Courant={}".format(num(c.get("residence") or 0, 3))]
+
+
 def plan_text(m):
     eq = EQUATIONS[m.equation][0]
     d1, t1 = ras_date(0.0)
@@ -573,8 +620,7 @@ def plan_text(m):
         "END DESCRIPTION:",
         "Computation Interval=" + m.comp_interval, "Output Interval=" + m.output_interval,
         "Instantaneous Interval=" + m.detail_interval, "Mapping Interval=" + m.mapping_interval,
-        "Computation Time Step Use Courant=        0",
-        "Computation Time Step Use Time Series=    0",
+        ] + courant_lines(m.courant, m.equation) + [
         "Run HTab=-1 ", "Run UNet=-1 ", "Run Sediment= 0 ", "Run PostProcess=-1 ",
         "Run WQNet= 0 ", "Run RASMapper= 0 ",
         "UNET Theta= 1 ", "UNET Theta Warmup= 1 ", "UNET ZTol= 0.02 ", "UNET ZSATol= 0.02 ",
@@ -1055,6 +1101,9 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             "target_cells": 100000, "equation": EQ_SWE, "base_flow_cfs": 0.0,
             "terrain_cell": 0.0, "max_terrain_cells": 150e6, "extent_depth_ft": 0.0,
             "manning_n": None, "courant": None,
+            # adaptive time step, merged over COURANT_DEFAULTS ({"adaptive": False} = the
+            # fixed Computation Interval); its 'max' defaults to the Courant target above
+            "time_step": None,
             "structures": True}                 # v3.12.0: the run's culverts and bridges
 
 
@@ -1349,6 +1398,105 @@ def _dam_lonlat(dam_folder):
     return None
 
 
+def inflow_check(ground_m, top_m, height_m):
+    """v3.10.16: why a run's breach inflow point is not below the dam ('' when it is). The
+    inflow must sit at least a quarter of the dam height below the top of dam (the Runner's own
+    rule is half; a quarter allows for a coarse DEM). Unknown ground is accepted."""
+    if ground_m is None or not np.isfinite(ground_m) or not height_m:
+        return ""
+    if ground_m > top_m - 0.25 * height_m:
+        return ("the ground there is {:.1f} ft, {} the {:.1f} ft top of dam".format(
+            ground_m / FT, "{:.1f} ft above".format((ground_m - top_m) / FT) if ground_m >= top_m
+            else "only {:.1f} ft below".format((top_m - ground_m) / FT), top_m / FT))
+    return ""
+
+
+def dam_length_ft(dam, dam_folder=None, override=None):
+    """v3.10.16: (dam crest length in ft, where it came from) or (None, ''): the option, the
+    run's crest length, else dam.json 'dam_length_ft'."""
+    for v, src in ((override, "chosen"),
+                   (getattr(dam, "crest_length_ft", None), "the run's crest length")):
+        try:
+            if v is not None and float(v) > 0:
+                return float(v), src
+        except (TypeError, ValueError):
+            pass
+    if dam_folder:
+        try:
+            with open(os.path.join(dam_folder, "dam.json"), encoding="utf-8") as f:
+                v = (json.load(f).get("fields") or {}).get("dam_length_ft")
+            if v is not None and float(v) > 0:
+                return float(v), "dam.json dam_length_ft"
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+    return None, ""
+
+
+def trim_dam_line(A, B, P, length, min_length=0.0):
+    """v3.10.16: the part of the edge A-B that is `length` long, centred on the dam point P
+    projected onto it (moved along so it stays on A-B). Returns (A', B', length', note);
+    the edge unchanged and note '' when no length is given or it is not shorter."""
+    A = np.asarray(A, float)
+    B = np.asarray(B, float)
+    full = float(np.hypot(*(B - A)))
+    if not length or full <= 0 or length >= full:
+        return A, B, full, ""
+    L = min(full, max(float(length), float(min_length)))
+    ab = (B - A) / full
+    s = float(np.dot(np.asarray(P, float) - A, ab))
+    s = min(max(s, 0.5 * L), full - 0.5 * L)
+    A2 = A + ab * (s - 0.5 * L)
+    B2 = A + ab * (s + 0.5 * L)
+    return A2, B2, L, ("{:,.0f} of the {:,.0f} long edge of the 2D area across the valley, "
+                       "centred on the dam point".format(L, full))
+
+
+def insert_on_ring(ring, pts, tol=None):
+    """v3.10.16: the ring (not closed, (n, 2)) with each point inserted as a vertex on the
+    segment it lies on (within `tol`, default 1e-6 of the ring's size); a point that is
+    already a vertex is not repeated."""
+    ring = [tuple(map(float, p)) for p in np.asarray(ring, float)]
+    a = np.asarray(ring)
+    size = float(np.ptp(a, axis=0).max()) if len(a) else 1.0
+    tol = tol if tol is not None else max(size * 1e-6, 1e-6)
+    for q in pts:
+        q = (float(q[0]), float(q[1]))
+        if any(math.hypot(q[0] - p[0], q[1] - p[1]) <= tol for p in ring):
+            continue
+        n = len(ring)
+        best = None
+        for i in range(n):
+            p0, p1 = ring[i], ring[(i + 1) % n]
+            dd = point_segment_distance(np.array([q[0]]), np.array([q[1]]), [p0, p1])[0]
+            if best is None or dd < best[0]:
+                best = (dd, i)
+        if best is not None and best[0] <= max(tol, size * 1e-4):
+            ring.insert(best[1] + 1, q)
+    return np.asarray(ring, float)
+
+
+def _dem_value_m(dem_path, srs, xy, z_to_m):
+    """v3.10.16: the DEM elevation (m) at a point in the model CRS, or None."""
+    try:
+        from ..damsuite import gdalsafe as GS
+        ds = GS.open_raster(dem_path)
+        dsrs = srs_from(ds.GetProjection())
+        x, y = transformer(srs, dsrs)([xy])[0]
+        gt = ds.GetGeoTransform()
+        c = int(math.floor((x - gt[0]) / gt[1]))
+        r = int(math.floor((y - gt[3]) / gt[5]))
+        if not (0 <= c < ds.RasterXSize and 0 <= r < ds.RasterYSize):
+            return None
+        b = ds.GetRasterBand(1)
+        v = float(b.ReadAsArray(c, r, 1, 1)[0, 0])
+        nd = b.GetNoDataValue()
+        if (nd is not None and v == nd) or not np.isfinite(v):
+            return None
+        return v * float(z_to_m)
+    except Exception:                       # noqa: BLE001 - a check, never a failure
+        return None
+
+
 def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=None,
                 log=None, progress=None):
     """Builds the HEC-RAS model of a finished run in `out_folder` (default
@@ -1405,12 +1553,28 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
          transformer(geo, srs)([lonlat])[0])
     if settings.get("breach_xy") and to_model is not None:
         P = to_model([settings["breach_xy"]])[0]
+    elif report.get("crest_xy") and to_model is not None:
+        P = to_model([report["crest_xy"]])[0]          # v3.10.16: the run moved the crest
     inflow = (report.get("inflow_point") or {}).get("xy")
     inflow_m = to_model([inflow])[0] if (inflow and to_model is not None) else None
     path_m = None
     fp = _flow_path(model_dir)
     if fp is not None and to_model is not None:
         path_m = to_model(fp)
+    # v3.10.16: an inflow point that is not below the dam (runs before 3.10.16 could put it on
+    # a hill next to the dam, DWR-3161) must not set the flow direction or the breach centre
+    use_path_dir = True
+    if inflow_m is not None:
+        g_m = _dem_value_m(dem_path, srs, inflow_m, _z_factor(report, dem_path)[0])
+        why_bad = inflow_check(g_m, dam.top_of_dam_ft * FT, dam.dam_height_ft * FT)
+        if why_bad:
+            notes.append("The run's breach inflow point was not used: {}. The flow direction "
+                         "comes from the flooded area and the breach centre from the lowest "
+                         "ground at the toe. Check the dam point and re-run the Runner (3.10.16 "
+                         "places the inflow below the dam).".format(why_bad))
+            log("Inflow point not used: " + why_bad)
+            inflow_m = None
+            use_path_dir = False          # the flow trace started at that point too
 
     # --- flooded extent in the model CRS -----------------------------------------
     progress(10, "flooded extent")
@@ -1429,8 +1593,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # flow direction at the dam: towards the inflow point, else the path, else the flood
     d = None
     for q in ([inflow_m] if inflow_m is not None else []) + (
-            [path_m[min(len(path_m) - 1, 5)]] if path_m is not None and len(path_m) > 1
-            else []):
+            [path_m[min(len(path_m) - 1, 5)]] if (path_m is not None and len(path_m) > 1
+                                                  and use_path_dir) else []):
         v = np.asarray(q, float) - P
         if np.hypot(*v) > 1e-6:
             d = v / np.hypot(*v)
@@ -1595,6 +1759,16 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
 
     # --- dam: connection line and weir profile ------------------------------------
     progress(60, "dam crest")
+    # v3.10.16: the connection is the dam's own length (dam.json / the run) when that is
+    # shorter than the 2D area's edge across the valley, centred on the dam point; the rest of
+    # that edge is a closed boundary (the reservoir reaches the 2D area over the dam only)
+    edge_A, edge_B = A, B
+    want_ft, want_src = dam_length_ft(dam, dam_folder, o.get("dam_length_ft"))
+    A, B, dam_len, tnote = trim_dam_line(edge_A, edge_B, P, units.from_ft(want_ft)
+                                         if want_ft else None, 2.0 * cell)
+    if tnote:
+        notes.append("Dam connection: {} ({}).".format(tnote, want_src))
+        perim = insert_on_ring(perim, [A, B])
     toe_off = units.from_ft((dam.ds_slope_h or 3.0) * dam.dam_height_ft +
                             0.5 * (dam.crest_width_ft or 20.0))
     wcell = tcell if dam_len / tcell <= 20000 else dam_len / 20000.0
@@ -1651,7 +1825,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     progress(70, "downstream boundary")
     dens = np.asarray(densify(perim, cell / 2.0, closed=True))
     zp = _sample(z, zx0, zy0, scell, dens)
-    dam_seg_d = point_segment_distance(dens[:, 0], dens[:, 1], [A, B])
+    dam_seg_d = point_segment_distance(dens[:, 0], dens[:, 1], [edge_A, edge_B])
     ok = np.isfinite(zp) & (dam_seg_d > side + cell)
     if not ok.any():
         raise HecRasModelError("no ground along the 2D perimeter away from the dam")
@@ -1851,6 +2025,13 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     m.base_flow = units.flow(o["base_flow_cfs"] * CFS)
     m.sim_hours = sim
     m.comp_interval = dt_lab
+    ts = dict(COURANT_DEFAULTS)
+    ts.update({k: v for k, v in (o.get("time_step") or {}).items() if v is not None})
+    if ts["max"] is None:
+        ts["max"] = cour
+    if ts["min"] is None:
+        ts["min"] = 0.5 * float(ts["max"])
+    m.courant = ts
     m.equation = o["equation"]
     m.breach = bvals
     m.terrain_name = terrain_name
@@ -1874,7 +2055,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             "len_name": units.len_name, "cell": cell, "cell_chosen": bool(o["cell_ft"]),
             "cells": int(len(pts)), "area": abs(ring_area(perim)),
             "dam_line": dam_len, "terrain_cell": tcell, "dem_z": znote,
-            "comp_interval": dt_lab, "sim_hours": sim, "bc_slope": slope,
+            "comp_interval": dt_lab, "time_step": dict(m.courant), "sim_hours": sim, "bc_slope": slope,
             "bc_slope_how": how, "centre_how": centre_how, "initial_wse": m.initial_wse,
             "breach": bvals,
             "side_buffer": side, "end_buffer": end, "weir_points": len(weir),
@@ -2053,6 +2234,20 @@ def write_layout(path, m, srs, bc_slope_how="", P=None, skipped=()):
     return path
 
 
+def _time_step_text(m):
+    c = m.courant or {}
+    base = "base step: Courant number (V dt / dx) about {:g} at the run's peak velocity".format(
+        float(c.get("max") or (1 if m.equation == EQ_SWE else 2)))
+    if not c.get("adaptive"):
+        return base + "; fixed step"
+    cmax = float(c.get("max") or (1.0 if m.equation == EQ_SWE else 2.0))
+    cmin = float(c["min"]) if c.get("min") is not None else 0.5 * cmax
+    return (base + "; adaptive (Courant {:g} to {:g}, halved up to {} times, doubled up to {} "
+            "times after {} steps below the minimum)".format(
+                cmin, cmax, int(c.get("max_halving") or 0), int(c.get("max_doubling") or 0),
+                int(c.get("count_to_double") or 0)))
+
+
 def write_readme(path, m, info, notes, dam, params):
     u = m.units
     L = u.len_name
@@ -2128,8 +2323,7 @@ def write_readme(path, m, info, notes, dam, params):
             "sunny day: the breach starts with the run"),
         "| Downstream boundary | normal depth, slope {:.5f} | {} |".format(
             info["bc_slope"], info["bc_slope_how"]),
-        "| Time step | {} | Courant number (V dt / dx) about {} at the run's peak velocity |"
-        .format(info["comp_interval"], 1 if m.equation == EQ_SWE else 2),
+        "| Time step | {} | {} |".format(info["comp_interval"], _time_step_text(m)),
         "| Mesh check (cells along the perimeter) | {} |  Voronoi cells clipped to the "
         "perimeter, as HEC-RAS builds them |".format(
             "not run (no scipy)" if not info.get("mesh_check") else
