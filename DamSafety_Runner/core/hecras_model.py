@@ -1660,6 +1660,11 @@ SIM_CAP_HR = 48.0
 SIM_MIN_HR = 6.0
 SIM_DRAIN_FRAC = 0.25
 SIM_DRAIN_MIN_HR = 2.0
+# The site checks guard the breach model (storage area + SA/2D breach + its storage curve).
+# options={"site_scope": "hydrograph"} (hecras_engine's hydrograph-inflow plan: dry reservoir,
+# no breach, the run's hydrograph on a BC line at the inflow point, which has its own check)
+# turns them into notes; "breach" (default) stops on them.
+SITE_SCOPES = ("breach", "hydrograph")
 HYDRO_END_FRAC = 0.02              # the hydrograph 'ends' when it falls below 2 % of its peak
 # v3.10.17: HEC-RAS's breach shape is not the plugin's (README and manifest say so)
 BREACH_SHAPE_NOTE = (
@@ -2371,13 +2376,25 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     p2, n2, sstats = storage_site_check(res.bottom / FT, curve_area_ac, g_ft, a_ac,
                                         dam.top_of_dam_ft, dam.dam_height_ft)
     allow = allow_bad_site(o)
-    site_gate(problems + p2, allow, notes)
+    scope = str(o.get("site_scope") or "breach").strip().lower()
+    if scope not in SITE_SCOPES:
+        raise HecRasModelError("site_scope must be one of {} (got {!r})".format(
+            ", ".join(SITE_SCOPES), scope))
+    if scope == "hydrograph":
+        # the plan has no breach and a dry reservoir: these checks judge a model that is not
+        # built; the inflow point has its own check (inflow_check)
+        for q in problems + p2:
+            notes.append("Site check for the breach model (not used: hydrograph-inflow plan, "
+                         "no breach, dry reservoir): " + q)
+    else:
+        site_gate(problems + p2, allow, notes)
     notes += snotes + n2
     site = {"toe_ground_ft": None if toe_u is None else round(to_ft(toe_u), 2),
             "breach_bottom_run_ft": round(to_ft(bvals["bottom_elev"]), 2),
             "top_of_dam_ft": round(float(dam.top_of_dam_ft), 2),
             "dam_height_ft": round(float(dam.dam_height_ft), 2),
-            "storage": sstats, "problems": problems + p2, "overridden": bool(problems + p2),
+            "storage": sstats, "problems": problems + p2, "scope": scope,
+            "overridden": bool(problems + p2) and scope == "breach",
             "breach_bottom_raised_ft": 0.0}
     # the breach must not open below the cells it flows into (HEC-RAS: 'weir breach lower than
     # the cells they are connected to'): raise its bottom to the toe ground. The storage below
@@ -2879,6 +2896,9 @@ def _site_rows(site, L):
         rows.append("| Terrain cut at the breach | {} x {} {}, to {} | so the 2D cells at the "
                     "breach reach its bottom |".format(cut.get("width"), cut.get("length"), L,
                                                        cut.get("z")))
+    if site.get("problems") and site.get("scope") == "hydrograph":
+        rows.append("| Site checks (breach model) | {} problem(s), not applied | hydrograph-"
+                    "inflow plan: no breach, dry reservoir |".format(len(site["problems"])))
     if site.get("overridden"):
         rows.append("| **Site checks** | **FAILED, overridden** | ALLOW_BAD_SITE / allow_bad_site;"
                     " the results are not meaningful |")

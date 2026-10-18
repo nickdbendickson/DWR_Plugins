@@ -446,13 +446,18 @@ def _record_side_conflict(dam_folder, status):
         pass
 
 
-def _record_fallback(dam_folder, status, sentence, reason):
+def _record_fallback(dam_folder, status, sentence, reason, blocked=None):
     """run_report.json 'hecras_inflow' -> status 'fallback_breach' (keeps the search record:
-    the original status, the reason and the lowest ground found)."""
+    the original status, the reason and the lowest ground found), or 'fallback_blocked' with
+    the site-check problems (`blocked`) when the breach model failed them."""
     rp = os.path.join(dam_folder, hecras.MODEL_FOLDER, hecras.RUN_REPORT_JSON)
     rec = dict(status or {})
     rec.update(status="fallback_breach", fallback_from=(status or {}).get("status", "missing"),
                reason=reason, note=sentence, inflow_mode="breach", inflow_mode_requested="auto")
+    if blocked:
+        rec.update(status="fallback_blocked", inflow_mode=None, site_problems=list(blocked),
+                   note=sentence + " The breach model failed the site checks, so no HEC-RAS "
+                   "model was built.")
     try:
         with open(rp, encoding="utf-8") as f:
             r = json.load(f)
@@ -489,7 +494,12 @@ def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
     if tail not in TAILS:
         raise HecRasEngineError("tail must be 'recession' or 'hold' (got {!r}; {})".format(
             tail, ENV_TAIL))
-    res = build(dam_folder, out_folder, options=options, log=log)
+    # the site checks guard the breach model; the hydrograph plan (and 'auto' until it knows it
+    # needs the breach model) builds with them as notes, see hecras_model.SITE_SCOPES
+    bopts = dict(options or {})
+    if inflow_mode in ("hydrograph", MODE_AUTO):
+        bopts["site_scope"] = "hydrograph"
+    res = build(dam_folder, out_folder, options=bopts, log=log)
     res["inflow_mode_requested"] = inflow_mode
     res["inflow_fallback"] = None
     if inflow_mode == MODE_AUTO:
@@ -505,6 +515,17 @@ def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
             sentence = fallback_sentence(st)
             reason = inflow_missing_message(st).split(". Check the dam point")[0].split(
                 "; use inflow_mode")[0]
+            # the breach model, with the site checks that guard it
+            bopts["site_scope"] = "breach"
+            try:
+                res = dict(build(dam_folder, out_folder, options=bopts, log=log),
+                           inflow_mode_requested=MODE_AUTO, inflow_fallback=None)
+            except hm.HecRasSiteError as e:
+                _record_fallback(dam_folder, st, sentence, reason, blocked=e.problems)
+                log("ERROR: inflow mode 'auto' found no inflow point ({}) and fell back to the "
+                    "breach model, which fails the site checks; no HEC-RAS model was "
+                    "built.".format(reason))
+                raise
             res["inflow_fallback"] = _record_fallback(dam_folder, st, sentence, reason)
             log("WARNING: " + sentence + " Reason: " + reason + ".")
             rd = (res.get("paths") or {}).get("readme")
