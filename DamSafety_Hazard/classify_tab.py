@@ -202,7 +202,7 @@ class ClassificationTabMixin(object):
             "structures")
         self.damage_curves_edit.setToolTip(
             "The plugin has no curves for non-residential structures (which curves to use is "
-            "your choice: Hazus, USACE ...). Without a file only their value exposed is "
+            "your choice: Hazus, USACE \u2026). Without a file only their value exposed is "
             "reported. 'Template' writes a file showing the format.")
         b_browse = QPushButton("Browse\u2026")
         b_browse.clicked.connect(self._damage_curves_browse)
@@ -863,7 +863,7 @@ class ClassificationTabMixin(object):
             try:
                 if sink:
                     self._add_downloaded(sink)
-                self._finish_deferred(res, "Finishing: layers, map book, report...")
+                self._finish_deferred(res, "Finishing: layers, map book, report\u2026")
             except CancelledByUser:
                 self._update_status("Cancelled by user" if everything else
                                     "Hazard classification cancelled", False)
@@ -879,8 +879,8 @@ class ClassificationTabMixin(object):
             self._after_classification(res)
             if everything:
                 self._log(">>> Run everything finished")
-        self._start_background("Run everything..." if everything else
-                               "Running hazard classification...", work, done)
+        self._start_background("Run everything\u2026" if everything else
+                               "Running hazard classification\u2026", work, done)
 
     def _after_classification(self, res):
         self._last_run = res
@@ -1094,7 +1094,7 @@ class ClassificationTabMixin(object):
             return
         from . import watch as WT
         self._set_busy(True)
-        self._progress = self._make_progress("Hazard creep watch...")
+        self._progress = self._make_progress("Hazard creep watch\u2026")
         info = {}
         try:
             rows, paths = WT.run_watch(parent, progress=self._progress_tick, log=self._log,
@@ -1156,7 +1156,7 @@ class ClassificationTabMixin(object):
             if hasattr(self, "_settings_profile_for_cfg") else None
 
         def work(progress, log):
-            progress(10, "Gathering the files...")
+            progress(10, "Gathering the files\u2026")
             return SUB.build(out, dam_name=dam.get("dam_name"), zip_it=True, include_gis=gis,
                              profile=profile or None, include_data=want_data,
                              include_rasters=want_rasters)
@@ -1183,7 +1183,7 @@ class ClassificationTabMixin(object):
                     "\n- ".join(res["missing"])
             QMessageBox.information(self, "Submittal package", text)
             self._open_path(res["folder"])
-        self._start_background("Making the submittal package...", work, done,
+        self._start_background("Making the submittal package\u2026", work, done,
                                project_bound=False)
 
     def _open_last_report(self, *args):

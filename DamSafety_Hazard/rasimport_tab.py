@@ -259,7 +259,7 @@ class RasImportTabMixin(object):
             return
         out = self._ras_out()
         self._set_busy(True)
-        self._progress = self._make_progress("Importing HEC-RAS plan results...")
+        self._progress = self._make_progress("Importing HEC-RAS plan results\u2026")
         try:
             res = RI.import_plan(plan, out, dem_path=dem,
                                  cell_ft=float(self.ras_cell_spin.value()),

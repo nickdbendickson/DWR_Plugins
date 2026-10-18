@@ -191,7 +191,7 @@ def check_services(urls, progress=None):
         return out
     for i, (label, url) in enumerate(urls):
         if progress:
-            progress(100.0 * i / max(1, len(urls)), "Checking {}...".format(label))
+            progress(100.0 * i / max(1, len(urls)), "Checking {}\u2026".format(label))
         probe = url.rstrip("/") + "?f=json" if ("Server/" in url or url.endswith("Server")) \
             else url
         try:

@@ -1102,7 +1102,7 @@ def build(out_zip, pad=DEFAULT_PAD_DEG, only=None, skip=None, workers=None, refr
     finally:
         manifest = writer.manifest()
         writer.close(finalize=False)
-    progress(99.0, "Writing the zip...")
+    progress(99.0, "Writing the zip\u2026")
     manifest = _write_zip(db, out_zip, manifest, log)
     ok = [k for k, v in manifest["datasets"].items() if v.get("status") == "complete"]
     total = sum(int(v.get("count") or 0) for v in manifest["datasets"].values()
