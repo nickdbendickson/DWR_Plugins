@@ -37,7 +37,10 @@ SET_THREADS = "NDBREACH_THREADS"
 
 METHODS = [(m, brmod.METHOD_LABELS[m]) for m in brmod.METHODS]
 TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
-         (workflow.TIER_BOTH, "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)")]
+         (workflow.TIER_BOTH, "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"),
+         # appended (design #68): indices 0 and 1 and the default are unchanged
+         (workflow.TIER_HECRAS, "LISFLOOD-FP then HEC-RAS 2D (final results from HEC-RAS; "
+                                "needs HEC-RAS 6.6, see help)")]
 DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
 ZUNITS = [("auto", "Detect from the raster"), ("feet", "Feet"),
           ("us_feet", "US survey feet"), ("meters", "Meters")]
@@ -615,6 +618,12 @@ class _Base(QgsProcessingAlgorithm):
             raise QgsProcessingException(
                 "Set the ANUGA Python interpreter in Processing > Options > Providers > "
                 "ND Dam Breach Runner; none was found on this computer. Found: '{}'".format(py))
+        if need_models and tier == workflow.TIER_HECRAS:
+            from .core import hecras_engine
+            d = hecras_engine.detect()
+            if not d["available"]:
+                raise QgsProcessingException(d["reason"] + " Nothing was run. Choose "
+                                             "'LISFLOOD-FP only' or set up HEC-RAS (see help).")
         dur = g("DURATION_HR")
         sim_max = g("DURATION_MAX_HR") if self.parameterDefinition("DURATION_MAX_HR") is not None else 0.0
         scen = SCENARIOS[min(1, self.parameterAsEnum(parameters, "SCENARIO", context))][0] \
@@ -1154,6 +1163,16 @@ class RunDamAlgorithm(_Base):
                 "until the flood no longer leaves it deeper than the tolerance, or until no "
                 "structure, road or rail lies in its path if you give those layers; ANUGA "
                 "can then re-run it on a mesh refined near the dam.\n\n"
+                "Models = 'LISFLOOD-FP then HEC-RAS 2D' (optional, off by default): after "
+                "LISFLOOD-FP, the run is built as a HEC-RAS 6.6 2D model (breach hydrograph at "
+                "the inflow point, culverts and bridges as SA/2D connections, subgrid terrain "
+                "from the DEM), run, and its maxima replace the final rasters (same names, "
+                "grid and units). Linux only for now: Windows HEC-RAS 6.6 in a Wine prefix "
+                "(NDBREACH_HECRAS_WINEPREFIX) with the RasMapperLib drivers, the official "
+                "Linux RasUnsteady (NDBREACH_HECRAS_LINUX_DIR) and h5py; HEC's Terms and "
+                "Conditions must be accepted by the user (NDBREACH_HECRAS_TCU_HOOK). See "
+                "tools/hecras_wine/README.md. Results are preliminary until compared with "
+                "LISFLOOD-FP / ANUGA for the dam.\n\n"
                 "Results go to <Dams folder>/<Dam ID>/ as 'Depth (Max).tif' (ft), "
                 "'Velocity (Max).tif' (ft/s), 'Arrival Time.tif' (hours after breach "
                 "initiation) and 'WSE (Max).tif' (ft), ready for the ND hazard classification, "
@@ -1446,6 +1465,18 @@ class RunDamAlgorithm(_Base):
             raise QgsProcessingException("Cancelled")
         except (ModelError, brmod.BreachInputError) as e:
             raise QgsProcessingException(str(e))
+        if st.tier == workflow.TIER_HECRAS:          # design #68; never for TIER 0 / 1
+            from .core import hecras_engine
+            feedback.pushWarning("Models = LISFLOOD-FP then HEC-RAS 2D: the final rasters come "
+                                 "from HEC-RAS 2D; the LISFLOOD-FP ones are kept as "
+                                 "'LISFLOOD-FP ...'.")
+            try:
+                hr = hecras_engine.run_stage(folder, res.final, writer, st, fb.log)
+            except hecras_engine.HecRasEngineError as e:
+                raise QgsProcessingException("HEC-RAS 2D stage failed (the LISFLOOD-FP results "
+                                             "are in the dam folder): {}".format(e))
+            res.final.update(hr["final"])
+            res.warnings.extend(hr["warnings"])
         for w in res.warnings:
             feedback.pushWarning("Check: " + w)
         for k, v in res.summary.items():
