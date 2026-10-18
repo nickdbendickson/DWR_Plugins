@@ -1508,6 +1508,175 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     return res
 
 
+# ============================================================================
+# a later final engine (TIER 2: HEC-RAS 2D after LISFLOOD-FP)
+# ============================================================================
+SCREENING_PREFIX = "LISFLOOD-FP "
+FINAL_VECTOR_NAMES = ("Flood Polygons (Max Depth).geojson", "Flood Extent.geojson",
+                      "Arrival Zones.geojson", "Velocity Polygons.geojson",
+                      "Incremental Depth Polygons.geojson", "Breach Products.gpkg",
+                      "EAP Inundation Map (preview).svg")
+
+
+def final_summary(fin, cell_ac, arrival_m, base=None, final_model=None):
+    """The run summary's flood figures from the FINAL arrays (SI): flooded acres (and over
+    the arrival depth), max depth, max velocity, latest arrival. `base` (the old summary) is
+    copied first; `final_model` replaces its final_model."""
+    s = dict(base or {})
+    d, v, a = fin["depth"], fin["velocity"], fin["arrival"]
+    with np.errstate(invalid="ignore"):
+        s.update({
+            "flooded_acres": round(float(np.isfinite(d).sum()) * cell_ac, 1),
+            "flooded_acres_over_arrival_depth": round(float((d >= arrival_m).sum()) * cell_ac, 1),
+            "max_depth_ft": round(float(np.nanmax(d)) / FT, 2) if np.isfinite(d).any() else 0,
+            "max_velocity_fps": (round(float(np.nanmax(v)) / FT, 2) if np.isfinite(v).any()
+                                 else 0),
+            "latest_arrival_hr": (round(float(np.nanmax(a)), 2) if np.isfinite(a).any()
+                                  else None)})
+    if final_model:
+        s["final_model"] = final_model
+    return s
+
+
+def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
+    """After a later engine (core/hecras_engine.run_stage) has written its maxima under
+    FINAL_NAMES in `out_folder`: makes every reported figure come from those rasters, as a
+    TIER 1 run does for ANUGA inside run_dam.
+
+    - the LISFLOOD-FP vector products (flood polygons, extent, arrival zones, GeoPackage,
+      EAP preview) are kept as 'LISFLOOD-FP <name>' and made again from the final rasters
+    - run_report.json 'summary' is recomputed from the final rasters (area, max depth, max
+      velocity, latest arrival, receptors); the screening figures move to
+      'screening_pass_lisflood' (with incremental and near-dam refine results, which only
+      LISFLOOD-FP made)
+    - run_report.md / .html are written again; dam.json gets a 'modelled' status with the
+      final model and its extent
+    Returns the new summary. Needs GDAL."""
+    from . import gdal_io, products
+    import types
+    log = log or (lambda m: None)
+    model_dir = os.path.join(out_folder, "_breach_model")
+    rp = os.path.join(model_dir, "run_report.json")
+    with open(rp, encoding="utf-8") as f:
+        report = json.load(f)
+    if report.get("screening_pass_lisflood"):
+        raise ValueError("the run report already went through adopt_final_engine")
+    paths = {k: os.path.join(out_folder, v) for k, v in FINAL_NAMES.items()}
+    g = gdal_io.read_grid(paths["depth"])
+    fin = {"depth": g.data * FT}
+    for k in ("velocity", "arrival", "wse"):
+        if os.path.exists(paths[k]):
+            a = gdal_io.read_like(paths[k], g, "near")
+            fin[k] = a if k == "arrival" else a * FT
+        else:
+            fin[k] = np.full(g.data.shape, np.nan)
+    unit = gdal_io.linear_unit_m(g.crs_wkt) or 1.0
+    cell_ac = (g.dx * unit) ** 2 / 4046.8564224
+    sets = report.get("settings") or {}
+    arrival_ft = float(getattr(st, "arrival_depth_ft", None) or sets.get("arrival_depth_ft") or 1.0)
+    arrival_m = arrival_ft * FT
+    old = dict(report.get("summary") or {})
+    screening = {"model": old.get("final_model") or "LISFLOOD-FP", "summary": old,
+                 "note": "The screening pass that laid out the domain and the HEC-RAS model. "
+                         "Every figure in 'summary', the flood polygons and the hazard class "
+                         "come from {}.".format(final_model),
+                 "vectors": {}}
+    for k in ("receptors", "receptors_incremental", "incremental", "refine_near_dam"):
+        if k in report:
+            screening[k] = report[k]
+    # keep the screening vector products under the LISFLOOD-FP prefix
+    for nm in FINAL_VECTOR_NAMES:
+        src = os.path.join(out_folder, nm)
+        if os.path.exists(src):
+            dst = os.path.join(out_folder, SCREENING_PREFIX + nm)
+            os.replace(src, dst)
+            screening["vectors"][nm] = dst
+    summary = final_summary(fin, cell_ac, arrival_m, old, final_model)
+    for k in ("incremental_acres", "refine_near_dam", "receptors_flooded"):
+        summary.pop(k, None)
+    rec = getattr(st, "receptors", None) if st is not None else None
+    if rec is not None and len(rec):
+        rsum, rrows = impmod.summarize(rec, g, fin, arrival_m)
+        report["receptors"] = rsum
+        impmod.write_rows(os.path.join(model_dir, "receptors_flooded.csv"), rrows)
+        summary["receptors_flooded"] = rsum.get("receptors_flooded")
+    else:
+        report.pop("receptors", None)
+    report.pop("receptors_incremental", None)
+    report.pop("refine_near_dam", None)
+    if "incremental" in report:
+        report["incremental"] = dict(report["incremental"], note=(
+            report["incremental"].get("note", "") + ". From the LISFLOOD-FP screening pass: "
+            "{} ran the breach only (no no-breach run).".format(final_model)))
+    report["summary"] = summary
+    report["screening_pass_lisflood"] = screening
+    report["final_engine"] = {"model": final_model, "figures_from": dict(paths),
+                              "adopted": datetime.datetime.now().isoformat(timespec="seconds")}
+    # vector products from the final rasters
+    dxy = dam_xy if dam_xy is not None else report.get("dam_xy")
+    dam_ns = types.SimpleNamespace(dam_id=old.get("dam_id") or report.get("dam", {}).get("dam_id"),
+                                   name=(report.get("dam") or {}).get("name", ""))
+    st_ns = types.SimpleNamespace(
+        scenario=getattr(st, "scenario", None) or old.get("scenario"),
+        arrival_contours_hr=tuple(getattr(st, "arrival_contours_hr", None)
+                                  or RunSettings().arrival_contours_hr),
+        receptors=rec, incr_thresholds_ft=(),
+        eap_map=getattr(st, "eap_map", None) or products.EAP_AUTO)
+    res_ns = types.SimpleNamespace(vectors={}, eap_map="", flood=None, gauges={}, plan={})
+    old_vectors = dict((report.get("outputs") or {}).get("vectors") or {})
+    warnings = list(report.get("warnings") or [])
+    try:
+        products.write_products(res_ns, report, st_ns, dam_ns, dxy, g, fin, None, None, None,
+                                None, out_folder, model_dir, arrival_m,
+                                crs=gdal_io.epsg_of(g.crs_wkt), unit_m=unit, plots=False)
+    except Exception as e:
+        warnings.append("Could not write the {} vector products: {}: {}".format(
+            final_model, type(e).__name__, e))
+    msg = ("Every figure in this report, the flood polygons and the hazard class come from {}; "
+           "the LISFLOOD-FP screening pass is under 'screening_pass_lisflood' and its "
+           "vector products are kept as '{}...'.".format(final_model, SCREENING_PREFIX))
+    if msg not in warnings:
+        warnings.append(msg)
+    report["warnings"] = warnings
+    vec = {k: v for k, v in old_vectors.items() if os.path.basename(str(v)) not in
+           FINAL_VECTOR_NAMES}
+    vec.update(res_ns.vectors)
+    report.setdefault("outputs", {})["final"] = dict(paths)
+    report["outputs"]["vectors"] = vec
+    with open(rp, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, default=_json_default)
+    with open(os.path.join(model_dir, "run_report.md"), "w", encoding="utf-8") as f:
+        f.write(render_report(report))
+    try:
+        products.write_html_report(report, model_dir, types.SimpleNamespace(
+            eap_map=res_ns.eap_map, vectors=vec, dam_id=dam_ns.dam_id))
+    except Exception as e:
+        log("Could not write the HTML report again: {}".format(e))
+    # dam.json: a 'modelled' status with the final model
+    try:
+        from . import damjson
+        result = {"breach_occurs": True, "scenario": summary.get("scenario"),
+                  "final_model": final_model,
+                  "final_rasters": [os.path.relpath(p, out_folder).replace(os.sep, "/")
+                                    for p in paths.values()],
+                  "manifest": damjson.MANIFEST_REL, "run_report": damjson.REPORT_REL,
+                  "screening_model": screening["model"]}
+        if dxy is not None:
+            result["extent_ft"] = damjson.extent_ft(g, fin["depth"], dxy, WET_M)
+        if summary.get("domain_mi"):
+            result["domain_mi"] = summary["domain_mi"]
+        if os.path.exists(os.path.join(out_folder, "dam.json")):
+            damjson.record_run(out_folder, {}, result)
+    except Exception as e:
+        log("dam.json not updated for {}: {}: {}".format(final_model, type(e).__name__, e))
+    log("Run summary from {}: {:,} ac, max depth {} ft, max velocity {} ft/s (LISFLOOD-FP "
+        "screening pass: {} ac, {} ft, {} ft/s).".format(
+            final_model, summary["flooded_acres"], summary["max_depth_ft"],
+            summary["max_velocity_fps"], old.get("flooded_acres"), old.get("max_depth_ft"),
+            old.get("max_velocity_fps")))
+    return summary
+
+
 def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
     """What a run would model, without running any flood model: the breach
     hydrograph, the first domain and simulation time. Used for the run-time
@@ -1863,6 +2032,20 @@ def render_report(r):
     if s.get("buildings"):
         lines.append("| Buildings (v3.4.0) | {} |".format(s["buildings"]))
     lines.append("")
+    scr = r.get("screening_pass_lisflood")
+    if scr:
+        ss = scr.get("summary") or {}
+        lines += ["## Screening pass ({})".format(scr.get("model", "LISFLOOD-FP")), "",
+                  scr.get("note", ""), "", "| | |", "|---|---|",
+                  "| Flooded area | {:,} ac ({:,} ac deeper than the arrival depth) |".format(
+                      ss.get("flooded_acres") or 0, ss.get("flooded_acres_over_arrival_depth") or 0),
+                  "| Maximum depth / velocity | {} ft / {} ft/s |".format(
+                      ss.get("max_depth_ft"), ss.get("max_velocity_fps")),
+                  "| Latest arrival | {} h after breach initiation |".format(
+                      ss.get("latest_arrival_hr"))]
+        if ss.get("receptors_flooded"):
+            lines.append("| Reaches | {} |".format(ss["receptors_flooded"]))
+        lines.append("")
     warns = list(r.get("warnings") or [])
     cut = any("still" in w.lower() and ("advanc" in w.lower() or "moving" in w.lower() or "edge" in w.lower())
               for w in warns)

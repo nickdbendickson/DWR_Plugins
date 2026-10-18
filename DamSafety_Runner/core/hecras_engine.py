@@ -368,6 +368,30 @@ def _float_env(env, key, default):
         raise HecRasEngineError("{}={!r} is not a number".format(key, v))
 
 
+def inflow_missing_message(status):
+    """TIER 2 fix: why hydrograph mode has no inflow point: none recorded, or the run's point
+    was rejected and none valid was found downstream."""
+    st = status or {}
+    if st.get("status") == "rejected":
+        xy = st.get("run_xy")
+        msg = "the run's inflow point (run_report.json 'inflow_point'{}) was rejected: {}".format(
+            ", {:.1f}, {:.1f}".format(*xy) if xy else "", st.get("why") or "not usable")
+        if st.get("searched_ft"):
+            msg += ("; no point at least a quarter of the dam height below the top of dam was "
+                    "found within {:,.0f} ft downstream along the flow path or the DEM's "
+                    "steepest descent".format(st["searched_ft"]))
+            if st.get("lowest_ground_ft") is not None:
+                msg += (" (it must be at most {:.1f} ft; the lowest ground found off the "
+                        "embankment is {:.1f} ft, {:,.0f} ft downstream)".format(
+                            st.get("need_ground_ft") or float("nan"), st["lowest_ground_ft"],
+                            st.get("lowest_at_ft") or 0.0))
+        if st.get("search_error"):
+            msg += " (search failed: {})".format(st["search_error"])
+        return msg + ". Check the dam point, or use inflow_mode='breach'."
+    return ("the run has no inflow point (run_report.json 'inflow_point'); "
+            "use inflow_mode='breach'")
+
+
 def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
                   build=None, load=None, log=None, env=None, base_flow_cfs=None, tail=None):
     """Builds the HEC-RAS project of a finished run (hecras_model.build_model). inflow_mode
@@ -403,8 +427,7 @@ def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
     m, info, paths = res["model"], res["info"], res["paths"]
     xy = info.get("inflow_xy_model")
     if xy is None:
-        raise HecRasEngineError("the run has no inflow point (run_report.json 'inflow_point'); "
-                                "use inflow_mode='breach'")
+        raise HecRasEngineError(inflow_missing_message(info.get("inflow_status")))
     a, b = np.asarray(m.conn_line[0], float), np.asarray(m.conn_line[-1], float)
     along = b - a
     direction = np.asarray(xy, float) - (a + b) / 2.0       # dam -> inflow, downstream

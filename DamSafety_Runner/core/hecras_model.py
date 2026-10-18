@@ -1109,7 +1109,9 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             # adaptive time step, merged over COURANT_DEFAULTS ({"adaptive": False} = the
             # fixed Computation Interval); its 'max' defaults to the Courant target above
             "time_step": None,
-            "structures": True}                 # v3.12.0: the run's culverts and bridges
+            "structures": True,                 # v3.12.0: the run's culverts and bridges
+            # TIER 2 fix: how far a rejected inflow point may be walked downstream
+            "inflow_search_ft": 3000.0}
 
 
 def _ogr():
@@ -1416,6 +1418,103 @@ def inflow_check(ground_m, top_m, height_m):
     return ""
 
 
+def inflow_drop_needed_m(top_m, height_m):
+    """The highest ground (m) an inflow point may have: a quarter of the dam height below the
+    top of dam (inflow_check)."""
+    return float(top_m) - 0.25 * float(height_m)
+
+
+def _walk_line(pts, start, step):
+    """Points every `step` along polyline `pts` downstream of its point nearest `start`, with
+    their distance along the line from there: [(xy, dist)]."""
+    pts = np.asarray(pts, float)
+    if len(pts) < 2:
+        return []
+    dens = np.asarray(densify([tuple(p) for p in pts], step))
+    k = int(np.argmin(np.hypot(dens[:, 0] - start[0], dens[:, 1] - start[1])))
+    seg = np.hypot(*np.diff(dens[k:], axis=0).T) if len(dens) - k > 1 else np.zeros(0)
+    dist = np.concatenate([[0.0], np.cumsum(seg)])
+    return [(dens[k + i], float(dist[i])) for i in range(len(dist))]
+
+
+def _steepest_descent(start, ground, step, max_dist, n_dirs=16):
+    """[(xy, dist)] from `start` downhill on `ground(xy (n,2)) -> z` in steps of `step`
+    (looking up to 4 steps away across flats), until max_dist or no lower ground."""
+    ang = np.linspace(0.0, 2 * np.pi, n_dirs, endpoint=False)
+    unit = np.column_stack([np.cos(ang), np.sin(ang)])
+    p = np.asarray(start, float)
+    z = float(ground(p[None, :])[0])
+    out, dist = [(p, 0.0)], 0.0
+    while dist < max_dist and np.isfinite(z):
+        moved = False
+        for r in (step, 2 * step, 4 * step):
+            cand = p + unit * r
+            zc = ground(cand)
+            if not np.isfinite(zc).any():
+                continue
+            i = int(np.nanargmin(zc))
+            if zc[i] < z - 1e-6:
+                p, z, dist, moved = cand[i], float(zc[i]), dist + r, True
+                out.append((p, dist))
+                break
+        if not moved:
+            break
+    return out
+
+
+def relocate_inflow(start, ground, need_m, dam_xy, min_off, max_dist, step, path=None,
+                    diag=None):
+    """TIER 2 fix: an inflow point downstream of a rejected one. Walks from `start` along the
+    run's flow path (`path`, the Runner's downstream trace), else down the steepest descent
+    of the DEM, to the first point whose ground (m, `ground(xy)`) is at most `need_m` and
+    that is at least `min_off` from the dam point (off the embankment), within `max_dist`
+    of walking. Returns {'xy', 'dist', 'ground_m', 'how'} or None; `diag` (a dict) gets the
+    lowest ground seen off the embankment ('lowest_m', 'lowest_xy', 'lowest_dist')."""
+    tries = []
+    if path is not None and len(path) > 1:
+        tries.append(("the run's downstream flow path", _walk_line(path, start, step)))
+    tries.append(("the steepest descent of the DEM", _steepest_descent(start, ground, step,
+                                                                        max_dist)))
+    P = np.asarray(dam_xy, float)
+    for how, cand in tries:
+        cand = [(xy, d) for xy, d in cand if d <= max_dist + 1e-9]
+        if not cand:
+            continue
+        z = ground(np.asarray([xy for xy, _ in cand], float))
+        for (xy, d), zz in zip(cand, z):
+            off = float(np.hypot(*(xy - P))) >= min_off
+            if (diag is not None and off and np.isfinite(zz) and
+                    zz < diag.get("lowest_m", np.inf)):
+                diag.update(lowest_m=float(zz), lowest_xy=[float(v) for v in xy],
+                            lowest_dist=float(d))
+            if np.isfinite(zz) and zz <= need_m and off:
+                return {"xy": np.asarray(xy, float), "dist": float(d), "ground_m": float(zz),
+                        "how": how}
+    return None
+
+
+def record_inflow_status(report_path, status, srs, work, units, log=None):
+    """TIER 2 fix: the HEC-RAS inflow point (used, moved downstream, rejected or missing) in the
+    run's run_report.json as 'hecras_inflow', with the moved point in the run's CRS too."""
+    rec = dict(status)
+    if rec.get("xy_model") and work is not None:
+        rec["xy"] = [round(float(v), 3) for v in transformer(srs, work)([rec["xy_model"]])[0]]
+    rec["model_crs"] = _epsg_text(srs)
+    rec["model_units"] = units.len_name
+    try:
+        with open(report_path, encoding="utf-8") as f:
+            rep = json.load(f)
+        rep["hecras_inflow"] = rec
+        tmp = report_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(rep, f, indent=2, default=str)
+        os.replace(tmp, report_path)
+    except (OSError, ValueError) as e:
+        if log:
+            log("Could not record the HEC-RAS inflow point in {}: {}".format(report_path, e))
+    return rec
+
+
 def dam_length_ft(dam, dam_folder=None, override=None):
     """v3.10.16: (dam crest length in ft, where it came from) or (None, ''): the option, the
     run's crest length, else dam.json 'dam_length_ft'."""
@@ -1569,17 +1668,67 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # v3.10.16: an inflow point that is not below the dam (runs before 3.10.16 could put it on
     # a hill next to the dam, DWR-3161) must not set the flow direction or the breach centre
     use_path_dir = True
+    inflow_status = {"status": "missing" if inflow is None else "used",
+                     "run_xy": list(inflow) if inflow else None}
+    if inflow is not None and to_model is None:
+        inflow_status.update(status="rejected", why="the run records no coordinate system")
     if inflow_m is not None:
-        g_m = _dem_value_m(dem_path, srs, inflow_m, _z_factor(report, dem_path)[0])
-        why_bad = inflow_check(g_m, dam.top_of_dam_ft * FT, dam.dam_height_ft * FT)
+        zf = _z_factor(report, dem_path)[0]
+        g_m = _dem_value_m(dem_path, srs, inflow_m, zf)
+        top_m, h_m = dam.top_of_dam_ft * FT, dam.dam_height_ft * FT
+        why_bad = inflow_check(g_m, top_m, h_m)
         if why_bad:
-            notes.append("The run's breach inflow point was not used: {}. The flow direction "
-                         "comes from the flooded area and the breach centre from the lowest "
-                         "ground at the toe. Check the dam point and re-run the Runner (3.10.16 "
-                         "places the inflow below the dam).".format(why_bad))
+            inflow_status.update(status="rejected", why=why_bad)
             log("Inflow point not used: " + why_bad)
-            inflow_m = None
             use_path_dir = False          # the flow trace started at that point too
+            # TIER 2 fix: walk it downstream (flow path, else steepest descent) to ground at
+            # least a quarter of the dam height below the top of dam, off the embankment
+            mx = units.from_ft(float(o["inflow_search_ft"]))
+            step = max(units.from_ft(5.0), mx / 600.0)
+            off = units.from_ft(0.5 * float(dam.crest_width_ft or 20.0) +
+                               (dam.ds_slope_h or 3.0) * dam.dam_height_ft)
+            moved, diag = None, {}
+            try:
+                b = (inflow_m[0] - mx - 4 * step, inflow_m[1] - mx - 4 * step,
+                     inflow_m[0] + mx + 4 * step, inflow_m[1] + mx + 4 * step)
+                wc = max(step, 2.0 * mx / 1500.0)
+                ga, gx0, gy0 = _warp(dem_path, srs, wc, bounds=b, alg="bilinear")
+                ground = (lambda xy, ga=ga, gx0=gx0, gy0=gy0, wc=wc:
+                          _sample(ga, gx0, gy0, wc, xy) * zf)
+                moved = relocate_inflow(inflow_m, ground, inflow_drop_needed_m(top_m, h_m), P,
+                                        off, mx, step, path_m, diag)
+            except Exception as e:            # noqa: BLE001 - reported as not found
+                inflow_status["search_error"] = "{}: {}".format(type(e).__name__, e)
+            if moved is not None:
+                inflow_status.update(
+                    status="moved", xy_model=[float(v) for v in moved["xy"]],
+                    moved=round(moved["dist"], 1), moved_ft=round(moved["dist"] * units.L / FT, 1),
+                    ground_ft=round(moved["ground_m"] / FT, 2), how=moved["how"],
+                    original_ground_ft=(round(g_m / FT, 2) if g_m is not None else None))
+                msg = ("The run's breach inflow point was moved {:,.0f} ft downstream along {} "
+                       "to {:.1f}, {:.1f} ({}), ground {:.1f} ft ({:.1f} ft below the top of "
+                       "dam): at the run's point {}.".format(
+                           inflow_status["moved_ft"], moved["how"], moved["xy"][0],
+                           moved["xy"][1], units.len_name, moved["ground_m"] / FT,
+                           (top_m - moved["ground_m"]) / FT, why_bad))
+                notes.append(msg)
+                log("Inflow point moved: " + msg)
+                inflow_m = np.asarray(moved["xy"], float)
+            else:
+                inflow_status["searched_ft"] = float(o["inflow_search_ft"])
+                inflow_status["need_ground_ft"] = round(inflow_drop_needed_m(top_m, h_m) / FT, 2)
+                if "lowest_m" in diag:
+                    inflow_status.update(lowest_ground_ft=round(diag["lowest_m"] / FT, 2),
+                                         lowest_xy_model=diag["lowest_xy"],
+                                         lowest_at_ft=round(diag["lowest_dist"] * units.L / FT,
+                                                            1))
+                notes.append("The run's breach inflow point was not used: {}; no point at "
+                             "least a quarter of the dam height below the top of dam was found "
+                             "within {:,.0f} ft downstream. The flow direction comes from the "
+                             "flooded area and the breach centre from the lowest ground at the "
+                             "toe. Check the dam point and re-run the Runner.".format(
+                                 why_bad, float(o["inflow_search_ft"])))
+                inflow_m = None
 
     # --- flooded extent in the model CRS -----------------------------------------
     progress(10, "flooded extent")
@@ -1790,12 +1939,22 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     weir = [(round(float(a), 2), round(float(b), 2)) for a, b in zip(s2, e2)]
     conn_line = [tuple(A)] + [tuple(p) for p in densify([A, B], max(dam_len / 16.0, cell))[1:-1]] \
         + [tuple(B)]
+    # TIER 2 fix: a moved inflow point must lie inside the 2D area
+    if inflow_status["status"] == "moved" and inflow_m is not None:
+        if not _polygon([tuple(q) for q in perim]).Contains(_point(*inflow_m)):
+            inflow_status.update(status="rejected", why=inflow_status.get("why", "") +
+                                 "; the point found downstream lies outside the 2D area")
+            notes.append("The moved inflow point lies outside the 2D area; it is not used.")
+            inflow_m = None
+
     # breach centre: where the run's breach inflow point (the low ground at the toe that
     # the runner found) projects onto the dam line; without it, the lowest ground along the
     # toe within the crest around the dam point
     ab = (B - A) / (dam_len or 1.0)
     sP = float(np.dot(P - A, ab))
-    if inflow_m is not None:
+    # TIER 2 fix: a point walked down the DEM (no flow path) may sit at the foot of a hill to
+    # one side, so it moves the inflow only, not the breach centre
+    if inflow_m is not None and inflow_status.get("how") != "the steepest descent of the DEM":
         sc = float(np.dot(inflow_m - A, ab))
         toe_xy = inflow_m
         centre_how = "the run's breach inflow point projected onto the dam line"
@@ -2071,10 +2230,13 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             # HEC-RAS 2D engine (hecras_engine): the inflow point and the CRSs, for the
             # hydrograph-inflow mode and for putting the results back on the run's grid
             "inflow_xy_model": (None if inflow_m is None else [float(v) for v in inflow_m]),
+            "inflow_status": inflow_status,
             "model_wkt": srs.ExportToWkt(),
             "work_wkt": (work.ExportToWkt() if work is not None else None)}
     paths["readme"] = write_readme(os.path.join(out, "README_HECRAS.md"), m, info, notes, dam,
                                    params)
+    record_inflow_status(os.path.join(model_dir, hecras.RUN_REPORT_JSON), inflow_status,
+                         srs, work, units, log)
     progress(100, "done")
     return {"folder": out, "paths": paths, "model": m, "info": info, "notes": notes}
 

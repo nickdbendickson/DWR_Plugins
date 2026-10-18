@@ -539,9 +539,9 @@ def _arrival_polys(grid, arrival, hours):
 
 
 def write_products(res, report, st, dam, dam_xy, dem, fin, incr, hy, hy_nb, path, out_folder,
-                   model_dir, arrival_m, crs=None, unit_m=1.0):
+                   model_dir, arrival_m, crs=None, unit_m=1.0, plots=True):
     """Flood polygons, arrival zones, the flow path, a GeoPackage, the EAP map
-    and the hydrograph plot. Fills res.vectors and res.eap_map."""
+    and (plots) the hydrograph and gauge plots. Fills res.vectors and res.eap_map."""
     crs = crs or getattr(res, "crs", None)
     d = fin["depth"]
     feats = []
@@ -640,6 +640,11 @@ def write_products(res, report, st, dam, dam_xy, dem, fin, incr, hy, hy_nb, path
             pass
     else:
         report["eap_map_note"] = MAPBOOK_NOTE
+    if not plots:
+        report.setdefault("outputs", {})["vectors"] = dict(res.vectors)
+        if res.eap_map:
+            report["outputs"]["eap_map"] = res.eap_map
+        return
     # hydrograph plot
     svg = hydrograph_plot(hy, hy_nb, res.flood)
     p = os.path.join(model_dir, "hydrograph.svg")

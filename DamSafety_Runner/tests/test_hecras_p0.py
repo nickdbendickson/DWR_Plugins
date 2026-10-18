@@ -245,17 +245,24 @@ def test_hecras_p0_build_model_on_a_synthetic_run():
 
 
 @test
-def test_hecras_p0_hillside_inflow_is_not_used():
+def test_hecras_p0_hillside_inflow_is_walked_off_the_hill():
     """A run before 3.10.16 put the inflow on the hill (DWR-3161). build_model does not use
-    it: the note says why and the breach centre is near the dam point, not the hill."""
+    it there (TIER 2 fix: it walks it down the DEM); the note says why and the breach centre is
+    near the dam point, not the hill."""
     if _skip():
         return
     d = tempfile.mkdtemp()
     try:
         _run(d, inflow_xy=(HILL[0] + 25.0, HILL[1] + 20.0))
         r = hm.build_model(d, out_folder=os.path.join(d, "model"))
-        assert any("inflow point was not used" in n and "above" in n for n in r["notes"]), \
-            r["notes"]
+        # TIER 2 fix: the hill point is walked down off the hill (no flow path in this run: the
+        # DEM's steepest descent) to ground a quarter of the dam height below the top of dam
+        assert any("inflow point was moved" in n and "above" in n and "steepest descent" in n
+                   for n in r["notes"]), r["notes"]
+        stt = r["info"]["inflow_status"]
+        assert stt["status"] == "moved", stt
+        assert stt["ground_ft"] <= (TOP_M - 0.25 * H_M) / 0.3048 + 1e-6, stt
+        assert stt["original_ground_ft"] > TOP_M / 0.3048, stt
         good = tempfile.mkdtemp()
         try:
             _run(good)
@@ -372,3 +379,100 @@ def test_hecras_p0_old_skeleton_writer_is_retired():
         assert not os.path.exists(os.path.join(d, "_hecras", "mesh.geojson"))
     finally:
         shutil.rmtree(d)
+
+
+# ============================================================ TIER 2 fix: inflow walked downstream
+def _flow_line(folder, pts):
+    m = os.path.join(folder, hecras.MODEL_FOLDER)
+    with open(os.path.join(m, "qa_dam_inflow_and_flow_path.geojson"), "w",
+              encoding="utf-8") as f:
+        json.dump({"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"what": "flow path used to lay out the domain"},
+             "geometry": {"type": "LineString", "coordinates": [list(p) for p in pts]}}]}, f)
+
+
+@test
+def test_hecras_p0_relocate_inflow_walks_the_path_then_the_dem():
+    """Pure: the first point down the flow path low enough and off the embankment; without a
+    path, the steepest descent; None (with the lowest ground seen) when there is none."""
+    ground = lambda xy: 100.0 + 0.01 * np.asarray(xy, float).reshape(-1, 2)[:, 1]  # noqa: E731
+    path = [(0.0, 0.0), (0.0, -1000.0)]
+    diag = {}
+    r = hm.relocate_inflow((0.0, -5.0), ground, 99.5, (0.0, 0.0), 30.0, 500.0, 5.0, path, diag)
+    assert r["how"] == "the run's downstream flow path", r
+    assert abs(r["xy"][1] + 50.0) < 1e-6 and abs(r["dist"] - 45.0) < 1e-6, r
+    r = hm.relocate_inflow((0.0, -5.0), ground, 99.5, (0.0, 0.0), 80.0, 500.0, 5.0, path)
+    assert abs(r["xy"][1] + 80.0) < 1e-6, r                    # off the embankment first
+    r = hm.relocate_inflow((0.0, -5.0), ground, 99.5, (0.0, 0.0), 30.0, 500.0, 5.0, None)
+    assert r["how"] == "the steepest descent of the DEM", r
+    assert r["xy"][1] <= -50.0 + 1e-6 and r["ground_m"] <= 99.5, r
+    diag = {}
+    assert hm.relocate_inflow((0.0, -5.0), ground, 90.0, (0.0, 0.0), 30.0, 200.0, 5.0, path,
+                              diag) is None
+    assert abs(diag["lowest_m"] - 97.95) < 1e-6 and abs(diag["lowest_dist"] - 200.0) < 1e-6, diag
+
+
+@test
+def test_hecras_p0_inflow_on_the_dam_is_walked_down_the_flow_path():
+    """DWR-3161 (TIER 2): the run's inflow point was too close to the dam and too high. It is
+    walked down the run's flow line off the embankment, used, and recorded in run_report.json
+    with the distance moved."""
+    if _skip():
+        return
+    d = tempfile.mkdtemp()
+    try:
+        _run(d, inflow_xy=(X0, Y0 - 10.0))                  # on the 30 m wide embankment
+        _flow_line(d, [(X0, Y0 + 50.0 - 10.0 * k) for k in range(400)])
+        r = hm.build_model(d, out_folder=os.path.join(d, "model"))
+        stt = r["info"]["inflow_status"]
+        assert stt["status"] == "moved" and stt["how"] == "the run's downstream flow path", stt
+        off_ft = 0.5 * 20.0 + 3.0 * H_M / 0.3048                # crest half + 3H:1V slope
+        assert off_ft - 1.0 <= stt["moved_ft"] + 10.0 / 0.3048 <= off_ft + 20.0, stt
+        assert stt["ground_ft"] <= (TOP_M - 0.25 * H_M) / 0.3048, stt
+        assert r["info"]["inflow_xy_model"] == stt["xy_model"]
+        assert any("inflow point was moved" in n and "flow path" in n for n in r["notes"])
+        with open(os.path.join(d, hecras.MODEL_FOLDER, hecras.RUN_REPORT_JSON),
+                  encoding="utf-8") as f:
+            rep = json.load(f)
+        rec = rep["hecras_inflow"]
+        assert rec["status"] == "moved" and rec["moved_ft"] == stt["moved_ft"], rec
+        assert abs(rec["xy"][0] - X0) < 2.0 and Y0 - 60.0 < rec["xy"][1] < Y0 - 30.0, rec
+        assert rec["run_xy"] == [X0, Y0 - 10.0] and rep["inflow_point"]["xy"] == rec["run_xy"]
+        from nd_breach_runner.core import hecras_engine as he
+        res = he.write_project(d, os.path.join(d, "hy"), inflow_mode="hydrograph",
+                               log=lambda m: None, env={})
+        assert res["inflow_bc"] is not None
+    finally:
+        shutil.rmtree(d)
+
+
+@test
+def test_hecras_p0_no_valid_inflow_point_fails_with_the_real_reason():
+    """No ground low enough within the search distance: the point is reported rejected (not
+    missing), with the lowest ground found, and hydrograph mode says so."""
+    if _skip():
+        return
+    from nd_breach_runner.core import hecras_engine as he
+    d = tempfile.mkdtemp()
+    try:
+        _run(d, inflow_xy=(X0, Y0 - 10.0))
+        _flow_line(d, [(X0, Y0 + 50.0 - 10.0 * k) for k in range(400)])
+        opts = {"inflow_search_ft": 60.0}               # ends on the embankment's toe
+        try:
+            he.write_project(d, os.path.join(d, "hy"), options=opts, inflow_mode="hydrograph",
+                             log=lambda m: None, env={})
+            raise AssertionError("write_project should have failed")
+        except he.HecRasEngineError as e:
+            msg = str(e)
+        assert "was rejected" in msg and "no point" in msg and "60 ft downstream" in msg, msg
+        assert "has no inflow point" not in msg, msg
+        with open(os.path.join(d, hecras.MODEL_FOLDER, hecras.RUN_REPORT_JSON),
+                  encoding="utf-8") as f:
+            assert json.load(f)["hecras_inflow"]["status"] == "rejected"
+        # breach mode still builds
+        he.write_project(d, os.path.join(d, "b"), options=opts, inflow_mode="breach",
+                         log=lambda m: None, env={})
+    finally:
+        shutil.rmtree(d)
+    # a run with no inflow point at all keeps the old message
+    assert "has no inflow point" in he.inflow_missing_message({"status": "missing"})
