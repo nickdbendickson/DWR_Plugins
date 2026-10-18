@@ -19,6 +19,9 @@ optional:
                   height, barrels, shape, manning, losses, apron)
   breaklines_json list of polylines that become mesh edges (embankment crests)
   regions_json    extra refined polygons [{"poly": [[x, y]...], "area": m2}]
+  mesh_points, mesh_triangles, mesh_boundary   ready-made mesh (ANUGA_MESHER=gmsh):
+                  model-CRS nodes, CCW triangles, [triangle, edge] outer edges;
+                  used with anuga.Domain instead of create_domain_from_regions
 
 result.npz: depth, velocity, arrival_hr, wse (NaN = dry / outside), plus
 stats as a JSON string. Progress goes to stdout as lines starting "PROGRESS".
@@ -93,7 +96,14 @@ def main(job_path, out_path):
             return anuga.create_domain_from_regions(boundary.tolist(), **dict(kw, **extra))
 
     breaklines_used = False
-    if breaklines:
+    if "mesh_points" in job and job["mesh_points"].size:
+        # external (gmsh) mesh: triangles CCW, boundary = [triangle, edge] (edge i is
+        # opposite vertex i), every outer edge tagged "outflow"
+        pts = to_local(job["mesh_points"])
+        tris = np.asarray(job["mesh_triangles"], dtype=int)
+        bnd = {(int(t), int(e)): "outflow" for t, e in np.asarray(job["mesh_boundary"], int)}
+        domain = anuga.Domain(pts.tolist(), tris.tolist(), bnd, geo_reference=georef)
+    elif breaklines:
         try:
             domain = make_domain({"breaklines": breaklines})
             breaklines_used = True
