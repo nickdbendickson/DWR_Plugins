@@ -361,7 +361,7 @@ def load_profile(path, known_keys=None, layer_ids=None):
     if not isinstance(data, dict) or data.get("format") != PROFILE_FORMAT:
         what = data.get("format") if isinstance(data, dict) else None
         raise ProfileError("{} is not a settings profile of this plugin (format {}; expected "
-                           "'{}'). Profiles are made with 'Save profile...'.".format(
+                           "'{}'). Profiles are made with 'Save profile\u2026'.".format(
                                os.path.basename(path), repr(what) if what else "missing",
                                PROFILE_FORMAT))
     fv = data.get("format_version")
@@ -381,7 +381,7 @@ def load_profile(path, known_keys=None, layer_ids=None):
     saved_sha = str(data.get("sha256") or "")
     raw_sha = profile_hash(raw)
     if not saved_sha:
-        warnings.append("the profile has no hash - it was not made by 'Save profile...'")
+        warnings.append("the profile has no hash - it was not made by 'Save profile\u2026'")
     elif saved_sha != raw_sha:
         warnings.append("the settings in the file do not match its hash - the file was edited "
                         "after it was saved")

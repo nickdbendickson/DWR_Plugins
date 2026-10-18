@@ -533,7 +533,7 @@ def import_plan(hdf_path, out_folder, dem_path=None, cell_ft=0.0, breach_hr=0.0,
                              "coarser cell size".format(width, height))
     os.makedirs(out_folder, exist_ok=True)
     if progress:
-        progress(45.0, "Writing {:,} cell centres...".format(xs.size))
+        progress(45.0, "Writing {:,} cell centres\u2026".format(xs.size))
     src, lname, tmp_files = _open_points(os.path.join(out_folder, "_cells"), cells, wkt)
     if src is None:
         raise RasImportError("the cell centres could not be written for gridding")
@@ -546,7 +546,7 @@ def import_plan(hdf_path, out_folder, dem_path=None, cell_ft=0.0, breach_hr=0.0,
             if f in ("vel", "arr", "peak") and not np.isfinite(cells[f]).any():
                 continue
             if progress:
-                progress(50.0 + 30.0 * i / len(fields), "Gridding {}...".format(f))
+                progress(50.0 + 30.0 * i / len(fields), "Gridding {}\u2026".format(f))
             dst = os.path.join(out_folder, "_grid_{}.tif".format(f))
             _grid(src, dst, f, bounds, width, height, radius, wkt, lname)
             grids[f] = dst
@@ -619,7 +619,7 @@ def _finish(folder, grids, dem, win, k, progress=None, rows=512):
             outs[key].GetRasterBand(1).WriteArray(np.where(ok, v, NODATA).astype(np.float32),
                                                   0, y0)
         if progress:
-            progress(80.0 + 20.0 * (y0 + hh) / h, "Writing rasters...")
+            progress(80.0 + 20.0 * (y0 + hh) / h, "Writing rasters\u2026")
     paths = {}
     for key in list(outs):
         outs[key].FlushCache()

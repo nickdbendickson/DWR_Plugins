@@ -137,7 +137,7 @@ class ModelGateAlgorithm(_Base):
                 "the model edge, no-data holes inside the wet area, mass balance and warnings "
                 "of an ND Dam Breach Runner run report, velocities near the breach (dam point "
                 "from dam.json), units (depth that looks like elevation, arrival in minutes "
-                "...) and the runner's run manifest against the rasters. Each finding is "
+                "\u2026) and the runner's run manifest against the rasters. Each finding is "
                 "PASS / WARN / FAIL (SKIP: could not be checked) with the reason, in "
                 "outputs/QA/Model_Gate.csv. Every threshold is a screening value you choose - "
                 "the defaults are starting values, not requirements. 'Stop on FAIL' makes a "

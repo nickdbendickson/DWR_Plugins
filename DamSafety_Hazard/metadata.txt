@@ -11,7 +11,21 @@ changelog=
     2.18.37 - 2026-10-18
       * One ellipsis character (U+2026) on the shared Dam suite home window's
         Browse… and plugin buttons (suite_home.py, identical in the three plugins).
-        2.18.36 is PR #87 (Hazard screens polish).
+    2.18.36 - 2026-10-18
+      * Lumo's Hazard screens review. The status line under the tabs no longer repeats
+        the Check inputs result ("Input check: N error(s), M warning(s)" / "Inputs need
+        fixing ... see the red box"): the red box and the button badge show it once, and
+        an empty status line is hidden.
+      * The long help text at the top of Review > Structures and Review > Roads &
+        facilities is collapsed by default ("How to review structures" and "How to
+        review roads and facilities"; click to open).
+      * One ellipsis character (U+2026) instead of '...' in the window's labels, tooltips,
+        drop-down items, progress messages, the plugin menu entry (Classify…), the dam
+        suite tool buttons and the Processing labels.
+      * The window is sized for the screen it opens on (QGIS's screen, else the one under
+        the mouse), not always the primary screen; it is placed inside that screen, never
+        larger than it (the cap follows the window to another monitor), and the 520 x 400
+        floor that could exceed a small screen is gone (ui_fit.py, Hazard copy).
     2.18.35 - 2026-10-18
       * The dam folder must be ONE dam's folder: the path is normalised ('//',
         'Dams//2801/') and the file-system root, the suite's Dams folder, a folder

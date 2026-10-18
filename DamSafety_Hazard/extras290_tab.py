@@ -778,7 +778,7 @@ class Extras290TabMixin(object):
         show = QMessageBox.information if est.get("ok", True) else QMessageBox.warning
         text = "\n".join(lines[:30])
         if len(lines) > 30:
-            text += "\n... (all {} lines are in the log)".format(len(lines))
+            text += "\n\u2026 (all {} lines are in the log)".format(len(lines))
         show(self, "Estimate run", text)
 
     # ------------------------------------------------------------ profiles --
@@ -909,7 +909,7 @@ class Extras290TabMixin(object):
             QMessageBox.information(self, "Compare profiles",
                                     head + "\n\nThe two profiles hold the same settings.")
         else:
-            more = "\n... (all {} in the log)".format(len(lines)) if len(lines) > 40 else ""
+            more = "\n\u2026 (all {} in the log)".format(len(lines)) if len(lines) > 40 else ""
             QMessageBox.information(
                 self, "Compare profiles", "{}\n\n{} setting(s) differ (first -> second):\n{}{}"
                 .format(head, len(lines), "\n".join(lines[:40]), more))
@@ -975,7 +975,7 @@ class Extras290TabMixin(object):
             self._status290("Reproduction: {}".format(status), bool(res.get("identical")))
             (QMessageBox.information if res.get("identical") else QMessageBox.warning)(
                 self, title, "Result: {}\n\n{}".format(status, "\n".join(lines[:30])))
-        self._start_background("Reproducing the package...", job, done, project_bound=False)
+        self._start_background("Reproducing the package\u2026", job, done, project_bound=False)
 
     # ----------------------------------------------------------- portfolio --
     @_guarded("Portfolio dashboard")
@@ -1015,7 +1015,7 @@ class Extras290TabMixin(object):
                 QMessageBox.information(self, title, "No dam folders were found in\n{}"
                                         .format(parent))
             self._open_file290(html_path)
-        self._start_background("Building the portfolio dashboard...", job, done,
+        self._start_background("Building the portfolio dashboard\u2026", job, done,
                                project_bound=False)
 
     # ----------------------------------------------------------- form fill --
