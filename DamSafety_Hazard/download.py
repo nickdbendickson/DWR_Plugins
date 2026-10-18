@@ -223,6 +223,7 @@ def parallel_map(jobs, progress_cb=None, label="Downloading", workers=None):
     out = {}
     if not jobs:
         return out
+    _prime_ellipsoids()          # v2.20.1: in the calling thread, before the workers
     workers = max(1, int(workers or DOWNLOAD_WORKERS))
     cancel = threading.Event()
     prog = _Progress(cancel)
@@ -257,6 +258,7 @@ def parallel_map(jobs, progress_cb=None, label="Downloading", workers=None):
             progress_cb(100.0, "{}: done".format(label))
         return out
     _prune_pools()
+    _warm_transforms()
     next_done = _run_pool([(k, make(k, f, a, kw)) for k, f, a, kw in jobs], workers)
     done = 0
     last = 0.0
@@ -291,7 +293,126 @@ def parallel_map(jobs, progress_cb=None, label="Downloading", workers=None):
     # every job has reported; wait for the last ones to return before the
     # pool is let go (v2.6.1, see _PoolHandle)
     next_done.handle.wait()
+    _adopt_results(out)
+    _repair_transforms()
     return out
+
+
+def _prime_ellipsoids(*acronyms):
+    """Look the ellipsoids up in THIS thread before worker threads do (keeps
+    the QGIS ellipsoid cache usable here); never fails. Ported from nd_hazard
+    ND_Dam_Hazard_Helper/helpers.py:prime_ellipsoids - DWR's helpers.py does
+    not ship it, so a local copy lives here (preferring helpers' own should a
+    future build add it)."""
+    try:
+        from .helpers import prime_ellipsoids as _pe
+    except ImportError:
+        _pe = None
+    if _pe is not None:
+        _pe(*acronyms)
+        return
+    try:
+        from qgis.core import QgsEllipsoidUtils
+        for a in ("EPSG:7019", "EPSG:7030") + tuple(x for x in acronyms if x):
+            QgsEllipsoidUtils.ellipsoidParameters(a)
+    except Exception:
+        pass
+
+
+# QGIS 3.34 thread bug (found on live data, 2.18.x): a QgsVectorLayer made in a download worker thread
+# keeps a coordinate reference system whose PROJ state belongs to that thread. Once the thread has ended
+# (the pool is let go) the layer reads fine, but every NEW transformation made from its CRS is INVALID -
+# and an invalid transformation reports isShortCircuited() == True, which reads as "same CRS". Filter
+# rectangles then stay in the wrong CRS and every structure, road and rail segment falls "outside the
+# study area" (the dam is then classified Low from nothing). The jobs hand layers back, so each layer is
+# re-created here, in the calling thread, from its file (memory layers are copied) before anyone uses it.
+_ORPHANS = []      # worker-thread layers: kept alive so Python never deletes them from the wrong thread
+
+
+def _adopt_layer(lyr):
+    try:
+        from qgis.core import QgsVectorLayer
+        if not isinstance(lyr, QgsVectorLayer) or not lyr.isValid():
+            return lyr
+        authid = lyr.crs().authid() or "EPSG:4326"
+        if lyr.providerType() == "memory":
+            from qgis.core import QgsWkbTypes
+            new = QgsVectorLayer("{}?crs={}".format(QgsWkbTypes.displayString(lyr.wkbType()),
+                                                    authid), lyr.name(), "memory")
+            prov = new.dataProvider()
+            prov.addAttributes(list(lyr.fields()))
+            new.updateFields()
+            prov.addFeatures(list(lyr.getFeatures()))
+            new.updateExtents()
+        else:
+            new = QgsVectorLayer(lyr.source(), lyr.name(), lyr.providerType())
+            if not new.isValid():
+                return lyr
+            if not new.crs().isValid():
+                new.setCrs(QgsCoordinateReferenceSystem(authid))
+        _ORPHANS.append(lyr)
+        return new
+    except Exception:
+        return lyr
+
+
+def _adopt_value(v):
+    if isinstance(v, tuple):
+        return tuple(_adopt_value(x) for x in v)
+    if isinstance(v, list):
+        return [_adopt_value(x) for x in v]
+    return _adopt_layer(v)
+
+
+def _adopt_results(out):
+    """parallel_map's results {key: (ok, value)}: layers made by the workers are replaced by
+    equivalents made in this (the calling) thread."""
+    if threading.current_thread() is not threading.main_thread():
+        return
+    for k, (ok, val) in list(out.items()):
+        if ok:
+            out[k] = (ok, _adopt_value(val))
+
+
+# QGIS 3.34 race (found on live data, 2.18.x): when several threads create the same
+# coordinate transformation at once (every download job reprojects), QGIS can cache the
+# first attempt as INVALID and hand that to later callers, so EPSG:4326 -> raster-CRS
+# transforms silently return the input unchanged and every structure falls "outside the
+# study area". The main thread creates the common pairs first (workers then only read the
+# cache) and, once the jobs are done, drops any cache entry the race may have poisoned.
+_WARM_PAIRS = (("EPSG:4326", "EPSG:3857"), ("EPSG:3857", "EPSG:4326"), ("EPSG:4326", "EPSG:5070"),
+               ("EPSG:5070", "EPSG:4326"), ("EPSG:4326", "EPSG:26914"), ("EPSG:26914", "EPSG:4326"))
+
+
+def _warm_transforms():
+    try:
+        from qgis.core import QgsCoordinateTransform, QgsCoordinateTransformContext
+        if threading.current_thread() is not threading.main_thread():
+            return
+        ctx = QgsCoordinateTransformContext()
+        for a, b in _WARM_PAIRS:
+            QgsCoordinateTransform(QgsCoordinateReferenceSystem(a), QgsCoordinateReferenceSystem(b), ctx)
+    except Exception:
+        pass
+
+
+def _repair_transforms():
+    try:
+        from qgis.core import QgsCoordinateTransform, QgsCoordinateTransformContext
+        if threading.current_thread() is not threading.main_thread():
+            return
+        ctx = QgsCoordinateTransformContext()
+        bad = [(a, b) for a, b in _WARM_PAIRS
+               if not QgsCoordinateTransform(QgsCoordinateReferenceSystem(a),
+                                             QgsCoordinateReferenceSystem(b), ctx).isValid()]
+        # an invalid entry for a pair we do not test would still hurt: always clear the cache
+        QgsCoordinateTransform.invalidateCache()
+        if bad:
+            log_message("Coordinate transformations {} were invalid after the parallel downloads "
+                        "(QGIS thread race); the transform cache was cleared".format(
+                            ", ".join("{}->{}".format(a, b) for a, b in bad)), MSG_WARNING)
+    except Exception:
+        pass
 
 
 def _park(handle):

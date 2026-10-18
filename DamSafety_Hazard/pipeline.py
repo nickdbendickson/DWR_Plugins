@@ -1434,9 +1434,11 @@ def _classify_and_write(run, cfg, state):
             n_rev, os.path.basename(store.path)))
     reinterpret(structs, float(cfg["min_area_ft2"]), int(cfg["persons_per_dwelling"]),
                 **ST.mobile_rules_from_cfg(cfg))
-    # ST.1: reinterpret restores persons on every habitable record; re-collapse so
-    # multi-outline extras stay at 0 persons (consequences / access also skip them)
-    ST.collapse_dwellings(structs)
+    # H4 / 2.16.0: the per-address dwelling collapse is NOT applied (audit). It zeroed
+    # the persons of every further habitable building sharing one 911/street address
+    # (apartment buildings, mobile-home parks, multi-home farmsteads), under-counting
+    # TM 11 lives-in-jeopardy and PAR / loss of life. Same-building duplicates are
+    # already merged spatially by build_inventory, so no re-collapse is needed here.
     _parcel_hints_step(run, cfg, structs, acrs)
 
     # ---- v2.7: the engineer's depth-damage curves for non-residential structures ----

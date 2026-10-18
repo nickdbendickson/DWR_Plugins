@@ -2087,7 +2087,14 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             problems.log("structure {}: {}".format(rec["id"], e))
     for rec in structs:
         apply_type(rec, one_d, near_ft, borderline_higher)
-    collapse_dwellings(structs)
+    # H4 / 2.16.0: the per-address dwelling collapse is not applied (audit). The
+    # collapse_dwellings() step zeroed the persons of every further habitable
+    # building sharing one 911/street address (apartment buildings, mobile-home
+    # parks and multi-home farmsteads - routine in rural ND), under-counting
+    # TM-11 lives-in-jeopardy and PAR/loss-of-life. Same-building duplicates are
+    # already merged spatially by build_inventory (STRUCTURE_MERGE_DIST_FT), so
+    # the address collapse is both unnecessary and unsafe. Definition kept for
+    # compatibility and direct callers; it is simply no longer invoked here.
     tick(100, "Structures evaluated")
     problems.summary()
     return structs
