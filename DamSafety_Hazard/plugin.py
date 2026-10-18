@@ -33,7 +33,6 @@ class NDdamHazardHelperPlugin(QObject):
         self.iface = iface
         self.action = None
         self.dialog = None
-        self.home_action = None
         self.home_dialog = None
         self.provider = None
         self._versions_checked = False
@@ -100,7 +99,13 @@ class NDdamHazardHelperPlugin(QObject):
             from .damsuite import versions as VS
             msgs = VS.check("ndhazard", versions=versions)
             lines = VS.report_lines("ndhazard", versions=versions)
-        except Exception:
+        except Exception as e:
+            try:
+                from .helpers import log_message
+                log_message("Suite version check skipped: the version table could not be "
+                            "loaded ({})".format(e))
+            except Exception:
+                pass
             return []
         try:
             from .helpers import log_message
@@ -128,13 +133,11 @@ class NDdamHazardHelperPlugin(QObject):
             return False
 
     def run_settings(self, *args):
-        """Open the window on its Suite settings tab (v2.13)."""
+        """Open the window and its Suite settings window (v2.13 a tab; 2.18.34 the gear
+        menu's non-modal window)."""
         self.run_plugin()
         try:
-            dlg = self.dialog
-            for i in range(dlg.tab_widget.count()):
-                if dlg.tab_widget.tabText(i) == "Suite settings":
-                    dlg.tab_widget.setCurrentIndex(i)
+            self.dialog._open_suite_settings()
         except Exception:                                        # noqa
             pass
 
@@ -192,14 +195,6 @@ class NDdamHazardHelperPlugin(QObject):
                 pass
             self.action.deleteLater()
             self.action = None
-        if self.home_action is not None:
-            try:
-                self.iface.removePluginMenu(PLUGIN_NAME, self.home_action)
-                self.home_action.triggered.disconnect(self.run_home)
-            except (RuntimeError, TypeError, AttributeError):
-                pass
-            self.home_action.deleteLater()
-            self.home_action = None
         if self.home_dialog is not None:
             try:
                 self.home_dialog.close()

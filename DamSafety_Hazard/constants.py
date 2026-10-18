@@ -3,7 +3,12 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-PLUGIN_VERSION = "2.18.13"
+PLUGIN_VERSION = "2.18.34"
+# 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
+# the submittal cover letter, the Runner's banner); no new authority is cited
+DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
+              "USBR ACER TM 11. They are not the classification until the engineer of record "
+              "adopts them; the Department of Water Resources decides the official hazard class.")
 OUTPUT_FOLDER_NAME = "outputs"
 
 # ------------------------------------------------------------ layer tree ----
@@ -63,6 +68,10 @@ BTN_INACTIVE_STYLE = (
 # additionally throttles UI refreshes to PROGRESS_MIN_INTERVAL_S seconds.
 PROGRESS_INTERVAL = 50
 PROGRESS_MIN_INTERVAL_S = 0.1
+
+# Fast / one-pass structure sampling: use strip reads when at least this many
+# structures need cells (structures.py and fastsample.py share this value).
+ONEPASS_MIN = 8
 
 # Hazard raster generation works on strips of rows so memory stays bounded
 # no matter how large the depth grid is (~2 M cells per strip is roughly
@@ -540,7 +549,7 @@ _METERS_PER_DEGREE_EQUATOR = 111320.0
 
 
 def _read_readme():
-    """README.txt next to this file (shown on the Readme tab)."""
+    """README.txt next to this file (the window's gear menu > Documentation)."""
     import os
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "README.txt")
     try:

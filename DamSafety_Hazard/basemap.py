@@ -186,12 +186,24 @@ def set_visible(on):
 
 
 # ------------------------------------------------------------ v2.9: layouts --
+SUITE_ENV_VARS = ("ND_DAM_SUITE", "ND_DAM_OFFLINE")   # pipeline.py: no 25-layer download
+
+
 def offline_only():
-    """The 'offline only' setting (no internet requests at all)."""
+    """True when the plugin must not ask the internet: the 'offline only'
+    setting, an offline pack configured, or ND_DAM_SUITE / ND_DAM_OFFLINE set
+    (the same no-download rule the pipeline applies to the layer downloads).
+    Lumo v1.6: the imagery probe used to go out in suite / offline-pack mode
+    and could block up to PROBE_TIMEOUT_MS on a hung service."""
+    import os
+    if any(os.environ.get(k) for k in SUITE_ENV_VARS):
+        return True
     try:
         from .download import offline_config
-        return bool(offline_config()[1])
-    except Exception:
+        pack, only = offline_config()
+        return bool(only) or bool(str(pack or "").strip())
+    except Exception as e:
+        log_message("Offline setting not read (imagery check goes ahead): {}".format(e))
         return False
 
 

@@ -15,6 +15,20 @@ except ImportError:                      # build_nd_pack.py: plugin folder on sy
                            CAMP_POINT_RADIUS_FT, OSM_PLACE_RADIUS_FT)
 
 
+def tag_has(tags, key, value):
+    """OS.1: tags[key] is `value`, also as one of semicolon-separated values
+    ("hospital;clinic")."""
+    v = (tags or {}).get(key)
+    if v == value:
+        return True
+    return isinstance(v, str) and ";" in v and value in (x.strip() for x in v.split(";"))
+
+
+def _tag_filter(k, v):
+    """OS.1: Overpass filter for key k having value v alone or in a ';' list."""
+    return '["{}"~"(^|;) *{} *(;|$)"]'.format(k, re.escape(v))
+
+
 def _bbox(extent_4326):
     xmin, ymin, xmax, ymax = extent_4326
     return "{:.6f},{:.6f},{:.6f},{:.6f}".format(ymin, xmin, ymax, xmax)   # S,W,N,E
@@ -23,7 +37,7 @@ def _bbox(extent_4326):
 def overpass_query(extent_4326, tags=OSM_LIFELINE_TAGS):
     xmin, ymin, xmax, ymax = extent_4326
     bbox = "{:.6f},{:.6f},{:.6f},{:.6f}".format(ymin, xmin, ymax, xmax)   # S,W,N,E
-    parts = "".join('nwr["{}"="{}"]({});'.format(k, v, bbox) for k, v, _c in tags)
+    parts = "".join('nwr{}({});'.format(_tag_filter(k, v), bbox) for k, v, _c in tags)
     return "[out:json][timeout:50];({});out center tags;".format(parts)
 
 
@@ -33,7 +47,7 @@ def overpass_to_features(data, tags=OSM_LIFELINE_TAGS):
     out = []
     for el in (data or {}).get("elements", []) if isinstance(data, dict) else []:
         t = el.get("tags") or {}
-        cat = next((c for k, v, c in tags if t.get(k) == v), None)
+        cat = next((c for k, v, c in tags if tag_has(t, k, v)), None)
         if cat is None:
             continue
         if "lat" in el and "lon" in el:
@@ -85,7 +99,7 @@ def camp_features(data, tags=OSM_CAMP_TAGS, point_radius_ft=CAMP_POINT_RADIUS_FT
     out = []
     for el in (data or {}).get("elements", []) if isinstance(data, dict) else []:
         t = el.get("tags") or {}
-        cat = next((c for k, v, c in tags if t.get(k) == v), None)
+        cat = next((c for k, v, c in tags if tag_has(t, k, v)), None)
         if cat is None:
             continue
         ring = None
@@ -122,6 +136,8 @@ def camp_features(data, tags=OSM_CAMP_TAGS, point_radius_ft=CAMP_POINT_RADIUS_FT
                     break
             except (TypeError, ValueError):
                 cap = None
+        if cap is not None and cap <= 0:
+            cap = None                                  # OS.3: 0 / negative = unknown
         out.append({"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]},
                     "properties": {"name": t.get("name") or t.get("operator") or "",
                                    "category": cat, "tourism": t.get("tourism") or "",
@@ -135,8 +151,8 @@ def camp_features(data, tags=OSM_CAMP_TAGS, point_radius_ft=CAMP_POINT_RADIUS_FT
 def camps_query(extent_4326, tags=OSM_CAMP_TAGS):
     xmin, ymin, xmax, ymax = extent_4326
     bbox = "{:.6f},{:.6f},{:.6f},{:.6f}".format(ymin, xmin, ymax, xmax)
-    ways = "".join('way["{}"="{}"]({});'.format(k, v, bbox) for k, v, _c in tags)
-    other = "".join('node["{0}"="{1}"]({2});relation["{0}"="{1}"]({2});'.format(k, v, bbox)
+    ways = "".join('way{}({});'.format(_tag_filter(k, v), bbox) for k, v, _c in tags)
+    other = "".join('node{0}({1});relation{0}({1});'.format(_tag_filter(k, v), bbox)
                     for k, v, _c in tags)
     return ("[out:json][timeout:50];({})->.w;.w out body geom;({})->.o;.o out body center;"
             .format(ways, other))
@@ -153,11 +169,15 @@ TRAILER_PARK_NAME = re.compile(
     r"|manufactured (?:home|housing) (?:park|community)|mhp)\b", re.I)
 # the server-side pre-filter (POSIX regex, case-insensitive); the exact
 # words are checked by is_trailer_park()
-_TRAILER_NAME_PREFILTER = "mobile home|trailer|manufactured|mhp"
+_TRAILER_NAME_PREFILTER = "mobile home|trailer|manufactured|mhp|m[.] ?h[.] ?p"   # OS.2
+_DOTTED = re.compile(r"\b(?:[A-Za-z]\. ?){2,}")
 
 
 def _norm_name(name):
-    return re.sub(r"\s+", " ", re.sub(r"[_\-/.,]+", " ", str(name or ""))).strip()
+    # OS.2: dotted acronyms first ("M.H.P." / "M. H. P." -> "MHP")
+    text = _DOTTED.sub(lambda m: m.group(0).replace(".", "").replace(" ", "") + " ",
+                       str(name or ""))
+    return re.sub(r"\s+", " ", re.sub(r"[_\-/.,]+", " ", text)).strip()
 
 
 def is_trailer_park(tags):

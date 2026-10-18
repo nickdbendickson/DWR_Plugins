@@ -40,6 +40,9 @@ TEMPLATE = """# Non-residential depth-damage curves for the ND Dam Hazard Classi
 # depth_ft  : flood depth above the first floor, ft (negative = below the first floor)
 # percent   : damage, 0 - 100
 #
+# Extend each curve to the deepest flooding you expect: above its last depth the
+# last percent is used unchanged (held flat), below its first depth the damage is 0.
+#
 # THE ROWS BELOW ARE A FORMAT EXAMPLE ONLY - the numbers are NOT real curve values.
 # Delete the leading '#' after replacing them with your curve.
 #
@@ -123,31 +126,34 @@ def load(path):
         return None, ["curve file not found: {}".format(path)]
     try:
         with open(path, newline="", encoding="utf-8-sig", errors="replace") as fh:
-            rows = [r for r in csv.reader(fh)
+            # (file line number, row): warnings name the line in the file, counting the
+            # comment and blank lines the template has (Lumo v1.7)
+            rd = csv.reader(fh)
+            rows = [(rd.line_num, r) for r in rd
                     if r and not (r[0].strip().startswith("#") or not "".join(r).strip())]
     except OSError as e:
         return None, ["curve file not readable: {}".format(e)]
     if not rows:
         return None, ["curve file is empty: {}".format(os.path.basename(path))]
-    head = [h.strip().lower() for h in rows[0]]
+    head = [h.strip().lower() for h in rows[0][1]]
     try:
         io_, ik, idp, ip = (head.index(k) for k in ("occupancy", "kind", "depth_ft", "percent"))
     except ValueError:
         return None, ["curve file needs the columns occupancy, kind, depth_ft, percent (found: "
                       "{})".format(", ".join(head))]
     pts = {}
-    for n, r in enumerate(rows[1:], 2):
+    for n, r in rows[1:]:
         try:
             occ = r[io_].strip().upper()
             kind = r[ik].strip().lower()
             depth = float(r[idp])
             pct = float(r[ip])
         except (IndexError, ValueError):
-            problems.append("row {} skipped (not readable): {}".format(n, ",".join(r)[:60]))
+            problems.append("line {} skipped (not readable): {}".format(n, ",".join(r)[:60]))
             continue
         if not occ or kind not in KINDS or not (0.0 <= pct <= 100.0) \
                 or not np.isfinite(depth):
-            problems.append("row {} skipped (occupancy, kind structure/content, percent "
+            problems.append("line {} skipped (occupancy, kind structure/content, percent "
                             "0-100): {}".format(n, ",".join(r)[:60]))
             continue
         pts.setdefault((occ, kind), []).append((depth, pct))
@@ -161,6 +167,10 @@ def load(path):
         if len(depths) != len(set(depths)):
             problems.append("{} {}: a depth is given twice - not used".format(occ, kind))
             continue
+        if any(b < a for a, b in zip(depths, depths[1:])):
+            # DC.2: sorted for the interpolation, but say so (a typo is likelier)
+            problems.append("{} {}: depths are not in increasing order in the file - "
+                            "sorted by depth (check the rows)".format(occ, kind))
         ps = [v for _d, v in sorted(p)]
         if any(b < a - 1e-9 for a, b in zip(ps, ps[1:])):
             problems.append("{} {}: damage falls as the water gets deeper - check the "

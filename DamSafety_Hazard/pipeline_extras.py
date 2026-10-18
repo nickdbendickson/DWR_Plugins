@@ -7,9 +7,10 @@ for its summary section. Kept out of pipeline.py so that file stays readable."""
 import csv
 import json
 import os
+import re
 import time
 
-from .helpers import RasterSampler, prepare_output_path
+from .helpers import RasterSampler, log_message, prepare_output_path
 from .scenarios import restore
 
 
@@ -35,6 +36,34 @@ def parse_factors(text):
         except (TypeError, ValueError):
             continue
     return out or None
+
+
+FACTOR_LOW, FACTOR_HIGH = 0.5, 2.0       # a factor outside this band is warned (Lumo v1.8)
+_COMMA_DECIMAL_RE = re.compile(r"^0,\d+$")       # "0,8": 0 is never a factor -> decimal comma
+_COMMA_PAIR_RE = re.compile(r"^\d+,\d+$")       # "1,2": a list, or 1.2 with a decimal comma?
+
+
+def factor_problems(text):
+    """(errors, warnings) about a sensitivity factor text. Error: "0,8" style entries
+    (clearly a decimal comma - read as 0 and 8). Warnings: other "1,2" entries without
+    spaces (a list, or a decimal comma?) and factors outside FACTOR_LOW-FACTOR_HIGH."""
+    errors, warnings = [], []
+    if text is None or isinstance(text, (list, tuple)):
+        items = []
+    else:
+        items = [t.strip(",") for t in str(text).replace(";", " ").split()]
+    for x in items:
+        if _COMMA_DECIMAL_RE.match(x):
+            errors.append("'{}' looks like a decimal comma - write {} (factors are separated "
+                          "by commas or spaces)".format(x, x.replace(",", ".")))
+        elif _COMMA_PAIR_RE.match(x):
+            warnings.append("'{}' is read as two factors ({}); write {} if one factor was "
+                            "meant".format(x, " and ".join(x.split(",")), x.replace(",", ".")))
+    for v in parse_factors(text) or []:
+        if v > 0 and not FACTOR_LOW <= v <= FACTOR_HIGH:
+            warnings.append("factor {:g} is outside {:g}-{:g} (a {:g}x depth / velocity "
+                            "scenario) - check it is meant".format(v, FACTOR_LOW, FACTOR_HIGH, v))
+    return errors, warnings
 
 
 def _open_depth(layers, gov):
@@ -86,6 +115,8 @@ def sensitivity_step(run, gov, governing, structs, base_snaps, layers, inputs, o
         if base is not None:
             same = (layers[gov.name].get("vel") is not None) == \
                 (layers[base[1].name].get("vel") is not None)
+        for w in sum(factor_problems(cfg.get("sensitivity_factors")), []):
+            run.log(">>> WARNING: sensitivity factors: " + w)
         try:
             res = SE.run(
                 structs, governing.get("roads"), governing.get("rails"),
@@ -346,7 +377,13 @@ def temporal_step(run, gov, suffix, d_eap):
             items.append((lyr, field, units))
     if not items:
         return ["Temporal animation not set up: no EAP arrival layer in the project"]
-    start = parse_start_time(cfg.get("temporal_breach_start"))
+    raw_start = str(cfg.get("temporal_breach_start") or "").strip()
+    start = parse_start_time(raw_start)
+    bad_start = bool(raw_start) and start is None
+    if bad_start:                                   # EX.8: not silently the nominal start
+        run.log(">>> WARNING: Temporal animation: breach start {!r} not understood "
+                "(YYYY-MM-DD HH:MM) - the nominal start 2000-01-01 00:00 is used".format(
+                    raw_start))
     try:
         step = float(cfg.get("temporal_step_min") or TP.DEFAULT_STEP_MIN)
     except (TypeError, ValueError):
@@ -359,8 +396,10 @@ def temporal_step(run, gov, suffix, d_eap):
     if not n:
         return ["Temporal animation not set up: " + "; ".join(msgs)]
     return ["Temporal Controller: {} layer(s) animated from the breach start ({}), step {:g} "
-            "min - the start is a nominal display time".format(
-                n, start.strftime("%Y-%m-%d %H:%M") if start else "2000-01-01 00:00", step)]
+            "min{}".format(
+                n, start.strftime("%Y-%m-%d %H:%M") if start else "2000-01-01 00:00", step,
+                "" if start else (" - the start is a nominal display time" + (
+                    " (the breach start given was not understood)" if bad_start else "")))]
 
 
 # ------------------------------------------------------------------ vintage --
@@ -378,7 +417,9 @@ def download_vintage_snapshot():
         from .download import PACK_USED, STALE_USED, tile_vintage
         return {"pack": [list(t) for t in PACK_USED], "stale": [list(t) for t in STALE_USED],
                 "tiles": tile_vintage()}
-    except Exception:
+    except Exception as e:
+        log_message("Data vintage records not read (the vintage table lists only the "
+                    "rasters): {}".format(e))
         return {"pack": [], "stale": [], "tiles": []}
 
 
@@ -412,8 +453,9 @@ def vintage_rows(run, layers, snap=None):
         for name, day, fname in snap.get("stale") or []:
             rows.append(("Earlier download", "{} ({})".format(name, fname), day,
                          "the service did not answer - an earlier download was used"))
-    except Exception:
-        pass
+    except Exception as e:
+        run.log(">>> NOTE: the data-vintage table lists only the rasters (pack / tile-cache / "
+                "earlier-download rows not read: {})".format(e))
     return rows
 
 

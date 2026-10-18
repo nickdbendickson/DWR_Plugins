@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.15.0
+ND Dam Hazard Classification Helper - Version 2.18.34
 ====================================================
 
 WHAT IT DOES
@@ -16,6 +16,24 @@ WHAT IT DOES
 - QA layers show exactly what was read: Structure_Evaluation_Areas (the area
   searched around each structure), Structure_Sampled_Cells (the raster cells)
   and Structure_Sample_Points (where each governing value came from).
+
+THE WINDOW (2.18.34)
+- Three tabs instead of nine. Classify: the dam folder and the rasters
+  (unticked box = found in the dam folder; Depth is always needed, Velocity
+  for the 2D criterion), the DSS-WISE Lite and HEC-RAS plan imports, Data and
+  output, and the classification options, each a section you open; under
+  them the check results and Check inputs / Classify. Results: the classes,
+  every criterion, the summary and the tools for the last run (PDF report,
+  submittal package, outputs folder, creep watch, dams in series). Review:
+  Structures and Roads & facilities.
+- The gear button (top right) holds Suite settings…, Documentation (this
+  text, with Run self-test and Edit data sources…), Run self-test and Edit
+  data sources…. Older notes below that name a tab mean its section now:
+  Setup & Run / Data & Output / Hazard Classification / DSS-WISE Lite /
+  HEC-RAS plan are on Classify, the Readme tab is the gear's Documentation.
+- Classify is the one run button ("Run everything" and "Run Hazard
+  Classification" ran the same classification). Input errors show in the
+  red box above it, not in a pop-up, and keep it off until they are fixed.
 
 NEW IN 2.15.0 (with ND Dam Breach Runner 3.7.0 and ND Dam Breach Screening 0.14.0)
 - A proposed dam (Screening tool 19) is named in the summary and the PDF.
@@ -173,7 +191,8 @@ NEW IN 2.11.0 - THE REG_05.2026 CURVE TABLE
   SHA-256.
 - NOT RUN IN A REAL QGIS (simulated QGIS / Qt only, as all releases).
 
-QUICK START (2.9.0)
+QUICK START (2.9.0; since 2.18.34 these are sections of the Classify tab -
+see THE WINDOW above)
 Tabs, left to right: DSS-WISE Lite, HEC-RAS plan, Setup & Run, Data & Output,
 Hazard Classification, Review, Review: roads & facilities, Readme.
 0. (Only when your results come from DSS-WISE Lite or a HEC-RAS plan) DSS-WISE
@@ -586,7 +605,7 @@ NEW IN 2.3.0
   the summary, the PDF report and the run log stay in outputs. Copies left
   in outputs by earlier versions are removed. CSV / XLSX copies are
   optional; the pre-2.0 All_Consolidated join layers are off by default.
-- Data-source addresses can be changed without a new version: Readme tab
+- Data-source addresses can be changed without a new version: gear button >
   "Edit data sources..." opens ND_Dam_Hazard_Helper_data_sources.json in
   the QGIS profile folder (restart QGIS after a change).
 - Processing toolbox: "Batch hazard classification (folder of dams)" runs
@@ -907,13 +926,7 @@ NEW IN 1.2.0 (performance and stability)
 - Re-running no longer duplicates layers or re-reads the plugin's own
   *_Consolidated outputs; locked output files get a time-stamped name.
 - Cancel works in every stage; the progress bar never moves backwards.
-- Readme tab: "Run Self-Test" checks the install on synthetic data.
-
-BUTTON STATES
-- "Run Main Consolidation" turns green once the dam folder AND all three
-  rasters are selected. It can only be clicked while green.
-- "Run POI Consolidation" turns green once the *_POI.gpkg file exists
-  in the output folder (created by Main Consolidation).
+- Gear button > "Run self-test" checks the install on synthetic data.
 
 INSTALL
 1. QGIS > Plugins > Manage and Install Plugins > Install from ZIP
@@ -926,18 +939,17 @@ INSTALL
    ("Install from ZIP" always picks the right folder for your QGIS version.)
 2. Restart QGIS
 3. Enable the plugin in Plugins > Manage and Install Plugins
-4. Readme tab > "Run Self-Test" confirms the install.
+4. Gear button > "Run self-test" confirms the install.
 
 USAGE
 1. Browse (or type) the Dam Project Folder; an "outputs" subfolder is
    created there.
 2. Select Depth, Velocity, and Arrival rasters.
-3. Click "Run Main Consolidation" (button turns green when ready).
-4. Place FEMA_Structures.gpkg (or {Dam}_FEMA_Structures.gpkg) in the
-   outputs folder BEFORE running Main Consolidation to enable the
-   building-outline stages (OSM_Outlines.gpkg is still read).
-5. Optional: Edit the *_POI.gpkg, save, click "Run POI Consolidation".
-6. Hazard Classification tab: load a road layer (NDDOT roads, HPMS, OSM)
+3. Optional: place FEMA_Structures.gpkg (or {Dam}_FEMA_Structures.gpkg)
+   in the outputs folder BEFORE running the classification to enable the
+   building-outline stages (OSM_Outlines.gpkg is still read). There is no
+   separate consolidation step any more: the classification run does it.
+4. Hazard Classification tab: load a road layer (NDDOT roads, HPMS, OSM)
    and optionally an AADT layer, choose the model type, then click
    "Run Hazard Classification". Internet is used for NSI, ND GIS Hub
    address points, FEMA USA Structures (optional, only without
@@ -945,11 +957,14 @@ USAGE
    Inventory of Dams and lifeline facilities unless those options are
    switched off. Enter the dam's NID ID so it is not listed as a dam in
    series.
-7. Review tab: decide the listed structures, "Save and re-run".
-8. DSS-WISE Lite tab: import a DSS-WISE package instead of (or besides)
+5. Review tab: decide the listed structures, "Save and re-run".
+6. DSS-WISE Lite tab: import a DSS-WISE package instead of (or besides)
    HEC-RAS rasters.
-   If the POI layer still has unsaved edits in QGIS you will be asked
-   whether to save them first.
+
+PRIVACY
+- The Review tab's "Open in web map" button sends that one structure's location to
+  Google Maps (or the WEBMAP_URL_TEMPLATE service) only when you click it; nothing else
+  is sent there.
 
 REQUIREMENTS
 - QGIS 3.28 or later (including QGIS 4 / Qt6) on Windows, macOS or Linux.

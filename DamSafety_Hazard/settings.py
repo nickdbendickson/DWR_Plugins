@@ -83,6 +83,8 @@ def widget_value(w):
 
 
 def set_widget_value(w, v):
+    """Set `w` to `v`. SE.2: returns False when the value was not applied (not
+    convertible, or no combo item has that data) - the widget keeps its value."""
     try:
         if isinstance(w, QCheckBox):
             w.setChecked(bool(v))
@@ -90,15 +92,27 @@ def set_widget_value(w, v):
             for i in range(w.count()):
                 if w.itemData(i) == v:
                     w.setCurrentIndex(i)
-                    return
+                    return True
+            return False
         elif isinstance(w, QSpinBox):
             w.setValue(int(v))
         elif isinstance(w, QDoubleSpinBox):
             w.setValue(float(v))
         elif isinstance(w, QLineEdit):
             w.setText("" if v is None else str(v))
-    except (TypeError, ValueError):
-        pass
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return True
+
+
+def note_failed_keys(meta, failed):
+    """SE.2: add the settings the dialog could not apply to meta["warnings"]."""
+    failed = sorted(set(failed or []))
+    if failed:
+        meta.setdefault("warnings", []).append(
+            "not applied (value not accepted by this dialog - the current value is kept): "
+            + ", ".join(failed))
+    return meta
 
 
 # ================================================================ profiles ==

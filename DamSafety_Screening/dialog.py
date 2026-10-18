@@ -18,7 +18,7 @@ from qgis.PyQt.QtCore import QUrl, Qt
 from qgis.PyQt.QtGui import QDesktopServices
 from .ui_fit import fit_window, wrap_tabs
 from qgis.PyQt.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget, QWidget, QLabel, QLineEdit,
+    QDialog, QSizePolicy, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget, QWidget, QLabel, QLineEdit,
     QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QGroupBox, QFileDialog, QMessageBox,
     QCheckBox, QRadioButton, QTableWidget, QTableWidgetItem, QInputDialog, QListWidget, QListWidgetItem,
 )
@@ -52,6 +52,27 @@ def plugin_version():
         return damrecord_io.plugin_version()
     except Exception:                                            # noqa
         return ""
+
+
+def window_title():
+    """0.17.23: 'DamSafety — Screening (v0.17.23)'."""
+    v = plugin_version()
+    return "DamSafety \u2014 Screening (v{})".format(v) if v else "DamSafety \u2014 Screening"
+
+
+# 0.17.23 the pipeline strip: (key, label, the step whose state it shows, tab it jumps to)
+PIPELINE = (("data", "Data", "1", "run"), ("dem", "DEM", "2", "run"),
+            ("screen", "Screen", "7", "run"), ("report", "Report", None, "results"))
+PIPE_MARK = {"done": "\u2713", "ready": "\u25cf", "running": "\u25d0", "problem": "!", "stale": "\u21bb",
+             "waiting": "\u25cb"}
+PIPE_COLOR = {"done": "#2e7d32", "ready": "#1a73e8", "running": "#1a73e8", "problem": "#c62828",
+              "stale": "#b26a00"}
+STEP_STATE_W, STEP_BTN_W = 110, 270
+BANNER_STYLE = ("QLabel { background: #eef3f8; color: #4a5560; border: 1px solid #d5dee8; "
+                "border-radius: 4px; padding: 6px; font-size: 9pt; }")
+HINT_STYLE = "color: #c62828;"
+PRIMARY_STYLE = ("QPushButton { background: #1a73e8; color: white; font-weight: bold; "
+                 "border-radius: 4px; padding: 6px 12px; } QPushButton:disabled { background: #9bbbe8; }")
 
 
 class QgisEnv(pf.Env):
@@ -115,7 +136,7 @@ class NDDamScreeningDialog(QDialog):
         super().__init__(parent)
         self.iface = iface
         self._loading = True
-        self.setWindowTitle("{} {}".format(TITLE, plugin_version()).strip())
+        self.setWindowTitle(window_title())
         self.setMinimumWidth(640)
         self.step_state, self.step_button, self.step_note = {}, {}, {}
         self.simple_state, self.simple_name, self.simple_note = {}, {}, {}
@@ -140,20 +161,23 @@ class NDDamScreeningDialog(QDialog):
     def _first_steps(self):
         """The two choices that come right after the work folder."""
         from .core.dem_download import county_names
-        box = QGroupBox("Data folder and county")
+        box = QWidget()
         grid = QGridLayout()
         grid.addWidget(QLabel("Data folder"), 0, 0)
         self.suite_edit = QLineEdit(getattr(self, "suite_folder", "") or "")
         self.suite_edit.setPlaceholderText("Offline pack or the folder of layer files")
         self.suite_edit.setToolTip("One folder. An offline pack or GeoPackages in it are filled in. Results do not go here.")
-        browse = QPushButton("Browse...")
+        self.suite_browse = browse = QPushButton("Browse\u2026")
         browse.clicked.connect(self._browse_suite)
         grid.addWidget(self.suite_edit, 0, 1)
         grid.addWidget(browse, 0, 2)
+        self.data_hint = QLabel("not set yet")
+        self.data_hint.setStyleSheet(HINT_STYLE)
+        grid.addWidget(self.data_hint, 1, 1)
         self.data_status = QLabel("No data folder yet.")
         self.data_status.setWordWrap(True)
-        grid.addWidget(self.data_status, 1, 0, 1, 3)
-        grid.addWidget(QLabel("County"), 2, 0)
+        grid.addWidget(self.data_status, 2, 0, 1, 3)
+        grid.addWidget(QLabel("County"), 3, 0)
         self.inventory_county = QComboBox()
         self.inventory_county.addItem("All counties", "")
         for name in county_names():
@@ -161,7 +185,9 @@ class NDDamScreeningDialog(QDialog):
         self.inventory_county.setToolTip("Only this county is screened. All counties keeps every county.")
         self.inventory_county.currentIndexChanged.connect(self._changed)
         self.inventory_county.currentIndexChanged.connect(lambda _i: self._sync_dem_county())
-        grid.addWidget(self.inventory_county, 2, 1, 1, 2)
+        grid.addWidget(self.inventory_county, 3, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setContentsMargins(0, 0, 0, 0)
         self.storage_choice = QComboBox()
         self.storage_choice.addItem("Max storage", 0)
         self.storage_choice.addItem("Normal storage", 1)
@@ -185,57 +211,223 @@ class NDDamScreeningDialog(QDialog):
             box.setCurrentIndex(idx)
 
     def _build(self):
+        """0.17.23 shell: header + banner, Workspace row, pipeline strip, Run / Review / Results
+        tabs, Settings behind the gear, the log folded to one line, Close bottom right."""
         lay = QVBoxLayout()
-        info = QLabel(DISCLAIMER)
-        info.setWordWrap(True)
-        lay.addWidget(info)
-
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Screening work folder:"))
-        self.work_edit = QLineEdit()
-        self.work_edit.setToolTip(
-            "One folder for everything this window's steps write (0_data_package.gpkg, "
-            "1_dams.gpkg, 2_terrain, ...). The window reads it to show which steps are done. "
-            "Use a folder per county / per run.")
-        self.work_edit.editingFinished.connect(self._changed)
-        self.work_browse = QPushButton("Browse...")
-        self.work_browse.clicked.connect(lambda _c=False: self._browse_folder(self.work_edit))
-        self.work_open = QPushButton("Open folder")
-        self.work_open.clicked.connect(self._open_work_folder)
-        self.help_btn = QPushButton("How it decides...")
+        head = QHBoxLayout()
+        self.title_label = QLabel(window_title())
+        self.title_label.setStyleSheet("font-size: 15pt; font-weight: bold;")
+        head.addWidget(self.title_label, 1)
+        self.help_btn = QPushButton("How it decides…")
         self.help_btn.setToolTip("Pictures of the rules: the rim / toe of a pond, the triage envelope, the "
                                  "ND 5.2 / 5.3 decision tree, and what every threshold does.")
         self.help_btn.clicked.connect(lambda _c=False: self._open_help())
-        row.addWidget(self.work_edit, 1)
-        row.addWidget(self.work_browse)
-        row.addWidget(self.work_open)
-        row.addWidget(self.help_btn)
-        lay.addLayout(row)
-        lay.addWidget(self._first_steps())
+        head.addWidget(self.help_btn)
+        self.settings_btn = QPushButton("\u2699 Settings")
+        self.settings_btn.setToolTip("Settings: every engineer-chosen value, the settings file and the run options.")
+        self.settings_btn.clicked.connect(lambda _c=False: self.show_settings())
+        head.addWidget(self.settings_btn)
+        lay.addLayout(head)
+        self.disclaimer = info = QLabel(DISCLAIMER)
+        info.setWordWrap(True)
+        info.setStyleSheet(BANNER_STYLE)
+        lay.addWidget(info)
 
+        ws = QGroupBox("Workspace")
+        wsg = QGridLayout()
+        wsg.addWidget(QLabel("Work folder"), 0, 0)
+        self.work_edit = QLineEdit()
+        self.work_edit.setPlaceholderText("One folder per county / per run")
+        self.work_edit.setToolTip(
+            "One folder for everything this window's steps write (0_data_package.gpkg, "
+            "1_dams.gpkg, 2_terrain, …). The window reads it to show which steps are done. "
+            "Use a folder per county / per run.")
+        self.work_edit.editingFinished.connect(self._changed)
+        self.work_browse = QPushButton("Browse\u2026")
+        self.work_browse.clicked.connect(lambda _c=False: self._browse_folder(self.work_edit))
+        self.work_open = QPushButton("Open folder")
+        self.work_open.clicked.connect(self._open_work_folder)
+        wsg.addWidget(self.work_edit, 0, 1)
+        wsg.addWidget(self.work_browse, 0, 2)
+        wsg.addWidget(self.work_open, 0, 3)
+        self.work_hint = QLabel("not set yet")
+        self.work_hint.setStyleSheet(HINT_STYLE)
+        wsg.addWidget(self.work_hint, 1, 1)
+        wsg.addWidget(self._first_steps(), 2, 0, 1, 4)
+        wsg.setColumnStretch(1, 1)
+        ws.setLayout(wsg)
+        lay.addWidget(ws)
+        lay.addWidget(self._build_pipeline())
+
+        self.settings_page = self._build_settings_tab()
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_simple_tab(), "Simple")
-        self.tabs.addTab(self._build_workflow_tab(), "All steps")
-        self.tabs.addTab(self._build_inputs_tab(), "Inputs")
-        self.tabs.addTab(self._build_settings_tab(), "Settings")
+        self.tabs.addTab(self._build_run_tab(), "Run")
         self.tabs.addTab(self._build_review_tab(), "Review")
         self.tabs.addTab(self._build_results_tab(), "Results")
         wrap_tabs(self.tabs)
         lay.addWidget(self.tabs, 1)
+        self._build_settings_window()
         fit_window(self)
 
-        lay.addWidget(QLabel("Log"))
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumHeight(110)
+        self.log_edit.setVisible(False)
         lay.addWidget(self.log_edit)
         row = QHBoxLayout()
+        self.log_line = QLabel("Log: -")
+        self.log_line.setStyleSheet("color: #4a5560;")
+        self.log_toggle = QPushButton("Show log")
+        self.log_toggle.setToolTip("Show or hide the whole log.")
+        self.log_toggle.clicked.connect(lambda _c=False: self._toggle_log())
         self.close_btn = QPushButton("Close")
         self.close_btn.clicked.connect(self.close)
-        row.addStretch(1)
+        row.addWidget(self.log_line, 1)
+        row.addWidget(self.log_toggle)
+        row.addStretch(0)
         row.addWidget(self.close_btn)
         lay.addLayout(row)
         self.setLayout(lay)
+
+    # -- 0.17.23 shell pieces
+    def _build_pipeline(self):
+        """Data -> DEM -> Screen -> Report; each a flat button that jumps to its tab."""
+        bar = QGroupBox("")
+        row = QHBoxLayout()
+        self.pipe_btn = {}
+        for i, (key, label, _step, _tab) in enumerate(PIPELINE):
+            if i:
+                row.addWidget(QLabel("\u2192"))
+            b = QPushButton("{} \u25cb".format(label))
+            b.setFlat(True)
+            b.clicked.connect(lambda _c=False, k=key: self._goto_stage(k))
+            self.pipe_btn[key] = b
+            row.addWidget(b)
+        row.addStretch(1)
+        bar.setLayout(row)
+        self.pipeline_bar = bar
+        # the old prose line, kept (not shown) for anything that reads it
+        self.status_line = QLabel("Dams not yet. DEM not yet. Screen not yet.")
+        return bar
+
+    def _goto_stage(self, key):
+        tab = dict((k, t) for k, _l, _s, t in PIPELINE).get(key, "run")
+        self.tabs.setCurrentIndex({"run": 0, "review": 1, "results": 2}[tab])
+
+    def _refresh_pipeline(self, by, busy, have, work):
+        """The strip from the same states the steps show (wf.statuses) and the report file."""
+        self.pipe_state = {}
+        cur = getattr(self.chain, "current", None) if busy else None
+        for key, label, step, _tab in PIPELINE:
+            if step is None:
+                st = "done" if have and os.path.isfile(os.path.join(work, wf.REPORT_INDEX)) else "waiting"
+                why = "Report: index.html written by step 10" if st == "done" else "Report: no report yet"
+            else:
+                st = by.get(step) or "waiting"
+                if step == "1":
+                    # Data is done once the data folder exists and step 1 can start (or ran)
+                    suite = self.suite_edit.text().strip()
+                    if have and suite and os.path.isdir(suite) and st in ("ready", "done", "stale"):
+                        st = "done"
+                    elif st == "done":
+                        pass
+                    elif have and suite and os.path.isdir(suite):
+                        st = "ready"
+                if busy and (cur == step or (step == "7" and cur in ("5", "6", "7", "8"))):
+                    st = "running"
+                why = "{}: step {} - {} ({})".format(label, step, wf.TITLE.get(step, ""), st)
+            self.pipe_state[key] = st
+            b = self.pipe_btn[key]
+            b.setText("{} {}".format(label, PIPE_MARK.get(st, "\u25cb")))
+            b.setToolTip(why + ". Click to go to the tab.")
+            b.setStyleSheet("color: {};{}".format(PIPE_COLOR.get(st, "#5f6b76"),
+                                                  " font-weight: bold;" if st in ("done", "ready") else ""))
+
+    def _collapsible(self, title, inner, open_=False):
+        """A checkable group whose check shows / hides its contents (does not disable them)."""
+        box = QGroupBox(title)
+        box.setCheckable(True)
+        box.setChecked(open_)
+        v = QVBoxLayout()
+        v.addWidget(inner)
+        box.setLayout(v)
+        inner.setVisible(open_)
+        box.toggled.connect(inner.setVisible)
+        return box
+
+    @staticmethod
+    def _fold(box, inner_layout):
+        """0.17.23: a checkable group's check shows / hides its contents instead of greying them."""
+        holder = QWidget()
+        holder.setLayout(inner_layout)
+        v = QVBoxLayout()
+        v.addWidget(holder)
+        box.setLayout(v)
+        def _show(on):
+            holder.setVisible(bool(on))
+            box.setFlat(not on)                 # collapsed: no empty frame under the check
+            # collapsed: only the title row (the frame below it is cut off, no empty bar)
+            try:
+                h = QCheckBox("x").sizeHint().height()
+            except Exception:                                    # noqa  (stub Qt in tests)
+                h = 22
+            box.setMaximumHeight(16777215 if on else h)
+            v.setContentsMargins(*((9, 9, 9, 9) if on else (0, 0, 0, 0)))
+        _show(box.isChecked())
+        box.toggled.connect(_show)
+        return holder
+
+    def _build_run_tab(self):
+        """Simple + All steps: run buttons on the left, the numbered steps and the input
+        overrides on the right."""
+        w = QWidget()
+        row = QHBoxLayout()
+        row.addWidget(self._build_simple_tab(), 1)
+        right = QGroupBox("Steps")
+        v = QVBoxLayout()
+        v.addWidget(self._build_workflow_tab())
+        self.inputs_page = self._build_inputs_tab()
+        self.override_box = self._collapsible("Override inputs (empty = use the data package)",
+                                              self.inputs_page)
+        v.addWidget(self.override_box)
+        right.setLayout(v)
+        row.addWidget(right, 2)
+        w.setLayout(row)
+        return w
+
+    def _build_settings_window(self):
+        self.settings_window = QDialog(self)
+        self.settings_window.setWindowTitle(window_title() + " \u2014 Settings")
+        v = QVBoxLayout()
+        v.addWidget(self.settings_page)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        done = QPushButton("Close")
+        done.clicked.connect(self.settings_window.close)
+        row.addWidget(done)
+        v.addLayout(row)
+        self.settings_window.setLayout(v)
+        try:
+            self.settings_window.resize(900, 620)
+        except Exception:                                        # noqa
+            pass
+
+    def settings_changed_count(self):
+        try:
+            return len(self.grid.settings.changed(self.grid.catalog))
+        except Exception:                                        # noqa
+            return 0
+
+    def _update_settings_badge(self):
+        n = self.settings_changed_count()
+        self.settings_btn.setText("\u2699 Settings ({})".format(n) if n else "\u2699 Settings")
+        self.settings_btn.setToolTip("{} setting(s) differ from the starting values. Opens the settings "
+                                     "grid, the settings file and the run options.".format(n))
+
+    def _toggle_log(self):
+        on = not self.log_edit.isVisible()
+        self.log_edit.setVisible(on)
+        self.log_toggle.setText("Hide log" if on else "Show log")
 
     # -- Simple
     def _build_simple_tab(self):
@@ -248,15 +440,18 @@ class NDDamScreeningDialog(QDialog):
         lay.addWidget(intro)
         run = QHBoxLayout()
         self.run_all_btn = QPushButton("Screen this county")
-        self.run_all_btn.setMinimumHeight(32)
+        self.run_all_btn.setMinimumHeight(40)
+        self.run_all_btn.setStyleSheet(PRIMARY_STYLE)
         self.run_all_btn.setToolTip("Checks the folder, then screens the county. Does not start the Runner.")
         self.run_all_btn.clicked.connect(lambda _c=False: self._run_chain(preflight=True))
-        self.one_dam_btn = QPushButton("One dam")
+        self.one_dam_btn = QPushButton("One dam\u2026")
         self.one_dam_btn.clicked.connect(lambda _c=False: self._run_one_dam())
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
+        self.stop_btn.setStyleSheet("QPushButton:enabled { color: #c62828; }")
         self.stop_btn.clicked.connect(lambda _c=False: self._stop_chain())
-        for b in (self.run_all_btn, self.one_dam_btn, self.stop_btn):
+        lay.addWidget(self.run_all_btn)
+        for b in (self.one_dam_btn, self.stop_btn):
             run.addWidget(b)
         lay.addLayout(run)
         grid = QGridLayout()
@@ -278,7 +473,7 @@ class NDDamScreeningDialog(QDialog):
             "Optional: the GeoPackage ND Dam Hazard's 'Export for Screening' writes, or your own "
             "package from step 0. Every input left empty on the Inputs tab is taken from it.")
         self.package_edit.editingFinished.connect(self._changed)
-        b = QPushButton("File...")
+        b = QPushButton("File…")
         b.clicked.connect(lambda _c=False: self._browse_file(self.package_edit, "GeoPackage (*.gpkg)"))
         grid.addWidget(self.package_edit, r, 1)
         grid.addWidget(b, r, 2)
@@ -311,9 +506,9 @@ class NDDamScreeningDialog(QDialog):
             "the tools, shared by the three plugins. Edit it on the Settings tab or in Excel; the tools open "
             "with its values. Empty = the tools' own starting values.")
         self.settings_file_edit.editingFinished.connect(lambda: self._settings_file_edited())
-        b = QPushButton("File...")
+        b = QPushButton("File…")
         b.clicked.connect(lambda _c=False: self._pick_settings_file())
-        self.new_settings_btn = QPushButton("New...")
+        self.new_settings_btn = QPushButton("New…")
         self.new_settings_btn.setToolTip("Write a new settings file with the current values (then edit it on the "
                                          "Settings tab).")
         self.new_settings_btn.clicked.connect(lambda _c=False: self._new_settings_file())
@@ -341,7 +536,7 @@ class NDDamScreeningDialog(QDialog):
         self.continue_btn.setEnabled(False)
         self.continue_btn.setToolTip("Opens the Runner or Hazard from this dam's dam.json, not from a depth file name.")
         self.continue_btn.clicked.connect(lambda _c=False: self._continue())
-        self.selected_dams_btn = QPushButton("Run selected dams...")
+        self.selected_dams_btn = QPushButton("Run selected dams…")
         self.selected_dams_btn.setToolTip("Pick several dams. Runs the county chain for those dams only.")
         self.selected_dams_btn.clicked.connect(lambda _c=False: self._run_selected_dams())
         self.to_runner_btn = QPushButton("Send High and Medium to the Runner")
@@ -351,13 +546,15 @@ class NDDamScreeningDialog(QDialog):
         self.handoff_runner_btn.clicked.connect(lambda _c=False: self._handoff_runner())
         self.handoff_hazard_btn = QPushButton("Open this dam in Hazard")
         self.handoff_hazard_btn.clicked.connect(lambda _c=False: self._handoff_hazard())
-        lay.addWidget(self.continue_btn)
+        run.addWidget(self.continue_btn)
+        self.continue_btn.setVisible(False)
         self.next_hint = QLabel("Choose a work folder, a data folder, and a county.")
         self.next_hint.setWordWrap(True)
         lay.addWidget(self.next_hint)
-        self.status_line = QLabel("Dams not yet. DEM not yet. Screen not yet.")
-        self.status_line.setWordWrap(True)
-        lay.addWidget(self.status_line)
+        # 0.17.22: the Runner engine step 7b will use, always visible on the Run tab
+        self.engine_status_label = QLabel(ho.engine_status(0))
+        self.engine_status_label.setWordWrap(True)
+        lay.addWidget(self.engine_status_label)
         lay.addWidget(self._county_dem_box())
 
         for key in SG.MAIN_STEPS:
@@ -375,9 +572,12 @@ class NDDamScreeningDialog(QDialog):
         self.preflight_text.setMaximumHeight(150)
         self.simple_hint = QLabel("")
         self.simple_hint.setWordWrap(True)
-        more_box = QGroupBox("Leave these")
+        more_box = QGroupBox("Advanced options (inputs, engine, storage, hand-offs)")
         more_box.setCheckable(True)
         more_box.setChecked(False)
+        more_box.setToolTip("Data package, terrain source, flood engine, hazard criterion, storage, settings "
+                            "file and presets, the preflight check and the Runner / Hazard hand-offs. "
+                            "The defaults are fine for a normal county screen.")
         inner = QVBoxLayout()
         inner.addLayout(grid)
         store = QHBoxLayout()
@@ -393,7 +593,7 @@ class NDDamScreeningDialog(QDialog):
         inner.addWidget(self.preflight_label)
         inner.addWidget(self.preflight_text)
         inner.addWidget(self.simple_hint)
-        more_box.setLayout(inner)
+        self._fold(more_box, inner)
         lay.addWidget(more_box)
         lay.addStretch(1)
         w.setLayout(lay)
@@ -403,33 +603,37 @@ class NDDamScreeningDialog(QDialog):
     def _build_workflow_tab(self):
         w = QWidget()
         lay = QVBoxLayout()
-        intro = QLabel(
+        intro = QLabel("Each button opens the step's Processing dialog, pre-filled. \u24d8")
+        intro.setToolTip(
             "Each button opens the tool's Processing dialog with the work folder's files, the settings "
             "file's values and the choices of this window filled in. Check the values, run it there, "
             "then come back: the list updates when this window is activated. Every step can also be run "
             "from the Processing Toolbox (ND Dam Breach Screening > Screening steps / Advanced).")
-        intro.setWordWrap(True)
         lay.addWidget(intro)
-        dem_btn = QPushButton("Download county DEM...")
+        dem_btn = QPushButton("Download county DEM…")
         dem_btn.setToolTip("Opens Download DEM with the Inventory county, 10 m or 1 m, and the suite folder filled in.")
         dem_btn.clicked.connect(lambda _c=False: self._open_dem_download())
         lay.addWidget(dem_btn)
-        off_btn = QPushButton("Download offline layers for this county...")
+        off_btn = QPushButton("Download offline layers for this county…")
         off_btn.setToolTip("Opens 0b with the county dropdown set from this window. Saves a GeoPackage of dams, roads, structures, and addresses.")
         off_btn.clicked.connect(lambda _c=False: self._open_offline_layers())
         lay.addWidget(off_btn)
         grid = QGridLayout()
         for i, key in enumerate(wf.KEYS):
             state = QLabel("")
-            btn = QPushButton("{} - {}...".format(key, wf.TITLE[key]))
+            btn = QPushButton("{} - {}\u2026".format(key, wf.TITLE[key]))
             btn.setToolTip("{}\n(Processing: {})".format(wf.HINT[key], wf.algorithm_id(key)))
             btn.clicked.connect(lambda _c=False, k=key: self._open_step(k))
             note = QLabel("")
             note.setWordWrap(True)
+            state.setFixedWidth(STEP_STATE_W)
+            btn.setFixedWidth(STEP_BTN_W)
+            note.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             self.step_state[key], self.step_button[key], self.step_note[key] = state, btn, note
             grid.addWidget(state, i, 0)
             grid.addWidget(btn, i, 1)
             grid.addWidget(note, i, 2)
+        grid.setColumnStretch(2, 1)
         lay.addLayout(grid)
         grp = QGroupBox("Run the steps in order")
         g = QVBoxLayout()
@@ -441,7 +645,7 @@ class NDDamScreeningDialog(QDialog):
             "run with the preflight check first.")
         txt.setWordWrap(True)
         g.addWidget(txt)
-        row = QHBoxLayout()
+        row = QGridLayout()                # 0.17.23: two columns (was one long row)
         self.chain_check = {}
         for key, label in (("0", "also build the data package (0)"), ("6", "also the quick screen (6)"),
                            ("9", "also the sensitivity (9)"),
@@ -450,7 +654,8 @@ class NDDamScreeningDialog(QDialog):
             c = QCheckBox(label)
             c.toggled.connect(self._chain_check_toggled)
             self.chain_check[key] = c
-            row.addWidget(c)
+            row.addWidget(c, (len(self.chain_check) - 1) // 2,
+                          (len(self.chain_check) - 1) % 2)
         g.addLayout(row)
         row = QHBoxLayout()
         self.chain_btn = QPushButton("Run the steps in order")
@@ -458,7 +663,7 @@ class NDDamScreeningDialog(QDialog):
         self.chain_stop_btn = QPushButton("Stop")
         self.chain_stop_btn.setEnabled(False)
         self.chain_stop_btn.clicked.connect(lambda _c=False: self._stop_chain())
-        self.export_btn = QPushButton("Export settings (JSON)...")
+        self.export_btn = QPushButton("Export settings (JSON)…")
         self.export_btn.setToolTip("Writes this window's choices as the JSON the headless tool (15) also "
                                    "reads; the suite settings file (.xlsx) is the usual way now.")
         self.export_btn.clicked.connect(lambda _c=False: self._export_settings())
@@ -495,7 +700,7 @@ class NDDamScreeningDialog(QDialog):
             "The data the tools read. A layer chosen here wins; left empty, the tools use the "
             "layer of the same meaning in the data package that step 0 wrote (structures, roads, "
             "railroads, flowlines, waterbodies, dam lines, lifelines). Pick project layers or "
-            "'File...'.")
+            "'File\u2026'.")
         info.setWordWrap(True)
         lay.addWidget(info)
         grp = QGroupBox("Layers")
@@ -504,7 +709,7 @@ class NDDamScreeningDialog(QDialog):
         for i, (slot, label, _pkg) in enumerate(slots):
             combo = QComboBox()
             combo.currentIndexChanged.connect(self._changed)
-            btn = QPushButton("File...")
+            btn = QPushButton("File…")
             btn.clicked.connect(lambda _c=False, s=slot: self._browse_layer(s))
             self.layer_combo[slot] = combo
             grid.addWidget(QLabel(label), i, 0)
@@ -515,7 +720,7 @@ class NDDamScreeningDialog(QDialog):
         self.layers_btn = QPushButton("Refresh the layer lists")
         self.layers_btn.clicked.connect(lambda _c=False: self._fill_layers())
         lay.addWidget(self.layers_btn)
-        self.suite_btn = QPushButton("Fill empty layers from suite folder...")
+        self.suite_btn = QPushButton("Fill empty layers from suite folder…")
         self.suite_btn.setToolTip(
             "Pick the suite data folder. Empty slots are filled from the GeoPackage "
             "layer whose name and fields match (DWR dams, dam lines, NSI). A layer "
@@ -583,12 +788,11 @@ class NDDamScreeningDialog(QDialog):
                                     "dam.json there. Empty = <work folder>/Dams.")
         # step 7b: the Runner's models / solver (defaults = the Runner's own)
         self.runner_tier = self._combo(list(ho.ENGINE_LABELS))
-        self.runner_tier.setToolTip("Step 7b: the Runner's models. ANUGA uses the culvert / bridge layer "
+        self.runner_tier.setToolTip("Step 7b: the Runner's engine (one choice; 'then ANUGA' is the old "
+                                    "'force ANUGA'). Only ANUGA models the culvert / bridge layer "
                                     "(Inputs: Culverts / bridges). The default sends nothing extra.")
-        self.runner_force_anuga = QCheckBox("Step 7b: force ANUGA (final results from ANUGA)")
-        self.runner_refine = QCheckBox("Step 7b: near-dam refine with the FV1 solver")
-        for c in (self.runner_force_anuga, self.runner_refine):
-            c.toggled.connect(self._changed)
+        self.runner_refine = QCheckBox("Step 7b: near-dam refine (finer FV1 grid near the dam; slower)")
+        self.runner_refine.toggled.connect(self._changed)
         self.runner_tier.currentIndexChanged.connect(self._changed)
         self.baseline = QCheckBox("Step 7: also run a no-breach baseline (increment rasters)")
         self.baseline.setToolTip("A second simulation of each dam with only the steady ambient flow, no "
@@ -646,8 +850,7 @@ class NDDamScreeningDialog(QDialog):
             ("ACER TM 11 chart file (.json)", self.chart_file, "json"),
             ("Step 7b DEM for the Runner", self.runner_dem, "raster"),
             ("Dams folder (7b, dam.json)", self.dams_folder, "dir"),
-            ("Step 7b Runner models", self.runner_tier, None),
-            ("", self.runner_force_anuga, None),
+            ("Step 7b Runner engine", self.runner_tier, None),
             ("", self.runner_refine, None),
             ("", self.baseline, None),
             ("Baseline ambient flow (cfs)", self.baseline_cfs, None),
@@ -664,7 +867,7 @@ class NDDamScreeningDialog(QDialog):
             grid.addWidget(QLabel(label), i, 0)
             grid.addWidget(widget, i, 1)
             if kind:
-                b = QPushButton("Browse...")
+                b = QPushButton("Browse…")
                 b.clicked.connect(lambda _c=False, e=widget, k=kind: self._browse_for(e, k))
                 grid.addWidget(b, i, 2)
         lay.addLayout(grid)
@@ -678,7 +881,8 @@ class NDDamScreeningDialog(QDialog):
     def _county_dem_box(self):
         """Visible on the Simple tab. County list, suite folder, and the download button."""
         from .core.dem_download import county_names
-        box = QGroupBox("Download the county DEM, if you do not already have one")
+        box = QGroupBox("Download the county DEM")
+        box.setToolTip("Download the county DEM, if you do not already have one.")
         box.setCheckable(True)
         box.setChecked(False)
         grid = QGridLayout()
@@ -705,7 +909,7 @@ class NDDamScreeningDialog(QDialog):
         grid.addWidget(QLabel("DEM folder"), 2, 0)
         self.dem_out = QLineEdit()
         self.dem_out.setPlaceholderText("Where Burleigh_10m_5070.tif is written")
-        browse = QPushButton("Browse...")
+        browse = QPushButton("Browse…")
         browse.clicked.connect(lambda _c=False: self._browse_for(self.dem_out, "dir"))
         go = QPushButton("Download this county DEM")
         go.clicked.connect(self._open_dem_download)
@@ -741,7 +945,7 @@ class NDDamScreeningDialog(QDialog):
         self.dem_imagine.setChecked(True)
         self.work_crs = QComboBox()
         self.work_crs.addItems(["Keep source CRS"])
-        box.setLayout(grid)
+        self._fold(box, grid)
         try:
             self.inventory_county.currentTextChanged.connect(self._sync_download_county)
         except Exception:
@@ -853,11 +1057,11 @@ class NDDamScreeningDialog(QDialog):
         self.dem_county.setCurrentText("Cass")
         self.dem_out = QLineEdit()
         self.dem_out.setPlaceholderText("folder for the tiles and the VRT")
-        browse = QPushButton("Browse...")
+        browse = QPushButton("Browse…")
         browse.clicked.connect(lambda _c=False: self._browse_for(self.dem_out, "dir"))
         counties = QPushButton("Counties on the map")
         counties.clicked.connect(self._show_counties)
-        go = QPushButton("Download DEM...")
+        go = QPushButton("Download DEM…")
         go.clicked.connect(self._open_dem_download)
         grid.addWidget(QLabel("Source"), 0, 0)
         grid.addWidget(self.dem_source, 0, 1)
@@ -1030,11 +1234,11 @@ class NDDamScreeningDialog(QDialog):
             self.type_combo.addItem(t, t)
         self.set_type_btn = QPushButton("Set pond type")
         self.set_type_btn.clicked.connect(lambda _c=False: self._decide("set_type", self.type_combo.currentData()))
-        self.move_btn = QPushButton("Move breach point...")
+        self.move_btn = QPushButton("Move breach point…")
         self.move_btn.setToolTip("Give the new point as 'x, y' in EPSG:5070 metres (the map canvas centre is "
                                  "offered when a map is open); dir_conf becomes 'reviewed'.")
         self.move_btn.clicked.connect(lambda _c=False: self._move_breach())
-        self.note_btn = QPushButton("Add note...")
+        self.note_btn = QPushButton("Add note…")
         self.note_btn.clicked.connect(lambda _c=False: self._add_note())
         for b in (self.review_refresh_btn, self.zoom_btn, self.accept_btn, self.exclude_btn):
             row.addWidget(b)
@@ -1075,7 +1279,7 @@ class NDDamScreeningDialog(QDialog):
                                 "the flood extents, the breach points and arrows, and the review queue; "
                                 "every layer styled.")
         self.add_btn.clicked.connect(lambda _c=False: self._add_results())
-        self.hazard_btn = QPushButton("Open ND Dam Hazard...")
+        self.hazard_btn = QPushButton("Open ND Dam Hazard…")
         self.hazard_btn.setToolTip("The classification authority: take the dams that matter there "
                                    "(its 'Dam suite' group reads the same dam.json records).")
         self.hazard_btn.clicked.connect(self._open_hazard)
@@ -1107,7 +1311,7 @@ class NDDamScreeningDialog(QDialog):
     # ---------------------------------------------------------------- settings --
     _EDITS = ("local_dem", "exe", "chart_file", "runner_dem", "dams_folder", "ref_folder", "old_inventory")
     _COMBOS = ("terrain_source", "larger_clips", "engine", "scenario", "crit", "buildings", "ref_units", "runner_tier")
-    _CHECKS = ("baseline", "incremental", "runner_force_anuga", "runner_refine")
+    _CHECKS = ("baseline", "incremental", "runner_refine")
     _SPINS = ("baseline_cfs", "building_raise_ft", "building_n", "dem_cell", "grid_m", "simh", "simmax")
 
     def settings(self):
@@ -1143,6 +1347,9 @@ class NDDamScreeningDialog(QDialog):
         return 0
 
     def _apply(self, s):
+        # 0.17.22: an old 'force ANUGA' choice is the engine choice now
+        if s and s.get("runner_force_anuga"):
+            s = dict(s, runner_tier=1, runner_force_anuga=False)
         self.work_edit.setText(s.get("work", ""))
         self.package_edit.setText(s.get("package", ""))
         self.inventory_county.setCurrentText(s.get("inventory_county") or "All counties")
@@ -1329,6 +1536,8 @@ class NDDamScreeningDialog(QDialog):
     def _grid_changed(self, settings):
         """An edit in the grid: the file is saved at once when there is one (the tools read it)."""
         self._autosave_settings()
+        if hasattr(self, "settings_btn"):
+            self._update_settings_badge()
 
     def _grid_file(self, path):
         if path and path != self.settings_file_edit.text().strip():
@@ -1536,6 +1745,10 @@ class NDDamScreeningDialog(QDialog):
     # --------------------------------------------------------------------- log --
     def _log(self, msg):
         self.log_edit.append(str(msg))
+        line = getattr(self, "log_line", None)
+        if line is not None:
+            text = str(msg).strip().splitlines()
+            line.setText("Log: " + (text[-1][:120] if text else "-"))
 
     # ----------------------------------------------------------------- refresh --
     def refresh(self, *args):
@@ -1546,9 +1759,22 @@ class NDDamScreeningDialog(QDialog):
         rows = wf.statuses(work, s) if have else [
             (k, wf.TITLE[k], "optional" if k in wf.OPTIONAL else "waiting", "") for k in wf.KEYS]
         what = s.get("screen_what", 0)
+        if hasattr(self, "engine_status_label"):
+            try:
+                cul = wf.slot_source("culverts", work, s) if have else ""
+            except Exception:                                    # noqa
+                cul = ""
+            txt = ho.engine_status(s.get("runner_tier"), cul)
+            self.engine_status_label.setText(txt)
+            self.engine_status_label.setStyleSheet("font-weight: bold;" if ho.effective_engine(
+                s.get("runner_tier")) else "")
         for key, _title, state, note in rows:
             self.step_state[key].setText(STATE_TEXT.get(state, state))
-            self.step_note[key].setText(note)
+            self.step_note[key].setText(self._short_note(note))
+            self.step_note[key].setToolTip(note)
+            # 0.17.23: a step still waiting for an earlier one is shown greyed (its button stays usable)
+            self.step_state[key].setEnabled(state != "waiting")
+            self.step_note[key].setEnabled(state != "waiting")
             if key in self.simple_state:
                 self.simple_state[key].setText(STATE_TEXT.get(state, state))
                 self.simple_note[key].setText(note)
@@ -1581,6 +1807,13 @@ class NDDamScreeningDialog(QDialog):
             return {"done": "ready", "waiting": "not yet", "running": "running",
                     "optional": "optional", "problem": "needs a look"}.get(st, st or "not yet")
 
+        self._refresh_pipeline(by, busy_now, have, work)
+        self.work_hint.setText("" if have else ("not set yet" if not work else "folder not found yet"))
+        self.work_hint.setVisible(not have)
+        data_set = bool(self.suite_edit.text().strip())
+        self.data_hint.setVisible(not data_set)
+        self.data_status.setVisible(data_set and self.data_status.text() != "No data folder yet.")
+        self._update_settings_badge()
         if line is not None:
             screen = "running" if busy_now else _word(by.get("7"))
             line.setText("Dams {}. DEM {}. Screen {}.".format(
@@ -1616,6 +1849,7 @@ class NDDamScreeningDialog(QDialog):
             cont.setText(label or "Continue")
             cont.setToolTip(why)
             cont.setEnabled(bool(plugin) and not busy)
+            cont.setVisible(bool(plugin) and not busy)
         text = ("Choose or create a work folder first." if not have else
                 ("Next: {} - {}. {}".format(nxt, wf.TITLE[nxt], wf.HINT[nxt]) if nxt else
                  "Nothing required is left: every non-optional step that can start is done."))
@@ -1640,6 +1874,15 @@ class NDDamScreeningDialog(QDialog):
         self.one_dam_report_btn.setEnabled(bool(runs))
         if have:
             self.refresh_review()
+
+    @staticmethod
+    def _short_note(note, limit=40):
+        """0.17.23: one short line next to a step button; the full text is the tooltip."""
+        note = (note or "").strip()
+        if len(note) <= limit:
+            return note
+        cut = note[:limit].rsplit(" ", 1)[0].rstrip(" ;,(")
+        return cut + " \u2026"
 
     def changeEvent(self, event):
         try:
@@ -1879,7 +2122,7 @@ class NDDamScreeningDialog(QDialog):
     def _stop_chain(self):
         if self.chain is not None and self.chain.active:
             self.chain.cancel()
-            self._log("Stopping after the step that is running ...")
+            self._log("Stopping after the step that is running\u2026")
             task = self._task
             try:
                 if task is not None:
@@ -2017,7 +2260,7 @@ class NDDamScreeningDialog(QDialog):
             QMessageBox.information(self, TITLE, "Nothing to run: every step is done.")
             return False
         text = "Run the county chain for {} dams?\n\n{}\n\nSteps: {}".format(
-            len(ids), ", ".join(ids[:8]) + ("..." if len(ids) > 8 else ""),
+            len(ids), ", ".join(ids[:8]) + ("\u2026" if len(ids) > 8 else ""),
             ", ".join(SG.plain(k, wf.TITLE[k]) for k in plan))
         if QMessageBox.question(self, TITLE, text) != self._yes():
             return False
@@ -2323,9 +2566,11 @@ class NDDamScreeningDialog(QDialog):
             QMessageBox.information(self, TITLE, "ND Dam Hazard could not be opened ({}).".format(e))
 
     def show_settings(self):
-        """Open the window on its Settings tab (the suite menu's 'Suite settings...')."""
+        """Open the Settings window (the gear; also the suite menu's 'Suite settings...')."""
         try:
-            self.tabs.setCurrentIndex(3)
+            self._update_settings_badge()
+            self.settings_window.show()
+            self.settings_window.raise_()
         except Exception:                                        # noqa
             pass
 

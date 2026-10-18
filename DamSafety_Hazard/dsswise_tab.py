@@ -16,7 +16,7 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import QgsRasterLayer, QgsVectorLayer
 
 from . import dsswise as DW
-from .compat import MSG_CRITICAL
+from .compat import MSG_CRITICAL, MSG_WARNING
 from .helpers import (
     log_message, add_layer_to_project, plugin_group, dam_display_name, CancelledByUser,
 )
@@ -31,7 +31,7 @@ class DssWiseTabMixin(object):
         tab = QWidget()
         lay = QVBoxLayout(tab)
         info = QLabel(
-            "<h3>DSS-WISE Lite results</h3>Import the <i>Simulation Results Package</i> "
+            "Import the <i>Simulation Results Package</i> "
             "downloaded from DSS-WISE Lite (NCCHE / FEMA). Each file is recognised by its "
             "name (e.g. <i>..._FloodDepth_in_Ft-..._UTM.tif</i>); check the roles and units "
             "below before importing. Rasters are converted to ft, ft/s, ft²/s and hours.")
@@ -41,9 +41,9 @@ class DssWiseTabMixin(object):
         form = QFormLayout()
         self.dsw_path_edit = QLineEdit()
         self.dsw_path_edit.setPlaceholderText("results package .zip or its unzipped folder")
-        b1 = QPushButton("Zip...")
+        b1 = QPushButton("Zip\u2026")
         b1.clicked.connect(self._dsw_browse_zip)
-        b2 = QPushButton("Folder...")
+        b2 = QPushButton("Folder\u2026")
         b2.clicked.connect(self._dsw_browse_folder)
         w = QWidget()
         h = QHBoxLayout(w)
@@ -65,15 +65,15 @@ class DssWiseTabMixin(object):
         self.dsw_table.setHorizontalHeaderLabels(DSW_COLS)
         lay.addWidget(self.dsw_table)
         opts = QHBoxLayout()
-        self.dsw_use_setup_check = QCheckBox("Use as the Setup tab rasters")
+        self.dsw_use_setup_check = QCheckBox("Use as the Setup rasters")
         self.dsw_use_setup_check.setChecked(True)
         self.dsw_load_check = QCheckBox("Load the converted layers")
         self.dsw_load_check.setChecked(True)
-        self.dsw_add_scenario_check = QCheckBox("Add as a scenario in the Hazard "
-                                                "Classification tab's table")
+        self.dsw_add_scenario_check = QCheckBox("Add as a scenario in the breach-scenario "
+                                                "table (classification options)")
         self.dsw_add_scenario_check.setToolTip(
             "A further breach scenario (or, with a name like 'no breach', ... set its role "
-            "there) next to the Setup tab rasters")
+            "there) next to the Setup rasters")
         for c in (self.dsw_use_setup_check, self.dsw_add_scenario_check, self.dsw_load_check):
             opts.addWidget(c)
         opts.addStretch()
@@ -249,7 +249,11 @@ class DssWiseTabMixin(object):
                 if b.isValid():
                     add_layer_to_project(b, group=grp)
         text = ["Imported to {}".format(out), ""] + res["lines"] + [""] + \
+            ["WARNING: " + w_ for w_ in res.get("warnings") or []] + \
             ["NOTE: " + n for n in res["notes"]]
+        for w_ in res.get("warnings") or []:
+            self._log(">>> WARNING: " + w_)
+            log_message(w_, MSG_WARNING)
         if res.get("report"):
             text.append("DSS-WISE report: {}".format(res["report"]))
         self.dsw_result_text.setPlainText("\n".join(text))

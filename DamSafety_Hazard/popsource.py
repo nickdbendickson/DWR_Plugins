@@ -651,7 +651,7 @@ def _people(values, units, area_ft2):
     return people, valid, int(neg.sum())
 
 
-def _fraction_counts(depth, pop, to_pop, win, thr, edges, progress_cb):
+def _fraction_counts(depth, pop, to_pop, win, thr, edges, progress_cb, result=None):
     """Wet depth cells per (population cell, depth class): sorted unique keys
     (row * width + col in the population window) x class -> counts."""
     c0, r0, ww, hh = win
@@ -665,6 +665,8 @@ def _fraction_counts(depth, pop, to_pop, win, thr, edges, progress_cb):
             progress_cb(15.0 + 40.0 * y0 / max(1, H), "Depth grid on the population grid")
         arr = depth.window_values(0, y0, W, h)
         if arr is None:
+            if result is not None:                    # counted like the other strip reads
+                result["n_strips_unread"] = result.get("n_strips_unread", 0) + 1
             continue
         wet = np.isfinite(arr) & (arr > thr)
         if not wet.any():
@@ -758,7 +760,7 @@ def _raster_population(pop_layer, depth, ctx, opts, lat, progress_cb):
         fu, fc = None, None
         if method == "fraction":
             fu, fc = _fraction_counts(depth, pop, to_pop, (c0, r0, ww, hh), thr, edges,
-                                      progress_cb)
+                                      progress_cb, result)
             fcls, fkey = fu % ncls, fu // ncls
         par = 0.0
         in_model = 0.0
@@ -957,19 +959,22 @@ def summary_lines(res):
 def _source_verdict(src, plug, kind):
     """(ratio, text) like crosscheck.verdict (same ratio band, same rules), with
     wording for a population layer instead of DSS-WISE."""
-    r, text = XC.verdict(src, plug)
-    if r is None:
-        if text.startswith("the plugin counts people where"):
-            return None, "the plugin counts people where the population source counts none - " \
-                         "check"
-        return None, text
-    if text == "consistent":
-        return r, text
-    if r > XC.RATIO_HIGH:
-        return r, ("plugin higher ({:.1f}x) - check for structures the population source "
+    return _source_verdict_code(src, plug, kind)[1:]
+
+
+def _source_verdict_code(src, plug, kind):
+    """(crosscheck verdict code, ratio, text): _source_verdict with the shared code."""
+    code, r, text = XC.verdict_code(src, plug)
+    if code == XC.V_ONLY_PLUGIN:
+        return code, None, "the plugin counts people where the population source counts " \
+                           "none - check"
+    if code in (XC.V_NOT_COMPARED, XC.V_BOTH_ZERO, XC.V_CONSISTENT):
+        return code, r, text
+    if code == XC.V_HIGHER:
+        return code, r, ("plugin higher ({:.1f}x) - check for structures the population source "
                    "shows few residents for (non-residential, campgrounds, seasonal housing), "
                    "or a persons-per-dwelling that is too high".format(r))
-    return r, ("plugin lower ({:.1f}x of the population source) - check for missing structure "
+    return code, r, ("plugin lower ({:.1f}x of the population source) - check for missing structure "
                "data (NSI / address / outline layers), or a population source that spreads "
                "people over land where there are no mapped structures".format(r))
 
@@ -991,11 +996,11 @@ def compare(res, conseq, population="night"):
         pairs.append(("population (day) in the flooded area", res["par_day"], res["day_field"],
                       conseq.get("par_day"), "population at risk, day"))
     for qty, sval, sfield, pval, plabel in pairs:
-        r, text = _source_verdict(sval, pval, res["kind"])
+        code, r, text = _source_verdict_code(sval, pval, res["kind"])
         rows.append({"Population_source": src_name, "Quantity": qty, "Source_value": sval,
                      "Source_field": sfield, "Plugin_value": pval, "Plugin_quantity": plabel,
                      "Ratio_plugin_to_source": None if r is None else round(r, 2),
-                     "Verdict": text})
+                     "Verdict": text, "Verdict_code": code})
         lines.append("{} - {}: population source {} (field '{}') against the plugin's {} "
                      "({}): {}".format(src_name, qty, _fmt(sval), sfield, _fmt(pval), plabel,
                                        text))
@@ -1012,10 +1017,11 @@ def compare(res, conseq, population="night"):
 def is_off_ratio(row):
     """True when a comparison row is outside the consistent band (for a run-log
     note like the HCOM check's)."""
-    r = row.get("Ratio_plugin_to_source")
-    if r is None:
-        return row.get("Verdict", "").startswith("the plugin counts people")
-    return not XC.RATIO_LOW <= r <= XC.RATIO_HIGH
+    code = row.get("Verdict_code")
+    if code is not None:
+        return XC.is_off(code)
+    r = row.get("Ratio_plugin_to_source")          # a row without a code (split only, older)
+    return r is not None and not XC.RATIO_LOW <= r <= XC.RATIO_HIGH
 
 
 def write_cross_check_csv(folder, rows):

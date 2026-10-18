@@ -105,7 +105,7 @@ def _node_line_ends(parts, snap):
                 dist, k, t, qx, qy = _project(x, y, parts[pj], sorted(ks))
                 if dist <= snap and (best is None or dist < best[0]):
                     best = (dist, pj, k, t, qx, qy)
-            if best is None or best[0] == 0.0 and _is_vertex(parts[best[1]], best[4], best[5]):
+            if best is None or (best[0] == 0.0 and _is_vertex(parts[best[1]], best[4], best[5])):
                 continue
             _d, pj, k, t, qx, qy = best
             c[end] = (qx, qy)
@@ -194,8 +194,10 @@ def access_analysis(road_layer, structs, depth_sampler, analysis_crs, transform_
         try:
             back = QgsCoordinateTransform(clip.crs, road_layer.crs(), transform_ctx)
             req.setFilterRect(big if back.isShortCircuited() else back.transformBoundingBox(big))
-        except Exception:
-            pass
+        except Exception as e:
+            # Lumo v1.6: no filter means every road feature is read (slower, same result)
+            log_message("Road layer '{}': area filter not applied, reading all features "
+                        "({})".format(road_layer.name(), e))
 
     uf = _UnionFind()
     nodes, exits = {}, set()
@@ -308,6 +310,9 @@ def access_analysis(road_layer, structs, depth_sampler, analysis_crs, transform_
     wet = np.array([e[4] for e in edges], dtype=bool)
     ea = np.array([e[5] for e in edges])
     cell = max(reach, 1e-9)
+    # AC.2 (kept): every cell of a segment's bounding box - exact for the 3 x 3
+    # search; _segment_grid's walk-along sampling is cheaper on long diagonals but
+    # is not provably the same set of hits, so it is not used here
     grid = {}
     for idx in range(len(E)):
         x0, y0, x1, y1 = E[idx]
@@ -374,8 +379,11 @@ def access_stats(structs, edges, edges_cut):
     stats = {"structures": 0, "cut": 0, "cut_dry": 0, "persons_cut_dry": 0, "unknown": 0,
              "edges": int(edges), "edges_cut": int(edges_cut)}
     for rec in structs:
-        if rec.get("habitable") != "Yes" or rec.get("access_unknown") \
-                or rec.get("access_cut") is None:
+        if rec.get("dwelling_extra"):             # ST.1: same household as another outline
+            rec["cut_off"] = None
+            rec["access_note"] = ""
+            continue
+        if rec.get("habitable") != "Yes" or rec.get("access_unknown")                 or rec.get("access_cut") is None:
             rec["cut_off"] = None                 # not a habitable structure / no road
             if rec.get("habitable") != "Yes":
                 rec["access_note"] = ""           # only habitable structures carry a note

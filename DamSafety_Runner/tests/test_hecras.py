@@ -555,7 +555,7 @@ def hecras_algorithms_initialise():
     h, _ = _algs()
     assert [c().name() for c in h.HECRAS_ALGORITHMS] == ["hecrasexport", "hecrasimport"]
     names = [c().displayName() for c in h.HECRAS_ALGORITHMS]
-    assert names == ["Export the breach to HEC-RAS (hydrograph and breach table)",
+    assert names == ["Export the breach to HEC-RAS (2D model package, hydrograph and breach table)",
                      "Import HEC-RAS 2D results as rasters"]
     for cls in h.HECRAS_ALGORITHMS:
         a = cls()
@@ -581,6 +581,11 @@ def hecras_export_algorithm_runs():
         n, vals = _parse_block(open(r["HYDROGRAPH_TXT"]).read())
         assert n == len(vals) and any("15MIN" in m for m in fb.info)
         assert "cfs" in r["RESULT"]
+        # v3.10.16: the 2D model package is tried; this fake run has no DEM or depth raster,
+        # so it is not built, the hydrograph and table still are, and the log says why
+        assert r["MODEL_FOLDER"] == "" and r["MODEL_ZIP"] == ""
+        assert any("HEC-RAS 2D model not built" in m for m in fb.errors)
+        assert "model not built" in r["RESULT"]
         # default step is 5 minutes; a chosen output folder is used
         out = os.path.join(d, "elsewhere")
         r2 = a.processAlgorithm({"DAM_FOLDER": d, "OUT_FOLDER": out},

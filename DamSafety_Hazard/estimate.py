@@ -210,8 +210,43 @@ def _on(cfg, key, default=True):
 
 
 def _eap_on(cfg, part):
-    # pipeline._eap_on: "eap" switches every EAP output, "eap_<part>" one of them
-    return _on(cfg, "eap") and _on(cfg, "eap_" + part)
+    # ES.4: the same defaults as pipeline._eap_on (eap off unless set; the list also
+    # on for the map book)
+    if not _on(cfg, "eap", False):
+        return False
+    if part == "list":
+        return _on(cfg, "eap_list", True) or _on(cfg, "eap_mapbook", False)
+    return _on(cfg, "eap_" + part, False)
+
+
+def _run_view(cfg, loc):
+    """ES.1: what pipeline._collect_inputs decides before downloading (shared
+    helpers; never raises - an unknown answer falls back to listing it)."""
+    view = {"off": False, "have_hub": "address" in loc, "usa": "usa"}
+    try:
+        from . import pipeline as PL
+    except Exception:
+        return view
+    try:
+        view["off"] = PL.downloads_disabled()
+    except Exception:
+        pass
+    try:
+        view["have_hub"] = view["have_hub"] or any(
+            f == "NDGISHUB" for f, _l in PL.resolve_point_layers(cfg, {}))
+    except Exception:
+        pass
+    try:
+        out = cfg.get("output_folder") or ""
+        dam = cfg.get("dam_folder") or ""
+        osm = cfg.get("osm_layer", "auto")
+        if osm == "auto":
+            osm = PL.get_osm_candidates(out, dam)
+        c2 = dict(cfg, download_usa_structures=_on(cfg, "download_usa_structures"))
+        view["usa"] = PL.usa_structures_plan(c2, osm, out, dam, loc)
+    except Exception:
+        pass
+    return view
 
 
 def planned_downloads(cfg, area):
@@ -231,12 +266,17 @@ def planned_downloads(cfg, area):
     def arc(name, label, url, e=ext):
         jobs.append((name, label, "arcgis", url, e))
     loc = _local_roles(cfg)          # v2.9: what the data folder supplies (as the run does)
+    view = _run_view(cfg, loc)
+    if view["off"]:
+        return []                    # ES.1(a): ND_DAM_SUITE / ND_DAM_OFFLINE: no downloads
     if _on(cfg, "download_nsi") and "nsi" not in loc:
         jobs.append(("NSI_structures", "NSI structures", "nsi", DL.NSI_API_URL, ext))
-    if _on(cfg, "download_address") and "address" not in loc:
+    if _on(cfg, "download_address") and not view["have_hub"]:
         arc("NDGISHUB_address_points", "ND GIS Hub address points", C.ND_ADDRESS_POINTS_URL)
-    if _on(cfg, "download_usa_structures") and "usa" not in loc:
-        arc("USA_Structures", "FEMA USA Structures", C.USA_STRUCTURES_URL)
+    if _on(cfg, "download_usa_structures") and "usa" not in loc and view["usa"]:
+        arc("USA_Structures", "FEMA USA Structures" + (
+            " (saved as the outline file)" if view["usa"] == "usa_file" else ""),
+            C.USA_STRUCTURES_URL)
     if cfg.get("rail_layer", none) in (None, none) and "rail" not in loc and \
             _on(cfg, "download_rail"):
         arc("NARN_rail_lines", "Rail lines", C.NARN_URL)
@@ -387,7 +427,9 @@ def _plan_one(job, cache_folder, pack, offline_only, max_age, refresh, now, outp
            "note": ""}
     ans = _pack_answer(pack, name, ext)
     today = _todays_download(output_folder, name, ext)
-    if today and (kind == "overpass" or not refresh):
+    # ES.1(d): refresh bypasses today's file only with a tile cache (download._refresh_requested)
+    # DL.1: OpenStreetMap downloads honour the refresh too (download._todays_file)
+    if today and not (refresh and cache_folder):
         row.update(source="today's download", note=os.path.basename(today))
         return row
     if ans == "covers":
@@ -536,6 +578,13 @@ def estimate(depth_path, velocity_path=None, extent_buffer_ft=None, downloads=No
                            "tiles": 0, "fresh": 0, "stale": 0, "missing": 0,
                            "note": "not estimated: {}".format(e)}
                 est["downloads"].append(row)
+            if sum(1 for r in est["downloads"] if r.get("name", "").startswith(
+                    ("HPMS_ND_", "NDDOT_traffic_counts", "ND_county_roads"))) > 1:
+                # Lumo v1.7: a run asks every HPMS year, NDDOT and the county roads; the
+                # Data tab's download (datafetch "traffic") stops at the first that answers
+                est["notes"].append("Traffic counts (HPMS years, NDDOT, county roads): counted "
+                                    "as separate downloads - an upper bound; the Data tab's "
+                                    "download stops at the first source that answers")
             for r in est["downloads"]:
                 counts["datasets"] += 1
                 counts["http_requests"] += r.get("requests", 0)

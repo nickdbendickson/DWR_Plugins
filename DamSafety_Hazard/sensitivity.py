@@ -102,7 +102,8 @@ _SLIM_KEYS = ("id", "habitable", "acer_type", "persons", "lifeline", "camp", "cu
               "cut_incremental", "incremental", "incr_note", "damage_usd", "category",
               "max_depth", "max_vel", "zone", "zone_mm", "zone_found", "zone_mobile",
               "outcome", "near", "near_raised", "zone_note", "margin_high", "margin_judg",
-              "base_depth", "base_zone")
+              "base_depth", "base_zone",
+              "dwelling_extra")                 # SX.1: classification filters on this flag
 _RELEVANT = ("Yes", "Unverified")       # "No" (not habitable) cannot change any class
 
 
@@ -265,10 +266,12 @@ def _scale_structures(structs, fd, fv, opts, changes=None, label=""):
             out[idx] = slim
             zone_or_outcome = (view.get("zone") != rec.get("zone")
                                or view.get("outcome") != rec.get("outcome"))
-            if zone_or_outcome:
+            inc_flip = (inc_new is not None and inc_new != rec.get("incremental"))
+            # SX.3: Flips_vs_Base counts the same events listed in the changes CSV
+            if zone_or_outcome or inc_flip:
                 flips += 1
             if changes is not None and len(changes) < opts["max_changes"] and \
-                    (zone_or_outcome or inc_new is not None and inc_new != rec.get("incremental")):
+                    (zone_or_outcome or inc_flip):
                 bits = []
                 if view.get("zone") != rec.get("zone"):
                     bits.append("zone")
@@ -405,9 +408,8 @@ def _persons(r, vz, opts):
         return None
     if r.get("persons"):
         return r["persons"]                      # the run's own figure (its speed / occupancy)
-    vehicles = r["aadt"] / 24.0 * (r.get("length_ft", 0.0) / 5280.0) / \
-        max(opts["speed_mph"], 1.0)
-    return vehicles * opts["occupancy"]
+    from .linear import motorists               # LN.1: one formula with linear.analyze_roads
+    return motorists(r["aadt"], r.get("length_ft", 0.0), opts["speed_mph"], opts["occupancy"])
 
 
 # ------------------------------------------------------------------ classification --
@@ -779,8 +781,8 @@ CONSEQ_DEFAULTS = {"conseq_sensitivity": False,
                    "conseq_sens_ppd": "2.0, 2.5, 3.0",
                    "conseq_sens_population": True, "conseq_sens_severity": True}
 # what consequences.life_loss_estimate / population_at_risk read of a structure
-_LL_KEYS = ("habitable", "max_depth", "dv_max", "arrival", "persons", "persons_basis",
-            "pop_night", "pop_day")
+_LL_KEYS = ("habitable", "dwelling_extra", "max_depth", "dv_max", "arrival", "persons",
+            "persons_basis", "pop_night", "pop_day")
 
 
 def _parse_values(v):
@@ -963,8 +965,10 @@ def run_consequences(structs, cfg=None, base_conseq=None, *,
         result["verdict"] = ("consequence sensitivity not made: the loss-of-life estimate is "
                              "switched off")
         return result
+    # vReal.10: extra footprints of one dwelling are not a second household (as totals)
     items = [(rec, {k: rec.get(k) for k in _LL_KEYS}) for rec in structs
-             if rec.get("habitable") == "Yes" and rec.get("max_depth")
+             if rec.get("habitable") == "Yes" and not rec.get("dwelling_extra")
+             and rec.get("max_depth")
              and rec["max_depth"] > 0
              and not (incremental is not False and rec.get("incremental") is False)]
     result["structures"] = len(items)

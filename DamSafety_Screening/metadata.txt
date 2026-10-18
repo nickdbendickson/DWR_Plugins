@@ -4,9 +4,15 @@ qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
 supportsQt6=True
 hasProcessingProvider=yes
-description=Popup window (Simple tab, settings grid, preflight check, run one dam, review) and Processing tools for batch screening of North Dakota dams and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching (3DEP / local LiDAR), storage estimation, breach direction and hydrographs, quick triage, 2D flood simulation (LISFLOOD-FP or built-in engine, reservoir-in-grid option, parallel), hazard classification under ND Dam Safety Standards Sec. 5.2/5.3 with the ACER TM 11 depth-velocity charts (same rules module as ND Dam Breach Runner), hand-off of chosen dams to ND Dam Breach Runner for detailed runs, sensitivity and reports.
-version=0.17.21
-changelog=0.17.21 (2026-10-15)
+description=Popup window (Run tab, settings grid, preflight check, run one dam, review) and Processing tools for batch screening of North Dakota dams and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching (3DEP / local LiDAR), storage estimation, breach direction and hydrographs, quick triage, 2D flood simulation (LISFLOOD-FP or built-in engine, reservoir-in-grid option, parallel), hazard classification under ND Dam Safety Standards Sec. 5.2/5.3 with the ACER TM 11 depth-velocity charts (same rules module as ND Dam Breach Runner), hand-off of chosen dams to ND Dam Breach Runner for detailed runs, sensitivity and reports.
+version=0.17.24
+changelog=0.17.24 (2026-10-16)
+    * ui_widgets.py: the window widgets the DamSafety plugins share, an identical copy in the Runner, Screening and Hazard (a test checks the copies). Settings buttons read 'Load…' / 'Save as…' (one ellipsis character); the settings grid's first-row combo box sits in its own column.
+    0.17.23 (2026-10-15)
+    * Window layout: title 'DamSafety — Screening (v...)', the disclaimer as a muted banner, one Workspace row (work folder, data folder, county) with a red 'not set yet' under an empty folder, a Data → DEM → Screen → Report strip (same step states as before; click to go to the tab), one Run tab (Simple + All steps; Inputs folded into 'Override inputs'), Settings behind the gear button (changed count shown), the log folded to one line with Show log, Close bottom right. No step, setting or run behaviour changed.
+    0.17.22 (2026-10-15)
+    * 7b engine (#38, QGIS Dev's #22 review): ENGINE is the one engine choice (legacy FORCE_ANUGA = 'LISFLOOD-FP then ANUGA'; only TIER is sent), engine status line in the log/window, culverts on a LISFLOOD-FP-only run warned as ignored, early stop when ANUGA is requested but not installed.
+    0.17.21 (2026-10-15)
     * Cross-platform (#32): text files read/written as UTF-8, CSVs written with newline='' (no blank rows on Windows), Windows conda ANUGA env python found, subprocess output decoded tolerantly.
     0.17.20 0.17.20 (2026-10-15)
     * 7b: passes the Runner's engine choice (TIER, FORCE_ANUGA, near-dam FV1 refine) and a CULVERTS layer with its field mapping to ndbreach:rundam (#22).

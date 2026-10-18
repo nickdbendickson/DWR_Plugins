@@ -39,7 +39,7 @@ class ExtrasTabMixin(object):
     def _build_extras_group(self):
         from .pipeline import DEFAULTS as D
         from .popsource import METHODS as POP_METHODS, RASTER_UNITS
-        grp = QGroupBox("6. Extra analyses and speed (advanced - all optional)")
+        grp = QGroupBox()
         lay = QVBoxLayout()
         note = QLabel(
             "Screening analyses run after the classification and never change it. The values "
@@ -371,9 +371,16 @@ class ExtrasTabMixin(object):
         """Problems with the extra choices (for validate_all_inputs)."""
         problems = []
         if self.sens_check.isChecked():
-            from .pipeline_extras import parse_factors
+            from .pipeline_extras import factor_problems, parse_factors
             try:
-                if not parse_factors(self.sens_factors_edit.text()):
+                text = self.sens_factors_edit.text()
+                errs, warns = factor_problems(text)
+                problems.extend("Sensitivity: " + e for e in errs)
+                for w in warns:                         # Lumo v1.8: warn, do not block
+                    log_message("Sensitivity factors: " + w)
+                    if hasattr(self, "_log"):
+                        self._log("WARNING: sensitivity factors: " + w)
+                if not errs and not parse_factors(text):
                     problems.append("Sensitivity: no valid factor in the factors field")
             except Exception:
                 problems.append("Sensitivity: the factors could not be read (use numbers "
@@ -385,7 +392,7 @@ class ExtrasTabMixin(object):
         if self.evac_check.isChecked():
             paths = getattr(self, "_raster_paths", lambda: {})() or {}
             if not paths.get("arr"):
-                problems.append("Evacuation timing needs an arrival-time raster (Setup tab)")
+                problems.append("Evacuation timing needs an arrival-time raster (Setup)")
         return problems
 
     # ---------------------------------------------------------- dams in series --
