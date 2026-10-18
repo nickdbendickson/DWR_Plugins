@@ -9,14 +9,25 @@ paths never import this module.
                       2D flow-hydrograph boundary at the run's inflow point (the same forcing
                       LISFLOOD-FP and ANUGA get), to the end of the simulation, with the
                       reservoir dry and no breach in the plan (see "Inflow modes" below)
-    preprocess()      terrain HDF, geometry completion, terrain association, 2D property
-                      tables (RasMapperLib drivers under Wine), then `Ras.exe -c` under Wine,
-                      stopped as soon as the .b##/.x##/.p##.tmp.hdf run inputs exist
+    preprocess()      terrain HDF; Ras.exe -c pass 1 (the geometry HDF with the 2D mesh);
+                      terrain association and 2D property tables (RasMapperLib drivers under
+                      Wine); Ras.exe -c pass 2, stopped as soon as the .b##/.x##/.p##.tmp.hdf
+                      run inputs exist. Each step's output is checked.
     compute()         the official Linux RasUnsteady on those inputs -> <name>.p01.hdf
     results()         the .p01.hdf maxima on the Runner grid as the workflow's final arrays
                       (SI: m, m/s, hours after breach initiation; NaN where dry)
     write_results()   those arrays under workflow.FINAL_NAMES (ft, ft/s, h) so ND Dam Hazard
                       reads the same files as after a LISFLOOD-FP or ANUGA run
+
+First real dam (Absaraka DWR-2801, TIER 2, 2026-10-18, on c232f65 with the step order now in
+preprocess() and Min Courant 0.45): 64,090 computation points (65,739 cells in the results),
+100 ft cells, 40 h, ~27 min on 1 core. RasUnsteady: volume error 2.7 ac-ft (0.17 %), max cell
+water-surface error 2.27 ft at Downstream cell 6495. That cell is an ordinary interior 100 x
+100 ft cell (not a small or boundary cell): ~2,060 ft inside the perimeter, ~7,900 ft from the
+inflow BC and ~37,000 ft from the normal-depth outflow, on a sharp terrain step (cell minimum
+1020.2 ft, neighbours 1027-1028.6 ft), at the wetting front ~5.1 h in, max depth ~4 ft. Only 10
+cells exceed 0.5 ft. No numerics were changed for it; finer cells or breaklines along such
+steps are the usual HEC-RAS remedy if it matters.
 
 Linux chain (proven on HEC's Muncie example, 2026-10-16, max WSE within 0.009 ft of HEC's):
 Windows HEC-RAS 6.6 installed in a 64-bit Wine prefix with .NET 4.8; `Ras.exe /regserver`
@@ -484,7 +495,10 @@ def _run(cmd, cwd, env, timeout, what, ok=None, log=None):
     text = (r.stdout or "") + (r.stderr or "")
     if r.returncode != 0 or (ok and ok not in text) or "FAIL" in text:
         tail = "\n".join(text.strip().splitlines()[-8:])
-        raise HecRasEngineError("{} failed (exit {}):\n{}".format(what, r.returncode, tail))
+        why = ("exit {}".format(r.returncode) if r.returncode != 0 else
+               "exit 0 but it printed FAIL" if "FAIL" in text else
+               "exit 0 but it never printed '{}'".format(ok))
+        raise HecRasEngineError("{} failed ({}):\n{}".format(what, why, tail))
     return text
 
 
@@ -502,17 +516,124 @@ def write_rasmap_terrain(rasmap_path, terrain_rel="Terrain\\Terrain.hdf", name="
         f.write(t)
 
 
+# ---------------------------------------------------------------------------- output checks
+PROPS_DATASETS = ("Cells Volume Elevation Values", "Faces Area Elevation Values")
+
+
+def geometry_hdf_state(path):
+    """What a geometry HDF (<name>.g##.hdf) holds, read-only: {'exists', 'size', 'cells'
+    (sum of 'Cell Count' over the 2D areas), 'areas' {name: {'cells', 'props'}}, 'terrain'
+    (the associated terrain file, '' if none), 'props' (every 2D area has non-empty
+    Cells Volume Elevation / Faces Area Elevation tables), 'error' ('' or why it could not
+    be read)}. Never raises."""
+    out = {"exists": os.path.isfile(path), "size": 0, "cells": 0, "areas": {}, "terrain": "",
+           "props": False, "error": ""}
+    if not out["exists"]:
+        return out
+    out["size"] = os.path.getsize(path)
+    if not out["size"]:
+        out["error"] = "empty file"
+        return out
+    try:
+        import h5py
+    except ImportError:
+        out["error"] = "h5py is not installed"
+        return out
+    try:
+        try:
+            f = h5py.File(path, "r", locking=False)
+        except TypeError:                                  # h5py < 3.5
+            f = h5py.File(path, "r")
+        with f:
+            geo = f.get("Geometry")
+            if geo is None:
+                out["error"] = "no Geometry group"
+                return out
+            t = geo.attrs.get("Terrain Filename", b"")
+            out["terrain"] = (t.decode("utf-8", "replace") if isinstance(t, bytes) else str(t)).strip()
+            areas = geo.get("2D Flow Areas")
+            if areas is None or "Attributes" not in areas:
+                return out
+            att = areas["Attributes"][()]
+            names = att.dtype.names or ()
+            for row in np.atleast_1d(att):
+                nm = row["Name"] if "Name" in names else b""
+                nm = (nm.decode("utf-8", "replace") if isinstance(nm, bytes) else str(nm)).strip()
+                n = int(row["Cell Count"]) if "Cell Count" in names else 0
+                g = areas.get(nm)
+                props = bool(g is not None and all(
+                    k in g and int(np.prod(g[k].shape)) > 0 for k in PROPS_DATASETS))
+                out["areas"][nm] = {"cells": n, "props": props}
+            out["cells"] = sum(a["cells"] for a in out["areas"].values())
+            out["props"] = bool(out["areas"]) and all(a["props"] for a in out["areas"].values())
+    except Exception as e:                                 # a file still being written
+        out["error"] = "{}: {}".format(type(e).__name__, e)
+    return out
+
+
+def data_errors(project_dir, name, plan):
+    """The text of HEC-RAS's '<name>.p<plan>.data_errors.txt' ('' when there is none)."""
+    p = os.path.join(project_dir, "{}.p{}.data_errors.txt".format(name, plan))
+    if not os.path.isfile(p):
+        return ""
+    try:
+        with open(p, encoding="latin-1") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _require_geometry(ghdf, step, need_cells=True, need_terrain=False, need_props=False,
+                      project_dir=None, name=None, plan=None):
+    """Raises HecRasEngineError when `step` (exit code 0 or not) left the geometry HDF without
+    what the next step needs. Returns the geometry_hdf_state()."""
+    st = geometry_hdf_state(ghdf)
+    base = os.path.basename(ghdf)
+    why = None
+    if not st["exists"] or not st["size"]:
+        why = "{} was not written".format(base)
+    elif st["error"]:
+        why = "{} could not be read ({})".format(base, st["error"])
+    elif need_cells and st["cells"] <= 0:
+        why = "{} has no 2D cells (no mesh)".format(base)
+    elif need_terrain and not st["terrain"]:
+        why = "{} has no terrain associated".format(base)
+    elif need_props and not st["props"]:
+        bad = [k for k, a in st["areas"].items() if not a["props"]] or ["the 2D areas"]
+        why = "{} has no 2D property tables for {}".format(base, ", ".join(bad))
+    if why:
+        de = data_errors(project_dir, name, plan) if project_dir else ""
+        raise HecRasEngineError("HEC-RAS {}: {} although the step reported success.{}".format(
+            step, why, (" HEC-RAS data errors ({}.p{}.data_errors.txt): {}".format(
+                name, plan, de[:600]) if de else "")))
+    return st
+
+
+# ---------------------------------------------------------------------------- preprocess
+STEPS = ("terrain", "geometry", "assoc", "props", "ras")
+
+
 def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=None,
                terrain_tif=None, prj=None, mesh=None, log=None, poll_s=2.0):
     """Makes the run inputs <name>.p<plan>.tmp.hdf, .b<plan>, .x<plan> in `project_dir`
     (which must be inside the Wine prefix's drive_c, as the chain was proven there).
 
-    steps (default all, in order): 'terrain' (terrain.exe from terrain_tif + prj into
-    Terrain/Terrain.hdf, registered in the .rasmap), 'mesh' (mesh.exe; `mesh` =
-    (area name, seeds csv path) - used when the geometry HDF exists, e.g. HEC's examples),
-    'complete' (drv.exe complete: geometry text -> .g##.hdf with the mesh), 'assoc' (terrain
-    association), 'props' (2D property tables), 'ras' (Ras.exe -c, stopped once the inputs
-    exist). Returns {step: seconds}."""
+    Default steps, in order (the order proven on Absaraka, 2026-10-18, for a project
+    build_model wrote, which has no geometry HDF yet):
+      'terrain'   terrain.exe from terrain_tif + prj into Terrain/Terrain.hdf, registered in
+                  the .rasmap
+      'geometry'  Ras.exe -c (pass 1), stopped as soon as <name>.g<geom>.hdf holds the 2D
+                  mesh (Absaraka: 65,739 cells, ~14 s); skipped when that HDF already has
+                  cells (e.g. HEC's own examples)
+      'assoc'     terrain association (drv.exe assoc = SetGeometryAssociation; ~4 s)
+      'props'     2D property tables (drv.exe props; ~22 s)
+      'ras'       Ras.exe -c (pass 2), stopped once the run inputs exist (~39 s)
+    Optional: 'complete' (drv.exe complete = CompleteGeometryCommand: completes an EXISTING
+    geometry HDF from the text; it prints OK but writes nothing when there is none) and
+    'mesh' (mesh.exe; `mesh` = (area name, seeds csv path), on an existing geometry HDF).
+    After every step the expected output is checked (geometry HDF with 2D cells > 0, terrain
+    associated, property tables written, run inputs present) and a missing one fails with a
+    clear message even when the program exited 0. Returns {step: seconds}."""
     d = d or require(env)
     e = wine_env(d, env)
     to = _timeout(env)
@@ -520,9 +641,10 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
     wdir = d["windows_dir"]
     nice = ["nice", "-n", "19"] if shutil.which("nice") else []
     wine = nice + [d["wine"] or "wine"]
-    steps = list(steps or ("terrain", "complete", "assoc", "props", "ras"))
+    steps = list(steps or STEPS)
     ghdf = os.path.join(project_dir, "{}.g{}.hdf".format(name, geom))
     terrain_hdf = os.path.join(project_dir, "Terrain", "Terrain.hdf")
+    chk = dict(project_dir=project_dir, name=name, plan=plan)
     times = {}
     for s in steps:
         t0 = time.time()
@@ -533,23 +655,50 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
             _run(wine + [os.path.join(wdir, "terrain.exe"), W(wdir), W(prj), W(terrain_tif),
                          W(os.path.dirname(terrain_hdf)), "Terrain"], wdir, e, to,
                  "terrain HDF (RasMapperLib, Wine)", ok="OK", log=log)
+            if not (os.path.isfile(terrain_hdf) and os.path.getsize(terrain_hdf) > 0):
+                raise HecRasEngineError("HEC-RAS terrain HDF: {} was not written although "
+                                        "terrain.exe reported OK.".format(terrain_hdf))
             rm = os.path.join(project_dir, name + ".rasmap")
             if os.path.exists(rm):
                 write_rasmap_terrain(rm)
+        elif s == "geometry":
+            st = geometry_hdf_state(ghdf)
+            if st["cells"] > 0 and not st["error"]:
+                (log or (lambda m: None))("HEC-RAS: {} already has the mesh ({:,} cells); "
+                                          "Ras.exe pass 1 skipped".format(
+                                              os.path.basename(ghdf), st["cells"]))
+            else:
+                ras_compile(project_dir, name, plan, d, e, to, log, poll_s,
+                            until=geometry_ready(ghdf), what="geometry HDF with the 2D mesh")
+            st = _require_geometry(ghdf, "geometry (Ras.exe -c pass 1)", **chk)
+            (log or (lambda m: None))("HEC-RAS: geometry HDF with {:,} 2D cells".format(
+                st["cells"]))
         elif s == "mesh":
             area, seeds = mesh
             _run(wine + [os.path.join(wdir, "mesh.exe"), W(ghdf), area, "csv", W(seeds)], wdir, e,
                  to, "2D mesh (RasMapperLib, Wine)", log=log)
+            _require_geometry(ghdf, "2D mesh (mesh.exe)", **chk)
         elif s == "complete":
+            if not os.path.isfile(ghdf):
+                raise HecRasEngineError(
+                    "drv.exe complete needs an existing {} (it reports OK but writes nothing "
+                    "without one); use the 'geometry' step (Ras.exe -c) on a new project."
+                    .format(os.path.basename(ghdf)))
             _run(wine + [os.path.join(wdir, "drv.exe"), W(wdir), "complete", W(ghdf),
                          W(os.path.join(project_dir, name + ".rasmap"))], wdir, e, to,
                  "geometry HDF from the text geometry (RasMapperLib, Wine)", ok="OK", log=log)
+            _require_geometry(ghdf, "geometry completion (drv.exe complete)", **chk)
         elif s == "assoc":
+            _require_geometry(ghdf, "terrain association: input", **chk)
             _run(wine + [os.path.join(wdir, "drv.exe"), W(wdir), "assoc", W(ghdf), W(terrain_hdf)],
                  wdir, e, to, "terrain association (RasMapperLib, Wine)", ok="OK", log=log)
+            _require_geometry(ghdf, "terrain association (drv.exe assoc)", need_terrain=True,
+                              **chk)
         elif s == "props":
+            _require_geometry(ghdf, "2D property tables: input", **chk)
             _run(wine + [os.path.join(wdir, "drv.exe"), W(wdir), "props", W(ghdf)], wdir, e, to,
                  "2D property tables (RasMapperLib, Wine)", ok="tables complete", log=log)
+            _require_geometry(ghdf, "2D property tables (drv.exe props)", need_props=True, **chk)
         elif s == "ras":
             ras_compile(project_dir, name, plan, d, e, to, log, poll_s)
         else:
@@ -563,13 +712,41 @@ def run_inputs(project_dir, name, plan):
             ("b" + plan, "x" + plan, "p{}.tmp.hdf".format(plan))]
 
 
-def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0):
+def geometry_ready(ghdf):
+    """A poll function: true once the geometry HDF has 2D cells and its size did not change
+    since the previous poll (Ras.exe may still be writing it)."""
+    last = [None]
+
+    def ready():
+        st = geometry_hdf_state(ghdf)
+        prev, last[0] = last[0], st["size"]
+        return st["cells"] > 0 and not st["error"] and prev == st["size"]
+    return ready
+
+
+def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0, until=None,
+                what=None):
     """Ras.exe -c through a .bat (Wine mangles quoted arguments otherwise); stopped
-    (wineserver -k) as soon as the run inputs exist and RasUnsteady.exe has started."""
+    (wineserver -k) as soon as `until()` is true - by default: the run inputs exist and
+    RasUnsteady.exe has started. A HEC-RAS data-errors file is reported in the error."""
     log = log or (lambda m: None)
-    for p in run_inputs(project_dir, name, plan):
-        if os.path.exists(p):
-            os.remove(p)
+    inputs_ok = (lambda: all(os.path.exists(p) and os.path.getsize(p) > 0
+                             for p in run_inputs(project_dir, name, plan)))
+    after_exit = until
+    if until is None:
+        for p in run_inputs(project_dir, name, plan):
+            if os.path.exists(p):
+                os.remove(p)
+        until = (lambda: inputs_ok() and _rasunsteady_running())
+        after_exit = inputs_ok
+        what = what or "run inputs ({})".format(", ".join(
+            os.path.basename(p) for p in run_inputs(project_dir, name, plan)))
+        final = True
+    else:
+        final = False
+    de_path = os.path.join(project_dir, "{}.p{}.data_errors.txt".format(name, plan))
+    if os.path.exists(de_path):
+        os.remove(de_path)
     bat = os.path.join(project_dir, "_ndbreach_ras_c.bat")
     with open(bat, "w", newline="") as f:
         f.write('"{}" -c "{}" "{}"\r\n'.format(
@@ -578,7 +755,8 @@ def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0):
             to_wine_path(os.path.join(project_dir, "{}.p{}".format(name, plan)), d["prefix"])))
     hook = None
     tcu = (e.get(ENV_TCU) or "").strip()
-    log("HEC-RAS: Ras.exe -c (geometry and plan compile)")
+    log("HEC-RAS: Ras.exe -c ({})".format("geometry and plan compile" if final else
+                                          "pass 1: " + what))
     proc = subprocess.Popen([d["wine"] or "wine", "cmd", "/c", to_wine_path(bat, d["prefix"])],
                             cwd=project_dir, env=e, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL)
@@ -594,25 +772,29 @@ def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0):
                 raise HecRasEngineError("the TCU hook {} could not start: {}".format(tcu, x))
         while time.time() - t0 < timeout:
             time.sleep(poll_s)
-            if all(os.path.exists(p) and os.path.getsize(p) > 0
-                   for p in run_inputs(project_dir, name, plan)) and _rasunsteady_running():
-                time.sleep(2.0)
+            if until():
+                time.sleep(2.0 if final else 0.0)
                 done = True
                 break
-            if proc.poll() is not None and not all(
-                    os.path.exists(p) for p in run_inputs(project_dir, name, plan)):
+            if proc.poll() is not None:
+                done = bool(after_exit())
                 break
     finally:
         subprocess.run(["wineserver", "-k"], env=e, timeout=60, capture_output=True)
         for p in (proc, hook):
             if p is not None and p.poll() is None:
                 p.kill()
-    if not done and not all(os.path.exists(p) for p in run_inputs(project_dir, name, plan)):
+    de = data_errors(project_dir, name, plan)
+    if final and de:
+        raise HecRasEngineError("Ras.exe -c reported HEC-RAS data errors ({}): {}".format(
+            os.path.basename(de_path), de[:800]))
+    if not done:
+        if de:
+            raise HecRasEngineError("Ras.exe -c stopped on HEC-RAS data errors ({}): {}".format(
+                os.path.basename(de_path), de[:800]))
         raise HecRasEngineError(
-            "Ras.exe -c wrote no run inputs ({}) within {:.0f} s. If HEC's Terms and "
-            "Conditions dialog is waiting, it must be accepted by the user (see {}).".format(
-                ", ".join(os.path.basename(p) for p in run_inputs(project_dir, name, plan)),
-                timeout, ENV_TCU))
+            "Ras.exe -c wrote no {} within {:.0f} s. If HEC's Terms and Conditions dialog is "
+            "waiting, it must be accepted by the user (see {}).".format(what, timeout, ENV_TCU))
 
 
 def _rasunsteady_running():

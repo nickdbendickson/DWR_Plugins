@@ -117,7 +117,11 @@ NICE_CELLS = (5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 20
 # Courant=0.45, Count To Double=4, Max Doubling=1, Max Halving=0). The Computation Interval is
 # the base step; HEC-RAS halves it (at most max_halving times) when the Courant number
 # passes max, and doubles it (at most max_doubling times) after count_to_double steps below
-# min. max None = the equation's Courant target (1 SWE, 2 DWE); min None = max / 2.
+# min. max None = the equation's Courant target (1 SWE, 2 DWE); min None = 0.45 x max
+# (0.45 SWE, 0.9 DWE). HEC-RAS 6.6 refuses min >= 0.5 x max ('The advanced time step control
+# requires that the Minimum Courant is < 0.5 Maximum Courant'; Absaraka, max 1 / min 0.5),
+# so courant_lines() raises for it.
+COURANT_MIN_RATIO = 0.45
 COURANT_DEFAULTS = {"adaptive": True, "max": None, "min": None, "count_to_double": 4,
                     "max_doubling": 3, "max_halving": 3, "residence": 0}
 
@@ -582,10 +586,11 @@ def courant_lines(c, equation=EQ_SWE):
                 "Computation Time Step Max Halving=0",
                 "Computation Time Step Residence Courant=0"]
     cmax = float(c.get("max") or (1.0 if equation == EQ_SWE else 2.0))
-    cmin = float(c.get("min") if c.get("min") is not None else 0.5 * cmax)
-    if not (0 < cmin < cmax):
-        raise HecRasModelError("adaptive time step: need 0 < min Courant ({:g}) < max Courant "
-                               "({:g})".format(cmin, cmax))
+    cmin = float(c.get("min") if c.get("min") is not None else COURANT_MIN_RATIO * cmax)
+    if not (0 < cmin < 0.5 * cmax - 1e-12):
+        raise HecRasModelError("adaptive time step: HEC-RAS needs 0 < min Courant < 0.5 x max "
+                               "Courant (got min {:g}, max {:g}; e.g. min {:g})".format(
+                                   cmin, cmax, COURANT_MIN_RATIO * cmax))
     ints = []
     for k in ("count_to_double", "max_doubling", "max_halving"):
         v = int(c.get(k) or 0)
@@ -2030,7 +2035,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     if ts["max"] is None:
         ts["max"] = cour
     if ts["min"] is None:
-        ts["min"] = 0.5 * float(ts["max"])
+        ts["min"] = round(COURANT_MIN_RATIO * float(ts["max"]), 4)
     m.courant = ts
     m.equation = o["equation"]
     m.breach = bvals
@@ -2241,7 +2246,7 @@ def _time_step_text(m):
     if not c.get("adaptive"):
         return base + "; fixed step"
     cmax = float(c.get("max") or (1.0 if m.equation == EQ_SWE else 2.0))
-    cmin = float(c["min"]) if c.get("min") is not None else 0.5 * cmax
+    cmin = float(c["min"]) if c.get("min") is not None else COURANT_MIN_RATIO * cmax
     return (base + "; adaptive (Courant {:g} to {:g}, halved up to {} times, doubled up to {} "
             "times after {} steps below the minimum)".format(
                 cmin, cmax, int(c.get("max_halving") or 0), int(c.get("max_doubling") or 0),
