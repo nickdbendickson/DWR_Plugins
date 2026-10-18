@@ -76,8 +76,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.setup_ui()
         self.dam_folder_edit.textChanged.connect(self._on_dam_folder_changed)
         for e in (self.depth_edit, self.vel_edit, self.arr_edit, self.dv_edit):
+            # 2.18.32: old results are stale; 2.18.35: cleared FIRST (the panel's reset
+            # switches Classify on), then the button state (off on a raster of another dam)
+            e.textChanged.connect(self.check_panel.clear)
             e.textChanged.connect(self._update_button_states)
-            e.textChanged.connect(self.check_panel.clear)   # 2.18.32: old results are stale
         try:
             self.model_combo.currentIndexChanged.connect(self._update_button_states)
             self.model_combo.currentIndexChanged.connect(self.check_panel.clear)
@@ -526,25 +528,102 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             self.dam_folder_edit.setText(folder)   # -> _on_dam_folder_changed
         self._update_button_states()
 
+    _RASTER_LABELS = {"depth": "Depth", "vel": "Velocity", "arr": "Arrival", "dv": "Depth x Velocity"}
+
+    def _raster_edits(self):
+        return [("depth", self.depth_edit), ("vel", self.vel_edit), ("arr", self.arr_edit),
+                ("dv", self.dv_edit)]
+
+    def _suite_dams_roots(self):
+        """The suite's Dams folder(s): never a dam folder themselves (2.18.35)."""
+        roots = []
+        try:
+            from .damsuite import suite_config as SC
+            roots.append(SC.get("dams_folder"))
+        except Exception:                                        # noqa
+            pass
+        try:
+            from qgis.core import QgsSettings
+            roots.append(QgsSettings().value("NDDamSuite/home_dams_folder", "") or "")
+        except Exception:                                        # noqa
+            pass
+        return [r for r in roots if isinstance(r, str) and r.strip()]
+
+    def _dam_folder_problem(self, text):
+        from . import damfolder as DF
+        from .autodetect import find_rasters
+        return DF.dam_folder_problem(
+            text, self._suite_dams_roots(),
+            has_flood_rasters=lambda p: bool(find_rasters(p).get("depth")))
+
     def _on_dam_folder_changed(self, text):
-        folder = (text or "").strip()
-        if folder in ("/", "", os.path.sep) or (folder and not os.path.isdir(folder)):
-            folder = ""
-            self.dam_folder_edit.setText("")
-            self.status_label.setText("Dam folder must be a real directory, not / or empty.")
+        """2.18.35: the folder is normalised and must be ONE dam's folder (not '/', '//',
+        the Dams folder or a folder above it, nor a folder holding dam folders); the
+        rasters filled from the previous folder are dropped and found again in the new
+        one, and rasters typed by hand are kept only when they are in the new folder."""
+        from . import damfolder as DF
+        raw = (text or "").strip()
+        problem = self._dam_folder_problem(raw) if raw else ""
+        folder = "" if (problem or not raw) else DF.normalize(raw)
+        old = self.config_dam_folder
+        self._dam_folder_refused = problem
         self.config_dam_folder = folder
         self.config_output_folder = os.path.join(folder, OUTPUT_FOLDER_NAME) if folder else ""
         self.output_folder_edit.setText(self.config_output_folder)
         self.check_panel.clear()                       # 2.18.34: results of another dam
         if not self._restoring:
-            n = self._auto_fill_rasters(force=False)
-            if folder:
-                self._update_status("Dam folder: {} - {}".format(
+            dropped = self._drop_other_folder_rasters(old, folder)
+            n = self._auto_fill_rasters(force=False) if folder else 0
+            if problem:
+                self._update_status("Dam folder refused: {}".format(problem), False)
+                self._log(">>> Dam folder refused: {}".format(problem))
+            elif folder:
+                self._update_status("Dam folder: {} - {}{}".format(
                     os.path.basename(folder.rstrip("/\\")) or folder,
                     "{} raster(s) found; Check inputs, then Classify".format(n) if n else
-                    "check the rasters, then Classify"), True)
+                    "check the rasters, then Classify",
+                    "; {} raster(s) of the previous folder cleared".format(len(dropped))
+                    if dropped else ""), True)
         self._update_button_states()
         self._refresh_dam_record()                     # v2.10: dam.json status line
+
+    def _drop_other_folder_rasters(self, old, new):
+        """Clear the raster boxes that do not belong to the new dam folder: every box the
+        auto-fill filled from another folder, and every hand-typed path outside `new`.
+        Returns [(label, path)] of the boxes cleared (the log lists them)."""
+        from . import damfolder as DF
+        auto = self.__dict__.setdefault("_auto_filled", {})
+        dropped = []
+        for key, edit in self._raster_edits():
+            path = edit.text().strip()
+            if not path:
+                continue
+            was_auto = auto.get(key) == path
+            keep = bool(new) and DF.inside(path, new) and not was_auto and not \
+                DF.raster_problems(new, {key: path})
+            if was_auto and new and old and DF.normalize(old) == DF.normalize(new):
+                keep = True                            # the same folder, written another way
+            if not keep:
+                edit.setText("")
+                auto.pop(key, None)
+                dropped.append((self._RASTER_LABELS[key], path))
+        for label, path in dropped:
+            self._log(">>> {} raster cleared: {} is not in the dam folder {}".format(
+                label, path, new or "(none)"))
+        return dropped
+
+    def _raster_ownership_problems(self):
+        """[text]: rasters outside the selected dam folder or of another dam (2.18.35);
+        also the refused dam folder. Check inputs fails and Classify stays off on these."""
+        from . import damfolder as DF
+        out = []
+        refused = self.__dict__.get("_dam_folder_refused")
+        if refused and self.dam_folder_edit.text().strip():
+            out.append("Dam folder refused: {}".format(refused))
+        if self.config_dam_folder:
+            paths = {k: e.text().strip() for k, e in self._raster_edits()}
+            out.extend(DF.raster_problems(self.config_dam_folder, paths, self._RASTER_LABELS))
+        return out
 
     def _auto_fill_rasters(self, force=False):
         """Fill the raster boxes from the files found in the dam folder: all
@@ -553,23 +632,24 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         folder = self.config_dam_folder
         if not folder or folder in ("/", os.path.sep) or not os.path.isdir(folder):
             return 0
-        edits = [("depth", self.depth_edit), ("vel", self.vel_edit), ("arr", self.arr_edit),
-                 ("dv", self.dv_edit)]
+        edits = self._raster_edits()
         base = []          # v2.5.1: no no-breach baseline / time steps in the dialog
         if not force and any(e.text().strip() for _k, e in edits):
             return 0
         from .autodetect import find_rasters, describe
         found = find_rasters(folder)
+        auto = self.__dict__.setdefault("_auto_filled", {})
         n = 0
         for key, edit in edits + base:
             if edit is None or not found.get(key):
                 continue
             if force or not edit.text().strip():
                 edit.setText(found[key])
+                auto[key] = found[key]
                 n += 1
         self._log(">>> Rasters found in the dam folder: {}".format(describe(found, folder)))
         for note in found["notes"]:
-            self._log("    " + note + " - change it on the Setup tab if needed")
+            self._log("    " + note + " - tick 'Rasters' on the Classify tab to choose another")
         self._update_button_states()
         return n
 
@@ -611,6 +691,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                 errors.append("{} raster not selected (or file missing)".format(labels[key]))
             elif path and not os.path.isfile(path):
                 errors.append("{} raster file missing".format(labels[key]))
+        errors.extend(self._raster_ownership_problems())     # 2.18.35
         if hasattr(self, "scenario_table"):
             errors.extend(self._scenario_problems())     # v2.7: the scenario table
         if hasattr(self, "sens_check"):
@@ -862,10 +943,12 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         return cfg
 
     def _run_checks(self, services):
-        from .checks import check_all
-        return check_all(self._check_paths(), self.config_output_folder,
-                         self.config_dam_folder, self._check_cfg(), services=services,
-                         progress=self._progress_tick if services else None)
+        from .checks import check_all, ERROR
+        # 2.18.35: rasters of another folder / dam fail the check (and block Classify)
+        own = [(ERROR, t) for t in self._raster_ownership_problems()]
+        return own + check_all(self._check_paths(), self.config_output_folder,
+                               self.config_dam_folder, self._check_cfg(), services=services,
+                               progress=self._progress_tick if services else None)
 
     @staticmethod
     def _checks_html(results):
