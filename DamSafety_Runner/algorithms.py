@@ -1481,6 +1481,15 @@ class RunDamAlgorithm(_Base):
                                              "are in the dam folder): {}".format(e))
             res.final.update(hr["final"])
             res.warnings.extend(hr["warnings"])
+            # every reported figure from the final engine (the screening pass is kept)
+            try:
+                res.summary = workflow.adopt_final_engine(folder, "HEC-RAS 2D", st, dam_xy,
+                                                          fb.log)
+            except Exception as e:
+                raise QgsProcessingException(
+                    "HEC-RAS 2D ran, but the run report and flood polygons could not be made "
+                    "from its rasters ({}: {}); they still show the LISFLOOD-FP screening "
+                    "pass.".format(type(e).__name__, e))
         for w in res.warnings:
             feedback.pushWarning("Check: " + w)
         for k, v in res.summary.items():

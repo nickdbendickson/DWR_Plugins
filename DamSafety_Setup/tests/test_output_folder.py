@@ -51,5 +51,11 @@ def test_dem_download_does_not_write_into_the_data_folder():
     fn = [n for n in ast.walk(ast.parse(src))
           if isinstance(n, ast.FunctionDef) and n.name == "_download"][0]
     body = ast.get_source_segment(src, fn)
-    assert "safe_dams_folder()" in body
-    assert "page(0).path" not in body       # the suite data folder (may be the pack)
+    # 1.0.8: the folder is DemPage._dem_folder() (the page also shows it before the download)
+    assert "out = self._dem_folder()" in body
+    fn = [n for n in ast.walk(ast.parse(src))
+          if isinstance(n, ast.FunctionDef) and n.name == "_dem_folder"][0]
+    folder = ast.get_source_segment(src, fn)
+    assert 'os.path.join(safe_dams_folder(), "terrain")' in folder
+    for part in (body, folder):
+        assert "page(0).path" not in part and "FOLDER_PAGE).path" not in part
