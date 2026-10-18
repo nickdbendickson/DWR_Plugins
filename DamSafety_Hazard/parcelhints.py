@@ -274,7 +274,8 @@ def mark_parcel_hints(structs, parcel_layer, analysis_crs, transform_ctx, landus
     "improvement_empty", "fields"}; never raises for bad input."""
     counts = {"ok": False, "message": "", "structures": 0, "on_parcel": 0, "no_parcel": 0,
               "hinted": 0, "no_building": 0, "non_residential": 0, "parcels_read": 0,
-              "parcels_matched": 0, "improvement_empty": 0, "no_point": 0,
+              "parcels_matched": 0, "improvement_empty": 0, "improvement_nonnumeric": 0,
+              "no_point": 0,
               "fields": {"landuse": landuse_field or "", "improvement": improvement_field or "",
                          "ref": ref_field or ""}}
     clear_parcel_hints(structs)
@@ -359,8 +360,12 @@ def mark_parcel_hints(structs, parcel_layer, analysis_crs, transform_ctx, landus
             a = feat.attributes()
             use = a[i_use] if i_use >= 0 else None
             imp = a[i_imp] if i_imp >= 0 else None
-            if i_imp >= 0 and _number(imp) is None:
-                counts["improvement_empty"] += 1
+            if i_imp >= 0:
+                num = _number(imp)
+                if num is None:
+                    counts["improvement_empty"] += 1
+                elif not math.isfinite(num):
+                    counts["improvement_nonnumeric"] += 1    # PH.1: "N/A" and the like
             kinds, text = parcel_verdict(use, imp, i_use >= 0, i_imp >= 0, nb, nr, rs,
                                          empty_means_no_building)
             ref = a[i_ref] if i_ref >= 0 else None
@@ -418,8 +423,14 @@ def summary_lines(counts, layer_name=""):
                "; {} without a representative point".format(counts["no_point"])
                if counts.get("no_point") else "")]
     n = counts.get("parcels_matched") or 0
-    if f.get("improvement") and n and counts.get("improvement_empty", 0) >= 0.9 * n:
-        out.append("  Note: the improvement-value field is empty on {} of the {} parcel(s) "
+    n_empty = counts.get("improvement_empty", 0)
+    n_text = counts.get("improvement_nonnumeric", 0)
+    if f.get("improvement") and n and n_empty + n_text >= 0.9 * n:
+        out.append("  Note: the improvement-value field is empty{} on {} of the {} parcel(s) "
                    "under the structures - check that it is the right field".format(
-                       counts["improvement_empty"], n))
+                       " or not a number ({} text values such as 'N/A')".format(n_text)
+                       if n_text else "", n_empty + n_text, n))
+    elif f.get("improvement") and n_text:
+        out.append("  Note: {} improvement value(s) are not numbers (e.g. 'N/A') - no hint "
+                   "was made from them".format(n_text))
     return out

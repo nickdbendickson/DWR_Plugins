@@ -84,7 +84,12 @@ import numpy as np
 from qgis.core import QgsCoordinateTransform, QgsFeatureRequest, QgsRectangle
 
 from . import consequences as CQ
-from .access import EXIT_MARGIN_FT, SNAP_FT, _ft, _node_line_ends, _seg_dist
+try:                    # EVC.1: private helpers of access.py - a rename must say so clearly
+    from .access import EXIT_MARGIN_FT, SNAP_FT, _ft, _node_line_ends, _seg_dist
+except ImportError as _e:                                   # pragma: no cover
+    raise ImportError("evacuation.py needs access.py's EXIT_MARGIN_FT, SNAP_FT, _ft, "
+                      "_node_line_ends and _seg_dist ({}) - the two modules are out of "
+                      "step".format(_e)) from _e
 from .constants import (
     DEFAULT_ACCESS_SEARCH_FT, DEFAULT_VEHICLE_SPEED_MPH, DEFAULT_WARNING_ISSUED_HR,
     LINE_SAMPLE_STEP_FT,
@@ -366,17 +371,58 @@ def build_road_graph(road_layer, depth, arrival, transform_ctx, filter_rect=None
     return g
 
 
+DRY_RING_MAX_POINTS = 720        # vR16-EV.4: ring samples per node at most
+DRY_DISK_MAX_STEPS = 40          # ... and disk grid steps per axis at most
+
+
 def _dry_nodes(depth, nx, ny, r_units_ft, kx, ky):
-    """Nodes that are dry with a dry ring of radius r (ft) around them (8
-    points); NoData / outside the raster counts as dry."""
-    ang = np.arange(8) * (math.pi / 4.0)
-    xs = [nx] + [nx + r_units_ft * kx * math.cos(a) for a in ang]
-    ys = [ny] + [ny + r_units_ft * ky * math.sin(a) for a in ang]
+    """Nodes that are dry with a dry disk of radius r (ft) around them - the
+    "dry-safe" places of evac_dry_safe_ft (opt-in; 0 = off, the default).
+
+    vR16-EV.4: the disk is checked, not 8 ring points: the ring at a spacing of
+    at most one raster cell (up to DRY_RING_MAX_POINTS points) and the inside on
+    a square grid of at most one cell (up to DRY_DISK_MAX_STEPS steps per axis;
+    coarser only for a radius of more than ~20 cells). Inside the depth raster's
+    extent, NoData counts as WET (a hole in the model result is not proof of dry
+    ground); outside the extent the point counts as dry (beyond the model area)."""
+    nx = np.asarray(nx, dtype=np.float64)
+    ny = np.asarray(ny, dtype=np.float64)
+    rx, ry = r_units_ft * kx, r_units_ft * ky
+    try:
+        gt = depth.gt
+        cell = min(abs(gt[1]), abs(gt[5])) or max(rx, ry)
+        x0 = gt[0]
+        x1 = gt[0] + depth.xsize * gt[1]
+        y0 = gt[3]
+        y1 = gt[3] + depth.ysize * gt[5]
+        bx = (min(x0, x1), max(x0, x1))
+        by = (min(y0, y1), max(y0, y1))
+    except Exception:                              # noqa: BLE001 - a sampler without gt
+        cell, bx, by = max(rx, ry) / 4.0 or 1.0, None, None
+    r_max = max(rx, ry)
+    offs = [(0.0, 0.0)]
+    if r_max > 0:
+        n_ring = int(min(DRY_RING_MAX_POINTS, max(8, math.ceil(2 * math.pi * r_max / cell))))
+        for a in np.arange(n_ring) * (2 * math.pi / n_ring):
+            offs.append((rx * math.cos(a), ry * math.sin(a)))
+        steps = int(min(DRY_DISK_MAX_STEPS, max(2, math.ceil(2 * r_max / cell))))
+        for u in np.linspace(-1.0, 1.0, steps + 1):
+            for v in np.linspace(-1.0, 1.0, steps + 1):
+                if u * u + v * v <= 1.0 and (u, v) != (0.0, 0.0):
+                    offs.append((rx * u, ry * v))
     dry = np.ones(len(nx), dtype=bool)
-    for x, y in zip(xs, ys):
-        d = depth.values_at(x, y)
+    for dx, dy in offs:
+        idx = np.nonzero(dry)[0]
+        if not idx.size:
+            break
+        x, y = nx[idx] + dx, ny[idx] + dy
+        d = np.asarray(depth.values_at(x, y), dtype=np.float64)
         with np.errstate(invalid="ignore"):
-            dry &= ~(np.isfinite(d) & (d > 0))
+            wet = np.isfinite(d) & (d > 0)
+        if bx is not None:
+            inside = (x >= bx[0]) & (x <= bx[1]) & (y >= by[0]) & (y <= by[1])
+            wet |= inside & ~np.isfinite(d)          # NoData inside the model: wet
+        dry[idx[wet]] = False
     return dry
 
 
@@ -808,7 +854,8 @@ ROUTE_FIELDS = [("Persons", "d"), ("Status", "s"), ("Safe_Exit_Possible", "s"),
                 ("Exit_X", "d"), ("Exit_Y", "d")]
 CLOSURE_FIELDS = [("Edge", "i"), ("Road", "s"), ("Close_min", "d"), ("Close_hhmm", "s"),
                   ("Max_Depth_ft", "d"), ("No_Arrival_Time", "s"), ("Length_ft", "d"),
-                  ("Limits_Structures", "i"), ("Limits_Persons", "d")]
+                  ("Limits_Structures", "i"), ("Limits_Persons", "d"),
+                  ("Limits_Failing", "i")]
 
 
 def route_of(res, row):
@@ -944,7 +991,8 @@ def closures_layer(res, crs=None, name=CLOSURES_LAYER):
     there - 0 when a deep sample has no arrival time, No_Arrival_Time = Yes),
     its deepest sample (Max_Depth_ft), and how many structures / persons of the
     timing table this piece limits (Limiting_Edge in Evacuation_Timing.csv =
-    Edge here). None when nothing closes or the graph was not kept."""
+    Edge here) - EVC.5: all of them, positive margin or not (Limits_Structures,
+    Limits_Persons); Limits_Failing: those of them with a negative margin. None when nothing closes or the graph was not kept."""
     from qgis.core import QgsFeature, QgsGeometry, QgsPointXY
     from .compat import WKB_LINESTRING, NULL
     from .helpers import create_memory_layer, add_features_batched
@@ -954,22 +1002,27 @@ def closures_layer(res, crs=None, name=CLOSURES_LAYER):
     closing = np.nonzero(np.isfinite(g.eclose))[0]
     if not len(closing):
         return None
-    limits = defaultdict(lambda: [0, 0.0])
+    # EVC.5: Limits_Structures / Limits_Persons count EVERY timing row this piece
+    # limits, whatever the sign of its margin (unchanged); Limits_Failing counts only
+    # those that cannot leave in time (margin < 0)
+    limits = defaultdict(lambda: [0, 0.0, 0])
     for r in res.get("rows") or []:
         if r.get("limiting_edge") is not None and r.get("margin_min") is not None:
             limits[int(r["limiting_edge"])][0] += 1
             limits[int(r["limiting_edge"])][1] += r.get("persons") or 0.0
+            if r["margin_min"] < 0:
+                limits[int(r["limiting_edge"])][2] += 1
     lyr = create_memory_layer(name, WKB_LINESTRING, _crs_of(res, crs), _qfields(CLOSURE_FIELDS))
     feats = []
     for e in closing.tolist():
         f = QgsFeature(lyr.fields())
         f.setGeometry(QgsGeometry.fromPolylineXY([QgsPointXY(float(g.ex0[e]), float(g.ey0[e])),
                                                   QgsPointXY(float(g.ex1[e]), float(g.ey1[e]))]))
-        n, p = limits.get(e, (0, 0.0))
+        n, p, nf = limits.get(e, (0, 0.0, 0))
         f.setAttributes([int(e), _road_name(g, e) or NULL, _num(g.eclose[e]),
                          _hhmm(g.eclose[e]), _num(g.emaxd[e]),
                          "Yes" if bool(g.eunk[e]) else "No", _num(g.elen_ft[e], 1),
-                         int(n), _num(p)])
+                         int(n), _num(p), int(nf)])
         feats.append(f)
     add_features_batched(lyr.dataProvider(), feats, 5000)
     lyr.updateExtents()

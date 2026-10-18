@@ -87,21 +87,58 @@ from .constants import (
     LEGACY_STRUCTURES_TAG, OSM_CAMP_TAGS, OSM_LIFELINE_TAGS,
 )
 from .helpers import gdal_exceptions, CancelledByUser
-from .processing import (
-    _GROUP_PATTERNS, _layer_name_key, is_plugin_output_name, is_downloaded_data_layer,
-    DATA_INDEX_FILE,
-)
-from .structures import _NSI_FIELDS, _NENA_MARKERS, _FEMA_FIELDS
-from .osm_processing import _is_fema_structures_name, _is_osm_name
+from .processing import is_plugin_output_name, is_downloaded_data_layer, DATA_INDEX_FILE
 from .facilities import canonical_category, SCHOOLS
-from .linear import (
-    _AADT_NAMES, _AADT_YEAR_NAMES, _RE_YEAR_COL, _NAME_NAMES, _OWNER_NAMES, _PASS_NAMES,
-    trains_per_day,
-)
-from .autodetect import _SKIP_DIRS as _AUTODETECT_SKIP_DIRS
-from .review_exchange import _ALIASES as _XY_ALIASES, _delimiter
+from .linear import trains_per_day
 from .datafetch import DATASETS
-from .download import _CACHE_RE
+
+# DF.1: private names borrowed from other modules. A rename there must not break
+# the import of this module (pipeline / estimate use it): each is looked up on
+# its own, a missing one is logged (IMPORT_PROBLEMS) and replaced by a neutral
+# stand-in, so detection degrades instead of failing.
+IMPORT_PROBLEMS = []
+_NEVER_RE = re.compile(r"(?!x)x")
+
+
+def _import_problem(what, err):
+    msg = "data folder: {} not available ({}: {}) - detection degraded".format(
+        what, type(err).__name__, err)
+    IMPORT_PROBLEMS.append(msg)
+    try:
+        from .helpers import log_message
+        log_message(msg)
+    except Exception:                                   # noqa: BLE001
+        pass
+
+
+def _borrow(module, name, default):
+    import importlib
+    try:
+        return getattr(importlib.import_module("." + module, __package__), name)
+    except Exception as e:                              # noqa: BLE001
+        _import_problem("{}.{}".format(module, name), e)
+        return default
+
+
+_GROUP_PATTERNS = _borrow("processing", "_GROUP_PATTERNS", ())
+_layer_name_key = _borrow("processing", "_layer_name_key", lambda n: str(n or "").lower())
+_NSI_FIELDS = _borrow("structures", "_NSI_FIELDS", ())
+_NENA_MARKERS = _borrow("structures", "_NENA_MARKERS", ())
+_FEMA_FIELDS = _borrow("structures", "_FEMA_FIELDS", ())
+_is_fema_structures_name = _borrow("osm_processing", "_is_fema_structures_name",
+                                   lambda n: False)
+_is_osm_name = _borrow("osm_processing", "_is_osm_name", lambda n: False)
+_AADT_NAMES = _borrow("linear", "_AADT_NAMES", ())
+_AADT_YEAR_NAMES = _borrow("linear", "_AADT_YEAR_NAMES", ())
+_RE_YEAR_COL = _borrow("linear", "_RE_YEAR_COL", _NEVER_RE)
+_NAME_NAMES = _borrow("linear", "_NAME_NAMES", ())
+_OWNER_NAMES = _borrow("linear", "_OWNER_NAMES", ())
+_PASS_NAMES = _borrow("linear", "_PASS_NAMES", ())
+_AUTODETECT_SKIP_DIRS = _borrow("autodetect", "_SKIP_DIRS", set())
+_XY_ALIASES = _borrow("review_exchange", "_ALIASES", {})
+_delimiter = _borrow("review_exchange", "_delimiter",
+                     lambda line: ";" if line.count(";") > line.count(",") else ",")
+_CACHE_RE = _borrow("download", "_CACHE_RE", _NEVER_RE)
 
 # ------------------------------------------------------------------ roles --
 ROLES = ("nsi", "address", "usa", "outlines", "camps", "roads", "aadt", "rail", "crossings",
@@ -435,6 +472,12 @@ def _walk(root, max_depth, max_files, include_zip, stopped, report):
 
 
 def _signature(kind, path, st):
+    """Scan-cache key of one file / .gdb. DF.4 (documented, not changed): size +
+    mtime only, no content hash - hashing every file / zip / .gdb of a data folder
+    on each scan is not cheap. A same-size edit with a preserved time stamp keeps
+    the cached description (layers / fields); the run itself always opens the
+    file anew, so only the detection list can be stale - rescan with the cache
+    cleared after such an edit."""
     if kind != "gdb":
         return (st.st_size, getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))
     n = size = newest = 0
@@ -528,20 +571,22 @@ def _read_ogr(source, path, st, member="", hints=()):
 def _read_csv(path, st):
     """A point DataSet for a CSV with lon / lat (or x / y) columns; a CSV
     without them is a table, not a data set (skipped silently)."""
+    # DF.5: header and first row through the csv module (a quoted cell may span lines)
     try:
         with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as fh:
             first = fh.readline()
-            second = fh.readline()
+            if not first.strip():
+                return [], []
+            delim = _delimiter(first)
+            fh.seek(0)
+            rd = csv.reader(fh, delimiter=delim)
+            try:
+                header = next(rd)
+                row = next((r for r in rd if any(c.strip() for c in r)), [])
+            except (csv.Error, StopIteration):
+                return [], []
     except OSError as e:
         return [], ["skipped {}: {}".format(path, e.strerror or _short(e))]
-    if not first.strip():
-        return [], []
-    delim = _delimiter(first)
-    try:
-        header = next(csv.reader([first], delimiter=delim))
-        row = next(csv.reader([second], delimiter=delim), []) if second.strip() else []
-    except (csv.Error, StopIteration):
-        return [], []
     tags = [_XY_ALIASES.get(re.sub(r"[^a-z0-9]", "", h.lower()), "") for h in header]
 
     def column(tag):
@@ -564,9 +609,10 @@ def _read_csv(path, st):
     count = None
     if st.st_size <= CSV_COUNT_MAX_BYTES:
         try:
-            with open(path, "rb") as fh:
-                count = max(0, sum(1 for line in fh if line.strip()) - 1)
-        except OSError:
+            with open(path, "r", encoding="utf-8-sig", errors="replace", newline="") as fh:
+                count = max(0, sum(1 for r in csv.reader(fh, delimiter=delim)
+                                   if any(c.strip() for c in r)) - 1)   # DF.5: logical rows
+        except (OSError, csv.Error):
             count = None
     xname, yname = header[ix].strip(), header[iy].strip()
     query = [("type", "csv"), ("delimiter", delim), ("xField", xname), ("yField", yname),
@@ -796,9 +842,32 @@ _PACK_GROUP_ROLES = {"nsi": ("nsi",), "address": ("address",), "usa": ("usa",),
                      "bridges": ("bridges",), "nhd": ("centerline",)}
 
 
+class _NoTabRules:
+    """DF.2: stand-in when classify_tab cannot be imported - its name rules match
+    nothing, so scoring degrades (fewer name hints) instead of find_data raising."""
+    import re as _re
+    _NEVER = _re.compile(r"(?!x)x")
+    _RAIL_RE = _ROAD_RE = _CROSS_RE = _PARCEL_RE = _PARCEL_EXCLUDE = _NEVER
+    _CENTERLINE_RE = _CENTER_EXCLUDE = _PLUGIN_POI_RE = _NEVER
+
+
+_TAB_RULES = []
+
+
 def _tab_rules():
-    """classify_tab's layer-name rules (imported late: a UI module)."""
-    from . import classify_tab as T
+    """classify_tab's layer-name rules (imported late: a UI module). DF.2: an
+    import failure is logged once and the name rules are switched off."""
+    if _TAB_RULES:
+        return _TAB_RULES[0]
+    try:
+        from . import classify_tab as T
+        for n in ("_RAIL_RE", "_ROAD_RE", "_CROSS_RE", "_PARCEL_RE", "_PARCEL_EXCLUDE",
+                  "_CENTERLINE_RE", "_CENTER_EXCLUDE", "_PLUGIN_POI_RE"):
+            getattr(T, n)
+    except Exception as e:                              # noqa: BLE001
+        _import_problem("classify_tab layer-name rules", e)
+        T = _NoTabRules
+    _TAB_RULES.append(T)
     return T
 
 

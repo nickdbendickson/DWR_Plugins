@@ -98,6 +98,11 @@ class ExtentClip(object):
                                  base.xMaximum() + dx, base.yMaximum() + dy)
         self.geom = QgsGeometry.fromRect(self.rect)
         self._xf = {}
+        self.xf_tries = 0             # XT.1: transforms tried / failed
+        self.xf_fails = 0
+        self._xf_logged = False
+        self._xf_warned = False
+        self._bad_crs = set()
         if is_web_mercator(self.crs) or is_geographic(self.crs):
             log_message("Depth raster CRS {} is {}: distances in feet are corrected for "
                         "latitude {:.2f}; a projected CRS (UTM / State Plane) is more "
@@ -118,6 +123,14 @@ class ExtentClip(object):
             key = src_crs.authid() or src_crs.toWkt()
         if key not in self._xf:
             xf = None
+            if src_crs is not None and (not src_crs.isValid() or not self.crs.isValid()):
+                # XT.2: an invalid CRS is not "the same CRS" - said once per CRS
+                if key not in self._bad_crs:
+                    self._bad_crs.add(key)
+                    log_message("Extent clip: {} CRS {} is invalid - its features are tested "
+                                "untransformed (may be clipped wrongly)".format(
+                                    "source" if not src_crs.isValid() else "raster",
+                                    key or "(unknown)"), MSG_WARNING)
             try:
                 if src_crs is not None and src_crs.isValid() and self.crs.isValid():
                     t = QgsCoordinateTransform(src_crs, self.crs, self.ctx)
@@ -126,6 +139,34 @@ class ExtentClip(object):
                 xf = None
             self._xf[key] = xf
         return self._xf[key]
+
+    XF_WARN_MIN = 20          # XT.1: tries before "most fail" is judged
+    XF_WARN_SHARE = 0.5
+
+    def _xf_result(self, ok, err=None):
+        """XT.1: count transform results; the first failure is logged once, a
+        loud warning once most of (at least XF_WARN_MIN) transforms failed -
+        e.g. a missing PROJ grid makes every feature look far away."""
+        self.xf_tries += 1
+        if ok:
+            return
+        self.xf_fails += 1
+        if not self._xf_logged:
+            self._xf_logged = True
+            log_message("Extent clip: a coordinate transformation failed ({}) - such "
+                        "features are treated as outside the area".format(err or "no result"),
+                        MSG_WARNING)
+        if (not self._xf_warned and self.xf_tries >= self.XF_WARN_MIN
+                and self.xf_fails >= self.XF_WARN_SHARE * self.xf_tries):
+            self._xf_warned = True
+            log_message("WARNING: {} of {} coordinate transformations to the raster CRS "
+                        "FAILED - most features are being dropped as outside the area. "
+                        "Check the layer CRS / missing PROJ transformation grids.".format(
+                            self.xf_fails, self.xf_tries), MSG_WARNING)
+
+    def transform_failures(self):
+        """(failed, tried) transforms so far (XT.1)."""
+        return self.xf_fails, self.xf_tries
 
     def contains_xy(self, x, y):
         r = self.rect
@@ -140,8 +181,10 @@ class ExtentClip(object):
         if xf is not None:
             try:
                 pt = xf.transform(pt)
-            except Exception:
+            except Exception as e:
+                self._xf_result(False, e)
                 return False       # outside the CRS's area of use = far away
+            self._xf_result(True)
         try:
             return self.contains_xy(pt.x(), pt.y())
         except Exception:
@@ -154,6 +197,8 @@ class ExtentClip(object):
         xf = xform if xform is not None else (
             self.transform_from(src_crs) if src_crs is not None else None)
         g = transform_geometry(geom, xf) if xf is not None else geom
+        if xf is not None:
+            self._xf_result(g is not None)
         if g is None:
             return False
         bb = g.boundingBox()

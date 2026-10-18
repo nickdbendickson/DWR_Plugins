@@ -19,6 +19,8 @@ Two run modes (v2.8; v2.9: shared with the batch classification):
   sequential  every dam is classified one after another in this QGIS session
               (processing_provider.batch_classify) - the default, and what runs
               when nothing else is possible;
+              (WK.2: no per-dam time limit - the run is in this QGIS process and
+              cannot be stopped from outside safely; use the parallel mode for a limit)
   parallel    `workers` > 1: every dam is a separate `qgis_process run
               ndhazard:classify` child process, at most `workers` at a time. A
               child works on its own dam folder only and writes the same files
@@ -121,14 +123,25 @@ def read_before(dam_folder):
 
 
 def read_changes(dam_folder):
-    """Change rows [(Change, Item, Before, Now)] of the run just made."""
-    path = os.path.join(qa_folder(dam_folder), HIS.CHANGES_FILE)
+    """Change rows [(Change, Item, Before, Now)] of the run just made. WK.3: None
+    when the changes table is missing or unreadable (summarise flags it) - not []
+    (which means "no change"). A copy saved under another name because the table
+    was open (prepare_output_path) is found too (the newest one)."""
+    qa = qa_folder(dam_folder)
+    path = os.path.join(qa, HIS.CHANGES_FILE)
+    if not os.path.isfile(path):
+        import glob
+        stem = os.path.splitext(HIS.CHANGES_FILE)[0]
+        hits = [p for p in glob.glob(os.path.join(qa, stem + "*.csv")) if os.path.isfile(p)]
+        if not hits:
+            return None
+        path = max(hits, key=os.path.getmtime)
     try:
         with open(path, newline="", encoding="utf-8-sig") as fh:
             return [(r.get("Change", ""), r.get("Item", ""), r.get("Before", ""),
                      r.get("Now", "")) for r in csv.DictReader(fh)]
-    except OSError:
-        return []
+    except (OSError, csv.Error, UnicodeDecodeError):
+        return None
 
 
 def flooded_habitable(snap):
@@ -151,6 +164,8 @@ def summarise(name, folder, before, after, changes=()):
     row.update({"ND_Before": before.get("nd") or "", "TM11_Before": before.get("tm11") or "",
                 "LIJ_Before": before.get("lij", ""), "Compared_With": before.get("time") or "",
                 "Flooded_Habitable_Before": flooded_habitable(before)})
+    no_table = changes is None                     # WK.3: unknown, not "no change"
+    changes = changes or ()
     n_new = sum(1 for c in changes if c[0] == _NEW)
     n_gone = sum(1 for c in changes if c[0] == _GONE)
     n_cat = sum(1 for c in changes if c[0] in _CAT)
@@ -185,6 +200,14 @@ def summarise(name, folder, before, after, changes=()):
         why.append("{} structure(s) no longer flooded".format(n_gone))
     if n_cat:
         why.append("{} structure(s) with another habitability / category".format(n_cat))
+    if no_table:
+        for k in ("Newly_Flooded", "No_Longer_Flooded", "Category_Changes",
+                  "Roads_Newly_Overtopped", "Lifelines_Newly_Inundated"):
+            row[k] = "?"
+        why.append("changes table {} missing or unreadable - structure / road / lifeline "
+                   "changes NOT checked".format(HIS.CHANGES_FILE))
+        if row["Alert"] == ALERT_NONE:
+            row["Alert"] = ALERT_REVIEW
     row["Message"] = "; ".join(why) or "no change"
     return row
 
