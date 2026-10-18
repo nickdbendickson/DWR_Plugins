@@ -35,6 +35,19 @@ def settings_copies_are_identical():
 
 
 @register
+def ui_widgets_copies_are_identical():
+    """ui_widgets.py: the shared window widgets, one byte-identical copy per plugin (no plugin
+    imports another's), with SHARED_VERSION and only qgis.PyQt imports."""
+    texts = {p: open(os.path.join(REPO, p, "ui_widgets.py"), "rb").read()
+             for p in ("DamSafety_Runner", "DamSafety_Screening", "DamSafety_Hazard")}
+    assert len({hashlib.sha256(t).hexdigest() for t in texts.values()}) == 1, "ui_widgets.py copies differ"
+    t = texts["DamSafety_Runner"].decode("utf-8")
+    assert "SHARED_VERSION = " in t
+    assert "PyQt5" not in t and "PySide" not in t and "PyQt6" not in t
+    assert "DamSafety_" not in t.split('"""', 2)[2], "a plugin-specific import in the shared file"
+
+
+@register
 def settings_save_merges_another_plugins_rows_written_meanwhile():
     d = _tmp()
     try:

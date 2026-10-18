@@ -7,10 +7,11 @@ import numpy as np
 from qgis.core import (QgsProcessingException, QgsProcessingOutputFile,
                        QgsProcessingOutputFolder, QgsProcessingOutputString,
                        QgsProcessingParameterBoolean, QgsProcessingParameterEnum,
-                       QgsProcessingParameterExtent, QgsProcessingParameterRasterLayer)
+                       QgsProcessingParameterExtent, QgsProcessingParameterRasterLayer,
+                       QgsProcessingParameterString)
 
 from .algorithms_tools import _ToolBase
-from .core import benchmark, gdal_io, hecras, workflow
+from .core import benchmark, gdal_io, hecras, hecras_model, hecras_package, workflow
 
 STEPS = [(hecras.ras_interval_label(m), m) for m in hecras.RAS_INTERVALS_MIN]
 STEP_DEFAULT = [m for _, m in STEPS].index(5)
@@ -26,10 +27,18 @@ class HecRasExportAlgorithm(_ToolBase):
         return "hecrasexport"
 
     def displayName(self):
-        return "Export the breach to HEC-RAS (hydrograph and breach table)"
+        return "Export the breach to HEC-RAS (2D model package, hydrograph and breach table)"
 
     def shortHelpString(self):
-        return ("Reads a finished run's breach hydrograph and parameters from its dam folder "
+        return ("v3.10.16: builds a complete HEC-RAS 6.x 2D dam-breach model of a finished run "
+                "(reservoir storage area, the dam as an SA/2D connection with the breach, the "
+                "flooded valley as a 2D area, normal-depth outflow, the run's culverts and "
+                "bridges) in '<dam folder>/_breach_model/hecras/<DamID>_<date>/' with a .zip "
+                "of it to copy to a Windows PC with HEC-RAS 6.6, and WINDOWS_README.txt with "
+                "the steps left to do in HEC-RAS (terrain, mesh, run) and what to send back. "
+                "The model has NOT been opened in HEC-RAS by the plugin; with an output folder "
+                "chosen, the package goes in '<folder>/hecras'. "
+                "Also reads a finished run's breach hydrograph and parameters from its dam folder "
                 "and writes (1) the hydrograph as an unsteady-flow text block for a HEC-RAS "
                 "'.u##' file ('Flow Hydrograph= N', 10 values a line, 8-character fields) and "
                 "as a CSV, on the time step you choose (the peak is kept exactly), and (2) "
@@ -46,6 +55,16 @@ class HecRasExportAlgorithm(_ToolBase):
             "STEP", "Hydrograph time step (HEC-RAS data interval)", [s[0] for s in STEPS],
             defaultValue=STEP_DEFAULT))
         self._file("OUT_FOLDER", "Output folder (empty = <dam folder>/_hecras)", folder=True)
+        self.addParameter(QgsProcessingParameterBoolean(
+            "BUILD_MODEL", "Build the HEC-RAS 2D model package (needs the run's DEM and "
+            "Depth (Max).tif)", defaultValue=True))
+        self.addParameter(QgsProcessingParameterString(
+            "MODEL_CRS", "HEC-RAS model CRS (empty = the DEM's when in feet, else North Dakota "
+            "State Plane ft)", defaultValue="", optional=True))
+        self._num("DAM_LENGTH_FT", "Dam crest length, ft (empty = the run's, else dam.json)",
+                  optional=True, minimum=1.0)
+        self.addOutput(QgsProcessingOutputFolder("MODEL_FOLDER", "HEC-RAS model package folder"))
+        self.addOutput(QgsProcessingOutputFile("MODEL_ZIP", "HEC-RAS model package (.zip)"))
         self.addOutput(QgsProcessingOutputFile("HYDROGRAPH_TXT", "Hydrograph, .u## block"))
         self.addOutput(QgsProcessingOutputFile("HYDROGRAPH_CSV", "Hydrograph CSV"))
         self.addOutput(QgsProcessingOutputFile("BREACH_TABLE", "Breach parameters CSV"))
@@ -71,9 +90,40 @@ class HecRasExportAlgorithm(_ToolBase):
             feedback.reportError("Check: " + n, fatalError=False)
         feedback.reportError("Check: the breach values are the plugin's estimates; the center "
                              "station is blank. See the basis column.", fatalError=False)
-        return {"HYDROGRAPH_TXT": r["hydrograph_txt"], "HYDROGRAPH_CSV": r["hydrograph_csv"],
-                "BREACH_TABLE": r["table_csv"], "BREACH_TABLE_MD": r["table_md"],
-                "RESULT": msg}
+        res = {"HYDROGRAPH_TXT": r["hydrograph_txt"], "HYDROGRAPH_CSV": r["hydrograph_csv"],
+               "BREACH_TABLE": r["table_csv"], "BREACH_TABLE_MD": r["table_md"],
+               "MODEL_FOLDER": "", "MODEL_ZIP": ""}
+        build = (self.parameterAsBool(parameters, "BUILD_MODEL", context)
+                 if "BUILD_MODEL" in parameters else True)
+        if build:
+            crs = self._str(parameters, "MODEL_CRS", context) or None
+            opts = {}
+            if parameters.get("DAM_LENGTH_FT") not in (None, ""):
+                opts["dam_length_ft"] = self.parameterAsDouble(parameters, "DAM_LENGTH_FT",
+                                                               context)
+            try:
+                p = hecras_package.build_package(
+                    folder, out_root=os.path.join(out, "hecras") if out else None,
+                    dt_min=step[1], crs=crs, options=opts, log=feedback.pushInfo)
+            except (hecras_model.HecRasModelError, hecras.HecRasError, OSError, ValueError,
+                    ImportError, RuntimeError) as e:
+                feedback.reportError("HEC-RAS 2D model not built: {}".format(e),
+                                     fatalError=False)
+                msg += "; HEC-RAS 2D model not built ({})".format(e)
+            else:
+                res["MODEL_FOLDER"], res["MODEL_ZIP"] = p["folder"], p["zip"] or ""
+                pi = p["info"]
+                feedback.pushInfo("HEC-RAS 2D model: {} cells of {:g} {} in {}, dam line "
+                                  "{:,.0f} {}".format(pi["cells"], pi["cell"], pi["len_name"],
+                                                      pi["crs"], pi["dam_line"],
+                                                      pi["len_name"]))
+                for n in p["notes"]:
+                    feedback.reportError("Check: " + n, fatalError=False)
+                feedback.pushInfo("Copy {} to the Windows PC and follow {} inside it.".format(
+                    p["zip"] or p["folder"], hecras_package.README))
+                msg += "; HEC-RAS 2D model package {}".format(p["zip"] or p["folder"])
+        res["RESULT"] = msg
+        return res
 
 
 class HecRasImportAlgorithm(_ToolBase):
