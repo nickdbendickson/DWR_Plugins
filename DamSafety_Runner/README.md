@@ -259,6 +259,16 @@ unchanged.
   run log, the run report and the manifest say what was replaced and why. Also: the floodplain
   solver keyword (`acceleration` / `fv1`) is now written to the .par file and recorded in the
   settings.
+- **Reservoir bottom carved from the storage curve** (`RESERVOIR_CARVE`, Off by default; Auto /
+  On; advanced; v3.10.20, `docs/Reservoir_carve_from_storage.md`): for LiDAR that shows a water
+  surface instead of the reservoir bottom. The cells under the water sheet upstream of the dam
+  are lowered into a bowl so the DEM's volume at the top of dam matches the storage curve (within
+  2 %), never below the curve bottom, the shoreline unchanged, nothing downstream. The source DEM
+  is never written: the carved copy is `_breach_model/<dam>_dem_carved.tif` (plus the depth
+  raster and a PNG), the engines and the HEC-RAS terrain read it, and `run_report.json`
+  `reservoir_carve` records the footprint and the target vs carved curves. When the footprint
+  cannot hold the storage (the DEM reservoir is far smaller than the curve says), the report
+  says so: the dam data are then the thing to check.
 - **Buildings as obstructions** (`BUILDINGS`, off by default): polygon footprints in the structures
   layer (points are ignored and say so) are raised by `BUILDING_RAISE_FT` (default 10 ft, YOUR
   value) or get Manning's n `BUILDING_N` (default 0.15, YOUR value) before the run; the

@@ -2193,6 +2193,13 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     terrain_tif = os.path.join(out, "Terrain", terrain_name + ".tif")
     write_terrain(dem_path, terrain_tif, srs, tcell, tb_, zf / units.L, dem_nodata,
                   "ft" if not units.si else "metre")
+    # v3.10.20: the run carved the reservoir bottom from the storage curve (RESERVOIR_CARVE):
+    # the same depth raster lowers this terrain, so the model and the site checks below see it
+    from . import reservoir_carve as rcarve
+    carve_note = rcarve.hecras_terrain_note(report, model_dir, terrain_tif, units.L)
+    if carve_note:
+        notes.append(carve_note)
+        log(carve_note)
     # the terrain at a coarser cell for the layout (at most about 20 million cells), and at
     # its own cell around the dam for the weir profile
     scell = max(tcell, math.sqrt((tb_[2] - tb_[0]) * (tb_[3] - tb_[1]) / 20e6))

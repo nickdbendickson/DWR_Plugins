@@ -93,6 +93,11 @@ MAX_SIM_S = 336 * 3600.0   # longest simulation the automatic duration will ask 
 STATE_FILE = "state.json"
 
 
+def _carve_default():
+    from . import reservoir_carve
+    return reservoir_carve.env_mode()
+
+
 class RunSettings:
     def __init__(self, **kw):
         self.tier = TIER_LISFLOOD
@@ -203,6 +208,10 @@ class RunSettings:
         self.refine_near = False
         self.refine_dist_mi = 1.0
         self.refine_cell_m = 0.0
+        # v3.10.20: carve the reservoir bottom into the DEM from the storage curve where the
+        # LiDAR shows a water surface (core/reservoir_carve.py): "off" (default) | "auto" |
+        # "on"; NDBREACH_RESERVOIR_CARVE overrides the default
+        self.reservoir_carve = _carve_default()
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError("unknown setting {}".format(k))
@@ -249,6 +258,8 @@ class RunSettings:
                 d[k] = v is not None
             elif k in ("anuga_mesher", "anuga_gmsh") and v in ("default", None):
                 continue                 # default mesh: the report stays as before
+            elif k == "reservoir_carve" and v in ("off", None, ""):
+                continue                 # v3.10.20: off - the report stays as before
             else:
                 d[k] = v
         return d
@@ -777,6 +788,13 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             report["inflow_point"] = {"xy": list(inflow_xy), "how": "given"}
     log("Breach inflow at {:.1f}, {:.1f} ({})".format(inflow_xy[0], inflow_xy[1],
                                                       report["inflow_point"]["how"]))
+    # --- v3.10.20: reservoir bottom carved from the storage curve (opt-in) -----------
+    # the engines (model_dem: LISFLOOD-FP, ANUGA, the refine run) and the HEC-RAS terrain read
+    # the carved copy from here on; the source DEM is never written
+    from . import reservoir_carve as rcarve
+    terrain_src, raw_terrain = rcarve.run_hook(
+        st, dam, dam_xy, inflow_xy, terrain_src, raw_terrain, model_dir, report, warnings, log,
+        downstream=qa_ctx.get("downstream"), crs_wkt=report.get("work_crs"))
 
     # --- initial domain from a flow trace --------------------------------------
     progress(3, "tracing the flow path")
