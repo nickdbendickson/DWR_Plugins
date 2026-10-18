@@ -561,6 +561,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
               "run_started": datetime.datetime.now().isoformat(timespec="seconds"),
               "dam": brmod.dam_to_dict(dam), "dam_xy": list(dam_xy),
               "settings": st.as_dict(), "scenario": st.scenario,
+              # v3.10.16: what the HEC-RAS model builder (core/hecras_model) needs to put the
+              # run back in place: the model CRS and the DEM's elevation unit (m per unit)
+              "work_crs": _work_crs_text(writer, terrain_src),
+              "dem_z_to_m": _z_to_m_of(terrain_src),
               "policy": "North Dakota Dam Safety Standards Policy REG_05.2026, Section 5.1 "
                         "(breach analysis) and 5.4 (outputs)"}
     rs = _dem_resample_of(terrain_src)
@@ -742,8 +746,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                                  .format(dam.dam_id, why))
                 if crest is not None:
                     dam_xy = crest
-                    warnings.append("Dam point was not on the embankment; crest moved to the highest "
-                                    "ground within {:.0f} m.".format(search_rad))
+                    report["crest_xy"] = [float(crest[0]), float(crest[1])]   # v3.10.16
+                    warnings.append("Dam point was not on the embankment; crest moved to the "
+                                    "nearest ground at the top of dam within {:.0f} m.".format(
+                                        search_rad))
             report["inflow_point"] = {"xy": list(inflow_xy), "how": why}
         else:
             report["inflow_point"] = {"xy": list(inflow_xy), "how": "given"}
@@ -845,6 +851,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                             st.sim_time_hr, duration_s / 3600.0))
     if st.structures:
         report["structures"] = structmod.describe(st.structures)
+        # v3.10.16: the structures as the run used them (inverts after the LiDAR check, matched
+        # culverts added), for the HEC-RAS model builder
+        report["structures_used"] = [s.to_dict() for s in st.structures]
         json.dump([s.to_dict() for s in st.structures],
                   open(os.path.join(model_dir, "structures.json"), "w", encoding="utf-8"), indent=2)
 
@@ -987,10 +996,11 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         warnings += [n for n in lf_env.notes if n not in warnings]
         # a finished pass has run.max / run.maxVc / run.inittm. Copy them now so a
         # growing domain still leaves depth, velocity, and arrival rasters and polygons.
-        try:
-            _write_pass_products(out_folder, dem, lf_env, arrival_m, writer, it)
-        except Exception as _e:
-            log("Could not write pass {} products: {}".format(it, _e))
+        if st.write_final:
+            try:
+                _write_pass_products(out_folder, dem, lf_env, arrival_m, writer, it)
+            except Exception as _e:
+                log("Could not write pass {} products: {}".format(it, _e))
         nodata = ~dem.valid()
         touch_n = 0
         if nodata.any():
@@ -1544,8 +1554,8 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
                     dam.dam_id, why))
             if crest is not None:
                 dam_xy = crest
-                warnings.append("Dam point was not on the embankment; crest moved to the highest "
-                                "ground within {:.0f} m.".format(search_rad))
+                warnings.append("Dam point was not on the embankment; crest moved to the nearest "
+                                "ground at the top of dam within {:.0f} m.".format(search_rad))
     L = st.initial_length_mi * MILE
     W = st.half_width_mi * MILE
     half = L + W + 2 * st.planning_cell_m
@@ -1679,6 +1689,24 @@ def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, war
     return info
 
 
+def _work_crs_text(writer, terrain_src):
+    """v3.10.16: the run's model CRS as text (EPSG code or WKT), or None."""
+    for obj in (writer, terrain_src, getattr(terrain_src, "base", None)):
+        v = getattr(obj, "work_srs", None) if obj is not None else None
+        if v:
+            return str(v)
+    return None
+
+
+def _z_to_m_of(terrain_src):
+    """v3.10.16: metres per DEM elevation unit, or None when the terrain does not say."""
+    v = getattr(terrain_src, "z_to_m", None)
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, warnings, log):
     """find_inflow_point limited to the downstream side of the crest and outside the pool
     (core/terrain.downstream_direction, pool_mask). The pool needs terrain well past the
@@ -1695,12 +1723,9 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     try:
         crest_xy = None
         if pool_grid is not None:
-            z = local.masked()
-            X, Y = np.meshgrid(local.x_centers(), local.y_centers())
-            near = (np.hypot(X - dam_xy[0], Y - dam_xy[1]) <= max(rad, 400.0)) & np.isfinite(z)
-            if near.any():
-                k = np.nanargmax(np.where(near, z, -np.inf))
-                crest_xy = (float(X.ravel()[k]), float(Y.ravel()[k]))
+            # v3.10.16: the crest of this dam (ground at the top of dam), not the highest
+            # ground in the circle (a hill)
+            crest_xy = terrain.embankment_crest(local, dam_xy, h_m, top_m, max(rad, 400.0))[0]
         direction, how = terrain.downstream_direction(
             pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
             crest_xy=crest_xy)

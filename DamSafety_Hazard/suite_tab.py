@@ -111,10 +111,10 @@ class SuiteTabMixin(object):
                                                        "suite_record_btn")
 
     def _build_suite_group(self):
-        grp = QGroupBox("8. Dam suite - ND Dam Breach Runner / Screening (v2.10)")
+        grp = QGroupBox("Dam suite - DamSafety Runner / Screening tools for this dam")
         lay = QVBoxLayout()
         info = QLabel(
-            "Tools shared with ND Dam Breach Runner and ND Dam Breach Screening. Each opens its "
+            "Tools shared with DamSafety Runner and DamSafety Screening. Each opens its "
             "Processing dialog with this dam's folders filled in. Every threshold is a "
             "screening value YOU choose; none is a requirement of REG_05.2026 or TM 11.")
         info.setWordWrap(True)
@@ -132,7 +132,7 @@ class SuiteTabMixin(object):
         lay.addWidget(self.suite_gate_stop_check)
         grid = QGridLayout()
         for i, (attr, label, alg, tip) in enumerate(TOOLS):
-            btn = QPushButton(label)
+            btn = QPushButton(label.replace("...", "\u2026"))     # one ellipsis character
             btn.setToolTip(tip + "\n(Processing: ndhazard:{})".format(alg))
             btn.clicked.connect(lambda _c=False, a=alg: self._open_suite_tool(a))
             setattr(self, attr, btn)
@@ -141,7 +141,7 @@ class SuiteTabMixin(object):
         row = QHBoxLayout()
         self.suite_record_label = QLabel("dam.json: -")
         self.suite_record_label.setWordWrap(True)
-        self.suite_record_btn = QPushButton("dam.json...")
+        self.suite_record_btn = QPushButton("dam.json\u2026")
         self.suite_record_btn.setToolTip(
             "The dam's record shared by the three plugins: values, which tool set them, the "
             "status (screened / modelled / classified / reviewed), values the tools did not "

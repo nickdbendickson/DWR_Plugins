@@ -1,0 +1,12 @@
+[general]
+name=ND PMP Tool (prototype)
+qgisMinimumVersion=3.28
+description=INTERNAL PROTOTYPE port of the North Dakota statewide PMP Evaluation Tool (AWA, 2021) main PMP script to QGIS Processing. Not validated against ArcGIS.
+version=0.3.0
+author=internal prototype (port of Applied Weather Associates ND_PMP_Tool.py)
+email=none@example.invalid
+about=Computes gridded and basin-average PMP, temporal distributions and hyetograph CSVs from the ND PMP study geodatabases (requires GDAL >= 3.7). For internal use only; not for publication or redistribution without written permission from the ND State Water Commission and AWA (the study report is for the exclusive use of the SWC). Data not included: download pmp_evaluation_tool.zip from the ND DWR PMP study page.
+experimental=True
+deprecated=False
+hasProcessingProvider=yes
+tags=pmp,precipitation,hydrology,north dakota,dam safety
