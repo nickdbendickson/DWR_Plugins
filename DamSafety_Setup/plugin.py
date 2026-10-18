@@ -5,8 +5,10 @@ A chosen value is never locked. The last page opens DamSafety Runner with the
 answers filled in, and Advanced holds the grid, engine, scenario, run length
 and EAP switch.
 """
+import html
 import os
 
+from qgis.PyQt.QtCore import QTimer, Qt
 from qgis.PyQt.QtWidgets import (
     QAction, QWizard, QWizardPage, QFormLayout, QDialog, QLineEdit, QPushButton, QLabel,
     QVBoxLayout, QHBoxLayout, QFileDialog, QComboBox, QDoubleSpinBox, QCheckBox,
@@ -27,6 +29,64 @@ ND_COUNTIES = (
 )
 ALG = "ndbreach:rundam"
 from .runner_params import DEFAULT_MAX_EXTENT_MI  # noqa: E402  (no Qt in it)
+
+# page ids (the order addPage is called in)
+FOLDER_PAGE, DAM_PAGE, DEM_PAGE, RUN_PAGE = range(4)
+RED, GREEN, GREY = "#c62828", "#2e7d32", "#888888"
+
+
+def _reason_label():
+    """The red line under a control that says why Next is off ('' hides it)."""
+    lbl = QLabel("")
+    lbl.setWordWrap(True)
+    lbl.setStyleSheet("color: {};".format(RED))
+    lbl.setVisible(False)
+    return lbl
+
+
+def _set_reason(lbl, text):
+    lbl.setText(text or "")
+    lbl.setVisible(bool(text))
+
+
+def scan_marks_html(found):
+    """The folder scan as coloured marks: a green check for each layer found, a circle
+    for each missing one (red for the DWR dams, which Next needs; grey otherwise)."""
+    rows = []
+    for key, label in (("dwr", "DWR dams"), ("dam_lines", "Dam lines"),
+                       ("structures", "NSI structures"), ("roads", "Roads"), ("rail", "Rail")):
+        if key in (found or {}):
+            mark, color = "\u2713", GREEN
+        else:
+            mark, color = "\u25cb", RED if key == "dwr" else GREY
+        rows.append("<span style='color:{}'>{}</span> {}{}".format(
+            color, mark, html.escape(label), "" if key in (found or {}) else " (missing)"))
+    return "<br>".join(rows)
+
+
+def dam_problem(row, height, storage):
+    """Why the picked dam cannot go to the Runner, or '' (the Runner needs a height and a
+    storage above 0: the wizard used to hand over 0 ft / 0 ac-ft)."""
+    if not row or row.get("error"):
+        return "Pick a dam from the list (choose a county or type a name)."
+    if not height or height <= 0:
+        return "Height is 0 ft: enter the dam height."
+    if not storage or storage <= 0:
+        return "Max storage is 0 ac-ft: enter the storage."
+    return ""
+
+
+def dem_target(folder, dam_id, point, res_index):
+    """Where 'Download DEM' writes for this dam: (folder, file name). The name follows
+    runner_params.downloaded_dem: <DAM_ID>_10m_5070.tif, else dam_<lon>_<lat>_..."""
+    from .runner_params import dem_stem, DEM_SUFFIXES
+    suffix = DEM_SUFFIXES[1] if res_index == 1 else DEM_SUFFIXES[0]
+    stem = dem_stem(dam_id)
+    if not stem:
+        raw = (point or "").split("[")[0].strip()
+        if "," in raw:
+            stem = "dam_{}_{}".format(*[p.strip() for p in raw.split(",")[:2]])
+    return folder, (stem + suffix) if stem else "(pick a dam first)"
 
 
 class SetupPlugin(object):
@@ -121,6 +181,11 @@ class SetupWizard(QWizard):
         self.addPage(DemPage(self))
         self.addPage(RunPage(self))
 
+    def selected_dam(self):
+        """The dam picked on the dam page with the page's edits applied ({} when none):
+        the one place the DEM and Run pages read it from."""
+        return self.page(DAM_PAGE).selected() or {}
+
     def params(self):
         from .runner_params import build_params
         return build_params(self.answers())
@@ -140,13 +205,22 @@ class FolderPage(QWizardPage):
         browse = QPushButton("Browse")
         browse.clicked.connect(self._browse)
         self.path.editingFinished.connect(self._scan)
+        self.path.textChanged.connect(self._edited)
         row.addWidget(self.path)
         row.addWidget(browse)
         lay.addLayout(row)
+        self.reason = _reason_label()
+        lay.addWidget(self.reason)
         self.note = QLabel("Pick the suite data folder. Results do not go here.")
         self.note.setWordWrap(True)
         lay.addWidget(self.note)
         self.setLayout(lay)
+        self._scanned = None             # the folder the marks belong to
+        self._timer = QTimer(self)       # scan shortly after typing stops
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(600)
+        self._timer.timeout.connect(self._scan)
+        _set_reason(self.reason, self.problem())
 
     def _browse(self):
         folder = QFileDialog.getExistingDirectory(self, "Suite data folder", self.path.text())
@@ -155,31 +229,55 @@ class FolderPage(QWizardPage):
         self.path.setText(folder)
         self._scan()
 
+    def _edited(self, _text=""):
+        """Typing makes the last scan stale: Next goes off until this folder is scanned."""
+        self.wiz.found = {}
+        self._scanned = None
+        self._timer.start()
+        _set_reason(self.reason, self.problem())
+        self.completeChanged.emit()
+
     def _scan(self):
+        self._timer.stop()
         folder = self.path.text().strip()
         if not folder or not os.path.isdir(folder):
             self.wiz.found = {}
-            self.note.setText("That folder was not found. Browse to the suite data folder.")
+            self._scanned = None
+            self.note.setText("")
+            _set_reason(self.reason, self.problem())
+            self.completeChanged.emit()
             return
         from .suite_fill import scan
         from .damsuite.suite_config import set as save
         found, notes = scan(folder)
         self.wiz.found = found
-        save("data_folder", folder)
-        lines = []
-        for key, label in (("dwr", "DWR dams"), ("dam_lines", "Dam lines"),
-                           ("structures", "NSI structures"), ("roads", "Roads"), ("rail", "Rail")):
-            lines.append(("OK " if key in found else "Missing ") + label)
-        if "dwr" not in found:
-            lines.append("Next stays off until DWR dams are in this folder.")
-        self.note.setText("\n".join(lines))
+        self._scanned = folder
+        if found.get("dwr"):
+            save("data_folder", folder)  # only a folder that holds the dams
+        self.note.setTextFormat(Qt.RichText)
+        self.note.setText(scan_marks_html(found))
+        _set_reason(self.reason, self.problem())
+        self.completeChanged.emit()
+
+    def problem(self):
+        folder = self.path.text().strip()
+        if not folder:
+            return "Pick the suite data folder (Browse)."
+        if not os.path.isdir(folder):
+            return "That folder was not found: {}".format(folder)
+        if self._scanned != folder:
+            return "Checking the folder\u2026 (press Enter to check now)"
+        if not self.wiz.found.get("dwr"):
+            return "No DWR dams in this folder: choose the suite data folder that holds them."
+        return ""
+
+    def isComplete(self):
+        return not self.problem()
 
     def validatePage(self):
-        self._scan()
-        ok = bool(self.path.text().strip() and self.wiz.found.get("dwr"))
-        if not ok:
-            self.note.setText(self.note.text() + "\nChoose a suite data folder that contains the DWR dams.")
-        return ok
+        if self._scanned != self.path.text().strip():
+            self._scan()
+        return self.isComplete()
 
 
 class DamPage(QWizardPage):
@@ -198,11 +296,15 @@ class DamPage(QWizardPage):
         self.search.setPlaceholderText("Type a dam name, then press Enter")
         self.search.returnPressed.connect(self._find)
         self.combo = QComboBox()
+        self.combo.currentIndexChanged.connect(self._show)
+        self.count = QLabel("")
+        self.count.setStyleSheet("font-weight: bold;")
         lay.addWidget(QLabel("County"))
         lay.addWidget(self.county)
         lay.addWidget(QLabel("Dam name"))
         lay.addWidget(self.search)
         lay.addWidget(self.combo)
+        lay.addWidget(self.count)
         self.note = QLabel("Pick a county to list its dams, or type a name.")
         self.note.setWordWrap(True)
         lay.addWidget(self.note)
@@ -233,8 +335,12 @@ class DamPage(QWizardPage):
         form.addRow("NID", self.nid)
         form.addRow("Dam point", self.point)
         lay.addLayout(form)
+        self.reason = _reason_label()
+        lay.addWidget(self.reason)
         self.setLayout(lay)
         self.rows = []
+        for spin in (self.height, self.storage):
+            spin.valueChanged.connect(self._changed)
 
     def initializePage(self):
         self.combo.clear()
@@ -242,24 +348,18 @@ class DamPage(QWizardPage):
         self.note.setText("Pick a county to list its dams, or type a name.")
         self._find()
 
-    def _find(self):
-        self.combo.clear()
+    def _find(self, *_a):
         county = self.county.currentData() or ""
         self.rows = _dams(self.wiz.found.get("dwr"), self.search.text().strip(), county)
+        self.combo.blockSignals(True)
+        self.combo.clear()
         for row in self.rows:
             self.combo.addItem("{} ({})".format(row["name"], row.get("county") or county), row)
-        try:
-            self.combo.currentIndexChanged.disconnect(self._show)
-        except Exception:
-            pass
-        self.combo.currentIndexChanged.connect(self._show)
-        if not self.rows:
-            self.note.setText("No dam in {}.".format(county or "that search"))
-        else:
-            self.note.setText("{} dam(s) in {}.".format(len(self.rows), county or "the search"))
+        self.combo.blockSignals(False)
+        self.count.setText(match_count_text(self.rows, county, self.search.text().strip()))
         self._show()
 
-    def _show(self):
+    def _show(self, *_a):
         row = self.combo.currentData() or {}
         self.height.setValue(float(row.get("height") or 0))
         self.storage.setValue(float(row.get("storage") or 0))
@@ -270,6 +370,24 @@ class DamPage(QWizardPage):
         self.note.setText("{} | county {} | crest line {}".format(
             row.get("name") or "No dam", row.get("county") or "blank",
             "found" if row.get("from_line") or self.wiz.found.get("dam_lines") else "not found"))
+        self._changed()
+
+    def _changed(self, *_a):
+        _set_reason(self.reason, self.problem())
+        self.completeChanged.emit()
+
+    def problem(self):
+        return dam_problem(self.combo.currentData(), self.height.value(), self.storage.value())
+
+    def isComplete(self):
+        return not self.problem()
+
+    def selected(self):
+        """The picked dam with the edits of this page, or None."""
+        row = self.combo.currentData()
+        if not row or row.get("error"):
+            return None
+        return self._apply_edits()
 
     def _apply_edits(self):
         row = self.combo.currentData()
@@ -284,7 +402,7 @@ class DamPage(QWizardPage):
         return row
 
     def validatePage(self):
-        return self._apply_edits() is not None
+        return self.isComplete() and self._apply_edits() is not None
 
 
 class DemPage(QWizardPage):
@@ -316,8 +434,20 @@ class DemPage(QWizardPage):
         self.res.addItem("1 m", 1)
         download = QPushButton("Download DEM for this dam")
         download.clicked.connect(self._download)
+        self.save_to = QLabel("")
+        self.save_to.setWordWrap(True)
+        self.save_to.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        drow = QHBoxLayout()
+        drow.addWidget(download)
+        drow.addWidget(self.save_to, 1)
+        dwrap = QWidget()
+        dwrap.setLayout(drow)
+        self.res.currentIndexChanged.connect(self._show_target)
+        self.dem.textChanged.connect(self._changed)
+        self.reason = _reason_label()
         form.addRow("Local DEM", self.res)
-        form.addRow("", download)
+        form.addRow("", dwrap)
+        form.addRow("", self.reason)
         form.addRow("Elevation unit", self.zunit)
         form.addRow("Top of dam (ft)", self.top)
         form.addRow("Inflow drop (ft)", self.drop)
@@ -330,13 +460,39 @@ class DemPage(QWizardPage):
         self.setLayout(lay)
 
     def initializePage(self):
-        dam = self.wiz.page(1)._apply_edits() or {}
+        dam = self.wiz.selected_dam()
+        self._show_target()
+        self._changed()
         if dam.get("crest") and self.top.value() == 0:
             self.top.setValue(float(dam["crest"]))
         self.zunit.setCurrentIndex(1)
         self.note.setText("Dam {} | height {} ft | storage {} ac-ft | point {}".format(
             dam.get("name") or "none", dam.get("height") or "blank",
             dam.get("storage") or "blank", dam.get("point") or "blank"))
+
+    def _dem_folder(self):
+        # Never into the suite data folder (it may be the read-only ND_Dam_Suite_Pack).
+        from .damsuite.suite_config import safe_dams_folder
+        return os.path.join(safe_dams_folder(), "terrain")
+
+    def _show_target(self, *_a):
+        dam = self.wiz.selected_dam()
+        point = (dam.get("point") or "").split("[")[0].strip()
+        folder, name = dem_target(self._dem_folder(), dam.get("id"), point,
+                                  self.res.currentIndex())
+        self.save_to.setText("Saves to {}\nas {}".format(folder, name))
+        self.save_to.setToolTip(os.path.join(folder, name))
+
+    def _changed(self, *_a):
+        _set_reason(self.reason, self.problem())
+        self.completeChanged.emit()
+
+    def problem(self):
+        from .runner_params import dem_problem
+        return dem_problem(self.dem.text())
+
+    def isComplete(self):
+        return not self.problem()
 
     def _browse(self):
         path, _f = QFileDialog.getOpenFileName(self, "DEM", "", "Raster (*.tif *.tiff *.vrt)")
@@ -346,19 +502,18 @@ class DemPage(QWizardPage):
     def _download(self):
         import processing
         from qgis.core import QgsApplication
-        dam = self.wiz.page(1)._apply_edits() or {}
-        county = self.wiz.page(1).county.currentData() or dam.get("county") or ""
+        dam = self.wiz.selected_dam()
+        county = self.wiz.page(DAM_PAGE).county.currentData() or dam.get("county") or ""
         point = (dam.get("point") or "").split("[")[0].strip()
-        # Never into the suite data folder (it may be the read-only ND_Dam_Suite_Pack).
-        from .damsuite.suite_config import safe_dams_folder, dem_buffer_mi
-        out = os.path.join(safe_dams_folder(), "terrain")
+        from .damsuite.suite_config import dem_buffer_mi
+        out = self._dem_folder()
         names = list(ND_COUNTIES)
         params = {
             "SOURCE": 0,
             "RES": self.res.currentData(),
             "SCOPE": 0,
             "DAM_POINT": point,
-            "BUFFER_MI": dem_buffer_mi(self.wiz.page(3).max_extent.value()),   # half the max extent
+            "BUFFER_MI": dem_buffer_mi(self.wiz.page(RUN_PAGE).max_extent.value()),   # half the max extent
             "COUNTY": names.index(county) if county in names else 0,
             "OUT": out,
             "DAM_ID": str(dam.get("id") or ""),     # names the file <DAM_ID>_10m_5070.tif
@@ -374,9 +529,8 @@ class DemPage(QWizardPage):
             self.dem.setText(path)
 
     def validatePage(self):
-        from .runner_params import dem_problem
-        why = dem_problem(self.dem.text())
-        self.setSubTitle(why)                 # shown on the page; empty when the DEM is fine
+        why = self.problem()
+        _set_reason(self.reason, why)         # shown under the DEM; empty when it is fine
         return not why
 
 
@@ -400,9 +554,13 @@ class RunPage(QWizardPage):
                                    "domain at this size.")
         main.addRow("Max extent (largest domain side)", self.max_extent)
         lay.addLayout(main)
+        # Ticking the box makes its values editable. Unticked they are NOT reset: the values
+        # shown are the ones the Runner gets (as in the Runner's own dialog, where Advanced
+        # only folds the parameters away), and the summary above states them.
         box = QGroupBox("Advanced settings")
         box.setCheckable(True)
         box.setChecked(False)
+        self.advanced = box
         form = QFormLayout()
         self.cell = QDoubleSpinBox()
         self.cell.setRange(10, 500)
@@ -420,19 +578,29 @@ class RunPage(QWizardPage):
         box.setLayout(form)
         lay.addWidget(box)
         self.setLayout(lay)
+        for sig in (self.cell.valueChanged, self.hours.valueChanged, self.max_extent.valueChanged,
+                    self.engine.currentIndexChanged, self.eap.toggled, box.toggled):
+            sig.connect(self._summarise)
 
     def initializePage(self):
-        dam = self.wiz.page(1).combo.currentData() or {}
+        self._summarise()
+
+    def _summarise(self, *_a):
+        dam = self.wiz.selected_dam()
         self.summary.setText(
-            "{}\nBuilt-in engine, {:g} m grid, no EAP report, unless Advanced is opened.\n"
+            "{}\n{} engine, {:g} m grid, {:g} h run, {}, max extent {:g} mi{}.\n"
             "The runner dialog opens next and these values can still be changed.".format(
-                dam.get("name") or "No dam", self.cell.value()))
+                dam.get("name") or "No dam",
+                (self.engine.currentText() or "Built-in").split(" (")[0], self.cell.value(),
+                self.hours.value(), "EAP report" if self.eap.isChecked() else "no EAP report",
+                self.max_extent.value(),
+                "" if self.advanced.isChecked() else " (tick Advanced settings to change them)"))
 
     def validatePage(self):
-        dam = self.wiz.page(1).combo.currentData() or {}
-        dem = self.wiz.page(2)
+        dam = self.wiz.selected_dam()
+        dem = self.wiz.page(DEM_PAGE)
         self.wiz._answers = {
-            "folder": self.wiz.page(0).path.text().strip(),
+            "folder": self.wiz.page(FOLDER_PAGE).path.text().strip(),
             "dam_id": dam.get("id"), "dam_name": dam.get("name"),
             "point": dam.get("point"),
             "lines": self.wiz.found.get("dam_lines"),
@@ -447,7 +615,24 @@ class RunPage(QWizardPage):
         return True
 
 
-def _dams(uri, name="", county="", limit=400):
+DAM_LIMIT = 400
+
+
+def match_count_text(rows, county="", name="", limit=None):
+    """'12 dams match (Cass, "lake")' for the dam page; says when the list is cut off."""
+    limit = DAM_LIMIT if limit is None else limit
+    rows = [r for r in rows or [] if not r.get("error")]
+    where = ", ".join(x for x in (county, '"{}"'.format(name) if name else "") if x) or \
+        "all counties"
+    if not rows:
+        return "No dam matches ({}).".format(where)
+    n = len(rows)
+    return "{} dam{} match{} ({}){}".format(
+        n, "" if n == 1 else "s", "es" if n == 1 else "", where,
+        " - only the first {} are listed; narrow the search".format(limit) if n >= limit else "")
+
+
+def _dams(uri, name="", county="", limit=DAM_LIMIT):
     """Dams in one county. Read the GeoPackage directly so a QGIS filter cannot
     return an empty list, and do not scan every dam line before the list shows."""
     rows = []
@@ -524,7 +709,7 @@ def _dams(uri, name="", county="", limit=400):
         from qgis.core import QgsVectorLayer
         lyr = QgsVectorLayer(uri, "dwr", "ogr")
         if not lyr.isValid():
-            return [{"name": "Dam layer did not open", "id": "", "point": ""}]
+            return [{"name": "Dam layer did not open", "id": "", "point": "", "error": True}]
         want = (county or "").lower()
         needle = (name or "").lower()
         for feat in lyr.getFeatures():
@@ -560,7 +745,8 @@ def _dams(uri, name="", county="", limit=400):
             if len(rows) >= limit:
                 break
     except Exception as e:
-        return [{"name": "Could not read dams ({})".format(e), "id": "", "point": ""}]
+        return [{"name": "Could not read dams ({})".format(e), "id": "", "point": "",
+                 "error": True}]
     rows.sort(key=lambda r: r["name"].lower())
     return rows
 

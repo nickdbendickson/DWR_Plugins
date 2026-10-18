@@ -67,6 +67,8 @@ class NdDataUpdaterPlugin:
         self.actions = []
         self.timer = None
         self.merger = gdal_merger()
+        self._noticed = set()        # notices shown on the message bar this session
+        self._logged = set()
 
     # ------------------------------------------------------------------ setup
 
@@ -140,7 +142,23 @@ class NdDataUpdaterPlugin:
         return build_sources(config, merger=self.merger)
 
     def make_updater(self, http=None):
-        return core.Updater(self.settings.data_dir, self.enabled_sources(), http)
+        return core.Updater(self.data_dir(quiet=True), self.enabled_sources(), http)
+
+    def data_dir(self, quiet=False):
+        """The data folder (Settings.resolve). A guarded folder or old downloads that could be
+        moved to the suite folder are logged, and shown once per session unless quiet."""
+        folder, how, notice = self.settings.resolve()
+        if notice and notice not in self._noticed:
+            if notice not in self._logged:
+                self._logged.add(notice)
+                log(notice, Qgis.Warning if how != "legacy" else Qgis.Info)
+            if not quiet:
+                self._noticed.add(notice)
+                try:
+                    self.iface.messageBar().pushInfo(LOG_TAG, notice)
+                except Exception:                                # noqa: BLE001
+                    pass
+        return folder
 
     def is_running(self):
         return self.task is not None
@@ -166,10 +184,11 @@ class NdDataUpdaterPlugin:
                 bar.pushWarning(LOG_TAG, "No datasets are turned on. Choose some in "
                                          "Plugins > ND Data Updater > Settings and Status.")
             return
+        data_dir = self.data_dir(quiet=quiet)
         try:
-            os.makedirs(self.settings.data_dir, exist_ok=True)
+            os.makedirs(data_dir, exist_ok=True)
         except OSError as e:
-            bar.pushCritical(LOG_TAG, f"Can't use data folder {self.settings.data_dir}: {e}")
+            bar.pushCritical(LOG_TAG, f"Can't use data folder {data_dir}: {e}")
             return
         self.settings.last_auto_check = time.time()
         self.task_quiet = quiet
@@ -311,6 +330,7 @@ class NdDataUpdaterPlugin:
         self.show_settings()
 
     def show_settings(self):
+        self.data_dir()
         if self.dialog is None:
             self.dialog = SettingsDialog(self.settings, self, self.iface.mainWindow())
             self.dialog.finished.connect(self._dialog_closed)
