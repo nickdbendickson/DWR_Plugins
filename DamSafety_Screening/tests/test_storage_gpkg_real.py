@@ -99,13 +99,14 @@ def main():
         assert ds is not None and ds.GetLayerCount() == 1, "3_dams_storage.gpkg has no layer"
         rows = {f.GetField("dam_id"): f for f in ds.GetLayer(0)}
         assert set(rows) == {"SHALLOW", "DRY"}, list(rows)
-        assert rows["DRY"].GetField("stor_conf") == "inventory", rows["DRY"].GetField("stor_conf")
+        assert rows["DRY"].GetField("stor_conf") == "low", rows["DRY"].GetField("stor_conf")
         s = rows["SHALLOW"]
-        assert s.GetField("stor_conf") == "inventory", (s.GetField("stor_conf"), s.items())
+        assert s.GetField("stor_conf") == "low", (s.GetField("stor_conf"), s.items())
         assert "not the reservoir" in (s.GetField("stor_notes") or ""), s.GetField("stor_notes")
         assert "no waterbody" in (rows["DRY"].GetField("stor_notes") or "")
         assert abs(s.GetField("stor_used_m3") / AF - 1615.5) < 0.5, s.GetField("stor_used_m3")
-        print("ok   gpkg has its layer; dry dam and shallow dish both use the inventory curve")
+        print("ok   gpkg has its layer; dry dam and shallow dish both use the assumed "
+              "inventory curve (M19: low confidence)")
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

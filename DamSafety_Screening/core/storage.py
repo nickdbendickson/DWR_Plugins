@@ -217,6 +217,21 @@ def estimate_storage(dem, water_mask, cell, dam_xy_idx=None, crest_radius_m=50.0
                                     shape_factor)
     curve_above, spill, leak_note = above_pool_curve_guarded(
         dem, water_mask, pool, crest, cell, steps)
+    if spill is not None and known_height_m and crest > spill + 0.01 and len(curve_above) >= 2:
+        # restored from the ND copy (0.19.0, nd_dam_screening/core/storage.py): a dam of known
+        # height holds water to its crest; above the spill level the fill has left the reservoir,
+        # so the curve goes on from the spill to the crest with the reservoir area at the spill
+        # level. Without this the stage-storage curve truncates at the spill, understating storage.
+        (e1, v1), (e0, v0) = curve_above[-1], curve_above[-2]
+        a_spill = (v1 - v0) / (e1 - e0) if e1 > e0 else 0.0
+        ext = np.linspace(spill, crest, steps + 1)[1:]
+        curve_above = list(curve_above) + [(float(e), v1 + a_spill * float(e - spill)) for e in ext]
+        leak_note = leak_note.replace("storage held at the spill level",
+                                      "storage leak at the spill level") + \
+            ("; above it the curve goes on to the crest {:.1f} ft with the reservoir area at the "
+             "spill level ({:,.1f} ac)".format(crest / 0.3048, a_spill / 4046.8564224))
+    elif spill is not None:                  # water runs out above this level; crest held at spill
+        crest = min(crest, spill)
     if leak_note:
         notes.append(leak_note)
         conf_leak = True
