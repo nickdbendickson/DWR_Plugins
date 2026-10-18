@@ -67,6 +67,18 @@ def _files(folder):
     return sorted(out)
 
 
+def _time_step_words(info):
+    """v3.10.17: the plan's time step in words (adaptive since 3.10.16 / #72)."""
+    ts = info.get("time_step") or {}
+    if not ts.get("adaptive"):
+        return "a fixed {} time step".format(info["comp_interval"])
+    return ("an adjustable time step: base {}, Courant {:g} to {:g}, halved up to {} times and "
+            "doubled up to {} times".format(info["comp_interval"], float(ts.get("min") or 0),
+                                            float(ts.get("max") or 0),
+                                            int(ts.get("max_halving") or 0),
+                                            int(ts.get("max_doubling") or 0)))
+
+
 def windows_readme(m, info, notes, version, run_tool):
     """The plain-English steps (CRLF, so Notepad shows the lines)."""
     u = info["len_name"]
@@ -142,9 +154,9 @@ def windows_readme(m, info, notes, version, run_tool):
         "- Mesh errors (cells with too many faces, points outside the area): in RAS Mapper move",
         "  or delete the reported points, or regenerate the points at a different cell size,",
         "  then Compute Property Tables again.",
-        "- The run is very slow: the time step is {} (fixed). In the plan's Computation Options".format(
-            info["comp_interval"]),
-        "  you can switch to an adjustable time step based on the Courant number.",
+        "- The run is very slow or unstable: the plan uses {}. See the plan's".format(
+            _time_step_words(info)),
+        "  Computation Options > Time step (adjustable, based on the Courant number).",
         "- Anything else: stop and send back what you have (step 8).",
         "",
         "NOT VERIFIED YET",
@@ -154,6 +166,7 @@ def windows_readme(m, info, notes, version, run_tool):
         "- DEM edits the Runner made (channels, culvert burns, buildings) are not in the terrain.",
         "- The vertical datum is the DEM's own (for 3DEP / ND LiDAR: NAVD88); the top of dam",
         "  must be in that datum.",
+        "- " + hm.BREACH_SHAPE_NOTE,
         "",
     ]
     if notes:
@@ -203,6 +216,11 @@ def build_package(dam_folder, out_root=None, dt_min=hecras.DEFAULT_STEP_MIN, crs
            "crs": r["info"]["crs"], "units": r["info"]["units"],
            "cells": r["info"]["cells"], "cell": r["info"]["cell"],
            "dam_line": r["info"]["dam_line"], "notes": r["notes"],
+           # v3.10.17: site checks, simulation window and the breach-shape caveat
+           "site_checks": r["info"].get("site"), "sim_hours": r["info"]["sim_hours"],
+           "sim_how": r["info"].get("sim_how"), "dam_line_how": r["info"].get("dam_line_how"),
+           "time_step": r["info"].get("time_step"),
+           "breach_shape_note": hm.BREACH_SHAPE_NOTE,
            "files": [{"path": p, "bytes": os.path.getsize(os.path.join(folder, p)),
                       "sha256": _sha256(os.path.join(folder, p))} for p in files]}
     with open(os.path.join(folder, MANIFEST), "w", encoding="utf-8") as f:
