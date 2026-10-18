@@ -261,14 +261,30 @@ def streambed_inflow(grid, crest_xy, dam_height_m, top_m, radius_m=150.0):
     drop_ft = pick[0] / 0.3048
     how = "first streambed cell at least half the dam height below the crest" if best else (
         "lowest streambed cell on the downstream trace")
-    return (pick[2], pick[3]), ("{}; {:.0f} m downstream, {:.1f} ft below the crest"
+    # v3.10.16: top_m is the top of dam (place_from_crest), so the drop is below the top of dam
+    return (pick[2], pick[3]), ("{}; {:.0f} m downstream, {:.1f} ft below the top of dam"
                                  .format(how, pick[1], drop_ft))
 
 
-def place_from_crest(grid, dam_xy, dam_height_m, top_m, radius_m=400.0):
-    """A label point is not the embankment. Use the highest ground within radius_m
-    as the crest, then the nearest toe at least half the dam height below that crest.
-    Returns (inflow_xy, crest_xy, note) or (None, crest_xy or None, reason)."""
+CREST_BAND_FT = 3.0     # v3.10.16: the crest is ground within this (or 10% of the dam height) of
+                        # the top of dam; higher ground nearby is a hill, not the embankment
+
+
+def crest_band_m(dam_height_m):
+    """Half-width (m) of the elevation band around the top of dam that counts as the crest."""
+    return max(CREST_BAND_FT * 0.3048, 0.1 * float(dam_height_m or 0.0))
+
+
+def embankment_crest(grid, dam_xy, dam_height_m, top_m, radius_m=400.0):
+    """v3.10.16: the crest of THIS dam near a label point.
+
+    The ground within `crest_band_m` of the top of dam is the embankment crest: the given point
+    is kept when it is on it, else the nearest such cell is the crest. Without such ground, the
+    highest ground NOT above the band. Ground well above the top of dam (a hill within the
+    search radius) is never the crest: before 3.10.16 the highest ground in the circle was,
+    and the breach inflow was put on a hillside (DWR-3161: a 1937.8 ft hill 400 m away from a
+    point on a 1844.4 ft dam).
+    Returns (crest_xy, crest_z_m, note) or (None, None, reason)."""
     xs = grid.x_centers()
     ys = grid.y_centers()
     X, Y = np.meshgrid(xs, ys)
@@ -277,29 +293,66 @@ def place_from_crest(grid, dam_xy, dam_height_m, top_m, radius_m=400.0):
     near = (d <= radius_m) & np.isfinite(z)
     if not near.any():
         return None, None, "no DEM within {:.0f} m of the dam point".format(radius_m)
-    rr, cc = np.unravel_index(np.nanargmax(np.where(near, z, -np.inf)), z.shape)
-    crest = (float(X[rr, cc]), float(Y[rr, cc]))
+    band = crest_band_m(dam_height_m)
+    on = near & (np.abs(z - top_m) <= band)
+    if on.any():
+        dd = np.where(on, d, np.inf)
+        rr, cc = np.unravel_index(int(np.argmin(dd)), dd.shape)
+        if dd[rr, cc] <= max(grid.dx, 1e-9) * 1.5:
+            return (float(dam_xy[0]), float(dam_xy[1])), float(z[rr, cc]), \
+                "the dam point is on the crest"
+        return (float(X[rr, cc]), float(Y[rr, cc])), float(z[rr, cc]), \
+            "nearest ground within {:.1f} ft of the top of dam".format(band / 0.3048)
+    low = near & (z <= top_m + band)
+    if not low.any():
+        return None, None, ("all ground within {:.0f} m of the dam point is more than {:.1f} ft "
+                            "above the top of dam: the point is not at this dam (or the top of "
+                            "dam is in another datum)".format(radius_m, band / 0.3048))
+    k = np.lexsort((d.ravel(), -np.where(low, z, -np.inf).ravel()))[0]
+    rr, cc = np.unravel_index(int(k), z.shape)
+    return (float(X[rr, cc]), float(Y[rr, cc])), float(z[rr, cc]), \
+        "highest ground not above the top of dam (no ground within {:.1f} ft of it)".format(
+            band / 0.3048)
+
+
+def place_from_crest(grid, dam_xy, dam_height_m, top_m, radius_m=400.0):
+    """A label point is not always the embankment. Find the crest of this dam
+    (`embankment_crest`: ground at the top of dam, never a higher hill), then the nearest toe
+    at least half the dam height below the TOP OF DAM.
+    Returns (inflow_xy, crest_xy, note) or (None, crest_xy or None, reason)."""
+    crest, crest_z, cnote = embankment_crest(grid, dam_xy, dam_height_m, top_m, radius_m)
+    if crest is None:
+        return None, None, cnote
+    xs = grid.x_centers()
+    ys = grid.y_centers()
+    X, Y = np.meshgrid(xs, ys)
+    z = grid.masked()
     moved = math.hypot(crest[0] - dam_xy[0], crest[1] - dam_xy[1])
-    crest_z = float(z[rr, cc])
-    inflow, why = streambed_inflow(grid, crest, dam_height_m, crest_z, radius_m)
+    inflow, why = streambed_inflow(grid, crest, dam_height_m, top_m, radius_m)
+    if inflow is not None:
+        r, c = grid.rc(*inflow)
+        if not (grid.inside(r, c) and np.isfinite(z[r, c]) and z[r, c] < top_m):
+            inflow, why = None, "the downstream trace did not go below the top of dam"
     if inflow is None:
-        inflow, why = find_inflow_point(grid, crest, dam_height_m, crest_z, radius_m)
+        inflow, why = find_inflow_point(grid, crest, dam_height_m, top_m, radius_m)
     if inflow is None:
         # Half the height is the normal toe. A label point can miss it by a foot on a
         # coarse DEM, so the fallback accepts 8 ft or 40 percent of the height.
-        need = min(crest_z - 8.0 * 0.3048, crest_z - 0.4 * dam_height_m)
+        need = min(top_m - 8.0 * 0.3048, top_m - 0.4 * dam_height_m)
         d2 = np.hypot(X - crest[0], Y - crest[1])
         sel = (d2 <= max(radius_m, 800.0)) & np.isfinite(z) & (z <= need)
         if not sel.any():
             return None, crest, why
         dd = np.where(sel, d2, np.inf)
         r, c = np.unravel_index(np.argmin(dd), dd.shape)
-        drop = (crest_z - float(z[r, c])) / 0.3048
+        drop = (top_m - float(z[r, c])) / 0.3048
         inflow = (float(X[r, c]), float(Y[r, c]))
-        why = ("toe is {:.0f} m from the moved crest, {:.1f} ft below it "
+        why = ("toe is {:.0f} m from the crest, {:.1f} ft below the top of dam "
                "(half-height search missed)".format(d2[r, c], drop))
-    return inflow, crest, ("crest moved {:.0f} m from the given point to the highest ground; {}"
-                           .format(moved, why))
+    if moved < 1e-6:
+        return inflow, None, "{}; {}".format(cnote, why)
+    return inflow, crest, ("crest moved {:.0f} m from the given point ({}); {}"
+                           .format(moved, cnote, why))
 
 
 def flow_direction(path):
