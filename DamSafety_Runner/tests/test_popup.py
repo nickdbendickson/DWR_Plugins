@@ -358,6 +358,29 @@ def qt_fakes():
 
 
 @test
+def popup_rundam_cell_from_the_settings_file_else_project_state_else_10():
+    from nd_breach_runner.damsuite import settings as DS
+    with Tmp() as d, qt_fakes() as q:
+        sf = os.path.join(d, "damsuite_settings.csv")
+        st = DS.Settings()
+        st.set("ndbreach", "rundam", "CELL", 5)
+        st.save(sf)
+        DS.set_current_path(sf, remember=False)
+        try:
+            dlg = q.dialog.NDBreachRunnerDialog()
+            assert dlg._open_tool("rundam") and q.proc.DIALOGS[-1][1]["CELL"] == 5.0
+            q.project.entries[("NDBreachRunner", "state")] = json.dumps({"grid_m": 20.0})
+            dlg = q.dialog.NDBreachRunnerDialog()
+            assert dlg._open_tool("rundam") and q.proc.DIALOGS[-1][1]["CELL"] == 20.0
+            DS.set_current_path("", remember=False)
+            q.project.entries.clear()
+            dlg = q.dialog.NDBreachRunnerDialog()
+            assert dlg._open_tool("rundam") and q.proc.DIALOGS[-1][1]["CELL"] == 10.0
+        finally:
+            DS.set_current_path("", remember=False)
+
+
+@test
 def popup_window_shows_the_dam_and_opens_tools():
     from nd_breach_runner import popup_logic as pl
     from nd_breach_runner.core import workflow as wf

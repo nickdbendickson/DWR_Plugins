@@ -700,7 +700,14 @@ class NDBreachRunnerDialog(QDialog):
             except Exception:                                    # noqa
                 sf = ""
         self.settings_file_edit.setText(sf)
-        self.grid_m.setValue(float(s.get("grid_m", pl.DEFAULT_SETTINGS["grid_m"])))
+        cell = s.get("grid_m")
+        if cell is None and sf:
+            try:
+                from .damsuite import settings as DS
+                cell = DS.Settings.load(sf).get(pl.PLUGIN_KEY, "rundam", "CELL")
+            except Exception:                                    # noqa
+                cell = None
+        self.grid_m.setValue(float(cell if cell is not None else pl.DEFAULT_SETTINGS["grid_m"]))
         self.simh.setValue(float(s.get("simh", pl.DEFAULT_SETTINGS["simh"])))
         self.simmax.setValue(float(s.get("simmax", pl.DEFAULT_SETTINGS["simmax"])))
         self.force_anuga.setChecked(bool(s.get("force_anuga", False)))
@@ -716,6 +723,7 @@ class NDBreachRunnerDialog(QDialog):
 
     def _load_state(self):
         s = dict(pl.DEFAULT_SETTINGS)
+        s.pop("grid_m")                  # unset: _apply takes the settings file's CELL, else 10
         try:
             from qgis.core import QgsProject
             text, ok = QgsProject.instance().readEntry(SCOPE, ENTRY, "")
