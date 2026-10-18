@@ -80,7 +80,9 @@ WITH_DAM_ID = frozenset({"products", "submittal"})
 WITH_DEM = frozenset({"conditiondem", "animation"})
 
 DEFAULT_SETTINGS = {"dams_folder": "", "dam_id": "", "dem": "", "settings_file": "",
-                    "grid_m": 10.0, "simh": 12.0, "simmax": 96.0, "force_anuga": False, "length_mi": 4.0, "half_width_mi": 1.0}
+                    "grid_m": 10.0, "simh": 12.0, "simmax": 96.0, "force_anuga": False, "length_mi": 4.0, "half_width_mi": 1.0,
+                    "reservoir_carve": "off"}
+CARVE_CHOICES = ("off", "auto", "on")   # core/reservoir_carve.MODES, the RESERVOIR_CARVE enum
 PLUGIN_KEY = "ndbreach"                 # the suite settings file key (damsuite.versions)
 TAB_ORDER = tuple(t for t, _tools in TABS)
 
@@ -528,6 +530,9 @@ def defaults(alg, dams_folder, dam_id, settings=None):
         if S.get("force_anuga"):
             p["FORCE_ANUGA"] = True
             p["TIER"] = 1
+        carve = str(S.get("reservoir_carve") or "off").strip().lower()
+        if carve in CARVE_CHOICES and carve != "off":                    # v3.10.19
+            p["RESERVOIR_CARVE"] = CARVE_CHOICES.index(carve)
     return p
 
 

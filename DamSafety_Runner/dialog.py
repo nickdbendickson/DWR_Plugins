@@ -188,6 +188,15 @@ class NDBreachRunnerDialog(QDialog):
         for sp in (self.grid_m, self.simh, self.simmax):
             sp.valueChanged.connect(self._changed)
         self.force_anuga.toggled.connect(self._changed)
+        self.carve_combo = QComboBox()                       # v3.10.19
+        for key, label in zip(pl.CARVE_CHOICES, ("Off", "Auto", "On")):
+            self.carve_combo.addItem(label, key)
+        self.carve_combo.setToolTip(
+            "Reservoir bottom carved into a copy of the DEM from the dam's storage curve, for "
+            "LiDAR that shows a water surface instead of the reservoir bottom. Off: the DEM as it "
+            "is. Auto: only when the DEM's pool holds far less than the storage curve. The "
+            "source DEM is never changed.")
+        self.carve_combo.currentIndexChanged.connect(self._changed)
 
         run_row = QHBoxLayout()
         self.run_dam_btn = QPushButton("▶  Run this dam")
@@ -222,6 +231,8 @@ class NDBreachRunnerDialog(QDialog):
         grid2.addWidget(QLabel("Longest simulated time (h):"), 1, 0)
         grid2.addWidget(self.simmax, 1, 1)
         grid2.addWidget(self.force_anuga, 1, 2, 1, 2)
+        grid2.addWidget(QLabel("Reservoir carve:"), 2, 0)
+        grid2.addWidget(self.carve_combo, 2, 1)
         grid2.setColumnStretch(4, 1)
         self.adv_section = Collapsible("Advanced", adv)
         lay.addWidget(self.adv_section)
@@ -269,6 +280,9 @@ class NDBreachRunnerDialog(QDialog):
                  "up to {:g} h".format(self.simmax.value())]
         if self.force_anuga.isChecked():
             parts.append("Force ANUGA")
+        carve = self.carve_combo.currentData() if hasattr(self, "carve_combo") else None
+        if carve and carve != "off":
+            parts.append("reservoir carve " + str(carve))
         self.adv_section.set_title("Advanced  ·  " + " · ".join(parts))
 
     def _open_settings(self):
@@ -681,12 +695,16 @@ class NDBreachRunnerDialog(QDialog):
 
     # ---------------------------------------------------------------- settings --
     def settings(self):
-        return {"dams_folder": self.dams_edit.text().strip(), "dam_id": self.dam_edit.text().strip(),
-                "dem": self.dem_combo.currentData() or "",
-                "settings_file": self.settings_file_edit.text().strip(),
-                "grid_m": float(self.grid_m.value()), "simh": float(self.simh.value()),
-                "simmax": float(self.simmax.value()),
-                "force_anuga": bool(self.force_anuga.isChecked())}
+        out = {"dams_folder": self.dams_edit.text().strip(), "dam_id": self.dam_edit.text().strip(),
+               "dem": self.dem_combo.currentData() or "",
+               "settings_file": self.settings_file_edit.text().strip(),
+               "grid_m": float(self.grid_m.value()), "simh": float(self.simh.value()),
+               "simmax": float(self.simmax.value()),
+               "force_anuga": bool(self.force_anuga.isChecked())}
+        carve = self.carve_combo.currentData() or "off"
+        if carve != "off":                  # Off (the default) leaves the saved state as before
+            out["reservoir_carve"] = carve
+        return out
 
     def _apply(self, s):
         self.dams_edit.setText(s.get("dams_folder", ""))
@@ -711,6 +729,9 @@ class NDBreachRunnerDialog(QDialog):
         self.simh.setValue(float(s.get("simh", pl.DEFAULT_SETTINGS["simh"])))
         self.simmax.setValue(float(s.get("simmax", pl.DEFAULT_SETTINGS["simmax"])))
         self.force_anuga.setChecked(bool(s.get("force_anuga", False)))
+        carve = str(s.get("reservoir_carve") or "off").lower()
+        self.carve_combo.setCurrentIndex(pl.CARVE_CHOICES.index(carve)
+                                         if carve in pl.CARVE_CHOICES else 0)
 
     def _save_state(self):
         if self._loading:
