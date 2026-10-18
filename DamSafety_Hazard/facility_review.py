@@ -660,8 +660,8 @@ def _motorists(rec, aadt, occupancy, speed_mph):
     if not vehicle_curve_available() or not aadt or rec.get("paved") == "No" or \
             rec.get("vehicle_zone") not in (CLASS_HIGH, CLASS_JUDGMENT):
         return None
-    vehicles = aadt / 24.0 * (float(rec.get("length_ft") or 0.0) / 5280.0) / max(speed_mph, 1.0)
-    return vehicles * occupancy
+    return LN.motorists(aadt, float(rec.get("length_ft") or 0.0), speed_mph,
+                        occupancy)                   # LN.1: the shared formula
 
 
 def _road_with_aadt(rec, aadt, dec, occupancy, speed_mph):

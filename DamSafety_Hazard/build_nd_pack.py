@@ -694,7 +694,8 @@ def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None):
         raise
     except BuildError as e:
         ctx.log("  object ids not listed ({}) - reading pages instead".format(e))
-        return _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid)
+        return _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid,
+                                   edit=(info.get("editingInfo") or {}).get("lastEditDate"))
     done_ids = _resume_ids(ctx, ids)
     ctx.log("  {:,} features".format(len(ids)))
     if not ids:
@@ -724,7 +725,7 @@ def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None):
             min(len(ids), finished[0]), len(ids)))
     _pool(ctx, ctx.workers, [(_arcgis_chunk_job, (url, ch, out_fields, precision, health))
                              for ch in chunks], got)
-    n = ctx.writer._cur["n"]
+    n = ctx.writer.count
     note = ""
     if health.down():
         raise BuildError("the service stopped answering ({} requests failed in a row) - "
@@ -743,9 +744,47 @@ def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None):
     return note
 
 
-def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid):
+def _page_anchor(url, bbox, oid, edit=None):
+    """BP.1: what the paged service holds now - {"count", "max_oid", "edit"}
+    (the parts it answers), or None when not even the count can be read."""
+    try:
+        d = http_json(url.rstrip("/") + "/query", dict(_envelope(bbox), where="1=1",
+                      returnCountOnly="true", f="json"), post=True, retries=1,
+                      what="feature count")
+        a = {"count": int(d["count"])}
+    except BuildCancelled:
+        raise
+    except Exception:                                  # noqa: BLE001 - best effort
+        return None
+    if oid:
+        try:
+            d = http_json(url.rstrip("/") + "/query", dict(_envelope(bbox), where="1=1",
+                          outStatistics=json.dumps([{"statisticType": "max",
+                                                     "onStatisticField": oid,
+                                                     "outStatisticFieldName": "mx"}]),
+                          f="json"), post=True, retries=1, what="last object id")
+            attrs = (d.get("features") or [{}])[0].get("attributes") or {}
+            mx = next((v for k, v in attrs.items() if k.lower() == "mx"), None)
+            if mx is not None:
+                a["max_oid"] = mx
+        except BuildCancelled:
+            raise
+        except Exception:                              # noqa: BLE001
+            pass
+    if edit is not None:
+        a["edit"] = edit
+    return a
+
+
+def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, edit=None):
     offset, page = 0, 0
     size = max(1, min(2000, mrc))
+    # BP.1: pages are offsets - kept pages are only valid while the service holds
+    # the same features. Its count (+ last object id / edit date) is stored with
+    # the pages; a change on resume discards them, an unknown state = PARTIAL.
+    akey = "page:{}:anchor".format(size)
+    now = _page_anchor(url, bbox, oid, edit)
+    resume_note = ""
     # v2.8.0: a page is a chunk too (key = offset and size; payload = how many
     # features it returned and whether more follow)
     kept = ctx.writer.chunks()
@@ -753,17 +792,34 @@ def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid):
     if stale:
         ctx.writer.drop_chunks(stale)
         kept = ctx.writer.chunks()
-    if kept:
-        ctx.log("  resuming: {} page(s) already stored".format(len(kept)))
+    pages = [k for k in kept if k != akey]
+    if pages:
+        old = _unpack_json(kept[akey]) if kept.get(akey) else None
+        if now is None or not isinstance(old, dict):
+            resume_note = ("kept pages could not be checked against the service (feature "
+                           "count {}) - features may be missing or doubled; rebuild with "
+                           "--refresh".format("not answered" if now is None else
+                                              "not recorded by the earlier run"))
+            ctx.log("  WARNING: " + resume_note)
+            ctx.status = STATUS_PARTIAL
+        elif any(old.get(k) != now.get(k) for k in now if k in old):
+            ctx.log("  the service changed since the pages were stored ({} -> {}) - "
+                    "starting the pages over".format(old, now))
+            ctx.writer.restart_stage()
+            kept, pages = {}, []
+    if not pages and now is not None:
+        ctx.writer.add([], uid, chunk=akey, payload=_pack_json(now))
+    if pages:
+        ctx.log("  resuming: {} page(s) already stored".format(len(pages)))
     while True:
         key = "page:{}:{}".format(size, offset)
         meta = _unpack_json(kept[key]) if kept.get(key) else None
         if isinstance(meta, dict) and isinstance(meta.get("n"), int):
             nfe, exceeded = meta["n"], bool(meta.get("exceeded"))
             page += 1
-            ctx.sub(min(95.0, page), "{:,} features".format(ctx.writer._cur["n"]))
+            ctx.sub(min(95.0, page), "{:,} features".format(ctx.writer.count))
             if not nfe or (nfe < size and not exceeded):
-                return ""
+                return resume_note
             offset += nfe
             continue
         params = dict(_envelope(bbox), where="1=1", outFields=out_fields, outSR="4326",
@@ -779,12 +835,12 @@ def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid):
         added = ctx.writer.add(feats, uid, chunk=key,
                                payload=_pack_json({"n": len(feats), "exceeded": exceeded}))
         page += 1
-        ctx.sub(min(95.0, page), "{:,} features".format(ctx.writer._cur["n"]))
+        ctx.sub(min(95.0, page), "{:,} features".format(ctx.writer.count))
         if not feats or (len(feats) < size and not exceeded):
-            return ""
+            return resume_note
         if added == 0:
             return "the service repeats the same page (no paging) - {:,} kept".format(
-                ctx.writer._cur["n"])
+                ctx.writer.count)
         offset += len(feats)
 
 
@@ -833,7 +889,7 @@ def fetch_nsi(ctx, bbox):
             ctx.writer.add(res, uid, chunk=_tile_key(args[0]))
         done[0] += 1
         ctx.sub(100.0 * done[0] / len(tiles), "{} of {} tiles, {:,} structures".format(
-            done[0], len(tiles), ctx.writer._cur["n"]))
+            done[0], len(tiles), ctx.writer.count))
     _pool(ctx, ctx.workers, [(_nsi_tile, (t,)) for t, k in zip(tiles, keys)
                              if k not in have], got)
     if failed:
@@ -889,7 +945,7 @@ def fetch_osm(ctx, bbox, make_query, parse):
             ctx.writer.add(res, uid, chunk=_tile_key(args[2]))
         done[0] += 1
         ctx.sub(100.0 * done[0] / len(tiles), "{} of {} areas, {:,} features".format(
-            done[0], len(tiles), ctx.writer._cur["n"]))
+            done[0], len(tiles), ctx.writer.count))
     _pool(ctx, min(ctx.workers, C.OVERPASS_WORKERS),
           [(_osm_tile, (make_query, parse, t)) for t, k in zip(tiles, keys)
            if k not in have], got)
@@ -1124,7 +1180,16 @@ def _run_one(ctx, name, label, kind, spec, bbox):
                    signature=_signature(kind, spec, bbox))
     if kept:
         ctx.log("  continuing an interrupted download: {} finished chunk(s) kept, {:,} "
-                "features".format(kept, w._cur["n"]))
+                "features".format(kept, w.count))
+        started = w.stage_started(name)              # BP.2: how old the kept chunks are
+        if started:
+            try:
+                age_h = (time.time() - time.mktime(time.strptime(
+                    started, "%Y-%m-%dT%H:%M:%S"))) / 3600.0
+                ctx.log("  the kept chunks were started {} ({:.1f} h ago){}".format(
+                    started, age_h, " - consider --refresh" if age_h > 24 * 7 else ""))
+            except (ValueError, OverflowError):
+                ctx.log("  the kept chunks were started {}".format(started))
     ctx.status, ctx.gaps = "complete", []
     net = NetSession(label, ctx.workers, log=ctx.log, on_beat=getattr(ctx, "beat", None))
     token = _NET.set(net)

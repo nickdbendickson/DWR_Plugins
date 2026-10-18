@@ -486,6 +486,10 @@ def same_direction(st, geom, max_deg=AADT_MAX_ANGLE_DEG):
         m = len(xs) // 2
         lo, hi = max(0, m - 3), min(len(xs), m + 4)
         a = _local_direction(xs[lo:hi], ys[lo:hi], xs[m], ys[m])
+        # LN.3: every failure below (degenerate stretch, no usable candidate part,
+        # an exception) returns True = "same direction": the AADT candidate is KEPT
+        # (fail-open), so a bad geometry never drops a count; along_fraction and
+        # names_conflict still filter it.
         if a is None:
             return True                       # a single sample: no direction to test
         best = None
@@ -499,6 +503,30 @@ def same_direction(st, geom, max_deg=AADT_MAX_ANGLE_DEG):
         return best is None or best >= math.cos(math.radians(max_deg))
     except Exception:
         return True
+
+
+def motorists(aadt, length_ft, speed_mph, occupancy):
+    """LN.1: persons in vehicles on a stretch at one time (TM 11): vehicles/hour
+    x hours to drive the stretch x occupancy. Shared with sensitivity._persons."""
+    vehicles = aadt / 24.0 * ((length_ft or 0.0) / 5280.0) / max(speed_mph, 1.0)
+    return vehicles * occupancy
+
+
+def crossing_aadt_candidates(crossing_index, geom, xsearch, rnames):
+    """AADT candidates (priority 0) of the nearest FRA crossing within `xsearch`
+    whose street name does not conflict with the road's. LN.8: a conflicting
+    nearest crossing no longer ends the search - the next-nearest is tried."""
+    for _dd, f, _g in crossing_index.within(geom, xsearch):
+        fa = f.attributes()
+        xname = " ".join(str(v) for v in (
+            crossing_index.reader.get(fa, "street"),
+            crossing_index.reader.get(fa, "highwayname")) if v and not is_null(v))
+        if names_conflict(rnames, xname):
+            continue
+        cid = crossing_index.reader.get(fa, "crossingid")
+        return [c + (0,) for c in crossing_index.reader.aadt_candidates(
+            fa, "FRA crossing {}".format(cid or ""))]
+    return []
 
 
 def best_aadt(candidates):
@@ -576,16 +604,7 @@ def analyze_roads(road_layer, samplers, analysis_crs, transform_ctx, filter_rect
                 cands.extend(c + (1,) for c in idx.reader.aadt_candidates(
                     fa, "'{}'".format(idx.layer.name())))
         if crossing_index is not None:
-            for _dd, f, _g in crossing_index.within(st["geom"], xsearch)[:1]:
-                fa = f.attributes()
-                xname = " ".join(str(v) for v in (
-                    crossing_index.reader.get(fa, "street"),
-                    crossing_index.reader.get(fa, "highwayname")) if v and not is_null(v))
-                if names_conflict(rnames, xname):
-                    continue
-                cid = crossing_index.reader.get(fa, "crossingid")
-                cands.extend(c + (0,) for c in crossing_index.reader.aadt_candidates(
-                    fa, "FRA crossing {}".format(cid or "")))
+            cands.extend(crossing_aadt_candidates(crossing_index, st["geom"], xsearch, rnames))
         aadt, year, src = best_aadt(cands)
         nd_cls, nd_basis, judge = nd_road_class(rclass, aadt)
         vzone = None
@@ -595,8 +614,7 @@ def analyze_roads(road_layer, samplers, analysis_crs, transform_ctx, filter_rect
                 vzone = int(classify_values(st["depth"], st["vel"], *curves).min())
         persons = None
         if veh and aadt and paved != "No" and vzone in (CLASS_HIGH, CLASS_JUDGMENT):
-            vehicles = aadt / 24.0 * (st["length_ft"] / 5280.0) / max(speed_mph, 1.0)
-            persons = vehicles * occupancy
+            persons = motorists(aadt, st["length_ft"], speed_mph, occupancy)
         results.append({
             "fid": feat.id(), "name": rname, "road_class": rclass,
             "class_basis": cbasis, "paved": paved, "paved_basis": pbasis,
@@ -616,8 +634,12 @@ _PASS_NAMES = ("passngr", "passenger", "amtrak")
 def trains_per_day(reader, attrs):
     """Daily trains at a crossing (FRA Form 71 / NTAD field names)."""
     def g(*names):
-        return next((_num(reader.get(attrs, n)) for n in names
-                     if n in reader.low and _num(reader.get(attrs, n)) is not None), None)
+        for n in names:                              # LN.9: one read per name
+            if n in reader.low:
+                v = _num(reader.get(attrs, n))
+                if v is not None:
+                    return v
+        return None
     total = g("totaltrn", "totaltrains", "total_trains")
     if total is None:
         day = g("totaldaylightthrutrains", "daythru")

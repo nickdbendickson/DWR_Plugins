@@ -103,7 +103,7 @@ AREA, RING, BAND = "area", "ring", "band"        # == structures.SAMPLE_AREA / R
 MODES = (AREA, RING, BAND)
 GEOS_QUADSEGS = 8                                 # structures.py: geom.buffer(d, 8)
 CHUNK_PAIRS = 1 << 17                             # cell x edge pairs per numpy block
-ONEPASS_MIN = 8                                   # as structures.ONEPASS_MIN
+from .constants import ONEPASS_MIN                # FS.6: single definition
 _EPS_PIX = 1e-7                                   # window slack (pixels): ties stay inside
 
 
@@ -790,9 +790,11 @@ def structures_cells(shapes, gt, reach, edge, mode=AREA, size=None, chunk_pairs=
     n = H * W
     ecnt = np.zeros(S, dtype=np.int64)
     polys, discs = [], []
+    n_bad_reach = 0
     for i in ok:
         sh = shapes[i]
         if not (math.isfinite(reach[i]) and math.isfinite(edge[i])):
+            n_bad_reach += 1
             continue
         if n[i] == 0:                           # nothing of the raster around it
             empty = np.zeros((int(H[i]), int(W[i])), dtype=bool)
@@ -808,6 +810,13 @@ def structures_cells(shapes, gt, reach, edge, mode=AREA, size=None, chunk_pairs=
                                   float(edge[i]), mode, chunk)
         else:
             polys.append(i)
+    if n_bad_reach:
+        try:
+            from .helpers import log_message
+            log_message("Fast sampling: {} structure(s) skipped (non-finite reach or "
+                        "edge); GEOS fallback will try them".format(n_bad_reach))
+        except Exception:
+            pass
     if polys:
         pidx = np.array(polys, dtype=np.int64)
         voff = np.zeros(S, dtype=np.int64)
@@ -872,7 +881,8 @@ def sample_cells(items, sampler, mode, edge, progress=None, chunk_pairs=CHUNK_PA
         if use_fast:                          # fast_sampling and dep.ok
             shp = FS.shape_from_geometry(rec["geom"], r_disc)
             if shp is not None:
-                fast[rec["id"]] = (shp, reach); fast_rd[rec["id"]] = r_disc
+                # one 3-tuple (shape, reach, disc_radius); no separate fast_rd map
+                fast[rec["id"]] = (shp, reach, r_disc)
                 continue                      # no GEOS buffer / difference
     before step 2:
         got = None
@@ -930,6 +940,10 @@ def sample_cells(items, sampler, mode, edge, progress=None, chunk_pairs=CHUNK_PA
         C0 = min(cs.c0 for _s, cs in sets)
         C1 = max(cs.c0 + cs.mask.shape[1] for _s, cs in sets)
         Wd = C1 - C0
+        # FS.2: even one row exceeds the memory target when the strip is too wide
+        if Wd > max_cells:
+            strips = False
+    if strips and sets:
         rows = max(1, min(R1 - R0, int(max_cells // max(1, Wd))))
         buckets = {}
         for sid, cs in sets:

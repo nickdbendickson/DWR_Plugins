@@ -333,15 +333,21 @@ def mark_subject_dam(dams, subject_nid="", dam_name=""):
     for d in dams:
         d["subject"] = False
         if sid and d.get("nid", "").upper() == sid:
-            hit = d
+            hit = hit or d                       # FA.4: first match, like the name path
         elif not sid and target and _norm_name(d.get("name")) == target:
             hit = hit or d
     if hit is not None:
         hit["subject"] = True
-        # saddle dams / dikes listed under the same name are part of it
+        # saddle dams / dikes of the same name, and other same-NID records, are
+        # part of the subject (not counted as dams in series)
         hn = _norm_name(hit.get("name"))
+        hit_nid = (hit.get("nid") or "").upper()
         for d in dams:
-            if d is not hit and hn and _norm_name(d.get("name")) == hn:
+            if d is hit:
+                continue
+            if hn and _norm_name(d.get("name")) == hn:
+                d["subject"] = True
+            elif hit_nid and (d.get("nid") or "").upper() == hit_nid:
                 d["subject"] = True
     return hit
 
@@ -443,7 +449,9 @@ def mark_incremental(records, breach_eval, base_eval, min_depth_ft):
             out[rec["id"]] = (True, "")
             continue
         bd = (base_eval.get(rec["id"]) or {}).get("depth")
-        if bd is None or bd <= 0:
+        if bd is None:
+            out[rec["id"]] = (True, "no baseline value (outside baseline raster)")
+        elif bd <= 0:
             out[rec["id"]] = (True, "dry without breach")
         elif d - bd >= min_depth_ft:
             out[rec["id"]] = (True, "+{:.1f} ft with breach".format(d - bd))

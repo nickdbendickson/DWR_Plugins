@@ -82,6 +82,26 @@ def _newest_package(out_folder):
     return max(zips, key=lambda f: os.path.getmtime(f))
 
 
+def package_staleness(out_folder, package):
+    """Warning text when `package` (a submittal zip) is older than the outputs' latest run
+    (QA/Last_Run_Snapshot.json), else '' (Lumo 2.23.1)."""
+    if not package:
+        return ""
+    snap = os.path.join(out_folder, "QA", "Last_Run_Snapshot.json")
+    try:
+        ts, tp = os.path.getmtime(snap), os.path.getmtime(package)
+    except OSError:
+        return ""
+    if tp + 1 < ts:
+        import time as _t
+        return ("the newest submittal package {} ({}) is OLDER than the last classification run "
+                "({}) - make a new package first, or check that this is the one that was "
+                "reviewed".format(os.path.basename(package),
+                                  _t.strftime("%Y-%m-%d %H:%M", _t.localtime(tp)),
+                                  _t.strftime("%Y-%m-%d %H:%M", _t.localtime(ts))))
+    return ""
+
+
 class SuiteTabMixin(object):
     """Group 8 of the Hazard Classification tab (v2.10)."""
 
@@ -91,10 +111,10 @@ class SuiteTabMixin(object):
                                                        "suite_record_btn")
 
     def _build_suite_group(self):
-        grp = QGroupBox("8. Dam suite - ND Dam Breach Runner / Screening (v2.10)")
+        grp = QGroupBox("Dam suite - DamSafety Runner / Screening tools for this dam")
         lay = QVBoxLayout()
         info = QLabel(
-            "Tools shared with ND Dam Breach Runner and ND Dam Breach Screening. Each opens its "
+            "Tools shared with DamSafety Runner and DamSafety Screening. Each opens its "
             "Processing dialog with this dam's folders filled in. Every threshold is a "
             "screening value YOU choose; none is a requirement of REG_05.2026 or TM 11.")
         info.setWordWrap(True)
@@ -112,7 +132,7 @@ class SuiteTabMixin(object):
         lay.addWidget(self.suite_gate_stop_check)
         grid = QGridLayout()
         for i, (attr, label, alg, tip) in enumerate(TOOLS):
-            btn = QPushButton(label)
+            btn = QPushButton(label.replace("...", "\u2026"))     # one ellipsis character
             btn.setToolTip(tip + "\n(Processing: ndhazard:{})".format(alg))
             btn.clicked.connect(lambda _c=False, a=alg: self._open_suite_tool(a))
             setattr(self, attr, btn)
@@ -121,7 +141,7 @@ class SuiteTabMixin(object):
         row = QHBoxLayout()
         self.suite_record_label = QLabel("dam.json: -")
         self.suite_record_label.setWordWrap(True)
-        self.suite_record_btn = QPushButton("dam.json...")
+        self.suite_record_btn = QPushButton("dam.json\u2026")
         self.suite_record_btn.setToolTip(
             "The dam's record shared by the three plugins: values, which tool set them, the "
             "status (screened / modelled / classified / reviewed), values the tools did not "
@@ -169,6 +189,13 @@ class SuiteTabMixin(object):
             pkg = _newest_package(out)
             if pkg:
                 p["PACKAGE"] = pkg
+                stale = package_staleness(out, pkg)
+                if stale:
+                    log_message("Mark reviewed: " + stale, MSG_WARNING)
+                    try:
+                        self._log(">>> WARNING: Mark reviewed: " + stale)
+                    except Exception:                            # noqa
+                        pass
         return p
 
     def _open_suite_tool(self, alg):
