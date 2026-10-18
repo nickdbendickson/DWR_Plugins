@@ -14,6 +14,24 @@ from qgis.PyQt.QtWidgets import QFrame, QLabel, QToolButton, QVBoxLayout, QHBoxL
 
 from .checks import ERROR, WARNING, OK
 
+
+def _qt_enum(group, name):
+    """A Qt enum member resolved scoped-first (PyQt6 requires the scoped spelling;
+    recent PyQt5 has it too), legacy Qt5 spelling second - so the panel does not crash
+    on a PyQt6 / QGIS 4 build (every other DamSafety_Hazard module already does this)."""
+    for get in (lambda: getattr(getattr(Qt, group), name), lambda: getattr(Qt, name)):
+        try:
+            v = get()
+        except Exception:                                        # noqa
+            continue
+        if v is not None:
+            return v
+    return None
+
+
+TOOLBTN_TEXT_ONLY = _qt_enum("ToolButtonStyle", "ToolButtonTextOnly")
+ALIGN_TOP = _qt_enum("AlignmentFlag", "AlignTop")
+
 BANNER_QSS = ("QFrame#checkErrorBanner {background:#b3261e; border:1px solid #8c1d18;"
               " border-radius:4px;} QFrame#checkErrorBanner QLabel {color:white;}")
 WARN_PILL_QSS = ("QLabel {background:#f9a825; color:#3e2723; font-weight:bold;"
@@ -31,7 +49,7 @@ class Collapsible(QWidget):
         super().__init__(parent)
         self._title = title
         self.header = QToolButton(self)
-        self.header.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.header.setToolButtonStyle(TOOLBTN_TEXT_ONLY)
         self.header.setAutoRaise(True)
         self.header.setCheckable(True)
         self.header.setStyleSheet("QToolButton {border:none; font-weight:bold; text-align:left;}")
@@ -156,7 +174,7 @@ class CheckPanel(QWidget):
             pill.setStyleSheet(WARN_PILL_QSS)
             lbl = QLabel(t)
             lbl.setWordWrap(True)
-            h.addWidget(pill, 0, Qt.AlignTop)
+            h.addWidget(pill, 0, ALIGN_TOP)
             h.addWidget(lbl, 1)
             v.addWidget(row)
         box = Collapsible("{} \u2014 the run proceeds, check them".format(
