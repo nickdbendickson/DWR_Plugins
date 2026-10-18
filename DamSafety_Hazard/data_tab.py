@@ -236,7 +236,7 @@ class DataTabMixin(object):
         oform = QFormLayout()
         opack = QLabel(
             "A pack holds every data set above for all of North Dakota. Build it once on a "
-            "computer that is online (<b>Build offline pack...</b>, or build_nd_pack.py in "
+            "computer that is online (<b>Build offline pack\u2026</b>, or build_nd_pack.py in "
             "the plugin folder), copy the zip here and pick it. Data sets in the pack are "
             "read from it instead of the internet. Kept for this computer, not the project.")
         opack.setWordWrap(True)
@@ -301,7 +301,7 @@ class DataTabMixin(object):
         row.addWidget(self.refresh_layers_btn)
         self.data_sources_btn = QPushButton("Edit data sources\u2026")
         self.data_sources_btn.setToolTip(
-            "Opens the file with every download address (NSI, ND GIS Hub, NID, HIFLD, NBI ...). "
+            "Opens the file with every download address (NSI, ND GIS Hub, NID, HIFLD, NBI \u2026). "
             "Point an entry at your work server's service when it has the same layer, then "
             "restart QGIS.")
         self.data_sources_btn.clicked.connect(self._on_edit_sources)
@@ -405,7 +405,7 @@ class DataTabMixin(object):
                                     "Use this pack on this computer too?") == MB_YES:
                 self.pack_path_edit.setText(path)
                 self._pack_changed()
-        self._start_background("Building the offline data pack...", work, done,
+        self._start_background("Building the offline data pack\u2026", work, done,
                                project_bound=False)
 
     def _data_area_changed(self, *args):
@@ -489,7 +489,7 @@ class DataTabMixin(object):
         from .datafetch import download_data
         job = self._download_job()
         job["cfg"]["add_to_project"] = True
-        self._progress = self._make_progress("Downloading data...")
+        self._progress = self._make_progress("Downloading data\u2026")
         rows = download_data(job["cfg"], job["clip"], job["depth"], job["out"], job["dam"],
                              progress=self._progress_tick, log=self._log)
         self._refresh_layer_combos()
@@ -542,7 +542,7 @@ class DataTabMixin(object):
                 return
             self._add_downloaded(sink)
             self._report_downloads(outcome.result)
-        self._start_background("Downloading data...", work, done)
+        self._start_background("Downloading data\u2026", work, done)
 
     def _report_downloads(self, rows):
         saved = [r for r in rows if r[1]]

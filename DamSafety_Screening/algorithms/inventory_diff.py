@@ -84,7 +84,7 @@ class InventoryDiff(QgsProcessingAlgorithm):
                                        NUM_DOUBLE, idf.HEIGHT_TOL_FT, minValue=0.0))
         P(QgsProcessingParameterNumber("STOL_PCT", "Storage: report a change from (%)",
                                        NUM_DOUBLE, idf.STORAGE_TOL_PCT, minValue=0.0))
-        P(QgsProcessingParameterNumber("STOL_AF", "Storage: ... and at least (ac-ft)",
+        P(QgsProcessingParameterNumber("STOL_AF", "Storage: \u2026 and at least (ac-ft)",
                                        NUM_DOUBLE, idf.STORAGE_TOL_ACFT, minValue=0.0))
         P(QgsProcessingParameterNumber("MOVE_M", f"Location: report a move of more than (m; {idf.MOVE_M:g} m = "
                                        f"{idf.MOVE_M / 0.3048:,.0f} ft)", NUM_DOUBLE,

@@ -31,6 +31,7 @@ from . import webmap
 from .compat import MB_YES, MB_NO
 from .constants import ZONE_LABELS
 from .helpers import log_message, buffer_distance_in_layer_units
+from .ui_widgets import Collapsible
 from .review import ReviewStore, needs_review, review_path, CONFIRMED
 from .structures import (
     CAT_DWELLING, CAT_OCCUPIED, CAT_UNVERIFIED, CAT_NOT_HABITABLE, TYPE_HOUSE, TYPE_MOBILE,
@@ -176,7 +177,11 @@ class ReviewTabMixin(object):
             "click a column heading to sort the list by it (click again to reverse)."
             .format(_CONFIRM, os.path.basename(review_path("x"))))
         info.setWordWrap(True)
-        lay.addWidget(info)
+        # 2.18.36: the long help is collapsed by default (it took the top third of the view)
+        info.setContentsMargins(14, 0, 0, 4)
+        self.review_help = Collapsible("How to review structures", info, expanded=False)
+        self.review_help.header.setToolTip("Show or hide how the decisions work")
+        lay.addWidget(self.review_help)
         opts = QHBoxLayout()
         self.review_show_done = QCheckBox("Show structures already reviewed")
         self.review_show_done.setChecked(False)
@@ -602,7 +607,7 @@ class ReviewTabMixin(object):
         if conflicts:
             shown = RX.conflict_lines(plan)
             text += "\n\n" + "\n".join(shown[:24]) + (
-                "\n... ({} more in the log)".format(len(shown) - 24) if len(shown) > 24 else "")
+                "\n\u2026 ({} more in the log)".format(len(shown) - 24) if len(shown) > 24 else "")
             for line in shown:
                 self._log(">>>   " + line)
         if QMessageBox.question(self, "Review merge", text + "\n\nMerge now? A backup copy "

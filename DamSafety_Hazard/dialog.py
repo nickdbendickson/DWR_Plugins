@@ -369,7 +369,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         row.addWidget(self.selftest_btn)
         self.sources_btn = QPushButton("Edit data sources\u2026")
         self.sources_btn.setToolTip("Opens the file with every download address (NSI, ND GIS "
-                                    "Hub, NID, HIFLD, NBI ...). Change an address there when "
+                                    "Hub, NID, HIFLD, NBI \u2026). Change an address there when "
                                     "a service moves, then restart QGIS.")
         self.sources_btn.clicked.connect(self._on_edit_sources)
         row.addWidget(self.sources_btn)
@@ -424,8 +424,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         view - since 2.18.34 instead of a pop-up."""
         from .checks import ERROR
         self.check_panel.set_results([(ERROR, e) for e in errors])
-        self._update_status("Inputs need fixing: {} error(s) - see the red box".format(
-            len(errors)), False)
+        self._clear_status()          # 2.18.36: the red box says it; the status line does not repeat it
         for e in errors:
             self._log(">>> INPUT ERROR: {}".format(e))
         self._show_view("Classify")
@@ -705,6 +704,12 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.status_label.setText(message)
         self.status_label.setStyleSheet(
             "padding: 8px; background-color: #f5f5f5; color: {};".format(color))
+        self.status_label.setVisible(bool(message))
+
+    def _clear_status(self):
+        """2.18.36: an empty status line is hidden (no grey bar repeating nothing)."""
+        self.status_label.setText("")
+        self.status_label.setVisible(False)
 
     def _log(self, message):
         self.log_text.append(str(message))
@@ -965,10 +970,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
     def _on_check_inputs(self, *args):
         if self._busy:
             return
-        from .checks import summary
         self._set_busy(True)
         try:
-            self._progress = self._make_progress("Checking inputs and data services...")
+            self._progress = self._make_progress("Checking inputs and data services\u2026")
             results = self._run_checks(services=True)
         except CancelledByUser:
             self._log(">>> Input check cancelled")
@@ -986,9 +990,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             self._set_busy(False)
         for lvl, t in results:
             self._log(">>> CHECK {}: {}".format(lvl, t))
-        n_err, n_warn = summary(results)
-        self._update_status("Input check: {} error(s), {} warning(s)".format(n_err, n_warn),
-                            n_err == 0)
+        # 2.18.36: the panel and the button badge show the counts; the status line no longer
+        # repeats them ("Input check: N error(s), M warning(s)")
+        self._clear_status()
         # 2.18.32: the results are shown in the panel under the buttons (no pop-up)
         self.check_panel.set_results(results)
         return results
@@ -1008,11 +1012,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             if lvl != "OK":
                 self._log(">>> CHECK {}: {}".format(lvl, t))
         self.check_panel.set_results(results)
-        n_err, n_warn = summary(results)
+        n_err = summary(results)[0]
         if n_err:
             # 2.18.34: the red box on the Classify view says what to fix (was a pop-up)
-            self._update_status("Inputs need fixing: {} error(s), {} warning(s) - see the red "
-                                "box".format(n_err, n_warn), False)
+            self._clear_status()      # 2.18.36: the red box is the one place that says it
             self._show_view("Classify")
             self._update_button_states()
             return
@@ -1033,7 +1036,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             return
         from .selftest import run_self_test
         self._set_busy(True)
-        self._progress = self._make_progress("Running self-test...")
+        self._progress = self._make_progress("Running self-test\u2026")
         try:
             ok, lines = run_self_test(progress_cb=self._progress_tick)
         except CancelledByUser:

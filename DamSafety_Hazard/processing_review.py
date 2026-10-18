@@ -56,7 +56,7 @@ class ReviewPackageAlgorithm(_Base):
         P = self.addParameter
         P(QgsProcessingParameterFile("PACKAGE_FOLDER", "Package folder", behavior=FILE_FOLDER,
                                      optional=True))
-        P(QgsProcessingParameterFile("PACKAGE_ZIP", "... or the package .zip",
+        P(QgsProcessingParameterFile("PACKAGE_ZIP", "\u2026 or the package .zip",
                                      behavior=FILE_FILE, extension="zip", optional=True))
         P(QgsProcessingParameterFolderDestination("WORK_FOLDER", "Work folder (the review "
                                                   "files go here, never into the package)"))

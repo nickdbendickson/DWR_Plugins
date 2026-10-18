@@ -31,5 +31,63 @@ The inflow point moved from (-106364, 2666612) at 320.46 m to (-106264, 2666572)
 
 The field `hazard_class` in `Hazard Classification (ND 5.2).json` in the dam folder (the Runner's own structures-only check, also printed as "Hazard class: MEDIUM" in the run log) is **not authoritative**. It reads Medium for DWR-3161, and an earlier draft of this log mistakenly used it.
 
+## Re-baseline 2026-10-18 (TIER 0, main 8b0601c, culvert burn on)
+
+**This used a non-default setting.** Main's default is `CULVERT_BURN_MATCHED` = off. The re-baseline turned it on explicitly with:
+- `CULVERT_INVENTORY` = nddot_bridge_inventory.gpkg;;ntad_nbi.gpkg;;research/nddot_centerline_pipes.gpkg
+- `CULVERT_MATCH_M` 75
+- TIER 0 (LISFLOOD-FP), 40 m cells
+
+Peaks are unchanged (25,800.5 / 34,271.7 cfs). Source: `/home/box/DamSafety/Dams/rebaseline_20261018/` (`progress.md`, `status`, `extra.json`, `compare_*_vs_prev.json`, `<dam>/dams/<dam>/_breach_model/run_report.json`). The class comes from `outputs/Hazard_Classification_Summary.csv`.
+
+| Dam | Culverts burned | Area any / ≥0.1 ft / ≥1 ft (ac) | Max depth (ft) | Max velocity (ft/s) | Arrival min / median / max (h) | Class |
+|---|---|---|---|---|---|---|
+| Absaraka DWR-2801 | 2 (NDDOT 09-117-18.1, 09-118-21.1) | 6,939.1 / 5,758.5 / 1,802.1 | 10.13 | 12.71 | 0.15 / 2.66 / 28.21 | High |
+| DWR-3161 | 1 (NDDOT CLP 205:49.5229, ND-23) | 4,841.7 / 4,493.0 / 703.0 | 11.29 | 19.36 | 0.19 / 1.56 / 21.95 | High |
+
+**Reference runs in `compare_*_vs_prev.json`:** both are 10-18 TIER 0 runs with **burn off**, so the comparison isolates the burn.
+- DWR-2801 against `Absaraka_compare/hecras_tier2_20261018/tier0`: 6,939.5 ac, 9.38 ft, 15.55 ft/s. Fit index 0.998 at ≥0.1 ft and 0.999 at any depth (QA map). Depth bias -0.00 ft.
+- DWR-3161 against `.../dwr3161_tier0`: 4,841.7 ac, 11.40 ft, 19.36 ft/s. Fit index 0.999.
+
+**QA notes:**
+- **DWR-2801 max depth (10.13 ft) is at the burned culvert NDDOT 09-118-21.1**, at about (-101220, 2662420), about 45 m from the culvert line and 6.5 km downstream. That cell had 5.29 ft with burn off. Burn off, the maximum (9.38 ft) is at the inflow point.
+  - The +0.75 ft "rise" is depth over ground that was lowered by the culvert cut. It isn't a deeper flood at the dam.
+  - Over the shared area, the depth difference is ~0 ft (bias -0.00, p90 0.003 ft).
+- **Max velocities are single shallow cells, not representative.**
+  - DWR-2801: both 12.71 ft/s (burn on) and 15.55 ft/s (burn off) are at the same cell, (-103860, 2666020), in 0.34 ft of water. That is right at the burned culvert NDDOT 09-117-18.1 (-103744, 2665971) and 2.5 km from the inflow. The culvert opening reduced the overtopping jet there. The 99th-percentile velocity is 4.68 vs 4.75 ft/s.
+  - DWR-3161: 19.36 ft/s is at (-493980, 2796180), in 0.15 ft of water, 5.5 km from the inflow. The 99th percentile is 4.48 ft/s.
+  - Report the p99 velocity, or the velocity at receptors, rather than the maximum.
+- **DWR-3161 vs the 10-15 burn-on run (4,870.9 ac, 11.74 ft): the cause is the inflow point, not the culvert.**
+  - In `runs/r7pr30`, the crest was moved 397 m to the highest ground, and the inflow was at (-490029, 2792468), 18.1 ft below the crest.
+  - On 8b0601c, the dam point is taken as the crest. The inflow is at (-489749, 2792668), only **4.0 ft below the top of dam**. That is about 344 m away, and it lies **on the opposite side of the dam point from the downstream trace** (the trace runs north; the inflow is 40 m south).
+  - The burn effect is now only -0.11 ft (11.40 → 11.29), against -1.42 ft on 10-15.
+  - HEC-RAS TIER 2 rejected this inflow point too (`hecras_tier2_20261018/status` at 05:07Z). Treat the DWR-3161 numbers as **provisional** until the inflow-point fix (PR #76, open) lands.
+- **DWR-3161 extent:** 4,139 of 4,842 ac (85%) is under 1 ft deep, as a uniform sheet over a featureless flat NW of the dam. That is probably the Sanish Bay / Lake Sakakawea water surface in the LiDAR (not checked against NHD). The "any depth" area is likely overstated. Use ≥1 ft (703 ac), or mask the mapped water body.
+- **DWR-2801 extent:** about 1,180 ac is wet at under 0.1 ft, with scattered isolated patches in the SE lowland (potholes). The east edge reached 0.73 ft, which is under the edge tolerance (`edges_over_tolerance` = []).
+
+## HEC-RAS TIER 2 vs TIER 0 and ANUGA: Absaraka DWR-2801 (10-18)
+
+Source: `Absaraka_compare/hecras_tier2_20261018/` (`progress.md`, `compare_tier2_8b0601c.json`). TIER 2 ran on 8b0601c (burn off), and `tier2_8b0601c` is identical to `tier2_manual`.
+
+| Run | Area any / ≥0.1 / ≥1 ft (ac) | Max depth (ft) | Max velocity (ft/s) | Median arrival (h) | Class |
+|---|---|---|---|---|---|
+| HEC-RAS TIER 2 (8b0601c) | 8,177.0 / 7,594.2 / 3,023.4 | 12.22 | 6.09 | 3.48 | High |
+| LISFLOOD TIER 0, burn off (10-18) | 6,939.5 / 5,760.5 / 1,802.9 | 9.38 | 15.55 | 2.66 | High |
+| ANUGA, first run (`anuga_structures_20261015`, 10-15 code) | 5,905.2 | 13.28 | 13.38 | — | High |
+
+- HEC-RAS is **+38.5% area vs ANUGA** (fails the area check), +17.8% vs TIER 0 at any depth, and +31.8% at ≥0.1 ft. Against TIER 0: F = 0.714, hit rate 0.966, false-alarm ratio 0.267.
+- **The water surface agrees but depth doesn't.** The WSE bias is -0.10 ft (p90 0.53 ft), while the depth bias is +0.61 ft (ratio 1.54). The difference is mostly in the ground surface each model subtracts. HEC-RAS uses the 1 m subgrid terrain, and its results were then mapped onto the 40 m LISFLOOD grid by `manual_results.py`. That counts fine-terrain lows as wet and deepens depths. **Check:** recompute HEC-RAS depth as WSE minus the same 40 m average-resampled DEM before comparing areas.
+- **ANUGA is truncated.** Its pass 2 hit the mesh edge with 8.58 ft of water ("extent limited by LISFLOOD domain"), so 5,905 ac is a lower bound and not a fair reference. It also ran on 10-15 code with 7 guessed culverts and the NBI bridges as structures.
+- **Other differences to check:**
+  - Simulation length: HEC-RAS latest arrival is 39.5 h vs 28.4 h, so a longer run spreads further.
+  - Roughness (Manning's n in the .p01/.u01 vs LISFLOOD).
+  - Mesh: 65,739 cells, with Min Courant manually set to 0.45.
+  - Accuracy: HEC-RAS max cell WSE error is 2.27 ft and the volume error is 0.17%.
+  - Both runs used the same inflow point and hydrograph (25,801 cfs).
+  - Compare areas at the same depth threshold. ≥1 ft gives 3,023 vs 1,803 ac (+68%), so the gap isn't just shallow fringe.
+
 ## Open items
-- **The full re-baseline on main (plan steps 1-7) hasn't been run yet.** Don't replace the trusted baseline numbers without the user's approval.
+- **ANUGA re-baseline not run.** The 20x20 ANUGA job was lost in the ~05:23Z reset and is being restarted with gmsh (`Absaraka_compare/anuga_gmsh_20x20_48h_20261018`).
+- **DWR-3161 TIER 2 is blocked** on SWE's inflow-point fix (PR #76, open). The DWR-3161 TIER 0 numbers above are provisional for the same reason.
+- HEC-RAS vs ANUGA/TIER 0 area gap: recompute HEC-RAS depth on the 40 m DEM, compare at matching thresholds and sim times, and check Manning's n.
+- Re-baseline numbers aren't yet adopted as the trusted baseline. That needs the user's approval. Note that they were run with the non-default culvert burn on.

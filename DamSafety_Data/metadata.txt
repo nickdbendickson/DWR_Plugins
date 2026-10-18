@@ -5,7 +5,7 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Keeps an offline copy of North Dakota structure and building-footprint data on this computer and downloads new versions when the sources change.
 about=Downloads and maintains local North Dakota copies of the National Structure Inventory (NSI API; NSI 2026 and NSI 2022 merged into one layer by default), Microsoft building footprints, OpenStreetMap (Geofabrik), optionally FEMA/ORNL USA Structures, and optionally the USACE-NSI/nsi-generator source code. Each dataset is checked cheaply (checksum, ETag or latest commit) and only re-downloaded when it changed. Updates are staged and verified before replacing the local copy, so the data stays usable offline and an interrupted update never leaves partial files. Layers already in the project are reloaded after an update.
-version=1.4.0
+version=1.4.1
 author=ND Data Updater
 email=nd-data-updater@example.com
 repository=https://example.com/nd-data-updater
@@ -16,7 +16,8 @@ tags=north dakota,nsi,structures,building footprints,offline,update
 icon=icon.svg
 experimental=False
 deprecated=False
-changelog=1.4.0 - Uses the suite data folder (audit 1.22 item 7): when ndsuite/data_folder is set, downloads go to <suite folder>/structures/. A folder inside the offline pack (ND_Dam_Suite_Pack) or one that can't be written is skipped with a message. Downloads already in ~/Documents/ND Structure Data stay in use, with a notice on how to move them, until structures/ holds data; nothing is moved automatically. A Data folder you choose in Settings still wins. Data's manifest is now structures_manifest.json, so it never replaces the suite's manifest.json (the old manifest.json is read once).
+changelog=1.4.1 - The Settings window is sized for the screen QGIS is on (else the screen under the mouse), not always the primary screen; it opens inside that screen and never larger than it, and the size cap follows it to another monitor (ui_fit.py, the same file as the Hazard's and Screening's).
+    1.4.0 - Uses the suite data folder (audit 1.22 item 7): when ndsuite/data_folder is set, downloads go to <suite folder>/structures/. A folder inside the offline pack (ND_Dam_Suite_Pack) or one that can't be written is skipped with a message. Downloads already in ~/Documents/ND Structure Data stay in use, with a notice on how to move them, until structures/ holds data; nothing is moved automatically. A Data folder you choose in Settings still wins. Data's manifest is now structures_manifest.json, so it never replaces the suite's manifest.json (the old manifest.json is read once).
     1.3.6 - Cross-platform (#32): UTF-8 text I/O and CSVs written with newline=''.
     1.3.2 - Added ND 911 Site/Structure Address Points (NENA) from the ND GIS Hub FeatureServer. Downloads as address_points (GeoPackage if ogr2ogr available, otherwise NDJSON). Also added to the offline pack builder so the suite pack includes the layer. suite_fill loads address_points with structures for Hazard verification.
   1.3.1 - Overture source now downloads and converts buildings for the ND bounding box using the overturemaps CLI (pip install overturemaps). Output is overture_buildings.gpkg (or .geojson). suite_fill recognizes the layer name.

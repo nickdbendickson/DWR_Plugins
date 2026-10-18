@@ -67,7 +67,7 @@ class NDdamHazardHelperPlugin(QObject):
         icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
         icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
 
-        self.action = QAction(icon, "Classify...", self.iface.mainWindow())
+        self.action = QAction(icon, "Classify\u2026", self.iface.mainWindow())
         self.action.setObjectName("NDDamHazardHelperAction")
         self.action.triggered.connect(self.run_plugin)
 

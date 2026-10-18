@@ -191,7 +191,7 @@ class SetupPlugin(object):
         self.action = None
 
     def initGui(self):
-        self.action = QAction("Start here...", self.iface.mainWindow())
+        self.action = QAction("Start here\u2026", self.iface.mainWindow())
         self.action.triggered.connect(self.run)
         self.iface.addPluginToMenu(MENU, self.action)
         self.dock = None
@@ -1037,7 +1037,7 @@ def _dams(uri, name="", county="", limit=DAM_LIMIT, lines_uri=None, hidden=None)
                     "structure_id": "" if sid is None else str(sid),
                     "nid": str(pick("national_id", "national_i") or ""),
                     "height": amount("max_dam_height", "max_dam_he"),
-                    # max pool volume, else the DWR normal pool volume (as before 1.0.9);
+                    # max pool volume, else the DWR normal pool volume (as before 1.0.10);
                     # the NID only fills what the DWR record has neither of
                     "storage": amount("max_pool_vol", "max_pool_v"),
                     "normal_vol": amount("normal_vol"),

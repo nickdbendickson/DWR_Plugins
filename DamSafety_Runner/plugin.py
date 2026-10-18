@@ -62,7 +62,7 @@ class NDBreachRunnerPlugin:
             from qgis.PyQt.QtWidgets import QAction
         except ImportError:  # Qt6 moved QAction
             from qgis.PyQt.QtGui import QAction
-        self.action = QAction("Run a dam...", self.iface.mainWindow())
+        self.action = QAction("Run a dam\u2026", self.iface.mainWindow())
         self.action.setObjectName("NDBreachRunnerAction")
         self.action.triggered.connect(self.run_plugin)
         self.iface.addPluginToMenu(MENU, self.action)

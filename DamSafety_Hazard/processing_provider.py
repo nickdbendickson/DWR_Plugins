@@ -915,7 +915,7 @@ class WatchAlgorithm(_Base):
     def shortHelpString(self):
         return ("Re-classifies every dam folder directly inside the chosen folder with its "
                 "own flood rasters but FRESH data (NSI, ND GIS Hub address points, FEMA "
-                "outlines, roads, ...), compares each result with that dam's previous run "
+                "outlines, roads, \u2026), compares each result with that dam's previous run "
                 "and writes Hazard_Creep_Watch.csv and Hazard_Creep_Watch_<date>.html in "
                 "the chosen folder - dams whose class changed, or with newly flooded "
                 "structures, roads or lifelines, first. It is a list of dams to look at, not "

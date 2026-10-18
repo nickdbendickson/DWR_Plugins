@@ -109,7 +109,7 @@ class SuiteHomeDialog(QDialog):
         row.addWidget(QLabel("Dams folder:"))
         self.dams_edit = QLineEdit()
         self.dams_edit.editingFinished.connect(self._changed)
-        b = QPushButton("Browse...")
+        b = QPushButton("Browse\u2026")
         b.clicked.connect(lambda _c=False: self._browse())
         self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(lambda _c=False: self.refresh())
@@ -151,7 +151,7 @@ class SuiteHomeDialog(QDialog):
         row.addWidget(self.diag_btn)
         row.addStretch(1)
         for key in ("ndhazard", "ndbreach", "ndscreen"):
-            btn = QPushButton(VS.LABELS.get(key, key) + "...")
+            btn = QPushButton(VS.LABELS.get(key, key) + "\u2026")
             btn.clicked.connect(lambda _c=False, k=key: self.open_plugin(k))
             setattr(self, "btn_" + key, btn)
             row.addWidget(btn)

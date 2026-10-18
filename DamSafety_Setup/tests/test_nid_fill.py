@@ -1,4 +1,4 @@
-"""Setup 1.0.9: a dam's missing height and storage are filled from the National Inventory of
+"""Setup 1.0.10: a dam's missing height and storage are filled from the National Inventory of
 Dams (NID), never over a DWR value; the source shows next to the value ('from NID ...') and
 goes to the Runner hand-off; the NID web service is asked only on the engineer's click (the
 web calls are mocked here); a dam without a point takes its dam line's midpoint.
