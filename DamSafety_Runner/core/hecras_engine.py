@@ -1349,7 +1349,9 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     stamp = time.strftime("%Y%m%d_%H%M%S")
     proj = os.path.join(d["prefix"], "drive_c", "ndbreach",
                         "{}_{}".format(os.path.basename(os.path.normpath(dam_folder)), stamp))
-    r = write_project(dam_folder, proj, log=log, env=env)      # NDBREACH_HECRAS_INFLOW_MODE
+    # v3.10.22: the Runner's 'Refine HEC-RAS mesh with Gmsh points' (off = the env / the grid)
+    opts = {"mesh_seeds": "gmsh"} if getattr(st, "hecras_mesh_seeds", None) == "gmsh" else None
+    r = write_project(dam_folder, proj, log=log, env=env, options=opts)   # NDBREACH_HECRAS_INFLOW_MODE
     name = r["model"].name
     times = preprocess(proj, name, d=d, env=env, terrain_tif=r["paths"]["terrain_tif"],
                        prj=r["paths"]["projection"], log=log)

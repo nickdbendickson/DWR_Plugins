@@ -81,7 +81,7 @@ WITH_DEM = frozenset({"conditiondem", "animation"})
 
 DEFAULT_SETTINGS = {"dams_folder": "", "dam_id": "", "dem": "", "settings_file": "",
                     "grid_m": 10.0, "simh": 12.0, "simmax": 96.0, "force_anuga": False, "length_mi": 4.0, "half_width_mi": 1.0,
-                    "reservoir_carve": "off"}
+                    "reservoir_carve": "off", "hecras_gmsh": False}
 CARVE_CHOICES = ("off", "auto", "on")   # core/reservoir_carve.MODES, the RESERVOIR_CARVE enum
 PLUGIN_KEY = "ndbreach"                 # the suite settings file key (damsuite.versions)
 TAB_ORDER = tuple(t for t, _tools in TABS)
@@ -533,7 +533,16 @@ def defaults(alg, dams_folder, dam_id, settings=None):
         carve = str(S.get("reservoir_carve") or "off").strip().lower()
         if carve in CARVE_CHOICES and carve != "off":                    # v3.10.20
             p["RESERVOIR_CARVE"] = CARVE_CHOICES.index(carve)
+        if S.get("hecras_gmsh"):                                         # v3.10.22
+            p["HECRAS_GMSH"] = True
     return p
+
+
+# v3.10.22: tooltip of the Runner's Advanced checkbox (and the HECRAS_GMSH parameter's help)
+HECRAS_GMSH_TIP = ("Optional, off by default. Uses gmsh to place the HEC-RAS 2D computation "
+                   "points, finer along the dam, breach and channel. Needs gmsh (pip install "
+                   "gmsh, in QGIS's Python or NDBREACH_GMSH_PYTHON). Without gmsh, the regular "
+                   "grid is used and the log says so. Only for Models with HEC-RAS 2D.")
 
 
 RESULT_RASTERS = tuple(workflow.FINAL_NAMES.values()) + tuple(workflow.BASELINE_NAMES.values()) + \

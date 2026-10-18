@@ -212,6 +212,9 @@ class RunSettings:
         # LiDAR shows a water surface (core/reservoir_carve.py): "off" (default) | "auto" |
         # "on"; NDBREACH_RESERVOIR_CARVE overrides the default
         self.reservoir_carve = _carve_default()
+        # v3.10.22: HEC-RAS 2D computation points: "grid" (default) | "gmsh" (optional; falls
+        # back to the grid without gmsh; core/hecras_seeds.py)
+        self.hecras_mesh_seeds = "grid"
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError("unknown setting {}".format(k))
@@ -260,6 +263,8 @@ class RunSettings:
                 continue                 # default mesh: the report stays as before
             elif k == "reservoir_carve" and v in ("off", None, ""):
                 continue                 # v3.10.20: off - the report stays as before
+            elif k == "hecras_mesh_seeds" and v in ("grid", None, ""):
+                continue                 # v3.10.22: the default - the report stays as before
             else:
                 d[k] = v
         return d
@@ -273,7 +278,8 @@ def key_settings(st):
     """st.as_dict() for checkpoint / run keys: without "resume", the EAP-map choice and the
     dam.json switch (they do not change the flood), and without the v3.2.0 class-stop
     settings while that rule is off - so a checkpoint of 3.1.x still resumes."""
-    d = {k: v for k, v in st.as_dict().items() if k not in ("resume", "eap_map", "dam_record")}
+    d = {k: v for k, v in st.as_dict().items() if k not in ("resume", "eap_map", "dam_record",
+                                                            "hecras_mesh_seeds")}
     if not getattr(st, "class_stop", False):
         for k in _CLASS_STOP_KEYS:
             d.pop(k, None)

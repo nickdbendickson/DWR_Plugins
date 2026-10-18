@@ -281,3 +281,26 @@ def hecras_seeds_nominal_cell_and_seed_check_after_compile():
         assert j["seed_check"][area]["ok"]
     finally:
         shutil.rmtree(d)
+
+
+@test
+def hecras_seeds_runner_checkbox_is_optional_and_off():
+    """The Runner's Advanced 'Refine HEC-RAS mesh with Gmsh points (optional)': off by default
+    (no parameter filled, the run settings say grid, checkpoints unchanged); on fills
+    HECRAS_GMSH and the HEC-RAS stage asks build_model for mesh_seeds='gmsh'."""
+    from nd_breach_runner import popup_logic as pl
+    from nd_breach_runner.core import workflow
+    from nd_breach_runner.core import hecras_engine as he
+    assert pl.DEFAULT_SETTINGS["hecras_gmsh"] is False
+    assert "HECRAS_GMSH" not in pl.defaults("rundam", "/d", "X", {})
+    assert pl.defaults("rundam", "/d", "X", {"hecras_gmsh": True})["HECRAS_GMSH"] is True
+    tip = pl.HECRAS_GMSH_TIP
+    assert "off by default" in tip and "Needs gmsh" in tip and "regular grid is used" in tip
+    st = workflow.RunSettings()
+    assert st.hecras_mesh_seeds == "grid" and "hecras_mesh_seeds" not in st.as_dict()
+    on = workflow.RunSettings(hecras_mesh_seeds="gmsh")
+    assert on.as_dict()["hecras_mesh_seeds"] == "gmsh"
+    assert workflow.key_settings(on) == workflow.key_settings(st)   # the flood is the same
+    src = open(he.__file__, encoding="utf-8").read()
+    assert 'getattr(st, "hecras_mesh_seeds", None) == "gmsh"' in src
+    assert "write_project(dam_folder, proj, log=log, env=env, options=opts)" in src
