@@ -63,7 +63,7 @@ class ConsequencesAlgorithm(_ToolBase):
     def shortHelpString(self):
         return ("Estimates damage (structure and contents), population at risk, warning time "
                 "and loss of life for the structures a dam's flood reaches, with the breach, "
-                "without it (the 'Baseline ...' rasters of a flood-scenario run) and the "
+                "without it (the 'Baseline \u2026' rasters of a flood-scenario run) and the "
                 "incremental difference (with minus without, never negative, structure by "
                 "structure; the idea behind ND REG_05.2026 6.4, no criterion of that section "
                 "is checked). Reads 'Depth (Max).tif', 'Velocity (Max).tif' and 'Arrival "
@@ -139,17 +139,17 @@ class ConsequencesAlgorithm(_ToolBase):
         self._num("DESTROY_DV", "Structure destroyed (100% damage) at depth x velocity of "
                   "(ft2/s); a user-adjustable placeholder, not a standard", d.destroy_dv_ft2s,
                   minimum=0)
-        self._num("DESTROY_DEPTH_FT", "... or at a depth of (ft; the starting value is the "
+        self._num("DESTROY_DEPTH_FT", "\u2026 or at a depth of (ft; the starting value is the "
                   "engineer's placeholder, not a standard)", d.destroy_depth_ft, minimum=0)
         self._num("SEV_MED_DEPTH_FT", "Flood severity medium from a depth of (ft; the starting "
                   "value is the engineer's placeholder)", d.sev_med_depth_ft, minimum=0,
                   advanced=True)
-        self._num("SEV_MED_DV", "... or depth x velocity of (ft2/s)", d.sev_med_dv_ft2s,
+        self._num("SEV_MED_DV", "\u2026 or depth x velocity of (ft2/s)", d.sev_med_dv_ft2s,
                   minimum=0, advanced=True)
         self._num("SEV_HIGH_DEPTH_FT", "Flood severity high from a depth of (ft; the starting "
                   "value is the engineer's placeholder)", d.sev_high_depth_ft, minimum=0,
                   advanced=True)
-        self._num("SEV_HIGH_DV", "... or depth x velocity of (ft2/s)", d.sev_high_dv_ft2s,
+        self._num("SEV_HIGH_DV", "\u2026 or depth x velocity of (ft2/s)", d.sev_high_dv_ft2s,
                   minimum=0, advanced=True)
         self._num("ROAD_WET_FT", "Road / rail counts as flooded from a depth of (ft; the "
                   "starting value is the engineer's, a screening value you choose)",

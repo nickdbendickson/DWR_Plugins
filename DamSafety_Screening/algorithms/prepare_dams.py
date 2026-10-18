@@ -88,10 +88,10 @@ class PrepareDams(QgsProcessingAlgorithm):
             "ONLY_IDS", "Only these dams (comma-separated DWR structure IDs, NID IDs or dam IDs such as "
             "DWR-5289; empty = all) - 'Run one dam' uses this", defaultValue="", optional=True))
         self.addParameter(QgsProcessingParameterNumber(
-            self.MINH, "Size filter: skip dams lower than (ft)...",
+            self.MINH, "Size filter: skip dams lower than (ft)\u2026",
             NUM_DOUBLE, 0.0, minValue=0))
         self.addParameter(QgsProcessingParameterNumber(
-            self.MINV, "...AND holding less than (acre-ft). 0 and 0 = no size filter",
+            self.MINV, "\u2026AND holding less than (acre-ft). 0 and 0 = no size filter",
             NUM_DOUBLE, 0.0, minValue=0))
         cm.distance_params(self.addParameter, "DIST_FT", self.DIST,
                            "Match distance (ft) for DWR/NID pairs without a shared NID ID", 1600.0, min_ft=0.0)

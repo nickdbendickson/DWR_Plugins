@@ -153,27 +153,27 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                                      behavior=FILE_FOLDER, optional=True))
         P(QgsProcessingParameterFeatureSource("BLD", "Structures (points or polygons; points are also "
                                               "given to rundam as receptors)", [pt, pg], optional=True))
-        for k, desc in (("S_OCC", "occupancy class field (empty = runner matches OCC_CLS, OCCTYPE ...)"),
-                        ("S_MOBILE", "mobile home field (empty = runner matches PRIM_OCC, mobile ...)"),
-                        ("S_HABITABLE", "habitable yes/no field (empty = runner matches habitable ...)")):
+        for k, desc in (("S_OCC", "occupancy class field (empty = runner matches OCC_CLS, OCCTYPE \u2026)"),
+                        ("S_MOBILE", "mobile home field (empty = runner matches PRIM_OCC, mobile \u2026)"),
+                        ("S_HABITABLE", "habitable yes/no field (empty = runner matches habitable \u2026)")):
             P(QgsProcessingParameterField(k, "Structures: " + desc, parentLayerParameterName="BLD",
                                           optional=True))
         P(QgsProcessingParameterString("UNINHABITED", "Structures: occupancy words that mark an UNINHABITED "
                                        "building (as tool 8)", defaultValue=", ".join(hz.UNINHABITED),
                                        optional=True))
         P(QgsProcessingParameterFeatureSource("ROADS", "Roads (lines)", [ln], optional=True))
-        P(QgsProcessingParameterField("R_AADT", "Roads: AADT field (empty = runner matches aadt ...)",
+        P(QgsProcessingParameterField("R_AADT", "Roads: AADT field (empty = runner matches aadt \u2026)",
                                       parentLayerParameterName="ROADS", optional=True))
         P(QgsProcessingParameterField("R_CLASS", "Roads: class / route field (empty = runner matches "
-                                      "road_class ...)", parentLayerParameterName="ROADS", optional=True))
+                                      "road_class \u2026)", parentLayerParameterName="ROADS", optional=True))
         P(QgsProcessingParameterField("R_SOLE", "Roads: sole access to an occupied location field (empty = "
-                                      "runner matches sole_access ...)", parentLayerParameterName="ROADS",
+                                      "runner matches sole_access \u2026)", parentLayerParameterName="ROADS",
                                       optional=True))
         P(QgsProcessingParameterFeatureSource("RAIL", "Railroads (lines)", [ln], optional=True))
         P(QgsProcessingParameterField("T_TRAINS", "Railroads: trains a day field (empty = runner matches "
-                                      "trains_day ...)", parentLayerParameterName="RAIL", optional=True))
+                                      "trains_day \u2026)", parentLayerParameterName="RAIL", optional=True))
         P(QgsProcessingParameterField("T_PASSENGER", "Railroads: passenger field (empty = runner matches "
-                                      "PASSNGR ...)", parentLayerParameterName="RAIL", optional=True))
+                                      "PASSNGR \u2026)", parentLayerParameterName="RAIL", optional=True))
         P(QgsProcessingParameterString("PASSENGER_CODES", "Railroads: passenger codes",
                                        defaultValue=", ".join(hz.PAX_CODES), optional=True))
         P(QgsProcessingParameterFeatureSource("LIFELINES", "Lifeline facilities (points or polygons)",
