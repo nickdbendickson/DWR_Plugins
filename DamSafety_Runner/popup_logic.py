@@ -57,7 +57,7 @@ TABS = (
         ("animation", "Animation of the flood...", "GIF / MP4 / time-enabled layers."),
         ("submittal", "Submittal report (Word)...", "The report with figures, checklist and files."),
         ("benchmark", "Compare with a reference model (HEC-RAS)...", "Rasters against a reference model."),
-        ("hecrasexport", "Export to HEC-RAS...", "The breach hydrograph and breach table."),
+        ("hecrasexport", "Export to HEC-RAS...", "A HEC-RAS 2D model package, the breach hydrograph and breach table."),
         ("hecrasimport", "Import HEC-RAS results...", "HEC-RAS 2D results as rasters."),
         ("validationrecord", "Validation record (Word)...", "From a benchmark comparison."),
     )),
