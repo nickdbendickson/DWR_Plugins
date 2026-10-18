@@ -16,7 +16,7 @@ Lines (model units, the 2D area downstream of the dam line, which is on its peri
   points half a spacing inside it, every spacing along it, gives even faces along the weir.
 * breach: the two sides of the breach opening cut into the terrain (the trench walls), from the
   dam line to the end of the cut.
-* channel: the two banks of a one-cell-wide row along the run's flow path, from the end of the
+* channel: the two banks of a one-cell-wide row (a full cell, v2c) along the run's flow path, from the end of the
   breach cut to two cells from the edge of the 2D area. A breakline down the middle of the
   channel would put a face on the thalweg; the banks put the thalweg in a row of cells.
 
@@ -33,6 +33,20 @@ PERIM_FRAC = 0.3            # ... or closer than this x its spacing to the perim
 CHANNEL_END_CELLS = 2.0     # the channel lines stop this many cells from the perimeter
 SIMPLIFY_CELLS = 0.5        # flow path simplified to this x the cell size, then smoothed
 SMOOTH_PASSES = 5           # Chaikin passes: bends of about a cell's radius or more
+# v3.10.22 (v2c, Absaraka v2b against v2, 2026-10-18):
+# * the channel strip is one full cell wide (v2b: half a cell, 50 ft; its small cells carried
+#   the main-channel velocity for 37,800 ft and held the time step at 6.25 s for 22 h of the
+#   run instead of 12.5 s: 2,957 s against 1,628 s), and never narrower than this x cell;
+CHANNEL_STRIP_FRAC = 1.0
+# * the dam row is finer across the breach: at least this many cells across the breach
+#   bottom (v2b: 50 ft cells, so only 2 low cells fronted the 80.8 ft breach; HEC-RAS takes
+#   each connection segment's tailwater from the two cells at its ends, and the dry
+#   embankment cells next to them held the tailwater up and the pool at 1,049.2 ft instead
+#   of draining to 1,046.9 ft), one more fine cell each side, then growing by at most
+#   BREACH_GRADING a cell to the dam spacing.
+BREACH_DAM_CELLS = 4
+BREACH_DAM_MIN_FRAC = 0.1   # ... but no finer than this x cell
+BREACH_GRADING = 1.3
 
 
 def poly_dist(px, py, line, chunk=4096):
@@ -232,7 +246,14 @@ def plan(perimeter, cell, dam_line, downstream, breach=None, path=None, spacing=
     if breach is not None:
         C, cw, cut_len = np.asarray(breach[0], float), float(breach[1]), float(breach[2])
         s = min(sp["breach"], cw)               # the pairs of the two sides must not meet
-        t0 = 0.5 * sp["dam"] + 0.5 * s
+        # v2c: a fine dam row across the breach (BREACH_DAM_CELLS cells over its width), and
+        # the breach lines start where that row ends
+        sb = min(sp["dam"], max(2.0 * cw / BREACH_DAM_CELLS, BREACH_DAM_MIN_FRAC * cell))
+        if sb < sp["dam"] - 1e-9:
+            out["dam"]["breach"] = {"centre": C.tolist(), "half": cw, "near": sb}
+            t0 = sb
+        else:
+            t0 = 0.5 * sp["dam"] + 0.5 * s
         if cut_len - t0 >= 2 * s:
             for nm, side in (("Breach left", -1.0), ("Breach right", 1.0)):
                 ln = [C + ab * side * cw + d * t0, C + ab * side * cw + d * cut_len]
@@ -241,7 +262,7 @@ def plan(perimeter, cell, dam_line, downstream, breach=None, path=None, spacing=
         else:
             out["skipped"].append("breach: the cut is too short for breaklines")
     if path is not None and len(path) >= 2:
-        h = sp["channel"]
+        h = max(sp["channel"], CHANNEL_STRIP_FRAC * cell)
         c = channel_centre(path, perimeter, [A, B], max(cut_len, 0.0) + h, cell, h)
         if len(c) >= 2:
             mid, nrm = strip_rows(c)
@@ -261,6 +282,52 @@ def plan(perimeter, cell, dam_line, downstream, breach=None, path=None, spacing=
     else:
         out["skipped"].append("channel: the run has no flow path")
     return out
+
+
+def dam_stations(L, s, tc, half, sb, grading=BREACH_GRADING):
+    """Stations (cell centres) and cell widths of the dam row, 0..L along the dam: width s,
+    except sb over the breach (tc +- half, plus one sb each side, faces on the breach walls
+    when half is a whole number of sb) and growing by at most `grading` a cell from sb to s.
+    Returns (centres, widths)."""
+    faces = [tc]
+    ws = []
+    for sign in (1.0, -1.0):
+        f, w, k = tc, sb, 0
+        nfine = int(round(half / sb)) + 1
+        side = []
+        while True:
+            if k >= nfine:
+                w = min(s, w * grading)
+            nxt = f + sign * w
+            if (sign > 0 and nxt >= L) or (sign < 0 and nxt <= 0):
+                break
+            side.append(nxt)
+            f, k = nxt, k + 1
+            if w >= s - 1e-9:
+                break
+        # the rest to the end of the dam, evenly at about s
+        end = L if sign > 0 else 0.0
+        rem = abs(end - f)
+        m = max(1, int(round(rem / s))) if rem > 1e-9 else 0
+        if m and rem / m < 0.5 * w:                # a sliver at the end: join it
+            m = max(1, m - 1)
+        if side and m:
+            for j in range(1, m):
+                side.append(f + sign * rem * j / m)
+        elif m:
+            for j in range(1, m):
+                side.append(f + sign * rem * j / m)
+        side.append(end)
+        if sign > 0:
+            faces = faces + side
+        else:
+            faces = side[::-1] + faces
+    faces = np.asarray(faces, float)
+    faces = faces[np.r_[True, np.diff(faces) > 1e-9]]
+    if faces[0] > 1e-9:
+        faces = np.r_[0.0, faces]
+    centres = 0.5 * (faces[1:] + faces[:-1])
+    return centres, np.diff(faces)
 
 
 def _pairs(line, s):
@@ -310,9 +377,15 @@ def enforce(points, perimeter, bl):
         if not inside(np.array([mid[0] + nrm[0] * s]), np.array([mid[1] + nrm[1] * s]),
                       perimeter)[0]:
             nrm = -nrm
-        tt = (np.arange(n) + 0.5) * (L / n)
-        row = A[None, :] + u[None, :] * tt[:, None] + nrm[None, :] * 0.5 * s
-        items.append(([A, B], s, s, row))
+        if dam.get("breach"):
+            tt, ss = dam_stations(L, s, float(np.dot(np.asarray(dam["breach"]["centre"], float)
+                                                    - A, u)),
+                                  float(dam["breach"]["half"]), float(dam["breach"]["near"]))
+        else:
+            tt = (np.arange(n) + 0.5) * (L / n)
+            ss = np.full(n, s)
+        row = A[None, :] + u[None, :] * tt[:, None] + nrm[None, :] * 0.5 * ss[:, None]
+        items.append(([A, B], s, float(ss.min()), row))
     for ln in bl.get("lines", []):
         if ln.get("kind") == "channel" and bl.get("strip"):
             continue
@@ -447,7 +520,8 @@ def limit_faces(points, perimeter, cell, protected=None, max_faces=MAX_FACES, pa
     return pts, removed, left
 
 
-def voronoi_precheck(points, perimeter, max_faces=MAX_FACES, clip=None, max_cells_per_fp=8):
+def voronoi_precheck(points, perimeter, max_faces=MAX_FACES, clip=None, max_cells_per_fp=8,
+                     perimeter_tol=None):
     """HEC-RAS's own mesh limits checked before HEC-RAS sees the points (v2_gmsh, Absaraka
     2026-10-18: "48 cell(s) with more than 8 sides" in the property tables).
     The Voronoi diagram of the points; a cell whose corners are all inside the perimeter
@@ -468,6 +542,8 @@ def voronoi_precheck(points, perimeter, max_faces=MAX_FACES, clip=None, max_cell
     vor = Voronoi(np.vstack([pts, frame]))
     vin = inside(vor.vertices[:, 0], vor.vertices[:, 1], per)
     sides = np.zeros(len(pts), np.int64)
+    pieces = np.ones(len(pts), np.int64)
+    pface = np.full(len(pts), np.inf)
     full = np.zeros(len(pts), bool)
     fp_count = {}
     for i in range(len(pts)):
@@ -480,7 +556,15 @@ def voronoi_precheck(points, perimeter, max_faces=MAX_FACES, clip=None, max_cell
             for r in reg:
                 fp_count[r] = fp_count.get(r, 0) + 1
         elif clip is not None:
-            sides[i] = int(clip(vor.vertices[reg]) or 0)
+            c = clip(vor.vertices[reg])
+            if isinstance(c, dict):
+                sides[i] = int(c.get("sides") or 0)
+                pieces[i] = int(c.get("pieces") or 0)
+                pf = c.get("perimeter_faces") or []
+                if pf:
+                    pface[i] = float(min(pf))
+            else:
+                sides[i] = int(c or 0)
         else:
             sides[i] = len(reg)
     # qhull splits a corner shared by many cells into near-duplicates: merge them
@@ -497,60 +581,215 @@ def voronoi_precheck(points, perimeter, max_faces=MAX_FACES, clip=None, max_cell
         fp_max = int(cells_at.max())
         fp_over = int((cells_at > max_cells_per_fp).sum())
     over = np.nonzero(sides > max_faces)[0]
+    per_chk = perimeter_check(pts, per, pieces, pface, full, perimeter_tol)
     return {"cells": int(len(pts)), "interior": int(full.sum()),
             "boundary": int(len(pts) - full.sum()), "max_sides": int(sides.max()) if len(pts)
             else 0, "over": over, "over_interior": int(full[over].sum()),
             "over_boundary": int((~full[over]).sum()), "facepoints_over": fp_over,
-            "max_cells_per_facepoint": fp_max}
+            "max_cells_per_facepoint": fp_max, **per_chk}
+
+
+# v3.10.22 (Absaraka v2b_gmsh, 2026-10-18: "2D Flow Area: Downstream - Error generating
+# Mesh ... 1 face errors detected on the perimeter of the mesh"): HEC-RAS also refuses a
+# perimeter cell that the perimeter cuts in two, and chokes on a perimeter face (the piece of
+# the perimeter inside one cell) of a fraction of a foot, which comes from a perimeter corner
+# that sits almost on a cell edge. Tolerances, as fractions of the local point spacing with a
+# floor in model units (hecras_model passes 5 ft / 0.5 ft in the model's units).
+PERIM_SHORT_FRAC = 0.02      # a perimeter face shorter than 2 % of the spacing ...
+PERIM_SHORT_MIN = 5.0        # ... or than 5 ft (HEC-RAS's own example meshes: 6.2 ft at least)
+PERIM_VERTEX_FRAC = 0.005    # a perimeter corner within 0.5 % of the spacing of a cell edge
+PERIM_VERTEX_MIN = 0.5       # ... or within 0.5 ft
+
+
+def _local_spacing(pts):
+    from scipy.spatial import cKDTree
+    if len(pts) < 2:
+        return np.ones(len(pts))
+    d, _ = cKDTree(pts).query(pts, k=2)
+    return d[:, 1]
+
+
+def vertex_edge_distance(pts, perimeter, k=4):
+    """For each perimeter corner: the seed whose cell holds it, the neighbour whose shared
+    cell edge is nearest, and the distance from the corner to that edge (the bisector of the
+    two seeds). Returns (dist, own, other)."""
+    from scipy.spatial import cKDTree
+    per = np.asarray(perimeter, float)
+    k = int(min(k, len(pts)))
+    if k < 2:
+        n = len(per)
+        return np.full(n, np.inf), np.zeros(n, np.int64), np.zeros(n, np.int64)
+    d, j = cKDTree(pts).query(per, k=k)
+    p1 = pts[j[:, 0]]
+    best = np.full(len(per), np.inf)
+    other = j[:, 1].copy()
+    for m in range(1, k):
+        pj = pts[j[:, m]]
+        sep = np.hypot(*(pj - p1).T)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            bd = (d[:, m] ** 2 - d[:, 0] ** 2) / (2.0 * sep)
+        bd = np.where(sep > 0, bd, np.inf)
+        better = bd < best
+        best = np.where(better, bd, best)
+        other = np.where(better, j[:, m], other)
+    return best, j[:, 0], other
+
+
+def perimeter_check(pts, perimeter, pieces=None, pface=None, full=None, tol=None):
+    """The perimeter part of voronoi_precheck: cells split in two by the perimeter
+    ('split'), cells with a perimeter face shorter than max(PERIM_SHORT_FRAC x spacing,
+    PERIM_SHORT_MIN) ('short'), and perimeter corners within max(PERIM_VERTEX_FRAC x spacing,
+    PERIM_VERTEX_MIN) of a cell edge ('near_vertex': rows of corner index, seed, neighbour,
+    distance). tol = (short_min, vertex_min) in model units; default 5 and 0.5 (feet)."""
+    pts = np.asarray(pts, float).reshape(-1, 2)
+    per = np.asarray(perimeter, float)
+    n = len(pts)
+    smin, vmin = tol if tol is not None else (PERIM_SHORT_MIN, PERIM_VERTEX_MIN)
+    sp = _local_spacing(pts)
+    pieces = np.ones(n, np.int64) if pieces is None else pieces
+    pface = np.full(n, np.inf) if pface is None else pface
+    split = np.nonzero(pieces > 1)[0]
+    stol = np.maximum(PERIM_SHORT_FRAC * sp, smin)
+    short = np.nonzero(pface < stol)[0]
+    vd, own, oth = vertex_edge_distance(pts, per)
+    vtol = np.maximum(PERIM_VERTEX_FRAC * sp[own], vmin) if n else np.zeros(0)
+    nv = np.nonzero(vd < vtol)[0]
+    fin = pface[np.isfinite(pface)]
+    return {"split": split, "short": short,
+            "near_vertex": np.c_[nv, own[nv], oth[nv]].astype(np.int64) if len(nv)
+            else np.zeros((0, 3), np.int64),
+            "near_vertex_dist": vd[nv],
+            "split_cells": int(len(split)), "short_perimeter_faces": int(len(short)),
+            "perimeter_corners_near_edge": int(len(nv)),
+            "min_perimeter_face": float(fin.min()) if len(fin) else None,
+            "min_corner_to_edge": float(vd.min()) if len(vd) else None}
+
+
+_ARRAY_KEYS = ("over", "split", "short", "near_vertex", "near_vertex_dist")
+
+
+def precheck_summary(chk):
+    """voronoi_precheck without its index arrays (for reports and JSON)."""
+    out = {k: v for k, v in chk.items() if k not in _ARRAY_KEYS}
+    for k in ("min_perimeter_face", "min_corner_to_edge"):
+        if out.get(k) is not None:
+            out[k] = round(float(out[k]), 3)
+    return out
+
+
+def perimeter_bad(chk):
+    return chk["split_cells"] + chk["short_perimeter_faces"] + chk["perimeter_corners_near_edge"]
 
 
 def fix_faces(points, perimeter, protected=None, clip=None, max_faces=MAX_FACES, passes=12,
-              nudge=True):
-    """Make every cell have at most max_faces sides (voronoi_precheck): first a nudge (each
-    bad point that is not a breakline pair moves to the middle of its own cell, one Lloyd
-    step, which evens out its neighbours), then the bad point goes (its neighbours share its
-    area); a protected point stays and its busiest unprotected neighbour goes instead.
-    Returns (points, protected, {'nudged', 'removed', 'left', 'facepoints_over', 'check'})
-    where 'check' is the final voronoi_precheck without the index array."""
+              nudge=True, perimeter_tol=None):
+    """Make the layout pass voronoi_precheck: every cell at most max_faces sides, and (v2c)
+    no perimeter cell split in two, no perimeter face shorter than the tolerance, and no
+    perimeter corner almost on a cell edge.
+    Over-sided cells: first a nudge (each bad point that is not a breakline pair moves to the
+    middle of its own cell, one Lloyd step, which evens out its neighbours), then the bad
+    point goes (its neighbours share its area); a protected point stays and its busiest
+    unprotected neighbour goes instead.
+    Perimeter: a split cell or one with a sliver perimeter face loses its point (its
+    neighbours take the strip of perimeter over; a protected point keeps its place and its
+    nearest unprotected neighbour goes); a corner within the tolerance of a cell edge moves
+    that edge off it by nudging the corner's own point (or, if that one is protected, the
+    neighbour) 3 tolerances along the line to the corner.
+    Returns (points, protected, {'nudged', 'removed', 'left', 'facepoints_over',
+    'perimeter_nudged', 'perimeter_removed', 'perimeter_left', 'perimeter_found', 'check'})
+    where 'check' is the final voronoi_precheck without its index arrays and
+    'perimeter_found' the first check's perimeter counts."""
     from scipy.spatial import Voronoi
     pts = np.asarray(points, float).reshape(-1, 2).copy()
+    per = np.asarray(perimeter, float)
     prot = np.zeros(len(pts), bool) if protected is None else np.asarray(protected, bool).copy()
-    nudged = removed = 0
+    nudged = removed = pnudged = premoved = 0
+    found = None
+    smin, vmin = perimeter_tol if perimeter_tol is not None else (PERIM_SHORT_MIN,
+                                                                   PERIM_VERTEX_MIN)
     for k in range(passes):
-        chk = voronoi_precheck(pts, perimeter, max_faces, clip)
+        chk = voronoi_precheck(pts, per, max_faces, clip, perimeter_tol=perimeter_tol)
+        if found is None:
+            found = {key: chk[key] for key in ("split_cells", "short_perimeter_faces",
+                                                "perimeter_corners_near_edge")}
         bad = chk["over"]
-        if not len(bad):
+        pbad = np.union1d(chk["split"], chk["short"]).astype(np.int64)
+        nv = chk["near_vertex"]
+        if not len(bad) and not len(pbad) and not len(nv):
             break
-        if nudge and k == 0:
-            vor = Voronoi(pts)
-            for i in bad:
-                reg = vor.regions[vor.point_region[i]]
-                if prot[i] or not reg or -1 in reg:
+        # perimeter corners near an edge: move the edge (cheap, never removes a point)
+        if len(nv):
+            sp = _local_spacing(pts)
+            for vi, a, b in nv:
+                tol = max(PERIM_VERTEX_FRAC * sp[a], vmin)
+                for q, sign in ((a, 1.0), (b, -1.0)):
+                    if prot[q]:
+                        continue
+                    dv = per[vi] - pts[q]
+                    L = float(np.hypot(*dv))
+                    if L <= 0:
+                        continue
+                    step = min(3.0 * tol, 0.25 * L)
+                    new = pts[q] + sign * dv / L * step
+                    if inside(np.array([new[0]]), np.array([new[1]]), per)[0]:
+                        pts[q] = new
+                        pnudged += 1
+                        break
+        drop = set()
+        if len(pbad):
+            from scipy.spatial import cKDTree
+            tree = cKDTree(pts)
+            for i in pbad:
+                if not prot[i]:
+                    drop.add(int(i))
                     continue
-                c = vor.vertices[reg].mean(axis=0)
-                if inside(np.array([c[0]]), np.array([c[1]]), perimeter)[0]:
-                    pts[i] = c
-                    nudged += 1
-            if nudged:
-                continue
-        vor = Voronoi(pts)
-        rp = vor.ridge_points
-        cnt = np.bincount(rp.ravel(), minlength=len(pts))
-        drop = set(int(i) for i in bad if not prot[i])
-        for i in bad:
-            if prot[i]:
-                nb = np.r_[rp[rp[:, 0] == i, 1], rp[rp[:, 1] == i, 0]]
-                nb = nb[~prot[nb]]
-                if len(nb):
-                    drop.add(int(nb[np.argmax(cnt[nb])]))
-        if not drop:
+                _, nb = tree.query(pts[i], k=min(7, len(pts)))
+                nb = [int(j) for j in np.atleast_1d(nb)[1:] if not prot[j]]
+                if nb:
+                    drop.add(nb[0])
+            premoved += len(drop)
+        if len(bad):
+            if nudge and k == 0 and not drop:
+                vor = Voronoi(pts)
+                nn = 0
+                for i in bad:
+                    reg = vor.regions[vor.point_region[i]]
+                    if prot[i] or not reg or -1 in reg:
+                        continue
+                    c = vor.vertices[reg].mean(axis=0)
+                    if inside(np.array([c[0]]), np.array([c[1]]), per)[0]:
+                        pts[i] = c
+                        nn += 1
+                nudged += nn
+                if nn:
+                    continue
+            vor = Voronoi(pts)
+            rp = vor.ridge_points
+            cnt = np.bincount(rp.ravel(), minlength=len(pts))
+            ob = set(int(i) for i in bad if not prot[i])
+            for i in bad:
+                if prot[i]:
+                    nb = np.r_[rp[rp[:, 0] == i, 1], rp[rp[:, 1] == i, 0]]
+                    nb = nb[~prot[nb]]
+                    if len(nb):
+                        ob.add(int(nb[np.argmax(cnt[nb])]))
+            removed += len(ob - drop)
+            drop |= ob
+        if len(pts) - len(drop) < 4:                     # a degenerate layout: stop
             break
-        keep = np.ones(len(pts), bool)
-        keep[list(drop)] = False
-        pts, prot = pts[keep], prot[keep]
-        removed += len(drop)
-    chk = voronoi_precheck(pts, perimeter, max_faces, clip)
+        if not drop and not len(nv):
+            break
+        if drop:
+            keep = np.ones(len(pts), bool)
+            keep[list(drop)] = False
+            pts, prot = pts[keep], prot[keep]
+    chk = voronoi_precheck(pts, per, max_faces, clip, perimeter_tol=perimeter_tol)
     left = int(len(chk["over"]))
-    chk = {k: v for k, v in chk.items() if k != "over"}
+    pleft = int(len(chk["split"]) + len(chk["short"]))
+    summ = precheck_summary(chk)
     return pts, prot, {"nudged": int(nudged), "removed": int(removed), "left": left,
-                       "facepoints_over": chk["facepoints_over"], "check": chk}
+                       "facepoints_over": summ["facepoints_over"],
+                       "perimeter_nudged": int(pnudged), "perimeter_removed": int(premoved),
+                       "perimeter_left": pleft,
+                       "perimeter_corners_left": int(len(chk["near_vertex"])),
+                       "perimeter_found": found or {}, "check": summ}

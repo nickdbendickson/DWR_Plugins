@@ -2835,14 +2835,21 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                                "length": round(hbl.length(b["line"]), 1)} for b in bl_lines],
                        skipped=bplan["skipped"],
                        channel_length=bplan.get("channel_length"))
+        bdam = (bplan["dam"] or {}).get("breach")
+        if bdam:
+            bl_info["breach_dam_spacing"] = round(float(bdam["near"]), 2)
         notes.append("Breaklines: {} (length, cell size along it), and an even row of points "
-                     "{:g} {u} apart along the dam; built into the computation points ({:,} "
+                     "{:g} {u} apart along the dam{}; built into the computation points ({:,} "
                      "removed, {:,} added), because HEC-RAS keeps the points it is given and "
                      "does not enforce breaklines in them.{}".format(
                          "; ".join("{} {:,.0f} {u}, {:g} {u}".format(
                              b["name"], hbl.length(b["line"]), round(b["near"], 1),
                              u=units.len_name) for b in bl_lines) or "none",
-                         bl_dam[0], bst["points_removed"], bst["points_added"],
+                         bl_dam[0],
+                         " ({:g} {u} across the breach, so that {} cells front its bottom)".format(
+                             round(float(bdam["near"]), 1), hbl.BREACH_DAM_CELLS,
+                             u=units.len_name) if bdam else "",
+                         bst["points_removed"], bst["points_added"],
                          "".join(" No {}.".format(w) for w in bplan["skipped"]),
                          u=units.len_name))
         log(notes[-1])
@@ -2852,17 +2859,13 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # property tables with "48 cell(s) with more than 8 sides"): the Voronoi pre-check on
     # every cell (clipped to the perimeter where it reaches it) and every face point, with a
     # nudge, then local removal; a layout that still fails stops the build here
-    poly_ = _polygon(perim)
-
-    def _clip(corners):
-        cp = _polygon(corners).Intersection(poly_)
-        if cp is None or cp.IsEmpty():
-            return 0
-        rr = _rings(cp)
-        return len(rr[0][1]) if rr else 0
-
+    # v3.10.22 (v2c; v2b_gmsh: "1 face errors detected on the perimeter of the mesh"): and
+    # on the perimeter, no cell cut in two, no sliver perimeter face, no perimeter corner on
+    # a cell edge; for the grid and the gmsh points alike
+    ptol = (units.from_ft(hbl.PERIM_SHORT_MIN), units.from_ft(hbl.PERIM_VERTEX_MIN))
     try:
-        pts, _, vfix = hbl.fix_faces(pts, perim, prot, clip=_clip)
+        pts, _, vfix = hbl.fix_faces(pts, perim, prot, clip=perimeter_clip(perim),
+                                     perimeter_tol=ptol)
     except ImportError:                                 # pragma: no cover - no scipy
         vfix = None
     if vfix is not None:
@@ -2871,19 +2874,37 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                          "that would have made cells with more than {} faces (HEC-RAS's "
                          "limit).".format(vfix["nudged"], vfix["removed"], hbl.MAX_FACES))
             log(notes[-1])
+        pf = vfix["perimeter_found"]
+        if vfix["perimeter_nudged"] or vfix["perimeter_removed"]:
+            notes.append("Perimeter pre-check: found {} cell(s) cut in two by the perimeter, "
+                         "{} perimeter face(s) shorter than {:g} {u} (or 2 % of the spacing) "
+                         "and {} perimeter corner(s) within {:g} {u} of a cell edge; {:,} "
+                         "point(s) nudged and {:,} removed to clear them (HEC-RAS stops with "
+                         "'face errors detected on the perimeter of the mesh').".format(
+                             pf.get("split_cells", 0), pf.get("short_perimeter_faces", 0),
+                             round(ptol[0], 2), pf.get("perimeter_corners_near_edge", 0),
+                             round(ptol[1], 2), vfix["perimeter_nudged"],
+                             vfix["perimeter_removed"], u=units.len_name))
+            log(notes[-1])
         vc = vfix["check"]
-        if vfix["left"] or vc["facepoints_over"]:
+        if vfix["left"] or vc["facepoints_over"] or vfix["perimeter_left"]:
             raise HecRasModelError(
-                "the computation points still make {:,} cells with more than {} faces and "
-                "{:,} face points shared by more than 8 cells after {:,} were nudged and {:,} "
-                "removed; HEC-RAS would refuse this mesh. Build with breaklines=False or "
+                "the computation points still make {:,} cells with more than {} faces, "
+                "{:,} face points shared by more than 8 cells and {:,} perimeter cells that "
+                "are cut in two or have a sliver perimeter face, after {:,} were nudged and "
+                "{:,} removed; HEC-RAS would refuse this mesh. Build with breaklines=False or "
                 "mesh_seeds='grid', or a larger cell size.".format(
-                    vfix["left"], hbl.MAX_FACES, vc["facepoints_over"], vfix["nudged"],
-                    vfix["removed"]))
+                    vfix["left"], hbl.MAX_FACES, vc["facepoints_over"], vfix["perimeter_left"],
+                    vfix["nudged"] + vfix["perimeter_nudged"],
+                    vfix["removed"] + vfix["perimeter_removed"]))
         notes.append("Voronoi pre-check: {:,} cells ({:,} inside, {:,} clipped to the "
                      "perimeter), most sides {}, 0 over {}; face points: most {} cells, 0 over "
-                     "8.".format(vc["cells"], vc["interior"], vc["boundary"], vc["max_sides"],
-                                 hbl.MAX_FACES, vc["max_cells_per_facepoint"]))
+                     "8; perimeter: 0 cells cut in two, shortest perimeter face {} {u}, "
+                     "nearest corner to a cell edge {} {u}.".format(
+                         vc["cells"], vc["interior"], vc["boundary"], vc["max_sides"],
+                         hbl.MAX_FACES, vc["max_cells_per_facepoint"],
+                         vc.get("min_perimeter_face"), vc.get("min_corner_to_edge"),
+                         u=units.len_name))
         log(notes[-1])
     n_faces = vfix["removed"] if vfix else 0
     seeds_info["removed_for_faces"] = int(n_faces)
@@ -2894,7 +2915,9 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     mc = mesh_check(perim, pts, cell)
     if mc is not None and vfix is not None:
         mc = dict(mc, voronoi_precheck=vfix["check"], nudged=vfix["nudged"],
-                  removed=vfix["removed"])
+                  removed=vfix["removed"], perimeter_found=vfix["perimeter_found"],
+                  perimeter_nudged=vfix["perimeter_nudged"],
+                  perimeter_removed=vfix["perimeter_removed"])
     # v3.10.22: the 2D area's nominal cell size is the median spacing of the points (gmsh)
     nominal_cell = cell
     if seeds_info.get("used") == "gmsh":
@@ -3476,6 +3499,21 @@ def write_readme(path, m, info, notes, dam, params):
             "cells, over 8: {facepoints_over}".format(**info["mesh_check"]["voronoi_precheck"])
             + "; {} nudged, {} removed".format(info["mesh_check"]["nudged"],
                                                info["mesh_check"]["removed"])),
+        "| Perimeter pre-check | {} | HEC-RAS stops on a perimeter cell cut in two or a "
+        "sliver perimeter face ('face errors detected on the perimeter of the mesh'); "
+        "points nudged or removed locally before writing |".format(
+            "not run (no scipy)" if not (info.get("mesh_check") or {}).get("voronoi_precheck")
+            else "found {f[split_cells]} cut in two, {f[short_perimeter_faces]} sliver faces, "
+            "{f[perimeter_corners_near_edge]} corners on a cell edge; {n} nudged, {r} removed; "
+            "now {c[split_cells]} / {c[short_perimeter_faces]} / "
+            "{c[perimeter_corners_near_edge]}, shortest perimeter face {c[min_perimeter_face]}, "
+            "nearest corner to an edge {c[min_corner_to_edge]}".format(
+                f=info["mesh_check"].get("perimeter_found") or {
+                    "split_cells": 0, "short_perimeter_faces": 0,
+                    "perimeter_corners_near_edge": 0},
+                c=info["mesh_check"]["voronoi_precheck"],
+                n=info["mesh_check"].get("perimeter_nudged", 0),
+                r=info["mesh_check"].get("perimeter_removed", 0))),
         "| Simulation | {:g} h from {} 00:00 | {} |".format(
             info["sim_hours"], START_DATE, info.get("sim_how") or ""),
         "| Dam line | {:,.0f} {} | {} |".format(info["dam_line"], L,
@@ -3596,3 +3634,60 @@ def structures_readme(m, sinfo):
             "4. After the run, compare the water upstream of each road with the run's maximum "
             "depth there.", ""]
     return out
+
+
+def perimeter_clip(perimeter):
+    """v3.10.22: clip(corners) for hecras_breaklines.voronoi_precheck: a Voronoi cell clipped
+    to the 2D area as HEC-RAS builds it -> {'sides', 'pieces' (polygons it falls into; HEC-RAS
+    refuses a cell split in two), 'perimeter_faces' [lengths of the pieces of the perimeter
+    inside it: HEC-RAS's perimeter faces]}."""
+    from osgeo import ogr
+    per = np.asarray(perimeter, float)
+    poly = _polygon(per)
+    ring = ogr.Geometry(ogr.wkbLineString)
+    for x, y in list(per) + [per[0]]:
+        ring.AddPoint_2D(float(x), float(y))
+
+    def _parts(g):
+        if g is None or g.IsEmpty():
+            return []
+        t = ogr.GT_Flatten(g.GetGeometryType())
+        if t == ogr.wkbLineString:
+            return [np.asarray(g.GetPoints(), float)[:, :2]]
+        if t in (ogr.wkbMultiLineString, ogr.wkbGeometryCollection):
+            out = []
+            for i in range(g.GetGeometryCount()):
+                out += _parts(g.GetGeometryRef(i))
+            return out
+        return []
+
+    def clip(corners):
+        cell = _polygon(corners)
+        cp = cell.Intersection(poly)
+        if cp is None or cp.IsEmpty():
+            return {"sides": 0, "pieces": 0, "perimeter_faces": []}
+        rr = _rings(cp)
+        parts = [p for p in _parts(ring.Intersection(cell)) if len(p) >= 2]
+        # the ring's start point cuts one piece in two: join pieces that share an end
+        merged = True
+        while merged and len(parts) > 1:
+            merged = False
+            for i in range(len(parts)):
+                for j in range(i + 1, len(parts)):
+                    a, b = parts[i], parts[j]
+                    if np.allclose(a[-1], b[0]):
+                        parts[i] = np.vstack([a, b[1:]])
+                    elif np.allclose(b[-1], a[0]):
+                        parts[i] = np.vstack([b, a[1:]])
+                    else:
+                        continue
+                    del parts[j]
+                    merged = True
+                    break
+                if merged:
+                    break
+        lens = [float(np.hypot(*np.diff(p, axis=0).T).sum()) for p in parts]
+        return {"sides": len(rr[0][1]) if rr else 0, "pieces": len(rr),
+                "perimeter_faces": lens}
+
+    return clip

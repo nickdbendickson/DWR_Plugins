@@ -34,7 +34,7 @@ MODES = ("grid", "gmsh")
 TIMEOUT_S = 600.0
 MIN_SEED_CAP = 25000          # a small 2D area may refine to more than max_seeds_ratio x its grid
 # spacing along the lines, as a fraction of the 2D area's cell size
-DEFAULT_REFINE = {"dam_frac": 0.25, "breach_frac": 0.25, "channel_frac": 0.5,
+DEFAULT_REFINE = {"dam_frac": 0.25, "breach_frac": 0.25, "channel_frac": 1.0,
                   "dam_dist_cells": 8.0, "channel_dist_cells": 4.0,
                   "max_seeds_ratio": 4.0, "edge_frac": 0.45,
                   # v3.10.22 (Absaraka v2_gmsh: 58 cells of 9 sides, HEC-RAS refused 48):

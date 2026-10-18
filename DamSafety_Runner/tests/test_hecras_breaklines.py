@@ -76,8 +76,10 @@ def hecras_breaklines_pairs_put_the_faces_on_the_line():
 
 @test
 def hecras_breaklines_channel_strip_and_dam_row():
-    """Pure: a curved flow path makes two bank lines one spacing apart with a row of cells
-    between them; the dam (on the perimeter) gets an even row half a spacing inside it."""
+    """Pure: a curved flow path makes two bank lines one full cell apart (v2c; v2b: half a
+    cell, which held HEC-RAS's time step at half of v2's) with a row of cells between them;
+    the dam (on the perimeter) gets an even row half a spacing inside it, finer across the
+    breach: at least 4 cells over the breach bottom (v2c; v2b had 2, and the pool stalled)."""
     if not _has_scipy():
         print("  (skipped: no scipy)")
         return
@@ -98,15 +100,25 @@ def hecras_breaklines_channel_strip_and_dam_row():
     # the channel starts below the breach cut and stops two cells from the edge
     assert cl[:, 1].max() < 4000.0 - 250.0 and cl[:, 1].min() >= 200.0 - 1e-6
     gap = hbl.poly_dist(cl[:, 0], cl[:, 1], cr)
-    assert np.median(gap) > 0.8 * 50.0 and np.median(gap) < 1.2 * 50.0, np.median(gap)
+    assert np.median(gap) > 0.8 * 100.0 and np.median(gap) < 1.2 * 100.0, np.median(gap)
+    assert plan["strip"]["h"] == 100.0 and plan["lines"][2]["near"] == 100.0
+    assert plan["dam"]["breach"]["near"] == 20.0                # 80 ft bottom / 4
     out, st = hbl.enforce(pts, per, plan)
     for b in plan["lines"]:
         f = hbl.share_on_faces(out, b["line"])
         assert f > 0.95, (b["name"], f)
     # the dam row: points half the dam spacing inside the dam line, evenly spaced
-    row = out[np.abs(out[:, 1] - (4000.0 - 25.0)) < 1e-6]
+    row = out[np.abs(out[:, 1] - (4000.0 - 25.0)) < 2.5]       # half the (fitted) spacing
     row = row[(row[:, 0] > 1000.0) & (row[:, 0] < 2000.0)]
-    assert len(row) >= 18, len(row)
+    assert len(row) >= 12, len(row)
+    assert (np.abs(row[:, 0] - 1500.0) > 150.0).all()          # coarse away from the breach
+    fine = out[(np.abs(out[:, 1] - (4000.0 - 10.0)) < 1e-6) & (np.abs(out[:, 0] - 1500.0) < 40.0)]
+    assert len(fine) >= 4, fine                                  # 4 low cells front the breach
+    assert np.allclose(np.sort(fine[:, 0]), [1470.0, 1490.0, 1510.0, 1530.0]), fine
+    # its cells grow by at most 1.3 a cell from 20 to the dam spacing
+    c, w = hbl.dam_stations(1000.0, 50.0, 500.0, 40.0, 20.0)
+    assert abs(w.sum() - 1000.0) < 1e-6 and w.min() == 20.0 and w.max() <= 50.0 + 1e-6
+    assert (w[1:] / w[:-1]).max() <= 1.3 + 1e-6, w
     assert hbl.inside(out[:, 0], out[:, 1], per).all()
     # no breaklines asked: no plan lines when the run has no flow path or cut
     p2 = hbl.plan(per, 100.0, (A, B), (0.0, -1.0), breach=None, path=None)
@@ -167,7 +179,10 @@ def hecras_breaklines_written_and_built_into_the_grid():
         assert [b[0] for b in bl] == ["Breach left", "Breach right", "Channel left",
                                       "Channel right"], [b[0] for b in bl]
         for name, near, far, rep, rad, line in bl:
-            assert far == cell and 0 < near <= 0.5 * cell, (name, near, far)
+            if name.startswith("Channel"):                       # v2c: a full-cell strip
+                assert far == cell and near == cell, (name, near, far)
+            else:
+                assert far == cell and 0 < near <= 0.5 * cell, (name, near, far)
             assert rep == "0" and rad == "-1"
             assert hm.cond.points_in_polygon(line[:, 0], line[:, 1],
                                              np.asarray(m.perimeter)).all(), name
@@ -274,3 +289,62 @@ def hecras_breaklines_voronoi_precheck_counts_sides_and_face_points():
     # clipped cells: the clip function decides their sides
     chk = hbl.voronoi_precheck(pts, per, clip=lambda corners: 12)
     assert chk["over_boundary"] == chk["boundary"] > 0 and chk["over_interior"] == 0
+
+
+@test
+def hecras_breaklines_perimeter_precheck_flags_and_fixes_the_v2b_gmsh_failure():
+    """v2c: Absaraka package_v2b_gmsh stopped in HEC-RAS with "1 face errors detected on the
+    perimeter of the mesh". Its points near the two bad cells (tests/data): the check flags
+    cell 54811, which the perimeter cuts in two, and cell 54967, whose perimeter face is 0.6
+    ft; fix_faces clears them by nudging or removing a few points nearby."""
+    if p0._skip() or not _has_scipy():
+        print("  (skipped: no GDAL / scipy)")
+        return
+    import json
+    with open(os.path.join(os.path.dirname(__file__), "data",
+                           "abs2801_v2bg_perimeter_cells.json")) as f:
+        d = json.load(f)
+    for case in d["cases"]:
+        per, pts = np.asarray(case["perimeter"]), np.asarray(case["points"])
+        clip = hm.perimeter_clip(per)
+        a = int(np.argmin(np.hypot(*(pts - case["cell"]).T)))
+        chk = hbl.voronoi_precheck(pts, per, clip=clip)
+        if case["kind"] == "split":
+            assert a in chk["split"], chk["split"]
+        else:
+            assert a in chk["short"], chk["short"]
+            assert chk["min_perimeter_face"] < 1.0, chk["min_perimeter_face"]
+        s = hbl.precheck_summary(chk)
+        assert s["split_cells"] + s["short_perimeter_faces"] >= 1
+        assert "split" not in s and "near_vertex" not in s
+        out, _, info = hbl.fix_faces(pts, per, None, clip=clip)
+        assert info["perimeter_left"] == 0 and info["perimeter_corners_left"] == 0, info
+        assert info["perimeter_removed"] + info["perimeter_nudged"] <= 6, info
+        c2 = info["check"]
+        assert c2["split_cells"] == 0 and c2["short_perimeter_faces"] == 0
+        assert c2["min_perimeter_face"] >= hbl.PERIM_SHORT_MIN, c2
+    # a sound perimeter: nothing to do
+    sq = [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]
+    g = _grid(0, 1000, 0, 1000, 100.0)
+    out2, _, i2 = hbl.fix_faces(g, sq, None, clip=hm.perimeter_clip(sq))
+    assert len(out2) == len(g) and i2["perimeter_found"] == {
+        "split_cells": 0, "short_perimeter_faces": 0, "perimeter_corners_near_edge": 0}, i2
+
+
+@test
+def hecras_breaklines_perimeter_corner_on_a_cell_edge_is_moved_off():
+    """v2c: a perimeter corner 0.1 ft from the face between two points (half a spacing from
+    each) is flagged and the nearer point nudged so the corner is clear of the edge."""
+    if not _has_scipy():
+        print("  (skipped: no scipy)")
+        return
+    g = _grid(0, 1000, 0, 1000, 100.0)
+    # the face between (450, 450) and (550, 450) is x = 500; a corner at x = 500.1
+    per = [(0.0, 0.0), (500.1, 400.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]
+    keep = hbl.inside(g[:, 0], g[:, 1], per) & (hbl.ring_dist(g[:, 0], g[:, 1], per) > 30.0)
+    g = g[keep]
+    pc = hbl.perimeter_check(g, per)
+    assert pc["perimeter_corners_near_edge"] >= 1 and 1 in pc["near_vertex"][:, 0], pc
+    out, _, info = hbl.fix_faces(g, per, None)
+    assert info["perimeter_nudged"] >= 1 and info["perimeter_corners_left"] == 0, info
+    assert hbl.perimeter_check(out, per)["min_corner_to_edge"] >= hbl.PERIM_VERTEX_MIN
