@@ -393,6 +393,9 @@ def inflow_missing_message(status):
                             st.get("lowest_at_ft") or 0.0))
         if st.get("search_error"):
             msg += " (search failed: {})".format(st["search_error"])
+        if st.get("side_problems"):
+            msg += ("; CHECK THE DAM POINT: the point and the run's flow line disagree ({})"
+                    .format("; ".join(st["side_problems"])))
         return msg + ". Check the dam point, or use inflow_mode='breach'."
     return ("the run has no inflow point (run_report.json 'inflow_point'); "
             "use inflow_mode='breach'")
@@ -415,6 +418,32 @@ def fallback_sentence(status):
         return head + "the run recorded no inflow point."
     return head + "the run's inflow point was rejected ({}).".format(st.get("why") or
                                                                     "not usable")
+
+
+def side_conflict_message(status):
+    st = status or {}
+    return ("inflow mode 'auto' did not fall back to the breach model: the run's inflow "
+            "point{} looks like a dam-point / downstream-side problem ({}). Check the dam "
+            "point (and the DWR dam line) and re-run the Runner (3.10.18 keeps the inflow on "
+            "the downstream side), or set {}=breach to model the breach at the dam anyway."
+            .format(" ({:.1f}, {:.1f})".format(*st["run_xy"]) if st.get("run_xy") else "",
+                    "; ".join(st.get("side_problems") or []), ENV_MODE))
+
+
+def _record_side_conflict(dam_folder, status):
+    rp = os.path.join(dam_folder, hecras.MODEL_FOLDER, hecras.RUN_REPORT_JSON)
+    try:
+        with open(rp, encoding="utf-8") as f:
+            r = json.load(f)
+        r["hecras_inflow"] = dict(r.get("hecras_inflow") or {}, status="side_conflict",
+                                  side_problems=status.get("side_problems"),
+                                  note=side_conflict_message(status))
+        tmp = rp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(r, f, indent=2, default=str)
+        os.replace(tmp, rp)
+    except (OSError, ValueError):
+        pass
 
 
 def _record_fallback(dam_folder, status, sentence, reason):
@@ -466,6 +495,13 @@ def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
     if inflow_mode == MODE_AUTO:
         if res["info"].get("inflow_xy_model") is None:
             st = res["info"].get("inflow_status") or {}
+            if st.get("side_problems"):
+                # not a quiet fallback: the run's inflow point is on the wrong side of the dam
+                # or far from it, so the dam point or the downstream side is probably wrong
+                _record_side_conflict(dam_folder, st)
+                msg = side_conflict_message(st)
+                log("ERROR: " + msg)
+                raise HecRasEngineError(msg)
             sentence = fallback_sentence(st)
             reason = inflow_missing_message(st).split(". Check the dam point")[0].split(
                 "; use inflow_mode")[0]
@@ -481,6 +517,10 @@ def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
             inflow_mode = "hydrograph"
     res["inflow_mode"] = inflow_mode
     res["inflow_bc"] = None
+    sp = (res["info"].get("inflow_status") or {}).get("side_problems")
+    if sp and inflow_mode == "breach":
+        log("WARNING: CHECK THE DAM POINT: the run's inflow point and its flow line disagree "
+            "({}); the breach model at the dam was asked for explicitly.".format("; ".join(sp)))
     if inflow_mode == "breach":
         b = res["model"].breach or {}
         log("HEC-RAS inflow: dam breach in the plan (SA/2D connection, trigger water surface "

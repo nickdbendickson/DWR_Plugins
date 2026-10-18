@@ -1418,6 +1418,35 @@ def inflow_check(ground_m, top_m, height_m):
     return ""
 
 
+INFLOW_FAR_FT = 1312.0       # 400 m: the Runner never places the inflow farther from the dam
+
+
+def inflow_side_problems(dam_xy, inflow_xy, path=None, far=None, unit=""):
+    """Why the run's inflow point looks like a dam-point / downstream-side problem: the flow
+    line from it runs back over the dam point, the point is behind the dam relative to the
+    flow line's direction, or it is farther from the dam point than the Runner ever puts it
+    (`far`, model units). [] when none."""
+    out = []
+    P, Q = np.asarray(dam_xy, float), np.asarray(inflow_xy, float)
+    d0 = float(np.hypot(*(Q - P)))
+    if far is not None and d0 > far:
+        out.append("the inflow point is {:,.0f} {u} from the dam point (the Runner places it "
+                   "within {:,.0f} {u})".format(d0, far, u=unit))
+    if path is not None and len(path) >= 2 and d0 > 1e-6:
+        pa = np.asarray(path, float)
+        dmin = float(np.hypot(pa[1:, 0] - P[0], pa[1:, 1] - P[1]).min())
+        if dmin < 0.5 * d0:
+            out.append("the flow line from the inflow point runs back over the dam point "
+                       "({:,.0f} {u} from it)".format(dmin, u=unit))
+        seg = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(pa, axis=0).T))])
+        far_i = int(np.searchsorted(seg, min(seg[-1], 3.0 * d0 + 1e-9)))
+        v = pa[min(far_i, len(pa) - 1)] - pa[0]
+        if float(np.hypot(*v)) > 1e-6 and float(np.dot(Q - P, v)) < 0:
+            out.append("the inflow point is behind the dam relative to the flow line's "
+                       "direction")
+    return out
+
+
 def inflow_drop_needed_m(top_m, height_m):
     """The highest ground (m) an inflow point may have: a quarter of the dam height below the
     top of dam (inflow_check)."""
@@ -1672,6 +1701,24 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                      "run_xy": list(inflow) if inflow else None}
     if inflow is not None and to_model is None:
         inflow_status.update(status="rejected", why="the run records no coordinate system")
+    if inflow_m is not None:
+        # the run's point against the run's flow line: a point behind the dam (DWR-3161,
+        # Runner 3.10.16) means the dam point or the downstream side is wrong, not only that
+        # the ground is too high
+        side = inflow_side_problems(P, inflow_m, path_m, units.from_ft(INFLOW_FAR_FT),
+                                    units.len_name)
+        if side:
+            inflow_status["side_problems"] = side
+            notes.append("CHECK THE DAM POINT: the run's breach inflow point and its flow "
+                         "line disagree: {}. The dam point or the downstream side the Runner "
+                         "chose is probably wrong (Runner 3.10.18 checks this); the point is "
+                         "not used and not walked, and the flow direction comes from the "
+                         "flooded area.".format("; ".join(side)))
+            log(notes[-1])
+            inflow_status.update(status="rejected", why="CHECK THE DAM POINT: " +
+                                 "; ".join(side))
+            inflow_m = None
+            use_path_dir = False
     if inflow_m is not None:
         zf = _z_factor(report, dem_path)[0]
         g_m = _dem_value_m(dem_path, srs, inflow_m, zf)

@@ -422,7 +422,7 @@ def test_hecras_p0_inflow_on_the_dam_is_walked_down_the_flow_path():
     d = tempfile.mkdtemp()
     try:
         _run(d, inflow_xy=(X0, Y0 - 10.0))                  # on the 30 m wide embankment
-        _flow_line(d, [(X0, Y0 + 50.0 - 10.0 * k) for k in range(400)])
+        _flow_line(d, [(X0, Y0 - 10.0 - 10.0 * k) for k in range(400)])
         r = hm.build_model(d, out_folder=os.path.join(d, "model"))
         stt = r["info"]["inflow_status"]
         assert stt["status"] == "moved" and stt["how"] == "the run's downstream flow path", stt
@@ -456,7 +456,7 @@ def test_hecras_p0_no_valid_inflow_point_fails_with_the_real_reason():
     d = tempfile.mkdtemp()
     try:
         _run(d, inflow_xy=(X0, Y0 - 10.0))
-        _flow_line(d, [(X0, Y0 + 50.0 - 10.0 * k) for k in range(400)])
+        _flow_line(d, [(X0, Y0 - 10.0 - 10.0 * k) for k in range(400)])
         opts = {"inflow_search_ft": 60.0}               # ends on the embankment's toe
         try:
             he.write_project(d, os.path.join(d, "hy"), options=opts, inflow_mode="hydrograph",
@@ -494,7 +494,7 @@ def _flat_tailwater_run(d):
         _run(d, inflow_xy=(X0, Y0 - 10.0))
     finally:
         globals()["_ground"] = old
-    _flow_line(d, [(X0, Y0 + 50.0 - 10.0 * k) for k in range(400)])
+    _flow_line(d, [(X0, Y0 - 10.0 - 10.0 * k) for k in range(400)])
     return flat
 
 
@@ -576,3 +576,72 @@ def test_hecras_p0_strict_hydrograph_mode_still_fails():
         shutil.rmtree(d)
     assert he.fallback_sentence({"status": "missing"}).endswith(
         "because the run recorded no inflow point.")
+
+
+# ======================= the fallback is not quiet when the point is on the wrong side (DWR-3161)
+@test
+def test_hecras_p0_inflow_side_problems_pure():
+    P = (0.0, 0.0)
+    down = [(0.0, -40.0 - 40.0 * k) for k in range(30)]               # flow runs south
+    assert hm.inflow_side_problems(P, (0.0, -40.0), down, far=400.0) == []
+    # Oct 18 DWR-3161: the point 40 m on one side, the run's flow line runs the other way,
+    # back over the dam point
+    sp = hm.inflow_side_problems(P, (2.8, 37.0 - 77.0), [(2.8, -37.0 + 40.0 * k)
+                                                       for k in range(30)], far=400.0)
+    assert any("runs back over the dam point" in t for t in sp), sp
+    assert any("behind the dam" in t for t in sp), sp
+    sp = hm.inflow_side_problems(P, (-280.0, -340.0), None, far=400.0)   # 440 m away
+    assert sp and "from the dam point" in sp[0], sp
+
+
+def _wrong_side_run(d):
+    """The run's inflow point upstream of the dam (in the reservoir, north of y = Y0) while its
+    flow line runs south from there over the dam, and the ground is too high downstream."""
+    _flat_tailwater_run(d)
+    m = os.path.join(d, hecras.MODEL_FOLDER)
+    rp = os.path.join(m, hecras.RUN_REPORT_JSON)
+    with open(rp, encoding="utf-8") as f:
+        rep = json.load(f)
+    rep["inflow_point"] = {"xy": [X0, Y0 + 40.0], "how": "test: upstream"}
+    with open(rp, "w", encoding="utf-8") as f:
+        json.dump(rep, f)
+    _flow_line(d, [(X0, Y0 + 40.0 - 10.0 * k) for k in range(400)])
+
+
+@test
+def test_hecras_p0_auto_refuses_a_quiet_fallback_on_a_side_conflict():
+    if _skip():
+        return
+    from nd_breach_runner.core import hecras_engine as he
+    d = tempfile.mkdtemp()
+    try:
+        _wrong_side_run(d)
+        logs = []
+        try:
+            he.write_project(d, os.path.join(d, "auto"), log=logs.append, env={})
+            raise AssertionError("auto must not fall back quietly on a side conflict")
+        except he.HecRasEngineError as e:
+            msg = str(e)
+        assert "did not fall back" in msg and "dam-point / downstream-side problem" in msg, msg
+        assert "runs back over the dam point" in msg and "=breach" in msg, msg
+        assert any(x.startswith("ERROR: ") for x in logs)
+        with open(os.path.join(d, hecras.MODEL_FOLDER, hecras.RUN_REPORT_JSON),
+                  encoding="utf-8") as f:
+            rec = json.load(f)["hecras_inflow"]
+        assert rec["status"] == "side_conflict" and rec["side_problems"], rec
+        # explicit breach still builds, with the warning in the log and the notes
+        logs = []
+        r = he.write_project(d, os.path.join(d, "b"), inflow_mode="breach", log=logs.append,
+                             env={})
+        assert r["inflow_mode"] == "breach"
+        assert any("WARNING: CHECK THE DAM POINT" in x for x in logs), logs
+        assert any(n.startswith("CHECK THE DAM POINT") for n in r["notes"]), r["notes"]
+        # strict hydrograph names the side problem in its error
+        try:
+            he.write_project(d, os.path.join(d, "h"), inflow_mode="hydrograph",
+                             log=lambda m: None, env={})
+            raise AssertionError("hydrograph must fail")
+        except he.HecRasEngineError as e:
+            assert "CHECK THE DAM POINT" in str(e), str(e)
+    finally:
+        shutil.rmtree(d)
