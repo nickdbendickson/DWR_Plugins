@@ -523,7 +523,6 @@ def defaults(step, work, settings):
                 key = "{}_{}".format(prefix, role)
                 put(key, saved.get(key) or field)
         put("COUNTY", S.get("inventory_county"))
-        put("STORAGE_CHOICE", int(S.get("storage_choice") or 0))
     elif step == "2":
         put("DAMS", o("1"))
         put("SRC", S["terrain_source"])

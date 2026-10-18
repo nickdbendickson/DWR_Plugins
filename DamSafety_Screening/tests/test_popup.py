@@ -157,6 +157,12 @@ assert set(algs) - {wf.ALG[k] for k in wf.KEYS} == {"downloaddem", "downloadlaye
 settings_all = {"waterbodies": "a", "structures": "b", "roads": "c", "rail": "d", "lifelines": "e", "streams": "f",
                 "dam_lines": "g", "nlcd": "h", "dwr": "i", "nid": "j", "clip": "k", "workers": 2,
                 "local_dem": "/l", "exe": "/e", "runner_dem": "/r", "chart_file": "/c", "package": PKG}
+# step 1 (prepare dams) must not emit STORAGE_CHOICE: only step 3 (estimate storage) takes it
+_t1 = set(algs[wf.ALG["1"]]._params)
+for _v in (settings_all, {}):
+    assert all(p in _t1 for p in wf.defaults("1", W, _v)), \
+        [p for p in wf.defaults("1", W, _v) if p not in _t1]
+    assert "STORAGE_CHOICE" not in wf.defaults("1", W, _v)
 for variant in (settings_all, {}):
     for k in wf.KEYS:
         names = set(algs[wf.ALG[k]]._params)

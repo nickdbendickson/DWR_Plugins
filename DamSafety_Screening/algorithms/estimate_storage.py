@@ -6,12 +6,14 @@ from osgeo import gdal, ogr, osr
 from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterFile,
                        QgsProcessingParameterNumber, QgsProcessingParameterFeatureSink,
+                       QgsProcessingParameterEnum,
                        QgsFields, QgsField, QgsFeature,
                        QgsCoordinateTransform, QgsCoordinateReferenceSystem, QgsProject,
                        QgsFeatureRequest, QgsRectangle)
 
 from ..core import storage
-from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_POINT, SRC_POLYGON)
+from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_POINT, SRC_POLYGON,
+                      set_advanced)
 from . import _common as cm
 from ..core import errors as er
 from ..damsuite import gdalsafe as GS
@@ -60,6 +62,13 @@ class EstimateStorage(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterNumber(
             self.SHAPE, "Below-pool shape factor (calibration)",
             NUM_DOUBLE, 1.0, minValue=0.1, maxValue=1.5))
+        # STORAGE_CHOICE: which inventory volume seeds the assumed (no-DEM) curve. Declared here
+        # (advanced, hidden by default) because the window / core.workflow already pass it and
+        # estimate_storage reads it; default 0 (maximum) keeps every default/preset run unchanged.
+        self.addParameter(set_advanced(QgsProcessingParameterEnum(
+            "STORAGE_CHOICE", "Inventory storage to seed the assumed curve",
+            ["Maximum storage", "Normal storage", "Larger of normal and maximum"],
+            defaultValue=0)))
         self.addParameter(QgsProcessingParameterFolderDestination(
             self.CURVES, "Folder for stage-storage curves (CSV)"))
         self.addParameter(QgsProcessingParameterFeatureSink(
