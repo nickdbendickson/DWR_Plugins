@@ -226,12 +226,14 @@ def nd_hazard_nan_aadt_unknown_velocity_and_zero_wet_depth():
 def nd_hazard_charts_need_who_digitized_and_checked():
     cs = test_charts()
     cs.checked_by = ""
+    assert cs.ready                                               # one signer is enough (#24)
+    cs.digitized_by = ""
     assert not cs.ready
     try:
         nh.classify([nh.Structure("a", 1.0, 1.0)], charts=cs)
         raise AssertionError("expected ChartsNotDigitized")
     except nh.ChartsNotDigitized as e:
-        assert "checked" in str(e) and "1D model" in str(e)
+        assert "signed_off_by" in str(e) and "1D model" in str(e)
 
 
 @test
