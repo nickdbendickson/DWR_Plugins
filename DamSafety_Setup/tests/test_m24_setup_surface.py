@@ -97,17 +97,51 @@ def test_unload_removes_both_actions_and_the_dock():
         "unload never removes the dock widget"
 
 
+def _calls_method(fn, name):
+    """True when fn contains any `<something>.<name>(...)` call."""
+    return any(isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+               and c.func.attr == name for c in ast.walk(fn))
+
+
+def _clears_self_dock(fn):
+    """True when fn assigns None to self.dock (so the leaked dock is released)."""
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Assign):
+            continue
+        for tgt in node.targets:
+            if (isinstance(tgt, ast.Attribute) and tgt.attr == "dock"
+                    and isinstance(tgt.value, ast.Name) and tgt.value.id == "self"
+                    and isinstance(node.value, ast.Constant) and node.value.value is None):
+                return True
+    return False
+
+
+def test_unload_releases_and_clears_the_dock():
+    """New bug from M24: unload removed the dock from the window but never released it, so
+    every 'Reload plugin' leaked a hidden SuiteStatusDock. unload must detach and delete the
+    dock and drop its own reference. Mirrors the dialog teardown in DamSafety_Hazard/plugin.py
+    (setParent/deleteLater, then the attribute set to None)."""
+    fn = _method("unload")
+    assert _calls_method(fn, "setParent"), \
+        "unload never detaches the dock (self.dock.setParent(None))"
+    assert _calls_method(fn, "deleteLater"), \
+        "unload never schedules the dock for deletion (self.dock.deleteLater())"
+    assert _clears_self_dock(fn), \
+        "unload never clears self.dock (self.dock = None), so the dock is leaked on reload"
+
+
 if __name__ == "__main__":
     failed = 0
     for fn in (test_initgui_wires_the_setup_dialog,
                test_initgui_wires_the_status_dock,
                test_initgui_adds_both_actions_to_the_menu,
-               test_unload_removes_both_actions_and_the_dock):
+               test_unload_removes_both_actions_and_the_dock,
+               test_unload_releases_and_clears_the_dock):
         try:
             fn()
             print("ok    ", fn.__name__)
         except AssertionError as e:
             failed += 1
             print("FAIL  ", fn.__name__, ":", e)
-    print("\n{} tests, {} failed".format(4, failed))
+    print("\n{} tests, {} failed".format(5, failed))
     raise SystemExit(failed)

@@ -62,6 +62,15 @@ class SetupPlugin(object):
             self.iface.removePluginMenu(MENU, self.dock_action)
         if getattr(self, "dock", None) is not None:
             self.iface.removeDockWidget(self.dock)
+            # removeDockWidget only detaches the dock from the main window; without releasing
+            # it the hidden SuiteStatusDock stays parented to the window and leaks on every
+            # 'Reload plugin'. Detach and schedule deletion, then drop our own reference.
+            try:
+                self.dock.setParent(None)
+                self.dock.deleteLater()
+            except (RuntimeError, AttributeError):
+                pass
+            self.dock = None
 
     def open_status(self):
         from .damsuite.suite_config import get, set, dams_folder
