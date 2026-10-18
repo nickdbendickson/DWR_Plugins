@@ -733,7 +733,7 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     stamp = time.strftime("%Y%m%d_%H%M%S")
     proj = os.path.join(d["prefix"], "drive_c", "ndbreach",
                         "{}_{}".format(os.path.basename(os.path.normpath(dam_folder)), stamp))
-    r = write_project(dam_folder, proj, log=log)
+    r = write_project(dam_folder, proj, log=log, env=env)      # NDBREACH_HECRAS_INFLOW_MODE
     name = r["model"].name
     times = preprocess(proj, name, d=d, env=env, terrain_tif=r["paths"]["terrain_tif"],
                        prj=r["paths"]["projection"], log=log)
@@ -748,6 +748,8 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     rep = {"engine": "hecras", "hecras_version": "6.6", "platform": d["platform"],
            "project": proj, "results_hdf": os.path.join(keep, os.path.basename(hdf)),
            "preprocess_s": times, "inflow_mode": r["inflow_mode"],
+           "inflow_series": (r.get("inflow_bc") or {}).get("series"),
+           "time_step": r["info"].get("time_step"),
            "lisflood_rasters_kept_as": LISFLOOD_PREFIX + "<name>"}
     with open(os.path.join(keep, "hecras_stage.json"), "w", encoding="utf-8") as f:
         json.dump(rep, f, indent=1)

@@ -36,3 +36,13 @@ def hecras_tier_appended_and_defaults_unchanged():
     assert wl.TIER_IDS == workflow.TIERS and wl.TIER_LABELS[workflow.TIER_HECRAS]
     wsrc = open(os.path.join(os.path.dirname(HERE), "core", "workflow.py"), encoding="utf-8").read()
     assert "st.tier == TIER_BOTH" in wsrc and "TIER_HECRAS" not in wsrc.split("def run_dam", 1)[1]
+
+
+@test
+def hecras_tier_stage_passes_its_env_to_the_project_writer():
+    """run_stage builds the project with its own env, so NDBREACH_HECRAS_INFLOW_MODE (and the
+    base flow / tail settings) reach write_project."""
+    from nd_breach_runner.core import hecras_engine as he
+    src = open(he.__file__, encoding="utf-8").read().split("def run_stage", 1)[1]
+    assert "write_project(dam_folder, proj, log=log, env=env)" in src
+    assert '"time_step"' in src and '"inflow_series"' in src
