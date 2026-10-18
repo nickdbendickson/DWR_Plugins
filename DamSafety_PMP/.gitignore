@@ -1,0 +1,23 @@
+# DamSafety_PMP: never commit AWA data or run outputs
+PMP_Evaluation_Tool/
+*.gdb/
+Input/
+out_*/
+medina_pmp/
+pothole_ws/
+cascade_test/
+sd_out/
+hms_out/
+e2e/
+syn_out/
+pothole_sens/
+*.json
+!**/FILES.json
+*.gpkg
+*.tif
+*.shp
+*.shx
+*.dbf
+*.prj
+*.xlsx
+__pycache__/

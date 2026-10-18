@@ -46,7 +46,8 @@ def hhmm(hours):
     if hours is None:
         return ""
     m = int(round(float(hours) * 60.0))
-    return "{}:{:02d}".format(m // 60, m % 60)
+    sign, m = ("-" if m < 0 else ""), abs(m)          # vR16: -1.5 -> "-1:30"
+    return "{}{}:{:02d}".format(sign, m // 60, m % 60)
 
 
 def _point(geom):
@@ -255,7 +256,8 @@ def band_labels_text():
 
 def write_arrival_bands(path, depth_path, arrival_path):
     """Int16 GeoTIFF on the depth grid: arrival class where depth > 0 and the
-    arrival is known (NoData elsewhere). Returns the path or None."""
+    arrival is known (NoData elsewhere). Returns the path, or None (also when no
+    flooded cell has an arrival time)."""
     from .hazard import _Grid
     from .processing import _create_class_raster, _finalize_class_raster, _rows_per_block
     if not depth_path or not arrival_path:
@@ -287,7 +289,16 @@ def write_arrival_bands(path, depth_path, arrival_path):
         band = None
         out = None
         if not n:
-            log_message("EAP arrival bands: no flooded cell has an arrival time")
+            # Lumo v1.7: an all-NoData raster is not a product; no file, not listed
+            log_message("EAP arrival bands: no flooded cell has an arrival time - no bands "
+                        "raster written")
+            try:
+                for p in (path, path + ".aux.xml"):
+                    if os.path.exists(p):
+                        os.remove(p)
+            except OSError as e:
+                log_message("EAP arrival bands: empty file not removed ({})".format(e))
+            return None
         return path
     except Exception as e:
         log_message("EAP arrival bands not written: {}".format(e))
@@ -306,14 +317,26 @@ def write_arrival_bands(path, depth_path, arrival_path):
         ds_d = None
 
 
+LAST_CONTOUR_PROBLEM = [""]      # vR16: why the last write_arrival_contours gave None
+
+
 def write_arrival_contours(path, arrival_path):
     """Arrival-time lines (GDAL ContourGenerateEx, fixed levels) to a
-    GeoPackage. None when GDAL cannot contour here."""
-    if not arrival_path or not hasattr(gdal, "ContourGenerateEx"):
+    GeoPackage. None when GDAL cannot contour here; the reason is in
+    LAST_CONTOUR_PROBLEM[0] (and logged)."""
+    LAST_CONTOUR_PROBLEM[0] = ""
+
+    def skip(why):
+        LAST_CONTOUR_PROBLEM[0] = why
+        log_message("EAP arrival contours not written: {}".format(why))
         return None
+    if not arrival_path:
+        return skip("no arrival-time raster")
+    if not hasattr(gdal, "ContourGenerateEx"):
+        return skip("this GDAL has no ContourGenerateEx (GDAL >= 2.4 needed)")
     drv = ogr.GetDriverByName("GPKG")
     if drv is None:
-        return None
+        return skip("no GPKG driver in this GDAL")
     path = prepare_output_path(path)
     try:
         with gdal_exceptions():
@@ -341,8 +364,7 @@ def write_arrival_contours(path, arrival_path):
             ds = lyr = band = src = None
         if not n:
             os.remove(path)
-            return None
+            return skip("no contour line at the fixed arrival levels")
         return path
     except Exception as e:
-        log_message("EAP arrival contours not written: {}".format(e))
-        return None
+        return skip(str(e) or type(e).__name__)

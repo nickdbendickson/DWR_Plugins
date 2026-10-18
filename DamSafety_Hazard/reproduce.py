@@ -150,14 +150,28 @@ def fingerprint(path, hash_files=True):
            "sha256": None}
     try:
         if os.path.isdir(path):
-            size = 0
-            for dp, _d, files in os.walk(path):
-                for f in files:
+            # v2.18.14: a folder (a .gdb, a shapefile folder) is fingerprinted by its files:
+            # sorted [relative path, size, sha256] (sha256 None over HASH_MAX_BYTES), and
+            # "sha256" is the digest of that list - an edit inside the folder changes it.
+            # Records written before this have no "files" and are compared by size + date.
+            size, items = 0, []
+            for dp, dirs, files in os.walk(path):
+                dirs.sort()
+                for f in sorted(files):
+                    full = os.path.join(dp, f)
                     try:
-                        size += os.path.getsize(os.path.join(dp, f))
+                        fs = os.path.getsize(full)
                     except OSError:
-                        pass
+                        continue
+                    size += fs
+                    rel = os.path.relpath(full, path).replace(os.sep, "/")
+                    items.append([rel, fs, sha256_file(full) if hash_files else None])
+            items.sort()
             rec.update({"exists": True, "kind": "folder", "size": size})
+            if hash_files:
+                rec["files"] = items
+                rec["sha256"] = hashlib.sha256(json.dumps(items).encode("utf-8")).hexdigest()
+                rec["unhashed_files"] = sum(1 for it in items if it[2] is None)
         elif os.path.isfile(path):
             rec.update({"exists": True, "kind": "file", "size": os.path.getsize(path),
                         "sha256": sha256_file(path) if hash_files else None})
@@ -542,6 +556,34 @@ def _suffix_of(rec):
     return split_source(rec.get("source") or "")[1]
 
 
+def comparison_method(fp):
+    """How a recorded file is compared: (code, text). code "sha256", "folder-sha256" (every file
+    of the folder by SHA-256), "folder-partial" (some files over the cap: size only for them),
+    "size-date-large" (a file over HASH_MAX_BYTES), "size-date-folder" (a folder recorded
+    before per-file fingerprints), "size-date" (no hash taken), "missing"."""
+    fp = fp or {}
+    if not fp.get("exists"):
+        return "missing", "did not exist when the run was made"
+    cap = "{:.0f} GB".format(HASH_MAX_BYTES / float(1 << 30))
+    if fp.get("kind") == "folder":
+        if fp.get("files") is not None and fp.get("sha256"):
+            n = int(fp.get("unhashed_files") or 0)
+            if n:
+                return "folder-partial", ("folder: per-file SHA-256, {} file(s) over {} by size "
+                                          "only".format(n, cap))
+            return "folder-sha256", "folder: every file by SHA-256"
+        return "size-date-folder", "folder: size and date only (recorded before per-file hashing)"
+    if fp.get("sha256"):
+        return "sha256", "SHA-256"
+    try:
+        big = fp.get("size") is not None and int(fp["size"]) > HASH_MAX_BYTES
+    except (TypeError, ValueError):
+        big = False
+    if big:
+        return "size-date-large", "size and date only (file over {})".format(cap)
+    return "size-date", "size and date only (no SHA-256 recorded)"
+
+
 def _changed_since_run(src, fp):
     """True when `src` on disk is not the file the run read (by sha256, or size
     and date when no hash was taken)."""
@@ -806,11 +848,17 @@ def plan_from_package(package_folder, work_folder, rasters_folder=None, as_layer
     except Exception:
         known = None
     cfg = {}
+    unknown = []
     for k, v in (rec.get("settings") or {}).items():
-        if k in _PATH_SETTINGS or (known is not None and k not in known
-                                   and k != "settings_profile"):
+        if k in _PATH_SETTINGS:
+            continue
+        if known is not None and k not in known and k != "settings_profile":
+            unknown.append(k)                # RP.1: say so (a newer version's setting?)
             continue
         cfg[k] = v
+    if unknown:
+        notes.append("settings this version does not know were left out (the reproduction "
+                     "runs without them): {}".format(", ".join(sorted(unknown))))
     for k in list(cfg):
         if k.startswith("download_"):
             cfg[k] = False                       # never on the internet
@@ -1038,15 +1086,27 @@ def _free_path(path):
 WORK_MARKER = "_Reproduction_Work_Folder.txt"
 
 
-def _check_work_folder(work_folder):
-    """A work folder is empty, new, or one a reproduction made (WORK_MARKER):
-    never a dam's real outputs folder."""
+def work_folder_problem(work_folder):
+    """RP.3 (shared with the dialog): None when the work folder is new, empty,
+    or one a reproduction made (WORK_MARKER); otherwise the reason it is refused
+    - never a dam's real outputs folder, nor any other non-empty folder."""
     if not os.path.isdir(work_folder) or os.path.isfile(os.path.join(work_folder, WORK_MARKER)):
-        return
+        return None
     if os.path.exists(os.path.join(work_folder, "Hazard_Classification_Run_Log.txt")) or \
             os.path.isfile(os.path.join(work_folder, SUBDIR_QA, HIS.SNAPSHOT_FILE)):
-        raise ValueError("{} holds the outputs of a classification run - choose an empty work "
-                         "folder for the reproduction".format(work_folder))
+        return ("{} holds the outputs of a classification run - choose an empty work "
+                "folder for the reproduction".format(work_folder))
+    if os.listdir(work_folder):
+        return ("The work folder is not empty:\n{}\n\nChoose an empty (or new) folder - the "
+                "reproduction writes there and must never touch a dam's real "
+                "outputs.".format(work_folder))
+    return None
+
+
+def _check_work_folder(work_folder):
+    msg = work_folder_problem(work_folder)
+    if msg:
+        raise ValueError(msg)
 
 
 def extract_package(zip_path, work_folder):
@@ -1139,6 +1199,13 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
                                             "", ""])))
     for n in plan["notes"]:
         rows.append(dict(zip(CHECK_FIELDS, ["Note", "", n, "", "", "", ""])))
+    weak = []
+    for fpath, fp in sorted((plan["record"].get("fingerprints") or {}).items()):
+        code, text = comparison_method(fp)
+        if code not in ("sha256", "folder-sha256", "missing"):
+            weak.append((fpath, text))
+            rows.append(dict(zip(CHECK_FIELDS, ["Method", "Compared by " + text, fpath, "", "",
+                                                "", ""])))
     head = {"IDENTICAL": "IDENTICAL - the reproduction gives the same result as the package "
                          "(ND {} / TM 11 {}, lives in jeopardy {})",
             "DIFFERENT": "DIFFERENT - the reproduction does not give the package's result "
@@ -1164,6 +1231,9 @@ def reproduce(package_folder, work_folder, run=None, progress=None, log=None,
                        "(MANIFEST.csv): {}".format(len(tampered), ", ".join(
                            r for r, _p in tampered)))
     summary.extend("Note: " + n for n in plan["notes"])
+    if weak:
+        summary.append("{} recorded file(s) / folder(s) not compared by SHA-256:".format(len(weak)))
+        summary.extend("  {}: {}".format(fpath, text) for fpath, text in weak)
     summary.append("Reproduced {} with {} v{} from {} (run of {} by v{})".format(
         time.strftime("%Y-%m-%d %H:%M"), PLUGIN_NAME, PLUGIN_VERSION, package_folder,
         (before or {}).get("time") or "?", plan["record"].get("plugin_version") or "?"))

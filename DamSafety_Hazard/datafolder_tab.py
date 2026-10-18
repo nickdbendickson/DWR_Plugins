@@ -68,7 +68,7 @@ class DataFolderTabMixin(object):
         self.datafolder_edit.setToolTip(
             "Search this folder (sub-folders to 4 levels) for the data sets of groups 3-6. "
             "Order of use: this folder, then the QGIS layer tree, then the internet.")
-        self.datafolder_browse_btn = QPushButton("Browse...")
+        self.datafolder_browse_btn = QPushButton("Browse\u2026")
         self.datafolder_browse_btn.clicked.connect(self._on_browse_data_folder)
         self.datafolder_search_btn = QPushButton("Search folder")
         self.datafolder_search_btn.setToolTip(
@@ -182,8 +182,8 @@ class DataFolderTabMixin(object):
             try:
                 from .damsuite.suite_config import set as save
                 save("data_folder", pack)
-            except Exception:
-                pass
+            except Exception as e:
+                log_message("Suite data folder not remembered ({}): {}".format(pack, e))
             return
         if hasattr(self, "pack_path_edit") and not self.pack_path_edit.text().strip():
             self.pack_path_edit.setText(pack)

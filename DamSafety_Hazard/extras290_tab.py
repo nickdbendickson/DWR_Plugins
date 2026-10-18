@@ -59,13 +59,24 @@ _LITERAL = {
 _TIME_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S")
 
 
+_LITERAL_FALLBACK_LOGGED = []
+
+
 def _default(key):
     """Starting value of a cfg key: pipeline.DEFAULTS when it has the key, else
-    the literal above."""
+    the literal above (logged once if pipeline cannot be imported)."""
     try:
         from .pipeline import DEFAULTS
         return DEFAULTS.get(key, _LITERAL[key])
-    except Exception:
+    except Exception as e:
+        if not _LITERAL_FALLBACK_LOGGED:
+            _LITERAL_FALLBACK_LOGGED.append(True)
+            try:
+                from .helpers import log_message
+                log_message("extras290: pipeline.DEFAULTS not available ({}); "
+                            "using built-in literals".format(e))
+            except Exception:
+                pass
         return _LITERAL[key]
 
 
@@ -149,7 +160,7 @@ class Extras290TabMixin(object):
     # ------------------------------------------------------------------ UI --
     def _build_extras290_group(self):
         from . import parcelhints as PH
-        grp = QGroupBox("7. Version 2.9 options (advanced - all optional)")
+        grp = QGroupBox()
         lay = QVBoxLayout()
         note = QLabel(
             "Optional v2.9 choices. Every number is the engineer's own screening value: the "
@@ -383,7 +394,7 @@ class Extras290TabMixin(object):
         lay.addLayout(form)
 
         # -- tools
-        self.estimate_btn = QPushButton("Estimate run...")
+        self.estimate_btn = QPushButton("Estimate run\u2026")
         self.estimate_btn.setToolTip(
             "Looks at the rasters and the download choices and tells what this run would "
             "read, download and write - study area, raster cells, data tiles (already in the "
@@ -391,36 +402,36 @@ class Extras290TabMixin(object):
             "written; takes about a second. The times and sizes are ROUGH (assumed costs, "
             "not measurements).")
         self.estimate_btn.clicked.connect(self._on_estimate290)
-        self.profile_save_btn = QPushButton("Save settings profile...")
+        self.profile_save_btn = QPushButton("Save settings profile\u2026")
         self.profile_save_btn.setToolTip(
             "Saves the classification options of this dialog as a small file to share (a "
             "firm's standard settings). Left out: everything of ONE dam or ONE project - "
             "folders, rasters, scenarios, layer choices, paths.")
         self.profile_save_btn.clicked.connect(self._on_profile_save290)
-        self.profile_load_btn = QPushButton("Load settings profile...")
+        self.profile_load_btn = QPushButton("Load settings profile\u2026")
         self.profile_load_btn.setToolTip(
             "Applies a settings profile. Dam- or project-specific entries found in the file "
             "are ignored. The run log records the profile's name and hash, and whether you "
             "changed anything afterwards.")
         self.profile_load_btn.clicked.connect(self._on_profile_load290)
-        self.profile_compare_btn = QPushButton("Compare profiles...")
+        self.profile_compare_btn = QPushButton("Compare profiles\u2026")
         self.profile_compare_btn.setToolTip(
             "Lists the settings that differ between two profile files.")
         self.profile_compare_btn.clicked.connect(self._on_profile_compare290)
-        self.reproduce_btn = QPushButton("Reproduce a package...")
+        self.reproduce_btn = QPushButton("Reproduce a package\u2026")
         self.reproduce_btn.setToolTip(
             "Re-runs a classification from its submittal package (folder or .zip) in an "
             "EMPTY work folder - with the settings, rasters and data of that run, nothing "
             "downloaded, nothing added to this project - and checks that the same result "
             "comes out. Takes as long as the original run.")
         self.reproduce_btn.clicked.connect(self._on_reproduce290)
-        self.portfolio_btn = QPushButton("Portfolio dashboard...")
+        self.portfolio_btn = QPushButton("Portfolio dashboard\u2026")
         self.portfolio_btn.setToolTip(
             "One web page with a row per dam of a folder of dams: class, last run, oldest "
             "data, open review items, creep alert. Read from the files the runs left; "
             "nothing is re-run. The classes are screening results as last run.")
         self.portfolio_btn.clicked.connect(self._on_portfolio290)
-        self.formfill_btn = QPushButton("Fill form template...")
+        self.formfill_btn = QPushButton("Fill form template\u2026")
         self.formfill_btn.setToolTip(
             "Fills YOUR form template (.docx, .txt, .md, .html or .csv) where it has "
             "{{KEY}} placeholders, with values from the last run. No form field is guessed: "
@@ -513,13 +524,17 @@ class Extras290TabMixin(object):
         if data != _AUTO:
             lyr = project.mapLayer(data)
             return lyr if isinstance(lyr, QgsVectorLayer) else None
+        # EX.4: same rules as classify_tab._resolve_layer (skip inundated / plugin outputs)
+        from .classify_tab import _PLUGIN_POI_RE
         for lyr in project.mapLayers().values():
             try:
                 if (isinstance(lyr, QgsVectorLayer) and lyr.isValid()
                         and lyr.geometryType() == GEOM_POLYGON and _PARCEL_RE.search(lyr.name())
                         and not _PARCEL_EXCLUDE.search(lyr.name())
                         and not is_plugin_output_name(lyr.name())
-                        and not is_downloaded_data_layer(lyr)):
+                        and not is_downloaded_data_layer(lyr)
+                        and "inundated" not in lyr.name().lower()
+                        and not _PLUGIN_POI_RE.search(lyr.name())):
                     return lyr
             except Exception:
                 continue
@@ -541,12 +556,19 @@ class Extras290TabMixin(object):
             return None
         if not uri or not isinstance(uri, str):
             return None
+        import os
+        path = uri.split("|", 1)[0]
+        try:
+            st = os.stat(path)
+            stamp = (uri, st.st_mtime_ns, st.st_size)
+        except OSError:
+            stamp = (uri, None, None)
         cached = self.__dict__.get("_folder_parcels_cache290")
-        if cached and cached[0] == uri:
+        if cached and cached[0] == stamp:
             return cached[1]
         from . import datafolder as DF
         lyr = DF.open_uri(uri)
-        self._folder_parcels_cache290 = (uri, lyr)
+        self._folder_parcels_cache290 = (stamp, lyr)
         return lyr
 
     def _refresh_parcel_fields290(self, *args):
@@ -807,7 +829,8 @@ class Extras290TabMixin(object):
             "Settings profile (*{});;JSON (*.json)".format(ST.PROFILE_EXT))
         if not path:
             return
-        known = list(self._SETTING_WIDGETS) + ["scenario_rows", "main_baseline"]
+        known = list(self._SETTING_WIDGETS) + ["scenario_rows", "main_baseline"] + \
+            list(getattr(self, "_RETIRED_SETTINGS", ()))      # 2.18.34: e.g. advanced_check
         ids = self._layer_ids290()
         try:
             state, meta = ST.load_profile(path, known_keys=known, layer_ids=ids)
@@ -816,6 +839,7 @@ class Extras290TabMixin(object):
             return
         self._apply_state(state)
         self._restore_parcel_fields290(state)
+        ST.note_failed_keys(meta, getattr(self, "_apply_failed", None))   # SE.2
         self._remember_dir290(path)
         self._profile_state290 = state
         self._profile_meta290 = meta
@@ -915,11 +939,9 @@ class Extras290TabMixin(object):
             or self._start_dir290())
         if not work:
             return
-        if os.path.isdir(work) and os.listdir(work) and not os.path.isfile(
-                os.path.join(work, REP.WORK_MARKER)):
-            QMessageBox.warning(self, title, "The work folder is not empty:\n{}\n\nChoose an "
-                                "empty (or new) folder - the reproduction writes there and "
-                                "must never touch a dam's real outputs.".format(work))
+        problem = REP.work_folder_problem(work)          # RP.3: the module's own rule
+        if problem:
+            QMessageBox.warning(self, title, problem)
             return
         rasters = None
         if QMessageBox.question(

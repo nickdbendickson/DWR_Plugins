@@ -312,8 +312,26 @@ def assumed_units(items):
 
 
 # ---------------------------------------------------------------- converting --
-def _convert_raster(src, dst, factor, progress=None):
-    """Copy `src` to a float32 GeoTIFF multiplied by `factor` (NoData -9999)."""
+# v2.18.14 / 2.31.2: converted maxima above these (plugin units) are almost always a unit
+# mistake (metres read as feet, cm, mm) or a bad cell - warned, never changed
+PLAUSIBLE_MAX = {"depth": (300.0, "ft"), "velocity": (100.0, "ft/s")}
+
+
+def implausible_warnings(maxima):
+    """Warnings for converted maxima {role: value in plugin units} above PLAUSIBLE_MAX."""
+    out = []
+    for role, (cap, unit) in PLAUSIBLE_MAX.items():
+        v = maxima.get(role)
+        if v is not None and v > cap:
+            out.append("Implausible DSS-WISE {}: maximum {:,.1f} {} (> {:g} {}) after conversion - "
+                       "check the units (feet / metres) and the raster before classifying".format(
+                           role, v, unit, cap, unit))
+    return out
+
+
+def _convert_raster(src, dst, factor, progress=None, stats=None):
+    """Copy `src` to a float32 GeoTIFF multiplied by `factor` (NoData -9999). `stats`
+    (a dict) gets "max": the largest converted value (None when no valid cell)."""
     with gdal_exceptions():
         ds = gdal.Open(src, gdal.GA_ReadOnly)
         if ds is None:
@@ -342,6 +360,9 @@ def _convert_raster(src, dst, factor, progress=None):
             if nd is not None:
                 valid &= a != nd
             a = (a * scale + offset) * factor
+            if stats is not None and valid.any():
+                m = float(np.max(a[valid]))
+                stats["max"] = m if stats.get("max") is None else max(stats["max"], m)
             ob.WriteArray(np.where(valid, a, -9999.0).astype(np.float32), 0, y0)
             if progress:
                 progress(100.0 * (y0 + n) / h)
@@ -377,9 +398,13 @@ def convert(items, out_folder, name="DSS-WISE Lite", progress=None):
             if progress:
                 progress(100.0 * (i + p / 100.0) / max(1, len(roles) + 1),
                          "Converting {}".format(role))
-        res["paths"][role] = _convert_raster(it.path, dst, factor, sub)
+        st = {"max": None}
+        res["paths"][role] = _convert_raster(it.path, dst, factor, sub, stats=st)
+        res.setdefault("maxima", {})[role] = st["max"]
         res["lines"].append("{}: {} ({} -> plugin units, x{:g}; units {})".format(
             role, it.name, units, factor, it.basis or "set by user"))
+    res["warnings"] = implausible_warnings({"depth": res.get("maxima", {}).get(R_DEPTH),
+                                            "velocity": res.get("maxima", {}).get(R_VEL)})
     if R_DEPTH not in res["paths"]:
         raise RuntimeError("The package has no maximum-depth raster (or it was not "
                            "recognised - set its role in the table).")
@@ -414,6 +439,7 @@ def convert(items, out_folder, name="DSS-WISE Lite", progress=None):
     with open(prepare_output_path(os.path.join(out_folder, "DSSWISE_Import_Summary.txt")),
               "w", encoding="utf-8") as fh:
         fh.write("\n".join(["DSS-WISE Lite import: " + name, ""] + res["lines"] + [""] +
+                           ["WARNING: " + x for x in res["warnings"]] +
                            ["NOTE: " + n for n in res["notes"]]) + "\n")
     if progress:
         progress(100.0, "DSS-WISE import done")

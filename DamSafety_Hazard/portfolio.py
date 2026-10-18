@@ -240,13 +240,24 @@ def section(parsed, prefix):
     return None, []
 
 
+def clean_nid(nid):
+    """FF.4: the NID id, or None for empty / "none" / '' / "" placeholders."""
+    s = str(nid or "").strip()
+    return s if s and s.lower() not in ("none", "''", '""') else None
+
+
 def summary_facts(parsed):
     """Classes, lives in jeopardy, NID and the optional-analysis lines from a
     parsed summary."""
     f = {}
     h, lines = section(parsed, "ND HAZARD CLASSIFICATION")
     if h:
-        f["nd"] = h.split(":", 1)[1].strip().capitalize() if ":" in h else ""
+        # PF.2: the writer appends "  |  <flags>" (unverified / incomplete) to the class
+        val = h.split(":", 1)[1] if ":" in h else ""
+        cls, _sep, flags = val.partition("  |  ")
+        f["nd"] = cls.strip().capitalize()
+        if flags.strip():
+            f["nd_flags"] = flags.strip()
         f["nd_reasons"] = [x for x in lines if not x.startswith("Basis:")]
     h, lines = section(parsed, "ACER TM 11 CLASSIFICATION")
     if h:
@@ -368,6 +379,9 @@ def open_review_from_csv(path):
     rows = read_csv_rows(path)
     if not rows:
         return None
+    from .structures import NOTE_TYPE_SHAPE, NOTE_TYPE_PARK_LOT, NOTE_MOBILE_OCCUPIED
+    mobile_notes = tuple(t.lower() for t in (NOTE_TYPE_SHAPE, NOTE_TYPE_PARK_LOT,
+                                             NOTE_MOBILE_OCCUPIED))
     n_open = n_done = 0
     for r in rows:
         wet = (r.get("ND_Outcome") or "") not in _DRY
@@ -380,13 +394,12 @@ def open_review_from_csv(path):
                or (wet and "occupied building without occupancy data" in notes)
                or (wet and "moved onto this outline" in notes)
                or (wet and "nd site address" in notes)
+               or (wet and any(t in notes for t in mobile_notes))      # PF.1
                or (not wet and r.get("Access_Cut_Off") == "Yes"
                    and r.get("Habitable") == "Yes"))
-        if not why:
-            continue
         if (r.get("Reviewed") or "").strip():
-            n_done += 1
-        else:
+            n_done += 1          # PF.1: reviewed counts even when no reason remains
+        elif why:
             n_open += 1
     return n_open, n_done
 
@@ -1003,6 +1016,8 @@ def dam_row(folder, parent_watch=None, parent_series=None, screen_index=None, to
     else:
         if sf.get("nd"):
             row["ND_Class"] = sf["nd"]
+        if sf.get("nd_flags"):
+            notes.append("summary: " + sf["nd_flags"])
         if sf.get("tm11"):
             row["TM11_Class"] = sf["tm11"]
             row["Lives_In_Jeopardy"] = _fmt_num(sf.get("lij"))
@@ -1012,7 +1027,7 @@ def dam_row(folder, parent_watch=None, parent_series=None, screen_index=None, to
     # NID
     nid = read_location_nid(folder) or (log["settings"].get("subject_dam_nid") or "").strip() \
         or sf.get("nid") or ""
-    if nid and nid.lower() not in ("none", "''", '""'):
+    if clean_nid(nid):
         row["NID_ID"] = nid
     # last run
     row["Last_Run"] = log.get("finished") or (snap or {}).get("time") or \

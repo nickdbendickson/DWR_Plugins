@@ -231,9 +231,11 @@ def write_geojson(layer, out_path, ctx=None):
                               "WRITE_BBOX=NO"))
 
 
-def write_kmz(layer, out_path, base=None, ctx=None):
+def write_kmz(layer, out_path, base=None, ctx=None, warnings=None):
     """KMZ (zip with doc.kml) of the layer, placemarks named by
-    feature_label(), coloured per layer. Returns the path written."""
+    feature_label(), coloured per layer. Returns the path written. WE.1: a
+    styling failure (the KMZ is still written, uncoloured) is appended to
+    `warnings` (a list) when given."""
     ctx = ctx or _ctx()
     base = base or os.path.splitext(os.path.basename(out_path))[0]
     ct = _to_wgs84(layer, ctx)
@@ -255,7 +257,9 @@ def write_kmz(layer, out_path, base=None, ctx=None):
                     os.remove(kml)
         else:
             raise RuntimeError("; ".join(errors))
-        style_kml(kml, base)
+        ok, why = style_kml_reason(kml, base)
+        if not ok and warnings is not None:
+            warnings.append("KMZ written without colours ({})".format(why))
         path = prepare_output_path(out_path)
         tmp = path + ".part"
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
@@ -329,13 +333,19 @@ def _band_class(pm):
 
 def style_kml(kml_path, base):
     """Give the placemarks of a KML file written by OGR a colour (Style +
-    styleUrl). Best effort: the file stays as it is when it cannot be parsed."""
+    styleUrl). Best effort: the file stays as it is when it cannot be parsed.
+    True when styled (see style_kml_reason for the reason of a failure)."""
+    return style_kml_reason(kml_path, base)[0]
+
+
+def style_kml_reason(kml_path, base):
+    """WE.1: (ok, reason) of style_kml; reason "" when ok."""
     try:
         tree = ET.parse(kml_path)
         root = tree.getroot()
         doc = root.find("{%s}Document" % KML_NS)
         if doc is None:
-            return False
+            return False, "no KML Document element"
         fam = _family(base)
         color = dict(LAYER_COLORS).get(fam, DEFAULT_COLOR) if fam else DEFAULT_COLOR
         sid = "s_" + safe_name(base)
@@ -362,9 +372,9 @@ def style_kml(kml_path, base):
             su.text = "#" + use
             _insert_after_lead(pm, su)
         tree.write(kml_path, encoding="utf-8", xml_declaration=True)
-        return True
-    except Exception:                                   # noqa - colours are optional
-        return False
+        return True, ""
+    except Exception as e:                              # noqa - colours are optional
+        return False, "{}: {}".format(type(e).__name__, e)
 
 
 def merge_kmz(kmz_paths, out_path, title):
@@ -469,11 +479,15 @@ def export_layers(layers_or_paths, out_folder, formats=("kmz", "geojson"), name_
                 except Exception as e:              # noqa
                     entry["error"] += "GeoJSON: {}; ".format(e)
             if "kmz" in formats:
+                warn = []
                 try:
                     entry["kmz"] = write_kmz(lyr, os.path.join(out_folder, fname + ".kmz"),
-                                             base=base, ctx=ctx)
+                                             base=base, ctx=ctx, warnings=warn)
                 except Exception as e:              # noqa
                     entry["error"] += "KMZ: {}; ".format(e)
+                for w in warn:                          # WE.1
+                    entry["warning"] = w
+                    log("Web export of {}: WARNING {}".format(base, w))
             entry["error"] = entry["error"].rstrip("; ")
         except Exception as e:                      # noqa - one bad layer
             entry["error"] = str(e) or e.__class__.__name__
@@ -577,6 +591,10 @@ def export_eap_web(eap_folder, dam_name, log=None, formats=("kmz", "geojson"),
     try:
         out = os.path.join(eap_folder, WEB_SUBDIR)
         items = find_eap_layers(eap_folder)
+        if items and not any(n.startswith("EAP_Termination_Point") for n, _p in items):
+            # WE.3: say so (termination off, or it failed) instead of leaving it out silently
+            log("Web export: no EAP_Termination_Point layer found (EAP folder or the QA "
+                "folder beside it) - the export has no termination point")
         if bands:
             for tif in _band_rasters(eap_folder):
                 stem = os.path.splitext(os.path.basename(tif))[0]

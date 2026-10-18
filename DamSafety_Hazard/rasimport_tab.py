@@ -34,7 +34,7 @@ class RasImportTabMixin(object):
         tab = QWidget()
         lay = QVBoxLayout(tab)
         info = QLabel(
-            "<h3>HEC-RAS plan results</h3>Reads a HEC-RAS 6.x plan results file "
+            "Reads a HEC-RAS 6.x plan results file "
             "(<i>project.p01.hdf</i>) and makes the maximum depth, velocity, water surface, "
             "arrival-time and time-of-peak rasters from its 2D flow areas - no RAS Mapper "
             "export needed. Give the terrain raster for depths on the terrain grid (as RAS "
@@ -46,14 +46,14 @@ class RasImportTabMixin(object):
         form = QFormLayout()
         self.ras_plan_edit = QLineEdit()
         self.ras_plan_edit.setPlaceholderText("<project>.p##.hdf (run with 2D output)")
-        b1 = QPushButton("Browse...")
+        b1 = QPushButton("Browse\u2026")
         b1.clicked.connect(self._ras_browse_plan)
         form.addRow("Plan results (.hdf):", self._ras_row(self.ras_plan_edit, b1))
         self.ras_dem_edit = QLineEdit()
         self.ras_dem_edit.setPlaceholderText("optional but recommended - the RAS terrain "
                                              "(GeoTIFF), same coordinate system and "
                                              "vertical units as the model")
-        b2 = QPushButton("Browse...")
+        b2 = QPushButton("Browse\u2026")
         b2.clicked.connect(self._ras_browse_dem)
         form.addRow("Terrain raster:", self._ras_row(self.ras_dem_edit, b2))
         self.ras_breach_spin = QDoubleSpinBox()
@@ -85,7 +85,7 @@ class RasImportTabMixin(object):
         grp.setLayout(form)
         lay.addWidget(grp)
         opts = QHBoxLayout()
-        self.ras_use_setup_check = QCheckBox("Use as the Setup tab rasters")
+        self.ras_use_setup_check = QCheckBox("Use as the Setup rasters")
         self.ras_use_setup_check.setChecked(True)
         self.ras_load_check = QCheckBox("Load the rasters")
         self.ras_load_check.setChecked(True)
@@ -99,7 +99,7 @@ class RasImportTabMixin(object):
         # v2.9: the plan itself as the classification input
         self.ras_use_plan_btn = QPushButton("Use this plan for the classification")
         self.ras_use_plan_btn.setToolTip(
-            "Puts the plan file in the Setup tab's depth, velocity and arrival boxes: the "
+            "Puts the plan file in the Setup depth, velocity and arrival boxes: the "
             "rasters are made from it when the classification starts (in the background, "
             "with the options above) and re-used while the plan and the options are "
             "unchanged. Nothing is loaded now - use Import to look at the rasters first.")
@@ -197,7 +197,7 @@ class RasImportTabMixin(object):
             self.model_combo.setCurrentIndex(i)
         root = self._ras_cache_root()
         hit = RI.plan_cache_lookup(plan, root, self._ras_plan_settings())
-        text = ["Setup tab: depth, velocity and arrival now come from this plan:", "  " + plan,
+        text = ["Setup: depth, velocity and arrival now come from this plan:", "  " + plan,
                 "",
                 "They are made when the classification starts - with the terrain raster, breach "
                 "start, arrival depth and pixel size above - and re-used while the plan and "

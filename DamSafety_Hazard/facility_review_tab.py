@@ -242,7 +242,7 @@ class FacilityReviewTabMixin(object):
         tab = QWidget()
         lay = QVBoxLayout(tab)
         info = QLabel(
-            "<h3>Review: roads, railroads, bridges and lifeline facilities</h3>The overtopped "
+            "The overtopped "
             "road stretches, inundated railroad stretches, bridges / culverts / low-water "
             "crossings and lifeline facilities of the last Hazard Classification run. For each "
             "one choose '{}', <b>Exclude</b> it (not a public road, abandoned line, not a "
