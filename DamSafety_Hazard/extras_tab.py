@@ -452,4 +452,4 @@ class ExtrasTabMixin(object):
             QMessageBox.information(self, "Dams in series", "\n".join(lines[:14]) + "\n\n" +
                                     paths.get("html", ""))
             self._open_path(paths.get("html"))
-        self._start_background("Dams in series screen...", work, done, project_bound=False)
+        self._start_background("Dams in series screen\u2026", work, done, project_bound=False)

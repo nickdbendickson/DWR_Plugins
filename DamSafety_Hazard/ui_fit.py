@@ -73,15 +73,88 @@ def wrap_wizard(wizard):
         scroll_page(wizard.page(page_id))
 
 
+def _screen_for(dialog):
+    """The screen the window opens on: its parent window's screen, else the screen under the
+    mouse, else the primary screen (2.18.36 - was always the primary screen, so on a laptop
+    with a large second monitor the window was sized for the wrong one)."""
+    parent = dialog.parentWidget() if hasattr(dialog, "parentWidget") else None
+    if parent is not None:
+        try:
+            win = parent.window()
+            scr = win.screen() if hasattr(win, "screen") else None      # Qt >= 5.14
+            if scr is None and win.windowHandle() is not None:
+                scr = win.windowHandle().screen()
+            if scr is not None:
+                return scr
+        except Exception:                                                # noqa
+            pass
+    try:
+        from qgis.PyQt.QtGui import QCursor
+        scr = QApplication.screenAt(QCursor.pos())
+        if scr is not None:
+            return scr
+    except Exception:                                                    # noqa
+        pass
+    return QApplication.primaryScreen()
+
+
+def fit_size(prefer, avail, margin=(48, 80)):
+    """(width, height, min_w, min_h) for a window preferring `prefer` on a screen whose
+    available geometry is `avail` (QRect): never larger than the screen."""
+    max_w = max(1, avail.width() - margin[0]) if avail.width() > 2 * margin[0] else avail.width()
+    max_h = max(1, avail.height() - margin[1]) if avail.height() > 2 * margin[1] else avail.height()
+    return (min(prefer[0], max_w), min(prefer[1], max_h), min(640, max_w), min(420, max_h))
+
+
+def _follow_screen(dialog):
+    """Moved to another monitor: the size cap follows that monitor's available area."""
+    if getattr(dialog, "_fit_follows_screen", False):
+        return
+    try:
+        dialog.winId()                          # creates the window handle (no show)
+        handle = dialog.windowHandle()
+        if handle is None:
+            return
+
+        def _on_screen(scr, _d=dialog):
+            if scr is None:
+                return
+            a = scr.availableGeometry()
+            _d.setMaximumSize(a.width(), a.height())
+            _d.setMinimumSize(min(_d.minimumWidth(), a.width()), min(_d.minimumHeight(), a.height()))
+            if _d.width() > a.width() or _d.height() > a.height():
+                _d.resize(min(_d.width(), a.width()), min(_d.height(), a.height()))
+        handle.screenChanged.connect(_on_screen)
+        dialog._fit_follows_screen = True
+    except Exception:                                                    # noqa
+        pass
+
+
 def fit_window(dialog, prefer=(980, 680)):
-    """Size the window to the screen, and never larger than the screen."""
-    screen = QApplication.primaryScreen()
+    """Size the window to the screen it opens on, and never larger than that screen.
+
+    2.18.36: the screen is the parent's (or the mouse's), not the primary one; the window is
+    placed inside that screen's available area (centred on the parent); the size cap is that
+    screen's available area and follows the window to another monitor; and the old
+    520 x 400 floor (larger than a small screen) is gone."""
+    screen = _screen_for(dialog)
     if screen is None:
         dialog.resize(prefer[0], prefer[1])
         return
     avail = screen.availableGeometry()
-    max_w = max(520, avail.width() - 48)
-    max_h = max(400, avail.height() - 80)
-    dialog.setMaximumSize(max_w, max_h)
-    dialog.setMinimumSize(min(640, max_w), min(420, max_h))
-    dialog.resize(min(prefer[0], max_w), min(prefer[1], max_h))
+    w, h, min_w, min_h = fit_size(prefer, avail)
+    dialog.setMinimumSize(min_w, min_h)
+    dialog.setMaximumSize(avail.width(), avail.height())     # never larger than this screen
+    dialog.resize(w, h)
+    _follow_screen(dialog)
+    parent = dialog.parentWidget() if hasattr(dialog, "parentWidget") else None
+    try:
+        if parent is not None and avail.intersects(parent.window().frameGeometry()):
+            centre = parent.window().frameGeometry().center()
+        else:
+            centre = avail.center()
+        x = min(max(avail.left(), centre.x() - w // 2), avail.right() + 1 - w)
+        y = min(max(avail.top(), centre.y() - h // 2), avail.bottom() + 1 - h)
+        dialog.move(max(avail.left(), x), max(avail.top(), y))
+    except Exception:                                                    # noqa
+        pass

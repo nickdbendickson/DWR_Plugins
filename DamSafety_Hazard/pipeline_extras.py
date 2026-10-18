@@ -108,7 +108,7 @@ def sensitivity_step(run, gov, governing, structs, base_snaps, layers, inputs, o
 
     def go():
         from . import sensitivity as SE
-        run.tick(89, "Sensitivity table...")
+        run.tick(89, "Sensitivity table\u2026")
         restore(structs, governing["snap"])
         base = base_snaps.get(gov.baseline) if gov.baseline else None
         same = True
@@ -151,7 +151,7 @@ def termination_step(run, gov, governing, layers, inputs, clip, dam_name, d_qa, 
         from . import termination as TM
         from qgis.core import QgsVectorLayer
         from .constants import GRP_EAP, TRAVEL_STATION_MI
-        run.tick(90, "Downstream termination point...")
+        run.tick(90, "Downstream termination point\u2026")
         depth = _open_depth(layers, gov)
         arr = RasterSampler(layers[gov.name]["arr"]) if layers[gov.name].get("arr") is not None \
             else None
@@ -214,7 +214,7 @@ def popsource_step(run, gov, governing, layers, d_qa, written):
 
     def go():
         from . import popsource as PS
-        run.tick(90, "Second population source...")
+        run.tick(90, "Second population source\u2026")
         depth = _open_depth(layers, gov)
         try:
             lines, paths, res = PS.run_check(
@@ -246,7 +246,7 @@ def evacuation_step(run, gov, governing, structs, layers, inputs, d_qa, written,
     def go():
         from . import evacuation as EV
         from qgis.core import QgsVectorLayer
-        run.tick(90, "Evacuation timing...")
+        run.tick(90, "Evacuation timing\u2026")
         roads = None
         src = inputs.get("roads_source")
         if src and src[0] and src[1] and src[1] != "memory":
@@ -308,7 +308,7 @@ def conseq_sensitivity_step(run, gov, governing, structs, d_qa, written):
 
     def go():
         from . import sensitivity as SE
-        run.tick(89, "Consequence sensitivity...")
+        run.tick(89, "Consequence sensitivity\u2026")
         restore(structs, governing["snap"])
         try:
             res = SE.run_consequences(structs, cfg, governing.get("conseq"),
@@ -336,7 +336,7 @@ def webexport_step(run, dam_name, d_eap, written):
 
     def go():
         from . import webexport as WX
-        run.tick(96, "KMZ / GeoJSON export...")
+        run.tick(96, "KMZ / GeoJSON export\u2026")
         res = WX.export_eap_web(d_eap, dam_name, log=run.log)
         for name, r in res.items():
             for k in ("kmz", "geojson"):

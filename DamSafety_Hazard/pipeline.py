@@ -1060,7 +1060,7 @@ def _evaluate(run, cfg, scenarios, breaches):
     if SOURCE_OVERRIDES:
         run.sources.append("Data-source addresses changed in {}: {}".format(
             sources_file_path(), ", ".join(sorted(SOURCE_OVERRIDES))))
-    run.tick(1, "Finding the inundated area...")
+    run.tick(1, "Finding the inundated area\u2026")
     probe = RasterSampler(dlyr)
     try:
         ext = probe.valid_extent(positive_only=True)
@@ -1073,7 +1073,7 @@ def _evaluate(run, cfg, scenarios, breaches):
     inputs = _collect_inputs(run, clip)
 
     # ---- structure inventory -----------------------------------------------
-    run.tick(20, "Building the structure inventory...")
+    run.tick(20, "Building the structure inventory\u2026")
     rules = ST.mobile_rules_from_cfg(cfg)          # v2.9: manufactured-home rules
     structs = build_inventory(inputs["outlines"], inputs["points"], acrs, run.ctx,
                               progress_cb=run.stage(20, 28), clip=clip, mobile_rules=rules)
@@ -1310,7 +1310,7 @@ def _input_overviews(run, scenarios):
             for p in (s.depth, s.velocity, s.arrival, s.dv):
                 if p and p not in paths:
                     paths.append(p)
-        run.tick(1, "Raster overviews...")
+        run.tick(1, "Raster overviews\u2026")
         for line in OV.summary_lines(OV.ensure_input_overviews(paths)):
             run.log(">>> " + line)
     except CancelledByUser:
@@ -1420,7 +1420,7 @@ def _classify_and_write(run, cfg, state):
     judge = cfg["judgment_as_probable"]
 
     # ---- engineer review and the habitability rules ---------------------------
-    run.tick(82, "Applying the review decisions and the rules...")
+    run.tick(82, "Applying the review decisions and the rules\u2026")
     store = ReviewStore(cfg.get("review_file") or review_path(out))
     if store.error is not None:
         run.log(">>> WARNING: engineer review decisions in {} could not be read ({}) - "
@@ -1490,12 +1490,12 @@ def _classify_and_write(run, cfg, state):
             base_snaps[sc.name] = (res["snap"], sc, res["method"])
 
     # ---- model extent check (with the baseline's depth after the increment) ---
-    run.tick(83, "Checking the model extent...")
+    run.tick(83, "Checking the model extent\u2026")
     for sc in breaches:
         run.results[sc.name]["boundary"] = _boundary_check(run, sc, layers)
 
     # ---- classification ------------------------------------------------------
-    run.tick(83, "Classifying...")
+    run.tick(83, "Classifying\u2026")
     for sc in breaches:
         res = run.results[sc.name]
         restore(structs, res["snap"])
@@ -1527,7 +1527,7 @@ def _classify_and_write(run, cfg, state):
     governing = run.results[gov.name]
 
     # ---- outputs --------------------------------------------------------------
-    run.tick(84, "Writing outputs...")
+    run.tick(84, "Writing outputs\u2026")
     single = len(breaches) == 1
     written = []
     d_class, d_eap, d_qa = (_sub(out, SUBDIR_CLASSIFICATION), _sub(out, SUBDIR_EAP),
@@ -1630,7 +1630,7 @@ def _classify_and_write(run, cfg, state):
     # Main Consolidation of 1.x - 2.5 wrote them to outputs/Consolidation)
     zone_paths = {}
     if cfg.get("zone_rasters", True) and layers[gov.name].get("vel") is not None:
-        run.tick(88, "ACER zone rasters...")
+        run.tick(88, "ACER zone rasters\u2026")
         try:
             from .constants import HAZARD_COEFFICIENTS
             zsig = _product_sig([get_layer_path(layers[gov.name]["depth"]),
@@ -1694,7 +1694,7 @@ def _classify_and_write(run, cfg, state):
                                          written, d_class)
     eap_more = []
     if _eap_on(cfg, "travel"):
-        run.tick(90, "EAP travel-time table...")
+        run.tick(90, "EAP travel-time table\u2026")
         eap_more += _travel_time(run, gov, governing, structs, layers, inputs, clip, dam_name,
                                  written, d_eap)
     else:
@@ -1725,7 +1725,7 @@ def _classify_and_write(run, cfg, state):
         extra.setdefault("method", []).append(
             "Evaluation (downloads, inventory, raster sampling) re-used from the run of {} - "
             "rasters, data and their settings were unchanged".format(run.reused))
-    run.tick(92, "Writing the summary...")
+    run.tick(92, "Writing the summary\u2026")
     res = {"governing": gov.name, "nd": governing["nd"], "tm11": governing["tm11"],
            "result_items": _result_items(run, gov, governing),
            "results": run.results, "lines": [], "outputs": written, "structs": structs,
@@ -1734,7 +1734,7 @@ def _classify_and_write(run, cfg, state):
 
     # ---- main-thread part: map book, summary, report, layers, groups -----------
     def post_outputs():
-        run.tick(93, "EAP map book..." if _eap_on(cfg, "mapbook") else "Summary...")
+        run.tick(93, "EAP map book\u2026" if _eap_on(cfg, "mapbook") else "Summary\u2026")
         if run.deferred:
             # layers made in the worker thread are not handed to layouts or
             # the project: the layouts use the layers just added to the
@@ -1804,7 +1804,7 @@ def _classify_and_write(run, cfg, state):
             old = os.path.join(out, "Hazard_Classification_Report.pdf")
             report = old if os.path.isfile(old) else None
         elif cfg["report_pdf"]:
-            run.tick(95, "Building the PDF report...")
+            run.tick(95, "Building the PDF report\u2026")
             rep_info = {}
             try:
                 from .report import build_report
@@ -1973,7 +1973,7 @@ def _collect_inputs(run, clip):
     labels = {k: lbl for k, lbl, _f, _a in jobs}
     got = {}
     if jobs:
-        tick(2, "Downloading {} data set(s)...".format(len(jobs)))
+        tick(2, "Downloading {} data set(s)\u2026".format(len(jobs)))
         res = parallel_map([(k, try_download, (lbl, fn) + args, {}) for k, lbl, fn, args in jobs],
                            progress_cb=run.stage(2, 18), label="Downloading")
         for k, (ok, val) in res.items():
@@ -2868,7 +2868,7 @@ def _future_development(run, gov, governing, structs, layers, clip, dam_name, wr
     if parcels is None:
         _retire_everywhere(run.out, base)
         return []
-    run.tick(89, "Screening vacant parcels (future development)...")
+    run.tick(89, "Screening vacant parcels (future development)\u2026")
     samplers = _open_samplers(run, gov, layers[gov.name])
     try:
         lyr, summ = DEV.screen(parcels, structs, samplers, clip.crs, run.ctx, clip=clip,

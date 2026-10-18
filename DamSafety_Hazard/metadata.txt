@@ -5,9 +5,24 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.35
+version=2.18.36
 author=N.D. Bendickson
 changelog=
+    2.18.36 - 2026-10-18
+      * Lumo's Hazard screens review. The status line under the tabs no longer repeats
+        the Check inputs result ("Input check: N error(s), M warning(s)" / "Inputs need
+        fixing ... see the red box"): the red box and the button badge show it once, and
+        an empty status line is hidden.
+      * The long help text at the top of Review > Structures and Review > Roads &
+        facilities is collapsed by default ("How to review structures" and "How to
+        review roads and facilities"; click to open).
+      * One ellipsis character (U+2026) instead of '...' in the window's labels, tooltips,
+        drop-down items, progress messages, the plugin menu entry (Classify…), the dam
+        suite tool buttons and the Processing labels.
+      * The window is sized for the screen it opens on (QGIS's screen, else the one under
+        the mouse), not always the primary screen; it is placed inside that screen, never
+        larger than it (the cap follows the window to another monitor), and the 520 x 400
+        floor that could exceed a small screen is gone (ui_fit.py, Hazard copy).
     2.18.35 - 2026-10-18
       * The dam folder must be ONE dam's folder: the path is normalised ('//',
         'Dams//2801/') and the file-system root, the suite's Dams folder, a folder
