@@ -5,7 +5,8 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Four-page setup for the DamSafety plugins: suite folder, dam, crest and inflow, then the breach run.
 about=Fills empty slots from the suite data folder and opens DamSafety Runner with the answers. Advanced settings stay editable.
-version=1.0.8
-changelog=1.0.8 - Wizard live checks: Next stays off until the page is valid (folder holds the DWR dams; a dam with height and storage above 0 - no more 0 ft / 0 ac-ft hand-over; a readable DEM) and the reason shows in red under the control. Folder scan as coloured marks, the number of matching dams, where the downloaded DEM is saved, and a Run summary that states the grid / run length / EAP values the Runner gets (Advanced values apply also when its box is unticked, as before).
+version=1.0.9
+changelog=1.0.9 - One ellipsis character (U+2026) on the plugin menu entry (Start here…).
+    1.0.8 - Wizard live checks: Next stays off until the page is valid (folder holds the DWR dams; a dam with height and storage above 0 - no more 0 ft / 0 ac-ft hand-over; a readable DEM) and the reason shows in red under the control. Folder scan as coloured marks, the number of matching dams, where the downloaded DEM is saved, and a Run summary that states the grid / run length / EAP values the Runner gets (Advanced values apply also when its box is unticked, as before).
     1.0.7 - Cross-platform (#32): explicit UTF-8 text I/O in the pack converter.
 author=N.D. Bendickson

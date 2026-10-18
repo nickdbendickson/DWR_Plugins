@@ -95,7 +95,7 @@ class SetupPlugin(object):
         self.action = None
 
     def initGui(self):
-        self.action = QAction("Start here...", self.iface.mainWindow())
+        self.action = QAction("Start here\u2026", self.iface.mainWindow())
         self.action.triggered.connect(self.run)
         self.iface.addPluginToMenu(MENU, self.action)
         self.dock = None

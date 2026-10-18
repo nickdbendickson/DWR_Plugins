@@ -1191,7 +1191,7 @@ class RunDamAlgorithm(_Base):
                 "Results go to <Dams folder>/<Dam ID>/ as 'Depth (Max).tif' (ft), "
                 "'Velocity (Max).tif' (ft/s), 'Arrival Time.tif' (hours after breach "
                 "initiation) and 'WSE (Max).tif' (ft), ready for the ND hazard classification, "
-                "with 'Baseline ...' and 'Incremental ...' rasters for the flood scenario, flood "
+                "with 'Baseline \u2026' and 'Incremental \u2026' rasters for the flood scenario, flood "
                 "polygons, arrival zones, a GeoPackage and an EAP inundation map preview (the "
                 "EAP map is ND Dam Hazard's map book; see 'EAP map'). The run report "
                 "(Markdown, JSON and HTML) is in the _breach_model subfolder.\n\n"
@@ -1484,7 +1484,7 @@ class RunDamAlgorithm(_Base):
             from .core import hecras_engine
             feedback.pushWarning("Models = LISFLOOD-FP then HEC-RAS 2D: the final rasters come "
                                  "from HEC-RAS 2D; the LISFLOOD-FP ones are kept as "
-                                 "'LISFLOOD-FP ...'.")
+                                 "'LISFLOOD-FP \u2026'.")
             try:
                 hr = hecras_engine.run_stage(folder, res.final, writer, st, fb.log)
             except hecras_engine.HecRasEngineError as e:
@@ -1888,7 +1888,7 @@ class CascadeAlgorithm(_Base):
                 "failing, with the wave added to its own inflow when its normal pool level (and "
                 "PMF inflow / spillway files in <Dams folder>/<Dam ID>/inputs/) are given. "
                 "Reservoirs listed in the Ponds layer are treated as full for the upstream "
-                "flood (tailwater). Writes 'Cascade ...' rasters: the deepest and fastest water "
+                "flood (tailwater). Writes 'Cascade \u2026' rasters: the deepest and fastest water "
                 "of all runs and the earliest arrival after the first dam's breach.\n\n"
                 "Dams are ordered upstream first by the order field (or the layer order).")
 
