@@ -36,7 +36,15 @@ MIN_SEED_CAP = 25000          # a small 2D area may refine to more than max_seed
 # spacing along the lines, as a fraction of the 2D area's cell size
 DEFAULT_REFINE = {"dam_frac": 0.25, "breach_frac": 0.25, "channel_frac": 0.5,
                   "dam_dist_cells": 8.0, "channel_dist_cells": 4.0,
-                  "max_seeds_ratio": 4.0, "edge_frac": 0.45}
+                  "max_seeds_ratio": 4.0, "edge_frac": 0.45,
+                  # v3.10.22 (Absaraka v2_gmsh: 58 cells of 9 sides, HEC-RAS refused 48):
+                  # gmsh's Frontal-Delaunay (6) instead of Delaunay (5) gave 0 nodes of 9 or
+                  # more neighbours there (Delaunay: 58), at the same sizes; a fixed random
+                  # seed and one thread give the same points every run; the size grows at
+                  # most `grading` from a point to its neighbour; points closer than
+                  # min_spacing_frac x the smallest spacing are thinned
+                  "algorithm": 6, "random_seed": 20261018, "grading": 1.3,
+                  "min_spacing_frac": 0.5, "max_points": 2000000}
 # equal point density to a square grid of the same cell: a triangle node carries
 # sqrt(3)/2 h^2 of area, a grid point cell^2
 GRID_EQUIV = math.sqrt(2.0 / math.sqrt(3.0))
@@ -103,21 +111,29 @@ def spec_for(perimeter, cell, dam_line=None, downstream=None, breach_xy=None, br
     chan = []
     if channel is not None and len(channel) >= 2:
         chan.append(np.asarray(channel, float).reshape(-1, 2).tolist())
+    # smooth grading: from h_min the size grows by at most (grading - 1) per unit of
+    # distance, i.e. neighbouring points differ in spacing by at most `grading`
+    g1 = max(1e-3, float(r["grading"]) - 1.0)
+    d_line_min, d_ch_min = 2.0 * h_line, 0.5 * cell
+    d_line_max = max(float(r["dam_dist_cells"]) * cell, d_line_min + (h_base - h_line) / g1)
+    d_ch_max = max(float(r["channel_dist_cells"]) * cell, d_ch_min + (h_base - h_ch) / g1)
     spec = {"outer": np.asarray(perimeter, float).reshape(-1, 2).tolist(),
             "lines": lines, "channel": chan, "points": [],
             # gmsh_mesher's sizes are triangle areas; its line size is 1.3 x the edge of
             # min_area, so min_area is set from h_line / 1.3
             "min_area_m2": _area(h_line / 1.3), "channel_area_m2": _area(h_ch),
             "max_area_m2": _area(h_base),
-            "line_dist_min_m": 2.0 * h_line, "line_dist_max_m": float(r["dam_dist_cells"]) * cell,
-            "channel_dist_min_m": 0.5 * cell,
-            "channel_dist_max_m": float(r["channel_dist_cells"]) * cell,
+            "line_dist_min_m": d_line_min, "line_dist_max_m": d_line_max,
+            "channel_dist_min_m": d_ch_min, "channel_dist_max_m": d_ch_max,
+            "algorithm": int(r["algorithm"]), "threads": 1,
+            "random_seed": None if r["random_seed"] is None else int(r["random_seed"]),
             # seeds, not ANUGA triangles: no quality gate (HEC-RAS makes its own cells)
             "min_angle_deg": 0.0, "min_area_tol": 0.0, "declutter": True}
     sizes = {"cell": float(cell), "base_spacing": round(h_base, 3), "dam_spacing": round(h_dam, 3),
              "breach_spacing": round(h_br, 3), "channel_spacing": round(h_ch, 3),
-             "dam_dist": round(float(r["dam_dist_cells"]) * cell, 3),
-             "channel_dist": round(float(r["channel_dist_cells"]) * cell, 3),
+             "dam_dist": round(d_line_max, 3), "channel_dist": round(d_ch_max, 3),
+             "grading": float(r["grading"]), "algorithm": int(r["algorithm"]),
+             "random_seed": r["random_seed"],
              "lines": len(lines), "channel_lines": len(chan)}
     return spec, sizes, r
 
@@ -260,19 +276,113 @@ def make_seeds(perimeter, cell, options=None, env=None, timeout_s=TIMEOUT_S, **l
         raise SeedError("; ".join(tried))
     p, t, stats, ver, where = res
     pts, h = clean_seeds(p, t, perimeter, r["edge_frac"])
+    # the same points in the same order every run (gmsh numbers its nodes by thread)
+    order = np.lexsort((pts[:, 0], pts[:, 1]))
+    pts, h = pts[order], h[order]
+    pts, n_thin = decimate(pts, float(r["min_spacing_frac"]) * min(
+        sizes["dam_spacing"], sizes["breach_spacing"], sizes["channel_spacing"]))
     grid_n = abs(_ring_area(perimeter)) / float(cell) ** 2
     if len(pts) < 10:
         raise SeedError("gmsh gave {} usable points".format(len(pts)))
-    cap = max(float(r["max_seeds_ratio"]) * grid_n, MIN_SEED_CAP)
+    cap = min(max(float(r["max_seeds_ratio"]) * grid_n, MIN_SEED_CAP), float(r["max_points"]))
     if len(pts) > cap:
-        raise SeedError("gmsh gave {:,} points, more than {:,.0f} ({:g} x the {:,.0f} of the "
-                        "regular grid)".format(len(pts), cap, r["max_seeds_ratio"], grid_n))
+        raise SeedError("gmsh gave {:,} points, more than the cap of {:,.0f} (max_seeds_ratio "
+                        "{:g} x the {:,.0f} points of the regular grid, at most max_points "
+                        "{:,.0f}); raise gmsh_refine dam_frac / channel_frac or the cell "
+                        "size".format(len(pts), cap, r["max_seeds_ratio"], grid_n,
+                                      float(r["max_points"])))
     info = {"gmsh_version": ver, "python": where, "seeds": int(len(pts)),
             "gmsh_nodes": int(len(p)), "dropped_on_perimeter": int(len(p) - len(pts)),
+            "thinned_min_spacing": int(n_thin),
             "grid_equivalent": int(round(grid_n)), "seconds": round(time.time() - t0, 2),
             "smallest_spacing": round(float(h.min()), 3) if len(h) else None,
             "sizes": sizes, "gmsh_stats": stats, "tried_first": tried}
     return pts, info
+
+
+def decimate(points, min_dist):
+    """Drop points closer than min_dist to a point kept before them (in their order).
+    Returns (points, number dropped)."""
+    pts = np.asarray(points, float).reshape(-1, 2)
+    if min_dist <= 0 or len(pts) < 2:
+        return pts, 0
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError:                                # pragma: no cover
+        return pts, 0
+    pairs = cKDTree(pts).query_pairs(float(min_dist), output_type="ndarray")
+    if not len(pairs):
+        return pts, 0
+    keep = np.ones(len(pts), bool)
+    nb = {}
+    for a, b in pairs:
+        nb.setdefault(int(min(a, b)), []).append(int(max(a, b)))
+    for a in sorted(nb):
+        if keep[a]:
+            keep[nb[a]] = False
+    return pts[keep], int((~keep).sum())
+
+
+def spacing_stats(points, perimeter=None):
+    """Spacing of the points: lengths of their Delaunay edges (the cell faces' normals),
+    leaving out edges along the outside of the layout. {'median', 'p5', 'p95', 'min',
+    'grading_p99', 'grading_max'} (grading: ratio of the mean spacing of two neighbouring
+    points), or None without scipy or with fewer than 3 points."""
+    pts = np.asarray(points, float).reshape(-1, 2)
+    if len(pts) < 3:
+        return None
+    try:
+        from scipy.spatial import Delaunay
+    except ImportError:                                # pragma: no cover
+        return None
+    tri = Delaunay(pts)
+    e = np.vstack([tri.simplices[:, [0, 1]], tri.simplices[:, [1, 2]], tri.simplices[:, [2, 0]]])
+    e = np.unique(np.sort(e, axis=1), axis=0)
+    hull = set(map(tuple, np.sort(tri.convex_hull, axis=1).tolist()))
+    on_hull = np.array([tuple(x) in hull for x in e.tolist()])
+    L = np.hypot(*(pts[e[:, 0]] - pts[e[:, 1]]).T)
+    inner = ~on_hull
+    if perimeter is not None:
+        d = _ring_distance(pts[:, 0], pts[:, 1], perimeter)
+        far = d > 2.0 * np.median(L[inner])
+        inner &= far[e[:, 0]] & far[e[:, 1]]
+    if not inner.any():
+        inner = ~on_hull
+    s = np.zeros(len(pts))
+    c = np.zeros(len(pts))
+    np.add.at(s, e[inner].ravel(), np.repeat(L[inner], 2))
+    np.add.at(c, e[inner].ravel(), 1)
+    loc = np.where(c > 0, s / np.maximum(c, 1), np.nan)
+    a, b = loc[e[inner, 0]], loc[e[inner, 1]]
+    ok = np.isfinite(a) & np.isfinite(b)
+    g = np.maximum(a[ok], b[ok]) / np.minimum(a[ok], b[ok])
+    Li = L[inner]
+    return {"median": round(float(np.median(Li)), 2), "p5": round(float(np.percentile(Li, 5)), 2),
+            "p95": round(float(np.percentile(Li, 95)), 2), "min": round(float(L.min()), 3),
+            "grading_p99": round(float(np.percentile(g, 99)), 3) if len(g) else None,
+            "grading_max": round(float(g.max()), 3) if len(g) else None}
+
+
+def fidelity(seeds, centers, perimeter=None, tol=0.01):
+    """After HEC-RAS compiled the geometry: do its cells sit on the points we gave it?
+    seeds (n, 2) from the .g01 'Storage Area 2D Points', centers (m, 2) the geometry HDF's
+    'Cells Center Coordinate' of the real cells (no ghost cells). One-to-one nearest match.
+    Returns {'seeds', 'cells', 'matched', 'moved_over_tol', 'max_move', 'mean_move',
+    'one_to_one', 'ok', 'spacing'}."""
+    from scipy.spatial import cKDTree
+    s = np.asarray(seeds, float).reshape(-1, 2)
+    c = np.asarray(centers, float).reshape(-1, 2)
+    d, j = cKDTree(c).query(s)
+    back = cKDTree(s).query(c)[1]
+    mutual = back[j] == np.arange(len(s))
+    one = len(np.unique(j)) == len(s)
+    out = {"seeds": int(len(s)), "cells": int(len(c)), "matched": int(mutual.sum()),
+           "moved_over_tol": int((d > tol).sum()), "tol": tol,
+           "max_move": round(float(d.max()), 6) if len(d) else None,
+           "mean_move": float(d.mean()) if len(d) else None, "one_to_one": bool(one)}
+    out["ok"] = bool(len(s) == len(c) and one and out["moved_over_tol"] == 0)
+    out["spacing"] = spacing_stats(c, perimeter)
+    return out
 
 
 def _ring_area(pts):

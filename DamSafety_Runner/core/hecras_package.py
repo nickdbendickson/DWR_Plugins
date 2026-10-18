@@ -130,8 +130,11 @@ def windows_readme(m, info, notes, version, run_tool):
         "   and choose the new terrain.",
         "6. Build the 2D mesh: in RAS Mapper turn on editing for the geometry, right-click the",
         "   2D Flow Area '{}' > Edit 2D Area Properties > Generate Computation Points".format(hm.AREA_NAME),
-        "   ONLY if you want another cell size (the points are already there, {:g} {}).".format(
-            info["cell"], u),
+        "   ONLY if you want another cell size (the points are already there, {}; generating".format(
+            "{:,} points from gmsh".format(info["cells"])
+            if (info.get("mesh_seeds") or {}).get("used") == "gmsh"
+            else "{:g} {}".format(info["cell"], u)),
+        "   new ones also removes the breakline point pairs; re-enforce the breaklines then).",
         "   Stop editing and save. Then Geometry > Compute Property Tables (right-click the",
         "   geometry). Note every message HEC-RAS shows about the mesh.",
         "7. Run: in the main HEC-RAS window, Run > Unsteady Flow Analysis. Pick plan '{}',".format(
@@ -141,6 +144,9 @@ def windows_readme(m, info, notes, version, run_tool):
             b.get("start_hr") or 0.0) if b.get("start_mode") == "time" else
          "   The plan breaches the dam at {:.2f} {} (water level in the reservoir).".format(
              b["trigger_wse"], u)),
+        "   Dam results: the breach flow is the connection's 'Breach Flow' (Breaching",
+        "   Variables). Do not use Total Flow - Weir Flow: HEC-RAS counts the breach inside",
+        "   Weir Flow, so that is 0. The spillway flow is Total Flow - Breach Flow.",
         "8. SEND BACK (zip them, or the whole folder):",
         "   - {}.p01.hdf (the results; it appears after a run, even a failed one)".format(m.name),
         "   - the computation messages: the text in the Unsteady Flow Analysis window after",
@@ -195,8 +201,9 @@ def write_plugin_reference(pref, folder):
     with open(path, "w", encoding="utf-8", newline="") as f:
         f.write("# The plugin's breach routing (Runner core/breach.py) with the HEC-RAS plan's "
                 "breach: bottom {} ft, average width {} ft, side slope {}, formation {} h. "
-                "Peak {} cfs. Compare with the HEC-RAS breach flow (Total Flow - Weir Flow of "
-                "connection 'Dam').\n".format(pref["bottom_ft"], pref["avg_width_ft"],
+                "Peak {} cfs. Compare with HEC-RAS's own 'Breach Flow' of connection 'Dam' "
+                "(Breaching Variables; hecras.connection_timeseries 'breach_flow'), not Total "
+                "- Weir: HEC-RAS counts the breach inside Weir Flow.\n".format(pref["bottom_ft"], pref["avg_width_ft"],
                                              pref["side_slope"], pref["formation_hr"],
                                              pref["peak_cfs"]))
         f.write("time_from_breach_hr,time_in_plan_hr,flow_cfs\n")
@@ -260,6 +267,7 @@ def build_package(dam_folder, out_root=None, dt_min=hecras.DEFAULT_STEP_MIN, crs
            "mesh_seeds": {k: v for k, v in (r["info"].get("mesh_seeds") or {}).items()
                           if k != "gmsh_stats"},
            "plugin_reference": r["info"].get("plugin_reference"),
+           "breaklines": r["info"].get("breaklines"),
            "breach_shape_note": hm.BREACH_SHAPE_NOTE,
            "files": [{"path": p, "bytes": os.path.getsize(os.path.join(folder, p)),
                       "sha256": _sha256(os.path.join(folder, p))} for p in files]}

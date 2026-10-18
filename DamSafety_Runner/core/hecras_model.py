@@ -296,6 +296,7 @@ class Model:
         self.perimeter = []          # 2D area perimeter, not closed, counter-clockwise
         self.points = np.zeros((0, 2))   # 2D computation points
         self.cell = 100.0
+        self.nominal_cell = None     # Point Generation Data; None = cell
         self.manning_n = 0.06
         self.reservoir = []          # storage-area outline (display only)
         self.elev_volume = []        # [(elevation, volume)]
@@ -322,6 +323,8 @@ class Model:
         self.description = []
         self.structures = []         # v3.12.0: structure_connection() dicts
         self.tolerances = dict(TOLERANCES["default"])   # v3.10.22: solver tolerances (plan)
+        self.breaklines = []         # v3.10.22: [{'name', 'line', 'near', 'far'}] in the 2D area
+        self.conn_cellsize = None    # v3.10.22: (near, far) along the dam connection
 
     def bounds(self):
         pts = list(self.perimeter) + list(self.reservoir)
@@ -366,7 +369,8 @@ def geometry_text(m, now=None):
     L += [s.ljust(48) for s in lines_xy(m.perimeter, 1)]
     L += ["Storage Area Type= 0 ", "Storage Area Area=", "Storage Area Min Elev=",
           "Storage Area Is2D=-1",
-          "Storage Area Point Generation Data=,,{},{}".format(num(m.cell), num(m.cell)),
+          "Storage Area Point Generation Data=,,{0},{0}".format(
+              num(m.nominal_cell if getattr(m, "nominal_cell", None) else m.cell)),
           "Storage Area 2D Points= {} ".format(len(m.points))]
     L += lines_xy(m.points, 2)
     L += ["Storage Area 2D PointsPerimeterTime=" + now.strftime("%d%b%Y %H:%M:%S"),
@@ -387,14 +391,26 @@ def geometry_text(m, now=None):
         flat += [e, v]
     L += lines8(flat)
     L += ["Storage Area Is2D=0", ""]
+    # --- v3.10.22: 2D breaklines (BaldEagleDamBrk.g03 / Muncie.g04 layout); the computation
+    # points already follow them (hecras_breaklines.enforce) ------------------------------
+    for b in m.breaklines:
+        L += ["BreakLine Name=" + str(b["name"]),
+              "BreakLine CellSize Min={}".format(num(b["near"], 2)),
+              "BreakLine CellSize Max={}".format(num(b["far"], 2)),
+              "BreakLine Near Repeats=0", "BreakLine Protection Radius=-1",
+              "BreakLine Polyline= {} ".format(len(b["line"]))]
+        L += lines_xy(b["line"], 2)
     # --- SA/2D connection: the dam ------------------------------------------------------
     cx, cy = _centroid(m.conn_line)
     L.append("Connection={},{},{}".format(name16(CONN_NAME), num(cx, 4), num(cy, 4)))
     L.append("Connection Desc=Dam crest from the ND Dam Breach Runner")
     L.append("Connection Line={}".format(len(m.conn_line)))
     L += lines_xy(m.conn_line, 2)
-    L += ["Connection Last Edited Time=" + now.strftime("%b/%d/%Y %H:%M:%S"),
-          "Conn Near Repeats=1",
+    L.append("Connection Last Edited Time=" + now.strftime("%b/%d/%Y %H:%M:%S"))
+    if m.conn_cellsize:
+        L += ["Conn CellSize Min={}".format(num(m.conn_cellsize[0], 2)),
+              "Conn CellSize Max={}".format(num(m.conn_cellsize[1], 2))]
+    L += ["Conn Near Repeats=1",
           "Connection Up SA=" + name16(SA_NAME), "Connection Dn SA=" + name16(AREA_NAME),
           "Conn Routing Type= 1 ", "Conn Use RC Family=False", "Conn OverFlow Method 2D=True",
           "Conn Weir WD={}".format(num(m.weir_width, 2)),
@@ -1154,7 +1170,8 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             "hec_breach_mode": "match_plugin",  # or 'failure_mode' (HEC Piping for piping)
             "warmup_hold": True,                # spillway: hold the pool during the warm-up
             "tolerances": "default",            # or 'tight', or a dict (TOLERANCES keys)
-            "mesh_seeds": None}                 # None: NDBREACH_HECRAS_MESH_SEEDS, else 'grid'
+            "mesh_seeds": None,                 # None: NDBREACH_HECRAS_MESH_SEEDS, else 'grid'
+            "breaklines": True}                 # dam, breach and channel breaklines (in the points)
 
 
 def _ogr():
@@ -2128,6 +2145,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     gdal, ogr, osr = _ogr()
     from ..damsuite import gdalsafe as GS
     from . import hecras_seeds as hseeds
+    from . import hecras_breaklines as hbl
     seeds_mode = hseeds.mode_of(o)               # v3.10.22: raises on a bad value, before work
     dem_ds = GS.open_raster(dem_path)
     dem_wkt = dem_ds.GetProjection()
@@ -2669,9 +2687,11 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                               "source": sp[3], "as": "notch in the dam connection's weir",
                               "weir_coef": units.weir_coef(SPILLWAY_WEIR_COEF)}
                 notes.append("Spillway: a {:,.0f} {u} notch at {:.2f} {u} in the dam weir, "
-                             "stations {:,.0f} to {:,.0f} ({}; {}). Its flow is the "
-                             "connection's 'Weir Flow'; the breach flow is 'Total Flow' minus "
-                             "'Weir Flow'.".format(width_u, crest_u, ss_[0], ss_[1], sp[3],
+                             "stations {:,.0f} to {:,.0f} ({}; {}). HEC-RAS counts the breach "
+                             "flow inside the connection's 'Weir Flow' (Total - Weir is 0): "
+                             "read the breach flow from the connection's 'Breaching Variables' "
+                             "('Breach Flow'); the spillway is 'Total Flow' minus 'Breach "
+                             "Flow'.".format(width_u, crest_u, ss_[0], ss_[1], sp[3],
                                                    "centred where given" if st_u is not None
                                                    else "at the end of the dam line farther "
                                                    "from the breach", u=units.len_name))
@@ -2787,11 +2807,101 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                              sinf["gmsh_version"], len(pts), sinf["sizes"]["dam_spacing"],
                              sinf["sizes"]["channel_spacing"], cell, u=units.len_name))
             log(notes[-1])
+    # v3.10.22: breaklines along the breach cut and the channel, an even row along the dam,
+    # built into the points (HEC-RAS keeps a given point layout as it is and does not enforce
+    # breaklines in it; see hecras_breaklines)
+    bl_info, bl_lines, bl_dam = None, [], None
+    if o.get("breaklines", True):
+        if seeds_info.get("used") == "gmsh":
+            zs = seeds_info.get("sizes") or {}
+            bsp = {"dam": zs.get("dam_spacing"), "breach": zs.get("breach_spacing"),
+                   "channel": zs.get("channel_spacing")}
+        else:
+            bsp = None
+        bcw = 0.5 * max(bw, 2.0 * tcell)
+        bplan = hbl.plan(perim, cell, (A, B), d,
+                         breach=(A + ab * sc, bcw, toe_off + cell) if cut is not None else None,
+                         path=(path_m if (path_m is not None and use_path_dir) else None),
+                         spacing=bsp)
+        n0 = len(pts)
+        pts, bst = hbl.enforce(pts, perim, bplan)
+        prot = bst.pop("_protected")
+        bl_lines = [{"name": b["name"], "line": [tuple(map(float, q)) for q in b["line"]],
+                     "near": float(b["near"]), "far": float(b["far"])} for b in bplan["lines"]]
+        bl_dam = (float(bplan["dam"]["near"]), float(bplan["dam"]["far"]))
+        bl_info = dict(bst, points_before=int(n0), dam_spacing=round(bl_dam[0], 2),
+                       lines=[{"name": b["name"], "near": round(b["near"], 2),
+                               "far": round(b["far"], 2),
+                               "length": round(hbl.length(b["line"]), 1)} for b in bl_lines],
+                       skipped=bplan["skipped"],
+                       channel_length=bplan.get("channel_length"))
+        notes.append("Breaklines: {} (length, cell size along it), and an even row of points "
+                     "{:g} {u} apart along the dam; built into the computation points ({:,} "
+                     "removed, {:,} added), because HEC-RAS keeps the points it is given and "
+                     "does not enforce breaklines in them.{}".format(
+                         "; ".join("{} {:,.0f} {u}, {:g} {u}".format(
+                             b["name"], hbl.length(b["line"]), round(b["near"], 1),
+                             u=units.len_name) for b in bl_lines) or "none",
+                         bl_dam[0], bst["points_removed"], bst["points_added"],
+                         "".join(" No {}.".format(w) for w in bplan["skipped"]),
+                         u=units.len_name))
+        log(notes[-1])
+    else:
+        prot = None
+    # v3.10.22: no cell with more than 8 faces (HEC-RAS's limit; Absaraka v2_gmsh failed its
+    # property tables with "48 cell(s) with more than 8 sides"): the Voronoi pre-check on
+    # every cell (clipped to the perimeter where it reaches it) and every face point, with a
+    # nudge, then local removal; a layout that still fails stops the build here
+    poly_ = _polygon(perim)
+
+    def _clip(corners):
+        cp = _polygon(corners).Intersection(poly_)
+        if cp is None or cp.IsEmpty():
+            return 0
+        rr = _rings(cp)
+        return len(rr[0][1]) if rr else 0
+
+    try:
+        pts, _, vfix = hbl.fix_faces(pts, perim, prot, clip=_clip)
+    except ImportError:                                 # pragma: no cover - no scipy
+        vfix = None
+    if vfix is not None:
+        if vfix["nudged"] or vfix["removed"]:
+            notes.append("Voronoi pre-check: {:,} computation points nudged and {:,} removed "
+                         "that would have made cells with more than {} faces (HEC-RAS's "
+                         "limit).".format(vfix["nudged"], vfix["removed"], hbl.MAX_FACES))
+            log(notes[-1])
+        vc = vfix["check"]
+        if vfix["left"] or vc["facepoints_over"]:
+            raise HecRasModelError(
+                "the computation points still make {:,} cells with more than {} faces and "
+                "{:,} face points shared by more than 8 cells after {:,} were nudged and {:,} "
+                "removed; HEC-RAS would refuse this mesh. Build with breaklines=False or "
+                "mesh_seeds='grid', or a larger cell size.".format(
+                    vfix["left"], hbl.MAX_FACES, vc["facepoints_over"], vfix["nudged"],
+                    vfix["removed"]))
+        notes.append("Voronoi pre-check: {:,} cells ({:,} inside, {:,} clipped to the "
+                     "perimeter), most sides {}, 0 over {}; face points: most {} cells, 0 over "
+                     "8.".format(vc["cells"], vc["interior"], vc["boundary"], vc["max_sides"],
+                                 hbl.MAX_FACES, vc["max_cells_per_facepoint"]))
+        log(notes[-1])
+    n_faces = vfix["removed"] if vfix else 0
+    seeds_info["removed_for_faces"] = int(n_faces)
+    seeds_info["nudged_for_faces"] = int(vfix["nudged"]) if vfix else 0
+    seeds_info["over_8_faces_left"] = int(vfix["left"]) if vfix else None
+    if bl_info is not None:
+        bl_info["points"] = int(len(pts))
     mc = mesh_check(perim, pts, cell)
-    if mc and mc["over_8_faces"]:
-        notes.append("{} cells along the perimeter have more than 8 faces; HEC-RAS will "
-                     "report them. Fix them in RAS Mapper (move or delete the points).".format(
-                         mc["over_8_faces"]))
+    if mc is not None and vfix is not None:
+        mc = dict(mc, voronoi_precheck=vfix["check"], nudged=vfix["nudged"],
+                  removed=vfix["removed"])
+    # v3.10.22: the 2D area's nominal cell size is the median spacing of the points (gmsh)
+    nominal_cell = cell
+    if seeds_info.get("used") == "gmsh":
+        sp_ = hseeds.spacing_stats(pts, perim)
+        if sp_:
+            seeds_info["spacing"] = sp_
+            nominal_cell = sp_["median"]
 
     # --- v3.12.0: the run's culverts, bridges and notches inside the 2D area -------
     structs, ssrc = run_structures(report) if o["structures"] else ([], "")
@@ -2935,7 +3045,10 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     m.units = units
     m.perimeter = [tuple(p) for p in perim]
     m.points = pts
+    m.breaklines = bl_lines                     # v3.10.22
+    m.conn_cellsize = bl_dam
     m.cell = cell
+    m.nominal_cell = nominal_cell                 # v3.10.22: median point spacing (gmsh)
     m.manning_n = float(o["manning_n"] or settings.get("manning_n") or 0.06)
     m.reservoir = [tuple(p) for p in reservoir]
     ev, res = storage_curve(dam, units)
@@ -3017,6 +3130,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                              "trigger_wse": bvals.get("trigger_wse")},
             "hec_breach_mode": hmode, "spillway": spill_info,
             "tolerances": {"name": tname, "values": tvals}, "mesh_seeds": seeds_info,
+            "breaklines": bl_info,
             "plugin_reference": (None if pref is None else
                                  {k: v for k, v in pref.items() if k not in ("t_hr", "q_cfs")}),
             "model_wkt": srs.ExportToWkt(),
@@ -3336,6 +3450,11 @@ def write_readme(path, m, info, notes, dam, params):
             info["mesh_seeds"].get("used") != "gmsh" else
             "refined along the dam, breach and channel; HEC-RAS makes the cells"
             if (info.get("mesh_seeds") or {}).get("used") == "gmsh" else "the default"),
+        "| Breaklines | {} | {} |".format(
+            ", ".join(b["name"] for b in (info.get("breaklines") or {}).get("lines", []))
+            or "none", "built into the computation points: pairs of points across each line "
+            "(faces on the line) and an even row along the dam; re-enforce them in RAS Mapper "
+            "only if you move them" if info.get("breaklines") else "off (option breaklines)"),
         "| Plugin breach peak on this breach | {} | {} |".format(
             "{:,.0f} cfs at {:.2f} h after the breach starts".format(
                 info["plugin_reference"]["peak_cfs"],
@@ -3349,6 +3468,14 @@ def write_readme(path, m, info, notes, dam, params):
             "not run (no scipy)" if not info.get("mesh_check") else
             "{cells_checked} checked, most faces {max_faces}, over 8 faces {over_8_faces}, "
             "smallest {smallest_fraction:g} of a full cell".format(**info["mesh_check"])),
+        "| Voronoi pre-check (every cell) | {} | HEC-RAS refuses a cell with more than 8 "
+        "sides; points nudged or removed locally before writing |".format(
+            "not run (no scipy)" if not (info.get("mesh_check") or {}).get("voronoi_precheck")
+            else "{cells:,} cells, most sides {max_sides}, over 8: {over_interior} inside + "
+            "{over_boundary} on the perimeter; face points: most {max_cells_per_facepoint} "
+            "cells, over 8: {facepoints_over}".format(**info["mesh_check"]["voronoi_precheck"])
+            + "; {} nudged, {} removed".format(info["mesh_check"]["nudged"],
+                                               info["mesh_check"]["removed"])),
         "| Simulation | {:g} h from {} 00:00 | {} |".format(
             info["sim_hours"], START_DATE, info.get("sim_how") or ""),
         "| Dam line | {:,.0f} {} | {} |".format(info["dam_line"], L,

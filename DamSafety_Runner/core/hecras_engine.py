@@ -924,6 +924,80 @@ def geometry_hdf_state(path):
     return out
 
 
+def g01_points(path):
+    """{area name: (n, 2) 'Storage Area 2D Points'} of a geometry text file (16-character
+    x and y, 2 pairs a line)."""
+    out = {}
+    with open(path, encoding="latin-1") as f:
+        L = f.read().replace("\r", "").split("\n")
+    area = None
+    k = 0
+    while k < len(L):
+        ln = L[k]
+        if ln.startswith("Storage Area="):
+            area = ln.split("=", 1)[1].split(",")[0].strip()
+        elif ln.startswith("Storage Area 2D Points=") and area is not None:
+            n = int(ln.split("=", 1)[1].strip() or 0)
+            xy = []
+            k += 1
+            while len(xy) < n and k < len(L):
+                row = L[k]
+                for c in range(0, len(row) // 32 * 32, 32):
+                    xy.append((float(row[c:c + 16]), float(row[c + 16:c + 32])))
+                k += 1
+            out[area] = np.asarray(xy[:n], float).reshape(-1, 2)
+            continue
+        k += 1
+    return out
+
+
+def seed_check(project_dir, name, geom="01", log=None, write=True):
+    """v3.10.22, after Ras.exe built the mesh: HEC-RAS's cells against the computation points
+    the package gave it (it keeps a given layout: Muncie 10,824 of 10,824 within 6e-11 ft):
+    cell count, one-to-one match, the largest move, and the spacing of the cells. Written to
+    <project>/run_report.json 'seed_check' {area: {...}}. Never raises; {'error'} instead."""
+    from . import hecras_seeds as hs
+    g = os.path.join(project_dir, "{}.g{}".format(name, geom))
+    ghdf = g + ".hdf"
+    rep = {}
+    try:
+        import h5py
+        seeds = g01_points(g)
+        with h5py.File(ghdf, "r") as f:
+            areas = f["Geometry/2D Flow Areas"]
+            att = areas["Attributes"][()]
+            for row in np.atleast_1d(att):
+                nm = row["Name"]
+                nm = (nm.decode("utf-8", "replace") if isinstance(nm, bytes) else str(nm)).strip()
+                n = int(row["Cell Count"])
+                c = areas[nm]["Cells Center Coordinate"][()][:n, :2]
+                per = areas[nm]["Perimeter"][()][:, :2] if "Perimeter" in areas[nm] else None
+                s = seeds.get(nm)
+                if s is None:
+                    rep[nm] = {"error": "no 'Storage Area 2D Points' for {} in {}".format(
+                        nm, os.path.basename(g))}
+                    continue
+                rep[nm] = hs.fidelity(s, c, per)
+    except Exception as e:                                 # noqa: BLE001 - a report, not a gate
+        rep = {"error": "{}: {}".format(type(e).__name__, e)}
+    for nm, r in rep.items():
+        if isinstance(r, dict) and "ok" in r:
+            (log or (lambda m: None))(
+                "HEC-RAS seed check {}: {:,} points, {:,} cells, {:,} moved over {:g}, largest "
+                "move {:g}; {}".format(nm, r["seeds"], r["cells"], r["moved_over_tol"], r["tol"],
+                                       r["max_move"], "OK" if r["ok"] else "MISMATCH"))
+    if write:
+        rp = os.path.join(project_dir, hecras.RUN_REPORT_JSON)
+        try:
+            cur = json.load(open(rp, encoding="utf-8")) if os.path.isfile(rp) else {}
+        except (OSError, ValueError):
+            cur = {}
+        cur["seed_check"] = rep
+        with open(rp, "w", encoding="utf-8") as fh:
+            json.dump(cur, fh, indent=1, default=str)
+    return rep
+
+
 def data_errors(project_dir, name, plan):
     """The text of HEC-RAS's '<name>.p<plan>.data_errors.txt' ('' when there is none)."""
     p = os.path.join(project_dir, "{}.p{}.data_errors.txt".format(name, plan))
@@ -1026,6 +1100,7 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
             st = _require_geometry(ghdf, "geometry (Ras.exe -c pass 1)", **chk)
             (log or (lambda m: None))("HEC-RAS: geometry HDF with {:,} 2D cells".format(
                 st["cells"]))
+            seed_check(project_dir, name, geom, log=log)
         elif s == "mesh":
             area, seeds = mesh
             _run(wine + [os.path.join(wdir, "mesh.exe"), W(ghdf), area, "csv", W(seeds)], wdir, e,

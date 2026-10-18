@@ -277,3 +277,53 @@ def hecras_timing_engine_arrival_counts_from_the_breach_start():
     assert he.results_t0_hr({"inflow_bc": None,
                              "info": {"breach_start": {"mode": "wse", "start_hr": None}}}) == 0.0
     assert he.results_t0_hr({"info": {}}) == 0.0
+
+
+@test
+def hecras_timing_breach_flow_is_hecs_own_not_total_minus_weir():
+    """Absaraka v2 (Grok Bot, 2026-10-18): HEC-RAS counts the breach flow inside the
+    connection's Weir Flow, so Total - Weir is 0. The breach flow is the 'Breach Flow' of the
+    connection's Breaching Variables; the spillway is Total - Breach."""
+    try:
+        import h5py
+    except ImportError:
+        print("  (skipped: no h5py)")
+        return
+    from nd_breach_runner.core import hecras
+    d = tempfile.mkdtemp()
+    try:
+        path = os.path.join(d, "x.p01.hdf")
+        g = "Results/Unsteady/Output/Output Blocks/DSS Hydrograph Output/Unsteady Time Series/"
+        n = 121
+        t = np.linspace(0.0, 0.25, n)
+        breach = np.where(t > 0.0104, 15000.0 * np.sin(np.clip((t - 0.0104) / 0.1, 0, 1) * np.pi),
+                          0.0)
+        spill = np.full(n, 1720.0) * np.exp(-t * 20)
+        sv = np.column_stack([breach + spill, breach + spill, np.full(n, 1069.0),
+                              np.full(n, 1047.0)])
+        bv = np.zeros((n, 9))
+        bv[:, 6] = np.where(t > 0.0104, breach, np.nan)     # HEC writes NaN before the breach
+        with h5py.File(path, "w") as f:
+            f.create_dataset(g + "Time", data=t).attrs["Time"] = b"days"
+            ds = f.create_dataset(g + "SA 2D Area Conn/Dam/Structure Variables", data=sv)
+            ds.attrs["Variable_Unit"] = np.array(
+                [[b"Total Flow", b"cfs"], [b"Weir Flow", b"cfs"], [b"Stage HW", b"ft"],
+                 [b"Stage TW", b"ft"]], dtype="S32")
+            ds = f.create_dataset(g + "SA 2D Area Conn/Dam/Breaching Variables", data=bv)
+            ds.attrs["Variable_Unit"] = np.array(
+                [[c.encode(), u.encode()] for c, u in (
+                    ("Stage HW", "ft"), ("Stage TW", "ft"), ("Bottom-Width", "ft"),
+                    ("Bottom-Elevation", "ft"), ("Left Side Slope", "feet/feet"),
+                    ("Right Side Slope", "feet/feet"), ("Breach Flow", "cfs"),
+                    ("Breach Velocity", "ft/s"), ("Breach Flow Area", "ft^2"))], dtype="S32")
+            f.create_dataset(g + "SA 2D Area Conn/Other/Structure Variables", data=sv).attrs[
+                "Variable_Unit"] = ds.attrs["Variable_Unit"][:4]
+        r = hecras.connection_timeseries(path, "Dam")
+        tot, weir = r["values"][:, 0], r["values"][:, 1]
+        assert np.abs(tot - weir).max() == 0.0                 # what the v2 run showed
+        assert np.allclose(r["breach_flow"], breach) and np.allclose(r["other_flow"], spill)
+        assert r["breach"]["columns"][6] == "Breach Flow" and r["breach"]["units"][6] == "cfs"
+        r = hecras.connection_timeseries(path, "Other")          # no breach on it
+        assert r["breach"] is None and r["breach_flow"] is None
+    finally:
+        shutil.rmtree(d)

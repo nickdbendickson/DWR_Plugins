@@ -108,8 +108,11 @@ def hecras_seeds_fallback_to_the_grid_without_gmsh():
             rep["hecras_mesh_seeds"]["used"] == "grid"
         assert "gmsh asked for, not available" in open(r["paths"]["readme"]).read()
         # default off: nothing asked, the grid, recorded as such
-        assert grid["info"]["mesh_seeds"] == {"asked": "grid", "used": "grid",
-                                              "grid_points": grid["info"]["cells"]}
+        ms = grid["info"]["mesh_seeds"]
+        assert {k: ms[k] for k in ("asked", "used", "grid_points")} == {
+            "asked": "grid", "used": "grid",
+            "grid_points": grid["info"]["breaklines"]["points_before"]}, ms
+        assert ms["over_8_faces_left"] == 0 and "spacing" not in ms, ms
         with _NoGmsh():
             try:
                 hs.make_seeds([(0, 0), (10, 0), (10, 10)], 1.0, options={}, env={})
@@ -135,7 +138,9 @@ def hecras_seeds_gmsh_points_written_and_recorded():
         si, m = r["info"]["mesh_seeds"], r["model"]
         assert si["used"] == "gmsh" and si["gmsh_version"] == hs.gmsh_version_inprocess(), si
         pts = _g01_points(r["paths"]["g01"])
-        assert len(pts) == si["seeds"] == r["info"]["cells"] == len(m.points)
+        bl = r["info"]["breaklines"]                   # the breaklines are built in after gmsh
+        assert len(pts) == bl["points"] == r["info"]["cells"] == len(m.points)
+        assert si["seeds"] == bl["points_before"]
         # none on or outside the perimeter
         per = np.asarray(m.perimeter)
         dist = hm.point_segment_distance(pts[:, 0], pts[:, 1],
@@ -159,7 +164,8 @@ def hecras_seeds_gmsh_points_written_and_recorded():
                              options={"mesh_seeds": "gmsh"})
         man = json.load(open(os.path.join(p["folder"], hp.MANIFEST)))
         assert man["mesh_seeds"]["used"] == "gmsh" and "gmsh_stats" not in man["mesh_seeds"]
-        assert man["cells"] == man["mesh_seeds"]["seeds"]
+        assert man["cells"] == man["breaklines"]["points"]
+        assert man["breaklines"]["points_before"] == man["mesh_seeds"]["seeds"]
     finally:
         shutil.rmtree(d)
 
@@ -178,3 +184,100 @@ def hecras_seeds_gmsh_in_another_python():
     assert "option gmsh_python" in info["python"] and info["gmsh_version"], info
     assert info["tried_first"] and "not installed in this Python" in info["tried_first"][0]
     assert 300 < len(pts) < hs.MIN_SEED_CAP, len(pts)
+
+
+@test
+def hecras_seeds_decimate_spacing_and_fidelity():
+    """Pure: min-spacing thinning, the spacing / grading stats, and the post-compile check of
+    HEC-RAS's cells against the points (count, one-to-one, largest move)."""
+    try:
+        import scipy.spatial  # noqa: F401
+    except ImportError:
+        print("  (skipped: no scipy)")
+        return
+    X, Y = np.meshgrid(np.arange(50.0, 2000.0, 100.0), np.arange(50.0, 2000.0, 100.0))
+    g = np.column_stack([X.ravel(), Y.ravel()])
+    pts = np.vstack([g, g[:5] + [3.0, 0.0]])                # 5 near-duplicates
+    out, n = hs.decimate(pts, 10.0)
+    assert n == 5 and len(out) == len(g) and np.allclose(out, g)
+    per = [(0.0, 0.0), (2000.0, 0.0), (2000.0, 2000.0), (0.0, 2000.0)]
+    sp = hs.spacing_stats(g, per)
+    assert sp["median"] == 100.0 and sp["grading_max"] < 1.3, sp
+    f = hs.fidelity(g, g[::-1] + 1e-9, per)
+    assert f["ok"] and f["moved_over_tol"] == 0 and f["one_to_one"], f
+    f = hs.fidelity(g, np.vstack([g[:-1], g[-1] + [30.0, 0.0]]), per)
+    assert not f["ok"] and f["moved_over_tol"] == 1 and abs(f["max_move"] - 30.0) < 1e-6
+    f = hs.fidelity(g, g[:-3], per)
+    assert not f["ok"] and f["cells"] == len(g) - 3
+
+
+@test
+def hecras_seeds_spec_is_graded_and_repeatable():
+    """The gmsh spec: Frontal-Delaunay, a fixed random seed, one thread, and size fields that
+    grow by at most 1.3 from a point to the next; with gmsh, the same points twice, sorted."""
+    ring = [(0.0, 0.0), (6000.0, 0.0), (6000.0, 3000.0), (0.0, 3000.0)]
+    spec, sizes, r = hs.spec_for(ring, 100.0, dam_line=((0.0, 1000.0), (0.0, 2000.0)),
+                                 downstream=(1.0, 0.0), breach_xy=(0.0, 1500.0),
+                                 channel=[(0.0, 1500.0), (6000.0, 1500.0)])
+    assert spec["algorithm"] == 6 and spec["random_seed"] == 20261018 and spec["threads"] == 1
+    hb = hs.GRID_EQUIV * 100.0
+    for smin, a, b in ((sizes["dam_spacing"], "line_dist_min_m", "line_dist_max_m"),
+                       (sizes["channel_spacing"], "channel_dist_min_m", "channel_dist_max_m")):
+        slope = (hb - smin) / (spec[b] - spec[a])
+        assert slope <= 0.3 + 1e-9, (a, slope)
+    if not _has_gmsh():
+        print("  (gmsh part skipped: no gmsh in {})".format(sys.executable))
+        return
+    kw = dict(dam_line=((0.0, 1000.0), (0.0, 2000.0)), downstream=(1.0, 0.0),
+              breach_xy=(0.0, 1500.0), channel=[(0.0, 1500.0), (6000.0, 1500.0)])
+    p1, i1 = hs.make_seeds(ring, 100.0, options={}, env={}, **kw)
+    p2, _ = hs.make_seeds(ring, 100.0, options={}, env={}, **kw)
+    assert p1.shape == p2.shape and np.array_equal(p1, p2)
+    assert np.all(np.diff(p1[:, 1]) >= 0)                     # sorted by y, then x
+    from nd_breach_runner.core import hecras_breaklines as hbl
+    chk = hbl.voronoi_precheck(p1, ring)
+    assert chk["over_interior"] == 0, chk
+    from scipy.spatial import cKDTree
+    assert cKDTree(p1).query(p1, k=2)[0][:, 1].min() >= 0.5 * sizes["dam_spacing"] - 1e-9
+
+
+@test
+def hecras_seeds_nominal_cell_and_seed_check_after_compile():
+    """With gmsh the .g01's Point Generation Data is the median point spacing; after HEC-RAS
+    builds the mesh, hecras_engine.seed_check compares its cells with the points and writes
+    run_report.json 'seed_check' (a stand-in geometry HDF here)."""
+    if p0._skip() or not _has_gmsh():
+        print("  (skipped: no gmsh in {})".format(sys.executable))
+        return
+    from nd_breach_runner.core import hecras_engine as he
+    d = tempfile.mkdtemp()
+    try:
+        p0._run(d, dam_json_len_ft=1500.0)
+        r = hm.build_model(d, out_folder=os.path.join(d, "m"), options={"mesh_seeds": "gmsh"})
+        si = r["info"]["mesh_seeds"]
+        g = open(r["paths"]["g01"], encoding="latin-1").read()
+        line = [l for l in g.splitlines() if l.startswith("Storage Area Point Generation Data=")]
+        v = float(line[0].split(",")[-1])
+        assert abs(v - si["spacing"]["median"]) < 0.01 and v != r["info"]["cell"], (v, si)
+        mc = r["info"]["mesh_check"]["voronoi_precheck"]
+        assert mc["over_interior"] == 0 and mc["over_boundary"] == 0, mc
+        pts = he.g01_points(r["paths"]["g01"])
+        assert len(pts) == 1 and len(list(pts.values())[0]) == r["info"]["cells"]
+        try:
+            import h5py
+        except ImportError:
+            print("  (seed_check part skipped: no h5py)")
+            return
+        name = os.path.splitext(os.path.basename(r["paths"]["g01"]))[0]
+        area, xy = list(pts.items())[0]
+        with h5py.File(r["paths"]["g01"] + ".hdf", "w") as f:
+            dt = np.dtype([("Name", "S16"), ("Cell Count", "<i4")])
+            f["Geometry/2D Flow Areas/Attributes"] = np.array([(area.encode(), len(xy))], dt)
+            ghost = np.vstack([xy, xy[:3] + 1e4])                  # ghost cells at the end
+            f["Geometry/2D Flow Areas/{}/Cells Center Coordinate".format(area)] = ghost
+        rep = he.seed_check(os.path.dirname(r["paths"]["g01"]), name, log=lambda m: None)
+        assert rep[area]["ok"] and rep[area]["cells"] == len(xy), rep
+        j = json.load(open(os.path.join(os.path.dirname(r["paths"]["g01"]), "run_report.json")))
+        assert j["seed_check"][area]["ok"]
+    finally:
+        shutil.rmtree(d)
