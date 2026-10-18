@@ -273,6 +273,10 @@ def test_lock_decision_logic():
     # a pid-less lock: refused while fresh, cleared once past the stale window
     assert core.lock_decision({"pid": None, "age": 5.0})[0] == "refuse"
     assert core.lock_decision({"pid": None, "age": 7 * 3600.0})[0] == "clear"
+    # M23 fix: a FRESH lock from THIS process is a live concurrent update -> refuse (not stolen);
+    # an own-pid lock is cleared only once it is past the stale window.
+    assert core.lock_decision({"pid": os.getpid(), "age": 1.0}, alive=lambda p: True)[0] == "refuse"
+    assert core.lock_decision({"pid": os.getpid(), "age": 7 * 3600.0}, alive=lambda p: True)[0] == "clear"
 
 
 @test

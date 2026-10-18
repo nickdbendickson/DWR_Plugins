@@ -169,8 +169,16 @@ def lock_decision(info, stale_seconds=LOCK_STALE_SECONDS, alive=pid_alive, own_p
         return "free", ""
     pid = info.get("pid")
     age = float(info.get("age") or 0.0)
-    if pid is not None and pid == (os.getpid() if own_pid is None else own_pid):
-        return "clear", f"it was left behind by this process (pid {pid})"
+    me = os.getpid() if own_pid is None else own_pid
+    if pid is not None and pid == me:
+        # M23 fix: a lock whose pid is THIS process is stale only once it is older than the stale
+        # window. A fresh same-pid lock is a live concurrent update - a reloaded plugin or a
+        # sibling updater sharing the QGIS process and data folder - and must be refused, not
+        # stolen; stealing it let two updates race and clobber the staging folder.
+        if age > stale_seconds:
+            return "clear", (f"it was left behind by this process (pid {pid}) "
+                             f"{age / 3600.0:.1f} hours ago")
+        return "refuse", "another update is already running in this process"
     if pid is None:
         if age > stale_seconds:
             return "clear", f"it records no process and is {age / 3600.0:.1f} hours old"
