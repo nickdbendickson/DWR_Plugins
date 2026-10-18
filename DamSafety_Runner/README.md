@@ -260,7 +260,7 @@ unchanged.
   solver keyword (`acceleration` / `fv1`) is now written to the .par file and recorded in the
   settings.
 - **Reservoir bottom carved from the storage curve** (`RESERVOIR_CARVE`, Off by default; Auto /
-  On; advanced; v3.10.19, `docs/Reservoir_carve_from_storage.md`): for LiDAR that shows a water
+  On; advanced; v3.10.20, `docs/Reservoir_carve_from_storage.md`): for LiDAR that shows a water
   surface instead of the reservoir bottom. The cells under the water sheet upstream of the dam
   are lowered into a bowl so the DEM's volume at the top of dam matches the storage curve (within
   2 %), never below the curve bottom, the shoreline unchanged, nothing downstream. The source DEM

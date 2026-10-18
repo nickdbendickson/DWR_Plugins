@@ -1,4 +1,4 @@
-"""v3.10.19: the reservoir bottom carved into the DEM from the storage curve
+"""v3.10.20: the reservoir bottom carved into the DEM from the storage curve
 (core/reservoir_carve.py, RESERVOIR_CARVE = off | auto | on; docs/Reservoir_carve_from_storage.md).
 
 Synthetic data: a valley reservoir held by a dam at x = 0 (downstream +x) whose true bottom is
@@ -277,7 +277,7 @@ def reservoir_carve_settings_gui_and_cli():
     assert tuple(pl.CARVE_CHOICES) == rc.MODES
     st = workflow.RunSettings()
     k = workflow.key_settings(st)
-    assert "reservoir_carve" not in k                  # off: checkpoints of 3.10.18 still resume
+    assert "reservoir_carve" not in k                  # off: checkpoints of 3.10.19 still resume
     assert workflow.key_settings(workflow.RunSettings(reservoir_carve="auto"))["reservoir_carve"] \
         == "auto"
     import importlib

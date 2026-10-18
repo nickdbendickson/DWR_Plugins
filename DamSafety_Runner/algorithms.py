@@ -685,7 +685,7 @@ class _Base(QgsProcessingAlgorithm):
             st.eap_map = EAP_MAP_CHOICES[min(len(EAP_MAP_CHOICES) - 1, self.parameterAsEnum(
                 parameters, "EAP_MAP", context))][0]
         if self.parameterDefinition("RESERVOIR_CARVE") is not None and \
-                parameters.get("RESERVOIR_CARVE") not in (None, ""):          # v3.10.19
+                parameters.get("RESERVOIR_CARVE") not in (None, ""):          # v3.10.20
             from .core import reservoir_carve
             st.reservoir_carve = reservoir_carve.normalize(
                 int(self.parameterAsEnum(parameters, "RESERVOIR_CARVE", context)))
@@ -876,6 +876,7 @@ class _Base(QgsProcessingAlgorithm):
         rec = impmod.Receptors()
         footprints = []                 # v3.4.0: building outlines from a polygon layer
         road_lines = []
+        rail_lines = []                 # gmsh ANUGA mesh: rail embankments become mesh lines
         for name, kind in (("RECEPTOR_POINTS", impmod.KIND_STRUCTURE),
                            ("RECEPTOR_ROADS", impmod.KIND_ROAD),
                            ("RECEPTOR_RAIL", impmod.KIND_RAIL)):
@@ -896,6 +897,8 @@ class _Base(QgsProcessingAlgorithm):
                 rec.add_lines([x[0] for x in ln], kind)
                 if kind == impmod.KIND_ROAD:
                     road_lines.extend(x[0] for x in ln)
+                elif kind == impmod.KIND_RAIL:
+                    rail_lines.extend(x[0] for x in ln)
         self._more_receptors(parameters, context, tf, center_xy, radius, rec, footprints,
                              road_lines, notes)
         for name in ("RECEPTOR_POINTS", "RECEPTOR_ROADS", "RECEPTOR_RAIL", "STRUCTURES",
@@ -904,6 +907,7 @@ class _Base(QgsProcessingAlgorithm):
             self._record("Layer " + name, self._vector_path(parameters, name, context))
         st.receptors = rec if len(rec) else None
         st.road_lines = road_lines
+        st.rail_lines = rail_lines
         self._receptor_gate = None
         psrc = self.parameterAsSource(parameters, "RECEPTOR_POINTS", context)
         if psrc is not None and _source_has_features(psrc):
@@ -1488,6 +1492,15 @@ class RunDamAlgorithm(_Base):
                                              "are in the dam folder): {}".format(e))
             res.final.update(hr["final"])
             res.warnings.extend(hr["warnings"])
+            # every reported figure from the final engine (the screening pass is kept)
+            try:
+                res.summary = workflow.adopt_final_engine(folder, "HEC-RAS 2D", st, dam_xy,
+                                                          fb.log)
+            except Exception as e:
+                raise QgsProcessingException(
+                    "HEC-RAS 2D ran, but the run report and flood polygons could not be made "
+                    "from its rasters ({}: {}); they still show the LISFLOOD-FP screening "
+                    "pass.".format(type(e).__name__, e))
         for w in res.warnings:
             feedback.pushWarning("Check: " + w)
         for k, v in res.summary.items():

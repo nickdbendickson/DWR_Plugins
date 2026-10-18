@@ -95,3 +95,17 @@ Benchmark for **Grok Bot** (heavy runs, Absaraka, ANUGA then LISFLOOD, same brea
 2. `core/gmsh_mesher.py` (lazy import, noding, size fields, export and QA) plus `anuga_worker` support for `mesh_points`, `mesh_tris` and `mesh_edge_tags`, plus the `anuga_mesher` setting (default `default`, hidden), plus unit tests and the gmsh check in `check_anuga`.
 3. Exposing the option in the Runner and tool 7b with help text, and mesh QA in run_report. Then Grok Bot's benchmark.
 4. Tuning (slope field, SizeMax inside the flood extent), and the default changes only after the user signs off.
+
+## 12. After the first real run (Absaraka 20 x 20 mi, 2026-10-18)
+- **Gate.** gmsh's smallest triangle was 49.93 m2 against `0.5 x 100 m2`, on a mesh with a 31.3° minimum angle, so the Runner quietly used the default mesh. The default `min_area_tol` is now **0.45** (`anuga_gmsh["min_area_tol"]`, or `NDBREACH_ANUGA_GMSH_MIN_AREA_TOL`). The gate is `tol x` the **smallest intended size**, `min(min_area_m2, culvert_area_m2)`, not always the base area. A smaller culvert size makes small triangles on purpose and must not fail the gate. What the gate has to catch is triangles much smaller than anything that was asked for. Slivers are caught by `min_angle_deg`.
+- **Mesher choice.** `ANUGA_MESHER` / `NDBREACH_ANUGA_MESHER`:
+  - `default`: unchanged.
+  - `gmsh`: **strict**. A rejected mesh, a gmsh error or the 600 s timeout stops the run with the reason.
+  - `gmsh_or_default`: falls back to the default mesh, with a `WARNING:` log line and `gmsh mesh rejected: <reason>; used the default mesh` first in "Things to check" and in its own "ANUGA mesh" section of run_report.md.
+
+  `run_report.json` has `anuga_mesh` (requested, used, rejected, gmsh stats, embankments, every pass) and `summary.anuga_mesher`.
+- **Culverts.** As planned in 4.4, the culvert ends get the point field at `h(min_area)` within 40 m, measured at about 140 m2 mean near each Absaraka culvert. There are no 25 m2 octagons. `culvert_area_m2` (default = `min_area_m2`) can ask for smaller ones, and the gate follows it.
+- **Road and rail embankments (4.2).** These weren't wired before: only `REFINE_LINES` reached the mesher. Now, with a gmsh mesher, the RECEPTOR_ROADS and RECEPTOR_RAIL centrelines go into the mesh. A centreline counts as being on an embankment where the crown (the highest ground within 3 m) is ≥ 0.3 m above the ground 20 m to both sides, read at ≤ 5 m. Gaps ≤ 30 m are bridged, pieces must be ≥ 100 m long, and only roads within 150 m of the LISFLOOD-FP flood are used. Those pieces become embedded mesh lines (options `embankment_*` in `anuga_gmsh`; `embankment_lines: false` turns this off).
+
+  Before noding, `declutter()` drops stretches within `h_min` of, and within 30° of parallel to, a line that is already kept (double track, a road beside the rail). It also moves loose ends that stop within `h_min` of a line onto that line. `node_lines()` then splits an edge at any node within the snap distance. Without these steps, the Absaraka NG911 + NARN lines gave a 1.5° minimum angle.
+- **Caveat.** ANUGA takes its elevation from the model DEM at the triangle centroids. With CELL 40 m, an embankment narrower than a cell is still smeared in elevation. The line keeps the triangle edges along the road, but not the crest height.

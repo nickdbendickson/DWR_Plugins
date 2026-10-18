@@ -2,7 +2,8 @@
 
 The default mesher must leave the ANUGA job file byte-identical to main; the
 gmsh mesher must join crossing lines, keep the quality gate (20 deg, 100 m2),
-tag every outer edge, and fall back to the default mesh on failure or timeout.
+tag every outer edge, and report why on failure or timeout (test_gmsh_gate.py:
+the strict / gmsh_or_default handling of that).
 gmsh tests are skipped when gmsh is not importable. Nothing here runs ANUGA."""
 import hashlib
 import json
@@ -168,11 +169,11 @@ def gmsh_mesher_runs_as_a_script_and_reaches_the_job():
 
 
 @test
-def gmsh_failure_and_timeout_fall_back_to_the_default_mesh():
+def gmsh_failure_and_timeout_return_no_mesh_and_the_reason():
     d = tempfile.mkdtemp(prefix="gmshfail_")
     st = AM.AnugaSettings(sys.executable)
-    mesh, note = AM.make_gmsh_mesh(d, dict(outer=[[0, 0], [1, 0]]), st)   # bad ring
-    assert mesh is None and "default ANUGA mesh" in note
+    mesh, why = AM.make_gmsh_mesh(d, dict(outer=[[0, 0], [1, 0]]), st)   # bad ring
+    assert mesh is None and "fewer than 3 points" in why, why
     slow = os.path.join(d, "slow.py")
     with open(slow, "w") as fh:
         fh.write("import time; time.sleep(30)\n")
@@ -183,7 +184,7 @@ def gmsh_failure_and_timeout_fall_back_to_the_default_mesh():
         mesh, note = AM.make_gmsh_mesh(d, {}, st)
     finally:
         AM.MESHER = old
-    assert mesh is None and "over 1 s" in note
+    assert mesh is None and "over 1 s" in note and "timeout" in note
     shutil.rmtree(d, ignore_errors=True)
 
 

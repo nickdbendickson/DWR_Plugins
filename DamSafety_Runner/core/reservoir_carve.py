@@ -1,4 +1,4 @@
-"""v3.10.19: the reservoir bottom carved into the DEM from the dam's storage curve (opt-in).
+"""v3.10.20: the reservoir bottom carved into the DEM from the dam's storage curve (opt-in).
 
 LiDAR does not see below a water surface: where the pool was full when the DEM was flown the
 reservoir is a flat sheet a few feet below the top of dam and holds a fraction of the dam's

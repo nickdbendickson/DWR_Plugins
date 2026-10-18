@@ -82,6 +82,6 @@ def test_dem_buffer_is_half_the_max_extent():
 def test_both_wizards_use_the_shared_buffer_helper():
     setup = open(os.path.join(ROOT, "DamSafety_Setup", "plugin.py")).read()
     runner = open(os.path.join(ROOT, "DamSafety_Runner", "wizard.py")).read()
-    assert '"BUFFER_MI": dem_buffer_mi(self.wiz.page(3).max_extent.value())' in setup
+    assert '"BUFFER_MI": dem_buffer_mi(self.wiz.page(RUN_PAGE).max_extent.value())' in setup
     assert '"BUFFER_MI": dem_buffer_mi(a.get("max_extent_mi"))' in runner
     assert '"BUFFER_MI": 15.0' not in setup and '"BUFFER_MI": 15.0' not in runner

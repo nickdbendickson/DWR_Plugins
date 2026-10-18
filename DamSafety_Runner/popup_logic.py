@@ -531,7 +531,7 @@ def defaults(alg, dams_folder, dam_id, settings=None):
             p["FORCE_ANUGA"] = True
             p["TIER"] = 1
         carve = str(S.get("reservoir_carve") or "off").strip().lower()
-        if carve in CARVE_CHOICES and carve != "off":                    # v3.10.19
+        if carve in CARVE_CHOICES and carve != "off":                    # v3.10.20
             p["RESERVOIR_CARVE"] = CARVE_CHOICES.index(carve)
     return p
 

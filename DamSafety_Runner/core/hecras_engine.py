@@ -48,12 +48,19 @@ Settings (environment variables, or the `env` dict of each function):
     NDBREACH_HECRAS_LINUX_DIR    the unzipped Linux_RAS_v66 folder (bin/, libs/)
     NDBREACH_HECRAS_DISPLAY      X display for Wine (default :77; an Xvfb is NOT started here)
     NDBREACH_HECRAS_TCU_HOOK     optional, see above
-    NDBREACH_HECRAS_TIMEOUT_S    per-step timeout (default 1800)
-    NDBREACH_HECRAS_INFLOW_MODE  'hydrograph' (default) or 'breach' (see write_project)
+    NDBREACH_HECRAS_TIMEOUT_S    per-step timeout in s (preprocess steps: default 1800; the
+                                 RasUnsteady compute: default compute_timeout(), scaled to
+                                 the model); set, it overrides both
+    NDBREACH_HECRAS_INFLOW_MODE  'auto' (default), 'hydrograph' or 'breach' (see write_project)
     NDBREACH_HECRAS_BASE_FLOW_CFS  base flow of the inflow hydrograph (default 0, see below)
     NDBREACH_HECRAS_TAIL         'recession' (default) or 'hold' (see inflow_series)
 
 Inflow modes (write_project):
+  auto        (the default) 'hydrograph' when the run has a usable inflow point (the run's,
+              or one walked downstream by build_model); otherwise 'breach', with the reason
+              in run_report.json 'hecras_inflow' (status 'fallback_breach'), a logged warning
+              and a sentence in the run report and the EAP preview. 'hydrograph' and 'breach'
+              set explicitly are strict: 'hydrograph' without an inflow point fails.
   hydrograph  the run's breach hydrograph is a 2D flow-hydrograph BC at the run's inflow point
               (the forcing LISFLOOD-FP and ANUGA get). The plan has NO breach and the
               reservoir storage area starts DRY (the lowest elevation of its storage curve)
@@ -66,10 +73,13 @@ Inflow modes (write_project):
               breach on the SA/2D connection with the run's breach parameters and trigger
               (hecras_model.breach_block); no inflow BC.
 """
+import datetime
 import json
 import math
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -92,7 +102,8 @@ INFLOW_BC_SLOPE = 0.001            # energy slope HEC-RAS distributes the inflow
 ENV_MODE = "NDBREACH_HECRAS_INFLOW_MODE"
 ENV_BASE = "NDBREACH_HECRAS_BASE_FLOW_CFS"
 ENV_TAIL = "NDBREACH_HECRAS_TAIL"
-INFLOW_MODES = ("hydrograph", "breach")
+INFLOW_MODES = ("auto", "hydrograph", "breach")
+MODE_AUTO = "auto"
 TAILS = ("recession", "hold")
 HDF_NAME = "{name}.p01.hdf"
 
@@ -110,6 +121,151 @@ def _timeout(env):
         return float(_env(env).get(ENV_TIMEOUT) or 1800)
     except ValueError:
         return 1800.0
+
+
+def _timeout_override(env):
+    """NDBREACH_HECRAS_TIMEOUT_S as seconds, or None when unset / not a positive number."""
+    try:
+        v = float(_env(env).get(ENV_TIMEOUT) or 0)
+    except ValueError:
+        return None
+    return v if v > 0 else None
+
+
+# ---------------------------------------------------------------------------- compute time
+# RasUnsteady wall time ~ COMPUTE_K_S x cells x simulated seconds / base computation interval
+# (one core, SWE-ELM, adaptive Courant step; the base interval stands for the step HEC-RAS
+# starts from and halves/doubles around). Calibrated 2026-10-18 on this box (1 core):
+#   DWR-3161  68,949 cells, 32 h, 3 s base step: 65 % in 7,200 s -> ~11,100 s  k = 4.2e-6
+#   Absaraka  64,090 cells, 40 h, 6 s base step: ~21 min (1,260 s)             k = 0.8e-6
+# k is the slower of the two (a wet, flat tailwater keeps the adaptive step small); the
+# timeout is COMPUTE_SAFETY x the estimate, at least COMPUTE_MIN_S, at most COMPUTE_MAX_S.
+# The time step itself is never coarsened here: the adaptive Courant step governs.
+COMPUTE_K_S = 4.2e-6
+COMPUTE_SAFETY = 3.0
+COMPUTE_MIN_S = 2 * 3600.0
+COMPUTE_MAX_S = 48 * 3600.0
+
+
+def compute_estimate_s(cells, sim_hours, base_dt_s, k=COMPUTE_K_S):
+    """Estimated RasUnsteady wall time (s): k x cells x sim seconds / base step."""
+    return float(k) * float(cells) * float(sim_hours) * 3600.0 / max(float(base_dt_s), 1e-3)
+
+
+def compute_timeout(cells, sim_hours, base_dt_s, env=None):
+    """(timeout_s, estimate_s or None, how): NDBREACH_HECRAS_TIMEOUT_S when set, else
+    max(COMPUTE_MIN_S, COMPUTE_SAFETY x estimate) capped at COMPUTE_MAX_S; COMPUTE_MIN_S when
+    the model's size is not known."""
+    est = (compute_estimate_s(cells, sim_hours, base_dt_s)
+           if cells and sim_hours and base_dt_s else None)
+    ov = _timeout_override(env)
+    if ov is not None:
+        return ov, est, "{} (override)".format(ENV_TIMEOUT)
+    if est is None:
+        return COMPUTE_MIN_S, None, "default (model size unknown)"
+    t = min(max(COMPUTE_MIN_S, COMPUTE_SAFETY * est), COMPUTE_MAX_S)
+    how = "{:g} x the estimate, at least {:g} h, at most {:g} h".format(
+        COMPUTE_SAFETY, COMPUTE_MIN_S / 3600.0, COMPUTE_MAX_S / 3600.0)
+    return t, est, how
+
+
+def _interval_s(label):
+    """'3SEC' / '1MIN' / '1HOUR' -> seconds, or None."""
+    m = re.match(r"^\s*(\d+(?:\.\d+)?)\s*(SEC|MIN|HOUR|DAY)", str(label or "").upper())
+    if not m:
+        return None
+    return float(m.group(1)) * {"SEC": 1, "MIN": 60, "HOUR": 3600, "DAY": 86400}[m.group(2)]
+
+
+def plan_timing(project_dir, name, plan="01"):
+    """{'cells', 'sim_hours', 'base_dt_s'} of a project's plan (None for what is unknown):
+    the plan's Simulation Date and Computation Interval, the 2D cells of its geometry HDF
+    (else hecras_engine.json 'cells')."""
+    out = {"cells": None, "sim_hours": None, "base_dt_s": None}
+    geom = "01"
+    try:
+        with open(os.path.join(project_dir, "{}.p{}".format(name, plan)), encoding="ascii",
+                  errors="replace") as f:
+            txt = f.read()
+    except OSError:
+        txt = ""
+    for line in txt.splitlines():
+        k, _, v = line.partition("=")
+        if k == "Computation Interval":
+            out["base_dt_s"] = _interval_s(v)
+        elif k == "Simulation Date":
+            f_ = [x.strip() for x in v.split(",")]
+            try:
+                a = datetime.datetime.strptime(f_[0] + f_[1].zfill(4), "%d%b%Y%H%M")
+                b = datetime.datetime.strptime(f_[2] + f_[3].zfill(4), "%d%b%Y%H%M")
+                out["sim_hours"] = (b - a).total_seconds() / 3600.0
+            except (ValueError, IndexError):
+                pass
+        elif k == "Geom File":
+            geom = v.strip().lstrip("gG") or geom
+    st = geometry_hdf_state(os.path.join(project_dir, "{}.g{}.hdf".format(name, geom)))
+    if st["cells"] > 0:
+        out["cells"] = int(st["cells"])
+        return out
+    # no h5py / no HDF: the geometry text's 'Storage Area 2D Points=' (summed over 2D areas)
+    n = 0
+    try:
+        with open(os.path.join(project_dir, "{}.g{}".format(name, geom)), encoding="ascii",
+                  errors="replace") as f:
+            for line in f:
+                if line.startswith("Storage Area 2D Points="):
+                    try:
+                        n += int(line.split("=", 1)[1].strip() or 0)
+                    except ValueError:
+                        pass
+    except OSError:
+        pass
+    if n > 0:
+        out["cells"] = n
+        return out
+    try:
+        with open(os.path.join(project_dir, "hecras_engine.json"), encoding="utf-8") as f:
+            out["cells"] = json.load(f).get("cells")
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+_SIMTIME = re.compile(r"^\s*SIMTIME=\s*([0-9.Ee+-]+)\s*$", re.M)
+
+
+def last_simtime_hr(text):
+    """The last 'SIMTIME=' (hours into the simulation) RasUnsteady printed, or None."""
+    m = None
+    for m in _SIMTIME.finditer(text or ""):
+        pass
+    try:
+        return float(m.group(1)) if m else None
+    except ValueError:
+        return None
+
+
+def _hm(sec):
+    return "{:.0f} s ({:.1f} h)".format(sec, sec / 3600.0)
+
+
+def compute_timeout_message(timeout, elapsed, text, sim_hours, estimate=None):
+    """The error when RasUnsteady ran out of time: % done and the timeout that would do."""
+    t = last_simtime_hr(text)
+    frac = (t / sim_hours) if (t is not None and sim_hours) else None
+    msg = "Linux RasUnsteady did not finish in {}".format(_hm(timeout))
+    if frac and frac > 0:
+        need = elapsed / frac
+        sug = int(math.ceil(1.25 * need / 900.0) * 900)        # 25 % margin, 15 min steps
+        msg += (": it reached {:.2f} h of the {:g} h simulation ({:.0f} % done), so it needs "
+                "about {} in all. Set {}={} (or more) and re-run.".format(
+                    t, sim_hours, 100 * frac, _hm(need), ENV_TIMEOUT, sug))
+    else:
+        msg += (" and printed no simulation time (stuck before the unsteady computations?); "
+                "see run.log.")
+    if estimate:
+        msg += " (Estimate before the run: {}.)".format(_hm(estimate))
+    return msg
 
 
 # ============================================================================
@@ -351,10 +507,10 @@ def inflow_series(hy, units_flow, sim_hours, dt_min=hecras.DEFAULT_STEP_MIN, bas
 
 
 def _mode(inflow_mode, env):
-    m = (inflow_mode or (_env(env).get(ENV_MODE) or "").strip().lower() or "hydrograph")
+    m = (inflow_mode or (_env(env).get(ENV_MODE) or "").strip().lower() or MODE_AUTO)
     if m not in INFLOW_MODES:
-        raise HecRasEngineError("inflow_mode must be 'hydrograph' or 'breach' (got {!r}; "
-                                "{})".format(m, ENV_MODE))
+        raise HecRasEngineError("inflow_mode must be 'auto', 'hydrograph' or 'breach' (got "
+                                "{!r}; {})".format(m, ENV_MODE))
     return m
 
 
@@ -368,10 +524,108 @@ def _float_env(env, key, default):
         raise HecRasEngineError("{}={!r} is not a number".format(key, v))
 
 
+def inflow_missing_message(status):
+    """TIER 2 fix: why hydrograph mode has no inflow point: none recorded, or the run's point
+    was rejected and none valid was found downstream."""
+    st = status or {}
+    if st.get("status") == "rejected":
+        xy = st.get("run_xy")
+        msg = "the run's inflow point (run_report.json 'inflow_point'{}) was rejected: {}".format(
+            ", {:.1f}, {:.1f}".format(*xy) if xy else "", st.get("why") or "not usable")
+        if st.get("searched_ft"):
+            msg += ("; no point at least a quarter of the dam height below the top of dam was "
+                    "found within {:,.0f} ft downstream along the flow path or the DEM's "
+                    "steepest descent".format(st["searched_ft"]))
+            if st.get("lowest_ground_ft") is not None:
+                msg += (" (it must be at most {:.1f} ft; the lowest ground found off the "
+                        "embankment is {:.1f} ft, {:,.0f} ft downstream)".format(
+                            st.get("need_ground_ft") or float("nan"), st["lowest_ground_ft"],
+                            st.get("lowest_at_ft") or 0.0))
+        if st.get("search_error"):
+            msg += " (search failed: {})".format(st["search_error"])
+        if st.get("side_problems"):
+            msg += ("; CHECK THE DAM POINT: the point and the run's flow line disagree ({})"
+                    .format("; ".join(st["side_problems"])))
+        return msg + ". Check the dam point, or use inflow_mode='breach'."
+    return ("the run has no inflow point (run_report.json 'inflow_point'); "
+            "use inflow_mode='breach'")
+
+
+def fallback_sentence(status):
+    """The report sentence for an 'auto' run that fell back to the breach model."""
+    st = status or {}
+    head = "HEC-RAS modeled the breach at the dam (no inflow hydrograph) because "
+    if st.get("searched_ft"):
+        drop = st.get("need_drop_ft")
+        msg = head + "no inflow point {}was found within {:,.0f} ft downstream".format(
+            "at least {:.1f} ft below the top of dam ".format(drop) if drop is not None else
+            "low enough below the top of dam ", st["searched_ft"])
+        if st.get("lowest_ground_ft") is not None:
+            msg += " (lowest ground {:.1f} ft at {:,.0f} ft)".format(
+                st["lowest_ground_ft"], st.get("lowest_at_ft") or 0.0)
+        return msg + "."
+    if st.get("status") == "missing" or not st:
+        return head + "the run recorded no inflow point."
+    return head + "the run's inflow point was rejected ({}).".format(st.get("why") or
+                                                                    "not usable")
+
+
+def side_conflict_message(status):
+    st = status or {}
+    return ("inflow mode 'auto' did not fall back to the breach model: the run's inflow "
+            "point{} looks like a dam-point / downstream-side problem ({}). Check the dam "
+            "point (and the DWR dam line) and re-run the Runner (3.10.18 keeps the inflow on "
+            "the downstream side), or set {}=breach to model the breach at the dam anyway."
+            .format(" ({:.1f}, {:.1f})".format(*st["run_xy"]) if st.get("run_xy") else "",
+                    "; ".join(st.get("side_problems") or []), ENV_MODE))
+
+
+def _record_side_conflict(dam_folder, status):
+    rp = os.path.join(dam_folder, hecras.MODEL_FOLDER, hecras.RUN_REPORT_JSON)
+    try:
+        with open(rp, encoding="utf-8") as f:
+            r = json.load(f)
+        r["hecras_inflow"] = dict(r.get("hecras_inflow") or {}, status="side_conflict",
+                                  side_problems=status.get("side_problems"),
+                                  note=side_conflict_message(status))
+        tmp = rp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(r, f, indent=2, default=str)
+        os.replace(tmp, rp)
+    except (OSError, ValueError):
+        pass
+
+
+def _record_fallback(dam_folder, status, sentence, reason, blocked=None):
+    """run_report.json 'hecras_inflow' -> status 'fallback_breach' (keeps the search record:
+    the original status, the reason and the lowest ground found), or 'fallback_blocked' with
+    the site-check problems (`blocked`) when the breach model failed them."""
+    rp = os.path.join(dam_folder, hecras.MODEL_FOLDER, hecras.RUN_REPORT_JSON)
+    rec = dict(status or {})
+    rec.update(status="fallback_breach", fallback_from=(status or {}).get("status", "missing"),
+               reason=reason, note=sentence, inflow_mode="breach", inflow_mode_requested="auto")
+    if blocked:
+        rec.update(status="fallback_blocked", inflow_mode=None, site_problems=list(blocked),
+                   note=sentence + " The breach model failed the site checks, so no HEC-RAS "
+                   "model was built.")
+    try:
+        with open(rp, encoding="utf-8") as f:
+            r = json.load(f)
+        r["hecras_inflow"] = dict(r.get("hecras_inflow") or {}, **rec)
+        tmp = rp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(r, f, indent=2, default=str)
+        os.replace(tmp, rp)
+    except (OSError, ValueError):
+        pass
+    return rec
+
+
 def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
                   build=None, load=None, log=None, env=None, base_flow_cfs=None, tail=None):
     """Builds the HEC-RAS project of a finished run (hecras_model.build_model). inflow_mode
-    (default NDBREACH_HECRAS_INFLOW_MODE, else 'hydrograph'): see the module docstring.
+    (default NDBREACH_HECRAS_INFLOW_MODE, else 'auto'): see the module docstring. 'auto' is
+    'hydrograph' when there is an inflow point, else 'breach' (res['inflow_fallback']).
     'hydrograph' forces the 2D area with the run's breach hydrograph at the run's inflow
     point from the simulation start to its end (inflow_series), with a dry reservoir and no
     breach; 'breach' keeps build_model's storage area + SA/2D breach unchanged. Returns
@@ -390,9 +644,54 @@ def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
     if tail not in TAILS:
         raise HecRasEngineError("tail must be 'recession' or 'hold' (got {!r}; {})".format(
             tail, ENV_TAIL))
-    res = build(dam_folder, out_folder, options=options, log=log)
+    # the site checks guard the breach model; the hydrograph plan (and 'auto' until it knows it
+    # needs the breach model) builds with them as notes, see hecras_model.SITE_SCOPES
+    bopts = dict(options or {})
+    if inflow_mode in ("hydrograph", MODE_AUTO):
+        bopts["site_scope"] = "hydrograph"
+    res = build(dam_folder, out_folder, options=bopts, log=log)
+    res["inflow_mode_requested"] = inflow_mode
+    res["inflow_fallback"] = None
+    if inflow_mode == MODE_AUTO:
+        if res["info"].get("inflow_xy_model") is None:
+            st = res["info"].get("inflow_status") or {}
+            if st.get("side_problems"):
+                # not a quiet fallback: the run's inflow point is on the wrong side of the dam
+                # or far from it, so the dam point or the downstream side is probably wrong
+                _record_side_conflict(dam_folder, st)
+                msg = side_conflict_message(st)
+                log("ERROR: " + msg)
+                raise HecRasEngineError(msg)
+            sentence = fallback_sentence(st)
+            reason = inflow_missing_message(st).split(". Check the dam point")[0].split(
+                "; use inflow_mode")[0]
+            # the breach model, with the site checks that guard it
+            bopts["site_scope"] = "breach"
+            try:
+                res = dict(build(dam_folder, out_folder, options=bopts, log=log),
+                           inflow_mode_requested=MODE_AUTO, inflow_fallback=None)
+            except hm.HecRasSiteError as e:
+                _record_fallback(dam_folder, st, sentence, reason, blocked=e.problems)
+                log("ERROR: inflow mode 'auto' found no inflow point ({}) and fell back to the "
+                    "breach model, which fails the site checks; no HEC-RAS model was "
+                    "built.".format(reason))
+                raise
+            res["inflow_fallback"] = _record_fallback(dam_folder, st, sentence, reason)
+            log("WARNING: " + sentence + " Reason: " + reason + ".")
+            rd = (res.get("paths") or {}).get("readme")
+            if rd and os.path.exists(rd):
+                with open(rd, "a", encoding="utf-8") as f:
+                    f.write("\n- **Inflow mode 'auto' fell back to the breach model.** {} "
+                            "Reason: {}.\n".format(sentence, reason))
+            inflow_mode = "breach"
+        else:
+            inflow_mode = "hydrograph"
     res["inflow_mode"] = inflow_mode
     res["inflow_bc"] = None
+    sp = (res["info"].get("inflow_status") or {}).get("side_problems")
+    if sp and inflow_mode == "breach":
+        log("WARNING: CHECK THE DAM POINT: the run's inflow point and its flow line disagree "
+            "({}); the breach model at the dam was asked for explicitly.".format("; ".join(sp)))
     if inflow_mode == "breach":
         b = res["model"].breach or {}
         log("HEC-RAS inflow: dam breach in the plan (SA/2D connection, trigger water surface "
@@ -403,8 +702,7 @@ def write_project(dam_folder, out_folder=None, options=None, inflow_mode=None,
     m, info, paths = res["model"], res["info"], res["paths"]
     xy = info.get("inflow_xy_model")
     if xy is None:
-        raise HecRasEngineError("the run has no inflow point (run_report.json 'inflow_point'); "
-                                "use inflow_mode='breach'")
+        raise HecRasEngineError(inflow_missing_message(info.get("inflow_status")))
     a, b = np.asarray(m.conn_line[0], float), np.asarray(m.conn_line[-1], float)
     along = b - a
     direction = np.asarray(xy, float) - (a + b) / 2.0       # dam -> inflow, downstream
@@ -451,6 +749,9 @@ def _write_engine_json(res, inflow_mode, inflow_bc, info):
     info = info or res.get("info") or {}
     with open(os.path.join(res["folder"], "hecras_engine.json"), "w", encoding="utf-8") as f:
         json.dump({"inflow_mode": inflow_mode, "inflow_bc": inflow_bc,
+                   "cells": info.get("cells"), "comp_interval": info.get("comp_interval"),
+                   "inflow_mode_requested": res.get("inflow_mode_requested", inflow_mode),
+                   "inflow_fallback": res.get("inflow_fallback"),
                    "time_step": info.get("time_step"), "sim_hours": info.get("sim_hours"),
                    "model_wkt": info.get("model_wkt"), "work_wkt": info.get("work_wkt")},
                   f, indent=1)
@@ -499,6 +800,45 @@ def _run(cmd, cwd, env, timeout, what, ok=None, log=None):
                "exit 0 but it printed FAIL" if "FAIL" in text else
                "exit 0 but it never printed '{}'".format(ok))
         raise HecRasEngineError("{} failed ({}):\n{}".format(what, why, tail))
+    return text
+
+
+def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None):
+    """RasUnsteady with its output going to `log_path` as it runs (watchable); on a timeout
+    the process group is killed and compute_timeout_message() says how far it got."""
+    log = log or (lambda m: None)
+    what, ok = "Linux RasUnsteady", "Finished Unsteady Flow Simulation"
+    log("HEC-RAS: " + what)
+    t0 = time.time()
+    try:
+        with open(log_path, "w", errors="replace") as out:
+            p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT,
+                                 start_new_session=True)
+            try:
+                rc = p.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except (OSError, AttributeError):
+                    p.kill()
+                p.wait()
+                rc = None
+    except OSError as e:
+        raise HecRasEngineError("{} could not start: {}".format(what, e))
+    with open(log_path, errors="replace") as f:
+        text = f.read()
+    if rc is None:
+        msg = compute_timeout_message(timeout, time.time() - t0, text, sim_hours, estimate)
+        log("ERROR: " + msg)
+        raise HecRasEngineError(msg)
+    if rc != 0 or ok not in text or "FAIL" in text:
+        tail = "\n".join(text.strip().splitlines()[-8:])
+        why = ("exit {}".format(rc) if rc != 0 else
+               "exit 0 but it printed FAIL" if "FAIL" in text else
+               "exit 0 but it never printed '{}'".format(ok))
+        raise HecRasEngineError("{} failed ({}):\n{}".format(what, why, tail))
+    log("HEC-RAS compute: RasUnsteady finished in {}{}.".format(
+        _hm(time.time() - t0), " (estimate {})".format(_hm(estimate)) if estimate else ""))
     return text
 
 
@@ -831,10 +1171,16 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
     e["LD_LIBRARY_PATH"] = ":".join(os.path.join(L, s) for s in ("libs", "libs/mkl", "libs/rhel_8"))
     tmp = os.path.basename(ins[2])
     nice = ["nice", "-n", "19"] if shutil.which("nice") else []
-    text = _run(nice + [d["rasunsteady"], tmp, "x" + plan], work, e, _timeout(env),
-                "Linux RasUnsteady", ok="Finished Unsteady Flow Simulation", log=log)
-    with open(os.path.join(work, "run.log"), "w") as f:
-        f.write(text)
+    pt = plan_timing(project_dir, name, plan)
+    timeout, est, how = compute_timeout(pt["cells"], pt["sim_hours"], pt["base_dt_s"], env)
+    log("HEC-RAS compute: {} cells, {} h simulated, {} base step (adaptive Courant step "
+        "governs); estimated RasUnsteady time {}; timeout {} [{}].".format(
+            "{:,}".format(pt["cells"]) if pt["cells"] else "?",
+            "{:g}".format(pt["sim_hours"]) if pt["sim_hours"] else "?",
+            "{:g} s".format(pt["base_dt_s"]) if pt["base_dt_s"] else "?",
+            _hm(est) if est else "unknown", _hm(timeout), how))
+    text = _run_logged(nice + [d["rasunsteady"], tmp, "x" + plan], work, e, timeout,
+                       os.path.join(work, "run.log"), pt["sim_hours"], est, log=log)
     out = os.path.join(work, "{}.p{}.hdf".format(name, plan))
     os.replace(os.path.join(work, tmp), out)
     return out
@@ -930,12 +1276,16 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     rep = {"engine": "hecras", "hecras_version": "6.6", "platform": d["platform"],
            "project": proj, "results_hdf": os.path.join(keep, os.path.basename(hdf)),
            "preprocess_s": times, "inflow_mode": r["inflow_mode"],
+           "inflow_mode_requested": r.get("inflow_mode_requested"),
+           "inflow_fallback": r.get("inflow_fallback"),
            "inflow_series": (r.get("inflow_bc") or {}).get("series"),
            "time_step": r["info"].get("time_step"),
            "lisflood_rasters_kept_as": LISFLOOD_PREFIX + "<name>"}
     with open(os.path.join(keep, "hecras_stage.json"), "w", encoding="utf-8") as f:
         json.dump(rep, f, indent=1)
-    return {"final": final, "hdf": hdf, "project": proj, "report": rep,
-            "warnings": ["Final rasters are from HEC-RAS 2D (preliminary engine; LISFLOOD-FP "
-                         "rasters kept as '{}...'). Review _hecras/hecras_stage.json."
-                         .format(LISFLOOD_PREFIX)]}
+    warns = ["Final rasters are from HEC-RAS 2D (preliminary engine; LISFLOOD-FP "
+             "rasters kept as '{}...'). Review _hecras/hecras_stage.json."
+             .format(LISFLOOD_PREFIX)]
+    if r.get("inflow_fallback"):
+        warns.append(r["inflow_fallback"]["note"])
+    return {"final": final, "hdf": hdf, "project": proj, "report": rep, "warnings": warns}

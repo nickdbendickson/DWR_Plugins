@@ -188,7 +188,7 @@ class NDBreachRunnerDialog(QDialog):
         for sp in (self.grid_m, self.simh, self.simmax):
             sp.valueChanged.connect(self._changed)
         self.force_anuga.toggled.connect(self._changed)
-        self.carve_combo = QComboBox()                       # v3.10.19
+        self.carve_combo = QComboBox()                       # v3.10.20
         for key, label in zip(pl.CARVE_CHOICES, ("Off", "Auto", "On")):
             self.carve_combo.addItem(label, key)
         self.carve_combo.setToolTip(

@@ -15,6 +15,13 @@ from qgis.PyQt.QtWidgets import (
 
 from .sources import SOURCE_INFO
 
+DIR_HOW = {
+    "explicit": "The folder you chose in these settings.",
+    "suite": "The suite data folder's structures/ subfolder (automatic).",
+    "legacy": "Your existing downloads folder (automatic; the suite folder's structures/ is empty).",
+    "default": "The default folder (no suite data folder is set, or it can't be used).",
+}
+
 NSI_MODE_LABELS = (
     ("merged", "2026 and 2022 merged (2026 wins where both have a structure)"),
     ("nsi2026", "2026 only"),
@@ -63,7 +70,11 @@ class SettingsDialog(QDialog):
         general = QGroupBox("Local data")
         form = QFormLayout(general)
         row = QHBoxLayout()
-        self.data_dir = QLineEdit(settings.data_dir)
+        folder, how, notice = settings.resolve()
+        self._shown_dir = folder
+        self.data_dir = QLineEdit(folder)
+        self.data_dir.setToolTip(DIR_HOW.get(how, "") + (("\n" + notice) if notice else ""))
+        self.data_dir.setPlaceholderText("Empty = automatic (the suite folder's structures/)")
         browse = QPushButton("Choose…")
         browse.clicked.connect(self._browse)
         row.addWidget(self.data_dir)
@@ -167,7 +178,13 @@ class SettingsDialog(QDialog):
 
     def save(self):
         s = self.settings
-        s.data_dir = self.data_dir.text().strip() or s.data_dir
+        text = self.data_dir.text().strip()
+        if not text:
+            s.data_dir = ""                      # back to automatic
+        elif os.path.normcase(os.path.abspath(text)) != \
+                os.path.normcase(os.path.abspath(self._shown_dir)):
+            s.data_dir = text                    # the user picked a folder: it wins
+        self._shown_dir = s.data_dir
         s.auto_check = self.auto_check.isChecked()
         s.check_hours = self.check_hours.value()
         s.nsi_interval_days = self.nsi_days.value()

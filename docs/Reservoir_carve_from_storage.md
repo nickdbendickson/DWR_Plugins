@@ -1,4 +1,4 @@
-# Reservoir bottom carved from the storage curve (Runner 3.10.19, opt-in)
+# Reservoir bottom carved from the storage curve (Runner 3.10.20, opt-in)
 
 ## Problem
 
