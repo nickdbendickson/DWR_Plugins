@@ -581,6 +581,77 @@ def _time_factor_hr(catalog, path, obj):
     return 24.0
 
 
+def _block_of(path):
+    """The output block of a results path: the part up to and including 'Unsteady Time
+    Series' (e.g. '.../Output Blocks/Base Output/Unsteady Time Series'), or None."""
+    parts = path.split("/")
+    for i, p in enumerate(parts):
+        if _norm(p) == "unsteady time series":
+            return "/".join(parts[:i + 1])
+    return None
+
+
+def pair_time(times, series):
+    """v3.10.17: the 'Time' dataset of the same output block as `series` (path, obj) whose
+    length is the series' row count; HEC-RAS writes several blocks (Base Output, DSS
+    Hydrograph Output every minute, DSS Profile Output once per profile) and taking the first
+    'Time' paired a series with another block's times (DWR-3161 readout: 33 profile rows read
+    against the 385 base-output times). Falls back to the first time when there is no series."""
+    if not times:
+        return None
+    if series is None:
+        return times[0]
+    blk = _block_of(series[0])
+    rows = series[1].shape[0] if len(getattr(series[1], "shape", ())) else None
+    same = [t for t in times if _block_of(t[0]) == blk]
+    for t in same + list(times):
+        if rows is None or t[1].shape[0] == rows:
+            return t
+    return (same or times)[0]
+
+
+def connection_timeseries(hdf, name, prefer_block="DSS Hydrograph Output"):
+    """v3.10.17: the time series of an SA/2D area connection (the dam) from a plan HDF:
+    {'block', 'path', 't_hr', 'columns', 'values' (n, k), 'units'}. Uses the 'Structure
+    Variables' (Total Flow, Weir Flow, Stage HW, Stage TW) of the block with the most time
+    steps that are a TIME SERIES (rows = that block's Time), preferring `prefer_block`
+    (every minute when HEC-RAS writes it); never the DSS Profile Output table."""
+    f, close = _open_hdf(hdf)
+    try:
+        cat = Catalog(f)
+        hits = [(p, o) for p, o in cat.find("structure variables", exact=True)
+                if "/sa 2d area conn/" in "/".join(_norm(x) for x in p.split("/")) + "/"
+                and _norm(p.split("/")[-2]) == _norm(name)]
+        times = cat.find("time", exact=True, under="time series")
+        best = None
+        for p, o in hits:
+            blk = _block_of(p)
+            if blk is None or "profile" in _norm(blk):
+                continue
+            t = [x for x in times if _block_of(x[0]) == blk and x[1].shape[0] == o.shape[0]]
+            if not t:
+                continue
+            key = (0 if _norm(prefer_block) in _norm(blk) else 1, -o.shape[0])
+            if best is None or key < best[0]:
+                best = (key, p, o, t[0], blk)
+        if best is None:
+            raise HecRasError("No time series of connection '{}' in {} (found: {})".format(
+                name, hdf, ", ".join(p for p, _ in hits) or "nothing"))
+        _, p, o, (tp, to), blk = best
+        cols, units = [], []
+        for row in _attrs(o).get("Variable_Unit", []):
+            vals = [_text(v) for v in (row if hasattr(row, "__len__") and not isinstance(
+                row, (bytes, str)) else [row])]
+            cols.append(vals[0] if vals else "")
+            units.append(vals[1] if len(vals) > 1 else "")
+        t_hr = np.asarray(_read(to), dtype=np.float64).reshape(-1) * _time_factor_hr(cat, tp, to)
+        return {"block": blk.split("/")[-2] if "/" in blk else blk, "path": p, "t_hr": t_hr,
+                "columns": cols, "units": units,
+                "values": np.asarray(_read(o), dtype=np.float64)}
+    finally:
+        close()
+
+
 def discover(catalog, area=None):
     """The datasets to use for one 2D flow area. Raises HecRasError listing what was found
     when a required one is missing. Returns a dict of paths and objects."""
@@ -623,7 +694,7 @@ def discover(catalog, area=None):
     res["ts_wse"] = pick("water surface", prefer=("unsteady time series",), exact=True,
                          under="time series")
     times = catalog.find("time", exact=True, under="time series")
-    res["ts_time"] = times[0] if times else None
+    res["ts_time"] = pair_time(times, res["ts_wse"])
     missing = [label for key, label in (("min_elev", "Cells Minimum Elevation"),
                                         ("max_wse", "Maximum Water Surface"))
                if res[key] is None]
