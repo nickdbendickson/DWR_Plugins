@@ -740,10 +740,14 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                  search_cell)
         qa_ctx["local"], qa_ctx["radius_m"] = local, rad
         if inflow_xy is None:
+            ds_info = {}
             inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
-                                                search_cell, warnings, log)
+                                                search_cell, warnings, log, out=ds_info)
+            ds_dir = ds_info.get("direction")
+            qa_ctx["downstream"] = ds_dir
             if inflow_xy is None:
-                inflow_xy, crest, why = terrain.place_from_crest(local, dam_xy, h_m, top_m, search_rad)
+                inflow_xy, crest, why = terrain.place_from_crest(local, dam_xy, h_m, top_m,
+                                                                 search_rad, downstream=ds_dir)
                 if inflow_xy is None:
                     raise brmod.BreachInputError("{}: could not place the breach inflow: {}"
                                                  .format(dam.dam_id, why))
@@ -782,6 +786,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                 "a closed basin; give the breach inflow point explicitly (just below the "
                 "dam).".format(plen, d_end))
     report["trace"] = {"length_mi": round(plen / MILE, 2), "points": len(path)}
+    _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, qa_ctx.get("downstream"),
+                       plan is not None, warnings, log)
     np.savetxt(os.path.join(model_dir, "flow_trace.csv"), np.asarray(path), delimiter=",",
                header="x,y", comments="", fmt="%.2f")
     candidates = list(getattr(st, "culvert_candidates", None) or [])
@@ -1548,10 +1554,12 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
         local = terrain_src.read((dam_xy[0] - search_rad - 30, dam_xy[1] - search_rad - 30,
                                   dam_xy[0] + search_rad + 30, dam_xy[1] + search_rad + 30),
                                  search_cell)
+        ds_info = {}
         inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
-                                            search_cell, warnings, lambda *_a: None)
+                                            search_cell, warnings, lambda *_a: None, out=ds_info)
         if inflow_xy is None:
-            inflow_xy, crest, why = terrain.place_from_crest(local, dam_xy, h_m, top_m, search_rad)
+            inflow_xy, crest, why = terrain.place_from_crest(
+                local, dam_xy, h_m, top_m, search_rad, downstream=ds_info.get("direction"))
             if inflow_xy is None:
                 raise brmod.BreachInputError("{}: could not place the breach inflow: {}".format(
                     dam.dam_id, why))
@@ -1710,7 +1718,50 @@ def _z_to_m_of(terrain_src):
         return None
 
 
-def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, warnings, log):
+ROAD_NEAR_M = 30.0      # v3.10.18: a road this close to the dam point may be the embankment
+
+
+def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, from_plan,
+                       warnings, log):
+    """v3.10.18: the inflow point against the flow trace (terrain.inflow_side_check) and the
+    dam point against the road layer. A disagreement is a prominent warning (the dam point
+    or the downstream side is probably wrong) and is recorded in run_report.json:
+    inflow_point.side_check and dam_point_checks."""
+    if from_plan:
+        return
+    chk = terrain.inflow_side_check(dam_xy, inflow_xy, path, downstream)
+    report.setdefault("inflow_point", {})["side_check"] = chk
+    if not chk["ok"]:
+        msg = ("{}: the breach inflow point ({:.1f}, {:.1f}) and the flow trace disagree on "
+               "the downstream side: {}. The dam point or the downstream side is probably "
+               "wrong; give the inflow point (just below the dam) or the DWR dam line "
+               "(DAM_LINES).".format(terrain.SIDE_PROBLEM, inflow_xy[0], inflow_xy[1],
+                                     "; ".join(chk["problems"])))
+        warnings.insert(0, msg)
+        log(msg)
+    roads = getattr(st, "road_lines", None) or []
+    rd = terrain.nearest_line_distance(dam_xy, roads) if roads else None
+    line = getattr(dam, "crest_line_xy", None)
+    ld = terrain.nearest_line_distance(dam_xy, [line]) if line else None
+    report["dam_point_checks"] = {"road_m": None if rd is None else round(rd, 1),
+                                  "dam_line_m": None if ld is None else round(ld, 1)}
+    if rd is not None and rd <= ROAD_NEAR_M:
+        if line:
+            msg = ("A road runs {:.0f} m from the dam point, which is on the DWR dam line: the "
+                   "road is on (or beside) this embankment; the crest comes from the dam line."
+                   .format(rd))
+        else:
+            msg = ("A road runs {:.0f} m from the dam point: the embankment in the DEM may be "
+                   "the road's fill rather than the dam (DWR-3161 sits on the ND-23 fill). "
+                   "Check the dam point, or give the DWR dam line (DAM_LINES) so the crest "
+                   "comes from the dam line.".format(rd))
+        report["dam_point_checks"]["note"] = msg
+        warnings.append(msg)
+        log(msg)
+
+
+def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, warnings, log,
+                       out=None):
     """find_inflow_point limited to the downstream side of the crest and outside the pool
     (core/terrain.downstream_direction, pool_mask). The pool needs terrain well past the
     reservoir, so it is read on its own (POOL_HALF_M around the dam, at the search cell)."""
@@ -1736,6 +1787,8 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
         direction, how = None, "downstream direction failed: {}".format(e)
     log("Downstream side of the crest: {}".format(
         "({:.2f}, {:.2f}), {}".format(direction[0], direction[1], how) if direction else how))
+    if out is not None:                  # v3.10.18: place_from_crest keeps to this side too
+        out["direction"], out["how"] = direction, how
     xy, why = terrain.find_inflow_point(local, dam_xy, h_m, top_m, rad, downstream=direction,
                                         pool=pool)
     if why.startswith(terrain.NO_DOWNSTREAM):
