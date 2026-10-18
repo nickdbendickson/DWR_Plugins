@@ -207,8 +207,8 @@ from nd_dam_screening.dialog import NDDamScreeningDialog, STATE_TEXT  # noqa: E4
 
 QgsProject.instance().__dict__.pop("_entries", None)
 dlg = NDDamScreeningDialog()
-assert set(dlg.step_button) == set(wf.KEYS) and dlg.tabs.count() == 6 and len(dlg.step_button) == 21
-assert [dlg.tabs.tabText(i) for i in range(6)] == ["Simple", "All steps", "Inputs", "Settings", "Review", "Results"]
+assert set(dlg.step_button) == set(wf.KEYS) and dlg.tabs.count() == 3 and len(dlg.step_button) == 21
+assert [dlg.tabs.tabText(i) for i in range(3)] == ["Run", "Review", "Results"]  # 0.17.23 shell
 assert not dlg.step_button["1"].isEnabled() and not dlg.next_btn.isEnabled()      # no work folder yet
 assert "Choose or create a work folder" in dlg.hint_label.text()
 W2 = os.path.join(work, "w2")

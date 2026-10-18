@@ -125,10 +125,11 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def file_digest(path, full_limit=FULL_HASH_LIMIT):
+def file_digest(path, full_limit=FULL_HASH_LIMIT, use_disk_cache=True):
     """{"sha256", "size", "mtime", "sampled"} of a file, or {"missing": True}.
 
-    Identical to the ND Dam Breach Runner's core/provenance.file_digest."""
+    use_disk_cache=False skips the persistent size+mtime digest file (fingerprint
+    content_digest needs a fresh hash when a raster is rewritten in place)."""
     try:
         st = os.stat(path)
     except OSError:
@@ -136,7 +137,7 @@ def file_digest(path, full_limit=FULL_HASH_LIMIT):
     key = (os.path.abspath(path), st.st_size, st.st_mtime_ns, full_limit)
     if key in _cache:
         return dict(_cache[key])
-    if st.st_size >= PERSIST_MIN:
+    if use_disk_cache and st.st_size >= PERSIST_MIN:
         hit = _disk_get(key)
         if hit is not None:
             _cache[key] = dict(hit)
@@ -159,7 +160,7 @@ def file_digest(path, full_limit=FULL_HASH_LIMIT):
            "mtime": datetime.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
            "sampled": sampled}
     _cache[key] = dict(out)
-    if st.st_size >= PERSIST_MIN:
+    if use_disk_cache and st.st_size >= PERSIST_MIN:
         _disk_put(key, out)
     return out
 

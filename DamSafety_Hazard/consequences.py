@@ -48,7 +48,10 @@ SEV_LOW, SEV_MEDIUM, SEV_HIGH = "Low", "Medium", "High"
 WARN_NONE, WARN_15_60, WARN_60 = "none (<15 min)", "15-60 min", ">60 min"
 GRAHAM_RATES = {
     (SEV_HIGH, WARN_NONE, None): (0.75, 0.30, 1.00),
-    (SEV_HIGH, WARN_15_60, None): (0.75, 0.30, 1.00),     # applied to people remaining
+    # Graham applies the High rates to the people REMAINING after warning; this tool has
+    # no defined evacuated/remaining quantity, so they are applied to the full PAR
+    # (conservative). See CN.2 in plugin_analysis/audit3_lumo_verification.md.
+    (SEV_HIGH, WARN_15_60, None): (0.75, 0.30, 1.00),
     (SEV_HIGH, WARN_60, None): (0.75, 0.30, 1.00),
     (SEV_MEDIUM, WARN_NONE, None): (0.15, 0.03, 0.35),
     (SEV_MEDIUM, WARN_15_60, "vague"): (0.04, 0.01, 0.08),
@@ -118,6 +121,7 @@ def economic_estimate(rec, curves=None):
         return rec
     total, bases, ffs, missing = 0.0, set(), [], 0
     nonres, nonres_used = 0.0, set()
+    curve_applied = False
     for u in units:
         key, basement = curve_for_occtype(u.get("occtype"))
         fh = _num(u.get("found_ht"))
@@ -144,11 +148,12 @@ def economic_estimate(rec, curves=None):
         if vcont is not None:
             cdmg = min(cdmg, vcont)
         total += vstruct * ps / 100.0 + cdmg
+        curve_applied = True
         bases.add(EGM_LABELS[key] + (" (basement: no-basement curve used)" if basement else ""))
         if fh is None:
             bases.add("foundation height unknown (0 ft used)")
     rec["ff_depth"] = max(ffs) if ffs else None
-    if any(b.startswith("EGM") for b in bases):
+    if curve_applied:          # Lumo v1.7: a flag, not the label text
         rec["damage_usd"] = total
     if nonres_used:
         rec["damage_nonres_usd"] = nonres
@@ -209,12 +214,14 @@ def life_loss_estimate(rec, warning_issued_hr=0.0, understanding="vague",
     rec.update({"severity": None, "warning_hr": None, "fatality_rate": None,
                 "lol": None, "lol_low": None, "lol_high": None, "par": None,
                 "par_night": None, "par_day": None, "lol_night": None, "lol_day": None})
-    if rec.get("habitable") != "Yes" or not rec.get("max_depth") or rec["max_depth"] <= 0:
+    if rec.get("habitable") != "Yes" or rec.get("dwelling_extra")             or not rec.get("max_depth") or rec["max_depth"] <= 0:
         return rec
     sev, why = flood_severity(rec.get("dv_max"), rec.get("max_depth"), severity_method)
     if high_severity:
         sev, why = SEV_HIGH, "near-instantaneous failure (user setting)"
     warn, wt = warning_category(rec.get("arrival"), warning_issued_hr)
+    if wt is None:
+        why += "; arrival unknown - treated as no warning"
     rate, lo, hi = graham_rate(sev, warn, understanding)
     par, _basis = population_at_risk(rec, period)
     # v2.7: both times of day, whatever the setting (same severity and rate)
@@ -229,7 +236,9 @@ def life_loss_estimate(rec, warning_issued_hr=0.0, understanding="vague",
 
 def totals(structs):
     """Sums for the summary."""
-    wet = [s for s in structs if s.get("max_depth") and s["max_depth"] > 0]
+    # ST.1: dwelling_extra footprints are the same household (classification already skips)
+    wet = [s for s in structs if s.get("max_depth") and s["max_depth"] > 0
+           and not s.get("dwelling_extra")]
     camps = [s for s in wet if s.get("camp") is not None]
     t = {"par": sum(s.get("par") or 0 for s in wet),
          "lol": sum(s.get("lol") or 0 for s in wet),

@@ -31,6 +31,14 @@ from .helpers import create_memory_layer, export_layer_to_formats, prepare_outpu
 from .structures import OUT_PROBABLE, OUT_JUDGMENT, OUT_ECONOMIC, TYPE_MOBILE
 
 
+PROVISIONAL_PREFIX = "PROVISIONAL - "   # FF.1: formfill skips this reason (not a criterion)
+
+
+def governing_reason(reasons):
+    """FF.1: the first ND reason that is a criterion (the provisional note skipped)."""
+    return next((r for r in reasons or [] if not str(r).startswith(PROVISIONAL_PREFIX)), None)
+
+
 def _raise(level, new):
     return new if ND_RANK[new] > ND_RANK[level] else level
 
@@ -436,7 +444,7 @@ def extra_criteria(nd, structs, res, cfg, total=False):
                 ": already counted in the higher zone" if cfg.get("borderline_higher")
                 else ""))
     wet = [s for s in structs if s.get("outcome") not in (None, OUT_DRY, OUT_TRACE)
-           and s.get("habitable") == "Yes"]
+           and s.get("habitable") == "Yes" and not s.get("dwelling_extra")]   # as totals
     dmg = sum(s.get("damage_usd") or 0 for s in wet)
     if dmg:
         for i, r in enumerate(nd["reasons"]):
@@ -461,21 +469,28 @@ def extra_criteria(nd, structs, res, cfg, total=False):
                      and not counts.get("habitable_probable")
                      and not counts.get("roads_high") and not counts.get("rail_high"))
     if judgment_only:
-        margins = [abs(float(s["margin_judg"])) for s in structs
-                   if s.get("habitable") == "Yes" and not s.get("dwelling_extra")
-                   and s.get("outcome") == OUT_JUDGMENT and s.get("margin_judg") is not None]
+        raw_margins = [float(s["margin_judg"]) for s in structs
+                       if s.get("habitable") == "Yes" and not s.get("dwelling_extra")
+                       and s.get("outcome") == OUT_JUDGMENT
+                       and s.get("margin_judg") is not None]
+        margins = [abs(m) for m in raw_margins]
         # Provisional only when every judgment-zone dwelling is within 1 ft of the
         # line. The class rests on the most-exposed house, not the least.
         if margins and max(margins) < 1.0:
             nd["provisional"] = True
             nd["provisional_margin_ft"] = max(margins)
+            # CL.2: raised-to-Judgment (positive margin) are still below the line
+            if raw_margins and max(raw_margins) <= 0:
+                where = "{:.2f} ft past the ACER judgment line".format(max(margins))
+            else:
+                where = "within {:.2f} ft of the ACER judgment line".format(max(margins))
             msg = ("HIGH is provisional: the most-exposed judgment-zone dwelling is only "
-                   "{:.2f} ft past the ACER judgment line, inside the vertical error of a "
+                   "{}, inside the vertical error of a "
                    "lidar crest and a coarse grid. The class stays High (borderline goes "
                    "to the higher class, 5.3(f)); confirm the buildings are habitable and "
-                   "the depths before the class is final.".format(max(margins)))
+                   "the depths before the class is final.".format(where))
             nd["judgment"].insert(0, msg)
-            nd["reasons"].insert(0, "PROVISIONAL - " + msg)
+            nd["reasons"].insert(0, PROVISIONAL_PREFIX + msg)
     result = "HIGH (provisional)" if nd.get("provisional") else nd["cls"].upper()
     crit.append({"section": "Result", "criterion": "ND hazard classification (screening)",
                  "found": "", "result": result})

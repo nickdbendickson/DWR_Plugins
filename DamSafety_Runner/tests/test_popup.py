@@ -109,9 +109,9 @@ def popup_dam_status_and_suggestion():
         touch(f, "Probabilistic", "Runs", "index.json")
         assert {k: det for k, _l, _s, det in pl.dam_status(f)}["ensemble"] == ""
         lines = pl.status_lines(rows)
-        assert lines[0].startswith("✓ Flood rasters") and any(l.startswith("◐ Baseline") for l in lines)
+        assert lines[0].startswith("◐ Terrain clip") and lines[1].startswith("✓ Flood rasters") and any(l.startswith("◐ Baseline") for l in lines)
         # the rasters exist, nothing handed to the classification yet
-        assert pl.suggest(rows) == ("classify", "Hand the results to the ND Dam Hazard classification.")
+        assert pl.suggest(rows) == ("classify", "Hand the results to the DamSafety Hazard classification.")
         touch(f, "_classification", "x.json")
         rows = pl.dam_status(f)
         assert pl.suggest(rows)[0] is None and "Nothing is waiting" in pl.suggest(rows)[1]
@@ -201,7 +201,7 @@ def qt_fakes():
     pkg = sys.modules["nd_breach_runner"]
     names = ("QtCore", "QtWidgets", "QtGui", "sip")
     saved = {n: (sys.modules.get("qgis.PyQt." + n), getattr(pyqt, n, None)) for n in names}
-    mods = ("nd_breach_runner.dialog", "nd_breach_runner.plugin")
+    mods = ("nd_breach_runner.ui_widgets", "nd_breach_runner.dialog", "nd_breach_runner.plugin")
     old_mods = {m: (sys.modules.get(m), getattr(pkg, m.rsplit(".", 1)[1], None)) for m in mods}
     old_core = {n: getattr(core, n, None) for n in ("QgsProject", "QgsRasterLayer", "QgsApplication")}
     old_proc = sys.modules.get("processing")
@@ -367,7 +367,9 @@ def popup_window_shows_the_dam_and_opens_tools():
         q.project.layers["dem1"] = q.Raster("dem1", "ND LiDAR 1m")
         q.project.layers["dem2"] = q.Raster("dem2", "Another DEM")
         dlg = q.dialog.NDBreachRunnerDialog()
-        assert dlg.tabs.count() == 6 and [dlg.tabs.tabText(i) for i in range(6)] == [t for t, _x in pl.TABS] + ["Settings"]
+        # 3.10.15: two tabs (Run, Tools); the tool categories are a rail on the Tools tab
+        assert dlg.tabs.count() == 2 and [dlg.tabs.tabText(i) for i in range(2)] == ["Run", "Tools"]
+        assert dlg.rail.count() == len(pl.TABS) and dlg.pages.count() == len(pl.TABS)
         # 3.5: the suite settings grid, one tab per popup tab, the tools' defaults from the file
         assert dlg.grid.tabs.titles == [t for t in pl.TAB_ORDER if t in dlg.grid.groups]
         assert len(dlg.grid.catalog) > 30 and all(s.plugin == "ndbreach" for s in dlg.grid.catalog)
@@ -392,7 +394,7 @@ def popup_window_shows_the_dam_and_opens_tools():
         dlg.settings_file_edit.setText("")
         assert set(dlg.tool_button) == {t[0] for t in pl.ALL_TOOLS}
         assert dlg.status_label.text() == "Choose the Dams folder and the dam ID."
-        assert dlg.models_label.text().startswith("LISFLOOD-FP: ") and "ANUGA: " in dlg.models_label.text()
+        assert dlg.lis_chip.text().startswith("LISFLOOD-FP ") and dlg.anuga_chip.text().startswith("ANUGA ")
         assert not dlg.suggest_btn.isEnabled() and not dlg.folder_btn.isEnabled()
         # a tool can be opened before a dam is chosen: the dialog's own empty fields
         assert dlg._open_tool("rundam") is True and q.proc.DIALOGS[-1] == ("ndbreach:rundam", {})
@@ -419,7 +421,7 @@ def popup_window_shows_the_dam_and_opens_tools():
         dlg.refresh()
         assert "Dam folder " + f in dlg.status_label.text() and "✓ Flood rasters" in dlg.status_label.text()
         assert dlg.record_label.text().startswith("dam.json: none yet")
-        assert "Hand the results to the ND Dam Hazard classification" in dlg.suggest_label.text()
+        assert "Hand the results to the DamSafety Hazard classification" in dlg.suggest_label.text()
         assert dlg.folder_btn.isEnabled()
         dlg._open_suggested()
         assert q.proc.DIALOGS[-1] == ("ndbreach:classify", {"MODE": 0, "FOLDER": f, "DAM_ID": "DWR-1"})

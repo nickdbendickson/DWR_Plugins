@@ -166,6 +166,9 @@ def detach_layers(cfg):
                 continue
             try:
                 c = fn(_all_request()) if meth == "materialize" else fn()
+                if c is not None and not c.isValid():
+                    log_message("Layer '{}': its {} copy for the background run is not valid"
+                                .format(lyr.name(), meth), MSG_WARNING)
                 if c is not None and c.isValid():
                     try:
                         c.setName(lyr.name())
@@ -175,8 +178,13 @@ def detach_layers(cfg):
                 c = None
             except Exception as e:
                 log_message("Layer '{}' not copied for the background run ({}); read in "
-                            "place".format(lyr.name(), e))
+                            "place - do not edit or remove that layer while the run "
+                            "works".format(lyr.name(), e), MSG_WARNING)
                 c = None
+        if c is None:
+            log_message("Layer '{}' could not be copied for the background run; it is read in "
+                        "place - do not edit or remove that layer while the run works".format(
+                            lyr.name()), MSG_WARNING)
         if edited and c is not None and order[0] == "materialize" and \
                 getattr(c, "featureCount", lambda: -1)() != getattr(lyr, "featureCount",
                                                                     lambda: -2)():

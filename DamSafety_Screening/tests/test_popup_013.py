@@ -54,7 +54,7 @@ dlg.work_edit.setText(W)
 dlg._changed()
 
 # ---------------------------------------------------------------- 1. the tabs and the grid
-assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == ["Simple", "All steps", "Inputs", "Settings", "Review", "Results"]
+assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == ["Run", "Review", "Results"]  # 0.17.23 shell
 g = dlg.grid
 assert isinstance(g, SS.SettingsGrid) and g.tabs.titles[0] == "Run options"
 assert g.tabs.titles[1:] == [t for t in SG.TAB_ORDER if t in g.groups], g.tabs.titles
@@ -99,10 +99,11 @@ assert "(1 changed)" in g.file_label.text()
 fresh = algs["findponds"].createInstance()
 fresh.initAlgorithm()
 assert fresh._params["HEAD_FT"].defaultValue == 1.5
-# bad input: refused with a message, the row shows the value in effect
+# bad input: refused in the grid's status line (no message box), the row shows the value in effect
 EVENTS["messages"].clear()
 assert "not a number" in g.set_value(head, "tall", from_widget=True)
-assert EVENTS["messages"][-1][0] == "information" and g.value(head) == 1.5
+assert not EVENTS["messages"] and g.value(head) == 1.5
+assert "not a number" in g.status_label.text()
 # an enum through its combo, a bool through its check state
 src = ("ndscreen", "findponds", "SRC")
 g.combos[src].setCurrentIndex(1)
