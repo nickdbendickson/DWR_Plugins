@@ -81,8 +81,11 @@ def hecras_hydrograph_block_format_and_peak():
         assert [float(ls[2][i:i + 8]) for i in range(0, len(ls[2]), 8)] == [
             123456.8, 0.5, 12.0, 1234568.0]              # decimals dropped to fit 8 characters
         assert len(ls[2]) == 32
-        huge = hecras.flow_hydrograph_block([123456789.0])
-        assert len(huge.splitlines()[1]) == 8
+        try:                                   # 9 digits cannot fit: a clear error, never a
+            hecras.flow_hydrograph_block([123456789.0])        # 9-character field
+            raise AssertionError("123456789 should not fit in 8 characters")
+        except hecras.FixedWidthError as e:
+            assert "does not fit" in str(e)
     finally:
         shutil.rmtree(d)
 
@@ -686,3 +689,31 @@ def hecras_import_algorithm_runs_with_and_without_benchmark():
                     assert "Cells Minimum Elevation" in str(e)
     finally:
         shutil.rmtree(d)
+
+
+@test
+def hecras_field8_always_exactly_eight_characters():
+    """Absaraka TIER 2 preview: flows of 10,000 cfs and more fill the whole 8-character field
+    (as in HEC's own files); every field is exactly 8 characters, decimals are dropped to fit,
+    and a value that cannot fit raises instead of shifting the columns after it."""
+    f = hecras.field8
+    cases = {9999.99: " 9999.99", 10000: "10000.00", 10000.004: "10000.00",
+             12345.67: "12345.67", 123456.7: "123456.7", 123456.78: "123456.8",
+             1234567: " 1234567", 12345678: "12345678", 0: "    0.00", 0.5: "    0.50",
+             -1.5: "   -1.50", -9999.99: "-9999.99", -10000: "-10000.0", -123456.7: " -123457",
+             -1234567: "-1234567", -0.001: "    0.00"}
+    for v, want in cases.items():
+        got = f(v)
+        assert got == want and len(got) == 8, (v, got, want)
+    # a row of 10,000+ values reads back by 8-character columns
+    row = "".join(f(v) for v in (7895.88, 11063.36, 25800.5, 123456.7, -10000.0))
+    assert row == " 7895.8811063.3625800.50123456.7-10000.0"
+    assert [float(row[i:i + 8]) for i in range(0, len(row), 8)] == [
+        7895.88, 11063.36, 25800.5, 123456.7, -10000.0]
+    for bad in (123456789.0, -12345678.0, float("nan"), float("inf"), "x"):
+        try:
+            f(bad)
+            raise AssertionError("{!r} should raise".format(bad))
+        except hecras.FixedWidthError:
+            pass
+    assert hecras._field8 is f
