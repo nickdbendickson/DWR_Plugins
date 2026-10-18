@@ -1,5 +1,8 @@
 # Changelog
 
+## Runner 3.10.22 (open PR, issue #91)
+- Run report metrics, reporting only: flooded area at or above 0.1 / 1 / 2 ft, P95 / P99 velocity over wet cells, the depth and position of the max-velocity cell, velocity at flooded structures and overtopped roads, and an optional water-body mask (`WATER_MASK` / `NDBREACH_WATERBODY_MASK` / the suite's hydro waterbodies when present) with masked and unmasked figures side by side. Existing fields unchanged; new CSV columns appended. TIER 2 HEC-RAS goes through `adopt_final_engine`. See `docs/Run_report_metrics.md`.
+
 ## New plugin
 - **#60 (merged 10-16), DamSafety_PMP 0.3.0 (internal, experimental):** the nd_pmp prototype is added as `DamSafety_PMP/`. Provider id `ndpmp` and settings keys `nd_pmp/*` are unchanged. The AWA data isn't included. Machine-specific paths were removed. Light tests are in `tests/run_tests.py`, and data-dependent tests skip when their inputs are missing. The OGR memory driver now falls back to "Memory" on GDAL < 3.11. Licensing: for SWC's exclusive use; get permission from SWC and AWA before redistributing.
 

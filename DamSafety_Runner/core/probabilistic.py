@@ -622,6 +622,9 @@ RUN_FIELDS = ["run", "status", "resumed", "method", "width_factor", "time_factor
               "latest_arrival_hr", "structures_flooded", "structures_depth_ge_3ft",
               "road_km_flooded", "rail_km_flooded", "hazard_class", "domain_too_small",
               "minutes"]
+RUN_FIELDS += ["flooded_ac_ge_0_1ft", "flooded_ac_ge_1ft", "flooded_ac_ge_2ft",
+               "velocity_p95_fps", "velocity_p99_fps", "max_velocity_depth_ft",
+               "flooded_ac_masked", "flooded_ac_ge_1ft_masked"]   # v3.10.22 (#91), appended
 SUMMARY_FIELDS = ["metric", "unit", "runs", "mean", "std", "min", "p10", "p50", "p90", "max",
                   "base"]
 _METRICS = (("peak_cfs", "cfs"), ("flooded_ac", "ac"), ("flooded_ac_over_arrival_depth", "ac"),
@@ -629,13 +632,17 @@ _METRICS = (("peak_cfs", "cfs"), ("flooded_ac", "ac"), ("flooded_ac_over_arrival
             ("avg_breach_width_ft", "ft"), ("formation_time_hr", "hr"),
             ("width_factor", "x"), ("time_factor", "x"), ("n_factor", "x"),
             ("structures_flooded", "count"), ("structures_depth_ge_3ft", "count"),
-            ("road_km_flooded", "km"), ("rail_km_flooded", "km"))
+            ("road_km_flooded", "km"), ("rail_km_flooded", "km"),
+            # v3.10.22 (#91)
+            ("flooded_ac_ge_0_1ft", "ac"), ("flooded_ac_ge_1ft", "ac"), ("flooded_ac_ge_2ft", "ac"),
+            ("velocity_p95_fps", "ft/s"), ("velocity_p99_fps", "ft/s"),
+            ("flooded_ac_masked", "ac"), ("flooded_ac_ge_1ft_masked", "ac"))
 _OK = ("done", "no breach")
 _KEY_SKIP = ("resume", "threads", "lisflood_exe", "anuga_python", "products", "keep_model_files",
              "write_final", "keep_arrays", "gauges", "gauge_massint_s", "fixed_plan", "receptors",
              "tier", "baseline", "arrival_contours_hr", "refine_lines", "anuga_fine_area_m2",
              "anuga_coarse_area_m2", "anuga_near_field_mi", "anuga_buffer_m", "anuga_algorithm",
-             "impact_look_ahead_mi", "incr_thresholds_ft")
+             "impact_look_ahead_mi", "incr_thresholds_ft", "water_mask")
 
 
 def raster_names(thresholds_ft):
@@ -1150,6 +1157,8 @@ def run_probabilistic(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_x
                     "avg_breach_width_ft": hp.get("avg_breach_width_ft"),
                     "formation_time_hr": hp.get("formation_time_hr"),
                     "tr60_rise_time_hr": hp.get("rise_time_hr")})
+        from . import report_metrics
+        row.update(report_metrics.table_values(s))      # v3.10.22 (#91)
         if any("leaves the base domain" in w for w in (r.warnings or [])):
             row["domain_too_small"] = True
         if classify is not None and row["status"] == "done":
@@ -1255,6 +1264,8 @@ def _base_values(base, rep):
          "avg_breach_width_ft": h.get("avg_breach_width_ft"),
          "formation_time_hr": h.get("formation_time_hr"), "width_factor": 1.0,
          "time_factor": 1.0, "n_factor": 1.0}
+    from . import report_metrics
+    b.update(report_metrics.table_values(s))        # v3.10.22 (#91)
     r = rep.get("receptors")
     if isinstance(r, dict):
         b.update({"structures_flooded": r.get("structure", {}).get("flooded", 0),

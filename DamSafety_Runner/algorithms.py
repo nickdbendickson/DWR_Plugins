@@ -496,6 +496,11 @@ class _Base(QgsProcessingAlgorithm):
             "reservoir is a LiDAR water surface (Off = the DEM as it is; Auto = only when the "
             "DEM's pool holds far less than the storage curve; the source DEM is never changed)",
             list(reservoir_carve.LABELS), defaultValue=0, optional=True)))
+        # v3.10.22 (#91): reporting only - masked cells stay in the model
+        self._file("WATER_MASK", "Water-body mask for the run report only (polygons of existing "
+                   "lakes and ponds; the report gives the area and velocity figures with and "
+                   "without them; empty = NDBREACH_WATERBODY_MASK, else the dam's or the suite's "
+                   "waterbodies layer when there is one)", optional=True, advanced=True)
         self.addParameter(QgsProcessingParameterEnum("TIER", "Models",
                                                      [t[1] for t in TIERS], defaultValue=0))
         self._bool("FORCE_ANUGA", "Force ANUGA: final results come from ANUGA even when "
@@ -689,6 +694,10 @@ class _Base(QgsProcessingAlgorithm):
             from .core import reservoir_carve
             st.reservoir_carve = reservoir_carve.normalize(
                 int(self.parameterAsEnum(parameters, "RESERVOIR_CARVE", context)))
+        if self.parameterDefinition("WATER_MASK") is not None:         # v3.10.22 (#91)
+            wm = self._fileparam(parameters, "WATER_MASK", context)
+            if wm:
+                st.water_mask = wm
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0
@@ -1612,7 +1621,23 @@ class SensitivityAlgorithm(RunDamAlgorithm):
 BATCH_FIELDS = ("Dam", "Folder", "Status", "Scenario", "Final_Model", "Peak_Breach_cfs",
                 "Storage_At_Failure_acft", "Flooded_ac", "Max_Depth_ft", "Max_Velocity_fps",
                 "Latest_Arrival_hr", "Receptors_Flooded", "Runs", "Domain_mi", "Minutes",
-                "Warnings", "Message")
+                "Warnings", "Message",
+                # v3.10.22 (#91): appended, so the columns above keep their places
+                "Flooded_ge_0_1ft_ac", "Flooded_ge_1ft_ac", "Flooded_ge_2ft_ac",
+                "Velocity_P95_fps", "Velocity_P99_fps", "Max_Velocity_Depth_ft",
+                "Flooded_Masked_ac", "Flooded_ge_1ft_Masked_ac")
+
+
+def _batch_metrics(s):
+    """v3.10.22 (#91): the appended batch columns from a run summary ("" when absent)."""
+    keys = (("Flooded_ge_0_1ft_ac", "flooded_acres_ge_0_1ft"),
+            ("Flooded_ge_1ft_ac", "flooded_acres_ge_1ft"),
+            ("Flooded_ge_2ft_ac", "flooded_acres_ge_2ft"),
+            ("Velocity_P95_fps", "velocity_p95_fps"), ("Velocity_P99_fps", "velocity_p99_fps"),
+            ("Max_Velocity_Depth_ft", "max_velocity_depth_ft"),
+            ("Flooded_Masked_ac", "flooded_acres_masked"),
+            ("Flooded_ge_1ft_Masked_ac", "flooded_acres_ge_1ft_masked"))
+    return {col: ("" if s.get(k) is None else s.get(k)) for col, k in keys}
 BATCH_SCENARIOS = [SCENARIOS[0][1], SCENARIOS[1][1],
                    "Per dam: flood if its folder has inputs/pmf_inflow.csv, else sunny day"]
 BATCH_FIELD_KEYS = (("F_ID", "Dam ID field", False), ("F_NAME", "Dam name field", False),
@@ -1821,6 +1846,7 @@ class BatchAlgorithm(_Base):
                                 "Flooded_ac": s["flooded_acres"],
                                 "Max_Depth_ft": s["max_depth_ft"],
                                 "Max_Velocity_fps": s["max_velocity_fps"],
+                                **_batch_metrics(s),
                                 "Latest_Arrival_hr": s["latest_arrival_hr"],
                                 "Receptors_Flooded": s.get("receptors_flooded", ""),
                                 "Runs": s["lisflood_runs"],
