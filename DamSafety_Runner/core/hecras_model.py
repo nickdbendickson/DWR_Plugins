@@ -1502,6 +1502,284 @@ def _dem_value_m(dem_path, srs, xy, z_to_m):
         return None
 
 
+# ============================================================================
+# v3.10.17: site checks, breach invert vs the ground below the dam, dam line without a
+# recorded length, simulation window (DWR-3161 HEC-RAS test: 36 % volume error)
+# ============================================================================
+# A run whose dam point, dam height or storage curve do not fit the terrain gives a HEC-RAS
+# model that runs but means nothing (DWR-3161: breach bottom 1816.3 ft connected to cells at
+# 1840.5 ft, 4 ft of relief for a 28 ft dam, storage curve to 1816 ft over 201 ac against a
+# 30 ac outline with ground no lower than 1840.4 ft). build_model stops with HecRasSiteError
+# on a gross mismatch; options={"allow_bad_site": True} or the environment variable
+# ALLOW_BAD_SITE=1 builds it anyway and writes the problems into the notes.
+ENV_ALLOW_BAD_SITE = "ALLOW_BAD_SITE"
+SITE_BREACH_BELOW_TOE_FT = 5.0     # breach bottom more than this below the toe ground: stop
+SITE_MIN_RELIEF_FRAC = 0.5         # top of dam - toe ground under half the dam height: stop
+SITE_NOTE_RELIEF_FRAC = (0.8, 1.5)  # outside this (but not a stop): a note
+STORAGE_STOP_DEPTH_FRAC = 0.25     # top of dam - lowest ground in the outline < 1/4 H: stop
+STORAGE_NOTE_DEPTH_FRAC = 0.5      # ... < 1/2 H: a note (LiDAR sees a normal pool's surface)
+STORAGE_STOP_AREA_RATIO = 0.2      # outline area / curve area at the top < 0.2: stop
+STORAGE_NOTE_AREA_RATIO = (0.5, 2.0)
+# dam line when no length is on record: the embankment crest along the 2D area's edge across
+# the valley, i.e. where the ground is within max(3 ft, 10 % of H) of the top of dam, walking
+# out from the dam point and stepping over gaps up to max(2 cells, DAM_LINE_GAP_FT) (an
+# emergency spillway, a low spot), at most DAM_LINE_CAP_FT
+DAM_LINE_CAP_FT = 3000.0
+DAM_LINE_GAP_FT = 300.0            # stretches off the crest stepped over (spillway, low spot)
+# simulation window: (the later of the end of the breach hydrograph and the run's latest
+# arrival) + a drain allowance of 25 % of that (at least 2 h), at most SIM_CAP_HR
+SIM_CAP_HR = 48.0
+SIM_MIN_HR = 6.0
+SIM_DRAIN_FRAC = 0.25
+SIM_DRAIN_MIN_HR = 2.0
+HYDRO_END_FRAC = 0.02              # the hydrograph 'ends' when it falls below 2 % of its peak
+# v3.10.17: HEC-RAS's breach shape is not the plugin's (README and manifest say so)
+BREACH_SHAPE_NOTE = (
+    "Breach shape: the plugin's routed breach opens as a trapezoid that deepens from the crest "
+    "and widens linearly over the formation time (an orifice phase first only for the "
+    "'piping with a pipe phase' method). HEC-RAS's 'Piping' failure mode in this plan starts "
+    "as a pipe at the piping elevation that grows until the top collapses, then becomes the "
+    "trapezoid; 'Overtopping' deepens from the top like the plugin. Expect the HEC-RAS peak and "
+    "its timing to differ from the plugin's; set the failure mode to Overtopping in the breach "
+    "editor to compare like with like.")
+
+
+class HecRasSiteError(HecRasModelError):
+    """The run's dam, terrain and storage do not fit together; `problems` lists why."""
+
+    def __init__(self, problems):
+        self.problems = list(problems)
+        super().__init__(
+            "The HEC-RAS model was not built because the dam data do not match the ground: "
+            + " ".join("({}) {}".format(i + 1, p) for i, p in enumerate(self.problems))
+            + " Check the dam point, top of dam, dam height and storage, then re-run the "
+            "Runner. To build the model anyway (for testing only), set {}=1 or the option "
+            "allow_bad_site.".format(ENV_ALLOW_BAD_SITE))
+
+
+def allow_bad_site(options=None, env=None):
+    """True when the site checks may be overridden (option or ALLOW_BAD_SITE=1)."""
+    if options and options.get("allow_bad_site"):
+        return True
+    v = str((os.environ if env is None else env).get(ENV_ALLOW_BAD_SITE, "")).strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def breach_site_check(bottom_ft, toe_ft, top_ft, height_ft):
+    """The breach and the ground just below the dam. Returns (problems, notes), plain text.
+    A problem stops the build: the breach bottom more than SITE_BREACH_BELOW_TOE_FT below the
+    toe ground, or the top of dam less than SITE_MIN_RELIEF_FRAC x H above it."""
+    problems, notes = [], []
+    if toe_ft is None or not np.isfinite(toe_ft) or not height_ft:
+        return problems, ["The ground below the dam could not be read; the breach was not "
+                          "checked against it."]
+    below = toe_ft - bottom_ft
+    relief = top_ft - toe_ft
+    frac = relief / float(height_ft)
+    if below > SITE_BREACH_BELOW_TOE_FT:
+        problems.append(
+            "The breach bottom ({:.1f} ft) is {:.1f} ft below the ground just downstream of the "
+            "dam ({:.1f} ft); HEC-RAS would connect it to cells far above it, the water cannot "
+            "drain that low and the volume balance fails.".format(bottom_ft, below, toe_ft))
+    if frac < SITE_MIN_RELIEF_FRAC:
+        problems.append(
+            "The top of dam ({:.1f} ft) is only {:.1f} ft above the ground just downstream of "
+            "the dam ({:.1f} ft), {:.0f} % of the {:.1f} ft dam height: the DEM shows no "
+            "embankment at the dam point.".format(top_ft, relief, toe_ft, 100 * frac, height_ft))
+    elif not (SITE_NOTE_RELIEF_FRAC[0] <= frac <= SITE_NOTE_RELIEF_FRAC[1]):
+        notes.append("The top of dam is {:.1f} ft above the ground just downstream of the dam "
+                     "({:.0f} % of the {:.1f} ft dam height); check the dam height and the dam "
+                     "point.".format(relief, 100 * frac, height_ft))
+    return problems, notes
+
+
+def storage_site_check(curve_min_ft, curve_area_ac, ground_min_ft, outline_area_ac, top_ft,
+                       height_ft):
+    """The storage curve against the terrain inside the reservoir outline (ground below the top
+    of dam reached from just upstream). Returns (problems, notes, stats)."""
+    problems, notes = [], []
+    stats = {"curve_min_ft": round(float(curve_min_ft), 2),
+             "curve_area_top_ac": (round(float(curve_area_ac), 1) if curve_area_ac else None),
+             "ground_min_ft": (None if ground_min_ft is None else round(float(ground_min_ft), 2)),
+             "outline_area_ac": (None if outline_area_ac is None else
+                                 round(float(outline_area_ac), 1))}
+    if ground_min_ft is None or not height_ft:
+        notes.append("The reservoir is not visible in the DEM below the top of dam; the storage "
+                     "curve was not checked against the terrain.")
+        return problems, notes, stats
+    depth = top_ft - ground_min_ft
+    frac = depth / float(height_ft)
+    stats["depth_frac"] = round(frac, 3)
+    if frac < STORAGE_STOP_DEPTH_FRAC:
+        problems.append(
+            "Inside the reservoir outline the ground is never lower than {:.1f} ft, only {:.1f} "
+            "ft below the top of dam, but the storage curve goes down to {:.1f} ft ({:.1f} ft "
+            "dam height): the dam point does not sit at this reservoir.".format(
+                ground_min_ft, depth, curve_min_ft, height_ft))
+    elif frac < STORAGE_NOTE_DEPTH_FRAC:
+        notes.append("The lowest ground inside the reservoir outline is {:.1f} ft, {:.1f} ft "
+                     "above the bottom of the storage curve ({:.1f} ft); LiDAR shows a water "
+                     "surface there, or the dam data are off.".format(
+                         ground_min_ft, ground_min_ft - curve_min_ft, curve_min_ft))
+    if curve_area_ac and outline_area_ac is not None:
+        ratio = outline_area_ac / float(curve_area_ac)
+        stats["area_ratio"] = round(ratio, 3)
+        if ratio < STORAGE_STOP_AREA_RATIO:
+            problems.append(
+                "The ground below the top of dam upstream covers {:.1f} ac, against {:.1f} ac "
+                "at the top of the storage curve ({:.0f} %).".format(
+                    outline_area_ac, curve_area_ac, 100 * ratio))
+        elif not (STORAGE_NOTE_AREA_RATIO[0] <= ratio <= STORAGE_NOTE_AREA_RATIO[1]):
+            notes.append("The ground below the top of dam upstream covers {:.1f} ac, against "
+                         "{:.1f} ac at the top of the storage curve; check the surface area "
+                         "and the top of dam.".format(outline_area_ac, curve_area_ac))
+    return problems, notes, stats
+
+
+def site_gate(problems, allow, notes):
+    """Raises HecRasSiteError for `problems` unless `allow`; then they go into `notes`."""
+    if not problems:
+        return
+    if not allow:
+        raise HecRasSiteError(problems)
+    for p in problems:
+        notes.append("SITE CHECK OVERRIDDEN ({}=1 / allow_bad_site): {} The results of this "
+                     "model are not meaningful.".format(ENV_ALLOW_BAD_SITE, p))
+
+
+def crest_segment(st, z, s0, top, tol, gap=0.0):
+    """(s_lo, s_hi, ok): the embankment crest along the dam line: the stations around s0 where
+    the ground (z) is within `tol` of the top of dam (NaN = unknown, counts as crest), walking
+    out from s0 and stepping over stretches up to `gap` long that are not (an emergency
+    spillway, a low spot, a road cut); one station more at each end ties it in. ok is False
+    when no crest ground lies within `gap` of s0 (then s_lo = s_hi = s0's station)."""
+    st = np.asarray(st, float)
+    z = np.asarray(z, float)
+    n = len(st)
+    if n == 0:
+        return 0.0, 0.0, False
+    inb = ~(np.abs(z - top) > tol)
+    k0 = int(np.argmin(np.abs(st - s0)))
+    if not inb[k0]:
+        cand = np.nonzero(inb & (np.abs(st - st[k0]) <= gap))[0]
+        if not len(cand):
+            return float(st[k0]), float(st[k0]), False
+        k0 = int(cand[np.argmin(np.abs(st[cand] - st[k0]))])
+    last = k0
+    for i in range(k0 + 1, n):
+        if inb[i]:
+            last = i
+        elif st[i] - st[last] > gap:
+            break
+    hi = min(last + 1, n - 1)
+    last = k0
+    for i in range(k0 - 1, -1, -1):
+        if inb[i]:
+            last = i
+        elif st[last] - st[i] > gap:
+            break
+    lo = max(last - 1, 0)
+    return float(st[lo]), float(st[hi]), True
+
+
+def dam_line_part(A, B, s_lo, s_hi, s0, cap, min_length=0.0):
+    """(A', B', length): the stations s_lo..s_hi of the edge A-B, at most `cap` long (centred
+    on s0, kept inside s_lo..s_hi) and at least `min_length` (centred on s0, kept on A-B)."""
+    A = np.asarray(A, float)
+    B = np.asarray(B, float)
+    full = float(np.hypot(*(B - A)))
+    if full <= 0:
+        return A, B, 0.0
+    ab = (B - A) / full
+    lo, hi = max(0.0, float(s_lo)), min(full, float(s_hi))
+    if cap and hi - lo > cap:
+        c = min(max(float(s0), lo + 0.5 * cap), hi - 0.5 * cap)
+        lo, hi = c - 0.5 * cap, c + 0.5 * cap
+    if hi - lo < min_length:
+        L = min(full, float(min_length))
+        c = min(max(float(s0), 0.5 * L), full - 0.5 * L)
+        lo, hi = c - 0.5 * L, c + 0.5 * L
+    return A + ab * lo, A + ab * hi, hi - lo
+
+
+def hydrograph_end_hr(t_s, q, t_ref_s=0.0, frac=HYDRO_END_FRAC):
+    """Hours after breach initiation at which the hydrograph has fallen below `frac` of its
+    peak for good (its last time when it never does)."""
+    t = np.asarray(t_s, float)
+    q = np.asarray(q, float)
+    if len(t) == 0:
+        return 0.0
+    pk = float(np.nanmax(q)) if np.isfinite(q).any() else 0.0
+    if pk <= 0:
+        return max(0.0, (float(t[-1]) - t_ref_s) / 3600.0)
+    above = np.nonzero(q >= frac * pk)[0]
+    k = int(above[-1]) if len(above) else len(t) - 1
+    k = min(k + 1, len(t) - 1)          # the first sample below it
+    return max(0.0, (float(t[k]) - t_ref_s) / 3600.0)
+
+
+def simulation_hours(hydro_end_hr, arrival_hr, formation_hr=0.0, cap=SIM_CAP_HR,
+                     minimum=SIM_MIN_HR):
+    """(hours, how): the plan's simulation window. The later of the end of the breach
+    hydrograph, the run's latest arrival and the breach formation time, plus a drain allowance
+    of SIM_DRAIN_FRAC of that (at least SIM_DRAIN_MIN_HR); whole hours, between `minimum` and
+    `cap`."""
+    base = max(float(hydro_end_hr or 0.0), float(arrival_hr or 0.0), float(formation_hr or 0.0))
+    drain = max(SIM_DRAIN_MIN_HR, SIM_DRAIN_FRAC * base)
+    want = base + drain
+    sim = float(min(max(math.ceil(want - 1e-9), minimum), cap))
+    how = ("the later of the end of the breach hydrograph ({:.1f} h) and the run's latest "
+           "arrival ({:.1f} h), plus {:.1f} h to drain".format(
+               float(hydro_end_hr or 0.0), float(arrival_hr or 0.0), drain))
+    if want > cap:
+        how += ("; capped at {:g} h (the flood front may not reach the end of the 2D area; set "
+                "the option sim_hours to run longer)".format(cap))
+    return sim, how
+
+
+def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut):
+    """Lowers the terrain GeoTIFF (never raises it) to z_cut in the rectangle from the dam line
+    A + ab*s (s_lo..s_hi) downstream (d) for 0..t_max: the breach opening through the
+    downstream half of the embankment, so the 2D cells along the breach reach the breach
+    bottom. Returns {'cells', 'area', 'max_cut'} (area in the GeoTIFF's units squared)."""
+    gdal, ogr, osr = _ogr()
+    ds = gdal.Open(tif_path, gdal.GA_Update)
+    gt = ds.GetGeoTransform()
+    b = ds.GetRasterBand(1)
+    nd = b.GetNoDataValue()
+    A = np.asarray(A, float)
+    ab = np.asarray(ab, float)
+    d = np.asarray(d, float)
+    corners = np.array([A + ab * s_lo, A + ab * s_hi, A + ab * s_hi + d * t_max,
+                        A + ab * s_lo + d * t_max])
+    c0 = max(0, int(math.floor((corners[:, 0].min() - gt[0]) / gt[1])) - 1)
+    c1 = min(ds.RasterXSize, int(math.ceil((corners[:, 0].max() - gt[0]) / gt[1])) + 1)
+    r0 = max(0, int(math.floor((corners[:, 1].max() - gt[3]) / gt[5])) - 1)
+    r1 = min(ds.RasterYSize, int(math.ceil((corners[:, 1].min() - gt[3]) / gt[5])) + 1)
+    out = {"cells": 0, "area": 0.0, "max_cut": 0.0}
+    if c1 <= c0 or r1 <= r0:
+        ds = None
+        return out
+    a = b.ReadAsArray(c0, r0, c1 - c0, r1 - r0).astype(np.float64)
+    xs = gt[0] + (np.arange(c0, c1) + 0.5) * gt[1]
+    ys = gt[3] + (np.arange(r0, r1) + 0.5) * gt[5]
+    X, Y = np.meshgrid(xs, ys)
+    s = (X - A[0]) * ab[0] + (Y - A[1]) * ab[1]
+    t = (X - A[0]) * d[0] + (Y - A[1]) * d[1]
+    valid = np.isfinite(a)
+    if nd is not None:
+        valid &= a != nd
+    m = (s >= s_lo) & (s <= s_hi) & (t >= 0.0) & (t <= t_max) & valid & (a > z_cut)
+    if m.any():
+        out = {"cells": int(m.sum()), "area": float(m.sum() * abs(gt[1] * gt[5])),
+               "max_cut": float((a[m] - z_cut).max())}
+        a[m] = z_cut
+        b.WriteArray(a.astype(np.float32), c0, r0)
+        b.FlushCache()
+    ds = None
+    return out
+
+
 def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=None,
                 log=None, progress=None):
     """Builds the HEC-RAS model of a finished run in `out_folder` (default
@@ -1737,6 +2015,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     near = can & (lat <= max(dam_len, 4 * rc_cell)) & (np.hypot(GX - P[0], GY - P[1]) <=
                                                         max(dam_len, 10 * rc_cell))
     reservoir = None
+    res_obs = None          # v3.10.17: (lowest ground, area) inside the outline, model units
     if near.any():
         cand = np.argwhere(near)
         zz = zc[near]
@@ -1749,6 +2028,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                 rings = _rings(rp)
                 if rings:
                     reservoir = rings[0][1]
+                    res_obs = (float(np.nanmin(zc[reach])), float(reach.sum()) * rc_cell ** 2)
     if reservoir is None or len(reservoir) < 3:
         sa = (dam.surface_area_top_ac * 4046.8564224 / units.L ** 2 if dam.surface_area_top_ac
               else dam_len ** 2)
@@ -1757,6 +2037,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                               B - d * cell])
         notes.append("The reservoir outline is a rectangle with the surface area at the top "
                      "of dam (the DEM did not show it); it is for display only.")
+        res_obs = None
     if ring_area(reservoir) < 0:
         reservoir = reservoir[::-1]
     if len(reservoir) > 500:
@@ -1774,10 +2055,47 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     if tnote:
         notes.append("Dam connection: {} ({}).".format(tnote, want_src))
         perim = insert_on_ring(perim, [A, B])
+    dam_line_how = ("{} ft from {}".format(round(want_ft), want_src) if want_ft else
+                    "the 2D area's edge across the valley")
+    if not want_ft:
+        # v3.10.17: no length on record - only the part of the edge where the ground stays
+        # near the top of dam around the dam point (DWR-3161: a 4,612 ft line over hills up to
+        # 2043 ft for a 1844 ft dam), at most DAM_LINE_CAP_FT
+        edge_len = float(np.hypot(*(edge_B - edge_A)))
+        ab_e = (edge_B - edge_A) / (edge_len or 1.0)
+        st_e = np.linspace(0.0, edge_len, max(2, int(math.ceil(edge_len / scell)) + 1))
+        z_e = _sample(z, zx0, zy0, scell, edge_A[None, :] + st_e[:, None] * ab_e[None, :])
+        s0 = min(max(float(np.dot(P - edge_A, ab_e)), 0.0), edge_len)
+        tol_ft = max(3.0, 0.1 * dam.dam_height_ft)
+        gap = max(2.0 * cell, units.from_ft(DAM_LINE_GAP_FT))
+        s_lo, s_hi, ok_c = crest_segment(st_e, z_e, s0, top_u, units.from_ft(tol_ft), gap)
+        cap_ft = float(o.get("max_dam_line_ft") or DAM_LINE_CAP_FT)
+        # at least the breach's top width plus a cell each side
+        pb = breach_values(dam, params, units, 0.0)[0]
+        min_len = max(2.0 * cell, pb["bottom_width"] + 2.0 * pb["left_slope"] *
+                      (top_u - pb["bottom_elev"]) + 2.0 * cell)
+        A2, B2, L2 = dam_line_part(edge_A, edge_B, s_lo, s_hi, s0, units.from_ft(cap_ft),
+                                   min_len)
+        if L2 < edge_len - 1e-6:
+            A, B, dam_len = A2, B2, L2
+            perim = insert_on_ring(perim, [A, B])
+            if not ok_c:
+                dam_line_how = ("{:,.0f} {} around the dam point: no ground within {:.1f} ft of "
+                                "the top of dam (no embankment crest) near the dam point".format(
+                                    L2, units.len_name, tol_ft))
+            else:
+                dam_line_how = ("{:,.0f} of the {:,.0f} {} edge of the 2D area across the valley, "
+                                "where the ground is within {:.1f} ft of the top of dam (the "
+                                "embankment crest) around the dam point{}".format(
+                                    L2, edge_len, units.len_name, tol_ft,
+                                    "; capped at {:,.0f} ft".format(cap_ft)
+                                    if s_hi - s_lo > units.from_ft(cap_ft) + 1e-6 else ""))
+            notes.append("Dam connection: {} (no dam length on record; give dam_length_ft in "
+                         "dam.json or the option dam_length_ft).".format(dam_line_how))
     toe_off = units.from_ft((dam.ds_slope_h or 3.0) * dam.dam_height_ft +
                             0.5 * (dam.crest_width_ft or 20.0))
     wcell = tcell if dam_len / tcell <= 20000 else dam_len / 20000.0
-    pad = toe_off + 4 * wcell
+    pad = toe_off + max(4 * wcell, 1.5 * cell)
     wb = (min(A[0], B[0]) - pad, min(A[1], B[1]) - pad, max(A[0], B[0]) + pad,
           max(A[1], B[1]) + pad)
     zw, wx0, wy0 = _warp(terrain_tif, srs, wcell, bounds=wb, alg="bilinear")
@@ -1820,11 +2138,81 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     if bvals["trigger_wse"] is not None and abs(trig_ft - wse0_ft) < 1e-6:
         # sunny day: breach as soon as the run starts (pool starts at the trigger)
         bvals["trigger_wse"] = units.from_ft(wse0_ft - 0.01)
+    # --- v3.10.17: site checks; the breach invert against the ground below the dam -----
+    # toe ground: the lowest ground just past the embankment toe across the breach (the 2D
+    # cells the breach flows into), else the ground at the toe point
+    bw = float(bvals["bottom_width"])
+    half_w = max(0.5 * bw, cell)
+    ss = np.linspace(sc - half_w, sc + half_w, max(3, int(math.ceil(2 * half_w / wcell)) + 1))
+    tt = np.linspace(toe_off, toe_off + cell, max(3, int(math.ceil(cell / wcell)) + 1))
+    SS, TT = np.meshgrid(ss, tt)
+    band = (A[None, :] + SS.reshape(-1)[:, None] * ab[None, :] +
+            TT.reshape(-1)[:, None] * d[None, :])
+    zb_ = _sample(zw, wx0, wy0, wcell, band)
     gb = float(_sample(zw, wx0, wy0, wcell, [toe_xy])[0])
-    if np.isfinite(gb) and bvals["bottom_elev"] < gb - units.from_ft(5.0):
-        notes.append("The breach bottom ({:.1f} {u}) is more than 5 ft below the ground at the "
-                     "toe ({:.1f} {u}); HEC-RAS drains the reservoir only down to the 2D cells "
-                     "there.".format(bvals["bottom_elev"], gb, u=units.len_name))
+    toe_u = (float(np.nanmin(zb_)) if np.isfinite(zb_).any() else
+             (gb if np.isfinite(gb) else None))
+    to_ft = (lambda v: None if v is None else float(v) * units.L / FT)
+    problems, snotes = breach_site_check(to_ft(bvals["bottom_elev"]), to_ft(toe_u),
+                                         dam.top_of_dam_ft, dam.dam_height_ft)
+    ev, res = storage_curve(dam, units)
+    curve_area_ac = res.m * res.vt / res.ht / 4046.8564224
+    if res_obs is not None:
+        g_ft, a_ac = to_ft(res_obs[0]), res_obs[1] * units.L ** 2 / 4046.8564224
+    else:
+        g_ft = a_ac = None
+    p2, n2, sstats = storage_site_check(res.bottom / FT, curve_area_ac, g_ft, a_ac,
+                                        dam.top_of_dam_ft, dam.dam_height_ft)
+    allow = allow_bad_site(o)
+    site_gate(problems + p2, allow, notes)
+    notes += snotes + n2
+    site = {"toe_ground_ft": None if toe_u is None else round(to_ft(toe_u), 2),
+            "breach_bottom_run_ft": round(to_ft(bvals["bottom_elev"]), 2),
+            "top_of_dam_ft": round(float(dam.top_of_dam_ft), 2),
+            "dam_height_ft": round(float(dam.dam_height_ft), 2),
+            "storage": sstats, "problems": problems + p2, "overridden": bool(problems + p2),
+            "breach_bottom_raised_ft": 0.0}
+    # the breach must not open below the cells it flows into (HEC-RAS: 'weir breach lower than
+    # the cells they are connected to'): raise its bottom to the toe ground. The storage below
+    # cannot drain onto the ground there anyway; the note says how much stays behind.
+    if toe_u is not None and bvals["bottom_elev"] < toe_u - 1e-6:
+        old_b = bvals["bottom_elev"]
+        new_b = math.ceil(toe_u * 100.0) / 100.0
+        kept = float(res.volume(new_b * units.L)) / ACFT
+        bvals["bottom_elev"] = new_b
+        if bvals.get("piping") and bvals.get("piping_elev") is not None and \
+                bvals["piping_elev"] <= new_b:
+            bvals["piping_elev"] = round(new_b + 0.5 * (top_u - new_b), 2)
+            notes.append("Initial piping elevation moved to {:.2f} {}, half way up the raised "
+                         "breach.".format(bvals["piping_elev"], units.len_name))
+        site["breach_bottom_raised_ft"] = round(to_ft(new_b - old_b), 2)
+        notes.append("Breach bottom raised {:.1f} ft, from {:.2f} to {:.2f} {u}: the lowest "
+                     "ground just downstream of the dam in the breach. HEC-RAS cannot drain the "
+                     "reservoir below the ground the breach flows onto; {:,.0f} acre-ft ({:.0f} % "
+                     "of the {:,.0f} acre-ft at the top of dam) stays in the reservoir.".format(
+                         to_ft(new_b - old_b), old_b, new_b, kept,
+                         100.0 * kept / max(dam.storage_top_acft, 1e-9), dam.storage_top_acft,
+                         u=units.len_name))
+        half = 0.5 * bvals["bottom_width"] + bvals["left_slope"] * (top_u - new_b)
+        sc = min(max(sc, half), max(dam_len - half, half))
+        bvals["center_station"] = round(sc, 1)
+    # the breach opening through the downstream half of the embankment, cut into the terrain
+    # to the breach bottom (lowered only), so the 2D cells along the breach reach its bottom
+    cut = None
+    if o.get("breach_cut", True):
+        cw = 0.5 * max(bw, 2.0 * tcell)
+        cut = cut_breach_channel(terrain_tif, A, ab, d, sc - cw, sc + cw, toe_off + cell,
+                                 bvals["bottom_elev"])
+        cut.update(width=round(2 * cw, 1), length=round(toe_off + cell, 1),
+                   z=round(bvals["bottom_elev"], 2))
+        if cut["cells"]:
+            notes.append("Terrain: the breach opening ({:,.0f} {u} wide, from the dam line "
+                         "{:,.0f} {u} downstream) is cut to the breach bottom {:.2f} {u} in the "
+                         "terrain GeoTIFF ({:,} cells, lowered by up to {:.1f} {u}), so the 2D "
+                         "cells at the breach reach its bottom.".format(
+                             2 * cw, toe_off + cell, bvals["bottom_elev"], cut["cells"],
+                             cut["max_cut"], u=units.len_name))
+    site["breach_cut"] = cut
 
     # --- boundary: normal depth where the valley leaves the 2D area ---------------
     progress(70, "downstream boundary")
@@ -1976,9 +2364,14 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # --- simulation timing ---------------------------------------------------------
     summ = report.get("summary") or {}
     arr = summ.get("latest_arrival_hr") or 0.0
-    dur_hr = float(hy.t_s[-1]) / 3600.0 if len(hy.t_s) else 6.0
-    sim = max(6.0, 1.25 * max(dur_hr, float(arr) + bvals["formation_hr"] + 2.0))
-    sim = float(min(math.ceil(sim), 336.0))
+    # v3.10.17: from the end of the breach hydrograph and the latest arrival, plus a drain
+    # allowance, capped (was 1.25 x the longer of the record and arrival + formation + 2 h)
+    t_end = hydrograph_end_hr(hy.t_s, hy.q_cms, hy.t_ref_s) if len(hy.t_s) else 6.0
+    if o.get("sim_hours"):
+        sim, sim_how = float(o["sim_hours"]), "chosen"
+    else:
+        sim, sim_how = simulation_hours(t_end, float(arr), bvals["formation_hr"],
+                                        cap=float(o.get("sim_cap_hr") or SIM_CAP_HR))
     vmax_fps = float(summ.get("max_velocity_fps") or 10.0)
     hmax_ft = float(summ.get("max_depth_ft") or dmax or 10.0)
     cour = o["courant"] or (1.0 if o["equation"] == EQ_SWE else 2.0)
@@ -2071,6 +2464,9 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             # HEC-RAS 2D engine (hecras_engine): the inflow point and the CRSs, for the
             # hydrograph-inflow mode and for putting the results back on the run's grid
             "inflow_xy_model": (None if inflow_m is None else [float(v) for v in inflow_m]),
+            # v3.10.17
+            "site": site, "sim_how": sim_how, "hydrograph_end_hr": round(t_end, 2),
+            "dam_line_how": dam_line_how, "breach_shape_note": BREACH_SHAPE_NOTE,
             "model_wkt": srs.ExportToWkt(),
             "work_wkt": (work.ExportToWkt() if work is not None else None)}
     paths["readme"] = write_readme(os.path.join(out, "README_HECRAS.md"), m, info, notes, dam,
@@ -2253,6 +2649,32 @@ def _time_step_text(m):
                 int(c.get("count_to_double") or 0)))
 
 
+def _site_rows(site, L):
+    """v3.10.17: README rows for the site checks."""
+    if not site:
+        return []
+    st = site.get("storage") or {}
+    rows = ["| Ground just below the dam (breach) | {} ft | lowest ground just past the toe "
+            "across the breach; top of dam {} ft, dam height {} ft |".format(
+                site.get("toe_ground_ft"), site.get("top_of_dam_ft"), site.get("dam_height_ft")),
+            "| Reservoir in the DEM | lowest ground {} ft, {} ac below the top of dam | storage "
+            "curve: bottom {} ft, {} ac at the top |".format(
+                st.get("ground_min_ft"), st.get("outline_area_ac"), st.get("curve_min_ft"),
+                st.get("curve_area_top_ac"))]
+    if site.get("breach_bottom_raised_ft"):
+        rows.append("| Breach bottom raised | {} ft | to the ground the breach flows onto |"
+                    .format(site["breach_bottom_raised_ft"]))
+    cut = site.get("breach_cut") or {}
+    if cut.get("cells"):
+        rows.append("| Terrain cut at the breach | {} x {} {}, to {} | so the 2D cells at the "
+                    "breach reach its bottom |".format(cut.get("width"), cut.get("length"), L,
+                                                       cut.get("z")))
+    if site.get("overridden"):
+        rows.append("| **Site checks** | **FAILED, overridden** | ALLOW_BAD_SITE / allow_bad_site;"
+                    " the results are not meaningful |")
+    return rows
+
+
 def write_readme(path, m, info, notes, dam, params):
     u = m.units
     L = u.len_name
@@ -2334,8 +2756,11 @@ def write_readme(path, m, info, notes, dam, params):
             "not run (no scipy)" if not info.get("mesh_check") else
             "{cells_checked} checked, most faces {max_faces}, over 8 faces {over_8_faces}, "
             "smallest {smallest_fraction:g} of a full cell".format(**info["mesh_check"])),
-        "| Simulation | {:g} h from {} 00:00 | 1.25 x the longer of the hydrograph and the "
-        "latest arrival |".format(info["sim_hours"], START_DATE), "",
+        "| Simulation | {:g} h from {} 00:00 | {} |".format(
+            info["sim_hours"], START_DATE, info.get("sim_how") or ""),
+        "| Dam line | {:,.0f} {} | {} |".format(info["dam_line"], L,
+                                              info.get("dam_line_how") or ""),
+        ] + _site_rows(info.get("site"), L) + ["",
         "## Not carried over from the run", "",
         "- DEM edits made for the run (channels, ponds, notches, buildings, a proposed "
         "embankment) are not in the terrain: add them in RAS Mapper as terrain "
@@ -2344,6 +2769,7 @@ def write_readme(path, m, info, notes, dam, params):
         "add the spillway and outlets to the connection.",
         "- HEC-RAS routes the breach itself (weir flow through the opening); its peak will "
         "differ from the plugin's {:,.0f} cfs.".format(float(params.get("peak_cfs") or 0)),
+        "- " + BREACH_SHAPE_NOTE,
         ""]
     # v3.12.0: culverts, bridges and notches (nothing is added when the run had none)
     k = lines.index("## Not carried over from the run")
