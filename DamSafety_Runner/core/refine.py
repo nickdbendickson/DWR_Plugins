@@ -12,8 +12,16 @@ replace the coarse cells they fall in: maximum depth, speed and WSE, earliest ar
 The flagged distance and the fine cell size are the engineer's screening values (defaults 1 mi
 and half the main cell), not requirements of ND REG_05.2026. Nothing here has been run against
 a real LISFLOOD-FP or in a real QGIS: the tests stub the model.
+
+v3.11.0, from the Elm River Dam 1 run (LISFLOOD-FP 8.1, QGIS 3.34): the FV1 free boundary
+brought water INTO the fine box where breach water stood against its upstream edge, growing
+exponentially until the box held 6.5e10 m3 against 9.7e6 m3 injected, and the garbage was
+merged. So now (1) the edges that face the reservoir are closed walls, (2) the fine run lasts
+the hydrograph plus the travel time to the interface, not the main run's whole clock, and
+(3) the fine run is checked (`check_fine`) and the ACC results are kept when it fails.
 """
 import copy
+import json
 import math
 import os
 
@@ -30,7 +38,22 @@ FOLDER = "refine_near_dam"   # under <dam folder>/_breach_model/
 NOTE = ("Near-dam refine is an engineer's choice, not a requirement of ND REG_05.2026: the "
         "flagged distance and the fine cell size are screening values you choose. The ACC "
         "(local inertial) velocities near a breach are not reliable in fast or supercritical "
-        "flow; the FV1 solver is shock-capturing. Not run against a real LISFLOOD-FP here.")
+        "flow; the FV1 solver is shock-capturing. In LISFLOOD-FP 8.1 a free FV1 edge can bring "
+        "water into the model, so the fine run closes the edges that face the reservoir, is "
+        "checked before it is merged, and is rejected (the ACC results kept) when it fails.")
+
+# the fine box's edges that face the reservoir are closed when the flow component along that
+# axis is at least this (sin 22.5 degrees); the downstream and side edges stay free
+UPSTREAM_COMPONENT = 0.38
+# the fine run lasts the breach hydrograph plus this many times the time the flood front takes
+# to reach the interface at the screening front speed, plus an hour
+TRAVEL_FACTOR = 2.0
+MIN_FINE_HR = 2.0
+# the fine run is rejected when ...
+MAX_VOLUME_RATIO = 1.10      # ... the water in the box exceeds what went in (plus the starting
+                             # water) by more than this
+MAX_LATE_INFLOW_PCT = 2.0    # ... water came in through the edges after the hydrograph, % of it
+MAX_DEPTH_HEIGHTS = 2.0      # ... max depth exceeds this many dam heights (plus 20 ft)
 
 
 def receptors_within(receptors, structures, breach_xy, dist_m):
@@ -113,8 +136,67 @@ def decide(st, final_model, receptors, structures, breach_xy):
     return info
 
 
+def upstream_edges(direction):
+    """The edges of an axis-aligned box that face upstream for a flow `direction` (unit
+    vector, x east, y north): ("S",) for flow to the north, ("S", "W") for flow to the
+    north-east, and so on. A component weaker than UPSTREAM_COMPONENT closes nothing on
+    that axis, so the side edges stay free. Pure."""
+    dx, dy = float(direction[0]), float(direction[1])
+    out = []
+    if dy >= UPSTREAM_COMPONENT:
+        out.append("S")
+    if dy <= -UPSTREAM_COMPONENT:
+        out.append("N")
+    if dx >= UPSTREAM_COMPONENT:
+        out.append("W")
+    if dx <= -UPSTREAM_COMPONENT:
+        out.append("E")
+    return tuple(out)
+
+
+def fine_sim_time(st, hy, dist_mi, main_sim_time_s):
+    """Seconds the fine run lasts: the breach hydrograph, plus TRAVEL_FACTOR times the time the
+    flood front needs to cross the fine box at the screening front speed, plus an hour; at
+    least MIN_FINE_HR and never more than the main run's clock. Pure."""
+    box_m = dist_mi * (1.0 + MARGIN) * MILE
+    speed = max(0.05, float(getattr(st, "front_speed_mps", 0.5) or 0.5))
+    t = float(hy.duration_s) + TRAVEL_FACTOR * box_m / speed + 3600.0
+    return min(float(main_sim_time_s), max(MIN_FINE_HR * 3600.0, t))
+
+
+def check_fine(stats, dam_height_ft):
+    """Whether the fine run's numbers are sane enough to merge. `stats` are the fine run's
+    final LISFLOOD-FP statistics (lisflood.read_results). Returns a list of what is wrong;
+    empty means fine. Pure."""
+    bad = []
+    if not stats:
+        return ["the fine run reported no statistics"]
+    ratio = stats.get("max_domain_volume_ratio")
+    init = float(stats.get("initial_water_acft") or 0.0)
+    inj = float(stats.get("injected_acft") or 0.0)
+    if ratio is not None and inj > 0:
+        held = ratio * inj
+        if held > MAX_VOLUME_RATIO * (inj + init):
+            bad.append("the box held {:,.0f} ac-ft against {:,.0f} ac-ft put in".format(
+                held, inj + init))
+    late = stats.get("late_boundary_inflow_pct")
+    if late is not None and late > MAX_LATE_INFLOW_PCT:
+        bad.append("{:.1f}% of the breach volume came in through the edges after the "
+                   "hydrograph ended (limit {:g}%)".format(late, MAX_LATE_INFLOW_PCT))
+    err = stats.get("max_volume_error_pct")
+    if err is not None and err > 5.0:
+        bad.append("the mass-balance error is {:.1f}% of the injected volume".format(err))
+    depth = stats.get("max_depth_ft")
+    limit = MAX_DEPTH_HEIGHTS * float(dam_height_ft or 0.0) + 20.0
+    if depth is not None and depth > limit:
+        bad.append("the maximum depth is {:,.1f} ft (more than {:g} dam heights + 20 ft = "
+                   "{:,.0f} ft)".format(depth, MAX_DEPTH_HEIGHTS, limit))
+    return bad
+
+
 def fine_settings(st, dist_mi, cell_m, sim_time_s, hy, hy_nb):
-    """RunSettings copy for the fine FV1 run. Pure (no I/O)."""
+    """RunSettings copy for the fine FV1 run. Pure (no I/O). `sim_time_s` is how long the fine
+    run lasts (fine_sim_time)."""
     import dataclasses
     f = copy.copy(st)
     f.overrides = dataclasses.replace(st.overrides)
@@ -125,6 +207,7 @@ def fine_settings(st, dist_mi, cell_m, sim_time_s, hy, hy_nb):
     f.half_width_mi = min(float(st.half_width_mi), max(MIN_HALF_WIDTH_MI, 0.5 * dist_mi))
     f.max_iterations = 1
     f.sim_time_hr = max(1.0, float(sim_time_s) / 3600.0)
+    f.close_upstream_edges = True          # v3.11.0: FV1 free edges import water (see above)
     f.receptors = None
     f.gauges = []
     f.products = False
@@ -168,6 +251,20 @@ def merge_onto(main_grid, main_arrays, fine_grid, fine_arrays, point, direction,
     return out, int(cover.sum())
 
 
+MERGE_KEYS = ("depth", "velocity", "wse", "arrival")
+
+
+def _merge_keep(main_grid, main_arrays, fine_grid, fine_arrays, point, direction, keys):
+    """merge_onto for `keys`; every other kind of MERGE_KEYS keeps the main run's values
+    (the ACC velocity when the fine run wrote none). Returns (arrays, cells replaced)."""
+    out, replaced = merge_onto(main_grid, main_arrays, fine_grid, fine_arrays, point,
+                               direction, keys)
+    for k in MERGE_KEYS:
+        if k not in out and k in main_arrays:
+            out[k] = np.array(main_arrays[k], dtype=float, copy=True)
+    return out, replaced
+
+
 def zone_stats(grid, arrays, breach_xy, dist_m):
     """Maximum depth (ft) and velocity (ft/s) within `dist_m` of the breach. Pure."""
     X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
@@ -178,6 +275,25 @@ def zone_stats(grid, arrays, breach_xy, dist_m):
             "max_velocity_fps": (round(float(np.nanmax(v)) / FT, 2)
                                  if np.isfinite(v).any() else 0.0),
             "wet_cells": int(np.isfinite(d).sum())}
+
+
+def _fine_stats(fr):
+    """The fine LISFLOOD-FP run's final statistics, for check_fine. The sibling reads
+    `fr.lisflood_stats`; DWR's RunResult does not carry it, so fall back to the last
+    LISFLOOD run recorded in the fine run's report JSON (report["lisflood_runs"][-1]
+    ["stats"], which is lisflood.read_results' stats dict)."""
+    stats = dict(getattr(fr, "lisflood_stats", None) or {})
+    if stats:
+        return stats
+    path = getattr(fr, "report_json", "") or ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            runs = json.load(f).get("lisflood_runs") or []
+        if runs:
+            return dict(runs[-1].get("stats") or {})
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        pass
+    return {}
 
 
 def run_refine(dam, dam_xy, st, raw_terrain, writer, model_dir, hy, hy_nb, inflow_xy, path,
@@ -191,42 +307,62 @@ def run_refine(dam, dam_xy, st, raw_terrain, writer, model_dir, hy, hy_nb, inflo
     log = log or (lambda m: None)
     dist_mi = decision["dist_mi"]
     cell_m = decision["fine_cell_m"]
-    fst = fine_settings(st, dist_mi, cell_m, sim_time_s, hy, hy_nb if base_arrays is not None
+    fine_s = fine_sim_time(st, hy, dist_mi, sim_time_s)
+    fst = fine_settings(st, dist_mi, cell_m, fine_s, hy, hy_nb if base_arrays is not None
                         else None)
     folder = os.path.join(model_dir, FOLDER)
     log("Near-dam refine: {}. Running the first {:.2f} mi below the breach on a {:g} m grid "
-        "with the FV1 solver.".format(decision["reason"], fst.initial_length_mi, cell_m))
+        "with the FV1 solver for {:.1f} h (the main run is {:.1f} h).".format(
+            decision["reason"], fst.initial_length_mi, cell_m, fine_s / 3600.0,
+            sim_time_s / 3600.0))
     fr = workflow.run_dam(dam, dam_xy, fst, raw_terrain, writer, folder, inflow_xy,
                           progress, log, cancel)
     info = {"applied": False, "reason": decision["reason"], "dist_mi": dist_mi,
             "fine_cell_m": cell_m, "main_cell_m": float(st.cell_size_m),
             "solver": lfmod.SOLVER_FV1, "counts": decision.get("counts"), "folder": folder,
             "note": NOTE}
+    info["fine_sim_time_hr"] = round(fine_s / 3600.0, 2)
     if fr.final_si is None or fr.grid is None:
         info["warning"] = "the fine run gave no results; the ACC results are kept"
+        return fin, base_arrays, info
+    # v3.11.0: the fine FV1 run is checked before anything is merged. A free FV1 edge standing
+    # against reservoir water imports water into the box (Elm River Dam 1: 6.5e10 m3 against
+    # 9.7e6 m3 injected); when the box volume, late boundary inflow or max depth are out of
+    # range the fine run is rejected and the ACC results are kept everywhere.
+    fstats = _fine_stats(fr)
+    info["fine_stats"] = {k: fstats.get(k) for k in (
+        "max_depth_ft", "max_velocity_fps", "injected_acft", "in_domain_acft",
+        "max_domain_volume_ratio", "late_boundary_inflow_acft", "late_boundary_inflow_pct",
+        "max_volume_error_pct", "sim_time_hr")}
+    problems = check_fine(fstats, getattr(dam, "dam_height_ft", None))
+    if problems:
+        info["rejected"] = problems
+        info["warning"] = ("the fine FV1 run was rejected and NOT merged, the ACC results are "
+                           "kept everywhere: " + "; ".join(problems))
+        log("Near-dam refine: " + info["warning"])
         return fin, base_arrays, info
     ipoint, idir, plen = nested.interface_point(path, dist_mi * MILE)
     # LISFLOOD-FP 8.1 writes no FV1 .maxVc. Merging that as 0 ft/s lowered hazard
     # next to the dam. Keep the ACC velocities and take depth, WSE and arrival
     # from the fine run.
-    fstats = dict(getattr(fr, "lisflood_stats", None) or {})
-    keys = ("depth", "velocity", "wse", "arrival")
+    keys = MERGE_KEYS
     if fstats.get("velocity_written") is False:
-        keys = ("depth", "wse", "arrival")
+        keys = tuple(k for k in MERGE_KEYS if k != "velocity")
         info["velocity_kept_acc"] = True
         info["warning"] = ("LISFLOOD-FP wrote no maximum velocity for the FV1 fine run, so "
                            "the ACC velocities are kept near the dam; depth, water surface and "
                            "arrival come from the fine run")
         log("Near-dam refine: " + info["warning"])
-    merged, replaced = merge_onto(dem, fin, fr.grid, fr.final_si, ipoint, idir, keys)
+    merged, replaced = _merge_keep(dem, fin, fr.grid, fr.final_si, ipoint, idir, keys)
     before = zone_stats(dem, fin, dam_xy, dist_mi * MILE)
     after = zone_stats(dem, merged, dam_xy, dist_mi * MILE)
     base_m = None
     if base_arrays is not None and fr.base_si is not None:
-        base_m, _ = merge_onto(dem, base_arrays, fr.grid, fr.base_si, ipoint, idir, keys)
+        base_m, _ = _merge_keep(dem, base_arrays, fr.grid, fr.base_si, ipoint, idir, keys)
     elif base_arrays is not None:
-        info["warning"] = ("the fine run has no no-breach baseline; the baseline and "
-                           "incremental rasters keep the ACC results near the dam")
+        info["warning"] = "; ".join(w for w in (
+            info.get("warning"), "the fine run has no no-breach baseline; the baseline and "
+            "incremental rasters keep the ACC results near the dam") if w)
         base_m = base_arrays
     # the fine domain is deliberately short: the flood leaving its downstream edge is expected
     fine_warn = [w for w in fr.warnings if not w.startswith("Stopped after 1 runs")
@@ -236,9 +372,12 @@ def run_refine(dam, dam_xy, st, raw_terrain, writer, model_dir, hy, hy_nb, inflo
                  "fine_cells": int(fr.grid.data.size), "cells_replaced": replaced,
                  "zone_before_acc": before, "zone_after_fv1": after,
                  "fine_warnings": fine_warn, "fine_report": fr.report_json,
-                 "summary": "ACC velocities within {:g} mi of the breach replaced by an FV1 "
+                 "summary": "{} within {:g} mi of the breach replaced by an FV1 "
                             "fine-grid run ({:g} m cells); {} receptors inside. Zone maximum "
                             "velocity {} -> {} ft/s, depth {} -> {} ft.".format(
+                                # say so when the ACC velocities were kept
+                                "Depths (ACC velocities kept: FV1 wrote none)"
+                                if info.get("velocity_kept_acc") else "ACC velocities",
                                 dist_mi, cell_m, (decision.get("counts") or {}).get("total", 0),
                                 before["max_velocity_fps"], after["max_velocity_fps"],
                                 before["max_depth_ft"], after["max_depth_ft"])})
@@ -251,6 +390,24 @@ def report_lines(info):
     if not info:
         return []
     lines = ["## Near-dam refine (v3.4.0)", ""]
+    if info.get("rejected"):
+        fs = info.get("fine_stats") or {}
+        lines += ["**Rejected: the fine FV1 run failed its checks, so the ACC results are "
+                  "kept everywhere.** The run was made because {}.".format(
+                      info.get("reason", "")), ""]
+        lines += ["- " + p for p in info["rejected"]]
+        lines += ["", "| Fine run | |", "|---|---|"]
+        for k, label in (("sim_time_hr", "Simulated (h)"), ("injected_acft", "Put in (ac-ft)"),
+                         ("in_domain_acft", "In the box at the end (ac-ft)"),
+                         ("max_domain_volume_ratio", "Largest box volume / put in"),
+                         ("late_boundary_inflow_acft", "Came in through the edges after the "
+                                                       "hydrograph (ac-ft)"),
+                         ("max_depth_ft", "Max depth (ft)"),
+                         ("max_velocity_fps", "Max velocity (ft/s)")):
+            if fs.get(k) is not None:
+                lines.append("| {} | {:,} |".format(label, fs[k]))
+        lines += ["", "Fine run folder: {}.".format(info.get("folder", "")), "", info["note"], ""]
+        return lines
     if not info.get("applied"):
         lines += ["Not applied: {}.".format(info.get("reason", "")), ""]
         if info.get("warning"):

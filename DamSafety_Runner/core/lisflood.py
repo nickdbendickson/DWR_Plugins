@@ -26,6 +26,7 @@ ARRIVAL_TOL_M = 0.001    # LISFLOOD-FP writes depth to 3 decimals
 # are not limited by the inertial approximation (used by the near-dam refine option). Neither
 # has been run against a real executable here: nothing in this plugin was run in a real QGIS
 # or with a real LISFLOOD-FP.
+EDGE_LETTERS = ("N", "S", "E", "W")
 SOLVER_ACC = "acceleration"
 SOLVER_FV1 = "fv1"
 SOLVERS = (SOLVER_ACC, SOLVER_FV1)
@@ -44,11 +45,18 @@ class LisfloodSettings:
                  arrival_depth_m=0.3048, sim_time_s=6 * 3600.0, massint_s=300.0,
                  initial_tstep_s=10.0, velocity_min_depth_m=0.03, extra_par=None,
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
-                 solver=SOLVER_ACC):
+                 solver=SOLVER_ACC, closed_edges=()):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
         self.solver = solver                    # v3.4.0: "acceleration" (default) or "fv1"
+        # v3.11.0: domain edges written as closed walls ("N", "S", "E", "W") instead of free
+        # outflow. The near-dam FV1 run closes the edges that face the reservoir: with FV1 a
+        # free edge across ponded water brings water INTO the model (see core/refine.py).
+        self.closed_edges = tuple(sorted({str(e).upper() for e in (closed_edges or ())}))
+        bad = [e for e in self.closed_edges if e not in EDGE_LETTERS]
+        if bad:
+            raise ModelError("unknown domain edge(s) to close: {}".format(", ".join(bad)))
         self.exe = exe
         self.threads = threads
         self.manning_n = manning_n
@@ -187,10 +195,11 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
         for rr, cc in cells:
             px, py = dem.xy(rr, cc)
             f.write("P {:.3f} {:.3f} QVAR breach\n".format(px, py))
-        f.write("N {:.3f} {:.3f} FREE\n".format(xmin, xmax))
-        f.write("S {:.3f} {:.3f} FREE\n".format(xmin, xmax))
-        f.write("E {:.3f} {:.3f} FREE\n".format(ymin, ymax))
-        f.write("W {:.3f} {:.3f} FREE\n".format(ymin, ymax))
+        closed = getattr(st, "closed_edges", ())      # a closed edge is simply not listed
+        for edge, lo, hi in (("N", xmin, xmax), ("S", xmin, xmax),
+                             ("E", ymin, ymax), ("W", ymin, ymax)):
+            if edge not in closed:
+                f.write("{} {:.3f} {:.3f} FREE\n".format(edge, lo, hi))
     # QVAR at a point source is per unit width (m2/s); the code multiplies by
     # dx. Each of the n inflow cells carries 1/n of the breach outflow.
     t, q = hydrograph.resampled(30.0)      # keeps every original breakpoint
@@ -291,6 +300,45 @@ def _read_mass(path):
     except (OSError, StopIteration, ValueError):
         pass
     return last_t, cum, vol, qin_max, worst
+
+
+def _read_series(path):
+    """The mass file as arrays (time s, domain volume m3, inflow m3/s, outflow m3/s)."""
+    t, v, qi, qo = [], [], [], []
+    try:
+        with open(path, encoding="utf-8") as f:
+            next(f)
+            for line in f:
+                p = line.split()
+                if len(p) >= 11:
+                    t.append(float(p[0]))
+                    v.append(float(p[5]))
+                    qi.append(float(p[6]))
+                    qo.append(float(p[8]))
+    except (OSError, StopIteration, ValueError):
+        pass
+    return np.asarray(t), np.asarray(v), np.asarray(qi), np.asarray(qo)
+
+
+def late_inflow(path, t_end_s, tol_cms=0.5):
+    """Water that comes in through the domain edges after the hydrograph has ended, from
+    the mass file. Returns (volume m3, largest inflow m3/s, time of the largest inflow s).
+    Once the point source has stopped, the only inflow left is what a boundary adds, so
+    anything above `tol_cms` is the boundary importing water (LISFLOOD-FP 8.1's FV1 free
+    edge does this where water stands against it)."""
+    t, _v, qi, _qo = _read_series(path)
+    if len(t) < 2:
+        return 0.0, 0.0, 0.0
+    late = t > t_end_s
+    if not late.any():
+        return 0.0, 0.0, 0.0
+    tl, ql = t[late], qi[late]
+    dt = np.diff(np.concatenate([[max(t_end_s, t[~late][-1] if (~late).any() else 0.0)], tl]))
+    vol = float(np.sum(np.clip(ql - tol_cms, 0.0, None) * dt))
+    k = int(np.argmax(ql))
+    if ql[k] <= tol_cms:
+        return 0.0, 0.0, 0.0
+    return vol, float(ql[k]), float(tl[k])
 
 
 def run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
@@ -415,8 +463,32 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "worst_interval_error_pct": round(100.0 * worst / injected, 3) if injected else None,
         "injected_acft": round(injected / 1233.48183754752, 2),
         "in_domain_acft": round(vol / 1233.48183754752, 2),
+        "initial_water_acft": 0.0,
         "velocity_written": vmax_written,
     }
+    if st.initial_depth is not None:
+        init_d = st.initial_depth.data
+        stats["initial_water_acft"] = round(float(np.nansum(np.where(np.isfinite(init_d),
+                                            init_d, 0.0))) * dem.dx ** 2 / 1233.48183754752, 2)
+    # v3.11.0: what the model holds against what was put in. A free FV1 edge can import water
+    # (it grew to 6.5e10 m3 against 9.7e6 m3 injected at Elm River Dam 1); the near-dam refine
+    # checks these before it merges anything. Only meaningful without ambient sources.
+    t_ser, v_ser, _qi, _qo = _read_series(os.path.join(res, name + ".mass"))
+    if injected and len(v_ser):
+        stats["max_domain_volume_ratio"] = round(float(v_ser.max()) / injected, 3)
+    if not st.extra_sources:
+        lv, lq, lt = late_inflow(os.path.join(res, name + ".mass"), float(hydrograph.duration_s))
+        stats["late_boundary_inflow_acft"] = round(lv / 1233.48183754752, 2)
+        stats["late_boundary_inflow_max_cfs"] = round(lq / 0.028316846592, 1)
+        stats["late_boundary_inflow_pct"] = round(100.0 * lv / injected, 2) if injected else None
+        if injected and lv > 0.02 * injected:
+            notes.append(
+                "Water came IN through the domain edges after the breach hydrograph ended "
+                "({:,.0f} ac-ft, {:.1f}% of the {:,.0f} ac-ft injected; largest inflow {:,.0f} "
+                "cfs at {:.1f} h). The edge is bringing water into the model, so the volumes "
+                "and depths are not reliable. Close that edge or use the ACC solver.".format(
+                    lv / 1233.48183754752, 100.0 * lv / injected,
+                    injected / 1233.48183754752, lq / 0.028316846592, lt / 3600.0))
     if stats["max_volume_error_pct"] and stats["max_volume_error_pct"] > 1.0:
         notes.append("LISFLOOD-FP mass-balance error is {}% of the injected volume (limit 1%); "
                      "try a smaller cell size or initial time step.".format(

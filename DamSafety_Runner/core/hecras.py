@@ -48,7 +48,7 @@ import re
 import numpy as np
 
 from .grid import Grid
-from .units import ACFT, CFS, FT
+from .units import ACFT, CFS, FT, US_FT
 
 RAS_INTERVALS_MIN = (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60, 120, 180, 240, 360, 480, 720,
                      1440)
@@ -171,7 +171,7 @@ def write_hydrograph_files(hy, folder, dt_min=DEFAULT_STEP_MIN, stem="HECRAS Bre
         f.write("time_hr,discharge_cfs\n")
         for t, q in zip(t_hr, q_cfs):
             f.write("{:.5f},{:.2f}\n".format(t, q))
-    return {"txt": txt, "csv": csv_path, "info": info}
+    return {"txt": txt, "csv": csv_path, "info": info, "t_hr": t_hr, "q_cfs": q_cfs}
 
 
 # ============================================================================
@@ -413,13 +413,50 @@ def _perp(a, b, length):
     return (mx - px, my - py), (mx + px, my + py)
 
 
+class _ProjectUnits:
+    """HEC-RAS project units taken from the model CRS, mirroring core/hecras_model.Units: a CRS
+    in feet is an English-units model (cfs), a CRS in metres an SI model (m3/s). The geometry
+    coordinates and the flow hydrograph are written in these units, so the declared system must
+    match the CRS or HEC-RAS reads the numbers in the wrong unit (cfs as m3/s, feet as metres)."""
+
+    def __init__(self, si):
+        self.si = bool(si)
+
+    @property
+    def label(self):
+        return "SI Units" if self.si else "English Units"
+
+    @property
+    def len_name(self):
+        return "m" if self.si else "ft"
+
+    @property
+    def q_name(self):
+        return "m3/s" if self.si else "cfs"
+
+    def flow(self, cms):
+        """A discharge in m3/s expressed in the project flow unit."""
+        return float(cms) if self.si else float(cms) / CFS
+
+
+def _project_units(dem_src):
+    """The project units for the generated model, from the DEM CRS linear unit (feet ->
+    English, metres -> SI), mirroring core/hecras_model.crs_units. The run works in a metric CRS
+    and the flow trace is written in that CRS, so SI is used when the unit cannot be read."""
+    u = _raster_linear_unit_m(dem_src)
+    if u is not None and (abs(u - FT) < 1e-6 or abs(u - US_FT) < 1e-6):
+        return _ProjectUnits(False)
+    return _ProjectUnits(True)
+
+
 def write_ras_project(dam_folder, out, hydro, dam, params, model_folder=MODEL_FOLDER,
                       cell_m=100.0, half_width_m=800.0):
     """A HEC-RAS 6 project skeleton: 2D area, mesh, river, terrain clip, plan.
 
-    Coordinates are the CRS of the run DEM. HEC-RAS must be set to SI. RAS Mapper
-    still computes the official mesh HDF on first open; the mesh written here is the
-    same cell size so that compute starts from this grid.
+    Coordinates are the CRS of the run DEM, and the declared unit system (SI or English) follows
+    that CRS's linear unit so the geometry coordinates and the breach hydrograph are both read in
+    the right unit (see `_project_units`). RAS Mapper still computes the official mesh HDF on
+    first open; the mesh written here is the same cell size so that compute starts from this grid.
     """
     line, dam_xy, inflow = _trace_xy(dam_folder, model_folder)
     if len(line) < 2:
@@ -444,6 +481,7 @@ def write_ras_project(dam_folder, out, hydro, dam, params, model_folder=MODEL_FO
         ny = max(1, int(round((ymax - ymin) / cell_m)))
     dem_src = _find_dem(dam_folder, model_folder)
     epsg = _raster_epsg(dem_src) or "EPSG:26914"
+    units = _project_units(dem_src)
     sa = "Flood2D"
     reach = (getattr(dam, "name", None) or name or "River").replace(",", " ")
     mesh = os.path.join(out, "mesh.geojson")
@@ -481,8 +519,14 @@ def write_ras_project(dam_folder, out, hydro, dam, params, model_folder=MODEL_FO
         f.write(xy_block(line) + "\n\n")
         f.write("BC Line Name=Inflow\nBC Line SA={}\nBC Line= 2\n".format(sa) + xy_block(bc_up) + "\n\n")
         f.write("BC Line Name=Downstream\nBC Line SA={}\nBC Line= 2\n".format(sa) + xy_block(bc_dn) + "\n")
-    # unsteady: hydrograph on the inflow line, normal depth downstream
-    block = open(hydro["txt"], encoding="utf-8").read()
+    # unsteady: hydrograph on the inflow line, normal depth downstream. Write the discharge in
+    # the project flow unit (cfs for an English model, m3/s for an SI model) so the values match
+    # the unit system declared in the plan and project files; otherwise HEC-RAS reads cfs as m3/s.
+    q_cfs = hydro.get("q_cfs")
+    if q_cfs is None:                       # a hydro dict without the array: fall back to the CSV
+        q_cfs = [float(ln.split(",")[1]) for ln in
+                 open(hydro["csv"], encoding="utf-8").read().splitlines()[1:] if ln.strip()]
+    block = flow_hydrograph_block([units.flow(float(q) * CFS) for q in q_cfs])
     hours = hydro["info"].get("duration_hr") or hydro["info"].get("hours") or 12
     unsteady = os.path.join(out, name + ".u01")
     with open(unsteady, "w", encoding="utf-8", newline="") as f:
@@ -497,11 +541,11 @@ def write_ras_project(dam_folder, out, hydro, dam, params, model_folder=MODEL_FO
         f.write("Simulation Date=01Jan2024,0000,01Jan2024,{:02d}00\n".format(min(23, int(hours) + 1)))
         f.write("Computation Interval=1MIN\nOutput Interval=15MIN\nMapping Interval=15MIN\n")
         f.write("Geometry File={}.g01\nFlow File={}.u01\n".format(name, name))
-        f.write("SI Units\n")
+        f.write("{}\n".format(units.label))
     prj = os.path.join(out, name + ".prj")
     with open(prj, "w", encoding="utf-8", newline="") as f:
         f.write("Proj Title={}\nCurrent Plan=p01\nDefault Exp/Contr=0.1,0.3\n".format(name))
-        f.write("SI Units\n")
+        f.write("{}\n".format(units.label))
         f.write("Geom File={}.g01\nUnsteady File={}.u01\nPlan File={}.p01\n".format(name, name, name))
     rasmap = os.path.join(out, name + ".rasmap")
     with open(rasmap, "w", encoding="utf-8", newline="") as f:
@@ -511,9 +555,13 @@ def write_ras_project(dam_folder, out, hydro, dam, params, model_folder=MODEL_FO
     terrain, epsg = _terrain_clip(dam_folder, model_folder, out, xmin, ymin, xmax, ymax)
     note = os.path.join(out, "HECRAS_README.txt")
     with open(note, "w", encoding="utf-8", newline="") as f:
-        f.write("CRS: {}. Set HEC-RAS to SI before computing.\n".format(epsg or "the run CRS"))
-        f.write("2D area, cell {:.0f} m, {} cells in mesh.geojson.\n".format(cell_m, nx * ny))
-        f.write("River centerline is the breach flow path. Dam is a breakline. Inflow is the breach hydrograph.\n")
+        f.write("CRS: {} (coordinates in {}). The project is written in {}; keep HEC-RAS in that "
+                "unit system before computing.\n".format(epsg or "the run CRS", units.len_name,
+                                                         units.label))
+        f.write("2D area, cell {:.0f} {}, {} cells in mesh.geojson.\n".format(
+            cell_m, units.len_name, nx * ny))
+        f.write("River centerline is the breach flow path. Dam is a breakline. Inflow is the "
+                "breach hydrograph in {}.\n".format(units.q_name))
         f.write("Open the .prj in HEC-RAS 6, associate terrain.tif, then Compute 2D Flow Areas. "
                 "RAS writes the official mesh HDF; this package cannot do that step.\n")
         f.write("Culverts and bridges: {} from the Runner (the same lines ANUGA uses) or a labeled guess. "
@@ -548,6 +596,19 @@ def _raster_epsg(path):
         return raster_info(path).get("epsg") or ""
     except Exception:
         return ""
+
+
+def _raster_linear_unit_m(path):
+    """Metres per linear unit of the DEM's CRS (about 0.3048 for a feet CRS, 1.0 for metres), or
+    None when it cannot be read without GDAL. Used to choose the HEC-RAS project unit system."""
+    epsg = _raster_epsg(path)
+    if not epsg:
+        return None
+    try:
+        from . import gdal_io
+        return gdal_io.linear_unit_m(epsg)
+    except Exception:
+        return None
 
 
 def _terrain_clip(dam_folder, model_folder, out, xmin, ymin, xmax, ymax):
