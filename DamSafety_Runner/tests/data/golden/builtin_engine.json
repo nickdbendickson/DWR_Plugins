@@ -1,0 +1,21 @@
+{
+ "description": "Frozen regulatory-facing outputs of the deterministic built-in flood engine on a fixed synthetic breach (a 2 km channel, 20 m cells, a 30 cms breach hydrograph for 600 s). Regenerate with: python3 tools/regen_golden_builtin.py. A drift here means a coefficient, units or sign change in the engine moved the flood numbers that feed hazard classification.",
+ "case": "channel_20m_30cms_1200s",
+ "scalars": {
+  "cells": 2000,
+  "cell_size_m": 20.0,
+  "sim_time_hr": 0.33,
+  "peak_inflow_cfs": 1059.0,
+  "injected_acft": 21.89,
+  "in_domain_acft": 15.95,
+  "flooded_acres": 7.7,
+  "max_depth_ft": 2.37,
+  "max_velocity_fps": 6.32,
+  "max_volume_error_pct": 0.0
+ },
+ "raster": {
+  "wet_cells": 156,
+  "max_depth_m": 0.723,
+  "sum_depth_m": 60.396
+ }
+}
