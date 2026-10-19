@@ -809,7 +809,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --check) MODE=check; shift ;;
     --uninstall) MODE=uninstall; shift ;;
-    --write-settings-only) MODE=write; shift ;;
+    --write-settings-only) MODE="write"; shift ;;
     --prefix) need_arg $# "$1"; PREFIX="$2"; shift 2 ;;
     --prefix=*) PREFIX="${1#*=}"; shift ;;
     --lisflood-src) need_arg $# "$1"; LISFLOOD_SRC="$2"; shift 2 ;;
@@ -842,7 +842,7 @@ done
 
 case "$PREFIX" in
   "~") PREFIX="$HOME" ;;
-  "~/"*) PREFIX="$HOME/${PREFIX#\~/}" ;;
+  \~/*) PREFIX="$HOME/${PREFIX#\~/}" ;;
 esac
 case "$PREFIX" in
   /*) ;;
