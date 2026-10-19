@@ -16,6 +16,11 @@ try:
 except ImportError:                    # core/ itself on sys.path
     import hazard as hz
     import nd_hazard as nh
+try:
+    from ..damsuite import structure_flags as SF
+except ImportError:                    # core/ itself on sys.path (tests)
+    import importlib
+    SF = importlib.import_module("damsuite.structure_flags")
 
 RUNNER_ALG = "ndbreach:rundam"
 HAZARD_ALG = "ndbreach:ndhazardclass"
@@ -206,7 +211,12 @@ def _pos(attrs, key):
 
 # ---------------------------------------------------------------------------------- selection
 def selected(attrs, mode, is_selected=False):
-    """(send?, why) for one dam record; `why` says why it is sent or skipped."""
+    """(send?, why) for one dam record; `why` says why it is sent or skipped. 0.17.26: a
+    flagged structure (damsuite/structure_flags.py, e.g. a road fill over backwater) is never
+    sent, whatever the mode."""
+    fl = SF.lookup(attrs.get("dam_id"), attrs.get("nid_id"))
+    if fl:
+        return False, "flagged structure ({}): {}".format(SF.short_ref(fl), SF.note(fl))
     cls, unknown = class_of(attrs)
     if mode == SELECT_ALL:
         return True, "all dams"

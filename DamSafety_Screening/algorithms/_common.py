@@ -10,6 +10,7 @@ from qgis.core import (QgsFields, QgsField, QgsCoordinateReferenceSystem, QgsCoo
 from ..core import terrain, hydrocond, gridutil as gu
 from ..compat import (GEOM_LINE, GEOM_POINT, GEOM_POLYGON)
 from ..damsuite import gdalsafe as GS
+from ..damsuite import structure_flags as SF
 
 ALBERS = "EPSG:5070"
 FT = 0.3048                      # metres per foot (user-facing depths are in feet since 0.11)
@@ -93,6 +94,20 @@ def excluded(f, names):
         return False, ""
     who, when = fval(f, names, "rev_by"), fval(f, names, "rev_date")
     return True, "excluded by review ({}{})".format(who or "reviewer", ", " + str(when)[:10] if when else "")
+
+
+def flagged(f, names):
+    """0.17.26: (entry, note) when the dam is a flagged structure (damsuite/structure_flags.py,
+    e.g. DWR-3161 / ND00597, a road fill over backwater): matched on dam_id, or nid_id.
+    (None, "") otherwise. Tools 5, 6, 7, 7b, 8 and 12 list
+    such a dam with the note instead of computing a breach flood or a breach hazard."""
+    try:
+        e = SF.lookup(fval(f, names, "dam_id"), fval(f, names, "nid_id"))
+    except Exception:                                      # noqa  (a flag check never fails a tool)
+        e = None
+    if not e:
+        return None, ""
+    return e, "flagged structure ({}): {}".format(SF.short_ref(e), SF.note(e))
 
 
 def albers():

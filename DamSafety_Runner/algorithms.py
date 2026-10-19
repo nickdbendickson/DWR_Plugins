@@ -27,6 +27,7 @@ from .core import (workflow, breach as brmod, flood as floodmod, impacts as impm
                    sensitivity as sensmod, cascade as cascmod, estimate as estmod,
                    outlets as outmod, damjson, stoprule, products as prodmod)
 from .core.lisflood import Cancelled, ModelError, check_lisflood
+from .damsuite import structure_flags as sflags
 from .core.anuga_model import check_anuga
 from .core.units import FT, MILE
 
@@ -497,6 +498,11 @@ class _Base(QgsProcessingAlgorithm):
             "reservoir is a LiDAR water surface (Off = the DEM as it is; Auto = only when the "
             "DEM's pool holds far less than the storage curve; the source DEM is never changed)",
             list(reservoir_carve.LABELS), defaultValue=0, optional=True)))
+        # v3.10.27 (#91): reporting only - masked cells stay in the model
+        self._file("WATER_MASK", "Water-body mask for the run report only (polygons of existing "
+                   "lakes and ponds; the report gives the area and velocity figures with and "
+                   "without them; empty = NDBREACH_WATERBODY_MASK, else the dam's or the suite's "
+                   "waterbodies layer when there is one)", optional=True, advanced=True)
         self.addParameter(QgsProcessingParameterEnum("TIER", "Models",
                                                      [t[1] for t in TIERS], defaultValue=0))
         self._bool("FORCE_ANUGA", "Force ANUGA: final results come from ANUGA even when "
@@ -712,6 +718,10 @@ class _Base(QgsProcessingAlgorithm):
                 "HECRAS_CREST") not in (None, "") and not self.parameterAsBool(
                 parameters, "HECRAS_CREST", context)):
             st.hecras_dam_axis = "straight"
+        if self.parameterDefinition("WATER_MASK") is not None:         # v3.10.27 (#91)
+            wm = self._fileparam(parameters, "WATER_MASK", context)
+            if wm:
+                st.water_mask = wm
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0
@@ -1184,6 +1194,9 @@ class _Base(QgsProcessingAlgorithm):
 
 # ============================================================================
 class RunDamAlgorithm(_Base):
+    # 3.10.23: a flagged structure (damsuite/structure_flags.py) is refused unless allowed
+    FLAG_GATE = True
+
     def name(self):
         return "rundam"
 
@@ -1237,7 +1250,12 @@ class RunDamAlgorithm(_Base):
                 "report, manifest and log say what was done. 'Buildings' raises the DEM or "
                 "sets Manning's n inside polygon footprints of the structures layer (points "
                 "cannot be used). Neither has been run against a real LISFLOOD-FP or in a real "
-                "QGIS.")
+                "QGIS.\n\n"
+                "Flagged structures (v3.10.23): a record the suite lists as not a dam to breach "
+                "(damsuite/structure_flags.py, e.g. DWR-3161 / ND00597, a road fill over "
+                "backwater, hazard Low from the DWR record) is refused with the reason; 'Run a "
+                "flagged structure anyway' (advanced) or ALLOW_FLAGGED_STRUCTURE=1 runs it, for "
+                "information only, and the log and run report say so.")
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterString("DAM_ID", "Dam ID (NID ID)"))
@@ -1272,6 +1290,9 @@ class RunDamAlgorithm(_Base):
         self.add_scenario_params(per_dam=True)
         self.add_feature_params()
         self.add_model_params()
+        self._bool("ALLOW_FLAGGED_STRUCTURE", "Run a flagged structure anyway (e.g. a road fill "
+                   "over backwater, docs/Flagged_structures.md; results for information only, "
+                   "the hazard of record stays)", False, advanced=True)
         self.addOutput(QgsProcessingOutputRasterLayer("DEPTH", "Depth (Max)"))
         self.addOutput(QgsProcessingOutputRasterLayer("VELOCITY", "Velocity (Max)"))
         self.addOutput(QgsProcessingOutputRasterLayer("ARRIVAL", "Arrival Time"))
@@ -1302,6 +1323,9 @@ class RunDamAlgorithm(_Base):
                 "NID_ID": (self._str(parameters, "NID_ID", context) or None)
                 if self.parameterDefinition("NID_ID") is not None else None}
         vals, notes, used = damjson.fill(vals, rec)
+        flag_note = self.flag_gate(parameters, context, dam_id, vals.get("NID_ID"), rec)
+        if flag_note:
+            notes.insert(0, flag_note)
         crest_len = o("CREST_LENGTH")
         if crest_len in (None, "") and rec is not None and rec.get("dam_length_ft"):
             crest_len = rec.get("dam_length_ft")
@@ -1327,6 +1351,34 @@ class RunDamAlgorithm(_Base):
             valley_width_ft=o("VALLEY_WIDTH"), crest_length_ft=crest_len,
             name=vals.get("DAM_NAME") or "")
 
+
+    def flag_gate(self, parameters, context, dam_id, nid_id=None, rec=None):
+        """3.10.23: a flagged structure (damsuite/structure_flags.py: e.g. DWR-3161, a road fill
+        over backwater, hazard Low from the DWR record) is not a dam to breach. Refused with
+        the reason unless ALLOW_FLAGGED_STRUCTURE (parameter) or ALLOW_FLAGGED_STRUCTURE=1
+        (environment); allowed, the note returned goes to the log and the run report."""
+        sid = self._str(parameters, "STRUCTURE_ID", context) \
+            if self.parameterDefinition("STRUCTURE_ID") is not None else ""
+        ids = [dam_id, nid_id, sid]
+        if rec is not None:
+            ids += [rec.get("dam_id"), rec.get("nid_id")]
+        entry = None
+        for i, v in enumerate(ids):
+            entry = sflags.lookup(structure_id=v) if i == 2 else sflags.lookup(v)
+            if entry:
+                break
+        if not entry:
+            return ""
+        opt = (self.parameterDefinition("ALLOW_FLAGGED_STRUCTURE") is not None and
+               self.parameterAsBool(parameters, "ALLOW_FLAGGED_STRUCTURE", context))
+        if not self.FLAG_GATE:
+            return "Flagged structure: " + sflags.note(entry) + " (" + sflags.short_ref(entry) + ")"
+        if not sflags.allowed(opt):
+            raise QgsProcessingException(sflags.refusal(
+                entry, "breach run", dam_id, "'Run a flagged structure anyway' "
+                "(ALLOW_FLAGGED_STRUCTURE) or the environment variable {}=1".format(
+                    sflags.ENV_ALLOW)))
+        return sflags.overridden_text(entry, dam_id)
 
     def _crest_from_dam_line(self, parameters, context, work, dam_xy):
         """The crest is the dam line, not the inventory point. Returns (xy, note) or (None, "")."""
@@ -1635,7 +1687,23 @@ class SensitivityAlgorithm(RunDamAlgorithm):
 BATCH_FIELDS = ("Dam", "Folder", "Status", "Scenario", "Final_Model", "Peak_Breach_cfs",
                 "Storage_At_Failure_acft", "Flooded_ac", "Max_Depth_ft", "Max_Velocity_fps",
                 "Latest_Arrival_hr", "Receptors_Flooded", "Runs", "Domain_mi", "Minutes",
-                "Warnings", "Message")
+                "Warnings", "Message", "Structure_Flag", "Hazard_Of_Record",
+                # v3.10.27 (#91): appended after 3.10.23's flag columns, so the columns above keep their places
+                "Flooded_ge_0_1ft_ac", "Flooded_ge_1ft_ac", "Flooded_ge_2ft_ac",
+                "Velocity_P95_fps", "Velocity_P99_fps", "Max_Velocity_Depth_ft",
+                "Flooded_Masked_ac", "Flooded_ge_1ft_Masked_ac")
+
+
+def _batch_metrics(s):
+    """v3.10.27 (#91): the appended batch columns from a run summary ("" when absent)."""
+    keys = (("Flooded_ge_0_1ft_ac", "flooded_acres_ge_0_1ft"),
+            ("Flooded_ge_1ft_ac", "flooded_acres_ge_1ft"),
+            ("Flooded_ge_2ft_ac", "flooded_acres_ge_2ft"),
+            ("Velocity_P95_fps", "velocity_p95_fps"), ("Velocity_P99_fps", "velocity_p99_fps"),
+            ("Max_Velocity_Depth_ft", "max_velocity_depth_ft"),
+            ("Flooded_Masked_ac", "flooded_acres_masked"),
+            ("Flooded_ge_1ft_Masked_ac", "flooded_acres_ge_1ft_masked"))
+    return {col: ("" if s.get(k) is None else s.get(k)) for col, k in keys}
 BATCH_SCENARIOS = [SCENARIOS[0][1], SCENARIOS[1][1],
                    "Per dam: flood if its folder has inputs/pmf_inflow.csv, else sunny day"]
 BATCH_FIELD_KEYS = (("F_ID", "Dam ID field", False), ("F_NAME", "Dam name field", False),
@@ -1650,6 +1718,35 @@ BATCH_FIELD_KEYS = (("F_ID", "Dam ID field", False), ("F_NAME", "Dam name field"
                     ("F_DS", "Downstream slope field (H)", True),
                     ("F_LENGTH", "Crest length field (ft)", True),
                     ("F_POOL", "Normal pool elevation field (ft), flood scenario", True))
+
+
+# 3.10.23: the dams-layer fields that can carry an NID id or a DWR structure id
+FLAG_NID_FIELDS = ("NIDID", "nidid", "nid_id", "NID_ID", "national_id", "national_i",
+                   "FEDERAL_ID", "federal_id")
+FLAG_SID_FIELDS = ("structure_id", "structure_", "STRUCTURE_ID", "STRUCTURE_")
+
+
+def batch_flag(dam_id, feat=None):
+    """The structure_flags entry of a batch dam: its dam ID, else an NID / structure id field
+    of its feature. None when not flagged."""
+    e = sflags.lookup(dam_id)
+    if e or feat is None:
+        return e
+    try:
+        names = feat.fields().names()
+    except Exception:                                     # noqa
+        return None
+    for f in FLAG_NID_FIELDS:
+        if f in names:
+            e = sflags.lookup(nid_id=feat[f])
+            if e:
+                return e
+    for f in FLAG_SID_FIELDS:
+        if f in names:
+            e = sflags.lookup(structure_id=feat[f])
+            if e:
+                return e
+    return None
 
 
 class BatchAlgorithm(_Base):
@@ -1669,7 +1766,10 @@ class BatchAlgorithm(_Base):
                 "For the flood scenario put each dam's inputs in <Dams folder>/<Dam ID>/inputs/: "
                 "pmf_inflow.csv, spillway_rating.csv (optional), baseline_outflow.csv and "
                 "breach_hydrograph.csv (own-hydrograph method only). A dam that fails is "
-                "reported and skipped. With 'classify afterwards' the ND hazard batch "
+                "reported and skipped. A flagged structure (docs/Flagged_structures.md, e.g. a "
+                "road fill over backwater) is not run: Status 'flagged' with the reason, "
+                "Structure_Flag and Hazard_Of_Record (ALLOW_FLAGGED_STRUCTURE=1 in the "
+                "environment runs it anyway). With 'classify afterwards' the ND hazard batch "
                 "classification is run on the dams folder and its result is merged into "
                 "Batch_Breach_Runs.csv.")
 
@@ -1774,6 +1874,21 @@ class BatchAlgorithm(_Base):
             row = dict.fromkeys(BATCH_FIELDS, "")
             row.update({"Dam": dam_id, "Folder": folder})
             fb = _Feedback(feedback, 100.0 * i / n, 100.0 * (i + 1) / n)
+            flag = batch_flag(dam_id, feat)            # 3.10.23: a flagged structure is skipped
+            if flag and not sflags.allowed():
+                row.update({"Status": "flagged", "Message": sflags.refusal(
+                    flag, "breach run", dam_id, "the environment variable {}=1".format(
+                        sflags.ENV_ALLOW))[:500],
+                    "Structure_Flag": sflags.note(flag), "Hazard_Of_Record": "{} ({})".format(
+                        flag.get("hazard"), flag.get("hazard_source"))})
+                feedback.pushInfo("{}: skipped, flagged structure: {}".format(
+                    dam_id, sflags.note(flag)))
+                rows.append(row)
+                continue
+            if flag:
+                row.update({"Structure_Flag": sflags.note(flag) + " (run allowed)",
+                            "Hazard_Of_Record": "{} ({})".format(flag.get("hazard"),
+                                                                 flag.get("hazard_source"))})
             if skip and os.path.exists(os.path.join(folder, workflow.FINAL_NAMES["depth"])):
                 row.update({"Status": "skipped", "Message": "already has Depth (Max).tif"})
                 rows.append(row)
@@ -1844,6 +1959,7 @@ class BatchAlgorithm(_Base):
                                 "Flooded_ac": s["flooded_acres"],
                                 "Max_Depth_ft": s["max_depth_ft"],
                                 "Max_Velocity_fps": s["max_velocity_fps"],
+                                **_batch_metrics(s),
                                 "Latest_Arrival_hr": s["latest_arrival_hr"],
                                 "Receptors_Flooded": s.get("receptors_flooded", ""),
                                 "Runs": s["lisflood_runs"],
@@ -1870,9 +1986,11 @@ class BatchAlgorithm(_Base):
             w.writeheader()
             w.writerows(rows)
         counts = {k: sum(1 for r in rows if r["Status"] == k)
-                  for k in ("done", "failed", "skipped", "cancelled", "no breach")}
+                  for k in ("done", "failed", "skipped", "cancelled", "no breach", "flagged")}
         msg = "{done} run, {failed} failed, {skipped} skipped, {no breach} with no breach".format(
             **counts)
+        if counts["flagged"]:
+            msg += ", {} flagged structure(s) not run".format(counts["flagged"])
         feedback.pushInfo(msg)
         if self.parameterAsBool(parameters, "CLASSIFY", context) and counts["done"] \
                 and not counts["cancelled"] and not feedback.isCanceled():
@@ -2074,6 +2192,8 @@ class HydrographAlgorithm(_Base):
 
 # ============================================================================
 class EstimateAlgorithm(RunDamAlgorithm):
+    FLAG_GATE = False          # a time estimate is not a breach run: the flag is only noted
+
     def name(self):
         return "estimate"
 

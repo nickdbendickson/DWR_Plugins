@@ -37,9 +37,8 @@ For each structure that either rule set counts as habitable and flooded:
   nd_hazard.road_class / rail_class from ND's own depths and AADT / train
   data) and a one-line verdict.
 
-Output: <outputs>/QA/Rules_Comparison.csv and .html. Two entry points:
-compare_result(res) with the pipeline result dict (the dialog) and
-compare_folder(outputs_folder) from the files a run wrote (Processing). Not
+Output: <outputs>/QA/Rules_Comparison.csv and .html, from
+compare_folder(outputs_folder) with the files a run wrote (Processing). Not
 yet run in a real QGIS.
 """
 
@@ -828,42 +827,6 @@ def _raster_transform(struct_crs, raster_path):
         return fn
     except Exception:
         return None
-
-
-def compare_result(res, scenario=None, method=METHOD_CURVES, chart_file=None, nh_path=None,
-                   wet_ft=0.1, out_folder=None, judgment_as_probable=None, write=True,
-                   use_nd_types=False, depth_path=None, vel_path=None):
-    """Comparison for a pipeline result dict (run_classification): structures of
-    the governing breach scenario (or `scenario`), its depth / velocity
-    rasters, ND's roads / railroads and dam class. Writes outputs/QA/
-    Rules_Comparison.csv / .html unless write=False."""
-    results = res.get("results") or {}
-    name = scenario or res.get("governing") or (next(iter(results)) if results else None)
-    sres = results.get(name) or {}
-    sc = sres.get("scenario")
-    depth_path = depth_path or (getattr(sc, "depth", None) if sc is not None else None)
-    vel_path = vel_path or (getattr(sc, "velocity", None) if sc is not None else None)
-    snap = sres.get("snap") or {}
-    recs = []
-    for rec in res.get("structs") or []:
-        r = dict(rec)
-        r.update(snap.get(rec.get("id"), {}))         # this scenario's values
-        recs.append(r)
-    run = res.get("run")
-    cfg = getattr(run, "cfg", None) or {}
-    judge = cfg.get("judgment_as_probable", True) if judgment_as_probable is None \
-        else bool(judgment_as_probable)
-    if out_folder is None and write:
-        base = getattr(run, "out", None) or cfg.get("output_folder")
-        out_folder = os.path.join(base, SUBDIR_QA) if base else None
-    nd = sres.get("nd") or res.get("nd") or {}
-    return run_compare(recs, depth_path, vel_path, nd_class=nd.get("cls", ""), judge=judge,
-                       method=method, chart_file=chart_file, nh_path=nh_path, wet_ft=wet_ft,
-                       roads=sres.get("roads") or (), rails=sres.get("rails") or (),
-                       out_folder=out_folder if write else None,
-                       dam_name=res.get("dam_name") or "", source="scenario '{}'".format(name),
-                       one_d=bool(cfg.get("one_d")), use_nd_types=use_nd_types,
-                       transform=_raster_transform(res.get("crs"), depth_path))
 
 
 def _find_structures_file(out_folder, name=None):

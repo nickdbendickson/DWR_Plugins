@@ -19,4 +19,9 @@ def window_shell_with_real_qt_offscreen():
     if "No module named 'qgis'" in out:
         print("      (skipped: no real QGIS Python here)")
         return
+    if "No module named 'PyQt5'" in out and "from PyQt5" in out:
+        # QGIS's Python files are on the path but this interpreter has no PyQt5
+        # (venv_scipy); the window shell needs the real Qt bindings
+        print("      (skipped: this Python has no PyQt5)")
+        return
     assert r.returncode == 0 and "all checks passed" in out, out[-3000:]

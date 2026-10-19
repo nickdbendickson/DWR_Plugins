@@ -105,7 +105,9 @@ class EstimateRuntime(QgsProcessingAlgorithm):
             dam_id = str(get(f, "dam_id") or f.id())
             d = {"dam_id": dam_id}
             tri = str(get(f, "tri_result") or "")
-            if cm.excluded(f, names)[0]:
+            if cm.flagged(f, names)[0]:
+                d["skip"] = cm.flagged(f, names)[1]
+            elif cm.excluded(f, names)[0]:
                 d["skip"] = "excluded by review"
             elif cm.no_flood(f, names)[0]:
                 d["skip"] = "no breach flood (tool 16)"
