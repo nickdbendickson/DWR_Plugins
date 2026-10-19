@@ -5,9 +5,11 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.39
+version=2.18.40
 author=N.D. Bendickson
 changelog=
+    2.18.40 - 2026-10-19
+      * Suite hand-off: the window has the refresh hook the Dam suite home calls after it hands a dam over (suite_home.point_window_at). Handing over the dam the window already showed (opened before the Runner finished, or restored from the last session) left the raster boxes empty, since the unchanged dam folder fired no textChanged; the empty boxes are now filled from the Runner's Depth (Max) / Velocity (Max) / Arrival Time rasters. Rasters chosen by hand are kept, nothing runs by itself, nothing during a run. No result changes. tests/test_suite_handoff.py.
     2.18.39 - 2026-10-19 (PR #94, Claude's audit-fix campaign)
       * M3 (default changes): homes that come only from the National Structure Inventory (NSI) are no longer counted as habitable unless a parcel (fema_parcel) supports them; this can lower a dam's hazard class.
       * H4 (default changes): collapse_dwellings removed, so buildings sharing one 911 / street address each keep their occupants (mobile-home parks, apartments, farmsteads); PAR can go up.

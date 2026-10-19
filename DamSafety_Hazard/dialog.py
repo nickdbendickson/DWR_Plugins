@@ -586,6 +586,29 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self._update_button_states()
         self._refresh_dam_record()                     # v2.10: dam.json status line
 
+    def refresh(self, *args):
+        """2.18.40: the hook the Dam suite home calls after it hands a dam over
+        (suite_home.point_window_at fills dam_folder_edit, then tries "_changed" / "refresh").
+        Handing over the dam the window already shows (opened before the Runner finished, or
+        restored from the last session) fires no textChanged, so the rasters the Runner has
+        written since were never looked for. Fills the empty raster boxes only (rasters chosen
+        by hand stay), never runs anything, never raises. Returns the number of boxes filled."""
+        try:
+            folder = self.config_dam_folder
+            if self._busy or self._restoring or not folder:
+                return 0
+            n = self._auto_fill_rasters(force=False)
+            if n:
+                self._update_status("Dam folder: {} - {} raster(s) found; Check inputs, then "
+                                    "Classify".format(os.path.basename(folder.rstrip("/\\"))
+                                                      or folder, n), True)
+            self._update_button_states()
+            self._refresh_dam_record()
+            return n
+        except Exception as e:                                   # noqa - called by the suite home
+            log_message("Hand-off refresh not completed: {}".format(e))
+            return 0
+
     def _drop_other_folder_rasters(self, old, new):
         """Clear the raster boxes that do not belong to the new dam folder: every box the
         auto-fill filled from another folder, and every hand-typed path outside `new`.
