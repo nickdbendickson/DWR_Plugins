@@ -288,7 +288,17 @@ def test_hecras_p0_dam_line_trimmed_to_dam_json_length():
     d = tempfile.mkdtemp()
     try:
         _run(d, dam_json_len_ft=1500.0)
-        r = hm.build_model(d, out_folder=os.path.join(d, "model"))
+        # v3.10.22: along the crest (the default) the connection is the dam length measured
+        # along the crest (within 1 %: the breach span is straightened)
+        rc = hm.build_model(d, out_folder=os.path.join(d, "crest"))
+        cl = np.asarray(rc["model"].conn_line, float)
+        Lc = float(np.hypot(*np.diff(cl, axis=0).T).sum())
+        assert rc["info"]["dam_axis"]["used"] == "crest", rc["info"]["dam_axis"]
+        assert abs(Lc - 1500.0) < 15.0 and abs(rc["info"]["dam_line"] - Lc) < 1.0, (Lc, rc["info"])
+        assert any("dam.json dam_length_ft" in n for n in rc["notes"]), rc["notes"]
+        # the straight line: the dam length exactly
+        r = hm.build_model(d, out_folder=os.path.join(d, "model"),
+                           options={"dam_axis": "straight"})
         m, info = r["model"], r["info"]
         L = float(np.hypot(*np.subtract(m.conn_line[-1], m.conn_line[0])))
         assert abs(L - 1500.0) < 1.0 and abs(info["dam_line"] - 1500.0) < 1.0, (L, info)

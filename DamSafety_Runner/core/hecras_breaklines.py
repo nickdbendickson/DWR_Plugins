@@ -237,24 +237,57 @@ def _forward(ln, nrm, h):
     return ln[keep]
 
 
+def _poly_frame(line, xy):
+    """v3.10.22: (station of xy, unit tangent there) on a polyline (2 points: the straight
+    line, as before)."""
+    p = np.asarray(line, float).reshape(-1, 2)
+    if len(p) == 2:
+        L = float(np.hypot(*(p[1] - p[0])))
+        u = (p[1] - p[0]) / (L or 1.0)
+        return float(np.dot(np.asarray(xy, float) - p[0], u)), u
+    s = station_of(p, xy)
+    c = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p, axis=0).T))]
+    k = int(np.clip(np.searchsorted(c, s, side="right") - 1, 0, len(p) - 2))
+    t = p[k + 1] - p[k]
+    return s, t / (np.hypot(*t) or 1.0)
+
+
+def _poly_points(line, st):
+    """v3.10.22: points at stations st along a polyline and the unit tangents there."""
+    p = np.asarray(line, float).reshape(-1, 2)
+    c = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p, axis=0).T))]
+    st = np.asarray(st, float)
+    if len(p) == 2:
+        u = (p[1] - p[0]) / (c[-1] or 1.0)
+        return p[0][None, :] + u[None, :] * st[:, None], np.repeat(u[None, :], len(st), 0)
+    k = np.clip(np.searchsorted(c, st, side="right") - 1, 0, len(p) - 2)
+    t = p[k + 1] - p[k]
+    t /= np.maximum(np.hypot(*t.T), 1e-12)[:, None]
+    return p[k] + t * (st - c[k])[:, None], t
+
+
 def plan(perimeter, cell, dam_line, downstream, breach=None, path=None, spacing=None):
-    """The breaklines of the model. dam_line (A, B): the dam connection; downstream: unit
-    vector into the 2D area; breach: (centre on the dam line, half width of the cut, cut
+    """The breaklines of the model. dam_line (A, B), or a polyline from A to B (v3.10.22, the
+    crest): the dam connection; downstream: unit vector into the 2D area at the breach;
+    breach: (centre on the dam line, half width of the cut, cut
     length[, half the breach bottom width, default the cut's]) or None; path: the run's flow path or None; spacing: {'dam', 'breach', 'channel'}
     near spacings (default GRID_NEAR_FRAC x cell). Returns {'dam': {...} or None, 'lines':
     [{'name', 'line', 'near', 'far', 'kind'}], 'skipped': [why]}."""
     cell = float(cell)
     sp = {k: GRID_NEAR_FRAC * cell for k in ("dam", "breach", "channel")}
     sp.update({k: float(v) for k, v in (spacing or {}).items() if v})
-    A, B = (np.asarray(v, float) for v in dam_line)
+    dline = np.asarray(dam_line, float).reshape(-1, 2)
+    A, B = dline[0], dline[-1]
     d = np.asarray(downstream, float)
     d = d / (np.hypot(*d) or 1.0)
-    out = {"dam": {"line": [A.tolist(), B.tolist()], "near": sp["dam"], "far": cell},
+    out = {"dam": {"line": dline.tolist(), "near": sp["dam"], "far": cell},
            "lines": [], "skipped": []}
     ab = (B - A) / (np.hypot(*(B - A)) or 1.0)
     cut_len = 0.0
     if breach is not None:
         C, cw, cut_len = np.asarray(breach[0], float), float(breach[1]), float(breach[2])
+        if len(dline) > 2:
+            ab = _poly_frame(dline, C)[1]           # the crest's own direction at the breach
         # v2d: the dam row is centred on the breach's own bottom corners (breach[3], half the
         # bottom width), which can be inside the cut when the cut is widened to a terrain cell
         rh = float(breach[3]) if len(breach) > 3 and breach[3] else cw
@@ -276,7 +309,7 @@ def plan(perimeter, cell, dam_line, downstream, breach=None, path=None, spacing=
             out["skipped"].append("breach: the cut is too short for breaklines")
     if path is not None and len(path) >= 2:
         h = max(sp["channel"], CHANNEL_STRIP_FRAC * cell)
-        c = channel_centre(path, perimeter, [A, B], max(cut_len, 0.0) + h, cell, h)
+        c = channel_centre(path, perimeter, dline, max(cut_len, 0.0) + h, cell, h)
         if len(c) >= 2:
             mid, nrm = strip_rows(c)
             for nm, off in (("Channel left", 0.5 * h), ("Channel right", -0.5 * h)):
@@ -398,26 +431,32 @@ def enforce(points, perimeter, bl):
     dam = bl.get("dam")
     items = []
     if dam:
-        A, B = (np.asarray(v, float) for v in dam["line"])
+        dl = np.asarray(dam["line"], float).reshape(-1, 2)
+        A, B = dl[0], dl[-1]
         s = float(dam["near"])
-        L = float(np.hypot(*(B - A)))
+        L = float(length(dl)) if len(dl) > 2 else float(np.hypot(*(B - A)))
         n = max(1, int(round(L / s)))
-        u = (B - A) / (L or 1.0)
+        u = (B - A) / (float(np.hypot(*(B - A))) or 1.0)
         # the 2D area's side of the dam line: the normal pointing inside
-        nrm = np.array([-u[1], u[0]])
-        mid = A + 0.5 * (B - A)
+        sgn = 1.0
+        mid, um = _poly_points(dl, [0.5 * L])
+        mid, um = mid[0], um[0]
+        nrm = np.array([-um[1], um[0]])
         if not inside(np.array([mid[0] + nrm[0] * s]), np.array([mid[1] + nrm[1] * s]),
                       perimeter)[0]:
-            nrm = -nrm
+            sgn = -1.0
         if dam.get("breach"):
-            tt, ss = dam_stations(L, s, float(np.dot(np.asarray(dam["breach"]["centre"], float)
-                                                    - A, u)),
+            tt, ss = dam_stations(L, s, _poly_frame(dl, dam["breach"]["centre"])[0],
                                   float(dam["breach"]["half"]), float(dam["breach"]["near"]))
         else:
             tt = (np.arange(n) + 0.5) * (L / n)
             ss = np.full(n, s)
-        row = A[None, :] + u[None, :] * tt[:, None] + nrm[None, :] * 0.5 * ss[:, None]
-        items.append(([A, B], s, float(ss.min()), row))
+        # v3.10.22: along a polyline (the crest), each point half its cell inside, on the normal
+        # of its own segment
+        q, tq = _poly_points(dl, tt)
+        nq = sgn * np.column_stack([-tq[:, 1], tq[:, 0]])
+        row = q + nq * 0.5 * ss[:, None]
+        items.append((dl, s, float(ss.min()), row))
     for ln in bl.get("lines", []):
         if ln.get("kind") == "channel" and bl.get("strip"):
             continue
@@ -454,10 +493,18 @@ def enforce(points, perimeter, bl):
         dam_side = dam["line"] if dam else None
         if dam_side is not None:
             # from the dam line itself, so the cut's first metres are covered too
-            A_, B_ = (np.asarray(v, float) for v in dam_side)
-            u_ = (B_ - A_) / (np.hypot(*(B_ - A_)) or 1.0)
-            pa = A_ + u_ * float(np.dot(a_[0] - A_, u_))
-            pb = A_ + u_ * float(np.dot(b_[0] - A_, u_))
+            ds_ = np.asarray(dam_side, float).reshape(-1, 2)
+            if len(ds_) == 2:
+                A_, B_ = ds_
+                u_ = (B_ - A_) / (np.hypot(*(B_ - A_)) or 1.0)
+                pa = A_ + u_ * float(np.dot(a_[0] - A_, u_))
+                pb = A_ + u_ * float(np.dot(b_[0] - A_, u_))
+            else:
+                # v3.10.22: the crest is straight across the breach: its segment's frame there
+                s_, u_ = _poly_frame(ds_, 0.5 * (a_[0] + b_[0]))
+                c_ = _poly_points(ds_, [s_])[0][0]
+                pa = c_ + u_ * float(np.dot(a_[0] - c_, u_))
+                pb = c_ + u_ * float(np.dot(b_[0] - c_, u_))
             quad = np.vstack([pa, a_[-1], b_[-1], pb])
         inq = keep & inside(pts[:, 0], pts[:, 1], quad)
         keep[inq] = False
@@ -773,8 +820,13 @@ def fix_faces(points, perimeter, protected=None, clip=None, max_faces=MAX_FACES,
             sp = _local_spacing(pts)
             for vi, a, b in nv:
                 tol = max(PERIM_VERTEX_FRAC * sp[a], vmin)
+                # v3.10.22: when both are protected (two dam-row points meeting at a crest
+                # vertex of a polyline dam line), the corner's own point moves anyway: 3
+                # tolerances is a small fraction of a row cell, and a corner on a cell edge
+                # stops HEC-RAS ('face errors detected on the perimeter of the mesh')
+                both = bool(prot[a] and prot[b])
                 for q, sign in ((a, 1.0), (b, -1.0)):
-                    if prot[q]:
+                    if prot[q] and not (both and q == a):
                         continue
                     dv = per[vi] - pts[q]
                     L = float(np.hypot(*dv))

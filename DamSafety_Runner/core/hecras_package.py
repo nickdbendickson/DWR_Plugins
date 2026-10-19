@@ -268,6 +268,8 @@ def build_package(dam_folder, out_root=None, dt_min=hecras.DEFAULT_STEP_MIN, crs
                           if k != "gmsh_stats"},
            "plugin_reference": r["info"].get("plugin_reference"),
            "breaklines": r["info"].get("breaklines"),
+           "dam_axis": {k: v for k, v in (r["info"].get("dam_axis") or {}).items()
+                        if k != "raw_line"},
            "breach_shape_note": hm.BREACH_SHAPE_NOTE,
            "files": [{"path": p, "bytes": os.path.getsize(os.path.join(folder, p)),
                       "sha256": _sha256(os.path.join(folder, p))} for p in files]}

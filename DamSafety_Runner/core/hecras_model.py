@@ -1171,7 +1171,15 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             "warmup_hold": True,                # spillway: hold the pool during the warm-up
             "tolerances": "default",            # or 'tight', or a dict (TOLERANCES keys)
             "mesh_seeds": None,                 # None: NDBREACH_HECRAS_MESH_SEEDS, else 'grid'
-            "breaklines": True}                 # dam, breach and channel breaklines (in the points)
+            "breaklines": True,                 # dam, breach and channel breaklines (in the points)
+            # v3.10.22: the dam line along the crest traced from the DEM ('crest') or the
+            # straight line through the dam point across the flow ('straight', the old line);
+            # the breach centre along it: breach_at ('auto' = the deepest dam section, 'toe',
+            # 'lowest_crest', 'inflow' = the run's inflow point projected, the old rule) or
+            # breach_station_ft (from the dam line's first end); dam_line_xy: a dam line of
+            # your own (model CRS), which wins over the trace (see hecras_crest)
+            "dam_axis": "crest", "breach_at": "auto", "breach_station_ft": None,
+            "dam_line_xy": None}
 
 
 def _ogr():
@@ -2137,6 +2145,139 @@ def record_run_report(report_path, key, value, log=None):
             log("Could not record {} in {}: {}".format(key, report_path, e))
 
 
+def dam_axis_of(options=None):
+    """v3.10.22: 'crest' (default) or 'straight' from the option dam_axis."""
+    from . import hecras_crest as hcrest
+    v = (options or {}).get("dam_axis")
+    v = "crest" if v in (None, "") else str(v).strip().lower()
+    if v not in hcrest.DAM_AXES:
+        raise HecRasModelError("dam_axis must be one of {} (got {!r})".format(
+            ", ".join(hcrest.DAM_AXES), v))
+    return v
+
+
+def _dam_axis_rows(ax, L):
+    """README rows for the dam line along the crest (or why it is straight)."""
+    if not ax:
+        return []
+    if ax.get("used") != "crest":
+        return ["| Dam line along the crest | not used | {} |".format(
+            "the trace failed: " + ax["why"] + " (the straight line is used)" if ax.get("why")
+            else "dam_axis='straight' (the straight line across the flow)")]
+    return ["| Breach location | station {:,.1f} {} | {}; the crest there runs {:.0f} degrees "
+            "off the straight line; the breach is cut at right angles to the crest (toward "
+            "bearing {:.0f}) |".format(ax.get("final_breach_station", ax.get("breach_station", 0)),
+                                       L, ax.get("breach_how", ""), ax.get("skew_deg") or 0.0,
+                                       (ax.get("breach_frame") or {}).get(
+                                           "downstream_bearing_deg",
+                                           ax.get("downstream_bearing_deg") or 0.0))]
+
+
+def crest_dam_line(dem_path, srs, zf, units, dam, params, P, d, n_left, cell, tcell, o,
+                   user_line=None, inflow_m=None, dam_folder=None):
+    """v3.10.22: the dam line along the embankment crest (model units, from A, the left end
+    looking downstream, to B), the breach centre along it and how both were found. A user's
+    dam line (user_line, model CRS) wins over the trace. Raises hecras_crest.CrestTraceError
+    when the crest cannot be traced (build_model then uses the straight line)."""
+    from . import hecras_crest as hc
+    axis = -np.asarray(n_left, float)                  # A -> B
+    ft = units.from_ft(1.0)
+    top_u = units.from_ft(dam.top_of_dam_ft)
+    H = units.from_ft(dam.dam_height_ft)
+    toe = units.from_ft((dam.ds_slope_h or 3.0) * dam.dam_height_ft +
+                        0.5 * (dam.crest_width_ft or 20.0))
+    want_ft, want_src = dam_length_ft(dam, dam_folder, o.get("dam_length_ft"))
+    cap_ft = float(o.get("max_dam_line_ft") or DAM_LINE_CAP_FT)
+    max_len = units.from_ft(want_ft) if want_ft else units.from_ft(cap_ft)
+    step = max(float(tcell), units.from_ft(5.0))
+    pad = max_len + 2.0 * toe + 4.0 * step + cell
+    while (2 * pad / step) ** 2 > 6e6:
+        step *= 1.5
+    b = (P[0] - pad, P[1] - pad, P[0] + pad, P[1] + pad)
+    za, zx0, zy0 = _warp(dem_path, srs, step, bounds=b, alg="bilinear")
+    za = za * float(zf) / units.L
+
+    def sample(xy, za=za, zx0=zx0, zy0=zy0, c=step):
+        return _sample(za, zx0, zy0, c, xy)
+
+    gap = max(2.0 * cell, units.from_ft(DAM_LINE_GAP_FT))
+    rec = {"asked": "crest", "step": round(step, 2), "dam_length": round(max_len, 1),
+           "dam_length_source": want_src or "the cap max_dam_line_ft ({:g} ft)".format(cap_ft),
+           "dam_length_on_record": bool(want_ft)}
+    if user_line is not None and len(user_line) >= 2:
+        line = np.asarray(user_line, float).reshape(-1, 2)
+        if (line[-1] - line[0]) @ axis < 0:
+            line = line[::-1]
+        line = hc.min_spacing(line, 0.5 * cell)
+        rec.update(source="your dam line", raw_points=int(len(user_line)))
+        p0 = line[int(np.argmin(np.hypot(*(line - P).T)))]
+    else:
+        tr = hc.trace(sample, P, axis, top_u, H, step, toe, max_len, gap, ft=ft)
+        line = hc.tidy(tr["line"], step, cell, keep_len=max_len, centre=tr["p0"])
+        p0 = tr["p0"]
+        rec.update(source="traced from the DEM", raw_points=int(len(tr["line"])),
+                   raw_length=round(float(hc.cumlen(tr["line"])[-1]), 1),
+                   snap=round(tr["snap"], 2), tol=round(tr["tol"], 2), prom=round(tr["prom"], 2),
+                   ends={k: {"stop": v[0], "walked": round(v[1], 1)} for k, v in tr["ends"].items()},
+                   raw_line=[[round(float(x), 2), round(float(y), 2)] for x, y in tr["line"]])
+    L = float(hc.cumlen(line)[-1])
+    if L < 2.0 * cell:
+        raise hc.CrestTraceError("the dam line along the crest is only {:,.0f} {} long".format(
+            L, units.len_name))
+    pb = breach_values(dam, params, units, 0.0)[0]
+    half_b = 0.5 * float(pb["bottom_width"])
+    half_t = half_b + float(pb["left_slope"]) * max(0.0, top_u - float(pb["bottom_elev"]))
+    tol = max(units.from_ft(3.0), 0.1 * H)
+    method = str(o.get("breach_at") or "auto").strip().lower()
+    if method not in hc.BREACH_AT:
+        raise HecRasModelError("breach_at must be one of {} (got {!r})".format(
+            ", ".join(hc.BREACH_AT), method))
+    detail = {}
+    if o.get("breach_station_ft") is not None:
+        sc = min(max(units.from_ft(float(o["breach_station_ft"])), 0.0), L)
+        how, method = "chosen (breach_station_ft)", "station"
+    elif method == "inflow" and inflow_m is not None:
+        sc = hc.station_of(line, inflow_m)
+        how = "the run's breach inflow point projected onto the dam line"
+    else:
+        if method == "inflow":
+            method = "auto"
+        sc, how, detail = hc.pick_breach(line, sample, toe, cell, half_b, half_t, top_u, tol,
+                                         method, step)
+    bxy = hc.point_at(line, sc)
+    # straight across the breach (its top width plus half a cell each side), so that the
+    # breach is a rectangle in the crest's own frame there
+    hw = half_t + 0.5 * cell
+    s0, s1 = sc - hw, sc + hw
+    cv = hc.cumlen(line)
+    # a vertex just outside the span becomes its end (no sliver segment beside the breach)
+    near0 = [c for c in cv[1:-1] if s0 - 0.5 * cell < c <= s0]
+    near1 = [c for c in cv[1:-1] if s1 <= c < s1 + 0.5 * cell]
+    s0 = min(near0) if near0 else s0
+    s1 = max(near1) if near1 else s1
+    line2 = hc.straighten(line, s0, s1)
+    ins = [i for i, q in enumerate(line2) if min(np.hypot(*(q - hc.point_at(line, s0))),
+                                                  np.hypot(*(q - hc.point_at(line, s1)))) < 1e-6]
+    line2 = hc.min_spacing(line2, 0.5 * cell, keep=ins)
+    if not hc.monotonic(line2, axis):
+        raise hc.CrestTraceError("the dam line along the crest turns back across the valley "
+                                 "(it does not advance from one end to the other)")
+    sc = hc.station_of(line2, bxy)
+    span_xy = (hc.point_at(line, s0), hc.point_at(line, s1))
+    rec["straight_span"] = [round(hc.station_of(line2, q), 1) for q in span_xy]
+    t_b = hc.tangent_at(line2, sc)
+    skew = hc.angle_deg(t_b, axis)
+    rec.update(used="crest", line=[[round(float(x), 2), round(float(y), 2)] for x, y in line2],
+               vertices=int(len(line2)), length=round(float(hc.cumlen(line2)[-1]), 1),
+               breach_station=round(sc, 1), breach_xy=[round(float(v), 2) for v in bxy],
+               breach_how=how, breach_method=method, breach_detail=detail,
+               skew_deg=round(skew, 1), crest_bearing_deg=round(hc.bearing_deg(t_b), 1),
+               straight_bearing_deg=round(hc.bearing_deg(axis), 1),
+               downstream_bearing_deg=round(hc.bearing_deg(hc.left_normal(t_b)), 1),
+               p0=[round(float(v), 2) for v in p0])
+    return line2, sc, rec
+
+
 def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=None,
                 log=None, progress=None):
     """Builds the HEC-RAS model of a finished run in `out_folder` (default
@@ -2168,6 +2309,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     from . import hecras_seeds as hseeds
     from . import hecras_breaklines as hbl
     seeds_mode = hseeds.mode_of(o)               # v3.10.22: raises on a bad value, before work
+    from . import hecras_crest as hcrest
+    axis_mode = dam_axis_of(o)                   # v3.10.22: raises on a bad value, before work
     dem_ds = GS.open_raster(dem_path)
     dem_wkt = dem_ds.GetProjection()
     dem_gt = dem_ds.GetGeoTransform()
@@ -2337,7 +2480,54 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         lo, hi = (units.from_ft(25.0), units.from_ft(500.0))
         cell = nice_cell(min(hi, max(lo, math.sqrt(area_u2 / float(o["target_cells"])))))
     dom = dom.Simplify(cell / 4.0)
-    # cut straight along the dam line, keep the downstream part
+    # v3.10.22: the dam line along the embankment crest, traced from the DEM (dam_axis='crest'),
+    # else (or when the trace fails) the straight line through the dam point across the flow
+    crest_line, crest_sc, crest_rec = None, None, {"asked": axis_mode, "used": "straight"}
+    if axis_mode == "crest":
+        zf_c = _z_factor(report, dem_path)[0]
+        dsrs_c = srs_from(dem_wkt) if dem_wkt else srs
+        tcell_c = float(o["terrain_cell"] or 0.0) or abs(dem_gt[1]) * (
+            dsrs_c.GetLinearUnits() if dsrs_c.IsProjected() else 111320.0) / units.L
+        user_line = None
+        if o.get("dam_line_xy"):
+            user_line = np.asarray(o["dam_line_xy"], float).reshape(-1, 2)
+        elif report.get("crest_line_xy") and to_model is not None:
+            user_line = to_model(report["crest_line_xy"])
+        try:
+            crest_line, crest_sc, crest_rec = crest_dam_line(
+                dem_path, srs, zf_c, units, dam, params, P, d, n_left, cell, tcell_c, o,
+                user_line=user_line, inflow_m=inflow_m, dam_folder=dam_folder)
+            # the part inside the 2D area (the flooded area plus its buffer) only
+            cl_geom = dom.Intersection(_line([tuple(q) for q in crest_line]))
+            pieces = []
+            for g_ in ([cl_geom] if ogr.GT_Flatten(cl_geom.GetGeometryType()) == ogr.wkbLineString
+                       else [cl_geom.GetGeometryRef(i) for i in range(cl_geom.GetGeometryCount())]):
+                if g_ is not None and g_.GetPointCount() >= 2:
+                    pieces.append(np.asarray(g_.GetPoints(), float)[:, :2])
+            full_c = float(hcrest.cumlen(crest_line)[-1])
+            bxy_c = hcrest.point_at(crest_line, crest_sc)
+            if not pieces:
+                raise hcrest.CrestTraceError("the traced crest is outside the 2D area")
+            piece = min(pieces, key=lambda q: float(point_segment_distance(
+                np.array([bxy_c[0]]), np.array([bxy_c[1]]), q)[0]))
+            if float(hcrest.cumlen(piece)[-1]) < full_c - 0.5 * cell:
+                if (piece[-1] - piece[0]) @ (crest_line[-1] - crest_line[0]) < 0:
+                    piece = piece[::-1]
+                notes.append("Dam line: the traced crest reaches beyond the 2D area; {:,.0f} of "
+                             "its {:,.0f} {} are used.".format(float(hcrest.cumlen(piece)[-1]),
+                                                               full_c, units.len_name))
+                crest_line = hcrest.min_spacing(piece, 0.5 * cell)
+                crest_sc = hcrest.station_of(crest_line, bxy_c)
+                crest_rec["clipped_to_2d_area"] = True
+        except hcrest.CrestTraceError as e:
+            crest_line, crest_sc = None, None
+            crest_rec = {"asked": "crest", "used": "straight", "why": str(e),
+                         "fallback": True}
+            notes.append("WARNING: the dam line could not be traced along the crest ({}); the "
+                         "straight line through the dam point across the flow is used "
+                         "(dam_axis='straight'). Check the breach location and the dam line in "
+                         "RAS Mapper, or give a dam line (dam_line_xy).".format(e))
+            log(notes[-1])
     span = 4.0 * math.sqrt(max(area_u2, 1.0)) + 10 * side
     cut = _line([P - n_left * span, P + n_left * span])
     inter = dom.Intersection(cut)
@@ -2358,10 +2548,32 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     B = P + n_left * ta
     eps = cell * 0.01
     up_len = span
-    cutter = _polygon([A + n_left * eps, B - n_left * eps, B - n_left * eps - d * up_len,
-                       A + n_left * eps - d * up_len])
+    edge_line = None
+    if crest_line is not None:
+        # v3.10.22: cut along the crest, extended straight past its ends across the valley;
+        # everything upstream of it (the pool) is left out of the 2D area
+        ext = hcrest.extend(crest_line, span, -n_left)
+        up2 = 2.0 * span
+        cutter = _polygon([tuple(q) for q in ext] + [tuple(ext[-1] - d * up2),
+                                                      tuple(ext[0] - d * up2)])
+        bxy_c = hcrest.point_at(crest_line, crest_sc)
+        probe = bxy_c + hcrest.left_normal(hcrest.tangent_at(crest_line, crest_sc)) * \
+            max(2 * acell, cell)
+        ei = dom.Intersection(_line([tuple(q) for q in ext]))
+        epieces = []
+        for g_ in ([ei] if ogr.GT_Flatten(ei.GetGeometryType()) == ogr.wkbLineString
+                   else [ei.GetGeometryRef(i) for i in range(ei.GetGeometryCount())]):
+            if g_ is not None and g_.GetPointCount() >= 2:
+                epieces.append(np.asarray(g_.GetPoints(), float)[:, :2])
+        if epieces:
+            edge_line = min(epieces, key=lambda q: float(point_segment_distance(
+                np.array([bxy_c[0]]), np.array([bxy_c[1]]), q)[0]))
+        A, B = crest_line[0].copy(), crest_line[-1].copy()
+    else:
+        cutter = _polygon([A + n_left * eps, B - n_left * eps, B - n_left * eps - d * up_len,
+                           A + n_left * eps - d * up_len])
+        probe = P + d * max(2 * acell, cell)
     down = dom.Difference(cutter)
-    probe = P + d * max(2 * acell, cell)
     parts = _rings(down)
     if not parts:
         raise HecRasModelError("nothing of the 2D area is left below the dam")
@@ -2381,10 +2593,21 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         notes.append("The 2D area's edge at the dam is not straight; check the connection "
                      "line in RAS Mapper.")
     iA, iB = int(np.argmin(dA)), int(np.argmin(dB))
-    perim = thin_ring(perim, 0.9 * cell, keep=(iA, iB))
-    A = perim[int(np.argmin(np.hypot(*(perim - A).T)))]
-    B = perim[int(np.argmin(np.hypot(*(perim - B).T)))]
-    dam_len = float(np.hypot(*(A - B)))
+    if crest_line is not None:
+        # every crest vertex is a perimeter vertex (from the cut) and stays one
+        perim = insert_on_ring(perim, crest_line)
+        kv = [int(np.argmin(np.hypot(*(perim - q).T))) for q in crest_line]
+        perim = thin_ring(perim, 0.9 * cell, keep=kv)
+        crest_line = np.array([perim[int(np.argmin(np.hypot(*(perim - q).T)))]
+                               for q in crest_line])
+        A, B = crest_line[0], crest_line[-1]
+        dam_len = float(hcrest.cumlen(crest_line)[-1])
+        crest_sc = min(max(hcrest.station_of(crest_line, bxy_c), 0.0), dam_len)
+    else:
+        perim = thin_ring(perim, 0.9 * cell, keep=(iA, iB))
+        A = perim[int(np.argmin(np.hypot(*(perim - A).T)))]
+        B = perim[int(np.argmin(np.hypot(*(perim - B).T)))]
+        dam_len = float(np.hypot(*(A - B)))
     log("2D area: {:,.0f} {}2, dam line {:,.0f} {}".format(abs(ring_area(perim)),
                                                            units.len_name, dam_len,
                                                            units.len_name))
@@ -2485,65 +2708,98 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # shorter than the 2D area's edge across the valley, centred on the dam point; the rest of
     # that edge is a closed boundary (the reservoir reaches the 2D area over the dam only)
     edge_A, edge_B = A, B
-    want_ft, want_src = dam_length_ft(dam, dam_folder, o.get("dam_length_ft"))
-    A, B, dam_len, tnote = trim_dam_line(edge_A, edge_B, P, units.from_ft(want_ft)
-                                         if want_ft else None, 2.0 * cell)
-    if tnote:
-        notes.append("Dam connection: {} ({}).".format(tnote, want_src))
-        perim = insert_on_ring(perim, [A, B])
-    dam_line_how = ("{} ft from {}".format(round(want_ft), want_src) if want_ft else
-                    "the 2D area's edge across the valley")
-    if not want_ft:
-        # v3.10.17: no length on record - only the part of the edge where the ground stays
-        # near the top of dam around the dam point (DWR-3161: a 4,612 ft line over hills up to
-        # 2043 ft for a 1844 ft dam), at most DAM_LINE_CAP_FT
-        edge_len = float(np.hypot(*(edge_B - edge_A)))
-        ab_e = (edge_B - edge_A) / (edge_len or 1.0)
-        st_e = np.linspace(0.0, edge_len, max(2, int(math.ceil(edge_len / scell)) + 1))
-        z_e = _sample(z, zx0, zy0, scell, edge_A[None, :] + st_e[:, None] * ab_e[None, :])
-        s0 = min(max(float(np.dot(P - edge_A, ab_e)), 0.0), edge_len)
-        tol_ft = max(3.0, 0.1 * dam.dam_height_ft)
-        gap = max(2.0 * cell, units.from_ft(DAM_LINE_GAP_FT))
-        s_lo, s_hi, ok_c = crest_segment(st_e, z_e, s0, top_u, units.from_ft(tol_ft), gap)
-        cap_ft = float(o.get("max_dam_line_ft") or DAM_LINE_CAP_FT)
-        # at least the breach's top width plus a cell each side
-        pb = breach_values(dam, params, units, 0.0)[0]
-        min_len = max(2.0 * cell, pb["bottom_width"] + 2.0 * pb["left_slope"] *
-                      (top_u - pb["bottom_elev"]) + 2.0 * cell)
-        A2, B2, L2 = dam_line_part(edge_A, edge_B, s_lo, s_hi, s0, units.from_ft(cap_ft),
-                                   min_len)
-        if L2 < edge_len - 1e-6:
-            A, B, dam_len = A2, B2, L2
+    if crest_line is not None:
+        if edge_line is None:
+            edge_line = crest_line
+        dam_line_how = ("{:,.0f} {} along the embankment crest, {} ({} vertices; the crest at "
+                        "the breach runs {:.0f} degrees off the straight line across the flow)"
+                        .format(dam_len, units.len_name, crest_rec.get("source", "traced"),
+                                len(crest_line), crest_rec.get("skew_deg") or 0.0))
+        notes.append("Dam connection: " + dam_line_how + "; ends: " + "; ".join(
+            "{} {}".format(k, v["stop"]) for k, v in (crest_rec.get("ends") or {}).items()) +
+            (" (dam length {:,.0f} {} from {})".format(crest_rec["dam_length"], units.len_name,
+                                                      crest_rec["dam_length_source"])
+             if crest_rec.get("dam_length_on_record") else
+             " (no dam length on record; give dam_length_ft in dam.json; the crest is followed "
+             "to its ends, at most {:,.0f} {} (option max_dam_line_ft))".format(
+                 crest_rec["dam_length"], units.len_name)) + ".")
+        if (not crest_rec.get("dam_length_on_record") and crest_rec.get("dam_length")
+                and (dam_len >= crest_rec["dam_length"] - 2.0 * cell or any(
+                    v.get("stop") == "the dam length"
+                    for v in (crest_rec.get("ends") or {}).values()))):
+            dam_line_how += "; capped at {:,.0f} ft".format(
+                crest_rec["dam_length"] / units.from_ft(1.0))
+    else:
+        want_ft, want_src = dam_length_ft(dam, dam_folder, o.get("dam_length_ft"))
+        A, B, dam_len, tnote = trim_dam_line(edge_A, edge_B, P, units.from_ft(want_ft)
+                                             if want_ft else None, 2.0 * cell)
+        if tnote:
+            notes.append("Dam connection: {} ({}).".format(tnote, want_src))
             perim = insert_on_ring(perim, [A, B])
-            if not ok_c:
-                dam_line_how = ("{:,.0f} {} around the dam point: no ground within {:.1f} ft of "
-                                "the top of dam (no embankment crest) near the dam point".format(
-                                    L2, units.len_name, tol_ft))
-            else:
-                dam_line_how = ("{:,.0f} of the {:,.0f} {} edge of the 2D area across the valley, "
-                                "where the ground is within {:.1f} ft of the top of dam (the "
-                                "embankment crest) around the dam point{}".format(
-                                    L2, edge_len, units.len_name, tol_ft,
-                                    "; capped at {:,.0f} ft".format(cap_ft)
-                                    if s_hi - s_lo > units.from_ft(cap_ft) + 1e-6 else ""))
-            notes.append("Dam connection: {} (no dam length on record; give dam_length_ft in "
-                         "dam.json or the option dam_length_ft).".format(dam_line_how))
+        dam_line_how = ("{} ft from {}".format(round(want_ft), want_src) if want_ft else
+                        "the 2D area's edge across the valley")
+        if not want_ft:
+            # v3.10.17: no length on record - only the part of the edge where the ground stays
+            # near the top of dam around the dam point (DWR-3161: a 4,612 ft line over hills up to
+            # 2043 ft for a 1844 ft dam), at most DAM_LINE_CAP_FT
+            edge_len = float(np.hypot(*(edge_B - edge_A)))
+            ab_e = (edge_B - edge_A) / (edge_len or 1.0)
+            st_e = np.linspace(0.0, edge_len, max(2, int(math.ceil(edge_len / scell)) + 1))
+            z_e = _sample(z, zx0, zy0, scell, edge_A[None, :] + st_e[:, None] * ab_e[None, :])
+            s0 = min(max(float(np.dot(P - edge_A, ab_e)), 0.0), edge_len)
+            tol_ft = max(3.0, 0.1 * dam.dam_height_ft)
+            gap = max(2.0 * cell, units.from_ft(DAM_LINE_GAP_FT))
+            s_lo, s_hi, ok_c = crest_segment(st_e, z_e, s0, top_u, units.from_ft(tol_ft), gap)
+            cap_ft = float(o.get("max_dam_line_ft") or DAM_LINE_CAP_FT)
+            # at least the breach's top width plus a cell each side
+            pb = breach_values(dam, params, units, 0.0)[0]
+            min_len = max(2.0 * cell, pb["bottom_width"] + 2.0 * pb["left_slope"] *
+                          (top_u - pb["bottom_elev"]) + 2.0 * cell)
+            A2, B2, L2 = dam_line_part(edge_A, edge_B, s_lo, s_hi, s0, units.from_ft(cap_ft),
+                                       min_len)
+            if L2 < edge_len - 1e-6:
+                A, B, dam_len = A2, B2, L2
+                perim = insert_on_ring(perim, [A, B])
+                if not ok_c:
+                    dam_line_how = ("{:,.0f} {} around the dam point: no ground within {:.1f} ft of "
+                                    "the top of dam (no embankment crest) near the dam point".format(
+                                        L2, units.len_name, tol_ft))
+                else:
+                    dam_line_how = ("{:,.0f} of the {:,.0f} {} edge of the 2D area across the valley, "
+                                    "where the ground is within {:.1f} ft of the top of dam (the "
+                                    "embankment crest) around the dam point{}".format(
+                                        L2, edge_len, units.len_name, tol_ft,
+                                        "; capped at {:,.0f} ft".format(cap_ft)
+                                        if s_hi - s_lo > units.from_ft(cap_ft) + 1e-6 else ""))
+                notes.append("Dam connection: {} (no dam length on record; give dam_length_ft in "
+                             "dam.json or the option dam_length_ft).".format(dam_line_how))
     toe_off = units.from_ft((dam.ds_slope_h or 3.0) * dam.dam_height_ft +
                             0.5 * (dam.crest_width_ft or 20.0))
     wcell = tcell if dam_len / tcell <= 20000 else dam_len / 20000.0
     pad = toe_off + max(4 * wcell, 1.5 * cell)
-    wb = (min(A[0], B[0]) - pad, min(A[1], B[1]) - pad, max(A[0], B[0]) + pad,
-          max(A[1], B[1]) + pad)
+    dam_poly = np.asarray(crest_line if crest_line is not None else [A, B], float)  # v3.10.22
+    if edge_line is None:
+        edge_line = np.asarray([edge_A, edge_B], float)
+    wb = (dam_poly[:, 0].min() - pad, dam_poly[:, 1].min() - pad, dam_poly[:, 0].max() + pad,
+          dam_poly[:, 1].max() + pad)
     zw, wx0, wy0 = _warp(terrain_tif, srs, wcell, bounds=wb, alg="bilinear")
     npts = int(min(MAX_WEIR_POINTS * 8, max(10, dam_len / max(wcell, 1e-9))))
-    line = np.linspace(0.0, 1.0, npts)[:, None] * (B - A)[None, :] + A[None, :]
-    st = np.hypot(*(line - A).T)
+    if crest_line is not None:
+        st = np.linspace(0.0, dam_len, npts)
+        line = hcrest.point_at(dam_poly, st)
+    else:
+        line = np.linspace(0.0, 1.0, npts)[:, None] * (B - A)[None, :] + A[None, :]
+        st = np.hypot(*(line - A).T)
     zl = _sample(zw, wx0, wy0, wcell, line)
     weir_z = np.where(np.isfinite(zl), np.maximum(zl, top_u), top_u)
     s2, e2 = simplify_profile(st, weir_z, units.from_ft(0.1), MAX_WEIR_POINTS)
     weir = [(round(float(a), 2), round(float(b), 2)) for a, b in zip(s2, e2)]
-    conn_line = [tuple(A)] + [tuple(p) for p in densify([A, B], max(dam_len / 16.0, cell))[1:-1]] \
-        + [tuple(B)]
+    if crest_line is not None:
+        # the crest vertices (perimeter vertices) and points on the segments between them
+        conn_line = [tuple(map(float, q)) for q in densify(dam_poly, max(dam_len / 16.0, cell))]
+    else:
+        conn_line = [tuple(A)] + [tuple(p) for p in densify([A, B], max(dam_len / 16.0, cell))[1:-1]] \
+            + [tuple(B)]
     # TIER 2 fix: a moved inflow point must lie inside the 2D area
     if inflow_status["status"] == "moved" and inflow_m is not None:
         if not _polygon([tuple(q) for q in perim]).Contains(_point(*inflow_m)):
@@ -2559,7 +2815,13 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     sP = float(np.dot(P - A, ab))
     # TIER 2 fix: a point walked down the DEM (no flow path) may sit at the foot of a hill to
     # one side, so it moves the inflow only, not the breach centre
-    if inflow_m is not None and inflow_status.get("how") != "the steepest descent of the DEM":
+    if crest_line is not None:
+        # v3.10.22: chosen along the traced crest (hecras_crest.pick_breach)
+        sc = float(crest_sc)
+        O_, ab_, d_ = hcrest.frame_at(dam_poly, sc)
+        toe_xy = O_ + ab_ * sc + d_ * toe_off
+        centre_how = crest_rec.get("breach_how") or "along the traced crest"
+    elif inflow_m is not None and inflow_status.get("how") != "the steepest descent of the DEM":
         sc = float(np.dot(inflow_m - A, ab))
         toe_xy = inflow_m
         centre_how = "the run's breach inflow point projected onto the dam line"
@@ -2595,6 +2857,9 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     half = 0.5 * bvals["bottom_width"] + bvals["left_slope"] * (top_u - bvals["bottom_elev"])
     sc = min(max(sc, half), max(dam_len - half, half))
     bvals["center_station"] = round(sc, 1)
+    # v3.10.22: the straight frame at the breach (origin, along, downstream): the dam line's
+    # own for the straight line; the crest segment's at the breach for the traced crest
+    Ob, abb, db = hcrest.frame_at(dam_poly, sc) if crest_line is not None else (A, ab, d)
     bvals["trigger_wse"] = units.from_ft(trig_ft)
     if bvals["trigger_wse"] is not None and abs(trig_ft - wse0_ft) < 1e-6:
         # sunny day: breach as soon as the run starts (pool starts at the trigger)
@@ -2607,8 +2872,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     ss = np.linspace(sc - half_w, sc + half_w, max(3, int(math.ceil(2 * half_w / wcell)) + 1))
     tt = np.linspace(toe_off, toe_off + cell, max(3, int(math.ceil(cell / wcell)) + 1))
     SS, TT = np.meshgrid(ss, tt)
-    band = (A[None, :] + SS.reshape(-1)[:, None] * ab[None, :] +
-            TT.reshape(-1)[:, None] * d[None, :])
+    band = (Ob[None, :] + SS.reshape(-1)[:, None] * abb[None, :] +
+            TT.reshape(-1)[:, None] * db[None, :])
     zb_ = _sample(zw, wx0, wy0, wcell, band)
     gb = float(_sample(zw, wx0, wy0, wcell, [toe_xy])[0])
     toe_u = (float(np.nanmin(zb_)) if np.isfinite(zb_).any() else
@@ -2669,12 +2934,14 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         half = 0.5 * bvals["bottom_width"] + bvals["left_slope"] * (top_u - new_b)
         sc = min(max(sc, half), max(dam_len - half, half))
         bvals["center_station"] = round(sc, 1)
+        if crest_line is not None:
+            Ob, abb, db = hcrest.frame_at(dam_poly, sc)
     # the breach opening through the downstream half of the embankment, cut into the terrain
     # to the breach bottom (lowered only), so the 2D cells along the breach reach its bottom
     cut = None
     if o.get("breach_cut", True):
         cw = 0.5 * max(bw, 2.0 * tcell)
-        cut = cut_breach_channel(terrain_tif, A, ab, d, sc - cw, sc + cw, toe_off + cell,
+        cut = cut_breach_channel(terrain_tif, Ob, abb, db, sc - cw, sc + cw, toe_off + cell,
                                  bvals["bottom_elev"])
         cut.update(width=round(2 * cw, 1), length=round(toe_off + cell, 1),
                    z=round(bvals["bottom_elev"], 2))
@@ -2721,7 +2988,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     progress(70, "downstream boundary")
     dens = np.asarray(densify(perim, cell / 2.0, closed=True))
     zp = _sample(z, zx0, zy0, scell, dens)
-    dam_seg_d = point_segment_distance(dens[:, 0], dens[:, 1], [edge_A, edge_B])
+    dam_seg_d = point_segment_distance(dens[:, 0], dens[:, 1], edge_line)
     ok = np.isfinite(zp) & (dam_seg_d > side + cell)
     if not ok.any():
         raise HecRasModelError("no ground along the 2D perimeter away from the dam")
@@ -2760,7 +3027,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                 slope, how = (zz2[0] - zz2[1]) / Lp, "along the run's flow path, the last " \
                     "{:,.0f} {} before the boundary".format(Lp, units.len_name)
     if slope is None or not slope > 0:
-        ref = inflow_m if inflow_m is not None else P + d * toe_off
+        ref = inflow_m if inflow_m is not None else (Ob + abb * sc + db * toe_off)
         zr = _sample(z, zx0, zy0, scell, [ref])[0]
         Lr2 = float(np.hypot(*(exit_xy - ref)))
         slope = (zr - zmin) / Lr2 if (np.isfinite(zr) and Lr2 > 0) else 0.001
@@ -2811,8 +3078,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         progress(82, "gmsh computation points")
         try:
             spts, sinf = hseeds.make_seeds(
-                perim, cell, options=o, dam_line=(A, B), downstream=d,
-                breach_xy=A + ab * sc, breach_len=toe_off + 2.0 * cell,
+                perim, cell, options=o, dam_line=[tuple(q) for q in dam_poly], downstream=d,
+                breach_xy=Ob + abb * sc, breach_len=toe_off + 2.0 * cell, breach_dir=db,
                 channel=(path_m if (path_m is not None and use_path_dir) else None))
         except hseeds.SeedError as e:
             seeds_info["why"] = str(e)
@@ -2840,8 +3107,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         else:
             bsp = None
         bcw = 0.5 * max(bw, 2.0 * tcell)
-        bplan = hbl.plan(perim, cell, (A, B), d,
-                         breach=(A + ab * sc, bcw, toe_off + cell, 0.5 * bw)
+        bplan = hbl.plan(perim, cell, [tuple(q) for q in dam_poly], db,
+                         breach=(Ob + abb * sc, bcw, toe_off + cell, 0.5 * bw)
                          if cut is not None else None,
                          path=(path_m if (path_m is not None and use_path_dir) else None),
                          spacing=bsp)
@@ -2867,7 +3134,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             if cut is not None:
                 cm = breach_corner_margin(tcell, float(bdam["near"]))
                 fh = max(bcw, float(bdam["half"]) + cm)
-                cut2 = cut_breach_channel(terrain_tif, A, ab, d, sc - fh, sc + fh,
+                cut2 = cut_breach_channel(terrain_tif, Ob, abb, db, sc - fh, sc + fh,
                                           toe_off + cell, bvals["bottom_elev"],
                                           side_slope=max(float(bvals.get("left_slope") or 0),
                                                          float(bvals.get("right_slope") or 0))
@@ -2935,6 +3202,12 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                              vfix["perimeter_removed"], u=units.len_name))
             log(notes[-1])
         vc = vfix["check"]
+        if vfix.get("perimeter_corners_left"):
+            notes.append("WARNING: Perimeter pre-check: {} perimeter corner(s) still within {:g} "
+                         "{} of a cell edge; HEC-RAS may stop with 'face errors detected on the "
+                         "perimeter of the mesh'.".format(vfix["perimeter_corners_left"],
+                                                          round(ptol[1], 2), units.len_name))
+            log(notes[-1])
         if vfix["left"] or vc["facepoints_over"] or vfix["perimeter_left"]:
             raise HecRasModelError(
                 "the computation points still make {:,} cells with more than {} faces, "
@@ -3193,6 +3466,25 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     paths["terrain_tif"] = terrain_tif
     paths["layout"] = write_layout(os.path.join(out, "GIS", "HECRAS Layout.gpkg"), m, srs,
                                    bc_slope_how=how, P=P, skipped=sinfo["skipped"])
+    # v3.10.22: the dam line and the breach along it, in the README and run_report.json
+    crest_rec.update(final_breach_station=round(float(sc), 1),
+                     final_breach_xy=[round(float(v), 2) for v in (Ob + abb * sc)],
+                     breach_frame={"along_bearing_deg": round(hcrest.bearing_deg(abb), 1),
+                                   "downstream_bearing_deg": round(hcrest.bearing_deg(db), 1)},
+                     connection_length=round(float(dam_len), 1), units=units.len_name,
+                     model_crs=_epsg_text(srs))
+    if crest_line is not None:
+        notes.append("Breach centre at station {:,.1f} {u} of the dam line: {}. The crest there "
+                     "runs {:.0f} degrees off the straight line across the flow (bearing {:.0f} "
+                     "against {:.0f}); the breach cut is a rectangle across the crest, "
+                     "downstream at bearing {:.0f}.".format(
+                         sc, crest_rec.get("breach_how"), crest_rec.get("skew_deg") or 0.0,
+                         crest_rec.get("crest_bearing_deg") or 0.0,
+                         crest_rec.get("straight_bearing_deg") or 0.0,
+                         hcrest.bearing_deg(db), u=units.len_name))
+        log(notes[-1])
+    record_run_report(os.path.join(model_dir, hecras.RUN_REPORT_JSON), "hecras_dam_line",
+                      dict(crest_rec, folder=out), log)
     info = {"crs": _epsg_text(srs), "crs_why": why, "units": units.label,
             "len_name": units.len_name, "cell": cell, "cell_chosen": bool(o["cell_ft"]),
             "cells": int(len(pts)), "area": abs(ring_area(perim)),
@@ -3212,6 +3504,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             # v3.10.17
             "site": site, "sim_how": sim_how, "hydrograph_end_hr": round(t_end, 2),
             "dam_line_how": dam_line_how, "breach_shape_note": BREACH_SHAPE_NOTE,
+            "dam_axis": crest_rec,              # v3.10.22
             # v3.10.22
             "breach_start": {"mode": smode, "start_hr": start_hr,
                              "trigger_wse": bvals.get("trigger_wse")},
@@ -3664,7 +3957,7 @@ def write_readme(path, m, info, notes, dam, params):
             info["sim_hours"], START_DATE, info.get("sim_how") or ""),
         "| Dam line | {:,.0f} {} | {} |".format(info["dam_line"], L,
                                               info.get("dam_line_how") or ""),
-        ] + _site_rows(info.get("site"), L) + ["",
+        ] + _dam_axis_rows(info.get("dam_axis"), L) + _site_rows(info.get("site"), L) + ["",
         "## Not carried over from the run", "",
         "- DEM edits made for the run (channels, ponds, notches, buildings, a proposed "
         "embankment) are not in the terrain: add them in RAS Mapper as terrain "
