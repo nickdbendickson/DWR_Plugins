@@ -518,7 +518,6 @@ def defaults(step, work, settings):
                 key = "{}_{}".format(prefix, role)
                 put(key, saved.get(key) or field)
         put("COUNTY", S.get("inventory_county"))
-        put("STORAGE_CHOICE", int(S.get("storage_choice") or 0))
     elif step == "2":
         put("DAMS", o("1"))
         put("SRC", S["terrain_source"])
@@ -528,7 +527,7 @@ def defaults(step, work, settings):
         put("DAMS", o("1"))
         put("WB", src("waterbodies"))
         put("DEMDIR", o("2"))
-        put("STORAGE_CHOICE", int(S.get("storage_choice") or 0))
+        put("STORAGE_CHOICE", int(S.get("storage_choice") or 0))     # tool 3 only (0.17.27)
     elif step == "4":
         put("DAMS", o("3") or o("1"))
         put("LINES", src("dam_lines"))

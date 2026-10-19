@@ -1,4 +1,4 @@
-"""Runner 3.10.24: HEC-RAS (and gmsh) timeouts on the wall clock, SIGTERM then SIGKILL, and the
+"""Runner 3.10.26 (opened as 3.10.24): HEC-RAS (and gmsh) timeouts on the wall clock, SIGTERM then SIGKILL, and the
 timeout logged before any cleanup (core/wallclock.py, core/hecras_engine.py). Fake clocks,
 fake processes and tiny shell scripts only; no HEC-RAS."""
 import json

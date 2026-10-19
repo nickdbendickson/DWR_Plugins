@@ -1,4 +1,4 @@
-"""Wall-clock deadlines and a graceful stop for long subprocesses (Runner 3.10.24).
+"""Wall-clock deadlines and a graceful stop for long subprocesses (Runner 3.10.24, released in 3.10.26).
 
 Why: Python's subprocess timeouts (Popen.wait(timeout=...), subprocess.run(timeout=...)) run
 on time.monotonic(). On a VM that is paused, snapshotted or forked, CLOCK_MONOTONIC (and
