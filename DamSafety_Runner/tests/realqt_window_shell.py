@@ -105,6 +105,19 @@ assert pl.defaults("rundam", "", "", dict(pl.DEFAULT_SETTINGS, **dlg.settings())
 shot(dlg, "advanced_hecras_gmsh_checked")
 g.setChecked(False)
 assert "gmsh" not in dlg.adv_section.title()
+# the HEC-RAS dam line along the crest: on by default, unticked = the straight line
+c = dlg.hecras_crest
+assert c.text() == "HEC-RAS dam line follows the crest (recommended)" and c.isChecked()
+assert c.isVisible() and "On by default" in c.toolTip() and "log says so" in c.toolTip()
+assert "hecras_dam_axis" not in dlg.settings()
+assert "HECRAS_CREST" not in pl.defaults("rundam", "", "", dict(pl.DEFAULT_SETTINGS, **dlg.settings()))
+c.setChecked(False)
+assert dlg.settings()["hecras_dam_axis"] == "straight"
+assert dlg.adv_section.title().endswith(" · HEC-RAS straight dam line"), dlg.adv_section.title()
+assert pl.defaults("rundam", "", "", dict(pl.DEFAULT_SETTINGS, **dlg.settings()))["HECRAS_CREST"] is False
+shot(dlg, "advanced_hecras_crest_unticked")
+c.setChecked(True)
+assert "straight" not in dlg.adv_section.title()
 dlg.adv_section.header.click()
 assert dlg.adv_section.header.text().startswith("▸ Advanced") and "▾" not in dlg.adv_section.header.text()
 

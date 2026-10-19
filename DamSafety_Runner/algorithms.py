@@ -36,7 +36,7 @@ SET_ANUGA = "NDBREACH_ANUGA_PYTHON"
 SET_THREADS = "NDBREACH_THREADS"
 
 METHODS = [(m, brmod.METHOD_LABELS[m]) for m in brmod.METHODS]
-from .popup_logic import HECRAS_GMSH_TIP                     # noqa: E402  v3.10.22
+from .popup_logic import HECRAS_GMSH_TIP, HECRAS_CREST_TIP   # noqa: E402  v3.10.22
 TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          (workflow.TIER_BOTH, "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"),
          # appended (design #68): indices 0 and 1 and the default are unchanged
@@ -508,6 +508,13 @@ class _Base(QgsProcessingAlgorithm):
         if hasattr(p, "setHelp"):
             p.setHelp(HECRAS_GMSH_TIP)
         self.addParameter(set_advanced(p))
+        # on by default: the HEC-RAS dam line along the crest (core/hecras_crest.py)
+        p = QgsProcessingParameterBoolean(
+            "HECRAS_CREST", "HEC-RAS dam line follows the crest (recommended; off = a straight "
+            "line across the flow)", True, optional=True)
+        if hasattr(p, "setHelp"):
+            p.setHelp(HECRAS_CREST_TIP)
+        self.addParameter(set_advanced(p))
         self._num("CELL", "Model cell size (m; 10 m = 32.8 ft, the raster cell, not a depth)",
                   10.0, minimum=0.5)
         self._num("MANNING", "Manning's n (where there is no n raster)", 0.06, minimum=0.005,
@@ -701,6 +708,10 @@ class _Base(QgsProcessingAlgorithm):
                 "HECRAS_GMSH") not in (None, "") and self.parameterAsBool(
                 parameters, "HECRAS_GMSH", context)):                       # v3.10.22
             st.hecras_mesh_seeds = "gmsh"
+        if (self.parameterDefinition("HECRAS_CREST") is not None and parameters.get(
+                "HECRAS_CREST") not in (None, "") and not self.parameterAsBool(
+                parameters, "HECRAS_CREST", context)):
+            st.hecras_dam_axis = "straight"
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0

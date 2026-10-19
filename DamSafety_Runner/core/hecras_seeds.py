@@ -84,8 +84,27 @@ def _offset_line(A, B, d, off, trim):
     return [(A + u * trim + d * off).tolist(), (B - u * trim + d * off).tolist()]
 
 
+def _offset_poly(line, d, off, trim):
+    """v3.10.22: a polyline (the crest) trimmed `trim` at both ends and moved `off` to the
+    side of `d` (each vertex along its averaged normal)."""
+    p = np.asarray(line, float).reshape(-1, 2)
+    c = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p, axis=0).T))]
+    if c[-1] <= 2 * trim:
+        return None
+    st = np.r_[trim, c[(c > trim) & (c < c[-1] - trim)], c[-1] - trim]
+    q = np.column_stack([np.interp(st, c, p[:, 0]), np.interp(st, c, p[:, 1])])
+    t = np.zeros_like(q)
+    t[1:-1] = q[2:] - q[:-2]
+    t[0], t[-1] = q[1] - q[0], q[-1] - q[-2]
+    t /= np.maximum(np.hypot(*t.T), 1e-12)[:, None]
+    n = np.column_stack([-t[:, 1], t[:, 0]])
+    if float(np.mean(n @ np.asarray(d, float))) < 0:
+        n = -n
+    return (q + off * n).tolist()
+
+
 def spec_for(perimeter, cell, dam_line=None, downstream=None, breach_xy=None, breach_len=None,
-             channel=None, refine=None):
+             channel=None, refine=None, breach_dir=None):
     """The gmsh_mesher.build_mesh spec (model units) for HEC-RAS seeds, and the sizes used.
     dam_line: (A, B) of the SA/2D connection; downstream: unit vector; breach_xy: the
     breach centre on the dam line; channel: the run's flow path [(x, y)...]."""
@@ -100,12 +119,15 @@ def spec_for(perimeter, cell, dam_line=None, downstream=None, breach_xy=None, br
     if dam_line is not None and downstream is not None:
         # the dam is on the perimeter (gmsh_mesher drops lines that touch the outer ring),
         # so the dam line is refined one step inside the 2D area
-        ln = _offset_line(dam_line[0], dam_line[1], downstream, 2.0 * h_line, 2.0 * h_line)
+        if len(dam_line) > 2:                   # v3.10.22: the crest polyline
+            ln = _offset_poly(dam_line, downstream, 2.0 * h_line, 2.0 * h_line)
+        else:
+            ln = _offset_line(dam_line[0], dam_line[-1], downstream, 2.0 * h_line, 2.0 * h_line)
         if ln:
             lines.append(ln)
     if breach_xy is not None and downstream is not None:
         p = np.asarray(breach_xy, float)
-        d = np.asarray(downstream, float)
+        d = np.asarray(breach_dir if breach_dir is not None else downstream, float)
         L = float(breach_len or 4.0 * cell)
         lines.append([(p + d * 2.0 * h_line).tolist(), (p + d * (2.0 * h_line + L)).tolist()])
     chan = []

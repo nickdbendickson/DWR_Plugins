@@ -23,6 +23,10 @@ MESH_SEEDS_LABELS = ["Regular grid (default)",
                      "gmsh layout, finer along the dam, breach and channel (needs gmsh; falls "
                      "back to the grid)"]
 MESH_SEEDS_MODES = ["grid", "gmsh"]
+# the HEC-RAS dam line (core/hecras_crest.py)
+DAM_AXIS_LABELS = ["Along the embankment crest, traced from the DEM (default)",
+                   "Straight line through the dam point, across the flow (the old line)"]
+DAM_AXIS_MODES = ["crest", "straight"]
 US_SI = ["Detect from the file (US customary when it says nothing)", "US customary (ft)",
          "SI metric (m)"]
 
@@ -76,6 +80,11 @@ class HecRasExportAlgorithm(_ToolBase):
         self.addParameter(QgsProcessingParameterEnum(
             "MESH_SEEDS", "2D computation points", MESH_SEEDS_LABELS, defaultValue=0,
             optional=True))
+        self.addParameter(QgsProcessingParameterEnum(
+            "DAM_AXIS", "Dam line (the SA/2D connection)", DAM_AXIS_LABELS, defaultValue=0,
+            optional=True))
+        self._num("BREACH_STATION_FT", "Breach centre, ft along the dam line from its first "
+                  "end (empty = the deepest dam section)", optional=True, minimum=0.0)
         self.addOutput(QgsProcessingOutputFolder("MODEL_FOLDER", "HEC-RAS model package folder"))
         self.addOutput(QgsProcessingOutputFile("MODEL_ZIP", "HEC-RAS model package (.zip)"))
         self.addOutput(QgsProcessingOutputFile("HYDROGRAPH_TXT", "Hydrograph, .u## block"))
@@ -121,6 +130,12 @@ class HecRasExportAlgorithm(_ToolBase):
             if parameters.get("MESH_SEEDS") not in (None, ""):
                 opts["mesh_seeds"] = MESH_SEEDS_MODES[self.parameterAsEnum(parameters,
                                                                            "MESH_SEEDS", context)]
+            if parameters.get("DAM_AXIS") not in (None, ""):
+                opts["dam_axis"] = DAM_AXIS_MODES[self.parameterAsEnum(parameters, "DAM_AXIS",
+                                                                       context)]
+            if parameters.get("BREACH_STATION_FT") not in (None, ""):
+                opts["breach_station_ft"] = self.parameterAsDouble(parameters,
+                                                                   "BREACH_STATION_FT", context)
             try:
                 p = hecras_package.build_package(
                     folder, out_root=os.path.join(out, "hecras") if out else None,
