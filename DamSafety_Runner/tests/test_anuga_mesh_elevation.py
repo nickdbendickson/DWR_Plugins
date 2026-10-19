@@ -3,7 +3,7 @@
 1. The ANUGA bed comes from the finest terrain (the DEM source at its own cell size, read in
    blocks into a memory-mapped .npy) sampled at the triangle vertices; ANUGA_ELEVATION=
    model_grid keeps the model grid at the centroids (before 3.10.26).
-2. The default mesher's culvert-end octagons that overlap are merged into one region.
+2. (The culvert-end octagons: tests/test_anuga_culvert_regions.py, its own PR.)
 3. gmsh: an embedded edge just longer than the mesh size is no longer cut in two.
 4. gmsh_spec passes the culvert-end size (25 m2) to gmsh.
 5. The worker checks create_domain_from_regions' signature instead of catching TypeError.
@@ -37,54 +37,6 @@ except Exception:
 def _sha(p):
     with open(p, "rb") as fh:
         return hashlib.sha256(fh.read()).hexdigest()
-
-
-def _segments_cross(p, q):
-    """Do two closed polygons' edges properly cross?"""
-    for a, b in zip(p, np.roll(p, -1, axis=0)):
-        for c, d in zip(q, np.roll(q, -1, axis=0)):
-            def orient(u, v, w):
-                return np.sign((v[0] - u[0]) * (w[1] - u[1]) - (v[1] - u[1]) * (w[0] - u[0]))
-            if (orient(a, b, c) * orient(a, b, d) < 0) and (orient(c, d, a) * orient(c, d, b) < 0):
-                return True
-    return False
-
-
-# ------------------------------------------------------------------ 2. culvert octagons
-def _culvert(length, width=3.658, y=0.0):
-    return {"end_points": [[1000.0, y], [1000.0 + length, y]], "width": width}
-
-
-@test
-def culvert_octagons_on_a_short_culvert_become_one_region_without_crossing_edges():
-    st = AM.AnugaSettings(sys.executable)
-    old = [AM.octagon(e, 25.0) for e in _culvert(36.0)["end_points"]]
-    assert _segments_cross(old[0], old[1])            # what made Absaraka's 0.15 m2 slivers
-    regs = AM.culvert_regions([_culvert(36.0)], st)
-    assert len(regs) == 1, regs
-    poly = np.asarray(regs[0]["poly"])
-    assert regs[0]["area"] == 25.0
-    from nd_breach_runner.core import conditioning as cond
-    assert cond.points_in_polygon(np.array([1000.0, 1036.0]), np.array([0.0, 0.0]), poly).all()
-    # two twin culverts 30 m apart: all four ends in one region, nothing crosses
-    regs = AM.culvert_regions([_culvert(36.0), _culvert(36.0, y=30.0)], st)
-    assert len(regs) == 1
-    # and nothing a hull leaves behind crosses another region
-    regs = AM.culvert_regions([_culvert(36.0), _culvert(60.0, y=400.0)], st)
-    polys = [np.asarray(r["poly"]) for r in regs]
-    assert all(not _segments_cross(a, b) for i, a in enumerate(polys) for b in polys[i + 1:])
-
-
-@test
-def culvert_octagons_apart_are_exactly_as_before():
-    st = AM.AnugaSettings(sys.executable)
-    c = [_culvert(80.0), _culvert(80.0, y=500.0)]
-    old = []
-    for cc in c:                                      # the code before 3.10.26
-        r = max(3.0 * cc["width"], 25.0)
-        for e in cc["end_points"]:
-            old.append({"poly": AM.octagon(e, r).tolist(), "area": min(st.fine_area_m2, 25.0)})
-    assert AM.culvert_regions(c, st) == old
 
 
 # ------------------------------------------------------------------ 3. gmsh short edges

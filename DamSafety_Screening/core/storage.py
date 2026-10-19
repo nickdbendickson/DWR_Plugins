@@ -281,6 +281,69 @@ def ensure_top_of_dam(curve, inv_max_m3, crest_m=None):
                  "maximum {:.0f} m3".format(vol, target))
 
 
+# 0.17.27: tool 3's STORAGE_CHOICE (the window's "Storage" choice; same labels and values)
+STORAGE_CHOICES = ("Max storage", "Normal storage", "Larger of the two")
+STORAGE_MAX, STORAGE_NORMAL, STORAGE_LARGER = 0, 1, 2
+
+
+def resolve_storage_choice(inv_norm_m3, inv_max_m3, choice=STORAGE_MAX):
+    """The inventory storage tool 3 uses for `choice` (0 Max, the default; 1 Normal; 2 Larger
+    of the two). A value counts as given when it is over 1 m3 (missing, empty, zero or
+    unreadable is not given).
+
+    Returns dict(volume_m3 (None when neither value is given: the DEM estimate is kept),
+    kind ("maximum" / "normal" / "none": which inventory value it is), choice (the int used),
+    label (the choice's label), fallback ("" or the sentence saying what replaced a missing
+    value), text (one line for the notes and the log)).
+
+      Max:     maximum; missing -> normal (fallback); both missing -> none.
+      Normal:  normal; missing -> maximum (fallback); both missing -> none.
+      Larger:  the larger of the two; one missing -> the other (fallback); both -> none.
+    An unknown choice is treated as Max and says so."""
+    def given(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if v == v and v > 1.0 else None
+    n, m = given(inv_norm_m3), given(inv_max_m3)
+    try:
+        c = int(choice or 0)
+    except (TypeError, ValueError):
+        c = -1
+    fallback = ""
+    if c not in (STORAGE_MAX, STORAGE_NORMAL, STORAGE_LARGER):
+        fallback = "unknown storage choice {!r}, used Max storage; ".format(choice)
+        c = STORAGE_MAX
+    if c == STORAGE_NORMAL:
+        order = (("normal", n), ("maximum", m))
+    elif c == STORAGE_LARGER and n is not None and m is not None:
+        order = (("normal", n), ("maximum", m)) if n > m else (("maximum", m), ("normal", n))
+    else:
+        order = (("maximum", m), ("normal", n))
+    vol, kind = None, "none"
+    for k, v in order:
+        if v is not None:
+            vol, kind = v, k
+            break
+    wanted = {STORAGE_MAX: "maximum", STORAGE_NORMAL: "normal"}.get(c)
+    if vol is None:
+        fallback += "no inventory normal or maximum storage, so the DEM estimate is kept"
+    elif c == STORAGE_LARGER and (n is None or m is None):
+        fallback += "{} storage missing or zero, so the larger of the two is the {} storage".format(
+            "normal" if n is None else "maximum", kind)
+    elif wanted and kind != wanted:
+        fallback += "{} storage missing or zero, so {} storage was used".format(wanted, kind)
+    fallback = fallback.rstrip("; ")
+    text = "storage choice {}: {}".format(
+        STORAGE_CHOICES[c], "{} storage {:.0f} m3".format(kind, vol) if vol is not None
+        else "no inventory storage")
+    if fallback:
+        text += " ({})".format(fallback)
+    return {"volume_m3": vol, "kind": kind, "choice": c, "label": STORAGE_CHOICES[c],
+            "fallback": fallback, "text": text}
+
+
 def storage_choice_volume(inv_norm_m3, inv_max_m3, choice=0):
     """choice: 0 max (default), 1 normal, 2 larger of the two."""
     n = float(inv_norm_m3 or 0)

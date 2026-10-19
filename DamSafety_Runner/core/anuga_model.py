@@ -657,7 +657,7 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     job = os.path.join(workdir, "anuga_job.npz")
     result = os.path.join(workdir, "anuga_result.npz")
     culverts, cnotes = structmod.anuga_culverts(structures or [], dem, outer)
-    regions = culvert_regions(culverts, st)     # small triangles around the culvert ends
+    regions = culvert_regions(culverts, st)     # small triangles at both culvert ends
     step = max(5.0, float(np.sqrt(max(st.fine_area_m2, 1.0))))
     breaklines = clip_lines_to_polygon([cond.densify(np.asarray(b, float), step)
                                         for b in (refine_lines or [])], outer)
