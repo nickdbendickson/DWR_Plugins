@@ -28,8 +28,8 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
 
 from ..core import inventory as inv
 from ..core import ponds as pd, terrain
-from ..compat import (FIELD_ANY, FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, NUM_DOUBLE, SRC_LINE,
-                      SRC_POINT, SRC_POLYGON, WKB_LINESTRING, WKB_POINT)
+from ..compat import (FIELD_ANY, FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_LINE, SRC_POINT,
+                      SRC_POLYGON, WKB_LINESTRING, WKB_POINT)
 from ..damsuite import gdalsafe as GS
 from . import _common as cm
 from ..core import errors as er

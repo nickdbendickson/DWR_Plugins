@@ -523,8 +523,7 @@ class NDBreachRunnerDialog(QDialog):
 
     def _show_counties(self):
         from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsPointXY,
-                               QgsProject, QgsField, QgsFillSymbol, QgsSingleSymbolRenderer)
-        from qgis.PyQt.QtCore import QVariant
+                               QgsProject, QgsFillSymbol, QgsSingleSymbolRenderer)
         dd = _load_dem_download()
         if dd is None:
             raise ImportError("screening")

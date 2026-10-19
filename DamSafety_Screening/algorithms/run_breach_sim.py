@@ -14,7 +14,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
 from ..core import solver_io as sio, runner as rn, gridutil as gu
 from ..core.proposed import PHRASE as PROPOSED_PHRASE
 from . import _common as cm
-from ..compat import (FILE_FILE, FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, GEOM_POLYGON, NUM_DOUBLE, NUM_INT, SRC_LINE, SRC_POINT, SRC_POLYGON)
+from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, GEOM_POLYGON, NUM_DOUBLE, NUM_INT, SRC_LINE, SRC_POINT, SRC_POLYGON)
 
 NEW_FIELDS = [("scenario", FT_STRING), ("sim_status", FT_STRING),
               ("sim_engine", FT_STRING), ("sim_cell_m", FT_DOUBLE),

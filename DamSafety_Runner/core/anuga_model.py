@@ -10,13 +10,11 @@ import math
 import os
 import queue
 import subprocess
-import sys
 import threading
 import time
 
 import numpy as np
 
-from .grid import Grid
 from .lisflood import Envelopes, ModelError, Cancelled
 from . import terrain, wallclock
 from . import conditioning as cond

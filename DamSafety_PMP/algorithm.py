@@ -1,6 +1,5 @@
 """Thin PyQGIS wrapper around core.run_pmp (all computation lives in core/)."""
 import os
-import tempfile
 
 from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource, QgsProcessingParameterFile,
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterString,

@@ -5,7 +5,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
                        QgsProcessingParameterString, QgsProcessingParameterPoint, QgsProcessingParameterBoolean,
                        QgsProcessing, QgsProcessingException, QgsProcessingOutputFile, QgsProcessingOutputNumber,
                        QgsProcessingUtils, QgsVectorFileWriter, QgsCoordinateTransformContext, QgsFeatureSink,
-                       QgsSettings, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsProject)
+                       QgsSettings, QgsCoordinateReferenceSystem)
 
 D = QgsProcessingParameterNumber.Double
 SETTING_DATA_HOME = "nd_pmp/data_home"

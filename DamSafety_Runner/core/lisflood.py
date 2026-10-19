@@ -16,7 +16,7 @@ import time
 
 import numpy as np
 
-from .grid import Grid, NODATA
+from .grid import Grid
 
 # Windows: no console window for a child program (QGIS is a GUI program, so each console
 # program it starts opens its own window, and closing that window kills the run)

@@ -9,7 +9,6 @@ Not mapped (warned): pothole 'cascade', nonzero/recession baseflow, AMC-III conv
 before export), UH 'average' sampling, noncontrib area (exported as area_mi2 - noncontrib_mi2).
 """
 import os, re, json, subprocess, csv
-import numpy as np
 from .hydro import read_hyetograph, cn_amc3, HydroConfig
 
 HMS_DT = [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60, 120, 180, 240, 360, 480, 720, 1440]

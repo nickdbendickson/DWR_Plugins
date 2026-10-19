@@ -12,8 +12,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
                        QgsFeatureRequest, QgsRectangle)
 
 from ..core import storage
-from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_POINT, SRC_POLYGON,
-                      set_advanced)
+from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_POINT, SRC_POLYGON)
 from . import _common as cm
 from ..core import errors as er
 from ..damsuite import gdalsafe as GS

@@ -18,7 +18,6 @@ run in a separate CI job that provisions QGIS; this job is the always-on hard ga
 """
 import os
 import re
-import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

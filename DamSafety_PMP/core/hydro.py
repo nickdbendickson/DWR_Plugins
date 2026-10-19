@@ -10,7 +10,7 @@ Units: depth in inches, area in mi^2, time in hours, flow in cfs.
 """
 import csv
 import os
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -272,7 +272,6 @@ def run_folder(hyeto_paths, out_dir, cfg: HydroConfig, log=print):
         res, t, p, e, q = compute(hdr, dt, precip, cfg)
         res["hydrograph_csv"] = write_hydrograph(out_dir, res, t, p, e, q)
         if res.get("_cascade") is not None:
-            from . import cascade as C
             cd = os.path.join(out_dir, "pothole_cascade"); os.makedirs(cd, exist_ok=True)
             n = len(precip)
             res["cascade_csv"] = _write_cas(cd, res, dt, n)

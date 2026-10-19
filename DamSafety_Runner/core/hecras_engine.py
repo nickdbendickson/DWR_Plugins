@@ -84,7 +84,6 @@ import math
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -504,7 +503,7 @@ def inflow_series(hy, units_flow, sim_hours, dt_min=hecras.DEFAULT_STEP_MIN, bas
     """(interval label, values in project flow units, info): the breach hydrograph on the
     HEC-RAS data interval from the simulation start to its end - exactly
     sim_hours * 60 / dt_min + 1 values - with the tail of extended_record()."""
-    from .units import ACFT, CFS
+    from .units import CFS
     lab = hecras.ras_interval_label(dt_min)
     if lab is None:
         raise HecRasEngineError("{:g} min is not a HEC-RAS data interval".format(dt_min))

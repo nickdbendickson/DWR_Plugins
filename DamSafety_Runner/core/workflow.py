@@ -49,7 +49,6 @@ from . import terrain
 from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
-from .grid import Grid
 from .units import FT, MILE, ACFT, CFS
 
 def _metadata_version():
@@ -735,10 +734,6 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                             dam.dam_height_ft, z_note or "unknown")
             warnings.append(msg)
             report["crest_source"] = "inventory crest; DEM near the point differs"
-            try:
-                feedback.pushWarning(msg)
-            except Exception:
-                pass
         if abs(diff) > 3.0:
             warnings.append("The DEM crest near the dam point ({:.1f} ft) differs from the top "
                             "of dam ({:.1f} ft) by {:+.1f} ft.".format(
