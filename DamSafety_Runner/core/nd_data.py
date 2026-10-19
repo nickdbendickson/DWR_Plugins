@@ -9,6 +9,10 @@ import os
 import re
 import shutil
 import subprocess
+
+# Windows: no console window for a child program (QGIS is a GUI program, so each console
+# program it starts opens its own window, and closing that window kills the run)
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_NO_WINDOW
 import sys
 
 # --------------------------------------------------------------------------------------
@@ -252,7 +256,7 @@ def conda_env_pythons(timeout=6.0):
         return []
     try:
         r = subprocess.run([exe, "env", "list", "--json"], capture_output=True, text=True,
-                           timeout=timeout, errors="replace")
+                           timeout=timeout, errors="replace", **NO_WINDOW)
         envs = json.loads(r.stdout).get("envs", [])
     except Exception:
         return []

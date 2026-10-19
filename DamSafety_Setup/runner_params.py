@@ -55,6 +55,12 @@ def build_params(a):
         # which may be the read-only ND_Dam_Suite_Pack.
         "DAMS_FOLDER": safe_dams_folder(a.get("dams_folder")),
     }
+    # Where the height and storage came from ('DWR', 'NID ND00182 MAX_STORAGE (...)',
+    # 'typed in'). Not Runner parameters: the processing dialog only reads the parameters
+    # the algorithm defines and ignores these, so they cannot break the Runner.
+    for key in ("height_source", "storage_source"):
+        if a.get(key):
+            out[key.upper()] = a.get(key)
     if a.get("area"):
         out["AREA_AC"] = a.get("area")
     if a.get("top"):

@@ -46,7 +46,7 @@ def hecras_tier_stage_passes_its_env_to_the_project_writer():
     base flow / tail settings) reach write_project."""
     from nd_breach_runner.core import hecras_engine as he
     src = open(he.__file__, encoding="utf-8").read().split("def run_stage", 1)[1]
-    assert "write_project(dam_folder, proj, log=log, env=env)" in src
+    assert "write_project(dam_folder, proj, log=log, env=env" in src   # (+ options, v3.10.22)
     assert '"time_step"' in src and '"inflow_series"' in src
 
 
