@@ -62,15 +62,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           cd "$GITHUB_WORKSPACE"
-          fail=0
-          for t in DamSafety_Hazard/tests/test_*.py; do
-            echo "== $t =="
-            if python "$t"; then
-              echo "[rc=0] $t"
-            else
-              rc=$?
-              echo "[rc=$rc FAILED] $t"
-              fail=1
-            fi
-          done
-          exit $fail
+          # One Python entry point whose exit status is the step's result (like the Screening and
+          # Runner steps above). An inline `for ...; exit $fail` shell loop did not propagate its
+          # status under micromamba's `bash -el` even when every script exited 0.
+          python DamSafety_Hazard/tests/run_all.py
