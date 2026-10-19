@@ -41,7 +41,7 @@ jobs:
         with:
           environment-name: qgis
           create-args: >-
-            python=3.12 qgis "numpy<2" scipy gdal
+            python=3.12 qgis numpy<2 scipy gdal
       - name: Screening suite (mock-QGIS)
         env:
           QT_QPA_PLATFORM: offscreen
