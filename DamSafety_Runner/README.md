@@ -269,7 +269,7 @@ unchanged.
   `reservoir_carve` records the footprint and the target vs carved curves. When the footprint
   cannot hold the storage (the DEM reservoir is far smaller than the curve says), the report
   says so: the dam data are then the thing to check.
-- **Run report metrics** (v3.10.22, issue #91, `docs/Run_report_metrics.md`; reporting only):
+- **Run report metrics** (v3.10.27, issue #91, `docs/Run_report_metrics.md`; reporting only):
   the summary also gives the flooded area at or above 0.1, 1 and 2 ft, the P95 / P99 velocity
   over cells at least 0.1 ft deep, the depth and position of the maximum-velocity cell, and the
   max / P95 velocity at flooded structures and overtopped roads. An optional water-body mask

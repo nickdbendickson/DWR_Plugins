@@ -624,7 +624,7 @@ RUN_FIELDS = ["run", "status", "resumed", "method", "width_factor", "time_factor
               "minutes"]
 RUN_FIELDS += ["flooded_ac_ge_0_1ft", "flooded_ac_ge_1ft", "flooded_ac_ge_2ft",
                "velocity_p95_fps", "velocity_p99_fps", "max_velocity_depth_ft",
-               "flooded_ac_masked", "flooded_ac_ge_1ft_masked"]   # v3.10.22 (#91), appended
+               "flooded_ac_masked", "flooded_ac_ge_1ft_masked"]   # v3.10.27 (#91), appended
 SUMMARY_FIELDS = ["metric", "unit", "runs", "mean", "std", "min", "p10", "p50", "p90", "max",
                   "base"]
 _METRICS = (("peak_cfs", "cfs"), ("flooded_ac", "ac"), ("flooded_ac_over_arrival_depth", "ac"),
@@ -633,7 +633,7 @@ _METRICS = (("peak_cfs", "cfs"), ("flooded_ac", "ac"), ("flooded_ac_over_arrival
             ("width_factor", "x"), ("time_factor", "x"), ("n_factor", "x"),
             ("structures_flooded", "count"), ("structures_depth_ge_3ft", "count"),
             ("road_km_flooded", "km"), ("rail_km_flooded", "km"),
-            # v3.10.22 (#91)
+            # v3.10.27 (#91)
             ("flooded_ac_ge_0_1ft", "ac"), ("flooded_ac_ge_1ft", "ac"), ("flooded_ac_ge_2ft", "ac"),
             ("velocity_p95_fps", "ft/s"), ("velocity_p99_fps", "ft/s"),
             ("flooded_ac_masked", "ac"), ("flooded_ac_ge_1ft_masked", "ac"))
@@ -1158,7 +1158,7 @@ def run_probabilistic(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_x
                     "formation_time_hr": hp.get("formation_time_hr"),
                     "tr60_rise_time_hr": hp.get("rise_time_hr")})
         from . import report_metrics
-        row.update(report_metrics.table_values(s))      # v3.10.22 (#91)
+        row.update(report_metrics.table_values(s))      # v3.10.27 (#91)
         if any("leaves the base domain" in w for w in (r.warnings or [])):
             row["domain_too_small"] = True
         if classify is not None and row["status"] == "done":
@@ -1265,7 +1265,7 @@ def _base_values(base, rep):
          "formation_time_hr": h.get("formation_time_hr"), "width_factor": 1.0,
          "time_factor": 1.0, "n_factor": 1.0}
     from . import report_metrics
-    b.update(report_metrics.table_values(s))        # v3.10.22 (#91)
+    b.update(report_metrics.table_values(s))        # v3.10.27 (#91)
     r = rep.get("receptors")
     if isinstance(r, dict):
         b.update({"structures_flooded": r.get("structure", {}).get("flooded", 0),

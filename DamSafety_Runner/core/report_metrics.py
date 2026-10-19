@@ -1,4 +1,4 @@
-"""Run-report metrics (v3.10.22, issue #91): reporting only, the model never sees any of this.
+"""Run-report metrics (v3.10.27, issue #91): reporting only, the model never sees any of this.
 
 The headline figures of a run report (`flooded_acres`, `max_velocity_fps`) can mislead: the
 any-depth area is often mostly a thin film (or a lake surface in hydro-flattened LiDAR) and the
@@ -15,13 +15,15 @@ maximum velocity is often one shallow cell. This module adds, from the same fina
     1. the run setting `water_mask` (a vector file path, `path|layername=x` works, several
        separated by ;;) or the NDBREACH_WATERBODY_MASK environment variable
     2. the dam folder's data section "waterbodies" layer (the Data plugin's per-dam step)
-    3. hydro/3DHP_waterbodies.gpkg or hydro/NHD_waterbodies.gpkg in the suite pack or the suite
+    3. hydro/3DHP_waterbodies.gpkg, another hydro/3DHP_*waterbod*.gpkg (3.10.27) or
+       hydro/NHD_waterbodies.gpkg in the suite pack or the suite
        data folder, when that file exists (the pack does not hold it yet; the Data plugin has to
        add it). "off" in the setting or the variable turns the mask off.
 
 Every function takes SI arrays (m, m/s) on a core Grid-like object (x0, y0, dx, nx, ny) whose
 coordinates are in the grid's CRS. Field names are new; no existing report field changes.
 """
+import glob
 import os
 
 import numpy as np
@@ -33,12 +35,13 @@ ENV_MASK = "NDBREACH_WATERBODY_MASK"
 MASK_OFF = ("off", "none", "no", "0", "false")
 SUITE_MASK_FILES = (os.path.join("hydro", "3DHP_waterbodies.gpkg"),
                     os.path.join("hydro", "NHD_waterbodies.gpkg"))
+SUITE_MASK_GLOB = os.path.join("hydro", "3DHP_*waterbod*.gpkg")   # 3.10.27: the 3DHP file's own names
 PACK_DIR = "ND_Dam_Suite_Pack"
 MASK_GEOJSON = "Water Body Mask.geojson"
 ACRE_M2 = 4046.8564224
 
 
-# v3.10.22: the extra table / CSV columns (sensitivity, probabilistic, batch), in this order;
+# v3.10.27: the extra table / CSV columns (sensitivity, probabilistic, batch), in this order;
 # appended after the existing columns so a script reading the old ones by position still works
 TABLE_FIELDS = ("flooded_ac_ge_0_1ft", "flooded_ac_ge_1ft", "flooded_ac_ge_2ft",
                 "velocity_p95_fps", "velocity_p99_fps", "max_velocity_depth_ft",
@@ -181,6 +184,16 @@ def flood_metrics(fin, grid, cell_ac, arrival_m=None, receptors=None, mask=None,
 
 
 # ------------------------------------------------------------------ the mask --
+def _suite_files_in(root):
+    """The waterbody files under one suite root, best first: hydro/3DHP_waterbodies.gpkg, any
+    other hydro/3DHP_*waterbod*.gpkg (the 3DHP download's own names, sorted), then
+    hydro/NHD_waterbodies.gpkg."""
+    exact = [os.path.join(root, rel) for rel in SUITE_MASK_FILES]
+    extra = sorted(glob.glob(os.path.join(root, SUITE_MASK_GLOB)))
+    order = exact[:1] + [p for p in extra if p not in exact] + exact[1:]
+    return [p for p in order if os.path.isfile(p)]
+
+
 def _suite_candidates(environ=None):
     """Suite pack / data folder waterbody files that exist (read only)."""
     env = os.environ if environ is None else environ
@@ -200,9 +213,8 @@ def _suite_candidates(environ=None):
         roots += [os.path.join(data, PACK_DIR), data]
     out = []
     for root in roots:
-        for rel in SUITE_MASK_FILES:
-            p = os.path.join(root, rel)
-            if os.path.isfile(p) and p not in out:
+        for p in _suite_files_in(root):
+            if p not in out:
                 out.append(p)
                 break
     return out[:1]

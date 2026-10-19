@@ -8,13 +8,13 @@ clips are hard-linked (copied where a link is not possible) into one folder each
     merge(work) -> {"dams": path, "bpts": path, "arrows": path, "curves": folder, "terrain": folder,
                     "n_dams": n, "n_ponds": n, "notes": [...]}
 
-Nothing here needs QGIS or GDAL. Not run in a real QGIS.
+Nothing here needs QGIS or GDAL.
 """
 import os
 import shutil
 import sqlite3
 
-from . import workflow as wf
+from . import gpkg_write, workflow as wf
 
 LAYOUT = {"OUT": "18_dams_all.gpkg", "OUTP": "18_breach_points_all.gpkg", "OUTL": "18_flow_arrows_all.gpkg",
           "CURVES": "18_stage_storage", "TERRAIN": "18_terrain"}
@@ -35,7 +35,7 @@ def append_gpkg(dst_path, src_path, notes=None):
     """Append the rows of the (single) feature table of src to the feature table of dst, adding
     the columns dst lacks. Returns the number of rows appended."""
     notes = notes if notes is not None else []
-    con = sqlite3.connect(dst_path)
+    con = gpkg_write.connect(dst_path)
     try:
         dst = _feature_table(con)
         con.execute("ATTACH DATABASE ? AS src", (src_path,))

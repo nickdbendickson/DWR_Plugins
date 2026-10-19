@@ -1,4 +1,4 @@
-# Run report metrics (Runner 3.10.22, issue #91)
+# Run report metrics (Runner 3.10.27, issue #91)
 
 Reporting only: none of this changes the model, the result rasters or the flood polygons.
 Every field is new; the existing fields (`flooded_acres`, `flooded_acres_over_arrival_depth`,
@@ -47,7 +47,7 @@ warning), and `Water Body Mask.geojson` (the mask as polygons) in the dam folder
    (`path|layername=x` works; several separated by `;;`) or polygons in the work CRS.
    Without it, the `NDBREACH_WATERBODY_MASK` environment variable.
 2. The dam folder's data section `waterbodies` layer (the Data plugin's per-dam step).
-3. `hydro/3DHP_waterbodies.gpkg` (or the pre-1.19 `hydro/NHD_waterbodies.gpkg`) in the suite pack
+3. `hydro/3DHP_waterbodies.gpkg`, another `hydro/3DHP_*waterbod*.gpkg` (the 3DHP download's own names, first by name), or the pre-1.19 `hydro/NHD_waterbodies.gpkg` in the suite pack
    or the suite data folder, when that file exists. `ND_Dam_Suite_Pack/LAYERS.txt` lists it but
    the pack does not hold it yet; adding it is a Data-plugin step. The Runner only reads.
 

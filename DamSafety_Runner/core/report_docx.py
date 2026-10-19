@@ -1600,7 +1600,7 @@ SENS_LABELS = {"case": "Case", "group": "Varied", "method": "Method", "peak_cfs"
                "structures_depth_ge_3ft": "Structures >= 3 ft", "road_km_flooded":
                    "Road flooded (km)", "rail_km_flooded": "Rail flooded (km)",
                "hazard_class": "Hazard class", "domain_too_small": "Domain too small",
-               # v3.10.22 (#91)
+               # v3.10.27 (#91)
                "flooded_ac_ge_0_1ft": "Flooded >= 0.1 ft (ac)", "flooded_ac_ge_1ft":
                    "Flooded >= 1 ft (ac)", "flooded_ac_ge_2ft": "Flooded >= 2 ft (ac)",
                "velocity_p95_fps": "Velocity P95 (ft/s)", "velocity_p99_fps":
@@ -2092,7 +2092,7 @@ class _Report(object):
             s.get("flooded_acres_over_arrival_depth"), "ac")
         add("Maximum depth", s.get("max_depth_ft"), "ft")
         add("Maximum velocity", s.get("max_velocity_fps"), "ft/s")
-        # v3.10.22 (#91): what the area and the maximum velocity are made of
+        # v3.10.27 (#91): what the area and the maximum velocity are made of
         add("Flooded area at or above 0.1 ft", s.get("flooded_acres_ge_0_1ft"), "ac")
         add("Flooded area at or above 1 ft", s.get("flooded_acres_ge_1ft"), "ac")
         add("Flooded area at or above 2 ft", s.get("flooded_acres_ge_2ft"), "ac")
@@ -2377,7 +2377,7 @@ class _Report(object):
                 ("Flooded area (ac)", s.get("flooded_acres")),
                 ("Flooded area at or above the arrival depth (ac)",
                  s.get("flooded_acres_over_arrival_depth")),
-                # v3.10.22 (#91)
+                # v3.10.27 (#91)
                 ("Flooded area at or above 0.1 ft (ac)", s.get("flooded_acres_ge_0_1ft")),
                 ("Flooded area at or above 1 ft (ac)", s.get("flooded_acres_ge_1ft")),
                 ("Flooded area at or above 2 ft (ac)", s.get("flooded_acres_ge_2ft")),

@@ -5,9 +5,16 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.37
+version=2.18.38
 author=N.D. Bendickson
 changelog=
+    2.18.38 - 2026-10-19
+      * Flagged structures (damsuite/structure_flags.py, docs/Flagged_structures.md): a dam
+        of the suite's list (DWR-3161 / ND00597, the ND-23 road fill over backwater, hazard
+        Low from the DWR record) is not classified from breach rasters: the run stops with
+        the reason, unless allow_flagged_structure / ALLOW_FLAGGED_STRUCTURE=1, when the log
+        and DATA SOURCES say the hazard of record stays Low and the computed class is for
+        information only. The Dam suite home shows the flag and Low.
     2.18.37 - 2026-10-18
       * One ellipsis character (U+2026) on the shared Dam suite home window's
         Browse… and plugin buttons (suite_home.py, identical in the three plugins).

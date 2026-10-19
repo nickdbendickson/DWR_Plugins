@@ -30,7 +30,10 @@ try:
 except Exception:
     HAVE_GMSH = False
 
-# sha256 of anuga_job.npz written by origin/main 89cb655 for _case() (default mesher)
+# sha256 of anuga_job.npz written by origin/main 89cb655 for _case() (default mesher),
+# with the built-in cell-edge outline tracer. terrain.mask_outline uses contourpy instead
+# when it is installed (the qgis334 env has it, venv_scipy does not), and that traces the
+# mesh polygons up to one cell differently, so the pin is checked with the tracer forced.
 MAIN_JOB_SHA256 = "78c4969f0a72a424c859367b052e224c51d85d7984a46acb964ff873e3f03511"
 
 
@@ -72,7 +75,16 @@ def anuga_default_mesher_job_file_is_byte_identical_to_main():
     assert _sha(a) == _sha(b)
     with np.load(a) as r:
         assert not [k for k in r.files if k.startswith("mesh_")]
-    assert _sha(a) == MAIN_JOB_SHA256, _sha(a)
+    from nd_breach_runner.core import terrain
+    real = terrain._have_contourpy
+    terrain._have_contourpy = lambda: False          # the outline tracer main's pin used
+    try:
+        c = _job()
+        d = _job("default")
+    finally:
+        terrain._have_contourpy = real
+    assert _sha(c) == _sha(d)
+    assert _sha(c) == MAIN_JOB_SHA256, _sha(c)
 
 
 @test

@@ -5,7 +5,7 @@
                      downstream trace; the title gives the dam ID and the inflow elevation
                      against the top of dam.
   qa_depth_map.png   the maximum depth (ft) over a hillshade, with the trace and the dam.
-                     v3.10.22 (#91): the title also gives the area at any depth, >= 0.1, 1 and
+                     v3.10.27 (#91): the title also gives the area at any depth, >= 0.1, 1 and
                      2 ft, the P99 and max velocity (with the depth at the max cell), and the
                      water-body mask (reporting only) is outlined and hatched.
 
@@ -140,7 +140,7 @@ def draw_inflow_map(path, grid, dam_id, dam_xy, inflow_xy, top_m, radius_m=None,
 
 
 def depth_title(dam_id, acres, dmax_ft, metrics=None):
-    """The depth map's title: the 0.1 ft line as before, then (v3.10.22) the #91 figures."""
+    """The depth map's title: the 0.1 ft line as before, then (v3.10.27) the #91 figures."""
     t = "{}: max depth (ft), {:,.0f} ac over 0.1 ft, max {:.2f} ft".format(dam_id, acres, dmax_ft)
     try:
         from .report_metrics import qa_title_lines

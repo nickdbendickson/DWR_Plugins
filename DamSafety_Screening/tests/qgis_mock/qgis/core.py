@@ -307,10 +307,14 @@ class QgsProcessingContext:
 
 
 class QgsProcessingFeedback:
-    def __init__(self, verbose=False): self.log, self.errors, self.verbose, self._cancel = [], [], verbose, False
+    def __init__(self, verbose=False):
+        self.log, self.errors, self.warnings, self.verbose, self._cancel = [], [], [], verbose, False
     def pushInfo(self, m):
         self.log.append(m)
         if self.verbose: print("   [info]", m)
+    def pushWarning(self, m):                      # QGIS >= 3.16 (the plugins need 3.28)
+        self.warnings.append(m); self.log.append(m)
+        if self.verbose: print("   [warning]", m)
     def reportError(self, m, fatal=False):
         self.errors.append(m); print("   [error]", m)
     def setProgress(self, p): pass
@@ -324,6 +328,7 @@ class QgsProcessingMultiStepFeedback:
     def __init__(self, n, parent): self.n, self.parent, self.steps = n, parent, []
     def setCurrentStep(self, i): self.steps.append(i)
     def pushInfo(self, m): self.parent.pushInfo(m)
+    def pushWarning(self, m): self.parent.pushWarning(m)
     def reportError(self, m, fatal=False): self.parent.reportError(m, fatal)
     def setProgress(self, p): pass
     def setProgressText(self, t): pass

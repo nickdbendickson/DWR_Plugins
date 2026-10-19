@@ -212,7 +212,7 @@ class RunSettings:
         # LiDAR shows a water surface (core/reservoir_carve.py): "off" (default) | "auto" |
         # "on"; NDBREACH_RESERVOIR_CARVE overrides the default
         self.reservoir_carve = _carve_default()
-        # v3.10.22 (#91): water-body mask for the run report only (core/report_metrics.py): a
+        # v3.10.27 (#91): water-body mask for the run report only (core/report_metrics.py): a
         # vector file path (several separated by ;;), a list of polygons in the work CRS, or
         # "off". None = NDBREACH_WATERBODY_MASK, else the dam folder's / the suite's waterbody
         # layer when there is one. Never changes the model.
@@ -267,7 +267,7 @@ class RunSettings:
                 continue                 # v3.10.20: off - the report stays as before
             elif k == "water_mask":
                 if v in (None, ""):
-                    continue             # v3.10.22: not set - the report stays as before
+                    continue             # v3.10.27: not set - the report stays as before
                 d[k] = v if isinstance(v, str) else "polygons ({})".format(len(v))
             else:
                 d[k] = v
@@ -1512,7 +1512,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     }
     if "receptors" in report:
         summary["receptors_flooded"] = report["receptors"].get("receptors_flooded")
-    # v3.10.22 (#91): depth-threshold areas, representative velocities, water-body mask
+    # v3.10.27 (#91): depth-threshold areas, representative velocities, water-body mask
     water_mask = _report_metrics(summary, report, st, dem, fin, cell_ac, arrival_m, out_folder,
                                  getattr(writer, "work_srs", None), warnings, log)
     if report.get("anuga_mesh"):
@@ -1598,7 +1598,7 @@ def final_summary(fin, cell_ac, arrival_m, base=None, final_model=None, grid=Non
                   receptors=None, mask=None, mask_source=None, crs=None):
     """The run summary's flood figures from the FINAL arrays (SI): flooded acres (and over
     the arrival depth), max depth, max velocity, latest arrival. `base` (the old summary) is
-    copied first; `final_model` replaces its final_model. v3.10.22 (#91): with `grid`, also
+    copied first; `final_model` replaces its final_model. v3.10.27 (#91): with `grid`, also
     the report_metrics fields (depth-threshold areas, P95 / P99 velocity, the max-velocity
     cell, velocity at `receptors`, and the masked figures when `mask` is given); the old
     values of those fields are dropped first so none is left over from the screening pass."""
@@ -1679,7 +1679,7 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
             os.replace(src, dst)
             screening["vectors"][nm] = dst
     rec = getattr(st, "receptors", None) if st is not None else None
-    # v3.10.22 (#91): the depth-threshold / velocity / mask figures from the final rasters too
+    # v3.10.27 (#91): the depth-threshold / velocity / mask figures from the final rasters too
     from . import report_metrics as rm
     mask, minfo = None, None
     try:
@@ -2078,7 +2078,7 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
 
 def _report_metrics(summary, report, st, grid, fin, cell_ac, arrival_m, out_folder, crs,
                     warnings, log):
-    """v3.10.22 (#91): the report_metrics fields into `summary` and the water-body mask into
+    """v3.10.27 (#91): the report_metrics fields into `summary` and the water-body mask into
     report['water_mask']. Reporting only, never fails the run. Returns the mask (or None)."""
     from . import report_metrics as rm
     mask = None
@@ -2243,7 +2243,7 @@ def render_report(r):
              "| Domain | {} x {} mi after {} LISFLOOD-FP run(s) |".format(
                  s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"])]
     from . import report_metrics as _rm
-    lines += _rm.report_lines(s)        # v3.10.22 (#91); nothing for an older report
+    lines += _rm.report_lines(s)        # v3.10.27 (#91); nothing for an older report
     if s.get("receptors_flooded"):
         lines.append("| Reaches | {} |".format(s["receptors_flooded"]))
     if s.get("refine_near_dam"):

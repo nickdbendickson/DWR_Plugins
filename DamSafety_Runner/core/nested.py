@@ -352,7 +352,7 @@ def run_nested(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         "interface_peak_cfs": out.interface["peak_cfs"],
         "fine_cells": int(fr.grid.data.size), "coarse_cells": int(cr.grid.data.size),
     }
-    try:                    # v3.10.22 (#91): reporting only
+    try:                    # v3.10.27 (#91): reporting only
         from . import report_metrics
         out.summary.update(report_metrics.flood_metrics(
             fin, grid, cell_ac, st.arrival_depth_ft * FT,

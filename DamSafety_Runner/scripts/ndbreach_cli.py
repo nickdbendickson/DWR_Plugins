@@ -104,6 +104,7 @@ try:
     gdal_io = importlib.import_module(PKG + ".core.gdal_io")
     grid_mod = importlib.import_module(PKG + ".core.grid")
     units = importlib.import_module(PKG + ".core.units")
+    sflags = importlib.import_module(PKG + ".damsuite.structure_flags")
 except Exception as _e:              # pragma: no cover
     _fail_import(_e)
 
@@ -114,15 +115,15 @@ FT, MILE = units.FT, units.MILE
 BATCH_FIELDS = ("Dam", "Folder", "Status", "Scenario", "Final_Model", "Peak_Breach_cfs",
                 "Storage_At_Failure_acft", "Flooded_ac", "Max_Depth_ft", "Max_Velocity_fps",
                 "Latest_Arrival_hr", "Receptors_Flooded", "Runs", "Domain_mi", "Minutes",
-                "Warnings", "Message",
-                # v3.10.22 (#91): appended, so the columns above keep their places
+                "Warnings", "Message", "Structure_Flag", "Hazard_Of_Record",
+                # v3.10.27 (#91): appended after 3.10.23's flag columns, so the columns above keep their places
                 "Flooded_ge_0_1ft_ac", "Flooded_ge_1ft_ac", "Flooded_ge_2ft_ac",
                 "Velocity_P95_fps", "Velocity_P99_fps", "Max_Velocity_Depth_ft",
                 "Flooded_Masked_ac", "Flooded_ge_1ft_Masked_ac")
 
 
 def _batch_metrics(s):
-    """v3.10.22 (#91): the appended batch columns from a run summary ("" when absent)."""
+    """v3.10.27 (#91): the appended batch columns from a run summary ("" when absent)."""
     keys = (("Flooded_ge_0_1ft_ac", "flooded_acres_ge_0_1ft"),
             ("Flooded_ge_1ft_ac", "flooded_acres_ge_1ft"),
             ("Flooded_ge_2ft_ac", "flooded_acres_ge_2ft"),
@@ -1321,10 +1322,38 @@ def _print_summary(res):
         say("{}: {}".format(k, v))
 
 
+def _flag_of(d, row=None):
+    """3.10.23: the structure_flags entry of a dam (its dam_id / nid_id / structure_id, or a
+    table row's NID / structure id columns); None when not flagged."""
+    for k in ("dam_id", "nid_id"):
+        e = sflags.lookup(d.get(k))
+        if e:
+            return e
+    e = sflags.lookup(structure_id=d.get("structure_id"))
+    if e:
+        return e
+    for k, v in (row or {}).items():
+        lk = str(k).lower()
+        if lk in ("nidid", "nid_id", "national_id", "national_i", "federal_id"):
+            e = sflags.lookup(nid_id=v)
+        elif lk in ("structure_id", "structure_"):
+            e = sflags.lookup(structure_id=v)
+        if e:
+            return e
+    return None
+
+
 def cmd_run(args):
     cfg = load_config(args.config)
     if args.output:
         cfg.data["output"]["folder"] = os.path.abspath(args.output)
+    flag = _flag_of(dam_dict(cfg))
+    if flag and not sflags.allowed(getattr(args, "allow_flagged_structure", False)):
+        raise CliError(sflags.refusal(flag, "breach run", dam_dict(cfg).get("dam_id"),
+                                      "--allow-flagged-structure or {}=1".format(
+                                          sflags.ENV_ALLOW)))
+    if flag:
+        say(sflags.overridden_text(flag, dam_dict(cfg).get("dam_id")))
     try:
         p = prepare(cfg, args)
     except brmod.BreachInputError as e:
@@ -1586,6 +1615,17 @@ def cmd_batch(args):
         out = dict.fromkeys(BATCH_FIELDS, "")
         out.update({"Dam": dam_id, "Folder": folder})
         pr = Progress(100.0 * i / n, 100.0 * (i + 1) / n)
+        flag = _flag_of(vals, row)                 # 3.10.23: a flagged structure is skipped
+        if flag:
+            out.update({"Structure_Flag": sflags.note(flag), "Hazard_Of_Record": "{} ({})".format(
+                flag.get("hazard"), flag.get("hazard_source"))})
+            if not sflags.allowed():
+                out.update({"Status": "flagged", "Message": sflags.refusal(
+                    flag, "breach run", dam_id, "{}=1".format(sflags.ENV_ALLOW))[:500]})
+                say("{}: skipped, flagged structure: {}".format(dam_id, sflags.note(flag)))
+                results.append(out)
+                continue
+            out["Structure_Flag"] += " (run allowed)"
         depth_names = (workflow.FINAL_NAMES["depth"],
                        os.path.splitext(workflow.FINAL_NAMES["depth"])[0] + ".asc")
         if skip_done and any(os.path.exists(os.path.join(folder, nm)) for nm in depth_names):
@@ -1646,9 +1686,10 @@ def cmd_batch(args):
         w.writeheader()
         w.writerows(results)
     counts = dict((k, sum(1 for r in results if r["Status"] == k))
-                  for k in ("done", "failed", "skipped", "cancelled", "no breach"))
+                  for k in ("done", "failed", "skipped", "cancelled", "no breach", "flagged"))
     say("{done} run, {failed} failed, {skipped} skipped, {no breach} with no breach".format(
-        **counts))
+        **counts) + (", {} flagged structure(s) not run".format(counts["flagged"])
+                     if counts["flagged"] else ""))
     say("Summary: " + path)
     if counts["cancelled"] or CANCEL["flag"]:
         return 130
@@ -1691,6 +1732,9 @@ def build_parser():
     p.add_argument("config")
     p.add_argument("--resume", action="store_true", help="reuse finished LISFLOOD-FP runs")
     p.add_argument("--output", default="", help="output folder (overrides the configuration)")
+    p.add_argument("--allow-flagged-structure", action="store_true",
+                   help="run a flagged structure anyway (docs/Flagged_structures.md; results "
+                        "for information only)")
     models(p)
     p.set_defaults(func=cmd_run)
     p = sub.add_parser("hydrograph", help="breach hydrograph only (no DEM needed)")

@@ -1,4 +1,4 @@
-"""Run-report metrics (core/report_metrics.py, v3.10.22, issue #91): depth-threshold areas,
+"""Run-report metrics (core/report_metrics.py, v3.10.27, issue #91): depth-threshold areas,
 P95 / P99 velocity over wet cells, the max-velocity cell's depth and position, velocity at
 receptors, and the reporting-only water-body mask (masked and unmasked side by side)."""
 import hashlib
@@ -162,6 +162,13 @@ def report_metrics_mask_sources_user_then_dam_then_suite_and_off():
         assert sorted(os.listdir(hydro)) == listing                    # nothing written
         # the 1.19 3DHP name wins over the NHD one in the same folder
         p3 = os.path.join(hydro, "3DHP_waterbodies.gpkg")
+        open(p3, "wb").close()
+        assert RM.mask_sources(None, env) == [p3]
+        # any other hydro/3DHP_*waterbod*.gpkg comes after the exact 3DHP name, before the NHD one
+        os.remove(p3)
+        p3b = os.path.join(hydro, "3DHP_ND_waterbodies.gpkg")
+        open(p3b, "wb").close()
+        assert RM.mask_sources(None, env) == [p3b]
         open(p3, "wb").close()
         assert RM.mask_sources(None, env) == [p3]
         polys = [[(0, 0), (1, 0), (1, 1)]]
