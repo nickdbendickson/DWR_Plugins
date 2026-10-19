@@ -504,6 +504,11 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
                                / 4046.8564224, 1),
         "max_edge_depth_ft": round(stats["max_edge_depth_m"] / 0.3048, 2),
     })
+    try:                    # v3.10.27 (#91): reporting only
+        from . import report_metrics
+        stats.update(report_metrics.pass_stats(dem, depth, vel))
+    except Exception:       # noqa: BLE001
+        pass
     if log:
         log("ANUGA finished in {:.1f} min ({} triangles)".format((time.time() - t0) / 60.0,
                                                                stats.get("triangles")))

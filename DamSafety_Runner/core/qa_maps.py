@@ -5,6 +5,9 @@
                      downstream trace; the title gives the dam ID and the inflow elevation
                      against the top of dam.
   qa_depth_map.png   the maximum depth (ft) over a hillshade, with the trace and the dam.
+                     v3.10.27 (#91): the title also gives the area at any depth, >= 0.1, 1 and
+                     2 ft, the P99 and max velocity (with the depth at the max cell), and the
+                     water-body mask (reporting only) is outlined and hatched.
 
 QA_MAPS setting: "off" | "inflow" | "inflow+depth" (default). matplotlib (in the QGIS python)
 draws them; without it a plain Qt image is drawn (hillshade and symbols, no contours). A map
@@ -136,15 +139,31 @@ def draw_inflow_map(path, grid, dam_id, dam_xy, inflow_xy, top_m, radius_m=None,
     return path
 
 
-def draw_depth_map(path, grid, depth_m, dam_id, dam_xy, inflow_xy=None, trace=None):
-    """qa_depth_map.png: the max depth (ft) of the final model grid over its hillshade."""
+def depth_title(dam_id, acres, dmax_ft, metrics=None):
+    """The depth map's title: the 0.1 ft line as before, then (v3.10.27) the #91 figures."""
+    t = "{}: max depth (ft), {:,.0f} ac over 0.1 ft, max {:.2f} ft".format(dam_id, acres, dmax_ft)
+    try:
+        from .report_metrics import qa_title_lines
+        more = qa_title_lines(metrics)
+    except Exception:                        # noqa: BLE001
+        more = []
+    return "\n".join([t] + more)
+
+
+def draw_depth_map(path, grid, depth_m, dam_id, dam_xy, inflow_xy=None, trace=None,
+                   metrics=None, water_mask=None):
+    """qa_depth_map.png: the max depth (ft) of the final model grid over its hillshade.
+    `metrics`: the run summary (report_metrics fields go into the title); `water_mask`: bool
+    array on `grid` drawn as a hatched outline (reporting only)."""
     d = np.asarray(depth_m, dtype=float) / FT
     wet = np.isfinite(d) & (d > 0.1)
     z = grid.masked()
     ext = (grid.x0, grid.x0 + grid.nx * grid.dx, grid.y0 - grid.ny * grid.dx, grid.y0)
     acres = wet.sum() * grid.dx * grid.dx / 4046.86
-    title = "{}: max depth (ft), {:,.0f} ac over 0.1 ft, max {:.2f} ft".format(
-        dam_id, acres, float(np.nanmax(d)) if wet.any() else 0.0)
+    title = depth_title(dam_id, acres, float(np.nanmax(d)) if wet.any() else 0.0, metrics)
+    wm = None
+    if water_mask is not None and np.shape(water_mask) == d.shape and np.any(water_mask):
+        wm = np.asarray(water_mask, dtype=bool)
     try:
         plt = _plt()
     except Exception:                        # noqa: BLE001
@@ -157,6 +176,14 @@ def draw_depth_map(path, grid, depth_m, dam_id, dam_xy, inflow_xy=None, trace=No
         if trace is not None and len(trace) > 1:
             t = np.asarray(trace, dtype=float)
             ax.plot(t[:, 0], t[:, 1], "r-", lw=0.8, label="downstream trace")
+        if wm is not None:
+            X = grid.x0 + (np.arange(grid.nx) + 0.5) * grid.dx
+            Y = grid.y0 - (np.arange(grid.ny) + 0.5) * grid.dx
+            ax.contourf(X, Y, wm.astype(float), levels=[0.5, 1.5], colors="none",
+                        hatches=["////"])
+            ax.contour(X, Y, wm.astype(float), levels=[0.5], colors="darkorange",
+                       linewidths=1.0)
+            ax.plot([], [], "-", color="darkorange", label="water-body mask (reporting only)")
         ax.plot(*dam_xy, "k*", ms=12, mec="w", label="dam")
         if wet.any():
             rr, cc = np.where(wet)
@@ -205,7 +232,7 @@ def _qt_map(path, a, ext, cell, title, dam_xy, inflow_xy, trace, depth_ft):
             p.setPen(QPen(QColor(255, 0, 0), 3))
             p.drawEllipse(px(*inflow_xy), 5, 5)
         p.setPen(QPen(QColor(0, 0, 0)))
-        p.drawText(4, 14, title)
+        p.drawText(4, 14, title.split("\n")[0])
     finally:
         p.end()
     if not img.save(path, "PNG"):
@@ -215,7 +242,7 @@ def _qt_map(path, a, ext, cell, title, dam_xy, inflow_xy, trace, depth_ft):
 
 def write_qa_maps(mode, out_folder, dam_id, terrain_grid, dam_xy, inflow_xy, top_m, radius_m=None,
                   trace=None, crest_line=None, breach_xy=None, model_grid=None, depth_m=None,
-                  log=None):
+                  log=None, metrics=None, water_mask=None):
     """Write the QA maps `mode` asks for into `out_folder`. Never raises.
     Returns ({"inflow_map": path, "depth_map": path, "seconds": s, "mode": mode}, [problems])."""
     out, problems = {}, []
@@ -236,7 +263,7 @@ def write_qa_maps(mode, out_folder, dam_id, terrain_grid, dam_xy, inflow_xy, top
         terrain_grid is not None)]
     if mode == QA_BOTH:
         jobs.append(("depth_map", DEPTH_PNG, lambda p: draw_depth_map(
-            p, model_grid, depth_m, dam_id, dam_xy, inflow_xy, trace),
+            p, model_grid, depth_m, dam_id, dam_xy, inflow_xy, trace, metrics, water_mask),
             model_grid is not None and depth_m is not None))
     for key, name, fn, ok in jobs:
         if not ok:

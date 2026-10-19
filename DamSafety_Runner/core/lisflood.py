@@ -417,6 +417,11 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "in_domain_acft": round(vol / 1233.48183754752, 2),
         "velocity_written": vmax_written,
     }
+    try:                    # v3.10.27 (#91): reporting only
+        from . import report_metrics
+        stats.update(report_metrics.pass_stats(dem, hmax, vmax))
+    except Exception:       # noqa: BLE001
+        pass
     if stats["max_volume_error_pct"] and stats["max_volume_error_pct"] > 1.0:
         notes.append("LISFLOOD-FP mass-balance error is {}% of the injected volume (limit 1%); "
                      "try a smaller cell size or initial time step.".format(
