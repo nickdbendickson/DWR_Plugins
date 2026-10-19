@@ -148,11 +148,28 @@ def test_no_screen_uses_the_preferred_size():
             QApplication.primaryScreen = old
 
 
+def _teardown():
+    """Destroy the test widgets and QGIS while the application is still alive.
+
+    The tests call deleteLater(), which only posts a DeferredDelete event; with no event loop
+    nothing delivers it. Left pending, Python's interpreter teardown then destroyed the
+    QgsApplication and the Python-owned dialogs in no fixed order, and Qt 6 (conda-forge
+    QGIS 4 on CI) freed the same widgets twice: SIGSEGV / "malloc(): ... corrupted" after
+    every check had passed. Deliver the deletes now, then shut QGIS down as a standalone
+    script should."""
+    from qgis.PyQt.QtCore import QCoreApplication, QEvent
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    QgsApplication.exitQgis()
+
+
 if __name__ == "__main__":
     n = 0
-    for _name, _fn in sorted(globals().items()):
-        if _name.startswith("test_") and callable(_fn):
-            _fn()
-            n += 1
-            print("ok", _name)
+    try:
+        for _name, _fn in sorted(globals().items()):
+            if _name.startswith("test_") and callable(_fn):
+                _fn()
+                n += 1
+                print("ok", _name)
+    finally:
+        _teardown()
     print("{}: all {} checks passed".format(os.path.basename(__file__), n))

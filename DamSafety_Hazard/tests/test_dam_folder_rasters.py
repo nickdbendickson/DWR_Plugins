@@ -239,11 +239,25 @@ def test_h2_dams_root_and_double_slash_refused():
         _done(d)
 
 
+def _teardown():
+    """Shut Qt and QGIS down while the application is still alive (see the Screening copy in
+    DamSafety_Screening/tests/test_ui_fit_screens.py): deliver the deleteLater() deletes, which
+    nothing else delivers without an event loop, then exitQgis(). Otherwise Python's
+    interpreter teardown destroyed the QgsApplication and the widgets in no fixed order and
+    Qt 6 (conda-forge QGIS 4 on CI) crashed at exit after every check had passed."""
+    from qgis.PyQt.QtCore import QCoreApplication, QEvent
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    QgsApplication.exitQgis()
+
+
 if __name__ == "__main__":
     n = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-            n += 1
-            print("ok", name, flush=True)
+    try:
+        for name, fn in sorted(globals().items()):
+            if name.startswith("test_") and callable(fn):
+                fn()
+                n += 1
+                print("ok", name, flush=True)
+    finally:
+        _teardown()
     print("{} passed".format(n), flush=True)

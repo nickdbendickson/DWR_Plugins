@@ -117,16 +117,30 @@ def test_we3_termination_note():
     assert any("EAP_Termination_Point" in m for m in logs), logs
 
 
+def _teardown():
+    """Shut Qt and QGIS down while the application is still alive (see the Screening copy in
+    DamSafety_Screening/tests/test_ui_fit_screens.py): deliver the deleteLater() deletes, which
+    nothing else delivers without an event loop, then exitQgis(). Otherwise Python's
+    interpreter teardown destroyed the QgsApplication and the widgets in no fixed order and
+    Qt 6 (conda-forge QGIS 4 on CI) crashed at exit after every check had passed."""
+    from qgis.PyQt.QtCore import QCoreApplication, QEvent
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    QgsApplication.exitQgis()
+
+
 if __name__ == "__main__":
     fails = 0
-    for n, f in sorted(globals().items()):
-        if n.startswith("test_") and callable(f):
-            try:
-                f()
-                print("PASS", n)
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                fails += 1
-                print("FAIL", n, e)
+    try:
+        for n, f in sorted(globals().items()):
+            if n.startswith("test_") and callable(f):
+                try:
+                    f()
+                    print("PASS", n)
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    fails += 1
+                    print("FAIL", n, e)
+    finally:
+        _teardown()
     sys.exit(1 if fails else 0)

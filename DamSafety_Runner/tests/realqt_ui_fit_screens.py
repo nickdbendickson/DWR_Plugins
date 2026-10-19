@@ -167,11 +167,25 @@ def test_remembered_size_is_still_clamped():
         QSettings().remove(key.split("/")[0])
 
 
+def _teardown():
+    """Shut Qt and QGIS down while the application is still alive (see the Screening copy in
+    DamSafety_Screening/tests/test_ui_fit_screens.py): deliver the deleteLater() deletes, which
+    nothing else delivers without an event loop, then exitQgis(). Otherwise Python's
+    interpreter teardown destroyed the QgsApplication and the widgets in no fixed order and
+    Qt 6 (conda-forge QGIS 4 on CI) crashed at exit after every check had passed."""
+    from qgis.PyQt.QtCore import QCoreApplication, QEvent
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    QgsApplication.exitQgis()
+
+
 if __name__ == "__main__":
     n = 0
-    for _name, _fn in sorted(globals().items()):
-        if _name.startswith("test_") and callable(_fn):
-            _fn()
-            n += 1
-            print("ok", _name)
+    try:
+        for _name, _fn in sorted(globals().items()):
+            if _name.startswith("test_") and callable(_fn):
+                _fn()
+                n += 1
+                print("ok", _name)
+    finally:
+        _teardown()
     print("{}: all {} checks passed".format(os.path.basename(__file__), n))
