@@ -156,3 +156,9 @@ if __name__ == "__main__":
             n += 1
             print("ok", _name)
     print("{}: all {} checks passed".format(os.path.basename(__file__), n))
+    # Exit without Python's interpreter teardown: some QGIS builds (conda-forge on GitHub
+    # Actions) crash while destroying the QgsApplication and its widgets at exit, which
+    # turned a passing run into a failure. Every check has already run and been reported.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)

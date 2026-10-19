@@ -50,12 +50,14 @@ jobs:
           # (tests/qgis_mock on PYTHONPATH shadowed the real osgeo for the GDAL-write tests)
           python DamSafety_Screening/tests/run_all.py
       - name: Runner fast suite
+        if: ${{ !cancelled() }}   # run even when an earlier suite failed, so every suite reports
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           cd "$GITHUB_WORKSPACE"
           python -m nd_breach_runner.tests.run_tests
       - name: Hazard suite (real QGIS)
+        if: ${{ !cancelled() }}   # run even when an earlier suite failed, so every suite reports
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
