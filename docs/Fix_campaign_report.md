@@ -288,3 +288,37 @@ into the deliverable, plus validating the engines against a real binary.
 | P1 | S | **Stamp input-data vintage** (NSI / 911 / AADT versions) onto the face of every LoL / EAP / hazard output. |
 | P1 | L | **Finish HEC-RAS 2D to production** — chain self-test, headless TCU, golden regression, batch tier (it self-labels "preliminary"). |
 | P2 | M | **Promote the uncertainty envelope** (`probabilistic.py` / `sensitivity.py` P10/P50/P90) to a first-class, EAP-ready output. |
+
+---
+
+## 11. Fork convergence — slice 1 done (safety core)
+
+Started the P0 **DWR ↔ nd_ fork convergence** with its safe first slice: the safety core.
+
+- **Key finding (reassuring):** the `chain.py` functions that decide classification
+  comparability — `_canonical`, `digest_of`, `manifest_ok`, `compare_rasters`,
+  `find_runner_manifest`, `chain_summary`, `_norm_role`, `_entries`, `_where` — were **already
+  byte-identical across both forks**. So the forks already fingerprint and classify comparably;
+  the only `chain.py` divergence was DamSafety's transparent persistent **disk cache** (perf,
+  not safety).
+- **Reconciled to byte-identical across forks:** `damsuite/chain.py` and `damsuite/solvegate.py`.
+  nd adopted DamSafety's superset `chain.py` (adds the disk cache) plus the one-line **FP.1
+  guard** in nd's `fingerprint.py` (`use_disk_cache=False` on evaluation keys — preserves nd's
+  fresh-hash behavior; required so a raster rewritten in place is still seen as changed).
+  `solvegate.py` picked up DamSafety's UTF-8/encoding hardening. nd's four `FILES.json`
+  regenerated; all four nd `damsuite.selfcheck()` clean.
+- **Intentionally left fork-specific:** `damsuite/versions.py` is branding + per-fork release
+  numbers (`nd_*` folder names and the 2.3x/3.2x line vs `DamSafety_*` and the reset line);
+  forcing it identical would erase the brands. Its shared *logic* (`version_of`, the compat
+  matrix) can converge later; its data must not.
+- **New gate:** `tools/check_fork_parity.py` asserts `chain.py` + `solvegate.py` are identical
+  across the forks (and that each fork's vendored copies agree). It runs where both repos are
+  checked out (a combined CI job or locally) and is wired into `tools/ci_checks.py` as a step
+  that skips gracefully when the nd checkout is absent. Within-fork drift stays covered by
+  `tools/sync_damsuite.py`.
+
+**Remaining convergence work** (larger slices, still P0-adjacent): a true single-source shared
+`damsuite` both forks vendor from a pinned tag (so the cross-fork gate runs in normal CI, not
+only a combined checkout); converging the coupled non-core files that drifted (e.g. the newer
+`fingerprint.py` nested-VRT handling); and deciding the end-state (one product + a branding skin,
+vs. an extracted shared package).

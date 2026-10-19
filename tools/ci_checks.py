@@ -76,6 +76,18 @@ def check_compile(problems):
     print("  compiled {} .py files".format(n))
 
 
+def check_fork_parity(problems):
+    """Safety core identical across the DamSafety and nd_hazard forks — only when both are
+    checked out (separate repos), otherwise a graceful skip."""
+    import check_fork_parity as cfp
+    nd = os.environ.get("ND_HAZARD_ROOT", "/home/user/nd_hazard")
+    if not os.path.isdir(nd):
+        print("  nd_hazard checkout not present; skipping cross-fork parity (set ND_HAZARD_ROOT)")
+        return
+    for p in cfp.check(nd):
+        _fail(problems, "fork parity: " + p)
+
+
 def check_golden(problems):
     try:
         import numpy  # noqa: F401
@@ -95,6 +107,7 @@ def check_golden(problems):
 def main():
     problems = []
     for name, fn in (("damsuite drift", check_damsuite_drift), ("versions", check_versions),
+                     ("fork parity", check_fork_parity),
                      ("compile", check_compile), ("golden baseline", check_golden)):
         print("[ci] " + name)
         try:
