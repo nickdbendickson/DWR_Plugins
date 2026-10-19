@@ -377,14 +377,16 @@ def build_mesh(spec):
     (culvert ends, inflow), and sizes: min_area_m2, channel_area_m2,
     max_area_m2, culvert_area_m2 (the points; None = min_area_m2), line_dist_min_m,
     line_dist_max_m, channel_dist_min_m, channel_dist_max_m, min_angle_deg,
-    min_area_tol (gate, see MIN_AREA_TOL), threads.
-    Returns dict(points, triangles (CCW), boundary [[tri, edge]...], stats)."""
-    import gmsh
+    min_area_tol (gate, see MIN_AREA_TOL), threads; v3.10.22 (HEC-RAS seeds): algorithm
+    (gmsh Mesh.Algorithm, default 5), random_seed (Mesh.RandomSeed, for the same points
+    every run), optimize [[method, niter]...] (default Laplace2D x 5), smoothing
+    (Mesh.Smoothing passes). Returns dict(points, triangles (CCW), boundary [[tri, edge]...], stats)."""
     g = dict(min_area_m2=100.0, channel_area_m2=250.0, max_area_m2=20000.0,
              line_dist_min_m=60.0, line_dist_max_m=1500.0, channel_dist_min_m=250.0,
              channel_dist_max_m=2500.0, point_dist_min_m=40.0, point_dist_max_m=600.0,
              min_angle_deg=20.0, min_area_tol=MIN_AREA_TOL, culvert_area_m2=None, declutter=True,
-             threads=0)
+             threads=0, algorithm=5, random_seed=None, optimize=(("Laplace2D", 5),),
+             smoothing=None)
     g.update({k: v for k, v in spec.items() if k in g})
     if g["culvert_area_m2"] is None:
         g["culvert_area_m2"] = g["min_area_m2"]
@@ -393,6 +395,9 @@ def build_mesh(spec):
         ring = ring[:-1]
     if len(ring) < 3:
         raise MeshError("outer polygon has fewer than 3 points")
+    # checked before gmsh is imported, so a bad spec is reported as such even where gmsh
+    # is missing (that is reported by make_gmsh_mesh as the ModuleNotFoundError line)
+    import gmsh
     # gmsh works in local coordinates: with UTM-sized numbers its tolerances
     # break down and meshing can hang
     origin = ring.min(axis=0)
@@ -483,9 +488,14 @@ def build_mesh(spec):
             gmsh.option.setNumber("Mesh." + k, 0)
         gmsh.option.setNumber("Mesh.MeshSizeMin", min(hmin, hpt) if ptags else hmin)
         gmsh.option.setNumber("Mesh.MeshSizeMax", hmax)
-        gmsh.option.setNumber("Mesh.Algorithm", 5)
+        gmsh.option.setNumber("Mesh.Algorithm", int(g["algorithm"]))
+        if g["random_seed"] is not None:
+            gmsh.option.setNumber("Mesh.RandomSeed", int(g["random_seed"]))
+        if g["smoothing"] is not None:
+            gmsh.option.setNumber("Mesh.Smoothing", int(g["smoothing"]))
         gmsh.model.mesh.generate(2)
-        gmsh.model.mesh.optimize("Laplace2D", niter=5)
+        for meth, nit in (g["optimize"] or ()):
+            gmsh.model.mesh.optimize(str(meth), niter=int(nit))
         tags, xyz, _ = gmsh.model.mesh.getNodes()
         etypes, _, enodes = gmsh.model.mesh.getElements(2)
         tri_nodes = None

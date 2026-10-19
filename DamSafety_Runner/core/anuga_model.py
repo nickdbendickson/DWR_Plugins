@@ -18,9 +18,13 @@ import numpy as np
 
 from .grid import Grid
 from .lisflood import Envelopes, ModelError, Cancelled
-from . import terrain
+from . import terrain, wallclock
 from . import conditioning as cond
 from . import structures as structmod
+
+# Windows: no console window for a child program (QGIS is a GUI program, so each console
+# program it starts opens its own window, and closing that window kills the run)
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_NO_WINDOW
 
 WORKER = os.path.join(os.path.dirname(__file__), "anuga_worker.py")
 MESHER = os.path.join(os.path.dirname(__file__), "gmsh_mesher.py")
@@ -318,8 +322,9 @@ def make_gmsh_mesh(workdir, spec, st):
     if os.path.exists(op):
         os.remove(op)
     try:
-        out = subprocess.run([st.python, MESHER, sp, op], capture_output=True, text=True,
-                             env=_clean_env(), timeout=float(st.gmsh_timeout_s), errors="replace")
+        # wall-clock timeout (a paused VM counts; core/wallclock.py), SIGTERM then SIGKILL
+        out = wallclock.run([st.python, MESHER, sp, op], env=_clean_env(),
+                            timeout=float(st.gmsh_timeout_s), grace=5.0, what="gmsh")
     except subprocess.TimeoutExpired:
         return None, "gmsh took over {:.0f} s (timeout)".format(st.gmsh_timeout_s)
     except Exception as e:
@@ -360,7 +365,7 @@ def _launch(st, job, result, workdir, progress, cancel):
     with open(log_path, "w", encoding="utf-8") as logf:
         proc = subprocess.Popen([st.python, "-u", WORKER, job, result], cwd=workdir, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                bufsize=1, errors="replace")
+                                bufsize=1, errors="replace", **NO_WINDOW)
         lines = queue.Queue()
 
         def pump():
@@ -503,6 +508,11 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
                                / 4046.8564224, 1),
         "max_edge_depth_ft": round(stats["max_edge_depth_m"] / 0.3048, 2),
     })
+    try:                    # v3.10.27 (#91): reporting only
+        from . import report_metrics
+        stats.update(report_metrics.pass_stats(dem, depth, vel))
+    except Exception:       # noqa: BLE001
+        pass
     if log:
         log("ANUGA finished in {:.1f} min ({} triangles)".format((time.time() - t0) / 60.0,
                                                                stats.get("triangles")))
@@ -529,7 +539,7 @@ def check_anuga(python, workdir):
             "import sys; print(getattr(anuga,'__version__','?'), sys.version.split()[0])")
     try:
         out = subprocess.run([python, "-c", code], capture_output=True, text=True, env=env,
-                             timeout=300, errors="replace")
+                             timeout=300, errors="replace", **NO_WINDOW)
     except Exception as e:
         return {"ok": False, "message": str(e)}
     if out.returncode != 0:
@@ -546,7 +556,8 @@ def check_gmsh(python, env=None):
     code = "import gmsh; print(gmsh.__version__)"
     try:
         out = subprocess.run([python, "-c", code], capture_output=True, text=True,
-                             env=env or _clean_env(), timeout=120, errors="replace")
+                             env=env or _clean_env(), timeout=120, errors="replace",
+                             **NO_WINDOW)
     except Exception as e:
         return {"gmsh": None, "gmsh_message": "gmsh check failed: {}".format(e)}
     if out.returncode != 0:

@@ -615,7 +615,11 @@ def connection_timeseries(hdf, name, prefer_block="DSS Hydrograph Output"):
     {'block', 'path', 't_hr', 'columns', 'values' (n, k), 'units'}. Uses the 'Structure
     Variables' (Total Flow, Weir Flow, Stage HW, Stage TW) of the block with the most time
     steps that are a TIME SERIES (rows = that block's Time), preferring `prefer_block`
-    (every minute when HEC-RAS writes it); never the DSS Profile Output table."""
+    (every minute when HEC-RAS writes it); never the DSS Profile Output table.
+    v3.10.22: with a breach, also 'breach' (the Breaching Variables: Stage HW/TW, Bottom-Width,
+    Bottom-Elevation, side slopes, Breach Flow, Velocity, Flow Area), 'breach_flow' (HEC's own
+    Breach Flow; Weir Flow INCLUDES it) and 'other_flow' (Total - Breach: the spillway);
+    None without a breach."""
     f, close = _open_hdf(hdf)
     try:
         cat = Catalog(f)
@@ -645,9 +649,34 @@ def connection_timeseries(hdf, name, prefer_block="DSS Hydrograph Output"):
             cols.append(vals[0] if vals else "")
             units.append(vals[1] if len(vals) > 1 else "")
         t_hr = np.asarray(_read(to), dtype=np.float64).reshape(-1) * _time_factor_hr(cat, tp, to)
-        return {"block": blk.split("/")[-2] if "/" in blk else blk, "path": p, "t_hr": t_hr,
-                "columns": cols, "units": units,
-                "values": np.asarray(_read(o), dtype=np.float64)}
+        values = np.asarray(_read(o), dtype=np.float64)
+        out = {"block": blk.split("/")[-2] if "/" in blk else blk, "path": p, "t_hr": t_hr,
+               "columns": cols, "units": units, "values": values,
+               "breach": None, "breach_flow": None, "other_flow": None}
+        # v3.10.22: HEC-RAS counts the breach flow inside 'Weir Flow' (Absaraka v2: Total -
+        # Weir = 0 all through); its own 'Breach Flow' is in the connection's 'Breaching
+        # Variables' next to the Structure Variables. Total - Breach is what else crosses the
+        # connection (the spillway notch, the weir away from the breach).
+        bp = p.rsplit("/", 1)[0] + "/Breaching Variables"
+        bo = [x for q, x in cat.find("breaching variables", exact=True) if q == bp]
+        if bo and bo[0].shape[0] == values.shape[0]:
+            bcols, bunits = [], []
+            for row in _attrs(bo[0]).get("Variable_Unit", []):
+                vals = [_text(v) for v in (row if hasattr(row, "__len__") and not isinstance(
+                    row, (bytes, str)) else [row])]
+                bcols.append(vals[0] if vals else "")
+                bunits.append(vals[1] if len(vals) > 1 else "")
+            bv = np.asarray(_read(bo[0]), dtype=np.float64)
+            out["breach"] = {"path": bp, "columns": bcols, "units": bunits, "values": bv}
+            low = [_norm(c) for c in bcols]
+            tot = [i for i, c in enumerate(cols) if _norm(c) == _norm("Total Flow")]
+            if _norm("Breach Flow") in low:
+                # NaN before the breach starts (Absaraka v2): no breach flow yet
+                out["breach_flow"] = np.nan_to_num(bv[:, low.index(_norm("Breach Flow"))],
+                                                   nan=0.0)
+                if tot:
+                    out["other_flow"] = values[:, tot[0]] - out["breach_flow"]
+        return out
     finally:
         close()
 

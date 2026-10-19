@@ -15,3 +15,20 @@ The top-level `nd_breach_runner/` and `nd_dam_screening/` folders are **kept**. 
 
 ## DamSafety_PMP (internal, experimental)
 `DamSafety_PMP/` is the QGIS port of AWA's ND PMP Evaluation Tool (v0.3.0, provider `ndpmp`). **It's internal only, not validated against ArcGIS, and not for redistribution without written permission from the ND State Water Commission and AWA.** The AWA data isn't in the repo. See `DamSafety_PMP/README.md` for where to download it and for the hydrograph CSV order (`time_hr, flow_cfs, ...`) that the Runner reads.
+
+## Testing the Setup plugin
+Setup's tests (`DamSafety_Setup/tests/`) use pytest. `test_wizard_live.py` drives the real wizard with real Qt, so it must run in the QGIS Python, not the system `python3`. On the box that is the conda env **`qgis334`** (QGIS 3.34, `~/miniforge3/envs/qgis334`), which doesn't ship pytest. Install it once from conda-forge:
+
+```bash
+~/miniforge3/bin/mamba install -n qgis334 -c conda-forge pytest
+```
+
+Then, from the repo root, run the Setup tests offscreen with a throw-away settings folder and HOME (the test also points `QGIS_CUSTOM_CONFIG_PATH` at its own temp folder, so your QGIS profile is never touched):
+
+```bash
+export HOME=$(mktemp -d) QGIS_CUSTOM_CONFIG_PATH=$(mktemp -d) QT_QPA_PLATFORM=offscreen
+~/miniforge3/bin/conda run -n qgis334 python -m pytest DamSafety_Setup/tests -p no:cacheprovider          # all Setup tests
+~/miniforge3/bin/conda run -n qgis334 python -m pytest DamSafety_Setup/tests/test_wizard_live.py -v -p no:cacheprovider   # the live wizard only
+```
+
+Without QGIS installed, `test_wizard_live.py` skips (`pytest.importorskip("qgis.core")`). The Runner's own tests are described in [DamSafety_Runner/README.md](DamSafety_Runner/README.md#tests).

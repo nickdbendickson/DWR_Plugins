@@ -628,7 +628,8 @@ class NDDamScreeningDialog(QDialog):
             note.setWordWrap(True)
             state.setFixedWidth(STEP_STATE_W)
             btn.setFixedWidth(STEP_BTN_W)
-            note.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            note.setSizePolicy(getattr(QSizePolicy, 'Policy', QSizePolicy).Ignored,
+                               getattr(QSizePolicy, 'Policy', QSizePolicy).Preferred)
             self.step_state[key], self.step_button[key], self.step_note[key] = state, btn, note
             grid.addWidget(state, i, 0)
             grid.addWidget(btn, i, 1)
@@ -2243,7 +2244,7 @@ class NDDamScreeningDialog(QDialog):
         none_btn.clicked.connect(lambda: [lst.item(i).setCheckState(getattr(Qt, 'CheckState', Qt).Unchecked) for i in range(lst.count())])
         ok_btn.clicked.connect(dlg.accept)
         cancel_btn.clicked.connect(dlg.reject)
-        if (dlg.exec() if hasattr(dlg, 'exec') else dlg.exec_()) != QDialog.Accepted:
+        if (dlg.exec() if hasattr(dlg, 'exec') else dlg.exec_()) != getattr(QDialog, 'DialogCode', QDialog).Accepted:
             return False
         ids = [lst.item(i).data(getattr(Qt, "ItemDataRole", Qt).UserRole) for i in range(lst.count()) if lst.item(i).checkState() == getattr(Qt, 'CheckState', Qt).Checked]
         if not ids:

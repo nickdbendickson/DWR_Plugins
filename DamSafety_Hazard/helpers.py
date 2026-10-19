@@ -652,61 +652,6 @@ def _promote_type(a, b):
     return FT_STRING
 
 
-class FieldPlan(object):
-    """Merged output schema for several source field lists.
-
-    - names are matched case-insensitively (GPKG/XLSX column names are
-      case-insensitive, so 'Name' and 'NAME' would break the export)
-    - differing types are promoted (Int+Double -> Double, else String)
-    - fields in `skip` / `reserved` (lower-case names) are dropped
-    """
-
-    def __init__(self, skip=(), reserved=()):
-        self._skip = {s.lower() for s in skip} | {r.lower() for r in reserved}
-        self._order = []
-        self._specs = {}          # lower -> [name, type, subtype, promoted]
-
-    def add_fields(self, fields, rename=None):
-        for f in fields:
-            src_name = f.name()
-            out_name = rename(src_name) if rename else src_name
-            key = out_name.lower()
-            if src_name.lower() in self._skip or key in self._skip:
-                continue
-            if key not in self._specs:
-                self._specs[key] = [out_name, f.type(), f.subType(), False]
-                self._order.append(key)
-            else:
-                spec = self._specs[key]
-                if _type_key(spec[1]) != _type_key(f.type()):
-                    spec[1] = _promote_type(spec[1], f.type())
-                    spec[2] = None
-                    spec[3] = True
-
-    def qgs_fields(self, extra=()):
-        out = [make_field(self._specs[k][0], self._specs[k][1], self._specs[k][2])
-               for k in self._order]
-        out.extend(extra)
-        return out
-
-    def mapping(self, src_fields, out_fields, rename=None):
-        """[(src_idx, dst_idx, converter_or_None)] for one source layer."""
-        dst_index = {out_fields.at(i).name().lower(): i for i in range(out_fields.count())}
-        result = []
-        for si in range(src_fields.count()):
-            f = src_fields.at(si)
-            out_name = rename(f.name()) if rename else f.name()
-            key = out_name.lower()
-            if key not in self._specs or key not in dst_index:
-                continue
-            spec = self._specs[key]
-            conv = None
-            if spec[3] or _type_key(spec[1]) != _type_key(f.type()):
-                conv = _converter_for(spec[1])
-            result.append((si, dst_index[key], conv))
-        return result
-
-
 def _to_text(v):
     if isinstance(v, str):
         return v
@@ -759,8 +704,8 @@ def is_null(v):
 
 
 def copy_attributes_into(attrs, src_attrs, mapping):
-    """Copy values into an existing output attribute list using a FieldPlan
-    mapping (index based - much faster than name lookups per value)."""
+    """Copy values into an existing output attribute list using an index mapping
+    [(src_idx, dst_idx, converter)] - much faster than name lookups per value."""
     for si, di, conv in mapping:
         v = src_attrs[si]
         if conv is not None and not is_null(v):

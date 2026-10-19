@@ -866,6 +866,7 @@ def _run_classification(run, cfg):
     redirected_outputs(clear=True)
     _read_dam_record(run, cfg)                # v2.10: dam.json (name, NID) when not given
     run.dam_name = cfg.get("dam_name") or dam_display_name(cfg.get("dam_folder") or out)
+    _flagged_structure_gate(run, cfg)        # v2.18.38: a flagged structure (DWR-3161)
     log_message(environment_summary())
     scenarios = order_for_run([s for s in cfg["scenarios"]])
     breaches = [s for s in scenarios if s.role == ROLE_BREACH]
@@ -1242,6 +1243,42 @@ def _read_dam_record(run, cfg):
                 "the dam's dam.json ('conflicts')".format(
                     sum(1 for c in rec.conflicts if not c.get("applied"))))
     return rec
+
+
+def flagged_structure(cfg):
+    """v2.18.38: the damsuite structure_flags entry of the dam being classified (the dam
+    folder's name, the subject dam's NID ID or the dam ID given), else None."""
+    from .damsuite import structure_flags as SF
+    folder = cfg.get("dam_folder") or ""
+    ids = [os.path.basename(os.path.normpath(folder)) if folder else "",
+           cfg.get("subject_dam_nid"), cfg.get("dam_id")]
+    for i in ids:
+        e = SF.lookup(i)
+        if e:
+            return e
+    return None
+
+
+def _flagged_structure_gate(run, cfg):
+    """v2.18.38: a flagged structure (damsuite/structure_flags.py, e.g. DWR-3161 / ND00597, a
+    road fill over backwater, hazard Low from the DWR record) has no breach flood to classify.
+    The run stops with the reason unless cfg allow_flagged_structure or the environment
+    variable ALLOW_FLAGGED_STRUCTURE=1; allowed, the log and DATA SOURCES say that the hazard
+    of record stays the entry's and the class computed here is for information only."""
+    from .damsuite import structure_flags as SF
+    e = flagged_structure(cfg)
+    if not e:
+        return None
+    name = os.path.basename(os.path.normpath(cfg.get("dam_folder") or "")) or e.get("dwr_id")
+    if not SF.allowed(cfg.get("allow_flagged_structure")):
+        raise RuntimeError(SF.refusal(
+            e, "breach hazard classification", name,
+            "allow_flagged_structure in the run settings or the environment variable "
+            "{}=1".format(SF.ENV_ALLOW)))
+    msg = SF.overridden_text(e, name)
+    run.log(">>> WARNING: " + msg)
+    run.sources.append(msg)
+    return e
 
 
 def _write_dam_record(run, cfg, res):

@@ -8,7 +8,9 @@ import types
 
 from nd_breach_runner.tests.registry import test as register  # "test" would be collected by pytest
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# realpath: the suite is run through a nd_breach_runner -> DamSafety_Runner symlink in a
+# temporary folder (/workspace/rt.sh), and the other plugins sit next to the real folder
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 PLUGINS = ("DamSafety_Runner", "DamSafety_Screening", "DamSafety_Hazard")
 
 

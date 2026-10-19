@@ -31,6 +31,10 @@ from . import domain as dm, solver_io as sio, triage as tg, reservoir as rsv
 from .fv_engine import Engine
 from .gridutil import xy_to_rc, rc_to_xy, rasterize_lines, rasterize_polygons, NODATA, dilate
 
+# Windows: no console window for a child program (QGIS is a GUI program, so each console
+# program it starts opens its own window, and closing that window kills the run)
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_NO_WINDOW
+
 ENGINES = ("lisflood-acc", "lisflood-fv1", "builtin", "builtin-reservoir")
 BUILDING_MODES = ("none", "raise", "manning")
 M3S_PER_CFS = 0.3048 ** 3                  # 1 ft3/s = 0.028316846592 m3/s
@@ -51,7 +55,7 @@ def _log_suppressed(message):
     """Log an error that is deliberately not raised (QGIS message log, else Python logging)."""
     try:
         from qgis.core import QgsMessageLog, Qgis
-        QgsMessageLog.logMessage(str(message), "DamSafety", Qgis.Warning)
+        QgsMessageLog.logMessage(str(message), "DamSafety", getattr(Qgis, 'MessageLevel', Qgis).Warning)
     except Exception:                                            # noqa - no QGIS (tests, CLI)
         import logging
         logging.getLogger(__name__).warning("%s", message)
@@ -95,7 +99,8 @@ def run_lisflood(exe, par, cwd, timeout_s, cancel=None, threads=1):
     from ..damsuite.keepawake import keep_awake
     with keep_awake("LISFLOOD-FP", log=None):
         with open(log_path, "w", encoding="utf-8") as logf:
-            p = subprocess.Popen([exe, par], cwd=cwd, stdout=logf, stderr=subprocess.STDOUT, env=env)
+            p = subprocess.Popen([exe, par], cwd=cwd, stdout=logf, stderr=subprocess.STDOUT, env=env,
+                                 **NO_WINDOW)
             while p.poll() is None:
                 if cancel is not None and cancel():
                     _stop(p)

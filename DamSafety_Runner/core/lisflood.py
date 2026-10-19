@@ -18,6 +18,10 @@ import numpy as np
 
 from .grid import Grid, NODATA
 
+# Windows: no console window for a child program (QGIS is a GUI program, so each console
+# program it starts opens its own window, and closing that window kills the run)
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_NO_WINDOW
+
 
 ARRIVAL_TOL_M = 0.001    # LISFLOOD-FP writes depth to 3 decimals
 
@@ -505,7 +509,7 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
     t0 = time.time()
     with open(log_path, "w", encoding="utf-8") as logf:
         proc = subprocess.Popen([exe, "-v", os.path.basename(par)], cwd=workdir, env=env,
-                                stdout=logf, stderr=subprocess.STDOUT)
+                                stdout=logf, stderr=subprocess.STDOUT, **NO_WINDOW)
         while proc.poll() is None:
             time.sleep(1.0)
             if cancel and cancel():
@@ -634,6 +638,11 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
                 "and depths are not reliable. Close that edge or use the ACC solver.".format(
                     lv / 1233.48183754752, 100.0 * lv / injected,
                     injected / 1233.48183754752, lq / 0.028316846592, lt / 3600.0))
+    try:                    # v3.10.27 (#91): reporting only
+        from . import report_metrics
+        stats.update(report_metrics.pass_stats(dem, hmax, vmax))
+    except Exception:       # noqa: BLE001
+        pass
     if stats["max_volume_error_pct"] and stats["max_volume_error_pct"] > 1.0:
         notes.append("The flood model's mass-balance error is {}% of the injected volume (limit "
                      "1%); try a smaller cell size or initial time step.".format(
