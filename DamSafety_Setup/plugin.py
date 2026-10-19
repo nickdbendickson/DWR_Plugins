@@ -254,7 +254,7 @@ class FolderPage(QWizardPage):
         self._scanned = folder
         if found.get("dwr"):
             save("data_folder", folder)  # only a folder that holds the dams
-        self.note.setTextFormat(Qt.RichText)
+        self.note.setTextFormat(getattr(Qt, 'TextFormat', Qt).RichText)
         self.note.setText(scan_marks_html(found))
         _set_reason(self.reason, self.problem())
         self.completeChanged.emit()
@@ -436,7 +436,7 @@ class DemPage(QWizardPage):
         download.clicked.connect(self._download)
         self.save_to = QLabel("")
         self.save_to.setWordWrap(True)
-        self.save_to.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.save_to.setTextInteractionFlags(getattr(Qt, 'TextInteractionFlag', Qt).TextSelectableByMouse)
         drow = QHBoxLayout()
         drow.addWidget(download)
         drow.addWidget(self.save_to, 1)
@@ -808,7 +808,7 @@ def ensure_dams_folder(path):
     except Exception as e:
         try:
             from qgis.core import QgsMessageLog, Qgis
-            QgsMessageLog.logMessage("Dams folder not created: {}".format(e), "DamSafety Setup", Qgis.Warning)
+            QgsMessageLog.logMessage("Dams folder not created: {}".format(e), "DamSafety Setup", getattr(Qgis, 'MessageLevel', Qgis).Warning)
         except Exception:
             pass
         return []

@@ -323,7 +323,7 @@ class NDBreachRunnerDialog(QDialog):
         lay.addWidget(card.warn_label)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFrameShape(getattr(QFrame, 'Shape', QFrame).NoFrame)
         scroll.setWidget(card)
         lay.addWidget(scroll, 1)
         row = QHBoxLayout()
@@ -403,7 +403,7 @@ class NDBreachRunnerDialog(QDialog):
         w.setLayout(lay)
         scroll = QScrollArea()                 # Post-process has twelve tools
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFrameShape(getattr(QFrame, 'Shape', QFrame).NoFrame)
         scroll.setWidget(w)
         return scroll
 

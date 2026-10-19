@@ -22,6 +22,10 @@ from . import terrain
 from . import conditioning as cond
 from . import structures as structmod
 
+# Windows: no console window for a child program (QGIS is a GUI program, so each console
+# program it starts opens its own window, and closing that window kills the run)
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_NO_WINDOW
+
 WORKER = os.path.join(os.path.dirname(__file__), "anuga_worker.py")
 MESHER = os.path.join(os.path.dirname(__file__), "gmsh_mesher.py")
 # "gmsh" is strict: a rejected gmsh mesh stops the run. "gmsh_or_default" uses the default
@@ -319,7 +323,8 @@ def make_gmsh_mesh(workdir, spec, st):
         os.remove(op)
     try:
         out = subprocess.run([st.python, MESHER, sp, op], capture_output=True, text=True,
-                             env=_clean_env(), timeout=float(st.gmsh_timeout_s), errors="replace")
+                             env=_clean_env(), timeout=float(st.gmsh_timeout_s), errors="replace",
+                             **NO_WINDOW)
     except subprocess.TimeoutExpired:
         return None, "gmsh took over {:.0f} s (timeout)".format(st.gmsh_timeout_s)
     except Exception as e:
@@ -360,7 +365,7 @@ def _launch(st, job, result, workdir, progress, cancel):
     with open(log_path, "w", encoding="utf-8") as logf:
         proc = subprocess.Popen([st.python, "-u", WORKER, job, result], cwd=workdir, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                bufsize=1, errors="replace")
+                                bufsize=1, errors="replace", **NO_WINDOW)
         lines = queue.Queue()
 
         def pump():
@@ -529,7 +534,7 @@ def check_anuga(python, workdir):
             "import sys; print(getattr(anuga,'__version__','?'), sys.version.split()[0])")
     try:
         out = subprocess.run([python, "-c", code], capture_output=True, text=True, env=env,
-                             timeout=300, errors="replace")
+                             timeout=300, errors="replace", **NO_WINDOW)
     except Exception as e:
         return {"ok": False, "message": str(e)}
     if out.returncode != 0:
@@ -546,7 +551,8 @@ def check_gmsh(python, env=None):
     code = "import gmsh; print(gmsh.__version__)"
     try:
         out = subprocess.run([python, "-c", code], capture_output=True, text=True,
-                             env=env or _clean_env(), timeout=120, errors="replace")
+                             env=env or _clean_env(), timeout=120, errors="replace",
+                             **NO_WINDOW)
     except Exception as e:
         return {"gmsh": None, "gmsh_message": "gmsh check failed: {}".format(e)}
     if out.returncode != 0:
