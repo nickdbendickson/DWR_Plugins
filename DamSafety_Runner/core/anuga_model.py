@@ -54,9 +54,9 @@ class AnugaSettings:
         self.mesher = "default"
         self.gmsh = None                 # dict of gmsh_mesher sizes (None = its defaults)
         self.gmsh_timeout_s = 600.0
-        # 3.10.26 ANUGA_ELEVATION: "fine" = the bed from the finest terrain (the DEM source at
+        # 3.10.31 ANUGA_ELEVATION: "fine" = the bed from the finest terrain (the DEM source at
         # its own cell size, read in blocks), sampled at the triangle vertices; "model_grid" =
-        # the model DEM at the triangle centroids (before 3.10.26). "fine" needs run()'s
+        # the model DEM at the triangle centroids (before 3.10.31). "fine" needs run()'s
         # elevation_read; without it, or when the source is not finer, the model grid is used.
         self.elevation = "fine"
         self.elevation_cell_m = None     # None = the source DEM's own cell size (>= 0.5 m)
@@ -229,7 +229,7 @@ def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_d
         job["mesh_triangles"] = np.asarray(mesh["triangles"], np.int64)
         job["mesh_boundary"] = np.asarray(mesh["boundary"], np.int64)
         job["mesh_stats"] = json.dumps(mesh.get("stats", {}))
-    if elevation:            # 3.10.26: the fine bed (prepare_elevation); absent = as before
+    if elevation:            # 3.10.31: the fine bed (prepare_elevation); absent = as before
         job.update(elevation)
     np.savez(path, **job)
 
@@ -266,7 +266,7 @@ def gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st, channel=No
                 channel=[np.asarray(c, float).tolist() for c in channel], points=pts,
                 threads=int(st.threads or 0))
     if culverts:
-        # 3.10.26: the culvert ends get the default mesher's size (its octagons around each
+        # 3.10.31: the culvert ends get the default mesher's size (its octagons around each
         # end, culvert_regions); without it they got min_area_m2 (100 m2). The quality gate
         # follows (gmsh_mesher.gate_area: 0.45 x the smallest size asked for).
         spec["culvert_area_m2"] = culvert_area_m2(st)
@@ -648,7 +648,7 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     elevation_read(bounds, cell) -> Grid: the terrain ANUGA's bed is sampled from
     (ANUGA_ELEVATION=fine, prepare_elevation; st.elevation), elevation_native_m its own
     cell size and elevation_label its name for the report. Without it the bed is the
-    model DEM `dem`, as before 3.10.26."""
+    model DEM `dem`, as before 3.10.31."""
     if not st.python or not os.path.isfile(st.python):
         raise ModelError("ANUGA Python interpreter not found: {}".format(st.python))
     os.makedirs(workdir, exist_ok=True)

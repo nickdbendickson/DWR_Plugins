@@ -525,7 +525,7 @@ class ConditionedTerrain:
         self.last_manning_counts = {}
 
     def native_cell_m(self):
-        """The base source's own cell size (m), None when unknown (3.10.26)."""
+        """The base source's own cell size (m), None when unknown (3.10.31)."""
         fn = getattr(self.base, "native_cell_m", None)
         return fn() if fn else None
 

@@ -22,7 +22,7 @@ optional:
   mesh_points, mesh_triangles, mesh_boundary   ready-made mesh (ANUGA_MESHER=gmsh):
                   model-CRS nodes, CCW triangles, [triangle, edge] outer edges;
                   used with anuga.Domain instead of create_domain_from_regions
-  elev_fine_file, elev_fine_x0, elev_fine_y0, elev_fine_dx   (3.10.26) a .npy float32
+  elev_fine_file, elev_fine_x0, elev_fine_y0, elev_fine_dx   (3.10.31) a .npy float32
                   grid next to the job file (row 0 = top, NaN = no data) of the finest
                   terrain: the elevation is sampled from it at the triangle vertices
                   (sample_fine); the model DEM fills its gaps. Without it the elevation
@@ -183,7 +183,7 @@ def main(job_path, out_path):
 
     elev_stats = {"mode": "model_grid", "cell_m": dx}
     if "elev_fine_file" in job:
-        # 3.10.26: the elevation at the triangle VERTICES from the finest terrain. ANUGA
+        # 3.10.31: the elevation at the triangle VERTICES from the finest terrain. ANUGA
         # makes the edge values the mean of their two vertices and the centroid the mean of
         # three, so a crown on an embedded mesh line keeps its height on that edge and
         # weighs 2/3 in both triangles beside it (an area mean would spread it over the

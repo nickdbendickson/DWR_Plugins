@@ -489,7 +489,7 @@ def build_mesh(spec):
         for p in pts_in:      # a point on or near an embedded line would stop gmsh
             if not len(edges) or _dist_to_segments(p, nodes[edges[:, 0]], nodes[edges[:, 1]]) > hmin / 2.0:
                 free.append(geo.addPoint(float(p[0]), float(p[1]), 0.0))
-        # 3.10.26: gmsh cuts an embedded curve of length L into floor(L / h) + 1 pieces, so an
+        # 3.10.31: gmsh cuts an embedded curve of length L into floor(L / h) + 1 pieces, so an
         # edge just longer than the local size h (an embankment piece's last segment, a piece
         # between a crossing and a vertex) became two pieces of ~h / 2 and the triangles there
         # fell below the gate (DWR-4441: a 20.0 m end segment at h = 19.8 m, 44 m2 < 45 m2).

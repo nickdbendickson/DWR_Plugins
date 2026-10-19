@@ -131,7 +131,7 @@ class GdalTerrain:
         return Grid(a, xmin, ymax, cell, crs_wkt=out.GetProjection())
 
     def native_cell_m(self):
-        """The DEM's own cell size in metres (3.10.26: ANUGA's bed is read at it). A
+        """The DEM's own cell size in metres (3.10.31: ANUGA's bed is read at it). A
         geographic raster's degrees are converted at its centre latitude."""
         gdal, osr = _gdal()
         ds = GS.open_raster(self.dem_path)

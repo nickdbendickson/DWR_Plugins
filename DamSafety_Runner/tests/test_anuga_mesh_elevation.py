@@ -1,8 +1,8 @@
-"""3.10.26: ANUGA mesh and bed fixes from the gmsh embankment-line benchmark (2026-10-19).
+"""3.10.31: ANUGA mesh and bed fixes from the gmsh embankment-line benchmark (2026-10-19).
 
 1. The ANUGA bed comes from the finest terrain (the DEM source at its own cell size, read in
    blocks into a memory-mapped .npy) sampled at the triangle vertices; ANUGA_ELEVATION=
-   model_grid keeps the model grid at the centroids (before 3.10.26).
+   model_grid keeps the model grid at the centroids (before 3.10.31).
 2. (The culvert-end octagons: tests/test_anuga_culvert_regions.py, its own PR.)
 3. gmsh: an embedded edge just longer than the mesh size is no longer cut in two.
 4. gmsh_spec passes the culvert-end size (25 m2) to gmsh.
@@ -211,7 +211,7 @@ def anuga_job_gets_the_fine_bed_only_when_a_finer_source_is_given():
         a = np.load(os.path.join(fine, AM.ELEVATION_FILE), mmap_mode="r")
         assert a.dtype == np.float32 and np.nanmax(a) == 290.0
         del a                               # the worker failed: the file is kept to look at
-        # ANUGA_ELEVATION=model_grid and no fine source: the job file is the one before 3.10.26
+        # ANUGA_ELEVATION=model_grid and no fine source: the job file is the one before 3.10.31
         with np.load(os.path.join(base, "anuga_job.npz")) as r:
             assert not [k for k in r.files if k.startswith("elev_")]
         assert _sha(os.path.join(off, "anuga_job.npz")) == _sha(os.path.join(base, "anuga_job.npz"))

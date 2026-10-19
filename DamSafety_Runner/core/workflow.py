@@ -136,9 +136,9 @@ class RunSettings:
         # optional dict of gmsh sizes (gmsh_mesher.build_mesh, e.g. min_area_tol,
         # culvert_area_m2) and embankment options (anuga_model.EMBANKMENT_DEFAULTS)
         self.anuga_gmsh = None
-        # 3.10.26: the ANUGA bed. "fine" = the DEM source at its own cell size (read in blocks)
+        # 3.10.31: the ANUGA bed. "fine" = the DEM source at its own cell size (read in blocks)
         # sampled at the triangle vertices, so road and dam crowns on mesh lines survive;
-        # "model_grid" = the model-cell DEM at the centroids (before 3.10.26). LISFLOOD-FP
+        # "model_grid" = the model-cell DEM at the centroids (before 3.10.31). LISFLOOD-FP
         # always uses the model grid. NDBREACH_ANUGA_ELEVATION (or ANUGA_ELEVATION) sets it;
         # NDBREACH_ANUGA_ELEVATION_CELL_M fixes the fine cell size (0 = the source's own).
         self.anuga_elevation = (os.environ.get("NDBREACH_ANUGA_ELEVATION")
@@ -273,7 +273,7 @@ class RunSettings:
                 continue                 # default mesh: the report stays as before
             elif (k == "anuga_elevation" and v == "fine") or (k == "anuga_elevation_cell_m"
                                                               and not v):
-                continue                 # 3.10.26 defaults: run_report["anuga_elevation_source"]
+                continue                 # 3.10.31 defaults: run_report["anuga_elevation_source"]
             elif k == "reservoir_carve" and v in ("off", None, ""):
                 continue                 # v3.10.20: off - the report stays as before
             else:
@@ -1333,7 +1333,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             emb_kw = {"embankment_lines": list(getattr(st, "road_lines", None) or [])
                       + list(getattr(st, "rail_lines", None) or []),
                       "terrain_read": terrain_src.read}
-        # 3.10.26: ANUGA's bed from the finest terrain (the same conditioning, refills and
+        # 3.10.31: ANUGA's bed from the finest terrain (the same conditioning, refills and
         # structure cuts as the model DEM, at the source's own cell size); LISFLOOD-FP
         # keeps the model grid
         ast.elevation = getattr(st, "anuga_elevation", "fine") or "fine"
