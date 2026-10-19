@@ -413,19 +413,18 @@ def hecras_engine_preprocess_fails_when_a_step_writes_nothing():
 
 @test
 def hecras_engine_run_reports_exit_zero_without_the_ok_text():
-    import subprocess as sp
-    saved = sp.run
+    saved = he.wallclock.run
 
     class R:
         returncode, stdout, stderr = 0, "OK props 0.59 s", ""
-    sp.run = lambda *a, **k: R()
+    he.wallclock.run = lambda *a, **k: R()
     try:
         he._run(["x"], "/", {}, 10, "2D property tables", ok="tables complete")
         raise AssertionError("should raise")
     except he.HecRasEngineError as e:
         assert "exit 0 but it never printed 'tables complete'" in str(e)
     finally:
-        sp.run = saved
+        he.wallclock.run = saved
 
 
 @test

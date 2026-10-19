@@ -269,6 +269,14 @@ unchanged.
   `reservoir_carve` records the footprint and the target vs carved curves. When the footprint
   cannot hold the storage (the DEM reservoir is far smaller than the curve says), the report
   says so: the dam data are then the thing to check.
+- **Run report metrics** (v3.10.27, issue #91, `docs/Run_report_metrics.md`; reporting only):
+  the summary also gives the flooded area at or above 0.1, 1 and 2 ft, the P95 / P99 velocity
+  over cells at least 0.1 ft deep, the depth and position of the maximum-velocity cell, and the
+  max / P95 velocity at flooded structures and overtopped roads. An optional water-body mask
+  (`WATER_MASK`, advanced; or `NDBREACH_WATERBODY_MASK`; else the dam's / the suite's
+  `hydro/3DHP_waterbodies.gpkg` or `NHD_waterbodies.gpkg` when present) leaves existing lakes
+  and ponds out of the `*_masked` figures, shown next to the unmasked ones; the model, the
+  rasters and the flood polygons are unchanged.
 - **Buildings as obstructions** (`BUILDINGS`, off by default): polygon footprints in the structures
   layer (points are ignored and say so) are raised by `BUILDING_RAISE_FT` (default 10 ft, YOUR
   value) or get Manning's n `BUILDING_N` (default 0.15, YOUR value) before the run; the
