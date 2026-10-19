@@ -119,35 +119,6 @@ class NDBreachRunnerPlugin:
         except Exception:
             return False
 
-    def _fill_suite(self):
-        """Load the suite layers into the project. A layer already there is kept."""
-        from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
-        from qgis.core import QgsVectorLayer, QgsProject
-        folder = QFileDialog.getExistingDirectory(self.iface.mainWindow(), "Suite data folder", "")
-        if not folder:
-            return
-        from .damsuite.suite_fill import scan
-        found, notes = scan(folder)
-        root = QgsProject.instance().layerTreeRoot()
-        group = root.findGroup("ND suite data") or root.addGroup("ND suite data")
-        added = []
-        for slot, uri in found.items():
-            if slot == "pack" or not isinstance(uri, str) or "|layername=" not in uri:
-                continue
-            name = slot + " " + uri.split("=")[-1]
-            if any(lyr.name() == name for lyr in QgsProject.instance().mapLayers().values()):
-                continue
-            lyr = QgsVectorLayer(uri, name, "ogr")
-            if not lyr.isValid():
-                continue
-            QgsProject.instance().addMapLayer(lyr, False)
-            group.addLayer(lyr)
-            added.append(name)
-        QMessageBox.information(
-            self.iface.mainWindow(), "Suite data",
-            "Added {} layer(s) to 'ND suite data'. Pick them in the tool dialog. "
-            "The offline pack is {}.".format(len(added), found.get("pack") or "not in this folder"))
-
     def run_home(self, *args):
         """The Dam suite home window (suite_home.py, the same in all three plugins)."""
         from . import suite_home
