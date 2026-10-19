@@ -274,3 +274,8 @@ if __name__ == "__main__":
             n += 1
             print("ok", name)
     print("{} passed".format(n))
+    # Exit without interpreter teardown: some QGIS builds (conda-forge on GitHub Actions)
+    # crash while destroying the QgsApplication at exit, after every check has passed.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)

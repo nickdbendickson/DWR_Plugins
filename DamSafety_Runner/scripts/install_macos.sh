@@ -67,7 +67,6 @@ set -eu
 set -o pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PLUGIN_DIR="$(dirname "$HERE")"
 
 MODE=install
 PREFIX="${HOME}/.ndbreach"

@@ -129,4 +129,8 @@ if __name__ == "__main__":
                 traceback.print_exc()
                 fails += 1
                 print("FAIL", n, e)
-    sys.exit(1 if fails else 0)
+    # Exit without interpreter teardown: some QGIS builds (conda-forge on GitHub Actions)
+    # crash while destroying the QgsApplication at exit, after every check has passed.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(1 if fails else 0)
