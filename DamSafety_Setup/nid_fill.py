@@ -206,20 +206,51 @@ def needs(row):
     return number((row or {}).get("height")) is None or number((row or {}).get("storage")) is None
 
 
+NORMAL_POOL_SOURCE = ("DWR normal pool volume - NOT max storage, under-estimates the breach "
+                      "(no DWR max pool volume and no NID storage on record)")
+
+
+def from_normal_pool(row):
+    """True when the row's storage is only the DWR normal pool fallback (see fill_rows)."""
+    return bool((row or {}).get("storage_normal_pool"))
+
+
 def mark_dwr(row):
-    """Source labels for the values the DWR record itself supplied. A storage still blank
-    takes the DWR normal pool volume first: a DWR value always wins over the NID."""
-    if number(row.get("storage")) is None and number(row.get("normal_vol")) is not None:
-        row["storage"] = number(row.get("normal_vol"))
-        row["storage_source"] = "DWR normal pool volume (no max pool volume on record)"
+    """Source labels for the values the DWR record itself supplied (a DWR value always wins).
+    A blank storage is left blank here: the NID max storage is tried first (fill_rows)."""
     for key in ("height", "storage"):
         if number(row.get(key)) is not None and not row.get(key + "_source"):
             row[key + "_source"] = "DWR"
 
 
+def storage_fallback(row):
+    """After the NID: the conservative storage when the DWR has no max pool volume.
+    * the NID filled it, but the DWR normal pool is larger -> the larger (DWR normal pool);
+    * nothing filled it -> the DWR normal pool, flagged non-conservative
+      (row['storage_normal_pool'] = True, so the wizard still offers the NID web lookup).
+    A DWR max pool volume or a typed value is never touched. Returns True when it changed."""
+    normal = number(row.get("normal_vol"))
+    if normal is None or str(row.get("storage_source") or "") in ("DWR", "typed in"):
+        return False
+    store = number(row.get("storage"))
+    if store is None:
+        row["storage"] = normal
+        row["storage_source"] = NORMAL_POOL_SOURCE
+        row["storage_normal_pool"] = True
+        return True
+    if str(row.get("storage_source") or "").startswith("NID ") and normal > store:
+        row["storage_source"] = ("DWR normal pool volume (larger than {}: the larger "
+                                 "is used)".format(row["storage_source"]))
+        row["storage"] = normal
+        row.pop("storage_normal_pool", None)
+        return True
+    return False
+
+
 def fill_rows(rows, nid_uri):
-    """Fill blanks in the listed dams from the local NID layer (after the DWR values,
-    mark_dwr). Returns how many dams got an NID value."""
+    """Fill blanks in the listed dams: DWR values first (mark_dwr), then the local NID layer
+    (its MAX_STORAGE first), then the DWR normal pool as the last resort (storage_fallback).
+    Returns how many dams got an NID value."""
     recs = load_layer(nid_uri) if nid_uri else []
     filled = 0
     for row in rows or []:
@@ -230,6 +261,7 @@ def fill_rows(rows, nid_uri):
             rec, how = match(recs, row.get("nid"), parse_point(row.get("point")))
             if apply(row, rec, how, "local NID layer"):
                 filled += 1
+        storage_fallback(row)
     return filled
 
 
@@ -282,6 +314,9 @@ def fill_online(row, answers):
             rec, how = match(recs, "", parse_point(row.get("point")))
         if rec:
             done = apply(row, rec, how, "NID web service")
+            if "storage" in done:
+                row.pop("storage_normal_pool", None)
+                storage_fallback(row)
             nid = _nid_id(rec)
             if done:
                 return done, "Filled {} from NID {} (online).".format(" and ".join(done), nid)

@@ -5,9 +5,12 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.39
+version=2.18.41
 author=N.D. Bendickson
 changelog=
+    2.18.41 - 2026-10-19 (fixes of the 2026-10-19 audit, High findings; 2.18.40 is PR #112)
+      * H1 (default change back, conservative): an ND GIS Hub (911) address point with no building outline within 100 ft and no NSI record counts as habitable again by the ND site address rule (2.18.39 had made it Unverified, which never raises the class). It is noted and listed for review ("911 address point with no building"). The self-test passes again (56 of 56 checks); a new test runs it in CI (tests/test_selftest.py).
+      * H2: depth rasters in metres and velocity rasters in m/s are detected - from the raster's band unit or 'units' metadata, the HEC-RAS project's "SI Units", or the file name (depth_m.tif, Velocity_mps.tif). Check inputs and the model gate's units row: ERROR / FAIL when the raster or its HEC-RAS project says metres (Classify stays off), WARNING when only the file name does (ERROR when the CRS is also in metres). A run stops on the same strong evidence. Feet rasters are unchanged.
     2.18.39 - 2026-10-19 (PR #94, Claude's audit-fix campaign)
       * M3 (default changes): homes that come only from the National Structure Inventory (NSI) are no longer counted as habitable unless a parcel (fema_parcel) supports them; this can lower a dam's hazard class.
       * H4 (default changes): collapse_dwellings removed, so buildings sharing one 911 / street address each keep their occupants (mobile-home parks, apartments, farmsteads); PAR can go up.

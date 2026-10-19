@@ -247,6 +247,29 @@ def _same_crs(a, b):
     return bool(_crs_key(a)) and _crs_key(a) == _crs_key(b)
 
 
+def _metric_units_guard(run, scenarios, layers):
+    """2.18.41 (audit H2): a depth raster in metres or a velocity raster in m/s would be
+    read as feet / ft/s (about 3.28 times too low). Metric from the raster's own unit /
+    metadata or its HEC-RAS project (SI Units) stops the run; metric only from the file
+    name is logged as a warning (checks.raster_units)."""
+    from .checks import raster_units
+    for s in scenarios:
+        for key, what, want in (("depth", "depth", "feet"), ("vel", "velocity", "ft/s")):
+            lyr = layers.get(s.name, {}).get(key)
+            if lyr is None:
+                continue
+            path = lyr.source().split("|")[0]
+            kind, why, strong = raster_units(path, lyr)
+            if kind != "metric":
+                continue
+            text = ("Scenario '{}': the {} raster looks metric ({}) - the plugin expects {}. "
+                    "Convert it, or import the HEC-RAS plan with Tools > HEC-RAS plan "
+                    "(writes feet).".format(s.name, what, why, want))
+            if strong:
+                raise RuntimeError(text)
+            run.log("WARNING: " + text)
+
+
 def _same_crs_rasters(run, scenarios, layers, acrs):
     """Scenario rasters in another CRS than the first breach are copied into
     that CRS (nearest cell), so every sampler works with one set of
@@ -1043,6 +1066,7 @@ def _evaluate(run, cfg, scenarios, breaches):
     run.clip_crs = acrs
     run.clip_lat = None
     _same_crs_rasters(run, scenarios, layers, acrs)
+    _metric_units_guard(run, scenarios, layers)
     rect = _union_rect(acrs, scenarios, layers, run.ctx)
     clip = ExtentClip(dlyr, cfg["extent_buffer_ft"], run.ctx, rect=rect)
     run.clip_lat = clip.lat

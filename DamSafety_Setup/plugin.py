@@ -70,8 +70,10 @@ def source_text(source):
         return "from NID {}".format(source.split()[1])
     if source.startswith("estimated from DEM"):
         return "estimated from DEM (screening only)"
+    if source.startswith("DWR normal pool volume - NOT max"):
+        return "DWR normal pool \u2013 not max storage (non-conservative)"
     if source.startswith("DWR normal pool"):
-        return "from DWR (normal pool volume)"
+        return "from DWR (normal pool volume, larger than the NID)"
     return "from {}".format(source.split(" (")[0])
 
 
@@ -262,37 +264,77 @@ class SetupPlugin(object):
         self.dock.show()
 
     def run(self):
-        # One per-dam wizard: the Runner's. This plugin keeps suite setup.
+        """'Start here\u2026': Setup's own 4-page wizard (suite folder, dam with the NID fill /
+        Estimate from DEM / source labels, DEM, run), then the Runner's 'rundam' dialog
+        with the answers. 1.0.12 (audit F-01): always this wizard, also when DamSafety
+        Runner is installed (before, the Runner's wizard opened instead and an error in it
+        was swallowed). The Runner's own wizard stays on the Runner's menu."""
         try:
-            import importlib
-            from qgis.utils import plugins
-            for name in ("DamSafety_Runner", "nd_breach_runner"):
-                if plugins.get(name) is None:
-                    continue
-                importlib.import_module(name + ".wizard").run_wizard(self.iface)
-                return
-        except Exception:
-            pass
-        wiz = SetupWizard(self.iface.mainWindow())
+            wiz = SetupWizard(self.iface.mainWindow())
+        except Exception as e:
+            _report_error(self.iface, "The Setup wizard did not open.", e)
+            return
         run = getattr(wiz, "exec_", None) or getattr(wiz, "exec")
         if not run():
             return
         try:
-            import processing
             params = wiz.params()
-            try:
-                from qgis.core import QgsMessageLog, Qgis
-                QgsMessageLog.logMessage("{}: height from {}, storage from {}".format(
-                    params.get("DAM_ID") or "dam", params.get("HEIGHT_SOURCE") or "?",
-                    params.get("STORAGE_SOURCE") or "?"), "DamSafety Setup", Qgis.Info)
-            except Exception:
-                pass
+        except Exception as e:
+            _report_error(self.iface, "The wizard answers could not be turned into Runner "
+                                      "parameters.", e)
+            return
+        _log("{}: height from {}, storage from {}".format(
+            params.get("DAM_ID") or "dam", params.get("HEIGHT_SOURCE") or "?",
+            params.get("STORAGE_SOURCE") or "?"))
+        if not runner_installed():
+            _report_error(self.iface, "DamSafety Runner is not installed or not enabled, so "
+                                      "the breach run ({}) cannot open. Install or enable "
+                                      "DamSafety Runner and run Start here\u2026 again.".format(
+                                          ALG), None)
+            return
+        try:
+            import processing
             processing.execAlgorithmDialog(ALG, params)
         except Exception as e:
-            from qgis.PyQt.QtWidgets import QMessageBox
-            QMessageBox.warning(self.iface.mainWindow(), "DamSafety Setup",
-                                "The runner dialog did not open ({}). Install DamSafety Runner "
-                                "and run again.\n\n{}".format(ALG, e))
+            _report_error(self.iface, "The Runner dialog ({}) did not open.".format(ALG), e)
+
+
+def runner_installed():
+    """True when DamSafety Runner (or its old folder name) is loaded in QGIS."""
+    try:
+        from qgis.utils import plugins
+    except Exception:
+        return False
+    return any(plugins.get(n) is not None for n in ("DamSafety_Runner", "nd_breach_runner"))
+
+
+def _log(text, level="Info"):
+    try:
+        from qgis.core import QgsMessageLog, Qgis
+        QgsMessageLog.logMessage(text, "DamSafety Setup", getattr(Qgis, level, Qgis.Info))
+    except Exception:
+        pass
+
+
+def _report_error(iface, text, error):
+    """An error is never swallowed: the traceback goes to the QGIS log (DamSafety Setup
+    tab) and the engineer gets a message box."""
+    import traceback
+    detail = ""
+    if error is not None:
+        detail = "".join(traceback.format_exception(type(error), error,
+                                                    error.__traceback__))
+        _log("{}\n{}".format(text, detail), "Critical")
+    else:
+        _log(text, "Warning")
+    try:
+        from qgis.PyQt.QtWidgets import QMessageBox
+        msg = text + ("\n\n{}\n\nDetails: View > Panels > Log Messages, "
+                      "DamSafety Setup tab.".format(error) if error is not None else "")
+        QMessageBox.warning(iface.mainWindow() if iface is not None else None,
+                            "DamSafety Setup", msg)
+    except Exception:
+        pass
 
 
 class DamSafetySetupPlugin(SetupPlugin):
@@ -567,9 +609,13 @@ class DamPage(QWizardPage):
             src = self.source(key)
             lbl.setText(source_text(src))
             lbl.setToolTip(src)            # the NID field and how the dam was matched
+            # the normal pool fallback under-states the breach: shown in red, not grey
+            lbl.setStyleSheet("color: {};".format(
+                RED if src.startswith("DWR normal pool volume - NOT max") else GREY))
         row = self.combo.currentData() or {}
         blank = not self.height.value() or not self.storage.value()
-        self.nid_button.setEnabled(bool(row) and not row.get("error") and blank and
+        self.nid_button.setEnabled(bool(row) and not row.get("error") and
+                                   (blank or self.storage_is_normal_pool()) and
                                    not self._busy and bool(nid_fill.online_urls(row)))
         dem = self.dem_for_estimate()
         self.est_button.setText("Estimate from DEM" if dem else "Choose DEM and estimate\u2026")
@@ -674,6 +720,13 @@ class DamPage(QWizardPage):
             return row.get(key + "_source") or "DWR"
         return "typed in"
 
+    def storage_is_normal_pool(self):
+        """True while the storage box still shows the DWR normal pool fallback (no DWR max
+        pool volume, no NID storage): the NID web lookup may still find the max storage."""
+        row = self.combo.currentData() or {}
+        return nid_fill.from_normal_pool(row) and self.source("storage") == row.get(
+            "storage_source")
+
     def _fill_online(self, *_a):
         row = self.combo.currentData()       # a copy: written back with setItemData
         index = self.combo.currentIndex()
@@ -682,6 +735,9 @@ class DamPage(QWizardPage):
         work = dict(row)
         work["height"] = self.height.value() or None      # a typed value is kept
         work["storage"] = self.storage.value() or None
+        if self.storage_is_normal_pool():
+            work["storage"] = None        # the normal pool fallback: the NID max storage first
+            work["storage_source"] = ""
         urls = nid_fill.online_urls(work)
         if not urls:
             self.nid_status.setText("No NID id or dam point to look up.")
@@ -719,6 +775,8 @@ class DamPage(QWizardPage):
             for key in filled:
                 row[key] = work[key]
                 row[key + "_source"] = work[key + "_source"]
+            if "storage" in filled:
+                row.pop("storage_normal_pool", None)
             if filled:
                 if work.get("nid") and not row.get("nid"):
                     row["nid"] = work["nid"]

@@ -210,8 +210,45 @@ def test_fill_only_blanks_never_over_dwr(suite):
     assert near["storage"] == 5000.0 and "MAX_STORAGE" in near["storage_source"]
     assert near["nid"] == "ND00002"                                    # the match is shown
     assert N.needs(rows["Too Far"]) and not rows["Too Far"].get("height_source")
-    normal = rows["Normal Pool"]                  # DWR normal pool before the NID's 999
-    assert normal["storage"] == 77.0 and normal["storage_source"].startswith("DWR normal pool")
+    normal = rows["Normal Pool"]       # no DWR max pool: the NID max storage (999) before
+    assert normal["storage"] == 999.0  # the DWR normal pool (77), conservative (audit F-03)
+    assert "ND00004 MAX_STORAGE" in normal["storage_source"]
+    assert not N.from_normal_pool(normal)
+
+
+def test_normal_pool_only_when_no_nid_storage_and_flagged(suite):
+    """Audit F-03: the DWR normal pool is the last resort, labelled non-conservative."""
+    rows = _rows(suite, nid=False)
+    normal = rows["Normal Pool"]
+    assert normal["storage"] == 77.0 and N.from_normal_pool(normal)
+    assert normal["storage_source"] == N.NORMAL_POOL_SOURCE
+    assert "NOT max storage" in normal["storage_source"]
+    assert P.source_text(normal["storage_source"]) == (
+        "DWR normal pool \u2013 not max storage (non-conservative)")
+    assert rows["Full Record"]["storage"] == 410.0          # a DWR max pool is never touched
+
+
+def test_the_larger_of_nid_and_dwr_normal_pool_is_used():
+    row = {"storage": None, "normal_vol": 500.0, "nid": "ND00009"}
+    N.mark_dwr(row)
+    N.apply(row, {"NIDID": "ND00009", "NORMAL_STORAGE": 300.0}, "NID id", "local NID layer")
+    assert N.storage_fallback(row) and row["storage"] == 500.0
+    assert row["storage_source"].startswith("DWR normal pool volume (larger than NID ND00009")
+    assert P.source_text(row["storage_source"]) == (
+        "from DWR (normal pool volume, larger than the NID)")
+    typed = {"storage": 10.0, "storage_source": "typed in", "normal_vol": 500.0}
+    assert not N.storage_fallback(typed) and typed["storage"] == 10.0
+
+
+def test_online_lookup_replaces_the_normal_pool_fallback():
+    row = {"nid": "ND00182", "storage": None, "normal_vol": 77.0, "height": 9.0}
+    N.mark_dwr(row)
+    N.storage_fallback(row)
+    work = dict(row, storage=None, storage_source="")
+    inv = json.dumps({"nidId": "ND00182", "maxStorage": 452})
+    done, _msg = N.fill_online(work, [("id", inv)])
+    assert done == ["storage"] and work["storage"] == 452.0
+    assert not N.from_normal_pool(work)
 
 
 def test_no_nid_layer_leaves_the_blanks(suite):
@@ -371,6 +408,33 @@ def test_online_button_fills_blanks_only_on_click(wiz, suite):
     assert "Filled storage from NID ND77777 (online)" in dam.nid_status.text()
     assert dam.isComplete() and not dam.nid_button.isEnabled()
     assert dam.selected()["storage_source"].startswith("NID ND77777 nidStorage (NID web service")
+
+
+def test_online_button_offered_for_the_normal_pool_fallback(wiz, suite):
+    """Audit F-03: the normal pool fallback (red label) still offers the NID web lookup,
+    which replaces it with the NID max storage."""
+    inv = json.dumps({"nidId": "ND00004", "nidHeight": "11", "maxStorage": "999"})
+    net = FakeNet({"ND00004/inventory": inv})
+    dam = _dam_page(wiz, suite["folder"], net)
+    i = next(i for i in range(dam.combo.count()) if dam.combo.itemData(i)["name"] == "Normal Pool")
+    row = dict(dam.combo.itemData(i))           # as when the local NID layer lacks the dam
+    for key in ("storage", "storage_source", "storage_normal_pool"):
+        row.pop(key, None)
+    N.storage_fallback(row)
+    dam.combo.setItemData(i, row)
+    dam.rows[i] = row
+    dam.combo.setCurrentIndex(i)
+    dam._show()
+    _pump()
+    assert dam.storage.value() == 77
+    assert "non-conservative" in dam.storage_src.text()
+    assert P.RED in dam.storage_src.styleSheet()
+    assert dam.storage_is_normal_pool() and dam.nid_button.isEnabled()
+    dam.nid_button.click()
+    _pump()
+    assert dam.storage.value() == 999 and dam.storage_src.text() == "from NID ND00004"
+    assert not dam.storage_is_normal_pool() and P.GREY in dam.storage_src.styleSheet()
+    assert dam.selected()["storage_source"].startswith("NID ND00004 maxStorage")
 
 
 def test_online_offline_or_unknown_says_type_it_in(wiz, suite):

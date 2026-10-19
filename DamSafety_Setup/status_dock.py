@@ -57,7 +57,7 @@ class SuiteStatusDock(QDockWidget):
 
     def _build_lisflood(self):
         script = os.path.join(os.path.dirname(__file__), "scripts", "build_lisflood_linux.sh")
-        self._run("Build LISFLOOD-FP", script, "Patch and cmake the LISFLOOD-FP source, then set the executable in this dock.")
+        self._run("Build LISFLOOD-FP", script, "Applies the arrival-depth patch (scripts/patch_lisflood.py) and builds the LISFLOOD-FP source in LISFLOOD_SRC (default ~/lisflood-fp), then set the executable in this dock.")
 
     def _build_anuga(self):
         script = os.path.join(os.path.dirname(__file__), "scripts", "create_anuga_env.sh")
