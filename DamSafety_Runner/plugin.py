@@ -8,11 +8,7 @@ v3.2.0: once QGIS has loaded its plugins (a zero-delay timer after initGui), the
 the other ND dam suite plugins are checked (damsuite.versions.check("ndbreach")); problems go
 to the message bar and the "ND Dam Breach Runner" log. The plugin loads and works without ND
 Dam Hazard or ND Dam Breach Screening installed."""
-import os
-
 from qgis.core import QgsApplication
-from qgis.PyQt.QtCore import QUrl
-from qgis.PyQt.QtGui import QDesktopServices
 
 from .provider import Provider
 
