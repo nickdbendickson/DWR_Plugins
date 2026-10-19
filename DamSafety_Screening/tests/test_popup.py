@@ -168,6 +168,11 @@ for variant in (settings_all, {}):
 from nd_dam_screening.algorithms import run_breach_sim as rbs  # noqa: E402
 assert list(algs["runbreachsim"]._params["SCEN"].options) == rbs.SCENARIOS
 assert list(algs["runbreachsim"]._params["ENGINE"].options) == rbs.ENGINES
+# the storage choice goes to tool 3 only, as its own enum (0.17.27; tool 1 never had it)
+assert list(algs["estimatestorage"]._params["STORAGE_CHOICE"].options) == \
+    ["Max storage", "Normal storage", "Larger of the two"]
+assert "STORAGE_CHOICE" not in wf.defaults("1", W, {"storage_choice": 1})
+assert wf.defaults("3", W, {"storage_choice": 2})["STORAGE_CHOICE"] == 2
 
 # ------------------------------------------------ 3. results text
 assert wf.summary_counts(W) is None and "No report yet" in wf.counts_text(None)
@@ -302,6 +307,11 @@ dlg3 = NDDamScreeningDialog()
 dlg3.work_edit.setText("")
 EVENTS["messages"].clear()
 assert dlg3._open_step("1") is False and EVENTS["messages"][-1][2] == "Choose a work folder first."
+
+# the window's storage choice is tool 3's enum, label for label and value for value
+sc = dlg2.storage_choice
+assert [sc.itemText(i) for i in range(sc.count())] == list(algs["estimatestorage"]._params["STORAGE_CHOICE"].options)
+assert [sc.itemData(i) for i in range(sc.count())] == [0, 1, 2]
 
 # results tab: report, folder, result layers
 QtGui.OPENED_URLS.clear()
