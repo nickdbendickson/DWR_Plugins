@@ -134,8 +134,22 @@ def _install_fake_ogr(rec):
 
 # ------------------------------------------------------------------- tests --
 def test_decodes_blobs_without_gdal():
-    sys.modules.pop("osgeo", None)
-    sys.modules.pop("osgeo.ogr", None)
+    # None in sys.modules makes "from osgeo import ogr" raise ImportError, so the no-GDAL path
+    # is exercised even on a machine (QGIS) that has GDAL installed. Restored at the end.
+    saved = {k: sys.modules.get(k) for k in ("osgeo", "osgeo.ogr")}
+    sys.modules["osgeo"] = None
+    sys.modules["osgeo.ogr"] = None
+    try:
+        _decodes_blobs_without_gdal()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+
+def _decodes_blobs_without_gdal():
     mod = _load_module()
     tmp = tempfile.mkdtemp(prefix="m4pack_")
     pack = os.path.join(tmp, "nd_offline_pack.sqlite")
