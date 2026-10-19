@@ -32,6 +32,7 @@ from .core.units import FT, MILE
 
 PROVIDER_ID = "ndbreach"
 SET_LISFLOOD = "NDBREACH_LISFLOOD_EXE"
+SET_BUILTIN = "NDBREACH_USE_BUILTIN"       # opt in to the built-in screening engine (M5)
 SET_ANUGA = "NDBREACH_ANUGA_PYTHON"
 SET_THREADS = "NDBREACH_THREADS"
 
@@ -622,8 +623,9 @@ class _Base(QgsProcessingAlgorithm):
                   "= 1,640 ft)", 500.0, minimum=0.0, advanced=True)
         self._num("THREADS", "Threads (0 = the provider setting / all)", 0, minimum=0,
                   integer=True, advanced=True)
-        self._text("LISFLOOD_EXE", "LISFLOOD-FP executable (empty = provider setting or "
-                   "auto-detected)", advanced=True)
+        self._text("LISFLOOD_EXE", "LISFLOOD-FP executable (empty = provider setting or an "
+                   "installed LISFLOOD-FP; type 'builtin' to use the built-in screening engine "
+                   "- a numpy approximation, NOT LISFLOOD-FP)", advanced=True)
         self._text("ANUGA_PYTHON", "ANUGA Python interpreter (a path; a symlink is resolved "
                    "to the real file). Empty = provider setting or auto-detected",
                    advanced=True)
@@ -650,10 +652,18 @@ class _Base(QgsProcessingAlgorithm):
         # ProcessingConfig key, which may hold a first-run auto-detected default; then detect.
         exe = (self._str(parameters, "LISFLOOD_EXE", context)
                or _suite_setting("lisflood_exe") or _setting(SET_LISFLOOD))
+        from .core import lisflood as lfmod
+        # Opt in to the built-in screening engine ONLY by an explicit act: the word "builtin" in
+        # the field, or the provider flag. It is never selected just because the field is empty,
+        # so the numpy approximation can never silently stand in for LISFLOOD-FP (M5 safety).
+        if exe and str(exe).strip().lower() in lfmod.BUILTIN_WORDS:
+            return lfmod.BUILTIN_EXE
         if not exe or not os.path.isfile(exe):
             found = nd_data.detect_lisflood()
             if found:
                 exe = found
+            elif str(_setting(SET_BUILTIN, "") or "").strip().lower() in ("1", "true", "yes", "on"):
+                return lfmod.BUILTIN_EXE
         return exe
 
     def find_anuga(self, parameters, context):
@@ -2131,8 +2141,9 @@ class CheckAlgorithm(_Base):
                 "provider settings can be filled in.")
 
     def initAlgorithm(self, config=None):
-        self._text("LISFLOOD_EXE", "LISFLOOD-FP executable (empty = provider setting or "
-                   "auto-detected)")
+        self._text("LISFLOOD_EXE", "LISFLOOD-FP executable (empty = provider setting or an "
+                   "installed LISFLOOD-FP; type 'builtin' to use the built-in screening engine "
+                   "- a numpy approximation, NOT LISFLOOD-FP)")
         self._text("ANUGA_PYTHON", "ANUGA Python interpreter (a path; a symlink is resolved "
                    "to the real file). Empty = provider setting or auto-detected")
         self.addOutput(QgsProcessingOutputString("RESULT", "Result"))

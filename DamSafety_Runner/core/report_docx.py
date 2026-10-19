@@ -2087,8 +2087,9 @@ class _Report(object):
         add("Maximum velocity", s.get("max_velocity_fps"), "ft/s")
         add("Latest arrival", s.get("latest_arrival_hr"), "h after breach initiation")
         if s.get("domain_mi"):
-            add("Model domain", "{} x {} mi after {} LISFLOOD-FP run(s)".format(
-                s["domain_mi"][0], s["domain_mi"][1], s.get("lisflood_runs")))
+            add("Model domain", "{} x {} mi after {} run(s) of {}".format(
+                s["domain_mi"][0], s["domain_mi"][1], s.get("lisflood_runs"),
+                s.get("flood_engine_short", "LISFLOOD-FP")))
         add("Final rasters from", s.get("final_model"))
         for k, v in (s.get("incremental_acres") or {}).items():
             add("Area where the breach adds at least " + k, v, "ac")
@@ -2245,7 +2246,8 @@ class _Report(object):
         if not rep or not (runs or st):
             return False
         tier = st.get("tier")
-        rows = [["Model", "LISFLOOD-FP (inertial solver)" + (
+        engine = rep.get("flood_engine") or "LISFLOOD-FP (inertial solver)"
+        rows = [["Model", engine + (
             "; final results from ANUGA" if tier == "lisflood+anuga" else "")],
             ["Inflow", "Breach hydrograph as a point source just below the dam; free outflow "
                        "at the domain edges"]]
@@ -2286,7 +2288,7 @@ class _Report(object):
                               fmt_val((it.get("stats") or {}).get("max_volume_error_pct")),
                               fmt_val(it.get("runtime_min"))])
             d.table(table, align=[None, None, "right", "right", None, None, "right", "right"],
-                    caption="LISFLOOD-FP runs")
+                    caption="{} runs".format(rep.get("flood_engine_short") or "LISFLOOD-FP"))
             dec = rep.get("receptor_edge_decisions") or []
             drows = []
             for rec in dec:
@@ -2737,6 +2739,7 @@ class _Report(object):
     # -- section 9 -----------------------------------------------------------------------
     def sec_assumptions(self):
         d, st, h = self.doc, self.settings, self.hy
+        eng = (self.rep or {}).get("flood_engine_short") or "LISFLOOD-FP"
         method = h.get("breach_parameters") or h.get("method") or "the chosen method"
         a = [
             "Breach size and formation time come from {} or from a hydrograph supplied by the "
@@ -2759,10 +2762,10 @@ class _Report(object):
             "Roughness is a single Manning's n ({}) or values from a land-cover raster; these "
             "are typical floodplain values and have not been calibrated.".format(
                 fmt_val(st.get("manning_n", 0.06))),
-            "LISFLOOD-FP's inertial solver is not meant for supercritical flow, so velocities "
+            "The inertial solver in {} is not meant for supercritical flow, so velocities "
             "within a few cells of the breach are the least reliable part of the result. "
-            "Culverts are open cuts through the embankment in LISFLOOD-FP (no roof, no inlet "
-            "control), which passes more flow than a real culvert.",
+            "Culverts are open cuts through the embankment in {} (no roof, no inlet "
+            "control), which passes more flow than a real culvert.".format(eng, eng),
             "Water leaves the model domain freely at its edges (no downstream boundary "
             "condition). The domain is extended until the depth at each edge is below the "
             "tolerance, or until no receptor lies ahead of the flood; the flood is cut off "

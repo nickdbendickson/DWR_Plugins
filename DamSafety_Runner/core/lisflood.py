@@ -11,6 +11,7 @@ ignores the keyword and records arrival at its internal wet/dry depth (about
 1 mm); `check_lisflood()` tells the two apart."""
 import os
 import subprocess
+import sys
 import time
 
 import numpy as np
@@ -30,6 +31,82 @@ EDGE_LETTERS = ("N", "S", "E", "W")
 SOLVER_ACC = "acceleration"
 SOLVER_FV1 = "fv1"
 SOLVERS = (SOLVER_ACC, SOLVER_FV1)
+
+# ---------------------------------------------------------------------------------------------
+# Built-in engine (M5, suite 1.14.1 parity). core/builtin_lisflood.py is the same local-inertial
+# equations in numpy, so a run works out of the box WITHOUT a LISFLOOD-FP binary. It is a
+# screening approximation, NOT LISFLOOD-FP, and it is STRICTLY OPT-IN: the run guard still errors
+# when no engine is chosen (see algorithms.find_lisflood). The word "builtin" selects it; its
+# "executable" is its .py file, so every "is the executable there" check and the run manifest keep
+# working. resolve_exe() deliberately does NOT fall back to the built-in on an empty value (unlike
+# the nd_ sibling): choosing it is always an explicit act, so the numpy approximation can never be
+# substituted silently for LISFLOOD-FP in a hazard classification.
+HERE = os.path.dirname(os.path.abspath(__file__))
+BUILTIN_EXE = os.path.join(HERE, "builtin_lisflood.py")
+BUNDLED_DIR = os.path.join(os.path.dirname(HERE), "bin")
+BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
+
+
+def bundled_exe():
+    """A LISFLOOD-FP bundled for this computer, or None. DamSafety ships no bin/ dir, so this is
+    normally None; kept for parity so a future bundled binary is picked up."""
+    import platform
+    import stat
+    mach = platform.machine().lower()
+    if mach not in ("x86_64", "amd64"):
+        return None
+    if os.name == "nt":
+        p = os.path.join(BUNDLED_DIR, "windows-x64", "lisflood.exe")
+    elif sys.platform.startswith("linux"):
+        p = os.path.join(BUNDLED_DIR, "linux-x64", "lisflood")
+    else:
+        return None
+    if not os.path.isfile(p):
+        return None
+    if os.name != "nt" and not os.access(p, os.X_OK):
+        try:
+            os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        except OSError:
+            return None
+    return p
+
+
+def is_builtin(exe):
+    return bool(exe) and os.path.abspath(str(exe)) == BUILTIN_EXE
+
+
+def resolve_exe(exe):
+    """The flood engine for a setting or parameter value. The word "builtin" (any BUILTIN_WORDS
+    spelling) selects the built-in engine; anything else is returned verbatim. An empty value
+    stays empty on purpose: the caller's guard then raises, so the built-in is never used unless
+    the user asked for it."""
+    v = (str(exe).strip() if exe else "")
+    if v.lower() in BUILTIN_WORDS:
+        return BUILTIN_EXE
+    return v
+
+
+def describe_exe(exe):
+    """One line for logs and reports: which program runs the floods."""
+    if is_builtin(exe):
+        return "the built-in engine (local inertial, in numpy; NOT LISFLOOD-FP)"
+    if exe and os.path.abspath(str(exe)).startswith(BUNDLED_DIR + os.sep):
+        return "LISFLOOD-FP bundled with the plugin ({})".format(exe)
+    return "LISFLOOD-FP at {}".format(exe)
+
+
+def engine_label(exe):
+    """A concise model name for the report "Model" row / final_model / manifest: it distinguishes
+    the built-in screening engine from LISFLOOD-FP so a run can never be read as LISFLOOD-FP when
+    it was not."""
+    if is_builtin(exe):
+        return "built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
+    return "LISFLOOD-FP"
+
+
+def engine_name(exe):
+    """A short noun for log lines and prose: "the built-in engine" or "LISFLOOD-FP"."""
+    return "the built-in engine" if is_builtin(exe) else "LISFLOOD-FP"
 
 
 class ModelError(RuntimeError):
@@ -290,53 +367,61 @@ def write_inputs(workdir, dem_real, inflow_xy, hydrograph, st, name="run", inflo
     return par
 
 
+def _read_mass_rows(path):
+    """Parse the LISFLOOD-FP .mass file ONCE. Returns a float ndarray of shape (n, 5) whose
+    columns are [time_s, domain_vol_m3, Qin_cms, Qout_cms, interval_err_m3] (the .mass columns
+    0, 5, 6, 8, 10) for every data row with >= 11 fields; an empty (0, 5) array when the file is
+    missing or short. _read_mass / _read_series / late_inflow all read through this so read_results
+    parses the (often multi-thousand-row) file once instead of three times."""
+    rows = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            next(f)
+            for line in f:
+                p = line.split()
+                if len(p) >= 11:
+                    rows.append((float(p[0]), float(p[5]), float(p[6]),
+                                 float(p[8]), float(p[10])))
+    except (OSError, StopIteration, ValueError):
+        pass
+    return np.asarray(rows, dtype=float).reshape(-1, 5)
+
+
+def _mass_summary(rows):
+    """_read_mass's value from shared rows. The explicit loop reproduces the original exactly:
+    sequential cum (left-to-right, not pairwise), qin_max/worst floored at 0.0 (so a negative Qin
+    leaves qin_max == 0.0), last-row last_t/vol, all zeros for an empty file."""
+    last_t = cum = vol = qin_max = worst = 0.0
+    for t, v, qin, _qo, e in rows:
+        last_t = float(t)
+        vol = float(v)
+        qin_max = max(qin_max, float(qin))
+        e = float(e)
+        cum += e
+        worst = max(worst, abs(e))
+    return last_t, cum, vol, qin_max, worst
+
+
+def _series_cols(rows):
+    """_read_series's value (time s, domain volume m3, inflow m3/s, outflow m3/s) from shared
+    rows; shape-(0,) float64 arrays for an empty file, matching the old np.asarray([])."""
+    return rows[:, 0], rows[:, 1], rows[:, 2], rows[:, 3]
+
+
 def _read_mass(path):
     """Last time (s), cumulative volume error (m3, signed sum of the interval
     errors), last domain volume (m3), largest inflow (m3/s), largest single
     interval error (m3)."""
-    last_t, cum, vol, qin_max, worst = 0.0, 0.0, 0.0, 0.0, 0.0
-    try:
-        with open(path, encoding="utf-8") as f:
-            next(f)
-            for line in f:
-                p = line.split()
-                if len(p) >= 11:
-                    last_t = float(p[0])
-                    vol = float(p[5])
-                    qin_max = max(qin_max, float(p[6]))
-                    e = float(p[10])
-                    cum += e
-                    worst = max(worst, abs(e))
-    except (OSError, StopIteration, ValueError):
-        pass
-    return last_t, cum, vol, qin_max, worst
+    return _mass_summary(_read_mass_rows(path))
 
 
 def _read_series(path):
     """The mass file as arrays (time s, domain volume m3, inflow m3/s, outflow m3/s)."""
-    t, v, qi, qo = [], [], [], []
-    try:
-        with open(path, encoding="utf-8") as f:
-            next(f)
-            for line in f:
-                p = line.split()
-                if len(p) >= 11:
-                    t.append(float(p[0]))
-                    v.append(float(p[5]))
-                    qi.append(float(p[6]))
-                    qo.append(float(p[8]))
-    except (OSError, StopIteration, ValueError):
-        pass
-    return np.asarray(t), np.asarray(v), np.asarray(qi), np.asarray(qo)
+    return _series_cols(_read_mass_rows(path))
 
 
-def late_inflow(path, t_end_s, tol_cms=0.5):
-    """Water that comes in through the domain edges after the hydrograph has ended, from
-    the mass file. Returns (volume m3, largest inflow m3/s, time of the largest inflow s).
-    Once the point source has stopped, the only inflow left is what a boundary adds, so
-    anything above `tol_cms` is the boundary importing water (LISFLOOD-FP 8.1's FV1 free
-    edge does this where water stands against it)."""
-    t, _v, qi, _qo = _read_series(path)
+def _late_inflow(t, qi, t_end_s, tol_cms=0.5):
+    """late_inflow's math on already-parsed series (so read_results needs no extra parse)."""
     if len(t) < 2:
         return 0.0, 0.0, 0.0
     late = t > t_end_s
@@ -351,16 +436,65 @@ def late_inflow(path, t_end_s, tol_cms=0.5):
     return vol, float(ql[k]), float(tl[k])
 
 
+def late_inflow(path, t_end_s, tol_cms=0.5):
+    """Water that comes in through the domain edges after the hydrograph has ended, from
+    the mass file. Returns (volume m3, largest inflow m3/s, time of the largest inflow s).
+    Once the point source has stopped, the only inflow left is what a boundary adds, so
+    anything above `tol_cms` is the boundary importing water (LISFLOOD-FP 8.1's FV1 free
+    edge does this where water stands against it)."""
+    t, _v, qi, _qo = _read_series(path)
+    return _late_inflow(t, qi, t_end_s, tol_cms)
+
+
+def _run_builtin(workdir, par, st, progress=None, cancel=None, log=None):
+    """Run core/builtin_lisflood.py in-process (the numpy local-inertial engine). Writes
+    lisflood.log whose first line is the engine name, and surfaces the mass error and the
+    donor-cell limiter's clipped volume so steep-terrain clipping cannot pass unnoticed."""
+    from . import builtin_lisflood as bl
+    t0 = time.time()
+    lines = []
+
+    def say(msg):
+        lines.append(msg)
+        if log:
+            log(msg)
+
+    def prog(t, sim):
+        if progress:
+            progress(min(100.0, 100.0 * t / sim), "built-in engine t = {:.2f} h".format(t / 3600.0))
+    try:
+        stats = bl.run_par(par, progress=prog, cancel=cancel, log=say)
+    except bl.Cancelled:
+        raise Cancelled("cancelled")
+    except bl.EngineError as e:
+        raise ModelError("built-in engine: {}".format(e))
+    finally:
+        with open(os.path.join(workdir, "lisflood.log"), "w", encoding="utf-8") as f:
+            f.write(bl.NAME + "\n" + "\n".join(lines) + "\n")
+    # surface the limiter loss: the donor-cell limiter keeps depth >= 0 (mass conserved) by
+    # clipping outflow, which on steep terrain quietly removes conveyance; report it as a share
+    # of what was injected so a reviewer sees when the screening result leaned on clipping.
+    inj = float(stats.get("injected_m3") or 0.0)
+    clip = float(stats.get("clipped_m3") or 0.0)
+    if inj > 0 and clip > 0.01 * inj:
+        say("Built-in engine: the stability limiter removed {:.3g} m3 ({:.1f}% of the {:.4g} m3 "
+            "injected) on steep terrain; treat near-breach velocities and extent as "
+            "screening-grade.".format(clip, 100.0 * clip / inj, inj))
+    return time.time() - t0
+
+
 def run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
-    # Keep-awake runs beside the solver, not around it, so Cancel still reaches LISFLOOD-FP
+    # Keep-awake runs beside the solver, not around it, so Cancel still reaches the model
     # and a missing systemd bus cannot stop the run.
     from ..damsuite.keepawake import keep_awake
-    with keep_awake("LISFLOOD-FP", log=log):
+    with keep_awake(engine_name(st.exe), log=log):
         return _run(workdir, par, st, progress, cancel, log, name)
 
 
 def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
     exe = st.exe
+    if is_builtin(exe):
+        return _run_builtin(workdir, par, st, progress, cancel, log)
     if not exe or not os.path.isfile(exe):
         raise ModelError("LISFLOOD-FP executable not found: {}".format(exe))
     env = dict(os.environ)
@@ -430,7 +564,7 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         p = os.path.join(res, name + ext)
         if not os.path.exists(p):
             if required:
-                raise ModelError("LISFLOOD-FP did not write {}".format(p))
+                raise ModelError("The flood model did not write {}".format(p))
             return None
         g = Grid.read_asc(p)
         a = g.data
@@ -449,7 +583,7 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     hmax = np.where(np.isfinite(hmax), hmax, 0.0)
     wet = hmax >= st.arrival_depth_m - ARRIVAL_TOL_M
     if vmax is None:
-        notes.append("LISFLOOD-FP wrote no maximum velocity (.maxVc).")
+        notes.append("The flood model wrote no maximum velocity (.maxVc).")
         vmax = np.full(hmax.shape, np.nan)
     vmax = np.where(np.isfinite(vmax) & (hmax >= st.velocity_min_depth_m), vmax, 0.0)
     if arr is None:
@@ -458,7 +592,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     if wse is None:
         wse = np.where(hmax > 0, dem.data + hmax, np.nan)
     wse = np.where(hmax > 0, wse, np.nan)
-    last_t, verr, vol, qin_max, worst = _read_mass(os.path.join(res, name + ".mass"))
+    mass_rows = _read_mass_rows(os.path.join(res, name + ".mass"))   # parse the .mass file once
+    last_t, verr, vol, qin_max, worst = _mass_summary(mass_rows)
     injected = hydrograph.volume_until(last_t) or hydrograph.volume_m3
     injected += sum(source_volume(src, last_t) for src in st.extra_sources)
     stats = {
@@ -483,11 +618,11 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     # v3.11.0: what the model holds against what was put in. A free FV1 edge can import water
     # (it grew to 6.5e10 m3 against 9.7e6 m3 injected at Elm River Dam 1); the near-dam refine
     # checks these before it merges anything. Only meaningful without ambient sources.
-    t_ser, v_ser, _qi, _qo = _read_series(os.path.join(res, name + ".mass"))
+    t_ser, v_ser, qi_ser, _qo = _series_cols(mass_rows)
     if injected and len(v_ser):
         stats["max_domain_volume_ratio"] = round(float(v_ser.max()) / injected, 3)
     if not st.extra_sources:
-        lv, lq, lt = late_inflow(os.path.join(res, name + ".mass"), float(hydrograph.duration_s))
+        lv, lq, lt = _late_inflow(t_ser, qi_ser, float(hydrograph.duration_s))
         stats["late_boundary_inflow_acft"] = round(lv / 1233.48183754752, 2)
         stats["late_boundary_inflow_max_cfs"] = round(lq / 0.028316846592, 1)
         stats["late_boundary_inflow_pct"] = round(100.0 * lv / injected, 2) if injected else None
@@ -500,8 +635,8 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
                     lv / 1233.48183754752, 100.0 * lv / injected,
                     injected / 1233.48183754752, lq / 0.028316846592, lt / 3600.0))
     if stats["max_volume_error_pct"] and stats["max_volume_error_pct"] > 1.0:
-        notes.append("LISFLOOD-FP mass-balance error is {}% of the injected volume (limit 1%); "
-                     "try a smaller cell size or initial time step.".format(
+        notes.append("The flood model's mass-balance error is {}% of the injected volume (limit "
+                     "1%); try a smaller cell size or initial time step.".format(
                          stats["max_volume_error_pct"]))
     return Envelopes(dem.like(hmax, nodata=np.nan), dem.like(vmax, nodata=np.nan),
                      dem.like(arr, nodata=np.nan), dem.like(wse, nodata=np.nan), stats, notes,
@@ -584,8 +719,12 @@ def check_lisflood(exe, workdir):
     # it is recorded wherever there was any water, which is far more cells.
     deep = int((env.depth.data >= 0.3 - ARRIVAL_TOL_M).sum())
     patched = raw_wet <= 1.03 * deep + 3
-    msg = ("LISFLOOD-FP ran: {} cells reached 0.3 m.".format(thr_wet))
-    if not patched:
+    who = "The built-in engine" if is_builtin(exe) else "LISFLOOD-FP"
+    msg = ("{} ran: {} cells reached 0.3 m.".format(who, thr_wet))
+    if is_builtin(exe):
+        msg += (" This is the built-in numpy screening engine (local inertial), NOT LISFLOOD-FP; "
+                "its results are preliminary estimates.")
+    if not patched and not is_builtin(exe):
         msg += (" The arrival-depth patch is NOT active (arrival time will be the first "
                 "wetting, about 1 mm). Rebuild with scripts/build_lisflood_linux.sh on Linux, or scripts/build_lisflood_macos.sh on macOS on macOS, or build with CMake on Linux.")
     return {"ok": True, "patched": patched, "message": msg}

@@ -937,6 +937,18 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         return lfmod.read_results(os.path.join(model_dir, "lisflood" + tag), dem, lst, hyd), \
             dem, init
 
+    # M5: a run on the built-in engine is a SCREENING approximation, not LISFLOOD-FP. Say so
+    # prominently before anything runs, so the numbers are never mistaken for LISFLOOD-FP's.
+    if lfmod.is_builtin(st.lisflood_exe):
+        bmsg = ("This run uses the BUILT-IN screening engine (local inertial, in numpy), NOT "
+                "LISFLOOD-FP. The results are preliminary estimates: near-breach velocities may "
+                "be understated (which can lower the depth-velocity hazard zone) and nothing has "
+                "been validated against LISFLOOD-FP. Do not use them as the basis of a final "
+                "hazard classification or loss-of-life determination without a LISFLOOD-FP run.")
+        if bmsg not in warnings:
+            warnings.append(bmsg)
+            log(bmsg)
+
     # --- LISFLOOD-FP with domain extension ----------------------------------------
     iterations = list(state.get("iterations", []))
     lf_env, dem, init_grid = None, None, None
@@ -956,7 +968,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         bounds = tuple(state.get("final_bounds"))
         sim_time = state.get("final_sim_time", sim_time)
         lf_env, dem, init_grid = load_lisflood("", hy, bounds, sim_time)
-        log("LISFLOOD-FP results loaded from the checkpoint.")
+        log("Results loaded from the checkpoint ({}).".format(lfmod.engine_name(st.lisflood_exe)))
         start_it = st.max_iterations + 1
     max_it = 1 if plan is not None else st.max_iterations
     it = start_it
@@ -974,8 +986,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
 
         nx_ = int(round((bounds[2] - bounds[0]) / cs))
         ny_ = int(round((bounds[3] - bounds[1]) / cs))
-        log("LISFLOOD-FP run {}: {:.1f} x {:.1f} mi, {:,} cells, {:.1f} h".format(
-            it, (bounds[2] - bounds[0]) / MILE, (bounds[3] - bounds[1]) / MILE, nx_ * ny_,
+        log("Run {} with {}: {:.1f} x {:.1f} mi, {:,} cells, {:.1f} h".format(
+            it, lfmod.engine_name(st.lisflood_exe),
+            (bounds[2] - bounds[0]) / MILE, (bounds[3] - bounds[1]) / MILE, nx_ * ny_,
             sim_time / 3600.0))
         lf_env, dem, init_grid, runtime, wd, lst = lisflood_run("", hy, bounds, sim_time, prog,
                                                                 st.gauges, snap_for(sim_time))
@@ -1212,7 +1225,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         return fa
 
     lf_final = write_qa("", lf_env, "lisflood", init_grid)
-    final_env, final_model, final_arrays = lf_env, "LISFLOOD-FP", lf_final
+    final_env, final_model, final_arrays = lf_env, lfmod.engine_label(st.lisflood_exe), lf_final
     lf_base_env = None
     lf_base_arrays = None
 
@@ -1453,6 +1466,13 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         summary["refine_near_dam"] = report["refine_near_dam"]["summary"]
     if report.get("dem_conditioning"):
         summary["buildings"] = report["dem_conditioning"]["buildings"].split(".")[0]
+    # M5 labeling: one authoritative engine name for every report surface (md / HTML / docx /
+    # run_report.json / manifest), so a built-in-engine run is never presented as LISFLOOD-FP.
+    _builtin_run = lfmod.is_builtin(st.lisflood_exe)
+    report["flood_engine"] = ("Built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
+                              if _builtin_run else "LISFLOOD-FP (inertial solver)")
+    report["flood_engine_short"] = lfmod.engine_name(st.lisflood_exe)
+    summary["flood_engine_short"] = report["flood_engine_short"]
     report["summary"] = summary
     report["warnings"] = warnings
     report["outputs"] = {"final": res.final, "baseline": res.baseline,
@@ -1851,8 +1871,9 @@ def render_report(r):
              "| Maximum depth / velocity | {} ft / {} ft/s |".format(s["max_depth_ft"],
                                                                   s["max_velocity_fps"]),
              "| Latest arrival | {} h after breach initiation |".format(s["latest_arrival_hr"]),
-             "| Domain | {} x {} mi after {} LISFLOOD-FP run(s) |".format(
-                 s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"])]
+             "| Domain | {} x {} mi after {} run(s) of {} |".format(
+                 s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"],
+                 r.get("flood_engine_short", "LISFLOOD-FP"))]
     if s.get("receptors_flooded"):
         lines.append("| Reaches | {} |".format(s["receptors_flooded"]))
     if s.get("refine_near_dam"):
@@ -1924,8 +1945,9 @@ def render_report(r):
                 "edges_over_after_receptors", it["edges_over_tolerance"]))) or "none",
             it["runtime_min"]))
     last = r["lisflood_runs"][-1]["stats"]
-    lines += ["", "LISFLOOD-FP (last run): max volume error {}% of the breach volume, "
-              "peak inflow {} cfs.".format(last.get("max_volume_error_pct"),
+    lines += ["", "{} (last run): max volume error {}% of the breach volume, "
+              "peak inflow {} cfs.".format(r.get("flood_engine_short", "LISFLOOD-FP"),
+                                           last.get("max_volume_error_pct"),
                                            last.get("peak_inflow_cfs")), ""]
     cs = r.get("class_stop_rule")
     if cs:
