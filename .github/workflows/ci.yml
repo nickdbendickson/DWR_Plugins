@@ -65,6 +65,12 @@ jobs:
           fail=0
           for t in DamSafety_Hazard/tests/test_*.py; do
             echo "== $t =="
-            python "$t" || fail=1
+            if python "$t"; then
+              echo "[rc=0] $t"
+            else
+              rc=$?
+              echo "[rc=$rc FAILED] $t"
+              fail=1
+            fi
           done
           exit $fail
