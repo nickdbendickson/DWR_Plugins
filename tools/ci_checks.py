@@ -24,9 +24,30 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening",
            "DamSafety_Data", "DamSafety_Setup", "DamSafety_PMP")
 
+# plugin-root files copied verbatim into more than one plugin (not shared via damsuite): they must
+# stay byte-identical so the two tools apply the same rule. {filename: (plugins that carry it)}.
+IDENTICAL_ACROSS_PLUGINS = {
+    "crest_rule.py": ("DamSafety_Runner", "DamSafety_Screening"),  # one top-of-dam number for both
+}
+
 
 def _fail(problems, msg):
     problems.append(msg)
+
+
+def check_cross_plugin_identical(problems):
+    import hashlib
+    for name, plugins in IDENTICAL_ACROSS_PLUGINS.items():
+        shas = {}
+        for p in plugins:
+            try:
+                with open(os.path.join(ROOT, p, name), "rb") as f:
+                    shas[p] = hashlib.sha256(f.read()).hexdigest()
+            except OSError:
+                _fail(problems, "{}/{} missing".format(p, name))
+        if len(set(shas.values())) > 1:
+            _fail(problems, "{} differs across {} (must stay byte-identical)".format(
+                name, " / ".join(plugins)))
 
 
 def check_damsuite_drift(problems):
@@ -117,6 +138,7 @@ def main():
     problems = []
     for name, fn in (("damsuite drift", check_damsuite_drift),
                      ("damsuite pin", check_damsuite_pin), ("versions", check_versions),
+                     ("cross-plugin identical", check_cross_plugin_identical),
                      ("fork parity", check_fork_parity),
                      ("compile", check_compile), ("golden baseline", check_golden)):
         print("[ci] " + name)
