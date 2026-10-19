@@ -24,10 +24,12 @@ jobs:
           python-version: "3.12"
       - name: Install numpy (no QGIS/scipy needed here)
         run: python -m pip install "numpy<2.3"
-      - name: Fast checks (drift, versions, compile, golden baseline)
+      - name: Fast checks (drift, pin, versions, compile, golden baseline)
         env:
           QT_QPA_PLATFORM: offscreen
         run: python3 tools/ci_checks.py
+      - name: Fingerprint nested-VRT regression (QGIS-free)
+        run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
 
   plugin-suites:
     runs-on: ubuntu-latest
