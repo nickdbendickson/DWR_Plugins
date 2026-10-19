@@ -50,7 +50,12 @@ Settings (environment variables, or the `env` dict of each function):
     NDBREACH_HECRAS_TCU_HOOK     optional, see above
     NDBREACH_HECRAS_TIMEOUT_S    per-step timeout in s (preprocess steps: default 1800; the
                                  RasUnsteady compute: default compute_timeout(), scaled to
-                                 the model); set, it overrides both
+                                 the model); set, it overrides both. Every timeout is on
+                                 the WALL clock (core/wallclock.py): a paused / forked VM
+                                 counts, a clock stepped back never makes it fire early
+    NDBREACH_HECRAS_KILL_GRACE_S seconds between SIGTERM and SIGKILL when a step times out
+                                 (default 60); the timeout is in run.log and run_report.json
+                                 ('hecras_timeout') before anything is stopped
     NDBREACH_HECRAS_INFLOW_MODE  'auto' (default), 'hydrograph' or 'breach' (see write_project)
     NDBREACH_HECRAS_BASE_FLOW_CFS  base flow of the inflow hydrograph (default 0, see below)
     NDBREACH_HECRAS_TAIL         'recession' (default) or 'hold' (see inflow_series)
@@ -86,7 +91,7 @@ import time
 
 import numpy as np
 
-from . import hecras
+from . import hecras, wallclock
 
 ENV_PREFIX = "NDBREACH_HECRAS_WINEPREFIX"
 ENV_WINDIR = "NDBREACH_HECRAS_WINDOWS_DIR"
@@ -110,6 +115,16 @@ HDF_NAME = "{name}.p01.hdf"
 
 class HecRasEngineError(RuntimeError):
     """A clear, user-facing failure of the HEC-RAS 2D engine."""
+
+
+class HecRasTimeout(HecRasEngineError):
+    """RasUnsteady ran out of time. .info: what was recorded (timeout, wall and monotonic
+    elapsed, clock jumps, how it was stopped, the partial results HDF); it is also in
+    linux_run/timeout.json, run.log and (run_stage) run_report.json 'hecras_timeout'."""
+
+    def __init__(self, msg, info=None):
+        super().__init__(msg)
+        self.info = info or {}
 
 
 def _env(env):
@@ -787,10 +802,13 @@ def _run(cmd, cwd, env, timeout, what, ok=None, log=None):
     log = log or (lambda m: None)
     log("HEC-RAS: " + what)
     try:
-        r = subprocess.run(cmd, cwd=cwd, env=env, timeout=timeout, capture_output=True,
-                           text=True, errors="replace")
-    except subprocess.TimeoutExpired:
-        raise HecRasEngineError("{} did not finish in {:.0f} s".format(what, timeout))
+        r = wallclock.run(cmd, cwd=cwd, env=env, timeout=timeout, grace=wallclock.grace_s(env),
+                          log=log, what=what)
+    except subprocess.TimeoutExpired as x:
+        stop = getattr(x, "stop", None) or {}
+        raise HecRasEngineError("{} did not finish in {:.0f} s (wall clock){}".format(
+            what, timeout, "; stopped with " + ", then ".join(stop["sent"])
+            if stop.get("sent") else ""))
     except OSError as e:
         raise HecRasEngineError("{} could not start: {}".format(what, e))
     text = (r.stdout or "") + (r.stderr or "")
@@ -803,42 +821,88 @@ def _run(cmd, cwd, env, timeout, what, ok=None, log=None):
     return text
 
 
-def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None):
-    """RasUnsteady with its output going to `log_path` as it runs (watchable); on a timeout
-    the process group is killed and compute_timeout_message() says how far it got."""
+def _append(path, text):
+    """Adds a line to a log; never raises (the timeout must be logged whatever fails)."""
+    try:
+        with open(path, "a", errors="replace") as f:
+            f.write("\n" + text.rstrip("\n") + "\n")
+    except Exception:
+        pass
+
+
+def _read_text(path):
+    try:
+        with open(path, errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None,
+                deadline=None, stop=None, poll_s=2.0):
+    """RasUnsteady with its output going to `log_path` as it runs (watchable, appended, so the
+    lines added here are never overwritten). The timeout is on the wall clock
+    (wallclock.Deadline). On a timeout, in this order: the timeout is written to run.log and
+    log() (before anything that can fail), then the process group gets SIGTERM,
+    NDBREACH_HECRAS_KILL_GRACE_S (default 60 s) to exit, then SIGKILL; HecRasTimeout is raised
+    with compute_timeout_message() and .info. `deadline` / `stop` are for the tests."""
     log = log or (lambda m: None)
     what, ok = "Linux RasUnsteady", "Finished Unsteady Flow Simulation"
     log("HEC-RAS: " + what)
-    t0 = time.time()
+    grace = wallclock.grace_s(env)
     try:
-        with open(log_path, "w", errors="replace") as out:
+        open(log_path, "w").close()
+        with open(log_path, "a", errors="replace") as out:
             p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT,
                                  start_new_session=True)
-            try:
-                rc = p.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except (OSError, AttributeError):
-                    p.kill()
-                p.wait()
-                rc = None
     except OSError as e:
         raise HecRasEngineError("{} could not start: {}".format(what, e))
-    with open(log_path, errors="replace") as f:
-        text = f.read()
+    dl = (deadline or wallclock.Deadline)(timeout, what="RasUnsteady", log=log)
+    rc = wallclock.wait(p, dl, poll_s=poll_s)
     if rc is None:
-        msg = compute_timeout_message(timeout, time.time() - t0, text, sim_hours, estimate)
-        log("ERROR: " + msg)
-        raise HecRasEngineError(msg)
+        elapsed = dl.elapsed()
+        info = dict(dl.summary(), what=what, grace_s=grace, stop=None, stop_error=None)
+        try:
+            msg = compute_timeout_message(timeout, elapsed, _read_text(log_path), sim_hours,
+                                          estimate)
+        except Exception as e:                       # never lose the timeout itself
+            msg = "Linux RasUnsteady did not finish in {:.0f} s ({}: {})".format(
+                timeout, type(e).__name__, e)
+        info["message"] = msg
+        head = ("[ndbreach] TIMEOUT {}: {} Wall clock {:.0f} s, monotonic {:.0f} s since "
+                "the start ({}). Stopping it: SIGTERM to the process group, SIGKILL after "
+                "{:.0f} s.".format(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), msg,
+                                   info["wall_elapsed_s"], info["monotonic_elapsed_s"],
+                                   info["started"], grace))
+        _append(log_path, head)                      # (1) run.log, before any cleanup
+        try:
+            log("ERROR: " + msg)                     # (2) the Runner log
+        except Exception:
+            pass
+        try:                                         # (3) only now: stop it
+            info["stop"] = (stop or wallclock.stop_group)(p, grace, log=log)
+        except Exception as e:
+            info["stop_error"] = "{}: {}".format(type(e).__name__, e)
+            try:
+                p.kill()
+            except Exception:
+                pass
+        st = info["stop"] or {}
+        _append(log_path, "[ndbreach] stopped: {}; exited after {}.{}".format(
+            ", then ".join(st.get("sent") or []) or "no signal sent",
+            st.get("exited_after") or "unknown",
+            " Stop error: " + info["stop_error"] if info["stop_error"] else ""))
+        raise HecRasTimeout(msg, info)
+    text = _read_text(log_path)
     if rc != 0 or ok not in text or "FAIL" in text:
         tail = "\n".join(text.strip().splitlines()[-8:])
         why = ("exit {}".format(rc) if rc != 0 else
                "exit 0 but it printed FAIL" if "FAIL" in text else
                "exit 0 but it never printed '{}'".format(ok))
         raise HecRasEngineError("{} failed ({}):\n{}".format(what, why, tail))
+    el = dl.elapsed()
     log("HEC-RAS compute: RasUnsteady finished in {}{}.".format(
-        _hm(time.time() - t0), " (estimate {})".format(_hm(estimate)) if estimate else ""))
+        _hm(el), " (estimate {})".format(_hm(estimate)) if estimate else ""))
     return text
 
 
@@ -1100,7 +1164,8 @@ def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0, un
     proc = subprocess.Popen([d["wine"] or "wine", "cmd", "/c", to_wine_path(bat, d["prefix"])],
                             cwd=project_dir, env=e, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL)
-    t0, done = time.time(), False
+    done = False
+    dl = wallclock.Deadline(timeout, what="Ras.exe -c", log=log)     # wall clock, see wallclock
     try:
         if tcu:
             log("HEC-RAS: starting the user's TCU hook " + tcu)
@@ -1110,8 +1175,8 @@ def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0, un
                                         stderr=subprocess.DEVNULL)
             except OSError as x:
                 raise HecRasEngineError("the TCU hook {} could not start: {}".format(tcu, x))
-        while time.time() - t0 < timeout:
-            time.sleep(poll_s)
+        while not dl.expired():
+            time.sleep(max(0.01, min(poll_s, dl.remaining())))
             if until():
                 time.sleep(2.0 if final else 0.0)
                 done = True
@@ -1152,6 +1217,89 @@ def strip_cr(path):
         f.write(b.replace(b"\r\n", b"\n"))
 
 
+def partial_hdf_state(path):
+    """What a results HDF RasUnsteady did not finish holds (read-only, never raises):
+    {'path', 'size', 'readable', 'groups' (top level), 'has_results', 'error'}."""
+    out = {"path": path, "size": 0, "readable": False, "groups": [], "has_results": False,
+           "error": ""}
+    try:
+        out["size"] = os.path.getsize(path)
+        import h5py
+        try:
+            f = h5py.File(path, "r", locking=False)
+        except TypeError:
+            f = h5py.File(path, "r")
+        with f:
+            out["groups"] = sorted(f.keys())
+            out["has_results"] = "Results" in f
+        out["readable"] = True
+    except Exception as e:
+        out["error"] = "{}: {}".format(type(e).__name__, e)
+    return out
+
+
+def keep_partial(work, tmp, name, plan, log=None):
+    """After a timeout: renames RasUnsteady's half-written <name>.p<plan>.tmp.hdf in `work` to
+    <name>.p<plan>.partial.hdf (never used as results) and says what it holds. RasUnsteady
+    writes the Time / Breaching / volume series only at the end, so they are usually missing
+    even when it exits cleanly on SIGTERM. Never raises; None when there is no file."""
+    src = os.path.join(work, tmp)
+    if not os.path.exists(src):
+        return None
+    dst = os.path.join(work, "{}.p{}.partial.hdf".format(name, plan))
+    try:
+        os.replace(src, dst)
+    except OSError:
+        dst = src
+    st = partial_hdf_state(dst)
+    try:
+        (log or (lambda m: None))(
+            "HEC-RAS compute: partial results kept as {} ({:,} bytes, {}). Not used as "
+            "results.".format(os.path.basename(dst), st["size"],
+                              "readable, groups: " + ", ".join(st["groups"]) if st["readable"]
+                              else "not readable: " + st["error"]))
+    except Exception:
+        pass
+    return st
+
+
+def record_timeout(dam_folder, info, log=None):
+    """run_stage after a RasUnsteady timeout: the partial HDF copied to <dam>/_hecras/, the
+    timeout in _hecras/hecras_stage.json and in _breach_model/run_report.json as
+    'hecras_timeout'. Each part on its own; never raises."""
+    info = dict(info or {})
+    keep = os.path.join(dam_folder, "_hecras")
+    ph = (info.get("partial_hdf") or {}).get("path")
+    try:
+        os.makedirs(keep, exist_ok=True)
+        if ph and os.path.exists(ph):
+            shutil.copy2(ph, keep)
+            info["partial_hdf_kept_as"] = os.path.join(keep, os.path.basename(ph))
+    except Exception as e:
+        info["partial_hdf_copy_error"] = "{}: {}".format(type(e).__name__, e)
+    try:
+        with open(os.path.join(keep, "hecras_stage.json"), "w", encoding="utf-8") as f:
+            json.dump({"engine": "hecras", "status": "timeout", "timeout": info}, f, indent=1,
+                      default=str)
+    except Exception:
+        pass
+    rp = os.path.join(dam_folder, "_breach_model", "run_report.json")
+    try:
+        with open(rp, encoding="utf-8") as f:
+            rep = json.load(f)
+        rep["hecras_timeout"] = info
+        with open(rp + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(rep, f, indent=1, default=str)
+        os.replace(rp + ".tmp", rp)
+    except Exception as e:
+        try:
+            (log or (lambda m: None))("WARNING: the HEC-RAS timeout could not be added to {} "
+                                      "({}: {})".format(rp, type(e).__name__, e))
+        except Exception:
+            pass
+    return info
+
+
 def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=None):
     """Official Linux RasUnsteady on the preprocessed inputs; returns the results HDF path
     (<name>.p<plan>.hdf in work_dir, default <project>/linux_run)."""
@@ -1179,8 +1327,19 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
             "{:g}".format(pt["sim_hours"]) if pt["sim_hours"] else "?",
             "{:g} s".format(pt["base_dt_s"]) if pt["base_dt_s"] else "?",
             _hm(est) if est else "unknown", _hm(timeout), how))
-    text = _run_logged(nice + [d["rasunsteady"], tmp, "x" + plan], work, e, timeout,
-                       os.path.join(work, "run.log"), pt["sim_hours"], est, log=log)
+    try:
+        _run_logged(nice + [d["rasunsteady"], tmp, "x" + plan], work, e, timeout,
+                    os.path.join(work, "run.log"), pt["sim_hours"], est, log=log)
+    except HecRasTimeout as x:
+        x.info.update(estimate_s=est, timeout_how=how, cells=pt["cells"],
+                      sim_hours=pt["sim_hours"])
+        x.info["partial_hdf"] = keep_partial(work, tmp, name, plan, log=log)
+        try:
+            with open(os.path.join(work, "timeout.json"), "w", encoding="utf-8") as f:
+                json.dump(x.info, f, indent=1, default=str)
+        except Exception:
+            pass
+        raise
     out = os.path.join(work, "{}.p{}.hdf".format(name, plan))
     os.replace(os.path.join(work, tmp), out)
     return out
@@ -1265,7 +1424,11 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     name = r["model"].name
     times = preprocess(proj, name, d=d, env=env, terrain_tif=r["paths"]["terrain_tif"],
                        prj=r["paths"]["projection"], log=log)
-    hdf = compute(proj, name, d=d, env=env, log=log)
+    try:
+        hdf = compute(proj, name, d=d, env=env, log=log)
+    except HecRasTimeout as x:
+        x.info = record_timeout(dam_folder, dict(x.info, project=proj), log=log)
+        raise
     keep = os.path.join(dam_folder, "_hecras")
     os.makedirs(keep, exist_ok=True)
     shutil.copy2(hdf, keep)

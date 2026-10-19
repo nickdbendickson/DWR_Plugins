@@ -18,7 +18,7 @@ import numpy as np
 
 from .grid import Grid
 from .lisflood import Envelopes, ModelError, Cancelled
-from . import terrain
+from . import terrain, wallclock
 from . import conditioning as cond
 from . import structures as structmod
 
@@ -390,8 +390,9 @@ def make_gmsh_mesh(workdir, spec, st):
     if os.path.exists(op):
         os.remove(op)
     try:
-        out = subprocess.run([st.python, MESHER, sp, op], capture_output=True, text=True,
-                             env=_clean_env(), timeout=float(st.gmsh_timeout_s), errors="replace")
+        # wall-clock timeout (a paused VM counts; core/wallclock.py), SIGTERM then SIGKILL
+        out = wallclock.run([st.python, MESHER, sp, op], env=_clean_env(),
+                            timeout=float(st.gmsh_timeout_s), grace=5.0, what="gmsh")
     except subprocess.TimeoutExpired:
         return None, "gmsh took over {:.0f} s (timeout)".format(st.gmsh_timeout_s)
     except Exception as e:
