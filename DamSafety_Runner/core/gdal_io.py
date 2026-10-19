@@ -1,5 +1,6 @@
 """GDAL side: read the (statewide) DEM into the model's metric CRS and write
 GeoTIFFs. Works offline on local files, VRT mosaics included."""
+import math
 import os
 
 import numpy as np
@@ -164,6 +165,23 @@ class GdalTerrain:
         a = out.GetRasterBand(1).ReadAsArray().astype(np.float64)
         a[a == NODATA] = np.nan
         return Grid(a, xmin, ymax, cell, crs_wkt=out.GetProjection())
+
+    def native_cell_m(self):
+        """The DEM's own cell size in metres (3.10.31: ANUGA's bed is read at it). A
+        geographic raster's degrees are converted at its centre latitude."""
+        gdal, osr = _gdal()
+        ds = GS.open_raster(self.dem_path)
+        gt = ds.GetGeoTransform()
+        px = min(abs(gt[1]), abs(gt[5]))
+        wkt = ds.GetProjection()
+        if not wkt:
+            return float(px)
+        srs = osr.SpatialReference()
+        srs.ImportFromWkt(wkt)
+        if srs.IsGeographic():
+            lat = gt[3] + gt[5] * ds.RasterYSize / 2.0
+            return float(px * 111320.0 * max(math.cos(math.radians(lat)), 0.1))
+        return float(px * (srs.GetLinearUnits() or 1.0))
 
     def read(self, bounds, cell):
         g = self._warp(self.dem_path, bounds, cell, self.resample, self.src_nodata)

@@ -136,6 +136,19 @@ class RunSettings:
         # optional dict of gmsh sizes (gmsh_mesher.build_mesh, e.g. min_area_tol,
         # culvert_area_m2) and embankment options (anuga_model.EMBANKMENT_DEFAULTS)
         self.anuga_gmsh = None
+        # 3.10.31: the ANUGA bed. "fine" = the DEM source at its own cell size (read in blocks)
+        # sampled at the triangle vertices, so road and dam crowns on mesh lines survive;
+        # "model_grid" = the model-cell DEM at the centroids (before 3.10.31). LISFLOOD-FP
+        # always uses the model grid. NDBREACH_ANUGA_ELEVATION (or ANUGA_ELEVATION) sets it;
+        # NDBREACH_ANUGA_ELEVATION_CELL_M fixes the fine cell size (0 = the source's own).
+        self.anuga_elevation = (os.environ.get("NDBREACH_ANUGA_ELEVATION")
+                                or os.environ.get("ANUGA_ELEVATION") or "fine")
+        self.anuga_elevation_cell_m = 0.0
+        try:
+            self.anuga_elevation_cell_m = float(os.environ.get("NDBREACH_ANUGA_ELEVATION_CELL_M")
+                                                or 0.0)
+        except ValueError:
+            pass
         _tol = os.environ.get("NDBREACH_ANUGA_GMSH_MIN_AREA_TOL")
         if _tol:
             try:
@@ -270,6 +283,9 @@ class RunSettings:
                 d[k] = v is not None
             elif k in ("anuga_mesher", "anuga_gmsh") and v in ("default", None):
                 continue                 # default mesh: the report stays as before
+            elif (k == "anuga_elevation" and v == "fine") or (k == "anuga_elevation_cell_m"
+                                                              and not v):
+                continue                 # 3.10.31 defaults: run_report["anuga_elevation_source"]
             elif k == "reservoir_carve" and v in ("off", None, ""):
                 continue                 # v3.10.20: off - the report stays as before
             elif k == "hecras_mesh_seeds" and v in ("grid", None, ""):
@@ -577,6 +593,27 @@ def model_dem(terrain_src, structures, model, bounds, cell, refill_paths=()):
     if cuts:
         g, _, _ = cond.Edits(notches=cuts).apply(g)
     return g
+
+
+def terrain_native_cell(terrain_src):
+    """The terrain source's own cell size in work-CRS metres (None when unknown):
+    terrain_src.native_cell_m() through the wrappers (conditioning, refill, carve)."""
+    fn = getattr(terrain_src, "native_cell_m", None)
+    if fn is None:
+        return None
+    try:
+        v = fn()
+        return float(v) if v else None
+    except Exception:                               # noqa - unknown: prepare_elevation uses 2 m
+        return None
+
+
+def terrain_label(terrain_src):
+    """A short name of the terrain source for the report (its DEM path when known)."""
+    p = getattr(terrain_src, "dem_path", None)
+    if p is None and hasattr(terrain_src, "base"):
+        p = getattr(terrain_src.base, "dem_path", None)
+    return str(p) if p else None
 
 
 def max_extent_warning(max_extent_mi, over):
@@ -1351,6 +1388,14 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             emb_kw = {"embankment_lines": list(getattr(st, "road_lines", None) or [])
                       + list(getattr(st, "rail_lines", None) or []),
                       "terrain_read": terrain_src.read}
+        # 3.10.31: ANUGA's bed from the finest terrain (the same conditioning, refills and
+        # structure cuts as the model DEM, at the source's own cell size); LISFLOOD-FP
+        # keeps the model grid
+        ast.elevation = getattr(st, "anuga_elevation", "fine") or "fine"
+        ast.elevation_cell_m = getattr(st, "anuga_elevation_cell_m", 0.0) or None
+        emb_kw.update(elevation_read=lambda b, c: dem_for("anuga", b, c),
+                      elevation_native_m=terrain_native_cell(terrain_src),
+                      elevation_label=terrain_label(terrain_src))
         width_m = max(3 * cs, inlet_w)
         hy_a, hy_nb_a = _with_flow(hy, amb_cms, sim_time), _with_flow(hy_nb, amb_cms, sim_time)
         a_runs = []
@@ -1378,6 +1423,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             ast.buffer_m *= 2
         state.save(anuga_done=True)
         report["anuga_runs"] = a_runs
+        report["anuga_elevation_source"] = an_env.stats.get("elevation_source")
         anuga_mesh = _anuga_mesh_report(a_runs)
         report["anuga_mesh"] = anuga_mesh
         if anuga_mesh.get("rejected_line"):
@@ -1569,6 +1615,12 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         summary["anuga_mesher"] = report["anuga_mesh"]["used"]
         if report["anuga_mesh"].get("rejected_line"):
             summary["anuga_mesh_rejected"] = report["anuga_mesh"]["rejected_line"]
+    es = report.get("anuga_elevation_source") or {}
+    if es.get("mode") == "fine":
+        summary["anuga_elevation"] = "{:g} m terrain at the triangle vertices".format(es["cell_m"])
+    elif es.get("mode") == "model_grid":
+        summary["anuga_elevation"] = "model grid ({:g} m) at the centroids ({})".format(
+            es.get("cell_m", 0), es.get("reason", ""))
     if "incremental" in report:
         summary["incremental_acres"] = report["incremental"]["acres_at_or_above"]
     if report.get("refine_near_dam", {}).get("applied"):
@@ -2336,6 +2388,8 @@ def render_report(r):
         elif am.get("requested") not in (None, "default", s["anuga_mesher"]):
             txt += " (asked for {})".format(am.get("requested"))
         lines.append("| ANUGA mesh | {} |".format(txt))
+    if s.get("anuga_elevation"):
+        lines.append("| ANUGA bed elevation | {} |".format(s["anuga_elevation"]))
     lines.append("")
     if s.get("anuga_mesh_rejected"):
         lines += ["## ANUGA mesh", "", "**" + s["anuga_mesh_rejected"] + "**", ""]
