@@ -46,13 +46,9 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          cd DamSafety_Screening
-          fail=0
-          for t in tests/test_*.py; do
-            echo "== $t =="
-            PYTHONPATH="tests/qgis_mock:$GITHUB_WORKSPACE" python "$t" || fail=1
-          done
-          exit $fail
+          # the suite's own runner: each script picks the mock or the real GDAL it needs
+          # (tests/qgis_mock on PYTHONPATH shadowed the real osgeo for the GDAL-write tests)
+          python DamSafety_Screening/tests/run_all.py
       - name: Runner fast suite
         env:
           QT_QPA_PLATFORM: offscreen
