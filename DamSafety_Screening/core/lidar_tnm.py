@@ -1,4 +1,4 @@
-"""USGS 3DEP 1 m lidar DEM tiles, native (Screening 0.17.28): the project tiles themselves, not
+"""USGS 3DEP 1 m lidar DEM tiles, native (Screening 0.17.29): the project tiles themselves, not
 the resampled ImageServer images that Download DEM's "USGS 3DEP" source asks for.
 
     plan = make_plan(bbox_ll, tile_dir, http)        list the tiles: project, dates, sizes, disk

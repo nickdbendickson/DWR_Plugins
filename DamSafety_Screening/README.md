@@ -300,7 +300,7 @@ them:
   test doubles in tests/ (tests/test_suite09.py, including a real export made by ND Dam Hazard's
   exporter under its own test harness).
 
-## Download DEM: USGS 3DEP 1 m lidar tiles (native) (0.17.28)
+## Download DEM: USGS 3DEP 1 m lidar tiles (native) (0.17.29)
 
 Download DEM (`nddam:downloaddem`, also the window's **Download DEM…** button) has three sources:
 

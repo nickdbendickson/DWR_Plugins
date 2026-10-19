@@ -12,7 +12,8 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
                        QgsFeatureRequest, QgsRectangle)
 
 from ..core import storage
-from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_POINT, SRC_POLYGON)
+from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_POINT, SRC_POLYGON,
+                      set_advanced)
 from . import _common as cm
 from ..core import errors as er
 from ..damsuite import gdalsafe as GS
@@ -166,6 +167,10 @@ class EstimateStorage(QgsProcessingAlgorithm):
             out = QgsFeature(fields); out.setGeometry(f.geometry())
             vals = list(f.attributes()) + [None] * len(NEW_FIELDS)
             res, note = None, ""
+            # M19: True when `res` is the assumed quadratic inventory curve from _inventory_curve
+            # (a guess from inventory volume + height, not a DEM measurement); it must be reported
+            # low confidence and labelled as the assumed kind, never high-confidence 'inventory'
+            assumed = False
             # reset per dam: the dry-dam fallback must not see the previous dam's raster, and the
             # frame-dict lookups it used kept the frame (the output sink too) referenced on
             # Python 3.12, so 3_dams_storage.gpkg was left without its layer
@@ -213,6 +218,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
                                                                                  h / storage.FT_M))
                     if alt is not None:
                         res, note = alt, "{} (water body: {})".format(alt.notes[0], note)
+                        assumed = True
                         feedback.pushWarning("dam {}: {}".format(dam_id, alt.notes[0]))
             except Exception as e:  # keep going, record why
                 note = "FAILED: " + er.plain(e, dam_id, "3")
@@ -223,6 +229,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
                                                 "no waterbody polygon")
                 if alt is not None:
                     res, note = alt, alt.notes[0]
+                    assumed = True
                     feedback.pushWarning("dam {}: {}".format(dam_id, note))
                 else:
                     feedback.reportError("dam {}: {}".format(dam_id, er.plain(e, dam_id, "3")))
@@ -269,6 +276,12 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 cal_total = curve[-1][1]
                 used, method, conf = ((inv, "inventory", "high") if inv else
                                       (res.total_m3, "estimated", res.confidence))
+                if assumed:
+                    # M19 (ported from nd_ 0.26.0 estimate_storage.py): the assumed quadratic curve
+                    # already holds the inventory volume at its top, but it is a GUESS whatever the
+                    # inventory fields say - report it low confidence and labelled as the assumed
+                    # kind, not a high-confidence 'inventory' measurement.
+                    used, method, conf = res.total_m3, "inventory curve", "low"
                 vals[k:] = [res.pool_elev, res.crest_elev, res.surface_area_m2, res.below_pool_m3,
                             res.above_pool_m3, res.total_m3, res.max_depth_m, res.shore_slope_deg,
                             used, method, conf,

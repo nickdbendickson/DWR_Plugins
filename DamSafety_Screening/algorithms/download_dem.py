@@ -1,6 +1,6 @@
 """Download a local DEM for one dam, one North Dakota county, or the state.
 
-Resolution is 10 m or 1 m. Source is USGS 3DEP (ImageServer), ND DWR QL2 LiDAR, or (0.17.28)
+Resolution is 10 m or 1 m. Source is USGS 3DEP (ImageServer), ND DWR QL2 LiDAR, or (0.17.29)
 the USGS 3DEP 1 m lidar project tiles themselves from The National Map (core/lidar_tnm.py).
 For the first two the local file is a tiled GeoTIFF, float32, EPSG:5070, elevations in
 metres. The native 1 m tiles are kept as they are (UTM, metres) in the suite's lidar tile folder
@@ -94,7 +94,7 @@ class DownloadDem(QgsProcessingAlgorithm):
             "IMAGINE", "ND LiDAR: DEM_Imagine (1 m feet)", True))
         self.addParameter(QgsProcessingParameterString(
             "WORK_CRS", "Extra CRS (empty = EPSG:5070 only)", optional=True))
-        # 0.17.28: USGS 3DEP 1 m lidar tiles (native, TNM); used only with that source
+        # 0.17.29: USGS 3DEP 1 m lidar tiles (native, TNM); used only with that source
         self.addParameter(QgsProcessingParameterString(
             "BBOX", "1 m tiles: box west,south,east,north in degrees (optional)", optional=True))
         self.addParameter(QgsProcessingParameterFile(
@@ -249,7 +249,7 @@ class DownloadDem(QgsProcessingAlgorithm):
         return vrt, native
 
 
-    # ------------------------------------------------------------- 0.17.28: native 1 m tiles
+    # ------------------------------------------------------------- 0.17.29: native 1 m tiles
 
     def _opt(self, parameters, context, name):
         return (self.parameterAsString(parameters, name, context) or "").strip() \

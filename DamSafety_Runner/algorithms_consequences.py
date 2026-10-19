@@ -2,7 +2,7 @@
 
 Import it through `algorithms` (which the provider does), like the other tool modules."""
 import numpy as np
-from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
+from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsPointXY,
                        QgsProcessingException, QgsProcessingOutputFile,
                        QgsProcessingOutputString, QgsProcessingParameterEnum,
                        QgsProcessingParameterFeatureSource)
@@ -13,6 +13,37 @@ from .algorithms_tools import _ToolBase
 from .compat import SOURCE_LINE, SOURCE_POINT, SOURCE_POLYGON, set_advanced
 from .core import consequences as cons
 from .core import impacts as impmod
+
+
+def _xy(p):
+    return float(p.x()), float(p.y())
+
+
+def _haversine_m(lon0, lat0, lon1, lat1, r=6371008.8):
+    p0, p1 = np.radians(lat0), np.radians(lat1)
+    a = (np.sin((p1 - p0) / 2) ** 2
+         + np.cos(p0) * np.cos(p1) * np.sin(np.radians(lon1 - lon0) / 2) ** 2)
+    return float(2 * r * np.arcsin(np.sqrt(a)))
+
+
+def _ground_m_per_unit(crs, center, context, step=100.0):
+    """M11: ground metres per unit of the rasters' CRS at the grid centre (the dam folder's
+    rasters are in the DEM's CRS, which may be in feet or Web Mercator), from a short east and
+    north step measured on the ellipsoid; 1.0 when it cannot be measured. Ported from
+    nd_breach_runner so flooded road/rail length is metres on a feet-CRS folder."""
+    try:
+        to_ll = QgsCoordinateTransform(crs, QgsCoordinateReferenceSystem("EPSG:4326"),
+                                       context.transformContext())
+        x, y = center
+        lon0, lat0 = _xy(to_ll.transform(QgsPointXY(x, y)))
+        out = []
+        for dx, dy in ((step, 0.0), (0.0, step)):
+            lon, lat = _xy(to_ll.transform(QgsPointXY(x + dx, y + dy)))
+            out.append(_haversine_m(lon0, lat0, lon, lat) / step)
+        k = float(np.mean(out))
+        return k if np.isfinite(k) and k > 0 else 1.0
+    except Exception:
+        return 1.0
 
 FIELD_SYNONYMS = {
     "F_ID": ("id", "structure_id", "struct_id", "fd_id", "objectid", "fid", "name",
@@ -265,10 +296,11 @@ class ConsequencesAlgorithm(_ToolBase):
         radius = 0.5 * float(np.hypot(xmax - xmin, ymax - ymin))
         lines = qio.lines(src, to_r, to_l, center, radius,
                           fields=[x for x in (fld["R_AADT"], fld["R_NAME"]) if x])
+        unit_m = _ground_m_per_unit(crs, center, context)   # M11: ground metres per CRS unit
         for i, (verts, at) in enumerate(lines):
             ident = _txt(at.get(fld["R_NAME"])) if fld["R_NAME"] else ""
             ident = ident or "{} {}".format(kind, i + 1)
-            rec.add_lines([verts], kind, ids=[ident])
+            rec.add_lines([verts], kind, ids=[ident], unit_m=unit_m)
             v = qio.num(at.get(fld["R_AADT"])) if fld["R_AADT"] else None
             if v is not None:
                 aadt[ident] = max(aadt.get(ident, 0.0), v)

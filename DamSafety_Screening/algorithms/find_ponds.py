@@ -53,6 +53,15 @@ EXCLUDED_FIELDS = [("wb_id", FT_STRING), ("wb_type", FT_STRING), ("pond_type", F
                    ("notes", FT_STRING)]
 
 
+def _cell_of(path):
+    """The cell size of a raster (inf when it cannot be read)."""
+    try:
+        ds = gdal.Open(path)
+        return abs(ds.GetGeoTransform()[1]) if ds is not None else float("inf")
+    except Exception:                                            # noqa
+        return float("inf")
+
+
 def pond_id(x, y):
     """Stable dam ID of a water body: from its centroid in EPSG:5070 rounded to 1 m, so the same
     water body gets the same ID in every run (and the terrain / curve files are found again)."""
@@ -230,7 +239,10 @@ class FindPonds(QgsProcessingAlgorithm):
                              "largest water body".format(n, m))
         clip = os.path.join(self._terrain, "dam_{}.tif".format(pid))
         tiles = []
-        if os.path.exists(clip) and clip_covers(clip, ext):
+        # the dam clip only when it is as fine as the analysis cell. It is written at the clip cell
+        # (often coarser), so a second run read the pond from the coarse clip and gave a different
+        # (lower) storage than the first run.
+        if os.path.exists(clip) and clip_covers(clip, ext) and _cell_of(clip) <= cell * 1.001:
             source = clip
         elif self._vrt:
             source = self._vrt

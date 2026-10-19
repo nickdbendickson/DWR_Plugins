@@ -54,12 +54,48 @@ def z_to_m_factor(path, choice=Z_AUTO):
         except Exception:
             vert = None
         lin = vert or (srs.GetLinearUnits() if srs.IsProjected() else None)
-        if lin:
-            if abs(lin - US_FT) < 1e-7:
-                return US_FT, "US survey feet (assumed from the CRS units; check)"
-            if abs(lin - FT) < 1e-7:
-                return FT, "feet (assumed from the CRS units; check)"
+        if lin and (abs(lin - US_FT) < 1e-7 or abs(lin - FT) < 1e-7):
+            f, name = (US_FT, "US survey feet") if abs(lin - US_FT) < 1e-7 else (FT, "feet")
+            # 3.10.0: a feet CRS alone does not make feet elevations - a 3DEP metre DEM warped
+            # to ND State Plane feet keeps metre values. The elevations decide when only one
+            # reading lands in North Dakota's ground range.
+            med = _median_value(ds)
+            if med is not None:
+                as_ft, as_m = _nd_ground(med * f), _nd_ground(med)
+                if as_m and not as_ft:
+                    return 1.0, ("metres (no unit in the raster; its {} CRS suggests {}, but a "
+                                 "median of {:.0f} is below North Dakota's ground in {}; "
+                                 "check)").format(name, name, med, name)
+                if as_ft and not as_m:
+                    return f, ("{} (no unit in the raster; the CRS is in {} and a median of "
+                               "{:.0f} fits North Dakota's ground only as {}; check)").format(
+                                   name, name, med, name)
+            return f, ("{} (assumed from the CRS units; the elevations fit both feet and "
+                       "metres - set the units if this is wrong)").format(name)
     return 1.0, "metres (no units recorded in the raster; check)"
+
+
+ND_GROUND_M = (200.0, 1100.0)      # North Dakota: 229 m (Pembina) to 1069 m (White Butte)
+
+
+def _nd_ground(z_m):
+    return ND_GROUND_M[0] <= z_m <= ND_GROUND_M[1]
+
+
+def _median_value(ds, size=256):
+    """Median of the DEM's valid cells from a decimated read, or None."""
+    try:
+        b = ds.GetRasterBand(1)
+        nx, ny = ds.RasterXSize, ds.RasterYSize
+        a = b.ReadAsArray(0, 0, nx, ny, buf_xsize=min(nx, size),
+                          buf_ysize=min(ny, size)).astype(np.float64)
+        nd = b.GetNoDataValue()
+        ok = np.isfinite(a) & (a > -1e5) & (a < 1e5)
+        if nd is not None:
+            ok &= a != nd
+        return float(np.median(a[ok])) if ok.any() else None
+    except Exception:
+        return None
 
 
 def utm_epsg(lon, lat):

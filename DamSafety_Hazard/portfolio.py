@@ -1013,6 +1013,14 @@ def dam_row(folder, parent_watch=None, parent_series=None, screen_index=None, to
         row["Flooded_Habitable"] = str(sum(
             1 for s in snap.get("structures", []) if s.get("habitable") == "Yes"
             and s.get("outcome") not in _DRY))
+        # M2 follow-up: classify_nd marks a run incomplete when a structure / road /
+        # railroad layer was not evaluated (classification.classify_nd -> nd["incomplete"]).
+        # Surface it as an additive marker so a batch / portfolio run is not read as a
+        # clean class; the class value itself is left unchanged (mirrors nd_hazard
+        # history.history_lines).
+        inc = snap.get("incomplete")
+        if inc:
+            notes.append("INCOMPLETE ({})".format(", ".join(str(x) for x in inc)))
     else:
         if sf.get("nd"):
             row["ND_Class"] = sf["nd"]

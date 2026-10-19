@@ -64,7 +64,7 @@ from . import hydro3dhp   # noqa: F401  (1.15.0)
 from . import netproxy   # noqa: F401  (1.16.2)
 from . import structure_flags   # noqa: F401  (1.17.2)
 
-SUITE_VERSION = "1.17.3"   # 1.17.3: suitedata skips dem/lidar_1m (tile cache); 1.17.2: structure_flags (flagged structures); 1.17.1: one canonical package
+SUITE_VERSION = "1.17.4"   # 1.17.4: suitedata skips dem/lidar_1m (Screening 1 m tile cache, #105); 1.17.3: record.py, pack_convert fixes (#94); 1.17.2: structure_flags (flagged structures); 1.17.1: one canonical package
 FILES_NAME = "FILES.json"
 
 __all__ = ["SUITE_VERSION", "FILES_NAME", "selfcheck", "package_files", "chain", "dam_record",

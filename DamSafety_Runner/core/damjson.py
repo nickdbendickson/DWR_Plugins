@@ -40,6 +40,7 @@ PARAM_FIELDS = (("HEIGHT_FT", "height_ft", "Dam height (ft)"),
                 ("DAM_NAME", "name", "Dam name"),
                 ("NID_ID", "nid_id", "NID ID"))
 LOCAL_DATUMS = ("local",)
+DEM_ESTIMATE_DATUM = "DEM estimate"   # this plugin's own DEM estimate (read back as an estimate)
 MANIFEST_REL = "_breach_model/run_manifest.json"
 REPORT_REL = "_breach_model/run_report.json"
 
@@ -95,6 +96,13 @@ def local_datum(rec):
     return d in LOCAL_DATUMS
 
 
+def dem_estimate(rec):
+    """True when the record's top of dam is this plugin's own earlier DEM estimate, not a
+    surveyed/as-built or record crest, so a later run should estimate it again (M7)."""
+    d = str((rec.get("top_of_dam_datum") if rec is not None else "") or "").strip().lower()
+    return d == DEM_ESTIMATE_DATUM.lower()
+
+
 def fill(values, rec):
     """Fill empty values ({tool parameter: value or None}) from the record.
 
@@ -115,6 +123,10 @@ def fill(values, rec):
         if field == "top_of_dam_ft" and local_datum(rec):
             notes.append("{} in dam.json ({}) is on a local datum ({}); not used as an "
                          "elevation.".format(label, v, rec.get("top_of_dam_datum")))
+            continue
+        if field == "top_of_dam_ft" and dem_estimate(rec):
+            notes.append("{} in dam.json ({}) is an earlier run's estimate from the DEM, not a "
+                         "given crest; this run estimates it again.".format(label, v))
             continue
         if field in ("height_ft", "storage_acft") and not (isinstance(v, (int, float))
                                                            and v > 0):
@@ -170,8 +182,11 @@ def values_used(dam, st=None, top_source="parameter", point=None, nid_id=None):
          "nid_id": nid_id or None}
     if top_source != "record":
         v["top_of_dam_ft"] = _num(getattr(dam, "top_of_dam_ft", None))
-        if v["top_of_dam_ft"] is not None:
-            v["top_of_dam_datum"] = "DEM"
+        # M7 / 3.20.3: the datum says where the value came from. Only this plugin's own DEM
+        # estimate is marked (and read back as an estimate, so a later run re-estimates it); a
+        # value given as a parameter keeps whatever datum the record holds, since we cannot know it.
+        if v["top_of_dam_ft"] is not None and top_source == "dem":
+            v["top_of_dam_datum"] = DEM_ESTIMATE_DATUM
     fl = getattr(st, "flood", None) if st is not None else None
     if fl is not None and _num(getattr(fl, "normal_pool_ft", None)) is not None:
         v["normal_pool_ft"] = _num(fl.normal_pool_ft)

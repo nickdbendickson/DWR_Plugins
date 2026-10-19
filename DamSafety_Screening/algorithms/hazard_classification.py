@@ -250,23 +250,37 @@ class HazardClassification(QgsProcessingAlgorithm):
             feedback.reportError("Lethality: {}. ND 5.2.1.1 uses the ACER TM 11 charts; use these "
                                  "classes for comparison only.".format(basis))
 
-        # fields: the named field when the layer has it; tool-0 standard fields otherwise
-        has = lambda src, f: bool(f) and src is not None and f in src.fields().names()
-        occ = S("OCC") if has(bld, S("OCC")) else None
-        prim = S("PRIM") if has(bld, S("PRIM")) else None
+        # fields: the layer's own spelling of the named field when it has it (0.18.0: matched
+        # ignoring case, so a layer with AADT is found by the default 'aadt'); tool-0 standard
+        # fields otherwise. Ported from nd_dam_screening's pick(); named pfield so the imported
+        # more_layers.pick (the extra-layer logic below) stays in scope.
+        def pfield(src, f):
+            if not f or src is None:
+                return None
+            nm = src.fields().names()
+            if f in nm:
+                return f
+            low = {n.lower(): n for n in nm}
+            hit = low.get(str(f).lower())
+            if hit:
+                feedback.pushInfo("Field '{}' found as '{}' (case ignored).".format(f, hit))
+            return hit
+        has = lambda src, f: bool(pfield(src, f))
+        occ = pfield(bld, S("OCC"))
+        prim = pfield(bld, S("PRIM"))
         f_hab = "habitable" if has(bld, "habitable") else None
         f_mob = "mobile" if has(bld, "mobile") else None
         if bld is not None and occ is None and prim is None and f_hab is None:
             feedback.pushInfo("Structures: no occupancy or habitable field - every structure is habitable "
                               "(5.2.1.1, 5.3).")
-        f_aadt = S("ROAD_AADT") if has(roads, S("ROAD_AADT")) else None
-        f_rcls = S("ROAD_CLASS") if has(roads, S("ROAD_CLASS")) else None
-        f_sole = S("R_SOLE") if has(roads, S("R_SOLE")) else None
+        f_aadt = pfield(roads, S("ROAD_AADT"))
+        f_rcls = pfield(roads, S("ROAD_CLASS"))
+        f_sole = pfield(roads, S("R_SOLE"))
         primary_roads_no_aadt = roads is not None and f_aadt is None
-        f_trn = S("RAIL_TRAINS") if has(rail, S("RAIL_TRAINS")) else None
-        f_pax = S("RAIL_PAX") if has(rail, S("RAIL_PAX")) else ("passenger" if has(rail, "passenger") else None)
-        f_kind = S("L_KIND") if has(life, S("L_KIND")) else None
-        f_dcls = S("DAM_CLASS") if has(sim, S("DAM_CLASS")) else ("hazard_cla" if has(sim, "hazard_cla") else None)
+        f_trn = pfield(rail, S("RAIL_TRAINS"))
+        f_pax = pfield(rail, S("RAIL_PAX")) or pfield(rail, "passenger")
+        f_kind = pfield(life, S("L_KIND"))
+        f_dcls = pfield(sim, S("DAM_CLASS")) or pfield(sim, "hazard_cla")
 
         names = sim.fields().names()
         get = lambda f, k, c=None: cm.fval(f, names, k, c)

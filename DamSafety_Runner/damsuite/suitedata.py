@@ -57,7 +57,7 @@ TERRAIN, NLCD, DEM, DWR, HIFLD = "terrain", "nlcd", "dem", "dwr", "hifld"
 SUBFOLDERS = (TERRAIN, NLCD, DEM, DWR, HIFLD)
 MANIFEST = "manifest.json"
 RASTER_EXT = (".tif", ".tiff", ".vrt", ".img")
-# 1.17.3: tile caches inside dem/ that are not "your own DEM": Screening's native 3DEP 1 m lidar
+# 1.17.4: tile caches inside dem/ that are not "your own DEM": Screening's native 3DEP 1 m lidar
 # tiles (dem/lidar_1m/, hundreds of 10 km tiles) would otherwise be taken by local_dem().
 TILE_CACHES = ("lidar_1m",)
 VECTOR_EXT = (".gpkg", ".shp", ".geojson", ".json", ".kml", ".kmz", ".zip", ".gdb", ".csv")

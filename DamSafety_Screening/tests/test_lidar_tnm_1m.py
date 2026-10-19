@@ -1,4 +1,4 @@
-"""0.17.28: Download DEM's 'USGS 3DEP 1 m lidar tiles (native, TNM)' source (core/lidar_tnm.py).
+"""0.17.29: Download DEM's 'USGS 3DEP 1 m lidar tiles (native, TNM)' source (core/lidar_tnm.py).
 No network: the TNM answers, the metadata XML and the tile downloads are served by a fake HTTP
 object; the tiles are tiny synthetic GeoTIFFs. Needs GDAL (prints SKIP otherwise).
 

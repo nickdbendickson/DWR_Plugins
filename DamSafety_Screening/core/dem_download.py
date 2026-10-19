@@ -516,7 +516,7 @@ def tiles_for_box(west, south, east, north, cache_dir, feedback=None):
 
 
 def product_info(source, cell_m, native=None):
-    """Facts written beside the local DEM. source is 'usgs', 'ndlidar' or (0.17.28) 'tnm1m',
+    """Facts written beside the local DEM. source is 'usgs', 'ndlidar' or (0.17.29) 'tnm1m',
     the native USGS 3DEP 1 m lidar tiles (core/lidar_tnm.py), which stay in their UTM CRS."""
     native = native or {}
     cell_m = int(cell_m)

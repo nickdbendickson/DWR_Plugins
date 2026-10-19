@@ -7,11 +7,18 @@ Logic
   2. Downstream side = the side of the axis AWAY from the reservoir.
        primary : waterbody distance function (0 inside water)
        backup  : terrain (downstream side has lower ground)
-     If both are available and disagree, the result is flagged low confidence.
+     Both are measured at several stations along the whole dam line, not just its middle
+     (0.18.0: on a 4,000 ft dam a small pond below the dam outvoted the reservoir at the
+     midpoint). If both are available and disagree, the TERRAIN wins and the result is flagged
+     low confidence (0.18.0: the waterbody used to win; a pond is a worse witness than the
+     ground).
   3. Breach point = the point along the line where the ground at the downstream
      toe is lowest, i.e. where the embankment is tallest (the old channel).
      Falls back to the point on the line nearest the dam's reference point.
   4. Flow direction = the downstream normal of the axis, as a compass bearing.
+  5. 0.26.0: when neither the waterbody test nor the side test gives a vote, the steepest drop of
+     the DEM from the dam midpoint (8 compass directions at 200 m, else 40 m) is the downstream
+     direction ("terrain trace", low confidence, to be verified).
 """
 import math
 
@@ -79,6 +86,22 @@ def _normals(axis):
     return (ty, -tx), (-ty, tx)
 
 
+STATIONS = (0.1, 0.3, 0.5, 0.7, 0.9)     # fractions of the dam line the sides are judged at
+
+
+def _stations(line, length):
+    """Points at STATIONS of the line's length (the midpoint alone for a very short line)."""
+    if length <= 0:
+        return [line[0]]
+    if length < 60.0:
+        return [resample(line, max(length / 2.0, 1.0))[1]]
+    pts = resample(line, max(length / 400.0, 1.0))
+    out = []
+    for f in STATIONS:
+        out.append(pts[min(len(pts) - 1, int(round(f * (len(pts) - 1))))])
+    return out
+
+
 def _mean_dem(dem_fn, p, n, d0, d1, step=10.0):
     vals = []
     d = d0
@@ -90,31 +113,47 @@ def _mean_dem(dem_fn, p, n, d0, d1, step=10.0):
     return float(np.mean(vals)) if vals else float("nan")
 
 
-# ----------------------------------------------------------------- main API
+# 0.26.0: the last-resort trace from the dam midpoint
+TRACE_DIRS = tuple((math.sin(math.radians(a)), math.cos(math.radians(a))) for a in range(0, 360, 45))
+TRACE_DISTANCES = (200.0, 40.0)         # metres; the shorter ring only when the longer has no data
+TRACE_MIN_DROP = 0.2                    # metres over the distance; less is "flat": no answer
 
-def _steepest(dem_fn, origin, step=40.0, reach=200.0):
-    """Unit vector of the steepest DEM drop from origin. None if the trace cannot leave."""
-    z0 = dem_fn(origin[0], origin[1])
-    if not np.isfinite(z0):
+
+def midpoint(line, length=None):
+    """The point half way along the polyline."""
+    length = polyline_length(line) if length is None else length
+    if length <= 0:
+        return tuple(line[0])
+    return tuple(resample(line, length / 2.0)[1])
+
+
+def steepest_drop(dem_fn, p, distances=TRACE_DISTANCES, min_drop=TRACE_MIN_DROP):
+    """0.26.0: the compass direction in which the ground falls most from point p: the DEM is
+    sampled in the 8 compass directions at the first of `distances` that has any data (200 m,
+    else 40 m) and the direction with the largest drop per metre wins when that drop is at least
+    `min_drop` over the distance. Returns (unit vector, drop_m, distance_m), or None when the
+    midpoint has no elevation, no ring has data, or the ground is flat."""
+    z0 = dem_fn(p[0], p[1])
+    if z0 is None or not np.isfinite(z0):
         return None
-    best, best_drop = None, 0.2
-    for i in range(8):
-        ang = i * math.pi / 4.0
-        ux, uy = math.sin(ang), math.cos(ang)
-        z = dem_fn(origin[0] + ux * reach, origin[1] + uy * reach)
-        if not np.isfinite(z):
-            z = dem_fn(origin[0] + ux * step, origin[1] + uy * step)
-            dist = step
-        else:
-            dist = reach
-        if not np.isfinite(z):
-            continue
-        drop = (z0 - z) / dist
-        if drop > best_drop:
-            best, best_drop = (ux, uy), drop
-    return best
+    for dist in distances:
+        best = None
+        for d in TRACE_DIRS:
+            z = dem_fn(p[0] + d[0] * dist, p[1] + d[1] * dist)
+            if z is None or not np.isfinite(z):
+                continue
+            drop = float(z0) - float(z)
+            if best is None or drop > best[1]:
+                best = (d, drop)
+        if best is None:
+            continue                                   # no data on this ring: try the shorter one
+        if best[1] >= min_drop:
+            return best[0], best[1], dist
+        return None                                    # data, but flat: no answer
+    return None
 
 
+# ----------------------------------------------------------------- main API
 def resolve_breach(line, ref_pt, water_dist_fn=None, dem_fn=None,
                    known_height_m=None, offset=40.0):
     """Returns a dict describing breach location and flow direction.
@@ -128,43 +167,52 @@ def resolve_breach(line, ref_pt, water_dist_fn=None, dem_fn=None,
     length = polyline_length(line)
     axis = axis_direction(line)
     n1, n2 = _normals(axis)
-    mid = resample(line, max(length / 2.0, 1.0))[1] if length > 0 else line[0]
+    stations = _stations(line, length)
 
     # ---- which normal points downstream -------------------------------
+    # each station votes (+1 / -1 for n1); the sign of the sum is the vote of the whole line
     votes = {}
     if water_dist_fn is not None:
-        d1 = water_dist_fn(mid[0] + n1[0] * offset, mid[1] + n1[1] * offset)
-        d2 = water_dist_fn(mid[0] + n2[0] * offset, mid[1] + n2[1] * offset)
-        if abs(d1 - d2) > 1.0:
-            votes["waterbody"] = n1 if d1 > d2 else n2
+        s = 0
+        for q in stations:
+            d1 = water_dist_fn(q[0] + n1[0] * offset, q[1] + n1[1] * offset)
+            d2 = water_dist_fn(q[0] + n2[0] * offset, q[1] + n2[1] * offset)
+            if abs(d1 - d2) > 1.0:
+                s += 1 if d1 > d2 else -1
+        if s != 0:
+            votes["waterbody"] = n1 if s > 0 else n2
     if dem_fn is not None:
-        z1 = _mean_dem(dem_fn, mid, n1, 60, 300)
-        z2 = _mean_dem(dem_fn, mid, n2, 60, 300)
-        if np.isfinite(z1) and np.isfinite(z2) and abs(z1 - z2) > 0.2:
-            votes["terrain"] = n1 if z1 < z2 else n2
+        s = 0.0
+        for q in stations:
+            z1 = _mean_dem(dem_fn, q, n1, 60, 300)
+            z2 = _mean_dem(dem_fn, q, n2, 60, 300)
+            if np.isfinite(z1) and np.isfinite(z2) and abs(z1 - z2) > 0.2:
+                s += 1.0 if z1 < z2 else -1.0
+        if s != 0:
+            votes["terrain"] = n1 if s > 0 else n2
 
     if not votes and dem_fn is not None:
-        down = _steepest(dem_fn, mid)
-        if down is not None:
-            votes["trace"] = down
-            notes.append("downstream from the DEM trace; waterbody and side test were blank")
+        # 0.26.0: last resort - the steepest fall of the ground from the dam midpoint (the station
+        # vote above is untouched; this only runs when it and the waterbody test gave nothing)
+        tr = steepest_drop(dem_fn, midpoint(line, length))
+        if tr is not None:
+            votes["trace"] = tr[0]
+            notes.append("downstream side from the steepest DEM drop at the dam midpoint; the waterbody "
+                         "and side tests gave no answer; verify")
     if not votes:
         return {"ok": False, "reason": "cannot tell upstream from downstream",
                 "length_m": length, "axis_az": bearing(*axis) % 180}
-    if "waterbody" in votes:
-        down, dir_method = votes["waterbody"], "waterbody"
-    elif "terrain" in votes:
+    conf = "medium" if len(votes) == 1 else "high"
+    if "trace" in votes:
+        down, dir_method, conf = votes["trace"], "terrain trace", "low"
+    elif len(votes) == 2 and votes["waterbody"] != votes["terrain"]:
+        conf = "low"
         down, dir_method = votes["terrain"], "terrain"
+        notes.append("waterbody and terrain disagree on downstream side; the terrain was used")
+    elif "waterbody" in votes:
+        down, dir_method = votes["waterbody"], "waterbody"
     else:
-        down, dir_method = votes["trace"], "terrain trace"
-    if dir_method == "terrain trace":
-        conf = "low"
-        notes.append("ASSUMPTION: direction from steepest DEM drop only; verify")
-    else:
-        conf = "medium" if len(votes) == 1 else "high"
-    if len(votes) == 2 and "waterbody" in votes and "terrain" in votes and votes["waterbody"] != votes["terrain"]:
-        conf = "low"
-        notes.append("waterbody and terrain disagree on downstream side")
+        down, dir_method = votes["terrain"], "terrain"
 
     # ---- breach point ---------------------------------------------------
     cand = resample(line, max(3.0, length / 200.0))

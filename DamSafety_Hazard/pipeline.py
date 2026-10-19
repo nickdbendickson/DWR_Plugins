@@ -1120,6 +1120,10 @@ def _evaluate(run, cfg, scenarios, breaches):
             "inputs": {"used": inputs.get("used") or {},
                        "roads_on": inputs["roads"] is not None,
                        "rail_on": inputs["rail"] is not None,
+                       # 2.19.0: an empty list is "nothing was given or downloaded"
+                       "structs_on": any(
+                           x is not None and (len(x) > 0 if isinstance(x, (list, tuple)) else True)
+                           for x in (inputs["outlines"], inputs["points"])),
                        "places": inputs.get("places") or [],
                        "flowlines": get_layer_path(inputs["flowlines"])
                        if inputs.get("flowlines") is not None else None,
@@ -1471,9 +1475,11 @@ def _classify_and_write(run, cfg, state):
             n_rev, os.path.basename(store.path)))
     reinterpret(structs, float(cfg["min_area_ft2"]), int(cfg["persons_per_dwelling"]),
                 **ST.mobile_rules_from_cfg(cfg))
-    # ST.1: reinterpret restores persons on every habitable record; re-collapse so
-    # multi-outline extras stay at 0 persons (consequences / access also skip them)
-    ST.collapse_dwellings(structs)
+    # H4 / 2.16.0: the per-address dwelling collapse is NOT applied (audit). It zeroed
+    # the persons of every further habitable building sharing one 911/street address
+    # (apartment buildings, mobile-home parks, multi-home farmsteads), under-counting
+    # TM 11 lives-in-jeopardy and PAR / loss of life. Same-building duplicates are
+    # already merged spatially by build_inventory, so no re-collapse is needed here.
     _parcel_hints_step(run, cfg, structs, acrs)
 
     # ---- v2.7: the engineer's depth-damage curves for non-residential structures ----
@@ -1541,7 +1547,8 @@ def _classify_and_write(run, cfg, state):
                                   (structs, res["roads"], res["rails"]))
         try:
             nd = classify_nd(s_view, r_view, l_view, judgment_as_probable=judge, one_d=one_d,
-                             roads_evaluated=inputs["roads_on"], rail_evaluated=inputs["rail_on"])
+                             roads_evaluated=inputs["roads_on"], rail_evaluated=inputs["rail_on"],
+                             structs_evaluated=inputs.get("structs_on", True))
             tm11 = classify_tm11(s_view, r_view, judgment_as_probable=judge)
         except Exception as e:
             run.log(">>> ERROR: classification failed for {}: {}: {}".format(
@@ -1555,11 +1562,12 @@ def _classify_and_write(run, cfg, state):
         if res.get("incremental"):
             nd_t = classify_nd(structs, res["roads"], res["rails"], judgment_as_probable=judge,
                                one_d=one_d, roads_evaluated=inputs["roads_on"],
-                               rail_evaluated=inputs["rail_on"])
+                               rail_evaluated=inputs["rail_on"],
+                               structs_evaluated=inputs.get("structs_on", True))
             extra_criteria(nd_t, structs, res, cfg, total=True)
             res["nd_total"] = nd_t
             res["tm11_total"] = classify_tm11(structs, res["roads"], judgment_as_probable=judge)
-    gov = max(breaches, key=lambda s: (ND_RANK[run.results[s.name]["nd"]["cls"]],
+    gov = max(breaches, key=lambda s: (ND_RANK.get(run.results[s.name]["nd"]["cls"], -1),
                                        run.results[s.name]["tm11"]["lij"]))
     governing = run.results[gov.name]
 
