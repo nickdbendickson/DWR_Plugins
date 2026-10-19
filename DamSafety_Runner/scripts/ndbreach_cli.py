@@ -753,6 +753,10 @@ class AscTerrain(object):
     def bounds(self):
         return self.grid.bounds
 
+    def native_cell_m(self):
+        """The ASCII grid's own cell size (3.10.31: ANUGA's bed is read at it)."""
+        return float(self.grid.dx)
+
     def _sample(self, src, bounds, cell, method):
         xmin, ymin, xmax, ymax = bounds
         nx = int(round((xmax - xmin) / cell))
