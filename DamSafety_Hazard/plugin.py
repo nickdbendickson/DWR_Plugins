@@ -74,11 +74,6 @@ class NDdamHazardHelperPlugin(QObject):
 
         # Add to Plugins Menu
         self.iface.addPluginToMenu("Dam safety", self.action)
-        # v2.12: the Dam suite home (the same window in all three plugins)
-        self.home_action = QAction(icon, "Dam suite home...", self.iface.mainWindow())
-        self.home_action.setObjectName("NDDamHazardSuiteHomeAction")
-        self.home_action.triggered.connect(self.run_home)
-        self.iface.addPluginToMenu("Dam safety", self.home_action)
 
         # Optional: Add to a custom toolbar (uncomment if you want a dedicated toolbar)
         # self.iface.addToolBarIcon(self.action)

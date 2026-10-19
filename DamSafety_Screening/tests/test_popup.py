@@ -380,13 +380,13 @@ class Iface:
 iface = Iface()
 plug = pkg.classFactory(iface)
 plug.initGui()
-assert [m[0] for m in iface.menu] == ["Dam safety"] * 2 and plug.action is iface.menu[0][1]
-assert plug.home_action is iface.menu[1][1]                            # 0.11: Dam suite home...
+assert [m[0] for m in iface.menu] == ["Dam safety"] and plug.action is iface.menu[0][1]
+assert plug.home_action is None                                         # one entry; the home opens from the window
 assert plug.suite_actions == []                                        # fork: no shared ND Dam Suite menu
 assert plug.action.triggered._slots == [plug.run_plugin]
 assert plug.provider is not None                                       # the toolbox provider is still there
 plug.initGui()                                                          # a second initGui adds no second entry
-assert len(iface.menu) == 2
+assert len(iface.menu) == 1
 plug.action.triggered.emit()
 first = plug.dialog
 assert first is not None and first.isVisible()
@@ -780,7 +780,7 @@ assert home.open_plugin("ndhazard", home.rows[1]) is False and "not enabled" in 
 # the plugin entry point: one window, re-created when destroyed
 plug_home = pkg.classFactory(Iface())
 plug_home.initGui()
-assert [m[0] for m in plug_home.iface.menu] == ["Dam safety"] * 2
+assert [m[0] for m in plug_home.iface.menu] == ["Dam safety"]
 h1 = plug_home.run_home()
 assert h1 is plug_home.home_dialog and h1.isVisible() and plug_home.run_home() is h1
 h1.deleteLater()

@@ -81,11 +81,6 @@ class NDDamScreeningPlugin:
             self.action.setObjectName("NDDamScreeningAction")
             self.action.triggered.connect(self.run_plugin)
             self.iface.addPluginToMenu(MENU_NAME, self.action)
-            # 0.11: the Dam suite home (the same window in all three plugins)
-            self.home_action = QAction("Dam suite home...", self.iface.mainWindow())
-            self.home_action.setObjectName("NDDamScreeningSuiteHomeAction")
-            self.home_action.triggered.connect(self.run_home)
-            self.iface.addPluginToMenu(MENU_NAME, self.home_action)
         except Exception as e:                                   # noqa
             self.action = None
             self._log_failure("Menu entry not available: {}".format(e))
