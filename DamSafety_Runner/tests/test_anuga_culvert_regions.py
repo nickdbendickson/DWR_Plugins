@@ -1,4 +1,4 @@
-"""Default ANUGA mesher, culvert ends (Runner 3.10.26 or later): octagons that overlap or
+"""Default ANUGA mesher, culvert ends (Runner 3.10.30 or later): octagons that overlap or
 nearly touch are merged into one refined region. From the 2026-10-19 mesh benchmark:
 Absaraka's 36 m culverts put two r = 25 m octagons across each other and ANUGA's mesher
 made 92 triangles under 5 m2 (the smallest 0.15 m2), cutting the time step about 6x.
@@ -54,7 +54,7 @@ def culvert_octagons_apart_are_exactly_as_before():
     st = AM.AnugaSettings(sys.executable)
     c = [_culvert(80.0), _culvert(80.0, y=500.0)]
     old = []
-    for cc in c:                                      # the code before 3.10.26
+    for cc in c:                                      # the code before 3.10.30
         r = max(3.0 * cc["width"], 25.0)
         for e in cc["end_points"]:
             old.append({"poly": AM.octagon(e, r).tolist(), "area": min(st.fine_area_m2, 25.0)})
