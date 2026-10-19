@@ -62,10 +62,12 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           cd "$GITHUB_WORKSPACE"
+          set +e          # the shell runs with -e: keep going and report each script's exit code
           fail=0
           for t in DamSafety_Hazard/tests/test_*.py; do
             echo "== $t =="
-            python "$t"; rc=$?
+            python -X faulthandler "$t"; rc=$?
+            echo "== $t exit $rc"
             if [ $rc -ne 0 ]; then echo "!! $t exited with code $rc"; fail=1; fi
           done
           exit $fail
