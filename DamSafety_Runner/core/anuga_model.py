@@ -151,7 +151,7 @@ def convex_polygons_near(a, b, gap):
 
 def culvert_regions(culverts, st):
     """Refined regions for the default mesher: an octagon of radius max(3 x width, 25 m)
-    around each culvert end, as before 3.10.26. Octagons that overlap or nearly touch (a
+    around each culvert end, as before 3.10.30. Octagons that overlap or nearly touch (a
     culvert shorter than two radii - Absaraka's 36 m culverts - or the ends of culverts
     side by side) crossed each other's edges, and ANUGA's mesher put sliver triangles at
     the crossings (down to 0.15 m2, which set the time step). Such octagons are now
