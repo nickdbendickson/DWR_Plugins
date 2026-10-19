@@ -511,9 +511,9 @@ class RunBreachSim(QgsProcessingAlgorithm):
             tri = str(get(f, "tri_result") or "")
             nf, nf_why = cm.no_flood(f, dams.fields().names())
             ex, ex_why = cm.excluded(f, dams.fields().names())
-            fl, fl_why = cm.flagged(f, dams.fields().names())
-            if fl:                         # 0.17.26: a flagged structure: no breach flood
-                rec["skip"] = "flagged"; rec["why"] = fl_why
+            flag_e, flag_why = cm.flagged(f, dams.fields().names())
+            if flag_e:                         # 0.17.26: a flagged structure: no breach flood
+                rec["skip"] = "flagged"; rec["why"] = flag_why
             elif ex:                       # 0.13: the Review tab excluded this dam
                 rec["skip"] = "excluded"; rec["why"] = ex_why
             elif nf:                       # tool 16: nothing above the natural ground -> nothing floods

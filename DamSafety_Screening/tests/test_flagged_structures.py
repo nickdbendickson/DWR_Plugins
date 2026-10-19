@@ -19,7 +19,7 @@ from nd_dam_screening.damsuite import structure_flags as SF  # noqa: E402
 from nd_dam_screening.algorithms import _common as cm  # noqa: E402
 from nd_dam_screening.core import handoff as ho, report as rp  # noqa: E402
 from nd_dam_screening.algorithms.hazard_classification import HazardClassification  # noqa: E402
-from nd_dam_screening.algorithms.prepare_dams import PrepareDams, OUT_FIELDS  # noqa: E402
+from nd_dam_screening.algorithms.prepare_dams import PrepareDams, OUT_FIELDS, FLAG_FIELDS  # noqa: E402
 
 NOTE = "road fill over backwater; breach analysis not applicable; hazard Low (DWR record)"
 work = tempfile.mkdtemp(prefix="flag_")
@@ -55,7 +55,7 @@ try:
     assert [n for n, _ in OUT_FIELDS][:12] == ["dam_id", "name", "source", "nid_id", "height_m", "inv_norm_m3",
                                                "inv_max_m3", "inv_area_m2", "haz_existing", "status",
                                                "crest_len_m", "shared_vol"]
-    assert [n for n, _ in OUT_FIELDS][12:] == ["struct_cls", "flag_note"]
+    assert len(OUT_FIELDS) == 12 and [n for n, _ in FLAG_FIELDS] == ["struct_cls", "flag_note"]
     # the DWR shapefile export's 10-character names (the tool's defaults)
     DWRF = [("structure_", Dd), ("dam_name", Sx), ("max_dam_he", Dd), ("normal_vol", Dd),
             ("max_pool_v", Dd), ("normal_are", Dd), ("hazard_cla", Sx), ("status", Sx),
@@ -102,8 +102,14 @@ try:
                      [(QgsGeometry.fromMultiPointXY([QgsPointXY(*xy(2, 2))]), {"OCC_CLS": "Residential",
                                                                                 "PRIM_OCC": "Single Family"})],
                      "point", "bld")
+    # a railroad through the flooded cell: the flag check must not disturb the other dams' rail
+    # sampling (a variable clash broke it once)
+    rail = make_layer([("trains_day", Dd)],
+                      [(QgsGeometry.fromPolylineXY([QgsPointXY(*xy(2, 0)), QgsPointXY(*xy(2, 9))]),
+                        {"trains_day": 4.0})], "line", "rail")
     ctx2, fb2 = QgsProcessingContext(), QgsProcessingFeedback()
-    r8 = HazardClassification().run_mock({"SIM": ctx2.add(sim), "BLD": ctx2.add(bld), "CRIT": 2}, ctx2, fb2)
+    r8 = HazardClassification().run_mock({"SIM": ctx2.add(sim), "BLD": ctx2.add(bld), "RAIL": ctx2.add(rail),
+                                          "CRIT": 2}, ctx2, fb2)
     o8 = ctx2.layers[r8["OUT"]]
     n8 = o8.fields().names()
     rows8 = {f["dam_id"]: {k: f[k] for k in n8} for f in o8.getFeatures()}
@@ -113,6 +119,7 @@ try:
     assert "breach analysis not applicable; hazard Low from the DWR record, not computed" in d["hz_notes"]
     assert d["n_bldg_wet"] == 0 and d["hz_vs_existing"] == "agree", d["hz_vs_existing"]
     assert rows8["DWR-1"]["hz_class"] != "Low" and rows8["DWR-1"]["n_bldg_wet"] == 1, rows8["DWR-1"]
+    assert rows8["DWR-1"]["n_rail_wet"] == 1, rows8["DWR-1"]
     assert rows8["DWR-2"]["hz_class"] == "Low" and rows8["DWR-2"]["hz_conf"] == "flagged"   # by its NID id
     print("OK (tool 8):", d["hz_class"], d["hz_conf"])
 

@@ -363,17 +363,17 @@ class HazardClassification(QgsProcessingAlgorithm):
             res.update({"hz_criterion": crit, "hz_basis": basis, "hz_chart": chart_txt})
             status = str(get(f, "sim_status") or get(f, "status") or "")
             dtif, vtif = get(f, "depth_tif"), get(f, "vel_tif")
-            fl, fl_why = cm.flagged(f, names)
-            if fl:
+            flag_e, flag_why = cm.flagged(f, names)
+            if flag_e:
                 # 0.17.26: a flagged structure (damsuite/structure_flags.py, e.g. a road fill over
                 # backwater): no breach hazard is computed; the class of record stands
-                res.update({"hz_class": fl.get("hazard"), "hz_conf": "flagged",
-                            "hz_reason": fl_why,
+                res.update({"hz_class": flag_e.get("hazard"), "hz_conf": "flagged",
+                            "hz_reason": flag_why,
                             "n_bldg_wet": 0, "n_bldg_lethal": 0, "n_road_wet": 0, "n_rail_wet": 0,
                             "hz_border": "no", "hz_gaps": "",
                             "hz_notes": "{}: breach analysis not applicable; hazard {} from the {}, "
                                         "not computed (docs/Flagged_structures.md)".format(
-                                            SF.label(fl), fl.get("hazard"), fl.get("hazard_source"))})
+                                            SF.label(flag_e), flag_e.get("hazard"), flag_e.get("hazard_source"))})
             elif status == "excluded" or cm.excluded(f, names)[0]:
                 # 0.13: the Review tab excluded this dam: no class, the reason recorded
                 res.update({"hz_class": "", "hz_conf": "excluded",
