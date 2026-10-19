@@ -9,6 +9,8 @@ under one fork is provably comparable to one classified under the other.
 This checks the reconciled safety core:
   * damsuite/chain.py     - the model->classification fingerprint + run-manifest comparison
   * damsuite/solvegate.py - the pre-solve safety gate
+  * <plugin>/fingerprint.py - the content fingerprints of the files a run reads (a plugin-root
+                              file the shared pin cannot cover, so it needs this cross-fork gate)
 against the nd_hazard checkout. It also confirms each fork's own vendored copies agree.
 
 NOT checked (intentionally fork-specific): damsuite/versions.py is branding + per-fork release
@@ -31,6 +33,13 @@ MASTER = os.path.join(ROOT, "shared", "damsuite")
 SAFETY_CORE = ("chain.py", "solvegate.py")
 DWR_FULL = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening")
 ND_PLUGINS = ("ND_Dam_Hazard_Helper", "nd_breach_runner", "nd_dam_screening", "nd_data_updater")
+
+# plugin-root files (OUTSIDE damsuite/, so the pin cannot cover them) that must also be
+# byte-identical across the forks because they fingerprint a run's provenance - the same
+# "how its provenance is fingerprinted" category as the safety core. {label: (DamSafety, nd)}.
+PLUGIN_ROOT_SHARED = {
+    "fingerprint.py": ("DamSafety_Hazard/fingerprint.py", "ND_Dam_Hazard_Helper/fingerprint.py"),
+}
 
 
 def _sha(path):
@@ -73,6 +82,17 @@ def check(nd_root):
             elif sha != master:
                 problems.append("nd_hazard {}/damsuite/{} != DamSafety master (forks diverge "
                                 "in the safety core)".format(p, name))
+    # plugin-root provenance files (outside damsuite/, so the pin cannot cover them)
+    for label, (dwr_rel, nd_rel) in PLUGIN_ROOT_SHARED.items():
+        a = _sha(os.path.join(ROOT, dwr_rel))
+        b = _sha(os.path.join(nd_root, nd_rel))
+        if a is None:
+            problems.append("DamSafety {} missing".format(dwr_rel))
+        elif b is None:
+            problems.append("nd_hazard {} missing".format(nd_rel))
+        elif a != b:
+            problems.append("{} differs across forks ({} != {}) - a provenance-fingerprint file "
+                            "must stay byte-identical".format(label, dwr_rel, nd_rel))
     return problems
 
 
@@ -87,7 +107,8 @@ def main(argv):
         for p in problems:
             print("  - " + p)
         return 1
-    print("Safety core (chain.py, solvegate.py) is identical across DamSafety and nd_hazard.")
+    print("Safety core (chain.py, solvegate.py) and fingerprint.py are identical across DamSafety "
+          "and nd_hazard.")
     return 0
 
 
