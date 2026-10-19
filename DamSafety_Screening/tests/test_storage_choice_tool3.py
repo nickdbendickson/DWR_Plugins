@@ -169,8 +169,9 @@ for (n, m, c), want in (((NORM, BIG, 0), BIG), ((NORM, BIG, 1), NORM), ((NORM, B
                         ((0.0, BIG, 1), BIG), ((NORM, 0.0, 0), NORM)):
     top, row, warn, _ = tool3(n, m, c, wb=False, tag="dry_{}_{}_{}".format(int(bool(n)), int(bool(m)), c))
     assert top is not None and abs(top - want) < 1.0, ((n, m, c), top, want, row["stor_notes"])
-    # stor_method is "inventory" when the record has a normal storage (as before 0.17.27)
-    assert row["stor_method"] == ("inventory" if n else "estimated"), row["stor_method"]
+    # the dry-dam curve is the assumed inventory curve: since M19 (#94) it is labelled
+    # "inventory curve", low confidence, whatever the inventory fields say
+    assert row["stor_method"] == "inventory curve", row["stor_method"]
     assert "dry-dam inventory curve" in row["stor_notes"]
     assert row["stor_notes"].count("missing or zero") <= 1, row["stor_notes"]
     assert row["stor_notes"].startswith("storage choice " + S.STORAGE_CHOICES[c])
