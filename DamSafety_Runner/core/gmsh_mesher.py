@@ -379,7 +379,6 @@ def build_mesh(spec):
     line_dist_max_m, channel_dist_min_m, channel_dist_max_m, min_angle_deg,
     min_area_tol (gate, see MIN_AREA_TOL), threads.
     Returns dict(points, triangles (CCW), boundary [[tri, edge]...], stats)."""
-    import gmsh
     g = dict(min_area_m2=100.0, channel_area_m2=250.0, max_area_m2=20000.0,
              line_dist_min_m=60.0, line_dist_max_m=1500.0, channel_dist_min_m=250.0,
              channel_dist_max_m=2500.0, point_dist_min_m=40.0, point_dist_max_m=600.0,
@@ -393,6 +392,9 @@ def build_mesh(spec):
         ring = ring[:-1]
     if len(ring) < 3:
         raise MeshError("outer polygon has fewer than 3 points")
+    # checked before gmsh is imported, so a bad spec is reported as such even where gmsh
+    # is missing (that is reported by make_gmsh_mesh as the ModuleNotFoundError line)
+    import gmsh
     # gmsh works in local coordinates: with UTM-sized numbers its tolerances
     # break down and meshing can hang
     origin = ring.min(axis=0)
