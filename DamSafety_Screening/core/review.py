@@ -17,10 +17,9 @@ tests files) and written with an Apply object: `SqliteApply` edits GeoPackage fi
 import csv
 import datetime
 import os
-import sqlite3
 import struct
 
-from . import workflow as wf
+from . import gpkg_write, workflow as wf
 
 LOG = wf.REVIEW_LOG
 ACTIONS = ("accept", "exclude", "set_type", "move_breach", "note")
@@ -162,7 +161,7 @@ class SqliteApply(object):
 
     def set_attributes(self, path, dam_id, values):
         """values = {field: value}; missing fields are added (TEXT). Returns rows changed."""
-        con = sqlite3.connect(path)
+        con = gpkg_write.connect(path)
         try:
             t = self._table(con)
             have = {r[1] for r in con.execute('PRAGMA table_info("{}")'.format(t))}
@@ -177,7 +176,7 @@ class SqliteApply(object):
             con.close()
 
     def move_point(self, path, dam_id, x, y):
-        con = sqlite3.connect(path)
+        con = gpkg_write.connect(path)
         try:
             t = self._table(con)
             gcol, srs = con.execute("SELECT column_name, srs_id FROM gpkg_geometry_columns WHERE table_name=?",

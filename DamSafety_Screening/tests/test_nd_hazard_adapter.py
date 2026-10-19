@@ -185,8 +185,14 @@ except nh.ChartsNotDigitized as e:
 assert hz.METHOD_LABELS[nh.LETHALITY_ALL_WET] in msg and "not digitized" in msg
 assert hz.METHOD_LABELS[nh.LETHALITY_1D] not in msg and "only allowed for a 1D model" in msg
 assert "acer_tm11_charts.json" in msg
-unchecked = test_charts(); unchecked.checked_by = ""
-assert not unchecked.ready and "checked by ''" in hz.charts_not_digitized_message(unchecked)
+# one signer is enough (suite 1.14.1, #24): no checker still leaves the charts ready
+one = test_charts(); one.checked_by = ""
+assert one.ready and hz.charts_not_digitized_message(one) == ""
+# nobody named at all: not ready, and the message says nobody signed them off
+unsigned = test_charts(); unsigned.digitized_by = unsigned.checked_by = unsigned.signed_off_by = ""
+m_ = hz.charts_not_digitized_message(unsigned)
+assert not unsigned.ready and "signed off by ''" in m_ and "signed_off_by" in m_, m_
+assert hz.METHOD_LABELS[nh.LETHALITY_ALL_WET] in m_
 try:
     hz.classify_nd([S("a", 4.0, 1.0)], charts=None)
     raise SystemExit("chart method without charts accepted")

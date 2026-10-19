@@ -1599,7 +1599,14 @@ SENS_LABELS = {"case": "Case", "group": "Varied", "method": "Method", "peak_cfs"
                    "Latest arrival (h)", "structures_flooded": "Structures flooded",
                "structures_depth_ge_3ft": "Structures >= 3 ft", "road_km_flooded":
                    "Road flooded (km)", "rail_km_flooded": "Rail flooded (km)",
-               "hazard_class": "Hazard class", "domain_too_small": "Domain too small"}
+               "hazard_class": "Hazard class", "domain_too_small": "Domain too small",
+               # v3.10.27 (#91)
+               "flooded_ac_ge_0_1ft": "Flooded >= 0.1 ft (ac)", "flooded_ac_ge_1ft":
+                   "Flooded >= 1 ft (ac)", "flooded_ac_ge_2ft": "Flooded >= 2 ft (ac)",
+               "velocity_p95_fps": "Velocity P95 (ft/s)", "velocity_p99_fps":
+                   "Velocity P99 (ft/s)", "max_velocity_depth_ft": "Depth at max velocity (ft)",
+               "flooded_ac_masked": "Flooded, water bodies masked (ac)",
+               "flooded_ac_ge_1ft_masked": "Flooded >= 1 ft, water bodies masked (ac)"}
 
 
 def label_of(key):
@@ -2085,6 +2092,21 @@ class _Report(object):
             s.get("flooded_acres_over_arrival_depth"), "ac")
         add("Maximum depth", s.get("max_depth_ft"), "ft")
         add("Maximum velocity", s.get("max_velocity_fps"), "ft/s")
+        # v3.10.27 (#91): what the area and the maximum velocity are made of
+        add("Flooded area at or above 0.1 ft", s.get("flooded_acres_ge_0_1ft"), "ac")
+        add("Flooded area at or above 1 ft", s.get("flooded_acres_ge_1ft"), "ac")
+        add("Flooded area at or above 2 ft", s.get("flooded_acres_ge_2ft"), "ac")
+        add("Velocity P95 / P99 over wet cells",
+            None if s.get("velocity_p99_fps") is None else "{} / {}".format(
+                fmt_val(s.get("velocity_p95_fps")), fmt_val(s.get("velocity_p99_fps"))), "ft/s")
+        add("Depth at the maximum-velocity cell", s.get("max_velocity_depth_ft"), "ft")
+        add("Velocity at flooded structures (max)", s.get("velocity_at_structures_max_fps"), "ft/s")
+        add("Velocity at overtopped roads (max)", s.get("velocity_at_roads_max_fps"), "ft/s")
+        if s.get("water_mask_acres") is not None:
+            add("Water-body mask (reporting only)", s.get("water_mask_acres"), "ac")
+            add("Flooded area, water bodies masked", s.get("flooded_acres_masked"), "ac")
+            add("Flooded area at or above 1 ft, water bodies masked",
+                s.get("flooded_acres_ge_1ft_masked"), "ac")
         add("Latest arrival", s.get("latest_arrival_hr"), "h after breach initiation")
         if s.get("domain_mi"):
             add("Model domain", "{} x {} mi after {} LISFLOOD-FP run(s)".format(
@@ -2354,7 +2376,16 @@ class _Report(object):
                 ("Latest arrival (h after breach initiation)", s.get("latest_arrival_hr")),
                 ("Flooded area (ac)", s.get("flooded_acres")),
                 ("Flooded area at or above the arrival depth (ac)",
-                 s.get("flooded_acres_over_arrival_depth"))) if v is not None]
+                 s.get("flooded_acres_over_arrival_depth")),
+                # v3.10.27 (#91)
+                ("Flooded area at or above 0.1 ft (ac)", s.get("flooded_acres_ge_0_1ft")),
+                ("Flooded area at or above 1 ft (ac)", s.get("flooded_acres_ge_1ft")),
+                ("Flooded area at or above 2 ft (ac)", s.get("flooded_acres_ge_2ft")),
+                ("Velocity P95 over wet cells (ft/s)", s.get("velocity_p95_fps")),
+                ("Velocity P99 over wet cells (ft/s)", s.get("velocity_p99_fps")),
+                ("Depth at the maximum-velocity cell (ft)", s.get("max_velocity_depth_ft")),
+                ("Flooded area, water bodies masked (ac)", s.get("flooded_acres_masked")))
+                if v is not None]
             if rows:
                 self.kv([(a, fmt_val(b)) for a, b in rows], head=("Quantity", "Result"),
                         caption="Depth, velocity and arrival")

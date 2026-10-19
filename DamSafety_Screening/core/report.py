@@ -111,7 +111,8 @@ def _nice(v):
 # ------------------------------------------------------------------ review queue
 def review_reasons(rec):
     r = []
-    if rec.get("status_sim") and rec["status_sim"] not in ("ok", "cached", "triage", "noflood", "excluded"):
+    if rec.get("status_sim") and rec["status_sim"] not in ("ok", "cached", "triage", "noflood", "excluded",
+                                                        "flagged"):
         r.append("simulation failed")
     if rec.get("hz_class") == "NoData":
         r.append("no classification")

@@ -539,7 +539,12 @@ def ndhazard_tool_results_in_the_word_submittal_report():
             assert needle in t_, needle
         figs = {f["name"]: f for f in res.figures}
         assert set(figs) == {an.OUTPUT_NAMES["svg_house"], an.OUTPUT_NAMES["svg_mobile"]}
-        assert not any(f["embedded"] for f in figs.values())        # no cairosvg here
+        # embedded exactly when the cairosvg the report was asked to use can render the
+        # tool's SVG here (the qgis334 env has cairosvg, venv_scipy does not)
+        probe = os.path.join(h.root, "probe.png")
+        can = R.svg_to_png(figs[an.OUTPUT_NAMES["svg_house"]]["source"], probe, 200,
+                           ["cairosvg"]) is not None
+        assert all(f["embedded"] == can for f in figs.values()), (can, res.figures)
         m = re.search(r"Hazard classification screened \(ND 5\.2\)\n(Yes|No|Check|N/A)\n"
                       r"([^\n]*)", t_)
         assert m and m.group(1) == "Yes" and "class HIGH" in m.group(2), m and m.groups()

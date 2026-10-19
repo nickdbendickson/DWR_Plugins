@@ -16,6 +16,7 @@ Which plugin the next action belongs to (NEXT_PLUGIN):
 import os
 
 from . import dam_record as DR
+from . import structure_flags as SF
 from . import versions as VS
 
 NEXT_PLUGIN = {"screen": "ndscreen", "model": "ndbreach", "classify": "ndhazard",
@@ -43,7 +44,7 @@ def dam_row(folder, name=None):
     row = {"dam_id": name, "folder": folder, "name": "", "class": "", "existing_class": "",
            "screened": "", "modelled": "", "classified": "", "reviewed": "", "next": "",
            "next_text": "", "plugin": "", "disputed": 0, "problem": "", "has_rasters": False,
-           "has_manifest": False, "has_record": False}
+           "has_manifest": False, "has_record": False, "flag": ""}
     rec = None
     try:
         rec = DR.load(folder)
@@ -70,7 +71,27 @@ def dam_row(folder, name=None):
         code, text = "classify", "Flood rasters without a dam record: classify the dam (ND Dam " \
                                  "Hazard writes dam.json)."
     row["next"], row["next_text"], row["plugin"] = code, text, NEXT_PLUGIN.get(code, "ndhazard")
+    _apply_flag(row, folder, rec)
     return row
+
+
+def _apply_flag(row, folder, rec):
+    """1.17.2: a flagged structure (structure_flags: e.g. a road fill over backwater) shows
+    the flag, the class of record and no next action; a class recorded by a breach run is
+    named as not used."""
+    try:
+        e = SF.lookup_folder(folder, rec)
+    except Exception:                                            # noqa
+        e = None
+    if not e:
+        return
+    was = row.get("class") or ""
+    row["flag"] = SF.note(e)
+    row["class"] = e.get("hazard") or was
+    row["next"], row["plugin"] = "none", NEXT_PLUGIN["none"]
+    row["next_text"] = "Flagged structure ({}): {}. No breach run or classification.{}".format(
+        SF.short_ref(e), row["flag"],
+        " The recorded class {} is not used.".format(was) if was and was != row["class"] else "")
 
 
 def _fill_from_record(row, rec, facts, depth):
@@ -127,7 +148,8 @@ def scan(dams_folder):
             rows.append({"dam_id": n, "folder": p, "name": "", "class": "", "existing_class": "",
                          "screened": "", "modelled": "", "classified": "", "reviewed": "", "next": "none",
                          "next_text": "", "plugin": "", "disputed": 0, "problem": str(e),
-                         "has_rasters": False, "has_manifest": False, "has_record": False})
+                         "has_rasters": False, "has_manifest": False, "has_record": False,
+                         "flag": ""})
     return rows
 
 
