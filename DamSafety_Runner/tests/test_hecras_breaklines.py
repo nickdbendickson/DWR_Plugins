@@ -79,7 +79,8 @@ def hecras_breaklines_channel_strip_and_dam_row():
     """Pure: a curved flow path makes two bank lines one full cell apart (v2c; v2b: half a
     cell, which held HEC-RAS's time step at half of v2's) with a row of cells between them;
     the dam (on the perimeter) gets an even row half a spacing inside it, finer across the
-    breach: at least 4 cells over the breach bottom (v2c; v2b had 2, and the pool stalled)."""
+    breach: cells centred on the breach centre and on both bottom corners (v2d; v2c put a
+    face on each corner and HEC-RAS warned 'weir breach lower than the cells')."""
     if not _has_scipy():
         print("  (skipped: no scipy)")
         return
@@ -102,7 +103,9 @@ def hecras_breaklines_channel_strip_and_dam_row():
     gap = hbl.poly_dist(cl[:, 0], cl[:, 1], cr)
     assert np.median(gap) > 0.8 * 100.0 and np.median(gap) < 1.2 * 100.0, np.median(gap)
     assert plan["strip"]["h"] == 100.0 and plan["lines"][2]["near"] == 100.0
-    assert plan["dam"]["breach"]["near"] == 20.0                # 80 ft bottom / 4
+    # v2d: 40 ft cells (80 ft bottom / BREACH_DAM_CELLS), centred on the breach centre and on
+    # both bottom corners (v2c: 20 ft cells with a face on each corner)
+    assert plan["dam"]["breach"]["near"] == 40.0, plan["dam"]["breach"]
     out, st = hbl.enforce(pts, per, plan)
     for b in plan["lines"]:
         f = hbl.share_on_faces(out, b["line"])
@@ -111,14 +114,31 @@ def hecras_breaklines_channel_strip_and_dam_row():
     row = out[np.abs(out[:, 1] - (4000.0 - 25.0)) < 2.5]       # half the (fitted) spacing
     row = row[(row[:, 0] > 1000.0) & (row[:, 0] < 2000.0)]
     assert len(row) >= 12, len(row)
-    assert (np.abs(row[:, 0] - 1500.0) > 150.0).all()          # coarse away from the breach
-    fine = out[(np.abs(out[:, 1] - (4000.0 - 10.0)) < 1e-6) & (np.abs(out[:, 0] - 1500.0) < 40.0)]
-    assert len(fine) >= 4, fine                                  # 4 low cells front the breach
-    assert np.allclose(np.sort(fine[:, 0]), [1470.0, 1490.0, 1510.0, 1530.0]), fine
-    # its cells grow by at most 1.3 a cell from 20 to the dam spacing
-    c, w = hbl.dam_stations(1000.0, 50.0, 500.0, 40.0, 20.0)
-    assert abs(w.sum() - 1000.0) < 1e-6 and w.min() == 20.0 and w.max() <= 50.0 + 1e-6
+    assert (np.abs(row[:, 0] - 1500.0) > 60.0).all()           # coarse away from the breach
+    fine = out[(np.abs(out[:, 1] - (4000.0 - 20.0)) < 1e-6) & (np.abs(out[:, 0] - 1500.0) < 45.0)]
+    assert np.allclose(np.sort(fine[:, 0]), [1460.0, 1500.0, 1540.0]), fine
+    # its cells grow by at most 1.3 a cell from the breach row to the dam spacing, and no face
+    # lies on a bottom corner
+    c, w = hbl.dam_stations(1000.0, 50.0, 500.0, 40.0, 40.0)
+    assert abs(w.sum() - 1000.0) < 1e-6 and w.min() == 40.0 and w.max() <= 50.0 + 1e-6
     assert (w[1:] / w[:-1]).max() <= 1.3 + 1e-6, w
+    faces = np.r_[0.0, np.cumsum(w)]
+    assert np.abs(faces[:, None] - np.array([460.0, 540.0])[None, :]).min() >= 20.0 - 1e-6
+    for half, ds in ((40.4, 50.0), (40.4, 25.0), (10.0, 50.0), (150.0, 50.0), (3.9, 20.0)):
+        sb = hbl.breach_row_spacing(half, ds, 100.0 if ds >= 25.0 else 40.0)
+        c, w = hbl.dam_stations(1700.0, ds, 850.0, half, sb)
+        assert abs(w.sum() - 1700.0) < 1e-6
+        faces = np.r_[0.0, np.cumsum(w)]
+        gap = np.abs(faces[:, None] - np.array([850.0 - half, 850.0 + half])).min()
+        k = round(half / sb)
+        if k >= 1:          # cells centred on the centre and on both corners
+            assert sb <= ds + 1e-9 and abs(half / sb - k) < 1e-9, (half, ds, sb)
+            assert gap >= 0.5 * sb - 1e-6, (half, ds)
+            assert np.abs(c[:, None] - np.array([850.0 - half, 850.0, 850.0 + half])).min(
+                axis=0).max() < 1e-6, (half, ds)
+        else:               # a narrow bottom: one cell holds both corners, well inside it
+            assert sb > 2 * half and gap >= 0.2 * ds - 1e-6, (half, ds, sb, gap)
+        assert w.min() >= min(ds, 0.4 * ds) - 1e-6 or w.min() >= sb - 1e-6, (half, ds, w.min())
     assert hbl.inside(out[:, 0], out[:, 1], per).all()
     # no breaklines asked: no plan lines when the run has no flow path or cut
     p2 = hbl.plan(per, 100.0, (A, B), (0.0, -1.0), breach=None, path=None)
@@ -348,3 +368,127 @@ def hecras_breaklines_perimeter_corner_on_a_cell_edge_is_moved_off():
     out, _, info = hbl.fix_faces(g, per, None)
     assert info["perimeter_nudged"] >= 1 and info["perimeter_corners_left"] == 0, info
     assert hbl.perimeter_check(out, per)["min_corner_to_edge"] >= hbl.PERIM_VERTEX_MIN
+
+
+def _abs_case(name):
+    import json
+    with open(os.path.join(os.path.dirname(__file__), "data", "abs2801_breach_cells.json")) as f:
+        c = json.load(f)["cases"][name]
+    r = c["raster"]
+    ras = (np.asarray(r["z"], float), r["x0"], r["y0"], r["pix"])
+    return c, ras
+
+
+def _abs_check(c, ras):
+    b = c["breach"]
+    half = 0.5 * b["bottom_width"]
+    return hbl.breach_cell_check(np.asarray(c["points"]), np.asarray(c["perimeter"]),
+                                 np.asarray(c["conn_line"]), b["centre_station"] - half,
+                                 b["centre_station"] + half, b["invert"], ras, top=b["top"],
+                                 side_slope=b["side_slope"])
+
+
+@test
+def hecras_breach_cells_precheck_flags_the_v2c_cells_hec_ras_warned_about():
+    """v2d: Absaraka v2c and v2c_gmsh (volume errors 38.7 % and >= 12 %) both had HEC-RAS's
+    'SA 2D Connection at Dam has a weir breach lower than the cells they are connected to' at
+    weir station 809.6 (invert 1,046.43 ft): cell 62974 at 1,049.26 ft and cell 64879 at
+    1,049.78 ft. The pre-check (points near the breach, the package terrain; tests/data) finds
+    exactly those cells, 0.3-0.6 ft higher (strict side), plus the cell at the other corner;
+    v2b (0.5 % volume error, no warning) passes."""
+    if not _has_scipy():
+        print("  (skipped: no scipy)")
+        return
+    for name, hec_cell, hec_z in (("v2c", 62974, 1049.256), ("v2c_gmsh", 64879, 1049.783)):
+        c, ras = _abs_case(name)
+        r = _abs_check(c, ras)
+        assert not r["ok"] and r["bad"] == 2, (name, r["bad"], r["cells"])
+        hec = [c["hec_index"][x["cell"]] for x in r["bad_cells"]]
+        assert hec_cell in hec, (name, hec)
+        row = [x for x in r["bad_cells"] if c["hec_index"][x["cell"]] == hec_cell][0]
+        assert hec_z - 0.05 <= row["min_elev"] <= hec_z + 0.75, (name, row)
+        assert abs(row["to"] - 809.6) < 0.2, row                  # its face ends on the corner
+    c, ras = _abs_case("v2b")
+    r = _abs_check(c, ras)
+    assert r["ok"] and r["bad"] == 0 and r["bottom_cells"] == 2, r["cells"]
+
+
+@test
+def hecras_breach_cells_corner_centred_row_passes_where_a_face_on_the_corner_fails():
+    """v2d, pure: a dam on the top edge of a square 2D area, a breach cut 80 ft wide into a
+    20 ft high embankment: the v2c row (a face on each bottom corner) leaves the embankment
+    cell beside each corner above the invert; the v2d row (cells centred on the corners) with
+    the cut a little past the corners passes."""
+    if not _has_scipy():
+        print("  (skipped: no scipy)")
+        return
+    per = [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]
+    A, B = (0.0, 1000.0), (1000.0, 1000.0)
+    pix = 10.0
+    xs = np.arange(0.0, 1000.0, pix) + 0.5 * pix
+    X, Y = np.meshgrid(xs, 1000.0 - (np.arange(0.0, 1000.0, pix) + 0.5 * pix))
+    z0 = np.where(Y > 900.0, 1020.0, 1000.0)                 # the embankment's downstream half
+    tc, half, inv = 500.0, 40.0, 1000.0
+
+    def check(row_x, margin):
+        z = z0.copy()
+        z[(np.abs(X - tc) <= half + margin) & (Y > 800.0)] = inv
+        row = np.column_stack([row_x, np.full(len(row_x), 980.0)])
+        g = _grid(0, 1000, 0, 1000, 100.0)
+        pts = np.vstack([row, g[g[:, 1] < 900.0]])
+        return hbl.breach_cell_check(pts, per, [A, B], tc - half, tc + half, inv,
+                                     (z, 0.0, 1000.0, pix), top=1020.0, side_slope=0.7)
+    # v2c: 20 ft cells with faces on the corners (460 and 540), 50 ft cells outside
+    v2c = np.r_[np.arange(25.0, 440.0, 50.0), np.arange(450.0, 551.0, 20.0),
+                np.arange(575.0, 1000.0, 50.0)]
+    bad = check(v2c, 0.0)
+    assert not bad["ok"] and bad["bad"] == 2 and bad["worst_above"] > 1.0, bad["cells"]
+    assert sorted(round(c["to"] if c["to"] < 500 else c["from"]) for c in bad["bad_cells"]) == \
+        [460, 540], bad["bad_cells"]
+    # v2d: cells centred on the corners and the centre (dam_stations), the cut a little past
+    sb = hbl.breach_row_spacing(half, 50.0, 100.0)
+    cen, _ = hbl.dam_stations(1000.0, 50.0, tc, half, sb)
+    assert sb == 40.0 and np.isclose(cen, 460.0).any() and np.isclose(cen, 540.0).any()
+    good = check(cen, hm.breach_corner_margin(pix, sb))
+    assert good["ok"] and good["bottom_cells"] == 3, good["cells"]
+    # ... and the same row with the old cut (to the corners only) is caught too
+    assert check(cen, -2.0 * pix)["bad"] >= 1
+    # the station of each face end, and a corner within station_tol counts both cells
+    runs = hbl.connection_cells(np.vstack([[[450.0, 990.0], [550.0, 990.0]]]), per, [A, B])
+    assert [r[0] for r in runs] == [0, 1] and abs(runs[0][2] - 500.0) < 0.1, runs
+
+
+@test
+def hecras_breach_cells_precheck_in_the_build_and_run_report():
+    """v2d build_model: the breach-cell pre-check runs on the final points and the written
+    terrain; its result is in the README, the site checks and run_report.json
+    ('hecras_breach_cells'); a bad breach_cell_check option is refused."""
+    if p0._skip() or not _has_scipy():
+        print("  (skipped: no GDAL / scipy)")
+        return
+    import json
+    d = tempfile.mkdtemp()
+    try:
+        p0._run(d, dam_json_len_ft=1500.0)
+        _with_path(d)
+        r = hm.build_model(d, out_folder=os.path.join(d, "m"))
+        bc = r["info"]["site"]["breach_cells"]
+        assert bc["action"] == "ok" and bc["ok"] and bc["bad"] == 0, bc
+        assert bc["bottom_cells"] >= 2, bc
+        cut = r["info"]["site"]["breach_cut"]
+        assert cut["corner_margin"] > 0 and cut["flat_width"] > cut["width"], cut
+        rep = json.load(open(os.path.join(d, hm.hecras.MODEL_FOLDER, hm.hecras.RUN_REPORT_JSON)))
+        assert rep["hecras_breach_cells"]["ok"] is True, rep.get("hecras_breach_cells")
+        assert rep["hecras_breach_cells"]["cells"], rep["hecras_breach_cells"]
+        txt = open(r["paths"]["readme"], encoding="utf-8").read()
+        assert "| Breach-cell pre-check | OK:" in txt
+        assert any(n.startswith("Breach-cell pre-check: OK") for n in r["notes"])
+        try:
+            hm.build_model(d, out_folder=os.path.join(d, "m2"),
+                           options={"breach_cell_check": "maybe"})
+        except hm.HecRasModelError as e:
+            assert "breach_cell_check" in str(e)
+        else:
+            raise AssertionError("a bad breach_cell_check option was accepted")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)

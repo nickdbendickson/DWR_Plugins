@@ -1931,11 +1931,16 @@ def simulation_hours(hydro_end_hr, arrival_hr, formation_hr=0.0, cap=SIM_CAP_HR,
     return sim, how
 
 
-def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut):
+def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut, side_slope=None,
+                       z_top=None, t_min=0.0):
     """Lowers the terrain GeoTIFF (never raises it) to z_cut in the rectangle from the dam line
     A + ab*s (s_lo..s_hi) downstream (d) for 0..t_max: the breach opening through the
     downstream half of the embankment, so the 2D cells along the breach reach the breach
-    bottom. Returns {'cells', 'area', 'max_cut'} (area in the GeoTIFF's units squared)."""
+    bottom. v2d: with side_slope (H:V) and z_top, the sides rise from z_cut at that slope
+    beyond s_lo / s_hi up to z_top (the breach's own side slopes), lowered only too; t_min < 0
+    starts the cut upstream of the dam line (through the whole embankment), so that the
+    interpolated terrain at the dam line is the breach bottom too.
+    Returns {'cells', 'area', 'max_cut'} (area in the GeoTIFF's units squared)."""
     gdal, ogr, osr = _ogr()
     ds = gdal.Open(tif_path, gdal.GA_Update)
     gt = ds.GetGeoTransform()
@@ -1944,8 +1949,12 @@ def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut):
     A = np.asarray(A, float)
     ab = np.asarray(ab, float)
     d = np.asarray(d, float)
-    corners = np.array([A + ab * s_lo, A + ab * s_hi, A + ab * s_hi + d * t_max,
-                        A + ab * s_lo + d * t_max])
+    wside = 0.0
+    if side_slope and z_top is not None and z_top > z_cut:
+        wside = float(side_slope) * (float(z_top) - float(z_cut))
+    lo_, hi_ = s_lo - wside, s_hi + wside
+    corners = np.array([A + ab * lo_ + d * t_min, A + ab * hi_ + d * t_min,
+                        A + ab * hi_ + d * t_max, A + ab * lo_ + d * t_max])
     c0 = max(0, int(math.floor((corners[:, 0].min() - gt[0]) / gt[1])) - 1)
     c1 = min(ds.RasterXSize, int(math.ceil((corners[:, 0].max() - gt[0]) / gt[1])) + 1)
     r0 = max(0, int(math.floor((corners[:, 1].max() - gt[3]) / gt[5])) - 1)
@@ -1963,15 +1972,27 @@ def cut_breach_channel(tif_path, A, ab, d, s_lo, s_hi, t_max, z_cut):
     valid = np.isfinite(a)
     if nd is not None:
         valid &= a != nd
-    m = (s >= s_lo) & (s <= s_hi) & (t >= 0.0) & (t <= t_max) & valid & (a > z_cut)
+    zt = np.full(a.shape, float(z_cut))
+    if wside > 0:
+        off = np.maximum(s_lo - s, s - s_hi)
+        zt = np.where(off > 0, z_cut + off / float(side_slope), z_cut)
+    m = (s >= lo_) & (s <= hi_) & (t >= t_min) & (t <= t_max) & valid & (a > zt + 1e-9)
     if m.any():
         out = {"cells": int(m.sum()), "area": float(m.sum() * abs(gt[1] * gt[5])),
-               "max_cut": float((a[m] - z_cut).max())}
-        a[m] = z_cut
+               "max_cut": float((a[m] - zt[m]).max())}
+        a[m] = zt[m]
         b.WriteArray(a.astype(np.float32), c0, r0)
         b.FlushCache()
     ds = None
     return out
+
+
+def breach_corner_margin(tcell, sb):
+    """v2d: how far the flat breach cut runs past each bottom corner so that the dam-row cell
+    centred on the corner (width sb) reaches the invert in HEC-RAS's interpolated terrain: the
+    four terrain cells around a point span up to sqrt(2) x tcell across the dam, the corner
+    cell reaches sb / 2 inside the corner, plus a quarter terrain cell."""
+    return max(0.25 * tcell, math.sqrt(2.0) * tcell - 0.5 * sb + 0.25 * tcell)
 
 
 # ============================================================================
@@ -2820,7 +2841,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             bsp = None
         bcw = 0.5 * max(bw, 2.0 * tcell)
         bplan = hbl.plan(perim, cell, (A, B), d,
-                         breach=(A + ab * sc, bcw, toe_off + cell) if cut is not None else None,
+                         breach=(A + ab * sc, bcw, toe_off + cell, 0.5 * bw)
+                         if cut is not None else None,
                          path=(path_m if (path_m is not None and use_path_dir) else None),
                          spacing=bsp)
         n0 = len(pts)
@@ -2838,6 +2860,32 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         bdam = (bplan["dam"] or {}).get("breach")
         if bdam:
             bl_info["breach_dam_spacing"] = round(float(bdam["near"]), 2)
+            # v2d: the dam-row cells centred on the bottom corners straddle them; the flat cut
+            # runs a little past each corner (breach_corner_margin), then the breach's side
+            # slopes, so those cells reach the invert (v2c: a face on the corner, the cell
+            # beside it 2.8-3.4 ft above the invert in HEC-RAS)
+            if cut is not None:
+                cm = breach_corner_margin(tcell, float(bdam["near"]))
+                fh = max(bcw, float(bdam["half"]) + cm)
+                cut2 = cut_breach_channel(terrain_tif, A, ab, d, sc - fh, sc + fh,
+                                          toe_off + cell, bvals["bottom_elev"],
+                                          side_slope=max(float(bvals.get("left_slope") or 0),
+                                                         float(bvals.get("right_slope") or 0))
+                                          or None, z_top=top_u, t_min=-1.5 * tcell)
+                cut.update(corner_margin=round(cm, 2), flat_width=round(2 * fh, 1),
+                           upstream=round(1.5 * tcell, 1),
+                           side_slope=bvals.get("left_slope"),
+                           corner_cells=cut2["cells"],
+                           corner_max_cut=round(cut2["max_cut"], 2))
+                notes.append("Terrain: the breach cut runs {:.1f} {u} past each bottom corner "
+                             "({:,.0f} {u} flat), then rises at the breach's side slope {:g}:1, "
+                             "and starts {:.0f} {u} upstream of the dam line (outside the 2D "
+                             "area), so the dam-row cells centred on the corners reach the "
+                             "breach bottom ({:,} more terrain cells lowered, by up to {:.1f} {u})."
+                             .format(cm, 2 * fh, float(bvals.get("left_slope") or 0),
+                                     1.5 * tcell, cut2["cells"], cut2["max_cut"],
+                                     u=units.len_name))
+                log(notes[-1])
         notes.append("Breaklines: {} (length, cell size along it), and an even row of points "
                      "{:g} {u} apart along the dam{}; built into the computation points ({:,} "
                      "removed, {:,} added), because HEC-RAS keeps the points it is given and "
@@ -2846,9 +2894,9 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                              b["name"], hbl.length(b["line"]), round(b["near"], 1),
                              u=units.len_name) for b in bl_lines) or "none",
                          bl_dam[0],
-                         " ({:g} {u} across the breach, so that {} cells front its bottom)".format(
-                             round(float(bdam["near"]), 1), hbl.BREACH_DAM_CELLS,
-                             u=units.len_name) if bdam else "",
+                         " ({:g} {u} across the breach, cells centred on its centre and on both "
+                         "bottom corners, so that no cell face lies on a corner)".format(
+                             round(float(bdam["near"]), 1), u=units.len_name) if bdam else "",
                          bst["points_removed"], bst["points_added"],
                          "".join(" No {}.".format(w) for w in bplan["skipped"]),
                          u=units.len_name))
@@ -2906,6 +2954,22 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                          vc.get("min_perimeter_face"), vc.get("min_corner_to_edge"),
                          u=units.len_name))
         log(notes[-1])
+    # v2d: HEC-RAS's 'weir breach lower than the cells they are connected to', checked before
+    # HEC-RAS (Absaraka v2c / v2c_gmsh: cell 62974 / 64879 above the invert at station 809.6,
+    # volume errors 38.7 % / >= 12 %)
+    # (not for hecras_engine's hydrograph-inflow plan, which has no breach)
+    bcc = None if scope == "hydrograph" else breach_cells_precheck(
+        pts, perim, conn_line, sc, bvals, top_u, terrain_tif, srs, cell, o,
+        bool(cut and "corner_margin" in cut), units)
+    if bcc is not None:
+        site["breach_cells"] = {k: v for k, v in bcc.items() if k != "cells"}
+        notes.append(bcc["note"])
+        log(notes[-1])
+        record_run_report(os.path.join(model_dir, hecras.RUN_REPORT_JSON),
+                          "hecras_breach_cells", bcc, log)
+        if bcc["action"] == "fail":
+            raise HecRasModelError(bcc["note"] + " Build with breach_cell_check='warn' to write "
+                                   "the model anyway.")
     n_faces = vfix["removed"] if vfix else 0
     seeds_info["removed_for_faces"] = int(n_faces)
     seeds_info["nudged_for_faces"] = int(vfix["nudged"]) if vfix else 0
@@ -3170,6 +3234,79 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             "plugin_reference": pref}
 
 
+BREACH_CELL_CHECK_MODES = ("auto", "fail", "warn", "off")
+
+
+def _breach_cells_row(bc, L):
+    if not bc:
+        return "not run"
+    return "{}: {} cell(s) on the bottom, stations {:,.1f} to {:,.1f}, invert {:.2f} {u}, " \
+        "highest {:+.2f} {u}; {} above it".format(
+            bc.get("action", "?").upper(), bc.get("bottom_cells"), bc["reach"][0], bc["reach"][1],
+            bc["invert"], bc.get("worst_above") or 0.0, bc.get("bad"), u=L)
+
+
+def breach_cells_precheck(pts, perim, conn_line, sc, bvals, top_u, terrain_tif, srs, cell, o,
+                          cut_on, units):
+    """v2d: every cell fronting the final breach bottom on the dam connection must reach the
+    final invert (hecras_breaklines.breach_cell_check on the written terrain). Option
+    breach_cell_check: 'auto' (default: fail when the corner-centred dam row and the corner
+    cut were built, which should always make them reach it; warn otherwise, e.g. without
+    breaklines or the cut), 'fail', 'warn' or 'off'. Returns the result
+    with 'action' ('ok', 'warn' or 'fail') and 'note', or None when off or not possible."""
+    from . import hecras_breaklines as hbl
+    mode = str(o.get("breach_cell_check") or "auto").strip().lower()
+    if mode not in BREACH_CELL_CHECK_MODES:
+        raise HecRasModelError("breach_cell_check must be one of {} (got {!r})".format(
+            ", ".join(BREACH_CELL_CHECK_MODES), mode))
+    if mode == "off" or not bvals or bvals.get("bottom_width") is None:
+        return None
+    half = 0.5 * float(bvals["bottom_width"])
+    pad = 4.0 * cell + float(bvals.get("left_slope") or 0) * max(0.0, top_u - bvals["bottom_elev"])
+    cl = np.asarray(conn_line, float)
+    lo_xy = cl.min(axis=0) - pad
+    hi_xy = cl.max(axis=0) + pad
+    try:
+        ras = _tif_window(terrain_tif, (lo_xy[0], lo_xy[1], hi_xy[0], hi_xy[1]), srs,
+                          max_cells=6000)
+        r = hbl.breach_cell_check(pts, perim, cl, sc - half, sc + half, bvals["bottom_elev"],
+                                  ras, top=top_u,
+                                  side_slope=float(bvals.get("left_slope") or 0) or None,
+                                  tol=units.from_ft(hbl.BREACH_CELL_TOL),
+                                  station_tol=units.from_ft(hbl.BREACH_STATION_TOL),
+                                  step=units.from_ft(0.1))
+    except ImportError:                                 # pragma: no cover - no scipy
+        return None
+    r["terrain_cell"] = round(float(ras[3]), 3)
+    r["mode"] = mode
+    if r["ok"]:
+        r["action"] = "ok"
+    elif mode == "fail" or (mode == "auto" and cut_on):
+        r["action"] = "fail"
+    else:
+        r["action"] = "warn"
+    L = units.len_name
+    if r["ok"]:
+        r["note"] = ("Breach-cell pre-check: OK, the {} cell(s) fronting the final breach bottom "
+                     "(stations {:,.1f} to {:,.1f}) reach the invert {:.2f} {u} (highest {:+.2f} "
+                     "{u}); HEC-RAS should not warn 'weir breach lower than the cells they are "
+                     "connected to'.".format(r["bottom_cells"], r["reach"][0], r["reach"][1],
+                                             r["invert"], r["worst_above"] or 0.0, u=L))
+    else:
+        r["note"] = ("Breach-cell pre-check {}: {} cell(s) fronting the final breach bottom "
+                     "(stations {:,.1f} to {:,.1f}) sit above the invert {:.2f} {u}: {}. HEC-RAS "
+                     "warns 'weir breach lower than the cells they are connected to' and the run "
+                     "can lose or make water (Absaraka v2c: 38.7 % volume error).".format(
+                         "FAILED" if r["action"] == "fail" else "WARNING", r["bad"],
+                         r["reach"][0], r["reach"][1], r["invert"],
+                         "; ".join("cell {} (stations {:,.1f}-{:,.1f}) lowest ground {:.2f}, "
+                                   "{:+.2f} {u}".format(c["cell"], c["from"], c["to"],
+                                                        c["min_elev"], c["above"], u=L)
+                                   for c in r["bad_cells"]), u=L))
+    r.pop("bad_cells", None)
+    return r
+
+
 def mesh_check(perimeter, points, cell):
     """A stand-in for HEC-RAS's mesh checks on the cells along the perimeter: the Voronoi
     cell of each point clipped to the perimeter. Returns {'cells_checked', 'max_faces',
@@ -3364,6 +3501,11 @@ def _site_rows(site, L):
         rows.append("| Terrain cut at the breach | {} x {} {}, to {} | so the 2D cells at the "
                     "breach reach its bottom |".format(cut.get("width"), cut.get("length"), L,
                                                        cut.get("z")))
+        if cut.get("corner_margin") is not None:
+            rows.append("| Breach cut past the corners | {} {} each side ({} {} flat), then "
+                        "side slope {}:1 | so the dam-row cells centred on the bottom corners "
+                        "reach the invert |".format(cut["corner_margin"], L, cut.get("flat_width"),
+                                                   L, cut.get("side_slope")))
     if site.get("problems") and site.get("scope") == "hydrograph":
         rows.append("| Site checks (breach model) | {} problem(s), not applied | hydrograph-"
                     "inflow plan: no breach, dry reservoir |".format(len(site["problems"])))
@@ -3514,6 +3656,10 @@ def write_readme(path, m, info, notes, dam, params):
                 c=info["mesh_check"]["voronoi_precheck"],
                 n=info["mesh_check"].get("perimeter_nudged", 0),
                 r=info["mesh_check"].get("perimeter_removed", 0))),
+        "| Breach-cell pre-check | {} | every cell fronting the final breach bottom on the "
+        "dam connection reaches the invert (HEC-RAS: 'weir breach lower than the cells they "
+        "are connected to'; Absaraka v2c: 38.7 % volume error) |".format(
+            _breach_cells_row((info.get("site") or {}).get("breach_cells"), L)),
         "| Simulation | {:g} h from {} 00:00 | {} |".format(
             info["sim_hours"], START_DATE, info.get("sim_how") or ""),
         "| Dam line | {:,.0f} {} | {} |".format(info["dam_line"], L,

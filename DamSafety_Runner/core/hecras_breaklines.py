@@ -38,14 +38,24 @@ SMOOTH_PASSES = 5           # Chaikin passes: bends of about a cell's radius or 
 #   the main-channel velocity for 37,800 ft and held the time step at 6.25 s for 22 h of the
 #   run instead of 12.5 s: 2,957 s against 1,628 s), and never narrower than this x cell;
 CHANNEL_STRIP_FRAC = 1.0
-# * the dam row is finer across the breach: at least this many cells across the breach
-#   bottom (v2b: 50 ft cells, so only 2 low cells fronted the 80.8 ft breach; HEC-RAS takes
-#   each connection segment's tailwater from the two cells at its ends, and the dry
-#   embankment cells next to them held the tailwater up and the pool at 1,049.2 ft instead
-#   of draining to 1,046.9 ft), one more fine cell each side, then growing by at most
-#   BREACH_GRADING a cell to the dam spacing.
-BREACH_DAM_CELLS = 4
+# * the dam row is finer across the breach (v2b: 50 ft cells, so only 2 low cells fronted the
+#   80.8 ft breach; HEC-RAS takes each connection segment's tailwater from the two cells at its
+#   ends, and the dry embankment cells next to them held the tailwater up and the pool at
+#   1,049.2 ft instead of draining to 1,046.9 ft), then growing by at most BREACH_GRADING a
+#   cell to the dam spacing.
+# v2d (Absaraka v2c / v2c_gmsh: 'weir breach lower than the cells they are connected to' at
+#   station 809.6, volume errors 38.7 % / >= 12 %): v2c put a cell FACE on each breach bottom
+#   corner (850 - 40.4 = 809.6, 20.2 ft cells from the centre), so the embankment cell next to
+#   the corner, with no cut terrain in it, fronted the corner 2.8-3.4 ft above the invert. Now
+#   the corners are cell CENTRES (cells of half / k, k whole, centred on the breach centre), so
+#   the corner cell straddles the corner and the terrain cut reaches into it; and
+#   BREACH_DAM_CELLS spans the bottom corner to corner (2: three cells of 40.4 ft, the
+#   middle one inside the breach, instead of v2c's 20.2 ft cells, which held HEC-RAS's time step
+#   at its floor, 6 s / 2^3 = 0.75 s, through the breach and at 1.5 s after it).
+BREACH_DAM_CELLS = 2
+ENFORCE_REACH = 1.01        # v2d: old points within this x the reach of a line go
 BREACH_DAM_MIN_FRAC = 0.1   # ... but no finer than this x cell
+BREACH_ROW_MIN_FRAC = 0.4   # ... nor than this x the dam spacing (v2d)
 BREACH_GRADING = 1.3
 
 
@@ -230,7 +240,7 @@ def _forward(ln, nrm, h):
 def plan(perimeter, cell, dam_line, downstream, breach=None, path=None, spacing=None):
     """The breaklines of the model. dam_line (A, B): the dam connection; downstream: unit
     vector into the 2D area; breach: (centre on the dam line, half width of the cut, cut
-    length) or None; path: the run's flow path or None; spacing: {'dam', 'breach', 'channel'}
+    length[, half the breach bottom width, default the cut's]) or None; path: the run's flow path or None; spacing: {'dam', 'breach', 'channel'}
     near spacings (default GRID_NEAR_FRAC x cell). Returns {'dam': {...} or None, 'lines':
     [{'name', 'line', 'near', 'far', 'kind'}], 'skipped': [why]}."""
     cell = float(cell)
@@ -245,15 +255,18 @@ def plan(perimeter, cell, dam_line, downstream, breach=None, path=None, spacing=
     cut_len = 0.0
     if breach is not None:
         C, cw, cut_len = np.asarray(breach[0], float), float(breach[1]), float(breach[2])
+        # v2d: the dam row is centred on the breach's own bottom corners (breach[3], half the
+        # bottom width), which can be inside the cut when the cut is widened to a terrain cell
+        rh = float(breach[3]) if len(breach) > 3 and breach[3] else cw
         s = min(sp["breach"], cw)               # the pairs of the two sides must not meet
-        # v2c: a fine dam row across the breach (BREACH_DAM_CELLS cells over its width), and
-        # the breach lines start where that row ends
-        sb = min(sp["dam"], max(2.0 * cw / BREACH_DAM_CELLS, BREACH_DAM_MIN_FRAC * cell))
-        if sb < sp["dam"] - 1e-9:
-            out["dam"]["breach"] = {"centre": C.tolist(), "half": cw, "near": sb}
-            t0 = sb
-        else:
-            t0 = 0.5 * sp["dam"] + 0.5 * s
+        # v2d: a dam row whose cells are centred on the breach bottom corners (and on the
+        # centre), BREACH_DAM_CELLS cells from corner to corner, never coarser than the dam
+        # spacing; the breach lines start where that row ends
+        sb = breach_row_spacing(rh, sp["dam"], cell)
+        out["dam"]["breach"] = {"centre": C.tolist(), "half": rh, "near": sb}
+        # the cut's sides cross the row in the corner cell (sb deep) or, when the cut is wider
+        # than the bottom, in a coarser one (at most the dam spacing deep)
+        t0 = sb if cw <= rh + 0.5 * sb + 1e-9 else max(sb, sp["dam"])
         if cut_len - t0 >= 2 * s:
             for nm, side in (("Breach left", -1.0), ("Breach right", 1.0)):
                 ln = [C + ab * side * cw + d * t0, C + ab * side * cw + d * cut_len]
@@ -284,48 +297,67 @@ def plan(perimeter, cell, dam_line, downstream, breach=None, path=None, spacing=
     return out
 
 
+def breach_row_spacing(half, dam_spacing, cell, n=None):
+    """The dam row's cell width across the breach: half / k with k whole (so both bottom
+    corners are cell centres), about 2 x half / n (n = BREACH_DAM_CELLS), at most the dam
+    spacing and at least max(BREACH_DAM_MIN_FRAC x cell, BREACH_ROW_MIN_FRAC x the dam
+    spacing). A bottom narrower than that floor gets one cell (k = 0) that holds both corners,
+    each at least half the floor from its faces."""
+    n = int(n or BREACH_DAM_CELLS)
+    half = float(half)
+    ds = float(dam_spacing)
+    floor = min(ds, max(BREACH_DAM_MIN_FRAC * cell, BREACH_ROW_MIN_FRAC * ds))
+    if half <= 0:
+        return ds
+    if half < floor - 1e-9:
+        return min(max(floor, 2.0 * half + floor), max(ds, 2.0 * half + floor))
+    target = min(ds, max(2.0 * half / max(n, 1), floor))
+    k = max(1, min(int(math.ceil(half / target - 1e-9)), int(math.floor(half / floor + 1e-9))))
+    return half / k
+
+
 def dam_stations(L, s, tc, half, sb, grading=BREACH_GRADING):
-    """Stations (cell centres) and cell widths of the dam row, 0..L along the dam: width s,
-    except sb over the breach (tc +- half, plus one sb each side, faces on the breach walls
-    when half is a whole number of sb) and growing by at most `grading` a cell from sb to s.
-    Returns (centres, widths)."""
-    faces = [tc]
-    ws = []
+    """Stations (cell centres) and cell widths of the dam row, 0..L along the dam: width sb
+    over the breach, with a cell centred on the breach centre tc and on each bottom corner
+    tc +- half (when half is a whole number of sb, see breach_row_spacing), so that no face
+    lies on a corner (v2d; v2c put faces on the corners); then growing by at most `grading`
+    a cell from sb to s, and the rest evenly at about s. Returns (centres, widths)."""
+    k = max(0, int(round(float(half) / float(sb))))
+    faces = [tc - 0.5 * sb, tc + 0.5 * sb] if 0.5 * sb < min(tc, L - tc) else [tc]
     for sign in (1.0, -1.0):
-        f, w, k = tc, sb, 0
-        nfine = int(round(half / sb)) + 1
+        f = tc + sign * 0.5 * sb
         side = []
-        while True:
-            if k >= nfine:
-                w = min(s, w * grading)
-            nxt = f + sign * w
-            if (sign > 0 and nxt >= L) or (sign < 0 and nxt <= 0):
+        end = L if sign > 0 else 0.0
+        ok = (lambda v: v < L - 1e-9) if sign > 0 else (lambda v: v > 1e-9)
+        if not ok(f):
+            continue
+        w = sb
+        for _ in range(k):                         # the fine cells out to the corner cell
+            nxt = f + sign * sb
+            if not ok(nxt):
                 break
             side.append(nxt)
-            f, k = nxt, k + 1
-            if w >= s - 1e-9:
+            f = nxt
+        while w < s - 1e-9:                         # grading up to the dam spacing
+            w = min(s, w * grading)
+            nxt = f + sign * w
+            if not ok(nxt):
                 break
-        # the rest to the end of the dam, evenly at about s
-        end = L if sign > 0 else 0.0
+            side.append(nxt)
+            f = nxt
         rem = abs(end - f)
         m = max(1, int(round(rem / s))) if rem > 1e-9 else 0
         if m and rem / m < 0.5 * w:                # a sliver at the end: join it
             m = max(1, m - 1)
-        if side and m:
-            for j in range(1, m):
-                side.append(f + sign * rem * j / m)
-        elif m:
-            for j in range(1, m):
-                side.append(f + sign * rem * j / m)
-        side.append(end)
+        for j in range(1, m):
+            side.append(f + sign * rem * j / m)
         if sign > 0:
             faces = faces + side
         else:
             faces = side[::-1] + faces
-    faces = np.asarray(faces, float)
+    faces = np.r_[0.0, np.asarray(faces, float), float(L)]
+    faces = np.unique(np.clip(faces, 0.0, float(L)))
     faces = faces[np.r_[True, np.diff(faces) > 1e-9]]
-    if faces[0] > 1e-9:
-        faces = np.r_[0.0, faces]
     centres = 0.5 * (faces[1:] + faces[:-1])
     return centres, np.diff(faces)
 
@@ -404,12 +436,31 @@ def enforce(points, perimeter, bl):
         items.append((c, 1.5 * h, h, rows))
     for line, r, s, add in items:
         line = np.asarray(line, float)
-        idx = _near_line(pts, keep, line, r)
+        # v2d: 1 % past r too (gmsh lays a row of nodes exactly 2 spacings off the dam line,
+        # which is r for a 50 ft dam row: Absaraka v2d_gmsh kept them 25 ft from the row)
+        idx = _near_line(pts, keep, line, ENFORCE_REACH * r)
         if len(idx):
             dd = poly_dist(pts[idx, 0], pts[idx, 1], line)
-            keep[idx[dd < r]] = False
+            keep[idx[dd < ENFORCE_REACH * r]] = False
         new.append(add)
         new_s.append(np.full(len(add), s))
+    # v2d: nothing but the breach pairs inside the breach cut (Absaraka v2d_gmsh: a gmsh node on
+    # the breach centre line, exactly one spacing from both sides, survived 20 ft from the
+    # pairs in the fastest flow there is)
+    br = [ln for ln in bl.get("lines", []) if ln.get("kind") == "breach"]
+    if len(br) == 2:
+        a_, b_ = (np.asarray(ln["line"], float) for ln in br)
+        quad = np.vstack([a_[0], a_[-1], b_[-1], b_[0]])
+        dam_side = dam["line"] if dam else None
+        if dam_side is not None:
+            # from the dam line itself, so the cut's first metres are covered too
+            A_, B_ = (np.asarray(v, float) for v in dam_side)
+            u_ = (B_ - A_) / (np.hypot(*(B_ - A_)) or 1.0)
+            pa = A_ + u_ * float(np.dot(a_[0] - A_, u_))
+            pb = A_ + u_ * float(np.dot(b_[0] - A_, u_))
+            quad = np.vstack([pa, a_[-1], b_[-1], pb])
+        inq = keep & inside(pts[:, 0], pts[:, 1], quad)
+        keep[inq] = False
     removed = int((~keep).sum())
     if new:
         add = np.vstack(new)
@@ -793,3 +844,165 @@ def fix_faces(points, perimeter, protected=None, clip=None, max_faces=MAX_FACES,
                        "perimeter_left": pleft,
                        "perimeter_corners_left": int(len(chk["near_vertex"])),
                        "perimeter_found": found or {}, "check": summ}
+
+
+# v3.10.22 (v2d; Absaraka v2c and v2c_gmsh, 2026-10-18: HEC-RAS 'SA 2D Connection at Dam has a
+# weir breach lower than the cells they are connected to', weir station 809.6 at 1,046.43 ft
+# against cell 62974 at 1,049.26 ft, and volume errors of 38.7 % / >= 12 %, against 0.5 % in
+# v2 and v2b): every cell that fronts the breach bottom on the dam connection must reach the
+# final breach invert. v2c's fine dam row put a cell face exactly on each breach bottom corner
+# (station 809.6 = 850 - 40.4), so the embankment cell next to it fronted the corner and its
+# ground (no cut pixel in it) was 2.8 ft above the invert.
+BREACH_CELL_TOL = 0.01      # model units: a cell may sit this much above the invert
+BREACH_STATION_TOL = 0.5    # a face end this close to a bottom corner counts as fronting it
+
+
+def connection_cells(points, perimeter, conn_line, step=0.1):
+    """The cells that front a connection on the 2D area's perimeter: the line sampled every
+    `step` (stations from its first point), each sample moved a hair into the 2D area, and the
+    nearest point (Voronoi). Returns [(cell index, station from, station to)] in order."""
+    from scipy.spatial import cKDTree
+    pts = np.asarray(points, float).reshape(-1, 2)
+    ln = np.asarray(conn_line, float).reshape(-1, 2)
+    per = np.asarray(perimeter, float)
+    seg = np.hypot(*np.diff(ln, axis=0).T)
+    along = np.r_[0.0, np.cumsum(seg)]
+    if along[-1] <= 0:
+        return []
+    st = np.arange(0.0, along[-1] + 1e-9, step)
+    if st[-1] < along[-1] - 1e-9:
+        st = np.r_[st, along[-1]]
+    xy = np.column_stack([np.interp(st, along, ln[:, 0]), np.interp(st, along, ln[:, 1])])
+    k = np.clip(np.searchsorted(along, st, side="right") - 1, 0, len(seg) - 1)
+    t = (ln[k + 1] - ln[k]) / np.maximum(seg[k], 1e-12)[:, None]
+    n = np.column_stack([-t[:, 1], t[:, 0]])
+    eps = 1e-3 * max(step, 1e-6)
+    mid = len(st) // 2
+    probe = xy[mid] + n[mid] * 10 * eps
+    if not inside(np.array([probe[0]]), np.array([probe[1]]), per)[0]:
+        n = -n
+    own = cKDTree(pts).query(xy + n * eps)[1]
+    out = []
+    i0 = 0
+    for i in range(1, len(st) + 1):
+        if i == len(st) or own[i] != own[i0]:
+            # the face end lies between the last sample of one cell and the first of the next
+            a = st[i0] if i0 == 0 else 0.5 * (st[i0 - 1] + st[i0])
+            b = st[-1] if i == len(st) else 0.5 * (st[i - 1] + st[i])
+            out.append((int(own[i0]), float(a), float(b)))
+            i0 = i
+    return out
+
+
+def bilinear(raster, xy):
+    """Bilinear sample of a north-up raster (array with NaN, x0, ytop, pixel) at points, the
+    terrain cell centres as the nodes (NaN outside; a NaN corner falls back to the nearest)."""
+    a, x0, y0, pix = raster
+    a = np.asarray(a, float)
+    xy = np.asarray(xy, float).reshape(-1, 2)
+    fx = (xy[:, 0] - x0) / pix - 0.5
+    fy = (y0 - xy[:, 1]) / pix - 0.5
+    ny, nx = a.shape
+    c0 = np.clip(np.floor(fx).astype(int), 0, max(nx - 2, 0))
+    r0 = np.clip(np.floor(fy).astype(int), 0, max(ny - 2, 0))
+    c1, r1 = np.minimum(c0 + 1, nx - 1), np.minimum(r0 + 1, ny - 1)
+    tx, ty = np.clip(fx - c0, 0, 1), np.clip(fy - r0, 0, 1)
+    v = (a[r0, c0] * (1 - tx) * (1 - ty) + a[r0, c1] * tx * (1 - ty) +
+         a[r1, c0] * (1 - tx) * ty + a[r1, c1] * tx * ty)
+    bad = ~np.isfinite(v)
+    if bad.any():
+        rr = np.clip(np.round(fy).astype(int), 0, ny - 1)
+        cc = np.clip(np.round(fx).astype(int), 0, nx - 1)
+        v[bad] = a[rr[bad], cc[bad]]
+    v[(fx < -0.5) | (fy < -0.5) | (fx > nx - 0.5) | (fy > ny - 0.5)] = np.nan
+    return v
+
+
+def cell_min_elevations(points, cells, raster, perimeter=None, sub=None):
+    """The lowest ground in each of `cells` (indices into points): the terrain sampled
+    bilinearly every `sub` (default the smaller of 1/16 of a terrain cell and 1/40 of the
+    cell's spacing to its nearest neighbour) over the cell (the part of the
+    Voronoi cell inside the perimeter). On Absaraka v2c / v2c_gmsh this gives 1,049.74 /
+    1,050.30 ft for the cells HEC-RAS reported at 1,049.26 / 1,049.78 ft (a terrain-cell
+    minimum gives 1,046.43, which HEC-RAS does not use), so it errs on the high (strict)
+    side. Returns {cell: z}."""
+    from scipy.spatial import cKDTree
+    pts = np.asarray(points, float).reshape(-1, 2)
+    pix = float(raster[3])
+    tree = cKDTree(pts)
+    out = {}
+    for c in sorted(set(int(v) for v in cells)):
+        k = int(min(9, len(pts)))
+        d, _ = tree.query(pts[c], k=k)
+        d = np.atleast_1d(d)
+        R = float(np.max(d)) if k > 1 else pix
+        h = float(sub) if sub else min(pix / 16.0, (d[1] if k > 1 else pix) / 40.0)
+        g = np.arange(-R, R + 1e-9, max(h, 1e-6))
+        X, Y = np.meshgrid(pts[c, 0] + g, pts[c, 1] + g)
+        xy = np.column_stack([X.ravel(), Y.ravel()])
+        m = tree.query(xy)[1] == c
+        if perimeter is not None:
+            m &= inside(xy[:, 0], xy[:, 1], perimeter)
+        xy = xy[m] if m.any() else pts[c:c + 1]
+        z = bilinear(raster, xy)
+        out[c] = float(np.nanmin(z)) if np.isfinite(z).any() else float("nan")
+    return out
+
+
+def station_of(line, xy):
+    """Station along a polyline of the point's projection on it."""
+    s = np.asarray(line, float).reshape(-1, 2)
+    p = np.asarray(xy, float)
+    best, st, acc = np.inf, 0.0, 0.0
+    for a, b in zip(s[:-1], s[1:]):
+        ab = b - a
+        L2 = float(ab @ ab)
+        t = 0.0 if L2 <= 0 else float(np.clip((p - a) @ ab / L2, 0.0, 1.0))
+        dd = float(np.hypot(*(a + t * ab - p)))
+        if dd < best:
+            best, st = dd, acc + t * math.sqrt(L2)
+        acc += math.sqrt(L2)
+    return st
+
+
+def breach_cell_check(points, perimeter, conn_line, bottom_lo, bottom_hi, invert, raster,
+                      top=None, side_slope=None, tol=BREACH_CELL_TOL,
+                      station_tol=BREACH_STATION_TOL, step=0.1):
+    """HEC-RAS's 'weir breach lower than the cells they are connected to', before HEC-RAS: the
+    cells whose connection face overlaps the final breach bottom (stations bottom_lo..bottom_hi,
+    a face that ends within station_tol of a corner counts too, as HEC-RAS may give the corner to
+    either cell) and their lowest ground against the final invert. With top and side_slope, the
+    cells along the breach sides (up to the top of dam) are listed as well, against the lowest
+    breach elevation over their face, as a warning only.
+    Returns {'ok', 'invert', 'reach', 'cells': [{'cell', 'from', 'to', 'min_elev', 'breach_z',
+    'above', 'part'}], 'bad' (bottom cells above the invert), 'worst_above', 'side_warn'}."""
+    lo, hi = float(min(bottom_lo, bottom_hi)), float(max(bottom_lo, bottom_hi))
+    runs = connection_cells(points, perimeter, conn_line, step)
+    slo, shi = lo, hi
+    if top is not None and side_slope:
+        w = float(side_slope) * max(0.0, float(top) - float(invert))
+        slo, shi = lo - w, hi + w
+    pick = [(c, a, b) for c, a, b in runs if b > slo - station_tol and a < shi + station_tol]
+    zmin = cell_min_elevations(points, [c for c, _, _ in pick], raster, perimeter)
+    rows = []
+    for c, a, b in pick:
+        bottom = b >= lo - station_tol and a <= hi + station_tol
+        if bottom:
+            bz = float(invert)
+        elif not side_slope:
+            continue
+        else:
+            # the lowest breach elevation over the face: at its end nearer the bottom
+            near = b if b < lo else a
+            bz = float(invert) + abs(near - (lo if b < lo else hi)) / float(side_slope)
+        z = zmin[c]
+        rows.append({"cell": int(c), "from": round(a, 2), "to": round(b, 2),
+                     "min_elev": round(z, 3), "breach_z": round(bz, 3),
+                     "above": round(z - bz, 3), "part": "bottom" if bottom else "side"})
+    bad = [r for r in rows if r["part"] == "bottom" and not r["above"] <= tol]
+    side = [r for r in rows if r["part"] == "side" and not r["above"] <= tol]
+    bot = [r["above"] for r in rows if r["part"] == "bottom"]
+    return {"ok": not bad, "invert": round(float(invert), 3), "reach": [round(lo, 2), round(hi, 2)],
+            "tol": tol, "station_tol": station_tol, "cells": rows, "bad": len(bad),
+            "bad_cells": bad, "worst_above": round(max(bot), 3) if bot else None,
+            "bottom_cells": len(bot), "side_warn": len(side)}
