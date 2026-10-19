@@ -9,9 +9,20 @@ runtime. Edit `shared/damsuite/` ONLY, never a vendored copy, then run this tool
 
     python3 tools/sync_damsuite.py           # write: copy master into each plugin, refresh FILES.json
     python3 tools/sync_damsuite.py --check    # verify: exit 1 if any vendored copy or FILES.json drifted
+    python3 tools/sync_damsuite.py --write-pin [--pin damsuite-pin-vN]   # regenerate the shared pin
 
 Use --check as a CI/merge gate so a hand-edited vendored copy (or a stale FILES.json after a
 merge) fails the build instead of silently shipping. Pure stdlib; no QGIS/numpy/scipy needed.
+
+THE SHARED PIN. `shared/damsuite/` here is the single source of truth that BOTH forks vendor from
+- the DamSafety_* plugins in this repo, and the nd_* plugins in the nd_hazard repo. `--write-pin`
+records a content fingerprint of the master (sha256 of every module) in `tools/damsuite_pin.json`
+and stamps a tag label (damsuite-pin-vN). That pin file is committed byte-identical into both repos
+so each repo's NORMAL CI can verify its own vendored copies against the pin with no combined
+checkout and no network (nd_hazard's tools/sync_damsuite.py --check does exactly that). --check in
+THIS repo additionally confirms the committed pin still matches the master, so the master can never
+be edited without regenerating the pin. Edit shared/damsuite/, run --write-pin (bump --pin on a real
+content change), cut the matching git tag, then mirror tools/damsuite_pin.json into nd_hazard.
 
 Each plugin vendors the SUBSET of the master it needs (its current file set is preserved — e.g.
 the Runner and Screening copies omit `pack_convert.py`). DamSafety_Setup is intentionally NOT a
@@ -25,6 +36,7 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TOOLS = os.path.dirname(os.path.abspath(__file__))
 MASTER = os.path.join(ROOT, "shared", "damsuite")
 
 # plugins that vendor the FULL shared package (not DamSafety_Setup, which vendors a mini-subset)
@@ -36,6 +48,19 @@ EXCLUDE = {
     "DamSafety_Screening": {"pack_convert.py"},
 }
 FILES_NAME = "FILES.json"
+
+# --- the shared pin (tools/damsuite_pin.json) -------------------------------------------------
+PIN_NAME = "damsuite_pin.json"
+PIN_PATH = os.path.join(TOOLS, PIN_NAME)
+DEFAULT_PIN_LABEL = "damsuite-pin-v1"
+# Files present in a fork's vendored copies but whose CONTENT legitimately differs per fork, so the
+# cross-fork pin does NOT require them to match (each fork's own --check still keeps that fork's
+# copies equal to its own master/pin). Documented reasons:
+#   __init__.py    per-fork module manifest + SUITE_VERSION (the forks run divergent version lines)
+#   versions.py    per-fork branding + release history
+#   suite_home.py  DamSafety couples it to structure_flags (a DamSafety-only module); nd_hazard
+#                  ships the same file minus that feature until the structure_flags port is decided
+FORK_SPECIFIC = ("__init__.py", "versions.py", "suite_home.py")
 
 
 def _expected(plugin, master_py):
@@ -104,6 +129,76 @@ def check(root=ROOT):
     return problems
 
 
+def _pin_body(label):
+    """The pin dict: sha256 of every canonical master module, the fork-specific list, the tag
+    label, and a single fingerprint over the content-checked (non-fork-specific) files."""
+    files = _manifest(MASTER)                                   # {name: sha256} for all master .py
+    content = {k: v for k, v in files.items() if k not in FORK_SPECIFIC}
+    pin_sha = hashlib.sha256(
+        json.dumps(content, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {
+        "pin": label,
+        "pin_sha256": pin_sha,
+        "source": "nickdbendickson/DWR_Plugins : shared/damsuite",
+        "fork_specific": sorted(FORK_SPECIFIC),
+        "files": files,
+    }
+
+
+def _pin_text(label):
+    return json.dumps(_pin_body(label), indent=1, sort_keys=True) + "\n"
+
+
+def _read_pin():
+    if not os.path.isfile(PIN_PATH):
+        return None
+    with open(PIN_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_pin(label=None):
+    """(Re)write tools/damsuite_pin.json from the master. Keeps the existing pin label unless
+    `label` is given (bump it with --pin damsuite-pin-vN on a real content change). Returns the
+    list of changes made."""
+    if label is None:
+        existing = _read_pin()
+        label = (existing or {}).get("pin", DEFAULT_PIN_LABEL)
+    text = _pin_text(label)
+    have = ""
+    if os.path.isfile(PIN_PATH):
+        with open(PIN_PATH, encoding="utf-8") as f:
+            have = f.read()
+    if text == have:
+        return []
+    with open(PIN_PATH, "w", encoding="utf-8") as f:
+        f.write(text)
+    return ["wrote tools/{} (pin {})".format(PIN_NAME, label)]
+
+
+def check_pin(root=ROOT):
+    """Confirm the committed pin still matches the current master, so the master can never be
+    edited without regenerating the pin. Returns a list of problems; [] means in sync."""
+    problems = []
+    pin = _read_pin()
+    if pin is None:
+        return ["pin missing: tools/{} (run: python3 tools/sync_damsuite.py --write-pin)".format(
+            PIN_NAME)]
+    expect = _pin_body(pin.get("pin", DEFAULT_PIN_LABEL))
+    have, want = pin.get("files") or {}, expect["files"]
+    for name in sorted(set(have) | set(want)):
+        if have.get(name) != want.get(name):
+            why = ("not in the master" if name not in want else
+                   "in the master, not pinned" if name not in have else "hash changed")
+            problems.append("pin stale: {} ({})".format(name, why))
+    if pin.get("pin_sha256") != expect["pin_sha256"]:
+        problems.append("pin_sha256 does not match the master content")
+    if sorted(pin.get("fork_specific") or []) != sorted(FORK_SPECIFIC):
+        problems.append("pin fork_specific list != {}".format(sorted(FORK_SPECIFIC)))
+    if problems:
+        problems.append("run: python3 tools/sync_damsuite.py --write-pin")
+    return problems
+
+
 def sync(root=ROOT):
     """Copy the master into each full-copy plugin (preserving that plugin's file set) and rewrite
     FILES.json. Returns the list of changes made."""
@@ -143,17 +238,28 @@ def sync(root=ROOT):
 def main(argv):
     ap = argparse.ArgumentParser(description="Sync the vendored damsuite copies from shared/damsuite.")
     ap.add_argument("--check", action="store_true",
-                    help="verify only; exit 1 if any vendored copy or FILES.json drifted")
+                    help="verify only; exit 1 if any vendored copy, FILES.json or the pin drifted")
+    ap.add_argument("--write-pin", action="store_true",
+                    help="(re)generate tools/damsuite_pin.json from the master (the shared pin both "
+                         "forks vendor from)")
+    ap.add_argument("--pin", metavar="LABEL",
+                    help="pin label to stamp when writing the pin (e.g. damsuite-pin-v2); defaults "
+                         "to the current label")
     args = ap.parse_args(argv)
+    if args.write_pin:
+        changes = write_pin(args.pin)
+        print("\n".join(changes) if changes else "pin: already current")
+        return 0
     if args.check:
-        problems = check()
+        problems = check() + check_pin()
         if problems:
             print("damsuite drift:")
             for p in problems:
                 print("  - " + p)
-            print("run: python3 tools/sync_damsuite.py")
+            if not any(p.startswith("run:") for p in problems):
+                print("run: python3 tools/sync_damsuite.py")
             return 1
-        print("damsuite: all vendored copies match shared/damsuite ({} plugins)".format(
+        print("damsuite: all vendored copies match shared/damsuite and the pin ({} plugins)".format(
             len(FULL_COPY_PLUGINS)))
         return 0
     changes = sync()

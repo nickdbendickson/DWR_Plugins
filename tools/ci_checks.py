@@ -2,7 +2,8 @@
 """Fast, QGIS-free merge gate. Runs the checks that need no QGIS/GDAL install and are fully
 deterministic, so they can gate every PR cheaply:
 
-  1. damsuite drift   — every vendored copy matches shared/damsuite and its FILES.json
+  1. damsuite drift   — every vendored copy matches shared/damsuite and its FILES.json; and the
+                        committed shared pin (tools/damsuite_pin.json) still matches the master
   2. version sanity   — each plugin metadata.txt has a well-formed version=, and the shared
                         damsuite SUITE_VERSION is identical across every copy that ships it
   3. compile          — py_compile every .py in the suite (catches a syntax error from a bad
@@ -22,7 +23,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening",
-           "DamSafety_Data", "DamSafety_Setup")
+           "DamSafety_Data", "DamSafety_Setup", "DamSafety_PMP")
 
 
 def _fail(problems, msg):
@@ -34,6 +35,15 @@ def check_damsuite_drift(problems):
     import sync_damsuite
     for p in sync_damsuite.check(ROOT):
         _fail(problems, "damsuite drift: " + p)
+
+
+def check_damsuite_pin(problems):
+    """The committed shared pin (tools/damsuite_pin.json) still matches the master, so the master
+    cannot be edited without regenerating the pin both forks vendor from."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import sync_damsuite
+    for p in sync_damsuite.check_pin(ROOT):
+        _fail(problems, "damsuite pin: " + p)
 
 
 def check_versions(problems):
@@ -106,7 +116,8 @@ def check_golden(problems):
 
 def main():
     problems = []
-    for name, fn in (("damsuite drift", check_damsuite_drift), ("versions", check_versions),
+    for name, fn in (("damsuite drift", check_damsuite_drift),
+                     ("damsuite pin", check_damsuite_pin), ("versions", check_versions),
                      ("fork parity", check_fork_parity),
                      ("compile", check_compile), ("golden baseline", check_golden)):
         print("[ci] " + name)
