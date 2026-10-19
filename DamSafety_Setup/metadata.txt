@@ -5,8 +5,9 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Four-page setup for the DamSafety plugins: suite folder, dam, crest and inflow, then the breach run.
 about=Fills empty slots from the suite data folder and opens DamSafety Runner with the answers. Advanced settings stay editable.
-version=1.0.9
-changelog=1.0.9 - One ellipsis character (U+2026) on the plugin menu entry (Start here…).
+version=1.0.10
+changelog=1.0.10 - Dam page: (1) NID fill: a height or storage the DWR record does not have (blank or 0) is filled from the National Inventory of Dams - the NID layer in the suite data folder at once, the NID web service only when "Fill from NID (online)" is clicked; a DWR value is never replaced (a storage still blank takes the DWR normal pool volume first). (2) Records that are not a dam to model (status Removed / Breached / Not Built / Submerged, remarks 'VOID ...', 'No Dam Visible') are hidden unless "Show all records" is ticked, each with its reason. (3) "Estimate from DEM": screening height (crest along the dam line minus the lowest ground just downstream) and storage (DEM volume below the crest in the closed basin upstream), in a background task, only into blank values. The source shows next to each value (from DWR / from NID ND00189 / estimated from DEM (screening only) / typed in) and goes to the Runner hand-off. A dam with no point takes its dam line midpoint (EPSG:4326). Max storage goes up to 50 million ac-ft.
+    1.0.9 - One ellipsis character (U+2026) on the plugin menu entry (Start here…).
     1.0.8 - Wizard live checks: Next stays off until the page is valid (folder holds the DWR dams; a dam with height and storage above 0 - no more 0 ft / 0 ac-ft hand-over; a readable DEM) and the reason shows in red under the control. Folder scan as coloured marks, the number of matching dams, where the downloaded DEM is saved, and a Run summary that states the grid / run length / EAP values the Runner gets (Advanced values apply also when its box is unticked, as before).
     1.0.7 - Cross-platform (#32): explicit UTF-8 text I/O in the pack converter.
 author=N.D. Bendickson
