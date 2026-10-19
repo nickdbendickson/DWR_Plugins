@@ -322,3 +322,58 @@ Started the P0 **DWR ↔ nd_ fork convergence** with its safe first slice: the s
 only a combined checkout); converging the coupled non-core files that drifted (e.g. the newer
 `fingerprint.py` nested-VRT handling); and deciding the end-state (one product + a branding skin,
 vs. an extracted shared package).
+
+## 12. Fork convergence — slice 2 done (shared pin + coupled-file convergence)
+
+Delivered the next slice: a single shared `damsuite` source both forks vendor from a **pinned
+tag**, so the parity gate runs in **normal per-repo CI** (no combined checkout, no network), plus
+convergence of the genuinely-drifted coupled files. Opened as PRs in both repos for review — not
+merged. The end-state decision (one product + a branding skin vs. an extracted shared package) is
+**still yours**; nothing here forecloses it.
+
+- **The pin (`tools/damsuite_pin.json`, committed byte-identical in both repos).** A content
+  fingerprint of the canonical master (`DWR_Plugins/shared/damsuite/`, 35 modules): `sha256` of
+  every module, a `fork_specific` list, a tag label `damsuite-pin-v1`, and a `pin_sha256` over the
+  content-checked modules. Because it is committed into both repos, each repo's CI verifies its own
+  vendored copies against it **offline** — the explicit "normal CI, not only a combined checkout"
+  requirement. It keys on **content, not `SUITE_VERSION`** (the forks run inverted version lines —
+  nd 1.18.0 vs DamSafety 1.17.3 — so a version key would be meaningless).
+- **Drift was far smaller than feared.** Of the 27 modules both forks ship, **23 were already
+  byte-identical**; only `__init__.py`, `versions.py`, `suite_home.py` and `offline_pack.py`
+  differed.
+- **Converged (nd adopted DamSafety's newer version), as separate commits:**
+  - `fingerprint.py` (plugin-level) — the nested-VRT handling: follows nested VRTs with cycle
+    detection, treats a `<SourceFilename>` with no `relativeToVRT` as relative (GDAL's default —
+    nd's old regex silently dropped those sources), unescapes HTML entities, and marks a truncated
+    source list incomplete (FP.2). Depends only on `chain` (already identical) + stdlib, so the
+    swap is self-contained; now byte-identical across forks. A new QGIS-free regression test
+    (`tests/test_fingerprint_vrt.py`, added to **both** forks) locks the behaviour in (fail-before
+    on the old code, pass-after).
+  - `damsuite/offline_pack.py` — `encoding="utf-8"` on two `.write_test` probes (the campaign's
+    UTF-8 hardening); converged across all four nd copies, each `FILES.json` refreshed. Now
+    byte-identical across forks.
+- **Documented, NOT converged (surfaced for the end-state decision):**
+  - `fork_specific` (present in both forks, content legitimately per-fork): `__init__.py` (module
+    manifest + `SUITE_VERSION`), `versions.py` (branding + releases), and `suite_home.py` —
+    DamSafety couples it to the DamSafety-only `structure_flags` module, so nd ships the same file
+    minus that feature until the `structure_flags` port is decided. The pin does not compare their
+    content across forks (each fork's own CI still keeps its copies internally consistent).
+  - `ND_NOT_VENDORED` — the 8 DamSafety-only modules nd does not carry (`health`, `layout`,
+    `pack_convert`, `record`, `servers`, `structure_flags`, `suite_config`, `suite_fill`). Listed
+    explicitly so CI does not flag them as missing while the gap stays visible.
+- **Tooling / gates.** DamSafety's `tools/sync_damsuite.py` gained `--write-pin` and a
+  `pin == master` check folded into `--check`; `tools/ci_checks.py` runs the pin check (and now
+  covers `DamSafety_PMP`). nd gained a `tools/` dir it never had: a pin-based `sync_damsuite.py`
+  (`--check` against the pin; `--from <DamSafety>/shared/damsuite` to re-vendor) and a QGIS-free
+  `tools/ci_checks.py`, plus its **first `.github/workflows/ci.yml`**. Both gates were shown to
+  fail on injected drift and pass clean.
+- **The tag.** `tools/tag_damsuite_pin.sh` cuts the annotated `damsuite-pin-v1` tag at the pinned
+  commit (and only creates it locally unless `--push` is given). Cut it right after the pin PR
+  merges so it names a durable commit; bump the label (`--write-pin --pin damsuite-pin-v2`) on the
+  next content change.
+
+**Residual, honest limits.** Keeping the two repos' `tools/damsuite_pin.json` identical is a
+release-time step (or the combined-checkout `check_fork_parity.py` job can assert it) — no single
+repo's CI can prove the *other* repo's pin matches without reaching across repos. A true single
+source (the extracted-package end-state) would remove that bridge entirely; that is the decision
+left to you.
