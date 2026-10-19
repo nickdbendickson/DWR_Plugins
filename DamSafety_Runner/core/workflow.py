@@ -212,6 +212,13 @@ class RunSettings:
         # LiDAR shows a water surface (core/reservoir_carve.py): "off" (default) | "auto" |
         # "on"; NDBREACH_RESERVOIR_CARVE overrides the default
         self.reservoir_carve = _carve_default()
+        # v3.10.22: HEC-RAS 2D computation points: "grid" (default) | "gmsh" (optional; falls
+        # back to the grid without gmsh; core/hecras_seeds.py)
+        self.hecras_mesh_seeds = "grid"
+        # v3.10.22 (crest dam line): the HEC-RAS dam line: "crest" (default; traced along the
+        # embankment crest from the DEM) | "straight" (the old line across the flow;
+        # core/hecras_crest.py)
+        self.hecras_dam_axis = "crest"
         # v3.10.27 (#91): water-body mask for the run report only (core/report_metrics.py): a
         # vector file path (several separated by ;;), a list of polygons in the work CRS, or
         # "off". None = NDBREACH_WATERBODY_MASK, else the dam folder's / the suite's waterbody
@@ -265,6 +272,10 @@ class RunSettings:
                 continue                 # default mesh: the report stays as before
             elif k == "reservoir_carve" and v in ("off", None, ""):
                 continue                 # v3.10.20: off - the report stays as before
+            elif k == "hecras_mesh_seeds" and v in ("grid", None, ""):
+                continue                 # v3.10.22: the default - the report stays as before
+            elif k == "hecras_dam_axis" and v in ("crest", None, ""):
+                continue                 # the default - the report stays as before
             elif k == "water_mask":
                 if v in (None, ""):
                     continue             # v3.10.27: not set - the report stays as before
@@ -283,7 +294,9 @@ def key_settings(st):
     dam.json switch (they do not change the flood), and without the v3.2.0 class-stop
     settings while that rule is off - so a checkpoint of 3.1.x still resumes."""
     d = {k: v for k, v in st.as_dict().items() if k not in ("resume", "eap_map", "dam_record",
-                                                         "water_mask")}
+                                                            "hecras_mesh_seeds",
+                                                            "hecras_dam_axis",
+                                                            "water_mask")}
     if not getattr(st, "class_stop", False):
         for k in _CLASS_STOP_KEYS:
             d.pop(k, None)
@@ -2021,11 +2034,17 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
     ld = terrain.nearest_line_distance(dam_xy, [line]) if line else None
     report["dam_point_checks"] = {"road_m": None if rd is None else round(rd, 1),
                                   "dam_line_m": None if ld is None else round(ld, 1)}
+    if line:
+        # v3.10.22: the DWR dam line (run CRS), for the HEC-RAS dam line along the crest
+        report["crest_line_xy"] = [[round(float(x), 3), round(float(y), 3)] for x, y in line]
     if rd is not None and rd <= ROAD_NEAR_M:
         if line:
-            msg = ("A road runs {:.0f} m from the dam point, which is on the DWR dam line: the "
-                   "road is on (or beside) this embankment; the crest comes from the dam line."
-                   .format(rd))
+            # v3.10.22: say "on the dam line" only when the dam point is (it may not be)
+            where = ("which is on the DWR dam line" if ld is not None and ld <= ROAD_NEAR_M else
+                     "{:.0f} m from the DWR dam line".format(ld) if ld is not None else
+                     "with a DWR dam line given")
+            msg = ("A road runs {:.0f} m from the dam point, {}: the road is on (or beside) "
+                   "this embankment; the crest comes from the dam line.".format(rd, where))
         else:
             msg = ("A road runs {:.0f} m from the dam point: the embankment in the DEM may be "
                    "the road's fill rather than the dam (DWR-3161 sits on the ND-23 fill). "
