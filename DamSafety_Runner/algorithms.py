@@ -37,6 +37,7 @@ SET_ANUGA = "NDBREACH_ANUGA_PYTHON"
 SET_THREADS = "NDBREACH_THREADS"
 
 METHODS = [(m, brmod.METHOD_LABELS[m]) for m in brmod.METHODS]
+from .popup_logic import HECRAS_GMSH_TIP, HECRAS_CREST_TIP   # noqa: E402  v3.10.22
 TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          (workflow.TIER_BOTH, "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"),
          # appended (design #68): indices 0 and 1 and the default are unchanged
@@ -506,6 +507,20 @@ class _Base(QgsProcessingAlgorithm):
                                                      [t[1] for t in TIERS], defaultValue=0))
         self._bool("FORCE_ANUGA", "Force ANUGA: final results come from ANUGA even when "
                    "Models is set to LISFLOOD-FP only", False)
+        # v3.10.22: optional, off by default (core/hecras_seeds.py)
+        p = QgsProcessingParameterBoolean(
+            "HECRAS_GMSH", "Refine HEC-RAS mesh with Gmsh points (optional; needs gmsh, falls "
+            "back to the regular grid)", False, optional=True)
+        if hasattr(p, "setHelp"):
+            p.setHelp(HECRAS_GMSH_TIP)
+        self.addParameter(set_advanced(p))
+        # on by default: the HEC-RAS dam line along the crest (core/hecras_crest.py)
+        p = QgsProcessingParameterBoolean(
+            "HECRAS_CREST", "HEC-RAS dam line follows the crest (recommended; off = a straight "
+            "line across the flow)", True, optional=True)
+        if hasattr(p, "setHelp"):
+            p.setHelp(HECRAS_CREST_TIP)
+        self.addParameter(set_advanced(p))
         self._num("CELL", "Model cell size (m; 10 m = 32.8 ft, the raster cell, not a depth)",
                   10.0, minimum=0.5)
         self._num("MANNING", "Manning's n (where there is no n raster)", 0.06, minimum=0.005,
@@ -695,6 +710,14 @@ class _Base(QgsProcessingAlgorithm):
             from .core import reservoir_carve
             st.reservoir_carve = reservoir_carve.normalize(
                 int(self.parameterAsEnum(parameters, "RESERVOIR_CARVE", context)))
+        if (self.parameterDefinition("HECRAS_GMSH") is not None and parameters.get(
+                "HECRAS_GMSH") not in (None, "") and self.parameterAsBool(
+                parameters, "HECRAS_GMSH", context)):                       # v3.10.22
+            st.hecras_mesh_seeds = "gmsh"
+        if (self.parameterDefinition("HECRAS_CREST") is not None and parameters.get(
+                "HECRAS_CREST") not in (None, "") and not self.parameterAsBool(
+                parameters, "HECRAS_CREST", context)):
+            st.hecras_dam_axis = "straight"
         if self.parameterDefinition("WATER_MASK") is not None:         # v3.10.27 (#91)
             wm = self._fileparam(parameters, "WATER_MASK", context)
             if wm:
