@@ -380,13 +380,13 @@ class Iface:
 iface = Iface()
 plug = pkg.classFactory(iface)
 plug.initGui()
-assert [m[0] for m in iface.menu] == ["ND Dam Breach Screening"] * 2 + ["ND Dam Suite"] * 3 and plug.action is iface.menu[0][1]
+assert [m[0] for m in iface.menu] == ["Dam safety"] * 2 and plug.action is iface.menu[0][1]
 assert plug.home_action is iface.menu[1][1]                            # 0.11: Dam suite home...
-assert len(plug.suite_actions) == 3                                     # 0.13: the shared suite menu
+assert plug.suite_actions == []                                        # fork: no shared ND Dam Suite menu
 assert plug.action.triggered._slots == [plug.run_plugin]
 assert plug.provider is not None                                       # the toolbox provider is still there
 plug.initGui()                                                          # a second initGui adds no second entry
-assert len(iface.menu) == 5
+assert len(iface.menu) == 2
 plug.action.triggered.emit()
 first = plug.dialog
 assert first is not None and first.isVisible()
@@ -396,7 +396,7 @@ first.deleteLater()                                                     # Qt des
 plug.run_plugin()
 assert plug.dialog is not first and plug.dialog.isVisible()
 plug.unload()
-assert iface.removed and iface.removed[0][0] == "ND Dam Breach Screening" and plug.action is None
+assert iface.removed and iface.removed[0][0] == "Dam safety" and plug.action is None
 assert plug.dialog is None and plug.provider is None
 plug.unload()                                                           # safe twice
 # no interface (tests, qgis_process): no menu entry, no error
@@ -715,6 +715,13 @@ print("popup window: all checks passed")
 from nd_dam_screening import suite_home as SHW  # noqa: E402
 from nd_dam_screening.damsuite import dam_record as dr_  # noqa: E402
 import qgis.utils as qutils_  # noqa: E402
+# real QGIS always exposes loadPlugin/startPlugin on qgis.utils (suite_home imports them to start
+# a plugin that is installed but not loaded); the minimal mock omits them, so add no-op stubs -
+# with a plugin already in qgis.utils.plugins these are never called, only imported.
+if not hasattr(qutils_, "loadPlugin"):
+    qutils_.loadPlugin = lambda name: False
+if not hasattr(qutils_, "startPlugin"):
+    qutils_.startPlugin = lambda name: None
 
 HD = os.path.join(work, "home_dams")
 for n, steps in (("DWR-1", [("screened", "ndscreen", {"triage": "needs 2D"})]),
@@ -734,10 +741,11 @@ home._changed()
 assert home.table.rowCount() == 3 and home.table.columnCount() == len(SHW.COLUMNS)
 assert home.table.item(0, 0).text() == "DWR-1" and home.table.item(0, 8).text().startswith("model:")
 assert home.table.item(1, 8).text().startswith("classify:") and home.table.item(2, 2).text() == "High"
-assert home.table.item(0, 9).text() == "ND Dam Breach Runner" and home.table.item(1, 9).text() == "ND Dam Hazard Classification Helper"
+assert home.table.item(0, 9).text() == "DamSafety Runner" and home.table.item(1, 9).text() == "DamSafety Hazard"
 assert "3 dam(s); next: 1 model, 1 classify, 1 none" in home.summary_label.text()
-assert "Opened from ND Dam Breach Screening" in home.plugins_label.text()
-assert QgsProject.instance().readEntry("NDDamSuite", "home_dams_folder", "")[0] == HD
+assert "Opened from DamSafety Screening" in home.plugins_label.text()
+from qgis.core import QgsSettings as _QS  # noqa: E402
+assert _QS().value("NDDamSuite/home_dams_folder", "") == HD   # fork: Dams folder remembered per computer
 # opening the plugin for a dam: via qgis.utils.plugins, the window pointed at the dam
 calls = []
 
@@ -768,11 +776,11 @@ qutils_.plugins["nd_dam_screening"] = plug_s = type("P", (), {"dialog": NDDamScr
 assert home.open_plugin("ndscreen", home.rows[0]) is True and plug_s.dialog.settings()["dams_folder"] == HD
 # a plugin that is not installed: a message, no crash
 EVENTS["messages"].clear()
-assert home.open_plugin("ndhazard", home.rows[1]) is False and "not installed" in EVENTS["messages"][-1][2]
+assert home.open_plugin("ndhazard", home.rows[1]) is False and "not enabled" in EVENTS["messages"][-1][2]
 # the plugin entry point: one window, re-created when destroyed
 plug_home = pkg.classFactory(Iface())
 plug_home.initGui()
-assert [m[0] for m in plug_home.iface.menu] == ["ND Dam Breach Screening"] * 2 + ["ND Dam Suite"] * 3
+assert [m[0] for m in plug_home.iface.menu] == ["Dam safety"] * 2
 h1 = plug_home.run_home()
 assert h1 is plug_home.home_dialog and h1.isVisible() and plug_home.run_home() is h1
 h1.deleteLater()
