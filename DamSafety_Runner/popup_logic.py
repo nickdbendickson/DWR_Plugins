@@ -81,7 +81,8 @@ WITH_DEM = frozenset({"conditiondem", "animation"})
 
 DEFAULT_SETTINGS = {"dams_folder": "", "dam_id": "", "dem": "", "settings_file": "",
                     "grid_m": 10.0, "simh": 12.0, "simmax": 96.0, "force_anuga": False, "length_mi": 4.0, "half_width_mi": 1.0,
-                    "reservoir_carve": "off"}
+                    "reservoir_carve": "off", "hecras_gmsh": False,
+                    "hecras_dam_axis": "crest"}
 CARVE_CHOICES = ("off", "auto", "on")   # core/reservoir_carve.MODES, the RESERVOIR_CARVE enum
 PLUGIN_KEY = "ndbreach"                 # the suite settings file key (damsuite.versions)
 TAB_ORDER = tuple(t for t, _tools in TABS)
@@ -533,7 +534,29 @@ def defaults(alg, dams_folder, dam_id, settings=None):
         carve = str(S.get("reservoir_carve") or "off").strip().lower()
         if carve in CARVE_CHOICES and carve != "off":                    # v3.10.20
             p["RESERVOIR_CARVE"] = CARVE_CHOICES.index(carve)
+        if S.get("hecras_gmsh"):                                         # v3.10.22
+            p["HECRAS_GMSH"] = True
+        if str(S.get("hecras_dam_axis") or "crest").strip().lower() == "straight":
+            p["HECRAS_CREST"] = False                                    # crest dam line
     return p
+
+
+# v3.10.22: tooltip of the Runner's Advanced checkbox (and the HECRAS_GMSH parameter's help)
+HECRAS_GMSH_TIP = ("Optional, off by default. Uses gmsh to place the HEC-RAS 2D computation "
+                   "points, finer along the dam, breach and channel. Needs gmsh (pip install "
+                   "gmsh, in QGIS's Python or NDBREACH_GMSH_PYTHON). Without gmsh, the regular "
+                   "grid is used and the log says so. Only for Models with HEC-RAS 2D.")
+
+
+# tooltip of the Runner's Advanced 'HEC-RAS dam line follows the crest' checkbox (and the
+# HECRAS_CREST parameter's help)
+HECRAS_CREST_TIP = ("On by default (recommended). HEC-RAS needs a line where the reservoir "
+                    "meets the flood area: the dam. With this on, that line follows the top of "
+                    "the embankment as the ground model (DEM) shows it, bends and all, and the "
+                    "breach is cut straight through the dam there. Off: a straight line through "
+                    "the dam point, square to the flow, as before; use it only to repeat an "
+                    "older model. If the top of the dam cannot be found, the straight line is "
+                    "used and the log says so. Only for Models with HEC-RAS 2D.")
 
 
 RESULT_RASTERS = tuple(workflow.FINAL_NAMES.values()) + tuple(workflow.BASELINE_NAMES.values()) + \

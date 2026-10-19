@@ -5,3 +5,4 @@ __pycache__/
 *.vrt
 *.gpkg
 *.asc
+symbology-style.db

@@ -264,7 +264,7 @@ def ftp_allowed():
 def _log_warning(message):
     try:
         from qgis.core import QgsMessageLog, Qgis
-        QgsMessageLog.logMessage(str(message), "ND LiDAR", Qgis.Warning)
+        QgsMessageLog.logMessage(str(message), "ND LiDAR", getattr(Qgis, 'MessageLevel', Qgis).Warning)
     except Exception:                                            # noqa - no QGIS (tests, CLI)
         import logging
         logging.getLogger(__name__).warning("%s", message)

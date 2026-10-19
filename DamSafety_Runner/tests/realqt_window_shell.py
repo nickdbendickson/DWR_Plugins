@@ -89,10 +89,37 @@ assert dlg.adv_section.title() == "Advanced  ·  grid 5 m · 12 h simulated · u
 assert dlg.adv_section.header.text().startswith("▾ Advanced  ·  grid 5 m")
 assert dlg.settings()["force_anuga"] is True
 shot(dlg, "advanced_expanded")
-dlg.adv_section.header.click()
-assert dlg.adv_section.header.text().startswith("▸ Advanced") and "▾" not in dlg.adv_section.header.text()
 dlg.force_anuga.setChecked(False)
 dlg.grid_m.setValue(10.0)
+# v3.10.22: the optional gmsh points for HEC-RAS: off by default, a plain checkbox in Advanced
+g = dlg.hecras_gmsh
+assert g.text() == "Refine HEC-RAS mesh with Gmsh points (optional)" and not g.isChecked()
+assert g.isVisible() and "Needs gmsh" in g.toolTip()
+assert "regular grid is used" in g.toolTip() and "off by default" in g.toolTip()
+assert "hecras_gmsh" not in dlg.settings()
+assert "HECRAS_GMSH" not in pl.defaults("rundam", "", "", dict(pl.DEFAULT_SETTINGS, **dlg.settings()))
+g.setChecked(True)
+assert dlg.settings()["hecras_gmsh"] is True
+assert dlg.adv_section.title().endswith(" · HEC-RAS gmsh points"), dlg.adv_section.title()
+assert pl.defaults("rundam", "", "", dict(pl.DEFAULT_SETTINGS, **dlg.settings()))["HECRAS_GMSH"] is True
+shot(dlg, "advanced_hecras_gmsh_checked")
+g.setChecked(False)
+assert "gmsh" not in dlg.adv_section.title()
+# the HEC-RAS dam line along the crest: on by default, unticked = the straight line
+c = dlg.hecras_crest
+assert c.text() == "HEC-RAS dam line follows the crest (recommended)" and c.isChecked()
+assert c.isVisible() and "On by default" in c.toolTip() and "log says so" in c.toolTip()
+assert "hecras_dam_axis" not in dlg.settings()
+assert "HECRAS_CREST" not in pl.defaults("rundam", "", "", dict(pl.DEFAULT_SETTINGS, **dlg.settings()))
+c.setChecked(False)
+assert dlg.settings()["hecras_dam_axis"] == "straight"
+assert dlg.adv_section.title().endswith(" · HEC-RAS straight dam line"), dlg.adv_section.title()
+assert pl.defaults("rundam", "", "", dict(pl.DEFAULT_SETTINGS, **dlg.settings()))["HECRAS_CREST"] is False
+shot(dlg, "advanced_hecras_crest_unticked")
+c.setChecked(True)
+assert "straight" not in dlg.adv_section.title()
+dlg.adv_section.header.click()
+assert dlg.adv_section.header.text().startswith("▸ Advanced") and "▾" not in dlg.adv_section.header.text()
 
 # 3. a valid Dams folder and a dam with flood rasters
 dams = tempfile.mkdtemp()

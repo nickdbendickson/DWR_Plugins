@@ -267,7 +267,9 @@ def hecras_site_plan_time_step_window_and_breach_shape_note():
         # simulation window: synthetic arrival 2 h
         hy, dam, params = hecras.load_run(d)
         te = hm.hydrograph_end_hr(hy.t_s, hy.q_cms, hy.t_ref_s)
-        assert info["sim_hours"] == hm.simulation_hours(te, 2.0, m.breach["formation_hr"])[0]
+        # v3.10.22: plus the sunny-day warm-up before the breach's set start time
+        assert abs(info["sim_hours"] - (hm.simulation_hours(te, 2.0, m.breach["formation_hr"])[0]
+                                        + hm.BREACH_WARMUP_HR)) < 1e-9
         assert info["sim_how"] in open(r["paths"]["readme"], encoding="utf-8").read()
         assert "Breach shape" in open(r["paths"]["readme"], encoding="utf-8").read()
         # the package

@@ -197,6 +197,13 @@ class NDBreachRunnerDialog(QDialog):
             "is. Auto: only when the DEM's pool holds far less than the storage curve. The "
             "source DEM is never changed.")
         self.carve_combo.currentIndexChanged.connect(self._changed)
+        self.hecras_gmsh = QCheckBox("Refine HEC-RAS mesh with Gmsh points (optional)")  # v3.10.22
+        self.hecras_gmsh.setToolTip(pl.HECRAS_GMSH_TIP)
+        self.hecras_gmsh.toggled.connect(self._changed)
+        self.hecras_crest = QCheckBox("HEC-RAS dam line follows the crest (recommended)")
+        self.hecras_crest.setToolTip(pl.HECRAS_CREST_TIP)
+        self.hecras_crest.setChecked(True)                  # on by default
+        self.hecras_crest.toggled.connect(self._changed)
 
         run_row = QHBoxLayout()
         self.run_dam_btn = QPushButton("▶  Run this dam")
@@ -233,6 +240,8 @@ class NDBreachRunnerDialog(QDialog):
         grid2.addWidget(self.force_anuga, 1, 2, 1, 2)
         grid2.addWidget(QLabel("Reservoir carve:"), 2, 0)
         grid2.addWidget(self.carve_combo, 2, 1)
+        grid2.addWidget(self.hecras_gmsh, 2, 2, 1, 2)
+        grid2.addWidget(self.hecras_crest, 3, 2, 1, 2)
         grid2.setColumnStretch(4, 1)
         self.adv_section = Collapsible("Advanced", adv)
         lay.addWidget(self.adv_section)
@@ -283,6 +292,10 @@ class NDBreachRunnerDialog(QDialog):
         carve = self.carve_combo.currentData() if hasattr(self, "carve_combo") else None
         if carve and carve != "off":
             parts.append("reservoir carve " + str(carve))
+        if getattr(self, "hecras_gmsh", None) is not None and self.hecras_gmsh.isChecked():
+            parts.append("HEC-RAS gmsh points")
+        if getattr(self, "hecras_crest", None) is not None and not self.hecras_crest.isChecked():
+            parts.append("HEC-RAS straight dam line")
         self.adv_section.set_title("Advanced  ·  " + " · ".join(parts))
 
     def _open_settings(self):
@@ -323,7 +336,7 @@ class NDBreachRunnerDialog(QDialog):
         lay.addWidget(card.warn_label)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFrameShape(getattr(QFrame, 'Shape', QFrame).NoFrame)
         scroll.setWidget(card)
         lay.addWidget(scroll, 1)
         row = QHBoxLayout()
@@ -403,7 +416,7 @@ class NDBreachRunnerDialog(QDialog):
         w.setLayout(lay)
         scroll = QScrollArea()                 # Post-process has twelve tools
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setFrameShape(getattr(QFrame, 'Shape', QFrame).NoFrame)
         scroll.setWidget(w)
         return scroll
 
@@ -704,6 +717,10 @@ class NDBreachRunnerDialog(QDialog):
         carve = self.carve_combo.currentData() or "off"
         if carve != "off":                  # Off (the default) leaves the saved state as before
             out["reservoir_carve"] = carve
+        if self.hecras_gmsh.isChecked():    # off (the default) leaves the saved state as before
+            out["hecras_gmsh"] = True
+        if not self.hecras_crest.isChecked():   # on (the default) leaves the saved state as before
+            out["hecras_dam_axis"] = "straight"
         return out
 
     def _apply(self, s):
@@ -732,6 +749,9 @@ class NDBreachRunnerDialog(QDialog):
         carve = str(s.get("reservoir_carve") or "off").lower()
         self.carve_combo.setCurrentIndex(pl.CARVE_CHOICES.index(carve)
                                          if carve in pl.CARVE_CHOICES else 0)
+        self.hecras_gmsh.setChecked(bool(s.get("hecras_gmsh", False)))
+        self.hecras_crest.setChecked(
+            str(s.get("hecras_dam_axis") or "crest").strip().lower() != "straight")
 
     def _save_state(self):
         if self._loading:
