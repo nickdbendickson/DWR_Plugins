@@ -151,7 +151,7 @@ class NdDataUpdaterPlugin:
         if notice and notice not in self._noticed:
             if notice not in self._logged:
                 self._logged.add(notice)
-                log(notice, Qgis.Warning if how != "legacy" else Qgis.Info)
+                log(notice, MSG_WARNING if how != "legacy" else MSG_INFO)
             if not quiet:
                 self._noticed.add(notice)
                 try:
