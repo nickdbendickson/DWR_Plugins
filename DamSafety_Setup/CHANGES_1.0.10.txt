@@ -1,0 +1,91 @@
+DamSafety Setup 1.0.10 - missing dam height and storage: NID fill, DEM estimate;
+not-a-dam records hidden
+=================================================================================
+(1.0.9 is the ellipsis-only release of #89; this follows it.)
+
+Why
+  1.0.8 keeps Next off while a dam's height or storage is 0, so the Runner never gets
+  0 ft / 0 ac-ft. Many DWR records have no height or storage (42 of the 74 Cass County
+  dams). This version fills what it can from the National Inventory of Dams (NID); typing
+  the numbers in stays the fallback.
+
+What changed (dam page)
+  * The NID layer in the suite data folder (the offline pack's hydro/NID_dams.gpkg, found
+    by the folder scan) fills blanks as soon as the dams are listed. Read-only; no network.
+  * "Fill from NID (online)" asks the NID web service (nid.sec.usace.army.mil) for the
+    current dam. Only on that click: the wizard makes no network call by itself. It goes
+    through QGIS's network settings (proxy), does not freeze the window, gives up after
+    15 s and says so; the values can then be typed in.
+  * A dam is matched by its NID id (DWR national_id), else by the nearest NID dam within
+    100 m of the DWR point.
+  * Only blanks are filled. 0 counts as blank (DWR stores "not recorded" as 0). A DWR value
+    above 0 is never replaced, and a storage still blank takes the DWR normal pool volume
+    before the NID. A value typed in is kept by the online fill.
+  * NID height: NID_HEIGHT, else DAM_HEIGHT (ft). NID storage: MAX_STORAGE, else
+    NID_STORAGE, else NORMAL_STORAGE (ac-ft).
+  * A grey note beside each value says where it came from: "from DWR", "from DWR (normal
+    pool volume)", "from NID ND00189", "typed in". The tooltip names the NID field and how
+    the dam was matched. The DEM and Run pages show the same.
+  * Max storage goes up to 50,000,000 ac-ft (the NID gives 26,000,000 for Snake Creek /
+    Lake Sakakawea; the old 5,000,000 cap would have cut it silently).
+
+Hand-off to the Runner
+  * The wizard answers carry height_source and storage_source; the Runner parameters carry
+    HEIGHT_SOURCE and STORAGE_SOURCE, and the QGIS log ("DamSafety Setup") records them.
+    The Runner's processing dialog only reads parameters it defines, so these extra keys
+    do not change the run and are not yet written to the Runner's run_report.json.
+
+Dam reader fix
+  * A dam with no point (blank or 0, 0) now takes the midpoint of its dam line, transformed
+    to EPSG:4326 like the inventory points, and is marked "point from the dam line". The old
+    code looked the line up but only set from_line = False and never used it (and only when
+    the lines sat in the same GeoPackage, which the pack does not do). The unused
+    _line_midpoints helper, which would have replaced every inventory point, is gone.
+    Three DWR dams (all Sargent County) have no point; all three have a dam line.
+
+Records that are not a dam to model (dam_filter.py)
+  * Hidden from the dam list by default; "Show all records" (off) brings them back, each
+    marked "- not a dam? <reason>" and the reason in full under the list. The count line
+    says how many were hidden.
+  * Hidden when the DWR status is Removed, Breached, Not Built or Submerged (an old dam
+    under a newer reservoir), or when the remarks match (case-insensitive):
+        ^\W*void\b                       remarks start with VOID ("VOID SEE #80")
+        \bno dam (is )?(visible|found|located|present|constructed|built|exist|exists|there)\b
+        \bnot a dam\b
+        \bdam does not exist\b | \bdoes not exist anymore\b
+        \b(did|does) not show ?a dam\b
+    A status of Intact, Under Construction or Pending wins over a remark (3 Intact dams
+    have an old "no dam visible" remark). "Permit is void" / "permit voided" do not match.
+  * Pack (ND_Dam_Suite_Pack, 10,088 records): 1,525 hidden statewide (Breached 1,095,
+    Not Built 222, Submerged 83, Removed 73, remarks 52); Cass 24 of 74.
+
+Estimate from DEM (dem_estimate.py)
+  * "Estimate from DEM" on the dam page, on when the height or storage is blank. It uses
+    the DEM chosen on the DEM page, else one already downloaded for this dam into the
+    Dams folder; with neither the button reads "Choose DEM and estimate..." and asks for a
+    file (which the DEM page then starts with). The estimate stays on the dam page because
+    Next is off there until both values are above 0.
+  * Height = crest elevation (median ground along the dam line; without a line the high
+    ground within 40 m of the point) minus the lowest ground 2 cells to 150 m downstream.
+    The downstream side is the side with the lower ground.
+  * Storage = DEM volume below the crest in the basin upstream: a flood fill from the
+    lowest ground just upstream, on the upstream side of the dam, inside 1.5, 3, 6 then
+    12 km. A fill that reaches the edge of 12 km has no closed basin: no storage. No
+    embankment in the DEM (crest not 0.5 m above the toe): neither value.
+  * Units: the raster's unit (band unit, vertical CRS: feet / US survey feet / metres)
+    wins, else the DEM page's choice, else metres; results in ft and ac-ft. A window wider
+    than 1,600 cells is read averaged.
+  * Runs in a QgsTask with progress on the page. Fills only blank values; a typed value
+    always wins. Labelled "estimated from DEM (screening only)"; height_source /
+    storage_source carry the crest, toe, basin area and radius to the hand-off.
+  * Screening only: LiDAR sees the water surface, so the storage is the volume above the
+    water on the survey day, and a low weir or a dam under water does not show.
+  * Copied from DamSafety_Runner (plugins do not import each other): _sample, _flood_fill
+    and the reservoir mask (core/hecras_model.py, #79), z_to_m_factor and the unit names
+    (core/gdal_io.py).
+
+Tests
+  DamSafety_Setup/tests/test_nid_fill.py (offscreen, QGIS 3.34, web calls mocked).
+  DamSafety_Setup/tests/test_dem_estimate.py: a synthetic DEM with a 200 m x 200 m pit 8 m
+  below the crest (259.4 ac-ft) and a 10 m dam (32.8 ft), in metres and in US survey feet;
+  a leaking basin; point only; the filter patterns; the wizard with the real QgsTask.
