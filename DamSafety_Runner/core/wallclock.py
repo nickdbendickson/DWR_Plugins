@@ -175,8 +175,10 @@ def run(cmd, cwd=None, env=None, timeout=None, grace=DEFAULT_GRACE_S, log=None, 
     timeout; on expiry the process group gets stop_group() and Timeout is raised. Output goes
     through temporary files (no pipe can fill up). OSError when it cannot start."""
     with tempfile.TemporaryFile() as o, tempfile.TemporaryFile() as e:
+        # Windows: no console window for the child (CREATE_NO_WINDOW, as NO_WINDOW elsewhere)
         p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=o, stderr=e,
-                             start_new_session=(os.name == "posix"))
+                             start_new_session=(os.name == "posix"),
+                             creationflags=(0x08000000 if os.name == "nt" else 0))
         rc = None
         if timeout is None:
             rc = p.wait()

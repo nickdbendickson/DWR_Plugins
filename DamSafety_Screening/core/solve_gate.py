@@ -9,6 +9,10 @@ import shutil
 import subprocess
 import tempfile
 
+# Windows: no console window for a child program (QGIS is a GUI program, so each console
+# program it starts opens its own window, and closing that window kills the run)
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_NO_WINDOW
+
 CFS = 35.31466672148859
 ACFT = 1233.48183754752
 # A 10-mile box at 10 m is about 3,200 pixels. The 3DEP export timed out as one
@@ -173,7 +177,8 @@ def lisflood_smoke(exe, work=None):
             fh.write("DEMfile dem.asc\nresroot run\ndirroot out\nsim_time 1\ninitial_tstep 1\n"
                      "saveint 1\nmassint 1\nfpfric 0.05\nacceleration\n")
         try:
-            r = subprocess.run([exe, par], cwd=folder, capture_output=True, text=True, timeout=60, errors="replace")
+            r = subprocess.run([exe, par], cwd=folder, capture_output=True, text=True, timeout=60, errors="replace",
+                               **NO_WINDOW)
         except subprocess.TimeoutExpired:
             return check("fail", "LISFLOOD 1-second check", "no answer in 60 s",
                          "The binary did not finish a 5 by 5 grid. Do not start the dam.")
@@ -217,7 +222,8 @@ def raster_info(path):
     """
     import json
     try:
-        r = subprocess.run(["gdalinfo", "-json", path], capture_output=True, text=True, timeout=30, errors="replace")
+        r = subprocess.run(["gdalinfo", "-json", path], capture_output=True, text=True, timeout=30, errors="replace",
+                           **NO_WINDOW)
         info = json.loads(r.stdout or "{}")
     except (OSError, subprocess.TimeoutExpired, ValueError):
         info = {}
