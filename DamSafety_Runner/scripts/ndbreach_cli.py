@@ -115,7 +115,23 @@ FT, MILE = units.FT, units.MILE
 BATCH_FIELDS = ("Dam", "Folder", "Status", "Scenario", "Final_Model", "Peak_Breach_cfs",
                 "Storage_At_Failure_acft", "Flooded_ac", "Max_Depth_ft", "Max_Velocity_fps",
                 "Latest_Arrival_hr", "Receptors_Flooded", "Runs", "Domain_mi", "Minutes",
-                "Warnings", "Message", "Structure_Flag", "Hazard_Of_Record")
+                "Warnings", "Message", "Structure_Flag", "Hazard_Of_Record",
+                # v3.10.27 (#91): appended after 3.10.23's flag columns, so the columns above keep their places
+                "Flooded_ge_0_1ft_ac", "Flooded_ge_1ft_ac", "Flooded_ge_2ft_ac",
+                "Velocity_P95_fps", "Velocity_P99_fps", "Max_Velocity_Depth_ft",
+                "Flooded_Masked_ac", "Flooded_ge_1ft_Masked_ac")
+
+
+def _batch_metrics(s):
+    """v3.10.27 (#91): the appended batch columns from a run summary ("" when absent)."""
+    keys = (("Flooded_ge_0_1ft_ac", "flooded_acres_ge_0_1ft"),
+            ("Flooded_ge_1ft_ac", "flooded_acres_ge_1ft"),
+            ("Flooded_ge_2ft_ac", "flooded_acres_ge_2ft"),
+            ("Velocity_P95_fps", "velocity_p95_fps"), ("Velocity_P99_fps", "velocity_p99_fps"),
+            ("Max_Velocity_Depth_ft", "max_velocity_depth_ft"),
+            ("Flooded_Masked_ac", "flooded_acres_masked"),
+            ("Flooded_ge_1ft_Masked_ac", "flooded_acres_ge_1ft_masked"))
+    return {col: ("" if s.get(k) is None else s.get(k)) for col, k in keys}
 # columns of the dams table -> what the batch tool calls them (algorithms.BATCH_FIELD_KEYS)
 BATCH_FIELD_KEYS = ("F_ID", "F_NAME", "F_HEIGHT", "F_STORAGE", "F_TOP", "F_AREA", "F_PMF",
                     "F_BOTTOM", "F_CREST", "F_US", "F_DS", "F_LENGTH", "F_POOL")
@@ -1647,6 +1663,7 @@ def cmd_batch(args):
                             "Storage_At_Failure_acft": s["storage_at_failure_acft"],
                             "Flooded_ac": s["flooded_acres"], "Max_Depth_ft": s["max_depth_ft"],
                             "Max_Velocity_fps": s["max_velocity_fps"],
+                            **_batch_metrics(s),
                             "Latest_Arrival_hr": s["latest_arrival_hr"],
                             "Receptors_Flooded": s.get("receptors_flooded", ""),
                             "Runs": s["lisflood_runs"],
