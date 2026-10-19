@@ -12,7 +12,6 @@ Temporal distributions: see temporal.py. NOT ported: checkTemporal table, Spatia
 """
 import os
 import csv
-import math
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 

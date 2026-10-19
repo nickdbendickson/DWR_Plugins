@@ -18,12 +18,13 @@ models ask for, so the source DEM is never modified:
   has the crest does nothing further.
 """
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 import numpy as np
 
-from .grid import Grid
+from .units import FT
+
 
 # v3.4.0 building footprints: how they are represented (BUILDINGS parameter)
 BUILDINGS_NONE = "none"
@@ -319,7 +320,7 @@ class BuildingRaise:
     LiDAR has removed the building). Footprints smaller than a cell take the cell
     under their centroid."""
     polygon: np.ndarray
-    raise_m: float = BUILDING_RAISE_FT_DEFAULT * 0.3048
+    raise_m: float = BUILDING_RAISE_FT_DEFAULT * FT
     name: str = "building"
 
     def apply(self, grid, z, init):
@@ -368,7 +369,7 @@ def building_edits(footprints, mode, raise_ft=BUILDING_RAISE_FT_DEFAULT, n=BUILD
     for i, poly in enumerate(footprints):
         name = "building {}".format(i + 1)
         if mode == BUILDINGS_RAISE:
-            out.append(BuildingRaise(np.asarray(poly, float), float(raise_ft) * 0.3048, name))
+            out.append(BuildingRaise(np.asarray(poly, float), float(raise_ft) * FT, name))
         else:
             out.append(BuildingRoughness(np.asarray(poly, float), float(n), name))
     return out
@@ -388,7 +389,7 @@ def describe_buildings(edits, counts=None):
     if raise_:
         return ("Buildings: {} footprint(s) raised to the highest ground inside each plus "
                 "{:.1f} ft (flat-topped blocks){}. {}".format(
-                    len(raise_), raise_[0].raise_m / 0.3048, cells, BUILDINGS_NOTE))
+                    len(raise_), raise_[0].raise_m / FT, cells, BUILDINGS_NOTE))
     return ("Buildings: Manning's n = {:g} inside {} footprint(s){}. {}".format(
         rough[0].n, len(rough), cells, BUILDINGS_NOTE))
 

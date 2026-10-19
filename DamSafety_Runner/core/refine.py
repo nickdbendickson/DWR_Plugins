@@ -22,7 +22,6 @@ the hydrograph plus the travel time to the interface, not the main run's whole c
 """
 import copy
 import json
-import math
 import os
 
 import numpy as np

@@ -1,6 +1,6 @@
 """Keep a plugin window on the screen and scroll a long tab."""
 from qgis.PyQt.QtCore import Qt, QSize
-from qgis.PyQt.QtWidgets import QApplication, QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QWizardPage
+from qgis.PyQt.QtWidgets import QApplication, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
 
 
 def _policy(name):

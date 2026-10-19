@@ -11,14 +11,14 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
                        QgsProcessingParameterBoolean,
                        QgsFields, QgsField, QgsFeature, QgsGeometry,
                        QgsPointXY, QgsFeatureRequest, QgsRectangle,
-                       QgsProcessingException, QgsVectorLayer)
+                       QgsProcessingException)
 
 import os
 
 from ..core import hazard as hz, gridutil as gu
 from ..core import nd_hazard as nh
 from ..core import damrecord_io as dri, handoff as ho
-from ..core.more_layers import pick, uris, layer_name
+from ..core.more_layers import pick, layer_name
 from . import _common as cm
 from ..damsuite import structure_flags as SF
 from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, NUM_DOUBLE, SRC_LINE, SRC_POINT, SRC_POLYGON, WKB_POINT)

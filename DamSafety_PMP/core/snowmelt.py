@@ -8,7 +8,9 @@ the SWE before that day's melt (as the original).
 Original-script defect noted, not reproduced: it advances the date with `datetime.timedelta`
 but only imports `timedelta`; here the date is advanced with timedelta.
 """
-import os, csv, re, glob
+import os
+import csv
+import glob
 from datetime import date, timedelta
 import numpy as np
 from . import gridutil as G

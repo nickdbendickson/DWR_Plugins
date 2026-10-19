@@ -64,8 +64,8 @@ from .styles import style_by_field, set_map_tip, style_outline
 from .hazard import METHOD_MAXMAX, METHOD_LABEL
 from .scenarios import (
     ROLE_BREACH, order_for_run, restore, mark_structures_incremental, raster_reuse_problems,
-    line_baseline_depth, mark_lines_incremental, incremental_view, EVAL_KEYS,
-    CONSEQ_KEYS, SNAP_KEYS,
+    line_baseline_depth, mark_lines_incremental, incremental_view, CONSEQ_KEYS,
+    SNAP_KEYS,
 )
 from .consequences import economic_estimate, life_loss_estimate, totals
 from .access import access_analysis

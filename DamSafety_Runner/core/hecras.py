@@ -41,7 +41,6 @@ ft/s and hours.
 """
 import csv
 import math
-import json
 import os
 import re
 

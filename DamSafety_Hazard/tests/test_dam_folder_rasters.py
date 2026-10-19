@@ -247,3 +247,8 @@ if __name__ == "__main__":
             n += 1
             print("ok", name, flush=True)
     print("{} passed".format(n), flush=True)
+    # All checks ran and passed (a failure raises before here). This builds a real QgsApplication,
+    # whose offscreen teardown at interpreter shutdown can return non-zero / segfault on CI and make
+    # the runner report FAIL despite the passing checks. Exit 0 explicitly before that teardown.
+    sys.stdout.flush()
+    os._exit(0)

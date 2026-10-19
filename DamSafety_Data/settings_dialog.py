@@ -6,11 +6,11 @@ import os
 from qgis.PyQt.QtCore import Qt
 from .ui_fit import fit_window
 from qgis.PyQt.QtWidgets import (
-    QScrollArea,
+    QAbstractItemView,
 
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton, QSpinBox,
-    QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox,
+    QHBoxLayout, QHeaderView, QLineEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
+    QVBoxLayout,
 )
 
 from .sources import SOURCE_INFO

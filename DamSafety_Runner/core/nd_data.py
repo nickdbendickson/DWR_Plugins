@@ -13,7 +13,6 @@ import subprocess
 # Windows: no console window for a child program (QGIS is a GUI program, so each console
 # program it starts opens its own window, and closing that window kills the run)
 NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_NO_WINDOW
-import sys
 
 # --------------------------------------------------------------------------------------
 # NLCD land cover -> Manning's n (floodplain, shallow flow)

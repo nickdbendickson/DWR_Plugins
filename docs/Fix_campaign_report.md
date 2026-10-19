@@ -322,3 +322,126 @@ Started the P0 **DWR ↔ nd_ fork convergence** with its safe first slice: the s
 only a combined checkout); converging the coupled non-core files that drifted (e.g. the newer
 `fingerprint.py` nested-VRT handling); and deciding the end-state (one product + a branding skin,
 vs. an extracted shared package).
+
+## 12. Fork convergence — slice 2 done (shared pin + coupled-file convergence)
+
+Delivered the next slice: a single shared `damsuite` source both forks vendor from a **pinned
+tag**, so the parity gate runs in **normal per-repo CI** (no combined checkout, no network), plus
+convergence of the genuinely-drifted coupled files. Opened as PRs in both repos for review — not
+merged. The end-state decision (one product + a branding skin vs. an extracted shared package) is
+**still yours**; nothing here forecloses it.
+
+- **The pin (`tools/damsuite_pin.json`, committed byte-identical in both repos).** A content
+  fingerprint of the canonical master (`DWR_Plugins/shared/damsuite/`, 35 modules): `sha256` of
+  every module, a `fork_specific` list, a tag label `damsuite-pin-v1`, and a `pin_sha256` over the
+  content-checked modules. Because it is committed into both repos, each repo's CI verifies its own
+  vendored copies against it **offline** — the explicit "normal CI, not only a combined checkout"
+  requirement. It keys on **content, not `SUITE_VERSION`** (the forks run inverted version lines —
+  nd 1.18.0 vs DamSafety 1.17.3 — so a version key would be meaningless).
+- **Drift was far smaller than feared.** Of the 27 modules both forks ship, **23 were already
+  byte-identical**; only `__init__.py`, `versions.py`, `suite_home.py` and `offline_pack.py`
+  differed.
+- **Converged (nd adopted DamSafety's newer version), as separate commits:**
+  - `fingerprint.py` (plugin-level) — the nested-VRT handling: follows nested VRTs with cycle
+    detection, treats a `<SourceFilename>` with no `relativeToVRT` as relative (GDAL's default —
+    nd's old regex silently dropped those sources), unescapes HTML entities, and marks a truncated
+    source list incomplete (FP.2). Depends only on `chain` (already identical) + stdlib, so the
+    swap is self-contained; now byte-identical across forks. A new QGIS-free regression test
+    (`tests/test_fingerprint_vrt.py`, added to **both** forks) locks the behaviour in (fail-before
+    on the old code, pass-after).
+  - `damsuite/offline_pack.py` — `encoding="utf-8"` on two `.write_test` probes (the campaign's
+    UTF-8 hardening); converged across all four nd copies, each `FILES.json` refreshed. Now
+    byte-identical across forks.
+- **Documented, NOT converged (surfaced for the end-state decision):**
+  - `fork_specific` (present in both forks, content legitimately per-fork): `__init__.py` (module
+    manifest + `SUITE_VERSION`), `versions.py` (branding + releases), and `suite_home.py` —
+    DamSafety couples it to the DamSafety-only `structure_flags` module, so nd ships the same file
+    minus that feature until the `structure_flags` port is decided. The pin does not compare their
+    content across forks (each fork's own CI still keeps its copies internally consistent).
+  - `ND_NOT_VENDORED` — the 8 DamSafety-only modules nd does not carry (`health`, `layout`,
+    `pack_convert`, `record`, `servers`, `structure_flags`, `suite_config`, `suite_fill`). Listed
+    explicitly so CI does not flag them as missing while the gap stays visible.
+- **Tooling / gates.** DamSafety's `tools/sync_damsuite.py` gained `--write-pin` and a
+  `pin == master` check folded into `--check`; `tools/ci_checks.py` runs the pin check (and now
+  covers `DamSafety_PMP`). nd gained a `tools/` dir it never had: a pin-based `sync_damsuite.py`
+  (`--check` against the pin; `--from <DamSafety>/shared/damsuite` to re-vendor) and a QGIS-free
+  `tools/ci_checks.py`, plus its **first `.github/workflows/ci.yml`**. Both gates were shown to
+  fail on injected drift and pass clean.
+- **The tag.** `tools/tag_damsuite_pin.sh` cuts the annotated `damsuite-pin-v1` tag at the pinned
+  commit (and only creates it locally unless `--push` is given). Cut it right after the pin PR
+  merges so it names a durable commit; bump the label (`--write-pin --pin damsuite-pin-v2`) on the
+  next content change.
+
+**Residual, honest limits.** Keeping the two repos' `tools/damsuite_pin.json` identical is a
+release-time step (or the combined-checkout `check_fork_parity.py` job can assert it) — no single
+repo's CI can prove the *other* repo's pin matches without reaching across repos. A true single
+source (the extracted-package end-state) would remove that bridge entirely; that is the decision
+left to you.
+
+**Verification (adversarial, Oct 2026).** A 10-agent review of this slice refuted 13 of 15 raised
+findings; the 2 survivors are now fixed: nd's `--check` validates its own `pin_sha256` (catches a
+corrupt/hand-edited pin), and `check_fork_parity.py` now gates `fingerprint.py` cross-fork identity.
+
+## 13. Recommendations round — dead code, de-dup, split assessment (2026-10-19)
+
+Acting on five recommendations: (1) dead-code sweep, (2) continue de-duplication, (3) split
+`pipeline.py`/`structures.py` only with real-QGIS coverage, (4) leave damsuite vendoring alone, and
+(5) no byte minification. Backstop in this environment: `py_compile` of every source, `pyflakes`
+(0 undefined names), and the QGIS-free suites — the real-QGIS suites cannot run here.
+
+### 13.1 Dead-code sweep (pyflakes + vulture) — done
+- **Removed 122 unused imports** across both forks (autoflake, name-aware), preserving the `# noqa`
+  availability probes, the `__init__` re-exports and partial imports; `damsuite/` was left untouched
+  (rec 4). Count matched an independently-derived safe list exactly.
+- **Removed a latent bug:** `DamSafety_Runner/core/workflow.py` called an undefined `feedback` inside
+  a swallowed `try/except`, so the push never ran (the warning is already in the `warnings` list;
+  nd never had the block). Removing it is no-behaviour-change and converges with nd.
+- **vulture** at high confidence surfaced only unused *parameters* (part of signatures) — not removed.
+- **Flagged, not changed (needs your eyes):** `DamSafety_Runner/core/cascade.py` sets a local
+  `failed = True` that is never read; the `CascadeResult.failed` field may never be propagated — a
+  possible missing-failure-status bug in the cascade path.
+
+### 13.2 De-duplication — the safe, verified subset applied; the rest a prioritized backlog
+A de-dup discovery pass (5 subsystem finders + adversarial equivalence verification) found 7
+provably-equivalent "unify now" cases and 31 "report only". **Applied** (behaviour-preserving,
+verified): the unit-conversion factors in `lisflood.py` read_results → `units.FT/ACRE/CFS/ACFT`
+(both forks; golden baseline reproduces identical numbers), the three `0.3048` ft↔m literals in
+`conditioning.py` → `units.FT` (DWR only — nd lacks that module), and a `crest_rule.py`
+byte-identical-across-plugins CI assertion.
+
+**Backlog (not applied here), highest value first:**
+- **Structure-outcome decision tokens** (`OUT_PROBABLE`/`OUT_JUDGMENT`/`OUT_ECONOMIC`/`OUT_DRY`):
+  produced once by `structures.structure_outcome` but re-declared/literal in ~11 Hazard modules
+  (robustness, ensemble, rulecompare, portfolio, watch, traveltime, history, quickcreep, formfill).
+  They drive High/Medium/Low, so a drift is a real misclassification risk. Provably literal-equal
+  today → define in `constants.py` (QGIS-free) and re-export. **Needs the real-QGIS classify/
+  ensemble suite to validate**, so deferred to an environment that can run it. Caveats for whoever
+  does it: keep the `_DRY` membership tuples' extra members (`""`, `None`, quickcreep's `"NULL"`);
+  `ensemble` also inlines `"Not inundated"`.
+- **Same-file helper extractions** (low risk, low drift-danger): `dem_download.py` `to_5070`/
+  `_box_2266` → one `_box_in(epsg,…)`; `gdal_io.py` the two north-up-bounds expressions → a
+  `bounds_from_gt` helper (NOT the *windowed* one in `rasimport.py`); the duplicate `ALBERS =
+  "EPSG:5070"` in Screening `_common.py` vs `terrain_cache.py`.
+- **Runner↔Screening breach-formula family** (Froehlich 1995/2008, Von Thun–Gillette, MLM/L-M,
+  TR-60, weir coefficients): parallel implementations. Candidates for a shared breach module — but
+  **Screening's are deliberately simplified**, so this is a human design decision, not an auto-unify.
+- **Do NOT unify (deliberate differences):** `G = 9.80665` (Runner) vs `G = 9.81` (Screening); the
+  TM-11 danger-zone logic (canonical in `damsuite/tm11_curves.py`, off-limits); the hazard-class
+  severity tiers (canonical in `damsuite/priority.py`).
+- **Unit-constant sprawl in Screening** (~15 files restate `AF_M3`/`FT`/`ACRE`): candidate for one
+  Screening-wide units module (or vendoring `damsuite/units.py`), left for the end-state decision.
+
+### 13.3 Split `pipeline.py` / `structures.py` — assessed, correctly deferred (rec 3)
+Both import `qgis.core` at module scope, and their coverage (`test_lumo_real*`,
+`test_m1m2_classify_nd`, `test_flagged_structures`, …; 19 of 27 Hazard test files import qgis)
+runs **only with real QGIS**, which this environment lacks. Per rec 3, **not split here**. Proposed
+themed split (the files already carry `# --- inputs --` / `# --- scenarios --` section markers):
+pull the product-reuse / evaluation-key machinery (`_layer_sig`…`_evaluate`), the input collection
+(`_collect_inputs`…`_collect_facilities`), and the scenario runner (`_run_scenario`…`_result_items`)
+into themed submodules, leaving `pipeline.py` as the `Run` orchestrator. Execute it on a branch
+where the `lumo_real` suite can confirm before/after parity.
+
+### 13.4 Recs 4 & 5
+Rec 4 (leave damsuite vendoring alone): honored — the pin slice is identical-copy-plus-assertion
+with no build step, and neither the dead-code nor de-dup work touched a vendored `damsuite/` file.
+Rec 5 (no minification): not done, by design.

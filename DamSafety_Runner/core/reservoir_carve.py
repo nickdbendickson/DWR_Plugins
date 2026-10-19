@@ -21,7 +21,6 @@ import re
 
 import numpy as np
 
-from .grid import Grid
 from .units import ACFT, ACRE, FT
 
 MODE_OFF, MODE_AUTO, MODE_ON = "off", "auto", "on"

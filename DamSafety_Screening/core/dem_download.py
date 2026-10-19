@@ -4,7 +4,6 @@ County boxes are download clips, padded, not survey boundaries. The service
 returns metres in EPSG:5070.
 """
 import os
-import zipfile
 
 from osgeo import gdal, osr
 
