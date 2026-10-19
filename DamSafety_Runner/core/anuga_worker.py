@@ -22,11 +22,18 @@ optional:
   mesh_points, mesh_triangles, mesh_boundary   ready-made mesh (ANUGA_MESHER=gmsh):
                   model-CRS nodes, CCW triangles, [triangle, edge] outer edges;
                   used with anuga.Domain instead of create_domain_from_regions
+  elev_fine_file, elev_fine_x0, elev_fine_y0, elev_fine_dx   (3.10.26) a .npy float32
+                  grid next to the job file (row 0 = top, NaN = no data) of the finest
+                  terrain: the elevation is sampled from it at the triangle vertices
+                  (sample_fine); the model DEM fills its gaps. Without it the elevation
+                  is the model DEM at the centroids, as before.
 
 result.npz: depth, velocity, arrival_hr, wse (NaN = dry / outside), plus
 stats as a JSON string. Progress goes to stdout as lines starting "PROGRESS".
 """
+import inspect
 import json
+import os
 import sys
 import time
 
@@ -45,6 +52,50 @@ def bilinear(dem, x0, y0, dx, x, y):
     v = (a[r0, c0] * (1 - tc) * (1 - tr) + a[r0, c0 + 1] * tc * (1 - tr)
          + a[r0 + 1, c0] * (1 - tc) * tr + a[r0 + 1, c0 + 1] * tc * tr)
     return v
+
+
+def sample_fine(arr, x0, y0, dx, x, y, chunk=1000000):
+    """Bilinear samples of a (possibly memory-mapped) grid at model-CRS points (x0 / y0 =
+    left / top edge). NaN where the point is off the grid or all four cells are no data;
+    where only some are, the valid ones are blended. Read in chunks, so a memory-mapped
+    grid of any size is touched only at the cells needed."""
+    x = np.asarray(x, float).ravel()
+    y = np.asarray(y, float).ravel()
+    ny, nx = arr.shape
+    out = np.full(x.shape, np.nan)
+    for i in range(0, len(x), chunk):
+        xs, ys = x[i:i + chunk], y[i:i + chunk]
+        fc = (xs - x0) / dx - 0.5
+        fr = (y0 - ys) / dx - 0.5
+        inside = (fc > -1.0) & (fr > -1.0) & (fc < nx) & (fr < ny)
+        c0 = np.clip(np.floor(fc).astype(np.int64), 0, max(nx - 2, 0))
+        r0 = np.clip(np.floor(fr).astype(np.int64), 0, max(ny - 2, 0))
+        c1 = np.minimum(c0 + 1, nx - 1)
+        r1 = np.minimum(r0 + 1, ny - 1)
+        tc = np.clip(fc - c0, 0.0, 1.0)
+        tr = np.clip(fr - r0, 0.0, 1.0)
+        acc = np.zeros(len(xs))
+        wsum = np.zeros(len(xs))
+        for rr, cc, w in ((r0, c0, (1 - tc) * (1 - tr)), (r0, c1, tc * (1 - tr)),
+                          (r1, c0, (1 - tc) * tr), (r1, c1, tc * tr)):
+            v = np.asarray(arr[rr, cc], float)
+            ok = np.isfinite(v)
+            acc[ok] += v[ok] * w[ok]
+            wsum[ok] += w[ok]
+        good = inside & (wsum > 1e-9)
+        res = np.full(len(xs), np.nan)
+        res[good] = acc[good] / wsum[good]
+        out[i:i + chunk] = res
+    return out
+
+
+def accepts_keyword(fn, name):
+    """True when `fn` names `name` among its parameters (ANUGA 3.x's
+    create_domain_from_regions has mesh_filename; ANUGA 4 does not)."""
+    try:
+        return name in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def fill_nan(a):
@@ -88,12 +139,11 @@ def main(job_path, out_path):
     kw = dict(boundary_tags={"outflow": list(range(nb))},
               maximum_triangle_area=s("coarse_area"), interior_regions=regions,
               mesh_geo_reference=georef, use_cache=False, verbose=False)
+    if accepts_keyword(anuga.create_domain_from_regions, "mesh_filename"):
+        kw["mesh_filename"] = job_path.replace(".npz", ".msh")   # ANUGA 3.x writes the mesh
+
     def make_domain(extra):
-        try:   # ANUGA 3.x writes the mesh to a file
-            return anuga.create_domain_from_regions(
-                boundary.tolist(), mesh_filename=job_path.replace(".npz", ".msh"), **dict(kw, **extra))
-        except TypeError:
-            return anuga.create_domain_from_regions(boundary.tolist(), **dict(kw, **extra))
+        return anuga.create_domain_from_regions(boundary.tolist(), **dict(kw, **extra))
 
     breaklines_used = False
     if "mesh_points" in job and job["mesh_points"].size:
@@ -131,8 +181,35 @@ def main(job_path, out_path):
                 setter(threads)
     domain.set_minimum_storable_height(0.001)
 
-    domain.set_quantity("elevation", lambda x, y: bilinear(dem, lx0, ly0, dx, x, y),
-                        location="centroids")
+    elev_stats = {"mode": "model_grid", "cell_m": dx}
+    if "elev_fine_file" in job:
+        # 3.10.26: the elevation at the triangle VERTICES from the finest terrain. ANUGA
+        # makes the edge values the mean of their two vertices and the centroid the mean of
+        # three, so a crown on an embedded mesh line keeps its height on that edge and
+        # weighs 2/3 in both triangles beside it (an area mean would spread it over the
+        # triangle, and the old 40 m model grid had averaged it away before that).
+        fpath = os.path.join(os.path.dirname(os.path.abspath(job_path)), str(job["elev_fine_file"]))
+        farr = np.load(fpath, mmap_mode="r")
+        fx0, fy0, fdx = s("elev_fine_x0"), s("elev_fine_y0"), s("elev_fine_dx")
+        count = {"vertices": 0, "fallback": 0}
+
+        def elevation(x, y):
+            x = np.asarray(x, float)
+            y = np.asarray(y, float)
+            v = sample_fine(farr, fx0, fy0, fdx, x.ravel() + x_ref, y.ravel() + y_ref)
+            bad = ~np.isfinite(v)
+            if bad.any():                              # no fine data: the model DEM
+                v[bad] = bilinear(dem, lx0, ly0, dx, x.ravel()[bad], y.ravel()[bad])
+            count["vertices"] += int(v.size)
+            count["fallback"] += int(bad.sum())
+            return v.reshape(x.shape)
+        domain.set_quantity("elevation", elevation, location="vertices")
+        elev_stats = {"mode": "fine", "cell_m": fdx, "sampled_at": "vertices",
+                      "vertex_samples": count["vertices"],
+                      "model_grid_fallback_samples": count["fallback"]}
+    else:
+        domain.set_quantity("elevation", lambda x, y: bilinear(dem, lx0, ly0, dx, x, y),
+                            location="centroids")
     if "manning" in job and job["manning"].size:
         man = fill_nan(job["manning"].astype(float))
         domain.set_quantity("friction", lambda x, y: bilinear(man, lx0, ly0, dx, x, y),
@@ -142,8 +219,14 @@ def main(job_path, out_path):
     init = None
     if "init_depth" in job and job["init_depth"].size:
         init = np.where(np.isfinite(job["init_depth"]), job["init_depth"], 0.0).astype(float)
-        domain.set_quantity("stage", lambda x, y: bilinear(dem, lx0, ly0, dx, x, y)
-                            + bilinear(init, lx0, ly0, dx, x, y), location="centroids")
+        if elev_stats["mode"] == "fine":      # the depth on top of the mesh's own bed
+            cxy = domain.centroid_coordinates
+            zc = domain.quantities["elevation"].centroid_values
+            domain.set_quantity("stage", zc + bilinear(init, lx0, ly0, dx, cxy[:, 0], cxy[:, 1]),
+                                location="centroids")
+        else:
+            domain.set_quantity("stage", lambda x, y: bilinear(dem, lx0, ly0, dx, x, y)
+                                + bilinear(init, lx0, ly0, dx, x, y), location="centroids")
     else:
         domain.set_quantity("stage", expression="elevation", location="centroids")
     h0 = domain.quantities["stage"].centroid_values - domain.quantities["elevation"].centroid_values
@@ -267,7 +350,7 @@ def main(job_path, out_path):
              "initial_volume_m3": vol_initial, "breaklines_used": breaklines_used,
              "culverts": len(culverts) - len(culvert_errors), "culvert_errors": culvert_errors,
              "injected_m3": injected, "anuga_version": getattr(anuga, "__version__", "?"),
-             "algorithm": str(job["algorithm"])}
+             "algorithm": str(job["algorithm"]), "elevation": elev_stats}
     np.savez_compressed(out_path, depth=depth, velocity=vel, arrival_hr=arr, wse=wse,
                         stats=json.dumps(stats))
     print("PROGRESS 100 done", flush=True)

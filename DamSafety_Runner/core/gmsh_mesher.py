@@ -335,6 +335,48 @@ def _split_at_near_nodes(nodes, edges, kinds, snap_m, rounds=4):
     return edges, kinds
 
 
+def _threshold(d, smin, dmin, dmax, hmax):
+    """gmsh's Threshold field (linear between DistMin and DistMax)."""
+    if d <= dmin:
+        return smin
+    if d >= dmax:
+        return hmax
+    return smin + (hmax - smin) * (d - dmin) / max(dmax - dmin, 1e-9)
+
+
+def short_edge_counts(nodes, edges, kinds, pts, g, hmin, hch, hpt, hmax):
+    """{edge index: number of pieces} for embedded edges shorter than 3 x the local mesh
+    size. gmsh would cut such an edge into floor(L / h) + 1 pieces (L = 1.01 h gives two
+    of 0.5 h); round(L / h) keeps every piece at 0.75 h or more. The local size is the
+    size field (build_mesh's Threshold fields) at the edge's midpoint. Longer edges are left
+    to gmsh: floor(L / h) + 1 pieces of L >= 3 h are at least 0.75 h long."""
+    if not len(edges):
+        return {}
+    a, b = nodes[edges[:, 0]], nodes[edges[:, 1]]
+    is_line = np.array([kd == "line" for kd in kinds], bool)
+    pts = np.asarray(pts, float).reshape(-1, 2)
+    out = {}
+    for k in range(len(edges)):
+        L = float(np.hypot(*(b[k] - a[k])))
+        if L <= 0:
+            continue
+        m = 0.5 * (a[k] + b[k])
+        h = hmax
+        if is_line.any():
+            d = 0.0 if is_line[k] else _dist_to_segments(m, a[is_line], b[is_line])
+            h = min(h, _threshold(d, hmin, g["line_dist_min_m"], g["line_dist_max_m"], hmax))
+        if (~is_line).any():
+            d = 0.0 if not is_line[k] else _dist_to_segments(m, a[~is_line], b[~is_line])
+            h = min(h, _threshold(d, hch, g["channel_dist_min_m"], g["channel_dist_max_m"], hmax))
+        if len(pts):
+            d = float(np.min(np.hypot(*(pts - m).T)))
+            h = min(h, _threshold(d, hpt, g["point_dist_min_m"], g["point_dist_max_m"], hmax))
+        h = max(h, min(hmin, hpt))                   # Mesh.MeshSizeMin
+        if L < 3.0 * h:
+            out[k] = max(1, int(round(L / h)))
+    return out
+
+
 def _dist_to_ring(p, ring):
     r = np.asarray(ring, float)
     a, b = r, np.roll(r, -1, axis=0)
@@ -437,13 +479,22 @@ def build_mesh(spec):
         surf = geo.addPlaneSurface([geo.addCurveLoop(bl)])
         used = sorted(set(edges.ravel().tolist())) if len(edges) else []
         gp = {n: geo.addPoint(float(nodes[n][0]), float(nodes[n][1]), 0.0) for n in used}
-        line_c, chan_c = [], []
+        line_c, chan_c, curve_of = [], [], []
         for (a, b), kd in zip(edges, kinds):
-            (line_c if kd == "line" else chan_c).append(geo.addLine(gp[a], gp[b]))
+            curve_of.append(geo.addLine(gp[a], gp[b]))
+            (line_c if kd == "line" else chan_c).append(curve_of[-1])
         free = []
         for p in pts_in:      # a point on or near an embedded line would stop gmsh
             if not len(edges) or _dist_to_segments(p, nodes[edges[:, 0]], nodes[edges[:, 1]]) > hmin / 2.0:
                 free.append(geo.addPoint(float(p[0]), float(p[1]), 0.0))
+        # 3.10.26: gmsh cuts an embedded curve of length L into floor(L / h) + 1 pieces, so an
+        # edge just longer than the local size h (an embankment piece's last segment, a piece
+        # between a crossing and a vertex) became two pieces of ~h / 2 and the triangles there
+        # fell below the gate (DWR-4441: a 20.0 m end segment at h = 19.8 m, 44 m2 < 45 m2).
+        # Short edges get a fixed node count instead: round(L / h) pieces, never under 0.75 h.
+        short = short_edge_counts(nodes, edges, kinds, pts_in, g, hmin, hch, hpt, hmax)
+        for k, n_seg in short.items():
+            geo.mesh.setTransfiniteCurve(curve_of[k], n_seg + 1)
         geo.synchronize()
         if line_c or chan_c:
             gmsh.model.mesh.embed(1, line_c + chan_c, 2, surf)
@@ -499,7 +550,8 @@ def build_mesh(spec):
     mesh_s = time.time() - t0
     return finish(np.asarray(tags, np.int64), np.asarray(xyz).reshape(-1, 3)[:, :2] + origin,
                   tri_nodes,
-                  g, mesh_s, n_lines=len(line_c), n_channel=len(chan_c), n_points=len(ptags))
+                  g, mesh_s, n_lines=len(line_c), n_channel=len(chan_c), n_points=len(ptags),
+                  short_edges_fixed=len(short))
 
 
 def finish(tags, xy, tri_nodes, g, mesh_s=0.0, **extra):
