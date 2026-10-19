@@ -173,3 +173,118 @@ it is a separate, explicitly-scoped task.
 
 All five rounds, the GUI review, and the GUI port are complete and pushed. The deferred
 ledger (§7) is the remaining backlog and is yours to prioritise.
+
+---
+
+## 9. Follow-up (post-merge) — 2026-10-19
+
+The §7 deferred ledger has since been **cleared**, grok's `origin/main` was merged in, and
+three further fixes landed. Current branch HEADs: DWR `claude/funny-goldberg-dg1x2s` (merged),
+nd_hazard same.
+
+**§7 deferred items — now done:**
+
+- **M5 built-in engine** — ported nd's numpy local-inertial engine into the Runner, but
+  **strictly opt-in** (`'builtin'` keyword or the `NDBREACH_USE_BUILTIN` provider flag; the
+  default still errors, so the approximation is never silently substituted for LISFLOOD-FP),
+  **labeled on every surface** (report / summary / docx / manifest / log / rasters-tier), with
+  the near-dam FV1 refine skipped-and-flagged and the limiter clip-volume surfaced. Three
+  adversarial safety reviewers all required this form; a real-LISFLOOD-FP numeric parity run
+  remains an **off-sandbox release gate** (see §10 P0).
+- **Perf** — `read_results` now parses `.mass` once (was 3×); `move_xy` reads the breach-point
+  GeoPackage once per UI move (both repos).
+- **3DEP** — `fetch_3dep` hardened: bounded transport retry, pre-write TIFF-signature + size
+  validation, atomic `.part`+`os.replace` (no junk tile on a bad/short answer).
+- **test_popup** — fixed a real missing `home_action` in `DamSafety_Screening/plugin.py` and
+  synced the stale menu/suite-home assertions; file green end-to-end.
+- **Stale signing tests** — `test_nd_hazard.py` / `test_nd_hazard_adapter.py` brought in line
+  with the one-signing-engineer model (verified against the code, not masking drift).
+
+**Merged `origin/main` (grok's DamSafety updates):** +95 commits / 151 files (Runner 3.10.21,
+Screening 0.17.25, Hazard 2.18.37, shared `ui_widgets`/`ui_fit`, the Setup wizard, the HEC-RAS
+2D rework, reservoir-carve, gmsh mesh). 141 files auto-merged; 10 conflicts resolved
+(grok's #77 `gpkg_write`, #78 county boxes and the `hecras_model` rework supersede the matching
+campaign fixes, whose intent they preserve; the M5 labeling + perf fixes were combined in). An
+audit of grok's new code (ui_widgets, reservoir-carve, gmsh gate, HEC-RAS engine, Setup wizard,
+gpkg_write/handoff), refute-by-default, found **no correctness issues**.
+
+**Three further fixes:**
+
+- **Velocity peak sampled every step** in `builtin_lisflood.py` (was every 5th; it feeds the
+  velocity-driven High zone of the ACER TM-11 chart — a silent low bias). Both repos.
+- **Canonical `damsuite` master + drift gate** — `shared/damsuite/` is now the single source of
+  truth; `tools/sync_damsuite.py` writes the vendored copies and regenerates `FILES.json`, and
+  `--check` (with `tools/test_sync_damsuite.py`) fails the build on any drift. Ends the
+  hand-regeneration of `FILES.json`. (DamSafety_Setup's trimmed mini-`damsuite` is intentionally
+  excluded.)
+- **Golden-baseline regression** for the deterministic built-in engine
+  (`tests/test_golden_baseline.py` + `tests/data/golden/builtin_engine.json`, regen via
+  `tools/regen_golden_builtin.py`) — freezes the regulatory-facing flood scalars so a
+  coefficient / units / sign change can no longer pass the qualitative-only tests.
+
+---
+
+## 10. Roadmap — 33 recommendations (six-dimension review of the merged suite)
+
+Prioritised P0 (do first) → P3; effort S/M/L/XL. Items already done above are marked **✅**.
+The encouraging finding: the suite already carries strong defensibility *machinery*
+(`sensitivity.py`, `probabilistic.py`, `verification.py`, `benchmark.py`, `provenance.py`,
+signed/hashed ACER TM-11 charts) — most of the top work is **binding and gating** those pieces
+into the deliverable, plus validating the engines against a real binary.
+
+### Safety & regulatory defensibility
+| Pri | Eff | Recommendation |
+|---|---|---|
+| P0 | L | **Documented model-acceptance gate** against a pinned real patched LISFLOOD-FP build (+ its SHA): run the analytic suite, a built-in-vs-LISFLOOD-FP parity case and a real HEC-RAS benchmark with numeric thresholds, captured as a signed Validation Record. The engines (esp. the M5 built-in) have **never** been run against the reference. |
+| P0 | M | **One signed, hash-bound Classification Record** binding hazard class ⊕ engine+binary SHA ⊕ input hashes ⊕ chart/rate-table signer ⊕ manifest digest, with a `verify` that refuses on any mismatch / stale input / built-in-engine. Pieces exist but are separate artifacts. |
+| P1 | S | **✅ Fix peak-velocity under-sampling** in the built-in engine (done above). |
+| P1 | M | **Propagate the screening-grade flag** (+ mass-error / clip-volume) onto the `Classification` itself — today log-only, so the deliverable carries no trace an unvalidated engine produced it. |
+| P1 | M | **Harden ACER TM-11 digitization**: independent human check (shipped charts have digitizer == signer, `checked_by` blank), archived raw source + reproducible trace script, verification against the original Reclamation (1988) figures, and a digitization-sensitivity flag on borderline structures. |
+
+### Correctness & robustness (grok's new engines)
+| Pri | Eff | Recommendation |
+|---|---|---|
+| P1 | M | **HEC-RAS domain truncation**: the 2D area has one "DS Normal Depth" outflow arc; every other perimeter cell is a closed wall. Compute and surface a boundary-wetting metric so wall-ponding / silent extent truncation is detected. |
+| P1 | M | **HEC-RAS run.log gating**: parse RasUnsteady volume accounting + max-cell WS error and reject on them, not just on the "Finished Unsteady Flow Simulation" string. |
+| P1 | M | **End-to-end golden test for the new engines** against a real HEC-RAS HDF (the Muncie example is already manually proven). |
+| P2 | M | **HEC-RAS normal-depth outflow**: validate and record the placement + energy slope (currently a single hard-clamped scalar). |
+| P2 | S | **gmsh mesher**: add an area-coverage / watertightness check to the quality gate (today only min-angle / min-area). |
+| P2 | M | **reservoir-carve**: require a dam-line wall or lake clip before an unbounded carve; gate on carve quality. |
+
+### Architecture & maintainability
+| Pri | Eff | Recommendation |
+|---|---|---|
+| P0 | M | **✅ Canonical `damsuite` master + sync tool + drift gate** (done above). |
+| P0 | L | **Converge the DWR ↔ nd_ forks, starting with the safety core** — `chain.py` (model→class fingerprint), `solvegate.py` (pre-solve gate), `versions.py` differ, so a dam classified under one fork isn't comparable to the other. Pick one product + a thin branding skin, or extract `damsuite` to its own pinned-tag repo both vendor from. |
+| P1 | S | **Wire `damsuite.selfcheck()` into plugin startup / the Setup health dock** — it has no non-test caller today. |
+| P1 | M | **Make the Screening→Runner handoff contract Runner-owned and runtime-checked** (today `handoff.py` mirrors the Runner's param/enum assumptions by hand → silent drift, e.g. a 20 m screen re-running at 10 m). |
+| P1 | M | **CI as the merge gate** on py3.12 (drift-check + handoff-contract + version consistency). |
+| P2 | S | **Eliminate the second `damsuite` flavor in Setup**; single-source the version table. |
+
+### Testing & CI
+| Pri | Eff | Recommendation |
+|---|---|---|
+| P0 | M | **CI pipeline** running every plugin's fast suite on each PR (no CI exists today). |
+| P0 | M | **✅ Golden-baseline regression for flood numbers** (done above for the engine; extend to derived class/LoL next). |
+| P1 | L | **Periodic real-engine parity job** (built-in vs patched LISFLOOD-FP, + ANUGA/HEC-RAS) — scheduled, not per-PR. |
+| P1 | S | **Pin numpy/scipy/QGIS/GDAL** and make the scipy gate fail loudly (today it silently disables the Runner suite under numpy 2.5.3). |
+| P1 | M | **Unify the package import name** (`nd_breach_runner` vs the `DamSafety_Runner` dir) and wire the built-in engine into the automated fast suite. |
+| P2 | L | **Headless QGIS-container job** for the real-Qt shells and the real GDAL self-test. |
+
+### UX & GUI
+| Pri | Eff | Recommendation |
+|---|---|---|
+| P0 | M | **Wire the shared `CheckPanel` into Runner & Screening pre-flight** — it exists in `ui_widgets.py` but only Hazard uses it; the two tools that launch multi-hour runs still gate with one-shot modal warnings. |
+| P1 | M | **Show (and let the user choose) the actual engine + output units** on the Runner/Screening workspace (now that there are 4 engines incl. the HEC-RAS tier and the built-in). |
+| P1 | M | **Converge the forked `ui_fit.py`** and extend window/state persistence to every dialog. |
+| P1 | M | **Make the Setup wizard / health reflect the 4-engine reality** (report the built-in as always-available screening-only; the real runtime constraints). |
+| P2 | M | **Give Screening a shared "which-step-am-I" strip** (`StageStrip`) and align error surfacing across the suite. |
+
+### Features
+| Pri | Eff | Recommendation |
+|---|---|---|
+| P0 | L | **Observed-event / reference calibration loop** — compose `benchmark.py` + `sensitivity.py` into a workflow that demonstrates the model reproduces a known event (the strongest defensibility argument a submittal can carry). |
+| P0 | M | **Crash-safe portfolio batch** — append per-dam results + a resumable queue + a portfolio roll-up ("which dams are High / which moved"); today the summary is all-or-nothing. |
+| P1 | S | **Stamp input-data vintage** (NSI / 911 / AADT versions) onto the face of every LoL / EAP / hazard output. |
+| P1 | L | **Finish HEC-RAS 2D to production** — chain self-test, headless TCU, golden regression, batch tier (it self-labels "preliminary"). |
+| P2 | M | **Promote the uncertainty envelope** (`probabilistic.py` / `sensitivity.py` P10/P50/P90) to a first-class, EAP-ready output. |
