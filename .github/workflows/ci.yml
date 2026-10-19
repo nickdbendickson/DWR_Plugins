@@ -63,6 +63,6 @@ jobs:
           fail=0
           for t in DamSafety_Hazard/tests/test_*.py; do
             echo "== $t =="
-            python "$t" || fail=1
+            python "$t" || { rc=$?; echo "::error::$t exited $rc"; fail=1; }
           done
           exit $fail
