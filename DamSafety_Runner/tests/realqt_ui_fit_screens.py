@@ -175,3 +175,8 @@ if __name__ == "__main__":
             n += 1
             print("ok", _name)
     print("{}: all {} checks passed".format(os.path.basename(__file__), n))
+    # All checks ran and passed (a failure raises before here). This builds a real QgsApplication,
+    # whose offscreen teardown at interpreter shutdown can return non-zero (e.g. "does not support
+    # propagateSizeHints()") and fail the parent's returncode check. Exit 0 explicitly first.
+    sys.stdout.flush()
+    os._exit(0)
