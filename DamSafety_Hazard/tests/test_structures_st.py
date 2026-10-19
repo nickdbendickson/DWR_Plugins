@@ -103,6 +103,30 @@ def test_st1_collapse_zeros_persons_again():
     assert len(kept) == 1 and kept[0]["persons"] == 3
 
 
+def test_h4_evaluate_structures_no_address_collapse():
+    """H4: evaluate_structures must NOT collapse habitable buildings by street
+    address. Three distinct habitable buildings >30 ft apart sharing one 911
+    address (mobile-home park / apartment complex / multi-home farmstead -
+    routine in rural ND) must all keep their persons so TM-11 lives-in-jeopardy
+    counts all three. The sibling ND_Dam_Hazard_Helper removed this call at
+    2.16.0 (same-building duplicates are already merged spatially by
+    build_inventory). The collapse_dwellings() definition is kept for
+    compatibility / direct callers; it is simply no longer invoked here.
+    """
+    import re
+    src = open(os.path.join(HAZARD, "structures.py"), encoding="utf-8").read()
+    m = re.search(r"\ndef evaluate_structures\b", src)
+    assert m, "evaluate_structures not found"
+    nxt = re.search(r"\ndef ", src[m.start() + 1:])
+    body = src[m.start():m.start() + 1 + nxt.start()] if nxt else src[m.start():]
+    calls = [ln for ln in body.splitlines() if ln.strip().startswith("collapse_dwellings(")]
+    assert not calls, "evaluate_structures still collapses dwellings: {}".format(calls)
+    assert ("H4" in body) or ("not applied (audit)" in body), "H4 audit note missing"
+    # definition kept for compatibility and direct callers (pipeline, tests)
+    assert re.search(r"\ndef collapse_dwellings\b", src), "collapse_dwellings def removed"
+    assert callable(ST.collapse_dwellings)
+
+
 def test_st7_addr_not_street_is_documented():
     # source-level: _ADDR_NOT_STREET still lists addr_id / address_id, and describe
     # only sets address from street_idx / key_idx (regression lock)
@@ -115,7 +139,9 @@ def test_st7_addr_not_street_is_documented():
 def main():
     tests = [test_st6_bool_coercion, test_st8_normalize_in_duplicate,
              test_st1_consequences_and_access_skip_extras, test_st3_camp_not_collapsed_by_footprint,
-             test_st1_collapse_zeros_persons_again, test_st7_addr_not_street_is_documented]
+             test_st1_collapse_zeros_persons_again,
+             test_h4_evaluate_structures_no_address_collapse,
+             test_st7_addr_not_street_is_documented]
     failed = 0
     for fn in tests:
         try:

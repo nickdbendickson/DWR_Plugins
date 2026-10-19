@@ -5,15 +5,15 @@ import os
 import time
 
 from qgis.core import (
-    Qgis, QgsApplication, QgsFeedback, QgsMapLayerType, QgsMessageLog, QgsProject,
+    QgsApplication, QgsFeedback, QgsMessageLog, QgsProject,
     QgsProviderRegistry, QgsTask, QgsVectorLayer,
 )
 from qgis.PyQt.QtCore import QTimer, QUrl
 from qgis.PyQt.QtGui import QDesktopServices, QIcon
-from qgis.PyQt.QtWidgets import QAction
 
 from . import core
 from .http_qgis import QgisHttp, gdal_merger
+from .qtcompat import MSG_INFO, MSG_WARNING, TASK_CAN_CANCEL, VECTOR_LAYER, QAction
 from .settings import Settings
 from .settings_dialog import SettingsDialog
 from .sources import SOURCE_INFO, build_sources
@@ -24,13 +24,13 @@ GROUP_NAME = "North Dakota data"
 PLUGIN_DIR = os.path.dirname(__file__)
 
 
-def log(message, level=Qgis.Info):
+def log(message, level=MSG_INFO):
     QgsMessageLog.logMessage(message, LOG_TAG, level)
 
 
 class UpdateTask(QgsTask):
     def __init__(self, make_updater, force, only, on_done):
-        super().__init__("Updating North Dakota data", QgsTask.CanCancel)
+        super().__init__("Updating North Dakota data", TASK_CAN_CANCEL)
         self.qgs_feedback = QgsFeedback()
         self.updater = make_updater(QgisHttp(self.qgs_feedback))
         self.force = force
@@ -151,7 +151,7 @@ class NdDataUpdaterPlugin:
         if notice and notice not in self._noticed:
             if notice not in self._logged:
                 self._logged.add(notice)
-                log(notice, Qgis.Warning if how != "legacy" else Qgis.Info)
+                log(notice, MSG_WARNING if how != "legacy" else MSG_INFO)
             if not quiet:
                 self._noticed.add(notice)
                 try:
@@ -204,7 +204,7 @@ class NdDataUpdaterPlugin:
         quiet = self.task_quiet
         bar = self.iface.messageBar()
         if task.error is not None:
-            log(f"Update failed: {task.error}", Qgis.Warning)
+            log(f"Update failed: {task.error}", MSG_WARNING)
             if not quiet or not isinstance(task.error, core.UpdateError):
                 bar.pushWarning(LOG_TAG, f"Update check failed: {task.error}")
             self._refresh_dialog()
@@ -276,7 +276,7 @@ class NdDataUpdaterPlugin:
                         continue
                     layer = QgsVectorLayer(uri, f"{source.name}: {name}", provider)
                     if not layer.isValid():
-                        log(f"Could not open {uri}", Qgis.Warning)
+                        log(f"Could not open {uri}", MSG_WARNING)
                         continue
                     group = root.findGroup(GROUP_NAME) or root.insertGroup(0, GROUP_NAME)
                     project.addMapLayer(layer, False)
@@ -304,7 +304,7 @@ class NdDataUpdaterPlugin:
         if path.lower().endswith((".gdb", ".gdb" + os.sep, ".gpkg")):
             found = []
             for details in QgsProviderRegistry.instance().querySublayers(path):
-                if details.type() == QgsMapLayerType.VectorLayer:
+                if details.type() == VECTOR_LAYER:
                     found.append((details.uri(), details.name() or base,
                                   details.providerKey()))
             if name_filter:
@@ -313,7 +313,7 @@ class NdDataUpdaterPlugin:
                 if wanted:
                     return wanted
                 log(f"No layer matching {', '.join(name_filter)} in {path}; adding all layers",
-                    Qgis.Warning)
+                    MSG_WARNING)
             if found:
                 return found
         return [(path, base, "ogr")]

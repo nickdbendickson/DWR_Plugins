@@ -1,6 +1,13 @@
 # Changelog
 
 ## 2026-10-19
+- **Claude's audit-fix campaign (#94, with the review follow-ups; Runner 3.10.32, Hazard 2.18.39, Screening 0.17.28, Data 1.4.2, Setup 1.0.11, damsuite 1.17.3).** See `docs/Fix_campaign_report.md`. Default-changing items:
+  - **Hazard 2.18.39:** **M3** NSI-only homes are not counted as habitable without a parcel (can lower the hazard class); **H4** `collapse_dwellings` removed (PAR can go up); **H5** `transformguard` patches QGIS coordinate transforms for the whole QGIS session.
+  - **Runner 3.10.32:** **M6** top of dam from the 98th percentile within 30 m, not the maximum (lower, less conservative); **M5** built-in flood engine, opt-in only (off by default, not validated against LISFLOOD-FP).
+  - **Screening 0.17.28:** **M18** a new cap limits the crest to the spillway level; **H11** downstream side judged along the dam with terrain over the waterbody vote (can flip the breach direction on long dams).
+  - **Data 1.4.2:** H14 Qt6 fixes, M21-M23, L3, P1; no default changes.
+  - **Setup 1.0.11:** M24 status panel, M4 pack_convert; no default changes.
+  - Repo: `shared/damsuite` master copy with `tools/sync_damsuite.py --check`, `tools/ci_checks.py` and `.github/workflows/ci.yml`.
 - **Runner 3.10.31: ANUGA mesh and bed fixes from the gmsh embankment-line benchmark.**
   - ANUGA's bed now comes from the DEM source at its own cell size, set at the triangle vertices. Before, it was the 40 m model grid at the centroids. You can switch back with `ANUGA_ELEVATION=model_grid`, and `run_report["anuga_elevation_source"]` records which bed was used. With embankment lines, the share of crown height kept went from 13–21 % to 56–63 % (centroids) and 81–82 % (edges).
   - A gmsh embedded edge just longer than the mesh size is no longer cut in two, so DWR-4441 passes the gate. The gate itself is unchanged.

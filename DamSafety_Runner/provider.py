@@ -4,7 +4,8 @@ import os
 from qgis.core import QgsProcessingProvider
 from qgis.PyQt.QtGui import QIcon
 
-from .algorithms import ALGORITHMS as ORIGINAL_ALGORITHMS, PROVIDER_ID, SET_ANUGA, SET_LISFLOOD, SET_THREADS
+from .algorithms import (ALGORITHMS as ORIGINAL_ALGORITHMS, PROVIDER_ID, SET_ANUGA, SET_BUILTIN,
+                         SET_LISFLOOD, SET_THREADS)
 from .core import nd_data
 from . import popup_logic as pl
 from . import suite_settings_tools as ST
@@ -52,6 +53,11 @@ class Provider(QgsProcessingProvider):
             ProcessingConfig.addSetting(Setting(
                 self.name(), SET_THREADS, "Threads for the models (0 = all cores)", 0,
                 valuetype=Setting.INT))
+            ProcessingConfig.addSetting(Setting(
+                self.name(), SET_BUILTIN, "Use the built-in screening engine when no "
+                "LISFLOOD-FP is set (a numpy local-inertial approximation, NOT LISFLOOD-FP; "
+                "off by default so a run errors rather than silently using the approximation)",
+                False, valuetype=Setting.BOOL))
             ProcessingConfig.readSettings()
         except Exception:   # settings are optional; parameters can carry the paths
             pass
@@ -61,7 +67,7 @@ class Provider(QgsProcessingProvider):
     def unload(self):
         try:
             from processing.core.ProcessingConfig import ProcessingConfig
-            for k in (SET_LISFLOOD, SET_ANUGA, SET_THREADS):
+            for k in (SET_LISFLOOD, SET_ANUGA, SET_THREADS, SET_BUILTIN):
                 ProcessingConfig.removeSetting(k)
         except Exception:
             pass

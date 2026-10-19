@@ -104,6 +104,14 @@ HAZUS_OCCUPANCY = {
     "GOV2": "Emergency response", "EDU1": "Grade school", "EDU2": "College / university",
 }
 _FEMA_FIELDS = ("occ_cls", "prim_occ")        # FEMA USA Structures occupancy
+# v2.20.1: FEMA USA Structures copies the PARCEL's occupancy and address to
+# every building on the parcel (a detached garage on a house lot reads
+# "Residential / Single Family Dwelling", every barn and grain bin of a farm
+# carries the farm's address). PROP_ADDR / PROP_ZIP are kept to group the
+# buildings of one parcel (and shown for reference); they are never read as
+# evidence that a building is habitable. The occupancy texts of a FEMA layer
+# are already dropped by the _parcel family filter in _interpret.
+_FEMA_PARCEL_ADDR = ("prop_addr", "prop_zip")
 
 
 def hazus_label(occtype):
@@ -364,6 +372,10 @@ class _SourceReader(object):
         self.nsi = {k: low.index(k) for k in _NSI_FIELDS if k in low}
         self.place_idx = low.index("place_type") if "place_type" in low else None
         self.fema_idx = [low.index(n) for n in _FEMA_FIELDS if n in low]
+        # v2.20.1: a FEMA USA Structures layer - occupancy and address are the parcel's
+        self.fema_parcel = bool(self.fema_idx)
+        self.parcel_idx = [low.index(n) for n in _FEMA_PARCEL_ADDR if n in low] \
+            if self.fema_parcel else []
         self.placement_idx = low.index("placement") if "placement" in low else None
         # v2.9: the NENA Site_NGUID of an ND GIS Hub address point
         self.nguid_idx = low.index("site_nguid") if "site_nguid" in low else None
@@ -388,7 +400,7 @@ class _SourceReader(object):
         attrs = feat.attributes()
         rec = {"family": self.family, "texts": [], "address": False, "nsi": None,
                "addr_key": None, "unit": "", "placement": None, "place_kind": None,
-               "nena": self.nena, "place_type": "", "fema": ""}
+               "nena": self.nena, "place_type": "", "fema": "", "fema_parcel": self.fema_parcel}
         if self.nguid_idx is not None:
             rec["nguid"] = _text(attrs[self.nguid_idx])
         if self.fema_idx:
@@ -414,11 +426,17 @@ class _SourceReader(object):
                     v, " [{}]".format(phrase) if phrase and phrase != v.lower() else ""))
         if self.placement_idx is not None:
             rec["placement"] = _text(attrs[self.placement_idx]).lower() or None
+        if self.parcel_idx and _text(attrs[self.parcel_idx[0]]):
+            # v2.20.1: the parcel's address (groups the buildings of one parcel)
+            rec["parcel"] = re.sub(r"\s+", " ", " | ".join(
+                _text(attrs[i]) for i in self.parcel_idx).upper()).strip(" |")
         # ST.7: addr_id / address_id alone (_ADDR_NOT_STREET) is not a street address
         # for habitability - only street_idx / NENA key fields count
+        # v2.20.1: FEMA PROP_ADDR is the parcel's address, not this building's - it
+        # is shown (addr_text) but is no evidence of a dwelling (fema_parcel)
         street_parts = [p for p in (_text(attrs[i]) for i in self.street_idx) if p]
         key_parts = [p for p in (_text(attrs[i]) for i in self.key_idx) if p]
-        if street_parts or key_parts:
+        if (street_parts or key_parts) and not self.fema_parcel:
             rec["address"] = True
             # NENA: number + street (+ unit) identify the address; other
             # sources (OSM addr:*, FEMA PROP_ADDR) only say "has an address"
@@ -716,6 +734,76 @@ def _outline_takes_points(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2):
     return area is None or area >= min_area_ft2
 
 
+# v2.20.1: a structure without an outline (NSI / address point) belongs to the
+# parcel of the nearest outline within this distance
+SITE_JOIN_FT = 150.0
+
+
+def _has_own_911(rec, merge_dist):
+    """An ND GIS Hub address point sits on this structure: inside its
+    outline, moved onto it from at most STRUCTURE_MERGE_DIST_FT, or (no
+    outline) merged with its point."""
+    for s in rec["sources"]:
+        if s.get("family") == "NDGISHUB" and s.get("nena") and s.get("address"):
+            d = s.get("snapped")
+            if d is None or d <= merge_dist:
+                return True
+    return False
+
+
+def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist):
+    """v2.20.1: parcel / site evidence for _interpret.
+
+    FEMA USA Structures gives every building of a parcel the parcel's address
+    (PROP_ADDR), so the outlines that share it are one site (a farmstead, a
+    house lot). When an ND GIS Hub (911) address point sits on one of them,
+    that building is the site's addressed structure and the others are its
+    outbuildings: rec["site_anchor"] = {"parcel", "ids"} on the others.
+    Structures without an outline join the parcel of the nearest outline
+    within join_dist. rec["lone_address"]: a structure made only of 911
+    address points with no outline within lone_dist (field access, vacant
+    lot, tower or utility site) - only when outlines were loaded at all."""
+    members = {}
+    for r in structs:
+        r.pop("site_anchor", None)
+        r.pop("lone_address", None)
+        if r["footprint"]:
+            for s in r["sources"]:
+                if s.get("parcel"):
+                    members.setdefault(s["parcel"], {})[r["id"]] = r
+    if not any(r["footprint"] for r in structs):
+        return
+    rings = max(1, int(math.ceil(max(join_dist, lone_dist) / grid.cell)))
+    for r in structs:
+        if r["footprint"]:
+            continue
+        p = r["point"]
+        pgeom = QgsGeometry.fromPointXY(p)
+        best, best_d = None, None
+        for cand in grid.near(p.x(), p.y(), rings=rings):
+            if not cand.get("footprint"):
+                continue
+            try:
+                d = cand["geom"].distance(pgeom)
+            except Exception:
+                continue
+            if d is not None and d >= 0 and (best_d is None or d < best_d):
+                best, best_d = cand, d
+        if r["families"] == {"NDGISHUB"} and (best_d is None or best_d > lone_dist):
+            r["lone_address"] = True
+        if best is not None and best_d <= join_dist:
+            for s in best["sources"]:
+                if s.get("parcel"):
+                    members.setdefault(s["parcel"], {})[r["id"]] = r
+    for k, recs in members.items():
+        anchors = sorted(i for i, r in recs.items() if _has_own_911(r, merge_dist))
+        if not anchors:
+            continue
+        for i, r in recs.items():
+            if i not in anchors and "site_anchor" not in r:
+                r["site_anchor"] = {"parcel": k.split(" | ")[0], "ids": anchors}
+
+
 class InventoryRejected(Exception):
     """Structure layers were supplied and none of them fell in the study area.
 
@@ -968,6 +1056,9 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
         structs.append(rec)
         pgrid.insert_point(rec, pt.x(), pt.y())
     problems.summary()
+    # v2.20.1: parcel / site evidence (farmstead outbuildings, lone 911 points)
+    _mark_parcel_sites(structs, grid, merge_dist, _ft_units(SITE_JOIN_FT, analysis_crs, lat),
+                       _ft_units(snap_ft, analysis_crs, lat))
     rules = dict(mobile_rules or {})
     for rec in structs:
         _interpret(rec, **rules)
@@ -991,7 +1082,21 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
                     sum(1 for r in structs if r["habitable"] == "No"), snapped, outside,
                     " ({})".format(clip.describe()) if clip is not None else ""))
     _log_mobile_rules(structs)
+    _log_site_rules(structs)
     return structs
+
+
+def _log_site_rules(structs):
+    """v2.20.1: what the parcel / site and lone-address rules changed."""
+    unv = sum(1 for r in structs if r.get("site_note") and not r.get("lone_address")
+              and r["category"] == CAT_UNVERIFIED)
+    out = sum(1 for r in structs if r.get("site_note") and r["category"] == CAT_NOT_HABITABLE)
+    lone = sum(1 for r in structs if r.get("site_note") and r.get("lone_address"))
+    if unv or out or lone:
+        log_message("Structure inventory: on parcels whose 911 address point is on another "
+                    "building, {} building(s) only NSI calls residential are unverified and {} "
+                    "that no source calls habitable are outbuildings (not habitable); {} 911 "
+                    "address point(s) with no building are unverified".format(unv, out, lone))
 
 
 def _log_mobile_rules(structs):
@@ -1089,11 +1194,14 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     dwelling / unverified outline. rec["mobile_park"] (mark_mobile_parks)
     is used whenever it is set."""
     nsi_recs = [s["nsi"] for s in rec["sources"] if s.get("nsi")]
-    # FEMA USA Structures occupancy and street address belong to the parcel and
-    # are copied onto every building on it. They are shown, not used to decide
-    # habitability (a garage on a house lot is not a second house).
-    _parcel = {"FEMA_STRUCTURES", "USA_STRUCTURES", "FEMA"}
-    texts = " ; ".join(t for s in rec["sources"] if s.get("family") not in _parcel
+    # FEMA USA Structures occupancy and street address belong to the PARCEL and are
+    # copied onto every building on it. They are shown, not used to decide habitability
+    # (a garage on a house lot is not a second house). Suppress by the per-source
+    # fema_parcel flag (describe() sets it from the FEMA parcel fields), NOT by family
+    # name: an OSM/other outline loaded in the FEMA_STRUCTURES slot is fema_parcel=False
+    # and must keep its own building=house / addr evidence, else a real dwelling that is
+    # a parcel sibling of a 911 anchor is wrongly demoted to Not habitable (M3 fix).
+    texts = " ; ".join(t for s in rec["sources"] if not s.get("fema_parcel")
                        for t in s["texts"])
     norm = _norm_text(texts)
     mobile_basis, category, lifeline, occ_codes = [], None, False, []
@@ -1133,6 +1241,7 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
                 lifeline = True
         elif occ.startswith("AGR"):
             category = category or CAT_UNVERIFIED
+    nsi_category = category
 
     if KW_MOBILE.search(norm):
         mobile_basis.append("attributes: {}".format(KW_MOBILE.search(norm).group(0)))
@@ -1145,7 +1254,7 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     kw_occupied = bool(KW_OCCUPIED.search(norm_hab))
     kw_nonhab = bool(KW_NONHAB.search(norm))
     has_address = any(s.get("address") for s in rec["sources"]
-                      if s.get("family") not in _parcel)
+                      if not s.get("fema_parcel"))
     place_kinds = {s.get("place_kind") for s in rec["sources"]}
     if _PT_MOBILE in place_kinds and not mobile_basis:
         mobile_basis.append("address Place_Type")
@@ -1168,22 +1277,53 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     elif category == CAT_UNVERIFIED and (kw_dwelling or kw_occupied):
         category = CAT_DWELLING if kw_dwelling else CAT_OCCUPIED
 
-    # v2.5.1: a structure with an ND GIS Hub site address is habitable - the
-    # address is the evidence. Place_Type values that would otherwise read as
-    # vacant / not habitable are kept in a note (and listed for review).
     # (only an ND GIS Hub address point that carries an address - not any
     # layer that happens to have a NENA-like field such as ST_NAME)
     nd_srcs = [s for s in rec["sources"] if s.get("nena") and s.get("address")
                and s.get("family") == "NDGISHUB"]
     nd_addr = bool(nd_srcs)
-    addr_note = ""
-    has_outline = bool(rec.get("footprint")) or any(
-        s.get("family") == "NSI" for s in rec["sources"])
-    if nd_addr and not has_outline and not kw_dwelling and _PT_OCCUPIED not in place_kinds:
-        # a 911 point in a field, on a tower or a utility site is not a dwelling
+
+    # v2.20.1: site evidence (_mark_parcel_sites). On a parcel whose 911 address
+    # point is on another building, a building that only NSI calls
+    # residential is unverified (NSI 2026 gives the parcel's RES record to
+    # machine sheds and barns of farmsteads, while the farmhouse is often
+    # AGR1), and one that nothing calls habitable (only the FEMA parcel record
+    # or NSI AGR) is not habitable. Manufactured-home evidence and FEMA multi-
+    # family / manufactured-home parcels keep the earlier reading.
+    site_note = ""
+    site = rec.get("site_anchor")
+    fema_txt = " ".join(s.get("fema") or "" for s in rec["sources"]).lower()
+    if site and not nd_addr and not mobile_basis and rec.get("mobile_park") is None \
+            and "multi" not in fema_txt and "manufactured" not in fema_txt:
+        where = "the 911 address of its parcel ({}) is on structure {}".format(
+            site["parcel"], ", ".join(str(i) for i in site["ids"][:3])
+            + (" ..." if len(site["ids"]) > 3 else ""))
+        if category == CAT_DWELLING and nsi_category == CAT_DWELLING and not kw_dwelling:
+            category = CAT_UNVERIFIED
+            site_note = "NSI lists it as residential ({}), but {} - probably an outbuilding; " \
+                "verify".format(", ".join(sorted({c for c in occ_codes if c.startswith("RES")})),
+                                where)
+        elif category == CAT_UNVERIFIED and nsi_category in (None, CAT_UNVERIFIED) \
+                and not (kw_dwelling or kw_occupied or has_address):
+            category = CAT_NOT_HABITABLE
+            site_note = "outbuilding: no source says it is habitable and {}".format(where)
+    # v2.20.1: 911 address points with no building - no outline within the
+    # address snap distance and no NSI structure merged with them (a field
+    # access, vacant lot, tower or utility site) - are unverified, unless
+    # their Place_Type says what is there
+    lone = bool(rec.get("lone_address")) and not (
+        place_kinds & {_PT_DWELLING, _PT_MOBILE, _PT_OCCUPIED})
+    if lone:
         category = CAT_UNVERIFIED
-        addr_note = "ND site address with no building outline or NSI structure - unverified"
-    elif nd_addr and category not in (CAT_DWELLING, CAT_OCCUPIED):
+        site_note = "911 address point with no building outline within {:.0f} ft and no NSI " \
+            "structure - field access, vacant lot, tower or utility site? verify".format(
+                ADDRESS_SNAP_FT)
+
+    # v2.5.1: a structure with an ND GIS Hub site address is habitable - the
+    # address is the evidence. Place_Type values that would otherwise read as
+    # vacant / not habitable are kept in a note (and listed for review).
+    addr_note = ""
+    if nd_addr and not lone and category not in (CAT_DWELLING, CAT_OCCUPIED):
         odd = sorted({s.get("place_type") or "" for s in nd_srcs
                       if s.get("place_kind") in (_PT_NONHAB, _PT_UNVERIFIED)} - {""})
         was = category
@@ -1321,6 +1461,7 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
         "mobile_occupied": bool(mobile_occupied),
         "nd_address": bool(nd_addr and camp is None),
         "address_note": addr_note if camp is None else "",
+        "site_note": site_note if camp is None else "",
         "fema_category": fema_category,
         "type_conflict": conflict,
         "lifeline": lifeline,
@@ -2087,7 +2228,14 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             problems.log("structure {}: {}".format(rec["id"], e))
     for rec in structs:
         apply_type(rec, one_d, near_ft, borderline_higher)
-    collapse_dwellings(structs)
+    # H4 / 2.16.0: the per-address dwelling collapse is not applied (audit). The
+    # collapse_dwellings() step zeroed the persons of every further habitable
+    # building sharing one 911/street address (apartment buildings, mobile-home
+    # parks and multi-home farmsteads - routine in rural ND), under-counting
+    # TM-11 lives-in-jeopardy and PAR/loss-of-life. Same-building duplicates are
+    # already merged spatially by build_inventory (STRUCTURE_MERGE_DIST_FT), so
+    # the address collapse is both unnecessary and unsafe. Definition kept for
+    # compatibility and direct callers; it is simply no longer invoked here.
     tick(100, "Structures evaluated")
     problems.summary()
     return structs

@@ -5,9 +5,14 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.38
+version=2.18.39
 author=N.D. Bendickson
 changelog=
+    2.18.39 - 2026-10-19 (PR #94, Claude's audit-fix campaign)
+      * M3 (default changes): homes that come only from the National Structure Inventory (NSI) are no longer counted as habitable unless a parcel (fema_parcel) supports them; this can lower a dam's hazard class.
+      * H4 (default changes): collapse_dwellings removed, so buildings sharing one 911 / street address each keep their occupants (mobile-home parks, apartments, farmsteads); PAR can go up.
+      * H5: damsuite/transformguard.py is installed at plugin load and patches QGIS coordinate transforms for the whole QGIS session (worker-thread layers from parallel_map kept their CRS invalid on 3.34, so roads / rail / lifelines emptied out).
+      * M1, M2, M4, M14: incomplete-flag surfacing, Classify busy-guard and the other fixes in docs/Fix_campaign_report.md.
     2.18.38 - 2026-10-19
       * Flagged structures (damsuite/structure_flags.py, docs/Flagged_structures.md): a dam
         of the suite's list (DWR-3161 / ND00597, the ND-23 road fill over backwater, hazard

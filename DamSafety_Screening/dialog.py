@@ -1799,7 +1799,7 @@ class NDDamScreeningDialog(QDialog):
                 sim = os.path.join(work, "7_sim")
                 n = len([fn for fn in os.listdir(sim) if fn.endswith("_depth.tif")]) if os.path.isdir(sim) else 0
                 extra += "; depth rasters written: {}".format(n)
-            self.simple_note[cur].setText((note if False else self.simple_note[cur].text() + " | " + extra).strip(" |"))
+            self.simple_note[cur].setText((self.simple_note[cur].text() + " | " + extra).strip(" |"))
         hint = getattr(self, "next_hint", None)
         line = getattr(self, "status_line", None)
         by = {k: state for k, _t, state, _n in rows}
@@ -2221,7 +2221,7 @@ class NDDamScreeningDialog(QDialog):
         lay = QVBoxLayout(dlg)
         lay.addWidget(QLabel("Check the dams to screen. The county chain runs for these dams only."))
         lst = QListWidget()
-        lst.setSelectionMode(QListWidget.MultiSelection)
+        lst.setSelectionMode(getattr(QListWidget, 'SelectionMode', QListWidget).MultiSelection)
         for did, lab in choices:
             item = QListWidgetItem(lab)
             item.setData(getattr(Qt, "ItemDataRole", Qt).UserRole, did)
@@ -2457,8 +2457,8 @@ class NDDamScreeningDialog(QDialog):
                     self._log("!!! {} could not be read as a layer".format(p))
             except Exception as e:                               # noqa
                 self._log("!!! {}: {}".format(p, e))
+        self._fill_layers()     # before the summary: _fill_layers can log a work-folder-layout
         self._log("Added {} result layer(s) to the project{}".format(added, " in one group" if group is not None else ""))
-        self._fill_layers()
         return added
 
 

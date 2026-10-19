@@ -362,7 +362,10 @@ class RunBreachSim(QgsProcessingAlgorithm):
                                               [SRC_POINT]))
         P(QgsProcessingParameterFile("DEMDIR", "Folder of cached dam DEMs (tool 2)",
                                      behavior=FILE_FOLDER))
-        P(QgsProcessingParameterEnum("TSRC", "Terrain for larger clips", TERRAIN, defaultValue=0))
+        # H3 (2026-10-18): default USGS 3DEP, not "Cached clips only" (index 0). With cache only a
+        # flood that reaches the edge of the step-2 clip stops there and the run looks finished, so
+        # the dam is under-classified; cache-only is now a deliberate choice, not the default.
+        P(QgsProcessingParameterEnum("TSRC", "Terrain for larger clips", TERRAIN, defaultValue=1))
         P(QgsProcessingParameterFile("LOCAL", "Local DEM folder (if selected above)",
                                      behavior=FILE_FOLDER, optional=True))
         P(QgsProcessingParameterEnum("ENGINE", "Flood engine", ENGINES, defaultValue=0))

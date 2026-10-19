@@ -87,6 +87,115 @@ def _iso_to_ts(value):
         return None
 
 
+# --------------------------------------------------------------------------- the lock file
+
+
+def _win_pid_alive(pid):
+    """Is `pid` running, on Windows, without touching it.
+
+    os.kill(pid, 0) must NOT be used on Windows: Python maps every signal other than
+    CTRL_C_EVENT / CTRL_BREAK_EVENT to TerminateProcess, so "signal 0" would END the process in
+    the lock file (the other QGIS mid-build). Ask the kernel through OpenProcess instead:
+    ERROR_INVALID_PARAMETER (87) means no such pid (dead); ERROR_ACCESS_DENIED (5) means it
+    exists but we may not query it (alive); otherwise read the exit code, where 259
+    (STILL_ACTIVE) means running."""
+    import ctypes
+    from ctypes import wintypes
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    ERROR_INVALID_PARAMETER = 87
+    k32 = ctypes.windll.kernel32
+    handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return k32.GetLastError() != ERROR_INVALID_PARAMETER   # access-denied etc. -> exists
+    try:
+        code = wintypes.DWORD()
+        if k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return code.value == STILL_ACTIVE
+        return True                        # could not read it, but the handle opened: it exists
+    finally:
+        k32.CloseHandle(handle)
+
+
+def pid_alive(pid):
+    """Is the process that wrote the lock still running?
+
+    On Linux and macOS signal 0 asks the kernel without touching the process. A PermissionError
+    means the pid belongs to somebody else's process and therefore exists, so it counts as
+    alive: clearing a lock on a guess is worse than asking the user to wait. On Windows
+    os.kill(pid, 0) would kill that process, so a kernel query is used instead."""
+    try:
+        pid = int(pid)
+    except (ValueError, TypeError):
+        return False
+    if os.name == "nt":
+        try:
+            return _win_pid_alive(pid)
+        except Exception:
+            return True                    # cannot tell on Windows: treat as alive, never kill
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, ValueError, TypeError):
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def read_lock(path):
+    """{"pid", "age", "text"} of a lock file, or {} when there is none.
+
+    `pid` is None for a lock written by an older version (it held no pid) or one that cannot be
+    read; `age` is its age in seconds."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read(200).strip()
+        age = max(0.0, time.time() - os.path.getmtime(path))
+    except OSError:
+        return {}
+    first = text.split()[0] if text else ""
+    try:
+        pid = int(first)
+    except ValueError:
+        pid = None
+    return {"pid": pid, "age": age, "text": text}
+
+
+def lock_decision(info, stale_seconds=LOCK_STALE_SECONDS, alive=pid_alive, own_pid=None):
+    """("free" | "clear" | "refuse", why) for a lock file read by read_lock().
+
+    "clear" means the lock is left over from a run that no longer exists (QGIS was killed, the
+    machine was restarted) and can be removed: that is the fix for "every later run refuses to
+    start". "refuse" is kept for a lock whose process really is still working, where removing it
+    would let two builds write the same pack."""
+    if not info:
+        return "free", ""
+    pid = info.get("pid")
+    age = float(info.get("age") or 0.0)
+    me = os.getpid() if own_pid is None else own_pid
+    if pid is not None and pid == me:
+        # M23 fix: a lock whose pid is THIS process is stale only once it is older than the stale
+        # window. A fresh same-pid lock is a live concurrent update - a reloaded plugin or a
+        # sibling updater sharing the QGIS process and data folder - and must be refused, not
+        # stolen; stealing it let two updates race and clobber the staging folder.
+        if age > stale_seconds:
+            return "clear", (f"it was left behind by this process (pid {pid}) "
+                             f"{age / 3600.0:.1f} hours ago")
+        return "refuse", "another update is already running in this process"
+    if pid is None:
+        if age > stale_seconds:
+            return "clear", f"it records no process and is {age / 3600.0:.1f} hours old"
+        return "refuse", "another update is already running"
+    if not alive(pid):
+        return "clear", f"the process that made it (pid {pid}) is no longer running"
+    if age > stale_seconds:
+        return "clear", (f"pid {pid} is still running but the lock is {age / 3600.0:.1f} hours "
+                         "old, longer than an update can take")
+    return "refuse", f"another update is already running (process {pid})"
+
+
 def file_hash(path, algorithm="md5"):
     h = hashlib.new(algorithm)
     with open(path, "rb") as f:
@@ -450,13 +559,24 @@ class Updater:
 
     # locking --------------------------------------------------------------
 
-    def _acquire_lock(self):
+    def _acquire_lock(self, feedback=None):
+        """Return the lock path when the lock is ours, or None when another run holds it.
+
+        A lock left behind by a process that is no longer running (QGIS was killed mid-update,
+        the machine restarted) is cleared and said so once, instead of refusing every later run
+        for up to six hours. A lock whose process really is still working is kept, so two runs
+        never write the same data folder."""
         path = os.path.join(self.data_dir, LOCK_NAME)
-        try:
-            if time.time() - os.path.getmtime(path) > LOCK_STALE_SECONDS:
+        what, why = lock_decision(read_lock(path))
+        if what == "clear":
+            try:
                 os.remove(path)
-        except OSError:
-            pass
+            except OSError:
+                pass
+            if feedback:
+                feedback.log(f"Cleared the left-over lock file {path}: {why}")
+        elif what == "refuse":
+            return None
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
@@ -474,9 +594,12 @@ class Updater:
         """
         feedback = feedback or Feedback()
         os.makedirs(self.data_dir, exist_ok=True)
-        lock = self._acquire_lock()
+        lock = self._acquire_lock(feedback)
         if lock is None:
-            raise UpdateError("Another update is already running for this data folder")
+            raise UpdateError(
+                "Another update is already running for this data folder. Wait for it to "
+                f"finish, or delete {os.path.join(self.data_dir, LOCK_NAME)} if you are sure "
+                "nothing is running.")
         try:
             shutil.rmtree(os.path.join(self.data_dir, STAGING_NAME), ignore_errors=True)
             sources = [s for s in self.sources if only is None or s.id in only]
@@ -584,11 +707,17 @@ class OvertureSource(Source):
 
     ND_BBOX = "-104.05,45.94,-96.55,49.00"  # west,south,east,north
 
-    def __init__(self, id, name, folder, description=""):
+    def __init__(self, id, name, folder, description="", check_interval_hours=24 * 30):
         self.id = id
         self.name = name
         self.folder = folder
         self.description = description
+        # Overture publishes a new release about once a month; without a check interval the
+        # whole bounding box was re-downloaded on every run. Skip a re-download until the
+        # interval passes (overridable; force=True ignores it).
+        self.min_check_interval_hours = check_interval_hours
+        # Output filenames so "Add North Dakota Layers to Project" can find the layer.
+        self.layer_globs = ("overture_buildings.gpkg", "overture_buildings.geojson")
 
     def remote_version(self, http, feedback):
         # Overture releases are dated; use a fixed check interval instead of a remote version.
@@ -664,7 +793,7 @@ class ArcGISFeatureSource(Source):
     """
 
     def __init__(self, id, name, url, folder, where="1=1", out_fields="*",
-                 description="", layer_name=None):
+                 description="", layer_name=None, check_interval_hours=24):
         self.id = id
         self.name = name
         self.url = url.rstrip("/")
@@ -673,10 +802,40 @@ class ArcGISFeatureSource(Source):
         self.out_fields = out_fields
         self.description = description
         self.layer_name = layer_name or folder
+        # Without a check interval the whole FeatureServer was paged and downloaded on every
+        # run. Check at most this often (default daily; overridable; force=True ignores it).
+        self.min_check_interval_hours = check_interval_hours
+        # Output filenames so "Add North Dakota Layers to Project" can find the layer.
+        self.layer_globs = (f"{self.layer_name}.gpkg", f"{self.layer_name}.ndjson")
 
     def remote_version(self, http, feedback):
-        # FeatureServer data changes; use a simple daily check via count or last edit if available.
-        return None
+        """A cheap change signal so an unchanged FeatureServer is skipped instead of paged and
+        re-downloaded in full: the layer's last-edit timestamp and/or feature count (one HEAD-like
+        metadata read plus a returnCountOnly query). Returns None when neither can be read, in
+        which case fetch() downloads and records the feature count as the version. A real network
+        failure propagates so the source is reported offline and the local copy is kept."""
+        def _probe(url, params):
+            try:
+                data = http.get_json(url, params)
+            except NetworkError:
+                raise
+            except Exception:
+                return None
+            return data if isinstance(data, dict) else None
+
+        parts = []
+        meta = _probe(self.url, {"f": "json"})
+        if meta:
+            editing = meta.get("editingInfo")
+            if isinstance(editing, dict):
+                last_edit = editing.get("lastEditDate") or editing.get("dataLastEditDate")
+                if last_edit is not None:
+                    parts.append(f"edit:{last_edit}")
+        cnt = _probe(self.url + "/query",
+                     {"where": self.where, "returnCountOnly": "true", "f": "json"})
+        if cnt is not None and isinstance(cnt.get("count"), int):
+            parts.append(f"count:{cnt['count']}")
+        return "arcgis:" + "|".join(parts) if parts else None
 
     def fetch(self, http, staging_dir, feedback, remote_version):
         import json
@@ -705,6 +864,13 @@ class ArcGISFeatureSource(Source):
         }
         offset = 0
         total = 0
+        pages = 0
+        prev_ids = None
+        # Guard against a FeatureServer that ignores resultOffset while it keeps setting
+        # exceededTransferLimit: it would hand back the same page forever and grow the NDJSON
+        # without bound. 10,000 pages is far above any North Dakota layer (the largest is
+        # ~440k points) yet still caps a runaway loop.
+        max_pages = 10000
         with open(out_ndjson, "w", encoding="utf-8") as fh:
             while True:
                 feedback.check_cancelled()
@@ -719,13 +885,29 @@ class ArcGISFeatureSource(Source):
                 exceeded = data.get("exceededTransferLimit")
                 if n == 0:
                     break
+                # A server that ignores resultOffset returns the previous page unchanged; stop
+                # before writing the same features a second time (feature ids are stable when
+                # the layer has an OBJECTID, which these queries request).
+                page_ids = tuple(f.get("id") for f in feats)
+                if (prev_ids is not None and page_ids == prev_ids
+                        and all(i is not None for i in page_ids)):
+                    raise UpdateError(
+                        f"{self.name}: the FeatureServer ignored resultOffset and returned the "
+                        f"same {n} features again at offset {offset}; aborting so the download "
+                        "does not loop and grow without bound")
+                prev_ids = page_ids
                 for feat in feats:
                     fh.write(json.dumps(feat) + "\n")
                 total += n
                 offset += n
+                pages += 1
                 feedback.log(f"{self.name}: {total} features")
                 if arcgis_page_done(n, page, exceeded):
                     break
+                if pages >= max_pages:
+                    raise UpdateError(
+                        f"{self.name}: stopped after {max_pages} pages ({total} features) to "
+                        "avoid an unbounded download; the FeatureServer may be ignoring paging")
                 time.sleep(0.2)
 
         if total == 0:
@@ -757,4 +939,6 @@ class ArcGISFeatureSource(Source):
                     f"Source: {self.url}\nFeatures: {total}\n"
                 )
 
-        return f"arcgis-{total}"
+        # Reuse the cheap version signal from remote_version() so a later run that reads the
+        # same signal detects "current" without paging the whole service again.
+        return remote_version or f"arcgis-{total}"

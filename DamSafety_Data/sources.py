@@ -5,10 +5,12 @@ from .core import GitHubRepoSource, HttpFileSource, NsiApiSource, OvertureSource
 MICROSOFT_URL = ("https://minedbuildings.z5.web.core.windows.net/legacy/"
                  "usbuildings-v2/NorthDakota.geojson.zip")
 GEOFABRIK_URL = "https://download.geofabrik.de/north-america/us/north-dakota-latest-free.gpkg.zip"
-# NSI generator pinned to one reviewed commit (main as of 2026-10-14, committed 2026-09-15) and
-# the SHA-256 of GitHub's zip of that commit. To move to a newer commit, review it and update both.
-NSI_GENERATOR_COMMIT = "87f768783302e51852e38bb622ebd35fe17eee59"
-NSI_GENERATOR_ZIP_SHA256 = "26eedf5bad62b0f47438f58ce12e2689fc2070ca29cdea58e9f7a9d32bdd0098"
+# NSI generator source code is pinned to one reviewed commit instead of following `main`
+# (a branch can be force-pushed under us). To move to a newer commit, review it and update this.
+# NSI_GENERATOR_ZIP_SHA256 is left None: GitHub may recompress archive zips, so the hash is logged
+# on every fetch (visible if it changes) but not enforced; set it to enforce a byte-for-byte match.
+NSI_GENERATOR_COMMIT = "87f768783302e51852e38bb622ebd35fe17eee59"   # USACE-NSI/nsi-generator main @ 2026-10-14
+NSI_GENERATOR_ZIP_SHA256 = None
 # Overture Maps buildings (conflated OSM + Microsoft + others, with height)
 # Downloaded via overturemaps CLI or S3; ND bbox: -104.05,45.94,-96.55,49.00
 OVERTURE_NOTE = "Overture buildings (ND bbox) via overturemaps download --type=building"

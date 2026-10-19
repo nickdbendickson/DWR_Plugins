@@ -706,7 +706,7 @@ def check_lisflood_exe(exe, workdir):
                    "ND Dam Breach Runner, or build it with scripts/install_macos.sh)")
     if not os.path.isfile(exe):
         raise RuntimeError("the LISFLOOD-FP path does not exist: {}".format(exe))
-    if not os.access(exe, os.X_OK):
+    if not lisflood.is_builtin(exe) and not os.access(exe, os.X_OK):
         raise RuntimeError("the LISFLOOD-FP file is not executable: {}".format(exe))
     r = lisflood.check_lisflood(exe, os.path.join(workdir, "lisflood_check"))
     if not r["ok"]:
