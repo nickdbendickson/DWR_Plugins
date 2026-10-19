@@ -29,7 +29,18 @@ MASTER = os.path.join(ROOT, "shared", "damsuite")
 
 # plugins that vendor the FULL shared package (not DamSafety_Setup, which vendors a mini-subset)
 FULL_COPY_PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening")
+# a full-copy plugin carries every master module EXCEPT these (modules it has no use for);
+# a new master module with no exclusion propagates to every full copy.
+EXCLUDE = {
+    "DamSafety_Runner": {"pack_convert.py"},
+    "DamSafety_Screening": {"pack_convert.py"},
+}
 FILES_NAME = "FILES.json"
+
+
+def _expected(plugin, master_py):
+    """The .py set a full-copy plugin should vendor: the master minus its exclusions."""
+    return sorted(set(master_py) - EXCLUDE.get(plugin, set()))
 
 
 def _sha(path):
@@ -69,10 +80,16 @@ def check(root=ROOT):
         if not os.path.isdir(folder):
             problems.append("{}: no damsuite/".format(plugin))
             continue
-        for name in _vendored_py(folder):
-            if name not in master_py:
-                problems.append("{}/damsuite/{} is not in the master".format(plugin, name))
-                continue
+        expected = set(_expected(plugin, master_py))
+        have = set(_vendored_py(folder))
+        for name in sorted(expected - have):
+            problems.append("{}/damsuite/{} is missing (in the master, not vendored)".format(
+                plugin, name))
+        for name in sorted(have - expected):
+            why = "excluded for this plugin" if name in EXCLUDE.get(plugin, set()) \
+                else "not in the master"
+            problems.append("{}/damsuite/{} should not be vendored ({})".format(plugin, name, why))
+        for name in sorted(expected & have):
             if _sha(os.path.join(folder, name)) != _sha(os.path.join(MASTER, name)):
                 problems.append("{}/damsuite/{} differs from the master".format(plugin, name))
         mpath = os.path.join(folder, FILES_NAME)
@@ -91,24 +108,25 @@ def sync(root=ROOT):
     """Copy the master into each full-copy plugin (preserving that plugin's file set) and rewrite
     FILES.json. Returns the list of changes made."""
     changes = []
+    master_py = set(_vendored_py(MASTER))
     for plugin in FULL_COPY_PLUGINS:
         folder = os.path.join(root, plugin, "damsuite")
         if not os.path.isdir(folder):
             continue
-        for name in _vendored_py(folder):
+        for name in _expected(plugin, master_py):
             src = os.path.join(MASTER, name)
-            if not os.path.isfile(src):
-                raise SystemExit("{}/damsuite/{} has no master; add it to shared/damsuite or "
-                                 "remove it".format(plugin, name))
             with open(src, "rb") as f:
                 want = f.read()
             dst = os.path.join(folder, name)
-            with open(dst, "rb") as f:
-                have = f.read()
+            have = None
+            if os.path.isfile(dst):
+                with open(dst, "rb") as f:
+                    have = f.read()
             if want != have:
                 with open(dst, "wb") as f:
                     f.write(want)
-                changes.append("updated {}/damsuite/{}".format(plugin, name))
+                changes.append("{} {}/damsuite/{}".format(
+                    "added" if have is None else "updated", plugin, name))
         mpath = os.path.join(folder, FILES_NAME)
         want_m = _manifest_text(folder)
         have_m = ""
