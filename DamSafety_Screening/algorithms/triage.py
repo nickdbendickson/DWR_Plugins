@@ -233,7 +233,10 @@ class Triage(QgsProcessingAlgorithm):
             result, reason, reach, hits, tif = "needs 2D", "", None, 0, None
             nf, nf_why = cm.no_flood(f, dams.fields().names())
             ex, ex_why = cm.excluded(f, dams.fields().names())
+            flag_e, flag_why = cm.flagged(f, dams.fields().names())
             try:
+                if flag_e:                      # 0.17.26: a flagged structure -> cleared, with the note
+                    raise _NoFlood(flag_why)
                 if ex:                      # 0.13: excluded by the reviewer -> cleared, with the reason
                     raise _NoFlood(ex_why)
                 if nf:                      # tool 16: nothing above the natural ground -> nothing floods
@@ -338,7 +341,7 @@ class Triage(QgsProcessingAlgorithm):
             except Exception as e:  # keep the batch going
                 reason = "not screened: " + er.plain(e, dam_id, "6")
             aud = "no"
-            if result == "clear" and not nf and rnd.random() < audit:
+            if result == "clear" and not nf and not flag_e and rnd.random() < audit:
                 aud = "yes"; stats["audit"] += 1
             stats[result] += 1
             for k, v in (("tri_result", result), ("tri_reason", reason), ("tri_reach_m", reach),
