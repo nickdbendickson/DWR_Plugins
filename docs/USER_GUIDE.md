@@ -1,6 +1,6 @@
-# DamSafety plugins: user guide (changes through 2026-10-15)
+# DamSafety plugins: user guide (changes through 2026-10-19)
 
-This guide covers the behaviour added in PRs #9-#21, #23 and #27. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
+This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84 and #93. Open PRs #92 and #96 are described under "Pending review". The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
 
 ## Standard work-folder layout (#18)
 The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker all create the same empty folders:
@@ -19,6 +19,8 @@ The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker 
 - **DEM resampling onto the model grid** (`DEM_RESAMPLE`): "Automatic" uses the `NDBREACH_DEM_RESAMPLE` environment variable, or **average** if that isn't set. An explicit setting wins over the environment variable. The method used is written to `run_manifest.json`.
 - **QA maps** (`QA_MAPS`, "QA maps written into the dam folder"): "Off", "Inflow map only", or "Inflow map and depth map" (the default). On the command line, use `qa_maps: off | inflow | inflow+depth`. Check `qa_inflow_map.png` after every run to see where the inflow point landed relative to the dam.
 - **Inflow point (#14):** the lowest qualifying cell within the usual radius. The QA inflow map shows the point, the search radius and the inflow elevation against the top of dam.
+- **Inflow side check (#84, Runner 3.10.18+):** the inflow point is always picked on the downstream side of the dam. Check `inflow_point.side_check` in `run_report.json`. If the trace from the inflow runs back over the dam point, or the inflow is behind the dam or on the upstream side of the crest, the first warning reads **"CHECK THE DAM POINT"**. Fix the dam point or give the dam line before trusting the run.
+- **Road-fill warning (#84):** if a road from the receptor road layer is within 30 m of the dam point and no DWR dam line (`DAM_LINES`) was given, the Runner warns that the embankment in the DEM may be the road's fill (`dam_point_checks` in `run_report.json`).
 
 ## Settings saves (#12)
 Several windows can share one settings file safely. A window that opens without changing anything doesn't rewrite the file. If a save reports that the file can't be read, fix or restore it from `<name>.bak` (or use "Save as" to replace it on purpose) instead of deleting it. A leftover `<name>.lock` from a crashed QGIS clears itself after 30 s.
@@ -90,8 +92,27 @@ Labels below are from main (checked at 18ae1f5). These are advanced Runner param
 - ANUGA conda env auto-detect now works on Windows (`<env>\python.exe`).
 - Known gap: the vendored `damsuite/` copies weren't changed.
 
+## Flagged structures (#93; Runner 3.10.23, Hazard 2.18.38, Screening 0.17.26)
+Some records in the dam inventory aren't dams to breach. The plugins carry a short, version-controlled list of them in `damsuite/structure_flags.py`; see `docs/Flagged_structures.md` for the evidence. The first entry is **DWR-3161 / ND00597 (Sanish Bay WPA Dam 1)**: the ND-23 road fill over backwater from Lake Sakakawea (Sanish Bay), hazard **Low (DWR record)**, breach analysis not applicable. Lookups accept `DWR-3161`, `3161`, `ND00597` and `NID-ND00597`.
+- **Screening:** tool 1 adds `struct_cls` and `flag_note`. Tools 5, 6, 7 and 12 skip the breach (`flagged`), 7b never sends the dam to the Runner, and tool 8 sets `hz_class` = Low with `hz_conf` = `flagged`. Screening has no override.
+- **Runner:** single-dam, sensitivity, nested and probabilistic breach runs stop with the reason. Batch runs skip the dam with Status `flagged` and add two columns at the end of `Batch_Breach_Runs.csv`: `Structure_Flag` and `Hazard_Of_Record`.
+- **Hazard:** classifying the dam stops with the reason, written to the run log.
+- **Dam suite home:** shows class Low, next action "none" and the flag text. An older class (such as the 10-18 re-baseline's High) is labelled as not used.
+- **To run it anyway, for information only:** tick the advanced **"Run a flagged structure anyway"** (`ALLOW_FLAGGED_STRUCTURE`), use `ndbreach_cli.py run --allow-flagged-structure`, or set the environment variable **`ALLOW_FLAGGED_STRUCTURE=1`**. The log and run report then start with "FLAGGED STRUCTURE (run allowed …)", and the hazard of record stays Low.
+- Nothing writes the list. To add or change an entry, open a PR.
+
+## HEC-RAS TIER 2 inflow (#76)
+- `NDBREACH_HECRAS_INFLOW_MODE` = `auto` (default), `hydrograph` or `breach`. `auto` uses the inflow hydrograph when there's a usable inflow point (the run's, or one walked downstream), and otherwise builds a breach model at the dam. The site checks still stop a breach model that doesn't fit the site; `ALLOW_BAD_SITE=1` overrides them.
+- An inflow point on the wrong side of the dam isn't used. `auto` stops with a "likely dam-point / downstream-side problem" error instead of switching to a breach model.
+- The report, polygons and EAP preview come from the HEC-RAS rasters. The LISFLOOD-FP figures are kept in a "Screening pass (LISFLOOD-FP)" section.
+
+## Pending review (not on main yet)
+- **Run-report metrics and water-body mask (#92, Runner 3.10.22).** Adds flooded area at ≥0.1, ≥1 and ≥2 ft, P95/P99 velocity, the max-velocity cell's depth and location, and velocity at receptors. **The mask is opt-in:** set the advanced `WATER_MASK` parameter or the `NDBREACH_WATERBODY_MASK` environment variable to a polygon file. For ND, use `/home/box/DamSafety/Data/3DHP/3DHP_ND_waterbodies.gpkg` (USGS 3DHP; NHD-sourced, 2023) or a polygon you draw. The mask only adds `*_masked` figures; the unmasked figures and the rasters don't change. Near Lake Sakakawea, check the masked area before using it, because the whole lake is one polygon.
+- **HEC-RAS timeouts on the wall clock (#96, Runner 3.10.24).** VM pauses now count against `NDBREACH_HECRAS_TIMEOUT_S`. On a timeout, look for `[ndbreach] TIMEOUT` in `linux_run/run.log`, `linux_run/timeout.json` and `hecras_timeout` in `run_report.json`. Partial results are kept as `<name>.p01.partial.hdf` and are never used as results. `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s) sets the wait between SIGTERM and SIGKILL.
+
 ## Not verified in this guide
 - These descriptions come from PR text and source code. None of the window steps were checked in a running QGIS.
 - The exact list of fixes in #27 and the details of #11 and #16 are summarized from PR titles and commit headlines only.
-- No window steps for #22, #30 or #32 were tried in QGIS.
+- No window steps for #22, #30, #32, #76, #84 or #93 were tried in QGIS. The #93 labels were checked in main's source (d217ec2).
+- #92 and #96 are described from their PR text; their labels may change before merging.
 - The installed copy of the plugins may lag behind main.
