@@ -99,6 +99,78 @@ def octagon(center, radius, n=8):
     return np.column_stack([center[0] + radius * np.cos(a), center[1] + radius * np.sin(a)])
 
 
+def culvert_area_m2(st):
+    """Largest triangle at the culvert ends (both meshers)."""
+    return min(st.fine_area_m2, 25.0)
+
+
+def convex_hull(pts):
+    """Convex hull (counter-clockwise, no repeated first point) of 2-D points."""
+    p = sorted(set(map(tuple, np.asarray(pts, float).tolist())))
+    if len(p) < 3:
+        return np.array(p)
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    lo, hi = [], []
+    for q in p:
+        while len(lo) >= 2 and cross(lo[-2], lo[-1], q) <= 0:
+            lo.pop()
+        lo.append(q)
+    for q in reversed(p):
+        while len(hi) >= 2 and cross(hi[-2], hi[-1], q) <= 0:
+            hi.pop()
+        hi.append(q)
+    return np.array(lo[:-1] + hi[:-1])
+
+
+def convex_polygons_near(a, b, gap):
+    """True when two convex polygons overlap or come within `gap` of each other on every
+    separating axis (their edge normals; conservative: a 'near' pair may be a bit
+    further apart than gap along a diagonal)."""
+    for poly in (a, b):
+        e = np.roll(poly, -1, axis=0) - poly
+        for nx, ny in np.column_stack([-e[:, 1], e[:, 0]]):
+            n = np.hypot(nx, ny)
+            if n == 0:
+                continue
+            pa = (a[:, 0] * nx + a[:, 1] * ny) / n
+            pb = (b[:, 0] * nx + b[:, 1] * ny) / n
+            if pa.min() > pb.max() + gap or pb.min() > pa.max() + gap:
+                return False
+    return True
+
+
+def culvert_regions(culverts, st):
+    """Refined regions for the default mesher: an octagon of radius max(3 x width, 25 m)
+    around each culvert end, as before 3.10.26. Octagons that overlap or nearly touch (a
+    culvert shorter than two radii - Absaraka's 36 m culverts - or the ends of culverts
+    side by side) crossed each other's edges, and ANUGA's mesher put sliver triangles at
+    the crossings (down to 0.15 m2, which set the time step). Such octagons are now
+    merged into one region, the convex hull of their corners, so no region edges cross.
+    Octagons apart from all others are unchanged (the same job file as before)."""
+    area = culvert_area_m2(st)
+    gap = math.sqrt(4.0 * area / math.sqrt(3.0))       # one triangle edge at that size
+    polys = []
+    for c in culverts:
+        r = max(3.0 * c["width"], 25.0)
+        for e in c["end_points"]:
+            polys.append(octagon(e, r))
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(polys)):
+            for j in range(i + 1, len(polys)):
+                if convex_polygons_near(polys[i], polys[j], gap):
+                    polys[i] = convex_hull(np.vstack([polys[i], polys[j]]))
+                    del polys[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    return [{"poly": p.tolist(), "area": area} for p in polys]
+
+
 def clip_lines_to_polygon(lines, polygon, min_len=1):
     """Pieces of the polylines that lie inside `polygon` (vertex test)."""
     out = []
@@ -418,11 +490,7 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     job = os.path.join(workdir, "anuga_job.npz")
     result = os.path.join(workdir, "anuga_result.npz")
     culverts, cnotes = structmod.anuga_culverts(structures or [], dem, outer)
-    regions = []
-    for c in culverts:      # small triangles around both ends of each culvert
-        r = max(3.0 * c["width"], 25.0)
-        for e in c["end_points"]:
-            regions.append({"poly": octagon(e, r).tolist(), "area": min(st.fine_area_m2, 25.0)})
+    regions = culvert_regions(culverts, st)     # small triangles at both culvert ends
     step = max(5.0, float(np.sqrt(max(st.fine_area_m2, 1.0))))
     breaklines = clip_lines_to_polygon([cond.densify(np.asarray(b, float), step)
                                         for b in (refine_lines or [])], outer)
