@@ -888,7 +888,8 @@ class NDDamScreeningDialog(QDialog):
         grid = QGridLayout()
         grid.addWidget(QLabel("Source"), 0, 0)
         self.dem_source = QComboBox()
-        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)"])
+        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)",
+                                   "USGS 3DEP 1 m lidar tiles (native, TNM)"])
         self.dem_source.currentIndexChanged.connect(self._dem_fact)
         grid.addWidget(self.dem_source, 0, 1)
         grid.addWidget(QLabel("Resolution"), 0, 2)
@@ -1026,7 +1027,8 @@ class NDDamScreeningDialog(QDialog):
         box = QGroupBox("Download a DEM (USGS 3DEP, metres, EPSG:5070)")
         grid = QGridLayout()
         self.dem_source = QComboBox()
-        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)"])
+        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)",
+                                   "USGS 3DEP 1 m lidar tiles (native, TNM)"])
         self.dem_source.setToolTip("ND DWR LiDAR uses the FTP package from the map site: "
                                    "LiDAR_NorthDakota_QL2, ASCII_Grids_ft and DEM_Imagine.")
         self.dem_ftp = QLineEdit()
@@ -2465,7 +2467,10 @@ class NDDamScreeningDialog(QDialog):
         label = getattr(self, "dem_fact", None)
         if label is None:
             return
-        if index == 1:
+        if index == 2:
+            label.setText("USGS 3DEP 1 m lidar tiles: native GeoTIFF tiles, UTM metres, kept in the suite's "
+                          "dem/lidar_1m folder. Result is a per-dam VRT. The first run lists the tiles and sizes.")
+        elif index == 1:
             label.setText("ND DWR LiDAR: feet, often EPSG:3721, .img. Saved copy is EPSG:5070, metres, GeoTIFF.")
         else:
             label.setText("USGS 3DEP: EPSG:5070, metres, GeoTIFF.")

@@ -300,6 +300,62 @@ them:
   test doubles in tests/ (tests/test_suite09.py, including a real export made by ND Dam Hazard's
   exporter under its own test harness).
 
+## Download DEM: USGS 3DEP 1 m lidar tiles (native) (0.17.28)
+
+Download DEM (`nddam:downloaddem`, also the window's **Download DEM…** button) has three sources:
+
+| Source | What you get |
+|---|---|
+| USGS 3DEP | The 3DEP ImageServer resampled to 10 m or 1 m, warped to one EPSG:5070 GeoTIFF. |
+| ND DWR LiDAR | ND QL2 tiles from lidar.dwr.nd.gov (DEM_Imagine 1 m, 2 km tiles), warped to one EPSG:5070 GeoTIFF. |
+| **USGS 3DEP 1 m lidar tiles (native, TNM)** | The 3DEP 1 m lidar project tiles themselves (10 x 10 km GeoTIFFs at 1 m, NAD83 UTM metres, NAVD88, about 275 MB each) from The National Map, kept as they are, and a per-dam VRT over them. |
+
+How to run it (Processing toolbox > Dam screening > Download DEM, Source = *USGS 3DEP 1 m lidar
+tiles (native, TNM)*):
+
+1. Give the area, first that is set: **box** (`BBOX`, west,south,east,north in degrees); a **dam
+   folder** (`DAM_FOLDER`: the Runner's model bounds from `_breach_model/state.json` plus a margin,
+   `DOMAIN_PAD_M`, default 500 m; else dam.json's point and the buffer); the **dam point** and
+   buffer; or a **county** (Area = County). The whole state is refused.
+2. Run it once as it is. It only asks The National Map and lists each tile (project, collection
+   dates, publication date, size), the total per project, what is still to download, and the
+   free disk space. Nothing is downloaded.
+3. Tick **download the listed tiles** (`LIDAR_DOWNLOAD`) and run again. A run is refused when
+   it would download more than **largest download** (`LIDAR_MAX_GB`, default 10 GB) or leave
+   less than 2 GB free.
+
+Where the tiles go, first that can be used: **tile folder** (`TILE_FOLDER`), else
+`<suite data folder>/dem/lidar_1m/` (an existing `DEM/` folder is used as it is), else
+`<output folder>/lidar_1m/` with a warning. A folder inside the offline pack (ND_Dam_Suite_Pack)
+or one that can't be written is skipped, with a message. The tiles are shared by every dam:
+
+- A tile already there (right size, recorded in the manifest) is skipped.
+- A cut download is kept as `<tile>.part` and resumes from there (HTTP Range); each tile is tried
+  4 times. Cancel (the Processing dialog's Cancel) keeps the finished tiles and the `.part`.
+- Each tile is checked: its size, and GDAL opens it as a 1 m grid with a CRS. A failed tile is
+  renamed `.bad`, reported, and left out of the VRT.
+- `lidar_1m_manifest.json` lists every tile: project, collection and publication dates, URL,
+  sha256, bytes, EPSG.
+- The suite's "your own DEM" lookup skips `dem/lidar_1m/`, so the tiles never pass for a
+  statewide DEM.
+
+Overlapping projects: where two projects publish the same 10 km tile, the newest collection is
+used (the collection end date from the project's metadata, else the publication date), the
+older tile is not downloaded, and the log says which won. **Keep older overlapping projects
+underneath** (`LIDAR_KEEP_OLDER`) downloads both and puts the older one under the newer one.
+
+The result, in the output folder:
+
+- `<DAM_ID>_1m_lidar.vrt`: 1 m, in the UTM zone most tiles are in (a tile in another zone is
+  warped into it), clipped to the area, the newest collection on top. The coarser DEM sits
+  underneath and shows only where no tile has data: **coarser DEM underneath**
+  (`FALLBACK_DEM`), else `<DAM_ID>_10m_5070.tif` when it is in the output folder.
+- `<DAM_ID>_1m_lidar.json`: the source projects with their dates, the tiles (sha256), the
+  fallback, the area, any missing tiles and the overlap choices.
+- `<DAM_ID>_1m_lidar_dem.txt`: the usual source / CRS / units facts.
+
+Nothing downloads when QGIS or the window opens.
+
 ## Workflow (Processing toolbox > ND Dam Breach Screening, or the popup window)
 0. Build offline data package - one GeoPackage (EPSG:5070) with standard fields: USA Structures
    (habitable, mobile) and structure_points, roads (aadt, road_class, level), FRA rail (passenger,
