@@ -20,6 +20,7 @@ from ..core import nd_hazard as nh
 from ..core import damrecord_io as dri, handoff as ho
 from ..core.more_layers import pick, uris, layer_name
 from . import _common as cm
+from ..damsuite import structure_flags as SF
 from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, NUM_DOUBLE, SRC_LINE, SRC_POINT, SRC_POLYGON, WKB_POINT)
 
 NEW = [("hz_class", FT_STRING), ("hz_conf", FT_STRING),
@@ -362,7 +363,18 @@ class HazardClassification(QgsProcessingAlgorithm):
             res.update({"hz_criterion": crit, "hz_basis": basis, "hz_chart": chart_txt})
             status = str(get(f, "sim_status") or get(f, "status") or "")
             dtif, vtif = get(f, "depth_tif"), get(f, "vel_tif")
-            if status == "excluded" or cm.excluded(f, names)[0]:
+            fl, fl_why = cm.flagged(f, names)
+            if fl:
+                # 0.17.26: a flagged structure (damsuite/structure_flags.py, e.g. a road fill over
+                # backwater): no breach hazard is computed; the class of record stands
+                res.update({"hz_class": fl.get("hazard"), "hz_conf": "flagged",
+                            "hz_reason": fl_why,
+                            "n_bldg_wet": 0, "n_bldg_lethal": 0, "n_road_wet": 0, "n_rail_wet": 0,
+                            "hz_border": "no", "hz_gaps": "",
+                            "hz_notes": "{}: breach analysis not applicable; hazard {} from the {}, "
+                                        "not computed (docs/Flagged_structures.md)".format(
+                                            SF.label(fl), fl.get("hazard"), fl.get("hazard_source"))})
+            elif status == "excluded" or cm.excluded(f, names)[0]:
                 # 0.13: the Review tab excluded this dam: no class, the reason recorded
                 res.update({"hz_class": "", "hz_conf": "excluded",
                             "hz_reason": cm.excluded(f, names)[1] or "excluded by review",

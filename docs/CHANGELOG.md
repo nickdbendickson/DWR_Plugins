@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-10-19
+- **Flagged structures (Runner 3.10.23, Hazard 2.18.38, Screening 0.17.26, damsuite 1.17.2):** a repo-shipped list of records that are not a dam to breach (`damsuite/structure_flags.py`, see [Flagged_structures.md](Flagged_structures.md)). The first entry is DWR-3161 / ND00597 (Sanish Bay WPA Dam 1): the ND-23 road fill over backwater, breach analysis not applicable, hazard Low from the DWR record (the 3.10.16 rebaseline's HIGH was a model artifact). Screening lists it with that note and the Low class instead of a breach hazard (new fields `struct_cls`, `flag_note`). The Runner refuses a single-dam breach run of it unless `ALLOW_FLAGGED_STRUCTURE`, and the batch tools skip it (Status `flagged`, new columns `Structure_Flag` and `Hazard_Of_Record`). Hazard refuses to classify it unless allowed. The Dam suite home shows the flag and Low. Runner 3.10.22 is taken by the open #90 and #92, so this is 3.10.23.
+
 ## New plugin
 - **#60 (merged 10-16), DamSafety_PMP 0.3.0 (internal, experimental):** the nd_pmp prototype is added as `DamSafety_PMP/`. Provider id `ndpmp` and settings keys `nd_pmp/*` are unchanged. The AWA data isn't included. Machine-specific paths were removed. Light tests are in `tests/run_tests.py`, and data-dependent tests skip when their inputs are missing. The OGR memory driver now falls back to "Memory" on GDAL < 3.11. Licensing: for SWC's exclusive use; get permission from SWC and AWA before redistributing.
 

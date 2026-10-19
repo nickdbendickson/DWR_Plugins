@@ -511,7 +511,10 @@ class RunBreachSim(QgsProcessingAlgorithm):
             tri = str(get(f, "tri_result") or "")
             nf, nf_why = cm.no_flood(f, dams.fields().names())
             ex, ex_why = cm.excluded(f, dams.fields().names())
-            if ex:                         # 0.13: the Review tab excluded this dam
+            fl, fl_why = cm.flagged(f, dams.fields().names())
+            if fl:                         # 0.17.26: a flagged structure: no breach flood
+                rec["skip"] = "flagged"; rec["why"] = fl_why
+            elif ex:                       # 0.13: the Review tab excluded this dam
                 rec["skip"] = "excluded"; rec["why"] = ex_why
             elif nf:                       # tool 16: nothing above the natural ground -> nothing floods
                 rec["skip"] = "noflood"; rec["why"] = nf_why
@@ -631,6 +634,9 @@ class RunBreachSim(QgsProcessingAlgorithm):
                             "notes": ["no breach flood: " + rec.get("why", "")]}
                 if rec["skip"] == "excluded":
                     return {"dam_id": dam_id, "status": "excluded", "notes": [rec.get("why", "")]}
+                if rec["skip"] == "flagged":
+                    return {"dam_id": dam_id, "status": "flagged",
+                            "notes": [rec.get("why", "") + "; breach flood not simulated"]}
                 return {"dam_id": dam_id, "status": "triage" if rec["skip"] == "triage" else "FAILED",
                         "notes": [] if rec["skip"] == "triage" else [rec["skip"]]}
             pth = paths(dam_id)
@@ -707,7 +713,8 @@ class RunBreachSim(QgsProcessingAlgorithm):
 
         total = len(cases) or 1
         done = [0]
-        counts = {"ok": 0, "cached": 0, "triage": 0, "noflood": 0, "excluded": 0, "FAILED": 0, "cancelled": 0}
+        counts = {"ok": 0, "cached": 0, "triage": 0, "noflood": 0, "excluded": 0, "flagged": 0, "FAILED": 0,
+                  "cancelled": 0}
 
         def on_done(rec, r):
             done[0] += 1

@@ -194,6 +194,12 @@ class BreachHydrograph(QgsProcessingAlgorithm):
             try:
                 nf, nf_why = cm.no_flood(f, names)
                 ex, ex_why = cm.excluded(f, names)
+                fl, fl_why = cm.flagged(f, names)
+                if fl:                        # 0.17.26: a flagged structure: no breach analysis
+                    notes.append(fl_why)
+                    extra["brch_conf"] = "flagged"
+                    skipped += 1
+                    raise _NoFlood()
                 if ex:                        # 0.13: the Review tab excluded this dam
                     notes.append(ex_why)
                     extra["brch_conf"] = "excluded"

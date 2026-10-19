@@ -12,13 +12,15 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
 from ..core import inventory as inv
 from ..compat import (FIELD_ANY, FIELD_NUMERIC, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_POINT, WKB_POINT)
 from . import _common as cm
+from ..damsuite import structure_flags as SF
 
 OUT_FIELDS = [("dam_id", FT_STRING), ("name", FT_STRING),
               ("source", FT_STRING), ("nid_id", FT_STRING),
               ("height_m", FT_DOUBLE), ("inv_norm_m3", FT_DOUBLE),
               ("inv_max_m3", FT_DOUBLE), ("inv_area_m2", FT_DOUBLE),
               ("haz_existing", FT_STRING), ("status", FT_STRING),
-              ("crest_len_m", FT_DOUBLE), ("shared_vol", FT_STRING)]
+              ("crest_len_m", FT_DOUBLE), ("shared_vol", FT_STRING),
+              ("struct_cls", FT_STRING), ("flag_note", FT_STRING)]     # 0.17.26: flagged structures
 
 # field defaults: DWR shapefile names, and the NID GeoPackage names
 FIELD_DEFAULTS = {f"DWR_{k}": v for k, v in inv.DWR_DEFAULTS.items()}
@@ -65,7 +67,11 @@ class PrepareDams(QgsProcessingAlgorithm):
                 "shared_vol = YES marks records that share an identical large volume (e.g. levee "
                 "'reach' segments of one reservoir): they are not separate reservoirs and need "
                 "manual handling. Existing hazard text is kept as-is; DWR says 'Significant' where "
-                "the ND policy says 'Medium'.")
+                "the ND policy says 'Medium'.\n"
+                "struct_cls / flag_note (0.17.26): a flagged structure of the suite's list "
+                "(docs/Flagged_structures.md, e.g. DWR-3161, a road fill over backwater) is kept "
+                "with its class and note; the later tools list it with the note and its hazard "
+                "of record instead of a breach flood.")
 
     def initAlgorithm(self, config=None):
         for src, label in ((self.DWR, "ND DWR dams"), (self.NID, "NID dams")):
@@ -226,15 +232,24 @@ class PrepareDams(QgsProcessingAlgorithm):
             recs.append((g, a, "NID", a["id"][4:]))
 
         shared = inv.shared_volume_flags([r[1]["ms"] or r[1]["ns"] for r in recs])
+        n_flag = 0
         for (g, a, src, nid_id), sh in zip(recs, shared):
+            fl = SF.lookup(a["id"], nid_id)          # 0.17.26: a flagged structure (structure_flags)
+            if fl:
+                n_flag += 1
+                feedback.pushInfo("{}: flagged structure ({}): {}".format(
+                    a["id"], SF.short_ref(fl), SF.note(fl)))
             o = QgsFeature(fields); o.setGeometry(g)
             o.setAttributes([a["id"], a["name"], src, nid_id, a["h"], a["ns"], a["ms"], a["sa"],
-                             a["hz"], a["status"], a["len"], "YES" if sh else ""])
+                             a["hz"], a["status"], a["len"], "YES" if sh else "",
+                             fl["structure_class"] if fl else None,
+                             SF.note(fl) if fl else None])
             sink.addFeature(o)
         feedback.pushInfo(
             f"{len(recs)} dams written | dropped by status: {n_status}, by size: {n_size} | "
             f"NID matched: {len(used)} ({n_by_id} by ID) | flagged shared volume: {sum(shared)}" +
-            (f" | not in the chosen IDs: {n_only}" if only else ""))
+            (f" | not in the chosen IDs: {n_only}" if only else "") +
+            (f" | flagged structures (no breach analysis): {n_flag}" if n_flag else ""))
         if only and not recs:
             raise QgsProcessingException("None of the dams matches the chosen IDs ({}); check the ID "
                                          "(DWR structure ID such as 5289, or DWR-5289).".format(", ".join(sorted(only))))
