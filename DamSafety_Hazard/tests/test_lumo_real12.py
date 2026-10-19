@@ -127,4 +127,8 @@ if __name__ == "__main__":
                 traceback.print_exc()
                 fails += 1
                 print("FAIL", n, e)
-    sys.exit(1 if fails else 0)
+    sys.stdout.flush()
+    if fails:
+        sys.exit(1)
+    # all passed; os._exit(0) before the real-QgsApplication offscreen teardown segfaults at shutdown
+    os._exit(0)
