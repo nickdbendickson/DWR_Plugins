@@ -32,6 +32,7 @@ from qgis.core import QgsProject, QgsCoordinateTransform, QgsRectangle
 
 from .helpers import log_message, buffer_distance_in_layer_units
 from . import facility_review as FR
+from .ui_widgets import Collapsible
 
 TAB_TITLE = "Review: roads & facilities"
 
@@ -41,14 +42,14 @@ _CONFIRM = "Automatic result is correct"
 # (label, decision saved in the file)
 DECISION_CHOICES = {
     FR.KIND_ROAD: [(_KEEP, None), (_CONFIRM, FR.DEC_CONFIRMED),
-                   ("Exclude (not a public road, private drive, not overtopped...)",
+                   ("Exclude (not a public road, private drive, not overtopped\u2026)",
                     FR.DEC_EXCLUDED),
                    ("Set AADT (number at the right)", FR.DEC_SET_AADT)],
     FR.KIND_RAIL: [(_KEEP, None), (_CONFIRM, FR.DEC_CONFIRMED),
-                   ("Exclude (abandoned, out of service, not a railroad...)", FR.DEC_EXCLUDED),
+                   ("Exclude (abandoned, out of service, not a railroad\u2026)", FR.DEC_EXCLUDED),
                    ("Set trains per day (number at the right)", FR.DEC_SET_TRAINS)],
     FR.KIND_CROSSING: [(_KEEP, None), (_CONFIRM, FR.DEC_CONFIRMED),
-                       ("Exclude (not a crossing, wrong data...)", FR.DEC_EXCLUDED),
+                       ("Exclude (not a crossing, wrong data\u2026)", FR.DEC_EXCLUDED),
                        ("Overtopped: yes", FR.DEC_OVERTOPPED_YES),
                        ("Overtopped: no (deck above the water)", FR.DEC_OVERTOPPED_NO)],
     FR.KIND_LIFELINE: [(_KEEP, None), (_CONFIRM, FR.DEC_CONFIRMED),
@@ -242,18 +243,22 @@ class FacilityReviewTabMixin(object):
         tab = QWidget()
         lay = QVBoxLayout(tab)
         info = QLabel(
-            "<h3>Review: roads, railroads, bridges and lifeline facilities</h3>The overtopped "
+            "The overtopped "
             "road stretches, inundated railroad stretches, bridges / culverts / low-water "
             "crossings and lifeline facilities of the last Hazard Classification run. For each "
             "one choose '{}', <b>Exclude</b> it (not a public road, abandoned line, not a "
-            "lifeline ...), set the <b>AADT</b>, <b>trains per day</b> or <b>category</b>, or "
+            "lifeline \u2026), set the <b>AADT</b>, <b>trains per day</b> or <b>category</b>, or "
             "say whether a bridge is <b>overtopped</b>. Decisions are saved to <i>{}</i> in the "
             "outputs folder and applied on every later run: excluded items are left out of the "
             "classification and the output layers, set values replace the automatic ones. "
             "Click a column heading to sort; double-click a row to zoom to it."
             .format(_CONFIRM, FR.REVIEW_FILE))
         info.setWordWrap(True)
-        lay.addWidget(info)
+        # 2.18.36: the long help is collapsed by default (it took the top third of the view)
+        info.setContentsMargins(14, 0, 0, 4)
+        self.facrev_help = Collapsible("How to review roads and facilities", info, expanded=False)
+        self.facrev_help.header.setToolTip("Show or hide how the decisions work")
+        lay.addWidget(self.facrev_help)
         opts = QHBoxLayout()
         opts.addWidget(QLabel("Show:"))
         self.facrev_kind_combo = QComboBox()
@@ -272,7 +277,7 @@ class FacilityReviewTabMixin(object):
         self.facrev_show_all_check.setChecked(False)
         self.facrev_show_all_check.setToolTip(
             "Unticked: roads that count (ND High / Medium) or are flagged (no AADT, bridge, "
-            "private ...), every railroad stretch, and the flooded bridges / crossings and "
+            "private \u2026), every railroad stretch, and the flooded bridges / crossings and "
             "lifeline facilities - plus every item with a saved decision. Ticked: all of them.")
         self.facrev_show_all_check.toggled.connect(self._facrev_view_changed)
         opts.addWidget(self.facrev_show_all_check)

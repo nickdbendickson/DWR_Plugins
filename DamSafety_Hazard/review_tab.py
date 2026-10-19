@@ -31,6 +31,7 @@ from . import webmap
 from .compat import MB_YES, MB_NO
 from .constants import ZONE_LABELS
 from .helpers import log_message, buffer_distance_in_layer_units
+from .ui_widgets import Collapsible
 from .review import ReviewStore, needs_review, review_path, CONFIRMED
 from .structures import (
     CAT_DWELLING, CAT_OCCUPIED, CAT_UNVERIFIED, CAT_NOT_HABITABLE, TYPE_HOUSE, TYPE_MOBILE,
@@ -164,7 +165,7 @@ class ReviewTabMixin(object):
         tab = QWidget()
         lay = QVBoxLayout(tab)
         info = QLabel(
-            "<h3>Engineer review</h3>Structures that need a decision after the last Hazard "
+            "Structures that need a decision after the last Hazard "
             "Classification run. <b>Set habitable</b> decides habitability (structures with "
             "an ND site address are habitable automatically), <b>Set ACER type</b> decides "
             "the curve (Habitable and House on foundation: TM 11 Fig. 2; Mobile home: Fig. 3), "
@@ -176,7 +177,11 @@ class ReviewTabMixin(object):
             "click a column heading to sort the list by it (click again to reverse)."
             .format(_CONFIRM, os.path.basename(review_path("x"))))
         info.setWordWrap(True)
-        lay.addWidget(info)
+        # 2.18.36: the long help is collapsed by default (it took the top third of the view)
+        info.setContentsMargins(14, 0, 0, 4)
+        self.review_help = Collapsible("How to review structures", info, expanded=False)
+        self.review_help.header.setToolTip("Show or hide how the decisions work")
+        lay.addWidget(self.review_help)
         opts = QHBoxLayout()
         self.review_show_done = QCheckBox("Show structures already reviewed")
         self.review_show_done.setChecked(False)
@@ -230,22 +235,29 @@ class ReviewTabMixin(object):
         self.review_rerun_btn = QPushButton("Save and re-run classification")
         self.review_rerun_btn.clicked.connect(self._review_save_and_rerun)
         # v2.8: two engineers review the same dam separately and merge their decisions
-        self.review_export_btn = QPushButton("Export decisions...")
+        self.review_export_btn = QPushButton("Export decisions\u2026")
         self.review_export_btn.setToolTip(
             "Writes the saved decisions as a portable CSV (with a small header file) to send "
             "to another engineer. Save the decisions first.")
         self.review_export_btn.clicked.connect(self._review_export)
-        self.review_merge_btn = QPushButton("Merge from other engineer...")
+        self.review_merge_btn = QPushButton("Merge from other engineer\u2026")
         self.review_merge_btn.setToolTip(
             "Compares another engineer's exported decisions with yours, lists the differences "
             "and - after you choose how to settle conflicts - merges them (a backup copy of "
             "your decisions is made first). Re-run the classification to apply them.")
         self.review_merge_btn.clicked.connect(self._review_merge)
         for b in (self.review_zoom_btn, self.review_webmap_btn, self.review_save_btn,
-                  self.review_rerun_btn, self.review_export_btn, self.review_merge_btn):
+                  self.review_rerun_btn):
             row.addWidget(b)
         row.addStretch()
         lay.addLayout(row)
+        # 2.18.34: exchanging decisions with another engineer on a second row (six buttons
+        # in one row were wider than the Review view)
+        row2 = QHBoxLayout()
+        for b in (self.review_export_btn, self.review_merge_btn):
+            row2.addWidget(b)
+        row2.addStretch()
+        lay.addLayout(row2)
         self.review_status = QLabel("Run Hazard Classification first")
         self.review_status.setWordWrap(True)
         lay.addWidget(self.review_status)
@@ -595,7 +607,7 @@ class ReviewTabMixin(object):
         if conflicts:
             shown = RX.conflict_lines(plan)
             text += "\n\n" + "\n".join(shown[:24]) + (
-                "\n... ({} more in the log)".format(len(shown) - 24) if len(shown) > 24 else "")
+                "\n\u2026 ({} more in the log)".format(len(shown) - 24) if len(shown) > 24 else "")
             for line in shown:
                 self._log(">>>   " + line)
         if QMessageBox.question(self, "Review merge", text + "\n\nMerge now? A backup copy "

@@ -741,7 +741,8 @@ def check_anuga_env(python, workdir):
     r = anuga_model.check_anuga(python, os.path.join(workdir, "anuga_check"))
     if not r["ok"]:
         raise RuntimeError("{}: {}".format(python, r["message"]))
-    return "{}: {}".format(python, r["message"])
+    extra = "; " + r["gmsh_message"] if r.get("gmsh_message") else ""
+    return "{}: {}{}".format(python, r["message"], extra)
 
 
 def model_valley(x, y):

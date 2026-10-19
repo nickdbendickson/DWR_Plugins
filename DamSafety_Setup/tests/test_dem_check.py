@@ -24,7 +24,8 @@ def test_dem_problem():
 
 def test_page_uses_it():
     src = open(os.path.join(ROOT, "DamSafety_Setup", "plugin.py"), encoding="utf-8").read()
-    assert "why = dem_problem(self.dem.text())" in src
+    # 1.0.8: DemPage.problem() is isComplete() and validatePage() (Next stays off)
+    assert "return dem_problem(self.dem.text())" in src
 
 
 if __name__ == "__main__":

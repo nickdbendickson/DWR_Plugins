@@ -117,7 +117,12 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 "ANUGA (unstructured mesh) for the final results; it is much slower and needs the "
                 "Runner's ANUGA environment (checked before any dam is run). This is what the old "
                 "'force ANUGA' box did; an old FORCE_ANUGA = True still selects it. The engine used "
-                "is logged as a warning when it is ANUGA and written to rn_engine.\n"
+                "is logged as a warning when it is ANUGA and written to rn_engine. 'LISFLOOD-FP then HEC-RAS 2D' "
+                "(TIER 2, optional) builds and runs a HEC-RAS 6.6 2D model after LISFLOOD-FP (subgrid "
+                "terrain from the DEM, the breach hydrograph at the inflow point, culverts / bridges as "
+                "SA/2D connections) and writes its maxima as the final rasters; it needs the Runner's "
+                "HEC-RAS set-up (NDBREACH_HECRAS_WINEPREFIX, NDBREACH_HECRAS_LINUX_DIR; checked before "
+                "any dam is run) and HEC's Terms and Conditions accepted by the user.\n"
                 "NEAR-DAM REFINE: re-runs the stretch next to the dam on a finer grid with the FV1 "
                 "solver (full shallow-water equations, more accurate for the fast, steep flow near "
                 "a breach) and merges it in; adds roughly the time of one more model run.\n"
@@ -148,27 +153,27 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                                      behavior=FILE_FOLDER, optional=True))
         P(QgsProcessingParameterFeatureSource("BLD", "Structures (points or polygons; points are also "
                                               "given to rundam as receptors)", [pt, pg], optional=True))
-        for k, desc in (("S_OCC", "occupancy class field (empty = runner matches OCC_CLS, OCCTYPE ...)"),
-                        ("S_MOBILE", "mobile home field (empty = runner matches PRIM_OCC, mobile ...)"),
-                        ("S_HABITABLE", "habitable yes/no field (empty = runner matches habitable ...)")):
+        for k, desc in (("S_OCC", "occupancy class field (empty = runner matches OCC_CLS, OCCTYPE \u2026)"),
+                        ("S_MOBILE", "mobile home field (empty = runner matches PRIM_OCC, mobile \u2026)"),
+                        ("S_HABITABLE", "habitable yes/no field (empty = runner matches habitable \u2026)")):
             P(QgsProcessingParameterField(k, "Structures: " + desc, parentLayerParameterName="BLD",
                                           optional=True))
         P(QgsProcessingParameterString("UNINHABITED", "Structures: occupancy words that mark an UNINHABITED "
                                        "building (as tool 8)", defaultValue=", ".join(hz.UNINHABITED),
                                        optional=True))
         P(QgsProcessingParameterFeatureSource("ROADS", "Roads (lines)", [ln], optional=True))
-        P(QgsProcessingParameterField("R_AADT", "Roads: AADT field (empty = runner matches aadt ...)",
+        P(QgsProcessingParameterField("R_AADT", "Roads: AADT field (empty = runner matches aadt \u2026)",
                                       parentLayerParameterName="ROADS", optional=True))
         P(QgsProcessingParameterField("R_CLASS", "Roads: class / route field (empty = runner matches "
-                                      "road_class ...)", parentLayerParameterName="ROADS", optional=True))
+                                      "road_class \u2026)", parentLayerParameterName="ROADS", optional=True))
         P(QgsProcessingParameterField("R_SOLE", "Roads: sole access to an occupied location field (empty = "
-                                      "runner matches sole_access ...)", parentLayerParameterName="ROADS",
+                                      "runner matches sole_access \u2026)", parentLayerParameterName="ROADS",
                                       optional=True))
         P(QgsProcessingParameterFeatureSource("RAIL", "Railroads (lines)", [ln], optional=True))
         P(QgsProcessingParameterField("T_TRAINS", "Railroads: trains a day field (empty = runner matches "
-                                      "trains_day ...)", parentLayerParameterName="RAIL", optional=True))
+                                      "trains_day \u2026)", parentLayerParameterName="RAIL", optional=True))
         P(QgsProcessingParameterField("T_PASSENGER", "Railroads: passenger field (empty = runner matches "
-                                      "PASSNGR ...)", parentLayerParameterName="RAIL", optional=True))
+                                      "PASSNGR \u2026)", parentLayerParameterName="RAIL", optional=True))
         P(QgsProcessingParameterString("PASSENGER_CODES", "Railroads: passenger codes",
                                        defaultValue=", ".join(hz.PAX_CODES), optional=True))
         P(QgsProcessingParameterFeatureSource("LIFELINES", "Lifeline facilities (points or polygons)",
@@ -350,8 +355,11 @@ class RunnerHandoff(QgsProcessingAlgorithm):
             if B("FORCE_ANUGA"):
                 _warn(feedback, "FORCE_ANUGA (before 0.17.22) is now the Runner engine choice "
                       "'LISFLOOD-FP then ANUGA'.")
-            # early check: a missing ANUGA would only fail deep inside each rundam run
-            if not ho.find_anuga_python(_runner_anuga_setting, None, _runner_anuga_detect()):
+            # early check: a missing engine would only fail deep inside each rundam run
+            if engine == 2:
+                if not ho.hecras_configured():
+                    raise QgsProcessingException(ho.HECRAS_MISSING)
+            elif not ho.find_anuga_python(_runner_anuga_setting, None, _runner_anuga_detect()):
                 raise QgsProcessingException(ho.ANUGA_MISSING)
         else:
             feedback.pushInfo(status)       # culverts on LISFLOOD-only: warned with the notes below

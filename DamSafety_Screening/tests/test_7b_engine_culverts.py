@@ -210,7 +210,7 @@ assert ho.find_anuga_python(lambda: "/gone", {}, lambda: "", isfile=lambda p: Fa
 # parameters: one engine enum, FORCE_ANUGA hidden, numeric culvert fields, advanced field pickers
 alg = RunnerHandoff(); alg.initAlgorithm()
 defs = alg._params
-assert len(defs["ENGINE"].options) == 2 and "force ANUGA" in defs["ENGINE"].options[1]
+assert len(defs["ENGINE"].options) == 3 and "force ANUGA" in defs["ENGINE"].options[1] and "HEC-RAS 2D" in defs["ENGINE"].options[2]
 assert "upstream end first" in str(defs["CULVERTS"].description)
 assert defs["FORCE_ANUGA"].defaultValue is False
 help_ = alg.shortHelpString()

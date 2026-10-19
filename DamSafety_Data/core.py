@@ -7,7 +7,8 @@ supplies an HTTP client (network access through QGIS) and a Feedback object
 How an update works, for each source:
   1. Ask the source for its remote version without downloading the data
      (checksum sidecar file, HTTP ETag/Last-Modified, or latest git commit).
-  2. If it matches the version recorded in manifest.json, nothing is downloaded.
+  2. If it matches the version recorded in structures_manifest.json (manifest.json before
+     1.4.0), nothing is downloaded.
   3. Otherwise download into <data folder>/.staging, verify it, then swap it into
      place with directory renames. The working copy is replaced only after a
      complete, verified download, so an interrupted update never leaves
@@ -25,7 +26,11 @@ import time
 import uuid
 import zipfile
 
-MANIFEST_NAME = "manifest.json"
+# 1.4.0: Data's own manifest has its own name, so it never replaces the suite's manifest.json
+# when Data downloads into the suite data folder. LEGACY_MANIFEST_NAME is read once (when the
+# new one is missing) and never written or deleted.
+MANIFEST_NAME = "structures_manifest.json"
+LEGACY_MANIFEST_NAME = "manifest.json"
 STAGING_NAME = ".staging"
 LOCK_NAME = ".update.lock"
 LOCK_STALE_SECONDS = 6 * 3600
@@ -510,6 +515,15 @@ class Result:
         return f"Result({self.source_id!r}, {self.status!r}, {self.message!r})"
 
 
+def _read_json_dict(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 class Updater:
     def __init__(self, data_dir, sources, http, now=time.time):
         self.data_dir = data_dir
@@ -524,12 +538,15 @@ class Updater:
         return os.path.join(self.data_dir, MANIFEST_NAME)
 
     def load_manifest(self):
-        try:
-            with open(self.manifest_path, encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
+        if os.path.isfile(self.manifest_path):
+            return _read_json_dict(self.manifest_path)
+        # 1.3.x wrote manifest.json: take its per-source entries once; the next save writes
+        # structures_manifest.json. The suite's manifest.json ("datasets", "updated", ...)
+        # has no per-source dict entries, so nothing of it is taken.
+        legacy = _read_json_dict(os.path.join(self.data_dir, LEGACY_MANIFEST_NAME))
+        if legacy.get("format") or "datasets" in legacy:
             return {}
+        return {k: v for k, v in legacy.items() if isinstance(v, dict)}
 
     def _save_manifest(self, manifest):
         tmp = self.manifest_path + ".tmp"

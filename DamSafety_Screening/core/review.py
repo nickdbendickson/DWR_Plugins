@@ -17,11 +17,9 @@ tests files) and written with an Apply object: `SqliteApply` edits GeoPackage fi
 import csv
 import datetime
 import os
-import sqlite3
 import struct
 
-from . import workflow as wf
-from . import gpkg_sqlite
+from . import gpkg_write, workflow as wf
 
 LOG = wf.REVIEW_LOG
 ACTIONS = ("accept", "exclude", "set_type", "move_breach", "note")
@@ -181,7 +179,7 @@ class SqliteApply(object):
 
     def set_attributes(self, path, dam_id, values):
         """values = {field: value}; missing fields are added (TEXT). Returns rows changed."""
-        con = sqlite3.connect(path)
+        con = gpkg_write.connect(path)
         try:
             t = self._table(con)
             have = {r[1] for r in con.execute('PRAGMA table_info("{}")'.format(t))}
@@ -197,7 +195,7 @@ class SqliteApply(object):
 
     def point_of(self, path, dam_id):
         """0.17.0: (x, y) of the dam's point in the layer's own CRS, or None."""
-        con = sqlite3.connect(path)
+        con = gpkg_write.connect(path)
         try:
             t = self._table(con)
             gcol = con.execute("SELECT column_name FROM gpkg_geometry_columns WHERE table_name=?",
@@ -208,15 +206,14 @@ class SqliteApply(object):
             con.close()
 
     def move_point(self, path, dam_id, x, y):
-        con = sqlite3.connect(path)
+        con = gpkg_write.connect(path)
         try:
             t = self._table(con)
             gcol, srs = con.execute("SELECT column_name, srs_id FROM gpkg_geometry_columns WHERE table_name=?",
                                     (t,)).fetchone()
-            # 0.29.0: a breach-point GeoPackage that QGIS wrote has rtree triggers calling
-            # ST_IsEmpty, which plain sqlite3 lacks; without this the UPDATE failed and the point
-            # never moved while the log said it had. Drop the index so the write succeeds.
-            gpkg_sqlite.disable_rtree(con, t)
+            # 0.29.0/#77: a breach-point GeoPackage that QGIS wrote has rtree triggers calling
+            # ST_IsEmpty, which plain sqlite3 lacks. gpkg_write.connect registers those functions
+            # (and keeps the spatial index intact), so the UPDATE below succeeds.
             cur = con.execute('UPDATE "{}" SET "{}" = ? WHERE "dam_id" = ?'.format(t, gcol),
                               (_gpkg_point_blob(x, y, srs), dam_id))
             con.execute("UPDATE gpkg_contents SET min_x=NULL, min_y=NULL, max_x=NULL, max_y=NULL WHERE table_name=?", (t,))

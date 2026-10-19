@@ -148,3 +148,6 @@ class QSize(object):
 
     def __eq__(self, other):
         return isinstance(other, QSize) and (self._w, self._h) == (other._w, other._h)
+
+# 3.10.15 Runner window: label text format / interaction flags
+Qt.RichText, Qt.PlainText, Qt.TextSelectableByMouse = 1, 0, 1

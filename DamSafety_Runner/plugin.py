@@ -62,7 +62,7 @@ class NDBreachRunnerPlugin:
             from qgis.PyQt.QtWidgets import QAction
         except ImportError:  # Qt6 moved QAction
             from qgis.PyQt.QtGui import QAction
-        self.action = QAction("Run a dam...", self.iface.mainWindow())
+        self.action = QAction("Run a dam\u2026", self.iface.mainWindow())
         self.action.setObjectName("NDBreachRunnerAction")
         self.action.triggered.connect(self.run_plugin)
         self.iface.addPluginToMenu(MENU, self.action)
@@ -74,10 +74,10 @@ class NDBreachRunnerPlugin:
         self.actions.append(self.home_action)
 
     def run_settings(self, *args):
-        """Open the window on its Settings tab (the suite settings grid)."""
+        """Open the window and its Settings window (the suite settings grid)."""
         self.run_plugin()
         try:
-            self.dialog.tabs.setCurrentIndex(self.dialog.tabs.count() - 1)
+            self.dialog._open_settings()
         except Exception:                                        # noqa
             pass
 

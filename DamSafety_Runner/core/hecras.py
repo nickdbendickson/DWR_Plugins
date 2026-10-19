@@ -40,7 +40,6 @@ System'); the default, when none is found, is US customary. Everything returned 
 ft/s and hours.
 """
 import csv
-import datetime
 import math
 import json
 import os
@@ -49,7 +48,7 @@ import re
 import numpy as np
 
 from .grid import Grid
-from .units import ACFT, CFS, FT, US_FT
+from .units import ACFT, CFS, FT
 
 RAS_INTERVALS_MIN = (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60, 120, 180, 240, 360, 480, 720,
                      1440)
@@ -134,14 +133,42 @@ def resample_hydrograph(hy, dt_min=DEFAULT_STEP_MIN):
     return t / 3600.0, q_cfs, info
 
 
-def _field8(v, width=8):
-    """A number in a `width`-character field: as many decimals (up to 2) as fit."""
-    v = float(v)
-    for d in (2, 1, 0):
-        s = "{:.{}f}".format(v, d)
+class FixedWidthError(HecRasError):
+    """A number that does not fit a HEC-RAS fixed-width field."""
+
+
+def field8(v, width=8, max_decimals=2):
+    """`v` right-justified in exactly `width` characters (HEC-RAS's fixed-width tables:
+    .u## hydrographs, .g## elevation-volume and station-elevation tables, .p## breach
+    progression). As many decimals (up to `max_decimals`) as fit, then fewer:
+    12345.67 -> '12345.67', 123456.7 -> '123456.7', 1234567 -> ' 1234567'.
+
+    A field may use all `width` characters, so neighbouring values can touch
+    ('7895.8811063.36'); HEC-RAS reads these tables by column, and HEC's own example files
+    are written the same way (e.g. Example 18 InlineStructureE.u01, Baxter.u01). A value that
+    cannot be written in `width` characters even with no decimals raises FixedWidthError
+    (never an overflowing field or exponent notation, which would shift every later column).
+    NaN/inf raise too; callers that want a blank field pass None to their own wrapper."""
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        raise FixedWidthError("not a number for a HEC-RAS {}-character field: {!r}".format(
+            width, v))
+    if not math.isfinite(x):
+        raise FixedWidthError("{!r} cannot be written in a HEC-RAS {}-character field".format(
+            v, width))
+    for d in range(int(max_decimals), -1, -1):
+        s = "{:.{}f}".format(x, d)
+        if s.startswith("-") and float(s) == 0.0:
+            s = s[1:]                                   # no '-0.00'
         if len(s) <= width:
             return s.rjust(width)
-    return "{:.2e}".format(v).rjust(width)
+    raise FixedWidthError(
+        "{:g} does not fit in a HEC-RAS {}-character field (largest {}, smallest {}); "
+        "check the units or the value".format(x, width, "9" * width, "-" + "9" * (width - 1)))
+
+
+_field8 = field8                                   # older name, same formatter
 
 
 def flow_hydrograph_block(q_cfs, per_line=10, width=8, interval=None):
@@ -153,7 +180,7 @@ def flow_hydrograph_block(q_cfs, per_line=10, width=8, interval=None):
         lines.append("Interval={}".format(interval))
     lines.append("Flow Hydrograph= {}".format(len(q)))
     for i in range(0, len(q), per_line):
-        lines.append("".join(_field8(x, width) for x in q[i:i + per_line]))
+        lines.append("".join(field8(x, width) for x in q[i:i + per_line]))
     return "\n".join(lines) + "\n"
 
 
@@ -172,7 +199,7 @@ def write_hydrograph_files(hy, folder, dt_min=DEFAULT_STEP_MIN, stem="HECRAS Bre
         f.write("time_hr,discharge_cfs\n")
         for t, q in zip(t_hr, q_cfs):
             f.write("{:.5f},{:.2f}\n".format(t, q))
-    return {"txt": txt, "csv": csv_path, "info": info, "t_hr": t_hr, "q_cfs": q_cfs}
+    return {"txt": txt, "csv": csv_path, "info": info}
 
 
 # ============================================================================
@@ -374,269 +401,17 @@ def export_run(dam_folder, out_folder=None, dt_min=DEFAULT_STEP_MIN,
     t = write_breach_table(dam, params, out, peak_cfs=params.get("peak_cfs"),
                            notes=h["info"]["notes"])
     return {"hydrograph_txt": h["txt"], "hydrograph_csv": h["csv"], "table_csv": t["csv"],
-            "table_md": t["md"], "info": h["info"], "rows": t["rows"],
-            **write_ras_project(dam_folder, out, h, dam, params, model_folder)}
+            "table_md": t["md"], "info": h["info"], "rows": t["rows"]}
 
 
-def _trace_xy(dam_folder, model_folder):
-    """River line and dam point in the run CRS. Prefers the flow-path GeoJSON."""
-    model = os.path.join(dam_folder, model_folder)
-    geo = os.path.join(model, "qa_dam_inflow_and_flow_path.geojson")
-    dam = inflow = None
-    line = []
-    if os.path.isfile(geo):
-        fc = json.load(open(geo, encoding="utf-8"))
-        for f in fc.get("features") or []:
-            g = f.get("geometry") or {}
-            what = (f.get("properties") or {}).get("what")
-            if g.get("type") == "LineString" and g.get("coordinates"):
-                line = [(c[0], c[1]) for c in g["coordinates"]]
-            elif what == "dam" and g.get("type") == "Point":
-                dam = tuple(g["coordinates"][:2])
-            elif what == "breach inflow point" and g.get("type") == "Point":
-                inflow = tuple(g["coordinates"][:2])
-    if not line:
-        csvp = os.path.join(model, "flow_trace.csv")
-        if os.path.isfile(csvp):
-            for row in open(csvp, encoding="utf-8"):
-                parts = row.strip().split(",")
-                if len(parts) < 2 or parts[0] == "x":
-                    continue
-                line.append((float(parts[0]), float(parts[1])))
-    return line, dam, inflow
-
-
-def _perp(a, b, length):
-    dx, dy = b[0] - a[0], b[1] - a[1]
-    n = (dx * dx + dy * dy) ** 0.5 or 1.0
-    px, py = -dy / n * length, dx / n * length
-    mx, my = (a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0
-    return (mx - px, my - py), (mx + px, my + py)
-
-
-class _ProjectUnits:
-    """HEC-RAS project units taken from the model CRS, mirroring core/hecras_model.Units: a CRS
-    in feet is an English-units model (cfs), a CRS in metres an SI model (m3/s). The geometry
-    coordinates and the flow hydrograph are written in these units, so the declared system must
-    match the CRS or HEC-RAS reads the numbers in the wrong unit (cfs as m3/s, feet as metres)."""
-
-    def __init__(self, si):
-        self.si = bool(si)
-
-    @property
-    def label(self):
-        return "SI Units" if self.si else "English Units"
-
-    @property
-    def len_name(self):
-        return "m" if self.si else "ft"
-
-    @property
-    def q_name(self):
-        return "m3/s" if self.si else "cfs"
-
-    def flow(self, cms):
-        """A discharge in m3/s expressed in the project flow unit."""
-        return float(cms) if self.si else float(cms) / CFS
-
-
-def _project_units(dem_src):
-    """The project units for the generated model, from the DEM CRS linear unit (feet ->
-    English, metres -> SI), mirroring core/hecras_model.crs_units. The run works in a metric CRS
-    and the flow trace is written in that CRS, so SI is used when the unit cannot be read."""
-    u = _raster_linear_unit_m(dem_src)
-    if u is not None and (abs(u - FT) < 1e-6 or abs(u - US_FT) < 1e-6):
-        return _ProjectUnits(False)
-    return _ProjectUnits(True)
-
-
-def write_ras_project(dam_folder, out, hydro, dam, params, model_folder=MODEL_FOLDER,
-                      cell_m=100.0, half_width_m=800.0):
-    """A HEC-RAS 6 project skeleton: 2D area, mesh, river, terrain clip, plan.
-
-    Coordinates are the CRS of the run DEM, and the declared unit system (SI or English) follows
-    that CRS's linear unit so the geometry coordinates and the breach hydrograph are both read in
-    the right unit (see `_project_units`). RAS Mapper still computes the official mesh HDF on
-    first open; the mesh written here is the same cell size so that compute starts from this grid.
-    """
-    line, dam_xy, inflow = _trace_xy(dam_folder, model_folder)
-    if len(line) < 2:
-        return {"ras_project": ""}
-    os.makedirs(out, exist_ok=True)
-    name = getattr(dam, "dam_id", None) or "dam"
-    # domain box around the river
-    xs = [p[0] for p in line]
-    ys = [p[1] for p in line]
-    xmin, xmax = min(xs) - half_width_m, max(xs) + half_width_m
-    ymin, ymax = min(ys) - half_width_m, max(ys) + half_width_m
-    ring = [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax), (xmin, ymin)]
-    dam_line = _perp(line[0], line[min(3, len(line) - 1)], 200.0)
-    bc_up = _perp(line[0], line[1], 150.0)
-    bc_dn = _perp(line[-2], line[-1], 150.0)
-    # mesh, capped so a long river does not write millions of cells
-    nx = max(1, int(round((xmax - xmin) / cell_m)))
-    ny = max(1, int(round((ymax - ymin) / cell_m)))
-    if nx * ny > 40000:
-        cell_m = ((xmax - xmin) * (ymax - ymin) / 40000.0) ** 0.5
-        nx = max(1, int(round((xmax - xmin) / cell_m)))
-        ny = max(1, int(round((ymax - ymin) / cell_m)))
-    dem_src = _find_dem(dam_folder, model_folder)
-    epsg = _raster_epsg(dem_src) or "EPSG:26914"
-    units = _project_units(dem_src)
-    sa = "Flood2D"
-    reach = (getattr(dam, "name", None) or name or "River").replace(",", " ")
-    mesh = os.path.join(out, "mesh.geojson")
-    feats = []
-    for j in range(ny):
-        for i in range(nx):
-            x0, y0 = xmin + i * cell_m, ymin + j * cell_m
-            cell = [(x0, y0), (x0 + cell_m, y0), (x0 + cell_m, y0 + cell_m), (x0, y0 + cell_m), (x0, y0)]
-            feats.append({"type": "Feature", "properties": {"cell": j * nx + i},
-                          "geometry": {"type": "Polygon", "coordinates": [cell]}})
-    json.dump({"type": "FeatureCollection",
-               "crs": {"type": "name", "properties": {"name": epsg}},
-               "features": feats}, open(mesh, "w", encoding="utf-8"))
-    json.dump({"type": "FeatureCollection", "features": [
-        {"type": "Feature", "properties": {"what": "2D area"},
-         "geometry": {"type": "Polygon", "coordinates": [ring]}},
-        {"type": "Feature", "properties": {"what": "river"},
-         "geometry": {"type": "LineString", "coordinates": line}},
-        {"type": "Feature", "properties": {"what": "dam breakline"},
-         "geometry": {"type": "LineString", "coordinates": list(dam_line)}},
-    ]}, open(os.path.join(out, "geometry.geojson"), "w", encoding="utf-8"))
-    def xy_block(pts):
-        return "\n".join("{:.3f} {:.3f}".format(x, y) for x, y in pts)
-    geom = os.path.join(out, name + ".g01")
-    with open(geom, "w", encoding="utf-8", newline="") as f:
-        f.write("Geom Title={}\nProgram Version=6.31\n".format(name))
-        f.write("Viewing Rectangle={:.3f},{:.3f},{:.3f},{:.3f}\n\n".format(xmin, xmax, ymin, ymax))
-        f.write("2D Flow Area Name={}\n2D Flow Area Cell Size={:.3f}\n".format(sa, cell_m))
-        f.write("2D Flow Area Manning's n=0.06\n2D Flow Area Polygon= {}\n".format(len(ring)))
-        f.write(xy_block(ring) + "\n\n")
-        f.write("2D Flow Area BreakLine Name=Dam\n2D Flow Area BreakLine Cell Size={:.3f}\n".format(max(10.0, cell_m / 4)))
-        f.write("2D Flow Area BreakLine= 2\n" + xy_block(dam_line) + "\n\n")
-        f.write("River Reach={},Breach\n".format(reach))
-        f.write("Reach XY= {}\n".format(len(line)))
-        f.write(xy_block(line) + "\n\n")
-        f.write("BC Line Name=Inflow\nBC Line SA={}\nBC Line= 2\n".format(sa) + xy_block(bc_up) + "\n\n")
-        f.write("BC Line Name=Downstream\nBC Line SA={}\nBC Line= 2\n".format(sa) + xy_block(bc_dn) + "\n")
-    # unsteady: hydrograph on the inflow line, normal depth downstream. Write the discharge in
-    # the project flow unit (cfs for an English model, m3/s for an SI model) so the values match
-    # the unit system declared in the plan and project files; otherwise HEC-RAS reads cfs as m3/s.
-    q_cfs = hydro.get("q_cfs")
-    if q_cfs is None:                       # a hydro dict without the array: fall back to the CSV
-        q_cfs = [float(ln.split(",")[1]) for ln in
-                 open(hydro["csv"], encoding="utf-8").read().splitlines()[1:] if ln.strip()]
-    block = flow_hydrograph_block([units.flow(float(q) * CFS) for q in q_cfs])
-    # Size the plan window to the run's actual simulation duration -- the span of the exported
-    # breach hydrograph -- so the whole flood is simulated. The resample info dict carries no
-    # duration, so the old 'hours or 12' default always resolved to 12 and wrote a fixed 13 h
-    # window, truncating longer breach floods. Take the duration from the hydrograph itself (its
-    # final time), falling back to the reported duration_hr then 12, and let the end date roll
-    # past a single day (ported from core/hecras_model.ras_date) so long floods are not clipped.
-    t_hr = hydro.get("t_hr")
-    if t_hr is not None and len(t_hr):
-        sim_hr = float(t_hr[-1])
-    else:
-        sim_hr = float(hydro["info"].get("duration_hr") or (params or {}).get("duration_hr") or 12)
-    end_dt = (datetime.datetime(2024, 1, 1)
-              + datetime.timedelta(hours=max(1, int(math.ceil(sim_hr))) + 1))
-    unsteady = os.path.join(out, name + ".u01")
-    with open(unsteady, "w", encoding="utf-8", newline="") as f:
-        f.write("Flow Title={}\nProgram Version=6.31\n".format(name))
-        f.write("Boundary Location={},Inflow\n".format(sa))
-        f.write(block)
-        f.write("Boundary Location={},Downstream\nFriction Slope=0.001,0\n".format(sa))
-        f.write("Use Fixed Start Time\nFixed Start Date/Time=01Jan2024,0000\n")
-    plan = os.path.join(out, name + ".p01")
-    with open(plan, "w", encoding="utf-8", newline="") as f:
-        f.write("Plan Title={}\nProgram Version=6.31\nShort Identifier=Breach\n".format(name))
-        f.write("Simulation Date=01Jan2024,0000,{},{}\n".format(
-            end_dt.strftime("%d%b%Y"), end_dt.strftime("%H%M")))
-        f.write("Computation Interval=1MIN\nOutput Interval=15MIN\nMapping Interval=15MIN\n")
-        f.write("Geometry File={}.g01\nFlow File={}.u01\n".format(name, name))
-        f.write("{}\n".format(units.label))
-    prj = os.path.join(out, name + ".prj")
-    with open(prj, "w", encoding="utf-8", newline="") as f:
-        f.write("Proj Title={}\nCurrent Plan=p01\nDefault Exp/Contr=0.1,0.3\n".format(name))
-        f.write("{}\n".format(units.label))
-        f.write("Geom File={}.g01\nUnsteady File={}.u01\nPlan File={}.p01\n".format(name, name, name))
-    rasmap = os.path.join(out, name + ".rasmap")
-    with open(rasmap, "w", encoding="utf-8", newline="") as f:
-        f.write("<RASMapper>\n  <Terrains>\n    <Layer Name=\"Terrain\" Type=\"TerrainLayer\" Filename=\"terrain.tif\"/>\n  </Terrains>\n")
-        f.write("  <Geometries>\n    <Layer Name=\"Geometry\" Type=\"GeometryLayer\" Filename=\"{}.g01\"/>\n  </Geometries>\n</RASMapper>\n".format(name))
-    n_struct = _write_structures(dam_folder, model_folder, out, geom, name, river=line, sa=sa)
-    terrain, epsg = _terrain_clip(dam_folder, model_folder, out, xmin, ymin, xmax, ymax)
-    note = os.path.join(out, "HECRAS_README.txt")
-    with open(note, "w", encoding="utf-8", newline="") as f:
-        f.write("CRS: {} (coordinates in {}). The project is written in {}; keep HEC-RAS in that "
-                "unit system before computing.\n".format(epsg or "the run CRS", units.len_name,
-                                                         units.label))
-        f.write("2D area, cell {:.0f} {}, {} cells in mesh.geojson.\n".format(
-            cell_m, units.len_name, nx * ny))
-        f.write("River centerline is the breach flow path. Dam is a breakline. Inflow is the "
-                "breach hydrograph in {}.\n".format(units.q_name))
-        f.write("Open the .prj in HEC-RAS 6, associate terrain.tif, then Compute 2D Flow Areas. "
-                "RAS writes the official mesh HDF; this package cannot do that step.\n")
-        f.write("Culverts and bridges: {} from the Runner (the same lines ANUGA uses) or a labeled guess. "
-                "See structures.csv. source=guess and surveyed=no is not a surveyed culvert. "
-                "A bridge is a weir connection; a culvert is a barrel group.\n".format(n_struct))
-    return {"ras_project": prj, "geometry": geom, "plan": plan, "unsteady": unsteady,
-            "mesh": mesh, "terrain": terrain, "readme": note}
-
-
-def _find_dem(dam_folder, model_folder):
-    """The DEM the run used, not a hardcoded Elm River path."""
-    names = ("dem.tif", "terrain.tif", "dem.vrt")
-    roots = [os.path.join(dam_folder, model_folder), dam_folder]
-    for root in roots:
-        if not os.path.isdir(root):
-            continue
-        for name in names:
-            path = os.path.join(root, name)
-            if os.path.isfile(path):
-                return path
-        for fn in sorted(os.listdir(root)):
-            if fn.lower().endswith((".tif", ".tiff", ".vrt")):
-                return os.path.join(root, fn)
-    return ""
-
-
-def _raster_epsg(path):
-    if not path or not os.path.isfile(path):
-        return ""
-    try:
-        from .solve_gate import raster_info
-        return raster_info(path).get("epsg") or ""
-    except Exception:
-        return ""
-
-
-def _raster_linear_unit_m(path):
-    """Metres per linear unit of the DEM's CRS (about 0.3048 for a feet CRS, 1.0 for metres), or
-    None when it cannot be read without GDAL. Used to choose the HEC-RAS project unit system."""
-    epsg = _raster_epsg(path)
-    if not epsg:
-        return None
-    try:
-        from . import gdal_io
-        return gdal_io.linear_unit_m(epsg)
-    except Exception:
-        return None
-
-
-def _terrain_clip(dam_folder, model_folder, out, xmin, ymin, xmax, ymax):
-    """Clip the run DEM into the 2D area. The clip keeps the DEM CRS."""
-    src = _find_dem(dam_folder, model_folder)
-    dest = os.path.join(out, "terrain.tif")
-    epsg = _raster_epsg(src)
-    if not src:
-        return "", epsg
-    import subprocess
-    cmd = ["gdalwarp", "-te", str(xmin), str(ymin), str(xmax), str(ymax),
-           "-tr", "10", "10", "-r", "bilinear", "-overwrite", src, dest]
-    subprocess.run(cmd, check=False, capture_output=True)
-    return (dest if os.path.isfile(dest) else ""), epsg
+def write_ras_project(*args, **kwargs):
+    """RETIRED in 3.10.16. It wrote a project skeleton with keywords HEC-RAS does not use
+    ('2D Flow Area Name=', 'BC Line SA=', 'Geometry File=' ...: none of them is in HEC's own
+    example files), so HEC-RAS could not read its geometry. The HEC-RAS 2D model is now built by
+    `core/hecras_model.build_model` (HEC's keyword lines, CRLF, US or SI units from the CRS) and
+    packaged by `core/hecras_package.build_package`."""
+    raise HecRasError("write_ras_project was retired in 3.10.16 (its geometry keywords are not "
+                      "HEC-RAS's); use core.hecras_package.build_package")
 
 
 # ============================================================================
@@ -806,6 +581,77 @@ def _time_factor_hr(catalog, path, obj):
     return 24.0
 
 
+def _block_of(path):
+    """The output block of a results path: the part up to and including 'Unsteady Time
+    Series' (e.g. '.../Output Blocks/Base Output/Unsteady Time Series'), or None."""
+    parts = path.split("/")
+    for i, p in enumerate(parts):
+        if _norm(p) == "unsteady time series":
+            return "/".join(parts[:i + 1])
+    return None
+
+
+def pair_time(times, series):
+    """v3.10.17: the 'Time' dataset of the same output block as `series` (path, obj) whose
+    length is the series' row count; HEC-RAS writes several blocks (Base Output, DSS
+    Hydrograph Output every minute, DSS Profile Output once per profile) and taking the first
+    'Time' paired a series with another block's times (DWR-3161 readout: 33 profile rows read
+    against the 385 base-output times). Falls back to the first time when there is no series."""
+    if not times:
+        return None
+    if series is None:
+        return times[0]
+    blk = _block_of(series[0])
+    rows = series[1].shape[0] if len(getattr(series[1], "shape", ())) else None
+    same = [t for t in times if _block_of(t[0]) == blk]
+    for t in same + list(times):
+        if rows is None or t[1].shape[0] == rows:
+            return t
+    return (same or times)[0]
+
+
+def connection_timeseries(hdf, name, prefer_block="DSS Hydrograph Output"):
+    """v3.10.17: the time series of an SA/2D area connection (the dam) from a plan HDF:
+    {'block', 'path', 't_hr', 'columns', 'values' (n, k), 'units'}. Uses the 'Structure
+    Variables' (Total Flow, Weir Flow, Stage HW, Stage TW) of the block with the most time
+    steps that are a TIME SERIES (rows = that block's Time), preferring `prefer_block`
+    (every minute when HEC-RAS writes it); never the DSS Profile Output table."""
+    f, close = _open_hdf(hdf)
+    try:
+        cat = Catalog(f)
+        hits = [(p, o) for p, o in cat.find("structure variables", exact=True)
+                if "/sa 2d area conn/" in "/".join(_norm(x) for x in p.split("/")) + "/"
+                and _norm(p.split("/")[-2]) == _norm(name)]
+        times = cat.find("time", exact=True, under="time series")
+        best = None
+        for p, o in hits:
+            blk = _block_of(p)
+            if blk is None or "profile" in _norm(blk):
+                continue
+            t = [x for x in times if _block_of(x[0]) == blk and x[1].shape[0] == o.shape[0]]
+            if not t:
+                continue
+            key = (0 if _norm(prefer_block) in _norm(blk) else 1, -o.shape[0])
+            if best is None or key < best[0]:
+                best = (key, p, o, t[0], blk)
+        if best is None:
+            raise HecRasError("No time series of connection '{}' in {} (found: {})".format(
+                name, hdf, ", ".join(p for p, _ in hits) or "nothing"))
+        _, p, o, (tp, to), blk = best
+        cols, units = [], []
+        for row in _attrs(o).get("Variable_Unit", []):
+            vals = [_text(v) for v in (row if hasattr(row, "__len__") and not isinstance(
+                row, (bytes, str)) else [row])]
+            cols.append(vals[0] if vals else "")
+            units.append(vals[1] if len(vals) > 1 else "")
+        t_hr = np.asarray(_read(to), dtype=np.float64).reshape(-1) * _time_factor_hr(cat, tp, to)
+        return {"block": blk.split("/")[-2] if "/" in blk else blk, "path": p, "t_hr": t_hr,
+                "columns": cols, "units": units,
+                "values": np.asarray(_read(o), dtype=np.float64)}
+    finally:
+        close()
+
+
 def discover(catalog, area=None):
     """The datasets to use for one 2D flow area. Raises HecRasError listing what was found
     when a required one is missing. Returns a dict of paths and objects."""
@@ -848,7 +694,7 @@ def discover(catalog, area=None):
     res["ts_wse"] = pick("water surface", prefer=("unsteady time series",), exact=True,
                          under="time series")
     times = catalog.find("time", exact=True, under="time series")
-    res["ts_time"] = times[0] if times else None
+    res["ts_time"] = pair_time(times, res["ts_wse"])
     missing = [label for key, label in (("min_elev", "Cells Minimum Elevation"),
                                         ("max_wse", "Maximum Water Surface"))
                if res[key] is None]
@@ -1269,98 +1115,3 @@ def import_as_reference(hdf_path, like_grid, area=None, **kw):
     arrays = rasterise(mesh, like_grid.x0, like_grid.y0, like_grid.dx, like_grid.nx,
                        like_grid.ny, names=("depth", "wse", "velocity", "arrival"))
     return arrays
-
-
-def _write_structures(dam_folder, model_folder, out, geom, name, river=None, sa="Flood2D"):
-    """Append the Runner structures ANUGA uses. Culverts become barrel groups; bridges a weir.
-
-    An inventory row is surveyed. A guess from a road crossing is written to
-    culvert_candidates.csv and is not added to the geometry.
-    """
-    src = os.path.join(dam_folder, model_folder, "structures.json")
-    rows = []
-    if os.path.isfile(src):
-        rows = json.load(open(src, encoding="utf-8")) or []
-        for s in rows:
-            if "source" not in s:
-                s["source"] = "runner"
-                s["surveyed"] = True
-            else:
-                s.setdefault("surveyed", s.get("source") == "inventory")
-    guessed_saved = [s for s in rows if s.get("source") == "guess"
-                     or str(s.get("name") or "").startswith("guess:")]
-    rows = [s for s in rows if s not in guessed_saved]
-    extra = []
-    if not rows and river:
-        roads = _road_lines(dam_folder, model_folder)
-        if roads:
-            from .culvert_guess import guess_crossings
-            extra = guess_crossings(roads, [river])
-    listed = guessed_saved + extra
-    if listed:
-        from .culvert_guess import write_candidates_csv
-        write_candidates_csv(os.path.join(out, "culvert_candidates.csv"), listed)
-    if not rows:
-        return 0
-    csv_path = os.path.join(out, "structures.csv")
-    with open(csv_path, "w", encoding="utf-8", newline="") as f:
-        f.write("name,kind,shape,barrels,width_m,height_m,source,surveyed,x1,y1,x2,y2,note\n")
-        for s in rows:
-            line = [] if s.get("line") is None else list(s.get("line"))  # may be an ndarray
-            a = line[0] if line else ["", ""]
-            b = line[-1] if line else ["", ""]
-            f.write("{},{},{},{},{},{},{},{},{},{},{},{},{}\n".format(
-                s.get("name") or s.get("kind"), s.get("kind"), s.get("shape"), s.get("barrels"),
-                s.get("width_m"), s.get("height_m"), s.get("source") or "runner",
-                "yes" if s.get("surveyed") else "no", a[0], a[1], b[0], b[1],
-                s.get("note") or ""))
-    with open(geom, "a", encoding="utf-8", newline="") as f:
-        f.write("\n")
-        for i, s in enumerate(rows, 1):
-            line = [] if s.get("line") is None else list(s.get("line"))  # may be an ndarray
-            if len(line) < 2:
-                continue
-            label = s.get("name") or "{}{}".format(s.get("kind"), i)
-            f.write("SA/2D Area Conn Name={}\n".format(label))
-            f.write("SA/2D Area Conn SA={}\n".format(sa))
-            f.write("SA/2D Area Conn Line= {}\n".format(len(line)))
-            f.write("\n".join("{:.3f} {:.3f}".format(p[0], p[1]) for p in line) + "\n")
-            if s.get("kind") == "culvert":
-                f.write("SA/2D Area Conn Culv= 1\n")
-                f.write("Culvert Name={}\nCulvert Shape={}\n".format(label, s.get("shape") or "box"))
-                f.write("Culvert Span={}\nCulvert Rise={}\n".format(s.get("width_m"), s.get("height_m")))
-                f.write("Culvert Barrel Count={}\nCulvert Manning={}\n".format(
-                    s.get("barrels") or 1, s.get("manning") or 0.013))
-                f.write("Culvert Upstream Invert={}\nCulvert Downstream Invert={}\n".format(
-                    s.get("invert_up_m"), s.get("invert_dn_m")))
-                f.write("Culvert Entrance Loss={}\n".format(s.get("losses") or 0.5))
-                f.write("Culvert Comment=source {} surveyed {}\n".format(
-                    s.get("source") or "runner", "yes" if s.get("surveyed") else "no"))
-            else:
-                f.write("SA/2D Area Conn Type=Weir\n")
-                f.write("SA/2D Area Conn Weir Width={}\n".format(s.get("width_m")))
-                f.write("SA/2D Area Conn Weir Crest={}\n".format(s.get("invert_up_m")))
-            f.write("\n")
-    return len(rows)
-
-
-def _road_lines(dam_folder, model_folder):
-    """Polylines from a roads GeoJSON the run already saved, if there is one."""
-    for folder in (os.path.join(dam_folder, model_folder), dam_folder):
-        path = os.path.join(folder, "roads.geojson")
-        if not os.path.isfile(path):
-            continue
-        try:
-            fc = json.load(open(path, encoding="utf-8"))
-        except (OSError, ValueError):
-            return []
-        lines = []
-        for feat in fc.get("features") or []:
-            g = feat.get("geometry") or {}
-            if g.get("type") == "LineString":
-                lines.append([(c[0], c[1]) for c in g.get("coordinates") or []])
-            elif g.get("type") == "MultiLineString":
-                for part in g.get("coordinates") or []:
-                    lines.append([(c[0], c[1]) for c in part])
-        return lines
-    return []

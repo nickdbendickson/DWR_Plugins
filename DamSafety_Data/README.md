@@ -21,7 +21,18 @@ your Mac and downloads a new copy only when a source actually changes.
 - **Settings and Status…**: data folder, schedule, which datasets to keep, and
   when each was last updated and checked.
 
-Data is stored in `~/Documents/ND Structure Data` unless you choose another folder.
+Where the data is stored (first that applies):
+
+1. The folder you choose in **Settings and Status…**.
+2. `<suite data folder>/structures/` when the dam suite's data folder is set
+   (`ndsuite/data_folder`). A folder inside the offline pack (`ND_Dam_Suite_Pack`) or
+   one that can't be written is skipped, with a message.
+3. `~/Documents/ND Structure Data`.
+
+If `~/Documents/ND Structure Data` already holds downloads and the suite's
+`structures/` folder is empty, Data keeps using the old folder and shows a one-line
+notice. To share the data with the suite, close QGIS and move that folder's contents
+into `structures/`. Nothing is moved automatically.
 
 ## Datasets
 
@@ -83,8 +94,10 @@ hidden `.staging` folder, verified (checksum, complete size, valid zip), and onl
 then swapped into place, so an interrupted download never damages the data you
 have. Layers already in your project are reloaded after an update.
 
-`manifest.json` in the data folder records the version, last update and last
-check for each dataset.
+`structures_manifest.json` in the data folder (`manifest.json` before 1.4.0, read
+once and left in place) records the version, last update and last
+check for each dataset. It has its own name so it never replaces the suite's
+`manifest.json` in the suite data folder.
 
 ## Notes
 

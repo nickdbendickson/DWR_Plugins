@@ -68,7 +68,7 @@ class DataFolderTabMixin(object):
         self.datafolder_edit.setToolTip(
             "Search this folder (sub-folders to 4 levels) for the data sets of groups 3-6. "
             "Order of use: this folder, then the QGIS layer tree, then the internet.")
-        self.datafolder_browse_btn = QPushButton("Browse...")
+        self.datafolder_browse_btn = QPushButton("Browse\u2026")
         self.datafolder_browse_btn.clicked.connect(self._on_browse_data_folder)
         self.datafolder_search_btn = QPushButton("Search folder")
         self.datafolder_search_btn.setToolTip(
@@ -79,7 +79,7 @@ class DataFolderTabMixin(object):
         self.datafolder_hifld_btn.setToolTip(
             "Opens the Homeland Security Digital Library HIFLD page in your web browser. "
             "Download the layers you need (fire stations, EMS, EOC, law enforcement, "
-            "wastewater, ... for North Dakota), save them in a folder and search it here.")
+            "wastewater, \u2026 for North Dakota), save them in a folder and search it here.")
         self.datafolder_hifld_btn.clicked.connect(self._on_open_hifld_page)
         row.addWidget(self.datafolder_edit, 3)
         row.addWidget(self.datafolder_browse_btn)
@@ -163,7 +163,7 @@ class DataFolderTabMixin(object):
             n = len([r for r in DF.ROLES if match.best(r)])
             self._update_status("Data folder: {} layer(s) read, {} of {} data sets found".format(
                 len(scan), n, len(DF.ROLES)), n > 0)
-        self._start_background("Searching the data folder...", work, done, project_bound=False)
+        self._start_background("Searching the data folder\u2026", work, done, project_bound=False)
 
     # --------------------------------------------------------------- table --
     def _df_use_pack(self, folder):

@@ -81,8 +81,11 @@ def hecras_hydrograph_block_format_and_peak():
         assert [float(ls[2][i:i + 8]) for i in range(0, len(ls[2]), 8)] == [
             123456.8, 0.5, 12.0, 1234568.0]              # decimals dropped to fit 8 characters
         assert len(ls[2]) == 32
-        huge = hecras.flow_hydrograph_block([123456789.0])
-        assert len(huge.splitlines()[1]) == 8
+        try:                                   # 9 digits cannot fit: a clear error, never a
+            hecras.flow_hydrograph_block([123456789.0])        # 9-character field
+            raise AssertionError("123456789 should not fit in 8 characters")
+        except hecras.FixedWidthError as e:
+            assert "does not fit" in str(e)
     finally:
         shutil.rmtree(d)
 
@@ -215,68 +218,6 @@ def hecras_export_run_reads_the_workflow_files():
             assert "breach_hydrograph.csv" in str(e)
     finally:
         shutil.rmtree(d)
-
-
-def _u01_flow_values(u01_text):
-    """The discharge values in the 'Flow Hydrograph=' block of a .u01 file."""
-    vals, grab = [], False
-    for ln in u01_text.splitlines():
-        if ln.startswith("Flow Hydrograph="):
-            grab = True
-            continue
-        if grab:
-            if ln.strip() and len(ln) % 8 == 0 and all(c in "0123456789.eE+- " for c in ln):
-                vals += [float(ln[k:k + 8]) for k in range(0, len(ln), 8)]
-            else:
-                break
-    return vals
-
-
-@test
-def hecras_project_units_match_the_hydrograph_and_coordinates():
-    """H7 regression: the unit system declared in the generated .prj/.p01 must match the units
-    of the embedded breach hydrograph (cfs for an English model, m3/s for an SI model) and of
-    the 2D geometry coordinates. The crude skeleton used to declare 'SI Units' while writing the
-    hydrograph in cfs, so HEC-RAS read the cfs numbers as m3/s: a ~1/CFS (~35x) too-large inflow.
-    The units now follow the DEM CRS linear unit, mirroring core/hecras_model.crs_units."""
-
-    def run_case(unit_m, x0, y0, step):
-        d = tempfile.mkdtemp()
-        old = hecras._raster_linear_unit_m
-        try:
-            hecras._raster_linear_unit_m = lambda p: unit_m
-            hy = _fake_run(d)
-            pts = np.array([[x0 + i * step, y0] for i in range(6)], dtype=float)
-            np.savetxt(os.path.join(d, hecras.MODEL_FOLDER, "flow_trace.csv"), pts,
-                       delimiter=",", header="x,y", comments="", fmt="%.2f")
-            r = hecras.export_run(d, None, 5)
-            assert r["ras_project"], "no HEC-RAS project was written"
-            si = unit_m is None or abs(unit_m - 1.0) < 1e-9
-            label = "SI Units" if si else "English Units"
-            for key in ("ras_project", "plan"):
-                text = open(r[key], encoding="utf-8").read()
-                assert label in text and (("English" if si else "SI") + " Units") not in text, \
-                    (key, label, text)
-            vals = _u01_flow_values(open(r["unsteady"], encoding="utf-8").read())
-            assert vals, "no discharge values written in the .u01"
-            # the embedded discharge is in the DECLARED unit (no ~35x unit mismatch)
-            want = hy.peak_cfs * (CFS if si else 1.0)      # m3/s for SI, cfs for English
-            wrong = hy.peak_cfs * (1.0 if si else CFS)     # the other unit the old code mixed in
-            _close(max(vals), want, rel=5e-3)
-            assert abs(max(vals) - want) < 0.5 * abs(want - wrong), (max(vals), want, wrong)
-            # the 2D geometry coordinates are the trace coordinates (already in the declared
-            # unit); they are written through, not reinterpreted or converted
-            g01 = open(r["geometry"], encoding="utf-8").read()
-            assert "{:.3f}".format(x0) in g01, "the river coordinates must be in the CRS units"
-            readme = open(r["readme"], encoding="utf-8").read()
-            assert label in readme and ("m3/s" if si else "cfs") in readme
-        finally:
-            hecras._raster_linear_unit_m = old
-            shutil.rmtree(d)
-
-    run_case(None, 512345.0, 5234567.0, 50.0)     # CRS unit unknown -> SI (the metric run CRS)
-    run_case(1.0, 512345.0, 5234567.0, 50.0)      # metres CRS -> SI, flow in m3/s
-    run_case(FT, 1500000.0, 500000.0, 160.0)      # feet CRS -> English, flow stays in cfs
 
 
 # ============================================================================ HDF stand-in
@@ -617,7 +558,7 @@ def hecras_algorithms_initialise():
     h, _ = _algs()
     assert [c().name() for c in h.HECRAS_ALGORITHMS] == ["hecrasexport", "hecrasimport"]
     names = [c().displayName() for c in h.HECRAS_ALGORITHMS]
-    assert names == ["Export the breach to HEC-RAS (hydrograph and breach table)",
+    assert names == ["Export the breach to HEC-RAS (2D model package, hydrograph and breach table)",
                      "Import HEC-RAS 2D results as rasters"]
     for cls in h.HECRAS_ALGORITHMS:
         a = cls()
@@ -643,6 +584,11 @@ def hecras_export_algorithm_runs():
         n, vals = _parse_block(open(r["HYDROGRAPH_TXT"]).read())
         assert n == len(vals) and any("15MIN" in m for m in fb.info)
         assert "cfs" in r["RESULT"]
+        # v3.10.16: the 2D model package is tried; this fake run has no DEM or depth raster,
+        # so it is not built, the hydrograph and table still are, and the log says why
+        assert r["MODEL_FOLDER"] == "" and r["MODEL_ZIP"] == ""
+        assert any("HEC-RAS 2D model not built" in m for m in fb.errors)
+        assert "model not built" in r["RESULT"]
         # default step is 5 minutes; a chosen output folder is used
         out = os.path.join(d, "elsewhere")
         r2 = a.processAlgorithm({"DAM_FOLDER": d, "OUT_FOLDER": out},
@@ -746,41 +692,28 @@ def hecras_import_algorithm_runs_with_and_without_benchmark():
 
 
 @test
-def hecras_plan_window_covers_the_whole_breach_flood():
-    """M12 regression: the generated HEC-RAS plan simulation window must span the run's actual
-    breach hydrograph, not a fixed 13 h. write_ras_project read hydro['info']['duration_hr'], a
-    key the resample info never has, so `hours` always fell back to 12 and every plan ran
-    01Jan2024 00:00 -> 01Jan2024 13:00 (min(23, 12 + 1)); HEC-RAS then truncated any flood longer
-    than that. The window now follows the exported hydrograph's final time and the end date rolls
-    across days, so a long flood is simulated in full."""
-    import datetime as _dt
-    d = tempfile.mkdtemp()
-    old = hecras._raster_linear_unit_m
-    try:
-        hecras._raster_linear_unit_m = lambda p: FT          # feet CRS -> English model
-        # a breach hydrograph that lasts ~30 h, well past the old 13 h cap
-        t_s = np.linspace(0.0, 30.0 * 3600.0, 61)
-        q_cms = np.concatenate([np.linspace(0.0, 500.0, 20), np.linspace(500.0, 0.0, 41)])
-        hy = br.Hydrograph(t_s, q_cms, br.METHOD_PIPING)
-        m = os.path.join(d, hecras.MODEL_FOLDER)
-        os.makedirs(m)
-        hy.to_csv(os.path.join(m, hecras.HYDROGRAPH_CSV))
-        json.dump({"dam": br.dam_to_dict(_dam()), "hydrograph": hy.summary()},
-                  open(os.path.join(m, hecras.RUN_REPORT_JSON), "w"))
-        pts = np.array([[1500000.0 + i * 160.0, 500000.0] for i in range(6)], dtype=float)
-        np.savetxt(os.path.join(m, "flow_trace.csv"), pts, delimiter=",",
-                   header="x,y", comments="", fmt="%.2f")
-        r = hecras.export_run(d, None, 5)
-        plan = open(r["plan"], encoding="utf-8").read()
-        line = [ln for ln in plan.splitlines() if ln.startswith("Simulation Date=")][0]
-        sd, stime, ed, etime = line.split("=", 1)[1].split(",")
-        start = _dt.datetime.strptime(sd + stime, "%d%b%Y%H%M")
-        end = _dt.datetime.strptime(ed + etime, "%d%b%Y%H%M")
-        window_hr = (end - start).total_seconds() / 3600.0
-        assert end > start, line
-        # must cover the whole ~30 h flood (the bug produced a fixed 13 h window)
-        assert window_hr >= 30.0, (line, window_hr)
-        assert window_hr <= 33.0, (line, window_hr)          # and not absurdly padded
-    finally:
-        hecras._raster_linear_unit_m = old
-        shutil.rmtree(d)
+def hecras_field8_always_exactly_eight_characters():
+    """Absaraka TIER 2 preview: flows of 10,000 cfs and more fill the whole 8-character field
+    (as in HEC's own files); every field is exactly 8 characters, decimals are dropped to fit,
+    and a value that cannot fit raises instead of shifting the columns after it."""
+    f = hecras.field8
+    cases = {9999.99: " 9999.99", 10000: "10000.00", 10000.004: "10000.00",
+             12345.67: "12345.67", 123456.7: "123456.7", 123456.78: "123456.8",
+             1234567: " 1234567", 12345678: "12345678", 0: "    0.00", 0.5: "    0.50",
+             -1.5: "   -1.50", -9999.99: "-9999.99", -10000: "-10000.0", -123456.7: " -123457",
+             -1234567: "-1234567", -0.001: "    0.00"}
+    for v, want in cases.items():
+        got = f(v)
+        assert got == want and len(got) == 8, (v, got, want)
+    # a row of 10,000+ values reads back by 8-character columns
+    row = "".join(f(v) for v in (7895.88, 11063.36, 25800.5, 123456.7, -10000.0))
+    assert row == " 7895.8811063.3625800.50123456.7-10000.0"
+    assert [float(row[i:i + 8]) for i in range(0, len(row), 8)] == [
+        7895.88, 11063.36, 25800.5, 123456.7, -10000.0]
+    for bad in (123456789.0, -12345678.0, float("nan"), float("inf"), "x"):
+        try:
+            f(bad)
+            raise AssertionError("{!r} should raise".format(bad))
+        except hecras.FixedWidthError:
+            pass
+    assert hecras._field8 is f

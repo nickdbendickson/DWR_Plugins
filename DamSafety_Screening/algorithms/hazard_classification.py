@@ -71,7 +71,7 @@ class HazardClassification(QgsProcessingAlgorithm):
                 "ft/s. ANY DEPTH: from 0.03048 m (0.1 ft, the runner's WET_FT).\n"
                 "HABITABLE: a tool-0 'habitable' yes/no field wins; otherwise every structure is "
                 "habitable unless its occupancy texts name an uninhabited building (the editable "
-                "word list: barn, shed, garage, silo, grain bin, outbuilding, well pad ...). Mobile "
+                "word list: barn, shed, garage, silo, grain bin, outbuilding, well pad \u2026). Mobile "
                 "homes (Fig. 5.2): 'mobile' / 'manufactured' / 'trailer' / NSI RES2. ROADS: a missing, "
                 "zero or NaN AADT is unknown - the 'unknown AADT' class you choose (default Medium), "
                 "listed in hz_gaps; interstate from I-94 / I 94 / IH-29 / 'Interstate' / TIGER 'I'. "

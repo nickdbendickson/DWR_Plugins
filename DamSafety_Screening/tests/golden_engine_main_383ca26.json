@@ -1,0 +1,154 @@
+{
+ "source": "main 383ca26",
+ "ENGINE_LABELS": [
+  "LISFLOOD-FP only (Runner default; culverts / bridges not modelled)",
+  "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA; = the Runner's 'force ANUGA')"
+ ],
+ "ENGINE_SHORT": [
+  "LISFLOOD-FP only",
+  "LISFLOOD-FP → ANUGA (final results from ANUGA)"
+ ],
+ "effective_engine": {
+  "0,False": 0,
+  "0,True": 1,
+  "1,False": 1,
+  "1,True": 1
+ },
+ "engine_params": [
+  [
+   [
+    0,
+    false,
+    false,
+    null,
+    null
+   ],
+   [
+    {},
+    []
+   ]
+  ],
+  [
+   [
+    1,
+    false,
+    false,
+    null,
+    null
+   ],
+   [
+    {
+     "TIER": 1
+    },
+    [
+     "models: LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA; = the Runner's 'force ANUGA')"
+    ]
+   ]
+  ],
+  [
+   [
+    0,
+    true,
+    false,
+    null,
+    null
+   ],
+   [
+    {
+     "TIER": 1
+    },
+    [
+     "models: LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA; = the Runner's 'force ANUGA')"
+    ]
+   ]
+  ],
+  [
+   [
+    1,
+    false,
+    true,
+    "c.gpkg",
+    {
+     "C_KIND": "k"
+    }
+   ],
+   [
+    {
+     "TIER": 1,
+     "REFINE_NEAR": true,
+     "STRUCTURES": "c.gpkg",
+     "S_KIND": "k"
+    },
+    [
+     "models: LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA; = the Runner's 'force ANUGA')",
+     "near-dam refine with the FV1 solver",
+     "culverts / bridges: c.gpkg"
+    ]
+   ]
+  ],
+  [
+   [
+    0,
+    false,
+    false,
+    "c.gpkg",
+    {}
+   ],
+   [
+    {
+     "STRUCTURES": "c.gpkg"
+    },
+    [
+     "culverts / bridges: c.gpkg",
+     "Culverts / bridges (CULVERTS) are only modelled by ANUGA; this run uses LISFLOOD-FP only, so the culvert layer is ignored. Choose 'LISFLOOD-FP for the extent, then ANUGA' to use it."
+    ]
+   ]
+  ],
+  [
+   [
+    1,
+    true,
+    false,
+    "c.gpkg",
+    {
+     "C_KIND": ""
+    }
+   ],
+   [
+    {
+     "TIER": 1,
+     "STRUCTURES": "c.gpkg"
+    },
+    [
+     "models: LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA; = the Runner's 'force ANUGA')",
+     "culverts / bridges: c.gpkg"
+    ]
+   ]
+  ]
+ ],
+ "engine_status": {
+  "0,None": "Runner engine (7b): LISFLOOD-FP only",
+  "0,x": "Runner engine (7b): LISFLOOD-FP only; culverts: IGNORED (LISFLOOD-FP only)",
+  "1,None": "Runner engine (7b): LISFLOOD-FP → ANUGA (final results from ANUGA)",
+  "1,x": "Runner engine (7b): LISFLOOD-FP → ANUGA (final results from ANUGA); culverts: used by ANUGA"
+ },
+ "runner_TIERS": [
+  [
+   "lisflood",
+   "LISFLOOD-FP only"
+  ],
+  [
+   "lisflood+anuga",
+   "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"
+  ]
+ ],
+ "runner_TIER_default": 0,
+ "workflow_TIERS": [
+  "lisflood",
+  "lisflood+anuga"
+ ],
+ "wizard_TIER_LABELS": {
+  "lisflood": "LISFLOOD-FP only",
+  "lisflood+anuga": "LISFLOOD-FP for the extent, then ANUGA for the final results"
+ }
+}

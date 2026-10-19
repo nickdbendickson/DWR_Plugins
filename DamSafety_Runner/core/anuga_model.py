@@ -6,6 +6,7 @@ The mesh covers the area LISFLOOD-FP flooded, widened by a buffer, with
 small triangles near the dam where the flow is fastest and larger ones
 downstream."""
 import json
+import math
 import os
 import queue
 import subprocess
@@ -22,6 +23,11 @@ from . import conditioning as cond
 from . import structures as structmod
 
 WORKER = os.path.join(os.path.dirname(__file__), "anuga_worker.py")
+MESHER = os.path.join(os.path.dirname(__file__), "gmsh_mesher.py")
+# "gmsh" is strict: a rejected gmsh mesh stops the run. "gmsh_or_default" uses the default
+# ANUGA mesh instead, with a WARNING in the log and a line in run_report.json / .md.
+MESHERS = ("default", "gmsh", "gmsh_or_default")
+GMSH_MESHERS = ("gmsh", "gmsh_or_default")
 
 
 class AnugaSettings:
@@ -42,6 +48,12 @@ class AnugaSettings:
         self.buffer_m = buffer_m
         self.algorithm = algorithm
         self.velocity_min_depth_m = velocity_min_depth_m
+        # ANUGA_MESHER: "default" = ANUGA's own mesh (create_domain_from_regions, unchanged);
+        # "gmsh" = breakline-graded mesh from core/gmsh_mesher.py, the run stops if it is
+        # rejected; "gmsh_or_default" = the same, but a rejected mesh falls back (loudly)
+        self.mesher = "default"
+        self.gmsh = None                 # dict of gmsh_mesher sizes (None = its defaults)
+        self.gmsh_timeout_s = 600.0
 
 
 def inlet_line(inflow_xy, direction, width_m):
@@ -109,7 +121,7 @@ def clip_lines_to_polygon(lines, polygon, min_len=1):
 
 
 def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_depth=None,
-              culverts=None, breaklines=None, regions=None):
+              culverts=None, breaklines=None, regions=None, mesh=None):
     job = {
         "dem": dem.masked().astype(np.float32), "dem_x0": dem.x0, "dem_y0": dem.y0,
         "dem_dx": dem.dx, "manning_n": st.manning_n,
@@ -132,7 +144,207 @@ def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_d
         job["breaklines_json"] = json.dumps([np.asarray(b).tolist() for b in breaklines])
     if regions:
         job["regions_json"] = json.dumps(regions)
+    if mesh is not None:     # gmsh mesh: the worker uses anuga.Domain(points, vertices, boundary)
+        job["mesh_points"] = np.asarray(mesh["points"], float)
+        job["mesh_triangles"] = np.asarray(mesh["triangles"], np.int64)
+        job["mesh_boundary"] = np.asarray(mesh["boundary"], np.int64)
+        job["mesh_stats"] = json.dumps(mesh.get("stats", {}))
     np.savez(path, **job)
+
+
+def _clean_env():
+    env = dict(os.environ)
+    for k in ("PYTHONHOME", "PYTHONPATH", "QGIS_PREFIX_PATH", "PYTHONNOUSERSITE"):
+        env.pop(k, None)
+    return env
+
+
+def gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st, channel=None,
+              embankments=None):
+    """The gmsh_mesher input: outer ring, breaklines (REFINE_LINES, road and rail
+    centrelines on embankments, culverts, the inlet/breach line), the flow path and the
+    points that need small triangles (culvert ends, inflow)."""
+    lines = [np.asarray(b, float).tolist() for b in (breaklines or [])]
+    lines += [np.asarray(b, float).tolist() for b in (embankments or [])]
+    lines.append(np.asarray(inlet, float).tolist())
+    pts = [list(map(float, inflow_xy))]
+    for c in culverts or []:
+        e = np.asarray(c["end_points"], float).reshape(-1, 2)
+        lines.append(e.tolist())
+        pts += e.tolist()
+    if channel is None:
+        try:
+            path, _ = terrain.trace_downstream(dem, inflow_xy, 4.0 * max(dem.nx, dem.ny) * dem.dx)
+            # clip first (vertex test), then simplify each inside piece
+            channel = [terrain.douglas_peucker(c, max(dem.dx, 10.0))
+                       for c in clip_lines_to_polygon([np.asarray(path, float)], outer)]
+        except Exception:
+            channel = []
+    spec = dict(outer=np.asarray(outer, float).tolist(), lines=lines,
+                channel=[np.asarray(c, float).tolist() for c in channel], points=pts,
+                threads=int(st.threads or 0))
+    spec.update({k: v for k, v in (st.gmsh or {}).items() if not k.startswith("embankment")})
+    return spec
+
+
+EMBANKMENT_DEFAULTS = dict(embankment_lines=True, embankment_raise_m=0.3,
+                           embankment_offset_m=20.0, embankment_step_m=10.0,
+                           embankment_min_len_m=100.0, embankment_gap_m=30.0,
+                           embankment_cell_m=5.0, embankment_wet_pad_m=150.0)
+
+
+def embankment_options(st):
+    o = dict(EMBANKMENT_DEFAULTS)
+    o.update({k: v for k, v in (getattr(st, "gmsh", None) or {}).items() if k in o})
+    return o
+
+
+def embankment_breaklines(lines, grid, outer, raise_m=0.3, offset_m=20.0, step_m=10.0,
+                          min_len_m=100.0, gap_m=30.0, wet=None):
+    """Pieces of road / rail centrelines that sit on an embankment, for the gmsh mesh.
+
+    Each line is sampled every step_m inside `outer`; a sample is on an embankment when
+    the crown (the highest ground within 3 m across the line) is at least raise_m above
+    the ground offset_m to BOTH sides. Runs of such samples (gaps up to gap_m bridged, so a
+    culvert cut does not split the road) at least min_len_m long are returned as
+    polylines. Lines on flat ground or on a side-hill are left out: only a raised fill
+    holds water back. `wet` (optional (Grid, bool array)): only where the first
+    (LISFLOOD-FP) run flooded, widened; roads in the dry buffer only add triangles.
+    Returns (pieces, info dict)."""
+    out, n_in, km_in, km_out = [], 0, 0.0, 0.0
+    outer = np.asarray(outer, float)
+    zz = grid.masked()                    # once: Grid.sample_bilinear copies it per call
+
+    def sample(x, y):
+        fc = (x - grid.x0) / grid.dx - 0.5
+        fr = (grid.y0 - y) / grid.dx - 0.5
+        c0, r0 = np.floor(fc).astype(int), np.floor(fr).astype(int)
+        tc, tr = fc - c0, fr - r0
+        c0c, c1c = np.clip(c0, 0, grid.nx - 1), np.clip(c0 + 1, 0, grid.nx - 1)
+        r0c, r1c = np.clip(r0, 0, grid.ny - 1), np.clip(r0 + 1, 0, grid.ny - 1)
+        v = (zz[r0c, c0c] * (1 - tc) * (1 - tr) + zz[r0c, c1c] * tc * (1 - tr)
+             + zz[r1c, c0c] * (1 - tc) * tr + zz[r1c, c1c] * tc * tr)
+        off = (fc < -0.5) | (fr < -0.5) | (fc > grid.nx - 0.5) | (fr > grid.ny - 0.5)
+        return np.where(off, np.nan, v)
+    for ln in lines or []:
+        ln = np.asarray(ln, float).reshape(-1, 2)
+        if len(ln) < 2:
+            continue
+        for piece in clip_lines_to_polygon([cond.densify(ln, step_m)], outer):
+            if len(piece) < 3:
+                continue
+            n_in += 1
+            seg = np.hypot(*np.diff(piece, axis=0).T)
+            km_in += seg.sum() / 1000.0
+            t = np.gradient(piece, axis=0)
+            nrm = np.hypot(t[:, 0], t[:, 1])
+            nrm[nrm == 0] = 1.0
+            nx, ny = -t[:, 1] / nrm, t[:, 0] / nrm
+            with np.errstate(invalid="ignore"):
+                crown = np.nanmax(np.vstack([sample(piece[:, 0] + nx * d, piece[:, 1] + ny * d)
+                                             for d in (-3.0, 0.0, 3.0)]), axis=0)
+            left = sample(piece[:, 0] + nx * offset_m, piece[:, 1] + ny * offset_m)
+            right = sample(piece[:, 0] - nx * offset_m, piece[:, 1] - ny * offset_m)
+            with np.errstate(invalid="ignore"):
+                raised = (crown - np.fmax(left, right)) >= raise_m
+            raised &= np.isfinite(crown) & np.isfinite(left) & np.isfinite(right)
+            if wet is not None:
+                wg, wm = wet
+                c = np.floor((piece[:, 0] - wg.x0) / wg.dx).astype(int)
+                r = np.floor((wg.y0 - piece[:, 1]) / wg.dx).astype(int)
+                ok = (r >= 0) & (r < wm.shape[0]) & (c >= 0) & (c < wm.shape[1])
+                inw = np.zeros(len(piece), bool)
+                inw[ok] = wm[r[ok], c[ok]]
+                raised &= inw
+            s = np.concatenate([[0.0], np.cumsum(seg)])
+            # bridge short gaps (a culvert cut, a field approach)
+            idx = np.flatnonzero(raised)
+            for a, b in zip(idx[:-1], idx[1:]):
+                if b > a + 1 and s[b] - s[a] <= gap_m + 1e-9:
+                    raised[a:b] = True
+            i = 0
+            while i < len(raised):
+                if not raised[i]:
+                    i += 1
+                    continue
+                j = i
+                while j + 1 < len(raised) and raised[j + 1]:
+                    j += 1
+                if s[j] - s[i] >= min_len_m:
+                    out.append(piece[i:j + 1])
+                    km_out += (s[j] - s[i]) / 1000.0
+                i = j + 1
+    return out, {"lines_inside": n_in, "km_inside": round(float(km_in), 2),
+                 "embankment_pieces": len(out), "embankment_km": round(float(km_out), 2),
+                 "raise_m": raise_m, "offset_m": offset_m, "cell_m": round(float(grid.dx), 2)}
+
+
+def find_embankments(lines, outer, dem, terrain_read, st, flooded=None):
+    """Road / rail embankment breaklines for the gmsh mesh (or ([], info) when off).
+    Reads the terrain at <= embankment_cell_m over the mesh polygon (the ANUGA DEM is
+    often too coarse to show a road fill); falls back to the ANUGA DEM. `flooded` (bool
+    array on `dem`): only roads within embankment_wet_pad_m of it."""
+    o = embankment_options(st)
+    if not lines or not o["embankment_lines"]:
+        return [], {"embankment_pieces": 0, "reason": "off" if lines else "no road or rail lines"}
+    outer = np.asarray(outer, float)
+    grid = dem
+    if terrain_read is not None and dem.dx > float(o["embankment_cell_m"]):
+        pad = float(o["embankment_offset_m"]) + 20.0
+        x0, y0 = outer.min(axis=0) - pad
+        x1, y1 = outer.max(axis=0) + pad
+        # at most ~25 million cells
+        cell = max(float(o["embankment_cell_m"]), math.sqrt((x1 - x0) * (y1 - y0) / 25e6))
+        if cell < dem.dx:
+            grid = terrain_read((float(x0), float(y0), float(x1), float(y1)), cell)
+    wet = None
+    if flooded is not None and np.asarray(flooded).shape == (dem.ny, dem.nx):
+        wet = (dem, terrain.dilate(np.asarray(flooded, bool), float(o["embankment_wet_pad_m"]),
+                                   dem.dx))
+    return embankment_breaklines(lines, grid, outer, float(o["embankment_raise_m"]),
+                                 float(o["embankment_offset_m"]), float(o["embankment_step_m"]),
+                                 float(o["embankment_min_len_m"]), float(o["embankment_gap_m"]),
+                                 wet=wet)
+
+
+def make_gmsh_mesh(workdir, spec, st):
+    """Run gmsh_mesher.py in the ANUGA interpreter with a timeout. Returns
+    (mesh dict, summary note), or (None, reason) when gmsh failed, timed out or the
+    mesh failed the quality gate; run() then stops or falls back (ANUGA_MESHER)."""
+    sp = os.path.join(workdir, "gmsh_mesh_in.json")
+    op = os.path.join(workdir, "gmsh_mesh.npz")
+    with open(sp, "w", encoding="utf-8") as fh:
+        json.dump(spec, fh)
+    if os.path.exists(op):
+        os.remove(op)
+    try:
+        out = subprocess.run([st.python, MESHER, sp, op], capture_output=True, text=True,
+                             env=_clean_env(), timeout=float(st.gmsh_timeout_s), errors="replace")
+    except subprocess.TimeoutExpired:
+        return None, "gmsh took over {:.0f} s (timeout)".format(st.gmsh_timeout_s)
+    except Exception as e:
+        return None, "gmsh could not start ({})".format(e)
+    if out.returncode != 0 or not os.path.exists(op):
+        msg = (out.stdout + out.stderr).strip().splitlines()
+        why = next((m[len("MESHERROR "):] for m in msg if m.startswith("MESHERROR ")),
+                   msg[-1][:200] if msg else "code {}".format(out.returncode))
+        return None, why
+    with np.load(op) as r:
+        mesh = {"points": r["mesh_points"], "triangles": r["mesh_triangles"],
+                "boundary": r["mesh_boundary"], "stats": json.loads(str(r["mesh_stats"]))}
+    s = mesh["stats"]
+    return mesh, ("ANUGA mesh from gmsh: {} triangles, smallest {:.0f} m2, minimum angle "
+                  "{:.1f} deg.".format(s.get("triangles"), s.get("min_area_m2", 0),
+                                       s.get("min_angle_deg", 0)))
+
+
+def mesher_mode(st):
+    return str(getattr(st, "mesher", "default") or "default").strip().lower()
+
+
+def rejected_line(reason):
+    """The report line for a gmsh mesh that was not used."""
+    return "gmsh mesh rejected: {}; used the default mesh".format(reason)
 
 
 def _launch(st, job, result, workdir, progress, cancel):
@@ -194,7 +406,10 @@ def _tail_text(path, chars=2000):
 
 def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, st,
         progress=None, cancel=None, log=None, structures=None, initial_depth=None,
-        refine_lines=None, reuse=False):
+        refine_lines=None, reuse=False, embankment_lines=None, terrain_read=None):
+    """embankment_lines: road / rail centrelines (work CRS); with a gmsh mesher the
+    pieces on an embankment become mesh lines (find_embankments). terrain_read(bounds,
+    cell) reads finer ground for that test. Neither changes the default mesh."""
     if not st.python or not os.path.isfile(st.python):
         raise ModelError("ANUGA Python interpreter not found: {}".format(st.python))
     os.makedirs(workdir, exist_ok=True)
@@ -211,8 +426,48 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     step = max(5.0, float(np.sqrt(max(st.fine_area_m2, 1.0))))
     breaklines = clip_lines_to_polygon([cond.densify(np.asarray(b, float), step)
                                         for b in (refine_lines or [])], outer)
+    mesh, mnote = None, None
+    mesher = mesher_mode(st)
+    minfo = {"requested": mesher, "used": "default", "rejected": None}
+    if mesher in GMSH_MESHERS:
+        emb, einfo = [], {}
+        try:
+            emb, einfo = find_embankments(embankment_lines, outer, dem, terrain_read, st,
+                                          flooded=flooded)
+        except Exception as e:                      # noqa - the mesh is made without them
+            einfo = {"embankment_pieces": 0, "error": str(e)[:200]}
+        minfo["embankments"] = einfo
+        if log and einfo.get("embankment_pieces"):
+            log("gmsh: {} road/rail embankment piece(s), {} km, become mesh lines.".format(
+                einfo["embankment_pieces"], einfo.get("embankment_km")))
+        spec = gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st,
+                         embankments=emb)
+        mesh, msg = make_gmsh_mesh(workdir, spec, st)
+        if mesh is None:
+            minfo["rejected"] = msg
+            if mesher == "gmsh":
+                raise ModelError(
+                    "ANUGA_MESHER=gmsh: the gmsh mesh was rejected ({}). The run stopped "
+                    "instead of quietly using the default mesh. Set ANUGA_MESHER="
+                    "gmsh_or_default to fall back to the default ANUGA mesh, or change the "
+                    "gmsh sizes (anuga_gmsh, e.g. min_area_tol). Mesh input: {}".format(
+                        msg, os.path.join(workdir, "gmsh_mesh_in.json")))
+            mnote = rejected_line(msg)
+            if log:
+                log("WARNING: " + mnote)
+        else:
+            minfo["used"] = "gmsh"
+            minfo["gmsh"] = mesh.get("stats", {})
+            mnote = msg
+            if log:
+                log(msg)
+    elif mesher != "default":
+        mnote = "ANUGA_MESHER {!r} is unknown; the default ANUGA mesh was used.".format(mesher)
+        minfo["rejected"] = "unknown mesher {!r}".format(mesher)
+        if log:
+            log("WARNING: " + mnote)
     write_job(job, dem, outer, fine, inlet, hydrograph, st, dem, initial_depth, culverts,
-              breaklines, regions)
+              breaklines, regions, mesh=mesh)
     np.savetxt(os.path.join(workdir, "mesh_boundary.csv"), outer, delimiter=",",
                header="x,y", comments="", fmt="%.3f")
     if len(fine):
@@ -241,6 +496,7 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         stats = json.loads(str(r["stats"]))
         depth, vel, arr, wse = r["depth"], r["velocity"], r["arrival_hr"], r["wse"]
     stats.update({
+        "mesher": minfo["used"], "mesh": minfo,
         "max_depth_ft": round(float(np.nanmax(depth)) / 0.3048, 2),
         "max_velocity_fps": round(float(np.nanmax(vel)) / 0.3048, 2),
         "flooded_acres": round(float(np.nansum(depth >= st.arrival_depth_m)) * dem.dx ** 2
@@ -251,9 +507,11 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         log("ANUGA finished in {:.1f} min ({} triangles)".format((time.time() - t0) / 60.0,
                                                                stats.get("triangles")))
     notes = list(cnotes)
+    if mnote:
+        notes.append(mnote)
     for e in stats.get("culvert_errors", []):
         notes.append("ANUGA culvert not applied: " + e)
-    if refine_lines and not stats.get("breaklines_used") and breaklines:
+    if refine_lines and not stats.get("breaklines_used") and breaklines and mesh is None:
         notes.append("ANUGA: the embankment lines could not be used as mesh edges (they cross or "
                      "touch each other); the mesh was made without them.")
     return Envelopes(dem.like(depth, np.nan), dem.like(vel, np.nan), dem.like(arr, np.nan),
@@ -277,4 +535,25 @@ def check_anuga(python, workdir):
     if out.returncode != 0:
         return {"ok": False, "message": (out.stdout + out.stderr)[-1500:]}
     ver = out.stdout.strip().splitlines()[-1]
-    return {"ok": True, "message": "ANUGA {} (Python {})".format(*ver.split()[:2])}
+    res = {"ok": True, "message": "ANUGA {} (Python {})".format(*ver.split()[:2])}
+    res.update(check_gmsh(python, env))
+    return res
+
+
+def check_gmsh(python, env=None):
+    """Optional: is gmsh importable in the ANUGA interpreter (ANUGA_MESHER=gmsh)?
+    Never makes the ANUGA check fail."""
+    code = "import gmsh; print(gmsh.__version__)"
+    try:
+        out = subprocess.run([python, "-c", code], capture_output=True, text=True,
+                             env=env or _clean_env(), timeout=120, errors="replace")
+    except Exception as e:
+        return {"gmsh": None, "gmsh_message": "gmsh check failed: {}".format(e)}
+    if out.returncode != 0:
+        last = ((out.stdout + out.stderr).strip().splitlines() or ["?"])[-1][:200]
+        hint = (" (Linux: install libglu1-mesa libxcursor1 libxinerama1 libxft2)"
+                if "libGLU" in last or ".so" in last else " (pip install gmsh in the ANUGA env)")
+        return {"gmsh": None, "gmsh_message": "gmsh not available, optional for "
+                "ANUGA_MESHER=gmsh: {}{}".format(last, hint)}
+    v = out.stdout.strip().splitlines()[-1]
+    return {"gmsh": v, "gmsh_message": "gmsh {} (optional, for ANUGA_MESHER=gmsh)".format(v)}

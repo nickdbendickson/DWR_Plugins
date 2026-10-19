@@ -390,7 +390,7 @@ class NDHazardAlgorithm(_ToolBase):
                           ("S_HABITABLE", "habitable field (yes/no, true/false, 1/0; blank = "
                                           "use the occupancy class)"),
                           ("S_OCC", "occupancy class field (NSI OCCTYPE, USA Structures "
-                                    "OCC_CLS / PRIM_OCC ...)"),
+                                    "OCC_CLS / PRIM_OCC \u2026)"),
                           ("S_MOBILE", "mobile home field (yes/no, or text containing "
                                        "manufactured / mobile / trailer)")):
             self._field(key, "Structures: " + desc, "STRUCTURES", numeric=False, advanced=True)

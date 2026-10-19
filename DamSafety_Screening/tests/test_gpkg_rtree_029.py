@@ -4,8 +4,9 @@ index whose triggers call ST_IsEmpty) must not fail.
 The _gpkg test fake writes an index-less GeoPackage, so the Screening tests passed while the real
 tool 18 merge and the Review tab's "Move breach point" died on every real work folder with
 "no such function: ST_IsEmpty". This test adds the real GDAL R*Tree index + triggers to the fake's
-output, proves the write fails when core/gpkg_sqlite.disable_rtree is a no-op (the pre-fix state),
-and that merge (H1), move_point (H2) and the far-move guard (L2) behave once it runs.
+output, proves the write fails with a plain sqlite3 connection (ST_* unregistered, the pre-fix
+state), and that merge (H1), move_point (H2) and the far-move guard (L2) behave once
+core/gpkg_write.connect registers ST_* (#77 keeps the spatial index rather than dropping it).
 
 Run: PYTHONPATH=tests/qgis_mock:<parent of the plugin> python3 tests/test_gpkg_rtree_029.py
 """
@@ -20,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 sys.path.insert(0, HERE)
 
 import _gpkg  # noqa: E402
-from nd_dam_screening.core import merge as mg, review as rv, workflow as wf, gpkg_sqlite  # noqa: E402
+from nd_dam_screening.core import merge as mg, review as rv, workflow as wf, gpkg_write  # noqa: E402
 
 DF = [("dam_id", "TEXT"), ("name", "TEXT"), ("height_m", "REAL"), ("stor_method", "TEXT")]
 PF = DF + [("pond_type", "TEXT"), ("no_flood", "TEXT")]
@@ -107,52 +108,53 @@ def count(path, table):
         con.close()
 
 
-# -- the hazard is real: without disable_rtree, the tool-18 merge dies on the rtree triggers (H1)
+# -- the hazard is real: a plain sqlite3 connection (no ST_*) dies on the rtree triggers (H1)
 Wbad = tempfile.mkdtemp(prefix="rtree_bad_")
 populate(Wbad)
-real_disable = gpkg_sqlite.disable_rtree
-gpkg_sqlite.disable_rtree = lambda con, table: False
+real_connect = gpkg_write.connect
+gpkg_write.connect = lambda path: sqlite3.connect(path)      # pre-fix: ST_* not registered
 try:
     try:
         mg.merge(Wbad)
-        raise AssertionError("merge succeeded with the rtree index left in place")
+        raise AssertionError("merge succeeded without the ST_* functions registered")
     except sqlite3.OperationalError as e:
         assert "ST_IsEmpty" in str(e), e
 finally:
-    gpkg_sqlite.disable_rtree = real_disable
+    gpkg_write.connect = real_connect
 
-# -- H1: with the fix the merge appends the ponds and the 18_* copies lose their rtree index
+# -- H1: with gpkg_write the merge appends the ponds and the 18_* copies KEEP their rtree index
+# (#77 registers ST_* on the connection instead of dropping the index, so QGIS keeps a usable one)
 W = tempfile.mkdtemp(prefix="rtree_merge_")
 populate(W)
 r = mg.merge(W)
 assert r["n_dams"] == 2 and r["n_ponds"] == 2, r
 assert count(r["dams"], "dams") == 4 and count(r["bpts"], "bp") == 3, (r["dams"], r["bpts"])
-assert triggers(r["dams"]) == [] and triggers(r["bpts"]) == [] and triggers(r["arrows"]) == []
+assert all(triggers(p) for p in (r["dams"], r["bpts"], r["arrows"]))   # index preserved, not dropped
 assert any("added column pond_type" in n for n in r["notes"])
 # running it again replaces (no doubling) - the fresh 18 copy has the rtree again, still handled
 r2 = mg.merge(W)
 assert count(r2["dams"], "dams") == 4
 
-# -- the hazard is real for the move too: without disable_rtree the UPDATE dies (H2)
+# -- the hazard is real for the move too: a plain sqlite3 connection (no ST_*) UPDATE dies (H2)
 Wmv = tempfile.mkdtemp(prefix="rtree_move_")
 populate(Wmv)
 bp4 = wf.path(Wmv, "4", "OUTP")
-gpkg_sqlite.disable_rtree = lambda con, table: False
+gpkg_write.connect = lambda path: sqlite3.connect(path)
 try:
     try:
         rv.SqliteApply().move_point(bp4, "DWR-2", X0 + 10.0, Y0 + 10.0)
-        raise AssertionError("move_point succeeded with the rtree index left in place")
+        raise AssertionError("move_point succeeded without the ST_* functions registered")
     except sqlite3.OperationalError as e:
         assert "ST_IsEmpty" in str(e), e
 finally:
-    gpkg_sqlite.disable_rtree = real_disable
+    gpkg_write.connect = real_connect
 # the point never moved in the broken state
 assert rv.SqliteApply().point_of(bp4, "DWR-2") == (X0, Y0)
 
-# -- H2: with the fix move_point actually moves the point and drops the rtree
+# -- H2: with gpkg_write move_point actually moves the point and keeps the rtree index (#77)
 n = rv.SqliteApply().move_point(bp4, "DWR-2", X0 + 10.0, Y0 + 10.0)
 assert n == 1 and rv.SqliteApply().point_of(bp4, "DWR-2") == (X0 + 10.0, Y0 + 10.0)
-assert triggers(bp4) == []
+assert triggers(bp4) != []                                     # index preserved, not dropped
 
 # -- L2: a far move (wrong CRS or wrong dam) is refused and never logged; a near move is applied
 Wg = tempfile.mkdtemp(prefix="rtree_guard_")

@@ -35,7 +35,7 @@ class DataPackage(QgsProcessingAlgorithm):
                 "optionally clipped to North Dakota, with standard field names the other tools pick up "
                 "automatically:\n"
                 "structures: habitable (1/0: 0 only when OCC_CLS / PRIM_OCC name an uninhabited "
-                "building - barn, shed, garage ...; ND 5.2.1.1 / 5.3; a habitable yes/no field of the "
+                "building - barn, shed, garage \u2026; ND 5.2.1.1 / 5.3; a habitable yes/no field of the "
                 "layer wins), mobile (1/0, mobile / manufactured / trailer, or a mobile yes/no field), "
                 "occ_cls, prim_occ; structure_points: the same structures as points (point on "
                 "surface) for ND Dam Breach Runner's receptors\n"

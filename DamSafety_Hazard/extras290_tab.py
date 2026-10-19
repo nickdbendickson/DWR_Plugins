@@ -160,7 +160,7 @@ class Extras290TabMixin(object):
     # ------------------------------------------------------------------ UI --
     def _build_extras290_group(self):
         from . import parcelhints as PH
-        grp = QGroupBox("7. Version 2.9 options (advanced - all optional)")
+        grp = QGroupBox()
         lay = QVBoxLayout()
         note = QLabel(
             "Optional v2.9 choices. Every number is the engineer's own screening value: the "
@@ -394,7 +394,7 @@ class Extras290TabMixin(object):
         lay.addLayout(form)
 
         # -- tools
-        self.estimate_btn = QPushButton("Estimate run...")
+        self.estimate_btn = QPushButton("Estimate run\u2026")
         self.estimate_btn.setToolTip(
             "Looks at the rasters and the download choices and tells what this run would "
             "read, download and write - study area, raster cells, data tiles (already in the "
@@ -402,36 +402,36 @@ class Extras290TabMixin(object):
             "written; takes about a second. The times and sizes are ROUGH (assumed costs, "
             "not measurements).")
         self.estimate_btn.clicked.connect(self._on_estimate290)
-        self.profile_save_btn = QPushButton("Save settings profile...")
+        self.profile_save_btn = QPushButton("Save settings profile\u2026")
         self.profile_save_btn.setToolTip(
             "Saves the classification options of this dialog as a small file to share (a "
             "firm's standard settings). Left out: everything of ONE dam or ONE project - "
             "folders, rasters, scenarios, layer choices, paths.")
         self.profile_save_btn.clicked.connect(self._on_profile_save290)
-        self.profile_load_btn = QPushButton("Load settings profile...")
+        self.profile_load_btn = QPushButton("Load settings profile\u2026")
         self.profile_load_btn.setToolTip(
             "Applies a settings profile. Dam- or project-specific entries found in the file "
             "are ignored. The run log records the profile's name and hash, and whether you "
             "changed anything afterwards.")
         self.profile_load_btn.clicked.connect(self._on_profile_load290)
-        self.profile_compare_btn = QPushButton("Compare profiles...")
+        self.profile_compare_btn = QPushButton("Compare profiles\u2026")
         self.profile_compare_btn.setToolTip(
             "Lists the settings that differ between two profile files.")
         self.profile_compare_btn.clicked.connect(self._on_profile_compare290)
-        self.reproduce_btn = QPushButton("Reproduce a package...")
+        self.reproduce_btn = QPushButton("Reproduce a package\u2026")
         self.reproduce_btn.setToolTip(
             "Re-runs a classification from its submittal package (folder or .zip) in an "
             "EMPTY work folder - with the settings, rasters and data of that run, nothing "
             "downloaded, nothing added to this project - and checks that the same result "
             "comes out. Takes as long as the original run.")
         self.reproduce_btn.clicked.connect(self._on_reproduce290)
-        self.portfolio_btn = QPushButton("Portfolio dashboard...")
+        self.portfolio_btn = QPushButton("Portfolio dashboard\u2026")
         self.portfolio_btn.setToolTip(
             "One web page with a row per dam of a folder of dams: class, last run, oldest "
             "data, open review items, creep alert. Read from the files the runs left; "
             "nothing is re-run. The classes are screening results as last run.")
         self.portfolio_btn.clicked.connect(self._on_portfolio290)
-        self.formfill_btn = QPushButton("Fill form template...")
+        self.formfill_btn = QPushButton("Fill form template\u2026")
         self.formfill_btn.setToolTip(
             "Fills YOUR form template (.docx, .txt, .md, .html or .csv) where it has "
             "{{KEY}} placeholders, with values from the last run. No form field is guessed: "
@@ -778,7 +778,7 @@ class Extras290TabMixin(object):
         show = QMessageBox.information if est.get("ok", True) else QMessageBox.warning
         text = "\n".join(lines[:30])
         if len(lines) > 30:
-            text += "\n... (all {} lines are in the log)".format(len(lines))
+            text += "\n\u2026 (all {} lines are in the log)".format(len(lines))
         show(self, "Estimate run", text)
 
     # ------------------------------------------------------------ profiles --
@@ -829,7 +829,8 @@ class Extras290TabMixin(object):
             "Settings profile (*{});;JSON (*.json)".format(ST.PROFILE_EXT))
         if not path:
             return
-        known = list(self._SETTING_WIDGETS) + ["scenario_rows", "main_baseline"]
+        known = list(self._SETTING_WIDGETS) + ["scenario_rows", "main_baseline"] + \
+            list(getattr(self, "_RETIRED_SETTINGS", ()))      # 2.18.34: e.g. advanced_check
         ids = self._layer_ids290()
         try:
             state, meta = ST.load_profile(path, known_keys=known, layer_ids=ids)
@@ -908,7 +909,7 @@ class Extras290TabMixin(object):
             QMessageBox.information(self, "Compare profiles",
                                     head + "\n\nThe two profiles hold the same settings.")
         else:
-            more = "\n... (all {} in the log)".format(len(lines)) if len(lines) > 40 else ""
+            more = "\n\u2026 (all {} in the log)".format(len(lines)) if len(lines) > 40 else ""
             QMessageBox.information(
                 self, "Compare profiles", "{}\n\n{} setting(s) differ (first -> second):\n{}{}"
                 .format(head, len(lines), "\n".join(lines[:40]), more))
@@ -974,7 +975,7 @@ class Extras290TabMixin(object):
             self._status290("Reproduction: {}".format(status), bool(res.get("identical")))
             (QMessageBox.information if res.get("identical") else QMessageBox.warning)(
                 self, title, "Result: {}\n\n{}".format(status, "\n".join(lines[:30])))
-        self._start_background("Reproducing the package...", job, done, project_bound=False)
+        self._start_background("Reproducing the package\u2026", job, done, project_bound=False)
 
     # ----------------------------------------------------------- portfolio --
     @_guarded("Portfolio dashboard")
@@ -1014,7 +1015,7 @@ class Extras290TabMixin(object):
                 QMessageBox.information(self, title, "No dam folders were found in\n{}"
                                         .format(parent))
             self._open_file290(html_path)
-        self._start_background("Building the portfolio dashboard...", job, done,
+        self._start_background("Building the portfolio dashboard\u2026", job, done,
                                project_bound=False)
 
     # ----------------------------------------------------------- form fill --

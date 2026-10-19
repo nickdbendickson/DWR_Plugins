@@ -31,9 +31,9 @@ class DssWiseTabMixin(object):
         tab = QWidget()
         lay = QVBoxLayout(tab)
         info = QLabel(
-            "<h3>DSS-WISE Lite results</h3>Import the <i>Simulation Results Package</i> "
+            "Import the <i>Simulation Results Package</i> "
             "downloaded from DSS-WISE Lite (NCCHE / FEMA). Each file is recognised by its "
-            "name (e.g. <i>..._FloodDepth_in_Ft-..._UTM.tif</i>); check the roles and units "
+            "name (e.g. <i>\u2026_FloodDepth_in_Ft-\u2026_UTM.tif</i>); check the roles and units "
             "below before importing. Rasters are converted to ft, ft/s, ft²/s and hours.")
         info.setWordWrap(True)
         lay.addWidget(info)
@@ -41,9 +41,9 @@ class DssWiseTabMixin(object):
         form = QFormLayout()
         self.dsw_path_edit = QLineEdit()
         self.dsw_path_edit.setPlaceholderText("results package .zip or its unzipped folder")
-        b1 = QPushButton("Zip...")
+        b1 = QPushButton("Zip\u2026")
         b1.clicked.connect(self._dsw_browse_zip)
-        b2 = QPushButton("Folder...")
+        b2 = QPushButton("Folder\u2026")
         b2.clicked.connect(self._dsw_browse_folder)
         w = QWidget()
         h = QHBoxLayout(w)
@@ -65,15 +65,15 @@ class DssWiseTabMixin(object):
         self.dsw_table.setHorizontalHeaderLabels(DSW_COLS)
         lay.addWidget(self.dsw_table)
         opts = QHBoxLayout()
-        self.dsw_use_setup_check = QCheckBox("Use as the Setup tab rasters")
+        self.dsw_use_setup_check = QCheckBox("Use as the Setup rasters")
         self.dsw_use_setup_check.setChecked(True)
         self.dsw_load_check = QCheckBox("Load the converted layers")
         self.dsw_load_check.setChecked(True)
-        self.dsw_add_scenario_check = QCheckBox("Add as a scenario in the Hazard "
-                                                "Classification tab's table")
+        self.dsw_add_scenario_check = QCheckBox("Add as a scenario in the breach-scenario "
+                                                "table (classification options)")
         self.dsw_add_scenario_check.setToolTip(
-            "A further breach scenario (or, with a name like 'no breach', ... set its role "
-            "there) next to the Setup tab rasters")
+            "A further breach scenario (or, with a name like 'no breach', \u2026 set its role "
+            "there) next to the Setup rasters")
         for c in (self.dsw_use_setup_check, self.dsw_add_scenario_check, self.dsw_load_check):
             opts.addWidget(c)
         opts.addStretch()
@@ -191,7 +191,7 @@ class DssWiseTabMixin(object):
         name = self._dsw_name()
         out = self._dsw_out()
         self._set_busy(True)
-        self._progress = self._make_progress("Importing DSS-WISE Lite results...")
+        self._progress = self._make_progress("Importing DSS-WISE Lite results\u2026")
         try:
             res = DW.convert(items, out, name=name, progress=self._progress_tick)
         except CancelledByUser:

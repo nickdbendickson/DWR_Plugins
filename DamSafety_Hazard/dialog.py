@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Dialog UI and orchestration for the ND Dam Hazard Helper."""
+"""Dialog UI and orchestration of DamSafety Hazard.
+
+2.18.34: three views - Classify (setup, imports, data and output, the classification
+options, check panel, Classify), Results (the classes and the tools for the last run) and
+Review (structures; roads & facilities) - and a gear menu (suite settings, documentation,
+self-test, data sources). Until 2.18.33 these were nine tabs."""
 
 import os
 import html
@@ -7,11 +12,11 @@ import time
 import traceback
 
 from .ui_fit import fit_window, wrap_tabs
-from .ui_check_panel import CheckPanel
+from .ui_widgets import CheckPanel, Collapsible, InfoBanner
 from qgis.PyQt.QtWidgets import (
     QApplication, QProgressDialog, QDialog, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog, QMessageBox, QGroupBox,
-    QFormLayout, QTabWidget, QTextEdit, QWidget, QComboBox,
+    QFormLayout, QTabWidget, QTextEdit, QWidget, QComboBox, QMenu, QToolButton,
 )
 
 from qgis.core import QgsProject, QgsRasterLayer
@@ -21,7 +26,7 @@ from .helpers import log_message, CancelledByUser, plugin_group, dam_display_nam
 
 from .constants import (
     PLUGIN_NAME, PLUGIN_VERSION, OUTPUT_FOLDER_NAME,
-    BTN_ACTIVE_STYLE, BTN_INACTIVE_STYLE, README_TEXT, PROGRESS_MIN_INTERVAL_S,
+    BTN_ACTIVE_STYLE, BTN_INACTIVE_STYLE, README_TEXT, PROGRESS_MIN_INTERVAL_S, DISCLAIMER,
 )
 from .extent import make_extent_clip
 from .classify_tab import ClassificationTabMixin
@@ -37,6 +42,17 @@ from .facility_review_tab import FacilityReviewTabMixin
 from .suite_settings_tab import SuiteSettingsTabMixin
 from . import facility_review_tab as FT
 from .settings import save_state, load_state, widget_value, set_widget_value
+
+# the raster box: what an unticked box means (its fields are greyed out then)
+RASTER_GROUP_TIP = ("Unticked: the boxes are filled from the dam folder (Find rasters, or "
+                    "Classify when Depth is empty). Tick to choose the files yourself. Depth "
+                    "is always needed and Velocity for the 2D criterion; Arrival and "
+                    "Depth x Velocity are optional.")
+
+
+def _enum(cls, scope, name):
+    """cls.<name> on Qt5, cls.<scope>.<name> on Qt6."""
+    return getattr(getattr(cls, scope, cls), name, None) or getattr(cls, name)
 
 class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, ClassificationTabMixin,
                         ExtrasTabMixin, Extras290TabMixin, SuiteTabMixin, ReviewTabMixin, SuiteSettingsTabMixin,
@@ -60,8 +76,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.setup_ui()
         self.dam_folder_edit.textChanged.connect(self._on_dam_folder_changed)
         for e in (self.depth_edit, self.vel_edit, self.arr_edit, self.dv_edit):
+            # 2.18.32: old results are stale; 2.18.35: cleared FIRST (the panel's reset
+            # switches Classify on), then the button state (off on a raster of another dam)
+            e.textChanged.connect(self.check_panel.clear)
             e.textChanged.connect(self._update_button_states)
-            e.textChanged.connect(self.check_panel.clear)   # 2.18.32: old results are stale
         try:
             self.model_combo.currentIndexChanged.connect(self._update_button_states)
             self.model_combo.currentIndexChanged.connect(self.check_panel.clear)
@@ -82,23 +100,70 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             pass
 
     # ------------------------------------------------------------------ UI --
+    # 2.18.34: three views (Classify / Results / Review) and a gear menu instead of nine tabs
+    VIEWS = ("Classify", "Results", "Review")
+
     def setup_ui(self):
-        self.setWindowTitle("{} v{}".format(PLUGIN_NAME, PLUGIN_VERSION))
+        self.setWindowTitle("{} {}".format(PLUGIN_NAME, PLUGIN_VERSION))
+        self.setObjectName("DamSafetyHazardDialog")
         self.setMinimumSize(640, 420)
         main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(6)
+        main_layout.addWidget(InfoBanner(DISCLAIMER))
+
         self.tab_widget = QTabWidget()
         self._dss_tab = self._build_dsswise_tab()
         self._ras_tab = self._build_ras_tab()
+        self.tab_widget.addTab(self._build_classify_view(), "Classify")
+        self.tab_widget.addTab(self._build_results_panel(), "Results")
+        self.tab_widget.addTab(self._build_review_view(), "Review")
+        self.tab_widget.setCornerWidget(self._build_gear())
+        self.tab_widget.setCurrentIndex(0)
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        main_layout.addWidget(self.tab_widget, 1)
+        main_layout.addWidget(self.action_area)   # Classify view only (_on_tab_changed)
 
-        # --- Setup tab ---
-        setup_tab = QWidget()
-        setup_layout = QVBoxLayout(setup_tab)
+        self.status_label = QLabel("Ready \u2014 pick the dam folder")
+        self.status_label.setWordWrap(True)
+        self.status_label.setStyleSheet("padding: 6px; background-color: #f5f5f5;")
+        main_layout.addWidget(self.status_label)
 
-        dam_group = QGroupBox("1. Dam Project Folder")
+        self.log_text = QTextEdit()
+        self.log_text.setMaximumHeight(150)
+        self.log_text.setReadOnly(True)
+        self.log_section = Collapsible("Log", self.log_text)
+        main_layout.addWidget(self.log_section)
+        row = QHBoxLayout()                       # Close in its own row, bottom right
+        row.addStretch(1)
+        self.close_btn = QPushButton("Close")
+        self.close_btn.setAutoDefault(False)
+        self.close_btn.clicked.connect(self.close)
+        row.addWidget(self.close_btn)
+        main_layout.addLayout(row)
+
+        self._build_settings_dialog()             # hidden; the gear menu shows them
+        self._build_readme_dialog()
+        wrap_tabs(self.tab_widget)                # after every widget is in place
+        self.classify_scroll = self.tab_widget.widget(self._view_index("Classify"))
+        fit_window(self, (1000, 720))
+        self._refresh_layer_combos()              # once, the data and option lists exist now
+
+    # -- Classify view
+    def _build_classify_view(self):
+        """Setup (dam folder, rasters), the two imports, Data and output, the
+        classification options and the dam suite group (the page wrap_tabs scrolls). The
+        check panel and the action bar (self.action_area) sit under the tabs, so the red
+        banner and Classify are always in sight on this view."""
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(6, 6, 6, 6)
+
+        dam_group = QGroupBox("Setup \u2014 dam folder")
         dam_layout = QHBoxLayout()
         self.dam_folder_edit = QLineEdit()
         self.dam_folder_edit.setPlaceholderText("Browse or paste the dam project folder")
-        self.dam_browse_btn = QPushButton("Browse Dam Folder...")
+        self.dam_browse_btn = QPushButton("Browse\u2026")
+        self.dam_browse_btn.setToolTip("Pick the dam project folder")
         self.dam_browse_btn.clicked.connect(self.browse_dam_folder)
         self.find_rasters_btn = QPushButton("Find rasters")
         self.find_rasters_btn.setToolTip(
@@ -110,25 +175,30 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         dam_layout.addWidget(self.dam_browse_btn)
         dam_layout.addWidget(self.find_rasters_btn)
         dam_group.setLayout(dam_layout)
-        setup_layout.addWidget(dam_group)
+        lay.addWidget(dam_group)
 
-        raster_group = QGroupBox("2. Raster Files (Classify finds them if Depth is empty)")
+        raster_group = QGroupBox("Rasters \u2014 tick to choose them yourself")
         raster_group.setCheckable(True)
         raster_group.setChecked(False)
+        raster_group.setToolTip(RASTER_GROUP_TIP)
         self.raster_group = raster_group     # _set_busy: its children follow its tick
         raster_layout = QFormLayout()
+        self.raster_hint = QLabel(RASTER_GROUP_TIP)
+        self.raster_hint.setWordWrap(True)
+        self.raster_hint.setStyleSheet("color:#666;")
         self.depth_edit = QLineEdit()
-        self.depth_browse_btn = QPushButton("Browse...")
+        self.depth_browse_btn = QPushButton("Browse\u2026")
         self.depth_browse_btn.clicked.connect(self.browse_depth)
         raster_layout.addRow("Depth (Hmax):",
                              self._inline_row(self.depth_edit, self.depth_browse_btn))
         self.vel_edit = QLineEdit()
-        self.vel_browse_btn = QPushButton("Browse...")
+        self.vel_browse_btn = QPushButton("Browse\u2026")
         self.vel_browse_btn.clicked.connect(self.browse_velocity)
         raster_layout.addRow("Velocity (Vmax):",
                              self._inline_row(self.vel_edit, self.vel_browse_btn))
         self.arr_edit = QLineEdit()
-        self.arr_browse_btn = QPushButton("Browse...")
+        self.arr_edit.setPlaceholderText("optional - without it there are no warning times")
+        self.arr_browse_btn = QPushButton("Browse\u2026")
         self.arr_browse_btn.clicked.connect(self.browse_arrival)
         raster_layout.addRow("Arrival Time:",
                              self._inline_row(self.arr_edit, self.arr_browse_btn))
@@ -136,7 +206,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.dv_edit.setPlaceholderText("optional - RAS Mapper 'Depth x Velocity' (Max), "
                                         "DSS-WISE DV; flood severity for the loss-of-life "
                                         "estimate (ACER zones use Dmax / Vmax)")
-        self.dv_browse_btn = QPushButton("Browse...")
+        self.dv_browse_btn = QPushButton("Browse\u2026")
         self.dv_browse_btn.clicked.connect(
             lambda: self._browse_raster(self.dv_edit, "Select Depth x Velocity (max) raster"))
         raster_layout.addRow("Depth x Velocity (ft\u00b2/s):",
@@ -147,88 +217,224 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                                  "(ND Figs 5.1/5.2)", "2d")
         self.model_combo.addItem("1D model - habitable structure depth > 2 ft", "1d")
         self.model_combo.setToolTip("Set automatically by the DSS-WISE and HEC-RAS imports.")
+        self.model_combo.setSizeAdjustPolicy(
+            _enum(QComboBox, "SizeAdjustPolicy", "AdjustToMinimumContentsLengthWithIcon"))
+        self.model_combo.setMinimumContentsLength(24)
         raster_layout.addRow("Breach model:", self.model_combo)
         raster_group.setLayout(raster_layout)
-        setup_layout.addWidget(raster_group)
+        lay.addWidget(raster_group)
+        lay.addWidget(self.raster_hint)       # outside the box: readable while it is off
 
-        btn_layout = QHBoxLayout()
+        self.dss_section = Collapsible("Import DSS-WISE Lite results", self._dss_tab)
+        self.ras_section = Collapsible("Import HEC-RAS plan results", self._ras_tab)
+        self.data_section = Collapsible("Data and output", self._build_data_tab(scroll=False))
+        for sec in (self.dss_section, self.ras_section, self.data_section):
+            lay.addWidget(sec)
+
+        head = QLabel("<b>Classification options</b> \u2014 the ND defaults are preset; "
+                      "open a section to change it.")
+        head.setWordWrap(True)
+        head.setStyleSheet("padding-top: 6px;")
+        lay.addWidget(head)
+        self.option_sections = {}
+        for title, grp, expanded in self._build_classification_options():
+            sec = Collapsible(title, grp, expanded=expanded)
+            self.option_sections[title] = sec
+            lay.addWidget(sec)
+        if getattr(self, "suite_group", None) is not None:
+            lay.addWidget(self.suite_group)       # always shown (v2.10)
+        lay.addStretch(1)
+
+        # 2.18.32: check results by severity (ui_widgets.CheckPanel); under the tabs, so the
+        # red banner is seen next to the button it blocks
+        self.action_area = QWidget()
+        outer = QVBoxLayout(self.action_area)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
         self.check_btn = QPushButton("Check inputs")
         self.check_btn.setToolTip("Checks the rasters (units, water-surface raster given as "
                                   "depth, arrival in minutes, missing velocity, coordinate "
                                   "systems), the outline file and the download services.")
+        self.check_btn.setAutoDefault(False)
         self.check_btn.clicked.connect(self._on_check_inputs)
         self.classify_btn = QPushButton("Classify")
-        self.classify_btn.setMinimumHeight(40)
+        self.classify_btn.setMinimumHeight(36)
+        self.classify_btn.setMinimumWidth(160)
         self.classify_btn.setStyleSheet("font-size: 14px; font-weight: bold;")
-        self.classify_btn.setToolTip("Finds the depth, velocity, and arrival rasters, checks them, and classifies.")
+        self.classify_btn.setToolTip(
+            "Finds the depth, velocity and arrival rasters when the boxes are empty, checks "
+            "them, saves the data sets first when 'Data and output' asks for it, and "
+            "classifies. The result opens on the Results tab.")
+        self.classify_btn.setDefault(True)
         self.classify_btn.clicked.connect(self._classify_simple)
-        btn_layout.addWidget(self.check_btn)
-        btn_layout.addWidget(self.classify_btn)
-        btn_layout.addStretch()
-        setup_layout.addLayout(btn_layout)
-        # 2.18.32: check results by severity (ui_check_panel.py)
         self.check_panel = CheckPanel(self.check_btn, self.classify_btn, action="classifying")
-        setup_layout.addWidget(self.check_panel)
-        setup_layout.addStretch()
-        self.tab_widget.addTab(setup_tab, "Setup and Run")
-        self.tab_widget.setCurrentWidget(setup_tab)
+        self.check_panel.errors_fixed.connect(lambda _ok: self._update_button_states())
+        outer.addWidget(self.check_panel)
+        bar = QHBoxLayout()
+        self.next_label = QLabel("Classify \u2192 the classes and the report on Results \u2192 "
+                                 "your decisions on Review")
+        self.next_label.setToolTip(
+            "Classify finds the habitable structures, overtopped roads (AADT) and inundated "
+            "railroads, estimates the consequences, classifies the dam (REG_05.2026 Sec. 5.2, "
+            "ACER TM 11) and writes the report.")
+        self.next_label.setWordWrap(True)
+        self.next_label.setStyleSheet("color:#666;")
+        bar.addWidget(self.next_label, 1)
+        bar.addWidget(self.check_btn)
+        bar.addWidget(self.classify_btn)
+        outer.addLayout(bar)
+        return body
 
-        # --- Data & Output tab (data_tab.py); the "Run everything" button is here (v2.9) ---
-        self.tab_widget.addTab(self._build_data_tab(), "Data && Output")   # "&&" shows one "&"
+    # -- Review view
+    def _build_review_view(self):
+        """The two review tables as sub-tabs. They stay two tables: each one's decisions
+        are tied to its own row list (_review_rows / _facrev_rows)."""
+        self.review_tabs = QTabWidget()
+        self.review_tabs.addTab(self._build_review_tab(), "Structures")
+        self.review_tabs.addTab(self._build_facility_review_tab(),
+                                FT.TAB_TITLE.replace("Review: ", "").replace("&", "&&")
+                                .capitalize())
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(4, 4, 4, 4)
+        v.addWidget(self.review_tabs)
+        return page
 
-        # --- Hazard classification tab (classify_tab.py) ---
-        self.tab_widget.addTab(self._build_classification_tab(), "Hazard Classification")
-        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+    # -- gear menu, settings and README windows
+    def _build_gear(self):
+        self.gear_btn = QToolButton()
+        self.gear_btn.setText("\u2699")
+        self.gear_btn.setToolTip("Suite settings, documentation, self-test, data sources")
+        self.gear_btn.setPopupMode(_enum(QToolButton, "ToolButtonPopupMode", "InstantPopup"))
+        self.gear_btn.setAutoRaise(True)
+        self.gear_btn.setStyleSheet("QToolButton {font-size: 18px; padding: 0 8px 2px 8px;}")
+        menu = QMenu(self.gear_btn)
+        self.settings_action = menu.addAction("Suite settings\u2026")
+        self.settings_action.triggered.connect(lambda _c=False: self._open_suite_settings())
+        self.readme_action = menu.addAction("Documentation (README)\u2026")
+        self.readme_action.triggered.connect(lambda _c=False: self._open_readme())
+        menu.addSeparator()
+        self.selftest_action = menu.addAction("Run self-test")
+        self.selftest_action.setToolTip("Runs the full pipeline on synthetic data in a "
+                                        "temporary folder. Your project is not changed.")
+        self.selftest_action.triggered.connect(lambda _c=False: self._on_run_selftest())
+        self.sources_action = menu.addAction("Edit data sources\u2026")
+        self.sources_action.triggered.connect(lambda _c=False: self._on_edit_sources())
+        self.gear_menu = menu
+        self.gear_btn.setMenu(menu)
+        return self.gear_btn
 
-        # --- Review tabs: structures, then roads / rail / bridges / lifelines ---
-        self.tab_widget.addTab(self._build_review_tab(), "Review")
-        self.tab_widget.addTab(self._build_facility_review_tab(), FT.TAB_TITLE.replace("&", "&&"))   # "&&" shows one "&"
-        self.tab_widget.addTab(self._dss_tab, "DSS-WISE Lite")
-        self.tab_widget.addTab(self._ras_tab, "HEC-RAS plan")
-
-        # --- v2.13: the suite settings file as a grid (suite_settings_tab.py) ---
+    def _build_settings_dialog(self):
+        """The suite settings grid in its own non-modal window (was a tab). Built once,
+        hidden; a grid that cannot be built never stops the window (v2.13 guard)."""
+        self.suite_settings_dialog = None
         try:
-            self.tab_widget.addTab(self._build_suite_settings_tab(), "Suite settings")
+            page = self._build_suite_settings_tab()
         except Exception as e:                                   # noqa - the grid must never stop the window
-            log_message("Suite settings tab not built: {}".format(e))
+            log_message("Suite settings window not built: {}".format(e))
+            self.suite_settings_error = str(e) or repr(e)
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("{} \u2014 Suite settings".format(PLUGIN_NAME))
+        dlg.setModal(False)
+        v = QVBoxLayout(dlg)
+        v.addWidget(page, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        done = QPushButton("Close")
+        done.clicked.connect(dlg.close)
+        row.addWidget(done)
+        v.addLayout(row)
+        dlg.resize(940, 640)
+        self.suite_settings_dialog = dlg
 
-        # --- Readme tab ---
-        readme_tab = QWidget()
-        readme_layout = QVBoxLayout(readme_tab)
+    def _build_readme_dialog(self):
+        """The README with the self-test and data-source buttons (was the Readme tab).
+        Built once with the window, so _set_busy reaches its buttons before it is opened."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("{} \u2014 Documentation".format(PLUGIN_NAME))
+        dlg.setModal(False)
+        v = QVBoxLayout(dlg)
         readme_text = QTextEdit()
         readme_text.setReadOnly(True)
         readme_text.setPlainText(README_TEXT)
         readme_text.setStyleSheet(
             "font-family: 'Menlo', 'Courier New', monospace; font-size: 12px;")
-        readme_layout.addWidget(readme_text)
-        selftest_row = QHBoxLayout()
-        self.selftest_btn = QPushButton("Run Self-Test")
+        v.addWidget(readme_text, 1)
+        row = QHBoxLayout()
+        self.selftest_btn = QPushButton("Run self-test")
         self.selftest_btn.setToolTip("Runs the full pipeline on synthetic data in a "
                                      "temporary folder. Your project is not changed.")
-        self.selftest_btn.clicked.connect(self._on_run_selftest)
-        selftest_row.addWidget(self.selftest_btn)
-        self.sources_btn = QPushButton("Edit data sources...")
+        self.selftest_btn.clicked.connect(lambda _c=False: self._on_run_selftest())
+        row.addWidget(self.selftest_btn)
+        self.sources_btn = QPushButton("Edit data sources\u2026")
         self.sources_btn.setToolTip("Opens the file with every download address (NSI, ND GIS "
-                                    "Hub, NID, HIFLD, NBI ...). Change an address there when "
+                                    "Hub, NID, HIFLD, NBI \u2026). Change an address there when "
                                     "a service moves, then restart QGIS.")
         self.sources_btn.clicked.connect(self._on_edit_sources)
-        selftest_row.addWidget(self.sources_btn)
-        selftest_row.addStretch()
-        readme_layout.addLayout(selftest_row)
-        self.tab_widget.addTab(readme_tab, "Readme")
+        row.addWidget(self.sources_btn)
+        row.addStretch(1)
+        done = QPushButton("Close")
+        done.clicked.connect(dlg.close)
+        row.addWidget(done)
+        v.addLayout(row)
+        dlg.resize(820, 640)
+        self.readme_text = readme_text
+        self.readme_dialog = dlg
 
-        main_layout.addWidget(self.tab_widget)
+    @staticmethod
+    def _raise(dlg):
+        dlg.show()
+        try:
+            dlg.raise_()
+            dlg.activateWindow()
+        except Exception:                                        # noqa
+            pass
 
-        self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet("padding: 8px; background-color: #f5f5f5;")
-        main_layout.addWidget(self.status_label)
+    def _open_suite_settings(self):
+        dlg = getattr(self, "suite_settings_dialog", None)
+        if dlg is None:
+            QMessageBox.warning(self, "Suite settings", "The suite settings grid could not be "
+                                "built: {}".format(getattr(self, "suite_settings_error", "?")))
+            return None
+        self._raise(dlg)
+        return dlg
 
-        self.log_text = QTextEdit()
-        self.log_text.setMaximumHeight(150)
-        self.log_text.setReadOnly(True)
-        wrap_tabs(self.tab_widget)
-        fit_window(self, (980, 700))
-        main_layout.addWidget(self.log_text)
+    def _open_readme(self):
+        self._raise(self.readme_dialog)
+        return self.readme_dialog
+
+    # -- the views
+    def _view_index(self, name):
+        """Index of a view by its tab text (wrap_tabs replaces the page widgets, so the
+        text is the stable key)."""
+        for i in range(self.tab_widget.count()):
+            if self.tab_widget.tabText(i).replace("&&", "&") == name:
+                return i
+        return -1
+
+    def _show_view(self, name):
+        i = self._view_index(name)
+        if i >= 0:
+            self.tab_widget.setCurrentIndex(i)
+        return i
+
+    def _show_input_errors(self, errors):
+        """Input errors in the check panel (red banner, Classify blocked) on the Classify
+        view - since 2.18.34 instead of a pop-up."""
+        from .checks import ERROR
+        self.check_panel.set_results([(ERROR, e) for e in errors])
+        self._clear_status()          # 2.18.36: the red box says it; the status line does not repeat it
+        for e in errors:
+            self._log(">>> INPUT ERROR: {}".format(e))
+        self._show_view("Classify")
+        self._update_button_states()
+
+    @property
+    def _checks_block(self):
+        """True while the check panel shows errors: Classify stays off."""
+        panel = self.__dict__.get("check_panel")
+        return bool(panel is not None and panel.blocked)
 
     def _on_edit_sources(self, *args):
         from .constants import write_sources_file, SOURCE_OVERRIDES
@@ -245,7 +451,13 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _on_tab_changed(self, index):
-        if self.tab_widget.tabText(index).replace("&&", "&") in ("Hazard Classification", "Data & Output"):
+        # the Classify view holds the layer lists (data and options): list the project's
+        # current layers whenever it is shown again
+        classify = self.tab_widget.tabText(index).replace("&&", "&") == "Classify"
+        area = self.__dict__.get("action_area")
+        if area is not None:
+            area.setVisible(classify)
+        if classify:
             self._refresh_layer_combos()
 
     def _inline_row(self, edit, btn):
@@ -315,19 +527,102 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             self.dam_folder_edit.setText(folder)   # -> _on_dam_folder_changed
         self._update_button_states()
 
+    _RASTER_LABELS = {"depth": "Depth", "vel": "Velocity", "arr": "Arrival", "dv": "Depth x Velocity"}
+
+    def _raster_edits(self):
+        return [("depth", self.depth_edit), ("vel", self.vel_edit), ("arr", self.arr_edit),
+                ("dv", self.dv_edit)]
+
+    def _suite_dams_roots(self):
+        """The suite's Dams folder(s): never a dam folder themselves (2.18.35)."""
+        roots = []
+        try:
+            from .damsuite import suite_config as SC
+            roots.append(SC.get("dams_folder"))
+        except Exception:                                        # noqa
+            pass
+        try:
+            from qgis.core import QgsSettings
+            roots.append(QgsSettings().value("NDDamSuite/home_dams_folder", "") or "")
+        except Exception:                                        # noqa
+            pass
+        return [r for r in roots if isinstance(r, str) and r.strip()]
+
+    def _dam_folder_problem(self, text):
+        from . import damfolder as DF
+        from .autodetect import find_rasters
+        return DF.dam_folder_problem(
+            text, self._suite_dams_roots(),
+            has_flood_rasters=lambda p: bool(find_rasters(p).get("depth")))
+
     def _on_dam_folder_changed(self, text):
-        folder = (text or "").strip()
-        if folder in ("/", "", os.path.sep) or (folder and not os.path.isdir(folder)):
-            folder = ""
-            self.dam_folder_edit.setText("")
-            self.status_label.setText("Dam folder must be a real directory, not / or empty.")
+        """2.18.35: the folder is normalised and must be ONE dam's folder (not '/', '//',
+        the Dams folder or a folder above it, nor a folder holding dam folders); the
+        rasters filled from the previous folder are dropped and found again in the new
+        one, and rasters typed by hand are kept only when they are in the new folder."""
+        from . import damfolder as DF
+        raw = (text or "").strip()
+        problem = self._dam_folder_problem(raw) if raw else ""
+        folder = "" if (problem or not raw) else DF.normalize(raw)
+        old = self.config_dam_folder
+        self._dam_folder_refused = problem
         self.config_dam_folder = folder
         self.config_output_folder = os.path.join(folder, OUTPUT_FOLDER_NAME) if folder else ""
         self.output_folder_edit.setText(self.config_output_folder)
+        self.check_panel.clear()                       # 2.18.34: results of another dam
         if not self._restoring:
-            self._auto_fill_rasters(force=False)
+            dropped = self._drop_other_folder_rasters(old, folder)
+            n = self._auto_fill_rasters(force=False) if folder else 0
+            if problem:
+                self._update_status("Dam folder refused: {}".format(problem), False)
+                self._log(">>> Dam folder refused: {}".format(problem))
+            elif folder:
+                self._update_status("Dam folder: {} - {}{}".format(
+                    os.path.basename(folder.rstrip("/\\")) or folder,
+                    "{} raster(s) found; Check inputs, then Classify".format(n) if n else
+                    "check the rasters, then Classify",
+                    "; {} raster(s) of the previous folder cleared".format(len(dropped))
+                    if dropped else ""), True)
         self._update_button_states()
         self._refresh_dam_record()                     # v2.10: dam.json status line
+
+    def _drop_other_folder_rasters(self, old, new):
+        """Clear the raster boxes that do not belong to the new dam folder: every box the
+        auto-fill filled from another folder, and every hand-typed path outside `new`.
+        Returns [(label, path)] of the boxes cleared (the log lists them)."""
+        from . import damfolder as DF
+        auto = self.__dict__.setdefault("_auto_filled", {})
+        dropped = []
+        for key, edit in self._raster_edits():
+            path = edit.text().strip()
+            if not path:
+                continue
+            was_auto = auto.get(key) == path
+            keep = bool(new) and DF.inside(path, new) and not was_auto and not \
+                DF.raster_problems(new, {key: path})
+            if was_auto and new and old and DF.normalize(old) == DF.normalize(new):
+                keep = True                            # the same folder, written another way
+            if not keep:
+                edit.setText("")
+                auto.pop(key, None)
+                dropped.append((self._RASTER_LABELS[key], path))
+        for label, path in dropped:
+            self._log(">>> {} raster cleared: {} is not in the dam folder {}".format(
+                label, path, new or "(none)"))
+        return dropped
+
+    def _raster_ownership_problems(self):
+        """[text]: rasters outside the selected dam folder or of another dam (2.18.35);
+        also the refused dam folder. Check inputs fails and Classify stays off on these."""
+        from . import damfolder as DF
+        out = []
+        refused = self.__dict__.get("_dam_folder_refused")
+        if refused and self.dam_folder_edit.text().strip():
+            out.append("Dam folder refused: {}".format(refused))
+        if self.config_dam_folder:
+            paths = {k: e.text().strip() for k, e in self._raster_edits()}
+            out.extend(DF.raster_problems(self.config_dam_folder, paths, self._RASTER_LABELS))
+        return out
 
     def _auto_fill_rasters(self, force=False):
         """Fill the raster boxes from the files found in the dam folder: all
@@ -336,23 +631,24 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         folder = self.config_dam_folder
         if not folder or folder in ("/", os.path.sep) or not os.path.isdir(folder):
             return 0
-        edits = [("depth", self.depth_edit), ("vel", self.vel_edit), ("arr", self.arr_edit),
-                 ("dv", self.dv_edit)]
+        edits = self._raster_edits()
         base = []          # v2.5.1: no no-breach baseline / time steps in the dialog
         if not force and any(e.text().strip() for _k, e in edits):
             return 0
         from .autodetect import find_rasters, describe
         found = find_rasters(folder)
+        auto = self.__dict__.setdefault("_auto_filled", {})
         n = 0
         for key, edit in edits + base:
             if edit is None or not found.get(key):
                 continue
             if force or not edit.text().strip():
                 edit.setText(found[key])
+                auto[key] = found[key]
                 n += 1
         self._log(">>> Rasters found in the dam folder: {}".format(describe(found, folder)))
         for note in found["notes"]:
-            self._log("    " + note + " - change it on the Setup tab if needed")
+            self._log("    " + note + " - tick 'Rasters' on the Classify tab to choose another")
         self._update_button_states()
         return n
 
@@ -394,6 +690,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                 errors.append("{} raster not selected (or file missing)".format(labels[key]))
             elif path and not os.path.isfile(path):
                 errors.append("{} raster file missing".format(labels[key]))
+        errors.extend(self._raster_ownership_problems())     # 2.18.35
         if hasattr(self, "scenario_table"):
             errors.extend(self._scenario_problems())     # v2.7: the scenario table
         if hasattr(self, "sens_check"):
@@ -407,6 +704,12 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.status_label.setText(message)
         self.status_label.setStyleSheet(
             "padding: 8px; background-color: #f5f5f5; color: {};".format(color))
+        self.status_label.setVisible(bool(message))
+
+    def _clear_status(self):
+        """2.18.36: an empty status line is hidden (no grey bar repeating nothing)."""
+        self.status_label.setText("")
+        self.status_label.setVisible(False)
 
     def _log(self, message):
         self.log_text.append(str(message))
@@ -597,6 +900,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         for name in ("check_btn", "run_all_btn", "find_rasters_btn", "dam_browse_btn",
                      "depth_browse_btn", "vel_browse_btn", "arr_browse_btn",
                      "output_browse_btn", "selftest_btn", "refresh_layers_btn",
+                     # 2.18.34: the gear menu's run actions and the Results tools
+                     "selftest_action", "sources_action", "submittal_btn", "watch_btn",
                      "dv_browse_btn", "review_zoom_btn", "review_webmap_btn", "cache_clear_btn",
                      "review_save_btn", "review_rerun_btn", "sources_btn",
                      "review_export_btn", "review_merge_btn", "series_btn",
@@ -643,10 +948,12 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         return cfg
 
     def _run_checks(self, services):
-        from .checks import check_all
-        return check_all(self._check_paths(), self.config_output_folder,
-                         self.config_dam_folder, self._check_cfg(), services=services,
-                         progress=self._progress_tick if services else None)
+        from .checks import check_all, ERROR
+        # 2.18.35: rasters of another folder / dam fail the check (and block Classify)
+        own = [(ERROR, t) for t in self._raster_ownership_problems()]
+        return own + check_all(self._check_paths(), self.config_output_folder,
+                               self.config_dam_folder, self._check_cfg(), services=services,
+                               progress=self._progress_tick if services else None)
 
     @staticmethod
     def _checks_html(results):
@@ -665,10 +972,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
     def _on_check_inputs(self, *args):
         if self._busy:
             return
-        from .checks import summary
         self._set_busy(True)
         try:
-            self._progress = self._make_progress("Checking inputs and data services...")
+            self._progress = self._make_progress("Checking inputs and data services\u2026")
             results = self._run_checks(services=True)
         except CancelledByUser:
             self._log(">>> Input check cancelled")
@@ -686,9 +992,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             self._set_busy(False)
         for lvl, t in results:
             self._log(">>> CHECK {}: {}".format(lvl, t))
-        n_err, n_warn = summary(results)
-        self._update_status("Input check: {} error(s), {} warning(s)".format(n_err, n_warn),
-                            n_err == 0)
+        # 2.18.36: the panel and the button badge show the counts; the status line no longer
+        # repeats them ("Input check: N error(s), M warning(s)")
+        self._clear_status()
         # 2.18.32: the results are shown in the panel under the buttons (no pop-up)
         self.check_panel.set_results(results)
         return results
@@ -700,18 +1006,20 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             return
         valid, errors = self.validate_all_inputs()
         if not valid:
-            QMessageBox.warning(self, "Input Errors",
-                                "\n".join("- {}".format(e) for e in errors))
+            self._show_input_errors(errors)       # 2.18.34: the red box, not a pop-up
             return
-        from .checks import summary, ERROR
+        from .checks import summary
         results = self._run_checks(services=False)
         for lvl, t in results:
             if lvl != "OK":
                 self._log(">>> CHECK {}: {}".format(lvl, t))
         self.check_panel.set_results(results)
-        if summary(results)[0]:
-            QMessageBox.warning(self, "Run everything - inputs need fixing",
-                                self._checks_html([r for r in results if r[0] == ERROR]))
+        n_err = summary(results)[0]
+        if n_err:
+            # 2.18.34: the red box on the Classify view says what to fix (was a pop-up)
+            self._clear_status()      # 2.18.36: the red box is the one place that says it
+            self._show_view("Classify")
+            self._update_button_states()
             return
         download_first = self.data_save_check.isChecked()
         if download_first:
@@ -730,7 +1038,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             return
         from .selftest import run_self_test
         self._set_busy(True)
-        self._progress = self._make_progress("Running self-test...")
+        self._progress = self._make_progress("Running self-test\u2026")
         try:
             ok, lines = run_self_test(progress_cb=self._progress_tick)
         except CancelledByUser:
@@ -762,7 +1070,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         "dams_download_check", "dam_layer_combo", "subject_nid_edit",
         "lifelines_download_check", "lifeline_combo", "lifeline_medium_check",
         "boundary_combo", "eap_check",
-        "crossings_download_check", "advanced_check", "spreadsheets_check",
+        "crossings_download_check", "spreadsheets_check",
         # v2.5
         "camps_download_check", "parcel_combo", "parcel_acres_spin", "compare_check",
         "eap_list_check", "eap_mapbook_check", "mapbook_scale_combo", "eap_travel_check",
@@ -786,6 +1094,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         # v2.9
         "datafolder_edit", "datafolder_use_check", "datafolder_picks_edit"
     ) + Extras290TabMixin.SETTING_WIDGETS_290 + SuiteTabMixin.SETTING_WIDGETS_2100
+
+    # 2.18.34: saved by older versions, no widget now ('Show advanced options': every option
+    # group is its own section). A saved value is ignored; a profile with it is not flagged.
+    _RETIRED_SETTINGS = ("advanced_check",)
 
     def _current_state(self):
         state = {}
@@ -851,6 +1163,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             self._facrev_clear()
         if hasattr(self, "open_report_btn"):
             self.open_report_btn.setEnabled(False)
+        self._clear_results()                 # 2.18.34: the Results view is per project
         # the layer choices of the new project can only be restored once the
         # combos list the new project's layers
         if hasattr(self, "_refresh_layer_combos"):
@@ -860,6 +1173,19 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                 log_message("Layer lists not refreshed: {}".format(e))
         self._restore_settings()
         self._update_button_states()
+
+    def _clear_results(self):
+        """The Results view back to 'no run yet' (another project was opened)."""
+        if not hasattr(self, "result_table"):
+            return
+        self.result_label.setText("No classification run yet")
+        self.result_hint.setVisible(True)
+        self.result_table.setRowCount(0)
+        self._result_rows = []
+        self.scenario_result_table.setRowCount(0)
+        self.scenario_result_table.setVisible(False)
+        self.class_result_text.clear()
+        self.result_tool_rows["open_report_btn"].set_status("no", show=False)
 
     def _on_write_project(self, *args):
         """Project > Save: store the dialog settings with it."""

@@ -49,8 +49,18 @@ RUNDAM_KEYS = ("DAM_ID", "DAM_NAME", "DAM_POINT", "HEIGHT_FT", "STORAGE_ACFT", "
 # only TIER is sent. ANUGA is the only engine that models culverts / bridges.
 ENGINE_LABELS = ["LISFLOOD-FP only (Runner default; culverts / bridges not modelled)",
                  "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA; "
-                 "= the Runner's 'force ANUGA')"]
-ENGINE_SHORT = ["LISFLOOD-FP only", "LISFLOOD-FP \u2192 ANUGA (final results from ANUGA)"]
+                 "= the Runner's 'force ANUGA')",
+                 # appended (design #68): 0 and 1 and the default are unchanged
+                 "LISFLOOD-FP then HEC-RAS 2D (final results from HEC-RAS; culverts / bridges "
+                 "as SA/2D connections; needs HEC-RAS 6.6)"]
+ENGINE_SHORT = ["LISFLOOD-FP only", "LISFLOOD-FP \u2192 ANUGA (final results from ANUGA)",
+                "LISFLOOD-FP \u2192 HEC-RAS 2D (final results from HEC-RAS)"]
+HECRAS_ENV = ("NDBREACH_HECRAS_WINEPREFIX", "NDBREACH_HECRAS_LINUX_DIR")
+HECRAS_MISSING = ("HEC-RAS 2D was requested (Runner models = LISFLOOD-FP then HEC-RAS 2D) but "
+                  "it is not set up: set NDBREACH_HECRAS_WINEPREFIX (Wine prefix with HEC-RAS "
+                  "6.6) and NDBREACH_HECRAS_LINUX_DIR (HEC's Linux RasUnsteady), see the "
+                  "Runner's tools/hecras_wine/README.md, or choose 'LISFLOOD-FP only'. "
+                  "Nothing was run.")
 ANUGA_SETTING = "NDBREACH_ANUGA_PYTHON"          # the Runner's ANUGA interpreter setting / env
 ANUGA_MISSING = ("ANUGA was requested (Runner models = LISFLOOD-FP then ANUGA) but no ANUGA "
                  "environment was found: set 'ANUGA Python interpreter' in Processing > Options > "
@@ -69,7 +79,18 @@ def effective_engine(engine=0, force_anuga=False):
         e = int(engine or 0)
     except (TypeError, ValueError):
         e = 0
-    return 1 if (e >= 1 or force_anuga) else 0
+    if force_anuga:
+        return 1
+    if e == 2:
+        return 2                    # HEC-RAS 2D (design #68)
+    return 1 if e >= 1 else 0
+
+
+def hecras_configured(env=None, isdir=None):
+    """True when both HEC-RAS 2D folders are set and exist (the Runner checks the rest)."""
+    env = os.environ if env is None else env
+    isdir = isdir or os.path.isdir
+    return all((env.get(k) or "").strip() and isdir(env.get(k).strip()) for k in HECRAS_ENV)
 
 
 def engine_status(engine, culverts=None):
@@ -78,7 +99,8 @@ def engine_status(engine, culverts=None):
     e = effective_engine(engine)
     s = "Runner engine (7b): " + ENGINE_SHORT[e]
     if culverts not in (None, ""):
-        s += "; culverts: " + ("used by ANUGA" if e else "IGNORED (LISFLOOD-FP only)")
+        s += "; culverts: " + ({1: "used by ANUGA", 2: "SA/2D connections in HEC-RAS"}
+                               .get(e, "IGNORED (LISFLOOD-FP only)"))
     return s
 
 

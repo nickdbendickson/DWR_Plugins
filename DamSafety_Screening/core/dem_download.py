@@ -8,8 +8,7 @@ import zipfile
 
 from osgeo import gdal, osr
 
-from . import terrain
-from . import nd_counties
+from . import nd_counties, terrain
 
 
 def _safe_extract(zf, dest):
@@ -22,15 +21,11 @@ def _safe_extract(zf, dest):
     for member in zf.infolist():
         zf.extract(member, dest)
 
-# (west, south, east, north) in degrees, padded so a dam on the county line is inside.
-# The county download extents are derived from the county outlines the suite ships
-# (nd_counties.geojson, the same file the DEM-tab map and county picker use), not hand-typed.
-# The old hand-typed table ended INSIDE 48 of the 53 counties (McLean by ~34 mi on the west), so a
-# county DEM download quietly stopped short and dams in the missing strip had no terrain
-# (step-7 FAIL / flood cut at the DEM edge). Ported from nd_dam_screening core/dem_download.py.
-COUNTY_PAD_DEG = 0.03          # ~3 km outward, so a dam on the county line is inside the download
+# west, south, east, north in degrees: each county's outline box, padded so a 5 mi box around
+# any dam in the county is inside (0.12 deg >= 5 mi of longitude up to 52 N).
+COUNTY_PAD_DEG = 0.12
 COUNTIES = {name: nd_counties.box([name], COUNTY_PAD_DEG) for name in nd_counties.names()}
-STATE = nd_counties.box(nd_counties.names(), COUNTY_PAD_DEG)
+STATE = (-104.06, 45.93, -96.54, 49.01)
 MI = 1609.344
 
 

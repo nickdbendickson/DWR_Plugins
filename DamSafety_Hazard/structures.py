@@ -1986,7 +1986,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             progress_cb(p, m)
 
     # ---- 1. reset, evaluation areas of the structures near the flood --------
-    tick(0, "Finding structures near the flood...")
+    tick(0, "Finding structures near the flood\u2026")
     # (the provider reader has no fast whole-raster pass: every structure is
     # then a candidate, as before)
     mask_f = _coarse_wet_mask(dep) if dep.ok and dep.backend == "gdal" else None
@@ -2163,7 +2163,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
         except Exception as e:
             problems.log("structure {} evaluation area: {}".format(sid, e))
     # ---- 3. velocity, arrival, D x V for all wet cells at once ---------------
-    tick(55, "Reading velocity and arrival at {} structure(s)...".format(len(wet_ids)))
+    tick(55, "Reading velocity and arrival at {} structure(s)\u2026".format(len(wet_ids)))
     if wet_ids:
         counts = [cells[s][2].size for s in wet_ids]
         offs = np.concatenate(([0], np.cumsum(counts)))

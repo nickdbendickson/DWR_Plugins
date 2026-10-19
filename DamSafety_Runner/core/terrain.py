@@ -228,24 +228,62 @@ def _pick_inflow(X, Y, d, z, need, top_m, radius_m, ok):
                   .format(last_r, last_drop))
 
 
-def streambed_inflow(grid, crest_xy, dam_height_m, top_m, radius_m=150.0):
+def _side(xy, origin, downstream):
+    """Signed distance of xy past `origin` along the unit vector `downstream` (> 0: downstream)."""
+    return (xy[0] - origin[0]) * downstream[0] + (xy[1] - origin[1]) * downstream[1]
+
+
+def _downstream_trace(grid, crest_xy, radius_m, downstream):
+    """The steepest-descent trace from the crest, keeping only cells on the downstream side.
+    v3.10.18: on a low embankment between two flat (hydro-flattened) water surfaces the trace
+    from the crest can step into the reservoir (DWR-3161: 0.8 ft lower on the pool side,
+    40 m south of a dam whose downstream is north). Then the trace is started again a few
+    cells out on the downstream side. Returns (cells [(x, y)], start offset m)."""
+    try:
+        path, _length = trace_downstream(grid, crest_xy, radius_m)
+    except Exception:                               # noqa: BLE001
+        path = []
+    if downstream is None:
+        return path[1:], 0.0
+    keep = [p for p in path[1:] if _side(p, crest_xy, downstream) > 0.5 * grid.dx]
+    if keep:
+        return keep, 0.0
+    for k in (1, 2, 3, 5, 8):
+        off = k * grid.dx
+        if off > radius_m:
+            break
+        start = (crest_xy[0] + downstream[0] * off, crest_xy[1] + downstream[1] * off)
+        r, c = grid.rc(*start)
+        if not grid.inside(r, c):
+            break
+        try:
+            path, _length = trace_downstream(grid, start, radius_m)
+        except Exception:                           # noqa: BLE001
+            continue
+        # the cells the trace reaches from there (not the start), still downstream
+        keep = [p for p in path[1:] if _side(p, crest_xy, downstream) > 0.5 * grid.dx]
+        if keep:
+            return keep, off
+    return [], 0.0
+
+
+def streambed_inflow(grid, crest_xy, dam_height_m, top_m, radius_m=150.0, downstream=None):
     """Lowest cell on the downstream trace, not the nearest low ground.
 
     Follow steepest descent from the crest. Prefer the first cell at least half
     the dam height below the crest. If none, take the lowest cell on that path
-    within radius_m. A cell off the trace is not the streambed.
+    within radius_m. A cell off the trace is not the streambed. `downstream` (unit vector,
+    v3.10.18) keeps only cells on the downstream side of the crest (_downstream_trace).
     Returns ((x, y), note) or (None, reason)."""
-    try:
-        path, _length = trace_downstream(grid, crest_xy, radius_m)
-    except Exception as e:
-        return None, "downstream trace failed: {}".format(e)
-    if len(path) < 2:
-        return None, "downstream trace did not leave the crest"
+    cells, off = _downstream_trace(grid, crest_xy, radius_m, downstream)
+    if not cells:
+        return None, ("no cell of the downstream trace on the downstream side of the crest"
+                      if downstream is not None else "downstream trace did not leave the crest")
     z = grid.masked()
     need = top_m - 0.5 * dam_height_m
     best = None
     lowest = None
-    for x, y in path[1:]:
+    for x, y in cells:
         r, c = grid.rc(x, y)
         if not grid.inside(r, c) or not np.isfinite(z[r, c]):
             continue
@@ -261,14 +299,33 @@ def streambed_inflow(grid, crest_xy, dam_height_m, top_m, radius_m=150.0):
     drop_ft = pick[0] / 0.3048
     how = "first streambed cell at least half the dam height below the crest" if best else (
         "lowest streambed cell on the downstream trace")
-    return (pick[2], pick[3]), ("{}; {:.0f} m downstream, {:.1f} ft below the crest"
+    if off > 0:
+        how += " (traced from {:.0f} m out on the downstream side: the trace from the crest " \
+               "went into the reservoir)".format(off)
+    # v3.10.16: top_m is the top of dam (place_from_crest), so the drop is below the top of dam
+    return (pick[2], pick[3]), ("{}; {:.0f} m downstream, {:.1f} ft below the top of dam"
                                  .format(how, pick[1], drop_ft))
 
 
-def place_from_crest(grid, dam_xy, dam_height_m, top_m, radius_m=400.0):
-    """A label point is not the embankment. Use the highest ground within radius_m
-    as the crest, then the nearest toe at least half the dam height below that crest.
-    Returns (inflow_xy, crest_xy, note) or (None, crest_xy or None, reason)."""
+CREST_BAND_FT = 3.0     # v3.10.16: the crest is ground within this (or 10% of the dam height) of
+                        # the top of dam; higher ground nearby is a hill, not the embankment
+
+
+def crest_band_m(dam_height_m):
+    """Half-width (m) of the elevation band around the top of dam that counts as the crest."""
+    return max(CREST_BAND_FT * 0.3048, 0.1 * float(dam_height_m or 0.0))
+
+
+def embankment_crest(grid, dam_xy, dam_height_m, top_m, radius_m=400.0):
+    """v3.10.16: the crest of THIS dam near a label point.
+
+    The ground within `crest_band_m` of the top of dam is the embankment crest: the given point
+    is kept when it is on it, else the nearest such cell is the crest. Without such ground, the
+    highest ground NOT above the band. Ground well above the top of dam (a hill within the
+    search radius) is never the crest: before 3.10.16 the highest ground in the circle was,
+    and the breach inflow was put on a hillside (DWR-3161: a 1937.8 ft hill 400 m away from a
+    point on a 1844.4 ft dam).
+    Returns (crest_xy, crest_z_m, note) or (None, None, reason)."""
     xs = grid.x_centers()
     ys = grid.y_centers()
     X, Y = np.meshgrid(xs, ys)
@@ -277,29 +334,123 @@ def place_from_crest(grid, dam_xy, dam_height_m, top_m, radius_m=400.0):
     near = (d <= radius_m) & np.isfinite(z)
     if not near.any():
         return None, None, "no DEM within {:.0f} m of the dam point".format(radius_m)
-    rr, cc = np.unravel_index(np.nanargmax(np.where(near, z, -np.inf)), z.shape)
-    crest = (float(X[rr, cc]), float(Y[rr, cc]))
+    band = crest_band_m(dam_height_m)
+    on = near & (np.abs(z - top_m) <= band)
+    if on.any():
+        dd = np.where(on, d, np.inf)
+        rr, cc = np.unravel_index(int(np.argmin(dd)), dd.shape)
+        if dd[rr, cc] <= max(grid.dx, 1e-9) * 1.5:
+            return (float(dam_xy[0]), float(dam_xy[1])), float(z[rr, cc]), \
+                "the dam point is on the crest"
+        return (float(X[rr, cc]), float(Y[rr, cc])), float(z[rr, cc]), \
+            "nearest ground within {:.1f} ft of the top of dam".format(band / 0.3048)
+    low = near & (z <= top_m + band)
+    if not low.any():
+        return None, None, ("all ground within {:.0f} m of the dam point is more than {:.1f} ft "
+                            "above the top of dam: the point is not at this dam (or the top of "
+                            "dam is in another datum)".format(radius_m, band / 0.3048))
+    k = np.lexsort((d.ravel(), -np.where(low, z, -np.inf).ravel()))[0]
+    rr, cc = np.unravel_index(int(k), z.shape)
+    return (float(X[rr, cc]), float(Y[rr, cc])), float(z[rr, cc]), \
+        "highest ground not above the top of dam (no ground within {:.1f} ft of it)".format(
+            band / 0.3048)
+
+
+def place_from_crest(grid, dam_xy, dam_height_m, top_m, radius_m=400.0, downstream=None):
+    """A label point is not always the embankment. Find the crest of this dam
+    (`embankment_crest`: ground at the top of dam, never a higher hill), then the nearest toe
+    at least half the dam height below the TOP OF DAM.
+    v3.10.18: `downstream` (unit vector from downstream_direction) keeps every pick on the
+    downstream side of the crest; before, this fallback ignored it and put DWR-3161's inflow
+    40 m into the reservoir while the flow trace ran the other way.
+    Returns (inflow_xy, crest_xy, note) or (None, crest_xy or None, reason)."""
+    crest, crest_z, cnote = embankment_crest(grid, dam_xy, dam_height_m, top_m, radius_m)
+    if crest is None:
+        return None, None, cnote
+    xs = grid.x_centers()
+    ys = grid.y_centers()
+    X, Y = np.meshgrid(xs, ys)
+    z = grid.masked()
     moved = math.hypot(crest[0] - dam_xy[0], crest[1] - dam_xy[1])
-    crest_z = float(z[rr, cc])
-    inflow, why = streambed_inflow(grid, crest, dam_height_m, crest_z, radius_m)
+    inflow, why = streambed_inflow(grid, crest, dam_height_m, top_m, radius_m, downstream)
+    if inflow is not None:
+        r, c = grid.rc(*inflow)
+        if not (grid.inside(r, c) and np.isfinite(z[r, c]) and z[r, c] < top_m):
+            inflow, why = None, "the downstream trace did not go below the top of dam"
     if inflow is None:
-        inflow, why = find_inflow_point(grid, crest, dam_height_m, crest_z, radius_m)
+        inflow, why = find_inflow_point(grid, crest, dam_height_m, top_m, radius_m,
+                                        downstream=downstream)
+        if inflow is not None and why.startswith(NO_DOWNSTREAM):
+            inflow = None                    # only the upstream side qualified: not used
     if inflow is None:
         # Half the height is the normal toe. A label point can miss it by a foot on a
         # coarse DEM, so the fallback accepts 8 ft or 40 percent of the height.
-        need = min(crest_z - 8.0 * 0.3048, crest_z - 0.4 * dam_height_m)
+        need = min(top_m - 8.0 * 0.3048, top_m - 0.4 * dam_height_m)
         d2 = np.hypot(X - crest[0], Y - crest[1])
         sel = (d2 <= max(radius_m, 800.0)) & np.isfinite(z) & (z <= need)
+        if downstream is not None:
+            sel &= _side((X, Y), crest, downstream) > 0.0
         if not sel.any():
             return None, crest, why
         dd = np.where(sel, d2, np.inf)
         r, c = np.unravel_index(np.argmin(dd), dd.shape)
-        drop = (crest_z - float(z[r, c])) / 0.3048
+        drop = (top_m - float(z[r, c])) / 0.3048
         inflow = (float(X[r, c]), float(Y[r, c]))
-        why = ("toe is {:.0f} m from the moved crest, {:.1f} ft below it "
+        why = ("toe is {:.0f} m from the crest, {:.1f} ft below the top of dam "
                "(half-height search missed)".format(d2[r, c], drop))
-    return inflow, crest, ("crest moved {:.0f} m from the given point to the highest ground; {}"
-                           .format(moved, why))
+    if moved < 1e-6:
+        return inflow, None, "{}; {}".format(cnote, why)
+    return inflow, crest, ("crest moved {:.0f} m from the given point ({}); {}"
+                           .format(moved, cnote, why))
+
+
+SIDE_PROBLEM = "CHECK THE DAM POINT"
+
+
+def inflow_side_check(dam_xy, inflow_xy, path, downstream=None):
+    """v3.10.18: is the breach inflow on the downstream side, as the flow trace from it says?
+    Flags (a) a trace from the inflow that runs back over the dam point, (b) an inflow
+    behind the dam relative to the trace's own direction, (c) an inflow on the other side of
+    the crest from `downstream`. Returns {'ok', 'problems', ...}."""
+    d0 = math.hypot(inflow_xy[0] - dam_xy[0], inflow_xy[1] - dam_xy[1])
+    out = {"ok": True, "problems": [], "inflow_from_dam_m": round(d0, 1)}
+    if path is not None and len(path) >= 2:
+        dmin = min(math.hypot(p[0] - dam_xy[0], p[1] - dam_xy[1]) for p in path[1:])
+        out["trace_min_to_dam_m"] = round(dmin, 1)
+        if d0 > 1.0 and dmin < 0.5 * d0:
+            out["problems"].append("the flow trace from the inflow point runs back over the dam "
+                                   "point ({:.0f} m from it)".format(dmin))
+        fd = flow_direction(path)
+        out["trace_direction"] = [round(fd[0], 3), round(fd[1], 3)]
+        if d0 > 1.0 and _side(inflow_xy, dam_xy, fd) < 0:
+            out["problems"].append("the inflow point is behind the dam relative to the flow "
+                                   "trace's direction ({:.2f}, {:.2f})".format(*fd))
+    if downstream is not None:
+        out["downstream"] = [round(downstream[0], 3), round(downstream[1], 3)]
+        if d0 > 1.0 and _side(inflow_xy, dam_xy, downstream) < 0:
+            out["problems"].append("the inflow point is on the upstream side of the crest "
+                                   "(downstream is ({:.2f}, {:.2f}))".format(*downstream))
+    out["ok"] = not out["problems"]
+    return out
+
+
+def nearest_line_distance(xy, lines):
+    """Shortest distance (m) from xy to any polyline in `lines` ([[(x, y), ...], ...])."""
+    best = None
+    px, py = float(xy[0]), float(xy[1])
+    for ln in lines or []:
+        a = np.asarray(ln, dtype=float).reshape(-1, 2)
+        if len(a) == 1:
+            d = math.hypot(a[0, 0] - px, a[0, 1] - py)
+        else:
+            p0, p1 = a[:-1], a[1:]
+            v = p1 - p0
+            L2 = (v ** 2).sum(axis=1)
+            t = np.clip(((px - p0[:, 0]) * v[:, 0] + (py - p0[:, 1]) * v[:, 1]) /
+                        np.where(L2 > 0, L2, 1.0), 0.0, 1.0)
+            d = float(np.hypot(p0[:, 0] + t * v[:, 0] - px, p0[:, 1] + t * v[:, 1] - py).min())
+        best = d if best is None else min(best, d)
+    return best
 
 
 def flow_direction(path):

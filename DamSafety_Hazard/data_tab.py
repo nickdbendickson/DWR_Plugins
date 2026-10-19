@@ -29,23 +29,26 @@ class DataTabMixin(object):
     _set_busy, _update_status, config_* attributes and the classification
     tab's _refresh_layer_combos / _resolve_layer."""
 
-    def _build_data_tab(self):
+    def _build_data_tab(self, scroll=True):
+        """The output options and the data sets. scroll=False (2.18.34, the 'Data and
+        output' section of the Classify view, which scrolls itself): no scroll area of its
+        own."""
         tab = QWidget()
         self._data_tab = tab
         outer = QVBoxLayout(tab)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        if not scroll:
+            outer.setContentsMargins(0, 0, 0, 0)
         body = QWidget()
         lay = QVBoxLayout(body)
         intro = QLabel(
-            "<h3>Data &amp; Output</h3>Where the results go and which data are used. "
+            "Where the results go and which data are used. "
             "Everything ticked here is downloaded for the study area when the Hazard "
             "Classification needs it. <b>Download data now</b> also saves "
             "each data set to <i>outputs/{}</i> - for the study area or only where the flood "
             "is - and adds it to the project. Layers from a work server: add them to the "
             "project and pick them in the lists; a service address can be changed with "
-            "<i>Edit data sources</i>. The study area comes from the Depth raster on the "
-            "Setup tab.".format(SUBDIR_DATA))
+            "<i>Edit data sources</i>. The study area comes from the Depth raster under "
+            "Setup.".format(SUBDIR_DATA))
         intro.setWordWrap(True)
         lay.addWidget(intro)
 
@@ -55,8 +58,8 @@ class DataTabMixin(object):
         self.output_folder_edit = QLineEdit()
         self.output_folder_edit.setReadOnly(True)
         self.output_folder_edit.setPlaceholderText("<dam folder>/outputs - pick the dam folder "
-                                                   "on the Setup tab")
-        self.output_browse_btn = QPushButton("Browse...")
+                                                   "under Setup")
+        self.output_browse_btn = QPushButton("Browse\u2026")
         self.output_browse_btn.clicked.connect(self.browse_output)
         form.addRow("Output folder:", self._inline_row(self.output_folder_edit,
                                                        self.output_browse_btn))
@@ -233,7 +236,7 @@ class DataTabMixin(object):
         oform = QFormLayout()
         opack = QLabel(
             "A pack holds every data set above for all of North Dakota. Build it once on a "
-            "computer that is online (<b>Build offline pack...</b>, or build_nd_pack.py in "
+            "computer that is online (<b>Build offline pack\u2026</b>, or build_nd_pack.py in "
             "the plugin folder), copy the zip here and pick it. Data sets in the pack are "
             "read from it instead of the internet. Kept for this computer, not the project.")
         opack.setWordWrap(True)
@@ -241,7 +244,7 @@ class DataTabMixin(object):
         self.pack_path_edit = QLineEdit()
         self.pack_path_edit.setPlaceholderText("nd_offline_pack.zip (or its unpacked folder)")
         self.pack_path_edit.editingFinished.connect(self._pack_changed)
-        self.pack_browse_btn = QPushButton("Browse...")
+        self.pack_browse_btn = QPushButton("Browse\u2026")
         self.pack_browse_btn.clicked.connect(self._browse_pack)
         self.pack_clear_btn = QPushButton("Clear")
         self.pack_clear_btn.clicked.connect(self._clear_pack)
@@ -264,7 +267,7 @@ class DataTabMixin(object):
         self.pack_status_label = QLabel("")
         self.pack_status_label.setWordWrap(True)
         oform.addRow("Status:", self.pack_status_label)
-        self.pack_build_btn = QPushButton("Build offline pack...")
+        self.pack_build_btn = QPushButton("Build offline pack\u2026")
         self.pack_build_btn.setToolTip(
             "Downloads every data set for all of North Dakota into one zip (needs internet; "
             "an hour or more; a large file). An interrupted build goes on where it "
@@ -274,20 +277,18 @@ class DataTabMixin(object):
         ogrp.setLayout(oform)
         lay.addWidget(ogrp)
         self._load_pack_settings()
-        lay.addStretch()
-        scroll.setWidget(body)
-        outer.addWidget(scroll)
+        if scroll:
+            lay.addStretch()
+            area = QScrollArea()
+            area.setWidgetResizable(True)
+            area.setWidget(body)
+            outer.addWidget(area)
+        else:
+            lay.setContentsMargins(0, 0, 0, 0)
+            outer.addWidget(body)
 
         row = QHBoxLayout()
-        # v2.9: the button moved here from the Setup & Run tab
-        self.run_all_btn = QPushButton("Run everything")
-        self.run_all_btn.setToolTip("Checks the inputs, saves the data sets to outputs/Data "
-                                    "(when ticked on this tab) and runs the Hazard "
-                                    "Classification - one inventory of every structure, the "
-                                    "ACER zone rasters, the ND criteria, the report and the "
-                                    "EAP outputs.")
-        self.run_all_btn.clicked.connect(self._on_run_all)
-        row.addWidget(self.run_all_btn)
+        # 2.18.34: no "Run everything" here - Classify (the action bar) is that run
         self.data_download_btn = QPushButton("Download data now")
         self.data_download_btn.setToolTip(
             "Downloads every data set ticked above for the study area (or the flooded area) "
@@ -298,9 +299,9 @@ class DataTabMixin(object):
         self.refresh_layers_btn = QPushButton("Refresh layer lists")
         self.refresh_layers_btn.clicked.connect(self._refresh_layer_combos)
         row.addWidget(self.refresh_layers_btn)
-        self.data_sources_btn = QPushButton("Edit data sources...")
+        self.data_sources_btn = QPushButton("Edit data sources\u2026")
         self.data_sources_btn.setToolTip(
-            "Opens the file with every download address (NSI, ND GIS Hub, NID, HIFLD, NBI ...). "
+            "Opens the file with every download address (NSI, ND GIS Hub, NID, HIFLD, NBI \u2026). "
             "Point an entry at your work server's service when it has the same layer, then "
             "restart QGIS.")
         self.data_sources_btn.clicked.connect(self._on_edit_sources)
@@ -404,7 +405,7 @@ class DataTabMixin(object):
                                     "Use this pack on this computer too?") == MB_YES:
                 self.pack_path_edit.setText(path)
                 self._pack_changed()
-        self._start_background("Building the offline data pack...", work, done,
+        self._start_background("Building the offline data pack\u2026", work, done,
                                project_bound=False)
 
     def _data_area_changed(self, *args):
@@ -442,7 +443,7 @@ class DataTabMixin(object):
     def _open_data_folder(self, *args):
         path = os.path.join(self.config_output_folder or "", SUBDIR_DATA)
         if not self.config_output_folder:
-            QMessageBox.information(self, "Data", "Pick the dam folder on the Setup tab "
+            QMessageBox.information(self, "Data", "Pick the dam folder under Setup "
                                                   "first.")
             return
         os.makedirs(path, exist_ok=True)
@@ -488,7 +489,7 @@ class DataTabMixin(object):
         from .datafetch import download_data
         job = self._download_job()
         job["cfg"]["add_to_project"] = True
-        self._progress = self._make_progress("Downloading data...")
+        self._progress = self._make_progress("Downloading data\u2026")
         rows = download_data(job["cfg"], job["clip"], job["depth"], job["out"], job["dam"],
                              progress=self._progress_tick, log=self._log)
         self._refresh_layer_combos()
@@ -498,13 +499,13 @@ class DataTabMixin(object):
         if self._busy:
             return
         if not self.config_output_folder:
-            QMessageBox.warning(self, "Download data", "Pick the dam folder on the Setup tab "
+            QMessageBox.warning(self, "Download data", "Pick the dam folder under Setup "
                                                        "first.")
             return
         depth = self._raster_paths().get("depth")
         if not depth or not os.path.isfile(depth):
             QMessageBox.warning(self, "Download data", "The study area comes from the Depth "
-                                                       "raster - select it on the Setup tab.")
+                                                       "raster - select it under Setup.")
             return
         try:
             job = self._download_job()
@@ -541,7 +542,7 @@ class DataTabMixin(object):
                 return
             self._add_downloaded(sink)
             self._report_downloads(outcome.result)
-        self._start_background("Downloading data...", work, done)
+        self._start_background("Downloading data\u2026", work, done)
 
     def _report_downloads(self, rows):
         saved = [r for r in rows if r[1]]

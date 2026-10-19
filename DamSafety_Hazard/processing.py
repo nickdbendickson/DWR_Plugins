@@ -319,7 +319,7 @@ def generate_hazard_rasters(output_folder, depth_layer, velocity_layer,
     _maxmax_rasters(d_path, v_path, paths, curves, kinds, tick, overviews=overviews)
 
     if add_to_project:
-        tick(95, "Loading hazard layers...")
+        tick(95, "Loading hazard layers\u2026")
         for key in kinds:
             lyr = QgsRasterLayer(paths[key], "Hazard {}".format(key.capitalize()))
             if lyr.isValid():
@@ -338,7 +338,7 @@ def _zone_overviews(paths, kinds, width, height, tick):
         return
     from .overviews import build_overviews
     for i, key in enumerate(kinds):
-        tick(88 + 6.0 * i / max(1, len(kinds)), "Building overviews: {}...".format(
+        tick(88 + 6.0 * i / max(1, len(kinds)), "Building overviews: {}\u2026".format(
             os.path.basename(paths[key])))
         ok, text = build_overviews(paths[key], ZONE_OVERVIEW_RESAMPLING, external=False,
                                    compress="LZW")
@@ -357,7 +357,7 @@ def _maxmax_rasters(d_path, v_path, paths, curves, kinds, tick, overviews=True):
             if ds_d is None or ds_v is None:
                 raise RuntimeError("Could not open depth/velocity rasters with GDAL")
 
-            tick(5, "Aligning velocity grid to depth grid...")
+            tick(5, "Aligning velocity grid to depth grid\u2026")
             width, height = ds_d.RasterXSize, ds_d.RasterYSize
             gt = ds_d.GetGeoTransform()
             proj = ds_d.GetProjection()
@@ -409,7 +409,7 @@ def _maxmax_rasters(d_path, v_path, paths, curves, kinds, tick, overviews=True):
                 tick(10 + 75.0 * (y0 + h) / height,
                      "Classifying hazard zones: row {} of {}".format(y0 + h, height))
 
-            tick(86, "Finalising hazard GeoTIFFs (statistics)...")
+            tick(86, "Finalising hazard GeoTIFFs (statistics)\u2026")
             for key in list(outs):
                 _finalize_class_raster(outs[key], width, height, overviews=False)
                 outs[key] = None                 # closes the file
