@@ -65,4 +65,6 @@ jobs:
             echo "== $t =="
             python "$t" || { rc=$?; echo "::error::$t exited $rc"; fail=1; }
           done
-          exit $fail
+          # no `exit` here: in this login shell (bash -el) the exit builtin runs ~/.bash_logout,
+          # whose clear_console line fails without a terminal and turned "exit 0" into 1
+          test "$fail" -eq 0
