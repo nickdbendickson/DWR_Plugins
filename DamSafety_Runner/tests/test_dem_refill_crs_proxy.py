@@ -11,6 +11,7 @@ import io
 import os
 import sys
 import tempfile
+import urllib.error
 import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -106,11 +107,97 @@ def refill_rejects_a_non_tiff_answer():
         assert "GeoTIFF" in str(e), str(e)
 
 
+# A little-endian BigTIFF leader (one of the four TIFF_MAGIC signatures), padded past the floor.
+FAKE_BIGTIFF = b"II+\x00" + b"\x00" * 2000
+
+
+def _run_fetch(data=FAKE_TIFF, urlopen=None, crs=26914,
+               bounds=(100.0, 200.0, 1100.0, 1200.0), cell=10.0):
+    """fetch_3dep with netproxy.urlopen stubbed and dem_refill.time.sleep neutralised so retries
+    are instant. Returns (out_path, calls, error): error is whatever fetch_3dep raised, or None.
+    `urlopen`, when given, is called as urlopen(call_number, data) and returns a _FakeResp (or
+    raises) so a flaky transport can be simulated; otherwise every call returns _FakeResp(data)."""
+    calls = {"n": 0}
+
+    def fake_urlopen(req, timeout=60, settings=None):
+        calls["n"] += 1
+        if urlopen is not None:
+            return urlopen(calls["n"], data)
+        return _FakeResp(data)
+
+    real = netproxy.urlopen
+    real_sleep = dem_refill.time.sleep
+    netproxy.urlopen = fake_urlopen
+    dem_refill.time.sleep = lambda *a, **k: None       # retries fire with no real delay
+    d = tempfile.mkdtemp()
+    out = os.path.join(d, "refill.tif")
+    error = None
+    try:
+        dem_refill.fetch_3dep(bounds, cell, out, crs=crs)
+    except Exception as e:                               # noqa: BLE001 - the test inspects it
+        error = e
+    finally:
+        netproxy.urlopen = real
+        dem_refill.time.sleep = real_sleep
+    return out, calls["n"], error
+
+
+@register
+def refill_empty_body_raises_and_writes_no_file():
+    out, _n, err = _run_fetch(data=b"")
+    assert isinstance(err, IOError), repr(err)
+    assert not os.path.exists(out), "an empty answer left a file at out_path"
+
+
+@register
+def refill_short_tiff_body_raises_short_and_writes_no_file():
+    # a real TIFF leader but under the 1000-byte floor: a truncated tile, not a usable one
+    out, _n, err = _run_fetch(data=b"II*\x00" + b"\x00" * 100)
+    assert isinstance(err, IOError), repr(err)
+    assert "short" in str(err), str(err)
+    assert not os.path.exists(out), "a short answer left a file at out_path"
+
+
+@register
+def refill_html_body_raises_geotiff_and_writes_no_file():
+    out, _n, err = _run_fetch(data=b"<!DOCTYPE html><html><body>error</body></html>" + b" " * 2000)
+    assert isinstance(err, IOError), repr(err)
+    assert "GeoTIFF" in str(err), str(err)
+    assert not os.path.exists(out), "an HTML answer left a file at out_path"
+
+
+@register
+def refill_bigtiff_body_over_floor_succeeds():
+    out, _n, err = _run_fetch(data=FAKE_BIGTIFF)
+    assert err is None, repr(err)
+    assert os.path.isfile(out) and os.path.getsize(out) >= 1000, out
+
+
+@register
+def refill_retries_transport_errors_then_succeeds():
+    # URLError on the first (RETRIES - 1) calls, then a valid tile: the loop retries transport
+    # failures and the call count lands on exactly RETRIES.
+    def flaky(n, _data):
+        if n <= dem_refill.RETRIES - 1:
+            raise urllib.error.URLError("transient")
+        return _FakeResp(FAKE_TIFF)
+
+    out, calls, err = _run_fetch(urlopen=flaky)
+    assert err is None, repr(err)
+    assert os.path.isfile(out) and os.path.getsize(out) >= 1000, out
+    assert calls == dem_refill.RETRIES, "expected {} calls, got {}".format(dem_refill.RETRIES, calls)
+
+
 def _run():
     tests = [refill_requests_the_grids_working_crs_not_hardcoded_5070,
              refill_accepts_epsg_string_and_defaults_to_5070,
              refill_download_is_routed_through_the_qgis_proxy_layer,
-             refill_rejects_a_non_tiff_answer]
+             refill_rejects_a_non_tiff_answer,
+             refill_empty_body_raises_and_writes_no_file,
+             refill_short_tiff_body_raises_short_and_writes_no_file,
+             refill_html_body_raises_geotiff_and_writes_no_file,
+             refill_bigtiff_body_over_floor_succeeds,
+             refill_retries_transport_errors_then_succeeds]
     failed = 0
     for fn in tests:
         try:

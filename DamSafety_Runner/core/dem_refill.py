@@ -5,6 +5,7 @@ size and mosaicked onto the clip. A second hole is not requested again. Nothing
 is requested outside the study cap, and dry no-data is left alone.
 """
 import os
+import time
 import urllib.parse
 import urllib.request
 
@@ -13,6 +14,11 @@ EXPORT_URL = ("https://elevation.nationalmap.gov/arcgis/rest/services/"
 MILE = 1609.344
 TARGET_EPSG = 5070                                   # fall-back when no grid CRS is given
 USER_AGENT = "ND-Dam-Suite (QGIS plugins; dam safety)"
+# The four TIFF leaders (classic + BigTIFF, both byte orders), copied from
+# damsuite.terrain_cache._is_tiff; a GeoTIFF starts with one of these.
+TIFF_MAGIC = (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+")
+MIN_TILE_BYTES = 1000                                # anything shorter is not a real tile
+RETRIES = 3                                          # transport retries; bad answers are not retried
 
 
 def _sr(crs):
@@ -54,7 +60,7 @@ def hole_bounds(xs, ys, margin_m, cap):
     return (x0, y0, x1, y1)
 
 
-def fetch_3dep(bounds, cell_m, out_path, crs=TARGET_EPSG, timeout=120):
+def fetch_3dep(bounds, cell_m, out_path, crs=TARGET_EPSG, timeout=120, retries=RETRIES):
     """One GeoTIFF for `bounds`, requested AND returned in the model grid's working CRS (`crs`,
     an EPSG code, an 'EPSG:<n>' string, or a CRS WKT; defaults to EPSG:5070 when none is given).
 
@@ -82,14 +88,30 @@ def fetch_3dep(bounds, cell_m, out_path, crs=TARGET_EPSG, timeout=120):
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     from ..damsuite import netproxy
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with netproxy.urlopen(req, timeout=timeout) as r:
-        data = r.read()
-    if data[:4] not in (b"II*\x00", b"MM\x00*"):     # an ArcGIS JSON error comes back HTTP 200
+    # Retry only transport failures (timeouts, resets, proxy hiccups). A bad answer that comes
+    # back whole - wrong signature or too short - is deterministic and is NOT retried below.
+    data = None
+    err = None
+    for attempt in range(max(1, retries)):
+        try:
+            with netproxy.urlopen(req, timeout=timeout) as r:
+                data = r.read()
+            break
+        except Exception as e:                       # noqa: BLE001 - retried, then reported
+            err = e
+            if attempt + 1 < max(1, retries):
+                time.sleep(2 * (attempt + 1))
+    if data is None:
+        raise IOError("3DEP refill download failed: {}".format(err))
+    # Validate BEFORE writing anything, so out_path never holds a bad/partial answer.
+    if data[:4] not in TIFF_MAGIC:                    # an ArcGIS JSON/HTML error comes back HTTP 200
         raise IOError("3DEP refill did not return a GeoTIFF")
-    with open(out_path, "wb") as f:
+    if len(data) < MIN_TILE_BYTES:
+        raise IOError("3DEP refill returned a short answer ({} bytes)".format(len(data)))
+    part = out_path + ".part"
+    with open(part, "wb") as f:
         f.write(data)
-    if os.path.getsize(out_path) < 1000:
-        raise IOError("3DEP refill wrote no tile")
+    os.replace(part, out_path)
     return out_path
 
 
