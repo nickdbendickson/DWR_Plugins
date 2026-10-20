@@ -109,6 +109,19 @@ Source: `Absaraka_compare/anuga_gmsh_20x20_48h_20261018/` (`compare_stats.json`,
 | ANUGA gmsh 20x20 / 48 h | 15,188 / 11,944 / 2,416 | 11.26 | 3.42 / 9.78 | 0.10 / 3.56 | 214,240 | High |
 
 - **Class High** (`Hazard_Classification_Summary.csv`): 22 inundated BNSF KO rail stretches at **22 trains/day** (≥10/day, ND 5.2.1.3; FRA crossings 980805Y, 071108D, 071105H). The stretches 2.5 km below the dam are wet in all three models (ANUGA 1.7-3.6 ft, re-baseline 0.5-4.3 ft, HEC-RAS 1.4-4.9 ft). Also 11 overtopped roads with AADT > 2,000 in Casselton. (`QA_FINDINGS.md` says 15 trains/day; that is wrong, the summary CSV is authoritative.)
+  - **Train-count provenance** (FRA Highway-Rail Crossing Inventory, Form 71, checked 2026-10-20; current records: [FRA crossing inventory (current, data.transportation.gov)](https://data.transportation.gov/resource/m2f8-22s6.json?$where=crossingid%3D%27071105H%27)):
+
+    | Crossing | Location | Day / night trains | Count year | Reported | Notes |
+    |---|---|---|---|---|---|
+    | [071105H](https://safetydata.fra.dot.gov/OfficeofSafety/PublicSite/Crossing/Crossing.aspx?phasetype=C&rpttype=I&txtcrossingnum=071105H) | 6th Ave, MP 27.782 | 11 / 11 = 22 | 2023 | BNSF 12/18/2024 | Current record revised 05/13/2025 by FRA (Quiet Zone Update, counts carried over). Earlier 15/15 (count year 2019, 2019 report); 26/26 (2004-2019). |
+    | [071108D](https://safetydata.fra.dot.gov/OfficeofSafety/PublicSite/Crossing/Crossing.aspx?phasetype=C&rpttype=I&txtcrossingnum=071108D) | 3rd Ave, MP 28.003 | 11 / 11 = 22 | 2023 | BNSF 12/18/2024 | Current record 05/13/2025 FRA quiet zone update. Earlier 15/15. |
+    | [980805Y](https://safetydata.fra.dot.gov/OfficeofSafety/PublicSite/Crossing/Crossing.aspx?phasetype=C&rpttype=I&txtcrossingnum=980805Y) | 2nd St N, MP 28.257 | 0 / 0 | 2023 | BNSF 01/16/2025 (revised) | Less than one movement/day (1 train/week). |
+    | [102944Y](https://safetydata.fra.dot.gov/OfficeofSafety/PublicSite/Crossing/Crossing.aspx?phasetype=C&rpttype=I&txtcrossingnum=102944Y), [102946M](https://safetydata.fra.dot.gov/OfficeofSafety/PublicSite/Crossing/Crossing.aspx?phasetype=C&rpttype=I&txtcrossingnum=102946M), [102947U](https://safetydata.fra.dot.gov/OfficeofSafety/PublicSite/Crossing/Crossing.aspx?phasetype=C&rpttype=I&txtcrossingnum=102947U) | other KO | 8 / 7 = 15 | 2023 | BNSF 01/14/2025 | |
+    | [071099G](https://safetydata.fra.dot.gov/OfficeofSafety/PublicSite/Crossing/Crossing.aspx?phasetype=C&rpttype=I&txtcrossingnum=071099G) | other KO | 11 / 11 = 22 | 2023 | BNSF 12/18/2024 | |
+    | [103787L](https://safetydata.fra.dot.gov/OfficeofSafety/PublicSite/Crossing/Crossing.aspx?phasetype=C&rpttype=I&txtcrossingnum=103787L) | other KO | 15 / 15 = 30 | 2023 | BNSF 01/14/2025 | |
+    | [071100Y](https://safetydata.fra.dot.gov/OfficeofSafety/PublicSite/Crossing/Crossing.aspx?phasetype=C&rpttype=I&txtcrossingnum=071100Y) | other KO | blank (FRA current); 0 / 0 (pack) | | State report 07/27/2022 | Counts blank in FRA's current record. |
+
+    The pack copy (NTAD Railroad Grade Crossings layer, downloaded 2026-10-14) has no revision-date or count-year field. All flooded KO stretches remain ≥ 10 trains/day, so High (ND 5.2.1.3) is unchanged.
 - **Max depth 11.26 ft is a one-cell DEM trench in Casselton**, 16 km downstream. Near the dam, the max is **9.8 ft**. The same-run LISFLOOD has 11.36 ft at the same spot.
 - **Use ≥0.1 ft for reporting.** The "any depth" figure counts a 1 mm film: 3,244 ac of it is under 0.1 ft.
 - **Edge and time:** not edge-capped (0.42 ft at the mesh edge). It is **time-capped at 48 h**: 102 ac of the ≥1 ft area arrives after 40 h, and the front is still moving east.
