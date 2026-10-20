@@ -57,7 +57,7 @@ from qgis.core import (
 
 from .compat import NULL, AREA_SQFT, WKB_MULTIPOLYGON, WKB_POINT, FT_INT, FT_DOUBLE, FT_STRING
 from .constants import (
-    CLASS_HIGH, CLASS_JUDGMENT, ZONE_LABELS,
+    CLASS_HIGH, CLASS_JUDGMENT, ZONE_LABELS, ZONE_NAMES_REG05, DANGER_CHART_REG05,
     OSM_EDGE_BUFFER_FT, STRUCTURES_FAMILY, TM11_PERSONS_PER_DWELLING, ND_1D_DEPTH_FT,
     DEFAULT_MIN_UNVERIFIED_AREA_FT2, DEFAULT_POINT_RADIUS_FT,
     STRUCTURE_MERGE_DIST_FT, PROGRESS_INTERVAL, FEATURE_BATCH_SIZE, ADDRESS_SNAP_FT,
@@ -1848,7 +1848,7 @@ def apply_type(rec, one_d=False, near_ft=DEFAULT_NEAR_THRESHOLD_FT, borderline_h
     changed type (engineer review), 1D / 2D choice or borderline setting is
     applied without reading the rasters again."""
     types = rec.get("_types")
-    rec.update({"near": "", "zone_note": "", "near_raised": False})
+    rec.update({"near": "", "zone_note": "", "near_raised": False, "one_d": bool(one_d)})
     if not types or rec.get("max_depth") is None:
         rec["zone"] = rec["zone_mm"] = rec["margin_high"] = rec["margin_judg"] = None
         rec["loc"] = None
@@ -2380,7 +2380,8 @@ STRUCTURE_FIELDS = [
     ("Max_Depth_ft", FT_DOUBLE), ("Max_Vel_fps", FT_DOUBLE),
     ("First_Arrival_hr", FT_DOUBLE), ("Zone_Found", FT_INT),
     ("Zone_Mobile", FT_INT), ("ACER_Zone", FT_INT),
-    ("ACER_Zone_Label", FT_STRING), ("ND_Outcome", FT_STRING),
+    ("ACER_Zone_Label", FT_STRING), ("Danger_Zone", FT_STRING), ("Danger_Chart", FT_STRING),
+    ("ND_Outcome", FT_STRING),
     ("DV_Max_ft2s", FT_DOUBLE), ("Margin_High_ft", FT_DOUBLE),
     ("Margin_Judg_ft", FT_DOUBLE), ("Near_Threshold", FT_STRING),
     ("Pop_Night", FT_DOUBLE), ("Pop_Day", FT_DOUBLE),
@@ -2497,6 +2498,26 @@ def structure_notes(rec):
     return notes
 
 
+def danger_zone(rec):
+    """2.18.47: the REG_05.2026 Fig. 5.1 / 5.2 zone name of the structure's controlling zone
+    (HIGH DANGER ZONE / JUDGMENT ZONE / LOW DANGER ZONE); NULL when dry or for a 1D model, where
+    depth alone decides (5.2.1.1(d))."""
+    if rec.get("one_d") or rec.get("outcome", OUT_DRY) == OUT_DRY:
+        return NULL
+    return ZONE_NAMES_REG05.get(rec.get("zone")) or NULL
+
+
+def danger_chart(rec):
+    """2.18.47: which REG_05.2026 relationship decided the structure: Fig. 5.1 (houses built on
+    foundations), Fig. 5.2 (mobile homes) or the 1D depth > 2 ft rule; NULL when dry."""
+    if rec.get("outcome", OUT_DRY) == OUT_DRY or rec.get("max_depth") is None:
+        return NULL
+    if rec.get("one_d"):
+        return DANGER_CHART_REG05["1d"]
+    return DANGER_CHART_REG05["mobile" if curve_type(rec.get("acer_type")) == TYPE_MOBILE
+                              else "found"]
+
+
 def structures_to_layer(structs, crs, include_dry=False, name="Habitable_Structures"):
     fields = [QgsField(n, t) for n, t in STRUCTURE_FIELDS]
     lyr = create_memory_layer(name, WKB_MULTIPOLYGON, crs, fields)
@@ -2529,6 +2550,7 @@ def structures_to_layer(structs, crs, include_dry=False, name="Habitable_Structu
             "Zone_Found": _nz(rec.get("zone_found")), "Zone_Mobile": _nz(rec.get("zone_mobile")),
             "ACER_Zone": _nz(rec.get("zone")),
             "ACER_Zone_Label": ZONE_LABELS.get(rec.get("zone"), "DRY"),
+            "Danger_Zone": danger_zone(rec), "Danger_Chart": danger_chart(rec),
             "ND_Outcome": rec.get("outcome", OUT_DRY),
             "DV_Max_ft2s": _nz(rec.get("dv_max")), "Margin_High_ft": _nz(rec.get("margin_high")),
             "Margin_Judg_ft": _nz(rec.get("margin_judg")),

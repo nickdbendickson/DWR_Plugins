@@ -67,6 +67,9 @@ ZONE_LOW = "low danger"
 ZONE_JUDGMENT = "judgment"
 ZONE_HIGH = "high danger"
 ZONE_ORDER = {ZONE_LOW: 0, ZONE_JUDGMENT: 1, ZONE_HIGH: 2}
+# the zone names of REG_05.2026 Figures 5.1 / 5.2 (pp. 21-22), for tables, legends and reports
+ZONE_NAMES = {ZONE_HIGH: "HIGH DANGER ZONE", ZONE_JUDGMENT: "JUDGMENT ZONE",
+              ZONE_LOW: "LOW DANGER ZONE"}
 
 LETHALITY_CHARTS = "acer_tm11"        # 2D model: Figures 5.1 / 5.2
 LETHALITY_1D = "depth_2ft"            # 1D model: depth > 2 ft
@@ -546,6 +549,11 @@ class Finding:
     y: Optional[float] = None
     gap: str = ""
 
+    @property
+    def danger_zone(self):
+        """The REG_05.2026 Fig. 5.1 / 5.2 name of `zone` ('' when no chart zone)."""
+        return ZONE_NAMES.get(self.zone, "")
+
 
 @dataclass
 class Classification:
@@ -809,8 +817,8 @@ def markdown(c, dam_id="", title="Hazard classification"):
     return "\n".join(lines) + "\n"
 
 
-FINDING_COLUMNS = ["level", "section", "kind", "id", "reason", "zone", "borderline",
-                   "depth_ft", "vel_fts", "x", "y"]
+FINDING_COLUMNS = ["level", "section", "kind", "id", "reason", "zone", "danger_zone",
+                   "borderline", "depth_ft", "vel_fts", "x", "y"]
 
 
 def finding_rows(c):
@@ -851,8 +859,8 @@ def chart_svg(chart, structures=(), width=560, height=380, title=None):
                    'stroke-width="0.6"><title>{}: {:.1f} ft, {:.1f} ft/s</title></circle>'.format(
                        sx(v), sy(d), "#000" if beyond else "#1f4e9c", _esc(s.id), d, v))
     lx = ml + W - 150
-    for i, (lab, col) in enumerate((("High danger", "#ef9897"), ("Judgment", "#f9f4a3"),
-                                    ("Low danger", "#c4e0ad"))):
+    for i, (lab, col) in enumerate((("HIGH DANGER ZONE", "#ef9897"), ("JUDGMENT ZONE", "#f9f4a3"),
+                                    ("LOW DANGER ZONE", "#c4e0ad"))):
         out.append('<rect x="{}" y="{}" width="12" height="10" fill="{}" stroke="#555"/>'
                    '<text x="{}" y="{}">{}</text>'.format(lx, mt + 8 + 15 * i, col, lx + 16,
                                                          mt + 17 + 15 * i, lab))

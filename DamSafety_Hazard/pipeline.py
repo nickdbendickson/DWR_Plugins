@@ -2547,7 +2547,7 @@ def _result_items(run, gov, governing):
     """Rows of the result panel: the two classes, every ND criterion (with the
     geometries behind it, for zooming) and every judgment item."""
     from .structures import OUT_PROBABLE, OUT_JUDGMENT, OUT_ECONOMIC
-    from .constants import ND_HIGH as _H, ND_MEDIUM as _M
+    from .constants import ND_HIGH as _H, ND_MEDIUM as _M, ND_LOW as _L
     nd, tm11 = governing["nd"], governing["tm11"]
     s_view, r_view, l_view = governing["views"]
     hab = [s for s in s_view if s.get("habitable") == "Yes"]
@@ -2565,6 +2565,8 @@ def _result_items(run, gov, governing):
         "Overtopped roads - Interstate": [r["geom"] for r in r_view if r["nd_class"] == _H],
         "Overtopped roads - US": [r["geom"] for r in r_view if r["nd_class"] == _M],
         "Overtopped roads without AADT": [r["geom"] for r in r_view if r.get("nd_judgment")],
+        "Overtopped roads - private": [r["geom"] for r in r_view if r["nd_class"] == _L
+                                       and not r.get("nd_judgment")],
         "Railroad - passenger": [r["geom"] for r in l_view if r["nd_class"] == _H],
         "Railroad - other": [r["geom"] for r in l_view if r["nd_class"] != _H],
         "Habitable structures inundated": [s["geom"] for s in hab if s.get("outcome") in (
