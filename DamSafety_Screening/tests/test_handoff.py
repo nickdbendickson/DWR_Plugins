@@ -82,8 +82,12 @@ assert ho.agreement("Medium", "Medium") == "agree" and ho.agreement("High", None
 print("OK (mapping)")
 
 # ---- 2. parameter names against the runner's own definitions (its fake QGIS, own process)
-runner = os.path.join(PARENT, "nd_breach_runner")
-if os.path.exists(os.path.join(runner, "algorithms.py")) and os.path.exists(os.path.join(runner, "tests", "fake_qgis.py")):
+sys.path.insert(0, HERE)
+import _runner  # noqa: E402  (audit F-02: the Runner in this repository, a FAIL in CI when missing)
+RUNNER_ROOT, runner = _runner.runner_folder("algorithms.py", os.path.join("tests", "fake_qgis.py"))
+if runner is None:
+    _runner.missing("the rundam / ndhazardclass parameter names")
+if runner is not None:
     code = r'''
 import json
 from nd_breach_runner.tests import fake_qgis; fake_qgis.install()
@@ -96,7 +100,7 @@ for cls in (A.RunDamAlgorithm, NDHazardAlgorithm):
                      for p in a.parameterDefinitions()}
 print(json.dumps(out))
 '''
-    env = dict(os.environ, PYTHONPATH=PARENT, PYTHONDONTWRITEBYTECODE="1")   # never write into the runner
+    env = dict(os.environ, PYTHONPATH=RUNNER_ROOT, PYTHONDONTWRITEBYTECODE="1")   # never write into the runner
     res = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=300,
                          cwd=work)
     assert res.returncode == 0, res.stderr[-2000:]
@@ -120,8 +124,6 @@ print(json.dumps(out))
         assert hd[k][0] == "QgsProcessingParameterField", k
     print("OK (all {} rundam and {} ndhazardclass parameter names verified by importing the runner's "
           "algorithms under its fake QGIS)".format(len(ho.RUNDAM_KEYS), len(ho.NDHAZARD_KEYS)))
-else:
-    print("SKIP runner parameter check: no runner at", runner)
 
 # ---- 3. tool 7b with test doubles of the runner
 RUNNER_METHODS = ["Piping failure, Froehlich (2008) parameters, routed"] + ["m%d" % i for i in range(1, 9)] + \

@@ -355,8 +355,10 @@ def review_reasons(rec):
         out.append("habitability unverified")
     if wet and rec.get("address_note"):
         out.append("ND site address, habitable by rule - Place_Type / sources say otherwise")
-    if wet and rec.get("site_note") and rec.get("category") == CAT_UNVERIFIED:
-        out.append(REASON_LONE_ADDRESS if rec.get("lone_address") else REASON_OUTBUILDING)
+    if wet and rec.get("site_note") and rec.get("lone_address"):
+        out.append(REASON_LONE_ADDRESS)     # 2.18.41: habitable by rule, listed for review
+    elif wet and rec.get("site_note") and rec.get("category") == CAT_UNVERIFIED:
+        out.append(REASON_OUTBUILDING)
     if wet and rec.get("type_conflict"):
         out.append("sources disagree on house / mobile home")
     if wet and rec.get("mobile_rule") == "shape":

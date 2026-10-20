@@ -23,16 +23,20 @@ work = tempfile.mkdtemp(prefix="ndhz_")
 NAN = float("nan")
 
 # ---- 1. the copies are byte-identical to the runner's (skip when the runner is not here)
-runner_core = os.environ.get("ND_BREACH_RUNNER_CORE") or os.path.join(
-    os.path.dirname(PLUGIN), "nd_breach_runner", "core")
-if os.path.exists(os.path.join(runner_core, "nd_hazard.py")):
+sys.path.insert(0, HERE)
+import _runner  # noqa: E402  (audit F-02: the Runner in this repository, a FAIL in CI when missing)
+runner_core = os.environ.get("ND_BREACH_RUNNER_CORE")
+if not runner_core:
+    _root, _folder = _runner.runner_folder(os.path.join("core", "nd_hazard.py"))
+    runner_core = os.path.join(_folder, "core") if _folder else ""
+if not runner_core or not os.path.exists(os.path.join(runner_core, "nd_hazard.py")):
+    _runner.missing("the byte-identical copy of core/nd_hazard.py")
+if runner_core and os.path.exists(os.path.join(runner_core, "nd_hazard.py")):
     for fn in ("nd_hazard.py", "acer_tm11_charts.json"):
         a = open(os.path.join(PLUGIN, "core", fn), "rb").read()
         b = open(os.path.join(runner_core, fn), "rb").read()
         assert a == b, fn + " differs from the ND Dam Breach Runner copy - re-copy it, never edit it"
     print("OK (copies identical to", runner_core + ")")
-else:
-    print("SKIP copy check: no runner at", runner_core)
 assert hz.nh is nh and nh.MODULE_VERSION == "1.1.0"
 
 

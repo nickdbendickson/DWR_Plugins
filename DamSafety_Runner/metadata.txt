@@ -8,6 +8,17 @@ about=Builds the breach hydrograph (ND REG_05.2026 Section 5.1.1: Froehlich 2008
 version=3.10.42
 changelog=3.10.42 (2026-10-20; REG_05.2026 zone colours)
     * The ND Fig 5.1 / 5.2 review charts (core/nd_hazard.py chart_svg) and styles/acer_zones.qml / acer_zone_points.qml use the colours of REG_05.2026 Figures 5.1 / 5.2: High #EF9897, Judgment #F9F4A3, Low #C4E0AD (the judgment zone was peach, the low zone nearly white; the zone rasters were Material red / yellow / green at 0.75 opacity, now full opacity). Breakpoints and classes unchanged. 3.10.41 is not used: it is left for an open PR.
+    3.10.40 (2026-10-20, fixes of the 2026-10-19 audit, rebased onto current main)
+    * R-H1: scripts/build_lisflood_linux.sh (and Setup's copy, kept byte-identical, checked by tools/ci_checks.py) applies patch_lisflood.py before cmake and refuses an unpatched build.
+    * F-02 (tests): the Screening <-> Runner parity tests find the in-repo Runner and FAIL in CI when it is missing.
+    3.10.39 (2026-10-20; #107)
+    * Main window: the rows of 'Download a DEM' keep their height when the section opens. The window has an explicit minimum size (fit_window), so Qt did not raise it to the layout's minimum and squeezed the rows to 6-9 px, drawn on top of each other. The dam rows, Download a DEM, Advanced and the Run/Tools tabs now sit in a scroll area (the action bar, the Log and Close stay below it), the sections keep their own height, the Run/Tools tabs take the room that is left, and opening a section grows the window up to its screen. No change to any setting or result. Numbered 3.10.36 on its branch until #121 and #123 took 3.10.36 and 3.10.37; #117 claims 3.10.38.
+    3.10.38 (2026-10-20; ANUGA checkpoints and partial results, #117; numbered 3.10.35 on its branch until #120 took it, 3.10.36 / 3.10.37 came with #121 / #123)
+    * ANUGA checkpoints (ANUGA 4.0.1 domain.set_checkpointing) ON FOR LONG RUNS by default: a run of >= 12 h simulated or >= 50,000 expected triangles checkpoints every 30 wall-clock minutes (keep 2) and writes anuga/anuga_partial.npz every 10 minutes; a short run is unchanged. NDBREACH_ANUGA_CHECKPOINT_MIN=0 switches it off, > 0 forces that cadence; NDBREACH_ANUGA_CHECKPOINT_STEPS, _KEEP, _PARTIAL_MIN set the rest.
+    * The hydraulics are unchanged: bit-identical depth, velocity, arrival and WSE with and without checkpoints on a real-ANUGA test domain (31 checkpoints written).
+    * Partial results: anuga_partial.npz (the envelope grids so far, atomic write) after every checkpoint, periodically and on SIGTERM / Cancel.
+    * Resume: NDBREACH_ANUGA_RESUME=1 (or the run's Resume with checkpoints on) continues the same ANUGA job from its newest complete checkpoint; a different job starts over. Recorded in run_report["anuga_checkpoint"].
+    * An unpicklable domain or too little disk: the run goes on without checkpoints and says why.
     3.10.37 (2026-10-20)
     * Engine chips put the mark first ('✕ ANUGA'), like every other mark in the suite. A missing ANUGA is amber, not red, because only the ANUGA tier needs it; the tooltips say 'installed' / 'not installed'.
     3.10.36 (2026-10-20; GUI grammar, part 3)
