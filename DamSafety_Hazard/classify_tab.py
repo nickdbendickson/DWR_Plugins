@@ -28,6 +28,7 @@ from .constants import (
     TRAVEL_STATION_MI, DEFAULT_PARCEL_MAX_ACRES,
 )
 from .helpers import log_message, CancelledByUser
+from .tokens import TOKENS
 from .structures import SAMPLE_AREAS
 from .processing import is_plugin_output_name, is_downloaded_data_layer
 from .scenarios import (ROLE_BREACH, ROLE_BASELINE, MAIN_NAME, clean_rows, raster_reuse_problems,
@@ -325,7 +326,7 @@ class ClassificationTabMixin(object):
         self.result_hint = QLabel("Classify on the Classify tab: the classes, every criterion "
                                   "and the summary of the run appear here.")
         self.result_hint.setWordWrap(True)
-        self.result_hint.setStyleSheet("color:#666; padding: 0 4px;")
+        self.result_hint.setStyleSheet("color:{}; padding: 0 4px;".format(TOKENS["muted"]))
         outer.addWidget(self.result_hint)
         self.result_table = QTableWidget()
         self.result_table.setColumnCount(len(RESULT_COLS))

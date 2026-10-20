@@ -5,6 +5,7 @@ import os
 
 from qgis.PyQt.QtCore import Qt
 from .ui_fit import fit_window
+from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
 
@@ -57,12 +58,24 @@ def _fmt_size(n):
         n /= 1024.0
 
 
+def _window_title():
+    """'DamSafety Data 1.4.4': the suite's 'DamSafety <Tool> <version>' (docs/gui-grammar.md)."""
+    import re
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata.txt"),
+                  encoding="utf-8") as f:
+            m = re.search(r"^version=(.+)$", f.read(), re.M)
+        return "DamSafety Data {}".format(m.group(1).strip()) if m else "DamSafety Data"
+    except Exception:                                            # noqa
+        return "DamSafety Data"
+
+
 class SettingsDialog(QDialog):
     def __init__(self, settings, plugin, parent=None):
         super().__init__(parent)
         self.settings = settings
         self.plugin = plugin
-        self.setWindowTitle("ND Data Updater")
+        self.setWindowTitle(_window_title())
         self.setMinimumWidth(640)
         layout = QVBoxLayout(self)
 
@@ -166,6 +179,8 @@ class SettingsDialog(QDialog):
         buttons = QDialogButtonBox(_sb.Save | _sb.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        for b in buttons.buttons():                  # no icons on action buttons (docs/gui-grammar.md)
+            b.setIcon(QIcon())
         fit_window(self, (720, 640))
         layout.addWidget(buttons)
 
