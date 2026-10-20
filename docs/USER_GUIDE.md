@@ -1,6 +1,6 @@
-# DamSafety plugins: user guide (changes through 2026-10-19)
+# DamSafety plugins: user guide (changes through 2026-10-20, main b0c2ad5)
 
-This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84 and #93. Open PRs #92 and #96 are described under "Pending review". The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
+This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84, #92, #93 and #96. Other merged PRs (#85-#90, #94, #100-#105, …) are listed in CHANGELOG.md only. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
 
 ## Standard work-folder layout (#18)
 The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker all create the same empty folders:
@@ -106,13 +106,21 @@ Some records in the dam inventory aren't dams to breach. The plugins carry a sho
 - An inflow point on the wrong side of the dam isn't used. `auto` stops with a "likely dam-point / downstream-side problem" error instead of switching to a breach model.
 - The report, polygons and EAP preview come from the HEC-RAS rasters. The LISFLOOD-FP figures are kept in a "Screening pass (LISFLOOD-FP)" section.
 
-## Pending review (not on main yet)
-- **Run-report metrics and water-body mask (#92, Runner 3.10.22).** Adds flooded area at ≥0.1, ≥1 and ≥2 ft, P95/P99 velocity, the max-velocity cell's depth and location, and velocity at receptors. **The mask is opt-in:** set the advanced `WATER_MASK` parameter or the `NDBREACH_WATERBODY_MASK` environment variable to a polygon file. For ND, use `/home/box/DamSafety/Data/3DHP/3DHP_ND_waterbodies.gpkg` (USGS 3DHP; NHD-sourced, 2023) or a polygon you draw. The mask only adds `*_masked` figures; the unmasked figures and the rasters don't change. Near Lake Sakakawea, check the masked area before using it, because the whole lake is one polygon.
-- **HEC-RAS timeouts on the wall clock (#96, Runner 3.10.24).** VM pauses now count against `NDBREACH_HECRAS_TIMEOUT_S`. On a timeout, look for `[ndbreach] TIMEOUT` in `linux_run/run.log`, `linux_run/timeout.json` and `hecras_timeout` in `run_report.json`. Partial results are kept as `<name>.p01.partial.hdf` and are never used as results. `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s) sets the wait between SIGTERM and SIGKILL.
+## Run-report metrics and the water-body mask (#92, Runner 3.10.27)
+Reporting only: the model, the rasters and the flood polygons don't change. Field list: [Run_report_metrics.md](Run_report_metrics.md).
+- `run_report.json` summary adds flooded area at ≥0.1, ≥1 and ≥2 ft (`flooded_acres_ge_0_1ft`, `flooded_acres_ge_1ft`, `flooded_acres_ge_2ft`), `velocity_p95_fps` / `velocity_p99_fps` over wet cells, and the depth and location of the max-velocity cell (`max_velocity_depth_ft`, `max_velocity_xy`), plus velocity at flooded structures and overtopped roads and rail. New batch-CSV columns go at the end.
+- **Quote P99 or receptor velocity, not the max.** At DWR-3161 the 19.4 ft/s max sat in one cell 0.15 ft deep.
+- **Water-body mask, opt-in in practice.** Advanced parameter "Water-body mask for the run report only (polygons of existing lakes and ponds; …)" (`WATER_MASK`), or the `NDBREACH_WATERBODY_MASK` environment variable. If both are empty, the Runner looks for the dam folder's `waterbodies` layer, then `hydro/3DHP_waterbodies.gpkg`, any `hydro/3DHP_*waterbod*.gpkg`, then `hydro/NHD_waterbodies.gpkg` in the suite pack or suite data folder. `off` turns it off. ND_Dam_Suite_Pack has no waterbody file, so on this box point `WATER_MASK` at `/home/box/DamSafety/Data/3DHP/3DHP_ND_waterbodies.gpkg` (USGS 3DHP, NHD-sourced, 2023) or at a polygon you draw.
+- The mask adds `*_masked` figures next to the unmasked ones and writes `Water Body Mask.geojson`. Near Lake Sakakawea, check the masked area first: the whole lake is one polygon.
+
+## HEC-RAS timeouts on the wall clock (#96, Runner 3.10.26)
+- VM pauses now count against `NDBREACH_HECRAS_TIMEOUT_S` (the timeout formula is unchanged).
+- On a timeout, look for `[ndbreach] TIMEOUT` in `linux_run/run.log`, `linux_run/timeout.json`, and `hecras_timeout` in `run_report.json`. These are written before RasUnsteady is stopped.
+- Partial results are kept as `<name>.p01.partial.hdf` and are never used as results.
+- `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s) sets the wait between SIGTERM and SIGKILL.
 
 ## Not verified in this guide
 - These descriptions come from PR text and source code. None of the window steps were checked in a running QGIS.
 - The exact list of fixes in #27 and the details of #11 and #16 are summarized from PR titles and commit headlines only.
-- No window steps for #22, #30, #32, #76, #84 or #93 were tried in QGIS. The #93 labels were checked in main's source (d217ec2).
-- #92 and #96 are described from their PR text; their labels may change before merging.
+- No window steps for #22, #30, #32, #76, #84, #92, #93 or #96 were tried in QGIS. The #93 labels were checked in main's source at d217ec2, and the #92 `WATER_MASK` label and lookup order and the #96 names at b0c2ad5.
 - The installed copy of the plugins may lag behind main.
