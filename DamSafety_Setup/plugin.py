@@ -73,7 +73,9 @@ def source_text(source):
     if source.startswith("DWR normal pool volume - NOT max"):
         return "DWR normal pool \u2013 not max storage (non-conservative)"
     if source.startswith("DWR normal pool"):
-        return "from DWR (normal pool volume, larger than the NID)"
+        # audit F-03: the normal pool larger than the NID is still a normal pool, not a max
+        # storage - it must read as non-conservative (red), not as a neutral "from DWR".
+        return "DWR normal pool \u2013 not max storage, larger than the NID (non-conservative)"
     return "from {}".format(source.split(" (")[0])
 
 
@@ -609,9 +611,11 @@ class DamPage(QWizardPage):
             src = self.source(key)
             lbl.setText(source_text(src))
             lbl.setToolTip(src)            # the NID field and how the dam was matched
-            # the normal pool fallback under-states the breach: shown in red, not grey
+            # the normal pool fallback under-states the breach: shown in red, not grey.
+            # audit F-03: this covers both normal-pool cases (nothing filled, and normal pool
+            # larger than the NID) - both are normal pool, not max storage.
             lbl.setStyleSheet("color: {};".format(
-                RED if src.startswith("DWR normal pool volume - NOT max") else GREY))
+                RED if src.startswith("DWR normal pool") else GREY))
         row = self.combo.currentData() or {}
         blank = not self.height.value() or not self.storage.value()
         self.nid_button.setEnabled(bool(row) and not row.get("error") and

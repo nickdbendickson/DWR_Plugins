@@ -235,7 +235,7 @@ def test_the_larger_of_nid_and_dwr_normal_pool_is_used():
     assert N.storage_fallback(row) and row["storage"] == 500.0
     assert row["storage_source"].startswith("DWR normal pool volume (larger than NID ND00009")
     assert P.source_text(row["storage_source"]) == (
-        "from DWR (normal pool volume, larger than the NID)")
+        "DWR normal pool – not max storage, larger than the NID (non-conservative)")
     typed = {"storage": 10.0, "storage_source": "typed in", "normal_vol": 500.0}
     assert not N.storage_fallback(typed) and typed["storage"] == 10.0
 
