@@ -1,8 +1,8 @@
-"""Setup 1.0.10: hide DWR records that are not a dam to model ("Show all records" brings
-them back), and 'Estimate from DEM' for a blank height / storage, on a synthetic DEM with a
-known reservoir volume and dam height.
+"""Hide DWR records that are not a dam to model ("Show all records" brings them back), and
+'Estimate from DEM' for a blank height / storage, on a synthetic DEM with a known reservoir
+volume and dam height. Moved from DamSafety Setup 1.0.13 to the Runner's dam wizard (3.10.36).
 
-    QT_QPA_PLATFORM=offscreen python -m pytest DamSafety_Setup/tests/test_dem_estimate.py
+    QT_QPA_PLATFORM=offscreen python -m pytest DamSafety_Runner/tests/suite_dams
 """
 import os
 import sqlite3
@@ -12,7 +12,8 @@ import time
 
 import pytest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -30,11 +31,10 @@ for _fmt in (QSettings.NativeFormat, QSettings.IniFormat):
 
 _app = qgis_core.QgsApplication.instance() or qgis_core.QgsApplication([], True)
 
-from DamSafety_Setup import plugin as P  # noqa: E402
-from DamSafety_Setup import dem_estimate as DE  # noqa: E402
-from DamSafety_Setup import dam_filter as DF  # noqa: E402
-from DamSafety_Setup import runner_params as RP  # noqa: E402
-from DamSafety_Setup.damsuite import suite_config as SC  # noqa: E402
+from DamSafety_Runner import suite_dams as P  # noqa: E402
+from DamSafety_Runner import wizard as WZ  # noqa: E402
+from DamSafety_Runner.suite_dams import dem_estimate as DE  # noqa: E402
+from DamSafety_Runner.suite_dams import dam_filter as DF  # noqa: E402
 
 # Synthetic site in EPSG:5070 near Fargo. A plain at 110 m; the dam crest along y = Y0 from
 # X0 - 100 to X0 + 100 (on the plain, 110 m); a reservoir pit at 102 m north of the dam,
@@ -215,49 +215,63 @@ def _suite():
 
 @pytest.fixture
 def wiz(tmp_path):
-    SC.set("dams_folder", str(tmp_path / "Dams"))
-    w = P.SetupWizard()
-    w.show()
-    _app.processEvents()
+    w = WZ._classes()["Wizard"](None)
+    w.answers["dams_folder"] = str(tmp_path / "Dams")
     yield w
     w.hide()
     w.deleteLater()
     _app.processEvents()
-    for key in ("dams_folder", "data_folder"):
-        qgis_core.QgsSettings().remove(SC.PREFIX + key)
+    qgis_core.QgsProject.instance().removeAllMapLayers()
 
 
 def _dam_page(w, folder):
-    page = w.page(P.FOLDER_PAGE)
-    page.path.setText(folder)
-    page._scan()
-    w.next()
+    w.found = {"dwr": os.path.join(folder, "dwr_dams.gpkg"),
+               "dam_lines": os.path.join(folder, "dwr_dam_lines.gpkg") + "|layername=dwr_dam_lines"}
+    w.show()
     _app.processEvents()
-    dam = w.page(P.DAM_PAGE)
+    dam = w.currentPage()
     dam.county.setCurrentIndex(dam.county.findData("Cass"))
     _app.processEvents()
     return dam
 
 
+def _load(path):
+    """A DEM loaded in the project: the estimate takes the one that covers the dam."""
+    lyr = qgis_core.QgsRasterLayer(path, os.path.basename(path))
+    assert lyr.isValid()
+    qgis_core.QgsProject.instance().addMapLayer(lyr)
+    return lyr
+
+
 def _names(dam):
-    return [dam.combo.itemText(i) for i in range(dam.combo.count())]
+    return [dam.feature.itemText(i) for i in range(dam.feature.count())]
+
+
+def _val(dam, param):
+    t = dam.value_edit[param].text().strip()
+    return float(t) if t else None
+
+
+def _src(dam, param):
+    return dam.mark[param].toolTip()
 
 
 def test_not_a_dam_records_hidden_until_show_all(wiz):
     dam = _dam_page(wiz, _suite())
-    assert _names(dam) == ["Blank Dam (Cass)", "Kept Dam (Cass)"]
-    assert "2 records hidden" in dam.count.text()
+    assert _names(dam) == ["Blank Dam (500)", "Kept Dam (503)"]
+    assert "2 records hidden" in dam.note.text()
     assert not dam.show_all.isChecked()
     dam.show_all.setChecked(True)
     _app.processEvents()
     names = _names(dam)
-    assert len(names) == 4 and "Gone Dam (Cass) \u2013 not a dam? status Breached" in names
-    assert "Void Dam (Cass) \u2013 not a dam? remarks start with VOID" in names
-    dam.combo.setCurrentIndex(names.index("Void Dam (Cass) \u2013 not a dam? remarks start "
-                                          "with VOID"))
+    assert len(names) == 4 and "Gone Dam (501) \u2013 not a dam? status Breached" in names
+    assert "Void Dam (502) \u2013 not a dam? remarks start with VOID" in names
+    dam.feature.setCurrentIndex(names.index("Void Dam (502) \u2013 not a dam? remarks start "
+                                            "with VOID"))
     _app.processEvents()
-    assert 'Not a dam to model? remarks start with VOID: "VOID SEE #80"' in dam.note.text()
-    assert "hidden" not in dam.count.text()
+    assert 'Not a dam to model? remarks start with VOID: "VOID SEE #80"' in \
+        dam.card.warn_label.text()
+    assert "hidden" not in dam.note.text()
 
 
 def _sync(work, done, progress):
@@ -279,45 +293,43 @@ def test_estimate_fills_blanks_labels_and_hands_over(wiz):
     dem = _dem(folder)
     dam = _dam_page(wiz, folder)
     dam.run_task = _sync
-    assert dam.combo.currentText() == "Blank Dam (Cass)"
+    assert dam.feature.currentText() == "Blank Dam (500)"
     assert dam.est_button.isEnabled() and dam.est_button.text().startswith("Choose DEM")
-    wiz.page(P.DEM_PAGE).dem.setText(dem)           # a DEM is known: plain button
-    dam._changed()
+    _load(dem)                                       # a DEM that covers the dam: plain button
+    dam.refresh()
     assert dam.est_button.text() == "Estimate from DEM"
     dam.est_button.click()
     _app.processEvents()
     assert _sync.pcts and _sync.pcts[-1] == 100
-    assert abs(dam.height.value() - round(HEIGHT_FT, 1)) < 0.05
-    assert abs(dam.storage.value() - round(VOL_ACFT, 1)) < 0.05 * VOL_ACFT
-    assert dam.height_src.text() == "estimated from DEM (screening only)"
-    assert dam.storage_src.text() == "estimated from DEM (screening only)"
+    assert abs(_val(dam, "HEIGHT_FT") - round(HEIGHT_FT, 1)) < 0.05
+    assert abs(_val(dam, "STORAGE_ACFT") - round(VOL_ACFT, 1)) < 0.05 * VOL_ACFT
+    assert _src(dam, "HEIGHT_FT") == "estimated from DEM (screening only)"
+    assert _src(dam, "STORAGE_ACFT") == "estimated from DEM (screening only)"
+    assert dam.mark["HEIGHT_FT"].text() == "\u26a0"
     assert "Estimated height and storage from the DEM (screening only)" in dam.est_status.text()
-    assert dam.isComplete() and not dam.est_button.isEnabled()
-    row = dam.selected()
-    assert row["height_source"].startswith("estimated from DEM (screening only): crest")
-    p = RP.build_params({"height": row["height"], "storage": row["storage"],
-                         "height_source": row["height_source"],
-                         "storage_source": row["storage_source"]})
-    assert p["STORAGE_SOURCE"].startswith("estimated from DEM (screening only)")
+    assert not dam.est_button.isEnabled()
+    assert dam.validatePage()
+    src = wiz.answers["sources"]
+    assert src["HEIGHT_FT"].startswith("estimated from DEM (screening only): crest")
+    assert src["STORAGE_ACFT"].startswith("estimated from DEM (screening only)")
 
 
 def test_typed_value_beats_the_estimate(wiz):
     folder = _suite()
-    dem = _dem(folder)
+    _load(_dem(folder))
     dam = _dam_page(wiz, folder)
     dam.run_task = _sync
-    wiz.page(P.DEM_PAGE).dem.setText(dem)
-    dam.height.setValue(21)                         # typed before the estimate
+    dam.value_edit["HEIGHT_FT"].setText("21")      # typed before the estimate
     dam.est_button.click()
     _app.processEvents()
-    assert dam.height.value() == 21 and dam.height_src.text() == "typed in"
-    assert dam.storage_src.text() == "estimated from DEM (screening only)"
-    dam.storage.setValue(300)                       # typed after: wins, says so
-    assert dam.storage_src.text() == "typed in"
-    assert dam.selected()["storage_source"] == "typed in"
+    assert _val(dam, "HEIGHT_FT") == 21
+    assert _src(dam, "STORAGE_ACFT") == "estimated from DEM (screening only)"
+    dam.value_edit["STORAGE_ACFT"].setText("300")  # typed after: wins, says so
+    assert _src(dam, "STORAGE_ACFT") == "typed in"
+    assert dam.validatePage() and wiz.answers["sources"]["STORAGE_ACFT"] == "typed in"
 
 
-def test_estimate_error_is_shown(wiz):
+def test_estimate_error_is_shown(wiz, monkeypatch):
     folder = _suite()
     dam = _dam_page(wiz, folder)
     dam.run_task = _sync
@@ -328,19 +340,21 @@ def test_estimate_error_is_shown(wiz):
     srs.ImportFromEPSG(5070)
     ds.SetProjection(srs.ExportToWkt())
     ds = None
-    wiz.page(P.DEM_PAGE).dem.setText(far)
+    # no DEM covers the dam: the button asks for one (the file dialog is answered here)
+    from qgis.PyQt import QtWidgets
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getOpenFileName",
+                        staticmethod(lambda *a, **k: (far, "")))
     dam.est_button.click()
     _app.processEvents()
     assert "No estimate: The dam is outside the DEM." in dam.est_status.text()
-    assert dam.height.value() == 0 and dam.est_button.isEnabled()
+    assert _val(dam, "HEIGHT_FT") is None and dam.est_button.isEnabled()
 
 
 def test_estimate_runs_in_a_qgis_task(wiz):
     """The real run_task: a QgsTask off the window's thread, progress shown, result back."""
     folder = _suite()
-    dem = _dem(folder)
+    _load(_dem(folder))
     dam = _dam_page(wiz, folder)
-    wiz.page(P.DEM_PAGE).dem.setText(dem)
     seen = []
     dam.est_status.setText("")
     real = P.run_task
@@ -355,6 +369,6 @@ def test_estimate_runs_in_a_qgis_task(wiz):
         _app.processEvents()
         time.sleep(0.01)
     assert not dam._est_busy
-    assert abs(dam.storage.value() - round(VOL_ACFT, 1)) < 0.05 * VOL_ACFT
-    assert dam.storage_src.text() == "estimated from DEM (screening only)"
+    assert abs(_val(dam, "STORAGE_ACFT") - round(VOL_ACFT, 1)) < 0.05 * VOL_ACFT
+    assert _src(dam, "STORAGE_ACFT") == "estimated from DEM (screening only)"
     assert seen                                      # progress came through

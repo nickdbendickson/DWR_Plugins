@@ -402,7 +402,7 @@ def validate_page(page, a, exists=os.path.isfile, isdir=os.path.isdir, models=No
             if not models.get("lisflood"):
                 errors.append("LISFLOOD-FP was not found. Run the installer "
                               "(scripts/install_macos.sh) or set it in Processing > Options "
-                              "> Providers > ND Dam Breach Runner.")
+                              "> Providers > DamSafety Runner.")
             if a.get("tier") == workflow.TIER_BOTH and not models.get("anuga"):
                 errors.append("The ANUGA tier needs the ANUGA Python environment, which was "
                               "not found.")

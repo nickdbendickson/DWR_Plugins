@@ -27,7 +27,7 @@ _HRS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening")
 # {file in shared/ui/: plugins that ship a copy at their root}
 SHARED = {
     "tokens.py": _HRS + ("DamSafety_Data", "DamSafety_Setup"),
-    "ui_widgets.py": _HRS,
+    "ui_widgets.py": _HRS + ("DamSafety_Setup",),
     "ui_fit.py": _HRS + ("DamSafety_Data",),
     "suite_settings.py": _HRS,
     "suite_settings_tools.py": _HRS,
