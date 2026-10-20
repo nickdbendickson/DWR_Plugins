@@ -29,8 +29,9 @@ from .core import settings_groups as SG
 from .core import preflight as pf
 from .core import review as rv
 from .damsuite import settings as DS
+from .tokens import TOKENS
 
-TITLE = "ND Dam Breach Screening"
+TITLE = "DamSafety Screening"
 SCOPE = "NDDamScreening"          # QgsProject entry scope
 ENTRY = "state"
 STATE_TEXT = {"done": "✓ done", "stale": "↻ out of date", "ready": "● ready",
@@ -55,9 +56,9 @@ def plugin_version():
 
 
 def window_title():
-    """0.17.23: 'DamSafety — Screening (v0.17.23)'."""
+    """'DamSafety Screening 0.17.30': the suite's 'DamSafety <Tool> <version>' (docs/gui-grammar.md)."""
     v = plugin_version()
-    return "DamSafety \u2014 Screening (v{})".format(v) if v else "DamSafety \u2014 Screening"
+    return "{} {}".format(TITLE, v) if v else TITLE
 
 
 # 0.17.23 the pipeline strip: (key, label, the step whose state it shows, tab it jumps to)
@@ -65,14 +66,15 @@ PIPELINE = (("data", "Data", "1", "run"), ("dem", "DEM", "2", "run"),
             ("screen", "Screen", "7", "run"), ("report", "Report", None, "results"))
 PIPE_MARK = {"done": "\u2713", "ready": "\u25cf", "running": "\u25d0", "problem": "!", "stale": "\u21bb",
              "waiting": "\u25cb"}
-PIPE_COLOR = {"done": "#2e7d32", "ready": "#1a73e8", "running": "#1a73e8", "problem": "#c62828",
-              "stale": "#b26a00"}
+PIPE_COLOR = {"done": TOKENS["success"], "ready": TOKENS["link"], "running": TOKENS["link"],
+              "problem": TOKENS["error"], "stale": TOKENS["warn"]}
 STEP_STATE_W, STEP_BTN_W = 110, 270
-BANNER_STYLE = ("QLabel { background: #eef3f8; color: #4a5560; border: 1px solid #d5dee8; "
-                "border-radius: 4px; padding: 6px; font-size: 9pt; }")
-HINT_STYLE = "color: #c62828;"
-PRIMARY_STYLE = ("QPushButton { background: #1a73e8; color: white; font-weight: bold; "
-                 "border-radius: 4px; padding: 6px 12px; } QPushButton:disabled { background: #9bbbe8; }")
+BANNER_STYLE = ("QLabel {{ background: {}; color: {}; border: 1px solid {}; "
+                "border-radius: 4px; padding: 6px; }}".format(TOKENS["subtle"], TOKENS["muted"],
+                                                              TOKENS["frame"]))
+HINT_STYLE = "color: {};".format(TOKENS["error"])
+# docs/gui-grammar.md: the primary button keeps Qt's look; bold says it is the main action
+PRIMARY_STYLE = "QPushButton { font-weight: bold; padding: 6px 12px; }"
 
 
 class QgisEnv(pf.Env):
@@ -276,7 +278,7 @@ class NDDamScreeningDialog(QDialog):
         lay.addWidget(self.log_edit)
         row = QHBoxLayout()
         self.log_line = QLabel("Log: -")
-        self.log_line.setStyleSheet("color: #4a5560;")
+        self.log_line.setStyleSheet("color: {};".format(TOKENS["muted"]))
         self.log_toggle = QPushButton("Show log")
         self.log_toggle.setToolTip("Show or hide the whole log.")
         self.log_toggle.clicked.connect(lambda _c=False: self._toggle_log())
@@ -340,7 +342,7 @@ class NDDamScreeningDialog(QDialog):
             b = self.pipe_btn[key]
             b.setText("{} {}".format(label, PIPE_MARK.get(st, "\u25cb")))
             b.setToolTip(why + ". Click to go to the tab.")
-            b.setStyleSheet("color: {};{}".format(PIPE_COLOR.get(st, "#5f6b76"),
+            b.setStyleSheet("color: {};{}".format(PIPE_COLOR.get(st, TOKENS["off"]),
                                                   " font-weight: bold;" if st in ("done", "ready") else ""))
 
     def _collapsible(self, title, inner, open_=False):
@@ -397,7 +399,7 @@ class NDDamScreeningDialog(QDialog):
 
     def _build_settings_window(self):
         self.settings_window = QDialog(self)
-        self.settings_window.setWindowTitle(window_title() + " \u2014 Settings")
+        self.settings_window.setWindowTitle(TITLE + " \u2014 Settings")
         v = QVBoxLayout()
         v.addWidget(self.settings_page)
         row = QHBoxLayout()
@@ -408,7 +410,10 @@ class NDDamScreeningDialog(QDialog):
         v.addLayout(row)
         self.settings_window.setLayout(v)
         try:
-            self.settings_window.resize(900, 620)
+            # the Run options tab is a long form: it scrolls, so the window fits a 1080p screen
+            # (unscrolled it asked for 1147 px and put Save and Close below the screen)
+            wrap_tabs(self.grid.tabs)
+            fit_window(self.settings_window, prefer=(900, 620))
         except Exception:                                        # noqa
             pass
 
@@ -448,7 +453,7 @@ class NDDamScreeningDialog(QDialog):
         self.one_dam_btn.clicked.connect(lambda _c=False: self._run_one_dam())
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
-        self.stop_btn.setStyleSheet("QPushButton:enabled { color: #c62828; }")
+        self.stop_btn.setStyleSheet("QPushButton:enabled {{ color: {}; }}".format(TOKENS["error"]))
         self.stop_btn.clicked.connect(lambda _c=False: self._stop_chain())
         lay.addWidget(self.run_all_btn)
         for b in (self.one_dam_btn, self.stop_btn):
@@ -1277,11 +1282,11 @@ class NDDamScreeningDialog(QDialog):
         self.report_btn = QPushButton("Open the report (index.html)")
         self.report_btn.clicked.connect(self._open_report)
         self.add_btn = QPushButton("Add the results to the project")
-        self.add_btn.setToolTip("One layer group 'ND Dam Screening - <work folder>' with the dams by class, "
+        self.add_btn.setToolTip("One layer group 'DamSafety Screening - <work folder>' with the dams by class, "
                                 "the flood extents, the breach points and arrows, and the review queue; "
                                 "every layer styled.")
         self.add_btn.clicked.connect(lambda _c=False: self._add_results())
-        self.hazard_btn = QPushButton("Open ND Dam Hazard…")
+        self.hazard_btn = QPushButton("Open DamSafety Hazard…")
         self.hazard_btn.setToolTip("The classification authority: take the dams that matter there "
                                    "(its 'Dam suite' group reads the same dam.json records).")
         self.hazard_btn.clicked.connect(self._open_hazard)
@@ -1924,7 +1929,7 @@ class NDDamScreeningDialog(QDialog):
             QMessageBox.information(
                 self, TITLE,
                 "The Processing dialog of {} could not be opened here ({}).\n\nOpen it from the "
-                "Processing Toolbox: ND Dam Breach Screening > {}.".format(aid, e, wf.TITLE[key]))
+                "Processing Toolbox: DamSafety Screening > {}.".format(aid, e, wf.TITLE[key]))
             return False
         self._log(">>> Opened {} ({})".format(aid, ", ".join(
             "{}={}".format(k, os.path.basename(str(v)) if os.path.isabs(str(v).split("|")[0]) else v)
@@ -2145,7 +2150,7 @@ class NDDamScreeningDialog(QDialog):
             report = os.path.join(folder, wf.REPORT_INDEX)
             if os.path.isfile(report):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(report))
-            self._add_results(work=folder, title="ND Dam Screening - {}".format(dam_id))
+            self._add_results(work=folder, title="DamSafety Screening - {}".format(dam_id))
 
     # ----------------------------------------------------------------- one dam --
     def _run_one_dam(self, dam_id=None):
@@ -2438,7 +2443,7 @@ class NDDamScreeningDialog(QDialog):
         group = None
         try:
             root = QgsProject.instance().layerTreeRoot()
-            name = title or "ND Dam Screening - {}".format(os.path.basename(os.path.normpath(work)) or work)
+            name = title or "DamSafety Screening - {}".format(os.path.basename(os.path.normpath(work)) or work)
             group = root.findGroup(name) or root.insertGroup(0, name)
         except Exception:                                        # noqa
             group = None
@@ -2568,7 +2573,7 @@ class NDDamScreeningDialog(QDialog):
                 raise KeyError("Hazard is not installed or not enabled")
             plug.run_plugin()
         except Exception as e:                                   # noqa
-            QMessageBox.information(self, TITLE, "ND Dam Hazard could not be opened ({}).".format(e))
+            QMessageBox.information(self, TITLE, "DamSafety Hazard could not be opened ({}).".format(e))
 
     def show_settings(self):
         """Open the Settings window (the gear; also the suite menu's 'Suite settings...')."""

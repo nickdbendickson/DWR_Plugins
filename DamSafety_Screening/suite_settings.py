@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """The suite settings grid - one table of every engineer-chosen value, HEC-RAS style.
 
-Byte-identical in ND Dam Hazard Classification Helper, ND Dam Breach Runner and ND Dam Breach
-Screening (written by suite/suite_shared/make_styles.py; edit it there). Each plugin's popup
+Byte-identical in DamSafety Hazard, Runner and Screening. Canonical copy: shared/ui/suite_settings.py;
+edit it there and run tools/sync_ui.py (tools/ci_checks.py fails on a stale copy). Each plugin's popup
 shows it on its Settings tab: one sub-tab per family of parameters, rows = the parameters with
 their Value, Unit and Starting value, a Find box, "show only YOUR values" (the engineer-chosen
 thresholds), "show only changed", the description of the selected row, and Reset / Load / Save.
@@ -22,11 +22,13 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .damsuite import settings as DS
+from .tokens import TOKENS
 
 COLUMNS = ("#", "Parameter", "Value", "Unit", "Starting value")
 C_NUM, C_LABEL, C_VALUE, C_UNIT, C_DEFAULT = range(5)
 FILE_FILTER = "Settings workbook (*.xlsx);;Settings table (*.csv)"
 YOUR_MARK = "  [YOUR value]"
+MAX_VALUE_WIDTH = 260          # px; the full choice shows when the drop-down opens
 
 
 def _qt(name, member):
@@ -54,6 +56,29 @@ CHECKED, UNCHECKED = _qt("CheckState", "Checked"), _qt("CheckState", "Unchecked"
 FLAGS_FIXED = _flags("ItemIsSelectable", "ItemIsEnabled")
 FLAGS_EDIT = _flags("ItemIsSelectable", "ItemIsEnabled", "ItemIsEditable")
 FLAGS_CHECK = _flags("ItemIsSelectable", "ItemIsEnabled", "ItemIsUserCheckable")
+
+
+def tab_title(text):
+    """A tab title as Qt must be given it: a lone '&' marks a keyboard shortcut and is drawn as
+    an underline ("Review & QA" showed as "Review _QA"), so it is doubled."""
+    return str(text).replace("&&", "&").replace("&", "&&")
+
+
+def fit_label_column(table):
+    """The Parameter column takes the width the other columns leave (its long labels elide, the
+    full text is in the tooltip), so Value, Unit and Starting value are always in view; sized to
+    its contents, one long label pushed them off the right edge."""
+    header = table.horizontalHeader()
+    for c in (C_VALUE, C_UNIT, C_DEFAULT):          # a long drop-down list stays a sane width
+        if table.columnWidth(c) > MAX_VALUE_WIDTH:
+            table.setColumnWidth(c, MAX_VALUE_WIDTH)
+    mode = getattr(getattr(header, "ResizeMode", header), "Stretch", None)
+    if mode is None:
+        return
+    header.setSectionResizeMode(C_LABEL, mode)
+    elide = _qt("TextElideMode", "ElideRight")
+    if elide is not None:
+        table.setTextElideMode(elide)
 
 
 def _set_flags(item, flags):
@@ -135,7 +160,7 @@ class SettingsGrid(QWidget):
         lay.addLayout(bar)
         self.tabs = QTabWidget()
         for title, widget in self.extra_tabs:
-            self.tabs.addTab(widget, title)
+            self.tabs.addTab(widget, tab_title(title))
         for g in self.groups:
             t = QTableWidget()
             t.setColumnCount(len(COLUMNS))
@@ -149,7 +174,7 @@ class SettingsGrid(QWidget):
             t.currentCellChanged.connect(lambda r, c, pr, pc, tbl=t: self._show_help(tbl, r))
             t.cellClicked.connect(lambda r, c, tbl=t: self._show_help(tbl, r))
             self.tables[g] = t
-            self.tabs.addTab(t, g)
+            self.tabs.addTab(t, tab_title(g))
         lay.addWidget(self.tabs, 1)
         legend = QLabel("bold = changed from the starting value.  [YOUR value] = an engineer-chosen threshold, "
                         "not a standard.  Cell sizes stay in metres (the DEM's unit); every other distance is "
@@ -164,7 +189,7 @@ class SettingsGrid(QWidget):
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
         try:
-            self.status_label.setStyleSheet("color: #b42318;")
+            self.status_label.setStyleSheet("color: {};".format(TOKENS["error"]))
         except Exception:                                        # noqa
             pass
         self.status_label.setVisible(False)
@@ -203,7 +228,8 @@ class SettingsGrid(QWidget):
                     num = QTableWidgetItem(str(i + 1))
                     _set_flags(num, FLAGS_FIXED)
                     label = QTableWidgetItem(s.label + (YOUR_MARK if s.your else ""))
-                    label.setToolTip("{} - {} ({})".format(s.tool_title or s.tool, s.key, s.help or "").strip())
+                    label.setToolTip("{}\n{} - {} ({})".format(s.label, s.tool_title or s.tool, s.key,
+                                                             s.help or "").strip())
                     _set_flags(label, FLAGS_FIXED)
                     unit = QTableWidgetItem(s.unit)
                     _set_flags(unit, FLAGS_FIXED)
@@ -244,6 +270,7 @@ class SettingsGrid(QWidget):
                 t.blockSignals(False)
                 try:
                     t.resizeColumnsToContents()
+                    fit_label_column(t)
                 except Exception:                                # noqa
                     pass
         finally:

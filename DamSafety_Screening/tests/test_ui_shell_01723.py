@@ -37,7 +37,7 @@ if REAL:
 
 # 1. the shell's widgets
 title = dlg.windowTitle() if REAL else D.window_title()
-assert title.startswith("DamSafety \u2014 Screening"), title
+assert title.startswith("DamSafety Screening"), title
 assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == ["Run", "Review", "Results"]
 assert set(dlg.pipe_btn) == {"data", "dem", "screen", "report"}
 for name in ("work_edit", "work_browse", "suite_edit", "suite_browse", "inventory_county", "work_hint",
