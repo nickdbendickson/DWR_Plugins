@@ -3,7 +3,7 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-PLUGIN_VERSION = "2.18.42"
+PLUGIN_VERSION = "2.18.44"
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
@@ -55,14 +55,10 @@ CLASS_JUDGMENT = 2
 CLASS_LOW = 3
 CLASS_NODATA = -9999
 
-BTN_ACTIVE_STYLE = (
-    "background-color: #4CAF50; color: white; "
-    "font-weight: bold; padding: 10px 20px; border-radius: 4px;"
-)
-BTN_INACTIVE_STYLE = (
-    "background-color: #B0BEC5; color: #eceff1; "
-    "font-weight: bold; padding: 10px 20px; border-radius: 4px;"
-)
+# The primary button keeps Qt's own look (docs/gui-grammar.md: no painted buttons); bold text
+# says it is the main action, and Qt greys it when it is disabled.
+BTN_ACTIVE_STYLE = "font-weight: bold; padding: 10px 20px;"
+BTN_INACTIVE_STYLE = "font-weight: bold; padding: 10px 20px;"
 
 # How often (in features) the processing loops report progress. The dialog
 # additionally throttles UI refreshes to PROGRESS_MIN_INTERVAL_S seconds.

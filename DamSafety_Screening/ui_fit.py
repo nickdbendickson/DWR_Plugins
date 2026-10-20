@@ -1,6 +1,13 @@
-"""Keep a plugin window on the screen and scroll a long tab."""
+"""Keep a plugin window on the screen and scroll a long tab.
+
+Canonical copy: shared/ui/ui_fit.py (Hazard, Runner, Screening and Data ship byte-identical
+copies); edit it there and run tools/sync_ui.py."""
 from qgis.PyQt.QtCore import Qt, QSize
+from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtWidgets import QApplication, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+
+# pages that scroll themselves (tables, text boxes); a Qt test double may not have the class
+_SELF_SCROLLING = getattr(QtWidgets, "QAbstractScrollArea", QScrollArea)
 
 
 def _policy(name):
@@ -32,14 +39,15 @@ def _scroll(page):
 
 
 def wrap_tabs(tabs):
-    """Put each tab page in a scroll area. A short page does not show a bar."""
+    """Put each tab page in a scroll area. A short page does not show a bar. A page that scrolls
+    itself (a table, a text box) is left as it is."""
     if tabs is None:
         return
     current = tabs.currentIndex()
     i = 0
     while i < tabs.count():
         page = tabs.widget(i)
-        if isinstance(page, QScrollArea):
+        if isinstance(page, _SELF_SCROLLING):
             i += 1
             continue
         title = tabs.tabText(i)
@@ -73,10 +81,43 @@ def wrap_wizard(wizard):
         scroll_page(wizard.page(page_id))
 
 
+def _saved_size(key):
+    if not key:
+        return None
+    try:
+        from qgis.PyQt.QtCore import QSettings
+        v = QSettings().value(key + "/size")
+        if v is None:
+            return None
+        if hasattr(v, "width"):
+            return int(v.width()), int(v.height())
+        w, h = v
+        return int(w), int(h)
+    except Exception:                                            # noqa
+        return None
+
+
+def save_size(dialog, key):
+    """Remember the window size under QSettings `key` (call it on close)."""
+    if not key:
+        return
+    try:
+        from qgis.PyQt.QtCore import QSettings
+        QSettings().setValue(key + "/size", QSize(int(dialog.width()), int(dialog.height())))
+    except Exception:                                            # noqa
+        pass
+
+
 def _screen_for(dialog):
-    """The screen the window opens on: its parent window's screen, else the screen under the
-    mouse, else the primary screen (2.18.36 - was always the primary screen, so on a laptop
-    with a large second monitor the window was sized for the wrong one)."""
+    """The screen the window opens on: its own once it is shown, else its parent window's
+    screen, else the screen under the mouse, else the primary screen (3.10.21 - before show
+    it fell back to the primary screen, not the one under the mouse)."""
+    try:
+        if dialog.isVisible() and dialog.windowHandle() is not None \
+                and dialog.windowHandle().screen() is not None:
+            return dialog.windowHandle().screen()
+    except Exception:                                                    # noqa
+        pass
     parent = dialog.parentWidget() if hasattr(dialog, "parentWidget") else None
     if parent is not None:
         try:
@@ -130,13 +171,18 @@ def _follow_screen(dialog):
         pass
 
 
-def fit_window(dialog, prefer=(980, 680)):
-    """Size the window to the screen it opens on, and never larger than that screen.
+_screen_of = _screen_for         # the 3.10.15 name
 
-    2.18.36: the screen is the parent's (or the mouse's), not the primary one; the window is
-    placed inside that screen's available area (centred on the parent); the size cap is that
-    screen's available area and follows the window to another monitor; and the old
-    520 x 400 floor (larger than a small screen) is gone."""
+
+def fit_window(dialog, prefer=(980, 680), key=None):
+    """Size the window to the screen it opens on, and never larger than that screen. With
+    `key`, the size save_size() stored under that QSettings key is preferred (still clamped).
+
+    3.10.21 (the Hazard 2.18.36 fix): the screen falls back to the one under the mouse, not
+    the primary one; the window is placed inside that screen's available area (centred on
+    the parent); the size cap is that screen's available area and follows the window to
+    another monitor; and the old 520 x 400 floor (larger than a small screen) is gone."""
+    prefer = _saved_size(key) or prefer
     screen = _screen_for(dialog)
     if screen is None:
         dialog.resize(prefer[0], prefer[1])

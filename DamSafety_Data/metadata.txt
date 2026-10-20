@@ -5,7 +5,7 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Keeps an offline copy of North Dakota structure and building-footprint data on this computer and downloads new versions when the sources change.
 about=Downloads and maintains local North Dakota copies of the National Structure Inventory (NSI API; NSI 2026 and NSI 2022 merged into one layer by default), Microsoft building footprints, OpenStreetMap (Geofabrik), optionally FEMA/ORNL USA Structures, and optionally the USACE-NSI/nsi-generator source code. Each dataset is checked cheaply (checksum, ETag or latest commit) and only re-downloaded when it changed. Updates are staged and verified before replacing the local copy, so the data stays usable offline and an interrupted update never leaves partial files. Layers already in the project are reloaded after an update.
-version=1.4.2
+version=1.4.4
 author=ND Data Updater
 email=nd-data-updater@example.com
 repository=https://example.com/nd-data-updater
@@ -16,7 +16,9 @@ tags=north dakota,nsi,structures,building footprints,offline,update
 icon=icon.svg
 experimental=False
 deprecated=False
-changelog=1.4.2 - PR #94 (Claude's audit-fix campaign): H14 Qt6 scoped-enum crashes fixed (qtcompat.py); M21, M22, M23, L3, P1: NSI generator hash, source fixes and the pid-lock rule (a lock never steals a live same-process lock). No default changes.
+changelog=1.4.4 - GUI grammar, part 2: Save and Cancel carry no icons (the suite's buttons are text only). No default changes.
+    1.4.3 - GUI grammar, part 1: window title 'DamSafety Data 1.4.3' (was 'ND Data Updater'); ui_fit.py and tokens.py are the suite's shared copies (shared/ui/). No default changes.
+    1.4.2 - PR #94 (Claude's audit-fix campaign): H14 Qt6 scoped-enum crashes fixed (qtcompat.py); M21, M22, M23, L3, P1: NSI generator hash, source fixes and the pid-lock rule (a lock never steals a live same-process lock). No default changes.
     1.4.1 - The Settings window is sized for the screen QGIS is on (else the screen under the mouse), not always the primary screen; it opens inside that screen and never larger than it, and the size cap follows it to another monitor (ui_fit.py, the same file as the Hazard's and Screening's).
     1.4.0 - Uses the suite data folder (audit 1.22 item 7): when ndsuite/data_folder is set, downloads go to <suite folder>/structures/. A folder inside the offline pack (ND_Dam_Suite_Pack) or one that can't be written is skipped with a message. Downloads already in ~/Documents/ND Structure Data stay in use, with a notice on how to move them, until structures/ holds data; nothing is moved automatically. A Data folder you choose in Settings still wins. Data's manifest is now structures_manifest.json, so it never replaces the suite's manifest.json (the old manifest.json is read once).
     1.3.6 - Cross-platform (#32): UTF-8 text I/O and CSVs written with newline=''.

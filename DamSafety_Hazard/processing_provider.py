@@ -1314,7 +1314,7 @@ class Provider(QgsProcessingProvider):
         return PROVIDER_ID
 
     def name(self):
-        return "ND Dam Hazard"
+        return "DamSafety Hazard"
 
     def longName(self):
         return PLUGIN_NAME

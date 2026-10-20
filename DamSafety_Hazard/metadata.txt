@@ -5,11 +5,18 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.42
+version=2.18.44
+icon=icon.svg
 author=N.D. Bendickson
 changelog=
-    2.18.42 - 2026-10-20 (#108)
+    2.18.44 - 2026-10-20 (#108)
       * Classify no longer scrolls sideways. Long check boxes (the lifeline-facilities one was 1 250 px on one line) set the minimum width of the whole Classify page, so with the sections open it was 1 530 px wide and the Browse…, Zip…, Import, Read plan and 'Use this plan for the classification' buttons were past the right edge. The check boxes of the Classify view now wrap their text (ui_wrap.WrapCheckBox: still a QCheckBox, same settings and signals; the whole text is clickable), and long combo boxes and the layer lists shrink with the window (the full item is in the list and the tooltip). The page now needs 591 px and fits the window down to its 640 px minimum, at 1280x800, 1024x640 and 2x HiDPI. Layout only: no setting, default or result changes. tests/test_classify_fit_width.py.
+    2.18.43 - 2026-10-20 (GUI grammar, part 2)
+      * The settings window's legend is two lines: the notation (bold, [YOUR value]) and, quieter under it, the units footnote. tools/gui_lint.py also checks that action buttons carry no icon or ▶ and (on a 1080p display) that no page scrolls sideways. No default changes.
+    2.18.42 - 2026-10-20 (GUI grammar, part 1)
+      * GUI grammar foundation (docs/gui-grammar.md): window colours from the shared tokens.py; the shared window files have one canonical copy in shared/ui/ (tools/sync_ui.py, checked in CI); tools/gui_lint.py opens every window in real QGIS and checks the rules.
+      * Settings tabs show 'Review & QA' (was 'Review _QA'); the settings table keeps Value, Unit and Starting value in view (the Parameter column takes the rest and elides, full text in its tooltip).
+      * Plugin icon (icon.svg; the menu entry looked for a missing icon.png). Processing provider named DamSafety Hazard. The Run everything button keeps Qt's look (no painted green). No default changes.
     2.18.39 - 2026-10-19 (PR #94, Claude's audit-fix campaign)
       * M3 (default changes): homes that come only from the National Structure Inventory (NSI) are no longer counted as habitable unless a parcel (fema_parcel) supports them; this can lower a dam's hazard class.
       * H4 (default changes): collapse_dwellings removed, so buildings sharing one 911 / street address each keep their occupants (mobile-home parks, apartments, farmsteads); PAR can go up.
