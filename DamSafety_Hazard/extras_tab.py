@@ -20,6 +20,7 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.core import QgsProject, QgsVectorLayer, QgsRasterLayer
 
+from .ui_wrap import WrapCheckBox
 from .compat import GEOM_POLYGON, MSG_CRITICAL, MSG_WARNING, MB_YES, MB_NO
 from .helpers import log_message
 
@@ -50,7 +51,7 @@ class ExtrasTabMixin(object):
         form = QFormLayout()
 
         # -- sensitivity
-        self.sens_check = QCheckBox("Sensitivity table: re-classify with the depth / velocity "
+        self.sens_check = WrapCheckBox("Sensitivity table: re-classify with the depth / velocity "
                                     "scaled by the factors below")
         self.sens_check.setToolTip(
             "Shows how far the modelled depths and velocities would have to be wrong before a "
@@ -63,11 +64,11 @@ class ExtrasTabMixin(object):
         self.sens_factors_edit.setToolTip("Comma-separated factors, 1.0 = as modelled (added "
                                           "automatically). Example: 0.8, 0.9, 1.1, 1.2")
         form.addRow("Sensitivity factors:", self.sens_factors_edit)
-        self.sens_split_check = QCheckBox("Scale depth and velocity separately as well")
+        self.sens_split_check = WrapCheckBox("Scale depth and velocity separately as well")
         form.addRow("", self.sens_split_check)
 
         # -- termination point
-        self.term_check = QCheckBox("Downstream termination point (where the breach flood no "
+        self.term_check = WrapCheckBox("Downstream termination point (where the breach flood no "
                                     "longer adds a meaningful rise)")
         self.term_check.setToolTip(
             "Walks down the channel from the dam and reports where the flood stays below the "
@@ -128,7 +129,7 @@ class ExtrasTabMixin(object):
         form.addRow("  Count where depth is above:", self.pop_mindepth_spin)
 
         # -- evacuation timing
-        self.evac_check = QCheckBox("Evacuation timing (latest safe departure against the "
+        self.evac_check = WrapCheckBox("Evacuation timing (latest safe departure against the "
                                     "flood arrival along the road network)")
         self.evac_check.setToolTip(
             "Needs an arrival-time raster and a road layer that is saved as a file (not a "
@@ -162,7 +163,7 @@ class ExtrasTabMixin(object):
         form.addRow("  Dry-safe distance:", self.evac_safe_spin)
 
         # -- speed and data cache
-        self.cache_check = QCheckBox("Keep downloaded data tiles in the QGIS profile and "
+        self.cache_check = WrapCheckBox("Keep downloaded data tiles in the QGIS profile and "
                                      "re-use them while they are recent")
         self.cache_check.setToolTip(
             "NSI and address downloads are kept per tile with their date; a later run (or the "
@@ -174,7 +175,7 @@ class ExtrasTabMixin(object):
         self.cache_age_spin.setValue(int(D["data_max_age_days"]))
         self.cache_age_spin.setSuffix(" days")
         form.addRow("  Tiles are re-fetched when older than:", self.cache_age_spin)
-        self.cache_refresh_check = QCheckBox("Refresh every tile this run")
+        self.cache_refresh_check = WrapCheckBox("Refresh every tile this run")
         form.addRow("  ", self.cache_refresh_check)
         crow = QWidget()
         chl = QHBoxLayout(crow)
@@ -185,7 +186,7 @@ class ExtrasTabMixin(object):
         self.cache_clear_btn.clicked.connect(self._clear_tile_cache)
         chl.addWidget(self.cache_clear_btn)
         form.addRow("  ", crow)
-        self.quick_check = QCheckBox("Quick re-run: skip the PDF report and the map book "
+        self.quick_check = WrapCheckBox("Quick re-run: skip the PDF report and the map book "
                                      "(everything else is rewritten)")
         self.quick_check.setToolTip(
             "For working through review decisions or settings: the classification, tables and "

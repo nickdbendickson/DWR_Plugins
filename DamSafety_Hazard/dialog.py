@@ -12,6 +12,7 @@ import time
 import traceback
 
 from .ui_fit import fit_window, wrap_tabs
+from .ui_wrap import narrow_combos
 from .ui_widgets import CheckPanel, Collapsible, InfoBanner
 from qgis.PyQt.QtWidgets import (
     QApplication, QProgressDialog, QDialog, QVBoxLayout, QHBoxLayout,
@@ -145,6 +146,13 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self._build_readme_dialog()
         wrap_tabs(self.tab_widget)                # after every widget is in place
         self.classify_scroll = self.tab_widget.widget(self._view_index("Classify"))
+        # 2.18.42 (#108): long combo boxes and layer lists shrink with the window instead of
+        # widening the page (the check boxes wrap: ui_wrap.WrapCheckBox)
+        narrow_combos(self.classify_scroll.widget(), always=[
+            getattr(self, n, None) for n in (
+                "outline_combo", "dam_layer_combo", "lifeline_combo", "boundary_combo",
+                "parcel_combo", "centerline_combo", "road_combo", "aadt_combo", "rail_combo",
+                "crossing_combo")])
         fit_window(self, (1000, 720))
         self._refresh_layer_combos()              # once, the data and option lists exist now
 

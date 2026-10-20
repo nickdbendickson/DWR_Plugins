@@ -36,6 +36,7 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.core import QgsProject, QgsVectorLayer
 
+from .ui_wrap import WrapCheckBox
 from .compat import GEOM_POLYGON, MSG_CRITICAL, MSG_WARNING, MB_YES, MB_NO, MB_CANCEL
 from .helpers import log_message
 
@@ -171,7 +172,7 @@ class Extras290TabMixin(object):
         form = QFormLayout()
 
         # -- mobile homes
-        self.mobile_shape_check = QCheckBox("Type mobile homes from the footprint shape")
+        self.mobile_shape_check = WrapCheckBox("Type mobile homes from the footprint shape")
         self.mobile_shape_check.setChecked(bool(_default("mobile_shape")))
         self.mobile_shape_check.setToolTip(
             "Only when no data source, park or address unit says anything about the type: a "
@@ -205,7 +206,7 @@ class Extras290TabMixin(object):
             "Longest outline length read as a single-wide. Screening value of yours; default "
             "90 ft. Must not be shorter than the length above.")
         form.addRow("  Mobile home - length to:", self.mobile_max_length_spin)
-        self.mobile_lot_check = QCheckBox("Address units Lot/Space/Trlr mean a mobile-home "
+        self.mobile_lot_check = WrapCheckBox("Address units Lot/Space/Trlr mean a mobile-home "
                                           "park")
         self.mobile_lot_check.setChecked(bool(_default("mobile_lot_units")))
         self.mobile_lot_check.setToolTip(
@@ -214,7 +215,7 @@ class Extras290TabMixin(object):
             "evidence never types an occupied non-residential building (park office, club "
             "house). Screening rule of yours.")
         form.addRow("", self.mobile_lot_check)
-        self.trailer_parks_check = QCheckBox("Use OpenStreetMap mobile-home parks (internet)")
+        self.trailer_parks_check = WrapCheckBox("Use OpenStreetMap mobile-home parks (internet)")
         self.trailer_parks_check.setChecked(bool(_default("download_trailer_parks")))
         self.trailer_parks_check.setToolTip(
             "Downloads the OpenStreetMap areas tagged as mobile-home / trailer parks; a "
@@ -223,7 +224,7 @@ class Extras290TabMixin(object):
         form.addRow("", self.trailer_parks_check)
 
         # -- speed
-        self.fast_sampling_check = QCheckBox("Fast cell selection for the structures (no "
+        self.fast_sampling_check = WrapCheckBox("Fast cell selection for the structures (no "
                                              "GEOS buffers)")
         self.fast_sampling_check.setChecked(bool(_default("fast_sampling")))
         self.fast_sampling_check.setToolTip(
@@ -235,7 +236,7 @@ class Extras290TabMixin(object):
             "there. Off by default; the class rarely changes, but compare once before "
             "relying on it (see the fastsample.py notes).")
         form.addRow("", self.fast_sampling_check)
-        self.input_overviews_check = QCheckBox("Build pyramids (.ovr) for large input "
+        self.input_overviews_check = WrapCheckBox("Build pyramids (.ovr) for large input "
                                                "rasters")
         self.input_overviews_check.setChecked(bool(_default("input_overviews")))
         self.input_overviews_check.setToolTip(
@@ -244,7 +245,7 @@ class Extras290TabMixin(object):
             "files in the data folder (the rasters themselves are not touched). It changes "
             "no result: the plugin reads every value at full resolution.")
         form.addRow("", self.input_overviews_check)
-        self.zone_overviews_check = QCheckBox("Build pyramids for the ACER zone rasters")
+        self.zone_overviews_check = WrapCheckBox("Build pyramids for the ACER zone rasters")
         self.zone_overviews_check.setChecked(bool(_default("zone_overviews")))
         self.zone_overviews_check.setToolTip(
             "Adds overviews inside the Hazard_*.tif zone rasters the run writes, for fast "
@@ -252,7 +253,7 @@ class Extras290TabMixin(object):
         form.addRow("", self.zone_overviews_check)
 
         # -- maps
-        self.report_imagery_check = QCheckBox("Aerial imagery under the maps of the PDF "
+        self.report_imagery_check = WrapCheckBox("Aerial imagery under the maps of the PDF "
                                               "report and EAP map book")
         self.report_imagery_check.setChecked(bool(_default("report_imagery")))
         self.report_imagery_check.setToolTip(
@@ -263,7 +264,7 @@ class Extras290TabMixin(object):
         form.addRow("", self.report_imagery_check)
 
         # -- consequence sensitivity
-        self.conseq_sens_check = QCheckBox("Consequence sensitivity: re-estimate the lives in "
+        self.conseq_sens_check = WrapCheckBox("Consequence sensitivity: re-estimate the lives in "
                                            "jeopardy under other assumptions")
         self.conseq_sens_check.setChecked(bool(_default("conseq_sensitivity")))
         self.conseq_sens_check.setToolTip(
@@ -286,14 +287,14 @@ class Extras290TabMixin(object):
             "Persons per dwelling to try, comma-separated positive numbers. Example: 2.0, "
             "2.5, 3.0. Screening values of yours.")
         form.addRow("  Persons per dwelling:", self.conseq_ppd_edit)
-        self.conseq_pop_check = QCheckBox("Also try the other time of day (day / night "
+        self.conseq_pop_check = WrapCheckBox("Also try the other time of day (day / night "
                                           "population)")
         self.conseq_pop_check.setChecked(bool(_default("conseq_sens_population")))
         self.conseq_pop_check.setToolTip(
             "Also re-estimates with the other time of day (day instead of night population, "
             "or the reverse). Part of the range; changes no class.")
         form.addRow("  ", self.conseq_pop_check)
-        self.conseq_severity_check = QCheckBox("Also try the other severity method")
+        self.conseq_severity_check = WrapCheckBox("Also try the other severity method")
         self.conseq_severity_check.setChecked(bool(_default("conseq_sens_severity")))
         self.conseq_severity_check.setToolTip(
             "Also re-estimates with the other depth-velocity severity method (Graham 1999 "
@@ -301,7 +302,7 @@ class Extras290TabMixin(object):
         form.addRow("  ", self.conseq_severity_check)
 
         # -- EAP extras
-        self.evac_routes_check = QCheckBox("Draw the evacuation routes and road closures "
+        self.evac_routes_check = WrapCheckBox("Draw the evacuation routes and road closures "
                                            "(EAP layers)")
         self.evac_routes_check.setChecked(bool(_default("evac_routes")))
         self.evac_routes_check.setToolTip(
@@ -309,7 +310,7 @@ class Extras290TabMixin(object):
             "map layers. The route drawn for a structure is the LATEST-DEPARTURE route - the "
             "one that leaves the most time - not necessarily the shortest.")
         form.addRow("", self.evac_routes_check)
-        self.temporal_check = QCheckBox("Play the flood arrival in the QGIS Temporal "
+        self.temporal_check = WrapCheckBox("Play the flood arrival in the QGIS Temporal "
                                         "Controller")
         self.temporal_check.setChecked(bool(_default("temporal_animation")))
         self.temporal_check.setToolTip(
@@ -332,7 +333,7 @@ class Extras290TabMixin(object):
         self.temporal_step_spin.setToolTip(
             "Length of one animation frame. A display choice only - no result depends on it.")
         form.addRow("  Animation frame step:", self.temporal_step_spin)
-        self.web_export_check = QCheckBox("KMZ / GeoJSON copies of the EAP layers for Google "
+        self.web_export_check = WrapCheckBox("KMZ / GeoJSON copies of the EAP layers for Google "
                                           "Earth and web maps (EAP/Web)")
         self.web_export_check.setChecked(bool(_default("web_export")))
         self.web_export_check.setToolTip(
@@ -341,7 +342,7 @@ class Extras290TabMixin(object):
         form.addRow("", self.web_export_check)
 
         # -- parcel habitability hints
-        self.parcel_hints_check = QCheckBox("Parcel habitability hints (from the parcel layer "
+        self.parcel_hints_check = WrapCheckBox("Parcel habitability hints (from the parcel layer "
                                             "of the future-development screening)")
         self.parcel_hints_check.setChecked(bool(_default("parcel_hints")))
         self.parcel_hints_check.setToolTip(
@@ -384,7 +385,7 @@ class Extras290TabMixin(object):
             "Land-use words meaning a dwelling - they cancel a 'non-residential' hint. "
             "Empty = the built-in list: " + ", ".join(PH.RESIDENTIAL_KEYWORDS))
         form.addRow("  'Residential' words:", self.parcel_res_kw_edit)
-        self.parcel_empty_zero_check = QCheckBox("An empty improvement value counts as 0")
+        self.parcel_empty_zero_check = WrapCheckBox("An empty improvement value counts as 0")
         self.parcel_empty_zero_check.setChecked(bool(_default("parcel_hint_empty_is_zero")))
         self.parcel_empty_zero_check.setToolTip(
             "Untick when your parcel data leave the value empty for parcels that do have a "

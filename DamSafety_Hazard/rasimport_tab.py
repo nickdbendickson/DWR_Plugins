@@ -21,6 +21,7 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import QgsRasterLayer
 
 from . import rasimport as RI
+from .ui_wrap import WrapCheckBox
 from .compat import MSG_CRITICAL
 from .helpers import (
     log_message, add_layer_to_project, plugin_group, dam_display_name, CancelledByUser,
@@ -85,9 +86,9 @@ class RasImportTabMixin(object):
         grp.setLayout(form)
         lay.addWidget(grp)
         opts = QHBoxLayout()
-        self.ras_use_setup_check = QCheckBox("Use as the Setup rasters")
+        self.ras_use_setup_check = WrapCheckBox("Use as the Setup rasters")
         self.ras_use_setup_check.setChecked(True)
-        self.ras_load_check = QCheckBox("Load the rasters")
+        self.ras_load_check = WrapCheckBox("Load the rasters")
         self.ras_load_check.setChecked(True)
         for c in (self.ras_use_setup_check, self.ras_load_check):
             opts.addWidget(c)
