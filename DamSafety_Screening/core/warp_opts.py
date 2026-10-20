@@ -25,8 +25,11 @@ def no_overviews(gdal, kw=None):
     """`kw` (a dict of gdal.WarpOptions / gdal.Warp keywords, changed in place and returned)
     with the source overviews switched off: overviewLevel='NONE' where the bindings have the
     keyword (GDAL 3.8 in QGIS 3.34 here, 3.13 in QGIS 4), else '-ovr NONE' in `options`
-    (gdalwarp has had -ovr since GDAL 2.0)."""
+    (gdalwarp has had -ovr since GDAL 2.0). A `gdal` without WarpOptions (the Screening
+    tests' GDAL double) gets `kw` unchanged."""
     kw = {} if kw is None else kw
+    if not hasattr(gdal, "WarpOptions"):
+        return kw            # a test double without warp options (real GDAL has had them since 2.1)
     if _supports_kw(gdal):
         kw["overviewLevel"] = "NONE"
     else:

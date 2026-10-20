@@ -141,7 +141,7 @@ def warp_opts_no_overviews_keyword_or_cli_flag():
             return options
     assert W.no_overviews(Old, {"options": ["-q"]}) == {"options": ["-q", "-ovr", "NONE"]}
     assert W.no_overviews(Old, {"options": "-q -multi"})["options"] == ["-q", "-multi", "-ovr", "NONE"]
-    assert W.no_overviews(object(), {}) == {"options": ["-ovr", "NONE"]}
+    assert W.no_overviews(object(), {"format": "MEM"}) == {"format": "MEM"}   # a GDAL test double
     here = os.path.dirname(os.path.dirname(os.path.abspath(W.__file__)))
     other = os.path.join(os.path.dirname(here), "DamSafety_Screening", "core", "warp_opts.py")
     if os.path.exists(other):
