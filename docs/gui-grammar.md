@@ -53,3 +53,6 @@ belong to the product, not the window, so the colour rules don't apply to them.
   wizard, and it takes over B's ideas: the DamCard summary, Required / Improves-the-estimate
   groups with ✓/⚠/○ row marks, the live DEM coverage line, source warnings as amber rows, and a
   `Collapsible` Advanced header that shows the values.
+- Built in part 3: Setup's Start here… is the folder page and Continue…; the Runner's dam
+  wizard reads the suite's DWR dams (`DamSafety_Runner/suite_dams/`, which took over Setup's NID
+  fill, not-a-dam filter and DEM estimate) and shows each page's problems in red on the page.

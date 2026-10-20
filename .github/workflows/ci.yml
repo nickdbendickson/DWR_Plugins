@@ -43,7 +43,7 @@ jobs:
         with:
           environment-name: qgis
           create-args: >-
-            python=3.12 qgis numpy<2 scipy gdal
+            python=3.12 qgis numpy<2 scipy gdal pytest
       - name: Screening suite (mock-QGIS)
         env:
           QT_QPA_PLATFORM: offscreen
@@ -73,3 +73,17 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           # opens every DamSafety window offscreen and checks it against the grammar
           python tools/gui_lint.py
+      - name: Runner dam wizard (real QGIS)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          python DamSafety_Runner/tests/realqt_wizard.py
+      - name: Suite dam data and Setup (real QGIS, pytest)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          # os._exit after pytest: QGIS can segfault while Python tears it down at exit, after
+          # every test has passed (the realqt scripts end the same way)
+          python -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_Runner/tests/suite_dams', 'DamSafety_Setup/tests']); sys.stdout.flush(); os._exit(int(rc))"

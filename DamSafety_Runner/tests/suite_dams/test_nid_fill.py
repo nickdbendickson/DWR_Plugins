@@ -1,10 +1,14 @@
-"""Setup 1.0.10: a dam's missing height and storage are filled from the National Inventory of
-Dams (NID), never over a DWR value; the source shows next to the value ('from NID ...') and
-goes to the Runner hand-off; the NID web service is asked only on the engineer's click (the
+"""A dam's missing height and storage are filled from the National Inventory of Dams (NID),
+never over a DWR value; the source shows on the value's mark and in the dam card ('from NID
+...') and on the Review page; the NID web service is asked only on the engineer's click (the
 web calls are mocked here); a dam without a point takes its dam line's midpoint.
 
-Real Qt, offscreen, in the QGIS python, with a throw-away QGIS settings folder:
-    QT_QPA_PLATFORM=offscreen python -m pytest DamSafety_Setup/tests/test_nid_fill.py
+Moved from DamSafety Setup 1.0.13 (its dam page) to the Runner's dam wizard, which reads the
+suite data folder that Setup hands over (Runner 3.10.36).
+
+Real Qt, offscreen, in the QGIS python, with a throw-away QGIS settings folder (pytest; not
+run by run_tests.py, which only imports the test_* files next to it):
+    QT_QPA_PLATFORM=offscreen python -m pytest DamSafety_Runner/tests/suite_dams
 """
 import json
 import os
@@ -14,7 +18,8 @@ import tempfile
 
 import pytest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -24,17 +29,16 @@ os.environ.pop("NDSUITE_SETTINGS", None)
 
 qgis_core = pytest.importorskip("qgis.core")
 from qgis.PyQt.QtCore import QSettings, QVariant  # noqa: E402
-from qgis.PyQt.QtWidgets import QWizard  # noqa: E402
 
-for _fmt in (QSettings.NativeFormat, QSettings.IniFormat):   # settings in _CFG only
-    QSettings.setPath(_fmt, QSettings.UserScope, _CFG)
+for _fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):   # settings in _CFG only
+    QSettings.setPath(_fmt, QSettings.Scope.UserScope, _CFG)
 
 _app = qgis_core.QgsApplication.instance() or qgis_core.QgsApplication([], True)
 
-from DamSafety_Setup import plugin as P  # noqa: E402
-from DamSafety_Setup import nid_fill as N  # noqa: E402
-from DamSafety_Setup import runner_params as RP  # noqa: E402
-from DamSafety_Setup.damsuite import suite_config as SC  # noqa: E402
+from DamSafety_Runner import suite_dams as P  # noqa: E402
+from DamSafety_Runner import wizard as WZ  # noqa: E402
+from DamSafety_Runner import wizard_logic as wl  # noqa: E402
+from DamSafety_Runner.suite_dams import nid_fill as N  # noqa: E402
 
 from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsPointXY, QgsField,  # noqa
                        QgsVectorFileWriter, QgsCoordinateTransformContext,
@@ -84,6 +88,15 @@ def _dwr_gpkg(folder):
     return path
 
 
+def _field(name, kind):
+    """A string ("s") or double ("d") field, on Qt5 (QVariant) and Qt6 (QMetaType) QGIS."""
+    try:
+        from qgis.PyQt.QtCore import QMetaType
+        return QgsField(name, {"s": QMetaType.Type.QString, "d": QMetaType.Type.Double}[kind])
+    except Exception:
+        return QgsField(name, {"s": QVariant.String, "d": QVariant.Double}[kind])
+
+
 def _write(layer, path):
     opts = QgsVectorFileWriter.SaveVectorOptions()
     opts.driverName = "GPKG"
@@ -97,11 +110,11 @@ def _nid_gpkg(folder, with_lonlat=False):
     """A real GeoPackage like the pack's hydro/NID_dams.gpkg (point geometry; the
     LATITUDE / LONGITUDE columns only when asked, so the geometry blob is read)."""
     lyr = QgsVectorLayer("Point?crs=EPSG:4326", "NID_dams", "memory")
-    fields = [QgsField("NIDID", QVariant.String)] + [
-        QgsField(n, QVariant.Double) for n in
+    fields = [_field("NIDID", "s")] + [
+        _field(n, "d") for n in
         ("NID_HEIGHT", "DAM_HEIGHT", "MAX_STORAGE", "NID_STORAGE", "NORMAL_STORAGE")]
     if with_lonlat:
-        fields += [QgsField("LONGITUDE", QVariant.Double), QgsField("LATITUDE", QVariant.Double)]
+        fields += [_field("LONGITUDE", "d"), _field("LATITUDE", "d")]
     lyr.dataProvider().addAttributes(fields)
     lyr.updateFields()
     feats = []
@@ -149,7 +162,7 @@ def suite():
 
 
 def _rows(suite, nid=True):
-    rows = P._dams(suite["dwr"], "", "Cass", lines_uri=suite["lines"])
+    rows = P.dams(suite["dwr"], "", "Cass", lines_uri=suite["lines"])
     N.fill_rows(rows, suite["nid"] if nid else "")
     return {r["name"]: r for r in rows}
 
@@ -264,27 +277,21 @@ class FakeNet(object):
 
 @pytest.fixture
 def wiz(tmp_path):
-    SC.set("dams_folder", str(tmp_path / "Dams"))
-    w = P.SetupWizard()
-    w.show()
-    _pump()
+    w = WZ._classes()["Wizard"](None)
+    w.answers["dams_folder"] = str(tmp_path / "Dams")
     yield w
     w.hide()
     w.deleteLater()
     _pump()
-    for key in ("dams_folder", "data_folder"):
-        qgis_core.QgsSettings().remove(SC.PREFIX + key)
 
 
-def _dam_page(w, folder, net=None):
-    page = w.page(P.FOLDER_PAGE)
-    page.path.setText(folder)
-    page._scan()
+def _dam_page(w, suite, net=None):
+    """The Runner's dam wizard as Setup's Continue… opens it: with the folder's scan."""
+    w.found = {"dwr": suite["dwr"], "nid": suite["nid"], "dam_lines": suite["lines"]}
+    w.show()
     _pump()
-    assert w.found.get("nid"), w.found               # the folder scan finds the NID layer
-    w.next()
-    _pump()
-    dam = w.page(P.DAM_PAGE)
+    dam = w.currentPage()
+    assert dam.layer.currentText() == "DWR dams (suite data folder)"
     if net is not None:
         dam.fetch = net
     dam.county.setCurrentIndex(dam.county.findData("Cass"))
@@ -293,64 +300,64 @@ def _dam_page(w, folder, net=None):
 
 
 def _pick(dam, name):
-    for i in range(dam.combo.count()):
-        if dam.combo.itemText(i).startswith(name + " ("):
-            dam.combo.setCurrentIndex(i)
+    for i in range(dam.feature.count()):
+        if dam.feature.itemText(i).startswith(name + " ("):
+            dam.feature.setCurrentIndex(i)
             _pump()
             return
     raise AssertionError(name)
 
 
+def _val(dam, param):
+    t = dam.value_edit[param].text().strip()
+    return float(t) if t else None
+
+
+def _src(dam, param):
+    """The source on a value's mark (its tooltip), e.g. 'from NID ND00001'."""
+    return dam.mark[param].toolTip()
+
+
 def test_dam_page_shows_from_nid_and_hands_the_source_over(wiz, suite):
     net = FakeNet()
-    dam = _dam_page(wiz, suite["folder"], net)
+    dam = _dam_page(wiz, suite, net)
     _pick(dam, "By Id")
-    assert dam.height.value() == 25.0 and dam.storage.value() == 900.0
-    assert dam.height_src.text() == "from NID ND00001"
-    assert dam.storage_src.text() == "from NID ND00001"
-    assert dam.nid.text() == "ND00001"
-    assert dam.isComplete() and wiz.button(QWizard.NextButton).isEnabled()
+    assert _val(dam, "HEIGHT_FT") == 25.0 and _val(dam, "STORAGE_ACFT") == 900.0
+    assert _src(dam, "HEIGHT_FT") == "from NID ND00001"
+    assert _src(dam, "STORAGE_ACFT") == "from NID ND00001"
+    assert dam.mark["HEIGHT_FT"].text() == "\u26a0"            # not the DWR record's: amber
+    assert "NID ND00001" in dam.card.path_label.text()
+    assert "Height: from NID ND00001, not the DWR record." in dam.card.warn_label.text()
     assert not dam.nid_button.isEnabled()          # nothing blank: no web call to offer
     _pick(dam, "Full Record")
-    assert dam.height_src.text() == "from DWR"
+    assert _src(dam, "HEIGHT_FT") == "from DWR" and dam.mark["HEIGHT_FT"].text() == "\u2713"
     _pick(dam, "Near Only")
-    assert dam.height_src.text() == "from DWR" and dam.storage_src.text() == "from NID ND00002"
-    dam.storage.setValue(4321)                      # the engineer's own number
-    assert dam.storage_src.text() == "typed in"
-    row = dam.selected()
-    assert row["storage"] == 4321 and row["storage_source"] == "typed in"
-    assert row["height_source"] == "DWR"
+    assert _src(dam, "HEIGHT_FT") == "from DWR"
+    assert _src(dam, "STORAGE_ACFT") == "from NID ND00002"
+    dam.value_edit["STORAGE_ACFT"].setText("4321")   # the engineer's own number
+    assert _src(dam, "STORAGE_ACFT") == "typed in"
+    assert dam.validatePage()
+    a = wiz.answers
+    assert a["dam"]["STORAGE_ACFT"] == 4321 and a["sources"]["STORAGE_ACFT"] == "typed in"
+    assert a["sources"]["HEIGHT_FT"] == "DWR"
     assert net.urls == []                           # no silent network call
 
 
 def test_answers_and_params_carry_the_source(wiz, suite):
-    dam = _dam_page(wiz, suite["folder"], FakeNet())
+    dam = _dam_page(wiz, suite, FakeNet())
     _pick(dam, "By Id")
-    wiz.next()
-    _pump()
-    dem_page = wiz.page(P.DEM_PAGE)
-    assert "from NID ND00001" in dem_page.note.text()
-    dem = os.path.join(suite["folder"], "dem.tif")
-    open(dem, "wb").close()
-    dem_page.dem.setText(dem)
-    wiz.next()
-    _pump()
-    run = wiz.page(P.RUN_PAGE)
-    assert "storage 900 ac-ft (from NID ND00001)" in run.summary.text()
-    assert run.validatePage()
-    a = wiz.answers()
-    assert a["height"] == 25.0 and a["height_source"].startswith("NID ND00001 NID_HEIGHT")
-    p = RP.build_params(a)
+    assert dam.validatePage()
+    a = wiz.answers
+    assert a["dam"]["HEIGHT_FT"] == 25.0
+    assert a["sources"]["HEIGHT_FT"].startswith("NID ND00001 NID_HEIGHT")
+    assert a["point"][2] == "EPSG:4326"
+    p = wl.build_rundam_params(a)
     assert p["HEIGHT_FT"] == 25.0 and p["STORAGE_ACFT"] == 900.0
-    assert p["STORAGE_SOURCE"].startswith("NID ND00001 NID_STORAGE")
-
-
-def test_extra_source_keys_do_not_reach_runner_parameters():
-    """The processing dialog sets only the parameters the algorithm defines."""
-    p = RP.build_params({"height": 5, "storage": 6, "height_source": "DWR",
-                         "storage_source": "typed in"})
-    assert p["HEIGHT_SOURCE"] == "DWR" and p["STORAGE_SOURCE"] == "typed in"
-    assert "HEIGHT_SOURCE" not in RP.build_params({"height": 5})
+    assert p["DAM_ID"] == "101" and p["DAM_POINT"].endswith("[EPSG:4326]")
+    assert "STORAGE_SOURCE" not in p               # the tool has no such parameter
+    review = wiz.page(4)
+    review.initializePage()
+    assert "Storage: from NID ND00001" in review.text.toPlainText()
 
 
 def test_online_button_fills_blanks_only_on_click(wiz, suite):
@@ -358,38 +365,36 @@ def test_online_button_fills_blanks_only_on_click(wiz, suite):
     net = FakeNet({"query?nr=-97.700000,46.600000": json.dumps(
         [{"nidId": "ND77777", "nidHeight": "14", "nidStorage": "321",
           "longitude": "-97.7003", "latitude": "46.6"}]), "ND77777/inventory": inv})
-    dam = _dam_page(wiz, suite["folder"], net)
+    dam = _dam_page(wiz, suite, net)
     _pick(dam, "Too Far")                           # not in the local layer within 100 m
-    assert not dam.isComplete() and dam.nid_button.isEnabled()
-    dam.height.setValue(16)                         # typed before the click: kept
+    assert dam.nid_button.isEnabled() and dam.mark["STORAGE_ACFT"].text() == "\u2715"
+    dam.value_edit["HEIGHT_FT"].setText("16")       # typed before the click: kept
     assert net.urls == []
     dam.nid_button.click()
     _pump()
     assert len(net.urls) == 1 and "/query?nr=" in net.urls[0]     # no NID id: by point
-    assert dam.height.value() == 16 and dam.height_src.text() == "typed in"
-    assert dam.storage.value() == 321 and dam.storage_src.text() == "from NID ND77777"
+    assert _val(dam, "HEIGHT_FT") == 16 and _src(dam, "HEIGHT_FT") == "typed in"
+    assert _val(dam, "STORAGE_ACFT") == 321 and _src(dam, "STORAGE_ACFT") == "from NID ND77777"
     assert "Filled storage from NID ND77777 (online)" in dam.nid_status.text()
-    assert dam.isComplete() and not dam.nid_button.isEnabled()
-    assert dam.selected()["storage_source"].startswith("NID ND77777 nidStorage (NID web service")
+    assert not dam.nid_button.isEnabled()
+    assert dam.validatePage()
+    assert wiz.answers["sources"]["STORAGE_ACFT"].startswith(
+        "NID ND77777 nidStorage (NID web service")
 
 
 def test_online_offline_or_unknown_says_type_it_in(wiz, suite):
-    dam = _dam_page(wiz, suite["folder"], FakeNet(error="Host not found"))
+    dam = _dam_page(wiz, suite, FakeNet(error="Host not found"))
     _pick(dam, "Too Far")
     dam.nid_button.click()
     _pump()
     assert "did not answer (Host not found)" in dam.nid_status.text()
-    assert not dam.isComplete() and dam.nid_button.isEnabled()      # can try again
+    assert dam.nid_button.isEnabled()                              # can try again
     dam.fetch = FakeNet()                                           # answers: no dam there
     dam.nid_button.click()
     _pump()
-    assert "not in the NID" in dam.nid_status.text() and dam.storage.value() == 0
-
-
-def test_large_nid_storage_is_not_clipped(wiz, suite):
-    dam = _dam_page(wiz, suite["folder"], FakeNet())
-    dam.storage.setValue(26000000)                   # Snake Creek / Lake Sakakawea
-    assert dam.storage.value() == 26000000
+    assert "not in the NID" in dam.nid_status.text() and _val(dam, "STORAGE_ACFT") is None
+    assert not dam.validatePage()                   # the storage is still missing ...
+    assert dam.problems.isVisible() and "Storage" in dam.problems.text()   # ... on the page
 
 
 def test_real_nid_get_uses_qgis_network_manager(monkeypatch):
