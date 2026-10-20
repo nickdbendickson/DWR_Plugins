@@ -30,8 +30,8 @@ os.environ.pop("NDSUITE_SETTINGS", None)
 qgis_core = pytest.importorskip("qgis.core")
 from qgis.PyQt.QtCore import QSettings, QVariant  # noqa: E402
 
-for _fmt in (QSettings.NativeFormat, QSettings.IniFormat):   # settings in _CFG only
-    QSettings.setPath(_fmt, QSettings.UserScope, _CFG)
+for _fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):   # settings in _CFG only
+    QSettings.setPath(_fmt, QSettings.Scope.UserScope, _CFG)
 
 _app = qgis_core.QgsApplication.instance() or qgis_core.QgsApplication([], True)
 
@@ -88,6 +88,15 @@ def _dwr_gpkg(folder):
     return path
 
 
+def _field(name, kind):
+    """A string ("s") or double ("d") field, on Qt5 (QVariant) and Qt6 (QMetaType) QGIS."""
+    try:
+        from qgis.PyQt.QtCore import QMetaType
+        return QgsField(name, {"s": QMetaType.Type.QString, "d": QMetaType.Type.Double}[kind])
+    except Exception:
+        return QgsField(name, {"s": QVariant.String, "d": QVariant.Double}[kind])
+
+
 def _write(layer, path):
     opts = QgsVectorFileWriter.SaveVectorOptions()
     opts.driverName = "GPKG"
@@ -101,11 +110,11 @@ def _nid_gpkg(folder, with_lonlat=False):
     """A real GeoPackage like the pack's hydro/NID_dams.gpkg (point geometry; the
     LATITUDE / LONGITUDE columns only when asked, so the geometry blob is read)."""
     lyr = QgsVectorLayer("Point?crs=EPSG:4326", "NID_dams", "memory")
-    fields = [QgsField("NIDID", QVariant.String)] + [
-        QgsField(n, QVariant.Double) for n in
+    fields = [_field("NIDID", "s")] + [
+        _field(n, "d") for n in
         ("NID_HEIGHT", "DAM_HEIGHT", "MAX_STORAGE", "NID_STORAGE", "NORMAL_STORAGE")]
     if with_lonlat:
-        fields += [QgsField("LONGITUDE", QVariant.Double), QgsField("LATITUDE", QVariant.Double)]
+        fields += [_field("LONGITUDE", "d"), _field("LATITUDE", "d")]
     lyr.dataProvider().addAttributes(fields)
     lyr.updateFields()
     feats = []

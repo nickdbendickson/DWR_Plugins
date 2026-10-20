@@ -26,8 +26,8 @@ qgis_core = pytest.importorskip("qgis.core")
 from qgis.PyQt.QtCore import QSettings  # noqa: E402
 from qgis.PyQt.QtWidgets import QWizard  # noqa: E402
 
-for _fmt in (QSettings.NativeFormat, QSettings.IniFormat):   # settings in _CFG only
-    QSettings.setPath(_fmt, QSettings.UserScope, _CFG)
+for _fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):   # settings in _CFG only
+    QSettings.setPath(_fmt, QSettings.Scope.UserScope, _CFG)
 
 _app = qgis_core.QgsApplication.instance() or qgis_core.QgsApplication([], True)
 
@@ -80,12 +80,12 @@ def wiz(tmp_path):
 
 
 def _continue_enabled(w):
-    return w.button(QWizard.FinishButton).isEnabled()
+    return w.button(QWizard.WizardButton.FinishButton).isEnabled()
 
 
 def test_folder_page_next_follows_the_scan(wiz):
     _next_enabled = _continue_enabled                 # one page: Continue… is the Finish button
-    assert wiz.buttonText(QWizard.FinishButton) == "Continue\u2026"
+    assert wiz.buttonText(QWizard.WizardButton.FinishButton) == "Continue\u2026"
     page = wiz.page(P.FOLDER_PAGE)
     assert not page.isComplete() and not _next_enabled(wiz)
     assert page.reason.isVisibleTo(page) and "Pick the suite data folder" in page.reason.text()

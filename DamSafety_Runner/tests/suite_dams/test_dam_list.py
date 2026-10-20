@@ -23,8 +23,8 @@ os.environ.pop("NDSUITE_SETTINGS", None)
 qgis_core = pytest.importorskip("qgis.core")
 from qgis.PyQt.QtCore import QSettings  # noqa: E402
 
-for _fmt in (QSettings.NativeFormat, QSettings.IniFormat):
-    QSettings.setPath(_fmt, QSettings.UserScope, _CFG)
+for _fmt in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+    QSettings.setPath(_fmt, QSettings.Scope.UserScope, _CFG)
 
 _app = qgis_core.QgsApplication.instance() or qgis_core.QgsApplication([], True)
 
