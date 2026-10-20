@@ -70,7 +70,7 @@ assert "border:none" in dlg.lis_chip.styleSheet() and type(dlg.lis_chip).__name_
 _cb = dlg.close_btn.mapTo(dlg, dlg.close_btn.rect().topLeft())
 _lg = dlg.log_section.header.mapTo(dlg, dlg.log_section.header.rect().topLeft())
 assert _cb.y() > _lg.y() and _cb.x() + dlg.close_btn.width() > dlg.width() - 40, (_cb, _lg)
-assert dlg.lis_chip.text().split()[0] == "LISFLOOD-FP" and dlg.anuga_chip.text().split()[0] == "ANUGA"
+assert dlg.lis_chip.text().split()[-1] == "LISFLOOD-FP" and dlg.anuga_chip.text().split()[-1] == "ANUGA"
 assert not dlg.adv_section.is_expanded() and not dlg.adv_section.inner().isVisible()
 assert not dlg.log_section.inner().isVisible()
 assert not hasattr(dlg, "adv_box") and not hasattr(dlg, "models_label")

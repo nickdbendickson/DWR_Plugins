@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-10-20
+- **New plugin: DamSafety Hazard Lite 0.1.0 (`DamSafety_HazardLite/`, provider `ndlite`).** One Processing tool, about 700 lines, separate from DamSafety Hazard. From the breach depth and velocity rasters it reports hmax / vmax at each 911-addressed structure (sampled over the FEMA outline the point is in, or the nearest one within 30 ft), at each overtopped road stretch (NG9-1-1 roads, NDDOT AADT from the same road) and at each inundated rail stretch (NARN, FRA trains/day). Then it gives the REG_05.2026 Section 5.2 class with section numbers. FEMA "Agriculture" out-buildings are excluded (5.2.1.1) unless the 911 point or occupancy marks a dwelling (a switch keeps them). It reads the offline pack. It also has a one-window form in the shared GUI grammar (Plugins menu; info banner, stage pills, CheckPanel, bold Classify, ▸ Log, ⚙ gear; checked by `tools/gui_lint.py`). Tests: `DamSafety_HazardLite/tests/test_core.py` (CI plugin-suites job). Absaraka: High, the same roads as Hazard 2.32.0. No change to the other plugins.
 - **#114 (merged 02:59Z, main b0c2ad5), tests/CI only:** de-flakes `test_hecras_engine.py::hecras_engine_write_project_hydrograph_inflow`, which compared two `.g01` files byte for byte while `geometry_text` stamps the wall clock into two lines (about 2.5 % of runs failed when the writes straddled a second). No plugin version change (Runner stays 3.10.32). Split out of the open #113.
 
 ## 2026-10-19

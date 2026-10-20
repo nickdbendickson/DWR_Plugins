@@ -14,7 +14,7 @@ import numpy as np
 from qgis.PyQt.QtGui import QColor
 
 from qgis.core import (
-    QgsProject, QgsMessageLog, QgsRectangle, QgsField, QgsFields,
+    QgsProject, QgsMessageLog, QgsRectangle, QgsFields,
     QgsVectorLayer, QgsVectorFileWriter, QgsColorRampShader, QgsRasterShader,
     QgsSingleBandPseudoColorRenderer, QgsUnitTypes, QgsWkbTypes, QgsGeometry,
     QgsMemoryProviderUtils,
@@ -25,7 +25,6 @@ from osgeo import gdal, ogr
 from .compat import (
     NULL, MSG_INFO, MSG_WARNING, MSG_CRITICAL, SHADER_DISCRETE, WRITER_NO_ERROR,
     GEOM_OP_SUCCESS, DIST_FEET, DIST_METERS, DIST_DEGREES, DIST_UNKNOWN,
-    FT_INT, FT_UINT, FT_LONGLONG, FT_ULONGLONG, FT_DOUBLE, FT_STRING, FT_INVALID,
     enum_value,
 )
 from .constants import (
@@ -540,22 +539,6 @@ def _operation_ok(res):
     return enum_value(res) == 0
 
 
-def coerce_geometry(geom, wkb_type):
-    """Coerce `geom` to `wkb_type` (e.g. MultiPoint -> Point) so memory and
-    GPKG layers accept it. Returns the original geometry if not possible."""
-    try:
-        if geom is None or geom.isNull() or geom.wkbType() == wkb_type:
-            return geom
-        res = geom.coerceToType(wkb_type)
-        if isinstance(res, (list, tuple)):
-            res = res[0] if res else None
-        if res is not None and not res.isNull():
-            return res
-    except Exception:
-        pass
-    return geom
-
-
 def transform_xy(xs, ys, xform):
     """Transform coordinate arrays point by point (NaN where it fails)."""
     xs = np.asarray(xs, dtype=np.float64)
@@ -601,99 +584,6 @@ def buffer_distance_in_layer_units(distance_ft, crs):
         return float(distance_ft)
 
 
-# ----------------------------------------------------------- field helpers --
-def sanitize_field_name(name):
-    n = "".join(c if (c.isalnum() or c == "_") else "_" for c in str(name))
-    return n if n else "fld"
-
-
-def prefixed_field(name, prefix):
-    return sanitize_field_name("{}_{}".format(prefix, name))
-
-
-def _type_key(t):
-    """Comparable key for a field type: QVariant.Type (Qt5) and
-    QMetaType.Type (QGIS >= 3.38 / Qt6) share the same numeric values for
-    all basic types, and PyQt6 enums are not ints."""
-    return enum_value(t)
-
-
-_NUMERIC_TYPES = {_type_key(t) for t in (FT_INT, FT_UINT, FT_LONGLONG, FT_ULONGLONG, FT_DOUBLE)}
-
-
-def make_field(name, qtype, sub_type=None):
-    """A clean QgsField (no length limit, no constraints) so values from
-    several sources never get rejected by the memory provider."""
-    if sub_type is not None and _type_key(sub_type) != _type_key(FT_INVALID):
-        try:
-            return QgsField(name, qtype, "", 0, 0, "", sub_type)
-        except TypeError:
-            pass        # type and sub type from different Qt enum families
-    try:
-        return QgsField(name, qtype)
-    except TypeError:
-        # a QVariant.Type from a source field on a build that wants
-        # QMetaType.Type (or the reverse): map by the shared numeric value
-        return QgsField(name, _FT_BY_KEY.get(_type_key(qtype), FT_STRING))
-
-
-_FT_BY_KEY = {_type_key(t): t for t in (FT_INT, FT_UINT, FT_LONGLONG, FT_ULONGLONG,
-                                        FT_DOUBLE, FT_STRING)}
-
-
-def _promote_type(a, b):
-    ka, kb = _type_key(a), _type_key(b)
-    if ka == kb:
-        return a
-    if ka in _NUMERIC_TYPES and kb in _NUMERIC_TYPES:
-        if _type_key(FT_DOUBLE) in (ka, kb):
-            return FT_DOUBLE
-        return FT_LONGLONG
-    return FT_STRING
-
-
-def _to_text(v):
-    if isinstance(v, str):
-        return v
-    for attr in ("isoformat",):
-        if hasattr(v, attr):
-            try:
-                return getattr(v, attr)()
-            except Exception:
-                pass
-    if hasattr(v, "toString"):
-        try:
-            return v.toString()
-        except Exception:
-            pass
-    return str(v)
-
-
-def _to_float(v):
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return NULL
-
-
-def _to_int(v):
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return NULL
-
-
-def _converter_for(qtype):
-    k = _type_key(qtype)
-    if k == _type_key(FT_STRING):
-        return _to_text
-    if k == _type_key(FT_DOUBLE):
-        return _to_float
-    if k in (_type_key(FT_LONGLONG), _type_key(FT_INT)):
-        return _to_int
-    return None
-
-
 def is_null(v):
     if v is None:
         return True
@@ -701,22 +591,6 @@ def is_null(v):
         return v == NULL
     except Exception:
         return False
-
-
-def copy_attributes_into(attrs, src_attrs, mapping):
-    """Copy values into an existing output attribute list using an index mapping
-    [(src_idx, dst_idx, converter)] - much faster than name lookups per value."""
-    for si, di, conv in mapping:
-        v = src_attrs[si]
-        if conv is not None and not is_null(v):
-            v = conv(v)
-        attrs[di] = v
-    return attrs
-
-
-def copy_attributes(src_attrs, mapping, n_out):
-    """New output attribute list (NULL-filled) populated from `src_attrs`."""
-    return copy_attributes_into([NULL] * n_out, src_attrs, mapping)
 
 
 def create_memory_layer(name, wkb_type, crs, fields):
