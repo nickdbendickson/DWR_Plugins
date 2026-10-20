@@ -11,7 +11,7 @@
     <symbols>
     <symbol type="marker" name="0" alpha="1" clip_to_extent="1" force_rhr="0">
       <layer class="SimpleMarker" enabled="1" locked="0" pass="0">
-        <prop k="color" v="244,67,54,255"/>
+        <prop k="color" v="239,152,151,255"/>
         <prop k="name" v="circle"/>
         <prop k="size" v="3"/>
         <prop k="size_unit" v="MM"/>
@@ -22,7 +22,7 @@
     </symbol>
     <symbol type="marker" name="1" alpha="1" clip_to_extent="1" force_rhr="0">
       <layer class="SimpleMarker" enabled="1" locked="0" pass="0">
-        <prop k="color" v="255,235,59,255"/>
+        <prop k="color" v="249,244,163,255"/>
         <prop k="name" v="circle"/>
         <prop k="size" v="3"/>
         <prop k="size_unit" v="MM"/>
@@ -33,7 +33,7 @@
     </symbol>
     <symbol type="marker" name="2" alpha="1" clip_to_extent="1" force_rhr="0">
       <layer class="SimpleMarker" enabled="1" locked="0" pass="0">
-        <prop k="color" v="76,175,80,255"/>
+        <prop k="color" v="196,224,173,255"/>
         <prop k="name" v="circle"/>
         <prop k="size" v="3"/>
         <prop k="size_unit" v="MM"/>

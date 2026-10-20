@@ -426,9 +426,9 @@ def apply_acer11_style(lyr):
             return False
         items = [
             QgsColorRampShader.ColorRampItem(CLASS_NODATA, QColor(0, 0, 0, 0), "No Data"),
-            QgsColorRampShader.ColorRampItem(CLASS_HIGH, QColor("#F44336"), "HIGH DANGER ZONE"),
-            QgsColorRampShader.ColorRampItem(CLASS_JUDGMENT, QColor("#FFEB3B"), "JUDGEMENT ZONE"),
-            QgsColorRampShader.ColorRampItem(CLASS_LOW, QColor("#4CAF50"), "LOW DANGER ZONE"),
+            QgsColorRampShader.ColorRampItem(CLASS_HIGH, QColor("#EF9897"), "HIGH DANGER ZONE"),
+            QgsColorRampShader.ColorRampItem(CLASS_JUDGMENT, QColor("#F9F4A3"), "JUDGMENT ZONE"),
+            QgsColorRampShader.ColorRampItem(CLASS_LOW, QColor("#C4E0AD"), "LOW DANGER ZONE"),
         ]
         ramp_shader = QgsColorRampShader()
         if SHADER_DISCRETE is not None:

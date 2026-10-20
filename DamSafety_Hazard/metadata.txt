@@ -5,10 +5,12 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.43
+version=2.18.46
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
+    2.18.46 - 2026-10-20 (REG_05.2026 zone colours)
+      * The ACER TM 11 danger zones use the colours of REG_05.2026 Figures 5.1 / 5.2: High #EF9897, Judgment #F9F4A3, Low #C4E0AD (were #F44336 / #FFEB3B / #4CAF50). Zone rasters (apply_acer11_style and styles/acer_zones.qml, now at full opacity: 0.75 lightened them), structure points by ACER zone (styles.COLORS, styles/acer_zone_points.qml) and the chart sign-off overlay, which now fills the low zone too (it was white). The zone raster legend says JUDGMENT ZONE (was JUDGEMENT). Breakpoints, classes and field values are unchanged. tests/test_zone_colors_reg05.py (also in tools/ci_checks.py) checks every copy.
     2.18.43 - 2026-10-20 (GUI grammar, part 2)
       * The settings window's legend is two lines: the notation (bold, [YOUR value]) and, quieter under it, the units footnote. tools/gui_lint.py also checks that action buttons carry no icon or ▶ and (on a 1080p display) that no page scrolls sideways. No default changes.
     2.18.42 - 2026-10-20 (GUI grammar, part 1)

@@ -829,10 +829,10 @@ def chart_svg(chart, structures=(), width=560, height=380, title=None):
            '<rect width="100%" height="100%" fill="#ffffff"/>',
            '<text x="{}" y="18" font-size="13" font-weight="bold">{}</text>'.format(
                ml, _esc(title or chart.title)),
-           '<rect x="{}" y="{}" width="{}" height="{}" fill="#e8f3e8" stroke="#555"/>'.format(
+           '<rect x="{}" y="{}" width="{}" height="{}" fill="#c4e0ad" stroke="#555"/>'.format(
                ml, mt, W, H),
-           '<polygon points="{}" fill="#fbe7b5" stroke="#b58400"/>'.format(poly(chart.judgment)),
-           '<polygon points="{}" fill="#f4b6b0" stroke="#a3271c"/>'.format(poly(chart.high))]
+           '<polygon points="{}" fill="#f9f4a3" stroke="#b58400"/>'.format(poly(chart.judgment)),
+           '<polygon points="{}" fill="#ef9897" stroke="#a3271c"/>'.format(poly(chart.high))]
     for i in range(6):
         v = chart.v_max_fts * i / 5.0
         d = chart.d_max_ft * i / 5.0
@@ -851,8 +851,8 @@ def chart_svg(chart, structures=(), width=560, height=380, title=None):
                    'stroke-width="0.6"><title>{}: {:.1f} ft, {:.1f} ft/s</title></circle>'.format(
                        sx(v), sy(d), "#000" if beyond else "#1f4e9c", _esc(s.id), d, v))
     lx = ml + W - 150
-    for i, (lab, col) in enumerate((("High danger", "#f4b6b0"), ("Judgment", "#fbe7b5"),
-                                    ("Low danger", "#e8f3e8"))):
+    for i, (lab, col) in enumerate((("High danger", "#ef9897"), ("Judgment", "#f9f4a3"),
+                                    ("Low danger", "#c4e0ad"))):
         out.append('<rect x="{}" y="{}" width="12" height="10" fill="{}" stroke="#555"/>'
                    '<text x="{}" y="{}">{}</text>'.format(lx, mt + 8 + 15 * i, col, lx + 16,
                                                          mt + 17 + 15 * i, lab))
