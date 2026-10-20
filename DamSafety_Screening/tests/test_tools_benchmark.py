@@ -43,19 +43,10 @@ assert bm.verdict({"fit_index_F": 0.85}).startswith("extents agree well")
 assert "noticeably" in bm.verdict({"fit_index_F": 0.7}) and "a lot" in bm.verdict({"fit_index_F": 0.3})
 
 # ---------------------------------------------------------------- 2. identical to the Runner's module
-runner = None
-for cand in ("/home/claude/suite", os.path.dirname(os.path.dirname(HERE))):
-    if os.path.exists(os.path.join(cand, "nd_breach_runner", "core", "benchmark.py")):
-        if cand not in sys.path:
-            sys.path.insert(0, cand)
-        try:
-            from nd_breach_runner.core import benchmark as runner  # noqa: E402
-        except Exception as e:  # noqa: BLE001
-            print("Runner import failed:", e)
-        break
-if runner is None:
-    print("SKIP: the ND Dam Breach Runner is not on this machine; equality with its benchmark not checked")
-else:
+sys.path.insert(0, HERE)
+import _runner  # noqa: E402  (audit F-02: the Runner in this repository, a FAIL in CI when missing)
+runner = _runner.import_core("benchmark")
+if runner is not None:
     for thr in (0.5, 1.0, 2.0):
         for o, r in ((ours, ref), ({"depth": depth_a}, {"depth": depth_b}),
                      ({"depth": depth_a, "wse": depth_a + 100}, {"depth": depth_b, "wse": depth_b + 100.5})):
