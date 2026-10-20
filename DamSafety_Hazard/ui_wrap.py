@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Hazard 2.18.42 (#108): widgets that wrap instead of widening the Classify view.
+"""Hazard 2.18.44 (#108): widgets that wrap instead of widening the Classify view.
 
 A QCheckBox never wraps its text, so a long one sets the minimum width of the whole scrolled
 page (one 1 250 px lifeline checkbox made the Classify tab 1 530 px wide and pushed the
@@ -120,8 +120,28 @@ class WrapCheckBox(QCheckBox):
             fopt.rect = self.fontMetrics().boundingRect(rect, _flags(), text).adjusted(-1, 0, 1, 1)
             p.drawPrimitive(_enum(QStyle, "PrimitiveElement", "PE_FrameFocusRect"), fopt)
 
+    def _wrapped_hit_rect(self):
+        """The indicator and the painted text block of a wrapped box (paintEvent's geometry)."""
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        one = self._one_line()
+        opt.text = ""
+        opt.rect = QRect(0, 0, self.width(), one.height())
+        indicator = self.style().subElementRect(
+            _enum(QStyle, "SubElement", "SE_CheckBoxIndicator"), opt, self)
+        left = self.style().subElementRect(
+            _enum(QStyle, "SubElement", "SE_CheckBoxContents"), opt, self).left()
+        top = max(0, (one.height() - self.fontMetrics().height()) // 2)
+        area = QRect(left, top, max(1, self.width() - left), self.height() - top)
+        text = self.fontMetrics().boundingRect(area, _flags(), self.text())
+        return indicator.united(text).adjusted(0, 0, 2, 2)
+
     def hitButton(self, pos):
-        return self.rect().contains(pos)
+        """Unwrapped: QCheckBox's own click area (the box and its text, not the empty space
+        beside them). Wrapped: the box and the whole wrapped text block."""
+        if not self._wrapped():
+            return super().hitButton(pos)
+        return self._wrapped_hit_rect().contains(pos)
 
 
 def narrow_combos(root, max_px=300, chars=28, always=()):

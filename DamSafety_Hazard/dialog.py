@@ -147,7 +147,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self._build_readme_dialog()
         wrap_tabs(self.tab_widget)                # after every widget is in place
         self.classify_scroll = self.tab_widget.widget(self._view_index("Classify"))
-        # 2.18.42 (#108): long combo boxes and layer lists shrink with the window instead of
+        # 2.18.44 (#108): long combo boxes and layer lists shrink with the window instead of
         # widening the page (the check boxes wrap: ui_wrap.WrapCheckBox)
         narrow_combos(self.classify_scroll.widget(), always=[
             getattr(self, n, None) for n in (

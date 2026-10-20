@@ -1,6 +1,6 @@
-"""Hazard 2.18.42 (#108): the Classify view never scrolls sideways.
+"""Hazard 2.18.44 (#108): the Classify view never scrolls sideways.
 
-Until 2.18.41 the long one-line check boxes (the lifeline-facilities one is 1 250 px) set the
+Until 2.18.43 the long one-line check boxes (the lifeline-facilities one is 1 250 px) set the
 minimum width of the whole scrolled Classify page: with its sections open the page was
 1 530 px wide, so in a 1280 x 800 or 1024 x 640 window the Browse…, Zip…, Import, Read plan
 and 'Use this plan for the classification' buttons sat past the right edge. Built in a real
@@ -146,7 +146,8 @@ def test_wrap_check_box_wraps_and_toggles():
     _pump()
     assert not cb.isChecked()
     # a click on the wrapped text (last line, right part) toggles it, as on a QCheckBox label
-    QTest.mouseClick(cb, Qt.LeftButton, Qt.NoModifier, QPoint(180, cb.height() - 4))
+    QTest.mouseClick(cb, getattr(Qt, "MouseButton", Qt).LeftButton,          # Qt6: scoped enums
+                     getattr(Qt, "KeyboardModifier", Qt).NoModifier, QPoint(180, cb.height() - 4))
     assert cb.isChecked()
     cb.setText("short")
     assert cb.heightForWidth(220) == QCheckBox("short").sizeHint().height()
@@ -154,6 +155,46 @@ def test_wrap_check_box_wraps_and_toggles():
     cb.deleteLater()
     _pump()
 
+
+
+def test_wrap_check_box_click_area_matches_a_plain_check_box():
+    """2.18.44: beside an unwrapped box's text (a box stretched across a row) a click does
+    nothing, as on a QCheckBox; the box and its text toggle it. Wrapped: the click area is the
+    box and the whole wrapped text block, every line of it."""
+    from qgis.PyQt.QtWidgets import QVBoxLayout
+    from DamSafety_Hazard.ui_wrap import WrapCheckBox
+    left = getattr(Qt, "MouseButton", Qt).LeftButton
+    none = getattr(Qt, "KeyboardModifier", Qt).NoModifier
+    host = QWidget()
+    lay = QVBoxLayout(host)
+    wrap, plain = WrapCheckBox("Short box"), QCheckBox("Short box")
+    lay.addWidget(wrap)
+    lay.addWidget(plain)
+    host.resize(600, 120)
+    host.show()
+    _pump()
+    assert wrap.width() > wrap.sizeHint().width() + 100          # stretched across the row
+    for cb in (wrap, plain):
+        mid = cb.height() // 2
+        QTest.mouseClick(cb, left, none, QPoint(cb.width() - 5, mid))      # empty space
+        assert not cb.isChecked(), type(cb).__name__
+        QTest.mouseClick(cb, left, none, QPoint(cb.sizeHint().width() - 8, mid))   # its text
+        assert cb.isChecked(), type(cb).__name__
+    # wrapped: a click on the last line of the text toggles it
+    long_text = ("Lifeline facilities - hospitals, care homes, schools, fire / EMS / police, "
+                 "utilities (ND GIS Hub, EIA, OpenStreetMap) (internet) x")
+    lw = WrapCheckBox(long_text)
+    lay.addWidget(lw)
+    host.resize(260, 400)
+    _pump()
+    assert lw.width() < lw.sizeHint().width()                    # wrapped
+    hit = lw._wrapped_hit_rect()
+    assert hit.height() > lw.sizeHint().height()                 # covers every line
+    QTest.mouseClick(lw, left, none, QPoint(hit.left() + 30, hit.bottom() - 3))   # text
+    assert lw.isChecked()
+    host.hide()
+    host.deleteLater()
+    _pump()
 
 if __name__ == "__main__":
     n = 0
