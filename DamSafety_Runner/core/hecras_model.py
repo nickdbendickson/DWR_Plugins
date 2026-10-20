@@ -1345,7 +1345,8 @@ def _warp(path, srs, cell, bounds=None, alg="bilinear", src_nodata=None):
         kw["outputBounds"] = bounds
     if src_nodata is not None:
         kw["srcNodata"] = src_nodata
-    out = GS.checked(gdal.Warp("", path, options=gdal.WarpOptions(**kw)),
+    from .warp_opts import no_overviews          # 3.10.43: no source overviews
+    out = GS.checked(gdal.Warp("", path, options=gdal.WarpOptions(**no_overviews(gdal, kw))),
                      "reprojecting {}".format(path))
     a = out.GetRasterBand(1).ReadAsArray().astype(np.float64)
     a[a == -9999.0] = np.nan
@@ -3656,7 +3657,8 @@ def write_terrain(dem_path, path, srs, cell, bounds, factor, src_nodata, zunit, 
               outputType=gdal.GDT_Float32)
     if src_nodata is not None:
         kw["srcNodata"] = src_nodata
-    vrt = GS.checked(gdal.Warp("", dem_path, options=gdal.WarpOptions(**kw)),
+    from .warp_opts import no_overviews          # 3.10.43: the terrain from the full-res DEM
+    vrt = GS.checked(gdal.Warp("", dem_path, options=gdal.WarpOptions(**no_overviews(gdal, kw))),
                      "reprojecting the DEM {}".format(dem_path))
     nx, ny = vrt.RasterXSize, vrt.RasterYSize
     ds = GS.checked(drv.Create(path, nx, ny, 1, gdal.GDT_Float32,
