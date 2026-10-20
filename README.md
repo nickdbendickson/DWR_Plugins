@@ -13,6 +13,9 @@ Roles: the Nightly Audit Engineer makes one small fix per area each night. SWE b
 
 The top-level `nd_breach_runner/` and `nd_dam_screening/` folders are **kept**. They are test-only import aliases for DamSafety_Runner and DamSafety_Screening, because the tests import the plugins by their installed names.
 
+## DamSafety_HazardLite (experimental)
+`DamSafety_HazardLite/` is a small, separate hazard tool (provider `ndlite`, one Processing algorithm). From the breach depth and velocity rasters it gives hmax / vmax at 911-addressed structures, roads and railroads, and the REG_05.2026 Section 5.2 class. See `DamSafety_HazardLite/README.md`.
+
 ## DamSafety_PMP (internal, experimental)
 `DamSafety_PMP/` is the QGIS port of AWA's ND PMP Evaluation Tool (v0.3.0, provider `ndpmp`). **It's internal only, not validated against ArcGIS, and not for redistribution without written permission from the ND State Water Commission and AWA.** The AWA data isn't in the repo. See `DamSafety_PMP/README.md` for where to download it and for the hydrograph CSV order (`time_hr, flow_cfs, ...`) that the Runner reads.
 

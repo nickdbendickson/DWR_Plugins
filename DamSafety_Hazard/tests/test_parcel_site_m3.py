@@ -230,11 +230,28 @@ def test_review_reason_outbuilding():
     assert RV.REASON_LONE_ADDRESS in RV.review_reasons(rec_lone)
 
 
+def test_lone_911_address_point_stays_habitable_and_listed():
+    """2.18.41 (audit H1): a 911 address point with no building outline nearby and no
+    NSI record (lone_address) stays habitable by the ND site address rule
+    (conservative: a new rural house is often in neither FEMA USA Structures nor the
+    NSI). The missing building is only noted and listed for the engineer's review."""
+    src = dict(_addr911_src(), place_type="PARKING", place_kind=ST._PT_NONHAB)
+    rec = {"id": 9, "footprint": False, "area_ft2": None, "families": {"NDGISHUB"},
+           "notes": [], "sources": [src], "lone_address": True}
+    ST._interpret(rec)
+    assert rec["category"] in (ST.CAT_DWELLING, ST.CAT_OCCUPIED), rec["category"]
+    assert rec["habitable"] == "Yes", rec["habitable"]
+    assert "no building outline" in (rec.get("site_note") or ""), rec.get("site_note")
+    wet = dict(rec, outcome="Probable loss of life")
+    assert RV.REASON_LONE_ADDRESS in RV.review_reasons(wet), RV.review_reasons(wet)
+
+
 def main():
     tests = [test_farmstead_is_one_dwelling_not_three,
              test_nsi_res_without_911_anchor_stays_a_dwelling,
              test_osm_house_parcel_sibling_stays_a_dwelling,
-             test_review_reason_outbuilding]
+             test_review_reason_outbuilding,
+             test_lone_911_address_point_stays_habitable_and_listed]
     failed = 0
     print("QGIS: {}".format(MODE))
     for fn in tests:

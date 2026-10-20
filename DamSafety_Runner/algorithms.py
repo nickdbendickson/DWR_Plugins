@@ -2354,7 +2354,8 @@ class CheckAlgorithm(_Base):
         with tempfile.TemporaryDirectory(prefix="ndbreach_check_") as tmp:
             if not exe:
                 lines.append("PROBLEM LISFLOOD-FP not found. Build it with "
-                             "scripts/build_lisflood_linux.sh on Linux, or scripts/build_lisflood_macos.sh on macOS on macOS, or build with CMake on Linux and set its path in Processing > "
+                             "scripts/build_lisflood_linux.sh on Linux or scripts/build_lisflood_macos.sh on macOS (both "
+                             "apply the arrival-depth patch, scripts/patch_lisflood.py) and set its path in Processing > "
                              "Options > Providers > ND Dam Breach Runner.")
             else:
                 r = check_lisflood(exe, os.path.join(tmp, "lisflood"))

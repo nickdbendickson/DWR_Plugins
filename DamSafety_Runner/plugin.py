@@ -29,6 +29,13 @@ def version_messages(versions=None):
         return [("info", "Suite version check skipped: {}".format(e))]
 
 
+
+def _plugin_icon():
+    """The plugin's icon.svg for its menu entry (every DamSafety plugin has one)."""
+    import os
+    from qgis.PyQt.QtGui import QIcon
+    return QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.svg"))
+
 class NDBreachRunnerPlugin:
     def __init__(self, iface):
         self.iface = iface
@@ -58,7 +65,7 @@ class NDBreachRunnerPlugin:
             from qgis.PyQt.QtWidgets import QAction
         except ImportError:  # Qt6 moved QAction
             from qgis.PyQt.QtGui import QAction
-        self.action = QAction("Run a dam\u2026", self.iface.mainWindow())
+        self.action = QAction(_plugin_icon(), "Run a dam\u2026", self.iface.mainWindow())
         self.action.setObjectName("NDBreachRunnerAction")
         self.action.triggered.connect(self.run_plugin)
         self.iface.addPluginToMenu(MENU, self.action)

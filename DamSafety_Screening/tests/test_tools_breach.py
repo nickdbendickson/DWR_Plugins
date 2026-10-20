@@ -2,8 +2,8 @@
 1984, NRCS TR-60) and user-specified breach parameters in tool 5.
 
 The numeric functions are compared with the Runner's own module when the Runner is on the
-machine (/home/claude/suite/nd_breach_runner or next to this plugin); otherwise that part is
-skipped with a message. The tool itself runs against the QGIS test doubles in tests/qgis_mock.
+machine (tests/_runner.py: DamSafety_Runner in this repository, /home/claude/suite); otherwise
+that part is skipped with a message - and FAILS in CI. The tool itself runs against the QGIS test doubles in tests/qgis_mock.
 """
 import os, sys, tempfile, shutil
 import numpy as np
@@ -21,19 +21,11 @@ from nd_dam_screening.algorithms.sensitivity import VARIANTS  # noqa: E402
 D, S = "double", "string"
 
 # ---------------------------------------------------------------- 1. same numbers as the Runner
-runner = None
-for cand in ("/home/claude/suite", os.path.dirname(os.path.dirname(HERE))):
-    if os.path.exists(os.path.join(cand, "nd_breach_runner", "core", "breach.py")):
-        if cand not in sys.path:
-            sys.path.insert(0, cand)
-        try:
-            from nd_breach_runner.core import breach as runner  # noqa: E402
-        except Exception as e:  # noqa: BLE001
-            print("Runner import failed:", e)
-        break
-if runner is None:
-    print("SKIP: the ND Dam Breach Runner is not on this machine; equality with its functions not checked")
-else:
+sys.path.insert(0, HERE)
+import _runner  # noqa: E402  (audit F-02: the Runner in this repository, a FAIL in CI when missing)
+runner = _runner.import_core("breach")
+if runner is not None:
+    print("Runner breach equations from", os.path.dirname(os.path.dirname(runner.__file__)))
     for vw, hw, a in ((1.0e6, 10.0, 500.0), (2.5e5, 4.0, 120.0), (3.0e7, 25.0, 2000.0)):
         assert bh.mlm_1984(vw, hw, a) == runner.mlm_1984(vw, hw, a)
     for h, c, u, d in ((25.0, 12.0, 3.0, 3.0), (8.0, 10.0, 2.5, 2.0)):
