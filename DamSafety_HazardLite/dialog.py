@@ -8,7 +8,7 @@ the work is one tool. The Processing algorithm (plugin.py) stays, so the tool al
 import os
 import traceback
 
-from qgis.PyQt.QtCore import Qt
+
 from qgis.PyQt.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                                  QLineEdit, QPushButton, QCheckBox, QFileDialog, QWidget,
                                  QPlainTextEdit, QToolButton, QMenu, QMessageBox)
@@ -17,6 +17,11 @@ from .ui_fit import fit_window
 from .ui_widgets import InfoBanner, CheckPanel, Collapsible, StageStrip, ERROR, OK
 from .tokens import TOKENS as T
 from . import core
+
+def _enum(cls, scope, name):
+    """cls.<name> on Qt5, cls.<scope>.<name> on Qt6 (the flags are scoped there)."""
+    return getattr(getattr(cls, scope, cls), name, None) or getattr(cls, name)
+
 
 DISCLAIMER = ("Screening result under ND Dam Safety Standards REG_05.2026 Section 5.2. "
               "The engineer of record classifies the dam. hmax / vmax are read from the "
@@ -77,7 +82,7 @@ class HazardLiteDialog(QDialog):
         bar = QHBoxLayout()
         self.gear = QToolButton()
         self.gear.setText("⚙")
-        self.gear.setPopupMode(QToolButton.InstantPopup)
+        self.gear.setPopupMode(_enum(QToolButton, "ToolButtonPopupMode", "InstantPopup"))
         menu = QMenu(self.gear)
         menu.addAction("About Hazard Lite…", self._about)
         self.gear.setMenu(menu)
