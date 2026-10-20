@@ -244,16 +244,27 @@ def interpreters(options=None, env=None):
     return out
 
 
-def _mesh_subprocess(spec, python, timeout_s):
+# 3.10.40: the gmsh subprocess is stopped like the ANUGA mesher (anuga_model.py): SIGTERM to its
+# process group, this many seconds to exit, then SIGKILL (core/wallclock.stop_group)
+KILL_GRACE_S = 5.0
+
+
+def _mesh_subprocess(spec, python, timeout_s, run=None):
+    """gmsh in another Python (this file as a script). 3.10.40: the timeout is on the wall
+    clock (core/wallclock.py: elapsed = max(wall, monotonic), so a paused / resumed VM counts
+    and a clock step back cannot stretch it), and on expiry the process group gets SIGTERM,
+    KILL_GRACE_S, then SIGKILL - before, subprocess.run(timeout=) ran on the monotonic clock
+    only and killed the interpreter alone (a gmsh child could stay). `run` is for the tests."""
+    from . import wallclock
+    run = run or wallclock.run
     with tempfile.TemporaryDirectory(prefix="hecras_seeds_") as td:
         sp, op = os.path.join(td, "seeds_in.json"), os.path.join(td, "seeds_out.npz")
         with open(sp, "w", encoding="utf-8") as fh:
             json.dump(spec, fh)
         try:
-            out = subprocess.run([python, os.path.abspath(__file__), sp, op], capture_output=True,
-                                 text=True, env=_clean_env(), timeout=float(timeout_s),
-                                 errors="replace")
-        except subprocess.TimeoutExpired:
+            out = run([python, os.path.abspath(__file__), sp, op], env=_clean_env(),
+                      timeout=float(timeout_s), grace=KILL_GRACE_S, what="gmsh points")
+        except subprocess.TimeoutExpired:          # wallclock.Timeout is one
             raise SeedError("gmsh took over {:.0f} s (timeout)".format(timeout_s))
         except Exception as e:                         # noqa: BLE001
             raise SeedError("{} could not start ({})".format(python, e))
