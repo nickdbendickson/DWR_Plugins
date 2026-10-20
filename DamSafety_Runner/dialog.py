@@ -936,7 +936,8 @@ class NDBreachRunnerDialog(QDialog):
             m = wizard._find_models()
             self.lis_chip.set_state(bool(m.get("lisflood")), hint=MODEL_HINT)
             self.anuga_chip.set_state(bool(m.get("anuga")), "" if m.get("anuga") else
-                                      "only the ANUGA tier needs it", hint=MODEL_HINT)
+                                      "only the ANUGA tier needs it", hint=MODEL_HINT,
+                                      optional=True)
         except Exception:                                        # noqa
             self.lis_chip.set_state(None, hint=MODEL_HINT)
             self.anuga_chip.set_state(None, hint=MODEL_HINT)
