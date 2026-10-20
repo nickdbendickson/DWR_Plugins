@@ -14,6 +14,7 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.core import QgsProject, QgsRasterLayer
 
+from .ui_wrap import WrapCheckBox
 from .compat import MSG_CRITICAL, MB_YES
 from .constants import (
     DEFAULT_EXTENT_BUFFER_FT, ND_ADDRESS_POINTS_URL, NID_URL,
@@ -71,7 +72,7 @@ class DataTabMixin(object):
             "Study area = the Depth raster's extent grown by this distance. Structures and "
             "all downloads outside it are left out; features inside it are kept.")
         form.addRow("Study area: raster extent +", self.extent_spin)
-        self.keep_dry_check = QCheckBox(
+        self.keep_dry_check = WrapCheckBox(
             "Keep features inside the study area that have no flood values")
         self.keep_dry_check.setChecked(True)
         self.keep_dry_check.setToolTip(
@@ -79,7 +80,7 @@ class DataTabMixin(object):
             "velocity / arrival where the rasters have no data.\nUnchecked: only structures "
             "with at least one raster value are written.")
         form.addRow("", self.keep_dry_check)
-        self.spreadsheets_check = QCheckBox(
+        self.spreadsheets_check = WrapCheckBox(
             "Also write CSV / XLSX copies of the result layers (GPKG is always written)")
         self.spreadsheets_check.setChecked(True)
         form.addRow("", self.spreadsheets_check)
@@ -105,7 +106,7 @@ class DataTabMixin(object):
         self.flood_buffer_spin.setToolTip("Distance around the wet cells (flooded-area "
                                           "choice only).")
         aform.addRow("Flood buffer:", self.flood_buffer_spin)
-        self.data_save_check = QCheckBox(
+        self.data_save_check = WrapCheckBox(
             "Run everything saves the data sets to outputs/{} first".format(SUBDIR_DATA))
         self.data_save_check.setChecked(True)
         aform.addRow("", self.data_save_check)
@@ -119,11 +120,11 @@ class DataTabMixin(object):
         # 3. structures
         sgrp = QGroupBox("3. Structures")
         sform = QFormLayout()
-        self.nsi_download_check = QCheckBox("USACE National Structure Inventory (NSI) points "
+        self.nsi_download_check = WrapCheckBox("USACE National Structure Inventory (NSI) points "
                                             "(internet)")
         self.nsi_download_check.setChecked(True)
         sform.addRow("", self.nsi_download_check)
-        self.addr_download_check = QCheckBox(
+        self.addr_download_check = WrapCheckBox(
             "ND GIS Hub site / structure address points when no ND GIS Hub layer is loaded "
             "(internet) - every addressed structure is habitable")
         self.addr_download_check.setChecked(True)
@@ -131,7 +132,7 @@ class DataTabMixin(object):
             "NDGISHUB SiteStructure Address Points (NENA NG9-1-1), from\n" +
             ND_ADDRESS_POINTS_URL)
         sform.addRow("", self.addr_download_check)
-        self.usa_download_check = QCheckBox(
+        self.usa_download_check = WrapCheckBox(
             "FEMA USA Structures outlines - saved as <Dam>_FEMA_Structures.gpkg when that "
             "file is missing (internet)")
         self.usa_download_check.setChecked(True)
@@ -140,7 +141,7 @@ class DataTabMixin(object):
             "folder (FEMA USA Structures for ND). When that file is missing, the study area's "
             "outlines are downloaded once and saved as <Dam>_FEMA_Structures.gpkg.")
         sform.addRow("", self.usa_download_check)
-        self.camps_download_check = QCheckBox(
+        self.camps_download_check = WrapCheckBox(
             "Campgrounds and RV parks - overnight recreation (OpenStreetMap) (internet)")
         self.camps_download_check.setChecked(True)
         self.camps_download_check.setToolTip(
@@ -164,7 +165,7 @@ class DataTabMixin(object):
         rform.addRow("AADT layer (optional):", self.aadt_combo)
         rform.addRow("Rail lines:", self.rail_combo)
         rform.addRow("Rail crossings (trains/day):", self.crossing_combo)
-        self.crossings_download_check = QCheckBox(
+        self.crossings_download_check = WrapCheckBox(
             "Bridges, culverts, low-water crossings and rail bridges (National Bridge "
             "Inventory, OpenStreetMap) (internet)")
         self.crossings_download_check.setChecked(True)
@@ -175,7 +176,7 @@ class DataTabMixin(object):
         # 5. dams, lifelines, other layers
         fgrp = QGroupBox("5. Dams, lifeline facilities and other layers")
         fform = QFormLayout()
-        self.dams_download_check = QCheckBox(
+        self.dams_download_check = WrapCheckBox(
             "National Inventory of Dams - other dams in the flood (dams in series, 5.3(c)) "
             "(internet)")
         self.dams_download_check.setChecked(True)
@@ -189,7 +190,7 @@ class DataTabMixin(object):
         self.subject_nid_edit.setToolTip("This dam is left out of the dams-in-series list. "
                                          "Without it, a dam with the same name is left out.")
         fform.addRow("This dam's NID ID:", self.subject_nid_edit)
-        self.lifelines_download_check = QCheckBox(
+        self.lifelines_download_check = WrapCheckBox(
             "Lifeline facilities - hospitals, care homes, schools, fire / EMS / police, "
             "utilities (ND GIS Hub, EIA, OpenStreetMap) (internet). HIFLD: download it from "
             "hsdl.org/hifld and search its folder (Data folder, above)")
@@ -224,7 +225,7 @@ class DataTabMixin(object):
             "one, USGS NHD flowlines are downloaded and traced downstream from the dam's NID "
             "point (or the first cell the flood reaches).")
         cform.addRow("Channel centerline:", self.centerline_combo)
-        self.flowlines_download_check = QCheckBox(
+        self.flowlines_download_check = WrapCheckBox(
             "USGS NHD flowlines and OpenStreetMap towns (internet)")
         self.flowlines_download_check.setChecked(True)
         cform.addRow("", self.flowlines_download_check)
@@ -256,7 +257,7 @@ class DataTabMixin(object):
         w7.setLayout(row7)
         row7.setContentsMargins(0, 0, 0, 0)
         oform.addRow("Pack:", w7)
-        self.offline_only_check = QCheckBox(
+        self.offline_only_check = WrapCheckBox(
             "Offline only - never contact the internet (the pack, project layers and "
             "earlier downloads only)")
         self.offline_only_check.setToolTip(
