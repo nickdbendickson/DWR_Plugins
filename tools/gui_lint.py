@@ -4,6 +4,9 @@ against docs/gui-grammar.md. Every rule here is a bug the 2026-10-20 consistency
 so it cannot come back.
 
     QT_QPA_PLATFORM=offscreen <QGIS python> tools/gui_lint.py [shots_dir]
+    xvfb-run -s "-screen 0 1920x1080x24" env QT_QPA_PLATFORM=xcb <QGIS python> tools/gui_lint.py
+
+The sideways-scroll rule needs a 1080p screen, so it runs only under the second form.
 
 Exit 1 on any failure (one FAIL line each). With a folder argument it also saves a screenshot
 of every window. Opens no Processing dialog and runs nothing. The QGIS-free half of the rules
@@ -115,6 +118,20 @@ def rule_ellipsis(label, win):
             sorted(bad)))
 
 
+def rule_buttons(label, win):
+    """Action buttons: no icon, no ▶ prefix (docs/gui-grammar.md, Primary action and Buttons)."""
+    from qgis.PyQt.QtWidgets import QPushButton
+    bad = set()
+    for b in win.findChildren(QPushButton):
+        t = text_of(b).replace("&", "").strip()
+        if not b.icon().isNull() and t:
+            bad.add("{} (icon)".format(t))
+        if t.startswith("\u25b6"):
+            bad.add("{} (\u25b6 prefix)".format(t))
+    if bad:
+        fail(label, "action buttons carry no icon or \u25b6: {}".format(sorted(bad)))
+
+
 def rule_close(label, win):
     btns = [b for b in win.findChildren(QAbstractButton)
             if text_of(b).replace("&", "").strip() == "Close" and b.isVisibleTo(win)]
@@ -142,6 +159,27 @@ def rule_tables(label, win):
                     _table_fits(label, win, t)
 
 
+def rule_no_sideways(label, win):
+    """A scrolling page scrolls down, never sideways (its right-hand buttons would hide)."""
+    from qgis.PyQt.QtWidgets import QApplication, QScrollArea, QTabWidget
+    if QApplication.primaryScreen().availableGeometry().width() < 1280:
+        return          # Qt5 offscreen is 800x600; run under a 1080p display (xvfb) to check this
+    bad = set()
+    for tabs in win.findChildren(QTabWidget):
+        if not tabs.isVisible() or tabs.window() is not win:
+            continue    # a child window's tabs (settings), checked with that window
+        for i in range(tabs.count()):
+            tabs.setCurrentIndex(i)
+            pump(2)
+            for sa in [tabs.widget(i)]:
+                if isinstance(sa, QScrollArea) and sa.widget() is not None and \
+                        sa.widget().width() > sa.viewport().width() + 2:
+                    bad.add("{} ({} px in {})".format(tabs.tabText(i), sa.widget().width(),
+                                                       sa.viewport().width()))
+    if bad:
+        fail(label, "pages scroll sideways: {}".format(sorted(bad)))
+
+
 def _table_fits(label, win, t):
     from qgis.PyQt.QtWidgets import QTableWidget
     for t in [t]:
@@ -166,7 +204,8 @@ def check(label, win, top=True, close=True):
     win.resize(max(win.width(), 980), max(win.height(), 680))
     win.show()
     pump()
-    for rule in (rule_tab_amp, rule_fits, rule_colours, rule_ellipsis, rule_tables):
+    for rule in (rule_tab_amp, rule_fits, rule_colours, rule_ellipsis, rule_buttons,
+                 rule_tables, rule_no_sideways):
         try:
             rule(label, win)
         except Exception:                                        # noqa

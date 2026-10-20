@@ -112,17 +112,13 @@ class NDBreachRunnerDialog(QDialog):
     def _build(self):
         lay = QVBoxLayout()
         lay.setSpacing(6)
-        head = QHBoxLayout()
-        title = QLabel("DamSafety Runner {}".format(plugin_version()).strip())
-        title.setStyleSheet("font-size:15px; font-weight:bold;")
-        head.addWidget(title)
-        head.addStretch(1)
-        self.gear = QToolButton()
+        # no in-window title: the window title names the tool (docs/gui-grammar.md)
+        self.gear = QToolButton()                 # on the tab bar, as in Hazard and Screening
         self.gear.setText("⚙")
+        self.gear.setAutoRaise(True)
+        self.gear.setStyleSheet("QToolButton {font-size: 18px; padding: 0 8px 2px 8px;}")
         self.gear.setToolTip("Settings: the suite settings file the tools open with.")
         self.gear.clicked.connect(lambda _c=False: self._open_settings())
-        head.addWidget(self.gear)
-        lay.addLayout(head)
         lay.addWidget(InfoBanner(DISCLAIMER))
 
         self.strip = StageStrip([pl.STAGE_LABELS[k] for k in pl.STAGE_KEYS])
@@ -206,17 +202,9 @@ class NDBreachRunnerDialog(QDialog):
         self.hecras_crest.setChecked(True)                  # on by default
         self.hecras_crest.toggled.connect(self._changed)
 
+        # the action bar (added under the tabs): engine state on the left, the primary action at
+        # the bottom right in Qt's own look, bold (docs/gui-grammar.md)
         run_row = QHBoxLayout()
-        self.run_dam_btn = QPushButton("▶  Run this dam")
-        self.run_dam_btn.setDefault(True)
-        self.run_dam_btn.setMinimumHeight(34)
-        self.run_dam_btn.setMinimumWidth(180)
-        self.run_dam_btn.setStyleSheet("QPushButton {font-weight:bold; padding:4px 16px;}")
-        self.run_dam_btn.setToolTip(RUN_TIP_NO_DAM)
-        self.run_dam_btn.setEnabled(False)          # refresh() enables it once a dam is chosen
-        self.run_dam_btn.clicked.connect(lambda _c=False: self._open_tool("rundam"))
-        run_row.addWidget(self.run_dam_btn)
-        run_row.addSpacing(12)
         engines = QLabel("Engines:")
         engines.setStyleSheet("color:{};".format(TOKENS["muted"]))
         run_row.addWidget(engines)
@@ -225,7 +213,14 @@ class NDBreachRunnerDialog(QDialog):
         for chip in (self.lis_chip, self.anuga_chip):
             run_row.addWidget(chip)
         run_row.addStretch(1)
-        lay.addLayout(run_row)
+        self.run_dam_btn = QPushButton("Run this dam")
+        self.run_dam_btn.setDefault(True)
+        self.run_dam_btn.setMinimumHeight(34)
+        self.run_dam_btn.setStyleSheet("QPushButton {font-weight:bold; padding:4px 16px;}")
+        self.run_dam_btn.setToolTip(RUN_TIP_NO_DAM)
+        self.run_dam_btn.setEnabled(False)          # refresh() enables it once a dam is chosen
+        self.run_dam_btn.clicked.connect(lambda _c=False: self._open_tool("rundam"))
+        run_row.addWidget(self.run_dam_btn)
 
         adv = QWidget()
         grid2 = QGridLayout(adv)
@@ -249,7 +244,9 @@ class NDBreachRunnerDialog(QDialog):
         self.tabs.setMinimumHeight(150)
         self.tabs.addTab(self._build_run_tab(), "Run")
         self.tabs.addTab(self._build_tools_tab(), "Tools")
+        self.tabs.setCornerWidget(self.gear)
         lay.addWidget(self.tabs, 1)
+        lay.addLayout(run_row)
 
         self.settings_dialog = QDialog(self)
         self.settings_dialog.setWindowTitle("{} \u2014 Settings".format(TITLE))

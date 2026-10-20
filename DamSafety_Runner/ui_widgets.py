@@ -9,7 +9,7 @@ Colours come from tokens.py (also synced); docs/gui-grammar.md says where each w
     WrapLabel     a word-wrapped label that is never cut off
     InfoBanner    the muted disclaimer / context banner
     Collapsible   a ▸/▾ disclosure section (title kept apart from the arrow)
-    StageStrip    stage chips ✓ yes / ◐ part / ○ no / ▶ active, optionally clickable
+    StageStrip    stage chips ✓ yes / ◐ part / ○ no / ▶ active / ✕ error, optionally clickable
     EngineChip    a borderless "LISFLOOD-FP ✓" status label (not a button)
     ToolRow       one tool: a left-aligned button, a status tag and a grey description
     DamCard       a dam's title, path, warnings, status chips and lines
@@ -25,11 +25,11 @@ from qgis.PyQt.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPush
 
 from .tokens import TOKENS as T
 
-SHARED_VERSION = "1.1.0"
+SHARED_VERSION = "1.2.0"
 
-YES, PART, NO, ACTIVE = "yes", "part", "no", "active"
-MARKS = {YES: "\u2713", PART: "\u25d0", NO: "\u25cb", ACTIVE: "\u25b6"}
-COLORS = {YES: T["success"], PART: T["warn"], NO: T["off"], ACTIVE: T["link"]}
+YES, PART, NO, ACTIVE, ERR = "yes", "part", "no", "active", "error"
+MARKS = {YES: "\u2713", PART: "\u25d0", NO: "\u25cb", ACTIVE: "\u25b6", ERR: "\u2715"}
+COLORS = {YES: T["success"], PART: T["warn"], NO: T["off"], ACTIVE: T["link"], ERR: T["error"]}
 TAG_TEXT = {YES: "\u2713 done", PART: "\u25d0 partial", NO: "not run yet"}
 
 # the check levels (the same strings as the Hazard plugin's checks.py)
@@ -155,7 +155,7 @@ class StageStrip(QWidget):
     """Stage chips with an arrow between them. clickable=True makes each chip a flat button
     that emits clicked(index)."""
 
-    YES, PART, NO, ACTIVE = YES, PART, NO, ACTIVE
+    YES, PART, NO, ACTIVE, ERR = YES, PART, NO, ACTIVE, ERR
     clicked = pyqtSignal(int)
 
     def __init__(self, stages, clickable=False, parent=None):

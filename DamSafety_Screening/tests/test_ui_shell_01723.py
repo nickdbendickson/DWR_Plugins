@@ -55,7 +55,7 @@ if REAL:                                                 # the mock's buttons ke
 dlg.refresh()
 assert dlg.work_hint.text() == "not set yet" and dlg.pipe_state == {
     "data": "waiting", "dem": "waiting", "screen": "waiting", "report": "waiting"}, dlg.pipe_state
-assert not REAL or all(b.text().endswith("\u25cb") for b in dlg.pipe_btn.values())
+assert not REAL or all(b.text().startswith("\u25cb") for b in dlg.pipe_btn.values())
 assert not dlg.run_all_btn.isEnabled()
 
 # 3. folders set and the step states move: the strip follows wf.statuses + the report file
@@ -71,15 +71,15 @@ finally:
     wf.statuses = real_statuses
 assert dlg.pipe_state["data"] == "done" and dlg.pipe_state["dem"] == "done", dlg.pipe_state
 assert dlg.pipe_state["screen"] == "waiting" and dlg.pipe_state["report"] == "waiting"
-assert not REAL or (dlg.pipe_btn["data"].text() == "Data \u2713" and
-                    dlg.pipe_btn["screen"].text() == "Screen \u25cb")
+assert not REAL or (dlg.pipe_btn["data"].text() == "\u2713 Data" and
+                    dlg.pipe_btn["screen"].text() == "\u25cb Screen")
 assert dlg.work_hint.text() == "" and dlg.run_all_btn.isEnabled()
 rep = os.path.join(work, wf.REPORT_INDEX)
 os.makedirs(os.path.dirname(rep), exist_ok=True)
 open(rep, "w").close()
 dlg.refresh()
 assert dlg.pipe_state["report"] == "done"
-assert not REAL or dlg.pipe_btn["report"].text() == "Report \u2713"
+assert not REAL or dlg.pipe_btn["report"].text() == "\u2713 Report"
 
 # 4. strip clicks jump to the tab; the gear opens the settings window; the log folds
 dlg.pipe_btn["report"].click()
@@ -87,14 +87,14 @@ assert dlg.tabs.currentIndex() == 2
 dlg.pipe_btn["dem"].click()
 assert dlg.tabs.currentIndex() == 0
 dlg.show_settings()
-assert not REAL or dlg.settings_btn.text().startswith("\u2699 Settings")
+assert not REAL or dlg.settings_btn.text() == "\u2699"
 dlg._log("hello\nlast line")
 assert dlg.log_line.text() == "Log: last line"
 if REAL:
     assert dlg.settings_window.isVisible()
     assert not dlg.log_edit.isVisible()
     dlg._toggle_log()
-    assert dlg.log_edit.isVisible() and dlg.log_toggle.text() == "Hide log"
+    assert dlg.log_edit.isVisible() and dlg.log_section.is_expanded()
     dlg.settings_window.close()
 print("test_ui_shell_01723: ok ({})".format("real Qt offscreen" if REAL else "qgis mock"))
 
@@ -112,7 +112,7 @@ if REAL:
     assert not d2.continue_btn.isVisible() and d2.continue_btn.isHidden()
     w2, s2 = _tf.mkdtemp(), _tf.mkdtemp()
     d2.work_edit.setText(w2); d2.suite_edit.setText(s2); d2._changed(); d2.refresh()
-    assert d2.pipe_btn["data"].text() == "Data \u2713", d2.pipe_btn["data"].text()
+    assert d2.pipe_btn["data"].text() == "\u2713 Data", d2.pipe_btn["data"].text()
     assert d2.continue_btn.isHidden()
     assert len({b.minimumWidth() for b in d2.step_button.values()}) == 1
 print("ok layout round 2")
