@@ -171,7 +171,7 @@ class NDBreachRunnerDialog(QDialog):
         grid.addWidget(QLabel("DEM:"), 2, 0)
         grid.addWidget(self.dem_combo, 2, 1, 1, 2)
         grid.addWidget(b, 2, 3)
-        # 3.10.36 (#107): everything between the stage strip and Close sits in a scroll area.
+        # 3.10.36 (#107): everything between the stage strip and the Log sits in a scroll area.
         # The window has an explicit minimum size (fit_window), so Qt no longer raises it to the
         # layout's minimum; expanding "Download a DEM" then squeezed its rows to 6-9 px and drew
         # them on top of each other. In the scroll area every row keeps its own height and the
@@ -292,12 +292,12 @@ class NDBreachRunnerDialog(QDialog):
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumHeight(110)
         self.log_section = Collapsible("Log", self.log_edit)
-        body.addWidget(self.log_section)
         self.body_scroll = QScrollArea()
         self.body_scroll.setWidgetResizable(True)
         self.body_scroll.setFrameShape(getattr(QFrame, 'Shape', QFrame).NoFrame)
         self.body_scroll.setWidget(self.body_widget)
         lay.addWidget(self.body_scroll, 1)
+        lay.addWidget(self.log_section)            # outside the scroll area: always just above Close
         for sec in (self.dem_section, self.adv_section, self.log_section):
             sec.header.toggled.connect(self._section_toggled)
             _vertical_policy(sec, "Fixed")   # rows at their own height: never below the size hint
@@ -308,6 +308,11 @@ class NDBreachRunnerDialog(QDialog):
         row.addWidget(self.close_btn)
         lay.addLayout(row)
         self.setLayout(lay)
+        # setDefault() registers the button with its dialog only when the button's own parent
+        # changes; it went into body_widget before body_widget was in this dialog, so register
+        # it again (off then on: setDefault(True) on a default button returns early)
+        self.run_dam_btn.setDefault(False)
+        self.run_dam_btn.setDefault(True)
         fit_window(self, key=SIZE_KEY)
         self._sync_advanced_title()
 
