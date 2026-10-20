@@ -13,6 +13,7 @@ about 80,600 lines in DamSafety_Hazard. Only GDAL / OGR and numpy, so `core.run(
 |---|---|---|
 | Max depth, max velocity | breach run rasters | ft and ft/s (tick the box for m and m/s) |
 | 911 address points | `NDGISHUB_address_points` | each point is a habitable site; `LOT` points are skipped |
+| FEMA occupancy | `USA_Structures.PRIM_OCC` / `OCC_CLS` | a point on a FEMA "Agriculture" outline is dropped as an out-building (5.2.1.1), unless the 911 point or occupancy marks a dwelling. On by default; a switch keeps them |
 | Structure outlines | `USA_Structures` (FEMA) | the outline holding the point, else the nearest within 30 ft; every cell the outline touches is sampled; no outline = 20 ft circle, flagged |
 | Roads | `ND_roads_NG911` | sampled every half cell; each wet run (>= 0.1 ft) is one spot at its deepest point |
 | Traffic | `NDDOT_traffic_counts` | the nearest station that sits on the same named road, within 1 mile |
@@ -61,6 +62,7 @@ Ran in 3.5 s in QGIS 3.34.4 through `qgis_process`.
 
 Lite finds more structures because every 911 point counts (no NSI rules) and because a 20 m cell
 that only touches an outline is sampled. Example: 101 3rd Ave N reads 3.44 ft here and 2.27 ft in the full plugin.
+FEMA "Agriculture" out-buildings are excluded by default (5.2.1.1); on Absaraka the flood reaches a town, so none were dropped.
 
 ## Window
 

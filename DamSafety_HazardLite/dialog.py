@@ -64,8 +64,11 @@ class HazardLiteDialog(QDialog):
         self.metres = QCheckBox("Rasters are in metres and m/s")
         self.judgment = QCheckBox("Count the judgment zone as High (5.3 borderline rule)")
         self.judgment.setChecked(True)
+        self.exclude_ag = QCheckBox("Exclude FEMA agricultural out-buildings (5.2.1.1)")
+        self.exclude_ag.setChecked(True)
         root.addWidget(self.metres)
         root.addWidget(self.judgment)
+        root.addWidget(self.exclude_ag)
 
         self.check_btn = QPushButton("Check inputs")
         self.classify_btn = QPushButton("Classify")
@@ -160,7 +163,8 @@ class HazardLiteDialog(QDialog):
         try:
             res = core.run(self.depth.text(), self.vel.text(), self.out.text(),
                            core.pack_paths(self.pack.text()), metres=self.metres.isChecked(),
-                           judgment_high=self.judgment.isChecked(), dam_name=self.dam.text(),
+                           judgment_high=self.judgment.isChecked(),
+                           exclude_ag=self.exclude_ag.isChecked(), dam_name=self.dam.text(),
                            log=self.log.appendPlainText)
         except Exception as e:                                                # noqa
             self.log.appendPlainText(traceback.format_exc())

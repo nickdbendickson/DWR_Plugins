@@ -108,6 +108,8 @@ def write_pack(folder):
         (box(70, 70, 72, 72), {"BUILD_ID": 4, "PRIM_OCC": "Agriculture"}),             # F: shed, no 911 point
         (box(130, 80, 133, 83), {"BUILD_ID": 5, "PRIM_OCC": "Multi - Family Dwelling"}),  # G: two units
         (box(180, 50, 182, 52), {"BUILD_ID": 6, "PRIM_OCC": "Single Family Dwelling"}),   # H: dry
+        (box(80, 45, 82, 47), {"BUILD_ID": 7, "PRIM_OCC": "Agriculture"}),      # I: ag shed, 911 point, excluded
+        (box(85, 45, 87, 47), {"BUILD_ID": 8, "PRIM_OCC": "Agriculture"}),      # J: ag outline, 911 says residence
     ])
     write_layer(p["address"], ogr.wkbPoint, [("ADDRESS", S), ("Place_Type", S), ("Site_NGUID", S), ("Unit", S)], [
         (pt(6, 6), {"ADDRESS": "1 HIGH ST", "Site_NGUID": "a"}),
@@ -118,6 +120,8 @@ def write_pack(folder):
         (pt(131, 81), {"ADDRESS": "6 APT", "Unit": "1", "Site_NGUID": "g1"}),
         (pt(132, 82), {"ADDRESS": "6 APT", "Unit": "2", "Site_NGUID": "g2"}),
         (pt(181, 51), {"ADDRESS": "7 DRY LN", "Site_NGUID": "h"}),
+        (pt(81, 46), {"ADDRESS": "8 AG SHED", "Site_NGUID": "i"}),
+        (pt(86, 46), {"ADDRESS": "9 FARMHOUSE", "Place_Type": "RESIDENCE", "Site_NGUID": "j"}),
     ])
     write_layer(p["roads"], ogr.wkbMultiLineString, [("FULL_NAME", S), ("RoadClass", S)], [
         (mline((10, 100), (190, 100)), {"FULL_NAME": "INTERSTATE 94", "RoadClass": "Primary"}),
@@ -174,7 +178,9 @@ def main():
         g = [r for r in res["structures"] if r["build_id"] == 5]
         check("two 911 points in one outline: one structure, 2 units", len(g) == 1 and g[0]["units"] == 2)
         check("dry structure not listed", "7 DRY LN" not in s)
-        check("5 structures in all", len(res["structures"]) == 5, len(res["structures"]))
+        check("FEMA agricultural out-building excluded by default", "8 AG SHED" not in s)
+        check("ag outline kept when the 911 point says residence", "9 FARMHOUSE" in s)
+        check("6 structures in all", len(res["structures"]) == 6, len(res["structures"]))
 
         r = {x["road"]: x for x in res["roads"]}
         check("Interstate overtopped: High", r.get("INTERSTATE 94", {}).get("nd_class") == "High")
@@ -198,7 +204,7 @@ def main():
             check("output " + f, os.path.isfile(os.path.join(out, f)))
         ds = ogr.Open(res["gpkg"])
         check("gpkg layers", [ds.GetLayer(i).GetName() for i in range(ds.GetLayerCount())] ==
-              ["structures", "road_spots", "rail_spots"] and ds.GetLayerByName("structures").GetFeatureCount() == 5)
+              ["structures", "road_spots", "rail_spots"] and ds.GetLayerByName("structures").GetFeatureCount() == 6)
         ds = None
 
         os.makedirs(os.path.join(tmp, "p2"))
@@ -206,6 +212,12 @@ def main():
                         judgment_high=False, log=lambda m: None)
         b2 = {x["address"]: x for x in res2["structures"]}["2 JUDGMENT ST"]
         check("judgment zone not counted when switched off", b2["nd_class"] == "Medium")
+
+        os.makedirs(os.path.join(tmp, "p3"))
+        res3 = core.run(depth, vel, os.path.join(tmp, "out3"), write_pack(os.path.join(tmp, "p3")),
+                        exclude_ag=False, log=lambda m: None)
+        check("ag out-building kept when the exclusion is off",
+              "8 AG SHED" in {x["address"]: x for x in res3["structures"]})
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("\n{} failed".format(len(FAILS)) if FAILS else "\nall passed")

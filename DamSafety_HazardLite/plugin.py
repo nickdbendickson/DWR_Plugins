@@ -33,6 +33,8 @@ class Classify(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterBoolean("METRES", "Rasters are in m and m/s", False))
         self.addParameter(QgsProcessingParameterBoolean(
             "JUDGMENT_HIGH", "Count the judgment zone as High (5.3 borderline rule)", True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            "EXCLUDE_AG", "Exclude FEMA agricultural out-buildings (5.2.1.1)", True))
         pack = QgsSettings().value("ndsuite/pack_path", os.environ.get("NDSUITE_PACK", ""))
         self.addParameter(QgsProcessingParameterFile(
             "PACK", "ND Dam Suite offline pack folder", QgsProcessingParameterFile.Folder,
@@ -58,6 +60,7 @@ class Classify(QgsProcessingAlgorithm):
                        self.parameterAsRasterLayer(p, "VELOCITY", context).source(), out, layers,
                        metres=self.parameterAsBool(p, "METRES", context),
                        judgment_high=self.parameterAsBool(p, "JUDGMENT_HIGH", context),
+                       exclude_ag=self.parameterAsBool(p, "EXCLUDE_AG", context),
                        dam_name=self.parameterAsString(p, "DAM", context), log=feedback.pushInfo)
         for cls, sec, why in res["reasons"]:
             feedback.pushInfo("{} [{}] {}".format(cls, sec, why))

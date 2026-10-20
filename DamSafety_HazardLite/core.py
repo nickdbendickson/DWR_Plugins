@@ -181,7 +181,11 @@ def _txt(v):
 
 
 # --------------------------------------------------------------- structures --
-def structures(grid, bounds, address_path, outline_path, judgment_high=True):
+RESIDENTIAL_PLACE = ("RESIDENCE", "MOBILE HOME", "SINGLE FAMILY", "MULTI-FAMILY",
+                     "MULTI - FAMILY", "DUPLEX", "APARTMENT")
+
+
+def structures(grid, bounds, address_path, outline_path, judgment_high=True, exclude_ag=True):
     pts = read_layer(address_path, grid, bounds, ["ADDRESS", "Place_Type", "Site_NGUID", "Unit"])
     outl = read_layer(outline_path, grid, bounds, ["BUILD_ID", "PRIM_OCC", "OCC_CLS"],
                       pad_ft=OUTLINE_SNAP_FT)
@@ -211,21 +215,30 @@ def structures(grid, bounds, address_path, outline_path, judgment_high=True):
         if s is None:
             if best is not None:
                 geom, occ = outl[best][0], _txt(outl[best][1]["PRIM_OCC"])
+                occ_cls = _txt(outl[best][1]["OCC_CLS"])
                 how = "outline (point inside)" if bd * grid.unit_ft < 1 else "outline (nearest, {:.0f} ft)".format(bd * grid.unit_ft)
             else:
-                geom = g.Buffer(NO_OUTLINE_RADIUS_FT / grid.unit_ft, 8)
-                occ, how = "", "no outline: {:.0f} ft circle".format(NO_OUTLINE_RADIUS_FT)
-            s = sites[key] = {"geom": geom, "addresses": [], "occ": occ, "how": how,
-                              "build_id": outl[best][1]["BUILD_ID"] if best is not None else None,
+                geom, occ, occ_cls = g.Buffer(NO_OUTLINE_RADIUS_FT / grid.unit_ft, 8), "", ""
+                how = "no outline: {:.0f} ft circle".format(NO_OUTLINE_RADIUS_FT)
+            s = sites[key] = {"geom": geom, "addresses": [], "occ": occ, "occ_cls": occ_cls,
+                              "how": how, "build_id": outl[best][1]["BUILD_ID"] if best is not None else None,
                               "place": set()}
         s["addresses"].append(_txt(a["ADDRESS"]) + (" #" + _txt(a["Unit"]) if _txt(a["Unit"]) else ""))
         s["place"].add(_txt(a["Place_Type"]).upper())
     out = []
+    excluded_ag = 0
     for s in sites.values():
         d, v = grid.under(s["geom"])
         if not len(d) or d.max() < WET_FT:
             continue
         kind = "mobile" if ("MANUFACTURED" in s["occ"].upper() or "MOBILE HOME" in s["place"]) else "house"
+        # FEMA Agriculture outlines (barns, sheds, bins) are out-buildings under 5.2.1.1 unless the
+        # 911 point or the occupancy marks a dwelling. Excluded by default (exclude_ag).
+        is_ag = "AGRICULTURE" in (s["occ"].upper() + " " + s["occ_cls"].upper())
+        residential = kind == "mobile" or any(p in RESIDENTIAL_PLACE for p in s["place"])
+        if exclude_ag and is_ag and not residential:
+            excluded_ag += 1
+            continue
         z = tm11.zones(kind, d, v)
         k = int(np.lexsort((d, z))[-1])                 # governing cell: worst zone, then deepest
         zone = int(z[k])
@@ -242,7 +255,7 @@ def structures(grid, bounds, address_path, outline_path, judgment_high=True):
                     "gov_depth_ft": round(float(d[k]), 2), "gov_vel_fps": round(float(v[k]), 2),
                     "zone": tm11.ZONE_NAMES[zone], "nd_class": nd})
     out.sort(key=lambda r: (-{"High": 2, "Judgment": 1, "Low": 0}[r["zone"]], -r["hmax_ft"]))
-    return out
+    return out, excluded_ag
 
 
 # ------------------------------------------------------------- lines -------
@@ -456,19 +469,25 @@ R_COLS = ["road", "road_class", "length_ft", "hmax_ft", "vmax_fps", "aadt", "aad
 L_COLS = ["railroad", "subdivision", "length_ft", "hmax_ft", "vmax_fps", "trains_day", "nd_class", "basis"]
 
 
-def run(depth, velocity, out_dir, layers, metres=False, judgment_high=True, dam_name="", log=print):
+def run(depth, velocity, out_dir, layers, metres=False, judgment_high=True, exclude_ag=True,
+        dam_name="", log=print):
     os.makedirs(out_dir, exist_ok=True)
     grid = Grid(depth, velocity, metres)
     bounds = grid.wet_bounds()
     log("Flooded extent {:.1f} x {:.1f} mi".format((bounds[2] - bounds[0]) * grid.unit_ft / 5280,
                                                    (bounds[3] - bounds[1]) * grid.unit_ft / 5280))
-    s = structures(grid, bounds, layers["address"], layers["outlines"], judgment_high)
-    log("Structures inundated: {}".format(len(s)))
+    s, excluded_ag = structures(grid, bounds, layers["address"], layers["outlines"], judgment_high,
+                                exclude_ag)
+    log("Structures inundated: {}{}".format(len(s), " (excluded {} FEMA agricultural out-building(s))"
+                                            .format(excluded_ag) if excluded_ag else ""))
     r = roads(grid, bounds, layers["roads"], layers["counts"])
     log("Road stretches overtopped: {}".format(len(r)))
     l = railroads(grid, bounds, layers["rail"], layers["crossings"])
     log("Rail stretches inundated: {}".format(len(l)))
     cls, reasons, verify = classify(s, r, l, judgment_high)
+    if excluded_ag:
+        verify.append("{} inundated FEMA agricultural out-building(s) were excluded (5.2.1.1 "
+                      "out-buildings); confirm none is a regularly occupied shop or farmhouse".format(excluded_ag))
 
     gpkg = os.path.join(out_dir, "hazard_lite.gpkg")
     if os.path.exists(gpkg):
