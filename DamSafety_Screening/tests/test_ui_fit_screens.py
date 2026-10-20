@@ -156,3 +156,8 @@ if __name__ == "__main__":
             n += 1
             print("ok", _name)
     print("{}: all {} checks passed".format(os.path.basename(__file__), n))
+    # All checks ran and passed above (a failure would have raised before here). This script builds
+    # a real QgsApplication, whose offscreen teardown at interpreter shutdown can return non-zero on
+    # CI and make the runner report FAIL despite the passing checks. Exit 0 explicitly before that.
+    sys.stdout.flush()
+    os._exit(0)

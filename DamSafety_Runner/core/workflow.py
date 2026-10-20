@@ -49,7 +49,6 @@ from . import terrain
 from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
-from .grid import Grid
 from .units import FT, MILE, ACFT, CFS
 
 def _metadata_version():
@@ -136,6 +135,19 @@ class RunSettings:
         # optional dict of gmsh sizes (gmsh_mesher.build_mesh, e.g. min_area_tol,
         # culvert_area_m2) and embankment options (anuga_model.EMBANKMENT_DEFAULTS)
         self.anuga_gmsh = None
+        # 3.10.31: the ANUGA bed. "fine" = the DEM source at its own cell size (read in blocks)
+        # sampled at the triangle vertices, so road and dam crowns on mesh lines survive;
+        # "model_grid" = the model-cell DEM at the centroids (before 3.10.31). LISFLOOD-FP
+        # always uses the model grid. NDBREACH_ANUGA_ELEVATION (or ANUGA_ELEVATION) sets it;
+        # NDBREACH_ANUGA_ELEVATION_CELL_M fixes the fine cell size (0 = the source's own).
+        self.anuga_elevation = (os.environ.get("NDBREACH_ANUGA_ELEVATION")
+                                or os.environ.get("ANUGA_ELEVATION") or "fine")
+        self.anuga_elevation_cell_m = 0.0
+        try:
+            self.anuga_elevation_cell_m = float(os.environ.get("NDBREACH_ANUGA_ELEVATION_CELL_M")
+                                                or 0.0)
+        except ValueError:
+            pass
         _tol = os.environ.get("NDBREACH_ANUGA_GMSH_MIN_AREA_TOL")
         if _tol:
             try:
@@ -212,6 +224,18 @@ class RunSettings:
         # LiDAR shows a water surface (core/reservoir_carve.py): "off" (default) | "auto" |
         # "on"; NDBREACH_RESERVOIR_CARVE overrides the default
         self.reservoir_carve = _carve_default()
+        # v3.10.22: HEC-RAS 2D computation points: "grid" (default) | "gmsh" (optional; falls
+        # back to the grid without gmsh; core/hecras_seeds.py)
+        self.hecras_mesh_seeds = "grid"
+        # v3.10.22 (crest dam line): the HEC-RAS dam line: "crest" (default; traced along the
+        # embankment crest from the DEM) | "straight" (the old line across the flow;
+        # core/hecras_crest.py)
+        self.hecras_dam_axis = "crest"
+        # v3.10.27 (#91): water-body mask for the run report only (core/report_metrics.py): a
+        # vector file path (several separated by ;;), a list of polygons in the work CRS, or
+        # "off". None = NDBREACH_WATERBODY_MASK, else the dam folder's / the suite's waterbody
+        # layer when there is one. Never changes the model.
+        self.water_mask = None
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError("unknown setting {}".format(k))
@@ -258,8 +282,19 @@ class RunSettings:
                 d[k] = v is not None
             elif k in ("anuga_mesher", "anuga_gmsh") and v in ("default", None):
                 continue                 # default mesh: the report stays as before
+            elif (k == "anuga_elevation" and v == "fine") or (k == "anuga_elevation_cell_m"
+                                                              and not v):
+                continue                 # 3.10.31 defaults: run_report["anuga_elevation_source"]
             elif k == "reservoir_carve" and v in ("off", None, ""):
                 continue                 # v3.10.20: off - the report stays as before
+            elif k == "hecras_mesh_seeds" and v in ("grid", None, ""):
+                continue                 # v3.10.22: the default - the report stays as before
+            elif k == "hecras_dam_axis" and v in ("crest", None, ""):
+                continue                 # the default - the report stays as before
+            elif k == "water_mask":
+                if v in (None, ""):
+                    continue             # v3.10.27: not set - the report stays as before
+                d[k] = v if isinstance(v, str) else "polygons ({})".format(len(v))
             else:
                 d[k] = v
         return d
@@ -273,7 +308,10 @@ def key_settings(st):
     """st.as_dict() for checkpoint / run keys: without "resume", the EAP-map choice and the
     dam.json switch (they do not change the flood), and without the v3.2.0 class-stop
     settings while that rule is off - so a checkpoint of 3.1.x still resumes."""
-    d = {k: v for k, v in st.as_dict().items() if k not in ("resume", "eap_map", "dam_record")}
+    d = {k: v for k, v in st.as_dict().items() if k not in ("resume", "eap_map", "dam_record",
+                                                            "hecras_mesh_seeds",
+                                                            "hecras_dam_axis",
+                                                            "water_mask")}
     if not getattr(st, "class_stop", False):
         for k in _CLASS_STOP_KEYS:
             d.pop(k, None)
@@ -556,6 +594,27 @@ def model_dem(terrain_src, structures, model, bounds, cell, refill_paths=()):
     return g
 
 
+def terrain_native_cell(terrain_src):
+    """The terrain source's own cell size in work-CRS metres (None when unknown):
+    terrain_src.native_cell_m() through the wrappers (conditioning, refill, carve)."""
+    fn = getattr(terrain_src, "native_cell_m", None)
+    if fn is None:
+        return None
+    try:
+        v = fn()
+        return float(v) if v else None
+    except Exception:                               # noqa - unknown: prepare_elevation uses 2 m
+        return None
+
+
+def terrain_label(terrain_src):
+    """A short name of the terrain source for the report (its DEM path when known)."""
+    p = getattr(terrain_src, "dem_path", None)
+    if p is None and hasattr(terrain_src, "base"):
+        p = getattr(terrain_src.base, "dem_path", None)
+    return str(p) if p else None
+
+
 def max_extent_warning(max_extent_mi, over):
     """The warning when the domain hits the largest-domain cap with the flood still leaving.
     The default cap is 20 mi (60 mi before 2026-10); say so, so a large dam's truncated run is
@@ -653,26 +712,28 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         if err:
             raise brmod.BreachInputError("{}: {}".format(dam.dam_id, err))
     else:
+        # the 98th percentile of the DEM within 30 m, not the single highest cell (nanmax):
+        # nanmax can latch onto a nearby hill, road embankment or spike and read the crest
+        # several feet high (matching the Screener's estimate_storage percentile approach)
         sel = np.hypot(X - dam_xy[0], Y - dam_xy[1]) <= 30.0
-        crest_dem_ft = float(np.nanmax(z[sel])) / FT if np.isfinite(z[sel]).any() else None
+        fin_z = z[sel & np.isfinite(z)]
+        crest_dem_ft = float(np.nanpercentile(fin_z, 98)) / FT if fin_z.size else None
         if crest_dem_ft is None:
             raise brmod.BreachInputError("{}: no DEM data at the dam point".format(dam.dam_id))
+        report["dem_crest_from"] = "DEM near the dam point (98th percentile, 30 m)"
     report["dem_crest_ft"] = round(crest_dem_ft, 2)
     if not spec and dam.top_of_dam_ft is not None and dam.dam_height_ft:
         diff = crest_dem_ft - dam.top_of_dam_ft
         if abs(diff) > max(0.6 * dam.dam_height_ft, 8.0):
-            msg = ("{}: the highest DEM point within 30 m of the dam point is {:.1f} ft but the "
+            msg = ("{}: the crest read from the DEM ({}) is {:.1f} ft but the "
                    "top of dam is {:.1f} ft (difference {:+.1f} ft, dam height {:.1f} ft). "
                    "The inventory crest is kept. Check the datum and that the point is on the "
                    "crest. DEM units: {}."
-                   ).format(dam.dam_id, crest_dem_ft, dam.top_of_dam_ft, diff,
+                   ).format(dam.dam_id, report.get("dem_crest_from", "DEM near the dam point"),
+                            crest_dem_ft, dam.top_of_dam_ft, diff,
                             dam.dam_height_ft, z_note or "unknown")
             warnings.append(msg)
             report["crest_source"] = "inventory crest; DEM near the point differs"
-            try:
-                feedback.pushWarning(msg)
-            except Exception:
-                pass
         if abs(diff) > 3.0:
             warnings.append("The DEM crest near the dam point ({:.1f} ft) differs from the top "
                             "of dam ({:.1f} ft) by {:+.1f} ft.".format(
@@ -680,9 +741,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     top_from_dem = dam.top_of_dam_ft is None
     if dam.top_of_dam_ft is None:
         dam.top_of_dam_ft = crest_dem_ft
-        warnings.append("Top of dam not given: taken as the highest DEM point within 30 m of "
-                        "the dam point ({:.1f} ft). Check it against the as-built crest."
-                        .format(dam.top_of_dam_ft))
+        warnings.append("Top of dam not given: estimated from the {} ({:.1f} ft). Check it "
+                        "against the as-built crest.".format(
+                            report.get("dem_crest_from", "DEM near the dam point"),
+                            dam.top_of_dam_ft))
         report["dam"]["top_of_dam_ft"] = dam.top_of_dam_ft
 
     # --- breach hydrograph(s) ------------------------------------------------------
@@ -703,7 +765,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             warnings += fr.notes
             if st.dam_record is not None and st.write_final:
                 report["dam_record"] = _record_dam(dam, st, res, dam_xy, out_folder,
-                                                   top_from_dem, "none", warnings, log)
+                                                   top_from_dem, "none", warnings, log,
+                                                   crest_from=report.get("dem_crest_from", ""))
             _write_no_breach(res, report, warnings, model_dir, hy_nb)
             return res
     else:
@@ -927,6 +990,15 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     def snap_for(sim_s):
         return max(60.0, round(sim_s / frames / 60.0) * 60.0) if frames > 0 else None
 
+    def closed_edges():
+        """H6 / v3.11.0: the near-dam FV1 refine run closes the box edges that face the
+        reservoir, so an FV1 free edge cannot import reservoir water into the fine grid.
+        Returns () for an ordinary run (st.close_upstream_edges unset)."""
+        if getattr(st, "close_upstream_edges", False):
+            from . import refine as refmod
+            return refmod.upstream_edges(direction)
+        return ()
+
     def lisflood_run(tag, hyd, bnds, sim_s, prog, gauges=None, snap=None):
         dem = dem_for("lisflood", bnds, cs)
         man = manning_for(bnds, cs)
@@ -936,7 +1008,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                      sim_s, massint_s=st.gauge_massint_s if gl else 300.0,
                                      initial_depth=init, gauges=gl, snapshot_s=snap,
                                      extra_sources=extra_sources(sim_s),
-                                     solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC))
+                                     solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
+                                     closed_edges=closed_edges())
         wd = os.path.join(model_dir, "lisflood" + tag)
         if snap:        # snapshots of an earlier (smaller) run must not mix with these
             for _i, fp in lfmod.snapshot_files(wd):
@@ -971,9 +1044,22 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                      sim_s, massint_s=st.gauge_massint_s if gl else 300.0,
                                      initial_depth=init, gauges=gl,
                                      extra_sources=extra_sources(sim_s),
-                                     solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC))
+                                     solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
+                                     closed_edges=closed_edges())
         return lfmod.read_results(os.path.join(model_dir, "lisflood" + tag), dem, lst, hyd), \
             dem, init
+
+    # M5: a run on the built-in engine is a SCREENING approximation, not LISFLOOD-FP. Say so
+    # prominently before anything runs, so the numbers are never mistaken for LISFLOOD-FP's.
+    if lfmod.is_builtin(st.lisflood_exe):
+        bmsg = ("This run uses the BUILT-IN screening engine (local inertial, in numpy), NOT "
+                "LISFLOOD-FP. The results are preliminary estimates: near-breach velocities may "
+                "be understated (which can lower the depth-velocity hazard zone) and nothing has "
+                "been validated against LISFLOOD-FP. Do not use them as the basis of a final "
+                "hazard classification or loss-of-life determination without a LISFLOOD-FP run.")
+        if bmsg not in warnings:
+            warnings.append(bmsg)
+            log(bmsg)
 
     # --- LISFLOOD-FP with domain extension ----------------------------------------
     iterations = list(state.get("iterations", []))
@@ -994,7 +1080,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         bounds = tuple(state.get("final_bounds"))
         sim_time = state.get("final_sim_time", sim_time)
         lf_env, dem, init_grid = load_lisflood("", hy, bounds, sim_time)
-        log("LISFLOOD-FP results loaded from the checkpoint.")
+        log("Results loaded from the checkpoint ({}).".format(lfmod.engine_name(st.lisflood_exe)))
         start_it = st.max_iterations + 1
     max_it = 1 if plan is not None else st.max_iterations
     it = start_it
@@ -1012,8 +1098,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
 
         nx_ = int(round((bounds[2] - bounds[0]) / cs))
         ny_ = int(round((bounds[3] - bounds[1]) / cs))
-        log("LISFLOOD-FP run {}: {:.1f} x {:.1f} mi, {:,} cells, {:.1f} h".format(
-            it, (bounds[2] - bounds[0]) / MILE, (bounds[3] - bounds[1]) / MILE, nx_ * ny_,
+        log("Run {} with {}: {:.1f} x {:.1f} mi, {:,} cells, {:.1f} h".format(
+            it, lfmod.engine_name(st.lisflood_exe),
+            (bounds[2] - bounds[0]) / MILE, (bounds[3] - bounds[1]) / MILE, nx_ * ny_,
             sim_time / 3600.0))
         lf_env, dem, init_grid, runtime, wd, lst = lisflood_run("", hy, bounds, sim_time, prog,
                                                                 st.gauges, snap_for(sim_time))
@@ -1038,8 +1125,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         warnings += [n for n in lf_env.notes if n not in warnings]
         # a finished pass has run.max / run.maxVc / run.inittm. Copy them now so a
         # growing domain still leaves depth, velocity, and arrival rasters and polygons.
-        if st.write_final:
-            try:
+        if st.write_final:    # per-run rasters off (the probabilistic/Monte-Carlo default):
+            try:              # do not write Depth/Velocity/Arrival(Max)/Extent into every run
                 _write_pass_products(out_folder, dem, lf_env, arrival_m, writer, it)
             except Exception as _e:
                 log("Could not write pass {} products: {}".format(it, _e))
@@ -1068,7 +1155,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                 else:
                     tile = os.path.join(model_dir, "dem_refill.tif")
                     try:
-                        dem_refill.fetch_3dep(box, cs, tile)
+                        dem_refill.fetch_3dep(box, cs, tile, crs=getattr(dem, "crs_wkt", None))
                         refill_paths.append(tile)
                         refilled = True
                         msg = ("Wet cells sit on DEM no-data ({:,} cells). Requested one 3DEP "
@@ -1250,7 +1337,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         return fa
 
     lf_final = write_qa("", lf_env, "lisflood", init_grid)
-    final_env, final_model, final_arrays = lf_env, "LISFLOOD-FP", lf_final
+    final_env, final_model, final_arrays = lf_env, lfmod.engine_label(st.lisflood_exe), lf_final
     lf_base_env = None
     lf_base_arrays = None
 
@@ -1296,6 +1383,14 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             emb_kw = {"embankment_lines": list(getattr(st, "road_lines", None) or [])
                       + list(getattr(st, "rail_lines", None) or []),
                       "terrain_read": terrain_src.read}
+        # 3.10.31: ANUGA's bed from the finest terrain (the same conditioning, refills and
+        # structure cuts as the model DEM, at the source's own cell size); LISFLOOD-FP
+        # keeps the model grid
+        ast.elevation = getattr(st, "anuga_elevation", "fine") or "fine"
+        ast.elevation_cell_m = getattr(st, "anuga_elevation_cell_m", 0.0) or None
+        emb_kw.update(elevation_read=lambda b, c: dem_for("anuga", b, c),
+                      elevation_native_m=terrain_native_cell(terrain_src),
+                      elevation_label=terrain_label(terrain_src))
         width_m = max(3 * cs, inlet_w)
         hy_a, hy_nb_a = _with_flow(hy, amb_cms, sim_time), _with_flow(hy_nb, amb_cms, sim_time)
         a_runs = []
@@ -1323,6 +1418,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             ast.buffer_m *= 2
         state.save(anuga_done=True)
         report["anuga_runs"] = a_runs
+        report["anuga_elevation_source"] = an_env.stats.get("elevation_source")
         anuga_mesh = _anuga_mesh_report(a_runs)
         report["anuga_mesh"] = anuga_mesh
         if anuga_mesh.get("rejected_line"):
@@ -1406,8 +1502,13 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     # --- final rasters for the classification plugin ------------------------------
     progress(93, "writing rasters")
     if st.write_final:
-        # a hazard classification of the previous rasters no longer applies
-        for stale in STALE_ON_RERUN:
+        # A hazard classification of the previous rasters no longer applies. A rerun that
+        # changes scenario (e.g. a sunny-day run into a folder left by a flood run) must not
+        # keep the previous run's Baseline / Incremental rasters: they belong to a different
+        # scenario and would be read as this run's. Clear them here; they are written again
+        # below only when this run actually has a baseline.
+        for stale in (list(STALE_ON_RERUN) + list(BASELINE_NAMES.values())
+                      + list(INCREMENT_NAMES.values())):
             try:
                 os.remove(os.path.join(out_folder, stale))
             except OSError:
@@ -1502,16 +1603,32 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     }
     if "receptors" in report:
         summary["receptors_flooded"] = report["receptors"].get("receptors_flooded")
+    # v3.10.27 (#91): depth-threshold areas, representative velocities, water-body mask
+    water_mask = _report_metrics(summary, report, st, dem, fin, cell_ac, arrival_m, out_folder,
+                                 getattr(writer, "work_srs", None), warnings, log)
     if report.get("anuga_mesh"):
         summary["anuga_mesher"] = report["anuga_mesh"]["used"]
         if report["anuga_mesh"].get("rejected_line"):
             summary["anuga_mesh_rejected"] = report["anuga_mesh"]["rejected_line"]
+    es = report.get("anuga_elevation_source") or {}
+    if es.get("mode") == "fine":
+        summary["anuga_elevation"] = "{:g} m terrain at the triangle vertices".format(es["cell_m"])
+    elif es.get("mode") == "model_grid":
+        summary["anuga_elevation"] = "model grid ({:g} m) at the centroids ({})".format(
+            es.get("cell_m", 0), es.get("reason", ""))
     if "incremental" in report:
         summary["incremental_acres"] = report["incremental"]["acres_at_or_above"]
     if report.get("refine_near_dam", {}).get("applied"):
         summary["refine_near_dam"] = report["refine_near_dam"]["summary"]
     if report.get("dem_conditioning"):
         summary["buildings"] = report["dem_conditioning"]["buildings"].split(".")[0]
+    # M5 labeling: one authoritative engine name for every report surface (md / HTML / docx /
+    # run_report.json / manifest), so a built-in-engine run is never presented as LISFLOOD-FP.
+    _builtin_run = lfmod.is_builtin(st.lisflood_exe)
+    report["flood_engine"] = ("Built-in engine (local inertial, numpy; NOT LISFLOOD-FP)"
+                              if _builtin_run else "LISFLOOD-FP (inertial solver)")
+    report["flood_engine_short"] = lfmod.engine_name(st.lisflood_exe)
+    summary["flood_engine_short"] = report["flood_engine_short"]
     report["summary"] = summary
     report["warnings"] = warnings
     report["outputs"] = {"final": res.final, "baseline": res.baseline,
@@ -1532,11 +1649,12 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             warnings.append("Could not write the vector products / map: {}: {}".format(
                 type(e).__name__, e))
     _qa_maps(report, st, dam, dam_xy, inflow_xy, top_m, qa_ctx, path, dem, fin, out_folder,
-             warnings, log)
+             warnings, log, water_mask=water_mask)
     if st.dam_record is not None and st.write_final:
         report["dam_record"] = _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem,
                                            summary["final_model"], warnings, log, dem, d,
-                                           cut_off=report.get("cut_off"))
+                                           cut_off=report.get("cut_off"),
+                                           crest_from=report.get("dem_crest_from", ""))
     report["run_finished"] = datetime.datetime.now().isoformat(timespec="seconds")
     report["elapsed_min"] = round((time.time() - t_start) / 60.0, 1)
     res.report_json = os.path.join(model_dir, "run_report.json")
@@ -1581,10 +1699,14 @@ FINAL_VECTOR_NAMES = ("Flood Polygons (Max Depth).geojson", "Flood Extent.geojso
                       "EAP Inundation Map (preview).svg")
 
 
-def final_summary(fin, cell_ac, arrival_m, base=None, final_model=None):
+def final_summary(fin, cell_ac, arrival_m, base=None, final_model=None, grid=None,
+                  receptors=None, mask=None, mask_source=None, crs=None):
     """The run summary's flood figures from the FINAL arrays (SI): flooded acres (and over
     the arrival depth), max depth, max velocity, latest arrival. `base` (the old summary) is
-    copied first; `final_model` replaces its final_model."""
+    copied first; `final_model` replaces its final_model. v3.10.27 (#91): with `grid`, also
+    the report_metrics fields (depth-threshold areas, P95 / P99 velocity, the max-velocity
+    cell, velocity at `receptors`, and the masked figures when `mask` is given); the old
+    values of those fields are dropped first so none is left over from the screening pass."""
     s = dict(base or {})
     d, v, a = fin["depth"], fin["velocity"], fin["arrival"]
     with np.errstate(invalid="ignore"):
@@ -1596,6 +1718,12 @@ def final_summary(fin, cell_ac, arrival_m, base=None, final_model=None):
                                  else 0),
             "latest_arrival_hr": (round(float(np.nanmax(a)), 2) if np.isfinite(a).any()
                                   else None)})
+    if grid is not None:
+        from . import report_metrics as rm
+        for k in [k for k in s if rm.is_metric_key(k)]:
+            s.pop(k, None)
+        s.update(rm.flood_metrics(fin, grid, cell_ac, arrival_m, receptors=receptors, mask=mask,
+                                  mask_source=mask_source, crs=crs))
     if final_model:
         s["final_model"] = final_model
     return s
@@ -1639,25 +1767,49 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
     arrival_ft = float(getattr(st, "arrival_depth_ft", None) or sets.get("arrival_depth_ft") or 1.0)
     arrival_m = arrival_ft * FT
     old = dict(report.get("summary") or {})
-    screening = {"model": old.get("final_model") or "LISFLOOD-FP", "summary": old,
+    # M5: the screening pass may have run on the opt-in built-in engine; label its kept vector
+    # products and notes with the engine that actually produced them, never a bare 'LISFLOOD-FP'.
+    scr_model = old.get("final_model") or "LISFLOOD-FP"
+    scr_prefix = ("built-in engine " if "built-in" in str(scr_model).lower() else SCREENING_PREFIX)
+    screening = {"model": scr_model, "summary": old,
                  "note": "The screening pass that laid out the domain and the HEC-RAS model. "
                          "Every figure in 'summary', the flood polygons and the hazard class "
                          "come from {}.".format(final_model),
                  "vectors": {}}
-    for k in ("receptors", "receptors_incremental", "incremental", "refine_near_dam"):
+    for k in ("receptors", "receptors_incremental", "incremental", "refine_near_dam",
+              "water_mask"):
         if k in report:
             screening[k] = report[k]
     # keep the screening vector products under the LISFLOOD-FP prefix
     for nm in FINAL_VECTOR_NAMES:
         src = os.path.join(out_folder, nm)
         if os.path.exists(src):
-            dst = os.path.join(out_folder, SCREENING_PREFIX + nm)
+            dst = os.path.join(out_folder, scr_prefix + nm)
             os.replace(src, dst)
             screening["vectors"][nm] = dst
-    summary = final_summary(fin, cell_ac, arrival_m, old, final_model)
+    rec = getattr(st, "receptors", None) if st is not None else None
+    # v3.10.27 (#91): the depth-threshold / velocity / mask figures from the final rasters too
+    from . import report_metrics as rm
+    mask, minfo = None, None
+    try:
+        mask, minfo = rm.build_mask(g, getattr(st, "water_mask", None) if st is not None else None,
+                                    g.crs_wkt, out_folder=out_folder, log=log)
+    except Exception as e:      # noqa: BLE001 - reporting only
+        log("Water-body mask not used: {}: {}".format(type(e).__name__, e))
+    msrc = "; ".join(os.path.basename(x) for x in (minfo or {}).get("sources") or [])
+    summary = final_summary(fin, cell_ac, arrival_m, old, final_model, grid=g,
+                            receptors=rec if rec is not None and len(rec) else None,
+                            mask=mask, mask_source=msrc or None, crs=gdal_io.epsg_of(g.crs_wkt))
+    if minfo is not None:
+        report["water_mask"] = minfo
+        if mask is not None:
+            gj = rm.write_mask_geojson(g, mask, out_folder, crs=gdal_io.epsg_of(g.crs_wkt))
+            if gj:
+                minfo["polygons"] = gj
+    else:
+        report.pop("water_mask", None)
     for k in ("incremental_acres", "refine_near_dam", "receptors_flooded"):
         summary.pop(k, None)
-    rec = getattr(st, "receptors", None) if st is not None else None
     if rec is not None and len(rec):
         rsum, rrows = impmod.summarize(rec, g, fin, arrival_m)
         report["receptors"] = rsum
@@ -1669,8 +1821,8 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
     report.pop("refine_near_dam", None)
     if "incremental" in report:
         report["incremental"] = dict(report["incremental"], note=(
-            report["incremental"].get("note", "") + ". From the LISFLOOD-FP screening pass: "
-            "{} ran the breach only (no no-breach run).".format(final_model)))
+            report["incremental"].get("note", "") + ". From the {} screening pass: "
+            "{} ran the breach only (no no-breach run).".format(scr_prefix.strip(), final_model)))
     hin = report.get("hecras_inflow") or {}
     fallback = hin.get("note") if hin.get("status") == "fallback_breach" else ""
     if fallback:
@@ -1701,8 +1853,8 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
         warnings.append("Could not write the {} vector products: {}: {}".format(
             final_model, type(e).__name__, e))
     msg = ("Every figure in this report, the flood polygons and the hazard class come from {}; "
-           "the LISFLOOD-FP screening pass is under 'screening_pass_lisflood' and its "
-           "vector products are kept as '{}...'.".format(final_model, SCREENING_PREFIX))
+           "the {} screening pass is under 'screening_pass_lisflood' and its "
+           "vector products are kept as '{}...'.".format(final_model, scr_prefix.strip(), scr_prefix))
     if msg not in warnings:
         warnings.append(msg)
     if fallback and fallback not in warnings:
@@ -1893,7 +2045,7 @@ def _write_no_breach(res, report, warnings, model_dir, hy_nb):
 
 
 def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, warnings, log,
-                grid=None, depth=None, cut_off=None):
+                grid=None, depth=None, cut_off=None, crest_from=""):
     """v3.2.0: write what the run used into <dam folder>/dam.json (damjson.record_run) and add
     its "modelled" status. Conflicts with another tool's values become warnings. Never fails
     the run."""
@@ -1918,10 +2070,17 @@ def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, war
             result["extent_ft"] = damjson.extent_ft(grid, depth, dam_xy, WET_M)
             w, h = terrain.bounds_size(grid.bounds)
             result["domain_mi"] = [round(w / MILE, 2), round(h / MILE, 2)]
-        info = damjson.record_run(
-            out_folder, vals, result, dr.get("read"),
-            dem_top_note="highest DEM point within 30 m of the dam point" if top_from_dem
-            else "")
+        # a top of dam this plugin estimated from the DEM is written with a note that marks it
+        # as an estimate (and, when damjson supplies it, a "DEM estimate" datum), so a later run
+        # re-estimates it instead of trusting one run's guess as a surveyed crest
+        dem_note = ""
+        if top_from_dem:
+            fmt = getattr(damjson, "DEM_ESTIMATE_NOTE",
+                          "estimated by this plugin from the {}; not a surveyed or as-built "
+                          "crest")
+            dem_note = fmt.format(crest_from or "DEM near the dam point")
+        info = damjson.record_run(out_folder, vals, result, dr.get("read"),
+                                  dem_top_note=dem_note)
     except Exception as e:           # the record is an extra; never lose the run for it
         info = {"error": "dam.json not updated: {}: {}".format(type(e).__name__, e),
                 "warnings": [], "read": list(dr.get("read") or [])}
@@ -1978,11 +2137,17 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
     ld = terrain.nearest_line_distance(dam_xy, [line]) if line else None
     report["dam_point_checks"] = {"road_m": None if rd is None else round(rd, 1),
                                   "dam_line_m": None if ld is None else round(ld, 1)}
+    if line:
+        # v3.10.22: the DWR dam line (run CRS), for the HEC-RAS dam line along the crest
+        report["crest_line_xy"] = [[round(float(x), 3), round(float(y), 3)] for x, y in line]
     if rd is not None and rd <= ROAD_NEAR_M:
         if line:
-            msg = ("A road runs {:.0f} m from the dam point, which is on the DWR dam line: the "
-                   "road is on (or beside) this embankment; the crest comes from the dam line."
-                   .format(rd))
+            # v3.10.22: say "on the dam line" only when the dam point is (it may not be)
+            where = ("which is on the DWR dam line" if ld is not None and ld <= ROAD_NEAR_M else
+                     "{:.0f} m from the DWR dam line".format(ld) if ld is not None else
+                     "with a DWR dam line given")
+            msg = ("A road runs {:.0f} m from the dam point, {}: the road is on (or beside) "
+                   "this embankment; the crest comes from the dam line.".format(rd, where))
         else:
             msg = ("A road runs {:.0f} m from the dam point: the embankment in the DEM may be "
                    "the road's fill rather than the dam (DWR-3161 sits on the ND-23 fill). "
@@ -2033,8 +2198,37 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     return xy, why
 
 
+def _report_metrics(summary, report, st, grid, fin, cell_ac, arrival_m, out_folder, crs,
+                    warnings, log):
+    """v3.10.27 (#91): the report_metrics fields into `summary` and the water-body mask into
+    report['water_mask']. Reporting only, never fails the run. Returns the mask (or None)."""
+    from . import report_metrics as rm
+    mask = None
+    try:
+        crs_wkt = getattr(grid, "crs_wkt", None) or crs
+        mask, info = rm.build_mask(grid, getattr(st, "water_mask", None), crs_wkt,
+                                   out_folder=out_folder, log=log)
+        if info is not None:
+            report["water_mask"] = info
+            for p in info.get("problems") or []:
+                warnings.append(p)
+        src = "; ".join(os.path.basename(x) for x in (info or {}).get("sources") or [])
+        summary.update(rm.flood_metrics(fin, grid, cell_ac, arrival_m,
+                                        receptors=getattr(st, "receptors", None), mask=mask,
+                                        mask_source=src or None, crs=crs))
+        if mask is not None and out_folder and getattr(st, "write_final", True):
+            gj = rm.write_mask_geojson(grid, mask, out_folder, crs=crs)
+            if gj:
+                report["water_mask"]["polygons"] = gj
+    except Exception as e:      # noqa: BLE001 - extra figures never cost the run
+        msg = "Run-report metrics (#91) not computed: {}: {}".format(type(e).__name__, e)
+        warnings.append(msg)
+        log(msg)
+    return mask
+
+
 def _qa_maps(report, st, dam, dam_xy, inflow_xy, top_m, qa_ctx, path, dem, fin, out_folder,
-             warnings, log):
+             warnings, log, water_mask=None):
     """The QA PNGs (core/qa_maps.py) into the dam's output folder. Never fails the run."""
     try:
         from . import qa_maps
@@ -2050,7 +2244,8 @@ def _qa_maps(report, st, dam, dam_xy, inflow_xy, top_m, qa_ctx, path, dem, fin, 
             tuple(dam_xy), tuple(inflow_xy) if inflow_xy is not None else None, top_m,
             radius_m=qa_ctx.get("radius_m"), trace=path,
             crest_line=getattr(dam, "crest_line_xy", None), breach_xy=qa_ctx.get("breach_xy"),
-            model_grid=dem, depth_m=depth)
+            model_grid=dem, depth_m=depth, metrics=report.get("summary"),
+            water_mask=water_mask)
         report["qa_maps"] = info
         for p in problems:
             warnings.append(p)
@@ -2167,8 +2362,11 @@ def render_report(r):
              "| Maximum depth / velocity | {} ft / {} ft/s |".format(s["max_depth_ft"],
                                                                   s["max_velocity_fps"]),
              "| Latest arrival | {} h after breach initiation |".format(s["latest_arrival_hr"]),
-             "| Domain | {} x {} mi after {} LISFLOOD-FP run(s) |".format(
-                 s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"])]
+             "| Domain | {} x {} mi after {} run(s) of {} |".format(
+                 s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"],
+                 r.get("flood_engine_short", "LISFLOOD-FP"))]
+    from . import report_metrics as _rm
+    lines += _rm.report_lines(s)        # v3.10.27 (#91); nothing for an older report
     if s.get("receptors_flooded"):
         lines.append("| Reaches | {} |".format(s["receptors_flooded"]))
     if s.get("refine_near_dam"):
@@ -2185,6 +2383,8 @@ def render_report(r):
         elif am.get("requested") not in (None, "default", s["anuga_mesher"]):
             txt += " (asked for {})".format(am.get("requested"))
         lines.append("| ANUGA mesh | {} |".format(txt))
+    if s.get("anuga_elevation"):
+        lines.append("| ANUGA bed elevation | {} |".format(s["anuga_elevation"]))
     lines.append("")
     if s.get("anuga_mesh_rejected"):
         lines += ["## ANUGA mesh", "", "**" + s["anuga_mesh_rejected"] + "**", ""]
@@ -2274,8 +2474,9 @@ def render_report(r):
                 "edges_over_after_receptors", it["edges_over_tolerance"]))) or "none",
             it["runtime_min"]))
     last = r["lisflood_runs"][-1]["stats"]
-    lines += ["", "LISFLOOD-FP (last run): max volume error {}% of the breach volume, "
-              "peak inflow {} cfs.".format(last.get("max_volume_error_pct"),
+    lines += ["", "{} (last run): max volume error {}% of the breach volume, "
+              "peak inflow {} cfs.".format(r.get("flood_engine_short", "LISFLOOD-FP"),
+                                           last.get("max_volume_error_pct"),
                                            last.get("peak_inflow_cfs")), ""]
     cs = r.get("class_stop_rule")
     if cs:

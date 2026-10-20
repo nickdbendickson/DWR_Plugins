@@ -791,7 +791,18 @@ class NDHazardAlgorithm(_ToolBase):
             return
         ft = self.parameterAsDouble(parameters, "AADT_JOIN_FT", context)
         max_m = ft * 0.3048 if ft else aadt_join.DEFAULT_MAX_M
-        self._aadt_log = aadt_join.apply(need, parts, traffic, max_m,
+        # M13: aadt_join.match/apply measure distances in the grid's own coordinate units, while
+        # max_m is metres. On a feet CRS those units are feet, so the metre radius must be
+        # expressed in grid units (metres / metres-per-unit) or the ~30 m search radius collapses
+        # to ~9 m and overtopped roads stop matching their traffic layer. (metres-per-unit idiom
+        # shared with algorithms_tools / products / algorithms_hecras: linear_unit_m or 1.0.)
+        from .core import gdal_io
+        try:
+            unit_m = gdal_io.linear_unit_m(grid.crs_wkt) or 1.0
+        except Exception:
+            unit_m = 1.0            # GDAL unavailable / CRS not projected: assume metre units
+        max_units = max_m / unit_m
+        self._aadt_log = aadt_join.apply(need, parts, traffic, max_units,
                                          is_wet=getattr(self, "_is_wet", None))
         for j in self._aadt_log:
             feedback.pushInfo("AADT joined: {road} = {aadt:g} ({year}) from {source}".format(**j))

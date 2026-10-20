@@ -24,7 +24,6 @@ in the fine domain at the end is not passed on (only the flow through the interf
 handover is checked: the volume through the interface against the breach volume is reported.
 """
 import copy
-import dataclasses
 import math
 import os
 
@@ -352,6 +351,13 @@ def run_nested(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         "interface_peak_cfs": out.interface["peak_cfs"],
         "fine_cells": int(fr.grid.data.size), "coarse_cells": int(cr.grid.data.size),
     }
+    try:                    # v3.10.27 (#91): reporting only
+        from . import report_metrics
+        out.summary.update(report_metrics.flood_metrics(
+            fin, grid, cell_ac, st.arrival_depth_ft * FT,
+            receptors=getattr(st, "receptors", None)))
+    except Exception:       # noqa: BLE001
+        pass
     out.report_md = _write_report(out, dam, st, fine_cell_m, out_folder)
     progress(100, "done")
     return out

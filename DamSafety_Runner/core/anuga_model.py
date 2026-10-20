@@ -10,17 +10,19 @@ import math
 import os
 import queue
 import subprocess
-import sys
 import threading
 import time
 
 import numpy as np
 
-from .grid import Grid
 from .lisflood import Envelopes, ModelError, Cancelled
-from . import terrain
+from . import terrain, wallclock
 from . import conditioning as cond
 from . import structures as structmod
+
+# Windows: no console window for a child program (QGIS is a GUI program, so each console
+# program it starts opens its own window, and closing that window kills the run)
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_NO_WINDOW
 
 WORKER = os.path.join(os.path.dirname(__file__), "anuga_worker.py")
 MESHER = os.path.join(os.path.dirname(__file__), "gmsh_mesher.py")
@@ -54,6 +56,14 @@ class AnugaSettings:
         self.mesher = "default"
         self.gmsh = None                 # dict of gmsh_mesher sizes (None = its defaults)
         self.gmsh_timeout_s = 600.0
+        # 3.10.31 ANUGA_ELEVATION: "fine" = the bed from the finest terrain (the DEM source at
+        # its own cell size, read in blocks), sampled at the triangle vertices; "model_grid" =
+        # the model DEM at the triangle centroids (before 3.10.31). "fine" needs run()'s
+        # elevation_read; without it, or when the source is not finer, the model grid is used.
+        self.elevation = "fine"
+        self.elevation_cell_m = None     # None = the source DEM's own cell size (>= 0.5 m)
+        self.elevation_max_cells = 256e6   # cap on the fine grid (float32 on disk, ~1 GB)
+        self.elevation_block = 2048      # cells per side of one read
 
 
 def inlet_line(inflow_xy, direction, width_m):
@@ -99,6 +109,78 @@ def octagon(center, radius, n=8):
     return np.column_stack([center[0] + radius * np.cos(a), center[1] + radius * np.sin(a)])
 
 
+def culvert_area_m2(st):
+    """Largest triangle at the culvert ends (both meshers)."""
+    return min(st.fine_area_m2, 25.0)
+
+
+def convex_hull(pts):
+    """Convex hull (counter-clockwise, no repeated first point) of 2-D points."""
+    p = sorted(set(map(tuple, np.asarray(pts, float).tolist())))
+    if len(p) < 3:
+        return np.array(p)
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    lo, hi = [], []
+    for q in p:
+        while len(lo) >= 2 and cross(lo[-2], lo[-1], q) <= 0:
+            lo.pop()
+        lo.append(q)
+    for q in reversed(p):
+        while len(hi) >= 2 and cross(hi[-2], hi[-1], q) <= 0:
+            hi.pop()
+        hi.append(q)
+    return np.array(lo[:-1] + hi[:-1])
+
+
+def convex_polygons_near(a, b, gap):
+    """True when two convex polygons overlap or come within `gap` of each other on every
+    separating axis (their edge normals; conservative: a 'near' pair may be a bit
+    further apart than gap along a diagonal)."""
+    for poly in (a, b):
+        e = np.roll(poly, -1, axis=0) - poly
+        for nx, ny in np.column_stack([-e[:, 1], e[:, 0]]):
+            n = np.hypot(nx, ny)
+            if n == 0:
+                continue
+            pa = (a[:, 0] * nx + a[:, 1] * ny) / n
+            pb = (b[:, 0] * nx + b[:, 1] * ny) / n
+            if pa.min() > pb.max() + gap or pb.min() > pa.max() + gap:
+                return False
+    return True
+
+
+def culvert_regions(culverts, st):
+    """Refined regions for the default mesher: an octagon of radius max(3 x width, 25 m)
+    around each culvert end, as before 3.10.30. Octagons that overlap or nearly touch (a
+    culvert shorter than two radii - Absaraka's 36 m culverts - or the ends of culverts
+    side by side) crossed each other's edges, and ANUGA's mesher put sliver triangles at
+    the crossings (down to 0.15 m2, which set the time step). Such octagons are now
+    merged into one region, the convex hull of their corners, so no region edges cross.
+    Octagons apart from all others are unchanged (the same job file as before)."""
+    area = culvert_area_m2(st)
+    gap = math.sqrt(4.0 * area / math.sqrt(3.0))       # one triangle edge at that size
+    polys = []
+    for c in culverts:
+        r = max(3.0 * c["width"], 25.0)
+        for e in c["end_points"]:
+            polys.append(octagon(e, r))
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(polys)):
+            for j in range(i + 1, len(polys)):
+                if convex_polygons_near(polys[i], polys[j], gap):
+                    polys[i] = convex_hull(np.vstack([polys[i], polys[j]]))
+                    del polys[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    return [{"poly": p.tolist(), "area": area} for p in polys]
+
+
 def clip_lines_to_polygon(lines, polygon, min_len=1):
     """Pieces of the polylines that lie inside `polygon` (vertex test)."""
     out = []
@@ -121,7 +203,7 @@ def clip_lines_to_polygon(lines, polygon, min_len=1):
 
 
 def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_depth=None,
-              culverts=None, breaklines=None, regions=None, mesh=None):
+              culverts=None, breaklines=None, regions=None, mesh=None, elevation=None):
     job = {
         "dem": dem.masked().astype(np.float32), "dem_x0": dem.x0, "dem_y0": dem.y0,
         "dem_dx": dem.dx, "manning_n": st.manning_n,
@@ -149,6 +231,8 @@ def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_d
         job["mesh_triangles"] = np.asarray(mesh["triangles"], np.int64)
         job["mesh_boundary"] = np.asarray(mesh["boundary"], np.int64)
         job["mesh_stats"] = json.dumps(mesh.get("stats", {}))
+    if elevation:            # 3.10.31: the fine bed (prepare_elevation); absent = as before
+        job.update(elevation)
     np.savez(path, **job)
 
 
@@ -183,6 +267,11 @@ def gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st, channel=No
     spec = dict(outer=np.asarray(outer, float).tolist(), lines=lines,
                 channel=[np.asarray(c, float).tolist() for c in channel], points=pts,
                 threads=int(st.threads or 0))
+    if culverts:
+        # 3.10.31: the culvert ends get the default mesher's size (its octagons around each
+        # end, culvert_regions); without it they got min_area_m2 (100 m2). The quality gate
+        # follows (gmsh_mesher.gate_area: 0.45 x the smallest size asked for).
+        spec["culvert_area_m2"] = culvert_area_m2(st)
     spec.update({k: v for k, v in (st.gmsh or {}).items() if not k.startswith("embankment")})
     return spec
 
@@ -318,8 +407,9 @@ def make_gmsh_mesh(workdir, spec, st):
     if os.path.exists(op):
         os.remove(op)
     try:
-        out = subprocess.run([st.python, MESHER, sp, op], capture_output=True, text=True,
-                             env=_clean_env(), timeout=float(st.gmsh_timeout_s), errors="replace")
+        # wall-clock timeout (a paused VM counts; core/wallclock.py), SIGTERM then SIGKILL
+        out = wallclock.run([st.python, MESHER, sp, op], env=_clean_env(),
+                            timeout=float(st.gmsh_timeout_s), grace=5.0, what="gmsh")
     except subprocess.TimeoutExpired:
         return None, "gmsh took over {:.0f} s (timeout)".format(st.gmsh_timeout_s)
     except Exception as e:
@@ -336,6 +426,153 @@ def make_gmsh_mesh(workdir, spec, st):
     return mesh, ("ANUGA mesh from gmsh: {} triangles, smallest {:.0f} m2, minimum angle "
                   "{:.1f} deg.".format(s.get("triangles"), s.get("min_area_m2", 0),
                                        s.get("min_angle_deg", 0)))
+
+
+ELEVATION_MODES = ("fine", "model_grid")
+ELEVATION_FILE = "anuga_elevation_fine.npy"
+
+
+def elevation_mode(st):
+    return str(getattr(st, "elevation", "fine") or "fine").strip().lower()
+
+
+def fine_elevation_cell(st, native_m, bounds, model_dx):
+    """(cell, why) of the fine elevation grid over `bounds`: the source DEM's own cell size
+    (2 m when unknown) or the elevation_cell_m override, at least 0.5 m, coarsened only so
+    the grid stays within elevation_max_cells. cell is None when that is not finer than
+    the model grid (why says so)."""
+    over = getattr(st, "elevation_cell_m", None)
+    if over:
+        cell, why = float(over), "elevation_cell_m"
+    elif native_m and native_m > 0:
+        cell, why = float(native_m), "the source DEM's cell size"
+    else:
+        cell, why = 2.0, "2 m (the source DEM's cell size is unknown)"
+    cell = max(cell, 0.5)
+    x0, y0, x1, y1 = bounds
+    cap = float(getattr(st, "elevation_max_cells", 256e6) or 256e6)
+    need = math.sqrt(max((x1 - x0) * (y1 - y0), 0.0) / cap)
+    if need > cell:
+        cell = math.ceil(need * 100.0) / 100.0
+        why += ", coarsened to keep the grid under {:.0f} million cells".format(cap / 1e6)
+    if cell >= 0.999 * float(model_dx):
+        return None, ("the source DEM ({:g} m) is not finer than the model grid ({:g} m)"
+                      .format(cell, model_dx))
+    return cell, why
+
+
+def _rect_touches_polygon(rect, poly, pts):
+    """Does the rectangle (x0, y0, x1, y1) meet the polygon? pts = the polygon's outline
+    densified finer than the rectangle."""
+    x0, y0, x1, y1 = rect
+    xs = np.array([x0, x1, x0, x1, 0.5 * (x0 + x1)])
+    ys = np.array([y0, y0, y1, y1, 0.5 * (y0 + y1)])
+    if cond.points_in_polygon(xs, ys, poly).any():
+        return True
+    return bool(((pts[:, 0] >= x0) & (pts[:, 0] <= x1) & (pts[:, 1] >= y0)
+                 & (pts[:, 1] <= y1)).any())
+
+
+def write_fine_elevation(path, polygon, cell, read, block=2048, pad_m=None, cancel=None):
+    """Read the terrain over the polygon's bounding box at `cell` in blocks of block x block
+    cells and write it to `path` as a float32 .npy (row 0 = top, NaN = no data) through a
+    memory map, so a 20 x 20 mi domain at 1 m never sits in memory. Blocks that miss the
+    polygon stay NaN (not read). read(bounds, cell) -> Grid. Returns the grid's x0, y0
+    (left / top), shape and the counts."""
+    poly = np.asarray(polygon, float)
+    pad = float(pad_m if pad_m is not None else 4.0 * cell)
+    x0 = math.floor((poly[:, 0].min() - pad) / cell) * cell
+    y0 = math.floor((poly[:, 1].min() - pad) / cell) * cell
+    x1 = math.ceil((poly[:, 0].max() + pad) / cell) * cell
+    y1 = math.ceil((poly[:, 1].max() + pad) / cell) * cell
+    nx = int(round((x1 - x0) / cell))
+    ny = int(round((y1 - y0) / cell))
+    edge = cond.densify(np.vstack([poly, poly[:1]]), max(cell, 0.25 * block * cell))
+    mm = np.lib.format.open_memmap(path, mode="w+", dtype=np.float32, shape=(ny, nx))
+    n_read = n_skip = n_valid = 0
+    t0 = time.time()
+    try:
+        for r0 in range(0, ny, block):
+            for c0 in range(0, nx, block):
+                if cancel and cancel():
+                    raise Cancelled("cancelled")
+                h, w = min(block, ny - r0), min(block, nx - c0)
+                bx0, bx1 = x0 + c0 * cell, x0 + (c0 + w) * cell
+                by1, by0 = y1 - r0 * cell, y1 - (r0 + h) * cell
+                if not _rect_touches_polygon((bx0, by0, bx1, by1), poly, edge):
+                    mm[r0:r0 + h, c0:c0 + w] = np.nan
+                    n_skip += 1
+                    continue
+                g = read((bx0, by0, bx1, by1), cell)
+                a = np.full((h, w), np.nan, np.float32)
+                d = np.asarray(g.data, np.float32)[:h, :w]
+                a[:d.shape[0], :d.shape[1]] = d
+                mm[r0:r0 + h, c0:c0 + w] = a
+                n_valid += int(np.isfinite(a).sum())
+                n_read += 1
+        mm.flush()
+    finally:
+        del mm
+    return {"x0": x0, "y0": y1, "nx": nx, "ny": ny, "cell_m": cell, "blocks_read": n_read,
+            "blocks_skipped": n_skip, "valid_cells": n_valid,
+            "file_mb": round(nx * ny * 4 / 1e6, 1), "read_s": round(time.time() - t0, 1)}
+
+
+def prepare_elevation(workdir, outer, dem, st, elevation_read, native_m=None, label=None,
+                      log=None, cancel=None):
+    """(job keys or None, report dict) for the ANUGA bed (ANUGA_ELEVATION)."""
+    mode = elevation_mode(st)
+    info = {"mode": "model_grid", "cell_m": round(float(dem.dx), 3),
+            "source": "model grid (the DEM at the model cell size, as LISFLOOD-FP uses)",
+            "sampled_at": "centroids"}
+    if mode == "model_grid":
+        info["reason"] = "ANUGA_ELEVATION=model_grid"
+        return None, info
+    if mode != "fine":
+        info["reason"] = "ANUGA_ELEVATION {!r} is unknown; used the model grid".format(mode)
+        return None, info
+    if elevation_read is None:
+        info["reason"] = "no finer terrain source was given"
+        return None, info
+    o = np.asarray(outer, float)
+    bounds = (o[:, 0].min(), o[:, 1].min(), o[:, 0].max(), o[:, 1].max())
+    cell, why = fine_elevation_cell(st, native_m, bounds, dem.dx)
+    if cell is None:
+        info["reason"] = why
+        return None, info
+    path = os.path.join(workdir, ELEVATION_FILE)
+    try:
+        w = write_fine_elevation(path, o, cell, elevation_read,
+                                 int(getattr(st, "elevation_block", 2048) or 2048), cancel=cancel)
+    except Cancelled:
+        raise
+    except Exception as e:                      # noqa - the run goes on with the model grid
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        info["reason"] = "the fine terrain could not be read ({}: {}); used the model grid".format(
+            type(e).__name__, str(e)[:200])
+        if log:
+            log("WARNING: ANUGA elevation: " + info["reason"])
+        return None, info
+    if not w["valid_cells"]:
+        os.remove(path)
+        info["reason"] = "the fine terrain has no data over the mesh; used the model grid"
+        return None, info
+    info = {"mode": "fine", "cell_m": cell, "cell_rule": why, "native_cell_m": native_m,
+            "source": label or "the DEM source (conditioned as for the model grid)",
+            "sampled_at": "triangle vertices (bilinear); the model grid fills gaps",
+            "model_cell_m": round(float(dem.dx), 3), "file": ELEVATION_FILE}
+    info.update({k: w[k] for k in ("nx", "ny", "blocks_read", "blocks_skipped", "valid_cells",
+                                   "file_mb", "read_s")})
+    if log:
+        log("ANUGA elevation: {:g} m cells from {} ({} x {}, {:.0f} MB, {:.0f} s).".format(
+            cell, info["source"], w["nx"], w["ny"], w["file_mb"], w["read_s"]))
+    job = {"elev_fine_file": ELEVATION_FILE, "elev_fine_x0": w["x0"], "elev_fine_y0": w["y0"],
+           "elev_fine_dx": cell}
+    return job, info
 
 
 def mesher_mode(st):
@@ -360,7 +597,7 @@ def _launch(st, job, result, workdir, progress, cancel):
     with open(log_path, "w", encoding="utf-8") as logf:
         proc = subprocess.Popen([st.python, "-u", WORKER, job, result], cwd=workdir, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                bufsize=1, errors="replace")
+                                bufsize=1, errors="replace", **NO_WINDOW)
         lines = queue.Queue()
 
         def pump():
@@ -406,10 +643,15 @@ def _tail_text(path, chars=2000):
 
 def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, st,
         progress=None, cancel=None, log=None, structures=None, initial_depth=None,
-        refine_lines=None, reuse=False, embankment_lines=None, terrain_read=None):
+        refine_lines=None, reuse=False, embankment_lines=None, terrain_read=None,
+        elevation_read=None, elevation_native_m=None, elevation_label=None):
     """embankment_lines: road / rail centrelines (work CRS); with a gmsh mesher the
     pieces on an embankment become mesh lines (find_embankments). terrain_read(bounds,
-    cell) reads finer ground for that test. Neither changes the default mesh."""
+    cell) reads finer ground for that test. Neither changes the default mesh.
+    elevation_read(bounds, cell) -> Grid: the terrain ANUGA's bed is sampled from
+    (ANUGA_ELEVATION=fine, prepare_elevation; st.elevation), elevation_native_m its own
+    cell size and elevation_label its name for the report. Without it the bed is the
+    model DEM `dem`, as before 3.10.31."""
     if not st.python or not os.path.isfile(st.python):
         raise ModelError("ANUGA Python interpreter not found: {}".format(st.python))
     os.makedirs(workdir, exist_ok=True)
@@ -418,11 +660,7 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     job = os.path.join(workdir, "anuga_job.npz")
     result = os.path.join(workdir, "anuga_result.npz")
     culverts, cnotes = structmod.anuga_culverts(structures or [], dem, outer)
-    regions = []
-    for c in culverts:      # small triangles around both ends of each culvert
-        r = max(3.0 * c["width"], 25.0)
-        for e in c["end_points"]:
-            regions.append({"poly": octagon(e, r).tolist(), "area": min(st.fine_area_m2, 25.0)})
+    regions = culvert_regions(culverts, st)     # small triangles at both culvert ends
     step = max(5.0, float(np.sqrt(max(st.fine_area_m2, 1.0))))
     breaklines = clip_lines_to_polygon([cond.densify(np.asarray(b, float), step)
                                         for b in (refine_lines or [])], outer)
@@ -466,14 +704,19 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         minfo["rejected"] = "unknown mesher {!r}".format(mesher)
         if log:
             log("WARNING: " + mnote)
+    have = bool(reuse) and os.path.exists(result)
+    if have:                 # the result is reused: the bed is not read again
+        elev_job, elev_info = None, {"mode": "reused", "reason": "earlier result reused"}
+    else:
+        elev_job, elev_info = prepare_elevation(workdir, outer, dem, st, elevation_read,
+                                                elevation_native_m, elevation_label, log, cancel)
     write_job(job, dem, outer, fine, inlet, hydrograph, st, dem, initial_depth, culverts,
-              breaklines, regions, mesh=mesh)
+              breaklines, regions, mesh=mesh, elevation=elev_job)
     np.savetxt(os.path.join(workdir, "mesh_boundary.csv"), outer, delimiter=",",
                header="x,y", comments="", fmt="%.3f")
     if len(fine):
         np.savetxt(os.path.join(workdir, "mesh_fine_area.csv"), fine, delimiter=",",
                    header="x,y", comments="", fmt="%.3f")
-    have = bool(reuse) and os.path.exists(result)
     if os.path.exists(result) and not have:
         os.remove(result)
     t0 = time.time()
@@ -490,6 +733,13 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     if proc.returncode != 0 or not os.path.exists(result):
         tail = _tail_text(log_path)
         raise ModelError("ANUGA stopped with code {}:\n{}".format(proc.returncode, tail))
+    fpath = os.path.join(workdir, ELEVATION_FILE)
+    if elev_job and os.path.exists(fpath):      # up to ~1 GB; the job only needs it once
+        try:
+            os.remove(fpath)
+            elev_info["file_removed_after_run"] = True
+        except OSError:
+            pass
     # 3.4.1: read the archive inside `with` - an open .npz keeps the file locked on Windows
     # until garbage collection, which stopped the work folder from being removed
     with np.load(result) as r:
@@ -497,12 +747,18 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         depth, vel, arr, wse = r["depth"], r["velocity"], r["arrival_hr"], r["wse"]
     stats.update({
         "mesher": minfo["used"], "mesh": minfo,
+        "elevation_source": dict(elev_info, worker=stats.get("elevation")),
         "max_depth_ft": round(float(np.nanmax(depth)) / 0.3048, 2),
         "max_velocity_fps": round(float(np.nanmax(vel)) / 0.3048, 2),
         "flooded_acres": round(float(np.nansum(depth >= st.arrival_depth_m)) * dem.dx ** 2
                                / 4046.8564224, 1),
         "max_edge_depth_ft": round(stats["max_edge_depth_m"] / 0.3048, 2),
     })
+    try:                    # v3.10.27 (#91): reporting only
+        from . import report_metrics
+        stats.update(report_metrics.pass_stats(dem, depth, vel))
+    except Exception:       # noqa: BLE001
+        pass
     if log:
         log("ANUGA finished in {:.1f} min ({} triangles)".format((time.time() - t0) / 60.0,
                                                                stats.get("triangles")))
@@ -529,7 +785,7 @@ def check_anuga(python, workdir):
             "import sys; print(getattr(anuga,'__version__','?'), sys.version.split()[0])")
     try:
         out = subprocess.run([python, "-c", code], capture_output=True, text=True, env=env,
-                             timeout=300, errors="replace")
+                             timeout=300, errors="replace", **NO_WINDOW)
     except Exception as e:
         return {"ok": False, "message": str(e)}
     if out.returncode != 0:
@@ -546,7 +802,8 @@ def check_gmsh(python, env=None):
     code = "import gmsh; print(gmsh.__version__)"
     try:
         out = subprocess.run([python, "-c", code], capture_output=True, text=True,
-                             env=env or _clean_env(), timeout=120, errors="replace")
+                             env=env or _clean_env(), timeout=120, errors="replace",
+                             **NO_WINDOW)
     except Exception as e:
         return {"gmsh": None, "gmsh_message": "gmsh check failed: {}".format(e)}
     if out.returncode != 0:

@@ -6,6 +6,7 @@ from osgeo import gdal, ogr, osr
 from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterFile,
                        QgsProcessingParameterNumber, QgsProcessingParameterFeatureSink,
+                       QgsProcessingParameterEnum,
                        QgsFields, QgsField, QgsFeature,
                        QgsCoordinateTransform, QgsCoordinateReferenceSystem, QgsProject,
                        QgsFeatureRequest, QgsRectangle)
@@ -26,9 +27,18 @@ NEW_FIELDS = [("est_pool_m", FT_DOUBLE), ("est_crest_m", FT_DOUBLE),
               ("below_scale", FT_DOUBLE), ("cal_total_m3", FT_DOUBLE)]
 
 
+def _storage_choice(alg, params, context):
+    """STORAGE_CHOICE of `alg`: 0 (Max) when it has no such parameter (a model or script from
+    before 0.17.27, or a stand-in object in a test)."""
+    if alg.parameterDefinition("STORAGE_CHOICE") is None:
+        return storage.STORAGE_MAX
+    return alg.parameterAsEnum(params, "STORAGE_CHOICE", context)
+
+
 class EstimateStorage(QgsProcessingAlgorithm):
     DAMS, WB, DEMDIR, SEARCH, SHAPE, OUT, CURVES = ("DAMS", "WB", "DEMDIR", "SEARCH",
                                                     "SHAPE", "OUT", "CURVES")
+    STORAGE_CHOICE = "STORAGE_CHOICE"      # 0.17.27: the window's storage choice (0 Max)
 
     def name(self): return "estimatestorage"
     def displayName(self): return "3 - Estimate reservoir storage"
@@ -46,7 +56,15 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 "(stor_method = inventory): it calibrates the below-pool part of the curve "
                 "(below_scale) while the above-pool part stays DEM-measured. inv_vs_est is "
                 "inventory normal storage / estimated storage at normal pool. Use the shape factor to "
-                "calibrate against dams with known storage.")
+                "calibrate against dams with known storage.\n\n"
+                "Storage to use (default Max storage): Max raises the storage at the top of dam "
+                "to the inventory maximum; Normal keeps the DEM-measured part above the normal "
+                "pool (a sunny-day check); Larger of the two uses whichever inventory value is "
+                "larger. A missing or zero value falls back to the other one (Normal without a "
+                "normal storage uses the maximum, Max without a maximum uses the normal); with "
+                "neither, the DEM estimate is kept. Dams without a water body use the chosen "
+                "value for their assumed full-height curve. stor_notes and the log start with "
+                "the storage used and any fallback.")
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterFeatureSource(
@@ -60,12 +78,19 @@ class EstimateStorage(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterNumber(
             self.SHAPE, "Below-pool shape factor (calibration)",
             NUM_DOUBLE, 1.0, minValue=0.1, maxValue=1.5))
+        self.addParameter(QgsProcessingParameterEnum(
+            self.STORAGE_CHOICE, "Storage to use", list(storage.STORAGE_CHOICES),
+            defaultValue=storage.STORAGE_MAX))
         self.addParameter(QgsProcessingParameterFolderDestination(
             self.CURVES, "Folder for stage-storage curves (CSV)"))
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUT, "Dams with storage", SRC_POINT))
 
     # -- helpers ---------------------------------------------------------
+    def _choice(self, params, context):
+        """STORAGE_CHOICE (0 Max when the parameter is absent: older models / scripts)."""
+        return _storage_choice(self, params, context)
+
     @staticmethod
     def _rasterize(geoms_wkb, ds):
         gt = ds.GetGeoTransform()
@@ -92,10 +117,10 @@ class EstimateStorage(QgsProcessingAlgorithm):
             except (TypeError, ValueError):
                 return 0.0
         inv_max, inv_norm, hh = num("inv_max_m3"), num("inv_norm_m3"), num("height_m")
-        choice = self.parameterAsEnum(params, "STORAGE_CHOICE", context) \
-            if self.parameterDefinition("STORAGE_CHOICE") else 0
-        vol, how = storage.storage_choice_volume(inv_norm, inv_max, choice)
-        if not (vol > 1.0 and hh > 0.5):
+        pick = storage.resolve_storage_choice(inv_norm, inv_max, _storage_choice(self, params, context))
+        vol = pick["volume_m3"]
+        how = "{} storage".format(pick["kind"])
+        if vol is None or not hh > 0.5:
             return None
         ground = None
         if arr is not None and row is not None and col is not None:
@@ -119,6 +144,9 @@ class EstimateStorage(QgsProcessingAlgorithm):
         shape = self.parameterAsDouble(params, self.SHAPE, context)
         curves = self.parameterAsString(params, self.CURVES, context)
         os.makedirs(curves, exist_ok=True)
+        choice = self._choice(params, context)
+        feedback.pushInfo("Storage to use: {}".format(
+            storage.resolve_storage_choice(0, 0, choice)["label"]))
 
         fields = QgsFields(dams.fields())
         for n, t in NEW_FIELDS: fields.append(QgsField(n, t))
@@ -138,6 +166,10 @@ class EstimateStorage(QgsProcessingAlgorithm):
             out = QgsFeature(fields); out.setGeometry(f.geometry())
             vals = list(f.attributes()) + [None] * len(NEW_FIELDS)
             res, note = None, ""
+            # M19: True when `res` is the assumed quadratic inventory curve from _inventory_curve
+            # (a guess from inventory volume + height, not a DEM measurement); it must be reported
+            # low confidence and labelled as the assumed kind, never high-confidence 'inventory'
+            assumed = False
             # reset per dam: the dry-dam fallback must not see the previous dam's raster, and the
             # frame-dict lookups it used kept the frame (the output sink too) referenced on
             # Python 3.12, so 3_dams_storage.gpkg was left without its layer
@@ -185,6 +217,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
                                                                                  h / storage.FT_M))
                     if alt is not None:
                         res, note = alt, "{} (water body: {})".format(alt.notes[0], note)
+                        assumed = True
                         feedback.pushWarning("dam {}: {}".format(dam_id, alt.notes[0]))
             except Exception as e:  # keep going, record why
                 note = "FAILED: " + er.plain(e, dam_id, "3")
@@ -195,6 +228,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
                                                 "no waterbody polygon")
                 if alt is not None:
                     res, note = alt, alt.notes[0]
+                    assumed = True
                     feedback.pushWarning("dam {}: {}".format(dam_id, note))
                 else:
                     feedback.reportError("dam {}: {}".format(dam_id, er.plain(e, dam_id, "3")))
@@ -206,18 +240,27 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 curve, scale, cnote = storage.calibrate_below_pool(
                     res.curve, res.below_pool_m3, inv)
                 if cnote: note = (note + "; " if note else "") + cnote
-                choice = self.parameterAsEnum(params, "STORAGE_CHOICE", context) if self.parameterDefinition("STORAGE_CHOICE") else 0
                 inv_max = f["inv_max_m3"] if "inv_max_m3" in names else None
                 try:
                     inv_max = float(inv_max) if inv_max not in (None, "") else 0.0
                 except (TypeError, ValueError):
                     inv_max = 0.0
                 inv_norm = inv or 0.0
-                if int(choice or 0) != 1:
+                # the storage choice (0.17.27). The below-pool part is always calibrated to the
+                # inventory normal storage (above). When the storage used is the inventory
+                # maximum (Max; Larger when the maximum is larger; Normal without a normal
+                # storage) the storage at the top of dam is raised to it; when it is the normal
+                # storage (Normal; Max without a maximum) the DEM-measured part above the normal
+                # pool is kept. resolve_storage_choice says which, and any fallback.
+                pick = storage.resolve_storage_choice(inv_norm, inv_max, choice)
+                if pick["kind"] == "maximum":
                     curve, tnote = storage.ensure_top_of_dam(
-                        curve, inv_max, getattr(res, "crest_elev", None))
+                        curve, pick["volume_m3"], getattr(res, "crest_elev", None))
                     if tnote:
                         note = (note + "; " if note else "") + tnote
+                note = pick["text"] + ("; " + note if note else "")
+                (feedback.pushWarning if pick["fallback"] else feedback.pushInfo)(
+                    "dam {}: {}".format(dam_id, pick["text"]))
                 if inv_max > 1.0 and inv_norm > 1.0 and inv_max > 3.0 * inv_norm:
                     note = (note + "; " if note else "") + "assumption: maximum storage is more than 3 times normal"
                 purpose = ""
@@ -227,10 +270,17 @@ class EstimateStorage(QgsProcessingAlgorithm):
                         break
                 if "flood" in purpose.lower():
                     note = (note + "; " if note else "") + "assumption: purpose is flood control; used {}".format(
-                        "normal storage" if int(choice or 0) == 1 else "maximum storage")
+                        "{} storage".format(pick["kind"]) if pick["kind"] != "none"
+                        else "the DEM estimate")
                 cal_total = curve[-1][1]
                 used, method, conf = ((inv, "inventory", "high") if inv else
                                       (res.total_m3, "estimated", res.confidence))
+                if assumed:
+                    # M19 (ported from nd_ 0.26.0 estimate_storage.py): the assumed quadratic curve
+                    # already holds the inventory volume at its top, but it is a GUESS whatever the
+                    # inventory fields say - report it low confidence and labelled as the assumed
+                    # kind, not a high-confidence 'inventory' measurement.
+                    used, method, conf = res.total_m3, "inventory curve", "low"
                 vals[k:] = [res.pool_elev, res.crest_elev, res.surface_area_m2, res.below_pool_m3,
                             res.above_pool_m3, res.total_m3, res.max_depth_m, res.shore_slope_deg,
                             used, method, conf,

@@ -7,7 +7,7 @@ the zeros stay in the mean). Writes a GeoPackage of points and one GeoTIFF per d
 """
 import os, csv, math
 import numpy as np
-from osgeo import ogr, gdal
+from osgeo import ogr
 from . import gridutil as G
 
 DEFAULT_PATTERNS = {

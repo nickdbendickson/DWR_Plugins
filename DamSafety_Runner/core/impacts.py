@@ -10,7 +10,6 @@ Structures are points; roads and rail are lines, sampled every `spacing`
 metres so each sample stands for that much length.
 """
 import csv
-import math
 
 import numpy as np
 
@@ -50,12 +49,16 @@ class Receptors:
         ids = ids if ids is not None else [str(i) for i in range(len(xy))]
         self._append(xy, kind, ids, 0.0)
 
-    def add_lines(self, lines, kind=KIND_ROAD, ids=None, spacing=LINE_SPACING_M):
+    def add_lines(self, lines, kind=KIND_ROAD, ids=None, spacing=LINE_SPACING_M, unit_m=1.0):
+        """`unit_m`: ground metres per coordinate unit (3.10.0: 0.3048 for a feet CRS, about
+        cos(latitude) for Web Mercator); lengths are kept in metres."""
+        unit_m = float(unit_m or 1.0)
         for i, ln in enumerate(lines):
-            pts = cond.densify(np.asarray(ln, dtype=float), spacing)
+            pts = cond.densify(np.asarray(ln, dtype=float), spacing / unit_m)
             if not len(pts):
                 continue
-            seg = cond.polyline_length(ln) / max(1, len(pts) - 1) if len(pts) > 1 else spacing
+            seg = (cond.polyline_length(ln) * unit_m / max(1, len(pts) - 1) if len(pts) > 1
+                   else spacing)
             self._append(pts, kind, [ids[i] if ids else str(i)] * len(pts), seg)
 
     def subset(self, mask):

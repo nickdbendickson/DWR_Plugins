@@ -628,7 +628,8 @@ class NDDamScreeningDialog(QDialog):
             note.setWordWrap(True)
             state.setFixedWidth(STEP_STATE_W)
             btn.setFixedWidth(STEP_BTN_W)
-            note.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            note.setSizePolicy(getattr(QSizePolicy, 'Policy', QSizePolicy).Ignored,
+                               getattr(QSizePolicy, 'Policy', QSizePolicy).Preferred)
             self.step_state[key], self.step_button[key], self.step_note[key] = state, btn, note
             grid.addWidget(state, i, 0)
             grid.addWidget(btn, i, 1)
@@ -888,7 +889,8 @@ class NDDamScreeningDialog(QDialog):
         grid = QGridLayout()
         grid.addWidget(QLabel("Source"), 0, 0)
         self.dem_source = QComboBox()
-        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)"])
+        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)",
+                                   "USGS 3DEP 1 m lidar tiles (native, TNM)"])
         self.dem_source.currentIndexChanged.connect(self._dem_fact)
         grid.addWidget(self.dem_source, 0, 1)
         grid.addWidget(QLabel("Resolution"), 0, 2)
@@ -1026,7 +1028,8 @@ class NDDamScreeningDialog(QDialog):
         box = QGroupBox("Download a DEM (USGS 3DEP, metres, EPSG:5070)")
         grid = QGridLayout()
         self.dem_source = QComboBox()
-        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)"])
+        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)",
+                                   "USGS 3DEP 1 m lidar tiles (native, TNM)"])
         self.dem_source.setToolTip("ND DWR LiDAR uses the FTP package from the map site: "
                                    "LiDAR_NorthDakota_QL2, ASCII_Grids_ft and DEM_Imagine.")
         self.dem_ftp = QLineEdit()
@@ -1094,8 +1097,7 @@ class NDDamScreeningDialog(QDialog):
 
     def _show_counties(self):
         from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsPointXY,
-                               QgsProject, QgsField, QgsFillSymbol, QgsSingleSymbolRenderer)
-        from qgis.PyQt.QtCore import QVariant
+                               QgsProject, QgsFillSymbol, QgsSingleSymbolRenderer)
         from .core import dem_download as dd
         layer = QgsVectorLayer("Polygon?crs=EPSG:4326&field=county:string",
                                "ND counties (download clips)", "memory")
@@ -1798,7 +1800,7 @@ class NDDamScreeningDialog(QDialog):
                 sim = os.path.join(work, "7_sim")
                 n = len([fn for fn in os.listdir(sim) if fn.endswith("_depth.tif")]) if os.path.isdir(sim) else 0
                 extra += "; depth rasters written: {}".format(n)
-            self.simple_note[cur].setText((note if False else self.simple_note[cur].text() + " | " + extra).strip(" |"))
+            self.simple_note[cur].setText((self.simple_note[cur].text() + " | " + extra).strip(" |"))
         hint = getattr(self, "next_hint", None)
         line = getattr(self, "status_line", None)
         by = {k: state for k, _t, state, _n in rows}
@@ -2220,7 +2222,7 @@ class NDDamScreeningDialog(QDialog):
         lay = QVBoxLayout(dlg)
         lay.addWidget(QLabel("Check the dams to screen. The county chain runs for these dams only."))
         lst = QListWidget()
-        lst.setSelectionMode(QListWidget.MultiSelection)
+        lst.setSelectionMode(getattr(QListWidget, 'SelectionMode', QListWidget).MultiSelection)
         for did, lab in choices:
             item = QListWidgetItem(lab)
             item.setData(getattr(Qt, "ItemDataRole", Qt).UserRole, did)
@@ -2243,7 +2245,7 @@ class NDDamScreeningDialog(QDialog):
         none_btn.clicked.connect(lambda: [lst.item(i).setCheckState(getattr(Qt, 'CheckState', Qt).Unchecked) for i in range(lst.count())])
         ok_btn.clicked.connect(dlg.accept)
         cancel_btn.clicked.connect(dlg.reject)
-        if (dlg.exec() if hasattr(dlg, 'exec') else dlg.exec_()) != QDialog.Accepted:
+        if (dlg.exec() if hasattr(dlg, 'exec') else dlg.exec_()) != getattr(QDialog, 'DialogCode', QDialog).Accepted:
             return False
         ids = [lst.item(i).data(getattr(Qt, "ItemDataRole", Qt).UserRole) for i in range(lst.count()) if lst.item(i).checkState() == getattr(Qt, 'CheckState', Qt).Checked]
         if not ids:
@@ -2456,8 +2458,8 @@ class NDDamScreeningDialog(QDialog):
                     self._log("!!! {} could not be read as a layer".format(p))
             except Exception as e:                               # noqa
                 self._log("!!! {}: {}".format(p, e))
+        self._fill_layers()     # before the summary: _fill_layers can log a work-folder-layout
         self._log("Added {} result layer(s) to the project{}".format(added, " in one group" if group is not None else ""))
-        self._fill_layers()
         return added
 
 
@@ -2465,7 +2467,10 @@ class NDDamScreeningDialog(QDialog):
         label = getattr(self, "dem_fact", None)
         if label is None:
             return
-        if index == 1:
+        if index == 2:
+            label.setText("USGS 3DEP 1 m lidar tiles: native GeoTIFF tiles, UTM metres, kept in the suite's "
+                          "dem/lidar_1m folder. Result is a per-dam VRT. The first run lists the tiles and sizes.")
+        elif index == 1:
             label.setText("ND DWR LiDAR: feet, often EPSG:3721, .img. Saved copy is EPSG:5070, metres, GeoTIFF.")
         else:
             label.setText("USGS 3DEP: EPSG:5070, metres, GeoTIFF.")

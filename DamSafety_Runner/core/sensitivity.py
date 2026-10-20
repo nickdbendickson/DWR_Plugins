@@ -37,7 +37,7 @@ import numpy as np
 from . import breach as brmod
 from . import impacts as impmod
 from . import workflow
-from .units import FT, CFS
+from .units import FT
 
 GROUP_WIDTH, GROUP_TIME, GROUP_N, GROUP_METHOD, GROUP_BASE = (
     "breach width", "formation time", "roughness", "method", "base")
@@ -224,6 +224,8 @@ def _stats(res, st, case, dam):
            "flooded_ac_over_arrival_depth": s.get("flooded_acres_over_arrival_depth"),
            "max_depth_ft": s.get("max_depth_ft"), "max_velocity_fps": s.get("max_velocity_fps"),
            "latest_arrival_hr": s.get("latest_arrival_hr")}
+    from . import report_metrics
+    row.update(report_metrics.table_values(s))      # v3.10.27 (#91)
     return row
 
 
@@ -482,6 +484,9 @@ CSV_FIELDS = ["case", "group", "method", "cell_m", "peak_cfs", "flooded_ac",
               "road_km_flooded", "rail_km_flooded", "max_depth_at_receptors_ft",
               "max_velocity_at_receptors_fps", "preview_class", "hazard_class",
               "fit_index_F", "class_stable_grid", "domain_too_small"]
+CSV_FIELDS += ["flooded_ac_ge_0_1ft", "flooded_ac_ge_1ft", "flooded_ac_ge_2ft",
+               "velocity_p95_fps", "velocity_p99_fps", "max_velocity_depth_ft",
+               "flooded_ac_masked", "flooded_ac_ge_1ft_masked"]   # v3.10.27 (#91), appended
 
 
 def write_outputs(out, st):

@@ -335,6 +335,48 @@ def _split_at_near_nodes(nodes, edges, kinds, snap_m, rounds=4):
     return edges, kinds
 
 
+def _threshold(d, smin, dmin, dmax, hmax):
+    """gmsh's Threshold field (linear between DistMin and DistMax)."""
+    if d <= dmin:
+        return smin
+    if d >= dmax:
+        return hmax
+    return smin + (hmax - smin) * (d - dmin) / max(dmax - dmin, 1e-9)
+
+
+def short_edge_counts(nodes, edges, kinds, pts, g, hmin, hch, hpt, hmax):
+    """{edge index: number of pieces} for embedded edges shorter than 3 x the local mesh
+    size. gmsh would cut such an edge into floor(L / h) + 1 pieces (L = 1.01 h gives two
+    of 0.5 h); round(L / h) keeps every piece at 0.75 h or more. The local size is the
+    size field (build_mesh's Threshold fields) at the edge's midpoint. Longer edges are left
+    to gmsh: floor(L / h) + 1 pieces of L >= 3 h are at least 0.75 h long."""
+    if not len(edges):
+        return {}
+    a, b = nodes[edges[:, 0]], nodes[edges[:, 1]]
+    is_line = np.array([kd == "line" for kd in kinds], bool)
+    pts = np.asarray(pts, float).reshape(-1, 2)
+    out = {}
+    for k in range(len(edges)):
+        L = float(np.hypot(*(b[k] - a[k])))
+        if L <= 0:
+            continue
+        m = 0.5 * (a[k] + b[k])
+        h = hmax
+        if is_line.any():
+            d = 0.0 if is_line[k] else _dist_to_segments(m, a[is_line], b[is_line])
+            h = min(h, _threshold(d, hmin, g["line_dist_min_m"], g["line_dist_max_m"], hmax))
+        if (~is_line).any():
+            d = 0.0 if not is_line[k] else _dist_to_segments(m, a[~is_line], b[~is_line])
+            h = min(h, _threshold(d, hch, g["channel_dist_min_m"], g["channel_dist_max_m"], hmax))
+        if len(pts):
+            d = float(np.min(np.hypot(*(pts - m).T)))
+            h = min(h, _threshold(d, hpt, g["point_dist_min_m"], g["point_dist_max_m"], hmax))
+        h = max(h, min(hmin, hpt))                   # Mesh.MeshSizeMin
+        if L < 3.0 * h:
+            out[k] = max(1, int(round(L / h)))
+    return out
+
+
 def _dist_to_ring(p, ring):
     r = np.asarray(ring, float)
     a, b = r, np.roll(r, -1, axis=0)
@@ -377,14 +419,16 @@ def build_mesh(spec):
     (culvert ends, inflow), and sizes: min_area_m2, channel_area_m2,
     max_area_m2, culvert_area_m2 (the points; None = min_area_m2), line_dist_min_m,
     line_dist_max_m, channel_dist_min_m, channel_dist_max_m, min_angle_deg,
-    min_area_tol (gate, see MIN_AREA_TOL), threads.
-    Returns dict(points, triangles (CCW), boundary [[tri, edge]...], stats)."""
-    import gmsh
+    min_area_tol (gate, see MIN_AREA_TOL), threads; v3.10.22 (HEC-RAS seeds): algorithm
+    (gmsh Mesh.Algorithm, default 5), random_seed (Mesh.RandomSeed, for the same points
+    every run), optimize [[method, niter]...] (default Laplace2D x 5), smoothing
+    (Mesh.Smoothing passes). Returns dict(points, triangles (CCW), boundary [[tri, edge]...], stats)."""
     g = dict(min_area_m2=100.0, channel_area_m2=250.0, max_area_m2=20000.0,
              line_dist_min_m=60.0, line_dist_max_m=1500.0, channel_dist_min_m=250.0,
              channel_dist_max_m=2500.0, point_dist_min_m=40.0, point_dist_max_m=600.0,
              min_angle_deg=20.0, min_area_tol=MIN_AREA_TOL, culvert_area_m2=None, declutter=True,
-             threads=0)
+             threads=0, algorithm=5, random_seed=None, optimize=(("Laplace2D", 5),),
+             smoothing=None)
     g.update({k: v for k, v in spec.items() if k in g})
     if g["culvert_area_m2"] is None:
         g["culvert_area_m2"] = g["min_area_m2"]
@@ -393,6 +437,9 @@ def build_mesh(spec):
         ring = ring[:-1]
     if len(ring) < 3:
         raise MeshError("outer polygon has fewer than 3 points")
+    # checked before gmsh is imported, so a bad spec is reported as such even where gmsh
+    # is missing (that is reported by make_gmsh_mesh as the ModuleNotFoundError line)
+    import gmsh
     # gmsh works in local coordinates: with UTM-sized numbers its tolerances
     # break down and meshing can hang
     origin = ring.min(axis=0)
@@ -437,13 +484,22 @@ def build_mesh(spec):
         surf = geo.addPlaneSurface([geo.addCurveLoop(bl)])
         used = sorted(set(edges.ravel().tolist())) if len(edges) else []
         gp = {n: geo.addPoint(float(nodes[n][0]), float(nodes[n][1]), 0.0) for n in used}
-        line_c, chan_c = [], []
+        line_c, chan_c, curve_of = [], [], []
         for (a, b), kd in zip(edges, kinds):
-            (line_c if kd == "line" else chan_c).append(geo.addLine(gp[a], gp[b]))
+            curve_of.append(geo.addLine(gp[a], gp[b]))
+            (line_c if kd == "line" else chan_c).append(curve_of[-1])
         free = []
         for p in pts_in:      # a point on or near an embedded line would stop gmsh
             if not len(edges) or _dist_to_segments(p, nodes[edges[:, 0]], nodes[edges[:, 1]]) > hmin / 2.0:
                 free.append(geo.addPoint(float(p[0]), float(p[1]), 0.0))
+        # 3.10.31: gmsh cuts an embedded curve of length L into floor(L / h) + 1 pieces, so an
+        # edge just longer than the local size h (an embankment piece's last segment, a piece
+        # between a crossing and a vertex) became two pieces of ~h / 2 and the triangles there
+        # fell below the gate (DWR-4441: a 20.0 m end segment at h = 19.8 m, 44 m2 < 45 m2).
+        # Short edges get a fixed node count instead: round(L / h) pieces, never under 0.75 h.
+        short = short_edge_counts(nodes, edges, kinds, pts_in, g, hmin, hch, hpt, hmax)
+        for k, n_seg in short.items():
+            geo.mesh.setTransfiniteCurve(curve_of[k], n_seg + 1)
         geo.synchronize()
         if line_c or chan_c:
             gmsh.model.mesh.embed(1, line_c + chan_c, 2, surf)
@@ -483,9 +539,14 @@ def build_mesh(spec):
             gmsh.option.setNumber("Mesh." + k, 0)
         gmsh.option.setNumber("Mesh.MeshSizeMin", min(hmin, hpt) if ptags else hmin)
         gmsh.option.setNumber("Mesh.MeshSizeMax", hmax)
-        gmsh.option.setNumber("Mesh.Algorithm", 5)
+        gmsh.option.setNumber("Mesh.Algorithm", int(g["algorithm"]))
+        if g["random_seed"] is not None:
+            gmsh.option.setNumber("Mesh.RandomSeed", int(g["random_seed"]))
+        if g["smoothing"] is not None:
+            gmsh.option.setNumber("Mesh.Smoothing", int(g["smoothing"]))
         gmsh.model.mesh.generate(2)
-        gmsh.model.mesh.optimize("Laplace2D", niter=5)
+        for meth, nit in (g["optimize"] or ()):
+            gmsh.model.mesh.optimize(str(meth), niter=int(nit))
         tags, xyz, _ = gmsh.model.mesh.getNodes()
         etypes, _, enodes = gmsh.model.mesh.getElements(2)
         tri_nodes = None
@@ -499,7 +560,8 @@ def build_mesh(spec):
     mesh_s = time.time() - t0
     return finish(np.asarray(tags, np.int64), np.asarray(xyz).reshape(-1, 3)[:, :2] + origin,
                   tri_nodes,
-                  g, mesh_s, n_lines=len(line_c), n_channel=len(chan_c), n_points=len(ptags))
+                  g, mesh_s, n_lines=len(line_c), n_channel=len(chan_c), n_points=len(ptags),
+                  short_edges_fixed=len(short))
 
 
 def finish(tags, xy, tri_nodes, g, mesh_s=0.0, **extra):

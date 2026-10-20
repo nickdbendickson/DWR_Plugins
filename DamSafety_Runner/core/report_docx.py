@@ -28,13 +28,11 @@ import datetime
 import fnmatch
 import hashlib
 import json
-import math
 import os
 import re
 import shutil
 import struct
 import subprocess
-import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
@@ -1599,7 +1597,14 @@ SENS_LABELS = {"case": "Case", "group": "Varied", "method": "Method", "peak_cfs"
                    "Latest arrival (h)", "structures_flooded": "Structures flooded",
                "structures_depth_ge_3ft": "Structures >= 3 ft", "road_km_flooded":
                    "Road flooded (km)", "rail_km_flooded": "Rail flooded (km)",
-               "hazard_class": "Hazard class", "domain_too_small": "Domain too small"}
+               "hazard_class": "Hazard class", "domain_too_small": "Domain too small",
+               # v3.10.27 (#91)
+               "flooded_ac_ge_0_1ft": "Flooded >= 0.1 ft (ac)", "flooded_ac_ge_1ft":
+                   "Flooded >= 1 ft (ac)", "flooded_ac_ge_2ft": "Flooded >= 2 ft (ac)",
+               "velocity_p95_fps": "Velocity P95 (ft/s)", "velocity_p99_fps":
+                   "Velocity P99 (ft/s)", "max_velocity_depth_ft": "Depth at max velocity (ft)",
+               "flooded_ac_masked": "Flooded, water bodies masked (ac)",
+               "flooded_ac_ge_1ft_masked": "Flooded >= 1 ft, water bodies masked (ac)"}
 
 
 def label_of(key):
@@ -2085,10 +2090,26 @@ class _Report(object):
             s.get("flooded_acres_over_arrival_depth"), "ac")
         add("Maximum depth", s.get("max_depth_ft"), "ft")
         add("Maximum velocity", s.get("max_velocity_fps"), "ft/s")
+        # v3.10.27 (#91): what the area and the maximum velocity are made of
+        add("Flooded area at or above 0.1 ft", s.get("flooded_acres_ge_0_1ft"), "ac")
+        add("Flooded area at or above 1 ft", s.get("flooded_acres_ge_1ft"), "ac")
+        add("Flooded area at or above 2 ft", s.get("flooded_acres_ge_2ft"), "ac")
+        add("Velocity P95 / P99 over wet cells",
+            None if s.get("velocity_p99_fps") is None else "{} / {}".format(
+                fmt_val(s.get("velocity_p95_fps")), fmt_val(s.get("velocity_p99_fps"))), "ft/s")
+        add("Depth at the maximum-velocity cell", s.get("max_velocity_depth_ft"), "ft")
+        add("Velocity at flooded structures (max)", s.get("velocity_at_structures_max_fps"), "ft/s")
+        add("Velocity at overtopped roads (max)", s.get("velocity_at_roads_max_fps"), "ft/s")
+        if s.get("water_mask_acres") is not None:
+            add("Water-body mask (reporting only)", s.get("water_mask_acres"), "ac")
+            add("Flooded area, water bodies masked", s.get("flooded_acres_masked"), "ac")
+            add("Flooded area at or above 1 ft, water bodies masked",
+                s.get("flooded_acres_ge_1ft_masked"), "ac")
         add("Latest arrival", s.get("latest_arrival_hr"), "h after breach initiation")
         if s.get("domain_mi"):
-            add("Model domain", "{} x {} mi after {} LISFLOOD-FP run(s)".format(
-                s["domain_mi"][0], s["domain_mi"][1], s.get("lisflood_runs")))
+            add("Model domain", "{} x {} mi after {} run(s) of {}".format(
+                s["domain_mi"][0], s["domain_mi"][1], s.get("lisflood_runs"),
+                s.get("flood_engine_short", "LISFLOOD-FP")))
         add("Final rasters from", s.get("final_model"))
         for k, v in (s.get("incremental_acres") or {}).items():
             add("Area where the breach adds at least " + k, v, "ac")
@@ -2245,7 +2266,8 @@ class _Report(object):
         if not rep or not (runs or st):
             return False
         tier = st.get("tier")
-        rows = [["Model", "LISFLOOD-FP (inertial solver)" + (
+        engine = rep.get("flood_engine") or "LISFLOOD-FP (inertial solver)"
+        rows = [["Model", engine + (
             "; final results from ANUGA" if tier == "lisflood+anuga" else "")],
             ["Inflow", "Breach hydrograph as a point source just below the dam; free outflow "
                        "at the domain edges"]]
@@ -2286,7 +2308,7 @@ class _Report(object):
                               fmt_val((it.get("stats") or {}).get("max_volume_error_pct")),
                               fmt_val(it.get("runtime_min"))])
             d.table(table, align=[None, None, "right", "right", None, None, "right", "right"],
-                    caption="LISFLOOD-FP runs")
+                    caption="{} runs".format(rep.get("flood_engine_short") or "LISFLOOD-FP"))
             dec = rep.get("receptor_edge_decisions") or []
             drows = []
             for rec in dec:
@@ -2354,7 +2376,16 @@ class _Report(object):
                 ("Latest arrival (h after breach initiation)", s.get("latest_arrival_hr")),
                 ("Flooded area (ac)", s.get("flooded_acres")),
                 ("Flooded area at or above the arrival depth (ac)",
-                 s.get("flooded_acres_over_arrival_depth"))) if v is not None]
+                 s.get("flooded_acres_over_arrival_depth")),
+                # v3.10.27 (#91)
+                ("Flooded area at or above 0.1 ft (ac)", s.get("flooded_acres_ge_0_1ft")),
+                ("Flooded area at or above 1 ft (ac)", s.get("flooded_acres_ge_1ft")),
+                ("Flooded area at or above 2 ft (ac)", s.get("flooded_acres_ge_2ft")),
+                ("Velocity P95 over wet cells (ft/s)", s.get("velocity_p95_fps")),
+                ("Velocity P99 over wet cells (ft/s)", s.get("velocity_p99_fps")),
+                ("Depth at the maximum-velocity cell (ft)", s.get("max_velocity_depth_ft")),
+                ("Flooded area, water bodies masked (ac)", s.get("flooded_acres_masked")))
+                if v is not None]
             if rows:
                 self.kv([(a, fmt_val(b)) for a, b in rows], head=("Quantity", "Result"),
                         caption="Depth, velocity and arrival")
@@ -2737,6 +2768,7 @@ class _Report(object):
     # -- section 9 -----------------------------------------------------------------------
     def sec_assumptions(self):
         d, st, h = self.doc, self.settings, self.hy
+        eng = (self.rep or {}).get("flood_engine_short") or "LISFLOOD-FP"
         method = h.get("breach_parameters") or h.get("method") or "the chosen method"
         a = [
             "Breach size and formation time come from {} or from a hydrograph supplied by the "
@@ -2759,10 +2791,10 @@ class _Report(object):
             "Roughness is a single Manning's n ({}) or values from a land-cover raster; these "
             "are typical floodplain values and have not been calibrated.".format(
                 fmt_val(st.get("manning_n", 0.06))),
-            "LISFLOOD-FP's inertial solver is not meant for supercritical flow, so velocities "
+            "The inertial solver in {} is not meant for supercritical flow, so velocities "
             "within a few cells of the breach are the least reliable part of the result. "
-            "Culverts are open cuts through the embankment in LISFLOOD-FP (no roof, no inlet "
-            "control), which passes more flow than a real culvert.",
+            "Culverts are open cuts through the embankment in {} (no roof, no inlet "
+            "control), which passes more flow than a real culvert.".format(eng, eng),
             "Water leaves the model domain freely at its edges (no downstream boundary "
             "condition). The domain is extended until the depth at each edge is below the "
             "tolerance, or until no receptor lies ahead of the flood; the flood is cut off "

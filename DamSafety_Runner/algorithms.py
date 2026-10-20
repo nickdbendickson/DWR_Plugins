@@ -33,10 +33,12 @@ from .core.units import FT, MILE
 
 PROVIDER_ID = "ndbreach"
 SET_LISFLOOD = "NDBREACH_LISFLOOD_EXE"
+SET_BUILTIN = "NDBREACH_USE_BUILTIN"       # opt in to the built-in screening engine (M5)
 SET_ANUGA = "NDBREACH_ANUGA_PYTHON"
 SET_THREADS = "NDBREACH_THREADS"
 
 METHODS = [(m, brmod.METHOD_LABELS[m]) for m in brmod.METHODS]
+from .popup_logic import HECRAS_GMSH_TIP, HECRAS_CREST_TIP   # noqa: E402  v3.10.22
 TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
          (workflow.TIER_BOTH, "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)"),
          # appended (design #68): indices 0 and 1 and the default are unchanged
@@ -73,6 +75,19 @@ def _setting(key, default=""):
         from processing.core.ProcessingConfig import ProcessingConfig
         v = ProcessingConfig.getSetting(key)
         return default if v in (None, "") else v
+    except Exception:
+        return default
+
+
+def _suite_setting(key, default=""):
+    """The suite setting DamSafety Setup writes, read through the one suite store: a project
+    override, the computer setting (QgsSettings 'ndsuite/<key>') or the environment variable.
+    Empty when unset or QGIS is unavailable. Setup writes lisflood_exe / anuga_python here, not
+    to the Runner provider's own ProcessingConfig key, so find_lisflood must consult it."""
+    try:
+        from .damsuite.suite_config import get as _suite_get
+        v = _suite_get(key)
+        return v if v not in (None, "") else default
     except Exception:
         return default
 
@@ -149,6 +164,59 @@ def _crest_line_near(lines, xy, max_m=500.0):
     if best is None or bd > max_m:
         return None
     return best
+
+
+CREST_SNAP_M = 500.0      # a crest line farther than this from the dam point is not its line
+
+
+def _nearest_on_line(line, xy):
+    """(distance, (x, y)) of the point of polyline `line` nearest `xy` (segments, not vertices)."""
+    p = np.asarray(line, float)
+    best = None
+    for a, b in zip(p[:-1], p[1:]):
+        ab = b - a
+        L2 = float(ab @ ab)
+        t = 0.0 if L2 <= 0 else min(max(float((np.asarray(xy) - a) @ ab) / L2, 0.0), 1.0)
+        q = a + t * ab
+        d = float(math.hypot(q[0] - xy[0], q[1] - xy[1]))
+        if best is None or d < best[0]:
+            best = (d, (float(q[0]), float(q[1])))
+    return best
+
+
+def _dwr_ids(dam_id, rec):
+    """The DWR structure numbers a dam may carry: dam.json's dwr_structure_id and the digits of
+    a 'DWR-2801' style dam ID. Strings without leading zeros."""
+    out = set()
+    v = getattr(rec, "get", lambda _k: None)("dwr_structure_id") if rec is not None else None
+    for x in (v, ):
+        if x not in (None, ""):
+            out.add(str(x).strip().split(".")[0].lstrip("0") or "0")
+    m = re.match(r"^\s*DWR[-_ ]?0*(\d+)\s*$", str(dam_id or ""), re.I)
+    if m:
+        out.add(m.group(1).lstrip("0") or "0")
+    return out
+
+
+def _pick_crest_line(lines_attrs, center_xy, ids, id_field):
+    """(line, distance, how) of the crest line for this dam, or (None, d, reason). The line whose
+    structure id matches the dam's DWR number wins; otherwise the line nearest the dam point, and
+    only within CREST_SNAP_M. `lines_attrs` is a list of (line, {field: value})."""
+    if not lines_attrs:
+        return None, None, "no crest line near the dam"
+    if ids and id_field:
+        hit = [(ln, at) for ln, at in lines_attrs
+               if str(at.get(id_field) if at.get(id_field) is not None else "").strip()
+               .split(".")[0].lstrip("0") in ids]
+        if hit:
+            ln = min((h[0] for h in hit), key=lambda l: _nearest_on_line(l, center_xy)[0])
+            return ln, _nearest_on_line(ln, center_xy)[0], "DWR structure {}".format(
+                sorted(ids)[0])
+    ln = min((x[0] for x in lines_attrs), key=lambda l: _nearest_on_line(l, center_xy)[0])
+    d = _nearest_on_line(ln, center_xy)[0]
+    if d > CREST_SNAP_M:
+        return None, d, "the nearest crest line is {:.0f} m from the dam point".format(d)
+    return ln, d, "nearest line"
 
 
 def _floats(text, default=()):
@@ -497,10 +565,29 @@ class _Base(QgsProcessingAlgorithm):
             "reservoir is a LiDAR water surface (Off = the DEM as it is; Auto = only when the "
             "DEM's pool holds far less than the storage curve; the source DEM is never changed)",
             list(reservoir_carve.LABELS), defaultValue=0, optional=True)))
+        # v3.10.27 (#91): reporting only - masked cells stay in the model
+        self._file("WATER_MASK", "Water-body mask for the run report only (polygons of existing "
+                   "lakes and ponds; the report gives the area and velocity figures with and "
+                   "without them; empty = NDBREACH_WATERBODY_MASK, else the dam's or the suite's "
+                   "waterbodies layer when there is one)", optional=True, advanced=True)
         self.addParameter(QgsProcessingParameterEnum("TIER", "Models",
                                                      [t[1] for t in TIERS], defaultValue=0))
         self._bool("FORCE_ANUGA", "Force ANUGA: final results come from ANUGA even when "
                    "Models is set to LISFLOOD-FP only", False)
+        # v3.10.22: optional, off by default (core/hecras_seeds.py)
+        p = QgsProcessingParameterBoolean(
+            "HECRAS_GMSH", "Refine HEC-RAS mesh with Gmsh points (optional; needs gmsh, falls "
+            "back to the regular grid)", False, optional=True)
+        if hasattr(p, "setHelp"):
+            p.setHelp(HECRAS_GMSH_TIP)
+        self.addParameter(set_advanced(p))
+        # on by default: the HEC-RAS dam line along the crest (core/hecras_crest.py)
+        p = QgsProcessingParameterBoolean(
+            "HECRAS_CREST", "HEC-RAS dam line follows the crest (recommended; off = a straight "
+            "line across the flow)", True, optional=True)
+        if hasattr(p, "setHelp"):
+            p.setHelp(HECRAS_CREST_TIP)
+        self.addParameter(set_advanced(p))
         self._num("CELL", "Model cell size (m; 10 m = 32.8 ft, the raster cell, not a depth)",
                   10.0, minimum=0.5)
         self._num("MANNING", "Manning's n (where there is no n raster)", 0.06, minimum=0.005,
@@ -566,8 +653,9 @@ class _Base(QgsProcessingAlgorithm):
                   "= 1,640 ft)", 500.0, minimum=0.0, advanced=True)
         self._num("THREADS", "Threads (0 = the provider setting / all)", 0, minimum=0,
                   integer=True, advanced=True)
-        self._text("LISFLOOD_EXE", "LISFLOOD-FP executable (empty = provider setting or "
-                   "auto-detected)", advanced=True)
+        self._text("LISFLOOD_EXE", "LISFLOOD-FP executable (empty = provider setting or an "
+                   "installed LISFLOOD-FP; type 'builtin' to use the built-in screening engine "
+                   "- a numpy approximation, NOT LISFLOOD-FP)", advanced=True)
         self._text("ANUGA_PYTHON", "ANUGA Python interpreter (a path; a symlink is resolved "
                    "to the real file). Empty = provider setting or auto-detected",
                    advanced=True)
@@ -590,11 +678,22 @@ class _Base(QgsProcessingAlgorithm):
 
     # -- reading parameters ------------------------------------------------------
     def find_lisflood(self, parameters, context):
-        exe = self._str(parameters, "LISFLOOD_EXE", context) or _setting(SET_LISFLOOD)
+        # The suite setting (what DamSafety Setup writes) wins over the provider's own
+        # ProcessingConfig key, which may hold a first-run auto-detected default; then detect.
+        exe = (self._str(parameters, "LISFLOOD_EXE", context)
+               or _suite_setting("lisflood_exe") or _setting(SET_LISFLOOD))
+        from .core import lisflood as lfmod
+        # Opt in to the built-in screening engine ONLY by an explicit act: the word "builtin" in
+        # the field, or the provider flag. It is never selected just because the field is empty,
+        # so the numpy approximation can never silently stand in for LISFLOOD-FP (M5 safety).
+        if exe and str(exe).strip().lower() in lfmod.BUILTIN_WORDS:
+            return lfmod.BUILTIN_EXE
         if not exe or not os.path.isfile(exe):
             found = nd_data.detect_lisflood()
             if found:
                 exe = found
+            elif str(_setting(SET_BUILTIN, "") or "").strip().lower() in ("1", "true", "yes", "on"):
+                return lfmod.BUILTIN_EXE
         return exe
 
     def find_anuga(self, parameters, context):
@@ -690,6 +789,18 @@ class _Base(QgsProcessingAlgorithm):
             from .core import reservoir_carve
             st.reservoir_carve = reservoir_carve.normalize(
                 int(self.parameterAsEnum(parameters, "RESERVOIR_CARVE", context)))
+        if (self.parameterDefinition("HECRAS_GMSH") is not None and parameters.get(
+                "HECRAS_GMSH") not in (None, "") and self.parameterAsBool(
+                parameters, "HECRAS_GMSH", context)):                       # v3.10.22
+            st.hecras_mesh_seeds = "gmsh"
+        if (self.parameterDefinition("HECRAS_CREST") is not None and parameters.get(
+                "HECRAS_CREST") not in (None, "") and not self.parameterAsBool(
+                parameters, "HECRAS_CREST", context)):
+            st.hecras_dam_axis = "straight"
+        if self.parameterDefinition("WATER_MASK") is not None:         # v3.10.27 (#91)
+            wm = self._fileparam(parameters, "WATER_MASK", context)
+            if wm:
+                st.water_mask = wm
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0
@@ -1099,16 +1210,23 @@ class _Base(QgsProcessingAlgorithm):
         src = self.parameterAsSource(parameters, "CREST_LINE", context)
         if src is not None and parameters.get("BREACH_POSITION") not in (None, ""):
             a, b = tf(src)
-            lines = [x[0] for x in qio.lines(src, a, b, center_xy, radius)]
+            # Pick this dam's crest line by its DWR structure id when the layer carries one
+            # (else the nearest line within CREST_SNAP_M), so the breach is never placed on a
+            # neighbouring dam's line that merely happens to be closer in the search box.
+            id_field = next((n for n in qio.field_names(src)
+                             if n.lower() in ("structure_id", "structure_", "structure")), "")
+            ids = getattr(self, "_crest_ids", None) or set()
+            self._crest_ids = None
+            clines = qio.lines(src, a, b, center_xy, radius,
+                               fields=[id_field] if id_field else ())
             frac = self.parameterAsDouble(parameters, "BREACH_POSITION", context)
-            crest = _crest_line_near(lines, center_xy)
+            crest, _dist, how = _pick_crest_line(clines, center_xy, ids, id_field)
             if crest is not None:
                 st.breach_xy = _point_along_line(crest, frac)
-                notes.append("Breach starts at {:.0f}% along the crest line".format(100 * frac))
-            elif lines:
-                notes.append(
-                    "Nearest crest line is more than 500 m from the dam; "
-                    "breach position along the crest was not used.")
+                notes.append("Breach starts at {:.0f}% along the crest line ({}).".format(
+                    100 * frac, how))
+            elif clines:
+                notes.append("Breach position along the crest was not used: {}.".format(how))
         src = self.parameterAsSource(parameters, "REFINE_LINES", context)
         st.refine_lines = []
         if src is not None:
@@ -1425,6 +1543,7 @@ class RunDamAlgorithm(_Base):
                                                                   context)),
                               _safe_name(dam.dam_id))
         feedback.pushInfo("Model CRS {}; DEM elevations in {}".format(work.authid(), src.z_note))
+        self._crest_ids = _dwr_ids(dam.dam_id, getattr(self, "_dam_rec", None))
         for n in self.apply_features(st, parameters, context, work, (dam_xy.x(), dam_xy.y())):
             feedback.pushInfo(n)
         try:
@@ -1655,7 +1774,23 @@ class SensitivityAlgorithm(RunDamAlgorithm):
 BATCH_FIELDS = ("Dam", "Folder", "Status", "Scenario", "Final_Model", "Peak_Breach_cfs",
                 "Storage_At_Failure_acft", "Flooded_ac", "Max_Depth_ft", "Max_Velocity_fps",
                 "Latest_Arrival_hr", "Receptors_Flooded", "Runs", "Domain_mi", "Minutes",
-                "Warnings", "Message", "Structure_Flag", "Hazard_Of_Record")
+                "Warnings", "Message", "Structure_Flag", "Hazard_Of_Record",
+                # v3.10.27 (#91): appended after 3.10.23's flag columns, so the columns above keep their places
+                "Flooded_ge_0_1ft_ac", "Flooded_ge_1ft_ac", "Flooded_ge_2ft_ac",
+                "Velocity_P95_fps", "Velocity_P99_fps", "Max_Velocity_Depth_ft",
+                "Flooded_Masked_ac", "Flooded_ge_1ft_Masked_ac")
+
+
+def _batch_metrics(s):
+    """v3.10.27 (#91): the appended batch columns from a run summary ("" when absent)."""
+    keys = (("Flooded_ge_0_1ft_ac", "flooded_acres_ge_0_1ft"),
+            ("Flooded_ge_1ft_ac", "flooded_acres_ge_1ft"),
+            ("Flooded_ge_2ft_ac", "flooded_acres_ge_2ft"),
+            ("Velocity_P95_fps", "velocity_p95_fps"), ("Velocity_P99_fps", "velocity_p99_fps"),
+            ("Max_Velocity_Depth_ft", "max_velocity_depth_ft"),
+            ("Flooded_Masked_ac", "flooded_acres_masked"),
+            ("Flooded_ge_1ft_Masked_ac", "flooded_acres_ge_1ft_masked"))
+    return {col: ("" if s.get(k) is None else s.get(k)) for col, k in keys}
 BATCH_SCENARIOS = [SCENARIOS[0][1], SCENARIOS[1][1],
                    "Per dam: flood if its folder has inputs/pmf_inflow.csv, else sunny day"]
 BATCH_FIELD_KEYS = (("F_ID", "Dam ID field", False), ("F_NAME", "Dam name field", False),
@@ -1911,6 +2046,7 @@ class BatchAlgorithm(_Base):
                                 "Flooded_ac": s["flooded_acres"],
                                 "Max_Depth_ft": s["max_depth_ft"],
                                 "Max_Velocity_fps": s["max_velocity_fps"],
+                                **_batch_metrics(s),
                                 "Latest_Arrival_hr": s["latest_arrival_hr"],
                                 "Receptors_Flooded": s.get("receptors_flooded", ""),
                                 "Runs": s["lisflood_runs"],
@@ -2203,8 +2339,9 @@ class CheckAlgorithm(_Base):
                 "provider settings can be filled in.")
 
     def initAlgorithm(self, config=None):
-        self._text("LISFLOOD_EXE", "LISFLOOD-FP executable (empty = provider setting or "
-                   "auto-detected)")
+        self._text("LISFLOOD_EXE", "LISFLOOD-FP executable (empty = provider setting or an "
+                   "installed LISFLOOD-FP; type 'builtin' to use the built-in screening engine "
+                   "- a numpy approximation, NOT LISFLOOD-FP)")
         self._text("ANUGA_PYTHON", "ANUGA Python interpreter (a path; a symlink is resolved "
                    "to the real file). Empty = provider setting or auto-detected")
         self.addOutput(QgsProcessingOutputString("RESULT", "Result"))

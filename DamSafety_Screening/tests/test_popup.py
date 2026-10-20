@@ -157,6 +157,12 @@ assert set(algs) - {wf.ALG[k] for k in wf.KEYS} == {"downloaddem", "downloadlaye
 settings_all = {"waterbodies": "a", "structures": "b", "roads": "c", "rail": "d", "lifelines": "e", "streams": "f",
                 "dam_lines": "g", "nlcd": "h", "dwr": "i", "nid": "j", "clip": "k", "workers": 2,
                 "local_dem": "/l", "exe": "/e", "runner_dem": "/r", "chart_file": "/c", "package": PKG}
+# step 1 (prepare dams) must not emit STORAGE_CHOICE: only step 3 (estimate storage) takes it
+_t1 = set(algs[wf.ALG["1"]]._params)
+for _v in (settings_all, {}):
+    assert all(p in _t1 for p in wf.defaults("1", W, _v)), \
+        [p for p in wf.defaults("1", W, _v) if p not in _t1]
+    assert "STORAGE_CHOICE" not in wf.defaults("1", W, _v)
 for variant in (settings_all, {}):
     for k in wf.KEYS:
         names = set(algs[wf.ALG[k]]._params)
@@ -168,6 +174,11 @@ for variant in (settings_all, {}):
 from nd_dam_screening.algorithms import run_breach_sim as rbs  # noqa: E402
 assert list(algs["runbreachsim"]._params["SCEN"].options) == rbs.SCENARIOS
 assert list(algs["runbreachsim"]._params["ENGINE"].options) == rbs.ENGINES
+# the storage choice goes to tool 3 only, as its own enum (0.17.27; tool 1 never had it)
+assert list(algs["estimatestorage"]._params["STORAGE_CHOICE"].options) == \
+    ["Max storage", "Normal storage", "Larger of the two"]
+assert "STORAGE_CHOICE" not in wf.defaults("1", W, {"storage_choice": 1})
+assert wf.defaults("3", W, {"storage_choice": 2})["STORAGE_CHOICE"] == 2
 
 # ------------------------------------------------ 3. results text
 assert wf.summary_counts(W) is None and "No report yet" in wf.counts_text(None)
@@ -303,6 +314,11 @@ dlg3.work_edit.setText("")
 EVENTS["messages"].clear()
 assert dlg3._open_step("1") is False and EVENTS["messages"][-1][2] == "Choose a work folder first."
 
+# the window's storage choice is tool 3's enum, label for label and value for value
+sc = dlg2.storage_choice
+assert [sc.itemText(i) for i in range(sc.count())] == list(algs["estimatestorage"]._params["STORAGE_CHOICE"].options)
+assert [sc.itemData(i) for i in range(sc.count())] == [0, 1, 2]
+
 # results tab: report, folder, result layers
 QtGui.OPENED_URLS.clear()
 dlg2.work_edit.setText(W)
@@ -315,17 +331,22 @@ dlg2._open_work_folder()
 assert QtGui.OPENED_URLS == [os.path.join(W, "10_reports", "index.html"), W]
 assert dlg2.add_btn.isEnabled()
 before = len(QgsProject.instance().mapLayers())
+# _add_results refills the layer lists, and the first _changed for a new work folder then
+# creates the standard layout (5249d1d) and logs that after the count, so the count is
+# looked for in what this call logged, not only on the very last line
+n_log = len(dlg2.log_edit.lines)
 n_added = dlg2._add_results()             # the files here are empty placeholders: reported, none added
 assert n_added == 0 and len(QgsProject.instance().mapLayers()) == before
 assert any("could not be read as a layer" in m for m in dlg2.log_edit.lines)
-assert "Added 0 result layer(s)" in dlg2.log_edit.lines[-1]
+assert any("Added 0 result layer(s)" in m for m in dlg2.log_edit.lines[n_log:]), dlg2.log_edit.lines[n_log:]
 # a readable result is added to the project, once per call
 W3 = os.path.join(work, "w3")
 os.makedirs(W3)
 _gpkg.write(os.path.join(W3, "1_dams.gpkg"), {"dams": ("POINT", [("dam_id", "TEXT")], [])})
 dlg2.work_edit.setText(W3)
+n_log = len(dlg2.log_edit.lines)
 assert dlg2._add_results() == 1 and len(QgsProject.instance().mapLayers()) == before + 1
-assert "Added 1 result layer(s)" in dlg2.log_edit.lines[-1]
+assert any("Added 1 result layer(s)" in m for m in dlg2.log_edit.lines[n_log:]), dlg2.log_edit.lines[n_log:]
 added_layer = list(QgsProject.instance().mapLayers().values())[-1]
 assert added_layer.styles and added_layer.styles[0].endswith(os.path.join("styles", "dams_points.qml"))
 assert any("style dams_points.qml applied" in m for m in dlg2.log_edit.lines)
@@ -374,13 +395,14 @@ class Iface:
 iface = Iface()
 plug = pkg.classFactory(iface)
 plug.initGui()
-assert [m[0] for m in iface.menu] == ["ND Dam Breach Screening"] * 2 + ["ND Dam Suite"] * 3 and plug.action is iface.menu[0][1]
-assert plug.home_action is iface.menu[1][1]                            # 0.11: Dam suite home...
-assert len(plug.suite_actions) == 3                                     # 0.13: the shared suite menu
+# one entry, Plugins > Dam safety > Screen a county... (the suite home and the suite settings
+# are opened from the suite's own windows, not from more menu entries)
+assert [m[0] for m in iface.menu] == ["Dam safety"] and plug.action is iface.menu[0][1]
+assert plug.home_action is None and plug.suite_actions == []
 assert plug.action.triggered._slots == [plug.run_plugin]
 assert plug.provider is not None                                       # the toolbox provider is still there
 plug.initGui()                                                          # a second initGui adds no second entry
-assert len(iface.menu) == 5
+assert len(iface.menu) == 1
 plug.action.triggered.emit()
 first = plug.dialog
 assert first is not None and first.isVisible()
@@ -390,7 +412,7 @@ first.deleteLater()                                                     # Qt des
 plug.run_plugin()
 assert plug.dialog is not first and plug.dialog.isVisible()
 plug.unload()
-assert iface.removed and iface.removed[0][0] == "ND Dam Breach Screening" and plug.action is None
+assert iface.removed and iface.removed[0][0] == "Dam safety" and plug.action is None
 assert plug.dialog is None and plug.provider is None
 plug.unload()                                                           # safe twice
 # no interface (tests, qgis_process): no menu entry, no error
@@ -709,6 +731,13 @@ print("popup window: all checks passed")
 from nd_dam_screening import suite_home as SHW  # noqa: E402
 from nd_dam_screening.damsuite import dam_record as dr_  # noqa: E402
 import qgis.utils as qutils_  # noqa: E402
+# real QGIS always exposes loadPlugin/startPlugin on qgis.utils (suite_home imports them to start
+# a plugin that is installed but not loaded); the minimal mock omits them, so add no-op stubs -
+# with a plugin already in qgis.utils.plugins these are never called, only imported.
+if not hasattr(qutils_, "loadPlugin"):
+    qutils_.loadPlugin = lambda name: False
+if not hasattr(qutils_, "startPlugin"):
+    qutils_.startPlugin = lambda name: None
 
 HD = os.path.join(work, "home_dams")
 for n, steps in (("DWR-1", [("screened", "ndscreen", {"triage": "needs 2D"})]),
@@ -728,10 +757,15 @@ home._changed()
 assert home.table.rowCount() == 3 and home.table.columnCount() == len(SHW.COLUMNS)
 assert home.table.item(0, 0).text() == "DWR-1" and home.table.item(0, 8).text().startswith("model:")
 assert home.table.item(1, 8).text().startswith("classify:") and home.table.item(2, 2).text() == "High"
-assert home.table.item(0, 9).text() == "ND Dam Breach Runner" and home.table.item(1, 9).text() == "ND Dam Hazard Classification Helper"
+# the plugin column and the opener use the suite's own names (damsuite/versions.LABELS)
+assert home.table.item(0, 9).text() == SHW.VS.LABELS["ndbreach"] == "DamSafety Runner"
+assert home.table.item(1, 9).text() == SHW.VS.LABELS["ndhazard"] == "DamSafety Hazard"
 assert "3 dam(s); next: 1 model, 1 classify, 1 none" in home.summary_label.text()
-assert "Opened from ND Dam Breach Screening" in home.plugins_label.text()
-assert QgsProject.instance().readEntry("NDDamSuite", "home_dams_folder", "")[0] == HD
+assert "Opened from DamSafety Screening" in home.plugins_label.text()
+# the Dams folder is a per-computer setting (2.18.13); this project stores none of its own
+from qgis.core import QgsSettings  # noqa: E402
+assert QgsSettings().value(SHW.DAMS_KEY, "") == HD
+assert QgsProject.instance().readEntry("NDDamSuite", "home_dams_folder", "")[0] != HD
 # opening the plugin for a dam: via qgis.utils.plugins, the window pointed at the dam
 calls = []
 
@@ -762,11 +796,12 @@ qutils_.plugins["nd_dam_screening"] = plug_s = type("P", (), {"dialog": NDDamScr
 assert home.open_plugin("ndscreen", home.rows[0]) is True and plug_s.dialog.settings()["dams_folder"] == HD
 # a plugin that is not installed: a message, no crash
 EVENTS["messages"].clear()
-assert home.open_plugin("ndhazard", home.rows[1]) is False and "not installed" in EVENTS["messages"][-1][2]
+assert home.open_plugin("ndhazard", home.rows[1]) is False
+assert "DamSafety Hazard is not enabled in this QGIS" in EVENTS["messages"][-1][2], EVENTS["messages"][-1]
 # the plugin entry point: one window, re-created when destroyed
 plug_home = pkg.classFactory(Iface())
 plug_home.initGui()
-assert [m[0] for m in plug_home.iface.menu] == ["ND Dam Breach Screening"] * 2 + ["ND Dam Suite"] * 3
+assert [m[0] for m in plug_home.iface.menu] == ["Dam safety"]
 h1 = plug_home.run_home()
 assert h1 is plug_home.home_dialog and h1.isVisible() and plug_home.run_home() is h1
 h1.deleteLater()

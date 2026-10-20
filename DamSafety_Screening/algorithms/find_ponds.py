@@ -28,8 +28,8 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
 
 from ..core import inventory as inv
 from ..core import ponds as pd, terrain
-from ..compat import (FIELD_ANY, FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, NUM_DOUBLE, SRC_LINE,
-                      SRC_POINT, SRC_POLYGON, WKB_LINESTRING, WKB_POINT)
+from ..compat import (FIELD_ANY, FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_LINE, SRC_POINT,
+                      SRC_POLYGON, WKB_LINESTRING, WKB_POINT)
 from ..damsuite import gdalsafe as GS
 from . import _common as cm
 from ..core import errors as er
@@ -51,6 +51,15 @@ POND_FIELDS = [("pond_type", FT_STRING), ("pond_conf", FT_STRING), ("no_flood", 
 EXCLUDED_FIELDS = [("wb_id", FT_STRING), ("wb_type", FT_STRING), ("pond_type", FT_STRING),
                    ("reason", FT_STRING), ("area_ac", FT_DOUBLE), ("pool_m", FT_DOUBLE),
                    ("notes", FT_STRING)]
+
+
+def _cell_of(path):
+    """The cell size of a raster (inf when it cannot be read)."""
+    try:
+        ds = gdal.Open(path)
+        return abs(ds.GetGeoTransform()[1]) if ds is not None else float("inf")
+    except Exception:                                            # noqa
+        return float("inf")
 
 
 def pond_id(x, y):
@@ -230,7 +239,10 @@ class FindPonds(QgsProcessingAlgorithm):
                              "largest water body".format(n, m))
         clip = os.path.join(self._terrain, "dam_{}.tif".format(pid))
         tiles = []
-        if os.path.exists(clip) and clip_covers(clip, ext):
+        # the dam clip only when it is as fine as the analysis cell. It is written at the clip cell
+        # (often coarser), so a second run read the pond from the coarse clip and gave a different
+        # (lower) storage than the first run.
+        if os.path.exists(clip) and clip_covers(clip, ext) and _cell_of(clip) <= cell * 1.001:
             source = clip
         elif self._vrt:
             source = self._vrt

@@ -18,6 +18,15 @@ STEP_DEFAULT = [m for _, m in STEPS].index(5)
 IMPORT_NAMES = {"depth": "HECRAS Depth (Max).tif", "velocity": "HECRAS Velocity (Max).tif",
                 "arrival": "HECRAS Arrival Time.tif", "wse": "HECRAS WSE (Max).tif",
                 "time_of_max": "HECRAS Time of Max WSE.tif"}
+# v3.10.22: computation points of the HEC-RAS 2D area (core/hecras_seeds.py)
+MESH_SEEDS_LABELS = ["Regular grid (default)",
+                     "gmsh layout, finer along the dam, breach and channel (needs gmsh; falls "
+                     "back to the grid)"]
+MESH_SEEDS_MODES = ["grid", "gmsh"]
+# the HEC-RAS dam line (core/hecras_crest.py)
+DAM_AXIS_LABELS = ["Along the embankment crest, traced from the DEM (default)",
+                   "Straight line through the dam point, across the flow (the old line)"]
+DAM_AXIS_MODES = ["crest", "straight"]
 US_SI = ["Detect from the file (US customary when it says nothing)", "US customary (ft)",
          "SI metric (m)"]
 
@@ -63,6 +72,19 @@ class HecRasExportAlgorithm(_ToolBase):
             "State Plane ft)", defaultValue="", optional=True))
         self._num("DAM_LENGTH_FT", "Dam crest length, ft (empty = the run's, else dam.json)",
                   optional=True, minimum=1.0)
+        # v3.10.22
+        self._num("SPILLWAY_CREST_FT", "Spillway crest elevation, ft (empty = dam.json "
+                  "spillway_crest_ft, else no spillway)", optional=True)
+        self._num("SPILLWAY_WIDTH_FT", "Spillway width, ft (empty = dam.json spillway_width_ft)",
+                  optional=True, minimum=1.0)
+        self.addParameter(QgsProcessingParameterEnum(
+            "MESH_SEEDS", "2D computation points", MESH_SEEDS_LABELS, defaultValue=0,
+            optional=True))
+        self.addParameter(QgsProcessingParameterEnum(
+            "DAM_AXIS", "Dam line (the SA/2D connection)", DAM_AXIS_LABELS, defaultValue=0,
+            optional=True))
+        self._num("BREACH_STATION_FT", "Breach centre, ft along the dam line from its first "
+                  "end (empty = the deepest dam section)", optional=True, minimum=0.0)
         self.addOutput(QgsProcessingOutputFolder("MODEL_FOLDER", "HEC-RAS model package folder"))
         self.addOutput(QgsProcessingOutputFile("MODEL_ZIP", "HEC-RAS model package (.zip)"))
         self.addOutput(QgsProcessingOutputFile("HYDROGRAPH_TXT", "Hydrograph, .u## block"))
@@ -101,6 +123,19 @@ class HecRasExportAlgorithm(_ToolBase):
             if parameters.get("DAM_LENGTH_FT") not in (None, ""):
                 opts["dam_length_ft"] = self.parameterAsDouble(parameters, "DAM_LENGTH_FT",
                                                                context)
+            for key, opt in (("SPILLWAY_CREST_FT", "spillway_crest_ft"),
+                             ("SPILLWAY_WIDTH_FT", "spillway_width_ft")):
+                if parameters.get(key) not in (None, ""):
+                    opts[opt] = self.parameterAsDouble(parameters, key, context)
+            if parameters.get("MESH_SEEDS") not in (None, ""):
+                opts["mesh_seeds"] = MESH_SEEDS_MODES[self.parameterAsEnum(parameters,
+                                                                           "MESH_SEEDS", context)]
+            if parameters.get("DAM_AXIS") not in (None, ""):
+                opts["dam_axis"] = DAM_AXIS_MODES[self.parameterAsEnum(parameters, "DAM_AXIS",
+                                                                       context)]
+            if parameters.get("BREACH_STATION_FT") not in (None, ""):
+                opts["breach_station_ft"] = self.parameterAsDouble(parameters,
+                                                                   "BREACH_STATION_FT", context)
             try:
                 p = hecras_package.build_package(
                     folder, out_root=os.path.join(out, "hecras") if out else None,

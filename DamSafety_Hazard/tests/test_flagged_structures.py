@@ -94,3 +94,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+    sys.stdout.flush()
+    # all passed (a failure raises in main()); os._exit(0) before the real-QgsApplication
+    # offscreen teardown segfaults at interpreter shutdown.
+    os._exit(0)

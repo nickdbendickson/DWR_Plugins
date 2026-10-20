@@ -159,7 +159,7 @@ def batch_skips_a_flagged_structure_and_records_the_reason():
     from nd_breach_runner.tests.test_v320 import _tmp
     algs, fq = _algs()
     assert algs.BATCH_FIELDS[:len(OLD_BATCH_FIELDS)] == OLD_BATCH_FIELDS     # names kept
-    assert algs.BATCH_FIELDS[len(OLD_BATCH_FIELDS):] == ("Structure_Flag", "Hazard_Of_Record")
+    assert algs.BATCH_FIELDS[len(OLD_BATCH_FIELDS):len(OLD_BATCH_FIELDS) + 2] == ("Structure_Flag", "Hazard_Of_Record")  # #91 appends after
     d = _tmp()
     try:
         os.makedirs(os.path.join(d, "DWR-3161"))
@@ -211,7 +211,7 @@ def cli_refuses_and_batch_skips_a_flagged_structure():
     from nd_breach_runner.tests.test_cli import cli, run_cli, Tmp, base_config, dump, _FakeResult
     c = cli()
     assert c.BATCH_FIELDS[:len(OLD_BATCH_FIELDS)] == OLD_BATCH_FIELDS
-    assert c.BATCH_FIELDS[len(OLD_BATCH_FIELDS):] == ("Structure_Flag", "Hazard_Of_Record")
+    assert c.BATCH_FIELDS[len(OLD_BATCH_FIELDS):len(OLD_BATCH_FIELDS) + 2] == ("Structure_Flag", "Hazard_Of_Record")  # #91 appends after
     with Tmp() as d, _Env(None):
         p, cfg = base_config(d)
         cfg["dam"] = dict(cfg.get("dam") or {}, dam_id="DWR-3161")

@@ -4,7 +4,6 @@ County boxes are download clips, padded, not survey boundaries. The service
 returns metres in EPSG:5070.
 """
 import os
-import zipfile
 
 from osgeo import gdal, osr
 
@@ -264,7 +263,7 @@ def ftp_allowed():
 def _log_warning(message):
     try:
         from qgis.core import QgsMessageLog, Qgis
-        QgsMessageLog.logMessage(str(message), "ND LiDAR", Qgis.Warning)
+        QgsMessageLog.logMessage(str(message), "ND LiDAR", getattr(Qgis, 'MessageLevel', Qgis).Warning)
     except Exception:                                            # noqa - no QGIS (tests, CLI)
         import logging
         logging.getLogger(__name__).warning("%s", message)
@@ -516,9 +515,22 @@ def tiles_for_box(west, south, east, north, cache_dir, feedback=None):
 
 
 def product_info(source, cell_m, native=None):
-    """Facts written beside the local DEM. source is 'usgs' or 'ndlidar'."""
+    """Facts written beside the local DEM. source is 'usgs', 'ndlidar' or (0.17.29) 'tnm1m',
+    the native USGS 3DEP 1 m lidar tiles (core/lidar_tnm.py), which stay in their UTM CRS."""
     native = native or {}
     cell_m = int(cell_m)
+    if source == "tnm1m":
+        return {
+            "source": "USGS 3DEP 1 m lidar DEM tiles (native, The National Map)",
+            "crs": native.get("crs") or "NAD83 UTM (the tiles' zone)",
+            "units": "metres",
+            "file_type": "VRT over the native GeoTIFF tiles (and the fallback DEM underneath, if any)",
+            "cell_m": 1,
+            "native_source": "TNM Access API, dataset 'Digital Elevation Model (DEM) 1 meter', GeoTIFF",
+            "native_crs": "NAD83 / UTM zone of each tile",
+            "native_units": "metres (NAVD88)",
+            "native_file_type": "GeoTIFF float32, 10 x 10 km tiles at 1 m",
+        }
     if source == "usgs":
         return {
             "source": "USGS 3DEP ImageServer (elevation.nationalmap.gov)",

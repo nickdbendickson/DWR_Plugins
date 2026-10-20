@@ -1,0 +1,68 @@
+name: CI
+
+# Merge gate for the DamSafety plugin suite.
+#
+# fast-checks  — the always-on HARD GATE: no QGIS/GDAL needed, fully deterministic, seconds to
+#                run (damsuite drift, version sanity, py_compile of every source, the built-in
+#                engine golden baseline). Mark THIS job required in branch protection.
+# plugin-suites — the fuller per-plugin test suites. These need a real QGIS/GDAL (Hazard, Runner)
+#                and a numpy the vendored scipy supports, so the job provisions QGIS via conda.
+#                Keep it running on PRs; promote it to required once it is green on your runners.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  fast-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install numpy (no QGIS/scipy needed here)
+        run: python -m pip install "numpy<2.3"
+      - name: Fast checks (drift, pin, versions, compile, golden baseline)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 tools/ci_checks.py
+      - name: Fingerprint nested-VRT regression (QGIS-free)
+        run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
+
+  plugin-suites:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision QGIS + a scipy-compatible numpy
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: qgis
+          create-args: >-
+            python=3.12 qgis numpy<2 scipy gdal
+      - name: Screening suite (mock-QGIS)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          # the suite's own runner: each script picks the mock or the real GDAL it needs
+          # (tests/qgis_mock on PYTHONPATH shadowed the real osgeo for the GDAL-write tests)
+          python DamSafety_Screening/tests/run_all.py
+      - name: Runner fast suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          python -m nd_breach_runner.tests.run_tests
+      - name: Hazard suite (real QGIS)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          # One Python entry point whose exit status is the step's result (like the Screening and
+          # Runner steps above). An inline `for ...; exit $fail` shell loop did not propagate its
+          # status under micromamba's `bash -el` even when every script exited 0.
+          python DamSafety_Hazard/tests/run_all.py
