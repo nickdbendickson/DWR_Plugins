@@ -21,8 +21,10 @@ and gives one row per finding, each PASS / WARN / FAIL with the reason:
   breach     the largest velocity within breach_radius_ft of the dam point (dam.json via
              damsuite.dam_record, or the legacy dam_location.json): WARN "check the model
              near the breach" above breach_vel_warn_fps. Never FAIL.
-  units      checks.check_rasters (depth that looks like water-surface elevation or
-             metres, arrival in minutes / seconds, velocity missing where it is wet, CRS):
+  units      checks.check_rasters (depth that looks like water-surface elevation; depth
+             in metres or velocity in m/s from the band unit / metadata, the HEC-RAS
+             project's SI Units or the file name - checks.raster_units, 2.18.41; arrival
+             in minutes / seconds, velocity missing where it is wet, CRS):
              its ERROR -> FAIL, WARNING -> WARN, OK -> PASS.
   manifest   the runner's run_manifest.json (damsuite.chain): its own digest
              (manifest_ok; edited -> WARN) and the rasters being classified against it

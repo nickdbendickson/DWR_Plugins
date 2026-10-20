@@ -15,6 +15,7 @@ wrong), WARNING (check it) or OK.
 
 import math
 import os
+import re
 
 import numpy as np
 from qgis.core import QgsRasterLayer
@@ -48,6 +49,155 @@ def _sample(sampler):
     if not vals:
         return np.empty(0), np.empty(0), np.empty(0)
     return np.concatenate(vals), np.concatenate(xs), np.concatenate(ys)
+
+
+# 2.18.41 (audit H2): metric depth / velocity rasters. The plugin works in feet and ft/s;
+# a 4 m depth read as 4 ft under-states depth and velocity about 3.28 times (lower ACER
+# zones, ND class and LIJ). Evidence, strongest first:
+#   1. the band unit or a 'units' metadata item of the raster (GDAL: RAS Mapper and most
+#      GIS exports write it) - "m", "metre", "m/s" ... or "ft", "feet", "ft/s" ...
+#   2. the HEC-RAS project (*.prj with "Proj Title=") in the raster's folder or the two
+#      above it: "SI Units" or "English Units"
+#   3. a unit word in the file name: depth_m.tif, Velocity_mps.tif, Depth (m).tif ... or
+#      Depth_ft.tif, Velocity_ftps.tif (the Import tools write the feet names)
+# Metric from 1. or 2. -> ERROR (Classify stays off until a feet raster is given); metric
+# only from the name -> WARNING, an ERROR when the raster's CRS is also in metres.
+FT_PER_M = 3.28084
+_METRIC_UNITS = {"m", "meter", "meters", "metre", "metres", "m/s", "m s-1", "m.s-1",
+                 "ms-1", "mps", "m/sec", "meter/second", "meters/second",
+                 "meters per second", "metres per second", "meter per second",
+                 "metre per second", "m per s", "cm", "centimeters", "centimetres"}
+_US_UNITS = {"ft", "feet", "foot", "us survey foot", "us_survey_foot", "ft/s", "fps",
+             "ft s-1", "ft/sec", "feet/second", "feet per second", "foot per second",
+             "ft per s", "us-ft", "ftus", "international foot"}
+_METRIC_NAME = re.compile(r"(?:^|[^a-z0-9])(?:m|meters?|metres?|m_s|m-s|mps|"
+                          r"m_per_s|si)(?:[^a-z0-9]|$)")
+_US_NAME = re.compile(r"(?:^|[^a-z0-9])(?:ft|feet|ftps|fps|ft_s|ft-s|ft_per_s|"
+                      r"us)(?:[^a-z0-9]|$)")
+
+
+def _unit_word(text):
+    """'metric' / 'us' / None for one unit text (band unit, metadata value)."""
+    t = re.sub(r"\s+", " ", str(text or "").strip().lower().replace("_", " "))
+    t = t.strip("[]() ")
+    if not t:
+        return None
+    if t in _METRIC_UNITS or t.replace(" ", "") in _METRIC_UNITS:
+        return "metric"
+    if t in _US_UNITS or t.replace(" ", "") in _US_UNITS:
+        return "us"
+    return None
+
+
+def _band_units(path):
+    """(kind, why) from the raster's own band unit / 'units' metadata (GDAL)."""
+    try:
+        from osgeo import gdal
+    except Exception:
+        return None, ""
+    try:
+        ds = gdal.Open(path)
+    except Exception:
+        ds = None
+    if ds is None:
+        return None, ""
+    try:
+        band = ds.GetRasterBand(1)
+        unit = band.GetUnitType() if band is not None else ""
+        kind = _unit_word(unit)
+        if kind:
+            return kind, "band unit '{}'".format(unit)
+        for obj, where in ((band, "band"), (ds, "raster")):
+            md = (obj.GetMetadata() or {}) if obj is not None else {}
+            for k, v in md.items():
+                if str(k).strip().lower() in ("units", "unit", "unittype", "unit_type",
+                                              "z_units", "zunits", "units system"):
+                    kind = _unit_word(v)
+                    if kind:
+                        return kind, "{} metadata {}={}".format(where, k, v)
+    finally:
+        ds = None
+    return None, ""
+
+
+def _ras_project_units(path):
+    """(kind, why) from a HEC-RAS project file (*.prj starting 'Proj Title=') in the
+    raster's folder or the two above it: 'SI Units' / 'English Units'."""
+    folder = os.path.dirname(os.path.abspath(path))
+    for _ in range(3):
+        try:
+            names = sorted(n for n in os.listdir(folder) if n.lower().endswith(".prj"))
+        except OSError:
+            names = []
+        for name in names[:20]:
+            try:
+                with open(os.path.join(folder, name), encoding="utf-8",
+                          errors="replace") as fh:
+                    head = fh.read(20000)
+            except OSError:
+                continue
+            if not head.lstrip().startswith("Proj Title="):
+                continue                   # an ESRI projection .prj, not a RAS project
+            for line in head.splitlines():
+                line = line.strip().lower()
+                if line in ("si units", "si unit"):
+                    return "metric", "HEC-RAS project {} is in SI Units".format(name)
+                if line in ("english units", "english unit"):
+                    return "us", "HEC-RAS project {} is in English Units".format(name)
+        up = os.path.dirname(folder)
+        if up == folder:
+            break
+        folder = up
+    return None, ""
+
+
+def _name_units(path):
+    """(kind, why) from a unit word in the file name."""
+    stem = os.path.splitext(os.path.basename(path or ""))[0].lower()
+    if _METRIC_NAME.search(stem) and not _US_NAME.search(stem):
+        return "metric", "file name '{}'".format(os.path.basename(path))
+    if _US_NAME.search(stem) and not _METRIC_NAME.search(stem):
+        return "us", "file name '{}'".format(os.path.basename(path))
+    return None, ""
+
+
+def _crs_metres(lyr):
+    try:
+        from qgis.core import QgsUnitTypes
+        crs = lyr.crs()
+        return bool(crs.isValid() and not crs.isGeographic() and
+                    crs.mapUnits() == QgsUnitTypes.DistanceMeters)
+    except Exception:
+        return False
+
+
+def raster_units(path, lyr=None):
+    """2.18.41: the units of a depth / velocity raster as (kind, why, strong):
+    kind 'metric' / 'us' / None; strong when it comes from the raster's metadata or its
+    HEC-RAS project (not only the file name)."""
+    for finder in (_band_units, _ras_project_units):
+        kind, why = finder(path)
+        if kind:
+            return kind, why, True
+    kind, why = _name_units(path)
+    if kind == "metric" and lyr is not None and _crs_metres(lyr):
+        return kind, why + " and a CRS in metres ({})".format(lyr.crs().authid()), True
+    return kind, why, False
+
+
+def _units_rows(pre, name, path, lyr, unit_ft, unit_m, sample_max=None):
+    """[(level, text)] when a raster looks metric (see raster_units)."""
+    kind, why, strong = raster_units(path, lyr)
+    if kind != "metric":
+        return []
+    vals = ""
+    if sample_max is not None:
+        vals = " (max {:.1f} {} would be {:.1f} {})".format(
+            sample_max, unit_m, sample_max * FT_PER_M, unit_ft)
+    text = ("{}{} raster looks like {} ({}){} - the plugin expects {}: convert it "
+            "(x {}) or import the HEC-RAS plan with Tools > HEC-RAS plan, which writes "
+            "{}".format(pre, name, unit_m, why, vals, unit_ft, FT_PER_M, unit_ft))
+    return [(ERROR if strong else WARNING, text)]
 
 
 def _open(path, name):
@@ -106,6 +256,8 @@ def check_rasters(depth, velocity=None, arrival=None, dv=None, label=""):
         else:
             out.append((OK, "{}depth: {:,} wet cells sampled, median {:.1f} ft, max {:.1f} "
                             "ft".format(pre, int(wet.sum()), med, mx)))
+        out += _units_rows(pre, "depth", depth, opened["depth"][0], "feet", "metres",
+                           float(np.percentile(dw, 99)) if med <= 300 else None)
         if (d < 0).any() and float(d[d < 0].min()) > -9000:
             out.append((WARNING, "{}depth raster has negative values (min {:.1f}) - they are "
                                  "treated as dry".format(pre, float(d[d < 0].min()))))
@@ -116,6 +268,9 @@ def check_rasters(depth, velocity=None, arrival=None, dv=None, label=""):
         if "vel" in opened:
             _l, vsmp, _n = opened["vel"]
             v = vsmp.values_at(wx, wy) if _same_crs(opened, "vel") else None
+            vfin = v[np.isfinite(v)] if v is not None else np.empty(0)
+            out += _units_rows(pre, "velocity", velocity, _l, "ft/s", "m/s",
+                               float(vfin.max()) if vfin.size else None)
             if v is not None:
                 miss = float(np.mean(~np.isfinite(v)))
                 vv = v[np.isfinite(v)]
