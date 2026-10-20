@@ -16,8 +16,9 @@ import tempfile
 import zipfile
 from xml.etree import ElementTree as ET
 
-from .constants import ZONE_FILLS_REG05
-
+# REG_05.2026 Fig. 5.1 / 5.2 fills by ACER class (1 high, 2 judgment, 3 low); the same colours
+# as styles/acer_zones.qml (tests/test_zone_colors_reg05.py)
+ZONE_FILLS_REG05 = {1: "#EF9897", 2: "#F9F4A3", 3: "#C4E0AD"}
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 ZONE_COLUMNS = ("ACER_Zone_Label", "Danger_Zone")
 ZONE_OF_TEXT = {"HIGH": 1, "HIGH DANGER ZONE": 1, "JUDGMENT": 2, "JUDGMENT ZONE": 2,
@@ -126,6 +127,7 @@ def fill_zone_cells(path, columns=ZONE_COLUMNS):
                 elif info.filename == "xl/styles.xml":
                     data = styles.encode("utf-8")
                 out.writestr(info, data)
+        shutil.copymode(path, tmp)
         shutil.move(tmp, path)
     finally:
         if os.path.exists(tmp):

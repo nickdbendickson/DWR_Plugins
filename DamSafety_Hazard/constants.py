@@ -3,7 +3,7 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-PLUGIN_VERSION = "2.18.46"
+PLUGIN_VERSION = "2.18.47"
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
@@ -205,10 +205,10 @@ CURVE_FIGURE = {"found": "ND Figure 5.1 / TM 11 Figure 2 (houses built on founda
 
 ZONE_LABELS = {1: "HIGH", 2: "JUDGMENT", 3: "LOW", -9999: "NO DATA"}
 # 2.18.47: the zone names and fills of ND Dam Safety Standards REG_05.2026 Figures 5.1 / 5.2
-# (pp. 21-22) for the tables (Danger_Zone column, XLSX cell fills). ZONE_LABELS above stays the
-# short stored value (styles, rule compare and saved tables read it).
+# (pp. 21-22) for the tables (Danger_Zone column). ZONE_LABELS above stays the
+# short stored value (styles, rule compare and saved tables read it). The fills are in
+# xlsx_zone_fill.ZONE_FILLS_REG05 (this file is window code: no colour literals).
 ZONE_NAMES_REG05 = {1: "HIGH DANGER ZONE", 2: "JUDGMENT ZONE", 3: "LOW DANGER ZONE"}
-ZONE_FILLS_REG05 = {1: "#EF9897", 2: "#F9F4A3", 3: "#C4E0AD"}
 DANGER_CHART_REG05 = {"found": "REG_05.2026 Fig. 5.1 (houses built on foundations)",
                       "mobile": "REG_05.2026 Fig. 5.2 (mobile homes)",
                       "1d": "1D model: depth > 2 ft (REG_05.2026 5.2.1.1(d))"}
