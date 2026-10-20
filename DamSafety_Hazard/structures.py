@@ -134,6 +134,12 @@ OUT_DRY = "Not inundated"
 # Shallower than the 1 ft arrival depth: still wet on the grid, not a consequence.
 CONSEQUENCE_DEPTH_FT = 0.1  # ND 5.2.2 inundated to any degree
 OUT_TRACE = "Below consequence depth"
+# 2.18.48: why First_Arrival_hr is blank at a wet structure (REG_05.2026 5.4(c) asks for the
+# arrival time at each critical feature; the value is left blank, never invented)
+NOTE_ARRIVAL_BELOW = ("no arrival time: the arrival raster has no value at this structure's "
+                      "wet cells (max depth {:.2f} ft); an arrival raster records when the "
+                      "depth first exceeds the model's arrival depth (Runner ARRIVAL_FT, 1 ft "
+                      "by default)")
 
 def _kw(*words):
     return re.compile(r"\b(?:%s)\b" % "|".join(re.escape(w) for w in words))
@@ -1888,7 +1894,7 @@ _RESET = {"max_depth": None, "max_vel": None, "arrival": None, "zone_found": Non
           "dv_max": None, "margin_high": None, "margin_judg": None, "near": "",
           "zone_note": "", "loc": None, "near_raised": False, "region": None,
           "reach_ft": None, "region_kind": "", "n_cells": 0, "sampling": "",
-          "cells_xy": None, "_types": None}
+          "cells_xy": None, "_types": None, "arrival_below": False}
 
 
 # v2.7.1: which cells around a structure are read for its maximum depth / velocity
@@ -2204,6 +2210,10 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             rec["max_depth"] = float(d.max())
             rec["max_vel"] = float(v.max()) if vel_ok else None
             rec["arrival"] = float(np.nanmin(a)) if np.isfinite(a).any() else None
+            # 2.18.48: an arrival raster that has no time at any of the structure's wet cells
+            # (the Runner's arrival time is when the depth first EXCEEDS its arrival depth,
+            # ARRIVAL_FT, 1 ft by default - a shallower flood never sets it) - said in Notes
+            rec["arrival_below"] = rec["arrival"] is None and bool(samplers["arr"].ok)
             dvv = None
             if dv_all is not None:
                 dvv = dv_all[a0:a1]
@@ -2477,6 +2487,8 @@ def structure_notes(rec):
         notes.append(NOTE_MOBILE_OCCUPIED)
     if rec.get("vel_missing"):
         notes.append("velocity missing on some wet cells (used 0)")
+    if rec.get("arrival_below") and rec.get("max_depth") is not None:
+        notes.append(NOTE_ARRIVAL_BELOW.format(rec["max_depth"]))
     if rec["category"] == CAT_UNVERIFIED:
         notes.append("habitability not confirmed by any source - verify")
     if rec.get("address_note"):

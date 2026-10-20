@@ -624,8 +624,9 @@ does (the same module, byte for byte, as the ND dam screening plugin):
   tolerance of a higher zone or beyond the chart's axes. Inundated at any depth -> at least
   Medium (economic loss, 5.2.2; the policy leaves low vs medium to the Engineer, the tool says
   Medium and notes it). Uninhabited buildings only -> Low.
-- **Roads** (5.2.1.2), overtopped at any depth: AADT > 2,000 or interstate -> High, 500-2,000 ->
-  Medium, private or < 500 -> Low, sole access to an occupied location -> Medium.
+- **Roads** (5.2.1.2), overtopped at any depth: AADT > 2,000 or interstate -> High, US / State
+  highway (5.2.1.2(b), whatever its AADT) or 500-2,000 -> Medium, private or < 500 (local, county
+  and private roads only) -> Low, sole access to an occupied location -> Medium.
   **Railroads** (5.2.1.3): Medium; 10 or more trains a day or an active passenger line -> High.
   **Lifeline facilities** (5.2.2) inundated -> Medium (their access roads are not traced).
   **Downstream dams** (5.3 cascading): a dam whose point the flood reaches passes on its class
@@ -633,7 +634,9 @@ does (the same module, byte for byte, as the ND dam screening plugin):
 - **"Any depth"** is the wet depth, 0.1 ft by default and at least 0.01 ft (a dry cell reads 0).
 - **Private roads** are only those an explicit field marks private; ownership or access codes
   are not read as private. Interstates are recognised from "Interstate", "I-94", "I 94", "I94"
-  or TIGER route type "I". FRA passenger codes default to A, B, C (T tourist is not counted).
+  or TIGER route type "I". US / State highways (Runner 3.10.45) from "US 2", "U.S. Highway 85",
+  "ND 23", "ND-1804", "State Hwy 22", "Highway 23" / "Hwy 2" (not "County Highway 12"), TIGER
+  route types "U" / "S" or OSM highway=trunk / primary, in the class field or the name. FRA passenger codes default to A, B, C (T tourist is not counted).
 - **Data gaps**: a road without AADT or a railroad without a train count is classified by the
   assumption you choose (Medium by default) and listed as a data gap; when every governing
   finding is borderline or assumed, the log says the higher class was assigned.

@@ -106,6 +106,8 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
     road_high = [r for r in roads if r["nd_class"] == ND_HIGH]
     road_med = [r for r in roads if r["nd_class"] == ND_MEDIUM]
     road_low = [r for r in roads if r["nd_class"] == ND_LOW and not r.get("nd_judgment")]
+    # 2.18.48: US / State highways, REG_05.2026 5.2.1.2(b): at least Medium whatever the AADT
+    road_us_state = [r for r in roads if r.get("road_class") in ("US Highway", "State Highway")]
     if road_high:
         reasons.append("HIGH - {} overtopped road stretch(es) on Interstates or with "
                        "AADT > 2,000 [5.2.1.2]: {}".format(len(road_high), _road_list(road_high)))
@@ -208,6 +210,9 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
         ("5.2.1.2", "Overtopped roads - US / State highway or AADT 500 - 2,000",
          "{} stretch(es)".format(len(road_med)) if roads_evaluated else "not evaluated",
          met(road_med, ND_MEDIUM) if roads_evaluated else "?"),
+        ("5.2.1.2(b)", "US / State highways overtopped - at least Medium whatever the AADT",
+         "{} stretch(es)".format(len(road_us_state)) if roads_evaluated else "not evaluated",
+         met(road_us_state, ND_MEDIUM + " (at least)") if roads_evaluated else "?"),
         ("5.2.1.2", "Overtopped roads - private or AADT < 500 (no probable loss of life)",
          "{} stretch(es)".format(len(road_low)) if roads_evaluated else "not evaluated",
          met(road_low, ND_LOW) if roads_evaluated else "?"),
