@@ -66,6 +66,10 @@ jobs:
           # Runner steps above). An inline `for ...; exit $fail` shell loop did not propagate its
           # status under micromamba's `bash -el` even when every script exited 0.
           python DamSafety_Hazard/tests/run_all.py
+      - name: Hazard Lite (GDAL + numpy)
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          python DamSafety_HazardLite/tests/test_core.py
       - name: GUI lint (real QGIS, docs/gui-grammar.md)
         env:
           QT_QPA_PLATFORM: offscreen

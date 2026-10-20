@@ -24,7 +24,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening",
-           "DamSafety_Data", "DamSafety_Setup", "DamSafety_PMP")
+           "DamSafety_Data", "DamSafety_Setup", "DamSafety_PMP", "DamSafety_HazardLite")
 
 # plugin-root files copied verbatim into more than one plugin (not shared via damsuite): they must
 # stay byte-identical so the two tools apply the same rule. {filename: (plugins that carry it)}.
