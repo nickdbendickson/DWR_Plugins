@@ -18,6 +18,7 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.core import QgsProject, QgsVectorLayer
 
+from .ui_wrap import WrapCheckBox
 from .compat import (GEOM_POINT, GEOM_LINE, GEOM_POLYGON, MSG_CRITICAL, MSG_WARNING,
                      MB_YES, MB_NO, MB_CANCEL)
 from .constants import (
@@ -65,7 +66,7 @@ class ClassificationTabMixin(object):
         hid six of them together. Closed sections keep their ND defaults, as before."""
         crit = QGroupBox()
         cform = QFormLayout()
-        self.judgment_check = QCheckBox(
+        self.judgment_check = WrapCheckBox(
             "Count ACER judgment-zone structures as probable loss of life "
             "(conservative, ND 5.3(f))")
         self.judgment_check.setChecked(True)
@@ -78,7 +79,7 @@ class ClassificationTabMixin(object):
         self.near_spin.setToolTip("Structures this close below the next ACER boundary are "
                                   "flagged as borderline (ND 5.3(f)).")
         cform.addRow("Borderline distance:", self.near_spin)
-        self.borderline_check = QCheckBox("Count borderline structures in the higher zone")
+        self.borderline_check = WrapCheckBox("Count borderline structures in the higher zone")
         cform.addRow("", self.borderline_check)
         self.ppd_spin = QSpinBox()
         self.ppd_spin.setRange(1, 20)
@@ -114,7 +115,7 @@ class ClassificationTabMixin(object):
         self.speed_spin.setValue(DEFAULT_VEHICLE_SPEED_MPH)
         self.speed_spin.setSuffix(" mph")
         cform.addRow("Travel speed (motorist estimate):", self.speed_spin)
-        self.lifeline_medium_check = QCheckBox(
+        self.lifeline_medium_check = WrapCheckBox(
             "Inundated lifeline facilities make the dam at least ND Medium (5.2.2)")
         self.lifeline_medium_check.setChecked(True)
         cform.addRow("", self.lifeline_medium_check)
@@ -130,33 +131,33 @@ class ClassificationTabMixin(object):
 
         rep = QGroupBox()
         rform = QFormLayout()
-        self.report_check = QCheckBox("PDF report with maps (print layout kept in the project)")
+        self.report_check = WrapCheckBox("PDF report with maps (print layout kept in the project)")
         self.report_check.setChecked(True)
         rform.addRow("", self.report_check)
         self.pages_spin = QSpinBox()
         self.pages_spin.setRange(0, 40)
         self.pages_spin.setValue(8)
         rform.addRow("Zoom map pages (max):", self.pages_spin)
-        self.compare_check = QCheckBox("Compare with the last run (what changed - "
+        self.compare_check = WrapCheckBox("Compare with the last run (what changed - "
                                        "QA/Changes_Since_Last_Run.csv)")
         self.compare_check.setChecked(True)
         rform.addRow("", self.compare_check)
         # v2.6: the map products of the former Main Consolidation
-        self.zone_rasters_check = QCheckBox("ACER zone rasters - houses, mobile homes, vehicles "
+        self.zone_rasters_check = WrapCheckBox("ACER zone rasters - houses, mobile homes, vehicles "
                                             "(Classification/Hazard_*.tif)")
         self.zone_rasters_check.setChecked(True)
         self.zone_rasters_check.setToolTip("Every cell classified from its max depth with its "
                                            "max velocity (TM 11 Figs 2-4). Needs the velocity "
                                            "raster.")
         rform.addRow("", self.zone_rasters_check)
-        self.sampled_cells_check = QCheckBox("Layer of the raster cells read for each structure "
+        self.sampled_cells_check = WrapCheckBox("Layer of the raster cells read for each structure "
                                              "(QA/Structure_Sampled_Cells)")
         self.sampled_cells_check.setChecked(True)
         self.sampled_cells_check.setToolTip("The evaluation areas (outline + 5-ft edge ring) "
                                             "are always written to QA/Structure_Evaluation_Areas;"
                                             " this adds the cells behind them.")
         rform.addRow("", self.sampled_cells_check)
-        self.reuse_check = QCheckBox("Re-use the last run's downloads, inventory and raster "
+        self.reuse_check = WrapCheckBox("Re-use the last run's downloads, inventory and raster "
                                      "sampling when unchanged (fast re-runs)")
         self.reuse_check.setChecked(True)
         self.reuse_check.setToolTip(
@@ -175,7 +176,7 @@ class ClassificationTabMixin(object):
 
         cons = QGroupBox()
         kform = QFormLayout()
-        self.lol_check = QCheckBox("Loss-of-life estimate (Graham 1999, DSO-99-06)")
+        self.lol_check = WrapCheckBox("Loss-of-life estimate (Graham 1999, DSO-99-06)")
         self.lol_check.setChecked(True)
         kform.addRow("", self.lol_check)
         self.warn_spin = QDoubleSpinBox()
@@ -231,7 +232,7 @@ class ClassificationTabMixin(object):
         hrow2.addWidget(self.hcom_edit, stretch=3)
         hrow2.addWidget(b_hcom)
         kform.addRow("DSS-WISE HCOM table (cross-check):", wrow2)
-        self.access_check = QCheckBox("Sole-access screening on the road network")
+        self.access_check = WrapCheckBox("Sole-access screening on the road network")
         self.access_check.setChecked(True)
         kform.addRow("", self.access_check)
         self.access_spin = QSpinBox()
@@ -239,7 +240,7 @@ class ClassificationTabMixin(object):
         self.access_spin.setValue(int(DEFAULT_ACCESS_SEARCH_FT))
         self.access_spin.setSuffix(" ft")
         kform.addRow("Structure to road, max:", self.access_spin)
-        self.access_medium_check = QCheckBox(
+        self.access_medium_check = WrapCheckBox(
             "Cut-off habitable structures make the dam at least ND Medium (5.2.1.2)")
         self.access_medium_check.setChecked(True)
         kform.addRow("", self.access_medium_check)
@@ -249,17 +250,17 @@ class ClassificationTabMixin(object):
         # first box)
         eapg = QGroupBox()
         eform = QFormLayout()
-        self.eap_check = QCheckBox("Make Emergency Action Plan outputs")
+        self.eap_check = WrapCheckBox("Make Emergency Action Plan outputs")
         self.eap_check.setChecked(True)
         self.eap_check.setToolTip("Untick to skip every EAP output below (faster runs while "
                                   "the classification is being worked out).")
         eform.addRow("", self.eap_check)
-        self.eap_list_check = QCheckBox("Notification list (sorted by arrival time, "
+        self.eap_list_check = WrapCheckBox("Notification list (sorted by arrival time, "
                                         "priority for schools / care homes) and arrival-time "
                                         "bands and contours")
         self.eap_list_check.setChecked(True)
         eform.addRow("", self.eap_list_check)
-        self.eap_mapbook_check = QCheckBox("Inundation map book (PDF: index + numbered map "
+        self.eap_mapbook_check = WrapCheckBox("Inundation map book (PDF: index + numbered map "
                                            "sheets with the notification items)")
         self.eap_mapbook_check.setChecked(False)
         self.eap_mapbook_check.setToolTip("Also makes the notification list and arrival maps "
@@ -271,7 +272,7 @@ class ClassificationTabMixin(object):
         i = self.mapbook_scale_combo.findData(MAPBOOK_DEFAULT_SCALE)
         self.mapbook_scale_combo.setCurrentIndex(i if i >= 0 else 0)
         eform.addRow("Map book scale:", self.mapbook_scale_combo)
-        self.eap_travel_check = QCheckBox("Travel-time table along the channel (river miles, "
+        self.eap_travel_check = WrapCheckBox("Travel-time table along the channel (river miles, "
                                           "towns, bridges, road closures)")
         self.eap_travel_check.setChecked(True)
         eform.addRow("", self.eap_travel_check)
