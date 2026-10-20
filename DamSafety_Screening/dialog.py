@@ -413,7 +413,7 @@ class NDDamScreeningDialog(QDialog):
             # the Run options tab is a long form: it scrolls, so the window fits a 1080p screen
             # (unscrolled it asked for 1147 px and put Save and Close below the screen)
             wrap_tabs(self.grid.tabs)
-            fit_window(self.settings_window, prefer=(900, 620))
+            fit_window(self.settings_window, prefer=(1140, 720))   # Run options rows are wide
         except Exception:                                        # noqa
             pass
 
