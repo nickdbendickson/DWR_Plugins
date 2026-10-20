@@ -530,8 +530,10 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
         raise ModelError(
             "This LISFLOOD-FP build does not have the arrival-depth patch (it ignored "
             "'inittm_depth'), so arrival times would mark the first millimetre of water "
-            "instead of the arrival depth. Rebuild it with scripts/build_lisflood_linux.sh on Linux, or scripts/build_lisflood_macos.sh on macOS on macOS, or build with CMake on Linux "
-            "(or scripts/patch_lisflood.py) and set the new executable in Processing > "
+            "instead of the arrival depth. Rebuild it with scripts/build_lisflood_linux.sh on Linux "
+            "or scripts/build_lisflood_macos.sh on macOS (both apply scripts/patch_lisflood.py; a "
+            "plain CMake build of your own needs that patch first) and set the new executable in "
+            "Processing > "
             "Options > Providers > ND Dam Breach Runner.")
     if log:
         log("LISFLOOD-FP finished in {:.1f} min".format((time.time() - t0) / 60.0))
@@ -736,7 +738,8 @@ def check_lisflood(exe, workdir):
                 "its results are preliminary estimates.")
     if not patched and not is_builtin(exe):
         msg += (" The arrival-depth patch is NOT active (arrival time will be the first "
-                "wetting, about 1 mm). Rebuild with scripts/build_lisflood_linux.sh on Linux, or scripts/build_lisflood_macos.sh on macOS on macOS, or build with CMake on Linux.")
+                "wetting, about 1 mm). Rebuild with scripts/build_lisflood_linux.sh on Linux or "
+                "scripts/build_lisflood_macos.sh on macOS (both apply scripts/patch_lisflood.py).")
     return {"ok": True, "patched": patched, "message": msg}
 
 
