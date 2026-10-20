@@ -176,11 +176,17 @@ class SettingsGrid(QWidget):
             self.tables[g] = t
             self.tabs.addTab(t, tab_title(g))
         lay.addWidget(self.tabs, 1)
+        # the legend explains the table's notation; the units line under it is a quieter footnote
         legend = QLabel("bold = changed from the starting value.  [YOUR value] = an engineer-chosen threshold, "
-                        "not a standard.  Cell sizes stay in metres (the DEM's unit); every other distance is "
-                        "in feet, areas in acres, volumes in acre-feet.")
+                        "not a standard.")
         legend.setWordWrap(True)
         lay.addWidget(legend)
+        units = QLabel("Cell sizes stay in metres (the DEM's unit); every other distance is in feet, areas in "
+                       "acres, volumes in acre-feet.")
+        units.setWordWrap(True)
+        units.setStyleSheet("color: {};".format(TOKENS["muted"]))
+        lay.addWidget(units)
+        self.legend_label, self.units_label = legend, units
         self.help_label = QLabel("")
         self.help_label.setWordWrap(True)
         self.help_label.setVisible(False)

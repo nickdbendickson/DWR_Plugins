@@ -17,7 +17,9 @@ style.
   `shared/ui/`, and window code must not contain a `#rrggbb` colour outside `tokens.py`.
 - **GUI lint** (`tools/gui_lint.py`, real QGIS, offscreen): opens every window and checks the
   rules below. Run it as `QT_QPA_PLATFORM=offscreen <QGIS python> tools/gui_lint.py [shots_dir]`.
-  Add a screenshots folder to see every window.
+  Add a screenshots folder to see every window. One rule, no page scrolls sideways, needs a
+  1080p screen (Qt5's offscreen screen is 800x600), so run it under a virtual display as well:
+  `xvfb-run -s "-screen 0 1920x1080x24" env QT_QPA_PLATFORM=xcb <QGIS python> tools/gui_lint.py`.
 
 ## The rules
 

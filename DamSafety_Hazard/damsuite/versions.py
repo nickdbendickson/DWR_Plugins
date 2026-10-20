@@ -32,7 +32,7 @@ PLUGINS = {"ndhazard": "DamSafety_Hazard",
 LABELS = {"ndhazard": "DamSafety Hazard",
           "ndbreach": "DamSafety Runner",
           "ndscreen": "DamSafety Screening"}
-RELEASE = {"ndhazard": "2.18.42", "ndbreach": "3.10.34", "ndscreen": "0.17.31"}
+RELEASE = {"ndhazard": "2.18.43", "ndbreach": "3.10.35", "ndscreen": "0.17.32"}
 # minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
 REQUIRES = {
     ("ndbreach", "ndhazard"): ("2.9.1", "2.11.0",
