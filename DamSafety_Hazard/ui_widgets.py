@@ -196,7 +196,9 @@ class StageStrip(QWidget):
 
 
 class EngineChip(QLabel):
-    """'LISFLOOD-FP ✓' - a status label, borderless by default so it does not look clickable."""
+    """'✓ LISFLOOD-FP' - a status label, borderless by default so it does not look clickable.
+    The mark leads, like every mark in the suite. A missing optional engine is amber, not red:
+    red is for what blocks the run."""
 
     def __init__(self, name, bordered=False, parent=None):
         super().__init__(parent)
@@ -205,18 +207,19 @@ class EngineChip(QLabel):
         self.found = None
         self.set_state(None, pending=True)
 
-    def set_state(self, found, note="", pending=False, hint=""):
-        """found: True / False / None (could not be checked)."""
+    def set_state(self, found, note="", pending=False, hint="", optional=False):
+        """found: True / False / None (could not be checked). optional: the run does not need it."""
         self.found = found
-        color = {True: T["success"], False: T["error"]}.get(found, T["off"])
+        color = {True: T["success"], False: T["warn"] if optional else T["error"]}.get(
+            found, T["off"])
         mark = "\u2026" if pending else {True: "\u2713", False: "\u2715"}.get(found, "?")
-        self.setText("{} {}".format(self.name, mark))
+        self.setText("{} {}".format(mark, self.name))
         border = "border:1px solid %s; border-radius:4px; padding:2px 8px;" % color \
             if self.bordered else "border:none; padding:2px 4px;"
         self.setStyleSheet("QLabel {color:%s; %s}" % (color, border))
         if not pending:
             self.setToolTip("{}: {}{}{}".format(
-                self.name, {True: "found", False: "NOT found"}.get(found, "could not be checked"),
+                self.name, {True: "installed", False: "not installed"}.get(found, "could not be checked"),
                 " - " + note if note else "", "\n" + hint if hint else ""))
 
 
