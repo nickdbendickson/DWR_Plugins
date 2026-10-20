@@ -27,7 +27,7 @@ from . import wizard_logic as wl
 from .core import breach as brmod
 from .core import nd_data
 
-TITLE = "ND Dam Breach Runner"
+TITLE = "DamSafety Runner"
 
 
 # ------------------------------------------------------------------------------- messages
@@ -640,7 +640,7 @@ def _classes():
     class Wizard(W.QWizard):
         def __init__(self, parent=None):
             W.QWizard.__init__(self, parent)
-            self.setWindowTitle("{}: model one dam".format(TITLE))
+            self.setWindowTitle("{} \u2014 Model one dam".format(TITLE))
             self.answers = wl.default_answers()
             self.session = EstimateSession()
             for page in (DamPage(), TerrainPage(), ScenarioPage(), ModelPage(), ReviewPage()):

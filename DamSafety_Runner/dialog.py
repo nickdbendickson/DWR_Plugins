@@ -25,6 +25,7 @@ from qgis.PyQt.QtWidgets import (
 
 from . import popup_logic as pl
 from .ui_widgets import Collapsible, DamCard, EngineChip, InfoBanner, StageStrip, ToolRow
+from .tokens import TOKENS
 
 TITLE = "DamSafety Runner"
 SIZE_KEY = "DamSafety_Runner/window"           # QSettings: the window size, saved on close
@@ -40,7 +41,7 @@ CATEGORY_TITLES = {"Dam": "Run variants", "Model": "Model runs", "Data": "Terrai
 CARD_CHIPS = (("run", "Flood run"), ("baseline", "Baseline"), ("manifest", "Manifest"),
               ("products", "Products"), ("preview", "5.2 preview"), ("handoff", "Hand-off"),
               ("submittal", "Submittal"), ("package", "Package"))
-CHIP_STYLE = {"yes": ("✓", "#137333"), "part": ("◐", "#b26b00"), "no": ("○", "#888888")}
+CHIP_STYLE = {"yes": ("✓", TOKENS["success"]), "part": ("◐", TOKENS["warn"]), "no": ("○", TOKENS["off"])}
 TOOL_TAG = {"yes": "✓ done", "part": "◐ partial", "no": "not run yet"}
 RUN_TIP = "Opens the breach model with this dam, DEM, grid, and hours filled in."
 RUN_TIP_NO_DAM = "Set the Dams folder and the dam ID first - the run needs a dam to write into."
@@ -210,16 +211,14 @@ class NDBreachRunnerDialog(QDialog):
         self.run_dam_btn.setDefault(True)
         self.run_dam_btn.setMinimumHeight(34)
         self.run_dam_btn.setMinimumWidth(180)
-        self.run_dam_btn.setStyleSheet(
-            "QPushButton {background:#1a5fb4; color:white; font-weight:bold; border-radius:4px;"
-            " padding:4px 16px;} QPushButton:disabled {background:#d5d8dd; color:#8a9099;}")
+        self.run_dam_btn.setStyleSheet("QPushButton {font-weight:bold; padding:4px 16px;}")
         self.run_dam_btn.setToolTip(RUN_TIP_NO_DAM)
         self.run_dam_btn.setEnabled(False)          # refresh() enables it once a dam is chosen
         self.run_dam_btn.clicked.connect(lambda _c=False: self._open_tool("rundam"))
         run_row.addWidget(self.run_dam_btn)
         run_row.addSpacing(12)
         engines = QLabel("Engines:")
-        engines.setStyleSheet("color:#666;")
+        engines.setStyleSheet("color:{};".format(TOKENS["muted"]))
         run_row.addWidget(engines)
         self.lis_chip = EngineChip("LISFLOOD-FP")       # status labels, not buttons
         self.anuga_chip = EngineChip("ANUGA")
@@ -253,7 +252,7 @@ class NDBreachRunnerDialog(QDialog):
         lay.addWidget(self.tabs, 1)
 
         self.settings_dialog = QDialog(self)
-        self.settings_dialog.setWindowTitle("{} - Settings".format(TITLE))
+        self.settings_dialog.setWindowTitle("{} \u2014 Settings".format(TITLE))
         self.settings_dialog.setModal(False)
         self.settings_dialog.resize(900, 620)
         sd = QVBoxLayout()
@@ -428,7 +427,7 @@ class NDBreachRunnerDialog(QDialog):
         except Exception:
             box = QWidget()
             lay = QVBoxLayout()
-            lay.addWidget(QLabel("DEM download needs DamSafety Screening or ND Dam Breach Screening. Neither import succeeded."))
+            lay.addWidget(QLabel("DEM download needs DamSafety Screening. It could not be imported."))
             box.setLayout(lay)
             return Collapsible("Download a DEM (not available)", box)
         box = QWidget()
@@ -993,7 +992,7 @@ class NDBreachRunnerDialog(QDialog):
             QMessageBox.information(
                 self, TITLE,
                 "The Processing dialog of {} could not be opened here ({}).\n\nOpen it from the "
-                "Processing Toolbox: ND Dam Breach Runner > {}.".format(aid, e, pl.TOOL_LABEL.get(alg, alg)))
+                "Processing Toolbox: DamSafety Runner > {}.".format(aid, e, pl.TOOL_LABEL.get(alg, alg)))
             return False
         self._log(">>> Opened {} ({})".format(aid, ", ".join(
             "{}={}".format(k, os.path.basename(str(v)) if os.path.isabs(str(v)) else v)

@@ -33,7 +33,8 @@ from . import nid_fill  # noqa: E402  (no Qt in it)
 
 # page ids (the order addPage is called in)
 FOLDER_PAGE, DAM_PAGE, DEM_PAGE, RUN_PAGE = range(4)
-RED, GREEN, GREY = "#c62828", "#2e7d32", "#888888"
+from .tokens import TOKENS  # noqa: E402
+RED, GREEN, GREY = TOKENS["error"], TOKENS["success"], TOKENS["off"]
 
 
 def _reason_label():
@@ -185,13 +186,20 @@ def dem_target(folder, dam_id, point, res_index):
     return folder, (stem + suffix) if stem else "(pick a dam first)"
 
 
+
+def _plugin_icon():
+    """The plugin's icon.svg for its menu entry (every DamSafety plugin has one)."""
+    import os
+    from qgis.PyQt.QtGui import QIcon
+    return QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.svg"))
+
 class SetupPlugin(object):
     def __init__(self, iface):
         self.iface = iface
         self.action = None
 
     def initGui(self):
-        self.action = QAction("Start here\u2026", self.iface.mainWindow())
+        self.action = QAction(_plugin_icon(), "Start here\u2026", self.iface.mainWindow())
         self.action.setObjectName("DamSafetySetupStartAction")
         self.action.triggered.connect(self.run)
         self.iface.addPluginToMenu(MENU, self.action)
@@ -302,7 +310,7 @@ class DamSafetySetupPlugin(SetupPlugin):
 class SetupWizard(QWizard):
     def __init__(self, parent=None):
         super(SetupWizard, self).__init__(parent)
-        self.setWindowTitle("Set up one dam")
+        self.setWindowTitle("DamSafety Setup \u2014 Set up one dam")
         self.found = {}
         self.addPage(FolderPage(self))
         self.addPage(DamPage(self))
@@ -330,7 +338,7 @@ class FolderPage(QWizardPage):
         lay = QVBoxLayout()
         row = QHBoxLayout()
         self.path = QLineEdit()
-        browse = QPushButton("Browse")
+        browse = QPushButton("Browse\u2026")
         browse.clicked.connect(self._browse)
         self.path.editingFinished.connect(self._scan)
         self.path.textChanged.connect(self._edited)
@@ -772,7 +780,7 @@ class DemPage(QWizardPage):
         form = QFormLayout()
         row = QHBoxLayout()
         self.dem = QLineEdit()
-        browse = QPushButton("Browse")
+        browse = QPushButton("Browse\u2026")
         browse.clicked.connect(self._browse)
         row.addWidget(self.dem)
         row.addWidget(browse)
