@@ -725,15 +725,21 @@ def xml_escape(s):
             .replace('"', "&quot;"))
 
 
-def write_text_files(m, folder):
-    """Writes the project, geometry, unsteady, plan and RAS Mapper files. Returns paths."""
+def write_text_files(m, folder, now=None):
+    """Writes the project, geometry, unsteady, plan and RAS Mapper files. Returns paths.
+
+    now: optional fixed timestamp for the geometry edit-time stamps (Storage Area 2D
+    PointsPerimeterTime / Connection Last Edited Time, incl. per-structure). It defaults to
+    the wall clock, as before; a fixed value makes a build byte-reproducible (HEC-RAS
+    overwrites these stamps on first open, so there is no operational difference)."""
     os.makedirs(folder, exist_ok=True)
     out = {}
     for ext, fn in (("prj", project_text), ("g01", geometry_text), ("u01", unsteady_text),
                     ("p01", plan_text), ("rasmap", rasmap_text)):
         p = os.path.join(folder, "{}.{}".format(m.name, ext))
+        text = geometry_text(m, now) if fn is geometry_text else fn(m)
         with open(p, "w", newline="", encoding="ascii", errors="replace") as f:
-            f.write(fn(m))
+            f.write(text)
         out[ext] = p
     return out
 
