@@ -84,4 +84,6 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           cd "$GITHUB_WORKSPACE"
-          python -m pytest -q -p no:cacheprovider DamSafety_Runner/tests/suite_dams DamSafety_Setup/tests
+          # os._exit after pytest: QGIS can segfault while Python tears it down at exit, after
+          # every test has passed (the realqt scripts end the same way)
+          python -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_Runner/tests/suite_dams', 'DamSafety_Setup/tests']); sys.stdout.flush(); os._exit(int(rc))"
