@@ -417,7 +417,7 @@ def popup_window_shows_the_dam_and_opens_tools():
         dlg.settings_file_edit.setText("")
         assert set(dlg.tool_button) == {t[0] for t in pl.ALL_TOOLS}
         assert dlg.status_label.text() == "Choose the Dams folder and the dam ID."
-        assert dlg.lis_chip.text().startswith("LISFLOOD-FP ") and dlg.anuga_chip.text().startswith("ANUGA ")
+        assert dlg.lis_chip.text().endswith(" LISFLOOD-FP") and dlg.anuga_chip.text().endswith(" ANUGA")
         assert not dlg.suggest_btn.isEnabled() and not dlg.folder_btn.isEnabled()
         RUN = {"CELL": 10.0, "DURATION_HR": 12.0, "DURATION_MAX_HR": 96.0}    # the window's run fields
         # a tool can be opened before a dam is chosen: the dialog's own empty fields
