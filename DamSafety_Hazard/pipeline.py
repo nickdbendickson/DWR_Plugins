@@ -1065,8 +1065,13 @@ def _evaluate(run, cfg, scenarios, breaches):
     acrs = dlyr.crs()
     run.clip_crs = acrs
     run.clip_lat = None
-    _same_crs_rasters(run, scenarios, layers, acrs)
+    # audit H2: the units guard must read the rasters AS DELIVERED. _same_crs_rasters
+    # reprojects a secondary scenario whose CRS differs from the primary's (a fresh Float32
+    # .tif under _reprojected/, renamed and relocated), which strips the HEC-RAS SI-project,
+    # filename and metric-CRS evidence raster_units() relies on - so the guard must run
+    # BEFORE reprojection, not after, or a metric secondary scenario is read as feet.
     _metric_units_guard(run, scenarios, layers)
+    _same_crs_rasters(run, scenarios, layers, acrs)
     rect = _union_rect(acrs, scenarios, layers, run.ctx)
     clip = ExtentClip(dlyr, cfg["extent_buffer_ft"], run.ctx, rect=rect)
     run.clip_lat = clip.lat

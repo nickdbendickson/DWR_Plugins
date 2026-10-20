@@ -162,12 +162,27 @@ def test_pipeline_guard_stops_metric_rasters():
         raise AssertionError("a raster with band unit 'm' must stop the run")
 
 
+def test_metric_units_guard_runs_before_reprojection():
+    # audit H2 regression: _same_crs_rasters reprojects a secondary scenario whose CRS differs
+    # from the primary's (a renamed/relocated Float32 .tif under _reprojected/), which strips
+    # the HEC-RAS SI-project / filename / metric-CRS evidence raster_units() reads. So
+    # _metric_units_guard must run BEFORE _same_crs_rasters in _evaluate, or a metric secondary
+    # scenario is read as feet with no error. Guard the call order so it cannot be reintroduced.
+    import inspect
+    from DamSafety_Hazard import pipeline as PL
+    src = inspect.getsource(PL._evaluate)
+    assert "_metric_units_guard(" in src and "_same_crs_rasters(" in src, src
+    assert src.index("_metric_units_guard(") < src.index("_same_crs_rasters("), \
+        "H2: _metric_units_guard must run before _same_crs_rasters (reprojection) in _evaluate"
+
+
 def main():
     tests = [test_unit_words, test_file_name_hints, test_band_unit_metres_is_an_error,
              test_units_metadata_item, test_hec_ras_si_project,
              test_name_only_is_a_warning_and_metric_crs_makes_it_an_error,
              test_feet_rasters_pass, test_model_gate_units_row_fails_on_metres,
-             test_pipeline_guard_stops_metric_rasters]
+             test_pipeline_guard_stops_metric_rasters,
+             test_metric_units_guard_runs_before_reprojection]
     failed = 0
     for fn in tests:
         try:
