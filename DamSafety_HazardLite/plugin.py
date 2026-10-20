@@ -84,7 +84,10 @@ class Provider(QgsProcessingProvider):
 
 class Plugin:
     def __init__(self, iface):
+        self.iface = iface
         self.provider = None
+        self.action = None
+        self.dialog = None
 
     def initProcessing(self):
         self.provider = Provider()
@@ -92,7 +95,23 @@ class Plugin:
 
     def initGui(self):
         self.initProcessing()
+        from qgis.PyQt.QtGui import QIcon
+        from qgis.PyQt.QtWidgets import QAction
+        here = os.path.dirname(__file__)
+        self.action = QAction(QIcon(os.path.join(here, "icon.svg")),
+                              "DamSafety Hazard Lite…", self.iface.mainWindow())
+        self.action.triggered.connect(self.open)
+        self.iface.addPluginToMenu("DamSafety Hazard Lite", self.action)
+
+    def open(self):
+        from .dialog import HazardLiteDialog
+        if self.dialog is None:
+            self.dialog = HazardLiteDialog(self.iface.mainWindow(), self.iface)
+        self.dialog.show()
+        self.dialog.raise_()
 
     def unload(self):
         if self.provider:
             QgsApplication.processingRegistry().removeProvider(self.provider)
+        if self.action is not None:
+            self.iface.removePluginMenu("DamSafety Hazard Lite", self.action)

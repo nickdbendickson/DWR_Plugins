@@ -62,6 +62,13 @@ Ran in 3.5 s in QGIS 3.34.4 through `qgis_process`.
 Lite finds more structures because every 911 point counts (no NSI rules) and because a 20 m cell
 that only touches an outline is sampled. Example: 101 3rd Ave N reads 3.44 ft here and 2.27 ft in the full plugin.
 
+## Window
+
+Plugins menu > DamSafety Hazard Lite > DamSafety Hazard Lite… opens a one-window form built from the
+shared `shared/ui` widgets (info banner, stage pills, CheckPanel, bold Classify beside Check inputs,
+▸ Log fold, ⚙ gear), so it matches the other DamSafety windows (docs/gui-grammar.md, checked by
+tools/gui_lint.py). The Processing tool stays, so the same run also works headless.
+
 ## Install
 
 Copy the `DamSafety_HazardLite` folder into the QGIS plugins folder (or Plugins > Install from ZIP), enable it,
