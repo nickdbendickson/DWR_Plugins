@@ -636,7 +636,9 @@ does (the same module, byte for byte, as the ND dam screening plugin):
   are not read as private. Interstates are recognised from "Interstate", "I-94", "I 94", "I94"
   or TIGER route type "I". US / State highways (Runner 3.10.45) from "US 2", "U.S. Highway 85",
   "ND 23", "ND-1804", "State Hwy 22", "Highway 23" / "Hwy 2" (not "County Highway 12"), TIGER
-  route types "U" / "S" or OSM highway=trunk / primary, in the class field or the name. FRA passenger codes default to A, B, C (T tourist is not counted).
+  route types "U" / "S", ND NG9-1-1 SHIELD "USHY" / "STHY" (the Runner reads NG9-1-1 FULL_NAME as the
+  name and SHIELD as the class field), OSM / Geofabrik trunk, or primary from an OSM highway / fclass
+  field, in the class field or the name. FRA passenger codes default to A, B, C (T tourist is not counted).
 - **Data gaps**: a road without AADT or a railroad without a train count is classified by the
   assumption you choose (Medium by default) and listed as a data gap; when every governing
   finding is borderline or assumed, the log says the higher class was assigned.
