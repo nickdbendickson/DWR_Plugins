@@ -148,6 +148,18 @@ class RunSettings:
                                                 or 0.0)
         except ValueError:
             pass
+        # 3.10.35, opt-in (all off = the run is exactly as before): ANUGA checkpoints every
+        # anuga_checkpoint_min wall-clock minutes (or every anuga_checkpoint_steps yield steps
+        # of 300 s), the newest anuga_checkpoint_keep kept; anuga_partial_min writes
+        # anuga/anuga_partial.npz (the envelope so far) that often, and after each checkpoint;
+        # anuga_resume continues the same ANUGA job from its newest checkpoint (also when the
+        # run resumes, st.resume, with checkpoints on). Env: NDBREACH_ANUGA_CHECKPOINT_MIN,
+        # _CHECKPOINT_STEPS, _CHECKPOINT_KEEP, _PARTIAL_MIN, _RESUME (or ANUGA_CHECKPOINT_MIN...).
+        self.anuga_checkpoint_min = _env_number("ANUGA_CHECKPOINT_MIN", 0.0)
+        self.anuga_checkpoint_steps = int(_env_number("ANUGA_CHECKPOINT_STEPS", 0))
+        self.anuga_checkpoint_keep = int(_env_number("ANUGA_CHECKPOINT_KEEP", 2))
+        self.anuga_partial_min = _env_number("ANUGA_PARTIAL_MIN", 0.0)
+        self.anuga_resume = _env_flag("ANUGA_RESUME")
         _tol = os.environ.get("NDBREACH_ANUGA_GMSH_MIN_AREA_TOL")
         if _tol:
             try:
@@ -285,6 +297,8 @@ class RunSettings:
             elif (k == "anuga_elevation" and v == "fine") or (k == "anuga_elevation_cell_m"
                                                               and not v):
                 continue                 # 3.10.31 defaults: run_report["anuga_elevation_source"]
+            elif k in ANUGA_CHECKPOINT_DEFAULTS and v == ANUGA_CHECKPOINT_DEFAULTS[k]:
+                continue                 # 3.10.35: checkpoints off - the report stays as before
             elif k == "reservoir_carve" and v in ("off", None, ""):
                 continue                 # v3.10.20: off - the report stays as before
             elif k == "hecras_mesh_seeds" and v in ("grid", None, ""):
@@ -309,6 +323,7 @@ def key_settings(st):
     dam.json switch (they do not change the flood), and without the v3.2.0 class-stop
     settings while that rule is off - so a checkpoint of 3.1.x still resumes."""
     d = {k: v for k, v in st.as_dict().items() if k not in ("resume", "eap_map", "dam_record",
+                                                            *ANUGA_CHECKPOINT_DEFAULTS,
                                                             "hecras_mesh_seeds",
                                                             "hecras_dam_axis",
                                                             "water_mask")}
@@ -331,6 +346,25 @@ def key_settings(st):
 
 
 _REFINE_KEYS = ("refine_near", "refine_dist_mi", "refine_cell_m")
+# 3.10.35: ANUGA checkpoint settings and their defaults (off). They do not change the flood:
+# left out of the run key and, at these values, of the settings in run_report.
+ANUGA_CHECKPOINT_DEFAULTS = {"anuga_checkpoint_min": 0.0, "anuga_checkpoint_steps": 0,
+                             "anuga_checkpoint_keep": 2, "anuga_partial_min": 0.0,
+                             "anuga_resume": False}
+
+
+def _env_number(name, default):
+    """NDBREACH_<name> (or <name>) as a float; default when unset or not a number."""
+    v = os.environ.get("NDBREACH_" + name) or os.environ.get(name)
+    try:
+        return float(v) if v not in (None, "") else default
+    except ValueError:
+        return default
+
+
+def _env_flag(name):
+    v = os.environ.get("NDBREACH_" + name) or os.environ.get(name) or ""
+    return v.strip().lower() in ("1", "true", "yes", "on")
 
 
 class RunResult:
@@ -613,6 +647,26 @@ def terrain_label(terrain_src):
     if p is None and hasattr(terrain_src, "base"):
         p = getattr(terrain_src.base, "dem_path", None)
     return str(p) if p else None
+
+
+def anuga_checkpoint_line(ck):
+    """One line for run_report.md from run_report["anuga_checkpoint"] (3.10.35)."""
+    if ck.get("every_min"):
+        how = "every {:g} min of wall time".format(ck["every_min"])
+    elif ck.get("every_steps"):
+        how = "every {} yield steps".format(ck["every_steps"])
+    else:
+        how = "none written"
+    parts = [how, "{} saved".format(ck.get("checkpoints_saved", 0))]
+    if ck.get("checkpoint_error"):
+        parts.append("OFF: " + ck["checkpoint_error"])
+    if ck.get("partial_flushes"):
+        parts.append("partial results flushed {} times".format(ck["partial_flushes"]))
+    if ck.get("resumed_from_t_s") is not None:
+        parts.append("resumed from t = {:.2f} h".format(ck["resumed_from_t_s"] / 3600.0))
+    elif ck.get("resume_skipped"):
+        parts.append("not resumed: " + ck["resume_skipped"])
+    return "; ".join(parts)
 
 
 def max_extent_warning(max_extent_mi, over):
@@ -1388,6 +1442,13 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         # keeps the model grid
         ast.elevation = getattr(st, "anuga_elevation", "fine") or "fine"
         ast.elevation_cell_m = getattr(st, "anuga_elevation_cell_m", 0.0) or None
+        # 3.10.35: opt-in checkpoints / partial results / resume of the ANUGA job
+        ast.checkpoint_min = float(getattr(st, "anuga_checkpoint_min", 0.0) or 0.0)
+        ast.checkpoint_steps = int(getattr(st, "anuga_checkpoint_steps", 0) or 0)
+        ast.checkpoint_keep = int(getattr(st, "anuga_checkpoint_keep", 2) or 2)
+        ast.partial_min = float(getattr(st, "anuga_partial_min", 0.0) or 0.0)
+        ast.resume = bool(getattr(st, "anuga_resume", False)
+                          or (st.resume and (ast.checkpoint_min > 0 or ast.checkpoint_steps > 0)))
         emb_kw.update(elevation_read=lambda b, c: dem_for("anuga", b, c),
                       elevation_native_m=terrain_native_cell(terrain_src),
                       elevation_label=terrain_label(terrain_src))
@@ -1419,6 +1480,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         state.save(anuga_done=True)
         report["anuga_runs"] = a_runs
         report["anuga_elevation_source"] = an_env.stats.get("elevation_source")
+        if an_env.stats.get("checkpoint"):          # 3.10.35: only when checkpoints are on
+            report["anuga_checkpoint"] = an_env.stats["checkpoint"]
         anuga_mesh = _anuga_mesh_report(a_runs)
         report["anuga_mesh"] = anuga_mesh
         if anuga_mesh.get("rejected_line"):
@@ -1616,6 +1679,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     elif es.get("mode") == "model_grid":
         summary["anuga_elevation"] = "model grid ({:g} m) at the centroids ({})".format(
             es.get("cell_m", 0), es.get("reason", ""))
+    ack = report.get("anuga_checkpoint") or {}
+    if ack:
+        summary["anuga_checkpoint"] = anuga_checkpoint_line(ack)
     if "incremental" in report:
         summary["incremental_acres"] = report["incremental"]["acres_at_or_above"]
     if report.get("refine_near_dam", {}).get("applied"):
@@ -2385,6 +2451,8 @@ def render_report(r):
         lines.append("| ANUGA mesh | {} |".format(txt))
     if s.get("anuga_elevation"):
         lines.append("| ANUGA bed elevation | {} |".format(s["anuga_elevation"]))
+    if s.get("anuga_checkpoint"):
+        lines.append("| ANUGA checkpoints | {} |".format(s["anuga_checkpoint"]))
     lines.append("")
     if s.get("anuga_mesh_rejected"):
         lines += ["## ANUGA mesh", "", "**" + s["anuga_mesh_rejected"] + "**", ""]

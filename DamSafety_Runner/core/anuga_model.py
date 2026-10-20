@@ -26,6 +26,10 @@ NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_
 
 WORKER = os.path.join(os.path.dirname(__file__), "anuga_worker.py")
 MESHER = os.path.join(os.path.dirname(__file__), "gmsh_mesher.py")
+PARTIAL_NAME = "anuga_partial.npz"       # = anuga_worker.PARTIAL_NAME
+# 3.10.35: with checkpoints on, a cancel sends SIGTERM first so the worker writes
+# anuga_partial.npz, then SIGKILL after this many seconds
+STOP_GRACE_S = 60.0
 # "gmsh" is strict: a rejected gmsh mesh stops the run. "gmsh_or_default" uses the default
 # ANUGA mesh instead, with a WARNING in the log and a line in run_report.json / .md.
 MESHERS = ("default", "gmsh", "gmsh_or_default")
@@ -64,6 +68,18 @@ class AnugaSettings:
         self.elevation_cell_m = None     # None = the source DEM's own cell size (>= 0.5 m)
         self.elevation_max_cells = 256e6   # cap on the fine grid (float32 on disk, ~1 GB)
         self.elevation_block = 2048      # cells per side of one read
+        # 3.10.35, all off by default (the worker then runs exactly as before): ANUGA
+        # checkpoints (domain.set_checkpointing) every checkpoint_min wall-clock minutes, or
+        # every checkpoint_steps yield steps when checkpoint_min is 0; the newest
+        # checkpoint_keep are kept. partial_min: anuga_partial.npz (the max depth / velocity /
+        # WSE and arrival grids so far) every that many wall-clock minutes; with checkpoints it
+        # is also written after each one. resume: continue from the newest checkpoint of the
+        # same job (see anuga_worker.py).
+        self.checkpoint_min = 0.0
+        self.checkpoint_steps = 0
+        self.checkpoint_keep = 2
+        self.partial_min = 0.0
+        self.resume = False
 
 
 def inlet_line(inflow_xy, direction, width_m):
@@ -202,6 +218,41 @@ def clip_lines_to_polygon(lines, polygon, min_len=1):
     return out
 
 
+def checkpoint_job(st):
+    """The worker's checkpoint keys (anuga_worker.CKPT_KEYS) for st; {} when none is on, so
+    the job file is the one written before 3.10.35."""
+    every_min = float(getattr(st, "checkpoint_min", 0.0) or 0.0)
+    steps = int(getattr(st, "checkpoint_steps", 0) or 0)
+    partial = float(getattr(st, "partial_min", 0.0) or 0.0)
+    resume = bool(getattr(st, "resume", False))
+    if every_min <= 0 and steps <= 0 and partial <= 0 and not resume:
+        return {}
+    return {"ckpt_every_min": max(0.0, every_min), "ckpt_every_steps": max(0, steps),
+            "ckpt_keep": max(1, int(getattr(st, "checkpoint_keep", 2) or 2)),
+            "partial_every_min": max(0.0, partial), "resume": int(resume)}
+
+
+def checkpointing(st):
+    """True when the run writes checkpoints or partial results."""
+    j = checkpoint_job(st)
+    return bool(j) and (j["ckpt_every_min"] > 0 or j["ckpt_every_steps"] > 0
+                        or j["partial_every_min"] > 0)
+
+
+def partial_note(workdir):
+    """'' or a line naming anuga_partial.npz (the envelope so far) after a stopped run."""
+    p = os.path.join(workdir, PARTIAL_NAME)
+    if not os.path.exists(p):
+        return ""
+    try:
+        with np.load(p) as z:
+            info = json.loads(str(z["info"]))
+        return ("Partial ANUGA results up to t = {:.2f} h ({}% of the run, {}) are in {}."
+                .format(info["t_s"] / 3600.0, info.get("percent"), info.get("reason"), p))
+    except Exception:       # noqa: BLE001 - still name the file
+        return "Partial ANUGA results are in {}.".format(p)
+
+
 def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_depth=None,
               culverts=None, breaklines=None, regions=None, mesh=None, elevation=None):
     job = {
@@ -233,6 +284,7 @@ def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_d
         job["mesh_stats"] = json.dumps(mesh.get("stats", {}))
     if elevation:            # 3.10.31: the fine bed (prepare_elevation); absent = as before
         job.update(elevation)
+    job.update(checkpoint_job(st))   # 3.10.35: opt-in checkpoints; absent = as before
     np.savez(path, **job)
 
 
@@ -609,6 +661,12 @@ def _launch(st, job, result, workdir, progress, cancel):
         done = False
         while not done:
             if cancel and cancel():      # also while ANUGA is silent (meshing, start-up)
+                if checkpointing(st) and os.name != "nt":   # 3.10.35: flush the partial file
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=STOP_GRACE_S)
+                    except subprocess.TimeoutExpired:
+                        pass
                 proc.kill()
                 proc.wait()
                 raise Cancelled("cancelled")
@@ -732,7 +790,9 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
             proc, log_path = _launch(st, job, result, workdir, progress, cancel)
     if proc.returncode != 0 or not os.path.exists(result):
         tail = _tail_text(log_path)
-        raise ModelError("ANUGA stopped with code {}:\n{}".format(proc.returncode, tail))
+        note = partial_note(workdir) if checkpoint_job(st) else ""
+        raise ModelError("ANUGA stopped with code {}:\n{}{}".format(
+            proc.returncode, tail, "\n" + note if note else ""))
     fpath = os.path.join(workdir, ELEVATION_FILE)
     if elev_job and os.path.exists(fpath):      # up to ~1 GB; the job only needs it once
         try:

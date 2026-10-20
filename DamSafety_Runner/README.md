@@ -40,6 +40,48 @@ optional roughness, structure and road layers, and a dam point layer.
 what the flood reaches; *Hand the results to the hazard classification* still calls the ND
 Dam Hazard plugin for you (see below). The official classification is ND DWR's.
 
+## ANUGA checkpoints and partial results (3.10.35, opt-in)
+
+A long ANUGA run used to keep its maxima only in memory and write `anuga_result.npz` at
+the end, so a run that stopped lost everything. Three switches, all **off by default**
+(off = the job file and the results are exactly as before):
+
+| Setting (`RunSettings`) | Environment variable | Default | What it does |
+|---|---|---|---|
+| `anuga_checkpoint_min` | `NDBREACH_ANUGA_CHECKPOINT_MIN` | 0 (off) | ANUGA checkpoint (`domain.set_checkpointing(checkpoint_time=...)`) every that many **wall-clock** minutes |
+| `anuga_checkpoint_steps` | `NDBREACH_ANUGA_CHECKPOINT_STEPS` | 0 (off) | or every that many yield steps (300 s of model time each), when the minutes are 0 |
+| `anuga_checkpoint_keep` | `NDBREACH_ANUGA_CHECKPOINT_KEEP` | 2 | newest checkpoints kept; older ones are deleted |
+| `anuga_partial_min` | `NDBREACH_ANUGA_PARTIAL_MIN` | 0 (off) | write `anuga_partial.npz` every that many wall-clock minutes (it is also written after every checkpoint) |
+| `anuga_resume` | `NDBREACH_ANUGA_RESUME` (`1`) | off | continue the same ANUGA job from its newest complete checkpoint |
+
+Each variable can also be given without `NDBREACH_` (`ANUGA_CHECKPOINT_MIN`, ...), as with
+`ANUGA_MESHER`. The run's own **Resume** (`resume`) also resumes ANUGA when checkpoints are on.
+
+- **Where:** `<model folder>/anuga/anuga_checkpoints/<job fingerprint>/anuga_breach_<t>.pickle`
+  (ANUGA's own pickles of the whole domain; the envelope operator with the max depth, velocity,
+  WSE and arrival times is part of it) and `checkpoint.json`, which lists only checkpoints that
+  were written completely. A checkpoint is about 1 KB per triangle. After the run finishes they
+  are deleted, and so is the partial file.
+- **Partial results:** `<model folder>/anuga/anuga_partial.npz` has `depth`, `velocity`,
+  `arrival_hr` and `wse` on the output grid (the same layout as `anuga_result.npz`; NaN = dry or
+  outside), the triangle maxima, and `info` (JSON: model time `t_s`, `percent`, `reason`
+  checkpoint / periodic / stopped, `fingerprint`, `written_utc`). It is written to a `.tmp`
+  file and renamed, so it is never half a file. SIGTERM and **Cancel** (SIGTERM first when
+  checkpoints are on, SIGKILL after 60 s) write it once more; SIGKILL cannot.
+- **Resume:** only a job with the same fingerprint (the sha256 of the job file without the
+  checkpoint settings, the thread count and gmsh's timings) resumes; anything else (another
+  mesh, DEM, hydrograph, run length, the mesh widened on the second pass) starts over and says
+  so. A checkpoint that does not load (killed while it was written) is skipped for the one
+  before it. A resumed run gives the same envelope as an uninterrupted one (bit-identical on
+  the test domain with ANUGA 4.0.1).
+- **Report:** `run_report.json["anuga_checkpoint"]` (and each `anuga_runs[].stats.checkpoint`):
+  cadence, checkpoints saved, partial flushes, `resumed_from_t_s` or why it did not resume;
+  one line in `run_report.md`. When the domain cannot be pickled the run goes on without
+  checkpoints and the reason is recorded there.
+- Stop / resume by hand: stop the worker with SIGTERM (`kill <pid>`), then run the same dam
+  again with `NDBREACH_ANUGA_RESUME=1` and the same settings. The preparation (LISFLOOD-FP
+  pass, mesh input, fine bed) is redone; only the ANUGA time stepping continues.
+
 ## DEM resampling onto the model grid
 
 The DEM is warped onto the model grid with the **DEM resampling** setting: the advanced
