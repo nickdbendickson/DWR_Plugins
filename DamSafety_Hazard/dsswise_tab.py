@@ -16,6 +16,7 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import QgsRasterLayer, QgsVectorLayer
 
 from . import dsswise as DW
+from .ui_wrap import WrapCheckBox
 from .compat import MSG_CRITICAL, MSG_WARNING
 from .helpers import (
     log_message, add_layer_to_project, plugin_group, dam_display_name, CancelledByUser,
@@ -65,11 +66,11 @@ class DssWiseTabMixin(object):
         self.dsw_table.setHorizontalHeaderLabels(DSW_COLS)
         lay.addWidget(self.dsw_table)
         opts = QHBoxLayout()
-        self.dsw_use_setup_check = QCheckBox("Use as the Setup rasters")
+        self.dsw_use_setup_check = WrapCheckBox("Use as the Setup rasters")
         self.dsw_use_setup_check.setChecked(True)
-        self.dsw_load_check = QCheckBox("Load the converted layers")
+        self.dsw_load_check = WrapCheckBox("Load the converted layers")
         self.dsw_load_check.setChecked(True)
-        self.dsw_add_scenario_check = QCheckBox("Add as a scenario in the breach-scenario "
+        self.dsw_add_scenario_check = WrapCheckBox("Add as a scenario in the breach-scenario "
                                                 "table (classification options)")
         self.dsw_add_scenario_check.setToolTip(
             "A further breach scenario (or, with a name like 'no breach', \u2026 set its role "

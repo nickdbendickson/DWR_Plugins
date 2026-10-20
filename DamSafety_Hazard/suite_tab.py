@@ -23,6 +23,7 @@ from qgis.PyQt.QtWidgets import (
     QMessageBox,
 )
 
+from .ui_wrap import WrapCheckBox
 from .helpers import log_message
 from .compat import MSG_WARNING
 
@@ -119,10 +120,10 @@ class SuiteTabMixin(object):
             "screening value YOU choose; none is a requirement of REG_05.2026 or TM 11.")
         info.setWordWrap(True)
         lay.addWidget(info)
-        self.suite_gate_check = QCheckBox("Model gate before every classification run "
+        self.suite_gate_check = WrapCheckBox("Model gate before every classification run "
                                           "(QA/Model_Gate.csv)")
         self.suite_gate_check.setToolTip(TOOLS[0][3])
-        self.suite_gate_stop_check = QCheckBox("Stop the run when the gate FAILs")
+        self.suite_gate_stop_check = WrapCheckBox("Stop the run when the gate FAILs")
         self.suite_gate_stop_check.setToolTip(
             "Off: the gate's findings are written and the classification goes on. On: a FAIL "
             "stops the run before anything is downloaded.")
