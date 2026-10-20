@@ -1,6 +1,7 @@
 """Tests of the HEC-RAS 2D engine module (core/hecras_engine.py). No HEC-RAS, no Wine: the
 results reader runs on a tiny synthetic plan HDF, the project writer on build_model's own
 text writers with a synthetic Model, and detect() on fake folders."""
+import datetime
 import os
 import shutil
 import tempfile
@@ -85,7 +86,11 @@ def hecras_engine_write_project_hydrograph_inflow():
                            np.array([0.0, 5000.0 * CFS, 0.0]), "test")
 
         def build(dam_folder, out, options=None, log=None):
-            paths = hm.write_text_files(m, out)
+            # a fixed edit-time stamp so the reference build and the breach-mode build stamp
+            # the geometry identically. The two PointsPerimeterTime / Connection Last Edited
+            # Time stamps are otherwise the wall clock, so the byte-identical assertion below
+            # flaked (~2.5%) when the two writes straddled a one-second tick.
+            paths = hm.write_text_files(m, out, now=datetime.datetime(2026, 1, 1))
             return {"folder": out, "paths": paths, "model": m, "notes": [],
                     "info": {"inflow_xy_model": [150.0, 550.0]}}
         before = {k: open(p, newline="").read() for k, p in
