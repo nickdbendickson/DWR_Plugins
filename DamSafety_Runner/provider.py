@@ -29,10 +29,10 @@ class Provider(QgsProcessingProvider):
         return PROVIDER_ID
 
     def name(self):
-        return "ND Dam Breach Runner"
+        return "DamSafety Runner"
 
     def longName(self):
-        return "ND Dam Breach Runner (LISFLOOD-FP / ANUGA)"
+        return "DamSafety Runner (LISFLOOD-FP / ANUGA)"
 
     def icon(self):
         return QIcon(ICON) if os.path.exists(ICON) else QgsProcessingProvider.icon(self)

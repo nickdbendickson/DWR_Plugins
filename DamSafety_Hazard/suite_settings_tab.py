@@ -14,6 +14,7 @@ from qgis.PyQt.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLin
                                  QFileDialog, QMessageBox)
 
 from .helpers import log_message
+from .tokens import TOKENS
 
 PLUGIN_KEY = "ndhazard"
 FILE_FILTER = "Settings workbook (*.xlsx);;Settings table (*.csv);;All files (*)"
@@ -51,7 +52,7 @@ class SuiteSettingsTabMixin(object):
         self.suite_settings_status = QLabel("")
         self.suite_settings_status.setWordWrap(True)
         try:
-            self.suite_settings_status.setStyleSheet("color: #b42318;")
+            self.suite_settings_status.setStyleSheet("color: {};".format(TOKENS["error"]))
         except Exception:                                        # noqa
             pass
         self.suite_settings_status.setVisible(False)     # 2.18.34: no gap while empty

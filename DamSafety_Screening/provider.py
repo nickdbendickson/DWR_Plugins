@@ -95,4 +95,4 @@ class NDDamProvider(QgsProcessingProvider):
         return "nddam"
 
     def name(self):
-        return "ND Dam Breach Screening"
+        return "DamSafety Screening"

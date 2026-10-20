@@ -76,7 +76,7 @@ class NdDataUpdaterPlugin:
         icon = QIcon(os.path.join(PLUGIN_DIR, "icon.svg"))
         win = self.iface.mainWindow()
         self.action_check = QAction(icon, "Check for Data Updates Now", win)
-        self.action_check.setToolTip("ND Data Updater: check North Dakota datasets for updates")
+        self.action_check.setToolTip("DamSafety Data: check North Dakota datasets for updates")
         self.action_check.triggered.connect(lambda: self.start_update(force=False, quiet=False))
         self.action_load = QAction("Add North Dakota Layers to Project", win)
         self.action_load.triggered.connect(self.load_layers)

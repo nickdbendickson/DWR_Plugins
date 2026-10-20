@@ -25,6 +25,13 @@ def suite_messages(versions=None):
     return vs.check("ndscreen", versions=versions)
 
 
+
+def _plugin_icon():
+    """The plugin's icon.svg for its menu entry (every DamSafety plugin has one)."""
+    import os
+    from qgis.PyQt.QtGui import QIcon
+    return QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.svg"))
+
 class NDDamScreeningPlugin:
     def __init__(self, iface):
         self.iface = iface
@@ -77,7 +84,7 @@ class NDDamScreeningPlugin:
                 from qgis.PyQt.QtGui import QAction
             except ImportError:               # Qt5 (QGIS 3.x): QtWidgets
                 from qgis.PyQt.QtWidgets import QAction
-            self.action = QAction("Screen a county\u2026", self.iface.mainWindow())
+            self.action = QAction(_plugin_icon(), "Screen a county\u2026", self.iface.mainWindow())
             self.action.setObjectName("NDDamScreeningAction")
             self.action.triggered.connect(self.run_plugin)
             self.iface.addPluginToMenu(MENU_NAME, self.action)
@@ -90,7 +97,7 @@ class NDDamScreeningPlugin:
         window to it; 'Dam suite home' and 'Suite settings' once)."""
         try:
             from . import suite_home
-            for label, name, slot in (("ND Dam Breach Screening\u2026", "NDSuiteScreeningWindow", self.run_plugin),
+            for label, name, slot in (("DamSafety Screening\u2026", "NDSuiteScreeningWindow", self.run_plugin),
                                       ("Dam suite home\u2026", "NDSuiteHome", self.run_home),
                                       ("Suite settings\u2026", "NDSuiteSettings", self.run_settings)):
                 a = suite_home.add_suite_action(self.iface, label, name, slot)

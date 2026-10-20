@@ -1,6 +1,13 @@
-"""Keep a plugin window on the screen and scroll a long tab."""
+"""Keep a plugin window on the screen and scroll a long tab.
+
+Canonical copy: shared/ui/ui_fit.py (Hazard, Runner, Screening and Data ship byte-identical
+copies); edit it there and run tools/sync_ui.py."""
 from qgis.PyQt.QtCore import Qt, QSize
+from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtWidgets import QApplication, QScrollArea, QSizePolicy, QVBoxLayout, QWidget
+
+# pages that scroll themselves (tables, text boxes); a Qt test double may not have the class
+_SELF_SCROLLING = getattr(QtWidgets, "QAbstractScrollArea", QScrollArea)
 
 
 def _policy(name):
@@ -32,14 +39,15 @@ def _scroll(page):
 
 
 def wrap_tabs(tabs):
-    """Put each tab page in a scroll area. A short page does not show a bar."""
+    """Put each tab page in a scroll area. A short page does not show a bar. A page that scrolls
+    itself (a table, a text box) is left as it is."""
     if tabs is None:
         return
     current = tabs.currentIndex()
     i = 0
     while i < tabs.count():
         page = tabs.widget(i)
-        if isinstance(page, QScrollArea):
+        if isinstance(page, _SELF_SCROLLING):
             i += 1
             continue
         title = tabs.tabText(i)
