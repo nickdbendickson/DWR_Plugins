@@ -1,4 +1,4 @@
-"""Runner 3.10.40: the gmsh-points subprocess of the HEC-RAS 2D area (core/hecras_seeds.py
+"""Runner 3.10.41: the gmsh-points subprocess of the HEC-RAS 2D area (core/hecras_seeds.py
 _mesh_subprocess) times out on the wall clock through core/wallclock.run, as the HEC-RAS
 engine and the ANUGA mesher do (#96): elapsed = max(wall, monotonic), then SIGTERM to the
 process group, KILL_GRACE_S, SIGKILL. Before, subprocess.run(timeout=) used the monotonic clock

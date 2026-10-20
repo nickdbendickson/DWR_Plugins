@@ -20,7 +20,7 @@ from .ui_fit import fit_window, save_size
 from qgis.PyQt.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget, QWidget, QLabel, QLineEdit,
     QPushButton, QComboBox, QTextEdit, QFileDialog, QMessageBox, QDoubleSpinBox, QCheckBox,
-    QFrame, QToolButton, QListWidget, QStackedWidget, QScrollArea, QPlainTextEdit,
+    QFrame, QToolButton, QListWidget, QStackedWidget, QScrollArea, QPlainTextEdit, QSizePolicy,
 )
 
 from . import popup_logic as pl
@@ -73,6 +73,16 @@ def _load_dem_download():
         except Exception:
             continue
     return None
+
+def _vertical_policy(widget, name):
+    """Set one widget's vertical size policy by name; a Qt (or test fake) without it is left as is."""
+    try:
+        sp = widget.sizePolicy()
+        sp.setVerticalPolicy(getattr(getattr(QSizePolicy, "Policy", QSizePolicy), name))
+        widget.setSizePolicy(sp)
+    except Exception:                                            # noqa - sizing never breaks the window
+        pass
+
 
 class NDBreachRunnerDialog(QDialog):
     """The popup window. `iface` is optional (used by the wizard)."""
@@ -158,9 +168,19 @@ class NDBreachRunnerDialog(QDialog):
         grid.addWidget(QLabel("DEM:"), 2, 0)
         grid.addWidget(self.dem_combo, 2, 1, 1, 2)
         grid.addWidget(b, 2, 3)
-        lay.addLayout(grid)
+        # 3.10.39 (#107): the dam rows, Download a DEM, Advanced and the Run/Tools tabs sit in a
+        # scroll area; the action bar, the Log and Close stay below it. The window has an explicit
+        # minimum size (fit_window), so Qt no longer raises it to the layout's minimum; opening
+        # "Download a DEM" then squeezed its rows to 6-9 px and drew them on top of each other.
+        # In the scroll area every row keeps its own height and the area scrolls when the window
+        # is short; opening a section also grows the window up to its screen (_grow_for_body).
+        self.body_widget = QWidget()
+        body = QVBoxLayout(self.body_widget)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(6)
+        body.addLayout(grid)
         self.dem_section = self._dem_download_box()
-        lay.addWidget(self.dem_section)
+        body.addWidget(self.dem_section)
 
         self.grid_m = QDoubleSpinBox()
         self.grid_m.setRange(0.5, 500.0)
@@ -238,15 +258,22 @@ class NDBreachRunnerDialog(QDialog):
         grid2.addWidget(self.hecras_crest, 3, 2, 1, 2)
         grid2.setColumnStretch(4, 1)
         self.adv_section = Collapsible("Advanced", adv)
-        lay.addWidget(self.adv_section)
+        body.addWidget(self.adv_section)
 
         self.tabs = QTabWidget()
         self.tabs.setMinimumHeight(150)
+        # in the scroll area the tabs take the room that is left, not their (tall) size hint
+        _vertical_policy(self.tabs, "Ignored")
         self.tabs.addTab(self._build_run_tab(), "Run")
         self.tabs.addTab(self._build_tools_tab(), "Tools")
         self.tabs.setCornerWidget(self.gear)
-        lay.addWidget(self.tabs, 1)
-        lay.addLayout(run_row)
+        body.addWidget(self.tabs, 1)
+        self.body_scroll = QScrollArea()
+        self.body_scroll.setWidgetResizable(True)
+        self.body_scroll.setFrameShape(getattr(QFrame, 'Shape', QFrame).NoFrame)
+        self.body_scroll.setWidget(self.body_widget)
+        lay.addWidget(self.body_scroll, 1)
+        lay.addLayout(run_row)                     # the action bar stays in view under the tabs
 
         self.settings_dialog = QDialog(self)
         self.settings_dialog.setWindowTitle("{} \u2014 Settings".format(TITLE))
@@ -266,7 +293,10 @@ class NDBreachRunnerDialog(QDialog):
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumHeight(110)
         self.log_section = Collapsible("Log", self.log_edit)
-        lay.addWidget(self.log_section)
+        lay.addWidget(self.log_section)            # outside the scroll area: always just above Close
+        for sec in (self.dem_section, self.adv_section, self.log_section):
+            sec.header.toggled.connect(self._section_toggled)
+            _vertical_policy(sec, "Fixed")   # rows at their own height: never below the size hint
         row = QHBoxLayout()                       # Close in its own row, bottom right
         row.addStretch(1)
         self.close_btn = QPushButton("Close")
@@ -274,8 +304,43 @@ class NDBreachRunnerDialog(QDialog):
         row.addWidget(self.close_btn)
         lay.addLayout(row)
         self.setLayout(lay)
+        # setDefault() registers the button with its dialog only when the button's own parent
+        # changes; register it again now that the whole layout is in this dialog (off then on:
+        # setDefault(True) on a default button returns early)
+        self.run_dam_btn.setDefault(False)
+        self.run_dam_btn.setDefault(True)
         fit_window(self, key=SIZE_KEY)
         self._sync_advanced_title()
+
+    def _section_toggled(self, on):
+        if on:
+            try:
+                from qgis.PyQt.QtCore import QTimer
+                QTimer.singleShot(0, self._grow_for_body)
+            except Exception:                                    # noqa
+                self._grow_for_body()
+
+    def _grow_for_body(self):
+        """After a section opens: make the window taller by what the scroll area is short of,
+        up to the window's maximum (the screen, set by fit_window), and keep it on its screen.
+        Whatever still does not fit scrolls."""
+        try:
+            need = self.body_widget.minimumSizeHint().height() - self.body_scroll.viewport().height()
+            if need <= 0:
+                return
+            h = min(self.maximumHeight(), self.height() + need)
+            if h <= self.height():
+                return
+            self.resize(self.width(), h)
+            from . import ui_fit
+            scr = ui_fit._screen_for(self)
+            if scr is not None:
+                a = scr.availableGeometry()
+                g = self.frameGeometry()
+                if g.bottom() > a.bottom():
+                    self.move(self.x(), max(a.top(), self.y() - (g.bottom() - a.bottom())))
+        except Exception:                                        # noqa - sizing never breaks the window
+            pass
 
     def _sync_advanced_title(self, *args):
         """The Advanced header shows the values, so nothing hides behind the closed section."""

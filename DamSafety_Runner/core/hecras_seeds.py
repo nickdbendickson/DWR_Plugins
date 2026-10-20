@@ -244,13 +244,13 @@ def interpreters(options=None, env=None):
     return out
 
 
-# 3.10.40: the gmsh subprocess is stopped like the ANUGA mesher (anuga_model.py): SIGTERM to its
+# 3.10.41: the gmsh subprocess is stopped like the ANUGA mesher (anuga_model.py): SIGTERM to its
 # process group, this many seconds to exit, then SIGKILL (core/wallclock.stop_group)
 KILL_GRACE_S = 5.0
 
 
 def _mesh_subprocess(spec, python, timeout_s, run=None):
-    """gmsh in another Python (this file as a script). 3.10.40: the timeout is on the wall
+    """gmsh in another Python (this file as a script). 3.10.41: the timeout is on the wall
     clock (core/wallclock.py: elapsed = max(wall, monotonic), so a paused / resumed VM counts
     and a clock step back cannot stretch it), and on expiry the process group gets SIGTERM,
     KILL_GRACE_S, then SIGKILL - before, subprocess.run(timeout=) ran on the monotonic clock
