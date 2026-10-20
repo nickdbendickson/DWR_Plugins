@@ -38,6 +38,8 @@ The field `hazard_class` in `Hazard Classification (ND 5.2).json` in the dam fol
 - `CULVERT_MATCH_M` 75
 - TIER 0 (LISFLOOD-FP), 40 m cells
 
+> **Hazard figures superseded (2026-10-20):** the hazard numbers from this re-baseline came from a Hazard 2.18.34 batch (NaN lengths and areas). See "Hazard re-baseline on 2.18.44 (2026-10-20)" below. The flood figures stand.
+
 Peaks are unchanged (25,800.5 / 34,271.7 cfs). Source: `/home/box/DamSafety/Dams/rebaseline_20261018/` (`progress.md`, `status`, `extra.json`, `compare_*_vs_prev.json`, `<dam>/dams/<dam>/_breach_model/run_report.json`). The class comes from `outputs/Hazard_Classification_Summary.csv`.
 
 | Dam | Culverts burned | Area any / ≥0.1 ft / ≥1 ft (ac) | Max depth (ft) | Max velocity (ft/s) | Arrival min / median / max (h) | Class |
@@ -68,6 +70,8 @@ Peaks are unchanged (25,800.5 / 34,271.7 cfs). Source: `/home/box/DamSafety/Dams
 ## HEC-RAS TIER 2 vs TIER 0 and ANUGA: Absaraka DWR-2801 (10-18)
 
 Source: `Absaraka_compare/hecras_tier2_20261018/` (`progress.md`, `compare_tier2_8b0601c.json`). TIER 2 ran on 8b0601c (burn off), and `tier2_8b0601c` is identical to `tier2_manual`.
+
+> **Hazard figures superseded (2026-10-20):** the Class column came from Hazard 2.18.12–2.18.34 batch runs. For current hazard numbers, see "Hazard re-baseline on 2.18.44 (2026-10-20)" below.
 
 | Run | Area any / ≥0.1 / ≥1 ft (ac) | Max depth (ft) | Max velocity (ft/s) | Median arrival (h) | Class |
 |---|---|---|---|---|---|
@@ -132,7 +136,7 @@ Source: `Absaraka_compare/anuga_gmsh_20x20_48h_20261018/` (`compare_stats.json`,
 
 **Flags:**
 - **East pond, unconfirmed.** 107 ac at ≥1 ft, 3.17 ft max (the connected ≥1 ft component around the pond, `qa2.json`; WSE 912.8-913.2 ft), around EPSG:5070 (-84,739, 2,656,831), 23.7 km ESE of the dam. It's breach water held behind the BNSF KO grade (crest 910.4-915.3 ft), where no rail culvert is modelled and the triangles are coarse (median 4,323 m²). 1 ft first arrives after 35 h. The same-run LISFLOOD is dry there. The refined run's compare script uses a different measure, everything ≥1 ft within 1.5 km of the pond centre (`east_pond_1500m`), which gives **137.7 ac / 3.4 ft** for this 48 h run because it picks up neighbouring ponded patches. Compare like with like.
-- **Casselton consequences are shallow and late.** 162 habitable structures inundated (Hazard summary, ND 5.2.2) and 11 roads with AADT > 2,000, but the median structure depth is 0.23 ft (50 structures at ≥1 ft) and the water arrives after about 18-28 h. Same-run LISFLOOD corroborates the extent (446 ac ≥0.1 ft there). Don't mix the 162 with `run_report.json` `receptors_flooded` (21 structures, 8.2 km of road, 0.1 km of rail): that is the Runner's own receptor count at the arrival depth, from a different structure layer and threshold.
+- **Casselton consequences are shallow and late.** 162 habitable structures inundated (Hazard summary, ND 5.2.2; *superseded: 152 on Hazard 2.18.44, see the 2026-10-20 re-baseline*) and 11 roads with AADT > 2,000, but the median structure depth is 0.23 ft (50 structures at ≥1 ft) and the water arrives after about 18-28 h. Same-run LISFLOOD corroborates the extent (446 ac ≥0.1 ft there). Don't mix the 162 with `run_report.json` `receptors_flooded` (21 structures, 8.2 km of road, 0.1 km of rail): that is the Runner's own receptor count at the arrival depth, from a different structure layer and threshold.
 
 **Refined rerun in progress:** `Absaraka_compare/anuga_gmsh_refined_72h_20261019/`, started 10-19 05:18Z by Grok Bot; 59 % at 10-20 03:24Z (sim t = 153,600 s of 259,200 s).
 - Code: main a71e9e7 (Runner 3.10.21) with in-process shims (`run_anuga.py`). It does **not** include #102/#104 (Runner 3.10.30/3.10.31 ANUGA mesh and bed changes); the 10 m ground comes from the run's own `ANUGA_ELEV_CELL_M=10` shim.
@@ -143,9 +147,80 @@ Source: `Absaraka_compare/anuga_gmsh_20x20_48h_20261018/` (`compare_stats.json`,
 - This run changes duration, box, mesh, structures and ground resolution at once, so a change at the pond or Casselton can't be credited to the rail openings alone. The KO-06/07 closed sensitivity (`..._ko0607closed`, prepared, not run) isolates those two culverts.
 - Review: `qa_review_anuga_20261019/REFINED_RUN_CHECKLIST.md`; results go into `REFINED_RUN_RESULTS_TEMPLATE.md` in the same folder. Until it's reviewed, report the 48 h run against the in-run LISFLOOD (F 0.70).
 
+## Hazard re-baseline on 2.18.44 (2026-10-20)
+
+**What was run.** Grok Bot ran `ndhazard:batch` (DamSafety Hazard **2.18.44**, DWR_Plugins main **0a8344b**; `DOWNLOADS=true REPORT=false EAP=false WORKERS=1`, no solver) on **copies** of 65 saved results: 23 Absaraka DWR-2801 results (Absaraka_compare and rebaseline_20261018) and the 42 NickReview dams. Result: **65 classified, 0 failed** (`progress.log`, 20:34Z–21:43Z). **DWR-3161 was skipped** everywhere (flagged, #93), as was one HEC-RAS preview source folder that isn't a dam result. The originals weren't modified. No model was rerun: same depth, velocity and arrival rasters.
+
+Sources: `/workspace/hazard_rebaseline_20261020/` (`SUMMARY.md`, `changes.json`, `progress.log`, `jobs.json`) and the explanation note `/workspace/hazard_diff_2801_20261020/NOTE.md` (with `structure_changes.csv`). Full per-result table: [results/hazard_rebaseline_20261020.csv](results/hazard_rebaseline_20261020.csv). The class comes from each copy's `outputs/Hazard_Classification_Summary.txt` / `.csv`.
+
+**Why.** PR #94 (Hazard 2.18.39) changed hazard results, and it exposed a bug in the older numbers:
+- **Every saved DamSafety Hazard *batch* result from 2.18.0 to 2.18.34 has NaN outline areas and 10 ft road and rail stretches.** Each stretch's length came out NaN, and `max(10, NaN)` gave the 10 ft sampling floor. So the motorist part of lives in jeopardy (LIJ) was about 0, and no NSI or 911 point could snap onto a building outline (NaN ≥ 400 ft² is False). From 2.18.39, lengths and areas are real. The fix is attributed to H5 (`transformguard`, f862645) by elimination; the NaN couldn't be reproduced outside a batch run.
+- **M3:** a building that only NSI calls a home is now *Unverified* (0 persons) when the parcel's 911 address point is on another building. This can lower the class.
+- **H4:** `collapse_dwellings` was removed, so buildings that share an address keep their persons. Population at risk and cut-off counts can go up.
+- **Old batch numbers (2.18.0–2.18.34, plus the 2.18.37 in-run hazard of the refined 72 h run) are not comparable with 2.18.39 or later.** Compare only like with like.
+
+**DWR-2801 (rebaseline_20261018 copy; same rasters, SHA-256 0ad6429d / 96400315 / 7fe484a9): ND High / TM 11 Significant, unchanged.** These are the same numbers as the 2.18.39 re-run in NOTE.md.
+
+| Metric | 10-18 (2.18.34) | 10-20 (2.18.44) | Cause (NOTE.md) |
+|---|---|---|---|
+| Lives in jeopardy | 0.0 | 0.6 | Stretch lengths (H5). Before, all 75 overtopped roads and 4 rail stretches were 10 ft; now they have real lengths up to 5,357 ft. Motorists: High 0.56, mostly 148th Ave SE (AADT 174, 5,357 ft): 0.25. Structure part 0 in both. Rescaling the 10-18 motorists by the measured lengths gives exactly 0.562 / 0.016. |
+| Habitable structures inundated | 5 (12 persons) | 3 (6 persons) | M3: #258/#262 (15362 33rd St SE) and #585 (14840 30th St SE) are now Unverified. H4: at 14751 30th St SE the persons move from #471 (Unverified) to the 911 building #577. Residential damage $137k → $2.5k. |
+| Dry habitable structures cut off | 8 (22 persons) | 11 (30 persons) | H4: #226, #230, #260, #266 and #602 keep their persons (+14). M3 (#720) and H5 areas + M3 (#754): −6. |
+
+- **The downloads made no difference at DWR-2801.** NSI, address points and NG911 roads have the same features (only OBJECTIDs and order differ), and the FEMA outlines are the same reused file. An inventory-only check with the new code gives the same result from the 10-18 and 10-20 downloads. That check was done for DWR-2801 only; the other dams used fresh downloads too (`DOWNLOADS=true`) and weren't checked.
+- The class still rests on the BNSF KO rail stretches (≥10 trains/day, ND 5.2.1.3).
+
+**Summary of all 65 results.**
+- 59 results had a stored summary to compare with: 44 on Hazard 2.18.0, 3 on 2.18.11, 2 on 2.18.12, 5 on 2.18.34, 1 on 2.18.37 (the refined 72 h in-run hazard) and 4 on nd_hazard 2.30.1.
+- The other 6 had no stored summary, so they have new numbers only.
+- Of the 59:
+  - **8 changed class** (table below).
+  - LIJ changed in 42 (up in 34).
+  - Habitable structures inundated changed in 20 (down in 18).
+  - Dry structures cut off changed in 33 (down in 27).
+  - 14 are unchanged on every metric.
+
+| Set | Results | Class changes | Notes |
+|---|---|---|---|
+| Absaraka_compare (DWR-2801) | 22 (6 new-only) | 2 (TM 11) | ND High in every result that has a stored summary. The 3 `screen/7_simulations` copies (new-only) are ND Low / TM 11 Significant. |
+| rebaseline_20261018 (DWR-2801) | 1 | 0 | See the DWR-2801 table above. |
+| NickReview | 42 | 6 (2 ND, 5 TM 11; DWR-8278 both) | |
+
+**Class changes (ND or TM 11).** The driver column comes from each copy's `outputs/QA/Changes_Since_Last_Run.csv` and `outputs/Classification/Habitable_Structures.csv`, compared with the original. "Consistent with M3" means the outputs show the pattern M3 produces: an NSI-only home becomes Unverified with 0 persons, while the address's 911 point is on another building. The outputs don't name the rule for each structure, though; only DWR-2801 was traced to the code (NOTE.md).
+
+| Result | ND | TM 11 (LIJ) | Driver shown in the outputs |
+|---|---|---|---|
+| NickReview DWR-4560 | **High → Low** | Significant → Significant (3.0 → 0.0) | The only counted structure, #258 (8007 157th Ave SW, NSI AGR1 + RES1, Judgment zone, 3 persons), is now Unverified with 0 persons. The address's 911 point is on #211, which is dry. Consistent with M3. Inundated 1 → 0. |
+| NickReview DWR-8278 | **High → Low** | **High → Significant** (6.0 → 0.0) | Judgment #191 (9250 56th Ave SW, 911 + NSI) is now an NSI-only Unverified point (#201). High-zone NSI-only #192 (RES1) moved onto outline #68 and is Unverified. Outline snapping needs the real areas (H5), so this is H5 + M3 by pattern. **To review:** the per-structure cause isn't confirmed in code. |
+| NickReview DWR-10633 | High | **High → Significant** (6.0 → 3.7) | High-zone #391 and Judgment #383 (13205 12th St SE, NSI-only RES1) are now Unverified with 0 persons. The 911 point is on #430 (Low zone). Consistent with M3. Judgment #361 (3 persons) remains. Motorists 0 → 0.6 (lengths). ND High still rests on BNSF KO rail (16 stretches). |
+| NickReview DWR-2635 | High | **Significant → High** (3.1 → 7.3) | Motorists 0.0 → 4.3 (High 0.5, Judgment 3.8). The old run had all 167 road stretches at 10 ft, the new one has real lengths (H5). The structure part is unchanged (Judgment #2154, 3 persons). |
+| NickReview DWR-2666 | High | **High → Significant** (6.0 → 3.2) | Judgment #472 (12979 95th St NE, NSI-only) is now Unverified with 0 persons. The 911 point is on #294 (dry). Consistent with M3. Judgment #729 (3 persons) remains. Motorists +0.2. |
+| NickReview DWR-2809 | High | **High → Significant** (9.0 → 3.5) | Judgment #731 and #748 (5487 County Road 12B, NSI-only) and #1122 (NSI point) are now Unverified with 0 persons. High-zone #778 (3 persons) remains. Motorists +0.5. Likely M3, but whether a 911 point sits on another building there wasn't checked: **to review**. |
+| Absaraka_compare/gui_ds (2801) | High | **Low → Significant** (0.0 → 0.2) | Motorists only: the 12 High / Judgment road stretches had no AADT in the old run (10-13, 2.18.0 GUI). They now get ND_county_roads AADT (10–337) from the 2026-10-14 offline pack. This is a data-input difference, not the length bug (the old run already had real lengths). The structure part is 0 in both. |
+| Absaraka_compare/hecras_tier2_20261018/tier2_ccc5d38 (DWR-2801) | High | **Significant → High** (0.0 → 7.5) | Two structures now count in the High zone. #476 (14853 30th St SE) was an outline-only Unverified house in the Judgment zone (old area NaN); it now has the NSI RES2 point snapped on (H5 areas) and is a mobile home in the High zone at 5.9 ft. #733 is an NSI-only RES1 point, Yes, 3 persons, 8.2 ft, with no counterpart in the old inventory. Motorists 1.4. **To review:** #733's appearance, and whether H4 or M3 should have touched it. |
+
+Other notes:
+- **The other 4 HEC-RAS tier2 copies keep their class.** `tier2_8b0601c` and `tier2_manual`: High / High, LIJ 9.0 → 7.5. `tier0`: High / Significant, LIJ 0.0 → 0.6, with the same numbers as rebaseline_20261018. `tier2`: new-only.
+- **The ANUGA 48 h run now has 152 inundated, not 162** (`anuga_gmsh_20x20_48h_20261018`, was 2.18.12). LIJ 0.0 → 0.6 and cut-off 765 → 695. Still High (22 BNSF KO stretches at 22 trains/day, 11 roads with AADT > 2,000).
+- **The refined 72 h run's corrected hazard is High / Significant** (`anuga_gmsh_refined_72h_20261019`, the in-run 2.18.37 was provisional). LIJ 0.0 → 1.2, inundated 40 → 34, cut-off 815 → 800 (persons 2,881 → 3,831). The summary flags it "incomplete: flood cut off (duration cap)". The run itself is reviewed separately with `REFINED_RUN_CHECKLIST.md`.
+- **The nd_hazard 2.30.1 results** (`nd`, `gui_nd`, `nd_vrt`, `nd_vrt_contaminated`) were made by the old helper plugin. The comparison is across plugins. The class and LIJ are unchanged; `nd` cut-off went 445 → 448.
+- **Three results changed structure counts without any class or LIJ change.** `SUMMARY.md`'s "Changed" column only flags class and LIJ, so it shows them as "-": NickReview DWR-2827 (cut-off 6 → 1), DWR-2899 (inundated 3 → 0, cut-off 2 → 1) and Absaraka `nd` (cut-off 445 → 448).
+
+**Caveat: main has moved on.** Main is now Hazard **2.18.45** (#113, merged 20:45Z, after this batch started at 20:34Z). Its **H1** change goes back to the conservative default: a 911 address point with no building outline nearby and no NSI record counts as habitable again. These 2.18.44 numbers don't include H1, so H1-type points (for example, 911-only points listed as "ND site address with no building outline or NSI structure - unverified") may count again on 2.18.45. Before the numbers are adopted, decide whether to repeat the batch on 2.18.45.
+
+**Output folders** (copies next to the originals, suffix `_hazard_2.18.44_20261020`):
+- `/home/box/DamSafety/Dams/Absaraka_compare/<run>_hazard_2.18.44_20261020/` for anuga_gmsh_refined_72h_20261019, anuga_gmsh_20x20_48h_20261018, anuga_structures_20261015, anuga_structures_20x20_48h_20261015, ds, gui_ds, gui_nd, hecras_tier2_20261018 (tier0, tier2, tier2_8b0601c, tier2_ccc5d38, tier2_manual), nd, nd_vrt, nd_vrt_contaminated, rerun_20261014, rerun_pr11_20261014 and rerun_quiet_20261015_0446
+- `/home/box/DamSafety/Dams/rebaseline_20261018_hazard_2.18.44_20261020/`
+- `/home/box/DamSafety/Dams/NickReview_hazard_2.18.44_20261020/`
+
+The exact folder for each result is in the CSV (`new_output_folder`).
+
+**QA (Docs & QA, read-only).** I re-parsed all 65 old and new `Hazard_Classification_Summary.txt` files with an independent script, and they match every class, LIJ, inundated and cut-off figure in `SUMMARY.md`. All 65 new summaries are DamSafety Hazard v2.18.44, written between 20:35Z and 21:43Z. I read DWR-2801 (rebaseline_20261018), DWR-4560, DWR-10633 and DWR-2635 in full. The 8 class-change entries of `changes.json` also match the outputs.
+
 ## Open items
 - **Refined ANUGA rerun (Absaraka) running** (see above). Review it with `REFINED_RUN_CHECKLIST.md`, then the KO-06/07 closed variant.
 - **DWR-3161 is on hold:** flagged Low (#93), with breach runs refused. It waits for DWR's answers to the record questions in #93. Its 10-18 TIER 0 numbers aren't used.
 - **Merged 10-19:** #92 (run-report metrics and the opt-in water-body mask, Runner 3.10.27, closes #91) and #96 (HEC-RAS timeouts on the wall clock, Runner 3.10.26). Main is now Runner 3.10.32 (#94, which changes the default top of dam to the 98th percentile within 30 m, M6), so runs on current main are not directly comparable with the runs above. See CHANGELOG.md.
 - HEC-RAS vs ANUGA/TIER 0 area gap: recompute HEC-RAS depth on the 40 m DEM, compare at matching thresholds and sim times, and check Manning's n.
+- **The Hazard re-baseline on 2.18.44 (2026-10-20) supersedes the batch hazard numbers above.** All batch hazard results before 2.18.39 are superseded. Before adopting the new numbers, review the class changes marked "to review" and decide whether to repeat the batch on 2.18.45 (#113 H1).
 - Re-baseline numbers aren't yet adopted as the trusted baseline. That needs the user's approval. Note that they were run with the non-default culvert burn on.
