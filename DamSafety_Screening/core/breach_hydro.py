@@ -75,7 +75,14 @@ def froehlich_1995(vw_m3, hb_m, mode="piping"):
     return {"bavg_m": float(bavg), "tf_s": float(tf), "z": z, "ko": ko}
 
 
-VTG_CB = [(1.23e6, 6.1), (6.17e6, 18.3), (1.23e7, 42.7), (float("inf"), 54.9)]
+# 0.17.33: Cb by reservoir volume in acre-feet, the limits of the method and of the Runner's
+# vtg_1990 (core/breach.py): below 1,000 / 5,000 / 10,000 ac-ft, a limit itself in the next
+# class. The earlier rounded m3 limits (1.23e6 / 6.17e6 / 1.23e7 m3, inclusive) put
+# 997.2-1,000, 5,000-5,002 and 9,972-10,000 ac-ft in another class than the Runner (B up to
+# 24 m different). VTG_ACFT_M3 is the Runner's ACFT (core/units.py), so a volume on a limit
+# falls on the same side in both plugins.
+VTG_ACFT_M3 = 1233.48183754752
+VTG_CB = [(1000.0, 6.1), (5000.0, 18.3), (10000.0, 42.7), (float("inf"), 54.9)]   # (below ac-ft, Cb m)
 
 
 def von_thun_gillette(vw_m3, hw_m, erodible=True, z=0.5):
@@ -87,7 +94,8 @@ def von_thun_gillette(vw_m3, hw_m, erodible=True, z=0.5):
     compacted clay/till (change `z` if yours are not).
     """
     vw_m3, hw_m = _positive("reservoir volume Vw", vw_m3), _positive("water height hw", hw_m)
-    cb = next(c for lim, c in VTG_CB if vw_m3 <= lim)
+    acft = vw_m3 / VTG_ACFT_M3
+    cb = next(c for lim, c in VTG_CB if acft < lim)
     bavg = 2.5 * hw_m + cb
     tf_h = 0.015 * hw_m if erodible else 0.020 * hw_m + 0.25
     return {"bavg_m": float(bavg), "tf_s": float(tf_h * 3600.0), "z": z, "ko": None}
