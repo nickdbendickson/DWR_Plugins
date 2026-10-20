@@ -27,6 +27,7 @@ from qgis.PyQt.QtWidgets import (
     QLineEdit, QTableWidget, QTableWidgetItem, QMessageBox, QFileDialog,
 )
 
+from .ui_wrap import WrapCheckBox
 from .helpers import log_message
 from . import datafolder as DF
 
@@ -86,7 +87,7 @@ class DataFolderTabMixin(object):
         row.addWidget(self.datafolder_search_btn)
         row.addWidget(self.datafolder_hifld_btn)
         lay.addLayout(row)
-        self.datafolder_use_check = QCheckBox(
+        self.datafolder_use_check = WrapCheckBox(
             "Use the data sets found in this folder first (before QGIS layers and downloads)")
         self.datafolder_use_check.setChecked(True)
         self.datafolder_use_check.toggled.connect(lambda *_a: self._df_parcels_changed())
