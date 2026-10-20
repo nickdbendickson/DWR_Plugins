@@ -407,10 +407,18 @@ class NDDamScreeningDialog(QDialog):
         row.addWidget(done)
         v.addLayout(row)
         self.settings_window.setLayout(v)
-        try:
-            self.settings_window.resize(900, 620)
+        try:                       # 0.17.32 (#109): fitted to its screen like the main window
+            fit_window(self.settings_window, (900, 620))
+            sw, hint = self.settings_window, self.settings_window.minimumSizeHint()
+            # never below what its rows need (an explicit minimum stops Qt from enforcing the
+            # layout's), but never above the screen cap fit_window set
+            sw.setMinimumSize(min(max(sw.minimumWidth(), hint.width()), sw.maximumWidth()),
+                              min(max(sw.minimumHeight(), hint.height()), sw.maximumHeight()))
         except Exception:                                        # noqa
-            pass
+            try:
+                self.settings_window.resize(900, 620)
+            except Exception:                                    # noqa
+                pass
 
     def settings_changed_count(self):
         try:
@@ -875,9 +883,40 @@ class NDDamScreeningDialog(QDialog):
         lay.addWidget(self._dem_download_box())
         lay.addStretch(1)
         w.setLayout(lay)
-        return w
+        return self._scrolling_page(w)
 
-
+    @staticmethod
+    def _scrolling_page(w):
+        """0.17.32 (#109): the Run options page in a scroll area, so its 24 rows and the DEM box no
+        longer set the Settings window's minimum height (1223 px on the test box, taller than a
+        laptop screen). A drop-down sizes to about 40 characters instead of its longest entry (the
+        full text is in its list and tooltip), so the page fits a 1024 px wide screen."""
+        try:
+            from qgis.PyQt.QtWidgets import QScrollArea, QFrame
+        except ImportError:                                      # a Qt without them: the page as is
+            return w
+        try:
+            combos = w.findChildren(QComboBox)
+        except Exception:                                        # noqa
+            combos = []
+        for c in combos:
+            try:
+                pol = getattr(QComboBox, "SizeAdjustPolicy", QComboBox)
+                c.setSizeAdjustPolicy(pol.AdjustToMinimumContentsLengthWithIcon)
+                c.setMinimumContentsLength(40)
+                if not c.toolTip():
+                    c.setToolTip(c.currentText())
+                    c.currentTextChanged.connect(c.setToolTip)
+            except Exception:                                    # noqa
+                pass
+        try:
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(getattr(QFrame, "Shape", QFrame).NoFrame)
+            scroll.setWidget(w)
+            return scroll
+        except Exception:                                        # noqa
+            return w
 
     def _county_dem_box(self):
         """Visible on the Simple tab. County list, suite folder, and the download button."""
