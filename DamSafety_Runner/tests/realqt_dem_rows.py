@@ -1,9 +1,9 @@
-"""Runner 3.10.36 (#107): the "Download a DEM" rows keep their height when the section opens.
+"""Runner 3.10.39 (#107): the "Download a DEM" rows keep their height when the section opens.
 
     QT_QPA_PLATFORM=offscreen <QGIS python> DamSafety_Runner/tests/realqt_dem_rows.py
 
 The main window has an explicit minimum size (ui_fit.fit_window), so Qt does not raise it to the
-layout's minimum: before 3.10.36, opening "Download a DEM" in a 1280x800 window squeezed its
+layout's minimum: before 3.10.39, opening "Download a DEM" in a 1280x800 window squeezed its
 combo boxes, line edits and buttons to 6-9 px and drew them on top of each other. Now the body of
 the window scrolls and opening a section grows the window up to its screen.
 

@@ -57,7 +57,8 @@ dlg._changed()
 assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == ["Run", "Review", "Results"]  # 0.17.23 shell
 g = dlg.grid
 assert isinstance(g, SS.SettingsGrid) and g.tabs.titles[0] == "Run options"
-assert g.tabs.titles[1:] == [t for t in SG.TAB_ORDER if t in g.groups], g.tabs.titles
+# the settings tabs double a "&" so Qt draws it (docs/gui-grammar.md)
+assert [t.replace("&&", "&") for t in g.tabs.titles[1:]] == [t for t in SG.TAB_ORDER if t in g.groups], g.tabs.titles
 assert len(g.catalog) > 100 and all(s.plugin == "ndscreen" for s in g.catalog)
 head = ("ndscreen", "findponds", "HEAD_FT")
 assert head in g.items and g.value(head) == 1.0 and g.by_id[head].unit == "ft" and g.by_id[head].your

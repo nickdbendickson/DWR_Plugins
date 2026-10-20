@@ -29,6 +29,7 @@ from .constants import (
     BTN_ACTIVE_STYLE, BTN_INACTIVE_STYLE, README_TEXT, PROGRESS_MIN_INTERVAL_S, DISCLAIMER,
 )
 from .extent import make_extent_clip
+from .tokens import TOKENS
 from .classify_tab import ClassificationTabMixin
 from .extras_tab import ExtrasTabMixin
 from .extras290_tab import Extras290TabMixin
@@ -125,7 +126,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
         self.status_label = QLabel("Ready \u2014 pick the dam folder")
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("padding: 6px; background-color: #f5f5f5;")
+        self.status_label.setStyleSheet("padding: 6px; background-color: {};".format(TOKENS["subtle"]))
         main_layout.addWidget(self.status_label)
 
         self.log_text = QTextEdit()
@@ -185,7 +186,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         raster_layout = QFormLayout()
         self.raster_hint = QLabel(RASTER_GROUP_TIP)
         self.raster_hint.setWordWrap(True)
-        self.raster_hint.setStyleSheet("color:#666;")
+        self.raster_hint.setStyleSheet("color:{};".format(TOKENS["muted"]))
         self.depth_edit = QLineEdit()
         self.depth_browse_btn = QPushButton("Browse\u2026")
         self.depth_browse_btn.clicked.connect(self.browse_depth)
@@ -278,7 +279,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             "railroads, estimates the consequences, classifies the dam (REG_05.2026 Sec. 5.2, "
             "ACER TM 11) and writes the report.")
         self.next_label.setWordWrap(True)
-        self.next_label.setStyleSheet("color:#666;")
+        self.next_label.setStyleSheet("color:{};".format(TOKENS["muted"]))
         bar.addWidget(self.next_label, 1)
         bar.addWidget(self.check_btn)
         bar.addWidget(self.classify_btn)
@@ -700,10 +701,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
     # ------------------------------------------------------------ STATUS/LOG
     def _update_status(self, message, is_success=True):
-        color = "#2e7d32" if is_success else "#c62828"
+        color = TOKENS["success"] if is_success else TOKENS["error"]
         self.status_label.setText(message)
         self.status_label.setStyleSheet(
-            "padding: 8px; background-color: #f5f5f5; color: {};".format(color))
+            "padding: 8px; background-color: {}; color: {};".format(TOKENS["subtle"], color))
         self.status_label.setVisible(bool(message))
 
     def _clear_status(self):
@@ -957,9 +958,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
     @staticmethod
     def _checks_html(results):
-        colors = {"ERROR": "#c62828", "WARNING": "#e65100", "OK": "#2e7d32"}
+        colors = {"ERROR": TOKENS["error"], "WARNING": TOKENS["warn"], "OK": TOKENS["success"]}
         return "<br>".join("<span style='color:{}'><b>{}</b></span> {}".format(
-            colors.get(lvl, "#000"), lvl, html.escape(t)) for lvl, t in results)
+            colors.get(lvl, "black"), lvl, html.escape(t)) for lvl, t in results)
 
     def _classify_simple(self, *args):
         """Find the Runner rasters if the boxes are empty, then check and classify."""

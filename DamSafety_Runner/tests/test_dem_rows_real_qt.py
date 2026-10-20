@@ -1,4 +1,4 @@
-"""3.10.36 (#107): runs tests/realqt_dem_rows.py (real Qt, offscreen) in its own process, so the
+"""3.10.39 (#107): runs tests/realqt_dem_rows.py (real Qt, offscreen) in its own process, so the
 fake Qt of this suite does not get in the way."""
 import os
 import subprocess

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """The Dam suite home window - one view of a Dams folder for the three plugins.
 
-Byte-identical in ND Dam Hazard Classification Helper, ND Dam Breach Runner and ND Dam Breach
-Screening (written by suite/suite_shared/make_styles.py; edit it there). Each plugin opens it
+Byte-identical in DamSafety Hazard, Runner and Screening. Canonical copy: shared/ui/suite_home.py;
+edit it there and run tools/sync_ui.py (tools/ci_checks.py fails on a stale copy). Each plugin opens it
 from its menu ("Dam suite home..."); whichever plugin opened it, the window is the same: every
 dam folder of a Dams folder with its dam.json state (screened / modelled / classified / reviewed),
 its class, the suite's next action (damsuite.suite_home / damsuite.dam_record.next_action) and the

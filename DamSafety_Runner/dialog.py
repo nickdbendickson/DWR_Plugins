@@ -25,6 +25,7 @@ from qgis.PyQt.QtWidgets import (
 
 from . import popup_logic as pl
 from .ui_widgets import Collapsible, DamCard, EngineChip, InfoBanner, StageStrip, ToolRow
+from .tokens import TOKENS
 
 TITLE = "DamSafety Runner"
 SIZE_KEY = "DamSafety_Runner/window"           # QSettings: the window size, saved on close
@@ -40,7 +41,7 @@ CATEGORY_TITLES = {"Dam": "Run variants", "Model": "Model runs", "Data": "Terrai
 CARD_CHIPS = (("run", "Flood run"), ("baseline", "Baseline"), ("manifest", "Manifest"),
               ("products", "Products"), ("preview", "5.2 preview"), ("handoff", "Hand-off"),
               ("submittal", "Submittal"), ("package", "Package"))
-CHIP_STYLE = {"yes": ("✓", "#137333"), "part": ("◐", "#b26b00"), "no": ("○", "#888888")}
+CHIP_STYLE = {"yes": ("✓", TOKENS["success"]), "part": ("◐", TOKENS["warn"]), "no": ("○", TOKENS["off"])}
 TOOL_TAG = {"yes": "✓ done", "part": "◐ partial", "no": "not run yet"}
 RUN_TIP = "Opens the breach model with this dam, DEM, grid, and hours filled in."
 RUN_TIP_NO_DAM = "Set the Dams folder and the dam ID first - the run needs a dam to write into."
@@ -121,17 +122,13 @@ class NDBreachRunnerDialog(QDialog):
     def _build(self):
         lay = QVBoxLayout()
         lay.setSpacing(6)
-        head = QHBoxLayout()
-        title = QLabel("DamSafety Runner {}".format(plugin_version()).strip())
-        title.setStyleSheet("font-size:15px; font-weight:bold;")
-        head.addWidget(title)
-        head.addStretch(1)
-        self.gear = QToolButton()
+        # no in-window title: the window title names the tool (docs/gui-grammar.md)
+        self.gear = QToolButton()                 # on the tab bar, as in Hazard and Screening
         self.gear.setText("⚙")
+        self.gear.setAutoRaise(True)
+        self.gear.setStyleSheet("QToolButton {font-size: 18px; padding: 0 8px 2px 8px;}")
         self.gear.setToolTip("Settings: the suite settings file the tools open with.")
         self.gear.clicked.connect(lambda _c=False: self._open_settings())
-        head.addWidget(self.gear)
-        lay.addLayout(head)
         lay.addWidget(InfoBanner(DISCLAIMER))
 
         self.strip = StageStrip([pl.STAGE_LABELS[k] for k in pl.STAGE_KEYS])
@@ -171,12 +168,12 @@ class NDBreachRunnerDialog(QDialog):
         grid.addWidget(QLabel("DEM:"), 2, 0)
         grid.addWidget(self.dem_combo, 2, 1, 1, 2)
         grid.addWidget(b, 2, 3)
-        # 3.10.36 (#107): everything between the stage strip and the Log sits in a scroll area.
-        # The window has an explicit minimum size (fit_window), so Qt no longer raises it to the
-        # layout's minimum; expanding "Download a DEM" then squeezed its rows to 6-9 px and drew
-        # them on top of each other. In the scroll area every row keeps its own height and the
-        # area scrolls when the window is short; expanding a section also grows the window up to
-        # the screen (_grow_for_body).
+        # 3.10.39 (#107): the dam rows, Download a DEM, Advanced and the Run/Tools tabs sit in a
+        # scroll area; the action bar, the Log and Close stay below it. The window has an explicit
+        # minimum size (fit_window), so Qt no longer raises it to the layout's minimum; opening
+        # "Download a DEM" then squeezed its rows to 6-9 px and drew them on top of each other.
+        # In the scroll area every row keeps its own height and the area scrolls when the window
+        # is short; opening a section also grows the window up to its screen (_grow_for_body).
         self.body_widget = QWidget()
         body = QVBoxLayout(self.body_widget)
         body.setContentsMargins(0, 0, 0, 0)
@@ -225,28 +222,25 @@ class NDBreachRunnerDialog(QDialog):
         self.hecras_crest.setChecked(True)                  # on by default
         self.hecras_crest.toggled.connect(self._changed)
 
+        # the action bar (added under the tabs): engine state on the left, the primary action at
+        # the bottom right in Qt's own look, bold (docs/gui-grammar.md)
         run_row = QHBoxLayout()
-        self.run_dam_btn = QPushButton("▶  Run this dam")
-        self.run_dam_btn.setDefault(True)
-        self.run_dam_btn.setMinimumHeight(34)
-        self.run_dam_btn.setMinimumWidth(180)
-        self.run_dam_btn.setStyleSheet(
-            "QPushButton {background:#1a5fb4; color:white; font-weight:bold; border-radius:4px;"
-            " padding:4px 16px;} QPushButton:disabled {background:#d5d8dd; color:#8a9099;}")
-        self.run_dam_btn.setToolTip(RUN_TIP_NO_DAM)
-        self.run_dam_btn.setEnabled(False)          # refresh() enables it once a dam is chosen
-        self.run_dam_btn.clicked.connect(lambda _c=False: self._open_tool("rundam"))
-        run_row.addWidget(self.run_dam_btn)
-        run_row.addSpacing(12)
         engines = QLabel("Engines:")
-        engines.setStyleSheet("color:#666;")
+        engines.setStyleSheet("color:{};".format(TOKENS["muted"]))
         run_row.addWidget(engines)
         self.lis_chip = EngineChip("LISFLOOD-FP")       # status labels, not buttons
         self.anuga_chip = EngineChip("ANUGA")
         for chip in (self.lis_chip, self.anuga_chip):
             run_row.addWidget(chip)
         run_row.addStretch(1)
-        body.addLayout(run_row)
+        self.run_dam_btn = QPushButton("Run this dam")
+        self.run_dam_btn.setDefault(True)
+        self.run_dam_btn.setMinimumHeight(34)
+        self.run_dam_btn.setStyleSheet("QPushButton {font-weight:bold; padding:4px 16px;}")
+        self.run_dam_btn.setToolTip(RUN_TIP_NO_DAM)
+        self.run_dam_btn.setEnabled(False)          # refresh() enables it once a dam is chosen
+        self.run_dam_btn.clicked.connect(lambda _c=False: self._open_tool("rundam"))
+        run_row.addWidget(self.run_dam_btn)
 
         adv = QWidget()
         grid2 = QGridLayout(adv)
@@ -272,10 +266,17 @@ class NDBreachRunnerDialog(QDialog):
         _vertical_policy(self.tabs, "Ignored")
         self.tabs.addTab(self._build_run_tab(), "Run")
         self.tabs.addTab(self._build_tools_tab(), "Tools")
+        self.tabs.setCornerWidget(self.gear)
         body.addWidget(self.tabs, 1)
+        self.body_scroll = QScrollArea()
+        self.body_scroll.setWidgetResizable(True)
+        self.body_scroll.setFrameShape(getattr(QFrame, 'Shape', QFrame).NoFrame)
+        self.body_scroll.setWidget(self.body_widget)
+        lay.addWidget(self.body_scroll, 1)
+        lay.addLayout(run_row)                     # the action bar stays in view under the tabs
 
         self.settings_dialog = QDialog(self)
-        self.settings_dialog.setWindowTitle("{} - Settings".format(TITLE))
+        self.settings_dialog.setWindowTitle("{} \u2014 Settings".format(TITLE))
         self.settings_dialog.setModal(False)
         self.settings_dialog.resize(900, 620)
         sd = QVBoxLayout()
@@ -292,11 +293,6 @@ class NDBreachRunnerDialog(QDialog):
         self.log_edit.setReadOnly(True)
         self.log_edit.setMaximumHeight(110)
         self.log_section = Collapsible("Log", self.log_edit)
-        self.body_scroll = QScrollArea()
-        self.body_scroll.setWidgetResizable(True)
-        self.body_scroll.setFrameShape(getattr(QFrame, 'Shape', QFrame).NoFrame)
-        self.body_scroll.setWidget(self.body_widget)
-        lay.addWidget(self.body_scroll, 1)
         lay.addWidget(self.log_section)            # outside the scroll area: always just above Close
         for sec in (self.dem_section, self.adv_section, self.log_section):
             sec.header.toggled.connect(self._section_toggled)
@@ -309,8 +305,8 @@ class NDBreachRunnerDialog(QDialog):
         lay.addLayout(row)
         self.setLayout(lay)
         # setDefault() registers the button with its dialog only when the button's own parent
-        # changes; it went into body_widget before body_widget was in this dialog, so register
-        # it again (off then on: setDefault(True) on a default button returns early)
+        # changes; register it again now that the whole layout is in this dialog (off then on:
+        # setDefault(True) on a default button returns early)
         self.run_dam_btn.setDefault(False)
         self.run_dam_btn.setDefault(True)
         fit_window(self, key=SIZE_KEY)
@@ -493,7 +489,7 @@ class NDBreachRunnerDialog(QDialog):
         except Exception:
             box = QWidget()
             lay = QVBoxLayout()
-            lay.addWidget(QLabel("DEM download needs DamSafety Screening or ND Dam Breach Screening. Neither import succeeded."))
+            lay.addWidget(QLabel("DEM download needs DamSafety Screening. It could not be imported."))
             box.setLayout(lay)
             return Collapsible("Download a DEM (not available)", box)
         box = QWidget()
@@ -1005,7 +1001,8 @@ class NDBreachRunnerDialog(QDialog):
             m = wizard._find_models()
             self.lis_chip.set_state(bool(m.get("lisflood")), hint=MODEL_HINT)
             self.anuga_chip.set_state(bool(m.get("anuga")), "" if m.get("anuga") else
-                                      "only the ANUGA tier needs it", hint=MODEL_HINT)
+                                      "only the ANUGA tier needs it", hint=MODEL_HINT,
+                                      optional=True)
         except Exception:                                        # noqa
             self.lis_chip.set_state(None, hint=MODEL_HINT)
             self.anuga_chip.set_state(None, hint=MODEL_HINT)
@@ -1058,7 +1055,7 @@ class NDBreachRunnerDialog(QDialog):
             QMessageBox.information(
                 self, TITLE,
                 "The Processing dialog of {} could not be opened here ({}).\n\nOpen it from the "
-                "Processing Toolbox: ND Dam Breach Runner > {}.".format(aid, e, pl.TOOL_LABEL.get(alg, alg)))
+                "Processing Toolbox: DamSafety Runner > {}.".format(aid, e, pl.TOOL_LABEL.get(alg, alg)))
             return False
         self._log(">>> Opened {} ({})".format(aid, ", ".join(
             "{}={}".format(k, os.path.basename(str(v)) if os.path.isabs(str(v)) else v)

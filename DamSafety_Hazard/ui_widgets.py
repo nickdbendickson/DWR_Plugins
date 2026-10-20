@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 """Shared window widgets of the DamSafety plugins (Runner, Screening, Hazard).
 
-Each plugin carries an IDENTICAL copy of this file (a test checks the bytes); the plugins are
-installed separately, so none imports another's copy. Change one copy, copy it to the other two,
-and raise SHARED_VERSION.
+Canonical copy: shared/ui/ui_widgets.py. Each plugin carries a byte-identical copy (the plugins
+are installed separately, so none imports another's); edit the canonical file, run
+tools/sync_ui.py and raise SHARED_VERSION. tools/ci_checks.py fails the build on a stale copy.
+Colours come from tokens.py (also synced); docs/gui-grammar.md says where each widget is used.
 
     WrapLabel     a word-wrapped label that is never cut off
     InfoBanner    the muted disclaimer / context banner
     Collapsible   a ▸/▾ disclosure section (title kept apart from the arrow)
-    StageStrip    stage chips ✓ yes / ◐ part / ○ no / ▶ active, optionally clickable
+    StageStrip    stage chips ✓ yes / ◐ part / ○ no / ▶ active / ✕ error, optionally clickable
     EngineChip    a borderless "LISFLOOD-FP ✓" status label (not a button)
     ToolRow       one tool: a left-aligned button, a status tag and a grey description
     DamCard       a dam's title, path, warnings, status chips and lines
@@ -22,22 +23,27 @@ from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
                                  QToolButton, QVBoxLayout, QWidget)
 
-SHARED_VERSION = "1.0.0"
+from .tokens import TOKENS as T
 
-YES, PART, NO, ACTIVE = "yes", "part", "no", "active"
-MARKS = {YES: "\u2713", PART: "\u25d0", NO: "\u25cb", ACTIVE: "\u25b6"}
-COLORS = {YES: "#137333", PART: "#b26b00", NO: "#888888", ACTIVE: "#1a5fb4"}
+SHARED_VERSION = "1.2.0"
+
+YES, PART, NO, ACTIVE, ERR = "yes", "part", "no", "active", "error"
+MARKS = {YES: "\u2713", PART: "\u25d0", NO: "\u25cb", ACTIVE: "\u25b6", ERR: "\u2715"}
+COLORS = {YES: T["success"], PART: T["warn"], NO: T["off"], ACTIVE: T["link"], ERR: T["error"]}
 TAG_TEXT = {YES: "\u2713 done", PART: "\u25d0 partial", NO: "not run yet"}
 
 # the check levels (the same strings as the Hazard plugin's checks.py)
 ERROR, WARNING, OK = "ERROR", "WARNING", "OK"
 
-BANNER_QSS = ("QFrame#checkErrorBanner {background:#b3261e; border:1px solid #8c1d18;"
-              " border-radius:4px;} QFrame#checkErrorBanner QLabel {color:white;}")
-WARN_PILL_QSS = ("QLabel {background:#f9a825; color:#3e2723; font-weight:bold;"
-                 " font-size:10px; border-radius:3px; padding:1px 5px;}")
-WARN_BOX_QSS = ("QLabel {color:#8a5300; background:#fff4e0; border:1px solid #e0b060;"
-                " border-radius:4px; padding:4px;}")
+BANNER_QSS = ("QFrame#checkErrorBanner {background:%s; border:1px solid %s;"
+              " border-radius:4px;} QFrame#checkErrorBanner QLabel {color:white;}"
+              % (T["error_fill"], T["error_edge"]))
+WARN_PILL_QSS = ("QLabel {background:%s; color:%s; font-weight:bold;"
+                 " font-size:10px; border-radius:3px; padding:1px 5px;}"
+                 % (T["warn_fill"], T["warn_ink"]))
+WARN_BOX_QSS = ("QLabel {color:%s; background:%s; border:1px solid %s;"
+                " border-radius:4px; padding:4px;}" % (T["warn"], T["warn_bg"], T["warn_edge"]))
+MUTED_QSS = "color:%s;" % T["muted"]
 
 
 def _plural(n, word):
@@ -88,8 +94,9 @@ class InfoBanner(QFrame):
     def __init__(self, text, parent=None):
         super().__init__(parent)
         self.setObjectName("info_banner")
-        self.setStyleSheet("QFrame#info_banner {background:#f2f2f7; border:1px solid #d8d8e0;"
-                           "border-radius:4px;} QLabel {color:#55555f;}")
+        self.setStyleSheet("QFrame#info_banner {background:%s; border:1px solid %s;"
+                           "border-radius:4px;} QLabel {color:%s;}"
+                           % (T["subtle"], T["frame"], T["muted"]))
         h = QHBoxLayout(self)
         h.setContentsMargins(10, 6, 10, 6)
         h.addWidget(QLabel("\u2139"))
@@ -148,7 +155,7 @@ class StageStrip(QWidget):
     """Stage chips with an arrow between them. clickable=True makes each chip a flat button
     that emits clicked(index)."""
 
-    YES, PART, NO, ACTIVE = YES, PART, NO, ACTIVE
+    YES, PART, NO, ACTIVE, ERR = YES, PART, NO, ACTIVE, ERR
     clicked = pyqtSignal(int)
 
     def __init__(self, stages, clickable=False, parent=None):
@@ -162,7 +169,7 @@ class StageStrip(QWidget):
         for i, name in enumerate(self.names):
             if i:
                 arrow = QLabel("\u2192")
-                arrow.setStyleSheet("color:#999;")
+                arrow.setStyleSheet("color:%s;" % T["off"])
                 h.addWidget(arrow)
             if self.clickable:
                 chip = QToolButton()
@@ -189,7 +196,9 @@ class StageStrip(QWidget):
 
 
 class EngineChip(QLabel):
-    """'LISFLOOD-FP ✓' - a status label, borderless by default so it does not look clickable."""
+    """'✓ LISFLOOD-FP' - a status label, borderless by default so it does not look clickable.
+    The mark leads, like every mark in the suite. A missing optional engine is amber, not red:
+    red is for what blocks the run."""
 
     def __init__(self, name, bordered=False, parent=None):
         super().__init__(parent)
@@ -198,18 +207,19 @@ class EngineChip(QLabel):
         self.found = None
         self.set_state(None, pending=True)
 
-    def set_state(self, found, note="", pending=False, hint=""):
-        """found: True / False / None (could not be checked)."""
+    def set_state(self, found, note="", pending=False, hint="", optional=False):
+        """found: True / False / None (could not be checked). optional: the run does not need it."""
         self.found = found
-        color = {True: "#137333", False: "#b33"}.get(found, "#888")
+        color = {True: T["success"], False: T["warn"] if optional else T["error"]}.get(
+            found, T["off"])
         mark = "\u2026" if pending else {True: "\u2713", False: "\u2715"}.get(found, "?")
-        self.setText("{} {}".format(self.name, mark))
+        self.setText("{} {}".format(mark, self.name))
         border = "border:1px solid %s; border-radius:4px; padding:2px 8px;" % color \
             if self.bordered else "border:none; padding:2px 4px;"
         self.setStyleSheet("QLabel {color:%s; %s}" % (color, border))
         if not pending:
             self.setToolTip("{}: {}{}{}".format(
-                self.name, {True: "found", False: "NOT found"}.get(found, "could not be checked"),
+                self.name, {True: "installed", False: "not installed"}.get(found, "could not be checked"),
                 " - " + note if note else "", "\n" + hint if hint else ""))
 
 
@@ -229,7 +239,7 @@ class ToolRow(QWidget):
         self.tag.setFixedWidth(tag_width)
         self.desc = QLabel(tip)
         self.desc.setWordWrap(True)
-        self.desc.setStyleSheet("color:#666;")
+        self.desc.setStyleSheet(MUTED_QSS)
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(10)
@@ -250,8 +260,8 @@ class DamCard(QFrame):
     def __init__(self, chip_rows=(), per_row=4, parent=None):
         super().__init__(parent)
         self.setObjectName("dam_card")
-        self.setStyleSheet("QFrame#dam_card {border:1px solid #d8d8e0; border-radius:4px;"
-                           " background:#fbfbfd;}")
+        self.setStyleSheet("QFrame#dam_card {border:1px solid %s; border-radius:4px;"
+                           " background:%s;}" % (T["frame"], T["card"]))
         self.chip_rows = tuple(chip_rows)
         self.layout_ = QVBoxLayout(self)
         self.title_label = QLabel("")
@@ -259,7 +269,7 @@ class DamCard(QFrame):
         if fmt is not None:
             self.title_label.setTextFormat(fmt)
         self.path_label = QLabel("")
-        self.path_label.setStyleSheet("color:#666;")
+        self.path_label.setStyleSheet(MUTED_QSS)
         sel = _flag("TextSelectableByMouse")
         if sel is not None:
             self.path_label.setTextInteractionFlags(sel)
@@ -282,7 +292,7 @@ class DamCard(QFrame):
         self.status_label.setWordWrap(True)
         self.record_label = QLabel("")
         self.record_label.setWordWrap(True)
-        self.record_label.setStyleSheet("color:#55555f;")
+        self.record_label.setStyleSheet(MUTED_QSS)
         self.suggest_label = QLabel("")
         self.suggest_label.setWordWrap(True)
         self.suggest_label.setStyleSheet("font-weight:bold;")
@@ -296,7 +306,7 @@ class DamCard(QFrame):
     def set_context(self, title, path, empty="No dam chosen"):
         """Title and path are plain text: they are escaped here, so no caller can forget."""
         self.title_label.setText("<b>{}</b>".format(html.escape(title)) if title else
-                                 "<span style='color:#888'>{}</span>".format(html.escape(empty)))
+                                 "<span style='color:{}'>{}</span>".format(T["off"], html.escape(empty)))
         self.path_label.setText(path or "")
 
     def set_warnings(self, warnings):
@@ -431,14 +441,14 @@ class CheckPanel(QWidget):
             v.addWidget(row)
         box = Collapsible("{} \u2014 the run proceeds, check them".format(
             _plural(len(warnings), "warning")), inner, expanded=True, parent=self)
-        box.header.setStyleSheet(box.header.styleSheet().replace("}", " color:#a15c00;}"))
+        box.header.setStyleSheet(box.header.styleSheet().replace("}", " color:%s;}" % T["warn"]))
         self._layout.addWidget(box)
         self._parts.append(box)
 
     def _add_ok_summary(self, n):
         inner = QLabel("All passed \u2014 the log lists the values.")
-        inner.setStyleSheet("color:#777;")
+        inner.setStyleSheet(MUTED_QSS)
         box = Collapsible(_plural(n, "check") + " passed", inner, expanded=False, parent=self)
-        box.header.setStyleSheet(box.header.styleSheet().replace("}", " color:#2e7d32;}"))
+        box.header.setStyleSheet(box.header.styleSheet().replace("}", " color:%s;}" % T["success"]))
         self._layout.addWidget(box)
         self._parts.append(box)
