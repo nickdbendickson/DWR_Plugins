@@ -1,0 +1,15 @@
+[general]
+name=DamSafety Hazard Lite
+qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
+supportsQt6=True
+description=hmax / vmax at 911-addressed structures, roads (NDDOT AADT) and railroads, and the ND REG_05.2026 Section 5.2 hazard class, from breach depth and velocity rasters.
+about=One Processing tool (Processing Toolbox > DamSafety Hazard Lite). Reads the ND Dam Suite offline pack: 911 address points on their FEMA outline, NG9-1-1 roads with NDDOT traffic counts, NARN rail with FRA crossings. Screening aid; the engineer of record classifies the dam.
+version=0.1.0
+icon=icon.svg
+author=N.D. Bendickson
+experimental=True
+hasProcessingProvider=yes
+changelog=
+    0.1.0 - 2026-10-20
+      * First version: one Processing tool, about 700 lines (core.py, tm11.py, plugin.py).
