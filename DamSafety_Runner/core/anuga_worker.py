@@ -28,7 +28,8 @@ optional:
                   (sample_fine); the model DEM fills its gaps. Without it the elevation
                   is the model DEM at the centroids, as before.
 
-  (3.10.35, opt-in; absent = no checkpoints, no partial file, results unchanged)
+  (3.10.35; absent = no checkpoints, no partial file, as before. From 3.10.38
+  anuga_model.resolve_checkpoints adds them for a long run; results never change)
   ckpt_every_min  wall-clock minutes between ANUGA checkpoints (domain.set_checkpointing
                   checkpoint_time); ckpt_every_steps = every that many yield steps instead
                   (used when ckpt_every_min is 0). 0 / absent = no checkpoints.
@@ -295,7 +296,13 @@ def prune_checkpoints(ckdir, times, keep):
 
 
 class _NullWriter:
+    """A file that keeps nothing and counts the bytes written to it."""
+
+    def __init__(self):
+        self.n = 0
+
     def write(self, b):
+        self.n += len(b)
         return len(b)
 
 
@@ -309,13 +316,31 @@ def pickler():
         return pickle
 
 
-def picklable(obj):
-    """'' when ANUGA's pickler can serialise obj (nothing is kept), else the error."""
+def trial_pickle(obj):
+    """('', bytes) when ANUGA's pickler can serialise obj (nothing is kept, only the size is
+    counted), else (the error, 0)."""
+    w = _NullWriter()
     try:
-        pickler().dump(obj, _NullWriter())
-        return ""
+        pickler().dump(obj, w)
+        return "", w.n
     except Exception as e:      # noqa: BLE001 - any failure disables checkpointing
-        return "{}: {}".format(type(e).__name__, str(e)[:200])
+        return "{}: {}".format(type(e).__name__, str(e)[:200]), 0
+
+
+def picklable(obj):
+    """'' when ANUGA's pickler can serialise obj, else the error."""
+    return trial_pickle(obj)[0]
+
+
+DISK_MARGIN_B = 256 * 1024 ** 2      # left free besides the checkpoints
+
+
+def free_bytes(path):
+    """Free space where `path` is (None when unknown)."""
+    try:
+        return shutil.disk_usage(path).free
+    except OSError:
+        return None
 
 
 def raster_index(domain, out_x0, out_y0, odx, onx, ony):
@@ -604,12 +629,19 @@ def main(job_path, out_path):
         env = Envelope(domain, arrival_depth, vmin_depth)
     ntri = info["triangles"]
     if ck is not None and ck["checkpoint"]:
-        err = picklable(domain)
+        err, nbytes = trial_pickle(domain)
+        ckinfo["checkpoint_mb"] = round(nbytes / 1024.0 ** 2, 3)
+        free = free_bytes(os.path.dirname(os.path.dirname(ckdir)))
+        if not err and free is not None and free < (ck["keep"] + 1) * nbytes + DISK_MARGIN_B:
+            err = "not enough free disk: {:.0f} MB free, {} checkpoints of {:.0f} MB need " \
+                  "{:.0f} MB".format(free / 1024.0 ** 2, ck["keep"] + 1, nbytes / 1024.0 ** 2,
+                                     ((ck["keep"] + 1) * nbytes + DISK_MARGIN_B) / 1024.0 ** 2)
         if err:                                  # the run goes on without checkpoints
             ckinfo["checkpoint_error"] = err
             domain.set_checkpointing(checkpoint=False)
-            print("PROGRESS 0 checkpointing off: the domain cannot be pickled ({})".format(err),
-                  flush=True)
+            print("PROGRESS 0 checkpointing off: {}".format(
+                err if err.startswith("not enough") else
+                "the domain cannot be pickled ({})".format(err)), flush=True)
         else:
             os.makedirs(ckdir, exist_ok=True)
             if meta is None:
@@ -662,6 +694,15 @@ def main(job_path, out_path):
                 ckinfo["last_checkpoint_t_s"] = float(t)
                 print("PROGRESS {:.2f} checkpoint t={:.0f}s".format(100.0 * t / sim_time, t),
                       flush=True)
+            if ck["checkpoint"] and not ckinfo.get("checkpoint_error"):
+                free = free_bytes(ckdir)          # room for the next one (plus the margin)?
+                if free is not None and free < 1.2 * ckinfo["checkpoint_mb"] * 1024.0 ** 2 \
+                        + DISK_MARGIN_B:
+                    domain.set_checkpointing(checkpoint=False)
+                    ckinfo["checkpoint_error"] = "checkpoints stopped at t={:.0f}s: {:.0f} MB " \
+                        "free".format(float(t), free / 1024.0 ** 2)
+                    print("PROGRESS {:.2f} {}".format(100.0 * t / sim_time,
+                                                      ckinfo["checkpoint_error"]), flush=True)
             if rindex is not None and (saved or (
                     ck["partial_every_min"] > 0
                     and time.time() - last_flush >= 60.0 * ck["partial_every_min"])):

@@ -1,6 +1,9 @@
-"""3.10.35: opt-in ANUGA checkpoints, partial results and resume (core/anuga_worker.py).
+"""3.10.35 / 3.10.38: ANUGA checkpoints, partial results and resume (core/anuga_worker.py).
 
-Off by default: the job file and the worker are as before. With checkpoints on, ANUGA's
+3.10.38: on by default for a long run only (anuga_model.resolve_checkpoints: >= 12 h simulated
+or >= 50,000 triangles expected; every 30 wall-clock minutes, partial results every 10);
+a short run's job file and worker are as before, and NDBREACH_ANUGA_CHECKPOINT_MIN=0 turns
+them off. The hydraulics never change. With checkpoints on, ANUGA's
 domain.set_checkpointing pickles the domain (the envelope operator rides along), the worker
 lists the complete checkpoints in checkpoint.json, keeps the newest few, flushes
 anuga_partial.npz atomically, and a resumed run gives the same envelope as an
@@ -142,6 +145,13 @@ def anuga_checkpoint_settings_env_report_and_run_key():
         d = st.as_dict()
         assert not set(d) & set(W.ANUGA_CHECKPOINT_DEFAULTS), "defaults stay out of the report"
         k0 = W.key_settings(st)
+    with _Env(NDBREACH_ANUGA_CHECKPOINT_MIN="0"):
+        assert W.RunSettings().anuga_checkpoint_min == 0.0
+    with _Env(ANUGA_CHECKPOINT_MIN="off"):
+        assert W.RunSettings().anuga_checkpoint_min == 0.0
+    with _Env():
+        st = W.RunSettings()
+        assert st.anuga_checkpoint_min is None and st.anuga_partial_min is None   # automatic
     with _Env(NDBREACH_ANUGA_CHECKPOINT_MIN="20", ANUGA_PARTIAL_MIN="5",
               NDBREACH_ANUGA_RESUME="yes", NDBREACH_ANUGA_CHECKPOINT_KEEP="x"):
         st = W.RunSettings()
@@ -154,6 +164,8 @@ def anuga_checkpoint_settings_env_report_and_run_key():
     assert line == ("every 20 min of wall time; 3 saved; partial results flushed 4 times; "
                     "resumed from t = 2.00 h"), line
     assert "OFF: boom" in W.anuga_checkpoint_line({"every_steps": 5, "checkpoint_error": "boom"})
+    assert "(automatic: long run, simulated >= 12 h" in W.anuga_checkpoint_line(
+        {"every_min": 30.0, "rule": {"mode": "auto", "rule": "simulated >= 12 h or ..."}})
 
 
 # ----------------------------------------------------------------------- helpers
@@ -328,12 +340,12 @@ def anuga_checkpoint_worker_resume_skips_a_broken_newest_checkpoint():
 @test
 def anuga_checkpoint_worker_unpicklable_domain_runs_on_without_checkpoints():
     d0, d1 = tempfile.mkdtemp(), tempfile.mkdtemp()
-    real = AW.picklable
-    AW.picklable = lambda obj: "PicklingError: test"
+    real = AW.trial_pickle
+    AW.trial_pickle = lambda obj: ("PicklingError: test", 0)
     try:
         g1, s1 = _grids(_fake_run(d1, ckpt_every_steps=2))
     finally:
-        AW.picklable = real
+        AW.trial_pickle = real
     try:
         g0, _ = _grids(_fake_run(d0))
         _same(g0, g1)
@@ -389,6 +401,130 @@ def anuga_checkpoint_cancel_sends_sigterm_first_only_when_on():
             shutil.rmtree(d)
 
 
+# ----------------------------------------------------------------------- 3.10.38 automatic rule
+def _poly(w, h):
+    return np.array([[0, 0], [w, 0], [w, h], [0, h]], float)
+
+
+@test
+def anuga_checkpoint_auto_rule_long_runs_only():
+    outer, fine = _poly(3000.0, 2000.0), _poly(200.0, 200.0)   # 6 km2, 0.04 km2 near the dam
+    st = AM.AnugaSettings("python", sim_time_s=6 * 3600.0, fine_area_m2=100.0,
+                          coarse_area_m2=1000.0)
+    assert st.checkpoint_min is None and st.partial_min is None       # automatic
+    n = AM.expected_triangles(st, outer, fine)
+    assert n == round(1.5 * ((6e6 - 4e4) / 1000.0 + 4e4 / 100.0)) == 9540, n
+    cst, info = AM.resolve_checkpoints(st, outer, fine)              # 6 h, 9,540: short
+    assert info["mode"] == "off" and AM.checkpoint_job(cst) == {} and cst is not st
+    assert st.checkpoint_min is None                                  # st itself untouched
+    st.sim_time_s = 12 * 3600.0                                       # long by duration
+    cst, info = AM.resolve_checkpoints(st, outer, fine)
+    assert info["mode"] == "auto" and info["simulated_h"] == 12.0
+    assert AM.checkpoint_job(cst) == {"ckpt_every_min": 30.0, "ckpt_every_steps": 0,
+                                      "ckpt_keep": 2, "partial_every_min": 10.0, "resume": 0}
+    st.sim_time_s = 3600.0
+    st.coarse_area_m2 = 150.0                                         # long by size
+    cst, info = AM.resolve_checkpoints(st, outer, fine)
+    assert info["mode"] == "auto" and info["expected_triangles"] >= 50000
+    mesh = {"triangles": np.zeros((49999, 3), int)}                   # gmsh: its own count
+    assert AM.resolve_checkpoints(st, outer, fine, mesh)[1]["mode"] == "off"
+    st.checkpoint_min = 0.0                                           # switched off
+    st.sim_time_s = 72 * 3600.0
+    cst, info = AM.resolve_checkpoints(st, outer, fine)
+    assert info["mode"] == "off" and AM.checkpoint_job(cst) == {}
+    st.checkpoint_min, st.partial_min = 15.0, 0.0                     # set by hand
+    cst, info = AM.resolve_checkpoints(st, outer, fine)
+    assert info["mode"] == "set" and cst.checkpoint_min == 15.0 and cst.partial_min == 0.0
+
+
+@test
+def anuga_checkpoint_auto_resume_with_the_run_only_when_on():
+    outer, fine = _poly(1000.0, 1000.0), _poly(0.0, 0.0)[:0]
+    st = AM.AnugaSettings("python", sim_time_s=3600.0)
+    st.resume_with_run = True
+    cst, _ = AM.resolve_checkpoints(st, outer, fine)                  # short: no checkpoints
+    assert not cst.resume and AM.checkpoint_job(cst) == {}
+    st.sim_time_s = 24 * 3600.0
+    cst, _ = AM.resolve_checkpoints(st, outer, fine)
+    assert cst.resume and AM.checkpoint_job(cst)["resume"] == 1
+    st.checkpoint_min = 0
+    st.resume = True                                                  # NDBREACH_ANUGA_RESUME
+    cst, _ = AM.resolve_checkpoints(st, outer, fine)
+    assert cst.resume and AM.checkpoint_job(cst) == {
+        "ckpt_every_min": 0.0, "ckpt_every_steps": 0, "ckpt_keep": 2,
+        "partial_every_min": 0.0, "resume": 1}
+
+
+@test
+def anuga_checkpoint_auto_job_file_short_run_unchanged_long_run_has_keys():
+    """Through anuga_model.run (the worker fails without ANUGA after the job is written)."""
+    from nd_breach_runner.tests.test_gmsh_mesher import _case
+    from nd_breach_runner.core.lisflood import ModelError
+    out = {}
+    for name, hours, cmin in (("short", 1.0, None), ("long", 13.0, None), ("off", 13.0, 0.0)):
+        dem, flooded, inflow, hy, st, roads = _case()
+        st.sim_time_s = hours * 3600.0
+        st.checkpoint_min = cmin
+        d = tempfile.mkdtemp()
+        try:
+            try:
+                AM.run(d, dem, flooded, inflow, (1.0, 0.0), 60.0, hy, st, refine_lines=roads)
+            except ModelError:
+                pass
+            with np.load(os.path.join(d, "anuga_job.npz")) as z:
+                out[name] = {k: float(z[k]) for k in z.files if k in AW.CKPT_KEYS}
+        finally:
+            shutil.rmtree(d)
+    assert out["short"] == {} and out["off"] == {}, out
+    assert out["long"] == {"ckpt_every_min": 30.0, "ckpt_every_steps": 0.0, "ckpt_keep": 2.0,
+                           "partial_every_min": 10.0, "resume": 0.0}, out
+
+
+@test
+def anuga_checkpoint_worker_too_little_disk_runs_on_without_checkpoints():
+    d0, d1 = tempfile.mkdtemp(), tempfile.mkdtemp()
+    real = AW.free_bytes
+    AW.free_bytes = lambda path: 1024 ** 2                            # 1 MB free
+    try:
+        g1, s1 = _grids(_fake_run(d1, ckpt_every_steps=2))
+    finally:
+        AW.free_bytes = real
+    try:
+        g0, _ = _grids(_fake_run(d0))
+        _same(g0, g1)
+        ck = s1["checkpoint"]
+        assert ck["checkpoint_error"].startswith("not enough free disk"), ck
+        assert ck["checkpoints_saved"] == 0 and ck["checkpoint_mb"] > 0
+    finally:
+        shutil.rmtree(d0)
+        shutil.rmtree(d1)
+
+
+@test
+def anuga_checkpoint_worker_stops_checkpoints_when_the_disk_fills():
+    d0, d1 = tempfile.mkdtemp(), tempfile.mkdtemp()
+    real = AW.free_bytes
+    calls = []
+
+    def free(path):                    # plenty at the start, then 1 MB from the 3rd yield
+        calls.append(path)
+        return 10 * 1024 ** 3 if len(calls) <= 3 else 1024 ** 2
+    AW.free_bytes = free
+    try:
+        g1, s1 = _grids(_fake_run(d1, ckpt_every_steps=1))
+    finally:
+        AW.free_bytes = real
+    try:
+        g0, _ = _grids(_fake_run(d0))
+        _same(g0, g1)
+        ck = s1["checkpoint"]
+        assert ck["checkpoint_error"].startswith("checkpoints stopped at t="), ck
+        assert 1 <= ck["checkpoints_saved"] <= 3, ck
+    finally:
+        shutil.rmtree(d0)
+        shutil.rmtree(d1)
+
+
 # ----------------------------------------------------------------------- real ANUGA (tiny)
 def _anuga_python():
     p = os.environ.get("NDBREACH_ANUGA_PYTHON")
@@ -428,6 +564,53 @@ def anuga_checkpoint_real_anuga_kill_and_resume_is_bit_identical():
     finally:
         shutil.rmtree(d0)
         shutil.rmtree(d1)
+
+
+@model_test
+def anuga_checkpoint_real_anuga_auto_default_gives_identical_results():
+    """3.10.38: the Runner's default ANUGA setup (anuga_model.run) with the automatic rule on
+    (thresholds lowered so the 30-minute, 839-triangle test domain counts as long, and
+    checkpoints / partial writes made at every yield step so they really happen) against
+    NDBREACH_ANUGA_CHECKPOINT_MIN=0: the same depth, velocity, arrival and WSE. Seconds."""
+    py = _anuga_python()
+    if not py:
+        print("skip: NDBREACH_ANUGA_PYTHON not set")
+        return
+    from nd_breach_runner.core import breach as br
+    ny, nx, dx = 30, 50, 20.0
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    dem = Grid(100.0 - 0.005 * xx * dx + 0.02 * np.abs(yy * dx - 300.0), 500000.0, 5200600.0,
+               dx)
+    fl = np.zeros((ny, nx), bool)
+    fl[8:22, 3:45] = True
+    hy = br.Hydrograph(np.array([0.0, 300.0, 900.0, 1800.0]),
+                       np.array([0.0, 80.0, 20.0, 0.0]), "t")
+    saved = (AM.AUTO_CHECKPOINT_HOURS, AM.AUTO_CHECKPOINT_MIN, AM.AUTO_PARTIAL_MIN)
+    res = {}
+    try:
+        AM.AUTO_CHECKPOINT_HOURS, AM.AUTO_CHECKPOINT_MIN, AM.AUTO_PARTIAL_MIN = 0.5, 1e-6, 1e-6
+        for name, cmin in (("auto", None), ("off", 0.0)):
+            st = AM.AnugaSettings(py, threads=1, sim_time_s=1800.0, yieldstep_s=60.0,
+                                  near_field_radius_m=100.0, fine_area_m2=200.0,
+                                  coarse_area_m2=800.0, buffer_m=60.0)
+            st.elevation = "model_grid"
+            st.checkpoint_min = cmin
+            d = tempfile.mkdtemp()
+            try:
+                env, _, _ = AM.run(d, dem, fl, dem.xy(15, 4), (1.0, 0.0), 60.0, hy, st)
+                res[name] = env
+                assert not os.path.exists(os.path.join(d, AM.PARTIAL_NAME))
+            finally:
+                shutil.rmtree(d)
+    finally:
+        AM.AUTO_CHECKPOINT_HOURS, AM.AUTO_CHECKPOINT_MIN, AM.AUTO_PARTIAL_MIN = saved
+    a, o = res["auto"], res["off"]
+    for k in ("depth", "velocity", "arrival_hr", "wse"):
+        assert np.array_equal(getattr(a, k).data, getattr(o, k).data, equal_nan=True), k
+    ck = a.stats["checkpoint"]
+    assert ck["rule"]["mode"] == "auto" and ck["checkpoints_saved"] >= 20, ck
+    assert ck["partial_flushes"] >= 20 and not ck.get("checkpoint_error"), ck
+    assert "checkpoint" not in o.stats
 
 
 if __name__ == "__main__":

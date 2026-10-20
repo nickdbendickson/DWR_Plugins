@@ -68,18 +68,21 @@ class AnugaSettings:
         self.elevation_cell_m = None     # None = the source DEM's own cell size (>= 0.5 m)
         self.elevation_max_cells = 256e6   # cap on the fine grid (float32 on disk, ~1 GB)
         self.elevation_block = 2048      # cells per side of one read
-        # 3.10.35, all off by default (the worker then runs exactly as before): ANUGA
-        # checkpoints (domain.set_checkpointing) every checkpoint_min wall-clock minutes, or
-        # every checkpoint_steps yield steps when checkpoint_min is 0; the newest
+        # 3.10.38 ANUGA checkpoints (domain.set_checkpointing) and partial results, see
+        # resolve_checkpoints. checkpoint_min: None = automatic (every AUTO_CHECKPOINT_MIN
+        # wall-clock minutes for a long run, none for a short one), 0 = off, > 0 = always, that
+        # often; checkpoint_steps > 0: every that many yield steps instead. The newest
         # checkpoint_keep are kept. partial_min: anuga_partial.npz (the max depth / velocity /
-        # WSE and arrival grids so far) every that many wall-clock minutes; with checkpoints it
-        # is also written after each one. resume: continue from the newest checkpoint of the
-        # same job (see anuga_worker.py).
-        self.checkpoint_min = 0.0
+        # WSE and arrival grids so far) that often (None = AUTO_PARTIAL_MIN when checkpoints
+        # are on); it is also written after each checkpoint. resume: continue from the newest
+        # checkpoint of the same job; resume_with_run: the same, only when checkpoints are on
+        # (the run's own Resume). None of them changes the hydraulics.
+        self.checkpoint_min = None
         self.checkpoint_steps = 0
         self.checkpoint_keep = 2
-        self.partial_min = 0.0
+        self.partial_min = None
         self.resume = False
+        self.resume_with_run = False
 
 
 def inlet_line(inflow_xy, direction, width_m):
@@ -218,10 +221,72 @@ def clip_lines_to_polygon(lines, polygon, min_len=1):
     return out
 
 
+# 3.10.38: the automatic checkpoint rule. A run is "long" when it simulates at least
+# AUTO_CHECKPOINT_HOURS, or its mesh is expected to have at least AUTO_CHECKPOINT_TRIANGLES
+# triangles (the gmsh mesh's own count; for ANUGA's mesher 1.5 x the area over the largest
+# triangle area of each region, near what ANUGA 4.0.1 makes). A long run checkpoints every
+# AUTO_CHECKPOINT_MIN wall-clock minutes (a run that ends sooner writes none) and writes
+# anuga_partial.npz every AUTO_PARTIAL_MIN minutes.
+AUTO_CHECKPOINT_HOURS = 12.0
+AUTO_CHECKPOINT_TRIANGLES = 50000
+AUTO_CHECKPOINT_MIN = 30.0
+AUTO_PARTIAL_MIN = 10.0
+TRIANGLES_PER_MAX_AREA = 1.5
+
+
+def polygon_area(poly):
+    p = np.asarray(poly, float).reshape(-1, 2)
+    if len(p) < 3:
+        return 0.0
+    x, y = p[:, 0], p[:, 1]
+    return float(abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))) / 2.0)
+
+
+def expected_triangles(st, outer, fine, mesh=None):
+    """The triangle count to expect: the gmsh mesh's own, else an estimate from the outer and
+    near-dam areas and their largest triangle areas."""
+    if mesh is not None:
+        return int(len(mesh["triangles"]))
+    a_out, a_fine = polygon_area(outer), polygon_area(fine) if len(fine) >= 3 else 0.0
+    n = (max(a_out - a_fine, 0.0) / max(st.coarse_area_m2, 1.0)
+         + a_fine / max(st.fine_area_m2, 1.0))
+    return int(round(TRIANGLES_PER_MAX_AREA * n))
+
+
+def resolve_checkpoints(st, outer, fine, mesh=None):
+    """A copy of st with the checkpoint settings resolved to numbers, and the decision
+    ({"mode": "auto" | "set" | "off", ...}). checkpoint_min None = the automatic rule."""
+    import copy
+    cst = copy.copy(st)
+    steps = int(getattr(st, "checkpoint_steps", 0) or 0)
+    cmin = getattr(st, "checkpoint_min", None)
+    sim_h = float(st.sim_time_s) / 3600.0
+    info = {"rule": "simulated >= {:g} h or >= {:,} triangles expected".format(
+        AUTO_CHECKPOINT_HOURS, AUTO_CHECKPOINT_TRIANGLES), "simulated_h": round(sim_h, 2)}
+    if steps > 0 or (cmin is not None and float(cmin) > 0):
+        info["mode"] = "set"
+        cst.checkpoint_min = float(cmin or 0.0)
+    elif cmin is not None:                       # 0: switched off
+        info["mode"] = "off"
+        cst.checkpoint_min = 0.0
+    else:
+        ntri = expected_triangles(st, outer, fine, mesh)
+        info["expected_triangles"] = ntri
+        long_run = sim_h >= AUTO_CHECKPOINT_HOURS or ntri >= AUTO_CHECKPOINT_TRIANGLES
+        info["mode"] = "auto" if long_run else "off"
+        cst.checkpoint_min = AUTO_CHECKPOINT_MIN if long_run else 0.0
+    on = cst.checkpoint_min > 0 or steps > 0
+    pmin = getattr(st, "partial_min", None)
+    cst.partial_min = float(pmin) if pmin is not None else (AUTO_PARTIAL_MIN if on else 0.0)
+    cst.resume = bool(getattr(st, "resume", False)
+                      or (getattr(st, "resume_with_run", False) and on))
+    return cst, info
+
+
 def checkpoint_job(st):
     """The worker's checkpoint keys (anuga_worker.CKPT_KEYS) for st; {} when none is on, so
     the job file is the one written before 3.10.35."""
-    every_min = float(getattr(st, "checkpoint_min", 0.0) or 0.0)
+    every_min = float(getattr(st, "checkpoint_min", 0.0) or 0.0)   # None (unresolved) = 0
     steps = int(getattr(st, "checkpoint_steps", 0) or 0)
     partial = float(getattr(st, "partial_min", 0.0) or 0.0)
     resume = bool(getattr(st, "resume", False))
@@ -768,7 +833,9 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     else:
         elev_job, elev_info = prepare_elevation(workdir, outer, dem, st, elevation_read,
                                                 elevation_native_m, elevation_label, log, cancel)
-    write_job(job, dem, outer, fine, inlet, hydrograph, st, dem, initial_depth, culverts,
+    # 3.10.38: checkpoints on for a long run (resolve_checkpoints); the hydraulics are the same
+    cst, ck_rule = resolve_checkpoints(st, outer, fine, mesh)
+    write_job(job, dem, outer, fine, inlet, hydrograph, cst, dem, initial_depth, culverts,
               breaklines, regions, mesh=mesh, elevation=elev_job)
     np.savetxt(os.path.join(workdir, "mesh_boundary.csv"), outer, delimiter=",",
                header="x,y", comments="", fmt="%.3f")
@@ -787,10 +854,10 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     else:
         from ..damsuite.keepawake import keep_awake
         with keep_awake("ANUGA", log=log):
-            proc, log_path = _launch(st, job, result, workdir, progress, cancel)
+            proc, log_path = _launch(cst, job, result, workdir, progress, cancel)
     if proc.returncode != 0 or not os.path.exists(result):
         tail = _tail_text(log_path)
-        note = partial_note(workdir) if checkpoint_job(st) else ""
+        note = partial_note(workdir) if checkpoint_job(cst) else ""
         raise ModelError("ANUGA stopped with code {}:\n{}{}".format(
             proc.returncode, tail, "\n" + note if note else ""))
     fpath = os.path.join(workdir, ELEVATION_FILE)
@@ -805,6 +872,8 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     with np.load(result) as r:
         stats = json.loads(str(r["stats"]))
         depth, vel, arr, wse = r["depth"], r["velocity"], r["arrival_hr"], r["wse"]
+    if stats.get("checkpoint"):          # 3.10.38: why checkpoints were on
+        stats["checkpoint"]["rule"] = ck_rule
     stats.update({
         "mesher": minfo["used"], "mesh": minfo,
         "elevation_source": dict(elev_info, worker=stats.get("elevation")),

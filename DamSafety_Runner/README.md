@@ -40,18 +40,30 @@ optional roughness, structure and road layers, and a dam point layer.
 what the flood reaches; *Hand the results to the hazard classification* still calls the ND
 Dam Hazard plugin for you (see below). The official classification is ND DWR's.
 
-## ANUGA checkpoints and partial results (3.10.35, opt-in)
+## ANUGA checkpoints and partial results (3.10.38: on for long runs)
 
 A long ANUGA run used to keep its maxima only in memory and write `anuga_result.npz` at
-the end, so a run that stopped lost everything. Three switches, all **off by default**
-(off = the job file and the results are exactly as before):
+the end, so a run that stopped lost everything. Checkpoints and partial results never change
+the hydraulics (bit-identical depth, velocity, arrival and WSE with and without them on a
+real-ANUGA test domain).
+
+**The default rule (`anuga_model.resolve_checkpoints`).** A run is *long* when it simulates
+**at least 12 h**, or its mesh is expected to have **at least 50,000 triangles** (gmsh: the
+mesh's own count; ANUGA's mesher: 1.5 × each region's area over its largest triangle area,
+close to what ANUGA 4.0.1 makes). A long run checkpoints every **30 wall-clock minutes**
+(a run that finishes sooner writes none), keeps the newest **2**, and writes
+`anuga_partial.npz` every **10 minutes** and after each checkpoint. A short run is exactly as
+before 3.10.35 (same job file, no extra files). `NDBREACH_ANUGA_CHECKPOINT_MIN=0` (or `off`)
+switches it off for every run; a number > 0 turns it on for every run at that cadence.
+The thresholds are `AUTO_CHECKPOINT_HOURS`, `AUTO_CHECKPOINT_TRIANGLES`,
+`AUTO_CHECKPOINT_MIN` and `AUTO_PARTIAL_MIN` in `core/anuga_model.py`.
 
 | Setting (`RunSettings`) | Environment variable | Default | What it does |
 |---|---|---|---|
-| `anuga_checkpoint_min` | `NDBREACH_ANUGA_CHECKPOINT_MIN` | 0 (off) | ANUGA checkpoint (`domain.set_checkpointing(checkpoint_time=...)`) every that many **wall-clock** minutes |
+| `anuga_checkpoint_min` | `NDBREACH_ANUGA_CHECKPOINT_MIN` | automatic (30 for a long run, none for a short one) | ANUGA checkpoint (`domain.set_checkpointing(checkpoint_time=...)`) every that many **wall-clock** minutes; 0 = off |
 | `anuga_checkpoint_steps` | `NDBREACH_ANUGA_CHECKPOINT_STEPS` | 0 (off) | or every that many yield steps (300 s of model time each), when the minutes are 0 |
 | `anuga_checkpoint_keep` | `NDBREACH_ANUGA_CHECKPOINT_KEEP` | 2 | newest checkpoints kept; older ones are deleted |
-| `anuga_partial_min` | `NDBREACH_ANUGA_PARTIAL_MIN` | 0 (off) | write `anuga_partial.npz` every that many wall-clock minutes (it is also written after every checkpoint) |
+| `anuga_partial_min` | `NDBREACH_ANUGA_PARTIAL_MIN` | 10 when checkpoints are on, else none | write `anuga_partial.npz` every that many wall-clock minutes (it is also written after every checkpoint); 0 = only after checkpoints |
 | `anuga_resume` | `NDBREACH_ANUGA_RESUME` (`1`) | off | continue the same ANUGA job from its newest complete checkpoint |
 
 Each variable can also be given without `NDBREACH_` (`ANUGA_CHECKPOINT_MIN`, ...), as with
@@ -76,8 +88,11 @@ Each variable can also be given without `NDBREACH_` (`ANUGA_CHECKPOINT_MIN`, ...
   the test domain with ANUGA 4.0.1).
 - **Report:** `run_report.json["anuga_checkpoint"]` (and each `anuga_runs[].stats.checkpoint`):
   cadence, checkpoints saved, partial flushes, `resumed_from_t_s` or why it did not resume;
-  one line in `run_report.md`. When the domain cannot be pickled the run goes on without
-  checkpoints and the reason is recorded there.
+  one line in `run_report.md`, with the rule that turned them on (`rule`: mode auto / set,
+  simulated hours, expected triangles). When the domain cannot be pickled, or the disk has
+  no room for `keep + 1` checkpoints plus 256 MB (checked before the run, from a trial pickle,
+  and at every yield step), the run goes on without (further) checkpoints and the reason is
+  recorded there (`checkpoint_error`, `checkpoint_mb` = the size of one checkpoint).
 - Stop / resume by hand: stop the worker with SIGTERM (`kill <pid>`), then run the same dam
   again with `NDBREACH_ANUGA_RESUME=1` and the same settings. The preparation (LISFLOOD-FP
   pass, mesh input, fine bed) is redone; only the ANUGA time stepping continues.
