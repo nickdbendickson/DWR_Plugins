@@ -362,18 +362,44 @@ def make_outer_boundary(anuga, domain, kind, dem_min):
                                                           str(e)[:80]))
 
 
-def volume_balance(initial, injected, in_domain, boundary_in=None):
+# 3.10.55 (review): ANUGA exposes the boundary flux only as ONE net number. Its DE flux kernel
+# adds every boundary edge's flux into domain.boundary_flux_sum (one value per sub-step, all
+# boundary tags together) and boundary_flux_integral_operator integrates that; there is no
+# per-edge or per-tag flux, so gross edge inflow and outflow cannot be reported separately
+# without re-computing the edge fluxes outside the solver. What the worker reports instead:
+# the net boundary integral (+ = in), ANUGA's own conservation residual
+# V_end - V_start - boundary integral - operators (inlet, culverts), and, with outflow-only
+# edges, how many edges had inward-moving water that the boundary mirrored (where a
+# transmissive edge would have let water in).
+GROSS_EDGE_FLUX_NOTE = ("not available: ANUGA sums the flux of all boundary edges into one net "
+                        "value per sub-step (domain.boundary_flux_sum)")
+
+
+def volume_balance(initial, injected, in_domain, boundary_in=None, operators=None,
+                   solver_volume=None):
     """3.10.55: the end-of-run water balance (m3). 'ratio' = in domain / (initial + injected):
-    above 1 the domain made water (a boundary that fed water in, or instability), below 1
+    above 1 the domain gained water (a boundary that fed water in, or instability), below 1
     water left through the edge. With ANUGA's boundary flux integral (DE algorithms; + = net
-    inflow) the 'residual' = in domain - initial - injected - boundary_in is what the solver
-    itself did not account for."""
+    inflow): 'boundary_net_inflow_m3', 'edge_net_outflow_m3' (its loss side) and 'residual_m3'
+    = in domain - initial - injected - boundary_in. With the operators' fractional-step
+    integral (the inlet; culverts move water inside) and ANUGA's own end volume:
+    'solver_residual_m3' = solver_volume - initial - boundary_in - operators, ANUGA's
+    conservation error (water_volume_statistics), and its fraction of the supply."""
     supplied = float(initial or 0.0) + float(injected or 0.0)
     out = {"supplied_m3": round(supplied, 1), "in_domain_m3": round(float(in_domain), 1),
-           "ratio": round(float(in_domain) / supplied, 4) if supplied > 0 else None}
+           "ratio": round(float(in_domain) / supplied, 4) if supplied > 0 else None,
+           "gross_edge_flows": GROSS_EDGE_FLUX_NOTE}
     if boundary_in is not None:
-        out["boundary_net_inflow_m3"] = round(float(boundary_in), 1)
-        out["residual_m3"] = round(float(in_domain) - supplied - float(boundary_in), 1)
+        b = float(boundary_in)
+        out["boundary_net_inflow_m3"] = round(b, 1)
+        out["edge_net_outflow_m3"] = round(-b, 1) if b < 0 else 0.0
+        out["residual_m3"] = round(float(in_domain) - supplied - b, 1)
+        if operators is not None:
+            out["operators_m3"] = round(float(operators), 1)
+            v = float(in_domain if solver_volume is None else solver_volume)
+            res = v - float(initial or 0.0) - b - float(operators)
+            out["solver_residual_m3"] = round(res, 1)
+            out["solver_residual_frac"] = round(res / supplied, 5) if supplied > 0 else None
     return out
 
 
@@ -771,6 +797,9 @@ def main(job_path, out_path):
         # (job key 'edge_bc'; 'boundary' is the outer polygon)
         Bo, bkind = make_outer_boundary(anuga, domain, str(job["edge_bc"]) if "edge_bc" in job
                                         else "outflow", np.nanmin(dem))
+        # One boundary for the whole outer polygon: the breach enters through an Inlet_operator
+        # inside the mesh, so there is no inflow boundary to protect. If a real boundary inflow is
+        # ever added (a tributary hydrograph, a tailwater stage), edge_bc must become per tag.
         domain.set_boundary({"outflow": Bo})
 
         qfun = Hydrograph(hyd_t, hyd_q)      # = np.interp(t, hyd_t, hyd_q, right=0.0)
@@ -892,9 +921,17 @@ def main(job_path, out_path):
         except (ValueError, OSError, AttributeError):   # not the main thread / no SIGTERM
             old_term = None
     last_flush = time.time()
+    # 3.10.55: outflow-only edges that mirrored inward-moving water (sampled at each yield step)
+    mirror = {"boundaries": list({id(b): b for b in (getattr(domain, "boundary_map", None)
+                                                     or {}).values()
+                                  if hasattr(b, "inward_edges")}.values()), "max": 0, "steps": 0}
     try:
         for t in domain.evolve(yieldstep=ystep, finaltime=sim_time):
             print("PROGRESS {:.2f} t={:.0f}s".format(100.0 * t / sim_time, t), flush=True)
+            if mirror["boundaries"]:
+                n_in = int(sum(int(b.inward_edges) for b in mirror["boundaries"]))
+                mirror["max"] = max(mirror["max"], n_in)
+                mirror["steps"] += int(n_in > 0)
             if ck is None:
                 continue
             saved = (ck["checkpoint"] and not ckinfo.get("checkpoint_error")
@@ -955,11 +992,18 @@ def main(job_path, out_path):
         b_in = float(domain.get_boundary_flux_integral())
     except Exception:           # noqa: BLE001
         b_in = None
-    balance = volume_balance(info["initial_volume_m3"], injected, vol_left, b_in)
     try:                        # what the inlet (and any rate operator) actually added
-        balance["operators_m3"] = round(float(domain.get_fractional_step_volume_integral()), 1)
+        fs = float(domain.get_fractional_step_volume_integral())
     except Exception:           # noqa: BLE001
-        pass
+        fs = None
+    try:
+        v_solver = float(domain.get_water_volume())
+    except Exception:           # noqa: BLE001
+        v_solver = None
+    balance = volume_balance(info["initial_volume_m3"], injected, vol_left, b_in, fs, v_solver)
+    if mirror["boundaries"]:
+        balance["inward_edges_mirrored"] = {"max_edges": mirror["max"],
+                                            "yield_steps": mirror["steps"]}
     stats = {"triangles": ntri, "runtime_min": round((time.time() - t0) / 60.0, 2),
              "max_edge_depth_m": edge_depth, "volume_in_domain_m3": vol_left,
              "initial_volume_m3": info["initial_volume_m3"],

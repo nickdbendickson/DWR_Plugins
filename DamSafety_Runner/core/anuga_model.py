@@ -982,13 +982,23 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
 
 
 VOLUME_GAIN_LIMIT = 1.02       # 3.10.55: more water in the domain than this x the supply
+VOLUME_CHECK_LIMIT = 1.005     # a softer "check" line above this (a creeping gain)
+SOLVER_RESIDUAL_LIMIT = 0.005  # |ANUGA conservation residual| / supply above this: check
+POSITIVE_EDGE_INFLOW = 0.001   # net edge inflow / supply above this with outflow-only edges
 
 
 def volume_note(stats, limit=VOLUME_GAIN_LIMIT):
-    """3.10.55: a warning when the domain holds more water than went in (initial water plus the
-    breach hydrograph): a mass source, not a flood (the NDDOT culvert run 2026-10-21 held 4.15 x
-    with the old transmissive edges). Also fills stats['volume_balance'] for results written
-    before 3.10.55. None when the balance is fine or unknown."""
+    """3.10.55: a note when the water balance looks wrong. Fills stats['volume_balance'] for
+    results written before 3.10.55. None when the balance is fine or unknown.
+    - ratio (in domain / initial water plus breach hydrograph) > `limit`: a gain. The cause is
+      named only as far as the numbers show it: ANUGA's net boundary flux integral says
+      whether the extra water came in through the edge; without it the edge is the likely
+      cause (old transmissive edges), but an instability or the inlet's integration could do it.
+    - ratio > VOLUME_CHECK_LIMIT: a softer check line.
+    - ANUGA's own conservation residual above SOLVER_RESIDUAL_LIMIT of the supply.
+    - a positive net edge inflow with outflow-only edges (it should be <= 0).
+    The ratio is net: gains at one edge can hide behind losses at another (ANUGA reports no
+    gross edge flows); the residual and the edge-inflow line cover what it can."""
     vb = stats.get("volume_balance")
     if not vb:
         sup = float(stats.get("initial_volume_m3") or 0.0) + float(stats.get("injected_m3") or 0.0)
@@ -999,17 +1009,41 @@ def volume_note(stats, limit=VOLUME_GAIN_LIMIT):
               "ratio": round(float(vin) / sup, 4)}
         stats["volume_balance"] = vb
     r = vb.get("ratio")
-    if r is None or r <= limit:
+    if r is None:
         return None
-    extra = vb["in_domain_m3"] - vb["supplied_m3"]
+    sup = float(vb.get("supplied_m3") or 0.0)
+    kind = stats.get("boundary", "transmissive")
     bi = vb.get("boundary_net_inflow_m3")
-    return ("ANUGA volume check FAILED: the domain ends with {:.2f} x the water that went in "
-            "({:,.0f} m3 = {:,.0f} acre-ft more than the {:,.0f} m3 of initial water and breach "
-            "inflow){}. Water was made at the edge ({} boundary), not by the breach; the depths "
-            "near the mesh edge are not usable.".format(
-                r, extra, extra / 1233.48184, vb["supplied_m3"],
-                "; ANUGA's boundary flux integral says {:,.0f} m3 came in through the edge".format(bi)
-                if bi is not None else "", stats.get("boundary", "transmissive")))
+    out = []
+    if r > limit:
+        extra = vb["in_domain_m3"] - vb["supplied_m3"]
+        if bi is not None and bi > 0.5 * extra:
+            why = ("ANUGA's boundary flux integral shows {:,.0f} m3 net inflow through the mesh "
+                   "edge ({} boundary), so the extra water came in there".format(bi, kind))
+        elif bi is not None:
+            why = ("ANUGA's boundary flux integral shows only {:,.0f} m3 net through the edge, so "
+                   "the gain is probably not from the edge: check for an instability or the "
+                   "inflow".format(bi))
+        else:
+            why = ("it most likely came in through the mesh edge ({} boundary), though an "
+                   "instability could also cause it".format(kind))
+        out.append("ANUGA volume check: the domain ends with {:.2f} x the water that went in "
+                   "({:,.0f} m3 = {:,.0f} acre-ft more than the {:,.0f} m3 of initial water and "
+                   "breach inflow); {}. Treat the depths near the mesh edge with caution until "
+                   "this is resolved.".format(r, extra, extra / 1233.48184, vb["supplied_m3"],
+                                              why))
+    elif r > VOLUME_CHECK_LIMIT:
+        out.append("ANUGA volume check: the domain ends with {:.3f} x the water that went in, a "
+                   "small gain (above {:.3f}); worth a look.".format(r, VOLUME_CHECK_LIMIT))
+    fr = vb.get("solver_residual_frac")
+    if fr is not None and abs(fr) > SOLVER_RESIDUAL_LIMIT:
+        out.append("ANUGA's own water balance is off by {:,.0f} m3 ({:+.1%} of the supply: end "
+                   "volume - start - edge flux - inflow operators), which points at an "
+                   "instability rather than a boundary.".format(vb["solver_residual_m3"], fr))
+    if kind == "outflow" and bi is not None and sup > 0 and bi > POSITIVE_EDGE_INFLOW * sup:
+        out.append("ANUGA reports a net inflow of {:,.0f} m3 through outflow-only edges, which "
+                   "should not happen (<= 0 by construction); check the run.".format(bi))
+    return " ".join(out) or None
 
 
 def check_anuga(python, workdir):

@@ -119,11 +119,50 @@ def anuga_volume_balance_flags_the_culvert_run():
     assert abs(vb2["residual_m3"] - (8248992.54 - 1989255.65 - 6259000.0)) < 0.2, vb2
     st = {"volume_balance": vb, "boundary": "transmissive"}
     note = am.volume_note(st)
-    assert note and note.startswith("ANUGA volume check FAILED: the domain ends with 4.15 x"), note
+    assert note and note.startswith("ANUGA volume check: the domain ends with 4.15 x"), note
     assert "5,075 acre-ft more" in note and "transmissive boundary" in note, note
+    assert "most likely" in note and "FAILED" not in note, note        # no unproven cause
+    note2 = am.volume_note({"volume_balance": vb2, "boundary": "transmissive"})
+    assert "6,259,000 m3 net inflow through the mesh edge" in note2, note2
+    assert "came in there" in note2, note2
+    assert vb["gross_edge_flows"].startswith("not available"), vb
     # results written before 3.10.55 (no volume_balance): computed from the plain stats
     old = {"initial_volume_m3": 0.0, "injected_m3": 1989255.65, "volume_in_domain_m3": 1522089.6}
     assert am.volume_note(old) is None and old["volume_balance"]["ratio"] == 0.7652, old
     assert am.volume_note({"injected_m3": 0.0, "volume_in_domain_m3": 5.0}) is None
     # the refined 72 h run closed at 1.000: no note
     assert am.volume_note({"volume_balance": aw.volume_balance(0, 100.0, 100.0)}) is None
+
+
+@test
+def anuga_volume_balance_solver_residual_and_edge_inflow_checks():
+    """Review (Docs & QA): ANUGA gives no gross edge flows, so the worker reports its own
+    conservation residual (V_end - V0 - edge integral - inlet) and flags a positive net edge
+    inflow under outflow-only edges, a creeping gain, and a gain the edge does not explain."""
+    sup = 1989255.65
+    # a sound run: 3 % left through the edge, the inlet added the hydrograph, residual ~0
+    vb = aw.volume_balance(0.0, sup, sup * 0.97, boundary_in=-sup * 0.03, operators=sup,
+                           solver_volume=sup * 0.97)
+    assert vb["edge_net_outflow_m3"] == round(sup * 0.03, 1) and abs(vb["solver_residual_m3"]) < 1
+    assert vb["solver_residual_frac"] == 0.0, vb
+    assert am.volume_note({"volume_balance": vb, "boundary": "outflow"}) is None
+    # net ratio fine (0.97) but ANUGA lost track of 2 % of the water: flagged
+    bad = aw.volume_balance(0.0, sup, sup * 0.97, boundary_in=-sup * 0.05, operators=sup,
+                            solver_volume=sup * 0.97)
+    assert bad["solver_residual_frac"] == 0.02, bad
+    n = am.volume_note({"volume_balance": bad, "boundary": "outflow"})
+    assert n and "own water balance is off" in n and "+2.0%" in n, n
+    # outflow-only edges with a net inflow: must not happen
+    pos = aw.volume_balance(0.0, sup, sup, boundary_in=sup * 0.01, operators=sup * 0.99,
+                            solver_volume=sup)
+    n = am.volume_note({"volume_balance": pos, "boundary": "outflow"})
+    assert n and "outflow-only edges" in n and "should not happen" in n, n
+    # creeping gain between 1.005 and 1.02: a softer line
+    n = am.volume_note({"volume_balance": aw.volume_balance(0.0, 100.0, 101.0)})
+    assert n and "small gain" in n, n
+    # gain the edge integral does not explain: not blamed on the edge
+    g = aw.volume_balance(0.0, sup, sup * 1.5, boundary_in=1000.0)
+    n = am.volume_note({"volume_balance": g, "boundary": "outflow"})
+    assert "probably not from the edge" in n and "instability" in n, n
+    # without the operator integral (older ANUGA / non-DE): no solver residual, no crash
+    assert "solver_residual_m3" not in aw.volume_balance(0.0, sup, sup, boundary_in=-1.0)
