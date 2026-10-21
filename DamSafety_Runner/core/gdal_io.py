@@ -8,6 +8,7 @@ import numpy as np
 from .grid import Grid, NODATA
 from .units import FT, US_FT
 from ..damsuite import gdalsafe as GS
+from .warp_opts import no_overviews
 
 Z_AUTO, Z_FEET, Z_US_FEET, Z_METERS = "auto", "feet", "us_feet", "meters"
 Z_CHOICES = (Z_AUTO, Z_FEET, Z_US_FEET, Z_METERS)
@@ -157,10 +158,11 @@ class GdalTerrain:
         nx = int(round((xmax - xmin) / cell))
         ny = int(round((ymax - ymin) / cell))
         xmax, ymin = xmin + nx * cell, ymax - ny * cell
-        opts = gdal.WarpOptions(format="MEM", dstSRS=self.work_srs,
-                                outputBounds=(xmin, ymin, xmax, ymax), width=nx, height=ny,
-                                resampleAlg=alg, dstNodata=NODATA, outputType=gdal.GDT_Float32,
-                                srcNodata=src_nodata, multithread=True)
+        # 3.10.43: from the full-resolution data, never the source's overviews (core/warp_opts)
+        opts = gdal.WarpOptions(**no_overviews(gdal, dict(
+            format="MEM", dstSRS=self.work_srs, outputBounds=(xmin, ymin, xmax, ymax),
+            width=nx, height=ny, resampleAlg=alg, dstNodata=NODATA,
+            outputType=gdal.GDT_Float32, srcNodata=src_nodata, multithread=True)))
         out = GS.checked(gdal.Warp("", path, options=opts), "warping {}".format(path))
         a = out.GetRasterBand(1).ReadAsArray().astype(np.float64)
         a[a == NODATA] = np.nan
@@ -453,10 +455,10 @@ def read_like(path, grid, alg="bilinear"):
     array with NaN for no data. Used to compare with another model's rasters."""
     gdal, _ = _gdal()
     xmin, ymin, xmax, ymax = grid.bounds
-    opts = gdal.WarpOptions(format="MEM", dstSRS=grid.crs_wkt or None,
-                            outputBounds=(xmin, ymin, xmax, ymax), width=grid.nx,
-                            height=grid.ny, resampleAlg=alg, dstNodata=NODATA,
-                            outputType=gdal.GDT_Float32)
+    opts = gdal.WarpOptions(**no_overviews(gdal, dict(       # 3.10.43: no source overviews
+        format="MEM", dstSRS=grid.crs_wkt or None, outputBounds=(xmin, ymin, xmax, ymax),
+        width=grid.nx, height=grid.ny, resampleAlg=alg, dstNodata=NODATA,
+        outputType=gdal.GDT_Float32)))
     out = GS.checked(gdal.Warp("", path, options=opts), "warping {}".format(path))
     a = out.GetRasterBand(1).ReadAsArray().astype(np.float64)
     a[a == NODATA] = np.nan

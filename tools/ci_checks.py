@@ -40,6 +40,8 @@ PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening",
 # stay byte-identical so the two tools apply the same rule. {filename: (plugins that carry it)}.
 IDENTICAL_ACROSS_PLUGINS = {
     "crest_rule.py": ("DamSafety_Runner", "DamSafety_Screening"),  # one top-of-dam number for both
+    # Runner 3.10.43 / Screening 0.17.35: gdal.Warp without the source overviews (-ovr NONE)
+    "core/warp_opts.py": ("DamSafety_Runner", "DamSafety_Screening"),
     # audit R-H1: the Suite status dock's Linux LISFLOOD-FP build applies the same patch
     "scripts/build_lisflood_linux.sh": ("DamSafety_Runner", "DamSafety_Setup"),
     "scripts/patch_lisflood.py": ("DamSafety_Runner", "DamSafety_Setup"),

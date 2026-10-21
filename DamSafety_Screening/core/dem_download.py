@@ -8,6 +8,7 @@ import os
 from osgeo import gdal, osr
 
 from . import nd_counties, terrain
+from .warp_opts import no_overviews
 
 
 def _safe_extract(zf, dest):
@@ -607,11 +608,11 @@ def write_local_dem(src, dest, cell_m, info, feedback=None):
     if feedback is not None:
         feedback.pushInfo(describe_product(info))
         feedback.pushInfo("writing {}".format(dest))
-    gdal.Warp(
-        dest, src, dstSRS="EPSG:5070", xRes=float(cell_m), yRes=float(cell_m),
+    gdal.Warp(dest, src, **no_overviews(gdal, dict(      # 0.17.35: no source overviews
+        dstSRS="EPSG:5070", xRes=float(cell_m), yRes=float(cell_m),
         resampleAlg="bilinear", outputType=gdal.GDT_Float32, dstNodata=-9999,
         format="GTiff",
-        creationOptions=["COMPRESS=DEFLATE", "TILED=YES", "BIGTIFF=IF_SAFER"])
+        creationOptions=["COMPRESS=DEFLATE", "TILED=YES", "BIGTIFF=IF_SAFER"])))
     ds = gdal.Open(dest, gdal.GA_Update)
     if ds is not None:
         ds.SetMetadataItem("SOURCE", info["source"])
