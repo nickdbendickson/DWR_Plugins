@@ -293,7 +293,10 @@ def _mark(raw, path, lon, lat, expected=None, size_m=CLIP_SIZE_M):
         w, h = img.width(), img.height()
         p = QPainter(img)
         try:
-            p.setRenderHint(QPainter.Antialiasing, True)
+            aa = getattr(QPainter, "Antialiasing", None)        # Qt6 scopes the enum
+            if aa is None:
+                aa = QPainter.RenderHint.Antialiasing
+            p.setRenderHint(aa, True)
             pen = QPen(QColor(255, 0, 0))
             pen.setWidth(3)
             p.setPen(pen)
