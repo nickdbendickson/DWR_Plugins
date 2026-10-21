@@ -47,7 +47,7 @@ def _compile_after_exit(t, timeout=None, write=None):
 
 @test
 def hecras_none_time_limit_formats_as_no_limit():
-    assert he.within_text(None) == "with no time limit (no limit)"
+    assert he.within_text(None) == "with no time limit"
     assert he.within_text(900) == "within 900 s"
     assert he._hm(None) == "no limit"
     assert he.limit_text(None) == "none"

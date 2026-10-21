@@ -216,7 +216,7 @@ def within_text(timeout, word="within"):
     (3.10.54: timeout=None since 3.10.48; '{:.0f}'.format(None) raised a TypeError that hid
     the real failure, run queue c4_hecras_v2e_gmsh_r)."""
     if timeout is None:
-        return "with no time limit (no limit)"
+        return "with no time limit"
     try:
         return "{} {:.0f} s".format(word, float(timeout))
     except (TypeError, ValueError):
