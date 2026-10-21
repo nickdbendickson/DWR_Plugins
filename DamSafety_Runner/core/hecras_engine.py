@@ -211,16 +211,16 @@ def limit_text(timeout):
     return "none" if timeout is None else _hm(timeout)
 
 
-def within_text(timeout):
+def within_text(timeout, word="within"):
     """'within N s' / 'with no time limit' for messages about a step that may have no limit
     (3.10.54: timeout=None since 3.10.48; '{:.0f}'.format(None) raised a TypeError that hid
     the real failure, run queue c4_hecras_v2e_gmsh_r)."""
     if timeout is None:
         return "with no time limit (no limit)"
     try:
-        return "within {:.0f} s".format(float(timeout))
+        return "{} {:.0f} s".format(word, float(timeout))
     except (TypeError, ValueError):
-        return "within {} s".format(timeout)
+        return "{} {} s".format(word, timeout)
 
 
 def limit_record(timeout, est, how):
@@ -869,7 +869,7 @@ def _run(cmd, cwd, env, timeout, what, ok=None, log=None):
     except subprocess.TimeoutExpired as x:
         stop = getattr(x, "stop", None) or {}
         raise HecRasEngineError("{} did not finish {} (wall clock){}".format(
-            what, within_text(timeout), "; stopped with " + ", then ".join(stop["sent"])
+            what, within_text(timeout, "in"), "; stopped with " + ", then ".join(stop["sent"])
             if stop.get("sent") else ""))
     except OSError as e:
         raise HecRasEngineError("{} could not start: {}".format(what, e))
@@ -930,7 +930,7 @@ def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None,
                                           estimate)
         except Exception as e:                       # never lose the timeout itself
             msg = "Linux RasUnsteady did not finish {} ({}: {})".format(
-                within_text(timeout), type(e).__name__, e)
+                within_text(timeout, "in"), type(e).__name__, e)
         info["message"] = msg
         head = ("[ndbreach] TIMEOUT {}: {} Wall clock {:.0f} s, monotonic {:.0f} s since "
                 "the start ({}). Stopping it: SIGTERM to the process group, SIGKILL after "
