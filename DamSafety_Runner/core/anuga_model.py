@@ -17,6 +17,7 @@ import numpy as np
 
 from .lisflood import Envelopes, ModelError, Cancelled
 from . import terrain, wallclock
+from .units import ARRIVAL_DEPTH_FT, FT
 from . import conditioning as cond
 from . import structures as structmod
 
@@ -40,7 +41,7 @@ GMSH_MESHERS = ("gmsh", "gmsh_or_default")
 # LISFLOOD-FP's OpenMP does by itself) left ANUGA single-threaded. resolve_threads turns 0
 # into a real count: NDBREACH_ANUGA_THREADS when set (> 0), else min(CPUs - 2, AUTO_THREADS_MAX)
 # (at least 1; the box is shared, and 4 threads already give ~2x). An explicit count > 0 is
-# used as given (3.10.49: at most the CPUs this process may use; inf / nan / decimals / text
+# used as given (3.10.56: at most the CPUs this process may use; inf / nan / decimals / text
 # are ignored with a note). The thread count never changes the results (bit-identical, see
 # tests/test_anuga_threads.py) and is not part of the checkpoint fingerprint.
 THREADS_ENV = "NDBREACH_ANUGA_THREADS"
@@ -49,7 +50,9 @@ AUTO_THREADS_SPARE = 2
 
 
 def cpu_count():
-    """CPUs this process may use (the affinity mask where the OS has one), at least 1."""
+    """CPUs this process may use (the affinity mask where the OS has one), at least 1. A
+    container's cgroup CPU quota is not read (a full affinity mask with a 2-CPU quota still
+    counts all CPUs); harmless where the box has no quota, set the threads explicitly there."""
     try:
         n = len(os.sched_getaffinity(0))
     except (AttributeError, OSError):
@@ -58,7 +61,7 @@ def cpu_count():
 
 
 def _whole_count(v):
-    """(n, problem): v as a whole number, or (None, why not). 3.10.49: inf / nan / text /
+    """(n, problem): v as a whole number, or (None, why not). 3.10.56: inf / nan / text /
     decimals such as 2.7 are invalid (2.7 used to become 2, inf raised OverflowError)."""
     if v is None or isinstance(v, bool):
         return None, "not a number"
@@ -79,7 +82,7 @@ def resolve_threads(threads, env=None, cpus=None):
     """(n, rule): the ANUGA OpenMP thread count for a requested `threads` and the reason.
     threads > 0 -> threads ("set"). 0 / None -> NDBREACH_ANUGA_THREADS from `env` (default
     os.environ) when it is a whole number > 0, else max(1, min(cpus - 2, 4)) ("auto").
-    3.10.49: an explicit or NDBREACH_ANUGA_THREADS count above the CPUs this process may use
+    3.10.56: an explicit or NDBREACH_ANUGA_THREADS count above the CPUs this process may use
     is clamped to them; a requested count or env value that is not a finite whole number
     (inf, nan, 2.7, text) is ignored with a note in the rule and the automatic count is used.
     Never raises."""
@@ -92,6 +95,9 @@ def resolve_threads(threads, env=None, cpus=None):
         t, why = _whole_count(threads)
         if t is None:
             notes += "; threads={!r} ignored ({})".format(threads, why)
+            t = 0
+        elif t < 0:
+            notes += "; threads={!r} ignored (not > 0)".format(threads)
             t = 0
     if t > 0:
         if t > n:
@@ -115,7 +121,7 @@ def resolve_threads(threads, env=None, cpus=None):
 
 class AnugaSettings:
     def __init__(self, python, threads=0, manning_n=0.06, manning_grid=None,
-                 arrival_depth_m=0.3048, sim_time_s=6 * 3600.0, yieldstep_s=300.0,
+                 arrival_depth_m=ARRIVAL_DEPTH_FT * FT, sim_time_s=6 * 3600.0, yieldstep_s=300.0,
                  near_field_radius_m=1609.344, fine_area_m2=100.0, coarse_area_m2=1000.0,
                  buffer_m=500.0, algorithm="DE0", velocity_min_depth_m=0.03):
         self.python = python
@@ -958,8 +964,15 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         stats["checkpoint"]["rule"] = ck_rule
     if not have:                         # 3.10.47; a reused result keeps its own record
         th = {"requested": int(st.threads or 0), "used": int(cst.threads), "rule": thr_rule}
-        if stats.get("omp_threads") is not None:
-            th["anuga_reported"] = stats["omp_threads"]
+        # 3.10.50: the OpenMP runtime's own count first (omp_probe); ANUGA's
+        # get_omp_num_threads only echoes the count it was given
+        rep = stats.get("omp_runtime_threads")
+        if rep is None:
+            rep = stats.get("omp_threads")
+        if rep is not None:
+            th["anuga_reported"] = rep
+        if stats.get("omp_runtime"):
+            th["omp_runtime"] = stats["omp_runtime"]
         if stats.get("omp_note"):
             th["note"] = stats["omp_note"]
         stats["threads"] = th

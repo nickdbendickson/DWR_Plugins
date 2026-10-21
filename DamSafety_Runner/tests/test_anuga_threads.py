@@ -235,7 +235,7 @@ def anuga_threads_real_anuga_1_vs_4_threads_bit_identical():
         out[1][1].get("omp_threads"), out[4][1].get("omp_threads"))
 
 
-# ---------------------------------------- 3.10.49: Docs & QA follow-ups to #132 (see #135)
+# ---------------------------------------- 3.10.56: Docs & QA follow-ups to #132 (see #135)
 @test
 def anuga_threads_env_inf_nan_and_garbage_fall_back_with_a_note():
     """(1) NDBREACH_ANUGA_THREADS=inf raised OverflowError (int(float('inf'))) and stopped the
@@ -297,3 +297,10 @@ def ndbreach_cli_threads_help_states_the_anuga_rule():
     for w in ("LISFLOOD-FP uses all cores", "NDBREACH_ANUGA_THREADS", "CPUs - 2, at most 4",
               "clamped"):
         assert w in seg, (w, seg)
+
+
+@test
+def anuga_threads_negative_explicit_count_is_noted():
+    """Review (Docs & QA): threads=-3 used to fall through to the automatic count silently."""
+    n, rule = AM.resolve_threads(-3, env={}, cpus=8)
+    assert n == 4 and "threads=-3 ignored (not > 0)" in rule and rule.startswith("automatic"), rule

@@ -12,6 +12,7 @@ from qgis.core import (QgsProcessingException, QgsProcessingOutputFile,
 
 from .algorithms_tools import _ToolBase
 from .core import benchmark, gdal_io, hecras, hecras_model, hecras_package, workflow
+from .core.units import ARRIVAL_DEPTH_FT
 
 STEPS = [(hecras.ras_interval_label(m), m) for m in hecras.RAS_INTERVALS_MIN]
 STEP_DEFAULT = [m for _, m in STEPS].index(5)
@@ -200,8 +201,10 @@ class HecRasImportAlgorithm(_ToolBase):
         self._text("AREA", "2D flow area name (empty = the largest)")
         self.addParameter(QgsProcessingParameterEnum("UNITS", "HEC-RAS model units", US_SI,
                                                      defaultValue=0))
-        self._num("ARRIVAL_FT", "Arrival depth (ft; starting value 1 is the engineer's, a "
-                  "screening value you choose)", 1.0, minimum=0.01)
+        self._num("ARRIVAL_FT", "Arrival depth (ft; starting value 0.1 is the engineer's: the "
+                  "ND hazard 'any depth', so every wet structure gets an arrival time)",
+                  ARRIVAL_DEPTH_FT,
+                  minimum=0.01)
         self._num("T0_HR", "Time of breach initiation in the HEC-RAS run (hr after its start)",
                   0.0, minimum=0.0)
         self.addParameter(QgsProcessingParameterBoolean(
