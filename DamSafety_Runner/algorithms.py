@@ -651,8 +651,9 @@ class _Base(QgsProcessingAlgorithm):
                   minimum=0.0, advanced=True)
         self._num("ANUGA_BUFFER", "ANUGA: mesh margin around the LISFLOOD-FP extent (m; 500 m "
                   "= 1,640 ft)", 500.0, minimum=0.0, advanced=True)
-        self._num("THREADS", "Threads (0 = the provider setting / all)", 0, minimum=0,
-                  integer=True, advanced=True)
+        self._num("THREADS", "Threads (0 = the provider setting, then automatic: LISFLOOD-FP "
+                  "all cores; ANUGA NDBREACH_ANUGA_THREADS, else CPUs - 2, at most 4)", 0,
+                  minimum=0, integer=True, advanced=True)
         self._text("LISFLOOD_EXE", "LISFLOOD-FP executable (empty = provider setting or an "
                    "installed LISFLOOD-FP; type 'builtin' to use the built-in screening engine "
                    "- a numpy approximation, NOT LISFLOOD-FP)", advanced=True)

@@ -676,6 +676,17 @@ def anuga_checkpoint_line(ck):
     return "; ".join(parts)
 
 
+def anuga_threads_line(th):
+    """One line for run_report.md from run_report["anuga_threads"] (3.10.47)."""
+    txt = "{} OpenMP thread(s) ({})".format(th.get("used"), th.get("rule", ""))
+    rep = th.get("anuga_reported")
+    if rep is not None and rep != th.get("used"):
+        txt += "; ANUGA reported {}".format(rep)
+    if th.get("note"):
+        txt += "; " + th["note"]
+    return txt
+
+
 def max_extent_warning(max_extent_mi, over):
     """The warning when the domain hits the largest-domain cap with the flood still leaving.
     The default cap is 20 mi (60 mi before 2026-10); say so, so a large dam's truncated run is
@@ -1490,6 +1501,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         report["anuga_elevation_source"] = an_env.stats.get("elevation_source")
         if an_env.stats.get("checkpoint"):          # only when checkpoints were on
             report["anuga_checkpoint"] = an_env.stats["checkpoint"]
+        if an_env.stats.get("threads"):             # 3.10.47: ANUGA's OpenMP threads
+            report["anuga_threads"] = an_env.stats["threads"]
         anuga_mesh = _anuga_mesh_report(a_runs)
         report["anuga_mesh"] = anuga_mesh
         if anuga_mesh.get("rejected_line"):
@@ -1690,6 +1703,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     ack = report.get("anuga_checkpoint") or {}
     if ack:
         summary["anuga_checkpoint"] = anuga_checkpoint_line(ack)
+    ath = report.get("anuga_threads") or {}
+    if ath:
+        summary["anuga_threads"] = anuga_threads_line(ath)
     if "incremental" in report:
         summary["incremental_acres"] = report["incremental"]["acres_at_or_above"]
     if report.get("refine_near_dam", {}).get("applied"):
@@ -2461,6 +2477,8 @@ def render_report(r):
         lines.append("| ANUGA bed elevation | {} |".format(s["anuga_elevation"]))
     if s.get("anuga_checkpoint"):
         lines.append("| ANUGA checkpoints | {} |".format(s["anuga_checkpoint"]))
+    if s.get("anuga_threads"):
+        lines.append("| ANUGA threads | {} |".format(s["anuga_threads"]))
     lines.append("")
     if s.get("anuga_mesh_rejected"):
         lines += ["## ANUGA mesh", "", "**" + s["anuga_mesh_rejected"] + "**", ""]

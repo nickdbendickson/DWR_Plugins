@@ -93,6 +93,29 @@ Each variable can also be given without `NDBREACH_` (`ANUGA_CHECKPOINT_MIN`, ...
   no room for `keep + 1` checkpoints plus 256 MB (checked before the run, from a trial pickle,
   and at every yield step), the run goes on without (further) checkpoints and the reason is
   recorded there (`checkpoint_error`, `checkpoint_mb` = the size of one checkpoint).
+
+### ANUGA threads (3.10.47)
+
+ANUGA 4 runs its OpenMP kernels on **one** thread unless it is told otherwise, so the threads
+setting's 0 ("0 = all cores", which LISFLOOD-FP's OpenMP does by itself) left ANUGA on one
+core. From 3.10.47 the Runner gives ANUGA a real count (`core/anuga_model.resolve_threads`):
+
+| Threads setting (provider setting `NDBREACH_THREADS`, tool parameter THREADS) | ANUGA uses |
+|---|---|
+| > 0 | that many |
+| 0 and `NDBREACH_ANUGA_THREADS` > 0 | `NDBREACH_ANUGA_THREADS` |
+| 0 | min(CPUs - 2, 4), at least 1 (the box is shared; 4 threads are about 2x) |
+
+The count goes into the job file, the worker's `OMP_NUM_THREADS` and ANUGA's
+`set_omp_num_threads` (also after a checkpoint resumes). `runner.log` has an
+`ANUGA threads: N (rule)` line, `anuga.log` has `ANUGA OpenMP threads: N`, and
+`run_report.json["anuga_threads"]` (`requested`, `used`, `rule`, `anuga_reported`) and
+`run_report.md` record it. The results do not depend on it (1 and 4 threads give
+bit-identical depth, velocity, arrival and WSE; `tests/test_anuga_threads.py`), and the
+checkpoint fingerprint ignores it, so a run can resume with another count. A build without
+OpenMP (or an ANUGA without `set_omp_num_threads`) runs on one thread and says so in the
+report; `anuga_benchmark_omp --threads 1,4` (in the ANUGA environment) shows whether a
+Windows / macOS install really scales. gmsh keeps the threads setting as given.
 - Stop / resume by hand: stop the worker with SIGTERM (`kill <pid>`), then run the same dam
   again with `NDBREACH_ANUGA_RESUME=1` and the same settings. The preparation (LISFLOOD-FP
   pass, mesh input, fine bed) is redone; only the ANUGA time stepping continues.
