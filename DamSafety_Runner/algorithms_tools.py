@@ -401,7 +401,8 @@ class ProductsAlgorithm(_ToolBase):
         self._text("DAM_NAME", "Dam name (map title)")
         self.addParameter(QgsProcessingParameterPoint("DAM_POINT", "Dam (in the raster's CRS)"))
         self._num("ARRIVAL_FT", "Flood extent and arrival zones: depth at least (ft; starting "
-                  "value 0.1 = the Runner's arrival depth, the ND hazard 'any depth')",
+                  "value 0.1 is the engineer's: the Runner's arrival depth, the ND hazard 'any "
+                  "depth')",
                   ARRIVAL_DEPTH_FT, minimum=0.01)
         self._text("CONTOURS_HR", "Arrival zones (hours)", "0.25, 0.5, 1, 2, 4, 8")
         from .algorithms import EAP_MAP_CHOICES

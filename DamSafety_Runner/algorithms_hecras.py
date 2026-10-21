@@ -201,8 +201,9 @@ class HecRasImportAlgorithm(_ToolBase):
         self._text("AREA", "2D flow area name (empty = the largest)")
         self.addParameter(QgsProcessingParameterEnum("UNITS", "HEC-RAS model units", US_SI,
                                                      defaultValue=0))
-        self._num("ARRIVAL_FT", "Arrival depth (ft; starting value 0.1 = the ND hazard 'any "
-                  "depth', so every wet structure gets an arrival time)", ARRIVAL_DEPTH_FT,
+        self._num("ARRIVAL_FT", "Arrival depth (ft; starting value 0.1 is the engineer's: the "
+                  "ND hazard 'any depth', so every wet structure gets an arrival time)",
+                  ARRIVAL_DEPTH_FT,
                   minimum=0.01)
         self._num("T0_HR", "Time of breach initiation in the HEC-RAS run (hr after its start)",
                   0.0, minimum=0.0)

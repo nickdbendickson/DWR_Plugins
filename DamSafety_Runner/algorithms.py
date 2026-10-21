@@ -601,8 +601,9 @@ class _Base(QgsProcessingAlgorithm):
                    advanced=True)
         self._num("ARRIVAL_FT", "Arrival depth (ft): arrival time is when the depth first "
                   "exceeds this; also the depth counted as flooded in the run summary (starting "
-                  "value 0.1 = the ND hazard 'any depth', so every wet structure gets an "
-                  "arrival time, REG_05.2026 5.4(c))", ARRIVAL_DEPTH_FT, minimum=0.01)
+                  "value 0.1 is the engineer's: the ND hazard 'any depth', so every wet "
+                  "structure gets an arrival time, REG_05.2026 5.4(c))", ARRIVAL_DEPTH_FT,
+                  minimum=0.01)
         self._num("EDGE_TOL_FT", "Extend the domain while the flood leaves an edge deeper "
                   "than (ft; starting value 1 is the engineer's, a screening value you choose)",
                   1.0, minimum=0.01)
