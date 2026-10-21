@@ -253,12 +253,41 @@ Sources: `/workspace/hazard_rebaseline_2.18.45_20261020/` (`SUMMARY.md`, `change
 - **LIJ:** 2.18.44 for the HEC-RAS tier2 variants (7.5) and DWR-4441 (46.4). The 2.18.45 values are double or non-dwelling counts. DWR-2645 is 9.1 verified, 15.1 if the lake lots are occupied.
 - **Inundated and cut-off counts:** the 2.18.45 values are an upper bound that includes unverified 911-only points. The 2.18.44 values are a lower bound. Report both until the H1 points are reviewed. The current tool output is 2.18.45, so its classes need this note wherever they're quoted.
 
-**DWR-8278 (Wells Dam): ND Low (screening), contingent on 9250 56th Ave SW being unoccupied. TM 11 Significant is robust.** 2.18.45 doesn't change it: Low / Significant, LIJ 0, the same as 2.18.44.
-- Docs & QA hand check: `/workspace/dwr8278_handcheck_20261020/NOTE.md`.
-- The old High at 9260 56th Ave SW was a machine shed that NSI labels RES1, counted twice. The farmhouse is dry, so that part of the drop is correct.
-- At 9250 56th Ave SW, the 911 point snapped 35 ft onto a dry single-wide-shaped outline. NAIP and Esri show only sheds, but the address is still active in Grant County 911.
-- If a mobile home is occupied there, the 2.66 ft / 4.25 ft/s cell next to it puts the dam back at **ND High** (3 persons). TM 11 would stay Significant at LIJ 3.
-- Confirm with Grant County or a site visit before adopting Low. The NID lists Low. This resolves the DWR-8278 "to review" in the 2.18.44 table.
+**DWR-8278 (Wells Dam): ND Low (screening), TM 11 Significant. Corrected 2026-10-21 after the footprint-offset study.** This replaces the earlier "contingent on 9250 56th Ave SW being unoccupied" wording. Details are in the latest section of the Docs & QA hand check, `/workspace/dwr8278_handcheck_20261020/NOTE.md`, with the map `DWR-8278_footprint_offsets_map.png`.
+- **The FEMA outlines here are shifted, and it isn't our reprojection.**
+  - The FEMA USA Structures outlines at these farmsteads come from Maxar scene `1030010045BF2F00` (2015-06-26). They sit about **14.7 m SW** of the real buildings on NAIP 2023.
+  - The other sources line up within a few metres: Microsoft ML footprints 1.2 m, NSI 1.3 m, 911 points 0.4 m, OSM 5.3 m N.
+  - Hazard's EPSG:5070 transform agrees with GDAL to within 0.2 m, and the raw FEMA download and its own LAT/LONG show the same shift. So the offset is in the source data.
+- **With the outlines corrected, 9250 56th Ave SW is High.** The 2.18.45 run was redone with the scene's outlines moved back by (+8.8, +11.7) m (`run_2.18.45_femashift/`).
+  - The single-wide at 9250 56th Ave SW then lies in the **mobile-home High zone (2.66 ft, 4.25 ft/s, 3 persons)**.
+  - That gives **ND High / TM 11 Significant (LIJ 3)**.
+  - The 9260 farmhouse stays dry, and the 9260 machine shed stays Unverified (M3).
+- **The single-wide is gone, so Low fits current conditions.** On Esri Wayback / NAIP it is:
+  - present 2017-09-09 and 2021-06-22;
+  - **gone** in NAIP 2023-07-06 and in Vantor 2025-10-13.
+- **But the run's "dry" result for 9250 is a geometry artifact.** The 911 point snapped onto a FEMA outline that is shifted into a dry cell. Don't cite it as the reason for Low. The 911 address (last updated 2021-08-23) and NSI 104080075 still list the home.
+- **What doesn't change:**
+  - 2.18.45 (H1) gives the same as 2.18.44: Low / Significant, LIJ 0.
+  - The old High's double-counted 9260 machine shed (NSI RES1) is still correctly dropped.
+  - The NID lists Low.
+- **Open:** confirm with Grant County 911 or the owner whether the 9250 pad is vacant or will be reoccupied. If it's reoccupied, the dam is ND High.
+
+**Footprint offsets near DWR-8278**, measured against NAIP 2023 roof centroids. Table: [results/dwr8278_footprint_offsets_20261021.csv](results/dwr8278_footprint_offsets_20261021.csv); per-building values are in `offsets/offsets_validated.csv`.
+
+| Source | n | Mean shift | Mean dx / dy (m) | Median distance (m) | RMS after removing the mean (m) |
+|---|---|---|---|---|---|
+| FEMA USA Structures (scene 1030010045BF2F00) | 11 | **14.7 m SW** | -8.8 / -11.7 | 15.0 | 4.8 |
+| OSM buildings | 16 | 5.3 m N | 0.0 / +5.3 | 5.6 | 3.6 |
+| Microsoft Global ML footprints | 14 | 1.2 m NE | +0.9 / +0.7 | 1.8 | 2.1 |
+| NSI 2022 points | 8 | 1.3 m NE | +1.0 / +0.8 | 1.7 | 1.8 |
+| ND 911 address points | 3 | 0.4 m | +0.1 / -0.4 | 1.8 | 1.6 |
+
+FEMA outlines from the other Maxar scenes in this study area are within about 2 m.
+
+**Caveat for all Hazard results: FEMA outline offsets can flip results.** Hazard samples depth at the FEMA outline that a 911 or NSI point snaps onto. If a whole source scene is shifted 10–15 m, a structure can be read from the wrong 40 m cell, wet as dry or dry as wet, and the class can change, as at DWR-8278. Other dams haven't been checked for scene offsets. SWE has been asked for a fix with three parts:
+- a per-scene offset check of FEMA outlines against NSI (`IMAGE_NAME` groups);
+- Microsoft Global ML footprints in the offline pack as the geometry source, keeping the FEMA attributes;
+- a review flag when a snap moves a structure into a cell with a different depth or zone.
 
 **Also noted.**
 - The 2.18.45 run fetched OSM lifelines live from Overpass (`OSM_lifelines_20261020_*.geojson`; for example, 1 dry substation in anuga_structures), whereas the 2.18.44 run used the pack. No lifeline was inundated in either run, so no number changes.
@@ -275,5 +304,6 @@ Sources: `/workspace/hazard_rebaseline_2.18.45_20261020/` (`SUMMARY.md`, `change
 - **Merged 10-19:** #92 (run-report metrics and the opt-in water-body mask, Runner 3.10.27, closes #91) and #96 (HEC-RAS timeouts on the wall clock, Runner 3.10.26). Main is now Runner 3.10.32 (#94, which changes the default top of dam to the 98th percentile within 30 m, M6), so runs on current main are not directly comparable with the runs above. See CHANGELOG.md.
 - HEC-RAS vs ANUGA/TIER 0 area gap: recompute HEC-RAS depth on the 40 m DEM, compare at matching thresholds and sim times, and check Manning's n.
 - **The Hazard re-baselines on 2.18.44 and 2.18.45 (2026-10-20/21) supersede the batch hazard numbers above.** All batch hazard results before 2.18.39 are superseded. 2.18.44 is *not* superseded by 2.18.45: both are kept, because H1 counts unverified 911-only points (see the 2.18.45 section). Open: review the H1-restored points (`h1_restored_points.csv`), especially Absaraka anuga_structures (QA value TM 11 Significant) and the DWR-2645 lake lots.
-- **DWR-8278:** ND Low (screening) is contingent on 9250 56th Ave SW being unoccupied. Confirm with Grant County 911 or a site visit. TM 11 Significant is robust.
+- **DWR-8278:** ND Low (screening) / TM 11 Significant reflects current conditions: the single-wide at 9250 56th Ave SW was removed between 2021 and 2023. Note that the as-run "dry" result for 9250 is a FEMA-offset artifact; with corrected outlines the home is in the mobile-home High zone. Open: confirm with Grant County 911 or the owner whether the pad is vacant or will be reoccupied. If it's reoccupied, the dam is ND High.
+- **FEMA outline offsets can flip results.** At DWR-8278, one Maxar scene's outlines are 14.7 m SW of the real buildings. Other dams haven't been checked. SWE has been asked for a fix: a per-scene offset check against NSI, Microsoft footprints as the geometry source, and a flag when a snap changes the depth or zone. Until it lands, treat any class that rests on a snapped FEMA outline near a wet/dry edge as needing an imagery check.
 - Re-baseline numbers aren't yet adopted as the trusted baseline. That needs the user's approval. Note that they were run with the non-default culvert burn on.
