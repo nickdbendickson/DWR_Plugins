@@ -92,7 +92,9 @@ class SelfTestAlgorithm(_ToolBase):
                    "auto-detected)", advanced=True)
         self._text("ANUGA_PYTHON", "ANUGA Python interpreter (empty = provider setting or "
                    "auto-detected)", advanced=True)
-        self._num("THREADS", "Threads for the models (0 = provider setting, then all cores)", 0,
+        self._num("THREADS", "Threads for the models (0 = provider setting, then automatic: "
+                  "LISFLOOD-FP all cores; ANUGA NDBREACH_ANUGA_THREADS, else CPUs - 2, "
+                  "at most 4)", 0,
                   minimum=0, integer=True, advanced=True)
         self._bool("KEEP", "Keep the working files even when everything passes", False,
                    advanced=True)

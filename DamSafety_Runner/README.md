@@ -26,7 +26,7 @@ that already has the crest changes nothing. Nothing here has been run in a real 
 |---|---|
 | `Depth (Max).tif` | ft |
 | `Velocity (Max).tif` | ft/s |
-| `Arrival Time.tif` | hours after breach initiation, at the arrival depth (default 1 ft) |
+| `Arrival Time.tif` | hours after breach initiation, at the arrival depth (default 0.1 ft since 3.10.53, the ND hazard 'any depth', so every wet structure has an arrival time; 1 ft before - re-run older results to fill the shallow ones) |
 | `WSE (Max).tif` | ft (DEM datum) |
 | `Baseline Depth (Max).tif` etc. | flood scenario: the same flood without the breach |
 | `Incremental Depth (Max).tif`, `Incremental WSE Rise (Max).tif` | flood scenario: with minus without (ND 6.4) |
@@ -93,9 +93,61 @@ Each variable can also be given without `NDBREACH_` (`ANUGA_CHECKPOINT_MIN`, ...
   no room for `keep + 1` checkpoints plus 256 MB (checked before the run, from a trial pickle,
   and at every yield step), the run goes on without (further) checkpoints and the reason is
   recorded there (`checkpoint_error`, `checkpoint_mb` = the size of one checkpoint).
+
+### ANUGA threads (3.10.47)
+
+ANUGA 4 runs its OpenMP kernels on **one** thread unless it is told otherwise, so the threads
+setting's 0 ("0 = all cores", which LISFLOOD-FP's OpenMP does by itself) left ANUGA on one
+core. From 3.10.47 the Runner gives ANUGA a real count (`core/anuga_model.resolve_threads`):
+
+| Threads setting (provider setting `NDBREACH_THREADS`, tool parameter THREADS) | ANUGA uses |
+|---|---|
+| > 0 | that many, at most the CPUs (3.10.56: a larger count is clamped, with a note) |
+| 0 and `NDBREACH_ANUGA_THREADS` a whole number > 0 | `NDBREACH_ANUGA_THREADS`, at most the CPUs |
+| 0 | min(CPUs - 2, 4), at least 1 (the box is shared; 4 threads are about 2x) |
+
+3.10.56: a threads value or `NDBREACH_ANUGA_THREADS` that is not a finite whole number (`inf`,
+`nan`, `2.7`, text) is ignored, and the automatic count is used; the `ANUGA threads` line and
+`run_report.json["anuga_threads"]["rule"]` say what was ignored and why. ("CPUs" = the CPUs this
+process may use, its affinity mask where the OS has one.) `ndbreach_cli.py --threads` follows
+the same rules for ANUGA; only LISFLOOD-FP takes 0 as "all cores".
+
+The count goes into the job file, the worker's `OMP_NUM_THREADS` and ANUGA's
+`set_omp_num_threads` (also after a checkpoint resumes). `runner.log` has an
+`ANUGA threads: N (rule)` line, `anuga.log` has `ANUGA OpenMP threads: N`, and
+`run_report.json["anuga_threads"]` (`requested`, `used`, `rule`, `anuga_reported`) and
+`run_report.md` record it. The results do not depend on it (1 and 4 threads give
+bit-identical depth, velocity, arrival and WSE; `tests/test_anuga_threads.py`), and the
+checkpoint fingerprint ignores it, so a run can resume with another count. A build without
+OpenMP (or an ANUGA without `set_omp_num_threads`) runs on one thread and says so in the
+report; `anuga_benchmark_omp --threads 1,4` (in the ANUGA environment) shows whether a
+Windows / macOS install really scales. gmsh keeps the threads setting as given.
+From 3.10.50 `anuga_reported` is the count the OpenMP runtime itself reports
+(`core/omp_probe.py`, ctypes `omp_get_max_threads`; `run_report.json` also has
+`omp_runtime`, the library's name); `anuga.get_omp_num_threads()` only echoes the count it
+was given. When the runtime runs another count, or none can be read, the report's note says
+so. To check Windows and macOS, run the manual GitHub Actions workflow
+`anuga-omp-scaling` (Actions tab > anuga-omp-scaling > Run workflow): ANUGA from conda-forge
+at 1, 2 and 4 threads (`tools/anuga_omp_bench.py`), with times and a checksum. On Windows
+the Runner finds `envs\*anuga*\python.exe` under `%USERPROFILE%\miniforge3`,
+`%LOCALAPPDATA%\miniforge3` and the other usual conda folders (3.10.50).
 - Stop / resume by hand: stop the worker with SIGTERM (`kill <pid>`), then run the same dam
   again with `NDBREACH_ANUGA_RESUME=1` and the same settings. The preparation (LISFLOOD-FP
   pass, mesh input, fine bed) is redone; only the ANUGA time stepping continues.
+
+## HEC-RAS 2D compute: no wall-clock limit by default (3.10.48)
+With **Models = LISFLOOD-FP then HEC-RAS 2D**, the Linux RasUnsteady compute now runs until it finishes unless you set a limit.
+
+- `NDBREACH_HECRAS_TIMEOUT_S` unset, empty or `0` (also `none` / `off`): **no limit anywhere**, neither on the compute nor on the Wine preprocess steps (terrain.exe, mesh.exe, drv.exe, Ras.exe -c; they had a 1,800 s cap each). 3.10.17-3.10.47 stopped the compute at max(2 h, 3 x the estimated run time), capped at 48 h, even with the variable unset, which killed long (72 h simulated, large-mesh) runs.
+- A positive number of seconds: the compute AND each Wine preprocess step stop after that many seconds of wall-clock time (a paused VM counts), with SIGTERM to the process group, `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s), then SIGKILL, exactly as before.
+- Anything else (text, a negative number) is ignored, with a note in the log, and there is no limit.
+- Without a limit, a Wine dialog that waits for a click (HEC's Terms and Conditions prompt) stalls `Ras.exe -c` until someone deals with it. Set `NDBREACH_HECRAS_TCU_HOOK`, or a positive `NDBREACH_HECRAS_TIMEOUT_S`, for unattended batches on a new Wine prefix.
+- The limit in force is logged ("HEC-RAS preprocess: wall-clock limit per step none [...]" and "HEC-RAS compute: ... wall-clock limit none [no limit: NDBREACH_HECRAS_TIMEOUT_S unset]", with the run-time estimate), and recorded in `run_report.json["hecras_time_limit"]` (`limit_s`, `limit`, `how`, `estimate_s`, `applies_to`), `_hecras/hecras_stage.json` and the run report's "HEC-RAS wall-clock limit" row.
+- The gmsh-points timeout of "Refine HEC-RAS mesh with Gmsh points" (`core/hecras_seeds.py`, 600 s) is a separate setting and is unchanged.
+
+## HEC-RAS package: culverts and bridges from the ANUGA run, terrain CRS guard (3.10.56)
+- **Structures from another run.** *Export to HEC-RAS* has a "Culverts and bridges from another run" folder (`structures_from` in `build_model`): point it at the ANUGA run's dam folder, and each culvert and bridge inside the HEC-RAS 2D area becomes a connection across the road (road weir from the terrain; a culvert group for a culvert, with ANUGA's inverts from `anuga/anuga_job.npz`; an open gap in the weir for a bridge). The road lines are built into the 2D points so cell faces lie on them, and any weir or invert lower than the cells it joins is raised to that ground + 0.05 ft (listed in README_HECRAS.md). Each connection is written as HEC-RAS's weir / gates / culverts type (`Conn Routing Type= 1`, also with culverts: type 3 made HEC-RAS 6.6 stop with "has an error with the connection. Check that the To: is set correctly"), and the build stops with a plain list when HEC-RAS would refuse a connection (name, line outside the 2D area, a barrel with both ends in one cell or not across the line, a weir or invert below its cells). `core/hecras_structures.add_to_package(package, run, out)` does the same for an already built package. Limits: no bridge deck, low chord, piers or pressure flow; HEC-RAS's FHWA culvert is not ANUGA's Boyd culvert; structures outside the 2D area are listed, not added.
+- **Terrain CRS guard.** After the terrain GeoTIFF is written (or copied by `add_to_package`) and before the package is zipped, it is reopened and must carry an EPSG code whose code, linear unit (name and size) and CRS match `GIS/Projection.prj`, and GDAL must be able to reach the PROJ database (proj.db). Otherwise the package stops with a plain reason and nothing half-built is left. This catches a terrain rewritten with `PROJ_DATA` unset, which turned EPSG:2266 (ft) into an unnamed metre CRS and made HEC-RAS's terrain step fail with "Translating source or target SRS failed". To fix it: set `PROJ_DATA` to the folder holding `proj.db` (QGIS's `share/proj`) and build again. Code: `core/hecras_terrain_crs.py`.
 
 ## DEM resampling onto the model grid
 
@@ -624,8 +676,9 @@ does (the same module, byte for byte, as the ND dam screening plugin):
   tolerance of a higher zone or beyond the chart's axes. Inundated at any depth -> at least
   Medium (economic loss, 5.2.2; the policy leaves low vs medium to the Engineer, the tool says
   Medium and notes it). Uninhabited buildings only -> Low.
-- **Roads** (5.2.1.2), overtopped at any depth: AADT > 2,000 or interstate -> High, 500-2,000 ->
-  Medium, private or < 500 -> Low, sole access to an occupied location -> Medium.
+- **Roads** (5.2.1.2), overtopped at any depth: AADT > 2,000 or interstate -> High, US / State
+  highway (5.2.1.2(b), whatever its AADT) or 500-2,000 -> Medium, private or < 500 (local, county
+  and private roads only) -> Low, sole access to an occupied location -> Medium.
   **Railroads** (5.2.1.3): Medium; 10 or more trains a day or an active passenger line -> High.
   **Lifeline facilities** (5.2.2) inundated -> Medium (their access roads are not traced).
   **Downstream dams** (5.3 cascading): a dam whose point the flood reaches passes on its class
@@ -633,7 +686,11 @@ does (the same module, byte for byte, as the ND dam screening plugin):
 - **"Any depth"** is the wet depth, 0.1 ft by default and at least 0.01 ft (a dry cell reads 0).
 - **Private roads** are only those an explicit field marks private; ownership or access codes
   are not read as private. Interstates are recognised from "Interstate", "I-94", "I 94", "I94"
-  or TIGER route type "I". FRA passenger codes default to A, B, C (T tourist is not counted).
+  or TIGER route type "I". US / State highways (Runner 3.10.53) from "US 2", "U.S. Highway 85",
+  "ND 23", "ND-1804", "State Hwy 22", "Highway 23" / "Hwy 2" (not "County Highway 12"), TIGER
+  route types "U" / "S", ND NG9-1-1 SHIELD "USHY" / "STHY" (the Runner reads NG9-1-1 FULL_NAME as the
+  name and SHIELD as the class field), OSM / Geofabrik trunk, or primary from an OSM highway / fclass
+  field, in the class field or the name. FRA passenger codes default to A, B, C (T tourist is not counted).
 - **Data gaps**: a road without AADT or a railroad without a train count is classified by the
   assumption you choose (Medium by default) and listed as a data gap; when every governing
   finding is borderline or assumed, the log says the higher class was assigned.

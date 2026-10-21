@@ -91,6 +91,7 @@ def _fake_run(d, stop_at=None, **extra):
     res = os.path.join(d, "anuga_result.npz")
     undo = FA.install()
     FA.STOP_AT["t"] = stop_at
+    omp = os.environ.get("OMP_NUM_THREADS")    # 3.10.47: the worker sets it (its own process)
     try:
         with contextlib.redirect_stdout(io.StringIO()):    # the PROGRESS lines
             AW.main(job, res)
@@ -100,6 +101,10 @@ def _fake_run(d, stop_at=None, **extra):
     finally:
         FA.STOP_AT["t"] = None
         undo()
+        if omp is None:
+            os.environ.pop("OMP_NUM_THREADS", None)
+        else:
+            os.environ["OMP_NUM_THREADS"] = omp
 
 
 def _grids(p):

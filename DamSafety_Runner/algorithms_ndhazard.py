@@ -22,6 +22,7 @@ from .compat import SOURCE_LINE, SOURCE_POINT, SOURCE_POLYGON, set_advanced
 from .core import consequences as cons
 from .core import aadt_join
 from .core import nd_hazard as nh
+from .damsuite import structure_flags as sflags
 
 OUTPUT_NAMES = {"markdown": "Hazard Classification (ND 5.2).md",
                 "json": "Hazard Classification (ND 5.2).json",
@@ -46,11 +47,11 @@ STRUCT_SYNONYMS = {
     "S_MOBILE": ("mobile", "mobile_home", "is_mobile", "manufactured", "trailer", "prim_occ"),
 }
 ROAD_SYNONYMS = {
-    "R_ID": ("name", "road_name", "fullname", "rte_name", "route_name", "route", "id",
-             "objectid"),
+    "R_ID": ("name", "road_name", "fullname", "full_name", "rte_name", "route_name", "route",
+             "id", "objectid"),
     "R_AADT": ("aadt", "adt", "aadt_2024", "aadt_2023", "aadt_2022", "aadt_vn", "traffic",
                "vehicles_per_day"),
-    "R_CLASS": ("rttyp", "route_type", "rte_type", "road_class", "class", "fclass",
+    "R_CLASS": ("rttyp", "route_type", "rte_type", "shield", "road_class", "class", "fclass",
                 "func_class", "functional_class", "route_sign", "route", "highway",
                 "fullname", "name"),
     "R_PRIVATE": ("private", "is_private"),      # never ownership / access codes
@@ -132,6 +133,30 @@ def is_mobile(flag_value, occ_text):
 
 def is_interstate(class_text, name_text=""):
     return nh.interstate_from_text(class_text) or nh.interstate_from_text(name_text)
+
+
+def is_us_state(class_text, name_text="", class_field=""):
+    """3.10.53 (nd_hazard 1.2.0): a US / State highway from the class field or the name
+    (5.2.1.2(b)). class_field: the class field's name; an OSM highway / fclass field also counts
+    'primary'."""
+    osm = str(class_field or "").strip().lower() in ("highway", "fclass")
+    return nh.us_state_highway_from_text(class_text, osm=osm) or \
+        nh.us_state_highway_from_text(name_text)
+
+
+def _flagged_entry(folder):
+    """3.10.53: the structure_flags entry of a dam folder (its name, or its dam.json dam_id /
+    nid_id), else None. Never raises."""
+    try:
+        rec = None
+        try:
+            from .core import damjson
+            rec, _problem = damjson.load(folder)
+        except Exception:                                  # noqa  (no record: the name only)
+            rec = None
+        return sflags.lookup_folder(folder, rec)
+    except Exception:                                      # noqa  (a flag check never fails)
+        return None
 
 
 def is_private(v):
@@ -364,7 +389,8 @@ class NDHazardAlgorithm(_ToolBase):
                 "5.1 houses, 5.2 mobile homes) -> High; the judgment zone is borderline and "
                 "takes the higher class (5.3). 1D model: deeper than 2 ft -> High. Inundated "
                 "at any depth -> at least Medium (economic loss). Roads (5.2.1.2): AADT > 2,000 "
-                "or interstate -> High, 500-2,000 -> Medium, private or < 500 -> Low, sole "
+                "or interstate -> High, US / State highway (5.2.1.2(b), any AADT) or 500-2,000 -> "
+                "Medium, private or < 500 (local / county roads) -> Low, sole "
                 "access to an occupied location -> Medium. Railroads (5.2.1.3): Medium, 10 or "
                 "more trains a day or passenger -> High. Lifeline facilities (5.2.2) inundated "
                 "-> Medium (access roads are not traced). A downstream dam the flood reaches "
@@ -586,6 +612,7 @@ class NDHazardAlgorithm(_ToolBase):
                     name or "road {}".format(f.id()), s["depth_ft"],
                     aadt=qio.num(_attr(f, fld["R_AADT"])),
                     interstate=is_interstate(_txt(_attr(f, fld["R_CLASS"])), name),
+                    us_state=is_us_state(_txt(_attr(f, fld["R_CLASS"])), name, fld["R_CLASS"]),
                     private=is_private(_attr(f, fld["R_PRIVATE"])),
                     sole_access=bool(_yesno(_attr(f, fld["R_SOLE"]))), x=s["x"], y=s["y"]))
                 self._keep_parts(rec["roads"][-1], f.geometry(), to_r)
@@ -732,6 +759,7 @@ class NDHazardAlgorithm(_ToolBase):
                             stem + ":" + (name or "road {}".format(f.id())), s["depth_ft"],
                             aadt=qio.num(_attr(f, fld["R_AADT"])),
                             interstate=is_interstate(_txt(_attr(f, fld["R_CLASS"])), name),
+                            us_state=is_us_state(_txt(_attr(f, fld["R_CLASS"])), name, fld["R_CLASS"]),
                             private=is_private(_attr(f, fld["R_PRIVATE"])),
                             sole_access=bool(_yesno(_attr(f, fld["R_SOLE"]))), x=s["x"], y=s["y"]))
                         self._keep_parts(rec["roads"][-1], f.geometry(), to_r)
@@ -857,6 +885,14 @@ class NDHazardAlgorithm(_ToolBase):
         road_check = {"hazard_class_status": status, "hazard_module_class": hz,
                       "class_to_use": hz or c.hazard_class,
                       "aadt_joined": getattr(self, "_aadt_log", [])}
+        flag = _flagged_entry(folder)
+        if flag:
+            # 3.10.53: a flagged structure (damsuite/structure_flags.py, e.g. DWR-3161, the ND-23
+            # road fill over backwater) keeps its hazard of record; no road rule (5.2.1.2(b)
+            # included) or computed class replaces it - this class is for information only
+            road_check["flagged_structure"] = "{} ({})".format(sflags.note(flag),
+                                                               sflags.short_ref(flag))
+            road_check["class_to_use"] = flag.get("hazard")
         for f in c.findings:
             if f.kind == "dam" and f.x is None and f.id in dam_xy:
                 f.x, f.y = dam_xy[f.id]
@@ -871,6 +907,12 @@ class NDHazardAlgorithm(_ToolBase):
             feedback.reportError("Check: hazard class {} is {}: an overtopped road has no AADT, "
                                  "so the ND 5.2.1.2 road rule rests on an assumption.".format(
                                      c.hazard_class.upper(), status), fatalError=False)
+        if flag:
+            feedback.reportError("Check: {} is a flagged structure: {}. The hazard of record ({}) "
+                                 "stands; the class computed here ({}) is for information only "
+                                 "(docs/Flagged_structures.md).".format(
+                                     sflags.short_ref(flag), sflags.note(flag), flag.get("hazard"),
+                                     c.hazard_class.upper()), fatalError=False)
         if hz:
             msg = "Hazard plugin result ({}): {}.".format(aadt_join.HAZARD_SUMMARY, hz)
             if hz.lower() != c.hazard_class.lower():
@@ -952,6 +994,7 @@ class NDHazardAlgorithm(_ToolBase):
                                                         aadt_join.STATUS_COMPLETE),
                   "hazard_module_class": road_check.get("hazard_module_class"),
                   "class_to_use": road_check.get("class_to_use", c.hazard_class),
+                  "flagged_structure": road_check.get("flagged_structure", ""),
                   "aadt_joined": road_check.get("aadt_joined") or [],
                   "official": "The official classification is made by the ND Department of "
                               "Water Resources."})

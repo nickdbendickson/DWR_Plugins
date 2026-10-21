@@ -74,6 +74,7 @@ from . import structures as ST
 from . import sensitivity as SE
 from . import parcelhints as PH
 from . import facility_review as FR
+from . import footprints as FP
 
 DEFAULTS = {
     "output_folder": None, "dam_folder": None, "dam_name": None, "scenarios": [],
@@ -145,6 +146,9 @@ DEFAULTS.update(SE.CONSEQ_DEFAULTS)
 DEFAULTS.update(PH.DEFAULTS)
 DEFAULTS.update({
     "download_trailer_parks": True,     # OpenStreetMap mobile-home parks (residential=trailer_park)
+    # 2.18.53: building geometry - Microsoft footprints (outputs/_downloads, never the offline
+    # pack), "auto" geometry order, FEMA scene offsets moved only when switched on
+    "download_ms_footprints": True, "outline_geometry": "auto", "fema_scene_shift": False,
     "fast_sampling": False,             # vectorised ring / band cell selection (fastsample.py)
     "zone_overviews": True, "input_overviews": False,       # raster pyramids
     "report_imagery": False,            # aerial imagery under the maps of report / map book
@@ -469,8 +473,9 @@ _EVAL_KEYS = ("extent_buffer_ft", "keep_dry", "download_nsi", "download_address"
               "access", "access_ft", "incremental_ft", "eap", "eap_travel", "sampled_cells",
               "sample_area", "sensitivity", "termination", "refresh_data", "local_data",
               "mobile_shape", "mobile_max_width_ft", "mobile_min_ratio", "mobile_min_length_ft",
-              "mobile_max_length_ft", "mobile_lot_units", "download_trailer_parks",
-              "fast_sampling")
+              "mobile_max_length_ft", "mobile_lot_units", "mobile_ms_width_allowance_ft",
+              "download_trailer_parks",
+              "fast_sampling", "download_ms_footprints", "outline_geometry", "fema_scene_shift")
 _EVAL_LAYERS = ("road_layer", "aadt_layer", "rail_layer", "crossing_layer",
                 "extra_outline_layer", "dam_layer", "lifeline_layer", "centerline_layer",
                 "model_boundary_layer")
@@ -928,6 +933,9 @@ def _run_classification(run, cfg):
                 "evaluation' for a full run".format(
                     cached["time"], " (saved by an earlier QGIS session)" if from_disk else ""))
         run.sources.extend(state["sources"])
+        cfg["building_geometry_fallback"] = next(        # 2.18.53: keep the judgment item
+            (x for x in state["sources"] if str(x).startswith("Building geometry: FEMA only")),
+            "")
         run.sources.append("Evaluation re-used from the run of {}".format(cached["time"]))
         run.forced_1d = state["forced_1d"]
         run.subject_dam = state["subject_dam"]
@@ -950,6 +958,57 @@ LOCAL_CFG_KEYS = {"roads": "road_layer", "aadt": "aadt_layer", "rail": "rail_lay
                   "crossings": "crossing_layer", "outlines": "extra_outline_layer",
                   "dams": "dam_layer", "boundary": "model_boundary_layer",
                   "parcels": "parcel_layer", "centerline": "centerline_layer"}
+
+
+def building_geometry_note(cfg, outlines, suite=None):
+    """2.18.53 (review): '' when Microsoft footprints are among the outline sources (or there are
+    no outlines at all); otherwise the DATA SOURCES / judgment line that the building geometry is
+    FEMA (or other traced outlines) only, and why. `suite`: downloads_disabled() (default)."""
+    if not outlines:
+        return ""
+    for fam, lyr in outlines:
+        if fam == FP.MS_FAMILY:
+            return ""
+        try:
+            if FP.outline_kind("", "{} {}".format(lyr.name(), lyr.source()),
+                               [f.name() for f in lyr.fields()]) == FP.KIND_MS:
+                return ""
+        except Exception:                                   # noqa - a stand-in layer
+            continue
+    if suite is None:
+        try:
+            suite = bool(downloads_disabled())
+        except Exception:                                   # noqa
+            suite = False
+    if suite:
+        why = "a suite folder is set, so nothing is downloaded, and no Microsoft footprint " \
+              "layer is in the project or data folder"
+    elif not cfg.get("download_ms_footprints"):
+        why = "the Microsoft footprint download is switched off"
+    else:
+        why = "the download failed and there is no earlier copy (offline?)"
+    return ("Building geometry: FEMA only - Microsoft footprints unavailable ({}). Structures "
+            "are placed on the FEMA USA Structures outlines; where a FEMA scene is offset the "
+            "class can differ from a run with Microsoft footprints (DWR-8278: High with them, "
+            "Low without). Re-run online or add a Microsoft footprint layer before the class "
+            "is final.".format(why))
+
+
+def _has_ms_outlines(cfg, osm, loc):
+    """2.18.53: a Microsoft footprint layer is already among the outline sources (project /
+    data-folder layer) - then it is not downloaded."""
+    for lyr in (cfg.get("extra_outline_layer"), osm if not isinstance(osm, str) else None,
+                (loc or {}).get("usa")):
+        if lyr is None:
+            continue
+        try:
+            names = [f.name() for f in lyr.fields()]
+            if FP.outline_kind("", "{} {}".format(lyr.name(), lyr.source()), names) == \
+                    FP.KIND_MS:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _apply_local_data(run, cfg):
@@ -1105,8 +1164,17 @@ def _evaluate(run, cfg, scenarios, breaches):
     # ---- structure inventory -----------------------------------------------
     run.tick(20, "Building the structure inventory\u2026")
     rules = ST.mobile_rules_from_cfg(cfg)          # v2.9: manufactured-home rules
+    scene_report = {}
     structs = build_inventory(inputs["outlines"], inputs["points"], acrs, run.ctx,
-                              progress_cb=run.stage(20, 28), clip=clip, mobile_rules=rules)
+                              progress_cb=run.stage(20, 28), clip=clip, mobile_rules=rules,
+                              geometry=cfg.get("outline_geometry") or "auto",
+                              scene_shift=bool(cfg.get("fema_scene_shift")),
+                              scene_report=scene_report)
+    for info in sorted(scene_report.values(), key=lambda i: i["scene"]):
+        if info["flagged"]:
+            run.log(">>> WARNING: " + FP.describe_scene(info) + (
+                " - outlines moved by the offset" if cfg.get("fema_scene_shift") else
+                " - flagged (Inventory QA); outlines not moved"))
     if inputs.get("camps") is not None:
         camps = campground_records(inputs["camps"], acrs, run.ctx, clip,
                                    start_id=len(structs) + 1)
@@ -1987,6 +2055,7 @@ def _collect_inputs(run, clip):
             cfg["download_dams"] = cfg["download_lifelines"] = False
             cfg["download_camps"] = cfg["download_flowlines"] = False
             cfg["download_places"] = cfg["download_trailer_parks"] = False
+            cfg["download_ms_footprints"] = False
             cfg["download_crossings_structures"] = False
         if cfg["download_nsi"] and "nsi" not in loc:
             want("nsi", "NSI", fetch_nsi, ext4326, out)
@@ -2034,6 +2103,8 @@ def _collect_inputs(run, clip):
             want("xosm", "OpenStreetMap crossings", fetch_osm_crossings, ext4326, out)
         if cfg.get("download_camps") and "camps" not in loc:
             want("camps", "OpenStreetMap campgrounds", fetch_osm_camps, ext4326, out)
+        if cfg.get("download_ms_footprints") and not _has_ms_outlines(cfg, osm, loc):
+            want("ms", "Microsoft building footprints", FP.fetch_ms_footprints, ext4326, out)
         if cfg.get("download_trailer_parks", True):
             want("parks", "OpenStreetMap mobile-home parks", fetch_osm_trailer_parks, ext4326,
                  out)
@@ -2107,6 +2178,16 @@ def _collect_inputs(run, clip):
         outlines.append(("OUTLINES", extra))
         run.sources.append("Additional building outlines: project layer '{}'".format(
             extra.name()))
+    if "ms" in got:
+        lyr, n, path = result("ms")
+        if lyr is not None and n:
+            outlines.append((FP.MS_FAMILY, lyr))
+            run.sources.append("Microsoft Global ML Building Footprints (ODbL): {} outlines "
+                               "({}) - building geometry; FEMA attributes matched onto them"
+                               .format(n, os.path.basename(path)))
+        elif lyr is None:
+            run.log(">>> NOTE: Microsoft building footprints not available - FEMA USA "
+                    "Structures outlines give the building geometry")
 
     # ---- roads, rail, crossings --------------------------------------------------
     if rail is None and "rail" in got:
@@ -2189,6 +2270,12 @@ def _collect_inputs(run, clip):
     for line in tile_cache_report_lines():          # v2.8: tiles read from the cache
         run.log(line)
     run.sources.extend(tile_cache_source_lines())
+    # 2.18.53 (review): FEMA-only geometry is said in DATA SOURCES and as a judgment item
+    geo_note = building_geometry_note(cfg, outlines)
+    cfg["building_geometry_fallback"] = geo_note
+    if geo_note:
+        run.sources.append(geo_note)
+        run.log(">>> NOTE: " + geo_note)
     tick(19, "Inputs ready")
     return {"points": points, "outlines": outlines, "roads": road, "aadt": aadt,
             "aadt_layers": aadt_layers,
@@ -2547,7 +2634,7 @@ def _result_items(run, gov, governing):
     """Rows of the result panel: the two classes, every ND criterion (with the
     geometries behind it, for zooming) and every judgment item."""
     from .structures import OUT_PROBABLE, OUT_JUDGMENT, OUT_ECONOMIC
-    from .constants import ND_HIGH as _H, ND_MEDIUM as _M
+    from .constants import ND_HIGH as _H, ND_MEDIUM as _M, ND_LOW as _L
     nd, tm11 = governing["nd"], governing["tm11"]
     s_view, r_view, l_view = governing["views"]
     hab = [s for s in s_view if s.get("habitable") == "Yes"]
@@ -2565,6 +2652,10 @@ def _result_items(run, gov, governing):
         "Overtopped roads - Interstate": [r["geom"] for r in r_view if r["nd_class"] == _H],
         "Overtopped roads - US": [r["geom"] for r in r_view if r["nd_class"] == _M],
         "Overtopped roads without AADT": [r["geom"] for r in r_view if r.get("nd_judgment")],
+        "US / State highways overtopped": [r["geom"] for r in r_view if r.get("road_class") in (
+            "US Highway", "State Highway")],
+        "Overtopped roads - private": [r["geom"] for r in r_view if r["nd_class"] == _L
+                                       and not r.get("nd_judgment")],
         "Railroad - passenger": [r["geom"] for r in l_view if r["nd_class"] == _H],
         "Railroad - other": [r["geom"] for r in l_view if r["nd_class"] != _H],
         "Habitable structures inundated": [s["geom"] for s in hab if s.get("outcome") in (
