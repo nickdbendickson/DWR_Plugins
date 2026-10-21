@@ -234,6 +234,10 @@ def features_in_extent(lines, extent_4326):
         f["properties"] = {"ms_source": "Microsoft Global ML Building Footprints (ODbL)",
                            "height": props.get("height"),
                            "confidence": props.get("confidence")}
+        # 2.18.54: imagery dates, where a release carries them (the lone-911 rule)
+        for k in ("capture_dates_range", "release"):
+            if props.get(k) not in (None, ""):
+                f["properties"][k] = props.get(k)
         feats.append(f)
     return feats
 

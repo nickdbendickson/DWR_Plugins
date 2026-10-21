@@ -59,6 +59,7 @@ from .structures import (
 from .linear import analyze_roads, analyze_rail, roads_to_layer, rail_to_layer, FeatureIndex
 from .classification import (
     classify_nd, classify_tm11, summary_lines, write_summary, extra_criteria,
+    lone_point_judgment, ms_rule_judgment,
 )
 from .styles import style_by_field, set_map_tip, style_outline
 from .hazard import METHOD_MAXMAX, METHOD_LABEL
@@ -71,6 +72,7 @@ from .consequences import economic_estimate, life_loss_estimate, totals
 from .access import access_analysis
 from .review import ReviewStore, review_path
 from . import structures as ST
+from . import lone911 as LN
 from . import sensitivity as SE
 from . import parcelhints as PH
 from . import facility_review as FR
@@ -156,6 +158,12 @@ DEFAULTS.update({
     "evac_routes": True, "web_export": False,
     "temporal_animation": False, "temporal_breach_start": "", "temporal_step_min": 15,
     "settings_profile": None,           # status of the settings profile in use (settings.py)
+    # 2.18.54 review 3 (Nick): the lone-911 300 ft rule reads the USDA NAIP 2025 flight date
+    # at each point (ND GIS Hub seamlines; ms_imagery_assumed_date is the fallback), checks
+    # whether a lone 911 point is far from its address on its own street, and saves small
+    # NAIP 2025 clips of the review points (outputs/QA/imagery, capped per run)
+    "naip_flight_dates": True, "naip_clips": True, "naip_clip_max": 25,
+    "misplaced_911_m": 150.0,
 })
 DEFAULTS.update({
     # v2.10: the dam suite
@@ -474,6 +482,7 @@ _EVAL_KEYS = ("extent_buffer_ft", "keep_dry", "download_nsi", "download_address"
               "sample_area", "sensitivity", "termination", "refresh_data", "local_data",
               "mobile_shape", "mobile_max_width_ft", "mobile_min_ratio", "mobile_min_length_ft",
               "mobile_max_length_ft", "mobile_lot_units", "mobile_ms_width_allowance_ft",
+              "ms_imagery_assumed_date", "naip_flight_dates", "misplaced_911_m",
               "download_trailer_parks",
               "fast_sampling", "download_ms_footprints", "outline_geometry", "fema_scene_shift")
 _EVAL_LAYERS = ("road_layer", "aadt_layer", "rail_layer", "crossing_layer",
@@ -936,6 +945,8 @@ def _run_classification(run, cfg):
         cfg["building_geometry_fallback"] = next(        # 2.18.53: keep the judgment item
             (x for x in state["sources"] if str(x).startswith("Building geometry: FEMA only")),
             "")
+        cfg["imagery_dates_fallback"] = next(            # 2.18.54 review 3: the same
+            (x for x in state["sources"] if str(x).startswith(LN.FALLBACK_PREFIX)), "")
         run.sources.append("Evaluation re-used from the run of {}".format(cached["time"]))
         run.forced_1d = state["forced_1d"]
         run.subject_dam = state["subject_dam"]
@@ -958,6 +969,83 @@ LOCAL_CFG_KEYS = {"roads": "road_layer", "aadt": "aadt_layer", "rail": "rail_lay
                   "crossings": "crossing_layer", "outlines": "extra_outline_layer",
                   "dams": "dam_layer", "boundary": "model_boundary_layer",
                   "parcels": "parcel_layer", "centerline": "centerline_layer"}
+
+
+def _offline_now():
+    """2.18.54 review 3: no internet requests this run (offline-only mode)."""
+    try:
+        from .download import offline_config
+        return bool(offline_config()[1])
+    except Exception:                                       # noqa
+        return False
+
+
+def _lone911_inputs(run, cfg, inputs, acrs):
+    """2.18.54 review 3: (ImageryDates or None, StreetIndex or None) - each built once per
+    run; a failure leaves the fallback (assumed date / no misplaced check)."""
+    dates = streets = None
+    if inputs.get("naip") is not None:
+        try:
+            dates = LN.ImageryDates(inputs["naip"], acrs, run.ctx)
+            if not len(dates):
+                dates = None
+                inputs["naip_why"] = "the NAIP 2025 seamlines carry no flight dates"
+        except Exception as e:                              # noqa
+            dates = None
+            inputs["naip_why"] = "the NAIP 2025 seamlines could not be read ({})".format(e)
+    road = inputs.get("roads")
+    if road is not None:
+        try:
+            streets = LN.StreetIndex(road, acrs, run.ctx)
+            if not streets.ok:
+                run.log(">>> NOTE: possibly-misplaced 911 check skipped - the road layer '{}' "
+                        "has no NG9-1-1 address ranges (St_Name, FromAddr_L ...)".format(
+                            road.name()))
+                streets = None
+        except Exception as e:                              # noqa
+            run.log("possibly-misplaced 911 check skipped: {}".format(e))
+            streets = None
+    return dates, streets
+
+
+def imagery_dates_note(cfg, why):
+    """2.18.54 review 3: the DATA SOURCES / judgment line when the NAIP 2025 flight dates are
+    not there and the 300 ft rule falls back to the assumed date."""
+    return ("{} unavailable ({}) - the lone 911 300 ft no-building rule uses the ASSUMED "
+            "Microsoft imagery date {} (setting ms_imagery_assumed_date) instead of the flight "
+            "date at each point; re-run online before the class is final.".format(
+                LN.FALLBACK_PREFIX, why or "not loaded",
+                ST.mobile_rules_from_cfg(cfg).get("ms_imagery_assumed_date")))
+
+
+def _lone911_report(run, cfg, structs, dates, streets, inputs):
+    """2.18.54 review 3: DATA SOURCES lines of the imagery dates and the misplaced check."""
+    cfg["imagery_dates_fallback"] = ""
+    rule_on = any(r.get("ms_none_within") for r in structs)
+    if dates is not None:
+        run.sources.append(LN.naip_source_line(dates, inputs.get("naip_path")))
+        outside = sum(1 for r in structs if r.get("img_fallback_why"))
+        if outside:
+            run.log(">>> NOTE: {} lone 911 point(s) outside the NAIP 2025 seamlines use the "
+                    "assumed imagery date".format(outside))
+    elif rule_on:
+        note = imagery_dates_note(cfg, inputs.get("naip_why"))
+        cfg["imagery_dates_fallback"] = note
+        run.sources.append(note)
+        run.log(">>> NOTE: " + note)
+    if streets is not None:
+        lone = [r for r in structs if r.get("lone_address")]
+        found = [r for r in lone if r.get("misplaced")]
+        far = [r for r in found if r["misplaced"].get("far")]
+        run.sources.append(
+            "Possibly misplaced 911 points: NG9-1-1 road centerlines ({} segments with address "
+            "ranges); {} of {} lone 911 point(s) matched to their street and address range, {} "
+            "more than {:.0f} m from it (setting misplaced_911_m){}".format(
+                len(streets), len(found), len(lone), len(far),
+                float(cfg.get("misplaced_911_m") or LN.MISPLACED_911_M),
+                ", {} with a Microsoft footprint within 300 ft of the expected location".format(
+                    sum(1 for r in far if r["misplaced"].get("ms_near_expected")))
+                if far else ""))
 
 
 def building_geometry_note(cfg, outlines, suite=None):
@@ -1165,11 +1253,16 @@ def _evaluate(run, cfg, scenarios, breaches):
     run.tick(20, "Building the structure inventory\u2026")
     rules = ST.mobile_rules_from_cfg(cfg)          # v2.9: manufactured-home rules
     scene_report = {}
+    img_dates, streets = _lone911_inputs(run, cfg, inputs, acrs)
     structs = build_inventory(inputs["outlines"], inputs["points"], acrs, run.ctx,
                               progress_cb=run.stage(20, 28), clip=clip, mobile_rules=rules,
                               geometry=cfg.get("outline_geometry") or "auto",
                               scene_shift=bool(cfg.get("fema_scene_shift")),
-                              scene_report=scene_report)
+                              scene_report=scene_report, imagery_dates=img_dates,
+                              imagery_why=inputs.get("naip_why") or "", streets=streets,
+                              misplaced_m=float(cfg.get("misplaced_911_m") or
+                                                LN.MISPLACED_911_M))
+    _lone911_report(run, cfg, structs, img_dates, streets, inputs)
     for info in sorted(scene_report.values(), key=lambda i: i["scene"]):
         if info["flagged"]:
             run.log(">>> WARNING: " + FP.describe_scene(info) + (
@@ -1636,6 +1729,9 @@ def _classify_and_write(run, cfg, state):
 
     # ---- classification ------------------------------------------------------
     run.tick(83, "Classifying\u2026")
+    clips = LN.ClipMaker(out, _sub(out, SUBDIR_QA),                 # 2.18.54 review 3
+                         enabled=bool(cfg.get("naip_clips", True)) and not _offline_now(),
+                         cap=int(cfg.get("naip_clip_max") or LN.CLIP_MAX), log=run.log)
     for sc in breaches:
         res = run.results[sc.name]
         restore(structs, res["snap"])
@@ -1652,6 +1748,22 @@ def _classify_and_write(run, cfg, state):
                 sc.name, type(e).__name__, e))
             raise
         extra_criteria(nd, s_view, res, cfg)
+        try:                                    # 2.18.54: class resting on lone 911 points
+            lone_point_judgment(nd, tm11, s_view, r_view, l_view, judgment_as_probable=judge,
+                                one_d=one_d, roads_evaluated=inputs["roads_on"],
+                                rail_evaluated=inputs["rail_on"],
+                                structs_evaluated=inputs.get("structs_on", True))
+        except Exception as e:                  # noqa - never fails the result
+            run.log("lone 911 point check: {}".format(e))
+        try:                                    # 2.18.54 review 2: the 300 ft rule's drops
+            ms_rule_judgment(nd, tm11, s_view, r_view, l_view, judgment_as_probable=judge,
+                             clip_fn=clips.clip,
+                             misplaced_m=float(cfg.get("misplaced_911_m") or 0) or None,
+                             one_d=one_d, roads_evaluated=inputs["roads_on"],
+                             rail_evaluated=inputs["rail_on"],
+                             structs_evaluated=inputs.get("structs_on", True))
+        except Exception as e:                  # noqa - never fails the result
+            run.log("300 ft no-building rule check: {}".format(e))
         res.update({"nd": nd, "tm11": tm11, "conseq": totals(s_view),
                     "views": (s_view, r_view, l_view)})
         res.pop("nd_total", None)
@@ -1664,6 +1776,17 @@ def _classify_and_write(run, cfg, state):
             extra_criteria(nd_t, structs, res, cfg, total=True)
             res["nd_total"] = nd_t
             res["tm11_total"] = classify_tm11(structs, res["roads"], judgment_as_probable=judge)
+    clip_line = clips.summary()                 # 2.18.54 review 3: NAIP 2025 clips
+    if clip_line:
+        run.sources.append(clip_line)
+        run.log(">>> NOTE: " + clip_line)
+    try:                                        # 2.18.54 review 2: in DATA SOURCES too
+        ms_line = ST.ms_rule_source_line(structs)
+    except Exception:                           # noqa
+        ms_line = ""
+    if ms_line and ms_line not in run.sources:
+        run.sources.append(ms_line)
+        run.log(">>> NOTE: " + ms_line)
     gov = max(breaches, key=lambda s: (ND_RANK.get(run.results[s.name]["nd"]["cls"], -1),
                                        run.results[s.name]["tm11"]["lij"]))
     governing = run.results[gov.name]
@@ -2057,6 +2180,7 @@ def _collect_inputs(run, clip):
             cfg["download_places"] = cfg["download_trailer_parks"] = False
             cfg["download_ms_footprints"] = False
             cfg["download_crossings_structures"] = False
+            cfg["_naip_off_why"] = "a suite folder is set, so nothing is downloaded"
         if cfg["download_nsi"] and "nsi" not in loc:
             want("nsi", "NSI", fetch_nsi, ext4326, out)
         if not have_hub and cfg["download_address"]:
@@ -2105,6 +2229,8 @@ def _collect_inputs(run, clip):
             want("camps", "OpenStreetMap campgrounds", fetch_osm_camps, ext4326, out)
         if cfg.get("download_ms_footprints") and not _has_ms_outlines(cfg, osm, loc):
             want("ms", "Microsoft building footprints", FP.fetch_ms_footprints, ext4326, out)
+        if cfg.get("naip_flight_dates", True) and not cfg.get("_naip_off_why"):
+            want("naip", "NAIP 2025 flight dates", LN.fetch_naip_dates, ext4326, out)
         if cfg.get("download_trailer_parks", True):
             want("parks", "OpenStreetMap mobile-home parks", fetch_osm_trailer_parks, ext4326,
                  out)
@@ -2188,6 +2314,19 @@ def _collect_inputs(run, clip):
         elif lyr is None:
             run.log(">>> NOTE: Microsoft building footprints not available - FEMA USA "
                     "Structures outlines give the building geometry")
+
+    # 2.18.54 review 3: NAIP 2025 flight dates (the lone-911 300 ft rule's imagery date)
+    naip_lyr, naip_path, naip_why = None, None, cfg.pop("_naip_off_why", "")
+    if "naip" in got:
+        naip_lyr, n, naip_path = result("naip")
+        if naip_lyr is None:
+            naip_why = "the download failed and there is no earlier copy (offline?)"
+        elif not n:
+            naip_lyr, naip_why = None, "no NAIP 2025 seamline over the study area"
+    elif not naip_why:
+        naip_why = "the NAIP 2025 flight-date download is switched off (naip_flight_dates)" \
+            if not cfg.get("naip_flight_dates", True) else \
+            "no internet requests (offline mode or no study-area extent)"
 
     # ---- roads, rail, crossings --------------------------------------------------
     if rail is None and "rail" in got:
@@ -2282,7 +2421,7 @@ def _collect_inputs(run, clip):
             "rail": rail, "crossings": cross, "facilities": facilities,
             "dams_evaluated": dams_on, "lifelines_evaluated": life_on,
             "camps": camps, "places": places, "flowlines": flowlines, "parks": parks,
-            "used": used,
+            "used": used, "naip": naip_lyr, "naip_path": naip_path, "naip_why": naip_why,
             "roads_path": get_layer_path(road) if road is not None else None,
             "roads_source": _layer_source(road)}
 
@@ -2721,7 +2860,8 @@ def _boundary_check(run, sc, layers):
     try:
         res = BND.check(depth, run.clip_crs, run.ctx,
                         boundary_layer=cfg.get("model_boundary_layer"), base_sampler=base,
-                        arr_sampler=arr, min_incr_ft=float(cfg["incremental_ft"]))
+                        arr_sampler=arr, min_incr_ft=float(cfg["incremental_ft"]),
+                        depth_path=sc.depth if isinstance(sc.depth, str) else None)
     except Exception as e:
         run.log(">>> WARNING: {}: model extent check failed: {}".format(sc.name, e))
         return {"error": str(e), "flagged": True, "method": None, "wet": 0, "points": []}

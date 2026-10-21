@@ -497,6 +497,9 @@ def extra_criteria(nd, structs, res, cfg, total=False):
     geo = (cfg or {}).get("building_geometry_fallback") if isinstance(cfg, dict) else None
     if geo and structs:                                 # 2.18.53 (review): FEMA-only geometry
         inv = list(inv) + [geo]
+    img = (cfg or {}).get("imagery_dates_fallback") if isinstance(cfg, dict) else None
+    if img and structs:                                 # 2.18.54 review 3: assumed date used
+        inv = list(inv) + [img]
     for msg in inv:
         at = nd.get("struct_items", 0)
         nd["judgment"].insert(at, msg)
@@ -543,6 +546,154 @@ def extra_criteria(nd, structs, res, cfg, total=False):
                  "found": "", "result": result})
     return nd
 
+
+def lone_point_judgment(nd, tm11, structs, roads, rails, **kw):
+    """2.18.54 (Docs & QA, H1): when the ND or TM 11 class rests on 911 address points with
+    no building (counted habitable by the ND site address rule - H1 default), say so in the
+    judgment items and the TM 11 notes. The class is not changed. Returns the message."""
+    from .structures import lone_911_counted
+    lone = lone_911_counted(structs)
+    if not lone:
+        return ""
+    ids = {id(r) for r in lone}
+    rest = [r for r in structs if id(r) not in ids]
+    # (raw structure classes - the access / facility raises of extra_criteria do not
+    # depend on these points)
+    nd1 = classify_nd(structs, roads, rails, **kw)
+    nd2 = classify_nd(rest, roads, rails, **kw)
+    tm2 = classify_tm11(rest, roads, judgment_as_probable=kw.get("judgment_as_probable", True))
+    nd_rests = nd2["cls"] != nd1["cls"] and ND_RANK.get(nd2["cls"], -1) < \
+        ND_RANK.get(nd["cls"], -1)
+    if not nd_rests and tm2["cls"] == tm11["cls"]:
+        # 2.18.54 review (Docs & QA #134 nit 8): a lighter, always-on line - how much of
+        # the LIJ comes from these points, even when the class does not depend on them
+        extra = (tm11.get("lij") or 0.0) - (tm2.get("lij") or 0.0)
+        if extra <= 1e-9:
+            return ""
+        parcel = sum(1 for r in lone if any((s.get("placement") or "") == "parcel"
+                                            for s in r.get("sources", ())))
+        persons = sum(float(r.get("persons") or 0) for r in lone)
+        msg = ("LIJ {:.1f} includes {:.1f} (zone-weighted) from {} 911 address point(s) with no "
+               "building ({:g} persons; H1 default{}): {}; the class is the same without them - "
+               "confirm on imagery".format(
+                   tm11.get("lij") or 0.0, extra, len(lone), persons,
+                   "; {} at Placement=Parcel".format(parcel) if parcel else "",
+                   "; ".join("structure {} ({}, {:.1f} ft)".format(
+                       r["id"], (r["sources"][0].get("addr_text") or "no address"),
+                       r.get("max_depth") or 0.0) for r in lone[:4])
+                   + ("" if len(lone) <= 4 else " and {} more".format(len(lone) - 4))))
+        nd["judgment"].append(msg)
+        tm11.setdefault("notes", []).append(msg)
+        return msg
+    what = []
+    if nd_rests:
+        what.append("ND {} (without them {})".format(nd["cls"], nd2["cls"]))
+    if tm2["cls"] != tm11["cls"]:
+        what.append("TM 11 {} (without them {}, LIJ {:.1f})".format(
+            tm11["cls"], tm2["cls"], tm2["lij"]))
+    msg = ("The class rests on {} 911 address point(s) with no building (H1 default - "
+           "counted habitable by the ND site address rule): {} - {}; confirm on imagery "
+           "that these are dwellings".format(
+               len(lone), " and ".join(what), "; ".join(
+                   "structure {} ({}, {}, {:.1f} ft)".format(
+                       r["id"], (r["sources"][0].get("addr_text") or "no address"),
+                       r.get("outcome"), r.get("max_depth") or 0.0) for r in lone[:4])
+               + ("" if len(lone) <= 4 else " and {} more".format(len(lone) - 4))))
+    at = nd.get("struct_items", 0)
+    nd["judgment"].insert(at, msg)
+    nd["struct_items"] = at + 1
+    tm11.setdefault("notes", []).append(msg)
+    return msg
+
+
+def ms_rule_judgment(nd, tm11, structs, roads, rails, clip_fn=None, **kw):
+    """2.18.54 review 2/3 (Docs & QA should-fix; Nick): when the 300 ft no-building rule
+    dropped or kept lone 911 points, a judgment item says how many and the imagery dates
+    used (NAIP 2025 flight dates, or the assumed fallback and why); every point it dropped
+    that is wet in a High or Judgment zone is named, with the ND / TM 11 class and LIJ it
+    would give if counted, and so is every one it kept as possibly newer than the imagery.
+    Lone 911 points that are possibly misplaced (far from their address on their own street)
+    and wet get their own item. clip_fn(rec) -> a NAIP 2025 clip path ('' = none). The class
+    is not changed. Returns the messages joined ('' when there is nothing to say)."""
+    from .structures import (ms_rule_dropped, ms_rule_counted_copy, ms_rule_source_line,
+                             ms_rule_kept, lone_misplaced, OUT_DRY, OUT_TRACE)
+    from .constants import CLASS_HIGH, CLASS_JUDGMENT
+    from .lone911 import misplaced_text, MISPLACED_911_M
+    misplaced_m = kw.pop("misplaced_m", None) or MISPLACED_911_M
+
+    def wet(r):
+        return r.get("outcome") not in (None, OUT_DRY, OUT_TRACE)
+
+    def hz(r):
+        return wet(r) and r.get("zone") in (CLASS_HIGH, CLASS_JUDGMENT)
+
+    def clip(r):
+        try:
+            c = clip_fn(r) if clip_fn else ""
+        except Exception:                               # noqa - never fails the result
+            c = ""
+        return "; NAIP 2025 clip {}".format(c) if c else ""
+
+    def name(r, d):
+        return "structure {} ({}, {:.1f} ft, {} zone, 911 record {}, imagery {}{}{})".format(
+            r["id"], (r["sources"][0].get("addr_text") or "no address"),
+            r.get("max_depth") or 0.0,
+            "High" if r.get("zone") == CLASS_HIGH else "Judgment",
+            d.get("upd") or "undated", d.get("img") or "?",
+            "; REVIEW: possibly misplaced, a Microsoft footprint is near its address location"
+            if d.get("review") else "", clip(r))
+
+    msgs = []
+    dropped = ms_rule_dropped(structs)
+    kept = ms_rule_kept(structs)
+    line = ms_rule_source_line(structs)
+    if line:
+        msg = line
+        wd = [r for r in dropped if hz(r)]
+        if wd:
+            ids = {id(r) for r in wd}
+            alt = [ms_rule_counted_copy(r) if id(r) in ids else r for r in structs]
+            nd2 = classify_nd(alt, roads, rails, **kw)
+            tm2 = classify_tm11(alt, roads,
+                                judgment_as_probable=kw.get("judgment_as_probable", True))
+            msg += (" Wet in a High or Judgment zone and not counted: {}. Counted, they would "
+                    "give ND {} / TM 11 {} (LIJ {:.1f}); now ND {} / TM 11 {} (LIJ {:.1f}) - "
+                    "confirm on imagery that no dwelling stands there.".format(
+                        "; ".join(name(r, r["ms_dropped"]) for r in wd),
+                        nd2["cls"], tm2["cls"], tm2.get("lij") or 0.0, nd["cls"], tm11["cls"],
+                        tm11.get("lij") or 0.0))
+        wk = [r for r in kept if hz(r)]
+        if wk:
+            msg += (" Wet in a High or Judgment zone and counted only because the 911 record "
+                    "is newer than the imagery: {} - confirm the dwelling.".format(
+                        "; ".join(name(r, r["ms_kept_newer"]) for r in wk)))
+        msgs.append(msg)
+    mis = [r for r in lone_misplaced(structs) if wet(r)]
+    if mis:
+        mis.sort(key=lambda r: -(r["misplaced"].get("dist_m") or 0))
+        shown = mis[:15]
+        msgs.append("Lone 911 points possibly misplaced (wet; more than {:.0f} m from the "
+                    "location of their address on their own street, NG9-1-1 centerlines): "
+                    "{}{} - the depth was read at the 911 point, not at the address; "
+                    "verify.".format(
+                        float(misplaced_m),
+                        "; ".join("structure {} ({}, {:.1f} ft, {}): {}{}{}".format(
+                            r["id"], r["sources"][0].get("addr_text") or "no address",
+                            r.get("max_depth") or 0.0,
+                            "counted" if r.get("habitable") == "Yes" else "not counted",
+                            misplaced_text(r["misplaced"]),
+                            "; a Microsoft footprint is within 300 ft of the expected location"
+                            if r["misplaced"].get("ms_near_expected") else "",
+                            clip(r) if hz(r) else "")
+                            for r in shown),
+                        "; and {} more (Notes column)".format(len(mis) - len(shown))
+                        if len(mis) > len(shown) else ""))
+    for msg in msgs:
+        at = nd.get("struct_items", 0)
+        nd["judgment"].insert(at, msg)
+        nd["struct_items"] = at + 1
+        tm11.setdefault("notes", []).append(msg)
+    return " ".join(msgs)
 
 def criteria_text(nd):
     """The criteria table as fixed-width text lines."""

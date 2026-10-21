@@ -69,11 +69,12 @@ class NotInPack(DownloadError):
     internet request is made)."""
 
 
-def http_get_bytes(url, user_agent=None):
+def http_get_bytes(url, user_agent=None, timeout_s=None):
     """GET `url`. DL.9 (documented): no per-request timeout is set here - the
     request uses QGIS's network timeout (Settings > Options > Network); an idle
     transfer timeout (QNetworkRequest.setTransferTimeout) would cut off slow
-    Overpass answers that legitimately stay silent for minutes."""
+    Overpass answers that legitimately stay silent for minutes. 2.18.54: timeout_s
+    sets one for small requests that must not hold a run (NAIP clips)."""
     if offline_config()[1]:
         raise NotInPack("offline mode - no internet requests ({})".format(url.split("?")[0]))
     req = QgsBlockingNetworkRequest()
@@ -82,6 +83,11 @@ def http_get_bytes(url, user_agent=None):
         try:
             qreq.setRawHeader(b"User-Agent", user_agent.encode("ascii"))
         except Exception:
+            pass
+    if timeout_s:
+        try:
+            qreq.setTransferTimeout(int(float(timeout_s) * 1000))
+        except Exception:                                   # noqa - Qt < 5.15
             pass
     with _HTTP_SLOTS:
         err = req.get(qreq, True)
