@@ -10,7 +10,9 @@ deterministic, so they can gate every PR cheaply:
                         merge across all plugins in seconds, without importing anything)
   4. shared/ui        — every plugin copy of the shared window files matches shared/ui/, and no
                         window code writes a #rrggbb colour outside tokens.py (docs/gui-grammar.md)
-  5. golden baseline  — the built-in flood engine still reproduces the frozen regulatory numbers
+  5. zone colours     — the ACER TM 11 danger zones use REG_05.2026 Fig. 5.1 / 5.2's colours in
+                        every style, chart and copy (DamSafety_Hazard/tests/test_zone_colors_reg05.py)
+  6. golden baseline  — the built-in flood engine still reproduces the frozen regulatory numbers
                         (needs numpy, not scipy; skipped with a notice if numpy is absent)
 
 Exit non-zero on any failure. The heavier per-plugin suites (real QGIS / scipy / real engines)
@@ -160,6 +162,17 @@ def check_fork_parity(problems):
         _fail(problems, "fork parity: " + p)
 
 
+def check_zone_colours(problems):
+    """REG_05.2026 Fig. 5.1 / 5.2 danger-zone colours in every copy (text check, no QGIS)."""
+    import importlib.util
+    path = os.path.join(ROOT, "DamSafety_Hazard", "tests", "test_zone_colors_reg05.py")
+    spec = importlib.util.spec_from_file_location("_zone_colours", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for p in mod.check_text(ROOT):
+        _fail(problems, "zone colours: " + p)
+
+
 def check_golden(problems):
     try:
         import numpy  # noqa: F401
@@ -182,6 +195,7 @@ def main():
                      ("damsuite pin", check_damsuite_pin), ("versions", check_versions),
                      ("cross-plugin identical", check_cross_plugin_identical),
                      ("shared/ui drift", check_ui_drift), ("window colours", check_window_colours),
+                     ("zone colours (REG_05.2026)", check_zone_colours),
                      ("fork parity", check_fork_parity),
                      ("compile", check_compile), ("golden baseline", check_golden)):
         print("[ci] " + name)
