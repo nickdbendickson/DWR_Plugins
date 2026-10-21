@@ -2048,13 +2048,16 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     # have counted toward) and the arguments to read the point again as counted
     mis = rec.get("misplaced") if lone else None
     mis_far = bool(mis and mis.get("far"))
-    if no_bldg_counted is True:          # review 3: kept as possibly newer than the imagery
+    # review 3: only where the rule decides - a point with other non-dwelling evidence (911
+    # NOTES, address number 0) is not counted either way and is not listed as the rule's
+    other_evidence = bool(nondwelling)
+    if no_bldg_counted is True and not other_evidence:   # kept as possibly newer
         rec["ms_kept_newer"] = {"upd": rec.get("_ms_upd"), "img": rec.get("_ms_img"),
                                 "assumed": rec.get("_ms_assumed"),
                                 "basis": rec.get("_ms_basis")}
     else:
         rec.pop("ms_kept_newer", None)
-    if no_bldg_counted is False:
+    if no_bldg_counted is False and not other_evidence:
         rec["ms_dropped"] = {"upd": rec.get("_ms_upd"), "assumed": rec.get("_ms_assumed"),
                              "img": rec.get("_ms_img"), "basis": rec.get("_ms_basis"),
                              # review 3: misplaced, and a footprint near its address location

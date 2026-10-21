@@ -88,7 +88,10 @@ def test_naip_flight_date_is_the_imagery_date():
         _pt("OLD", X0 + 600, Y0, "2022-04-13"),          # older than the flight: dropped
         _pt("NEW", X0 + 600, Y0 + 800, "2025-08-01"),    # after the 07-13 flight: kept
         _pt("LATE", X0 + 5000, Y0, "2025-08-01"),        # before the 09-01 flight: dropped
-        _pt("OUT", X0 + 20000, Y0, "2024-05-01")])       # no seamline: assumed 2022-12-31
+        _pt("OUT", X0 + 20000, Y0, "2024-05-01"),        # no seamline: assumed 2022-12-31
+        ((X0 + 600, Y0 - 800), ("GAS", 3520, "153RD", "AVE", "SE", "Unknown", "Unknown",
+                                "WBI Energy is building a natural gas transmission line "
+                                "station", "2025-05-16"))])
     structs = ST.build_inventory([(FP.MS_FAMILY, _ms())], [("NDGISHUB", pts)], CRS, CTX,
                                  imagery_dates=dates)
     old, new, late, out = (T._by_nguid(structs, k) for k in ("OLD", "NEW", "LATE", "OUT"))
@@ -102,6 +105,9 @@ def test_naip_flight_date_is_the_imagery_date():
     assert out["habitable"] == "Yes" and out["ms_kept_newer"]["assumed"] == "2022-12-31" \
         and "fallback: the point is outside the NAIP 2025 seamlines" in \
         out["ms_kept_newer"]["basis"], out.get("ms_kept_newer")
+    gas = T._by_nguid(structs, "GAS")      # NOTES decide, not the rule: not listed as its drop
+    assert gas["habitable"] == "Unverified" and not gas.get("ms_dropped") and \
+        not gas.get("ms_kept_newer"), (gas["habitable"], gas.get("ms_dropped"))
     line = ST.ms_rule_source_line(structs)
     assert line.startswith("Lone 911 points: 2 not counted by the 300 ft no-building rule") \
         and "; 2 counted as possibly built after the imagery" in line \
