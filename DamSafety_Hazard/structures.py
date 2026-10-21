@@ -214,12 +214,21 @@ def is_lot_unit(unit, words=None):
     return bool(rx.search(str(unit)))
 
 
+# Microsoft's US footprints carry no capture_dates_range (checked on the 2026 release:
+# only height / confidence; the README gives the imagery as "between 2014 and 2024").
+# Without one, a 911 DateUpdate after this date counts as "possibly newer than the
+# imagery" (the point stays counted). A screening default - engineer judgment.
+# 2.18.54 review 2: settings key ms_imagery_assumed_date (Nick decides the default)
+MS_IMAGERY_ASSUMED_DATE = "2022-12-31"
+
 # keyword arguments of _interpret / reinterpret for the manufactured-home rules
 MOBILE_RULE_DEFAULTS = {
     "mobile_shape": True, "mobile_max_width_ft": MOBILE_MAX_WIDTH_FT,
     "mobile_min_ratio": MOBILE_MIN_RATIO, "mobile_min_length_ft": MOBILE_MIN_LENGTH_FT,
     "mobile_max_length_ft": MOBILE_MAX_LENGTH_FT, "mobile_lot_units": True,
     "mobile_ms_width_allowance_ft": MOBILE_MS_WIDTH_ALLOWANCE_FT,
+    # 2.18.54 review 2: the lone-911 300 ft rule's assumed Microsoft imagery date (settings key)
+    "ms_imagery_assumed_date": MS_IMAGERY_ASSUMED_DATE,
 }
 
 
@@ -246,10 +255,20 @@ def mobile_rules_from_cfg(cfg):
         v = (cfg or {}).get(k)
         if v is None:
             continue
+        if k == "ms_imagery_assumed_date":
+            d = parse_record_date(v) if str(v).strip() else None
+            if d is None:
+                log_message("Structure inventory: setting ms_imagery_assumed_date {!r} is not a "
+                            "date (YYYY-MM-DD) - {} used".format(v, MS_IMAGERY_ASSUMED_DATE))
+            else:
+                out[k] = d.isoformat()
+            continue
         try:
             out[k] = _cfg_bool(v, dflt) if isinstance(dflt, bool) else float(v)
         except (TypeError, ValueError):
             pass
+    if not out.get("ms_imagery_assumed_date"):
+        out["ms_imagery_assumed_date"] = MS_IMAGERY_ASSUMED_DATE
     return out
 
 
@@ -909,11 +928,7 @@ _FOR_NEW_DWELLING = frozenset((
 # 100 ft address snap, so a rural point at a driveway entrance still finds its house -
 # unless the 911 record is newer than the footprint imagery (possibly built since)
 LONE_911_MS_FT = 300.0
-# Microsoft's US footprints carry no capture_dates_range (checked on the 2026 release:
-# only height / confidence; the README gives the imagery as "between 2014 and 2024").
-# Without one, a 911 DateUpdate after this date counts as "possibly newer than the
-# imagery" (the point stays counted). A screening default - engineer judgment.
-MS_IMAGERY_ASSUMED_DATE = "2022-12-31"
+# MS_IMAGERY_ASSUMED_DATE: defined with MOBILE_RULE_DEFAULTS (a settings key)
 # M3: a 911 anchor test this close to its STRUCTURE_MERGE_DIST_FT limit is a judgment item
 SITE_NEAR_LIMIT_FT = 3.0
 
@@ -957,16 +972,17 @@ def _parcel_911_note(srcs):
     return ""
 
 
-def _no_building_911(rec, srcs, assumed_imagery=MS_IMAGERY_ASSUMED_DATE):
+def _no_building_911(rec, srcs, assumed_imagery=None):
     """2.18.54 (Docs & QA #721 rule): (counted, note) for a lone 911 point that has no
     Microsoft footprint within LONE_911_MS_FT (rec["ms_none_within"], set by
     _mark_parcel_sites when footprints are loaded). counted=None: the rule does not apply
     (no footprints loaded, a footprint is near, or the point is on a structure)."""
-    if not rec.get("ms_none_within"):
+    if not rec.get("ms_none_within") or rec.get("_ms_count_anyway"):
         return None, ""
     if any((s.get("placement") or "") == "structure" for s in srcs):
         return None, ""
     import datetime
+    assumed_imagery = assumed_imagery or MS_IMAGERY_ASSUMED_DATE
     upd = [s.get("date_update") for s in srcs if s.get("date_update")]
     upd = max(upd) if upd else None
     img, basis = rec.get("ms_imagery") or (None, "")
@@ -975,8 +991,12 @@ def _no_building_911(rec, srcs, assumed_imagery=MS_IMAGERY_ASSUMED_DATE):
             img = datetime.date(*(int(x) for x in str(assumed_imagery).split("-")))
         except Exception:
             img = None
-        basis = "date not published for these footprints, assumed {}".format(
-            assumed_imagery)
+        basis = "date not published for these footprints, assumed {} (setting " \
+            "ms_imagery_assumed_date)".format(assumed_imagery)
+        rec["_ms_assumed"] = str(assumed_imagery)
+    else:
+        rec.pop("_ms_assumed", None)
+    rec["_ms_upd"] = upd
     if upd is not None and img is not None and upd > img:
         return True, "no building within {:.0f} ft in Microsoft footprints, but the 911 " \
             "record ({}) is newer than the footprint imagery ({}) - possibly built after " \
@@ -1137,6 +1157,7 @@ def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist, ms_dist=
     for r in structs:
         r.pop("ms_none_within", None)
         r.pop("ms_imagery", None)
+        r.pop("ms_near_300", None)
         if r["footprint"]:
             continue
         p = r["point"]
@@ -1166,6 +1187,7 @@ def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist, ms_dist=
                         if d is not None and 0 <= d <= ms_dist:
                             near_ms = True
                             break
+                r["ms_near_300"] = near_ms
                 if not near_ms:
                     r["ms_none_within"] = True
                     if ms_dated:
@@ -1801,7 +1823,8 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
                mobile_max_width_ft=MOBILE_MAX_WIDTH_FT, mobile_min_ratio=MOBILE_MIN_RATIO,
                mobile_min_length_ft=MOBILE_MIN_LENGTH_FT,
                mobile_max_length_ft=MOBILE_MAX_LENGTH_FT, mobile_lot_units=True,
-               mobile_ms_width_allowance_ft=MOBILE_MS_WIDTH_ALLOWANCE_FT):
+               mobile_ms_width_allowance_ft=MOBILE_MS_WIDTH_ALLOWANCE_FT,
+               ms_imagery_assumed_date=None):
     """Category, habitability, ACER type and occupancy basis for a record.
 
     v2.9 manufactured-home rules (see the module docstring for the order):
@@ -1934,7 +1957,21 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     lone = bool(rec.get("lone_address")) and not (
         place_kinds & {_PT_DWELLING, _PT_MOBILE, _PT_OCCUPIED})
     nondwelling = _nondwelling_911(nd_srcs) if lone else ""
-    no_bldg_counted, no_bldg_note = _no_building_911(rec, nd_srcs) if lone else (None, "")
+    no_bldg_counted, no_bldg_note = _no_building_911(rec, nd_srcs, ms_imagery_assumed_date) \
+        if lone else (None, "")
+    # 2.18.54 review 2: what the 300 ft rule dropped (judgment item with the class it would
+    # have counted toward) and the arguments to read the point again as counted
+    if no_bldg_counted is False:
+        rec["ms_dropped"] = {"upd": rec.get("_ms_upd"), "assumed": rec.get("_ms_assumed")}
+        rec["_rules_kw"] = dict(
+            min_area_ft2=min_area_ft2, persons_per_dwelling=persons_per_dwelling,
+            mobile_shape=mobile_shape, mobile_max_width_ft=mobile_max_width_ft,
+            mobile_min_ratio=mobile_min_ratio, mobile_min_length_ft=mobile_min_length_ft,
+            mobile_max_length_ft=mobile_max_length_ft, mobile_lot_units=mobile_lot_units,
+            mobile_ms_width_allowance_ft=mobile_ms_width_allowance_ft,
+            ms_imagery_assumed_date=ms_imagery_assumed_date)
+    else:
+        rec.pop("ms_dropped", None)
     if no_bldg_counted is False and not nondwelling:
         nondwelling = no_bldg_note
     parcel_note = _parcel_911_note(nd_srcs) if lone else ""
@@ -1947,6 +1984,9 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
             "{:.0f} ft and no NSI structure - counted as habitable by the ND site address " \
             "rule; field access, vacant lot, tower or utility site? verify".format(
                 ADDRESS_SNAP_FT)
+        if rec.get("ms_near_300"):     # review 2: why the 300 ft rule did not drop it
+            site_note += "; a Microsoft footprint is within {:.0f} ft, so the no-building " \
+                "rule does not apply".format(LONE_911_MS_FT)
         if nondwelling and nondwelling == no_bldg_note:
             category = CAT_UNVERIFIED
             site_note = "911 point with no building: {}".format(no_bldg_note)
@@ -2181,13 +2221,15 @@ def reinterpret(structs, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
                 mobile_max_width_ft=MOBILE_MAX_WIDTH_FT, mobile_min_ratio=MOBILE_MIN_RATIO,
                 mobile_min_length_ft=MOBILE_MIN_LENGTH_FT,
                 mobile_max_length_ft=MOBILE_MAX_LENGTH_FT, mobile_lot_units=True,
-                mobile_ms_width_allowance_ft=MOBILE_MS_WIDTH_ALLOWANCE_FT):
+                mobile_ms_width_allowance_ft=MOBILE_MS_WIDTH_ALLOWANCE_FT,
+                ms_imagery_assumed_date=None):
     """Re-apply the habitability / occupancy rules with other settings
     (v2.9: and the manufactured-home rules, see _interpret)."""
     kw = dict(mobile_shape=mobile_shape, mobile_max_width_ft=mobile_max_width_ft,
               mobile_min_ratio=mobile_min_ratio, mobile_min_length_ft=mobile_min_length_ft,
               mobile_max_length_ft=mobile_max_length_ft, mobile_lot_units=mobile_lot_units,
-              mobile_ms_width_allowance_ft=mobile_ms_width_allowance_ft)
+              mobile_ms_width_allowance_ft=mobile_ms_width_allowance_ft,
+              ms_imagery_assumed_date=ms_imagery_assumed_date)
     for rec in structs:
         _interpret(rec, min_area_ft2, persons_per_dwelling, **kw)
     # 2.18.54: restored-911 duplicates follow the hosts' new habitability
@@ -3568,6 +3610,49 @@ def inventory_judgment(structs):
                     for r in recs[:4]) + ("" if len(recs) <= 4 else " and {} more".format(
                         len(recs) - 4))))
     return items
+
+
+def ms_rule_dropped(structs):
+    """2.18.54 review 2: structures the 300 ft no-building rule left uncounted."""
+    return [r for r in structs if r.get("ms_dropped") and r.get("habitable") != "Yes"]
+
+
+def ms_rule_counted_copy(rec):
+    """2.18.54 review 2: a copy of a dropped lone 911 point read as counted (the rule off for
+    it) - same outcome, depth and zone fields; for the 'class with them counted' item."""
+    import copy
+    c = copy.copy(rec)
+    c["sources"] = list(rec["sources"])
+    c["notes"] = list(rec.get("notes") or [])
+    c["_ms_count_anyway"] = True
+    keep = {k: rec.get(k) for k in rec if k not in ("category", "habitable", "persons",
+                                                    "persons_basis", "site_note")}
+    _interpret(c, **(rec.get("_rules_kw") or {}))
+    for k in ("outcome", "max_depth", "max_vel", "zone", "zone_found", "zone_mobile",
+              "margin_high", "margin_judg", "near", "dv_max", "arrival_hr"):
+        if k in keep:
+            c[k] = keep[k]
+    c.pop("ms_dropped", None)
+    return c
+
+
+def ms_rule_source_line(structs):
+    """2.18.54 review 2: the DATA SOURCES / judgment line when the 300 ft rule dropped points
+    ('' when it dropped none): how many, and the imagery date it assumed."""
+    dropped = ms_rule_dropped(structs)
+    if not dropped:
+        return ""
+    assumed = sorted({r["ms_dropped"].get("assumed") for r in dropped} - {None})
+    upd = sorted(r["ms_dropped"].get("upd") for r in dropped if r["ms_dropped"].get("upd"))
+    return ("Lone 911 points: {} not counted by the 300 ft no-building rule (no Microsoft "
+            "footprint within {:.0f} ft and the 911 record not newer than the imagery). {}{}"
+            .format(len(dropped), LONE_911_MS_FT,
+                    "Microsoft imagery date ASSUMED {} (setting ms_imagery_assumed_date; "
+                    "Microsoft publishes no capture dates for US footprints) - an earlier date "
+                    "counts more of them. ".format(", ".join(assumed)) if assumed else
+                    "Imagery dates from the footprints' capture_dates_range. ",
+                    "Their 911 records date from {} to {}.".format(upd[0], upd[-1]) if upd
+                    else ""))
 
 
 def lone_911_counted(structs):

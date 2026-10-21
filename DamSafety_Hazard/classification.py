@@ -569,9 +569,11 @@ def lone_point_judgment(nd, tm11, structs, roads, rails, **kw):
             return ""
         parcel = sum(1 for r in lone if any((s.get("placement") or "") == "parcel"
                                             for s in r.get("sources", ())))
-        msg = ("LIJ {:.1f} includes {:.1f} from {} 911 address point(s) with no building (H1 "
-               "default{}): {}; the class is the same without them - confirm on imagery".format(
-                   tm11.get("lij") or 0.0, extra, len(lone),
+        persons = sum(float(r.get("persons") or 0) for r in lone)
+        msg = ("LIJ {:.1f} includes {:.1f} (zone-weighted) from {} 911 address point(s) with no "
+               "building ({:g} persons; H1 default{}): {}; the class is the same without them - "
+               "confirm on imagery".format(
+                   tm11.get("lij") or 0.0, extra, len(lone), persons,
                    "; {} at Placement=Parcel".format(parcel) if parcel else "",
                    "; ".join("structure {} ({}, {:.1f} ft)".format(
                        r["id"], (r["sources"][0].get("addr_text") or "no address"),
@@ -594,6 +596,43 @@ def lone_point_judgment(nd, tm11, structs, roads, rails, **kw):
                        r["id"], (r["sources"][0].get("addr_text") or "no address"),
                        r.get("outcome"), r.get("max_depth") or 0.0) for r in lone[:4])
                + ("" if len(lone) <= 4 else " and {} more".format(len(lone) - 4))))
+    at = nd.get("struct_items", 0)
+    nd["judgment"].insert(at, msg)
+    nd["struct_items"] = at + 1
+    tm11.setdefault("notes", []).append(msg)
+    return msg
+
+
+def ms_rule_judgment(nd, tm11, structs, roads, rails, **kw):
+    """2.18.54 review 2 (Docs & QA should-fix): when the 300 ft no-building rule dropped lone
+    911 points, a judgment item says how many and the Microsoft imagery date it assumed; every
+    dropped point that is wet in a High or Judgment zone is named, with the ND / TM 11 class
+    and LIJ it would give if counted. The class is not changed. Returns the message ('' when
+    the rule dropped nothing)."""
+    from .structures import ms_rule_dropped, ms_rule_counted_copy, ms_rule_source_line, \
+        OUT_DRY, OUT_TRACE
+    from .constants import CLASS_HIGH, CLASS_JUDGMENT
+    dropped = ms_rule_dropped(structs)
+    if not dropped:
+        return ""
+    msg = ms_rule_source_line(structs)
+    wet = [r for r in dropped if r.get("zone") in (CLASS_HIGH, CLASS_JUDGMENT)
+           and r.get("outcome") not in (None, OUT_DRY, OUT_TRACE)]
+    if wet:
+        ids = {id(r) for r in wet}
+        alt = [ms_rule_counted_copy(r) if id(r) in ids else r for r in structs]
+        nd2 = classify_nd(alt, roads, rails, **kw)
+        tm2 = classify_tm11(alt, roads, judgment_as_probable=kw.get("judgment_as_probable", True))
+        msg += (" Wet in a High or Judgment zone and not counted: {}. Counted, they would give "
+                "ND {} / TM 11 {} (LIJ {:.1f}); now ND {} / TM 11 {} (LIJ {:.1f}) - confirm on "
+                "imagery that no dwelling stands there.".format(
+                    "; ".join("structure {} ({}, {:.1f} ft, {} zone, 911 record {})".format(
+                        r["id"], (r["sources"][0].get("addr_text") or "no address"),
+                        r.get("max_depth") or 0.0,
+                        "High" if r.get("zone") == CLASS_HIGH else "Judgment",
+                        r["ms_dropped"].get("upd") or "undated") for r in wet),
+                    nd2["cls"], tm2["cls"], tm2.get("lij") or 0.0, nd["cls"], tm11["cls"],
+                    tm11.get("lij") or 0.0))
     at = nd.get("struct_items", 0)
     nd["judgment"].insert(at, msg)
     nd["struct_items"] = at + 1

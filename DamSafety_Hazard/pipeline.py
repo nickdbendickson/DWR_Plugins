@@ -59,7 +59,7 @@ from .structures import (
 from .linear import analyze_roads, analyze_rail, roads_to_layer, rail_to_layer, FeatureIndex
 from .classification import (
     classify_nd, classify_tm11, summary_lines, write_summary, extra_criteria,
-    lone_point_judgment,
+    lone_point_judgment, ms_rule_judgment,
 )
 from .styles import style_by_field, set_map_tip, style_outline
 from .hazard import METHOD_MAXMAX, METHOD_LABEL
@@ -475,6 +475,7 @@ _EVAL_KEYS = ("extent_buffer_ft", "keep_dry", "download_nsi", "download_address"
               "sample_area", "sensitivity", "termination", "refresh_data", "local_data",
               "mobile_shape", "mobile_max_width_ft", "mobile_min_ratio", "mobile_min_length_ft",
               "mobile_max_length_ft", "mobile_lot_units", "mobile_ms_width_allowance_ft",
+              "ms_imagery_assumed_date",
               "download_trailer_parks",
               "fast_sampling", "download_ms_footprints", "outline_geometry", "fema_scene_shift")
 _EVAL_LAYERS = ("road_layer", "aadt_layer", "rail_layer", "crossing_layer",
@@ -1660,6 +1661,13 @@ def _classify_and_write(run, cfg, state):
                                 structs_evaluated=inputs.get("structs_on", True))
         except Exception as e:                  # noqa - never fails the result
             run.log("lone 911 point check: {}".format(e))
+        try:                                    # 2.18.54 review 2: the 300 ft rule's drops
+            ms_rule_judgment(nd, tm11, s_view, r_view, l_view, judgment_as_probable=judge,
+                             one_d=one_d, roads_evaluated=inputs["roads_on"],
+                             rail_evaluated=inputs["rail_on"],
+                             structs_evaluated=inputs.get("structs_on", True))
+        except Exception as e:                  # noqa - never fails the result
+            run.log("300 ft no-building rule check: {}".format(e))
         res.update({"nd": nd, "tm11": tm11, "conseq": totals(s_view),
                     "views": (s_view, r_view, l_view)})
         res.pop("nd_total", None)
@@ -1672,6 +1680,13 @@ def _classify_and_write(run, cfg, state):
             extra_criteria(nd_t, structs, res, cfg, total=True)
             res["nd_total"] = nd_t
             res["tm11_total"] = classify_tm11(structs, res["roads"], judgment_as_probable=judge)
+    try:                                        # 2.18.54 review 2: in DATA SOURCES too
+        ms_line = ST.ms_rule_source_line(structs)
+    except Exception:                           # noqa
+        ms_line = ""
+    if ms_line and ms_line not in run.sources:
+        run.sources.append(ms_line)
+        run.log(">>> NOTE: " + ms_line)
     gov = max(breaches, key=lambda s: (ND_RANK.get(run.results[s.name]["nd"]["cls"], -1),
                                        run.results[s.name]["tm11"]["lij"]))
     governing = run.results[gov.name]

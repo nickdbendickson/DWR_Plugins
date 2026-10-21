@@ -336,7 +336,9 @@ def test_no_microsoft_footprint_within_300_ft():
     assert "possibly built after the footprint imagery" in n2 and "Placement=Parcel" in n2, n2
     f3 = _by_nguid(structs, "F3")
     assert f3["habitable"] == "Yes" and not f3.get("ms_none_within"), f3
-    assert "Microsoft" not in "; ".join(ST.structure_notes(f3))
+    n3 = "; ".join(ST.structure_notes(f3))           # review 2: both distances said
+    assert "within 100 ft" in n3 and "a Microsoft footprint is within 300 ft, so the " \
+        "no-building rule does not apply" in n3, n3
     f4 = _by_nguid(structs, "F4")
     assert f4["habitable"] == "Yes", f4["habitable"]
     # the footprint's own capture dates win over the assumed date
@@ -351,6 +353,50 @@ def test_no_microsoft_footprint_within_300_ft():
     s3 = ST.build_inventory(fema, [("NDGISHUB", pts)], CRS, CTX)
     assert _by_nguid(s3, "F1")["habitable"] == "Yes"
 
+
+def test_imagery_date_setting_and_dropped_point_judgment():
+    # review 2 (Docs & QA should-fix): the assumed imagery date is a settings key, shown in
+    # DATA SOURCES / judgment items, and a wet High / Judgment point the rule drops is named
+    # with the class it would count toward
+    from DamSafety_Hazard import footprints as FP
+    r = ST.mobile_rules_from_cfg({})
+    assert r["ms_imagery_assumed_date"] == ST.MS_IMAGERY_ASSUMED_DATE == "2022-12-31"
+    assert ST.mobile_rules_from_cfg({"ms_imagery_assumed_date": "2021-08-22"})[
+        "ms_imagery_assumed_date"] == "2021-08-22"
+    assert ST.mobile_rules_from_cfg({"ms_imagery_assumed_date": "soon"})[
+        "ms_imagery_assumed_date"] == "2022-12-31"
+    ms = _layer(WKB_POLYGON, "MS_building_footprints", MSF,
+                [((X0, Y0, X0 + 12, Y0 + 12), ("4", "-1"))])
+    pts = _layer(WKB_POINT, "NDGISHUB_address_points", NENA_D, [
+        ((X0 + 12 + 1271 * FT, Y0), ("K", 3550, "153RD", "AVE", "SE", "Unknown", "Unknown",
+                                     "", "2022-04-13"))])
+    structs = ST.build_inventory([(FP.MS_FAMILY, ms)], [("NDGISHUB", pts)], CRS, CTX)
+    k = _by_nguid(structs, "K")
+    assert k["habitable"] == "Unverified" and k.get("ms_dropped"), k.get("ms_dropped")
+    line = ST.ms_rule_source_line(structs)
+    assert line.startswith("Lone 911 points: 1 not counted by the 300 ft no-building rule") \
+        and "ASSUMED 2022-12-31 (setting ms_imagery_assumed_date" in line \
+        and "from 2022-04-13 to 2022-04-13" in line, line
+    for r in structs:
+        if r is k:
+            r["outcome"], r["max_depth"], r["zone"] = ST.OUT_PROBABLE, 8.17, ST.CLASS_HIGH
+        else:
+            r["outcome"], r["max_depth"], r["zone"] = ST.OUT_DRY, None, None
+    nd = CL.classify_nd(structs, [], [])
+    tm = CL.classify_tm11(structs, [])
+    msg = CL.ms_rule_judgment(nd, tm, structs, [], [])
+    assert "structure {} (3550 153RD AVE SE, 8.2 ft, High zone, 911 record 2022-04-13)".format(
+        k["id"]) in msg, msg
+    assert "Counted, they would give ND High" in msg and "now ND " + nd["cls"] in msg, msg
+    assert msg in nd["judgment"] and msg in tm["notes"]
+    assert k["habitable"] == "Unverified"                       # the copy, not the record
+    # an earlier imagery date counts it again (the setting reaches reinterpret)
+    ST.reinterpret(structs, **ST.mobile_rules_from_cfg({"ms_imagery_assumed_date": "2021-08-22"}))
+    assert k["habitable"] == "Yes" and not k.get("ms_dropped"), k["habitable"]
+    assert "possibly built after" in "; ".join(ST.structure_notes(k))
+    assert ST.ms_rule_source_line(structs) == ""
+    nd3 = CL.classify_nd([], [], [])
+    assert CL.ms_rule_judgment(nd3, CL.classify_tm11([], []), structs, [], []) == ""
 
 def test_record_dates():
     import datetime
@@ -391,7 +437,8 @@ def test_lij_from_lone_points_is_always_listed():
     nd = CL.classify_nd(structs, [], [])
     tm = CL.classify_tm11(structs, [])
     msg = CL.lone_point_judgment(nd, tm, structs, [], [])
-    assert msg.startswith("LIJ ") and "from 1 911 address point(s) with no building" in msg, msg
+    assert msg.startswith("LIJ ") and "(zone-weighted) from 1 911 address point(s) with no " \
+        "building (3 persons" in msg, msg
     assert msg in nd["judgment"] and msg in tm["notes"]
 
 
