@@ -1168,6 +1168,10 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             # fixed Computation Interval); its 'max' defaults to the Courant target above
             "time_step": None,
             "structures": True,                 # v3.12.0: the run's culverts and bridges
+            # 3.10.56: the culverts and bridges of another run (its dam folder or
+            # run_report.json, e.g. the ANUGA run), faces on the connection lines, and the
+            # weirs / culvert inverts no lower than their cells
+            "structures_from": None, "structure_breaklines": True, "structure_cell_fit": True,
             # TIER 2 fix: how far a rejected inflow point may be walked downstream
             "inflow_search_ft": 3000.0,
             # v3.10.22 (see the constants above build_model's helpers)
@@ -3269,57 +3273,46 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             nominal_cell = sp_["median"]
 
     # --- v3.12.0: the run's culverts, bridges and notches inside the 2D area -------
-    structs, ssrc = run_structures(report) if o["structures"] else ([], "")
-    sinfo = {"source": ssrc, "exported": [], "skipped": []}
-    used = {CONN_NAME, AREA_NAME, SA_NAME}
+    # 3.10.56: or those of another run (structures_from, e.g. the ANUGA run of the dam); the
+    # loop lives in hecras_structures.connections (shared with add_to_package)
+    from . import hecras_structures as hstr
+    s_to_model = to_model
+    if o.get("structures") and o.get("structures_from"):
+        structs, ssrc, s_wtext, snotes = hstr.load_run_structures(o["structures_from"])
+        s_to_model = transformer(srs_from(s_wtext), srs) if s_wtext else None
+        for n_ in snotes:
+            log("Structures: " + n_)
+    else:
+        structs, ssrc = run_structures(report) if o["structures"] else ([], "")
     if structs:
         progress(84, "culverts and bridges")
-    todo = []
-    for s in structs:
-        label = s.name or s.kind or "?"
-        line_u = to_model(np.asarray(s.line, dtype=float)) if (
-            to_model is not None and len(s.line)) else np.zeros((0, 2))
-        if to_model is None:
-            todo.append((s, label, line_u, None, "the run did not record its model coordinate "
-                                                 "system"))
-            continue
-        if len(line_u) < 2:
-            todo.append((s, label, line_u, None, "needs a line with two ends"))
-            continue
-        # the terrain around it: the model's own terrain GeoTIFF, as HEC-RAS will have it
-        pad = units.from_ft(STRUCT_MAX_HALF_FT) + 4 * cell
-        sb = (line_u[:, 0].min() - pad, line_u[:, 1].min() - pad,
-              line_u[:, 0].max() + pad, line_u[:, 1].max() + pad)
-        todo.append((s, label, line_u, _tif_window(terrain_tif, sb, srs), None))
-    # the crest of each structure in the 2D area, so that connections on one road stay apart
-    crests = []
-    for i, (s, label, line_u, g, whynot) in enumerate(todo):
-        if g is not None and cond.points_in_polygon(line_u[:, 0], line_u[:, 1], perim).all():
-            cr = structure_crest(line_u, lambda xy, g=g: _sample(g[0], g[1], g[2], g[3], xy),
-                                 g[3], units.from_ft(0.1))
-            if cr is not None:
-                crests.append((i, label, cr[0]))
-    done = set()
-    for i, (s, label, line_u, g, whynot) in enumerate(todo):
-        if whynot is None:
-            ground = (lambda xy, g=g: _sample(g[0], g[1], g[2], g[3], xy))
-            avoid = [(e["name"], e["line"]) for e in sinfo["exported"]]
-            c, whynot = structure_connection(s, line_u, ground, perim, cell, g[3], units, "",
-                                             avoid, [(lab, q) for j, lab, q in crests if j != i])
-            if whynot and any(j > i for j, _, _ in crests):
-                # two structures too close for a connection each: the first one takes it
-                c, whynot = structure_connection(s, line_u, ground, perim, cell, g[3], units, "",
-                                                 avoid, [(lab, q) for j, lab, q in crests
-                                                         if j in done])
-        if whynot:
-            sinfo["skipped"].append({"name": label, "kind": s.kind, "why": whynot,
-                                     "line": [tuple(p) for p in line_u]})
-            log("Structure {} ({}) not exported: {}".format(label, s.kind, whynot))
-            continue
-        c["name"] = connection_name(label, used)
-        sinfo["exported"].append(c)
-        done.add(i)
-        log("Structure {} ({}): connection '{}' in the 2D area".format(label, s.kind, c["name"]))
+    sinfo = dict(hstr.connections(structs, s_to_model, perim, cell, terrain_tif, srs, units, log),
+                 source=ssrc)
+    # 3.10.56: faces on every connection line (breaklines built into the points), then the
+    # weir and culvert inverts no lower than the cells they connect (HEC-RAS refuses them)
+    if sinfo["exported"] and o.get("structure_breaklines", True):
+        pts, sbl = hstr.connection_breaklines(pts, perim, sinfo["exported"], cell, units,
+                                              conn_line, clip=perimeter_clip(perim))
+        sinfo["breaklines"] = sbl
+        mc = mesh_check(perim, pts, cell)
+        notes.append("Structure breaklines: {} connection line(s) built into the computation "
+                     "points ({:,} removed, {:,} added; {:,} points now){}.".format(
+                         sbl["lines"], sbl.get("points_removed", 0), sbl.get("points_added", 0),
+                         sbl["points"], "".join("; no breakline on {} ({})".format(
+                             k["name"], k["why"]) for k in sbl["skipped"])))
+        log(notes[-1])
+    if sinfo["exported"] and o.get("structure_cell_fit", True):
+        traster = hstr.read_raster(terrain_tif)
+        sck = hstr.cells_check(pts, perim, sinfo["exported"], traster)
+        sinfo["fit"] = hstr.fit_to_cells(sinfo["exported"], sck, units)
+        sinfo["cells_check"] = hstr.check_summary(
+            hstr.cells_check(pts, perim, sinfo["exported"], traster) if sinfo["fit"] else sck)
+        if sinfo["fit"]:
+            notes.append("Structures: {} weir stretch(es) / culvert invert(s) raised to the "
+                         "lowest ground of the cell they connect (HEC-RAS refuses a weir or a "
+                         "culvert below its cells): {}.".format(len(sinfo["fit"]), "; ".join(
+                             hstr.change_text(x, units) for x in sinfo["fit"])))
+            log(notes[-1])
 
     # --- simulation timing ---------------------------------------------------------
     summ = report.get("summary") or {}
@@ -4054,6 +4047,20 @@ def structures_readme(m, sinfo):
                 "lines, {:g} x the span apart, on HEC-RAS's default barrel centrelines (across "
                 "the connection line). The Runner's own lines are in the layout GeoPackage "
                 "(layer 'Structures from the run').".format(1.1), ""]
+    fit = sinfo.get("fit") or []
+    if fit:
+        out += ["Raised to the cells they connect (3.10.56; HEC-RAS refuses a weir or a culvert "
+                "invert below the lowest ground of a connected cell; the terrain is unchanged):",
+                ""]
+        out += ["- " + _hstr_change_text(x, u) + "." for x in fit] + [""]
+    if ex:
+        out += ["Mapping limits (3.10.56): HEC-RAS's culvert group is FHWA inlet / outlet "
+                "control with entrance and exit losses; ANUGA's Boyd operator uses one loss "
+                "coefficient (the run's `losses`) and its own inverts (used here). A bridge is "
+                "an open gap in the road weir down to its invert, as ANUGA and LISFLOOD-FP cut "
+                "it into the DEM: no deck, low chord, piers or pressure flow. Flow over a road "
+                "is the weir equation (coefficient {:g}), not the 2D equations.".format(
+                    u.weir_coef(STRUCT_WEIR_COEF)), ""]
     sk = sinfo.get("skipped") or []
     if sk:
         out += ["Not exported (add them in HEC-RAS if they matter):", ""]
@@ -4070,14 +4077,27 @@ def structures_readme(m, sinfo):
             "metal or another inlet), upstream and downstream inverts, number of barrels and "
             "their centreline stations. Make sure the culvert group is listed for the "
             "connection. Replace an open gap with a bridge or culverts if you have the data.",
-            "2. RAS Mapper: the 2D cells need faces along every connection line. The "
-            "computation points here were laid out without the structures: put breaklines "
-            "on the connection lines (or regenerate the points) so the mesh follows them.",
+            ("2. RAS Mapper: the 2D cells need faces along every connection line. "
+             "3.10.56: the connection lines are breaklines built into the computation points "
+             "(a pair of points half a spacing each side of each line, so the faces lie on "
+             "it; {}). Do not regenerate the points; if you move a connection, enforce its "
+             "breakline in RAS Mapper.".format("; ".join(
+                 "{} {:.0%} on faces".format(k, v) for k, v in
+                 ((sinfo.get("breaklines") or {}).get("on_faces") or {}).items()) or "see the notes")
+             if (sinfo.get("breaklines") or {}).get("lines") else
+             "2. RAS Mapper: the 2D cells need faces along every connection line. The "
+             "computation points here were laid out without the structures: put breaklines "
+             "on the connection lines (or regenerate the points) so the mesh follows them."),
             "3. Compute the property tables (Geometry > Compute Property Tables, or the plan's "
             "geometry preprocessor) and read the messages for each connection.",
             "4. After the run, compare the water upstream of each road with the run's maximum "
             "depth there.", ""]
     return out
+
+
+def _hstr_change_text(x, units):
+    from . import hecras_structures as hstr
+    return hstr.change_text(x, units)
 
 
 def perimeter_clip(perimeter):
