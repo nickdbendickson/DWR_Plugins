@@ -57,7 +57,7 @@ from qgis.core import (
 
 from .compat import NULL, AREA_SQFT, WKB_MULTIPOLYGON, WKB_POINT, FT_INT, FT_DOUBLE, FT_STRING
 from .constants import (
-    CLASS_HIGH, CLASS_JUDGMENT, ZONE_LABELS,
+    CLASS_HIGH, CLASS_JUDGMENT, ZONE_LABELS, ZONE_NAMES_REG05, DANGER_CHART_REG05,
     OSM_EDGE_BUFFER_FT, STRUCTURES_FAMILY, TM11_PERSONS_PER_DWELLING, ND_1D_DEPTH_FT,
     DEFAULT_MIN_UNVERIFIED_AREA_FT2, DEFAULT_POINT_RADIUS_FT,
     STRUCTURE_MERGE_DIST_FT, PROGRESS_INTERVAL, FEATURE_BATCH_SIZE, ADDRESS_SNAP_FT,
@@ -131,9 +131,16 @@ OUT_PROBABLE = "Probable loss of life"
 OUT_JUDGMENT = "Judgment zone"
 OUT_ECONOMIC = "Inundated (economic loss)"
 OUT_DRY = "Not inundated"
-# Shallower than the 1 ft arrival depth: still wet on the grid, not a consequence.
+# Shallower than this: still wet on the grid, not a consequence (= the Runner's arrival depth,
+# ARRIVAL_FT 0.1 ft since Runner 3.10.53).
 CONSEQUENCE_DEPTH_FT = 0.1  # ND 5.2.2 inundated to any degree
 OUT_TRACE = "Below consequence depth"
+# 2.18.52: why First_Arrival_hr is blank at a wet structure (REG_05.2026 5.4(c) asks for the
+# arrival time at each critical feature; the value is left blank, never invented)
+NOTE_ARRIVAL_BELOW = ("no arrival time: the arrival raster has no value at this structure's "
+                      "wet cells (max depth {:.2f} ft); an arrival raster records when the "
+                      "depth first exceeds the model's arrival depth (Runner ARRIVAL_FT: 0.1 ft "
+                      "by default since Runner 3.10.53, 1 ft before - re-run an older result)")
 
 def _kw(*words):
     return re.compile(r"\b(?:%s)\b" % "|".join(re.escape(w) for w in words))
@@ -1848,7 +1855,7 @@ def apply_type(rec, one_d=False, near_ft=DEFAULT_NEAR_THRESHOLD_FT, borderline_h
     changed type (engineer review), 1D / 2D choice or borderline setting is
     applied without reading the rasters again."""
     types = rec.get("_types")
-    rec.update({"near": "", "zone_note": "", "near_raised": False})
+    rec.update({"near": "", "zone_note": "", "near_raised": False, "one_d": bool(one_d)})
     if not types or rec.get("max_depth") is None:
         rec["zone"] = rec["zone_mm"] = rec["margin_high"] = rec["margin_judg"] = None
         rec["loc"] = None
@@ -1888,7 +1895,7 @@ _RESET = {"max_depth": None, "max_vel": None, "arrival": None, "zone_found": Non
           "dv_max": None, "margin_high": None, "margin_judg": None, "near": "",
           "zone_note": "", "loc": None, "near_raised": False, "region": None,
           "reach_ft": None, "region_kind": "", "n_cells": 0, "sampling": "",
-          "cells_xy": None, "_types": None}
+          "cells_xy": None, "_types": None, "arrival_below": False}
 
 
 # v2.7.1: which cells around a structure are read for its maximum depth / velocity
@@ -2204,6 +2211,11 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             rec["max_depth"] = float(d.max())
             rec["max_vel"] = float(v.max()) if vel_ok else None
             rec["arrival"] = float(np.nanmin(a)) if np.isfinite(a).any() else None
+            # 2.18.52: an arrival raster that has no time at any of the structure's wet cells
+            # (the Runner's arrival time is when the depth first EXCEEDS its arrival depth,
+            # ARRIVAL_FT: 0.1 ft by default since Runner 3.10.53, 1 ft before - a shallower
+            # flood never sets it) - said in Notes
+            rec["arrival_below"] = rec["arrival"] is None and bool(samplers["arr"].ok)
             dvv = None
             if dv_all is not None:
                 dvv = dv_all[a0:a1]
@@ -2380,7 +2392,8 @@ STRUCTURE_FIELDS = [
     ("Max_Depth_ft", FT_DOUBLE), ("Max_Vel_fps", FT_DOUBLE),
     ("First_Arrival_hr", FT_DOUBLE), ("Zone_Found", FT_INT),
     ("Zone_Mobile", FT_INT), ("ACER_Zone", FT_INT),
-    ("ACER_Zone_Label", FT_STRING), ("ND_Outcome", FT_STRING),
+    ("ACER_Zone_Label", FT_STRING), ("Danger_Zone", FT_STRING), ("Danger_Chart", FT_STRING),
+    ("ND_Outcome", FT_STRING),
     ("DV_Max_ft2s", FT_DOUBLE), ("Margin_High_ft", FT_DOUBLE),
     ("Margin_Judg_ft", FT_DOUBLE), ("Near_Threshold", FT_STRING),
     ("Pop_Night", FT_DOUBLE), ("Pop_Day", FT_DOUBLE),
@@ -2476,6 +2489,8 @@ def structure_notes(rec):
         notes.append(NOTE_MOBILE_OCCUPIED)
     if rec.get("vel_missing"):
         notes.append("velocity missing on some wet cells (used 0)")
+    if rec.get("arrival_below") and rec.get("max_depth") is not None:
+        notes.append(NOTE_ARRIVAL_BELOW.format(rec["max_depth"]))
     if rec["category"] == CAT_UNVERIFIED:
         notes.append("habitability not confirmed by any source - verify")
     if rec.get("address_note"):
@@ -2495,6 +2510,26 @@ def structure_notes(rec):
                      "number of sites and when it is open".format(rec["camp"].get("shape")
                                                                   or "OSM"))
     return notes
+
+
+def danger_zone(rec):
+    """2.18.51: the REG_05.2026 Fig. 5.1 / 5.2 zone name of the structure's controlling zone
+    (HIGH DANGER ZONE / JUDGMENT ZONE / LOW DANGER ZONE); NULL when dry or for a 1D model, where
+    depth alone decides (5.2.1.1(d))."""
+    if rec.get("one_d") or rec.get("outcome", OUT_DRY) == OUT_DRY:
+        return NULL
+    return ZONE_NAMES_REG05.get(rec.get("zone")) or NULL
+
+
+def danger_chart(rec):
+    """2.18.51: which REG_05.2026 relationship decided the structure: Fig. 5.1 (houses built on
+    foundations), Fig. 5.2 (mobile homes) or the 1D depth > 2 ft rule; NULL when dry."""
+    if rec.get("outcome", OUT_DRY) == OUT_DRY or rec.get("max_depth") is None:
+        return NULL
+    if rec.get("one_d"):
+        return DANGER_CHART_REG05["1d"]
+    return DANGER_CHART_REG05["mobile" if curve_type(rec.get("acer_type")) == TYPE_MOBILE
+                              else "found"]
 
 
 def structures_to_layer(structs, crs, include_dry=False, name="Habitable_Structures"):
@@ -2529,6 +2564,7 @@ def structures_to_layer(structs, crs, include_dry=False, name="Habitable_Structu
             "Zone_Found": _nz(rec.get("zone_found")), "Zone_Mobile": _nz(rec.get("zone_mobile")),
             "ACER_Zone": _nz(rec.get("zone")),
             "ACER_Zone_Label": ZONE_LABELS.get(rec.get("zone"), "DRY"),
+            "Danger_Zone": danger_zone(rec), "Danger_Chart": danger_chart(rec),
             "ND_Outcome": rec.get("outcome", OUT_DRY),
             "DV_Max_ft2s": _nz(rec.get("dv_max")), "Margin_High_ft": _nz(rec.get("margin_high")),
             "Margin_Judg_ft": _nz(rec.get("margin_judg")),
