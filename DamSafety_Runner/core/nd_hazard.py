@@ -851,8 +851,8 @@ def chart_svg(chart, structures=(), width=560, height=380, title=None):
                    'stroke-width="0.6"><title>{}: {:.1f} ft, {:.1f} ft/s</title></circle>'.format(
                        sx(v), sy(d), "#000" if beyond else "#1f4e9c", _esc(s.id), d, v))
     lx = ml + W - 150
-    for i, (lab, col) in enumerate((("High danger", "#ef9897"), ("Judgment", "#f9f4a3"),
-                                    ("Low danger", "#c4e0ad"))):
+    for i, (lab, col) in enumerate((("HIGH DANGER ZONE", "#ef9897"), ("JUDGMENT ZONE", "#f9f4a3"),
+                                    ("LOW DANGER ZONE", "#c4e0ad"))):
         out.append('<rect x="{}" y="{}" width="12" height="10" fill="{}" stroke="#555"/>'
                    '<text x="{}" y="{}">{}</text>'.format(lx, mt + 8 + 15 * i, col, lx + 16,
                                                          mt + 17 + 15 * i, lab))
