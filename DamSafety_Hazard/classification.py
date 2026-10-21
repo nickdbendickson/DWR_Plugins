@@ -562,7 +562,24 @@ def lone_point_judgment(nd, tm11, structs, roads, rails, **kw):
     nd_rests = nd2["cls"] != nd1["cls"] and ND_RANK.get(nd2["cls"], -1) < \
         ND_RANK.get(nd["cls"], -1)
     if not nd_rests and tm2["cls"] == tm11["cls"]:
-        return ""
+        # 2.18.54 review (Docs & QA #134 nit 8): a lighter, always-on line - how much of
+        # the LIJ comes from these points, even when the class does not depend on them
+        extra = (tm11.get("lij") or 0.0) - (tm2.get("lij") or 0.0)
+        if extra <= 1e-9:
+            return ""
+        parcel = sum(1 for r in lone if any((s.get("placement") or "") == "parcel"
+                                            for s in r.get("sources", ())))
+        msg = ("LIJ {:.1f} includes {:.1f} from {} 911 address point(s) with no building (H1 "
+               "default{}): {}; the class is the same without them - confirm on imagery".format(
+                   tm11.get("lij") or 0.0, extra, len(lone),
+                   "; {} at Placement=Parcel".format(parcel) if parcel else "",
+                   "; ".join("structure {} ({}, {:.1f} ft)".format(
+                       r["id"], (r["sources"][0].get("addr_text") or "no address"),
+                       r.get("max_depth") or 0.0) for r in lone[:4])
+                   + ("" if len(lone) <= 4 else " and {} more".format(len(lone) - 4))))
+        nd["judgment"].append(msg)
+        tm11.setdefault("notes", []).append(msg)
+        return msg
     what = []
     if nd_rests:
         what.append("ND {} (without them {})".format(nd["cls"], nd2["cls"]))

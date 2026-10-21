@@ -94,13 +94,18 @@ def test_nondwelling_911_points_are_unverified():
         ((X0 + 2100, Y0), ("D", 3550, "153RD", "AVE", "SE", "Unknown", "Unknown", "")),
     ])
     structs = ST.build_inventory(fema, [("NDGISHUB", pts)], CRS, CTX)
-    for g, why in (("A", "non-residential use"), ("B", "address number 0"),
-                   ("C", "Placement=Parcel")):
+    for g, why in (("A", "non-residential use"), ("B", "address number 0")):
         r = _by_nguid(structs, g)
         assert r.get("lone_address"), g
         assert r["habitable"] == "Unverified", (g, r["habitable"], r.get("site_note"))
         notes = "; ".join(ST.structure_notes(r))
         assert why in notes and "not counted" in notes, (g, notes)
+    # review (#134 finding 3): Placement=Parcel alone is flagged, still counted
+    c = _by_nguid(structs, "C")
+    assert c.get("lone_address") and c["habitable"] == "Yes" and c["persons"] > 0, c
+    notes = "; ".join(ST.structure_notes(c))
+    assert "Placement=Parcel (parcel centroid, not the building) - counted; verify" in notes, \
+        notes
     d = _by_nguid(structs, "D")
     assert d["habitable"] == "Yes" and d["persons"] > 0
     notes = "; ".join(ST.structure_notes(d))
@@ -279,6 +284,115 @@ def test_model_edge_with_nodata_ring():
         BND.describe(res)
     # another raster than the Runner's final one: no domain
     assert BND.runner_domain(os.path.join(os.path.dirname(path), "other.tif")) is None
+
+
+def test_nondwelling_keywords_and_for_new():
+    # review (#134 finding 4)
+    caught = ["added October 2022 per City of Casselton for new Dairy Queen",
+              "new shop", "lift station", "church parking", "grain bins", "temporary address",
+              "for the new Casey's", "for new car wash"]
+    kept = ["added August 2023 for new residence", "for new home", "for a new house",
+            "for new construction", "", "split from 1250", "Parkway Dr addition"]
+    for t in caught:
+        assert ST.nondwelling_note(t), t
+    for t in kept:
+        assert not ST.nondwelling_note(t), t
+
+
+NENA_D = NENA + [("DateUpdate", FT_STRING)]
+MSF = [("height", FT_STRING), ("confidence", FT_STRING)]
+
+
+def test_no_microsoft_footprint_within_300_ft():
+    # Docs & QA #721 rule: a lone 911 point with no Microsoft footprint within 300 ft is
+    # unverified unless its 911 record is newer than the footprint imagery
+    from DamSafety_Hazard import footprints as FP
+    ms = _layer(WKB_POLYGON, "MS_building_footprints", MSF,
+                [((X0, Y0, X0 + 12, Y0 + 12), ("4", "-1"))])
+    pts = _layer(WKB_POINT, "NDGISHUB_address_points", NENA_D, [
+        # #721: 1,271 ft away, record 2022-04-13
+        ((X0 + 12 + 1271 * FT, Y0), ("F1", 3550, "153RD", "AVE", "SE", "Unknown", "Unknown",
+                                     "", "2022-04-13")),
+        # newer than the imagery: stays counted
+        ((X0 + 6, Y0 + 12 + 900 * FT), ("F2", 1103, "RIVER", "RD", "", "Parcel", "Unknown",
+                                         "", "2025-11-06")),
+        # 250 ft from a footprint: not this rule (H1 default)
+        ((X0 + 6, Y0 - 250 * FT), ("F3", 3259, "RIVER PLACE", "DR", "N", "Unknown",
+                                   "Unknown", "", "2021-08-23")),
+        # placed on a structure (no outline yet): not this rule
+        ((X0 - 1000 * FT, Y0), ("F4", 3217, "RIVER PLACE", "DR", "N", "Structure",
+                                "Unknown", "", "2021-08-23")),
+    ])
+    structs = ST.build_inventory([(FP.MS_FAMILY, ms)], [("NDGISHUB", pts)], CRS, CTX)
+    f1 = _by_nguid(structs, "F1")
+    assert f1.get("lone_address") and f1.get("ms_none_within"), f1
+    assert f1["habitable"] == "Unverified" and f1["persons"] == 0, f1["habitable"]
+    n1 = "; ".join(ST.structure_notes(f1))
+    assert "no building within 300 ft in Microsoft footprints" in n1 and \
+        "assumed " + ST.MS_IMAGERY_ASSUMED_DATE in n1 and "2022-04-13" in n1, n1
+    f2 = _by_nguid(structs, "F2")
+    assert f2["habitable"] == "Yes" and f2["persons"] > 0, f2["habitable"]
+    n2 = "; ".join(ST.structure_notes(f2))
+    assert "possibly built after the footprint imagery" in n2 and "Placement=Parcel" in n2, n2
+    f3 = _by_nguid(structs, "F3")
+    assert f3["habitable"] == "Yes" and not f3.get("ms_none_within"), f3
+    assert "Microsoft" not in "; ".join(ST.structure_notes(f3))
+    f4 = _by_nguid(structs, "F4")
+    assert f4["habitable"] == "Yes", f4["habitable"]
+    # the footprint's own capture dates win over the assumed date
+    ms2 = _layer(WKB_POLYGON, "MS_building_footprints", MSF + [("capture_dates_range",
+                                                                 FT_STRING)],
+                 [((X0, Y0, X0 + 12, Y0 + 12), ("4", "-1", "5/1/2023-6/30/2023"))])
+    s2 = ST.build_inventory([(FP.MS_FAMILY, ms2)], [("NDGISHUB", pts)], CRS, CTX)
+    f2b = _by_nguid(s2, "F2")
+    assert "captured 5/1/2023-6/30/2023" in "; ".join(ST.structure_notes(f2b))
+    # without Microsoft footprints the rule does not apply
+    fema = _layer(WKB_POLYGON, "FEMA_Structures", FEMA, [_house(X0, Y0, "1 FAR RD")])
+    s3 = ST.build_inventory(fema, [("NDGISHUB", pts)], CRS, CTX)
+    assert _by_nguid(s3, "F1")["habitable"] == "Yes"
+
+
+def test_record_dates():
+    import datetime
+    assert ST.parse_record_date(1649862040000) == datetime.date(2022, 4, 13)
+    assert ST.parse_record_date("2022-04-13T15:00:40") == datetime.date(2022, 4, 13)
+    assert ST.parse_record_date("4/13/2022") == datetime.date(2022, 4, 13)
+    assert ST.parse_record_date("") is None and ST.parse_record_date(None) is None
+
+
+def test_colocated_groups_do_not_chain_two_houses():
+    # review (#134 finding 5): NSI-A <-> 911 <-> NSI-B, 25 ft each side, 50 ft apart
+    m = 30 * FT
+    a = ({}, QgsPointXY(X0, Y0), "NSI")
+    p = ({}, QgsPointXY(X0 + 26 * FT, Y0), "NDGISHUB")
+    b = ({}, QgsPointXY(X0 + 50 * FT, Y0), "NSI")
+    group_of, groups = ST._colocated_groups([a, p, b], m)
+    assert group_of[0] != group_of[2], groups
+    assert group_of[1] == group_of[2], groups            # the 911 point joins the nearer one
+    # a 911 + NSI + FEMA-point trio of one building still forms one group
+    c = ({}, QgsPointXY(X0 + 5 * FT, Y0), "NDGISHUB")
+    d = ({}, QgsPointXY(X0 + 10 * FT, Y0), "OSM")
+    group_of, groups = ST._colocated_groups([a, c, d], m)
+    assert len(set(group_of.values())) == 1, groups
+
+
+def test_lij_from_lone_points_is_always_listed():
+    # review (#134 nit 8): the class does not rest on the lone point, but its LIJ is listed
+    fema = _layer(WKB_POLYGON, "FEMA_Structures", FEMA,
+                  [_house(X0 + 40 * i, Y0, "{} MAIN ST".format(i), n=i + 1) for i in range(5)])
+    nsi = _layer(WKB_POINT, "NSI_points", NSI, [((X0 + 40 * i + 6, Y0 + 6), (i + 1, "RES1-1SNB", "W"))
+                                                for i in range(5)])
+    pts = _layer(WKB_POINT, "NDGISHUB_address_points", NENA, [
+        ((X0 + 3000, Y0), ("L", 3550, "153RD", "AVE", "SE", "Unknown", "Unknown", ""))])
+    structs = ST.build_inventory(fema, [("NSI", nsi), ("NDGISHUB", pts)], CRS, CTX)
+    _wet(structs, 8.0)
+    assert sum(1 for r in structs if r["habitable"] == "Yes") == 6, \
+        [(r["id"], r["habitable"]) for r in structs]
+    nd = CL.classify_nd(structs, [], [])
+    tm = CL.classify_tm11(structs, [])
+    msg = CL.lone_point_judgment(nd, tm, structs, [], [])
+    assert msg.startswith("LIJ ") and "from 1 911 address point(s) with no building" in msg, msg
+    assert msg in nd["judgment"] and msg in tm["notes"]
 
 
 def main():

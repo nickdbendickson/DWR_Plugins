@@ -397,6 +397,48 @@ def _text(v):
     return "" if is_null(v) else str(v).strip()
 
 
+def parse_record_date(v):
+    """2.18.54: a datetime.date from a 911 DateUpdate / capture date value - QDate(Time),
+    an ISO or m/d/yyyy text, or epoch milliseconds (ArcGIS JSON) - else None."""
+    import datetime
+    if v is None or is_null(v):
+        return None
+    for meth in ("toPyDateTime", "toPyDate"):
+        f = getattr(v, meth, None)
+        if f is not None:
+            try:
+                d = f()
+                return d.date() if isinstance(d, datetime.datetime) else d
+            except Exception:
+                return None
+    if isinstance(v, datetime.datetime):
+        return v.date()
+    if isinstance(v, datetime.date):
+        return v
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        try:
+            return datetime.datetime.utcfromtimestamp(v / 1000.0 if v > 1e11 else v).date()
+        except Exception:
+            return None
+    dates = dates_in_text(str(v))
+    return dates[0] if dates else None
+
+
+def dates_in_text(text):
+    """2.18.54: every date in a text (yyyy-mm-dd or m/d/yyyy), in order."""
+    import datetime
+    out = []
+    for m in re.finditer(r"(\d{4})-(\d{1,2})-(\d{1,2})|(\d{1,2})/(\d{1,2})/(\d{4})", text or ""):
+        try:
+            if m.group(1):
+                out.append(datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3))))
+            else:
+                out.append(datetime.date(int(m.group(6)), int(m.group(4)), int(m.group(5))))
+        except ValueError:
+            continue
+    return out
+
+
 class _SourceReader(object):
     """Field lookup for one source layer (done once, not per feature)."""
 
@@ -421,6 +463,11 @@ class _SourceReader(object):
             else None
         # v2.9: the NENA Site_NGUID of an ND GIS Hub address point
         self.nguid_idx = low.index("site_nguid") if "site_nguid" in low else None
+        # 2.18.54 (Docs & QA #721 rule): the 911 record's DateUpdate, and the imagery dates
+        # of a Microsoft footprint (capture_dates_range, when the release has them)
+        self.date_idx = low.index("dateupdate") if self.nena and "dateupdate" in low else None
+        self.capture_idx = low.index("capture_dates_range") if "capture_dates_range" in low \
+            else None
         # 2.18.53: the FEMA scene an outline was traced on (scene-offset check)
         self.scene_idx = next((low.index(n) for n in _SCENE_FIELDS if n in low), None)
         self.field_names = names
@@ -448,6 +495,10 @@ class _SourceReader(object):
                "nena": self.nena, "place_type": "", "fema": "", "fema_parcel": self.fema_parcel}
         if self.nguid_idx is not None:
             rec["nguid"] = _text(attrs[self.nguid_idx])
+        if self.date_idx is not None:
+            rec["date_update"] = parse_record_date(attrs[self.date_idx])
+        if self.capture_idx is not None:
+            rec["capture_dates"] = _text(attrs[self.capture_idx])
         if self.scene_idx is not None:
             rec["scene"] = _text(attrs[self.scene_idx])
         if self.fema_idx:
@@ -762,8 +813,13 @@ def _is_duplicate(sources, src, pt, dup_dist):
 def _colocated_groups(unplaced, merge_dist):
     """2.18.54: ({index: group}, {group: [indices]}) of points outside every outline -
     points of DIFFERENT sources within merge_dist of each other are one group (same-source
-    points are separate buildings unless the free-standing merge says otherwise)."""
+    points are separate buildings unless the free-standing merge says otherwise).
+    Review (Docs & QA #134 finding 5): two groups that each already hold a point of the
+    same source are never joined, so NSI-A <-> 911 <-> NSI-B (two houses 40-60 ft apart
+    with one 911 point between them) does not chain into one group; the 911 point joins
+    the nearer house only (pairs are joined nearest first)."""
     parent = list(range(len(unplaced)))
+    fams = [{f} for (_s, _p, f) in unplaced]
 
     def find(i):
         while parent[i] != i:
@@ -771,14 +827,19 @@ def _colocated_groups(unplaced, merge_dist):
             i = parent[i]
         return i
     g = _Grid(max(merge_dist, 1e-9))
+    pairs = []
     for k, (_src, pt, family) in enumerate(unplaced):
         for j in g.near(pt.x(), pt.y()):
             pj, fj = unplaced[j][1], unplaced[j][2]
-            if fj != family and math.hypot(pj.x() - pt.x(), pj.y() - pt.y()) <= merge_dist:
-                a, b = find(k), find(j)
-                if a != b:
-                    parent[a] = b
+            d = math.hypot(pj.x() - pt.x(), pj.y() - pt.y())
+            if fj != family and d <= merge_dist:
+                pairs.append((d, j, k))
         g.insert_point(k, pt.x(), pt.y())
+    for _d, j, k in sorted(pairs):
+        a, b = find(k), find(j)
+        if a != b and not (fams[a] & fams[b]):
+            parent[a] = b
+            fams[b] |= fams[a]
     group_of = {k: find(k) for k in range(len(unplaced))}
     groups = {}
     for k, gi in group_of.items():
@@ -825,33 +886,104 @@ SITE_JOIN_FT = 150.0
 RESTORED_ADDR_FT = 1000.0
 RESTORED_NSI_FT = 150.0
 # 911 NOTES naming a non-residential use (WBI gas station, communications hut, store ...)
+# 2.18.54 review (Docs & QA #134 finding 4): generic non-residential words (a brand list -
+# "new Dairy Queen" - cannot keep up) and "for new <X>" where X is not a dwelling word
 _NONDWELLING_NOTES = re.compile(
     r"\b(station|tower|towers|communications?|comm hut|cell site|store|restaurant|"
-    r"farm building|substation|utility|utilities|well site|well pad|cell tower)\b", re.I)
+    r"farm building|substation|utility|utilities|well site|well pad|cell tower|"
+    r"business|commercial|office|shop|warehouse|church|school|garage|shed|grain bins?|bins?|"
+    r"elevator|lift station|pump|pump house|sign|billboard|cemetery|park|"
+    r"temporary address)\b", re.I)
+_FOR_NEW = re.compile(r"\bfor (?:a |the )?new ([a-z][a-z'&.-]*)", re.I)
+# words after "for new" that are (or may be) a dwelling - not evidence of a non-dwelling
+_FOR_NEW_DWELLING = frozenset((
+    "residence", "residences", "residential", "house", "houses", "home", "homes", "dwelling",
+    "dwellings", "mobile", "manufactured", "modular", "trailer", "apartment", "apartments",
+    "apt", "duplex", "triplex", "fourplex", "twin", "twinhome", "townhome", "townhomes",
+    "townhouse", "condo", "condos", "condominium", "cabin", "single", "family", "farmhouse",
+    "farmstead", "rental", "unit", "units", "construction", "build", "building", "buildings",
+    "structure", "lot", "lots", "address", "addresses", "development", "subdivision",
+    "owner", "owners", "parcel", "site", "lake", "basement", "addition"))
+# 2.18.54 (Docs & QA #721 rule): a lone 911 point (Placement not "Structure") with no
+# Microsoft footprint within LONE_911_MS_FT is not counted (Unverified) - three times the
+# 100 ft address snap, so a rural point at a driveway entrance still finds its house -
+# unless the 911 record is newer than the footprint imagery (possibly built since)
+LONE_911_MS_FT = 300.0
+# Microsoft's US footprints carry no capture_dates_range (checked on the 2026 release:
+# only height / confidence; the README gives the imagery as "between 2014 and 2024").
+# Without one, a 911 DateUpdate after this date counts as "possibly newer than the
+# imagery" (the point stays counted). A screening default - engineer judgment.
+MS_IMAGERY_ASSUMED_DATE = "2022-12-31"
 # M3: a 911 anchor test this close to its STRUCTURE_MERGE_DIST_FT limit is a judgment item
 SITE_NEAR_LIMIT_FT = 3.0
 
 
+def nondwelling_note(notes):
+    """2.18.54: the non-residential use a 911 NOTES text names ("" = none)."""
+    notes = notes or ""
+    if _NONDWELLING_NOTES.search(notes):
+        return notes
+    for m in _FOR_NEW.finditer(notes):
+        if m.group(1).lower() not in _FOR_NEW_DWELLING:
+            return notes
+    return ""
+
+
 def _nondwelling_911(srcs):
     """2.18.54: why a lone 911 point is probably not a dwelling ("" = no evidence): NOTES
-    naming a non-residential use, address number 0, or Placement "Parcel" (a parcel
-    centroid, not a building)."""
+    naming a non-residential use, or address number 0. Review (Docs & QA #134 finding 3):
+    Placement "Parcel" alone is no longer evidence - 28 % of the restored points are
+    parcel centroids and a rural home there must stay counted; it is flagged for review
+    instead (_parcel_911_note) and the no-building-within-300-ft rule still applies."""
     why = []
     for s in srcs:
-        m = _NONDWELLING_NOTES.search(s.get("nena_notes") or "")
-        if m:
+        if nondwelling_note(s.get("nena_notes")):
             why.append('911 NOTES name a non-residential use ("{}")'.format(
                 (s.get("nena_notes") or "")[:80]))
         num = (s.get("add_number") or "").strip()
         if num and re.sub(r"[^0-9]", "", num) and int(re.sub(r"[^0-9]", "", num)) == 0:
             why.append("address number 0")
-        if (s.get("placement") or "") == "parcel":
-            why.append("Placement=Parcel (parcel centroid)")
     out = []
     for w in why:
         if w not in out:
             out.append(w)
     return "; ".join(out)
+
+
+def _parcel_911_note(srcs):
+    """2.18.54: the review flag of a lone 911 point placed at its parcel's centroid."""
+    if any((s.get("placement") or "") == "parcel" for s in srcs):
+        return "Placement=Parcel (parcel centroid, not the building) - counted; verify"
+    return ""
+
+
+def _no_building_911(rec, srcs, assumed_imagery=MS_IMAGERY_ASSUMED_DATE):
+    """2.18.54 (Docs & QA #721 rule): (counted, note) for a lone 911 point that has no
+    Microsoft footprint within LONE_911_MS_FT (rec["ms_none_within"], set by
+    _mark_parcel_sites when footprints are loaded). counted=None: the rule does not apply
+    (no footprints loaded, a footprint is near, or the point is on a structure)."""
+    if not rec.get("ms_none_within"):
+        return None, ""
+    if any((s.get("placement") or "") == "structure" for s in srcs):
+        return None, ""
+    import datetime
+    upd = [s.get("date_update") for s in srcs if s.get("date_update")]
+    upd = max(upd) if upd else None
+    img, basis = rec.get("ms_imagery") or (None, "")
+    if img is None:
+        try:
+            img = datetime.date(*(int(x) for x in str(assumed_imagery).split("-")))
+        except Exception:
+            img = None
+        basis = "imagery date not published for these footprints; assumed {}".format(
+            assumed_imagery)
+    if upd is not None and img is not None and upd > img:
+        return True, "no building within {:.0f} ft in Microsoft footprints, but the 911 " \
+            "record ({}) is newer than the footprint imagery ({}) - possibly built after " \
+            "the footprint imagery; counted; verify".format(LONE_911_MS_FT, upd, basis)
+    return False, "no building within {:.0f} ft in Microsoft footprints (imagery {}; 911 " \
+        "record {}) - vacant lot, field access or utility site? not counted (unverified); " \
+        "verify".format(LONE_911_MS_FT, basis, upd or "undated")
 
 
 def _point_of(rec):
@@ -960,7 +1092,22 @@ def _has_own_911(rec, merge_dist):
     return False
 
 
-def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist):
+def _is_ms(rec):
+    return rec.get("geom_kind") == FP.KIND_MS or any(
+        k == FP.KIND_MS for _d, k in rec.get("shape_dims") or ())
+
+
+def _ms_imagery(rec):
+    """(date, text) of the start of a Microsoft footprint's capture_dates_range, or None.
+    The start (not the end): a 911 record after it may be newer than the imagery."""
+    for s in rec.get("sources", ()):
+        ds = dates_in_text(s.get("capture_dates") or "")
+        if ds:
+            return min(ds), "captured {}".format(s.get("capture_dates"))
+    return None
+
+
+def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist, ms_dist=None):
     """v2.20.1: parcel / site evidence for _interpret.
 
     FEMA USA Structures gives every building of a parcel the parcel's address
@@ -983,8 +1130,11 @@ def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist):
                     members.setdefault(s["parcel"], {})[r["id"]] = r
     if not any(r["footprint"] for r in structs):
         return
-    rings = max(1, int(math.ceil(max(join_dist, lone_dist) / grid.cell)))
+    rings = max(1, int(math.ceil(max(join_dist, lone_dist, ms_dist or 0) / grid.cell)))
+    ms_recs = [m for m in structs if m["footprint"] and _is_ms(m)]
     for r in structs:
+        r.pop("ms_none_within", None)
+        r.pop("ms_imagery", None)
         if r["footprint"]:
             continue
         p = r["point"]
@@ -1001,6 +1151,25 @@ def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist):
                 best, best_d = cand, d
         if r["families"] == {"NDGISHUB"} and (best_d is None or best_d > lone_dist):
             r["lone_address"] = True
+            # 2.18.54 (#721 rule): no Microsoft footprint within ms_dist (only when the
+            # footprints are loaded); the nearest footprint's imagery dates, if any
+            if ms_dist and ms_recs:
+                near_ms = False
+                for cand in grid.near(p.x(), p.y(), rings=rings):
+                    if cand.get("footprint") and _is_ms(cand):
+                        try:
+                            d = cand["geom"].distance(pgeom)
+                        except Exception:
+                            continue
+                        if d is not None and 0 <= d <= ms_dist:
+                            near_ms = True
+                            break
+                if not near_ms:
+                    r["ms_none_within"] = True
+                    dated = [(m["geom"].distance(pgeom), m) for m in ms_recs
+                             if _ms_imagery(m) is not None]
+                    if dated:
+                        r["ms_imagery"] = _ms_imagery(min(dated, key=lambda t: t[0])[1])
         if best is not None and best_d <= join_dist:
             for s in best["sources"]:
                 if s.get("parcel"):
@@ -1489,7 +1658,8 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
     problems.summary()
     # v2.20.1: parcel / site evidence (farmstead outbuildings, lone 911 points)
     _mark_parcel_sites(structs, grid, merge_dist, _ft_units(SITE_JOIN_FT, analysis_crs, lat),
-                       _ft_units(snap_ft, analysis_crs, lat))
+                       _ft_units(snap_ft, analysis_crs, lat),
+                       _ft_units(LONE_911_MS_FT, analysis_crs, lat))
     _restored_candidates(structs, _ft_units(RESTORED_ADDR_FT, analysis_crs, lat),
                          _ft_units(RESTORED_NSI_FT, analysis_crs, lat))
     rules = dict(mobile_rules or {})
@@ -1532,8 +1702,8 @@ def _log_site_rules(structs):
     dups = sum(1 for r in structs if r.get("_restored_dup"))
     if nondw or dups:
         log_message("Structure inventory: of the 911 address points with no building, {} "
-                    "carry non-dwelling evidence (911 NOTES, address number 0, Placement "
-                    "Parcel) and are unverified, {} are the same site as a counted structure "
+                    "carry non-dwelling evidence (911 NOTES, address number 0, no Microsoft "
+                    "footprint within 300 ft) and are unverified, {} are the same site as a counted structure "
                     "(same address / NSI residential nearby) and are not counted again".format(
                         nondw, dups))
     if unv or out or lone:
@@ -1763,6 +1933,12 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     lone = bool(rec.get("lone_address")) and not (
         place_kinds & {_PT_DWELLING, _PT_MOBILE, _PT_OCCUPIED})
     nondwelling = _nondwelling_911(nd_srcs) if lone else ""
+    no_bldg_counted, no_bldg_note = _no_building_911(rec, nd_srcs) if lone else (None, "")
+    if no_bldg_counted is False and not nondwelling:
+        nondwelling = no_bldg_note
+    parcel_note = _parcel_911_note(nd_srcs) if lone else ""
+    rec["lone_flags"] = [n for n in (no_bldg_note if no_bldg_counted else "", parcel_note)
+                         if n] if lone else []
     dup = rec.get("dup_of") if lone else None
     if lone:
         # 2.18.54 (Docs & QA): the reason is written to Notes (structure_notes)
@@ -1770,13 +1946,18 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
             "{:.0f} ft and no NSI structure - counted as habitable by the ND site address " \
             "rule; field access, vacant lot, tower or utility site? verify".format(
                 ADDRESS_SNAP_FT)
-        if nondwelling:
+        if nondwelling and nondwelling == no_bldg_note:
+            category = CAT_UNVERIFIED
+            site_note = "911 point with no building: {}".format(no_bldg_note)
+        elif nondwelling:
             category = CAT_UNVERIFIED
             site_note = "911 point with no building: {} - probably not a dwelling, not " \
                 "counted (unverified); verify".format(nondwelling)
         elif dup:
             site_note = "911 point with no building - the same site as structure {} ({}); " \
                 "not counted again".format(dup[0], dup[1])
+        if rec["lone_flags"] and not nondwelling:
+            site_note += "; " + "; ".join(rec["lone_flags"])
 
     # v2.5.1: a structure with an ND GIS Hub site address is habitable - the
     # address is the evidence. Place_Type values that would otherwise read as
