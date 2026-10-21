@@ -208,7 +208,10 @@ def _qt_map(path, a, ext, cell, title, dam_xy, inflow_xy, trace, depth_ft):
     from qgis.PyQt.QtCore import QPointF
     hs = (_hillshade(a, cell) * 255).astype(np.uint8)
     h, w = hs.shape
-    img = QImage(w, h + 20, QImage.Format_RGB32)
+    fmt = getattr(QImage, "Format_RGB32", None)          # Qt6 scopes the enum
+    if fmt is None:
+        fmt = QImage.Format.Format_RGB32
+    img = QImage(w, h + 20, fmt)
     img.fill(QColor(255, 255, 255))
     for r in range(h):
         for c in range(w):

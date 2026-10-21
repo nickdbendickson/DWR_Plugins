@@ -34,7 +34,8 @@ def main():
         if state == "ok" and skipped:
             print("      " + "\n      ".join(skipped[:3]))
         if state == "FAIL":
-            print("      " + "\n      ".join(out.strip().splitlines()[-6:]))
+            # Full output on failure: a short tail can hide the traceback entirely.
+            print("      " + "\n      ".join(out.strip().splitlines()))
     print("\n{} scripts: {ok} ok, {SKIP} skipped, {FAIL} failed".format(len(names), **counts) +
           ("; {} ok* with a part skipped: {}".format(len(partly), ", ".join(partly))
            if partly else ""))
