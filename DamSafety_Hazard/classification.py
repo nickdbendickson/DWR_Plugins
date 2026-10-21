@@ -487,13 +487,16 @@ def extra_criteria(nd, structs, res, cfg, total=False):
         for c in crit:
             if c["criterion"].startswith("Habitable structures inundated"):
                 c["found"] += "; damage ${:,.0f}".format(dmg)
-    # 2.18.49: structure-inventory checks (FEMA scene offsets, points moved from a wet cell
+    # 2.18.53: structure-inventory checks (FEMA scene offsets, points moved from a wet cell
     # onto a dry outline) - judgment items, they never change the class themselves
     try:
         from .structures import inventory_judgment
         inv = inventory_judgment(structs)
     except Exception:                                   # noqa - never fails the result
         inv = []
+    geo = (cfg or {}).get("building_geometry_fallback") if isinstance(cfg, dict) else None
+    if geo and structs:                                 # 2.18.53 (review): FEMA-only geometry
+        inv = list(inv) + [geo]
     for msg in inv:
         at = nd.get("struct_items", 0)
         nd["judgment"].insert(at, msg)

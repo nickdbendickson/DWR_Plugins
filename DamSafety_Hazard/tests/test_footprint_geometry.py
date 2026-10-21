@@ -1,4 +1,4 @@
-"""2.18.49: building geometry - Microsoft footprints first, the FEMA USA Structures
+"""2.18.53: building geometry - Microsoft footprints first, the FEMA USA Structures
 scene-offset check, and points moved from a wet cell onto a dry outline (Docs & QA,
 DWR-8278 hand check 2026-10-21, items 1-3).
 
@@ -206,6 +206,70 @@ def test_snap_from_wet_cell_onto_dry_outline_is_listed():
     ST.evaluate_structures(structs, smp, CRS, CTX)
     assert not structs[0]["snap_flip"]
 
+
+
+def test_single_wide_on_a_wider_microsoft_outline_stays_a_mobile_home():
+    """Review (Docs & QA, REVIEW_133 finding 1): 9250 56th Ave SW - FEMA 16.4 x 81 ft (a
+    single-wide), Microsoft 20.4 x 78.9 ft (oriented boxes). With the Microsoft geometry the
+    building must still be typed a mobile home (FEMA outline's shape, or the Microsoft one
+    with the 3 ft allowance)."""
+    ft = 0.3048
+    fema = _poly_layer("FEMA_Structures", FEMA_FIELDS, [
+        ((X0, Y0, X0 + 16.4 * ft, Y0 + 81.0 * ft),
+         (1, "Residential", "Single Family Dwelling", "9250 56TH AVE SW", "S2"))])
+    ms = _poly_layer("MS_building_footprints", [("ms_source", FT_STRING)], [
+        ((X0 - 0.6, Y0 + 0.3, X0 - 0.6 + 20.4 * ft, Y0 + 0.3 + 78.9 * ft), ("Microsoft",))])
+    nsi = _pt_layer("NSI_structures", NSI_FIELDS, [((X0 + 2.5, Y0 + 12.0),
+                                                     (104080075, "RES1-1SNB", "W", 1300.0))])
+    structs = ST.build_inventory([(ST.STRUCTURES_FAMILY, fema), (FP.MS_FAMILY, ms)],
+                                 [("NSI", nsi)], CRS, CTX)
+    outl = [r for r in structs if r["footprint"]]
+    assert len(outl) == 1 and outl[0]["geom_kind"] == FP.KIND_MS, outl
+    r = outl[0]
+    assert min(r["dims_ft"]) > 20.0                  # the Microsoft box is the wide one
+    assert r["acer_type"] == ST.TYPE_MOBILE and r["mobile_rule"] == "shape", (
+        r["acer_type"], r.get("mobile_rule"), r.get("shape_dims"))
+    # Microsoft outline only: the 3 ft allowance keeps it a single-wide ...
+    ms_only = ST.build_inventory([(FP.MS_FAMILY, ms)], [("NSI", nsi)], CRS, CTX)
+    assert [x["acer_type"] for x in ms_only if x["footprint"]] == [ST.TYPE_MOBILE]
+    # ... a traced FEMA / OSM outline gets none; allowance 0 = the old rule
+    kw = dict(ST.MOBILE_RULE_DEFAULTS, mobile_ms_width_allowance_ft=0.0)
+    ST.reinterpret(ms_only, **kw)
+    assert [x["acer_type"] for x in ms_only if x["footprint"]] != [ST.TYPE_MOBILE]
+    pure = ST.single_wide_outline
+    assert pure({"shape_dims": [((20.4, 78.9), FP.KIND_FEMA)]}) is None
+    assert pure({"shape_dims": [((20.4, 78.9), FP.KIND_MS)]})[1] == FP.KIND_MS
+    assert pure({"shape_dims": [((22.0, 78.9), FP.KIND_MS)]}) is None
+    assert pure({"shape_dims": [((20.4, 78.9), FP.KIND_MS), ((16.4, 81.0), FP.KIND_FEMA)]}) \
+        == ((16.4, 81.0), FP.KIND_FEMA)                 # the traced outline first
+    assert pure({"dims_ft": (16.0, 77.0)}) == ((16.0, 77.0), None)   # older saved records
+
+
+def test_fema_only_geometry_is_in_sources_and_judgment():
+    """Review (REVIEW_133 finding 3): offline / suite folder without Microsoft footprints, the
+    FEMA-only geometry is said in DATA SOURCES and as a judgment item, not only in the log."""
+    from DamSafety_Hazard import pipeline as PL
+    fema, ms, _nsi, _t = _farm()
+    assert PL.building_geometry_note({}, []) == ""
+    assert PL.building_geometry_note({}, [(ST.STRUCTURES_FAMILY, fema), (FP.MS_FAMILY, ms)],
+                                     suite=False) == ""
+    ms_proj = _poly_layer("MS_building_footprints_20261021_x", [("ms_source", FT_STRING)], [])
+    assert PL.building_geometry_note({}, [("OUTLINES", ms_proj)], suite=True) == ""
+    n = PL.building_geometry_note({"download_ms_footprints": True},
+                                  [(ST.STRUCTURES_FAMILY, fema)], suite=True)
+    assert n.startswith("Building geometry: FEMA only - Microsoft footprints unavailable") \
+        and "suite folder" in n, n
+    assert "switched off" in PL.building_geometry_note(
+        {"download_ms_footprints": False}, [(ST.STRUCTURES_FAMILY, fema)], suite=False)
+    assert "download failed" in PL.building_geometry_note(
+        {"download_ms_footprints": True}, [(ST.STRUCTURES_FAMILY, fema)], suite=False)
+    nd = {"cls": "Low", "reasons": [], "judgment": [], "counts": {}}
+    CL.extra_criteria(nd, [], {}, {"building_geometry_fallback": n})
+    assert n not in nd["judgment"]                      # no structures: nothing to say
+    structs = ST.build_inventory(fema, [], CRS, CTX)
+    nd = {"cls": "Low", "reasons": [], "judgment": [], "counts": {}}
+    CL.extra_criteria(nd, structs, {}, {"building_geometry_fallback": n})
+    assert n in nd["judgment"], nd["judgment"]
 
 def main():
     fails = 0
