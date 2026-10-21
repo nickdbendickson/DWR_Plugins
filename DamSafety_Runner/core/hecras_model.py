@@ -3248,6 +3248,19 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         if bcc["action"] == "fail":
             raise HecRasModelError(bcc["note"] + " Build with breach_cell_check='warn' to write "
                                    "the model anyway.")
+    # 3.10.54: HEC-RAS's 'SA 2D Connection ... has a weir elevation lower than the cells', checked
+    # before HEC-RAS (check only: v2e_gmsh_r's notch at 1066.0 ft fronted cells at 1066.61 /
+    # 1066.25 ft; the terrain and the notch are not changed here)
+    wcc = weir_cells_precheck(pts, perim, conn_line, weir, top_u, terrain_tif, srs, cell, o, units)
+    if wcc is not None:
+        site["weir_cells"] = {k: v for k, v in wcc.items() if k != "cells"}
+        notes.append(wcc["note"])
+        log(notes[-1])
+        record_run_report(os.path.join(model_dir, hecras.RUN_REPORT_JSON),
+                          "hecras_weir_cells", wcc, log)
+        if wcc["action"] == "fail":
+            raise HecRasModelError(wcc["note"] + " Build with weir_cell_check='warn' to write "
+                                   "the model anyway.")
     n_faces = vfix["removed"] if vfix else 0
     seeds_info["removed_for_faces"] = int(n_faces)
     seeds_info["nudged_for_faces"] = int(vfix["nudged"]) if vfix else 0
@@ -3602,6 +3615,99 @@ def breach_cells_precheck(pts, perim, conn_line, sc, bvals, top_u, terrain_tif, 
                                                         c["min_elev"], c["above"], u=L)
                                    for c in r["bad_cells"]), u=L))
     r.pop("bad_cells", None)
+    return r
+
+
+WEIR_CELL_CHECK_MODES = ("warn", "fail", "off")
+WEIR_CELL_TOL_FT = 0.01
+
+
+def weir_cell_rows(runs, zmin, weir, tol=0.0):
+    """Pure: for each connection cell run (cell, station from, station to) with a lowest-ground
+    value in `zmin`, the lowest weir elevation over its face (the profile interpolated at both
+    ends and any vertex between) and how far the cell sits above it. HEC-RAS refuses a dam
+    connection whose weir is lower than a cell it connects to ('SA 2D Connection ... has a weir
+    elevation lower than the cells ... This is not allowed', run queue c4_hecras_v2e_gmsh_r).
+    Returns (rows, bad rows)."""
+    st = np.array([a for a, _ in weir], float)
+    el = np.array([b for _, b in weir], float)
+    rows = []
+    for c, a, b in runs:
+        z = zmin.get(int(c))
+        if z is None or not np.isfinite(z):
+            continue
+        inner = el[(st > a) & (st < b)]
+        w = float(min(np.interp([a, b], st, el).min(), inner.min() if len(inner) else np.inf))
+        rows.append({"cell": int(c), "from": round(float(a), 2), "to": round(float(b), 2),
+                     "weir_min": round(w, 3), "min_elev": round(float(z), 3),
+                     "above": round(float(z) - w, 3)})
+    bad = [r for r in rows if r["above"] > tol]
+    return rows, bad
+
+
+def weir_cells_precheck(pts, perim, conn_line, weir, top_u, terrain_tif, srs, cell, o, units):
+    """3.10.54, CHECK ONLY (the terrain and the weir are not changed): the cells along the dam
+    connection where the weir is below the top of dam (the spillway notch; elsewhere the weir is
+    the top of dam or the ground above it) against their lowest ground on the written terrain,
+    as HEC-RAS checks them. Option weir_cell_check: 'warn' (default; a note and
+    run_report.json 'hecras_weir_cells'), 'fail' (stop the build) or 'off'. Returns the result
+    with 'action' and 'note', or None when off, without a notch or not possible."""
+    from . import hecras_breaklines as hbl
+    mode = str(o.get("weir_cell_check") or "warn").strip().lower()
+    if mode not in WEIR_CELL_CHECK_MODES:
+        raise HecRasModelError("weir_cell_check must be one of {} (got {!r})".format(
+            ", ".join(WEIR_CELL_CHECK_MODES), mode))
+    if mode == "off" or not weir:
+        return None
+    st = np.array([a for a, _ in weir], float)
+    el = np.array([b for _, b in weir], float)
+    below = top_u - units.from_ft(0.05)       # the weir is written to 0.01; notches are far lower
+    if not (el < below).any():
+        return None
+    try:
+        runs = hbl.connection_cells(pts, perim, conn_line, units.from_ft(0.1))
+    except ImportError:                                 # pragma: no cover - no scipy
+        return None
+    low = []
+    for c, a, b in runs:
+        inner = el[(st > a) & (st < b)]
+        w = min(np.interp([a, b], st, el).min(), inner.min() if len(inner) else np.inf)
+        if w < below:
+            low.append((c, a, b))
+    if not low:
+        return None
+    cl = np.asarray(conn_line, float)
+    seg = np.hypot(*np.diff(cl, axis=0).T)
+    along = np.r_[0.0, np.cumsum(seg)]
+    ss = np.array([x for _, a, b in low for x in (a, b)])
+    xy = np.column_stack([np.interp(ss, along, cl[:, 0]), np.interp(ss, along, cl[:, 1])])
+    pad = 6.0 * cell
+    lo_xy, hi_xy = xy.min(axis=0) - pad, xy.max(axis=0) + pad
+    ras = _tif_window(terrain_tif, (lo_xy[0], lo_xy[1], hi_xy[0], hi_xy[1]), srs, max_cells=6000)
+    zmin = hbl.cell_min_elevations(pts, [c for c, _, _ in low], ras, perim)
+    tol = units.from_ft(WEIR_CELL_TOL_FT)
+    rows, bad = weir_cell_rows(low, zmin, weir, tol)
+    L = units.len_name
+    r = {"ok": not bad, "mode": mode, "cells": rows, "bad": len(bad), "tol": tol,
+         "terrain_cell": round(float(ras[3]), 3),
+         "action": "ok" if not bad else ("fail" if mode == "fail" else "warn")}
+    if not bad:
+        r["note"] = ("Weir-cell pre-check: OK, the {} cell(s) along the dam connection where the "
+                     "weir is below the top of dam (the spillway notch) reach the weir (highest "
+                     "{:+.2f} {u}).".format(len(rows), max(x["above"] for x in rows) if rows
+                                             else 0.0, u=L))
+    else:
+        r["note"] = ("Weir-cell pre-check {}: {} cell(s) along the dam connection sit above the "
+                     "weir: {}. HEC-RAS stops with 'SA 2D Connection at Dam has a weir elevation "
+                     "lower than the cells ... This is not allowed' (run queue "
+                     "c4_hecras_v2e_gmsh_r). Lower the terrain in those cells to the weir, or "
+                     "check the spillway crest and stations; the builder does not change "
+                     "either.".format(
+                         "FAILED" if r["action"] == "fail" else "WARNING", len(bad),
+                         "; ".join("cell {} (stations {:,.1f}-{:,.1f}) lowest ground {:.2f}, "
+                                   "weir {:.2f}, {:+.2f} {u}".format(
+                                       x["cell"], x["from"], x["to"], x["min_elev"],
+                                       x["weir_min"], x["above"], u=L) for x in bad), u=L))
     return r
 
 
