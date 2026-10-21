@@ -502,10 +502,12 @@ def hecras_engine_compute_timeout_env_override():
     for v in ("soon", "-5", "nan", "inf"):
         t, _, how = he.compute_timeout(68949, 32.0, 3.0, env={he.ENV_TIMEOUT: v})
         assert t is None and "ignored" in how and v in how, (v, how)
-    # the preprocess steps keep their own 1,800 s hang guard; an explicit limit replaces it
-    assert he._timeout({}) == he.PREPROCESS_TIMEOUT_S == 1800.0 and he._timeout(env) == 7200.0
-    for v in ("", "0", "soon", "-5"):
-        assert he._timeout({he.ENV_TIMEOUT: v}) == 1800.0, v
+    # the preprocess steps: no limit either without a value (3.10.48, was 1,800 s);
+    # an explicit limit applies to each step
+    assert he._timeout({}) is None and he._timeout(env) == 7200.0
+    assert not hasattr(he, "PREPROCESS_TIMEOUT_S")
+    for v in ("", "0", "none", "off", "soon", "-5"):
+        assert he._timeout({he.ENV_TIMEOUT: v}) is None, v
     assert he.limit_text(None) == "none" and he.limit_text(7200.0) == "7200 s (2.0 h)"
 
 

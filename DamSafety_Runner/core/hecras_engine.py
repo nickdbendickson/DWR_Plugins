@@ -51,9 +51,10 @@ Settings (environment variables, or the `env` dict of each function):
     NDBREACH_HECRAS_TIMEOUT_S    wall-clock limit in s. Unset, empty or 0 (the default since
                                  Runner 3.10.48): the RasUnsteady compute has NO limit and
                                  runs until it finishes (it was max(2 h, 3 x the estimate)
-                                 capped at 48 h); each preprocess step keeps its 1800 s
-                                 hang guard (a Wine dialog would block it for ever). A
-                                 positive number limits the compute AND each preprocess
+                                 capped at 48 h), and so does each Wine preprocess step
+                                 (no 1800 s cap either: NO limit anywhere; a waiting Wine
+                                 dialog then waits for ever, see NDBREACH_HECRAS_TCU_HOOK).
+                                 A positive number limits the compute AND each preprocess
                                  step to it. Anything else (text, negative) is ignored with
                                  a note in the log. The limit is on the WALL clock
                                  (core/wallclock.py): a paused / forked VM counts, a clock
@@ -135,9 +136,6 @@ def _env(env):
     return os.environ if env is None else env
 
 
-PREPROCESS_TIMEOUT_S = 1800.0      # each Wine preprocess step without an explicit limit
-
-
 def timeout_setting(env=None):
     """NDBREACH_HECRAS_TIMEOUT_S read once: (seconds or None, note). None = no explicit limit:
     the variable is unset, empty, 0 (also '0.0', 'none', 'off') or not a positive number; the
@@ -162,11 +160,9 @@ def timeout_setting(env=None):
 
 
 def _timeout(env):
-    """Each Wine preprocess step: the explicit NDBREACH_HECRAS_TIMEOUT_S, else the
-    PREPROCESS_TIMEOUT_S hang guard (a step takes seconds to minutes; a dialog Wine shows
-    would otherwise stop the run queue for good)."""
-    v, _ = timeout_setting(env)
-    return PREPROCESS_TIMEOUT_S if v is None else v
+    """Each Wine preprocess step's wall-clock limit: the explicit NDBREACH_HECRAS_TIMEOUT_S,
+    else None = no limit (3.10.48; it was 1800 s)."""
+    return timeout_setting(env)[0]
 
 
 def _timeout_override(env):
@@ -217,7 +213,8 @@ def limit_text(timeout):
 def limit_record(timeout, est, how):
     """run_report.json / hecras_stage.json 'hecras_time_limit' (3.10.48)."""
     return {"limit_s": timeout, "limit": limit_text(timeout), "how": how,
-            "estimate_s": round(est, 1) if est else None}
+            "estimate_s": round(est, 1) if est else None,
+            "applies_to": "the RasUnsteady compute and each Wine preprocess step"}
 
 
 def _interval_s(label):
@@ -1164,11 +1161,9 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
     clear message even when the program exited 0. Returns {step: seconds}."""
     d = d or require(env)
     e = wine_env(d, env)
-    to = _timeout(env)
-    _v, _note = timeout_setting(env)
-    (log or (lambda m: None))("HEC-RAS preprocess: each step limited to {} [{}].".format(
-        _hm(to), _note + (" (explicit limit)" if _v is not None else
-                          "; the {:g} s hang guard".format(PREPROCESS_TIMEOUT_S))))
+    to, _note = timeout_setting(env)
+    (log or (lambda m: None))("HEC-RAS preprocess: wall-clock limit per step {} [{}].".format(
+        limit_text(to), _note + (" (explicit limit)" if to is not None else "; no limit")))
     W = lambda p: to_wine_path(p, d["prefix"])
     wdir = d["windows_dir"]
     nice = ["nice", "-n", "19"] if shutil.which("nice") else []

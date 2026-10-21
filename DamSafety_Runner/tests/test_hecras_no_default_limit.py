@@ -217,3 +217,109 @@ def hecras_time_limit_goes_into_run_report_and_its_md_line():
         he.record_limit(dam, {})                      # nothing to record
     finally:
         shutil.rmtree(t, ignore_errors=True)
+
+
+class _PreFake:
+    """Stands in for _run / ras_compile / geometry_hdf_state in preprocess(): records the
+    timeout each Wine step got."""
+
+    def __init__(self):
+        self.timeouts = []
+        self.state = {"exists": False, "size": 0, "cells": 0, "areas": {}, "terrain": "",
+                      "props": False, "error": ""}
+
+    def run(self, cmd, cwd, env, timeout, what, ok=None, log=None):
+        self.timeouts.append(("run", timeout))
+        step = "terrain" if cmd[-1] == "Terrain" else cmd[cmd.index("wine") + 3]
+        if step == "terrain":
+            q = os.path.join(cmd[-2].replace("Z:", "").replace("\\", "/"), "Terrain.hdf")
+            os.makedirs(os.path.dirname(q), exist_ok=True)
+            open(q, "w").write("x")
+        elif step == "assoc":
+            self.state["terrain"] = ".\\Terrain\\Terrain.hdf"
+        elif step == "props":
+            self.state["props"] = True
+            self.state["areas"] = {"Downstream": {"cells": 10, "props": True}}
+        return "OK " + step + (" tables complete" if step == "props" else "")
+
+    def ras(self, project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0, until=None,
+            what=None):
+        self.timeouts.append(("ras", timeout))
+        if until is not None:
+            self.state.update(exists=True, size=1000, cells=10,
+                              areas={"Downstream": {"cells": 10, "props": False}})
+
+    def hdf(self, path):
+        return dict(self.state)
+
+
+def _preprocess(env):
+    from nd_breach_runner.tests.test_hecras_engine import _FAKE_D
+    t = tempfile.mkdtemp()
+    f = _PreFake()
+    saved = he._run, he.ras_compile, he.geometry_hdf_state
+    he._run, he.ras_compile, he.geometry_hdf_state = f.run, f.ras, f.hdf
+    logs = []
+    try:
+        he.preprocess(t, "M", d=_FAKE_D, env=env, terrain_tif="/x/t.tif", prj="/x/p.prj",
+                      log=logs.append)
+    finally:
+        he._run, he.ras_compile, he.geometry_hdf_state = saved
+        shutil.rmtree(t, ignore_errors=True)
+    return f.timeouts, logs
+
+
+@test
+def hecras_preprocess_has_no_limit_without_a_value():
+    """Nick, 2026-10-21: no 1,800 s cap on terrain / mesh / drv / Ras.exe -c either."""
+    for env in ({}, {he.ENV_TIMEOUT: ""}, {he.ENV_TIMEOUT: "0"}, {he.ENV_TIMEOUT: "off"},
+                {he.ENV_TIMEOUT: "soon"}):
+        tos, logs = _preprocess(env)
+        assert len(tos) == 5 and all(t is None for _, t in tos), (env, tos)
+        line = [m for m in logs if m.startswith("HEC-RAS preprocess:")]
+        assert line and "wall-clock limit per step none" in line[0], (env, logs)
+        assert "1800" not in line[0], line
+
+
+@test
+def hecras_preprocess_explicit_value_limits_each_step():
+    tos, logs = _preprocess({he.ENV_TIMEOUT: "900"})
+    assert len(tos) == 5 and all(t == 900.0 for _, t in tos), tos
+    line = [m for m in logs if m.startswith("HEC-RAS preprocess:")][0]
+    assert "wall-clock limit per step 900 s" in line and "explicit limit" in line, line
+
+
+@test
+def hecras_ras_compile_without_a_limit_waits_for_the_process():
+    """Ras.exe -c's polling loop with timeout=None: a Deadline that never expires, so it
+    returns when the run inputs appear (no Wine: Popen and wineserver are faked)."""
+    import subprocess as sp
+    clock = Clock()
+    real_popen, real_run, real_deadline = sp.Popen, sp.run, wc.Deadline
+    polls = {"n": 0}
+
+    class P:
+        def poll(self):
+            return None
+
+        def kill(self):
+            pass
+
+    def until():
+        polls["n"] += 1
+        clock.w += 10 * H                      # 10 h of wall clock per poll
+        clock.m += 10 * H
+        return polls["n"] >= 6                 # inputs appear after 60 h
+
+    t = tempfile.mkdtemp()
+    try:
+        sp.Popen = lambda *a, **k: P()
+        sp.run = lambda *a, **k: sp.CompletedProcess(a, 0, b"", b"")
+        wc.Deadline = lambda timeout, what="", log=None, **kw: real_deadline(
+            timeout, what=what, log=log, wall=clock.wall, mono=clock.mono)
+        d = {"prefix": t, "wine": "wine", "ras_exe": os.path.join(t, "Ras.exe")}
+        he.ras_compile(t, "M", "01", d, {}, None, poll_s=0.0, until=until, what="run inputs")
+    finally:
+        sp.Popen, sp.run, wc.Deadline = real_popen, real_run, real_deadline
+        shutil.rmtree(t, ignore_errors=True)
+    assert polls["n"] == 6, polls

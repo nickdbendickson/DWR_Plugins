@@ -120,9 +120,9 @@ Reporting only: the model, the rasters and the flood polygons don't change. Fiel
 - `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s) sets the wait between SIGTERM and SIGKILL.
 
 ## HEC-RAS compute: no wall-clock limit by default (Runner 3.10.48)
-- With `NDBREACH_HECRAS_TIMEOUT_S` unset, empty or `0`, RasUnsteady runs until it finishes. Before 3.10.48 it was stopped at max(2 h, 3 × the estimate), capped at 48 h, even with the variable unset.
+- With `NDBREACH_HECRAS_TIMEOUT_S` unset, empty or `0`, RasUnsteady and each preprocess step run until they finish. Before 3.10.48 it was stopped at max(2 h, 3 × the estimate), capped at 48 h, even with the variable unset.
 - A positive value still stops the compute (and each preprocess step) after that many wall-clock seconds, with SIGTERM, then SIGKILL after `NDBREACH_HECRAS_KILL_GRACE_S`. An invalid value is ignored, with a note in the log.
-- Preprocess steps without an explicit value keep a 1,800 s guard against a stuck Wine dialog.
+- With no value there is no limit anywhere: the Wine preprocess steps lost their 1,800 s cap too. A Wine dialog waiting for a click (the TCU prompt) then waits until someone deals with it; use `NDBREACH_HECRAS_TCU_HOOK` or a positive value for unattended batches.
 - The limit in force ("none" or N s) is in the Runner log, `run_report.json` (`hecras_time_limit`) and the run report's "HEC-RAS wall-clock limit" row.
 
 ## Not verified in this guide
