@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""2.18.49: building-outline geometry sources and the FEMA USA Structures scene-offset check.
+"""2.18.53: building-outline geometry sources and the FEMA USA Structures scene-offset check.
 
 Why (DWR-8278 hand check, Docs & QA 2026-10-21): FEMA / ORNL USA Structures outlines are
 traced per Maxar scene, and one scene (1030010045BF2F00, 2015-06-26) is placed about 14.7 m

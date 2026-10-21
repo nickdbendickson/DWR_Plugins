@@ -107,7 +107,7 @@ class RunSettings:
         self.planning_cell_m = 30.0
         self.manning_n = 0.06
         self.manning_scale = 1.0         # multiplies the Manning raster too (sensitivity)
-        self.arrival_depth_ft = ARRIVAL_DEPTH_FT    # 0.1 ft since 3.10.45 (was 1 ft)
+        self.arrival_depth_ft = ARRIVAL_DEPTH_FT    # 0.1 ft since 3.10.53 (was 1 ft)
         self.edge_tolerance_ft = 1.0
         self.initial_length_mi = 5.0
         self.half_width_mi = 1.0
@@ -684,6 +684,17 @@ def anuga_threads_line(th):
         txt += "; ANUGA reported {}".format(rep)
     if th.get("note"):
         txt += "; " + th["note"]
+    return txt
+
+
+def hecras_time_limit_line(lim):
+    """One line for run_report.md from run_report["hecras_time_limit"] (3.10.48)."""
+    txt = str(lim.get("limit") or "none")
+    if lim.get("how"):
+        txt += " ({})".format(lim["how"])
+    if lim.get("estimate_s"):
+        txt += "; estimated RasUnsteady time {:.0f} s ({:.1f} h)".format(
+            lim["estimate_s"], lim["estimate_s"] / 3600.0)
     return txt
 
 
@@ -1918,6 +1929,9 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
     if fallback:
         summary["hecras_inflow"] = "breach at the dam (fallback)"
         log("WARNING: " + fallback)
+    htl = report.get("hecras_time_limit") or {}       # 3.10.48 (hecras_engine.record_limit)
+    if htl:
+        summary["hecras_time_limit"] = hecras_time_limit_line(htl)
     report["summary"] = summary
     report["screening_pass_lisflood"] = screening
     report["final_engine"] = {"model": final_model, "figures_from": dict(paths),
@@ -2479,6 +2493,8 @@ def render_report(r):
         lines.append("| ANUGA checkpoints | {} |".format(s["anuga_checkpoint"]))
     if s.get("anuga_threads"):
         lines.append("| ANUGA threads | {} |".format(s["anuga_threads"]))
+    if s.get("hecras_time_limit"):
+        lines.append("| HEC-RAS wall-clock limit | {} |".format(s["hecras_time_limit"]))
     lines.append("")
     if s.get("anuga_mesh_rejected"):
         lines += ["## ANUGA mesh", "", "**" + s["anuga_mesh_rejected"] + "**", ""]

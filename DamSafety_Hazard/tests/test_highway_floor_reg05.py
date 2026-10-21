@@ -1,4 +1,4 @@
-"""Hazard 2.18.48: US / State highways (REG_05.2026 5.2.1.2(b)) and blank arrival times.
+"""Hazard 2.18.52: US / State highways (REG_05.2026 5.2.1.2(b)) and blank arrival times.
 
   * Roads: a US or State highway is at least Medium whatever its AADT (5.2.1.2(b), p. 23); the
     private / AADT < 500 Low rule (5.2.1.2(a)) is for local, county and private roads. This
@@ -12,7 +12,7 @@
     road rule: its Low of record stands.
   * Arrival (5.4(c)): a wet structure with no arrival-raster value at its wet cells (the flood
     there never exceeded the model's arrival depth: Runner ARRIVAL_FT, 0.1 ft by default since
-    Runner 3.10.45, 1 ft in older results) keeps a blank First_Arrival_hr - nothing is
+    Runner 3.10.53, 1 ft in older results) keeps a blank First_Arrival_hr - nothing is
     invented - and its Notes say why and that an older result needs a re-run.
 
     QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_highway_floor_reg05.py
@@ -39,6 +39,7 @@ from DamSafety_Hazard import structures as ST, classification as CL, linear as L
 from DamSafety_Hazard import pipeline as PL  # noqa: E402
 from DamSafety_Hazard.helpers import RasterSampler  # noqa: E402
 from DamSafety_Hazard.constants import ND_HIGH, ND_MEDIUM, ND_LOW  # noqa: E402
+from DamSafety_Hazard.compat import FT_STRING  # noqa: E402
 
 FAILS = []
 US_STATE = ("US 2", "U.S. Highway 85", "US-85", "US HWY 52", "ND 23", "ND-1804", "ND HWY 22",
@@ -69,7 +70,7 @@ def _nd_hazard():
 
 def road_classes(texts):
     lyr = QgsVectorLayer("LineString?crs=EPSG:5070", "roads", "memory")
-    lyr.dataProvider().addAttributes([QgsField("FULLNAME", 10)])   # QVariant.String
+    lyr.dataProvider().addAttributes([QgsField("FULLNAME", FT_STRING)])  # QGIS 3 and 4 (a bare 10 fails on PyQt6)
     lyr.updateFields()
     rd = LN.AttrReader(lyr)
     out = {}
@@ -110,8 +111,8 @@ def roads_part():
     check("private road -> Low", LN.nd_road_class(LN.ROAD_PRIVATE, None)[0] == ND_LOW)
     # ND NG9-1-1 roads: SHIELD USHY / STHY (US 83 through a town is 'S WASHINGTON ST')
     lyr = QgsVectorLayer("LineString?crs=EPSG:5070", "ng911", "memory")
-    lyr.dataProvider().addAttributes([QgsField("FULL_NAME", 10), QgsField("SHIELD", 10),
-                                      QgsField("RoadClass", 10)])
+    lyr.dataProvider().addAttributes([QgsField("FULL_NAME", FT_STRING), QgsField("SHIELD", FT_STRING),
+                                      QgsField("RoadClass", FT_STRING)])
     lyr.updateFields()
     rd = LN.AttrReader(lyr)
     for name, shield, want in (("S WASHINGTON ST", "USHY", LN.ROAD_US),

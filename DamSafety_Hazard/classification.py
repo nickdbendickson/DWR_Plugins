@@ -106,7 +106,7 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
     road_high = [r for r in roads if r["nd_class"] == ND_HIGH]
     road_med = [r for r in roads if r["nd_class"] == ND_MEDIUM]
     road_low = [r for r in roads if r["nd_class"] == ND_LOW and not r.get("nd_judgment")]
-    # 2.18.48: US / State highways, REG_05.2026 5.2.1.2(b): at least Medium whatever the AADT
+    # 2.18.52: US / State highways, REG_05.2026 5.2.1.2(b): at least Medium whatever the AADT
     road_us_state = [r for r in roads if r.get("road_class") in ("US Highway", "State Highway")]
     if road_high:
         reasons.append("HIGH - {} overtopped road stretch(es) on Interstates or with "
@@ -487,13 +487,16 @@ def extra_criteria(nd, structs, res, cfg, total=False):
         for c in crit:
             if c["criterion"].startswith("Habitable structures inundated"):
                 c["found"] += "; damage ${:,.0f}".format(dmg)
-    # 2.18.49: structure-inventory checks (FEMA scene offsets, points moved from a wet cell
+    # 2.18.53: structure-inventory checks (FEMA scene offsets, points moved from a wet cell
     # onto a dry outline) - judgment items, they never change the class themselves
     try:
         from .structures import inventory_judgment
         inv = inventory_judgment(structs)
     except Exception:                                   # noqa - never fails the result
         inv = []
+    geo = (cfg or {}).get("building_geometry_fallback") if isinstance(cfg, dict) else None
+    if geo and structs:                                 # 2.18.53 (review): FEMA-only geometry
+        inv = list(inv) + [geo]
     for msg in inv:
         at = nd.get("struct_items", 0)
         nd["judgment"].insert(at, msg)
@@ -542,7 +545,7 @@ def extra_criteria(nd, structs, res, cfg, total=False):
 
 
 def lone_point_judgment(nd, tm11, structs, roads, rails, **kw):
-    """2.18.50 (Docs & QA, H1): when the ND or TM 11 class rests on 911 address points with
+    """2.18.54 (Docs & QA, H1): when the ND or TM 11 class rests on 911 address points with
     no building (counted habitable by the ND site address rule - H1 default), say so in the
     judgment items and the TM 11 notes. The class is not changed. Returns the message."""
     from .structures import lone_911_counted
@@ -699,7 +702,7 @@ def write_summary(output_folder, lines, nd, tm11, transform_ctx):
     rows += [("ND {} {}".format(c["section"], c["criterion"]),
               "{} -> {}".format(c["found"], c["result"]) if c["found"] else c["result"])
              for c in nd.get("criteria", [])]
-    # 2.18.47: REG_05.2026 classes are High / Medium / Low; the ACER TM 11 Table 1 class
+    # 2.18.51: REG_05.2026 classes are High / Medium / Low; the ACER TM 11 Table 1 class
     # (Low / Significant / High) is a reference, said so in the item, never the ND class
     rows += [("TM 11 classification (ACER TM 11 Table 1 reference, not the ND class)",
               tm11["cls"]),

@@ -112,7 +112,7 @@ def _polygon_edge_groups(sampler, geoms, rows_per_strip=512):
 
 
 def runner_domain(depth_path, width=None, height=None):
-    """2.18.50: the model domain of a DamSafety Runner result, from the run folder next to
+    """2.18.54: the model domain of a DamSafety Runner result, from the run folder next to
     the depth raster (<dam>/_breach_model): ("mesh", [(x, y), ...]) - the ANUGA mesh
     boundary (anuga/mesh_boundary.csv, the raster's CRS) when ANUGA gave the final rasters;
     ("grid", None) - LISFLOOD-FP gave them and its model grid (lisflood/run.dem.asc) has the
@@ -190,7 +190,7 @@ def check(depth_sampler, analysis_crs, transform_ctx, boundary_layer=None,
             raise ValueError("the model boundary layer has no polygon")
         groups, res["checked"] = _polygon_edge_groups(depth_sampler, geoms)
     else:
-        # 2.18.50: a Runner result knows its own model domain (Docs & QA, Absaraka
+        # 2.18.54: a Runner result knows its own model domain (Docs & QA, Absaraka
         # anuga_structures: the raster's outer ring is no-data around the ANUGA mesh, so the
         # raster-edge check saw 0 cells while the mesh edge was wet to 8.4 ft)
         dom = runner_domain(depth_path, depth_sampler.xsize, depth_sampler.ysize)

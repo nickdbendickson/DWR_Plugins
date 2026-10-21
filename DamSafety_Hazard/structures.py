@@ -134,15 +134,15 @@ OUT_JUDGMENT = "Judgment zone"
 OUT_ECONOMIC = "Inundated (economic loss)"
 OUT_DRY = "Not inundated"
 # Shallower than this: still wet on the grid, not a consequence (= the Runner's arrival depth,
-# ARRIVAL_FT 0.1 ft since Runner 3.10.45).
+# ARRIVAL_FT 0.1 ft since Runner 3.10.53).
 CONSEQUENCE_DEPTH_FT = 0.1  # ND 5.2.2 inundated to any degree
 OUT_TRACE = "Below consequence depth"
-# 2.18.48: why First_Arrival_hr is blank at a wet structure (REG_05.2026 5.4(c) asks for the
+# 2.18.52: why First_Arrival_hr is blank at a wet structure (REG_05.2026 5.4(c) asks for the
 # arrival time at each critical feature; the value is left blank, never invented)
 NOTE_ARRIVAL_BELOW = ("no arrival time: the arrival raster has no value at this structure's "
                       "wet cells (max depth {:.2f} ft); an arrival raster records when the "
                       "depth first exceeds the model's arrival depth (Runner ARRIVAL_FT: 0.1 ft "
-                      "by default since Runner 3.10.45, 1 ft before - re-run an older result)")
+                      "by default since Runner 3.10.53, 1 ft before - re-run an older result)")
 
 def _kw(*words):
     return re.compile(r"\b(?:%s)\b" % "|".join(re.escape(w) for w in words))
@@ -188,6 +188,11 @@ MOBILE_MAX_WIDTH_FT = 18.0
 MOBILE_MIN_RATIO = 2.5
 MOBILE_MIN_LENGTH_FT = 30.0
 MOBILE_MAX_LENGTH_FT = 90.0
+# 2.18.53: Microsoft's ML footprints come out wider than the traced FEMA / OSM outlines (9250 56th
+# Ave SW: FEMA 16.4 x 81 ft, Microsoft 20.4 x 78.9 ft, oriented boxes). The single-wide shape is
+# tested on every outline of the building (any one passing is shape evidence), and a Microsoft
+# outline gets this much extra width (screening parameter; 18 + 3 = 21 ft).
+MOBILE_MS_WIDTH_ALLOWANCE_FT = 3.0
 # NENA unit designators of a lot / space in a mobile-home park (screening
 # choice): "Lot 12", "LOT 3", "Trlr 4", "Space 7", "Spc 7", "Lot #12"
 MOBILE_LOT_UNIT_WORDS = ("lot", "trlr", "trailer", "space", "spc")
@@ -214,6 +219,7 @@ MOBILE_RULE_DEFAULTS = {
     "mobile_shape": True, "mobile_max_width_ft": MOBILE_MAX_WIDTH_FT,
     "mobile_min_ratio": MOBILE_MIN_RATIO, "mobile_min_length_ft": MOBILE_MIN_LENGTH_FT,
     "mobile_max_length_ft": MOBILE_MAX_LENGTH_FT, "mobile_lot_units": True,
+    "mobile_ms_width_allowance_ft": MOBILE_MS_WIDTH_ALLOWANCE_FT,
 }
 
 
@@ -262,13 +268,34 @@ def single_wide_shape(dims, max_width_ft=MOBILE_MAX_WIDTH_FT, min_ratio=MOBILE_M
     return (w <= float(max_width_ft) and ln / w >= float(min_ratio)
             and float(min_length_ft) <= ln <= float(max_length_ft))
 
+def single_wide_outline(rec, max_width_ft=MOBILE_MAX_WIDTH_FT, min_ratio=MOBILE_MIN_RATIO,
+                        min_length_ft=MOBILE_MIN_LENGTH_FT, max_length_ft=MOBILE_MAX_LENGTH_FT,
+                        ms_allowance_ft=MOBILE_MS_WIDTH_ALLOWANCE_FT):
+    """2.18.53: ((width_ft, length_ft), outline kind) of the first outline of the building
+    that has a single-wide's shape, else None. Every outline attached to the building is
+    tried - the traced FEMA / OSM ones first (their width is the reliable one), then the
+    Microsoft footprint with `ms_allowance_ft` extra width (ML outlines are wider). Records
+    without rec["shape_dims"] (older saves) use rec["dims_ft"] as before."""
+    cands = list(rec.get("shape_dims") or [])
+    if not cands and rec.get("dims_ft"):
+        cands = [(rec["dims_ft"], rec.get("geom_kind"))]
+    cands.sort(key=lambda c: c[1] == FP.KIND_MS)
+    for dims, kind in cands:
+        if not dims:
+            continue
+        w = float(max_width_ft) + (float(ms_allowance_ft or 0.0) if kind == FP.KIND_MS else 0.0)
+        if single_wide_shape(dims, w, min_ratio, min_length_ft, max_length_ft):
+            return tuple(sorted(float(v) for v in dims)), kind
+    return None
+
+
 _TEXT_HINTS = ("occ", "use", "type", "class", "building", "amenity", "tourism",
                "landuse", "residential", "descr", "category", "struct", "bldg", "landmk")
 _ADDRESS_HINTS = ("addr", "address", "add_num", "fulladd", "st_num", "house_num")
 _NSI_FIELDS = ("occtype", "bldgtype", "fd_id", "sqft", "pop2amu65", "pop2amo65",
                "pop2pmu65", "pop2pmo65", "val_struct", "val_cont", "found_ht", "found_type",
                "num_story", "ftprntsqft")
-# 2.18.49: FEMA USA Structures source scene (Maxar image id) of an outline
+# 2.18.53: FEMA USA Structures source scene (Maxar image id) of an outline
 _SCENE_FIELDS = ("image_name",)
 # NENA NG9-1-1 site / structure address points (ND GIS Hub). Street-name
 # parts are never read as building descriptions ("LSt_Type=TER" is a street
@@ -388,13 +415,13 @@ class _SourceReader(object):
         self.parcel_idx = [low.index(n) for n in _FEMA_PARCEL_ADDR if n in low] \
             if self.fema_parcel else []
         self.placement_idx = low.index("placement") if "placement" in low else None
-        # 2.18.50: NENA NOTES / Add_Number - non-dwelling evidence of a lone 911 point
+        # 2.18.54: NENA NOTES / Add_Number - non-dwelling evidence of a lone 911 point
         self.notes_idx = low.index("notes") if self.nena and "notes" in low else None
         self.addnum_idx = low.index("add_number") if self.nena and "add_number" in low \
             else None
         # v2.9: the NENA Site_NGUID of an ND GIS Hub address point
         self.nguid_idx = low.index("site_nguid") if "site_nguid" in low else None
-        # 2.18.49: the FEMA scene an outline was traced on (scene-offset check)
+        # 2.18.53: the FEMA scene an outline was traced on (scene-offset check)
         self.scene_idx = next((low.index(n) for n in _SCENE_FIELDS if n in low), None)
         self.field_names = names
         self.unit_idx = [i for i, n in enumerate(low) if n in _UNIT_FIELDS] if self.nena else []
@@ -733,7 +760,7 @@ def _is_duplicate(sources, src, pt, dup_dist):
 
 
 def _colocated_groups(unplaced, merge_dist):
-    """2.18.50: ({index: group}, {group: [indices]}) of points outside every outline -
+    """2.18.54: ({index: group}, {group: [indices]}) of points outside every outline -
     points of DIFFERENT sources within merge_dist of each other are one group (same-source
     points are separate buildings unless the free-standing merge says otherwise)."""
     parent = list(range(len(unplaced)))
@@ -790,7 +817,7 @@ def _outline_takes_points(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2):
 SITE_JOIN_FT = 150.0
 
 
-# 2.18.50 (Docs & QA, H1 restored points): a lone 911 point (no outline, no NSI) is the
+# 2.18.54 (Docs & QA, H1 restored points): a lone 911 point (no outline, no NSI) is the
 # same site as a habitable structure carrying its address (FEMA parcel address) within
 # RESTORED_ADDR_FT, or as a habitable NSI residential (RES*) structure within
 # RESTORED_NSI_FT - the low end of Docs & QA's 150-300 ft, so a lake-lot neighbour 186 ft away
@@ -806,7 +833,7 @@ SITE_NEAR_LIMIT_FT = 3.0
 
 
 def _nondwelling_911(srcs):
-    """2.18.50: why a lone 911 point is probably not a dwelling ("" = no evidence): NOTES
+    """2.18.54: why a lone 911 point is probably not a dwelling ("" = no evidence): NOTES
     naming a non-residential use, address number 0, or Placement "Parcel" (a parcel
     centroid, not a building)."""
     why = []
@@ -847,7 +874,7 @@ def _own_911_addresses(rec):
 
 
 def _restored_candidates(structs, addr_dist, nsi_dist):
-    """2.18.50: rec["dup_cands"] on lone 911 structures: [(id, why)] of structures that may
+    """2.18.54: rec["dup_cands"] on lone 911 structures: [(id, why)] of structures that may
     already represent the same site (resolved after _interpret, _resolve_restored_dups)."""
     lone = [r for r in structs if r.get("lone_address")]
     for r in structs:
@@ -904,7 +931,7 @@ def _restored_candidates(structs, addr_dist, nsi_dist):
 
 
 def _resolve_restored_dups(structs):
-    """2.18.50: a lone 911 structure whose site is already a habitable structure
+    """2.18.54: a lone 911 structure whose site is already a habitable structure
     (dup_cands) is the same dwelling: rec["dup_of"] = (id, why), applied by _interpret."""
     by_id = {r["id"]: r for r in structs}
     changed = []
@@ -980,7 +1007,7 @@ def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist):
                     members.setdefault(s["parcel"], {})[r["id"]] = r
     band = merge_dist * SITE_NEAR_LIMIT_FT / STRUCTURE_MERGE_DIST_FT
     for k, recs in members.items():
-        # 2.18.50 (DWR-8278, M3 at 29.4 ft against 30 ft): a 911 point moved onto one of
+        # 2.18.54 (DWR-8278, M3 at 29.4 ft against 30 ft): a 911 point moved onto one of
         # the parcel's buildings from within SITE_NEAR_LIMIT_FT of the limit - the
         # outbuilding reading of the others could flip; a judgment item when wet
         close = []
@@ -1021,7 +1048,7 @@ def _gis_crs(crs):
     return crs
 
 
-# 2.18.49: a FEMA outline whose building centre is this close to an outline of another
+# 2.18.53: a FEMA outline whose building centre is this close to an outline of another
 # source (Microsoft / OSM) of a similar area is that building, when they do not overlap
 NEAR_MATCH_FT = 33.0
 NEAR_MATCH_AREA_RATIO = 2.5
@@ -1075,7 +1102,7 @@ def _nearest_other_outline(grid, g, reach, kind):
 
 
 def _check_fema_scenes(items, pending, analysis_crs, lat, da=None):
-    """2.18.49: FP.scene_offsets of the FEMA outlines in `items` against the Microsoft
+    """2.18.53: FP.scene_offsets of the FEMA outlines in `items` against the Microsoft
     footprints among them (when loaded) or else the NSI points in `pending`. Logged."""
     fema = [it for it in items if it["kind"] == FP.KIND_FEMA and it["src"].get("scene")]
     if not fema:
@@ -1121,14 +1148,14 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
     clip: extent.ExtentClip - only outlines touching / points inside it
     mobile_rules: v2.9 - keyword arguments of _interpret for the manufactured-
         home rules (MOBILE_RULE_DEFAULTS; None = the defaults)
-    geometry: 2.18.49 - "auto" (default): Microsoft building footprints, when one of the
+    geometry: 2.18.53 - "auto" (default): Microsoft building footprints, when one of the
         outline sources is them, give the building geometry and the other sources'
         outlines (FEMA parcel address / occupancy) are matched onto them; FEMA outlines
         of a scene flagged by the scene-offset check come after the other sources.
-        "listed": the outline sources in the order given (before 2.18.49).
-    scene_shift: 2.18.49 - move the outlines of a flagged FEMA scene by the scene's
+        "listed": the outline sources in the order given (before 2.18.53).
+    scene_shift: 2.18.53 - move the outlines of a flagged FEMA scene by the scene's
         median offset (off by default: the offset is reported, not applied)
-    scene_report: 2.18.49 - a dict filled with FP.scene_offsets() per FEMA scene
+    scene_report: 2.18.53 - a dict filled with FP.scene_offsets() per FEMA scene
     Every outline record keeps rec["dims_ft"] = (width_ft, length_ft) of its
     oriented minimum bounding box (None if not measurable) for the shape rule.
     """
@@ -1166,7 +1193,7 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
             shape_lat[0] = center_latitude(g.boundingBox(), analysis_crs, transform_ctx)
         return footprint_dims_ft(g, analysis_crs, shape_lat[0])
 
-    # 2.18.49: every outline is read first, then the points, then the FEMA scene-offset
+    # 2.18.53: every outline is read first, then the points, then the FEMA scene-offset
     # check (it needs both), and only then are the buildings formed - so the geometry
     # can come from the most accurate source (Microsoft footprints first, geometry="auto")
     items = []
@@ -1237,7 +1264,7 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
                 seen_fd.add(fd)
             pending.append((src, pt, family))
 
-    # --- 2.18.49: FEMA USA Structures scene-offset check ----------------------
+    # --- 2.18.53: FEMA USA Structures scene-offset check ----------------------
     scenes = _check_fema_scenes(items, pending, analysis_crs, lat, da)
     if scene_report is not None:
         scene_report.clear()
@@ -1290,6 +1317,7 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
             if host is not None:
                 host["sources"].append(src)
                 host["families"].add(ofam)
+                host.setdefault("shape_dims", []).append((dims_of(g), it["kind"]))
                 merged_outlines += 1
                 continue
         try:
@@ -1300,6 +1328,7 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
                "area_ft2": area_ft2, "sources": [src],
                "families": {ofam}, "notes": [], "dims_ft": dims_of(g),
                "geom_kind": it["kind"]}
+        rec["shape_dims"] = [(rec["dims_ft"], it["kind"])]
         structs.append(rec)
         grid.insert_rect(rec, g.boundingBox())
     if merged_outlines:
@@ -1342,7 +1371,7 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
         by_id = {r["id"]: r for r in structs}
         takes = {r["id"]: _outline_takes_points(r) for r in structs if r["footprint"]}
         nearest = {}
-        # 2.18.50 (DWR-8278): points of different sources within STRUCTURE_MERGE_DIST_FT
+        # 2.18.54 (DWR-8278): points of different sources within STRUCTURE_MERGE_DIST_FT
         # of each other describe one building - they are snapped together, with the
         # shortest reach of the group (a 911 point 0.2 m from an NSI point is not moved
         # 35 ft while the NSI point stays: before, the 100 ft / 30 ft reaches split them)
@@ -1600,7 +1629,8 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
                persons_per_dwelling=TM11_PERSONS_PER_DWELLING, mobile_shape=True,
                mobile_max_width_ft=MOBILE_MAX_WIDTH_FT, mobile_min_ratio=MOBILE_MIN_RATIO,
                mobile_min_length_ft=MOBILE_MIN_LENGTH_FT,
-               mobile_max_length_ft=MOBILE_MAX_LENGTH_FT, mobile_lot_units=True):
+               mobile_max_length_ft=MOBILE_MAX_LENGTH_FT, mobile_lot_units=True,
+               mobile_ms_width_allowance_ft=MOBILE_MS_WIDTH_ALLOWANCE_FT):
     """Category, habitability, ACER type and occupancy basis for a record.
 
     v2.9 manufactured-home rules (see the module docstring for the order):
@@ -1735,7 +1765,7 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     nondwelling = _nondwelling_911(nd_srcs) if lone else ""
     dup = rec.get("dup_of") if lone else None
     if lone:
-        # 2.18.50 (Docs & QA): the reason is written to Notes (structure_notes)
+        # 2.18.54 (Docs & QA): the reason is written to Notes (structure_notes)
         site_note = "911 point with no building (H1 default): no building outline within " \
             "{:.0f} ft and no NSI structure - counted as habitable by the ND site address " \
             "rule; field access, vacant lot, tower or utility site? verify".format(
@@ -1791,13 +1821,17 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     mobile_rule = "park_lot" if is_mobile and weak and not strong else ""
     # v2.9: footprint shape of a single-wide, when nothing else says anything
     shape_txt, shape_conflict = "", False
-    if mobile_shape and not evidence and dwelling_like and rec.get("footprint") \
-            and rec.get("dims_ft") and single_wide_shape(
-                rec["dims_ft"], mobile_max_width_ft, mobile_min_ratio, mobile_min_length_ft,
-                mobile_max_length_ft):
-        w_ft, l_ft = sorted(rec["dims_ft"])
+    shape_hit = None
+    if mobile_shape and not evidence and dwelling_like and rec.get("footprint"):
+        shape_hit = single_wide_outline(rec, mobile_max_width_ft, mobile_min_ratio,
+                                        mobile_min_length_ft, mobile_max_length_ft,
+                                        mobile_ms_width_allowance_ft)
+    if shape_hit is not None:
+        (w_ft, l_ft), kind = shape_hit
         shape_txt = "footprint shape suggests a single-wide manufactured home " \
-            "({:.0f} x {:.0f} ft)".format(w_ft, l_ft)
+            "({:.0f} x {:.0f} ft{})".format(
+                w_ft, l_ft, ", {} outline".format(kind) if kind and kind != rec.get(
+                    "geom_kind") else "")
         house = KW_HOUSE_EXPLICIT.search(norm)
         if house:
             shape_conflict = conflict = True
@@ -1910,7 +1944,7 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
         rec["occupancy"] = "{} (overnight recreation){}".format(
             camp.get("category") or "Campground",
             ": " + camp["name"] if camp.get("name") else "")
-    # 2.18.50: a restored 911 point of a site already counted is the same dwelling
+    # 2.18.54: a restored 911 point of a site already counted is the same dwelling
     # (not a second household; the structure is still sampled and listed)
     if dup and rec["habitable"] == "Yes":
         rec["dwelling_extra"] = True
@@ -1964,15 +1998,17 @@ def reinterpret(structs, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
                 persons_per_dwelling=TM11_PERSONS_PER_DWELLING, mobile_shape=True,
                 mobile_max_width_ft=MOBILE_MAX_WIDTH_FT, mobile_min_ratio=MOBILE_MIN_RATIO,
                 mobile_min_length_ft=MOBILE_MIN_LENGTH_FT,
-                mobile_max_length_ft=MOBILE_MAX_LENGTH_FT, mobile_lot_units=True):
+                mobile_max_length_ft=MOBILE_MAX_LENGTH_FT, mobile_lot_units=True,
+                mobile_ms_width_allowance_ft=MOBILE_MS_WIDTH_ALLOWANCE_FT):
     """Re-apply the habitability / occupancy rules with other settings
     (v2.9: and the manufactured-home rules, see _interpret)."""
     kw = dict(mobile_shape=mobile_shape, mobile_max_width_ft=mobile_max_width_ft,
               mobile_min_ratio=mobile_min_ratio, mobile_min_length_ft=mobile_min_length_ft,
-              mobile_max_length_ft=mobile_max_length_ft, mobile_lot_units=mobile_lot_units)
+              mobile_max_length_ft=mobile_max_length_ft, mobile_lot_units=mobile_lot_units,
+              mobile_ms_width_allowance_ft=mobile_ms_width_allowance_ft)
     for rec in structs:
         _interpret(rec, min_area_ft2, persons_per_dwelling, **kw)
-    # 2.18.50: restored-911 duplicates follow the hosts' new habitability
+    # 2.18.54: restored-911 duplicates follow the hosts' new habitability
     for rec in _resolve_restored_dups(structs):
         _interpret(rec, min_area_ft2, persons_per_dwelling, **kw)
 
@@ -2641,9 +2677,9 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             rec["max_depth"] = float(d.max())
             rec["max_vel"] = float(v.max()) if vel_ok else None
             rec["arrival"] = float(np.nanmin(a)) if np.isfinite(a).any() else None
-            # 2.18.48: an arrival raster that has no time at any of the structure's wet cells
+            # 2.18.52: an arrival raster that has no time at any of the structure's wet cells
             # (the Runner's arrival time is when the depth first EXCEEDS its arrival depth,
-            # ARRIVAL_FT: 0.1 ft by default since Runner 3.10.45, 1 ft before - a shallower
+            # ARRIVAL_FT: 0.1 ft by default since Runner 3.10.53, 1 ft before - a shallower
             # flood never sets it) - said in Notes
             rec["arrival_below"] = rec["arrival"] is None and bool(samplers["arr"].ok)
             dvv = None
@@ -2690,7 +2726,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
     return structs
 
 
-# 2.18.49: a point moved farther than this onto an outline is listed when the point's own
+# 2.18.53: a point moved farther than this onto an outline is listed when the point's own
 # cell is wet and the outline is dry (the snap crossed into another flood cell - DWR-8278,
 # 9250 56th Ave SW: a 911 point moved 35 ft onto a FEMA outline that was 14 m out of place)
 SNAP_FLIP_FT = 33.0
@@ -2954,7 +2990,7 @@ NOTE_SNAP_FLIP = ("{family} point moved {moved_ft:.0f} ft onto this outline from
 
 
 def geometry_note(rec):
-    """2.18.49: where the outline came from when the FEMA scene-offset check or the
+    """2.18.53: where the outline came from when the FEMA scene-offset check or the
     Microsoft-footprint geometry decided it ("" otherwise)."""
     if not rec.get("footprint"):
         return ""
@@ -2997,7 +3033,7 @@ def structure_notes(rec):
         notes.append("habitability not confirmed by any source - verify")
     if rec.get("address_note"):
         notes.append(rec["address_note"])
-    # 2.18.50 (Docs & QA): the M3 outbuilding / H1 lone-911 reasons were never written
+    # 2.18.54 (Docs & QA): the M3 outbuilding / H1 lone-911 reasons were never written
     if rec.get("site_note"):
         notes.append(rec["site_note"])
     sn = rec.get("site_near")
@@ -3026,7 +3062,7 @@ def structure_notes(rec):
 
 
 def danger_zone(rec):
-    """2.18.47: the REG_05.2026 Fig. 5.1 / 5.2 zone name of the structure's controlling zone
+    """2.18.51: the REG_05.2026 Fig. 5.1 / 5.2 zone name of the structure's controlling zone
     (HIGH DANGER ZONE / JUDGMENT ZONE / LOW DANGER ZONE); NULL when dry or for a 1D model, where
     depth alone decides (5.2.1.1(d))."""
     if rec.get("one_d") or rec.get("outcome", OUT_DRY) == OUT_DRY:
@@ -3035,7 +3071,7 @@ def danger_zone(rec):
 
 
 def danger_chart(rec):
-    """2.18.47: which REG_05.2026 relationship decided the structure: Fig. 5.1 (houses built on
+    """2.18.51: which REG_05.2026 relationship decided the structure: Fig. 5.1 (houses built on
     foundations), Fig. 5.2 (mobile homes) or the 1D depth > 2 ft rule; NULL when dry."""
     if rec.get("outcome", OUT_DRY) == OUT_DRY or rec.get("max_depth") is None:
         return NULL
@@ -3268,7 +3304,7 @@ def inventory_qa(structs, outline_families=(STRUCTURES_FAMILY, "OSM", "USA_STRUC
                                             "OUTLINES", FP.MS_FAMILY)):
     """(record, issue) pairs for the completeness check: outlines that no
     point source describes (possible unmapped dwelling or outbuilding) and
-    points without an outline (possible missing footprint). 2.18.49: one row per
+    points without an outline (possible missing footprint). 2.18.53: one row per
     FEMA scene flagged by the scene-offset check (on its first structure) and one per
     point moved > SNAP_FLIP_FT from a wet cell onto a dry outline."""
     fams = set(outline_families)
@@ -3297,7 +3333,7 @@ def inventory_qa(structs, outline_families=(STRUCTURES_FAMILY, "OSM", "USA_STRUC
 
 
 def inventory_judgment(structs):
-    """2.18.49: judgment items (text) from the structure inventory checks: flagged FEMA
+    """2.18.53: judgment items (text) from the structure inventory checks: flagged FEMA
     scenes in the study area and points moved from a wet cell onto a dry outline."""
     items = []
     scenes = {}
@@ -3332,7 +3368,7 @@ def inventory_judgment(structs):
                         r["id"], r["snap_flip"][0]["ref"], r["snap_flip"][0]["point_depth_ft"])
                     for r in flips[:4]) + ("" if len(flips) <= 4 else " and {} more".format(
                         len(flips) - 4))))
-    # 2.18.50: M3 site-anchor test within SITE_NEAR_LIMIT_FT of its limit, wet buildings
+    # 2.18.54: M3 site-anchor test within SITE_NEAR_LIMIT_FT of its limit, wet buildings
     near = {}
     for r in structs:
         sn = r.get("site_near")
@@ -3353,7 +3389,7 @@ def inventory_judgment(structs):
 
 
 def lone_911_counted(structs):
-    """2.18.50: wet habitable structures that are only a 911 point with no building (H1
+    """2.18.54: wet habitable structures that are only a 911 point with no building (H1
     default) and are counted (not a duplicate)."""
     return [r for r in structs if r.get("lone_address") and r.get("habitable") == "Yes"
             and not r.get("dwelling_extra")

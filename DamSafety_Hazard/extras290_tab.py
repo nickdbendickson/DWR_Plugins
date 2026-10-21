@@ -223,7 +223,7 @@ class Extras290TabMixin(object):
             "building inside one is read as park evidence. Needs internet access (skipped "
             "offline or when the offline pack answers). Volunteer-mapped data: check them.")
         form.addRow("", self.trailer_parks_check)
-        # 2.18.49: building geometry (DWR-8278: a FEMA scene 14.7 m out of place)
+        # 2.18.53: building geometry (DWR-8278: a FEMA scene 14.7 m out of place)
         self.ms_footprints_check = WrapCheckBox("Use Microsoft building footprints for the "
                                                 "building outlines (internet)")
         self.ms_footprints_check.setChecked(bool(_default("download_ms_footprints")))

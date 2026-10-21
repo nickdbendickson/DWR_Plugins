@@ -16,7 +16,7 @@ assert not hz.is_interstate("US Hwy 2") and not hz.is_interstate("Main St")
 # a missing, NaN, zero or negative AADT is UNKNOWN (assumed Medium by default), never Low
 for bad in (None, float("nan"), 0, -3, "", "n/a"):
     assert hz.road_level(bad, "county road") == "Medium", bad
-    # Screening 0.17.37 / nd_hazard 1.2.0: a US / State highway is at least Medium (5.2.1.2(b))
+    # Screening 0.17.38 / nd_hazard 1.2.0: a US / State highway is at least Medium (5.2.1.2(b))
     # whatever the AADT assumption
     assert hz.road_level(bad, "State Highway 6", unknown="Low") == "Medium", bad
 assert hz.road_level(300, "State Highway 6") == "Medium" and hz.road_level(10, "US 2") == "Medium"

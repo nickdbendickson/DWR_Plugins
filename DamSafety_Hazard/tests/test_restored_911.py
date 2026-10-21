@@ -1,4 +1,4 @@
-"""2.18.50: restored 911 points (H1, #113) and the DWR-8278 inventory follow-ups
+"""2.18.54: restored 911 points (H1, #113) and the DWR-8278 inventory follow-ups
 (Docs & QA 2026-10-21, items 4-10): duplicates of a site already counted, 911 points
 with non-dwelling evidence, the Notes reason, the class-rests-on-lone-points judgment
 item, the model-edge check of a raster with a no-data ring (Runner ANUGA mesh / LISFLOOD

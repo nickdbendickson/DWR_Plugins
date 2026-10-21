@@ -136,7 +136,7 @@ def is_interstate(class_text, name_text=""):
 
 
 def is_us_state(class_text, name_text="", class_field=""):
-    """3.10.45 (nd_hazard 1.2.0): a US / State highway from the class field or the name
+    """3.10.53 (nd_hazard 1.2.0): a US / State highway from the class field or the name
     (5.2.1.2(b)). class_field: the class field's name; an OSM highway / fclass field also counts
     'primary'."""
     osm = str(class_field or "").strip().lower() in ("highway", "fclass")
@@ -145,7 +145,7 @@ def is_us_state(class_text, name_text="", class_field=""):
 
 
 def _flagged_entry(folder):
-    """3.10.45: the structure_flags entry of a dam folder (its name, or its dam.json dam_id /
+    """3.10.53: the structure_flags entry of a dam folder (its name, or its dam.json dam_id /
     nid_id), else None. Never raises."""
     try:
         rec = None
@@ -887,7 +887,7 @@ class NDHazardAlgorithm(_ToolBase):
                       "aadt_joined": getattr(self, "_aadt_log", [])}
         flag = _flagged_entry(folder)
         if flag:
-            # 3.10.45: a flagged structure (damsuite/structure_flags.py, e.g. DWR-3161, the ND-23
+            # 3.10.53: a flagged structure (damsuite/structure_flags.py, e.g. DWR-3161, the ND-23
             # road fill over backwater) keeps its hazard of record; no road rule (5.2.1.2(b)
             # included) or computed class replaces it - this class is for information only
             road_check["flagged_structure"] = "{} ({})".format(sflags.note(flag),

@@ -1,6 +1,6 @@
 """Fill the danger-zone cells of an exported XLSX table with the zone colours of the ND Dam
 Safety Standards REG_05.2026 Figures 5.1 / 5.2 (pp. 21-22): HIGH DANGER ZONE #EF9897,
-JUDGMENT ZONE #F9F4A3, LOW DANGER ZONE #C4E0AD (2.18.47).
+JUDGMENT ZONE #F9F4A3, LOW DANGER ZONE #C4E0AD (2.18.51).
 
 GDAL's XLSX driver writes values only, so after export_layer_to_formats writes a table that has
 a zone column (ACER_Zone_Label, Danger_Zone) this adds three solid fills to xl/styles.xml and

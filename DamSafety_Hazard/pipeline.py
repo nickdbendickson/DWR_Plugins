@@ -147,7 +147,7 @@ DEFAULTS.update(SE.CONSEQ_DEFAULTS)
 DEFAULTS.update(PH.DEFAULTS)
 DEFAULTS.update({
     "download_trailer_parks": True,     # OpenStreetMap mobile-home parks (residential=trailer_park)
-    # 2.18.49: building geometry - Microsoft footprints (outputs/_downloads, never the offline
+    # 2.18.53: building geometry - Microsoft footprints (outputs/_downloads, never the offline
     # pack), "auto" geometry order, FEMA scene offsets moved only when switched on
     "download_ms_footprints": True, "outline_geometry": "auto", "fema_scene_shift": False,
     "fast_sampling": False,             # vectorised ring / band cell selection (fastsample.py)
@@ -474,7 +474,8 @@ _EVAL_KEYS = ("extent_buffer_ft", "keep_dry", "download_nsi", "download_address"
               "access", "access_ft", "incremental_ft", "eap", "eap_travel", "sampled_cells",
               "sample_area", "sensitivity", "termination", "refresh_data", "local_data",
               "mobile_shape", "mobile_max_width_ft", "mobile_min_ratio", "mobile_min_length_ft",
-              "mobile_max_length_ft", "mobile_lot_units", "download_trailer_parks",
+              "mobile_max_length_ft", "mobile_lot_units", "mobile_ms_width_allowance_ft",
+              "download_trailer_parks",
               "fast_sampling", "download_ms_footprints", "outline_geometry", "fema_scene_shift")
 _EVAL_LAYERS = ("road_layer", "aadt_layer", "rail_layer", "crossing_layer",
                 "extra_outline_layer", "dam_layer", "lifeline_layer", "centerline_layer",
@@ -933,6 +934,9 @@ def _run_classification(run, cfg):
                 "evaluation' for a full run".format(
                     cached["time"], " (saved by an earlier QGIS session)" if from_disk else ""))
         run.sources.extend(state["sources"])
+        cfg["building_geometry_fallback"] = next(        # 2.18.53: keep the judgment item
+            (x for x in state["sources"] if str(x).startswith("Building geometry: FEMA only")),
+            "")
         run.sources.append("Evaluation re-used from the run of {}".format(cached["time"]))
         run.forced_1d = state["forced_1d"]
         run.subject_dam = state["subject_dam"]
@@ -957,8 +961,42 @@ LOCAL_CFG_KEYS = {"roads": "road_layer", "aadt": "aadt_layer", "rail": "rail_lay
                   "parcels": "parcel_layer", "centerline": "centerline_layer"}
 
 
+def building_geometry_note(cfg, outlines, suite=None):
+    """2.18.53 (review): '' when Microsoft footprints are among the outline sources (or there are
+    no outlines at all); otherwise the DATA SOURCES / judgment line that the building geometry is
+    FEMA (or other traced outlines) only, and why. `suite`: downloads_disabled() (default)."""
+    if not outlines:
+        return ""
+    for fam, lyr in outlines:
+        if fam == FP.MS_FAMILY:
+            return ""
+        try:
+            if FP.outline_kind("", "{} {}".format(lyr.name(), lyr.source()),
+                               [f.name() for f in lyr.fields()]) == FP.KIND_MS:
+                return ""
+        except Exception:                                   # noqa - a stand-in layer
+            continue
+    if suite is None:
+        try:
+            suite = bool(downloads_disabled())
+        except Exception:                                   # noqa
+            suite = False
+    if suite:
+        why = "a suite folder is set, so nothing is downloaded, and no Microsoft footprint " \
+              "layer is in the project or data folder"
+    elif not cfg.get("download_ms_footprints"):
+        why = "the Microsoft footprint download is switched off"
+    else:
+        why = "the download failed and there is no earlier copy (offline?)"
+    return ("Building geometry: FEMA only - Microsoft footprints unavailable ({}). Structures "
+            "are placed on the FEMA USA Structures outlines; where a FEMA scene is offset the "
+            "class can differ from a run with Microsoft footprints (DWR-8278: High with them, "
+            "Low without). Re-run online or add a Microsoft footprint layer before the class "
+            "is final.".format(why))
+
+
 def _has_ms_outlines(cfg, osm, loc):
-    """2.18.49: a Microsoft footprint layer is already among the outline sources (project /
+    """2.18.53: a Microsoft footprint layer is already among the outline sources (project /
     data-folder layer) - then it is not downloaded."""
     for lyr in (cfg.get("extra_outline_layer"), osm if not isinstance(osm, str) else None,
                 (loc or {}).get("usa")):
@@ -1615,7 +1653,7 @@ def _classify_and_write(run, cfg, state):
                 sc.name, type(e).__name__, e))
             raise
         extra_criteria(nd, s_view, res, cfg)
-        try:                                    # 2.18.50: class resting on lone 911 points
+        try:                                    # 2.18.54: class resting on lone 911 points
             lone_point_judgment(nd, tm11, s_view, r_view, l_view, judgment_as_probable=judge,
                                 one_d=one_d, roads_evaluated=inputs["roads_on"],
                                 rail_evaluated=inputs["rail_on"],
@@ -2240,6 +2278,12 @@ def _collect_inputs(run, clip):
     for line in tile_cache_report_lines():          # v2.8: tiles read from the cache
         run.log(line)
     run.sources.extend(tile_cache_source_lines())
+    # 2.18.53 (review): FEMA-only geometry is said in DATA SOURCES and as a judgment item
+    geo_note = building_geometry_note(cfg, outlines)
+    cfg["building_geometry_fallback"] = geo_note
+    if geo_note:
+        run.sources.append(geo_note)
+        run.log(">>> NOTE: " + geo_note)
     tick(19, "Inputs ready")
     return {"points": points, "outlines": outlines, "roads": road, "aadt": aadt,
             "aadt_layers": aadt_layers,
