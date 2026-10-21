@@ -1132,6 +1132,8 @@ def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist, ms_dist=
         return
     rings = max(1, int(math.ceil(max(join_dist, lone_dist, ms_dist or 0) / grid.cell)))
     ms_recs = [m for m in structs if m["footprint"] and _is_ms(m)]
+    ms_dated = [(m, _ms_imagery(m)) for m in ms_recs]
+    ms_dated = [(m, im) for m, im in ms_dated if im is not None]   # once, not per point
     for r in structs:
         r.pop("ms_none_within", None)
         r.pop("ms_imagery", None)
@@ -1166,10 +1168,9 @@ def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist, ms_dist=
                             break
                 if not near_ms:
                     r["ms_none_within"] = True
-                    dated = [(m["geom"].distance(pgeom), m) for m in ms_recs
-                             if _ms_imagery(m) is not None]
-                    if dated:
-                        r["ms_imagery"] = _ms_imagery(min(dated, key=lambda t: t[0])[1])
+                    if ms_dated:
+                        r["ms_imagery"] = min(ms_dated, key=lambda t: t[0]["geom"].distance(
+                            pgeom))[1]
         if best is not None and best_d <= join_dist:
             for s in best["sources"]:
                 if s.get("parcel"):
