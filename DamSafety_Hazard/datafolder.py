@@ -1167,6 +1167,13 @@ def _score(ds, table, nhd_fields):
         ev["outlines"].add(50, "name '{}' -> building outlines".format(n))
     elif next((x for x in names if _is_osm_name(x)), None) and "building" in low:
         ev["outlines"].add(45, "OpenStreetMap buildings")
+    else:
+        # 2.18.53: Microsoft building footprints (the Data plugin's microsoft_footprints
+        # NorthDakota.geojson, or a Global ML Building Footprints download) - geometry source
+        from .footprints import KIND_MS, outline_kind
+        n = next((x for x in names if outline_kind("", x) == KIND_MS), None)
+        if n:
+            ev["outlines"].add(50, "name '{}' -> Microsoft building footprints".format(n))
     if "building" in low and ev["outlines"].primary:
         ev["outlines"].also("field building")
     n = next((x for x in names if _camp_re().search(_singular(_layer_name_key(x)))), None)
