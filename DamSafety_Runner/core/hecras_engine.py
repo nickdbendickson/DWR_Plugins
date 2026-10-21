@@ -211,6 +211,18 @@ def limit_text(timeout):
     return "none" if timeout is None else _hm(timeout)
 
 
+def within_text(timeout):
+    """'within N s' / 'with no time limit' for messages about a step that may have no limit
+    (3.10.54: timeout=None since 3.10.48; '{:.0f}'.format(None) raised a TypeError that hid
+    the real failure, run queue c4_hecras_v2e_gmsh_r)."""
+    if timeout is None:
+        return "with no time limit (no limit)"
+    try:
+        return "within {:.0f} s".format(float(timeout))
+    except (TypeError, ValueError):
+        return "within {} s".format(timeout)
+
+
 def limit_record(timeout, est, how):
     """run_report.json / hecras_stage.json 'hecras_time_limit' (3.10.48)."""
     return {"limit_s": timeout, "limit": limit_text(timeout), "how": how,
@@ -295,6 +307,9 @@ def last_simtime_hr(text):
 
 
 def _hm(sec):
+    """'N s (x.x h)'; 'no limit' for None (3.10.54: never a TypeError in an error path)."""
+    if sec is None:
+        return "no limit"
     return "{:.0f} s ({:.1f} h)".format(sec, sec / 3600.0)
 
 
@@ -853,8 +868,8 @@ def _run(cmd, cwd, env, timeout, what, ok=None, log=None):
                           log=log, what=what)
     except subprocess.TimeoutExpired as x:
         stop = getattr(x, "stop", None) or {}
-        raise HecRasEngineError("{} did not finish in {:.0f} s (wall clock){}".format(
-            what, timeout, "; stopped with " + ", then ".join(stop["sent"])
+        raise HecRasEngineError("{} did not finish {} (wall clock){}".format(
+            what, within_text(timeout), "; stopped with " + ", then ".join(stop["sent"])
             if stop.get("sent") else ""))
     except OSError as e:
         raise HecRasEngineError("{} could not start: {}".format(what, e))
@@ -914,8 +929,8 @@ def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None,
             msg = compute_timeout_message(timeout, elapsed, _read_text(log_path), sim_hours,
                                           estimate)
         except Exception as e:                       # never lose the timeout itself
-            msg = "Linux RasUnsteady did not finish in {:.0f} s ({}: {})".format(
-                timeout, type(e).__name__, e)
+            msg = "Linux RasUnsteady did not finish {} ({}: {})".format(
+                within_text(timeout), type(e).__name__, e)
         info["message"] = msg
         head = ("[ndbreach] TIMEOUT {}: {} Wall clock {:.0f} s, monotonic {:.0f} s since "
                 "the start ({}). Stopping it: SIGTERM to the process group, SIGKILL after "
@@ -1236,6 +1251,84 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
     return times
 
 
+COMPUTE_MESSAGES = "Results/Summary/Compute Messages (text)"
+COMPUTE_MESSAGES_MAX = 1500
+
+
+def _h5_text(v):
+    """An HDF string dataset / attribute value as text ('' for None)."""
+    if v is None:
+        return ""
+    if isinstance(v, bytes):
+        return v.decode("utf-8", "replace")
+    if isinstance(v, np.ndarray):
+        return "\n".join(_h5_text(x) for x in v.ravel().tolist())
+    if isinstance(v, (list, tuple)):
+        return "\n".join(_h5_text(x) for x in v)
+    return str(v)
+
+
+def compute_messages(project_dir, name, plan="01"):
+    """3.10.54: HEC-RAS's own account of a compile or run, read-only: the plan HDF's
+    'Results/Summary/Compute Messages (text)' and the Summary 'Solution' attribute, from
+    <name>.p<plan>.hdf (Ras.exe renames p<plan>.tmp.hdf to it when it stops on an error,
+    c4_hecras_v2e_gmsh_r) or else <name>.p<plan>.tmp.hdf; failing those, the text file
+    <name>.p<plan>.computeMsgs.txt. Returns {'text', 'solution', 'source', 'error'}; never
+    raises."""
+    out = {"text": "", "solution": "", "source": "", "error": ""}
+    base = os.path.join(project_dir, "{}.p{}".format(name, plan))
+    errs = []
+    for path in (base + ".hdf", base + ".tmp.hdf"):
+        if not (os.path.isfile(path) and os.path.getsize(path) > 0):
+            continue
+        try:
+            import h5py
+        except ImportError:
+            errs.append("h5py is not installed")
+            break
+        try:
+            try:
+                f = h5py.File(path, "r", locking=False)
+            except TypeError:                                  # h5py < 3.5
+                f = h5py.File(path, "r")
+            with f:
+                txt = _h5_text(f[COMPUTE_MESSAGES][()]) if COMPUTE_MESSAGES in f else ""
+                summ = f.get("Results/Summary")
+                sol = _h5_text(summ.attrs.get("Solution")) if summ is not None else ""
+        except Exception as e:
+            errs.append("{}: {}: {}".format(os.path.basename(path), type(e).__name__, e))
+            continue
+        txt = txt.replace("\r\n", "\n").replace("\r", "\n").strip("\x00 \n")
+        if txt or sol:
+            out.update(text=txt, solution=sol.strip("\x00 "), source=os.path.basename(path))
+            return out
+    for path in (base + ".computeMsgs.txt", base + ".comp_msgs.txt"):
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="latin-1") as fh:
+                    txt = fh.read().strip()
+            except OSError as e:
+                errs.append(str(e))
+                continue
+            if txt:
+                out.update(text=txt, source=os.path.basename(path))
+                return out
+    out["error"] = "; ".join(errs)
+    return out
+
+
+def compute_messages_excerpt(text, limit=COMPUTE_MESSAGES_MAX):
+    """The Compute Messages for an error message: the ERROR lines and what follows them first
+    (HEC-RAS puts the cause there), then the rest, at most `limit` characters."""
+    lines = [ln.rstrip() for ln in (text or "").splitlines() if ln.strip()]
+    keys = ("error", "not allowed", "failed", "stopping")
+    first = next((i for i, ln in enumerate(lines) if any(k in ln.lower() for k in keys)), None)
+    if first is not None:
+        lines = lines[first:] + (["(earlier lines:)"] + lines[:first] if first else [])
+    t = " | ".join(lines)
+    return t if len(t) <= limit else t[:limit - 3] + "..."
+
+
 def run_inputs(project_dir, name, plan):
     return [os.path.join(project_dir, "{}.{}".format(name, x)) for x in
             ("b" + plan, "x" + plan, "p{}.tmp.hdf".format(plan))]
@@ -1289,7 +1382,7 @@ def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0, un
     proc = subprocess.Popen([d["wine"] or "wine", "cmd", "/c", to_wine_path(bat, d["prefix"])],
                             cwd=project_dir, env=e, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL)
-    done = False
+    done = exited = False
     dl = wallclock.Deadline(timeout, what="Ras.exe -c", log=log)     # wall clock, see wallclock
     try:
         if tcu:
@@ -1307,6 +1400,7 @@ def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0, un
                 done = True
                 break
             if proc.poll() is not None:
+                exited = True
                 done = bool(after_exit())
                 break
     finally:
@@ -1322,9 +1416,20 @@ def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0, un
         if de:
             raise HecRasEngineError("Ras.exe -c stopped on HEC-RAS data errors ({}): {}".format(
                 os.path.basename(de_path), de[:800]))
+        cm = compute_messages(project_dir, name, plan) if (final and exited) else {}
+        if cm.get("text"):
+            raise HecRasEngineError(
+                "Ras.exe -c exited without writing the {}; HEC-RAS reported{} in {} "
+                "(Results/Summary/Compute Messages): {}".format(
+                    what, " '{}'".format(cm["solution"]) if cm.get("solution") else "",
+                    cm["source"], compute_messages_excerpt(cm["text"])))
         raise HecRasEngineError(
-            "Ras.exe -c wrote no {} within {:.0f} s. If HEC's Terms and Conditions dialog is "
-            "waiting, it must be accepted by the user (see {}).".format(what, timeout, ENV_TCU))
+            "Ras.exe -c wrote no {} {}{}. If HEC's Terms and Conditions dialog is "
+            "waiting, it must be accepted by the user (see {}).".format(
+                what, within_text(timeout),
+                " (Ras.exe exited; no Compute Messages in the plan HDF{})".format(
+                    ": " + cm["error"] if cm.get("error") else "")
+                if final and exited else "", ENV_TCU))
 
 
 def _rasunsteady_running():
