@@ -45,6 +45,7 @@ _LITERAL = {
     "mobile_shape": True, "mobile_max_width_ft": 18.0, "mobile_min_ratio": 2.5,
     "mobile_min_length_ft": 30.0, "mobile_max_length_ft": 90.0, "mobile_lot_units": True,
     "download_trailer_parks": True,
+    "download_ms_footprints": True, "fema_scene_shift": False,
     "fast_sampling": False, "input_overviews": False, "zone_overviews": True,
     "report_imagery": False,
     "conseq_sensitivity": False, "conseq_sens_warning_hr": "-0.5, 0.5, 1.0",
@@ -146,7 +147,7 @@ class Extras290TabMixin(object):
     SETTING_WIDGETS_290 = (
         "mobile_shape_check", "mobile_max_width_spin", "mobile_min_ratio_spin",
         "mobile_min_length_spin", "mobile_max_length_spin", "mobile_lot_check",
-        "trailer_parks_check",
+        "trailer_parks_check", "ms_footprints_check", "fema_scene_shift_check",
         "fast_sampling_check", "input_overviews_check", "zone_overviews_check",
         "report_imagery_check",
         "conseq_sens_check", "conseq_warning_edit", "conseq_ppd_edit", "conseq_pop_check",
@@ -222,6 +223,29 @@ class Extras290TabMixin(object):
             "building inside one is read as park evidence. Needs internet access (skipped "
             "offline or when the offline pack answers). Volunteer-mapped data: check them.")
         form.addRow("", self.trailer_parks_check)
+        # 2.18.53: building geometry (DWR-8278: a FEMA scene 14.7 m out of place)
+        self.ms_footprints_check = WrapCheckBox("Use Microsoft building footprints for the "
+                                                "building outlines (internet)")
+        self.ms_footprints_check.setChecked(bool(_default("download_ms_footprints")))
+        self.ms_footprints_check.setToolTip(
+            "Downloads Microsoft's Global ML Building Footprints (ODbL) for the study area "
+            "into outputs/_downloads and uses them for the building geometry; the FEMA USA "
+            "Structures attributes (parcel address, occupancy) are matched onto them. Kept "
+            "out of the offline data pack. Offline, or when the download fails, the FEMA "
+            "outlines are used as before. A footprint layer in the data folder or project "
+            "(other building outlines) is recognised by its name and used the same way.")
+        form.addRow("", self.ms_footprints_check)
+        self.fema_scene_shift_check = WrapCheckBox("Move FEMA outlines of an offset source "
+                                                   "scene by the measured offset")
+        self.fema_scene_shift_check.setChecked(bool(_default("fema_scene_shift")))
+        self.fema_scene_shift_check.setToolTip(
+            "Every run compares the FEMA USA Structures outlines of each source image "
+            "(IMAGE_NAME) with the Microsoft footprints or NSI points and flags a scene "
+            "offset by more than 5 m (Inventory QA, judgment item). On: the outlines of a "
+            "flagged scene are moved by its median offset before sampling. Off (default): "
+            "they are only flagged; where Microsoft or other outlines exist they give the "
+            "geometry anyway.")
+        form.addRow("", self.fema_scene_shift_check)
 
         # -- speed
         self.fast_sampling_check = WrapCheckBox("Fast cell selection for the structures (no "
@@ -639,6 +663,8 @@ class Extras290TabMixin(object):
             "mobile_max_length_ft": float(self.mobile_max_length_spin.value()),
             "mobile_lot_units": bool(self.mobile_lot_check.isChecked()),
             "download_trailer_parks": bool(self.trailer_parks_check.isChecked()),
+            "download_ms_footprints": bool(self.ms_footprints_check.isChecked()),
+            "fema_scene_shift": bool(self.fema_scene_shift_check.isChecked()),
             "fast_sampling": bool(self.fast_sampling_check.isChecked()),
             "input_overviews": bool(self.input_overviews_check.isChecked()),
             "zone_overviews": bool(self.zone_overviews_check.isChecked()),
