@@ -20,8 +20,10 @@ What the policy says and how it is applied here (section numbers are the policy'
   - Damage only to agricultural land, uninhabited buildings or isolated unoccupied oil well
     pads -> LOW.
 * 5.2.1.2 Roads, impacted if overtopped at any depth: AADT > 2,000 or interstate -> HIGH;
-  AADT 500-2,000 -> MEDIUM; private or AADT < 500 -> LOW; sole access to an occupied
-  location -> MEDIUM.
+  US / State highway (5.2.1.2(b), whatever its AADT) or AADT 500-2,000 -> MEDIUM; private or
+  AADT < 500 (local, county and private roads only) -> LOW; sole access to an occupied
+  location -> MEDIUM. A US / State highway is told from its route type or name
+  (us_state_highway_from_text).
 * 5.2.1.3 Railroads, impacted if overtopped at any depth: at least MEDIUM; freight of 10 or
   more trains a day or an active passenger line -> HIGH.
 * 5.2.2 Lifeline facilities (public utilities, emergency response) whose effectiveness or
@@ -52,7 +54,7 @@ import re
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 
-MODULE_VERSION = "1.1.0"
+MODULE_VERSION = "1.2.0"
 POLICY = "North Dakota Dam Safety Standards Policy REG_05.2026, Sections 5.2 and 5.3"
 CHART_REFERENCE = ("Reclamation (1988), ACER Technical Memorandum No. 11, Downstream Hazard "
                    "Classification Guidelines: Fig. 2 houses built on foundations (ND Fig. 5.1), "
@@ -300,6 +302,7 @@ class Road:
     sole_access: bool = False        # sole access to an occupied location
     x: Optional[float] = None
     y: Optional[float] = None
+    us_state: bool = False           # US or State highway: at least MEDIUM (5.2.1.2(b))
 
 
 @dataclass
@@ -414,6 +417,40 @@ def interstate_from_text(text):
     """'Interstate 94', 'I-94', 'I 94', 'I94', 'IH-29', or the TIGER route type 'I'."""
     t = str(text or "").strip()
     return t.upper() == "I" or "interstate" in t.lower() or bool(_INTERSTATE.match(t))
+
+
+# 1.2.0: US / State highways, REG_05.2026 5.2.1.2(b) (p. 23): "U.S. Highways, State Highways,
+# or roads with AADT 500-2,000" -> medium. 'US 2', 'U.S. Highway 85', 'US-85', 'US HWY 52',
+# 'ND 23', 'ND-1804', 'ND HWY 22', 'State Hwy 22', 'State Route 5', 'North Dakota Highway 200',
+# a bare 'Highway 23' / 'Hwy 2' (ND NG9-1-1 FULL_NAME), the ND NG9-1-1 SHIELD codes USHY /
+# STHY, the TIGER route types 'U' / 'S', OSM / Geofabrik trunk and (osm=True: the value comes
+# from an OSM highway / fclass field) primary. A 'County Highway 12' / 'Co Hwy 12' / 'Township
+# Highway' is a local road (5.2.1.2(a) by AADT); so is an NG9-1-1 RoadClass 'Primary' (it is
+# not a route designation). The Hazard plugin's linear.road_class reads the same texts
+# (parity test: DamSafety_Runner/tests/test_highway_floor.py).
+_US_STATE = re.compile(r"\b(?:u\.?\s?s\.?|nd|state|north\s+dakota)\s*(?:hwy|highway|route|rte)?"
+                       r"\s*-?\s*\d+|\b(?:hwy|highway)\s*-?\s*\d+", re.I)
+_LOCAL_PREFIX = re.compile(r"\b(?:county|cnty|co|township|twp)\.?\s*(?:road|rd)?\s*$", re.I)
+US_STATE_CODES = ("u", "s", "ushy", "sthy", "trunk", "trunk_link")
+OSM_US_STATE = ("primary", "primary_link")
+_SHIELD_TOKEN = re.compile(r"(?<![a-z0-9])(?:ushy|sthy)(?![a-z0-9])", re.I)
+
+
+def us_state_highway_from_text(text, osm=False):
+    """True for a US or State highway route type / name (see _US_STATE); never an interstate
+    (interstate_from_text, HIGH) and never a county / township highway. osm: the text is an
+    OSM highway= / Geofabrik fclass value, where 'primary' is a US / State highway too."""
+    t = str(text or "").strip()
+    if not t:
+        return False
+    if t.lower() in US_STATE_CODES or (osm and t.lower() in OSM_US_STATE):
+        return True
+    if _SHIELD_TOKEN.search(t):
+        return True
+    for m in _US_STATE.finditer(t):
+        if not _LOCAL_PREFIX.search(t[:m.start()]):
+            return True
+    return False
 
 
 def passenger_from_value(v, codes=("A", "B", "C")):
@@ -581,12 +618,22 @@ class Classification:
 def road_class(r, st):
     """(class, reason, gap or '')."""
     r = Road(r.id, r.max_depth_ft, aadt_value(r.aadt), r.interstate, r.private, r.sole_access,
-             r.x, r.y)
+             r.x, r.y, bool(getattr(r, "us_state", False)))
     if r.interstate:
         return HIGH, "interstate overtopped", ""
+    if r.aadt is not None and r.aadt > 2000:
+        return HIGH, "road with AADT {:,.0f} (> 2,000) overtopped".format(r.aadt), ""
+    if r.us_state:
+        # 1.2.0: 5.2.1.2(b) - a US / State highway is at least MEDIUM whatever its AADT (the
+        # private / AADT < 500 LOW rule, 5.2.1.2(a), is for local, county and private roads)
+        if r.aadt is not None:
+            return MEDIUM, "US / State highway with AADT {:,.0f} overtopped [5.2.1.2(b)]".format(
+                r.aadt), ""
+        lvl = max(MEDIUM, st.unknown_aadt, key=lambda c: RANK[c])
+        return lvl, "US / State highway overtopped, AADT unknown (assumed {}) [5.2.1.2(b)]" \
+            .format(lvl), "road {}: US / State highway without AADT; classified {} (High if " \
+            "AADT > 2,000)".format(r.id, lvl)
     if r.aadt is not None:
-        if r.aadt > 2000:
-            return HIGH, "road with AADT {:,.0f} (> 2,000) overtopped".format(r.aadt), ""
         if r.aadt >= 500:
             lvl, why = MEDIUM, "road with AADT {:,.0f} (500-2,000) overtopped".format(r.aadt)
         else:
