@@ -521,7 +521,15 @@ def add_to_package(package, run, out, log=None, breaklines=True, fit=True, when=
     terrain = os.path.join(out, "Terrain")
     tif = [os.path.join(terrain, f) for f in os.listdir(terrain) if f.lower().endswith(".tif")]
     if len(tif) != 1:
+        shutil.rmtree(out, ignore_errors=True)
         raise hm.HecRasModelError("expected one terrain GeoTIFF in {}".format(terrain))
+    # v3.10.56: the copied terrain must carry the package's EPSG code and unit
+    from . import hecras_terrain_crs as htc
+    try:
+        tcrs = htc.check_terrain(tif[0], os.path.join(out, "GIS", "Projection.prj"))
+    except htc.TerrainCRSError:
+        shutil.rmtree(out, ignore_errors=True)
+        raise
     with open(os.path.join(out, "GIS", "Projection.prj")) as f:
         srs = hm.srs_from(f.read())
     units, _ = hm.crs_units(srs)
@@ -534,7 +542,8 @@ def add_to_package(package, run, out, log=None, breaklines=True, fit=True, when=
         with open(man, encoding="utf-8") as f:
             cell = json.load(f).get("cell")
     cell = float(cell or np.median(hb_spacing(pts)))
-    info = {"source": src, "notes": notes, "cell": round(cell, 2), "points_before": len(pts)}
+    info = {"source": src, "notes": notes, "cell": round(cell, 2), "points_before": len(pts),
+            "terrain_crs": tcrs}
     sinfo = connections(structs, to_model, perim, cell, tif[0], srs, units, log,
                         used=set(g.get("connections", [])) | {hm.AREA_NAME, hm.SA_NAME})
     conns = sinfo["exported"]
@@ -558,6 +567,7 @@ def add_to_package(package, run, out, log=None, breaklines=True, fit=True, when=
     lay = os.path.join(out, "GIS", "HECRAS Layout.gpkg")
     if os.path.exists(lay):
         add_layout_layers(lay, srs, conns, sinfo["skipped"], units)
+    htc.check_terrain(tif[0], os.path.join(out, "GIS", "Projection.prj"))   # still fine
     info.update(exported=conns, skipped=sinfo["skipped"], breaklines=bl, check_before=check_summary(check),
                 check_after=check_summary(after), check_rows=after, fit=changes, points_after=len(pts), g01=gpath)
     return info

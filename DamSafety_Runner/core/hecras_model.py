@@ -3462,6 +3462,10 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         f.write(esri.ExportToWkt())
     # terrain GeoTIFF: only what the model needs (2D area and reservoir) plus a margin
     paths["terrain_tif"] = terrain_tif
+    # v3.10.56: the terrain must still carry the model's EPSG code and unit (a rewrite without
+    # the PROJ database gave an unnamed metre CRS and HEC-RAS's terrain step failed)
+    from . import hecras_terrain_crs as htc
+    htc.check_terrain(terrain_tif, paths["projection"])
     paths["layout"] = write_layout(os.path.join(out, "GIS", "HECRAS Layout.gpkg"), m, srs,
                                    bc_slope_how=how, P=P, skipped=sinfo["skipped"])
     # v3.10.22: the dam line and the breach along it, in the README and run_report.json
