@@ -1042,7 +1042,8 @@ def volume_note(stats, limit=VOLUME_GAIN_LIMIT):
                    "instability rather than a boundary.".format(vb["solver_residual_m3"], fr))
     if kind == "outflow" and bi is not None and sup > 0 and bi > POSITIVE_EDGE_INFLOW * sup:
         out.append("ANUGA reports a net inflow of {:,.0f} m3 through outflow-only edges, which "
-                   "should not happen (<= 0 by construction); check the run.".format(bi))
+                   "should be about zero or negative (a small inflow can pass where the outside stage is "
+                   "copied); check the run.".format(bi))
     return " ".join(out) or None
 
 

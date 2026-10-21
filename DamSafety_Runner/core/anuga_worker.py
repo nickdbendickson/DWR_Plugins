@@ -375,8 +375,14 @@ GROSS_EDGE_FLUX_NOTE = ("not available: ANUGA sums the flux of all boundary edge
                         "value per sub-step (domain.boundary_flux_sum)")
 
 
+SOLVER_RESIDUAL_NOT_DE = ("not computed: the flow algorithm is not a DE algorithm (ANUGA "
+                          "computes the boundary flux integral for DE algorithms only)")
+MIRRORED_EDGES_NOTE = ("sampled at yield steps only; restarts from 0 when a run resumes from a "
+                       "checkpoint")
+
+
 def volume_balance(initial, injected, in_domain, boundary_in=None, operators=None,
-                   solver_volume=None):
+                   solver_volume=None, solver_initial=None, de=True):
     """3.10.55: the end-of-run water balance (m3). 'ratio' = in domain / (initial + injected):
     above 1 the domain gained water (a boundary that fed water in, or instability), below 1
     water left through the edge. With ANUGA's boundary flux integral (DE algorithms; + = net
@@ -384,11 +390,17 @@ def volume_balance(initial, injected, in_domain, boundary_in=None, operators=Non
     = in domain - initial - injected - boundary_in. With the operators' fractional-step
     integral (the inlet; culverts move water inside) and ANUGA's own end volume:
     'solver_residual_m3' = solver_volume - initial - boundary_in - operators, ANUGA's
-    conservation error (water_volume_statistics), and its fraction of the supply."""
+    conservation error (water_volume_statistics), and its fraction of the supply.
+    3.10.55 review 2: solver_initial = ANUGA's own start volume (domain.volume_history[0], as in
+    report_water_volume_statistics; else `initial`); de=False (a non-DE flow algorithm): the
+    flux-integral lines are skipped and 'solver_residual' says 'not computed'."""
     supplied = float(initial or 0.0) + float(injected or 0.0)
     out = {"supplied_m3": round(supplied, 1), "in_domain_m3": round(float(in_domain), 1),
            "ratio": round(float(in_domain) / supplied, 4) if supplied > 0 else None,
            "gross_edge_flows": GROSS_EDGE_FLUX_NOTE}
+    if not de:
+        out["solver_residual"] = SOLVER_RESIDUAL_NOT_DE
+        boundary_in = None
     if boundary_in is not None:
         b = float(boundary_in)
         out["boundary_net_inflow_m3"] = round(b, 1)
@@ -397,7 +409,9 @@ def volume_balance(initial, injected, in_domain, boundary_in=None, operators=Non
         if operators is not None:
             out["operators_m3"] = round(float(operators), 1)
             v = float(in_domain if solver_volume is None else solver_volume)
-            res = v - float(initial or 0.0) - b - float(operators)
+            v0 = float(initial or 0.0) if solver_initial is None else float(solver_initial)
+            out["solver_initial_m3"] = round(v0, 1)
+            res = v - v0 - b - float(operators)
             out["solver_residual_m3"] = round(res, 1)
             out["solver_residual_frac"] = round(res / supplied, 5) if supplied > 0 else None
     return out
@@ -789,6 +803,10 @@ def main(job_path, out_path):
             domain.set_quantity("stage", expression="elevation", location="centroids")
         h0 = domain.quantities["stage"].centroid_values - domain.quantities["elevation"].centroid_values
         vol_initial = float(np.sum(np.clip(h0, 0, None) * domain.areas))
+        try:            # 3.10.55 review 2: ANUGA's own start volume (domain.volume_history[0])
+            domain.get_water_volume()
+        except Exception:                                        # noqa: BLE001
+            pass
 
         # Free outflow on the whole outer boundary. A transmissive (zero-gradient)
         # boundary reports the depth at the edge without the bias of a drained edge
@@ -988,10 +1006,13 @@ def main(job_path, out_path):
     qq = np.interp(tt, hyd_t, hyd_q)          # only what enters before the run ends
     injected = float(np.trapezoid(qq, tt)) if hasattr(np, "trapezoid") \
         else float(np.trapz(qq, tt))
-    try:                        # DE algorithms only; + = net inflow through the boundary
-        b_in = float(domain.get_boundary_flux_integral())
-    except Exception:           # noqa: BLE001
-        b_in = None
+    de = str(getattr(domain, "compute_fluxes_method", "DE")) == "DE"
+    b_in = None
+    if de:                      # DE algorithms only; + = net inflow through the boundary
+        try:
+            b_in = float(domain.get_boundary_flux_integral())
+        except Exception:       # noqa: BLE001
+            b_in = None
     try:                        # what the inlet (and any rate operator) actually added
         fs = float(domain.get_fractional_step_volume_integral())
     except Exception:           # noqa: BLE001
@@ -1000,10 +1021,17 @@ def main(job_path, out_path):
         v_solver = float(domain.get_water_volume())
     except Exception:           # noqa: BLE001
         v_solver = None
-    balance = volume_balance(info["initial_volume_m3"], injected, vol_left, b_in, fs, v_solver)
+    try:                        # ANUGA's start volume (first get_water_volume, in the build)
+        v0 = float(domain.volume_history[0]) if getattr(domain, "volume_history", None) \
+            else None
+    except Exception:           # noqa: BLE001
+        v0 = None
+    balance = volume_balance(info["initial_volume_m3"], injected, vol_left, b_in, fs, v_solver,
+                             solver_initial=v0, de=de)
     if mirror["boundaries"]:
         balance["inward_edges_mirrored"] = {"max_edges": mirror["max"],
-                                            "yield_steps": mirror["steps"]}
+                                            "yield_steps": mirror["steps"],
+                                            "note": MIRRORED_EDGES_NOTE}
     stats = {"triangles": ntri, "runtime_min": round((time.time() - t0) / 60.0, 2),
              "max_edge_depth_m": edge_depth, "volume_in_domain_m3": vol_left,
              "initial_volume_m3": info["initial_volume_m3"],

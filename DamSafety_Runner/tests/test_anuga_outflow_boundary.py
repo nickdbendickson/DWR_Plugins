@@ -156,7 +156,7 @@ def anuga_volume_balance_solver_residual_and_edge_inflow_checks():
     pos = aw.volume_balance(0.0, sup, sup, boundary_in=sup * 0.01, operators=sup * 0.99,
                             solver_volume=sup)
     n = am.volume_note({"volume_balance": pos, "boundary": "outflow"})
-    assert n and "outflow-only edges" in n and "should not happen" in n, n
+    assert n and "outflow-only edges" in n and "should be about zero or negative" in n, n
     # creeping gain between 1.005 and 1.02: a softer line
     n = am.volume_note({"volume_balance": aw.volume_balance(0.0, 100.0, 101.0)})
     assert n and "small gain" in n, n
@@ -166,3 +166,14 @@ def anuga_volume_balance_solver_residual_and_edge_inflow_checks():
     assert "probably not from the edge" in n and "instability" in n, n
     # without the operator integral (older ANUGA / non-DE): no solver residual, no crash
     assert "solver_residual_m3" not in aw.volume_balance(0.0, sup, sup, boundary_in=-1.0)
+    # review 2: a non-DE algorithm - no flux-integral lines, the residual is 'not computed'
+    nd = aw.volume_balance(0.0, sup, sup * 0.97, boundary_in=0.0, operators=sup,
+                           solver_volume=sup * 0.97, de=False)
+    assert nd["solver_residual"].startswith("not computed") and "solver_residual_m3" not in nd \
+        and "boundary_net_inflow_m3" not in nd, nd
+    assert am.volume_note({"volume_balance": nd, "boundary": "outflow"}) is None
+    # review 2: the start volume is ANUGA's own (volume_history[0]) when given
+    v = aw.volume_balance(10.0, sup, sup + 12.0, boundary_in=0.0, operators=sup,
+                          solver_volume=sup + 12.0, solver_initial=12.0)
+    assert v["solver_initial_m3"] == 12.0 and v["solver_residual_m3"] == 0.0, v
+    assert "checkpoint" in aw.MIRRORED_EDGES_NOTE and "yield steps" in aw.MIRRORED_EDGES_NOTE
