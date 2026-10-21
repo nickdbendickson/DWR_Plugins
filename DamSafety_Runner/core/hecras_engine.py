@@ -91,6 +91,7 @@ import time
 import numpy as np
 
 from . import hecras, wallclock
+from .units import ARRIVAL_DEPTH_FT
 
 ENV_PREFIX = "NDBREACH_HECRAS_WINEPREFIX"
 ENV_WINDIR = "NDBREACH_HECRAS_WINDOWS_DIR"
@@ -1435,7 +1436,7 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
 # ============================================================================
 # results -> the Runner grid
 # ============================================================================
-def results(hdf, like_grid, arrival_m=0.3048, t0_hr=0.0, to_grid_xy=None, area=None,
+def results(hdf, like_grid, arrival_m=ARRIVAL_DEPTH_FT * 0.3048, t0_hr=0.0, to_grid_xy=None, area=None,
             units=None, wet_m=0.003):
     """The HEC-RAS maxima on the Runner grid as the workflow's final arrays, SI:
     {'depth' m, 'velocity' m/s, 'wse' m, 'arrival' h after breach initiation}, NaN where
@@ -1525,7 +1526,7 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     os.makedirs(keep, exist_ok=True)
     shutil.copy2(hdf, keep)
     tr = transformer(r["info"].get("model_wkt"), like.crs_wkt or r["info"].get("work_wkt"))
-    arr = results(hdf, like, arrival_m=float(getattr(st, "arrival_depth_ft", 1.0)) * 0.3048,
+    arr = results(hdf, like, arrival_m=float(getattr(st, "arrival_depth_ft", ARRIVAL_DEPTH_FT)) * 0.3048,
                   t0_hr=results_t0_hr(r), to_grid_xy=tr)
     final = write_results(arr, like, writer, dam_folder)
     rep = {"engine": "hecras", "hecras_version": "6.6", "platform": d["platform"],

@@ -11,8 +11,9 @@
   * A flagged structure (DWR-3161, the ND-23 road fill over backwater) is refused before any
     road rule: its Low of record stands.
   * Arrival (5.4(c)): a wet structure with no arrival-raster value at its wet cells (the flood
-    there never exceeded the model's arrival depth, Runner ARRIVAL_FT 1 ft by default) keeps a
-    blank First_Arrival_hr - nothing is invented - and its Notes say why.
+    there never exceeded the model's arrival depth: Runner ARRIVAL_FT, 0.1 ft by default since
+    Runner 3.10.45, 1 ft in older results) keeps a blank First_Arrival_hr - nothing is
+    invented - and its Notes say why and that an older result needs a re-run.
 
     QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_highway_floor_reg05.py
 """
@@ -207,7 +208,7 @@ def arrival_part():
     tmp = tempfile.mkdtemp(prefix="hz_arr_")
     try:
         depth = np.zeros((10, 10)); vel = np.full((10, 10), 0.5); arr = np.full((10, 10), np.nan)
-        depth[2, 1] = 0.5                      # structure A: wet, below the 1 ft arrival depth
+        depth[2, 1] = 0.5                      # structure A: wet, no time (a run at the old 1 ft)
         depth[2, 6], arr[2, 6] = 1.5, 0.8      # structure B: deeper, the raster has a time
         paths = {}
         for k, a in (("depth", depth), ("vel", vel), ("arr", arr)):
@@ -236,7 +237,8 @@ def arrival_part():
               abs(b["arrival"] - 0.8) < 1e-3, b.get("arrival"))
         na, nb = "; ".join(ST.structure_notes(a)), "; ".join(ST.structure_notes(b))
         check("A's Notes say why First_Arrival_hr is blank (arrival depth not exceeded)",
-              "no arrival time" in na and "0.50 ft" in na and "ARRIVAL_FT" in na, na)
+              "no arrival time" in na and "0.50 ft" in na and "ARRIVAL_FT" in na and
+              "0.1 ft by default" in na and "re-run" in na, na)
         check("B's Notes have no arrival note", "no arrival time" not in nb, nb)
         lyr = ST.structures_to_layer(structs, crs)
         rows = {f["Struct_ID"]: f for f in lyr.getFeatures()}

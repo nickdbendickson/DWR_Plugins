@@ -49,7 +49,7 @@ from . import terrain
 from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
-from .units import FT, MILE, ACFT, CFS
+from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 
 def _metadata_version():
     """The plugin version from metadata.txt (the single source of truth)."""
@@ -107,7 +107,7 @@ class RunSettings:
         self.planning_cell_m = 30.0
         self.manning_n = 0.06
         self.manning_scale = 1.0         # multiplies the Manning raster too (sensitivity)
-        self.arrival_depth_ft = 1.0
+        self.arrival_depth_ft = ARRIVAL_DEPTH_FT    # 0.1 ft since 3.10.45 (was 1 ft)
         self.edge_tolerance_ft = 1.0
         self.initial_length_mi = 5.0
         self.half_width_mi = 1.0
@@ -1838,7 +1838,7 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
     unit = gdal_io.linear_unit_m(g.crs_wkt) or 1.0
     cell_ac = (g.dx * unit) ** 2 / 4046.8564224
     sets = report.get("settings") or {}
-    arrival_ft = float(getattr(st, "arrival_depth_ft", None) or sets.get("arrival_depth_ft") or 1.0)
+    arrival_ft = float(getattr(st, "arrival_depth_ft", None) or sets.get("arrival_depth_ft") or ARRIVAL_DEPTH_FT)
     arrival_m = arrival_ft * FT
     old = dict(report.get("summary") or {})
     # M5: the screening pass may have run on the opt-in built-in engine; label its kept vector

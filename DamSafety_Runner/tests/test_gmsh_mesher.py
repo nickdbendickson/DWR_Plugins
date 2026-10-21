@@ -46,7 +46,9 @@ def _case():
     flooded[40:80, 10:150] = True
     inflow = dem.xy(60, 15)
     hy = br.Hydrograph(np.array([0.0, 600.0, 3600.0]), np.array([0.0, 100.0, 0.0]), "test")
-    st = AM.AnugaSettings(sys.executable, sim_time_s=3600.0)
+    # main 89cb655's arrival depth (1 ft; the default is 0.1 ft since 3.10.45) so the pin still
+    # checks the mesh and the job layout, not that default
+    st = AM.AnugaSettings(sys.executable, sim_time_s=3600.0, arrival_depth_m=0.3048)
     road = [[dem.x0 + 1600.0, dem.y0 - 700.0], [dem.x0 + 1600.0, dem.y0 - 1700.0]]
     return dem, flooded, inflow, hy, st, [road]
 

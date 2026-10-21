@@ -133,15 +133,16 @@ OUT_PROBABLE = "Probable loss of life"
 OUT_JUDGMENT = "Judgment zone"
 OUT_ECONOMIC = "Inundated (economic loss)"
 OUT_DRY = "Not inundated"
-# Shallower than the 1 ft arrival depth: still wet on the grid, not a consequence.
+# Shallower than this: still wet on the grid, not a consequence (= the Runner's arrival depth,
+# ARRIVAL_FT 0.1 ft since Runner 3.10.45).
 CONSEQUENCE_DEPTH_FT = 0.1  # ND 5.2.2 inundated to any degree
 OUT_TRACE = "Below consequence depth"
 # 2.18.48: why First_Arrival_hr is blank at a wet structure (REG_05.2026 5.4(c) asks for the
 # arrival time at each critical feature; the value is left blank, never invented)
 NOTE_ARRIVAL_BELOW = ("no arrival time: the arrival raster has no value at this structure's "
                       "wet cells (max depth {:.2f} ft); an arrival raster records when the "
-                      "depth first exceeds the model's arrival depth (Runner ARRIVAL_FT, 1 ft "
-                      "by default)")
+                      "depth first exceeds the model's arrival depth (Runner ARRIVAL_FT: 0.1 ft "
+                      "by default since Runner 3.10.45, 1 ft before - re-run an older result)")
 
 def _kw(*words):
     return re.compile(r"\b(?:%s)\b" % "|".join(re.escape(w) for w in words))
@@ -2641,7 +2642,8 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             rec["arrival"] = float(np.nanmin(a)) if np.isfinite(a).any() else None
             # 2.18.48: an arrival raster that has no time at any of the structure's wet cells
             # (the Runner's arrival time is when the depth first EXCEEDS its arrival depth,
-            # ARRIVAL_FT, 1 ft by default - a shallower flood never sets it) - said in Notes
+            # ARRIVAL_FT: 0.1 ft by default since Runner 3.10.45, 1 ft before - a shallower
+            # flood never sets it) - said in Notes
             rec["arrival_below"] = rec["arrival"] is None and bool(samplers["arr"].ok)
             dvv = None
             if dv_all is not None:

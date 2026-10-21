@@ -47,7 +47,7 @@ import re
 import numpy as np
 
 from .grid import Grid
-from .units import ACFT, CFS, FT
+from .units import ACFT, CFS, FT, ARRIVAL_DEPTH_FT
 
 RAS_INTERVALS_MIN = (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60, 120, 180, 240, 360, 480, 720,
                      1440)
@@ -760,7 +760,7 @@ def _unit_factor(u):
     return 1.0 / FT if u == "si" else 1.0
 
 
-def read_mesh(hdf, area=None, units=None, arrival_depth_ft=1.0, t0_hr=0.0, wet_ft=0.01,
+def read_mesh(hdf, area=None, units=None, arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_hr=0.0, wet_ft=0.01,
               want_arrival=True):
     """The maximum results of a 2D flow area as a Mesh (fields depth, wse, velocity,
     arrival in ft, ft, ft/s, hours; time_of_max in hours when the file has it).
