@@ -8,6 +8,11 @@ ACRE = 4046.8564224            # m2
 ACFT = 1233.48183754752        # m3 per acre-foot
 CFS = 0.028316846592           # m3/s per ft3/s
 G = 9.80665                    # m/s2
+# Arrival depth (ft): the arrival time is when the depth first exceeds this. 3.10.45: 0.1 ft, the
+# ND hazard 'any depth' wet threshold (nd_hazard wet_ft, Hazard CONSEQUENCE_DEPTH_FT), so every
+# wet structure gets an arrival time (REG_05.2026 5.4(c)); it was 1 ft, which left structures
+# flooded 0.1-1 ft deep without one. Also the depth for 'flooded' in the run summary and impacts.
+ARRIVAL_DEPTH_FT = 0.1
 
 
 def ft_to_m(v):

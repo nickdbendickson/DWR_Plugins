@@ -29,7 +29,7 @@ from .core import (workflow, breach as brmod, flood as floodmod, impacts as impm
 from .core.lisflood import Cancelled, ModelError, check_lisflood
 from .damsuite import structure_flags as sflags
 from .core.anuga_model import check_anuga
-from .core.units import FT, MILE
+from .core.units import FT, MILE, ARRIVAL_DEPTH_FT
 
 PROVIDER_ID = "ndbreach"
 SET_LISFLOOD = "NDBREACH_LISFLOOD_EXE"
@@ -600,8 +600,9 @@ class _Base(QgsProcessingAlgorithm):
         self._text("NLCD_N", "NLCD: your own n for some classes, JSON like {\"82\": 0.05}",
                    advanced=True)
         self._num("ARRIVAL_FT", "Arrival depth (ft): arrival time is when the depth first "
-                  "exceeds this (starting value 1 is the engineer's, a screening value you "
-                  "choose)", 1.0, minimum=0.01)
+                  "exceeds this; also the depth counted as flooded in the run summary (starting "
+                  "value 0.1 = the ND hazard 'any depth', so every wet structure gets an "
+                  "arrival time, REG_05.2026 5.4(c))", ARRIVAL_DEPTH_FT, minimum=0.01)
         self._num("EDGE_TOL_FT", "Extend the domain while the flood leaves an edge deeper "
                   "than (ft; starting value 1 is the engineer's, a screening value you choose)",
                   1.0, minimum=0.01)

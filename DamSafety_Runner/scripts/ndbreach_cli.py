@@ -431,7 +431,7 @@ TEMPLATE = {
                  "off | inflow | inflow+depth (QA PNGs in the dam folder; default inflow+depth). "
                  "reservoir_carve: off | auto | on (carve the reservoir bottom from the storage "
                  "curve where the LiDAR shows a water surface; default off).",
-        "tier": "lisflood", "cell_size_m": 10.0, "arrival_depth_ft": 1.0,
+        "tier": "lisflood", "cell_size_m": 10.0, "arrival_depth_ft": 0.1,
         "edge_tolerance_ft": 1.0, "initial_length_mi": 5.0, "half_width_mi": 1.0,
         "expand_step_mi": 3.0, "max_extent_mi": 20.0, "qa_maps": "inflow+depth", "reservoir_carve": "off",
         "max_iterations": 6, "sim_time_hr": None,
