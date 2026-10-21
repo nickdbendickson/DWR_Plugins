@@ -1,6 +1,6 @@
-# DamSafety plugins: user guide (changes through 2026-10-21, main 732f597)
+# DamSafety plugins: user guide (changes through 2026-10-21, main 034e9d7)
 
-This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84, #92, #93, #96, #131 (arrival depth), #132 (ANUGA threads) and #137 (HEC-RAS time limit). Other merged PRs (#85-#90, #94, #100-#105, …) are listed in CHANGELOG.md only. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
+This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84, #92, #93, #96, #131 (arrival depth), #132 (ANUGA threads), #137 (HEC-RAS time limit) and #126 (zone colours). Other merged PRs (#85-#90, #94, #100-#105, …) are listed in CHANGELOG.md only. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
 
 ## Standard work-folder layout (#18)
 The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker all create the same empty folders:
@@ -216,10 +216,32 @@ Results don't change: the limit only decides whether a run is allowed to finish.
 
 **Tip: the thread count doesn't change the results.** On real ANUGA, 1 and 4 threads gave the same depth, velocity, arrival time and water surface, to the last digit. This was tested on 589- and 87,749-triangle domains. A run stopped at 1 thread and resumed from its checkpoint at 4 threads also matched. Only the time changes: 4 threads were about 2.6x faster on the 87,749-triangle test (62 s to 24 s), and about 2x on a 262,000-triangle benchmark. So you can compare a new run with an older single-thread run without allowing for the thread count. Any difference comes from other changes in the code or settings, not from the threads. Compare wall-clock times only between runs with the same `used` count. Windows and macOS installs were not tested; check `anuga_reported` there, or run `anuga_benchmark_omp --threads 1,4` in the ANUGA environment.
 
+## Hazard zone colours match the ND Dam Safety Standards (#126, Hazard 2.18.46, Runner 3.10.51, Screening 0.17.34)
+**What changed.** Every ACER TM 11 danger-zone graphic now uses the colours of the ND Dam Safety Standards, Policy REG_05.2026 (effective 04/01/2026), Figure 5.1 (houses, p. 21) and Figure 5.2 (mobile homes, p. 22): [the policy document](https://www.dwr.nd.gov/reclink/4dcgi/GetPolicyDocument/16). The standard names no colours, so they were sampled from the published figures.
+
+| Zone (legend label) | Colour now | Map styles before #126 | Review charts before #126 |
+|---|---|---|---|
+| HIGH DANGER ZONE | #EF9897 (light red) | #F44336 | #f4b6b0 |
+| JUDGMENT ZONE | #F9F4A3 (pale yellow) | #FFEB3B (legend said "JUDGEMENT ZONE") | peach #fbe7b5 |
+| LOW DANGER ZONE | #C4E0AD (light green) | #4CAF50 | nearly white #e8f3e8 |
+
+The old map styles were drawn at 75 % opacity, and the Hazard chart sign-off overlay left the low zone white (unfilled); it's now filled.
+
+- **Where you see them:** the zone rasters (`Hazard_Foundations.tif`, `Hazard_MobileHomes.tif`, `Hazard_Vehicles.tif`, style `acer_zones.qml`), the zone points (`acer_zone_points.qml`), the Hazard chart sign-off overlay, and the Runner / Screening review charts and their legends. The QML styles are the same in Hazard, Runner and Screening.
+- **What didn't change:** the depth-velocity breakpoints, the classes and the stored field values (`HIGH` / `JUDGMENT` / `LOW`). The dam hazard-class colours (High / Medium / Low) aren't ACER zones and are unchanged.
+- `tools/ci_checks.py` ("zone colours (REG_05.2026)") checks every copy of the colours, so a style that drifts from the standard fails the checks.
+
+**Tip: let the basemap show through the zone layers.** The zone styles are now fully opaque (opacity 100 %; it was 75 %, which lightened the colours away from the figures). Over aerial imagery that hides the buildings and roads under a zone. To see them:
+- **Zone rasters:** *Layer Properties > Transparency > Global opacity*, or the opacity slider in the *Layer Styling* panel. About 60-70 % keeps the zones readable and shows the imagery.
+- **Zone points and other vector layers:** *Layer Properties > Symbology > Layer Rendering > Opacity*.
+- This only changes how the layer is drawn in your project, not the files or the class.
+- Lower opacity lightens the colours, so they no longer match Figure 5.1 / 5.2 exactly. For a figure that a reviewer will compare with the standard, set the zone layer back to 100 % (or right-click the layer, *Styles > Default*, to reload the plugin style).
+
 ## Not verified in this guide
 - These descriptions come from PR text and source code. None of the window steps were checked in a running QGIS.
 - The exact list of fixes in #27 and the details of #11 and #16 are summarized from PR titles and commit headlines only.
 - No window steps for #22, #30, #32, #76, #84, #92, #93 or #96 were tried in QGIS. The #93 labels were checked in main's source at d217ec2, and the #92 `WATER_MASK` label and lookup order and the #96 names at b0c2ad5.
 - The #131 (arrival depth) and #137 (HEC-RAS time limit) names, labels, defaults and rules were checked in main's source at 732f597. No window was opened in QGIS, and no model was run.
 - The #132 (ANUGA threads) names, labels and rules were checked in main's source at caaf850 and against the PR's real-ANUGA check (`/workspace/anuga_threads_pr/real_check.log`). The Processing Options path was not opened in QGIS.
+- The #126 zone colours, labels and opacity were checked in main's source at 034e9d7 (`DamSafety_Hazard/helpers.py`, `styles/acer_zones.qml`, `styles/acer_zone_points.qml`). The QGIS menu paths in the transparency tip are the standard QGIS 3.34 ones; they weren't opened in a running QGIS for this guide.
 - The installed copy of the plugins may lag behind main.
