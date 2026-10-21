@@ -392,9 +392,14 @@ def _classification_checks(rep, rasters, utm, ctx):
         rep.check("ND classification = High", nd["cls"] == "High", nd["cls"])
         tm = classify_tm11(structs, roads)
         # H (RES1) and P (ND address, Place_Type PARKING - habitable by rule) are
-        # both in the 3-ft judgment band: 3 + 3 persons
-        rep.check("TM 11: structures 6 high + 6 judgment, motorists on CR 12 counted -> High",
-                  tm["lij_structures_high"] == 6 and tm["lij_structures_judgment"] == 6
+        # both in the 3-ft judgment band. 2.18.50: P is a 911 point with no building 41 ft
+        # from the NSI RES1 house H (no address of its own) - the same site, counted once
+        rep.check("911 point with no building next to an NSI RES house = the same site "
+                  "(2.18.50, not a second household)",
+                  bool(zones["P"].get("dwelling_extra")) and zones["P"]["persons"] == 0,
+                  (zones["P"].get("dwelling_extra"), zones["P"]["persons"]))
+        rep.check("TM 11: structures 6 high + 3 judgment, motorists on CR 12 counted -> High",
+                  tm["lij_structures_high"] == 6 and tm["lij_structures_judgment"] == 3
                   and tm["lij_vehicles_high"] > 0 and tm["cls"] == "High",
                   (tm["lij_structures_high"], tm["lij_structures_judgment"],
                    round(tm["lij_vehicles_high"], 3), tm["cls"]))
