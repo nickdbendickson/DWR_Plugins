@@ -67,6 +67,9 @@ ZONE_LOW = "low danger"
 ZONE_JUDGMENT = "judgment"
 ZONE_HIGH = "high danger"
 ZONE_ORDER = {ZONE_LOW: 0, ZONE_JUDGMENT: 1, ZONE_HIGH: 2}
+# the zone names of REG_05.2026 Figures 5.1 / 5.2 (pp. 21-22), for tables, legends and reports
+ZONE_NAMES = {ZONE_HIGH: "HIGH DANGER ZONE", ZONE_JUDGMENT: "JUDGMENT ZONE",
+              ZONE_LOW: "LOW DANGER ZONE"}
 
 LETHALITY_CHARTS = "acer_tm11"        # 2D model: Figures 5.1 / 5.2
 LETHALITY_1D = "depth_2ft"            # 1D model: depth > 2 ft
@@ -546,6 +549,11 @@ class Finding:
     y: Optional[float] = None
     gap: str = ""
 
+    @property
+    def danger_zone(self):
+        """The REG_05.2026 Fig. 5.1 / 5.2 name of `zone` ('' when no chart zone)."""
+        return ZONE_NAMES.get(self.zone, "")
+
 
 @dataclass
 class Classification:
@@ -809,8 +817,8 @@ def markdown(c, dam_id="", title="Hazard classification"):
     return "\n".join(lines) + "\n"
 
 
-FINDING_COLUMNS = ["level", "section", "kind", "id", "reason", "zone", "borderline",
-                   "depth_ft", "vel_fts", "x", "y"]
+FINDING_COLUMNS = ["level", "section", "kind", "id", "reason", "zone", "danger_zone",
+                   "borderline", "depth_ft", "vel_fts", "x", "y"]
 
 
 def finding_rows(c):

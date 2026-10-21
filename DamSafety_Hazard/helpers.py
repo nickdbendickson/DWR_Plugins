@@ -470,6 +470,18 @@ def apply_class_style(lyr, items):
         return False
 
 
+def _fill_zones(layer, path):
+    """2.18.51: colour the danger-zone cells (ACER_Zone_Label / Danger_Zone) of an exported
+    XLSX with the REG_05.2026 Fig. 5.1 / 5.2 fills; a failure is logged, never raised."""
+    try:
+        from .xlsx_zone_fill import ZONE_COLUMNS, fill_zone_cells
+        if any(f.name() in ZONE_COLUMNS for f in layer.fields()):
+            fill_zone_cells(path)
+    except Exception as e:
+        log_message("XLSX zone colours not applied to {}: {}".format(
+            os.path.basename(path), e), MSG_WARNING)
+
+
 def export_layer_to_formats(layer, output_folder, base_name, transform_ctx,
                             formats=("gpkg", "csv", "xlsx")):
     """Export a layer to GPKG, CSV, and XLSX (or the given `formats`).
@@ -500,6 +512,8 @@ def export_layer_to_formats(layer, output_folder, base_name, transform_ctx,
             results[fmt] = enum_value(err_code) == enum_value(WRITER_NO_ERROR)
             if results[fmt]:
                 paths[fmt] = out_file
+                if fmt == "xlsx":
+                    _fill_zones(layer, out_file)
             else:
                 log_message("{} export failed ({}): {}".format(
                     fmt.upper(), err_code, _writer_error_message(write_result)), MSG_WARNING)
