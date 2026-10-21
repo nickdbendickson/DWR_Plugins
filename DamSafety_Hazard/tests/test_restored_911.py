@@ -385,7 +385,7 @@ def test_imagery_date_setting_and_dropped_point_judgment():
     nd = CL.classify_nd(structs, [], [])
     tm = CL.classify_tm11(structs, [])
     msg = CL.ms_rule_judgment(nd, tm, structs, [], [])
-    assert "structure {} (3550 153RD AVE SE, 8.2 ft, High zone, 911 record 2022-04-13)".format(
+    assert "structure {} (3550 153RD AVE SE, 8.2 ft, High zone, 911 record 2022-04-13, imagery 2022-12-31)".format(
         k["id"]) in msg, msg
     assert "Counted, they would give ND High" in msg and "now ND " + nd["cls"] in msg, msg
     assert msg in nd["judgment"] and msg in tm["notes"]
@@ -394,9 +394,13 @@ def test_imagery_date_setting_and_dropped_point_judgment():
     ST.reinterpret(structs, **ST.mobile_rules_from_cfg({"ms_imagery_assumed_date": "2021-08-22"}))
     assert k["habitable"] == "Yes" and not k.get("ms_dropped"), k["habitable"]
     assert "possibly built after" in "; ".join(ST.structure_notes(k))
-    assert ST.ms_rule_source_line(structs) == ""
+    assert ST.ms_rule_source_line(structs).startswith(          # review 3: kept ones too
+        "Lone 911 points: 0 not counted by the 300 ft no-building rule (no Microsoft footprint "
+        "within 300 ft and the 911 record not newer than the imagery); 1 counted as possibly "
+        "built after the imagery.")
     nd3 = CL.classify_nd([], [], [])
-    assert CL.ms_rule_judgment(nd3, CL.classify_tm11([], []), structs, [], []) == ""
+    assert "1 counted as possibly built after the imagery" in CL.ms_rule_judgment(
+        nd3, CL.classify_tm11([], []), structs, [], [])
 
 def test_record_dates():
     import datetime

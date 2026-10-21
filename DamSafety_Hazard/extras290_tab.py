@@ -46,6 +46,7 @@ _LITERAL = {
     "mobile_min_length_ft": 30.0, "mobile_max_length_ft": 90.0, "mobile_lot_units": True,
     "download_trailer_parks": True,
     "download_ms_footprints": True, "ms_imagery_assumed_date": "2022-12-31",
+    "naip_flight_dates": True, "naip_clips": True, "misplaced_911_m": 150.0,
     "fema_scene_shift": False,
     "fast_sampling": False, "input_overviews": False, "zone_overviews": True,
     "report_imagery": False,
@@ -150,7 +151,8 @@ class Extras290TabMixin(object):
         "mobile_min_length_spin", "mobile_max_length_spin", "mobile_lot_check",
         "trailer_parks_check", "ms_footprints_check", "fema_scene_shift_check",
         "fast_sampling_check", "input_overviews_check", "zone_overviews_check",
-        "report_imagery_check", "ms_imagery_date_edit",
+        "report_imagery_check", "ms_imagery_date_edit", "naip_dates_check",
+        "naip_clips_check", "misplaced_911_spin",
         "conseq_sens_check", "conseq_warning_edit", "conseq_ppd_edit", "conseq_pop_check",
         "conseq_severity_check",
         "evac_routes_check", "temporal_check", "temporal_start_edit", "temporal_step_spin",
@@ -248,6 +250,30 @@ class Extras290TabMixin(object):
             "DATA SOURCES and the judgment items whenever the rule drops points. Default "
             "2022-12-31 (under review).")
         form.addRow("  Microsoft imagery assumed date:", self.ms_imagery_date_edit)
+        # 2.18.54 review 3 (Nick): NAIP 2025 flight dates, clips, possibly misplaced points
+        self.naip_dates_check = WrapCheckBox("Use the USDA NAIP 2025 flight date at each lone "
+                                             "911 point (internet)")
+        self.naip_dates_check.setChecked(bool(_default("naip_flight_dates")))
+        self.naip_dates_check.setToolTip(
+            "The 300 ft no-building rule compares a lone 911 point's record date with the "
+            "NAIP 2025 flight date at the point (ND GIS Hub seamlines, one query per run). "
+            "Offline, or when the download fails, the assumed date above is used and the "
+            "summary says so.")
+        form.addRow("", self.naip_dates_check)
+        self.naip_clips_check = WrapCheckBox("Save NAIP 2025 clips of the review points "
+                                             "(outputs/QA/imagery, internet)")
+        self.naip_clips_check.setChecked(bool(_default("naip_clips")))
+        self.naip_clips_check.setToolTip(
+            "About 600 m square, red marker at the 911 point, yellow ring at its address "
+            "location; at most 25 per run (setting naip_clip_max). A failed download only "
+            "leaves the clip out.")
+        form.addRow("", self.naip_clips_check)
+        self.misplaced_911_spin = self._spin290(10.0, 5000.0, 10.0, "misplaced_911_m", " m")
+        self.misplaced_911_spin.setToolTip(
+            "A lone 911 point farther than this from the location of its address on its own "
+            "street (NG9-1-1 centerline address ranges) is listed as possibly misplaced. "
+            "Default 150 m.")
+        form.addRow("  Possibly misplaced 911 point beyond:", self.misplaced_911_spin)
         self.fema_scene_shift_check = WrapCheckBox("Move FEMA outlines of an offset source "
                                                    "scene by the measured offset")
         self.fema_scene_shift_check.setChecked(bool(_default("fema_scene_shift")))
@@ -679,6 +705,9 @@ class Extras290TabMixin(object):
             "download_ms_footprints": bool(self.ms_footprints_check.isChecked()),
             "ms_imagery_assumed_date": (self.ms_imagery_date_edit.text().strip()
                                         or str(_default("ms_imagery_assumed_date"))),
+            "naip_flight_dates": bool(self.naip_dates_check.isChecked()),
+            "naip_clips": bool(self.naip_clips_check.isChecked()),
+            "misplaced_911_m": float(self.misplaced_911_spin.value()),
             "fema_scene_shift": bool(self.fema_scene_shift_check.isChecked()),
             "fast_sampling": bool(self.fast_sampling_check.isChecked()),
             "input_overviews": bool(self.input_overviews_check.isChecked()),
