@@ -42,7 +42,7 @@ ROAD_OTHER = "Local/County"
 _RE_INTERSTATE = re.compile(r"\b(?:i|ih|interstate)\s*-?\s*\d+", re.I)
 _RE_US = re.compile(r"\b(?:us|u\.\s?s\.?)\s*(?:hwy|highway|route|rte)?\s*-?\s*\d+", re.I)
 _RE_STATE = re.compile(r"\b(?:nd|state)\s*(?:hwy|highway|route|rte)?\s*-?\s*\d+", re.I)
-# 2.18.48: a bare 'Highway 23' / 'Hwy 2' (ND NG9-1-1 names) and 'North Dakota Highway 200' are
+# 2.18.52: a bare 'Highway 23' / 'Hwy 2' (ND NG9-1-1 names) and 'North Dakota Highway 200' are
 # State highways too, 'County Highway 12' / 'Co Hwy 12' / 'Township Highway' are not - the same
 # texts as the Runner / Screening nd_hazard.us_state_highway_from_text (REG_05.2026 5.2.1.2(b);
 # parity test DamSafety_Runner/tests/test_highway_floor.py)
@@ -574,7 +574,7 @@ def nd_road_class(road_class, aadt):
         return ND_HIGH, "AADT {:,.0f} > {:,} - probable loss of life".format(
             aadt, ND_AADT_HIGH_ABOVE), False
     if road_class in (ROAD_US, ROAD_STATE):
-        # 2.18.48: the basis cites 5.2.1.2(b) - a US / State highway is at least Medium
+        # 2.18.52: the basis cites 5.2.1.2(b) - a US / State highway is at least Medium
         # whatever its AADT (the AADT < 500 Low rule is for local, county and private roads)
         if aadt is None:
             return ND_MEDIUM, "{} - transportation disruption [5.2.1.2(b)]; no AADT found - High " \

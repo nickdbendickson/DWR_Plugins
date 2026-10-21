@@ -800,7 +800,7 @@ def workflow_lisflood_extends_domain():
         assert os.path.exists(r.final[k])
     depth = np.load(os.path.splitext(r.final["depth"])[0] + ".npy")
     arr = np.load(os.path.splitext(r.final["arrival"])[0] + ".npy")
-    # arrival only where depth reached the arrival depth (0.1 ft by default since 3.10.45)
+    # arrival only where depth reached the arrival depth (0.1 ft by default since 3.10.53)
     assert np.all(depth[np.isfinite(arr)] >= st.arrival_depth_ft - 1e-3)
     # reservoir side (west of the dam) stays dry
     js = json.load(open(os.path.splitext(r.final["depth"])[0] + ".json"))

@@ -148,7 +148,7 @@ assert hz.classify_nd(roads=[R("1", None, "I 94")], method=L1).hazard_class == "
 c = hz.classify_nd(roads=[R("17", NAN, "county road")], method=L1)
 assert c.hazard_class == "Medium" and c.data_gaps == ["road 17: AADT not given; classified Medium by assumption"]
 c = hz.classify_nd(roads=[R("17", None, "State Highway 6")], method=L1, unknown_aadt="Low")
-# 0.17.37 / nd_hazard 1.2.0: REG_05.2026 5.2.1.2(b) - a US / State highway is at least Medium
+# 0.17.38 / nd_hazard 1.2.0: REG_05.2026 5.2.1.2(b) - a US / State highway is at least Medium
 # whatever its AADT (was: Low here, "not promoted by its name"); the gap says to verify the AADT
 assert c.hazard_class == "Medium", "a State highway is at least Medium (5.2.1.2(b))"
 assert c.data_gaps == ["road 17: US / State highway without AADT; classified Medium (High if AADT > 2,000)"], c.data_gaps

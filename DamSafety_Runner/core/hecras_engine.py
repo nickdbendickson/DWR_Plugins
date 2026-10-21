@@ -48,11 +48,17 @@ Settings (environment variables, or the `env` dict of each function):
     NDBREACH_HECRAS_LINUX_DIR    the unzipped Linux_RAS_v66 folder (bin/, libs/)
     NDBREACH_HECRAS_DISPLAY      X display for Wine (default :77; an Xvfb is NOT started here)
     NDBREACH_HECRAS_TCU_HOOK     optional, see above
-    NDBREACH_HECRAS_TIMEOUT_S    per-step timeout in s (preprocess steps: default 1800; the
-                                 RasUnsteady compute: default compute_timeout(), scaled to
-                                 the model); set, it overrides both. Every timeout is on
-                                 the WALL clock (core/wallclock.py): a paused / forked VM
-                                 counts, a clock stepped back never makes it fire early
+    NDBREACH_HECRAS_TIMEOUT_S    wall-clock limit in s. Unset, empty or 0 (the default since
+                                 Runner 3.10.48): the RasUnsteady compute has NO limit and
+                                 runs until it finishes (it was max(2 h, 3 x the estimate)
+                                 capped at 48 h), and so does each Wine preprocess step
+                                 (no 1800 s cap either: NO limit anywhere; a waiting Wine
+                                 dialog then waits for ever, see NDBREACH_HECRAS_TCU_HOOK).
+                                 A positive number limits the compute AND each preprocess
+                                 step to it. Anything else (text, negative) is ignored with
+                                 a note in the log. The limit is on the WALL clock
+                                 (core/wallclock.py): a paused / forked VM counts, a clock
+                                 stepped back never makes it fire early
     NDBREACH_HECRAS_KILL_GRACE_S seconds between SIGTERM and SIGKILL when a step times out
                                  (default 60); the timeout is in run.log and run_report.json
                                  ('hecras_timeout') before anything is stopped
@@ -131,20 +137,38 @@ def _env(env):
     return os.environ if env is None else env
 
 
-def _timeout(env):
+def timeout_setting(env=None):
+    """NDBREACH_HECRAS_TIMEOUT_S read once: (seconds or None, note). None = no explicit limit:
+    the variable is unset, empty, 0 (also '0.0', 'none', 'off') or not a positive number; the
+    note then says which, and an invalid value is named so the log shows it was ignored."""
+    raw = _env(env).get(ENV_TIMEOUT)
+    txt = "" if raw is None else str(raw).strip()
+    if not txt:
+        return None, "{} unset".format(ENV_TIMEOUT)
+    if txt.lower() in ("none", "off", "no", "unlimited"):
+        return None, "{}={} (no limit)".format(ENV_TIMEOUT, txt)
     try:
-        return float(_env(env).get(ENV_TIMEOUT) or 1800)
+        v = float(txt)
     except ValueError:
-        return 1800.0
+        return None, "{}={!r} is not a number; ignored (no limit)".format(ENV_TIMEOUT, txt)
+    if v != v or v in (float("inf"),):
+        return None, "{}={!r} ignored (no limit)".format(ENV_TIMEOUT, txt)
+    if v == 0:
+        return None, "{}=0 (no limit)".format(ENV_TIMEOUT)
+    if v < 0:
+        return None, "{}={!r} is negative; ignored (no limit)".format(ENV_TIMEOUT, txt)
+    return v, "{}={:g}".format(ENV_TIMEOUT, v)
+
+
+def _timeout(env):
+    """Each Wine preprocess step's wall-clock limit: the explicit NDBREACH_HECRAS_TIMEOUT_S,
+    else None = no limit (3.10.48; it was 1800 s)."""
+    return timeout_setting(env)[0]
 
 
 def _timeout_override(env):
     """NDBREACH_HECRAS_TIMEOUT_S as seconds, or None when unset / not a positive number."""
-    try:
-        v = float(_env(env).get(ENV_TIMEOUT) or 0)
-    except ValueError:
-        return None
-    return v if v > 0 else None
+    return timeout_setting(env)[0]
 
 
 # ---------------------------------------------------------------------------- compute time
@@ -153,13 +177,16 @@ def _timeout_override(env):
 # starts from and halves/doubles around). Calibrated 2026-10-18 on this box (1 core):
 #   DWR-3161  68,949 cells, 32 h, 3 s base step: 65 % in 7,200 s -> ~11,100 s  k = 4.2e-6
 #   Absaraka  64,090 cells, 40 h, 6 s base step: ~21 min (1,260 s)             k = 0.8e-6
-# k is the slower of the two (a wet, flat tailwater keeps the adaptive step small); the
-# timeout is COMPUTE_SAFETY x the estimate, at least COMPUTE_MIN_S, at most COMPUTE_MAX_S.
+# k is the slower of the two (a wet, flat tailwater keeps the adaptive step small). The
+# estimate is logged; since 3.10.48 it is NOT a limit: without NDBREACH_HECRAS_TIMEOUT_S the
+# compute runs until it finishes. (3.10.17-3.10.47 stopped it at COMPUTE_SAFETY x the
+# estimate, at least 2 h, at most 48 h, which killed long runs; the constants stay for the
+# message a timeout prints and for old reports.)
 # The time step itself is never coarsened here: the adaptive Courant step governs.
 COMPUTE_K_S = 4.2e-6
 COMPUTE_SAFETY = 3.0
-COMPUTE_MIN_S = 2 * 3600.0
-COMPUTE_MAX_S = 48 * 3600.0
+COMPUTE_MIN_S = 2 * 3600.0          # no longer applied (3.10.48)
+COMPUTE_MAX_S = 48 * 3600.0         # no longer applied (3.10.48)
 
 
 def compute_estimate_s(cells, sim_hours, base_dt_s, k=COMPUTE_K_S):
@@ -168,20 +195,27 @@ def compute_estimate_s(cells, sim_hours, base_dt_s, k=COMPUTE_K_S):
 
 
 def compute_timeout(cells, sim_hours, base_dt_s, env=None):
-    """(timeout_s, estimate_s or None, how): NDBREACH_HECRAS_TIMEOUT_S when set, else
-    max(COMPUTE_MIN_S, COMPUTE_SAFETY x estimate) capped at COMPUTE_MAX_S; COMPUTE_MIN_S when
-    the model's size is not known."""
+    """(timeout_s or None, estimate_s or None, how). The timeout is NDBREACH_HECRAS_TIMEOUT_S
+    when it is a positive number; otherwise None = no wall-clock limit (3.10.48: unset, empty,
+    0 or an invalid value; `how` says which). The estimate is only for the log."""
     est = (compute_estimate_s(cells, sim_hours, base_dt_s)
            if cells and sim_hours and base_dt_s else None)
-    ov = _timeout_override(env)
+    ov, note = timeout_setting(env)
     if ov is not None:
-        return ov, est, "{} (override)".format(ENV_TIMEOUT)
-    if est is None:
-        return COMPUTE_MIN_S, None, "default (model size unknown)"
-    t = min(max(COMPUTE_MIN_S, COMPUTE_SAFETY * est), COMPUTE_MAX_S)
-    how = "{:g} x the estimate, at least {:g} h, at most {:g} h".format(
-        COMPUTE_SAFETY, COMPUTE_MIN_S / 3600.0, COMPUTE_MAX_S / 3600.0)
-    return t, est, how
+        return ov, est, "{} (explicit limit)".format(note)
+    return None, est, "no limit: " + note
+
+
+def limit_text(timeout):
+    """'none' or 'N s (x.x h)' for logs and reports."""
+    return "none" if timeout is None else _hm(timeout)
+
+
+def limit_record(timeout, est, how):
+    """run_report.json / hecras_stage.json 'hecras_time_limit' (3.10.48)."""
+    return {"limit_s": timeout, "limit": limit_text(timeout), "how": how,
+            "estimate_s": round(est, 1) if est else None,
+            "applies_to": "the RasUnsteady compute and each Wine preprocess step"}
 
 
 def _interval_s(label):
@@ -855,7 +889,8 @@ def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None,
                 deadline=None, stop=None, poll_s=2.0):
     """RasUnsteady with its output going to `log_path` as it runs (watchable, appended, so the
     lines added here are never overwritten). The timeout is on the wall clock
-    (wallclock.Deadline). On a timeout, in this order: the timeout is written to run.log and
+    (wallclock.Deadline); timeout=None (3.10.48, the default) waits until RasUnsteady exits,
+    with no limit. On a timeout, in this order: the timeout is written to run.log and
     log() (before anything that can fail), then the process group gets SIGTERM,
     NDBREACH_HECRAS_KILL_GRACE_S (default 60 s) to exit, then SIGKILL; HecRasTimeout is raised
     with compute_timeout_message() and .info. `deadline` / `stop` are for the tests."""
@@ -1127,7 +1162,9 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
     clear message even when the program exited 0. Returns {step: seconds}."""
     d = d or require(env)
     e = wine_env(d, env)
-    to = _timeout(env)
+    to, _note = timeout_setting(env)
+    (log or (lambda m: None))("HEC-RAS preprocess: wall-clock limit per step {} [{}].".format(
+        limit_text(to), _note + (" (explicit limit)" if to is not None else "; no limit")))
     W = lambda p: to_wine_path(p, d["prefix"])
     wdir = d["windows_dir"]
     nice = ["nice", "-n", "19"] if shutil.which("nice") else []
@@ -1388,9 +1425,33 @@ def record_timeout(dam_folder, info, log=None):
     return info
 
 
-def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=None):
+def record_limit(dam_folder, lim, log=None):
+    """run_report.json 'hecras_time_limit' (limit_record(): 'none' or N s, how, the estimate),
+    added before adopt_final_engine rewrites the report from it. Never raises."""
+    if not lim:
+        return
+    rp = os.path.join(dam_folder, "_breach_model", "run_report.json")
+    try:
+        with open(rp, encoding="utf-8") as f:
+            rep = json.load(f)
+        rep["hecras_time_limit"] = lim
+        with open(rp + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(rep, f, indent=1, default=str)
+        os.replace(rp + ".tmp", rp)
+    except Exception as e:
+        try:
+            (log or (lambda m: None))("WARNING: the HEC-RAS wall-clock limit could not be added "
+                                      "to {} ({}: {})".format(rp, type(e).__name__, e))
+        except Exception:
+            pass
+
+
+def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=None,
+            limit=None):
     """Official Linux RasUnsteady on the preprocessed inputs; returns the results HDF path
-    (<name>.p<plan>.hdf in work_dir, default <project>/linux_run)."""
+    (<name>.p<plan>.hdf in work_dir, default <project>/linux_run). The wall-clock limit is
+    compute_timeout(): none unless NDBREACH_HECRAS_TIMEOUT_S is a positive number (3.10.48);
+    it is logged, and a dict passed as `limit` gets limit_record()."""
     d = d or require(env)
     log = log or (lambda m: None)
     work = work_dir or os.path.join(project_dir, "linux_run")
@@ -1410,11 +1471,13 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
     pt = plan_timing(project_dir, name, plan)
     timeout, est, how = compute_timeout(pt["cells"], pt["sim_hours"], pt["base_dt_s"], env)
     log("HEC-RAS compute: {} cells, {} h simulated, {} base step (adaptive Courant step "
-        "governs); estimated RasUnsteady time {}; timeout {} [{}].".format(
+        "governs); estimated RasUnsteady time {}; wall-clock limit {} [{}].".format(
             "{:,}".format(pt["cells"]) if pt["cells"] else "?",
             "{:g}".format(pt["sim_hours"]) if pt["sim_hours"] else "?",
             "{:g} s".format(pt["base_dt_s"]) if pt["base_dt_s"] else "?",
-            _hm(est) if est else "unknown", _hm(timeout), how))
+            _hm(est) if est else "unknown", limit_text(timeout), how))
+    if limit is not None:                      # run_stage puts it in run_report.json
+        limit.update(limit_record(timeout, est, how))
     try:
         _run_logged(nice + [d["rasunsteady"], tmp, "x" + plan], work, e, timeout,
                     os.path.join(work, "run.log"), pt["sim_hours"], est, log=log)
@@ -1517,11 +1580,13 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     name = r["model"].name
     times = preprocess(proj, name, d=d, env=env, terrain_tif=r["paths"]["terrain_tif"],
                        prj=r["paths"]["projection"], log=log)
+    lim = {}
     try:
-        hdf = compute(proj, name, d=d, env=env, log=log)
+        hdf = compute(proj, name, d=d, env=env, log=log, limit=lim)
     except HecRasTimeout as x:
         x.info = record_timeout(dam_folder, dict(x.info, project=proj), log=log)
         raise
+    record_limit(dam_folder, lim, log=log)          # 3.10.48: 'none' or N s in the report
     keep = os.path.join(dam_folder, "_hecras")
     os.makedirs(keep, exist_ok=True)
     shutil.copy2(hdf, keep)
@@ -1536,6 +1601,7 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
            "inflow_fallback": r.get("inflow_fallback"),
            "inflow_series": (r.get("inflow_bc") or {}).get("series"),
            "time_step": r["info"].get("time_step"),
+           "hecras_time_limit": lim or None,
            "lisflood_rasters_kept_as": LISFLOOD_PREFIX + "<name>"}
     with open(os.path.join(keep, "hecras_stage.json"), "w", encoding="utf-8") as f:
         json.dump(rep, f, indent=1)

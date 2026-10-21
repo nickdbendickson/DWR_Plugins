@@ -1,4 +1,4 @@
-"""0.17.37 / nd_hazard 1.2.0: US and State highways are at least Medium (REG_05.2026 5.2.1.2(b)).
+"""0.17.38 / nd_hazard 1.2.0: US and State highways are at least Medium (REG_05.2026 5.2.1.2(b)).
 
 Tool 8 (hazard classification) and triage use core/nd_hazard.py, the Runner's rules module: an
 overtopped US / State highway is at least Medium whatever its AADT; the private / AADT < 500 Low
