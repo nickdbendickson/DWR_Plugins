@@ -36,6 +36,54 @@ STOP_GRACE_S = 60.0
 MESHERS = ("default", "gmsh", "gmsh_or_default")
 GMSH_MESHERS = ("gmsh", "gmsh_or_default")
 
+# 3.10.47: ANUGA's OpenMP threads. ANUGA 4 runs its kernels on ONE thread unless it is told
+# otherwise (OMP_NUM_THREADS unset -> 1), so threads=0 ("0 = all cores", which is what
+# LISFLOOD-FP's OpenMP does by itself) left ANUGA single-threaded. resolve_threads turns 0
+# into a real count: NDBREACH_ANUGA_THREADS when set (> 0), else min(CPUs - 2, AUTO_THREADS_MAX)
+# (at least 1; the box is shared, and 4 threads already give ~2x). An explicit count > 0 is
+# used as given. The thread count never changes the results (bit-identical, see
+# tests/test_anuga_threads.py) and is not part of the checkpoint fingerprint.
+THREADS_ENV = "NDBREACH_ANUGA_THREADS"
+AUTO_THREADS_MAX = 4
+AUTO_THREADS_SPARE = 2
+
+
+def cpu_count():
+    """CPUs this process may use (the affinity mask where the OS has one), at least 1."""
+    try:
+        n = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        n = os.cpu_count() or 1
+    return max(1, int(n))
+
+
+def resolve_threads(threads, env=None, cpus=None):
+    """(n, rule): the ANUGA OpenMP thread count for a requested `threads` and the reason.
+    threads > 0 -> threads ("set"). 0 / None -> NDBREACH_ANUGA_THREADS from `env` (default
+    os.environ) when it is a whole number > 0, else max(1, min(cpus - 2, 4)) ("auto")."""
+    env = os.environ if env is None else env
+    try:
+        t = int(threads or 0)
+    except (TypeError, ValueError):
+        t = 0
+    if t > 0:
+        return t, "set ({})".format(t)
+    raw = (env.get(THREADS_ENV) or "").strip()
+    bad = ""
+    if raw:
+        try:
+            v = int(float(raw))
+            if v > 0:
+                return v, "{}={}".format(THREADS_ENV, v)
+            bad = "; {}={!r} ignored (not > 0)".format(THREADS_ENV, raw)
+        except ValueError:
+            bad = "; {}={!r} ignored (not a number)".format(THREADS_ENV, raw)
+    n = cpu_count() if cpus is None else max(1, int(cpus))
+    used = max(1, min(n - AUTO_THREADS_SPARE, AUTO_THREADS_MAX))
+    return used, "automatic: min({} CPUs - {}, {}){}".format(n, AUTO_THREADS_SPARE,
+                                                             AUTO_THREADS_MAX, bad)
+
+
 
 class AnugaSettings:
     def __init__(self, python, threads=0, manning_n=0.06, manning_grid=None,
@@ -708,7 +756,7 @@ def _launch(st, job, result, workdir, progress, cancel):
     # QGIS sets these for its own Python; the ANUGA interpreter must not inherit them.
     for k in ("PYTHONHOME", "PYTHONPATH", "QGIS_PREFIX_PATH", "PYTHONNOUSERSITE"):
         env.pop(k, None)
-    if st.threads:
+    if st.threads:          # run() passes the resolved count (resolve_threads), never 0
         env["OMP_NUM_THREADS"] = str(int(st.threads))
     log_path = os.path.join(workdir, "anuga.log")
     t0 = time.time()
@@ -836,6 +884,11 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
                                                 elevation_native_m, elevation_label, log, cancel)
     # 3.10.38: checkpoints on for a long run (resolve_checkpoints); the hydraulics are the same
     cst, ck_rule = resolve_checkpoints(st, outer, fine, mesh)
+    # 3.10.47: a real OpenMP thread count for ANUGA (0 used to mean 1 thread); gmsh keeps
+    # st.threads (gmsh_spec above), only the ANUGA job and its process get the resolved count
+    cst.threads, thr_rule = resolve_threads(st.threads)
+    if log:
+        log("ANUGA threads: {} ({}).".format(cst.threads, thr_rule))
     write_job(job, dem, outer, fine, inlet, hydrograph, cst, dem, initial_depth, culverts,
               breaklines, regions, mesh=mesh, elevation=elev_job)
     np.savetxt(os.path.join(workdir, "mesh_boundary.csv"), outer, delimiter=",",
@@ -875,6 +928,13 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         depth, vel, arr, wse = r["depth"], r["velocity"], r["arrival_hr"], r["wse"]
     if stats.get("checkpoint"):          # 3.10.38: why checkpoints were on
         stats["checkpoint"]["rule"] = ck_rule
+    if not have:                         # 3.10.47; a reused result keeps its own record
+        th = {"requested": int(st.threads or 0), "used": int(cst.threads), "rule": thr_rule}
+        if stats.get("omp_threads") is not None:
+            th["anuga_reported"] = stats["omp_threads"]
+        if stats.get("omp_note"):
+            th["note"] = stats["omp_note"]
+        stats["threads"] = th
     stats.update({
         "mesher": minfo["used"], "mesh": minfo,
         "elevation_source": dict(elev_info, worker=stats.get("elevation")),
@@ -890,8 +950,9 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     except Exception:       # noqa: BLE001
         pass
     if log:
-        log("ANUGA finished in {:.1f} min ({} triangles)".format((time.time() - t0) / 60.0,
-                                                               stats.get("triangles")))
+        log("ANUGA finished in {:.1f} min ({} triangles, {} thread(s))".format(
+            (time.time() - t0) / 60.0, stats.get("triangles"),
+            (stats.get("threads") or {}).get("used", cst.threads)))
     notes = list(cnotes)
     if mnote:
         notes.append(mnote)

@@ -51,7 +51,8 @@ class Provider(QgsProcessingProvider):
                 self.name(), SET_ANUGA, "Python interpreter of the ANUGA conda environment "
                 "(e.g. ~/miniforge3/envs/anuga/bin/python)", an, valuetype=Setting.FILE))
             ProcessingConfig.addSetting(Setting(
-                self.name(), SET_THREADS, "Threads for the models (0 = all cores)", 0,
+                self.name(), SET_THREADS, "Threads for the models (0 = automatic: LISFLOOD-FP "
+                "uses all cores; ANUGA uses NDBREACH_ANUGA_THREADS, else CPUs - 2, at most 4)", 0,
                 valuetype=Setting.INT))
             ProcessingConfig.addSetting(Setting(
                 self.name(), SET_BUILTIN, "Use the built-in screening engine when no "
