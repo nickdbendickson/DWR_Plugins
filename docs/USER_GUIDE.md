@@ -1,6 +1,6 @@
-# DamSafety plugins: user guide (changes through 2026-10-21, main caaf850)
+# DamSafety plugins: user guide (changes through 2026-10-21, main 732f597)
 
-This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84, #92, #93, #96 and #132. Other merged PRs (#85-#90, #94, #100-#105, …) are listed in CHANGELOG.md only. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
+This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84, #92, #93, #96, #131 (arrival depth), #132 (ANUGA threads) and #137 (HEC-RAS time limit). Other merged PRs (#85-#90, #94, #100-#105, …) are listed in CHANGELOG.md only. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
 
 ## Standard work-folder layout (#18)
 The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker all create the same empty folders:
@@ -21,6 +21,44 @@ The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker 
 - **Inflow point (#14):** the lowest qualifying cell within the usual radius. The QA inflow map shows the point, the search radius and the inflow elevation against the top of dam.
 - **Inflow side check (#84, Runner 3.10.18+):** the inflow point is always picked on the downstream side of the dam. Check `inflow_point.side_check` in `run_report.json`. If the trace from the inflow runs back over the dam point, or the inflow is behind the dam or on the upstream side of the crest, the first warning reads **"CHECK THE DAM POINT"**. Fix the dam point or give the dam line before trusting the run.
 - **Road-fill warning (#84):** if a road from the receptor road layer is within 30 m of the dam point and no DWR dam line (`DAM_LINES`) was given, the Runner warns that the embankment in the DEM may be the road's fill (`dam_point_checks` in `run_report.json`).
+
+## Arrival depth: 0.1 ft by default (#131; Runner 3.10.53, Hazard 2.18.52)
+**What it is.** The arrival depth is how deep the water has to get at a spot before the Runner says the flood has "arrived" there. The arrival time in `Arrival Time.tif` is the first time the depth goes above it, in hours after the breach starts. Since Runner 3.10.53 the default is **0.1 ft**. Before, it was **1 ft**.
+
+**Why it changed.** At 1 ft, any place where the flood stayed shallower than 1 ft got no arrival time at all. Most of the flooded houses in the DWR-2801 sample (9 of 10, 0.07-0.65 ft deep) had a blank arrival time. ND Dam Safety Standards 5.4(c) asks for an arrival time at each critical feature, and Section 5.2.2 counts a house flooded "to any degree". 0.1 ft is the same "any depth" the hazard tools already use, so now every flooded house gets an arrival time.
+
+**What the arrival depth controls in the Runner.** It is more than the arrival map. The same number is used for:
+- **Arrival times:** `Arrival Time.tif` and the arrival lines and zones (`Arrival Zones.geojson`, the EAP preview), and `latest_arrival_hr` in `run_report.json`.
+- **"Flooded" in the run summary:** `flooded_acres_over_arrival_depth`, `receptors_flooded` (structures, road and rail flooded), the velocity at flooded structures, roads and rail, the per-pass flood extent, and `Flood Extent.geojson`.
+- **The in-run LISFLOOD-FP vs ANUGA comparison** in `run_report.json` (`comparison`: areas and the fit index F) is counted at this depth.
+- **The run's clock.** When the run length is automatic, the Runner runs LISFLOOD-FP again 1.5 times longer if the latest arrival falls in the last 10% of the run (the flood is "still moving"). Shallow edges arrive late, so at 0.1 ft this happens more often. Some runs will simulate longer than they did at 1 ft. A longer run can also spread further.
+- It is part of the run key, so a 0.1 ft run never resumes an older 1 ft checkpoint.
+
+**What it does not change.** Depth, velocity and water surface are worked out the same way. The 1 ft edge tolerance (`EDGE_TOL_FT`), which decides when the model area grows, is unchanged. The fixed-depth areas `flooded_acres_ge_0_1ft`, `flooded_acres_ge_1ft` and `flooded_acres_ge_2ft` don't depend on it. Neither do the ND hazard class or the ACER TM 11 class: Hazard and the Runner's ND hazard tool decide "flooded" with their own 0.1 ft "any depth", not with the arrival depth.
+
+**Where to set it.**
+- *Run breach model for one dam* (also *Run breach models for a layer of dams (batch)* and *Cascade failure of dams in a chain*): **"Arrival depth (ft): arrival time is when the depth first exceeds this; also the depth counted as flooded in the run summary …"** (`ARRIVAL_FT`).
+- *Import HEC-RAS 2D results as rasters*: "Arrival depth (ft; …)" (`ARRIVAL_FT`), default 0.1.
+- *Flood polygons and EAP map from a dam's rasters*: "Flood extent and arrival zones: depth at least (ft; …)" (`ARRIVAL_FT`), default 0.1.
+- Command line (`ndbreach_cli.py`): `arrival_depth_ft` in the run configuration. The template now has 0.1.
+- The value a run used is in `run_report.json` under `settings` → `arrival_depth_ft`. Check it before you compare two runs.
+- To get the old behaviour, set it to 1. Hazard's own HEC-RAS import ("Arrival depth (ft)") and the Screening tools already used 0.1 ft and are unchanged.
+
+**What Hazard does with it (Hazard 2.18.52).** Hazard doesn't set an arrival depth for Runner results. It reads the arrival raster the Runner wrote. It uses the arrival time for:
+- `First_Arrival_hr` in the structures, roads and rail tables, the notification list and the map book;
+- the EAP arrival bands and contours;
+- the loss-of-life estimate (Graham), where a blank arrival time counts as "no warning";
+- the evacuation timing, where a deep-enough road with no arrival time counts as closed from the start.
+
+When a flooded structure still has no arrival time, its Notes now say why: the arrival raster has no value at its wet cells, and the Runner's default was 1 ft before Runner 3.10.53, so re-run an older result.
+
+**Comparing with older runs.** Every Runner result made before Runner 3.10.53 (main before 732f597) used 1 ft, unless someone set it. After a re-run at 0.1 ft, expect:
+- arrival times at places that had none (water 0.1-1 ft deep), and earlier arrival times everywhere else, because the water reaches 0.1 ft before it reaches 1 ft;
+- a later `latest_arrival_hr`, and a different median arrival;
+- a bigger `flooded_acres_over_arrival_depth` (it now equals the ≥0.1 ft area), more `receptors_flooded`, and different velocities at receptors;
+- in Hazard, filled-in `First_Arrival_hr` values, different loss-of-life estimates (shallow houses that had "no warning" now get a warning time; deep houses get less warning) and earlier road closures in the evacuation timing.
+
+Compare like with like. Use the fixed-depth areas (`flooded_acres_ge_0_1ft`, `_ge_1ft`, `_ge_2ft`), max depth and the hazard class across the change. Don't compare arrival times, `flooded_acres_over_arrival_depth`, receptor counts or the in-run fit index between a 1 ft run and a 0.1 ft run. Re-classifying an old result with the new Hazard doesn't fill in its arrival times: you need a Runner re-run for that. RESULTS_LOG.md lists which logged baselines came before the change.
 
 ## Settings saves (#12)
 Several windows can share one settings file safely. A window that opens without changing anything doesn't rewrite the file. If a save reports that the file can't be read, fix or restore it from `<name>.bak` (or use "Save as" to replace it on purpose) instead of deleting it. A leftover `<name>.lock` from a crashed QGIS clears itself after 30 s.
@@ -119,11 +157,27 @@ Reporting only: the model, the rasters and the flood polygons don't change. Fiel
 - Partial results are kept as `<name>.p01.partial.hdf` and are never used as results.
 - `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s) sets the wait between SIGTERM and SIGKILL.
 
-## HEC-RAS compute: no wall-clock limit by default (Runner 3.10.48)
-- With `NDBREACH_HECRAS_TIMEOUT_S` unset, empty or `0`, RasUnsteady and each preprocess step run until they finish. Before 3.10.48 it was stopped at max(2 h, 3 × the estimate), capped at 48 h, even with the variable unset.
-- A positive value still stops the compute (and each preprocess step) after that many wall-clock seconds, with SIGTERM, then SIGKILL after `NDBREACH_HECRAS_KILL_GRACE_S`. An invalid value is ignored, with a note in the log.
-- With no value there is no limit anywhere: the Wine preprocess steps lost their 1,800 s cap too. A Wine dialog waiting for a click (the TCU prompt) then waits until someone deals with it; use `NDBREACH_HECRAS_TCU_HOOK` or a positive value for unattended batches.
-- The limit in force ("none" or N s) is in the Runner log, `run_report.json` (`hecras_time_limit`) and the run report's "HEC-RAS wall-clock limit" row.
+## HEC-RAS: no time limit unless you set one (#137, Runner 3.10.48)
+**What changed.** Before Runner 3.10.48 the Runner stopped a HEC-RAS 2D run after a set wall-clock time even when you hadn't asked for a limit. It stopped the compute (RasUnsteady) at 3 times its own estimate, at least 2 h and at most 48 h, and each Wine preprocess step (terrain.exe, mesh.exe, drv.exe, Ras.exe -c) after 1,800 s. Long runs were killed before they finished. Now:
+
+| `NDBREACH_HECRAS_TIMEOUT_S` | What happens |
+|---|---|
+| Not set, empty, `0`, or `none` / `off` / `no` / `unlimited` | **No time limit anywhere.** The compute and every preprocess step run until they finish. |
+| A positive number of seconds | That limit applies to the compute **and** to each preprocess step separately. When it's reached, the Runner sends SIGTERM, waits `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s), then sends SIGKILL. Partial results are kept as `<name>.p01.partial.hdf` and are never used. |
+| Anything else (text, a negative number, `inf`, `nan`) | Ignored, with a note in the log; no limit. |
+
+The run-time estimate is still worked out and written to the log, but it no longer stops anything. The limit is measured on the wall clock, so time while the computer is paused counts.
+
+**Caution: a Wine dialog can now wait forever.** HEC-RAS's Ras.exe shows HEC's Terms and Conditions (TCU) dialog, and Wine doesn't remember that it was accepted. The Runner never clicks it for you. With no limit set, nothing stops a run that sits on that dialog. The only guard is your own TCU hook: point `NDBREACH_HECRAS_TCU_HOOK` at a script that accepts the dialog (for example with xdotool) if you have accepted HEC's terms. For unattended or overnight batches, also set a positive `NDBREACH_HECRAS_TIMEOUT_S` large enough for the longest run. Then a stuck step is stopped instead of holding the queue.
+
+**Known issue on current main.** With no limit set, if Ras.exe -c exits without writing its output, the error message can itself fail (a Python formatting error), and the real HEC-RAS error is hidden. If a HEC-RAS run fails right after "Ras.exe -c" with a `TypeError`, look in the plan's Compute Messages for the real cause.
+
+**Where to see the limit a run used.**
+- The Runner log: "HEC-RAS preprocess: wall-clock limit per step none [NDBREACH_HECRAS_TIMEOUT_S unset; no limit]" and "HEC-RAS compute: … wall-clock limit none […]".
+- `run_report.json` → `hecras_time_limit` (`limit_s`, `limit`, `how`, `estimate_s`, and `applies_to`: "the RasUnsteady compute and each Wine preprocess step"). It's also in `_hecras/hecras_stage.json`.
+- `run_report.md`: the "HEC-RAS wall-clock limit" row.
+
+Results don't change: the limit only decides whether a run is allowed to finish. The gmsh mesh-points timeout (600 s, #127) is separate and unchanged.
 
 ## ANUGA threads (#132, Runner 3.10.47)
 **What it does.** ANUGA can split its work across several processor cores (threads). Before Runner 3.10.47, leaving the threads setting at 0 meant ANUGA ran on **one** core, so long ANUGA runs (for example the refined 72 h and 20x20 Absaraka runs) were slower than they had to be. LISFLOOD-FP was not affected; it already used all cores. From 3.10.47 the Runner picks a real thread count for ANUGA:
@@ -166,5 +220,6 @@ Reporting only: the model, the rasters and the flood polygons don't change. Fiel
 - These descriptions come from PR text and source code. None of the window steps were checked in a running QGIS.
 - The exact list of fixes in #27 and the details of #11 and #16 are summarized from PR titles and commit headlines only.
 - No window steps for #22, #30, #32, #76, #84, #92, #93 or #96 were tried in QGIS. The #93 labels were checked in main's source at d217ec2, and the #92 `WATER_MASK` label and lookup order and the #96 names at b0c2ad5.
+- The #131 (arrival depth) and #137 (HEC-RAS time limit) names, labels, defaults and rules were checked in main's source at 732f597. No window was opened in QGIS, and no model was run.
 - The #132 (ANUGA threads) names, labels and rules were checked in main's source at caaf850 and against the PR's real-ANUGA check (`/workspace/anuga_threads_pr/real_check.log`). The Processing Options path was not opened in QGIS.
 - The installed copy of the plugins may lag behind main.
