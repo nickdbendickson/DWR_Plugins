@@ -61,6 +61,11 @@ import time
 
 import numpy as np
 
+try:                    # 3.10.50: the worker runs as a script (python anuga_worker.py ...)
+    from . import omp_probe
+except ImportError:
+    import omp_probe
+
 
 def bilinear(dem, x0, y0, dx, x, y):
     a = dem
@@ -258,6 +263,20 @@ def apply_threads(anuga, threads):
         return (int(getter()) if getter else None), note
     except Exception:            # noqa: BLE001
         return None, note
+
+
+def runtime_note(threads, rt_n, rt_name, note=""):
+    """3.10.50: add to `note` when the OpenMP runtime's count (omp_probe) is not the
+    `threads` that were asked for (> 0), or when no runtime could be read."""
+    if threads <= 0:
+        return note
+    extra = ""
+    if rt_n is None:
+        extra = "thread count not verified ({})".format(rt_name)
+    elif int(rt_n) != int(threads):
+        extra = "the OpenMP runtime ({}) reports {} thread(s), not {}".format(
+            rt_name, rt_n, threads)
+    return "; ".join(x for x in (note, extra) if x)
 
 
 def checkpoint_config(job):
@@ -800,6 +819,12 @@ def main(job_path, out_path):
         stats["omp_threads"] = int(_getter()) if _getter else omp_threads
     except Exception:            # noqa: BLE001
         stats["omp_threads"] = omp_threads
+    # 3.10.50: the count the OpenMP runtime itself reports (get_omp_num_threads above only
+    # echoes what was asked for); a different count, or no runtime found, goes in the note
+    rt_n, rt_name = omp_probe.omp_runtime_threads()
+    stats["omp_runtime_threads"] = rt_n
+    stats["omp_runtime"] = rt_name
+    omp_note = runtime_note(threads, rt_n, rt_name, omp_note)
     if omp_note:
         stats["omp_note"] = omp_note
     if ck is not None:

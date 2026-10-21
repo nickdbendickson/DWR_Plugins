@@ -116,6 +116,15 @@ checkpoint fingerprint ignores it, so a run can resume with another count. A bui
 OpenMP (or an ANUGA without `set_omp_num_threads`) runs on one thread and says so in the
 report; `anuga_benchmark_omp --threads 1,4` (in the ANUGA environment) shows whether a
 Windows / macOS install really scales. gmsh keeps the threads setting as given.
+From 3.10.50 `anuga_reported` is the count the OpenMP runtime itself reports
+(`core/omp_probe.py`, ctypes `omp_get_max_threads`; `run_report.json` also has
+`omp_runtime`, the library's name); `anuga.get_omp_num_threads()` only echoes the count it
+was given. When the runtime runs another count, or none can be read, the report's note says
+so. To check Windows and macOS, run the manual GitHub Actions workflow
+`anuga-omp-scaling` (Actions tab > anuga-omp-scaling > Run workflow): ANUGA from conda-forge
+at 1, 2 and 4 threads (`tools/anuga_omp_bench.py`), with times and a checksum. On Windows
+the Runner finds `envs\*anuga*\python.exe` under `%USERPROFILE%\miniforge3`,
+`%LOCALAPPDATA%\miniforge3` and the other usual conda folders (3.10.50).
 - Stop / resume by hand: stop the worker with SIGTERM (`kill <pid>`), then run the same dam
   again with `NDBREACH_ANUGA_RESUME=1` and the same settings. The preparation (LISFLOOD-FP
   pass, mesh input, fine bed) is redone; only the ANUGA time stepping continues.

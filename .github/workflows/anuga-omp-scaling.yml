@@ -1,0 +1,54 @@
+# Does ANUGA's OpenMP thread setting take effect and scale on Windows and macOS (Runner
+# 3.10.50)? Manual trigger only: Actions tab > anuga-omp-scaling > Run workflow.
+# tools/anuga_omp_bench.py: the same small dam-break at 1/2/4 threads (time, checksum, the
+# OpenMP runtime's own count via DamSafety_Runner/core/omp_probe.py). macos-14 has 3 cores,
+# so its 4-thread time is oversubscribed.
+name: anuga-omp-scaling
+on:
+  workflow_dispatch:
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: anuga
+          python-version: "3.12"
+          channels: conda-forge
+          conda-remove-defaults: "true"
+      - name: Install ANUGA (conda-forge)
+        run: |
+          conda install -y -c conda-forge anuga=4.0.1 scipy matplotlib-base
+          conda list | grep -Ei "anuga|openmp|libgomp|openblas|libblas"
+          python -c "import anuga, os; print(anuga.__version__, os.cpu_count())"
+      - name: OpenMP scaling 1/2/4 threads (time + checksum)
+        run: python tools/anuga_omp_bench.py
+      - name: Runner worker path (thread tests + real worker at 1 vs 4 threads)
+        run: |
+          export NDBREACH_ANUGA_PYTHON="$(python -c 'import sys;print(sys.executable)')"
+          unset NDSUITE_SETTINGS OMP_NUM_THREADS NDBREACH_ANUGA_THREADS
+          export HOME="$RUNNER_TEMP/home"; mkdir -p "$HOME"
+          python - <<'PY'
+          import sys; sys.path.insert(0, ".")
+          import nd_breach_runner.tests.test_anuga_threads as T
+          from nd_breach_runner.tests.registry import TESTS, MODEL_TESTS
+          fails = 0
+          for t in [t for t in TESTS + MODEL_TESTS if t.__module__ == T.__name__]:
+              try:
+                  t(); print("ok", t.__name__)
+              except Exception as e:
+                  fails += 1; print("FAIL", t.__name__, repr(e)[:300])
+          from nd_breach_runner.core.anuga_model import resolve_threads, cpu_count
+          print("cpu_count", cpu_count(), "resolve_threads(0) ->", resolve_threads(0))
+          sys.exit(1 if fails else 0)
+          PY
