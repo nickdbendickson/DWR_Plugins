@@ -132,15 +132,15 @@ OUT_JUDGMENT = "Judgment zone"
 OUT_ECONOMIC = "Inundated (economic loss)"
 OUT_DRY = "Not inundated"
 # Shallower than this: still wet on the grid, not a consequence (= the Runner's arrival depth,
-# ARRIVAL_FT 0.1 ft since Runner 3.10.45).
+# ARRIVAL_FT 0.1 ft since Runner 3.10.53).
 CONSEQUENCE_DEPTH_FT = 0.1  # ND 5.2.2 inundated to any degree
 OUT_TRACE = "Below consequence depth"
-# 2.18.48: why First_Arrival_hr is blank at a wet structure (REG_05.2026 5.4(c) asks for the
+# 2.18.52: why First_Arrival_hr is blank at a wet structure (REG_05.2026 5.4(c) asks for the
 # arrival time at each critical feature; the value is left blank, never invented)
 NOTE_ARRIVAL_BELOW = ("no arrival time: the arrival raster has no value at this structure's "
                       "wet cells (max depth {:.2f} ft); an arrival raster records when the "
                       "depth first exceeds the model's arrival depth (Runner ARRIVAL_FT: 0.1 ft "
-                      "by default since Runner 3.10.45, 1 ft before - re-run an older result)")
+                      "by default since Runner 3.10.53, 1 ft before - re-run an older result)")
 
 def _kw(*words):
     return re.compile(r"\b(?:%s)\b" % "|".join(re.escape(w) for w in words))
@@ -2211,9 +2211,9 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             rec["max_depth"] = float(d.max())
             rec["max_vel"] = float(v.max()) if vel_ok else None
             rec["arrival"] = float(np.nanmin(a)) if np.isfinite(a).any() else None
-            # 2.18.48: an arrival raster that has no time at any of the structure's wet cells
+            # 2.18.52: an arrival raster that has no time at any of the structure's wet cells
             # (the Runner's arrival time is when the depth first EXCEEDS its arrival depth,
-            # ARRIVAL_FT: 0.1 ft by default since Runner 3.10.45, 1 ft before - a shallower
+            # ARRIVAL_FT: 0.1 ft by default since Runner 3.10.53, 1 ft before - a shallower
             # flood never sets it) - said in Notes
             rec["arrival_below"] = rec["arrival"] is None and bool(samplers["arr"].ok)
             dvv = None
@@ -2513,7 +2513,7 @@ def structure_notes(rec):
 
 
 def danger_zone(rec):
-    """2.18.47: the REG_05.2026 Fig. 5.1 / 5.2 zone name of the structure's controlling zone
+    """2.18.51: the REG_05.2026 Fig. 5.1 / 5.2 zone name of the structure's controlling zone
     (HIGH DANGER ZONE / JUDGMENT ZONE / LOW DANGER ZONE); NULL when dry or for a 1D model, where
     depth alone decides (5.2.1.1(d))."""
     if rec.get("one_d") or rec.get("outcome", OUT_DRY) == OUT_DRY:
@@ -2522,7 +2522,7 @@ def danger_zone(rec):
 
 
 def danger_chart(rec):
-    """2.18.47: which REG_05.2026 relationship decided the structure: Fig. 5.1 (houses built on
+    """2.18.51: which REG_05.2026 relationship decided the structure: Fig. 5.1 (houses built on
     foundations), Fig. 5.2 (mobile homes) or the 1D depth > 2 ft rule; NULL when dry."""
     if rec.get("outcome", OUT_DRY) == OUT_DRY or rec.get("max_depth") is None:
         return NULL

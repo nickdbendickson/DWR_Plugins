@@ -26,7 +26,7 @@ that already has the crest changes nothing. Nothing here has been run in a real 
 |---|---|
 | `Depth (Max).tif` | ft |
 | `Velocity (Max).tif` | ft/s |
-| `Arrival Time.tif` | hours after breach initiation, at the arrival depth (default 0.1 ft since 3.10.45, the ND hazard 'any depth', so every wet structure has an arrival time; 1 ft before - re-run older results to fill the shallow ones) |
+| `Arrival Time.tif` | hours after breach initiation, at the arrival depth (default 0.1 ft since 3.10.53, the ND hazard 'any depth', so every wet structure has an arrival time; 1 ft before - re-run older results to fill the shallow ones) |
 | `WSE (Max).tif` | ft (DEM datum) |
 | `Baseline Depth (Max).tif` etc. | flood scenario: the same flood without the breach |
 | `Incremental Depth (Max).tif`, `Incremental WSE Rise (Max).tif` | flood scenario: with minus without (ND 6.4) |
@@ -93,9 +93,42 @@ Each variable can also be given without `NDBREACH_` (`ANUGA_CHECKPOINT_MIN`, ...
   no room for `keep + 1` checkpoints plus 256 MB (checked before the run, from a trial pickle,
   and at every yield step), the run goes on without (further) checkpoints and the reason is
   recorded there (`checkpoint_error`, `checkpoint_mb` = the size of one checkpoint).
+
+### ANUGA threads (3.10.47)
+
+ANUGA 4 runs its OpenMP kernels on **one** thread unless it is told otherwise, so the threads
+setting's 0 ("0 = all cores", which LISFLOOD-FP's OpenMP does by itself) left ANUGA on one
+core. From 3.10.47 the Runner gives ANUGA a real count (`core/anuga_model.resolve_threads`):
+
+| Threads setting (provider setting `NDBREACH_THREADS`, tool parameter THREADS) | ANUGA uses |
+|---|---|
+| > 0 | that many |
+| 0 and `NDBREACH_ANUGA_THREADS` > 0 | `NDBREACH_ANUGA_THREADS` |
+| 0 | min(CPUs - 2, 4), at least 1 (the box is shared; 4 threads are about 2x) |
+
+The count goes into the job file, the worker's `OMP_NUM_THREADS` and ANUGA's
+`set_omp_num_threads` (also after a checkpoint resumes). `runner.log` has an
+`ANUGA threads: N (rule)` line, `anuga.log` has `ANUGA OpenMP threads: N`, and
+`run_report.json["anuga_threads"]` (`requested`, `used`, `rule`, `anuga_reported`) and
+`run_report.md` record it. The results do not depend on it (1 and 4 threads give
+bit-identical depth, velocity, arrival and WSE; `tests/test_anuga_threads.py`), and the
+checkpoint fingerprint ignores it, so a run can resume with another count. A build without
+OpenMP (or an ANUGA without `set_omp_num_threads`) runs on one thread and says so in the
+report; `anuga_benchmark_omp --threads 1,4` (in the ANUGA environment) shows whether a
+Windows / macOS install really scales. gmsh keeps the threads setting as given.
 - Stop / resume by hand: stop the worker with SIGTERM (`kill <pid>`), then run the same dam
   again with `NDBREACH_ANUGA_RESUME=1` and the same settings. The preparation (LISFLOOD-FP
   pass, mesh input, fine bed) is redone; only the ANUGA time stepping continues.
+
+## HEC-RAS 2D compute: no wall-clock limit by default (3.10.48)
+With **Models = LISFLOOD-FP then HEC-RAS 2D**, the Linux RasUnsteady compute now runs until it finishes unless you set a limit.
+
+- `NDBREACH_HECRAS_TIMEOUT_S` unset, empty or `0` (also `none` / `off`): **no limit anywhere**, neither on the compute nor on the Wine preprocess steps (terrain.exe, mesh.exe, drv.exe, Ras.exe -c; they had a 1,800 s cap each). 3.10.17-3.10.47 stopped the compute at max(2 h, 3 x the estimated run time), capped at 48 h, even with the variable unset, which killed long (72 h simulated, large-mesh) runs.
+- A positive number of seconds: the compute AND each Wine preprocess step stop after that many seconds of wall-clock time (a paused VM counts), with SIGTERM to the process group, `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s), then SIGKILL, exactly as before.
+- Anything else (text, a negative number) is ignored, with a note in the log, and there is no limit.
+- Without a limit, a Wine dialog that waits for a click (HEC's Terms and Conditions prompt) stalls `Ras.exe -c` until someone deals with it. Set `NDBREACH_HECRAS_TCU_HOOK`, or a positive `NDBREACH_HECRAS_TIMEOUT_S`, for unattended batches on a new Wine prefix.
+- The limit in force is logged ("HEC-RAS preprocess: wall-clock limit per step none [...]" and "HEC-RAS compute: ... wall-clock limit none [no limit: NDBREACH_HECRAS_TIMEOUT_S unset]", with the run-time estimate), and recorded in `run_report.json["hecras_time_limit"]` (`limit_s`, `limit`, `how`, `estimate_s`, `applies_to`), `_hecras/hecras_stage.json` and the run report's "HEC-RAS wall-clock limit" row.
+- The gmsh-points timeout of "Refine HEC-RAS mesh with Gmsh points" (`core/hecras_seeds.py`, 600 s) is a separate setting and is unchanged.
 
 ## DEM resampling onto the model grid
 
@@ -634,7 +667,7 @@ does (the same module, byte for byte, as the ND dam screening plugin):
 - **"Any depth"** is the wet depth, 0.1 ft by default and at least 0.01 ft (a dry cell reads 0).
 - **Private roads** are only those an explicit field marks private; ownership or access codes
   are not read as private. Interstates are recognised from "Interstate", "I-94", "I 94", "I94"
-  or TIGER route type "I". US / State highways (Runner 3.10.45) from "US 2", "U.S. Highway 85",
+  or TIGER route type "I". US / State highways (Runner 3.10.53) from "US 2", "U.S. Highway 85",
   "ND 23", "ND-1804", "State Hwy 22", "Highway 23" / "Hwy 2" (not "County Highway 12"), TIGER
   route types "U" / "S", ND NG9-1-1 SHIELD "USHY" / "STHY" (the Runner reads NG9-1-1 FULL_NAME as the
   name and SHIELD as the class field), OSM / Geofabrik trunk, or primary from an OSM highway / fclass

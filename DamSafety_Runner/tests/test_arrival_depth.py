@@ -1,4 +1,4 @@
-"""3.10.45: the arrival depth (ARRIVAL_FT) is 0.1 ft by default (was 1 ft).
+"""3.10.53: the arrival depth (ARRIVAL_FT) is 0.1 ft by default (was 1 ft).
 
 REG_05.2026 5.4(c) asks for the arrival time at each critical feature. The Runner's arrival time
 is when the depth first exceeds its arrival depth; at 1 ft a structure flooded 0.1-1 ft deep

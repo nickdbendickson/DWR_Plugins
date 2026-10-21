@@ -106,7 +106,7 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
     road_high = [r for r in roads if r["nd_class"] == ND_HIGH]
     road_med = [r for r in roads if r["nd_class"] == ND_MEDIUM]
     road_low = [r for r in roads if r["nd_class"] == ND_LOW and not r.get("nd_judgment")]
-    # 2.18.48: US / State highways, REG_05.2026 5.2.1.2(b): at least Medium whatever the AADT
+    # 2.18.52: US / State highways, REG_05.2026 5.2.1.2(b): at least Medium whatever the AADT
     road_us_state = [r for r in roads if r.get("road_class") in ("US Highway", "State Highway")]
     if road_high:
         reasons.append("HIGH - {} overtopped road stretch(es) on Interstates or with "
@@ -648,7 +648,7 @@ def write_summary(output_folder, lines, nd, tm11, transform_ctx):
     rows += [("ND {} {}".format(c["section"], c["criterion"]),
               "{} -> {}".format(c["found"], c["result"]) if c["found"] else c["result"])
              for c in nd.get("criteria", [])]
-    # 2.18.47: REG_05.2026 classes are High / Medium / Low; the ACER TM 11 Table 1 class
+    # 2.18.51: REG_05.2026 classes are High / Medium / Low; the ACER TM 11 Table 1 class
     # (Low / Significant / High) is a reference, said so in the item, never the ND class
     rows += [("TM 11 classification (ACER TM 11 Table 1 reference, not the ND class)",
               tm11["cls"]),

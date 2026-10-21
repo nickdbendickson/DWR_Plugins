@@ -475,7 +475,7 @@ class HazardClassification(QgsProcessingAlgorithm):
                             where[(kind, rid)] = ((s["x"], s["y"]), s, kind)
 
                 def _rname(r):
-                    # 0.17.37: the road's name (and an ND NG9-1-1 SHIELD code), so a US / State
+                    # 0.17.38: the road's name (and an ND NG9-1-1 SHIELD code), so a US / State
                     # highway named only there ('HIGHWAY 23', 'US 2', SHIELD USHY / STHY) counts
                     # at least Medium (5.2.1.2(b)), as in the Runner
                     try:

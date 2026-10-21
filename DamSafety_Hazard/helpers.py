@@ -471,7 +471,7 @@ def apply_class_style(lyr, items):
 
 
 def _fill_zones(layer, path):
-    """2.18.47: colour the danger-zone cells (ACER_Zone_Label / Danger_Zone) of an exported
+    """2.18.51: colour the danger-zone cells (ACER_Zone_Label / Danger_Zone) of an exported
     XLSX with the REG_05.2026 Fig. 5.1 / 5.2 fills; a failure is logged, never raised."""
     try:
         from .xlsx_zone_fill import ZONE_COLUMNS, fill_zone_cells

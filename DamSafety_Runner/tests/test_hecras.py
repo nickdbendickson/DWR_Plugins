@@ -387,7 +387,7 @@ def hecras_import_grids_from_a_synthetic_mesh():
         _close(v[N - 1 - 3, 1], (2.0 + 3.0 + 1.0 + 1.0) / 4.0)            # cell (i=1, j=3)
         _close(v[N - 1 - 0, 0], (2.0 + 1.0 + 9.0) / 3.0)                  # corner, ghost face
         assert np.isnan(v[:, 4:]).all()
-        arr = grids["arrival"].data                     # depth reaches 0.1 ft (3.10.45 default)
+        arr = grids["arrival"].data                     # depth reaches 0.1 ft (3.10.53 default)
         _nan_eq(arr, _expected_columns(0.2 / DMAX))
         g1, _ = hecras.import_results(src, arrival_depth_ft=1.0)          # the old 1 ft
         _nan_eq(g1["arrival"].data, _expected_columns(2.0 / DMAX))

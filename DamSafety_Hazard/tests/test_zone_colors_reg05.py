@@ -11,7 +11,7 @@ those colours at full opacity:
   * {Hazard,Runner,Screening}/styles/acer_zone_points.qml (structure points)
   * DamSafety_Hazard/chartsign.py overlay_svg() (the low zone is filled too)
   * {Runner,Screening}/core/nd_hazard.py chart_svg() (ND Fig 5.1 / 5.2 review charts + legend)
-  * DamSafety_Hazard/xlsx_zone_fill.py ZONE_FILLS_REG05 (XLSX zone cell fills, 2.18.47)
+  * DamSafety_Hazard/xlsx_zone_fill.py ZONE_FILLS_REG05 (XLSX zone cell fills, 2.18.51)
 
 check_text(root) is QGIS-free and is also run by tools/ci_checks.py. The sibling plugins' copies
 are checked when they are next to this plugin (the repo); a lone plugin zip checks its own.
@@ -113,7 +113,7 @@ def check_text(root=ROOT):
             if '"{}"'.format(ZONE_NAMES[key]) not in body:
                 probs.append("{}/core/nd_hazard.py chart_svg legend lacks '{}'".format(
                     p, ZONE_NAMES[key]))
-    s = _read(root, "DamSafety_Hazard/xlsx_zone_fill.py")       # 2.18.47 XLSX zone cell fills
+    s = _read(root, "DamSafety_Hazard/xlsx_zone_fill.py")       # 2.18.51 XLSX zone cell fills
     if s is not None and not re.search(r'ZONE_FILLS_REG05 = \{{1: "{}", 2: "{}", 3: "{}"\}}'.format(
             STD["high"], STD["judgment"], STD["low"]), s, re.I):
         probs.append("xlsx_zone_fill.py ZONE_FILLS_REG05 is not the standard's colours")
