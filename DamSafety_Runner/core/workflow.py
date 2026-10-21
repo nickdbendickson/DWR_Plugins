@@ -49,7 +49,7 @@ from . import terrain
 from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
-from .units import FT, MILE, ACFT, CFS
+from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 
 def _metadata_version():
     """The plugin version from metadata.txt (the single source of truth)."""
@@ -107,7 +107,7 @@ class RunSettings:
         self.planning_cell_m = 30.0
         self.manning_n = 0.06
         self.manning_scale = 1.0         # multiplies the Manning raster too (sensitivity)
-        self.arrival_depth_ft = 1.0
+        self.arrival_depth_ft = ARRIVAL_DEPTH_FT    # 0.1 ft since 3.10.53 (was 1 ft)
         self.edge_tolerance_ft = 1.0
         self.initial_length_mi = 5.0
         self.half_width_mi = 1.0
@@ -674,6 +674,28 @@ def anuga_checkpoint_line(ck):
     elif ck.get("resume_skipped"):
         parts.append("not resumed: " + ck["resume_skipped"])
     return "; ".join(parts)
+
+
+def anuga_threads_line(th):
+    """One line for run_report.md from run_report["anuga_threads"] (3.10.47)."""
+    txt = "{} OpenMP thread(s) ({})".format(th.get("used"), th.get("rule", ""))
+    rep = th.get("anuga_reported")
+    if rep is not None and rep != th.get("used"):
+        txt += "; ANUGA reported {}".format(rep)
+    if th.get("note"):
+        txt += "; " + th["note"]
+    return txt
+
+
+def hecras_time_limit_line(lim):
+    """One line for run_report.md from run_report["hecras_time_limit"] (3.10.48)."""
+    txt = str(lim.get("limit") or "none")
+    if lim.get("how"):
+        txt += " ({})".format(lim["how"])
+    if lim.get("estimate_s"):
+        txt += "; estimated RasUnsteady time {:.0f} s ({:.1f} h)".format(
+            lim["estimate_s"], lim["estimate_s"] / 3600.0)
+    return txt
 
 
 def max_extent_warning(max_extent_mi, over):
@@ -1490,6 +1512,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         report["anuga_elevation_source"] = an_env.stats.get("elevation_source")
         if an_env.stats.get("checkpoint"):          # only when checkpoints were on
             report["anuga_checkpoint"] = an_env.stats["checkpoint"]
+        if an_env.stats.get("threads"):             # 3.10.47: ANUGA's OpenMP threads
+            report["anuga_threads"] = an_env.stats["threads"]
         anuga_mesh = _anuga_mesh_report(a_runs)
         report["anuga_mesh"] = anuga_mesh
         if anuga_mesh.get("rejected_line"):
@@ -1690,6 +1714,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     ack = report.get("anuga_checkpoint") or {}
     if ack:
         summary["anuga_checkpoint"] = anuga_checkpoint_line(ack)
+    ath = report.get("anuga_threads") or {}
+    if ath:
+        summary["anuga_threads"] = anuga_threads_line(ath)
     if "incremental" in report:
         summary["incremental_acres"] = report["incremental"]["acres_at_or_above"]
     if report.get("refine_near_dam", {}).get("applied"):
@@ -1838,7 +1865,7 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
     unit = gdal_io.linear_unit_m(g.crs_wkt) or 1.0
     cell_ac = (g.dx * unit) ** 2 / 4046.8564224
     sets = report.get("settings") or {}
-    arrival_ft = float(getattr(st, "arrival_depth_ft", None) or sets.get("arrival_depth_ft") or 1.0)
+    arrival_ft = float(getattr(st, "arrival_depth_ft", None) or sets.get("arrival_depth_ft") or ARRIVAL_DEPTH_FT)
     arrival_m = arrival_ft * FT
     old = dict(report.get("summary") or {})
     # M5: the screening pass may have run on the opt-in built-in engine; label its kept vector
@@ -1902,6 +1929,9 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
     if fallback:
         summary["hecras_inflow"] = "breach at the dam (fallback)"
         log("WARNING: " + fallback)
+    htl = report.get("hecras_time_limit") or {}       # 3.10.48 (hecras_engine.record_limit)
+    if htl:
+        summary["hecras_time_limit"] = hecras_time_limit_line(htl)
     report["summary"] = summary
     report["screening_pass_lisflood"] = screening
     report["final_engine"] = {"model": final_model, "figures_from": dict(paths),
@@ -2461,6 +2491,10 @@ def render_report(r):
         lines.append("| ANUGA bed elevation | {} |".format(s["anuga_elevation"]))
     if s.get("anuga_checkpoint"):
         lines.append("| ANUGA checkpoints | {} |".format(s["anuga_checkpoint"]))
+    if s.get("anuga_threads"):
+        lines.append("| ANUGA threads | {} |".format(s["anuga_threads"]))
+    if s.get("hecras_time_limit"):
+        lines.append("| HEC-RAS wall-clock limit | {} |".format(s["hecras_time_limit"]))
     lines.append("")
     if s.get("anuga_mesh_rejected"):
         lines += ["## ANUGA mesh", "", "**" + s["anuga_mesh_rejected"] + "**", ""]
@@ -2629,9 +2663,14 @@ def render_report(r):
         lines += ["## ANUGA", ""]
         for a in r["anuga_runs"]:
             st = a["stats"]
+            vb = st.get("volume_balance") or {}
             lines.append("- mesh buffer {} m: {:,} triangles, {} min, deepest water at the mesh "
-                         "edge {} ft".format(a["buffer_m"], st.get("triangles", 0),
-                                             st.get("runtime_min"), st.get("max_edge_depth_ft")))
+                         "edge {} ft{}".format(a["buffer_m"], st.get("triangles", 0),
+                                               st.get("runtime_min"), st.get("max_edge_depth_ft"),
+                                               "; water in the domain at the end / supplied {} "
+                                               "({} edges)".format(vb["ratio"], st.get(
+                                                   "boundary", "transmissive"))
+                                               if vb.get("ratio") is not None else ""))
         c = r.get("comparison", {})
         lines += ["", "Comparison with LISFLOOD-FP (cells deeper than the arrival depth): "
                   "LISFLOOD-FP {} ac, ANUGA {} ac, both {} ac, fit index F = {}; mean depth "

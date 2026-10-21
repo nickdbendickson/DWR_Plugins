@@ -46,7 +46,9 @@ def _case():
     flooded[40:80, 10:150] = True
     inflow = dem.xy(60, 15)
     hy = br.Hydrograph(np.array([0.0, 600.0, 3600.0]), np.array([0.0, 100.0, 0.0]), "test")
-    st = AM.AnugaSettings(sys.executable, sim_time_s=3600.0)
+    # main 89cb655's arrival depth (1 ft; the default is 0.1 ft since 3.10.53) so the pin still
+    # checks the mesh and the job layout, not that default
+    st = AM.AnugaSettings(sys.executable, sim_time_s=3600.0, arrival_depth_m=0.3048)
     road = [[dem.x0 + 1600.0, dem.y0 - 700.0], [dem.x0 + 1600.0, dem.y0 - 1700.0]]
     return dem, flooded, inflow, hy, st, [road]
 
@@ -84,7 +86,24 @@ def anuga_default_mesher_job_file_is_byte_identical_to_main():
     finally:
         terrain._have_contourpy = real
     assert _sha(c) == _sha(d)
-    assert _sha(c) == MAIN_JOB_SHA256, _sha(c)
+    assert _sha_threads0(c) == MAIN_JOB_SHA256, _sha_threads0(c)
+
+
+def _sha_threads0(p):
+    """3.10.47: the job file carries the resolved ANUGA thread count (resolve_threads), where
+    main's pinned file had threads = 0. Everything else must stay byte-identical: the sha256
+    of the same file re-saved with threads = 0 (np.savez writes the keys in the same order)
+    and, since 3.10.55, without the 'edge_bc' key."""
+    with np.load(p) as z:
+        d = {k: z[k] for k in z.files}
+    assert int(d["threads"]) == AM.resolve_threads(0)[0] >= 1, d["threads"]
+    d["threads"] = np.asarray(0, d["threads"].dtype)
+    # 3.10.55: the job names its outer-edge condition ('outflow', the new default; main's
+    # pinned file had none and the worker used Transmissive_boundary); dropped for the pin
+    assert str(d.pop("edge_bc")) == "outflow"
+    q = p + ".threads0.npz"
+    np.savez(q, **d)
+    return _sha(q)
 
 
 @test

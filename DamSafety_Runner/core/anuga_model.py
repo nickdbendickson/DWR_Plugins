@@ -17,6 +17,7 @@ import numpy as np
 
 from .lisflood import Envelopes, ModelError, Cancelled
 from . import terrain, wallclock
+from .units import ARRIVAL_DEPTH_FT, FT
 from . import conditioning as cond
 from . import structures as structmod
 
@@ -35,10 +36,92 @@ STOP_GRACE_S = 60.0
 MESHERS = ("default", "gmsh", "gmsh_or_default")
 GMSH_MESHERS = ("gmsh", "gmsh_or_default")
 
+# 3.10.47: ANUGA's OpenMP threads. ANUGA 4 runs its kernels on ONE thread unless it is told
+# otherwise (OMP_NUM_THREADS unset -> 1), so threads=0 ("0 = all cores", which is what
+# LISFLOOD-FP's OpenMP does by itself) left ANUGA single-threaded. resolve_threads turns 0
+# into a real count: NDBREACH_ANUGA_THREADS when set (> 0), else min(CPUs - 2, AUTO_THREADS_MAX)
+# (at least 1; the box is shared, and 4 threads already give ~2x). An explicit count > 0 is
+# used as given (3.10.56: at most the CPUs this process may use; inf / nan / decimals / text
+# are ignored with a note). The thread count never changes the results (bit-identical, see
+# tests/test_anuga_threads.py) and is not part of the checkpoint fingerprint.
+THREADS_ENV = "NDBREACH_ANUGA_THREADS"
+AUTO_THREADS_MAX = 4
+AUTO_THREADS_SPARE = 2
+
+
+def cpu_count():
+    """CPUs this process may use (the affinity mask where the OS has one), at least 1. A
+    container's cgroup CPU quota is not read (a full affinity mask with a 2-CPU quota still
+    counts all CPUs); harmless where the box has no quota, set the threads explicitly there."""
+    try:
+        n = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        n = os.cpu_count() or 1
+    return max(1, int(n))
+
+
+def _whole_count(v):
+    """(n, problem): v as a whole number, or (None, why not). 3.10.56: inf / nan / text /
+    decimals such as 2.7 are invalid (2.7 used to become 2, inf raised OverflowError)."""
+    if v is None or isinstance(v, bool):
+        return None, "not a number"
+    if isinstance(v, int):
+        return v, ""
+    try:
+        f = float(str(v).strip())
+    except (TypeError, ValueError):
+        return None, "not a number"
+    if f != f or f in (float("inf"), float("-inf")):
+        return None, "not a finite number"
+    if f != int(f):
+        return None, "not a whole number"
+    return int(f), ""
+
+
+def resolve_threads(threads, env=None, cpus=None):
+    """(n, rule): the ANUGA OpenMP thread count for a requested `threads` and the reason.
+    threads > 0 -> threads ("set"). 0 / None -> NDBREACH_ANUGA_THREADS from `env` (default
+    os.environ) when it is a whole number > 0, else max(1, min(cpus - 2, 4)) ("auto").
+    3.10.56: an explicit or NDBREACH_ANUGA_THREADS count above the CPUs this process may use
+    is clamped to them; a requested count or env value that is not a finite whole number
+    (inf, nan, 2.7, text) is ignored with a note in the rule and the automatic count is used.
+    Never raises."""
+    env = os.environ if env is None else env
+    n = cpu_count() if cpus is None else max(1, int(cpus))
+    notes = ""
+    if threads is None or (isinstance(threads, str) and not threads.strip()):
+        t = 0
+    else:
+        t, why = _whole_count(threads)
+        if t is None:
+            notes += "; threads={!r} ignored ({})".format(threads, why)
+            t = 0
+        elif t < 0:
+            notes += "; threads={!r} ignored (not > 0)".format(threads)
+            t = 0
+    if t > 0:
+        if t > n:
+            return n, "set ({}), clamped to the {} CPUs".format(t, n)
+        return t, "set ({})".format(t)
+    raw = str(env.get(THREADS_ENV) or "").strip()
+    if raw:
+        v, why = _whole_count(raw)
+        if v is None:
+            notes += "; {}={!r} ignored ({})".format(THREADS_ENV, raw, why)
+        elif v <= 0:
+            notes += "; {}={!r} ignored (not > 0)".format(THREADS_ENV, raw)
+        elif v > n:
+            return n, "{}={}, clamped to the {} CPUs{}".format(THREADS_ENV, v, n, notes)
+        else:
+            return v, "{}={}{}".format(THREADS_ENV, v, notes)
+    used = max(1, min(n - AUTO_THREADS_SPARE, AUTO_THREADS_MAX))
+    return used, "automatic: min({} CPUs - {}, {}){}".format(n, AUTO_THREADS_SPARE,
+                                                             AUTO_THREADS_MAX, notes)
+
 
 class AnugaSettings:
     def __init__(self, python, threads=0, manning_n=0.06, manning_grid=None,
-                 arrival_depth_m=0.3048, sim_time_s=6 * 3600.0, yieldstep_s=300.0,
+                 arrival_depth_m=ARRIVAL_DEPTH_FT * FT, sim_time_s=6 * 3600.0, yieldstep_s=300.0,
                  near_field_radius_m=1609.344, fine_area_m2=100.0, coarse_area_m2=1000.0,
                  buffer_m=500.0, algorithm="DE0", velocity_min_depth_m=0.03):
         self.python = python
@@ -54,6 +137,11 @@ class AnugaSettings:
         self.buffer_m = buffer_m
         self.algorithm = algorithm
         self.velocity_min_depth_m = velocity_min_depth_m
+        # 3.10.55: the outer edges. "outflow" = water leaves freely, none enters (the normal
+        # momentum of inward-moving water is mirrored); "transmissive" = anuga's
+        # Transmissive_boundary as before 3.10.55, which feeds water in wherever the water by
+        # the edge moves inward (NDDOT culvert run 2026-10-21: 4.15 x the breach volume)
+        self.edge_bc = "outflow"
         # ANUGA_MESHER: "default" = ANUGA's own mesh (create_domain_from_regions, unchanged);
         # "gmsh" = breakline-graded mesh from core/gmsh_mesher.py, the run stops if it is
         # rejected; "gmsh_or_default" = the same, but a rejected mesh falls back (loudly)
@@ -331,6 +419,7 @@ def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_d
         "sim_time": st.sim_time_s, "yieldstep": st.yieldstep_s,
         "arrival_depth": st.arrival_depth_m, "velocity_min_depth": st.velocity_min_depth_m,
         "algorithm": st.algorithm, "threads": int(st.threads or 0),
+        "edge_bc": str(getattr(st, "edge_bc", None) or "outflow"),
         "out_x0": out_grid.x0, "out_y0": out_grid.y0, "out_dx": out_grid.dx,
         "out_nx": out_grid.nx, "out_ny": out_grid.ny,
     }
@@ -707,7 +796,7 @@ def _launch(st, job, result, workdir, progress, cancel):
     # QGIS sets these for its own Python; the ANUGA interpreter must not inherit them.
     for k in ("PYTHONHOME", "PYTHONPATH", "QGIS_PREFIX_PATH", "PYTHONNOUSERSITE"):
         env.pop(k, None)
-    if st.threads:
+    if st.threads:          # run() passes the resolved count (resolve_threads), never 0
         env["OMP_NUM_THREADS"] = str(int(st.threads))
     log_path = os.path.join(workdir, "anuga.log")
     t0 = time.time()
@@ -835,6 +924,11 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
                                                 elevation_native_m, elevation_label, log, cancel)
     # 3.10.38: checkpoints on for a long run (resolve_checkpoints); the hydraulics are the same
     cst, ck_rule = resolve_checkpoints(st, outer, fine, mesh)
+    # 3.10.47: a real OpenMP thread count for ANUGA (0 used to mean 1 thread); gmsh keeps
+    # st.threads (gmsh_spec above), only the ANUGA job and its process get the resolved count
+    cst.threads, thr_rule = resolve_threads(st.threads)
+    if log:
+        log("ANUGA threads: {} ({}).".format(cst.threads, thr_rule))
     write_job(job, dem, outer, fine, inlet, hydrograph, cst, dem, initial_depth, culverts,
               breaklines, regions, mesh=mesh, elevation=elev_job)
     np.savetxt(os.path.join(workdir, "mesh_boundary.csv"), outer, delimiter=",",
@@ -874,6 +968,20 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         depth, vel, arr, wse = r["depth"], r["velocity"], r["arrival_hr"], r["wse"]
     if stats.get("checkpoint"):          # 3.10.38: why checkpoints were on
         stats["checkpoint"]["rule"] = ck_rule
+    if not have:                         # 3.10.47; a reused result keeps its own record
+        th = {"requested": int(st.threads or 0), "used": int(cst.threads), "rule": thr_rule}
+        # 3.10.50: the OpenMP runtime's own count first (omp_probe); ANUGA's
+        # get_omp_num_threads only echoes the count it was given
+        rep = stats.get("omp_runtime_threads")
+        if rep is None:
+            rep = stats.get("omp_threads")
+        if rep is not None:
+            th["anuga_reported"] = rep
+        if stats.get("omp_runtime"):
+            th["omp_runtime"] = stats["omp_runtime"]
+        if stats.get("omp_note"):
+            th["note"] = stats["omp_note"]
+        stats["threads"] = th
     stats.update({
         "mesher": minfo["used"], "mesh": minfo,
         "elevation_source": dict(elev_info, worker=stats.get("elevation")),
@@ -889,11 +997,15 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     except Exception:       # noqa: BLE001
         pass
     if log:
-        log("ANUGA finished in {:.1f} min ({} triangles)".format((time.time() - t0) / 60.0,
-                                                               stats.get("triangles")))
+        log("ANUGA finished in {:.1f} min ({} triangles, {} thread(s))".format(
+            (time.time() - t0) / 60.0, stats.get("triangles"),
+            (stats.get("threads") or {}).get("used", cst.threads)))
     notes = list(cnotes)
     if mnote:
         notes.append(mnote)
+    vn = volume_note(stats)
+    if vn:
+        notes.append(vn)
     for e in stats.get("culvert_errors", []):
         notes.append("ANUGA culvert not applied: " + e)
     if refine_lines and not stats.get("breaklines_used") and breaklines and mesh is None:
@@ -901,6 +1013,72 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
                      "touch each other); the mesh was made without them.")
     return Envelopes(dem.like(depth, np.nan), dem.like(vel, np.nan), dem.like(arr, np.nan),
                      dem.like(wse, np.nan), stats, notes), outer, fine
+
+
+VOLUME_GAIN_LIMIT = 1.02       # 3.10.55: more water in the domain than this x the supply
+VOLUME_CHECK_LIMIT = 1.005     # a softer "check" line above this (a creeping gain)
+SOLVER_RESIDUAL_LIMIT = 0.005  # |ANUGA conservation residual| / supply above this: check
+POSITIVE_EDGE_INFLOW = 0.001   # net edge inflow / supply above this with outflow-only edges
+
+
+def volume_note(stats, limit=VOLUME_GAIN_LIMIT):
+    """3.10.55: a note when the water balance looks wrong. Fills stats['volume_balance'] for
+    results written before 3.10.55. None when the balance is fine or unknown.
+    - ratio (in domain / initial water plus breach hydrograph) > `limit`: a gain. The cause is
+      named only as far as the numbers show it: ANUGA's net boundary flux integral says
+      whether the extra water came in through the edge; without it the edge is the likely
+      cause (old transmissive edges), but an instability or the inlet's integration could do it.
+    - ratio > VOLUME_CHECK_LIMIT: a softer check line.
+    - ANUGA's own conservation residual above SOLVER_RESIDUAL_LIMIT of the supply.
+    - a positive net edge inflow with outflow-only edges (it should be <= 0).
+    The ratio is net: gains at one edge can hide behind losses at another (ANUGA reports no
+    gross edge flows); the residual and the edge-inflow line cover what it can."""
+    vb = stats.get("volume_balance")
+    if not vb:
+        sup = float(stats.get("initial_volume_m3") or 0.0) + float(stats.get("injected_m3") or 0.0)
+        vin = stats.get("volume_in_domain_m3")
+        if vin is None or sup <= 0:
+            return None
+        vb = {"supplied_m3": round(sup, 1), "in_domain_m3": round(float(vin), 1),
+              "ratio": round(float(vin) / sup, 4)}
+        stats["volume_balance"] = vb
+    r = vb.get("ratio")
+    if r is None:
+        return None
+    sup = float(vb.get("supplied_m3") or 0.0)
+    kind = stats.get("boundary", "transmissive")
+    bi = vb.get("boundary_net_inflow_m3")
+    out = []
+    if r > limit:
+        extra = vb["in_domain_m3"] - vb["supplied_m3"]
+        if bi is not None and bi > 0.5 * extra:
+            why = ("ANUGA's boundary flux integral shows {:,.0f} m3 net inflow through the mesh "
+                   "edge ({} boundary), so the extra water came in there".format(bi, kind))
+        elif bi is not None:
+            why = ("ANUGA's boundary flux integral shows only {:,.0f} m3 net through the edge, so "
+                   "the gain is probably not from the edge: check for an instability or the "
+                   "inflow".format(bi))
+        else:
+            why = ("it most likely came in through the mesh edge ({} boundary), though an "
+                   "instability could also cause it".format(kind))
+        out.append("ANUGA volume check: the domain ends with {:.2f} x the water that went in "
+                   "({:,.0f} m3 = {:,.0f} acre-ft more than the {:,.0f} m3 of initial water and "
+                   "breach inflow); {}. Treat the depths near the mesh edge with caution until "
+                   "this is resolved.".format(r, extra, extra / 1233.48184, vb["supplied_m3"],
+                                              why))
+    elif r > VOLUME_CHECK_LIMIT:
+        out.append("ANUGA volume check: the domain ends with {:.3f} x the water that went in, a "
+                   "small gain (above {:.3f}); worth a look.".format(r, VOLUME_CHECK_LIMIT))
+    fr = vb.get("solver_residual_frac")
+    if fr is not None and abs(fr) > SOLVER_RESIDUAL_LIMIT:
+        out.append("ANUGA's own water balance is off by {:,.0f} m3 ({:+.1%} of the supply: end "
+                   "volume - start - edge flux - inflow operators), which points at an "
+                   "instability rather than a boundary.".format(vb["solver_residual_m3"], fr))
+    if kind == "outflow" and bi is not None and sup > 0 and bi > POSITIVE_EDGE_INFLOW * sup:
+        out.append("ANUGA reports a net inflow of {:,.0f} m3 through outflow-only edges, which "
+                   "should be about zero or negative (a small inflow can pass where the outside stage is "
+                   "copied); check the run.".format(bi))
+    return " ".join(out) or None
 
 
 def check_anuga(python, workdir):

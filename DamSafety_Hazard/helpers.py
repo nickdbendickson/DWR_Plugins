@@ -426,9 +426,9 @@ def apply_acer11_style(lyr):
             return False
         items = [
             QgsColorRampShader.ColorRampItem(CLASS_NODATA, QColor(0, 0, 0, 0), "No Data"),
-            QgsColorRampShader.ColorRampItem(CLASS_HIGH, QColor("#F44336"), "HIGH DANGER ZONE"),
-            QgsColorRampShader.ColorRampItem(CLASS_JUDGMENT, QColor("#FFEB3B"), "JUDGEMENT ZONE"),
-            QgsColorRampShader.ColorRampItem(CLASS_LOW, QColor("#4CAF50"), "LOW DANGER ZONE"),
+            QgsColorRampShader.ColorRampItem(CLASS_HIGH, QColor("#EF9897"), "HIGH DANGER ZONE"),
+            QgsColorRampShader.ColorRampItem(CLASS_JUDGMENT, QColor("#F9F4A3"), "JUDGMENT ZONE"),
+            QgsColorRampShader.ColorRampItem(CLASS_LOW, QColor("#C4E0AD"), "LOW DANGER ZONE"),
         ]
         ramp_shader = QgsColorRampShader()
         if SHADER_DISCRETE is not None:
@@ -438,7 +438,8 @@ def apply_acer11_style(lyr):
         raster_shader.setRasterShaderFunction(ramp_shader)
         renderer = QgsSingleBandPseudoColorRenderer(lyr.dataProvider(), 1, raster_shader)
         lyr.setRenderer(renderer)
-        if lyr.renderer():
+        # QgsSingleBandPseudoColorRenderer has no invalidateCache() on QGIS 3.34
+        if lyr.renderer() and hasattr(lyr.renderer(), "invalidateCache"):
             lyr.renderer().invalidateCache()
         lyr.triggerRepaint()
         return True
@@ -467,6 +468,18 @@ def apply_class_style(lyr, items):
     except Exception as e:
         log_message("Style apply failed: {}".format(e), MSG_WARNING)
         return False
+
+
+def _fill_zones(layer, path):
+    """2.18.51: colour the danger-zone cells (ACER_Zone_Label / Danger_Zone) of an exported
+    XLSX with the REG_05.2026 Fig. 5.1 / 5.2 fills; a failure is logged, never raised."""
+    try:
+        from .xlsx_zone_fill import ZONE_COLUMNS, fill_zone_cells
+        if any(f.name() in ZONE_COLUMNS for f in layer.fields()):
+            fill_zone_cells(path)
+    except Exception as e:
+        log_message("XLSX zone colours not applied to {}: {}".format(
+            os.path.basename(path), e), MSG_WARNING)
 
 
 def export_layer_to_formats(layer, output_folder, base_name, transform_ctx,
@@ -499,6 +512,8 @@ def export_layer_to_formats(layer, output_folder, base_name, transform_ctx,
             results[fmt] = enum_value(err_code) == enum_value(WRITER_NO_ERROR)
             if results[fmt]:
                 paths[fmt] = out_file
+                if fmt == "xlsx":
+                    _fill_zones(layer, out_file)
             else:
                 log_message("{} export failed ({}): {}".format(
                     fmt.upper(), err_code, _writer_error_message(write_result)), MSG_WARNING)

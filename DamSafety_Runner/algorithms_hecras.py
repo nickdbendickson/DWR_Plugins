@@ -12,6 +12,7 @@ from qgis.core import (QgsProcessingException, QgsProcessingOutputFile,
 
 from .algorithms_tools import _ToolBase
 from .core import benchmark, gdal_io, hecras, hecras_model, hecras_package, workflow
+from .core.units import ARRIVAL_DEPTH_FT
 
 STEPS = [(hecras.ras_interval_label(m), m) for m in hecras.RAS_INTERVALS_MIN]
 STEP_DEFAULT = [m for _, m in STEPS].index(5)
@@ -85,6 +86,9 @@ class HecRasExportAlgorithm(_ToolBase):
             optional=True))
         self._num("BREACH_STATION_FT", "Breach centre, ft along the dam line from its first "
                   "end (empty = the deepest dam section)", optional=True, minimum=0.0)
+        # 3.10.56: culverts and bridges of another run (the ANUGA run of the same dam)
+        self._file("STRUCTURES_FROM", "Culverts and bridges from another run (its dam folder, "
+                   "e.g. the ANUGA run; empty = this run's own)", folder=True)
         self.addOutput(QgsProcessingOutputFolder("MODEL_FOLDER", "HEC-RAS model package folder"))
         self.addOutput(QgsProcessingOutputFile("MODEL_ZIP", "HEC-RAS model package (.zip)"))
         self.addOutput(QgsProcessingOutputFile("HYDROGRAPH_TXT", "Hydrograph, .u## block"))
@@ -136,6 +140,9 @@ class HecRasExportAlgorithm(_ToolBase):
             if parameters.get("BREACH_STATION_FT") not in (None, ""):
                 opts["breach_station_ft"] = self.parameterAsDouble(parameters,
                                                                    "BREACH_STATION_FT", context)
+            sfrom = self._fileparam(parameters, "STRUCTURES_FROM", context) or None
+            if sfrom:
+                opts["structures_from"] = sfrom
             try:
                 p = hecras_package.build_package(
                     folder, out_root=os.path.join(out, "hecras") if out else None,
@@ -200,8 +207,10 @@ class HecRasImportAlgorithm(_ToolBase):
         self._text("AREA", "2D flow area name (empty = the largest)")
         self.addParameter(QgsProcessingParameterEnum("UNITS", "HEC-RAS model units", US_SI,
                                                      defaultValue=0))
-        self._num("ARRIVAL_FT", "Arrival depth (ft; starting value 1 is the engineer's, a "
-                  "screening value you choose)", 1.0, minimum=0.01)
+        self._num("ARRIVAL_FT", "Arrival depth (ft; starting value 0.1 is the engineer's: the "
+                  "ND hazard 'any depth', so every wet structure gets an arrival time)",
+                  ARRIVAL_DEPTH_FT,
+                  minimum=0.01)
         self._num("T0_HR", "Time of breach initiation in the HEC-RAS run (hr after its start)",
                   0.0, minimum=0.0)
         self.addParameter(QgsProcessingParameterBoolean(

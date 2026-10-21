@@ -10,6 +10,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
                        QgsProject)
 
 from ..core import terrain
+from ..core.warp_opts import no_overviews
 from ..compat import (FILE_FOLDER, NUM_DOUBLE, SRC_POINT)
 from ..damsuite import gdalsafe as GS
 from . import _common as cm
@@ -251,10 +252,10 @@ class TerrainCache(QgsProcessingAlgorithm):
             ext = (p.x() - radius, p.y() - radius, p.x() + radius, p.y() + radius)
             try:
                 if use_local:
-                    GS.checked(gdal.Warp(dst, vrt, dstSRS="EPSG:5070", outputBounds=ext,
-                                         xRes=cell, yRes=cell, resampleAlg="bilinear",
-                                         outputType=gdal.GDT_Float32, dstNodata=-9999,
-                                         creationOptions=["COMPRESS=DEFLATE"]), "clipping the DEM")
+                    GS.checked(gdal.Warp(dst, vrt, **no_overviews(gdal, dict(   # 0.17.35
+                        dstSRS="EPSG:5070", outputBounds=ext, xRes=cell, yRes=cell,
+                        resampleAlg="bilinear", outputType=gdal.GDT_Float32, dstNodata=-9999,
+                        creationOptions=["COMPRESS=DEFLATE"]))), "clipping the DEM")
                 else:
                     tiles = terrain.fetch_3dep(ext, cell, os.path.join(out, "_tmp"), f"d{dam_id}",
                                                log=feedback.pushInfo)
