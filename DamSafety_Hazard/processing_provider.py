@@ -617,7 +617,7 @@ _ONE_D_NOTE = "depth-only (1D) criterion - no velocity data"
 _NO_DOWNLOADS = ("download_nsi", "download_address", "download_usa_structures", "download_rail",
                  "download_crossings", "download_roads", "download_dams", "download_lifelines",
                  "download_crossings_structures", "download_camps", "download_flowlines",
-                 "download_places")
+                 "download_places", "download_ms_footprints")
 
 
 def _prepare_dam(folder, cfg_over):

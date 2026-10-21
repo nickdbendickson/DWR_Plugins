@@ -44,6 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Provision QGIS + a scipy-compatible numpy
+        id: provision
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: qgis
@@ -56,13 +57,17 @@ jobs:
           # the suite's own runner: each script picks the mock or the real GDAL it needs
           # (tests/qgis_mock on PYTHONPATH shadowed the real osgeo for the GDAL-write tests)
           python DamSafety_Screening/tests/run_all.py
+      # Every suite step below runs even when an earlier suite failed, so one red suite does not
+      # hide the others' results (they are skipped only if QGIS could not be provisioned).
       - name: Runner fast suite
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           cd "$GITHUB_WORKSPACE"
           python -m nd_breach_runner.tests.run_tests
       - name: Hazard suite (real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
@@ -72,10 +77,12 @@ jobs:
           # status under micromamba's `bash -el` even when every script exited 0.
           python DamSafety_Hazard/tests/run_all.py
       - name: Hazard Lite (GDAL + numpy)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         run: |
           cd "$GITHUB_WORKSPACE"
           python DamSafety_HazardLite/tests/test_core.py
       - name: GUI lint (real QGIS, docs/gui-grammar.md)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
@@ -83,12 +90,14 @@ jobs:
           # opens every DamSafety window offscreen and checks it against the grammar
           python tools/gui_lint.py
       - name: Runner dam wizard (real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           cd "$GITHUB_WORKSPACE"
           python DamSafety_Runner/tests/realqt_wizard.py
       - name: Suite dam data and Setup (real QGIS, pytest)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
