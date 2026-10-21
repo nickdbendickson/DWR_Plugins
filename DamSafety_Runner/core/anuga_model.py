@@ -929,8 +929,15 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         stats["checkpoint"]["rule"] = ck_rule
     if not have:                         # 3.10.47; a reused result keeps its own record
         th = {"requested": int(st.threads or 0), "used": int(cst.threads), "rule": thr_rule}
-        if stats.get("omp_threads") is not None:
-            th["anuga_reported"] = stats["omp_threads"]
+        # 3.10.50: the OpenMP runtime's own count first (omp_probe); ANUGA's
+        # get_omp_num_threads only echoes the count it was given
+        rep = stats.get("omp_runtime_threads")
+        if rep is None:
+            rep = stats.get("omp_threads")
+        if rep is not None:
+            th["anuga_reported"] = rep
+        if stats.get("omp_runtime"):
+            th["omp_runtime"] = stats["omp_runtime"]
         if stats.get("omp_note"):
             th["note"] = stats["omp_note"]
         stats["threads"] = th
