@@ -135,7 +135,7 @@ def _lines_gpkg(folder):
     """dwr_dam_lines in Web Mercator, so the midpoint has to be transformed to EPSG:4326.
     Structure 105 (no point) runs from -97.90 to -97.88 at 46.40."""
     lyr = QgsVectorLayer("LineString?crs=EPSG:3857", "dwr_dam_lines", "memory")
-    lyr.dataProvider().addAttributes([QgsField("structure_id", QVariant.String)])
+    lyr.dataProvider().addAttributes([_field("structure_id", "s")])
     lyr.updateFields()
     xf = QgsCoordinateTransform(QgsCoordinateReferenceSystem("EPSG:4326"),
                                 QgsCoordinateReferenceSystem("EPSG:3857"), QgsProject.instance())

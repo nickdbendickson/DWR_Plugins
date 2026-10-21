@@ -84,9 +84,15 @@ def nid_get(url, done):
 
     def finished():
         _REPLIES.discard(reply)
-        status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
+        status_attr = getattr(QNetworkRequest, "HttpStatusCodeAttribute", None)  # Qt6 scopes these
+        if status_attr is None:
+            status_attr = QNetworkRequest.Attribute.HttpStatusCodeAttribute
+        status = reply.attribute(status_attr)
         body = bytes(reply.readAll()).decode("utf-8", "replace")
-        if reply.error() == QNetworkReply.NoError:
+        no_error = getattr(QNetworkReply, "NoError", None)
+        if no_error is None:
+            no_error = QNetworkReply.NetworkError.NoError
+        if reply.error() == no_error:
             done(body, "")
         elif status == 404:
             done("{}", "")                 # not in the NID: an answer, not a failure
