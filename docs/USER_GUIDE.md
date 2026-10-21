@@ -114,10 +114,16 @@ Reporting only: the model, the rasters and the flood polygons don't change. Fiel
 - The mask adds `*_masked` figures next to the unmasked ones and writes `Water Body Mask.geojson`. Near Lake Sakakawea, check the masked area first: the whole lake is one polygon.
 
 ## HEC-RAS timeouts on the wall clock (#96, Runner 3.10.26)
-- VM pauses now count against `NDBREACH_HECRAS_TIMEOUT_S` (the timeout formula is unchanged).
+- VM pauses now count against `NDBREACH_HECRAS_TIMEOUT_S`. (Since 3.10.48 there is no compute limit unless it is set; see below.)
 - On a timeout, look for `[ndbreach] TIMEOUT` in `linux_run/run.log`, `linux_run/timeout.json`, and `hecras_timeout` in `run_report.json`. These are written before RasUnsteady is stopped.
 - Partial results are kept as `<name>.p01.partial.hdf` and are never used as results.
 - `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s) sets the wait between SIGTERM and SIGKILL.
+
+## HEC-RAS compute: no wall-clock limit by default (Runner 3.10.48)
+- With `NDBREACH_HECRAS_TIMEOUT_S` unset, empty or `0`, RasUnsteady and each preprocess step run until they finish. Before 3.10.48 it was stopped at max(2 h, 3 × the estimate), capped at 48 h, even with the variable unset.
+- A positive value still stops the compute (and each preprocess step) after that many wall-clock seconds, with SIGTERM, then SIGKILL after `NDBREACH_HECRAS_KILL_GRACE_S`. An invalid value is ignored, with a note in the log.
+- With no value there is no limit anywhere: the Wine preprocess steps lost their 1,800 s cap too. A Wine dialog waiting for a click (the TCU prompt) then waits until someone deals with it; use `NDBREACH_HECRAS_TCU_HOOK` or a positive value for unattended batches.
+- The limit in force ("none" or N s) is in the Runner log, `run_report.json` (`hecras_time_limit`) and the run report's "HEC-RAS wall-clock limit" row.
 
 ## ANUGA threads (#132, Runner 3.10.47)
 **What it does.** ANUGA can split its work across several processor cores (threads). Before Runner 3.10.47, leaving the threads setting at 0 meant ANUGA ran on **one** core, so long ANUGA runs (for example the refined 72 h and 20x20 Absaraka runs) were slower than they had to be. LISFLOOD-FP was not affected; it already used all cores. From 3.10.47 the Runner picks a real thread count for ANUGA:

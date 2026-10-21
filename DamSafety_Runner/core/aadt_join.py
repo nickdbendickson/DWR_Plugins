@@ -325,6 +325,10 @@ def markdown_lines(road_check):
     for j in rc.get("aadt_joined") or []:
         out.append("- AADT joined: {}: {:g} ({}) from {}".format(
             j["road"], j["aadt"], j.get("year") or "year n/a", j["source"]))
+    if rc.get("flagged_structure"):
+        out.append("- Flagged structure: {}. The hazard of record ({}) stands; the class above "
+                   "is for information only.".format(rc["flagged_structure"],
+                                                     rc.get("class_to_use")))
     if rc.get("hazard_module_class"):
         out.append("- Hazard plugin class ({}): {}. Use the Hazard plugin's class.".format(
             HAZARD_SUMMARY, rc["hazard_module_class"]))

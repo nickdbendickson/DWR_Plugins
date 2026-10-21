@@ -721,9 +721,13 @@ def overlay_svg(image_path, calibration, out_svg, chart=HOUSE, charts=None,
         out.append('<image x="0" y="0" width="{0}" height="{1}" preserveAspectRatio="none" '
                    'href="{2}" xlink:href="{2}"/>'.format(W, H, img))
     else:
-        out.append('<polygon points="{}" fill="#fbe7b5" fill-opacity="0.8" stroke="none"/>'
+        # REG_05.2026 Fig. 5.1 / 5.2 zone colours: the plot area is the low danger zone
+        out.append('<polygon points="{} {} {} {}" fill="#c4e0ad" stroke="none"/>'
+                   .format(P(0, 0), P(sp["v_max"], 0), P(sp["v_max"], sp["d_max"]),
+                           P(0, sp["d_max"])))
+        out.append('<polygon points="{}" fill="#f9f4a3" stroke="none"/>'
                    .format(" ".join(P(v, d) for v, d in c["judgment"])))
-        out.append('<polygon points="{}" fill="#f4b6b0" fill-opacity="0.8" stroke="none"/>'
+        out.append('<polygon points="{}" fill="#ef9897" stroke="none"/>'
                    .format(" ".join(P(v, d) for v, d in c["high"])))
     # grid + frame
     g = ['<g stroke="#2a6fdb" stroke-opacity="0.45" stroke-width="{:.2f}" '
