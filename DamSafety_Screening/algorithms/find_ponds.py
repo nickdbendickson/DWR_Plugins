@@ -28,6 +28,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
 
 from ..core import inventory as inv
 from ..core import ponds as pd, terrain
+from ..core.warp_opts import no_overviews
 from ..compat import (FIELD_ANY, FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_LINE, SRC_POINT,
                       SRC_POLYGON, WKB_LINESTRING, WKB_POINT)
 from ..damsuite import gdalsafe as GS
@@ -250,10 +251,11 @@ class FindPonds(QgsProcessingAlgorithm):
             tiles = terrain.fetch_3dep(ext, cell, tmp, "p{}".format(pid))
             source = tiles
         try:
-            ds = GS.checked(gdal.Warp("", source, format="MEM", dstSRS=cm.ALBERS, outputBounds=ext,
-                                      width=n, height=m, resampleAlg="average", srcNodata=-9999,
-                                      dstNodata=-9999, outputType=gdal.GDT_Float32),
-                            "warping the terrain")
+            # 0.17.35: averaged from the full-resolution cells, never the source's overviews
+            ds = GS.checked(gdal.Warp("", source, **no_overviews(gdal, dict(
+                format="MEM", dstSRS=cm.ALBERS, outputBounds=ext, width=n, height=m,
+                resampleAlg="average", srcNodata=-9999, dstNodata=-9999,
+                outputType=gdal.GDT_Float32))), "warping the terrain")
         finally:
             for t in tiles:
                 try:
@@ -273,9 +275,10 @@ class FindPonds(QgsProcessingAlgorithm):
             return False
         ext = (centre[0] - radius, centre[1] - radius, centre[0] + radius, centre[1] + radius)
         if self._vrt:
-            GS.checked(gdal.Warp(dst, self._vrt, dstSRS=cm.ALBERS, outputBounds=ext, xRes=clip_cell,
-                                 yRes=clip_cell, resampleAlg="bilinear", outputType=gdal.GDT_Float32,
-                                 dstNodata=-9999, creationOptions=["COMPRESS=DEFLATE"]), "clipping the DEM")
+            GS.checked(gdal.Warp(dst, self._vrt, **no_overviews(gdal, dict(   # 0.17.35
+                dstSRS=cm.ALBERS, outputBounds=ext, xRes=clip_cell, yRes=clip_cell,
+                resampleAlg="bilinear", outputType=gdal.GDT_Float32, dstNodata=-9999,
+                creationOptions=["COMPRESS=DEFLATE"]))), "clipping the DEM")
         else:
             tiles = terrain.fetch_3dep(ext, clip_cell, tmp, "c{}".format(pid))
             try:

@@ -8,6 +8,7 @@ from qgis.core import (QgsFields, QgsField, QgsCoordinateReferenceSystem, QgsCoo
                        QgsProject, QgsFeatureRequest, QgsRectangle, QgsWkbTypes)
 
 from ..core import terrain, hydrocond, gridutil as gu
+from ..core.warp_opts import no_overviews
 from ..compat import (GEOM_LINE, GEOM_POINT, GEOM_POLYGON)
 from ..damsuite import gdalsafe as GS
 from ..damsuite import structure_flags as SF
@@ -271,9 +272,11 @@ class TerrainLoader:
                 src = self.vrt
             elif src is None:
                 raise FileNotFoundError("no cached DEM (tool 2) and no terrain source for a larger clip")
-        ds = gdal.Warp("", src, format="MEM", dstSRS=ALBERS, outputBounds=ext, width=n, height=n,
-                       resampleAlg="average", srcNodata=-9999, dstNodata=-9999,
-                       outputType=gdal.GDT_Float32)
+        # 0.17.35: averaged from the full-resolution cells, never the source's overviews
+        ds = gdal.Warp("", src, **no_overviews(gdal, dict(
+            format="MEM", dstSRS=ALBERS, outputBounds=ext, width=n, height=n,
+            resampleAlg="average", srcNodata=-9999, dstNodata=-9999,
+            outputType=gdal.GDT_Float32)))
         if ds is None:
             raise RuntimeError("GDAL could not warp the terrain for dam {} ({})".format(
                 dam_id, _gdal_msg() or "no message"))

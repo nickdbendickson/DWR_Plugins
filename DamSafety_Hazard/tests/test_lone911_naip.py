@@ -182,11 +182,17 @@ def test_possibly_misplaced_911_point():
 def _jpeg(color=(30, 120, 30)):
     from qgis.PyQt.QtGui import QImage, QColor
     from qgis.PyQt.QtCore import QBuffer, QByteArray, QIODevice
-    img = QImage(64, 64, QImage.Format_RGB32)
+    fmt = getattr(QImage, "Format_RGB32", None)        # Qt6 scopes the enum
+    if fmt is None:
+        fmt = QImage.Format.Format_RGB32
+    write_only = getattr(QIODevice, "WriteOnly", None)
+    if write_only is None:
+        write_only = QIODevice.OpenModeFlag.WriteOnly
+    img = QImage(64, 64, fmt)
     img.fill(QColor(*color))
     ba = QByteArray()
     buf = QBuffer(ba)
-    buf.open(QIODevice.WriteOnly)
+    buf.open(write_only)
     img.save(buf, "JPG")
     return bytes(ba)
 

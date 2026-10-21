@@ -243,6 +243,15 @@ def build_package(dam_folder, out_root=None, dt_min=hecras.DEFAULT_STEP_MIN, crs
     run_tool = report.get("tool") or "the Runner"
     with open(os.path.join(folder, README), "w", encoding="utf-8", newline="") as f:
         f.write(windows_readme(r["model"], r["info"], r["notes"], version, run_tool))
+    # v3.10.56: before the manifest and the zip, the terrain GeoTIFF must still carry the
+    # package's EPSG code and unit (GIS/Projection.prj); no half package is left behind
+    from . import hecras_terrain_crs as htc
+    try:
+        htc.check_package(folder)
+    except htc.TerrainCRSError:
+        import shutil
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
     files = _files(folder)
     man = {"format": "damsafety_runner/hecras_package", "format_version": 1,
            "built_by": "DamSafety Runner {}".format(version),

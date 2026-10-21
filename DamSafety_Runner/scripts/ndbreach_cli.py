@@ -1730,7 +1730,11 @@ def build_parser():
     def models(p):
         p.add_argument("--lisflood", default="", help="LISFLOOD-FP executable")
         p.add_argument("--anuga-python", default="", help="ANUGA environment's python")
-        p.add_argument("--threads", type=int, default=None, help="model threads (0 = all)")
+        p.add_argument("--threads", type=int, default=None,
+                       help="model threads. 0 (default) = automatic: "
+                       "LISFLOOD-FP uses all cores; ANUGA uses "
+                       "NDBREACH_ANUGA_THREADS, else CPUs - 2, at most 4. A count above the "
+                       "CPUs is clamped to them for ANUGA")
 
     p = sub.add_parser("run", help="run one dam (the same outputs as the QGIS tool)")
     p.add_argument("config")

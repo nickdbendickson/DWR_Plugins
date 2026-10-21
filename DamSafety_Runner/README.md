@@ -102,9 +102,15 @@ core. From 3.10.47 the Runner gives ANUGA a real count (`core/anuga_model.resolv
 
 | Threads setting (provider setting `NDBREACH_THREADS`, tool parameter THREADS) | ANUGA uses |
 |---|---|
-| > 0 | that many |
-| 0 and `NDBREACH_ANUGA_THREADS` > 0 | `NDBREACH_ANUGA_THREADS` |
+| > 0 | that many, at most the CPUs (3.10.56: a larger count is clamped, with a note) |
+| 0 and `NDBREACH_ANUGA_THREADS` a whole number > 0 | `NDBREACH_ANUGA_THREADS`, at most the CPUs |
 | 0 | min(CPUs - 2, 4), at least 1 (the box is shared; 4 threads are about 2x) |
+
+3.10.56: a threads value or `NDBREACH_ANUGA_THREADS` that is not a finite whole number (`inf`,
+`nan`, `2.7`, text) is ignored, and the automatic count is used; the `ANUGA threads` line and
+`run_report.json["anuga_threads"]["rule"]` say what was ignored and why. ("CPUs" = the CPUs this
+process may use, its affinity mask where the OS has one.) `ndbreach_cli.py --threads` follows
+the same rules for ANUGA; only LISFLOOD-FP takes 0 as "all cores".
 
 The count goes into the job file, the worker's `OMP_NUM_THREADS` and ANUGA's
 `set_omp_num_threads` (also after a checkpoint resumes). `runner.log` has an
@@ -138,6 +144,10 @@ With **Models = LISFLOOD-FP then HEC-RAS 2D**, the Linux RasUnsteady compute now
 - Without a limit, a Wine dialog that waits for a click (HEC's Terms and Conditions prompt) stalls `Ras.exe -c` until someone deals with it. Set `NDBREACH_HECRAS_TCU_HOOK`, or a positive `NDBREACH_HECRAS_TIMEOUT_S`, for unattended batches on a new Wine prefix.
 - The limit in force is logged ("HEC-RAS preprocess: wall-clock limit per step none [...]" and "HEC-RAS compute: ... wall-clock limit none [no limit: NDBREACH_HECRAS_TIMEOUT_S unset]", with the run-time estimate), and recorded in `run_report.json["hecras_time_limit"]` (`limit_s`, `limit`, `how`, `estimate_s`, `applies_to`), `_hecras/hecras_stage.json` and the run report's "HEC-RAS wall-clock limit" row.
 - The gmsh-points timeout of "Refine HEC-RAS mesh with Gmsh points" (`core/hecras_seeds.py`, 600 s) is a separate setting and is unchanged.
+
+## HEC-RAS package: culverts and bridges from the ANUGA run, terrain CRS guard (3.10.56)
+- **Structures from another run.** *Export to HEC-RAS* has a "Culverts and bridges from another run" folder (`structures_from` in `build_model`): point it at the ANUGA run's dam folder, and each culvert and bridge inside the HEC-RAS 2D area becomes a connection across the road (road weir from the terrain; a culvert group for a culvert, with ANUGA's inverts from `anuga/anuga_job.npz`; an open gap in the weir for a bridge). The road lines are built into the 2D points so cell faces lie on them, and any weir or invert lower than the cells it joins is raised to that ground + 0.05 ft (listed in README_HECRAS.md). Each connection is written as HEC-RAS's weir / gates / culverts type (`Conn Routing Type= 1`, also with culverts: type 3 made HEC-RAS 6.6 stop with "has an error with the connection. Check that the To: is set correctly"), and the build stops with a plain list when HEC-RAS would refuse a connection (name, line outside the 2D area, a barrel with both ends in one cell or not across the line, a weir or invert below its cells). `core/hecras_structures.add_to_package(package, run, out)` does the same for an already built package. Limits: no bridge deck, low chord, piers or pressure flow; HEC-RAS's FHWA culvert is not ANUGA's Boyd culvert; structures outside the 2D area are listed, not added.
+- **Terrain CRS guard.** After the terrain GeoTIFF is written (or copied by `add_to_package`) and before the package is zipped, it is reopened and must carry an EPSG code whose code, linear unit (name and size) and CRS match `GIS/Projection.prj`, and GDAL must be able to reach the PROJ database (proj.db). Otherwise the package stops with a plain reason and nothing half-built is left. This catches a terrain rewritten with `PROJ_DATA` unset, which turned EPSG:2266 (ft) into an unnamed metre CRS and made HEC-RAS's terrain step fail with "Translating source or target SRS failed". To fix it: set `PROJ_DATA` to the folder holding `proj.db` (QGIS's `share/proj`) and build again. Code: `core/hecras_terrain_crs.py`.
 
 ## DEM resampling onto the model grid
 
