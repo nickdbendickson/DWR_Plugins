@@ -28,7 +28,9 @@ def main():
         print("{:4} {}  (rc={})".format(state, name, p.returncode), flush=True)
         if p.returncode:
             failed.append(name)
-            print("      " + "\n      ".join(out.strip().splitlines()[-12:]), flush=True)
+            # Full output on failure: the traceback can be anywhere in the combined
+            # stdout/stderr (a tail used to hide it - see the Qt6 NAIP-clip debugging).
+            print("      " + "\n      ".join(out.strip().splitlines()), flush=True)
     print("\n{} scripts: {} ok, {} failed".format(len(names), len(names) - len(failed), len(failed)),
           flush=True)
     if failed:
