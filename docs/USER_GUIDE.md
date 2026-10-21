@@ -1,6 +1,6 @@
 # DamSafety plugins: user guide (changes through 2026-10-21, main 732f597)
 
-This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84, #92, #93, #96, #131 (arrival depth) and #137 (HEC-RAS time limit). Other merged PRs (#85-#90, #94, #100-#105, …) are listed in CHANGELOG.md only. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
+This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84, #92, #93, #96, #131 (arrival depth), #132 (ANUGA threads) and #137 (HEC-RAS time limit). Other merged PRs (#85-#90, #94, #100-#105, …) are listed in CHANGELOG.md only. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
 
 ## Standard work-folder layout (#18)
 The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker all create the same empty folders:
@@ -179,9 +179,47 @@ The run-time estimate is still worked out and written to the log, but it no long
 
 Results don't change: the limit only decides whether a run is allowed to finish. The gmsh mesh-points timeout (600 s, #127) is separate and unchanged.
 
+## ANUGA threads (#132, Runner 3.10.47)
+**What it does.** ANUGA can split its work across several processor cores (threads). Before Runner 3.10.47, leaving the threads setting at 0 meant ANUGA ran on **one** core, so long ANUGA runs (for example the refined 72 h and 20x20 Absaraka runs) were slower than they had to be. LISFLOOD-FP was not affected; it already used all cores. From 3.10.47 the Runner picks a real thread count for ANUGA:
+
+| Threads setting | ANUGA uses |
+|---|---|
+| A number above 0 | That number, exactly (no upper limit; it also applies to LISFLOOD-FP) |
+| 0 (the default) and the `NDBREACH_ANUGA_THREADS` environment variable is a number above 0 | `NDBREACH_ANUGA_THREADS` |
+| 0 and no usable `NDBREACH_ANUGA_THREADS` | The number of CPUs minus 2, but at most 4 and at least 1. On the 8-CPU box that is 4; on a 2-, 3- or 1-CPU machine it is 1; on a 5-CPU machine it is 3. |
+
+"CPUs" means the cores QGIS is allowed to use. The automatic choice stops at 4 on purpose, so a model run leaves room for other work on a shared computer.
+
+**Where the setting is.**
+- The **"Threads (0 = the provider setting, then automatic: …)"** parameter (`THREADS`) in the Advanced section of *Run breach model for one dam* and the other run tools. The self-test and verification tools have the same parameter.
+- If that is 0, the Runner uses the computer-wide Processing setting **"Threads for the models (0 = automatic: LISFLOOD-FP uses all cores; ANUGA uses NDBREACH_ANUGA_THREADS, else CPUs - 2, at most 4)"**. It's under Settings > Options > Processing > Providers > DamSafety Runner, and is stored as `NDBREACH_THREADS`.
+- On the command line (`ndbreach_cli.py`): `--threads N`, or `threads:` in the run configuration. The `--threads` help still says "0 = all", which is now true for LISFLOOD-FP only.
+- The Runner window and dam wizard have no threads field of their own; they use the tool parameter and the Processing setting above.
+
+**How to give ANUGA a different count without changing the setting.** Leave the threads setting at 0 and set `NDBREACH_ANUGA_THREADS` before you start QGIS or the command-line run. For example, use `export NDBREACH_ANUGA_THREADS=6` on Linux or macOS, or `set NDBREACH_ANUGA_THREADS=6` in the Windows command prompt that launches QGIS. This changes ANUGA only; LISFLOOD-FP still uses all cores.
+- A value of 0, a negative number or text (such as `lots`) is ignored. The automatic count is used instead, and the report says the value was ignored.
+- A decimal is cut down to a whole number: `2.7` gives 2.
+- Unlike the checkpoint variables, there is no short form: `ANUGA_THREADS` without `NDBREACH_` is not read.
+- `OMP_NUM_THREADS` no longer controls ANUGA, because the Runner always sets it for the ANUGA process. Use `NDBREACH_ANUGA_THREADS` instead.
+
+**Where to see what a run used.**
+- **The run log** (the tool's Log tab in QGIS, or `logs/runner.log` in Grok Bot's queue runs) has the line `ANUGA threads: 4 (automatic: min(8 CPUs - 2, 4)).` and, at the end, `ANUGA finished in … (N triangles, 4 thread(s))`.
+- **`_breach_model/anuga/anuga.log`** has `ANUGA OpenMP threads: 4 (asked for 4)`. This is the count ANUGA itself reports.
+- **`_breach_model/run_report.json`** has an `anuga_threads` entry:
+  - `requested`: the threads setting the run was given (0 = automatic);
+  - `used`: the count the Runner gave ANUGA;
+  - `rule`: why, such as `automatic: min(8 CPUs - 2, 4)`, `NDBREACH_ANUGA_THREADS=6` or `set (2)`;
+  - `anuga_reported`: the count ANUGA reported back;
+  - `note`: only when something went wrong. For example, an ANUGA build without multi-thread support runs on one thread, and the run still finishes.
+- **`run_report.md`** has an "ANUGA threads" row in the run table.
+- A run that reused an earlier ANUGA result has no new `anuga_threads` entry.
+
+**Tip: the thread count doesn't change the results.** On real ANUGA, 1 and 4 threads gave the same depth, velocity, arrival time and water surface, to the last digit. This was tested on 589- and 87,749-triangle domains. A run stopped at 1 thread and resumed from its checkpoint at 4 threads also matched. Only the time changes: 4 threads were about 2.6x faster on the 87,749-triangle test (62 s to 24 s), and about 2x on a 262,000-triangle benchmark. So you can compare a new run with an older single-thread run without allowing for the thread count. Any difference comes from other changes in the code or settings, not from the threads. Compare wall-clock times only between runs with the same `used` count. Windows and macOS installs were not tested; check `anuga_reported` there, or run `anuga_benchmark_omp --threads 1,4` in the ANUGA environment.
+
 ## Not verified in this guide
 - These descriptions come from PR text and source code. None of the window steps were checked in a running QGIS.
 - The exact list of fixes in #27 and the details of #11 and #16 are summarized from PR titles and commit headlines only.
 - No window steps for #22, #30, #32, #76, #84, #92, #93 or #96 were tried in QGIS. The #93 labels were checked in main's source at d217ec2, and the #92 `WATER_MASK` label and lookup order and the #96 names at b0c2ad5.
 - The #131 (arrival depth) and #137 (HEC-RAS time limit) names, labels, defaults and rules were checked in main's source at 732f597. No window was opened in QGIS, and no model was run.
+- The #132 (ANUGA threads) names, labels and rules were checked in main's source at caaf850 and against the PR's real-ANUGA check (`/workspace/anuga_threads_pr/real_check.log`). The Processing Options path was not opened in QGIS.
 - The installed copy of the plugins may lag behind main.
