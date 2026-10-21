@@ -541,6 +541,46 @@ def extra_criteria(nd, structs, res, cfg, total=False):
     return nd
 
 
+def lone_point_judgment(nd, tm11, structs, roads, rails, **kw):
+    """2.18.50 (Docs & QA, H1): when the ND or TM 11 class rests on 911 address points with
+    no building (counted habitable by the ND site address rule - H1 default), say so in the
+    judgment items and the TM 11 notes. The class is not changed. Returns the message."""
+    from .structures import lone_911_counted
+    lone = lone_911_counted(structs)
+    if not lone:
+        return ""
+    ids = {id(r) for r in lone}
+    rest = [r for r in structs if id(r) not in ids]
+    # (raw structure classes - the access / facility raises of extra_criteria do not
+    # depend on these points)
+    nd1 = classify_nd(structs, roads, rails, **kw)
+    nd2 = classify_nd(rest, roads, rails, **kw)
+    tm2 = classify_tm11(rest, roads, judgment_as_probable=kw.get("judgment_as_probable", True))
+    nd_rests = nd2["cls"] != nd1["cls"] and ND_RANK.get(nd2["cls"], -1) < \
+        ND_RANK.get(nd["cls"], -1)
+    if not nd_rests and tm2["cls"] == tm11["cls"]:
+        return ""
+    what = []
+    if nd_rests:
+        what.append("ND {} (without them {})".format(nd["cls"], nd2["cls"]))
+    if tm2["cls"] != tm11["cls"]:
+        what.append("TM 11 {} (without them {}, LIJ {:.1f})".format(
+            tm11["cls"], tm2["cls"], tm2["lij"]))
+    msg = ("The class rests on {} 911 address point(s) with no building (H1 default - "
+           "counted habitable by the ND site address rule): {} - {}; confirm on imagery "
+           "that these are dwellings".format(
+               len(lone), " and ".join(what), "; ".join(
+                   "structure {} ({}, {}, {:.1f} ft)".format(
+                       r["id"], (r["sources"][0].get("addr_text") or "no address"),
+                       r.get("outcome"), r.get("max_depth") or 0.0) for r in lone[:4])
+               + ("" if len(lone) <= 4 else " and {} more".format(len(lone) - 4))))
+    at = nd.get("struct_items", 0)
+    nd["judgment"].insert(at, msg)
+    nd["struct_items"] = at + 1
+    tm11.setdefault("notes", []).append(msg)
+    return msg
+
+
 def criteria_text(nd):
     """The criteria table as fixed-width text lines."""
     out = ["  {:<8} {:<74} {:<30} {}".format("Section", "Criterion", "Found", "Result")]

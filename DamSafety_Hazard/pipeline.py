@@ -59,6 +59,7 @@ from .structures import (
 from .linear import analyze_roads, analyze_rail, roads_to_layer, rail_to_layer, FeatureIndex
 from .classification import (
     classify_nd, classify_tm11, summary_lines, write_summary, extra_criteria,
+    lone_point_judgment,
 )
 from .styles import style_by_field, set_map_tip, style_outline
 from .hazard import METHOD_MAXMAX, METHOD_LABEL
@@ -1614,6 +1615,13 @@ def _classify_and_write(run, cfg, state):
                 sc.name, type(e).__name__, e))
             raise
         extra_criteria(nd, s_view, res, cfg)
+        try:                                    # 2.18.50: class resting on lone 911 points
+            lone_point_judgment(nd, tm11, s_view, r_view, l_view, judgment_as_probable=judge,
+                                one_d=one_d, roads_evaluated=inputs["roads_on"],
+                                rail_evaluated=inputs["rail_on"],
+                                structs_evaluated=inputs.get("structs_on", True))
+        except Exception as e:                  # noqa - never fails the result
+            run.log("lone 911 point check: {}".format(e))
         res.update({"nd": nd, "tm11": tm11, "conseq": totals(s_view),
                     "views": (s_view, r_view, l_view)})
         res.pop("nd_total", None)
@@ -2677,7 +2685,8 @@ def _boundary_check(run, sc, layers):
     try:
         res = BND.check(depth, run.clip_crs, run.ctx,
                         boundary_layer=cfg.get("model_boundary_layer"), base_sampler=base,
-                        arr_sampler=arr, min_incr_ft=float(cfg["incremental_ft"]))
+                        arr_sampler=arr, min_incr_ft=float(cfg["incremental_ft"]),
+                        depth_path=sc.depth if isinstance(sc.depth, str) else None)
     except Exception as e:
         run.log(">>> WARNING: {}: model extent check failed: {}".format(sc.name, e))
         return {"error": str(e), "flagged": True, "method": None, "wet": 0, "points": []}

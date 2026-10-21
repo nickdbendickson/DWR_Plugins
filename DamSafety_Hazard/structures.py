@@ -387,6 +387,10 @@ class _SourceReader(object):
         self.parcel_idx = [low.index(n) for n in _FEMA_PARCEL_ADDR if n in low] \
             if self.fema_parcel else []
         self.placement_idx = low.index("placement") if "placement" in low else None
+        # 2.18.50: NENA NOTES / Add_Number - non-dwelling evidence of a lone 911 point
+        self.notes_idx = low.index("notes") if self.nena and "notes" in low else None
+        self.addnum_idx = low.index("add_number") if self.nena and "add_number" in low \
+            else None
         # v2.9: the NENA Site_NGUID of an ND GIS Hub address point
         self.nguid_idx = low.index("site_nguid") if "site_nguid" in low else None
         # 2.18.49: the FEMA scene an outline was traced on (scene-offset check)
@@ -441,6 +445,10 @@ class _SourceReader(object):
                     v, " [{}]".format(phrase) if phrase and phrase != v.lower() else ""))
         if self.placement_idx is not None:
             rec["placement"] = _text(attrs[self.placement_idx]).lower() or None
+        if self.notes_idx is not None:
+            rec["nena_notes"] = _text(attrs[self.notes_idx])
+        if self.addnum_idx is not None:
+            rec["add_number"] = _text(attrs[self.addnum_idx])
         if self.parcel_idx and _text(attrs[self.parcel_idx[0]]):
             # v2.20.1: the parcel's address (groups the buildings of one parcel)
             rec["parcel"] = re.sub(r"\s+", " ", " | ".join(
@@ -723,6 +731,33 @@ def _is_duplicate(sources, src, pt, dup_dist):
     return False
 
 
+def _colocated_groups(unplaced, merge_dist):
+    """2.18.50: ({index: group}, {group: [indices]}) of points outside every outline -
+    points of DIFFERENT sources within merge_dist of each other are one group (same-source
+    points are separate buildings unless the free-standing merge says otherwise)."""
+    parent = list(range(len(unplaced)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    g = _Grid(max(merge_dist, 1e-9))
+    for k, (_src, pt, family) in enumerate(unplaced):
+        for j in g.near(pt.x(), pt.y()):
+            pj, fj = unplaced[j][1], unplaced[j][2]
+            if fj != family and math.hypot(pj.x() - pt.x(), pj.y() - pt.y()) <= merge_dist:
+                a, b = find(k), find(j)
+                if a != b:
+                    parent[a] = b
+        g.insert_point(k, pt.x(), pt.y())
+    group_of = {k: find(k) for k in range(len(unplaced))}
+    groups = {}
+    for k, gi in group_of.items():
+        groups.setdefault(gi, []).append(k)
+    return group_of, groups
+
+
 def _snap_distance_ft(src, snap_ft):
     """How far a point outside every outline may be moved onto one (None:
     never). NENA address points not placed on the structure itself
@@ -754,6 +789,136 @@ def _outline_takes_points(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2):
 SITE_JOIN_FT = 150.0
 
 
+# 2.18.50 (Docs & QA, H1 restored points): a lone 911 point (no outline, no NSI) is the
+# same site as a habitable structure carrying its address (FEMA parcel address) within
+# RESTORED_ADDR_FT, or as a habitable NSI residential (RES*) structure within
+# RESTORED_NSI_FT (3210 150th Ave SE: the 911 point is 105 ft from NSI RES1 #733)
+RESTORED_ADDR_FT = 1000.0
+RESTORED_NSI_FT = 200.0
+# 911 NOTES naming a non-residential use (WBI gas station, communications hut, store ...)
+_NONDWELLING_NOTES = re.compile(
+    r"\b(station|tower|towers|communications?|comm hut|cell site|store|restaurant|"
+    r"farm building|substation|utility|utilities|well site|well pad|cell tower)\b", re.I)
+# M3: a 911 anchor test this close to its STRUCTURE_MERGE_DIST_FT limit is a judgment item
+SITE_NEAR_LIMIT_FT = 3.0
+
+
+def _nondwelling_911(srcs):
+    """2.18.50: why a lone 911 point is probably not a dwelling ("" = no evidence): NOTES
+    naming a non-residential use, address number 0, or Placement "Parcel" (a parcel
+    centroid, not a building)."""
+    why = []
+    for s in srcs:
+        m = _NONDWELLING_NOTES.search(s.get("nena_notes") or "")
+        if m:
+            why.append('911 NOTES name a non-residential use ("{}")'.format(
+                (s.get("nena_notes") or "")[:80]))
+        num = (s.get("add_number") or "").strip()
+        if num and re.sub(r"[^0-9]", "", num) and int(re.sub(r"[^0-9]", "", num)) == 0:
+            why.append("address number 0")
+        if (s.get("placement") or "") == "parcel":
+            why.append("Placement=Parcel (parcel centroid)")
+    out = []
+    for w in why:
+        if w not in out:
+            out.append(w)
+    return "; ".join(out)
+
+
+def _point_of(rec):
+    if rec.get("point") is not None:
+        return rec["point"]
+    try:
+        return rec["geom"].pointOnSurface().asPoint()
+    except Exception:
+        return None
+
+
+def _nsi_res(rec):
+    return any(str((s.get("nsi") or {}).get("occtype") or "").upper().startswith("RES")
+               for s in rec.get("sources", ()))
+
+
+def _own_911_addresses(rec):
+    return {normalize_street(s.get("addr_text")) for s in rec.get("sources", ())
+            if s.get("family") == "NDGISHUB" and s.get("addr_text")} - {""}
+
+
+def _restored_candidates(structs, addr_dist, nsi_dist):
+    """2.18.50: rec["dup_cands"] on lone 911 structures: [(id, why)] of structures that may
+    already represent the same site (resolved after _interpret, _resolve_restored_dups)."""
+    lone = [r for r in structs if r.get("lone_address")]
+    for r in structs:
+        r.pop("dup_cands", None)
+    if not lone:
+        return
+    by_addr = {}
+    ngrid = _Grid(max(nsi_dist, 1e-6))
+    for r in structs:
+        if r.get("lone_address"):
+            continue
+        for s in r.get("sources", ()):
+            if s.get("parcel"):
+                k = normalize_street(s["parcel"].split(" | ")[0])
+                if k:
+                    by_addr.setdefault(k, []).append(r)
+        if _nsi_res(r):
+            p = _point_of(r)
+            if p is not None:
+                ngrid.insert_point(r, p.x(), p.y())
+    for r in lone:
+        p = r["point"]
+        pg = QgsGeometry.fromPointXY(p)
+        cands = []
+        for k in _own_911_addresses(r):
+            for c in by_addr.get(k, ()):
+                try:
+                    d = c["geom"].distance(pg)
+                except Exception:
+                    continue
+                if d is not None and 0 <= d <= addr_dist and c["id"] not in \
+                        [i for i, _w in cands]:
+                    cands.append((c["id"], "same address as its FEMA parcel record"))
+        mine = _own_911_addresses(r)
+        near = []
+        for c in ngrid.near(p.x(), p.y(), rings=1):
+            cp = _point_of(c)
+            if cp is None:
+                continue
+            try:
+                d = c["geom"].distance(pg)
+            except Exception:
+                d = math.hypot(cp.x() - p.x(), cp.y() - p.y())
+            other = _own_911_addresses(c)
+            if d is None or d < 0 or d > nsi_dist or (other and not (other & mine)):
+                continue                      # another house with its own 911 address
+            near.append((d, c["id"]))
+        for d, cid in sorted(near):
+            if cid not in [i for i, _w in cands]:
+                cands.append((cid, "NSI residential structure {:.0f} ft away".format(
+                    d * RESTORED_NSI_FT / max(nsi_dist, 1e-12))))
+        if cands:
+            r["dup_cands"] = cands
+
+
+def _resolve_restored_dups(structs):
+    """2.18.50: a lone 911 structure whose site is already a habitable structure
+    (dup_cands) is the same dwelling: rec["dup_of"] = (id, why), applied by _interpret."""
+    by_id = {r["id"]: r for r in structs}
+    changed = []
+    for r in structs:
+        old = r.get("dup_of")
+        r["dup_of"] = None
+        for cid, why in r.get("dup_cands") or ():
+            c = by_id.get(cid)
+            if c is not None and c.get("habitable") == "Yes" and not c.get("dup_of"):
+                r["dup_of"] = (cid, why)
+                break
+        if r["dup_of"] != old:
+            changed.append(r)
+    return changed
+
+
 def _has_own_911(rec, merge_dist):
     """An ND GIS Hub address point sits on this structure: inside its
     outline, moved onto it from at most STRUCTURE_MERGE_DIST_FT, or (no
@@ -782,6 +947,7 @@ def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist):
     for r in structs:
         r.pop("site_anchor", None)
         r.pop("lone_address", None)
+        r.pop("site_near", None)
         if r["footprint"]:
             for s in r["sources"]:
                 if s.get("parcel"):
@@ -810,7 +976,23 @@ def _mark_parcel_sites(structs, grid, merge_dist, join_dist, lone_dist):
             for s in best["sources"]:
                 if s.get("parcel"):
                     members.setdefault(s["parcel"], {})[r["id"]] = r
+    band = merge_dist * SITE_NEAR_LIMIT_FT / STRUCTURE_MERGE_DIST_FT
     for k, recs in members.items():
+        # 2.18.50 (DWR-8278, M3 at 29.4 ft against 30 ft): a 911 point moved onto one of
+        # the parcel's buildings from within SITE_NEAR_LIMIT_FT of the limit - the
+        # outbuilding reading of the others could flip; a judgment item when wet
+        close = []
+        for i, r in recs.items():
+            for s_ in r["sources"]:
+                d = s_.get("snapped")
+                if s_.get("family") == "NDGISHUB" and s_.get("nena") and d is not None \
+                        and abs(d - merge_dist) <= band:
+                    close.append((i, d * STRUCTURE_MERGE_DIST_FT / merge_dist))
+        if close:
+            for i, r in recs.items():
+                r["site_near"] = {"parcel": k.split(" | ")[0], "anchor": close[0][0],
+                                  "moved_ft": close[0][1],
+                                  "limit_ft": STRUCTURE_MERGE_DIST_FT}
         anchors = sorted(i for i, r in recs.items() if _has_own_911(r, merge_dist))
         if not anchors:
             continue
@@ -1158,8 +1340,20 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
         by_id = {r["id"]: r for r in structs}
         takes = {r["id"]: _outline_takes_points(r) for r in structs if r["footprint"]}
         nearest = {}
+        # 2.18.50 (DWR-8278): points of different sources within STRUCTURE_MERGE_DIST_FT
+        # of each other describe one building - they are snapped together, with the
+        # shortest reach of the group (a 911 point 0.2 m from an NSI point is not moved
+        # 35 ft while the NSI point stays: before, the 100 ft / 30 ft reaches split them)
+        group_of, groups = _colocated_groups(unplaced, merge_dist)
+        reach_of = {}
+        for gi, ks in groups.items():
+            reaches = [r for r in (_snap_distance_ft(unplaced[k][0], snap_ft) for k in ks)
+                       if r is not None]
+            reach_of[gi] = min(reaches) if reaches else None
         for k, (src, pt, _family) in enumerate(unplaced):
-            reach_ft = _snap_distance_ft(src, snap_ft)
+            if _snap_distance_ft(src, snap_ft) is None:
+                continue
+            reach_ft = reach_of[group_of[k]]
             if reach_ft is None:
                 continue
             reach = _ft_units(reach_ft, analysis_crs, lat)
@@ -1182,6 +1376,30 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
                     continue            # QgsGeometry.distance() is -1 on error
                 if k not in nearest or dd < nearest[k][0]:
                     nearest[k] = (dd, cand["id"])
+        n_groups = 0
+        for gi, ks in groups.items():
+            if len(ks) < 2:
+                continue
+            hits = [nearest[k] for k in ks if k in nearest]
+            if not hits:
+                continue
+            n_groups += 1
+            best = min(hits)[1]                 # the group's nearest outline
+            hg = by_id[best]["geom"]
+            for k in ks:
+                if _snap_distance_ft(unplaced[k][0], snap_ft) is None:
+                    continue
+                try:
+                    dd = hg.distance(QgsGeometry.fromPointXY(unplaced[k][1]))
+                except Exception:
+                    continue
+                if dd is not None and dd >= 0:
+                    nearest[k] = (dd, best)
+                    unplaced[k][0]["co_located"] = True
+        if n_groups:
+            log_message("Structure inventory: {} group(s) of co-located points of different "
+                        "sources were snapped together (shortest reach of the group)".format(
+                            n_groups))
         placed = set()
         same_family_dropped = []
         for k, (dd, sid) in sorted(nearest.items(), key=lambda kv: kv[1]):
@@ -1241,8 +1459,12 @@ def build_inventory(footprint_layer, point_sources, analysis_crs, transform_ctx,
     # v2.20.1: parcel / site evidence (farmstead outbuildings, lone 911 points)
     _mark_parcel_sites(structs, grid, merge_dist, _ft_units(SITE_JOIN_FT, analysis_crs, lat),
                        _ft_units(snap_ft, analysis_crs, lat))
+    _restored_candidates(structs, _ft_units(RESTORED_ADDR_FT, analysis_crs, lat),
+                         _ft_units(RESTORED_NSI_FT, analysis_crs, lat))
     rules = dict(mobile_rules or {})
     for rec in structs:
+        _interpret(rec, **rules)
+    for rec in _resolve_restored_dups(structs):
         _interpret(rec, **rules)
     if not structs and outside > 0:
         if missing_crs:
@@ -1273,7 +1495,16 @@ def _log_site_rules(structs):
     unv = sum(1 for r in structs if r.get("site_note") and not r.get("lone_address")
               and r["category"] == CAT_UNVERIFIED)
     out = sum(1 for r in structs if r.get("site_note") and r["category"] == CAT_NOT_HABITABLE)
-    lone = sum(1 for r in structs if r.get("site_note") and r.get("lone_address"))
+    lone = sum(1 for r in structs if r.get("site_note") and r.get("lone_address")
+               and r.get("habitable") == "Yes" and not r.get("dwelling_extra"))
+    nondw = sum(1 for r in structs if r.get("lone_address") and r.get("habitable") != "Yes")
+    dups = sum(1 for r in structs if r.get("_restored_dup"))
+    if nondw or dups:
+        log_message("Structure inventory: of the 911 address points with no building, {} "
+                    "carry non-dwelling evidence (911 NOTES, address number 0, Placement "
+                    "Parcel) and are unverified, {} are the same site as a counted structure "
+                    "(same address / NSI residential nearby) and are not counted again".format(
+                        nondw, dups))
     if unv or out or lone:
         log_message("Structure inventory: on parcels whose 911 address point is on another "
                     "building, {} building(s) only NSI calls residential are unverified and {} "
@@ -1499,16 +1730,27 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     # the class.
     lone = bool(rec.get("lone_address")) and not (
         place_kinds & {_PT_DWELLING, _PT_MOBILE, _PT_OCCUPIED})
+    nondwelling = _nondwelling_911(nd_srcs) if lone else ""
+    dup = rec.get("dup_of") if lone else None
     if lone:
-        site_note = "911 address point with no building outline within {:.0f} ft and no NSI " \
-            "structure - counted as habitable by the ND site address rule; field access, " \
-            "vacant lot, tower or utility site? verify".format(ADDRESS_SNAP_FT)
+        # 2.18.50 (Docs & QA): the reason is written to Notes (structure_notes)
+        site_note = "911 point with no building (H1 default): no building outline within " \
+            "{:.0f} ft and no NSI structure - counted as habitable by the ND site address " \
+            "rule; field access, vacant lot, tower or utility site? verify".format(
+                ADDRESS_SNAP_FT)
+        if nondwelling:
+            category = CAT_UNVERIFIED
+            site_note = "911 point with no building: {} - probably not a dwelling, not " \
+                "counted (unverified); verify".format(nondwelling)
+        elif dup:
+            site_note = "911 point with no building - the same site as structure {} ({}); " \
+                "not counted again".format(dup[0], dup[1])
 
     # v2.5.1: a structure with an ND GIS Hub site address is habitable - the
     # address is the evidence. Place_Type values that would otherwise read as
     # vacant / not habitable are kept in a note (and listed for review).
     addr_note = ""
-    if nd_addr and category not in (CAT_DWELLING, CAT_OCCUPIED):
+    if nd_addr and category not in (CAT_DWELLING, CAT_OCCUPIED) and not nondwelling:
         odd = sorted({s.get("place_type") or "" for s in nd_srcs
                       if s.get("place_kind") in (_PT_NONHAB, _PT_UNVERIFIED)} - {""})
         was = category
@@ -1666,6 +1908,15 @@ def _interpret(rec, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
         rec["occupancy"] = "{} (overnight recreation){}".format(
             camp.get("category") or "Campground",
             ": " + camp["name"] if camp.get("name") else "")
+    # 2.18.50: a restored 911 point of a site already counted is the same dwelling
+    # (not a second household; the structure is still sampled and listed)
+    if dup and rec["habitable"] == "Yes":
+        rec["dwelling_extra"] = True
+        rec["_restored_dup"] = True
+        rec["persons"] = 0
+        rec["persons_basis"] = "same dwelling as structure {} ({})".format(dup[0], dup[1])
+    elif rec.pop("_restored_dup", None):
+        rec["dwelling_extra"] = False
     rv = rec.get("review")
     if rv:
         _apply_review(rec, rv, max(1, units or addr_units), persons_per_dwelling)
@@ -1714,12 +1965,14 @@ def reinterpret(structs, min_area_ft2=DEFAULT_MIN_UNVERIFIED_AREA_FT2,
                 mobile_max_length_ft=MOBILE_MAX_LENGTH_FT, mobile_lot_units=True):
     """Re-apply the habitability / occupancy rules with other settings
     (v2.9: and the manufactured-home rules, see _interpret)."""
+    kw = dict(mobile_shape=mobile_shape, mobile_max_width_ft=mobile_max_width_ft,
+              mobile_min_ratio=mobile_min_ratio, mobile_min_length_ft=mobile_min_length_ft,
+              mobile_max_length_ft=mobile_max_length_ft, mobile_lot_units=mobile_lot_units)
     for rec in structs:
-        _interpret(rec, min_area_ft2, persons_per_dwelling, mobile_shape=mobile_shape,
-                   mobile_max_width_ft=mobile_max_width_ft, mobile_min_ratio=mobile_min_ratio,
-                   mobile_min_length_ft=mobile_min_length_ft,
-                   mobile_max_length_ft=mobile_max_length_ft,
-                   mobile_lot_units=mobile_lot_units)
+        _interpret(rec, min_area_ft2, persons_per_dwelling, **kw)
+    # 2.18.50: restored-911 duplicates follow the hosts' new habitability
+    for rec in _resolve_restored_dups(structs):
+        _interpret(rec, min_area_ft2, persons_per_dwelling, **kw)
 
 
 def _park_polygons(parks, analysis_crs, transform_ctx, parks_crs=None, name_field="name",
@@ -2718,6 +2971,11 @@ def geometry_note(rec):
     return ""
 
 
+NOTE_SITE_NEAR = ("911 point of parcel {parcel} moved {moved_ft:.1f} ft onto structure "
+                  "{anchor} - within 3 ft of the {limit_ft:.0f} ft site-anchor limit, the "
+                  "habitable / outbuilding reading of this parcel could flip; verify")
+
+
 def structure_notes(rec):
     notes = []
     if rec.get("type_conflict"):
@@ -2736,6 +2994,12 @@ def structure_notes(rec):
         notes.append("habitability not confirmed by any source - verify")
     if rec.get("address_note"):
         notes.append(rec["address_note"])
+    # 2.18.50 (Docs & QA): the M3 outbuilding / H1 lone-911 reasons were never written
+    if rec.get("site_note"):
+        notes.append(rec["site_note"])
+    sn = rec.get("site_near")
+    if sn and not rec.get("lone_address"):
+        notes.append(NOTE_SITE_NEAR.format(**sn))
     if rec["category"] == CAT_OCCUPIED and not rec["persons"]:
         notes.append("occupied building without occupancy data")
     moved = [x["snapped"] for x in rec["sources"] if x.get("snapped") is not None]
@@ -3065,7 +3329,32 @@ def inventory_judgment(structs):
                         r["id"], r["snap_flip"][0]["ref"], r["snap_flip"][0]["point_depth_ft"])
                     for r in flips[:4]) + ("" if len(flips) <= 4 else " and {} more".format(
                         len(flips) - 4))))
+    # 2.18.50: M3 site-anchor test within SITE_NEAR_LIMIT_FT of its limit, wet buildings
+    near = {}
+    for r in structs:
+        sn = r.get("site_near")
+        if sn and r.get("outcome") not in (None, OUT_DRY, OUT_TRACE):
+            near.setdefault(sn["parcel"], (sn, []))[1].append(r)
+    for parcel, (sn, recs) in sorted(near.items()):
+        items.append(
+            "Parcel {}: its 911 point was moved {:.1f} ft onto structure {} - within {:.0f} ft "
+            "of the {:.0f} ft site-anchor limit, so whether the parcel's other buildings are "
+            "outbuildings (or the 911 point belongs to another building) is a near-threshold "
+            "call; wet structures on the parcel: {} - verify on imagery".format(
+                parcel, sn["moved_ft"], sn["anchor"], SITE_NEAR_LIMIT_FT, sn["limit_ft"],
+                "; ".join("{} ({}, {:.1f} ft, habitable {})".format(
+                    r["id"], r.get("outcome"), r.get("max_depth") or 0.0, r.get("habitable"))
+                    for r in recs[:4]) + ("" if len(recs) <= 4 else " and {} more".format(
+                        len(recs) - 4))))
     return items
+
+
+def lone_911_counted(structs):
+    """2.18.50: wet habitable structures that are only a 911 point with no building (H1
+    default) and are counted (not a duplicate)."""
+    return [r for r in structs if r.get("lone_address") and r.get("habitable") == "Yes"
+            and not r.get("dwelling_extra")
+            and r.get("outcome") not in (None, OUT_DRY, OUT_TRACE)]
 
 
 def write_qa_csv(rows, path, crs):
