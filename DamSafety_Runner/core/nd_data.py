@@ -215,27 +215,46 @@ def lisflood_candidates():
     return out
 
 
-def anuga_python_candidates():
-    """Python interpreters of conda environments that look like ANUGA's."""
+CONDA_ROOT_NAMES = ("miniforge3", "mambaforge", "miniconda3", "anaconda3", "micromamba",
+                    ".conda")
+
+
+def env_python_rel(nt=None):
+    """The interpreter inside a conda env: python.exe at the env root on Windows,
+    bin/python elsewhere (3.10.50: Windows envs were never found before)."""
+    nt = (os.name == "nt") if nt is None else nt
+    return ("python.exe",) if nt else ("bin", "python")
+
+
+def anuga_python_candidates(nt=None, environ=None):
+    """Python interpreters of conda environments that look like ANUGA's. `nt` / `environ`
+    (default: this OS and os.environ) let the tests simulate a Windows layout."""
+    nt = (os.name == "nt") if nt is None else nt
+    environ = os.environ if environ is None else environ
+    rel = env_python_rel(nt)
     c = []
-    env = os.environ.get("NDBREACH_ANUGA_PYTHON")
+    env = environ.get("NDBREACH_ANUGA_PYTHON")
     if env:
         c.append(env)
-    roots = [_home_paths(d) for d in ("miniforge3", "mambaforge", "miniconda3", "anaconda3",
-                                      "micromamba", ".conda")]
+    roots = [_home_paths(d) for d in CONDA_ROOT_NAMES]
+    if nt:      # 3.10.50: the usual Windows install places (miniforge "just me" / per user)
+        for var in ("USERPROFILE", "LOCALAPPDATA"):
+            base = environ.get(var)
+            if base:
+                roots.append(os.path.join(base, "miniforge3"))
     roots += ["/opt/homebrew/Caskroom/miniforge/base", "/opt/homebrew/Caskroom/miniconda/base",
               "/opt/miniconda3", "/opt/anaconda3", "/usr/local/miniconda3", "/opt/conda"]
-    roots += [os.environ.get("CONDA_PREFIX", "")]
-    root_prefix = os.environ.get("MAMBA_ROOT_PREFIX")
+    roots += [environ.get("CONDA_PREFIX", "")]
+    root_prefix = environ.get("MAMBA_ROOT_PREFIX")
     if root_prefix:
         roots.append(root_prefix)
     for r in roots:
         if not r:
             continue
-        for p in sorted(glob.glob(os.path.join(r, "envs", "*anuga*", "bin", "python"))):
+        for p in sorted(glob.glob(os.path.join(r, "envs", "*anuga*", *rel))):
             c.append(p)
-        if "anuga" in os.path.basename(r).lower():          # CONDA_PREFIX of an active env
-            c.append(os.path.join(r, "bin", "python"))
+        if "anuga" in os.path.basename(os.path.normpath(r)).lower():   # CONDA_PREFIX of an env
+            c.append(os.path.join(r, *rel))
     seen, out = set(), []
     for p in c:
         if not p or not os.path.isfile(p):
@@ -261,8 +280,7 @@ def conda_env_pythons(timeout=6.0):
         return []
     out = []
     for e in envs:
-        p = os.path.join(e, "python.exe") if os.name == "nt" else os.path.join(
-            e, "bin", "python")
+        p = os.path.join(e, *env_python_rel())
         if os.path.isfile(p) and "anuga" in os.path.basename(e).lower():
             out.append(p)
     return out
