@@ -956,6 +956,10 @@ def main(job_path, out_path):
     except Exception:           # noqa: BLE001
         b_in = None
     balance = volume_balance(info["initial_volume_m3"], injected, vol_left, b_in)
+    try:                        # what the inlet (and any rate operator) actually added
+        balance["operators_m3"] = round(float(domain.get_fractional_step_volume_integral()), 1)
+    except Exception:           # noqa: BLE001
+        pass
     stats = {"triangles": ntri, "runtime_min": round((time.time() - t0) / 60.0, 2),
              "max_edge_depth_m": edge_depth, "volume_in_domain_m3": vol_left,
              "initial_volume_m3": info["initial_volume_m3"],
