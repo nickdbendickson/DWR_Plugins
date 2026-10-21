@@ -206,7 +206,7 @@ Other notes:
 - **The nd_hazard 2.30.1 results** (`nd`, `gui_nd`, `nd_vrt`, `nd_vrt_contaminated`) were made by the old helper plugin. The comparison is across plugins. The class and LIJ are unchanged; `nd` cut-off went 445 → 448.
 - **Three results changed structure counts without any class or LIJ change.** `SUMMARY.md`'s "Changed" column only flags class and LIJ, so it shows them as "-": NickReview DWR-2827 (cut-off 6 → 1), DWR-2899 (inundated 3 → 0, cut-off 2 → 1) and Absaraka `nd` (cut-off 445 → 448).
 
-**Caveat: main has moved on.** Main is now Hazard **2.18.45** (#113, merged 20:45Z, after this batch started at 20:34Z). Its **H1** change goes back to the conservative default: a 911 address point with no building outline nearby and no NSI record counts as habitable again. These 2.18.44 numbers don't include H1, so H1-type points (for example, 911-only points listed as "ND site address with no building outline or NSI structure - unverified") may count again on 2.18.45. Before the numbers are adopted, decide whether to repeat the batch on 2.18.45.
+**Caveat: main has moved on.** Main is now Hazard **2.18.45** (#113, merged 20:45Z, after this batch started at 20:34Z). Its **H1** change goes back to the conservative default: a 911 address point with no building outline nearby and no NSI record counts as habitable again. These 2.18.44 numbers don't include H1, so H1-type points (for example, 911-only points listed as "ND site address with no building outline or NSI structure - unverified") may count again on 2.18.45. Before the numbers are adopted, decide whether to repeat the batch on 2.18.45. *Done: see "Hazard re-baseline on 2.18.45 (2026-10-20/21)" below.*
 
 **Output folders** (copies next to the originals, suffix `_hazard_2.18.44_20261020`):
 - `/home/box/DamSafety/Dams/Absaraka_compare/<run>_hazard_2.18.44_20261020/` for anuga_gmsh_refined_72h_20261019, anuga_gmsh_20x20_48h_20261018, anuga_structures_20261015, anuga_structures_20x20_48h_20261015, ds, gui_ds, gui_nd, hecras_tier2_20261018 (tier0, tier2, tier2_8b0601c, tier2_ccc5d38, tier2_manual), nd, nd_vrt, nd_vrt_contaminated, rerun_20261014, rerun_pr11_20261014 and rerun_quiet_20261015_0446
@@ -217,10 +217,63 @@ The exact folder for each result is in the CSV (`new_output_folder`).
 
 **QA (Docs & QA, read-only).** I re-parsed all 65 old and new `Hazard_Classification_Summary.txt` files with an independent script, and they match every class, LIJ, inundated and cut-off figure in `SUMMARY.md`. All 65 new summaries are DamSafety Hazard v2.18.44, written between 20:35Z and 21:43Z. I read DWR-2801 (rebaseline_20261018), DWR-4560, DWR-10633 and DWR-2635 in full. The 8 class-change entries of `changes.json` also match the outputs.
 
+## Hazard re-baseline on 2.18.45 (2026-10-20/21)
+
+**What was run.** Grok Bot repeated the same 65-result batch on DamSafety Hazard **2.18.45** (DWR_Plugins main **5b4ed05**, which adds #113), with the same settings as the 2.18.44 batch (`ndhazard:batch`, `DOWNLOADS=true REPORT=false EAP=false WORKERS=1`, no solver). It ran from a scratch QGIS profile (`/workspace/qgis_profiles/hazard_2_18_45`) on fresh **copies** of the original results, 23:31Z Oct 20 to 00:37Z Oct 21. **65 classified, 0 failed; DWR-3161 skipped.** The originals and the `_hazard_2.18.44_20261020` copies weren't modified, and no model was rerun. The rasters are the same.
+
+Sources: `/workspace/hazard_rebaseline_2.18.45_20261020/` (`SUMMARY.md`, `changes.json`, `progress.log`, `jobs.json`). QA: `/workspace/rebaseline_2.18.45_qa_20261020/` (`NOTE.md`, `h1_restored_points.csv`, `Absaraka_anuga_structures_H1_QA_map.png`). Per-result table (2.18.44 vs 2.18.45, with QA notes): [results/hazard_rebaseline_2.18.45_20261020.csv](results/hazard_rebaseline_2.18.45_20261020.csv). Output folders: the `_hazard_2.18.45_20261020` siblings of the 2.18.44 folders listed above. The exact folder for each result is in the CSV (`output_folder_2_18_45`).
+
+**What changed, and why: #113 / H1 only.** H1 makes a 911 address point count as habitable again (3 persons) when it has no building outline within the snap distance and no NSI record. This was the default before 2.18.39; in 2.18.44 such points were *Unverified* (0 persons). Nothing else changed between the two batches.
+- **Every one of the 351 extra inundated structures across the 65 results is an H1-restored 911 point.** That is 106 distinct points, and the count matches exactly in every result.
+- The 160 extra cut-off structures come from the same points.
+- No ND class changed.
+
+| Result | ND | TM 11 (LIJ) 2.18.44 → 2.18.45 | Inundated | QA verdict |
+|---|---|---|---|---|
+| Absaraka_compare/anuga_structures_20261015 (DWR-2801) | High = | **Significant → High** (0.9 → 6.9) | 2 → 5 | **Not plausible: keep TM 11 Significant (0.9).** #721 (3550 153rd Ave SE, 8.17 ft, High zone) is open cropland on NAIP. #727 (3520 153rd Ave SE, 5.56 ft, Judgment zone, counted under 5.3(f)) is a field edge, and its 911 NOTES say "added April 2024, WBI Energy is building a natural gas transmission line station". #709 (3485 152nd Ave SE, 0.31 ft, Low zone) is a tower pad. All three are 985–1,160 ft from any FEMA outline and more than 1,000 ft from any NSI point. #721 and #727 also sit in water ponded against the closed SE mesh edge: this 10-15 run's pass 2 hit the mesh edge at 8.58 ft (`progress.md`). |
+| Absaraka hecras_tier2 tier2_8b0601c / tier2_ccc5d38 / tier2_manual | High = | High = (7.5 → 10.5) | 15 → 18 | **Double count: QA LIJ 7.5.** The +3 is 911 point #761 (3210 150th Ave SE, 7.19 ft, High zone). It sits on the farmstead's large shop building, which has no FEMA outline. The same address is already counted through NSI RES1-1SWB 103945889 (#733, 8.17 ft, High zone), 105 ft away, just beyond the snap distance. FEMA outline #273 also carries "3210 150TH AVENUE SOUTHEAST". This also explains the #733 "to review" note in the 2.18.44 section. |
+| NickReview DWR-2645 (Pheasant Lake Dam) | High = | High = (9.1 → 15.1) | 16 → 23 | **Plausible but unverified.** The +6 is 26 E Lake Dr (4.53 ft) and 138 E Lake Dr (3.94 ft), both in the Judgment zone. They are lakeshore cabin and camper lots with no FEMA outline, so seasonal occupancy is possible. Of the other 5 added points, 4 are Low-zone E Lake Dr lots, and "0 83RD AVE SE" (address number 0, in trees by the river) isn't a dwelling. |
+| NickReview DWR-4441 | High = | High = (46.4 → 49.4) | 62 → 72 | **The +3 is not a dwelling: QA LIJ 46.4.** 1255 Southport Loop (3.48 ft, Judgment zone) is a parcel-centroid point (`Placement=Parcel`) on the Southport marina docks. |
+| Absaraka anuga_gmsh_refined_72h_20261019 | High = | Significant = (1.2) | **34 → 62** | **Upper bound, no class effect.** 26 of the 28 added points are platted lots of a new north-Casselton subdivision (4th Ave N, 5th Ave N, 8th St N) that has no FEMA or NSI records. On NAIP, about 7 have a house built or under construction; the others are vacant lots, which is arguably 5.3(b) imminent development. The other two are 3467 155th Ave SE (911 NOTES: a temporary address for a communications hut) and 502 Martins Ave. All are Low zone at 0.11–1.10 ft. |
+| NickReview DWR-2635 | High = | High = (7.3) | 15 → 30 | **Mostly non-residential, no class effect.** The added points are Casselton commercial addresses (Industrial Blvd, Governors Dr suites A/B/C), plus a Dollar General, a Dairy Queen and a "new farm building" (all three named in the 911 NOTES). All are Low zone. |
+
+**Sample check of the H1-restored points.** There are 106 distinct wet points, listed in `h1_restored_points.csv`.
+- None is within 100 ft of a FEMA outline, and 70 are 300 ft or more from one.
+- 6 have 911 NOTES naming a non-residential use: a store, a restaurant, a communications tower, a communications hut, a gas station and a farm building.
+- 1 has address number 0, and 2 are parcel centroids.
+
+14 points were checked on NAIP:
+- **Not dwellings (8):** cropland, gas-station site, tower pad, communications hut, Dollar General site, communications tower, marina docks and riverside trees.
+- **Plausible but unverified (5):** a house with no FEMA outline on 15th Ave N in Casselton, a new-subdivision lot, two lake lots and the 3210 150th Ave SE farmstead (a duplicate).
+
+**H1 conservatively over-counts.** It picks up a few real dwellings that FEMA and NSI miss (new homes and cabins), but it also counts many non-dwelling 911 points as 3 persons each.
+
+**Adopted baseline: both kept (2.18.44 not superseded).** QA found the H1 output physically implausible where it changes a class (anuga_structures), so both batches are kept and flagged:
+- **Classes:** 64 of the 65 results have the same ND and TM 11 class on 2.18.44 and 2.18.45. For anuga_structures_20261015, the QA'd value is **TM 11 Significant** (2.18.44), not the 2.18.45 High.
+- **LIJ:** 2.18.44 for the HEC-RAS tier2 variants (7.5) and DWR-4441 (46.4). The 2.18.45 values are double or non-dwelling counts. DWR-2645 is 9.1 verified, 15.1 if the lake lots are occupied.
+- **Inundated and cut-off counts:** the 2.18.45 values are an upper bound that includes unverified 911-only points. The 2.18.44 values are a lower bound. Report both until the H1 points are reviewed. The current tool output is 2.18.45, so its classes need this note wherever they're quoted.
+
+**DWR-8278 (Wells Dam): ND Low (screening), contingent on 9250 56th Ave SW being unoccupied. TM 11 Significant is robust.** 2.18.45 doesn't change it: Low / Significant, LIJ 0, the same as 2.18.44.
+- Docs & QA hand check: `/workspace/dwr8278_handcheck_20261020/NOTE.md`.
+- The old High at 9260 56th Ave SW was a machine shed that NSI labels RES1, counted twice. The farmhouse is dry, so that part of the drop is correct.
+- At 9250 56th Ave SW, the 911 point snapped 35 ft onto a dry single-wide-shaped outline. NAIP and Esri show only sheds, but the address is still active in Grant County 911.
+- If a mobile home is occupied there, the 2.66 ft / 4.25 ft/s cell next to it puts the dam back at **ND High** (3 persons). TM 11 would stay Significant at LIJ 3.
+- Confirm with Grant County or a site visit before adopting Low. The NID lists Low. This resolves the DWR-8278 "to review" in the 2.18.44 table.
+
+**Also noted.**
+- The 2.18.45 run fetched OSM lifelines live from Overpass (`OSM_lifelines_20261020_*.geojson`; for example, 1 dry substation in anuga_structures), whereas the 2.18.44 run used the pack. No lifeline was inundated in either run, so no number changes.
+- DWR-8278 and DWR-4560 stay ND Low / TM 11 Significant, LIJ 0.
+
+**Verification (Docs & QA).** I re-parsed all 65 old and new results independently, from `Hazard_Classification_Summary.csv` and `Classification/Habitable_Structures.csv` rather than the `.txt` that `summarize.py` reads.
+- Every class, LIJ, inundated and cut-off figure matches Grok Bot's `SUMMARY.md`, and so do the 33 changed results.
+- All 65 new summaries are v2.18.45.
+- The inundated counts also equal the count of `Habitable=Yes` structures at 0.1 ft or more in every result.
+
 ## Open items
 - **Refined ANUGA rerun (Absaraka) running** (see above). Review it with `REFINED_RUN_CHECKLIST.md`, then the KO-06/07 closed variant.
 - **DWR-3161 is on hold:** flagged Low (#93), with breach runs refused. It waits for DWR's answers to the record questions in #93. Its 10-18 TIER 0 numbers aren't used.
 - **Merged 10-19:** #92 (run-report metrics and the opt-in water-body mask, Runner 3.10.27, closes #91) and #96 (HEC-RAS timeouts on the wall clock, Runner 3.10.26). Main is now Runner 3.10.32 (#94, which changes the default top of dam to the 98th percentile within 30 m, M6), so runs on current main are not directly comparable with the runs above. See CHANGELOG.md.
 - HEC-RAS vs ANUGA/TIER 0 area gap: recompute HEC-RAS depth on the 40 m DEM, compare at matching thresholds and sim times, and check Manning's n.
-- **The Hazard re-baseline on 2.18.44 (2026-10-20) supersedes the batch hazard numbers above.** All batch hazard results before 2.18.39 are superseded. Before adopting the new numbers, review the class changes marked "to review" and decide whether to repeat the batch on 2.18.45 (#113 H1).
+- **The Hazard re-baselines on 2.18.44 and 2.18.45 (2026-10-20/21) supersede the batch hazard numbers above.** All batch hazard results before 2.18.39 are superseded. 2.18.44 is *not* superseded by 2.18.45: both are kept, because H1 counts unverified 911-only points (see the 2.18.45 section). Open: review the H1-restored points (`h1_restored_points.csv`), especially Absaraka anuga_structures (QA value TM 11 Significant) and the DWR-2645 lake lots.
+- **DWR-8278:** ND Low (screening) is contingent on 9250 56th Ave SW being unoccupied. Confirm with Grant County 911 or a site visit. TM 11 Significant is robust.
 - Re-baseline numbers aren't yet adopted as the trusted baseline. That needs the user's approval. Note that they were run with the non-default culvert burn on.
