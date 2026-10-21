@@ -3,7 +3,7 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-PLUGIN_VERSION = "2.18.47"
+PLUGIN_VERSION = "2.18.51"
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
@@ -204,7 +204,7 @@ CURVE_FIGURE = {"found": "ND Figure 5.1 / TM 11 Figure 2 (houses built on founda
                 "vehicle": "Figure 4 (passenger vehicles)"}
 
 ZONE_LABELS = {1: "HIGH", 2: "JUDGMENT", 3: "LOW", -9999: "NO DATA"}
-# 2.18.47: the zone names and fills of ND Dam Safety Standards REG_05.2026 Figures 5.1 / 5.2
+# 2.18.51: the zone names and fills of ND Dam Safety Standards REG_05.2026 Figures 5.1 / 5.2
 # (pp. 21-22) for the tables (Danger_Zone column). ZONE_LABELS above stays the
 # short stored value (styles, rule compare and saved tables read it). The fills are in
 # xlsx_zone_fill.ZONE_FILLS_REG05 (this file is window code: no colour literals).

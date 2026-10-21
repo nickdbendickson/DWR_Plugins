@@ -11,7 +11,7 @@ those colours at full opacity:
   * {Hazard,Runner,Screening}/styles/acer_zone_points.qml (structure points)
   * DamSafety_Hazard/chartsign.py overlay_svg() (the low zone is filled too)
   * {Runner,Screening}/core/nd_hazard.py chart_svg() (ND Fig 5.1 / 5.2 review charts + legend)
-  * DamSafety_Hazard/xlsx_zone_fill.py ZONE_FILLS_REG05 (XLSX zone cell fills, 2.18.47)
+  * DamSafety_Hazard/xlsx_zone_fill.py ZONE_FILLS_REG05 (XLSX zone cell fills, 2.18.51)
 
 check_text(root) is QGIS-free and is also run by tools/ci_checks.py. The sibling plugins' copies
 are checked when they are next to this plugin (the repo); a lone plugin zip checks its own.
@@ -36,6 +36,10 @@ PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening")
 def _rgb(hexcol):
     h = hexcol.lstrip("#")
     return "{},{},{}".format(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+# the standard's zone names (REG_05.2026 Figures 5.1 / 5.2 legends)
+ZONE_NAMES = {"high": "HIGH DANGER ZONE", "judgment": "JUDGMENT ZONE", "low": "LOW DANGER ZONE"}
 
 
 def _read(root, rel):
@@ -78,6 +82,10 @@ def check_text(root=ROOT):
                              .format(val, STD[key]), q, re.I):
                 probs.append("{}/styles/acer_zones.qml value {} is not {}".format(p, val,
                                                                                   STD[key]))
+            lab = "{} {}".format(val, ZONE_NAMES[key])
+            if 'label="{}"'.format(lab) not in q:
+                probs.append("{}/styles/acer_zones.qml value {} label is not '{}'".format(
+                    p, val, lab))
         q = _read(root, p + "/styles/acer_zone_points.qml")
         if q is None:
             probs.append(p + "/styles/acer_zone_points.qml missing")
@@ -89,6 +97,10 @@ def check_text(root=ROOT):
             if not sym or sym.group(1) != _rgb(STD[key]) + ",255":
                 probs.append("{}/styles/acer_zone_points.qml {} is {} (want {},255)".format(
                     p, cat, sym.group(1) if sym else "?", _rgb(STD[key])))
+            if not re.search(r'<category value="{}" [^>]*label="{}"'.format(cat, ZONE_NAMES[key]),
+                             q):
+                probs.append("{}/styles/acer_zone_points.qml {} label is not '{}'".format(
+                    p, cat, ZONE_NAMES[key]))
     for p in ("DamSafety_Runner", "DamSafety_Screening"):
         s = _read(root, p + "/core/nd_hazard.py")
         if s is None:
@@ -98,7 +110,10 @@ def check_text(root=ROOT):
             if body.lower().count(STD[key].lower()) < 2:      # zone fill + legend swatch
                 probs.append("{}/core/nd_hazard.py chart_svg lacks {} for {}".format(
                     p, STD[key], key))
-    s = _read(root, "DamSafety_Hazard/xlsx_zone_fill.py")       # 2.18.47 XLSX zone cell fills
+            if '"{}"'.format(ZONE_NAMES[key]) not in body:
+                probs.append("{}/core/nd_hazard.py chart_svg legend lacks '{}'".format(
+                    p, ZONE_NAMES[key]))
+    s = _read(root, "DamSafety_Hazard/xlsx_zone_fill.py")       # 2.18.51 XLSX zone cell fills
     if s is not None and not re.search(r'ZONE_FILLS_REG05 = \{{1: "{}", 2: "{}", 3: "{}"\}}'.format(
             STD["high"], STD["judgment"], STD["low"]), s, re.I):
         probs.append("xlsx_zone_fill.py ZONE_FILLS_REG05 is not the standard's colours")

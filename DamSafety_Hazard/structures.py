@@ -2499,7 +2499,7 @@ def structure_notes(rec):
 
 
 def danger_zone(rec):
-    """2.18.47: the REG_05.2026 Fig. 5.1 / 5.2 zone name of the structure's controlling zone
+    """2.18.51: the REG_05.2026 Fig. 5.1 / 5.2 zone name of the structure's controlling zone
     (HIGH DANGER ZONE / JUDGMENT ZONE / LOW DANGER ZONE); NULL when dry or for a 1D model, where
     depth alone decides (5.2.1.1(d))."""
     if rec.get("one_d") or rec.get("outcome", OUT_DRY) == OUT_DRY:
@@ -2508,7 +2508,7 @@ def danger_zone(rec):
 
 
 def danger_chart(rec):
-    """2.18.47: which REG_05.2026 relationship decided the structure: Fig. 5.1 (houses built on
+    """2.18.51: which REG_05.2026 relationship decided the structure: Fig. 5.1 (houses built on
     foundations), Fig. 5.2 (mobile homes) or the 1D depth > 2 ft rule; NULL when dry."""
     if rec.get("outcome", OUT_DRY) == OUT_DRY or rec.get("max_depth") is None:
         return NULL

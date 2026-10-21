@@ -1,4 +1,4 @@
-"""Hazard 2.18.47: the hazard tables against ND Dam Safety Standards REG_05.2026, Section 5.
+"""Hazard 2.18.51: the hazard tables against ND Dam Safety Standards REG_05.2026, Section 5.
 
 Builds a small structure inventory (no rasters, no model), writes Habitable_Structures as GPKG /
 CSV / XLSX with the plugin's own export, writes the classification summary table, and checks:

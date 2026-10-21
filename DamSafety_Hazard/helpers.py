@@ -438,7 +438,8 @@ def apply_acer11_style(lyr):
         raster_shader.setRasterShaderFunction(ramp_shader)
         renderer = QgsSingleBandPseudoColorRenderer(lyr.dataProvider(), 1, raster_shader)
         lyr.setRenderer(renderer)
-        if lyr.renderer():
+        # QgsSingleBandPseudoColorRenderer has no invalidateCache() on QGIS 3.34
+        if lyr.renderer() and hasattr(lyr.renderer(), "invalidateCache"):
             lyr.renderer().invalidateCache()
         lyr.triggerRepaint()
         return True
@@ -470,7 +471,7 @@ def apply_class_style(lyr, items):
 
 
 def _fill_zones(layer, path):
-    """2.18.47: colour the danger-zone cells (ACER_Zone_Label / Danger_Zone) of an exported
+    """2.18.51: colour the danger-zone cells (ACER_Zone_Label / Danger_Zone) of an exported
     XLSX with the REG_05.2026 Fig. 5.1 / 5.2 fills; a failure is logged, never raised."""
     try:
         from .xlsx_zone_fill import ZONE_COLUMNS, fill_zone_cells

@@ -3,9 +3,9 @@
   <pipe>
     <rasterrenderer type="paletted" opacity="1" band="1" alphaBand="-1" nodataColor="">
       <colorPalette>
-        <paletteEntry value="1" color="#EF9897" label="1 HIGH danger" alpha="255"/>
-        <paletteEntry value="2" color="#F9F4A3" label="2 JUDGMENT" alpha="255"/>
-        <paletteEntry value="3" color="#C4E0AD" label="3 LOW danger" alpha="255"/>
+        <paletteEntry value="1" color="#EF9897" label="1 HIGH DANGER ZONE" alpha="255"/>
+        <paletteEntry value="2" color="#F9F4A3" label="2 JUDGMENT ZONE" alpha="255"/>
+        <paletteEntry value="3" color="#C4E0AD" label="3 LOW DANGER ZONE" alpha="255"/>
       </colorPalette>
     </rasterrenderer>
     <brightnesscontrast brightness="0" contrast="0" gamma="1"/>

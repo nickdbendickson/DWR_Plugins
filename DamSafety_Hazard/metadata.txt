@@ -5,17 +5,18 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.47
+version=2.18.51
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
-    2.18.47 - 2026-10-20 (hazard tables against REG_05.2026 Section 5)
+    2.18.51 - 2026-10-20 (hazard tables against REG_05.2026 Section 5; numbered 2.18.47 on its branch, which #112 also uses)
       * Habitable_Structures has two new columns after ACER_Zone_Label: Danger_Zone, the zone name of REG_05.2026 Figures 5.1 / 5.2 (HIGH DANGER ZONE / JUDGMENT ZONE / LOW DANGER ZONE; empty when dry or for a 1D model), and Danger_Chart, the relationship that decided it (Fig. 5.1 houses built on foundations, Fig. 5.2 mobile homes, or the 1D depth > 2 ft rule of 5.2.1.1(d)). ACER_Zone_Label keeps its short values (HIGH / JUDGMENT / LOW / DRY).
       * The XLSX tables fill the zone cells (ACER_Zone_Label, Danger_Zone) with the figures' colours: #EF9897 / #F9F4A3 / #C4E0AD (xlsx_zone_fill.py; values unchanged).
       * The criteria table and summary list 5.2.1.2(a): overtopped private roads or roads with AADT < 500 (Low). The summary's TM 11 row says it is the ACER TM 11 Table 1 reference class, not the ND class (REG_05.2026 classes are High / Medium / Low).
       * No class, threshold or default changes. tests/test_hazard_tables_reg05.py checks the headers, zone names, units, fills and labels.
     2.18.46 - 2026-10-20 (REG_05.2026 zone colours)
       * The ACER TM 11 danger zones use the colours of REG_05.2026 Figures 5.1 / 5.2: High #EF9897, Judgment #F9F4A3, Low #C4E0AD (were #F44336 / #FFEB3B / #4CAF50). Zone rasters (apply_acer11_style and styles/acer_zones.qml, now at full opacity: 0.75 lightened them), structure points by ACER zone (styles.COLORS, styles/acer_zone_points.qml) and the chart sign-off overlay, which now fills the low zone too (it was white). The zone raster legend says JUDGMENT ZONE (was JUDGEMENT). Breakpoints, classes and field values are unchanged. tests/test_zone_colors_reg05.py (also in tools/ci_checks.py) checks every copy.
+      * Zone legend labels follow the standard: HIGH DANGER ZONE / JUDGMENT ZONE / LOW DANGER ZONE. apply_acer11_style no longer fails on QGIS 3.34 (invalidateCache only when the renderer has it), so the zone layer repaints.
     2.18.45 - 2026-10-20 (fixes of the 2026-10-19 audit, High findings; rebased onto current main)
       * H1 (default change back, conservative): a 911 address point with no building outline nearby and no NSI record counts as habitable again by the ND site address rule (listed for review); the self-test runs in CI (tests/test_selftest.py).
       * H2: metre / m-per-s depth and velocity rasters are detected (band unit or metadata, HEC-RAS SI Units project, file name); Check inputs ERROR and model-gate FAIL on strong evidence, and the units guard runs BEFORE reprojection so a metric secondary scenario in a foreign CRS is caught, not read as feet.

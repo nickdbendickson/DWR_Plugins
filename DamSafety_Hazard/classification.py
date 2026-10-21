@@ -643,7 +643,7 @@ def write_summary(output_folder, lines, nd, tm11, transform_ctx):
     rows += [("ND {} {}".format(c["section"], c["criterion"]),
               "{} -> {}".format(c["found"], c["result"]) if c["found"] else c["result"])
              for c in nd.get("criteria", [])]
-    # 2.18.47: REG_05.2026 classes are High / Medium / Low; the ACER TM 11 Table 1 class
+    # 2.18.51: REG_05.2026 classes are High / Medium / Low; the ACER TM 11 Table 1 class
     # (Low / Significant / High) is a reference, said so in the item, never the ND class
     rows += [("TM 11 classification (ACER TM 11 Table 1 reference, not the ND class)",
               tm11["cls"]),

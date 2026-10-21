@@ -12,6 +12,9 @@ job.npz holds (all SI, coordinates in the model CRS):
   inlet           (2, 2) line across the flow just below the dam
   hyd_t, hyd_q    breach hydrograph, s and m3/s
   sim_time, yieldstep, arrival_depth, velocity_min_depth, algorithm, threads
+                  (threads: ANUGA's OpenMP thread count, set with set_omp_num_threads and
+                  OMP_NUM_THREADS; 0 = ANUGA's own default, which is ONE thread in ANUGA 4.
+                  From 3.10.47 the Runner always writes a count > 0, resolve_threads)
   out_x0, out_y0, out_dx, out_nx, out_ny   grid the results are written on
 optional:
   init_depth      grid like dem: initial water depth (m), ponds that start full
@@ -160,6 +163,27 @@ class Constant:
         return self.value
 
 
+def envelope_update(stage, elev, xm, ym, hmax, vmax, wmax, arr, vmin_depth, arrival_depth,
+                    get_time):
+    """One time step of the Envelope operator, in place: max depth, max speed (where at
+    least vmin_depth deep), max wet WSE, first time (h) at arrival_depth. 3.10.47: no full
+    np.where / zeros arrays and the speed only on the deep triangles (the same numbers as
+    before, bit for bit: tests/test_anuga_threads.py); serial numpy, ~20 % of a step at 8
+    OpenMP threads before, most of what is left is np.hypot."""
+    h = stage - elev
+    np.maximum(hmax, h, out=hmax)
+    np.maximum(wmax, stage, out=wmax, where=h > 0.001)
+    idx = np.flatnonzero(h >= vmin_depth)
+    if idx.size:
+        sp = np.hypot(xm[idx], ym[idx])
+        sp /= h[idx]
+        vmax[idx] = np.maximum(vmax[idx], sp)
+    new = np.isnan(arr)
+    new &= h >= arrival_depth
+    if new.any():
+        arr[new] = get_time() / 3600.0
+
+
 def envelope_class(anuga):
     """The Envelope operator class (needs anuga.Operator, imported only in the ANUGA
     Python). Defined once and bound at module level under its own name so that a pickled
@@ -184,16 +208,9 @@ def envelope_class(anuga):
             self.ym = dom.quantities["ymomentum"].centroid_values
 
         def __call__(self):
-            h = self.stage_c - self.elev_c
-            np.maximum(self.hmax, h, out=self.hmax)
-            np.maximum(self.wmax, np.where(h > 0.001, self.stage_c, -np.inf), out=self.wmax)
-            deep = h >= self.vmin_depth
-            sp = np.zeros_like(h)
-            sp[deep] = np.hypot(self.xm[deep], self.ym[deep]) / h[deep]
-            np.maximum(self.vmax, sp, out=self.vmax)
-            new = np.isnan(self.arr) & (h >= self.arrival_depth)
-            if new.any():
-                self.arr[new] = self.domain.get_time() / 3600.0
+            envelope_update(self.stage_c, self.elev_c, self.xm, self.ym, self.hmax,
+                            self.vmax, self.wmax, self.arr, self.vmin_depth,
+                            self.arrival_depth, self.domain.get_time)
 
         def parallel_safe(self):
             return True
@@ -208,6 +225,39 @@ def envelope_class(anuga):
     Envelope.__qualname__ = "Envelope"
     globals()["Envelope"] = Envelope
     return Envelope
+
+
+def apply_threads(anuga, threads):
+    """Set ANUGA's OpenMP thread count (a process setting, so also needed when a checkpoint
+    resumes: a loaded domain does not run Domain.__init__, which re-reads OMP_NUM_THREADS).
+    threads <= 0: nothing is set (ANUGA's own default; job files before 3.10.47). Returns
+    (the count ANUGA reports or None, a note or ''). Never raises: a build without OpenMP
+    (or without the setter) simply runs on one thread."""
+    if threads <= 0:
+        getter = getattr(anuga, "get_omp_num_threads", None)
+        try:
+            return (int(getter()) if getter else None), ""
+        except Exception:        # noqa: BLE001
+            return None, ""
+    os.environ["OMP_NUM_THREADS"] = str(int(threads))   # Domain() reads it on creation
+    setter = getattr(anuga, "set_omp_num_threads", None)
+    note = ""
+    if setter is None:
+        note = "this ANUGA has no set_omp_num_threads; OMP_NUM_THREADS only"
+    else:
+        try:
+            try:
+                setter(threads, verbose=False)
+            except TypeError:
+                setter(threads)
+        except Exception as e:   # noqa: BLE001 - e.g. no OpenMP extension: one thread
+            note = "set_omp_num_threads failed ({}); OMP_NUM_THREADS only".format(
+                str(e)[:120])
+    getter = getattr(anuga, "get_omp_num_threads", None)
+    try:
+        return (int(getter()) if getter else None), note
+    except Exception:            # noqa: BLE001
+        return None, note
 
 
 def checkpoint_config(job):
@@ -439,13 +489,11 @@ def main(job_path, out_path):
     sim_time = s("sim_time")
     ystep = s("yieldstep")
     threads = int(job["threads"]) if "threads" in job else 0
-    if threads > 0:              # a process setting: also needed when a checkpoint resumes
-        setter = getattr(anuga, "set_omp_num_threads", None)
-        if setter:
-            try:
-                setter(threads, verbose=False)
-            except TypeError:
-                setter(threads)
+    omp_threads, omp_note = apply_threads(anuga, threads)
+    if threads > 0:
+        print("ANUGA OpenMP threads: {} (asked for {}){}".format(
+            omp_threads if omp_threads is not None else "?", threads,
+            "; " + omp_note if omp_note else ""), flush=True)
     Envelope = envelope_class(anuga)
 
     def build_domain():
@@ -745,6 +793,15 @@ def main(job_path, out_path):
              "culverts": info["culverts"], "culvert_errors": info["culvert_errors"],
              "injected_m3": injected, "anuga_version": getattr(anuga, "__version__", "?"),
              "algorithm": str(job["algorithm"]), "elevation": info["elevation"]}
+    # 3.10.47: the OpenMP thread count ANUGA ran with (read back at the end: Domain() and a
+    # resumed checkpoint both go through it)
+    _getter = getattr(anuga, "get_omp_num_threads", None)
+    try:
+        stats["omp_threads"] = int(_getter()) if _getter else omp_threads
+    except Exception:            # noqa: BLE001
+        stats["omp_threads"] = omp_threads
+    if omp_note:
+        stats["omp_note"] = omp_note
     if ck is not None:
         if ckdir and os.path.isdir(ckdir):       # finished: the pickles are not needed
             shutil.rmtree(ckdir, ignore_errors=True)
