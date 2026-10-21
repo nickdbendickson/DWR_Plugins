@@ -39,6 +39,7 @@ from DamSafety_Hazard import structures as ST, classification as CL, linear as L
 from DamSafety_Hazard import pipeline as PL  # noqa: E402
 from DamSafety_Hazard.helpers import RasterSampler  # noqa: E402
 from DamSafety_Hazard.constants import ND_HIGH, ND_MEDIUM, ND_LOW  # noqa: E402
+from DamSafety_Hazard.compat import FT_STRING  # noqa: E402
 
 FAILS = []
 US_STATE = ("US 2", "U.S. Highway 85", "US-85", "US HWY 52", "ND 23", "ND-1804", "ND HWY 22",
@@ -69,7 +70,7 @@ def _nd_hazard():
 
 def road_classes(texts):
     lyr = QgsVectorLayer("LineString?crs=EPSG:5070", "roads", "memory")
-    lyr.dataProvider().addAttributes([QgsField("FULLNAME", 10)])   # QVariant.String
+    lyr.dataProvider().addAttributes([QgsField("FULLNAME", FT_STRING)])
     lyr.updateFields()
     rd = LN.AttrReader(lyr)
     out = {}
@@ -110,8 +111,8 @@ def roads_part():
     check("private road -> Low", LN.nd_road_class(LN.ROAD_PRIVATE, None)[0] == ND_LOW)
     # ND NG9-1-1 roads: SHIELD USHY / STHY (US 83 through a town is 'S WASHINGTON ST')
     lyr = QgsVectorLayer("LineString?crs=EPSG:5070", "ng911", "memory")
-    lyr.dataProvider().addAttributes([QgsField("FULL_NAME", 10), QgsField("SHIELD", 10),
-                                      QgsField("RoadClass", 10)])
+    lyr.dataProvider().addAttributes([QgsField("FULL_NAME", FT_STRING), QgsField("SHIELD", FT_STRING),
+                                      QgsField("RoadClass", FT_STRING)])
     lyr.updateFields()
     rd = LN.AttrReader(lyr)
     for name, shield, want in (("S WASHINGTON ST", "USHY", LN.ROAD_US),
