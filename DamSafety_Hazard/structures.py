@@ -975,7 +975,7 @@ def _no_building_911(rec, srcs, assumed_imagery=MS_IMAGERY_ASSUMED_DATE):
             img = datetime.date(*(int(x) for x in str(assumed_imagery).split("-")))
         except Exception:
             img = None
-        basis = "imagery date not published for these footprints; assumed {}".format(
+        basis = "date not published for these footprints, assumed {}".format(
             assumed_imagery)
     if upd is not None and img is not None and upd > img:
         return True, "no building within {:.0f} ft in Microsoft footprints, but the 911 " \
