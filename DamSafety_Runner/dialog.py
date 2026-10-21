@@ -26,6 +26,7 @@ from qgis.PyQt.QtWidgets import (
 from . import popup_logic as pl
 from .ui_widgets import Collapsible, DamCard, EngineChip, InfoBanner, StageStrip, ToolRow
 from .tokens import TOKENS
+from .tool_dialog import exec_tool_dialog
 
 TITLE = "DamSafety Runner"
 SIZE_KEY = "DamSafety_Runner/window"           # QSettings: the window size, saved on close
@@ -634,7 +635,7 @@ class NDBreachRunnerDialog(QDialog):
             n = QMessageBox.question(self, TITLE, "A statewide DEM is tiled and can take a long time. Continue?")
             if n != getattr(QMessageBox, 'StandardButton', QMessageBox).Yes:
                 return
-        processing.execAlgorithmDialog("nddam:downloaddem", {
+        exec_tool_dialog(processing, "nddam:downloaddem", {
             "SOURCE": self.dem_source.currentIndex(),
             "SCOPE": self.dem_scope.currentIndex(),
             "DAM_POINT": self.dem_point.text().strip(),
@@ -647,7 +648,7 @@ class NDBreachRunnerDialog(QDialog):
             "IMAGINE": self.dem_imagine.isChecked(),
             "WORK_CRS": self._work_crs(),
             "OUT": folder,
-        })
+        }, parent=self)
 
     # --------------------------------------------------- the settings window --
     def _build_settings_widget(self):
@@ -1049,7 +1050,7 @@ class NDBreachRunnerDialog(QDialog):
                 import processing
             except ImportError:
                 from qgis import processing
-            processing.execAlgorithmDialog(aid, params)
+            exec_tool_dialog(processing, aid, params, parent=self)
         except Exception as e:                                   # noqa
             self._log("!!! {} could not be opened: {}".format(aid, e))
             QMessageBox.information(

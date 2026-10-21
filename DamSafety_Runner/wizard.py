@@ -30,6 +30,7 @@ import tempfile
 import traceback
 
 from . import wizard_logic as wl
+from .tool_dialog import exec_tool_dialog
 from .core import breach as brmod
 from .core import nd_data
 
@@ -977,12 +978,12 @@ def _classes():
                     alg = "ndbreach:downloaddem"
             except Exception:
                 alg = "nddam:downloaddem"
-            processing.execAlgorithmDialog(alg, {
+            exec_tool_dialog(processing, alg, {
                 "SOURCE": 0, "RES": self.dem_res.currentData(), "SCOPE": 0,
                 "DAM_POINT": point, "OUT": out,
                 "BUFFER_MI": dem_buffer_mi(a.get("max_extent_mi")),     # half the max extent
                 "DAM_ID": str((a.get("dam") or {}).get("DAM_ID") or ""),
-            })
+            }, parent=self)
             dam = a.get("dam") or {}
             # This dam's download only: <DAM_ID>_*m_5070.tif (or dam_<x>_<y>_* of its point)
             hits = wl.dam_dem_candidates(folder, dam.get("DAM_ID"),
