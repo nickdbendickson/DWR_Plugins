@@ -321,6 +321,23 @@ v2e's lower breach invert (2.6 ft below v2d's) raises the peak 18% and the ≥1 
 - ANUGA with NDDOT culverts on the 10 x 9 mi TIER 1 domain (`Absaraka_compare/anuga_nddot_culverts_20261021`): the 1,000 m widen pass is clipped by the LISFLOOD grid; water ponds 10 ft deep at the SE mesh corner and the domain ends with 4.15 times the injected volume. Needs a rerun on the refined runs' 25 x 20 mi box.
 - HEC-RAS v2e_gmsh_r: HEC-RAS refused to start because the dam connection's spillway notch (1,066.0 ft, stations 100-220) is lower than two connected cells (1,066.25 and 1,066.61 ft). The 8d5493f engine then hid the message behind a TypeError (a None time limit in an error string).
 
+## ANUGA thread count in run reports (from main caaf850, Runner 3.10.47, #132)
+
+From main caaf850 (#132, merged 10-21), every ANUGA run's `_breach_model/run_report.json` records the thread count in `anuga_threads`. `run_report.md` has the same information in its "ANUGA threads" row. See USER_GUIDE.md, "ANUGA threads".
+
+**How to read it when comparing baselines:**
+- `used` is the number of threads ANUGA ran on, and `rule` says why. `automatic: min(8 CPUs - 2, 4)` is the default on the box, which gives 4 threads. `NDBREACH_ANUGA_THREADS=N` means the environment variable set it, and `set (N)` means the threads setting did.
+- `anuga_reported` is what ANUGA itself reported. If it differs from `used`, or there is a `note`, the run fell back to fewer threads, for example on a build without OpenMP. The results are still valid, but the run was slower.
+- **No `anuga_threads` entry** means the run is older than caaf850. If its threads setting was 0 (the default), ANUGA ran on **one** thread. #132 found that the 20x20 48 h run (`anuga_gmsh_20x20_48h_20261018`) and the refined 72 h run (`anuga_gmsh_refined_72h_20261019`) both used 1 of 8 cores.
+
+**Reproducibility: the thread count doesn't change results.** The evidence is in `/workspace/anuga_threads_pr/real_check.log` and `DamSafety_Runner/tests/test_anuga_threads.py`:
+- On real ANUGA 4.0.1 with 87,749 triangles and 600 s simulated, 1 and 4 threads gave bit-identical depth, velocity, arrival and WSE (max abs difference 0).
+- A run killed at 1 thread and resumed from its checkpoint at 4 threads was bit-identical to the uninterrupted 1-thread run.
+
+So a difference between a caaf850 run and an older ANUGA run comes from other changes, not from the threads. Examples are the Runner 3.10.30/3.10.31 mesh and bed changes, M6's top of dam, the culverts, the box and the duration. The same release also rewrote the per-step envelope update, and that was also bit-identical in the tests. Only wall-clock times change: 4 threads were about 2.6x faster in the check above, and about 2x on Grok Bot's 262k-triangle benchmark. Don't compare run times across a change in `used`. Windows and macOS builds were not tested.
+
+**First run with the field:** the 10-21 NDDOT culvert ANUGA run (queue item a, `Absaraka_compare/anuga_nddot_culverts_20261021/`) logged `ANUGA threads: 4 (automatic: min(8 CPUs - 2, 4))` (`/workspace/run_queue_20261021/STATUS.md`). The queue clears `NDBREACH_ANUGA_THREADS` and `OMP_NUM_THREADS` for every job, so the queued runs all use the automatic 4.
+
 ## Open items
 - **Queue 2026-10-21:** rerun the NDDOT-culvert ANUGA case on the 25 x 20 mi box; fix v2e_gmsh_r's notch cells and the engine's None-timeout message, then rerun it. Refined base rerun on caaf850 and the KO-06/07-closed variant are still running.
 - **Refined ANUGA rerun (Absaraka) running** (see above). Review it with `REFINED_RUN_CHECKLIST.md`, then the KO-06/07 closed variant.
@@ -330,4 +347,5 @@ v2e's lower breach invert (2.6 ft below v2d's) raises the peak 18% and the ≥1 
 - **The Hazard re-baselines on 2.18.44 and 2.18.45 (2026-10-20/21) supersede the batch hazard numbers above.** All batch hazard results before 2.18.39 are superseded. 2.18.44 is *not* superseded by 2.18.45: both are kept, because H1 counts unverified 911-only points (see the 2.18.45 section). Open: review the H1-restored points (`h1_restored_points.csv`), especially Absaraka anuga_structures (QA value TM 11 Significant) and the DWR-2645 lake lots.
 - **DWR-8278:** ND Low (screening) / TM 11 Significant reflects current conditions: the single-wide at 9250 56th Ave SW was removed between 2021 and 2023. Note that the as-run "dry" result for 9250 is a FEMA-offset artifact; with corrected outlines the home is in the mobile-home High zone. Open: confirm with Grant County 911 or the owner whether the pad is vacant or will be reoccupied. If it's reoccupied, the dam is ND High.
 - **FEMA outline offsets can flip results.** At DWR-8278, one Maxar scene's outlines are 14.7 m SW of the real buildings. Other dams haven't been checked. SWE has been asked for a fix: a per-scene offset check against NSI, Microsoft footprints as the geometry source, and a flag when a snap changes the depth or zone. Until it lands, treat any class that rests on a snapped FEMA outline near a wet/dry edge as needing an imagery check.
+- **From caaf850 (Runner 3.10.47),** ANUGA runs record `anuga_threads` and use 4 threads on the box by default. The results are bit-identical to 1 thread; only the run time changes.
 - Re-baseline numbers aren't yet adopted as the trusted baseline. That needs the user's approval. Note that they were run with the non-default culvert burn on.
