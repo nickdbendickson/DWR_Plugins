@@ -3254,6 +3254,10 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # 3.10.54 review: never aborts the build in 'warn' or 'auto' mode; an error in the check itself
     # is a note and run_report.json 'hecras_weir_cells' {'action': 'not run', 'error': ...}
     wmode = weir_cell_check_mode(o)
+    # 3.10.54 review 2: a bad weir_cell_fail_ft is a settings error (raised here, before the
+    # guarded check), not "pre-check not run"
+    if wmode != "off" and o.get("weir_cell_fail_ft") not in (None, ""):
+        weir_cell_fail_ft(o)
     try:
         wcc = weir_cells_precheck(pts, perim, conn_line, weir, top_u, terrain_tif, srs, cell, o,
                                   units)
@@ -3273,7 +3277,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                           "hecras_weir_cells", wcc, log)
         if wcc["action"] == "fail":
             raise HecRasModelError(wcc["note"] + " Build with weir_cell_check='warn' to write "
-                                   "the model anyway.")
+                                   "the model anyway, or raise weir_cell_fail_ft (now {} ft) if "
+                                   "this margin is acceptable.".format(weir_cell_fail_ft(o)))
     n_faces = vfix["removed"] if vfix else 0
     seeds_info["removed_for_faces"] = int(n_faces)
     seeds_info["nudged_for_faces"] = int(vfix["nudged"]) if vfix else 0

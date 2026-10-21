@@ -166,6 +166,15 @@ def hecras_weir_cells_check_error_never_aborts_warn_or_auto():
             assert "odd terrain" in str(e)
         else:
             raise AssertionError("weir_cell_check='fail' swallowed the check's own error")
+        # review 2: a bad weir_cell_fail_ft is a settings error, not "pre-check not run"
+        for bad in ("0.1ft", -1):
+            try:
+                hm.build_model(d, out_folder=os.path.join(d, "m_bad"),
+                               options=dict(opts, weir_cell_check="auto", weir_cell_fail_ft=bad))
+            except hm.HecRasModelError as e:
+                assert "weir_cell_fail_ft must be" in str(e), e
+            else:
+                raise AssertionError("bad weir_cell_fail_ft {!r} was not a settings error".format(bad))
     finally:
         hm.weir_cells_precheck = real
         shutil.rmtree(d, ignore_errors=True)
