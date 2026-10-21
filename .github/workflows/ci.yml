@@ -24,10 +24,15 @@ jobs:
           python-version: "3.12"
       - name: Install numpy (no QGIS/scipy needed here)
         run: python -m pip install "numpy<2.3"
-      - name: Fast checks (drift, pin, versions, compile, golden baseline)
+      - name: Fetch main (versions only go up, changelog entries of main kept)
+        run: git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+      - name: Fast checks (drift, pin, versions, version book vs main, compile, golden baseline)
         env:
           QT_QPA_PLATFORM: offscreen
+          CI_BASE_REF: origin/main
         run: python3 tools/ci_checks.py
+      - name: ci_checks self-test (version bookkeeping gates)
+        run: python3 tools/test_ci_checks.py
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
 
@@ -39,6 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Provision QGIS + a scipy-compatible numpy
+        id: provision
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: qgis
@@ -51,13 +57,17 @@ jobs:
           # the suite's own runner: each script picks the mock or the real GDAL it needs
           # (tests/qgis_mock on PYTHONPATH shadowed the real osgeo for the GDAL-write tests)
           python DamSafety_Screening/tests/run_all.py
+      # Every suite step below runs even when an earlier suite failed, so one red suite does not
+      # hide the others' results (they are skipped only if QGIS could not be provisioned).
       - name: Runner fast suite
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           cd "$GITHUB_WORKSPACE"
           python -m nd_breach_runner.tests.run_tests
       - name: Hazard suite (real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
@@ -67,10 +77,12 @@ jobs:
           # status under micromamba's `bash -el` even when every script exited 0.
           python DamSafety_Hazard/tests/run_all.py
       - name: Hazard Lite (GDAL + numpy)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         run: |
           cd "$GITHUB_WORKSPACE"
           python DamSafety_HazardLite/tests/test_core.py
       - name: GUI lint (real QGIS, docs/gui-grammar.md)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
@@ -78,12 +90,14 @@ jobs:
           # opens every DamSafety window offscreen and checks it against the grammar
           python tools/gui_lint.py
       - name: Runner dam wizard (real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           cd "$GITHUB_WORKSPACE"
           python DamSafety_Runner/tests/realqt_wizard.py
       - name: Suite dam data and Setup (real QGIS, pytest)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
