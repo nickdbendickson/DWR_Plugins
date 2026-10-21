@@ -48,7 +48,8 @@ from . import hecras_model as hm
 from . import conditioning as cond
 
 ANUGA_JOB = os.path.join("anuga", "anuga_job.npz")
-FIT_MARGIN_FT = 0.01        # a raised weir point / invert sits this far above the cell
+FIT_MARGIN_FT = 0.05        # a raised weir point / invert sits this far above the cell (0.05:
+#                              HEC-RAS 6.6 cell minimums came out up to 0.006 ft above the model's)
 BREAKLINE_REACH_FT = 400.0  # fix_faces may move points this close to a new line, no others
 DAM_CLEAR_CELLS = 2.0       # no breakline on a connection this close (cells) to the dam line
 
@@ -317,9 +318,11 @@ def _weir_min(weir, a, b):
 
 def cells_check(points, perimeter, conns, raster, step=None):
     """For each connection: the faces on its line, the lowest ground of the cells either side,
-    the weir against them, and each culvert barrel's inverts against the cells at its ends
-    (upstream = the side of the structure line's first point). Returns {name: {...}}."""
+    the weir against them, and each culvert barrel's inverts against the cells its two ends
+    (hm.barrel_ends) fall in. Returns {name: {...}}."""
+    from scipy.spatial import cKDTree
     pts = np.asarray(points, float)
+    tree = cKDTree(pts)
     step = step or 0.25 * float(raster[3])
     segs = {c["name"]: face_segments(pts, c["line"], step) for c in conns}
     cells = sorted({k for ss in segs.values() for sg in ss for k in (sg["left"], sg["right"])})
@@ -345,13 +348,24 @@ def cells_check(points, perimeter, conns, raster, step=None):
                "weir_below_cells": int(bad), "faces_rows": rows}
         cv = c.get("culvert")
         if cv:
-            up_left = float(np.dot(np.asarray(c["structure_line"][0], float) - A, nrm)) > 0
+            # 3.10.56: the cells the barrel's own ends (hm.barrel_ends, written as its GIS
+            # centerline) fall in; the headwater end on the right of the line
             bars = []
-            for sb in cv["stations"]:
+            for sb, (pu, pd) in zip(cv["stations"], hm.barrel_ends(c)):
                 sg = min(ss, key=lambda x: 0.0 if x["s0"] <= sb <= x["s1"] else
                          min(abs(sb - x["s0"]), abs(sb - x["s1"])))
-                up, dn = (sg["left"], sg["right"]) if up_left else (sg["right"], sg["left"])
+                up, dn = (int(k) for k in tree.query([pu, pd])[1])
+                for k in (up, dn):
+                    if k not in cmin:
+                        cmin.update(hb.cell_min_elevations(pts, [k], raster, perimeter=perimeter))
+                side_up = float(np.dot(np.asarray(pu) - A, nrm))
+                side_dn = float(np.dot(np.asarray(pd) - A, nrm))
                 bars.append({"station": sb, "up_cell": up, "dn_cell": dn,
+                             "up_xy": [round(v, 3) for v in pu], "dn_xy": [round(v, 3) for v in pd],
+                             "up_on_headwater_side": side_up < 0 < side_dn,
+                             "ends_inside": bool(cond.points_in_polygon(
+                                 np.array([pu[0], pd[0]]), np.array([pu[1], pd[1]]),
+                                 np.asarray(perimeter, float)).all()),
                              "cell_min_up": round(cmin[up], 3), "cell_min_dn": round(cmin[dn], 3),
                              "same_cell": up == dn,
                              "to_face_end": round(min(sb - sg["s0"], sg["s1"] - sb), 2),
@@ -362,16 +376,62 @@ def cells_check(points, perimeter, conns, raster, step=None):
     return out
 
 
+PROBLEMS_HEAD = ("HEC-RAS would refuse these culvert / bridge connections (\"has an error with "
+                 "the connection\"), so no package was written: ")
+
+
+def connection_problems(conns, check, perimeter, other_names=()):
+    """3.10.56: what would make HEC-RAS refuse a connection ("has an error with the connection.
+    Check that the From: / To: is set correctly", a weir or culvert below its cells), from the
+    connections and their cells_check: [str] (empty = none). Names 1-16 characters and unique
+    (with the 2D area, storage area and the other connections); both ends of the line inside the
+    2D area and faces along it; each barrel's two ends inside the 2D area, in two different
+    cells, the headwater end on the headwater side; inverts and weir not below the cells."""
+    out = []
+    seen = {str(n).strip().lower() for n in other_names}
+    per = np.asarray(perimeter, float)
+    for c in conns:
+        nm = c["name"]
+        if not str(nm).strip() or len(str(nm)) > 16 or any(ch in str(nm) for ch in ",=\r\n"):
+            out.append("{!r}: the name must be 1 to 16 characters without , or =".format(nm))
+        key = str(nm).strip().lower()
+        if key in seen:
+            out.append("{}: the name is used twice".format(nm))
+        seen.add(key)
+        ln = np.asarray(c["line"], float)
+        if not cond.points_in_polygon(ln[:, 0], ln[:, 1], per).all():
+            out.append("{}: its line leaves the 2D area".format(nm))
+        ck = check.get(nm) or {}
+        if not ck.get("faces"):
+            out.append("{}: no cell faces along its line".format(nm))
+        if ck.get("weir_below_cells"):
+            out.append("{}: the weir is lower than the cells on {} face(s)".format(
+                nm, ck["weir_below_cells"]))
+        for b in ck.get("barrels", []):
+            where = "{} barrel at station {:g}".format(nm, b["station"])
+            if not b.get("ends_inside", True):
+                out.append(where + ": an end is outside the 2D area")
+            if b["same_cell"]:
+                out.append(where + ": both ends are in cell {}".format(b["up_cell"]))
+            if not b.get("up_on_headwater_side", True):
+                out.append(where + ": its ends are not on opposite sides of the line, headwater "
+                           "end first")
+            if not (b["inv_up_ok"] and b["inv_dn_ok"]):
+                out.append(where + ": an invert is lower than its cell")
+    return out
+
+
 def fit_to_cells(conns, check, units):
-    """Raise each weir point on a face below its cells, and each culvert invert below its
-    cell, to the cell's lowest ground + FIT_MARGIN_FT. Returns the list of changes."""
+    """Raise each weir point on a face below (or less than FIT_MARGIN_FT above) its cells, and
+    each culvert invert below (or less than FIT_MARGIN_FT above) its cell, to the cell's lowest
+    ground + FIT_MARGIN_FT. Returns the list of changes."""
     m = units.from_ft(FIT_MARGIN_FT)
     changes = []
     for c in conns:
         ck = check.get(c["name"]) or {}
         w = [list(p) for p in c["weir"]]
         for r in ck.get("faces_rows", []):
-            if r["excess"] <= 0:
+            if r["excess"] <= -m + 1e-9:          # 3.10.56: within the margin counts too
                 continue
             z = max(r["cell_min_left"], r["cell_min_right"]) + m
             a, b = r["s0"], r["s1"]
@@ -395,7 +455,7 @@ def fit_to_cells(conns, check, units):
         for b in ck.get("barrels", []):
             for end, key in (("up", "inv_up"), ("dn", "inv_dn")):
                 cm = b["cell_min_" + end]
-                if cv[key] < cm:
+                if cv[key] < cm + m - 1e-9:
                     new = round(math.ceil((cm + m) * 100.0) / 100.0, 2)
                     changes.append({"connection": c["name"], "what": key, "was": cv[key],
                                     "now": new, "cell": b[end + "_cell"], "cell_min": cm})
@@ -555,6 +615,11 @@ def add_to_package(package, run, out, log=None, breaklines=True, fit=True, when=
     check = cells_check(pts, perim, conns, raster) if conns else {}
     changes = fit_to_cells(conns, check, units) if (conns and fit) else []
     after = cells_check(pts, perim, conns, raster) if changes else check
+    probs = connection_problems(conns, after, perim, other_names=g.get("connections", []) +
+                                [hm.AREA_NAME, hm.SA_NAME])
+    if probs:
+        shutil.rmtree(out, ignore_errors=True)
+        raise hm.HecRasModelError(PROBLEMS_HEAD + "; ".join(probs))
     now = when or datetime.datetime.now()
     write_g01(g, pts, conns, gpath, now)
     sinfo.update(source=src, breaklines=bl, fit=changes)

@@ -113,7 +113,7 @@ def hecras_structures_connections_culvert_bridge_and_outside():
         assert gap and abs(gap["width"] - 12.0 / hm.FT) < 0.5, gap
         blk = "\n".join(hm.structure_block(names["test culvert"], __import__("datetime").datetime(
             2026, 10, 21)))
-        assert "Conn Routing Type= 3" in blk and "Connection Culv=1," in blk, blk
+        assert "Conn Routing Type= 1 " in blk and "Conn Routing Type= 3" not in blk and "Connection Culv=1," in blk, blk
         assert "Connection Up SA=Downstream" in blk and "Connection Dn SA=Downstream" in blk
     finally:
         shutil.rmtree(tmp)
@@ -264,7 +264,7 @@ def hecras_structures_add_to_package_round_trip():
         assert np.allclose(g["perimeter"], _perimeter())
         txt = open(os.path.join(out, "T.g01"), newline="").read()
         assert txt.index("Connection=KO-x") < txt.index("BC Line Name=")
-        assert "Conn Routing Type= 3" in txt and "\r\n" in txt
+        assert "Conn Routing Type= 3" not in txt and "Conn Routing Type= 1 " in txt and "\r\n" in txt
         assert "## Culverts, bridges and notches" in open(os.path.join(out, "README_HECRAS.md")).read()
         assert open(os.path.join(pk, "T.g01"), newline="").read().count("Connection=") == 1
         try:
@@ -342,10 +342,64 @@ def hecras_structures_build_model_takes_them_from_another_run():
         g = os.path.join(out, m.name + ".g01")
         assert P.unknown_keywords(g) == set(), P.unknown_keywords(g)
         txt = open(g).read()
-        assert txt.count("Connection=") == 3 and "Conn Routing Type= 3" in txt
+        assert txt.count("Connection=") == 3 and "Conn Routing Type= 3" not in txt
         assert "Storage Area 2D Points= {} ".format(len(m.points)) in txt
         assert any("Structure breaklines" in n for n in r["notes"]), r["notes"]
         rd = open(os.path.join(out, "README_HECRAS.md")).read()
         assert "Mapping limits" in rd and "breaklines built into the computation points" in rd
     finally:
         shutil.rmtree(d)
+
+
+@test
+def hecras_structures_internal_culvert_connection_is_routing_1():
+    """Regression (Absaraka abs2801v2egrcv, HEC-RAS 6.6: "The SA 2D Connection at BNSF KO KO-01
+    cu has an error with the connection. Check that the "To:" is set correctly"): a culvert
+    connection inside the 2D area was written with 'Conn Routing Type= 3', which HEC-RAS reads as
+    a family of rating curves ('Use RC Family' 1). Now routing type 1; the barrel ends as HEC-RAS
+    lays them (barrel_ends, checked against KO-01 in that run's geometry HDF) are in two cells on
+    opposite sides, headwater end on the right; connection_problems() flags what HEC-RAS would
+    refuse."""
+    import datetime
+    tmp = tempfile.mkdtemp()
+    try:
+        tif, units, per, s = _build(tmp)
+        c = {k["source_name"]: k for k in s["exported"]}["test culvert"]
+        blk = hm.structure_block(c, datetime.datetime(2026, 10, 21))
+        assert "Conn Routing Type= 1 " in blk and not any("Routing Type= 3" in x for x in blk)
+        assert "Conn Culv Bottom n=0.013" in blk
+        up, dn = (np.array(p) for p in hm.barrel_ends(c)[0])
+        assert abs(np.hypot(*(dn - up)) - c["culvert"]["length"]) < 0.01
+        A, B = np.asarray(c["line"][0]), np.asarray(c["line"][-1])
+        t = B - A
+
+        def side(p):
+            return t[0] * (p[1] - A[1]) - t[1] * (p[0] - A[0])
+        assert side(up) < 0 < side(dn), (side(up), side(dn))      # headwater on the right
+        assert up[1] > dn[1], (up, dn)       # the run's culvert flows north to south
+        # as HEC-RAS 6.6 laid KO-01's barrel in abs2801v2egrcv (its geometry HDF)
+        ko = {"line": [(2771988.8219505, 467795.23050863), (2771029.7799253, 468222.38717843)],
+              "culvert": {"length": 131.56, "stations": [738.19]}}
+        (ku, kd), = hm.barrel_ends(ko)
+        assert np.allclose(ku, (2771341.25906267, 468155.66432044), atol=0.02), ku
+        assert np.allclose(kd, (2771287.73167693, 468035.48590335), atol=0.02), kd
+        pts, _ = hs.connection_breaklines(_points(), _perimeter(), s["exported"], CELL, units, None)
+        raster = hs.read_raster(tif)
+        ck = hs.cells_check(pts, _perimeter(), s["exported"], raster)
+        hs.fit_to_cells(s["exported"], ck, units)
+        ck = hs.cells_check(pts, _perimeter(), s["exported"], raster)
+        b = ck[c["name"]]["barrels"][0]
+        assert b["up_cell"] != b["dn_cell"] and b["up_on_headwater_side"] and b["ends_inside"], b
+        assert hs.connection_problems(s["exported"], ck, _perimeter(), [hm.AREA_NAME]) == []
+        # what HEC-RAS would refuse is reported
+        bad = dict(c, name=hm.AREA_NAME)
+        assert any("used twice" in p for p in hs.connection_problems([bad], {}, _perimeter(),
+                                                                       [hm.AREA_NAME]))
+        rev = json.loads(json.dumps(ck))
+        rb = rev[c["name"]]["barrels"][0]
+        rb.update(dn_cell=rb["up_cell"], same_cell=True, up_on_headwater_side=False)
+        msg = "; ".join(hs.connection_problems([c], rev, _perimeter()))
+        assert "both ends are in cell" in msg and "headwater end first" in msg, msg
+        assert "used twice" not in msg
+    finally:
+        shutil.rmtree(tmp)

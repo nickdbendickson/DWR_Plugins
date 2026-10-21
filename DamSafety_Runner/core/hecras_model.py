@@ -82,7 +82,8 @@ CR = "\r\n"
 #     2D Unsteady Flow Hydraulics/BaldEagleCrkMulti2D/BaldEagleDamBrk.g09 'Sayers Dam', and
 #     BaldEagleDamBrk.g03 'Lower Levee' (weir equation for the overflow: 'Conn OverFlow
 #     Method 2D=False', 'Conn Weir WD=10', 'Conn Weir Coef=2.6', 'Conn Weir Is Ogee= 0 ')
-#   culvert group 'Connection Culv=', barrel stations, 'Conn Culv Bottom n=', routing type 3:
+#   culvert group 'Connection Culv=', barrel stations, 'Conn Culv Bottom n=' (the routing type
+#   there, 3, is NOT for a connection inside a 2D area - see ROUTING_WEIR_CULVERTS below):
 #     Applications Guide/Example 17 - Unsteady Flow Application/Diamond.g01 'Pyramid to Eagle'
 #     1D Unsteady Flow Hydraulics/Storage Area Hydraulic Connection/Beaver_LS_SAConn.g01
 # The fields of 'Connection Culv=' were read against the geometry HDF HEC-RAS 6.3 wrote for
@@ -90,9 +91,20 @@ CR = "\r\n"
 # Manning's n, entrance loss, exit loss, FHWA chart, FHWA scale, upstream invert, downstream
 # invert, number of barrels, group name (12 characters), solution flag (0), upstream distance
 # (blank on a connection); then one upstream / downstream station pair per barrel in
-# 8-character fields. In those files a culvert counts only with 'Conn Routing Type= 3'
-# (OrleansEx.g04 has a culvert with type 1 and HEC-RAS 6.3 left it out of the HDF).
+# 8-character fields. In those storage-area files a culvert counts only with 'Conn Routing
+# Type= 3' (OrleansEx.g04 has a culvert with type 1 and HEC-RAS 6.3 left it out of the HDF);
+# inside a 2D area type 3 stops HEC-RAS 6.6, see ROUTING_WEIR_CULVERTS below.
 CULVERT_GROUP = "Culvert #1"
+# 3.10.56 fix (Absaraka chain abs2801v2egrcv: "The SA 2D Connection at BNSF KO KO-01 cu has an
+# error with the connection. Check that the "To:" is set correctly."): a connection inside a 2D
+# area is 'Conn Routing Type= 1' (weir, gates, culverts) WITH or without culverts, as HEC's
+# BaldEagleDamBrk internal levees and HEC-RAS-computed culverts on them are. Type 3 (copied from
+# the storage-area examples above) made HEC-RAS 6.6 read every culvert connection as a family of
+# rating curves ('Use RC Family' 1 in the geometry HDF) with no curves, and stop. The barrels
+# keep HEC-RAS's default centerline (across the line at the barrel's station, the barrel length
+# long, headwater end on the right of the line: barrel_ends(), which the cell checks use; it
+# matched the centerlines HEC-RAS 6.6 wrote for that run to the hundredth of a foot).
+ROUTING_WEIR_CULVERTS = 1
 # Runner shape -> (HEC-RAS shape code, FHWA chart, FHWA scale, entrance loss coefficient):
 # a concrete pipe with a square edge in a headwall (chart 1 scale 1, Ke 0.5) and a box with
 # wingwalls flared 30 to 75 degrees (chart 8 scale 1, Ke 0.4), HEC-RAS's typical values
@@ -442,6 +454,25 @@ def geometry_text(m, now=None):
     return CR.join(L) + CR
 
 
+def barrel_ends(c):
+    """3.10.56: the (headwater end, tailwater end) of each culvert barrel of connection `c`, as
+    HEC-RAS lays a barrel with no centerline of its own: at the barrel's station on the
+    connection line, across it, the barrel length long. The line is drawn left to right looking
+    downstream, so the headwater side is on its right."""
+    cv = c.get("culvert") or {}
+    A = np.asarray(c["line"][0], float)
+    B = np.asarray(c["line"][-1], float)
+    L = float(np.hypot(*(B - A))) or 1.0
+    t = (B - A) / L
+    down = np.array([-t[1], t[0]])                 # left of the line = downstream
+    h = 0.5 * float(cv.get("length") or 0.0)
+    out = []
+    for sb in cv.get("stations", []):
+        P = A + t * float(sb)
+        out.append((tuple(P - down * h), tuple(P + down * h)))
+    return out
+
+
 def structure_block(c, now):
     """v3.12.0: the geometry lines of one structure inside the 2D area (a dict from
     `structure_connection`): an SA/2D area connection from the 2D area to itself, laid out as
@@ -458,9 +489,9 @@ def structure_block(c, now):
     L += ["Connection Last Edited Time=" + now.strftime("%b/%d/%Y %H:%M:%S"),
           "Conn Near Repeats=1",
           "Connection Up SA=" + name16(AREA_NAME), "Connection Dn SA=" + name16(AREA_NAME),
-          # 3 = weir and culverts (Diamond.g01, Beaver_LS_SAConn.g01), 1 = weir (BaldEagleDamBrk)
-          # and the weir equation for flow over the road (BaldEagleDamBrk.g03 'Lower Levee')
-          "Conn Routing Type= {} ".format(3 if culv else 1),
+          # 1 = weir, gates and culverts, inside a 2D area (BaldEagleDamBrk.g03 'Lower Levee');
+          # NOT 3 (a family of rating curves there: HEC-RAS stops, "check the To:")
+          "Conn Routing Type= {} ".format(ROUTING_WEIR_CULVERTS),
           "Conn Use RC Family=False", "Conn OverFlow Method 2D=False",
           "Conn Weir WD={}".format(num(c["weir_width"], 2)),
           "Conn Weir Coef={}".format(num(c["weir_coef"], 3)),
@@ -3305,8 +3336,13 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         traster = hstr.read_raster(terrain_tif)
         sck = hstr.cells_check(pts, perim, sinfo["exported"], traster)
         sinfo["fit"] = hstr.fit_to_cells(sinfo["exported"], sck, units)
-        sinfo["cells_check"] = hstr.check_summary(
-            hstr.cells_check(pts, perim, sinfo["exported"], traster) if sinfo["fit"] else sck)
+        sck2 = hstr.cells_check(pts, perim, sinfo["exported"], traster) if sinfo["fit"] else sck
+        sinfo["cells_check"] = hstr.check_summary(sck2)
+        # 3.10.56: what HEC-RAS would refuse (names, line, barrel ends, inverts) stops the build
+        probs = hstr.connection_problems(sinfo["exported"], sck2, perim,
+                                         other_names=[AREA_NAME, SA_NAME, CONN_NAME])
+        if probs:
+            raise HecRasModelError(hstr.PROBLEMS_HEAD + "; ".join(probs))
         if sinfo["fit"]:
             notes.append("Structures: {} weir stretch(es) / culvert invert(s) raised to the "
                          "lowest ground of the cell they connect (HEC-RAS refuses a weir or a "
