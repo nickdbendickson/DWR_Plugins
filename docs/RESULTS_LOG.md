@@ -2,6 +2,43 @@
 
 Absaraka = DWR-2801. Unless noted, these runs used the old trusted baseline settings with NDBREACH_DEM_RESAMPLE=average. Source: `/workspace/dwr_test/pr12_15_progress.md` on the shared box.
 
+## Arrival depth: 1 ft before #131, 0.1 ft after (added 2026-10-21)
+#131 (merged as 732f597; Runner 3.10.53, Hazard 2.18.52) changed the Runner's default arrival depth (`ARRIVAL_FT`, `settings.arrival_depth_ft` in `run_report.json`) from 1 ft to 0.1 ft. See USER_GUIDE.md, "Arrival depth". Since then:
+- `Arrival Time.tif` starts the clock at 0.1 ft;
+- `flooded_acres_over_arrival_depth`, `receptors_flooded`, the receptor velocities and the in-run LISFLOOD-FP vs ANUGA `comparison` are counted at 0.1 ft;
+- with an automatic run length, LISFLOOD-FP is lengthened more often (the "still moving" test uses the latest arrival).
+
+**Before (1 ft): every result in this log, and every result in the open docs PRs.** Checked `settings.arrival_depth_ft` = 1.0 in the run reports of:
+- the 10-15 runs;
+- `rebaseline_20261018` (DWR-2801, DWR-3161);
+- `hecras_tier2_20261018` (all 10 runs, including `tier2_ccc5d38`);
+- `anuga_structures_20261015`;
+- `anuga_gmsh_20x20_48h_20261018`;
+- `anuga_gmsh_refined_72h_20261019`.
+
+The #131 scan found all 218 saved `run_report.json` files (70 dam ids) at 1.0 (`/workspace/hazard_highway_pr/arrival_runs_affected.txt`). Also at 1 ft:
+- The Hazard re-baselines on 2.18.44 / 2.18.45 (open PR #129). They re-classified those same 1 ft rasters.
+- The whole 2026-10-21 run queue (open PR #141). Its runs used main caaf850, or the HEC-RAS engine from 8d5493f, both before #131: `anuga_nddot_culverts_20261021`, `rebaseline_20261021`, HEC-RAS v2d / v2d_gmsh / v2e / v2e_gmsh_r / v2e_gmsh_r_nf, and the still-running `anuga_gmsh_refined_72h_20261021_caaf850` (d0) and `..._ko0607closed` (d).
+- So d0 and d are comparable with each other, and with the 10-19 refined run, on arrival as well.
+
+**After (0.1 ft): none yet.** The first 0.1 ft results will be Runner re-runs on main 732f597 or later. Label them with the arrival depth when they are logged.
+
+**Do the logged arrival numbers change?** No. Nothing above is rewritten: each figure is a record of a 1 ft run. A re-run at 0.1 ft would change them, so don't compare these figures directly with a 0.1 ft run:
+- **Arrival times** (the 10-18 re-baseline's min / median / max, the HEC-RAS table's median, the 20x20 run's first / median, the Casselton "18-28 h"). At 0.1 ft, arrival comes earlier wherever the water gets deeper than 1 ft, and places 0.1-1 ft deep get a time for the first time. The latest and median arrival usually go later. The east pond's "1 ft first arrives after 35 h" is a 1 ft measure by definition, so compute it at 1 ft from the depth time series, not from a 0.1 ft arrival raster.
+- **The "≥1 ft" areas of the 10-18 re-baseline (1,802.1 / 703.0 ac) and the 20x20 run (2,416 ac).** These are `flooded_acres_over_arrival_depth` at 1 ft; those run reports have no `flooded_acres_ge_1ft`. In a 0.1 ft run, that field is the ≥0.1 ft area. Take ≥1 ft from `flooded_acres_ge_1ft` instead.
+- **Runner `receptors_flooded`** (for example the 20x20 run's 21 structures / 8.2 km road / 0.1 km rail) and velocities at receptors. These count more at 0.1 ft.
+- **The in-run fit index** in `run_report.json` `comparison`. It's now counted at 0.1 ft. The "F 0.70 at ≥1 ft" headline was computed at 1 ft, so recompute F at 1 ft to compare.
+- **Hazard `First_Arrival_hr`, the loss-of-life (Graham) estimate and the evacuation timing.** They read the Runner's arrival raster, so they change only after a Runner re-run. Re-classifying an old result with Hazard 2.18.52 changes only the Note on a blank arrival time.
+
+**What stays comparable:**
+- peak flow;
+- any-depth area (`flooded_acres`) and the fixed `flooded_acres_ge_0_1ft` / `_ge_1ft` / `_ge_2ft` areas;
+- max depth, P99 and max velocity;
+- the ND class and the TM 11 class (neither uses the arrival depth).
+
+One caveat: a run with an automatic length may now simulate longer than its 1 ft twin, which can widen the extent. Check `lisflood_runs` and the passes' `sim_time_hr` before putting an area or class change down to the hydraulics.
+
+## Early runs (10-14 to 10-15)
 | Date (UTC) | Dam / route | Code | Peak (cfs) | Flooded area (ac) | Max depth (ft) | Class | Notes |
 |---|---|---|---|---|---|---|---|
 | baseline | Absaraka DWR-2801 | before #14 | 25,801 | 5,067.0 | 13.06 | High | Trusted baseline. Storage 1,992,690 m³, exponent 1.9. The #22 default-settings run reproduced it exactly (identical raster). |
