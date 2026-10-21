@@ -143,9 +143,27 @@ Source: `Absaraka_compare/anuga_gmsh_20x20_48h_20261018/` (`compare_stats.json`,
 - This run changes duration, box, mesh, structures and ground resolution at once, so a change at the pond or Casselton can't be credited to the rail openings alone. The KO-06/07 closed sensitivity (`..._ko0607closed`, prepared, not run) isolates those two culverts.
 - Review: `qa_review_anuga_20261019/REFINED_RUN_CHECKLIST.md`; results go into `REFINED_RUN_RESULTS_TEMPLATE.md` in the same folder. Until it's reviewed, report the 48 h run against the in-run LISFLOOD (F 0.70).
 
+## ANUGA thread count in run reports (from main caaf850, Runner 3.10.47, #132)
+
+From main caaf850 (#132, merged 10-21), every ANUGA run's `_breach_model/run_report.json` records the thread count in `anuga_threads`. `run_report.md` has the same information in its "ANUGA threads" row. See USER_GUIDE.md, "ANUGA threads".
+
+**How to read it when comparing baselines:**
+- `used` is the number of threads ANUGA ran on, and `rule` says why. `automatic: min(8 CPUs - 2, 4)` is the default on the box, which gives 4 threads. `NDBREACH_ANUGA_THREADS=N` means the environment variable set it, and `set (N)` means the threads setting did.
+- `anuga_reported` is what ANUGA itself reported. If it differs from `used`, or there is a `note`, the run fell back to fewer threads, for example on a build without OpenMP. The results are still valid, but the run was slower.
+- **No `anuga_threads` entry** means the run is older than caaf850. If its threads setting was 0 (the default), ANUGA ran on **one** thread. #132 found that the 20x20 48 h run (`anuga_gmsh_20x20_48h_20261018`) and the refined 72 h run (`anuga_gmsh_refined_72h_20261019`) both used 1 of 8 cores.
+
+**Reproducibility: the thread count doesn't change results.** The evidence is in `/workspace/anuga_threads_pr/real_check.log` and `DamSafety_Runner/tests/test_anuga_threads.py`:
+- On real ANUGA 4.0.1 with 87,749 triangles and 600 s simulated, 1 and 4 threads gave bit-identical depth, velocity, arrival and WSE (max abs difference 0).
+- A run killed at 1 thread and resumed from its checkpoint at 4 threads was bit-identical to the uninterrupted 1-thread run.
+
+So a difference between a caaf850 run and an older ANUGA run comes from other changes, not from the threads. Examples are the Runner 3.10.30/3.10.31 mesh and bed changes, M6's top of dam, the culverts, the box and the duration. The same release also rewrote the per-step envelope update, and that was also bit-identical in the tests. Only wall-clock times change: 4 threads were about 2.6x faster in the check above, and about 2x on Grok Bot's 262k-triangle benchmark. Don't compare run times across a change in `used`. Windows and macOS builds were not tested.
+
+**First run with the field:** the 10-21 NDDOT culvert ANUGA run (queue item a, `Absaraka_compare/anuga_nddot_culverts_20261021/`) logged `ANUGA threads: 4 (automatic: min(8 CPUs - 2, 4))` (`/workspace/run_queue_20261021/STATUS.md`). The queue clears `NDBREACH_ANUGA_THREADS` and `OMP_NUM_THREADS` for every job, so the queued runs all use the automatic 4.
+
 ## Open items
 - **Refined ANUGA rerun (Absaraka) running** (see above). Review it with `REFINED_RUN_CHECKLIST.md`, then the KO-06/07 closed variant.
 - **DWR-3161 is on hold:** flagged Low (#93), with breach runs refused. It waits for DWR's answers to the record questions in #93. Its 10-18 TIER 0 numbers aren't used.
 - **Merged 10-19:** #92 (run-report metrics and the opt-in water-body mask, Runner 3.10.27, closes #91) and #96 (HEC-RAS timeouts on the wall clock, Runner 3.10.26). Main is now Runner 3.10.32 (#94, which changes the default top of dam to the 98th percentile within 30 m, M6), so runs on current main are not directly comparable with the runs above. See CHANGELOG.md.
 - HEC-RAS vs ANUGA/TIER 0 area gap: recompute HEC-RAS depth on the 40 m DEM, compare at matching thresholds and sim times, and check Manning's n.
+- **From caaf850 (Runner 3.10.47),** ANUGA runs record `anuga_threads` and use 4 threads on the box by default. The results are bit-identical to 1 thread; only the run time changes.
 - Re-baseline numbers aren't yet adopted as the trusted baseline. That needs the user's approval. Note that they were run with the non-default culvert burn on.
