@@ -438,7 +438,8 @@ def apply_acer11_style(lyr):
         raster_shader.setRasterShaderFunction(ramp_shader)
         renderer = QgsSingleBandPseudoColorRenderer(lyr.dataProvider(), 1, raster_shader)
         lyr.setRenderer(renderer)
-        if lyr.renderer():
+        # QgsSingleBandPseudoColorRenderer has no invalidateCache() on QGIS 3.34
+        if lyr.renderer() and hasattr(lyr.renderer(), "invalidateCache"):
             lyr.renderer().invalidateCache()
         lyr.triggerRepaint()
         return True

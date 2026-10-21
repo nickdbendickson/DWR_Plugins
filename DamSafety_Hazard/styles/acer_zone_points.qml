@@ -2,9 +2,9 @@
 <qgis version="3.28.0-Firenze" styleCategories="Symbology">
   <renderer-v2 type="categorizedSymbol" attr="ACER_Zone" forceraster="0" symbollevels="0" enableorderby="0">
     <categories>
-      <category value="HIGH" symbol="0" label="HIGH danger" render="true"/>
-      <category value="JUDGMENT" symbol="1" label="JUDGMENT" render="true"/>
-      <category value="LOW" symbol="2" label="LOW danger" render="true"/>
+      <category value="HIGH" symbol="0" label="HIGH DANGER ZONE" render="true"/>
+      <category value="JUDGMENT" symbol="1" label="JUDGMENT ZONE" render="true"/>
+      <category value="LOW" symbol="2" label="LOW DANGER ZONE" render="true"/>
       <category value="DRY" symbol="3" label="dry" render="true"/>
       <category value="" symbol="4" label="other" render="true"/>
     </categories>

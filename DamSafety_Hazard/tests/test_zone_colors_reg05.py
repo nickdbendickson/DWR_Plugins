@@ -38,6 +38,10 @@ def _rgb(hexcol):
     return "{},{},{}".format(int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 
+# the standard's zone names (REG_05.2026 Figures 5.1 / 5.2 legends)
+ZONE_NAMES = {"high": "HIGH DANGER ZONE", "judgment": "JUDGMENT ZONE", "low": "LOW DANGER ZONE"}
+
+
 def _read(root, rel):
     p = os.path.join(root, rel)
     if not os.path.exists(p):
@@ -78,6 +82,10 @@ def check_text(root=ROOT):
                              .format(val, STD[key]), q, re.I):
                 probs.append("{}/styles/acer_zones.qml value {} is not {}".format(p, val,
                                                                                   STD[key]))
+            lab = "{} {}".format(val, ZONE_NAMES[key])
+            if 'label="{}"'.format(lab) not in q:
+                probs.append("{}/styles/acer_zones.qml value {} label is not '{}'".format(
+                    p, val, lab))
         q = _read(root, p + "/styles/acer_zone_points.qml")
         if q is None:
             probs.append(p + "/styles/acer_zone_points.qml missing")
@@ -89,6 +97,10 @@ def check_text(root=ROOT):
             if not sym or sym.group(1) != _rgb(STD[key]) + ",255":
                 probs.append("{}/styles/acer_zone_points.qml {} is {} (want {},255)".format(
                     p, cat, sym.group(1) if sym else "?", _rgb(STD[key])))
+            if not re.search(r'<category value="{}" [^>]*label="{}"'.format(cat, ZONE_NAMES[key]),
+                             q):
+                probs.append("{}/styles/acer_zone_points.qml {} label is not '{}'".format(
+                    p, cat, ZONE_NAMES[key]))
     for p in ("DamSafety_Runner", "DamSafety_Screening"):
         s = _read(root, p + "/core/nd_hazard.py")
         if s is None:
@@ -98,6 +110,9 @@ def check_text(root=ROOT):
             if body.lower().count(STD[key].lower()) < 2:      # zone fill + legend swatch
                 probs.append("{}/core/nd_hazard.py chart_svg lacks {} for {}".format(
                     p, STD[key], key))
+            if '"{}"'.format(ZONE_NAMES[key]) not in body:
+                probs.append("{}/core/nd_hazard.py chart_svg legend lacks '{}'".format(
+                    p, ZONE_NAMES[key]))
     s = _read(root, "DamSafety_Hazard/xlsx_zone_fill.py")       # 2.18.47 XLSX zone cell fills
     if s is not None and not re.search(r'ZONE_FILLS_REG05 = \{{1: "{}", 2: "{}", 3: "{}"\}}'.format(
             STD["high"], STD["judgment"], STD["low"]), s, re.I):

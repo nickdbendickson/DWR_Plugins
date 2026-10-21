@@ -26,7 +26,7 @@ that already has the crest changes nothing. Nothing here has been run in a real 
 |---|---|
 | `Depth (Max).tif` | ft |
 | `Velocity (Max).tif` | ft/s |
-| `Arrival Time.tif` | hours after breach initiation, at the arrival depth (default 1 ft) |
+| `Arrival Time.tif` | hours after breach initiation, at the arrival depth (default 0.1 ft since 3.10.45, the ND hazard 'any depth', so every wet structure has an arrival time; 1 ft before - re-run older results to fill the shallow ones) |
 | `WSE (Max).tif` | ft (DEM datum) |
 | `Baseline Depth (Max).tif` etc. | flood scenario: the same flood without the breach |
 | `Incremental Depth (Max).tif`, `Incremental WSE Rise (Max).tif` | flood scenario: with minus without (ND 6.4) |
