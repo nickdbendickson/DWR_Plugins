@@ -74,6 +74,7 @@ from . import structures as ST
 from . import sensitivity as SE
 from . import parcelhints as PH
 from . import facility_review as FR
+from . import footprints as FP
 
 DEFAULTS = {
     "output_folder": None, "dam_folder": None, "dam_name": None, "scenarios": [],
@@ -145,6 +146,9 @@ DEFAULTS.update(SE.CONSEQ_DEFAULTS)
 DEFAULTS.update(PH.DEFAULTS)
 DEFAULTS.update({
     "download_trailer_parks": True,     # OpenStreetMap mobile-home parks (residential=trailer_park)
+    # 2.18.49: building geometry - Microsoft footprints (outputs/_downloads, never the offline
+    # pack), "auto" geometry order, FEMA scene offsets moved only when switched on
+    "download_ms_footprints": True, "outline_geometry": "auto", "fema_scene_shift": False,
     "fast_sampling": False,             # vectorised ring / band cell selection (fastsample.py)
     "zone_overviews": True, "input_overviews": False,       # raster pyramids
     "report_imagery": False,            # aerial imagery under the maps of report / map book
@@ -470,7 +474,7 @@ _EVAL_KEYS = ("extent_buffer_ft", "keep_dry", "download_nsi", "download_address"
               "sample_area", "sensitivity", "termination", "refresh_data", "local_data",
               "mobile_shape", "mobile_max_width_ft", "mobile_min_ratio", "mobile_min_length_ft",
               "mobile_max_length_ft", "mobile_lot_units", "download_trailer_parks",
-              "fast_sampling")
+              "fast_sampling", "download_ms_footprints", "outline_geometry", "fema_scene_shift")
 _EVAL_LAYERS = ("road_layer", "aadt_layer", "rail_layer", "crossing_layer",
                 "extra_outline_layer", "dam_layer", "lifeline_layer", "centerline_layer",
                 "model_boundary_layer")
@@ -952,6 +956,23 @@ LOCAL_CFG_KEYS = {"roads": "road_layer", "aadt": "aadt_layer", "rail": "rail_lay
                   "parcels": "parcel_layer", "centerline": "centerline_layer"}
 
 
+def _has_ms_outlines(cfg, osm, loc):
+    """2.18.49: a Microsoft footprint layer is already among the outline sources (project /
+    data-folder layer) - then it is not downloaded."""
+    for lyr in (cfg.get("extra_outline_layer"), osm if not isinstance(osm, str) else None,
+                (loc or {}).get("usa")):
+        if lyr is None:
+            continue
+        try:
+            names = [f.name() for f in lyr.fields()]
+            if FP.outline_kind("", "{} {}".format(lyr.name(), lyr.source()), names) == \
+                    FP.KIND_MS:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _apply_local_data(run, cfg):
     """v2.9: open the layers of cfg["local_data"] (the Data & Output tab's folder search)
     and let them take the place of the QGIS layer-tree layer and of the download: order
@@ -1105,8 +1126,17 @@ def _evaluate(run, cfg, scenarios, breaches):
     # ---- structure inventory -----------------------------------------------
     run.tick(20, "Building the structure inventory\u2026")
     rules = ST.mobile_rules_from_cfg(cfg)          # v2.9: manufactured-home rules
+    scene_report = {}
     structs = build_inventory(inputs["outlines"], inputs["points"], acrs, run.ctx,
-                              progress_cb=run.stage(20, 28), clip=clip, mobile_rules=rules)
+                              progress_cb=run.stage(20, 28), clip=clip, mobile_rules=rules,
+                              geometry=cfg.get("outline_geometry") or "auto",
+                              scene_shift=bool(cfg.get("fema_scene_shift")),
+                              scene_report=scene_report)
+    for info in sorted(scene_report.values(), key=lambda i: i["scene"]):
+        if info["flagged"]:
+            run.log(">>> WARNING: " + FP.describe_scene(info) + (
+                " - outlines moved by the offset" if cfg.get("fema_scene_shift") else
+                " - flagged (Inventory QA); outlines not moved"))
     if inputs.get("camps") is not None:
         camps = campground_records(inputs["camps"], acrs, run.ctx, clip,
                                    start_id=len(structs) + 1)
@@ -1987,6 +2017,7 @@ def _collect_inputs(run, clip):
             cfg["download_dams"] = cfg["download_lifelines"] = False
             cfg["download_camps"] = cfg["download_flowlines"] = False
             cfg["download_places"] = cfg["download_trailer_parks"] = False
+            cfg["download_ms_footprints"] = False
             cfg["download_crossings_structures"] = False
         if cfg["download_nsi"] and "nsi" not in loc:
             want("nsi", "NSI", fetch_nsi, ext4326, out)
@@ -2034,6 +2065,8 @@ def _collect_inputs(run, clip):
             want("xosm", "OpenStreetMap crossings", fetch_osm_crossings, ext4326, out)
         if cfg.get("download_camps") and "camps" not in loc:
             want("camps", "OpenStreetMap campgrounds", fetch_osm_camps, ext4326, out)
+        if cfg.get("download_ms_footprints") and not _has_ms_outlines(cfg, osm, loc):
+            want("ms", "Microsoft building footprints", FP.fetch_ms_footprints, ext4326, out)
         if cfg.get("download_trailer_parks", True):
             want("parks", "OpenStreetMap mobile-home parks", fetch_osm_trailer_parks, ext4326,
                  out)
@@ -2107,6 +2140,16 @@ def _collect_inputs(run, clip):
         outlines.append(("OUTLINES", extra))
         run.sources.append("Additional building outlines: project layer '{}'".format(
             extra.name()))
+    if "ms" in got:
+        lyr, n, path = result("ms")
+        if lyr is not None and n:
+            outlines.append((FP.MS_FAMILY, lyr))
+            run.sources.append("Microsoft Global ML Building Footprints (ODbL): {} outlines "
+                               "({}) - building geometry; FEMA attributes matched onto them"
+                               .format(n, os.path.basename(path)))
+        elif lyr is None:
+            run.log(">>> NOTE: Microsoft building footprints not available - FEMA USA "
+                    "Structures outlines give the building geometry")
 
     # ---- roads, rail, crossings --------------------------------------------------
     if rail is None and "rail" in got:
