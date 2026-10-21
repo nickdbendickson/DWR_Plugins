@@ -40,7 +40,8 @@ GMSH_MESHERS = ("gmsh", "gmsh_or_default")
 # LISFLOOD-FP's OpenMP does by itself) left ANUGA single-threaded. resolve_threads turns 0
 # into a real count: NDBREACH_ANUGA_THREADS when set (> 0), else min(CPUs - 2, AUTO_THREADS_MAX)
 # (at least 1; the box is shared, and 4 threads already give ~2x). An explicit count > 0 is
-# used as given. The thread count never changes the results (bit-identical, see
+# used as given (3.10.49: at most the CPUs this process may use; inf / nan / decimals / text
+# are ignored with a note). The thread count never changes the results (bit-identical, see
 # tests/test_anuga_threads.py) and is not part of the checkpoint fingerprint.
 THREADS_ENV = "NDBREACH_ANUGA_THREADS"
 AUTO_THREADS_MAX = 4
@@ -56,32 +57,60 @@ def cpu_count():
     return max(1, int(n))
 
 
+def _whole_count(v):
+    """(n, problem): v as a whole number, or (None, why not). 3.10.49: inf / nan / text /
+    decimals such as 2.7 are invalid (2.7 used to become 2, inf raised OverflowError)."""
+    if v is None or isinstance(v, bool):
+        return None, "not a number"
+    if isinstance(v, int):
+        return v, ""
+    try:
+        f = float(str(v).strip())
+    except (TypeError, ValueError):
+        return None, "not a number"
+    if f != f or f in (float("inf"), float("-inf")):
+        return None, "not a finite number"
+    if f != int(f):
+        return None, "not a whole number"
+    return int(f), ""
+
+
 def resolve_threads(threads, env=None, cpus=None):
     """(n, rule): the ANUGA OpenMP thread count for a requested `threads` and the reason.
     threads > 0 -> threads ("set"). 0 / None -> NDBREACH_ANUGA_THREADS from `env` (default
-    os.environ) when it is a whole number > 0, else max(1, min(cpus - 2, 4)) ("auto")."""
+    os.environ) when it is a whole number > 0, else max(1, min(cpus - 2, 4)) ("auto").
+    3.10.49: an explicit or NDBREACH_ANUGA_THREADS count above the CPUs this process may use
+    is clamped to them; a requested count or env value that is not a finite whole number
+    (inf, nan, 2.7, text) is ignored with a note in the rule and the automatic count is used.
+    Never raises."""
     env = os.environ if env is None else env
-    try:
-        t = int(threads or 0)
-    except (TypeError, ValueError):
-        t = 0
-    if t > 0:
-        return t, "set ({})".format(t)
-    raw = (env.get(THREADS_ENV) or "").strip()
-    bad = ""
-    if raw:
-        try:
-            v = int(float(raw))
-            if v > 0:
-                return v, "{}={}".format(THREADS_ENV, v)
-            bad = "; {}={!r} ignored (not > 0)".format(THREADS_ENV, raw)
-        except ValueError:
-            bad = "; {}={!r} ignored (not a number)".format(THREADS_ENV, raw)
     n = cpu_count() if cpus is None else max(1, int(cpus))
+    notes = ""
+    if threads is None or (isinstance(threads, str) and not threads.strip()):
+        t = 0
+    else:
+        t, why = _whole_count(threads)
+        if t is None:
+            notes += "; threads={!r} ignored ({})".format(threads, why)
+            t = 0
+    if t > 0:
+        if t > n:
+            return n, "set ({}), clamped to the {} CPUs".format(t, n)
+        return t, "set ({})".format(t)
+    raw = str(env.get(THREADS_ENV) or "").strip()
+    if raw:
+        v, why = _whole_count(raw)
+        if v is None:
+            notes += "; {}={!r} ignored ({})".format(THREADS_ENV, raw, why)
+        elif v <= 0:
+            notes += "; {}={!r} ignored (not > 0)".format(THREADS_ENV, raw)
+        elif v > n:
+            return n, "{}={}, clamped to the {} CPUs{}".format(THREADS_ENV, v, n, notes)
+        else:
+            return v, "{}={}{}".format(THREADS_ENV, v, notes)
     used = max(1, min(n - AUTO_THREADS_SPARE, AUTO_THREADS_MAX))
     return used, "automatic: min({} CPUs - {}, {}){}".format(n, AUTO_THREADS_SPARE,
-                                                             AUTO_THREADS_MAX, bad)
-
+                                                             AUTO_THREADS_MAX, notes)
 
 
 class AnugaSettings:

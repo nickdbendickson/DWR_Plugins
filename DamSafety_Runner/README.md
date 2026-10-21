@@ -102,9 +102,15 @@ core. From 3.10.47 the Runner gives ANUGA a real count (`core/anuga_model.resolv
 
 | Threads setting (provider setting `NDBREACH_THREADS`, tool parameter THREADS) | ANUGA uses |
 |---|---|
-| > 0 | that many |
-| 0 and `NDBREACH_ANUGA_THREADS` > 0 | `NDBREACH_ANUGA_THREADS` |
+| > 0 | that many, at most the CPUs (3.10.49: a larger count is clamped, with a note) |
+| 0 and `NDBREACH_ANUGA_THREADS` a whole number > 0 | `NDBREACH_ANUGA_THREADS`, at most the CPUs |
 | 0 | min(CPUs - 2, 4), at least 1 (the box is shared; 4 threads are about 2x) |
+
+3.10.49: a threads value or `NDBREACH_ANUGA_THREADS` that is not a finite whole number (`inf`,
+`nan`, `2.7`, text) is ignored, and the automatic count is used; the `ANUGA threads` line and
+`run_report.json["anuga_threads"]["rule"]` say what was ignored and why. ("CPUs" = the CPUs this
+process may use, its affinity mask where the OS has one.) `ndbreach_cli.py --threads` follows
+the same rules for ANUGA; only LISFLOOD-FP takes 0 as "all cores".
 
 The count goes into the job file, the worker's `OMP_NUM_THREADS` and ANUGA's
 `set_omp_num_threads` (also after a checkpoint resumes). `runner.log` has an

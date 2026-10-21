@@ -44,7 +44,7 @@ class _Omp:
 def anuga_threads_resolve_rule():
     r = AM.resolve_threads
     assert r(3, env={}, cpus=8)[0] == 3                          # explicit: as given
-    assert r(12, env={AM.THREADS_ENV: "2"}, cpus=8)[0] == 12      # explicit beats the env
+    assert r(6, env={AM.THREADS_ENV: "2"}, cpus=8)[0] == 6        # explicit beats the env
     assert r(0, env={}, cpus=8) == (4, "automatic: min(8 CPUs - 2, 4)")
     assert r(None, env={}, cpus=5)[0] == 3
     assert r(0, env={}, cpus=2)[0] == 1 and r(0, env={}, cpus=1)[0] == 1
@@ -57,6 +57,7 @@ def anuga_threads_resolve_rule():
     assert r(0, env={AM.THREADS_ENV: " "}, cpus=8)[0] == 4
     assert r("x", env={}, cpus=8)[0] == 4
     assert AM.cpu_count() >= 1
+    assert r(4.0, env={}, cpus=8)[0] == 4 and r("3", env={}, cpus=8)[0] == 3
     n, _ = r(0, env={})                       # this machine
     assert 1 <= n <= AM.AUTO_THREADS_MAX
 
@@ -232,3 +233,67 @@ def anuga_threads_real_anuga_1_vs_4_threads_bit_identical():
         assert out[1][0][k].tobytes() == out[4][0][k].tobytes(), k
     assert out[1][1]["omp_threads"] == 1 and out[4][1]["omp_threads"] == 4, (
         out[1][1].get("omp_threads"), out[4][1].get("omp_threads"))
+
+
+# ---------------------------------------- 3.10.49: Docs & QA follow-ups to #132 (see #135)
+@test
+def anuga_threads_env_inf_nan_and_garbage_fall_back_with_a_note():
+    """(1) NDBREACH_ANUGA_THREADS=inf raised OverflowError (int(float('inf'))) and stopped the
+    run; inf / nan / garbage are now ignored with a note and the automatic count is used."""
+    r = AM.resolve_threads
+    for bad, why in (("inf", "not a finite number"), ("-inf", "not a finite number"),
+                     ("Infinity", "not a finite number"), ("nan", "not a finite number"),
+                     ("lots", "not a number"), ("1e400", "not a finite number"),
+                     ("4 threads", "not a number")):
+        n, rule = r(0, env={AM.THREADS_ENV: bad}, cpus=8)
+        assert n == 4 and rule.startswith("automatic"), (bad, n, rule)
+        assert "ignored ({})".format(why) in rule and repr(bad) in rule, (bad, rule)
+    # an explicit request that is not a finite whole number never raises either
+    for bad in (float("inf"), float("nan"), "inf", object()):
+        n, rule = r(bad, env={}, cpus=8)
+        assert n == 4 and "ignored" in rule, (bad, rule)
+
+
+@test
+def anuga_threads_decimals_are_rejected_not_truncated():
+    """(2) 2.7 used to become 2; a count must be a whole number."""
+    r = AM.resolve_threads
+    for bad in ("2.7", "0.5", "3.000001"):
+        n, rule = r(0, env={AM.THREADS_ENV: bad}, cpus=8)
+        assert n == 4 and "ignored (not a whole number)" in rule, (bad, rule)
+    n, rule = r(2.7, env={}, cpus=8)
+    assert n == 4 and "threads=2.7 ignored (not a whole number)" in rule, rule
+    n, rule = r(2.7, env={AM.THREADS_ENV: "3"}, cpus=8)       # falls back to the env
+    assert n == 3 and rule.startswith("NDBREACH_ANUGA_THREADS=3") and "2.7" in rule, rule
+    assert r(0, env={AM.THREADS_ENV: "6.0"}, cpus=8)[0] == 6  # a whole number written 6.0
+    assert r(0, env={AM.THREADS_ENV: " 5 "}, cpus=8)[0] == 5
+
+
+@test
+def anuga_threads_count_is_capped_at_the_cpus():
+    """(4) 64 threads on 8 CPUs: clamped to 8 with a note (explicit and env)."""
+    r = AM.resolve_threads
+    n, rule = r(64, env={}, cpus=8)
+    assert n == 8 and rule == "set (64), clamped to the 8 CPUs", rule
+    n, rule = r(0, env={AM.THREADS_ENV: "64"}, cpus=8)
+    assert n == 8 and rule == "NDBREACH_ANUGA_THREADS=64, clamped to the 8 CPUs", rule
+    assert r(8, env={}, cpus=8) == (8, "set (8)")               # at the limit: as given
+    assert r(0, env={AM.THREADS_ENV: "8"}, cpus=8) == (8, "NDBREACH_ANUGA_THREADS=8")
+    assert r(3, env={}, cpus=1)[0] == 1
+    n, _ = r(10 ** 6, env={})                                    # this machine
+    assert n == AM.cpu_count(), n
+
+
+@test
+def ndbreach_cli_threads_help_states_the_anuga_rule():
+    """(3) --threads said '(0 = all)', true only for LISFLOOD-FP since 3.10.47."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(AM.__file__))),
+                        "scripts", "ndbreach_cli.py")
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+    assert '"model threads (0 = all)"' not in src
+    i = src.index('"--threads"')
+    seg = src[i:i + 400]
+    for w in ("LISFLOOD-FP uses all cores", "NDBREACH_ANUGA_THREADS", "CPUs - 2, at most 4",
+              "clamped"):
+        assert w in seg, (w, seg)
