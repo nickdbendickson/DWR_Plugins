@@ -31,6 +31,7 @@ from .core import preflight as pf
 from .core import review as rv
 from .damsuite import settings as DS
 from .tokens import TOKENS
+from .tool_dialog import exec_tool_dialog
 from .ui_widgets import Collapsible, InfoBanner, StageStrip
 
 TITLE = "DamSafety Screening"
@@ -1165,7 +1166,7 @@ class NDDamScreeningDialog(QDialog):
         from .core.dem_download import county_names
         county = self._download_county()
         names = county_names()
-        processing.execAlgorithmDialog("nddam:downloaddem", {
+        exec_tool_dialog(processing, "nddam:downloaddem", {
             "SOURCE": self.dem_source.currentIndex() if hasattr(self, "dem_source") else 0,
             "RES": self.dem_res.currentIndex() if hasattr(self, "dem_res") else 0,
             "SCOPE": scope,
@@ -1178,7 +1179,7 @@ class NDDamScreeningDialog(QDialog):
             "IMAGINE": self.dem_imagine.isChecked() if hasattr(self, "dem_imagine") else True,
             "WORK_CRS": self._work_crs() if hasattr(self, "work_crs") else "",
             "OUT": folder,
-        })
+        }, parent=self)
 
 
     def _open_offline_layers(self):
@@ -1189,10 +1190,10 @@ class NDDamScreeningDialog(QDialog):
         folder = self.work_edit.text().strip() or os.path.expanduser("~")
         out = os.path.join(folder, "{}_offline.gpkg".format(county.replace(" ", "_")))
         self._log("Offline layers: county {} -> {}".format(county, out))
-        processing.execAlgorithmDialog("nddam:downloadlayers", {
+        exec_tool_dialog(processing, "nddam:downloadlayers", {
             "COUNTY": names.index(county) if county in names else 0,
             "OUT": out,
-        })
+        }, parent=self)
 
     def _build_settings_tab(self):
         from . import suite_settings as SS
@@ -1931,7 +1932,7 @@ class NDDamScreeningDialog(QDialog):
                 import processing
             except ImportError:
                 from qgis import processing
-            processing.execAlgorithmDialog(aid, params)
+            exec_tool_dialog(processing, aid, params, parent=self)
         except Exception as e:                                   # noqa
             self._log("!!! {} could not be opened: {}".format(aid, e))
             QMessageBox.information(

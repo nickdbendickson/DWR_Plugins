@@ -5,10 +5,12 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 hasProcessingProvider=yes
 description=Popup window (Run tab, settings grid, preflight check, run one dam, review) and Processing tools for batch screening of North Dakota dams and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching (3DEP / local LiDAR), storage estimation, breach direction and hydrographs, quick triage, 2D flood simulation (LISFLOOD-FP or built-in engine, reservoir-in-grid option, parallel), hazard classification under ND Dam Safety Standards Sec. 5.2/5.3 with the ACER TM 11 depth-velocity charts (same rules module as ND Dam Breach Runner), hand-off of chosen dams to ND Dam Breach Runner for detailed runs, sensitivity and reports.
-version=0.17.40
+version=0.17.41
 icon=icon.svg
 category=Plugins
-changelog=0.17.40 (2026-10-20; Von Thun & Gillette parity; renumbered from 0.17.33)
+changelog=0.17.41 (2026-10-21; tool dialogs stay in front of the window)
+    * Tool dialogs opened from the window (DEM download, offline layers, the suite tools) are owned by the window and modal (new shared/ui/tool_dialog.py). Before, QGIS's execAlgorithmDialog owned them from its main window and showed them before exec_(), so they were not modal: a click on the plugin window raised it over the tool; the Runner's wizard had the same bug, fixed in Runner 3.10.63 (from the Runner's 'Model one dam' wizard (modal itself) the DEM download could not be clicked at all, the wizard popped up in front of it). No step, default or number changes.
+    0.17.40 (2026-10-20; Von Thun & Gillette parity; renumbered from 0.17.33)
     * Von Thun & Gillette (1990) breach width: Cb now steps at 1,000 / 5,000 / 10,000 ac-ft (a volume on a limit is in the larger class), the method's limits and the Runner's (core/breach.py vtg_1990). The rounded m3 limits used before (1.23e6 / 6.17e6 / 1.23e7 m3) put reservoirs of 997.2-1,000, 5,000-5,002 and 9,972-10,000 ac-ft in the next class, so their VTG-E / VTG-R breach was 12.2-24.4 m wider than the Runner's. Other volumes and the other methods are unchanged. New tests/test_vtg_parity.py compares the two plugins on both sides of each limit.
     0.17.39 (2026-10-20; gdal.Warp without source overviews; renumbered from 0.17.35)
     * Terrain downsampled without the source's overviews (gdalwarp -ovr NONE; new core/warp_opts.py, the same file as the Runner's). gdal.Warp's default (-ovr AUTO) read the nearest overview of a 1 m tile or VRT when warping to a coarser cell. TerrainLoader.load (the larger-clip terrain), Find Ponds' terrain warp and its local-DEM clip, the terrain cache's local-DEM clip and Download DEM's local DEM (write_local_dem) now read the full-resolution cells. Results from DEMs WITH overviews can shift slightly (typically 1-2 cm, up to 5-12 cm mean |dz| for NEAREST overviews); a DEM without overviews is unchanged. Test: tests/test_warp_no_overviews.py.
