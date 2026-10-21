@@ -92,11 +92,15 @@ def anuga_default_mesher_job_file_is_byte_identical_to_main():
 def _sha_threads0(p):
     """3.10.47: the job file carries the resolved ANUGA thread count (resolve_threads), where
     main's pinned file had threads = 0. Everything else must stay byte-identical: the sha256
-    of the same file re-saved with threads = 0 (np.savez writes the keys in the same order)."""
+    of the same file re-saved with threads = 0 (np.savez writes the keys in the same order)
+    and, since 3.10.55, without the 'edge_bc' key."""
     with np.load(p) as z:
         d = {k: z[k] for k in z.files}
     assert int(d["threads"]) == AM.resolve_threads(0)[0] >= 1, d["threads"]
     d["threads"] = np.asarray(0, d["threads"].dtype)
+    # 3.10.55: the job names its outer-edge condition ('outflow', the new default; main's
+    # pinned file had none and the worker used Transmissive_boundary); dropped for the pin
+    assert str(d.pop("edge_bc")) == "outflow"
     q = p + ".threads0.npz"
     np.savez(q, **d)
     return _sha(q)

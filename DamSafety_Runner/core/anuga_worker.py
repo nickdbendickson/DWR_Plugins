@@ -297,7 +297,11 @@ def outflow_boundary_class(anuga):
     cls = globals().get("Outflow_boundary")
     base = getattr(anuga, "Boundary", None)
     if base is None:
-        from anuga.abstract_2d_finite_volumes.generic_boundary_conditions import Boundary as base
+        try:
+            from anuga.abstract_2d_finite_volumes.generic_boundary_conditions import Boundary \
+                as base
+        except ImportError:         # the tests' stand-in anuga
+            base = object
     if cls is not None and issubclass(cls, base):
         return cls
 
@@ -306,7 +310,8 @@ def outflow_boundary_class(anuga):
         water that would enter it: a closed or clipped edge never gains water."""
 
         def __init__(self, domain=None):
-            base.__init__(self)
+            if base is not object:
+                base.__init__(self)
             if domain is None:
                 raise Exception("Domain must be specified for the outflow boundary")
             self.domain = domain
