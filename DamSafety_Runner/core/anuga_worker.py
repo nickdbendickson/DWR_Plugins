@@ -12,6 +12,9 @@ job.npz holds (all SI, coordinates in the model CRS):
   inlet           (2, 2) line across the flow just below the dam
   hyd_t, hyd_q    breach hydrograph, s and m3/s
   sim_time, yieldstep, arrival_depth, velocity_min_depth, algorithm, threads
+                  (threads: ANUGA's OpenMP thread count, set with set_omp_num_threads and
+                  OMP_NUM_THREADS; 0 = ANUGA's own default, which is ONE thread in ANUGA 4.
+                  From 3.10.47 the Runner always writes a count > 0, resolve_threads)
   out_x0, out_y0, out_dx, out_nx, out_ny   grid the results are written on
 optional:
   init_depth      grid like dem: initial water depth (m), ponds that start full
@@ -57,6 +60,11 @@ import sys
 import time
 
 import numpy as np
+
+try:                    # 3.10.50: the worker runs as a script (python anuga_worker.py ...)
+    from . import omp_probe
+except ImportError:
+    import omp_probe
 
 
 def bilinear(dem, x0, y0, dx, x, y):
@@ -160,6 +168,27 @@ class Constant:
         return self.value
 
 
+def envelope_update(stage, elev, xm, ym, hmax, vmax, wmax, arr, vmin_depth, arrival_depth,
+                    get_time):
+    """One time step of the Envelope operator, in place: max depth, max speed (where at
+    least vmin_depth deep), max wet WSE, first time (h) at arrival_depth. 3.10.47: no full
+    np.where / zeros arrays and the speed only on the deep triangles (the same numbers as
+    before, bit for bit: tests/test_anuga_threads.py); serial numpy, ~20 % of a step at 8
+    OpenMP threads before, most of what is left is np.hypot."""
+    h = stage - elev
+    np.maximum(hmax, h, out=hmax)
+    np.maximum(wmax, stage, out=wmax, where=h > 0.001)
+    idx = np.flatnonzero(h >= vmin_depth)
+    if idx.size:
+        sp = np.hypot(xm[idx], ym[idx])
+        sp /= h[idx]
+        vmax[idx] = np.maximum(vmax[idx], sp)
+    new = np.isnan(arr)
+    new &= h >= arrival_depth
+    if new.any():
+        arr[new] = get_time() / 3600.0
+
+
 def envelope_class(anuga):
     """The Envelope operator class (needs anuga.Operator, imported only in the ANUGA
     Python). Defined once and bound at module level under its own name so that a pickled
@@ -184,16 +213,9 @@ def envelope_class(anuga):
             self.ym = dom.quantities["ymomentum"].centroid_values
 
         def __call__(self):
-            h = self.stage_c - self.elev_c
-            np.maximum(self.hmax, h, out=self.hmax)
-            np.maximum(self.wmax, np.where(h > 0.001, self.stage_c, -np.inf), out=self.wmax)
-            deep = h >= self.vmin_depth
-            sp = np.zeros_like(h)
-            sp[deep] = np.hypot(self.xm[deep], self.ym[deep]) / h[deep]
-            np.maximum(self.vmax, sp, out=self.vmax)
-            new = np.isnan(self.arr) & (h >= self.arrival_depth)
-            if new.any():
-                self.arr[new] = self.domain.get_time() / 3600.0
+            envelope_update(self.stage_c, self.elev_c, self.xm, self.ym, self.hmax,
+                            self.vmax, self.wmax, self.arr, self.vmin_depth,
+                            self.arrival_depth, self.domain.get_time)
 
         def parallel_safe(self):
             return True
@@ -208,6 +230,238 @@ def envelope_class(anuga):
     Envelope.__qualname__ = "Envelope"
     globals()["Envelope"] = Envelope
     return Envelope
+
+
+# 3.10.55: the outer boundary. Until 3.10.54 every outer edge was anuga.Transmissive_boundary:
+# the edge copies the stage AND the momentum of the triangle inside it, so the flux through the
+# edge is the interior's own flux - inward wherever the water next to the edge moves inward
+# (a pond against a clipped edge, an eddy, flow running along the edge). That edge then feeds
+# water in at the interior depth: the NDDOT culvert run (2026-10-21, mesh clipped by the
+# LISFLOOD-FP grid at its SE corner) ended with 4.15 x the breach volume in the domain (the
+# 2026-10-15 structures run 1.51 x) and a 10 ft pond along the clipped edge.
+# 'outflow' (default): transmissive where the water leaves; where its normal momentum points
+# inward, the normal component is mirrored (as Reflective_boundary does), so no water enters.
+BOUNDARY_KINDS = ("outflow", "transmissive")
+
+
+def outflow_only_momentum(xm, ym, n1, n2):
+    """Pure: boundary momentum for an outflow-only edge. (xm, ym) the interior edge momentum,
+    (n1, n2) the edge's OUTWARD unit normal. Where xm*n1 + ym*n2 < 0 (inward) the normal
+    component is mirrored (zero mass flux through the edge, as a wall); elsewhere it is kept
+    (transmissive: the water leaves freely). Returns (xm, ym, inward mask) as new arrays."""
+    xm = np.array(xm, dtype=float, copy=True)
+    ym = np.array(ym, dtype=float, copy=True)
+    n1 = np.asarray(n1, dtype=float)
+    n2 = np.asarray(n2, dtype=float)
+    un = xm * n1 + ym * n2
+    inward = un < 0.0
+    if np.any(inward):
+        xm = np.where(inward, xm - 2.0 * un * n1, xm)
+        ym = np.where(inward, ym - 2.0 * un * n2, ym)
+    return xm, ym, inward
+
+
+def apply_outflow_boundary(domain, ids, vol_ids, edge_ids, centroid=False):
+    """Sets the boundary values of the edges `ids` (domain.boundary_* indices): every quantity
+    that has boundary values copied from the triangle's edge (or centroid with
+    domain.centroid_transmissive_bc, as Transmissive_boundary), then the momentum (and the
+    velocity) made outflow-only. Returns the number of inward edges mirrored."""
+    q = domain.quantities
+
+    def src(Q):
+        return Q.centroid_values[vol_ids] if centroid else Q.edge_values[vol_ids, edge_ids]
+    for name in ("stage", "xmomentum", "ymomentum", "elevation", "height", "xvelocity",
+                 "yvelocity"):
+        Q = q.get(name)
+        if Q is not None and getattr(Q, "boundary_values", None) is not None:
+            Q.boundary_values[ids] = src(Q)
+    nrm = domain.normals
+    n1 = nrm[vol_ids, 2 * edge_ids]
+    n2 = nrm[vol_ids, 2 * edge_ids + 1]
+    xm, ym, inward = outflow_only_momentum(q["xmomentum"].boundary_values[ids],
+                                           q["ymomentum"].boundary_values[ids], n1, n2)
+    q["xmomentum"].boundary_values[ids] = xm
+    q["ymomentum"].boundary_values[ids] = ym
+    if "xvelocity" in q and "yvelocity" in q:
+        xv, yv, _ = outflow_only_momentum(q["xvelocity"].boundary_values[ids],
+                                          q["yvelocity"].boundary_values[ids], n1, n2)
+        q["xvelocity"].boundary_values[ids] = xv
+        q["yvelocity"].boundary_values[ids] = yv
+    return int(np.count_nonzero(inward))
+
+
+def outflow_boundary_class(anuga):
+    """The outflow-only boundary class (needs anuga's Boundary base, imported only in the
+    ANUGA Python); bound at module level under its own name like Envelope, so a checkpointed
+    domain pickles and loads it by name."""
+    cls = globals().get("Outflow_boundary")
+    base = getattr(anuga, "Boundary", None)
+    if base is None:
+        try:
+            from anuga.abstract_2d_finite_volumes.generic_boundary_conditions import Boundary \
+                as base
+        except ImportError:         # the tests' stand-in anuga
+            base = object
+    if cls is not None and issubclass(cls, base):
+        return cls
+
+    class Outflow_boundary(base):
+        """Transmissive for water leaving the domain, a wall (mirrored normal momentum) for
+        water that would enter it: a closed or clipped edge never gains water."""
+
+        def __init__(self, domain=None):
+            if base is not object:
+                base.__init__(self)
+            if domain is None:
+                raise Exception("Domain must be specified for the outflow boundary")
+            self.domain = domain
+            self.inward_edges = 0          # edges mirrored at the last update (diagnostic)
+
+        def __repr__(self):
+            return "Outflow_boundary"
+
+        def evaluate(self, vol_id, edge_id):
+            d = self.domain
+            if d.centroid_transmissive_bc:
+                qv = np.array(d.get_conserved_quantities(vol_id), float)
+            else:
+                qv = np.array(d.get_conserved_quantities(vol_id, edge=edge_id), float)
+            n = d.normals[vol_id, 2 * edge_id:2 * edge_id + 2]
+            xm, ym, _ = outflow_only_momentum([qv[1]], [qv[2]], [n[0]], [n[1]])
+            qv[1], qv[2] = xm[0], ym[0]
+            return qv
+
+        def evaluate_segment(self, domain, segment_edges):
+            if segment_edges is None or domain is None:
+                return
+            ids = np.asarray(segment_edges)
+            if ids.size == 0:
+                return
+            self.inward_edges = apply_outflow_boundary(
+                domain, ids, domain.boundary_cells[ids], domain.boundary_edges[ids],
+                centroid=bool(domain.centroid_transmissive_bc))
+
+    Outflow_boundary.__module__ = __name__
+    Outflow_boundary.__qualname__ = "Outflow_boundary"
+    globals()["Outflow_boundary"] = Outflow_boundary
+    return Outflow_boundary
+
+
+def make_outer_boundary(anuga, domain, kind, dem_min):
+    """(boundary object, what it is) for the outer edges: 'outflow' (default since 3.10.55),
+    'transmissive' (before 3.10.55; can feed water in) or, if neither can be made, a stage
+    far below the ground (drains, never adds water)."""
+    kind = (kind or "outflow").strip().lower()
+    try:
+        if kind == "transmissive":
+            return anuga.Transmissive_boundary(domain), "transmissive"
+        return outflow_boundary_class(anuga)(domain), "outflow"
+    except Exception as e:          # noqa: BLE001
+        return (anuga.Dirichlet_boundary([float(dem_min) - 50.0, 0.0, 0.0]),
+                "dirichlet stage {:.1f} m ({}: {})".format(float(dem_min) - 50.0, kind,
+                                                          str(e)[:80]))
+
+
+# 3.10.55 (review): ANUGA exposes the boundary flux only as ONE net number. Its DE flux kernel
+# adds every boundary edge's flux into domain.boundary_flux_sum (one value per sub-step, all
+# boundary tags together) and boundary_flux_integral_operator integrates that; there is no
+# per-edge or per-tag flux, so gross edge inflow and outflow cannot be reported separately
+# without re-computing the edge fluxes outside the solver. What the worker reports instead:
+# the net boundary integral (+ = in), ANUGA's own conservation residual
+# V_end - V_start - boundary integral - operators (inlet, culverts), and, with outflow-only
+# edges, how many edges had inward-moving water that the boundary mirrored (where a
+# transmissive edge would have let water in).
+GROSS_EDGE_FLUX_NOTE = ("not available: ANUGA sums the flux of all boundary edges into one net "
+                        "value per sub-step (domain.boundary_flux_sum)")
+
+
+SOLVER_RESIDUAL_NOT_DE = ("not computed: the flow algorithm is not a DE algorithm (ANUGA "
+                          "computes the boundary flux integral for DE algorithms only)")
+MIRRORED_EDGES_NOTE = ("sampled at yield steps only; restarts from 0 when a run resumes from a "
+                       "checkpoint")
+
+
+def volume_balance(initial, injected, in_domain, boundary_in=None, operators=None,
+                   solver_volume=None, solver_initial=None, de=True):
+    """3.10.55: the end-of-run water balance (m3). 'ratio' = in domain / (initial + injected):
+    above 1 the domain gained water (a boundary that fed water in, or instability), below 1
+    water left through the edge. With ANUGA's boundary flux integral (DE algorithms; + = net
+    inflow): 'boundary_net_inflow_m3', 'edge_net_outflow_m3' (its loss side) and 'residual_m3'
+    = in domain - initial - injected - boundary_in. With the operators' fractional-step
+    integral (the inlet; culverts move water inside) and ANUGA's own end volume:
+    'solver_residual_m3' = solver_volume - initial - boundary_in - operators, ANUGA's
+    conservation error (water_volume_statistics), and its fraction of the supply.
+    3.10.55 review 2: solver_initial = ANUGA's own start volume (domain.volume_history[0], as in
+    report_water_volume_statistics; else `initial`); de=False (a non-DE flow algorithm): the
+    flux-integral lines are skipped and 'solver_residual' says 'not computed'."""
+    supplied = float(initial or 0.0) + float(injected or 0.0)
+    out = {"supplied_m3": round(supplied, 1), "in_domain_m3": round(float(in_domain), 1),
+           "ratio": round(float(in_domain) / supplied, 4) if supplied > 0 else None,
+           "gross_edge_flows": GROSS_EDGE_FLUX_NOTE}
+    if not de:
+        out["solver_residual"] = SOLVER_RESIDUAL_NOT_DE
+        boundary_in = None
+    if boundary_in is not None:
+        b = float(boundary_in)
+        out["boundary_net_inflow_m3"] = round(b, 1)
+        out["edge_net_outflow_m3"] = round(-b, 1) if b < 0 else 0.0
+        out["residual_m3"] = round(float(in_domain) - supplied - b, 1)
+        if operators is not None:
+            out["operators_m3"] = round(float(operators), 1)
+            v = float(in_domain if solver_volume is None else solver_volume)
+            v0 = float(initial or 0.0) if solver_initial is None else float(solver_initial)
+            out["solver_initial_m3"] = round(v0, 1)
+            res = v - v0 - b - float(operators)
+            out["solver_residual_m3"] = round(res, 1)
+            out["solver_residual_frac"] = round(res / supplied, 5) if supplied > 0 else None
+    return out
+
+
+def apply_threads(anuga, threads):
+    """Set ANUGA's OpenMP thread count (a process setting, so also needed when a checkpoint
+    resumes: a loaded domain does not run Domain.__init__, which re-reads OMP_NUM_THREADS).
+    threads <= 0: nothing is set (ANUGA's own default; job files before 3.10.47). Returns
+    (the count ANUGA reports or None, a note or ''). Never raises: a build without OpenMP
+    (or without the setter) simply runs on one thread."""
+    if threads <= 0:
+        getter = getattr(anuga, "get_omp_num_threads", None)
+        try:
+            return (int(getter()) if getter else None), ""
+        except Exception:        # noqa: BLE001
+            return None, ""
+    os.environ["OMP_NUM_THREADS"] = str(int(threads))   # Domain() reads it on creation
+    setter = getattr(anuga, "set_omp_num_threads", None)
+    note = ""
+    if setter is None:
+        note = "this ANUGA has no set_omp_num_threads; OMP_NUM_THREADS only"
+    else:
+        try:
+            try:
+                setter(threads, verbose=False)
+            except TypeError:
+                setter(threads)
+        except Exception as e:   # noqa: BLE001 - e.g. no OpenMP extension: one thread
+            note = "set_omp_num_threads failed ({}); OMP_NUM_THREADS only".format(
+                str(e)[:120])
+    getter = getattr(anuga, "get_omp_num_threads", None)
+    try:
+        return (int(getter()) if getter else None), note
+    except Exception:            # noqa: BLE001
+        return None, note
+
+
+def runtime_note(threads, rt_n, rt_name, note=""):
+    """3.10.50: add to `note` when the OpenMP runtime's count (omp_probe) is not the
+    `threads` that were asked for (> 0), or when no runtime could be read."""
+    if threads <= 0:
+        return note
+    extra = ""
+    if rt_n is None:
+        extra = "thread count not verified ({})".format(rt_name)
+    elif int(rt_n) != int(threads):
+        extra = "the OpenMP runtime ({}) reports {} thread(s), not {}".format(
+            rt_name, rt_n, threads)
+    return "; ".join(x for x in (note, extra) if x)
 
 
 def checkpoint_config(job):
@@ -439,14 +693,13 @@ def main(job_path, out_path):
     sim_time = s("sim_time")
     ystep = s("yieldstep")
     threads = int(job["threads"]) if "threads" in job else 0
-    if threads > 0:              # a process setting: also needed when a checkpoint resumes
-        setter = getattr(anuga, "set_omp_num_threads", None)
-        if setter:
-            try:
-                setter(threads, verbose=False)
-            except TypeError:
-                setter(threads)
+    omp_threads, omp_note = apply_threads(anuga, threads)
+    if threads > 0:
+        print("ANUGA OpenMP threads: {} (asked for {}){}".format(
+            omp_threads if omp_threads is not None else "?", threads,
+            "; " + omp_note if omp_note else ""), flush=True)
     Envelope = envelope_class(anuga)
+    outflow_boundary_class(anuga)      # bound by name before a checkpoint is loaded
 
     def build_domain():
         """The mesh, bed, friction, initial water, boundary, inlet and culverts."""
@@ -550,14 +803,21 @@ def main(job_path, out_path):
             domain.set_quantity("stage", expression="elevation", location="centroids")
         h0 = domain.quantities["stage"].centroid_values - domain.quantities["elevation"].centroid_values
         vol_initial = float(np.sum(np.clip(h0, 0, None) * domain.areas))
+        try:            # 3.10.55 review 2: ANUGA's own start volume (domain.volume_history[0])
+            domain.get_water_volume()
+        except Exception:                                        # noqa: BLE001
+            pass
 
         # Free outflow on the whole outer boundary. A transmissive (zero-gradient)
         # boundary reports the depth at the edge without the bias of a drained edge
         # (a fixed stage far below the ground reads about 0.1 ft shallower).
-        try:
-            Bo = anuga.Transmissive_boundary(domain)
-        except Exception:
-            Bo = anuga.Dirichlet_boundary([float(np.nanmin(dem)) - 50.0, 0.0, 0.0])
+        # 3.10.55: outflow only (see BOUNDARY_KINDS); 'transmissive' only when the job asks
+        # (job key 'edge_bc'; 'boundary' is the outer polygon)
+        Bo, bkind = make_outer_boundary(anuga, domain, str(job["edge_bc"]) if "edge_bc" in job
+                                        else "outflow", np.nanmin(dem))
+        # One boundary for the whole outer polygon: the breach enters through an Inlet_operator
+        # inside the mesh, so there is no inflow boundary to protect. If a real boundary inflow is
+        # ever added (a tributary hydrograph, a tailwater stage), edge_bc must become per tag.
         domain.set_boundary({"outflow": Bo})
 
         qfun = Hydrograph(hyd_t, hyd_q)      # = np.interp(t, hyd_t, hyd_q, right=0.0)
@@ -582,7 +842,7 @@ def main(job_path, out_path):
 
         info = {"triangles": ntri, "breaklines_used": breaklines_used,
                 "culverts": len(culverts) - len(culvert_errors), "culvert_errors": culvert_errors,
-                "initial_volume_m3": vol_initial, "elevation": elev_stats}
+                "initial_volume_m3": vol_initial, "elevation": elev_stats, "boundary": bkind}
         return domain, info
 
     # 3.10.35: opt-in checkpoints / partial results / resume (ck None = as before)
@@ -679,9 +939,17 @@ def main(job_path, out_path):
         except (ValueError, OSError, AttributeError):   # not the main thread / no SIGTERM
             old_term = None
     last_flush = time.time()
+    # 3.10.55: outflow-only edges that mirrored inward-moving water (sampled at each yield step)
+    mirror = {"boundaries": list({id(b): b for b in (getattr(domain, "boundary_map", None)
+                                                     or {}).values()
+                                  if hasattr(b, "inward_edges")}.values()), "max": 0, "steps": 0}
     try:
         for t in domain.evolve(yieldstep=ystep, finaltime=sim_time):
             print("PROGRESS {:.2f} t={:.0f}s".format(100.0 * t / sim_time, t), flush=True)
+            if mirror["boundaries"]:
+                n_in = int(sum(int(b.inward_edges) for b in mirror["boundaries"]))
+                mirror["max"] = max(mirror["max"], n_in)
+                mirror["steps"] += int(n_in > 0)
             if ck is None:
                 continue
             saved = (ck["checkpoint"] and not ckinfo.get("checkpoint_error")
@@ -738,13 +1006,55 @@ def main(job_path, out_path):
     qq = np.interp(tt, hyd_t, hyd_q)          # only what enters before the run ends
     injected = float(np.trapezoid(qq, tt)) if hasattr(np, "trapezoid") \
         else float(np.trapz(qq, tt))
+    de = str(getattr(domain, "compute_fluxes_method", "DE")) == "DE"
+    b_in = None
+    if de:                      # DE algorithms only; + = net inflow through the boundary
+        try:
+            b_in = float(domain.get_boundary_flux_integral())
+        except Exception:       # noqa: BLE001
+            b_in = None
+    try:                        # what the inlet (and any rate operator) actually added
+        fs = float(domain.get_fractional_step_volume_integral())
+    except Exception:           # noqa: BLE001
+        fs = None
+    try:
+        v_solver = float(domain.get_water_volume())
+    except Exception:           # noqa: BLE001
+        v_solver = None
+    try:                        # ANUGA's start volume (first get_water_volume, in the build)
+        v0 = float(domain.volume_history[0]) if getattr(domain, "volume_history", None) \
+            else None
+    except Exception:           # noqa: BLE001
+        v0 = None
+    balance = volume_balance(info["initial_volume_m3"], injected, vol_left, b_in, fs, v_solver,
+                             solver_initial=v0, de=de)
+    if mirror["boundaries"]:
+        balance["inward_edges_mirrored"] = {"max_edges": mirror["max"],
+                                            "yield_steps": mirror["steps"],
+                                            "note": MIRRORED_EDGES_NOTE}
     stats = {"triangles": ntri, "runtime_min": round((time.time() - t0) / 60.0, 2),
              "max_edge_depth_m": edge_depth, "volume_in_domain_m3": vol_left,
              "initial_volume_m3": info["initial_volume_m3"],
              "breaklines_used": info["breaklines_used"],
              "culverts": info["culverts"], "culvert_errors": info["culvert_errors"],
              "injected_m3": injected, "anuga_version": getattr(anuga, "__version__", "?"),
-             "algorithm": str(job["algorithm"]), "elevation": info["elevation"]}
+             "algorithm": str(job["algorithm"]), "elevation": info["elevation"],
+             "boundary": info.get("boundary", "transmissive"), "volume_balance": balance}
+    # 3.10.47: the OpenMP thread count ANUGA ran with (read back at the end: Domain() and a
+    # resumed checkpoint both go through it)
+    _getter = getattr(anuga, "get_omp_num_threads", None)
+    try:
+        stats["omp_threads"] = int(_getter()) if _getter else omp_threads
+    except Exception:            # noqa: BLE001
+        stats["omp_threads"] = omp_threads
+    # 3.10.50: the count the OpenMP runtime itself reports (get_omp_num_threads above only
+    # echoes what was asked for); a different count, or no runtime found, goes in the note
+    rt_n, rt_name = omp_probe.omp_runtime_threads()
+    stats["omp_runtime_threads"] = rt_n
+    stats["omp_runtime"] = rt_name
+    omp_note = runtime_note(threads, rt_n, rt_name, omp_note)
+    if omp_note:
+        stats["omp_note"] = omp_note
     if ck is not None:
         if ckdir and os.path.isdir(ckdir):       # finished: the pickles are not needed
             shutil.rmtree(ckdir, ignore_errors=True)

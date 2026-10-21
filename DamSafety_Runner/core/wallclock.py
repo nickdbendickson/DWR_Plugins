@@ -14,6 +14,8 @@ Deadline        elapsed = max(wall elapsed, monotonic elapsed):
                 - a forward wall-clock step looks the same as a pause and counts. Every time
                   wall and monotonic disagree by more than `margin_s` more than last reported,
                   that is logged (and kept in Deadline.events) so the run log says why.
+                timeout_s=None (3.10.48): no limit; it never expires (the clock jumps are
+                still logged), so wait() simply waits for the process.
 wait()          polls a Popen until it exits or the Deadline expires (None).
 stop_group()    SIGTERM to the process group, `grace_s` (NDBREACH_HECRAS_KILL_GRACE_S, default
                 60 s) on the wall clock for it to exit, then SIGKILL. Returns what happened.
@@ -52,7 +54,7 @@ class Deadline:
 
     def __init__(self, timeout_s, what="", log=None, wall=time.time, mono=time.monotonic,
                  margin_s=JUMP_MARGIN_S):
-        self.timeout_s = float(timeout_s)
+        self.timeout_s = None if timeout_s is None else float(timeout_s)   # None: no limit
         self.what = what
         self._log = log or (lambda m: None)
         self._wall, self._mono = wall, mono
@@ -64,7 +66,7 @@ class Deadline:
 
     @property
     def deadline_wall(self):
-        return self.t0_wall + self.timeout_s
+        return None if self.timeout_s is None else self.t0_wall + self.timeout_s
 
     def elapsed(self):
         w = self._wall() - self.t0_wall
@@ -86,6 +88,9 @@ class Deadline:
         return max(w, m)
 
     def remaining(self):
+        if self.timeout_s is None:
+            self.elapsed()                        # keeps the clock-jump log going
+            return float("inf")
         return self.timeout_s - self.elapsed()
 
     def expired(self):
@@ -94,7 +99,8 @@ class Deadline:
     def summary(self):
         """Dict for logs and reports (call after elapsed())."""
         return {"timeout_s": self.timeout_s, "started": _utc(self.t0_wall),
-                "deadline": _utc(self.deadline_wall),
+                "deadline": (None if self.deadline_wall is None else
+                             _utc(self.deadline_wall)),
                 "wall_elapsed_s": round(self.last["wall_s"], 1),
                 "monotonic_elapsed_s": round(self.last["mono_s"], 1),
                 "clock_jumps": list(self.events)}

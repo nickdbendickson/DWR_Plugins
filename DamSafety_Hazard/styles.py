@@ -8,7 +8,7 @@ from .compat import GEOM_LINE, MSG_INFO
 from .helpers import log_message
 
 COLORS = {
-    "HIGH": "#F44336", "JUDGMENT": "#FFEB3B", "LOW": "#4CAF50", "DRY": "#9E9E9E",
+    "HIGH": "#EF9897", "JUDGMENT": "#F9F4A3", "LOW": "#C4E0AD", "DRY": "#9E9E9E",
     "High": "#F44336", "Medium": "#FF9800", "Low": "#4CAF50",
     # sample locations (where the values were read)
     "Hmax_ft": "#08519C", "Vmax_ftps": "#D94801", "Arrival_hr": "#238B45",

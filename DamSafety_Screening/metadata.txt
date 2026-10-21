@@ -5,10 +5,19 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 hasProcessingProvider=yes
 description=Popup window (Run tab, settings grid, preflight check, run one dam, review) and Processing tools for batch screening of North Dakota dams and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching (3DEP / local LiDAR), storage estimation, breach direction and hydrographs, quick triage, 2D flood simulation (LISFLOOD-FP or built-in engine, reservoir-in-grid option, parallel), hazard classification under ND Dam Safety Standards Sec. 5.2/5.3 with the ACER TM 11 depth-velocity charts (same rules module as ND Dam Breach Runner), hand-off of chosen dams to ND Dam Breach Runner for detailed runs, sensitivity and reports.
-version=0.17.32
+version=0.17.39
 icon=icon.svg
 category=Plugins
-changelog=0.17.32 (2026-10-20; GUI grammar, part 2)
+changelog=0.17.39 (2026-10-20; gdal.Warp without source overviews; renumbered from 0.17.35)
+    * Terrain downsampled without the source's overviews (gdalwarp -ovr NONE; new core/warp_opts.py, the same file as the Runner's). gdal.Warp's default (-ovr AUTO) read the nearest overview of a 1 m tile or VRT when warping to a coarser cell. TerrainLoader.load (the larger-clip terrain), Find Ponds' terrain warp and its local-DEM clip, the terrain cache's local-DEM clip and Download DEM's local DEM (write_local_dem) now read the full-resolution cells. Results from DEMs WITH overviews can shift slightly (typically 1-2 cm, up to 5-12 cm mean |dz| for NEAREST overviews); a DEM without overviews is unchanged. Test: tests/test_warp_no_overviews.py.
+    0.17.38 (2026-10-20; US / State highways at least Medium, REG_05.2026 5.2.1.2(b); on #130; numbered 0.17.37 on its branch, which #133 and #134 also use)
+    * Tool 8 and triage (core/nd_hazard.py 1.2.0, the Runner's rules): an overtopped US or State highway is at least Medium whatever its AADT (5.2.1.2(b), p. 23); the AADT < 500 Low rule is for local, county and private roads. The highway is read from the road class field and, new, the road's name field (name / fullname / road_name). A flagged structure (DWR-3161) still gets its Low of record (test).
+    0.17.36 (2026-10-20; hazard tables against REG_05.2026)
+    * 'Hazard Classification Findings.csv' / .geojson (core/nd_hazard.py) have a danger_zone column after zone, with the zone names of REG_05.2026 Figures 5.1 / 5.2 (HIGH DANGER ZONE / JUDGMENT ZONE / LOW DANGER ZONE); zone keeps its values. The ND Fig 5.1 / 5.2 chart legend uses the same names. No class or default changes. 0.17.35 is #128's.
+    0.17.34 (2026-10-20; REG_05.2026 zone colours)
+    * The ND Fig 5.1 / 5.2 review charts (core/nd_hazard.py chart_svg) and styles/acer_zones.qml / acer_zone_points.qml use the colours of REG_05.2026 Figures 5.1 / 5.2: High #EF9897, Judgment #F9F4A3, Low #C4E0AD (the judgment zone was peach, the low zone nearly white; the zone rasters were Material red / yellow / green at 0.75 opacity, now full opacity). Breakpoints and classes unchanged. 0.17.33 is not used: it is left for an open PR.
+    * Zone legend labels follow the standard: HIGH DANGER ZONE / JUDGMENT ZONE / LOW DANGER ZONE.
+    0.17.32 (2026-10-20; GUI grammar, part 2)
     * Main window: no header line (the window title names it); the caveat is the shared grey banner; Data → DEM → Screen → Report is the suite's pill strip, mark before the word ('✓ Data'); the ⚙ on the tab bar opens Settings, its arrow also holds How it decides…; Screen this county, One dam… and Stop sit at the bottom right (Run tab); the log is the shared ▸ Log fold above Close. Settings: Run options no longer scrolls sideways (the long engine list kept its combo 802 px wide and hid the Browse buttons). The settings window's legend is two lines: the notation (bold, [YOUR value]) and, quieter under it, the units footnote. No default changes.
     0.17.31 (2026-10-20; GUI grammar, part 1)
     * GUI grammar foundation (docs/gui-grammar.md): window colours from the shared tokens.py; the shared window files have one canonical copy in shared/ui/ (tools/sync_ui.py, checked in CI); tools/gui_lint.py opens every window in real QGIS and checks the rules.
