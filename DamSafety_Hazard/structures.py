@@ -793,9 +793,10 @@ SITE_JOIN_FT = 150.0
 # 2.18.50 (Docs & QA, H1 restored points): a lone 911 point (no outline, no NSI) is the
 # same site as a habitable structure carrying its address (FEMA parcel address) within
 # RESTORED_ADDR_FT, or as a habitable NSI residential (RES*) structure within
-# RESTORED_NSI_FT (3210 150th Ave SE: the 911 point is 105 ft from NSI RES1 #733)
+# RESTORED_NSI_FT - the low end of Docs & QA's 150-300 ft, so a lake-lot neighbour 186 ft away
+# (DWR-2645, 138 E Lake Dr) is not taken for the same site (3210 150th Ave SE: the 911 point is 105 ft from NSI RES1 #733)
 RESTORED_ADDR_FT = 1000.0
-RESTORED_NSI_FT = 200.0
+RESTORED_NSI_FT = 150.0
 # 911 NOTES naming a non-residential use (WBI gas station, communications hut, store ...)
 _NONDWELLING_NOTES = re.compile(
     r"\b(station|tower|towers|communications?|comm hut|cell site|store|restaurant|"

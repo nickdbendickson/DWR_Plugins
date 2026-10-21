@@ -275,7 +275,8 @@ def test_model_edge_with_nodata_ring():
     assert BND.runner_domain(path, 20, 20) == ("grid", None)
     res = _check(path)
     assert not res["flagged"] and res["checked"] == 76 and not res.get("unchecked"), res
-    assert "LISFLOOD-FP model grid" in BND.describe(res)
+    assert "LISFLOOD-FP model grid" in BND.describe(res) and "may end inside" not in \
+        BND.describe(res)
     # another raster than the Runner's final one: no domain
     assert BND.runner_domain(os.path.join(os.path.dirname(path), "other.tif")) is None
 

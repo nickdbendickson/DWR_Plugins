@@ -293,7 +293,7 @@ def describe(res):
     if not res["wet"]:
         line = "The flood does not reach the {} ({} edge cells checked)".format(
             res["method"], res["checked"])
-        if res["method"].startswith("edge of the depth raster"):
+        if res["method"] == "edge of the depth raster":     # not the Runner's own grid
             line += (" - the 2D flow area may end inside the raster; give the model boundary "
                      "polygon for a complete check")
         return line
