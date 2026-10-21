@@ -298,7 +298,31 @@ FEMA outlines from the other Maxar scenes in this study area are within about 2 
 - All 65 new summaries are v2.18.45.
 - The inundated counts also equal the count of `Habitable=Yes` structures at 0.1 ft or more in every result.
 
+## Run queue 2026-10-21 (main caaf850, Runner 3.10.47): QA by Docs & QA
+Read-only QA; reports in `/workspace/run_queue_qa_20261021/<job>/REPORT.md` on the shared box (tracker `QA_TRACKER.md`). Queue: `/workspace/run_queue_20261021/STATUS.md`.
+
+**TIER 0 re-baseline on caaf850: unchanged.** `/home/box/DamSafety/Dams/rebaseline_20261021/DWR-2801/`, same settings as 10-18 (culvert burn on, 2 NDDOT culverts). Depth, velocity, arrival and WSE rasters are identical cell for cell to the 10-18 re-baseline, so nothing merged from 8b0601c through #132 changed Absaraka's TIER 0 numbers.
+
+| Dam | Code | Area any / ≥0.1 ft / ≥1 ft (ac) | Max depth (ft) | Max velocity (ft/s) | Arrival max (h) | Edges N/S/E/W (ft) | Class |
+|---|---|---|---|---|---|---|---|
+| Absaraka DWR-2801 | caaf850 (Runner 3.10.47) | 6,939.1 / 5,758.5 / 1,802.1 | 10.13 | 12.71 | 28.21 | 0.0 / 0.0 / 0.73 / 0.0 | High |
+
+**HEC-RAS 6.6 comparison references (36.25 h, from the plan HDFs).** Not baselines; the 2D area is truncated downstream (about 70% of the volume leaves through the normal-depth line) and HEC-RAS routes the breach through its own storage area, so its peak is 72-74% of the plugin's.
+
+| Package | Engine | Cells | Peak dam flow (cfs) | Area ≥0.1 / ≥1 ft (ac) | Max depth (ft) | Volume error |
+|---|---|---|---|---|---|---|
+| v2d (100 ft grid) | old (`rr_tmp/pkgpath`) | 64,100 | 14,612 | 7,754 / 2,926 | 14.75 | 0.56% |
+| v2d_gmsh | old | 65,432 | 14,622 | 8,193 / 2,837 | 14.69 | 0.56% |
+| v2e (dam line on the crest, #103) | 8d5493f (#137) | 64,181 | 17,189 | 7,937 / 3,071 | 16.68 | 0.63% |
+
+v2e's lower breach invert (2.6 ft below v2d's) raises the peak 18% and the ≥1 ft area 5%. v2d vs v2d_gmsh differ by about 3%. Hazard was not scored for these runs.
+
+**Not used:**
+- ANUGA with NDDOT culverts on the 10 x 9 mi TIER 1 domain (`Absaraka_compare/anuga_nddot_culverts_20261021`): the 1,000 m widen pass is clipped by the LISFLOOD grid; water ponds 10 ft deep at the SE mesh corner and the domain ends with 4.15 times the injected volume. Needs a rerun on the refined runs' 25 x 20 mi box.
+- HEC-RAS v2e_gmsh_r: HEC-RAS refused to start because the dam connection's spillway notch (1,066.0 ft, stations 100-220) is lower than two connected cells (1,066.25 and 1,066.61 ft). The 8d5493f engine then hid the message behind a TypeError (a None time limit in an error string).
+
 ## Open items
+- **Queue 2026-10-21:** rerun the NDDOT-culvert ANUGA case on the 25 x 20 mi box; fix v2e_gmsh_r's notch cells and the engine's None-timeout message, then rerun it. Refined base rerun on caaf850 and the KO-06/07-closed variant are still running.
 - **Refined ANUGA rerun (Absaraka) running** (see above). Review it with `REFINED_RUN_CHECKLIST.md`, then the KO-06/07 closed variant.
 - **DWR-3161 is on hold:** flagged Low (#93), with breach runs refused. It waits for DWR's answers to the record questions in #93. Its 10-18 TIER 0 numbers aren't used.
 - **Merged 10-19:** #92 (run-report metrics and the opt-in water-body mask, Runner 3.10.27, closes #91) and #96 (HEC-RAS timeouts on the wall clock, Runner 3.10.26). Main is now Runner 3.10.32 (#94, which changes the default top of dam to the 98th percentile within 30 m, M6), so runs on current main are not directly comparable with the runs above. See CHANGELOG.md.
