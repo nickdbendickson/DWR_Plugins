@@ -47,7 +47,7 @@ class _U:
         return float(v)
 
 
-def _precheck(zcell, mode="warn", weir=None):
+def _precheck(zcell, mode="warn", weir=None, **opts):
     """A 1,000 ft straight dam line on y=0 with the 2D area below it (y<0), a row of cell
     centres 50 ft apart at y=-25, and a flat terrain at `zcell` (no GDAL: _tif_window faked)."""
     per = np.array([[0.0, 0.0], [1000.0, 0.0], [1000.0, -500.0], [0.0, -500.0]])
@@ -62,7 +62,7 @@ def _precheck(zcell, mode="warn", weir=None):
         np.full((80, 140), float(zcell)), -100.0, 100.0, 10.0)
     try:
         return hm.weir_cells_precheck(pts, per, conn, weir, 1070.0, "terrain.tif", None, 50.0,
-                                      {"weir_cell_check": mode}, _U())
+                                      dict({"weir_cell_check": mode}, **opts), _U())
     finally:
         hm._tif_window = real
 
@@ -99,6 +99,76 @@ def hecras_weir_cells_precheck_warns_and_never_edits():
         assert "weir_cell_check" in str(e)
     else:
         raise AssertionError("a bad weir_cell_check option was accepted")
+
+
+@test
+def hecras_weir_cells_auto_mode_fails_only_clearly_above():
+    """'auto' fails only when a cell is more than weir_cell_fail_ft (default 0.1 ft) above the
+    weir (c4: +0.25 / +0.61 ft), warns below; 'warn' stays the default."""
+    act = hm.weir_cell_action
+    assert act("auto", [], 0.1) == "ok"
+    assert act("auto", [{"above": 0.05}], 0.1) == "warn"
+    assert act("auto", [{"above": 0.05}, {"above": 0.252}], 0.1) == "fail"
+    assert act("warn", [{"above": 0.607}], 0.1) == "warn"
+    assert act("fail", [{"above": 0.02}], 0.1) == "fail"
+    assert hm.weir_cell_check_mode({}) == "warn" and hm.WEIR_CELL_AUTO_FAIL_FT == 0.1
+    assert hm.weir_cell_fail_ft({}) == 0.1 and hm.weir_cell_fail_ft({"weir_cell_fail_ft": "0.5"}) == 0.5
+    for bad in ("x", -1, float("nan")):
+        try:
+            hm.weir_cell_fail_ft({"weir_cell_fail_ft": bad})
+        except hm.HecRasModelError as e:
+            assert "weir_cell_fail_ft" in str(e)
+        else:
+            raise AssertionError("weir_cell_fail_ft {!r} was accepted".format(bad))
+    try:
+        import scipy  # noqa: F401
+    except ImportError:
+        print("    (skipped the geometry part: no scipy)")
+        return
+    r = _precheck(1066.4, mode="auto")                  # 0.4 ft above the 1066.0 notch
+    assert r["action"] == "fail" and r["fail_above"] == 0.1 and "FAILED" in r["note"], r
+    r = _precheck(1066.05, mode="auto")                 # 0.05 ft: HEC-RAS noise level, warn
+    assert r["action"] == "warn" and "WARNING" in r["note"], r
+    assert _precheck(1066.4, mode="auto", weir_cell_fail_ft=0.5)["action"] == "warn"
+    assert _precheck(1066.4)["action"] == "warn"        # default warn never fails
+
+
+@test
+def hecras_weir_cells_check_error_never_aborts_warn_or_auto():
+    """An exception inside the pre-check is a note and run_report 'not run' in warn / auto mode;
+    only weir_cell_check='fail' lets it through."""
+    if p0._skip():
+        print("    (skipped: no GDAL)")
+        return
+    real = hm.weir_cells_precheck
+
+    def boom(*a, **k):
+        raise RuntimeError("odd terrain")
+    d = tempfile.mkdtemp()
+    hm.weir_cells_precheck = boom
+    try:
+        p0._run(d, dam_json_len_ft=1500.0)
+        top_ft = p0.TOP_M / 0.3048
+        opts = {"spillway_crest_ft": top_ft - 3.0, "spillway_width_ft": 100.0}
+        for mode in (None, "warn", "auto"):
+            o = dict(opts, **({"weir_cell_check": mode} if mode else {}))
+            r = hm.build_model(d, out_folder=os.path.join(d, "m_{}".format(mode)), options=o)
+            wc = r["info"]["site"]["weir_cells"]
+            assert wc["action"] == "not run" and "odd terrain" in wc["error"], wc
+            assert any(n.startswith("Weir-cell pre-check not run") for n in r["notes"]), r["notes"]
+            rep = json.load(open(os.path.join(d, hm.hecras.MODEL_FOLDER,
+                                              hm.hecras.RUN_REPORT_JSON)))
+            assert rep["hecras_weir_cells"]["action"] == "not run", rep["hecras_weir_cells"]
+        try:
+            hm.build_model(d, out_folder=os.path.join(d, "m_fail"),
+                           options=dict(opts, weir_cell_check="fail"))
+        except RuntimeError as e:
+            assert "odd terrain" in str(e)
+        else:
+            raise AssertionError("weir_cell_check='fail' swallowed the check's own error")
+    finally:
+        hm.weir_cells_precheck = real
+        shutil.rmtree(d, ignore_errors=True)
 
 
 @test

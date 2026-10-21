@@ -39,8 +39,10 @@ TERMS AND CONDITIONS (TCU): Ras.exe shows HEC's TCU dialog and Wine does not kee
 acceptance. This module never clicks it. Accepting it is the user's decision; a user who has
 accepted it can point NDBREACH_HECRAS_TCU_HOOK at their own script (for example one that
 clicks "I agree" with xdotool), which preprocess() starts next to Ras.exe and names in the
-log. Without it, Ras.exe waits on the dialog and preprocess() stops at its timeout with a
-message saying so.
+log. Without it, Ras.exe waits on the dialog. preprocess() stops it at the wall-clock limit
+only when NDBREACH_HECRAS_TIMEOUT_S is set, with a message saying so; with no limit (the
+default since Runner 3.10.48) it waits for ever. For unattended batches, set the hook or a
+limit.
 
 Settings (environment variables, or the `env` dict of each function):
     NDBREACH_HECRAS_WINEPREFIX   the Wine prefix (required on Linux)
@@ -1321,7 +1323,7 @@ def compute_messages_excerpt(text, limit=COMPUTE_MESSAGES_MAX):
     """The Compute Messages for an error message: the ERROR lines and what follows them first
     (HEC-RAS puts the cause there), then the rest, at most `limit` characters."""
     lines = [ln.rstrip() for ln in (text or "").splitlines() if ln.strip()]
-    keys = ("error", "not allowed", "failed", "stopping")
+    keys = ("error", "not allowed", "failed", "stopping", "unsuccessful", "instabilit")
     first = next((i for i, ln in enumerate(lines) if any(k in ln.lower() for k in keys)), None)
     if first is not None:
         lines = lines[first:] + (["(earlier lines:)"] + lines[:first] if first else [])
