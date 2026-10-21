@@ -103,6 +103,11 @@ class AnugaSettings:
         self.buffer_m = buffer_m
         self.algorithm = algorithm
         self.velocity_min_depth_m = velocity_min_depth_m
+        # 3.10.55: the outer edges. "outflow" = water leaves freely, none enters (the normal
+        # momentum of inward-moving water is mirrored); "transmissive" = anuga's
+        # Transmissive_boundary as before 3.10.55, which feeds water in wherever the water by
+        # the edge moves inward (NDDOT culvert run 2026-10-21: 4.15 x the breach volume)
+        self.edge_bc = "outflow"
         # ANUGA_MESHER: "default" = ANUGA's own mesh (create_domain_from_regions, unchanged);
         # "gmsh" = breakline-graded mesh from core/gmsh_mesher.py, the run stops if it is
         # rejected; "gmsh_or_default" = the same, but a rejected mesh falls back (loudly)
@@ -380,6 +385,7 @@ def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_d
         "sim_time": st.sim_time_s, "yieldstep": st.yieldstep_s,
         "arrival_depth": st.arrival_depth_m, "velocity_min_depth": st.velocity_min_depth_m,
         "algorithm": st.algorithm, "threads": int(st.threads or 0),
+        "edge_bc": str(getattr(st, "edge_bc", None) or "outflow"),
         "out_x0": out_grid.x0, "out_y0": out_grid.y0, "out_dx": out_grid.dx,
         "out_nx": out_grid.nx, "out_ny": out_grid.ny,
     }
@@ -963,6 +969,9 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     notes = list(cnotes)
     if mnote:
         notes.append(mnote)
+    vn = volume_note(stats)
+    if vn:
+        notes.append(vn)
     for e in stats.get("culvert_errors", []):
         notes.append("ANUGA culvert not applied: " + e)
     if refine_lines and not stats.get("breaklines_used") and breaklines and mesh is None:
@@ -970,6 +979,37 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
                      "touch each other); the mesh was made without them.")
     return Envelopes(dem.like(depth, np.nan), dem.like(vel, np.nan), dem.like(arr, np.nan),
                      dem.like(wse, np.nan), stats, notes), outer, fine
+
+
+VOLUME_GAIN_LIMIT = 1.02       # 3.10.55: more water in the domain than this x the supply
+
+
+def volume_note(stats, limit=VOLUME_GAIN_LIMIT):
+    """3.10.55: a warning when the domain holds more water than went in (initial water plus the
+    breach hydrograph): a mass source, not a flood (the NDDOT culvert run 2026-10-21 held 4.15 x
+    with the old transmissive edges). Also fills stats['volume_balance'] for results written
+    before 3.10.55. None when the balance is fine or unknown."""
+    vb = stats.get("volume_balance")
+    if not vb:
+        sup = float(stats.get("initial_volume_m3") or 0.0) + float(stats.get("injected_m3") or 0.0)
+        vin = stats.get("volume_in_domain_m3")
+        if vin is None or sup <= 0:
+            return None
+        vb = {"supplied_m3": round(sup, 1), "in_domain_m3": round(float(vin), 1),
+              "ratio": round(float(vin) / sup, 4)}
+        stats["volume_balance"] = vb
+    r = vb.get("ratio")
+    if r is None or r <= limit:
+        return None
+    extra = vb["in_domain_m3"] - vb["supplied_m3"]
+    bi = vb.get("boundary_net_inflow_m3")
+    return ("ANUGA volume check FAILED: the domain ends with {:.2f} x the water that went in "
+            "({:,.0f} m3 = {:,.0f} acre-ft more than the {:,.0f} m3 of initial water and breach "
+            "inflow){}. Water was made at the edge ({} boundary), not by the breach; the depths "
+            "near the mesh edge are not usable.".format(
+                r, extra, extra / 1233.48184, vb["supplied_m3"],
+                "; ANUGA's boundary flux integral says {:,.0f} m3 came in through the edge".format(bi)
+                if bi is not None else "", stats.get("boundary", "transmissive")))
 
 
 def check_anuga(python, workdir):

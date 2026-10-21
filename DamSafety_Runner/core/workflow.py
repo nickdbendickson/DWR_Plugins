@@ -2663,9 +2663,14 @@ def render_report(r):
         lines += ["## ANUGA", ""]
         for a in r["anuga_runs"]:
             st = a["stats"]
+            vb = st.get("volume_balance") or {}
             lines.append("- mesh buffer {} m: {:,} triangles, {} min, deepest water at the mesh "
-                         "edge {} ft".format(a["buffer_m"], st.get("triangles", 0),
-                                             st.get("runtime_min"), st.get("max_edge_depth_ft")))
+                         "edge {} ft{}".format(a["buffer_m"], st.get("triangles", 0),
+                                               st.get("runtime_min"), st.get("max_edge_depth_ft"),
+                                               "; water in the domain at the end / supplied {} "
+                                               "({} edges)".format(vb["ratio"], st.get(
+                                                   "boundary", "transmissive"))
+                                               if vb.get("ratio") is not None else ""))
         c = r.get("comparison", {})
         lines += ["", "Comparison with LISFLOOD-FP (cells deeper than the arrival depth): "
                   "LISFLOOD-FP {} ac, ANUGA {} ac, both {} ac, fit index F = {}; mean depth "

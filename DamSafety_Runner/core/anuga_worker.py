@@ -232,6 +232,146 @@ def envelope_class(anuga):
     return Envelope
 
 
+# 3.10.55: the outer boundary. Until 3.10.54 every outer edge was anuga.Transmissive_boundary:
+# the edge copies the stage AND the momentum of the triangle inside it, so the flux through the
+# edge is the interior's own flux - inward wherever the water next to the edge moves inward
+# (a pond against a clipped edge, an eddy, flow running along the edge). That edge then feeds
+# water in at the interior depth: the NDDOT culvert run (2026-10-21, mesh clipped by the
+# LISFLOOD-FP grid at its SE corner) ended with 4.15 x the breach volume in the domain (the
+# 2026-10-15 structures run 1.51 x) and a 10 ft pond along the clipped edge.
+# 'outflow' (default): transmissive where the water leaves; where its normal momentum points
+# inward, the normal component is mirrored (as Reflective_boundary does), so no water enters.
+BOUNDARY_KINDS = ("outflow", "transmissive")
+
+
+def outflow_only_momentum(xm, ym, n1, n2):
+    """Pure: boundary momentum for an outflow-only edge. (xm, ym) the interior edge momentum,
+    (n1, n2) the edge's OUTWARD unit normal. Where xm*n1 + ym*n2 < 0 (inward) the normal
+    component is mirrored (zero mass flux through the edge, as a wall); elsewhere it is kept
+    (transmissive: the water leaves freely). Returns (xm, ym, inward mask) as new arrays."""
+    xm = np.array(xm, dtype=float, copy=True)
+    ym = np.array(ym, dtype=float, copy=True)
+    n1 = np.asarray(n1, dtype=float)
+    n2 = np.asarray(n2, dtype=float)
+    un = xm * n1 + ym * n2
+    inward = un < 0.0
+    if np.any(inward):
+        xm = np.where(inward, xm - 2.0 * un * n1, xm)
+        ym = np.where(inward, ym - 2.0 * un * n2, ym)
+    return xm, ym, inward
+
+
+def apply_outflow_boundary(domain, ids, vol_ids, edge_ids, centroid=False):
+    """Sets the boundary values of the edges `ids` (domain.boundary_* indices): every quantity
+    that has boundary values copied from the triangle's edge (or centroid with
+    domain.centroid_transmissive_bc, as Transmissive_boundary), then the momentum (and the
+    velocity) made outflow-only. Returns the number of inward edges mirrored."""
+    q = domain.quantities
+
+    def src(Q):
+        return Q.centroid_values[vol_ids] if centroid else Q.edge_values[vol_ids, edge_ids]
+    for name in ("stage", "xmomentum", "ymomentum", "elevation", "height", "xvelocity",
+                 "yvelocity"):
+        Q = q.get(name)
+        if Q is not None and getattr(Q, "boundary_values", None) is not None:
+            Q.boundary_values[ids] = src(Q)
+    nrm = domain.normals
+    n1 = nrm[vol_ids, 2 * edge_ids]
+    n2 = nrm[vol_ids, 2 * edge_ids + 1]
+    xm, ym, inward = outflow_only_momentum(q["xmomentum"].boundary_values[ids],
+                                           q["ymomentum"].boundary_values[ids], n1, n2)
+    q["xmomentum"].boundary_values[ids] = xm
+    q["ymomentum"].boundary_values[ids] = ym
+    if "xvelocity" in q and "yvelocity" in q:
+        xv, yv, _ = outflow_only_momentum(q["xvelocity"].boundary_values[ids],
+                                          q["yvelocity"].boundary_values[ids], n1, n2)
+        q["xvelocity"].boundary_values[ids] = xv
+        q["yvelocity"].boundary_values[ids] = yv
+    return int(np.count_nonzero(inward))
+
+
+def outflow_boundary_class(anuga):
+    """The outflow-only boundary class (needs anuga's Boundary base, imported only in the
+    ANUGA Python); bound at module level under its own name like Envelope, so a checkpointed
+    domain pickles and loads it by name."""
+    cls = globals().get("Outflow_boundary")
+    base = getattr(anuga, "Boundary", None)
+    if base is None:
+        from anuga.abstract_2d_finite_volumes.generic_boundary_conditions import Boundary as base
+    if cls is not None and issubclass(cls, base):
+        return cls
+
+    class Outflow_boundary(base):
+        """Transmissive for water leaving the domain, a wall (mirrored normal momentum) for
+        water that would enter it: a closed or clipped edge never gains water."""
+
+        def __init__(self, domain=None):
+            base.__init__(self)
+            if domain is None:
+                raise Exception("Domain must be specified for the outflow boundary")
+            self.domain = domain
+            self.inward_edges = 0          # edges mirrored at the last update (diagnostic)
+
+        def __repr__(self):
+            return "Outflow_boundary"
+
+        def evaluate(self, vol_id, edge_id):
+            d = self.domain
+            if d.centroid_transmissive_bc:
+                qv = np.array(d.get_conserved_quantities(vol_id), float)
+            else:
+                qv = np.array(d.get_conserved_quantities(vol_id, edge=edge_id), float)
+            n = d.normals[vol_id, 2 * edge_id:2 * edge_id + 2]
+            xm, ym, _ = outflow_only_momentum([qv[1]], [qv[2]], [n[0]], [n[1]])
+            qv[1], qv[2] = xm[0], ym[0]
+            return qv
+
+        def evaluate_segment(self, domain, segment_edges):
+            if segment_edges is None or domain is None:
+                return
+            ids = np.asarray(segment_edges)
+            if ids.size == 0:
+                return
+            self.inward_edges = apply_outflow_boundary(
+                domain, ids, domain.boundary_cells[ids], domain.boundary_edges[ids],
+                centroid=bool(domain.centroid_transmissive_bc))
+
+    Outflow_boundary.__module__ = __name__
+    Outflow_boundary.__qualname__ = "Outflow_boundary"
+    globals()["Outflow_boundary"] = Outflow_boundary
+    return Outflow_boundary
+
+
+def make_outer_boundary(anuga, domain, kind, dem_min):
+    """(boundary object, what it is) for the outer edges: 'outflow' (default since 3.10.55),
+    'transmissive' (before 3.10.55; can feed water in) or, if neither can be made, a stage
+    far below the ground (drains, never adds water)."""
+    kind = (kind or "outflow").strip().lower()
+    try:
+        if kind == "transmissive":
+            return anuga.Transmissive_boundary(domain), "transmissive"
+        return outflow_boundary_class(anuga)(domain), "outflow"
+    except Exception as e:          # noqa: BLE001
+        return (anuga.Dirichlet_boundary([float(dem_min) - 50.0, 0.0, 0.0]),
+                "dirichlet stage {:.1f} m ({}: {})".format(float(dem_min) - 50.0, kind,
+                                                          str(e)[:80]))
+
+
+def volume_balance(initial, injected, in_domain, boundary_in=None):
+    """3.10.55: the end-of-run water balance (m3). 'ratio' = in domain / (initial + injected):
+    above 1 the domain made water (a boundary that fed water in, or instability), below 1
+    water left through the edge. With ANUGA's boundary flux integral (DE algorithms; + = net
+    inflow) the 'residual' = in domain - initial - injected - boundary_in is what the solver
+    itself did not account for."""
+    supplied = float(initial or 0.0) + float(injected or 0.0)
+    out = {"supplied_m3": round(supplied, 1), "in_domain_m3": round(float(in_domain), 1),
+           "ratio": round(float(in_domain) / supplied, 4) if supplied > 0 else None}
+    if boundary_in is not None:
+        out["boundary_net_inflow_m3"] = round(float(boundary_in), 1)
+        out["residual_m3"] = round(float(in_domain) - supplied - float(boundary_in), 1)
+    return out
+
+
 def apply_threads(anuga, threads):
     """Set ANUGA's OpenMP thread count (a process setting, so also needed when a checkpoint
     resumes: a loaded domain does not run Domain.__init__, which re-reads OMP_NUM_THREADS).
@@ -514,6 +654,7 @@ def main(job_path, out_path):
             omp_threads if omp_threads is not None else "?", threads,
             "; " + omp_note if omp_note else ""), flush=True)
     Envelope = envelope_class(anuga)
+    outflow_boundary_class(anuga)      # bound by name before a checkpoint is loaded
 
     def build_domain():
         """The mesh, bed, friction, initial water, boundary, inlet and culverts."""
@@ -621,10 +762,10 @@ def main(job_path, out_path):
         # Free outflow on the whole outer boundary. A transmissive (zero-gradient)
         # boundary reports the depth at the edge without the bias of a drained edge
         # (a fixed stage far below the ground reads about 0.1 ft shallower).
-        try:
-            Bo = anuga.Transmissive_boundary(domain)
-        except Exception:
-            Bo = anuga.Dirichlet_boundary([float(np.nanmin(dem)) - 50.0, 0.0, 0.0])
+        # 3.10.55: outflow only (see BOUNDARY_KINDS); 'transmissive' only when the job asks
+        # (job key 'edge_bc'; 'boundary' is the outer polygon)
+        Bo, bkind = make_outer_boundary(anuga, domain, str(job["edge_bc"]) if "edge_bc" in job
+                                        else "outflow", np.nanmin(dem))
         domain.set_boundary({"outflow": Bo})
 
         qfun = Hydrograph(hyd_t, hyd_q)      # = np.interp(t, hyd_t, hyd_q, right=0.0)
@@ -649,7 +790,7 @@ def main(job_path, out_path):
 
         info = {"triangles": ntri, "breaklines_used": breaklines_used,
                 "culverts": len(culverts) - len(culvert_errors), "culvert_errors": culvert_errors,
-                "initial_volume_m3": vol_initial, "elevation": elev_stats}
+                "initial_volume_m3": vol_initial, "elevation": elev_stats, "boundary": bkind}
         return domain, info
 
     # 3.10.35: opt-in checkpoints / partial results / resume (ck None = as before)
@@ -805,13 +946,19 @@ def main(job_path, out_path):
     qq = np.interp(tt, hyd_t, hyd_q)          # only what enters before the run ends
     injected = float(np.trapezoid(qq, tt)) if hasattr(np, "trapezoid") \
         else float(np.trapz(qq, tt))
+    try:                        # DE algorithms only; + = net inflow through the boundary
+        b_in = float(domain.get_boundary_flux_integral())
+    except Exception:           # noqa: BLE001
+        b_in = None
+    balance = volume_balance(info["initial_volume_m3"], injected, vol_left, b_in)
     stats = {"triangles": ntri, "runtime_min": round((time.time() - t0) / 60.0, 2),
              "max_edge_depth_m": edge_depth, "volume_in_domain_m3": vol_left,
              "initial_volume_m3": info["initial_volume_m3"],
              "breaklines_used": info["breaklines_used"],
              "culverts": info["culverts"], "culvert_errors": info["culvert_errors"],
              "injected_m3": injected, "anuga_version": getattr(anuga, "__version__", "?"),
-             "algorithm": str(job["algorithm"]), "elevation": info["elevation"]}
+             "algorithm": str(job["algorithm"]), "elevation": info["elevation"],
+             "boundary": info.get("boundary", "transmissive"), "volume_balance": balance}
     # 3.10.47: the OpenMP thread count ANUGA ran with (read back at the end: Domain() and a
     # resumed checkpoint both go through it)
     _getter = getattr(anuga, "get_omp_num_threads", None)
