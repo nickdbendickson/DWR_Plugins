@@ -129,6 +129,16 @@ the Runner finds `envs\*anuga*\python.exe` under `%USERPROFILE%\miniforge3`,
   again with `NDBREACH_ANUGA_RESUME=1` and the same settings. The preparation (LISFLOOD-FP
   pass, mesh input, fine bed) is redone; only the ANUGA time stepping continues.
 
+## HEC-RAS 2D compute: no wall-clock limit by default (3.10.48)
+With **Models = LISFLOOD-FP then HEC-RAS 2D**, the Linux RasUnsteady compute now runs until it finishes unless you set a limit.
+
+- `NDBREACH_HECRAS_TIMEOUT_S` unset, empty or `0` (also `none` / `off`): **no limit anywhere**, neither on the compute nor on the Wine preprocess steps (terrain.exe, mesh.exe, drv.exe, Ras.exe -c; they had a 1,800 s cap each). 3.10.17-3.10.47 stopped the compute at max(2 h, 3 x the estimated run time), capped at 48 h, even with the variable unset, which killed long (72 h simulated, large-mesh) runs.
+- A positive number of seconds: the compute AND each Wine preprocess step stop after that many seconds of wall-clock time (a paused VM counts), with SIGTERM to the process group, `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s), then SIGKILL, exactly as before.
+- Anything else (text, a negative number) is ignored, with a note in the log, and there is no limit.
+- Without a limit, a Wine dialog that waits for a click (HEC's Terms and Conditions prompt) stalls `Ras.exe -c` until someone deals with it. Set `NDBREACH_HECRAS_TCU_HOOK`, or a positive `NDBREACH_HECRAS_TIMEOUT_S`, for unattended batches on a new Wine prefix.
+- The limit in force is logged ("HEC-RAS preprocess: wall-clock limit per step none [...]" and "HEC-RAS compute: ... wall-clock limit none [no limit: NDBREACH_HECRAS_TIMEOUT_S unset]", with the run-time estimate), and recorded in `run_report.json["hecras_time_limit"]` (`limit_s`, `limit`, `how`, `estimate_s`, `applies_to`), `_hecras/hecras_stage.json` and the run report's "HEC-RAS wall-clock limit" row.
+- The gmsh-points timeout of "Refine HEC-RAS mesh with Gmsh points" (`core/hecras_seeds.py`, 600 s) is a separate setting and is unchanged.
+
 ## DEM resampling onto the model grid
 
 The DEM is warped onto the model grid with the **DEM resampling** setting: the advanced
