@@ -380,13 +380,15 @@ PROBLEMS_HEAD = ("HEC-RAS would refuse these culvert / bridge connections (\"has
                  "the connection\"), so no package was written: ")
 
 
-def connection_problems(conns, check, perimeter, other_names=()):
+def connection_problems(conns, check, perimeter, other_names=(), cell=None):
     """3.10.56: what would make HEC-RAS refuse a connection ("has an error with the connection.
     Check that the From: / To: is set correctly", a weir or culvert below its cells), from the
     connections and their cells_check: [str] (empty = none). Names 1-16 characters and unique
     (with the 2D area, storage area and the other connections); both ends of the line inside the
     2D area and faces along it; each barrel's two ends inside the 2D area, in two different
-    cells, the headwater end on the headwater side; inverts and weir not below the cells."""
+    cells, the headwater end on the headwater side; inverts and weir not below the cells. With
+    `cell`, both ends of the line at least hm.STRUCT_EDGE_CELLS cells inside the perimeter (an end
+    about one cell from it stopped HEC-RAS at KO-01: "Check that the To: is set correctly")."""
     out = []
     seen = {str(n).strip().lower() for n in other_names}
     per = np.asarray(perimeter, float)
@@ -401,6 +403,15 @@ def connection_problems(conns, check, perimeter, other_names=()):
         ln = np.asarray(c["line"], float)
         if not cond.points_in_polygon(ln[:, 0], ln[:, 1], per).all():
             out.append("{}: its line leaves the 2D area".format(nm))
+        if cell:
+            closed = list(map(tuple, per)) + [tuple(per[0])]
+            need = hm.STRUCT_EDGE_CELLS * float(cell)
+            dist = hm.point_segment_distance(ln[[0, -1], 0], ln[[0, -1], 1], closed)
+            for end, dd in zip(("first", "last"), dist):
+                if dd < need - 1e-6:
+                    out.append("{}: the {} end of its line is {:.0f} from the edge of the 2D area "
+                               "(needs {:g} cells, {:.0f})".format(nm, end, dd,
+                                                                  hm.STRUCT_EDGE_CELLS, need))
         ck = check.get(nm) or {}
         if not ck.get("faces"):
             out.append("{}: no cell faces along its line".format(nm))
@@ -560,10 +571,12 @@ def write_g01(g, points, conns, path, now):
     return path
 
 
-def add_to_package(package, run, out, log=None, breaklines=True, fit=True, when=None):
+def add_to_package(package, run, out, log=None, breaklines=True, fit=True, when=None,
+                   exclude=()):
     """Copy a built package (folder with one .g01) to `out` and add the culverts and bridges of
     `run` (a finished run's dam folder or report): connections, breaklines in the points, the
-    cell check and fit. The terrain and everything else stay as they are. Returns info."""
+    cell check and fit. The terrain and everything else stay as they are. `exclude`: structure
+    names (as in the run) to leave out. Returns info."""
     import datetime
     log = log or (lambda m: None)
     if os.path.exists(out):
@@ -594,6 +607,16 @@ def add_to_package(package, run, out, log=None, breaklines=True, fit=True, when=
         srs = hm.srs_from(f.read())
     units, _ = hm.crs_units(srs)
     structs, src, wtext, notes = load_run_structures(run)
+    drop = {str(n).strip().lower() for n in exclude}
+    left_out = [s for s in structs if str(s.name or "").strip().lower() in drop]
+    missing = drop - {str(s.name or "").strip().lower() for s in left_out}
+    if missing:
+        shutil.rmtree(out, ignore_errors=True)
+        raise hm.HecRasModelError("exclude: no structure named {}".format(
+            ", ".join(sorted(missing))))
+    structs = [s for s in structs if all(s is not x for x in left_out)]
+    if left_out:
+        notes.append("left out on request: {}".format(", ".join(s.name for s in left_out)))
     to_model = hm.transformer(hm.srs_from(wtext), srs) if wtext else None
     perim, pts = g["perimeter"], g["points"]
     cell = None
@@ -616,7 +639,7 @@ def add_to_package(package, run, out, log=None, breaklines=True, fit=True, when=
     changes = fit_to_cells(conns, check, units) if (conns and fit) else []
     after = cells_check(pts, perim, conns, raster) if changes else check
     probs = connection_problems(conns, after, perim, other_names=g.get("connections", []) +
-                                [hm.AREA_NAME, hm.SA_NAME])
+                                [hm.AREA_NAME, hm.SA_NAME], cell=cell)
     if probs:
         shutil.rmtree(out, ignore_errors=True)
         raise hm.HecRasModelError(PROBLEMS_HEAD + "; ".join(probs))
