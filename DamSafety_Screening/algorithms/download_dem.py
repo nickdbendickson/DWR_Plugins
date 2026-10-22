@@ -82,6 +82,9 @@ class DownloadDem(QgsProcessingAlgorithm):
             "DAM_ID", "Dam ID (names the file <DAM_ID>_10m_5070.tif)", optional=True))
         self.addParameter(QgsProcessingParameterNumber(
             "BUFFER_MI", "Buffer around the dam (miles)", NUM_DOUBLE, 15.0, minValue=1.0))
+        self.addParameter(QgsProcessingParameterString(
+            "BEARING_DEG", "Downstream bearing (deg from north; blank = centered on the dam)",
+            optional=True))
         self.addParameter(QgsProcessingParameterEnum(
             "COUNTY", "County", dd.county_names(), defaultValue=0))
         self.addParameter(QgsProcessingParameterNumber(
@@ -193,7 +196,8 @@ class DownloadDem(QgsProcessingAlgorithm):
                 lon, lat = [float(x) for x in raw.replace(" ", "").split(",")[:2]]
             except ValueError:
                 raise QgsProcessingException("Dam point must be longitude,latitude")
-            extent = dd.point_box(lon, lat, self.parameterAsDouble(parameters, "BUFFER_MI", context))
+            extent = dd.point_box(lon, lat, self.parameterAsDouble(parameters, "BUFFER_MI", context),
+                                  bearing_deg=_bearing(self, parameters, context, feedback))
         elif scope == 1:
             name = self._county(parameters, context)
             box = dd.COUNTIES.get(name)
@@ -374,6 +378,21 @@ class DownloadDem(QgsProcessingAlgorithm):
         if extra and extra != vrt:
             feedback.pushInfo("extra CRS copy: {}".format(extra))
         return {"VRT": vrt, "OUT": out}
+
+
+def _bearing(alg, parameters, context, feedback=None):
+    """The downstream bearing parameter as a float (compass deg from north), or None when blank
+    or unparseable (then the DEM box is centred on the dam, as before)."""
+    raw = (alg.parameterAsString(parameters, "BEARING_DEG", context) or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw) % 360.0
+    except ValueError:
+        if feedback is not None:
+            feedback.pushWarning("Downstream bearing {!r} is not a number; centring the DEM on "
+                                 "the dam.".format(raw))
+        return None
 
 
 def lt_label():
