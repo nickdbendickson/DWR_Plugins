@@ -622,7 +622,7 @@ class NDDamScreeningDialog(QDialog):
             "Each button opens the tool's Processing dialog with the work folder's files, the settings "
             "file's values and the choices of this window filled in. Check the values, run it there, "
             "then come back: the list updates when this window is activated. Every step can also be run "
-            "from the Processing Toolbox (ND Dam Breach Screening > Screening steps / Advanced).")
+            "from the Processing Toolbox (DamSafety Screening > Screening steps / Advanced).")
         lay.addWidget(intro)
         dem_btn = QPushButton("Download county DEM…")
         dem_btn.setToolTip("Opens Download DEM with the Inventory county, 10 m or 1 m, and the suite folder filled in.")
@@ -656,8 +656,8 @@ class NDDamScreeningDialog(QDialog):
             "Runs every step that is not done (or out of date) one after the other, in the "
             "background, with the values this window would fill in - no dialogs. It stops at the "
             "first step that fails or lacks an input, and checks each step wrote its output. "
-            "Step 7b (ND Dam Breach Runner) is never part of it. The Simple tab's 'Run all' is the same "
-            "run with the preflight check first.")
+            "Step 7b (DamSafety Runner) is never part of it. Screen this county, on this Run tab, "
+            "is the same run with the check list first.")
         txt.setWordWrap(True)
         g.addWidget(txt)
         row = QGridLayout()                # 0.17.23: two columns (was one long row)
@@ -1035,7 +1035,8 @@ class NDDamScreeningDialog(QDialog):
 
     def _dem_download_box(self):
         if hasattr(self, "dem_county"):
-            note = QLabel("County DEM download is on the Simple tab: suite folder, county list, 10 m / 1 m, Download this county DEM.")
+            note = QLabel("The county DEM download is on the Run tab: data folder, county, "
+                          "10 m / 1 m, Download this county DEM.")
             note.setWordWrap(True)
             return note
         from .core import dem_download as dd
@@ -2092,7 +2093,7 @@ class NDDamScreeningDialog(QDialog):
             checks = self._preflight(steps=steps_planned, settings=S)
             if not pf.ready(checks):
                 QMessageBox.warning(self, TITLE, "Not ready: " + pf.summary(checks) +
-                                    "\n\nSee the check list on the Simple tab and fix it first.")
+                                    "\n\nSee the check list on the Run tab and fix it first.")
                 return False
         plan = ["{} - {}".format(st, wf.TITLE[st]) for st in steps_planned]
         notes = []

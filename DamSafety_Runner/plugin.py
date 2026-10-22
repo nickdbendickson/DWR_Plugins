@@ -13,7 +13,7 @@ from qgis.core import QgsApplication
 from .provider import Provider
 
 MENU = "&Dam safety"
-LOG_TAG = "ND Dam Breach Runner"
+LOG_TAG = "DamSafety Runner"
 
 
 def version_messages(versions=None):

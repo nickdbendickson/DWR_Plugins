@@ -15,7 +15,7 @@ from .ui_fit import fit_window, wrap_tabs
 from .ui_wrap import narrow_combos
 from .ui_widgets import CheckPanel, Collapsible, InfoBanner
 from qgis.PyQt.QtWidgets import (
-    QApplication, QProgressDialog, QDialog, QVBoxLayout, QHBoxLayout,
+    QApplication, QProgressDialog, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QLineEdit, QFileDialog, QMessageBox, QGroupBox,
     QFormLayout, QTabWidget, QTextEdit, QWidget, QComboBox, QMenu, QToolButton,
 )
@@ -168,7 +168,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         lay.setContentsMargins(6, 6, 6, 6)
 
         dam_group = QGroupBox("Setup \u2014 dam folder")
-        dam_layout = QHBoxLayout()
+        dam_layout = QGridLayout()
         self.dam_folder_edit = QLineEdit()
         self.dam_folder_edit.setPlaceholderText("Browse or paste the dam project folder")
         self.dam_browse_btn = QPushButton("Browse\u2026")
@@ -180,9 +180,10 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             "Depth (Max), Velocity (Max), Arrival Time and D * V (Max). Done automatically "
             "when the raster boxes are empty.")
         self.find_rasters_btn.clicked.connect(lambda *a: self._auto_fill_rasters(force=True))
-        dam_layout.addWidget(self.dam_folder_edit, stretch=3)
-        dam_layout.addWidget(self.dam_browse_btn)
-        dam_layout.addWidget(self.find_rasters_btn)
+        dam_layout.addWidget(self.dam_folder_edit, 0, 0, 1, 3)
+        dam_layout.setColumnStretch(0, 1)
+        dam_layout.addWidget(self.dam_browse_btn, 1, 1)
+        dam_layout.addWidget(self.find_rasters_btn, 1, 2)
         dam_group.setLayout(dam_layout)
         lay.addWidget(dam_group)
 

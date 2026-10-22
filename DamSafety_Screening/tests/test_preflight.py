@@ -105,7 +105,7 @@ t = by_title(pf.run_checks(W, S5, env=Net()))
 assert "ND DWR dams" not in t and t["Water bodies"]["status"] == pf.WARN
 # the Runner for 7b
 t = by_title(pf.run_checks(W, S4, steps=["7b"], env=Net()))
-assert t["ND Dam Breach Runner"]["status"] == pf.OK and "3.4.4" in t["ND Dam Breach Runner"]["detail"]
+assert t["DamSafety Runner"]["status"] == pf.OK and "3.4.4" in t["DamSafety Runner"]["detail"]
 # the chart criterion: the plugin's chart file decides
 t = by_title(pf.run_checks(W, S4, steps=["8"], env=Net()))
 assert t["ACER TM 11 charts"]["status"] in (pf.OK, pf.FAIL)

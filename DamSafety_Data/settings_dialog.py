@@ -164,10 +164,10 @@ class SettingsDialog(QDialog):
         header.setSectionResizeMode(4, getattr(QHeaderView, "ResizeMode", QHeaderView).Stretch)
         status_layout.addWidget(self.table)
         buttons_row = QHBoxLayout()
-        self.check_now = QPushButton("Save and Check All Now")
+        self.check_now = QPushButton("Save and check all now")
         self.check_now.setToolTip("Checks every enabled dataset, ignoring the NSI schedule.")
         self.check_now.clicked.connect(self._check_now)
-        open_folder = QPushButton("Open Data Folder")
+        open_folder = QPushButton("Open data folder")
         open_folder.clicked.connect(self.plugin.open_data_folder)
         buttons_row.addWidget(self.check_now)
         buttons_row.addWidget(open_folder)
@@ -181,6 +181,9 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         for b in buttons.buttons():                  # no icons on action buttons (docs/gui-grammar.md)
             b.setIcon(QIcon())
+        cancel = buttons.button(_sb.Cancel)
+        if cancel is not None:
+            cancel.setText("Close")
         fit_window(self, (720, 640))
         layout.addWidget(buttons)
 

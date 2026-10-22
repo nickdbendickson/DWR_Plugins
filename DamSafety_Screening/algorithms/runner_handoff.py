@@ -65,7 +65,7 @@ def _user_method_index(alg):
 
 class RunnerHandoff(QgsProcessingAlgorithm):
     def name(self): return "runnerhandoff"
-    def displayName(self): return "7b - Detailed runs with ND Breach Runner"
+    def displayName(self): return "7b - Detailed runs with DamSafety Runner"
     def group(self): return "Dam screening"
     def groupId(self): return "dams"
     def createInstance(self): return RunnerHandoff()

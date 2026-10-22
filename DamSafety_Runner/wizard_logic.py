@@ -342,10 +342,13 @@ def validate_page(page, a, exists=os.path.isfile, isdir=os.path.isdir, models=No
         h, top, bottom = dam.get("HEIGHT_FT"), dam.get("TOP_FT"), dam.get("BOTTOM_FT")
         if top is not None and bottom is not None and h and bottom >= top:
             errors.append("The breach bottom elevation must be below the top of dam.")
-        if dam.get("TOP_FT") is None:
+        named = bool(a.get("point")) or any(
+            dam.get(k) not in (None, "") for k in (
+                "DAM_ID", "DAM_NAME", "HEIGHT_FT", "STORAGE_ACFT", "TOP_FT", "AREA_AC"))
+        if named and dam.get("TOP_FT") is None:
             warnings.append("No top of dam elevation: the highest DEM point within 30 m of "
                             "the dam point will be used. Check it in the run report.")
-        if dam.get("AREA_AC") is None:
+        if named and dam.get("AREA_AC") is None:
             warnings.append("No surface area: the breach is taken from storage alone.")
     elif page == "terrain":
         if not a.get("dem_id"):

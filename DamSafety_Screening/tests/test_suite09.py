@@ -311,7 +311,7 @@ plug = NDDamScreeningPlugin(iface)
 msgs = plug.check_versions({"ndscreen": "0.9.0", "ndbreach": "3.0.0", "ndhazard": "2.9.1"})
 assert [m[0] for m in msgs] == ["error", "warning"], msgs
 assert len(iface.bar.msgs) == 2 and iface.bar.msgs[0][2] == 0 and "3.1.0" in iface.bar.msgs[0][1]
-assert any(t == "ND dam suite" and _vs.LABELS["ndhazard"] in m for t, _l, m in QgsMessageLog.LOG)
+assert any(t == "DamSafety Screening" and _vs.LABELS["ndhazard"] in m for t, _l, m in QgsMessageLog.LOG)
 assert plug.check_versions() == []                               # once per session
 assert NDDamScreeningPlugin(Iface()).check_versions({"ndscreen": "0.9.0"}) == []   # others not installed
 print("OK (version checks)")

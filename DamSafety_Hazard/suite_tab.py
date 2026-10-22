@@ -32,17 +32,17 @@ from .tool_dialog import exec_tool_dialog
 TOOLS = (
     ("suite_gate_btn", "Model gate\u2026", "modelgate",
      "Checks of the flood model before it is classified: flood at the model edge, no-data "
-     "holes in the wet area, the ND Dam Breach Runner's mass balance, warnings and run "
+     "holes in the wet area, DamSafety Runner's mass balance, warnings and run "
      "manifest, velocities near the breach, units. PASS / WARN / FAIL with the reason."),
     ("suite_ensemble_btn", "Class probability\u2026", "ensemble",
-     "Classifies every run of a model ensemble (ND Dam Breach Runner: Probabilistic run "
+     "Classifies every run of a model ensemble (DamSafety Runner: Probabilistic run "
      "with 'Write each run's rasters') with this dam's settings and data and gives "
      "P(High / Medium / Low). Only as good as the ensemble's parameter distributions."),
     ("suite_creep_btn", "Quick creep screen\u2026", "quickcreep",
      "A NEW structures layer against every dam's classified flood: new structures in each "
      "flood area, 're-run recommended'. Nothing is re-classified."),
     ("suite_rules_btn", "Rules comparison\u2026", "rulecompare",
-     "Re-classifies this run's structures with the ND Dam Breach Runner / Screening rules "
+     "Re-classifies this run's structures with the DamSafety Runner / Screening rules "
      "(their nd_hazard.py) and explains every difference. This plugin stays the authority."),
     ("suite_charts_btn", "Chart sign-off\u2026", "chartsignoff",
      "Writes the ACER TM 11 chart file the Runner and Screening need, from this plugin's "
@@ -52,11 +52,11 @@ TOOLS = (
      "Reviewer's view of a submittal package: every file against MANIFEST.csv, the model "
      "chain, optional reproduction and a checklist. Nothing is written into the package."),
     ("suite_culverts_btn", "Culverts for the Runner\u2026", "runnerculverts",
-     "Culvert / bridge lines (upstream end first) for the ND Dam Breach Runner from the NBI, "
+     "Culvert / bridge lines (upstream end first) for DamSafety Runner from the NBI, "
      "OpenStreetMap and NDDOT structures where a stream crosses a road or railroad. Unknown "
      "sizes stay empty."),
     ("suite_export_btn", "Export for Screening\u2026", "suiteexport",
-     "One GeoPackage in the ND Dam Breach Screening tool-0 schema from the offline pack or "
+     "One GeoPackage in the DamSafety Screening tool-0 schema from the offline pack or "
      "your downloads: structures with this plugin's habitability, roads with AADT, "
      "railroads, flowlines, lifelines, NID dams."),
     # v2.12
