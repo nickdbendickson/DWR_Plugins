@@ -36,6 +36,7 @@ SET_LISFLOOD = "NDBREACH_LISFLOOD_EXE"
 SET_BUILTIN = "NDBREACH_USE_BUILTIN"       # opt in to the built-in screening engine (M5)
 SET_ANUGA = "NDBREACH_ANUGA_PYTHON"
 SET_THREADS = "NDBREACH_THREADS"
+SET_ALLOW_UNPATCHED = "NDBREACH_ALLOW_UNPATCHED"   # opt in to an unpatched LISFLOOD-FP build
 
 METHODS = [(m, brmod.METHOD_LABELS[m]) for m in brmod.METHODS]
 from .popup_logic import HECRAS_GMSH_TIP, HECRAS_CREST_TIP   # noqa: E402  v3.10.22
@@ -757,6 +758,8 @@ class _Base(QgsProcessingAlgorithm):
             resume=self.parameterAsBool(parameters, "RESUME", context),
             impact_look_ahead_mi=g("LOOKAHEAD_MI") if self.parameterDefinition("LOOKAHEAD_MI") is not None else 5.0)
         st.planning_cell_m = max(30.0, st.cell_size_m)
+        st.allow_unpatched = str(_setting(SET_ALLOW_UNPATCHED, False)).lower() in (
+            "true", "1", "yes", "on")
         if self.parameterDefinition("PIPE_FRACTION") is not None:
             st.overrides = brmod.BreachOverrides(
                 self._opt(parameters, "BREACH_WIDTH", context),
