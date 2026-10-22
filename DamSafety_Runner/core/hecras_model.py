@@ -113,6 +113,10 @@ CULVERT_EXIT_LOSS = 1.0
 STRUCT_WEIR_COEF = 2.6         # road overflow, US units (HEC-RAS's default weir coefficient)
 STRUCT_RISE_FT = 10.0          # the connection line runs along the road until the ground is
 STRUCT_MAX_HALF_FT = 1000.0    # this far above the road at the structure, or this far each side
+STRUCT_EDGE_CELLS = 2.0        # 3.10.56: both ends of a connection line at least this many cells
+#                                inside the 2D perimeter (KO-01 at Absaraka ended 114 ft = about
+#                                one cell from it and HEC-RAS stopped: "check that the To: is set")
+STRUCT_ADVERSE_FT = 0.5        # a culvert whose outlet invert is this much above its inlet is noted
 
 # computation intervals HEC-RAS offers (seconds), and their labels
 COMP_INTERVALS = ((0.1, "0.1SEC"), (0.2, "0.2SEC"), (0.25, "0.25SEC"), (0.3, "0.3SEC"),
@@ -1019,7 +1023,8 @@ def structure_connection(s, line, ground, perimeter, cell, step, units, name, av
     * The embankment crest is the highest ground along the structure line; the connection
       line crosses it there, perpendicular to the structure line, drawn left to right looking
       downstream, and runs along the road each way until the ground is STRUCT_RISE_FT above
-      the crest at the structure, or STRUCT_MAX_HALF_FT, keeping one cell inside the 2D area
+      the crest at the structure, or STRUCT_MAX_HALF_FT, keeping STRUCT_EDGE_CELLS cells inside
+      the 2D area
       and half way (less half a cell) from the crest of any other structure, so that two
       structures on one road get two connections that do not touch.
     * The weir is the terrain along that line (the road crest; HEC-RAS's weir equation, not
@@ -1071,7 +1076,7 @@ def structure_connection(s, line, ground, perimeter, cell, step, units, name, av
         pts = C[None, :] + side * n_left[None, :] * ts[:, None]
         z = ground(pts)
         ok = cond.points_in_polygon(pts[:, 0], pts[:, 1], per) & np.isfinite(z)
-        ok &= point_segment_distance(pts[:, 0], pts[:, 1], closed) >= cell
+        ok &= point_segment_distance(pts[:, 0], pts[:, 1], closed) >= STRUCT_EDGE_CELLS * cell
         bad = np.nonzero(~ok)[0]
         end = int(bad[0]) if len(bad) else len(ts)            # points before this are usable
         why = "too close to the edge of the 2D area for a connection line across it"
@@ -1136,6 +1141,13 @@ def structure_connection(s, line, ground, perimeter, cell, step, units, name, av
                          "top of the barrel ({:.1f} {u}): the DEM may be cut through the road "
                          "here, or the size or inverts are off; check the weir and the culvert"
                          .format(float(road.min()), max(inv) + rise_u, u=units.len_name))
+        if inv[1] - inv[0] >= units.from_ft(STRUCT_ADVERSE_FT):
+            notes.append("adverse culvert: the outlet invert ({:.2f} {u}) is {:.2f} {u} above the "
+                         "inlet ({:.2f} {u}) as the run had it (inverts from: {}); kept, the "
+                         "headwater side is the first end of the structure line; check the "
+                         "inverts in the field"
+                         .format(inv[1], inv[1] - inv[0], inv[0], out["culvert"]["inverts_from"],
+                                 u=units.len_name))
         out["desc"] = "Culvert {} from the ND Dam Breach Runner".format(label)
     else:
         # the gap floor: the invert at the crest, from the structure's inverts or the lowest
@@ -3371,7 +3383,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         sinfo["cells_check"] = hstr.check_summary(sck2)
         # 3.10.56: what HEC-RAS would refuse (names, line, barrel ends, inverts) stops the build
         probs = hstr.connection_problems(sinfo["exported"], sck2, perim,
-                                         other_names=[AREA_NAME, SA_NAME, CONN_NAME])
+                                         other_names=[AREA_NAME, SA_NAME, CONN_NAME], cell=cell)
         if probs:
             raise HecRasModelError(hstr.PROBLEMS_HEAD + "; ".join(probs))
         if sinfo["fit"]:
