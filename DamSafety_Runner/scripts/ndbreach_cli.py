@@ -1030,6 +1030,11 @@ def build_settings(cfg, opts, need_models=True):
         st.threads = opts.threads
     st.lisflood_exe, st.anuga_python = find_models(cfg, opts, need_lisflood=need_models,
                                                    need_anuga=None if need_models else False)
+    if need_models and st.tier == workflow.TIER_HECRAS:    # 3.10.66: checked before any run
+        d = importlib.import_module(PKG + ".core.hecras_engine").detect()
+        if not d["available"]:
+            raise CliError(d["reason"] + " Nothing was run. Use model.tier 'lisflood' or set "
+                           "up HEC-RAS (docs/HEC-RAS_2D_engine_plan.md).")
     st.planning_cell_m = max(30.0, st.cell_size_m)
     st.overrides = breach_overrides(cfg)
     st.breach_method = cfg.get("breach", "method", st.breach_method)
@@ -1375,6 +1380,10 @@ def cmd_run(args):
     try:
         res = workflow.run_dam(p.dam, p.dam_xy, p.st, p.setup.terrain, p.setup.writer, p.folder,
                                p.inflow_xy, pr.progress, pr.log, pr.cancel)
+        _hecras_stage(p, res, pr.log)
+    except workflow.HecRasStageError as e:
+        sys.stderr.write("ndbreach: {}\n".format(e))
+        return 1
     except lfmod.Cancelled:
         say("Cancelled.")
         return 130
@@ -1387,6 +1396,15 @@ def cmd_run(args):
     _describe_result(res, p.setup.writer)
     say("Finished in {:.1f} min.".format((time.time() - t0) / 60.0))
     return 0
+
+
+def _hecras_stage(p, res, log):
+    """3.10.66: model.tier 'hecras' (LISFLOOD-FP then HEC-RAS 2D) runs the HEC-RAS 2D stage
+    after LISFLOOD-FP, as in QGIS (it was skipped). Raises workflow.HecRasStageError."""
+    if p.st.tier != workflow.TIER_HECRAS or not res.summary.get("breach_occurs", True):
+        return
+    log("HEC-RAS 2D stage\u2026 (the LISFLOOD-FP rasters are kept as 'LISFLOOD-FP <name>')")
+    workflow.run_hecras_stage(p.folder, res, p.setup.writer, p.st, p.dam_xy, log)
 
 
 def cmd_hydrograph(args):
@@ -1632,7 +1650,9 @@ def cmd_batch(args):
             out["Structure_Flag"] += " (run allowed)"
         depth_names = (workflow.FINAL_NAMES["depth"],
                        os.path.splitext(workflow.FINAL_NAMES["depth"])[0] + ".asc")
-        if skip_done and any(os.path.exists(os.path.join(folder, nm)) for nm in depth_names):
+        if skip_done and any(os.path.exists(os.path.join(folder, nm)) for nm in depth_names) \
+                and (cfg.get("model", "tier", workflow.TIER_LISFLOOD) != workflow.TIER_HECRAS
+                     or workflow.hecras_done(folder)):
             out.update({"Status": "skipped", "Message": "already has Depth (Max)"})
             results.append(out)
             continue
@@ -1653,6 +1673,7 @@ def cmd_batch(args):
                 say(note)
             res = workflow.run_dam(p.dam, p.dam_xy, p.st, p.setup.terrain, p.setup.writer,
                                    p.folder, None, pr.progress, pr.log, pr.cancel)
+            _hecras_stage(p, res, pr.log)
             s = res.summary
             if not s.get("breach_occurs", True):
                 out.update({"Status": "no breach",
@@ -1675,7 +1696,8 @@ def cmd_batch(args):
             out.update({"Status": "cancelled"})
             results.append(out)
             break
-        except (lfmod.ModelError, brmod.BreachInputError, CliError) as e:
+        except (lfmod.ModelError, brmod.BreachInputError, CliError,
+                workflow.HecRasStageError) as e:
             out.update({"Status": "failed", "Message": str(e)[:500]})
             sys.stderr.write("ndbreach: {}: {}\n".format(dam_id, e))
         except Exception as e:

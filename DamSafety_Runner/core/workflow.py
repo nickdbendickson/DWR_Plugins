@@ -2705,3 +2705,48 @@ def render_report(r):
               "These rasters are the input for the ND hazard classification; this tool does "
               "not classify the dam.", ""]
     return "\n".join(lines)
+
+
+class HecRasStageError(Exception):
+    """The HEC-RAS 2D stage of Models = LISFLOOD-FP then HEC-RAS 2D failed (the
+    LISFLOOD-FP results stay in the dam folder)."""
+
+
+def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None):
+    """3.10.66: the HEC-RAS 2D stage after workflow.run_dam (Models = LISFLOOD-FP then
+    HEC-RAS 2D), shared by 'Run breach model for one dam', the batch and the ndbreach CLI
+    (both used to skip it): runs hecras_engine.run_stage, puts its final rasters in `res.final`, adds its warnings and
+    re-makes the run report from the final engine (workflow.adopt_final_engine). Raises
+    HecRasStageError with a message that says the LISFLOOD-FP results are kept."""
+    if engine is None:
+        from . import hecras_engine as engine
+    try:
+        hr = engine.run_stage(folder, res.final, writer, st, log)
+    except engine.HecRasEngineError as e:
+        raise HecRasStageError("HEC-RAS 2D stage failed (the LISFLOOD-FP results are in the "
+                               "dam folder): {}".format(e))
+    res.final.update(hr["final"])
+    res.warnings.extend(hr["warnings"])
+    # every reported figure from the final engine (the screening pass is kept)
+    try:
+        res.summary = adopt_final_engine(folder, "HEC-RAS 2D", st, dam_xy, log)
+    except Exception as e:
+        raise HecRasStageError(
+            "HEC-RAS 2D ran, but the run report and flood polygons could not be made "
+            "from its rasters ({}: {}); they still show the LISFLOOD-FP screening "
+            "pass.".format(type(e).__name__, e))
+    return hr
+
+
+def hecras_done(folder):
+    """True when the dam folder holds a finished HEC-RAS 2D stage: _hecras/hecras_stage.json
+    with its results HDF (a timed-out stage writes the file too, with status 'timeout' and no
+    results - that is not finished)."""
+    path = os.path.join(folder, "_hecras", "hecras_stage.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return (isinstance(rec, dict) and rec.get("status") != "timeout"
+            and bool(rec.get("results_hdf")))

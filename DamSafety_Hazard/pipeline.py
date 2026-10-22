@@ -101,6 +101,9 @@ DEFAULTS = {
     "download_dams": True, "dam_layer": None, "subject_dam_nid": "",
     "download_lifelines": True, "lifeline_layer": None, "lifeline_as_medium": True,
     "model_boundary_layer": None, "eap": True,
+    # 2.18.58: a polygon file (absolute, or relative to the dam folder) used as the model
+    # boundary when no model_boundary_layer is given; missing file = the automatic check
+    "model_boundary_file": "",
     # v2.3
     "download_roads": True, "download_crossings_structures": True, "spreadsheets": True,
     "subfolders": True,
@@ -755,6 +758,46 @@ def forget_evaluation(output_folder=None):
         _EVAL_CACHE.pop(os.path.normcase(os.path.abspath(output_folder)), None)
 
 
+def boundary_file_path(cfg):
+    """The model boundary file of cfg["model_boundary_file"] (relative names are
+    looked up in the dam folder), or "" when not set / not found."""
+    name = str(cfg.get("model_boundary_file") or "").strip()
+    if not name:
+        return ""
+    path = name if os.path.isabs(name) else os.path.join(cfg.get("dam_folder") or "", name)
+    return path if os.path.isfile(path) else ""
+
+
+def resolve_boundary_file(cfg, log=None):
+    """2.18.58: cfg with model_boundary_layer loaded from model_boundary_file
+    (the HEC-RAS 2D flow area polygon of ndhazard:batch BOUNDARY), unless a
+    boundary layer is already given. A missing or unreadable file leaves the
+    automatic model edge check (logged)."""
+    if cfg.get("model_boundary_layer") is not None or not cfg.get("model_boundary_file"):
+        return cfg
+    path = boundary_file_path(cfg)
+    if not path:
+        if log:
+            log("Model boundary file {} not found in the dam folder - automatic model edge "
+                "check".format(cfg.get("model_boundary_file")))
+        return cfg
+    lyr = QgsVectorLayer(path, "Model boundary ({})".format(os.path.basename(path)), "ogr")
+    if not lyr.isValid():
+        sub = QgsVectorLayer(path + "|layername=model_boundary",
+                             "Model boundary ({})".format(os.path.basename(path)), "ogr")
+        lyr = sub if sub.isValid() else lyr
+    if not lyr.isValid():
+        if log:
+            log(">>> WARNING: model boundary file {} cannot be read - automatic model edge "
+                "check".format(path))
+        return cfg
+    out = dict(cfg)
+    out["model_boundary_layer"] = lyr
+    if log:
+        log("Model boundary: {}".format(path))
+    return out
+
+
 def run_classification(cfg, progress=None, log=None, deferred=False):
     """Returns a dict: governing, per-scenario results, lines, outputs,
     structs, layers. Every run (also a failed one) leaves
@@ -765,6 +808,7 @@ def run_classification(cfg, progress=None, log=None, deferred=False):
     res["post"]; call finish_run(res) on the main thread to add the layers,
     make the map book and the PDF report and write the summary and the run
     log. deferred=False: everything is done here."""
+    cfg = resolve_boundary_file(cfg, log)
     run = Run(cfg, progress, log, deferred=deferred)
     os.makedirs(run.out, exist_ok=True)
     try:

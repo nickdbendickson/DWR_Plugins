@@ -560,8 +560,79 @@ def import_plan(hdf_path, out_folder, dem_path=None, cell_ft=0.0, breach_hr=0.0,
         except OSError:
             pass
     dem = None
+    # 2.18.58: the 2D flow area perimeter(s) as the model boundary polygon, next to the
+    # rasters, so the classification's model-edge check uses the HEC-RAS 2D area
+    # (ndhazard:batch 'Model boundary' option; the dam folder copy is found by name)
+    try:
+        bnd = write_area_boundary(hdf_path, os.path.join(out_folder, BOUNDARY_FILE), wkt)
+        if bnd:
+            paths["boundary"] = bnd
+    except Exception as e:                     # the rasters are the result; never fail on it
+        notes.append("the 2D flow area boundary polygon was not written: {}".format(e))
     return {"paths": paths, "lines": lines, "notes": notes, "info": info,
             "pixel_ft": pix * k}
+
+
+BOUNDARY_FILE = "model_boundary_2d_area.gpkg"
+BOUNDARY_LAYER = "model_boundary"
+
+
+def area_perimeters(hdf_path):
+    """[(area name, [(x, y), ...])] of the plan's 2D flow area perimeters
+    (/Geometry/2D Flow Areas Polygon Info / Polygon Points), in the plan's
+    coordinates. [] when the plan has none."""
+    h = open_hdf(hdf_path)
+    try:
+        if not (h.has(GEOM + "/Polygon Points") and h.has(GEOM + "/Polygon Info")):
+            return []
+        pts = np.asarray(h.read(GEOM + "/Polygon Points"), dtype=float)
+        pinfo = np.asarray(h.read(GEOM + "/Polygon Info"))
+        names = h.field(GEOM + "/Attributes", "Name")
+        names = [str(_txt(n)).strip() for n in names] if names is not None else []
+    finally:
+        h.close()
+    out = []
+    for i, row in enumerate(np.atleast_2d(pinfo)):
+        s, n = int(row[0]), int(row[1])
+        ring = [(float(x), float(y)) for x, y in pts[s:s + n, :2]]
+        if len(ring) >= 3:
+            out.append((names[i] if i < len(names) and names[i] else "Area {}".format(i + 1),
+                        ring))
+    return out
+
+
+def write_area_boundary(hdf_path, out_path, wkt=""):
+    """Write the 2D flow area perimeter(s) as polygons (GeoPackage layer
+    'model_boundary', field 'area') to out_path. Returns the path, or None when
+    the plan has no perimeter."""
+    from osgeo import ogr, osr
+    rings = area_perimeters(hdf_path)
+    if not rings:
+        return None
+    if os.path.exists(out_path):
+        os.remove(out_path)
+    ds = ogr.GetDriverByName("GPKG").CreateDataSource(out_path)
+    if ds is None:
+        raise RasImportError("cannot write {}".format(out_path))
+    srs = None
+    if wkt:
+        srs = osr.SpatialReference()
+        srs.ImportFromWkt(wkt)
+    lyr = ds.CreateLayer(BOUNDARY_LAYER, srs, ogr.wkbPolygon)
+    lyr.CreateField(ogr.FieldDefn("area", ogr.OFTString))
+    for name, pts in rings:
+        ring = ogr.Geometry(ogr.wkbLinearRing)
+        for x, y in pts:
+            ring.AddPoint_2D(x, y)
+        ring.CloseRings()
+        poly = ogr.Geometry(ogr.wkbPolygon)
+        poly.AddGeometry(ring)
+        ft = ogr.Feature(lyr.GetLayerDefn())
+        ft.SetField("area", name)
+        ft.SetGeometry(poly)
+        lyr.CreateFeature(ft)
+    ds = None
+    return out_path
 
 
 def _finish(folder, grids, dem, win, k, progress=None, rows=512):
