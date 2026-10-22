@@ -12,6 +12,12 @@ import shutil
 import sys
 import tempfile
 
+try:
+    import h5py  # noqa: F401
+except ImportError:  # the CI QGIS env has no h5py: the fixture needs it, so skip (exit 0)
+    print("SKIP: h5py is not installed")
+    sys.exit(0)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, ROOT)
