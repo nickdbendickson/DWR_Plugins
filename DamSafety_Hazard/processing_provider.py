@@ -8,6 +8,7 @@ graphical models and from the command line (qgis_process).
   ndhazard:classify    ND REG_05.2026 / TM 11 hazard classification (uses and
                        adds project layers, so it runs on the main thread)
   ndhazard:dsswise     import a DSS-WISE Lite results package
+  ndhazard:savedamstate  one dam's Hazard window state as a project to reopen (2.18.59)
   ndhazard:batch       every dam folder of a folder (v2.9: WORKERS > 1 runs
                        that many dams at once as qgis_process children)
   ndhazard:creepwatch  hazard-creep watch over a folder of dams (watch.py)
@@ -1065,6 +1066,82 @@ class RasPlanAlgorithm(_Base):
                 "WSE": p.get("wse"), "PEAK": p.get("peak"), "BOUNDARY": p.get("boundary")}
 
 
+class SaveDamStateAlgorithm(_Base):
+    """2.18.59: one dam's Hazard window state as its own QGIS project (damstate.py)."""
+
+    def name(self):
+        return "savedamstate"
+
+    def displayName(self):
+        return "Save a dam's Hazard window state (project to reopen)"
+
+    def shortHelpString(self):
+        return ("Writes <dam folder>/Hazard_<dam>.qgz: a new QGIS project with the dam's "
+                "flood rasters and model boundary, and the Hazard window's state for this "
+                "dam (folders, rasters, scenario name, NID ID, boundary, options from a "
+                "settings profile). The open project is not touched. To go on with the dam "
+                "later: Project > Open… the .qgz, open the Hazard window, add scenarios "
+                "('Add scenario' / 'Add from a folder…', e.g. HEC-RAS or DSS-WISE results) "
+                "and Classify. The Runner's batch chain runs this after each dam.")
+
+    def initAlgorithm(self, config=None):
+        P = self.addParameter
+        P(QgsProcessingParameterFile("DAM_FOLDER", "Dam project folder", behavior=FILE_FOLDER))
+        P(QgsProcessingParameterFile("DEPTH", "Maximum depth raster (ft)", behavior=FILE_FILE))
+        for key, label in (("VELOCITY", "Maximum velocity raster (ft/s)"),
+                           ("ARRIVAL", "Arrival time raster (h)"),
+                           ("DXV", "Depth x velocity raster (ft2/s)"),
+                           ("BOUNDARY", "Model boundary polygon file (2D flow area)")):
+            P(QgsProcessingParameterFile(key, label, behavior=FILE_FILE, optional=True))
+        P(QgsProcessingParameterString("SCENARIO_NAME", "Scenario name",
+                                       defaultValue="Breach", optional=True))
+        P(QgsProcessingParameterString("SUBJECT_NID", "NID ID of the dam", optional=True))
+        P(QgsProcessingParameterString("DAM_ID", "Dam ID (project file name; empty = the "
+                                       "dam folder's name)", optional=True))
+        P(QgsProcessingParameterFile("PROFILE", "Settings profile (.ndprofile.json) for the "
+                                     "shared options", behavior=FILE_FILE, extension="json",
+                                     optional=True))
+        P(QgsProcessingParameterString("CLASSIFY_OPTIONS", "Classify options used (JSON, "
+                                       "ndhazard:classify parameter -> true/false)",
+                                       optional=True))
+        P(QgsProcessingParameterString("PROJECT_FILE", "Project file (.qgz; empty = "
+                                       "<dam folder>/Hazard_<dam>.qgz)", optional=True))
+        self.addOutput(QgsProcessingOutputFile("PROJECT", "Hazard project (.qgz)"))
+        self.addOutput(QgsProcessingOutputFile("STATE_JSON", "Window state (JSON copy)"))
+
+    def processAlgorithm(self, parameters, context, feedback):
+        import json
+        from . import damstate
+        from .settings import ProfileError
+
+        def f(key):
+            return (self.parameterAsFile(parameters, key, context) or "").strip()
+
+        def t(key):
+            return (self.parameterAsString(parameters, key, context) or "").strip()
+        opts = {}
+        if t("CLASSIFY_OPTIONS"):
+            try:
+                opts = json.loads(t("CLASSIFY_OPTIONS"))
+            except ValueError as e:
+                raise QgsProcessingException("CLASSIFY_OPTIONS is not JSON: {}".format(e))
+            if not isinstance(opts, dict):
+                raise QgsProcessingException("CLASSIFY_OPTIONS must be a JSON object")
+        try:
+            r = damstate.save_dam_state(
+                f("DAM_FOLDER"), f("DEPTH"), f("VELOCITY"), f("ARRIVAL"), f("DXV"),
+                name=t("SCENARIO_NAME") or "Breach", nid=t("SUBJECT_NID"),
+                boundary=f("BOUNDARY"), profile=f("PROFILE"), classify_options=opts,
+                project_path=t("PROJECT_FILE"), dam_id=t("DAM_ID"), log=feedback.pushInfo)
+        except (ValueError, OSError, ProfileError) as e:
+            raise QgsProcessingException(str(e))
+        for n in r["notes"]:
+            feedback.pushInfo("NOTE: " + n)
+        feedback.pushInfo("To go on with this dam: Project > Open… {}, open the Hazard "
+                          "window, add scenarios and Classify.".format(r["project"]))
+        return {"PROJECT": r["project"], "STATE_JSON": r["json"]}
+
+
 class SeriesAlgorithm(_Base):
     """v2.8: dams-in-series screen over a folder of studied dams (series.py)."""
 
@@ -1356,7 +1433,8 @@ class Provider(QgsProcessingProvider):
         from .rulecompare_alg import RuleCompareAlgorithm
         from .markreviewed_alg import MarkReviewedAlgorithm          # v2.12
         classes = [AcerZonesAlgorithm, ClassifyAlgorithm, BatchAlgorithm, DssWiseAlgorithm, RasPlanAlgorithm,
-                   WatchAlgorithm, SeriesAlgorithm, PortfolioAlgorithm, ReproduceAlgorithm, FormFillAlgorithm]
+                   WatchAlgorithm, SeriesAlgorithm, PortfolioAlgorithm, ReproduceAlgorithm, FormFillAlgorithm,
+                   SaveDamStateAlgorithm]
         classes += list(QA_ALGORITHMS)
         classes += [type(a) for a in review_algorithms()]
         classes += [RunnerCulvertsAlgorithm, SuiteExportAlgorithm, ChartSignOffAlgorithm, RuleCompareAlgorithm,

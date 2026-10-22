@@ -2404,7 +2404,8 @@ from .algorithms_verification import VERIFICATION_ALGORITHMS    # noqa: E402
 from .algorithms_provenance import PROVENANCE_ALGORITHMS        # noqa: E402
 from .algorithms_selftest import SELFTEST_ALGORITHMS            # noqa: E402
 from .algorithms_nested import NESTED_ALGORITHMS                # noqa: E402
+from .algorithms_chain import CHAIN_ALGORITHMS                  # noqa: E402  3.10.67
 ALGORITHMS = (CORE_ALGORITHMS + NESTED_ALGORITHMS + PROBABILISTIC_ALGORITHMS + TOOL_ALGORITHMS + HYDROLOGY_ALGORITHMS + ADEQUACY_ALGORITHMS
               + CONSEQUENCE_ALGORITHMS + NDHAZARD_ALGORITHMS + ANIMATION_ALGORITHMS + REPORT_ALGORITHMS
               + HECRAS_ALGORITHMS + PROVENANCE_ALGORITHMS + VERIFICATION_ALGORITHMS
-              + SELFTEST_ALGORITHMS)
+              + SELFTEST_ALGORITHMS + CHAIN_ALGORITHMS)

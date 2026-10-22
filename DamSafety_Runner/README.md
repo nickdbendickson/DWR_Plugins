@@ -40,6 +40,42 @@ optional roughness, structure and road layers, and a dam point layer.
 what the flood reaches; *Hand the results to the hazard classification* still calls the ND
 Dam Hazard plugin for you (see below). The official classification is ND DWR's.
 
+## Batch chain: a list of dams through the whole suite (3.10.67)
+
+In the Runner window, Dam tab: 'Batch chain: dams through the whole suite…' (Processing:
+`ndbreach:chainbatch`). For each dam of the
+list, in turn:
+
+1. the Screening steps for that dam only (`nddam:runchain`; can be turned off),
+2. the Runner (`ndbreach:batch` for that dam),
+3. the HEC-RAS 2D package (`ndbreach:hecrasexport`): culverts from the Runner's inventory, or the
+   culverts and bridges of an ANUGA run that already exists for the dam (ANUGA is never launched),
+4. the HEC-RAS 2D run - **Run** (where an engine is available), **Wait for a manual run** (open the
+   package in RasMapper, make the terrain, compute; the chain waits up to N minutes for the plan's
+   results `.p##.hdf`, else the dam is 'waiting' and a resume picks it up; see `_chain/CHAIN_HECRAS_TODO.txt`)
+   or **Skip** (the Runner's rasters go straight to Hazard),
+5. the Hazard import of the plan results (`ndhazard:hecrasplan`),
+6. the Hazard classification (`ndhazard:classify`, ND 5.2 + ACER TM 11),
+
+then the next dam. A dam that fails is a 'failed' row (stage and reason) and the list goes on.
+
+Dams: a point layer (its selected dams by default) with an ID field, typed IDs, or a CSV of IDs.
+Settings: one suite settings file with a section per stage (`ndscreen|window`, `ndbreach|batch`,
+`ndbreach|hecrasexport`, `ndhazard|hecrasplan`, `ndhazard|classify`) and the chain's own rows
+(`ndbreach|chainbatch`). An overrides CSV changes single dams: a `dam_id` column, then only the
+columns that differ, named `plugin.tool.KEY` (e.g. `ndbreach.batch.BREACH_METHOD`) or a chain key
+(e.g. `HEC_MODE` = run / wait / skip). 'Check' runs the preflight before anything runs.
+
+Outputs: one folder per dam with `_chain/chain_state.json` (the resume record) and
+`_chain/chain_settings_used.json` (values used, overrides applied, software versions, input
+checksums); `Chain_Batch_Summary.csv` (written after every dam) and `chain_manifest.json` in the
+output folder.
+
+**Reopening a dam in Hazard.** Each classified dam's Hazard state is saved as
+`<dam folder>/Hazard_<ID>.qgz` (needs DamSafety Hazard 2.18.59). Project > Open… that file, open
+the Hazard window (it fills itself from the project: scenario table, folders, options), use
+'Add scenario' or 'Add from a folder…' to add HEC-RAS or DSS-WISE runs, and press Classify.
+
 ## ANUGA checkpoints and partial results (3.10.38: on for long runs)
 
 A long ANUGA run used to keep its maxima only in memory and write `anuga_result.npz` at
