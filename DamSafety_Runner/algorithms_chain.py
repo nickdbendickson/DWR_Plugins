@@ -47,8 +47,23 @@ def registry_algs():
         return set()
 
 
-def hec_engine():
-    """{available, platform, reason, windows_launcher} of the HEC-RAS 2D engine here."""
+def hec_engine(platform=None, detect_windows=None):
+    """{available, platform, reason, windows_launcher} of the HEC-RAS 2D engine here. On
+    Windows (3.10.68): the Windows launcher (core/hecras_windows.py) when Ras.exe is found."""
+    import sys
+    plat = platform or sys.platform
+    if plat.startswith("win"):
+        try:
+            if detect_windows is None:
+                from .core import hecras_windows as HW
+                detect_windows = HW.detect
+            d = detect_windows()
+            ok = bool(d.get("available"))
+            return {"available": ok, "platform": plat, "windows_launcher": ok,
+                    "reason": "" if ok else (d.get("reason") or "HEC-RAS 6.6 not found")}
+        except Exception as e:                                   # noqa
+            return {"available": False, "platform": plat, "reason": str(e),
+                    "windows_launcher": False}
     try:
         from .core import hecras_engine as HE
         d = HE.detect()
@@ -107,8 +122,10 @@ def fresh_defs(alg):
 class QgisOps(object):
     """Runs one stage of one dam in QGIS."""
 
-    def __init__(self, context, feedback, settings_path="", algs=None, run=None, lookup=None):
+    def __init__(self, context, feedback, settings_path="", algs=None, run=None, lookup=None,
+                 win_run=None):
         self.context, self.feedback = context, feedback
+        self.win_run = win_run          # (folder, log) -> {plan_hdf, method, ...}; tests
         self.lookup = lookup or QgsApplication.processingRegistry().algorithmById
         self.settings_path = settings_path
         self.algs = algs
@@ -247,17 +264,38 @@ class QgisOps(object):
         b = dam.outputs.get("hec_build") or {}
         pkg = b.get("package", "")
         drop = os.path.join(CH.chain_dir(dam.folder), CH.RESULTS_DROP)
+        since = float(b.get("built_at") or 0)
+        launch_note = ""
+        if dam.mode == "run_windows":
+            done = CH.find_finished_plan([pkg, drop], since)
+            if done:                                 # computed by hand since the build
+                return {"plan_hdf": done, "project": "", "method": "manual"}
+            run = self.win_run
+            if run is None:
+                from .core import hecras_windows as HW
+
+                def run(folder, log=None):
+                    return HW.run_plan(folder, log=log)
+            try:
+                self.log("{}: running HEC-RAS 6.6 (Windows launcher)".format(dam.dam_id))
+                r = run(pkg, log=self.log)
+                return {"plan_hdf": r["plan_hdf"], "project": r.get("project", ""),
+                        "method": r.get("method", ""), "attempts": r.get("attempts", []),
+                        "seconds": r.get("seconds")}
+            except Exception as e:                               # noqa - wait instead
+                launch_note = "the Windows launcher did not run it ({}); ".format(e)
+                self.log("{}: {}waiting for a manual run".format(dam.dam_id, launch_note))
         kw = {"cancelled": self.feedback.isCanceled if self.feedback else (lambda: False),
               "log": self.log}
         if sleep is not None:
             kw["sleep"] = sleep
         p = CH.wait_for_plan([pkg, drop], float(dam.cv.get("HEC_WAIT_MIN") or 0),
-                             since=float(b.get("built_at") or 0), **kw)
+                             since=since, **kw)
         if not p:
-            raise CH.Waiting("waiting for HEC-RAS: run the plan of {} by hand (see {}), then "
-                             "run the chain again".format(pkg, os.path.join(
+            raise CH.Waiting("waiting for HEC-RAS: {}run the plan of {} by hand (see {}), then "
+                             "run the chain again".format(launch_note, pkg, os.path.join(
                                  CH.chain_dir(dam.folder), CH.TODO_NAME)))
-        return {"plan_hdf": p, "project": ""}
+        return {"plan_hdf": p, "project": "", "method": "manual"}
 
     def run_hazard_import(self, dam):
         r = dam.outputs.get("hec_run") or {}

@@ -76,6 +76,10 @@ output folder.
 the Hazard window (it fills itself from the project: scenario table, folders, options), use
 'Add scenario' or 'Add from a folder…' to add HEC-RAS or DSS-WISE runs, and press Classify.
 
+### HEC-RAS on Windows (3.10.68, NOT TESTED ON WINDOWS YET)
+
+With HEC-RAS 6.6 installed on Windows (`Ras.exe` in `C:\Program Files (x86)\HEC\HEC-RAS\6.6`, or the folder in `NDBREACH_HECRAS_WINDOWS_DIR`), **Run** launches the plan itself: first headless (`Ras.exe -c`, then `RasUnsteady.exe`), then the HEC-RAS Controller COM object (`RAS66.HECRASController`, needs pywin32) as a fallback (`NDBREACH_HECRAS_WIN_METHODS=headless,com` to change the order or drop one). Both need the **terrain**: the package's Terrain folder has to hold the .hdf. If it does not, the dam goes to 'waiting': open the package in RAS Mapper, make the terrain, then run the chain again (it takes the finished `.p##.hdf`). Any launcher error falls back to the same wait. It has only been tested against mocks.
+
 ## ANUGA checkpoints and partial results (3.10.38: on for long runs)
 
 A long ANUGA run used to keep its maxima only in memory and write `anuga_result.npz` at
