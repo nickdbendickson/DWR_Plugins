@@ -1136,7 +1136,7 @@ class NDBreachRunnerDialog(QDialog):
             self._refresh_models()
         except Exception as e:                                   # noqa
             QMessageBox.information(self, TITLE, "The options could not be opened ({}). Use Settings > "
-                                    "Options > Processing > Providers > ND Dam Breach Runner.".format(e))
+                                    "Options > Processing > Providers > DamSafety Runner.".format(e))
 
     def _open_help(self):
         p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "README.md")

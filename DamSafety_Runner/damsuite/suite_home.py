@@ -68,7 +68,7 @@ def dam_row(folder, name=None):
     except Exception as e:                                       # noqa
         code, text = "none", "next action unknown ({})".format(e)
     if rec is None and row["has_rasters"]:
-        code, text = "classify", "Flood rasters without a dam record: classify the dam (ND Dam " \
+        code, text = "classify", "Flood rasters without a dam record: classify the dam (DamSafety " \
                                  "Hazard writes dam.json)."
     row["next"], row["next_text"], row["plugin"] = code, text, NEXT_PLUGIN.get(code, "ndhazard")
     _apply_flag(row, folder, rec)
@@ -177,7 +177,7 @@ def summary_text(s):
         text += "; {} with disputed values".format(s["disputed"])
     if s["problems"]:
         text += "; {} with a dam.json problem".format(s["problems"])
-    return text + ". Classes from dam.json (ND Dam Hazard's, previews excluded)."
+    return text + ". Classes from dam.json (DamSafety Hazard's, previews excluded)."
 
 
 def installed_plugins():

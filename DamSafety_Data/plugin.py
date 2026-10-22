@@ -18,7 +18,7 @@ from .settings import Settings
 from .settings_dialog import SettingsDialog
 from .sources import SOURCE_INFO, build_sources
 
-LOG_TAG = "ND Data Updater"
+LOG_TAG = "DamSafety Data"
 MENU = "&Dam safety"
 GROUP_NAME = "North Dakota data"
 PLUGIN_DIR = os.path.dirname(__file__)
@@ -75,14 +75,14 @@ class NdDataUpdaterPlugin:
     def initGui(self):  # noqa: N802 - QGIS API
         icon = QIcon(os.path.join(PLUGIN_DIR, "icon.svg"))
         win = self.iface.mainWindow()
-        self.action_check = QAction(icon, "Check for Data Updates Now", win)
+        self.action_check = QAction(icon, "Check for updates now", win)
         self.action_check.setToolTip("DamSafety Data: check North Dakota datasets for updates")
         self.action_check.triggered.connect(lambda: self.start_update(force=False, quiet=False))
-        self.action_load = QAction("Add North Dakota Layers to Project", win)
+        self.action_load = QAction("Add North Dakota layers to the project", win)
         self.action_load.triggered.connect(self.load_layers)
-        self.action_folder = QAction("Open Data Folder", win)
+        self.action_folder = QAction("Open data folder", win)
         self.action_folder.triggered.connect(self.open_data_folder)
-        self.action_settings = QAction("Settings and Status…", win)
+        self.action_settings = QAction("Settings and status\u2026", win)
         self.action_settings.triggered.connect(self.show_settings)
         self.action_pack = QAction("About the offline pack…", win)
         self.action_pack.setToolTip(
@@ -182,7 +182,7 @@ class NdDataUpdaterPlugin:
         if not self.enabled_sources():
             if not quiet:
                 bar.pushWarning(LOG_TAG, "No datasets are turned on. Choose some in "
-                                         "Plugins > ND Data Updater > Settings and Status.")
+                                         "Plugins > Dam safety > Data > Settings and status\u2026.")
             return
         data_dir = self.data_dir(quiet=quiet)
         try:

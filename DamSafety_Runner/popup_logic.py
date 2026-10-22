@@ -49,7 +49,7 @@ TABS = (
     ("Results", (
         ("products", "Flood polygons and EAP map from rasters\u2026", "Polygons, arrival contours, map."),
         ("consequences", "Life safety and damage estimate\u2026", "Incremental life safety and damage."),
-        ("ndhazardclass", "ND hazard classification (Section 5.2)\u2026",
+        ("ndhazardclass", "Preview the Section 5.2 class\u2026",
          "The Runner's own preview of the ND 5.2 class with the ACER TM 11 charts. DamSafety "
          "Hazard is the classification authority."),
         ("classify", "Hand the results to the hazard classification\u2026",

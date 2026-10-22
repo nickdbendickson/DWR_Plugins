@@ -365,14 +365,14 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
                 out.append(check(OK, "ACER TM 11 charts", chart or "the plugin's chart file"))
             except Exception as e:                               # noqa
                 out.append(check(FAIL, "ACER TM 11 charts", str(e)[:200],
-                                 "Digitize and sign off the charts in ND Dam Hazard, or choose another criterion."))
+                                 "Digitize and sign off the charts in DamSafety Hazard, or choose another criterion."))
         else:
             out.append(check(OK, "Hazard criterion", "no chart file needed"))
     # -- other plugins
     if "7b" in steps:
         v = env.plugin_version("ndbreach")
-        out.append(check(OK if v else FAIL, "ND Dam Breach Runner", "version {}".format(v) if v else "not installed",
-                         "" if v else "Install the Runner, or leave the detailed runs out."))
+        out.append(check(OK if v else FAIL, "DamSafety Runner", "version {}".format(v) if v else "not installed",
+                         "" if v else "Install DamSafety Runner, or leave the detailed runs out."))
     # -- settings file
     try:
         from ..damsuite import settings as DS

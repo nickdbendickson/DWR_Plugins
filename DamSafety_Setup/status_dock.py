@@ -10,7 +10,7 @@ from qgis.PyQt.QtWidgets import (
 
 class SuiteStatusDock(QDockWidget):
     def __init__(self, iface):
-        super(SuiteStatusDock, self).__init__("Suite status", iface.mainWindow())
+        super(SuiteStatusDock, self).__init__("DamSafety Setup \u2014 Suite status", iface.mainWindow())
         self.iface = iface
         self.setObjectName("DamSafetySuiteStatus")
         body = QWidget()
@@ -19,13 +19,18 @@ class SuiteStatusDock(QDockWidget):
         self.rows.setWordWrap(True)
         self.lay.addWidget(self.rows)
         row = QHBoxLayout()
-        for label, fn in (
-            ("Change folders", self._change),
-            ("Build LISFLOOD", self._build_lisflood),
-            ("Create ANUGA env", self._build_anuga),
-            ("Convert old pack", self._convert),
+        for label, fn, tip in (
+            ("Change folders\u2026", self._change,
+             "Pick the suite data folder, then the Dams folder. Results never go in the data folder."),
+            ("Build LISFLOOD-FP\u2026", self._build_lisflood,
+             "Build LISFLOOD-FP and remember the executable."),
+            ("Create ANUGA env\u2026", self._build_anuga,
+             "Create the optional ANUGA conda environment."),
+            ("Convert old pack\u2026", self._convert,
+             "Convert an older offline pack into the current layout."),
         ):
             b = QPushButton(label)
+            b.setToolTip(tip)
             b.clicked.connect(fn)
             row.addWidget(b)
         self.lay.addLayout(row)

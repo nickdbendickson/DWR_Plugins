@@ -1,7 +1,7 @@
 from qgis.core import QgsApplication
 from .provider import NDDamProvider
 
-LOG_TAG = "ND dam suite"
+LOG_TAG = "DamSafety Screening"
 MENU_NAME = "Dam safety"
 
 

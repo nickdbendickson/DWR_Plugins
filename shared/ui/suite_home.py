@@ -101,7 +101,7 @@ class SuiteHomeDialog(QDialog):
         lay = QVBoxLayout()
         info = QLabel(
             "Every dam folder of the Dams folder with its dam.json state and the next action the suite "
-            "suggests. Classes are ND Dam Hazard's (the Runner's / Screening's previews are not counted). "
+            "suggests. Classes are DamSafety Hazard's (the Runner's / Screening's previews are not counted). "
             "Nothing here changes a file.")
         info.setWordWrap(True)
         lay.addWidget(info)
@@ -150,12 +150,16 @@ class SuiteHomeDialog(QDialog):
         self.diag_btn.clicked.connect(lambda _c=False: self.copy_diagnostics())
         row.addWidget(self.diag_btn)
         row.addStretch(1)
+        lay.addLayout(row)
+        # a second row: six buttons on one line are cut off below about 1400 px
+        plugins = QHBoxLayout()
+        plugins.addStretch(1)
         for key in ("ndhazard", "ndbreach", "ndscreen"):
             btn = QPushButton(VS.LABELS.get(key, key) + "\u2026")
             btn.clicked.connect(lambda _c=False, k=key: self.open_plugin(k))
             setattr(self, "btn_" + key, btn)
-            row.addWidget(btn)
-        lay.addLayout(row)
+            plugins.addWidget(btn)
+        lay.addLayout(plugins)
         self.plugins_label = QLabel("")
         self.plugins_label.setWordWrap(True)
         lay.addWidget(self.plugins_label)
