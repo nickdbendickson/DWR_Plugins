@@ -61,7 +61,7 @@ def _run(out, fail=False):
 
     old = (mod.dd.download, mod.dd.write_local_dem, mod._warp, mod.dd.point_box)
     mod.dd.download, mod.dd.write_local_dem = fake_download, fake_write
-    mod.dd.point_box = lambda lon, lat, buf: (0.0, 0.0, 1.0, 1.0)     # no osr in the mock
+    mod.dd.point_box = lambda lon, lat, buf, bearing_deg=None: (0.0, 0.0, 1.0, 1.0)  # no osr in the mock
     mod._warp = lambda *a, **k: None
     try:
         alg = mod.DownloadDem() if hasattr(mod, "DownloadDem") else [

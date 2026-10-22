@@ -33,7 +33,7 @@
   "tm11_curves.py": "1250a67efc4e11165b7f2d31b2dfc5d02ed9284b2301fc2dbb423fee409367c5",
   "transformguard.py": "33f4cdb38bd1bb3f678c266b5221b1cbf721c81a29d6e2e18866c49270829ff1",
   "units.py": "2cd0b0208220ee8ae470c7c10adc8968cfd2bda7c05b9a836ab05130afc501d1",
-  "versions.py": "e9da8c9f20fe222857f7be76d222aab0491408bc9bed211634e7c173013ad9ad",
+  "versions.py": "cd8b134ad9fc379b547c2ed6f3982ead87ecadab489d47a11c406d943c649d23",
   "xlsx_lite.py": "b7e9ad8d43f5ae4b4158f642b5abd11912811756228f07fe54713fb141605030"
  },
  "fork_specific": [

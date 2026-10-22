@@ -902,6 +902,16 @@ def _classes():
             self.dem_download.clicked.connect(self.download_dem)
             form.addRow("Download", self.dem_res)
             form.addRow("", self.dem_download)
+            # optional downstream bearing: shifts the downloaded box downstream instead of
+            # centring it on the dam (blank = centred). You know the dam's downstream heading.
+            self.dem_bearing = W.QLineEdit()
+            self.dem_bearing.setPlaceholderText("deg from north; blank = centered on the dam")
+            self.dem_bearing.setToolTip("Compass bearing (degrees clockwise from north) of the "
+                                        "downstream direction. Blank downloads a square centred "
+                                        "on the dam; a bearing shifts the same-size box so the "
+                                        "dam sits near the upstream edge and the DEM reaches "
+                                        "downstream.")
+            form.addRow("Downstream bearing", self.dem_bearing)
             form.addRow("DEM elevation units", self.z)
             form.addRow("Dams folder", box)
             outer.addLayout(form)
@@ -983,6 +993,7 @@ def _classes():
                 "DAM_POINT": point, "OUT": out,
                 "BUFFER_MI": dem_buffer_mi(a.get("max_extent_mi")),     # half the max extent
                 "DAM_ID": str((a.get("dam") or {}).get("DAM_ID") or ""),
+                "BEARING_DEG": self.dem_bearing.text().strip(),
             }, parent=self)
             dam = a.get("dam") or {}
             # This dam's download only: <DAM_ID>_*m_5070.tif (or dam_<x>_<y>_* of its point)
