@@ -255,6 +255,8 @@ def main():
     check("Runner main", run)
     if run is not None:
         check("Runner settings", getattr(run, "settings_dialog", None))
+    from DamSafety_Runner.chain_dialog import ChainDialog
+    check("Runner batch chain", opened("Runner batch chain", lambda: ChainDialog(None)))
     from DamSafety_Runner import wizard
     check("Runner wizard", opened("Runner wizard", lambda: wizard._classes()["Wizard"](None)),
           close=False)

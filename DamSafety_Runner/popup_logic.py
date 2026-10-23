@@ -13,6 +13,7 @@ from .core import damjson, workflow
 
 PROVIDER = "ndbreach"
 WIZARD = "wizard:"
+CHAIN = "chainbatch"        # 3.10.67: opens the Batch chain window, not the Processing dialog
 
 # tab -> tools: (algorithm, button label, tooltip). "wizard:" opens the guided wizard.
 TABS = (
@@ -24,6 +25,9 @@ TABS = (
          "the run report, written into <Dams folder>/<Dam ID>."),
         ("batch", "Run breach models for a layer of dams\u2026",
          "One run per dam of a point layer; can hand each result to the hazard classification."),
+        (CHAIN, "Batch chain: dams through the whole suite\u2026",
+         "For each dam of a list: Screening, the Runner, HEC-RAS 2D (run, wait for a manual run "
+         "or skip), the Hazard import and classification, then the next dam."),
         ("estimate", "Estimate the run time\u2026",
          "The plan and the time of a run for this dam, without running it."),
     )),

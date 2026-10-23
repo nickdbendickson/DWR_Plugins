@@ -1030,6 +1030,25 @@ class NDBreachRunnerDialog(QDialog):
             pass
 
     # ------------------------------------------------------------------- tools --
+    def _open_chain(self, s):
+        """3.10.67: the Batch chain window; an empty output folder / DEM from this window."""
+        try:
+            from .chain_dialog import ChainDialog
+            dlg = ChainDialog(self, self.iface)
+            if not dlg.out.text().strip() and s.get("dams_folder"):
+                dlg.out.setText(s["dams_folder"])
+            if not dlg.dem.text().strip() and s.get("dem"):
+                dlg.dem.setText(s["dem"])
+            self.chain_dialog = dlg
+            dlg.show()
+            self._log(">>> Opened the Batch chain window")
+            return True
+        except Exception as e:                                   # noqa
+            self._log("!!! The Batch chain window could not be opened: {}".format(e))
+            QMessageBox.information(self, TITLE, "The Batch chain window could not be opened "
+                                                 "here ({}).".format(e))
+            return False
+
     def _open_tool(self, alg):
         """Open the wizard or the Processing dialog of ndbreach:<alg>, the dam filled in."""
         if alg == pl.WIZARD:
@@ -1043,6 +1062,8 @@ class NDBreachRunnerDialog(QDialog):
                 QMessageBox.information(self, TITLE, "The wizard could not be opened here ({}).".format(e))
                 return False
         s = self.settings()
+        if alg == pl.CHAIN:
+            return self._open_chain(s)
         params = pl.defaults(alg, s["dams_folder"], s["dam_id"], s)
         aid = "{}:{}".format(pl.PROVIDER, alg)
         try:
