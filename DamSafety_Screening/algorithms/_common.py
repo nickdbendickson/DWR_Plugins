@@ -317,10 +317,6 @@ def warp_to_grid(path_or_layer_source, gt, shape, resample="near"):
     return ds.GetRasterBand(1).ReadAsArray().astype("float64")
 
 
-def is_line_source(src):
-    return src is not None and QgsWkbTypes.geometryType(src.wkbType()) == GEOM_LINE
-
-
 def geom_parts(g):
     """(kind, parts) of a geometry in its current CRS, multi-part aware:
     'point' -> [(x, y), ...]; 'line' -> [[(x, y), ...], ...] (parts with >= 2 vertices);
