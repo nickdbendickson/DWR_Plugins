@@ -147,10 +147,14 @@ def hecras_tier_report_and_polygons_come_from_the_final_engine():
 
 @test
 def hecras_tier_algorithm_adopts_the_final_engine_after_run_stage():
-    src = open(os.path.join(os.path.dirname(HERE), "algorithms.py"), encoding="utf-8").read()
-    i = src.index("hecras_engine.run_stage(")
-    j = src.index("workflow.adopt_final_engine(", i)
-    assert j > i and "res.summary = workflow.adopt_final_engine(" in src[i:j + 40]
+    # 3.10.66: the stage moved to workflow.run_hecras_stage (shared with the batch and CLI)
+    src = open(os.path.join(os.path.dirname(HERE), "core", "workflow.py"),
+               encoding="utf-8").read().split("def run_hecras_stage", 1)[1]
+    i = src.index("engine.run_stage(")
+    j = src.index("adopt_final_engine(", i)
+    assert j > i and "res.summary = adopt_final_engine(" in src[i:j + 40]
+    alg = open(os.path.join(os.path.dirname(HERE), "algorithms.py"), encoding="utf-8").read()
+    assert "hecras_tier_stage = workflow.run_hecras_stage" in alg
 
 
 def _tier2_folder(d, **extra):

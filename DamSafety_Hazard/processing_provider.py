@@ -613,6 +613,11 @@ BATCH_FIELDS = ("Dam", "Folder", "Status", "ND_Class", "TM11_Class", "Lives_In_J
                 "Governing_Reason", "Judgment_Items", "Depth_Raster", "Baseline", "Report",
                 "Message")
 BATCH_CSV = "Batch_Hazard_Classification.csv"
+# 2.18.58: ndhazard:batch BOUNDARY
+BOUNDARY_FILE_DEFAULT = "model_boundary_2d_area.gpkg"
+BATCH_BOUNDARY_OPTIONS = (
+    "Automatic (the Runner's model domain, else the edge of the depth raster)",
+    "Each dam folder's 2D flow area polygon (file name below) when present, else automatic")
 _ONE_D_NOTE = "depth-only (1D) criterion - no velocity data"
 _NO_DOWNLOADS = ("download_nsi", "download_address", "download_usa_structures", "download_rail",
                  "download_crossings", "download_roads", "download_dams", "download_lifelines",
@@ -844,7 +849,9 @@ class BatchAlgorithm(_Base):
                 "found; falls back to one dam after another when it is missing, and says "
                 "so in MODE). TIMEOUT_MIN ends a worker that takes longer (that dam is "
                 "listed as failed). WORKERS = 1 (default) runs the dams one after another "
-                "in this session.")
+                "in this session. BOUNDARY: the model edge check can use each dam folder's HEC-RAS "
+                "2D flow area polygon (model_boundary_2d_area.gpkg, written by 'Import HEC-RAS "
+                "plan results'); a dam without the file gets the automatic check.")
 
     def flags(self):
         return super().flags() | NO_THREADING
@@ -868,6 +875,12 @@ class BatchAlgorithm(_Base):
                                        "(minutes, 0 = none)", type=NUM_INTEGER,
                                        defaultValue=int(WT_TIMEOUT_MIN), minValue=0,
                                        optional=True))
+        # 2.18.58: the model edge check against each dam's HEC-RAS 2D flow area
+        P(QgsProcessingParameterEnum("BOUNDARY", "Model boundary for the model edge check",
+                                     options=list(BATCH_BOUNDARY_OPTIONS), defaultValue=0))
+        P(QgsProcessingParameterString("BOUNDARY_FILE", "Boundary file name in each dam "
+                                       "folder (2D flow area polygon)",
+                                       defaultValue=BOUNDARY_FILE_DEFAULT, optional=True))
         self.addOutput(QgsProcessingOutputFile("SUMMARY", "Batch summary (CSV)"))
         self.addOutput(QgsProcessingOutputString("COUNTS", "Dams classified / failed / "
                                                  "skipped"))
@@ -885,6 +898,11 @@ class BatchAlgorithm(_Base):
             over.update({k: False for k in _NO_DOWNLOADS})
         workers = self._int(parameters, "WORKERS", context, 1)
         timeout = self._int(parameters, "TIMEOUT_MIN", context, WT_TIMEOUT_MIN) * 60
+        if self.parameterAsEnum(parameters, "BOUNDARY", context) == 1:
+            name = (self.parameterAsString(parameters, "BOUNDARY_FILE", context) or "").strip()
+            over["model_boundary_file"] = name or BOUNDARY_FILE_DEFAULT
+            feedback.pushInfo("Model edge check: each dam folder's {} when present (else the "
+                              "automatic check)".format(over["model_boundary_file"]))
         info = {}
         try:
             rows, path = batch_classify(parent, over, progress=_progress(feedback),
@@ -1017,6 +1035,9 @@ class RasPlanAlgorithm(_Base):
                            ("ARRIVAL", "Arrival time (h)"), ("WSE", "Max water surface (ft)"),
                            ("PEAK", "Time of peak (h)")):
             self.addOutput(QgsProcessingOutputRasterLayer(key, label))
+        # 2.18.58: the 2D flow area perimeter(s) (model_boundary_2d_area.gpkg)
+        self.addOutput(QgsProcessingOutputFile("BOUNDARY", "2D flow area boundary "
+                                               "(GeoPackage, model edge check)"))
 
     def processAlgorithm(self, parameters, context, feedback):
         from . import rasimport as RI
@@ -1041,7 +1062,7 @@ class RasPlanAlgorithm(_Base):
             feedback.pushInfo(line)
         p = res["paths"]
         return {"DEPTH": p.get("depth"), "VELOCITY": p.get("vel"), "ARRIVAL": p.get("arr"),
-                "WSE": p.get("wse"), "PEAK": p.get("peak")}
+                "WSE": p.get("wse"), "PEAK": p.get("peak"), "BOUNDARY": p.get("boundary")}
 
 
 class SeriesAlgorithm(_Base):
