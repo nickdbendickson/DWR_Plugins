@@ -130,16 +130,6 @@ def boundary_ring(valid):
     return v & ~inner
 
 
-def crop_box(mask, pad=2):
-    rows = np.where(mask.any(axis=1))[0]
-    cols = np.where(mask.any(axis=0))[0]
-    if len(rows) == 0:
-        return None
-    r0, r1 = max(rows[0] - pad, 0), min(rows[-1] + pad + 1, mask.shape[0])
-    c0, c1 = max(cols[0] - pad, 0), min(cols[-1] + pad + 1, mask.shape[1])
-    return r0, r1, c0, c1
-
-
 def hillshade(dem, cell, az=315.0, alt=45.0):
     z = np.where(np.isfinite(dem) & (dem > NODATA + 1), dem, np.nan)
     fill = np.nanmean(z) if np.isfinite(z).any() else 0.0

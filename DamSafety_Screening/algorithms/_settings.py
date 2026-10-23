@@ -2,7 +2,6 @@
 (suite_settings_tools.py, the same in the three plugins) with this plugin's key, settings tabs
 (core/settings_groups.FAMILIES) and toolbox groups (Screening steps / Advanced)."""
 from ..core import settings_groups as SG
-from ..core import workflow as wf
 from .. import suite_settings_tools as T
 
 PLUGIN = SG.PLUGIN
@@ -32,11 +31,3 @@ def settings_aware(cls, step=None):
 
 def full_catalog(classes, plugin=PLUGIN):
     return T.full_catalog(classes, plugin, SG.family, SG.TAB_ORDER, SG.NOT_IN_GRID)
-
-
-def step_of_tool(tool):
-    """The workflow step key of an algorithm name ('findponds' -> '16')."""
-    for k, a in wf.ALG.items():
-        if a == tool:
-            return k
-    return None
