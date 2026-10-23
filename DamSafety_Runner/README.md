@@ -40,6 +40,46 @@ optional roughness, structure and road layers, and a dam point layer.
 what the flood reaches; *Hand the results to the hazard classification* still calls the ND
 Dam Hazard plugin for you (see below). The official classification is ND DWR's.
 
+## Batch chain: a list of dams through the whole suite (3.10.67)
+
+In the Runner window, Dam tab: 'Batch chain: dams through the whole suite…' (Processing:
+`ndbreach:chainbatch`). For each dam of the
+list, in turn:
+
+1. the Screening steps for that dam only (`nddam:runchain`; can be turned off),
+2. the Runner (`ndbreach:batch` for that dam),
+3. the HEC-RAS 2D package (`ndbreach:hecrasexport`): culverts from the Runner's inventory, or the
+   culverts and bridges of an ANUGA run that already exists for the dam (ANUGA is never launched),
+4. the HEC-RAS 2D run - **Run** (where an engine is available), **Wait for a manual run** (open the
+   package in RasMapper, make the terrain, compute; the chain waits up to N minutes for the plan's
+   results `.p##.hdf`, else the dam is 'waiting' and a resume picks it up; see `_chain/CHAIN_HECRAS_TODO.txt`)
+   or **Skip** (the Runner's rasters go straight to Hazard),
+5. the Hazard import of the plan results (`ndhazard:hecrasplan`),
+6. the Hazard classification (`ndhazard:classify`, ND 5.2 + ACER TM 11),
+
+then the next dam. A dam that fails is a 'failed' row (stage and reason) and the list goes on.
+
+Dams: a point layer (its selected dams by default) with an ID field, typed IDs, or a CSV of IDs.
+Settings: one suite settings file with a section per stage (`ndscreen|window`, `ndbreach|batch`,
+`ndbreach|hecrasexport`, `ndhazard|hecrasplan`, `ndhazard|classify`) and the chain's own rows
+(`ndbreach|chainbatch`). An overrides CSV changes single dams: a `dam_id` column, then only the
+columns that differ, named `plugin.tool.KEY` (e.g. `ndbreach.batch.BREACH_METHOD`) or a chain key
+(e.g. `HEC_MODE` = run / wait / skip). 'Check' runs the preflight before anything runs.
+
+Outputs: one folder per dam with `_chain/chain_state.json` (the resume record) and
+`_chain/chain_settings_used.json` (values used, overrides applied, software versions, input
+checksums); `Chain_Batch_Summary.csv` (written after every dam) and `chain_manifest.json` in the
+output folder.
+
+**Reopening a dam in Hazard.** Each classified dam's Hazard state is saved as
+`<dam folder>/Hazard_<ID>.qgz` (needs DamSafety Hazard 2.18.59). Project > Open… that file, open
+the Hazard window (it fills itself from the project: scenario table, folders, options), use
+'Add scenario' or 'Add from a folder…' to add HEC-RAS or DSS-WISE runs, and press Classify.
+
+### HEC-RAS on Windows (3.10.68, NOT TESTED ON WINDOWS YET)
+
+With HEC-RAS 6.6 installed on Windows (`Ras.exe` in `C:\Program Files (x86)\HEC\HEC-RAS\6.6`, or the folder in `NDBREACH_HECRAS_WINDOWS_DIR`), **Run** launches the plan itself: first headless (`Ras.exe -c`, then `RasUnsteady.exe`), then the HEC-RAS Controller COM object (`RAS66.HECRASController`, needs pywin32) as a fallback (`NDBREACH_HECRAS_WIN_METHODS=headless,com` to change the order or drop one). Both need the **terrain**: the package's Terrain folder has to hold the .hdf. If it does not, the dam goes to 'waiting': open the package in RAS Mapper, make the terrain, then run the chain again (it takes the finished `.p##.hdf`). Any launcher error falls back to the same wait. It has only been tested against mocks.
+
 ## ANUGA checkpoints and partial results (3.10.38: on for long runs)
 
 A long ANUGA run used to keep its maxima only in memory and write `anuga_result.npz` at
@@ -145,8 +185,8 @@ With **Models = LISFLOOD-FP then HEC-RAS 2D**, the Linux RasUnsteady compute now
 - The limit in force is logged ("HEC-RAS preprocess: wall-clock limit per step none [...]" and "HEC-RAS compute: ... wall-clock limit none [no limit: NDBREACH_HECRAS_TIMEOUT_S unset]", with the run-time estimate), and recorded in `run_report.json["hecras_time_limit"]` (`limit_s`, `limit`, `how`, `estimate_s`, `applies_to`), `_hecras/hecras_stage.json` and the run report's "HEC-RAS wall-clock limit" row.
 - The gmsh-points timeout of "Refine HEC-RAS mesh with Gmsh points" (`core/hecras_seeds.py`, 600 s) is a separate setting and is unchanged.
 
-## HEC-RAS package: culverts and bridges from the ANUGA run, terrain CRS guard (3.10.56)
-- **Structures from another run.** *Export to HEC-RAS* has a "Culverts and bridges from another run" folder (`structures_from` in `build_model`): point it at the ANUGA run's dam folder, and each culvert and bridge inside the HEC-RAS 2D area becomes a connection across the road (road weir from the terrain; a culvert group for a culvert, with ANUGA's inverts from `anuga/anuga_job.npz`; an open gap in the weir for a bridge). The road lines are built into the 2D points so cell faces lie on them, and any weir or invert lower than the cells it joins is raised to that ground + 0.05 ft (listed in README_HECRAS.md). Each connection is written as HEC-RAS's weir / gates / culverts type (`Conn Routing Type= 1`, also with culverts: type 3 made HEC-RAS 6.6 stop with "has an error with the connection. Check that the To: is set correctly"), and the build stops with a plain list when HEC-RAS would refuse a connection (name, line outside the 2D area, a barrel with both ends in one cell or not across the line, a weir or invert below its cells). `core/hecras_structures.add_to_package(package, run, out)` does the same for an already built package. Limits: no bridge deck, low chord, piers or pressure flow; HEC-RAS's FHWA culvert is not ANUGA's Boyd culvert; structures outside the 2D area are listed, not added.
+## HEC-RAS package: culverts and bridges from the ANUGA run, terrain CRS guard (3.10.59; numbered 3.10.56 on its branch)
+- **Structures from another run.** *Export to HEC-RAS* has a "Culverts and bridges from another run" folder (`structures_from` in `build_model`): point it at the ANUGA run's dam folder, and each culvert and bridge inside the HEC-RAS 2D area becomes a connection across the road (road weir from the terrain; a culvert group for a culvert, with ANUGA's inverts from `anuga/anuga_job.npz`; an open gap in the weir for a bridge). The road lines are built into the 2D points so cell faces lie on them, and any weir or invert lower than the cells it joins is raised to that ground + 0.05 ft (listed in README_HECRAS.md). Each connection is written as HEC-RAS's weir / gates / culverts type (`Conn Routing Type= 1`, also with culverts: type 3 made HEC-RAS 6.6 stop with "has an error with the connection. Check that the To: is set correctly"), and the build stops with a plain list when HEC-RAS would refuse a connection (name, line outside the 2D area, a barrel with both ends in one cell or not across the line, a weir or invert below its cells). 3.10.65: both ends of every connection line stay at least 2 cells inside the perimeter (an end one cell from it also stopped HEC-RAS with the "To:" message), and the build stops if one does not. A culvert whose outlet invert is 0.5 ft or more above its inlet is kept as the run had it, with an "adverse culvert" note in README_HECRAS.md to check the inverts in the field. `add_to_package(..., exclude=[names])` leaves named structures out. `core/hecras_structures.add_to_package(package, run, out)` does the same for an already built package. Limits: no bridge deck, low chord, piers or pressure flow; HEC-RAS's FHWA culvert is not ANUGA's Boyd culvert; structures outside the 2D area are listed, not added.
 - **Terrain CRS guard.** After the terrain GeoTIFF is written (or copied by `add_to_package`) and before the package is zipped, it is reopened and must carry an EPSG code whose code, linear unit (name and size) and CRS match `GIS/Projection.prj`, and GDAL must be able to reach the PROJ database (proj.db). Otherwise the package stops with a plain reason and nothing half-built is left. This catches a terrain rewritten with `PROJ_DATA` unset, which turned EPSG:2266 (ft) into an unnamed metre CRS and made HEC-RAS's terrain step fail with "Translating source or target SRS failed". To fix it: set `PROJ_DATA` to the folder holding `proj.db` (QGIS's `share/proj`) and build again. Code: `core/hecras_terrain_crs.py`.
 
 ## DEM resampling onto the model grid

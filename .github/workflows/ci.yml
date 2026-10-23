@@ -96,6 +96,13 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE"
           python DamSafety_Runner/tests/realqt_wizard.py
+      - name: Runner batch chain (real QGIS, stages mocked)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          python DamSafety_Runner/tests/realqt_chain.py
       - name: Suite dam data and Setup (real QGIS, pytest)
         if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         env:

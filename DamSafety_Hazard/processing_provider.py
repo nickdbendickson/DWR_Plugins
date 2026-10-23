@@ -8,6 +8,7 @@ graphical models and from the command line (qgis_process).
   ndhazard:classify    ND REG_05.2026 / TM 11 hazard classification (uses and
                        adds project layers, so it runs on the main thread)
   ndhazard:dsswise     import a DSS-WISE Lite results package
+  ndhazard:savedamstate  one dam's Hazard window state as a project to reopen (2.18.59)
   ndhazard:batch       every dam folder of a folder (v2.9: WORKERS > 1 runs
                        that many dams at once as qgis_process children)
   ndhazard:creepwatch  hazard-creep watch over a folder of dams (watch.py)
@@ -613,6 +614,11 @@ BATCH_FIELDS = ("Dam", "Folder", "Status", "ND_Class", "TM11_Class", "Lives_In_J
                 "Governing_Reason", "Judgment_Items", "Depth_Raster", "Baseline", "Report",
                 "Message")
 BATCH_CSV = "Batch_Hazard_Classification.csv"
+# 2.18.58: ndhazard:batch BOUNDARY
+BOUNDARY_FILE_DEFAULT = "model_boundary_2d_area.gpkg"
+BATCH_BOUNDARY_OPTIONS = (
+    "Automatic (the Runner's model domain, else the edge of the depth raster)",
+    "Each dam folder's 2D flow area polygon (file name below) when present, else automatic")
 _ONE_D_NOTE = "depth-only (1D) criterion - no velocity data"
 _NO_DOWNLOADS = ("download_nsi", "download_address", "download_usa_structures", "download_rail",
                  "download_crossings", "download_roads", "download_dams", "download_lifelines",
@@ -844,7 +850,9 @@ class BatchAlgorithm(_Base):
                 "found; falls back to one dam after another when it is missing, and says "
                 "so in MODE). TIMEOUT_MIN ends a worker that takes longer (that dam is "
                 "listed as failed). WORKERS = 1 (default) runs the dams one after another "
-                "in this session.")
+                "in this session. BOUNDARY: the model edge check can use each dam folder's HEC-RAS "
+                "2D flow area polygon (model_boundary_2d_area.gpkg, written by 'Import HEC-RAS "
+                "plan results'); a dam without the file gets the automatic check.")
 
     def flags(self):
         return super().flags() | NO_THREADING
@@ -868,6 +876,12 @@ class BatchAlgorithm(_Base):
                                        "(minutes, 0 = none)", type=NUM_INTEGER,
                                        defaultValue=int(WT_TIMEOUT_MIN), minValue=0,
                                        optional=True))
+        # 2.18.58: the model edge check against each dam's HEC-RAS 2D flow area
+        P(QgsProcessingParameterEnum("BOUNDARY", "Model boundary for the model edge check",
+                                     options=list(BATCH_BOUNDARY_OPTIONS), defaultValue=0))
+        P(QgsProcessingParameterString("BOUNDARY_FILE", "Boundary file name in each dam "
+                                       "folder (2D flow area polygon)",
+                                       defaultValue=BOUNDARY_FILE_DEFAULT, optional=True))
         self.addOutput(QgsProcessingOutputFile("SUMMARY", "Batch summary (CSV)"))
         self.addOutput(QgsProcessingOutputString("COUNTS", "Dams classified / failed / "
                                                  "skipped"))
@@ -885,6 +899,11 @@ class BatchAlgorithm(_Base):
             over.update({k: False for k in _NO_DOWNLOADS})
         workers = self._int(parameters, "WORKERS", context, 1)
         timeout = self._int(parameters, "TIMEOUT_MIN", context, WT_TIMEOUT_MIN) * 60
+        if self.parameterAsEnum(parameters, "BOUNDARY", context) == 1:
+            name = (self.parameterAsString(parameters, "BOUNDARY_FILE", context) or "").strip()
+            over["model_boundary_file"] = name or BOUNDARY_FILE_DEFAULT
+            feedback.pushInfo("Model edge check: each dam folder's {} when present (else the "
+                              "automatic check)".format(over["model_boundary_file"]))
         info = {}
         try:
             rows, path = batch_classify(parent, over, progress=_progress(feedback),
@@ -1017,6 +1036,9 @@ class RasPlanAlgorithm(_Base):
                            ("ARRIVAL", "Arrival time (h)"), ("WSE", "Max water surface (ft)"),
                            ("PEAK", "Time of peak (h)")):
             self.addOutput(QgsProcessingOutputRasterLayer(key, label))
+        # 2.18.58: the 2D flow area perimeter(s) (model_boundary_2d_area.gpkg)
+        self.addOutput(QgsProcessingOutputFile("BOUNDARY", "2D flow area boundary "
+                                               "(GeoPackage, model edge check)"))
 
     def processAlgorithm(self, parameters, context, feedback):
         from . import rasimport as RI
@@ -1041,7 +1063,83 @@ class RasPlanAlgorithm(_Base):
             feedback.pushInfo(line)
         p = res["paths"]
         return {"DEPTH": p.get("depth"), "VELOCITY": p.get("vel"), "ARRIVAL": p.get("arr"),
-                "WSE": p.get("wse"), "PEAK": p.get("peak")}
+                "WSE": p.get("wse"), "PEAK": p.get("peak"), "BOUNDARY": p.get("boundary")}
+
+
+class SaveDamStateAlgorithm(_Base):
+    """2.18.59: one dam's Hazard window state as its own QGIS project (damstate.py)."""
+
+    def name(self):
+        return "savedamstate"
+
+    def displayName(self):
+        return "Save a dam's Hazard window state (project to reopen)"
+
+    def shortHelpString(self):
+        return ("Writes <dam folder>/Hazard_<dam>.qgz: a new QGIS project with the dam's "
+                "flood rasters and model boundary, and the Hazard window's state for this "
+                "dam (folders, rasters, scenario name, NID ID, boundary, options from a "
+                "settings profile). The open project is not touched. To go on with the dam "
+                "later: Project > Open… the .qgz, open the Hazard window, add scenarios "
+                "('Add scenario' / 'Add from a folder…', e.g. HEC-RAS or DSS-WISE results) "
+                "and Classify. The Runner's batch chain runs this after each dam.")
+
+    def initAlgorithm(self, config=None):
+        P = self.addParameter
+        P(QgsProcessingParameterFile("DAM_FOLDER", "Dam project folder", behavior=FILE_FOLDER))
+        P(QgsProcessingParameterFile("DEPTH", "Maximum depth raster (ft)", behavior=FILE_FILE))
+        for key, label in (("VELOCITY", "Maximum velocity raster (ft/s)"),
+                           ("ARRIVAL", "Arrival time raster (h)"),
+                           ("DXV", "Depth x velocity raster (ft2/s)"),
+                           ("BOUNDARY", "Model boundary polygon file (2D flow area)")):
+            P(QgsProcessingParameterFile(key, label, behavior=FILE_FILE, optional=True))
+        P(QgsProcessingParameterString("SCENARIO_NAME", "Scenario name",
+                                       defaultValue="Breach", optional=True))
+        P(QgsProcessingParameterString("SUBJECT_NID", "NID ID of the dam", optional=True))
+        P(QgsProcessingParameterString("DAM_ID", "Dam ID (project file name; empty = the "
+                                       "dam folder's name)", optional=True))
+        P(QgsProcessingParameterFile("PROFILE", "Settings profile (.ndprofile.json) for the "
+                                     "shared options", behavior=FILE_FILE, extension="json",
+                                     optional=True))
+        P(QgsProcessingParameterString("CLASSIFY_OPTIONS", "Classify options used (JSON, "
+                                       "ndhazard:classify parameter -> true/false)",
+                                       optional=True))
+        P(QgsProcessingParameterString("PROJECT_FILE", "Project file (.qgz; empty = "
+                                       "<dam folder>/Hazard_<dam>.qgz)", optional=True))
+        self.addOutput(QgsProcessingOutputFile("PROJECT", "Hazard project (.qgz)"))
+        self.addOutput(QgsProcessingOutputFile("STATE_JSON", "Window state (JSON copy)"))
+
+    def processAlgorithm(self, parameters, context, feedback):
+        import json
+        from . import damstate
+        from .settings import ProfileError
+
+        def f(key):
+            return (self.parameterAsFile(parameters, key, context) or "").strip()
+
+        def t(key):
+            return (self.parameterAsString(parameters, key, context) or "").strip()
+        opts = {}
+        if t("CLASSIFY_OPTIONS"):
+            try:
+                opts = json.loads(t("CLASSIFY_OPTIONS"))
+            except ValueError as e:
+                raise QgsProcessingException("CLASSIFY_OPTIONS is not JSON: {}".format(e))
+            if not isinstance(opts, dict):
+                raise QgsProcessingException("CLASSIFY_OPTIONS must be a JSON object")
+        try:
+            r = damstate.save_dam_state(
+                f("DAM_FOLDER"), f("DEPTH"), f("VELOCITY"), f("ARRIVAL"), f("DXV"),
+                name=t("SCENARIO_NAME") or "Breach", nid=t("SUBJECT_NID"),
+                boundary=f("BOUNDARY"), profile=f("PROFILE"), classify_options=opts,
+                project_path=t("PROJECT_FILE"), dam_id=t("DAM_ID"), log=feedback.pushInfo)
+        except (ValueError, OSError, ProfileError) as e:
+            raise QgsProcessingException(str(e))
+        for n in r["notes"]:
+            feedback.pushInfo("NOTE: " + n)
+        feedback.pushInfo("To go on with this dam: Project > Open… {}, open the Hazard "
+                          "window, add scenarios and Classify.".format(r["project"]))
+        return {"PROJECT": r["project"], "STATE_JSON": r["json"]}
 
 
 class SeriesAlgorithm(_Base):
@@ -1335,7 +1433,8 @@ class Provider(QgsProcessingProvider):
         from .rulecompare_alg import RuleCompareAlgorithm
         from .markreviewed_alg import MarkReviewedAlgorithm          # v2.12
         classes = [AcerZonesAlgorithm, ClassifyAlgorithm, BatchAlgorithm, DssWiseAlgorithm, RasPlanAlgorithm,
-                   WatchAlgorithm, SeriesAlgorithm, PortfolioAlgorithm, ReproduceAlgorithm, FormFillAlgorithm]
+                   WatchAlgorithm, SeriesAlgorithm, PortfolioAlgorithm, ReproduceAlgorithm, FormFillAlgorithm,
+                   SaveDamStateAlgorithm]
         classes += list(QA_ALGORITHMS)
         classes += [type(a) for a in review_algorithms()]
         classes += [RunnerCulvertsAlgorithm, SuiteExportAlgorithm, ChartSignOffAlgorithm, RuleCompareAlgorithm,

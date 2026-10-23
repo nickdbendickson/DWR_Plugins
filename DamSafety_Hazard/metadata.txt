@@ -5,10 +5,14 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.57
+version=2.18.59
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
+    2.18.59 - 2026-10-22 (a dam's Hazard state saved to reopen)
+      * New Processing tool 'Save a dam's Hazard window state (project to reopen)' (ndhazard:savedamstate; damstate.py), run by the Runner's batch chain after each dam's classification: writes <dam folder>/Hazard_<ID>.qgz (a new project with the dam's flood rasters, its model boundary and the Hazard window's state: scenario table, folders and options) plus a readable Hazard_<ID>.hazard_state.json. To reopen: Project > Open… the .qgz, open the Hazard window (it fills itself from the project), add scenarios with 'Add scenario' / 'Add from a folder…' and press Classify. The open project is never changed. Nothing in the classification changed.
+    2.18.58 - 2026-10-22 (HEC-RAS 2D flow area as the batch's model boundary)
+      * 'Import HEC-RAS plan results' (and ndhazard:hecrasplan, new output BOUNDARY) writes the plan's 2D flow area perimeter(s) to model_boundary_2d_area.gpkg next to the rasters. ndhazard:batch has a new 'Model boundary for the model edge check' option (BOUNDARY / BOUNDARY_FILE): each dam folder's 2D flow area polygon when present, else the automatic check (default unchanged). New setting model_boundary_file (a file name, relative to the dam folder), also passed to the parallel workers; a missing or unreadable file falls back to the automatic check and says so in the log.
     2.18.57 - 2026-10-21 (tool dialogs stay in front of the window)
       * Tool dialogs opened from the window (the Dam suite tab's tools) are owned by the window and modal (new shared/ui/tool_dialog.py). Before, QGIS's execAlgorithmDialog owned them from its main window and showed them before exec_(), so they were not modal: a click on the plugin window raised it over the tool, and from the Runner's 'Model one dam' wizard (modal itself) the DEM download could not be clicked at all, the wizard popped up in front of it. Nothing in the classification changed.
     2.18.56 - 2026-10-21 (restored 911 points H1, model edge with a no-data ring, DWR-8278 inventory follow-ups; on 2.18.55; numbered 2.18.50 then 2.18.54 on its branch)

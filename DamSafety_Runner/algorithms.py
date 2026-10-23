@@ -1285,6 +1285,11 @@ class _Base(QgsProcessingAlgorithm):
 
 
 # ============================================================================
+HecRasTierError = workflow.HecRasStageError      # 3.10.66: shared with the CLI
+hecras_tier_stage = workflow.run_hecras_stage
+hecras_done = workflow.hecras_done
+
+
 class RunDamAlgorithm(_Base):
     # 3.10.23: a flagged structure (damsuite/structure_flags.py) is refused unless allowed
     FLAG_GATE = True
@@ -1649,26 +1654,13 @@ class RunDamAlgorithm(_Base):
         except (ModelError, brmod.BreachInputError) as e:
             raise QgsProcessingException(str(e))
         if st.tier == workflow.TIER_HECRAS:          # design #68; never for TIER 0 / 1
-            from .core import hecras_engine
             feedback.pushWarning("Models = LISFLOOD-FP then HEC-RAS 2D: the final rasters come "
                                  "from HEC-RAS 2D; the LISFLOOD-FP ones are kept as "
                                  "'LISFLOOD-FP \u2026'.")
             try:
-                hr = hecras_engine.run_stage(folder, res.final, writer, st, fb.log)
-            except hecras_engine.HecRasEngineError as e:
-                raise QgsProcessingException("HEC-RAS 2D stage failed (the LISFLOOD-FP results "
-                                             "are in the dam folder): {}".format(e))
-            res.final.update(hr["final"])
-            res.warnings.extend(hr["warnings"])
-            # every reported figure from the final engine (the screening pass is kept)
-            try:
-                res.summary = workflow.adopt_final_engine(folder, "HEC-RAS 2D", st, dam_xy,
-                                                          fb.log)
-            except Exception as e:
-                raise QgsProcessingException(
-                    "HEC-RAS 2D ran, but the run report and flood polygons could not be made "
-                    "from its rasters ({}: {}); they still show the LISFLOOD-FP screening "
-                    "pass.".format(type(e).__name__, e))
+                hecras_tier_stage(folder, res, writer, st, dam_xy, fb.log)
+            except HecRasTierError as e:
+                raise QgsProcessingException(str(e))
         for w in res.warnings:
             feedback.pushWarning("Check: " + w)
         for k, v in res.summary.items():
@@ -1859,7 +1851,10 @@ class BatchAlgorithm(_Base):
                 "For the flood scenario put each dam's inputs in <Dams folder>/<Dam ID>/inputs/: "
                 "pmf_inflow.csv, spillway_rating.csv (optional), baseline_outflow.csv and "
                 "breach_hydrograph.csv (own-hydrograph method only). A dam that fails is "
-                "reported and skipped. A flagged structure (docs/Flagged_structures.md, e.g. a "
+                "reported and skipped. With Models = LISFLOOD-FP then HEC-RAS 2D every dam "
+                "also gets the HEC-RAS 2D stage (_hecras/); a dam whose HEC-RAS run fails is "
+                "listed as failed (its LISFLOOD-FP results stay in its folder) and the batch "
+                "goes on. A flagged structure (docs/Flagged_structures.md, e.g. a "
                 "road fill over backwater) is not run: Status 'flagged' with the reason, "
                 "Structure_Flag and Hazard_Of_Record (ALLOW_FLAGGED_STRUCTURE=1 in the "
                 "environment runs it anyway). With 'classify afterwards' the ND hazard batch "
@@ -1982,8 +1977,11 @@ class BatchAlgorithm(_Base):
                 row.update({"Structure_Flag": sflags.note(flag) + " (run allowed)",
                             "Hazard_Of_Record": "{} ({})".format(flag.get("hazard"),
                                                                  flag.get("hazard_source"))})
-            if skip and os.path.exists(os.path.join(folder, workflow.FINAL_NAMES["depth"])):
-                row.update({"Status": "skipped", "Message": "already has Depth (Max).tif"})
+            if skip and os.path.exists(os.path.join(folder, workflow.FINAL_NAMES["depth"])) \
+                    and (base_st.tier != workflow.TIER_HECRAS or hecras_done(folder)):
+                row.update({"Status": "skipped", "Message": "already has Depth (Max).tif" + (
+                    " and _hecras/hecras_stage.json" if base_st.tier == workflow.TIER_HECRAS
+                    else "")})
                 rows.append(row)
                 continue
             feedback.pushInfo("=== {} ({}/{})".format(dam_id, i + 1, len(feats)))
@@ -2041,6 +2039,15 @@ class BatchAlgorithm(_Base):
                 row["Scenario"] = st.scenario
                 res = workflow.run_dam(dam, (xy.x(), xy.y()), st, src, writer, folder, None,
                                        fb.progress, fb.log, fb.cancel)
+                # 3.10.66: Models = LISFLOOD-FP then HEC-RAS 2D runs the HEC-RAS stage here
+                # too (it was skipped: the batch gave LISFLOOD-FP results without a word)
+                if st.tier == workflow.TIER_HECRAS and \
+                        res.summary.get("breach_occurs", True):
+                    feedback.pushInfo("{}: HEC-RAS 2D stage\u2026".format(dam_id))
+                    try:
+                        hecras_tier_stage(folder, res, writer, st, (xy.x(), xy.y()), fb.log)
+                    except HecRasTierError as e:
+                        raise QgsProcessingException(str(e))
                 s = res.summary
                 if not s.get("breach_occurs", True):
                     row.update({"Status": "no breach", "Message": "the dam does not fail in "
@@ -2397,7 +2404,8 @@ from .algorithms_verification import VERIFICATION_ALGORITHMS    # noqa: E402
 from .algorithms_provenance import PROVENANCE_ALGORITHMS        # noqa: E402
 from .algorithms_selftest import SELFTEST_ALGORITHMS            # noqa: E402
 from .algorithms_nested import NESTED_ALGORITHMS                # noqa: E402
+from .algorithms_chain import CHAIN_ALGORITHMS                  # noqa: E402  3.10.67
 ALGORITHMS = (CORE_ALGORITHMS + NESTED_ALGORITHMS + PROBABILISTIC_ALGORITHMS + TOOL_ALGORITHMS + HYDROLOGY_ALGORITHMS + ADEQUACY_ALGORITHMS
               + CONSEQUENCE_ALGORITHMS + NDHAZARD_ALGORITHMS + ANIMATION_ALGORITHMS + REPORT_ALGORITHMS
               + HECRAS_ALGORITHMS + PROVENANCE_ALGORITHMS + VERIFICATION_ALGORITHMS
-              + SELFTEST_ALGORITHMS)
+              + SELFTEST_ALGORITHMS + CHAIN_ALGORITHMS)
