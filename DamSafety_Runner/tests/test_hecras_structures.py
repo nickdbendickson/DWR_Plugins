@@ -356,7 +356,9 @@ def hecras_structures_internal_culvert_connection_is_routing_1():
     """Regression (Absaraka abs2801v2egrcv, HEC-RAS 6.6: "The SA 2D Connection at BNSF KO KO-01
     cu has an error with the connection. Check that the "To:" is set correctly"): a culvert
     connection inside the 2D area was written with 'Conn Routing Type= 3', which HEC-RAS reads as
-    a family of rating curves ('Use RC Family' 1). Now routing type 1; the barrel ends as HEC-RAS
+    a family of rating curves ('Use RC Family' 1). Now routing type 1, as HEC's own internal
+    connections (BaldEagleDamBrk g01/g03/g09; this alone did not clear the error, see
+    hecras_structures_connection_ends_two_cells_inside_the_perimeter); the barrel ends as HEC-RAS
     lays them (barrel_ends, checked against KO-01 in that run's geometry HDF) are in two cells on
     opposite sides, headwater end on the right; connection_problems() flags what HEC-RAS would
     refuse."""
@@ -401,5 +403,79 @@ def hecras_structures_internal_culvert_connection_is_routing_1():
         msg = "; ".join(hs.connection_problems([c], rev, _perimeter()))
         assert "both ends are in cell" in msg and "headwater end first" in msg, msg
         assert "used twice" not in msg
+    finally:
+        shutil.rmtree(tmp)
+
+
+@test
+def hecras_structures_connection_ends_two_cells_inside_the_perimeter():
+    """Regression (Absaraka abs2801v2egrcv / cv2, HEC-RAS 6.6 still: "The SA 2D Connection at
+    BNSF KO KO-01 cu has an error with the connection. Check that the "To:" is set correctly"
+    with routing type 1): KO-01's line ended 114 ft (about one cell) from the 2D perimeter, all
+    the others 466 ft or more. structure_connection now keeps both ends STRUCT_EDGE_CELLS (2)
+    cells inside, connection_problems(cell=) refuses an end closer than that, an adverse culvert
+    is noted, and add_to_package(exclude=) leaves named structures out."""
+    tmp = tempfile.mkdtemp()
+    try:
+        tif = _terrain(os.path.join(tmp, "t.tif"))
+        units = hm.Units(False)
+        per = _perimeter()
+        closed = [tuple(p) for p in per] + [tuple(per[0])]
+        # a culvert on the road 250 ft from the east edge: the road runs on to the edge
+        xe = X0 + HALF - 250.0
+        near = sm.Structure("culvert", np.array([[xe, Y0 + 60.0], [xe, Y0 - 60.0]]),
+                            width_m=0.9144, height_m=0.9144, shape="pipe",
+                            invert_up_m=997.0 * hm.FT, invert_dn_m=998.74 * hm.FT,
+                            name="edge culvert")
+        s = hs.connections([near], lambda a: np.asarray(a, float).reshape(-1, 2), per, CELL,
+                           tif, _srs(), units)
+        assert len(s["exported"]) == 1, s["skipped"]
+        c = s["exported"][0]
+        ln = np.asarray(c["line"], float)
+        d = hm.point_segment_distance(ln[:, 0], ln[:, 1], closed)
+        assert d.min() >= hm.STRUCT_EDGE_CELLS * CELL - 1e-6, d
+        assert any("adverse culvert" in n for n in c["notes"]), c["notes"]
+        assert c["culvert"]["inv_up"] < c["culvert"]["inv_dn"]          # kept as the run had it
+        pts, _ = hs.connection_breaklines(_points(), per, [c], CELL, units, None)
+        ck = hs.cells_check(pts, per, [c], hs.read_raster(tif))
+        hs.fit_to_cells([c], ck, units)
+        ck = hs.cells_check(pts, per, [c], hs.read_raster(tif))
+        assert hs.connection_problems([c], ck, per, cell=CELL) == []
+        # an end 114 ft from the edge (KO-01) is refused; without cell= it is not checked
+        ko = dict(c, line=[tuple(ln[0]), (X0 + HALF - 114.0, Y0)])
+        msg = "; ".join(hs.connection_problems([ko], ck, per, cell=CELL))
+        assert "end of its line is 114 from the edge" in msg and "needs 2 cells" in msg, msg
+        assert not any("edge" in p for p in hs.connection_problems([ko], ck, per))
+        # add_to_package: exclude a structure by name; an unknown name stops the build
+        pk = _package(tmp, tif)
+        bm = os.path.join(tmp, "RUN", "_breach_model")
+        os.makedirs(bm)
+        used = [{"kind": "culvert", "line": [[X0, Y0 + 60.0], [X0, Y0 - 60.0]], "width_m": 1.2192,
+                 "height_m": 1.2192, "shape": "pipe", "invert_up_m": 997.0 * hm.FT,
+                 "invert_dn_m": 996.5 * hm.FT, "name": "KO-x"},
+                {"kind": "culvert", "line": [[xe, Y0 + 60.0], [xe, Y0 - 60.0]], "width_m": 0.9144,
+                 "height_m": 0.9144, "shape": "pipe", "invert_up_m": 997.0 * hm.FT,
+                 "invert_dn_m": 996.9 * hm.FT, "name": "KO-edge"}]
+        with open(os.path.join(bm, "run_report.json"), "w") as f:
+            json.dump({"structures_used": used, "work_crs": "EPSG:{}".format(EPSG)}, f)
+        info = hs.add_to_package(pk, os.path.join(tmp, "RUN"), os.path.join(tmp, "A"))
+        assert sorted(x["source_name"] for x in info["exported"]) == ["KO-edge", "KO-x"]
+        for x in info["exported"]:
+            e = np.asarray(x["line"], float)
+            assert hm.point_segment_distance(e[:, 0], e[:, 1], closed).min() >= 200.0 - 1e-6
+        info = hs.add_to_package(pk, os.path.join(tmp, "RUN"), os.path.join(tmp, "B"),
+                                 exclude=["ko-edge"])
+        assert [x["source_name"] for x in info["exported"]] == ["KO-x"]
+        assert any("left out on request: KO-edge" in n for n in info["notes"]), info["notes"]
+        txt = open(os.path.join(tmp, "B", "T.g01"), newline="").read()
+        assert "KO-edge" not in txt and "Connection=KO-x" in txt
+        try:
+            hs.add_to_package(pk, os.path.join(tmp, "RUN"), os.path.join(tmp, "C"),
+                              exclude=["nope"])
+        except hm.HecRasModelError as e:
+            assert "no structure named nope" in str(e) and not os.path.exists(
+                os.path.join(tmp, "C"))
+        else:
+            raise AssertionError("an unknown exclude name: an error")
     finally:
         shutil.rmtree(tmp)
