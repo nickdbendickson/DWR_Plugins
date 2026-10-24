@@ -46,8 +46,17 @@ optional:
                   fingerprint), envelope (max depth / velocity / WSE, arrival) included;
                   no usable checkpoint = a fresh start, said in stats["checkpoint"]
 
+  (3.10.70; absent = off. Never part of the checkpoint fingerprint; results never change)
+  dt_diag_every   yield steps between rows of timestep_diag.csv (core/anuga_dtdiag.py: the
+                  internal dt and the triangle limiting it); NDBREACH_ANUGA_DT_DIAG=0|1 and
+                  NDBREACH_ANUGA_DT_DIAG_EVERY=N in the worker's environment win over it
+  dt_diag_crs     the model CRS (WKT) for the rows' lon / lat
+
 result.npz: depth, velocity, arrival_hr, wse (NaN = dry / outside), plus
 stats as a JSON string. Progress goes to stdout as lines starting "PROGRESS".
+From 3.10.70 each yield step's line ends with utc=<wall clock> steps=<internal steps so far
+in this process> dsteps=<since the last yield> wall_s=<wall seconds since the last yield>
+rate=<model s per wall s> (appended; "PROGRESS <pct> t=<s>s" is unchanged).
 """
 import hashlib
 import inspect
@@ -63,8 +72,10 @@ import numpy as np
 
 try:                    # 3.10.50: the worker runs as a script (python anuga_worker.py ...)
     from . import omp_probe
+    from . import anuga_dtdiag
 except ImportError:
     import omp_probe
+    import anuga_dtdiag
 
 
 def bilinear(dem, x0, y0, dx, x, y):
@@ -141,7 +152,8 @@ CKPT_KEYS = ("ckpt_every_min", "ckpt_every_steps", "ckpt_keep", "ckpt_dir",
              "partial_every_min", "resume")
 # not part of the fingerprint: the thread count and gmsh's own report (timings) do not
 # change the model, so a run can resume with another thread count
-FINGERPRINT_SKIP = CKPT_KEYS + ("threads", "mesh_stats")
+# 3.10.70: nor the read-only time-step diagnostic (a run resumes with it turned on or off)
+FINGERPRINT_SKIP = CKPT_KEYS + ("threads", "mesh_stats") + anuga_dtdiag.DT_DIAG_KEYS
 PARTIAL_NAME = "anuga_partial.npz"
 META_NAME = "checkpoint.json"
 
@@ -825,6 +837,7 @@ def main(job_path, out_path):
         anuga.Inlet_operator(domain, inlet.tolist(), Q=qfun, default=Constant(0.0))
         culverts = json.loads(str(job["culverts_json"])) if "culverts_json" in job else []
         culvert_errors = []
+        culvert_names = []          # 3.10.70: the built ones, in order (dt diagnostic)
         for c in culverts:
             ends = to_local(c["end_points"]).tolist()
             common = dict(losses=float(c["losses"]), barrels=float(c["barrels"]), end_points=ends,
@@ -837,12 +850,14 @@ def main(job_path, out_path):
                 else:
                     anuga.Boyd_box_operator(domain, width=float(c["width"]),
                                             height=float(c["height"]), **common)
+                culvert_names.append(str(c.get("name") or "culvert"))
             except Exception as e:
                 culvert_errors.append("{}: {}".format(c.get("name") or "culvert", str(e)[:200]))
 
         info = {"triangles": ntri, "breaklines_used": breaklines_used,
                 "culverts": len(culverts) - len(culvert_errors), "culvert_errors": culvert_errors,
-                "initial_volume_m3": vol_initial, "elevation": elev_stats, "boundary": bkind}
+                "initial_volume_m3": vol_initial, "elevation": elev_stats, "boundary": bkind,
+                "culvert_names": culvert_names}
         return domain, info
 
     # 3.10.35: opt-in checkpoints / partial results / resume (ck None = as before)
@@ -943,9 +958,31 @@ def main(job_path, out_path):
     mirror = {"boundaries": list({id(b): b for b in (getattr(domain, "boundary_map", None)
                                                      or {}).values()
                                   if hasattr(b, "inward_edges")}.values()), "max": 0, "steps": 0}
+    # 3.10.70: wall clock / internal steps on every PROGRESS line (always on, reads only), and
+    # the opt-in time-step diagnostic (timestep_diag.csv next to the job; off = None)
+    clock = anuga_dtdiag.YieldClock(domain.get_time())
+    dtdiag = None
+    diag_every = anuga_dtdiag.dt_diag_every(job)
+    if diag_every > 0:
+        try:
+            dtdiag = anuga_dtdiag.DtDiag(
+                domain, os.path.dirname(os.path.abspath(job_path)), diag_every,
+                resumed_t=ckinfo.get("resumed_from_t_s") if ckinfo else None,
+                x_off=x_ref, y_off=y_ref,
+                crs_wkt=str(job["dt_diag_crs"]) if "dt_diag_crs" in job else "",
+                culvert_names=info.get("culvert_names") or ())
+            print("DT_DIAG on: every {} yield step(s) -> {}".format(diag_every, dtdiag.path),
+                  flush=True)
+        except Exception as e:      # noqa: BLE001 - a diagnostic never stops the run
+            print("DT_DIAG off: {}".format(str(e)[:200]), flush=True)
+            dtdiag = None
     try:
         for t in domain.evolve(yieldstep=ystep, finaltime=sim_time):
-            print("PROGRESS {:.2f} t={:.0f}s".format(100.0 * t / sim_time, t), flush=True)
+            yc = clock.tick(domain, t)
+            print("PROGRESS {:.2f} t={:.0f}s{}".format(100.0 * t / sim_time, t,
+                                                       clock.suffix(yc)), flush=True)
+            if dtdiag is not None:
+                dtdiag.on_yield(domain, t, clock)
             if mirror["boundaries"]:
                 n_in = int(sum(int(b.inward_edges) for b in mirror["boundaries"]))
                 mirror["max"] = max(mirror["max"], n_in)
@@ -988,6 +1025,11 @@ def main(job_path, out_path):
     finally:
         if old_term is not None:
             signal.signal(signal.SIGTERM, old_term)
+        if dtdiag is not None:          # the rows are on disk; the summary needs the end
+            try:
+                dtdiag.f.flush()
+            except Exception:           # noqa: BLE001
+                pass
 
     # volume check
     h = domain.quantities["stage"].centroid_values - domain.quantities["elevation"].centroid_values
@@ -1055,6 +1097,8 @@ def main(job_path, out_path):
     omp_note = runtime_note(threads, rt_n, rt_name, omp_note)
     if omp_note:
         stats["omp_note"] = omp_note
+    if dtdiag is not None:
+        stats["dt_diag"] = dtdiag.finish()
     if ck is not None:
         if ckdir and os.path.isdir(ckdir):       # finished: the pickles are not needed
             shutil.rmtree(ckdir, ignore_errors=True)

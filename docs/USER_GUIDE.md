@@ -235,6 +235,30 @@ Results don't change: the limit only decides whether a run is allowed to finish.
 
 **Estimates, not yet checked for accuracy.** On the benchmark meshes, grading 500 m alone was estimated at about 1.45× faster; lines 200 m² alone at 31 % fewer triangles; and a 1,000 m wet-area buffer + lines 200 m² + grading 500 m at about 2.3× faster (56 % fewer triangles). The flood results still need to be compared with the default mesh (DWR-2851) before these are used for production runs.
 
+## ANUGA time-step diagnostic (Runner 3.10.70)
+**What it does.** ANUGA takes many small internal steps between the saved yield steps; the size of each step (dt) is set by the triangle where water crosses fastest relative to the triangle's size. When an ANUGA run is slow, the diagnostic tells you why: how many internal steps each yield step took, how big they were, which triangle set the step and whether a culvert or the breach inlet is next to it. **It is off by default, and it never changes the results**: it only reads ANUGA's numbers (tested bit for bit on real ANUGA, on and off).
+
+**Turning it on (the next run; it can't be attached to an ANUGA run that is already going).**
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `NDBREACH_ANUGA_DT_DIAG` | unset (off) | `1` turns it on, `0` turns it off (wins over the run setting). |
+| `NDBREACH_ANUGA_DT_DIAG_EVERY` | 1 | A row every N yield steps (only when it is on). |
+| run setting `anuga_dt_diag` | 0 | The same in a run's settings: 0 = off, N = a row every N yield steps, `on` = 1. |
+
+For example `export NDBREACH_ANUGA_DT_DIAG=1` before starting QGIS, the command-line run or the queue. The run's settings key (the result folder name) doesn't change, and a run stopped and resumed from its checkpoint keeps its file: rows after the checkpoint's time are dropped and the resumed run appends.
+
+**What it writes.** `_breach_model/anuga/timestep_diag.csv`, one row per sample:
+- `utc`, `t_s` (model time), `model_s` and `wall_s` since the last row, `model_s_per_wall_s`;
+- `steps` (internal steps since the last row) and `steps_total` (since this ANUGA process started);
+- `dt_mean_s`, `dt_min_s`, `dt_max_s` (over those steps), `dt_last_s` (the last step, cut to land on the yield time) and `dt_cfl_last_s` (the last step's own CFL step);
+- the triangle that limited the last step: `tri`, `x`, `y` (model CRS), `lon`, `lat`, `area_m2`, `radius_m`, `depth_m`, `speed_mps`, `wave_speed_mps`, `dt_tri_s`;
+- `near_op`, `near_op_type`, `near_op_dist_m`: the breach inlet or culvert nearest the triangle, when it is within max(3 × the triangle's inradius, 50 m).
+
+At the end, `timestep_diag_summary.txt`, the log and `run_report.json` → `anuga_dt_diag` list the triangles that limited the step most often, with their share of the rows, the internal steps and the wall time.
+
+**The wall clock on every progress line (always on).** Each ANUGA progress line now ends with `utc=2026-10-24T09:54:53Z steps=358 dsteps=107 wall_s=0.1 rate=2.89e+03`: the time, the internal steps so far and since the last yield step, the wall seconds since the last yield step and the model seconds per wall second. A long `wall_s` with a normal `dsteps` means the computer paused (a host freeze); a large `dsteps` means ANUGA really took many small steps. The start of the line is unchanged, so the progress bar reads it as before.
+
 ## Hazard zone colours match the ND Dam Safety Standards (#126, Hazard 2.18.46, Runner 3.10.51, Screening 0.17.34)
 **What changed.** Every ACER TM 11 danger-zone graphic now uses the colours of the ND Dam Safety Standards, Policy REG_05.2026 (effective 04/01/2026), Figure 5.1 (houses, p. 21) and Figure 5.2 (mobile homes, p. 22): [the policy document](https://www.dwr.nd.gov/reclink/4dcgi/GetPolicyDocument/16). The standard names no colours, so they were sampled from the published figures.
 
