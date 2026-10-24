@@ -166,6 +166,10 @@ class RunSettings:
         self.anuga_checkpoint_keep = int(_env_number("ANUGA_CHECKPOINT_KEEP", 2))
         self.anuga_partial_min = _env_number("ANUGA_PARTIAL_MIN", None)
         self.anuga_resume = _env_flag("ANUGA_RESUME")
+        # 3.10.70: the ANUGA worker's read-only time-step diagnostic: 0 = off, N = a row of
+        # anuga/timestep_diag.csv (internal dt, the limiting triangle, a structure near it)
+        # every N yield steps; NDBREACH_ANUGA_DT_DIAG=0|1 / _DT_DIAG_EVERY=N win (read below)
+        self.anuga_dt_diag = 0
         _tol = os.environ.get("NDBREACH_ANUGA_GMSH_MIN_AREA_TOL")
         if _tol:
             try:
@@ -264,6 +268,7 @@ class RunSettings:
         # part of the settings (run key, run_report). Bad values stop the gmsh mesh with a
         # clear error (anuga_model.check_gmsh_options); the default mesher ignores them.
         self.anuga_gmsh = anmod.gmsh_env_options(self.anuga_gmsh)
+        self.anuga_dt_diag = anmod.dt_diag_setting(self.anuga_dt_diag)
 
     def as_dict(self):
         d = {}
@@ -311,6 +316,8 @@ class RunSettings:
                 continue                 # 3.10.31 defaults: run_report["anuga_elevation_source"]
             elif k in ANUGA_CHECKPOINT_DEFAULTS and v == ANUGA_CHECKPOINT_DEFAULTS[k]:
                 continue                 # checkpoint defaults: run_report["anuga_checkpoint"]
+            elif k == "anuga_dt_diag" and not v:
+                continue                 # v3.10.70: off - the report stays as before
             elif k == "reservoir_carve" and v in ("off", None, ""):
                 continue                 # v3.10.20: off - the report stays as before
             elif k == "hecras_mesh_seeds" and v in ("grid", None, ""):
@@ -338,7 +345,8 @@ def key_settings(st):
                                                             *ANUGA_CHECKPOINT_DEFAULTS,
                                                             "hecras_mesh_seeds",
                                                             "hecras_dam_axis",
-                                                            "water_mask")}
+                                                            "water_mask",
+                                                            "anuga_dt_diag")}
     if not getattr(st, "class_stop", False):
         for k in _CLASS_STOP_KEYS:
             d.pop(k, None)
@@ -1493,6 +1501,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         ast.partial_min = getattr(st, "anuga_partial_min", None)
         ast.resume = bool(getattr(st, "anuga_resume", False))
         ast.resume_with_run = bool(st.resume)
+        ast.dt_diag = int(getattr(st, "anuga_dt_diag", 0) or 0)   # 3.10.70; never the results
         emb_kw.update(elevation_read=lambda b, c: dem_for("anuga", b, c),
                       elevation_native_m=terrain_native_cell(terrain_src),
                       elevation_label=terrain_label(terrain_src))
@@ -1530,6 +1539,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             report["anuga_checkpoint"] = an_env.stats["checkpoint"]
         if an_env.stats.get("threads"):             # 3.10.47: ANUGA's OpenMP threads
             report["anuga_threads"] = an_env.stats["threads"]
+        if an_env.stats.get("dt_diag"):             # 3.10.70: only when the diagnostic ran
+            report["anuga_dt_diag"] = an_env.stats["dt_diag"]
         anuga_mesh = _anuga_mesh_report(a_runs)
         report["anuga_mesh"] = anuga_mesh
         if anuga_mesh.get("rejected_line"):

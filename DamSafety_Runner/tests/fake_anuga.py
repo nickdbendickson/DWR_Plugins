@@ -4,7 +4,10 @@ of each triangle follows a fixed function of time, stepped at a few internal tim
 per yield step, so the envelope operator, checkpoints (pickled like Domain.evolve does,
 before each yield) and resume can be checked without ANUGA. Also a stand-in for
 matplotlib.tri's trifinder (nearest centroid inside the mesh box). Classes are at module
-level so the plain pickle module can store a domain."""
+level so the plain pickle module can store a domain. 3.10.70: the time-step bookkeeping
+the worker reads (radii, max_speed of the last step, number_of_steps and the recorded min /
+max dt since the last yield, reset after it like Generic_Domain.evolve) for the dt
+diagnostic tests (tests/test_anuga_dt_diag.py)."""
 import os
 import pickle
 import sys
@@ -72,6 +75,15 @@ class Domain:
         self.checkpoint = False
         self.checkpoint_step = 10
         self.name = "domain"
+        c = self.centroid_coordinates
+        self.radii = 5.0 + 0.01 * (c[:, 0] - c[:, 0].min()) + 0.001 * np.arange(n) % 1.0
+        self.max_speed = np.zeros(n)
+        self.CFL = 1.0
+        self.number_of_steps = 0
+        self.recorded_min_timestep = self.recorded_max_timestep = self.timestep = 0.0
+        self.flux_timestep = 0.0
+        self.minimum_allowed_height = 1e-5
+        self.g = 9.8
 
     def __len__(self):
         return len(self.triangles)
@@ -142,12 +154,20 @@ class Domain:
                 st = self.quantities["stage"].centroid_values
                 st[:] = self.quantities["elevation"].centroid_values + h
                 self.quantities["xmomentum"].centroid_values[:] = 0.5 * h
+                self.max_speed[:] = np.where(h > 0, 0.5 + np.sqrt(9.8 * h), 0.0)
+                self.number_of_steps += 1
+                self.timestep = dt
+                self.recorded_min_timestep = min(self.recorded_min_timestep or dt, dt)
+                self.recorded_max_timestep = max(self.recorded_max_timestep, dt)
                 for op in self.fractional_step_operators:
                     op()
             self.time = t_next
             self._save()
             yield self.get_time()
             self.yieldstep_counter += 1
+            self.number_of_steps = 0
+            self.recorded_min_timestep = self.recorded_max_timestep = 0.0
+            self.max_speed[:] = 0.0
 
     def _save(self):
         if self.checkpoint and self.checkpoint_step and \

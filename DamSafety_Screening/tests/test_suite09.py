@@ -188,17 +188,22 @@ processing.REGISTRY.update({ho.RUNNER_ALG: FakeRunDam, ho.HAZARD_ALG: FakeHazard
 AF = 1233.4818375
 F = [("dam_id", S), ("name", S), ("nid_id", S), ("height_m", D), ("td_vw_m3", D), ("hz_class", S),
      ("hz_border", S), ("hz_gaps", S), ("hz_vs_existing", S), ("haz_existing", S), ("tri_result", S),
-     ("tri_reason", S)]
+     ("tri_reason", S), ("crest_len_m", D), ("inv_area_m2", D), ("source", S)]
 rows = [("DWR-1", "High", "needs 2D", "Significant", "ND00001"), ("DWR-2", "Medium", "needs 2D", "Low", None),
         ("DWR-3", "Medium", "needs 2D", None, None), ("DWR-4", "Low", "clear", "Low", None)]
 dams = make_layer(F, [(pt(400000 + 1000 * i, 1800000), {
     "dam_id": d, "name": d + " dam", "nid_id": nid, "height_m": 6.096, "td_vw_m3": 500 * AF, "hz_class": c,
     "hz_border": "no", "hz_gaps": "road 3: AADT not given" if d == "DWR-1" else "", "hz_vs_existing": "agree",
-    "haz_existing": ex, "tri_result": tri, "tri_reason": "x"}) for i, (d, c, tri, ex, nid) in enumerate(rows)],
+    "haz_existing": ex, "tri_result": tri, "tri_reason": "x",
+    # 0.17.43: tool 1's inventory dam length / normal-pool area (DWR-1 also has a mapped dam line)
+    "crest_len_m": {"DWR-1": 99.0, "DWR-4": 30.48}.get(d, 0.0), "inv_area_m2": 12.5 * 4046.8564224 if d == "DWR-1" else 0.0,
+    "source": "DWR"}) for i, (d, c, tri, ex, nid) in enumerate(rows)],
     "point", "dams")
 BX, BY = -343705.1336915329, 2675829.785565597
-bpts = make_layer([("dam_id", S), ("flow_az", D)], [(pt(BX + 10 * i, BY), {"dam_id": d, "flow_az": 180.0})
-                                                   for i, (d, *_r) in enumerate(rows)], "point", "bpts")
+bpts = make_layer([("dam_id", S), ("flow_az", D), ("crest_len_m", D)],
+                 [(pt(BX + 10 * i, BY), {"dam_id": d, "flow_az": 180.0,
+                                         "crest_len_m": 121.92 if d == "DWR-1" else None})
+                  for i, (d, *_r) in enumerate(rows)], "point", "bpts")
 DAMS, BPTS = ctx.add(dams), ctx.add(bpts)
 folder = os.path.join(work, "Dams")
 # DWR-2: ND Dam Hazard already recorded another height; DWR-3: a broken dam.json
@@ -225,7 +230,22 @@ assert (f1["dam_id"], f1["dwr_structure_id"], f1["nid_id"], f1["name"]) == ("DWR
 assert abs(f1["height_ft"] - 20.0) < 1e-6 and abs(f1["storage_acft"] - 500.0) < 1e-6
 assert (f1["x"], f1["y"], f1["crs"]) == (round(BX, 3), round(BY, 3), "EPSG:5070")
 assert abs(f1["lon"] + 100.5) < 1e-6 and abs(f1["lat"] - 47.0) < 1e-6
-assert f1["existing_hazard_class"] == "Significant" and "surface_area_ac" not in f1
+assert f1["existing_hazard_class"] == "Significant"
+# 0.17.43: no top-of-dam area (no tool-3 curve) -> an explicit null with the reason, quoting the
+# inventory's normal-pool area it did not use; dam length from the mapped dam line (tool 4)
+assert "surface_area_ac" in f1 and f1["surface_area_ac"] is None, f1
+an = rec.sources["surface_area_ac"]
+assert an["tool"] == "ndscreen" and an["note"].startswith("not known to the screening: no surface area"), an
+assert "normal-pool surface area is 12.5 ac" in an["note"], an
+assert abs(f1["dam_length_ft"] - 400.0) < 1e-6, f1
+assert rec.sources["dam_length_ft"]["note"] == "length of the mapped dam line (tool 4)"
+f4 = dr.load(os.path.join(folder, "DWR-4"))
+assert abs(f4.fields["dam_length_ft"] - 100.0) < 1e-6                         # inventory length
+assert f4.sources["dam_length_ft"]["note"].startswith("dam inventory (DWR"), f4.sources
+assert "normal-pool surface area is" not in f4.sources["surface_area_ac"]["note"]   # inventory area 0
+f2 = dr.load(os.path.join(folder, "DWR-2"))
+assert "dam_length_ft" in f2.fields and f2.fields["dam_length_ft"] is None       # no line, no inventory
+assert "no dam length in the inventory" in f2.sources["dam_length_ft"]["note"]
 assert rec.sources["height_ft"]["tool"] == "ndscreen" and rec.sources["height_ft"]["version"] == dri.plugin_version()
 st = rec.latest("screened")
 assert st["tool"] == "ndscreen" and st["result"]["triage"] == "needs 2D" and st["result"]["hz_class"] == "High"

@@ -21,6 +21,7 @@ from .units import ARRIVAL_DEPTH_FT, FT
 from . import conditioning as cond
 from . import structures as structmod
 from . import gmsh_mesher as gmshmod     # numpy only; gmsh is imported in build_mesh
+from . import anuga_dtdiag               # 3.10.70: numpy only (the worker's dt diagnostic)
 
 # Windows: no console window for a child program (QGIS is a GUI program, so each console
 # program it starts opens its own window, and closing that window kills the run)
@@ -172,6 +173,9 @@ class AnugaSettings:
         self.partial_min = None
         self.resume = False
         self.resume_with_run = False
+        # 3.10.70: the worker's read-only time-step diagnostic (core/anuga_dtdiag.py):
+        # 0 = off; N = a row of anuga/timestep_diag.csv every N yield steps
+        self.dt_diag = 0
 
 
 def inlet_line(inflow_xy, direction, width_m):
@@ -478,7 +482,32 @@ def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_d
     if elevation:            # 3.10.31: the fine bed (prepare_elevation); absent = as before
         job.update(elevation)
     job.update(checkpoint_job(st))   # 3.10.35: opt-in checkpoints; absent = as before
+    job.update(dt_diag_job(st, getattr(dem, "crs_wkt", None)))   # 3.10.70; off = as before
     np.savez(path, **job)
+
+
+def dt_diag_setting(value, environ=None):
+    """3.10.70 anuga_dt_diag: yield steps between rows of the worker's timestep_diag.csv,
+    0 = off. True / "on" = 1. NDBREACH_ANUGA_DT_DIAG=0|1 and NDBREACH_ANUGA_DT_DIAG_EVERY=N
+    win over it (the same rule as the worker, anuga_dtdiag.dt_diag_every)."""
+    if isinstance(value, str):
+        v = value.strip().lower()
+        value = 1 if v in ("on", "true", "yes") else 0 if v in ("", "off", "false", "no") \
+            else value
+    try:
+        n = max(0, int(float(value or 0)))
+    except (TypeError, ValueError):
+        raise ValueError("anuga_dt_diag must be 0 (off) or a number of yield steps, not "
+                         "{!r}".format(value))
+    return anuga_dtdiag.dt_diag_every({"dt_diag_every": n}, environ)
+
+
+def dt_diag_job(st, crs_wkt=None):
+    """The job keys of the time-step diagnostic; {} when it is off (the job is as before)."""
+    n = int(getattr(st, "dt_diag", 0) or 0)
+    if n <= 0:
+        return {}
+    return {"dt_diag_every": n, "dt_diag_crs": str(crs_wkt or "")}
 
 
 def _clean_env():
