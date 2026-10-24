@@ -116,11 +116,94 @@ def anuga_culverts(structures, dem, mesh_polygon=None):
         if not np.all(np.isfinite(inv)):
             notes.append("Culvert {}: no DEM at an end and no invert given.".format(s.name or "?"))
             continue
+        # 3.10.71: where each invert came from ("given": the structure's own, after
+        # reconcile_inverts; "model_dem": read here). fine_ground_inverts updates both.
+        src = [INV_GIVEN if v is not None else INV_MODEL_DEM for v in (s.invert_up_m, s.invert_dn_m)]
         specs.append({"end_points": ends.tolist(), "invert_elevations": inv,
                       "width": s.width_m, "height": s.height_m, "barrels": int(s.barrels),
                       "shape": s.shape, "manning": s.manning, "losses": s.losses,
-                      "apron": max(2.0, 1.0 * s.width_m), "name": s.name})
+                      "apron": max(2.0, 1.0 * s.width_m), "name": s.name,
+                      "invert_source": src})
     return specs, notes
+
+
+# -------------------------------------------------- 3.10.71: inverts on ANUGA's bed --
+INV_GIVEN = "given"                   # the structure's own invert (inventory / user layer)
+INV_GIVEN_CAPPED = "given_capped"     # given, above the fine ground: lowered to ground + tol
+INV_MODEL_DEM = "model_dem"           # bilinear on the model DEM (no fine ground at that end)
+INV_FINE = "fine_grid"                # lowest fine ground within the search radius
+INVERT_SEARCH_MIN_M = 5.0             # search radius = max(apron, this)
+INVERT_CAP_TOL_M = 0.3                # a given invert may sit this far above the fine ground
+
+
+def invert_search_radius(spec):
+    return max(float(spec.get("apron") or 0.0), INVERT_SEARCH_MIN_M)
+
+
+def fine_ground_inverts(specs, lowest_ground, tol_m=INVERT_CAP_TOL_M):
+    """3.10.71: put the ANUGA culvert inverts on the bed ANUGA actually uses.
+
+    With ANUGA_ELEVATION=fine the mesh bed is the fine terrain (1-2 m) at the triangle
+    vertices, while anuga_culverts read missing inverts bilinearly from the coarse model DEM
+    (30 m), which smears the road embankment into the cells at the culvert ends: DWR-2801's
+    34 culverts had their inverts a median 0.69 m (up to 2.3 m) above the fine ground, so a
+    culvert passed little or nothing until the water was that deep.
+
+    `lowest_ground(xy, radius)` -> the lowest fine ground (m) within `radius` of xy, or None
+    where the fine terrain has no data. For each end (radius = max(apron, 5 m)):
+      * no invert given -> the lowest fine ground ("fine_grid"); none there -> the model DEM
+        value stays ("model_dem", noted);
+      * a given invert at most `tol_m` above that ground -> kept as given;
+      * a given invert higher than that -> lowered to ground + tol_m ("given_capped") with a
+        WARNING note naming both values (never silently).
+    Updates the specs in place (invert_elevations, invert_source, plus invert_ground_m,
+    invert_search_m and invert_model_dem_m for the report) and returns the notes."""
+    notes = []
+    for c in specs:
+        r = invert_search_radius(c)
+        inv = [float(v) for v in c["invert_elevations"]]
+        src = list(c.get("invert_source") or [INV_MODEL_DEM, INV_MODEL_DEM])
+        before, src_before = list(inv), list(src)
+        ground = []
+        name = c.get("name") or "culvert"
+        for i, e in enumerate(c["end_points"]):
+            g = lowest_ground(e, r)
+            g = float(g) if g is not None and np.isfinite(g) else None
+            ground.append(None if g is None else round(g, 3))
+            end = ("upstream", "downstream")[i]
+            if g is None:
+                if src[i] == INV_MODEL_DEM:
+                    notes.append("Culvert {}: no fine ground within {:.0f} m of the {} end; its "
+                                 "invert is the model DEM's ({:.2f} m).".format(name, r, end, inv[i]))
+                continue
+            if src[i] == INV_GIVEN:
+                if inv[i] > g + tol_m:
+                    notes.append("WARNING: Culvert {}: the given {} invert {:.2f} m is {:.2f} m above "
+                                 "the lowest ANUGA ground within {:.0f} m ({:.2f} m); lowered to "
+                                 "{:.2f} m (ground + {:.1f} m). Check the inventory elevation."
+                                 .format(name, end, inv[i], inv[i] - g, r, g, g + tol_m, tol_m))
+                    inv[i] = g + tol_m
+                    src[i] = INV_GIVEN_CAPPED
+                continue
+            if src[i] == INV_MODEL_DEM:
+                inv[i] = g
+                src[i] = INV_FINE
+        c["invert_elevations"] = inv
+        c["invert_source"] = src
+        c["invert_ground_m"] = ground
+        c["invert_search_m"] = round(r, 2)
+        c["invert_model_dem_m"] = [round(b, 3) if s0 == INV_MODEL_DEM else None
+                                   for b, s0 in zip(before, src_before)]
+    return notes
+
+
+def invert_record(specs):
+    """Per culvert: the inverts the ANUGA operator gets and where they came from (run report)."""
+    return [{"name": c.get("name"), "invert_elevations_m": [round(float(v), 3) for v in
+                                                            c["invert_elevations"]],
+             "invert_source": c.get("invert_source"), "ground_m": c.get("invert_ground_m"),
+             "model_dem_m": c.get("invert_model_dem_m"), "search_m": c.get("invert_search_m"),
+             "enquiry_gap_m": c.get("enquiry_gap")} for c in specs]
 
 
 def polyline_len(line):

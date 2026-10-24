@@ -125,6 +125,154 @@ def accepts_keyword(fn, name):
         return False
 
 
+def enquiry_points(ends, apron, gap):
+    """Where ANUGA's structure operator puts the two enquiry points of a straight culvert:
+    end i + (2i - 1) (apron + enquiry_gap) u, u the unit vector from end 0 to end 1."""
+    e = np.asarray(ends, float)
+    u = e[1] - e[0]
+    u = u / max(float(np.hypot(u[0], u[1])), 1e-12)
+    d = float(apron) + float(gap)
+    return [(e[0] - d * u).tolist(), (e[1] + d * u).tolist()]
+
+
+def enquiry_point_in_mesh(domain, pt):
+    """The two checks ANUGA's Inlet_enquiry makes before it accepts an enquiry point."""
+    try:
+        try:
+            from anuga.geometry.polygon import is_inside_polygon
+        except ImportError:
+            is_inside_polygon = point_in_polygon
+        if not is_inside_polygon(pt, domain.get_boundary_polygon()):
+            return False
+        domain.get_triangle_containing_point(pt)
+        return True
+    except Exception:
+        return False
+
+
+def point_in_polygon(pt, poly):
+    """Even-odd test (no ANUGA: the unit tests)."""
+    x, y = float(pt[0]), float(pt[1])
+    p = np.asarray(poly, float)
+    inside = False
+    for (x1, y1), (x2, y2) in zip(p, np.roll(p, -1, axis=0)):
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
+ENQUIRY_CLEAR_M = 0.5      # how far past the last inlet-triangle vertex the point goes
+
+
+def inlet_clear_gap(vertices, end, outward, width, apron, margin=ENQUIRY_CLEAR_M):
+    """The smallest enquiry gap that puts the enquiry point past every triangle that could
+    be in the inlet region at `end` - ANUGA's inlet is the width x apron rectangle beyond
+    the end (triangles with a centroid inside or an edge crossing it), so every triangle
+    that overlaps the rectangle is taken (a superset) and the point goes `margin` beyond the
+    furthest vertex of those along `outward`. vertices: (n, 3, 2) triangle corners (the
+    domain's coordinates). Returns the gap (m, >= 0) or None (no triangle overlaps)."""
+    v = np.asarray(vertices, float)
+    u = np.asarray(outward, float)
+    u = u / max(float(np.hypot(u[0], u[1])), 1e-12)
+    n = np.array([-u[1], u[0]])
+    d = v - np.asarray(end, float)
+    s = d @ u                                       # along, 0..apron is the inlet
+    t = d @ n                                       # across, +-width/2
+    a, hw = max(float(apron), 1e-6), 0.5 * float(width)
+    hit = (s.max(1) >= 0) & (s.min(1) <= a) & (t.max(1) >= -hw) & (t.min(1) <= hw)
+    if not hit.any():
+        return None
+    s, t = s[hit], t[hit]
+    rect = np.array([[0, -hw], [a, -hw], [a, hw], [0, hw]], float)
+    ok = np.ones(len(s), bool)
+    for k in range(3):                              # the triangle edges as separating axes
+        es, et = s[:, (k + 1) % 3] - s[:, k], t[:, (k + 1) % 3] - t[:, k]
+        ns, nt = -et, es
+        tri = s * ns[:, None] + t * nt[:, None]
+        rp = rect[:, 0][None, :] * ns[:, None] + rect[:, 1][None, :] * nt[:, None]
+        ok &= ~((tri.max(1) < rp.min(1)) | (rp.max(1) < tri.min(1)))
+    if not ok.any():
+        return None
+    return max(0.0, float(s[ok].max()) - a + float(margin))
+
+
+def local_enquiry_gap(domain, ends, width, apron, gap):
+    """3.10.71: the job's gap (one triangle edge at the culvert-end size), raised where the
+    triangles at an end are larger than that (a mesh line through a merged culvert region,
+    ...) to inlet_clear_gap of that end. Returns (gap, raised: bool); the job's gap when the
+    triangles cannot be read."""
+    try:
+        v = np.asarray(domain.get_vertex_coordinates(absolute=True), float).reshape(-1, 3, 2)
+    except Exception:           # noqa: BLE001
+        return gap, False
+    e = np.asarray(ends, float)
+    u = e[1] - e[0]
+    need = 0.0
+    for end, out in ((e[0], -u), (e[1], u)):
+        g = inlet_clear_gap(v, end, out, width, apron)
+        if g is not None:
+            need = max(need, g)
+    need = round(need, 2)
+    return (need, True) if need > gap else (gap, False)
+
+
+def add_boyd_culvert(anuga, domain, c, ends):
+    """3.10.71: one job culvert as a Boyd box / pipe operator. As before, plus the enquiry
+    gap (job key 'enquiry_gap', m): the head is read one triangle edge beyond the inlet
+    region instead of at its edge, where the enquiry triangle was usually an inlet triangle.
+    The gap is passed only to an ANUGA whose operator has `enquiry_gap` (others: as before,
+    noted), and only when both enquiry points are inside the mesh (else 0, noted); a failed
+    operator is never retried, since a half-built one stays registered in the domain.
+    Returns (operator, record) - record: enquiry_gap_m used, enquiry_in_inlet per end,
+    enquiry_note."""
+    common = dict(losses=float(c["losses"]), barrels=float(c["barrels"]), end_points=ends,
+                  invert_elevations=[float(v) for v in c["invert_elevations"]],
+                  apron=float(c["apron"]), manning=float(c["manning"]),
+                  use_momentum_jet=True, use_velocity_head=False, verbose=False)
+    if c.get("shape") == "pipe":
+        fn, size = anuga.Boyd_pipe_operator, dict(diameter=float(c["width"]))
+    else:
+        fn, size = anuga.Boyd_box_operator, dict(width=float(c["width"]),
+                                                 height=float(c["height"]))
+    gap = float(c.get("enquiry_gap") or 0.0)
+    note = None
+    raised = False
+    if gap > 0.0 and accepts_keyword(fn, "enquiry_gap"):
+        width = float(c["width"])
+        g2, raised = local_enquiry_gap(domain, ends, width, common["apron"], gap)
+        if raised and all(enquiry_point_in_mesh(domain, p) for p in
+                          enquiry_points(ends, common["apron"], g2)):
+            note = ("{}: triangles at an end are larger than the culvert-end size; enquiry "
+                    "gap {:.1f} m instead of {:.1f} m".format(c.get("name") or "culvert",
+                                                              g2, gap))
+            gap = g2
+        else:
+            raised = False
+    if gap > 0.0:
+        if not accepts_keyword(fn, "enquiry_gap"):
+            note = ("this ANUGA's culvert operator has no enquiry_gap; the head is read at the "
+                    "inlet edge as before")
+            gap = 0.0
+        elif not all(enquiry_point_in_mesh(domain, p) for p in
+                     enquiry_points(ends, common["apron"], gap)):
+            note = ("{}: an enquiry point {:.1f} m past the inlet is outside the mesh; read at "
+                    "the inlet edge as before".format(c.get("name") or "culvert", gap))
+            gap = 0.0
+        else:
+            common["enquiry_gap"] = gap
+    op = fn(domain, **size, **common)
+    in_inlet = None
+    try:
+        in_inlet = [bool(int(i.enquiry_index) in set(np.asarray(i.triangle_indices).tolist()))
+                    for i in op.inlets]
+    except Exception:       # noqa: BLE001 - reporting only
+        pass
+    rec = {"enquiry_gap_m": gap, "enquiry_in_inlet": in_inlet}
+    if note:
+        rec["enquiry_note"] = note
+    return op, rec
+
+
 def fill_nan(a):
     """Replace NaN with the nearest valid value so the mesh never sees no-data."""
     from scipy.ndimage import distance_transform_edt
@@ -825,23 +973,19 @@ def main(job_path, out_path):
         anuga.Inlet_operator(domain, inlet.tolist(), Q=qfun, default=Constant(0.0))
         culverts = json.loads(str(job["culverts_json"])) if "culverts_json" in job else []
         culvert_errors = []
+        culvert_enquiry = []      # 3.10.71: one record per job culvert, in job order
         for c in culverts:
             ends = to_local(c["end_points"]).tolist()
-            common = dict(losses=float(c["losses"]), barrels=float(c["barrels"]), end_points=ends,
-                          invert_elevations=[float(v) for v in c["invert_elevations"]],
-                          apron=float(c["apron"]), manning=float(c["manning"]),
-                          use_momentum_jet=True, use_velocity_head=False, verbose=False)
             try:
-                if c.get("shape") == "pipe":
-                    anuga.Boyd_pipe_operator(domain, diameter=float(c["width"]), **common)
-                else:
-                    anuga.Boyd_box_operator(domain, width=float(c["width"]),
-                                            height=float(c["height"]), **common)
+                _op, rec = add_boyd_culvert(anuga, domain, c, ends)
             except Exception as e:
                 culvert_errors.append("{}: {}".format(c.get("name") or "culvert", str(e)[:200]))
+                rec = {"enquiry_gap_m": None, "enquiry_in_inlet": None}
+            culvert_enquiry.append(rec)
 
         info = {"triangles": ntri, "breaklines_used": breaklines_used,
                 "culverts": len(culverts) - len(culvert_errors), "culvert_errors": culvert_errors,
+                "culvert_enquiry": culvert_enquiry,
                 "initial_volume_m3": vol_initial, "elevation": elev_stats, "boundary": bkind}
         return domain, info
 
@@ -1037,6 +1181,7 @@ def main(job_path, out_path):
              "initial_volume_m3": info["initial_volume_m3"],
              "breaklines_used": info["breaklines_used"],
              "culverts": info["culverts"], "culvert_errors": info["culvert_errors"],
+             "culvert_enquiry": info.get("culvert_enquiry", []),
              "injected_m3": injected, "anuga_version": getattr(anuga, "__version__", "?"),
              "algorithm": str(job["algorithm"]), "elevation": info["elevation"],
              "boundary": info.get("boundary", "transmissive"), "volume_balance": balance}

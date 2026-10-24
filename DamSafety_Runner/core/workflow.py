@@ -1524,6 +1524,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         state.save(anuga_done=True)
         report["anuga_runs"] = a_runs
         report["anuga_elevation_source"] = an_env.stats.get("elevation_source")
+        if an_env.stats.get("culvert_inverts"):     # 3.10.71: culvert inverts / enquiry
+            report["anuga_culvert_inverts"] = an_env.stats["culvert_inverts"]
         if an_env.stats.get("checkpoint"):          # only when checkpoints were on
             report["anuga_checkpoint"] = an_env.stats["checkpoint"]
         if an_env.stats.get("threads"):             # 3.10.47: ANUGA's OpenMP threads
@@ -1725,6 +1727,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     elif es.get("mode") == "model_grid":
         summary["anuga_elevation"] = "model grid ({:g} m) at the centroids ({})".format(
             es.get("cell_m", 0), es.get("reason", ""))
+    if report.get("anuga_culvert_inverts"):        # 3.10.71
+        summary["anuga_culverts"] = anmod.culvert_invert_summary(
+            report["anuga_culvert_inverts"])["line"]
     ack = report.get("anuga_checkpoint") or {}
     if ack:
         summary["anuga_checkpoint"] = anuga_checkpoint_line(ack)
@@ -2403,6 +2408,10 @@ def _manifest_extra(report, summary, warnings):
         extra["dem_resample"] = dict(report["dem_resample"])
     if report.get("qa_maps"):
         extra["qa_maps"] = dict(report["qa_maps"])
+    if report.get("anuga_culvert_inverts"):        # 3.10.71: where the inverts came from
+        cs = anmod.culvert_invert_summary(report["anuga_culvert_inverts"])
+        extra["anuga_culverts"] = {k: cs[k] for k in ("culverts", "invert_source", "enquiry_gap_m",
+                                                      "enquiry_in_inlet", "enquiry_ends")}
     c = report.get("dem_conditioning")
     if c is not None:
         extra["dem_conditioning"] = {"buildings": c["buildings"], "edits": c["edits"],

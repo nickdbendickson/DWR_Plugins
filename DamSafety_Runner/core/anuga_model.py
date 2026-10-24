@@ -222,6 +222,44 @@ def culvert_area_m2(st):
     return min(st.fine_area_m2, 25.0)
 
 
+ENQUIRY_EDGE_FACTOR = 1.3      # gmsh's point size is 1.3 x the equilateral edge (hpt)
+
+
+def enquiry_gap_m(st):
+    """3.10.71: ANUGA's culvert operator reads the head at an enquiry point `apron +
+    enquiry_gap` beyond each end; with enquiry_gap 0 (ANUGA's default) that point is the
+    far edge of the inlet region, so with 25 m2 triangles (7.6 m edges) and a 2-3 m apron
+    it fell in a triangle the operator drains or fills (DWR-2801: all 68 culvert ends
+    warned "Enquiry point ... is in an inlet triangle"). The gap is one local triangle
+    edge (gmsh's culvert-end size 1.3 x the equilateral edge of culvert_area_m2: 9.9 m
+    at 25 m2), so the enquiry triangle lies past the inlet's."""
+    a = culvert_area_m2(st)
+    return round(ENQUIRY_EDGE_FACTOR * math.sqrt(4.0 * a / math.sqrt(3.0)), 2)
+
+
+def fine_lowest_ground(path, x0, y0, dx):
+    """3.10.71: lowest_ground(xy, radius) on the fine bed file (prepare_elevation; x0 / y0 =
+    left / top edge, NaN = no data): the lowest cell centre within `radius`, or None."""
+    arr = np.load(path, mmap_mode="r")
+    ny, nx = arr.shape
+
+    def lowest(xy, radius):
+        x, y = float(xy[0]), float(xy[1])
+        c0 = max(int(math.floor((x - radius - x0) / dx)), 0)
+        c1 = min(int(math.ceil((x + radius - x0) / dx)) + 1, nx)
+        r0 = max(int(math.floor((y0 - y - radius) / dx)), 0)
+        r1 = min(int(math.ceil((y0 - y + radius) / dx)) + 1, ny)
+        if c0 >= c1 or r0 >= r1:
+            return None
+        z = np.asarray(arr[r0:r1, c0:c1], float)
+        xc = x0 + (np.arange(c0, c1) + 0.5) * dx
+        yc = y0 - (np.arange(r0, r1) + 0.5) * dx
+        X, Y = np.meshgrid(xc, yc)
+        near = (np.hypot(X - x, Y - y) <= radius) & np.isfinite(z)
+        return float(z[near].min()) if near.any() else None
+    return lowest
+
+
 def convex_hull(pts):
     """Convex hull (counter-clockwise, no repeated first point) of 2-D points."""
     p = sorted(set(map(tuple, np.asarray(pts, float).tolist())))
@@ -895,6 +933,41 @@ def prepare_elevation(workdir, outer, dem, st, elevation_read, native_m=None, la
     return job, info
 
 
+def invert_source_line(culverts):
+    """'34 culverts, 68 ends: 66 fine grid, 2 given' (log / report)."""
+    n = {}
+    for c in culverts:
+        for v in c.get("invert_source") or []:
+            n[v] = n.get(v, 0) + 1
+    return "{} culvert(s), {} end(s): {}".format(
+        len(culverts), sum(n.values()),
+        ", ".join("{} {}".format(k_, v.replace("_", " ")) for v, k_ in sorted(n.items())))
+
+
+def culvert_invert_summary(records):
+    """3.10.71: counts for the run summary / manifest from stats['culvert_inverts']
+    (enquiry_gap_m: [smallest, largest] gap used)."""
+    src, gaps, in_inlet, ends = {}, set(), 0, 0
+    for r in records or []:
+        for v in r.get("invert_source") or []:
+            src[v] = src.get(v, 0) + 1
+        if r.get("enquiry_gap_m") is not None:
+            gaps.add(float(r["enquiry_gap_m"]))
+        for b in r.get("enquiry_in_inlet") or []:
+            ends += 1
+            in_inlet += int(bool(b))
+    line = "{} culvert(s): inverts {}".format(
+        len(records or []), ", ".join("{} {}".format(k_, v.replace("_", " "))
+                                      for v, k_ in sorted(src.items())) or "none")
+    if gaps:
+        line += "; enquiry point {} m past the inlet ({} of {} end(s) in an inlet triangle)".format(
+            "/".join("{:g}".format(g) for g in sorted(gaps)) if len(gaps) <= 2 else
+            "{:g}-{:g}".format(min(gaps), max(gaps)), in_inlet, ends)
+    return {"culverts": len(records or []), "invert_source": src,
+            "enquiry_gap_m": [min(gaps), max(gaps)] if gaps else [], "enquiry_in_inlet": in_inlet,
+            "enquiry_ends": ends, "line": line}
+
+
 def mesher_mode(st):
     return str(getattr(st, "mesher", "default") or "default").strip().lower()
 
@@ -986,6 +1059,8 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     job = os.path.join(workdir, "anuga_job.npz")
     result = os.path.join(workdir, "anuga_result.npz")
     culverts, cnotes = structmod.anuga_culverts(structures or [], dem, outer)
+    for c in culverts:                          # 3.10.71: enquiry point past the inlet triangles
+        c["enquiry_gap"] = enquiry_gap_m(st)
     regions = culvert_regions(culverts, st)     # small triangles at both culvert ends
     step = max(5.0, float(np.sqrt(max(st.fine_area_m2, 1.0))))
     breaklines = clip_lines_to_polygon([cond.densify(np.asarray(b, float), step)
@@ -1051,6 +1126,12 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     else:
         elev_job, elev_info = prepare_elevation(workdir, outer, dem, st, elevation_read,
                                                 elevation_native_m, elevation_label, log, cancel)
+        if elev_job and culverts:               # 3.10.71: inverts on the bed ANUGA uses
+            cnotes = list(cnotes) + structmod.fine_ground_inverts(culverts, fine_lowest_ground(
+                os.path.join(workdir, elev_job["elev_fine_file"]), elev_job["elev_fine_x0"],
+                elev_job["elev_fine_y0"], elev_job["elev_fine_dx"]))
+            if log:
+                log("ANUGA culvert inverts: " + invert_source_line(culverts))
     # 3.10.38: checkpoints on for a long run (resolve_checkpoints); the hydraulics are the same
     cst, ck_rule = resolve_checkpoints(st, outer, fine, mesh)
     # 3.10.47: a real OpenMP thread count for ANUGA (0 used to mean 1 thread); gmsh keeps
@@ -1095,6 +1176,11 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     with np.load(result) as r:
         stats = json.loads(str(r["stats"]))
         depth, vel, arr, wse = r["depth"], r["velocity"], r["arrival_hr"], r["wse"]
+    if not have and culverts:            # 3.10.71: the inverts the operators got, and why
+        rec = structmod.invert_record(culverts)
+        for r_, w_ in zip(rec, stats.get("culvert_enquiry") or []):
+            r_.update(w_)
+        stats["culvert_inverts"] = rec
     if stats.get("checkpoint"):          # 3.10.38: why checkpoints were on
         stats["checkpoint"]["rule"] = ck_rule
     if not have:                         # 3.10.47; a reused result keeps its own record
@@ -1137,6 +1223,9 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         notes.append(vn)
     for e in stats.get("culvert_errors", []):
         notes.append("ANUGA culvert not applied: " + e)
+    for e in sorted({w.get("enquiry_note") for w in stats.get("culvert_enquiry") or []
+                     if w.get("enquiry_note")}):
+        notes.append("ANUGA culvert enquiry point: " + e)   # 3.10.71
     if refine_lines and not stats.get("breaklines_used") and breaklines and mesh is None:
         notes.append("ANUGA: the embankment lines could not be used as mesh edges (they cross or "
                      "touch each other); the mesh was made without them.")
