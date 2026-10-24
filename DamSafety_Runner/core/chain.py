@@ -140,6 +140,21 @@ def norm_id(s):
     return str(s if s is not None else "").strip()
 
 
+def canon_id(s):
+    """A dam ID in one canonical text form, so a layer feature, an IDs list and an overrides CSV
+    all match: NULL/'' -> '', and an integer-valued number loses its decimals ('123.0' -> '123')."""
+    t = norm_id(s)
+    if t.upper() == "NULL":
+        return ""
+    try:
+        f = float(t)
+        if f == int(f):
+            return str(int(f))
+    except (ValueError, OverflowError):
+        pass
+    return t
+
+
 def parse_ids(text):
     """Dam IDs typed in a box: separated by commas, semicolons, spaces or new lines; order
     kept, duplicates dropped."""
@@ -209,9 +224,7 @@ def key_of_column(col):
     parts = [p.strip() for p in re.split(r"[./:|]", c) if p.strip()]
     if len(parts) == 3:
         p, t, k = parts
-        if p.lower() == PLUGIN and t.lower() == TOOL:
-            k = k.upper()
-        return (p.lower(), t, k)
+        return (p.lower(), t.lower(), k.upper())
     if len(parts) == 2 and parts[0].lower() == TOOL and parts[1].upper() in KEY_INDEX:
         return (PLUGIN, TOOL, parts[1].upper())
     return None
@@ -240,13 +253,14 @@ def read_overrides(path):
             keys[i] = k
     out = {}
     for r in rows[1:]:
-        dam = r[col].strip() if col < len(r) else ""
+        raw = r[col].strip() if col < len(r) else ""
+        dam = canon_id(raw)
         if not dam:
             continue
         if dam in out:
-            problems.append("dam {} is in the overrides twice; the first row is used".format(dam))
+            problems.append("dam {} is in the overrides twice; the first row is used".format(raw))
             continue
-        out[dam] = {k: DS._from_text(r[i]) for i, k in keys.items()
+        out[dam] = {k: r[i].strip() for i, k in keys.items()
                     if i < len(r) and r[i].strip() != ""}
     return out, problems
 
@@ -425,17 +439,29 @@ def find_finished_plan(folders, since=0.0, has_results=None):
 def wait_for_plan(folders, minutes, since=0.0, poll_s=30.0, sleep=time.sleep, clock=time.time,
                   cancelled=lambda: False, log=None, has_results=None):
     """Wait up to `minutes` for a finished plan HDF whose size is the same on two polls.
-    Returns its path or None (minutes 0 = look once)."""
+    Returns its path or None (minutes 0 = look once). A verified result (h5py says it has an
+    unsteady Results group) is taken at once when minutes <= 0; a result h5py cannot verify
+    (plan_has_results -> None, the usual case on a HEC-RAS box without h5py) must still prove
+    its size is stable over two polls - even when minutes <= 0 - so a plan a manual run is
+    still writing is not read truncated and handed to Hazard as finished."""
     log = log or (lambda m: None)
+    check = has_results or plan_has_results
     end = clock() + max(0.0, float(minutes or 0)) * 60.0
     last = {}
+    unstable_left = 2          # bounded re-polls to prove a one-shot (minutes<=0) unverified result
     while True:
-        p = find_finished_plan(folders, since, has_results)
+        p = find_finished_plan(folders, since, check)
         if p:
             size = os.path.getsize(p)
-            if minutes <= 0 or last.get(p) == size:
+            if (check(p) is True and minutes <= 0) or last.get(p) == size:
                 return p
             last = {p: size}
+            if minutes <= 0:                 # unverified: re-poll a bounded number of times
+                if unstable_left <= 0:
+                    return None
+                unstable_left -= 1
+                if clock() >= end:
+                    end = clock() + poll_s
         if clock() >= end:
             return None
         if cancelled():
@@ -567,6 +593,8 @@ def run_dam(dam, ops, skip_done=True, log=None, cancelled=lambda: False):
     t0 = time.time()
     stages = plan_stages(dam.cv, dam.mode)
     state = load_state(dam.folder)
+    if state.get("dam") and state.get("dam") != dam.dam_id:
+        state = {}             # a different dam's state in this folder (safe_name collision): drop it
     recs = dict(state.get("stages") or {})
     row = dict.fromkeys(SUMMARY_FIELDS, "")
     row.update({"Dam": dam.dam_id, "Folder": dam.folder, "HEC_Mode": dam.mode})
@@ -680,6 +708,15 @@ def run_batch(dams, ops, out_folder, keep_going=True, skip_done=True, log=None,
     mpath = os.path.join(out_folder, MANIFEST_NAME)
     rows = []
     started = now()
+
+    def _try_write(what, fn):
+        """A summary/manifest write must never abort the batch (Summary.csv open in Excel ->
+        PermissionError, disk full -> OSError): log it and keep going so every dam still runs."""
+        try:
+            fn()
+        except OSError as e:
+            log("could not write {} ({}); the run continues".format(what, e))
+
     for i, dam in enumerate(dams):
         if cancelled():
             break
@@ -695,7 +732,7 @@ def run_batch(dams, ops, out_folder, keep_going=True, skip_done=True, log=None,
             row.update({"Dam": dam.dam_id, "Folder": dam.folder, "Status": "failed",
                         "Message": "{}: {}".format(type(e).__name__, e)[:500]})
         rows.append(row)
-        write_summary(spath, rows)
+        _try_write(SUMMARY_NAME, lambda: write_summary(spath, rows))
         if row["Status"] == "failed" and not keep_going:
             log("Stopped: {} failed and 'keep going' is off".format(dam.dam_id))
             break
@@ -715,13 +752,28 @@ def run_batch(dams, ops, out_folder, keep_going=True, skip_done=True, log=None,
                      if r["Folder"] else "", "hazard_project": r["Hazard_Project"]}
                     for r in rows]}
     man.update(manifest_extra or {})
-    save_json(mpath, man)
-    write_summary(spath, rows)
+    _try_write(MANIFEST_NAME, lambda: save_json(mpath, man))
+    _try_write(SUMMARY_NAME, lambda: write_summary(spath, rows))
     return rows, spath, mpath
 
 
 # ------------------------------------------------------------- preflight ----
 ERROR, WARNING, OK = "ERROR", "WARNING", "OK"
+
+
+def _needed_algs(cv, engine):
+    """The stage keys a dam needs given its chain values and the HEC-RAS engine detect dict."""
+    need = []
+    if cv.get("SCREENING"):
+        need.append("screening")
+    need.append("runner")
+    mode, _n = effective_hec_mode(cv, engine)
+    if mode in ("wait", "run_windows"):
+        need += ["hec_build", "hazard_import"]
+    elif mode == "run_linux":
+        need.append("hazard_import")
+    need.append("classify")
+    return need
 
 
 def preflight(dam_ids, values, env, overrides=None, override_problems=(), missing_ids=()):
@@ -740,6 +792,14 @@ def preflight(dam_ids, values, env, overrides=None, override_problems=(), missin
         out.append((OK, "", "{} dam(s) in the list".format(len(dam_ids))))
     for d in missing_ids:
         out.append((ERROR, d, "dam ID {} is not in the dams layer".format(d)))
+    folders = {}            # two distinct IDs that collapse to one folder cross-attribute results
+    for d in (dam_ids or ()):
+        folders.setdefault(safe_name(d), []).append(d)
+    for fn, ds in folders.items():
+        if len(ds) > 1:
+            out.append((ERROR, "", "dam IDs {} share the output folder '{}' (their IDs differ "
+                                   "only in characters the folder name replaces); rename them or "
+                                   "run them in separate batches".format(", ".join(ds), fn)))
     of = str(cv.get("OUT_FOLDER") or "").strip()
     if not of:
         out.append((ERROR, "", "Choose an output folder"))
@@ -795,15 +855,22 @@ def preflight(dam_ids, values, env, overrides=None, override_problems=(), missin
         out.append((ERROR, "", "The Hazard profile {} does not exist".format(prof)))
     for p in override_problems:
         out.append((ERROR, "", p))
-    known = set(dam_ids or ())
+    known = set(canon_id(x) for x in (dam_ids or ()))
+    engine = env.get("engine")
+    base_need = set(_needed_algs(cv, engine))
     for d, ov in (overrides or {}).items():
-        if d not in known:
+        if canon_id(d) not in known:
             out.append((WARNING, d, "overrides for dam {}, which is not in the list".format(d)))
             continue
         v, _a = resolve_for_dam(values, ov)
         dcv, dprobs = chain_values(v)
         for p in dprobs:
             out.append((ERROR, d, "{}: override {}".format(d, p)))
+        if algs is not None:          # a per-dam override that needs a stage the global run does not
+            for s in _needed_algs(dcv, engine):
+                if s not in base_need and ALGS[s] not in algs:
+                    out.append((ERROR, d, "{}: its override needs {} ({}), which is not installed "
+                                          "or not enabled".format(d, ALGS[s], _plugin_of(ALGS[s]))))
         for k in ("ANUGA_RUN", "HEC_PLAN_HDF", "HEC_TERRAIN", "DEM"):
             pth = str(dcv.get(k) or "").strip()
             if pth and (k != "DEM" or "://" not in pth) and not exists(pth):

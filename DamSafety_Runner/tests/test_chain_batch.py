@@ -205,6 +205,108 @@ def chain_preflight():
         shutil.rmtree(root, ignore_errors=True)
 
 
+@test
+def chain_review_overrides_and_keys():
+    """Review fixes: 3-part keys case-normalised (#7); override cells kept raw and dams keyed by
+    the canonical ID (#17/#18); wait_for_plan proves stability for an unverifiable result (#6/#14)."""
+    # #7: a stage tool's 3-part key is normalised to (plugin.lower, tool.lower, KEY.upper)
+    assert CH.key_of_column("ndbreach.batch.method") == ("ndbreach", "batch", "METHOD")
+    assert CH.key_of_column("NDBREACH.BATCH.method") == ("ndbreach", "batch", "METHOD")
+    assert CH.key_of_column("ndhazard.classify.foo") == ("ndhazard", "classify", "FOO")
+    # #18 canonical IDs: a layer feature, an IDs list and the CSV all match through canon_id
+    assert CH.canon_id("123.0") == "123" and CH.canon_id("00123") == "123"
+    assert CH.canon_id("NULL") == "" and CH.canon_id(" ND001 ") == "ND001"
+    d = _tmp()
+    try:
+        o = os.path.join(d, "ov.csv")
+        with open(o, "w") as f:
+            f.write("dam_id,ndbreach.batch.METHOD\n123.0,00123\n")
+        ov, probs = CH.read_overrides(o)
+        assert "123" in ov and "123.0" not in ov, ov                 # #18 keyed by canonical id
+        assert ov["123"][("ndbreach", "batch", "METHOD")] == "00123", ov   # #17 raw string kept
+        # #6/#14: an unverifiable (h5py None) result accepted only once its size is stable
+        p = os.path.join(d, "M.p01.hdf")
+        with open(p, "wb") as f:
+            f.write(b"x" * 10)
+        t = [0.0]
+        got = CH.wait_for_plan([d], 0, since=0, poll_s=1, sleep=lambda s: t.__setitem__(0, t[0] + s),
+                               clock=lambda: t[0], has_results=lambda q: None)
+        assert got == p, got                                         # stable -> accepted
+        # a still-growing HDF is never accepted (truncated-read guard)
+        sz = [10]
+
+        def grow(s):
+            t[0] += s
+            sz[0] += 10
+            with open(p, "wb") as f:
+                f.write(b"x" * sz[0])
+        t[0] = 0.0
+        got = CH.wait_for_plan([d], 0, since=0, poll_s=1, sleep=grow, clock=lambda: t[0],
+                               has_results=lambda q: None)
+        assert got is None, got
+        # a verified result with minutes<=0 is still taken at once
+        assert CH.wait_for_plan([d], 0, since=0, has_results=lambda q: True) == p
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test
+def chain_review_batch_and_preflight():
+    """Review fixes: a summary write failure does not abort the batch (#1); a folder collision
+    is a preflight ERROR (#15) and a foreign saved state is dropped (#15 defense); a per-dam
+    override that needs an uninstalled stage is caught in preflight (#12)."""
+    # #1: write_summary raising (Summary.csv open in Excel) must not stop the remaining dams
+    root = _tmp()
+    try:
+        orig = CH.write_summary
+        CH.write_summary = lambda path, rows: (_ for _ in ()).throw(
+            PermissionError("Summary.csv is open"))
+        logs = []
+        try:
+            rows, _sp, _mp = CH.run_batch(_dams(root, ["A", "B"], mode="skip"), FakeOps(), root,
+                                          log=logs.append)
+        finally:
+            CH.write_summary = orig
+        assert {r["Dam"] for r in rows} == {"A", "B"} and all(r["Status"] == "done" for r in rows)
+        assert any("could not write" in m for m in logs), logs
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    # #15 defense: a saved state stamped with another dam is not reused for this dam
+    root = _tmp()
+    try:
+        folder = os.path.join(root, "X")
+        os.makedirs(CH.chain_dir(folder))
+        vals, cv = _cv(OUT_FOLDER=root, SCREENING=False)
+        dam = CH.Dam("X", folder, vals, cv, mode="skip")
+        fp = CH.fingerprint(CH.stage_inputs("runner", vals, cv))
+        dep = os.path.join(folder, "depth.tif")
+        open(dep, "w").close()
+        CH.save_json(os.path.join(CH.chain_dir(folder), CH.STATE_NAME),
+                     {"dam": "OTHER", "stages": {"runner": {"stage": "runner", "status": "done",
+                      "fingerprint": fp, "outputs": {"depth": dep}}}})
+        ops = FakeOps()
+        CH.run_dam(dam, ops, skip_done=True)
+        assert ("X", "runner") in ops.calls, ops.calls              # not kept from OTHER's state
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    # #15 collision + #12 per-dam override validation
+    root = _tmp()
+    try:
+        dem = os.path.join(root, "dem.tif")
+        open(dem, "w").close()
+        vals, _ = _cv(OUT_FOLDER=root, HEC_MODE=2, SCREENING=False, DEM=dem)   # global: skip HEC
+        env = {"algs": {"ndbreach:batch", "ndhazard:classify", "ndhazard:savedamstate"},
+               "engine": {"available": False, "platform": "linux"}}
+        out = CH.preflight(["Smith/Dam", "Smith:Dam"], vals, env)             # both -> "Smith_Dam"
+        assert any("share the output folder" in t for lv, _d, t in out if lv == CH.ERROR), out
+        ov = {"A": {(CH.PLUGIN, CH.TOOL, "HEC_MODE"): "1"}}                   # this dam -> wait
+        out = CH.preflight(["A"], vals, env, overrides=ov)
+        errs = [t for lv, dd, t in out if lv == CH.ERROR and dd == "A"]
+        assert any("hecrasexport" in t for t in errs) and any("hecrasplan" in t for t in errs), out
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 # ---------------------------------------------------------------- QGIS ops ---
 class _FakeAlg(object):
     pass

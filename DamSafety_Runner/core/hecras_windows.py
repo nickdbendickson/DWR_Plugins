@@ -94,16 +94,27 @@ def detect(env=None, platform=None, isfile=os.path.isfile, com=None):
     return out
 
 
-def methods(env=None):
+def methods(env=None, log=None):
     raw = (_env(env).get(ENV_METHODS) or "").strip().lower()
-    got = [m.strip() for m in raw.split(",") if m.strip() in METHODS] if raw else []
-    return tuple(got) or METHODS
+    if not raw:
+        return METHODS
+    got = tuple(m.strip() for m in raw.split(",") if m.strip() in METHODS)
+    if not got and log:                              # set but unrecognized: warn, keep default
+        log("{}={!r} names no recognized method (expected {}); using {}".format(
+            ENV_METHODS, raw, "/".join(METHODS), "/".join(METHODS)))
+    return got or METHODS
 
 
-def timeout_s(env=None):
+def timeout_s(env=None, log=None):
+    raw = (_env(env).get(ENV_TIMEOUT) or "").strip()
+    if not raw:
+        return None                                  # unset: no wall-clock limit
     try:
-        v = float((_env(env).get(ENV_TIMEOUT) or "").strip() or 0)
+        v = float(raw)
     except ValueError:
+        if log:                                      # a typo must not silently drop the limit
+            log("{}={!r} is not a number of seconds; ignoring it (no wall-clock limit)"
+                .format(ENV_TIMEOUT, raw))
         return None
     return v if v > 0 else None
 
@@ -176,26 +187,99 @@ def results_hdf(plan_file):
 
 
 def _has_results(path, check):
+    """True only when the plan HDF exists, is non-empty, and `check` positively confirms
+    unsteady results (check(path) is True). 'cannot verify' - check returns None, e.g. h5py is
+    not importable in this runtime - is NOT treated as success: the chain then waits for a
+    verifiable result rather than attributing an unverified/partial/geometry-only plan to a dam."""
     if not os.path.isfile(path) or os.path.getsize(path) <= 0:
         return False
-    return check(path) is not False
+    return check(path) is True
+
+
+def _unverifiable(path, check):
+    """True when the file is there but `check` could not tell (returned None) - used only to
+    explain in the log why the launcher is waiting instead of accepting the file."""
+    try:
+        return os.path.isfile(path) and os.path.getsize(path) > 0 and check(path) is None
+    except Exception:                                            # noqa
+        return False
 
 
 # ------------------------------------------------------------------- launchers ----
+def _kill_tree(p):
+    """Best-effort kill of a process and its children (a HEC-RAS compute engine Ras.exe spawns
+    must not be orphaned when we time out)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)],
+                           capture_output=True)
+        else:
+            import signal
+            try:
+                os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+            except Exception:                                    # noqa
+                pass
+            try:
+                p.kill()
+            except Exception:                                    # noqa
+                pass
+    except Exception:                                            # noqa
+        pass
+
+
+def _popen_run(cmd, cwd=None, timeout=None, capture_output=True, text=True):
+    """Like subprocess.run, but the child starts its own process group / tree, and on timeout the
+    whole tree is killed (not just the direct child) before TimeoutExpired is re-raised. This is
+    the default runner; the tests inject their own. Needs real Windows to verify fully."""
+    kw = {}
+    if os.name == "nt":
+        kw["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        kw["start_new_session"] = True
+    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=text, **kw)
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(p)
+        try:
+            p.communicate(timeout=10)
+        except Exception:                                        # noqa
+            pass
+        raise
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+
+
 def _run(cmd, cwd, timeout, runner):
     r = runner(cmd, cwd=cwd, timeout=timeout, capture_output=True, text=True)
     return getattr(r, "returncode", 0), ((getattr(r, "stdout", "") or "") +
                                          (getattr(r, "stderr", "") or ""))[-2000:]
 
 
-def run_headless(prj, plan_file, d, timeout=None, runner=subprocess.run, check=None, log=None):
+def run_headless(prj, plan_file, d, timeout=None, runner=_popen_run, check=None, log=None):
     """Ras.exe -c, then RasUnsteady.exe on the run inputs when needed. Returns the results
-    HDF or raises WindowsRunError."""
+    HDF or raises WindowsRunError. A results HDF is accepted only when it is freshly produced
+    by this launch (not a stale file from an earlier run) and positively verified."""
     log = log or (lambda m: None)
     folder = os.path.dirname(prj)
     out = results_hdf(plan_file)
     ext = os.path.splitext(plan_file)[1][1:]            # p01
     num = ext[1:]
+    before = os.path.getmtime(out) if os.path.isfile(out) else None
+
+    def fresh(path):
+        """verified results AND produced by THIS launch - a pre-existing HDF left untouched by a
+        failed run keeps its old mtime and must NOT be accepted (a real HEC-RAS compute advances
+        the mtime; a same-instant rewrite falling through to wait is the safe failure)."""
+        if not _has_results(path, check):
+            return False
+        if before is None:
+            return True
+        try:
+            return os.path.getmtime(path) > before
+        except OSError:
+            return False
+
     try:
         rc, txt = _run([d["ras_exe"], "-c", prj, plan_file], folder, timeout, runner)
     except subprocess.TimeoutExpired:
@@ -204,7 +288,7 @@ def run_headless(prj, plan_file, d, timeout=None, runner=subprocess.run, check=N
         raise WindowsRunError("Ras.exe could not be started: {}".format(e))
     log("Ras.exe -c {} {}: exit {}".format(os.path.basename(prj),
                                            os.path.basename(plan_file), rc))
-    if _has_results(out, check):
+    if fresh(out):
         return out
     tmp = os.path.splitext(out)[0] + ".tmp.hdf"           # <name>.p01.tmp.hdf
     base = os.path.splitext(prj)[0]
@@ -224,17 +308,31 @@ def run_headless(prj, plan_file, d, timeout=None, runner=subprocess.run, check=N
     except OSError as e:
         raise WindowsRunError("RasUnsteady.exe could not be started: {}".format(e))
     log("RasUnsteady.exe {} x{}: exit {}".format(os.path.basename(tmp), num, rc2))
-    if os.path.isfile(tmp) and not _has_results(out, check):
+    # Promote the .tmp.hdf to the canonical results name ONLY when RasUnsteady succeeded and the
+    # tmp positively verifies; otherwise delete the partial so a failed/partial run never leaves a
+    # file at <name>.p##.hdf for the resume path to pick up as finished.
+    if rc2 == 0 and os.path.isfile(tmp) and _has_results(tmp, check) and not _has_results(out, check):
         os.replace(tmp, out)
-    if _has_results(out, check):
+    elif os.path.isfile(tmp):
+        try:
+            os.remove(tmp)
+        except OSError:                                          # noqa
+            pass
+    if rc2 == 0 and fresh(out):
         return out
-    raise WindowsRunError("RasUnsteady.exe gave no results (exit {}){}".format(
-        rc2, (": " + txt2.strip()) if txt2.strip() else ""))
+    extra = ("; results could not be verified (h5py not available) - waiting for a manual run"
+             if _unverifiable(out, check) or _unverifiable(tmp, check) else "")
+    raise WindowsRunError("RasUnsteady.exe gave no results (exit {}){}{}".format(
+        rc2, (": " + txt2.strip()) if txt2.strip() else "", extra))
 
 
-def run_com(prj, plan_file, dispatch=None, check=None, log=None):
+def run_com(prj, plan_file, dispatch=None, check=None, log=None, timeout=None):
     """The HEC-RAS Controller: Project_Open, Plan_SetCurrent, Compute_CurrentPlan (blocking).
-    Returns the results HDF or raises WindowsRunError."""
+    Returns the results HDF or raises WindowsRunError. With `timeout`, the blocking compute runs
+    in a watchdog thread; on expiry the controller is closed and WindowsRunError is raised so the
+    chain can fall through to the manual-wait path instead of stalling on this dam forever. (A
+    blocking COM call cannot be force-interrupted, so the background thread may linger until the
+    controller actually returns; closing it is best-effort.)"""
     log = log or (lambda m: None)
     if dispatch is None:
         try:
@@ -248,16 +346,38 @@ def run_com(prj, plan_file, dispatch=None, check=None, log=None):
         raise WindowsRunError("{} could not be started ({}); run 'Ras.exe /regserver' once as "
                               "administrator".format(PROG_ID, e))
     out = results_hdf(plan_file)
+    ok, msgs, timed_out = False, [], None
     try:
         ras.Project_Open(prj)
         title = plan_title(plan_file)
         if title:
             ras.Plan_SetCurrent(title)
-        r = ras.Compute_CurrentPlan(None, None, True)
-        ok = r[0] if isinstance(r, (tuple, list)) else r
-        msgs = list(r[2]) if isinstance(r, (tuple, list)) and len(r) > 2 and r[2] else []
-        log("HEC-RAS Controller Compute_CurrentPlan ({}): {}".format(title or "current plan",
-                                                                     "ok" if ok else "failed"))
+        if timeout:
+            import threading
+            box = {}
+
+            def _compute():
+                try:
+                    box["r"] = ras.Compute_CurrentPlan(None, None, True)
+                except Exception as e:                           # noqa
+                    box["e"] = e
+            th = threading.Thread(target=_compute, daemon=True)
+            th.start()
+            th.join(timeout)
+            if th.is_alive():
+                timed_out = ("HEC-RAS Controller did not finish within {:g} s"
+                             .format(timeout))
+            elif "e" in box:
+                raise box["e"]
+            else:
+                r = box.get("r")
+        else:
+            r = ras.Compute_CurrentPlan(None, None, True)
+        if not timed_out:
+            ok = r[0] if isinstance(r, (tuple, list)) else r
+            msgs = list(r[2]) if isinstance(r, (tuple, list)) and len(r) > 2 and r[2] else []
+            log("HEC-RAS Controller Compute_CurrentPlan ({}): {}".format(
+                title or "current plan", "ok" if ok else "failed"))
     except Exception as e:                                       # noqa
         raise WindowsRunError("HEC-RAS Controller failed: {}".format(e))
     finally:
@@ -266,13 +386,15 @@ def run_com(prj, plan_file, dispatch=None, check=None, log=None):
                 getattr(ras, close)()
             except Exception:                                    # noqa
                 pass
+    if timed_out:
+        raise WindowsRunError(timed_out)
     if _has_results(out, check):
         return out
     raise WindowsRunError("HEC-RAS Controller gave no results{}".format(
         (": " + "; ".join(str(m) for m in msgs[-5:])) if msgs else ""))
 
 
-def run_plan(folder, d=None, env=None, runner=subprocess.run, dispatch=None, check=None,
+def run_plan(folder, d=None, env=None, runner=_popen_run, dispatch=None, check=None,
              log=None, clock=time.time):
     """Runs the first plan of the HEC-RAS project in `folder`. Returns {plan_hdf, method,
     attempts, seconds}. Raises TerrainMissing (make the terrain first) or WindowsRunError."""
@@ -295,15 +417,16 @@ def run_plan(folder, d=None, env=None, runner=subprocess.run, dispatch=None, che
     if note:
         log(note)
     t0, attempts = clock(), []
-    for m in methods(env):
+    to = timeout_s(env, log)
+    for m in methods(env, log):
         try:
             if m == "headless":
-                p = run_headless(prj, plan, d, timeout_s(env), runner, check, log)
+                p = run_headless(prj, plan, d, to, runner, check, log)
             else:
                 if dispatch is None and not d.get("com"):
                     attempts.append("com: pywin32 (win32com) is not installed")
                     continue
-                p = run_com(prj, plan, dispatch, check, log)
+                p = run_com(prj, plan, dispatch, check, log, to)
             return {"plan_hdf": p, "method": m, "attempts": attempts,
                     "seconds": round(clock() - t0, 1), "project": prj}
         except WindowsRunError as e:

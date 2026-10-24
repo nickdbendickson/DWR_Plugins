@@ -255,11 +255,13 @@ class PrepareDams(QgsProcessingAlgorithm):
         if only and not recs:
             raise QgsProcessingException("None of the dams matches the chosen IDs ({}); check the ID "
                                          "(DWR structure ID such as 5289, or DWR-5289).".format(", ".join(sorted(only))))
+        self._write_field_map(params, context, dest)
         return {self.OUT: dest}
 
-    def _write_field_map(self, parameters, context):
-        """Keep the fields the user set so a later chain run does not re-detect them."""
-        out = parameters.get(self.OUT)
+    def _write_field_map(self, parameters, context, out_path=""):
+        """Keep the fields the user set so a later chain run (workflow step 1) reads them from
+        <work>/1_fields.json instead of re-detecting the DWR/NID field names."""
+        out = out_path or parameters.get(self.OUT)
         if not isinstance(out, str) or not out:
             return
         folder = os.path.dirname(out)

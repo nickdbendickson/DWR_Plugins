@@ -428,18 +428,36 @@ def write_point(feature, path):
 
 def collect_dams(source, id_field, wanted):
     """[(dam ID, (fields, crs, feature))] of the source's features, filtered to `wanted` (in
-    its order) when given; and [wanted IDs not found]."""
+    its order) when given; [wanted IDs not found]; and [notes about features dropped for a
+    blank/NULL or a duplicate ID] so a feature the operator selected is never silently
+    skipped."""
     from qgis.core import QgsFeature
     fields = source.fields()
     crs = source.sourceCrs()
     byid = {}
+    dropped = []
+    blank = 0
+    dup_ids = []
     for feat in source.getFeatures():
         i = _id_text(feat.attribute(id_field))
-        if i and i not in byid:
-            byid[i] = (fields, crs, QgsFeature(feat))
+        if not i:
+            blank += 1
+            continue
+        if i in byid:
+            if i not in dup_ids:
+                dup_ids.append(i)
+            continue
+        byid[i] = (fields, crs, QgsFeature(feat))
+    for i in dup_ids:
+        dropped.append("two or more features share the dam ID {}; the first is used, the rest "
+                       "are skipped".format(i))
+    if blank:
+        dropped.insert(0, "{} feature(s) have a blank/NULL '{}' and were skipped (no dam "
+                          "ID)".format(blank, id_field))
     if wanted:
-        return [(i, byid[i]) for i in wanted if i in byid], [i for i in wanted if i not in byid]
-    return list(byid.items()), []
+        return ([(i, byid[i]) for i in wanted if i in byid],
+                [i for i in wanted if i not in byid], dropped)
+    return list(byid.items()), [], dropped
 
 
 class ChainBatchAlgorithm(_Base):
@@ -537,13 +555,15 @@ class ChainBatchAlgorithm(_Base):
         ids_csv = self._fileparam(parameters, "IDS_CSV", context)
         if ids_csv:
             wanted += [i for i in CH.read_ids_csv(ids_csv) if i not in wanted]
-        dams, missing = collect_dams(src, id_field, wanted)
+        dams, missing, dropped = collect_dams(src, id_field, wanted)
         ov_path = self._fileparam(parameters, "OVERRIDES_CSV", context)
         overrides, ov_probs = CH.read_overrides(ov_path) if ov_path else ({}, [])
         algs = registry_algs()
         engine = hec_engine()
         checks = CH.preflight([d for d, _f in dams], values,
                               {"algs": algs, "engine": engine}, overrides, ov_probs, missing)
+        for note in dropped:
+            checks.append((CH.WARNING, "", note))
         n_err = 0
         for level, dam, text in checks:
             line = "{}: {}".format(level, text)
@@ -561,7 +581,7 @@ class ChainBatchAlgorithm(_Base):
                                          "started (see the log)".format(n_err))
         items = []
         for dam_id, feat in dams:
-            v, applied = CH.resolve_for_dam(values, overrides.get(dam_id))
+            v, applied = CH.resolve_for_dam(values, overrides.get(CH.canon_id(dam_id)))
             dcv, _p = CH.chain_values(v)
             mode, note = CH.effective_hec_mode(dcv, engine)
             d = CH.Dam(dam_id, os.path.join(out, CH.safe_name(dam_id)), v, dcv, applied,
