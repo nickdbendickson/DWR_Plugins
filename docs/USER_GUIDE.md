@@ -216,6 +216,25 @@ Results don't change: the limit only decides whether a run is allowed to finish.
 
 **Tip: the thread count doesn't change the results.** On real ANUGA, 1 and 4 threads gave the same depth, velocity, arrival time and water surface, to the last digit. This was tested on 589- and 87,749-triangle domains. A run stopped at 1 thread and resumed from its checkpoint at 4 threads also matched. Only the time changes: 4 threads were about 2.6x faster on the 87,749-triangle test (62 s to 24 s), and about 2x on a 262,000-triangle benchmark. So you can compare a new run with an older single-thread run without allowing for the thread count. Any difference comes from other changes in the code or settings, not from the threads. Compare wall-clock times only between runs with the same `used` count. Windows and macOS installs were not tested; check `anuga_reported` there, or run `anuga_benchmark_omp --threads 1,4` in the ANUGA environment.
 
+## ANUGA gmsh far-field sizing (Runner 3.10.69)
+**What it does.** With `ANUGA_MESHER=gmsh` the Runner builds the ANUGA mesh with gmsh: small triangles along the roads, embankments and the flood channel, growing to large ones (20,000 m²) away from them. Three optional settings let the far field be coarser, so ANUGA has fewer triangles to compute. **With none of them set, the mesh is exactly what it was before 3.10.69** (a test pins the mesh input and every gmsh size field to main's), so earlier runs, and reruns that reuse an earlier run's mesh settings, are unchanged.
+
+| Environment variable (or `anuga_gmsh` key) | Default (unset) | What it changes |
+|---|---|---|
+| `NDBREACH_ANUGA_GMSH_GRADE_DIST_M` (`grade_dist_m`) | unset = 1,500 m from lines, 2,500 m from the channel, 600 m from culvert ends | The distance over which triangles grow from the line size to the far-field size. Setting it to D uses D from lines, 2 × D from the channel and 0.6 × D from culvert ends (500 → 500 / 1,000 / 300 m). A shorter distance = fewer triangles. |
+| `NDBREACH_ANUGA_GMSH_LINE_MIN_AREA_M2` (`line_min_area_m2`) | unset = 100 m² | The smallest intended triangle along roads and embankments (200 m² is the suggested coarser value). The quality gate scales with it (0.45 × the value). Culvert ends keep their own size when `culvert_area_m2` is set. |
+| `NDBREACH_ANUGA_GMSH_MAX_AREA_M2` (`max_area_m2`) | 20,000 m² | The far-field triangle size (the setting existed; the variable is new). |
+| `NDBREACH_ANUGA_GMSH_REFINE_FOOTPRINT` (`refine_footprint`) | off | `wet`: refine only inside the area LISFLOOD-FP flooded (plus a pad), so roads and embankments far from the water don't get small triangles. Culvert ends are always refined. `off` turns it off. |
+| `NDBREACH_ANUGA_GMSH_REFINE_PAD_M` (`refine_footprint_pad_m`) | 200 m | The pad around the wet area for `wet`. |
+
+**How to set them.** Set the variables before you start QGIS or the command-line run (for example `export NDBREACH_ANUGA_GMSH_GRADE_DIST_M=500` and `export NDBREACH_ANUGA_GMSH_LINE_MIN_AREA_M2=200`), or put the keys in a run's `anuga_gmsh` settings. A variable that is set wins over the same key. An empty variable counts as unset.
+
+**Bad values.** A value that isn't a positive number (such as `500m`, `0` or `-5`), a footprint other than `wet` / `off`, or a distance so short that the channel's distance is no longer above its 250 m inner distance (`grade_dist_m` of 125 m or less) stops the gmsh mesh with a message naming the setting and the variable, before gmsh runs. These settings are only read by the gmsh mesher; the default ANUGA mesher ignores them.
+
+**Where to see what a run used.** The run log has a `gmsh sizing: lines 200 m2, far field 20000 m2, grading 500 / 1000 / 300 m (lines / channel / points)` line (and the wet-footprint size when it is on). The ANUGA mesh note adds `Sizing: …`. `run_report.json` → `anuga_mesh` → `sizing` (and `gmsh.sizing`) holds the values used, the footprint's area and how many km of lines were left outside it. The settings themselves are under `anuga_gmsh`. None of this appears when no option is set.
+
+**Estimates, not yet checked for accuracy.** On the benchmark meshes, grading 500 m alone was estimated at about 1.45× faster; lines 200 m² alone at 31 % fewer triangles; and a 1,000 m wet-area buffer + lines 200 m² + grading 500 m at about 2.3× faster (56 % fewer triangles). The flood results still need to be compared with the default mesh (DWR-2851) before these are used for production runs.
+
 ## Hazard zone colours match the ND Dam Safety Standards (#126, Hazard 2.18.46, Runner 3.10.51, Screening 0.17.34)
 **What changed.** Every ACER TM 11 danger-zone graphic now uses the colours of the ND Dam Safety Standards, Policy REG_05.2026 (effective 04/01/2026), Figure 5.1 (houses, p. 21) and Figure 5.2 (mobile homes, p. 22): [the policy document](https://www.dwr.nd.gov/reclink/4dcgi/GetPolicyDocument/16). The standard names no colours, so they were sampled from the published figures.
 

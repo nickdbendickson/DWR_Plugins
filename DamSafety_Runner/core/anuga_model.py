@@ -20,6 +20,7 @@ from . import terrain, wallclock
 from .units import ARRIVAL_DEPTH_FT, FT
 from . import conditioning as cond
 from . import structures as structmod
+from . import gmsh_mesher as gmshmod     # numpy only; gmsh is imported in build_mesh
 
 # Windows: no console window for a child program (QGIS is a GUI program, so each console
 # program it starts opens its own window, and closing that window kills the run)
@@ -449,11 +450,96 @@ def _clean_env():
     return env
 
 
+# 3.10.69 far-field sizing (gmsh_mesher module docstring): environment variable -> anuga_gmsh key
+GMSH_SIZING_ENV = (("NDBREACH_ANUGA_GMSH_GRADE_DIST_M", "grade_dist_m"),
+                   ("NDBREACH_ANUGA_GMSH_LINE_MIN_AREA_M2", "line_min_area_m2"),
+                   ("NDBREACH_ANUGA_GMSH_MAX_AREA_M2", "max_area_m2"),
+                   ("NDBREACH_ANUGA_GMSH_REFINE_FOOTPRINT", "refine_footprint"),
+                   ("NDBREACH_ANUGA_GMSH_REFINE_PAD_M", "refine_footprint_pad_m"))
+REFINE_PAD_M = 200.0          # refine_footprint "wet": the LISFLOOD-FP wet area padded this much
+_FOOTPRINT_OFF = ("", "off", "none", "no", "false", "0")
+
+
+def gmsh_env_options(gmsh=None, environ=None):
+    """anuga_gmsh (a dict or None) with the NDBREACH_ANUGA_GMSH_* sizing variables applied;
+    a variable that is set wins over the same key in the dict. Unset or empty variables
+    change nothing, so with none set the result is `gmsh` itself (None stays None). Numbers
+    are stored as floats; text that is not a number is kept as given and stopped with a
+    clear error by check_gmsh_options when an ANUGA gmsh mesh is made. A footprint of
+    'off' / 'none' removes refine_footprint."""
+    env = os.environ if environ is None else environ
+    out = None
+    for var, key in GMSH_SIZING_ENV:
+        raw = env.get(var)
+        if raw is None or not str(raw).strip():
+            continue
+        out = dict(gmsh or {}) if out is None else out
+        v = str(raw).strip()
+        if key == "refine_footprint":
+            if v.lower() in _FOOTPRINT_OFF:
+                out.pop(key, None)
+            else:
+                out[key] = v.lower()
+            continue
+        try:
+            out[key] = float(v)
+        except ValueError:
+            out[key] = v
+    if out is None or (not out and gmsh is None):
+        return gmsh
+    return out
+
+
+def check_gmsh_options(st):
+    """ModelError with a clear message for a bad far-field sizing value in st.gmsh (the
+    anuga_gmsh setting or an NDBREACH_ANUGA_GMSH_* variable). Returns the footprint mode:
+    None, "wet", or "rings" (a ring list given in the setting)."""
+    o = getattr(st, "gmsh", None) or {}
+
+    def bad(key, e):
+        var = next((v for v, k in GMSH_SIZING_ENV if k == key), None)
+        return ModelError("ANUGA gmsh sizing: {}{}".format(
+            e, " (setting anuga_gmsh['{}'] or {})".format(key, var) if var else ""))
+    for key in ("grade_dist_m", "line_min_area_m2", "max_area_m2", "refine_footprint_pad_m"):
+        if o.get(key) is not None:
+            try:
+                gmshmod.positive_number(key, o[key])
+            except gmshmod.MeshError as e:
+                raise bad(key, e)
+    fp = o.get("refine_footprint")
+    if fp is None:
+        return None
+    if isinstance(fp, str):
+        if fp.strip().lower() in _FOOTPRINT_OFF:
+            return None
+        if fp.strip().lower() == "wet":
+            return "wet"
+        raise bad("refine_footprint", "refine_footprint must be 'wet', 'off' or a list of "
+                  "rings, not {!r}".format(fp))
+    try:
+        gmshmod.footprint_rings(fp)
+    except gmshmod.MeshError as e:
+        raise bad("refine_footprint", e)
+    return "rings"
+
+
+def wet_footprint(dem, flooded, inflow_xy, pad_m):
+    """refine_footprint "wet": the outline of the LISFLOOD-FP wet cells (`flooded`) dilated
+    by pad_m, the part joined to the inflow (which is always inside), as an open ring."""
+    mask = terrain.dilate(np.asarray(flooded, bool), float(pad_m), dem.dx)
+    mask |= terrain.disk_mask(dem, inflow_xy, max(float(pad_m), 2.5 * dem.dx))
+    r, c = dem.rc(*inflow_xy)
+    mask = terrain.largest_component(mask, (r, c) if dem.inside(r, c) else None)
+    return terrain.mask_outline(dem, mask, simplify_m=max(2.0 * dem.dx, 20.0))
+
+
 def gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st, channel=None,
-              embankments=None):
+              embankments=None, footprint=None):
     """The gmsh_mesher input: outer ring, breaklines (REFINE_LINES, road and rail
     centrelines on embankments, culverts, the inlet/breach line), the flow path and the
-    points that need small triangles (culvert ends, inflow)."""
+    points that need small triangles (culvert ends, inflow). footprint: the ring for
+    refine_footprint "wet" (wet_footprint); the spec then carries it instead of the word.
+    With no sizing option set the spec is the same as before 3.10.69."""
     lines = [np.asarray(b, float).tolist() for b in (breaklines or [])]
     lines += [np.asarray(b, float).tolist() for b in (embankments or [])]
     lines.append(np.asarray(inlet, float).tolist())
@@ -479,6 +565,12 @@ def gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st, channel=No
         # follows (gmsh_mesher.gate_area: 0.45 x the smallest size asked for).
         spec["culvert_area_m2"] = culvert_area_m2(st)
     spec.update({k: v for k, v in (st.gmsh or {}).items() if not k.startswith("embankment")})
+    fp = spec.get("refine_footprint")
+    if isinstance(fp, str):
+        if fp.strip().lower() == "wet" and footprint is not None:
+            spec["refine_footprint"] = np.asarray(footprint, float).tolist()
+        else:
+            spec.pop("refine_footprint")         # 'off', or no wet area given
     return spec
 
 
@@ -629,9 +721,31 @@ def make_gmsh_mesh(workdir, spec, st):
         mesh = {"points": r["mesh_points"], "triangles": r["mesh_triangles"],
                 "boundary": r["mesh_boundary"], "stats": json.loads(str(r["mesh_stats"]))}
     s = mesh["stats"]
-    return mesh, ("ANUGA mesh from gmsh: {} triangles, smallest {:.0f} m2, minimum angle "
-                  "{:.1f} deg.".format(s.get("triangles"), s.get("min_area_m2", 0),
-                                       s.get("min_angle_deg", 0)))
+    note = ("ANUGA mesh from gmsh: {} triangles, smallest {:.0f} m2, minimum angle "
+            "{:.1f} deg.".format(s.get("triangles"), s.get("min_area_m2", 0),
+                                 s.get("min_angle_deg", 0)))
+    if s.get("sizing"):                     # 3.10.69: only when a sizing option is set
+        note += " Sizing: " + sizing_line(s["sizing"]) + "."
+    return mesh, note
+
+
+def _mesher_sizes(spec):
+    """gmsh_mesher.build_mesh's size defaults updated with the spec (for resolve_sizing's
+    check before the mesher is started; the mesher does the same)."""
+    g = gmshmod.default_sizes()
+    g.update({k: v for k, v in spec.items() if k in g})
+    return g
+
+
+def sizing_line(z):
+    """One line for the log and the mesh note from gmsh_mesher's "sizing" record."""
+    parts = ["lines {:g} m2".format(z["min_area_m2"]),
+             "far field {:g} m2".format(z["max_area_m2"]),
+             "grading {:g} / {:g} / {:g} m (lines / channel / points)".format(
+                 z["line_dist_max_m"], z["channel_dist_max_m"], z["point_dist_max_m"])]
+    if z.get("refine_footprint_km2") is not None:
+        parts.append("refined inside a {:g} km2 footprint".format(z["refine_footprint_km2"]))
+    return ", ".join(parts)
 
 
 ELEVATION_MODES = ("fine", "model_grid")
@@ -890,8 +1004,23 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         if log and einfo.get("embankment_pieces"):
             log("gmsh: {} road/rail embankment piece(s), {} km, become mesh lines.".format(
                 einfo["embankment_pieces"], einfo.get("embankment_km")))
+        fp_mode = check_gmsh_options(st)           # 3.10.69: a bad value stops here
+        footprint = None
+        if fp_mode == "wet":
+            pad = float((st.gmsh or {}).get("refine_footprint_pad_m") or REFINE_PAD_M)
+            footprint = wet_footprint(dem, flooded, inflow_xy, pad)
+            minfo["refine_footprint"] = {"mode": "wet", "pad_m": pad,
+                                         "vertices": int(len(footprint))}
         spec = gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st,
-                         embankments=emb)
+                         embankments=emb, footprint=footprint)
+        try:
+            sizing = gmshmod.resolve_sizing(spec, _mesher_sizes(spec))
+        except gmshmod.MeshError as e:
+            raise ModelError("ANUGA gmsh sizing: {}".format(e))
+        if sizing:
+            minfo["sizing"] = sizing
+            if log:
+                log("gmsh sizing: " + sizing_line(sizing))
         mesh, msg = make_gmsh_mesh(workdir, spec, st)
         if mesh is None:
             minfo["rejected"] = msg

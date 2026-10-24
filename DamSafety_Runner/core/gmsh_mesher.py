@@ -13,6 +13,36 @@ This file is also a stand-alone script, run in the ANUGA Python environment
 
 Only numpy (and gmsh for build_mesh) are needed. All coordinates are model CRS
 metres. The default ANUGA mesh does not use anything in this file.
+
+Far-field sizing (3.10.69). Optional spec keys that make the mesh coarser away from the
+refinement lines. Each one is absent by default, and then the mesh and the gmsh size fields
+are exactly as before. The Runner sets them from its anuga_gmsh setting or the
+NDBREACH_ANUGA_GMSH_* environment variables (anuga_model.gmsh_env_options):
+
+    grade_dist_m       NDBREACH_ANUGA_GMSH_GRADE_DIST_M      default unset (= 1500 m)
+        Distance from the refinement lines over which the size grows from the line size to
+        the far-field size (max_area_m2): the lines' Threshold field DistMax. The channel and
+        point fields scale with it (channel 2 x, points 0.6 x; at the defaults these are
+        1500 / 2500 / 600 m). An explicit line_dist_max_m, channel_dist_max_m or
+        point_dist_max_m still wins. The benchmark's "grade 500" is grade_dist_m = 500.
+    line_min_area_m2   NDBREACH_ANUGA_GMSH_LINE_MIN_AREA_M2  default unset (= min_area_m2, 100)
+        Smallest triangle area on the refinement lines: replaces min_area_m2, which also sets
+        the declutter gap, vertex spacing and the quality gate. Culvert ends keep
+        culvert_area_m2 when it is set (the Runner sets 25 m2 when there are culverts).
+    max_area_m2        NDBREACH_ANUGA_GMSH_MAX_AREA_M2       default 20000
+        The far-field (largest) triangle area, as before. The variable is new.
+    refine_footprint   NDBREACH_ANUGA_GMSH_REFINE_FOOTPRINT  default unset (= everywhere)
+        A ring [[x, y]...] or a list of rings. The refinement lines and the flow path are
+        cut to the inside of it, so outside it the mesh grades to the far-field size.
+        Culvert ends and the inflow point are always kept. The Runner's value "wet" uses the
+        LISFLOOD-FP wet area, padded by refine_footprint_pad_m
+        (NDBREACH_ANUGA_GMSH_REFINE_PAD_M, default 200 m).
+
+Bad values (not a positive number, a grading distance that does not reach past DistMin, or
+a ring with fewer than 3 points) raise MeshError with the key's name. When any of these keys
+(grade_dist_m, line_min_area_m2, refine_footprint) is set, the resolved values go into the
+mesh stats as "sizing" (run_report anuga_mesh.sizing and anuga_mesh.gmsh), with max_area_m2
+checked too.
 """
 import json
 import math
@@ -412,6 +442,152 @@ def keep_inside(nodes, edges, kinds, ring, clearance_m):
     return edges[keep] if len(keep) else np.zeros((0, 2), int), [kinds[i] for i in keep]
 
 
+def default_sizes():
+    """build_mesh's defaults for every size / option key a spec may override."""
+    return dict(min_area_m2=100.0, channel_area_m2=250.0, max_area_m2=20000.0,
+                line_dist_min_m=60.0, line_dist_max_m=1500.0, channel_dist_min_m=250.0,
+                channel_dist_max_m=2500.0, point_dist_min_m=40.0, point_dist_max_m=600.0,
+                min_angle_deg=20.0, min_area_tol=MIN_AREA_TOL, culvert_area_m2=None,
+                declutter=True, threads=0, algorithm=5, random_seed=None,
+                optimize=(("Laplace2D", 5),), smoothing=None)
+
+
+# ------------------------------------------------------------------ far-field sizing (3.10.69)
+# grade_dist_m sets each Threshold field's DistMax to ratio x grade_dist_m (the benchmark's
+# "grade 500" variant: lines 500 m, channel 1000 m, points 300 m)
+GRADE_RATIOS = (("line_dist_max_m", 1.0), ("channel_dist_max_m", 2.0), ("point_dist_max_m", 0.6))
+# the keys new in 3.10.69 (max_area_m2 is older; set alone it is used as before, with no record)
+SIZING_KEYS = ("grade_dist_m", "line_min_area_m2", "refine_footprint")
+
+
+def positive_number(name, v):
+    """float(v) when it is a finite number > 0; MeshError naming the key otherwise."""
+    if isinstance(v, bool):
+        raise MeshError("{} must be a positive number, not {!r}".format(name, v))
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        raise MeshError("{} must be a positive number, not {!r}".format(name, v))
+    if not math.isfinite(x) or x <= 0.0:
+        raise MeshError("{} must be a positive number, not {!r}".format(name, v))
+    return x
+
+
+def footprint_rings(fp):
+    """refine_footprint (one ring [[x, y]...] or a list of rings) -> list of (N, 2) arrays
+    (open rings); MeshError for anything else."""
+    try:
+        if isinstance(fp, (str, bytes)) or len(fp) == 0:
+            raise TypeError(fp)
+        one = np.ndim(fp[0][0]) == 0          # [[x, y], ...] rather than [[[x, y], ...], ...]
+        rings = [np.asarray(fp, float)] if one else [np.asarray(r, float) for r in fp]
+    except (TypeError, ValueError, IndexError):
+        raise MeshError("refine_footprint must be a ring [[x, y], ...] or a list of rings")
+    out = []
+    for r in rings:
+        if r.ndim != 2 or r.shape[1] != 2 or not np.isfinite(r).all():
+            raise MeshError("refine_footprint must be a ring [[x, y], ...] or a list of rings")
+        if len(r) > 1 and np.allclose(r[0], r[-1]):
+            r = r[:-1]
+        if len(r) < 3:
+            raise MeshError("refine_footprint has a ring with fewer than 3 points")
+        out.append(r)
+    if not out:
+        raise MeshError("refine_footprint has no ring")
+    return out
+
+
+def _ring_area(r):
+    x, y = r[:, 0], r[:, 1]
+    return 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+
+
+def resolve_sizing(spec, g):
+    """Apply the far-field sizing keys of spec (see the module docstring) to the size
+    dict g in place, after checking them. Returns the record for the mesh stats: {} when
+    none is set, so the default mesh and its stats stay exactly as before."""
+    if not any(spec.get(k) is not None for k in SIZING_KEYS):
+        return {}
+    rec = {}
+    for k in ("min_area_m2", "channel_area_m2", "max_area_m2"):
+        g[k] = positive_number(k, g[k])
+    if spec.get("line_min_area_m2") is not None:
+        g["min_area_m2"] = rec["line_min_area_m2"] = positive_number(
+            "line_min_area_m2", spec["line_min_area_m2"])
+    if spec.get("grade_dist_m") is not None:
+        G = rec["grade_dist_m"] = positive_number("grade_dist_m", spec["grade_dist_m"])
+        for key, ratio in GRADE_RATIOS:
+            if spec.get(key) is None:
+                g[key] = ratio * G
+    for key, _ in GRADE_RATIOS:
+        lo = key.replace("_max_", "_min_")
+        g[key] = positive_number(key, g[key])
+        if g[key] <= float(g[lo]):
+            raise MeshError(
+                "{} = {:g} m must be more than {} = {:g} m (the size grows from the line size "
+                "to the far-field size between them){}".format(
+                    key, g[key], lo, float(g[lo]),
+                    "; grade_dist_m = {:g} m is too short".format(rec["grade_dist_m"])
+                    if "grade_dist_m" in rec and spec.get(key) is None else ""))
+    rec.update(min_area_m2=g["min_area_m2"], channel_area_m2=g["channel_area_m2"],
+               max_area_m2=g["max_area_m2"], line_dist_max_m=g["line_dist_max_m"],
+               channel_dist_max_m=g["channel_dist_max_m"], point_dist_max_m=g["point_dist_max_m"])
+    if spec.get("refine_footprint") is not None:
+        rings = footprint_rings(spec["refine_footprint"])
+        rec["refine_footprint_rings"] = len(rings)
+        rec["refine_footprint_km2"] = round(sum(_ring_area(r) for r in rings) / 1e6, 3)
+    return rec
+
+
+def _seg_ring_ts(a, b, ring):
+    """Parameters t (0..1) where segment a-b crosses the ring's edges."""
+    c, d = ring, np.roll(ring, -1, axis=0)
+    r, s = b - a, d - c
+    den = r[0] * s[:, 1] - r[1] * s[:, 0]
+    ok = np.abs(den) > 1e-12
+    den = np.where(ok, den, 1.0)
+    ca = c - a
+    t = (ca[:, 0] * s[:, 1] - ca[:, 1] * s[:, 0]) / den
+    u = (ca[:, 0] * r[1] - ca[:, 1] * r[0]) / den
+    hit = ok & (t > 0.0) & (t < 1.0) & (u >= 0.0) & (u <= 1.0)
+    return t[hit].tolist()
+
+
+def clip_to_rings(line, rings):
+    """The pieces of a polyline inside any of the rings (each segment is cut where it
+    crosses a ring edge and a piece is kept when its midpoint is inside)."""
+    p = np.asarray(line, float).reshape(-1, 2)
+    pieces, cur = [], []
+    for a, b in zip(p[:-1], p[1:]):
+        ts = [0.0, 1.0]
+        for r in rings:
+            ts += _seg_ring_ts(a, b, r)
+        ts = sorted(set(ts))
+        for t0, t1 in zip(ts[:-1], ts[1:]):
+            if t1 - t0 < 1e-12:
+                continue
+            q0, q1 = a + (b - a) * t0, a + (b - a) * t1
+            if any(_inside(0.5 * (q0 + q1), r) for r in rings):
+                if cur and np.allclose(cur[-1], q0):
+                    cur.append(q1)
+                else:
+                    if len(cur) >= 2:
+                        pieces.append(cur)
+                    cur = [q0, q1]
+            else:
+                if len(cur) >= 2:
+                    pieces.append(cur)
+                cur = []
+    if len(cur) >= 2:
+        pieces.append(cur)
+    return [np.array(c).tolist() for c in pieces]
+
+
+def _length(line):
+    p = np.asarray(line, float).reshape(-1, 2)
+    return float(np.hypot(*np.diff(p, axis=0).T).sum()) if len(p) > 1 else 0.0
+
+
 # ------------------------------------------------------------------ gmsh
 def build_mesh(spec):
     """spec (dict): outer [[x, y]...], lines [[...]...] (embankments, structures,
@@ -422,14 +598,12 @@ def build_mesh(spec):
     min_area_tol (gate, see MIN_AREA_TOL), threads; v3.10.22 (HEC-RAS seeds): algorithm
     (gmsh Mesh.Algorithm, default 5), random_seed (Mesh.RandomSeed, for the same points
     every run), optimize [[method, niter]...] (default Laplace2D x 5), smoothing
-    (Mesh.Smoothing passes). Returns dict(points, triangles (CCW), boundary [[tri, edge]...], stats)."""
-    g = dict(min_area_m2=100.0, channel_area_m2=250.0, max_area_m2=20000.0,
-             line_dist_min_m=60.0, line_dist_max_m=1500.0, channel_dist_min_m=250.0,
-             channel_dist_max_m=2500.0, point_dist_min_m=40.0, point_dist_max_m=600.0,
-             min_angle_deg=20.0, min_area_tol=MIN_AREA_TOL, culvert_area_m2=None, declutter=True,
-             threads=0, algorithm=5, random_seed=None, optimize=(("Laplace2D", 5),),
-             smoothing=None)
+    (Mesh.Smoothing passes); v3.10.69 far-field sizing (module docstring): grade_dist_m,
+    line_min_area_m2, refine_footprint. Returns dict(points, triangles (CCW), boundary
+    [[tri, edge]...], stats)."""
+    g = default_sizes()
     g.update({k: v for k, v in spec.items() if k in g})
+    sizing = resolve_sizing(spec, g)               # {} (and g untouched) when none is set
     if g["culvert_area_m2"] is None:
         g["culvert_area_m2"] = g["min_area_m2"]
     ring = np.asarray(spec["outer"], float)
@@ -447,6 +621,8 @@ def build_mesh(spec):
     shift = lambda ls: [(np.asarray(l, float).reshape(-1, 2) - origin).tolist() for l in ls]
     spec = dict(spec, lines=shift(spec.get("lines", [])), channel=shift(spec.get("channel", [])),
                 points=(np.asarray(spec.get("points", []), float).reshape(-1, 2) - origin).tolist())
+    rings = (footprint_rings(spec["refine_footprint"]) if spec.get("refine_footprint") is not None
+             else None)
     # gmsh triangles scatter about +-30 % around the size field, so the floor edge is
     # 1.3 x the equilateral edge of min_area: the smallest triangles then stay near min_area
     hmin = 1.3 * h_of_area(g["min_area_m2"])
@@ -458,6 +634,14 @@ def build_mesh(spec):
     # parallel near-duplicates and loose ends (road / rail layers) would make slivers
     raw_l = [l for l in spec.get("lines", []) if len(l) >= 2]
     raw_c = [l for l in spec.get("channel", []) if len(l) >= 2]
+    if rings is not None:
+        # refine only inside the footprint: outside it the size grows to the far field
+        rings = [r - origin for r in rings]
+        before = sum(_length(l) for l in raw_l + raw_c)
+        raw_l = [q for l in raw_l for q in clip_to_rings(l, rings) if _length(q) >= hmin]
+        raw_c = [q for l in raw_c for q in clip_to_rings(l, rings) if _length(q) >= hmin]
+        sizing["refine_lines_km_outside"] = round(
+            (before - sum(_length(l) for l in raw_l + raw_c)) / 1000.0, 3)
     if g["declutter"]:
         kept = declutter(raw_l + raw_c, hmin)
         n = len(raw_l)
@@ -561,7 +745,7 @@ def build_mesh(spec):
     return finish(np.asarray(tags, np.int64), np.asarray(xyz).reshape(-1, 3)[:, :2] + origin,
                   tri_nodes,
                   g, mesh_s, n_lines=len(line_c), n_channel=len(chan_c), n_points=len(ptags),
-                  short_edges_fixed=len(short))
+                  short_edges_fixed=len(short), **({"sizing": sizing} if sizing else {}))
 
 
 def finish(tags, xy, tri_nodes, g, mesh_s=0.0, **extra):

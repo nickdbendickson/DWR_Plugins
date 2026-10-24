@@ -134,7 +134,9 @@ class RunSettings:
         self.anuga_mesher = (os.environ.get("NDBREACH_ANUGA_MESHER")
                              or os.environ.get("ANUGA_MESHER") or "default")
         # optional dict of gmsh sizes (gmsh_mesher.build_mesh, e.g. min_area_tol,
-        # culvert_area_m2) and embankment options (anuga_model.EMBANKMENT_DEFAULTS)
+        # culvert_area_m2; 3.10.69 far-field sizing: grade_dist_m, line_min_area_m2,
+        # max_area_m2, refine_footprint ('wet' or rings), refine_footprint_pad_m) and
+        # embankment options (anuga_model.EMBANKMENT_DEFAULTS)
         self.anuga_gmsh = None
         # 3.10.31: the ANUGA bed. "fine" = the DEM source at its own cell size (read in blocks)
         # sampled at the triangle vertices, so road and dam crowns on mesh lines survive;
@@ -256,6 +258,12 @@ class RunSettings:
             if not hasattr(self, k):
                 raise TypeError("unknown setting {}".format(k))
             setattr(self, k, v)
+        # 3.10.69: gmsh far-field sizing from NDBREACH_ANUGA_GMSH_GRADE_DIST_M,
+        # _LINE_MIN_AREA_M2, _MAX_AREA_M2, _REFINE_FOOTPRINT and _REFINE_PAD_M (they win over
+        # the same anuga_gmsh keys; none set = anuga_gmsh unchanged). Read here so they are
+        # part of the settings (run key, run_report). Bad values stop the gmsh mesh with a
+        # clear error (anuga_model.check_gmsh_options); the default mesher ignores them.
+        self.anuga_gmsh = anmod.gmsh_env_options(self.anuga_gmsh)
 
     def as_dict(self):
         d = {}
@@ -2440,6 +2448,9 @@ def _anuga_mesh_report(a_runs):
         out["gmsh"] = g
     if last.get("embankments"):
         out["embankments"] = last["embankments"]
+    for k in ("sizing", "refine_footprint"):       # 3.10.69: only when a sizing option is set
+        if last.get(k):
+            out[k] = last[k]
     rej = [m.get("rejected") for m in meshes if m.get("rejected")
            and m.get("requested") in ("gmsh", "gmsh_or_default")]
     if rej:
