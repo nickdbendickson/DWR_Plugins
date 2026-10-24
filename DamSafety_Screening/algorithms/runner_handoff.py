@@ -304,7 +304,7 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         bnames = bpts.fields().names()
         if "dam_id" not in bnames:
             raise QgsProcessingException("The breach points have no dam_id field (tool 4 output expected)")
-        bmap = {}
+        bmap, blen = {}, {}
         for b in bpts.getFeatures():
             g = b.geometry()
             if g.isEmpty():
@@ -312,6 +312,8 @@ class RunnerHandoff(QgsProcessingAlgorithm):
             g.transform(b2a); p = cm.rep_point(g)
             if p is not None:
                 bmap[str(b["dam_id"])] = p
+                if "crest_len_m" in bnames:          # tool 4: length of the mapped dam line
+                    blen[str(b["dam_id"])] = b["crest_len_m"]
 
         bld = self.parameterAsSource(params, "BLD", context)
         bld_points = bld is not None and QgsWkbTypes.geometryType(bld.wkbType()) == GEOM_POINT
@@ -430,10 +432,12 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                     for n in notes:
                         feedback.pushInfo(n)
                     try:                        # the suite's dam record, before the run
+                        jvals = dri.handoff_values(attrs, p, bmap[dam_id], cm.ALBERS, d_class or None,
+                                                   blen.get(dam_id))
                         jpath, jlog = dri.write(
-                            dfold, dri.handoff_values(attrs, p, bmap[dam_id], cm.ALBERS, d_class or None),
-                            dri.screening_result(attrs, "tool 7b"), version,
-                            field_notes=dri.source_notes(attrs, notes))
+                            dfold, jvals, dri.screening_result(attrs, "tool 7b"), version,
+                            field_notes=dri.source_notes(attrs, notes, blen.get(dam_id)),
+                            missing=dri.missing_notes(jvals, attrs, notes))
                         for line in jlog:
                             feedback.pushInfo("dam {}: {}".format(dam_id, line))
                         if jpath:

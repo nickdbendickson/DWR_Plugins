@@ -4,10 +4,21 @@
 Written by
   * tool 7b for every dam it sends to ND Dam Breach Runner, BEFORE the Runner runs: the values
     it sends (dam_id, name, nid_id, dwr_structure_id, height_ft, storage_acft, surface_area_ac,
-    the breach point as lon / lat and x / y / crs, existing_hazard_class) and a "screened"
-    status;
+    the breach point as lon / lat and x / y / crs, existing_hazard_class), the dam length
+    (dam_length_ft, 0.17.43) and a "screened" status. surface_area_ac or dam_length_ft
+    the screening does not have is written as null with the reason in its source note
+    (missing_notes, 0.17.43), so the record says why it is empty instead of leaving it out;
   * tool 8, when given the Dams folder, for every dam that ALREADY has a folder there (no folder
     is created): the dam's identity, height and existing class and a "screened" status.
+
+surface_area_ac is the area at the top of dam (what the Runner reads for AREA_AC): only the
+area tool 7b sends (from the tool-3 stage-storage curve). The inventory's normal-pool area
+(inv_area_m2: DWR normal_area / NID SURFACE_AREA) is NOT written there, since the Runner would
+take it for the top-of-dam area and its storage-area exponent; it is quoted in the null's note.
+dam_length_ft is the length of the mapped dam line (tool 4's crest_len_m), else the
+inventory's dam length (tool 1's crest_len_m: DWR dam_length / NID DAM_LENGTH; 0 = not
+recorded) - the order tool 5 uses. Tool 8 does not write it (it has no breach points, and a
+second source would flip the value between runs).
 
 Rules (damsuite.dam_record): values are set with set_many - a value another tool (or the
 engineer) put there is never overwritten; the refusal is recorded in the file's "conflicts"
@@ -26,6 +37,7 @@ lon / lat of the breach point are computed from EPSG:5070 with the Albers equal-
 (Snyder 1987) on GRS 1980 - NAD83 degrees, used as WGS 84 (they differ by about 1 m here).
 """
 import configparser
+import datetime
 import math
 import os
 import re
@@ -142,14 +154,39 @@ def round3(x):
     return None if x is None else round(float(x), 3)
 
 
-def handoff_values(attrs, rundam_params, point_xy, crs="EPSG:5070", class_field=None):
-    """The values tool 7b sends to 'ndbreach:rundam', as dam record fields."""
+def _pos_num(v):
+    x = _num(v)
+    return x if x is not None and x > 0 else None
+
+
+def dam_length(attrs, line_len_m=None):
+    """(dam length in ft rounded to 3 decimals, where it came from) or (None, ""): the length
+    of the mapped dam line (tool 4's crest_len_m on the breach point), else the inventory's
+    dam length (tool 1's crest_len_m: DWR dam_length / NID DAM_LENGTH) - the order tool 5
+    uses for its overtopping crest."""
+    m = _pos_num(line_len_m)
+    if m is not None:
+        return round3(m / FT), "length of the mapped dam line (tool 4)"
+    m = _pos_num((attrs or {}).get("crest_len_m"))
+    if m is not None:
+        src = _txt((attrs or {}).get("source")) or "DWR / NID"
+        return round3(m / FT), "dam inventory ({}: DWR dam_length / NID DAM_LENGTH)".format(src)
+    return None, ""
+
+
+def handoff_values(attrs, rundam_params, point_xy, crs="EPSG:5070", class_field=None,
+                   line_len_m=None):
+    """The values tool 7b sends to 'ndbreach:rundam', as dam record fields, and the dam
+    length (dam_length; line_len_m = tool 4's crest_len_m of the dam's breach point)."""
     v = identity(attrs, class_field)
     p = rundam_params or {}
     for key, field in (("HEIGHT_FT", "height_ft"), ("STORAGE_ACFT", "storage_acft"),
                        ("AREA_AC", "surface_area_ac")):
         if _num(p.get(key)) is not None:
             v[field] = round3(_num(p.get(key)))
+    length_ft, _src = dam_length(attrs, line_len_m)
+    if length_ft is not None:
+        v["dam_length_ft"] = length_ft
     if point_xy is not None:
         x, y = float(point_xy[0]), float(point_xy[1])
         v.update({"x": round3(x), "y": round3(y), "crs": crs})
@@ -165,6 +202,28 @@ def tool8_values(attrs, class_field=None):
     if h is not None and h > 0:
         v["height_ft"] = round3(h / FT)          # the same rounding as tool 7b's HEIGHT_FT
     return v
+
+
+def missing_notes(values, attrs=None, rundam_notes=None):
+    """{field: reason} for surface_area_ac / dam_length_ft that tool 7b has no value for; write()
+    records them as null with that reason (0.17.43: they were left out, so a missing value
+    could not be told from a field the screening never fills)."""
+    values, attrs = values or {}, attrs or {}
+    out = {}
+    if values.get("surface_area_ac") is None:
+        # the most specific reason: the shallow-curve note (handoff.area_for_runner) is added
+        # after rundam_params' generic "no surface area at the top of dam ..." line
+        hits = [str(n) for n in (rundam_notes or []) if str(n).startswith("no surface area")]
+        why = hits[-1] if hits else "no surface area at the top of dam from a tool-3 stage-storage curve"
+        inv = _pos_num(attrs.get("inv_area_m2"))
+        if inv is not None:
+            why += ("; the inventory's normal-pool surface area is {:,.1f} ac (not written: the "
+                    "Runner would read it as the area at the top of dam)".format(inv / ACRE_M2))
+        out["surface_area_ac"] = why
+    if values.get("dam_length_ft") is None:
+        out["dam_length_ft"] = ("no mapped dam line (tool 4) and no dam length in the "
+                                "inventory (DWR dam_length / NID DAM_LENGTH blank or 0)")
+    return out
 
 
 def screening_result(attrs, by):
@@ -190,8 +249,9 @@ def same_substance(a, b):
     return all(norm(a.get(k)) == norm(b.get(k)) for k in SUBSTANCE)
 
 
-def source_notes(attrs, rundam_notes=None):
-    """dam.json notes for a height or storage the screening estimated, not a DWR value."""
+def source_notes(attrs, rundam_notes=None, line_len_m=None):
+    """dam.json notes for a height or storage the screening estimated, not a DWR value, and
+    where the dam length came from."""
     attrs = attrs or {}
     low = " ".join(rundam_notes or []).lower()
     notes = {}
@@ -200,12 +260,17 @@ def source_notes(attrs, rundam_notes=None):
         notes["storage_acft"] = "estimated from the DEM (no DWR inventory storage)"
     if "no inventory height" in low or "estimat" in str(attrs.get("h_src") or "").lower():
         notes["height_ft"] = "estimated from the DEM (no DWR inventory height)"
+    length_ft, src = dam_length(attrs, line_len_m)
+    if length_ft is not None:
+        notes["dam_length_ft"] = src
     return notes
 
 
-def write(folder, values, result, version=None, create=True, field_notes=None):
+def write(folder, values, result, version=None, create=True, field_notes=None, missing=None):
     """Update <folder>/dam.json. Returns (path or None, [log lines]). create=False: nothing
-    happens when the folder does not exist."""
+    happens when the folder does not exist. missing: {field: reason} (missing_notes) written as
+    null with the reason as the source note - only into a field that holds no value, so a value
+    another tool (or a later run) recorded is never replaced by a null."""
     version = plugin_version() if version is None else version
     if not os.path.isdir(folder) and not create:
         return None, []
@@ -223,6 +288,13 @@ def write(folder, values, result, version=None, create=True, field_notes=None):
         if not rec.set(name, values[name], TOOL, version, note=note):
             if values[name] not in (None, ""):
                 refused.append(name)
+    when = datetime.datetime.now().isoformat(timespec="seconds")
+    for name, why in (missing or {}).items():
+        if name in dr.FIELDS and rec.fields.get(name) is None and \
+                (rec.sources.get(name) or {}).get("tool") in (None, "", TOOL):
+            rec.fields[name] = None
+            rec.sources[name] = {"tool": TOOL, "version": str(version or ""), "when": when,
+                                 "note": "not known to the screening: " + str(why)}
     for name in refused:
         c = next((c for c in reversed(rec.conflicts) if c.get("field") == name), {})
         src = (c.get("old_source") or {}).get("tool") or "the engineer / unknown"
