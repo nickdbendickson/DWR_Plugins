@@ -11,9 +11,6 @@ GEOFABRIK_URL = "https://download.geofabrik.de/north-america/us/north-dakota-lat
 # on every fetch (visible if it changes) but not enforced; set it to enforce a byte-for-byte match.
 NSI_GENERATOR_COMMIT = "87f768783302e51852e38bb622ebd35fe17eee59"   # USACE-NSI/nsi-generator main @ 2026-10-14
 NSI_GENERATOR_ZIP_SHA256 = None
-# Overture Maps buildings (conflated OSM + Microsoft + others, with height)
-# Downloaded via overturemaps CLI or S3; ND bbox: -104.05,45.94,-96.55,49.00
-OVERTURE_NOTE = "Overture buildings (ND bbox) via overturemaps download --type=building"
 
 # id -> (display name, description, enabled by default)
 SOURCE_INFO = {
