@@ -8,6 +8,8 @@
     python3 ndbreach_cli.py run config.json            one dam, the same outputs as in QGIS
     python3 ndbreach_cli.py batch dams.csv config.json a table of dams, one at a time
     python3 ndbreach_cli.py selftest                   what works on this computer
+    python3 ndbreach_cli.py culvert-precheck --dam-folder DIR --out OUT
+                                                       culvert inverts vs the fine ground
 
 Run it with any Python that has numpy. GeoTIFF and other GDAL-readable DEMs need GDAL's Python
 bindings (`osgeo`), which QGIS's own Python has:
@@ -1516,6 +1518,11 @@ def cmd_template(args):
     return 0
 
 
+def cmd_culvert_precheck(args):
+    cp = importlib.import_module(PKG + ".core.culvert_precheck")
+    return cp.main(args.rest)
+
+
 def cmd_selftest(args):
     st = importlib.import_module(PKG + ".core.selftest")
     return st.main(args.rest)
@@ -1793,6 +1800,11 @@ def build_parser():
     p = sub.add_parser("selftest", help="test GDAL, the models and a small run on this computer")
     p.add_argument("rest", nargs=argparse.REMAINDER, help="options of core/selftest.py")
     p.set_defaults(func=cmd_selftest)
+    p = sub.add_parser("culvert-precheck", help="before a run: culvert inverts against the fine "
+                       "ground (read-only report)", add_help=False)
+    p.add_argument("rest", nargs=argparse.REMAINDER, help="options of core/culvert_precheck.py "
+                   "(--help lists them)")
+    p.set_defaults(func=cmd_culvert_precheck)
     return ap
 
 
@@ -1815,6 +1827,10 @@ def _install_sigint():
 
 def main(argv=None):
     ap = build_parser()
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "culvert-precheck":
+        # its options start with -- (argparse's REMAINDER would not take them), passed as given
+        return int(cmd_culvert_precheck(argparse.Namespace(rest=argv[1:])) or 0)
     args = ap.parse_args(argv)
     old = _install_sigint() if args.command in ("run", "batch", "estimate") else None
     try:
