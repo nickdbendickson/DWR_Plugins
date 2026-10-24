@@ -132,6 +132,23 @@ Labels below are from main (checked at 18ae1f5). These are advanced Runner param
 - **Enquiry points.** ANUGA reads the head for each culvert end at an enquiry point. It is now one triangle edge (9.9 m with the default 25 m² culvert-end triangles) past the end's inlet area, instead of at its edge, where it fell inside a triangle the culvert drains or fills. Where the triangles at an end are bigger than that (for example a road line crossing the culvert's refined area), it goes 0.5 m past the furthest of them, with a note. It stays at the edge (with a note) when the point would leave the mesh, or with an ANUGA build whose culvert operator has no `enquiry_gap`.
 - **Where to see it:** `run_report.json["anuga_culvert_inverts"]` (per culvert: inverts, source per end `given` / `given_capped` / `fine_grid` / `model_dem`, the fine ground, the old model-DEM value, the search radius, the enquiry gap and whether each enquiry point is still in an inlet triangle), the summary line `anuga_culverts` and the manifest (`extra.anuga_culverts`). HEC-RAS packages built from the ANUGA run take the same inverts.
 
+## Culvert pre-check (Runner 3.10.72)
+Before a dam's run, see which culvert inverts the run will change, read-only and in seconds (no model):
+
+    python DamSafety_Runner/scripts/ndbreach_cli.py culvert-precheck --dam-folder DAMDIR --out OUTDIR
+    python DamSafety_Runner/scripts/ndbreach_cli.py culvert-precheck --structures S.gpkg \
+        --fine-dem DEM.vrt [--coverage NATIVE_1M.vrt FILL.vrt] [--dem-z meters] --dam ID --out OUTDIR
+
+- Use a Python that has GDAL, e.g. QGIS's own.
+- A dam folder gives the inputs through `rundam.json` (DEM, DEM_Z, STRUCTURES, CELL), else through `structures*.gpkg` and `*composite*.vrt`.
+- **HIGH**: the given invert is more than 0.3 m above the lowest fine ground within max(apron, 5 m). The run lowers it to ground + 0.3 m.
+- **FALLBACK**: there is no fine-grid data near that end, so the run uses the 30 m model DEM.
+- **SKIPPED**: the Runner leaves the culvert out of ANUGA.
+- The given inverts are checked first against the LiDAR (`reconcile_inverts`), as in a run. Use `--no-reconcile` to skip that step.
+- `on_top_source` says whether an end lies on a composite VRT's first source (native 1 m) or on its fill.
+- The output is `culvert_precheck_<dam>.md`, `.csv` and `.json`. With several dams there is also `culvert_precheck_index.json`.
+- The suggested invert is the lowest fine ground. It is not surveyed.
+
 ## Cross-platform (#32)
 - The plugins now read and write text as UTF-8 on every OS, so files with names, °, or – move cleanly between Windows and Linux.
 - CSVs no longer get blank rows on Windows.
