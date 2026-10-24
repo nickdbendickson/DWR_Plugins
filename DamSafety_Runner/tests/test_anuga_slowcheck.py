@@ -1,4 +1,4 @@
-"""3.10.72 core/anuga_slowcheck.py: the read-only freeze / time-step collapse checker, on
+"""3.10.73 core/anuga_slowcheck.py: the read-only freeze / time-step collapse checker, on
 tiny synthetic anuga.log files, checkpoints, timestep_diag.csv and a fake /proc (no model
 runs). Milliseconds."""
 import calendar

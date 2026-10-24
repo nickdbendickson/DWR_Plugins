@@ -1,4 +1,4 @@
-"""3.10.72: read-only checker that tells an ANUGA run's host freeze from a real time-step
+"""3.10.73: read-only checker that tells an ANUGA run's host freeze from a real time-step
 collapse (for Grok Bot's watch routine; standard library only, so it runs with any python3
 without the ANUGA environment or QGIS):
 
