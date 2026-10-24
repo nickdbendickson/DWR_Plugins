@@ -206,6 +206,44 @@ def hecras_windows_terrain_missing_and_timeout():
 
 
 @test
+def hecras_windows_freshness_and_env():
+    """Review fixes: unverifiable != finished (#3), a stale pre-existing HDF is rejected (#11),
+    and a set-but-bad env value warns instead of silently reverting/dropping (#10, #16)."""
+    # #16 / #10: warn on an unrecognized method list or a malformed timeout, keep the safe default
+    logs = []
+    assert HW.methods({HW.ENV_METHODS: "nonsense"}, log=logs.append) == ("headless", "com")
+    assert any("no recognized method" in m for m in logs), logs
+    logs = []
+    assert HW.timeout_s({HW.ENV_TIMEOUT: "1h"}, log=logs.append) is None
+    assert any("not a number" in m for m in logs), logs
+    assert HW.timeout_s({HW.ENV_TIMEOUT: "0"}) is None               # non-positive -> no limit
+    root = _tmp()
+    try:
+        # #3: 'cannot verify' (check -> None) is NOT accepted as 'has results'
+        p = os.path.join(root, "x.p01.hdf")
+        open(p, "wb").write(b"hdf")
+        assert HW._has_results(p, lambda q: True) is True
+        assert HW._has_results(p, lambda q: None) is False
+        assert HW._has_results(p, lambda q: False) is False
+        assert HW._unverifiable(p, lambda q: None) is True
+        # #11: a stale results HDF left untouched by a failed Ras.exe is not returned as this run's
+        _project(root)
+        out = os.path.join(root, "Dam.p01.hdf")
+        open(out, "wb").write(b"old")
+        old = os.path.getmtime(out) - 50
+        os.utime(out, (old, old))
+        run, calls = _runner(root)                                   # Ras.exe writes nothing
+        try:
+            HW.run_plan(root, d=dict(_d(), rasunsteady=""), env={HW.ENV_METHODS: "headless"},
+                        runner=run, check=lambda q: True)
+            raise AssertionError("a stale pre-existing HDF was accepted as a fresh result")
+        except HW.WindowsRunError as e:
+            assert "no results" in str(e), str(e)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@test
 def hecras_windows_chain_launcher_and_fallback():
     """The chain on Windows: 'Run' launches HEC-RAS; a failed launch waits for a manual run."""
     from nd_breach_runner import algorithms as _A  # noqa: F401 - import order

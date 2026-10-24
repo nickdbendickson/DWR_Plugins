@@ -5,10 +5,12 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 hasProcessingProvider=yes
 description=Popup window (Run tab, settings grid, preflight check, run one dam, review) and Processing tools for batch screening of North Dakota dams and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching (3DEP / local LiDAR), storage estimation, breach direction and hydrographs, quick triage, 2D flood simulation (LISFLOOD-FP or built-in engine, reservoir-in-grid option, parallel), hazard classification under ND Dam Safety Standards Sec. 5.2/5.3 with the ACER TM 11 depth-velocity charts (same rules module as ND Dam Breach Runner), hand-off of chosen dams to ND Dam Breach Runner for detailed runs, sensitivity and reports.
-version=0.17.43
+version=0.17.44
 icon=icon.svg
 category=Plugins
-changelog=0.17.43 (2026-10-24; dam.json surface_area_ac and dam_length_ft)
+changelog=0.17.44 (2026-10-24; tool 1 writes the DWR/NID field map it never saved)
+    * Tool 1 (Prepare dams) now writes the chosen DWR/NID field names to <work>/1_fields.json next to the standardized-dams output. The writer existed but was never called, so the reader (core/workflow.py step 1) looked for a file nothing produced and re-detected the fields on every chain run. The map is written on a normal run; a memory/virtual output (no real folder) is skipped without error. Test: tests/test_field_map.py.
+    0.17.43 (2026-10-24; dam.json surface_area_ac and dam_length_ft)
     * Tool 7b's dam.json (core/damrecord_io.py) now has dam_length_ft: the length of the mapped dam line (tool 4's crest_len_m on the breach point), else the inventory's dam length (tool 1's crest_len_m: DWR dam_length / NID DAM_LENGTH) - the order tool 5 uses - with where it came from in the source note. Before, it was never written, so the Runner used its 400 ft default crest length. A run of an existing folder now takes this length for the crest-raise strip, the PMF overtopping weir and the HEC-RAS dam connection, so results can change on a rerun.
     * surface_area_ac (the area at the top of dam the Runner reads for AREA_AC) is still only the area tool 7b sends from the tool-3 curve. When there is none it is written as null with the reason in its source note (the shallow-curve note, or no curve), quoting the inventory's normal-pool area when there is one; that area is not written, since the Runner would read it as the top-of-dam area. dam_length_ft with no line and no inventory length is a null with a note too. A null never replaces a value another tool recorded, and a later value fills it with no conflict.
     * Existing dam.json files get the fields on the next tool 7b run. Tests: tests/test_handoff_record_fields.py, tests/test_suite09.py.

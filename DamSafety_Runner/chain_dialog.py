@@ -324,12 +324,12 @@ class ChainDialog(QDialog):
             return wanted, []
         feats = lyr.selectedFeatures() if (self.selected_only.isChecked() and
                                            lyr.selectedFeatureCount()) else lyr.getFeatures()
+        from .algorithms_chain import _id_text     # the same normaliser the run uses (NULL/'' dropped)
         have = []
         for f in feats:
-            v = f[fld]
-            s = "" if v is None else str(int(v) if isinstance(v, float) and v == int(v) else v)
-            if s.strip() and s.strip() not in have:
-                have.append(s.strip())
+            s = _id_text(f[fld])
+            if s and s not in have:
+                have.append(s)
         if wanted:
             return [i for i in wanted if i in have], [i for i in wanted if i not in have]
         return have, []
