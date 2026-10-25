@@ -98,6 +98,11 @@ import time
 
 import numpy as np
 
+try:                                   # POSIX only: the RasUnsteady stack limit (3.10.75)
+    import resource
+except ImportError:                    # pragma: no cover - Windows
+    resource = None
+
 from . import hecras, wallclock
 from .units import ARRIVAL_DEPTH_FT
 
@@ -902,8 +907,51 @@ def _read_text(path):
         return ""
 
 
+# ---------------------------------------------------------------- stack limit (3.10.75) ------
+# DWR-2801 NickReview (2026-10-24, Runner 3.10.68, 421,317 cells): the Linux RasUnsteady died
+# with exit 174, SIGSEGV in GridGeometry.f90:151 ("Reading 2D Area(s)"), under the default
+# 8 MB stack; run by hand after `ulimit -s unlimited` it read the 2D area. RasUnsteady (Intel
+# Fortran) puts big automatic arrays on the stack, so compute() now raises RLIMIT_STACK for
+# its child: the soft limit to unlimited where the hard limit allows it, else to the hard limit.
+# Set in the child before exec (preexec_fn), so it holds through nice, a wrapper shell or Wine.
+def _rlim_text(v):
+    if resource is None or v == resource.RLIM_INFINITY or v is None or v < 0:
+        return "unlimited"
+    return "{:g} MB".format(v / 1048576.0) if v >= 1048576 else "{:d} KB".format(int(v // 1024))
+
+
+def stack_limit_plan():
+    """What compute() will set for RasUnsteady: (target_soft or None, text). None when this
+    system has no RLIMIT_STACK (not POSIX)."""
+    if resource is None or not hasattr(resource, "RLIMIT_STACK"):
+        return None, "unchanged (no RLIMIT_STACK on this system)"
+    soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+    target = resource.RLIM_INFINITY if hard == resource.RLIM_INFINITY else hard
+    if target == soft:
+        return target, "{} (already the hard limit)".format(_rlim_text(soft))
+    return target, "{} (was {}; hard limit {})".format(_rlim_text(target), _rlim_text(soft),
+                                                       _rlim_text(hard))
+
+
+def raise_stack_limit():
+    """preexec_fn for RasUnsteady: RLIMIT_STACK soft limit to unlimited, or to the hard limit
+    when unlimited is not allowed. Never raises (a child that cannot raise it runs as before)."""
+    if resource is None or not hasattr(resource, "RLIMIT_STACK"):
+        return
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
+    except (ValueError, OSError):
+        return
+    for want in (resource.RLIM_INFINITY, hard):
+        try:
+            resource.setrlimit(resource.RLIMIT_STACK, (want, hard))
+            return
+        except (ValueError, OSError):
+            continue
+
+
 def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None,
-                deadline=None, stop=None, poll_s=2.0):
+                deadline=None, stop=None, poll_s=2.0, preexec_fn=None):
     """RasUnsteady with its output going to `log_path` as it runs (watchable, appended, so the
     lines added here are never overwritten). The timeout is on the wall clock
     (wallclock.Deadline); timeout=None (3.10.48, the default) waits until RasUnsteady exits,
@@ -918,8 +966,9 @@ def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None,
     try:
         open(log_path, "w").close()
         with open(log_path, "a", errors="replace") as out:
+            kw = {"preexec_fn": preexec_fn} if preexec_fn is not None else {}
             p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT,
-                                 start_new_session=True)
+                                 start_new_session=True, **kw)
     except OSError as e:
         raise HecRasEngineError("{} could not start: {}".format(what, e))
     dl = (deadline or wallclock.Deadline)(timeout, what="RasUnsteady", log=log)
@@ -1585,9 +1634,15 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
             _hm(est) if est else "unknown", limit_text(timeout), how))
     if limit is not None:                      # run_stage puts it in run_report.json
         limit.update(limit_record(timeout, est, how))
+    # 3.10.75: the stack limit RasUnsteady gets (DWR-2801: SIGSEGV under the 8 MB default)
+    stack_target, stack_text = stack_limit_plan()
+    log("HEC-RAS compute: stack limit for RasUnsteady {}.".format(stack_text))
+    if limit is not None:
+        limit["stack_limit"] = stack_text
     try:
         _run_logged(nice + [d["rasunsteady"], tmp, "x" + plan], work, e, timeout,
-                    os.path.join(work, "run.log"), pt["sim_hours"], est, log=log)
+                    os.path.join(work, "run.log"), pt["sim_hours"], est, log=log,
+                    preexec_fn=raise_stack_limit if stack_target is not None else None)
     except HecRasTimeout as x:
         x.info.update(estimate_s=est, timeout_how=how, cells=pt["cells"],
                       sim_hours=pt["sim_hours"])

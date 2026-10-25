@@ -104,10 +104,14 @@ def _offset_poly(line, d, off, trim):
 
 
 def spec_for(perimeter, cell, dam_line=None, downstream=None, breach_xy=None, breach_len=None,
-             channel=None, refine=None, breach_dir=None):
+             channel=None, refine=None, breach_dir=None, structures=None):
     """The gmsh_mesher.build_mesh spec (model units) for HEC-RAS seeds, and the sizes used.
     dam_line: (A, B) of the SA/2D connection; downstream: unit vector; breach_xy: the
-    breach centre on the dam line; channel: the run's flow path [(x, y)...]."""
+    breach centre on the dam line; channel: the run's flow path [(x, y)...]; 3.10.75:
+    structures [{'line', 'size'}...], the culvert / bridge connection lines with the point
+    spacing wanted along each (hecras_structures.structure_spacing: <= half the line), as
+    gmsh size-only lines (not embedded: the breaklines put mirrored point pairs either side
+    of each line afterwards, which is what gives HEC-RAS cell faces on it)."""
     r = dict(DEFAULT_REFINE)
     r.update({k: v for k, v in (refine or {}).items() if v is not None})
     h_base = GRID_EQUIV * float(cell)
@@ -139,8 +143,17 @@ def spec_for(perimeter, cell, dam_line=None, downstream=None, breach_xy=None, br
     d_line_min, d_ch_min = 2.0 * h_line, 0.5 * cell
     d_line_max = max(float(r["dam_dist_cells"]) * cell, d_line_min + (h_base - h_line) / g1)
     d_ch_max = max(float(r["channel_dist_cells"]) * cell, d_ch_min + (h_base - h_ch) / g1)
+    size_lines = []
+    for st in structures or ():
+        hs = float(st["size"])
+        if not (hs > 0.0) or hs >= 0.999 * float(cell):
+            continue                    # a cell or more (a long line): the far field will do
+        dmin = 2.0 * hs
+        size_lines.append({"line": np.asarray(st["line"], float).reshape(-1, 2).tolist(),
+                           "size": hs, "dist_min": dmin,
+                           "dist_max": dmin + max(hs, (h_base - hs) / g1)})
     spec = {"outer": np.asarray(perimeter, float).reshape(-1, 2).tolist(),
-            "lines": lines, "channel": chan, "points": [],
+            "lines": lines, "channel": chan, "points": [], "size_lines": size_lines,
             # gmsh_mesher's sizes are triangle areas; its line size is 1.3 x the edge of
             # min_area, so min_area is set from h_line / 1.3
             "min_area_m2": _area(h_line / 1.3), "channel_area_m2": _area(h_ch),
@@ -157,6 +170,9 @@ def spec_for(perimeter, cell, dam_line=None, downstream=None, breach_xy=None, br
              "grading": float(r["grading"]), "algorithm": int(r["algorithm"]),
              "random_seed": r["random_seed"],
              "lines": len(lines), "channel_lines": len(chan)}
+    if size_lines:
+        sizes.update(structure_lines=len(size_lines), structure_spacing=round(
+            min(x["size"] for x in size_lines), 3))
     return spec, sizes, r
 
 
@@ -313,7 +329,8 @@ def make_seeds(perimeter, cell, options=None, env=None, timeout_s=TIMEOUT_S, **l
     order = np.lexsort((pts[:, 0], pts[:, 1]))
     pts, h = pts[order], h[order]
     pts, n_thin = decimate(pts, float(r["min_spacing_frac"]) * min(
-        sizes["dam_spacing"], sizes["breach_spacing"], sizes["channel_spacing"]))
+        sizes["dam_spacing"], sizes["breach_spacing"], sizes["channel_spacing"],
+        sizes.get("structure_spacing", np.inf)))
     grid_n = abs(_ring_area(perimeter)) / float(cell) ** 2
     if len(pts) < 10:
         raise SeedError("gmsh gave {} usable points".format(len(pts)))
