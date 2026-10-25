@@ -129,6 +129,29 @@ def hecras_windows_headless_then_rasunsteady():
         shutil.rmtree(root, ignore_errors=True)
 
 
+@test
+def hecras_windows_stale_results_overwritten_by_fresh_rasunsteady():
+    # Regression (#167): a stale <name>.p01.hdf left by an earlier run must NOT stop this launch's
+    # fresh, verified RasUnsteady results from being promoted. The old promotion guard deleted the
+    # fresh .tmp.hdf whenever any results file already sat at the canonical name, and the run then
+    # wrongly reported "no results" even though RasUnsteady had just succeeded.
+    root = _tmp()
+    try:
+        _project(root)
+        stale = os.path.join(root, "Dam.p01.hdf")
+        with open(stale, "wb") as f:
+            f.write(b"stale")
+        os.utime(stale, (100000.0, 100000.0))          # older than anything this run writes
+        run, calls = _runner(root, ras_writes=["Dam.b01", "Dam.x01", "Dam.p01.tmp.hdf"])
+        r = HW.run_plan(root, d=_d(), env={}, runner=run, check=lambda p: True)
+        assert [c[0] for c in calls] == ["Ras.exe", "RasUnsteady.exe"]
+        assert r["plan_hdf"] == stale and os.path.isfile(stale)
+        assert open(stale, "rb").read() == b"hdf"       # the fresh tmp bytes, not the stale ones
+        assert not os.path.exists(stale[:-4] + ".tmp.hdf")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 class _Ras:
     def __init__(self, root, write=True):
         self.root, self.write, self.calls = root, write, []

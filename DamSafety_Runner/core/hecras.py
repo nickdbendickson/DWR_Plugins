@@ -64,7 +64,7 @@ BASIS_NONE = "Not given by this method"
 BASIS_REF = "Reference only"
 
 
-# 3.10.78: what the depth is measured from (info['depth_basis'])
+# 3.10.79: what the depth is measured from (info['depth_basis'])
 DEPTH_BASIS_TERRAIN = "terrain"     # WSE minus the terrain under each grid cell (terrain_depth)
 DEPTH_BASIS_CELL_MIN = "cell_min"   # WSE minus the HEC cell's minimum elevation (read_mesh)
 
@@ -749,7 +749,7 @@ class Mesh:
         self.info = info
         self.crs_wkt = crs_wkt
         self._nn = None
-        # 3.10.78: per-cell values before the cell wet mask (US units): 'wse' (max WSE),
+        # 3.10.79: per-cell values before the cell wet mask (US units): 'wse' (max WSE),
         # 'min_elev' (Cells Minimum Elevation), 'velocity', 'time_of_max' when known.
         # terrain_depth uses them with the terrain under each grid cell.
         self.raw = {}
@@ -782,7 +782,7 @@ def read_mesh(hdf, area=None, units=None, arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_
 
     The depth here is per CELL: the water surface minus the cell's MINIMUM elevation (its
     lowest subgrid point), so a large cell with a ditch has the ditch's depth everywhere.
-    For mapped results use terrain_depth (3.10.78), which measures from the terrain under
+    For mapped results use terrain_depth (3.10.79), which measures from the terrain under
     each grid cell; this per-cell depth stays for cell diagnostics and as its fallback."""
     f, close = _open_hdf(hdf)
     try:
@@ -919,7 +919,7 @@ def _first_reach(ts, t_hr, elev, thr, n, cols=None, rows=None):
     """Per cell the first time (hours) the depth (water surface minus `elev`) reaches `thr`,
     interpolated between output steps; NaN when it never does. Reads a few rows at a time.
 
-    3.10.78: with `cols` (cell index per point), per POINT instead: the series of cell
+    3.10.79: with `cols` (cell index per point), per POINT instead: the series of cell
     cols[i] minus elev[i] (the terrain under a grid cell), so `elev` has len(cols) values."""
     nt = ts.shape[0]
     pick = None if cols is None else np.asarray(cols, dtype=np.int64)
@@ -1159,7 +1159,7 @@ FIELD_NAMES = ("depth", "wse", "velocity", "arrival", "time_of_max")
 
 
 # ============================================================================
-# 3.10.78: depth on the terrain of each grid cell (not the HEC cell's minimum)
+# 3.10.79: depth on the terrain of each grid cell (not the HEC cell's minimum)
 # ============================================================================
 def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
                   arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_hr=0.0, wet_ft=0.01, to_grid_xy=None,

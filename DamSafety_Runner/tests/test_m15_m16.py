@@ -38,8 +38,14 @@ def find_lisflood_reads_the_suite_setting_setup_writes():
 @test
 def suite_setting_empty_when_unset():
     QgsSettings._store.clear()
-    os.environ.pop("NDBREACH_LISFLOOD", None)
-    assert _suite_setting("lisflood_exe") == ""
+    # Restore NDBREACH_LISFLOOD afterwards: popping it permanently made every later MODEL_TEST
+    # (run_tests --models) fail to find LISFLOOD, which is why the --models run was broken.
+    prev = os.environ.pop("NDBREACH_LISFLOOD", None)
+    try:
+        assert _suite_setting("lisflood_exe") == ""
+    finally:
+        if prev is not None:
+            os.environ["NDBREACH_LISFLOOD"] = prev
 
 
 # ------------------------------------------------------------------- M16 (crest line pick)

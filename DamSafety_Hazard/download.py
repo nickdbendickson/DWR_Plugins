@@ -642,15 +642,25 @@ def set_offline_config(path, offline_only):
     st.setValue(SETTING_ONLY, bool(offline_only))
 
 
+# 2.18.60: the layers a classification cannot do without - the structure
+# inventory (lives in jeopardy). A pack whose manifest lists one of them but
+# lost its file is an error (pipeline: the run stops when offline only).
+REQUIRED_PACK_LAYERS = ("NSI_structures",)
+
+
 def pack_reader(log=None):
-    """The chosen offline data pack (offline_pack.PackReader), or None when
-    none is chosen or it cannot be read (the problem is logged once)."""
+    """The chosen offline data pack (offline_pack.PackReader, or for a
+    format-2 folder damsuite.gpkgpack.GpkgPackReader), or None when none is
+    chosen or it cannot be read (the problem is logged once).
+
+    2.18.60: the pack is checked against its manifest.json (pack_check) and
+    the missing or different layers are logged once as a warning."""
     from .offline_pack import open_pack
     path, _only = offline_config()
     if not path:
         return None
     try:
-        return open_pack(path, log=log or log_message)
+        reader = open_pack(path, log=log or log_message)
     except CancelledByUser:
         raise
     except Exception as e:
@@ -659,6 +669,24 @@ def pack_reader(log=None):
             _PACK_ERRORS.add(msg)
             log_message(msg, MSG_WARNING)
         return None
+    res = pack_check(path, reader)
+    if res is not None and not res.ok:
+        msg = "\n".join(res.lines(notes=False))
+        if msg not in _PACK_ERRORS:
+            _PACK_ERRORS.add(msg)
+            log_message(msg, MSG_WARNING)
+    return reader
+
+
+def pack_check(path=None, reader=None):
+    """2.18.60: damsuite.packcheck.PackCheck of the chosen pack (cached by
+    the files' size and time, read-only), or None. Never raises."""
+    from .offline_pack import check
+    if path is None:
+        path = offline_config()[0]
+    if not path:
+        return None
+    return check(path, reader=reader, required=REQUIRED_PACK_LAYERS)
 
 
 def _cache_key(path):

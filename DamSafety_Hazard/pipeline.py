@@ -692,6 +692,11 @@ def _offline_pack_sig():
             st = os.stat(path)
             sig = [os.path.normcase(os.path.abspath(path)), int(st.st_size),
                    int(getattr(st, "st_mtime_ns", 0))]
+            # 2.18.60: a format-2 pack folder changes with its manifest.json
+            from .offline_pack import pack_format
+            if os.path.isdir(path) and pack_format(path) == 2:
+                mst = os.stat(os.path.join(path, "manifest.json"))
+                sig += [int(mst.st_size), int(getattr(mst, "st_mtime_ns", 0))]
         except OSError:
             sig = [os.path.normcase(os.path.abspath(path)), "missing"]
     return [sig, bool(only)]
@@ -2526,6 +2531,28 @@ def _log_offline_mode(run):
     run.log(">>> Offline data pack: {} ({} data sets, built {}){}".format(
         os.path.basename(path), len(r.datasets), r.created,
         " - offline only, no internet requests" if only else ""))
+    _log_pack_check(run, path, r, only)
+
+
+def _log_pack_check(run, path, reader, only):
+    """2.18.60: the pack checked against its manifest.json, in the run log
+    (and so in the report's run log). A required layer missing: offline only
+    stops the run with a clear error; online, that layer is downloaded."""
+    from .download import pack_check
+    res = pack_check(path, reader)
+    if res is None:
+        run.log(">>> WARNING: the offline data pack could not be checked against its "
+                "manifest.json")
+        return
+    run.log(">>> " + ("" if res.ok else "WARNING: ") + res.summary())
+    for issue in res.issues:
+        if issue.level != "note":
+            run.log(">>>   " + issue.line())
+    if res.missing_required:
+        if only:
+            raise RuntimeError(res.required_message("The classification (offline only)"))
+        run.log(">>> WARNING: required layer(s) {} missing from the offline data pack - "
+                "downloaded from the service instead".format(", ".join(res.missing_required)))
 
 
 def pack_report_lines():

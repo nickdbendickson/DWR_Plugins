@@ -278,7 +278,7 @@ class HecRasImportAlgorithm(_ToolBase):
             grid = Grid(np.zeros((ny, nx)), x0, ytop, dx, crs_wkt=crs)
             terrain = self.parameterAsRasterLayer(parameters, "TERRAIN", context)
             if terrain is not None:
-                # 3.10.78: depth, wet area and arrival from the terrain of each grid cell
+                # 3.10.79: depth, wet area and arrival from the terrain of each grid cell
                 from .core import hecras_engine
                 t_ft = hecras_engine.terrain_on_grid(terrain.source(), grid)
                 arrays, tinfo = hecras.terrain_depth(

@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.18.59
+ND Dam Hazard Classification Helper - Version 2.18.60
 ====================================================
 
 WHAT IT DOES
@@ -892,6 +892,19 @@ OFFLINE DATA PACK (2.6.1) - running without internet access
   back to an earlier download of the same area, if there is one.
 - The pack is a snapshot: rebuild it (or --refresh a data set) to pick
   up newer data.
+- 2.18.60: the Offline pack box also takes a format-2 pack: a folder of
+  GeoPackages (one per layer) with manifest.json and LAYERS.txt, as built
+  by the nd Data Updater (e.g. nd_Pack_20261014, ND_Dam_Suite_Pack).
+  Browse..., pick its manifest.json (the folder goes in the box). It is
+  read under the same data set names as a format-1 pack. The automatic
+  pack search does not find format-2 folders yet (pending decision).
+- 2.18.60: every pack is checked against its manifest.json (read-only):
+  each layer's file, table, feature count, fields, geometry type and CRS
+  (EPSG:4326). Problems show in the QGIS log and message bar, as CHECK: on
+  the Status line, in Check inputs and in the run log. NSI_structures is
+  required: "Offline only" stops the run when it is missing; online it is
+  downloaded instead. See docs/USER_GUIDE.md, "Offline pack formats and
+  the pack check".
 
 CONSEQUENCE SCREENING SOURCES
 - Graham, W.J. (1999) USBR DSO-99-06, Table 7 fatality rates; severity:

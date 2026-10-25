@@ -243,7 +243,8 @@ class DataTabMixin(object):
         opack.setWordWrap(True)
         oform.addRow(opack)
         self.pack_path_edit = QLineEdit()
-        self.pack_path_edit.setPlaceholderText("nd_offline_pack.zip (or its unpacked folder)")
+        self.pack_path_edit.setPlaceholderText(
+            "nd_offline_pack.zip, its unpacked folder, or a pack folder with manifest.json")
         self.pack_path_edit.editingFinished.connect(self._pack_changed)
         self.pack_browse_btn = QPushButton("Browse\u2026")
         self.pack_browse_btn.clicked.connect(self._browse_pack)
@@ -335,6 +336,37 @@ class DataTabMixin(object):
         except Exception as e:
             log_message("Offline settings not saved: {}".format(e))
         self._show_pack_status()
+        self._warn_pack_check()
+
+    def _warn_pack_check(self):
+        """2.18.60: a pack whose layers are missing or differ from its
+        manifest.json is said in the QGIS message bar and log (once per
+        result). Quick check here (no feature counts); the run checks fully."""
+        from .offline_pack import check
+        path = self.pack_path_edit.text().strip()
+        if not path:
+            return
+        try:
+            from .download import REQUIRED_PACK_LAYERS
+            res = check(path, required=REQUIRED_PACK_LAYERS, deep=False)
+        except Exception:                                        # noqa: BLE001
+            res = None
+        if res is None or res.ok:
+            return
+        text = res.summary()
+        if text == getattr(self, "_pack_warned", None):
+            return
+        self._pack_warned = text
+        from .compat import MSG_WARNING
+        log_message("\n".join(res.lines(notes=False)), MSG_WARNING)
+        try:
+            from qgis.utils import iface
+            if iface is not None:
+                iface.messageBar().pushMessage(
+                    "Offline data pack", text,
+                    level=MSG_CRITICAL if res.missing_required else MSG_WARNING, duration=0)
+        except Exception:                                        # noqa: BLE001
+            pass
 
     def _show_pack_status(self):
         from .offline_pack import describe
@@ -348,7 +380,12 @@ class DataTabMixin(object):
         start = self.pack_path_edit.text().strip() or os.path.expanduser("~")
         path, _f = QFileDialog.getOpenFileName(
             self, "Offline data pack", start,
-            "Offline data pack (*.zip *.sqlite);;All files (*)")
+            "Offline data pack (*.zip *.sqlite manifest.json);;All files (*)")
+        if path and os.path.basename(path).lower() == "manifest.json":
+            # 2.18.60: a format-2 pack (one GeoPackage per layer) is its folder
+            from .offline_pack import pack_format
+            if pack_format(path) == 2:
+                path = os.path.dirname(path)
         if path:
             self.pack_path_edit.setText(path)
             self._pack_changed()

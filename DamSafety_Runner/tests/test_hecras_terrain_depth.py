@@ -1,6 +1,6 @@
-"""3.10.78: HEC-RAS depth from the terrain under each grid cell, not the cell's minimum.
+"""3.10.79: HEC-RAS depth from the terrain under each grid cell, not the cell's minimum.
 
-A 150 ft HEC-RAS cell holding a ditch: the pre-3.10.78 export (max WSE minus 'Cells Minimum
+A 150 ft HEC-RAS cell holding a ditch: the pre-3.10.79 export (max WSE minus 'Cells Minimum
 Elevation') gave the whole cell the ditch's depth; terrain_depth makes only the ditch deep and
 leaves the high ground dry, with the wet mask and the arrival time on the same depth. Also the
 re-export of a finished run from its plan HDF and terrain (reexport_hecras_results), without
@@ -77,7 +77,7 @@ def _grid_args():
 
 @test
 def hecras_ditch_cell_old_method_floods_the_whole_cell():
-    """The pre-3.10.78 export: every pixel of the centre cell is 5 ft deep."""
+    """The pre-3.10.79 export: every pixel of the centre cell is 5 ft deep."""
     mesh = hecras.read_mesh(_fake())
     assert mesh.info["depth_basis"] == hecras.DEPTH_BASIS_CELL_MIN
     a = hecras.rasterise(mesh, *_grid_args())

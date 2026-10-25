@@ -1724,7 +1724,7 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
 # results -> the Runner grid
 # ============================================================================
 def terrain_on_grid(terrain, like_grid, z=None):
-    """3.10.78: the terrain HEC-RAS used (its GeoTIFF, any CRS, ft or m elevations) averaged
+    """3.10.79: the terrain HEC-RAS used (its GeoTIFF, any CRS, ft or m elevations) averaged
     onto the grid of `like_grid` (its CRS), in ft; NaN where it has no data. z: the
     elevation unit (gdal_io.Z_CHOICES), default from the raster's unit."""
     from . import gdal_io
@@ -1740,10 +1740,10 @@ def results(hdf, like_grid, arrival_m=ARRIVAL_DEPTH_FT * 0.3048, t0_hr=0.0, to_g
     dry or outside the mesh. to_grid_xy(xy (n,2)) -> (n,2) maps the HEC-RAS model CRS to the
     grid's (None when they are the same).
 
-    3.10.78: `terrain` (the HEC-RAS terrain GeoTIFF, or an (ny, nx) array of the ground in ft
+    3.10.79: `terrain` (the HEC-RAS terrain GeoTIFF, or an (ny, nx) array of the ground in ft
     on like_grid) makes depth = cell max WSE minus the terrain of each grid cell, and the wet
     mask and arrival time follow that depth (hecras.terrain_depth). Without it the depth is
-    WSE minus the HEC cell's minimum elevation (the pre-3.10.78 export, which gives a cell's
+    WSE minus the HEC cell's minimum elevation (the pre-3.10.79 export, which gives a cell's
     lowest ditch depth to its whole area). `info` (a dict) receives the read details,
     'depth_basis' and, with a terrain, the cell-minimum depth (m) as 'old_depth_m'."""
     FT = 0.3048
@@ -1846,7 +1846,7 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     os.makedirs(keep, exist_ok=True)
     shutil.copy2(hdf, keep)
     tr = transformer(r["info"].get("model_wkt"), like.crs_wkt or r["info"].get("work_wkt"))
-    # 3.10.78: depth, wet area and arrival from the HEC-RAS terrain under each grid cell
+    # 3.10.79: depth, wet area and arrival from the HEC-RAS terrain under each grid cell
     terrain = r["paths"].get("terrain_tif")
     if not (terrain and os.path.exists(terrain)):
         terrain = None
@@ -1864,7 +1864,7 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
            "time_step": r["info"].get("time_step"),
            "hecras_time_limit": lim or None,
            "lisflood_rasters_kept_as": LISFLOOD_PREFIX + "<name>",
-           # 3.10.78: what reexport_hecras_results needs to redo the rasters from the HDF
+           # 3.10.79: what reexport_hecras_results needs to redo the rasters from the HDF
            "depth_basis": rinfo.get("depth_basis"), "terrain_tif": terrain,
            "model_wkt": r["info"].get("model_wkt"), "t0_hr": results_t0_hr(r),
            "arrival_depth_ft": arrival_ft}
@@ -1883,7 +1883,7 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
 
 
 # ============================================================================
-# 3.10.78: re-export the rasters of a finished HEC-RAS run (no model run)
+# 3.10.79: re-export the rasters of a finished HEC-RAS run (no model run)
 # ============================================================================
 REEXPORT_JSON = "reexport.json"
 

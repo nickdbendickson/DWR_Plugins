@@ -1527,7 +1527,7 @@ def cmd_culvert_precheck(args):
 
 
 def cmd_hecras_reexport(args):
-    """3.10.78: the HEC-RAS rasters of a finished run again from its plan HDF and terrain."""
+    """3.10.79: the HEC-RAS rasters of a finished run again from its plan HDF and terrain."""
     eng = importlib.import_module(PKG + ".core.hecras_engine")
     try:
         rep = eng.reexport_hecras_results(

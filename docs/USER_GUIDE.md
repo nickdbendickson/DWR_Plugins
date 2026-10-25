@@ -81,7 +81,85 @@ To push dams with an "Undetermined" or "Unknown" class through, either use optio
 Tool 7b writes one folder per dam into `<screening work folder>/Dams`. In the Runner, set **"Dams folder"** (`DAMS_FOLDER`, "Dams folder (each dam gets a folder named after its ID)") to that same `Dams` folder. Use the folder itself, not the work folder above it and not a single dam's folder. The suite home window ("Dams folder:") lists each dam's state from `dam.json`.
 
 ## How-to: offline pack (Hazard)
-On the Hazard window's data tab, the offline section has a **"Pack:"** field. Use "Browse..." to pick `nd_offline_pack.zip` or its unpacked folder, or "Clear" to remove it; the "Status:" line describes the pack. Build the pack once on a computer that's online, either with "Build offline pack..." or by running `build_nd_pack.py`. The setting belongs to the computer, not the project, and is stored in QGIS3.ini under `[ND_Dam_Hazard_Helper] offline_pack`. Never write into ND_Dam_Suite_Pack or into the pack folders.
+On the Hazard window's data tab, the offline section has a **"Pack:"** field. Use "Browse..." to pick a pack, or "Clear" to remove it; the "Status:" line describes the pack. Build a format-1 pack once on a computer that's online, either with "Build offline pack..." or by running `build_nd_pack.py`, or use a format-2 pack folder built by the nd Data Updater (see the next section). The setting belongs to the computer, not the project, and is stored in QGIS3.ini under `[ND_Dam_Hazard_Helper] offline_pack`. Never write into ND_Dam_Suite_Pack or into the pack folders.
+
+## Offline pack formats and the pack check (Hazard 2.18.60, Runner 3.10.77, Screening 0.17.45, damsuite 1.17.5; #171)
+Packs are optional: every plugin downloads what it needs when there is no pack. A pack only lets a run work without the internet, or faster.
+
+**The two formats**
+- **Format 1** is one SQLite database: `nd_offline_pack.sqlite`, a `.zip` of it, or the folder it was unpacked into. The DWR builder (`build_nd_pack.py`, "Build offline pack...") makes it. Example: `DamSafety_Pack_20261014` (21 layers).
+- **Format 2** is a folder with one GeoPackage per layer, plus `manifest.json` and `LAYERS.txt`. Its `manifest.json` says `"format": "nd-dam-hazard-offline-pack"` with `"layout": "gpkg"` or `"format_version": 2`. The nd Data Updater makes it. Examples: `nd_Pack_20261014` (34 layers) and `ND_Dam_Suite_Pack` (32 layers).
+
+**Which plugin reads which**
+
+| Plugin | Format 1 | Format 2 |
+|---|---|---|
+| DWR Hazard 2.18.60 and later | Yes (Offline pack box) | **Yes (Offline pack box), new in 2.18.60.** A format-2 folder also still works as the "Data folder". |
+| DWR Hazard 2.18.59 and earlier | Yes | Not as a pack. Use the folder as the "Data folder" instead. |
+| DWR Screening 0.17.45 | Yes (found in the suite folder on the Inputs tab) | Yes (the suite folder on the Inputs tab) |
+| DWR Runner 3.10.77 | Not checked | Searches the suite pack folder for the water-body mask; only the water-body layers are checked |
+
+Hazard reads a format-2 pack under the same layer names as a format-1 pack, so classifications don't change because of the format. For `NHD_flowlines` and `NHD_waterbodies`, a newer pack's `3DHP_*` layers are used too. The structure data still differs between the plugin sets: DWR Screening counts NSI points, while the nd plugins use USA_Structures footprints.
+
+**How-to: point Hazard at a folder pack (format 2)**
+1. Open the Hazard window's data tab and go to the offline section ("7. Offline data pack").
+2. Click "Browse..." next to **"Pack:"** and pick the pack's `manifest.json` (the file filter now lists it). Hazard puts the pack *folder* in the box. You can also type or paste the folder path and press Enter.
+3. Read the "Status:" line. A healthy pack shows no `CHECK:` text, and nothing appears in the QGIS message bar.
+4. Tick "Offline only" if this computer has no internet.
+
+Shortcut: when you choose a suite data folder that holds a format-2 pack (for example ND_Dam_Suite_Pack) and the Offline pack box is **empty**, Hazard fills the box with that folder too. If a different pack is already in the box, Hazard keeps it and only logs "Suite data folder ... kept as the Data folder; the offline pack stays ...". *(Pending decision: Nick has not yet confirmed that filling an empty box this way is the behaviour he wants.)*
+
+Hazard's automatic pack search does **not** find format-2 folders yet, so existing users are not switched to a different pack without noticing. Point the box at the folder yourself. *(Pending decision: whether auto-discovery should find format-2 folders such as ND_Dam_Suite_Pack.)*
+
+Because the evaluation signature now includes a format-2 pack's `manifest.json`, an updated pack counts as a new evaluation.
+
+**The pack check: what it does**
+Every time a pack is used, the shared `damsuite/packcheck.py` compares the pack with its `manifest.json`. It only reads (each GeoPackage is opened read-only). For each layer it checks that:
+- the file is there and the GeoPackage opens with the expected table;
+- the feature count matches (full check only);
+- the field names and types match;
+- the geometry type matches;
+- the CRS matches. `manifest.json` has no CRS key, so vector layers are expected in EPSG:4326, which is what `LAYERS.txt` promises.
+
+A format-1 pack gets a lighter check: each usable data set has its table and, in the full check, the right number of rows, and `manifest.json` lists nothing the `.sqlite` lacks. Format 1 has no per-layer fields, geometry type or CRS to compare. A zipped pack is checked once it's unpacked.
+
+When and where you see it:
+- **Hazard, when you choose a pack:** a quick check (no feature counts). Problems go to the QGIS log and the message bar ("Offline data pack"), and `CHECK:` is added to the "Status:" line.
+- **Hazard, at run time:** a full check, written to the run log (and so to the report's run log) on `>>>` lines.
+- **Hazard, Check inputs:** for a format-2 folder, the offline pack row turns into a WARNING when the check finds a problem (the same `CHECK:` text as the Status line).
+- **Screening, Preflight:** a new row, **"Offline pack vs manifest.json"**, OK or WARN. A warning lists up to six problems, then "(+N more)".
+- **Runner:** when no water-body file is used and the suite pack's `manifest.json` lists a water-body layer that is missing or unreadable, the run log says so in a "Water-body mask: offline pack ..." line instead of leaving the mask out silently.
+- The suite's per-dam data step (`damsuite` `damdata`) also writes the check lines into its log.
+
+On the real packs on this box, every pack checked OK: ND_Dam_Suite_Pack (format 2, 32 layers, `NHD_waterbodies` present), nd_Pack_20261014 (format 2, 34 layers) and DamSafety_Pack_20261014 (format 1, 21 layers).
+
+**Reading the messages**
+The first line is a summary, for example:
+- `Offline pack check (nd_Pack_20261014, format 2, 34 layer(s), built ...): OK - every layer matches manifest.json` means nothing to do.
+- `..., quick check: no counts)` means the quick check ran (feature counts are left for the run).
+- `...: REQUIRED layer(s) missing: NSI_structures; missing: X; not as in manifest.json: Y` lists the problem layers by kind.
+
+Each problem then gets one line, `ERROR: <layer>: ...`, `WARNING: <layer>: ...` or `note: <layer>: ...`.
+
+| Message (after the layer name) | What it means | What to do |
+|---|---|---|
+| `file hydro/X.gpkg not found` or `manifest.json gives no file` | The manifest lists the layer, but its file is gone. This is how the missing `NHD_waterbodies.gpkg` showed up in October 2026. | Rebuild or update the pack with the tool that made it (the nd Data Updater for format 2, "Build offline pack..." for format 1), or choose another pack. Without "Offline only", the plugins download that layer instead. Don't copy files into ND_Dam_Suite_Pack yourself; ask first. |
+| `...: <table error>` (the file opens but the table is missing) or `cannot be read: ...` | The file is damaged, partly copied or still being written. | Wait for any copy or sync to finish, then repeat. If it persists, rebuild that layer or the pack. |
+| `N feature(s) in the file, M in manifest.json` (or `listed`) | The layer was cut short or replaced after the manifest was written. | Usually a partial copy or an interrupted update. Rebuild or update the pack. |
+| Field list differences | The columns are not the ones the manifest names, for example from an older or newer builder. | Rebuild the pack with the current builder. Results may lack the attribute until then. |
+| `geometry A in the file, B in manifest.json` or `not a raster` / `not a vector layer` | The wrong kind of layer is under that name. | Rebuild or replace the layer. |
+| `CRS A in the file, B expected` | The layer is not in EPSG:4326 (or the CRS the manifest gives). | Rebuild the layer. Don't reproject it inside the pack folder. |
+| `required, and not in the pack` / `manifest.json does not list it` / `not usable (status ...)` (ERROR) | A layer Hazard can't classify without is missing. Today that is only **`NSI_structures`**. | See "Required layers" below. |
+| `note: ... status '...' (not in the pack, downloaded instead)`, `partial in manifest.json`, `left out of the pack: ...` | The builder could not finish that layer, or left it out on purpose. | Nothing to do: the plugins download it. Offline only, that layer is unavailable or partial. |
+| `note: ... is not in manifest.json (not used)` | An extra GeoPackage sits in the folder. | Nothing to do; it's ignored. |
+| `note: a zipped format-... pack: ... checked once it is unpacked` | A `.zip` was chosen. | Nothing to do. |
+
+The Screening preflight row says the same thing: "The layers named are missing or not what the manifest says: rebuild or update the offline pack, or pick those layers on the Inputs tab."
+
+**Required layers**
+- Only `NSI_structures` (the structure inventory) is required today. *(Pending decision: whether more layers should be required, for example `USA_Structures` or `NDGISHUB_address_points`.)*
+- **"Offline only" ticked:** the run stops with a clear error, for example "The classification (offline only) needs layer(s) missing from the offline data pack <path>: NSI_structures (...). Rebuild or repair the pack (Update offline pack), or choose another pack." The message bar shows it as critical when you choose the pack.
+- **Online:** the run continues, logs ">>> WARNING: required layer(s) NSI_structures missing from the offline data pack - downloaded from the service instead", and downloads it. *(Pending decision: whether a missing required layer should also stop an online run.)*
 
 ## Spillway adequacy tool (#23, #27)
 "Spillway adequacy (pass the Inflow Design Flood?)" is in the Runner's Processing tools. It needs:
@@ -335,8 +413,8 @@ It prints one line, for example `VERDICT=host_freeze confidence=high last_t_s=20
 - **Connection names.** HEC-RAS refuses some characters in a connection name (`/` in `OSM way/254643464`, `,`, `=` ...) and keeps 16 characters. They become `_`, names are cut to 16 characters and made unique (`OSM way_254643 2`), and `STRUCTURES_README.md` lists each renamed connection with its original name ("Renamed for HEC-RAS").
 - A HEC-RAS package built before 3.10.75 keeps its old geometry: rebuild it to get the new faces and names.
 
-## HEC-RAS: depth from the terrain, re-export of a finished run (Runner 3.10.78)
-- **Depth.** The HEC-RAS depth raster is now each 30 m grid cell's water surface minus the ground under that grid cell: the nearest HEC-RAS cell's max WSE (flat over the cell) minus the run's terrain averaged onto the grid, never below 0. Before 3.10.78 it was the WSE minus the cell's lowest point, so a 150 ft cell holding a ditch was the ditch's depth everywhere. The wet area, WSE, velocity and arrival time (first 0.1 ft) follow this depth. On DWR-2801 the >=1 ft area fell from 5,060 to 1,923 ac (ANUGA 1,960).
+## HEC-RAS: depth from the terrain, re-export of a finished run (Runner 3.10.79)
+- **Depth.** The HEC-RAS depth raster is now each 30 m grid cell's water surface minus the ground under that grid cell: the nearest HEC-RAS cell's max WSE (flat over the cell) minus the run's terrain averaged onto the grid, never below 0. Before 3.10.79 it was the WSE minus the cell's lowest point, so a 150 ft cell holding a ditch was the ditch's depth everywhere. The wet area, WSE, velocity and arrival time (first 0.1 ft) follow this depth. On DWR-2801 the >=1 ft area fell from 5,060 to 1,923 ac (ANUGA 1,960).
 - **Re-export an old run.** `python3 DamSafety_Runner/scripts/ndbreach_cli.py hecras-reexport DAM_FOLDER` reads the finished `.p01.hdf` and the terrain and writes `Depth (Max).tif`, `WSE (Max).tif`, `Velocity (Max).tif`, `Arrival Time.tif` and `reexport.json` (old and new areas) to `DAM_FOLDER/_hecras/reexport_<time>`, without rerunning HEC-RAS. `--out DIR` picks the folder; existing outputs are never replaced unless you add `--overwrite`. `--hdf`, `--terrain`, `--grid`, `--t0-hr` and `--arrival-depth-ft` override what it finds. From Python: `hecras_engine.reexport_hecras_results(run_dir)`.
 - The HEC-RAS import tool has an optional **Terrain** input; without it the depth is still the cell minimum (a note says so).
 
@@ -368,4 +446,5 @@ The old map styles were drawn at 75 % opacity, and the Hazard chart sign-off ove
 - The #131 (arrival depth) and #137 (HEC-RAS time limit) names, labels, defaults and rules were checked in main's source at 732f597. No window was opened in QGIS, and no model was run.
 - The #132 (ANUGA threads) names, labels and rules were checked in main's source at caaf850 and against the PR's real-ANUGA check (`/workspace/anuga_threads_pr/real_check.log`). The Processing Options path was not opened in QGIS.
 - The #126 zone colours, labels and opacity were checked in main's source at 034e9d7 (`DamSafety_Hazard/helpers.py`, `styles/acer_zones.qml`, `styles/acer_zone_points.qml`). The QGIS menu paths in the transparency tip are the standard QGIS 3.34 ones; they weren't opened in a running QGIS for this guide.
+- The #171 offline-pack sections (formats, folder pack, pack check messages) were checked against the PR's diff at 6b24a2b (`damsuite/packcheck.py`, `DamSafety_Hazard/offline_pack.py`, `data_tab.py`, `datafolder_tab.py`, `download.py`, `pipeline.py`, `checks.py`, `DamSafety_Screening/core/preflight.py`, `DamSafety_Runner/core/report_metrics.py`). The real-pack results are SWE's. No window was opened in QGIS. Items marked *pending decision* wait on Nick.
 - The installed copy of the plugins may lag behind main.
