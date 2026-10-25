@@ -312,6 +312,30 @@ def hecras_breaklines_voronoi_precheck_counts_sides_and_face_points():
 
 
 @test
+def hecras_breaklines_fix_faces_splits_a_big_cell_ringed_by_small_ones():
+    """Pure (3.10.81, #170): a coarse cell ringed by small ones (a band's end against sparse
+    seeds, DWR-2801) has 16 faces; thinning its ring only makes it bigger, so fix_faces splits
+    it in two - also when its point is protected (it stays put)."""
+    if not _has_scipy():
+        print("  (skipped: no scipy)")
+        return
+    per = [(0.0, 0.0), (300.0, 0.0), (300.0, 300.0), (0.0, 300.0)]
+    g = _grid(0, 300, 0, 300, 10.0)
+    g = g[~((abs(g[:, 0] - 150) < 30) & (abs(g[:, 1] - 150) < 30))]
+    allp = np.vstack([g, [[150.0, 150.0]]])
+    chk = hbl.voronoi_precheck(allp, per)
+    assert len(chk["over"]) == 1 and chk["max_sides"] > 8, chk
+    for pc in (False, True):
+        prot = np.zeros(len(allp), bool)
+        prot[-1] = pc
+        out, oprot, inf = hbl.fix_faces(allp.copy(), per, prot)
+        assert inf["left"] == 0 and inf["check"]["max_sides"] <= 8, (pc, inf)
+        assert inf["added"] >= 1 and inf["removed"] <= 5, (pc, inf)
+        if pc:
+            assert (np.hypot(*(out - (150.0, 150.0)).T) < 1e-9).any() and oprot.sum() == 1
+
+
+@test
 def hecras_breaklines_perimeter_precheck_flags_and_fixes_the_v2b_gmsh_failure():
     """v2c: Absaraka package_v2b_gmsh stopped in HEC-RAS with "1 face errors detected on the
     perimeter of the mesh". Its points near the two bad cells (tests/data): the check flags

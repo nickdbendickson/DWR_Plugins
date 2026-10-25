@@ -112,6 +112,60 @@ def hecras_bands_synthetic_road_stream_culvert_bridge_and_parallel_lines():
     assert np.allclose(sorted(q[:, 1] - 2500), [10, 30, 50, 70], atol=0.6), q
     assert len(prot) == len(out) and prot.sum() > 0
 
+    # 3.10.81: only the first rows are protected (an isolated stretch of the road: y = 1510
+    # and 1490), the outer and graded rows are not
+    far = (out[:, 0] > 600) & (out[:, 0] < 1200)
+    for y, want in [(1510, True), (1490, True), (1530, False), (1550, False), (1575, False)]:
+        sel = far & (np.abs(out[:, 1] - y) < 0.5)
+        assert sel.any() and (prot[sel] == want).all(), (y, want, prot[sel])
+
+
+def _dense_streets(seed):
+    """A town: 9 parallel E-W streets 40-100 ft apart crossed by 12 N-S streets 40-100 ft
+    apart (each a little skewed) and a diagonal avenue, on a 150 ft grid."""
+    perim = np.array([(0, 0), (3000, 0), (3000, 3000), (0, 3000), (0, 0)], float)
+    X, Y = np.meshgrid(np.arange(75, 3000, CELL), np.arange(75, 3000, CELL))
+    pts = np.column_stack([X.ravel(), Y.ravel()])
+    rng = np.random.default_rng(seed)
+    lines, y, x = [], 700.0, 650.0
+    for gap in [40, 55, 70, 85, 100, 60, 45, 90, 75]:
+        lines.append(np.array([(500, y), (2500, y + rng.uniform(-15, 15))]))
+        y += gap
+    for gap in [100, 45, 80, 60, 95, 40, 70, 55, 85, 65, 100, 50]:
+        lines.append(np.array([(x, 500), (x + rng.uniform(-30, 30), 1700)]))
+        x += gap
+    lines.append(np.array([(600, 600), (1800, 1600)]))
+    return pts, perim, hband.clip(lines, perim, S)
+
+
+@test
+def hecras_bands_dense_crossing_streets_pass_the_8_face_check():
+    """#170 (DWR-2801, Absaraka's streets): with every band point protected, overlapping
+    bands of streets 40-100 ft apart left cells of more than 8 faces that fix_faces could not
+    thin (a protected point among only protected neighbours). Now only the first rows are
+    protected, and not where another banded line is within 1.5 rows: 0 cells over 8 faces at
+    the default 3 x 20 ft, the faces still on the lines (fix_faces costs each line at most
+    5 % of its faces, at a crossing) and an isolated line keeps its protected first rows."""
+    if not _has_scipy():
+        print("  (skipped: no scipy)")
+        return
+    from nd_breach_runner.core.hecras_model import perimeter_clip
+    for seed in (1, 2, 5):
+        pts, perim, lines = _dense_streets(seed)
+        out, prot, st = hband.apply(pts, perim, lines, S, 3, 1.5, CELL, ranks=[1] * len(lines))
+        fixed, fprot, info = hbl.fix_faces(out, perim, prot, clip=perimeter_clip(perim))
+        assert info["left"] == 0, (seed, info["left"])
+        assert 0 < prot.sum() < st["band_points"], st
+        chk = hbl.voronoi_precheck(fixed, perim, hbl.MAX_FACES, perimeter_clip(perim))
+        assert len(chk["over"]) == 0, (seed, len(chk["over"]))
+        assert len(fixed) > 0.99 * len(out), (len(fixed), len(out))
+        for i, ln in enumerate(lines):
+            before, after = hbl.share_on_faces(out, ln), hbl.share_on_faces(fixed, ln)
+            assert after > before - 0.05, (seed, i, before, after)
+            assert after > 0.5, (seed, i, after)
+        on = [hbl.share_on_faces(fixed, ln) for ln in lines]
+        assert np.mean(on) > 0.85, (seed, np.mean(on))
+
 
 @test
 def hecras_bands_two_rows_of_50_ft():
