@@ -64,6 +64,10 @@ Settings (environment variables, or the `env` dict of each function):
     NDBREACH_HECRAS_KILL_GRACE_S seconds between SIGTERM and SIGKILL when a step times out
                                  (default 60); the timeout is in run.log and run_report.json
                                  ('hecras_timeout') before anything is stopped
+    NDBREACH_HECRAS_OMP_STACKSIZE  OpenMP worker-thread stack for RasUnsteady (Runner
+                                 3.10.75): KMP_STACKSIZE and OMP_STACKSIZE get this value
+                                 (default 1g) unless already set in the environment;
+                                 'off' leaves both unset (see omp_stack_env)
     NDBREACH_HECRAS_INFLOW_MODE  'auto' (default), 'hydrograph' or 'breach' (see write_project)
     NDBREACH_HECRAS_BASE_FLOW_CFS  base flow of the inflow hydrograph (default 0, see below)
     NDBREACH_HECRAS_TAIL         'recession' (default) or 'hold' (see inflow_series)
@@ -864,6 +868,7 @@ def wine_env(d, env=None):
               "DISPLAY": _env(env).get(ENV_DISPLAY) or ":77",
               "WINEPATH": "{0}\\GDAL\\bin64;{0}\\x64".format(w),
               "GDAL_DATA": "{}\\GDAL\\common\\data".format(w)})
+    e.update(omp_stack_env(env)[0])       # 3.10.75: Wine hands them to RasUnsteady.exe
     return e
 
 
@@ -948,6 +953,56 @@ def raise_stack_limit():
             return
         except (ValueError, OSError):
             continue
+
+
+# ------------------------------------------------- OpenMP thread stacks (3.10.75) ------
+# DWR-2801 NickReview (2026-10-25 02:12Z): with the stack unlimited and the bridges refined,
+# RasUnsteady still died (forrtl 174, SIGSEGV) at PROGRESS 0.50 - in the Intel OpenMP worker
+# threads, whose stacks are not covered by `ulimit -s` (4 MB default). By hand with
+# KMP_STACKSIZE=OMP_STACKSIZE=1g it stepped on. compute() (and the Wine env, for the
+# RasUnsteady.exe that Ras.exe -c starts; and the Windows launcher) now set both, keeping
+# any value the user already set.
+ENV_OMP_STACK = "NDBREACH_HECRAS_OMP_STACKSIZE"
+OMP_STACK_VARS = ("KMP_STACKSIZE", "OMP_STACKSIZE")
+OMP_STACK_DEFAULT = "1g"
+_OMP_STACK_RE = re.compile(r"^\s*\d+\s*[bBkKmMgG]?\s*$")
+
+
+def omp_stack_env(env=None):
+    """The OpenMP stack variables for RasUnsteady: ({var: value} to put in its env, info).
+    A variable already set (non-empty) in `env` (default os.environ) is kept as it is. The
+    others get NDBREACH_HECRAS_OMP_STACKSIZE, else 1g; 'off' / 'none' / '0' sets nothing,
+    a value that is not N[b|k|m|g] is ignored (1g) with a note in info["note"]."""
+    e = _env(env)
+    want = (e.get(ENV_OMP_STACK) or "").strip()
+    note = ""
+    if want.lower() in ("off", "none", "0", "no", "false"):
+        want = None
+    elif not want:
+        want = OMP_STACK_DEFAULT
+    elif not _OMP_STACK_RE.match(want):
+        note = "{}={!r} is not N[b|k|m|g]; using {}".format(ENV_OMP_STACK, want,
+                                                            OMP_STACK_DEFAULT)
+        want = OMP_STACK_DEFAULT
+    else:
+        want = want.replace(" ", "").lower()
+    put, info = {}, {"note": note} if note else {}
+    for k in OMP_STACK_VARS:
+        have = (e.get(k) or "").strip()
+        if have:
+            info[k], info[k + "_from"] = have, "environment"
+        elif want:
+            put[k] = info[k] = want
+            info[k + "_from"] = ENV_OMP_STACK if e.get(ENV_OMP_STACK) else "default"
+        else:
+            info[k], info[k + "_from"] = None, ENV_OMP_STACK + " off"
+    return put, info
+
+
+def omp_stack_text(info):
+    t = " ".join("{}={} ({})".format(k, info.get(k) or "unset", info.get(k + "_from"))
+                 for k in OMP_STACK_VARS)
+    return t + ("; " + info["note"] if info.get("note") else "")
 
 
 def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None,
@@ -1639,6 +1694,13 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
     log("HEC-RAS compute: stack limit for RasUnsteady {}.".format(stack_text))
     if limit is not None:
         limit["stack_limit"] = stack_text
+    # 3.10.75: Intel OpenMP worker-thread stacks (DWR-2801: forrtl 174 at PROGRESS 0.50)
+    omp_put, omp_info = omp_stack_env(env)
+    e.update(omp_put)
+    log("HEC-RAS compute: OpenMP thread stacks for RasUnsteady {}.".format(
+        omp_stack_text(omp_info)))
+    if limit is not None:
+        limit["omp_stacksize"] = omp_info
     try:
         _run_logged(nice + [d["rasunsteady"], tmp, "x" + plan], work, e, timeout,
                     os.path.join(work, "run.log"), pt["sim_hours"], est, log=log,
