@@ -646,6 +646,8 @@ def build_mesh(spec):
     if len(ring) < 3:
         raise MeshError("outer polygon has fewer than 3 points")
     size_lines = size_lines_of(spec)
+    if size_lines:
+        g["size_line_min_m"] = min(sl["size"] for sl in size_lines)   # 3.10.76: the gate
     # checked before gmsh is imported, so a bad spec is reported as such even where gmsh
     # is missing (that is reported by make_gmsh_mesh as the ModuleNotFoundError line)
     import gmsh
@@ -839,6 +841,11 @@ def gate_area(g):
     ca = g.get("culvert_area_m2")
     if ca is not None:
         intended = min(intended, float(ca))
+    sl = g.get("size_line_min_m")
+    if sl:
+        # 3.10.76: size_lines (the ANUGA line band, HEC-RAS seed lines) make small triangles
+        # on purpose: the area of the smallest of their sizes, as gmsh makes it
+        intended = min(intended, math.sqrt(3.0) / 4.0 * (float(sl) / 1.3) ** 2)
     return intended, tol, intended * tol
 
 
