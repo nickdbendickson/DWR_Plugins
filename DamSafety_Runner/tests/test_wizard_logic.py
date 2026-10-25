@@ -569,8 +569,12 @@ def wizard_estimate_session_uses_the_tools_own_setup():
                 fake_qgis.QgsCoordinateReferenceSystem("EPSG:26914"))
     keep_gis = algs._Base.gis
     algs._Base.gis = gis
-    exe = os.path.join(tempfile.gettempdir(), "fake_lisflood_for_wizard_test")
-    open(exe, "w").write("x")
+    # A unique temp name, not a fixed one: two Runner test suites (e.g. ND and DWR) running at
+    # once would otherwise share this file and one could remove it from under the other.
+    fd, exe = tempfile.mkstemp(prefix="fake_lisflood_wizard_")
+    os.close(fd)
+    with open(exe, "w") as f:
+        f.write("x")
     try:
         class Raster(object):
             def crs(self):
