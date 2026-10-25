@@ -589,6 +589,37 @@ def _length(line):
 
 
 # ------------------------------------------------------------------ gmsh
+def size_lines_of(spec):
+    """spec["size_lines"] checked: [{'line' [[x, y]...] (2+ points), 'size' > 0, 'dist_min'
+    >= 0, 'dist_max' > dist_min}...] (spec units); [] when absent (ANUGA meshes as before)."""
+    out = []
+    for i, sl in enumerate(spec.get("size_lines") or []):
+        try:
+            ln = np.asarray(sl["line"], float).reshape(-1, 2)
+        except (KeyError, TypeError, ValueError):
+            raise MeshError("size_lines[{}] needs a line [[x, y]...]".format(i))
+        if len(ln) < 2 or not np.isfinite(ln).all():
+            raise MeshError("size_lines[{}] needs a line of 2 or more points".format(i))
+        size = positive_number("size_lines[{}] size".format(i), sl.get("size"))
+        dmin = float(sl.get("dist_min", 2.0 * size))
+        dmax = positive_number("size_lines[{}] dist_max".format(i),
+                               sl.get("dist_max", dmin + 10.0 * size))
+        if not (0.0 <= dmin < dmax):
+            raise MeshError("size_lines[{}]: dist_min must be >= 0 and below dist_max".format(i))
+        out.append({"line": ln, "size": size, "dist_min": dmin, "dist_max": dmax})
+    return out
+
+
+def _densify(line, step):
+    """The line's vertices plus points every <= step along each segment."""
+    p = np.asarray(line, float).reshape(-1, 2)
+    out = [p[0]]
+    for a, b in zip(p[:-1], p[1:]):
+        n = max(1, int(math.ceil(float(np.hypot(*(b - a))) / max(step, 1e-9))))
+        out += [a + (b - a) * k / n for k in range(1, n + 1)]
+    return np.asarray(out)
+
+
 def build_mesh(spec):
     """spec (dict): outer [[x, y]...], lines [[...]...] (embankments, structures,
     culverts, breach, dam), channel [[...]...] (flow path), points [[x, y]...]
@@ -599,7 +630,10 @@ def build_mesh(spec):
     (gmsh Mesh.Algorithm, default 5), random_seed (Mesh.RandomSeed, for the same points
     every run), optimize [[method, niter]...] (default Laplace2D x 5), smoothing
     (Mesh.Smoothing passes); v3.10.69 far-field sizing (module docstring): grade_dist_m,
-    line_min_area_m2, refine_footprint. Returns dict(points, triangles (CCW), boundary
+    line_min_area_m2, refine_footprint; 3.10.75 (HEC-RAS seeds): size_lines [{line, size,
+    dist_min, dist_max}...], lines that only set the size (edge length `size` within dist_min
+    of the line, growing to the far field by dist_max) and are not embedded (no nodes on
+    them; see size_lines_of). Returns dict(points, triangles (CCW), boundary
     [[tri, edge]...], stats)."""
     g = default_sizes()
     g.update({k: v for k, v in spec.items() if k in g})
@@ -611,6 +645,9 @@ def build_mesh(spec):
         ring = ring[:-1]
     if len(ring) < 3:
         raise MeshError("outer polygon has fewer than 3 points")
+    size_lines = size_lines_of(spec)
+    if size_lines:
+        g["size_line_min_m"] = min(sl["size"] for sl in size_lines)   # 3.10.76: the gate
     # checked before gmsh is imported, so a bad spec is reported as such even where gmsh
     # is missing (that is reported by make_gmsh_mesh as the ModuleNotFoundError line)
     import gmsh
@@ -713,6 +750,15 @@ def build_mesh(spec):
             np.hypot(*(nodes[n] - p)) <= hmin / 2.0 for p in pts_in)]
         if ptags:
             threshold({"PointsList": ptags}, hpt, g["point_dist_min_m"], g["point_dist_max_m"])
+        # 3.10.75: size-only lines (HEC-RAS structure connections): points along the line,
+        # not embedded, so they set the size field only (their own nodes are in no triangle
+        # and finish() drops them)
+        sl_tags = [[geo.addPoint(float(x), float(y), 0.0) for x, y in _densify(
+            np.asarray(sl["line"], float) - origin, 0.5 * sl["size"])] for sl in size_lines]
+        if size_lines:
+            geo.synchronize()
+        for sl, tags_ in zip(size_lines, sl_tags):
+            threshold({"PointsList": tags_}, sl["size"], sl["dist_min"], sl["dist_max"])
         fc = f.add("MathEval")
         f.setString(fc, "F", repr(hmax))
         fields.append(fc)
@@ -721,7 +767,8 @@ def build_mesh(spec):
         f.setAsBackgroundMesh(fm)
         for k in ("MeshSizeExtendFromBoundary", "MeshSizeFromPoints", "MeshSizeFromCurvature"):
             gmsh.option.setNumber("Mesh." + k, 0)
-        gmsh.option.setNumber("Mesh.MeshSizeMin", min(hmin, hpt) if ptags else hmin)
+        gmsh.option.setNumber("Mesh.MeshSizeMin", min(
+            [min(hmin, hpt) if ptags else hmin] + [sl["size"] for sl in size_lines]))
         gmsh.option.setNumber("Mesh.MeshSizeMax", hmax)
         gmsh.option.setNumber("Mesh.Algorithm", int(g["algorithm"]))
         if g["random_seed"] is not None:
@@ -745,7 +792,9 @@ def build_mesh(spec):
     return finish(np.asarray(tags, np.int64), np.asarray(xyz).reshape(-1, 3)[:, :2] + origin,
                   tri_nodes,
                   g, mesh_s, n_lines=len(line_c), n_channel=len(chan_c), n_points=len(ptags),
-                  short_edges_fixed=len(short), **({"sizing": sizing} if sizing else {}))
+                  short_edges_fixed=len(short),
+                  **dict({"sizing": sizing} if sizing else {},
+                         **({"size_lines": len(size_lines)} if size_lines else {})))
 
 
 def finish(tags, xy, tri_nodes, g, mesh_s=0.0, **extra):
@@ -792,6 +841,11 @@ def gate_area(g):
     ca = g.get("culvert_area_m2")
     if ca is not None:
         intended = min(intended, float(ca))
+    sl = g.get("size_line_min_m")
+    if sl:
+        # 3.10.76: size_lines (the ANUGA line band, HEC-RAS seed lines) make small triangles
+        # on purpose: the area of the smallest of their sizes, as gmsh makes it
+        intended = min(intended, math.sqrt(3.0) / 4.0 * (float(sl) / 1.3) ** 2)
     return intended, tol, intended * tol
 
 

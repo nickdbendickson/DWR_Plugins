@@ -52,6 +52,23 @@ FIT_MARGIN_FT = 0.05        # a raised weir point / invert sits this far above t
 #                              HEC-RAS 6.6 cell minimums came out up to 0.006 ft above the model's)
 BREAKLINE_REACH_FT = 400.0  # fix_faces may move points this close to a new line, no others
 DAM_CLEAR_CELLS = 2.0       # no breakline on a connection this close (cells) to the dam line
+# 3.10.75 (DWR-2801 NickReview): HEC-RAS 6.6 refused 8 of 126 connections whose lines were only
+# 10-90 % on cell faces (its own faces: 'OSM way/254643 2', 126 ft, 9.5 %; 'NBI 000000009128',
+# 97 ft, 14.6 %) though the old check (share_on_faces, within 0.1 spacing) said 100 %. A line
+# shorter than its spacing had one point pair, so one face, and HEC-RAS, which merges very
+# short faces and snaps a face point to the line's end, tilted it off the line; the ends of
+# the longer lines were off the faces for about a spacing. Now: the spacing along a line is at
+# most STRUCT_SPACING_LEN_FRAC of its length (not under the floor below), the pairs run
+# BREAKLINE_END_EXT spacings past both ends, and aligned_share measures the line on the faces
+# HEC-RAS would make (warn under ALIGN_WARN, stop the build under ALIGN_FAIL).
+STRUCT_SPACING_LEN_FRAC = 0.5
+STRUCT_SPACING_MIN_FT = 20.0    # the floor: the larger of this and ..._MIN_CELL x the cell
+STRUCT_SPACING_MIN_CELL = 0.2
+BREAKLINE_END_EXT = 1.0
+ALIGN_TOL_FT = 0.5              # a sample of the line this close to a face is on it
+ALIGN_COLLAPSE_FRAC = 0.1       # faces shorter than this x the spacing merge (as HEC-RAS does)
+ALIGN_WARN = 0.90
+ALIGN_FAIL = 0.01               # "0 %": no face along the line at all
 
 
 # ---------------------------------------------------------------- the structures of a run --
@@ -114,7 +131,7 @@ def connections(structs, to_model, perim, cell, terrain_tif, srs, units, log=Non
     Returns {'exported': [...], 'skipped': [...]} (the sinfo of build_model, less 'source')."""
     log = log or (lambda m: None)
     used = set(used or (hm.CONN_NAME, hm.AREA_NAME, hm.SA_NAME))
-    out = {"exported": [], "skipped": []}
+    out = {"exported": [], "skipped": [], "renamed": []}
     todo = []
     for s in structs:
         label = s.name or s.kind or "?"
@@ -165,6 +182,11 @@ def connections(structs, to_model, perim, cell, terrain_tif, srs, units, log=Non
             log("Structure {} ({}) not exported: {}".format(label, s.kind, whynot))
             continue
         c["name"] = hm.connection_name(label, used)
+        if hm.connection_name_base(label) != " ".join(str(label).split()):
+            # 3.10.75: characters HEC-RAS refuses ("/" in OSM ids) replaced; the report keeps
+            # the original (and its OSM id) next to the HEC-RAS name
+            out["renamed"].append({"name": c["name"], "source_name": c["source_name"],
+                                   "label": label})
         out["exported"].append(c)
         done.add(i)
         log("Structure {} ({}): connection '{}' in the 2D area".format(label, s.kind, c["name"]))
@@ -240,30 +262,169 @@ def local_spacing(points, line, radius):
     return float(np.median(tree.query(pts[idx], k=2)[0][:, 1]))
 
 
-def connection_breaklines(points, perimeter, conns, cell, units, dam_line=None, clip=None):
-    """Breaklines on the connection lines built into the points. Spacing along each line: the
-    local spacing of the points there (between a quarter cell and a cell). Only points within
+def structure_spacing(length, cell, units, local=None):
+    """3.10.75: the point spacing along a connection line of this length: the local spacing of
+    the points there (`local`; else the cell) between a quarter cell and a cell, then no more
+    than STRUCT_SPACING_LEN_FRAC x the length (two or more point pairs, so faces, on every
+    line), and no less than the floor (max(STRUCT_SPACING_MIN_FT, STRUCT_SPACING_MIN_CELL x
+    cell))."""
+    cell = float(cell)
+    s = float(min(max(local or cell, 0.25 * cell), cell))
+    floor = max(units.from_ft(STRUCT_SPACING_MIN_FT), STRUCT_SPACING_MIN_CELL * cell)
+    return float(max(min(s, STRUCT_SPACING_LEN_FRAC * float(length)), min(floor, s)))
+
+
+def extended_line(line, ext):
+    """The line with its first and last segments longer by `ext` (a straight connection
+    line: ext past both ends)."""
+    ln = np.asarray(line, float).reshape(-1, 2).copy()
+    for i, j in ((0, 1), (-1, -2)):
+        d = ln[i] - ln[j]
+        n = float(np.hypot(*d))
+        if n > 0:
+            ln[i] = ln[i] + d / n * float(ext)
+    return ln
+
+
+def aligned_share(points, line, spacing, tol, collapse_frac=ALIGN_COLLAPSE_FRAC, step=None):
+    """3.10.75: the share of a connection line on the cell faces HEC-RAS makes from the points:
+    the Voronoi faces of the points near the line, those shorter than collapse_frac x spacing
+    merged into one face point (HEC-RAS drops very short faces; DWR-2801: faces of 1.6 and 8 ft
+    went and the face across a 126 ft line tilted 8 ft off it), then the share of samples of
+    the line within `tol` of a face. 0.0 when there are too few points near the line."""
+    from scipy.spatial import Voronoi, cKDTree
+    pts = np.asarray(points, float).reshape(-1, 2)
+    ln = np.asarray(line, float).reshape(-1, 2)
+    L = float(hb.length(ln))
+    if L <= 0 or len(pts) < 4:
+        return 0.0
+    sp = float(spacing)
+    R = 4.0 * sp
+    tree = cKDTree(pts)
+    hits = tree.query_ball_point(hb.resample(ln, 0.5 * sp), R)
+    idx = np.unique(np.concatenate([np.asarray(h, int) for h in hits] + [np.zeros(0, int)]))
+    if len(idx) < 4:
+        return 0.0
+    try:
+        vor = Voronoi(pts[idx])
+    except Exception:                                  # noqa: BLE001 - degenerate (collinear)
+        return 0.0
+    rv = np.asarray([r for r in vor.ridge_vertices if -1 not in r], int).reshape(-1, 2)
+    V = vor.vertices
+    # merge the end points of short faces (union-find; each group to its centroid)
+    par = np.arange(len(V))
+
+    def root(a):
+        while par[a] != a:
+            par[a] = par[par[a]]
+            a = par[a]
+        return a
+    lim = float(collapse_frac) * sp
+    for a, b in rv:
+        if np.hypot(*(V[a] - V[b])) < lim:
+            ra, rb = root(a), root(b)
+            if ra != rb:
+                par[rb] = ra
+    roots = np.array([root(a) for a in range(len(V))])
+    W = np.zeros_like(V)
+    np.add.at(W, roots, V)
+    W = W[roots] / np.bincount(roots, minlength=len(V))[roots][:, None]
+    A, B = W[rv[:, 0]], W[rv[:, 1]]
+    ok = np.hypot(*(B - A).T) > 1e-9
+    mid = 0.5 * (A + B)
+    ok &= hb.poly_dist(mid[:, 0], mid[:, 1], ln) < 2.0 * sp + 0.5 * np.hypot(*(B - A).T)
+    A, B = A[ok], B[ok]
+    if not len(A):
+        return 0.0
+    step = step or max(min(sp / 20.0, L / 50.0), 1e-6)
+    n = max(1, int(math.ceil(L / step)))
+    q = hb.resample(ln, L / n)
+    x = 0.5 * (q[1:] + q[:-1]) if len(q) > 1 else q
+    on = np.zeros(len(x), bool)
+    d = B - A
+    dd = np.maximum((d * d).sum(1), 1e-18)
+    for k in range(0, len(x), 512):
+        p = x[k:k + 512, None, :]
+        t = np.clip(((p - A) * d).sum(2) / dd, 0.0, 1.0)
+        dist = np.hypot(*(p - (A + t[..., None] * d)).transpose(2, 0, 1))
+        on[k:k + 512] = dist.min(1) <= tol
+    return float(on.mean())
+
+
+def alignment(points, conns, units, spacing=None, cell=None):
+    """aligned_share of each connection: {name: share}, the spacing of each from `spacing`
+    {name: s} (the breakline spacing), else c["breakline_spacing"], else the local spacing."""
+    tol = units.from_ft(ALIGN_TOL_FT)
+    out = {}
+    for c in conns:
+        sp = (spacing or {}).get(c["name"]) or c.get("breakline_spacing")
+        if not sp:
+            sp = local_spacing(points, c["line"], 3.0 * float(cell)) if cell else None
+        if not sp:
+            continue
+        out[c["name"]] = round(aligned_share(points, c["line"], sp, tol), 3)
+    return out
+
+
+def alignment_notes(aligned):
+    """(warnings, failures) from alignment(): [str] each, warn under ALIGN_WARN, fail under
+    ALIGN_FAIL."""
+    warn = ["{} {:.0%}".format(k, v) for k, v in sorted(aligned.items(), key=lambda kv: kv[1])
+            if ALIGN_FAIL <= v < ALIGN_WARN]
+    fail = ["{!r}: {:.0%} of its line is on cell faces (HEC-RAS needs a face along the line)"
+            .format(k, v) for k, v in sorted(aligned.items()) if v < ALIGN_FAIL]
+    return warn, fail
+
+
+def connection_breaklines(points, perimeter, conns, cell, units, dam_line=None, clip=None,
+                          banded=None):
+    """Breaklines on the connection lines built into the points. Spacing along each line:
+    structure_spacing (the local spacing of the points there, between a quarter cell and a
+    cell, at most half the line; 3.10.75), the point pairs BREAKLINE_END_EXT spacings past
+    both ends of the line (3.10.75), and aligned_share of each line after. Only points within
     BREAKLINE_REACH_FT of a new line may move or go. A connection within DAM_CLEAR_CELLS cells
     of the dam line gets no breakline (the dam row and breach cells stay as checked).
+    banded (3.10.76): {name: line} of the connection lines already in a line band
+    (hecras_bands, built into the points before): no point work on those, only the checks.
     Returns (points, info)."""
     pts = np.asarray(points, float).reshape(-1, 2)
     reach = units.from_ft(BREAKLINE_REACH_FT)
-    lines, skipped = [], []
+    lines, skipped, in_band = [], [], []
+    banded = banded or {}
     for c in conns:
         ln = np.asarray(c["line"], float)
+        bl = banded.get(c["name"])
+        if bl is not None and np.shape(bl) == ln.shape and np.allclose(
+                np.asarray(bl, float), ln, atol=0.01 * cell):
+            s = local_spacing(pts, ln, 3.0 * cell) or 0.5 * cell
+            c["breakline_spacing"] = round(s, 2)
+            c["line_band"] = True
+            in_band.append({"kind": "structure", "name": c["name"], "near": s, "far": s,
+                            "line": extended_line(ln, BREAKLINE_END_EXT * s), "true_line": ln})
+            continue
         if dam_line is not None:
             d = hb.poly_dist(*hb.resample(ln, 0.1 * cell).T, np.asarray(dam_line, float)).min()
             if d < DAM_CLEAR_CELLS * cell:
                 skipped.append({"name": c["name"], "why": "{:.0f} {} from the dam line".format(
                     d, units.len_name)})
                 continue
-        sp = local_spacing(pts, ln, 3.0 * cell) or cell
-        s = float(min(max(sp, 0.25 * cell), cell))
+        s = structure_spacing(hb.length(ln), cell, units, local_spacing(pts, ln, 3.0 * cell))
         c["breakline_spacing"] = round(s, 2)
-        lines.append({"kind": "structure", "name": c["name"], "line": ln, "near": s, "far": s})
-    info = {"points_before": int(len(pts)), "lines": len(lines), "skipped": skipped}
+        lines.append({"kind": "structure", "name": c["name"], "near": s, "far": s,
+                      "line": extended_line(ln, BREAKLINE_END_EXT * s), "true_line": ln})
+    info = {"points_before": int(len(pts)), "lines": len(lines) + len(in_band),
+            "skipped": skipped}
+    if in_band:
+        info["in_line_band"] = [ln["name"] for ln in in_band]
     if not lines:
         info.update(points=int(len(pts)), points_removed=0, points_added=0)
+        if in_band:
+            info.update(
+                on_faces={ln["name"]: round(hb.share_on_faces(pts, ln["true_line"]), 3)
+                          for ln in in_band},
+                aligned={ln["name"]: round(aligned_share(
+                    pts, ln["true_line"], ln["near"], units.from_ft(ALIGN_TOL_FT)), 3)
+                    for ln in in_band})
         return pts, info
     new, st = hb.enforce(pts, perimeter, {"lines": lines})
     prot = st.pop("_protected")
@@ -274,8 +435,11 @@ def connection_breaklines(points, perimeter, conns, cell, units, dam_line=None, 
     new, _, vfix = hb.fix_faces(new, perimeter, prot | far, clip=clip, perimeter_tol=ptol)
     info.update(st, points=int(len(new)), check=vfix["check"],
                 fix={k: v for k, v in vfix.items() if k != "check"},
-                on_faces={ln["name"]: round(hb.share_on_faces(new, ln["line"]), 3)
-                          for ln in lines})
+                on_faces={ln["name"]: round(hb.share_on_faces(new, ln["true_line"]), 3)
+                          for ln in lines + in_band},
+                aligned={ln["name"]: round(aligned_share(
+                    new, ln["true_line"], ln["near"], units.from_ft(ALIGN_TOL_FT)), 3)
+                    for ln in lines + in_band})
     if vfix["left"] or vfix["check"]["facepoints_over"] or vfix["perimeter_left"]:
         raise hm.HecRasModelError(
             "the structure breaklines leave {} cell(s) with more than {} faces or {} perimeter "
@@ -394,8 +558,11 @@ def connection_problems(conns, check, perimeter, other_names=(), cell=None):
     per = np.asarray(perimeter, float)
     for c in conns:
         nm = c["name"]
-        if not str(nm).strip() or len(str(nm)) > 16 or any(ch in str(nm) for ch in ",=\r\n"):
-            out.append("{!r}: the name must be 1 to 16 characters without , or =".format(nm))
+        if (not str(nm).strip() or len(str(nm)) > hm.CONN_NAME_MAX
+                or hm.CONN_NAME_BAD.search(str(nm))):
+            # 3.10.75: "/" too (HEC-RAS: "the connection name has fore slashes(/) in it")
+            out.append("{!r}: the name must be 1 to {} characters, only letters, digits, spaces "
+                       "and ( ) . _ - (no / , =)".format(nm, hm.CONN_NAME_MAX))
         key = str(nm).strip().lower()
         if key in seen:
             out.append("{}: the name is used twice".format(nm))
@@ -640,6 +807,17 @@ def add_to_package(package, run, out, log=None, breaklines=True, fit=True, when=
     after = cells_check(pts, perim, conns, raster) if changes else check
     probs = connection_problems(conns, after, perim, other_names=g.get("connections", []) +
                                 [hm.AREA_NAME, hm.SA_NAME], cell=cell)
+    if conns:
+        # 3.10.75: a connection line with no cell faces along it (as build_model)
+        sinfo["aligned"] = bl.get("aligned") or alignment(pts, conns, units, cell=cell)
+        a_warn, a_fail = alignment_notes(sinfo["aligned"])
+        if breaklines:
+            probs += a_fail
+        elif a_fail:
+            log("Structures: no cell faces along (no breaklines asked for): " + "; ".join(a_fail))
+        if a_warn:
+            log("Structures: connection line(s) under {:.0%} on cell faces: {}".format(
+                ALIGN_WARN, ", ".join(a_warn)))
     if probs:
         shutil.rmtree(out, ignore_errors=True)
         raise hm.HecRasModelError(PROBLEMS_HEAD + "; ".join(probs))
@@ -656,7 +834,9 @@ def add_to_package(package, run, out, log=None, breaklines=True, fit=True, when=
     if os.path.exists(lay):
         add_layout_layers(lay, srs, conns, sinfo["skipped"], units)
     htc.check_terrain(tif[0], os.path.join(out, "GIS", "Projection.prj"))   # still fine
-    info.update(exported=conns, skipped=sinfo["skipped"], breaklines=bl, check_before=check_summary(check),
+    info.update(exported=conns, skipped=sinfo["skipped"], breaklines=bl,
+                renamed=sinfo.get("renamed", []), aligned=sinfo.get("aligned", {}),
+                check_before=check_summary(check),
                 check_after=check_summary(after), check_rows=after, fit=changes, points_after=len(pts), g01=gpath)
     return info
 
