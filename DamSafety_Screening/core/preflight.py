@@ -197,6 +197,29 @@ def _pack_hit(S, slot):
     return pack_slot(path, slot)
 
 
+def _pack_check(S):
+    """0.17.45: the offline pack the Inputs read (suite folder or package) against its
+    manifest.json: a check row, or None when no pack is in use. Read-only."""
+    try:
+        from ..damsuite.suite_fill import layers_for_settings
+        from ..damsuite import packcheck as PC
+        found = layers_for_settings(S)
+        path = found.get("pack") or ""
+        if not path or not PC.detect_format(path):
+            return None
+        res = PC.check_pack(path)
+    except Exception as e:                                       # noqa
+        return check(WARN, "Offline pack vs manifest.json", "the check could not run: {}".format(e))
+    if res.ok:
+        return check(OK, "Offline pack vs manifest.json", res.summary())
+    bad = [i.line() for i in res.issues if i.level != PC.NOTE]
+    more = " (+{} more)".format(len(bad) - 6) if len(bad) > 6 else ""
+    return check(WARN, "Offline pack vs manifest.json", "{} | {}{}".format(
+        res.summary(), " | ".join(bad[:6]), more),
+        "The layers named are missing or not what the manifest says: rebuild or update the "
+        "offline pack, or pick those layers on the Inputs tab.")
+
+
 def run_checks(work, settings, steps=None, env=None, n_dams=None):
     """The preflight list for a work folder, the window's settings and the steps that would run
     (default: the chain plan). Never raises; a check that cannot be made says so."""
@@ -354,6 +377,9 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
     layer("rail", "Railroads", optional, "line")
     layer("lifelines", "Lifeline facilities", optional)
     layer("nid", "NID dams", "1" in steps, "point")
+    pk = _pack_check(S)                                          # 0.17.45
+    if pk is not None:
+        out.append(pk)
     # -- hazard criterion / charts
     if "8" in steps or "9" in steps:
         crit = int(S.get("crit") or 0)

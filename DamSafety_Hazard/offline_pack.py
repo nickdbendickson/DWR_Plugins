@@ -919,13 +919,37 @@ _OPEN_LOCK = threading.Lock()
 _READERS = {}
 
 
+def pack_format(path):
+    """2.18.60: 1 (nd_offline_pack.sqlite, its folder, or a .zip of it), 2 (a folder with a
+    format-2 manifest.json - one GeoPackage per layer -, a file in it such as manifest.json,
+    or a .zip of it) or 0 (not a pack). Reads only manifest.json; never raises."""
+    try:
+        from .damsuite import packcheck as PC
+        return PC.detect_format(path)
+    except Exception:                                            # noqa: BLE001
+        return 0
+
+
 def open_pack(path, log=None):
     """PackReader for a pack folder, its .sqlite, or a .zip (unpacked on
-    first use; unpacked again when the zip holds a newer pack)."""
+    first use; unpacked again when the zip holds a newer pack).
+
+    2.18.60: a format-2 pack (a folder of GeoPackages with manifest.json, a
+    file in it, or a .zip of it) is read by the suite's reader
+    (damsuite.gpkgpack.GpkgPackReader): same methods (has, info, covers,
+    query, created, datasets, bbox, meta) and the same data set names as a
+    format-1 pack (NHD_flowlines / NHD_waterbodies also answer to the 3DHP_
+    layers of newer packs). Format 1 is read as before."""
     log = log or (lambda m: None)
     if not path:
         raise PackError("no offline data pack chosen")
     path = os.path.abspath(os.path.expanduser(path))
+    if pack_format(path) == 2:
+        from .damsuite import offline_pack as SOP
+        try:
+            return SOP.open_pack(path, log=log)
+        except SOP.PackError as e:
+            raise PackError(str(e))
     with _OPEN_LOCK:
         try:
             stamp = os.path.getmtime(path)
@@ -982,15 +1006,41 @@ def _unzip(zip_path, log):
     raise PackError("no writable folder to unpack {} into".format(zip_path))
 
 
+def check(path, reader=None, required=(), deep=True):
+    """2.18.60: damsuite.packcheck.PackCheck of the pack at `path` (the folder
+    the reader really reads when `reader` is given: an unpacked zip), or None
+    when the check could not run. Read-only; never raises."""
+    try:
+        from .damsuite import packcheck as PC
+        target = path
+        if reader is not None:
+            target = getattr(reader, "folder", "") or getattr(reader, "db_path", "") or path
+        return PC.check_pack(target, required=required, deep=deep)
+    except Exception as e:                                       # noqa: BLE001
+        _log("Offline data pack check not run: {}".format(e))
+        return None
+
+
 def describe(path):
     """One line about a pack for the dialog (never raises)."""
     if not path:
         return "No offline data pack - every download uses the internet."
     if not os.path.exists(path):
         return "Not found: {}".format(path)
+    if pack_format(path) == 2:                       # 2.18.60: a folder of GeoPackages
+        try:
+            from .damsuite import offline_pack as SOP
+            line = SOP.describe(path)
+        except Exception as e:                                   # noqa: BLE001
+            return "Not usable: {}".format(e)
+        res = None if path.lower().endswith(".zip") else check(path, deep=False)
+        if res is not None and not res.ok:
+            line += " - CHECK: " + res.summary().split(": ", 1)[-1]
+        return line
     if os.path.isdir(path) and not os.path.isfile(os.path.join(path, DB_NAME)):
         return ("This is a suite data folder, not an offline pack. "
-                "Use it as the Data folder. The Offline pack box is only for an old .sqlite or .zip.")
+                "Use it as the Data folder. The Offline pack box takes an offline pack: a .sqlite, a .zip "
+                "or a folder with manifest.json.")
     m = read_manifest(path)
     if m is None:
         try:

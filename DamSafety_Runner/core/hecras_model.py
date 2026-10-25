@@ -413,7 +413,8 @@ def geometry_text(m, now=None):
         L += ["BreakLine Name=" + str(b["name"]),
               "BreakLine CellSize Min={}".format(num(b["near"], 2)),
               "BreakLine CellSize Max={}".format(num(b["far"], 2)),
-              "BreakLine Near Repeats=0", "BreakLine Protection Radius=-1",
+              "BreakLine Near Repeats={}".format(int(b.get("repeats", 0))),
+              "BreakLine Protection Radius=-1",
               "BreakLine Polyline= {} ".format(len(b["line"]))]
         L += lines_xy(b["line"], 2)
     # --- SA/2D connection: the dam ------------------------------------------------------
@@ -1181,16 +1182,37 @@ def structure_connection(s, line, ground, perimeter, cell, step, units, name, av
     return out, None
 
 
+# 3.10.75: the characters a connection name may have. HEC-RAS 6.6 refuses "," and "=" (the
+# .g01 record separators) and "/" (DWR-2801 NickReview, 2026-10-24: 57 of 126 connections
+# named from OpenStreetMap ids, 'OSM way/254643...', 'OSM node/1185946', stopped the plan with
+# "the connection name has fore slashes(/) in it"); the names it took there had only letters,
+# digits, spaces and ( ) - . so anything else becomes "_" (as the hand fix there did).
+CONN_NAME_MAX = 16
+CONN_NAME_BAD = re.compile(r"[^A-Za-z0-9 ()._\-]")
+
+
+def connection_name_base(text):
+    """A structure name as HEC-RAS takes it (no length limit yet): whitespace runs to one space,
+    each run of other refused characters ("/", ",", "=", ...) to one "_"."""
+    base = re.sub(r"\s+", " ", str(text or "")).strip()
+    base = re.sub(r"_+", "_", CONN_NAME_BAD.sub("_", base)).strip(" _")
+    return base or "Structure"
+
+
 def connection_name(text, used):
-    """A unique HEC-RAS connection name (16 characters, no , or =) from a structure name."""
-    base = re.sub(r"[\s,=]+", " ", str(text or "")).strip() or "Structure"
-    nm, i = base[:16], 1
-    while nm.strip() in used:
+    """A unique HEC-RAS connection name (at most CONN_NAME_MAX = 16 characters, only those
+    CONN_NAME_BAD allows) from a structure name; a name already in `used` (case-insensitive,
+    as HEC-RAS compares them) gets " 2", " 3", ... in its last characters. The original stays
+    in the connection's "source_name" (README table, layout layer, report)."""
+    base = connection_name_base(text)
+    taken = {str(u).strip().lower() for u in used}
+    nm, i = base[:CONN_NAME_MAX].strip(), 1
+    while nm.lower() in taken:
         i += 1
         suffix = " {}".format(i)
-        nm = base[:16 - len(suffix)].rstrip() + suffix
-    used.add(nm.strip())
-    return nm.strip()
+        nm = base[:CONN_NAME_MAX - len(suffix)].rstrip() + suffix
+    used.add(nm)
+    return nm
 
 
 # ============================================================================
@@ -1215,6 +1237,9 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             # run_report.json, e.g. the ANUGA run), faces on the connection lines, and the
             # weirs / culvert inverts no lower than their cells
             "structures_from": None, "structure_breaklines": True, "structure_cell_fit": True,
+            # 3.10.75: a connection line with (almost) no cell faces along it stops the build
+            # ('fail'), or is only reported ('warn'); under 90 % is always reported
+            "structure_align_check": "fail",
             # TIER 2 fix: how far a rejected inflow point may be walked downstream
             "inflow_search_ft": 3000.0,
             # v3.10.22 (see the constants above build_model's helpers)
@@ -1232,7 +1257,13 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             # breach_station_ft (from the dam line's first end); dam_line_xy: a dam line of
             # your own (model CRS), which wins over the trace (see hecras_crest)
             "dam_axis": "crest", "breach_at": "auto", "breach_station_ft": None,
-            "dam_line_xy": None}
+            "dam_line_xy": None,
+            # 3.10.76: bands of small cells along roads, rail, structures and breaklines
+            # (hecras_bands; None = the NDBREACH_BAND* variables, else hecras_bands.DEFAULTS:
+            # on, 3 rows of 20 ft each side, graded 1.5:1, wet area + 500 ft)
+            "line_bands": None, "band_cell_ft": None, "band_rows": None, "band_grading": None,
+            "band_classes": None, "band_extent": None, "band_wet_pad_ft": None,
+            "band_lines": None}
 
 
 def _ogr():
@@ -2362,6 +2393,12 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     from . import hecras_seeds as hseeds
     from . import hecras_breaklines as hbl
     seeds_mode = hseeds.mode_of(o)               # v3.10.22: raises on a bad value, before work
+    from . import hecras_bands as hband
+    try:
+        bcfg = hband.settings(o)                 # 3.10.76: raises on a bad value, before work
+    except hband.BandError as e:
+        raise HecRasModelError(str(e))
+    band_channel = bcfg["on"] and "channel" in bcfg["classes"]
     from . import hecras_crest as hcrest
     axis_mode = dam_axis_of(o)                   # v3.10.22: raises on a bad value, before work
     dem_ds = GS.open_raster(dem_path)
@@ -2493,6 +2530,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     dep, dx0, dy0 = _warp(depth_path, srs, acell, alg="max")
     thr = o["extent_depth_ft"]
     wet = np.isfinite(dep) & (dep > thr)
+    band_wet = (wet, dx0, dy0, acell)             # 3.10.76: the line bands' 'wet' extent
     if not wet.any():
         raise HecRasModelError("the run's Depth (Max).tif has no flooded cells")
     ny, nx = wet.shape
@@ -3133,7 +3171,9 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             spts, sinf = hseeds.make_seeds(
                 perim, cell, options=o, dam_line=[tuple(q) for q in dam_poly], downstream=d,
                 breach_xy=Ob + abb * sc, breach_len=toe_off + 2.0 * cell, breach_dir=db,
-                channel=(path_m if (path_m is not None and use_path_dir) else None))
+                channel=(path_m if (path_m is not None and use_path_dir) else None),
+                structures=_seed_structures(o, report, to_model, perim, cell, terrain_tif, srs,
+                                            units, log))
         except hseeds.SeedError as e:
             seeds_info["why"] = str(e)
             notes.append("gmsh computation points were asked for but not used ({}); the regular "
@@ -3163,7 +3203,9 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         bplan = hbl.plan(perim, cell, [tuple(q) for q in dam_poly], db,
                          breach=(Ob + abb * sc, bcw, toe_off + cell, 0.5 * bw)
                          if cut is not None else None,
-                         path=(path_m if (path_m is not None and use_path_dir) else None),
+                         # 3.10.76: the channel band (class 'channel') takes the path
+                         path=(path_m if (path_m is not None and use_path_dir
+                                          and not band_channel) else None),
                          spacing=bsp)
         n0 = len(pts)
         pts, bst = hbl.enforce(pts, perim, bplan)
@@ -3223,6 +3265,21 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         log(notes[-1])
     else:
         prot = None
+        bplan = None
+    # 3.10.76: bands of small cells along roads, rail, structures and breaklines (hecras_bands)
+    band_info, band_g, banded = None, [], {}
+    if bcfg["on"]:
+        progress(83, "line bands")
+        n0 = len(pts)
+        pts, prot, band_info, band_g, banded = _line_bands(
+            bcfg, o, report, settings, to_model, srs, units, perim, cell, pts, prot, dam_poly,
+            [b["line"] for b in ((bplan or {}).get("lines") or []) if b.get("kind") == "breach"],
+            band_wet, (path_m if (path_m is not None and use_path_dir) else None), terrain_tif,
+            log)
+        band_info["points_before"] = int(n0)
+        if band_info.get("note"):
+            notes.append(band_info["note"])
+            log(notes[-1])
     # v3.10.22: no cell with more than 8 faces (HEC-RAS's limit; Absaraka v2_gmsh failed its
     # property tables with "48 cell(s) with more than 8 sides"): the Voronoi pre-check on
     # every cell (clipped to the perimeter where it reaches it) and every face point, with a
@@ -3351,14 +3408,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # 3.10.56: or those of another run (structures_from, e.g. the ANUGA run of the dam); the
     # loop lives in hecras_structures.connections (shared with add_to_package)
     from . import hecras_structures as hstr
-    s_to_model = to_model
-    if o.get("structures") and o.get("structures_from"):
-        structs, ssrc, s_wtext, snotes = hstr.load_run_structures(o["structures_from"])
-        s_to_model = transformer(srs_from(s_wtext), srs) if s_wtext else None
-        for n_ in snotes:
-            log("Structures: " + n_)
-    else:
-        structs, ssrc = run_structures(report) if o["structures"] else ([], "")
+    structs, ssrc, s_to_model = _model_structures(o, report, to_model, srs, log)
     if structs:
         progress(84, "culverts and bridges")
     sinfo = dict(hstr.connections(structs, s_to_model, perim, cell, terrain_tif, srs, units, log),
@@ -3367,7 +3417,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # weir and culvert inverts no lower than the cells they connect (HEC-RAS refuses them)
     if sinfo["exported"] and o.get("structure_breaklines", True):
         pts, sbl = hstr.connection_breaklines(pts, perim, sinfo["exported"], cell, units,
-                                              conn_line, clip=perimeter_clip(perim))
+                                              conn_line, clip=perimeter_clip(perim),
+                                              banded=banded)
         sinfo["breaklines"] = sbl
         mc = mesh_check(perim, pts, cell)
         notes.append("Structure breaklines: {} connection line(s) built into the computation "
@@ -3376,6 +3427,34 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                          sbl["points"], "".join("; no breakline on {} ({})".format(
                              k["name"], k["why"]) for k in sbl["skipped"])))
         log(notes[-1])
+    if sinfo.get("renamed"):
+        notes.append("Structures: {} connection name(s) had characters HEC-RAS refuses (\"/\" "
+                     "in OpenStreetMap ids) replaced: {}.".format(len(sinfo["renamed"]), "; ".join(
+                         "'{}' = {}".format(x["name"], x["source_name"])
+                         for x in sinfo["renamed"])))
+        log(notes[-1])
+    if sinfo["exported"]:
+        # 3.10.75: each connection line on the cell faces HEC-RAS would make (DWR-2801: lines
+        # 10-90 % on its faces where the old check said 100 %)
+        aligned = (sinfo.get("breaklines") or {}).get("aligned") or hstr.alignment(
+            pts, sinfo["exported"], units, cell=cell)
+        sinfo["aligned"] = aligned
+        a_warn, a_fail = hstr.alignment_notes(aligned)
+        if a_warn:
+            notes.append("Structures: connection line(s) under {:.0%} on cell faces (HEC-RAS "
+                         "may refuse them or move flow off the line; check them in RAS Mapper): "
+                         "{}.".format(hstr.ALIGN_WARN, ", ".join(a_warn)))
+            log(notes[-1])
+        if a_fail:
+            # without the structure breaklines (structure_breaklines=False, the user's own
+            # choice) it is only reported
+            if (str(o.get("structure_align_check", "fail")).lower() == "warn"
+                    or not o.get("structure_breaklines", True)):
+                notes.append("Structures: NO cell faces along: " + "; ".join(a_fail) + ".")
+                log(notes[-1])
+            else:
+                raise HecRasModelError(hstr.PROBLEMS_HEAD + "; ".join(a_fail) + " (build with "
+                                       "structure_align_check='warn' to write it anyway)")
     if sinfo["exported"] and o.get("structure_cell_fit", True):
         traster = hstr.read_raster(terrain_tif)
         sck = hstr.cells_check(pts, perim, sinfo["exported"], traster)
@@ -3483,7 +3562,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     m.units = units
     m.perimeter = [tuple(p) for p in perim]
     m.points = pts
-    m.breaklines = bl_lines                     # v3.10.22
+    m.breaklines = bl_lines + band_g            # v3.10.22; 3.10.76: the line bands
     m.conn_cellsize = bl_dam
     m.cell = cell
     m.nominal_cell = nominal_cell                 # v3.10.22: median point spacing (gmsh)
@@ -3593,6 +3672,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             "hec_breach_mode": hmode, "spillway": spill_info,
             "tolerances": {"name": tname, "values": tvals}, "mesh_seeds": seeds_info,
             "breaklines": bl_info,
+            "line_bands": band_info,            # 3.10.76
             "plugin_reference": (None if pref is None else
                                  {k: v for k, v in pref.items() if k not in ("t_hr", "q_cfs")}),
             "model_wkt": srs.ExportToWkt(),
@@ -4207,6 +4287,45 @@ def breach_start_row(b, info, L):
         "sunny day: the breach starts with the run")
 
 
+def _model_structures(o, report, to_model, srs, log):
+    """The structures build_model exports: the run's, or those of o['structures_from'] (3.10.56).
+    Returns (structs, source text, their transformer to the model CRS)."""
+    from . import hecras_structures as hstr
+    if o.get("structures") and o.get("structures_from"):
+        structs, ssrc, s_wtext, snotes = hstr.load_run_structures(o["structures_from"])
+        for n_ in snotes:
+            log("Structures: " + n_)
+        return structs, ssrc, (transformer(srs_from(s_wtext), srs) if s_wtext else None)
+    structs, ssrc = run_structures(report) if o["structures"] else ([], "")
+    return structs, ssrc, to_model
+
+
+def _seed_structures(o, report, to_model, perim, cell, terrain_tif, srs, units, log):
+    """3.10.75: the connection lines for the gmsh seeds ([{'line', 'size'}], size =
+    hecras_structures.structure_spacing of the line), so the points are graded down to the
+    breakline spacing at every culvert / bridge. The same connections as the build makes later
+    (hecras_structures.connections; the terrain may differ only by the breach cut), found here
+    silently; [] without structures or structure breaklines, or on any error (the seeds are
+    then as before)."""
+    if not (o.get("structures") and o.get("structure_breaklines", True)):
+        return []
+    from . import hecras_structures as hstr
+    try:
+        structs, _, s_to_model = _model_structures(o, report, to_model, srs, lambda m: None)
+        if not structs:
+            return []
+        sinfo = hstr.connections(structs, s_to_model, perim, cell, terrain_tif, srs, units)
+    except Exception as e:                             # noqa: BLE001 - seeds then as before
+        log("gmsh seeds: no structure refinement ({}: {})".format(type(e).__name__, e))
+        return []
+    out = []
+    for c in sinfo["exported"]:
+        ln = np.asarray(c["line"], float)
+        out.append({"name": c["name"], "line": ln.tolist(), "size": hstr.structure_spacing(
+            float(np.hypot(*(ln[-1] - ln[0]))), cell, units)})
+    return out
+
+
 def structures_readme(m, sinfo):
     """v3.12.0: the README section on the run's culverts, bridges and notches: what became of
     each one and what to check in HEC-RAS. [] when the run had none."""
@@ -4263,6 +4382,21 @@ def structures_readme(m, sinfo):
                 "lines, {:g} x the span apart, on HEC-RAS's default barrel centrelines (across "
                 "the connection line). The Runner's own lines are in the layout GeoPackage "
                 "(layer 'Structures from the run').".format(1.1), ""]
+    ren = sinfo.get("renamed") or []
+    if ren:
+        out += ["Renamed for HEC-RAS (3.10.75; HEC-RAS refuses \"/\", \",\" and \"=\" in a "
+                "connection name and takes at most {} characters; the original name, with its "
+                "OpenStreetMap / NBI id, is in the Structure column above and here):".format(
+                    CONN_NAME_MAX), ""]
+        out += ["- `{}` = `{}`".format(x["name"], x["source_name"]) for x in ren] + [""]
+    al = (sinfo.get("breaklines") or {}).get("aligned") or sinfo.get("aligned") or {}
+    if al:
+        low = sorted((v, k) for k, v in al.items() if v < 0.90)
+        out += ["Connection lines on cell faces (3.10.75; the share of each line on the faces "
+                "HEC-RAS makes from these points, faces shorter than a tenth of the spacing "
+                "merged as HEC-RAS does): {} of {} at 90 % or more{}.".format(
+                    len(al) - len(low), len(al), "; under 90 %: " + ", ".join(
+                        "{} {:.0%}".format(k, v) for v, k in low) if low else ""), ""]
     fit = sinfo.get("fit") or []
     if fit:
         out += ["Raised to the cells they connect (3.10.56; HEC-RAS refuses a weir or a culvert "
@@ -4371,3 +4505,147 @@ def perimeter_clip(perimeter):
                 "perimeter_faces": lens}
 
     return clip
+
+
+def _dist_to_dam(line, dam_poly, cell):
+    """The least distance from a line to the dam line."""
+    from . import hecras_breaklines as hbl
+    q = hbl.resample(np.asarray(line, float), 0.1 * cell)
+    return float(hbl.poly_dist(q[:, 0], q[:, 1], np.asarray(dam_poly, float)).min())
+
+
+def _band_read_lines(paths, srs):
+    """3.10.76: the line features of vector files (band_lines), in the model CRS."""
+    gdal, ogr, osr = _ogr()
+    out = []
+    for path in paths or []:
+        ds = ogr.Open(str(path))
+        if ds is None:
+            raise HecRasModelError("band_lines: cannot open {}".format(path))
+        for li in range(ds.GetLayerCount()):
+            lyr = ds.GetLayer(li)
+            lsr = lyr.GetSpatialRef()
+            ct = None
+            if lsr is not None:
+                for s_ in (lsr, srs):
+                    try:
+                        s_.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+                    except AttributeError:                 # pragma: no cover - GDAL 2
+                        pass
+                ct = osr.CoordinateTransformation(lsr, srs)
+            for ft in lyr:
+                g = ft.GetGeometryRef()
+                if g is None:
+                    continue
+                g = g.Clone()
+                if ct is not None:
+                    g.Transform(ct)
+                parts = [g] if g.GetGeometryCount() == 0 else [
+                    g.GetGeometryRef(i) for i in range(g.GetGeometryCount())]
+                for p in parts:
+                    xy = np.asarray(p.GetPoints() or [], float)
+                    if len(xy) >= 2:
+                        out.append(xy[:, :2])
+        ds = None
+    return out
+
+
+def _line_bands(bcfg, o, report, settings, to_model, srs, units, perim, cell, pts, prot,
+                dam_poly, breach_lines, band_wet, path_m, terrain_tif, log):
+    """3.10.76: the line bands (hecras_bands) in the computation points: the lines of each
+    class in bcfg['classes'] (structures: the connection lines the build makes later; roads:
+    the run's road_lines; rail: report rail_lines_xy; breakline: band_lines files; channel:
+    the flow path), clipped to the 2D area, away from the dam line and the breach cut, and
+    (extent 'wet') to the run's wet area plus the pad. Returns (points, protected, info,
+    BreakLine blocks for the .g, {structure name: line} banded)."""
+    from . import hecras_bands as hband
+    from . import hecras_breaklines as hbl
+    from . import hecras_structures as hstr
+    s = units.from_ft(bcfg["cell_ft"])
+    rows, grading = int(bcfg["rows"]), float(bcfg["grading"])
+    edge = hband.band_edge(s, rows, grading, cell)
+    u = units.len_name
+    pts = np.asarray(pts, float)
+    pr = np.zeros(len(pts), bool) if prot is None else np.asarray(prot, bool)
+    # away from the dam line and the breach cut: they keep their own rows (hecras_breaklines)
+    avoid = [np.asarray(dam_poly, float)] + [np.asarray(b, float) for b in breach_lines or []]
+    clear = max(hstr.DAM_CLEAR_CELLS * cell, edge + 0.5 * cell)
+    tests = [hband.far_from(avoid, clear)]
+    wet_test = None
+    if bcfg["extent"] == "wet" and band_wet is not None:
+        wet, x0, ytop, acell = band_wet
+        wm = hband.dilate(wet, units.from_ft(bcfg["wet_pad_ft"]) / acell)
+        wet_test = hband.mask_test(wm, x0, ytop, acell)
+    lines, ranks, per, g_out, banded, skipped = [], [], {}, [], {}, []
+
+    def tr(ls):
+        out = []
+        for ln in ls or []:
+            a = np.asarray(ln, float).reshape(-1, 2)
+            if len(a) >= 2:
+                out.append(np.asarray(to_model(a.tolist()), float).reshape(-1, 2)[:, :2])
+        return out
+    for cls in hband.CLASSES:
+        if cls not in bcfg["classes"]:
+            continue
+        raw, names = [], None
+        if cls == "structure":
+            names = []
+            for c in _seed_structures(o, report, to_model, perim, cell, terrain_tif, srs,
+                                      units, log):
+                ln = np.asarray(c["line"], float)
+                if _dist_to_dam(ln, dam_poly, cell) < hstr.DAM_CLEAR_CELLS * cell:
+                    skipped.append("{} (near the dam line)".format(c.get("name")))
+                    continue
+                ext = hstr.extended_line(ln, hstr.BREAKLINE_END_EXT * s)
+                pc = hband.clip([ext], perim, s, tests)
+                if len(pc) == 1 and hbl.length(pc[0]) >= 0.99 * hbl.length(ext):
+                    raw.append(ext)
+                    names.append(c.get("name"))
+                    banded[c.get("name")] = ln.tolist()
+                else:
+                    skipped.append("{} (at the edge of the 2D area or the breach)".format(
+                        c.get("name")))
+            pcs = raw
+        else:
+            if to_model is None and cls in ("road", "rail"):
+                continue
+            if cls == "road":
+                raw = tr(settings.get("road_lines"))
+            elif cls == "rail":
+                raw = tr(report.get("rail_lines_xy"))
+            elif cls == "breakline":
+                raw = _band_read_lines(bcfg["lines"], srs)
+            elif cls == "channel" and path_m is not None:
+                raw = [np.asarray(path_m, float)]
+            pcs = hband.clip(raw, perim, s, tests + ([wet_test] if wet_test else []))
+            g_out += hband.g_lines(pcs, cls, s, cell, rows)
+        per[cls] = {"lines": len(raw), "pieces": len(pcs),
+                    "length": round(sum(hbl.length(p) for p in pcs), 1)}
+        lines += pcs
+        ranks += [hband.CLASSES.index(cls)] * len(pcs)
+    info = {"on": True, "spacing": s, "rows": rows, "grading": grading,
+            "classes": per, "extent": bcfg["extent"],
+            "wet_pad": (units.from_ft(bcfg["wet_pad_ft"]) if bcfg["extent"] == "wet" else None),
+            "skipped": skipped, "structures_banded": sorted(banded)}
+    if not lines:
+        info.update(points_removed=0, points_added=0, points=int(len(pts)),
+                    note="Line bands: no {} lines in the 2D area{}.".format(
+                        "/".join(bcfg["classes"]),
+                        " (wet area)" if wet_test else ""))
+        return pts, prot, info, [], {}
+    hard = pr & ~hband.far_from(avoid, 2.0 * clear)(pts)
+    pts2, prot2, st = hband.apply(pts, perim, lines, s, rows, grading, cell, pr, hard,
+                                  ranks=ranks)
+    info.update(st)
+    L = sum(v["length"] for v in per.values())
+    info["note"] = (
+        "Line bands: {rows} row(s) of {s:g} {u} cells each side of the lines ({cls}; {L:,.0f} "
+        "{u} in all{wet}), graded out at {g:g}:1 to the {c:g} {u} cells ({e:,.0f} {u} each "
+        "side in all); {r:,} points removed, {a:,} added ({p:,} points now).{sk}".format(
+            rows=rows, s=round(s, 2), u=u, cls=", ".join(
+                "{} {:,.0f} {}".format(k, v["length"], u) for k, v in per.items()), L=L,
+            wet=(", in the wet area + {:,.0f} {}".format(info["wet_pad"], u) if wet_test else ""),
+            g=grading, c=round(cell, 2), e=edge, r=st["points_removed"], a=st["points_added"],
+            p=st["points"], sk=(" Not banded: " + "; ".join(skipped) + "." if skipped else "")))
+    return pts2, prot2, info, g_out, banded

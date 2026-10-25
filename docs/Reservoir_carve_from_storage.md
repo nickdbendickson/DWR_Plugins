@@ -35,8 +35,9 @@ On a grid read through the run's terrain (work CRS, metres; cell about 2 m, at m
    downstream vector when the run already has it), by more than half a cell.
 2. Within `R = clamp(3 sqrt(curve area at the top), 600 m, 5 km)` of the dam point.
 3. Ground at or below the top of dam; the DWR dam line (when the run has it) is a wall.
-4. A lake or waterbody polygon, when one is given, clips it. The suite pack has no
-   NHD waterbody layer today (only NHD flowlines), so the DEM alone sets the footprint.
+4. A lake or waterbody polygon, when one is given, clips it. The run hook does not pass one
+   today (the suite pack's `hydro/NHD_waterbodies.gpkg`, restored 2026-10-24, is not read
+   here), so the DEM alone sets the footprint.
 5. 4-connected to the lowest such cell next to the dam.
 
 ## Carve
