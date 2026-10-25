@@ -21,10 +21,15 @@ Written (GeoTIFF, Float32, NoData -9999; ft, ft/s, hours):
   Velocity_ftps.tif   largest |max face velocity| over the cell's faces
                       (face-normal speeds; RAS Mapper interpolates a full
                       velocity field - its rasters can differ at cell edges)
-  Arrival_hr.tif      first output time the cell depth (WSE - minimum
-                      elevation) exceeds the arrival depth, minus the breach
-                      start time (0 = simulation start); needs time-series
-                      output
+  Arrival_hr.tif      2.31.1: per pixel, the first time the depth ON THE
+                      SAME BASIS AS Depth_ft.tif (the cell's water surface
+                      time series minus the pixel's terrain; without terrain
+                      minus the cell minimum) reaches the arrival depth,
+                      interpolated between output steps, minus the breach
+                      start time (0 = simulation start). Only where that
+                      depth reaches the arrival depth; a pixel reached only
+                      between output steps gets its cell's time of the
+                      maximum. Needs time-series output
   TimeOfPeak_hr.tif   time of the maximum water surface, minus breach start
 Pixels are assigned to the nearest cell centre (RAS cells are Voronoi-type
 polygons, so this is the cell that contains the pixel) within a search
@@ -32,6 +37,17 @@ radius; pixels beyond it are NoData.
 
 The HDF is read with h5py when QGIS has it, else with GDAL's
 multidimensional HDF5 driver (GDAL >= 3.1).
+
+2.31.1 - the depth basis (result 'depth_basis', depth_basis.json next to the
+rasters, the cache manifest, the run log):
+  terrain          a terrain raster was given: depth and arrival from it
+  runner_reexport  no terrain raster, but ND Dam Breach Runner rasters of
+                   this plan with depth from the terrain were found (a
+                   re-export _hecras/reexport_*/ or the dam folder's final
+                   rasters with hecras_stage.json depth_basis 'terrain'):
+                   those are used (find_runner_rasters)
+  cell_min         neither: depth from each cell's minimum elevation (ditches
+                   deepen whole cells; a warning says so)
 
 v2.9 - a plan HDF used DIRECTLY as a classification input (no Import step):
   is_plan_hdf(path)          cheap check (name *.p##.hdf + HDF5 signature;
@@ -69,6 +85,23 @@ FT_PER_M = 3.28083989501312
 NODATA = -9999.0
 OUT_NAMES = {"wse": "WSE_ft.tif", "depth": "Depth_ft.tif", "vel": "Velocity_ftps.tif",
              "arr": "Arrival_hr.tif", "peak": "TimeOfPeak_hr.tif"}
+
+
+# 2.31.1: what Depth_ft.tif / Arrival_hr.tif are measured from (see the module docstring)
+DEPTH_BASIS_TERRAIN = "terrain"
+DEPTH_BASIS_RUNNER = "runner_reexport"
+DEPTH_BASIS_CELL_MIN = "cell_min"
+BASIS_FILE = "depth_basis.json"
+CELL_MIN_WARNING = ("WARNING: no terrain raster and no Runner re-export of this plan - depth and "
+                    "arrival are from each HEC-RAS cell's MINIMUM elevation (a ditch or channel "
+                    "in a cell deepens the whole cell, so the flooded area is overstated). Give "
+                    "the terrain raster, or re-export the run with the Runner "
+                    "(ndbreach_cli.py hecras-reexport).")
+# the Runner's names (DamSafety_Runner core/workflow.FINAL_NAMES; ft, ft/s, h after its t0)
+RUNNER_NAMES = {"depth": "Depth (Max).tif", "vel": "Velocity (Max).tif",
+                "arr": "Arrival Time.tif", "wse": "WSE (Max).tif"}
+RUNNER_STAGE = os.path.join("_hecras", "hecras_stage.json")
+RUNNER_REEXPORT_JSON = "reexport.json"
 
 
 class RasImportError(Exception):
@@ -291,9 +324,11 @@ def arrival_days(ws_series, min_elev, threshold, chunk_rows=None):
     return np.where(anyw, first, -1)
 
 
-def read_area(h, area, is_si, breach_hr=0.0, arrival_ft=0.1, progress=None):
+def read_area(h, area, is_si, breach_hr=0.0, arrival_ft=0.1, progress=None, series=True):
     """Cell arrays of one 2D flow area in ft / ft/s / h:
-    {"x", "y", "zmin", "wse", "vel", "arr", "peak"} (NaN = no value)."""
+    {"x", "y", "zmin", "wse", "vel", "arr", "peak"} (NaN = no value), "n" and
+    "series" (the area has time-series output). series=False: the per-cell
+    arrival is not read ("arr" all NaN; import_plan computes it per pixel)."""
     g = "{}/{}".format(GEOM, area)
     s = "{}/{}".format(SUMMARY, area)
     xy = h.read(g + "/Cells Center Coordinate")
@@ -325,7 +360,8 @@ def read_area(h, area, is_si, breach_hr=0.0, arrival_ft=0.1, progress=None):
     # arrival from the time series
     arr = np.full(n, np.nan)
     tsp = "{}/2D Flow Areas/{}/Water Surface".format(TSERIES, area)
-    if h.has(tsp) and h.has(TSERIES + "/Time"):
+    out["series"] = bool(h.has(tsp) and h.has(TSERIES + "/Time"))
+    if out["series"] and series:
         times = h.read(TSERIES + "/Time").astype(np.float64).ravel()
         shp = h.shape(tsp)
         thr = arrival_ft / k                      # model units
@@ -363,10 +399,15 @@ def _spacing(xs, ys, h=None, area=None, n=None):
 
 
 # ------------------------------------------------------------------ rasters --
+# 2.31.1: "cid" = the cell's index over all areas (area offset + cell), gridded with the
+# values so each pixel knows the cell whose time series gives its arrival
+POINT_FIELDS = ("wse", "zmin", "vel", "peak", "cid")
+
+
 def _write_csv(path, cells):
     """Cell centres and values as CSV (fast for millions of cells); GDAL
     reads it as points through the CSV driver's X / Y open options."""
-    fields = ("wse", "zmin", "vel", "arr", "peak")
+    fields = POINT_FIELDS
     cols = [cells["x"], cells["y"]] + [np.where(np.isfinite(cells[f]), cells[f], NODATA)
                                        for f in fields]
     np.savetxt(path, np.column_stack(cols), delimiter=",", fmt="%.6f", comments="",
@@ -406,7 +447,7 @@ def _write_points(path, cells, srs_wkt):
         srs = osr.SpatialReference()
         srs.ImportFromWkt(srs_wkt)
     lyr = ds.CreateLayer("cells", srs, ogr.wkbPoint)
-    fields = ("wse", "zmin", "vel", "arr", "peak")
+    fields = POINT_FIELDS
     for f in fields:
         lyr.CreateField(ogr.FieldDefn(f, ogr.OFTReal))
     defn = lyr.GetLayerDefn()
@@ -425,10 +466,11 @@ def _write_points(path, cells, srs_wkt):
     ds = None
 
 
-def _grid(src, dst, field, bounds, width, height, radius, srs_wkt, layer="cells"):
+def _grid(src, dst, field, bounds, width, height, radius, srs_wkt, layer="cells",
+          float64=False):
     from osgeo import gdal
     opts = gdal.GridOptions(
-        format="GTiff", outputType=gdal.GDT_Float32, width=int(width), height=int(height),
+        format="GTiff", outputType=gdal.GDT_Float64 if float64 else gdal.GDT_Float32, width=int(width), height=int(height),
         outputBounds=list(bounds), outputSRS=srs_wkt or None, noData=NODATA,
         algorithm="nearest:radius1={r}:radius2={r}:angle=0.0:nodata={nd}".format(
             r=radius, nd=NODATA),
@@ -440,10 +482,19 @@ def _grid(src, dst, field, bounds, width, height, radius, srs_wkt, layer="cells"
 
 
 def import_plan(hdf_path, out_folder, dem_path=None, cell_ft=0.0, breach_hr=0.0,
-                arrival_ft=0.1, progress=None):
+                arrival_ft=0.1, progress=None, runner_dirs=None, use_runner=True):
     """Convert a plan's 2D results. Returns {"paths": {key: tif}, "lines",
-    "notes", "info"}."""
+    "notes", "info", "pixel_ft", "depth_basis", "depth_source"}.
+
+    2.31.1: without dem_path, ND Dam Breach Runner rasters of this plan with depth
+    from the terrain (find_runner_rasters; runner_dirs: extra folders to look in,
+    e.g. the dam folder) are used when use_runner; else depth from the cell minimum
+    with CELL_MIN_WARNING. The basis is written to depth_basis.json."""
     from osgeo import gdal
+    if not dem_path and use_runner:
+        found = find_runner_rasters(hdf_path, runner_dirs)
+        if found:
+            return _import_runner(hdf_path, out_folder, found, breach_hr, arrival_ft)
     notes, lines = [], []
     h = open_hdf(hdf_path)
     try:
@@ -455,21 +506,24 @@ def import_plan(hdf_path, out_folder, dem_path=None, cell_ft=0.0, breach_hr=0.0,
                                      ", ".join(info["areas"]) or "none"))
         is_si = info["is_si"]
         k = FT_PER_M if is_si else 1.0
-        cells = {f: [] for f in ("x", "y", "zmin", "wse", "vel", "arr", "peak")}
-        spacing = []
+        cells = {f: [] for f in ("x", "y", "zmin", "wse", "vel", "peak", "cid")}
+        spacing, areas, g0 = [], [], 0
         for ai, area in enumerate(info["with_results"]):
             def sub(p, m="", ai=ai):
                 if progress:
                     progress(40.0 * (ai + p / 100.0) / len(info["with_results"]), m)
-            c = read_area(h, area, is_si, breach_hr, arrival_ft, sub)
+            c = read_area(h, area, is_si, breach_hr, arrival_ft, sub, series=False)
+            c["cid"] = np.arange(g0, g0 + c["n"], dtype=np.float64)
             for f in cells:
                 cells[f].append(c[f])
+            areas.append((area, g0, c["n"], c["series"]))
+            g0 += c["n"]
             spacing.append(_spacing(c["x"], c["y"], h, area, c["n"]))
             lines.append("{}: {:,} cells, {:,} wet, max depth {:.1f} ft".format(
                 area, c["n"], int(np.isfinite(c["wse"]).sum()),
                 float(np.nanmax(c["wse"] - c["zmin"])) if np.isfinite(c["wse"]).any()
                 else 0.0))
-            if not np.isfinite(c["arr"]).any():
+            if not c["series"]:
                 notes.append("{}: no time-series output - no arrival raster (turn on "
                              "'2D Flow Area' time-series output in the plan)".format(area))
             if not np.isfinite(c["vel"]).any():
@@ -477,6 +531,8 @@ def import_plan(hdf_path, out_folder, dem_path=None, cell_ft=0.0, breach_hr=0.0,
         cells = {f: np.concatenate(v) for f, v in cells.items()}
     finally:
         h.close()
+    if g0 >= 2 ** 53:
+        raise RasImportError("too many cells")
     wkt = info["projection"]
     dem = gdal.Open(dem_path) if dem_path else None
     if dem is not None and not wkt:
@@ -516,14 +572,19 @@ def import_plan(hdf_path, out_folder, dem_path=None, cell_ft=0.0, breach_hr=0.0,
         bounds = (gt[0] + c0 * gt[1], gt[3] + r0 * gt[5],
                   gt[0] + c1 * gt[1], gt[3] + r1 * gt[5])
         pix = abs(gt[1])
+        basis = DEPTH_BASIS_TERRAIN
+        notes.append("depth basis: terrain - depth and arrival = water surface - the terrain "
+                     "raster under each pixel ({})".format(os.path.basename(dem_path)))
     else:
         pix = (cell_ft / k) if cell_ft and cell_ft > 0 else max(med / 2.0, 1e-6)
         width = int(np.ceil((xmax - xmin) / pix))
         height = int(np.ceil((ymax - ymin) / pix))
         bounds = (xmin, ymin + height * pix, xmin + width * pix, ymin)
         c0 = r0 = 0
+        basis = DEPTH_BASIS_CELL_MIN
         notes.append("no terrain raster: depth = max water surface - cell minimum elevation "
                      "(deepest point of each cell), {:.1f} ft pixels".format(pix * k))
+        notes.append(CELL_MIN_WARNING)
     if width * height > 400e6:
         raise RasImportError("output grid of {:,} x {:,} pixels is too large - give a "
                              "coarser cell size".format(width, height))
@@ -533,36 +594,379 @@ def import_plan(hdf_path, out_folder, dem_path=None, cell_ft=0.0, breach_hr=0.0,
     src, lname, tmp_files = _open_points(os.path.join(out_folder, "_cells"), cells, wkt)
     if src is None:
         raise RasImportError("the cell centres could not be written for gridding")
+    series = any(a[3] for a in areas)
     grids = {}
     old = gdal.GetConfigOption("GDAL_NUM_THREADS")
     gdal.SetConfigOption("GDAL_NUM_THREADS", "ALL_CPUS")
     try:
-        fields = ["wse", "vel", "arr", "peak"] + ([] if dem is not None else ["zmin"])
+        fields = ["wse", "vel", "peak"] + ([] if dem is not None else ["zmin"]) + \
+            (["cid"] if series else [])
         for i, f in enumerate(fields):
-            if f in ("vel", "arr", "peak") and not np.isfinite(cells[f]).any():
+            if f in ("vel", "peak") and not np.isfinite(cells[f]).any():
                 continue
             if progress:
-                progress(50.0 + 30.0 * i / len(fields), "Gridding {}...".format(f))
+                progress(50.0 + 25.0 * i / len(fields), "Gridding {}...".format(f))
             dst = os.path.join(out_folder, "_grid_{}.tif".format(f))
-            _grid(src, dst, f, bounds, width, height, radius, wkt, lname)
+            _grid(src, dst, f, bounds, width, height, radius, wkt, lname, float64=f == "cid")
             grids[f] = dst
     finally:
         src = None
         gdal.SetConfigOption("GDAL_NUM_THREADS", old)
-    paths = _finish(out_folder, grids, dem, (c0, r0, width, height), k, progress)
+    ground = os.path.join(out_folder, "_grid_ground.tif") if series else None
+    paths = _finish(out_folder, grids, dem, (c0, r0, width, height), k, progress,
+                    arrival_ft=arrival_ft, ground=ground)
+    if series:
+        if progress:
+            progress(90.0, "Arrival times...")
+        h = open_hdf(hdf_path)
+        try:
+            arr_path, n_fb = _arrival_from_series(h, areas, grids["cid"], ground,
+                                                  grids.get("peak"), out_folder, k,
+                                                  breach_hr, arrival_ft, progress)
+        finally:
+            h.close()
+        paths["arr"] = arr_path
+        if n_fb:
+            notes.append("{:,} pixels reach the arrival depth only between output steps; their "
+                         "arrival is the cell's time of the maximum".format(n_fb))
+        tmp_files.append(ground)
     for p in tmp_files + list(grids.values()):
         try:
             os.remove(p)
         except OSError:
             pass
     dem = None
+    source = os.path.abspath(dem_path) if dem_path else os.path.abspath(hdf_path)
+    _write_basis(out_folder, basis, source, hdf_path, arrival_ft, breach_hr, notes)
     return {"paths": paths, "lines": lines, "notes": notes, "info": info,
-            "pixel_ft": pix * k}
+            "pixel_ft": pix * k, "depth_basis": basis, "depth_source": source}
 
 
-def _finish(folder, grids, dem, win, k, progress=None, rows=512):
+def _write_basis(folder, basis, source, hdf_path, arrival_ft, breach_hr, notes, extra=None):
+    """depth_basis.json next to the rasters (what depth / arrival are measured from)."""
+    rec = {"depth_basis": basis, "depth_source": source, "plan": os.path.abspath(hdf_path),
+           "arrival_ft": float(arrival_ft), "breach_hr": float(breach_hr),
+           "arrival_method": "per pixel: first time the cell's water surface series minus the "
+                             "pixel's ground reaches arrival_ft (interpolated between output "
+                             "steps; between-steps only: the cell's time of the maximum)"
+           if basis != DEPTH_BASIS_RUNNER else "the Runner's arrival raster (same basis)",
+           "written": time.strftime("%Y-%m-%d %H:%M:%S"), "notes": list(notes)}
+    rec.update(extra or {})
+    try:
+        with open(os.path.join(folder, BASIS_FILE), "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, indent=1)
+    except OSError:
+        pass                                    # the rasters are the result
+
+
+def _pixel_first_reach(ws, t_hr, pick, ground, thr, batch=None):
+    """2.31.1 (= the Runner's hecras._first_reach per point, 3.10.79): per pixel, the first
+    time (hours, the times' clock) the depth ws[:, pick[i]] - ground[i] reaches thr,
+    interpolated between output steps; NaN when no output step reaches it.
+    ws: (T, m) water surface series (ft), t_hr: (T,), pick: (p,) column of each pixel,
+    ground: (p,) ft."""
+    pick = np.asarray(pick, dtype=np.int64)
+    ground = np.asarray(ground, dtype=np.float64)
+    t_hr = np.asarray(t_hr, dtype=np.float64)
+    out = np.full(pick.size, np.nan)
+    nt = ws.shape[0]
+    batch = batch or max(1, int(1.0e7 // max(1, nt)))
+    for b0 in range(0, pick.size, batch):
+        b1 = min(pick.size, b0 + batch)
+        d = ws[:, pick[b0:b1]] - ground[None, b0:b1]
+        with np.errstate(invalid="ignore"):
+            hit = d >= thr
+        anyh = hit.any(axis=0)
+        if not anyh.any():
+            continue
+        cols = np.flatnonzero(anyh)
+        j = hit[:, cols].argmax(axis=0)
+        d1, t1 = d[j, cols], t_hr[j]
+        jm = np.maximum(j - 1, 0)
+        d0, t0 = d[jm, cols], t_hr[jm]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            frac = np.where(np.isfinite(d0) & (d1 > d0) & (j > 0), (thr - d0) / (d1 - d0), 1.0)
+        out[b0 + cols] = np.where(j > 0, t0 + np.clip(frac, 0.0, 1.0) * (t1 - t0), t1)
+    return out
+
+
+def _arrival_from_series(h, areas, cid_path, ground_path, peak_path, folder, k, breach_hr,
+                         arrival_ft, progress=None, rows=512):
+    """2.31.1: Arrival_hr.tif per pixel from its cell's water surface series and the
+    pixel's ground (_finish wrote the ground where depth >= arrival_ft, NoData elsewhere),
+    so arrival and Depth_ft.tif have the same basis. Pixels the output steps never reach
+    (the maximum falls between steps) get the cell's time of the maximum.
+    areas: [(name, first global cell index, cells, has series)]. Returns (path, count of
+    those pixels)."""
+    from osgeo import gdal
+    from .helpers import prepare_output_path
+    cds, gds = gdal.Open(cid_path), gdal.Open(ground_path)
+    w, hgt = cds.RasterXSize, cds.RasterYSize
+    p = prepare_output_path(os.path.join(folder, OUT_NAMES["arr"]))
+    out = gdal.GetDriverByName("GTiff").Create(
+        p, w, hgt, 1, gdal.GDT_Float32, ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"])
+    if out is None:
+        raise RasImportError("{} could not be created".format(p))
+    out.SetGeoTransform(cds.GetGeoTransform())
+    out.SetProjection(cds.GetProjection())
+    ob = out.GetRasterBand(1)
+    ob.SetNoDataValue(NODATA)
+    for y0 in range(0, hgt, rows):
+        ob.WriteArray(np.full((min(rows, hgt - y0), w), NODATA, dtype=np.float32), 0, y0)
+
+    def strip(ds, y0, hh):
+        a = ds.GetRasterBand(1).ReadAsArray(0, y0, w, hh).astype(np.float64)
+        a[a == NODATA] = np.nan
+        return a
+    times = h.read(TSERIES + "/Time").astype(np.float64).ravel() * 24.0
+    chunks = []
+    for name, g0, n, ser in areas:
+        if not ser:
+            continue
+        tsp = "{}/2D Flow Areas/{}/Water Surface".format(TSERIES, name)
+        step = max(1, int(4.0e7 // max(1, h.shape(tsp)[0])))
+        chunks += [(tsp, g0, i0, min(n, i0 + step)) for i0 in range(0, n, step)]
+    for ci, (tsp, g0, i0, i1) in enumerate(chunks):
+        ws = h.read(tsp, cols=(i0, i1)).astype(np.float64) * k
+        lo, hi = g0 + i0, g0 + i1
+        for y0 in range(0, hgt, rows):
+            hh = min(rows, hgt - y0)
+            cid, gr = strip(cds, y0, hh), strip(gds, y0, hh)
+            with np.errstate(invalid="ignore"):
+                m = np.isfinite(gr) & np.isfinite(cid) & (cid >= lo) & (cid < hi)
+            if not m.any():
+                continue
+            a = _pixel_first_reach(ws, times[:ws.shape[0]], np.rint(cid[m]).astype(np.int64) - lo,
+                                   gr[m], arrival_ft)
+            cur = ob.ReadAsArray(0, y0, w, hh)
+            v = cur[m]
+            ok = np.isfinite(a)
+            v[ok] = np.maximum(a[ok] - breach_hr, 0.0)
+            cur[m] = v
+            ob.WriteArray(cur.astype(np.float32), 0, y0)
+        if progress:
+            progress(90.0 + 9.0 * (ci + 1) / len(chunks), "Arrival times...")
+    # reached only between output steps: the cell's time of the maximum (as the Runner)
+    starts = np.array([a[1] for a in areas], dtype=np.float64)
+    ser = np.array([bool(a[3]) for a in areas])
+    pds = gdal.Open(peak_path) if peak_path else None
+    n_fb = 0
+    for y0 in range(0, hgt, rows):
+        hh = min(rows, hgt - y0)
+        cid, gr = strip(cds, y0, hh), strip(gds, y0, hh)
+        cur = ob.ReadAsArray(0, y0, w, hh)
+        with np.errstate(invalid="ignore"):
+            m = np.isfinite(gr) & np.isfinite(cid) & (cur == NODATA)
+        if not m.any():
+            continue
+        ai = np.clip(np.searchsorted(starts, cid[m], side="right") - 1, 0, len(areas) - 1)
+        mm = np.zeros_like(m)
+        mm[m] = ser[ai]
+        if pds is not None and mm.any():
+            pk = strip(pds, y0, hh)
+            fill = mm & np.isfinite(pk)
+            cur[fill] = pk[fill]
+            n_fb += int(fill.sum())
+            ob.WriteArray(cur.astype(np.float32), 0, y0)
+    ob.FlushCache()
+    path = out.GetDescription()
+    out = ob = cds = gds = pds = None
+    return path, n_fb
+
+
+def _runner_candidates(hdf_path, runner_dirs=None):
+    """Folders that may hold the Runner's rasters of this plan: the given ones, then the
+    plan's folder and up to three above it (the plan copy is <dam>/_hecras/<plan>.hdf)."""
+    out, d = [], os.path.dirname(os.path.abspath(hdf_path))
+    for x in list(runner_dirs or []):
+        if x and os.path.isdir(x):
+            out.append(os.path.abspath(x))
+    for _ in range(4):
+        out.append(d)
+        up = os.path.dirname(d)
+        if up == d:
+            break
+        d = up
+    seen, res = set(), []
+    for x in out:
+        key = os.path.normcase(os.path.realpath(x))
+        if key not in seen:
+            seen.add(key)
+            res.append(x)
+    return res
+
+
+def _same_plan(a, b):
+    """The same plan results file: the same file, or a copy (same name and content)."""
+    try:
+        if not (a and b and os.path.isfile(a) and os.path.isfile(b)):
+            return False
+        if os.path.samefile(a, b):
+            return True
+        if os.path.basename(a).lower() != os.path.basename(b).lower() or \
+                os.path.getsize(a) != os.path.getsize(b):
+            return False
+        sa, sb = _content_sig(a), _content_sig(b)   # nd: [size, mtime, md5] - a copy has
+        return sa[0] == sb[0] and sa[-1] == sb[-1]   # its own mtime, so size + md5 only
+    except (OSError, ValueError):
+        return False
+
+
+def _load_json(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def find_runner_rasters(hdf_path, runner_dirs=None):
+    """2.31.1: ND Dam Breach Runner rasters of this plan whose depth is from the terrain,
+    or None. Looked for in runner_dirs and the plan's folder and above:
+      1. the newest <dam>/_hecras/reexport_*/ whose reexport.json has depth_basis
+         'terrain' and results_hdf = this plan (DamSafety Runner 3.10.79 hecras-reexport;
+         ND Dam Breach Runner 3.21.1 writes no re-export folder, so this is a no-op there)
+      2. the dam folder's final rasters when _hecras/hecras_stage.json has depth_basis
+         'terrain' and results_hdf = this plan, and the depth raster is not newer than it
+         (a later model run would have replaced it)
+    Returns {"folder", "files": {depth, vel, arr, wse: path or None}, "json", "kind",
+    "t0_hr", "arrival_depth_ft"}."""
+    if not hdf_path or not os.path.isfile(hdf_path):
+        return None
+    for d in _runner_candidates(hdf_path, runner_dirs):
+        hec = os.path.join(d, "_hecras")
+        if not os.path.isdir(hec):
+            continue
+        try:
+            subs = sorted((n for n in os.listdir(hec) if n.startswith("reexport_")),
+                          reverse=True)
+        except OSError:
+            subs = []
+        for n in subs:
+            f = os.path.join(hec, n)
+            rep = _load_json(os.path.join(f, RUNNER_REEXPORT_JSON))
+            if rep.get("depth_basis") != DEPTH_BASIS_TERRAIN or \
+                    not _same_plan(rep.get("results_hdf"), hdf_path):
+                continue
+            files = _runner_files(f)
+            if files:
+                return {"folder": f, "files": files, "kind": "reexport",
+                        "json": os.path.join(f, RUNNER_REEXPORT_JSON),
+                        "t0_hr": rep.get("t0_hr"),
+                        "arrival_depth_ft": rep.get("arrival_depth_ft")}
+        stage_p = os.path.join(d, RUNNER_STAGE)
+        st = _load_json(stage_p)
+        if st.get("depth_basis") == DEPTH_BASIS_TERRAIN and \
+                _same_plan(st.get("results_hdf"), hdf_path):
+            files = _runner_files(d)
+            try:
+                fresh = files and os.path.getmtime(files["depth"]) <= \
+                    os.path.getmtime(stage_p) + 5.0
+            except OSError:
+                fresh = False
+            if fresh:
+                return {"folder": d, "files": files, "kind": "stage", "json": stage_p,
+                        "t0_hr": st.get("t0_hr"),
+                        "arrival_depth_ft": st.get("arrival_depth_ft")}
+    return None
+
+
+def _runner_files(folder):
+    files = {k: os.path.join(folder, n) for k, n in RUNNER_NAMES.items()}
+    files = {k: (p if os.path.isfile(p) else None) for k, p in files.items()}
+    return files if files.get("depth") else None
+
+
+def _runner_sig(found):
+    """What plan_key keeps of the Runner rasters used (a new re-export: a new key)."""
+    if not found:
+        return None
+    out = [found["kind"], os.path.normcase(os.path.abspath(found["json"]))]
+    for k in sorted(found["files"]):
+        p = found["files"][k]
+        if p:
+            st = os.stat(p)
+            out.append([k, int(st.st_size), int(st.st_mtime)])
+    return out
+
+
+def _import_runner(hdf_path, out_folder, found, breach_hr, arrival_ft):
+    """2.31.1: the Runner's terrain-based rasters as the plan import result (copied to the
+    plugin's names; ft, ft/s; arrival moved from the Runner's t0 to the breach start)."""
+    from osgeo import gdal, osr
+    from .helpers import prepare_output_path
+    os.makedirs(out_folder, exist_ok=True)
+    notes, paths = [], {}
+    t0 = found.get("t0_hr")
+    t0 = float(t0) if t0 is not None else None
+    for key, src in found["files"].items():
+        if not src:
+            continue
+        dst = prepare_output_path(os.path.join(out_folder, OUT_NAMES[key]))
+        ds = gdal.Open(src)
+        b = ds.GetRasterBand(1)
+        a = b.ReadAsArray().astype(np.float64)
+        nd = b.GetNoDataValue()
+        bad = ~np.isfinite(a) | ((a == nd) if nd is not None else False)
+        if key == "arr" and t0 is not None:
+            # Runner: hours after its t0 (h of simulation time); here: after breach_hr
+            a = np.maximum(a + t0 - float(breach_hr), 0.0)
+        o = gdal.GetDriverByName("GTiff").Create(
+            dst, ds.RasterXSize, ds.RasterYSize, 1, gdal.GDT_Float32,
+            ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"])
+        o.SetGeoTransform(ds.GetGeoTransform())
+        o.SetProjection(ds.GetProjection())
+        o.GetRasterBand(1).SetNoDataValue(NODATA)
+        o.GetRasterBand(1).WriteArray(np.where(bad, NODATA, a).astype(np.float32))
+        o.FlushCache()
+        paths[key] = o.GetDescription()
+        o = None
+        if key == "depth":
+            gt, wkt = ds.GetGeoTransform(), ds.GetProjection()
+        ds = None
+    unit = 1.0
+    try:
+        sr = osr.SpatialReference()
+        sr.ImportFromWkt(wkt)
+        unit = float(sr.GetLinearUnits() or 1.0)
+    except Exception:
+        pass
+    pixel_ft = abs(gt[1]) * unit / 0.3048
+    notes.append("depth basis: runner_reexport - no terrain raster given; the ND Dam Breach "
+                 "Runner rasters of this plan with depth from the terrain are used ({})".format(
+                     found["folder"]))
+    if t0 is None:
+        notes.append("the Runner record has no t0_hr: arrival is as the Runner wrote it")
+    elif abs(t0 - float(breach_hr)) > 1e-9:
+        notes.append("arrival moved from the Runner's t0 ({:g} h) to the breach start "
+                     "({:g} h)".format(t0, float(breach_hr)))
+    rf = found.get("arrival_depth_ft")
+    if rf is not None and abs(float(rf) - float(arrival_ft)) > 1e-9:
+        notes.append("the Runner's arrival depth is {:g} ft (the {:g} ft option is not "
+                     "applied to its arrival raster)".format(float(rf), float(arrival_ft)))
+    if not paths.get("arr"):
+        notes.append("the Runner folder has no arrival raster")
+    h = open_hdf(hdf_path)
+    try:
+        info = plan_info(h)
+    finally:
+        h.close()
+    lines = ["Runner rasters ({}): {}".format(found["kind"], found["folder"])]
+    _write_basis(out_folder, DEPTH_BASIS_RUNNER, found["folder"], hdf_path, arrival_ft,
+                 breach_hr, notes, {"runner_json": found["json"], "runner_t0_hr": t0})
+    return {"paths": paths, "lines": lines, "notes": notes, "info": info,
+            "pixel_ft": pixel_ft, "depth_basis": DEPTH_BASIS_RUNNER,
+            "depth_source": found["folder"]}
+
+
+
+
+def _finish(folder, grids, dem, win, k, progress=None, rows=512, arrival_ft=0.1, ground=None):
     """Final rasters from the gridded cell values, strip by strip: depth,
-    and velocity / arrival / peak only where depth > 0."""
+    and velocity / peak only where depth > 0. 2.31.1: ground (a path) - the
+    ground (ft, terrain or cell minimum: the depth's basis) where depth >=
+    arrival_ft, for _arrival_from_series."""
     from osgeo import gdal
     c0, r0, w, h = win
     ref = gdal.Open(grids["wse"])
@@ -570,16 +974,22 @@ def _finish(folder, grids, dem, win, k, progress=None, rows=512):
     drv = gdal.GetDriverByName("GTiff")
     outs = {}
     from .helpers import prepare_output_path
-    for key in ("wse", "depth", "vel", "arr", "peak"):
-        if key in ("vel", "arr", "peak") and key not in grids:
+    for key in ("wse", "depth", "vel", "peak", "ground"):
+        if key in ("vel", "peak") and key not in grids:
             continue
-        # a copy loaded in QGIS is released first; a locked one (open in
-        # another program) gets a time-stamped name instead of failing
-        p = prepare_output_path(os.path.join(folder, OUT_NAMES[key]))
-        ds = drv.Create(p, w, h, 1, gdal.GDT_Float32,
-                        ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"])
+        if key == "ground":
+            if not ground:
+                continue
+            ds = drv.Create(ground, w, h, 1, gdal.GDT_Float64, ["TILED=YES", "COMPRESS=DEFLATE",
+                                                              "BIGTIFF=IF_SAFER"])
+        else:
+            # a copy loaded in QGIS is released first; a locked one (open in
+            # another program) gets a time-stamped name instead of failing
+            p = prepare_output_path(os.path.join(folder, OUT_NAMES[key]))
+            ds = drv.Create(p, w, h, 1, gdal.GDT_Float32,
+                            ["TILED=YES", "COMPRESS=DEFLATE", "BIGTIFF=IF_SAFER"])
         if ds is None:
-            raise RasImportError("{} could not be created".format(p))
+            raise RasImportError("{} could not be created".format(key))
         ds.SetGeoTransform(gt)
         ds.SetProjection(prj)
         ds.GetRasterBand(1).SetNoDataValue(NODATA)
@@ -603,11 +1013,14 @@ def _finish(folder, grids, dem, win, k, progress=None, rows=512):
         with np.errstate(invalid="ignore"):
             depth = wse - z
             wet = np.isfinite(depth) & (depth > 0)
+            reach = np.isfinite(depth) & (depth >= arrival_ft)
         outs["wse"].GetRasterBand(1).WriteArray(np.where(np.isfinite(wse), wse, NODATA)
                                                 .astype(np.float32), 0, y0)
         outs["depth"].GetRasterBand(1).WriteArray(np.where(wet, depth, NODATA)
                                                   .astype(np.float32), 0, y0)
-        for key in ("vel", "arr", "peak"):
+        if "ground" in outs:
+            outs["ground"].GetRasterBand(1).WriteArray(np.where(reach, z, NODATA), 0, y0)
+        for key in ("vel", "peak"):
             if key not in outs:
                 continue
             v = src[key].GetRasterBand(1).ReadAsArray(0, y0, w, hh).astype(np.float64)
@@ -615,11 +1028,12 @@ def _finish(folder, grids, dem, win, k, progress=None, rows=512):
             outs[key].GetRasterBand(1).WriteArray(np.where(ok, v, NODATA).astype(np.float32),
                                                   0, y0)
         if progress:
-            progress(80.0 + 20.0 * (y0 + hh) / h, "Writing rasters...")
+            progress(75.0 + 15.0 * (y0 + hh) / h, "Writing rasters...")
     paths = {}
     for key in list(outs):
         outs[key].FlushCache()
-        paths[key] = outs[key].GetDescription()
+        if key != "ground":
+            paths[key] = outs[key].GetDescription()
         outs[key] = None                     # closes the file (Windows keeps it locked)
     src.clear()
     ref = None
@@ -638,7 +1052,7 @@ HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
 # Bump when import_plan() writes different rasters for the same input. The
 # key also holds a digest of the conversion functions' source (_CODE_DIGEST),
 # so a changed import invalidates old caches even if this is forgotten.
-IMPORT_CODE_VERSION = "2.5.1"
+IMPORT_CODE_VERSION = "2.31.1"         # 2.31.1: per-pixel arrival, depth basis
 CACHE_FORMAT = 1
 CACHE_DIR_NAME = "HECRAS_plan_cache"
 MANIFEST = "manifest.json"
@@ -781,8 +1195,11 @@ def plan_key(path, settings=None):
             dem = ["missing", os.path.normcase(s["dem"])]
         if s["dem"].lower().endswith(".vrt"):
             dem.append(_vrt_sources_sig(s["dem"]))
+    # 2.31.1: without terrain, the Runner rasters that would be used (a new re-export of
+    # the plan: a new conversion)
+    runner = None if s["dem"] else _runner_sig(find_runner_rasters(path))
     parts = {"format": CACHE_FORMAT, "code": [IMPORT_CODE_VERSION, _CODE_DIGEST],
-             "plan": plan_sig, "dem": dem, "breach_hr": repr(s["breach_hr"]),
+             "plan": plan_sig, "dem": dem, "runner": runner, "breach_hr": repr(s["breach_hr"]),
              "arrival_ft": repr(s["arrival_ft"]),
              "cell_ft": repr(0.0 if s["dem"] else s["cell_ft"])}
     return hashlib.sha256(json.dumps(parts, sort_keys=True).encode("utf-8")).hexdigest()
@@ -807,7 +1224,9 @@ def _result(folder, manifest, cached):
     out.update({"cached": bool(cached), "folder": folder, "key": manifest.get("key"),
                 "lines": list(manifest.get("lines") or []),
                 "notes": list(manifest.get("notes") or []),
-                "pixel_ft": manifest.get("pixel_ft"), "plan": manifest.get("plan")})
+                "pixel_ft": manifest.get("pixel_ft"), "plan": manifest.get("plan"),
+                "depth_basis": manifest.get("depth_basis"),
+                "depth_source": manifest.get("depth_source")})
     return out
 
 
@@ -956,6 +1375,7 @@ def plan_to_rasters_cached(hdf_path, cache_root, settings=None, progress=None, l
         if hit is not None:
             say(">>> HEC-RAS plan {}: rasters re-used from the cache (plan and import options "
                 "unchanged) - {}".format(plan_name, final))
+            _say_basis(say, plan_name, hit)
             if progress:
                 progress(100.0, "HEC-RAS plan {}: cached rasters".format(plan_name))
             return hit
@@ -985,6 +1405,7 @@ def plan_to_rasters_cached(hdf_path, cache_root, settings=None, progress=None, l
                 "lines": [str(x) for x in res.get("lines") or []],
                 "notes": [str(x) for x in res.get("notes") or []],
                 "pixel_ft": float(res.get("pixel_ft") or 0.0),
+                "depth_basis": res.get("depth_basis"), "depth_source": res.get("depth_source"),
                 "created": time.strftime("%Y-%m-%d %H:%M:%S"), "created_ts": time.time(),
                 "seconds": round(time.time() - t0, 1)}
             path = os.path.join(tmp, MANIFEST)
@@ -1005,13 +1426,26 @@ def plan_to_rasters_cached(hdf_path, cache_root, settings=None, progress=None, l
         plan_name, manifest["seconds"], manifest["pixel_ft"], final))
     for n in manifest["notes"]:
         say("    NOTE: " + n)
-    return _result(final, manifest, False)
+    res = _result(final, manifest, False)
+    _say_basis(say, plan_name, res, warn=False)         # the warning is among the notes
+    return res
+
+
+def _say_basis(say, plan_name, res, warn=True):
+    """2.31.1: the depth basis in the log; the cell-minimum warning when it is that."""
+    b = res.get("depth_basis") or "unknown"
+    say("    HEC-RAS plan {}: depth basis {} ({})".format(plan_name, b,
+                                                       res.get("depth_source") or ""))
+    if warn and b == DEPTH_BASIS_CELL_MIN:
+        say("    " + CELL_MIN_WARNING)
 
 
 # the conversion code whose source is part of the cache key
 _CODE_FUNCS = ("plan_info", "_real_cells", "cell_velocity", "_ranges", "arrival_days",
                "read_area", "_spacing", "_write_csv", "_open_points", "_write_points", "_grid",
-               "import_plan", "_finish")
+               "import_plan", "_finish", "_write_basis", "_pixel_first_reach",
+               "_arrival_from_series", "_runner_candidates", "_same_plan", "find_runner_rasters",
+               "_runner_files", "_import_runner")
 
 
 def _code_digest():

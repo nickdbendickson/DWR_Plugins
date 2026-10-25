@@ -55,6 +55,9 @@ DEFAULT_STEP_MIN = 5.0
 MODEL_FOLDER = "_breach_model"            # where workflow.py writes the run's files
 HYDROGRAPH_CSV = "breach_hydrograph.csv"
 RUN_REPORT_JSON = "run_report.json"
+# 3.21.1: what an imported depth / arrival is measured from
+DEPTH_BASIS_TERRAIN = "terrain"     # WSE minus the terrain under each grid cell (terrain_depth)
+DEPTH_BASIS_CELL_MIN = "cell_min"   # WSE minus the HEC cell's minimum elevation (read_mesh)
 
 BASIS_EST = "Plugin estimate"
 BASIS_USER = "Your input"
@@ -606,6 +609,8 @@ class Mesh:
         self.info = info
         self.crs_wkt = crs_wkt
         self._nn = None
+        self.raw = {}                 # 3.21.1: unmasked per-cell values (terrain_depth)
+        self._series = None           # (dataset, times h, file->ft factor) while the file is open
 
     @property
     def n(self):
@@ -720,45 +725,66 @@ def _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival):
                      "Cell Indexes', or a per-cell maximum velocity); no velocity raster.")
 
     # time of the maximum, and the arrival time from the time series
+    tmax = None
     if t_max_raw is not None:
-        fields["time_of_max"] = masked(_clean(t_max_raw[:n]) * _time_factor_hr(
-            cat, lay["max_wse"][0], lay["max_wse"][1]))
-    if want_arrival and lay["ts_wse"] is not None and lay["ts_time"] is not None:
+        tmax = _clean(t_max_raw[:n]) * _time_factor_hr(cat, lay["max_wse"][0], lay["max_wse"][1])
+        fields["time_of_max"] = masked(tmax)
+    series = None
+    if lay["ts_wse"] is not None and lay["ts_time"] is not None:
         tobj = lay["ts_time"]
         t_hr = np.asarray(_read(tobj[1]), dtype=np.float64).reshape(-1) * _time_factor_hr(
             cat, tobj[0], tobj[1])
         sh = lay["ts_wse"][1].shape
         if len(sh) == 2 and sh[0] == len(t_hr) and sh[1] >= n:
-            thr = float(arrival_depth_ft) / _unit_factor(u_wse)
-            arr = _first_reach(lay["ts_wse"][1], t_hr, elev_raw * _unit_factor(u_elev)
-                               / _unit_factor(u_wse), thr, n) - float(t0_hr)
-            fields["arrival"] = masked(np.clip(arr, 0.0, None))
-            used["arrival"] = lay["ts_wse"][0]
-        else:
+            series = (lay["ts_wse"][1], t_hr, _unit_factor(u_wse))
+            used["series"] = lay["ts_wse"][0]
+        elif want_arrival:
             notes.append("The Water Surface time series has shape {} for {} times and {} "
                          "cells; no arrival time.".format(sh, len(t_hr), n))
-    elif want_arrival:
+    if want_arrival and series is not None:
+        ts, t_hr, fac = series
+        thr = float(arrival_depth_ft) / fac
+        arr = _first_reach(ts, t_hr, elev / fac, thr, n) - float(t0_hr)
+        fields["arrival"] = masked(np.clip(arr, 0.0, None))
+        used["arrival"] = lay["ts_wse"][0]
+    elif want_arrival and (lay["ts_wse"] is None or lay["ts_time"] is None):
         notes.append("No Water Surface time series in the file: no arrival time (the time "
                      "of the maximum is written instead when it exists).")
     info = {"area": lay["area"], "areas": lay["areas"], "n_cells": n, "units": u_wse,
             "used": used, "notes": notes, "arrival_depth_ft": float(arrival_depth_ft),
-            "t0_hr": float(t0_hr)}
+            "t0_hr": float(t0_hr), "depth_basis": DEPTH_BASIS_CELL_MIN}
     crs = None
     for k, v in cat.group_attrs.get("", {}).items():
         if _norm(k) in ("projection", "projection wkt", "crs"):
             crs = _text(v) or None
-    return Mesh(x, y, fields, info, crs)
+    mesh = Mesh(x, y, fields, info, crs)
+    mesh.raw = {"wse": wse, "min_elev": elev}
+    if vel is not None:
+        mesh.raw["velocity"] = vel
+    if tmax is not None:
+        mesh.raw["time_of_max"] = tmax
+    mesh._series = series
+    return mesh
 
 
-def _first_reach(ts, t_hr, elev, thr, n):
+def _first_reach(ts, t_hr, elev, thr, n, cols=None, rows=None):
     """Per cell the first time (hours) the depth (water surface minus `elev`) reaches `thr`,
-    interpolated between output steps; NaN when it never does. Reads a few rows at a time."""
+    interpolated between output steps; NaN when it never does. Reads a few rows at a time.
+
+    3.21.1: with `cols` (cell index per point), per POINT instead: the series of cell
+    cols[i] minus elev[i] (the terrain under a grid cell), so `elev` has len(cols) values."""
     nt = ts.shape[0]
-    out = np.full(n, np.nan)
-    rows = max(2, int(4_000_000 // max(n, 1)))
+    pick = None if cols is None else np.asarray(cols, dtype=np.int64)
+    out = np.full(n if pick is None else len(pick), np.nan)
+    if not len(out):
+        return out
+    rows = rows or max(2, int(4_000_000 // max(n, 1)))
     prev_d, prev_t = None, None
     for i in range(0, nt, rows):
-        blk = _clean(np.asarray(ts[i:i + rows, :n], dtype=np.float64)) - elev[None, :]
+        blk = _clean(np.asarray(ts[i:i + rows, :n], dtype=np.float64))
+        if pick is not None:
+            blk = blk[:, pick]
+        blk = blk - elev[None, :]
         tt = t_hr[i:i + rows]
         if prev_d is not None:
             blk = np.vstack([prev_d[None, :], blk])
@@ -926,7 +952,18 @@ def grid_spec(mesh, cell_size=None, extent=None):
 def rasterise(mesh, x0, ytop, dx, nx, ny, names=None, reach=0.75, block=400000):
     """Fields of the mesh on a regular grid by nearest cell centre. A grid cell farther than
     `reach` x the spacing of the nearest cell (the cell's distance to its own nearest
-    neighbour) from every centre is outside the mesh: NaN. Returns {name: (ny, nx)}.
+    neighbour) from every centre is outside the mesh: NaN. Returns {name: (ny, nx)}."""
+    cell = cell_index(mesh, x0, ytop, dx, nx, ny, reach=reach, block=block)
+    ok = cell >= 0
+    ci = np.maximum(cell, 0)
+    names = [k for k in (names or list(mesh.fields)) if k in mesh.fields]
+    return {k: np.where(ok, mesh.fields[k][ci], np.nan) for k in names}
+
+
+def cell_index(mesh, x0, ytop, dx, nx, ny, reach=0.75, block=400000):
+    """(ny, nx) index of the nearest mesh cell centre for each grid cell, -1 outside the mesh
+    (farther than `reach` x that cell's own neighbour spacing). Raises HecRasError when the
+    mesh does not overlap the grid.
 
     Two passes keep empty parts of the grid cheap: first every cell within 1.5 x the typical
     reach, then, for what is left, only the cells whose own reach is larger (coarse cells)."""
@@ -940,8 +977,7 @@ def rasterise(mesh, x0, ytop, dx, nx, ny, names=None, reach=0.75, block=400000):
         tiers.append((big, min(float(radius[big].max()), cap)))
     hashes = [SpatialHash(mesh.x[ids], mesh.y[ids], 2.0 * float(np.median(nn[ids])))
               for ids, _ in tiers]
-    names = [k for k in (names or list(mesh.fields)) if k in mesh.fields]
-    out = {k: np.full((ny, nx), np.nan) for k in names}
+    out = np.full((ny, nx), -1, dtype=np.int64)
     xs = x0 + (np.arange(nx) + 0.5) * dx
     rows = max(1, block // max(nx, 1))
     covered = 0
@@ -960,11 +996,8 @@ def rasterise(mesh, x0, ytop, dx, nx, ny, names=None, reach=0.75, block=400000):
             todo = todo[~ok]
             if not len(todo):
                 break
-        ok = cell >= 0
-        covered += int(ok.sum())
-        for k in names:
-            v = np.where(ok, mesh.fields[k][np.maximum(cell, 0)], np.nan)
-            out[k][r0:r1_, :] = v.reshape(r1_ - r0, nx)
+        covered += int((cell >= 0).sum())
+        out[r0:r1_, :] = cell.reshape(r1_ - r0, nx)
     if not covered:
         raise HecRasError("The mesh does not overlap the grid (mesh x {:.1f} to {:.1f}, y "
                           "{:.1f} to {:.1f}; grid x {:.1f} to {:.1f}, y {:.1f} to {:.1f}). "
@@ -975,6 +1008,142 @@ def rasterise(mesh, x0, ytop, dx, nx, ny, names=None, reach=0.75, block=400000):
 
 
 FIELD_NAMES = ("depth", "wse", "velocity", "arrival", "time_of_max")
+
+
+# ============================================================================
+# 3.21.1: depth on the terrain of each grid cell (not the HEC cell's minimum)
+# ============================================================================
+def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
+                  arrival_depth_ft=1.0, t0_hr=0.0, wet_ft=0.01, to_grid_xy=None,
+                  want_arrival=True, reach=0.75):
+    """The HEC-RAS maxima on a regular grid with depth from the terrain under each GRID cell.
+
+    `terrain_ft` (ny, nx): the ground (ft) of each grid cell, e.g. the HEC-RAS terrain
+    averaged onto the grid (gdal_io.read_like(path, grid, 'average')). Each grid cell takes the water
+    surface of its nearest HEC-RAS cell centre (the cell's WSE held flat over the cell, as
+    RAS Mapper's default 'horizontal' surface), then
+
+        depth   = max(0, WSE_max(cell) - terrain(grid cell))
+        wet     = depth >= wet_ft             (every field is NaN where not wet)
+        arrival = first time WSE(cell, t) - terrain(grid cell) >= arrival_depth_ft, minus
+                  t0_hr (interpolated between output steps), from the Water Surface series
+
+    so a 150 ft cell with a ditch is deep only over the ditch: its dry high ground stays dry
+    (read_mesh's depth is WSE minus the cell's MINIMUM elevation, the ditch bottom, over the
+    whole cell). Where the terrain has no data inside the mesh the cell's minimum elevation
+    is used (counted in the notes). to_grid_xy maps the HEC-RAS cell centres into the grid's
+    CRS (None: the same). Returns ({name: (ny, nx)} in ft, ft, ft/s, h; info) with
+    info['old'] the cell-minimum depth on the same grid for comparison."""
+    terrain_ft = np.asarray(terrain_ft, dtype=np.float64)
+    if terrain_ft.shape != (ny, nx):
+        raise HecRasError("the terrain is {} but the grid is {}".format(
+            terrain_ft.shape, (ny, nx)))
+    f, close = _open_hdf(hdf)
+    try:
+        mesh = _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, False)
+        if to_grid_xy is not None:
+            xy = np.asarray(to_grid_xy(np.column_stack([mesh.x, mesh.y])), dtype=float)
+            mesh.x, mesh.y = xy[:, 0], xy[:, 1]
+            mesh._nn = None
+        cell = cell_index(mesh, x0, ytop, dx, nx, ny, reach=reach)
+        inside = cell >= 0
+        ci = np.maximum(cell, 0)
+        raw = mesh.raw
+        wse = np.where(inside, raw["wse"][ci], np.nan)
+        no_terrain = inside & ~np.isfinite(terrain_ft)
+        ground = np.where(no_terrain, raw["min_elev"][ci], terrain_ft)
+        with np.errstate(invalid="ignore"):
+            depth = np.clip(wse - ground, 0.0, None)
+            wet = np.isfinite(depth) & (depth >= wet_ft)
+            old = np.where(inside, np.clip(raw["wse"][ci] - raw["min_elev"][ci], 0.0, None),
+                           np.nan)
+        out = {"depth": np.where(wet, depth, np.nan), "wse": np.where(wet, wse, np.nan)}
+        for k in ("velocity", "time_of_max"):
+            if k in raw:
+                out[k] = np.where(wet, raw[k][ci], np.nan)
+        info = dict(mesh.info)
+        notes = list(info["notes"])
+        if want_arrival and mesh._series is not None:
+            ts, t_hr, fac = mesh._series
+            with np.errstate(invalid="ignore"):
+                reach_px = np.flatnonzero((wet & (depth >= float(arrival_depth_ft))).ravel())
+            arr = np.full(ny * nx, np.nan)
+            if len(reach_px):
+                t = _first_reach(ts, t_hr, ground.ravel()[reach_px] / fac,
+                                 float(arrival_depth_ft) / fac, mesh.n,
+                                 cols=ci.ravel()[reach_px])
+                # the max WSE is kept every computation step, the series only every output
+                # step: a pixel whose max depth reaches the arrival depth between two output
+                # steps takes the cell's time of the max, so arrival follows the depth mask
+                missed = ~np.isfinite(t)
+                if missed.any() and "time_of_max" in raw:
+                    t[missed] = raw["time_of_max"][ci.ravel()[reach_px][missed]]
+                    n_tmax = int(np.isfinite(t[missed]).sum())
+                    if n_tmax:
+                        notes.append("{:,} grid cells reach the arrival depth only between "
+                                     "output steps; their arrival is the cell's time of the "
+                                     "maximum.".format(n_tmax))
+                arr[reach_px] = np.clip(t - float(t0_hr), 0.0, None)
+            out["arrival"] = arr.reshape(ny, nx)
+            info["used"] = dict(info["used"], arrival=info["used"].get("series"))
+        elif want_arrival:
+            notes.append("No usable Water Surface time series in the file: no arrival time.")
+        if no_terrain.any():
+            notes.append("{:,} grid cells inside the mesh have no terrain; the HEC-RAS cell's "
+                         "minimum elevation was used there.".format(int(no_terrain.sum())))
+        info.update({"notes": notes, "depth_basis": DEPTH_BASIS_TERRAIN,
+                     "no_terrain_cells": int(no_terrain.sum()), "old": old,
+                     "inside_cells": int(inside.sum())})
+        return out, info
+    finally:
+        close()
+
+
+CELL_MIN_WARNING = ("Depth and arrival are from the HEC-RAS cell's MINIMUM elevation (no "
+                    "terrain given): a cell with a ditch or channel in it is that deep over the "
+                    "whole cell, so the wet area and the arrival are overstated. Give the "
+                    "HEC-RAS terrain (or the DEM) for depth on the ground of each grid cell.")
+DEPTH_BASIS_JSON = "hecras_depth_basis.json"
+
+
+def import_on_grid(hdf, x0, ytop, dx, nx, ny, terrain_ft=None, area=None, mesh=None,
+                   reach=0.75, **kw):
+    """3.21.1: the HEC-RAS maxima on a grid, depth and arrival on ONE basis.
+
+    With `terrain_ft` ((ny, nx) ground in ft): terrain_depth - depth = WSE - terrain of the
+    grid cell, the wet mask and the arrival from that same depth (info depth_basis
+    'terrain'). Without: read_mesh's cell-minimum depth / arrival by nearest cell (an
+    already read `mesh` is used), depth_basis 'cell_min' and CELL_MIN_WARNING in the notes.
+    kw: units, arrival_depth_ft, t0_hr, wet_ft. Returns ({name: (ny, nx)}, info)."""
+    if terrain_ft is not None:
+        out, info = terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=area,
+                                  reach=reach, **kw)
+        info = dict(info)
+        info.pop("old", None)
+        return out, info
+    if mesh is None:
+        mesh = read_mesh(hdf, area=area, **kw)
+    out = rasterise(mesh, x0, ytop, dx, nx, ny, reach=reach)
+    info = dict(mesh.info)
+    info["notes"] = list(info["notes"]) + [CELL_MIN_WARNING]
+    info["depth_basis"] = DEPTH_BASIS_CELL_MIN
+    return out, info
+
+
+def write_depth_basis(out_dir, info, hdf, terrain_path=None):
+    """3.21.1: <out_dir>/hecras_depth_basis.json - what the imported depth / arrival are
+    measured from (terrain / cell_min), the plan and the terrain used."""
+    import json
+    rec = {"depth_basis": info.get("depth_basis"), "results_hdf": os.path.abspath(hdf),
+           "terrain": os.path.abspath(terrain_path) if terrain_path else None,
+           "arrival_depth_ft": info.get("arrival_depth_ft"), "t0_hr": info.get("t0_hr"),
+           "area": info.get("area"), "units": info.get("units"),
+           "no_terrain_cells": info.get("no_terrain_cells")}
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, DEPTH_BASIS_JSON)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(rec, fh, indent=1)
+    return path
 
 
 def to_grids(mesh, cell_size=None, extent=None, crs_wkt=None):

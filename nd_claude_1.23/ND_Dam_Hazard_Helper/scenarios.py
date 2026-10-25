@@ -132,6 +132,8 @@ class Scenario(object):
         self.plan_rasters = {k: res.get(k) for k in ("depth", "vel", "arr", "wse", "peak",
                                                      "folder", "key", "cached")}
         self.plan_rasters["notes"] = list(res.get("notes") or [])
+        # 2.31.1: terrain / runner_reexport / cell_min (rasimport.DEPTH_BASIS_*)
+        self.plan_rasters["depth_basis"] = res.get("depth_basis")
         return res
 
     @property
