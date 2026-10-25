@@ -593,7 +593,7 @@ def limit_faces(points, perimeter, cell, protected=None, max_faces=MAX_FACES, pa
     removed = 0
     left = 0
     for _ in range(passes):
-        vor = Voronoi(pts)
+        vor = centred_voronoi(pts)
         rp = vor.ridge_points
         cnt = np.bincount(rp.ravel(), minlength=len(pts))
         bad = np.nonzero(inner & (cnt > max_faces))[0]
@@ -612,10 +612,29 @@ def limit_faces(points, perimeter, cell, protected=None, max_faces=MAX_FACES, pa
         keep[list(drop)] = False
         pts, prot, inner = pts[keep], prot[keep], inner[keep]
         removed += len(drop)
-    vor = Voronoi(pts)
+    vor = centred_voronoi(pts)
     cnt = np.bincount(vor.ridge_points.ravel(), minlength=len(pts))
     left = int((inner & (cnt > max_faces)).sum())
     return pts, removed, left
+
+
+class _CentredVoronoi:
+    """scipy Voronoi of points shifted by -origin, with its vertices shifted back (qhull's
+    round-off at state-plane coordinates otherwise decides near-degenerate faces)."""
+
+    def __init__(self, points, origin):
+        from scipy.spatial import Voronoi
+        o = np.asarray(origin, float)
+        v = Voronoi(np.asarray(points, float) - o)
+        self.vertices = v.vertices + o
+        self.regions, self.point_region = v.regions, v.point_region
+        self.ridge_points, self.ridge_vertices = v.ridge_points, v.ridge_vertices
+
+
+def centred_voronoi(points):
+    """_CentredVoronoi on the points' bounding-box centre (3.10.82)."""
+    p = np.asarray(points, float).reshape(-1, 2)
+    return _CentredVoronoi(p, 0.5 * (p.min(axis=0) + p.max(axis=0)))
 
 
 def voronoi_precheck(points, perimeter, max_faces=MAX_FACES, clip=None, max_cells_per_fp=8,
@@ -637,7 +656,11 @@ def voronoi_precheck(points, perimeter, max_faces=MAX_FACES, clip=None, max_cell
     pad = 10.0 * float(max(hi - lo))
     frame = np.array([[lo[0] - pad, lo[1] - pad], [hi[0] + pad, lo[1] - pad],
                       [hi[0] + pad, hi[1] + pad], [lo[0] - pad, hi[1] + pad]])
-    vor = Voronoi(np.vstack([pts, frame]))
+    # 3.10.82 (#170, DWR-2801): qhull works on coordinates centred on the perimeter. In state
+    # plane feet (2.7e6) its round-off is about 1e-3 ft, so a near-cocircular quad's face of
+    # 0.0006 ft came and went with the 7th decimal: the build passed 8 faces and the written
+    # .g01 had a 9-face cell. Centred, the count is stable (and what HEC-RAS gets).
+    vor = _CentredVoronoi(np.vstack([pts, frame]), 0.5 * (lo + hi))
     vin = inside(vor.vertices[:, 0], vor.vertices[:, 1], per)
     sides = np.zeros(len(pts), np.int64)
     pieces = np.ones(len(pts), np.int64)
@@ -779,7 +802,7 @@ def perimeter_bad(chk):
     return chk["split_cells"] + chk["short_perimeter_faces"] + chk["perimeter_corners_near_edge"]
 
 
-FACE_DROP = "short"         # 3.10.81: over-faced unprotected cell: drop the neighbour across
+FACE_DROP = "short"         # 3.10.82: over-faced unprotected cell: drop the neighbour across
                             # its shortest face ("self": the cell itself, as before)
 
 
@@ -810,12 +833,12 @@ def _cell_area(vor, k):
     return 0.5 * abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))), v
 
 
-SPLIT_AREA = 2.5            # 3.10.81: an over-faced cell this x its neighbours' median area
+SPLIT_AREA = 2.5            # 3.10.82: an over-faced cell this x its neighbours' median area
                             # or more is split in two rather than thinned around
 
 
 def _split_cell(vor, i, pts, prot, per):
-    """3.10.81 (#170): a big cell with too many faces (a coarse cell ringed by small ones, at
+    """3.10.82 (#170): a big cell with too many faces (a coarse cell ringed by small ones, at
     the end of a band) is split in two along its long axis: (i, its point's new place or None
     if protected, the new point), or None when the cell is not big or not closed."""
     rp = vor.ridge_points
@@ -916,7 +939,7 @@ def fix_faces(points, perimeter, protected=None, clip=None, max_faces=MAX_FACES,
             premoved += len(drop)
         if len(bad):
             if nudge and k == 0 and not drop:
-                vor = Voronoi(pts)
+                vor = centred_voronoi(pts)
                 nn = 0
                 for i in bad:
                     reg = vor.regions[vor.point_region[i]]
@@ -929,7 +952,7 @@ def fix_faces(points, perimeter, protected=None, clip=None, max_faces=MAX_FACES,
                 nudged += nn
                 if nn:
                     continue
-            vor = Voronoi(pts)
+            vor = centred_voronoi(pts)
             rp = vor.ridge_points
             cnt = np.bincount(rp.ravel(), minlength=len(pts))
             ob = set()
@@ -942,7 +965,7 @@ def fix_faces(points, perimeter, protected=None, clip=None, max_faces=MAX_FACES,
                     ob.add(int(i))
                     continue
                 if not prot[i]:
-                    # 3.10.81 (#170): a cell with too many faces loses the neighbour across its
+                    # 3.10.82 (#170): a cell with too many faces loses the neighbour across its
                     # shortest face (that face goes, and the neighbour's area is shared by the
                     # cells around it), not itself: dropping the cell hands its area to its
                     # neighbours, which then have too many faces in turn (a big graded cell

@@ -3910,7 +3910,8 @@ def mesh_check(perimeter, points, cell):
     xmin, ymin = per.min(axis=0) - 10 * cell
     xmax, ymax = per.max(axis=0) + 10 * cell
     frame = [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)]
-    vor = Voronoi(np.vstack([pts, frame]))
+    from . import hecras_breaklines as _hbl
+    vor = _hbl.centred_voronoi(np.vstack([pts, frame]))  # 3.10.82: qhull round-off
     d = point_segment_distance(pts[:, 0], pts[:, 1], list(map(tuple, per)) + [tuple(per[0])])
     edge = np.nonzero(d < 1.5 * cell)[0]
     worst, over, small = 0, 0, 1.0

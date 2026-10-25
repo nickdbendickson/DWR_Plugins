@@ -21,7 +21,7 @@ are clipped away from the dam line and the breach cut (those keep their own rows
 hecras_breaklines) and, by default, to the run's wet area plus a pad (extent 'wet'; 'all' =
 every line in the 2D area).
 
-3.10.81 (#170): only the first rows (0.5 s off the line, the points whose shared faces lie on
+3.10.82 (#170): only the first rows (0.5 s off the line, the points whose shared faces lie on
 it) are protected from fix_faces, and only where no other banded line is within SOLO_FRAC x s
 (1.5 rows); the outer and graded rows, and the first rows where bands meet, may be moved or
 dropped to keep every cell at 8 faces or fewer. Protecting every band point left cells of
@@ -52,7 +52,7 @@ ENV = (("line_bands", "NDBREACH_BAND"), ("band_cell_ft", "NDBREACH_BAND_CELL_FT"
        ("band_rows", "NDBREACH_BAND_ROWS"), ("band_grading", "NDBREACH_BAND_GRADING"),
        ("band_classes", "NDBREACH_BAND_CLASSES"), ("band_extent", "NDBREACH_BAND_EXTENT"),
        ("band_wet_pad_ft", "NDBREACH_BAND_WET_PAD_FT"), ("band_lines", "NDBREACH_BAND_LINES"))
-MIN_FRAC = 0.5          # no two new points closer than this x their spacing
+MIN_FRAC = 0.7          # no two new points closer than this x their spacing (3.10.82: was 0.5)
 OWN_TOL = 0.25          # a row point may be this x its spacing nearer another line than its row
 FACE_FRAC = 0.475       # ... but never nearer any banded line than this x s (the faces on it)
 TREE_STEP_FRAC = 0.125  # lines sampled every this x s for the distances
@@ -60,7 +60,7 @@ CROSS_DEG = 20.0        # a lower-ranked line's point goes inside a higher-ranke
 CLEAR_EXTRA_FRAC = 0.25  # old points within the graded zone + this x the cell go
 MIN_PIECE_FRAC = 2.0    # line pieces shorter than this x s are dropped
 GRADE_STOP_FRAC = 0.9   # graded rows stop once the next would be this x the cell or more
-FIRST_ROW_FRAC = 0.75   # 3.10.81: band points within this x s of their line (the first row,
+FIRST_ROW_FRAC = 0.75   # 3.10.82: band points within this x s of their line (the first row,
                         # at 0.5 s) are protected; the outer rows are not
 SOLO_FRAC = 1.5         # ... and only where no other banded line is within this x s
 _OFF = ("off", "no", "false", "0", "none", "")
@@ -396,7 +396,7 @@ def apply(points, perimeter, lines, s, rows, grading, cell, protected=None, hard
         keep_old[rest_i[close]] = False
     removed = int((~keep_old).sum())
     out = np.vstack([pts[keep_old], xy])
-    # 3.10.81 (#170): only the first row (the points whose cells' shared faces lie on the
+    # 3.10.82 (#170): only the first row (the points whose cells' shared faces lie on the
     # line) is protected, and only where no other banded line comes within SOLO_FRAC x s;
     # fix_faces may move or drop the outer and graded rows, and the first rows where bands
     # meet (junctions, crossings, streets closer than the band), to keep cells at 8 faces

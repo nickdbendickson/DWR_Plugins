@@ -313,7 +313,7 @@ def hecras_breaklines_voronoi_precheck_counts_sides_and_face_points():
 
 @test
 def hecras_breaklines_fix_faces_splits_a_big_cell_ringed_by_small_ones():
-    """Pure (3.10.81, #170): a coarse cell ringed by small ones (a band's end against sparse
+    """Pure (3.10.82, #170): a coarse cell ringed by small ones (a band's end against sparse
     seeds, DWR-2801) has 16 faces; thinning its ring only makes it bigger, so fix_faces splits
     it in two - also when its point is protected (it stays put)."""
     if not _has_scipy():
