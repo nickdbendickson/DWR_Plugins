@@ -2,7 +2,7 @@
 when their inputs are missing; run them from a working folder that holds those inputs."""
 import os, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
-LIGHT = ["test_light.py"]
+LIGHT = ["test_light.py", "test_qt6.py"]
 DATA = ["validate_pothole.py", "validate_hydro.py", "test_cascade.py", "verify.py", "run_core.py",
         "test_sd_snow.py", "test_hms.py", "e2e_damsafety.py"]
 todo = LIGHT + (DATA if "--all" in sys.argv else [])

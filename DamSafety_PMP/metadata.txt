@@ -1,8 +1,10 @@
 [general]
 name=ND PMP Tool (prototype)
 qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
+supportsQt6=True
 description=INTERNAL PROTOTYPE port of the North Dakota statewide PMP Evaluation Tool (AWA, 2021) main PMP script to QGIS Processing. Not validated against ArcGIS.
-version=0.3.0
+version=0.3.1
 author=internal prototype (port of Applied Weather Associates ND_PMP_Tool.py)
 email=none@example.invalid
 about=Computes gridded and basin-average PMP, temporal distributions and hyetograph CSVs from the ND PMP study geodatabases (requires GDAL >= 3.7). For internal use only; not for publication or redistribution without written permission from the ND State Water Commission and AWA (the study report is for the exclusive use of the SWC). Data not included: download pmp_evaluation_tool.zip from the ND DWR PMP study page.
@@ -10,3 +12,5 @@ experimental=True
 deprecated=False
 hasProcessingProvider=yes
 tags=pmp,precipitation,hydrology,north dakota,dam safety
+changelog=0.3.1 - QGIS 4 (Qt6): metadata declares supportsQt6=True and qgisMaximumVersion=4.99, like the other DamSafety plugins, so QGIS 4 no longer treats PMP as QGIS 3 only. No code change was needed: PMP has no Qt imports, and its QGIS enums (QgsProcessing.TypeVectorPolygon, QgsProcessingParameterNumber.Double, QgsProcessingParameterFile.Folder, QgsFeatureSink.FastInsert) resolve on QGIS 4.2.3 / PyQt6. Checked on QGIS 4.2.3: the 6 ndpmp algorithms register and run with the same results as QGIS 3.34. Metadata/compat only; no result changes.
+    0.3.0 - Added to the DamSafety repo as DamSafety_PMP (nd_pmp 0.3.0, internal, experimental): no AWA data, no machine paths, light tests.
