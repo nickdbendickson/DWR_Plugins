@@ -522,7 +522,11 @@ GMSH_SIZING_ENV = (("NDBREACH_ANUGA_GMSH_GRADE_DIST_M", "grade_dist_m"),
                    ("NDBREACH_ANUGA_GMSH_LINE_MIN_AREA_M2", "line_min_area_m2"),
                    ("NDBREACH_ANUGA_GMSH_MAX_AREA_M2", "max_area_m2"),
                    ("NDBREACH_ANUGA_GMSH_REFINE_FOOTPRINT", "refine_footprint"),
-                   ("NDBREACH_ANUGA_GMSH_REFINE_PAD_M", "refine_footprint_pad_m"))
+                   ("NDBREACH_ANUGA_GMSH_REFINE_PAD_M", "refine_footprint_pad_m"),
+                   # 3.10.76: the line band (band_options)
+                   ("NDBREACH_ANUGA_BAND", "band"),
+                   ("NDBREACH_ANUGA_BAND_CELL_M", "band_cell_m"),
+                   ("NDBREACH_ANUGA_BAND_DIST_M", "band_dist_m"))
 REFINE_PAD_M = 200.0          # refine_footprint "wet": the LISFLOOD-FP wet area padded this much
 _FOOTPRINT_OFF = ("", "off", "none", "no", "false", "0")
 
@@ -542,6 +546,9 @@ def gmsh_env_options(gmsh=None, environ=None):
             continue
         out = dict(gmsh or {}) if out is None else out
         v = str(raw).strip()
+        if key == "band":
+            out[key] = v.lower()
+            continue
         if key == "refine_footprint":
             if v.lower() in _FOOTPRINT_OFF:
                 out.pop(key, None)
@@ -567,7 +574,12 @@ def check_gmsh_options(st):
         var = next((v for v, k in GMSH_SIZING_ENV if k == key), None)
         return ModelError("ANUGA gmsh sizing: {}{}".format(
             e, " (setting anuga_gmsh['{}'] or {})".format(key, var) if var else ""))
-    for key in ("grade_dist_m", "line_min_area_m2", "max_area_m2", "refine_footprint_pad_m"):
+    bd = o.get("band")
+    if bd is not None and not isinstance(bd, bool) and \
+            str(bd).strip().lower() not in _BAND_ON + _FOOTPRINT_OFF:
+        raise bad("band", "band must be 'on' or 'off', not {!r}".format(bd))
+    for key in ("grade_dist_m", "line_min_area_m2", "max_area_m2", "refine_footprint_pad_m",
+                "band_cell_m", "band_dist_m"):
         if o.get(key) is not None:
             try:
                 gmshmod.positive_number(key, o[key])
@@ -631,7 +643,23 @@ def gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st, channel=No
         # end, culvert_regions); without it they got min_area_m2 (100 m2). The quality gate
         # follows (gmsh_mesher.gate_area: 0.45 x the smallest size asked for).
         spec["culvert_area_m2"] = culvert_area_m2(st)
-    spec.update({k: v for k, v in (st.gmsh or {}).items() if not k.startswith("embankment")})
+    spec.update({k: v for k, v in (st.gmsh or {}).items()
+                 if not k.startswith("embankment") and k not in BAND_DEFAULTS})
+    bo = band_options(st)
+    if bo["on"]:
+        # 3.10.76: the line band, size_lines (gmsh_mesher): edges of band_cell_m within
+        # band_dist_m of the embankment lines, breaklines and culverts, graded out at
+        # BAND_GRADE to the line size (line_min_area_m2, else min_area_m2)
+        size = float(bo["band_cell_m"])
+        dmin = float(bo["band_dist_m"])
+        la = (st.gmsh or {}).get("line_min_area_m2") or gmshmod.default_sizes()["min_area_m2"]
+        h_line = 1.3 * gmshmod.h_of_area(float(la))
+        dmax = dmin + max(size, (max(h_line, size) - size) / BAND_GRADE)
+        bl = [np.asarray(b, float) for b in (breaklines or [])]
+        bl += [np.asarray(b, float) for b in (embankments or [])]
+        bl += [np.asarray(c["end_points"], float).reshape(-1, 2) for c in culverts or []]
+        spec["size_lines"] = [{"line": b.tolist(), "size": size, "dist_min": dmin,
+                               "dist_max": dmax} for b in bl if len(b) >= 2]
     fp = spec.get("refine_footprint")
     if isinstance(fp, str):
         if fp.strip().lower() == "wet" and footprint is not None:
@@ -639,6 +667,29 @@ def gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st, channel=No
         else:
             spec.pop("refine_footprint")         # 'off', or no wet area given
     return spec
+
+
+# 3.10.76: the ANUGA line band (gmsh meshes only), the ANUGA side of the HEC-RAS line bands
+# (hecras_bands): triangles with edges of band_cell_m (6.1 m = 20 ft) within band_dist_m
+# (18.3 m = 3 rows of 20 ft) of the road / rail embankment lines, breaklines and culverts.
+# Off by default: on DWR-2801 (314k triangles) the embankment lines alone add about 184k
+# triangles (+58 %) and the smallest inradius falls ~3x (ANUGA's time step x ~0.67, run
+# time x ~2.4). band_cell_m 15.2 / band_dist_m 30.5 (the 2 x 50 ft option) costs almost
+# nothing, the line size (100 m2) being about that already.
+BAND_DEFAULTS = {"band": "off", "band_cell_m": 6.1, "band_dist_m": 18.3}
+BAND_GRADE = 0.3              # the band's size growth per unit distance out to the line size
+_BAND_ON = ("on", "yes", "true", "1")
+
+
+def band_options(st):
+    """The ANUGA line band settings (BAND_DEFAULTS merged with st.gmsh): {'on', 'band_cell_m',
+    'band_dist_m'}."""
+    o = dict(BAND_DEFAULTS)
+    o.update({k: v for k, v in (getattr(st, "gmsh", None) or {}).items()
+              if k in o and v is not None})
+    b = o["band"]
+    o["on"] = b if isinstance(b, bool) else str(b).strip().lower() in _BAND_ON
+    return o
 
 
 EMBANKMENT_DEFAULTS = dict(embankment_lines=True, embankment_raise_m=0.3,
@@ -1117,6 +1168,16 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
                                          "vertices": int(len(footprint))}
         spec = gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st,
                          embankments=emb, footprint=footprint)
+        if spec.get("size_lines"):
+            bo = band_options(st)
+            minfo["line_band"] = {"lines": len(spec["size_lines"]),
+                                  "cell_m": float(bo["band_cell_m"]),
+                                  "dist_m": float(bo["band_dist_m"])}
+            if log:
+                log("gmsh line band: {} line(s), {:g} m triangles within {:g} m of each "
+                    "(NDBREACH_ANUGA_BAND).".format(len(spec["size_lines"]),
+                                                    float(bo["band_cell_m"]),
+                                                    float(bo["band_dist_m"])))
         try:
             sizing = gmshmod.resolve_sizing(spec, _mesher_sizes(spec))
         except gmshmod.MeshError as e:

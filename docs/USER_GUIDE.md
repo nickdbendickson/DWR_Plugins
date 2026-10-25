@@ -306,6 +306,28 @@ It prints one line, for example `VERDICT=host_freeze confidence=high last_t_s=20
 
 **How it tells them apart.** A host freeze stops the box's uptime clock and the worker's CPU time but not the wall clock. Wall seconds since the worker started minus its uptime age is the time the box was frozen (`freeze_total_s`); between two calls, wall gap minus uptime gap (`state_freeze_s`). CPU seconds per model second does not change with a freeze, so a rise in it (`cost_trend`) is a real slowdown. Logs from before 3.10.70 (no `dsteps`) are judged from the checkpoint times, the log's time, uptime and CPU, with confidence medium or low.
 
+## HEC-RAS: bands of small cells along roads, rail, structures and breaklines (Runner 3.10.76)
+**What it does.** The HEC-RAS 2D area gets rows of small cells, with cell faces on the line, each side of every road, railway, culvert / bridge connection line and extra breakline: by default 3 rows of 20 ft cells each side, then the cells grow by at most 1.5x per row (never more than 2:1) to the normal cell size. Each banded road / rail / breakline is written to the `.g` as a BreakLine (`Band road 1`, `Band rail 1`, ...) with CellSize Min = the band cell and Near Repeats = the rows, so HEC-RAS keeps them if you regenerate the mesh. Structures keep their Connection line (and the 3.10.75 face check).
+
+- **Where.** Only in the area the Runner run flooded plus 500 ft (`NDBREACH_BAND_EXTENT=all` for the whole 2D area). Pieces stop short of the perimeter, the dam line and the breach cut, whose own rows are unchanged. Where lines cross, the structure keeps its rows over the road, the road over rail and breaklines; two lines closer than the band share one set of rows.
+- **Settings** (run options or environment variables; a run option wins):
+
+| Option | Variable | Default | |
+|---|---|---|---|
+| `line_bands` | `NDBREACH_BAND` | `on` | `off` = the 3.10.75 geometry |
+| `band_cell_ft` | `NDBREACH_BAND_CELL_FT` | 20 | the band cell (ft) |
+| `band_rows` | `NDBREACH_BAND_ROWS` | 3 | rows each side (0 = off) |
+| `band_grading` | `NDBREACH_BAND_GRADING` | 1.5 | growth per row after the band (above 1, at most 2) |
+| `band_classes` | `NDBREACH_BAND_CLASSES` | `road,rail,structure,breakline` | also `channel` (the flow path, in place of the channel breaklines) |
+| `band_extent` | `NDBREACH_BAND_EXTENT` | `wet` | or `all` |
+| `band_wet_pad_ft` | `NDBREACH_BAND_WET_PAD_FT` | 500 | the pad around the wet area |
+| `band_lines` | `NDBREACH_BAND_LINES` | none | line files (shp, gpkg, ...) of more breaklines, `;;` between files |
+
+- **The 2 rows x 50 ft option:** `NDBREACH_BAND_CELL_FT=50` and `NDBREACH_BAND_ROWS=2` (a band about 290 ft each side in all, cells 50 ft along the line).
+- **Cost.** More cells and smaller cells: on DWR-2801 (421,317 cells) the default (wet area, roads + rail + structures) adds about 52 % (643k cells); 2 x 50 ft adds about 12 %. On Absaraka (65,478 cells) +121 % and +28 %. Over the whole 2D area (`all`) DWR-2801 would be 2.0M cells with 3 x 20 ft. The 20 ft cells are no smaller than the breach cells (about 20 ft), so the smallest cell does not change; a run takes longer about in proportion to the cells.
+- **ANUGA (gmsh meshes only, off by default).** `NDBREACH_ANUGA_BAND=on` asks gmsh for 6.1 m triangles within 18.3 m of the road / rail embankment lines, breaklines and culverts (`NDBREACH_ANUGA_BAND_CELL_M`, `NDBREACH_ANUGA_BAND_DIST_M`). On DWR-2801 that is about +184k triangles (+58 %) and a ~3x smaller smallest triangle, so ANUGA's time step falls to about 2/3 and the run takes about 2.4x as long. 15.2 m / 30.5 m (the 2 x 50 ft equivalent) costs almost nothing.
+- A HEC-RAS package built before 3.10.76 has no bands: rebuild it to get them.
+
 ## HEC-RAS: stack limit, OpenMP thread stacks, structure lines on cell faces, connection names (Runner 3.10.75)
 - **Stack limit.** On Linux the Runner starts RasUnsteady with the stack limit raised (unlimited, or the hard limit if your system does not allow unlimited); a large 2D area (DWR-2801, 421k cells) crashed under the default 8 MB with exit 174. The compute log line `HEC-RAS compute: stack limit for RasUnsteady ...` says what was set. If it says the hard limit and RasUnsteady still exits 174, raise the hard limit (`ulimit -Hs`, `/etc/security/limits.conf`) for the account that runs it.
 - **OpenMP thread stacks.** RasUnsteady's Intel OpenMP worker threads have their own stacks (4 MB by default), which `ulimit -s` does not change; DWR-2801 crashed there (exit 174 at PROGRESS 0.50) with the main stack unlimited. The Runner sets `KMP_STACKSIZE=1g` and `OMP_STACKSIZE=1g` for RasUnsteady (Linux, under Wine and on Windows). A value you set in the environment yourself is kept; `NDBREACH_HECRAS_OMP_STACKSIZE` (e.g. `2g`) changes the default, `off` sets neither. The compute log line `HEC-RAS compute: OpenMP thread stacks for RasUnsteady ...` and `run_report.json` (`hecras_time_limit.omp_stacksize`) show what was used. Each OpenMP thread can reserve that much address space (it is reserved, not used, until needed).

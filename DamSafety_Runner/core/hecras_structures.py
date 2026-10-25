@@ -376,19 +376,32 @@ def alignment_notes(aligned):
     return warn, fail
 
 
-def connection_breaklines(points, perimeter, conns, cell, units, dam_line=None, clip=None):
+def connection_breaklines(points, perimeter, conns, cell, units, dam_line=None, clip=None,
+                          banded=None):
     """Breaklines on the connection lines built into the points. Spacing along each line:
     structure_spacing (the local spacing of the points there, between a quarter cell and a
     cell, at most half the line; 3.10.75), the point pairs BREAKLINE_END_EXT spacings past
     both ends of the line (3.10.75), and aligned_share of each line after. Only points within
     BREAKLINE_REACH_FT of a new line may move or go. A connection within DAM_CLEAR_CELLS cells
     of the dam line gets no breakline (the dam row and breach cells stay as checked).
+    banded (3.10.76): {name: line} of the connection lines already in a line band
+    (hecras_bands, built into the points before): no point work on those, only the checks.
     Returns (points, info)."""
     pts = np.asarray(points, float).reshape(-1, 2)
     reach = units.from_ft(BREAKLINE_REACH_FT)
-    lines, skipped = [], []
+    lines, skipped, in_band = [], [], []
+    banded = banded or {}
     for c in conns:
         ln = np.asarray(c["line"], float)
+        bl = banded.get(c["name"])
+        if bl is not None and np.shape(bl) == ln.shape and np.allclose(
+                np.asarray(bl, float), ln, atol=0.01 * cell):
+            s = local_spacing(pts, ln, 3.0 * cell) or 0.5 * cell
+            c["breakline_spacing"] = round(s, 2)
+            c["line_band"] = True
+            in_band.append({"kind": "structure", "name": c["name"], "near": s, "far": s,
+                            "line": extended_line(ln, BREAKLINE_END_EXT * s), "true_line": ln})
+            continue
         if dam_line is not None:
             d = hb.poly_dist(*hb.resample(ln, 0.1 * cell).T, np.asarray(dam_line, float)).min()
             if d < DAM_CLEAR_CELLS * cell:
@@ -399,9 +412,19 @@ def connection_breaklines(points, perimeter, conns, cell, units, dam_line=None, 
         c["breakline_spacing"] = round(s, 2)
         lines.append({"kind": "structure", "name": c["name"], "near": s, "far": s,
                       "line": extended_line(ln, BREAKLINE_END_EXT * s), "true_line": ln})
-    info = {"points_before": int(len(pts)), "lines": len(lines), "skipped": skipped}
+    info = {"points_before": int(len(pts)), "lines": len(lines) + len(in_band),
+            "skipped": skipped}
+    if in_band:
+        info["in_line_band"] = [ln["name"] for ln in in_band]
     if not lines:
         info.update(points=int(len(pts)), points_removed=0, points_added=0)
+        if in_band:
+            info.update(
+                on_faces={ln["name"]: round(hb.share_on_faces(pts, ln["true_line"]), 3)
+                          for ln in in_band},
+                aligned={ln["name"]: round(aligned_share(
+                    pts, ln["true_line"], ln["near"], units.from_ft(ALIGN_TOL_FT)), 3)
+                    for ln in in_band})
         return pts, info
     new, st = hb.enforce(pts, perimeter, {"lines": lines})
     prot = st.pop("_protected")
@@ -413,10 +436,10 @@ def connection_breaklines(points, perimeter, conns, cell, units, dam_line=None, 
     info.update(st, points=int(len(new)), check=vfix["check"],
                 fix={k: v for k, v in vfix.items() if k != "check"},
                 on_faces={ln["name"]: round(hb.share_on_faces(new, ln["true_line"]), 3)
-                          for ln in lines},
+                          for ln in lines + in_band},
                 aligned={ln["name"]: round(aligned_share(
                     new, ln["true_line"], ln["near"], units.from_ft(ALIGN_TOL_FT)), 3)
-                    for ln in lines})
+                    for ln in lines + in_band})
     if vfix["left"] or vfix["check"]["facepoints_over"] or vfix["perimeter_left"]:
         raise hm.HecRasModelError(
             "the structure breaklines leave {} cell(s) with more than {} faces or {} perimeter "
