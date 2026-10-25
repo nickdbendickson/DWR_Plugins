@@ -1181,16 +1181,37 @@ def structure_connection(s, line, ground, perimeter, cell, step, units, name, av
     return out, None
 
 
+# 3.10.75: the characters a connection name may have. HEC-RAS 6.6 refuses "," and "=" (the
+# .g01 record separators) and "/" (DWR-2801 NickReview, 2026-10-24: 57 of 126 connections
+# named from OpenStreetMap ids, 'OSM way/254643...', 'OSM node/1185946', stopped the plan with
+# "the connection name has fore slashes(/) in it"); the names it took there had only letters,
+# digits, spaces and ( ) - . so anything else becomes "_" (as the hand fix there did).
+CONN_NAME_MAX = 16
+CONN_NAME_BAD = re.compile(r"[^A-Za-z0-9 ()._\-]")
+
+
+def connection_name_base(text):
+    """A structure name as HEC-RAS takes it (no length limit yet): whitespace runs to one space,
+    each run of other refused characters ("/", ",", "=", ...) to one "_"."""
+    base = re.sub(r"\s+", " ", str(text or "")).strip()
+    base = re.sub(r"_+", "_", CONN_NAME_BAD.sub("_", base)).strip(" _")
+    return base or "Structure"
+
+
 def connection_name(text, used):
-    """A unique HEC-RAS connection name (16 characters, no , or =) from a structure name."""
-    base = re.sub(r"[\s,=]+", " ", str(text or "")).strip() or "Structure"
-    nm, i = base[:16], 1
-    while nm.strip() in used:
+    """A unique HEC-RAS connection name (at most CONN_NAME_MAX = 16 characters, only those
+    CONN_NAME_BAD allows) from a structure name; a name already in `used` (case-insensitive,
+    as HEC-RAS compares them) gets " 2", " 3", ... in its last characters. The original stays
+    in the connection's "source_name" (README table, layout layer, report)."""
+    base = connection_name_base(text)
+    taken = {str(u).strip().lower() for u in used}
+    nm, i = base[:CONN_NAME_MAX].strip(), 1
+    while nm.lower() in taken:
         i += 1
         suffix = " {}".format(i)
-        nm = base[:16 - len(suffix)].rstrip() + suffix
-    used.add(nm.strip())
-    return nm.strip()
+        nm = base[:CONN_NAME_MAX - len(suffix)].rstrip() + suffix
+    used.add(nm)
+    return nm
 
 
 # ============================================================================
@@ -1215,6 +1236,9 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             # run_report.json, e.g. the ANUGA run), faces on the connection lines, and the
             # weirs / culvert inverts no lower than their cells
             "structures_from": None, "structure_breaklines": True, "structure_cell_fit": True,
+            # 3.10.75: a connection line with (almost) no cell faces along it stops the build
+            # ('fail'), or is only reported ('warn'); under 90 % is always reported
+            "structure_align_check": "fail",
             # TIER 2 fix: how far a rejected inflow point may be walked downstream
             "inflow_search_ft": 3000.0,
             # v3.10.22 (see the constants above build_model's helpers)
@@ -3133,7 +3157,9 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             spts, sinf = hseeds.make_seeds(
                 perim, cell, options=o, dam_line=[tuple(q) for q in dam_poly], downstream=d,
                 breach_xy=Ob + abb * sc, breach_len=toe_off + 2.0 * cell, breach_dir=db,
-                channel=(path_m if (path_m is not None and use_path_dir) else None))
+                channel=(path_m if (path_m is not None and use_path_dir) else None),
+                structures=_seed_structures(o, report, to_model, perim, cell, terrain_tif, srs,
+                                            units, log))
         except hseeds.SeedError as e:
             seeds_info["why"] = str(e)
             notes.append("gmsh computation points were asked for but not used ({}); the regular "
@@ -3351,14 +3377,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # 3.10.56: or those of another run (structures_from, e.g. the ANUGA run of the dam); the
     # loop lives in hecras_structures.connections (shared with add_to_package)
     from . import hecras_structures as hstr
-    s_to_model = to_model
-    if o.get("structures") and o.get("structures_from"):
-        structs, ssrc, s_wtext, snotes = hstr.load_run_structures(o["structures_from"])
-        s_to_model = transformer(srs_from(s_wtext), srs) if s_wtext else None
-        for n_ in snotes:
-            log("Structures: " + n_)
-    else:
-        structs, ssrc = run_structures(report) if o["structures"] else ([], "")
+    structs, ssrc, s_to_model = _model_structures(o, report, to_model, srs, log)
     if structs:
         progress(84, "culverts and bridges")
     sinfo = dict(hstr.connections(structs, s_to_model, perim, cell, terrain_tif, srs, units, log),
@@ -3376,6 +3395,34 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                          sbl["points"], "".join("; no breakline on {} ({})".format(
                              k["name"], k["why"]) for k in sbl["skipped"])))
         log(notes[-1])
+    if sinfo.get("renamed"):
+        notes.append("Structures: {} connection name(s) had characters HEC-RAS refuses (\"/\" "
+                     "in OpenStreetMap ids) replaced: {}.".format(len(sinfo["renamed"]), "; ".join(
+                         "'{}' = {}".format(x["name"], x["source_name"])
+                         for x in sinfo["renamed"])))
+        log(notes[-1])
+    if sinfo["exported"]:
+        # 3.10.75: each connection line on the cell faces HEC-RAS would make (DWR-2801: lines
+        # 10-90 % on its faces where the old check said 100 %)
+        aligned = (sinfo.get("breaklines") or {}).get("aligned") or hstr.alignment(
+            pts, sinfo["exported"], units, cell=cell)
+        sinfo["aligned"] = aligned
+        a_warn, a_fail = hstr.alignment_notes(aligned)
+        if a_warn:
+            notes.append("Structures: connection line(s) under {:.0%} on cell faces (HEC-RAS "
+                         "may refuse them or move flow off the line; check them in RAS Mapper): "
+                         "{}.".format(hstr.ALIGN_WARN, ", ".join(a_warn)))
+            log(notes[-1])
+        if a_fail:
+            # without the structure breaklines (structure_breaklines=False, the user's own
+            # choice) it is only reported
+            if (str(o.get("structure_align_check", "fail")).lower() == "warn"
+                    or not o.get("structure_breaklines", True)):
+                notes.append("Structures: NO cell faces along: " + "; ".join(a_fail) + ".")
+                log(notes[-1])
+            else:
+                raise HecRasModelError(hstr.PROBLEMS_HEAD + "; ".join(a_fail) + " (build with "
+                                       "structure_align_check='warn' to write it anyway)")
     if sinfo["exported"] and o.get("structure_cell_fit", True):
         traster = hstr.read_raster(terrain_tif)
         sck = hstr.cells_check(pts, perim, sinfo["exported"], traster)
@@ -4207,6 +4254,45 @@ def breach_start_row(b, info, L):
         "sunny day: the breach starts with the run")
 
 
+def _model_structures(o, report, to_model, srs, log):
+    """The structures build_model exports: the run's, or those of o['structures_from'] (3.10.56).
+    Returns (structs, source text, their transformer to the model CRS)."""
+    from . import hecras_structures as hstr
+    if o.get("structures") and o.get("structures_from"):
+        structs, ssrc, s_wtext, snotes = hstr.load_run_structures(o["structures_from"])
+        for n_ in snotes:
+            log("Structures: " + n_)
+        return structs, ssrc, (transformer(srs_from(s_wtext), srs) if s_wtext else None)
+    structs, ssrc = run_structures(report) if o["structures"] else ([], "")
+    return structs, ssrc, to_model
+
+
+def _seed_structures(o, report, to_model, perim, cell, terrain_tif, srs, units, log):
+    """3.10.75: the connection lines for the gmsh seeds ([{'line', 'size'}], size =
+    hecras_structures.structure_spacing of the line), so the points are graded down to the
+    breakline spacing at every culvert / bridge. The same connections as the build makes later
+    (hecras_structures.connections; the terrain may differ only by the breach cut), found here
+    silently; [] without structures or structure breaklines, or on any error (the seeds are
+    then as before)."""
+    if not (o.get("structures") and o.get("structure_breaklines", True)):
+        return []
+    from . import hecras_structures as hstr
+    try:
+        structs, _, s_to_model = _model_structures(o, report, to_model, srs, lambda m: None)
+        if not structs:
+            return []
+        sinfo = hstr.connections(structs, s_to_model, perim, cell, terrain_tif, srs, units)
+    except Exception as e:                             # noqa: BLE001 - seeds then as before
+        log("gmsh seeds: no structure refinement ({}: {})".format(type(e).__name__, e))
+        return []
+    out = []
+    for c in sinfo["exported"]:
+        ln = np.asarray(c["line"], float)
+        out.append({"line": ln.tolist(), "size": hstr.structure_spacing(
+            float(np.hypot(*(ln[-1] - ln[0]))), cell, units)})
+    return out
+
+
 def structures_readme(m, sinfo):
     """v3.12.0: the README section on the run's culverts, bridges and notches: what became of
     each one and what to check in HEC-RAS. [] when the run had none."""
@@ -4263,6 +4349,21 @@ def structures_readme(m, sinfo):
                 "lines, {:g} x the span apart, on HEC-RAS's default barrel centrelines (across "
                 "the connection line). The Runner's own lines are in the layout GeoPackage "
                 "(layer 'Structures from the run').".format(1.1), ""]
+    ren = sinfo.get("renamed") or []
+    if ren:
+        out += ["Renamed for HEC-RAS (3.10.75; HEC-RAS refuses \"/\", \",\" and \"=\" in a "
+                "connection name and takes at most {} characters; the original name, with its "
+                "OpenStreetMap / NBI id, is in the Structure column above and here):".format(
+                    CONN_NAME_MAX), ""]
+        out += ["- `{}` = `{}`".format(x["name"], x["source_name"]) for x in ren] + [""]
+    al = (sinfo.get("breaklines") or {}).get("aligned") or sinfo.get("aligned") or {}
+    if al:
+        low = sorted((v, k) for k, v in al.items() if v < 0.90)
+        out += ["Connection lines on cell faces (3.10.75; the share of each line on the faces "
+                "HEC-RAS makes from these points, faces shorter than a tenth of the spacing "
+                "merged as HEC-RAS does): {} of {} at 90 % or more{}.".format(
+                    len(al) - len(low), len(al), "; under 90 %: " + ", ".join(
+                        "{} {:.0%}".format(k, v) for v, k in low) if low else ""), ""]
     fit = sinfo.get("fit") or []
     if fit:
         out += ["Raised to the cells they connect (3.10.56; HEC-RAS refuses a weir or a culvert "

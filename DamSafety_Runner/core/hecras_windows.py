@@ -22,6 +22,8 @@ Settings (environment):
     NDBREACH_HECRAS_WINDOWS_DIR   the HEC-RAS 6.6 folder (default: the usual install folders)
     NDBREACH_HECRAS_TIMEOUT_S     wall-clock limit per program in s (unset/0 = none)
     NDBREACH_HECRAS_WIN_METHODS   'headless,com' (default), 'headless' or 'com'
+    NDBREACH_HECRAS_OMP_STACKSIZE KMP_STACKSIZE / OMP_STACKSIZE for Ras.exe and RasUnsteady.exe
+                                  (default 1g; a value already set is kept; 'off' = unset)
 """
 import glob
 import os
@@ -227,6 +229,15 @@ def _kill_tree(p):
         pass
 
 
+def child_env(env=None):
+    """os.environ (or `env`) plus KMP_STACKSIZE / OMP_STACKSIZE for HEC-RAS (3.10.75, the
+    Intel OpenMP worker-thread stacks; see hecras_engine.omp_stack_env)."""
+    from .hecras_engine import omp_stack_env
+    e = dict(_env(env))
+    e.update(omp_stack_env(e)[0])
+    return e
+
+
 def _popen_run(cmd, cwd=None, timeout=None, capture_output=True, text=True):
     """Like subprocess.run, but the child starts its own process group / tree, and on timeout the
     whole tree is killed (not just the direct child) before TimeoutExpired is re-raised. This is
@@ -237,7 +248,7 @@ def _popen_run(cmd, cwd=None, timeout=None, capture_output=True, text=True):
     else:
         kw["start_new_session"] = True
     p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         text=text, **kw)
+                         text=text, env=child_env(), **kw)
     try:
         out, err = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
