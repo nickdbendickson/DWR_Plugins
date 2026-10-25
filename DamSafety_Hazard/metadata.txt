@@ -5,10 +5,14 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.61
+version=2.18.62
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
+    2.18.62 - 2026-10-25 (reproduce / data folder: every file of every role is loaded, or a warning)
+      * Reproduce: the package's data sets were wrapped twice, so a role recorded as one file (roads, rail, NSI, FEMA USA Structures, ...) was skipped WITHOUT a word and a role with several files (AADT: HPMS + county roads; bridges: NBI + OSM) opened only its first. Now one shape for every role ([[path, category], ...]), old and new packages alike, and every file is handed to the run.
+      * AADT, bridges, NSI, address points, USA Structures, outlines and lifelines read every file of the data folder; another role with several files reads the first and says which were not used. A record made before 2.18.62 lists every traffic download: the reproduction uses what the run read (newest HPMS year, else NDDOT counts, then the county roads).
+      * A missing, unreadable or malformed file is a WARNING in the run log, and in the reproduction log, check (Input rows 'Loaded' / 'Not loaded') and summary - never a silent skip.
     2.18.61 - 2026-10-25 (HEC-RAS plan import: arrival on the same depth basis as the depth)
       * 'Import HEC-RAS plan results' (ndhazard:hecrasplan, plan scenarios): with a terrain raster, the arrival time is per pixel from the cell's water surface minus the terrain (>= the arrival depth, interpolated between output steps; reached only between steps: the time of the maximum), as the Runner 3.10.79 (#173). Before, arrival used the cell-minimum depth.
       * No terrain raster: the Runner's terrain-based rasters of the plan are used (newest _hecras/reexport_*, or the dam folder's rasters when hecras_stage.json says depth_basis terrain); else the cell minimum with a warning.
