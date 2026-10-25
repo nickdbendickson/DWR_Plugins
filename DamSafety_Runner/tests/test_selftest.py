@@ -272,16 +272,57 @@ def fake_gdal(**bugs):
         st.gdal_io, st.check_gdal, st.check_ogr_geopackage, st._set_unit_type = keep
 
 
+# Every variable the Runner (or the suite store it reads through) uses to find a model
+# executable or interpreter. A developer machine may set any of them globally.
+MODEL_ENV_VARS = ("NDBREACH_LISFLOOD", "NDBREACH_LISFLOOD_EXE", "NDBREACH_ANUGA_PYTHON",
+                  "NDBREACH_GMSH_PYTHON", "NDBREACH_HECRAS_WINEPREFIX",
+                  "NDBREACH_HECRAS_WINDOWS_DIR", "NDBREACH_HECRAS_LINUX_DIR")
+
+
 @contextlib.contextmanager
 def no_models():
-    """Nothing found by auto-detection, whatever the developer's machine has."""
+    """Nothing found by auto-detection, whatever the developer's machine has: the model
+    environment variables are cleared, PATH lookups of the model executables miss, and the
+    detectors return nothing. Everything is restored afterwards."""
     keep = nd_data.detect_lisflood, nd_data.detect_anuga_python
+    saved = dict((k, os.environ.pop(k)) for k in MODEL_ENV_VARS if k in os.environ)
+    real_which = shutil.which
+    models = ("lisflood", "lisflood.exe", "ras", "ras.exe", "rasunsteady", "rasunsteady.exe")
+
+    def which(cmd, *a, **k):
+        if os.path.basename(str(cmd)).lower() in models:
+            return None
+        return real_which(cmd, *a, **k)
     nd_data.detect_lisflood = lambda *a, **k: ""
     nd_data.detect_anuga_python = lambda *a, **k: ""
+    shutil.which = which
     try:
         yield
     finally:
+        shutil.which = real_which
         nd_data.detect_lisflood, nd_data.detect_anuga_python = keep
+        for k in MODEL_ENV_VARS:
+            os.environ.pop(k, None)
+        os.environ.update(saved)
+
+
+@test
+def no_models_clears_and_restores_the_model_environment():
+    before = dict((k, os.environ.get(k)) for k in MODEL_ENV_VARS)
+    os.environ["NDBREACH_LISFLOOD"] = "/somewhere/lisflood"
+    try:
+        with no_models():
+            assert all(k not in os.environ for k in MODEL_ENV_VARS)
+            assert shutil.which("lisflood") is None
+            from nd_breach_runner.damsuite import suite_config
+            assert suite_config.get("lisflood_exe") in (None, "")
+        assert os.environ["NDBREACH_LISFLOOD"] == "/somewhere/lisflood"
+    finally:
+        for k, v in before.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 class Tmp(object):
