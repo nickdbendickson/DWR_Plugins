@@ -755,6 +755,11 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
               "dem_z_to_m": _z_to_m_of(terrain_src),
               "policy": "North Dakota Dam Safety Standards Policy REG_05.2026, Section 5.1 "
                         "(breach analysis) and 5.4 (outputs)"}
+    if getattr(st, "rail_lines", None):
+        # 3.10.76: the rail centrelines (work CRS) for the HEC-RAS line bands (hecras_bands),
+        # beside the settings, whose rail_lines stays a count (the run key is unchanged)
+        report["rail_lines_xy"] = [[(round(float(p[0]), 1), round(float(p[1]), 1))
+                                    for p in np.asarray(ln)] for ln in st.rail_lines]
     rs = _dem_resample_of(terrain_src)
     if rs is not None:
         report["dem_resample"] = rs
