@@ -321,8 +321,11 @@ def run_headless(prj, plan_file, d, timeout=None, runner=_popen_run, check=None,
     log("RasUnsteady.exe {} x{}: exit {}".format(os.path.basename(tmp), num, rc2))
     # Promote the .tmp.hdf to the canonical results name ONLY when RasUnsteady succeeded and the
     # tmp positively verifies; otherwise delete the partial so a failed/partial run never leaves a
-    # file at <name>.p##.hdf for the resume path to pick up as finished.
-    if rc2 == 0 and os.path.isfile(tmp) and _has_results(tmp, check) and not _has_results(out, check):
+    # file at <name>.p##.hdf for the resume path to pick up as finished. A stale pre-existing
+    # <name>.p##.hdf (from an earlier run) is overwritten by the fresh verified tmp: it must not
+    # block promotion, or this launch's real results are deleted and the run wrongly reports no
+    # results (os.replace advances the mtime, so fresh(out) below then accepts it).
+    if rc2 == 0 and os.path.isfile(tmp) and _has_results(tmp, check):
         os.replace(tmp, out)
     elif os.path.isfile(tmp):
         try:
@@ -366,12 +369,45 @@ def run_com(prj, plan_file, dispatch=None, check=None, log=None, timeout=None):
         if timeout:
             import threading
             box = {}
+            # The controller `ras` lives in this (the main) thread's COM apartment. A worker
+            # thread must initialise COM and receive the interface through a marshalling stream;
+            # calling the raw object from another apartment fails on Windows (RPC_E_WRONG_THREAD),
+            # so the watchdog path used to break whenever a timeout was set. pythoncom is absent
+            # off Windows (and under the test mocks), where the stream stays None and the worker
+            # calls `ras` directly as before. Not yet verified on Windows.
+            stream = None
+            try:
+                import pythoncom
+                stream = pythoncom.CoMarshalInterThreadInterfaceInStream(
+                    pythoncom.IID_IDispatch, ras._oleobj_)
+            except Exception:                                    # noqa
+                stream = None
 
             def _compute():
+                co = None
                 try:
-                    box["r"] = ras.Compute_CurrentPlan(None, None, True)
-                except Exception as e:                           # noqa
-                    box["e"] = e
+                    try:
+                        import pythoncom as co
+                        co.CoInitialize()
+                    except Exception:                            # noqa
+                        co = None
+                    try:
+                        if co is not None and stream is not None:
+                            import win32com.client as _wc
+                            iface = co.CoGetInterfaceAndReleaseStream(
+                                stream, co.IID_IDispatch)
+                            target = _wc.Dispatch(iface)
+                        else:
+                            target = ras
+                        box["r"] = target.Compute_CurrentPlan(None, None, True)
+                    except Exception as e:                       # noqa
+                        box["e"] = e
+                finally:
+                    if co is not None:
+                        try:
+                            co.CoUninitialize()
+                        except Exception:                        # noqa
+                            pass
             th = threading.Thread(target=_compute, daemon=True)
             th.start()
             th.join(timeout)
