@@ -484,6 +484,25 @@ def check_qt6_enums(problems, root=None):
         _fail(problems, "qt6 enums: {}:{}: {} -> {}".format(rel, i, label, text))
 
 
+def check_qt6_metadata(problems, root=None):
+    """Every plugin metadata.txt declares supportsQt6=True and a qgisMaximumVersion of 4.x or
+    later. Without them QGIS 4 treats the plugin as QGIS 3 only (a missing maximum is capped at
+    <minimum major>.99), and no other CI step would notice the key being dropped."""
+    root = root or ROOT
+    for plugin in PLUGINS:
+        meta = os.path.join(root, plugin, "metadata.txt")
+        if not os.path.isfile(meta):
+            continue                    # check_versions reports a missing metadata.txt
+        text = _read(meta)
+        m = re.search(r"^supportsQt6\s*=\s*(.*)$", text, re.M)
+        if not m or m.group(1).strip().lower() != "true":
+            _fail(problems, "{}: metadata.txt needs supportsQt6=True (QGIS 4 / Qt6)".format(plugin))
+        m = re.search(r"^qgisMaximumVersion\s*=\s*(.*)$", text, re.M)
+        if not m or _ver_tuple(m.group(1).strip())[:1] < (4,):
+            _fail(problems, "{}: metadata.txt qgisMaximumVersion={} (needs 4.x or later, e.g. "
+                            "4.99)".format(plugin, m.group(1).strip() if m else None))
+
+
 def main():
     problems = []
     for name, fn in (("damsuite drift", check_damsuite_drift),
@@ -495,6 +514,7 @@ def main():
                      ("zone colours (REG_05.2026)", check_zone_colours),
                      ("fork parity", check_fork_parity),
                      ("qt6 enums", check_qt6_enums),
+                     ("qt6 metadata", check_qt6_metadata),
                      ("compile", check_compile), ("golden baseline", check_golden)):
         print("[ci] " + name)
         try:

@@ -2,8 +2,8 @@
 
 metadata.txt declares supportsQt6=True with qgisMaximumVersion=4.99 (the suite convention), and the
 plugin code has no Qt imports and no Qt5-only spellings (unscoped Qt enums, PyQt5 imports, QVariant
-field types, exec_()). The suite-wide enum lint is tools/ci_checks.py "qt6 enums"; this test keeps
-the PMP side explicit.
+field types, exec_()). The suite-wide checks are tools/ci_checks.py "qt6 enums" and "qt6 metadata"
+(both in CI); this test keeps the PMP side explicit.
 
 Run:  python3 DamSafety_PMP/tests/test_qt6.py
 """
