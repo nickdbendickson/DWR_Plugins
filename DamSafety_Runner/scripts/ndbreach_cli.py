@@ -10,6 +10,9 @@
     python3 ndbreach_cli.py selftest                   what works on this computer
     python3 ndbreach_cli.py culvert-precheck --dam-folder DIR --out OUT
                                                        culvert inverts vs the fine ground
+    python3 ndbreach_cli.py hecras-reexport DAM_FOLDER [--out DIR]
+                                                       HEC-RAS rasters again from the .p01.hdf
+                                                       and the terrain (no model run)
 
 Run it with any Python that has numpy. GeoTIFF and other GDAL-readable DEMs need GDAL's Python
 bindings (`osgeo`), which QGIS's own Python has:
@@ -1523,6 +1526,24 @@ def cmd_culvert_precheck(args):
     return cp.main(args.rest)
 
 
+def cmd_hecras_reexport(args):
+    """3.10.78: the HEC-RAS rasters of a finished run again from its plan HDF and terrain."""
+    eng = importlib.import_module(PKG + ".core.hecras_engine")
+    try:
+        rep = eng.reexport_hecras_results(
+            args.run_dir, out_dir=args.out or None, hdf=args.hdf or None,
+            terrain=args.terrain or None, like=args.grid or None, t0_hr=args.t0_hr,
+            arrival_depth_ft=args.arrival_depth_ft, terrain_z=args.terrain_z or None,
+            overwrite=args.overwrite, log=say)
+    except eng.HecRasEngineError as e:
+        raise CliError(str(e))
+    for k in ("areas_old_cell_min", "areas_new"):
+        a = rep[k]
+        say("{:<19} wet {:,.0f} ac, >=0.1 ft {:,.0f} ac, >=1 ft {:,.0f} ac".format(
+            k, a["wet_ac"], a["ge_0p1ft_ac"], a["ge_1ft_ac"]))
+    return 0
+
+
 def cmd_selftest(args):
     st = importlib.import_module(PKG + ".core.selftest")
     return st.main(args.rest)
@@ -1805,6 +1826,25 @@ def build_parser():
     p.add_argument("rest", nargs=argparse.REMAINDER, help="options of core/culvert_precheck.py "
                    "(--help lists them)")
     p.set_defaults(func=cmd_culvert_precheck)
+    p = sub.add_parser("hecras-reexport", help="HEC-RAS rasters again from a finished run's "
+                       ".p01.hdf and terrain: depth = WSE minus the terrain (no model run)")
+    p.add_argument("run_dir", metavar="DAM_FOLDER",
+                   help="the dam folder (with _hecras/hecras_stage.json and Depth (Max).tif)")
+    p.add_argument("--out", default="", help="folder to write (default: a new "
+                   "DAM_FOLDER/_hecras/reexport_<time> folder)")
+    p.add_argument("--hdf", default="", help="plan HDF (default: from hecras_stage.json)")
+    p.add_argument("--terrain", default="", help="HEC-RAS terrain GeoTIFF (default: "
+                   "<project>/Terrain/*.tif)")
+    p.add_argument("--grid", default="", help="raster whose grid to write on (default: the "
+                   "folder's Depth (Max).tif)")
+    p.add_argument("--terrain-z", default="", choices=["", "auto", "feet", "us_feet", "meters"],
+                   help="terrain elevation unit (default: from the raster)")
+    p.add_argument("--t0-hr", type=float, default=None, help="plan hour arrival counts from")
+    p.add_argument("--arrival-depth-ft", type=float, default=None, help="arrival depth "
+                   "(default 0.1 ft)")
+    p.add_argument("--overwrite", action="store_true",
+                   help="replace rasters already in --out")
+    p.set_defaults(func=cmd_hecras_reexport)
     return ap
 
 

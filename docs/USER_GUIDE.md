@@ -313,6 +313,11 @@ It prints one line, for example `VERDICT=host_freeze confidence=high last_t_s=20
 - **Connection names.** HEC-RAS refuses some characters in a connection name (`/` in `OSM way/254643464`, `,`, `=` ...) and keeps 16 characters. They become `_`, names are cut to 16 characters and made unique (`OSM way_254643 2`), and `STRUCTURES_README.md` lists each renamed connection with its original name ("Renamed for HEC-RAS").
 - A HEC-RAS package built before 3.10.75 keeps its old geometry: rebuild it to get the new faces and names.
 
+## HEC-RAS: depth from the terrain, re-export of a finished run (Runner 3.10.78)
+- **Depth.** The HEC-RAS depth raster is now each 30 m grid cell's water surface minus the ground under that grid cell: the nearest HEC-RAS cell's max WSE (flat over the cell) minus the run's terrain averaged onto the grid, never below 0. Before 3.10.78 it was the WSE minus the cell's lowest point, so a 150 ft cell holding a ditch was the ditch's depth everywhere. The wet area, WSE, velocity and arrival time (first 0.1 ft) follow this depth. On DWR-2801 the >=1 ft area fell from 5,060 to 1,923 ac (ANUGA 1,960).
+- **Re-export an old run.** `python3 DamSafety_Runner/scripts/ndbreach_cli.py hecras-reexport DAM_FOLDER` reads the finished `.p01.hdf` and the terrain and writes `Depth (Max).tif`, `WSE (Max).tif`, `Velocity (Max).tif`, `Arrival Time.tif` and `reexport.json` (old and new areas) to `DAM_FOLDER/_hecras/reexport_<time>`, without rerunning HEC-RAS. `--out DIR` picks the folder; existing outputs are never replaced unless you add `--overwrite`. `--hdf`, `--terrain`, `--grid`, `--t0-hr` and `--arrival-depth-ft` override what it finds. From Python: `hecras_engine.reexport_hecras_results(run_dir)`.
+- The HEC-RAS import tool has an optional **Terrain** input; without it the depth is still the cell minimum (a note says so).
+
 ## Hazard zone colours match the ND Dam Safety Standards (#126, Hazard 2.18.46, Runner 3.10.51, Screening 0.17.34)
 **What changed.** Every ACER TM 11 danger-zone graphic now uses the colours of the ND Dam Safety Standards, Policy REG_05.2026 (effective 04/01/2026), Figure 5.1 (houses, p. 21) and Figure 5.2 (mobile homes, p. 22): [the policy document](https://www.dwr.nd.gov/reclink/4dcgi/GetPolicyDocument/16). The standard names no colours, so they were sampled from the published figures.
 
