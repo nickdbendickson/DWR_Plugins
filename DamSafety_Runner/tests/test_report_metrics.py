@@ -184,6 +184,35 @@ def report_metrics_mask_sources_user_then_dam_then_suite_and_off():
 
 
 @test
+def report_metrics_mask_gap_in_the_suite_pack_is_logged():
+    """3.10.77: the suite pack's manifest.json lists a water-body layer whose file is gone:
+    build_mask says so (damsuite.packcheck, read-only) instead of leaving the mask out
+    silently; a pack with the file says nothing."""
+    d = tempfile.mkdtemp()
+    try:
+        pack = os.path.join(d, RM.PACK_DIR)
+        os.makedirs(os.path.join(pack, "hydro"))
+        m = {"format": "nd-dam-hazard-offline-pack", "format_version": 2, "layout": "gpkg",
+             "datasets": {"NHD_waterbodies": {"file": "hydro/NHD_waterbodies.gpkg",
+                                              "count": 3, "geometry": "MULTIPOLYGON",
+                                              "status": "complete"}}}
+        with open(os.path.join(pack, "manifest.json"), "w") as fh:
+            json.dump(m, fh)
+        listing = sorted(os.listdir(pack))
+        env = {"NDSUITE_DATA": d}
+        notes = RM.pack_gap_notes(env)
+        assert len(notes) == 1 and "NHD_waterbodies" in notes[0] and "not found" in notes[0], notes
+        logged = []
+        g, _fin = _flood()
+        mm, info = RM.build_mask(g, None, None, environ=env, log=logged.append)
+        assert mm is None and info is None and logged == notes, logged
+        assert sorted(os.listdir(pack)) == listing                      # nothing written
+        assert RM.pack_gap_notes({}) == []
+    finally:
+        shutil.rmtree(d)
+
+
+@test
 def report_metrics_mask_file_is_reprojected_onto_the_grid():
     try:
         from osgeo import gdal, osr  # noqa: F401

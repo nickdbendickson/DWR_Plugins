@@ -5,10 +5,14 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.59
+version=2.18.60
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
+    2.18.60 - 2026-10-25 (format-2 offline packs; every pack checked against its manifest.json)
+      * The Offline pack box now takes a format-2 pack: a folder of GeoPackages (one per layer) with manifest.json and LAYERS.txt, such as nd_Pack_20261014 or ND_Dam_Suite_Pack (Browse accepts its manifest.json). It is read by the suite's reader (damsuite.gpkgpack) under the same data set names as a format-1 pack; NHD_flowlines / NHD_waterbodies also answer to the 3DHP_ layers of newer packs. Format 1 (nd_offline_pack.sqlite / .zip) is read as before. Choosing a suite folder whose pack is format 2 also fills the Offline pack box when it is empty.
+      * On load the pack is checked against its manifest.json (damsuite.packcheck, read-only): every listed layer present, with its feature count, fields, geometry type and CRS (EPSG:4326). Missing or different layers are named in the QGIS log and message bar, in the pack status line and Check inputs, and in the run log. A missing NSI_structures (the structure inventory) is an error: offline only, the run stops with a clear message; online, it is downloaded instead. Before, a layer whose file was gone was skipped without a word.
+      * The evaluation signature of a format-2 pack folder includes its manifest.json, so an updated pack is a new evaluation.
     2.18.59 - 2026-10-22 (a dam's Hazard state saved to reopen)
       * New Processing tool 'Save a dam's Hazard window state (project to reopen)' (ndhazard:savedamstate; damstate.py), run by the Runner's batch chain after each dam's classification: writes <dam folder>/Hazard_<ID>.qgz (a new project with the dam's flood rasters, its model boundary and the Hazard window's state: scenario table, folders and options) plus a readable Hazard_<ID>.hazard_state.json. To reopen: Project > Open… the .qgz, open the Hazard window (it fills itself from the project), add scenarios with 'Add scenario' / 'Add from a folder…' and press Classify. The open project is never changed. Nothing in the classification changed.
     2.18.58 - 2026-10-22 (HEC-RAS 2D flow area as the batch's model boundary)

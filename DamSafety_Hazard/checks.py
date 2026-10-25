@@ -338,7 +338,7 @@ def check_services(urls, progress=None):
         from .offline_pack import describe
         text = describe(pack)
         bad = any(w in text for w in ("Not found", "Not usable", "missing", "incomplete",
-                                      "not an offline"))
+                                      "not an offline", "CHECK:"))     # 2.18.60: vs manifest
         out.append((WARNING if bad else OK, "offline data pack {}: {}".format(
             os.path.basename(pack), text)))
     if only:

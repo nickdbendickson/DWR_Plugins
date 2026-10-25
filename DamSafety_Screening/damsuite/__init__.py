@@ -43,6 +43,9 @@ Modules:
   netproxy    the proxy set in QGIS, for the downloads that go through urllib (1.16.2)
   structure_flags  flagged structures: records that are not a dam to breach (a road fill
               over backwater, DWR-3161) with the hazard class of record (1.17.2)
+  packcheck   an offline data pack checked against its manifest.json on load: every layer
+              there, with its count, fields, geometry type and CRS; format 1 / 2 detection
+              (1.17.5)
 
 `selfcheck()` compares this package's files with FILES.json and returns a list of problems
 ("missing: x.py", "changed: x.py", "unexpected file: x.py"); [] means the copy is intact.
@@ -63,14 +66,16 @@ from . import gpkgpack   # noqa: F401  (1.10.0)
 from . import hydro3dhp   # noqa: F401  (1.15.0)
 from . import netproxy   # noqa: F401  (1.16.2)
 from . import structure_flags   # noqa: F401  (1.17.2)
+from . import packcheck   # noqa: F401  (1.17.5)
 
-SUITE_VERSION = "1.17.4"   # 1.17.4: suitedata skips dem/lidar_1m (Screening 1 m tile cache, #105); 1.17.3: record.py, pack_convert fixes (#94); 1.17.2: structure_flags (flagged structures); 1.17.1: one canonical package
+SUITE_VERSION = "1.17.5"   # 1.17.5: packcheck (offline pack vs manifest.json on load), damdata logs it; 1.17.4: suitedata skips dem/lidar_1m (Screening 1 m tile cache, #105); 1.17.3: record.py, pack_convert fixes (#94); 1.17.2: structure_flags (flagged structures); 1.17.1: one canonical package
 FILES_NAME = "FILES.json"
 
 __all__ = ["SUITE_VERSION", "FILES_NAME", "selfcheck", "package_files", "chain", "dam_record",
            "gdalsafe", "settings", "suite_home", "tm11_curves", "units", "versions", "xlsx_lite",
            "offline_pack", "suitegpkg", "suitedata", "services", "terrain_cache", "damdata",
-           "keepawake", "solvegate", "gpkgpack", "hydro3dhp", "netproxy", "structure_flags"]
+           "keepawake", "solvegate", "gpkgpack", "hydro3dhp", "netproxy", "structure_flags",
+           "packcheck"]
 
 
 def package_files(folder=None):
