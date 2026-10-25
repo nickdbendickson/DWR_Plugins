@@ -55,7 +55,7 @@ from .grid import Grid
 from .units import FT, MILE, ACFT, CFS
 from ..damsuite import solvegate as SG
 
-VERSION_FALLBACK = "3.21.0"       # when metadata.txt cannot be read
+VERSION_FALLBACK = "3.21.1"       # when metadata.txt cannot be read
 
 
 def metadata_version(fallback=VERSION_FALLBACK):
