@@ -306,6 +306,58 @@ It prints one line, for example `VERDICT=host_freeze confidence=high last_t_s=20
 
 **How it tells them apart.** A host freeze stops the box's uptime clock and the worker's CPU time but not the wall clock. Wall seconds since the worker started minus its uptime age is the time the box was frozen (`freeze_total_s`); between two calls, wall gap minus uptime gap (`state_freeze_s`). CPU seconds per model second does not change with a freeze, so a rise in it (`cost_trend`) is a real slowdown. Logs from before 3.10.70 (no `dsteps`) are judged from the checkpoint times, the log's time, uptime and CPU, with confidence medium or low.
 
+## HEC-RAS results made before Runner 3.10.78 are too deep and too wide: re-export them (#173)
+**Who needs this.** Anyone with a HEC-RAS run that the Runner exported before 3.10.78. This covers the depth, the flooded area, the structure counts and the hazard class that Hazard worked out from those rasters. ANUGA and LISFLOOD-FP results aren't affected.
+
+**What was wrong.** HEC-RAS works on large cells (150 ft on DWR-2801), and each cell has one water surface. The Runner turns those cells into 30 m pixels for the depth raster. Before 3.10.78 it took each pixel's depth as the cell's highest water surface minus the *lowest* ground point anywhere in that cell. So if a cell had a ditch, a stream channel or a culvert outlet in it, every pixel in the cell got the ditch's depth, even where the ground was a few feet higher. The wet area and the 0.1 ft arrival time used the same depth. As a result:
+- **Depths were too high** across most cells that hold a low spot.
+- **The flooded area was too large**, because pixels on higher ground counted as wet or at 1 ft or more.
+- **Structures, roads and rail looked deeper than they were**, so they could land in a worse danger zone or count as flooded when they weren't.
+
+The HEC-RAS model itself was fine. The error was only in how the Runner read its results.
+
+**DWR-2801, on the area both models cover (51,387 ac):**
+
+| | Before 3.10.78 | 3.10.78 | ANUGA |
+|---|---|---|---|
+| Area at ≥ 1 ft | 5,060 ac | **1,923 ac** | 1,960 ac |
+| Area at ≥ 0.1 ft | 17,420 ac | 8,843 ac | 6,718 ac |
+| Wet area | 18,727 ac | 10,657 ac | 8,290 ac |
+
+The 2 lethal and 16 judgment structures that made HEC-RAS's ACER TM 11 class High came from this error. When the depths were worked out from the terrain, all 25 of HEC-RAS's zone 1 and 2 structures came out below 3 ft. The two models still don't agree on everything: HEC-RAS arrives earlier at Casselton and loses more volume. Those differences are real and the fix doesn't change them.
+
+**What 3.10.78 does.** Each pixel now gets the highest water surface of the HEC-RAS cell it falls in, minus the ground under that pixel. The ground is the terrain the HEC-RAS model used, averaged onto the 30 m grid. Depth never goes below 0. The wet area, the water surface, velocity and time-of-max rasters, and the 0.1 ft arrival time all use this depth. Arrival is now worked out pixel by pixel: it's the first time the cell's water surface over time, minus that pixel's ground, reaches 0.1 ft, interpolated between output times. A pixel that reaches 0.1 ft only between two output times gets the cell's time of the maximum instead. If a pixel inside the model has no terrain, the old lowest-point depth is used there, and a note gives the number of pixels.
+
+**Check which method a run used.** Open `DAM_FOLDER/_hecras/hecras_stage.json` and look at `depth_basis`:
+- `"terrain"`: 3.10.78 or later, depth from the terrain. Nothing to do.
+- `"cell_min"`: 3.10.78 or later, but the Runner couldn't find the model's terrain GeoTIFF, so the depth is the old lowest-point depth. The run also logs a warning that starts "HEC-RAS depth is from each cell's minimum elevation". Re-export it and give `--terrain`.
+- **No `depth_basis` key:** the run was made before 3.10.78. Re-export it.
+
+To check from a terminal: `python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('depth_basis', 'missing: before 3.10.78'))" "DAM_FOLDER/_hecras/hecras_stage.json"`
+
+**Re-export an old run (no model run).** The re-export reads the finished plan HDF (`.p01.hdf`) and the terrain again. HEC-RAS doesn't run again.
+- **Command line:** `python3 DamSafety_Runner/scripts/ndbreach_cli.py hecras-reexport DAM_FOLDER`
+- **Python:** `hecras_engine.reexport_hecras_results(run_dir)`
+- **What it writes.** It writes `Depth (Max).tif`, `Velocity (Max).tif`, `Arrival Time.tif`, `WSE (Max).tif` and `reexport.json` to a new folder, `DAM_FOLDER/_hecras/reexport_<UTC time>`. `reexport.json` records the inputs, `depth_basis`, any pixels without terrain (`no_terrain_cells`) and the areas both ways (`areas_old_cell_min` and `areas_new`). The command also prints both sets of areas.
+- **It doesn't touch your existing results.** The rasters in the dam folder stay as they were. It stops if the output folder already holds any of these files, unless you add `--overwrite`.
+- **Options.** It finds its inputs in `hecras_stage.json` and the HEC-RAS project, and the options override them:
+  - `--out DIR`: the output folder.
+  - `--hdf`: the plan HDF.
+  - `--terrain`: the terrain GeoTIFF. The default is `<project>/Terrain/*.tif`, not HEC-RAS's processed `Terrain.*.tif` copies.
+  - `--grid`: the raster whose grid to write on. The default is the dam folder's `Depth (Max).tif`.
+  - `--terrain-z`: the terrain's elevation unit, `feet`, `us_feet` or `meters`. The default is read from the raster.
+  - `--t0-hr`: the plan hour that arrival counts from.
+  - `--arrival-depth-ft`: the arrival depth. The default is 0.1 ft.
+- **After re-exporting**, run Hazard again on the new rasters. Point its depth, velocity and arrival inputs at the files in the `reexport_<UTC time>` folder. Any old Hazard classification, structure counts or maps made from the pre-3.10.78 rasters should be treated as out of date.
+
+**HEC-RAS import tool.** The Runner's HEC-RAS import tool has a new optional **Terrain** input ("Terrain the HEC-RAS model used"). Give it the model's terrain to get the 3.10.78 depth, wet area and arrival. If you leave it empty, the depth is still the old lowest-point depth, and a note says so.
+
+**Also fixed.** Arrival times for points with long time series used to fail with an error (a name clash in `_first_reach`). This happened when a series had more output times than one read block.
+
+**Not changed here.**
+- **The installed nd Runner 3.21.0** has the same depth line (`nd_breach_runner/core/hecras.py`). Its source is on the archived `archive/nd-plugins` branch, so fixing it would need a separate PR.
+- **Hazard's own HEC-RAS import** (`DamSafety_Hazard/rasimport.py`) isn't part of this change. With a terrain raster it already works out depth from the terrain, but its arrival time still uses each cell's lowest point. Without a terrain raster, its depth also uses the lowest point.
+
 ## HEC-RAS: bands of small cells along roads, rail, structures and breaklines (Runner 3.10.76)
 **What it does.** The HEC-RAS 2D area gets rows of small cells, with cell faces on the line, each side of every road, railway, culvert / bridge connection line and extra breakline: by default 3 rows of 20 ft cells each side, then the cells grow by at most 1.5x per row (never more than 2:1) to the normal cell size. Each banded road / rail / breakline is written to the `.g` as a BreakLine (`Band road 1`, `Band rail 1`, ...) with CellSize Min = the band cell and Near Repeats = the rows, so HEC-RAS keeps them if you regenerate the mesh. Structures keep their Connection line (and the 3.10.75 face check).
 
