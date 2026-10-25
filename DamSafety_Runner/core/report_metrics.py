@@ -194,8 +194,8 @@ def _suite_files_in(root):
     return [p for p in order if os.path.isfile(p)]
 
 
-def _suite_candidates(environ=None):
-    """Suite pack / data folder waterbody files that exist (read only)."""
+def _suite_roots(environ=None):
+    """The suite pack folder and the data folder (and its ND_Dam_Suite_Pack) to look in."""
     env = os.environ if environ is None else environ
     roots = []
     pack = env.get("NDSUITE_PACK", "")
@@ -211,13 +211,40 @@ def _suite_candidates(environ=None):
         roots.append(pack)
     if data:
         roots += [os.path.join(data, PACK_DIR), data]
+    return roots
+
+
+def _suite_candidates(environ=None):
+    """Suite pack / data folder waterbody files that exist (read only)."""
     out = []
-    for root in roots:
+    for root in _suite_roots(environ):
         for p in _suite_files_in(root):
             if p not in out:
                 out.append(p)
                 break
     return out[:1]
+
+
+def pack_gap_notes(environ=None):
+    """3.10.77: the water-body layers that a suite pack's manifest.json lists but that are
+    missing or unreadable on disk (damsuite.packcheck, files only, read-only), as log lines.
+    The mask then falls back silently otherwise (October 2026: NHD_waterbodies.gpkg gone)."""
+    out = []
+    try:
+        from ..damsuite import packcheck as PC
+    except Exception:            # noqa: BLE001 - outside the plugin
+        return out
+    seen = set()
+    for root in _suite_roots(environ):
+        folder = PC.pack_folder(root) if root and os.path.isdir(root) else ""
+        if not folder or folder in seen:
+            continue
+        seen.add(folder)
+        res = PC.check_pack(folder, deep=False)
+        for i in res.issues:
+            if i.level != PC.NOTE and "waterbod" in (i.layer or "").lower():
+                out.append("Water-body mask: offline pack {}: {}".format(folder, i.line()))
+    return out
 
 
 def _dam_folder_candidates(out_folder):
@@ -297,6 +324,10 @@ def build_mask(grid, setting=None, crs_wkt=None, environ=None, out_folder=None, 
     """(bool array or None, info dict) for the run report's 'water_mask'. Never raises:
     a file that cannot be read is a note in info['problems']."""
     srcs = mask_sources(setting, environ, out_folder)
+    if log and not any(isinstance(p, str) and "waterbod" in os.path.basename(p).lower()
+                       for p in srcs):
+        for line in pack_gap_notes(environ):     # 3.10.77: say why the suite file is not used
+            log(line)
     if not srcs:
         return None, None
     m = np.zeros((grid.ny, grid.nx), dtype=bool)

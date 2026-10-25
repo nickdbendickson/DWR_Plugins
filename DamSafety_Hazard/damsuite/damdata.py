@@ -536,6 +536,13 @@ def get_data_for_dam(folder, data_folder=None, catalog=None, http_get=None, make
     say = lambda m: (out["lines"].append(m), log(m))             # noqa
     say("Dam {} at {:.5f}, {:.5f} ({})".format(rec.get("dam_id") or os.path.basename(folder),
                                               lon, lat, how))
+    if reader is not None:                                       # 1.17.5: pack vs its manifest
+        try:
+            from . import packcheck as PC
+            for line in PC.check_pack(pack).lines(notes=False):
+                say(line)
+        except Exception as e:                                   # noqa
+            log("offline pack check not run: {}".format(e))
     ddir = os.path.join(folder, DATA_DIR)
     os.makedirs(ddir, exist_ok=True)
     vbox = _lonlat_box(lon, lat, vector_half_mi)

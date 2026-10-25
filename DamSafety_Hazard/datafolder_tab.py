@@ -178,14 +178,24 @@ class DataFolderTabMixin(object):
         if not pack:
             return
         if os.path.isdir(pack) and not os.path.isfile(os.path.join(pack, "nd_offline_pack.sqlite")):
-            self._log("This is a suite data folder (one GeoPackage per layer). "
-                      "Use it as the Data folder. The Offline pack box is only for an old .sqlite or .zip pack.")
             try:
                 from .damsuite.suite_config import set as save
                 save("data_folder", pack)
             except Exception as e:
                 log_message("Suite data folder not remembered ({}): {}".format(pack, e))
-            return
+            from .offline_pack import pack_format
+            if pack_format(pack) != 2:
+                self._log("This is a suite data folder (one GeoPackage per layer). "
+                          "Use it as the Data folder.")
+                return
+            # 2.18.60: a format-2 pack folder (manifest.json) is read as the offline pack too,
+            # unless another pack is already chosen
+            have = self.pack_path_edit.text().strip() if hasattr(self, "pack_path_edit") else ""
+            if have and os.path.normcase(os.path.abspath(have)) != os.path.normcase(
+                    os.path.abspath(pack)):
+                self._log("Suite data folder {} kept as the Data folder; the offline pack stays "
+                          "{}".format(pack, have))
+                return
         if hasattr(self, "pack_path_edit") and not self.pack_path_edit.text().strip():
             self.pack_path_edit.setText(pack)
         try:
