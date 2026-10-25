@@ -1059,8 +1059,13 @@ class RasPlanAlgorithm(_Base):
         except Exception as e:
             _report_traceback(feedback)
             raise QgsProcessingException(str(e) or repr(e)) from e
-        for line in res["lines"] + ["NOTE: " + n for n in res["notes"]]:
+        for line in res["lines"] + ["NOTE: " + n for n in res["notes"]
+                                    if n != RI.CELL_MIN_WARNING]:
             feedback.pushInfo(line)
+        # 2.18.61: what depth / arrival are measured from (also depth_basis.json)
+        feedback.pushInfo("Depth basis: {}".format(res.get("depth_basis")))
+        if res.get("depth_basis") == RI.DEPTH_BASIS_CELL_MIN:
+            feedback.reportError(RI.CELL_MIN_WARNING, fatalError=False)
         p = res["paths"]
         return {"DEPTH": p.get("depth"), "VELOCITY": p.get("vel"), "ARRIVAL": p.get("arr"),
                 "WSE": p.get("wse"), "PEAK": p.get("peak"), "BOUNDARY": p.get("boundary")}
