@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.18.60
+ND Dam Hazard Classification Helper - Version 2.18.61
 ====================================================
 
 WHAT IT DOES
@@ -892,6 +892,10 @@ OFFLINE DATA PACK (2.6.1) - running without internet access
   back to an earlier download of the same area, if there is one.
 - The pack is a snapshot: rebuild it (or --refresh a data set) to pick
   up newer data.
+- 2.18.61: HEC-RAS plan import - the arrival time uses the same depth as the
+  depth raster (terrain under each pixel when a terrain raster is given; else the
+  Runner's terrain re-export of the plan; else the cell minimum, with a warning).
+  The basis used is in depth_basis.json next to the rasters.
 - 2.18.60: the Offline pack box also takes a format-2 pack: a folder of
   GeoPackages (one per layer) with manifest.json and LAYERS.txt, as built
   by the nd Data Updater (e.g. nd_Pack_20261014, ND_Dam_Suite_Pack).

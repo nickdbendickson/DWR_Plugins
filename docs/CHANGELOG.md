@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **Hazard 2.18.61: HEC-RAS plan import - arrival on the same depth basis as the depth (follows Runner 3.10.79, #173).** `rasimport.py`: arrival per pixel from WSE minus the terrain; without a terrain raster the Runner's terrain re-export / terrain-basis rasters of the plan, else the cell minimum with a warning. Basis (`terrain` / `runner_reexport` / `cell_min`) in `depth_basis.json`, the plan cache manifest and the run log; REG_05.2026 workbook unchanged. Test: `tests/test_rasimport_terrain_arrival.py`. *(Prose: Docs & QA.)*
 - **Hazard 2.18.60, Runner 3.10.77, Screening 0.17.45, damsuite 1.17.5: format-2 offline packs in Hazard, and every pack checked against its manifest.json (#171; merge after #171).**
   - **Hazard reads format-2 packs.** The Offline pack box now takes a folder of GeoPackages with `manifest.json` (for example nd_Pack_20261014 or ND_Dam_Suite_Pack) as well as a format-1 `nd_offline_pack.sqlite`, `.zip` or unpacked folder. "Browse..." accepts `manifest.json` and puts its folder in the box. Layers are read under the same names as format 1, and `NHD_flowlines` / `NHD_waterbodies` also take a newer pack's `3DHP_*` layers. Before this, DWR Hazard read format 1 only, and a format-2 folder worked only as the "Data folder" (which still works).
   - **Suite folder shortcut.** Choosing a suite data folder that holds a format-2 pack also fills the Offline pack box, but only when the box is empty. *(Pending decision: Nick to confirm this behaviour.)*

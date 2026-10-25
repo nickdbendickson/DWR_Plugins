@@ -923,6 +923,10 @@ def _write_run_log(run, cfg, status):
             if k == "scenarios":
                 for sc in v or []:
                     lines.append("  scenario: {}".format(sc.to_dict()))
+                    # 2.18.61: a HEC-RAS plan's depth basis (terrain / runner_reexport / cell_min)
+                    pr = getattr(sc, "plan_rasters", None) or {}
+                    if pr.get("depth_basis"):
+                        lines.append("    HEC-RAS depth basis: {}".format(pr["depth_basis"]))
                 continue
             if callable(getattr(v, "name", None)):
                 v = "layer '{}'".format(v.name())
