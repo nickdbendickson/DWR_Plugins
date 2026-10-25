@@ -23,6 +23,7 @@ from nd_breach_runner.core.units import ACFT, CFS, FT
 from nd_breach_runner.tests.synthetic import SyntheticTerrain, npy_writer, valley, TOP_M, H_M
 
 from nd_breach_runner.tests.registry import TESTS, MODEL_TESTS, test, model_test  # noqa: E402
+from nd_breach_runner.tests.preflight_stub import without_dem_and_smoke_checks  # noqa: E402
 
 
 def close(a, b, rel=1e-6, abs_=0.0):
@@ -763,7 +764,9 @@ def wrong_dem_units_are_caught():
                          os.path.join(d, "T1"))
         raise AssertionError("expected a unit error")
     except br.BreachInputError as e:
-        assert "elevation units" in str(e) or "DEM elevation" in str(e), str(e)
+        # the crest mismatch is a warning now (the inventory crest is kept); what stops the run
+        # is that no ground near the dam point is near the top of dam
+        assert "another datum" in str(e) or "elevation units" in str(e), str(e)
     shutil.rmtree(d)
 
 
@@ -891,9 +894,11 @@ def workflow_no_breach_when_trigger_not_reached():
 
 
 def _road_valley(x, y):
-    """The valley with a tall road embankment across it at x = 2500 m."""
+    """The valley with a road embankment across it at x = 2500 m, 1.5 m below the top of dam.
+    A road above the reservoir's level would make the filled DEM spill back through the
+    reservoir, so the flow trace (and the domain) would run upstream."""
     z = valley(x, y)
-    return np.where(np.abs(x - 2500.0) < 12.0, np.maximum(z, TOP_M + 40.0), z)
+    return np.where(np.abs(x - 2500.0) < 12.0, np.maximum(z, TOP_M - 1.5), z)
 
 
 @model_test
@@ -1042,7 +1047,7 @@ def resume_skips_finished_runs_and_cancel_stops_quickly():
                           SyntheticTerrain(), npy_writer, out, log=logs2.append)
     assert any("Resuming" in m for m in logs2) and any("loaded from the checkpoint" in m
                                                        for m in logs2)
-    assert not any(m.startswith("LISFLOOD-FP run") for m in logs2)
+    assert not any(m.startswith("Run ") and "with LISFLOOD-FP" in m for m in logs2)
     assert r1.summary["flooded_acres"] == r2.summary["flooded_acres"]
     # a changed setting means a fresh start
     logs3 = []
@@ -1076,7 +1081,7 @@ def sensitivity_runs_share_the_domain_and_make_an_envelope():
              sens.Case("TR-60", sens.GROUP_METHOD, method=br.METHOD_TR60)]
     out = os.path.join(d, "T1")
     r = sens.run_sensitivity(dam(crest_width_ft=12, us_slope_h=3, ds_slope_h=3), (0.0, 0.0), st,
-                             SyntheticTerrain(), npy_writer, out, cases=cases,
+                             SyntheticTerrain(), npy_writer, out, cases=cases, cell_check=False,
                              classify=lambda folder: "High" if os.path.exists(os.path.join(
                                  folder, "Depth (Max).tif")) else "?")
     assert [x["case"] for x in r.rows][0] == "Base" and len(r.rows) == 4
@@ -1180,6 +1185,7 @@ def _patched_algs():
 
 
 @model_test
+@without_dem_and_smoke_checks
 def rundam_algorithm_end_to_end():
     algs, fq = _patched_algs()
     a = algs.RunDamAlgorithm()
@@ -1285,6 +1291,7 @@ def _poly(pts, **a):
 
 
 @model_test
+@without_dem_and_smoke_checks
 def rundam_algorithm_flood_with_layers():
     algs, fq = _patched_algs()
     a = algs.RunDamAlgorithm()
@@ -1365,7 +1372,7 @@ def sensitivity_and_estimate_and_check_algorithms():
     a.initAlgorithm()
     fb = fq.QgsProcessingFeedback()
     r = a.processAlgorithm(dict(common, SENS_WIDTH="0.7", SENS_TIME="", SENS_N="1.3",
-                                SENS_METHODS=False), fq.QgsProcessingContext(), fb)
+                                SENS_METHODS=False, SENS_CELL=False), fq.QgsProcessingContext(), fb)
     import csv as _csv
     rows = list(_csv.DictReader(open(r["SUMMARY"])))
     assert [x["case"] for x in rows] == ["Base", "Width x0.7", "Manning x1.3"], rows

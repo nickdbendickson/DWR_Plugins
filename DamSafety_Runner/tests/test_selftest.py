@@ -274,14 +274,19 @@ def fake_gdal(**bugs):
 
 @contextlib.contextmanager
 def no_models():
-    """Nothing found by auto-detection, whatever the developer's machine has."""
+    """Nothing found by auto-detection, whatever the developer's machine has. The model
+    variables are hidden too: the suite setting falls back to NDBREACH_LISFLOOD, which the
+    --models run sets."""
     keep = nd_data.detect_lisflood, nd_data.detect_anuga_python
+    env = dict((v, os.environ.pop(v)) for v in ("NDBREACH_LISFLOOD", "NDBREACH_ANUGA_PYTHON")
+               if v in os.environ)
     nd_data.detect_lisflood = lambda *a, **k: ""
     nd_data.detect_anuga_python = lambda *a, **k: ""
     try:
         yield
     finally:
         nd_data.detect_lisflood, nd_data.detect_anuga_python = keep
+        os.environ.update(env)
 
 
 class Tmp(object):
@@ -929,7 +934,7 @@ def selftest_small_model_runs_through_the_stand_in():
         prod = st.verify_products(res, expect_gpkg=False)
         assert "EAP map" in prod, prod
         assert res.summary["flooded_acres"] > 20, res.summary
-        assert any("LISFLOOD-FP run 1" in m for m in lines), lines[:5]
+        assert any(m.startswith("Run 1 with LISFLOOD-FP") for m in lines), lines[:5]
         # the verifier refuses a run that flooded nothing
         res.summary["flooded_acres"] = 1.0
         try:
