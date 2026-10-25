@@ -970,7 +970,7 @@ def selftest_small_model_runs_through_the_stand_in():
         prod = st.verify_products(res, expect_gpkg=False)
         assert "EAP map" in prod, prod
         assert res.summary["flooded_acres"] > 20, res.summary
-        assert any("LISFLOOD-FP run 1" in m for m in lines), lines[:5]
+        assert any(m.startswith("Run 1 with LISFLOOD-FP") for m in lines), lines[:5]
         # the verifier refuses a run that flooded nothing
         res.summary["flooded_acres"] = 1.0
         try:
