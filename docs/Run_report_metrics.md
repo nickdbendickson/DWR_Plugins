@@ -48,8 +48,9 @@ warning), and `Water Body Mask.geojson` (the mask as polygons) in the dam folder
    Without it, the `NDBREACH_WATERBODY_MASK` environment variable.
 2. The dam folder's data section `waterbodies` layer (the Data plugin's per-dam step).
 3. `hydro/3DHP_waterbodies.gpkg`, another `hydro/3DHP_*waterbod*.gpkg` (the 3DHP download's own names, first by name), or the pre-1.19 `hydro/NHD_waterbodies.gpkg` in the suite pack
-   or the suite data folder, when that file exists. `ND_Dam_Suite_Pack/LAYERS.txt` lists it but
-   the pack does not hold it yet; adding it is a Data-plugin step. The Runner only reads.
+   or the suite data folder, when that file exists. `ND_Dam_Suite_Pack` holds
+   `hydro/NHD_waterbodies.gpkg` (369,435 polygons, USGS NHD 2023-12-27; restored 2026-10-24), so
+   a run that finds the pack masks with it unless a 3DHP file comes first or the mask is `off`. The Runner only reads.
 
 `off` (in the setting or the variable) turns the mask off. Polygons are reprojected onto the
 final grid and burnt at cell centres. Cover the dam's own reservoir and any receiving lake below
