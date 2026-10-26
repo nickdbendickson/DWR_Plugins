@@ -22,7 +22,7 @@ from qgis.core import QgsRasterLayer
 
 from . import rasimport as RI
 from .ui_wrap import WrapCheckBox
-from .compat import MSG_CRITICAL
+from .compat import MSG_CRITICAL, MSG_WARNING
 from .helpers import (
     log_message, add_layer_to_project, plugin_group, dam_display_name, CancelledByUser,
 )
@@ -266,7 +266,8 @@ class RasImportTabMixin(object):
                                  cell_ft=float(self.ras_cell_spin.value()),
                                  breach_hr=float(self.ras_breach_spin.value()),
                                  arrival_ft=float(self.ras_arrival_spin.value()),
-                                 progress=self._progress_tick)
+                                 progress=self._progress_tick,
+                                 runner_dirs=[getattr(self, "config_dam_folder", "") or ""])
         except CancelledByUser:
             self._finish_progress()
             self._set_busy(False)
@@ -302,8 +303,14 @@ class RasImportTabMixin(object):
                         if key == "depth":
                             style_depth(lyr)
                         add_layer_to_project(lyr, visibility=key == "depth", group=grp)
-        text = ["Imported to {} ({:.1f} ft pixels)".format(out, res.get("pixel_ft") or 0), ""] \
-            + res["lines"] + [""] + ["NOTE: " + n for n in res["notes"]] + \
+        # 2.18.61: the depth basis first; the cell-minimum warning on top when it is that
+        basis = res.get("depth_basis")
+        warn = [RI.CELL_MIN_WARNING, ""] if basis == RI.DEPTH_BASIS_CELL_MIN else []
+        if warn:
+            log_message(RI.CELL_MIN_WARNING, MSG_WARNING)
+        text = warn + ["Imported to {} ({:.1f} ft pixels)".format(out, res.get("pixel_ft") or 0),
+                       "Depth basis: {}".format(basis), ""] \
+            + res["lines"] + [""] + ["NOTE: " + n for n in res["notes"] if n != RI.CELL_MIN_WARNING] + \
             ["", "Arrival and time of peak: hours after {:g} h of simulation time.".format(
                 float(self.ras_breach_spin.value()))]
         self.ras_result_text.setPlainText("\n".join(text))

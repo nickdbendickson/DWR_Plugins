@@ -12,7 +12,9 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
+import types
 
 import numpy as np
 
@@ -272,16 +274,190 @@ def fake_gdal(**bugs):
         st.gdal_io, st.check_gdal, st.check_ogr_geopackage, st._set_unit_type = keep
 
 
+# The environment variables the Runner, and the suite store it reads through
+# (damsuite.suite_config), use to find a model executable or interpreter. NDBREACH_LISFLOOD and
+# NDBREACH_ANUGA_PYTHON are on the self-test's path; the gmsh and HEC-RAS ones are not and are
+# cleared in case. A developer machine may set any of them globally.
+MODEL_ENV_VARS = ("NDBREACH_LISFLOOD", "NDBREACH_ANUGA_PYTHON", "NDBREACH_GMSH_PYTHON",
+                  "NDBREACH_HECRAS_WINEPREFIX", "NDBREACH_HECRAS_WINDOWS_DIR",
+                  "NDBREACH_HECRAS_LINUX_DIR")
+# Not environment variables, also read by find_lisflood / find_anuga: the suite store's keys
+# (a project override, then QgsSettings 'ndsuite/<key>', then the variable above) and the
+# Runner provider's Processing settings (algorithms.SET_LISFLOOD / SET_ANUGA, ProcessingConfig).
+MODEL_SUITE_KEYS = ("lisflood_exe", "anuga_python")
+MODEL_PROCESSING_KEYS = ("NDBREACH_LISFLOOD_EXE", "NDBREACH_ANUGA_PYTHON")
+# PATH lookups that miss. The Runner's only one, which('lisflood') in nd_data.lisflood_candidates,
+# is stubbed out too; these names (and the HEC-RAS executables, which no Runner code looks up on
+# the PATH today) are blocked in case.
+MODEL_EXES = ("lisflood", "lisflood.exe", "ras", "ras.exe", "rasunsteady", "rasunsteady.exe")
+
+
+def _processing_config():
+    """ProcessingConfig as algorithms._setting imports it, or None without Processing (then
+    _setting returns its default)."""
+    try:
+        from processing.core.ProcessingConfig import ProcessingConfig
+        return ProcessingConfig
+    except Exception:
+        return None
+
+
 @contextlib.contextmanager
 def no_models():
-    """Nothing found by auto-detection, whatever the developer's machine has."""
-    keep = nd_data.detect_lisflood, nd_data.detect_anuga_python
-    nd_data.detect_lisflood = lambda *a, **k: ""
-    nd_data.detect_anuga_python = lambda *a, **k: ""
+    """Nothing found by auto-detection, whatever the developer's machine has: the model
+    environment variables are cleared, the suite store and the Processing settings hold no
+    model, PATH lookups of the model executables miss, and the detectors and the candidate
+    lists they search return nothing. Everything is restored afterwards."""
+    from nd_breach_runner.damsuite import suite_config
+    keep = dict((n, getattr(nd_data, n)) for n in (
+        "detect_lisflood", "detect_anuga_python", "lisflood_candidates", "anuga_python_candidates",
+        "conda_env_pythons"))
+    saved = dict((k, os.environ.pop(k)) for k in MODEL_ENV_VARS if k in os.environ)
+    real_which, real_get, pc = shutil.which, suite_config.get, _processing_config()
+    real_setting = pc.getSetting if pc is not None else None
+
+    def which(cmd, *a, **k):
+        if os.path.basename(str(cmd)).lower() in MODEL_EXES:
+            return None
+        return real_which(cmd, *a, **k)
+    nd_data.detect_lisflood = nd_data.detect_anuga_python = lambda *a, **k: ""
+    nd_data.lisflood_candidates = nd_data.anuga_python_candidates = lambda *a, **k: []
+    nd_data.conda_env_pythons = lambda *a, **k: []
+    suite_config.get = lambda key, project=None: (
+        "" if key in MODEL_SUITE_KEYS else real_get(key, project))
+    if pc is not None:
+        pc.getSetting = staticmethod(lambda name, *a, **k: (
+            None if name in MODEL_PROCESSING_KEYS else real_setting(name, *a, **k)))
+    shutil.which = which
     try:
         yield
     finally:
-        nd_data.detect_lisflood, nd_data.detect_anuga_python = keep
+        shutil.which = real_which
+        if pc is not None:
+            pc.getSetting = staticmethod(real_setting)
+        suite_config.get = real_get
+        for n, f in keep.items():
+            setattr(nd_data, n, f)
+        for k in MODEL_ENV_VARS:
+            os.environ.pop(k, None)
+        os.environ.update(saved)
+
+
+@test
+def no_models_clears_and_restores_the_model_environment():
+    # Every input set: the variables, the suite store's computer setting, the Processing
+    # settings and a lisflood / Ras / RasUnsteady on the PATH. Inside no_models() each misses;
+    # afterwards each is back exactly, also when the block sets them or raises.
+    algs, _mod, fq = _algorithm_module()
+    from nd_breach_runner.core import hecras_engine, hecras_seeds, hecras_windows
+    from nd_breach_runner.damsuite import suite_config
+    wanted = (suite_config.ENV["lisflood_exe"], suite_config.ENV["anuga_python"],
+              hecras_seeds.ENV_PYTHON, hecras_engine.ENV_PREFIX, hecras_engine.ENV_WINDIR,
+              hecras_engine.ENV_LINUX, hecras_windows.ENV_WINDIR)
+    assert set(wanted) <= set(MODEL_ENV_VARS), sorted(set(wanted) - set(MODEL_ENV_VARS))
+    assert MODEL_PROCESSING_KEYS == (algs.SET_LISFLOOD, algs.SET_ANUGA)
+    variables = sorted(set(wanted) | set(MODEL_ENV_VARS))
+    before = dict((k, os.environ.get(k)) for k in variables + ["PATH"])
+    core = sys.modules["qgis.core"]
+    keep_core = core.__dict__.get("QgsSettings")
+    mods = ("processing", "processing.core", "processing.core.ProcessingConfig")
+    keep_mods = dict((m, sys.modules.get(m)) for m in mods)
+    funcs = ("detect_lisflood", "detect_anuga_python", "lisflood_candidates",
+             "anuga_python_candidates", "conda_env_pythons")
+    keep_funcs = dict((n, getattr(nd_data, n)) for n in funcs)
+    keep_store, d = dict(fq.QgsSettings._store), tempfile.mkdtemp()
+    try:
+        exes = {}
+        for name in ("lisflood", "Ras", "RasUnsteady", "python"):
+            exes[name] = os.path.join(d, name + (".exe" if os.name == "nt" else ""))
+            with open(exes[name], "w") as f:
+                f.write("#!/bin/sh\nexit 3\n")
+            os.chmod(exes[name], 0o755)
+        os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+        values = dict((k, os.path.join(d, k.lower())) for k in variables)
+        values[suite_config.ENV["lisflood_exe"]] = exes["lisflood"]
+        core.QgsSettings = fq.QgsSettings
+        fq.QgsSettings._store.update({suite_config.PREFIX + "lisflood_exe": exes["lisflood"],
+                                      suite_config.PREFIX + "anuga_python": exes["python"],
+                                      suite_config.PREFIX + "data_folder": d})
+        settings = {algs.SET_LISFLOOD: exes["lisflood"], algs.SET_ANUGA: exes["python"],
+                    algs.SET_THREADS: 3}
+
+        def real_setting(name, readable=False):
+            return settings.get(name)
+        pc = type("ProcessingConfig", (), {"getSetting": staticmethod(real_setting)})
+        for m in mods:
+            sys.modules[m] = types.ModuleType(m)
+        sys.modules["processing.core.ProcessingConfig"].ProcessingConfig = pc
+        real_which, real_get = shutil.which, suite_config.get
+        on_path = dict((n, exes[n]) for n in ("lisflood", "Ras", "RasUnsteady"))
+        found = {"which": on_path,
+                 "suite": {"lisflood_exe": exes["lisflood"], "anuga_python": exes["python"]},
+                 "processing": dict((k, settings[k]) for k in MODEL_PROCESSING_KEYS),
+                 "find": (exes["lisflood"], os.path.realpath(exes["python"]))}
+
+        def lookups():
+            return {"which": dict((n, shutil.which(n)) for n in on_path),
+                    "suite": dict((k, suite_config.get(k)) for k in MODEL_SUITE_KEYS),
+                    "processing": dict((k, algs._setting(k)) for k in MODEL_PROCESSING_KEYS),
+                    "find": (algs._Base().find_lisflood({}, None),
+                             algs._Base().find_anuga({}, None))}
+
+        def restored():
+            assert dict((k, os.environ.get(k)) for k in variables) == values
+            assert shutil.which is real_which and suite_config.get is real_get
+            assert pc.getSetting is real_setting
+            assert all(getattr(nd_data, n) is f for n, f in keep_funcs.items())
+            assert lookups() == found, lookups()
+
+        os.environ.update(values)
+        assert lookups() == found, lookups()        # each input is visible before
+        with no_models():
+            assert [k for k in variables if k in os.environ] == []
+            assert lookups() == {"which": dict((n, None) for n in on_path),
+                                 "suite": dict((k, "") for k in MODEL_SUITE_KEYS),
+                                 "processing": dict((k, "") for k in MODEL_PROCESSING_KEYS),
+                                 "find": ("", "")}, lookups()
+            # replaced, not just empty on this machine (home globs, CONDA_PREFIX, conda env list)
+            assert all(getattr(nd_data, n) is not f for n, f in keep_funcs.items())
+            assert (nd_data.detect_lisflood(), nd_data.detect_anuga_python()) == ("", "")
+            assert (nd_data.lisflood_candidates(), nd_data.anuga_python_candidates(),
+                    nd_data.conda_env_pythons()) == ([], [], [])
+            assert algs._setting(algs.SET_THREADS) == 3          # other settings still read
+            assert suite_config.get("data_folder") == d
+            for k in variables:
+                os.environ[k] = "set inside"
+        restored()
+        # a variable first set inside the block is removed, also when the block raises
+        for k in variables:
+            del os.environ[k]
+        try:
+            with no_models():
+                os.environ.update(dict((k, "set inside") for k in variables))
+                raise KeyError("inside")
+        except KeyError:
+            pass
+        assert [k for k in variables if k in os.environ] == []
+        os.environ.update(values)
+        restored()
+    finally:
+        for k, v in before.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        for m, v in keep_mods.items():
+            if v is None:
+                sys.modules.pop(m, None)
+            else:
+                sys.modules[m] = v
+        if keep_core is None:
+            core.__dict__.pop("QgsSettings", None)
+        else:
+            core.QgsSettings = keep_core
+        fq.QgsSettings._store.clear()
+        fq.QgsSettings._store.update(keep_store)
+        shutil.rmtree(d, ignore_errors=True)
 
 
 class Tmp(object):
@@ -929,7 +1105,7 @@ def selftest_small_model_runs_through_the_stand_in():
         prod = st.verify_products(res, expect_gpkg=False)
         assert "EAP map" in prod, prod
         assert res.summary["flooded_acres"] > 20, res.summary
-        assert any("LISFLOOD-FP run 1" in m for m in lines), lines[:5]
+        assert any(m.startswith("Run 1 with LISFLOOD-FP") for m in lines), lines[:5]
         # the verifier refuses a run that flooded nothing
         res.summary["flooded_acres"] = 1.0
         try:
