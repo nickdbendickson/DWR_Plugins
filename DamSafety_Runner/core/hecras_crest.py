@@ -41,26 +41,36 @@ PLATEAU_FRAC = 0.05          # level within 5 % of the sample spacing: the same 
 # record), not an abutment: the walk follows the DEM's crest level instead
 DATUM_FRAC = 0.25
 DATUM_MIN_FT = 5.0
-# 3.10.87: a dam line traced off the old rule (from other crest-high ground near the dam point
-# - snap -, at the DEM's level off the record, or on the dam point's own ridge over a higher
-# one) is used only when it crosses the run's flow (flow_check): of the run's flooded cells
-# within two line lengths, at least FLOW_DOWN_FRAC on its downstream side, their centroid
-# within FLOW_ANGLE_MAX_DEG of its downstream normal and of every part's, no ridge between the
-# line and the flood (a causeway across the pool has the dam between it and the flood)
+# 3.10.87: a dam line traced off the old rule (where that rule finds no crest: from other
+# crest-high ground near the dam point - snap -, at the DEM's level off the record, or on the
+# dam point's own ridge over a higher one) is used only with evidence() that it is the dam;
+# one part is flow_check: of the run's flooded cells within two line lengths, at least
+# FLOW_DOWN_FRAC on its downstream side, their centroid within FLOW_ANGLE_MAX_DEG of its
+# downstream normal, no ridge between the line and the flood (a causeway across the pool has
+# the dam between it and the flood)
 FLOW_DOWN_FRAC = 0.8
 FLOW_ANGLE_MAX_DEG = 60.0
-FLOW_LOCAL_MAX_DEG = 65.0     # ... and every part of the line within this (no arm along the flow)
+FLOW_LOCAL_MAX_DEG = 65.0     # ... and no more than one of ten parts off it by more than this
 FLOW_MIN_CELLS = 10
+# 3.10.87 (evidence): the flow path below the breach (flow_path) within this of the line's
+# downstream normal; its steps look this far either side of the last one
+FLOW_PATH_MAX_DEG = 45.0
+FLOW_PATH_CONE_DEG = 60.0
+# ... and another crest-high ridge or level top beside the line, or crest-high ground behind
+# it, in at most this fraction of its sections
+PARALLEL_MAX_FRAC = 0.25
 
 
 class CrestTraceError(ValueError):
     """The crest could not be traced; the message says why (build_model falls back).
 
-    3.10.87: on_ridge is True when the dam point sits on a ridge that stands above the ground on
-    both sides of the guessed axis but is not at the top of dam on record (the crest is there
-    and reads off the record: a coarse DEM, another datum), so no start from other high ground
-    nearby is tried; snap_tried records a start from other crest-high ground that was tried and
-    given up."""
+    3.10.87: on_ridge is True when the dam point is on the embankment where the trace found no
+    crest it may follow - on a ridge that stands above the ground on both sides of the guessed
+    axis but is off the record's level (the crest is there and reads off the record: a coarse
+    DEM, another datum), on ground at the record's level that is no clear crest, or within the
+    toe distance of a level top (a wide crest) - so no start from other high ground nearby is
+    tried; snap_tried records a start from other crest-high ground that was tried and given
+    up."""
 
     def __init__(self, msg, on_ridge=False, snap_tried=None):
         super().__init__(msg)
@@ -349,9 +359,14 @@ def _judge(sample, R, nu, zr, top, tol, toe, prom, nan_falls=False):
 
 
 def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap, wide=None):
+    """3.10.87: `wide` given (a trace off the old rule, see trace): see _ridge and _judge, and
+    crest found past a stretch stepped over at the end of the walk counts only when it is at
+    least two steps long and as long as that stretch (a high point or two past the end of the
+    embankment - a knoll on the abutment - is not its crest)."""
     pts = [np.asarray(X0, float)]
     X, tau = pts[0], np.asarray(tau0, float) / (np.hypot(*tau0) or 1.0)
     walked, run, last_ok, why, nstep = 0.0, 0.0, 0, "the dam length", 0
+    before_gap, since_gap, gap_len = 0, None, 0.0
     ds = 0.5 * step
     while walked < max_len - 1e-9:
         h = min(step, max_len - walked)
@@ -373,6 +388,10 @@ def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap, wide=None):
             walked += float(np.hypot(*(R - X)))
             X = R
             pts.append(R)
+            if run > 0.0:
+                before_gap, since_gap, gap_len = last_ok, 0, run
+            if since_gap is not None:
+                since_gap += 1
             last_ok, run = len(pts) - 1, 0.0
         else:
             run += h
@@ -382,7 +401,38 @@ def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap, wide=None):
             X = Y                                   # straight on over the gap
             walked += h
             pts.append(Y)
+    if wide is not None and since_gap is not None and \
+            since_gap * step < max(2.0 * step, gap_len) - 1e-9:
+        last_ok = before_gap
     return np.vstack(pts[:last_ok + 1]), why, walked
+
+
+def _level_tops(zz, tt, w_min, flat, fall, reach):
+    """3.10.87: the level tops along a section (samples zz at offsets tt, ascending): stretches
+    at least w_min long whose ground varies by no more than `flat`, beyond an end of which the
+    ground falls at least `fall` below them within `reach` - a wide crest, also one a higher
+    road on its edge keeps from being a ridge, or a bench at the crest's level; not a pool
+    surface (level, but nothing falls beyond it) and not a sloping face. [(t0, t1, z_mean)]"""
+    zz, tt = np.asarray(zz, float), np.asarray(tt, float)
+    n, out, i = len(zz), [], 0
+    while i < n:
+        if not np.isfinite(zz[i]):
+            i += 1
+            continue
+        lo = hi = zz[i]
+        j = i
+        while j + 1 < n and np.isfinite(zz[j + 1]) and \
+                max(hi, zz[j + 1]) - min(lo, zz[j + 1]) <= flat:
+            j += 1
+            lo, hi = min(lo, zz[j]), max(hi, zz[j])
+        if tt[j] - tt[i] >= w_min - 1e-9:
+            zm = float(np.mean(zz[i:j + 1]))
+            after = zz[(tt > tt[j]) & (tt <= tt[j] + reach)]
+            before = zz[(tt < tt[i]) & (tt >= tt[i] - reach)]
+            if any(np.any(np.isfinite(v) & (v <= zm - fall)) for v in (after, before)):
+                out.append((float(tt[i]), float(tt[j]), zm))
+        i = j + 1
+    return out
 
 
 def _rises(sample, P, Q, prom, ds):
@@ -408,7 +458,9 @@ def snap(sample, P, top, tol, search, half, step, allow=None, prom=None):
     valley floor does not, nor one beyond the shallow saddle a coarse DEM shows between it and
     a narrow crest that it reads low); and the embankment's direction there (the long axis of
     the high ground within `half` of it). Returns (point, unit axis) or None (P on the crest,
-    nothing high enough within reach, or high ground with no clear long axis: a hill)."""
+    nothing high enough within reach, P on the face of another ridge on the side away from it -
+    the embankment P is on reads below the record -, or high ground with no clear long axis: a
+    hill)."""
     P = np.asarray(P, float)
     zp = sample(P[None, :])[0]
     if np.isfinite(zp) and zp >= top - tol:
@@ -430,6 +482,18 @@ def snap(sample, P, top, tol, search, half, step, allow=None, prom=None):
             break
     if Q is None:
         return None
+    if prom is not None:
+        # the dam point on the face of another ridge, on the side away from Q (an embankment
+        # that reads below the record, a road beyond it at the record's level): it is on that
+        # one - the ground rises from P by `prom` to a top and falls behind it within `search`
+        u = (P - Q) / (np.hypot(*(P - Q)) or 1.0)
+        tt = np.arange(0.0, float(search) + 1e-9, 0.5 * step)
+        zb = sample(P[None, :] + tt[:, None] * u[None, :])
+        zb = zb[np.isfinite(zb)]
+        if len(zb) > 2:
+            k = int(np.argmax(zb))
+            if zb[k] - zb[0] >= prom and np.any(zb[k:] <= zb[k] - 0.5 * prom):
+                return None
     loc = high & (np.hypot(*(xy - Q).T) <= half)
     if loc.sum() < 3:
         return None
@@ -469,8 +533,11 @@ def flow_check(line, wet_xy, wet_cell, sample=None, crest=None, tol=None, toe=No
     wet_xy: the centres of the run's flooded cells (model units; cells wet_cell wide). Of those
     within `reach` (default two line lengths) of the line: at least FLOW_DOWN_FRAC on its
     downstream side (the line extended straight past its ends), their centroid within
-    FLOW_ANGLE_MAX_DEG of its downstream normal (seen from the line's middle; a line along the
-    valley has the flood along it). When `dam_point` is given: it is not more than `beyond`
+    FLOW_ANGLE_MAX_DEG of its downstream normal (seen from the line's middle), and of the
+    normals of no more than one of ten parts along it more than FLOW_LOCAL_MAX_DEG (an arm along
+    the flow) - a line along the valley with the flood on both sides fails; one with the flood
+    on one side only can pass, so evidence() also follows the flow path. When `dam_point` is
+    given: it is not more than `beyond`
     downstream of the line (a dam point on the pool or the face is upstream of the crest or
     near it; one farther downstream is below another embankment). When `sample` is given: no
     ridge between the line and the flood along most of the line - after the ground has fallen
@@ -570,32 +637,180 @@ def flow_check(line, wet_xy, wet_cell, sample=None, crest=None, tol=None, toe=No
     return True, dict(info, why="")
 
 
+def flow_path(sample, X0, heading, length, r, cone=FLOW_PATH_CONE_DEG):
+    """3.10.87: the way the water goes from X0 over the DEM: steps of r, each to the lowest
+    ground on an arc within `cone` degrees of the last step's direction (always forward: over a
+    hollow or a low rise, not into it, so a thalweg is followed down a valley that the
+    ground's local slope points across), until `length` or the edge of the DEM. Returns the
+    points (X0 first)."""
+    X = np.asarray(X0, float)
+    h = np.asarray(heading, float) / (np.hypot(*heading) or 1.0)
+    angs = np.radians(np.linspace(-cone, cone, 13))
+    pts, walked = [X.copy()], 0.0
+    while walked < length - 1e-9:
+        c, s = np.cos(angs), np.sin(angs)
+        dirs = np.column_stack([h[0] * c - h[1] * s, h[0] * s + h[1] * c])
+        cand = X[None, :] + r * dirs
+        z = sample(cand)
+        if not np.isfinite(z).all():
+            break
+        k = int(np.argmin(z + 1e-4 * r * np.abs(angs)))   # straight on between equal lows
+        X, h = cand[k], dirs[k]
+        walked += r
+        pts.append(X.copy())
+    return np.vstack(pts)
+
+
+def evidence(line, sc, sample, P, top_rec, top_used, tol, prom, height, toe, crest_w, step,
+             ft=1.0, wet_xy=None, wet_cell=None):
+    """3.10.87: the positive evidence a dam line traced off the old rule (trace's 'relaxed', or
+    from a start found away from the dam point) needs before it is used - the old rule found no
+    crest, so the line may be another embankment (a road or a dike beside the dam, a levee
+    along the valley, a causeway across the pool). line: A -> B (the downstream side on its
+    left), sc: the breach station on it, P: the dam point as given. All of:
+    (1) the dam point lies within the toe distance plus half the crest width and half a step
+        of it (on its crest, its faces or the pool just above it);
+    (2) the ground climbs from the dam point to it (no other ridge in between);
+    (3) the run's flooded cells (wet_xy) lie on its downstream side (flow_check);
+    (4) the flow path from its downstream toe at the breach (flow_path, about 1.5 line lengths,
+        at least 1,000 ft) leaves it within FLOW_PATH_MAX_DEG of square: a line along the
+        valley has the flow path along it, however the flooded area lies;
+    (5) no other ridge or level top (_level_tops) at least crest-high (the record or the traced
+        level, whichever is lower, less the tolerance) within twice the toe distance plus the
+        crest width of it, on either side, in more than PARALLEL_MAX_FRAC of its sections (a
+        road or a dike beside it, a road on the edge of a wide crest: which one is the dam is
+        not clear; the real dam upstream of a road), and no crest-high ground on its upstream
+        side beyond the toe distance in more than that fraction (a levee along the valley has
+        high ground behind it, a dam its pool).
+    Returns (ok, info): dam_point_to_line, flow_path_angle_deg, flow_path_length,
+    parallel_ridge_frac, upstream_high_frac, flow (flow_check's info), why."""
+    p = np.asarray(line, float).reshape(-1, 2)
+    P = np.asarray(P, float)
+    L = float(cumlen(p)[-1])
+    info = {}
+    dd = float(_seg_nearest(p, P.reshape(1, 2))[0][0])
+    info["dam_point_to_line"] = round(dd, 1)
+    reach = toe + 0.5 * crest_w + 0.5 * step
+    if dd > reach:
+        return False, dict(info, why="the dam point is {:,.0f} from it, more than the toe "
+                           "distance plus half the crest width ({:,.0f})".format(dd, reach))
+    sP = station_of(p, P)
+    X = point_at(p, sP)
+    if dd > step and not _rises(sample, P, X, 0.5 * prom, 0.5 * step):
+        return False, dict(info, why="the ground does not climb to it from the dam point "
+                           "(another ridge lies between them)")
+    ok, fi = flow_check(p, wet_xy, wet_cell, sample=sample, crest=top_used, tol=tol, toe=toe,
+                        step=0.25 * step, drop=max(tol, 0.5 * height) + tol, prom=0.5 * prom,
+                        dam_point=P, beyond=toe + 0.5 * crest_w)
+    info["flow"] = fi
+    if not ok:
+        return False, dict(info, why=fi["why"])
+    # (4) the flow path from the toe at the breach
+    B = point_at(p, sc)
+    nb = left_normal(tangent_at(p, sc))
+    D = max(1000.0 * ft, 1.5 * L)
+    path = flow_path(sample, B + toe * nb, nb, D, max(2.0 * step, D / 30.0))
+    walked = float(cumlen(path)[-1])
+    info["flow_path_length"] = round(walked, 1)
+    if walked < min(D, max(300.0 * ft, 3.0 * toe)):
+        return False, dict(info, why="no flow path below it on the DEM ({:,.0f} long)".format(
+            walked))
+    v = path[-1] - B
+    ang = float(np.degrees(np.arccos(np.clip(float(v @ nb) / (np.hypot(*v) or 1.0), -1.0,
+                                             1.0))))
+    info.update(flow_path_angle_deg=round(ang, 1),
+                flow_path_end=[round(float(q), 2) for q in path[-1]])
+    if ang > FLOW_PATH_MAX_DEG:
+        return False, dict(info, why="the flow path below its breach leaves it {:.0f} degrees "
+                           "off square (it runs along the flow)".format(ang))
+    # (5) other ridges beside it, high ground behind it
+    W = 2.0 * toe + crest_w
+    ds = 0.5 * step
+    tt = np.arange(-(W + toe), W + toe + 1e-9, ds)
+    lvl = min(top_rec, top_used) - tol
+    own_w = 0.5 * crest_w + step
+    w_lt = max(0.5 * crest_w, 2.0 * step)
+    sides = (np.nonzero(tt >= 0)[0], np.nonzero(tt <= 0)[0][::-1])    # from the line out
+    par = high = n = 0
+    for s in np.linspace(0.1 * L, 0.9 * L, 9):
+        Xs = point_at(p, s)
+        n_ = left_normal(tangent_at(p, s))
+        zz = sample(Xs[None, :] + tt[:, None] * n_[None, :])
+        if not np.isfinite(zz[np.abs(tt) <= own_w]).any():
+            continue
+        n += 1
+        up = (tt <= -toe) & (tt >= -W)
+        high += bool(np.any(np.isfinite(zz[up]) & (zz[up] >= lvl)))
+        found = False
+        for idx in sides:
+            zs, ts = zz[idx], np.abs(tt[idx])
+            fin = np.isfinite(zs)
+            zs, ts = zs[fin], ts[fin]
+            # off the line's own top (its crest, its face) ...
+            off = np.nonzero(np.maximum.accumulate(zs) - zs >= 0.5 * prom)[0] \
+                if len(zs) > 2 else []
+            if not len(off):
+                continue
+            zr, tr_ = zs[off[0]:], ts[off[0]:]
+            # ... then up again onto another ridge at least crest-high, within W, or a level
+            # top at least crest-high (a wide crest beside a road on its edge)
+            rise = zr - np.minimum.accumulate(zr)
+            found = found or bool(np.any((rise >= 0.5 * prom) & (zr >= lvl) & (tr_ <= W))) or \
+                any(zm >= lvl and t0 <= W for t0, _, zm in
+                    _level_tops(zr, tr_, w_lt, 0.25 * prom, prom, toe))
+        par += found
+    info.update(sections=n, parallel_ridge_frac=round(par / n, 3) if n else None,
+                upstream_high_frac=round(high / n, 3) if n else None)
+    if n and par > PARALLEL_MAX_FRAC * n:
+        return False, dict(info, why="another ridge at least crest-high runs beside it within "
+                           "{:,.0f} along {} of {} sections (a road or a dike beside the dam: "
+                           "which one is the dam is not clear)".format(W, par, n))
+    if n and high > PARALLEL_MAX_FRAC * n:
+        return False, dict(info, why="crest-high ground lies behind it (on its upstream side, "
+                           "beyond the toe distance) along {} of {} sections: a dam has its "
+                           "pool there".format(high, n))
+    return True, dict(info, why="")
+
+
 def trace(sample, P, axis, top, height, step, toe, max_len, gap, tol=None, prom=None,
-          search=None, ft=1.0, near=None, relax=True, crest_w=None, start_within=None):
+          search=None, ft=1.0, near=None, relax=True, crest_w=None, start_within=None,
+          dam_ground=None):
     """The crest polyline through the dam point. sample(xy) -> z (model units); axis: unit
     vector along the dam from A (the left end looking downstream) to B; top, height: top of dam
     and dam height; step: walk step; toe: the distance from the crest to the toe (for the
     ridge test); max_len: the dam length; gap: stretches off the crest stepped over; ft: model
     units per foot. Returns {'line' (A..B, raw walk), 'p0', 'ends': {'A', 'B'}: (why, length),
     'snap', 'top_used' (the level the crest was followed at), 'top_offset' (that minus the top
-    of dam on record)}. Raises CrestTraceError.
+    of dam on record), 'relaxed', 'how'}. Raises CrestTraceError.
 
-    3.10.87: the ridge the dam point is on (the nearest ridge across the section within `near`,
-    default max(toe / 2, step), of it) comes first: at the record's level it wins over a
-    farther ridge that is higher (a road beside the dam); above the record but standing above
-    the ground on both sides, the crest is followed at that ridge's own level when it is no
-    more than max(DATUM_MIN_FT, DATUM_FRAC x H) above it (another vertical datum: DWR-2801),
-    and never another ridge nearby. When the dam point is on a ridge that is not followed (off
-    the record's level - below it: a narrow crest that a coarse DEM reads low, a record above
-    the DEM's crest -, or at it but not standing above both sides), the error says on_ridge:
-    the crest is there, so no start from other high ground nearby is tried.
-    'relaxed' in the result says the trace took either way off the old rule (the highest ridge
-    across the section, at the record's level); relax=False keeps to the old rule. crest_w:
-    the crest width on record - the walk of a trace off the old rule (relaxed, or with
-    start_within) keeps to the middle of a level top wider than its window, and takes a side
-    of the ridge test that runs into no data (a pool left out of the DEM) as falling.
-    start_within: the crest the trace starts from must be at most this far from P (a start from
-    crest-high ground found nearby: not a higher ridge across the section)."""
+    The old rule (the highest ridge across the section, at the record's level, standing above
+    the ground on both sides) decides wherever it finds a crest: the result is then the old
+    rule's trace, whatever `relax` says. 3.10.87, only where it finds none (relax, the
+    default; relax=False is the old rule alone):
+    - 'datum': the crest is followed at the DEM's own level when that is no more than
+      max(DATUM_MIN_FT, DATUM_FRAC x H) above the record and the ridge stands above the ground
+      on both sides at that level (another vertical datum: DWR-2801's DEM crest is 3-6 ft
+      above its record) - the ridge the dam point is on (the nearest ridge across the section
+      within `near`, default max(toe / 2, step), of it) if there is one, else the highest. Not
+      when the ground at the dam point (dam_ground: the dam point's ground when P is a start
+      found elsewhere; default the ground at P) is within the tolerance of the record, nor when
+      a ridge at the record's level lies across the section within the toe distance of it: the
+      dam's crest is there, and a higher ridge beside it is another embankment (a road).
+    - 'own': the dam point's own ridge at the record's level, standing above both sides, over a
+      higher ridge across the section that the datum rule would take.
+    When the dam point is on a ridge that is not followed (off the record's level - below it:
+    a narrow crest that a coarse DEM reads low, a record above the DEM's crest -, or at it but
+    not standing above both sides), or within the toe distance of a level top no more than half
+    the dam height below the record (_level_tops: a wide crest, also one that a road on its
+    edge keeps from being a ridge), the error says on_ridge: the crest is there, so no start
+    from other high ground nearby is tried. 'relaxed' / 'how' say which way the trace left the
+    old rule ('' when it did not); such a line still needs positive evidence that it is the
+    dam (evidence(), in crest_dam_line). crest_w: the crest width on record - the walk of a
+    trace off the old rule (relaxed, or with start_within) keeps to the middle of a level top
+    wider than its window, and takes a side of the ridge test that runs into no data (a pool
+    left out of the DEM) as falling. start_within: the crest the trace starts from must be at
+    most this far from P (a start from crest-high ground found nearby: not a higher ridge
+    across the section)."""
     axis = np.asarray(axis, float) / (np.hypot(*axis) or 1.0)
     tol = float(tol if tol is not None else max(3.0 * ft, 0.1 * height))
     prom = float(prom if prom is not None else max(PROM_MIN_FT * ft, PROM_FRAC * height))
@@ -608,44 +823,60 @@ def trace(sample, P, axis, top, height, step, toe, max_len, gap, tol=None, prom=
         raise CrestTraceError("no DEM around the dam point")
     p0, z0 = rr
     why = _judge(sample, p0, nu, z0, top, tol, toe, prom)
+    msg = ("no embankment crest within {:.0f} of the dam point across the dam ({}; highest "
+           "ground {:.2f}, top of dam {:.2f})".format(search, why, z0, top))
     top_rec = top
-    allow = max(DATUM_MIN_FT * ft, DATUM_FRAC * height)
-    on_ridge, relaxed = False, False
-    own = [r for r in _ridges(sample, P, nu, search, 0.5 * step) if abs(r[2]) <= near] \
-        if relax else []
-    other = False
-    if own:
-        pn, zn, _ = own[0]
-        other = float(np.hypot(*(pn - p0))) > step
-        at_rec = abs(zn - top) <= tol
-        if at_rec and not _judge(sample, pn, nu, zn, top, tol, toe, prom):
-            # a crest at the record's level at the dam point wins over a farther ridge that
-            # is higher (within the tolerance, or one the datum allowance would take: a road
-            # beside the dam)
-            if other and ((not why and abs(zn - top) < abs(z0 - top) - 0.5 * ft) or (
-                    why.startswith("abutment: the ridge rises") and z0 - top <= allow)):
-                p0, z0, why, other, relaxed = pn, zn, "", False, True
-        elif why and (at_rec or not _judge(sample, pn, nu, zn, zn, tol, toe, prom)):
-            # the dam point is on ground at the record's level that is no clear crest, or on a
-            # ridge off the record's level: only that ridge may be followed at its own level
-            # (never another, higher one nearby: a road beside a low dam on a coarse DEM)
-            on_ridge = True
-            if other:
+    on_ridge, how = False, ""
+    if why and relax:
+        allow = max(DATUM_MIN_FT * ft, DATUM_FRAC * height)
+        zP = float(sample(P[None, :])[0]) if dam_ground is None else float(dam_ground)
+        datum_ok = not (np.isfinite(zP) and abs(zP - top) <= tol)
+        rises = why.startswith("abutment: the ridge rises") and z0 - top <= allow
+        ridges = _ridges(sample, P, nu, search, 0.5 * step)
+        own = [r for r in ridges if abs(r[2]) <= near]
+        # a ridge at the record's level across the section within the toe distance of the dam
+        # point: the dam is there - a higher ridge is not followed at its own level
+        rec_near = any(abs(z_ - top) <= tol and abs(t_) <= toe for _, z_, t_ in ridges)
+        if own:
+            pn, zn, _ = own[0]
+            other = float(np.hypot(*(pn - p0))) > step
+            if abs(zn - top) <= tol:
+                if other and rises and datum_ok and \
+                        not _judge(sample, pn, nu, zn, top, tol, toe, prom):
+                    p0, z0, why, how = pn, zn, "", "own"
+                else:
+                    on_ridge = True
+            elif not _judge(sample, pn, nu, zn, zn, tol, toe, prom):
+                # a ridge off the record's level: only it may be followed, at its own level
+                # (never another, higher one nearby: a road beside a low dam on a coarse DEM)
+                on_ridge = True
                 p0, z0 = pn, zn
                 why = _judge(sample, p0, nu, z0, top, tol, toe, prom)
-    if relax and why.startswith("abutment: the ridge rises") and z0 - top <= allow and \
-            not _judge(sample, p0, nu, z0, z0, tol, toe, prom):
-        top, why, relaxed = z0, "", True
+                rises = why.startswith("abutment: the ridge rises") and z0 - top <= allow
+        if not how and datum_ok and rises and not rec_near and \
+                not _judge(sample, p0, nu, z0, z0, tol, toe, prom):
+            top, why, how = z0, "", "datum"
+        on_ridge = on_ridge or (rec_near and not how)
+        if not how and not on_ridge:
+            # a level top within the toe distance of the dam point, no more than half the dam
+            # height below the record (a wide crest, also one that a higher road on its edge
+            # keeps from being a ridge): the dam point is on the embankment, its crest is there
+            w = max(0.5 * float(crest_w or 0.0), 2.0 * step)
+            r_ = 3.0 * toe + float(crest_w or 0.0)
+            tt = np.arange(-r_, r_ + 1e-9, 0.5 * step)
+            zz = sample(P[None, :] + tt[:, None] * nu[None, :])
+            low = top - max(tol, 0.5 * height) - tol
+            on_ridge = any(zm >= low and t0 <= toe and t1 >= -toe
+                           for t0, t1, zm in _level_tops(zz, tt, w, 0.25 * prom, prom, toe))
     if not why and start_within is not None and float(np.hypot(*(p0 - P))) > start_within:
         why = "the crest across the section is {:.0f} away, another ridge".format(
             float(np.hypot(*(p0 - P))))
+        msg = "no embankment crest within {:.0f} of the start ({})".format(start_within, why)
     if why:
-        raise CrestTraceError("no embankment crest within {:.0f} of the dam point across the "
-                              "dam ({}; highest ground {:.2f}, top of dam {:.2f})".format(
-                                  search, why, z0, top), on_ridge=on_ridge)
+        raise CrestTraceError(msg, on_ridge=on_ridge)
     # the walk keeps to the old rule unless the trace is off it (relaxed, or a start from
     # crest-high ground found nearby): only then the wide-crest and no-data rules (3.10.87)
-    wide = crest_w if (relaxed or start_within is not None) else None
+    wide = crest_w if (how or start_within is not None) else None
     a, why_a, _ = _walk(sample, p0, -axis, max_len, step, toe, top, tol, prom, gap, wide)
     b, why_b, _ = _walk(sample, p0, axis, max_len, step, toe, top, tol, prom, gap, wide)
     line = np.vstack([a[::-1], b[1:]])
@@ -656,7 +887,7 @@ def trace(sample, P, axis, top, height, step, toe, max_len, gap, tol=None, prom=
     return {"line": line, "p0": p0, "z0": z0, "snap": float(np.hypot(*(p0 - P))),
             "ends": {"A": (why_a, la), "B": (why_b, lb)}, "tol": tol, "prom": prom,
             "top_used": float(top), "top_offset": float(top - top_rec), "on_ridge": on_ridge,
-            "relaxed": relaxed}
+            "relaxed": bool(how), "how": how}
 
 
 def tidy(line, step, cell, keep_len=None, centre=None):
