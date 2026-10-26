@@ -32,13 +32,15 @@ ERROR (PackCheck.missing_required); everything else is a WARNING or a NOTE. chec
 raises; PackCheck.raise_if_required_missing() raises PackCheckError with a clear message.
 
 1.17.6 (#171 follow-up): a manifest.json that cannot be read (not JSON, not an object, a
-UTF-8 byte-order mark - the pack readers decode plain UTF-8 -, or datasets / rasters /
-left_out / an entry / a file of the wrong type) and any unexpected
-error of the check itself give a FAILED result (PackCheck.failed, an ERROR of kind
-"manifest" / "check", every required layer in missing_required) instead of an exception or
-a silent "not an offline data pack". A GeoPackage whose SQLite header is bad or that is
-shorter than its header says (a half-written copy) is "unreadable"; integrity=True also
-runs SQLite's quick_check (reads the whole file). A zipped format-2 pack is checked against
+UTF-8 byte-order mark - the pack readers decode plain UTF-8 -, or a section - datasets /
+rasters / left_out - of the wrong type) and any unexpected error of the check itself give a
+FAILED result (PackCheck.failed, an ERROR of kind "manifest" / "check", every required layer
+in missing_required) instead of an exception or a silent "not an offline data pack". One
+entry of the wrong type (not an object, a `file` that is not text) is not FAILED: it is a
+WARNING of kind "manifest" for that layer (an ERROR when the layer is required). A
+GeoPackage whose SQLite header is bad or that is shorter than its header says (a
+half-written copy) is "unreadable"; integrity=True also runs SQLite's quick_check (reads
+the whole file). A zipped format-2 pack is checked against
 its zip listing (every listed file present, not empty; the full check runs on the unpacked
 folder). pack_signature(path) gives every listed file's size and time for run signatures.
 A format-1 pack (one nd_offline_pack.sqlite) is checked lightly: each usable data set of its

@@ -894,13 +894,14 @@ OFFLINE DATA PACK (2.6.1) - running without internet access
   up newer data.
 - 2.18.64: The offline pack check never fails with an error: a manifest.json
   that cannot be read (also one saved with a UTF-8 byte-order mark: save it
-  as UTF-8 without BOM), or a half-written GeoPackage, is a FAILED check, and
-  with "Offline only" the run stops with a clear message (NSI_structures is
-  required) - also when the pack cannot be opened at all (a damaged zip, a
-  newer pack format), whatever the check says; the run log and the message
-  give the reason, and a moved or deleted pack (or an empty folder) is named
-  "not an offline data pack". A layer file replaced in place makes a new
-  evaluation.
+  as UTF-8 without BOM) is a FAILED check, and with "Offline only" the run
+  stops with a clear message (NSI_structures is required) - also when the
+  pack cannot be opened at all (a damaged zip, a newer pack format), whatever
+  the check says; the run log and the message give the reason, and a moved
+  or deleted pack (or an empty folder) is named "not an offline data pack".
+  A half-written GeoPackage is named "cannot be read" (not a FAILED check);
+  with "Offline only" the run stops on it only when it is a required layer
+  (NSI_structures). A layer file replaced in place makes a new evaluation.
 - 2.18.62: Reproduce and the data folder load every file of every role (AADT
   and bridges may come from several files); a file that cannot be used is a
   WARNING in the run log and the reproduction check, never a silent skip.

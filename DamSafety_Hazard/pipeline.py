@@ -2579,9 +2579,6 @@ def _log_offline_mode(run):
     why = []
     r = pack_reader(log=run.log, errors=why)
     if r is None:
-        run.log(">>> WARNING: the offline data pack {} could not be read{}{}".format(
-            path, " ({})".format(why[0]) if why else "",
-            " - offline only: nothing is downloaded" if only else " - the services are used"))
         # 2.18.64: checked all the same (the log says why) - and a pack that cannot be
         # opened gives none of the required layers, so an offline-only run stops here
         # whatever the check says (a bad zip member, a format the reader refuses)
@@ -2598,13 +2595,18 @@ def _log_pack_check(run, path, reader, only, opened=True, why=""):
     (and so in the report's run log). A required layer missing: offline only
     stops the run with a clear error; online, that layer is downloaded.
     2.18.64: opened=False - the reader could not open the pack (`why`: the
-    reader's reason): offline only stops whatever the check says, and the log
-    does not call the pack OK."""
+    reader's reason, logged after the check's when the check FAILED): offline
+    only stops whatever the check says, and the log does not call the pack OK."""
     from .download import pack_check, REQUIRED_PACK_LAYERS
     res = pack_check(path, reader)
     # 2.18.64: no manifest.json at all (a moved or deleted pack, an empty folder, a path
     # that is not a pack): nothing to check against - say so, not "found no problem"
     nopack = res is not None and not res.failed and res.format not in (1, 2)
+    if not opened:
+        why = _pack_open_why(res, why)
+        run.log(">>> WARNING: the offline data pack {} could not be read{}{}".format(
+            path, " ({})".format(why) if why else "",
+            " - offline only: nothing is downloaded" if only else " - the services are used"))
     if res is None:
         run.log(">>> WARNING: the offline data pack could not be checked against its "
                 "manifest.json")
@@ -2614,9 +2616,9 @@ def _log_pack_check(run, path, reader, only, opened=True, why=""):
         run.log(">>> WARNING: {} - it cannot be opened, nothing is read from it".format(
             res.summary()))
     else:                        # 2.18.64: the check passes, the reader cannot open it
-        run.log(">>> WARNING: the offline data pack check ({}) found no problem against "
-                "manifest.json, but the pack cannot be opened - nothing is read from "
-                "it".format(os.path.basename(path)))
+        run.log(">>> WARNING: the offline data pack check ({}) {}, but the pack cannot be "
+                "opened - nothing is read from it".format(os.path.basename(path),
+                                                         _pack_checked_what(res)))
     for issue in (res.issues if res is not None else ()):
         if issue.level != "note":
             run.log(">>>   " + issue.line())
@@ -2629,8 +2631,8 @@ def _log_pack_check(run, path, reader, only, opened=True, why=""):
             "only.".format(", ".join(REQUIRED_PACK_LAYERS), path,
                            ("cannot be opened" + (": " + why if why else "")) if not opened
                            else "could not be checked against its manifest.json",
-                           " ({})".format(res.summary()) if res is not None and (
-                               not res.ok or nopack) else ""))
+                           " ({})".format(res.summary()) if res is not None and not res.failed
+                           and (not res.ok or nopack) else ""))
     if res is None:
         return
     if res.missing_required:
@@ -2638,6 +2640,37 @@ def _log_pack_check(run, path, reader, only, opened=True, why=""):
             raise RuntimeError(res.required_message("The classification (offline only)"))
         run.log(">>> WARNING: required layer(s) {} missing from the offline data pack - "
                 "downloaded from the service instead".format(", ".join(res.missing_required)))
+
+
+def _pack_open_why(res, why):
+    """2.18.64: why the pack cannot be opened (`why`: the reader's reason).
+    When the check FAILED its reason leads and the reader's follows: a format-2
+    folder whose manifest.json is broken (or has a byte-order mark) is read as
+    format 1, and the reader only says nd_offline_pack.sqlite is not found."""
+    if res is None or not res.failed:
+        return why
+    lead = "the pack check FAILED - " + ("; ".join(
+        i.text for i in res.issues if not i.layer and i.kind in ("manifest", "check"))
+        or "the check could not run")
+    return "{}; the reader: {}".format(lead, why) if why else lead
+
+
+def _pack_checked_what(res):
+    """2.18.64: what a pack check that found no problem looked at, for the run
+    log: a format-2 pack against its manifest.json; a format-1 .sqlite its own
+    data set list, and a manifest.json only when one is beside it; a format-1
+    .zip only its manifest.json (the rest is checked once it is unpacked)."""
+    if res.format == 2:
+        return "found no problem against manifest.json"
+    p = str(res.path or "")
+    if p.lower().endswith(".zip"):
+        return ("only read the zip's manifest.json (a zipped format-1 pack is checked "
+                "once it is unpacked)")
+    db = os.path.basename(p) if p.lower().endswith((".sqlite", ".db")) else \
+        "nd_offline_pack.sqlite"
+    if res.folder and os.path.isfile(os.path.join(res.folder, "manifest.json")):
+        return "found no problem in {} or against manifest.json".format(db)
+    return "found no problem in {} (there is no manifest.json beside it)".format(db)
 
 
 def pack_report_lines():

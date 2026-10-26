@@ -4,15 +4,19 @@
 pipeline._log_offline_mode with download.offline_config / pack_reader patched to a tiny
 temp pack (no service, no download, no QGIS project):
 
-  * a broken manifest.json (the reader cannot open the pack): offline only -> RuntimeError
-    naming the required layer; online -> logged, no error (the services are used);
+  * a broken manifest.json, or one with a UTF-8 byte-order mark (the reader cannot open the
+    pack): offline only -> RuntimeError naming the required layer; online -> logged, no
+    error (the services are used); the log line and the error give the check's FAILED
+    reason first, then the reader's ("offline data pack not found: .../nd_offline_pack.sqlite"
+    - it reads the folder as format 1);
   * a cut-short NSI GeoPackage: offline only -> RuntimeError; online -> a warning;
   * no check result at all (offline_pack.check could not run): offline only -> RuntimeError;
   * a pack the reader cannot open although its check passes (a format-2 .zip whose NSI
     member has a bad CRC - the listing is intact -, a format-1 .zip without
-    nd_offline_pack.sqlite, a format_version the reader refuses): offline only ->
-    RuntimeError naming the required layer, and the log does not say "OK"; online -> a
-    warning only;
+    nd_offline_pack.sqlite, a format_version the reader refuses, a lone format-1 .sqlite
+    the reader refuses): offline only -> RuntimeError naming the required layer, and the
+    log does not say "OK"; online -> a warning only; the log says what the check looked at
+    (no "against manifest.json" for a .sqlite with no manifest.json beside it);
   * no pack at all (an empty folder, a moved or deleted pack - 2.18.64): offline only ->
     RuntimeError saying it is not an offline data pack and cannot be opened (with the
     reader's reason), never "found no problem against manifest.json"; online -> a warning;
@@ -26,6 +30,7 @@ read (offline_config is patched).
 import json
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import zipfile
@@ -129,7 +134,29 @@ def unopenable(tmp, good):
     fv = shutil.copytree(good, os.path.join(tmp, "newer"))
     T2.edit_manifest(fv, lambda m: m.update(format_version=99))
     out.append(("format_version the reader refuses", fv))
+    out.append(("lone format-1 .sqlite the reader refuses", lone_v1(tmp)))
     return out
+
+
+def lone_v1(tmp):
+    """A format-1 nd_offline_pack.sqlite with no manifest.json beside it, whose
+    format_version the reader refuses (its check passes: the .sqlite is complete)."""
+    db = T2.build_v1(os.path.join(tmp, "lone_v1"))
+    os.remove(os.path.join(os.path.dirname(db), "manifest.json"))
+    con = sqlite3.connect(db)
+    con.execute("UPDATE meta SET value = '99' WHERE key = 'format_version'")
+    con.commit()
+    con.close()
+    return db
+
+
+def check_first(text, reason):
+    """2.18.64: the check's FAILED reason comes before the reader's (which, for a
+    format-2 folder whose manifest.json it cannot read, is only that nd_offline_pack.sqlite
+    is not found)."""
+    a = text.find("the pack check FAILED - ")
+    b, c = text.find(reason), text.find("the reader: offline data pack not found: ")
+    return 0 <= a < b < c and text.find("nd_offline_pack.sqlite", c) > c
 
 
 def main():
@@ -142,13 +169,29 @@ def main():
         bad = shutil.copytree(good, os.path.join(tmp, "badjson"))
         with open(os.path.join(bad, "manifest.json"), "w") as fh:
             fh.write('{"format": "nd-dam-hazard-offline-pack", "format_version": 2, "data')
-        err, lines = attempt(bad, True)
-        expect(isinstance(err, RuntimeError) and "NSI_structures" in str(err),
-               "broken manifest.json, offline only: RuntimeError ({})".format(err))
-        expect(any("FAILED" in ln for ln in lines), "broken manifest.json: FAILED in the log")
-        err, lines = attempt(bad, False)
-        expect(err is None and any("FAILED" in ln for ln in lines),
-               "broken manifest.json, online: logged, no error ({})".format(err))
+        bom = shutil.copytree(good, os.path.join(tmp, "bom"))
+        with open(os.path.join(bom, "manifest.json"), "rb") as fh:
+            raw = fh.read()
+        with open(os.path.join(bom, "manifest.json"), "wb") as fh:
+            fh.write(b"\xef\xbb\xbf" + raw)
+        for what, pth, reason in (("broken manifest.json", bad, "manifest.json is not valid JSON"),
+                                  ("manifest.json with a BOM", bom, "byte-order mark")):
+            err, lines = attempt(pth, True)
+            expect(isinstance(err, RuntimeError) and "NSI_structures" in str(err),
+                   "{}, offline only: RuntimeError ({})".format(what, err))
+            expect(any("FAILED" in ln for ln in lines), "{}: FAILED in the log".format(what))
+            # 2.18.64: the check's reason leads, the reader's ("not found") follows
+            expect(check_first(str(err), reason),
+                   "{}: the error gives the check's reason first ({})".format(what, err))
+            read = [ln for ln in lines if "could not be read" in ln]
+            expect(len(read) == 1 and check_first(read[0], reason),
+                   "{}: the log line gives the check's reason first ({})".format(what, read))
+            err, lines = attempt(pth, False)
+            read = [ln for ln in lines if "could not be read" in ln]
+            expect(err is None and any("FAILED" in ln for ln in lines) and len(read) == 1 and
+                   check_first(read[0], reason) and "the services are used" in read[0],
+                   "{}, online: logged, the check's reason first, no error ({})".format(
+                       what, err))
 
         cut = shutil.copytree(good, os.path.join(tmp, "cut"))
         p = os.path.join(cut, "structures", "NSI_structures.gpkg")
@@ -181,6 +224,13 @@ def main():
             expect(err is None and any("WARNING" in ln for ln in lines) and
                    not any("OK - every layer" in ln for ln in lines),
                    "{}, online: a warning, no error ({})".format(what, err))
+            if pth.endswith(".sqlite"):
+                # 2.18.64: no manifest.json beside it - the log says what was checked
+                expect(not any("against manifest.json" in ln for ln in lines) and
+                       any("found no problem in nd_offline_pack.sqlite (there is no "
+                           "manifest.json beside it)" in ln and "cannot be opened" in ln
+                           for ln in lines),
+                       "{}: the log says no manifest.json was checked ({})".format(what, lines))
 
         # 2.18.64: no pack at all - nothing to check against, so neither the log nor the
         # error may say the check "found no problem against manifest.json"
