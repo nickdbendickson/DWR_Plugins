@@ -64,11 +64,18 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 "Storage to use (default Max storage): Max places the inventory maximum at the "
                 "max pool - (DWR max_pool_elev - normal_elev) above the lidar water surface, which "
                 "is the normal pool - with the normal storage at the normal pool and only the DEM "
-                "fill above the max pool added on top (stor_anchor, stor_anchor_m); without the "
-                "pool elevations (NID-only records) it raises the storage at the top of dam to the "
-                "inventory maximum, flagged FALLBACK in stor_notes. A normal storage equal to the "
-                "maximum (both read from the max-storage field) is flagged NORMAL-EQUALS-MAX and "
-                "not used at the normal pool. Normal keeps the DEM-measured part above the normal "
+                "fill above the max pool added on top (stor_anchor, stor_anchor_m). A max pool "
+                "above the DEM crest is placed at the crest (MAXPOOL-ABOVE-CREST): the storage at "
+                "the top of dam is never below the inventory maximum. A DEM fill from the pool to "
+                "the max pool larger than the maximum keeps the DEM curve (FILL-EXCEEDS-MAX). "
+                "Without the pool elevations (NID-only records), or with a max pool below the "
+                "normal pool or at it with a larger maximum (MAXPOOL-ELEV-BAD), it raises the "
+                "storage at the top of dam to the inventory maximum as before, flagged FALLBACK in "
+                "stor_notes. A normal storage equal to the maximum (both read from the max-storage "
+                "field) is flagged NORMAL-EQUALS-MAX and not used at the normal pool; one above "
+                "the maximum is flagged NORMAL-NOT-BELOW-MAX (not used at the normal pool when the "
+                "pool elevations are known, kept there as before in the fallback). Normal keeps "
+                "the DEM-measured part above the normal "
                 "pool (a sunny-day check); Larger of the two uses whichever inventory value is "
                 "larger. A missing or zero value falls back to the other one (Normal without a "
                 "normal storage uses the maximum, Max without a maximum uses the normal); with "
@@ -264,7 +271,9 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 # water surface and the DEM fill to the spill or crest added on top, so a record
                 # whose normal box held the maximum (DWR-2865: 167 ac-ft at 1870 ft) came out
                 # 237.6 ac-ft. Without the max-pool elevation the maximum is placed at the top of
-                # dam as before (flagged FALLBACK in stor_notes).
+                # dam as before (flagged FALLBACK in stor_notes); a max pool above the crest puts
+                # the maximum at the crest (MAXPOOL-ABOVE-CREST), so the storage at the top of dam
+                # is never below the maximum.
                 pick = storage.resolve_storage_choice(inv_norm, inv_max, choice)
                 anchor_m = None
                 if assumed:
