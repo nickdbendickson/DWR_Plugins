@@ -1,4 +1,4 @@
-"""3.10.84: the normal-depth BC line lies just outside the 2D perimeter.
+"""3.10.85: the normal-depth BC line lies just outside the 2D perimeter.
 
 Run in HEC-RAS 6.6 (Ras.exe -c under Wine with .NET 4.8) the package of DWR-2801 stopped in
 the geometry writer: "BC Line 'DS Normal Depth' intersects the perimeter of 2D Flow Area

@@ -253,6 +253,11 @@ class RunSettings:
         # embankment crest from the DEM) | "straight" (the old line across the flow;
         # core/hecras_crest.py)
         self.hecras_dam_axis = "crest"
+        # v3.10.84: what the HEC-RAS mapped depth is measured from: None (default) =
+        # NDBREACH_HECRAS_DEPTH_BASIS, else "cell_min" (the cell's max WSE minus the cell's
+        # minimum terrain elevation); "terrain" = minus the terrain under each grid cell (the
+        # 3.10.79 default). Wet area and arrival use the same depth (core/hecras.depth_basis).
+        self.hecras_depth_basis = None
         # v3.10.27 (#91): water-body mask for the run report only (core/report_metrics.py): a
         # vector file path (several separated by ;;), a list of polygons in the work CRS, or
         # "off". None = NDBREACH_WATERBODY_MASK, else the dam folder's / the suite's waterbody
@@ -324,6 +329,8 @@ class RunSettings:
                 continue                 # v3.10.22: the default - the report stays as before
             elif k == "hecras_dam_axis" and v in ("crest", None, ""):
                 continue                 # the default - the report stays as before
+            elif k == "hecras_depth_basis" and v in (None, ""):
+                continue                 # v3.10.84: not set - hecras_stage.json records it
             elif k == "water_mask":
                 if v in (None, ""):
                     continue             # v3.10.27: not set - the report stays as before
@@ -345,6 +352,7 @@ def key_settings(st):
                                                             *ANUGA_CHECKPOINT_DEFAULTS,
                                                             "hecras_mesh_seeds",
                                                             "hecras_dam_axis",
+                                                            "hecras_depth_basis",
                                                             "water_mask",
                                                             "anuga_dt_diag")}
     if not getattr(st, "class_stop", False):
@@ -702,6 +710,18 @@ def anuga_threads_line(th):
     if th.get("note"):
         txt += "; " + th["note"]
     return txt
+
+
+def hecras_depth_basis_line(rec):
+    """One line for run_report.md from hecras_stage.json's depth basis (3.10.84)."""
+    b = rec.get("depth_basis")
+    txt = {"cell_min": "cell minimum: max WSE minus the HEC-RAS cell's minimum terrain "
+                       "elevation (default)",
+           "terrain": "per-pixel terrain: max WSE minus the terrain under each grid cell"}
+    line = txt.get(b, str(b))
+    if rec.get("depth_basis_requested") and rec.get("depth_basis_requested") != b:
+        line += " ({} asked for; no terrain)".format(rec["depth_basis_requested"])
+    return line
 
 
 def hecras_time_limit_line(lim):
@@ -1967,6 +1987,18 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
     htl = report.get("hecras_time_limit") or {}       # 3.10.48 (hecras_engine.record_limit)
     if htl:
         summary["hecras_time_limit"] = hecras_time_limit_line(htl)
+    # 3.10.84: what the HEC-RAS depth (and so wet area and arrival) is measured from
+    hst = {}
+    try:
+        with open(os.path.join(out_folder, "_hecras", "hecras_stage.json"),
+                  encoding="utf-8") as f:
+            hst = json.load(f) or {}
+    except (OSError, ValueError):
+        hst = {}
+    if isinstance(hst, dict) and hst.get("depth_basis"):
+        report["hecras_depth_basis"] = {k: hst.get(k) for k in (
+            "depth_basis", "depth_basis_requested", "depth_basis_text", "depth_basis_compare")}
+        summary["hecras_depth_basis"] = hecras_depth_basis_line(hst)
     report["summary"] = summary
     report["screening_pass_lisflood"] = screening
     report["final_engine"] = {"model": final_model, "figures_from": dict(paths),
@@ -2537,6 +2569,8 @@ def render_report(r):
         lines.append("| ANUGA threads | {} |".format(s["anuga_threads"]))
     if s.get("hecras_time_limit"):
         lines.append("| HEC-RAS wall-clock limit | {} |".format(s["hecras_time_limit"]))
+    if s.get("hecras_depth_basis"):
+        lines.append("| HEC-RAS depth basis | {} |".format(s["hecras_depth_basis"]))
     lines.append("")
     if s.get("anuga_mesh_rejected"):
         lines += ["## ANUGA mesh", "", "**" + s["anuga_mesh_rejected"] + "**", ""]

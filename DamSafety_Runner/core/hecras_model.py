@@ -74,7 +74,7 @@ BC_NAME = "DS Normal Depth"
 START_DATE = "01JAN2000"
 MAX_WEIR_POINTS = 450          # HEC-RAS allows 500 station-elevation points on a weir
 MAX_ARC_POINTS = 400
-# 3.10.84: HEC-RAS stops when the normal-depth BC line touches the 2D perimeter ("BC Line
+# 3.10.85: HEC-RAS stops when the normal-depth BC line touches the 2D perimeter ("BC Line
 # intersects the perimeter ... it must be entirely outside"), so it is drawn this many cells
 # outside the perimeter, along it (found running the export in HEC-RAS 6.6 itself)
 BC_OFFSET_CELLS = 0.25
@@ -794,7 +794,7 @@ def ring_area(pts):
 
 
 def _offset_outward(ring, idx, dist):
-    """3.10.84: the points ring[idx] of a closed ring moved `dist` outward, along the ring's
+    """3.10.85: the points ring[idx] of a closed ring moved `dist` outward, along the ring's
     normal there, so a line drawn along the perimeter lies just outside it."""
     ring = np.asarray(ring, float)
     n = len(ring)

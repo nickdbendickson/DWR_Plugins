@@ -1013,9 +1013,16 @@ class RasPlanAlgorithm(_Base):
         return ("Reads the 2D flow area results of a HEC-RAS 6.x plan (<project>.p##.hdf) "
                 "and writes Depth_ft, Velocity_ftps, Arrival_hr, WSE_ft and TimeOfPeak_hr "
                 "GeoTIFFs. With the terrain raster, depth is water surface minus terrain on "
-                "the terrain grid; without it, water surface minus each cell's lowest "
-                "point. Arrival / time of peak are hours after the breach start (hours "
-                "after simulation start). Check the first results against RAS Mapper.")
+                "the terrain grid. Without it, the Runner's current per-pixel rasters of the "
+                "plan are used when there are some (2.18.61): the newest Runner re-export of "
+                "the plan's current results (_hecras/reexport_*) when it says terrain (from "
+                "2.18.63 the newest decides: after a newer cell_min one no older one is used), "
+                "else the dam folder's rasters when its _hecras/hecras_stage.json says terrain "
+                "for this plan and they are not newer than it (a fresh terrain stage); "
+                "otherwise depth is water surface minus each cell's lowest point (the cell "
+                "minimum, the Runner's default). The basis used is in depth_basis.json. "
+                "Arrival / time of peak are hours after the breach start (hours after "
+                "simulation start). Check the first results against RAS Mapper.")
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterFile("PLAN", "Plan results (.hdf)",
