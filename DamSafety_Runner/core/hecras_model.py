@@ -2388,8 +2388,9 @@ def _crest_off_rule(hc, e0, sample, rec, units, dam, params, o, P, d, axis, cell
     except hc.CrestTraceError as e1:
         on_ridge = e1.on_ridge
     if on_ridge:
-        tried.append("the dam point is on a ridge that reads off the top of dam on record, so "
-                     "no start from other high ground nearby was tried")
+        tried.append("the dam point is on or beside a crest the trace did not follow (a ridge "
+                     "or a level top off the record's level, or one at it that is no clear "
+                     "crest), so no start from other high ground nearby was tried")
     else:
         reach = toe + 0.5 * cw + 0.5 * step
         sn = hc.snap(sample, P, top_u, max(units.from_ft(3.0), 0.1 * H), reach,
