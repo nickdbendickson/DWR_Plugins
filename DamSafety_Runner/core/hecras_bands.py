@@ -21,6 +21,13 @@ are clipped away from the dam line and the breach cut (those keep their own rows
 hecras_breaklines) and, by default, to the run's wet area plus a pad (extent 'wet'; 'all' =
 every line in the 2D area).
 
+3.10.82 (#170): only the first rows (0.5 s off the line, the points whose shared faces lie on
+it) are protected from fix_faces, and only where no other banded line is within SOLO_FRAC x s
+(1.5 rows); the outer and graded rows, and the first rows where bands meet, may be moved or
+dropped to keep every cell at 8 faces or fewer. Protecting every band point left cells of
+protected points only where bands overlapped (a town's streets, DWR-2801) that fix_faces
+could not thin.
+
 Settings (options of hecras_model.build_model, else the environment variables):
 line_bands / NDBREACH_BAND ('on' | 'off'), band_cell_ft / NDBREACH_BAND_CELL_FT (20),
 band_rows / NDBREACH_BAND_ROWS (3; 0 = off), band_grading / NDBREACH_BAND_GRADING (1.5),
@@ -45,7 +52,7 @@ ENV = (("line_bands", "NDBREACH_BAND"), ("band_cell_ft", "NDBREACH_BAND_CELL_FT"
        ("band_rows", "NDBREACH_BAND_ROWS"), ("band_grading", "NDBREACH_BAND_GRADING"),
        ("band_classes", "NDBREACH_BAND_CLASSES"), ("band_extent", "NDBREACH_BAND_EXTENT"),
        ("band_wet_pad_ft", "NDBREACH_BAND_WET_PAD_FT"), ("band_lines", "NDBREACH_BAND_LINES"))
-MIN_FRAC = 0.5          # no two new points closer than this x their spacing
+MIN_FRAC = 0.7          # no two new points closer than this x their spacing (3.10.82: was 0.5)
 OWN_TOL = 0.25          # a row point may be this x its spacing nearer another line than its row
 FACE_FRAC = 0.475       # ... but never nearer any banded line than this x s (the faces on it)
 TREE_STEP_FRAC = 0.125  # lines sampled every this x s for the distances
@@ -53,6 +60,9 @@ CROSS_DEG = 20.0        # a lower-ranked line's point goes inside a higher-ranke
 CLEAR_EXTRA_FRAC = 0.25  # old points within the graded zone + this x the cell go
 MIN_PIECE_FRAC = 2.0    # line pieces shorter than this x s are dropped
 GRADE_STOP_FRAC = 0.9   # graded rows stop once the next would be this x the cell or more
+FIRST_ROW_FRAC = 0.75   # 3.10.82: band points within this x s of their line (the first row,
+                        # at 0.5 s) are protected; the outer rows are not
+SOLO_FRAC = 1.5         # ... and only where no other banded line is within this x s
 _OFF = ("off", "no", "false", "0", "none", "")
 
 
@@ -252,6 +262,27 @@ def _line_tree(lines, step):
     return cKDTree(dense), dense, tan
 
 
+def _near_other(lines, xy, li, radius, step):
+    """Per point: is a line other than its own (index li) within `radius`?"""
+    from scipy.spatial import cKDTree
+    dense, lid = [], []
+    for i, l in enumerate(lines):
+        c = hb.resample(l, step)
+        dense.append(c)
+        lid.append(np.full(len(c), i))
+    dense, lid = np.vstack(dense), np.concatenate(lid)
+    # a line's own samples within the radius are at most 2 radius / step + 1 (and the end
+    # caps' points are near their own line's end only), so k of those plus a few finds the
+    # nearest other line's sample if one is within the radius
+    k = int(min(len(dense), 2 * math.ceil(radius / step) + 6))
+    d, j = cKDTree(dense).query(xy, k=k, distance_upper_bound=radius)
+    d, j = d.reshape(len(xy), -1), j.reshape(len(xy), -1)
+    hit = np.isfinite(d)
+    other = np.zeros(j.shape, bool)
+    other[hit] = lid[j[hit]] != np.repeat(li, j.shape[1]).reshape(j.shape)[hit]
+    return other.any(1)
+
+
 def band_points(lines, s, rows, grading, cell):
     """Candidate points of all the lines' bands: (xy, spacing, offset, in_band, line index,
     tangent)."""
@@ -348,14 +379,14 @@ def apply(points, perimeter, lines, s, rows, grading, cell, protected=None, hard
     if ok.any():
         ok[ok] &= hb.ring_dist(xy[ok, 0], xy[ok, 1], ring) >= hb.PERIM_FRAC * sp[ok]
     idx = np.nonzero(ok)[0]
-    xy, sp, off, band = xy[idx], sp[idx], off[idx], band[idx]
+    xy, sp, off, band, li = xy[idx], sp[idx], off[idx], band[idx], li[idx]
     # old points in the band's reach go (but the dam row and breach cells)
     reach = edge + CLEAR_EXTRA_FRAC * cell
     do = tree.query(pts)[0] if len(pts) else np.zeros(0)
     keep_old = ~((do < reach) & ~hard)
     order = np.lexsort((np.arange(len(xy)), off))
     kept = _dedupe(xy, sp, order, MIN_FRAC, fixed=pts[hard] if hard.any() else None)
-    xy, sp, band = xy[kept], sp[kept], band[kept]
+    xy, sp, off, band, li = xy[kept], sp[kept], off[kept], band[kept], li[kept]
     # old points beyond the reach but too close to a new point (the outer row) go too
     rest_i = np.nonzero(keep_old)[0]
     if len(xy) and len(rest_i):
@@ -365,9 +396,18 @@ def apply(points, perimeter, lines, s, rows, grading, cell, protected=None, hard
         keep_old[rest_i[close]] = False
     removed = int((~keep_old).sum())
     out = np.vstack([pts[keep_old], xy])
-    oprot = np.r_[prot[keep_old], band]
+    # 3.10.82 (#170): only the first row (the points whose cells' shared faces lie on the
+    # line) is protected, and only where no other banded line comes within SOLO_FRAC x s;
+    # fix_faces may move or drop the outer and graded rows, and the first rows where bands
+    # meet (junctions, crossings, streets closer than the band), to keep cells at 8 faces
+    first = band & (off <= FIRST_ROW_FRAC * s)
+    if first.any() and len(lines) > 1:
+        fi = np.nonzero(first)[0]
+        first[fi[_near_other(lines, xy[fi], li[fi], SOLO_FRAC * s, s)]] = False
+    oprot = np.r_[prot[keep_old], first]
     stats.update(points_removed=removed, points_added=int(len(xy)),
                  band_points=int(band.sum()), graded_points=int((~band).sum()),
+                 protected_points=int(first.sum()),
                  points=int(len(out)))
     return out, oprot, stats
 
