@@ -23,6 +23,10 @@ OUT_FIELDS = [("dam_id", FT_STRING), ("name", FT_STRING),
 # 0.17.26: flagged structures (damsuite/structure_flags.py), after OUT_FIELDS (tools 16 and 19
 # build their layers on OUT_FIELDS and write their attributes by position)
 FLAG_FIELDS = [("struct_cls", FT_STRING), ("flag_note", FT_STRING)]
+# 0.17.46: the inventory's maximum-pool (top of dam) surface area, m2 (DWR max_pool_area; the NID
+# has none). Last, after FLAG_FIELDS, for the same reason. Tool 7b falls back to it when the
+# stage-storage curve is too shallow to give the surface area at the top of dam.
+MAXAREA_FIELDS = [("inv_maxa_m2", FT_DOUBLE)]
 
 # field defaults: DWR shapefile names, and the NID GeoPackage names
 FIELD_DEFAULTS = {f"DWR_{k}": v for k, v in inv.DWR_DEFAULTS.items()}
@@ -37,7 +41,8 @@ FIELD_KEYS = [("ID", "ID field", FIELD_ANY),
               ("HZ", "hazard class", FIELD_ANY),
               ("STATUS", "status (e.g. Intact / Breached)", FIELD_ANY),
               ("NIDREF", "NID ID (links a DWR dam to the NID layer)", FIELD_ANY),
-              ("LEN", "dam length", FIELD_NUMERIC)]
+              ("LEN", "dam length", FIELD_NUMERIC),
+              ("MA", "max pool surface area (top of dam; tool 7b's fallback area)", FIELD_NUMERIC)]
 
 
 class PrepareDams(QgsProcessingAlgorithm):
@@ -73,7 +78,11 @@ class PrepareDams(QgsProcessingAlgorithm):
                 "struct_cls / flag_note (0.17.26): a flagged structure of the suite's list "
                 "(docs/Flagged_structures.md, e.g. DWR-3161, a road fill over backwater) is kept "
                 "with its class and note; the later tools list it with the note and its hazard "
-                "of record instead of a breach flood.")
+                "of record instead of a breach flood.\n"
+                "inv_maxa_m2 (0.17.46): the DWR maximum-pool surface area (max_pool_area, acres, "
+                "recorded at the top of dam), in m2; empty when the inventory has none (0) and for NID "
+                "dams. Tool 7b sends it as the Runner's surface area when the tool-3 stage-storage "
+                "curve is too shallow to give one.")
 
     def initAlgorithm(self, config=None):
         for src, label in ((self.DWR, "ND DWR dams"), (self.NID, "NID dams")):
@@ -121,6 +130,8 @@ class PrepareDams(QgsProcessingAlgorithm):
         for k, _l, _t in FIELD_KEYS:
             if not fld.get(k):
                 fld[k] = found.get(k)
+        if fld.get("MA") and fld["MA"] not in names:   # optional field: never fail on it
+            fld["MA"] = found.get("MA")
         wgs = QgsCoordinateReferenceSystem("EPSG:4326")
         tr = QgsCoordinateTransform(src.sourceCrs(), wgs, QgsProject.instance())
         out = []
@@ -155,7 +166,7 @@ class PrepareDams(QgsProcessingAlgorithm):
             raise QgsProcessingException("Provide a DWR layer, an NID layer, or both.")
 
         fields = QgsFields()
-        for n, t in OUT_FIELDS + FLAG_FIELDS:
+        for n, t in OUT_FIELDS + FLAG_FIELDS + MAXAREA_FIELDS:
             fields.append(QgsField(n, t))
         wgs = QgsCoordinateReferenceSystem("EPSG:4326")
         sink, dest = self.parameterAsSink(params, self.OUT, context, fields,
@@ -245,7 +256,7 @@ class PrepareDams(QgsProcessingAlgorithm):
             o.setAttributes([a["id"], a["name"], src, nid_id, a["h"], a["ns"], a["ms"], a["sa"],
                              a["hz"], a["status"], a["len"], "YES" if sh else "",
                              flag_e["structure_class"] if flag_e else None,
-                             SF.note(flag_e) if flag_e else None])
+                             SF.note(flag_e) if flag_e else None, a.get("ma")])
             sink.addFeature(o)
         feedback.pushInfo(
             f"{len(recs)} dams written | dropped by status: {n_status}, by size: {n_size} | "

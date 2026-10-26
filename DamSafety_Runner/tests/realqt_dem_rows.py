@@ -18,8 +18,22 @@ PLUGIN_DIR = os.path.dirname(HERE)
 REPO = os.path.dirname(PLUGIN_DIR)
 ROOT = tempfile.mkdtemp(prefix="demrows_")
 os.symlink(PLUGIN_DIR, os.path.join(ROOT, "DamSafety_Runner"))
-if os.path.isdir(os.path.join(REPO, "DamSafety_Screening")):          # the DEM download code
-    os.symlink(os.path.join(REPO, "DamSafety_Screening"), os.path.join(ROOT, "DamSafety_Screening"))
+# the DEM download code lives in DamSafety_Screening, next to the Runner. Look beside the path we
+# were started from and beside the real (symlink-resolved) plugin folder: a nd_breach_runner ->
+# DamSafety_Runner link outside the repo must still find it (3.10.83).
+SCREENING = None
+for _repo in (REPO, os.path.dirname(os.path.realpath(PLUGIN_DIR))):
+    if os.path.isdir(os.path.join(_repo, "DamSafety_Screening")):
+        SCREENING = os.path.join(_repo, "DamSafety_Screening")
+        break
+if SCREENING:
+    os.symlink(SCREENING, os.path.join(ROOT, "DamSafety_Screening"))
+elif os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+    print("FAIL: DamSafety_Screening is not next to DamSafety_Runner; the DEM rows cannot be built")
+    sys.exit(1)
+else:   # a Runner-only copy: the section is the "not available" stub, there are no rows to check
+    print("SKIP: DamSafety_Screening is not next to DamSafety_Runner (Runner-only copy)")
+    sys.exit(0)
 sys.path.insert(0, ROOT)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -113,6 +127,7 @@ def test_dem_rows_keep_their_height_on_laptop_screens():
             with Screen(w, h):
                 d = _open(True, tab)
                 try:
+                    assert hasattr(d, "dem_source"), "DEM download section is the 'not available' stub"
                     assert d.dem_section.body.isVisible()
                     short = [(_name(x), x.height(), _need(x)) for x in _rows(d) if x.height() < _need(x)]
                     assert not short, ((w, h, tab), short)

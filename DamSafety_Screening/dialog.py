@@ -808,6 +808,16 @@ class NDDamScreeningDialog(QDialog):
                                     "(Inputs: Culverts / bridges). The default sends nothing extra.")
         self.runner_refine = QCheckBox("Step 7b: near-dam refine (finer FV1 grid near the dam; slower)")
         self.runner_refine.toggled.connect(self._changed)
+        # 0.17.46: the Inputs water bodies as the Runner's report mask (rundam WATER_MASK)
+        self.runner_water_mask = QCheckBox("Step 7b: mask existing lakes and ponds in the Runner's report")
+        self.runner_water_mask.setToolTip(
+            "Off (default): the Runner does what it always does. On: step 7b gives the Runner the "
+            "'NHD waterbodies' layer from the Inputs tab, and the Runner's run report then shows the "
+            "flooded area and speeds twice - with and without the lakes and ponds that were "
+            "already there before the breach. Only the report changes: the flood model, its maps "
+            "and the hazard class are the same either way. Needs that layer saved in a "
+            "file (Inputs tab) and ND Dam Breach Runner 3.10.27 or later.")
+        self.runner_water_mask.toggled.connect(self._changed)
         self.runner_tier.currentIndexChanged.connect(self._changed)
         self.baseline = QCheckBox("Step 7: also run a no-breach baseline (increment rasters)")
         self.baseline.setToolTip("A second simulation of each dam with only the steady ambient flow, no "
@@ -867,6 +877,7 @@ class NDDamScreeningDialog(QDialog):
             ("Dams folder (7b, dam.json)", self.dams_folder, "dir"),
             ("Step 7b Runner engine", self.runner_tier, None),
             ("", self.runner_refine, None),
+            ("", self.runner_water_mask, None),
             ("", self.baseline, None),
             ("Baseline ambient flow (cfs)", self.baseline_cfs, None),
             ("Step 7 buildings in the terrain", self.buildings, None),
@@ -1328,7 +1339,7 @@ class NDDamScreeningDialog(QDialog):
     # ---------------------------------------------------------------- settings --
     _EDITS = ("local_dem", "exe", "chart_file", "runner_dem", "dams_folder", "ref_folder", "old_inventory")
     _COMBOS = ("terrain_source", "larger_clips", "engine", "scenario", "crit", "buildings", "ref_units", "runner_tier")
-    _CHECKS = ("baseline", "incremental", "runner_refine")
+    _CHECKS = ("baseline", "incremental", "runner_refine", "runner_water_mask")
     _SPINS = ("baseline_cfs", "building_raise_ft", "building_n", "dem_cell", "grid_m", "simh", "simmax")
 
     def settings(self):

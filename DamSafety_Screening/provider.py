@@ -58,10 +58,14 @@ def _with_manifest(cls):
     inner = cls.processAlgorithm
 
     def processAlgorithm(self, params, context, feedback):
+        self.manifest_extra = None
         result = inner(self, params, context, feedback)
         try:
             from .core import manifest as mf
-            written = mf.record("nddam:" + self.name(), params, result)
+            # 0.17.46: a tool may add its own run facts (tool 7b: surface_area_source per dam)
+            extra = getattr(self, "manifest_extra", None)
+            written = mf.record("nddam:" + self.name(), params, result,
+                                extra=extra if isinstance(extra, dict) and extra else None)
             for w in written:
                 feedback.pushInfo("run manifest: {}".format(w))
         except Exception as e:                                   # noqa
