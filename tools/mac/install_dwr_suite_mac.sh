@@ -9,12 +9,15 @@
 # chip automatically and builds a native stack: Intel -> osx-64, Apple Silicon
 # (M1/M2/M3, incl. M2 Pro) -> osx-arm64.
 #
-#   * Miniforge (conda) if you don't already have conda/mamba
+#   * Miniforge (conda) if you don't already have conda/mamba: a pinned release
+#     (MF_VER below), sha256-checked before it is run
 #   * QGIS 3.34                      conda-forge, env  "ndqgis"
 #   * ANUGA + gmsh (the mesher)      conda-forge, env  "ndanuga"
 #   * LISFLOOD-FP 8.3                the OFFICIAL source is downloaded from Zenodo
 #                                    (size + sha256 checked), the Runner's small
-#                                    patch (lisflood/) is applied, and it is built
+#                                    patch is applied (the installed Runner's
+#                                    scripts/patch_lisflood.py, else lisflood/'s
+#                                    lisflood-8.3-ndbreach.patch), and it is built
 #                                    with conda-forge clang (conda-forge has no
 #                                    LISFLOOD-FP), OR reused from an existing
 #                                    patched ND-set build, OR DS_LISFLOOD
@@ -40,7 +43,8 @@
 # USAGE
 #   bash install_dwr_suite_mac.sh                 # full install
 #   bash install_dwr_suite_mac.sh --check         # report what is installed
-#   bash install_dwr_suite_mac.sh --skip-lisflood # don't build LISFLOOD-FP
+#   bash install_dwr_suite_mac.sh --skip-lisflood # don't build LISFLOOD-FP (an already
+#                                                 # installed patched one is still used)
 #
 # The only non-conda prerequisite is Apple's Command Line Tools (they provide
 # the macOS SDK the compiler needs) — an Apple component, NOT Homebrew. Skip it
@@ -49,8 +53,9 @@
 # Overrides (environment variables): DS_PREFIX, DS_MINIFORGE, DS_QGIS_ENV,
 # DS_ANUGA_ENV, DS_QGIS_VER, DS_QGIS_PROFILE, DS_PLUGIN_DIR, DS_SUBDIR,
 # DS_LISFLOOD (a patched binary), DS_LISFLOOD_ZIP (a local LISFLOOD-FP-8.3.zip,
-# still sha256-checked), DS_THREADS, DS_JOBS (compile jobs), DS_APPLE_CLANG=1
-# (compile with Apple's clang instead of conda-forge clang).
+# still sha256-checked), DS_MINIFORGE_SH (a local copy of the pinned Miniforge
+# installer, still sha256-checked), DS_THREADS, DS_JOBS (compile jobs),
+# DS_APPLE_CLANG=1 (compile with Apple's clang instead of conda-forge clang).
 #
 # GPU / Metal: the official LISFLOOD-FP 8.3 source has NO Metal back end (its
 # GPU code is CUDA only, which Macs cannot use), so DS_ENABLE_METAL is ignored.
@@ -82,7 +87,7 @@ for a in "$@"; do
   case "$a" in
     --check)         MODE="check" ;;
     --skip-lisflood) SKIP_LISFLOOD=1 ;;
-    -h|--help)       sed -n '2,57p' "$0"; exit 0 ;;
+    -h|--help)       sed -n '2,62p' "$0"; exit 0 ;;
     *) echo "unknown option: $a"; exit 2 ;;
   esac
 done
@@ -139,14 +144,39 @@ locate_conda() {
 }
 locate_conda
 
+# Miniforge is pinned to one release and its installer's sha256 is checked before it runs.
+# The hashes are the release's own published <asset>.sha256 files
+# (github.com/conda-forge/miniforge/releases/download/26.9.4-1/Miniforge3-26.9.4-1-MacOSX-<arch>.sh.sha256).
+MF_VER="26.9.4-1"
+case "$MF_ARCH" in
+  arm64)  MF_SHA256="63f8f5367cd3e52d1dba3e22d8ad91d10ea0e93675ba5b0822312a4342d962e0" ;;
+  x86_64) MF_SHA256="66b9e771fa268f30ce97c4f69bbce64a7e610dfd4cb993fb3b424466c3e42b50" ;;
+  *)      MF_SHA256="" ;;
+esac
+sha256_of() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi; }
+MF_TMP=""
+cleanup_mf() { if [ -n "$MF_TMP" ]; then rm -rf "$MF_TMP"; fi; }
+trap cleanup_mf EXIT
+
 if [ "$MODE" = "install" ] && [ -z "$CONDA_EXE" ]; then
-  say "No conda found — installing Miniforge to $MINIFORGE_DIR (conda-forge's own installer, not Homebrew)."
-  [ "$OS" = Darwin ] || die "No conda found (Linux test: set DS_MINIFORGE)."
-  TMP_INST="$(mktemp -t miniforge).sh"
-  URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-${MF_ARCH}.sh"
-  curl -fSL "$URL" -o "$TMP_INST" || die "Could not download Miniforge from $URL"
-  bash "$TMP_INST" -b -p "$MINIFORGE_DIR"
-  rm -f "$TMP_INST"
+  say "No conda found — installing Miniforge $MF_VER to $MINIFORGE_DIR (conda-forge's own installer, not Homebrew)."
+  [ "$OS" = Darwin ] || [ -n "${DS_MINIFORGE_SH:-}" ] || die "No conda found (Linux test: set DS_MINIFORGE)."
+  [ -n "$MF_SHA256" ] || die "No pinned Miniforge for arch '$MF_ARCH'."
+  MF_NAME="Miniforge3-${MF_VER}-MacOSX-${MF_ARCH}.sh"
+  MF_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dwr-miniforge.XXXXXX")"
+  if [ -n "${DS_MINIFORGE_SH:-}" ]; then
+    [ -f "$DS_MINIFORGE_SH" ] || die "DS_MINIFORGE_SH=$DS_MINIFORGE_SH is not a file."
+    cp "$DS_MINIFORGE_SH" "$MF_TMP/$MF_NAME"
+  else
+    URL="https://github.com/conda-forge/miniforge/releases/download/${MF_VER}/${MF_NAME}"
+    curl -fSL --retry 3 --connect-timeout 30 "$URL" -o "$MF_TMP/$MF_NAME" || die "Could not download Miniforge from $URL"
+  fi
+  GOT="$(sha256_of "$MF_TMP/$MF_NAME")"
+  [ "$GOT" = "$MF_SHA256" ] || die "sha256 mismatch for $MF_NAME: got $GOT, expected $MF_SHA256. Nothing was run."
+  echo "  $MF_NAME sha256 OK"
+  [ "$OS" = Darwin ] || die "Linux test: the Miniforge check passed; not running a macOS installer here."
+  bash "$MF_TMP/$MF_NAME" -b -p "$MINIFORGE_DIR"
+  cleanup_mf; MF_TMP=""
   CONDA_EXE="$MINIFORGE_DIR/bin/conda"; CONDA_KIND=conda
 fi
 [ -n "$CONDA_EXE" ] || die "conda not found. Install Miniforge, or re-run without --check."
@@ -198,7 +228,8 @@ if [ "$MODE" = "check" ]; then
   echo "  LISFLOOD-FP: $PREFIX/bin/lisflood  $st"
   echo "  profile:    $PROFILE_DIR"
   for p in "${DS_PLUGINS[@]}"; do
-    echo "    plugin $p: $( [ -d "$PROFILE_DIR/python/plugins/$p" ] && echo installed || echo missing)"
+    v="$(sed -n 's/^version=//p' "$PROFILE_DIR/python/plugins/$p/metadata.txt" 2>/dev/null | tr -d '\r')"
+    echo "    plugin $p: $( [ -d "$PROFILE_DIR/python/plugins/$p" ] && echo "installed ${v:-?}" || echo missing)"
   done
   echo "  Absaraka:   $PREFIX/absaraka-run  $( [ -f "$PREFIX/absaraka-run/Dams/DWR-2801/dam.json" ] && echo ready || echo missing)"
   exit 0
@@ -294,11 +325,11 @@ if [ -n "${DS_LISFLOOD:-}" ]; then
   is_patched "$DS_LISFLOOD" || warn "DS_LISFLOOD has no 'inittm_depth' (not the Runner-patched build) - the Runner will refuse it."
   LISFLOOD_EXE="$DS_LISFLOOD"
   say "Using the LISFLOOD-FP you pointed me at (DS_LISFLOOD): $LISFLOOD_EXE"
-elif [ "$SKIP_LISFLOOD" -eq 1 ]; then
-  say "Skipping LISFLOOD-FP (--skip-lisflood). The Runner uses its built-in engine (tick 'use built-in' in it)."
 elif is_patched "$PREFIX/bin/lisflood" && runs_ok "$PREFIX/bin/lisflood"; then
   LISFLOOD_EXE="$PREFIX/bin/lisflood"
   say "LISFLOOD-FP already installed and patched: $LISFLOOD_EXE (delete it to force a rebuild)"
+elif [ "$SKIP_LISFLOOD" -eq 1 ]; then
+  say "Skipping LISFLOOD-FP (--skip-lisflood). The Runner uses its built-in engine (tick 'use built-in' in it); run_nickreview.sh needs a patched LISFLOOD-FP."
 elif [ -x "$HOME/nd-dam-suite/bin/lisflood" ] && runs_ok "$HOME/nd-dam-suite/bin/lisflood"; then
   if is_patched "$HOME/nd-dam-suite/bin/lisflood"; then
     say "Reusing the patched LISFLOOD-FP already built for the ND set ($HOME/nd-dam-suite/bin/lisflood) — copying it in."
@@ -325,7 +356,7 @@ if [ -z "$LISFLOOD_EXE" ] && [ "$SKIP_LISFLOOD" -ne 1 ]; then
       create_env ndbuild cmake make c-compiler cxx-compiler
     fi
     BARGS=(--conda "$CONDA_EXE" --env ndbuild --out "$PREFIX" --jobs "${DS_JOBS:-$(ncpu)}"
-           --python "$QGIS_PREFIX/bin/python")
+           --python "$QGIS_PREFIX/bin/python" --patcher "$RUNNER_DIR/scripts/patch_lisflood.py")
     [ -n "${DS_LISFLOOD_ZIP:-}" ] && BARGS+=(--zip "$DS_LISFLOOD_ZIP")
     [ "${DS_APPLE_CLANG:-0}" = "1" ] && BARGS+=(--apple-clang)
     BUILT=""
@@ -349,7 +380,7 @@ if [ -z "$LISFLOOD_EXE" ] && [ "$SKIP_LISFLOOD" -ne 1 ]; then
         warn "LISFLOOD-FP built but did not run (try '$PREFIX/bin/lisflood -version'); leaving the Runner on its built-in engine."
       fi
     else
-      warn "LISFLOOD-FP build failed (see the [lisflood] lines above and $PREFIX/src/lisflood-8.3-ndbreach/*.log)."
+      warn "LISFLOOD-FP build failed (see the [lisflood] lines above and the logs of each attempt in $PREFIX/src/lisflood-logs/)."
       warn "The Runner will use its built-in engine. Retry later with:  bash $(basename "$0")"
     fi
   fi
@@ -384,14 +415,14 @@ s.setValue("Processing/Configuration/NDBREACH_THREADS", threads)
 # NDBREACH_THREADS (> 0) is used for LISFLOOD-FP AND ANUGA (Runner resolve_threads). The
 # separate ANUGA count NDBREACH_ANUGA_THREADS is an ENVIRONMENT variable only (read when
 # THREADS is 0), so it is not written here. Thread counts never change the results.
-if lisflood_exe:
-    s.setValue("Processing/Configuration/NDBREACH_LISFLOOD_EXE", lisflood_exe)
+# the same LISFLOOD-FP value as damsafety_env.sh, also when it is empty (an empty value is
+# "not set" for the Runner), so an older path never stays behind in the profile
+s.setValue("Processing/Configuration/NDBREACH_LISFLOOD_EXE", lisflood_exe)
 # the DamSafety "suite" store (what Setup normally writes): group ndsuite/
 s.setValue("ndsuite/anuga_python", anuga_py)
 s.setValue("ndsuite/dams_folder", dams_folder)
 s.setValue("ndsuite/setup_version", "mac-install 2026-10-26")
-if lisflood_exe:
-    s.setValue("ndsuite/lisflood_exe", lisflood_exe)
+s.setValue("ndsuite/lisflood_exe", lisflood_exe)
 s.sync()
 print("wrote", ini)
 print("  ANUGA_PYTHON =", anuga_py)
@@ -498,8 +529,11 @@ done
 if [ -n "$LISFLOOD_EXE" ]; then
   if runs_ok "$LISFLOOD_EXE" && is_patched "$LISFLOOD_EXE"; then echo "  OK  LISFLOOD-FP $LISFLOOD_EXE (Runner patch present)"
   else warn "LISFLOOD-FP $LISFLOOD_EXE does not run or is unpatched"; FAIL=1; fi
+elif [ "$SKIP_LISFLOOD" -eq 1 ]; then
+  warn "no LISFLOOD-FP binary (--skip-lisflood: built-in engine only; run_nickreview.sh needs a patched LISFLOOD-FP)"
 else
-  warn "no LISFLOOD-FP binary (built-in engine only)"
+  warn "no LISFLOOD-FP binary: the build failed or could not run (see above). run_nickreview.sh needs one; the Runner dialog can only use its built-in engine."
+  FAIL=1
 fi
 if [ "$FAIL" = 0 ]; then echo "  All checks passed."; else warn "Some checks failed - see the WARNING lines above and $LOG"; fi
 
@@ -517,7 +551,7 @@ cat <<EOF
   Absaraka run    $RUN
 
   Open QGIS:      double-click  "$LAUNCH"
-                  (or: $CONDA_EXE run -p $QGIS_PREFIX qgis --profile $PROFILE)
+                  (or in Terminal:  "$LAUNCH"   - it sources damsafety_env.sh first)
   Then follow RUN-ABSARAKA.md (in $RUN).
   NickReview dams (Terminal):  bash run_nickreview.sh --dry-run    (see README_MAC.md)
   Install log:    $LOG
