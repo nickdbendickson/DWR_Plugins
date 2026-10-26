@@ -152,6 +152,9 @@ DEFAULT_SETTINGS = {
     "runner_tier": 0, "runner_force_anuga": False, "runner_refine": False,
     "culvert_kind": "", "culvert_width": "", "culvert_height": "", "culvert_barrels": "",
     "culvert_shape": "", "culvert_name": "",
+    # 0.17.46: step 7b gives the Inputs "waterbodies" layer to the Runner as its report's
+    # water-body mask (WATER_MASK); off = nothing sent (the Runner's own default)
+    "runner_water_mask": False,
     # 0.11: tool 7 no-breach baseline / buildings, tool 8 incremental, tools 11 / 13 inputs
     "baseline": False, "baseline_cfs": 0.0,
     "buildings": 0,           # 0 bare terrain, 1 raise the DEM, 2 Manning's n
@@ -174,7 +177,8 @@ WINDOW_KEYS = ("terrain_source", "larger_clips", "engine", "scenario", "workers"
                "baseline_cfs", "buildings", "building_raise_ft", "building_n", "incremental", "ref_units",
                "screen_what", "chain", "dem_cell", "grid_m", "simh", "simmax", "storage_choice",
                "runner_tier", "runner_refine", "culvert_kind", "culvert_width",
-               "culvert_height", "culvert_barrels", "culvert_shape", "culvert_name")
+               "culvert_height", "culvert_barrels", "culvert_shape", "culvert_name",
+               "runner_water_mask")
 for _k, _l, _p in LAYER_SLOTS:
     DEFAULT_SETTINGS[_k] = ""
 
@@ -618,6 +622,9 @@ def defaults(step, work, settings):
             p["ENGINE"] = eng
         if S.get("runner_refine"):
             p["REFINE_NEAR"] = True
+        if S.get("runner_water_mask") and src("waterbodies"):       # 0.17.46
+            p["WATER_MASK_MODE"] = 2                                  # handoff.WATER_MASK_LAYER
+            p["WATER_MASK"] = src("waterbodies")
         put("CULVERTS", src("culverts"))
         if src("culverts"):
             for key, name in (("C_KIND", "culvert_kind"), ("C_WIDTH", "culvert_width"),

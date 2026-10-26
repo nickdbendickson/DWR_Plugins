@@ -19,6 +19,10 @@ DWR_ALIASES = {
     "STATUS": ("status",),
     "NIDREF": ("national_id", "national_i", "nid_id"),
     "LEN": ("dam_length",),
+    # 0.17.46: the DWR maximum-pool (top of dam) surface area, acres; tool 7b sends it as the
+    # Runner's AREA_AC when the stage-storage curve cannot give the area. The NID has none
+    # (its SURFACE_AREA is the normal pool).
+    "MA": ("max_pool_area", "max_pool_a"),
     # 0.17.47: pool elevations (ft; DWR only - the NID has none), so tool 3 can put each storage
     # at its own elevation (only their difference is used: some records are in a local datum)
     "NE": ("normal_elev", "normal_ele", "normal_elevation"),
@@ -95,6 +99,7 @@ def match_fields(names, aliases):
 DWR_DEFAULTS = {"ID": "structure_", "NAME": "dam_name", "H": "max_dam_he", "NS": "normal_vol",
                 "MS": "max_pool_v", "SA": "normal_are", "HZ": "hazard_cla",
                 "STATUS": "status", "NIDREF": "national_i", "LEN": "dam_length"}
+# no "MA" default: the field is optional, found by DWR_ALIASES (max_pool_area / max_pool_a)
 # NE / ME (pool elevations) have no default box value: older DWR exports lack them, and a default
 # name the layer does not have would fail the read; they are filled from DWR_ALIASES instead
 NID_DEFAULTS = {
@@ -130,7 +135,7 @@ def standardize(get, fld, metric=False, tag="DWR", idx=0):
             "h": _num(g("H"), h_m), "ns": _num(g("NS"), v_m), "ms": _num(g("MS"), v_m),
             "sa": _num(g("SA"), a_m), "hz": _txt(g("HZ")), "status": _txt(g("STATUS")),
             "nidref": _txt(g("NIDREF")).upper(), "len": _num(g("LEN"), h_m),
-            "ne": _num(g("NE"), h_m), "me": _num(g("ME"), h_m)}
+            "ma": _num(g("MA"), a_m), "ne": _num(g("NE"), h_m), "me": _num(g("ME"), h_m)}
 
 
 def parse_status_list(text):
