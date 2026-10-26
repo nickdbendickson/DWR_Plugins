@@ -68,7 +68,7 @@ from . import netproxy   # noqa: F401  (1.16.2)
 from . import structure_flags   # noqa: F401  (1.17.2)
 from . import packcheck   # noqa: F401  (1.17.5)
 
-SUITE_VERSION = "1.17.5"   # 1.17.5: packcheck (offline pack vs manifest.json on load), damdata logs it; 1.17.4: suitedata skips dem/lidar_1m (Screening 1 m tile cache, #105); 1.17.3: record.py, pack_convert fixes (#94); 1.17.2: structure_flags (flagged structures); 1.17.1: one canonical package
+SUITE_VERSION = "1.17.6"   # 1.17.6: packcheck never raises - a broken manifest.json or a cut-short GeoPackage is a FAILED / unreadable result, zipped format-2 packs against their zip listing, a UTF-8 BOM manifest is FAILED (folder and zip), the summary names pack-level problems, pack_signature (#171 follow-up); 1.17.5: packcheck (offline pack vs manifest.json on load), damdata logs it; 1.17.4: suitedata skips dem/lidar_1m (Screening 1 m tile cache, #105); 1.17.3: record.py, pack_convert fixes (#94); 1.17.2: structure_flags (flagged structures); 1.17.1: one canonical package
 FILES_NAME = "FILES.json"
 
 __all__ = ["SUITE_VERSION", "FILES_NAME", "selfcheck", "package_files", "chain", "dam_record",
