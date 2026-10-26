@@ -20,4 +20,7 @@ def dem_download_rows_keep_their_height_with_real_qt_offscreen():
     if "SKIP: no real QGIS" in out:
         print("      (skipped: no real QGIS Python here)")
         return
+    if "SKIP: DamSafety_Screening" in out and r.returncode == 0:
+        print("      (skipped: DamSafety_Screening is not next to the Runner)")
+        return
     assert r.returncode == 0 and "all" in out and "checks passed" in out, out[-3000:]
