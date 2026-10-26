@@ -1084,10 +1084,12 @@ def trace(sample, P, axis, top, height, step, toe, max_len, gap, tol=None, prom=
     old rule ('' when it did not); such a line still needs positive evidence that it is the
     dam (evidence(), in crest_dam_line). crest_w: the crest width on record - the walk of a
     trace off the old rule (relaxed, or with start_within) keeps to the middle of a level top
-    wider than its window, and takes a side of the ridge test that runs into no data (a pool
-    left out of the DEM) as falling. start_within: the crest the trace starts from must be at
-    most this far from P (a start from crest-high ground found nearby: not a higher ridge
-    across the section)."""
+    wider than its window while that top is about as wide as the crest on record, stops at a
+    junction (_walk: another embankment joining or crossing the crest), and takes a side of
+    the ridge test that runs into no data (a pool left out of the DEM) as falling; its ends
+    say why it stopped ('a junction: ...'). start_within: the crest the trace starts from must
+    be at most this far from P (a start from crest-high ground found nearby: not a higher
+    ridge across the section)."""
     axis = np.asarray(axis, float) / (np.hypot(*axis) or 1.0)
     tol = float(tol if tol is not None else max(3.0 * ft, 0.1 * height))
     prom = float(prom if prom is not None else max(PROM_MIN_FT * ft, PROM_FRAC * height))
