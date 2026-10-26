@@ -326,6 +326,17 @@ class Model:
         self.weir_coef = 2.6
         self.bc_line = []            # normal-depth BC line along the perimeter
         self.bc_slope = 0.001
+        # 3.10.85: more normal-depth lines where the run's flood reaches the perimeter
+        # [{'name', 'line', 'slope'}] (hecras_solver, outflow)
+        self.outflow_lines = []
+        self.d1d2_maxiter = 0        # 3.10.85: 'UNET D1D2 MaxIter' (hecras_solver)
+        # 3.10.85 (hecras_solver): 'UNET D2 Cores' (0 = all), the 2D initial-condition
+        # ramp-up ('UNET D2 TotalICTime' hours, 0 = off; 'RampUpFraction') and the breach
+        # progression curve ('linear' | 'sine')
+        self.d2_cores = 0
+        self.ic_time_hr = 0.0
+        self.ic_ramp_frac = 0.1
+        self.breach_progression = "linear"
         self.initial_wse = None
         self.inflow = None           # (interval label, [values]) or None for base flow
         self.base_flow = 0.0
@@ -446,17 +457,18 @@ def geometry_text(m, now=None):
     # --- v3.12.0: culverts, bridges and notches inside the 2D area ----------------------
     for c in m.structures:
         L += structure_block(c, now)
-    # --- normal-depth boundary line -----------------------------------------------------
-    bc = m.bc_line
-    mid = bc[len(bc) // 2]
-    L += ["BC Line Name=" + name32(BC_NAME), "BC Line Storage Area=" + name16(AREA_NAME),
-          "BC Line Start Position= {} , {} ".format(num(bc[0][0], 4), num(bc[0][1], 4)),
-          "BC Line Middle Position= {} , {} ".format(num(mid[0], 4), num(mid[1], 4)),
-          "BC Line End Position= {} , {} ".format(num(bc[-1][0], 4), num(bc[-1][1], 4)),
-          "BC Line Arc= {} ".format(len(bc))]
-    L += lines_xy(bc, 2)
-    L += ["BC Line Text Position= {} , {} ".format(num(mid[0], 4), num(mid[1], 4)),
-          "LCMann Time=Dec/30/1899 00:00:00", "LCMann Region Time=Dec/30/1899 00:00:00",
+    # --- normal-depth boundary lines (3.10.85: the main one, then the outflow edges) -------
+    for name, bc in [(BC_NAME, m.bc_line)] + [(o_["name"], o_["line"]) for o_ in
+                                               (getattr(m, "outflow_lines", None) or [])]:
+        mid = bc[len(bc) // 2]
+        L += ["BC Line Name=" + name32(name), "BC Line Storage Area=" + name16(AREA_NAME),
+              "BC Line Start Position= {} , {} ".format(num(bc[0][0], 4), num(bc[0][1], 4)),
+              "BC Line Middle Position= {} , {} ".format(num(mid[0], 4), num(mid[1], 4)),
+              "BC Line End Position= {} , {} ".format(num(bc[-1][0], 4), num(bc[-1][1], 4)),
+              "BC Line Arc= {} ".format(len(bc))]
+        L += lines_xy(bc, 2)
+        L += ["BC Line Text Position= {} , {} ".format(num(mid[0], 4), num(mid[1], 4))]
+    L += ["LCMann Time=Dec/30/1899 00:00:00", "LCMann Region Time=Dec/30/1899 00:00:00",
           "LCMann Table=0", "Chan Stop Cuts=-1 ", "", "", "",
           "Use User Specified Reach Order=0", "GIS Ratio Cuts To Invert=-1",
           "GIS Limit At Bridges=0", "Composite Channel Slope=5"]
@@ -607,9 +619,11 @@ def unsteady_text(m):
     L += lines8(vals)
     L += _bc_tail()
     # normal depth where the valley leaves the 2D area
-    L.append("Boundary Location={},{},{},{},{},{},{},{}".format(
-        blank16, blank16, blank8, blank8, blank16, name16(AREA_NAME), blank16, name32(BC_NAME)))
-    L.append("Friction Slope={},0".format(num(m.bc_slope, 6)))
+    for name, slope in [(BC_NAME, m.bc_slope)] + [(o_["name"], o_["slope"]) for o_ in
+                                                  (getattr(m, "outflow_lines", None) or [])]:
+        L.append("Boundary Location={},{},{},{},{},{},{},{}".format(
+            blank16, blank16, blank8, blank8, blank16, name16(AREA_NAME), blank16, name32(name)))
+        L.append("Friction Slope={},0".format(num(slope, 6)))
     L += _MET.split("\n")
     return CR.join(L) + CR
 
@@ -627,7 +641,7 @@ def breach_block(m):
             "Breach Method= 0 ",
             "Breach Geom=" + ",".join(geom),
             breach_start_line(b),
-            "Breach Progression= 2 ", f8(0) + f8(0) + f8(1) + f8(1),
+            ] + breach_progression_lines(getattr(m, "breach_progression", "linear")) + [
             "Simplified Physical Breach Downcutting= 2 ", f8(0) + f8(0) + f8(1) + f8(1),
             "Simplified Physical Breach Widening= 2 ", f8(0) + f8(0) + f8(1) + f8(1),
             "Starting Notch Depth= 3.402823E+38 ", "Initial Piping Diameter= 3.402823E+38 ",
@@ -635,6 +649,15 @@ def breach_block(m):
             "Mass Wasting Duration= 3.402823E+38 ",
             "Mass Wasting Final Bottom Elevation= 3.402823E+38 ",
             "Breach Use User Defined Growth Ratio=0", "Breach User Defined Growth Ratio=1"]
+
+
+def breach_progression_lines(kind):
+    """'Breach Progression= n ' and its (time fraction, breach fraction) pairs, 10 fields to
+    a line: linear = the two points (0,0)-(1,1); sine = HEC's sine-wave curve (3.10.85)."""
+    from . import hecras_solver as hsol
+    pts = hsol.sine_progression() if kind == "sine" else [(0, 0), (1, 1)]
+    return ["Breach Progression= {} ".format(len(pts))] + lines8(
+        [v for p in pts for v in p])
 
 
 def breach_start_line(b):
@@ -657,12 +680,15 @@ def _d2_block(m, eq):
             "UNET D2 Z Tol= {} ".format(_g(tol["d2_ztol"])),
             "UNET D2 Volume Tol= {} ".format(_g(tol["d2_voltol"])),
             "UNET D2 Max Iterations= {} ".format(int(tol["d2_maxiter"])),
-            "UNET D2 Equation= {} ".format(eq), "UNET D2 TotalICTime=",
-            "UNET D2 RampUpFraction=0.1", "UNET D2 TimeSlices= 1 ",
+            "UNET D2 Equation= {} ".format(eq),
+            "UNET D2 TotalICTime=" + (_g(m.ic_time_hr) if getattr(m, "ic_time_hr", 0) else ""),
+            "UNET D2 RampUpFraction=" + _g(getattr(m, "ic_ramp_frac", 0.1)),
+            "UNET D2 TimeSlices= 1 ",
             "UNET D2 Turbulence Formulation=Non-Conservative (original)",
             "UNET D2 Eddy Viscosity=", "UNET D2 Transverse Eddy Viscosity=",
             "UNET D2 Smagorinsky Mixing=0", "UNET D2 BCVolumeCheck=0", "UNET D2 Latitude=",
-            "UNET D2 Cores=0", "UNET D2 SolverType=PARDISO (Direct)"]
+            "UNET D2 Cores={}".format(int(getattr(m, "d2_cores", 0) or 0)),
+            "UNET D2 SolverType=PARDISO (Direct)"]
 
 
 def courant_lines(c, equation=EQ_SWE):
@@ -721,17 +747,18 @@ def plan_text(m):
         "Run WQNet= 0 ", "Run RASMapper= 0 ",
         "UNET Theta= 1 ", "UNET Theta Warmup= 1 ",
         "UNET ZTol= {} ".format(_g(tol["ztol"])), "UNET ZSATol= {} ".format(_g(tol["zsatol"])),
-        "UNET QTol=", "UNET MxIter= 20 ", "UNET Max Iter WO Improvement= 0 ",
+        "UNET QTol=", "UNET MxIter= {} ".format(int(tol.get("mxiter", 20))), "UNET Max Iter WO Improvement= 0 ",
         "UNET MaxInSteps= 0 ", "UNET DtIC= 0 ", "UNET DtMin= 0 ", "UNET MaxCRTS= 20 ",
         "UNET WFStab= 2 ", "UNET SFStab= 1 ", "UNET WFX= 1 ", "UNET SFX= 1 ",
         "UNET Gravity={}".format("9.80665" if m.units.si else "32.174"),
         "UNET 1D Methodology=Finite Difference", "UNET DSS MLevel= 4 ", "UNET Pardiso=0",
         "UNET DZMax Abort= 100 ", "UNET Use Existing IB Tables=-1 ",
         "UNET Froude Reduction=False", "UNET Froude Limit= 0.8 ", "UNET Froude Power= 4 ",
-        "UNET D1 Cores= 0 ", "UNET D2 Coriolis=0", "UNET D2 Cores= 0 "]
+        "UNET D1 Cores= 0 ", "UNET D2 Coriolis=0",
+        "UNET D2 Cores= {} ".format(int(getattr(m, "d2_cores", 0) or 0))]
     L += _d2_block(m, eq)[1:]
     L += _d2_block(m, eq)
-    L += ["UNET D1D2 MaxIter= 0 ", "UNET D1D2 ZTol=0.01", "UNET D1D2 QTol=0.1",
+    L += ["UNET D1D2 MaxIter= {} ".format(int(getattr(m, "d1d2_maxiter", 0) or 0)), "UNET D1D2 ZTol=0.01", "UNET D1D2 QTol=0.1",
           "UNET D1D2 MinQTol=1", "DSS File=dss", "Write IC File= 0 ",
           "Write IC File at Fixed DateTime=0", "IC Time=,,", "Write IC File Reoccurance=",
           "Write IC File at Sim End=0", "Echo Input=False", "Echo Parameters=False",
@@ -1287,7 +1314,10 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             # on, 3 rows of 20 ft each side, graded 1.5:1, wet area + 500 ft)
             "line_bands": None, "band_cell_ft": None, "band_rows": None, "band_grading": None,
             "band_classes": None, "band_extent": None, "band_wet_pad_ft": None,
-            "band_lines": None}
+            "band_lines": None,
+            # 3.10.85: solver / plan settings (hecras_solver.settings: this dict, else the
+            # NDBREACH_HECRAS_* variables, else hecras_solver.DEFAULTS)
+            "solver": None}
 
 
 def _ogr():
@@ -1407,6 +1437,22 @@ def _rings(geom):
             a = a[:-1]
         out.append((abs(p.GetArea()), a, p))
     out.sort(key=lambda t: -t[0])
+    return out
+
+
+def _reached(wet, x0, ytop, cell, xy):
+    """3.10.85: True where a flooded cell of `wet` (north-up, origin x0 / ytop, cell size
+    `cell`) is at or next to (8 neighbours) each point of `xy`."""
+    ny, nx = wet.shape
+    xy = np.asarray(xy, float).reshape(-1, 2)
+    c = np.floor((xy[:, 0] - x0) / cell).astype(int)
+    r = np.floor((ytop - xy[:, 1]) / cell).astype(int)
+    out = np.zeros(len(xy), bool)
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            rr, cc = r + dr, c + dc
+            inb = (rr >= 0) & (rr < ny) & (cc >= 0) & (cc < nx)
+            out[inb] |= wet[rr[inb], cc[inb]]
     return out
 
 
@@ -2681,6 +2727,11 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     band_channel = bcfg["on"] and "channel" in bcfg["classes"]
     from . import hecras_crest as hcrest
     axis_mode = dam_axis_of(o)                   # v3.10.22: raises on a bad value, before work
+    from . import hecras_solver as hsol
+    try:
+        sv = hsol.settings(o)                    # 3.10.85: raises on a bad value, before work
+    except hsol.SolverSettingError as e:
+        raise HecRasModelError(str(e))
     dem_ds = GS.open_raster(dem_path)
     dem_wkt = dem_ds.GetProjection()
     dem_gt = dem_ds.GetGeoTransform()
@@ -2851,6 +2902,43 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         lo, hi = (units.from_ft(25.0), units.from_ft(500.0))
         cell = nice_cell(min(hi, max(lo, math.sqrt(area_u2 / float(o["target_cells"])))))
     dom = dom.Simplify(cell / 4.0)
+    # 3.10.85: clip the 2D area to the ANUGA mesh outline (same domain and the same free
+    # outflow edges as the ANUGA run), else keep the buffered flood outline
+    outflow_info = {"mode": sv["outflow"], "clip": {"used": False}, "lines": []}
+    if sv["outflow"] in ("auto", "anuga"):
+        mpath = hsol.anuga_outline(model_dir, sv)
+        why_nc = None
+        if mpath is None:
+            why_nc = "the run has no ANUGA mesh outline ({})".format(hsol.ANUGA_MESH_CSV)
+        else:
+            try:
+                if to_model is None:
+                    raise ValueError("the run did not record its model coordinate system")
+                mpoly = _polygon([tuple(q) for q in to_model(hsol.read_outline(mpath))])
+                if not mpoly.IsValid():
+                    mpoly = mpoly.Buffer(0)
+                clipped = dom.Intersection(mpoly)
+                probe0 = P + d * max(2 * acell, cell)
+                if clipped is None or clipped.IsEmpty() or clipped.GetArea() <= 0:
+                    why_nc = "the ANUGA mesh outline does not overlap the 2D area"
+                elif clipped.Distance(_point(*probe0)) >= cell:
+                    why_nc = "the ANUGA mesh outline leaves out the ground just below the dam"
+                else:
+                    a0 = dom.GetArea()
+                    dom = clipped.Simplify(cell / 4.0)
+                    outflow_info["clip"] = {"used": True, "path": mpath,
+                                            "area_kept": round(dom.GetArea() / a0, 4)}
+                    notes.append("2D area clipped to the ANUGA mesh outline ({}): {:.0%} of the "
+                                 "buffered flood outline kept.".format(
+                                     os.path.basename(mpath), dom.GetArea() / a0))
+            except (OSError, ValueError, hsol.SolverSettingError) as e:
+                why_nc = "the ANUGA mesh outline could not be read: {}".format(e)
+        if why_nc:
+            outflow_info["clip"] = {"used": False, "why": why_nc}
+            notes.append(("WARNING: " if sv["outflow"] == "anuga" else "") +
+                         "2D area not clipped to an ANUGA mesh: {}; the buffered flood outline "
+                         "is used, with normal-depth outflow edges where the flood reaches "
+                         "it.".format(why_nc))
     # v3.10.22: the dam line along the embankment crest, traced from the DEM (dam_axis='crest'),
     # else (or when the trace fails) the straight line through the dam point across the flow
     crest_line, crest_sc, crest_rec = None, None, {"asked": axis_mode, "used": "straight"}
@@ -3462,6 +3550,32 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         slope = (zr - zmin) / Lr2 if (np.isfinite(zr) and Lr2 > 0) else 0.001
         how = "average fall from the dam toe to the boundary (straight line)"
     slope = float(min(max(slope, 1e-4), 0.05))
+    # 3.10.85: normal-depth outflow edges wherever the run's flood reaches the perimeter (away
+    # from the dam and from the main line), as the ANUGA run's own edges let water out
+    outflow_lines = []
+    if sv["outflow"] != "single":
+        reached = _reached(wet, dx0, dy0, acell, dens)
+        blocked = ~ok
+        for i in idx:
+            for k_ in range(-2, 3):
+                blocked[(i + k_) % n] = True
+        runs = hsol.wet_runs(reached, blocked, int(math.ceil(2.0 * sv["outflow_min_cells"])))
+        for k_, r_ in enumerate(runs):
+            ln_ = dens[r_]
+            if len(ln_) > MAX_ARC_POINTS:
+                ln_ = ln_[np.linspace(0, len(ln_) - 1, MAX_ARC_POINTS).astype(int)]
+            outflow_lines.append({"name": hsol.OUTFLOW_NAME.format(k_ + 1),
+                                  "line": [tuple(map(float, q)) for q in ln_], "slope": slope})
+        outflow_info["lines"] = [{"name": q["name"], "points": len(q["line"]),
+                                  "length": round(float(np.sum(np.hypot(*np.diff(
+                                      np.asarray(q["line"]), axis=0).T))), 1)}
+                                 for q in outflow_lines]
+        outflow_info["perimeter_reached_frac"] = round(float(np.mean(reached & ok)), 4)
+        if outflow_lines:
+            notes.append("Outflow: {} more normal-depth line(s) ({:,.0f} {} of perimeter) where "
+                         "the run's flood reaches the 2D area's edge, friction slope {:.5f} as "
+                         "the main line.".format(len(outflow_lines), sum(
+                             q["length"] for q in outflow_info["lines"]), units.len_name, slope))
 
     # --- 2D computation points -----------------------------------------------------
     progress(80, "2D computation points")
@@ -3536,7 +3650,10 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
             bsp = {"dam": zs.get("dam_spacing"), "breach": zs.get("breach_spacing"),
                    "channel": zs.get("channel_spacing")}
         else:
-            bsp = None
+            # 3.10.85: finer dam connection and breach rows when NDBREACH_HECRAS_CONN_SPACING
+            # is set (conn_spacing x cell; auto = the breakline default, 0.5 cell)
+            bsp = (None if sv["conn_spacing"] is None else
+                   {"dam": sv["conn_spacing"] * cell, "breach": sv["conn_spacing"] * cell})
         bcw = 0.5 * max(bw, 2.0 * tcell)
         bplan = hbl.plan(perim, cell, [tuple(q) for q in dam_poly], db,
                          breach=(Ob + abb * sc, bcw, toe_off + cell, 0.5 * bw)
@@ -3830,7 +3947,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     # HEC-RAS's Courant number is V dt / dx (velocity, not wave celerity)
     cell_ft = cell * units.L / FT
     dt = cour * cell_ft / max(vmax_fps, 5.0)
-    dt_s, dt_lab = comp_interval(dt)
+    dt_courant = dt                              # 3.10.85: capped below (hecras_solver)
     # v3.10.22: when the breach starts. Sunny day: at a set time after a short warm-up with the
     # pool at its starting level (the plugin's breach starts at its t = 0 with the pool there,
     # so the HEC-RAS times are the plugin's plus the warm-up); flood: the run's trigger level
@@ -3913,27 +4030,45 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     m.conn_line = conn_line
     m.weir = weir
     m.weir_width = units.from_ft(dam.crest_width_ft or 20.0)
-    m.weir_coef = units.weir_coef(2.6)
+    m.weir_coef = units.weir_coef(sv["dam_weir_coef"])     # 3.10.85: NDBREACH_HECRAS_DAM_WEIR_COEF
     m.bc_line = [tuple(p) for p in bc]
     m.bc_slope = slope
     m.initial_wse = units.from_ft(wse0_ft)
     m.inflow = inflow_series
     m.base_flow = units.flow(o["base_flow_cfs"] * CFS)
     m.sim_hours = sim
-    m.comp_interval = dt_lab
     ts = dict(COURANT_DEFAULTS)
     ts.update({k: v for k, v in (o.get("time_step") or {}).items() if v is not None})
+    ts = hsol.apply_courant(ts, sv)              # 3.10.85: NDBREACH_HECRAS_COURANT_* etc.
     if ts["max"] is None:
         ts["max"] = cour
     if ts["min"] is None:
         ts["min"] = round(COURANT_MIN_RATIO * float(ts["max"]), 4)
+    dt_s, dt_lab, ts, dt_how = hsol.time_step(dt_courant, sv, comp_interval, ts)
+    m.comp_interval = dt_lab
     m.courant = ts
+    m.outflow_lines = outflow_lines              # 3.10.85
+    m.d1d2_maxiter = int(sv["d1d2_maxiter"])
+    m.d2_cores, cores_how = hsol.cores(int(len(pts)), sv)       # 3.10.85
+    m.ic_time_hr = float(sv["ic_time_hr"])
+    m.ic_ramp_frac = float(sv["ic_ramp_frac"])
+    m.breach_progression = sv["breach_progression"]
+    log("HEC-RAS 2D cores: {} ({}); IC ramp-up {:g} h (fraction {:g}); breach progression "
+        "{}".format(m.d2_cores or "all", cores_how, m.ic_time_hr, m.ic_ramp_frac,
+                    m.breach_progression))
     m.equation = o["equation"]
     m.breach = bvals
     m.terrain_name = terrain_name
     m.description = ["Built by the ND Dam Breach Runner from the run in {}.".format(
         os.path.basename(os.path.normpath(dam_folder)))]
     m.structures = sinfo["exported"]            # v3.12.0
+    for c_ in m.structures:                     # 3.10.85: the weir / culvert settings
+        c_["weir_coef"] = units.weir_coef(sv["struct_weir_coef"])
+        cv_ = c_.get("culvert")
+        if cv_:
+            cv_["entrance"] = (sv["culvert_ke_pipe"] if cv_["shape"] == CULVERT_TYPES["pipe"][0]
+                               else sv["culvert_ke_box"])
+            cv_["exit"] = sv["culvert_exit_loss"]
     tol = o.get("tolerances") or "default"      # v3.10.22
     if isinstance(tol, dict):
         tname, tvals = "custom", dict(TOLERANCES["default"], **tol)
@@ -3942,6 +4077,11 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     else:
         raise HecRasModelError("tolerances must be one of {} or a dict (got {!r})".format(
             ", ".join(TOLERANCES), tol))
+    # 3.10.85: max_iter (default 40, the most HEC-RAS takes) for the 2D and the 1D / storage
+    # area iterations, unless a tolerances dict names d2_maxiter itself
+    if not (isinstance(tol, dict) and "d2_maxiter" in tol):
+        tvals["d2_maxiter"] = int(sv["max_iter"])
+    tvals.setdefault("mxiter", int(sv["max_iter"]))
     m.tolerances = tvals
     # v3.10.22: the plugin's routing on this plan's breach, to compare the breach flow with
     try:
@@ -4011,6 +4151,13 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                              "trigger_wse": bvals.get("trigger_wse")},
             "hec_breach_mode": hmode, "spillway": spill_info,
             "tolerances": {"name": tname, "values": tvals}, "mesh_seeds": seeds_info,
+            # 3.10.85
+            "solver": {"settings": {k: v for k, v in sv.items() if k != "_source"},
+                       "source": sv["_source"], "time_step_how": dt_how,
+                       "d2_cores": m.d2_cores, "cores_how": cores_how,
+                       "courant_estimate_s": round(float(dt_courant), 3),
+                       "changed_from_previous": [list(t) for t in hsol.changed(sv)]},
+            "outflow": outflow_info,
             "breaklines": bl_info,
             "line_bands": band_info,            # 3.10.76
             "plugin_reference": (None if pref is None else
@@ -4368,7 +4515,10 @@ def write_layout(path, m, srs, bc_slope_how="", P=None, skipped=()):
         "breach_bottom_width": float(b["bottom_width"]),
         "breach_bottom_elev": float(b["bottom_elev"]), "units": u})])
     layer("Normal depth boundary", ogr.wkbLineString, [(_line(m.bc_line), {
-        "name": BC_NAME, "friction_slope": float(m.bc_slope), "slope_from": bc_slope_how})])
+        "name": BC_NAME, "friction_slope": float(m.bc_slope), "slope_from": bc_slope_how})] + [
+        (_line(q["line"]), {"name": q["name"], "friction_slope": float(q["slope"]),
+                            "slope_from": "as " + BC_NAME})
+        for q in (getattr(m, "outflow_lines", None) or [])])
     # breach centre on the line
     A = np.asarray(m.conn_line[0])
     B = np.asarray(m.conn_line[-1])
@@ -4394,6 +4544,44 @@ def write_layout(path, m, srs, bc_slope_how="", P=None, skipped=()):
         layer("Structures from the run", ogr.wkbLineString, rows)
     ds = None
     return path
+
+
+def solver_row(info):
+    """3.10.85: the README row of the solver settings (hecras_solver)."""
+    sv = (info.get("solver") or {}).get("settings") or {}
+    if not sv:
+        return "| Solver settings | as before 3.10.85 | |"
+    src = (info.get("solver") or {}).get("source") or {}
+    own = sorted(k for k, v in src.items() if v != "default")
+    return ("| Solver settings (3.10.85) | {} iterations (2D and 1D), step {} {:g} s, "
+            "{} SA/2D iterations | dam / breach rows {} x cell; weir coef dam {:g}, "
+            "structures {:g}; culvert Ke pipe {:g} / box {:g}, exit {:g}; variable time step "
+            "{}; 2D cores {} ({}); IC ramp-up {:g} h (fraction {:g}); breach progression {}; "
+            "{} |".format(
+                sv["max_iter"], sv["dt_mode"], sv["dt_s"], sv["d1d2_maxiter"],
+                ("auto (0.5)" if sv["conn_spacing"] is None else "{:g}".format(sv["conn_spacing"])),
+                sv["dam_weir_coef"], sv["struct_weir_coef"],
+                sv["culvert_ke_pipe"], sv["culvert_ke_box"], sv["culvert_exit_loss"],
+                "on" if sv.get("adaptive", True) else "off",
+                (info.get("solver") or {}).get("d2_cores") or "all",
+                (info.get("solver") or {}).get("cores_how") or "",
+                sv.get("ic_time_hr", 0.0), sv.get("ic_ramp_frac", 0.1),
+                sv.get("breach_progression", "linear"),
+                "set: " + ", ".join(own) if own else "defaults (NDBREACH_HECRAS_* to change)"))
+
+
+def outflow_row(info, L):
+    """3.10.85: the README row of the outflow edges and the ANUGA clip."""
+    of = info.get("outflow") or {}
+    if not of:
+        return "| Outflow edges | none (before 3.10.85) | |"
+    clip = of.get("clip") or {}
+    lines = of.get("lines") or []
+    return "| Outflow edges | {} | {}; {} |".format(
+        "{} line(s), {:,.0f} {}".format(len(lines), sum(q["length"] for q in lines), L)
+        if lines else "none", "mode " + str(of.get("mode")),
+        "2D area clipped to the ANUGA mesh ({:.0%} kept)".format(clip.get("area_kept") or 0)
+        if clip.get("used") else "not clipped: " + str(clip.get("why") or "off"))
 
 
 def _time_step_text(m):
@@ -4530,7 +4718,11 @@ def write_readme(path, m, info, notes, dam, params):
                 if info["spillway"].get("warmup_inflow") else "")),
         "| Downstream boundary | normal depth, slope {:.5f} | {} |".format(
             info["bc_slope"], info["bc_slope_how"]),
-        "| Time step | {} | {} |".format(info["comp_interval"], _time_step_text(m)),
+        "| Time step | {} | {} |".format(info["comp_interval"], _time_step_text(m) + (
+            "; " + (info.get("solver") or {}).get("time_step_how")
+            if (info.get("solver") or {}).get("time_step_how") else "")),
+        solver_row(info),
+        outflow_row(info, L),
         "| Solver tolerances | {} | UNET ZTol {ztol:g}, ZSATol {zsatol:g}; 2D Z {d2_ztol:g}, "
         "volume {d2_voltol:g}, {d2_maxiter} iterations |".format(
             (info.get("tolerances") or {}).get("name", "default"),

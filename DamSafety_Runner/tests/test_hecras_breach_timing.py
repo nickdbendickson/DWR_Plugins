@@ -208,18 +208,26 @@ def hecras_timing_tolerances_default_unchanged_and_tight():
                 "UNET D2 Max Iterations=")
         r = _build(d)
         p01 = os.path.join(d, "model", r["model"].name + ".p01")
-        # 3.10.20's lines, byte for byte
+        # 3.10.20's tolerances; since 3.10.85 the iteration cap is the solver setting max_iter
+        # (default 40, HEC-RAS's maximum) instead of 20 (default) / 30 (tight)
         assert _lines(p01, *keys) == ["UNET ZTol= 0.02 ", "UNET ZSATol= 0.02 ",
                                       "UNET D2 Z Tol= 0.01 ", "UNET D2 Volume Tol= 0.01 ",
-                                      "UNET D2 Max Iterations= 20 "] * 1 + \
-            ["UNET D2 Z Tol= 0.01 ", "UNET D2 Volume Tol= 0.01 ", "UNET D2 Max Iterations= 20 "]
+                                      "UNET D2 Max Iterations= 40 "] * 1 + \
+            ["UNET D2 Z Tol= 0.01 ", "UNET D2 Volume Tol= 0.01 ", "UNET D2 Max Iterations= 40 "]
+        assert "UNET MxIter= 40 " in _lines(p01, "UNET MxIter=")
         r = _build(d, tolerances="tight")
         assert _lines(p01, *keys) == ["UNET ZTol= 0.01 ", "UNET ZSATol= 0.01 ",
                                       "UNET D2 Z Tol= 0.005 ", "UNET D2 Volume Tol= 0.005 ",
-                                      "UNET D2 Max Iterations= 30 ",
+                                      "UNET D2 Max Iterations= 40 ",
                                       "UNET D2 Z Tol= 0.005 ", "UNET D2 Volume Tol= 0.005 ",
-                                      "UNET D2 Max Iterations= 30 "]
+                                      "UNET D2 Max Iterations= 40 "]
+        # the pre-3.10.85 count is one setting away
         assert r["info"]["tolerances"]["name"] == "tight"
+        _build(d, tolerances="tight", solver={"max_iter": 30})
+        assert _lines(p01, "UNET D2 Max Iterations=") == ["UNET D2 Max Iterations= 30 "] * 2
+        # a tolerances dict that names d2_maxiter keeps it
+        _build(d, tolerances={"d2_maxiter": 25})
+        assert _lines(p01, "UNET D2 Max Iterations=") == ["UNET D2 Max Iterations= 25 "] * 2
         r = _build(d, tolerances={"zsatol": 0.005})
         assert "UNET ZSATol= 0.005 " in _lines(p01, *keys)
         assert p0.unknown_keywords(p01) == set()
