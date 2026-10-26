@@ -9,6 +9,8 @@ deterministic, so they can gate every PR cheaply:
      version book      — shared/damsuite/versions.py RELEASE (and every vendored copy) equals
                         each plugin's metadata.txt version; Hazard's constants.PLUGIN_VERSION and
                         README.txt version line agree with its metadata.txt
+     qt6 metadata      — every plugin metadata.txt declares supportsQt6=True and a
+                        qgisMaximumVersion of 4.99 or later (QGIS 4 / Qt6)
      vs main           — against the base branch (CI_BASE_REF, default origin/main; skipped with a
                         notice when it is not fetched): no plugin version is lower, and no
                         changelog entry of the base (metadata.txt changelog= versions,
@@ -484,6 +486,26 @@ def check_qt6_enums(problems, root=None):
         _fail(problems, "qt6 enums: {}:{}: {} -> {}".format(rel, i, label, text))
 
 
+def check_qt6_metadata(problems, root=None):
+    """Every plugin metadata.txt declares supportsQt6=True and a qgisMaximumVersion of 4.99 or
+    later (the suite convention). Without them QGIS 4 treats the plugin as QGIS 3 only (a missing
+    maximum is capped at <minimum major>.99), and a maximum such as 4.0 still hides it on QGIS 4.2;
+    PMP's own tests/test_qt6.py runs in no CI job, so this is the check that notices."""
+    root = root or ROOT
+    for plugin in PLUGINS:
+        meta = os.path.join(root, plugin, "metadata.txt")
+        if not os.path.isfile(meta):
+            continue                    # check_versions reports a missing metadata.txt
+        text = _read(meta)
+        m = re.search(r"^supportsQt6\s*=\s*(.*)$", text, re.M)
+        if not m or m.group(1).strip().lower() != "true":
+            _fail(problems, "{}: metadata.txt needs supportsQt6=True (QGIS 4 / Qt6)".format(plugin))
+        m = re.search(r"^qgisMaximumVersion\s*=\s*(.*)$", text, re.M)
+        if not m or _ver_tuple(m.group(1).strip())[:2] < (4, 99):
+            _fail(problems, "{}: metadata.txt qgisMaximumVersion={} (needs 4.99 or later)".format(
+                plugin, m.group(1).strip() if m else None))
+
+
 def main():
     problems = []
     for name, fn in (("damsuite drift", check_damsuite_drift),
@@ -495,6 +517,7 @@ def main():
                      ("zone colours (REG_05.2026)", check_zone_colours),
                      ("fork parity", check_fork_parity),
                      ("qt6 enums", check_qt6_enums),
+                     ("qt6 metadata", check_qt6_metadata),
                      ("compile", check_compile), ("golden baseline", check_golden)):
         print("[ci] " + name)
         try:
