@@ -487,6 +487,7 @@ def chain_hazard_import_depth_basis_follows_the_hecras_stage():
         assert "TERRAIN" not in calls[-1][1] and imp["depth_basis"] == "cell_min"
         assert imp["hazard_depth_basis"] == "cell_min" and imp["terrain"] == ""
         assert any("cell minimum" in m and "NDBREACH_HECRAS_DEPTH_BASIS=terrain" in m
+                   and "read when this import runs" in m and "HEC-RAS stage runs" not in m
                    for m in lines), lines
         with _basis_env("terrain"):            # per pixel without a terrain: a clear error
             try:
@@ -521,9 +522,14 @@ def chain_hazard_import_depth_basis_follows_the_hecras_stage():
         assert imp["hazard_depth_basis"] == "terrain"
         with open(os.path.join(hec, "hecras_stage.json"), "w") as f:
             json.dump(dict(stage, depth_basis="cell_min"), f)
+        del lines[:]
         with _basis_env("terrain"):
             imp = ops.run("hazard_import", dam)
         assert "TERRAIN" not in calls[-1][1] and imp["depth_basis"] == "cell_min"
+        # the stage read the variable: set it before that stage, or re-export on the terrain
+        assert any("before the Runner's HEC-RAS stage runs" in m and
+                   "hecras-reexport --depth-basis terrain" in m and
+                   "read when this import runs" not in m for m in lines), lines
         # a stage record of another plan: the variable decides
         dam.outputs["hec_run"] = {"plan_hdf": plan, "project": ""}
         with _basis_env("terrain"):

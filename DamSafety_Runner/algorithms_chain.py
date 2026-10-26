@@ -304,7 +304,9 @@ class QgisOps(object):
         plan = r.get("plan_hdf", "")
         # 3.10.84: the depth basis the HEC-RAS stage used (cell minimum by default). Only the
         # per-pixel 'terrain' basis needs the terrain; without TERRAIN ndhazard:hecrasplan
-        # makes its own cell-minimum depth from the plan (the Runner's basis)
+        # makes its own cell-minimum depth from the plan (the Runner's basis), unless the
+        # newest current Runner re-export of the plan (or a fresh terrain stage) is on the
+        # terrain basis, which Hazard 2.18.63 then adopts
         basis, why, stage = import_depth_basis(dam, plan)
         terrain = ""
         if basis == hecras.DEPTH_BASIS_TERRAIN:
@@ -324,9 +326,17 @@ class QgisOps(object):
             self.log("{}: HEC-RAS import depth basis: per pixel, max WSE minus the terrain "
                      "{} ({})".format(dam.dam_id, terrain, why))
         else:
+            env = hecras.DEPTH_BASIS_ENV
+            if stage:          # the Linux stage's own record: the variable is read by that stage
+                how = ("set {}=terrain before the Runner's HEC-RAS stage runs (a resumed chain "
+                       "does not run it again), or re-export the plan with ndbreach_cli.py "
+                       "hecras-reexport --depth-basis terrain (Hazard 2.18.63 adopts the newest "
+                       "current re-export of the plan)".format(env))
+            else:              # wait / manual / Windows run: read when this import runs
+                how = "set {}=terrain; it is read when this import runs".format(env)
             self.log("{}: HEC-RAS import depth basis: cell minimum, max WSE minus the HEC-RAS "
-                     "cell's minimum elevation ({}); for per-pixel depth set {}=terrain".format(
-                         dam.dam_id, why, hecras.DEPTH_BASIS_ENV))
+                     "cell's minimum elevation ({}); for per-pixel depth {}".format(
+                         dam.dam_id, why, how))
         out = os.path.join(CH.chain_dir(dam.folder), "hecras_import")
         os.makedirs(out, exist_ok=True)
         rec_p = os.path.join(out, "depth_basis.json")      # Hazard's record of the basis used
