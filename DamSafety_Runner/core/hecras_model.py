@@ -1258,6 +1258,9 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             # your own (model CRS), which wins over the trace (see hecras_crest)
             "dam_axis": "crest", "breach_at": "auto", "breach_station_ft": None,
             "dam_line_xy": None,
+            # 3.10.87: the coordinate system of dam_line_xy when it is not the model's (the
+            # export tool's DAM_LINE layer passes its own)
+            "dam_line_crs": None,
             # 3.10.76: bands of small cells along roads, rail, structures and breaklines
             # (hecras_bands; None = the NDBREACH_BAND* variables, else hecras_bands.DEFAULTS:
             # on, 3 rows of 20 ft each side, graded 1.5:1, wet area + 500 ft)
@@ -2297,12 +2300,33 @@ def crest_dam_line(dem_path, srs, zf, units, dam, params, P, d, n_left, cell, tc
         rec.update(source="your dam line", raw_points=int(len(user_line)))
         p0 = line[int(np.argmin(np.hypot(*(line - P).T)))]
     else:
-        tr = hc.trace(sample, P, axis, top_u, H, step, toe, max_len, gap, ft=ft)
+        try:
+            tr = hc.trace(sample, P, axis, top_u, H, step, toe, max_len, gap, ft=ft)
+        except hc.CrestTraceError as e0:
+            # 3.10.87: a dam point off the embankment, where the guessed axis (across the
+            # direction to the run's inflow point) misses the crest: start from the crest
+            # found nearby, along the embankment's own direction
+            sn = hc.snap(sample, P, top_u, max(units.from_ft(3.0), 0.1 * H),
+                         max(3.0 * toe, units.from_ft(300.0)),
+                         max(2.0 * toe, units.from_ft(150.0)), step)
+            if sn is None:
+                raise
+            Q, t = sn
+            if float(hc.left_normal(t) @ np.asarray(d, float)) < 0:
+                t = -t
+            tr = hc.trace(sample, Q, t, top_u, H, step, toe, max_len, gap, ft=ft)
+            rec.update(snapped_from=[round(float(v), 2) for v in P],
+                       snapped_to=[round(float(v), 2) for v in Q],
+                       snap_distance=round(float(np.hypot(*(Q - P))), 1),
+                       snap_turn_deg=round(hc.angle_deg(t, axis), 1),
+                       snap_reason=str(e0))
+            axis = t
         line = hc.tidy(tr["line"], step, cell, keep_len=max_len, centre=tr["p0"])
         p0 = tr["p0"]
         rec.update(source="traced from the DEM", raw_points=int(len(tr["line"])),
                    raw_length=round(float(hc.cumlen(tr["line"])[-1]), 1),
                    snap=round(tr["snap"], 2), tol=round(tr["tol"], 2), prom=round(tr["prom"], 2),
+                   top_offset=round(tr.get("top_offset", 0.0), 2),
                    ends={k: {"stop": v[0], "walked": round(v[1], 1)} for k, v in tr["ends"].items()},
                    raw_line=[[round(float(x), 2), round(float(y), 2)] for x, y in tr["line"]])
     L = float(hc.cumlen(line)[-1])
@@ -2582,12 +2606,29 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         user_line = None
         if o.get("dam_line_xy"):
             user_line = np.asarray(o["dam_line_xy"], float).reshape(-1, 2)
+            if o.get("dam_line_crs"):
+                user_line = transformer(srs_from(o["dam_line_crs"]), srs)(user_line)
         elif report.get("crest_line_xy") and to_model is not None:
             user_line = to_model(report["crest_line_xy"])
         try:
             crest_line, crest_sc, crest_rec = crest_dam_line(
                 dem_path, srs, zf_c, units, dam, params, P, d, n_left, cell, tcell_c, o,
                 user_line=user_line, inflow_m=inflow_m, dam_folder=dam_folder)
+            if crest_rec.get("snapped_to"):
+                # 3.10.87: the dam point was off the embankment; the cut, the pool and the
+                # breach frame follow the crest found nearby
+                t_ = crest_line[-1] - crest_line[0]
+                t_ = t_ / (np.hypot(*t_) or 1.0)
+                P = np.asarray(crest_rec["snapped_to"], float)
+                d = hcrest.left_normal(t_)
+                n_left = np.array([-d[1], d[0]])
+                notes.append("The dam point is {:,.0f} {u} from the embankment crest (no crest "
+                             "across the direction to the run's inflow point): the dam line "
+                             "is traced from the crest found there, {:.0f} degrees off that "
+                             "direction. Check it in RAS Mapper.".format(
+                                 crest_rec["snap_distance"], crest_rec["snap_turn_deg"],
+                                 u=units.len_name))
+                log(notes[-1])
             # the part inside the 2D area (the flooded area plus its buffer) only
             cl_geom = dom.Intersection(_line([tuple(q) for q in crest_line]))
             pieces = []
@@ -2806,6 +2847,11 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                         "the breach runs {:.0f} degrees off the straight line across the flow)"
                         .format(dam_len, units.len_name, crest_rec.get("source", "traced"),
                                 len(crest_line), crest_rec.get("skew_deg") or 0.0))
+        if crest_rec.get("top_offset"):
+            notes.append("Dam connection: the DEM's crest is {:.1f} {} above the top of dam on "
+                         "record (another vertical datum?); the crest was traced at the DEM's "
+                         "level. The weir and the breach still use the top of dam on record: "
+                         "check the datum.".format(crest_rec["top_offset"], units.len_name))
         notes.append("Dam connection: " + dam_line_how + "; ends: " + "; ".join(
             "{} {}".format(k, v["stop"]) for k, v in (crest_rec.get("ends") or {}).items()) +
             (" (dam length {:,.0f} {} from {})".format(crest_rec["dam_length"], units.len_name,

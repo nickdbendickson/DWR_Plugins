@@ -35,6 +35,12 @@ PROM_MIN_FT = 2.0            # the crest stands at least this (or PROM_FRAC x H)
 PROM_FRAC = 0.1
 CENTRE_BIAS = 1e-3           # ft of elevation per ft off the heading: the nearer of equal highs
 PLATEAU_FRAC = 0.05          # level within 5 % of the sample spacing: the same flat crest
+# 3.10.87: a DEM crest this far above the recorded top of dam (at least DATUM_MIN_FT) that
+# stands above the ground on both sides is the embankment on another vertical datum (DWR
+# crests are often on a local datum; DWR-2801's DEM crest is 1066-1069 ft against 1063.2 ft on
+# record), not an abutment: the walk follows the DEM's crest level instead
+DATUM_FRAC = 0.25
+DATUM_MIN_FT = 5.0
 
 
 class CrestTraceError(ValueError):
@@ -277,6 +283,40 @@ def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap):
     return np.vstack(pts[:last_ok + 1]), why, walked
 
 
+def snap(sample, P, top, tol, search, half, step):
+    """3.10.87: a dam point off the embankment (on the pool or the toe: DWR-2801's dam.json
+    point is on the pool, about 100 ft from the crest) with no ridge across the guessed axis.
+    When the ground at P is more than `tol` below the top of dam: the nearest ground within
+    `search` that is at least that high, and the embankment's direction there (the long axis
+    of that high ground within `half` of it). Returns (point, unit axis) or None (P on the
+    crest, nothing high enough, or high ground with no clear long axis: a hill)."""
+    P = np.asarray(P, float)
+    zp = sample(P[None, :])[0]
+    if np.isfinite(zp) and zp >= top - tol:
+        return None
+    r = float(search) + float(half)
+    g = np.arange(-r, r + 0.5 * step, step)
+    gx, gy = np.meshgrid(P[0] + g, P[1] + g)
+    xy = np.column_stack([gx.ravel(), gy.ravel()])
+    z = sample(xy)
+    with np.errstate(invalid="ignore"):
+        high = np.isfinite(z) & (z >= top - tol)
+    dist = np.hypot(*(xy - P).T)
+    cand = high & (dist <= search)
+    if not cand.any():
+        return None
+    Q = xy[int(np.argmin(np.where(cand, dist, np.inf)))]
+    loc = high & (np.hypot(*(xy - Q).T) <= half)
+    if loc.sum() < 3:
+        return None
+    pts = xy[loc]
+    w, v = np.linalg.eigh(np.cov((pts - pts.mean(axis=0)).T))
+    if w[0] > 0 and w[1] / w[0] < 2.0:
+        return None
+    t = v[:, 1]
+    return Q, t / np.hypot(*t)
+
+
 def trace(sample, P, axis, top, height, step, toe, max_len, gap, tol=None, prom=None,
           search=None, ft=1.0):
     """The crest polyline through the dam point. sample(xy) -> z (model units); axis: unit
@@ -296,6 +336,11 @@ def trace(sample, P, axis, top, height, step, toe, max_len, gap, tol=None, prom=
         raise CrestTraceError("no DEM around the dam point")
     p0, z0 = rr
     why = _judge(sample, p0, nu, z0, top, tol, toe, prom)
+    top_rec = top
+    allow = max(DATUM_MIN_FT * ft, DATUM_FRAC * height)
+    if why.startswith("abutment: the ridge rises") and z0 - top <= allow and not _judge(
+            sample, p0, nu, z0, z0, tol, toe, prom):
+        top, why = z0, ""
     if why:
         raise CrestTraceError("no embankment crest within {:.0f} of the dam point across the "
                               "dam ({}; highest ground {:.2f}, top of dam {:.2f})".format(
@@ -308,7 +353,8 @@ def trace(sample, P, axis, top, height, step, toe, max_len, gap, tol=None, prom=
         raise CrestTraceError("the crest could not be followed from the dam point ({} / {})"
                               .format(why_a, why_b))
     return {"line": line, "p0": p0, "z0": z0, "snap": float(np.hypot(*(p0 - P))),
-            "ends": {"A": (why_a, la), "B": (why_b, lb)}, "tol": tol, "prom": prom}
+            "ends": {"A": (why_a, la), "B": (why_b, lb)}, "tol": tol, "prom": prom,
+            "top_used": float(top), "top_offset": float(top - top_rec)}
 
 
 def tidy(line, step, cell, keep_len=None, centre=None):
