@@ -112,6 +112,202 @@ def hecras_bands_synthetic_road_stream_culvert_bridge_and_parallel_lines():
     assert np.allclose(sorted(q[:, 1] - 2500), [10, 30, 50, 70], atol=0.6), q
     assert len(prot) == len(out) and prot.sum() > 0
 
+    # 3.10.82: only the first rows are protected (an isolated stretch of the road: y = 1510
+    # and 1490), the outer and graded rows are not
+    far = (out[:, 0] > 600) & (out[:, 0] < 1200)
+    for y, want in [(1510, True), (1490, True), (1530, False), (1550, False), (1575, False)]:
+        sel = far & (np.abs(out[:, 1] - y) < 0.5)
+        assert sel.any() and (prot[sel] == want).all(), (y, want, prot[sel])
+
+
+def _dense_streets(seed):
+    """A town: 9 parallel E-W streets 40-100 ft apart crossed by 12 N-S streets 40-100 ft
+    apart (each a little skewed) and a diagonal avenue, on a 150 ft grid."""
+    perim = np.array([(0, 0), (3000, 0), (3000, 3000), (0, 3000), (0, 0)], float)
+    X, Y = np.meshgrid(np.arange(75, 3000, CELL), np.arange(75, 3000, CELL))
+    pts = np.column_stack([X.ravel(), Y.ravel()])
+    rng = np.random.default_rng(seed)
+    lines, y, x = [], 700.0, 650.0
+    for gap in [40, 55, 70, 85, 100, 60, 45, 90, 75]:
+        lines.append(np.array([(500, y), (2500, y + rng.uniform(-15, 15))]))
+        y += gap
+    for gap in [100, 45, 80, 60, 95, 40, 70, 55, 85, 65, 100, 50]:
+        lines.append(np.array([(x, 500), (x + rng.uniform(-30, 30), 1700)]))
+        x += gap
+    lines.append(np.array([(600, 600), (1800, 1600)]))
+    return pts, perim, hband.clip(lines, perim, S)
+
+
+@test
+def hecras_bands_dense_crossing_streets_pass_the_8_face_check():
+    """#170 (DWR-2801, Absaraka's streets): with every band point protected, overlapping
+    bands of streets 40-100 ft apart left cells of more than 8 faces that fix_faces could not
+    thin (a protected point among only protected neighbours). Now only the first rows are
+    protected, and not where another banded line is within 1.5 rows: 0 cells over 8 faces at
+    the default 3 x 20 ft, the faces still on the lines (fix_faces costs each line at most
+    5 % of its faces, at a crossing) and an isolated line keeps its protected first rows.
+    Seeds 3 and 7 leave 1-3 cells over 8 faces when every first row is protected (the solo
+    rule off)."""
+    if not _has_scipy():
+        print("  (skipped: no scipy)")
+        return
+    from nd_breach_runner.core.hecras_model import perimeter_clip, point_segment_distance
+    for seed in (1, 3, 7):
+        pts, perim, lines = _dense_streets(seed)
+        out, prot, st = hband.apply(pts, perim, lines, S, 3, 1.5, CELL, ranks=[1] * len(lines))
+        fixed, fprot, info = hbl.fix_faces(out, perim, prot, clip=perimeter_clip(perim))
+        assert info["left"] == 0, (seed, info["left"])
+        assert 0 < prot.sum() < st["band_points"], st
+        # the solo rule: no protected point has a second line within 1.4 rows (the rule's
+        # 1.5 rows is measured to the lines' samples every s, at most s / 2 off)
+        d = np.array([point_segment_distance(out[:, 0], out[:, 1], ln) for ln in lines])
+        shared = prot & ((d < 1.4 * S).sum(axis=0) > 1)
+        assert not shared.any(), (seed, int(shared.sum()))
+        chk = hbl.voronoi_precheck(fixed, perim, hbl.MAX_FACES, perimeter_clip(perim))
+        assert len(chk["over"]) == 0, (seed, len(chk["over"]))
+        assert len(fixed) > 0.99 * len(out), (len(fixed), len(out))
+        for i, ln in enumerate(lines):
+            before, after = hbl.share_on_faces(out, ln), hbl.share_on_faces(fixed, ln)
+            assert after > before - 0.05, (seed, i, before, after)
+            assert after > 0.5, (seed, i, after)
+        on = [hbl.share_on_faces(fixed, ln) for ln in lines]
+        assert np.mean(on) > 0.85, (seed, np.mean(on))
+
+
+def _crossing_and_close_parallel():
+    """Tiny synthetic case: two streets 30 ft apart (closer than their 3 x 20 ft bands), a
+    third 15 ft from the second over half its length, crossed at 90 and 35 degrees by two
+    others, on a 150 ft grid of 1,000 ft x 1,000 ft."""
+    perim = np.array([(0, 0), (1000, 0), (1000, 1000), (0, 1000), (0, 0)], float)
+    X, Y = np.meshgrid(np.arange(75, 1000, CELL), np.arange(75, 1000, CELL))
+    pts = np.column_stack([X.ravel(), Y.ravel()])
+    lines = [np.array([(100, 450), (900, 450)], float),
+             np.array([(100, 480), (900, 482)], float),
+             np.array([(300, 497), (700, 497)], float),
+             np.array([(500, 100), (500, 900)], float),
+             np.array([(200, 150), (800, 570)], float)]
+    return pts, perim, hband.clip(lines, perim, S)
+
+
+def _min_nn(p):
+    from scipy.spatial import cKDTree
+    return float(cKDTree(p).query(p, k=2)[0][:, 1].min())
+
+
+@test
+def hecras_bands_crossing_and_close_parallel_lines_no_near_duplicates_and_8_faces():
+    """3.10.82 (#170, DWR-2801): crossing bands and parallel lines closer than their bands
+    give no duplicate or near-duplicate seeds (none closer than MIN_FRAC = 0.7 x 20 ft after
+    the bands, 0.5 x after fix_faces), at most 8 faces to a cell and no face under 0.5 ft
+    (a degenerate face), at the default 3 rows x 20 ft."""
+    if not _has_scipy():
+        print("  (skipped: no scipy)")
+        return
+    from nd_breach_runner.core.hecras_model import perimeter_clip
+    assert hband.MIN_FRAC >= 0.7, hband.MIN_FRAC
+    assert hband.DEFAULTS["band_rows"] == 3 and hband.DEFAULTS["band_cell_ft"] == S
+    pts, perim, lines = _crossing_and_close_parallel()
+    out, prot, st = hband.apply(pts, perim, lines, S, 3, 1.5, CELL, ranks=[1] * len(lines))
+    assert st["band_points"] > 0
+    new = out[len(out) - st["points_added"]:]
+    assert _min_nn(new) >= hband.MIN_FRAC * S - 1e-6, _min_nn(new)
+    assert len(np.unique(np.round(out, 3), axis=0)) == len(out)
+    fixed, fprot, info = hbl.fix_faces(out, perim, prot, clip=perimeter_clip(perim))
+    assert info["left"] == 0, info
+    chk = hbl.voronoi_precheck(fixed, perim, hbl.MAX_FACES, perimeter_clip(perim))
+    assert len(chk["over"]) == 0 and chk["max_sides"] <= 8, chk["max_sides"]
+    assert chk["facepoints_over"] == 0
+    assert _min_nn(fixed) >= 0.5 * S, _min_nn(fixed)
+    # no degenerate cell: every closed inner cell at least a quarter of a 20 ft cell
+    vor = hbl.centred_voronoi(fixed)
+    inner = hbl.ring_dist(fixed[:, 0], fixed[:, 1], perim) > CELL
+    small = 0
+    for i in np.nonzero(inner)[0]:
+        reg = vor.regions[vor.point_region[i]]
+        if not reg or -1 in reg:
+            continue
+        v = vor.vertices[reg]
+        x, y = v[:, 0], v[:, 1]
+        small += 0.5 * abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))) < 0.25 * S * S
+    assert small == 0, small
+
+
+# DWR-2801 dry build (3.10.82 code, 2026-10-25): the 22 points around the 9-face cell of the
+# written .g01 (offsets from it, ft); a 0.0006 ft face. The build passed it as 8 faces and the
+# .g01 had 9; these 22 points alone give 9 faces with or without centring, so they check that
+# the cell is flagged and fixed at state-plane coordinates, not the round-off itself.
+_DWR2801_CELL = [[133.463, 130.087], [-19.65, 178.051], [106.699, 277.934], [189.611, -101.006],
+                 [45.665, -142.88], [-96.543, -190.495], [91.331, -285.76], [151.509, 44.074],
+                 [0.0, 0.0], [-277.88, -167.122], [-285.832, -101.594], [-293.783, -36.067],
+                 [-301.735, 29.46], [-285.328, 134.881], [-282.381, 67.935], [-279.434, 0.989],
+                 [-276.486, -65.957], [-190.378, -187.794], [-202.071, -91.43],
+                 [-213.765, 4.933], [-225.458, 101.297], [-237.152, 197.661]]
+
+
+@test
+def hecras_voronoi_precheck_is_stable_at_state_plane_coordinates():
+    """3.10.82 (#170), a stability check: the dense-streets layout at x + 2.76e6, y + 4.8e5 ft
+    gives the same cells over 8 faces and the same most sides as at the origin, and the
+    DWR-2801 9-face cell is found and fixed at its own coordinates. Both also hold with qhull
+    on the raw coordinates; hecras_centred_voronoi_is_the_diagram_at_the_origin tests the
+    centring."""
+    if not _has_scipy():
+        print("  (skipped: no scipy)")
+        return
+    from nd_breach_runner.core.hecras_model import perimeter_clip
+    pts, perim, lines = _dense_streets(2)
+    out, prot, _ = hband.apply(pts, perim, lines, S, 3, 1.5, CELL, ranks=[1] * len(lines))
+    o = np.array([2761846.4323187, 484247.73932066])
+    # (cells of exactly cocircular grid quads may differ by a zero-length face either way;
+    # the cells over 8 faces and the most sides may not)
+    a = hbl.voronoi_precheck(out, perim, hbl.MAX_FACES, perimeter_clip(perim))
+    b = hbl.voronoi_precheck(out + o, perim + o, hbl.MAX_FACES, perimeter_clip(perim + o))
+    assert list(a["over"]) == list(b["over"]) and a["max_sides"] == b["max_sides"], (
+        list(a["over"]), list(b["over"]))
+    c = np.array(_DWR2801_CELL) + o
+    per = np.array([(-360, -360), (360, -360), (360, 360), (-360, 360), (-360, -360)]) + o
+    chk = hbl.voronoi_precheck(c, per, hbl.MAX_FACES, perimeter_clip(per))
+    assert 8 in [int(i) for i in chk["over"]], chk["over"]
+    fixed, _, info = hbl.fix_faces(c, per, None, clip=perimeter_clip(per))
+    assert info["left"] == 0 and info["check"]["max_sides"] <= 8, info
+
+
+def _faces(vor, o, perim):
+    """{(i, j): the two ends - o} of the Voronoi faces with both ends inside the perimeter."""
+    v = vor.vertices - o
+    vin = hbl.inside(v[:, 0], v[:, 1], perim)
+    return {(min(i, j), max(i, j)): v[rv] for (i, j), rv in
+            zip(vor.ridge_points, vor.ridge_vertices) if -1 not in rv and vin[rv].all()}
+
+
+@test
+def hecras_centred_voronoi_is_the_diagram_at_the_origin():
+    """3.10.82 (#170): centred_voronoi of a layout at state-plane coordinates is the layout's
+    diagram at the origin, shifted back (the same faces between the same points, their ends
+    within 1e-6 ft), and voronoi_precheck there finds the cells over 8 faces it finds at the
+    origin. The dense-streets layout jittered by 0.001 ft keeps its grid quads
+    near-cocircular (about 1,000 faces under 0.001 ft): qhull on the raw state-plane
+    coordinates gets about 1,200 of its faces wrong and passes all 4 cells over 8 faces."""
+    if not _has_scipy():
+        print("  (skipped: no scipy)")
+        return
+    from scipy.spatial import Voronoi
+    from nd_breach_runner.core.hecras_model import perimeter_clip
+    pts, perim, lines = _dense_streets(1)
+    out, _, _ = hband.apply(pts, perim, lines, S, 3, 1.5, CELL, ranks=[1] * len(lines))
+    p = out + np.random.default_rng(0).normal(0.0, 1e-3, out.shape)
+    o = np.array([2761846.4323187, 484247.73932066])
+    ref, got = _faces(Voronoi(p), 0.0, perim), _faces(hbl.centred_voronoi(p + o), o, perim)
+    assert set(got) == set(ref), len(set(got) ^ set(ref))
+    d = max(min(np.abs(got[k] - ref[k]).max(), np.abs(got[k][::-1] - ref[k]).max())
+            for k in ref)
+    assert d < 1e-6, d
+    a = hbl.voronoi_precheck(p, perim, hbl.MAX_FACES, perimeter_clip(perim))
+    b = hbl.voronoi_precheck(p + o, perim + o, hbl.MAX_FACES, perimeter_clip(perim + o))
+    assert len(a["over"]) and list(a["over"]) == list(b["over"]), (list(a["over"]),
+                                                                    list(b["over"]))
+    assert a["max_sides"] == b["max_sides"], (a["max_sides"], b["max_sides"])
+
 
 @test
 def hecras_bands_two_rows_of_50_ft():
