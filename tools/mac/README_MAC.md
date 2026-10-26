@@ -83,7 +83,24 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
   `work/<dam>/run_<dam>.log`; a manifest (versions, settings, sha256 of inputs) per run.
 * The Mac is kept awake while it runs (`caffeinate`).
 
-Absaraka step by step, including the QGIS dialog values: `absaraka/RUN-ABSARAKA.md`.
+**Walkthrough:** Absaraka step by step, including the DEM and every QGIS dialog value:
+`absaraka/RUN-ABSARAKA.md` (in the unzipped package folder). Do that dam first.
+
+## 5. Three things that trip people up in QGIS
+
+* **1 m DEM: "729 tiles".** *Download a DEM* with *USGS 3DEP* at *1 m* fetches an image
+  service in 1.2 km pieces: the default 10 mile buffer is 27 × 27 = 729 requests, not
+  lidar tiles. For a 1 m DEM use `get_lidar_tiles.sh` (the tiles the box used), or the
+  Download DEM tool with Source **USGS 3DEP 1 m lidar tiles (native, TNM)** (10 km tiles,
+  about 20–40 for a dam; it lists them before downloading). Details in
+  `absaraka/RUN-ABSARAKA.md`, step 3a.
+* **"Set the DEM elevation unit (feet or metres)".** In *Run breach model*, set
+  **DEM elevation units = Meters** (USGS 1 m lidar, 3DEP downloads and ND DWR .img are
+  metres; only ND DWR QL2 ASCII grids are feet). *Detect from the raster* always stops
+  with that message in Runner 3.10.86.
+* The box's VRTs under `NickReview_data` point at `/home/box/...`; use the copies the run
+  script writes to `work/<dam>/dem/` (`bash run_nickreview.sh --dam <dam> --stages record`
+  writes them without running a model).
 
 ## Good to know
 
