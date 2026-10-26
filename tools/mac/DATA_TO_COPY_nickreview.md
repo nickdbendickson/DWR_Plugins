@@ -6,6 +6,7 @@ Put every file at `~/dwr-dam-suite/NickReview_data/<copy_to>` (same sub-folders)
 - 9.79 GB of that is USGS 3DEP 1 m LiDAR that can be downloaded instead of copied; the rest (22.90 GB) must be copied from the box.
   To download them: `bash get_lidar_tiles.sh data_files_nickreview.tsv` (all 36 URLs and sizes checked against USGS on 2026-10-26).
 - The full per-file list (size, path, source) is `data_files_nickreview.tsv`.
+- Plus **44 Screening 7b record inputs** in `Dams/NickReview/screen_maxstor/` (`8_hazard.gpkg`, `4_breach_points.gpkg` and the 42 `3_stage_storage/curve_<ID>.csv`; a dam without a curve on the box has none to copy). They were added to the lists after the sizes were measured, so their size is `?` and they are not in the totals above; `run_nickreview.sh --list-data` on the box writes both lists again with every size.
 
 | folder | files | size | source |
 |---|---:|---:|---|
@@ -32,3 +33,4 @@ Put every file at `~/dwr-dam-suite/NickReview_data/<copy_to>` (same sub-folders)
 | `culvert_sources/nddot_bridge_inventory.gpkg` | 1 | 0.1 MB | copy (box-made from NDDOT / NTAD downloads) |
 | `culvert_sources/ntad_nbi.gpkg` | 1 | 0.1 MB | copy (box-made from NDDOT / NTAD downloads) |
 | `nickreview_rerun_20261023/dwr2801_maincc5892e` | 2 | 0.0 MB | copy (box run kit: settings / DEM VRT) |
+| `Dams/NickReview/screen_maxstor` | 44 | ? | copy (NickReview max-storage screening: Screening 7b record input) |

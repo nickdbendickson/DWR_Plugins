@@ -123,55 +123,6 @@
     "gaps": "road 149463: AADT not given; classified Medium by assumption; road 149907: AADT not given; classified Medium by assumption; road 158050: AADT not given; classified Medium by assumption",
     "by": "tool 7b"
    }
-  },
-  {
-   "step": "modelled",
-   "tool": "ndbreach",
-   "version": "3.10.2",
-   "when": "2026-10-13T05:12:29",
-   "result": {
-    "breach_occurs": true,
-    "scenario": "sunny",
-    "final_model": "LISFLOOD-FP",
-    "final_rasters": [
-     "Depth (Max).tif",
-     "Velocity (Max).tif",
-     "Arrival Time.tif",
-     "WSE (Max).tif"
-    ],
-    "manifest": "_breach_model/run_manifest.json",
-    "run_report": "_breach_model/run_report.json",
-    "extent_ft": 44461.0,
-    "domain_mi": [
-     9.47,
-     8.9
-    ]
-   }
-  },
-  {
-   "step": "classified",
-   "tool": "ndbreach",
-   "version": "3.10.2",
-   "when": "2026-10-13T05:12:29",
-   "result": {
-    "preview": true,
-    "tool": "nd_hazard.py"
-   }
-  },
-  {
-   "step": "classified",
-   "tool": "ndhazard",
-   "version": "2.18.0",
-   "when": "2026-10-13T05:42:20",
-   "result": {
-    "nd_class": "High",
-    "tm11_class": "Significant",
-    "lives_in_jeopardy": 0.0020359848484848486,
-    "governing": "Breach",
-    "output_folder": "outputs",
-    "chain": "Model chain check: all 3 classified rasters are the model's own outputs (SHA-256)",
-    "quick_rerun": false
-   }
   }
  ],
  "conflicts": []

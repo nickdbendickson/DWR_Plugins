@@ -6,7 +6,7 @@
   "env": "/workspace/nickreview_rerun_20261023/dwr2801_maincc5892e/env_nr_cc5892e.sh",
   "post": "/workspace/nickreview_rerun_20261023/dwr2801_maincc5892e/post_2801.sh",
   "plugins_on_box_run": "DWR_Plugins main cc5892e (Runner 3.10.83)",
-  "plugins_in_this_package": "DWR_Plugins main a83ad04 (Runner 3.10.86, Screening 0.17.49, Hazard 2.18.64, damsuite 1.17.6)"
+  "plugins_in_this_package": "the zips in plugins/ (their commit is the first line of plugins/SHA256SUMS); written against DWR_Plugins main a83ad04 (Runner 3.10.86, Screening 0.17.49, Hazard 2.18.64, damsuite 1.17.6)"
  },
  "paths": "<DATA> = ~/dwr-dam-suite/NickReview_data (read only); <OUT> = results folder",
  "ndbreach:rundam": {
@@ -110,7 +110,7 @@
   "STRUCTURES": "structures_2801_with9122221_invfix2.gpkg (NBI 9122221 = NDDOT 09-122-22.1, 2-barrel 9.75x6.58 ft pipe-arch modelled as a 2.97x2.01 m box; invert_dn fixes on fid 257/263/280; 282 runner_culverts) - was structures_2801.gpkg",
   "WATER_MASK": "NHD_waterbodies.gpkg from ND_Dam_Suite_Pack (report only)",
   "THREADS": "6 on the box; 8 on the M2 Pro (identical results)",
-  "seed dam.json storage_acft": "1615.496 (NickReview screening record, shipped as absaraka/Dams/DWR-2801/dam.json) - Nick's seed had 1615.344"
+  "seed dam.json storage_acft": "1615.496 (NickReview screening record, shipped as absaraka/Dams/DWR-2801/dam.json: the screening fields, its 'screened' status and the box Runner's top of dam; the box's 'modelled' / 'classified' status entries are not shipped) - Nick's seed had 1615.344"
  },
  "never_on_mac": [
   "TIER 2 / HEC-RAS (no macOS build)",

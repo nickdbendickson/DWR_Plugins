@@ -2,8 +2,9 @@
 
 The settings below are the ones Grok Bot used for the DWR-2801 NickReview rerun
 (DWR_Plugins main cc5892e, Runner 3.10.83). The machine-readable copy is
-`grok_settings_DWR-2801.json`. This package installs the newer plugins from main
-a83ad04 (Runner 3.10.86).
+`grok_settings_DWR-2801.json`. This package installs newer plugins: the zips in its
+`plugins/` folder (the first line of `plugins/SHA256SUMS` names their commit). These notes
+were written against main a83ad04 (Runner 3.10.86, Screening 0.17.49).
 
 ## 1. Get the data (once)
 
@@ -11,6 +12,9 @@ Put the files listed in `DATA_TO_COPY_DWR-2801.md` under
 `~/dwr-dam-suite/NickReview_data/` (keep the sub-folders):
 
 * 1.06 GB to copy from the box (run kit, culverts, box-made DEMs, NHD waterbodies)
+* the 3 Screening 7b record inputs in `Dams/NickReview/screen_maxstor/` (`8_hazard.gpkg`,
+  `4_breach_points.gpkg`, `3_stage_storage/curve_DWR-2801.csv`): the run writes the dam's
+  Screening 7b `dam.json` from them before the breach model, as the box did
 * 9.79 GB of USGS 1 m LiDAR tiles: copy them, or download them with
   `bash get_lidar_tiles.sh` (in the package folder; resumes and checks every size)
 
@@ -25,8 +29,11 @@ bash run_nickreview.sh --dam DWR-2801             # the real run (hours)
 Results go to `~/dwr-dam-suite/Dams/NickReview_mac/dams/DWR-2801/`. The dam's log is
 `.../NickReview_mac/work/DWR-2801/run_DWR-2801.log`, the whole run's log is in
 `.../NickReview_mac/logs/`, and `.../NickReview_mac/manifest_<time>.json` records the
-versions, settings and the sha256 of every input file.
-Run it again and finished stages are skipped; `--redo` runs them again.
+versions, the settings and the sha256 of every file the steps read: each rundam and
+hazclass input (every file of a `;;` list), the DEM VRTs and the 1 m tiles that touch the
+dam's area, the Screening 7b inputs and the LISFLOOD-FP binary.
+Run it again and finished stages are skipped; `--redo` runs them again (with `--stages`,
+those stages and the ones after them).
 
 ## 3. Or in QGIS (Runner dialog)
 
@@ -39,7 +46,7 @@ pieces: that source is an image service that is cut into 1200 × 1200 px request
 requests. They are not lidar tiles, it is slow, and the result is a resampled image,
 not the tiles Grok used. Cancel it and do one of these:
 
-**Option B (recommended, the same DEM as Grok's run):**
+**Option B (recommended, the same DEM as Grok's run):** with the step 1 data in place,
 
 ```bash
 cd ~/Downloads/DWR_Mac_Setup
@@ -48,13 +55,16 @@ bash get_lidar_tiles.sh                  # downloads them; re-run to resume
 bash run_nickreview.sh --dam DWR-2801 --stages record   # writes the DEM VRT, runs no model
 ```
 
-The last line writes the DEM VRT with its paths changed to your Mac:
+The last line writes the DEM VRT with its paths changed to your Mac (and the dam's
+Screening 7b `dam.json`):
 `~/dwr-dam-suite/Dams/NickReview_mac/work/DWR-2801/dem/DWR-2801_composite_1m_full_native_v2.vrt`.
 Use **this** file as the DEM. The copy under `<DATA>/nickreview_rerun_20261023/` still
-points at the box's `/home/box/...` folders and will not open correctly in QGIS on the Mac.
+points at the box's `/workspace/...` and `/home/box/...` folders and will not open
+correctly in QGIS on the Mac.
 
-**Option A (inside QGIS, for this or any other dam):** Processing ▸ **DamSafety Screening**
-▸ Dam screening ▸ **Download DEM (dam, county, or state)**:
+**Option A (inside QGIS, for this or any other dam):** the Screening plugin's tool (the
+Runner dialog's *Download a DEM* box has no native-tile source in Runner 3.10.86):
+Processing ▸ **DamSafety Screening** ▸ Dam screening ▸ **Download DEM (dam, county, or state)**:
 
 | field | value |
 |---|---|
@@ -62,25 +72,30 @@ points at the box's `/home/box/...` folders and will not open correctly in QGIS 
 | 1 m tiles: box west,south,east,north in degrees | `-97.63262,46.71761,-96.90646,47.15281` (Grok's DWR-2801 model area; or leave empty and give the dam point below) |
 | Dam point, longitude,latitude | `-97.390918,46.984382` (only used when the box is empty, with the buffer) |
 | Dam ID | `DWR-2801` |
-| 1 m tiles: tile folder | e.g. `~/dwr-dam-suite/lidar_1m` (not `lidar_1m_native`: the tool does not recognise tiles get_lidar_tiles.sh put there and would download them again) |
+| 1 m tiles: tile folder | e.g. `~/dwr-dam-suite/lidar_1m` (not `lidar_1m_native`: the tool only counts tiles listed in its own `lidar_1m_manifest.json`, so it would download the get_lidar_tiles.sh tiles again) |
 | 1 m tiles: download the listed tiles | **off** the first time: it only lists the tiles and the total |
-| 1 m tiles: largest download for one run (GB) | **15** (the default 10 is just too small: 38 tiles ≈ 10.3 GB) |
+| 1 m tiles: largest download for one run (GB) | the default **10** is enough: the tool counts GB as 1024³ bytes, and the 38 tiles are about 9.3–9.7 of those (10.0–10.4 GB in the decimal GB of the data lists) |
 | Output folder | e.g. `~/dwr-dam-suite/DEM/DWR-2801` |
 
 Run it once: the log lists **38 tiles** for that box (Grok's 36 plus x66y518 and
-x66y519). Then tick **1 m tiles: download the listed tiles** and run again (it resumes if
-cut off). The DEM is `<Output folder>/DWR-2801_1m_lidar.vrt`. With the dam point and the
-default 15 mile buffer instead of the box it is about 32 tiles.
-Option A's VRT is the same 1 m lidar but not byte-identical to Grok's composite (that one
-also has a 5 m DEM underneath outside the 1 m tiles), so use option B to match Grok's run.
+x66y519). Two projects publish x66y518 and x66y519 (ND_3DEPProcessing_D22, published
+2024, and MN_RedRiver_D23, published 2026); the tool keeps the one with the newest
+collection and names it in the log. Then tick
+**1 m tiles: download the listed tiles** and run again (it resumes if cut off). The DEM is
+`<Output folder>/DWR-2801_1m_lidar.vrt`. With the dam point and the default 15 mile buffer
+instead of the box it is about 32 tiles (x59–x64, a different set).
+Option A's VRT is the same 1 m lidar where its tiles are the same ones, but not
+byte-identical to Grok's composite (that one also has a 5 m DEM underneath outside the 1 m tiles), so use
+option B to match Grok's run.
 
 ### 3b. "Set the DEM elevation unit (feet or metres)" error
 
 Run breach model's **DEM elevation units** is *Detect from the raster* by default, and in
-the plugins this package installs (Runner 3.10.86) that choice always stops with
+Runner 3.10.86 (the Runner these notes were written against) that choice always stops with
 *"Set the DEM elevation unit (feet or metres). QL2 ASCII grids are feet; a USGS IMG is
 usually metres."* Set **DEM elevation units = Meters** (all the DEMs above are metres;
-only ND DWR QL2 ASCII grids are feet). The Terminal script already passes Meters.
+only ND DWR QL2 ASCII grids are feet; Meters is right for them in any Runner version). The
+Terminal script already passes Meters.
 
 ### 3c. Run breach model
 

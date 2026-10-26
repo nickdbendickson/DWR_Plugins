@@ -96,6 +96,9 @@ bytes	copy_to (under ~/dwr-dam-suite/NickReview_data/)	source
 273649405	DEM/lidar_1m_native/USGS_1M_14_x65y522_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
 272013590	DEM/lidar_1m_native/USGS_1M_14_x65y523_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
 3957	Dams/NickReview/dams/DWR-2801/dam.json	copy (NickReview screening record)
+?	Dams/NickReview/screen_maxstor/3_stage_storage/curve_DWR-2801.csv	copy (NickReview max-storage screening: Screening 7b record input)
+?	Dams/NickReview/screen_maxstor/4_breach_points.gpkg	copy (NickReview max-storage screening: Screening 7b record input)
+?	Dams/NickReview/screen_maxstor/8_hazard.gpkg	copy (NickReview max-storage screening: Screening 7b record input)
 290148352	ND_Dam_Suite_Pack/hydro/NHD_waterbodies.gpkg	ND_Dam_Suite_Pack (copy, or point --map at your own copy)
 278528	culvert_precheck_20261024/dwr2801/structures_2801_with9122221_invfix2.gpkg	copy (box culvert fix: invfix2 + NBI 9122221)
 118784	culvert_sources/nddot_bridge_inventory.gpkg	copy (box-made from NDDOT / NTAD downloads)
