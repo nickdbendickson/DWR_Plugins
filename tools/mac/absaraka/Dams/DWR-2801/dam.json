@@ -1,0 +1,178 @@
+{
+ "format": "nd_dam_suite/dam_record",
+ "format_version": 1,
+ "fields": {
+  "crs": "EPSG:5070",
+  "dam_id": "DWR-2801",
+  "dwr_structure_id": "2801",
+  "existing_hazard_class": "Significant",
+  "height_ft": 27.5,
+  "lat": 46.9830314,
+  "lon": -97.3914888,
+  "name": "Swan Buffalo Detention Dam 12",
+  "nid_id": "ND00199",
+  "storage_acft": 1615.496,
+  "surface_area_ac": 111.643,
+  "top_of_dam_datum": "DEM",
+  "top_of_dam_ft": 1069.1171681161313,
+  "x": -106343.832,
+  "y": 2666591.505
+ },
+ "sources": {
+  "crs": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "dam_id": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "dwr_structure_id": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "existing_hazard_class": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "height_ft": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "lat": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "lon": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "name": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "nid_id": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "storage_acft": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "surface_area_ac": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "top_of_dam_datum": {
+   "tool": "ndbreach",
+   "version": "3.10.2",
+   "when": "2026-10-13T05:12:29",
+   "note": ""
+  },
+  "top_of_dam_ft": {
+   "tool": "ndbreach",
+   "version": "3.10.2",
+   "when": "2026-10-13T05:12:29",
+   "note": ""
+  },
+  "x": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  },
+  "y": {
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "note": "screening"
+  }
+ },
+ "status": [
+  {
+   "step": "screened",
+   "tool": "ndscreen",
+   "version": "0.17.5",
+   "when": "2026-10-13T05:11:32",
+   "result": {
+    "triage": "not run",
+    "hz_class": "High",
+    "border": "yes",
+    "gaps": "road 149463: AADT not given; classified Medium by assumption; road 149907: AADT not given; classified Medium by assumption; road 158050: AADT not given; classified Medium by assumption",
+    "by": "tool 7b"
+   }
+  },
+  {
+   "step": "modelled",
+   "tool": "ndbreach",
+   "version": "3.10.2",
+   "when": "2026-10-13T05:12:29",
+   "result": {
+    "breach_occurs": true,
+    "scenario": "sunny",
+    "final_model": "LISFLOOD-FP",
+    "final_rasters": [
+     "Depth (Max).tif",
+     "Velocity (Max).tif",
+     "Arrival Time.tif",
+     "WSE (Max).tif"
+    ],
+    "manifest": "_breach_model/run_manifest.json",
+    "run_report": "_breach_model/run_report.json",
+    "extent_ft": 44461.0,
+    "domain_mi": [
+     9.47,
+     8.9
+    ]
+   }
+  },
+  {
+   "step": "classified",
+   "tool": "ndbreach",
+   "version": "3.10.2",
+   "when": "2026-10-13T05:12:29",
+   "result": {
+    "preview": true,
+    "tool": "nd_hazard.py"
+   }
+  },
+  {
+   "step": "classified",
+   "tool": "ndhazard",
+   "version": "2.18.0",
+   "when": "2026-10-13T05:42:20",
+   "result": {
+    "nd_class": "High",
+    "tm11_class": "Significant",
+    "lives_in_jeopardy": 0.0020359848484848486,
+    "governing": "Breach",
+    "output_folder": "outputs",
+    "chain": "Model chain check: all 3 classified rasters are the model's own outputs (SHA-256)",
+    "quick_rerun": false
+   }
+  }
+ ],
+ "conflicts": []
+}
