@@ -1734,42 +1734,50 @@ def terrain_on_grid(terrain, like_grid, z=None):
 
 
 def results(hdf, like_grid, arrival_m=ARRIVAL_DEPTH_FT * 0.3048, t0_hr=0.0, to_grid_xy=None, area=None,
-            units=None, wet_m=0.003, terrain=None, info=None):
+            units=None, wet_m=0.003, terrain=None, info=None, depth_basis=None):
     """The HEC-RAS maxima on the Runner grid as the workflow's final arrays, SI:
     {'depth' m, 'velocity' m/s, 'wse' m, 'arrival' h after breach initiation}, NaN where
     dry or outside the mesh. to_grid_xy(xy (n,2)) -> (n,2) maps the HEC-RAS model CRS to the
     grid's (None when they are the same).
 
-    3.10.79: `terrain` (the HEC-RAS terrain GeoTIFF, or an (ny, nx) array of the ground in ft
-    on like_grid) makes depth = cell max WSE minus the terrain of each grid cell, and the wet
-    mask and arrival time follow that depth (hecras.terrain_depth). Without it the depth is
-    WSE minus the HEC cell's minimum elevation (the pre-3.10.79 export, which gives a cell's
-    lowest ditch depth to its whole area). `info` (a dict) receives the read details,
-    'depth_basis' and, with a terrain, the cell-minimum depth (m) as 'old_depth_m'."""
+    3.10.84 depth_basis (hecras.depth_basis: None = NDBREACH_HECRAS_DEPTH_BASIS, else
+    'cell_min'): 'cell_min' (default) = the nearest HEC-RAS cell's max WSE minus that cell's
+    minimum terrain elevation; 'terrain' (the 3.10.79 default) = minus the terrain of each
+    grid cell, which needs `terrain` (the HEC-RAS terrain GeoTIFF, or an (ny, nx) array of
+    the ground in ft on like_grid); without one it falls back to 'cell_min' and says so in
+    info['notes']. The wet mask and the arrival time always follow the depth used
+    (hecras.terrain_depth). `info` (a dict) receives the read details, 'depth_basis',
+    'depth_basis_requested', and the depth of the other basis (m) as 'other_depth_m' with
+    'other_basis' (None when it cannot be made: 'terrain' without a terrain)."""
     FT = 0.3048
     shape = (like_grid.ny, like_grid.nx)
+    want = hecras.depth_basis(depth_basis)
+    t_ft = None
     if terrain is not None:
         t_ft = terrain_on_grid(terrain, like_grid) if isinstance(terrain, str) else \
             np.asarray(terrain, dtype=float)
-        a, minfo = hecras.terrain_depth(hdf, like_grid.x0, like_grid.y0, like_grid.dx,
-                                        like_grid.nx, like_grid.ny, t_ft, area=area,
-                                        units=units, arrival_depth_ft=arrival_m / FT,
-                                        t0_hr=t0_hr, wet_ft=wet_m / FT, to_grid_xy=to_grid_xy)
-        old = minfo.pop("old")
-        if info is not None:
-            info.update(minfo)
-            info["old_depth_m"] = old * FT
-    else:
-        mesh = hecras.read_mesh(hdf, area=area, units=units, arrival_depth_ft=arrival_m / FT,
-                                t0_hr=t0_hr, wet_ft=wet_m / FT)
-        if to_grid_xy is not None:
-            xy = np.asarray(to_grid_xy(np.column_stack([mesh.x, mesh.y])), dtype=float)
-            mesh.x, mesh.y = xy[:, 0], xy[:, 1]
-            mesh._nn = None
-        a = hecras.rasterise(mesh, like_grid.x0, like_grid.y0, like_grid.dx, like_grid.nx,
-                             like_grid.ny, names=("depth", "wse", "velocity", "arrival"))
-        if info is not None:
-            info.update(mesh.info)
+    basis = want if (want == hecras.DEPTH_BASIS_CELL_MIN or t_ft is not None) else \
+        hecras.DEPTH_BASIS_CELL_MIN
+    a, minfo = hecras.terrain_depth(hdf, like_grid.x0, like_grid.y0, like_grid.dx,
+                                    like_grid.nx, like_grid.ny, t_ft, area=area,
+                                    units=units, arrival_depth_ft=arrival_m / FT,
+                                    t0_hr=t0_hr, wet_ft=wet_m / FT, to_grid_xy=to_grid_xy,
+                                    basis=basis)
+    d_cmin = minfo.pop("depth_cell_min")
+    d_terr = minfo.pop("depth_terrain")
+    if basis != want:
+        minfo["notes"] = list(minfo.get("notes") or []) + [
+            "Depth basis 'terrain' was asked for but there is no terrain: the depth is the "
+            "HEC-RAS cell's minimum elevation basis ('cell_min')."]
+    if info is not None:
+        info.update(minfo)
+        info["depth_basis_requested"] = want
+        if basis == hecras.DEPTH_BASIS_CELL_MIN:
+            info["other_basis"] = hecras.DEPTH_BASIS_TERRAIN if d_terr is not None else None
+            info["other_depth_m"] = None if d_terr is None else d_terr * FT
+        else:
+            info["other_basis"] = hecras.DEPTH_BASIS_CELL_MIN
+            info["other_depth_m"] = d_cmin * FT
     nan = np.full(shape, np.nan)
     d = np.asarray(a.get("depth", nan), float) * FT
     wet = np.isfinite(d) & (d > wet_m)
@@ -1846,14 +1854,25 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     os.makedirs(keep, exist_ok=True)
     shutil.copy2(hdf, keep)
     tr = transformer(r["info"].get("model_wkt"), like.crs_wkt or r["info"].get("work_wkt"))
-    # 3.10.79: depth, wet area and arrival from the HEC-RAS terrain under each grid cell
+    # 3.10.84: depth, wet area and arrival from the HEC-RAS cell's minimum terrain elevation
+    # (default) or the terrain under each grid cell (hecras_depth_basis / NDBREACH_HECRAS_
+    # DEPTH_BASIS = 'terrain', the 3.10.79 default); the terrain also gives the other basis
+    # for comparison in hecras_stage.json
     terrain = r["paths"].get("terrain_tif")
     if not (terrain and os.path.exists(terrain)):
         terrain = None
     arrival_ft = float(getattr(st, "arrival_depth_ft", ARRIVAL_DEPTH_FT))
     rinfo = {}
     arr = results(hdf, like, arrival_m=arrival_ft * 0.3048, t0_hr=results_t0_hr(r),
-                  to_grid_xy=tr, terrain=terrain, info=rinfo)
+                  to_grid_xy=tr, terrain=terrain, info=rinfo,
+                  depth_basis=getattr(st, "hecras_depth_basis", None))
+    other_m = rinfo.pop("other_depth_m", None)
+    compare = None
+    if other_m is not None:
+        acre = _cell_acres(like)
+        compare = {"basis": rinfo.get("depth_basis"), "areas": _depth_areas(
+            arr["depth"] / 0.3048, acre), "other_basis": rinfo.get("other_basis"),
+            "other_areas": _depth_areas(other_m / 0.3048, acre)}
     final = write_results(arr, like, writer, dam_folder)
     rep = {"engine": "hecras", "hecras_version": "6.6", "platform": d["platform"],
            "project": proj, "results_hdf": os.path.join(keep, os.path.basename(hdf)),
@@ -1865,7 +1884,10 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
            "hecras_time_limit": lim or None,
            "lisflood_rasters_kept_as": LISFLOOD_PREFIX + "<name>",
            # 3.10.79: what reexport_hecras_results needs to redo the rasters from the HDF
-           "depth_basis": rinfo.get("depth_basis"), "terrain_tif": terrain,
+           "depth_basis": rinfo.get("depth_basis"),
+           "depth_basis_requested": rinfo.get("depth_basis_requested"),
+           "depth_basis_text": hecras.DEPTH_BASIS_TEXT.get(rinfo.get("depth_basis")),
+           "depth_basis_compare": compare, "terrain_tif": terrain,
            "model_wkt": r["info"].get("model_wkt"), "t0_hr": results_t0_hr(r),
            "arrival_depth_ft": arrival_ft}
     with open(os.path.join(keep, "hecras_stage.json"), "w", encoding="utf-8") as f:
@@ -1875,10 +1897,10 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
              .format(LISFLOOD_PREFIX)]
     if r.get("inflow_fallback"):
         warns.append(r["inflow_fallback"]["note"])
-    if terrain is None:
-        warns.append("HEC-RAS depth is from each cell's minimum elevation: the model's terrain "
-                     "GeoTIFF was not found, so ditches deepen whole cells. Re-export with "
-                     "reexport_hecras_results and the terrain.")
+    if rinfo.get("depth_basis_requested") == hecras.DEPTH_BASIS_TERRAIN and terrain is None:
+        warns.append("HEC-RAS depth is from each cell's minimum elevation: the per-pixel "
+                     "terrain basis was asked for but the model's terrain GeoTIFF was not "
+                     "found. Re-export with reexport_hecras_results and the terrain.")
     return {"final": final, "hdf": hdf, "project": proj, "report": rep, "warnings": warns}
 
 
@@ -1912,12 +1934,25 @@ def _find_terrain(dirs):
     return None
 
 
+def _depth_areas(d_ft, acre):
+    """Wet / >= 0.1 ft / >= 1 ft areas (ac) of a depth grid in ft."""
+    with np.errstate(invalid="ignore"):
+        return {"wet_ac": float(np.sum(np.isfinite(d_ft) & (d_ft > 0.003 / 0.3048)) * acre),
+                "ge_0p1ft_ac": float(np.sum(d_ft >= 0.1) * acre),
+                "ge_1ft_ac": float(np.sum(d_ft >= 1.0) * acre)}
+
+
 def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=None,
                             t0_hr=None, arrival_depth_ft=None, model_wkt=None,
-                            terrain_z=None, overwrite=False, log=None):
+                            terrain_z=None, overwrite=False, log=None, depth_basis=None):
     """Re-make the final HEC-RAS rasters of a finished run from its plan HDF and the model
-    terrain (no HEC-RAS run): depth = max WSE minus the terrain under each grid cell, the
-    wet mask and arrival time on that depth (results(..., terrain=)).
+    terrain (no HEC-RAS run): depth = max WSE minus the ground of the depth basis, the
+    wet mask and arrival time on that depth (results(..., depth_basis=)).
+
+    3.10.84 depth_basis: None = NDBREACH_HECRAS_DEPTH_BASIS, else 'cell_min' (the cell's
+    minimum terrain elevation, the default); 'terrain' = the terrain under each grid cell
+    (the 3.10.79 default). The terrain is read for both: with 'cell_min' it gives the
+    comparison areas; it is required only for 'terrain'.
 
     run_dir: the dam folder (with _hecras/hecras_stage.json) or any folder holding the
     grid. Found there unless given: hdf (stage 'results_hdf', RESULTS_HDF_LOCATION.txt,
@@ -1963,9 +1998,13 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
         if not (terrain and os.path.exists(terrain)):
             terrain = _find_terrain([proj, hdf_dir, os.path.dirname(hdf_dir),
                                      os.path.join(run_dir, "_hecras", "model")])
+    basis = hecras.depth_basis(depth_basis)
     if not (terrain and os.path.exists(terrain)):
-        raise HecRasEngineError("no HEC-RAS terrain GeoTIFF found (looked for "
-                                "<project>/Terrain/*.tif); pass terrain=")
+        if basis == hecras.DEPTH_BASIS_TERRAIN:
+            raise HecRasEngineError("no HEC-RAS terrain GeoTIFF found (looked for "
+                                    "<project>/Terrain/*.tif); pass terrain=, or use the "
+                                    "'cell_min' depth basis")
+        terrain = None
     if like is None:
         for n in (workflow.FINAL_NAMES["depth"], LISFLOOD_PREFIX + workflow.FINAL_NAMES["depth"]):
             if os.path.exists(os.path.join(run_dir, n)):
@@ -1977,7 +2016,7 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
     eng = _read_json(os.path.join(proj, "hecras_engine.json")) if proj else {}
     if model_wkt is None:
         model_wkt = stage.get("model_wkt") or eng.get("model_wkt")
-        if not model_wkt:
+        if not model_wkt and terrain:
             gdal, _ = gdal_io._gdal()
             ds = gdal_io.GS.open_raster(terrain)
             model_wkt = ds.GetProjection() or None
@@ -2002,35 +2041,38 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
 
     grid = gdal_io.read_grid(like)
     tr = transformer(model_wkt, grid.crs_wkt) if model_wkt and grid.crs_wkt else None
-    say("Terrain {} onto the grid of {}".format(terrain, like))
-    t_ft = terrain_on_grid(terrain, grid, z=terrain_z)
+    t_ft = None
+    if terrain:
+        say("Terrain {} onto the grid of {}".format(terrain, like))
+        t_ft = terrain_on_grid(terrain, grid, z=terrain_z)
     info = {}
-    say("Reading {}".format(hdf))
+    say("Reading {} (depth basis {})".format(hdf, basis))
     arr = results(hdf, grid, arrival_m=float(arrival_depth_ft) * 0.3048, t0_hr=float(t0_hr),
-                  to_grid_xy=tr, terrain=t_ft, info=info)
+                  to_grid_xy=tr, terrain=t_ft, info=info, depth_basis=basis)
     os.makedirs(out_dir, exist_ok=True)
     writer = gdal_io.GeoTiffWriter(grid.crs_wkt)
     paths = write_results(arr, grid, writer, out_dir)
 
     acre = _cell_acres(grid)
-    old_ft = info.pop("old_depth_m") / 0.3048
+    other_m = info.pop("other_depth_m", None)
     new_ft = arr["depth"] / 0.3048
-
-    def areas(d):
-        with np.errstate(invalid="ignore"):
-            return {"wet_ac": float(np.sum(np.isfinite(d) & (d > 0.003 / 0.3048)) * acre),
-                    "ge_0p1ft_ac": float(np.sum(d >= 0.1) * acre),
-                    "ge_1ft_ac": float(np.sum(d >= 1.0) * acre)}
+    by_basis = {info.get("depth_basis"): _depth_areas(new_ft, acre)}
+    if other_m is not None:
+        by_basis[info.get("other_basis")] = _depth_areas(other_m / 0.3048, acre)
     ver = getattr(workflow, "VERSION", None)
     rep = {"reexport": "hecras", "runner": ver,
            "when_utc": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
            "run_dir": run_dir, "results_hdf": hdf, "terrain_tif": terrain, "grid": like,
            "t0_hr": float(t0_hr), "arrival_depth_ft": float(arrival_depth_ft),
            "depth_basis": info.get("depth_basis"),
-           "method": "nearest HEC-RAS cell WSE (flat over the cell) minus the terrain "
-                     "averaged onto each grid cell; wet and arrival on that depth",
+           "depth_basis_stage": stage.get("depth_basis"),
+           "method": hecras.DEPTH_BASIS_TEXT.get(info.get("depth_basis")) +
+           "; nearest HEC-RAS cell per grid cell; wet and arrival on that depth",
            "no_terrain_cells": info.get("no_terrain_cells"),
-           "areas_new": areas(new_ft), "areas_old_cell_min": areas(old_ft),
+           # 'areas_new' = the basis written; one entry per basis that could be made
+           "areas_new": by_basis[info.get("depth_basis")], "areas_by_basis": by_basis,
+           "areas_old_cell_min": by_basis.get(hecras.DEPTH_BASIS_CELL_MIN),
+           "areas_terrain": by_basis.get(hecras.DEPTH_BASIS_TERRAIN),
            "outputs": paths, "notes": info.get("notes", [])}
     with open(os.path.join(out_dir, REEXPORT_JSON), "w", encoding="utf-8") as f:
         json.dump(rep, f, indent=1)
