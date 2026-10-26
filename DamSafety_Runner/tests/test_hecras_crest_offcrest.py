@@ -484,6 +484,11 @@ def hecras_crest_offcrest_evidence():
         assert ok, (P, ev)
         assert ev["flow_path_angle_deg"] < 10.0 and ev["parallel_ridge_frac"] == 0.0, ev
         assert abs(ev["dam_point_to_line"] - abs(P[1])) < 1.0, ev
+    # the flooded area on its upstream side only: not across the run's flow (flow_check)
+    gx, gy = np.meshgrid(np.arange(-375.0, 400.0, 50.0), np.arange(125.0, 425.0, 50.0))
+    up = np.column_stack([gx.ravel(), gy.ravel()])
+    ok, ev = _ev(dam, f, (30.0, 0.0), wet=up)
+    assert not ok and "downstream side" in ev["why"] and ev["flow"]["downstream_frac"] == 0.0, ev
     ok, ev = _ev(dam, f, (30.0, TOE + 0.5 * CW + 10.0))
     assert not ok and ev["why"].startswith("the dam point is") and "more than the toe" in \
         ev["why"], ev
@@ -530,9 +535,9 @@ def hecras_crest_offcrest_walk_off_the_old_rule():
     """The walk of a trace off the old rule (here at the DEM's level, 5 ft above the record):
     (a) on a level crest 100 ft wide (wider than three times the walk's window) it keeps to
     the middle of the top instead of drifting across it a little every step; (b) where the
-    pool is left out of the DEM (no data) up to 2 ft below the crest of a 48 ft wide crest,
-    the side that runs into no data falls (the one face sample left is not the ground beside
-    the crest), so the crest is followed past it; (c) a single high point past a stretch
+    pool is left out of the DEM (no data) up to 3 ft below the crest of a 48 ft wide crest (a
+    2 ft DEM), the side that runs into no data falls (the one face sample left is not the
+    ground beside the crest), so the crest is followed past it; (c) a single high point past a stretch
     stepped over at the end (a knoll on the abutment) is not crest: the line ends before it.
     The old rule's own walk is unchanged."""
     z, x0, ytop, c = _valley_with(TOP + 5.0, cw=100.0, grid=True)
@@ -542,10 +547,10 @@ def hecras_crest_offcrest_walk_off_the_old_rule():
     assert tr["how"] == "datum" and hc.cumlen(tr["line"])[-1] > 900.0, tr["ends"]
     assert np.abs(tr["line"][:, 1]).max() < 15.0, np.abs(tr["line"][:, 1]).max()
     # (b) the pool left out of the DEM beside the left half of the crest
-    z, x0, ytop, c = _valley_with(TOP + 5.0, cw=48.0, grid=True)
+    z, x0, ytop, c = _valley_with(TOP + 5.0, cw=48.0, grid=True, c=2.0)
     X, Y = np.meshgrid(x0 + (np.arange(z.shape[1]) + 0.5) * c,
                        ytop - (np.arange(z.shape[0]) + 0.5) * c)
-    z = np.where((Y > 0.0) & (X < -100.0) & (z < TOP + 3.0), np.nan, z)
+    z = np.where((Y > 0.0) & (X < -100.0) & (z < TOP + 2.0), np.nan, z)
     f = _grid_sampler(z, x0, ytop, c)
     tr = hc.trace(f, (30.0, 0.0), (-1.0, 0.0), TOP, 10.0, 10.0, 54.0, 1500.0, 300.0,
                   crest_w=48.0)
