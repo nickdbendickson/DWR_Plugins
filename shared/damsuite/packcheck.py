@@ -30,6 +30,19 @@ time, so a plugin may call check_pack at every pack open.
 lists but that is missing or unreadable, or that the manifest does not list at all, is an
 ERROR (PackCheck.missing_required); everything else is a WARNING or a NOTE. check_pack never
 raises; PackCheck.raise_if_required_missing() raises PackCheckError with a clear message.
+
+1.17.6 (#171 follow-up): a manifest.json that cannot be read (not JSON, not an object, a
+UTF-8 byte-order mark - the pack readers decode plain UTF-8 -, or a section - datasets /
+rasters / left_out - of the wrong type) and any unexpected error of the check itself give a
+FAILED result (PackCheck.failed, an ERROR of kind "manifest" / "check", every required layer
+in missing_required) instead of an exception or a silent "not an offline data pack". One
+entry of the wrong type (not an object, a `file` that is not text) is not FAILED: it is a
+WARNING of kind "manifest" for that layer (an ERROR when the layer is required). A
+GeoPackage whose SQLite header is bad or that is shorter than its header says (a
+half-written copy) is "unreadable"; integrity=True also runs SQLite's quick_check (reads
+the whole file). A zipped format-2 pack is checked against
+its zip listing (every listed file present, not empty; the full check runs on the unpacked
+folder). pack_signature(path) gives every listed file's size and time for run signatures.
 A format-1 pack (one nd_offline_pack.sqlite) is checked lightly: each usable data set of its
 datasets table has its ds_ table and (deep) that many rows, and manifest.json lists nothing
 the .sqlite lacks. It has no per-layer fields, geometry type or CRS to compare.
@@ -79,6 +92,7 @@ class PackCheck(object):
         self.path = path
         self.format = fmt
         self.folder = folder
+        self.failed = False          # 1.17.6: the manifest or the check itself failed
         self.issues = []
         self.checked = []
         self.missing_required = []
@@ -113,7 +127,13 @@ class PackCheck(object):
         return out
 
     def summary(self):
-        name = os.path.basename(self.folder or self.path) or self.path
+        name = os.path.basename(str(self.folder or self.path or "")) or str(self.path)
+        if self.failed:
+            why = "; ".join(i.text for i in self.issues if i.kind in ("manifest", "check"))
+            return "Offline pack check ({}): FAILED - {}{}".format(
+                name, why or "the check could not run",
+                "; REQUIRED layer(s) not usable: " + ", ".join(self.missing_required)
+                if self.missing_required else "")
         if self.format not in (1, 2):
             return "Offline pack check ({}): not an offline data pack".format(name)
         head = "Offline pack check ({}, format {}, {} layer(s){}{})".format(
@@ -121,8 +141,8 @@ class PackCheck(object):
             "" if self.deep else ", quick check: no counts")
         if self.ok:
             return head + ": OK - every layer matches manifest.json"
-        miss = sorted({i.layer for i in self.of(ERROR, WARNING) if i.kind in ("missing", "table",
-                                                                             "unreadable")})
+        miss = sorted({i.layer for i in self.of(ERROR, WARNING) if i.layer and i.kind in (
+            "missing", "table", "unreadable", "manifest")})
         diff = [n for n in self.bad_layers() if n not in miss]
         parts = []
         if self.missing_required:
@@ -132,6 +152,9 @@ class PackCheck(object):
             parts.append("missing: " + ", ".join(rest))
         if diff:
             parts.append("not as in manifest.json: " + ", ".join(diff))
+        # 1.17.6: a problem of the pack itself (no layer name: a format-1 pack's broken
+        # manifest.json, an unreadable .sqlite) is named by its text, not as "missing: "
+        parts += [i.text for i in self.of(ERROR, WARNING) if not i.layer]
         return head + ": " + "; ".join(parts)
 
     def lines(self, notes=True):
@@ -164,6 +187,95 @@ def _read_json(p):
         return m if isinstance(m, dict) else None
     except (OSError, ValueError):
         return None
+
+
+def _manifest_error(p):
+    """Why manifest.json at `p` cannot be used as a JSON object, or "" (also "" when absent)."""
+    if not os.path.isfile(p):
+        return ""
+    try:
+        with open(p, "rb") as fh:
+            raw = fh.read()
+    except OSError as ex:
+        return "manifest.json cannot be read: {}".format(ex)
+    return _manifest_bytes_error(raw)
+
+
+def _manifest_bytes_error(raw):
+    # 1.17.6: a UTF-8 byte-order mark is a problem - the pack readers (gpkgpack,
+    # offline_pack, detect_format) decode plain UTF-8 and refuse it
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return ("manifest.json starts with a UTF-8 byte-order mark - the pack readers "
+                "cannot read it; save it as UTF-8 without BOM")
+    try:
+        m = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError as ex:
+        return "manifest.json is not UTF-8 text: {}".format(ex)
+    except ValueError as ex:
+        return "manifest.json is not valid JSON ({}; {:,} bytes - half written?)".format(ex, len(raw))
+    if not isinstance(m, dict):
+        return "manifest.json is a JSON {}, not an object".format(type(m).__name__)
+    return ""
+
+
+def manifest_problem(path):
+    """1.17.6: why the manifest.json of `path` (a folder, a file in it, or a .zip) cannot be
+    read or used (not UTF-8 / JSON / an object; a format-2 section of the wrong type), or ""
+    when it reads (or there is none). Never raises."""
+    try:
+        if not path:
+            return ""
+        path = os.path.abspath(os.path.expanduser(str(path)))
+        if os.path.isfile(path) and path.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(path) as z:
+                    name = min((n for n in z.namelist() if n.rsplit("/", 1)[-1] == MANIFEST),
+                               key=lambda n: n.count("/"), default=None)
+                    if not name:
+                        return ""
+                    raw = z.read(name)
+                    return _manifest_bytes_error(raw) or _shape_text(json.loads(
+                        raw.decode("utf-8")))
+            except (OSError, KeyError, ValueError, zipfile.BadZipFile) as ex:
+                return "the zip cannot be read: {}".format(ex)
+        folder = path if os.path.isdir(path) else os.path.dirname(path)
+        mp = os.path.join(folder, MANIFEST)
+        err = _manifest_error(mp)
+        if err or not os.path.isfile(mp):
+            return err
+        return _shape_text(_read_json(mp))
+    except Exception as ex:                                      # noqa: BLE001
+        return "manifest.json cannot be read: {}".format(ex)
+
+
+def _shape_text(m):
+    """"" or the shape problems of a parsed manifest, joined (manifest_problem)."""
+    if not isinstance(m, dict):
+        return ""
+    return "; ".join(manifest_shape_problems(m))
+
+
+def manifest_shape_problems(m):
+    """1.17.6: [text] for the parts of a format-2 manifest of the wrong type: the sections
+    datasets / rasters / left_out must be objects. [] when the shape is usable."""
+    out = []
+    for sect in ("datasets", "rasters", "left_out"):
+        v = m.get(sect)
+        if v is not None and not isinstance(v, dict):
+            out.append("manifest.json '{}' is a JSON {}, not an object".format(
+                sect, type(v).__name__))
+    return out
+
+
+def _entries(m, sect):
+    v = m.get(sect)
+    return v if isinstance(v, dict) else {}
+
+
+def _rel_file(e):
+    """The entry's `file` as a str, or None when missing or of the wrong type."""
+    f = e.get("file") if isinstance(e, dict) else None
+    return f if isinstance(f, str) and f else None
 
 
 def is_format2_manifest(m):
@@ -324,9 +436,9 @@ _LOCK = threading.Lock()
 def _stamp(folder, m):
     out = []
     for p in [os.path.join(folder, MANIFEST)] + [
-            os.path.join(folder, *(e.get("file") or "").split("/"))
-            for sect in ("datasets", "rasters") for e in (m.get(sect) or {}).values()
-            if isinstance(e, dict) and e.get("file")]:
+            os.path.join(folder, *_rel_file(e).split("/"))
+            for sect in ("datasets", "rasters") for e in _entries(m, sect).values()
+            if _rel_file(e)]:
         try:
             st = os.stat(p)
             out.append((p, st.st_size, st.st_mtime))
@@ -340,30 +452,63 @@ def clear_cache():
         _CACHE.clear()
 
 
-def check_pack(path, required=(), deep=True, aliases=None):
-    """PackCheck for the pack at `path` (folder, a file in it, .zip or .sqlite). Never raises.
+def failed_result(path, required, kind, text, fmt=2, folder=""):
+    """1.17.6: a FAILED PackCheck: one ERROR of `kind` ("manifest" or "check") and every
+    required layer missing, so a caller that needs layers blocks on it."""
+    res = PackCheck(path, fmt, folder)
+    res.failed = True
+    res.add(ERROR, "", kind, text)
+    for name in tuple(required or ()):
+        res.missing_required.append(name)
+        res.add(ERROR, name, "missing", "required, and the pack cannot be checked")
+    return res
+
+
+def check_pack(path, required=(), deep=True, aliases=None, integrity=False):
+    """PackCheck for the pack at `path` (folder, a file in it, .zip or .sqlite). Never raises:
+    an unreadable manifest.json or an error of the check is a FAILED result (1.17.6).
     `required`: layer names the caller needs. `aliases`: {name: other name} a layer may be
-    listed under (default: hydro3dhp's NHD_* <-> 3DHP_*)."""
-    required = tuple(required or ())
+    listed under (default: hydro3dhp's NHD_* <-> 3DHP_*). `integrity`: also SQLite's
+    quick_check of every GeoPackage (reads every page; off by default)."""
+    try:
+        required = tuple(required or ())
+    except TypeError:
+        required = (str(required),)
+    try:
+        return _check_pack(path, required, deep, aliases, integrity)
+    except Exception as ex:                                      # noqa: BLE001
+        return failed_result(path, required, "check", "the pack check failed: {}: {}".format(
+            type(ex).__name__, ex))
+
+
+def _check_pack(path, required, deep, aliases, integrity):
     fmt = detect_format(path)
+    if fmt == 0:
+        bad = manifest_problem(path)
+        if bad:                          # 1.17.6: a pack whose manifest.json is broken
+            p = os.path.abspath(os.path.expanduser(str(path)))
+            folder = "" if p.lower().endswith(".zip") else (p if os.path.isdir(p) else
+                                                             os.path.dirname(p))
+            return failed_result(path, required, "manifest", bad, 2, folder)
     folder = pack_folder(path) if fmt == 2 else ""
-    if fmt == 2 and not folder:          # a zipped format-2 pack: checked once it is unpacked
-        res = PackCheck(path, fmt)
-        res.add(NOTE, "", "zip", "a zipped format-2 pack: the layers are checked once it is "
-                "unpacked")
-        return res
+    if fmt == 2 and not folder:          # a zipped format-2 pack: its zip listing (1.17.6)
+        return _check_zip(path, required, aliases)
     if fmt == 1:
         return _check_v1(path, required, deep, aliases)
     if fmt != 2:
         return PackCheck(path, fmt)
     m = _read_json(os.path.join(folder, MANIFEST)) or {}
-    key = (folder, required, bool(deep), tuple(sorted((aliases or {}).items())))
+    shape = manifest_shape_problems(m)
+    if shape:
+        return failed_result(folder, required, "manifest", "; ".join(shape), 2, folder)
+    key = (folder, required, bool(deep), bool(integrity),
+           tuple(sorted((aliases or {}).items())))
     stamp = _stamp(folder, m)
     with _LOCK:
         hit = _CACHE.get(key)
         if hit and hit[0] == stamp:
             return hit[1]
-    res = _check(folder, m, required, deep, aliases)
+    res = _check(folder, m, required, deep, aliases, integrity)
     with _LOCK:
         _CACHE[key] = (stamp, res)
     return res
@@ -419,8 +564,11 @@ def _check_v1(path, required, deep, aliases):
         res.add(WARNING, "", "unreadable", "{} cannot be read: {}".format(db, ex))
     finally:
         con.close()
+    bad = _manifest_error(os.path.join(os.path.dirname(db), MANIFEST))
+    if bad:                              # 1.17.6: the .sqlite is checked, the manifest is broken
+        res.add(WARNING, "", "manifest", bad)
     m = _read_json(os.path.join(os.path.dirname(db), MANIFEST)) or {}
-    for name, e in (m.get("datasets") or {}).items():
+    for name, e in _entries(m, "datasets").items():
         if isinstance(e, dict) and e.get("status") in USABLE and name not in res.checked:
             res.add(WARNING, name, "missing", "listed in manifest.json, not in {}".format(DB_NAME))
     al = _aliases(aliases)
@@ -443,16 +591,21 @@ def _aliases(aliases):
                 "NHD_waterbodies": "3DHP_waterbodies", "3DHP_waterbodies": "NHD_waterbodies"}
 
 
-def _check(folder, m, required, deep, aliases):
+def _check(folder, m, required, deep, aliases, integrity=False):
     res = PackCheck(folder, 2, folder)
     res.deep = bool(deep)
     res.created = str(m.get("created") or m.get("started") or "")[:10]
     pack_crs = m.get("crs") or DEFAULT_CRS
     good = set()
-    for name, e in (m.get("datasets") or {}).items():
+    for name, e in _entries(m, "datasets").items():
         if not isinstance(e, dict):
+            res.checked.append(name)
+            res.add(WARNING, name, "manifest", "manifest.json entry is a JSON {}, not an object"
+                    .format(type(e).__name__))
             continue
         status = e.get("status") or ""
+        if not isinstance(status, str):
+            status = str(status)
         if status not in USABLE:
             res.add(NOTE, name, "status", "status '{}' in manifest.json (not in the pack, "
                     "downloaded instead){}".format(status, ": " + e["note"] if e.get("note") else ""))
@@ -460,20 +613,23 @@ def _check(folder, m, required, deep, aliases):
         res.checked.append(name)
         if status == "partial":
             res.add(NOTE, name, "status", "partial in manifest.json (part of the area is missing)")
-        if _check_one(res, folder, name, e, pack_crs, deep, raster=False):
+        if _check_one(res, folder, name, e, pack_crs, deep, raster=False, integrity=integrity):
             good.add(name)
-    for name, e in (m.get("rasters") or {}).items():
-        if not isinstance(e, dict):
-            continue
+    for name, e in _entries(m, "rasters").items():
         res.checked.append(name)
-        if _check_one(res, folder, name, e, e.get("crs") or "", deep, raster=True):
+        if not isinstance(e, dict):
+            res.add(WARNING, name, "manifest", "manifest.json entry is a JSON {}, not an object"
+                    .format(type(e).__name__))
+            continue
+        if _check_one(res, folder, name, e, e.get("crs") or "", deep, raster=True,
+                      integrity=integrity):
             good.add(name)
-    for name, why in (m.get("left_out") or {}).items():
+    for name, why in _entries(m, "left_out").items():
         res.add(NOTE, name, "left_out", "left out of the pack: {}".format(why))
     # files on disk that the manifest does not list
-    listed = {os.path.normcase(os.path.normpath(os.path.join(folder, *e["file"].split("/"))))
-              for sect in ("datasets", "rasters") for e in (m.get(sect) or {}).values()
-              if isinstance(e, dict) and e.get("file")}
+    listed = {os.path.normcase(os.path.normpath(os.path.join(folder, *_rel_file(e).split("/"))))
+              for sect in ("datasets", "rasters") for e in _entries(m, sect).values()
+              if _rel_file(e)}
     try:
         for sub in sorted(os.listdir(folder)):
             d = os.path.join(folder, sub)
@@ -486,7 +642,7 @@ def _check(folder, m, required, deep, aliases):
     except OSError:
         pass
     al = _aliases(aliases)
-    listed_names = set(m.get("datasets") or {}) | set(m.get("rasters") or {})
+    listed_names = set(_entries(m, "datasets")) | set(_entries(m, "rasters"))
     for name in required:
         real = name if name in listed_names else al.get(name, name)
         if real in good:
@@ -496,18 +652,23 @@ def _check(folder, m, required, deep, aliases):
             res.add(ERROR, name, "missing", "required, and manifest.json does not list it")
         else:
             for i in res.issues:          # the layer's own problem becomes an error
-                if i.layer == real and i.level == WARNING and i.kind in ("missing", "table",
-                                                                       "unreadable"):
+                if i.layer == real and i.level == WARNING and i.kind in (
+                        "missing", "table", "unreadable", "manifest"):
                     i.level = ERROR
             if not any(i.layer == real and i.level == ERROR for i in res.issues):
                 res.add(ERROR, real, "missing", "required, and not usable (status {})".format(
-                    ((m.get("datasets") or {}).get(real) or {}).get("status") or "?"))
+                    (_entries(m, "datasets").get(real) or {}).get("status") or "?"
+                    if isinstance(_entries(m, "datasets").get(real), dict) else "?"))
     return res
 
 
-def _check_one(res, folder, name, e, want_crs, deep, raster):
+def _check_one(res, folder, name, e, want_crs, deep, raster, integrity=False):
     """Adds the issues of one data set; True when its file and table are usable."""
-    rel = e.get("file") or ""
+    if e.get("file") not in (None, "") and not _rel_file(e):
+        res.add(WARNING, name, "manifest", "manifest.json 'file' is a JSON {}, not a path"
+                .format(type(e.get("file")).__name__))
+        return False
+    rel = _rel_file(e) or ""
     if not rel:
         res.add(WARNING, name, "missing", "manifest.json gives no file")
         return False
@@ -515,7 +676,13 @@ def _check_one(res, folder, name, e, want_crs, deep, raster):
     if not os.path.isfile(path):
         res.add(WARNING, name, "missing", "file {} not found".format(rel))
         return False
+    bad = sqlite_file_problem(path, integrity=integrity)
+    if bad:
+        res.add(WARNING, name, "unreadable", "{} cannot be read: {}".format(rel, bad))
+        return False
     table = e.get("layer") or name
+    if not isinstance(table, str):
+        table = str(table)
     try:
         facts = _layer_facts(path, table, deep and not raster)
     except LookupError as ex:
@@ -571,6 +738,144 @@ def _check_one(res, folder, name, e, want_crs, deep, raster):
         res.add(WARNING, name, "crs", "CRS {} in the file, {} expected".format(facts["crs"],
                                                                            want_crs))
     return True
+
+
+_SQLITE_MAGIC = b"SQLite format 3\x00"
+
+
+def sqlite_file_problem(path, integrity=False):
+    """1.17.6: why a GeoPackage file is not a whole SQLite file, or "". Cheap by default:
+    the 100-byte header (magic, page size) and the file size against the page count the
+    header gives (a copy cut short - a half-written GPKG - is shorter). A file with a -wal
+    beside it is not size-checked (its pages may still be in the WAL). integrity=True also
+    runs PRAGMA quick_check (reads every page). Never raises."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            head = fh.read(100)
+    except OSError as ex:
+        return str(ex)
+    if size == 0:
+        return "the file is empty"
+    if len(head) < 100 or not head.startswith(_SQLITE_MAGIC):
+        return "not an SQLite / GeoPackage file (bad header)"
+    page = int.from_bytes(head[16:18], "big")
+    page = 65536 if page == 1 else page
+    if page < 512 or page & (page - 1):
+        return "bad SQLite page size {} in the header".format(page)
+    change = int.from_bytes(head[24:28], "big")
+    pages = int.from_bytes(head[28:32], "big")
+    valid_for = int.from_bytes(head[92:96], "big")
+    if (pages and valid_for == change and not os.path.exists(path + "-wal")
+            and size < pages * page):
+        return ("the file is cut short: {:,} bytes, the header says {:,} pages of {:,} "
+                "({:,} bytes) - a half-written copy?".format(size, pages, page, pages * page))
+    if integrity:
+        try:
+            con = _ro(path)
+            try:
+                row = con.execute("PRAGMA quick_check(1)").fetchone()
+            finally:
+                con.close()
+            if not row or str(row[0]).lower() != "ok":
+                return "SQLite quick_check: {}".format(row[0] if row else "no answer")
+        except sqlite3.Error as ex:
+            return "SQLite quick_check failed: {}".format(ex)
+    return ""
+
+
+def _check_zip(path, required, aliases):
+    """1.17.6: a zipped format-2 pack against its zip listing: every listed file is in the
+    zip and not empty, every required layer listed. The layers themselves (tables, counts,
+    fields, CRS) are checked on the unpacked folder (Hazard checks the folder it reads)."""
+    res = PackCheck(path, 2)
+    try:
+        with zipfile.ZipFile(path) as z:
+            infos = {i.filename: i for i in z.infolist()}
+            name = min((n for n in infos if n.rsplit("/", 1)[-1] == MANIFEST),
+                       key=lambda n: n.count("/"))
+            raw = z.read(name)
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile) as ex:
+        return failed_result(path, required, "manifest", "the zip cannot be read: {}".format(ex))
+    # plain UTF-8, as the readers decode it: a BOM is named as for a folder
+    bad = _manifest_bytes_error(raw)
+    if bad:
+        return failed_result(path, required, "manifest", bad)
+    m = json.loads(raw.decode("utf-8"))
+    shape = manifest_shape_problems(m)
+    if shape:
+        return failed_result(path, required, "manifest", "; ".join(shape))
+    base = name[:-len(MANIFEST)]
+    res.created = str(m.get("created") or m.get("started") or "")[:10]
+    res.deep = False
+    good = set()
+    for sect in ("datasets", "rasters"):
+        for lname, e in _entries(m, sect).items():
+            if not isinstance(e, dict):
+                res.checked.append(lname)
+                res.add(WARNING, lname, "manifest", "manifest.json entry is not an object")
+                continue
+            if sect == "datasets" and (e.get("status") or "") not in USABLE:
+                res.add(NOTE, lname, "status", "status '{}' in manifest.json".format(
+                    e.get("status")))
+                continue
+            res.checked.append(lname)
+            rel = _rel_file(e)
+            if not rel:
+                res.add(WARNING, lname, "manifest" if e.get("file") else "missing",
+                        "manifest.json gives no usable file")
+                continue
+            info = infos.get(base + rel)
+            if info is None:
+                res.add(WARNING, lname, "missing", "file {} not in the zip".format(rel))
+            elif info.file_size == 0:
+                res.add(WARNING, lname, "unreadable", "file {} is empty in the zip".format(rel))
+            else:
+                good.add(lname)
+    res.add(NOTE, "", "zip", "a zipped format-2 pack: files checked against the zip listing; "
+            "tables, counts, fields and CRS are checked once it is unpacked")
+    al = _aliases(aliases)
+    listed = set(_entries(m, "datasets")) | set(_entries(m, "rasters"))
+    for rname in required:
+        real = rname if rname in listed else al.get(rname, rname)
+        if real in good:
+            continue
+        res.missing_required.append(rname)
+        hit = [i for i in res.issues if i.layer == real and i.level == WARNING]
+        for i in hit:
+            i.level = ERROR
+        if not hit:
+            res.add(ERROR, rname, "missing", "required, and not usable in the zip")
+    return res
+
+
+def pack_signature(path):
+    """1.17.6: [[relative file, size, mtime_ns], ...] of the pack's manifest.json and every
+    file it lists (format 2), or of the file / zip itself; for run signatures, so a layer
+    file replaced in place is a new run. Sizes and times, not hashes (a hash would read
+    gigabytes at every signature). Never raises."""
+    out = []
+    try:
+        p = os.path.abspath(os.path.expanduser(str(path)))
+        folder = pack_folder(p) if not p.lower().endswith(".zip") else ""
+        files = [p]
+        if folder:
+            m = _read_json(os.path.join(folder, MANIFEST)) or {}
+            files = [os.path.join(folder, MANIFEST)] + [
+                os.path.join(folder, *_rel_file(e).split("/"))
+                for sect in ("datasets", "rasters") for e in _entries(m, sect).values()
+                if _rel_file(e)]
+        for f in files:
+            rel = os.path.relpath(f, folder) if folder else os.path.basename(f)
+            try:
+                st = os.stat(f)
+                out.append([rel.replace(os.sep, "/"), int(st.st_size),
+                            int(getattr(st, "st_mtime_ns", 0))])
+            except OSError:
+                out.append([rel.replace(os.sep, "/"), None, None])
+    except Exception as ex:                                      # noqa: BLE001
+        out.append(["error", repr(ex)])
+    return out
 
 
 def log_lines(res, log, warn=None, notes=False):

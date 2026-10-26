@@ -79,10 +79,11 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 "For each chosen dam: 'ndbreach:rundam' with the dam ID, the tool-4 breach point as the "
                 "dam point, height (ft, from height_m), storage at the top of dam (ac-ft, from tool 5 "
                 "td_vw_m3, else tool 3, else the inventory maximum), the surface area near the top of "
-                "dam when a tool-3 curve folder is given (0.17.46: when the dam's curve is too shallow, "
-                "missing or gives no area, the DWR inventory's maximum-pool area instead - tool 1's "
-                "inv_maxa_m2, from max_pool_area in acres - with a warning; no inventory area = none "
-                "sent, also with a warning), your DEM and Dams folder. No DWR elevations "
+                "dam from the tool-3 curve when a curve folder is given (0.17.46: when the dam's curve "
+                "is too shallow, missing or gives no area - and 0.17.49: when no curve folder is given "
+                "- the DWR inventory's maximum-pool area instead - tool 1's inv_maxa_m2, from "
+                "max_pool_area in acres - with a warning; no inventory area = none sent, also with a "
+                "warning; the normal-pool area inv_area_m2 is never sent), your DEM and Dams folder. No DWR elevations "
                 "are passed (local datum): the runner takes the top of dam from the DEM. Breach "
                 "hydrograph: the runner's own ND method (default), or the screening's tool-5 "
                 "hydrograph written to <Dams folder>/<dam>/inputs/breach_hydrograph.csv (hr, cfs) and "
@@ -163,7 +164,8 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         P(QgsProcessingParameterNumber("CELL", "Runner cell size (m; empty = runner default)",
                                        NUM_DOUBLE, optional=True, minValue=1.0))
         P(QgsProcessingParameterFile("CURVES", "Stage-storage curve folder (tool 3; optional, gives the "
-                                     "surface area near the top of dam)",
+                                     "surface area near the top of dam; empty = the inventory's "
+                                     "max-pool area)",
                                      behavior=FILE_FOLDER, optional=True))
         P(QgsProcessingParameterFeatureSource("BLD", "Structures (points or polygons; points are also "
                                               "given to rundam as receptors)", [pt, pg], optional=True))
@@ -394,9 +396,10 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 feedback.pushInfo("Runner: " + n)
         engine_text = ho.ENGINE_SHORT[engine]
         mask_p = self._water_mask(params, context, run_alg, feedback)
-        if curves and not ho.has_inventory_area_field(names):
-            _warn(feedback, "Surface area: " + ho.OLD_TOOL1 + " (a dam whose stage-storage curve is "
-                  "too shallow is sent with no surface area).")
+        if not ho.has_inventory_area_field(names):
+            _warn(feedback, "Surface area: " + ho.OLD_TOOL1 + " (a dam " + (
+                "whose stage-storage curve is too shallow" if curves else
+                "- no curve folder was given -") + " is sent with no surface area).")
         area_sources = {}
 
         fields, put = cm.extend_fields(dams.fields(), NEW)
@@ -440,7 +443,8 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                         user_csv, peak = ho.write_runner_hydrograph(str(src),
                                                                     os.path.join(dfold, ho.RUNNER_HYDRO_CSV))
                         feedback.pushInfo("tool-5 hydrograph -> {} (peak {:,.0f} cfs)".format(user_csv, peak))
-                    # 0.17.46: the curve's area, else the inventory's maximum-pool area
+                    # 0.17.46: the curve's area, else (also with no curve folder, 0.17.49) the
+                    # inventory's maximum-pool area
                     area, area_src, anote = ho.surface_area_choice(
                         os.path.join(curves, f"curve_{dam_id}.csv") if curves else None,
                         cm.fval(f, names, "est_crest_m", float), cm.fval(f, names, "height_m", float),

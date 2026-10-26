@@ -372,3 +372,63 @@ def report_metrics_qa_depth_map_title_and_mask_overlay():
         assert open(p, "rb").read(8) == b"\x89PNG\r\n\x1a\n"
     finally:
         shutil.rmtree(d)
+
+
+def _pack_with_water(d, manifest_text=None, cut=False):
+    """3.10.86: a tiny suite pack under d/ND_Dam_Suite_Pack (a temp folder) with one real
+    water-body GeoPackage (the suite's stdlib writer); manifest_text replaces manifest.json,
+    cut keeps the first half of the GeoPackage (a half-written copy)."""
+    from nd_breach_runner.damsuite import gpkgpack as GP
+    pack = os.path.join(d, RM.PACK_DIR)
+    os.makedirs(os.path.join(pack, "hydro"))
+    gp = os.path.join(pack, "hydro", "NHD_waterbodies.gpkg")
+    feat = {"type": "Feature", "properties": {"name": "Lake"},
+            "geometry": {"type": "MultiPolygon", "coordinates": [[[[-100.5, 47.5], [-100.4, 47.5],
+                                                                   [-100.4, 47.6], [-100.5, 47.5]]]]}}
+    info = GP.write_layer(gp, "NHD_waterbodies", lambda: iter([feat]))
+    m = {"format": "nd-dam-hazard-offline-pack", "format_version": 2, "layout": "gpkg",
+         "datasets": {"NHD_waterbodies": {"file": "hydro/NHD_waterbodies.gpkg",
+                                          "count": info["count"], "geometry": info["geometry"],
+                                          "status": "complete"}}}
+    with open(os.path.join(pack, "manifest.json"), "w") as fh:
+        fh.write(json.dumps(m) if manifest_text is None else manifest_text)
+    if cut:
+        with open(gp, "rb") as fh:
+            raw = fh.read()
+        with open(gp, "wb") as fh:
+            fh.write(raw[:len(raw) // 2])
+    return pack, gp
+
+
+@test
+def report_metrics_suite_water_file_not_used_when_the_pack_check_fails():
+    """3.10.86 (#171 follow-up): a suite pack whose manifest.json cannot be read, or whose
+    water-body GeoPackage is cut short, is not used for the water-body mask: the reason is
+    logged (FAILED / cannot be read) and build_mask never raises; a good pack's file is
+    used. Read-only."""
+    for case in ("good", "badjson", "cut", "list"):
+        d = tempfile.mkdtemp()
+        try:
+            text = {"badjson": '{"format": "nd-dam-hazard-offline-pack", "datas',
+                    "list": "[]"}.get(case)
+            pack, gp = _pack_with_water(d, manifest_text=text, cut=(case == "cut"))
+            listing = sorted(os.listdir(pack))
+            env = {"NDSUITE_DATA": d}
+            cands = RM._suite_candidates(env)
+            notes = RM.pack_gap_notes(env)
+            if case == "good":
+                assert gp in cands and notes == [], (case, cands, notes)
+            else:
+                assert gp not in cands, (case, cands)
+                assert notes and "not used" in notes[0], (case, notes)
+                if case in ("badjson", "list"):
+                    assert "FAILED" in notes[0], (case, notes)
+                else:
+                    assert "cut short" in notes[0], (case, notes)
+                logged = []
+                g, _fin = _flood()
+                mm, info = RM.build_mask(g, None, None, environ=env, log=logged.append)
+                assert mm is None and info is None and logged == notes, (case, logged)
+            assert sorted(os.listdir(pack)) == listing                  # nothing written
+        finally:
+            shutil.rmtree(d)

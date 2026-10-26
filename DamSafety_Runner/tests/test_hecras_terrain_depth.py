@@ -89,7 +89,7 @@ def hecras_ditch_cell_old_method_floods_the_whole_cell():
 @test
 def hecras_ditch_cell_terrain_depth_wets_only_the_ditch():
     t = _terrain()
-    out, info = hecras.terrain_depth(_fake(), *_grid_args(), t)
+    out, info = hecras.terrain_depth(_fake(), *_grid_args(), t, basis=hecras.DEPTH_BASIS_TERRAIN)
     assert info["depth_basis"] == hecras.DEPTH_BASIS_TERRAIN
     d = out["depth"]
     wet = np.isfinite(d)
@@ -99,7 +99,7 @@ def hecras_ditch_cell_terrain_depth_wets_only_the_ditch():
     assert np.allclose(d[t == DITCH_A], WSE_C - DITCH_A)
     assert np.allclose(d[t == DITCH_B], WSE_C - DITCH_B)
     # the high ground of the same cell is dry (the old method had it 5 ft deep)
-    old = info["old"]
+    old = info["depth_cell_min"]
     hi = (t == HIGH) & (old > 0)
     assert int(hi.sum()) == NP * NP - 2 * NP and not np.isfinite(d[hi]).any()
     assert info["no_terrain_cells"] == 0
@@ -108,7 +108,8 @@ def hecras_ditch_cell_terrain_depth_wets_only_the_ditch():
 @test
 def hecras_terrain_depth_wet_mask_and_arrival_follow_the_depth():
     t = _terrain()
-    out, _ = hecras.terrain_depth(_fake(), *_grid_args(), t, arrival_depth_ft=0.1, t0_hr=0.0)
+    out, _ = hecras.terrain_depth(_fake(), *_grid_args(), t, arrival_depth_ft=0.1, t0_hr=0.0,
+                                 basis=hecras.DEPTH_BASIS_TERRAIN)
     d, arr = out["depth"], out["arrival"]
     wet = np.isfinite(d)
     for k in ("wse", "velocity", "time_of_max"):
@@ -119,7 +120,8 @@ def hecras_terrain_depth_wet_mask_and_arrival_follow_the_depth():
     assert np.allclose(arr[t == DITCH_A], 0.1 / 5.0 * 2.0, atol=1e-9)
     assert np.allclose(arr[t == DITCH_B], 3.1 / 5.0 * 2.0, atol=1e-9)
     # t0 shifts it; arrival depth deeper than a pixel's max depth: no arrival there
-    out2, _ = hecras.terrain_depth(_fake(), *_grid_args(), t, arrival_depth_ft=2.5, t0_hr=1.0)
+    out2, _ = hecras.terrain_depth(_fake(), *_grid_args(), t, arrival_depth_ft=2.5, t0_hr=1.0,
+                                   basis=hecras.DEPTH_BASIS_TERRAIN)
     a2 = out2["arrival"]
     assert np.allclose(a2[t == DITCH_A], 2.5 / 5.0 * 2.0 - 1.0, atol=1e-9)
     assert not np.isfinite(a2[t == DITCH_B]).any()
@@ -135,7 +137,8 @@ def hecras_terrain_depth_arrival_between_output_steps_uses_time_of_max():
     ser[:, 4] = np.minimum(ser[:, 4], 93.05)
     L[k] = (ser, L[k][1])
     t = _terrain()
-    out, info = hecras.terrain_depth(_FakeH5(L, root), *_grid_args(), t, arrival_depth_ft=0.1)
+    out, info = hecras.terrain_depth(_FakeH5(L, root), *_grid_args(), t, arrival_depth_ft=0.1,
+                                     basis=hecras.DEPTH_BASIS_TERRAIN)
     d, arr = out["depth"], out["arrival"]
     assert np.array_equal(np.isfinite(arr), np.isfinite(d) & (d >= 0.1))
     assert np.allclose(arr[t == DITCH_A], 0.04, atol=1e-9)
@@ -173,7 +176,7 @@ def hecras_terrain_depth_falls_back_to_cell_minimum_without_terrain():
     t = _terrain()
     t[:NP, :NP] = np.nan                             # no terrain under a dry corner cell
     t[NP:2 * NP, NP:NP + 3] = np.nan                 # nor under part of the centre cell
-    out, info = hecras.terrain_depth(_fake(), *_grid_args(), t)
+    out, info = hecras.terrain_depth(_fake(), *_grid_args(), t, basis=hecras.DEPTH_BASIS_TERRAIN)
     assert info["no_terrain_cells"] == NP * NP + 3 * NP
     d = out["depth"]
     assert np.allclose(d[NP:2 * NP, NP:NP + 3], WSE_C - DITCH_A)
@@ -186,7 +189,7 @@ def hecras_engine_results_with_terrain_is_si_and_consistent():
     like = Grid(np.zeros((3 * NP, 3 * NP)), 0.0, 3 * CELL, DX, crs_wkt=WKT)
     t = _terrain()
     info = {}
-    a = hecras_engine.results(_fake(), like, terrain=t, info=info)
+    a = hecras_engine.results(_fake(), like, terrain=t, info=info, depth_basis="terrain")
     wet = np.isfinite(a["depth"])
     assert np.array_equal(wet, t < HIGH)
     assert np.allclose(a["depth"][t == DITCH_A], (WSE_C - DITCH_A) * FT)
@@ -194,8 +197,9 @@ def hecras_engine_results_with_terrain_is_si_and_consistent():
         assert np.array_equal(np.isfinite(a[k]), wet), k
     assert np.array_equal(np.isfinite(a["arrival"]), wet)
     assert info["depth_basis"] == hecras.DEPTH_BASIS_TERRAIN
-    assert int(np.isfinite(info["old_depth_m"]).sum()) == 9 * NP * NP
-    old = hecras_engine.results(_fake(), like)            # no terrain: the old basis
+    assert info["other_basis"] == hecras.DEPTH_BASIS_CELL_MIN
+    assert int(np.isfinite(info["other_depth_m"]).sum()) == 9 * NP * NP
+    old = hecras_engine.results(_fake(), like, depth_basis="terrain")   # no terrain: cell min
     assert int(np.isfinite(old["depth"]).sum()) == NP * NP
 
 
@@ -245,7 +249,7 @@ def hecras_reexport_from_a_synthetic_hdf_into_a_new_folder():
         patch(gdal_io, "GeoTiffWriter", lambda crs: npy_writer)
         patch(gdal_io, "linear_unit_m", lambda wkt: FT)
 
-        rep = hecras_engine.reexport_hecras_results(run)
+        rep = hecras_engine.reexport_hecras_results(run, depth_basis="terrain")
         out = os.path.dirname(rep["outputs"]["depth"])
         assert os.path.dirname(out) == os.path.join(run, "_hecras"), out
         assert os.path.basename(out).startswith("reexport_")
@@ -263,11 +267,12 @@ def hecras_reexport_from_a_synthetic_hdf_into_a_new_folder():
         assert json.load(open(os.path.join(out, hecras_engine.REEXPORT_JSON)))["areas_new"]
         # the same folder again: refused unless overwrite
         try:
-            hecras_engine.reexport_hecras_results(run, out_dir=out)
+            hecras_engine.reexport_hecras_results(run, out_dir=out, depth_basis="terrain")
             raise AssertionError("re-export overwrote without overwrite=True")
         except hecras_engine.HecRasEngineError as e:
             assert "overwrite" in str(e)
-        hecras_engine.reexport_hecras_results(run, out_dir=out, overwrite=True)
+        hecras_engine.reexport_hecras_results(run, out_dir=out, overwrite=True,
+                                              depth_basis="terrain")
     finally:
         for obj, name, val in reversed(saved):
             setattr(obj, name, val)

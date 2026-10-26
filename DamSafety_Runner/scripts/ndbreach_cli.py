@@ -1534,12 +1534,12 @@ def cmd_hecras_reexport(args):
             args.run_dir, out_dir=args.out or None, hdf=args.hdf or None,
             terrain=args.terrain or None, like=args.grid or None, t0_hr=args.t0_hr,
             arrival_depth_ft=args.arrival_depth_ft, terrain_z=args.terrain_z or None,
-            overwrite=args.overwrite, log=say)
-    except eng.HecRasEngineError as e:
+            overwrite=args.overwrite, log=say, depth_basis=args.depth_basis or None)
+    except (eng.HecRasEngineError, eng.hecras.HecRasError) as e:
         raise CliError(str(e))
-    for k in ("areas_old_cell_min", "areas_new"):
-        a = rep[k]
-        say("{:<19} wet {:,.0f} ac, >=0.1 ft {:,.0f} ac, >=1 ft {:,.0f} ac".format(
+    say("depth basis written: {}".format(rep["depth_basis"]))
+    for k, a in rep["areas_by_basis"].items():
+        say("{:<9} wet {:,.0f} ac, >=0.1 ft {:,.0f} ac, >=1 ft {:,.0f} ac".format(
             k, a["wet_ac"], a["ge_0p1ft_ac"], a["ge_1ft_ac"]))
     return 0
 
@@ -1827,7 +1827,8 @@ def build_parser():
                    "(--help lists them)")
     p.set_defaults(func=cmd_culvert_precheck)
     p = sub.add_parser("hecras-reexport", help="HEC-RAS rasters again from a finished run's "
-                       ".p01.hdf and terrain: depth = WSE minus the terrain (no model run)")
+                       ".p01.hdf: depth = WSE minus the cell minimum (default) or the "
+                       "terrain (no model run)")
     p.add_argument("run_dir", metavar="DAM_FOLDER",
                    help="the dam folder (with _hecras/hecras_stage.json and Depth (Max).tif)")
     p.add_argument("--out", default="", help="folder to write (default: a new "
@@ -1844,6 +1845,11 @@ def build_parser():
                    "(default 0.1 ft)")
     p.add_argument("--overwrite", action="store_true",
                    help="replace rasters already in --out")
+    p.add_argument("--depth-basis", default="", choices=["", "cell_min", "terrain"],
+                   help="depth = max WSE minus the cell's minimum terrain elevation "
+                   "('cell_min', the default from 3.10.84) or minus the terrain of each grid "
+                   "cell ('terrain', the 3.10.79 default); default NDBREACH_HECRAS_DEPTH_BASIS, "
+                   "else cell_min")
     p.set_defaults(func=cmd_hecras_reexport)
     return ap
 

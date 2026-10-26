@@ -878,7 +878,7 @@ def version_checks_at_start_up_show_in_the_message_bar_and_log():
         assert [k for k, _t in msgs if k != "info"] == ["warning"] and bar[0][3] == 15
         bar.clear()
         # not installed / current: nothing in the message bar
-        for v in ({}, {"ndhazard": "2.11.0", "ndscreen": "0.9.0"}):
+        for v in ({}, {"ndhazard": "2.18.63", "ndscreen": "0.9.0"}):
             msgs = p.check_versions(v)
             assert all(k == "info" for k, _t in msgs) and not bar, (v, msgs)
         # initGui schedules the check (no QTimer in the stub: it runs at once) and loads

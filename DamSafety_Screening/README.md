@@ -399,6 +399,8 @@ Nothing downloads when QGIS or the window opens.
 Tool 1 defaults match the ND DWR 'Dams by Hazard Class' export (structure_, dam_name,
 max_dam_he, normal_vol, max_pool_v, normal_are, hazard_cla, status, national_i, dam_length;
 feet / acre-feet / acres; 0 = not recorded). Default status filter: Intact.
+The surface area field (inv_area_m2) is the normal-pool area: DWR normal_area / normal_are, NID
+SURFACE_AREA (0.17.49: the DWR max_pool_area no longer lands there; it is inv_maxa_m2).
 DWR dam lines (`dams_linear_features`, EPSG:2266) join to the dams by structure ID
 (`structure_id` = DWR `structure_`; dam_id `DWR-5289` uses structure_id 5289).
 
@@ -479,7 +481,7 @@ the dam folder and reads 'Hazard Classification (ND 5.2).json'. What is sent:
 | DAM_POINT | the tool-4 breach point (on the DWR dam line), joined by dam_id, in EPSG:5070 |
 | HEIGHT_FT | height_m / 0.3048 (else tool-5 td_hb_m, noted) |
 | STORAGE_ACFT | td_vw_m3, else cal_total_m3, else est_total_m3, else inv_max_m3; / 1233.48 |
-| AREA_AC | only with a tool-3 curve folder: mean area over the top 0.3 m of the curve below the crest (normal-pool areas are not passed) |
+| AREA_AC | the tool-3 curve (with a curve folder): mean area over the top 0.3 m of the curve below the crest; when that curve is too shallow, missing or gives no area (0.17.46), or no curve folder is given (0.17.49), the DWR inventory's maximum-pool area (inv_maxa_m2, from max_pool_area), with a warning; recorded as surface_area_source (rn_area_src). Normal-pool areas (inv_area_m2) are not passed |
 | TOP_FT | never passed: DWR elevations are a local datum; the runner takes the highest DEM point within 30 m |
 | DEM, DAMS_FOLDER, CELL | the tool's inputs (CELL only when given) |
 | METHOD, USER_CSV | only for the screening hydrograph: tool-5 td_csv converted to hr / cfs in `<Dams folder>/<dam>/inputs/breach_hydrograph.csv`; otherwise the runner's default ND method |

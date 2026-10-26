@@ -24,9 +24,13 @@ OUT_FIELDS = [("dam_id", FT_STRING), ("name", FT_STRING),
 # build their layers on OUT_FIELDS and write their attributes by position)
 FLAG_FIELDS = [("struct_cls", FT_STRING), ("flag_note", FT_STRING)]
 # 0.17.46: the inventory's maximum-pool (top of dam) surface area, m2 (DWR max_pool_area; the NID
-# has none). Last, after FLAG_FIELDS, for the same reason. Tool 7b falls back to it when the
+# has none). After FLAG_FIELDS, for the same reason. Tool 7b falls back to it when the
 # stage-storage curve is too shallow to give the surface area at the top of dam.
 MAXAREA_FIELDS = [("inv_maxa_m2", FT_DOUBLE)]
+# 0.17.47: the inventory normal-pool and max-pool elevations (m, in the record's own datum; DWR
+# normal_elev / max_pool_elev), last, after MAXAREA_FIELDS. Tool 3 places the maximum storage at
+# the max pool = (max-pool - normal-pool elevation) above the lidar water surface.
+POOL_FIELDS = [("inv_norm_elev_m", FT_DOUBLE), ("inv_max_elev_m", FT_DOUBLE)]
 
 # field defaults: DWR shapefile names, and the NID GeoPackage names
 FIELD_DEFAULTS = {f"DWR_{k}": v for k, v in inv.DWR_DEFAULTS.items()}
@@ -37,12 +41,14 @@ FIELD_KEYS = [("ID", "ID field", FIELD_ANY),
               ("H", "dam height", FIELD_NUMERIC),
               ("NS", "normal storage", FIELD_NUMERIC),
               ("MS", "max storage", FIELD_NUMERIC),
-              ("SA", "surface area", FIELD_NUMERIC),
+              ("SA", "normal pool surface area", FIELD_NUMERIC),
               ("HZ", "hazard class", FIELD_ANY),
               ("STATUS", "status (e.g. Intact / Breached)", FIELD_ANY),
               ("NIDREF", "NID ID (links a DWR dam to the NID layer)", FIELD_ANY),
               ("LEN", "dam length", FIELD_NUMERIC),
-              ("MA", "max pool surface area (top of dam; tool 7b's fallback area)", FIELD_NUMERIC)]
+              ("MA", "max pool surface area (top of dam; tool 7b's fallback area)", FIELD_NUMERIC),
+              ("NE", "normal pool elevation", FIELD_NUMERIC),
+              ("ME", "max pool elevation", FIELD_NUMERIC)]
 
 
 class PrepareDams(QgsProcessingAlgorithm):
@@ -82,7 +88,13 @@ class PrepareDams(QgsProcessingAlgorithm):
                 "inv_maxa_m2 (0.17.46): the DWR maximum-pool surface area (max_pool_area, acres, "
                 "recorded at the top of dam), in m2; empty when the inventory has none (0) and for NID "
                 "dams. Tool 7b sends it as the Runner's surface area when the tool-3 stage-storage "
-                "curve is too shallow to give one.")
+                "curve is too shallow to give one, or when no curve folder is given (0.17.49).\n"
+                "inv_norm_elev_m / inv_max_elev_m (0.17.47): the normal-pool and max-pool "
+                "elevations (DWR normal_elev / max_pool_elev; the NID has none). Tool 3 places the "
+                "maximum storage at the max pool, their difference above the lidar water surface.\n"
+                "inv_area_m2: the NORMAL-pool surface area (DWR normal_area / normal_are, NID "
+                "SURFACE_AREA). 0.17.49: on the suite GeoPackage it held max_pool_area before; a max-pool "
+                "field picked for it is used but warned in the log.")
 
     def initAlgorithm(self, config=None):
         for src, label in ((self.DWR, "ND DWR dams"), (self.NID, "NID dams")):
@@ -130,8 +142,14 @@ class PrepareDams(QgsProcessingAlgorithm):
         for k, _l, _t in FIELD_KEYS:
             if not fld.get(k):
                 fld[k] = found.get(k)
-        if fld.get("MA") and fld["MA"] not in names:   # optional field: never fail on it
-            fld["MA"] = found.get("MA")
+        for k in ("MA", "NE", "ME"):   # optional fields (0.17.46 / 0.17.47): never fail on them
+            if fld.get(k) and fld[k] not in names:
+                fld[k] = found.get(k)
+        if inv.is_max_pool_area(fld.get("SA")):          # 0.17.49: kept, but said in the log
+            self.__dict__.setdefault("_area_warn", []).append(
+                "{}: the surface area field is {}, the MAXIMUM-pool area; inv_area_m2 is the "
+                "normal-pool area (DWR normal_area / normal_are) - pick that field unless you "
+                "mean it".format(tag, fld["SA"]))
         wgs = QgsCoordinateReferenceSystem("EPSG:4326")
         tr = QgsCoordinateTransform(src.sourceCrs(), wgs, QgsProject.instance())
         out = []
@@ -160,13 +178,16 @@ class PrepareDams(QgsProcessingAlgorithm):
         keep = inv.parse_status_list(self.parameterAsString(params, self.KEEP, context))
         min_h = self.parameterAsDouble(params, self.MINH, context)
         min_v = self.parameterAsDouble(params, self.MINV, context)
+        self._area_warn = []
         dwr = self._read(params, context, self.DWR, "DWR")
         nid = self._read(params, context, self.NID, "NID")
         if not dwr and not nid:
             raise QgsProcessingException("Provide a DWR layer, an NID layer, or both.")
+        for msg in self._area_warn:
+            (getattr(feedback, "pushWarning", None) or feedback.pushInfo)(msg)
 
         fields = QgsFields()
-        for n, t in OUT_FIELDS + FLAG_FIELDS + MAXAREA_FIELDS:
+        for n, t in OUT_FIELDS + FLAG_FIELDS + MAXAREA_FIELDS + POOL_FIELDS:
             fields.append(QgsField(n, t))
         wgs = QgsCoordinateReferenceSystem("EPSG:4326")
         sink, dest = self.parameterAsSink(params, self.OUT, context, fields,
@@ -224,7 +245,7 @@ class PrepareDams(QgsProcessingAlgorithm):
             src, nid_id = "DWR", a["nidref"]
             if i in fill:
                 n = fill[i]; src = "DWR+NID"; nid_id = nid_id or n["id"]
-                for k in ("h", "ns", "ms", "sa", "len"):
+                for k in ("h", "ns", "ms", "sa", "len", "ne", "me"):
                     if a[k] is None: a[k] = n[k]
                 if not a["name"]: a["name"] = n["name"]
                 if not a["hz"]: a["hz"] = n["hz"]
@@ -256,7 +277,8 @@ class PrepareDams(QgsProcessingAlgorithm):
             o.setAttributes([a["id"], a["name"], src, nid_id, a["h"], a["ns"], a["ms"], a["sa"],
                              a["hz"], a["status"], a["len"], "YES" if sh else "",
                              flag_e["structure_class"] if flag_e else None,
-                             SF.note(flag_e) if flag_e else None, a.get("ma")])
+                             SF.note(flag_e) if flag_e else None, a.get("ma"),
+                             a.get("ne"), a.get("me")])
             sink.addFeature(o)
         feedback.pushInfo(
             f"{len(recs)} dams written | dropped by status: {n_status}, by size: {n_size} | "
