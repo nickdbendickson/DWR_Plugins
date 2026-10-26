@@ -1,7 +1,8 @@
 """Tool 7b (0.17.46): (1) when the tool-3 stage-storage curve is too shallow (or missing) to give
 the surface area at the top of dam, the DWR inventory's maximum-pool area (max_pool_area, acres)
 is sent as the Runner's AREA_AC, and where the area came from is recorded (rn_area_src, the
-dam.json note, the log, the run manifest: surface_area_source); (2) an optional water-body mask
+dam.json note, the log, the run manifest: surface_area_source) - 0.17.49: also when no curve
+folder is given; (2) an optional water-body mask
 for the Runner's report (rundam WATER_MASK), off by default.
 
 Run: python3 tests/test_7b_area_fallback_watermask.py
@@ -72,8 +73,17 @@ for attrs in ({}, {"inv_maxa_m2": None}, {"inv_maxa_m2": 0}, {"max_pool_area": 0
     assert a is None and src == ho.AREA_SRC_NONE, (attrs, a, src)
     assert note.startswith("no surface area sent: ") and ho.NO_INV_MAXA in note, note
     assert "depth squared" in note and note.count("depth squared") == 1, note
-# no curve folder at all: no area, as before
-assert ho.surface_area_choice(None, CREST, H, {"inv_maxa_m2": 5 * AC}, curves_given=False) == (None, "none", "")
+# no curve folder at all (0.17.49): the inventory's maximum-pool area, with a note
+a, src, note = ho.surface_area_choice(None, CREST, H, {"inv_maxa_m2": 5 * AC}, curves_given=False)
+assert src == ho.AREA_SRC_INVENTORY and abs(a - 5 * AC) < 1e-6, (a, src)
+assert note == ("surface area 5.0 ac from the inventory's maximum-pool area (inv_maxa_m2) because "
+                + ho.NO_CURVES), note
+# ... the curve is not even looked at (a usable curve path is ignored without a folder)
+assert ho.surface_area_choice(deep, CREST, H, {"inv_maxa_m2": 5 * AC}, curves_given=False)[1] == "inventory_max_pool_area"
+# no curve folder and no inventory value: no area, as before, now with a warning note
+a, src, note = ho.surface_area_choice(None, CREST, H, {"inv_maxa_m2": 0}, curves_given=False)
+assert a is None and src == "none" and note.startswith("no surface area sent: " + ho.NO_CURVES), note
+assert ho.NO_INV_MAXA in note and note.count("depth squared") == 1, note
 assert ho.has_inventory_area_field(["dam_id", "INV_MAXA_M2"]) and not ho.has_inventory_area_field(["dam_id"])
 print("OK (surface_area_choice: normal curve unchanged; shallow -> inventory; none -> None + note)")
 
@@ -99,10 +109,12 @@ print("OK (rundam_params note, dam.json surface_area_source note)")
 names = ["structure_", "max_pool_area", "normal_area"]
 fld = inv.match_fields(names, inv.DWR_ALIASES)
 assert fld["MA"] == "max_pool_area", fld
+assert fld["SA"] == "normal_area", fld          # 0.17.49: max_pool_area no longer lands in SA
 assert inv.match_fields(["max_pool_a"], inv.DWR_ALIASES)["MA"] == "max_pool_a"
 row = {"structure_": "42", "max_pool_area": 10.0, "normal_area": 4.0}
 s = inv.standardize(lambda n: row[n], fld)
 assert abs(s["ma"] - 10 * AC) < 1e-6, s
+assert abs(s["sa"] - 4 * AC) < 1e-6, s
 row["max_pool_area"] = 0
 assert inv.standardize(lambda n: row[n], fld)["ma"] is None
 assert inv.standardize(lambda n: row[n], {"ID": "structure_"})["ma"] is None     # no field: None
@@ -128,7 +140,7 @@ p_, n_, err = ho.water_mask_params(ho.WATER_MASK_LAYER, None)
 assert p_ == {} and err and "missing" in err
 assert "temporary" in ho.water_mask_params(0, None, True)[2]
 assert "WATER_MASK" in ho.RUNDAM_KEYS and len(ho.WATER_MASK_LABELS) == 3
-for lab in ho.WATER_MASK_LABELS + [ho.WATER_MASK_OLD_RUNNER, ho.NO_INV_MAXA, ho.OLD_TOOL1]:
+for lab in ho.WATER_MASK_LABELS + [ho.WATER_MASK_OLD_RUNNER, ho.NO_INV_MAXA, ho.OLD_TOOL1, ho.NO_CURVES]:
     assert "..." not in lab, lab
 print("OK (water-mask mapping)")
 
@@ -242,12 +254,39 @@ for d_, want in (("DWR-1", "stage_storage"), ("DWR-2", "inventory_max_pool_area"
     assert "surface_area_source = " + want in blob, (d_, blob[:500])
 print("OK (tool 7b: curve / inventory / none, log, manifest extra, dam.json)")
 
+# 0.17.49: no curve folder - the inventory area for dams that have one, none (warned) otherwise
+sent.clear()
+fb = QgsProcessingFeedback()
+alg = RunnerHandoff()
+nb = dict(base)
+nb.pop("CURVES")
+DF2 = os.path.join(W, "Dams_nocurves")
+alg.run_mock(dict(nb, DAMS_FOLDER=DF2), ctx, fb)
+by = {p["DAM_ID"]: p for p in sent}
+assert by["DWR-1"]["AREA_AC"] == 99.0 and by["DWR-2"]["AREA_AC"] == 12.5, by
+assert "AREA_AC" not in by["DWR-3"]
+log = "\n".join(fb.log)
+assert "DWR-1: surface area 99.0 ac from the inventory's maximum-pool area (inv_maxa_m2) because " + ho.NO_CURVES in log, log
+assert "DWR-3: no surface area sent: " + ho.NO_CURVES in log, log
+assert "surface area source (surface_area_source): inventory_max_pool_area 2, none 1" in log, log
+assert alg.manifest_extra["surface_area_source"] == {"DWR-1": "inventory_max_pool_area",
+                                                     "DWR-2": "inventory_max_pool_area", "DWR-3": "none"}
+assert not any(ho.OLD_TOOL1 in m for m in fb.log)
+js = json.dumps(json.load(open(os.path.join(DF2, "DWR-1", "dam.json"))))
+assert "surface_area_source = inventory_max_pool_area" in js and "no curve folder was given" in js, js[:600]
+print("OK (tool 7b, no curve folder: inventory / none, log, manifest extra, dam.json)")
+
 # an old tool-1 layer (no inv_maxa_m2): warned once
 sent.clear()
 old = make_layer(FLDS[:5], [(pt(0, 0), {k: v for k, v in rows[1].items() if k != "inv_maxa_m2"})], "point", "d")
 fb = QgsProcessingFeedback()
 RunnerHandoff().run_mock(dict(base, DAMS=ctx.add(old)), ctx, fb)
 assert "AREA_AC" not in sent[0] and any(ho.OLD_TOOL1 in m for m in fb.log), fb.log
+# ... also with no curve folder (0.17.49)
+sent.clear()
+fb = QgsProcessingFeedback()
+RunnerHandoff().run_mock(dict(nb, DAMS=ctx.add(old)), ctx, fb)
+assert "AREA_AC" not in sent[0] and any(ho.OLD_TOOL1 in m and "no curve folder" in m for m in fb.log), fb.log
 
 # water mask: off / a layer / an old Runner / a layer with no file
 one = dict(base, DAMS=ctx.add(make_layer(FLDS, [(pt(0, 0), rows[0])], "point", "d1")))

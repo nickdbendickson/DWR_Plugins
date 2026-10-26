@@ -64,7 +64,7 @@ Compare like with like. Use the fixed-depth areas (`flooded_acres_ge_0_1ft`, `_g
 Several windows can share one settings file safely. A window that opens without changing anything doesn't rewrite the file. If a save reports that the file can't be read, fix or restore it from `<name>.bak` (or use "Save as" to replace it on purpose) instead of deleting it. A leftover `<name>.lock` from a crashed QGIS clears itself after 30 s.
 
 ## Shallow-basin storage guard (#13)
-If tool 3 warns that a basin is shallow (bed-to-crest depth under 0.5 × dam height), the mapped water body isn't the reservoir, and the inventory curve (storage ∝ depth²) is used instead. The hand-off notes (`rn_inputs`) record the reason when AREA_AC is withheld.
+If tool 3 warns that a basin is shallow (bed-to-crest depth under 0.5 × dam height), the mapped water body isn't the reservoir, and the inventory curve (storage ∝ depth²) is used instead. For such a dam tool 7b sends the DWR inventory's maximum-pool area (`inv_maxa_m2`, DWR `max_pool_area`) as the Runner's AREA_AC when the inventory has one (Screening 0.17.46; also when no curve folder is given, 0.17.49), else it withholds AREA_AC. The hand-off notes (`rn_inputs`, `rn_area_src`) record which area was sent, or why none was.
 
 ## How-to: force undetermined dams through tool 7b
 In tool 7b, the "Dams to send" (`WHICH`) parameter has these options:

@@ -366,24 +366,29 @@ def has_inventory_area_field(names):
     return any(n in low for n, _m in INV_MAXA_FIELDS)
 
 
-def surface_area_choice(curve_csv, crest_m, height_m, attrs, curves_given=True):
-    """(area m2 or None, source, note) for the Runner's AREA_AC (0.17.46).
+NO_CURVES = "no stage-storage curve folder (tool 3) was given"
 
-    1. the tool-3 stage-storage curve near the top of dam (area_for_runner);
-    2. when a curve folder was given but this dam's curve cannot give the area (too shallow,
-       missing, unusable, or 0): the inventory's maximum-pool area (inventory_max_area_m2);
-    3. else None (the Runner assumes storage varies with depth squared).
-    No curve folder at all = no area, as before 0.17.46 (source "none")."""
-    if not curves_given:
-        return None, AREA_SRC_NONE, ""
-    area, why = area_for_runner(curve_csv, crest_m, height_m)
-    if area is not None and area > 0:
-        return area, AREA_SRC_CURVE, ""
-    if not why:
-        why = ("no stage-storage curve for this dam" if not curve_csv or not os.path.exists(curve_csv)
-               else "the stage-storage curve gives no usable area at the top of dam")
+
+def surface_area_choice(curve_csv, crest_m, height_m, attrs, curves_given=True):
+    """(area m2 or None, source, note) for the Runner's AREA_AC (0.17.46; 0.17.49: also with no
+    curve folder).
+
+    1. the tool-3 stage-storage curve near the top of dam (area_for_runner), when a curve folder
+       was given;
+    2. when the dam's curve cannot give the area (too shallow, missing, unusable, or 0) or no
+       curve folder was given at all: the inventory's maximum-pool area (inventory_max_area_m2);
+    3. else None (the Runner assumes storage varies with depth squared), with a note."""
+    if curves_given:
+        area, why = area_for_runner(curve_csv, crest_m, height_m)
+        if area is not None and area > 0:
+            return area, AREA_SRC_CURVE, ""
+        if not why:
+            why = ("no stage-storage curve for this dam" if not curve_csv or not os.path.exists(curve_csv)
+                   else "the stage-storage curve gives no usable area at the top of dam")
+        else:
+            why = why.replace("no surface area sent: ", "").split(" (the Runner assumes")[0]
     else:
-        why = why.replace("no surface area sent: ", "").split(" (the Runner assumes")[0]
+        why = NO_CURVES
     inv_m2, field = inventory_max_area_m2(attrs)
     if inv_m2 is not None:
         return inv_m2, AREA_SRC_INVENTORY, (
@@ -469,7 +474,7 @@ def rundam_params(attrs, point_xy, crs_authid, dem, dams_folder, cell_m=None, us
         p["AREA_AC"] = round(area_top_m2 / ACRE_M2, 3)
         if area_source == AREA_SRC_INVENTORY:
             notes.append("surface area {:,.1f} ac at the top of dam from the inventory's maximum-pool "
-                         "area (DWR max_pool_area; the stage-storage curve could not give it)".format(
+                         "area (DWR max_pool_area; no usable stage-storage curve)".format(
                              p["AREA_AC"]))
         else:
             notes.append("surface area {:,.1f} ac near the top of dam from the tool-3 curve".format(

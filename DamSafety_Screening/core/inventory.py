@@ -14,7 +14,10 @@ DWR_ALIASES = {
     "H": ("max_dam_height", "max_dam_he", "dam_height"),
     "NS": ("normal_vol", "normal_storage"),
     "MS": ("max_pool_vol", "max_pool_v", "max_storage"),
-    "SA": ("normal_area", "normal_are", "max_pool_area", "surface_area"),
+    # normal-pool surface area only (0.17.49): max_pool_area is the maximum-pool area ("MA" below).
+    # It was listed here too and, with the last-match rule, won over normal_area on the suite
+    # GeoPackage, so inv_area_m2 held the max-pool area.
+    "SA": ("normal_area", "normal_are", "surface_area"),
     "HZ": ("hazard_class", "hazard_cla", "hazard"),
     "STATUS": ("status",),
     "NIDREF": ("national_id", "national_i", "nid_id"),
@@ -91,10 +94,32 @@ def feature_in_county(feat, county, point=None):
     return west <= x <= east and south <= y <= north
 
 
+# 0.17.49: roles matched by priority - the FIRST alias the layer has wins (exact name, any case).
+# The other roles keep the old rule (the last alias the layer has wins) so their chain-run values
+# do not change (NE / ME are new in 0.17.47 and need no such protection); on the NID GeoPackage
+# that rule picks federal_id / nid_height / nid_storage / condition_assessment over the tool-1
+# defaults NIDID / DAM_HEIGHT / MAX_STORAGE / OPERATIONAL_STATUS (left for a separate decision).
+PRIORITY_ROLES = ("SA", "MA")
+# names that are the MAXIMUM-pool area: never the normal-pool area (SA)
+MAX_POOL_AREA_NAMES = ("max_pool_area", "max_pool_a")
+
+
 def match_fields(names, aliases):
-    """{role: actual field name} for the names this layer has."""
+    """{role: actual field name} for the names this layer has (names compared without case).
+
+    PRIORITY_ROLES: the first alias in the list the layer has; other roles: the last one."""
     have = {str(n).lower(): n for n in names}
-    return {role: have[a] for role, opts in aliases.items() for a in opts if a in have}
+    out = {}
+    for role, opts in aliases.items():
+        hits = [have[a] for a in opts if a in have]
+        if hits:
+            out[role] = hits[0] if role in PRIORITY_ROLES else hits[-1]
+    return out
+
+
+def is_max_pool_area(name):
+    """True for a field name that holds the maximum-pool area (not the normal-pool area)."""
+    return str(name or "").strip().lower() in MAX_POOL_AREA_NAMES
 
 DWR_DEFAULTS = {"ID": "structure_", "NAME": "dam_name", "H": "max_dam_he", "NS": "normal_vol",
                 "MS": "max_pool_v", "SA": "normal_are", "HZ": "hazard_cla",

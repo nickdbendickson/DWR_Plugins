@@ -13,8 +13,8 @@ Written by
 
 surface_area_ac is the area at the top of dam (what the Runner reads for AREA_AC): only the
 area tool 7b sends - from the tool-3 stage-storage curve, or (0.17.46) when that curve is too
-shallow or missing, the DWR inventory's maximum-pool area (max_pool_area, recorded at the top of
-dam). Its source note says which (surface_area_source = stage_storage / inventory_max_pool_area).
+shallow or missing (0.17.49: or no curve folder was given), the DWR inventory's maximum-pool area
+(max_pool_area, recorded at the top of dam). Its source note says which (surface_area_source = stage_storage / inventory_max_pool_area).
 The inventory's normal-pool area
 (inv_area_m2: DWR normal_area / NID SURFACE_AREA) is NOT written there, since the Runner would
 take it for the top-of-dam area and its storage-area exponent; it is quoted in the null's note.
@@ -278,7 +278,8 @@ AREA_SOURCE_NOTES = {
                      "top of dam",
     "inventory_max_pool_area": "surface_area_source = inventory_max_pool_area: the DWR inventory's "
                                "maximum-pool area (max_pool_area, acres; recorded at the top of dam), "
-                               "because the stage-storage curve could not give the area"}
+                               "because the stage-storage curve could not give the area or no curve "
+                               "folder was given"}
 
 
 def surface_area_source(rundam_notes):
