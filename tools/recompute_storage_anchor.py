@@ -172,11 +172,19 @@ def recompute(work, wb, dwr_uri, dam_id, row, search_m=500 * FT, shape=1.0, extr
     new_r, _s2, info_r = S.anchor_inventory_storage(res.curve, res.below_pool_m3, res.pool_elev,
                                                     r_norm, r_max, pick_r["kind"], ne_m, me_m,
                                                     res.crest_elev)
-    e_max = info_r["anchor_m"]
+    e_anchor = info_r["anchor_m"]      # None: no inventory storage placed (FILL-EXCEEDS-MAX, DEM)
     leak = [n for n in res.notes if "spill" in n]
     levels = {"normal pool (DEM water surface)": res.pool_elev}
-    if e_max is not None:
-        levels["max pool (pool + inventory rise)"] = e_max
+    if e_anchor is not None:
+        # where the DWR record's storage sits: the max pool, the crest when the max pool is above
+        # it, else (fallback, Normal storage) what stor_anchor says
+        if any(f.startswith("MAXPOOL-ABOVE-CREST") for f in info_r["flags"]):
+            lab = "crest (max pool above it)"
+        elif info_r["anchor"] == "maximum storage at the max pool":
+            lab = "max pool (pool + inventory rise)"
+        else:
+            lab = "anchor: " + info_r["anchor"]
+        levels[lab] = e_anchor
     sp = None
     for n in res.notes:
         mm = re.search(r"spill level ([0-9.]+) ft", n)

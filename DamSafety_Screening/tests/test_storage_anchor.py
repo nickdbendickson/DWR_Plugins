@@ -7,9 +7,11 @@ at 1870 ft. DWR-3034 had the same pattern (97.5 vs max_pool_vol 71.6). Now the m
 the max pool and only the DEM fill above the max pool is added on top of it.
 
 Part 1: core/storage.anchor_inventory_storage on a tiny synthetic curve shaped like 2865 (also:
-        a max pool above the crest, the fallback with a normal above the maximum, a DEM fill
-        above the maximum and tool 5's sunny day on it, a max pool at the normal pool).
-Part 1b: tool 7b's stage-storage area (core/handoff.surface_area_choice) on an anchored curve.
+        a normal within 0.5 % of the maximum, a max pool above the crest (with a DEM fill above
+        the maximum too), the fallback with a normal above the maximum, a DEM fill above the
+        maximum and tool 5's sunny day on it, a max pool at the normal pool or 0.01 ft above).
+Part 1b: tool 7b's stage-storage area (core/handoff.surface_area_choice) on an anchored curve,
+        a MAXPOOL-ABOVE-CREST curve and a fallback curve.
 Part 2: core/inventory reads the DWR pool elevations (ft -> m; 0 = not recorded).
 Part 3: tool 3 end to end through the mock on the self-test valley with the elevations set, and
         tool 1's output values read by field name.
@@ -66,6 +68,15 @@ assert any(f.startswith("NORMAL-EQUALS-MAX") for f in info["flags"]), info["flag
 assert any(f.startswith("NORMAL-NOT-BELOW-MAX") for f in info["flags"]), info["flags"]
 assert all(b[1] >= a[1] for a, b in zip(cur, cur[1:]))                          # never falls with stage
 assert any(near(e, E_MAX, 1e-6) for e, _v in cur)                               # the anchor is a curve point
+# a normal within ANCHOR_SAME of the maximum but more than 1 m3 below it is NORMAL-EQUALS-MAX too
+# and, as in the fallback, not used at the pool: the maximum minus the DEM fill to the max pool
+assert 0.997 * MAX < MAX - 1.0
+cur, scale, info = S.anchor_inventory_storage(CURVE, BELOW, POOL, 0.997 * MAX, MAX, "maximum", NE, ME, TOP)
+assert near(at(cur, POOL), MAX - F_MAX) and near(at(cur, E_MAX), MAX), (at(cur, POOL), MAX - F_MAX)
+assert any(f.startswith("NORMAL-EQUALS-MAX") for f in info["flags"]), info["flags"]
+assert not any(f.startswith("NORMAL-NOT-BELOW-MAX") for f in info["flags"]), info["flags"]    # it is below
+assert any("normal storage not used at the normal pool" in n for n in info["notes"]), info["notes"]
+assert near(scale, (MAX - F_MAX) / BELOW, 1e-6)
 
 # the DWR record's own values: normal 141 at the pool, maximum 167 at the max pool
 cur, scale, info = S.anchor_inventory_storage(CURVE, BELOW, POOL, NORM, MAX, "maximum", NE, ME, TOP)
@@ -118,7 +129,7 @@ assert any(f.startswith("MAXPOOL-ELEV-BAD") for f in info["flags"]), info
 # MAXPOOL-ELEV-BAD and the fallback of before 0.17.47
 want, _x, _y = S.calibrate_below_pool(CURVE, BELOW, NORM)
 want, _t = S.ensure_top_of_dam(want, MAX, TOP)
-for me in (NE, NE + 0.005 * FT):
+for me in (NE, NE + 0.005 * FT, NE + 0.01 * FT):        # a rise of exactly 0.01 ft too (rounding)
     cur, _s, info = S.anchor_inventory_storage(CURVE, BELOW, POOL, NORM, MAX, "maximum", NE, me, TOP)
     assert [round(v, 3) for _e, v in cur] == [round(v, 3) for _e, v in want], (me, cur[:2])
     assert any(f.startswith("MAXPOOL-ELEV-BAD") and "FALLBACK" in f for f in info["flags"]), info["flags"]
@@ -152,6 +163,23 @@ for nrm in (NORM, None, MX2):                   # the record's normal, none, the
     assert all(b[1] >= a[1] for a, b in zip(cur, cur[1:]))
 cur, _s, info = S.anchor_inventory_storage(CURVE, BELOW, POOL, NORM, MX2, "maximum", NE, ME_HI, TOP)
 assert near(cur[0][1], NORM) and NORM < at(cur, POOL + 5 * FT) < MX2       # the fill scaled to join them
+assert not any("less than the normal storage" in f for f in info["flags"]), info["flags"]
+# ... a maximum less than the normal plus the DEM fill to the crest: the crest still gets the
+# maximum (the inventory difference replaces the DEM fill), and the flag says so
+MX3 = 250 * AF
+assert NORM + fill(TOP) > MX3 + 1.0
+cur, _s, info = S.anchor_inventory_storage(CURVE, BELOW, POOL, NORM, MX3, "maximum", NE, ME_HI, TOP)
+assert near(cur[-1][1], MX3) and near(at(cur, TOP), MX3) and near(cur[0][1], NORM), cur[-2:]
+assert any(f.startswith("MAXPOOL-ABOVE-CREST") and "placed at the crest, less than the normal storage plus "
+           "the DEM fill to the crest ({:.0f} m3)".format(NORM + fill(TOP)) in f for f in info["flags"]), info["flags"]
+# ... no normal storage and a DEM fill to the crest larger than the maximum: FILL-EXCEEDS-MAX keeps
+# the DEM curve, so the storage at the crest is above the maximum; no note says the maximum is there
+cur, _s, info = S.anchor_inventory_storage(CURVE, BELOW, POOL, None, fill(TOP) / 2, "maximum", NE, ME_HI, TOP)
+assert [round(v, 3) for _e, v in cur] == [round(v, 3) for _e, v in CURVE] and cur[-1][1] > fill(TOP) / 2 + 1.0
+txt = "; ".join(info["flags"] + info["notes"])
+assert "FILL-EXCEEDS-MAX" in txt and "MAXPOOL-ABOVE-CREST" in txt and "placed at the crest" not in txt, txt
+assert "storage at the crest {:.0f} m3, above the maximum".format(CURVE[-1][1]) in txt, txt
+assert info["anchor_m"] is None
 # a curve short of the given crest, the max pool above the crest: the maximum at the crest
 cur, _s, info = S.anchor_inventory_storage(short, BELOW, POOL, NORM, MX2, "maximum", NE, ME_HI, TOP)
 assert near(cur[-1][0], TOP, 1e-9) and near(cur[-1][1], MX2) and near(at(cur, TOP), MX2)
@@ -201,6 +229,13 @@ def area_of(crv, tag):
 a_new, a_old = area_of(new, "new"), area_of(old, "old")
 assert abs(a_new - dem_area) <= 0.02 * dem_area, (a_new / ho.ACRE_M2, dem_area / ho.ACRE_M2)
 assert a_old > 3.0 * dem_area, (a_old / ho.ACRE_M2, dem_area / ho.ACRE_M2)     # the old, inflated area
+# MAXPOOL-ABOVE-CREST: the DEM area scaled like the fill ((maximum - normal) / DEM fill to the crest)
+hi, _s, _i = S.anchor_inventory_storage(CURVE, BELOW, POOL, NA, MX2, "maximum", NE, ME_HI, TOP)
+a_hi, want_hi = area_of(hi, "hi"), dem_area * (MX2 - NA) / fill(TOP)
+assert abs(a_hi - want_hi) <= 0.02 * want_hi, (a_hi / ho.ACRE_M2, want_hi / ho.ACRE_M2)
+# fallback (no pool elevations): the raised last point, so the area of 0.17.46
+fb, _s, _i = S.anchor_inventory_storage(CURVE, BELOW, POOL, NA, MA_, "maximum", None, None, TOP)
+assert abs(area_of(fb, "fb") - a_old) <= 1e-6 * a_old
 print("7b area at the top of dam: anchored {:.1f} ac, old {:.1f} ac, DEM {:.1f} ac".format(
     a_new / ho.ACRE_M2, a_old / ho.ACRE_M2, dem_area / ho.ACRE_M2))
 
