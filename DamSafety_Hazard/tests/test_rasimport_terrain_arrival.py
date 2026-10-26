@@ -7,6 +7,8 @@
   * without one, the Runner's terrain-based rasters of the plan (a re-export, or the dam
     folder's rasters with hecras_stage.json depth_basis 'terrain') are used;
   * else depth from the cell minimum, with CELL_MIN_WARNING;
+  * 2.18.63: the newest re-export of the plan's current results decides (a newer cell_min
+    re-export, or a model run since, means an older terrain re-export is not used);
   * the basis (terrain / runner_reexport / cell_min) is in the result, depth_basis.json and
     the cache manifest.
 A 3-cell synthetic plan through a stand-in HDF reader (no h5py, no HEC-RAS); the middle cell
@@ -258,6 +260,90 @@ def test_runner_reexport_fallback(d):
         == "terrain"
 
 
+def _reexport(hec, name, hdf, basis, depth, stat=False):
+    rx = os.path.join(hec, name)
+    _runner_rasters(rx, depth=depth)
+    rec = {"results_hdf": hdf, "depth_basis": basis, "t0_hr": 0.0, "arrival_depth_ft": 0.1}
+    if stat:                                        # Runner 3.10.84 records the HDF it read
+        st = os.stat(hdf)
+        rec["results_hdf_stat"] = {"size": st.st_size, "mtime": st.st_mtime}
+    with open(os.path.join(rx, "reexport.json"), "w") as fh:
+        json.dump(rec, fh)
+    return rx
+
+
+def test_newest_reexport_decides(d):
+    """2.18.63: the newest re-export of the plan decides - a newer cell_min one (Runner
+    3.10.84's default) means no older terrain one is used; the stage still can be."""
+    dam = os.path.join(d, "DWR-NEWEST")
+    hec = os.path.join(dam, "_hecras")
+    os.makedirs(hec)
+    hdf = _plan(hec)
+    old = _reexport(hec, "reexport_20261025T120000Z", hdf, "terrain", 3.0)
+    f = RI.find_runner_rasters(hdf)
+    assert f and f["folder"] == old
+    new = _reexport(hec, "reexport_20261026T120000Z", hdf, "cell_min", 9.0, stat=True)
+    assert RI.find_runner_rasters(hdf) is None          # 2.18.62 took the older terrain one
+    res = RI.import_plan(hdf, os.path.join(d, "n0"))
+    assert res["depth_basis"] == RI.DEPTH_BASIS_CELL_MIN and RI.CELL_MIN_WARNING in res["notes"]
+    # the stage's own rasters still count when the stage says terrain and they are current
+    _runner_rasters(dam, depth=5.0)
+    json.dump({"results_hdf": hdf, "depth_basis": "terrain", "t0_hr": 0.0},
+              open(os.path.join(hec, "hecras_stage.json"), "w"))
+    f = RI.find_runner_rasters(hdf)
+    assert f and f["kind"] == "stage" and f["folder"] == dam
+    os.remove(os.path.join(hec, "hecras_stage.json"))
+    # a newer re-export on the terrain basis is used again (the newest, not the first one)
+    newer = _reexport(hec, "reexport_20261027T120000Z", hdf, "terrain", 4.0, stat=True)
+    f = RI.find_runner_rasters(hdf)
+    assert f and f["folder"] == newer, f
+    assert _read(RI.import_plan(hdf, os.path.join(d, "n1"))["paths"]["depth"])[0][0, 0] == 4.0
+    # a re-export of ANOTHER plan in between does not decide for this one
+    _reexport(hec, "reexport_20261028T120000Z", os.path.join(hec, "other.p02.hdf"),
+              "cell_min", 1.0)
+    f = RI.find_runner_rasters(hdf)
+    assert f and f["folder"] == newer, f
+    assert old and new
+
+
+def test_reexport_of_replaced_results_is_not_used(d):
+    """2.18.63: the model run again writes the same _hecras/<plan>.hdf: a re-export made from
+    the earlier results is not taken for the new ones."""
+    dam = os.path.join(d, "DWR-STALE")
+    hec = os.path.join(dam, "_hecras")
+    os.makedirs(hec)
+    hdf = _plan(hec)
+    rx = _reexport(hec, "reexport_20261025T120000Z", hdf, "terrain", 3.0)
+    rj = os.path.join(rx, "reexport.json")
+    t = os.path.getmtime(rj)
+    os.utime(hdf, (t + 3, t + 3))                        # within the 5 s tolerance
+    f = RI.find_runner_rasters(hdf)
+    assert f and f["folder"] == rx
+    os.utime(hdf, (t + 60, t + 60))                      # a later model run (no stat record)
+    assert RI.find_runner_rasters(hdf) is None
+    assert RI.import_plan(hdf, os.path.join(d, "s0"))["depth_basis"] == RI.DEPTH_BASIS_CELL_MIN
+    # Runner 3.10.84 records the HDF it read: that record decides, not reexport.json's time
+    rx2 = _reexport(hec, "reexport_20261026T120000Z", hdf, "terrain", 6.0, stat=True)
+    f = RI.find_runner_rasters(hdf)
+    assert f and f["folder"] == rx2
+    with open(hdf, "ab") as fh:                          # new results, same name
+        fh.write(b"run 2")
+    os.utime(hdf, (t + 120, t + 120))
+    os.utime(os.path.join(rx2, "reexport.json"), (t + 200, t + 200))   # touched later
+    assert RI.find_runner_rasters(hdf) is None
+    # a terrain raster given: the terrain, whatever the re-exports say
+    assert RI.import_plan(hdf, os.path.join(d, "s1"), dem_path=_terrain(d))["depth_basis"] \
+        == "terrain"
+
+
+def test_cell_min_note_follows_the_suite_default():
+    """2.18.63: the cell minimum is the Runner's default (3.10.84) - the note no longer calls
+    it an overstatement and names the per-pixel re-export."""
+    w = RI.CELL_MIN_WARNING
+    assert "overstated" not in w and "default" in w and "conservative" in w, w
+    assert "--depth-basis terrain" in w and "terrain raster" in w, w
+
+
 def test_first_reach_brute_force():
     rng = np.random.default_rng(7)
     T, m, p = 12, 6, 400
@@ -280,7 +366,7 @@ def test_first_reach_brute_force():
 
 def test_code_digest_covers_the_new_code():
     for n in ("_pixel_first_reach", "_arrival_from_series", "find_runner_rasters",
-              "_import_runner", "import_plan", "_finish"):
+              "_import_runner", "import_plan", "_finish", "_reexport_fresh"):
         assert n in RI._CODE_FUNCS, n
 
 
@@ -290,6 +376,10 @@ def main():
         for name, fn in [("ditch cell, terrain", lambda: test_ditch_cell_terrain(d)),
                          ("cell-minimum warning + cache", lambda: test_cell_min_warning_and_cache(d)),
                          ("Runner re-export fallback", lambda: test_runner_reexport_fallback(d)),
+                         ("newest re-export decides", lambda: test_newest_reexport_decides(d)),
+                         ("re-export of replaced results",
+                          lambda: test_reexport_of_replaced_results_is_not_used(d)),
+                         ("cell-minimum note", test_cell_min_note_follows_the_suite_default),
                          ("first reach vs brute force", test_first_reach_brute_force),
                          ("code digest", test_code_digest_covers_the_new_code)]:
             fn()

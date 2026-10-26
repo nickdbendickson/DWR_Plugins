@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.18.62
+ND Dam Hazard Classification Helper - Version 2.18.63
 ====================================================
 
 WHAT IT DOES
@@ -892,6 +892,11 @@ OFFLINE DATA PACK (2.6.1) - running without internet access
   back to an earlier download of the same area, if there is one.
 - The pack is a snapshot: rebuild it (or --refresh a data set) to pick
   up newer data.
+- 2.18.63: HEC-RAS plan import without a terrain raster - the newest Runner
+  re-export of the plan's current results decides (an older terrain re-export
+  is not used once a newer one says cell_min, nor once the model was run
+  again); the cell minimum is the Runner's default (conservative), for
+  per-pixel depth give the terrain or re-export with --depth-basis terrain.
 - 2.18.62: Reproduce and the data folder load every file of every role (AADT
   and bridges may come from several files); a file that cannot be used is a
   WARNING in the run log and the reproduction check, never a silent skip.
