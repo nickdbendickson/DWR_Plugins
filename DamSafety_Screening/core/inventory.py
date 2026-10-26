@@ -96,9 +96,9 @@ def feature_in_county(feat, county, point=None):
 
 # 0.17.49: roles matched by priority - the FIRST alias the layer has wins (exact name, any case).
 # The other roles keep the old rule (the last alias the layer has wins) so their chain-run values
-# do not change; on the NID GeoPackage that rule picks federal_id / nid_height / nid_storage /
-# condition_assessment over the tool-1 defaults NIDID / DAM_HEIGHT / MAX_STORAGE /
-# OPERATIONAL_STATUS (left for a separate decision).
+# do not change (NE / ME are new in 0.17.47 and need no such protection); on the NID GeoPackage
+# that rule picks federal_id / nid_height / nid_storage / condition_assessment over the tool-1
+# defaults NIDID / DAM_HEIGHT / MAX_STORAGE / OPERATIONAL_STATUS (left for a separate decision).
 PRIORITY_ROLES = ("SA", "MA")
 # names that are the MAXIMUM-pool area: never the normal-pool area (SA)
 MAX_POOL_AREA_NAMES = ("max_pool_area", "max_pool_a")

@@ -5,7 +5,8 @@ has, so on the suite GeoPackage (which has both normal_area and max_pool_area) i
 the MAXIMUM-pool area. The DWR shapefile export (10-character names: normal_are, max_pool_a) was
 not affected. Checked against the real DWR_dams.gpkg column names (read-only, when the data pack
 is on this machine; else the names recorded below), the shapefile variant (the same names cut to
-10 characters), the chain's step-1 field map and tool 1 itself.
+10 characters), the chain's step-1 field map and tool 1 itself, also with stale saved
+pool-elevation boxes (DWR_NE / DWR_ME, 0.17.47) that the layer does not have.
 
 Run: python3 tests/test_inv_area_fields.py
 """
@@ -131,4 +132,28 @@ f = list(ctx.layers[r["OUT"]].getFeatures())[0]
 assert abs(f["inv_area_m2"] - 25 * AC) < 1e-6
 assert any("max_pool_area, the MAXIMUM-pool area" in m for m in fb.log), fb.log
 print("OK (tool 1: inv_area_m2 normal pool, inv_maxa_m2 max pool; a max-pool pick is warned)")
+
+# ---- 5. tool 1 with STALE saved pool-elevation boxes (the merge of 0.17.47 and 0.17.49): a
+# GeoPackage-named layer with normal_area, max_pool_area, normal_elev and max_pool_elev, the
+# surface area box blank, and DWR_NE / DWR_ME holding the shapefile names normal_ele / max_pool_e
+# (saved from a shapefile run; this layer does not have them). The optional-field re-detection
+# must cover NE and ME as well as MA, or tool 1 stops on the first record (KeyError 'normal_ele').
+FL5 = FL + [("normal_elev", D), ("max_pool_elev", D)]
+lay5 = make_layer(FL5, [(QgsGeometry.fromPointXY(QgsPointXY(-100.0, 47.0)),
+                         {"structure_id": 5290.0, "dam_name": "Stale", "max_dam_height": 22.0,
+                          "normal_vol": 110.0, "max_pool_vol": 330.0, "normal_area": 12.0,
+                          "max_pool_area": 31.0, "normal_elev": 1870.0, "max_pool_elev": 1874.5,
+                          "hazard_class": "Low", "status": "Intact", "national_id": "ND00124",
+                          "dam_length": 310.0})], "point", "dwr5")
+stale = dict(blank, DWR_NE="normal_ele", DWR_ME="max_pool_e")
+assert stale["DWR_SA"] == "" and not {"normal_ele", "max_pool_e"} & {n for n, _t in FL5}
+ctx, fb = QgsProcessingContext(), QgsProcessingFeedback()
+r = PrepareDams().run_mock(dict(stale, DWR=ctx.add(lay5), OUT="memory:"), ctx, fb)
+(f,) = list(ctx.layers[r["OUT"]].getFeatures())
+want = {"inv_area_m2": 12.0 * AC, "inv_maxa_m2": 31.0 * AC,
+        "inv_norm_elev_m": 1870.0 * inv.FT_M, "inv_max_elev_m": 1874.5 * inv.FT_M}
+for k, v in want.items():                                   # read back BY FIELD NAME
+    assert f[k] is not None and abs(f[k] - v) < 1e-6, (k, f[k], v)
+assert not any("MAXIMUM-pool" in m for m in fb.log), fb.log
+print("OK (tool 1: stale DWR_NE / DWR_ME box names are re-detected; areas and pool elevations by name)")
 print("ALL OK")
