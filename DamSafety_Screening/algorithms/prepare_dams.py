@@ -23,6 +23,10 @@ OUT_FIELDS = [("dam_id", FT_STRING), ("name", FT_STRING),
 # 0.17.26: flagged structures (damsuite/structure_flags.py), after OUT_FIELDS (tools 16 and 19
 # build their layers on OUT_FIELDS and write their attributes by position)
 FLAG_FIELDS = [("struct_cls", FT_STRING), ("flag_note", FT_STRING)]
+# 0.17.47: the inventory normal-pool and max-pool elevations (m, in the record's own datum; DWR
+# normal_elev / max_pool_elev), after FLAG_FIELDS. Tool 3 places the maximum storage at the max
+# pool = (max-pool - normal-pool elevation) above the lidar water surface.
+POOL_FIELDS = [("inv_norm_elev_m", FT_DOUBLE), ("inv_max_elev_m", FT_DOUBLE)]
 
 # field defaults: DWR shapefile names, and the NID GeoPackage names
 FIELD_DEFAULTS = {f"DWR_{k}": v for k, v in inv.DWR_DEFAULTS.items()}
@@ -37,7 +41,9 @@ FIELD_KEYS = [("ID", "ID field", FIELD_ANY),
               ("HZ", "hazard class", FIELD_ANY),
               ("STATUS", "status (e.g. Intact / Breached)", FIELD_ANY),
               ("NIDREF", "NID ID (links a DWR dam to the NID layer)", FIELD_ANY),
-              ("LEN", "dam length", FIELD_NUMERIC)]
+              ("LEN", "dam length", FIELD_NUMERIC),
+              ("NE", "normal pool elevation", FIELD_NUMERIC),
+              ("ME", "max pool elevation", FIELD_NUMERIC)]
 
 
 class PrepareDams(QgsProcessingAlgorithm):
@@ -73,7 +79,10 @@ class PrepareDams(QgsProcessingAlgorithm):
                 "struct_cls / flag_note (0.17.26): a flagged structure of the suite's list "
                 "(docs/Flagged_structures.md, e.g. DWR-3161, a road fill over backwater) is kept "
                 "with its class and note; the later tools list it with the note and its hazard "
-                "of record instead of a breach flood.")
+                "of record instead of a breach flood.\n"
+                "inv_norm_elev_m / inv_max_elev_m (0.17.47): the normal-pool and max-pool "
+                "elevations (DWR normal_elev / max_pool_elev; the NID has none). Tool 3 places the "
+                "maximum storage at the max pool, their difference above the lidar water surface.")
 
     def initAlgorithm(self, config=None):
         for src, label in ((self.DWR, "ND DWR dams"), (self.NID, "NID dams")):
@@ -121,6 +130,9 @@ class PrepareDams(QgsProcessingAlgorithm):
         for k, _l, _t in FIELD_KEYS:
             if not fld.get(k):
                 fld[k] = found.get(k)
+        for k in ("NE", "ME"):           # optional (0.17.47): a name the layer lacks is no field
+            if fld.get(k) and fld[k] not in names:
+                fld[k] = None
         wgs = QgsCoordinateReferenceSystem("EPSG:4326")
         tr = QgsCoordinateTransform(src.sourceCrs(), wgs, QgsProject.instance())
         out = []
@@ -155,7 +167,7 @@ class PrepareDams(QgsProcessingAlgorithm):
             raise QgsProcessingException("Provide a DWR layer, an NID layer, or both.")
 
         fields = QgsFields()
-        for n, t in OUT_FIELDS + FLAG_FIELDS:
+        for n, t in OUT_FIELDS + FLAG_FIELDS + POOL_FIELDS:
             fields.append(QgsField(n, t))
         wgs = QgsCoordinateReferenceSystem("EPSG:4326")
         sink, dest = self.parameterAsSink(params, self.OUT, context, fields,
@@ -213,7 +225,7 @@ class PrepareDams(QgsProcessingAlgorithm):
             src, nid_id = "DWR", a["nidref"]
             if i in fill:
                 n = fill[i]; src = "DWR+NID"; nid_id = nid_id or n["id"]
-                for k in ("h", "ns", "ms", "sa", "len"):
+                for k in ("h", "ns", "ms", "sa", "len", "ne", "me"):
                     if a[k] is None: a[k] = n[k]
                 if not a["name"]: a["name"] = n["name"]
                 if not a["hz"]: a["hz"] = n["hz"]
@@ -245,7 +257,8 @@ class PrepareDams(QgsProcessingAlgorithm):
             o.setAttributes([a["id"], a["name"], src, nid_id, a["h"], a["ns"], a["ms"], a["sa"],
                              a["hz"], a["status"], a["len"], "YES" if sh else "",
                              flag_e["structure_class"] if flag_e else None,
-                             SF.note(flag_e) if flag_e else None])
+                             SF.note(flag_e) if flag_e else None,
+                             a.get("ne"), a.get("me")])
             sink.addFeature(o)
         feedback.pushInfo(
             f"{len(recs)} dams written | dropped by status: {n_status}, by size: {n_size} | "
