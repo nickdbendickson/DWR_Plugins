@@ -7,7 +7,9 @@
 #   bash get_lidar_tiles.sh --dry-run                         # list what would be downloaded
 #
 # Files go to $DATA/DEM/lidar_1m_native/ (DATA defaults to ~/dwr-dam-suite/NickReview_data).
-# Safe to re-run: complete files are skipped and partial ones resume.
+# Safe to re-run: complete files are skipped and partial ones resume. The list is the
+# 3-column data list (bytes, copy_to, source) that run_nickreview.sh --list-data writes;
+# a list with no LiDAR tile rows is an error.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY=0; TSV="$HERE/absaraka/data_files_DWR-2801.tsv"
@@ -15,11 +17,14 @@ DATA="${DATA:-$HOME/dwr-dam-suite/NickReview_data}"
 for a in "$@"; do
   case "$a" in
     --dry-run) DRY=1 ;;
-    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
     *) TSV="$a" ;;
   esac
 done
 [[ -f "$TSV" ]] || { echo "ERROR: no data list $TSV" >&2; exit 1; }
+HEAD="$(head -n 1 "$TSV")"
+[[ "$HEAD" == bytes$'\t'copy_to* ]] || {
+  echo "ERROR: $TSV is not a data list (header 'bytes<TAB>copy_to...<TAB>source'; got: $HEAD)" >&2; exit 1; }
 BASE=https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1m/Projects
 n=0; bad=0
 while IFS=$'\t' read -r bytes rel _; do
@@ -38,4 +43,8 @@ while IFS=$'\t' read -r bytes rel _; do
   if [[ "$have" != "$bytes" ]]; then echo "ERROR: $name is $have bytes, expected $bytes" >&2; bad=$((bad + 1)); fi
 done < <(tail -n +2 "$TSV")
 echo "$n LiDAR tiles in $TSV; $bad failed."
+if [[ $n -eq 0 ]]; then
+  echo "ERROR: no LiDAR tile rows (DEM/lidar_1m_native/USGS_1M_*.tif in column 2) in $TSV" >&2
+  exit 1
+fi
 [[ $bad -eq 0 ]]
