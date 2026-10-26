@@ -351,3 +351,5 @@ assert "'bridges': handed over" in txt and "'lifelines': handed over" in txt, tx
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("OK test_reproduce_local_data_shapes")
+sys.stdout.flush()
+os._exit(0)                     # skip the offscreen QgsApplication teardown (it can segfault; see run_all)
