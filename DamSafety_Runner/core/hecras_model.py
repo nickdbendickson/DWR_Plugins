@@ -3294,10 +3294,12 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     except ImportError:                                 # pragma: no cover - no scipy
         vfix = None
     if vfix is not None:
-        if vfix["nudged"] or vfix["removed"]:
-            notes.append("Voronoi pre-check: {:,} computation points nudged and {:,} removed "
-                         "that would have made cells with more than {} faces (HEC-RAS's "
-                         "limit).".format(vfix["nudged"], vfix["removed"], hbl.MAX_FACES))
+        if vfix["nudged"] or vfix["removed"] or vfix.get("added"):
+            notes.append("Voronoi pre-check: {:,} computation points nudged, {:,} removed "
+                         "and {:,} added (a big cell split in two) that would have made cells "
+                         "with more than {} faces (HEC-RAS's limit).".format(
+                             vfix["nudged"], vfix["removed"], vfix.get("added", 0),
+                             hbl.MAX_FACES))
             log(notes[-1])
         pf = vfix["perimeter_found"]
         if vfix["perimeter_nudged"] or vfix["perimeter_removed"]:
@@ -3908,7 +3910,8 @@ def mesh_check(perimeter, points, cell):
     xmin, ymin = per.min(axis=0) - 10 * cell
     xmax, ymax = per.max(axis=0) + 10 * cell
     frame = [(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)]
-    vor = Voronoi(np.vstack([pts, frame]))
+    from . import hecras_breaklines as _hbl
+    vor = _hbl.centred_voronoi(np.vstack([pts, frame]))  # 3.10.82: qhull round-off
     d = point_segment_distance(pts[:, 0], pts[:, 1], list(map(tuple, per)) + [tuple(per[0])])
     edge = np.nonzero(d < 1.5 * cell)[0]
     worst, over, small = 0, 0, 1.0

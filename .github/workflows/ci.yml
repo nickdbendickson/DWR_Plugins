@@ -2,21 +2,27 @@ name: CI
 
 # Merge gate for the DamSafety plugin suite.
 #
-# fast-checks  — the always-on HARD GATE: no QGIS/GDAL needed, fully deterministic, seconds to
-#                run (damsuite drift, version sanity, py_compile of every source, the built-in
-#                engine golden baseline). Mark THIS job required in branch protection.
+# fast-checks  — no QGIS/GDAL needed, fully deterministic, seconds to run (damsuite drift,
+#                version sanity, py_compile of every source, the built-in engine golden baseline).
 # plugin-suites — the fuller per-plugin test suites. These need a real QGIS/GDAL (Hazard, Runner)
 #                and a numpy the vendored scipy supports, so the job provisions QGIS via conda.
-#                Keep it running on PRs; promote it to required once it is green on your runners.
+# model-tests  — the Runner's --models suite on a patched LISFLOOD-FP 8.3 and a conda ANUGA.
+# All three should be required checks on main (see docs/CI.md, which also has the local recipe).
 
 on:
   pull_request:
   push:
     branches: [main]
 
+# A new push to a PR cancels that PR's older run; every push to main still gets its own run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   fast-checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,6 +44,7 @@ jobs:
 
   plugin-suites:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash -el {0}
