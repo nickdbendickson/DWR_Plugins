@@ -408,32 +408,32 @@ A HEC-RAS stage asked for `terrain` that finds no terrain uses the cell minimum 
 - **Which basis.** When the chain ran the Runner's Linux HEC-RAS stage, the `depth_basis` of that stage's `hecras_stage.json`. For a wait / manual or Windows run, `NDBREACH_HECRAS_DEPTH_BASIS` as it is when the import runs.
 - **`terrain`:** the chain gives Hazard the terrain (`HEC_TERRAIN`, else the Linux stage's terrain, else the package's Terrain folder). With none found, the dam stops.
 - **`cell_min`:** no terrain is given, and Hazard decides as above: the newest current re-export of the plan decides, then a current terrain stage's rasters, else the cell minimum.
-- **The log** names the basis and how to get per-pixel depth for that run.
-- **Resume.** A resumed chain imports and classifies each dam once more after updating to 3.10.84 (its earlier import used the terrain), and again whenever `NDBREACH_HECRAS_DEPTH_BASIS` changes. It does not run the Runner's HEC-RAS stage again. So for a Linux stage, set the variable before that stage runs, or re-export the plan with `--depth-basis terrain`; the import uses the re-export the next time it runs.
+- **The log** names the basis and how to get per-pixel depth for that run. When the Linux stage was asked for `terrain` but found no terrain (`depth_basis_requested` `terrain`, `depth_basis` `cell_min` in `hecras_stage.json`), it says so and names the re-export with `--terrain`.
+- **Resume.** A resumed chain imports and classifies each dam once more after updating to 3.10.84 (its earlier import used the terrain), and again whenever `NDBREACH_HECRAS_DEPTH_BASIS` or the dam's `HEC_TERRAIN` changes. It does not run the Runner's HEC-RAS stage again. So for a Linux stage, set the variable before that stage runs, or re-export the plan with `--depth-basis terrain`. A re-export is used only when the import runs again: a resumed chain keeps the import as already done (its resume check does not look at `_hecras/reexport_*`). To have it run again, change `NDBREACH_HECRAS_DEPTH_BASIS` or the dam's `HEC_TERRAIN`. Unticking *Skip stages already done* (*Keep the stages already done* in the chain window) runs every stage of the dam again, the HEC-RAS stage too, and that new run replaces the results the re-export was made from, so the re-export is no longer used.
 
 ## HEC-RAS per-pixel depth (Runner 3.10.79 to 3.10.83 default) and re-exporting a finished run (#173)
 **Runner 3.10.84 made the cell minimum the default again** (previous section). This section explains why 3.10.79 moved to per-pixel depth, which is now an option, and how to re-export a finished run on either basis.
 
 **Who needs this.** Anyone who wants per-pixel depth for a HEC-RAS run, or who has HEC-RAS results exported by 3.10.79 to 3.10.83 (per pixel). This covers the depth, the flooded area, the structure counts and the hazard class that Hazard worked out from those rasters. ANUGA and LISFLOOD-FP results aren't affected.
 
-**Why 3.10.79 moved to per-pixel depth.** HEC-RAS works on large cells (150 ft on DWR-2801), and each cell has one water surface. The Runner turns those cells into 30 m pixels for the depth raster. Before 3.10.79 it took each pixel's depth as the cell's highest water surface minus the *lowest* ground point anywhere in that cell. So if a cell had a ditch, a stream channel or a culvert outlet in it, every pixel in the cell got the ditch's depth, even where the ground was a few feet higher. The wet area and the 0.1 ft arrival time used the same depth. As a result:
-- **Depths were too high** across most cells that hold a low spot.
-- **The flooded area was too large**, because pixels on higher ground counted as wet or at 1 ft or more.
-- **Structures, roads and rail looked deeper than they were**, so they could land in a worse danger zone or count as flooded when they weren't.
+**Why 3.10.79 moved to per-pixel depth.** HEC-RAS works on large cells (150 ft on DWR-2801), and each cell has one water surface. The Runner turns those cells into 30 m pixels for the depth raster. Before 3.10.79 it took each pixel's depth as the cell's highest water surface minus the *lowest* ground point anywhere in that cell (the cell minimum). So if a cell had a ditch, a stream channel or a culvert outlet in it, every pixel in the cell got the ditch's depth, even where the ground was a few feet higher. The wet area and the 0.1 ft arrival time used the same depth. Compared with per-pixel depth:
+- **Depths were higher** across most cells that hold a low spot.
+- **The flooded area was larger**, because pixels on higher ground counted as wet or at 1 ft or more.
+- **Structures, roads and rail came out deeper**, so they could land in a worse danger zone or count as flooded.
 
-The HEC-RAS model itself was fine. The error was only in how the Runner read its results.
+3.10.79 treated this as an error in how the Runner read the results (the HEC-RAS model itself is the same on both bases). Runner 3.10.84 went back to the cell minimum as the conservative default; see "HEC-RAS depth: the cell minimum is the default again (Runner 3.10.84, Hazard 2.18.63)" above.
 
 **DWR-2801, on the area both models cover (51,387 ac):**
 
-| | Before 3.10.79 | 3.10.79 | ANUGA |
+| | Cell minimum (before 3.10.79; 3.10.84 default) | Per pixel (3.10.79 to 3.10.83 default) | ANUGA |
 |---|---|---|---|
-| Area at ≥ 1 ft | 5,060 ac | **1,923 ac** | 1,960 ac |
+| Area at ≥ 1 ft | 5,060 ac | 1,923 ac | 1,960 ac |
 | Area at ≥ 0.1 ft | 17,420 ac | 8,843 ac | 6,718 ac |
 | Wet area | 18,727 ac | 10,657 ac | 8,290 ac |
 
-The 2 lethal and 16 judgment structures that made HEC-RAS's ACER TM 11 class High came from this error. When the depths were worked out from the terrain, all 25 of HEC-RAS's zone 1 and 2 structures came out below 3 ft. The two models still don't agree on everything: HEC-RAS arrives earlier at Casselton and loses more volume. Those differences are real and the fix doesn't change them.
+The 2 lethal and 16 judgment structures that made HEC-RAS's ACER TM 11 class High came from the cell-minimum depth. When the depths were worked out from the terrain, all 25 of HEC-RAS's zone 1 and 2 structures came out below 3 ft. The two models still don't agree on everything: HEC-RAS arrives earlier at Casselton and loses more volume. Those differences are real and the depth basis doesn't change them.
 
-**What 3.10.79 does.** Each pixel now gets the highest water surface of the HEC-RAS cell it falls in, minus the ground under that pixel. The ground is the terrain the HEC-RAS model used, averaged onto the 30 m grid. Depth never goes below 0. The wet area, the water surface, velocity and time-of-max rasters, and the 0.1 ft arrival time all use this depth. Arrival is now worked out pixel by pixel: it's the first time the cell's water surface over time, minus that pixel's ground, reaches 0.1 ft, interpolated between output times. A pixel that reaches 0.1 ft only between two output times gets the cell's time of the maximum instead. If a pixel inside the model has no terrain, the old lowest-point depth is used there, and a note gives the number of pixels.
+**What the per-pixel basis does** (the 3.10.79 to 3.10.83 default; an option from 3.10.84). Each pixel gets the highest water surface of the HEC-RAS cell it falls in, minus the ground under that pixel. The ground is the terrain the HEC-RAS model used, averaged onto the 30 m grid. Depth never goes below 0. The wet area, the water surface, velocity and time-of-max rasters, and the 0.1 ft arrival time all use this depth. Arrival is worked out pixel by pixel: it's the first time the cell's water surface over time, minus that pixel's ground, reaches 0.1 ft, interpolated between output times. A pixel that reaches 0.1 ft only between two output times gets the cell's time of the maximum instead. If a pixel inside the model has no terrain, the cell-minimum depth is used there, and a note gives the number of pixels.
 
 **Check which method a run used.** Open `DAM_FOLDER/_hecras/hecras_stage.json` and look at `depth_basis`:
 - `"terrain"`: per-pixel depth (the 3.10.79 to 3.10.83 default; from 3.10.84 only when asked for).

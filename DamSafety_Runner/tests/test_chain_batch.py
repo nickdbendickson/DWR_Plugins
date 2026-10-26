@@ -529,7 +529,25 @@ def chain_hazard_import_depth_basis_follows_the_hecras_stage():
         # the stage read the variable: set it before that stage, or re-export on the terrain
         assert any("before the Runner's HEC-RAS stage runs" in m and
                    "hecras-reexport --depth-basis terrain" in m and
-                   "read when this import runs" not in m for m in lines), lines
+                   "read when this import runs" not in m and "found no terrain" not in m
+                   for m in lines), lines
+        # ... and a resumed chain keeps the import as done: a re-export counts when it runs
+        # again (the variable or HEC_TERRAIN changes, or 'Skip stages already done' is off)
+        assert any("when this import runs again" in m and "Skip stages already done" in m
+                   and "HEC_TERRAIN" in m for m in lines), lines
+        # the stage was asked for the terrain basis but found no terrain: say so (the
+        # variable is already set), and re-export with the terrain
+        with open(os.path.join(hec, "hecras_stage.json"), "w") as f:
+            json.dump(dict(stage, depth_basis="cell_min", depth_basis_requested="terrain",
+                           terrain_tif=None), f)
+        del lines[:]
+        with _basis_env("terrain"):
+            imp = ops.run("hazard_import", dam)
+        assert "TERRAIN" not in calls[-1][1] and imp["depth_basis"] == "cell_min"
+        assert any("found no terrain" in m and "depth_basis_requested 'terrain'" in m and
+                   "--depth-basis terrain --terrain" in m and
+                   "NDBREACH_HECRAS_DEPTH_BASIS=terrain" not in m and
+                   "before the Runner's HEC-RAS stage runs" not in m for m in lines), lines
         # a stage record of another plan: the variable decides
         dam.outputs["hec_run"] = {"plan_hdf": plan, "project": ""}
         with _basis_env("terrain"):
@@ -538,7 +556,7 @@ def chain_hazard_import_depth_basis_follows_the_hecras_stage():
                 raise AssertionError("no ChainError")
             except CH.ChainError:
                 pass
-        assert len(calls) == n + 2
+        assert len(calls) == n + 3
         # resume: the import is redone when the basis setting changes
         vals, cv = _cv(OUT_FOLDER=root)
         with _basis_env(None):

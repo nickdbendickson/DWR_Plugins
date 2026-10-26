@@ -343,6 +343,7 @@ def test_cell_min_note_follows_the_suite_default():
     assert "overstated" not in w and "default" in w and "conservative" in w, w
     assert "--depth-basis terrain" in w and "terrain raster" in w, w
     assert "`" not in w, w                     # QGIS shows Markdown backticks as they are
+    assert "terrain." not in w, w              # a copied command would end in 'terrain.'
 
 
 def test_first_reach_brute_force():

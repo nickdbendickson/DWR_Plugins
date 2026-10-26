@@ -101,8 +101,8 @@ CELL_MIN_WARNING = ("Depth basis: cell minimum - no terrain raster and no curren
                     "per-pixel export of this plan, so depth and arrival are from each HEC-RAS "
                     "cell's MINIMUM elevation, the Runner's default (conservative: a ditch or "
                     "channel in a cell deepens the whole cell). For per-pixel depth give the "
-                    "terrain raster, or re-export the run with "
-                    "ndbreach_cli.py hecras-reexport --depth-basis terrain.")
+                    "terrain raster, or re-export the run on the per-pixel basis "
+                    "(ndbreach_cli.py hecras-reexport DAM_FOLDER --depth-basis terrain).")
 # the Runner's names (DamSafety_Runner core/workflow.FINAL_NAMES; ft, ft/s, h after its t0)
 RUNNER_NAMES = {"depth": "Depth (Max).tif", "vel": "Velocity (Max).tif",
                 "arr": "Arrival Time.tif", "wse": "WSE (Max).tif"}

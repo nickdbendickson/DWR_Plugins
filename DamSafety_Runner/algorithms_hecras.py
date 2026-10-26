@@ -192,15 +192,18 @@ class HecRasImportAlgorithm(_ToolBase):
     def shortHelpString(self):
         return ("Reads the maximum results of a HEC-RAS 2D plan HDF (.p##.hdf) and writes "
                 "GeoTIFFs 'HECRAS Depth (Max).tif', 'HECRAS Velocity (Max).tif', 'HECRAS "
-                "Arrival Time.tif' and 'HECRAS WSE (Max).tif' in ft, ft/s, hours and ft. Give the "
-                "terrain the model used: depth is then the cell's maximum water surface minus "
-                "the terrain under each grid cell, and the wet area and arrival time follow "
-                "that depth. Without a terrain, depth is the maximum water surface minus the "
-                "cell's minimum elevation, which gives a cell's ditch depth to the whole cell "
-                "(too deep and too wide on coarse cells). Velocity is "
-                "the per-cell maximum when the file has one, else the maximum face velocities "
-                "averaged onto the cells. Arrival is the first time the depth reaches the "
-                "arrival depth, from the water surface time series, counted from the "
+                "Arrival Time.tif' and 'HECRAS WSE (Max).tif' in ft, ft/s, hours and ft. The "
+                "Depth basis decides what depth is measured from (3.10.84): 'Cell minimum', the "
+                "default and the conservative one, is the HEC-RAS cell's maximum water surface "
+                "minus the cell's minimum terrain elevation, the same on every grid cell inside "
+                "it (a ditch or channel in a cell deepens the whole cell); 'Per pixel' is the "
+                "cell's maximum water surface minus the terrain under each grid cell and needs "
+                "the Terrain the model used. With the cell-minimum basis a given Terrain is not "
+                "used. The wet area and the arrival time follow the depth of the basis chosen. "
+                "The Depth basis starts at NDBREACH_HECRAS_DEPTH_BASIS (else cell minimum). "
+                "Velocity is the per-cell maximum when the file has one, else the maximum face "
+                "velocities averaged onto the cells. Arrival is the first time the depth reaches "
+                "the arrival depth, from the water surface time series, counted from the "
                 "'time of breach initiation' you give (hours after the start of the HEC-RAS "
                 "run). Cells are sampled by nearest cell centre onto the grid of the 'like' "
                 "raster (or of the dam folder's Depth (Max).tif), else onto a grid you set, "
@@ -216,7 +219,7 @@ class HecRasImportAlgorithm(_ToolBase):
                    "go to <dam folder>/_hecras)", folder=True)
         self.addParameter(QgsProcessingParameterRasterLayer(
             "TERRAIN", "Terrain the HEC-RAS model used (needed for the per-pixel depth "
-            "basis; with the cell-minimum basis it is only compared)", optional=True))
+            "basis; not used with the cell-minimum basis)", optional=True))
         # 3.10.84: cell minimum is the default again; per pixel stays selectable
         self.addParameter(QgsProcessingParameterEnum(
             "DEPTH_BASIS", "Depth basis (wet area and arrival follow it)", DEPTH_BASIS_OPTIONS,

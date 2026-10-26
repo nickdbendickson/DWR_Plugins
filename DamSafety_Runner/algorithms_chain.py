@@ -10,9 +10,11 @@ fails that stage with a plain message (the preflight says so before anything sta
   hec_build      ndbreach:hecrasexport (the HEC-RAS 2D package; culverts / bridges from an
                                         existing ANUGA run when there is one)
   hec_run        the Runner's Linux HEC-RAS stage, or a wait for a manual run of the package
-  hazard_import  ndhazard:hecrasplan   (ft, ft/s, h, 2D-area boundary; 3.10.84: depth on the
-                                        HEC-RAS stage's basis - cell minimum by default, the
-                                        terrain only for NDBREACH_HECRAS_DEPTH_BASIS=terrain)
+  hazard_import  ndhazard:hecrasplan   (ft, ft/s, h, 2D-area boundary; 3.10.84: depth basis
+                                        from the Linux HEC-RAS stage's hecras_stage.json for
+                                        its plan, else NDBREACH_HECRAS_DEPTH_BASIS (default
+                                        cell_min); TERRAIN passed only for the per-pixel
+                                        'terrain' basis)
   classify       ndhazard:classify     (ND + TM11), then ndhazard:savedamstate (the dam's
                                         Hazard window state, to add scenarios later)
 """
@@ -327,16 +329,31 @@ class QgisOps(object):
                      "{} ({})".format(dam.dam_id, terrain, why))
         else:
             env = hecras.DEPTH_BASIS_ENV
-            if stage:          # the Linux stage's own record: the variable is read by that stage
+            # a re-export is used only when this import runs again: a resumed chain keeps it
+            # as already done (its fingerprint, core/chain.stage_inputs, has HEC_TERRAIN and
+            # the variable, not _hecras/reexport_*)
+            reexport = ("re-export the plan with ndbreach_cli.py hecras-reexport --depth-basis "
+                        "terrain{} (Hazard 2.18.63 adopts the newest current re-export of the "
+                        "plan when this import runs again; a resumed chain keeps the import as "
+                        "already done unless {} or HEC_TERRAIN changes; unticking 'Skip stages "
+                        "already done' runs the dam's HEC-RAS stage again too, which replaces "
+                        "the results a re-export was made from)")
+            found = ""
+            if stage and stage.get("depth_basis_requested") == hecras.DEPTH_BASIS_TERRAIN:
+                # the stage was asked for per pixel but found no terrain (hecras_engine)
+                found = ("; the HEC-RAS stage was asked for per-pixel depth but found no "
+                         "terrain GeoTIFF (_hecras/hecras_stage.json depth_basis_requested "
+                         "'terrain')")
+                how = (reexport.format(" --terrain <the model's terrain GeoTIFF>", env) +
+                       ", or run the HEC-RAS stage again")
+            elif stage:        # the Linux stage's own record: the variable is read by that stage
                 how = ("set {}=terrain before the Runner's HEC-RAS stage runs (a resumed chain "
-                       "does not run it again), or re-export the plan with ndbreach_cli.py "
-                       "hecras-reexport --depth-basis terrain (Hazard 2.18.63 adopts the newest "
-                       "current re-export of the plan)".format(env))
+                       "does not run it again), or ".format(env) + reexport.format("", env))
             else:              # wait / manual / Windows run: read when this import runs
                 how = "set {}=terrain; it is read when this import runs".format(env)
             self.log("{}: HEC-RAS import depth basis: cell minimum, max WSE minus the HEC-RAS "
-                     "cell's minimum elevation ({}); for per-pixel depth {}".format(
-                         dam.dam_id, why, how))
+                     "cell's minimum elevation ({}){}; for per-pixel depth {}".format(
+                         dam.dam_id, why, found, how))
         out = os.path.join(CH.chain_dir(dam.folder), "hecras_import")
         os.makedirs(out, exist_ok=True)
         rec_p = os.path.join(out, "depth_basis.json")      # Hazard's record of the basis used
