@@ -62,7 +62,7 @@ It runs as a QGIS Processing algorithm. **It has not been validated against ArcG
 
 ## Install
 1. Download the SWC zip and extract it. The data folder is `PMP_Evaluation_Tool/` and must contain `Input/*.gdb`. Reading FileGDB **rasters** isn't needed here. FileGDB vectors and tables are read with GDAL's built-in OpenFileGDB driver.
-2. QGIS ≥ 3.28 (tested: QGIS 3.44.7 with GDAL 3.10.2, from conda-forge on Linux). Copy `nd_pmp/` into `<profile>/python/plugins/`, or use Plugins → Install from ZIP with `nd_pmp.zip`. Then enable it.
+2. QGIS ≥ 3.28, including QGIS 4 (tested: QGIS 3.44.7 with GDAL 3.10.2; QGIS 3.34; QGIS 4.2.3 / Qt 6 with GDAL 3.13, all from conda-forge on Linux). Copy `nd_pmp/` into `<profile>/python/plugins/`, or use Plugins → Install from ZIP with `nd_pmp.zip`. Then enable it.
 3. Run it from Processing Toolbox → ND PMP (prototype) → PMP Evaluation.
 
 Headless example:

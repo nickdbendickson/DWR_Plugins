@@ -8,7 +8,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterFile,
                        QgsProcessingParameterNumber, QgsProcessingParameterField,
                        QgsProcessingParameterString, QgsProcessingParameterFeatureSink,
-                       QgsProcessingParameterBoolean,
+                       QgsProcessingParameterBoolean, QgsProcessingParameterVectorLayer,
                        QgsFeature, QgsProcessingException, QgsApplication,
                        QgsProcessingMultiStepFeedback, QgsWkbTypes)
 
@@ -24,7 +24,8 @@ NEW = [("rn_status", FT_STRING), ("rn_folder", FT_STRING),
        ("rn_class", FT_STRING), ("rn_border", FT_STRING),
        ("rn_gaps", FT_STRING), ("scr_class", FT_STRING),
        ("rn_agree", FT_STRING), ("rn_inputs", FT_STRING),
-       ("rn_engine", FT_STRING)]          # 0.17.22: the Runner engine this dam was run with
+       ("rn_engine", FT_STRING),          # 0.17.22: the Runner engine this dam was run with
+       ("rn_area_src", FT_STRING)]        # 0.17.46: where AREA_AC came from (handoff.AREA_SRC_*)
 
 
 def _warn(feedback, msg):
@@ -78,7 +79,10 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 "For each chosen dam: 'ndbreach:rundam' with the dam ID, the tool-4 breach point as the "
                 "dam point, height (ft, from height_m), storage at the top of dam (ac-ft, from tool 5 "
                 "td_vw_m3, else tool 3, else the inventory maximum), the surface area near the top of "
-                "dam when a tool-3 curve folder is given, your DEM and Dams folder. No DWR elevations "
+                "dam when a tool-3 curve folder is given (0.17.46: when the dam's curve is too shallow, "
+                "missing or gives no area, the DWR inventory's maximum-pool area instead - tool 1's "
+                "inv_maxa_m2, from max_pool_area in acres - with a warning; no inventory area = none "
+                "sent, also with a warning), your DEM and Dams folder. No DWR elevations "
                 "are passed (local datum): the runner takes the top of dam from the DEM. Breach "
                 "hydrograph: the runner's own ND method (default), or the screening's tool-5 "
                 "hydrograph written to <Dams folder>/<dam>/inputs/breach_hydrograph.csv (hr, cfs) and "
@@ -100,7 +104,10 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 "width_ft, height_ft, barrels, shape, name).\n"
                 "OUTPUT: the input dams plus rn_status (done / failed: message / skipped: reason), "
                 "rn_folder, rn_class, rn_border, rn_gaps, scr_class (the screening class, hz_class), "
-                "rn_agree (agree / runner higher / runner lower) and rn_inputs (what was sent). A dam "
+                "rn_agree (agree / runner higher / runner lower), rn_inputs (what was sent) and "
+                "rn_area_src (0.17.46: where the surface area came from - stage_storage, "
+                "inventory_max_pool_area or none; also in dam.json's source note, the log and the run "
+                "manifest as surface_area_source). A dam "
                 "that fails is logged and the others continue. Runner runs take minutes to hours per "
                 "dam; the runner needs LISFLOOD-FP set up in its own provider settings.\n"
                 "DAM RECORD (v0.9): before each run, <Dams folder>/<dam ID>/dam.json (the suite's "
@@ -111,6 +118,13 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 "tool or the engineer put there is never overwritten (the conflict is logged and "
                 "kept in the file). The tool stops when an installed ND Dam Breach Runner is older "
                 "than this plugin needs (suite version check).\n"
+                "WATER-BODY MASK (0.17.46, advanced; Runner 3.10.27 or later): the Runner's run report "
+                "can give the flooded area and speeds with and without the lakes and ponds that were "
+                "already there (rundam WATER_MASK). It changes the report only, never the flood model, "
+                "its rasters or the class. 'Runner's default' (the default) sends nothing; 'Off' sends "
+                "off; 'Use the water-body layer below' sends that layer's file (it must be saved in a "
+                "file; a temporary layer stops the tool). An older Runner is warned about and gets "
+                "nothing.\n"
                 "RUNNER ENGINE (0.17.22): one choice. 'LISFLOOD-FP only' (the Runner's default; "
                 "TIER 0) is the fast local-inertial 2D model. 'LISFLOOD-FP for the extent, then "
                 "ANUGA' (TIER 1) uses LISFLOOD-FP to find how far the flood goes and re-runs it with "
@@ -226,6 +240,14 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 k, "Culverts: {} field (empty = runner matches its synonyms)".format(desc),
                 parentLayerParameterName="CULVERTS",
                 type=FIELD_NUMERIC if k in numeric else FIELD_ANY, optional=True)))
+        # 0.17.46: water-body mask for the Runner's run report (rundam WATER_MASK, Runner 3.10.27+).
+        # Default = send nothing (the Runner's own default; runs as before).
+        P(set_advanced(QgsProcessingParameterEnum(
+            "WATER_MASK_MODE", "Runner report: water-body mask\u2026", ho.WATER_MASK_LABELS,
+            defaultValue=ho.WATER_MASK_DEFAULT)))
+        P(set_advanced(QgsProcessingParameterVectorLayer(
+            "WATER_MASK", "Runner report: water-body layer (polygons of existing lakes and ponds; "
+            "saved in a file)", [pg], optional=True)))
         P(QgsProcessingParameterFeatureSink("OUT", "Dams with runner results", SRC_POINT))
 
     # ------------------------------------------------------------------
@@ -371,6 +393,11 @@ class RunnerHandoff(QgsProcessingAlgorithm):
             else:
                 feedback.pushInfo("Runner: " + n)
         engine_text = ho.ENGINE_SHORT[engine]
+        mask_p = self._water_mask(params, context, run_alg, feedback)
+        if curves and not ho.has_inventory_area_field(names):
+            _warn(feedback, "Surface area: " + ho.OLD_TOOL1 + " (a dam whose stage-storage curve is "
+                  "too shallow is sent with no surface area).")
+        area_sources = {}
 
         fields, put = cm.extend_fields(dams.fields(), NEW)
         sink, dest = self.parameterAsSink(params, "OUT", context, fields, dams.wkbType(), dams.sourceCrs())
@@ -392,7 +419,7 @@ class RunnerHandoff(QgsProcessingAlgorithm):
             scr = attrs.get("hz_class")
             res = {"rn_status": None, "rn_folder": None, "rn_class": None, "rn_border": None,
                    "rn_gaps": None, "scr_class": scr, "rn_agree": None, "rn_inputs": None,
-                   "rn_engine": None}
+                   "rn_engine": None, "rn_area_src": None}
             if not ok:
                 res["rn_status"] = "skipped: " + why
             elif feedback.isCanceled():
@@ -413,20 +440,24 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                         user_csv, peak = ho.write_runner_hydrograph(str(src),
                                                                     os.path.join(dfold, ho.RUNNER_HYDRO_CSV))
                         feedback.pushInfo("tool-5 hydrograph -> {} (peak {:,.0f} cfs)".format(user_csv, peak))
-                    area, anote = None, ""
-                    if curves:
-                        area, anote = ho.area_for_runner(os.path.join(curves, f"curve_{dam_id}.csv"),
-                                                         cm.fval(f, names, "est_crest_m", float),
-                                                         cm.fval(f, names, "height_m", float))
+                    # 0.17.46: the curve's area, else the inventory's maximum-pool area
+                    area, area_src, anote = ho.surface_area_choice(
+                        os.path.join(curves, f"curve_{dam_id}.csv") if curves else None,
+                        cm.fval(f, names, "est_crest_m", float), cm.fval(f, names, "height_m", float),
+                        attrs, curves_given=bool(curves))
                     p, notes = ho.rundam_params(attrs, bmap[dam_id], cm.ALBERS, params.get("DEM"), folder,
-                                                cell, user_csv, area, user_idx)
+                                                cell, user_csv, area, user_idx, area_source=area_src)
                     if anote:
                         notes = list(notes) + [anote]
+                        _warn(feedback, "{}: {}".format(dam_id, anote))   # fallback or no area
+                    res["rn_area_src"] = area_src
+                    area_sources[dam_id] = area_src
                     for key, v in receptors.items():
                         if v not in (None, ""):
                             p[key] = v
                     p.update(eng_p)
-                    notes = notes + eng_notes
+                    p.update(mask_p[0])
+                    notes = notes + eng_notes + mask_p[1]
                     res["rn_inputs"] = hz.limit_text(["sent: " + why] + notes)
                     res["rn_engine"] = engine_text
                     for n in notes:
@@ -475,4 +506,47 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         feedback.pushInfo("runner hand-off: " + ", ".join(f"{k_} {v}" for k_, v in counts.items() if v))
         if agree:
             feedback.pushInfo("runner vs screening: " + ", ".join(f"{k_} {v}" for k_, v in sorted(agree.items())))
+        if area_sources:
+            tally = {}
+            for v in area_sources.values():
+                tally[v] = tally.get(v, 0) + 1
+            feedback.pushInfo("surface area source (surface_area_source): " + ", ".join(
+                "{} {}".format(k_, v) for k_, v in sorted(tally.items())))
+        # 0.17.46: per-dam provenance for the run manifest (provider._with_manifest)
+        self.manifest_extra = {"surface_area_source": dict(sorted(area_sources.items())),
+                               "water_mask": mask_p[0].get("WATER_MASK") or "runner default"}
         return {"OUT": dest}
+
+    def _water_mask(self, params, context, run_alg, feedback):
+        """({'WATER_MASK': ...} or {}, notes) for rundam (0.17.46); stops on a mask that was asked
+        for but cannot be sent as a file."""
+        if self.parameterDefinition("WATER_MASK_MODE") is None:
+            return {}, []
+        mode = self.parameterAsEnum(params, "WATER_MASK_MODE", context) \
+            if params.get("WATER_MASK_MODE") not in (None, "") else ho.WATER_MASK_DEFAULT
+        raw = params.get("WATER_MASK")
+        chosen = raw not in (None, "")
+        lsrc = prov = None
+        if chosen and not (isinstance(raw, str) and ho.mask_path(raw)):
+            try:
+                lyr = self.parameterAsVectorLayer(params, "WATER_MASK", context)
+            except Exception:
+                lyr = None
+            if lyr is not None:
+                lsrc = lyr.source() if hasattr(lyr, "source") else None
+                try:
+                    prov = lyr.providerType()
+                except Exception:
+                    prov = None
+        path = ho.mask_path(raw if isinstance(raw, str) else None, lsrc, prov)
+        if mode == ho.WATER_MASK_OFF:
+            chosen = False                   # Off wins over a layer left in the box
+        p, notes, err = ho.water_mask_params(mode, path, chosen)
+        if err:
+            raise QgsProcessingException(err)
+        if p and run_alg is not None and run_alg.parameterDefinition("WATER_MASK") is None:
+            _warn(feedback, "Runner: " + ho.WATER_MASK_OLD_RUNNER)
+            return {}, []
+        for n in notes:
+            feedback.pushInfo("Runner: " + n)
+        return p, notes
