@@ -223,6 +223,32 @@ def test_qt6_enum_lint_clean_on_the_real_tree():
     assert hits == [], ["{}:{} {}".format(h[0], h[1], h[2]) for h in hits]
 
 
+def test_qt6_metadata():
+    problems = []                                 # every plugin of the real tree declares QGIS 4
+    C.check_qt6_metadata(problems)
+    assert problems == [], problems
+    root = tempfile.mkdtemp(prefix="qt6_meta_")
+    try:
+        _w(root, "DamSafety_Hazard/metadata.txt",
+           "[general]\nqgisMaximumVersion=4.99\nsupportsQt6=True\nversion=1.0.0\n")
+        _w(root, "DamSafety_Runner/metadata.txt",          # a changelog mention does not count
+           "[general]\nqgisMaximumVersion=3.99\nchangelog=1.0 - supportsQt6=True\n")
+        _w(root, "DamSafety_PMP/metadata.txt", "[general]\nsupportsQt6=False\n")
+        _w(root, "DamSafety_Data/metadata.txt",            # 4.0 would still hide it on QGIS 4.2
+           "[general]\nqgisMaximumVersion=4.0\nsupportsQt6=True\n")
+        C.check_qt6_metadata(problems, root)
+        text = "\n".join(problems)
+        for want in ("DamSafety_Runner: metadata.txt needs supportsQt6=True",
+                     "DamSafety_Runner: metadata.txt qgisMaximumVersion=3.99",
+                     "DamSafety_PMP: metadata.txt needs supportsQt6=True",
+                     "DamSafety_PMP: metadata.txt qgisMaximumVersion=None",
+                     "DamSafety_Data: metadata.txt qgisMaximumVersion=4.0"):
+            assert want in text, (want, problems)
+        assert len(problems) == 5, problems       # Hazard (both keys right) passes
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main():
     fails = 0
     for name, fn in sorted(globals().items()):
