@@ -214,11 +214,60 @@ def _suite_roots(environ=None):
     return roots
 
 
+_MASK_BAD_KINDS = ("missing", "table", "unreadable", "manifest")
+
+
+def _pack_mask_check(root):
+    """3.10.86: (PackCheck or None, blocked) for a suite root: None when the root is not an
+    offline pack folder (no manifest.json). blocked: True (no suite file of this root is
+    used) when the check FAILED - a manifest.json that cannot be read, an error of the check;
+    else the set of the files of the water-body layers it lists that are missing or
+    unreadable (a cut-short GeoPackage), which are then not used for the mask; else False.
+    Read-only, never raises."""
+    try:
+        from ..damsuite import packcheck as PC
+    except Exception:            # noqa: BLE001 - outside the plugin
+        return None, False
+    try:
+        if not root or not os.path.isdir(root):
+            return None, False
+        if not (PC.pack_folder(root) or PC.manifest_problem(root)):
+            return None, False
+        res = PC.check_pack(root, deep=False)
+        if res.failed:
+            return res, True
+        names = {i.layer for i in res.issues if i.level != PC.NOTE and i.layer
+                 and "waterbod" in i.layer.lower() and i.kind in _MASK_BAD_KINDS}
+        if not names:
+            return res, False
+        m = PC._read_json(os.path.join(root, PC.MANIFEST)) or {}
+        files = set()
+        for sect in ("datasets", "rasters"):
+            for name, e in PC._entries(m, sect).items():
+                rel = PC._rel_file(e)
+                if name in names and rel:
+                    files.add(os.path.normcase(os.path.abspath(os.path.join(root, *rel.split("/")))))
+        return res, files
+    except Exception:            # noqa: BLE001 - check_pack never raises; belt and braces
+        return None, True
+
+
+def _mask_blocked(blocked, path):
+    """True when `path` is a suite file that _pack_mask_check said not to use."""
+    if blocked is True:
+        return True
+    return bool(blocked) and os.path.normcase(os.path.abspath(path)) in blocked
+
+
 def _suite_candidates(environ=None):
-    """Suite pack / data folder waterbody files that exist (read only)."""
+    """Suite pack / data folder waterbody files that exist (read only). 3.10.86: not the
+    files of a suite pack whose check fails for its water-body layer (_pack_mask_check)."""
     out = []
     for root in _suite_roots(environ):
+        blocked = _pack_mask_check(root)[1]
         for p in _suite_files_in(root):
+            if _mask_blocked(blocked, p):
+                continue
             if p not in out:
                 out.append(p)
                 break
@@ -236,14 +285,25 @@ def pack_gap_notes(environ=None):
         return out
     seen = set()
     for root in _suite_roots(environ):
-        folder = PC.pack_folder(root) if root and os.path.isdir(root) else ""
+        folder = os.path.abspath(root) if root else ""
         if not folder or folder in seen:
             continue
         seen.add(folder)
-        res = PC.check_pack(folder, deep=False)
+        res, blocked = _pack_mask_check(folder)
+        if res is None:
+            if blocked:
+                out.append("Water-body mask: offline pack {}: the pack check could not run - "
+                           "its water-body file is not used".format(folder))
+            continue
+        if res.failed:           # 3.10.86: a broken manifest.json - the pack is not used
+            out.append("Water-body mask: offline pack {}: {} - its water-body file is not "
+                       "used".format(folder, res.summary()))
+            continue
         for i in res.issues:
             if i.level != PC.NOTE and "waterbod" in (i.layer or "").lower():
-                out.append("Water-body mask: offline pack {}: {}".format(folder, i.line()))
+                out.append("Water-body mask: offline pack {}: {}{}".format(
+                    folder, i.line(), " - not used for the mask" if blocked and i.kind in (
+                        "table", "unreadable", "manifest") else ""))
     return out
 
 
@@ -326,8 +386,11 @@ def build_mask(grid, setting=None, crs_wkt=None, environ=None, out_folder=None, 
     srcs = mask_sources(setting, environ, out_folder)
     if log and not any(isinstance(p, str) and "waterbod" in os.path.basename(p).lower()
                        for p in srcs):
-        for line in pack_gap_notes(environ):     # 3.10.77: say why the suite file is not used
-            log(line)
+        try:
+            for line in pack_gap_notes(environ):     # 3.10.77: say why the suite file is not used
+                log(line)
+        except Exception:        # noqa: BLE001 - 3.10.86: a note only, the mask never raises
+            pass
     if not srcs:
         return None, None
     m = np.zeros((grid.ny, grid.nx), dtype=bool)

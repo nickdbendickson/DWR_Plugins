@@ -1,6 +1,6 @@
 {
  "files": {
-  "__init__.py": "29023358c5fe942809760a11523bf91df4fa7590c5241174750131507161ee41",
+  "__init__.py": "fe805bf05b170868a2ab50014962016b849aeb3734d3e886426c6a3440574b96",
   "cascade.py": "c793fd0d12cb6e45e1cae588df34de9bb45616ee8b9ebecc50fa75e0b8aa1f69",
   "chain.py": "b62c77c2f7621a6b4e33f214da33629e9f082bc1d331e0368bb468858641d807",
   "dam_record.py": "3d627834a68f40d6f67e796e3b1d576edf6580539c84e63fbe6474982663c147",
@@ -15,7 +15,7 @@
   "netproxy.py": "ba09fe4098331bb7c2bda889793ff9d7d82f5fad274b1cfbaa53d16eb6435128",
   "offline_pack.py": "1544c4c10297308c0801b2129fb787ffdc970fee101d133688b111ee53f8eaec",
   "pack_convert.py": "9a2f427da4de2a6846368bd021f0753103442b8db45a17543a5baf2c1d65374f",
-  "packcheck.py": "053f13b95faba2186a69021b29611cd58646e4537606eced06e6bd28ea1778cd",
+  "packcheck.py": "8f9b353c97964df5d83a339024c37ac65fad056436b0aad2ce15287909e23214",
   "packdiff.py": "979eac6f7a4523768e85d587754bf65c608f9a67c90244da610253195979ef13",
   "priority.py": "bd7f1e7b86c1ecd93193f777a1fc4ab4508b1b918ff31546bb0479d2f8b0ccab",
   "record.py": "ad55837f431051825ba65dad6e9445b9d78d26623fb80d6abfdc373a9af1c4ce",
@@ -34,7 +34,7 @@
   "tm11_curves.py": "1250a67efc4e11165b7f2d31b2dfc5d02ed9284b2301fc2dbb423fee409367c5",
   "transformguard.py": "33f4cdb38bd1bb3f678c266b5221b1cbf721c81a29d6e2e18866c49270829ff1",
   "units.py": "2cd0b0208220ee8ae470c7c10adc8968cfd2bda7c05b9a836ab05130afc501d1",
-  "versions.py": "cbbe606318d181770f60fbd16f93c04d0fe0796f822623ad0482a0babacf6bba",
+  "versions.py": "21cd5e61e1b6ba7a30724b6b45fba192298f697726ec602bc5a2a937e9f4c7c9",
   "xlsx_lite.py": "b7e9ad8d43f5ae4b4158f642b5abd11912811756228f07fe54713fb141605030"
  },
  "fork_specific": [
@@ -43,6 +43,6 @@
   "versions.py"
  ],
  "pin": "damsuite-pin-v1",
- "pin_sha256": "383aa6b53bb2d6e103d4f9a8536f93c0d0017deb94420da9613fe9b956cbb576",
+ "pin_sha256": "10743a244e288e191f16af63597ad7737e2ea8cf8feef7a3170421c0b6202af9",
  "source": "nickdbendickson/DWR_Plugins : shared/damsuite"
 }

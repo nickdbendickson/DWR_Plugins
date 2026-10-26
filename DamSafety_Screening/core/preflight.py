@@ -205,8 +205,8 @@ def _pack_check(S):
         from ..damsuite import packcheck as PC
         found = layers_for_settings(S)
         path = found.get("pack") or ""
-        if not path or not PC.detect_format(path):
-            return None
+        if not path or not (PC.detect_format(path) or PC.manifest_problem(path)):
+            return None                  # 0.17.48: a broken manifest.json is a FAILED row
         res = PC.check_pack(path)
     except Exception as e:                                       # noqa
         return check(WARN, "Offline pack vs manifest.json", "the check could not run: {}".format(e))
