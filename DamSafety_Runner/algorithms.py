@@ -889,8 +889,16 @@ class _Base(QgsProcessingAlgorithm):
         zc = ZUNITS[self.parameterAsEnum(parameters, "DEM_Z", context)][0] \
             if has("DEM_Z") else "auto"
         if zc == "auto":
-            raise QgsProcessingException("Set the DEM elevation unit (feet or metres). "
-                                         "QL2 ASCII grids are feet; a USGS IMG is usually metres.")
+            # 3.10.88: 'Detect from the raster' uses the unit the DEM records (band unit type or
+            # vertical CRS: the Download DEM tool's files from Screening 0.17.50, 1 m lidar VRTs);
+            # a DEM with none still stops here, naming the setting.
+            try:
+                zc, _how = gdal_io.resolve_dem_z(dem.source(), zc)
+            except ValueError as e:
+                raise QgsProcessingException(str(e))
+            except Exception as e:                       # noqa - unreadable DEM: say which setting
+                raise QgsProcessingException("Could not read the DEM's elevation unit ({}). {}".format(
+                    e, gdal_io.DEM_Z_HELP))
         # ND ground is about 250-600 m. A units flip puts the median far outside that.
         try:
             import numpy as np

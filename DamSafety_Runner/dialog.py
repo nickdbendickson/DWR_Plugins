@@ -12,6 +12,7 @@ window's choices are saved with the QGIS project. The tools, the wizard and the 
 provider are unchanged.
 """
 import json
+import math
 import os
 
 from qgis.PyQt.QtCore import QUrl
@@ -29,6 +30,44 @@ from .tokens import TOKENS
 from .tool_dialog import exec_tool_dialog
 
 TITLE = "DamSafety Runner"
+
+DEM_SOURCE_TNM = "USGS 3DEP 1 m lidar tiles (native, TNM)"
+_MI_M = 1609.344
+_CHUNK_PX = 1200                    # Screening solve_gate.TILE_PX: the ImageServer export size
+
+
+def dem_facts_text(source_i, cell_m, buffer_mi=10.0, scope_i=0):
+    """The line under the Runner's 'Download a DEM' box (3.10.88: says how many ImageServer
+    chunks a 1 m dam download is, and what the native 1 m tile source writes). Pure: tested."""
+    if source_i == 2:
+        return ("Native 1 m lidar tiles from The National Map: 10 km GeoTIFFs at 1 m, UTM, "
+                "elevations in metres, about 270 MB each, kept as they are; the result is "
+                "<id>_1m_lidar.vrt (band unit metres). The tool lists the tiles, the total size "
+                "and the free space first; tick '1 m tiles: download the listed tiles' and run "
+                "again to fetch them (largest download per run: 10 GB by default). Resolution "
+                "is ignored (always 1 m). A dam point and {:.0f} mi buffer is a {:.0f} km square "
+                "around the dam; for a Runner domain give the tool a box or the dam folder.").format(
+                    buffer_mi, 2 * buffer_mi * _MI_M / 1000.0)
+    if source_i == 0:
+        src = "USGS 3DEP ImageServer"
+        native = "native CRS EPSG:5070, native units metres, native file GeoTIFF"
+    else:
+        src = "ND DWR QL2 LiDAR"
+        native = "native CRS QL2 feet (often EPSG:3721 or EPSG:2266), native units feet, native file Erdas Imagine .img"
+    text = ("Local copy: source {src}; CRS EPSG:5070; units metres; file type GeoTIFF float32 "
+            "tiled; cell {cell} m. {native}.").format(src=src, cell=cell_m, native=native)
+    if source_i == 0 and scope_i == 0:
+        side = 2.0 * buffer_mi * _MI_M
+        per = math.ceil(side / (_CHUNK_PX * float(cell_m)) - 1e-9)
+        n = int(per * per)
+        text += (" {n} export requests ({per} x {per}) of {km:.1f} km for a {side:.0f} km square: "
+                 "request chunks, not lidar tiles.").format(
+                     n=n, per=int(per), km=_CHUNK_PX * float(cell_m) / 1000.0, side=side / 1000.0)
+        if cell_m == 1 and n > 100:
+            text += " For 1 m use the source '{}' (10 km tiles), or a smaller buffer.".format(
+                DEM_SOURCE_TNM)
+    return text
+
 SIZE_KEY = "DamSafety_Runner/window"           # QSettings: the window size, saved on close
 SCOPE = "NDBreachRunner"          # QgsProject entry scope
 ENTRY = "state"
@@ -497,7 +536,15 @@ class NDBreachRunnerDialog(QDialog):
         grid = QGridLayout()
         grid.setContentsMargins(16, 2, 2, 2)
         self.dem_source = QComboBox()
-        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)"])
+        # 3.10.88: the third entry is the Download DEM tool's SOURCE 2 (Screening 0.17.29+), the
+        # 10 km 1 m lidar project tiles; "USGS 3DEP" is the ImageServer (1.2 km chunks at 1 m).
+        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)",
+                                  DEM_SOURCE_TNM])
+        self.dem_source.setToolTip(
+            "USGS 3DEP: the ImageServer, resampled to 10 m or 1 m and cut into 1,200 px export "
+            "chunks (at 1 m a 10 mi buffer is 729 chunks of 1.2 km - not lidar tiles). "
+            "{}: the 10 km 1 m lidar tiles themselves (about 270 MB each); the tool lists "
+            "them first, tick 'download the listed tiles' to fetch them.".format(DEM_SOURCE_TNM))
         self.dem_ftp = QLineEdit()
         self.dem_ftp.setPlaceholderText("ftp://lidarftp.swc.nd.gov/temp/<id>")
         self.dem_ascii = QCheckBox("ASCII_Grids_ft")
@@ -527,6 +574,8 @@ class NDBreachRunnerDialog(QDialog):
         self.dem_facts.setWordWrap(True)
         self.dem_source.currentIndexChanged.connect(lambda _i: self._dem_facts())
         self.dem_res.currentIndexChanged.connect(lambda _i: self._dem_facts())
+        self.dem_buffer.valueChanged.connect(lambda _v: self._dem_facts())
+        self.dem_scope.currentIndexChanged.connect(lambda _i: self._dem_facts())
         self._dem_facts()
         self.dem_out = QLineEdit()
         browse = QPushButton("Browse…")
@@ -559,19 +608,12 @@ class NDBreachRunnerDialog(QDialog):
         grid.addWidget(counties, 6, 2, 1, 2)
         grid.addWidget(self.dem_facts, 7, 0, 1, 4)
         box.setLayout(grid)
-        return Collapsible("Download a DEM (USGS 3DEP or ND DWR LiDAR)", box)
+        return Collapsible("Download a DEM (USGS 3DEP, ND DWR LiDAR or 1 m lidar tiles)", box)
 
     def _dem_facts(self):
-        cell = 10 if self.dem_res.currentIndex() == 0 else 1
-        if self.dem_source.currentIndex() == 0:
-            src = "USGS 3DEP ImageServer"
-            native = "native CRS EPSG:5070, native units metres, native file GeoTIFF"
-        else:
-            src = "ND DWR QL2 LiDAR"
-            native = "native CRS QL2 feet (often EPSG:3721 or EPSG:2266), native units feet, native file Erdas Imagine .img"
-        self.dem_facts.setText(
-            "Local copy: source {src}; CRS EPSG:5070; units metres; file type GeoTIFF float32 tiled; cell {cell} m. {native}.".format(
-                src=src, cell=cell, native=native))
+        self.dem_facts.setText(dem_facts_text(
+            self.dem_source.currentIndex(), 10 if self.dem_res.currentIndex() == 0 else 1,
+            float(self.dem_buffer.value()), self.dem_scope.currentIndex()))
 
     def _browse_dem_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "DEM folder", self.dem_out.text())
@@ -636,7 +678,7 @@ class NDBreachRunnerDialog(QDialog):
             if n != getattr(QMessageBox, 'StandardButton', QMessageBox).Yes:
                 return
         exec_tool_dialog(processing, "nddam:downloaddem", {
-            "SOURCE": self.dem_source.currentIndex(),
+            "SOURCE": self.dem_source.currentIndex(),        # 2 = native 1 m lidar tiles (TNM)
             "SCOPE": self.dem_scope.currentIndex(),
             "DAM_POINT": self.dem_point.text().strip(),
             "BUFFER_MI": float(self.dem_buffer.value()),

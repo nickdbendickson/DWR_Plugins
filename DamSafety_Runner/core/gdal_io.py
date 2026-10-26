@@ -76,6 +76,58 @@ def z_to_m_factor(path, choice=Z_AUTO):
     return 1.0, "metres (no units recorded in the raster; check)"
 
 
+def recorded_z_unit(path):
+    """(choice, how) from the elevation unit the DEM itself records - its band unit type, else a
+    compound CRS's vertical unit - or ("", why) when it records none. choice is Z_FEET,
+    Z_US_FEET or Z_METERS. Never guesses from the horizontal CRS or the values (3.10.88)."""
+    _gdal()
+    ds = GS.open_raster(path)
+    unit = (ds.GetRasterBand(1).GetUnitType() or "").strip().lower()
+    if unit in _US_FEET_NAMES:
+        return Z_US_FEET, "raster unit '{}'".format(unit)
+    if unit in _FEET_NAMES:
+        return Z_FEET, "raster unit '{}'".format(unit)
+    if unit in _METER_NAMES:
+        return Z_METERS, "raster unit '{}'".format(unit)
+    if unit:
+        return "", "the raster's unit '{}' is not feet or metres".format(unit)
+    from osgeo import osr
+    wkt = ds.GetProjection()
+    if wkt:
+        srs = osr.SpatialReference()
+        srs.ImportFromWkt(wkt)
+        try:
+            vert = srs.GetTargetLinearUnits("VERT_CS") if srs.IsCompound() else None
+        except Exception:
+            vert = None
+        if vert and abs(vert - US_FT) < 1e-7:
+            return Z_US_FEET, "vertical CRS in US survey feet"
+        if vert and abs(vert - FT) < 1e-7:
+            return Z_FEET, "vertical CRS in feet"
+        if vert and abs(vert - 1.0) < 1e-9:
+            return Z_METERS, "vertical CRS in metres"
+    return "", "no elevation unit is recorded in the raster (no band unit, no vertical CRS)"
+
+
+DEM_Z_HELP = ("Set 'DEM elevation units' to Meters or Feet. Metres: USGS 3DEP downloads (the "
+              "'Download DEM' tool's GeoTIFFs and 1 m lidar VRTs), USGS 1 m lidar tiles, ND DWR "
+              "DEM_Imagine (.img). Feet: ND DWR QL2 ASCII_Grids_ft.")
+
+
+def resolve_dem_z(path, choice=Z_AUTO):
+    """The DEM elevation unit a model run uses: an explicit choice as given; 'auto' (Detect from
+    the raster) the unit the raster records (recorded_z_unit). ValueError naming the setting
+    when 'auto' finds none - a run never guesses feet or metres (3.10.88; before, 'auto' was
+    refused even for a raster that records its unit)."""
+    if choice in (Z_FEET, Z_US_FEET, Z_METERS):
+        return choice, "chosen"
+    got, how = recorded_z_unit(path)
+    if got:
+        return got, "detected: " + how
+    raise ValueError("'DEM elevation units' is 'Detect from the raster', but {}: {}. {}".format(
+        os.path.basename(str(path)) or path, how, DEM_Z_HELP))
+
+
 ND_GROUND_M = (200.0, 1100.0)      # North Dakota: 229 m (Pembina) to 1069 m (White Butte)
 
 

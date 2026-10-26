@@ -3,6 +3,7 @@
 County boxes are download clips, padded, not survey boundaries. The service
 returns metres in EPSG:5070.
 """
+import math
 import os
 
 from osgeo import gdal, osr
@@ -70,13 +71,61 @@ def point_box(lon, lat, buffer_mi, bearing_deg=None):
     return (cx - b, cy - b, cx + b, cy + b)
 
 
+def imageserver_chunks(extent, cell_m):
+    """(count, side_km) of the 3DEP ImageServer export requests for an EPSG:5070 extent at
+    cell_m: the box is cut into TILE_PX x TILE_PX pixel pieces (1.2 km at 1 m, 12 km at 10 m).
+    These are request chunks, not lidar tiles (0.17.50)."""
+    from .solve_gate import TILE_PX
+    step = TILE_PX * float(cell_m)
+    nx = max(1, int(math.ceil((extent[2] - extent[0]) / step - 1e-9)))
+    ny = max(1, int(math.ceil((extent[3] - extent[1]) / step - 1e-9)))
+    return nx * ny, step / 1000.0
+
+
+def chunk_note(count, cell_m, side_km, width_km=None):
+    """One line for the log / the Runner's Download box about the ImageServer requests: at 1 m
+    over a dam's buffer they are hundreds of 1.2 km pieces (a 10 mi buffer: 27 x 27 = 729),
+    which is not the number of lidar tiles; the native 1 m source lists the 10 km lidar
+    project tiles instead (about 20 for that box). Empty when there is nothing to say."""
+    if int(round(cell_m)) != 1 or count <= 100:
+        return ""
+    what = " over a {:.0f} km square".format(width_km) if width_km else ""
+    return ("USGS 3DEP ImageServer at 1 m{}: {} export requests of {:.1f} km x {:.1f} km "
+            "(request chunks, not lidar tiles), mosaicked and warped into one GeoTIFF. For 1 m "
+            "the source 'USGS 3DEP 1 m lidar tiles (native, TNM)' downloads the 10 km lidar "
+            "tiles themselves (lists them first), or use a smaller buffer.").format(
+                what, count, side_km, side_km)
+
+
+def set_metres(path):
+    """Tag band 1 of a written DEM as metres (GeoTIFF / VRT). gdal.Warp and BuildVRT do not
+    carry a band unit, so the local copies had none and the Runner's 'Detect from the raster'
+    could not tell feet from metres (0.17.50). True when the tag was written."""
+    try:
+        ds = gdal.Open(path, gdal.GA_Update)
+        if ds is None:
+            return False
+        ds.GetRasterBand(1).SetUnitType("m")
+        ds.FlushCache()
+        ds = None
+        return True
+    except Exception:                                    # noqa - the sidecar still says metres
+        return False
+
+
 def download(extent, cell_m, out_dir, stem, feedback=None):
     """Download 3DEP tiles for an EPSG:5070 extent and write dem.vrt. Returns the VRT path."""
     os.makedirs(out_dir, exist_ok=True)
     from .solve_gate import TILE_PX
     tiles = list(terrain.tile_extents(*extent, cell_m))
     if feedback is not None:
-        feedback.pushInfo("{} tiles at {} m ({} px a side)".format(len(tiles), cell_m, TILE_PX))
+        feedback.pushInfo("{} ImageServer export chunks at {} m ({} px = {:.1f} km a side; "
+                          "request pieces, not lidar tiles)".format(
+                              len(tiles), cell_m, TILE_PX, TILE_PX * float(cell_m) / 1000.0))
+        note = chunk_note(len(tiles), cell_m, TILE_PX * float(cell_m) / 1000.0,
+                          (extent[2] - extent[0]) / 1000.0)
+        if note:
+            getattr(feedback, "pushWarning", feedback.pushInfo)(note)
     n = max(len(tiles), 1)
 
     def log(msg):
@@ -491,6 +540,7 @@ def warp_to(src, dest, epsg):
     """Warp one raster to dest in the given EPSG. Returns dest."""
     gdal.Warp(dest, src, dstSRS="EPSG:{}".format(epsg), format="GTiff",
               resampleAlg="bilinear", creationOptions=["COMPRESS=DEFLATE", "TILED=YES"])
+    set_metres(dest)               # 0.17.50: the local copies are metres; warp drops the tag
     return dest
 
 
@@ -637,5 +687,6 @@ def write_local_dem(src, dest, cell_m, info, feedback=None):
         ds.SetMetadataItem("CELL_M", str(info["cell_m"]))
         ds.SetDescription(describe_product(info))
         ds = None
+    set_metres(dest)                                     # 0.17.50: band unit = metres
     side = write_sidecar(dest, info)
     return dest, side
