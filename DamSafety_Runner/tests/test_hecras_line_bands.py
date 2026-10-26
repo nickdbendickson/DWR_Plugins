@@ -145,17 +145,24 @@ def hecras_bands_dense_crossing_streets_pass_the_8_face_check():
     thin (a protected point among only protected neighbours). Now only the first rows are
     protected, and not where another banded line is within 1.5 rows: 0 cells over 8 faces at
     the default 3 x 20 ft, the faces still on the lines (fix_faces costs each line at most
-    5 % of its faces, at a crossing) and an isolated line keeps its protected first rows."""
+    5 % of its faces, at a crossing) and an isolated line keeps its protected first rows.
+    Seeds 3 and 7 leave 1-3 cells over 8 faces when every first row is protected (the solo
+    rule off)."""
     if not _has_scipy():
         print("  (skipped: no scipy)")
         return
-    from nd_breach_runner.core.hecras_model import perimeter_clip
-    for seed in (1, 2, 5):
+    from nd_breach_runner.core.hecras_model import perimeter_clip, point_segment_distance
+    for seed in (1, 3, 7):
         pts, perim, lines = _dense_streets(seed)
         out, prot, st = hband.apply(pts, perim, lines, S, 3, 1.5, CELL, ranks=[1] * len(lines))
         fixed, fprot, info = hbl.fix_faces(out, perim, prot, clip=perimeter_clip(perim))
         assert info["left"] == 0, (seed, info["left"])
         assert 0 < prot.sum() < st["band_points"], st
+        # the solo rule: no protected point has a second line within 1.4 rows (the rule's
+        # 1.5 rows is measured to the lines' samples every s, at most s / 2 off)
+        d = np.array([point_segment_distance(out[:, 0], out[:, 1], ln) for ln in lines])
+        shared = prot & ((d < 1.4 * S).sum(axis=0) > 1)
+        assert not shared.any(), (seed, int(shared.sum()))
         chk = hbl.voronoi_precheck(fixed, perim, hbl.MAX_FACES, perimeter_clip(perim))
         assert len(chk["over"]) == 0, (seed, len(chk["over"]))
         assert len(fixed) > 0.99 * len(out), (len(fixed), len(out))
@@ -226,8 +233,9 @@ def hecras_bands_crossing_and_close_parallel_lines_no_near_duplicates_and_8_face
 
 
 # DWR-2801 dry build (3.10.82 code, 2026-10-25): the 22 points around the 9-face cell of the
-# written .g01 (offsets from it, ft); a 0.0006 ft face. Qhull at state-plane coordinates
-# passed it as 8 faces in the build and found 9 in the .g01.
+# written .g01 (offsets from it, ft); a 0.0006 ft face. The build passed it as 8 faces and the
+# .g01 had 9; these 22 points alone give 9 faces with or without centring, so they check that
+# the cell is flagged and fixed at state-plane coordinates, not the round-off itself.
 _DWR2801_CELL = [[133.463, 130.087], [-19.65, 178.051], [106.699, 277.934], [189.611, -101.006],
                  [45.665, -142.88], [-96.543, -190.495], [91.331, -285.76], [151.509, 44.074],
                  [0.0, 0.0], [-277.88, -167.122], [-285.832, -101.594], [-293.783, -36.067],
@@ -238,10 +246,11 @@ _DWR2801_CELL = [[133.463, 130.087], [-19.65, 178.051], [106.699, 277.934], [189
 
 @test
 def hecras_voronoi_precheck_is_stable_at_state_plane_coordinates():
-    """3.10.82 (#170): the face count does not depend on where the layout sits (qhull works
-    on centred coordinates): the dense-streets layout at x + 2.76e6, y + 4.8e5 ft gives each
-    cell the sides it has at the origin, and the DWR-2801 9-face cell is found and fixed at
-    its own coordinates."""
+    """3.10.82 (#170), a stability check: the dense-streets layout at x + 2.76e6, y + 4.8e5 ft
+    gives the same cells over 8 faces and the same most sides as at the origin, and the
+    DWR-2801 9-face cell is found and fixed at its own coordinates. Both also hold with qhull
+    on the raw coordinates; hecras_centred_voronoi_is_the_diagram_at_the_origin tests the
+    centring."""
     if not _has_scipy():
         print("  (skipped: no scipy)")
         return
@@ -261,6 +270,43 @@ def hecras_voronoi_precheck_is_stable_at_state_plane_coordinates():
     assert 8 in [int(i) for i in chk["over"]], chk["over"]
     fixed, _, info = hbl.fix_faces(c, per, None, clip=perimeter_clip(per))
     assert info["left"] == 0 and info["check"]["max_sides"] <= 8, info
+
+
+def _faces(vor, o, perim):
+    """{(i, j): the two ends - o} of the Voronoi faces with both ends inside the perimeter."""
+    v = vor.vertices - o
+    vin = hbl.inside(v[:, 0], v[:, 1], perim)
+    return {(min(i, j), max(i, j)): v[rv] for (i, j), rv in
+            zip(vor.ridge_points, vor.ridge_vertices) if -1 not in rv and vin[rv].all()}
+
+
+@test
+def hecras_centred_voronoi_is_the_diagram_at_the_origin():
+    """3.10.82 (#170): centred_voronoi of a layout at state-plane coordinates is the layout's
+    diagram at the origin, shifted back (the same faces between the same points, their ends
+    within 1e-6 ft), and voronoi_precheck there finds the cells over 8 faces it finds at the
+    origin. The dense-streets layout jittered by 0.001 ft keeps its grid quads
+    near-cocircular (about 1,000 faces under 0.001 ft): qhull on the raw state-plane
+    coordinates gets about 1,200 of its faces wrong and passes all 4 cells over 8 faces."""
+    if not _has_scipy():
+        print("  (skipped: no scipy)")
+        return
+    from scipy.spatial import Voronoi
+    from nd_breach_runner.core.hecras_model import perimeter_clip
+    pts, perim, lines = _dense_streets(1)
+    out, _, _ = hband.apply(pts, perim, lines, S, 3, 1.5, CELL, ranks=[1] * len(lines))
+    p = out + np.random.default_rng(0).normal(0.0, 1e-3, out.shape)
+    o = np.array([2761846.4323187, 484247.73932066])
+    ref, got = _faces(Voronoi(p), 0.0, perim), _faces(hbl.centred_voronoi(p + o), o, perim)
+    assert set(got) == set(ref), len(set(got) ^ set(ref))
+    d = max(min(np.abs(got[k] - ref[k]).max(), np.abs(got[k][::-1] - ref[k]).max())
+            for k in ref)
+    assert d < 1e-6, d
+    a = hbl.voronoi_precheck(p, perim, hbl.MAX_FACES, perimeter_clip(perim))
+    b = hbl.voronoi_precheck(p + o, perim + o, hbl.MAX_FACES, perimeter_clip(perim + o))
+    assert len(a["over"]) and list(a["over"]) == list(b["over"]), (list(a["over"]),
+                                                                    list(b["over"]))
+    assert a["max_sides"] == b["max_sides"], (a["max_sides"], b["max_sides"])
 
 
 @test

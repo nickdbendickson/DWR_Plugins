@@ -335,6 +335,44 @@ def hecras_breaklines_fix_faces_splits_a_big_cell_ringed_by_small_ones():
             assert (np.hypot(*(out - (150.0, 150.0)).T) < 1e-9).any() and oprot.sum() == 1
 
 
+def _coarse_with_a_fine_patch(seed):
+    """A 100 ft grid on 1,000 ft x 1,000 ft with a round patch of 15-40 ft points, every point
+    jittered by 2 ft: coarse cells meet fine ones."""
+    rng = np.random.default_rng(seed)
+    per = np.array([(0, 0), (1000, 0), (1000, 1000), (0, 1000), (0, 0)], float)
+    p = _grid(0, 1000, 0, 1000, 100.0)
+    cx, cy = rng.uniform(150, 850, 2)
+    r, f = rng.uniform(100, 300), rng.uniform(15, 40)
+    X, Y = np.meshgrid(np.arange(cx - r, cx + r, f), np.arange(cy - r, cy + r, f))
+    q = np.column_stack([X.ravel(), Y.ravel()])
+    q = q[np.hypot(q[:, 0] - cx, q[:, 1] - cy) < r]
+    p = np.vstack([p[np.hypot(p[:, 0] - cx, p[:, 1] - cy) > r + 50.0], q])
+    p = p + rng.normal(0, 2.0, p.shape)
+    p = p[hbl.inside(p[:, 0], p[:, 1], per) & (hbl.ring_dist(p[:, 0], p[:, 1], per) > 5)]
+    return p, per
+
+
+@test
+def hecras_breaklines_fix_faces_drops_the_neighbour_across_the_shortest_face():
+    """Pure (3.10.82, #170): where coarse cells meet fine ones, cells have 9-11 faces. An
+    over-faced unprotected cell loses the neighbour across its shortest face (FACE_DROP
+    'short'): 0 cells left over 8 faces, no more points removed than there were such cells.
+    Dropping the cell itself ('self') hands its area to its neighbours, which then have too
+    many faces in turn: these layouts keep 1-2 cells over 8 faces that way, and 1-3 with
+    3.10.80's fix_faces."""
+    if not _has_scipy():
+        print("  (skipped: no scipy)")
+        return
+    for seed in (65, 125, 179):
+        p, per = _coarse_with_a_fine_patch(seed)
+        clip = hm.perimeter_clip(per)
+        chk = hbl.voronoi_precheck(p, per, hbl.MAX_FACES, clip)
+        assert len(chk["over"]) > 0, seed
+        _, _, inf = hbl.fix_faces(p, per, None, clip=clip)
+        assert inf["left"] == 0 and inf["check"]["max_sides"] <= 8, (seed, inf["left"])
+        assert inf["removed"] <= len(chk["over"]), (seed, inf["removed"], len(chk["over"]))
+
+
 @test
 def hecras_breaklines_perimeter_precheck_flags_and_fixes_the_v2b_gmsh_failure():
     """v2c: Absaraka package_v2b_gmsh stopped in HEC-RAS with "1 face errors detected on the
