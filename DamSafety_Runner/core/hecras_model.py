@@ -74,6 +74,10 @@ BC_NAME = "DS Normal Depth"
 START_DATE = "01JAN2000"
 MAX_WEIR_POINTS = 450          # HEC-RAS allows 500 station-elevation points on a weir
 MAX_ARC_POINTS = 400
+# 3.10.85: HEC-RAS stops when the normal-depth BC line touches the 2D perimeter ("BC Line
+# intersects the perimeter ... it must be entirely outside"), so it is drawn this many cells
+# outside the perimeter, along it (found running the export in HEC-RAS 6.6 itself)
+BC_OFFSET_CELLS = 0.25
 CR = "\r\n"
 
 # v3.12.0: culverts, bridges and notches as connections inside the 2D area. The keyword lines
@@ -787,6 +791,23 @@ def ring_area(pts):
     a = np.asarray(pts, dtype=float)
     x, y = a[:, 0], a[:, 1]
     return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+
+
+def _offset_outward(ring, idx, dist):
+    """3.10.85: the points ring[idx] of a closed ring moved `dist` outward, along the ring's
+    normal there, so a line drawn along the perimeter lies just outside it."""
+    ring = np.asarray(ring, float)
+    n = len(ring)
+    x, y = ring[:, 0], ring[:, 1]
+    ccw = (np.dot(x, np.roll(y, -1)) - np.dot(np.roll(x, -1), y)) > 0
+    out = []
+    for i in idx:
+        t = ring[(i + 1) % n] - ring[(i - 1) % n]
+        L = math.hypot(t[0], t[1]) or 1.0
+        # outward normal: right of the direction of travel on a counter-clockwise ring
+        nx, ny = (t[1] / L, -t[0] / L) if ccw else (-t[1] / L, t[0] / L)
+        out.append((ring[i][0] + nx * dist, ring[i][1] + ny * dist))
+    return np.asarray(out)
 
 
 def densify(pts, step, closed=False):
@@ -3099,7 +3120,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     idx = [(i % n) for i in range(lo, hi + 1)]
     if len(idx) < 2:
         idx = [(i0 - 1) % n, i0, (i0 + 1) % n]
-    bc = dens[idx]
+    bc = _offset_outward(dens, idx, BC_OFFSET_CELLS * cell)
     if len(bc) > MAX_ARC_POINTS:
         bc = bc[np.linspace(0, len(bc) - 1, MAX_ARC_POINTS).astype(int)]
     exit_xy = dens[i0]
