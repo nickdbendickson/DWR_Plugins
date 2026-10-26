@@ -12,7 +12,10 @@ Written by
     is created): the dam's identity, height and existing class and a "screened" status.
 
 surface_area_ac is the area at the top of dam (what the Runner reads for AREA_AC): only the
-area tool 7b sends (from the tool-3 stage-storage curve). The inventory's normal-pool area
+area tool 7b sends - from the tool-3 stage-storage curve, or (0.17.46) when that curve is too
+shallow or missing, the DWR inventory's maximum-pool area (max_pool_area, recorded at the top of
+dam). Its source note says which (surface_area_source = stage_storage / inventory_max_pool_area).
+The inventory's normal-pool area
 (inv_area_m2: DWR normal_area / NID SURFACE_AREA) is NOT written there, since the Runner would
 take it for the top-of-dam area and its storage-area exponent; it is quoted in the null's note.
 dam_length_ft is the length of the mapped dam line (tool 4's crest_len_m), else the
@@ -263,7 +266,31 @@ def source_notes(attrs, rundam_notes=None, line_len_m=None):
     length_ft, src = dam_length(attrs, line_len_m)
     if length_ft is not None:
         notes["dam_length_ft"] = src
+    area_src = surface_area_source(rundam_notes)
+    if area_src:
+        notes["surface_area_ac"] = AREA_SOURCE_NOTES[area_src]
     return notes
+
+
+# 0.17.46: where the surface_area_ac tool 7b sent came from (handoff.surface_area_choice)
+AREA_SOURCE_NOTES = {
+    "stage_storage": "surface_area_source = stage_storage: the tool-3 stage-storage curve near the "
+                     "top of dam",
+    "inventory_max_pool_area": "surface_area_source = inventory_max_pool_area: the DWR inventory's "
+                               "maximum-pool area (max_pool_area, acres; recorded at the top of dam), "
+                               "because the stage-storage curve could not give the area"}
+
+
+def surface_area_source(rundam_notes):
+    """'stage_storage' / 'inventory_max_pool_area' from handoff.rundam_params' area note, or None
+    (no area sent)."""
+    for n in rundam_notes or []:
+        n = str(n)
+        if n.startswith("surface area ") and "from the inventory's maximum-pool area" in n:
+            return "inventory_max_pool_area"
+        if n.startswith("surface area ") and "from the tool-3 curve" in n:
+            return "stage_storage"
+    return None
 
 
 def write(folder, values, result, version=None, create=True, field_notes=None, missing=None):

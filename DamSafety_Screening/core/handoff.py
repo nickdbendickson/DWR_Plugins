@@ -43,7 +43,7 @@ RUNDAM_KEYS = ("DAM_ID", "DAM_NAME", "DAM_POINT", "HEIGHT_FT", "STORAGE_ACFT", "
                "DAMS_FOLDER", "CELL", "METHOD", "USER_CSV", "RECEPTOR_POINTS", "RECEPTOR_ROADS",
                "RECEPTOR_RAIL", "RECEPTOR_POINTS_MORE", "RECEPTOR_ROADS_MORE",
                "TIER", "FORCE_ANUGA", "REFINE_NEAR", "STRUCTURES", "S_KIND", "S_WIDTH", "S_HEIGHT",
-               "S_BARRELS", "S_SHAPE", "S_NAME")
+               "S_BARRELS", "S_SHAPE", "S_NAME", "WATER_MASK")
 # 7b engine choice (tool parameter -> rundam parameter). The Runner's TIER index 0 is
 # LISFLOOD-FP only, 1 is LISFLOOD-FP then ANUGA. "Solver" here is the Runner's near-dam FV1
 # refine (REFINE_NEAR); rundam has no other solver switch.
@@ -331,6 +331,69 @@ def area_for_runner(curve_csv, crest_m=None, height_m=None, dz=0.3):
     return area_at_top_m2(curve_csv, crest_m, dz), ""
 
 
+# 0.17.46: where the surface area tool 7b sends as AREA_AC came from (output field rn_area_src,
+# the dam.json source note, the run log and the run manifest)
+AREA_SRC_CURVE = "stage_storage"
+AREA_SRC_INVENTORY = "inventory_max_pool_area"
+AREA_SRC_NONE = "none"
+# the inventory's maximum-pool (top of dam) surface area on the dams layer: tool 1's field (m2),
+# else the DWR export's own field kept on the layer (acres; the gpkg name, then the 10-character
+# shapefile name)
+INV_MAXA_FIELDS = (("inv_maxa_m2", 1.0), ("max_pool_area", ACRE_M2), ("max_pool_a", ACRE_M2))
+NO_INV_MAXA = ("the inventory has no maximum-pool surface area for this dam (tool 1's inv_maxa_m2, "
+               "from the DWR max_pool_area field, is empty or 0)")
+OLD_TOOL1 = ("the dams layer has no inv_maxa_m2 field (tool 1 before 0.17.46): run tool 1 again so "
+             "the DWR max_pool_area reaches tool 7b")
+
+
+def inventory_max_area_m2(attrs):
+    """(the inventory's maximum-pool surface area in m2 or None, the field it came from).
+
+    DWR max_pool_area is the reservoir area at the maximum pool, which the DWR records at the
+    top of dam (max_pool_elev = streambed + height): the same level as the Runner's AREA_AC.
+    0 / blank = not recorded. Field names are matched without regard to case."""
+    low = {str(k).lower(): k for k in (attrs or {})}
+    for name, mult in INV_MAXA_FIELDS:
+        if name in low:
+            v = _num(attrs.get(low[name]))
+            if v is not None and v > 0:
+                return v * mult, low[name]
+    return None, ""
+
+
+def has_inventory_area_field(names):
+    low = {str(n).lower() for n in (names or ())}
+    return any(n in low for n, _m in INV_MAXA_FIELDS)
+
+
+def surface_area_choice(curve_csv, crest_m, height_m, attrs, curves_given=True):
+    """(area m2 or None, source, note) for the Runner's AREA_AC (0.17.46).
+
+    1. the tool-3 stage-storage curve near the top of dam (area_for_runner);
+    2. when a curve folder was given but this dam's curve cannot give the area (too shallow,
+       missing, unusable, or 0): the inventory's maximum-pool area (inventory_max_area_m2);
+    3. else None (the Runner assumes storage varies with depth squared).
+    No curve folder at all = no area, as before 0.17.46 (source "none")."""
+    if not curves_given:
+        return None, AREA_SRC_NONE, ""
+    area, why = area_for_runner(curve_csv, crest_m, height_m)
+    if area is not None and area > 0:
+        return area, AREA_SRC_CURVE, ""
+    if not why:
+        why = ("no stage-storage curve for this dam" if not curve_csv or not os.path.exists(curve_csv)
+               else "the stage-storage curve gives no usable area at the top of dam")
+    else:
+        why = why.replace("no surface area sent: ", "").split(" (the Runner assumes")[0]
+    inv_m2, field = inventory_max_area_m2(attrs)
+    if inv_m2 is not None:
+        return inv_m2, AREA_SRC_INVENTORY, (
+            "surface area {:,.1f} ac from the inventory's maximum-pool area ({}) because {}".format(
+                inv_m2 / ACRE_M2, field, why))
+    return None, AREA_SRC_NONE, (
+        "no surface area sent: {}, and {} (the Runner assumes storage varies with depth "
+        "squared)".format(why, NO_INV_MAXA))
+
+
 def write_runner_hydrograph(src_csv, dst_csv):
     """Tool-5 hydrograph (time_s, discharge_m3s) -> the runner's own-hydrograph CSV
     (time hr, discharge cfs). Returns (dst_csv, peak_cfs)."""
@@ -360,7 +423,7 @@ def write_runner_hydrograph(src_csv, dst_csv):
 
 
 def rundam_params(attrs, point_xy, crs_authid, dem, dams_folder, cell_m=None, user_csv=None,
-                  area_top_m2=None, user_method_index=USER_METHOD_INDEX):
+                  area_top_m2=None, user_method_index=USER_METHOD_INDEX, area_source=AREA_SRC_CURVE):
     """(parameters for 'ndbreach:rundam', notes) for one screening dam record.
 
     attrs: the dam's fields (screening names, metric units). point_xy: the tool-4 breach point
@@ -404,8 +467,13 @@ def rundam_params(attrs, point_xy, crs_authid, dem, dams_folder, cell_m=None, us
         p["DAM_NAME"] = str(name)
     if area_top_m2 is not None and area_top_m2 > 0:
         p["AREA_AC"] = round(area_top_m2 / ACRE_M2, 3)
-        notes.append("surface area {:,.1f} ac near the top of dam from the tool-3 curve".format(
-            p["AREA_AC"]))
+        if area_source == AREA_SRC_INVENTORY:
+            notes.append("surface area {:,.1f} ac at the top of dam from the inventory's maximum-pool "
+                         "area (DWR max_pool_area; the stage-storage curve could not give it)".format(
+                             p["AREA_AC"]))
+        else:
+            notes.append("surface area {:,.1f} ac near the top of dam from the tool-3 curve".format(
+                p["AREA_AC"]))
     else:
         notes.append("no surface area at the top of dam (normal-pool areas are not passed)")
     if cell_m is not None and cell_m > 0:
@@ -489,3 +557,50 @@ def read_runner_json(path):
     return {"class": cls, "border": "yes" if d.get("borderline_raised") else "no",
             "gaps": hz.limit_text(d.get("data_gaps") or []),
             "lethality": d.get("lethality_label") or (d.get("settings") or {}).get("lethality")}
+
+
+# ---------------------------------------------------------------- water-body mask (0.17.46)
+# Tool 7b's choice for the Runner's WATER_MASK (rundam v3.10.27+, issue #91). The Runner uses
+# the mask for its run REPORT only: area and velocity figures are given with and without the
+# existing lakes and ponds; the flood model and its rasters never change. Index 0 sends nothing
+# (the run is exactly as before 0.17.46).
+WATER_MASK_DEFAULT, WATER_MASK_OFF, WATER_MASK_LAYER = 0, 1, 2
+WATER_MASK_LABELS = ["Runner's default (it uses its own water-body layer when it finds one)",
+                     "Off (no water-body mask in the Runner's report)",
+                     "Use the water-body layer below"]
+WATER_MASK_OLD_RUNNER = ("the installed Runner has no WATER_MASK parameter (it needs ND Dam Breach "
+                         "Runner 3.10.27 or later): the water-body mask is not sent")
+
+
+def mask_path(value=None, layer_source=None, provider=None):
+    """A file path the Runner can read ('path' or 'path|layername=x') for the mask layer, or None
+    (nothing chosen, or a temporary layer with no file behind it)."""
+    for cand in (value if isinstance(value, str) else None, layer_source):
+        if not cand or (cand is layer_source and provider == "memory"):
+            continue
+        parts = str(cand).split("|")
+        if not os.path.isfile(parts[0]):
+            continue
+        lname = [x for x in parts[1:] if x.startswith("layername=")]
+        return parts[0] + ("|" + lname[0] if lname else "")
+    return None
+
+
+def water_mask_params(mode, path=None, chosen=False):
+    """({'WATER_MASK': ...} or {}, notes, error or None) for rundam.
+
+    mode: WATER_MASK_* index. path: mask_path() of the chosen layer. chosen: a layer was given
+    (path None then = it has no file). A layer given with the default mode is used: picking a
+    layer is the choice."""
+    mode = int(mode or 0)
+    if mode == WATER_MASK_OFF:
+        return {"WATER_MASK": "off"}, ["water-body mask: off (the Runner's report has no masked "
+                                       "figures)"], None
+    if mode == WATER_MASK_LAYER or chosen:
+        if not path:
+            return {}, [], ("The water-body mask layer is {}: tool 7b sends the Runner a file. Save "
+                            "the layer as a GeoPackage or shapefile, pick that file, and run again."
+                            .format("not saved in a file (a temporary layer)" if chosen
+                                    else "missing (choose the layer, or the Runner's default)"))
+        return {"WATER_MASK": path}, ["water-body mask for the Runner's report: {}".format(path)], None
+    return {}, [], None
