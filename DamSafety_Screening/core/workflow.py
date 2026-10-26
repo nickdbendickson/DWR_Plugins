@@ -495,7 +495,7 @@ def defaults(step, work, settings):
         put("DWR", S.get("dwr"))
         put("NID", S.get("nid"))
         put("ONLY_IDS", S.get("only_ids"))
-        from .inventory import DWR_ALIASES, NID_ALIASES, match_fields
+        from .inventory import DWR_ALIASES, NID_ALIASES, match_fields, is_max_pool_area
         def layer_fields(uri):
             if not uri:
                 return []
@@ -525,7 +525,12 @@ def defaults(step, work, settings):
             matched = match_fields(layer_fields(uri), aliases)
             for role, field in matched.items():
                 key = "{}_{}".format(prefix, role)
-                put(key, saved.get(key) or field)
+                keep = saved.get(key)
+                if role == "SA" and is_max_pool_area(keep):
+                    # 0.17.49: a field map saved before the fix put max_pool_area in the
+                    # normal-pool area box; the normal-pool field is used instead
+                    keep = None
+                put(key, keep or field)
         put("COUNTY", S.get("inventory_county"))
     elif step == "2":
         put("DAMS", o("1"))
