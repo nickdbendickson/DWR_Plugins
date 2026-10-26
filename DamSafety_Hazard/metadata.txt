@@ -5,13 +5,13 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.63
+version=2.18.64
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
-    2.18.63 - 2026-10-26 (offline pack check never raises; a broken pack stops an offline-only run - #171 follow-up)
-      * A manifest.json that cannot be read (half written, not JSON / UTF-8, not an object, a section or entry of the wrong type, saved with a UTF-8 byte-order mark - Notepad / PowerShell 5 - that the pack readers refuse) is a FAILED check result, never an exception and never a silent "not a pack"; NSI_structures then counts as missing, so an Offline-only run stops with a clear error (online: a warning, NSI is downloaded).
-      * An Offline-only run also stops when the pack cannot be opened, whatever its check says (a zip member with a bad CRC, a format-1 zip without nd_offline_pack.sqlite, a format_version the reader refuses: the check passed and the run went on without NSI), and the run log no longer calls such a pack "OK"; and when no check result could be made.
+    2.18.64 - 2026-10-26 (offline pack check never raises; a broken pack stops an offline-only run - #171 follow-up)
+      * A manifest.json that cannot be read (half written, not JSON / UTF-8, not an object, a section - datasets / rasters / left_out - of the wrong type, saved with a UTF-8 byte-order mark - Notepad / PowerShell 5 - that the pack readers refuse) is a FAILED check result, never an exception and never a silent "not a pack"; NSI_structures then counts as missing, so an Offline-only run stops with a clear error (online: a warning, NSI is downloaded). One entry of the wrong type (not an object, a non-text file) is a named manifest warning for that layer (an error when the layer is required).
+      * An Offline-only run also stops when the pack cannot be opened, whatever its check says (a zip member with a bad CRC, a format-1 zip without nd_offline_pack.sqlite, a format_version the reader refuses: the check passed and the run went on without NSI), and the run log no longer calls such a pack "OK"; and when no check result could be made. The run log and the error give the reader's reason, and a path with no pack at all (moved or deleted, an empty folder) is named "not an offline data pack" and "cannot be opened", not a check that "found no problem".
       * The check summary names a problem of the pack itself (a format-1 pack's broken manifest.json) instead of "missing: " with no layer name.
       * A cut-short (half-written) or garbage GeoPackage is named "cannot be read" (SQLite header, page size and file length) instead of passing the quick check.
       * A zipped pack is checked by its listing (every listed file in the zip, not empty).

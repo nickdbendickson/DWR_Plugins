@@ -648,13 +648,15 @@ def set_offline_config(path, offline_only):
 REQUIRED_PACK_LAYERS = ("NSI_structures",)
 
 
-def pack_reader(log=None):
+def pack_reader(log=None, errors=None):
     """The chosen offline data pack (offline_pack.PackReader, or for a
     format-2 folder damsuite.gpkgpack.GpkgPackReader), or None when none is
     chosen or it cannot be read (the problem is logged once).
 
     2.18.60: the pack is checked against its manifest.json (pack_check) and
-    the missing or different layers are logged once as a warning."""
+    the missing or different layers are logged once as a warning.
+    2.18.64: `errors` (a list): why the pack cannot be opened is appended to
+    it, every time (the run log and the offline-only error name it)."""
     from .offline_pack import open_pack
     path, _only = offline_config()
     if not path:
@@ -664,6 +666,8 @@ def pack_reader(log=None):
     except CancelledByUser:
         raise
     except Exception as e:
+        if errors is not None:
+            errors.append(str(e) or type(e).__name__)
         msg = "Offline data pack not used: {}".format(e)
         if msg not in _PACK_ERRORS:
             _PACK_ERRORS.add(msg)

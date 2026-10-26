@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Hazard 2.18.63 / damsuite 1.17.6 (#171 follow-up): damsuite.packcheck never raises.
+"""Hazard 2.18.64 / damsuite 1.17.6 (#171 follow-up): damsuite.packcheck never raises.
 
 Tiny synthetic packs in a temp folder (built with test_pack_format2's builders):
 
@@ -137,6 +137,11 @@ def main():
         expect(PC.manifest_problem(fb) == PC.manifest_problem(zb) and
                "byte-order mark" in PC.manifest_problem(fb),
                "BOM: folder and zip give the same problem ({!r})".format(PC.manifest_problem(fb)))
+        r, err = safe(PC._check_zip, zb, REQ, None)    # the zip listing check decodes plain UTF-8
+        expect(err is None and r is not None and r.failed and
+               PC.manifest_problem(fb) in r.summary() and list(r.missing_required) == list(REQ),
+               "BOM zip listing check: FAILED with the folder's BOM message ({})".format(
+                   r and r.summary()))
 
         # -- 1.17.6: a pack-level problem (a format-1 pack's broken manifest.json; layer "")
         #    is named in the summary, not as "missing: " with an empty name

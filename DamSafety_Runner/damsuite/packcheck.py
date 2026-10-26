@@ -792,9 +792,14 @@ def _check_zip(path, required, aliases):
             infos = {i.filename: i for i in z.infolist()}
             name = min((n for n in infos if n.rsplit("/", 1)[-1] == MANIFEST),
                        key=lambda n: n.count("/"))
-            m = json.loads(z.read(name).decode("utf-8-sig"))
+            raw = z.read(name)
     except (OSError, KeyError, ValueError, zipfile.BadZipFile) as ex:
         return failed_result(path, required, "manifest", "the zip cannot be read: {}".format(ex))
+    # plain UTF-8, as the readers decode it: a BOM is named as for a folder
+    bad = _manifest_bytes_error(raw)
+    if bad:
+        return failed_result(path, required, "manifest", bad)
+    m = json.loads(raw.decode("utf-8"))
     shape = manifest_shape_problems(m)
     if shape:
         return failed_result(path, required, "manifest", "; ".join(shape))

@@ -696,7 +696,7 @@ def _offline_pack_sig():
             if os.path.isdir(path) and pack_format(path) == 2:
                 mst = os.stat(os.path.join(path, "manifest.json"))
                 sig += [int(mst.st_size), int(getattr(mst, "st_mtime_ns", 0))]
-                # 2.18.63: and with every layer file it lists (size, time): a GeoPackage
+                # 2.18.64: and with every layer file it lists (size, time): a GeoPackage
                 # replaced in place without a new manifest is a new evaluation too
                 from .damsuite import packcheck as PC
                 sig.append(PC.pack_signature(path))
@@ -2576,15 +2576,16 @@ def _log_offline_mode(run):
             run.log(">>> Offline only, and no offline data pack chosen - nothing is "
                     "downloaded; only project layers and earlier downloads are used")
         return
-    r = pack_reader(log=run.log)
+    why = []
+    r = pack_reader(log=run.log, errors=why)
     if r is None:
-        run.log(">>> WARNING: the offline data pack {} could not be read{}".format(
-            path, " - offline only: nothing is downloaded" if only else
-            " - the services are used"))
-        # 2.18.63: checked all the same (the log says why) - and a pack that cannot be
+        run.log(">>> WARNING: the offline data pack {} could not be read{}{}".format(
+            path, " ({})".format(why[0]) if why else "",
+            " - offline only: nothing is downloaded" if only else " - the services are used"))
+        # 2.18.64: checked all the same (the log says why) - and a pack that cannot be
         # opened gives none of the required layers, so an offline-only run stops here
         # whatever the check says (a bad zip member, a format the reader refuses)
-        _log_pack_check(run, path, None, only, opened=False)
+        _log_pack_check(run, path, None, only, opened=False, why=why[0] if why else "")
         return
     run.log(">>> Offline data pack: {} ({} data sets, built {}){}".format(
         os.path.basename(path), len(r.datasets), r.created,
@@ -2592,20 +2593,27 @@ def _log_offline_mode(run):
     _log_pack_check(run, path, r, only)
 
 
-def _log_pack_check(run, path, reader, only, opened=True):
+def _log_pack_check(run, path, reader, only, opened=True, why=""):
     """2.18.60: the pack checked against its manifest.json, in the run log
     (and so in the report's run log). A required layer missing: offline only
     stops the run with a clear error; online, that layer is downloaded.
-    2.18.63: opened=False - the reader could not open the pack: offline only
-    stops whatever the check says, and the log does not call the pack OK."""
+    2.18.64: opened=False - the reader could not open the pack (`why`: the
+    reader's reason): offline only stops whatever the check says, and the log
+    does not call the pack OK."""
     from .download import pack_check, REQUIRED_PACK_LAYERS
     res = pack_check(path, reader)
+    # 2.18.64: no manifest.json at all (a moved or deleted pack, an empty folder, a path
+    # that is not a pack): nothing to check against - say so, not "found no problem"
+    nopack = res is not None and not res.failed and res.format not in (1, 2)
     if res is None:
         run.log(">>> WARNING: the offline data pack could not be checked against its "
                 "manifest.json")
     elif opened or not res.ok:
         run.log(">>> " + ("" if res.ok else "WARNING: ") + res.summary())
-    else:                        # 2.18.63: the check passes, the reader cannot open it
+    elif nopack:
+        run.log(">>> WARNING: {} - it cannot be opened, nothing is read from it".format(
+            res.summary()))
+    else:                        # 2.18.64: the check passes, the reader cannot open it
         run.log(">>> WARNING: the offline data pack check ({}) found no problem against "
                 "manifest.json, but the pack cannot be opened - nothing is read from "
                 "it".format(os.path.basename(path)))
@@ -2613,16 +2621,16 @@ def _log_pack_check(run, path, reader, only, opened=True):
         if issue.level != "note":
             run.log(">>>   " + issue.line())
     if only and REQUIRED_PACK_LAYERS and (res is None or not opened):
-        # 2.18.63: no check (no proof the required layers are there), or a pack the
+        # 2.18.64: no check (no proof the required layers are there), or a pack the
         # reader cannot open (they cannot come from it, whatever the check says)
         raise RuntimeError(
             "The classification (offline only) needs layer(s) {} from the offline data "
             "pack {}, and the pack {}{}. Repair or rebuild the pack, or untick Offline "
             "only.".format(", ".join(REQUIRED_PACK_LAYERS), path,
-                           "cannot be opened" if not opened else
-                           "could not be checked against its manifest.json",
-                           " ({})".format(res.summary()) if res is not None and not res.ok
-                           else ""))
+                           ("cannot be opened" + (": " + why if why else "")) if not opened
+                           else "could not be checked against its manifest.json",
+                           " ({})".format(res.summary()) if res is not None and (
+                               not res.ok or nopack) else ""))
     if res is None:
         return
     if res.missing_required:

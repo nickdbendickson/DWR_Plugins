@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Hazard 2.18.63 (#171 follow-up): an offline-only run stops on a pack it cannot trust.
+"""Hazard 2.18.64 (#171 follow-up): an offline-only run stops on a pack it cannot trust.
 
 pipeline._log_offline_mode with download.offline_config / pack_reader patched to a tiny
 temp pack (no service, no download, no QGIS project):
@@ -13,8 +13,11 @@ temp pack (no service, no download, no QGIS project):
     nd_offline_pack.sqlite, a format_version the reader refuses): offline only ->
     RuntimeError naming the required layer, and the log does not say "OK"; online -> a
     warning only;
+  * no pack at all (an empty folder, a moved or deleted pack - 2.18.64): offline only ->
+    RuntimeError saying it is not an offline data pack and cannot be opened (with the
+    reader's reason), never "found no problem against manifest.json"; online -> a warning;
   * a good pack: no error;
-  * _offline_pack_sig changes when a layer file changes in place (2.18.63).
+  * _offline_pack_sig changes when a layer file changes in place (2.18.64).
 
 Nothing outside the temp folder is read or written; the user's offline pack setting is not
 read (offline_config is patched).
@@ -66,12 +69,14 @@ def attempt(path, only):
     saved = DL.offline_config, DL.pack_reader
     DL.offline_config = lambda: (path, only)
 
-    def reader(log=None):
+    def reader(log=None, errors=None):
         try:
             return HOP.open_pack(path)
         except Exception as e:                               # noqa: BLE001
             if log:
                 log("cannot read: {}".format(e))
+            if errors is not None:
+                errors.append(str(e))
             return None
     DL.pack_reader = reader
     run = Run()
@@ -158,7 +163,7 @@ def main():
         expect(err is None and any("NSI_structures" in ln for ln in lines),
                "cut-short NSI GeoPackage, online: a warning, no error ({})".format(err))
 
-        # 2.18.63: the check passes, the reader cannot open the pack - nothing can be read
+        # 2.18.64: the check passes, the reader cannot open the pack - nothing can be read
         # from it, so offline only stops (it used to log "OK" and run on without NSI)
         for what, pth in unopenable(tmp, good):
             PC.clear_cache()
@@ -176,6 +181,37 @@ def main():
             expect(err is None and any("WARNING" in ln for ln in lines) and
                    not any("OK - every layer" in ln for ln in lines),
                    "{}, online: a warning, no error ({})".format(what, err))
+
+        # 2.18.64: no pack at all - nothing to check against, so neither the log nor the
+        # error may say the check "found no problem against manifest.json"
+        os.makedirs(os.path.join(tmp, "empty"))
+        for what, pth in (("an empty folder", os.path.join(tmp, "empty")),
+                          ("a missing path", os.path.join(tmp, "moved", "pack"))):
+            err, lines = attempt(pth, True)
+            msg = str(err)
+            expect(isinstance(err, RuntimeError) and "NSI_structures" in msg and
+                   "not an offline data pack" in msg and "cannot be opened: " in msg and
+                   "found no problem" not in msg,
+                   "{}, offline only: RuntimeError, not a pack, cannot be opened ({})".format(
+                       what, err))
+            expect(not any("found no problem" in ln for ln in lines) and
+                   any("not an offline data pack" in ln and "cannot be opened" in ln
+                       for ln in lines),
+                   "{}: the log says it is not a pack ({})".format(what, lines))
+            err, lines = attempt(pth, False)
+            expect(err is None and any("WARNING" in ln and "not an offline data pack" in ln
+                                       for ln in lines) and
+                   not any("found no problem" in ln for ln in lines),
+                   "{}, online: a warning, no error ({})".format(what, err))
+            saved = DL.offline_config
+            DL.offline_config = lambda p=pth: (p, True)
+            try:
+                why = []
+                r = DL.pack_reader(errors=why)
+            finally:
+                DL.offline_config = saved
+            expect(r is None and len(why) == 1 and why[0],
+                   "{}: download.pack_reader gives the reason ({})".format(what, why))
 
         saved = DL.pack_check
         DL.pack_check = lambda path=None, reader=None: None
