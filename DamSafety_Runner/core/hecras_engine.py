@@ -1822,6 +1822,12 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     path}, 'warnings': [...], 'hdf': path, 'project': folder}."""
     from . import gdal_io
     log = log or (lambda m: None)
+    # 3.10.84: an unknown depth basis (RunSettings.hecras_depth_basis or NDBREACH_HECRAS_
+    # DEPTH_BASIS) stops the stage here, before the model is built and computed
+    try:
+        hecras.depth_basis(getattr(st, "hecras_depth_basis", None))
+    except hecras.HecRasError as e:
+        raise HecRasEngineError(str(e))
     d = d or require(env)
     dp = final_paths.get("depth")
     if not dp or not os.path.exists(dp):
@@ -2047,6 +2053,7 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
         t_ft = terrain_on_grid(terrain, grid, z=terrain_z)
     info = {}
     say("Reading {} (depth basis {})".format(hdf, basis))
+    hst = os.stat(hdf)          # 3.10.84: recorded, so a later model run shows it is stale
     arr = results(hdf, grid, arrival_m=float(arrival_depth_ft) * 0.3048, t0_hr=float(t0_hr),
                   to_grid_xy=tr, terrain=t_ft, info=info, depth_basis=basis)
     os.makedirs(out_dir, exist_ok=True)
@@ -2063,6 +2070,9 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
     rep = {"reexport": "hecras", "runner": ver,
            "when_utc": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
            "run_dir": run_dir, "results_hdf": hdf, "terrain_tif": terrain, "grid": like,
+           # 3.10.84: the HDF as it was read (DamSafety Hazard 2.18.63 skips a re-export whose
+           # HDF has changed since, e.g. the model was run again into the same _hecras copy)
+           "results_hdf_stat": {"size": int(hst.st_size), "mtime": float(hst.st_mtime)},
            "t0_hr": float(t0_hr), "arrival_depth_ft": float(arrival_depth_ft),
            "depth_basis": info.get("depth_basis"),
            "depth_basis_stage": stage.get("depth_basis"),

@@ -287,3 +287,70 @@ def hecras_reexport_cli_depth_basis_option():
         assert cli.cmd_hecras_reexport(ns) == 0 and seen["depth_basis"] is None
     finally:
         hecras_engine.reexport_hecras_results = real
+
+
+@test
+def hecras_stage_unknown_depth_basis_stops_before_the_model_is_built():
+    """An unknown RunSettings.hecras_depth_basis / NDBREACH_HECRAS_DEPTH_BASIS stops
+    run_stage before write_project and the compute (it was only seen in results(), after the
+    whole HEC-RAS run, as a HecRasError run_hecras_stage did not catch)."""
+    from nd_breach_runner.core import gdal_io
+    built = []
+
+    def write_project(*a, **kw):
+        built.append(a)
+        raise hecras_engine.HecRasEngineError("stand-in: the model would be built here")
+
+    def body(tmp, patch):
+        patch(hecras_engine, "require", lambda env=None, **kw: {
+            "available": True, "prefix": tmp, "platform": "linux"})
+        patch(hecras_engine, "write_project", write_project)
+        patch(gdal_io, "read_grid", lambda p: Grid(np.zeros((3, 3)), 0.0, 3.0, 1.0,
+                                                   crs_wkt=WKT))
+        dam = os.path.join(tmp, "DAM-1")
+        os.makedirs(dam)
+        final = {"depth": os.path.join(dam, "Depth (Max).tif")}
+        open(final["depth"], "w").write("the LISFLOOD-FP depth")
+        for st, env in ((workflow.RunSettings(hecras_depth_basis="average"), None),
+                        (workflow.RunSettings(), "per-cell")):
+            with _Env(env):
+                try:
+                    hecras_engine.run_stage(dam, final, None, st)
+                    raise AssertionError("no error")
+                except hecras_engine.HecRasEngineError as e:
+                    assert "cell_min" in str(e) and ("average" in str(e) or
+                                                     hecras.DEPTH_BASIS_ENV in str(e)), e
+        assert not built
+
+        class _Res:
+            warnings = []
+        _Res.final = final
+        with _Env("per-cell"):
+            try:
+                workflow.run_hecras_stage(dam, _Res(), None, workflow.RunSettings(), None, None)
+                raise AssertionError("no error")
+            except workflow.HecRasStageError as e:
+                assert hecras.DEPTH_BASIS_ENV in str(e) and "LISFLOOD-FP results" in str(e)
+        assert not built
+        with _Env(None):              # the default and 'terrain' go on to build the model
+            for st in (workflow.RunSettings(), workflow.RunSettings(hecras_depth_basis="terrain")):
+                try:
+                    hecras_engine.run_stage(dam, final, None, st)
+                except hecras_engine.HecRasEngineError as e:
+                    assert "stand-in" in str(e), e
+        assert len(built) == 2
+    _with_patches(body)
+
+
+@test
+def hecras_reexport_records_the_results_hdf_it_read():
+    """reexport.json records the HDF's size and time stamp (DamSafety Hazard 2.18.63 skips a
+    re-export whose HDF has changed since, e.g. the model was run again)."""
+    def body(tmp, patch):
+        run = _reexport_fixture(tmp, patch)
+        rep = hecras_engine.reexport_hecras_results(run, out_dir=os.path.join(tmp, "a"))
+        st = os.stat(rep["results_hdf"])
+        assert rep["results_hdf_stat"] == {"size": st.st_size, "mtime": st.st_mtime}
+        js = json.load(open(os.path.join(tmp, "a", hecras_engine.REEXPORT_JSON)))
+        assert js["results_hdf_stat"]["size"] == st.st_size
+    _with_patches(body)

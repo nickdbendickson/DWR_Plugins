@@ -312,6 +312,24 @@ class _FakeAlg(object):
     pass
 
 
+class _basis_env(object):
+    """NDBREACH_HECRAS_DEPTH_BASIS set to `value` (None: unset) for a block."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __enter__(self):
+        self.saved = os.environ.get(CH.DEPTH_BASIS_ENV)
+        os.environ.pop(CH.DEPTH_BASIS_ENV, None)
+        if self.value is not None:
+            os.environ[CH.DEPTH_BASIS_ENV] = self.value
+
+    def __exit__(self, *a):
+        os.environ.pop(CH.DEPTH_BASIS_ENV, None)
+        if self.saved is not None:
+            os.environ[CH.DEPTH_BASIS_ENV] = self.saved
+
+
 def _ops(results, calls):
     from nd_breach_runner import algorithms_chain as AC
 
@@ -412,8 +430,16 @@ def chain_qgis_ops_hec_wait_and_import():
         open(dep, "w").close()
         calls = []
         ops = _ops({"ndhazard:hecrasplan": {"DEPTH": dep, "BOUNDARY": "/b.gpkg"}}, calls)
-        imp = ops.run("hazard_import", dam)
-        assert calls[0][1]["TERRAIN"].endswith("Terrain.tif") and imp["boundary"] == "/b.gpkg"
+        # 3.10.84: the default cell-minimum basis passes no terrain (was: always TERRAIN, the
+        # per-pixel depth the Runner no longer writes by default)
+        with _basis_env(None):
+            imp = ops.run("hazard_import", dam)
+        assert "TERRAIN" not in calls[0][1] and imp["boundary"] == "/b.gpkg"
+        assert imp["depth_basis"] == "cell_min" and imp["terrain"] == ""
+        with _basis_env("terrain"):                    # per pixel: the package's terrain
+            imp = ops.run("hazard_import", dam)
+        assert calls[1][1]["TERRAIN"].endswith("Terrain.tif") and imp["boundary"] == "/b.gpkg"
+        assert imp["depth_basis"] == "terrain" and imp["terrain"] == calls[1][1]["TERRAIN"]
         # Linux run: the Runner's HEC-RAS record
         dam.mode = "run_linux"
         try:
@@ -421,5 +447,106 @@ def chain_qgis_ops_hec_wait_and_import():
             raise AssertionError("no error")
         except CH.ChainError:
             pass
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@test
+def chain_hazard_import_depth_basis_follows_the_hecras_stage():
+    """3.10.84: the chain's Hazard import uses the depth basis the HEC-RAS stage used: the
+    Linux stage's hecras_stage.json for its own plan, else NDBREACH_HECRAS_DEPTH_BASIS (default
+    cell_min). Only the terrain basis looks for (and needs) a terrain."""
+    from nd_breach_runner.core import hecras
+    assert CH.DEPTH_BASIS_ENV == hecras.DEPTH_BASIS_ENV
+    root = _tmp()
+    try:
+        dam = _dams(root, ["L"], mode="wait")[0]
+        drop = os.path.join(CH.chain_dir(dam.folder), CH.RESULTS_DROP)
+        os.makedirs(drop)
+        plan = os.path.join(drop, "Dam.p01.hdf")           # no Terrain folder anywhere
+        open(plan, "wb").close()
+        dam.outputs["hec_run"] = {"plan_hdf": plan, "project": ""}
+        dep = os.path.join(root, "d.tif")
+        open(dep, "w").close()
+        out = os.path.join(CH.chain_dir(dam.folder), "hecras_import")
+        os.makedirs(out)
+        with open(os.path.join(out, "depth_basis.json"), "w") as f:
+            json.dump({"depth_basis": "terrain"}, f)       # a previous import's record
+
+        def hazard(params):                                # writes its record as Hazard does
+            with open(os.path.join(params["OUTPUT"], "depth_basis.json"), "w") as f:
+                json.dump({"depth_basis": "terrain" if params.get("TERRAIN")
+                           else "cell_min"}, f)
+            return {"DEPTH": dep}
+        calls = []
+        ops = _ops({"ndhazard:hecrasplan": hazard}, calls)
+        lines = []
+        ops.log = lines.append
+        with _basis_env(None):                 # default: no terrain needed, none passed
+            imp = ops.run("hazard_import", dam)
+        assert "TERRAIN" not in calls[-1][1] and imp["depth_basis"] == "cell_min"
+        assert imp["hazard_depth_basis"] == "cell_min" and imp["terrain"] == ""
+        assert any("cell minimum" in m and "NDBREACH_HECRAS_DEPTH_BASIS=terrain" in m
+                   for m in lines), lines
+        with _basis_env("terrain"):            # per pixel without a terrain: a clear error
+            try:
+                ops.run("hazard_import", dam)
+                raise AssertionError("no ChainError")
+            except CH.ChainError as e:
+                assert "HEC_TERRAIN" in str(e) and "terrain" in str(e)
+        with _basis_env("average"):            # an unknown basis: a clear error
+            try:
+                ops.run("hazard_import", dam)
+                raise AssertionError("no ChainError")
+            except CH.ChainError as e:
+                assert CH.DEPTH_BASIS_ENV in str(e)
+        n = len(calls)
+        # the Linux HEC-RAS stage of this plan decides, whatever the variable says now
+        dam.mode = "run_linux"
+        hec = os.path.join(dam.folder, "_hecras")
+        os.makedirs(os.path.join(hec, "Terrain"))
+        hplan = os.path.join(hec, "Dam.p01.hdf")
+        open(hplan, "wb").close()
+        tif = os.path.join(root, "proj", "Terrain", "Dam Terrain.tif")
+        os.makedirs(os.path.dirname(tif))
+        open(tif, "w").close()
+        stage = {"results_hdf": hplan, "project": os.path.dirname(os.path.dirname(tif)),
+                 "terrain_tif": tif, "depth_basis": "terrain"}
+        with open(os.path.join(hec, "hecras_stage.json"), "w") as f:
+            json.dump(stage, f)
+        dam.outputs["hec_run"] = {"plan_hdf": hplan, "project": stage["project"]}
+        with _basis_env(None):
+            imp = ops.run("hazard_import", dam)
+        assert calls[-1][1]["TERRAIN"] == tif and imp["depth_basis"] == "terrain"
+        assert imp["hazard_depth_basis"] == "terrain"
+        with open(os.path.join(hec, "hecras_stage.json"), "w") as f:
+            json.dump(dict(stage, depth_basis="cell_min"), f)
+        with _basis_env("terrain"):
+            imp = ops.run("hazard_import", dam)
+        assert "TERRAIN" not in calls[-1][1] and imp["depth_basis"] == "cell_min"
+        # a stage record of another plan: the variable decides
+        dam.outputs["hec_run"] = {"plan_hdf": plan, "project": ""}
+        with _basis_env("terrain"):
+            try:
+                ops.run("hazard_import", dam)
+                raise AssertionError("no ChainError")
+            except CH.ChainError:
+                pass
+        assert len(calls) == n + 2
+        # resume: the import is redone when the basis setting changes
+        vals, cv = _cv(OUT_FOLDER=root)
+        with _basis_env(None):
+            a = CH.fingerprint(CH.stage_inputs("hazard_import", vals, cv))
+            r = CH.fingerprint(CH.stage_inputs("runner", vals, cv))
+        with _basis_env("terrain"):
+            b = CH.fingerprint(CH.stage_inputs("hazard_import", vals, cv))
+            assert CH.fingerprint(CH.stage_inputs("runner", vals, cv)) == r
+        assert a != b
+        # a previous import's depth_basis.json is not taken for this one's
+        with open(os.path.join(out, "depth_basis.json"), "w") as f:
+            json.dump({"depth_basis": "terrain"}, f)
+        ops = _ops({"ndhazard:hecrasplan": {"DEPTH": dep}}, [])
+        with _basis_env(None):
+            assert ops.run("hazard_import", dam)["hazard_depth_basis"] == ""
     finally:
         shutil.rmtree(root, ignore_errors=True)
