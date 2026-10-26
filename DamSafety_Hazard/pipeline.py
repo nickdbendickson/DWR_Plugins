@@ -696,6 +696,10 @@ def _offline_pack_sig():
             if os.path.isdir(path) and pack_format(path) == 2:
                 mst = os.stat(os.path.join(path, "manifest.json"))
                 sig += [int(mst.st_size), int(getattr(mst, "st_mtime_ns", 0))]
+                # 2.18.63: and with every layer file it lists (size, time): a GeoPackage
+                # replaced in place without a new manifest is a new evaluation too
+                from .damsuite import packcheck as PC
+                sig.append(PC.pack_signature(path))
         except OSError:
             sig = [os.path.normcase(os.path.abspath(path)), "missing"]
     return [sig, bool(only)]
@@ -2577,6 +2581,9 @@ def _log_offline_mode(run):
         run.log(">>> WARNING: the offline data pack {} could not be read{}".format(
             path, " - offline only: nothing is downloaded" if only else
             " - the services are used"))
+        # 2.18.63: checked all the same - a pack that cannot be read (a broken manifest.json)
+        # cannot give the required layers, so an offline-only run stops here
+        _log_pack_check(run, path, None, only)
         return
     run.log(">>> Offline data pack: {} ({} data sets, built {}){}".format(
         os.path.basename(path), len(r.datasets), r.created,
@@ -2593,6 +2600,14 @@ def _log_pack_check(run, path, reader, only):
     if res is None:
         run.log(">>> WARNING: the offline data pack could not be checked against its "
                 "manifest.json")
+        if only:                 # 2.18.63: no check, no proof the required layers are there
+            from .download import REQUIRED_PACK_LAYERS
+            if REQUIRED_PACK_LAYERS:
+                raise RuntimeError(
+                    "The classification (offline only) needs layer(s) {} from the offline data "
+                    "pack {}, and the pack could not be checked against its manifest.json. "
+                    "Repair or rebuild the pack, or untick Offline only.".format(
+                        ", ".join(REQUIRED_PACK_LAYERS), path))
         return
     run.log(">>> " + ("" if res.ok else "WARNING: ") + res.summary())
     for issue in res.issues:

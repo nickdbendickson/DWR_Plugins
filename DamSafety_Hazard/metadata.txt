@@ -5,10 +5,16 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.18.62
+version=2.18.63
 icon=icon.svg
 author=N.D. Bendickson
 changelog=
+    2.18.63 - 2026-10-26 (offline pack check never raises; a broken pack stops an offline-only run - #171 follow-up)
+      * A manifest.json that cannot be read (half written, not JSON / UTF-8, not an object, a section or entry of the wrong type) is a FAILED check result, never an exception and never a silent "not a pack"; NSI_structures then counts as missing, so an Offline-only run stops with a clear error (online: a warning, NSI is downloaded). Also when the pack cannot be opened or no check result could be made.
+      * A cut-short (half-written) or garbage GeoPackage is named "cannot be read" (SQLite header, page size and file length) instead of passing the quick check.
+      * A zipped pack is checked by its listing (every listed file in the zip, not empty).
+      * The run signature includes each listed layer file's size and time, so a GeoPackage replaced in place is a new evaluation.
+      * Suite package 1.17.6 (packcheck). Tests: tests/test_packcheck_malformed.py, tests/test_pack_offline_block.py.
     2.18.62 - 2026-10-25 (reproduce / data folder: every file of every role is loaded, or a warning)
       * Reproduce: the package's data sets were wrapped twice, so a role recorded as one file (roads, rail, NSI, FEMA USA Structures, ...) was skipped WITHOUT a word and a role with several files (AADT: HPMS + county roads; bridges: NBI + OSM) opened only its first. Now one shape for every role ([[path, category], ...]), old and new packages alike, and every file is handed to the run.
       * AADT, bridges, NSI, address points, USA Structures, outlines and lifelines read every file of the data folder; another role with several files reads the first and says which were not used.

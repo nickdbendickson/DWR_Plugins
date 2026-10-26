@@ -2,7 +2,7 @@
 damsuite.packcheck). A synthetic format-2 pack (manifest.json, LAYERS.txt, one GeoPackage
 per layer, written with the suite's stdlib writer) in a temp suite folder: OK when every
 layer matches, WARN naming the layer when a file is gone or its count differs; no row when
-no pack is in use. Read-only on the pack.
+no pack is in use; 0.17.48: a broken manifest.json is a WARN row saying FAILED. Read-only on the pack.
 
 Run: PYTHONPATH=tests/qgis_mock:<parent of the plugin> python3 tests/test_preflight_packcheck.py
 """
@@ -82,6 +82,20 @@ try:
     assert r["status"] == pf.WARN and "missing: NID_dams" in r["detail"] and r["fix"], r
     print("ok   missing layer file: WARN naming NID_dams, with a fix")
     assert sorted(os.listdir(pack)) == ["LAYERS.txt", "dams", "manifest.json"]
+
+    # 0.17.48 (#171 follow-up): a manifest.json that cannot be read (half written, not an
+    # object) is a WARN row saying FAILED - not a silent "no pack" - and never raises
+    build(os.path.join(d, "Pack2"))
+    shutil.rmtree(pack)
+    pack = os.path.join(d, "Pack2")
+    for raw in ('{"format": "nd-dam-hazard-offline-pack", "format_version": 2, "data', "[]"):
+        with open(os.path.join(pack, "manifest.json"), "w") as fh:
+            fh.write(raw)
+        r = row(S)
+        assert r and r["status"] == pf.WARN and "FAILED" in r["detail"], (raw, r)
+        checks = pf.run_checks(os.path.join(d, "work"), S, env=Net())
+        assert [c for c in checks if c["title"] == TITLE and c["status"] == pf.WARN], raw
+    print("ok   broken manifest.json: WARN row saying FAILED")
 
     S2 = dict(wf.DEFAULT_SETTINGS)
     S2["suite_folder"] = os.path.join(d, "work")
