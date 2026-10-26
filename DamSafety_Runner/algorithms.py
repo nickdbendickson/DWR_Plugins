@@ -914,13 +914,10 @@ class _Base(QgsProcessingAlgorithm):
                         flat = flat[flat != nodata]
                     flat = flat[np.isfinite(flat)]
                     if flat.size > 10:
-                        med = float(np.median(flat))
-                        in_ft = zc in ("feet", "us_feet")
-                        med_m = med * 0.3048 if in_ft else med
-                        if med_m < 100 or med_m > 1200:
-                            raise QgsProcessingException(
-                                "DEM median {:.1f} with units '{}' is outside the North Dakota "
-                                "ground range (about 250-600 m). Check the elevation unit.".format(med, zc))
+                        # 3.10.89: the message names the unit that fits (gdal_io)
+                        problem = gdal_io.median_unit_problem(float(np.median(flat)), zc)
+                        if problem:
+                            raise QgsProcessingException(problem)
         except QgsProcessingException:
             raise
         except Exception:

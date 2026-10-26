@@ -78,7 +78,8 @@ def z_to_m_factor(path, choice=Z_AUTO):
 
 def recorded_z_unit(path):
     """(choice, how) from the elevation unit the DEM itself records - its band unit type, else a
-    compound CRS's vertical unit - or ("", why) when it records none. choice is Z_FEET,
+    compound CRS's vertical unit, else (3.10.89) the Download DEM tool's own record
+    (download_record_unit) - or ("", why) when it records none. choice is Z_FEET,
     Z_US_FEET or Z_METERS. Never guesses from the horizontal CRS or the values (3.10.88)."""
     _gdal()
     ds = GS.open_raster(path)
@@ -106,7 +107,52 @@ def recorded_z_unit(path):
             return Z_FEET, "vertical CRS in feet"
         if vert and abs(vert - 1.0) < 1e-9:
             return Z_METERS, "vertical CRS in metres"
-    return "", "no elevation unit is recorded in the raster (no band unit, no vertical CRS)"
+    got = download_record_unit(ds, path)
+    if got[0]:
+        return got
+    return "", ("no elevation unit is recorded in the raster (no band unit, no vertical CRS, "
+                "no Download DEM record)")
+
+
+def _unit_choice(unit):
+    unit = (unit or "").strip().lower()
+    if unit in _US_FEET_NAMES:
+        return Z_US_FEET
+    if unit in _FEET_NAMES:
+        return Z_FEET
+    if unit in _METER_NAMES:
+        return Z_METERS
+    return ""
+
+
+def download_record_unit(ds, path):
+    """(choice, how) from the Screening Download DEM tool's own record of a GeoTIFF it wrote, or
+    ("", ""): the dataset metadata SOURCE + UNITS that write_local_dem sets (every Screening
+    version; a warped copy keeps it), else the <stem>_dem.txt facts file beside it ('units:').
+    3.10.89: the downloads of Screening 0.17.49 and earlier have no band unit, so 'Detect from
+    the raster' stopped on them (Nick, one-dam run, Absaraka DWR-2801)."""
+    try:
+        md = ds.GetMetadata() or {}
+    except Exception:
+        md = {}
+    if str(md.get("SOURCE") or "").strip() and str(md.get("UNITS") or "").strip():
+        got = _unit_choice(md.get("UNITS"))
+        if got:
+            return got, "Download DEM record UNITS={}".format(md.get("UNITS"))
+    side = os.path.splitext(str(path).split("|", 1)[0])[0] + "_dem.txt"
+    try:
+        with open(side, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return "", ""
+    for line in lines:
+        key, _sep, val = line.partition(":")
+        if key.strip().lower() == "units":
+            got = _unit_choice(val)
+            if got:
+                return got, "Download DEM facts file {} (units: {})".format(
+                    os.path.basename(side), val.strip())
+    return "", ""
 
 
 DEM_Z_HELP = ("Set 'DEM elevation units' to Meters or Feet. Metres: USGS 3DEP downloads (the "
@@ -133,6 +179,34 @@ ND_GROUND_M = (200.0, 1100.0)      # North Dakota: 229 m (Pembina) to 1069 m (Wh
 
 def _nd_ground(z_m):
     return ND_GROUND_M[0] <= z_m <= ND_GROUND_M[1]
+
+
+Z_LABELS = {Z_FEET: "Feet", Z_US_FEET: "US survey feet", Z_METERS: "Meters"}
+_TO_M = {Z_FEET: FT, Z_US_FEET: US_FT, Z_METERS: 1.0}
+
+
+def median_unit_problem(med, zc):
+    """None when a DEM median `med` read in the unit `zc` is plausible North Dakota ground; else
+    the message, naming the unit that does fit (3.10.89). Stops when the metres value is outside
+    100-1200 m (as before), and also when feet put it below North Dakota's ground (200 m) while
+    metres fit - a 3DEP metre DEM run as Feet (about 99-200 m), which passed before."""
+    f = _TO_M.get(zc, 1.0)
+    med_m = med * f
+    alt = Z_METERS if f != 1.0 else Z_FEET
+    alt_m = med * _TO_M[alt]
+    bad = med_m < 100 or med_m > 1200 or (f != 1.0 and not _nd_ground(med_m) and _nd_ground(alt_m))
+    if not bad:
+        return None
+    text = ("DEM median {:.1f} with units '{}' is {:.0f} m, outside the North Dakota ground range "
+            "(about 230-1070 m). ").format(med, Z_LABELS.get(zc, zc), med_m)
+    if _nd_ground(alt_m):
+        text += ("Read as {} it is {:.0f} m, which fits: set 'DEM elevation units' to {}{}.").format(
+            "metres" if alt == Z_METERS else "feet", alt_m, Z_LABELS[alt],
+            " (USGS 3DEP downloads are metres)" if alt == Z_METERS else "")
+    else:
+        text += ("Neither feet nor metres fits: check the DEM (a nodata value that is not set, "
+                 "or not this dam's DEM).")
+    return text
 
 
 def _median_value(ds, size=256):
