@@ -182,8 +182,10 @@ def recompute(work, wb, dwr_uri, dam_id, row, search_m=500 * FT, shape=1.0, extr
             lab = "crest (max pool above it)"
         elif info_r["anchor"] == "maximum storage at the max pool":
             lab = "max pool (pool + inventory rise)"
+        elif info_r["anchor"].endswith("(fallback)"):
+            lab = "top of dam (fallback)"
         else:
-            lab = "anchor: " + info_r["anchor"]
+            lab = info_r["anchor"]     # "normal storage at the normal pool" (no maximum)
         levels[lab] = e_anchor
     sp = None
     for n in res.notes:

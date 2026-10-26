@@ -463,7 +463,10 @@ def anchor_inventory_storage(curve, below_est_m3, pool_m, inv_norm_m3, inv_max_m
       * storage at the max pool = inventory maximum;
       * storage at the pool = inventory normal storage when it is given and below the maximum
         (not equal to it: NORMAL-EQUALS-MAX, within ANCHOR_SAME); between the two the DEM fill
-        is scaled to join them, down when it is more than the difference (no flag);
+        is scaled to join them, down when it is more than the difference (no flag) - except for
+        a max pool above the end of a curve that stops short of a given crest_m (below; direct
+        callers only, tool 3's crest is the end of its curve), where the fill is not scaled
+        (CURVE-ABOVE-MAX when it already passes the maximum);
       * without a usable normal storage (missing, equal to the maximum - the 2865 pattern, where
         the "normal" box held the maximum - or above it) the storage at the pool is the maximum
         minus the DEM fill from the pool to the max pool;
