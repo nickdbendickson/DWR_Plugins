@@ -71,6 +71,7 @@ STATE_NAME = "chain_state.json"
 USED_NAME = "chain_settings_used.json"
 TODO_NAME = "CHAIN_HECRAS_TODO.txt"
 RESULTS_DROP = "hecras_results"         # <dam>/_chain/hecras_results: a finished plan HDF
+DEPTH_BASIS_ENV = "NDBREACH_HECRAS_DEPTH_BASIS"   # = core/hecras.DEPTH_BASIS_ENV (no numpy here)
 FULL_HASH_LIMIT = 256 * 1024 ** 2        # larger inputs are recorded by size and time
 
 
@@ -102,7 +103,9 @@ KEYS = (
         "override; empty = look in the dam folder)"),
     Key("HEC_PLAN_HDF", "text", "", "A finished HEC-RAS plan HDF to use (per-dam override)"),
     Key("HEC_TERRAIN", "text", "", "HEC-RAS terrain GeoTIFF (empty = the package's Terrain "
-        "folder)"),
+        "folder)", "3.10.84: used only for the per-pixel depth basis "
+        "(NDBREACH_HECRAS_DEPTH_BASIS=terrain, or a Linux HEC-RAS stage on that basis); the "
+        "default cell-minimum depth needs no terrain."),
     Key("HAZARD_PROFILE", "text", "", "Hazard settings profile (.ndprofile.json) for the "
         "saved Hazard window state"),
     Key("STOP_AFTER", "enum", 0, "Stop each dam at", options=STOP_CHOICES),
@@ -346,6 +349,11 @@ def stage_inputs(stage, values, cv):
             "hazard_import": ("HEC_TERRAIN",),
             "classify": ("HEC_MODE", "HAZARD_PROFILE")}.get(stage, ())
     out["chain"] = {k: cv.get(k) for k in used}
+    if stage == "hazard_import":
+        # 3.10.84: the import's depth basis (algorithms_chain.import_depth_basis); a resume
+        # imports again when it changes - and once after 3.10.84, whose default is the cell
+        # minimum (the import of 3.10.83 and earlier always used the terrain)
+        out["depth_basis_env"] = str(os.environ.get(DEPTH_BASIS_ENV) or "").strip().lower()
     return out
 
 

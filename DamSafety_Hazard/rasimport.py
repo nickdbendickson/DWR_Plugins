@@ -45,9 +45,13 @@ rasters, the cache manifest, the run log):
                    this plan with depth from the terrain were found (a
                    re-export _hecras/reexport_*/ or the dam folder's final
                    rasters with hecras_stage.json depth_basis 'terrain'):
-                   those are used (find_runner_rasters)
-  cell_min         neither: depth from each cell's minimum elevation (ditches
-                   deepen whole cells; a warning says so)
+                   those are used (find_runner_rasters; 2.18.63: the newest
+                   re-export of the plan's current results decides, so a
+                   newer cell_min re-export or a model run since wins over
+                   an older terrain re-export)
+  cell_min         neither: depth from each cell's minimum elevation (a
+                   ditch or channel deepens its whole cell - conservative,
+                   the Runner's default since 3.10.84; CELL_MIN_WARNING)
 
 v2.9 - a plan HDF used DIRECTLY as a classification input (no Import step):
   is_plan_hdf(path)          cheap check (name *.p##.hdf + HDF5 signature;
@@ -92,11 +96,13 @@ DEPTH_BASIS_TERRAIN = "terrain"
 DEPTH_BASIS_RUNNER = "runner_reexport"
 DEPTH_BASIS_CELL_MIN = "cell_min"
 BASIS_FILE = "depth_basis.json"
-CELL_MIN_WARNING = ("WARNING: no terrain raster and no Runner re-export of this plan - depth and "
-                    "arrival are from each HEC-RAS cell's MINIMUM elevation (a ditch or channel "
-                    "in a cell deepens the whole cell, so the flooded area is overstated). Give "
-                    "the terrain raster, or re-export the run with the Runner "
-                    "(ndbreach_cli.py hecras-reexport).")
+# 2.18.63: worded for the suite policy - the cell minimum is the Runner's default (3.10.84)
+CELL_MIN_WARNING = ("Depth basis: cell minimum - no terrain raster and no current Runner "
+                    "per-pixel export of this plan, so depth and arrival are from each HEC-RAS "
+                    "cell's MINIMUM elevation, the Runner's default (conservative: a ditch or "
+                    "channel in a cell deepens the whole cell). For per-pixel depth give the "
+                    "terrain raster, or re-export the run on the per-pixel basis "
+                    "(ndbreach_cli.py hecras-reexport DAM_FOLDER --depth-basis terrain).")
 # the Runner's names (DamSafety_Runner core/workflow.FINAL_NAMES; ft, ft/s, h after its t0)
 RUNNER_NAMES = {"depth": "Depth (Max).tif", "vel": "Velocity (Max).tif",
                 "arr": "Arrival Time.tif", "wse": "WSE (Max).tif"}
@@ -489,7 +495,9 @@ def import_plan(hdf_path, out_folder, dem_path=None, cell_ft=0.0, breach_hr=0.0,
     2.18.61: without dem_path, ND Dam Breach Runner rasters of this plan with depth
     from the terrain (find_runner_rasters; runner_dirs: extra folders to look in,
     e.g. the dam folder) are used when use_runner; else depth from the cell minimum
-    with CELL_MIN_WARNING. The basis is written to depth_basis.json."""
+    with CELL_MIN_WARNING. The basis is written to depth_basis.json. 2.18.63: an
+    older terrain re-export is not used once a newer re-export of the plan's current
+    results says cell_min, nor once the model has been run again since it."""
     from osgeo import gdal
     if not dem_path and use_runner:
         found = find_runner_rasters(hdf_path, runner_dirs)
@@ -833,11 +841,33 @@ def _load_json(path):
         return {}
 
 
+def _reexport_fresh(rep, json_path):
+    """2.18.63: True when a Runner re-export was made from its results HDF as that file is
+    now: the size and time stamp reexport.json recorded (results_hdf_stat, Runner 3.10.84),
+    else the HDF not newer than reexport.json (5 s tolerance, as the stage check). The
+    Runner's model run writes the same _hecras/<plan>.hdf again, so a re-export made before
+    a later run of the model would otherwise be taken for the new results."""
+    try:
+        st = os.stat(rep.get("results_hdf"))
+        rec = rep.get("results_hdf_stat")
+        if isinstance(rec, dict) and rec.get("size") is not None and \
+                rec.get("mtime") is not None:
+            return int(rec["size"]) == int(st.st_size) and \
+                abs(float(rec["mtime"]) - st.st_mtime) <= 5.0
+        return st.st_mtime <= os.path.getmtime(json_path) + 5.0
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def find_runner_rasters(hdf_path, runner_dirs=None):
     """2.18.61: ND Dam Breach Runner rasters of this plan whose depth is from the terrain,
     or None. Looked for in runner_dirs and the plan's folder and above:
-      1. the newest <dam>/_hecras/reexport_*/ whose reexport.json has depth_basis
-         'terrain' and results_hdf = this plan (Runner 3.10.79 hecras-reexport)
+      1. a <dam>/_hecras/reexport_*/ of this plan (reexport.json results_hdf = this plan)
+         whose depth_basis is 'terrain' (Runner 3.10.79 hecras-reexport). 2.18.63: only
+         re-exports made from the results HDF as it is now count (_reexport_fresh: not one
+         made before the model was run again), and the NEWEST of them decides - when it is
+         not 'terrain' (Runner 3.10.84 writes 'cell_min' by default) no older re-export is
+         used
       2. the dam folder's final rasters when _hecras/hecras_stage.json has depth_basis
          'terrain' and results_hdf = this plan, and the depth raster is not newer than it
          (a later model run would have replaced it)
@@ -856,10 +886,13 @@ def find_runner_rasters(hdf_path, runner_dirs=None):
             subs = []
         for n in subs:
             f = os.path.join(hec, n)
-            rep = _load_json(os.path.join(f, RUNNER_REEXPORT_JSON))
-            if rep.get("depth_basis") != DEPTH_BASIS_TERRAIN or \
-                    not _same_plan(rep.get("results_hdf"), hdf_path):
-                continue
+            rp = os.path.join(f, RUNNER_REEXPORT_JSON)
+            rep = _load_json(rp)
+            if not _same_plan(rep.get("results_hdf"), hdf_path) or \
+                    not _reexport_fresh(rep, rp):
+                continue                  # another plan's, or of results since replaced
+            if rep.get("depth_basis") != DEPTH_BASIS_TERRAIN:
+                break                     # 2.18.63: the newest says cell_min - no older one
             files = _runner_files(f)
             if files:
                 return {"folder": f, "files": files, "kind": "reexport",
@@ -1507,7 +1540,7 @@ _CODE_FUNCS = ("plan_info", "_real_cells", "cell_velocity", "_ranges", "arrival_
                "read_area", "_spacing", "_write_csv", "_open_points", "_write_points", "_grid",
                "import_plan", "_finish", "_write_basis", "_pixel_first_reach",
                "_arrival_from_series", "_runner_candidates", "_same_plan", "find_runner_rasters",
-               "_runner_files", "_import_runner")
+               "_runner_files", "_import_runner", "_reexport_fresh")
 
 
 def _code_digest():

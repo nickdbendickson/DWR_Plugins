@@ -25,6 +25,10 @@ NEW_FIELDS = [("est_pool_m", FT_DOUBLE), ("est_crest_m", FT_DOUBLE),
               ("stor_conf", FT_STRING), ("inv_vs_est", FT_DOUBLE),
               ("stor_notes", FT_STRING),
               ("below_scale", FT_DOUBLE), ("cal_total_m3", FT_DOUBLE)]
+# 0.17.47: where the inventory storage used sits on the curve (core/storage.py
+# anchor_inventory_storage). Kept out of NEW_FIELDS, which tools 17/18 (find ponds, propose dam)
+# build their layers on and fill by position.
+ANCHOR_FIELDS = [("stor_anchor", FT_STRING), ("stor_anchor_m", FT_DOUBLE)]
 
 
 def _storage_choice(alg, params, context):
@@ -57,8 +61,26 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 "(below_scale) while the above-pool part stays DEM-measured. inv_vs_est is "
                 "inventory normal storage / estimated storage at normal pool. Use the shape factor to "
                 "calibrate against dams with known storage.\n\n"
-                "Storage to use (default Max storage): Max raises the storage at the top of dam "
-                "to the inventory maximum; Normal keeps the DEM-measured part above the normal "
+                "Storage to use (default Max storage): Max places the inventory maximum at the "
+                "max pool - (DWR max_pool_elev - normal_elev) above the lidar water surface, which "
+                "is the normal pool - with the normal storage at the normal pool and only the DEM "
+                "fill above the max pool added on top (stor_anchor, stor_anchor_m). A max pool "
+                "above the DEM crest is placed at the crest (MAXPOOL-ABOVE-CREST): the storage at "
+                "the top of dam is set to the inventory maximum (never below it), which can be less "
+                "than the normal storage plus the DEM fill to the crest (the inventory difference "
+                "replaces that fill, as it does between the two pools). Without a usable normal "
+                "storage, a DEM fill from the pool to the max pool larger than the maximum keeps "
+                "the DEM curve (FILL-EXCEEDS-MAX; the storage at the top of dam is then above the "
+                "maximum); with one, the DEM fill between the two pools is scaled to fit between "
+                "them. "
+                "Without the pool elevations (NID-only records), or with a max pool below the "
+                "normal pool or at it with a larger maximum (MAXPOOL-ELEV-BAD), it raises the "
+                "storage at the top of dam to the inventory maximum as before, flagged FALLBACK in "
+                "stor_notes. A normal storage equal to the maximum (both read from the max-storage "
+                "field) is flagged NORMAL-EQUALS-MAX and not used at the normal pool; one above "
+                "the maximum is flagged NORMAL-NOT-BELOW-MAX (not used at the normal pool when the "
+                "pool elevations are known, kept there as before in the fallback). Normal keeps "
+                "the DEM-measured part above the normal "
                 "pool (a sunny-day check); Larger of the two uses whichever inventory value is "
                 "larger. A missing or zero value falls back to the other one (Normal without a "
                 "normal storage uses the maximum, Max without a maximum uses the normal); with "
@@ -149,7 +171,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
             storage.resolve_storage_choice(0, 0, choice)["label"]))
 
         fields = QgsFields(dams.fields())
-        for n, t in NEW_FIELDS: fields.append(QgsField(n, t))
+        for n, t in NEW_FIELDS + ANCHOR_FIELDS: fields.append(QgsField(n, t))
         sink, dest = self.parameterAsSink(params, self.OUT, context, fields,
                                           dams.wkbType(), dams.sourceCrs())
         alb = QgsCoordinateReferenceSystem("EPSG:5070")
@@ -164,7 +186,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
             feedback.setProgress(100 * i / total)
             dam_id = str(f["dam_id"]) if "dam_id" in names else str(f.id())
             out = QgsFeature(fields); out.setGeometry(f.geometry())
-            vals = list(f.attributes()) + [None] * len(NEW_FIELDS)
+            vals = list(f.attributes()) + [None] * (len(NEW_FIELDS) + len(ANCHOR_FIELDS))
             res, note = None, ""
             # M19: True when `res` is the assumed quadratic inventory curve from _inventory_curve
             # (a guess from inventory volume + height, not a DEM measurement); it must be reported
@@ -237,27 +259,54 @@ class EstimateStorage(QgsProcessingAlgorithm):
             if res is not None:
                 inv = f["inv_norm_m3"] if "inv_norm_m3" in names else None
                 inv = float(inv) if inv not in (None, "") else None
-                curve, scale, cnote = storage.calibrate_below_pool(
-                    res.curve, res.below_pool_m3, inv)
-                if cnote: note = (note + "; " if note else "") + cnote
                 inv_max = f["inv_max_m3"] if "inv_max_m3" in names else None
                 try:
                     inv_max = float(inv_max) if inv_max not in (None, "") else 0.0
                 except (TypeError, ValueError):
                     inv_max = 0.0
                 inv_norm = inv or 0.0
-                # the storage choice (0.17.27). The below-pool part is always calibrated to the
-                # inventory normal storage (above). When the storage used is the inventory
-                # maximum (Max; Larger when the maximum is larger; Normal without a normal
-                # storage) the storage at the top of dam is raised to it; when it is the normal
-                # storage (Normal; Max without a maximum) the DEM-measured part above the normal
-                # pool is kept. resolve_storage_choice says which, and any fallback.
+                # the storage choice (0.17.27). resolve_storage_choice says which inventory
+                # value is used (Max; Larger when the maximum is larger; Normal without a normal
+                # storage -> the maximum; Normal; Max without a maximum -> the normal), and any
+                # fallback. 0.17.47: each storage sits at its own elevation
+                # (storage.anchor_inventory_storage): the normal storage at the normal pool (the
+                # lidar water surface), the maximum at the max pool (inventory max-pool minus
+                # normal-pool elevation above the water surface) with only the DEM fill above
+                # the max pool added on top. Before, the "normal" storage was always put at the
+                # water surface and the DEM fill to the spill or crest added on top, so a record
+                # whose normal box held the maximum (DWR-2865: 167 ac-ft at 1870 ft) came out
+                # 237.6 ac-ft. Without the max-pool elevation the maximum is placed at the top of
+                # dam as before (flagged FALLBACK in stor_notes); a max pool above the crest puts
+                # the maximum at the crest (MAXPOOL-ABOVE-CREST), so the storage at the top of dam
+                # is never below the maximum.
                 pick = storage.resolve_storage_choice(inv_norm, inv_max, choice)
-                if pick["kind"] == "maximum":
-                    curve, tnote = storage.ensure_top_of_dam(
-                        curve, pick["volume_m3"], getattr(res, "crest_elev", None))
-                    if tnote:
-                        note = (note + "; " if note else "") + tnote
+                anchor_m = None
+                if assumed:
+                    # the assumed full-height curve already holds the inventory volume at its top
+                    curve, scale, cnote = storage.calibrate_below_pool(
+                        res.curve, res.below_pool_m3, inv)
+                    if cnote: note = (note + "; " if note else "") + cnote
+                    anchor = "assumed inventory curve"
+                    if pick["kind"] == "maximum":
+                        curve, tnote = storage.ensure_top_of_dam(
+                            curve, pick["volume_m3"], getattr(res, "crest_elev", None))
+                        if tnote:
+                            note = (note + "; " if note else "") + tnote
+                else:
+                    ne = f["inv_norm_elev_m"] if "inv_norm_elev_m" in names else None
+                    me = f["inv_max_elev_m"] if "inv_max_elev_m" in names else None
+                    curve, scale, ainfo = storage.anchor_inventory_storage(
+                        res.curve, res.below_pool_m3, res.pool_elev, inv_norm, inv_max,
+                        pick["kind"], ne, me, getattr(res, "crest_elev", None))
+                    anchor, anchor_m = ainfo["anchor"], ainfo["anchor_m"]
+                    extra = ainfo["notes"] + ainfo["flags"]
+                    if extra:
+                        note = (note + "; " if note else "") + "; ".join(extra)
+                    for fl in ainfo["flags"]:
+                        # a record without pool elevations (every NID-only dam) is the documented
+                        # fallback: logged, not warned; every other flag is a warning
+                        (feedback.pushInfo if fl.startswith("MAXPOOL-ELEV-MISSING")
+                         else feedback.pushWarning)("dam {}: {}".format(dam_id, fl))
                 note = pick["text"] + ("; " + note if note else "")
                 (feedback.pushWarning if pick["fallback"] else feedback.pushInfo)(
                     "dam {}: {}".format(dam_id, pick["text"]))
@@ -285,7 +334,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
                             res.above_pool_m3, res.total_m3, res.max_depth_m, res.shore_slope_deg,
                             used, method, conf,
                             (inv / res.below_pool_m3) if inv and res.below_pool_m3 else None,
-                            note, scale, cal_total]
+                            note, scale, cal_total, anchor, anchor_m]
                 with open(os.path.join(curves, f"curve_{dam_id}.csv"), "w", encoding="utf-8") as fh:
                     fh.write("elev_m,storage_m3\n")     # calibrated curve
                     for e, v in curve: fh.write(f"{e:.3f},{v:.1f}\n")

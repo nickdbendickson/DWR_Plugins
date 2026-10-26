@@ -10,7 +10,11 @@ fails that stage with a plain message (the preflight says so before anything sta
   hec_build      ndbreach:hecrasexport (the HEC-RAS 2D package; culverts / bridges from an
                                         existing ANUGA run when there is one)
   hec_run        the Runner's Linux HEC-RAS stage, or a wait for a manual run of the package
-  hazard_import  ndhazard:hecrasplan   (terrain-based depth, ft, ft/s, h, 2D-area boundary)
+  hazard_import  ndhazard:hecrasplan   (ft, ft/s, h, 2D-area boundary; 3.10.84: depth basis
+                                        from the Linux HEC-RAS stage's hecras_stage.json for
+                                        its plan, else NDBREACH_HECRAS_DEPTH_BASIS (default
+                                        cell_min); TERRAIN passed only for the per-pixel
+                                        'terrain' basis)
   classify       ndhazard:classify     (ND + TM11), then ndhazard:savedamstate (the dam's
                                         Hazard window state, to add scenarios later)
 """
@@ -24,7 +28,7 @@ from qgis.core import (QgsApplication, QgsProcessingException, QgsProcessingOutp
 from .algorithms import _Base
 from .compat import ALG_NO_THREADING, FIELD_ANY, SOURCE_POINT
 from .core import chain as CH
-from .core import nd_data
+from .core import hecras, nd_data
 from .damsuite import settings as DS
 from . import suite_settings_tools as ST
 
@@ -300,26 +304,83 @@ class QgisOps(object):
     def run_hazard_import(self, dam):
         r = dam.outputs.get("hec_run") or {}
         plan = r.get("plan_hdf", "")
-        terrain = str(dam.cv.get("HEC_TERRAIN") or "").strip()
-        if not terrain:
-            extra = [(dam.outputs.get("hec_build") or {}).get("package", "")]
-            if r.get("project"):
-                extra.append(os.path.dirname(r["project"]))
-            terrain = CH.find_terrain(plan, extra) or ""
-        if not terrain:
-            raise CH.ChainError("no HEC-RAS terrain GeoTIFF found next to {} (Terrain folder); "
-                                "give HEC_TERRAIN for this dam".format(plan))
+        # 3.10.84: the depth basis the HEC-RAS stage used (cell minimum by default). Only the
+        # per-pixel 'terrain' basis needs the terrain; without TERRAIN ndhazard:hecrasplan
+        # makes its own cell-minimum depth from the plan (the Runner's basis), unless the
+        # newest current Runner re-export of the plan (or a fresh terrain stage) is on the
+        # terrain basis, which Hazard 2.18.63 then adopts
+        basis, why, stage = import_depth_basis(dam, plan)
+        terrain = ""
+        if basis == hecras.DEPTH_BASIS_TERRAIN:
+            terrain = str(dam.cv.get("HEC_TERRAIN") or "").strip()
+            if not terrain and stage.get("terrain_tif") and \
+                    os.path.isfile(str(stage["terrain_tif"])):
+                terrain = str(stage["terrain_tif"])          # the Linux stage's own terrain
+            if not terrain:
+                extra = [(dam.outputs.get("hec_build") or {}).get("package", "")]
+                if r.get("project"):
+                    extra += [r["project"], os.path.dirname(r["project"])]
+                terrain = CH.find_terrain(plan, extra) or ""
+            if not terrain:
+                raise CH.ChainError("no HEC-RAS terrain GeoTIFF found next to {} (Terrain "
+                                    "folder) for the per-pixel 'terrain' depth basis ({}); "
+                                    "give HEC_TERRAIN for this dam".format(plan, why))
+            self.log("{}: HEC-RAS import depth basis: per pixel, max WSE minus the terrain "
+                     "{} ({})".format(dam.dam_id, terrain, why))
+        else:
+            env = hecras.DEPTH_BASIS_ENV
+            # a re-export is used only when this import runs again: a resumed chain keeps it
+            # as already done (its fingerprint, core/chain.stage_inputs, has HEC_TERRAIN and
+            # the variable, not _hecras/reexport_*)
+            reexport = ("re-export the plan with ndbreach_cli.py hecras-reexport \"{folder}\" "
+                        "--depth-basis terrain{terrain} (Hazard 2.18.63 adopts the newest current "
+                        "re-export of the plan when this import runs again; a resumed chain keeps "
+                        "the import as already done unless {env} or HEC_TERRAIN changes; "
+                        "unticking 'Skip stages "
+                        "already done' runs the dam's HEC-RAS stage again too, which replaces "
+                        "the results a re-export was made from)")
+            found = ""
+            if stage and stage.get("depth_basis_requested") == hecras.DEPTH_BASIS_TERRAIN:
+                # the stage was asked for per pixel but found no terrain (hecras_engine)
+                found = ("; the HEC-RAS stage was asked for per-pixel depth but found no "
+                         "terrain GeoTIFF (_hecras/hecras_stage.json depth_basis_requested "
+                         "'terrain')")
+                how = (reexport.format(folder=dam.folder, env=env,
+                                       terrain=" --terrain <the model's terrain GeoTIFF>") +
+                       ", or run the HEC-RAS stage again")
+            elif stage:        # the Linux stage's own record: the variable is read by that stage
+                how = ("set {}=terrain before the Runner's HEC-RAS stage runs (a resumed chain "
+                       "does not run it again), or ".format(env) +
+                       reexport.format(folder=dam.folder, env=env, terrain=""))
+            else:              # wait / manual / Windows run: read when this import runs
+                how = "set {}=terrain; it is read when this import runs".format(env)
+            self.log("{}: HEC-RAS import depth basis: cell minimum, max WSE minus the HEC-RAS "
+                     "cell's minimum elevation ({}){}; for per-pixel depth {}".format(
+                         dam.dam_id, why, found, how))
         out = os.path.join(CH.chain_dir(dam.folder), "hecras_import")
         os.makedirs(out, exist_ok=True)
+        rec_p = os.path.join(out, "depth_basis.json")      # Hazard's record of the basis used
+        try:
+            os.remove(rec_p)                                # not a previous import's
+        except OSError:
+            pass
         aid, params = self.tool_params(dam, "hazard_import",
-                                       {"PLAN": plan, "TERRAIN": terrain, "OUTPUT": out})
+                                       {"PLAN": plan, "TERRAIN": terrain or None, "OUTPUT": out})
         res = self._run(aid, params) or {}
         depth = res.get("DEPTH") or ""
         if not depth or not os.path.exists(depth):
             raise CH.ChainError("the HEC-RAS import wrote no depth raster")
+        try:                                # terrain / runner_reexport / cell_min (Hazard)
+            with open(rec_p, encoding="utf-8") as f:
+                used = str((json.load(f) or {}).get("depth_basis") or "")
+        except (OSError, ValueError, AttributeError):
+            used = ""
+        if used and used != basis:
+            self.log("{}: the Hazard import used depth basis {} (see {})".format(
+                dam.dam_id, used, rec_p))
         return {"depth": depth, "velocity": res.get("VELOCITY", ""),
                 "arrival": res.get("ARRIVAL", ""), "boundary": res.get("BOUNDARY", ""),
-                "terrain": terrain}
+                "terrain": terrain, "depth_basis": basis, "hazard_depth_basis": used}
 
     def run_classify(self, dam):
         if dam.mode == "skip":
@@ -379,6 +440,40 @@ def hecras_stage(folder):
         return None
     with open(os.path.join(folder, "_hecras", "hecras_stage.json"), encoding="utf-8") as f:
         return json.load(f)
+
+
+def import_depth_basis(dam, plan):
+    """3.10.84: (basis, why, stage record or {}) of the chain's HEC-RAS import, decided as the
+    HEC-RAS stage decided it: the depth_basis of the dam's _hecras/hecras_stage.json when the
+    chain ran the Runner's Linux HEC-RAS stage and that record is of this plan, else
+    core/hecras.depth_basis() (NDBREACH_HECRAS_DEPTH_BASIS, default 'cell_min'). Raises
+    ChainError for an unknown NDBREACH_HECRAS_DEPTH_BASIS."""
+    if dam.mode == "run_linux":
+        try:
+            rec = hecras_stage(dam.folder) or {}
+        except (OSError, ValueError):
+            rec = {}
+        b = rec.get("depth_basis")
+        if b in hecras.DEPTH_BASES and _same_file(rec.get("results_hdf"), plan):
+            return b, "as the HEC-RAS stage, _hecras/hecras_stage.json", rec
+    try:
+        b = hecras.depth_basis(None)
+    except hecras.HecRasError as e:
+        raise CH.ChainError(str(e))
+    env = hecras.DEPTH_BASIS_ENV
+    why = "{}={}".format(env, os.environ[env]) if os.environ.get(env) else "the default"
+    return b, why, {}
+
+
+def _same_file(a, b):
+    if not (a and b):
+        return False
+    if os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b)):
+        return True
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def batch_row(path, dam_id):

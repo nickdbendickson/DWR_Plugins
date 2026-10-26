@@ -32,13 +32,15 @@ PLUGINS = {"ndhazard": "DamSafety_Hazard",
 LABELS = {"ndhazard": "DamSafety Hazard",
           "ndbreach": "DamSafety Runner",
           "ndscreen": "DamSafety Screening"}
-RELEASE = {"ndhazard": "2.18.62", "ndbreach": "3.10.83", "ndscreen": "0.17.49"}
+RELEASE = {"ndhazard": "2.18.63", "ndbreach": "3.10.85", "ndscreen": "0.17.49"}
 # minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
 REQUIRES = {
-    ("ndbreach", "ndhazard"): ("2.9.1", "2.11.0",
+    ("ndbreach", "ndhazard"): ("2.9.1", "2.18.63",
                                "hand-off refuses a breach raster as its own baseline from 2.9.1; "
                                "dam.json from 2.10.0; the REG_05.2026 Fig. 5.1 / 5.2 curve table "
-                               "(the same curves as this plugin) from 2.11.0"),
+                               "(the same curves as this plugin) from 2.11.0; the chain's "
+                               "cell-minimum Hazard import relies on Hazard choosing the newest "
+                               "current Runner re-export from 2.18.63"),
     ("ndhazard", "ndbreach"): ("3.1.1", "3.7.0",
                                "hand-off passes the dam folder only from 3.1.1; the culvert tool's "
                                "NDDOT inlet / outlet elevations are checked against the LiDAR only "
