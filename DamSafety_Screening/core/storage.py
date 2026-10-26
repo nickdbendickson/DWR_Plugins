@@ -396,3 +396,253 @@ def is_shallow_basin(span_m, height_m, fraction=SHALLOW_BASIN):
     except (TypeError, ValueError):
         return False
     return span_m is not None and h > 0.5 and span_m < fraction * h
+
+
+# 0.17.47: each inventory storage at its own elevation (DWR-2865 / DWR-3034).
+# Tool 3 used to calibrate the curve so that the storage AT THE LIDAR WATER SURFACE (the normal
+# pool) is the inventory "normal" storage and then add the DEM fill above it. When the record's
+# normal storage is really its maximum (NickReview's "maxstor" field map put DWR max_pool_vol in
+# the normal-storage box), the maximum (167 ac-ft, DWR at 1874 ft) sat at the 1870 ft pool and
+# the fill to the 1875.9 ft spill came on top: 237.6 ac-ft. Now the maximum storage is placed at
+# the max-pool elevation, the normal storage at the normal pool, and only the DEM fill ABOVE the
+# max-pool elevation is added on top of the maximum.
+ANCHOR_SAME = 0.005          # normal and maximum within 0.5 % of each other are "the same value"
+
+
+def _interp_curve(curve, elev):
+    """Storage of `curve` [(elev, storage)] at `elev` (linear; held flat outside the curve)."""
+    es = [float(e) for e, _v in curve]
+    vs = [float(v) for _e, v in curve]
+    return float(np.interp(float(elev), es, vs))
+
+
+def max_pool_on_dem(pool_m, norm_elev_m=None, max_elev_m=None):
+    """(elevation on the DEM of the inventory max pool, how it was found, flag or "").
+
+    The lidar water surface is the normal pool (the DEM is hydro-flattened at it), so the max
+    pool is (inventory max-pool elevation - inventory normal-pool elevation) above the DEM pool.
+    Only the DIFFERENCE of the two inventory elevations is used: DWR records are in NAVD88 /
+    NGVD29 feet or in a local datum (DWR-3034: normal 125.7, max 130.7, streambed 100), so their
+    absolute values cannot be compared with the DEM. (None, ..., flag) when either elevation is
+    missing or the max pool is below the normal pool."""
+    def num(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if v == v else None
+    n, m = num(norm_elev_m), num(max_elev_m)
+    if n is None or m is None:
+        miss = " and ".join(w for w, v in (("normal-pool", n), ("max-pool", m)) if v is None)
+        return None, "", "MAXPOOL-ELEV-MISSING: no inventory {} elevation".format(miss)
+    if m < n - 0.01:
+        return None, "", ("MAXPOOL-ELEV-BAD: inventory max-pool elevation {:.1f} ft is below the "
+                          "normal pool {:.1f} ft".format(m / FT_M, n / FT_M))
+    rise = max(m - n, 0.0)
+    return (float(pool_m) + rise,
+            "max pool {:.1f} ft above the normal pool (inventory {:.1f} -> {:.1f} ft)".format(
+                rise / FT_M, n / FT_M, m / FT_M), "")
+
+
+def anchor_inventory_storage(curve, below_est_m3, pool_m, inv_norm_m3, inv_max_m3, kind,
+                             norm_elev_m=None, max_elev_m=None, crest_m=None):
+    """The stage-storage curve with each inventory storage at its own elevation.
+
+    curve        the DEM curve from estimate_storage, [(elev_m, storage_m3)] from the pool up,
+                 storage = estimated below-pool volume + DEM fill above the pool
+    below_est_m3 its estimated below-pool part (StorageResult.below_pool_m3)
+    pool_m       the DEM pool (lidar water surface) = the inventory normal pool
+    kind         resolve_storage_choice()["kind"]: "maximum", "normal" or "none"
+    crest_m      the top of dam when it is above the end of the curve (as ensure_top_of_dam);
+                 else the top of dam is the end of the curve (tool 3's est_crest_m)
+
+    kind "normal" / "none": the normal storage (when given) at the pool and the DEM fill above
+    it (calibrate_below_pool; the behaviour before 0.17.47).
+
+    kind "maximum", with the max-pool elevation known (max_pool_on_dem):
+      * storage at the max pool = inventory maximum;
+      * storage at the pool = inventory normal storage when it is given and below the maximum
+        (not equal to it: NORMAL-EQUALS-MAX, within ANCHOR_SAME); between the two the DEM fill
+        is scaled to join them, down when it is more than the difference (no flag) - except for
+        a max pool above the end of a curve that stops short of a given crest_m (below; direct
+        callers only, tool 3's crest is the end of its curve), where the fill is not scaled
+        (CURVE-ABOVE-MAX when it already passes the maximum);
+      * without a usable normal storage (missing, equal to the maximum - the 2865 pattern, where
+        the "normal" box held the maximum - or above it) the storage at the pool is the maximum
+        minus the DEM fill from the pool to the max pool;
+      * above the max pool only the DEM fill above the max-pool elevation is added;
+      * a max pool above the top of dam is placed AT the top of dam, flagged MAXPOOL-ABOVE-CREST:
+        the storage at the top of dam is never below the maximum (as ensure_top_of_dam gave
+        before 0.17.47) and no point above it carries the maximum; on a curve that reaches the
+        top of dam the fill from the pool is scaled so the curve reaches the maximum there, so
+        the storage there is the maximum, which can be less than the normal storage plus the DEM
+        fill to the top of dam (the inventory difference replaces the DEM fill, as between the
+        two pools when the max pool is below the top of dam);
+      * a max pool above the end of a curve that stops short of a given crest_m is added after
+        the last DEM point, storage = maximum (CURVE-ABOVE-MAX when the curve is already above);
+      * without a usable normal storage, the DEM fill from the pool to the max pool (or to the
+        top of dam or the end of the curve when they are lower) larger than the maximum
+        (FILL-EXCEEDS-MAX): the DEM curve is kept, its below-pool estimate at the pool, as before
+        0.17.47 without a normal storage (never 0 at the pool, which tool 5's sunny-day scenario
+        cannot use); the storage at the top of dam is then above the maximum.
+    kind "maximum" without a usable max-pool elevation (NID-only records, a DWR record without
+    normal_elev / max_pool_elev; a max pool below the normal pool, or at it with a maximum above
+    the normal storage: MAXPOOL-ELEV-BAD): FALLBACK, flagged - the maximum is placed at the top
+    of dam as before 0.17.47 (ensure_top_of_dam: the top is raised to the maximum, never
+    lowered). Only a normal storage equal to the maximum (NORMAL-EQUALS-MAX) is then not used
+    below the pool; one above the maximum stays at the pool as before, flagged
+    NORMAL-NOT-BELOW-MAX.
+
+    Returns (curve, scale, info) with info = {"anchor": short text for stor_anchor,
+    "anchor_m": the elevation the used storage is anchored at, "flags": [...], "notes": [...]}."""
+    flags, notes = [], []
+    curve = [(float(e), float(v)) for e, v in (curve or [])]
+    if not curve:
+        return [], 1.0, {"anchor": "none", "anchor_m": None, "flags": flags, "notes": notes}
+
+    def given(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if v == v and v > 1.0 else None
+    n, m = given(inv_norm_m3), given(inv_max_m3)
+    same = n is not None and m is not None and abs(n - m) <= ANCHOR_SAME * max(n, m)
+    if same:
+        flags.append("NORMAL-EQUALS-MAX: inventory normal storage {:.0f} m3 = maximum storage {:.0f} m3 "
+                     "(both probably read from the max-storage field)".format(n, m))
+    if kind != "maximum" or m is None:
+        new, scale, cnote = calibrate_below_pool(curve, below_est_m3, n)
+        if cnote:
+            notes.append(cnote)
+        anchor = "normal storage at the normal pool" if n is not None else "DEM estimate"
+        return new, scale, {"anchor": anchor, "anchor_m": float(pool_m) if n is not None else None,
+                            "flags": flags, "notes": notes}
+
+    pool = float(pool_m)
+    fill = [(e, v - float(below_est_m3 or 0.0)) for e, v in curve]   # DEM fill above the pool
+    e_max, how, eflag = max_pool_on_dem(pool, norm_elev_m, max_elev_m)
+    if (e_max is not None and e_max - pool <= 0.01 * FT_M + 1e-6 and n is not None and not same
+            and n < m - 1.0):
+        # the max pool at the normal pool (a rise of at most 0.01 ft; the 1e-6 m catches a rise
+        # of exactly 0.01 ft despite the ft -> m rounding) with a maximum above the normal storage:
+        # the maximum would sit at the pool with the whole DEM fill added on top (the double
+        # count again)
+        e_max, eflag = None, ("MAXPOOL-ELEV-BAD: inventory max-pool elevation {:.1f} ft is the normal "
+                              "pool {:.1f} ft, but the maximum storage {:.0f} m3 is more than the normal "
+                              "storage {:.0f} m3".format(float(max_elev_m) / FT_M,
+                                                         float(norm_elev_m) / FT_M, m, n))
+    if e_max is None:
+        flags.append(eflag + "; FALLBACK: maximum storage placed at the top of dam")
+        # only the 2865 field-map pattern (normal = maximum) drops the normal storage; one above
+        # the maximum keeps the placement of before 0.17.47 (at the pool), flagged
+        use_n = None if same else n
+        if n is not None and not same and n > m:
+            flags.append("NORMAL-NOT-BELOW-MAX: normal storage {:.0f} m3 is above the maximum {:.0f} m3: "
+                         "kept at the normal pool (fallback, as before 0.17.47)".format(n, m))
+        new, scale, cnote = calibrate_below_pool(curve, below_est_m3, use_n)
+        if cnote:
+            notes.append(cnote)
+        if same:
+            notes.append("normal storage not used below the pool (equal to the maximum)")
+        new, tnote = ensure_top_of_dam(new, m, crest_m)
+        if tnote:
+            notes.append(tnote)
+        return new, scale, {"anchor": "maximum storage at the top of dam (fallback)",
+                            "anchor_m": float(new[-1][0]), "flags": flags, "notes": notes}
+
+    notes.append(how)
+    end_e = fill[-1][0]
+    # the top of dam: the end of the DEM curve (tool 3's est_crest_m), or a given crest above it
+    top_e = end_e
+    try:
+        if crest_m not in (None, "") and float(crest_m) > end_e + 0.05:
+            top_e = float(crest_m)
+    except (TypeError, ValueError):
+        pass
+    # a max pool above the top of dam: the maximum is placed AT the top of dam, never above it
+    # (the storage there is at least the maximum, as ensure_top_of_dam gave before 0.17.47), and
+    # the fill below it is scaled to reach it. The flag is added once the storage there is known.
+    at_top = e_max > top_e + 0.01
+    crest_flag = ("MAXPOOL-ABOVE-CREST: the inventory max pool is {:.1f} ft above the normal pool "
+                  "but the crest only {:.1f} ft".format((e_max - pool) / FT_M, (top_e - pool) / FT_M))
+    e_max = min(e_max, top_e)
+    beyond = e_max > end_e + 0.01
+    f_max = _interp_curve(fill, min(e_max, end_e))
+    # a normal storage equal to the maximum (NORMAL-EQUALS-MAX) is not used at the pool, as in the
+    # fallback: it is the maximum read twice (the 2865 pattern)
+    use_n = n if (n is not None and not same and n < m - 1.0) else None
+    if n is not None and use_n is None:
+        if n >= m - 1.0:
+            flags.append("NORMAL-NOT-BELOW-MAX: normal storage {:.0f} m3 is not below the maximum {:.0f} m3: "
+                         "not used at the normal pool".format(n, m))
+        else:
+            notes.append("normal storage not used at the normal pool (equal to the maximum)")
+    if use_n is not None:
+        s_pool = use_n
+    else:
+        s_pool = m - f_max
+        if s_pool < 0.0:
+            # the maximum cannot sit at the max pool with any storage below the pool: the DEM
+            # curve is kept (a storage of 0 at the pool failed tool 5's sunny-day scenario)
+            new, tnote = ensure_top_of_dam(curve, m, crest_m)
+            if at_top:
+                # the DEM curve is kept, so the storage at the crest is above the maximum
+                flags.append(crest_flag + ": DEM curve kept (FILL-EXCEEDS-MAX), storage at the crest "
+                             "{:.0f} m3, above the maximum".format(new[-1][1]))
+            flags.append("FILL-EXCEEDS-MAX: the DEM fill from the pool to the {} ({:.0f} m3) is more "
+                         "than the maximum storage {:.0f} m3: DEM curve kept, below-pool estimate {:.0f} m3 "
+                         "at the normal pool".format(
+                             "end of the DEM curve" if beyond else ("crest" if at_top else "max pool"),
+                             f_max, m, float(below_est_m3 or 0.0)))
+            if tnote:
+                notes.append(tnote)
+            return new, 1.0, {"anchor": "DEM estimate (maximum below the DEM fill)", "anchor_m": None,
+                              "flags": flags, "notes": notes}
+    out = []
+    for e, f in fill:
+        if e <= e_max + 1e-9:
+            if beyond:                 # the whole curve is below the max pool
+                v = s_pool + f
+            elif f_max > 0.0:
+                v = s_pool + (m - s_pool) * (f / f_max)
+            else:
+                v = s_pool + (m - s_pool) * ((e - pool) / (e_max - pool) if e_max > pool else 1.0)
+        else:
+            v = m + (f - f_max)
+        out.append((e, float(v)))
+    if beyond:
+        top = out[-1][1]
+        if top > m + 1.0:
+            flags.append("CURVE-ABOVE-MAX: the curve reaches {:.0f} m3 below the max pool, more than the "
+                         "maximum {:.0f} m3".format(top, m))
+        out.append((float(e_max), max(m, top)))
+        notes.append("max pool {:.1f} ft is above the end of the DEM curve {:.1f} ft: maximum storage "
+                     "added as the last point".format(e_max / FT_M, end_e / FT_M))
+    if e_max < end_e - 0.01 and not any(abs(e - e_max) < 1e-6 for e, _v in out):
+        out.append((float(e_max), float(m)))
+        out.sort(key=lambda p: p[0])
+    # the curve must not fall with the stage
+    for i in range(1, len(out)):
+        if out[i][1] < out[i - 1][1]:
+            out[i] = (out[i][0], out[i - 1][1])
+    if at_top:
+        top_v = out[-1][1]             # e_max is the crest, the last point
+        if top_v > m + 1.0:
+            tail = "storage at the crest {:.0f} m3, above the maximum (CURVE-ABOVE-MAX)".format(top_v)
+        else:
+            tail = "maximum storage placed at the crest"
+            if use_n is not None and not beyond and use_n + f_max > m + 1.0:
+                tail += (", less than the normal storage plus the DEM fill to the crest ({:.0f} m3): "
+                         "the inventory difference replaces that fill".format(use_n + f_max))
+        flags.append(crest_flag + ": " + tail)
+    scale = (s_pool / float(below_est_m3)) if below_est_m3 else 1.0
+    where = "top of dam" if at_top else "max pool"
+    notes.append("maximum storage {:.0f} m3 at the {} {:.1f} ft; {} at the normal pool "
+                 "{:.1f} ft".format(m, where, e_max / FT_M,
+                                    "normal storage {:.0f} m3".format(use_n) if use_n is not None
+                                    else "{:.0f} m3 (maximum minus the DEM fill)".format(s_pool),
+                                    pool / FT_M))
+    return out, float(scale), {"anchor": "maximum storage at the " + where + (
+        " (max pool above the crest)" if at_top else ""), "anchor_m": float(e_max),
+        "flags": flags, "notes": notes}

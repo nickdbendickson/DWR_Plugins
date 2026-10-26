@@ -902,6 +902,11 @@ OFFLINE DATA PACK (2.6.1) - running without internet access
   A half-written GeoPackage is named "cannot be read" (not a FAILED check);
   with "Offline only" the run stops on it only when it is a required layer
   (NSI_structures). A layer file replaced in place makes a new evaluation.
+- 2.18.63: HEC-RAS plan import without a terrain raster - the newest Runner
+  re-export of the plan's current results decides (an older terrain re-export
+  is not used once a newer one says cell_min, nor once the model was run
+  again); the cell minimum is the Runner's default (conservative), for
+  per-pixel depth give the terrain or re-export with --depth-basis terrain.
 - 2.18.62: Reproduce and the data folder load every file of every role (AADT
   and bridges may come from several files); a file that cannot be used is a
   WARNING in the run log and the reproduction check, never a silent skip.
