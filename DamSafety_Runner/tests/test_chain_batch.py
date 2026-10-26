@@ -528,7 +528,7 @@ def chain_hazard_import_depth_basis_follows_the_hecras_stage():
         assert "TERRAIN" not in calls[-1][1] and imp["depth_basis"] == "cell_min"
         # the stage read the variable: set it before that stage, or re-export on the terrain
         assert any("before the Runner's HEC-RAS stage runs" in m and
-                   "hecras-reexport --depth-basis terrain" in m and
+                   'hecras-reexport "{}" --depth-basis terrain'.format(dam.folder) in m and
                    "read when this import runs" not in m and "found no terrain" not in m
                    for m in lines), lines
         # ... and a resumed chain keeps the import as done: a re-export counts when it runs
@@ -545,7 +545,8 @@ def chain_hazard_import_depth_basis_follows_the_hecras_stage():
             imp = ops.run("hazard_import", dam)
         assert "TERRAIN" not in calls[-1][1] and imp["depth_basis"] == "cell_min"
         assert any("found no terrain" in m and "depth_basis_requested 'terrain'" in m and
-                   "--depth-basis terrain --terrain" in m and
+                   'hecras-reexport "{}" --depth-basis terrain --terrain'.format(dam.folder)
+                   in m and
                    "NDBREACH_HECRAS_DEPTH_BASIS=terrain" not in m and
                    "before the Runner's HEC-RAS stage runs" not in m for m in lines), lines
         # a stage record of another plan: the variable decides

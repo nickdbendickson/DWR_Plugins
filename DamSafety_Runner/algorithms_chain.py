@@ -332,10 +332,11 @@ class QgisOps(object):
             # a re-export is used only when this import runs again: a resumed chain keeps it
             # as already done (its fingerprint, core/chain.stage_inputs, has HEC_TERRAIN and
             # the variable, not _hecras/reexport_*)
-            reexport = ("re-export the plan with ndbreach_cli.py hecras-reexport --depth-basis "
-                        "terrain{} (Hazard 2.18.63 adopts the newest current re-export of the "
-                        "plan when this import runs again; a resumed chain keeps the import as "
-                        "already done unless {} or HEC_TERRAIN changes; unticking 'Skip stages "
+            reexport = ("re-export the plan with ndbreach_cli.py hecras-reexport \"{folder}\" "
+                        "--depth-basis terrain{terrain} (Hazard 2.18.63 adopts the newest current "
+                        "re-export of the plan when this import runs again; a resumed chain keeps "
+                        "the import as already done unless {env} or HEC_TERRAIN changes; "
+                        "unticking 'Skip stages "
                         "already done' runs the dam's HEC-RAS stage again too, which replaces "
                         "the results a re-export was made from)")
             found = ""
@@ -344,11 +345,13 @@ class QgisOps(object):
                 found = ("; the HEC-RAS stage was asked for per-pixel depth but found no "
                          "terrain GeoTIFF (_hecras/hecras_stage.json depth_basis_requested "
                          "'terrain')")
-                how = (reexport.format(" --terrain <the model's terrain GeoTIFF>", env) +
+                how = (reexport.format(folder=dam.folder, env=env,
+                                       terrain=" --terrain <the model's terrain GeoTIFF>") +
                        ", or run the HEC-RAS stage again")
             elif stage:        # the Linux stage's own record: the variable is read by that stage
                 how = ("set {}=terrain before the Runner's HEC-RAS stage runs (a resumed chain "
-                       "does not run it again), or ".format(env) + reexport.format("", env))
+                       "does not run it again), or ".format(env) +
+                       reexport.format(folder=dam.folder, env=env, terrain=""))
             else:              # wait / manual / Windows run: read when this import runs
                 how = "set {}=terrain; it is read when this import runs".format(env)
             self.log("{}: HEC-RAS import depth basis: cell minimum, max WSE minus the HEC-RAS "
