@@ -10,7 +10,9 @@ icon=icon.svg
 author=N.D. Bendickson
 changelog=
     2.18.63 - 2026-10-26 (offline pack check never raises; a broken pack stops an offline-only run - #171 follow-up)
-      * A manifest.json that cannot be read (half written, not JSON / UTF-8, not an object, a section or entry of the wrong type) is a FAILED check result, never an exception and never a silent "not a pack"; NSI_structures then counts as missing, so an Offline-only run stops with a clear error (online: a warning, NSI is downloaded). Also when the pack cannot be opened or no check result could be made.
+      * A manifest.json that cannot be read (half written, not JSON / UTF-8, not an object, a section or entry of the wrong type, saved with a UTF-8 byte-order mark - Notepad / PowerShell 5 - that the pack readers refuse) is a FAILED check result, never an exception and never a silent "not a pack"; NSI_structures then counts as missing, so an Offline-only run stops with a clear error (online: a warning, NSI is downloaded).
+      * An Offline-only run also stops when the pack cannot be opened, whatever its check says (a zip member with a bad CRC, a format-1 zip without nd_offline_pack.sqlite, a format_version the reader refuses: the check passed and the run went on without NSI), and the run log no longer calls such a pack "OK"; and when no check result could be made.
+      * The check summary names a problem of the pack itself (a format-1 pack's broken manifest.json) instead of "missing: " with no layer name.
       * A cut-short (half-written) or garbage GeoPackage is named "cannot be read" (SQLite header, page size and file length) instead of passing the quick check.
       * A zipped pack is checked by its listing (every listed file in the zip, not empty).
       * The run signature includes each listed layer file's size and time, so a GeoPackage replaced in place is a new evaluation.

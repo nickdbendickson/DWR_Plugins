@@ -5,8 +5,11 @@ Tiny synthetic packs in a temp folder (built with test_pack_format2's builders):
 
   * a malformed or unreadable manifest.json (not JSON, not UTF-8, empty, a list, a number,
     sections of the wrong type, entries of the wrong type, a non-text file name, a file
-    that is a folder) gives a FAILED PackCheck (or a named "manifest" issue for one bad
-    entry) - never an exception - and a required layer then shows as missing;
+    that is a folder, a UTF-8 byte-order mark the readers refuse - folder and zip alike)
+    gives a FAILED PackCheck (or a named "manifest" issue for one bad entry) - never an
+    exception - and a required layer then shows as missing;
+  * a pack-level problem (a format-1 pack's broken manifest.json) is named in the summary,
+    not as "missing: " with no layer name;
   * a cut-short (half-written) or garbage GeoPackage is "unreadable"; a required one is
     an error; integrity=True runs SQLite's quick_check and passes on a good file;
   * zipped packs: the listing is checked (a listed file not in the zip, an empty one, a
@@ -79,6 +82,8 @@ def main():
         good = T2.build_v2(os.path.join(tmp, "good"))
         res = PC.check_pack(good, required=REQ)
         expect(res.ok and not res.failed, "a good pack checks OK ({})".format(res.summary()))
+        with open(os.path.join(good, "manifest.json"), "rb") as fh:
+            bom = b"\xef\xbb\xbf" + fh.read()      # Windows Notepad / PowerShell 5 "UTF-8"
 
         # -- manifest.json that cannot be read: FAILED, never raises
         cases = [("not JSON", "{\"format_version\": 2, "), ("empty", ""),
@@ -88,7 +93,8 @@ def main():
                  ("rasters a string", json.dumps({"format": F, "format_version": 2, "datasets": {},
                                                   "rasters": "x"})),
                  ("left_out a list", json.dumps({"format": F, "format_version": 2, "datasets": {},
-                                                 "left_out": ["a"]}))]
+                                                 "left_out": ["a"]})),
+                 ("UTF-8 BOM", bom)]
         for name, raw in cases:
             f = shutil.copytree(good, os.path.join(tmp, "m_" + name.replace(" ", "_")))
             write_manifest(f, raw)
@@ -113,6 +119,37 @@ def main():
             expect(serr is None and isinstance(sig, list),
                    "manifest {}: pack_signature does not raise".format(name))
         expect(PC.manifest_problem(good) == "", "a good manifest: no problem")
+
+        # -- 1.17.6: a UTF-8 byte-order mark - the pack readers do not read it, so the check
+        #    must not pass it (it used to: a folder was silently "not an offline data pack")
+        fb = os.path.join(tmp, "m_UTF-8_BOM")
+        from DamSafety_Hazard.damsuite import gpkgpack as GP
+        expect(GP.read_manifest(fb) is None and HOP.read_manifest(fb) is None,
+               "BOM: the pack readers do not read the manifest (why the check FAILS)")
+        zb = zip_folder(good, os.path.join(tmp, "bom.zip"), manifest=bom)
+        PC.clear_cache()
+        for what, pth in (("folder", fb), ("zip", zb)):
+            r, err = safe(PC.check_pack, pth, required=REQ)
+            expect(err is None and r is not None and r.failed and
+                   "byte-order mark" in r.summary() and list(r.missing_required) == list(REQ),
+                   "BOM {}: FAILED, named, the required layer missing ({})".format(
+                       what, r and r.summary()))
+        expect(PC.manifest_problem(fb) == PC.manifest_problem(zb) and
+               "byte-order mark" in PC.manifest_problem(fb),
+               "BOM: folder and zip give the same problem ({!r})".format(PC.manifest_problem(fb)))
+
+        # -- 1.17.6: a pack-level problem (a format-1 pack's broken manifest.json; layer "")
+        #    is named in the summary, not as "missing: " with an empty name
+        v1 = os.path.join(tmp, "v1_badjson")
+        T2.build_v1(v1)
+        write_manifest(v1, "{oops")
+        PC.clear_cache()
+        r, err = safe(PC.check_pack, v1, required=REQ)
+        summ = r.summary() if r is not None else ""
+        expect(err is None and r is not None and r.format == 1 and not r.ok and
+               not r.missing_required and "missing" not in summ and
+               "manifest.json is not valid JSON" in summ,
+               "format 1, broken manifest.json: named, no empty 'missing:' ({})".format(summ))
         expect(PC.manifest_problem(os.path.join(tmp, "nowhere")) == "",
                "no manifest at all: not a manifest problem (not a pack)")
 

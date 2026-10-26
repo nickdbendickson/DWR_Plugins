@@ -2581,9 +2581,10 @@ def _log_offline_mode(run):
         run.log(">>> WARNING: the offline data pack {} could not be read{}".format(
             path, " - offline only: nothing is downloaded" if only else
             " - the services are used"))
-        # 2.18.63: checked all the same - a pack that cannot be read (a broken manifest.json)
-        # cannot give the required layers, so an offline-only run stops here
-        _log_pack_check(run, path, None, only)
+        # 2.18.63: checked all the same (the log says why) - and a pack that cannot be
+        # opened gives none of the required layers, so an offline-only run stops here
+        # whatever the check says (a bad zip member, a format the reader refuses)
+        _log_pack_check(run, path, None, only, opened=False)
         return
     run.log(">>> Offline data pack: {} ({} data sets, built {}){}".format(
         os.path.basename(path), len(r.datasets), r.created,
@@ -2591,28 +2592,39 @@ def _log_offline_mode(run):
     _log_pack_check(run, path, r, only)
 
 
-def _log_pack_check(run, path, reader, only):
+def _log_pack_check(run, path, reader, only, opened=True):
     """2.18.60: the pack checked against its manifest.json, in the run log
     (and so in the report's run log). A required layer missing: offline only
-    stops the run with a clear error; online, that layer is downloaded."""
-    from .download import pack_check
+    stops the run with a clear error; online, that layer is downloaded.
+    2.18.63: opened=False - the reader could not open the pack: offline only
+    stops whatever the check says, and the log does not call the pack OK."""
+    from .download import pack_check, REQUIRED_PACK_LAYERS
     res = pack_check(path, reader)
     if res is None:
         run.log(">>> WARNING: the offline data pack could not be checked against its "
                 "manifest.json")
-        if only:                 # 2.18.63: no check, no proof the required layers are there
-            from .download import REQUIRED_PACK_LAYERS
-            if REQUIRED_PACK_LAYERS:
-                raise RuntimeError(
-                    "The classification (offline only) needs layer(s) {} from the offline data "
-                    "pack {}, and the pack could not be checked against its manifest.json. "
-                    "Repair or rebuild the pack, or untick Offline only.".format(
-                        ", ".join(REQUIRED_PACK_LAYERS), path))
-        return
-    run.log(">>> " + ("" if res.ok else "WARNING: ") + res.summary())
-    for issue in res.issues:
+    elif opened or not res.ok:
+        run.log(">>> " + ("" if res.ok else "WARNING: ") + res.summary())
+    else:                        # 2.18.63: the check passes, the reader cannot open it
+        run.log(">>> WARNING: the offline data pack check ({}) found no problem against "
+                "manifest.json, but the pack cannot be opened - nothing is read from "
+                "it".format(os.path.basename(path)))
+    for issue in (res.issues if res is not None else ()):
         if issue.level != "note":
             run.log(">>>   " + issue.line())
+    if only and REQUIRED_PACK_LAYERS and (res is None or not opened):
+        # 2.18.63: no check (no proof the required layers are there), or a pack the
+        # reader cannot open (they cannot come from it, whatever the check says)
+        raise RuntimeError(
+            "The classification (offline only) needs layer(s) {} from the offline data "
+            "pack {}, and the pack {}{}. Repair or rebuild the pack, or untick Offline "
+            "only.".format(", ".join(REQUIRED_PACK_LAYERS), path,
+                           "cannot be opened" if not opened else
+                           "could not be checked against its manifest.json",
+                           " ({})".format(res.summary()) if res is not None and not res.ok
+                           else ""))
+    if res is None:
+        return
     if res.missing_required:
         if only:
             raise RuntimeError(res.required_message("The classification (offline only)"))

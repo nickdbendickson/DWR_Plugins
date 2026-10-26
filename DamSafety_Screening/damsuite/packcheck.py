@@ -31,8 +31,9 @@ lists but that is missing or unreadable, or that the manifest does not list at a
 ERROR (PackCheck.missing_required); everything else is a WARNING or a NOTE. check_pack never
 raises; PackCheck.raise_if_required_missing() raises PackCheckError with a clear message.
 
-1.17.6 (#171 follow-up): a manifest.json that cannot be read (not JSON, not an object, or
-datasets / rasters / left_out / an entry / a file of the wrong type) and any unexpected
+1.17.6 (#171 follow-up): a manifest.json that cannot be read (not JSON, not an object, a
+UTF-8 byte-order mark - the pack readers decode plain UTF-8 -, or datasets / rasters /
+left_out / an entry / a file of the wrong type) and any unexpected
 error of the check itself give a FAILED result (PackCheck.failed, an ERROR of kind
 "manifest" / "check", every required layer in missing_required) instead of an exception or
 a silent "not an offline data pack". A GeoPackage whose SQLite header is bad or that is
@@ -138,7 +139,7 @@ class PackCheck(object):
             "" if self.deep else ", quick check: no counts")
         if self.ok:
             return head + ": OK - every layer matches manifest.json"
-        miss = sorted({i.layer for i in self.of(ERROR, WARNING) if i.kind in (
+        miss = sorted({i.layer for i in self.of(ERROR, WARNING) if i.layer and i.kind in (
             "missing", "table", "unreadable", "manifest")})
         diff = [n for n in self.bad_layers() if n not in miss]
         parts = []
@@ -149,6 +150,9 @@ class PackCheck(object):
             parts.append("missing: " + ", ".join(rest))
         if diff:
             parts.append("not as in manifest.json: " + ", ".join(diff))
+        # 1.17.6: a problem of the pack itself (no layer name: a format-1 pack's broken
+        # manifest.json, an unreadable .sqlite) is named by its text, not as "missing: "
+        parts += [i.text for i in self.of(ERROR, WARNING) if not i.layer]
         return head + ": " + "; ".join(parts)
 
     def lines(self, notes=True):
@@ -196,8 +200,13 @@ def _manifest_error(p):
 
 
 def _manifest_bytes_error(raw):
+    # 1.17.6: a UTF-8 byte-order mark is a problem - the pack readers (gpkgpack,
+    # offline_pack, detect_format) decode plain UTF-8 and refuse it
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return ("manifest.json starts with a UTF-8 byte-order mark - the pack readers "
+                "cannot read it; save it as UTF-8 without BOM")
     try:
-        m = json.loads(raw.decode("utf-8-sig"))
+        m = json.loads(raw.decode("utf-8"))
     except UnicodeDecodeError as ex:
         return "manifest.json is not UTF-8 text: {}".format(ex)
     except ValueError as ex:

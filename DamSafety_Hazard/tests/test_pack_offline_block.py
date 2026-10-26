@@ -8,6 +8,11 @@ temp pack (no service, no download, no QGIS project):
     naming the required layer; online -> logged, no error (the services are used);
   * a cut-short NSI GeoPackage: offline only -> RuntimeError; online -> a warning;
   * no check result at all (offline_pack.check could not run): offline only -> RuntimeError;
+  * a pack the reader cannot open although its check passes (a format-2 .zip whose NSI
+    member has a bad CRC - the listing is intact -, a format-1 .zip without
+    nd_offline_pack.sqlite, a format_version the reader refuses): offline only ->
+    RuntimeError naming the required layer, and the log does not say "OK"; online -> a
+    warning only;
   * a good pack: no error;
   * _offline_pack_sig changes when a layer file changes in place (2.18.63).
 
@@ -15,10 +20,12 @@ Nothing outside the temp folder is read or written; the user's offline pack sett
 read (offline_config is patched).
     python DamSafety_Hazard/tests/test_pack_offline_block.py
 """
+import json
 import os
 import shutil
 import sys
 import tempfile
+import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -78,6 +85,48 @@ def attempt(path, only):
         PC.clear_cache()
 
 
+def zip_pack(folder, zpath, bad_crc=""):
+    """`folder` zipped (stored, not compressed); `bad_crc`: a member whose data is changed
+    after the CRC is written - the listing (names, sizes) stays intact."""
+    os.makedirs(os.path.dirname(zpath), exist_ok=True)
+    with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
+        for base, _d, files in os.walk(folder):
+            for f in sorted(files):
+                full = os.path.join(base, f)
+                z.write(full, os.path.relpath(full, folder).replace(os.sep, "/"))
+    if bad_crc:
+        with zipfile.ZipFile(zpath) as z:
+            info = z.getinfo(bad_crc)
+        with open(zpath, "r+b") as fh:
+            fh.seek(info.header_offset + 26)
+            n, extra = int.from_bytes(fh.read(2), "little"), int.from_bytes(fh.read(2), "little")
+            pos = info.header_offset + 30 + n + extra + info.file_size // 2
+            fh.seek(pos)
+            b = fh.read(1)
+            fh.seek(pos)
+            fh.write(bytes([b[0] ^ 0xFF]))
+    return zpath
+
+
+def unopenable(tmp, good):
+    """[(what, path)] of packs whose check passes but that the reader cannot open."""
+    out = []
+    z = zip_pack(good, os.path.join(tmp, "crc", "pack.zip"), "structures/NSI_structures.gpkg")
+    out.append(("format-2 zip, NSI member with a bad CRC", z))
+    os.makedirs(os.path.join(tmp, "v1zip"))
+    z1 = os.path.join(tmp, "v1zip", "pack.zip")
+    with zipfile.ZipFile(z1, "w") as z:
+        z.writestr("manifest.json", json.dumps({
+            "format": "nd-dam-hazard-offline-pack", "format_version": 1,
+            "created": "2026-10-14T00:00:00",
+            "datasets": {"NSI_structures": {"count": 2, "status": "complete"}}}))
+    out.append(("format-1 zip without nd_offline_pack.sqlite", z1))
+    fv = shutil.copytree(good, os.path.join(tmp, "newer"))
+    T2.edit_manifest(fv, lambda m: m.update(format_version=99))
+    out.append(("format_version the reader refuses", fv))
+    return out
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="pc_block_")
     try:
@@ -108,6 +157,25 @@ def main():
         err, lines = attempt(cut, False)
         expect(err is None and any("NSI_structures" in ln for ln in lines),
                "cut-short NSI GeoPackage, online: a warning, no error ({})".format(err))
+
+        # 2.18.63: the check passes, the reader cannot open the pack - nothing can be read
+        # from it, so offline only stops (it used to log "OK" and run on without NSI)
+        for what, pth in unopenable(tmp, good):
+            PC.clear_cache()
+            res = DL.pack_check(pth)
+            expect(res is not None and res.ok and not res.missing_required,
+                   "{}: the check alone passes ({})".format(what, res and res.summary()))
+            err, lines = attempt(pth, True)
+            expect(isinstance(err, RuntimeError) and "NSI_structures" in str(err) and
+                   "cannot be opened" in str(err),
+                   "{}, offline only: RuntimeError ({})".format(what, err))
+            expect(not any("OK - every layer" in ln for ln in lines) and
+                   any("cannot be opened" in ln for ln in lines),
+                   "{}: the log does not say OK ({})".format(what, lines))
+            err, lines = attempt(pth, False)
+            expect(err is None and any("WARNING" in ln for ln in lines) and
+                   not any("OK - every layer" in ln for ln in lines),
+                   "{}, online: a warning, no error ({})".format(what, err))
 
         saved = DL.pack_check
         DL.pack_check = lambda path=None, reader=None: None

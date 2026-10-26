@@ -2,7 +2,8 @@
 damsuite.packcheck). A synthetic format-2 pack (manifest.json, LAYERS.txt, one GeoPackage
 per layer, written with the suite's stdlib writer) in a temp suite folder: OK when every
 layer matches, WARN naming the layer when a file is gone or its count differs; no row when
-no pack is in use; 0.17.48: a broken manifest.json is a WARN row saying FAILED. Read-only on the pack.
+no pack is in use; 0.17.48: a broken manifest.json (also one with a UTF-8 byte-order mark) is
+a WARN row saying FAILED. Read-only on the pack.
 
 Run: PYTHONPATH=tests/qgis_mock:<parent of the plugin> python3 tests/test_preflight_packcheck.py
 """
@@ -96,6 +97,20 @@ try:
         checks = pf.run_checks(os.path.join(d, "work"), S, env=Net())
         assert [c for c in checks if c["title"] == TITLE and c["status"] == pf.WARN], raw
     print("ok   broken manifest.json: WARN row saying FAILED")
+
+    # 0.17.48: a manifest.json saved with a UTF-8 byte-order mark (Windows Notepad /
+    # PowerShell 5): the pack readers do not read it, so a FAILED row too (it was no row)
+    shutil.rmtree(pack)
+    pack = os.path.join(d, "Pack3")
+    build(pack)
+    with open(os.path.join(pack, "manifest.json"), "rb") as fh:
+        raw = fh.read()
+    with open(os.path.join(pack, "manifest.json"), "wb") as fh:
+        fh.write(b"\xef\xbb\xbf" + raw)
+    r = row(S)
+    assert r and r["status"] == pf.WARN and "FAILED" in r["detail"] and \
+        "byte-order mark" in r["detail"], r
+    print("ok   manifest.json with a UTF-8 BOM: WARN row saying FAILED")
 
     S2 = dict(wf.DEFAULT_SETTINGS)
     S2["suite_folder"] = os.path.join(d, "work")
