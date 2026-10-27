@@ -80,14 +80,17 @@ bash get_lidar_tiles.sh data_files_nickreview.tsv    # all dams
 
 On the box, `--list-data` writes both lists again with every size. The box has no installer
 (so no `damsafety_env.sh` for `run_nickreview.sh`): run `nickreview_mac.py` itself from a
-DWR_Plugins checkout, with any python that has GDAL (e.g. the box's QGIS python). It is a dry
-run, so it needs no solvers and no plugins, and it lists finished dams too:
+DWR_Plugins checkout, with the box's QGIS python (it needs GDAL; without it the script stops
+and says so). It is a dry run, so it needs no solvers and no plugins, and it lists finished
+dams too:
 
 ```bash
 cd DWR_Plugins/tools/mac
-python3 nickreview_mac.py --list-data data_files_nickreview.tsv \
+PY=/path/to/the/box/QGIS/python    # the python QGIS runs with on the box
+"$PY" -c 'from osgeo import gdal'  # no error: this python has GDAL
+"$PY" nickreview_mac.py --list-data data_files_nickreview.tsv \
   --data /home/box/DamSafety --out /tmp/nr_list --dams-file nickreview_dams.txt
-python3 nickreview_mac.py --list-data absaraka/data_files_DWR-2801.tsv --dam DWR-2801 \
+"$PY" nickreview_mac.py --list-data absaraka/data_files_DWR-2801.tsv --dam DWR-2801 \
   --data /home/box/DamSafety --out /tmp/nr_list --dams-file nickreview_dams.txt
 ```
 
@@ -105,16 +108,36 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
   `absaraka/grok_settings_DWR-2801.json`).
 * **Resume:** stop with Ctrl-C any time (the log, the summary and the manifest of the
   dams so far are kept); run the same command again and finished stages are skipped.
-* **`--redo`** runs finished stages again, in the same command: the first stage in
-  `--stages` (all of them by default) that applies to the dam, and every stage after it
-  that applies (they read its results). The stages before it keep their results. The
-  stages run in the order prepare, structures, precheck, record, rundam, hazclass, hazbatch.
+  That is true for a `--redo` command too: it keeps a record of its dams in
+  `redo_sessions/` (in the results folder), and run again it goes on with the dam it
+  stopped in and the dams it had not reached, without redoing the dams it already redid
+  (once every dam of it is redone, the same command starts a new redo). A run without
+  `--redo` while a `--redo` is unfinished warns at the start and the end (the dams that
+  `--redo` has not reached keep their earlier results) and prints the command that
+  finishes it.
+* **`--redo`** runs finished stages again, in the same command: the stages in `--stages`
+  (all of them by default) that apply to the dam, and every later stage that reads their
+  results. The others keep their results. The stages run in the order prepare, structures,
+  precheck, record, rundam, hazclass, hazbatch. What runs again with each:
+
+  | `--redo --stages` | also runs again |
+  |---|---|
+  | prepare | structures, precheck, rundam, hazclass, hazbatch |
+  | structures | precheck, rundam, hazclass, hazbatch |
+  | precheck (a report) | nothing |
+  | record | rundam, hazclass, hazbatch |
+  | rundam | hazclass, hazbatch |
+  | hazclass | hazbatch |
+
   prepare and structures do not apply to DWR-2801, DWR-2865 and DWR-3034 (they use the box
-  preparation), so for them `--redo --stages prepare` changes nothing and
-  `--redo --stages record` runs record, rundam, hazclass and hazbatch. A prepare step that
+  preparation), so for them `--redo --stages prepare` changes nothing. A prepare step that
   runs again extracts and downloads its inputs (3DHP streams too) again. To run one
-  finished stage again and nothing after it (e.g. the report-only precheck), delete its
-  `work/<dam>/status/<stage>.ok` and run with `--stages <stage>`, without `--redo`.
+  finished stage again and nothing after it, delete its `work/<dam>/status/<stage>.ok`
+  and run with `--stages <stage>`, without `--redo`.
+* `--no-kits` (prepare DWR-2801, DWR-2865 and DWR-3034 here instead of using the box
+  preparation) on a dam that finished with its box preparation, or the reverse, does not
+  run it: `status/*.ok` records the mode each stage ran in, and the two are never mixed.
+  Add `--redo` to run every stage of that dam again in the new mode.
 * rundam waits for the Screening 7b record (`dams/<dam>/dam.json`, from
   `Dams/NickReview/screen_maxstor`), as on the box: without it the Runner would use its
   default crest length. `--allow-no-record` runs it anyway and says so in the log.
@@ -126,7 +149,8 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
   a `;;` list, the DEM VRTs and the DEM tiles that touch the dam's area, the streams and
   the other structures inputs, the suite pack layers or offline pack the extracts were cut
   from and `DWR_dams.gpkg` (prepared dams), the box kit's JSON files, the Screening 7b
-  inputs, the dam's `dam.json` as rundam read it, the LISFLOOD-FP binary).
+  inputs, the dam's `dam.json` as rundam read it, the suite settings CSV the plugins read
+  (`damsuite_settings_nickreview.csv` in the results folder), the LISFLOOD-FP binary).
 * The Mac is kept awake while it runs (`caffeinate`).
 
 **Walkthrough:** Absaraka step by step, including the DEM and every QGIS dialog value:
@@ -155,15 +179,16 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
 ## Good to know
 
 * The box runs used patched LISFLOOD-FP **8.2**; the Mac uses patched **8.3**.
-* LISFLOOD-FP 8.3 has no Metal (GPU) support, so it runs on the CPU. HEC-RAS (Tier 2)
-  does not run on macOS.
+* LISFLOOD-FP 8.3 has no Metal (GPU) support, so it runs on the CPU. HEC-RAS (the Runner's
+  *LISFLOOD-FP then HEC-RAS 2D* model) does not run on macOS.
 * Leave Hazard's *offline pack* setting empty (the run script passes the pack itself).
 * DWR-3161 (flagged road-fill structure) and DWR-4593 (breached) are not in the list.
 * If USGS 3DHP streams can't be downloaded (or the service answers an error or no
   flowlines), the script falls back to the NHD flowlines. Every later run of that dam says
-  so in its log and manifest (also a run that skips it as finished), and
-  `--redo --stages prepare` tries 3DHP again and runs every later stage of that dam again
-  (`--offline` always uses NHD).
+  so in its log and manifest (also a run that skips it as finished).
+  `--redo --stages prepare --dam <ID>` tries 3DHP again for that dam, and then every later
+  stage of it runs again too (structures, precheck, rundam, hazclass, hazbatch: hours).
+  With `--offline` it uses NHD again.
 * In QGIS, set *Crest length* as `absaraka/RUN-ABSARAKA.md` step 3c says: an empty crest
   length with no `dam_length_ft` in the Dams folder's `dam.json` is the Runner's 400 ft
   default, not the length the box runs used.

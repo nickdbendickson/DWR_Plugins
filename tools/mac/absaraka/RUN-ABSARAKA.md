@@ -32,12 +32,14 @@ Results go to `~/dwr-dam-suite/Dams/NickReview_mac/dams/DWR-2801/`. The dam's lo
 versions, the settings and the sha256 of every file the steps read: each rundam and
 hazclass input (every file of a `;;` list), the DEM VRTs and the 1 m tiles that touch the
 dam's area, the box kit's `rundam.json` and `hazclass.json`, the Screening 7b inputs, the
-dam's `dam.json` as rundam read it and the LISFLOOD-FP binary.
-Run it again and finished stages are skipped. `--redo` runs them again in the same command;
-with `--stages`, the first named stage that applies and every later one (for this dam:
-precheck, record, rundam, hazclass, hazbatch; prepare and structures do not apply, the box
-prepared it, so `--redo --stages prepare` changes nothing). For example
-`--redo --stages rundam` runs rundam, hazclass and hazbatch again.
+dam's `dam.json` as rundam read it, the suite settings CSV and the LISFLOOD-FP binary.
+Run it again and finished stages are skipped (a stopped `--redo` command too: run it again
+and it goes on where it stopped). `--redo` runs them again in the same command; with
+`--stages`, the named stages that apply and every later stage that reads their results (for
+this dam the stages are precheck, record, rundam, hazclass, hazbatch; prepare and structures
+do not apply, the box prepared it, so `--redo --stages prepare` changes nothing). For
+example `--redo --stages rundam` runs rundam, hazclass and hazbatch again, and
+`--redo --stages precheck` only the precheck (a report no later stage reads).
 
 ## 3. Or in QGIS (Runner dialog)
 
@@ -121,10 +123,10 @@ Processing ▸ **DamSafety Runner** ▸ **Run breach model for one dam**.
 | DEM elevation units | **Meters** (step 3b) |
 | Structures | `<DATA>/culvert_precheck_20261024/dwr2801/structures_2801_with9122221_invfix2.gpkg`, layer `runner_culverts` |
 | Structure fields | kind, span_ft, rise_ft, barrels, shape, invert_up, invert_dn, name |
-| Culvert inventory | `nddot_centerline_pipes.gpkg`, `nddot_bridge_inventory.gpkg`, `ntad_nbi.gpkg` (in `<DATA>/culvert_sources`), match 75 m, burn matched off |
+| Culvert inventory | `<DATA>/culvert_sources/research/nddot_centerline_pipes.gpkg`, `<DATA>/culvert_sources/nddot_bridge_inventory.gpkg`, `<DATA>/culvert_sources/ntad_nbi.gpkg`, match 75 m, burn matched off |
 | Receptors | `pack_NSI_structures_2801`, `pack_ND_roads_NG911_2801`, `pack_NARN_rail_lines_2801` (in `<DATA>/nickreview_rerun_20261023/dwr2801`) |
 | Water mask | `<DATA>/ND_Dam_Suite_Pack/hydro/NHD_waterbodies.gpkg` |
-| Engine | Tier 1, **force ANUGA on**, cell 30 m, Manning 0.06 |
+| Engine | Models **LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)**, **Force ANUGA** on, cell 30 m, Manning 0.06 |
 | Reach | length 16 mi, half width 6 mi, step 3 mi, max extent 20 mi, max runs 1 |
 | Arrival / edge tolerance | 0.1 ft / 1 ft |
 | Duration | 0 (auto), max 72 h |
@@ -148,5 +150,6 @@ Also set (the Terminal script does this for you) `NDBREACH_ANUGA_MESHER=gmsh` an
 * structures: invfix2 (NBI 9122221 as a 2-barrel 2.97 × 2.01 m box; invert fixes on fid 257/263/280)
 * water mask: NHD waterbodies; threads 8
 
-Not possible on a Mac: Tier 2 / HEC-RAS, and Metal GPU (LISFLOOD-FP 8.3 has none).
+Not possible on a Mac: HEC-RAS (Models *LISFLOOD-FP then HEC-RAS 2D*), and Metal GPU
+(LISFLOOD-FP 8.3 has none).
 After the run, first check the maximum velocity / time step at NBI 9122221.

@@ -13,15 +13,18 @@
 #   --dams FILE      dam list                                         [nickreview_dams.txt]
 #   --threads N      CPU threads for LISFLOOD-FP / ANUGA              [8]
 #   --redo           run finished stages again (default: skip them), in this command: the
-#                    first stage in --stages that applies to the dam and every stage after it
-#                    that applies; earlier ones are kept (prepare and structures do not apply
-#                    to DWR-2801/2865/3034: they use the box preparation unless --no-kits)
+#                    stages in --stages that apply to the dam and every later stage that
+#                    reads their results (precheck: only precheck); the others are kept
+#                    (prepare and structures do not apply to DWR-2801/2865/3034: they use the
+#                    box preparation unless --no-kits). Stopped, the same --redo command goes
+#                    on where it stopped (it does not redo the dams it already redid)
 #   --stages LIST    subset of prepare,structures,precheck,record,rundam,hazclass,hazbatch
 #   --offline        NHD flowlines from the suite pack instead of downloading 3DHP streams
 #   --allow-no-record  run rundam even if the Screening 7b record (dam.json) could not be
 #                    written (the crest length then differs from the box runs)
 #   --pack FILE      offline pack .sqlite (default: the one in --data, if there)
 #   --no-kits        prepare DWR-2801/2865/3034 here instead of using the box preparation
+#                    (a dam finished in the other mode is not run without --redo)
 #   --map BOX=MAC    extra path mapping for box paths in the kit files (repeatable)
 #   --dry-run        print the commands and planned inputs; run and write nothing
 #   --list-data TSV  (box side) list every file the dams need (bytes, copy_to, source) and
@@ -32,7 +35,7 @@
 # shellcheck disable=SC2154  # DAMSAFETY_* / QGIS_PROCESS / NDBREACH_* come from the sourced env file (checked below)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for a in "$@"; do case "$a" in -h|--help) sed -n '2,31p' "$0"; exit 0 ;; *) ;; esac; done
+for a in "$@"; do case "$a" in -h|--help) sed -n '2,34p' "$0"; exit 0 ;; *) ;; esac; done
 ENVF="${DAMSAFETY_ENV_FILE:-$HOME/dwr-dam-suite/damsafety_env.sh}"
 if [[ ! -f "$ENVF" ]]; then
   echo "ERROR: $ENVF not found. Run install_dwr_suite_mac.sh first." >&2; exit 1
@@ -56,7 +59,7 @@ while [[ $# -gt 0 ]]; do
     --redo|--offline|--no-kits|--allow-no-record) PASS+=("$1"); shift ;;
     --dry-run) DRY=1; PASS+=("$1"); shift ;;
     --list-data) DRY=1; PASS+=("$1" "$2"); shift 2 ;;
-    -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "ERROR: unknown option $1 (see --help)" >&2; exit 2 ;;
   esac
 done
