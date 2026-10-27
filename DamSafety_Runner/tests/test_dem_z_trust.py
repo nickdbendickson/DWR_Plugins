@@ -55,21 +55,22 @@ def dem_z_detect_trusts_only_a_usgs_download_record_that_describes_the_raster():
         _stops(G, _old_download(d, "other.tif", source="My own lidar mosaic", sidecar=False),
                "no Download DEM record")
         # facts files that describe another raster: cell size, CRS, file type
-        _stops(G, _old_download(d, "cell_10m_5070.tif", metadata=False, cell=1),
+        _stops(G, _old_download(d, "cell_10m_5070.tif", cell=1),
                "does not describe this raster", "cell 1 m")
-        _stops(G, _old_download(d, "crs_10m_5070.tif", metadata=False, crs="EPSG:5070"),
+        _stops(G, _old_download(d, "crs_10m_5070.tif", crs="EPSG:5070"),
                "does not describe this raster", "EPSG:5070")
-        tif = _old_download(d, "same_10m_5070.tif", metadata=False)
-        assert G.resolve_dem_z(tif, "auto")[0] == G.Z_METERS           # its own facts: trusted
+        tif = _old_download(d, "same_10m_5070.tif")
+        assert G.resolve_dem_z(tif, "auto")[0] == G.Z_METERS           # its own record: trusted
         sub = os.path.join(d, "v")
         os.makedirs(sub)
         vrt = os.path.join(sub, "same_10m_5070.vrt")                    # same stem, a VRT
         gdal.BuildVRT(vrt, [tif]).FlushCache()
         shutil.copy(os.path.splitext(tif)[0] + "_dem.txt", os.path.join(sub, "same_10m_5070_dem.txt"))
-        _stops(G, vrt, "does not describe this raster", "file type")
-        # the five keys of write_local_dem, USGS 3DEP: trusted (a warped copy keeps them)
-        ok = _old_download(d, "usgs_10m_5070.tif", sidecar=False)
-        got, how = G.resolve_dem_z(ok, "auto")
+        _stops(G, vrt, "replaced or re-exported")          # a VRT has no in-file record
+        # review round 2: the five keys of write_local_dem alone are not trusted (a copy keeps
+        # them whatever it did to the values); with the facts file beside them they are
+        _stops(G, _old_download(d, "usgs_10m_5070.tif", sidecar=False), "not trusted alone")
+        got, how = G.resolve_dem_z(tif, "auto")
         assert got == G.Z_METERS and "USGS 3DEP ImageServer" in how, how
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -140,8 +141,9 @@ def dem_z_detect_stops_on_an_old_lidar_vrt_over_a_feet_fallback():
             # the same VRT from Screening 0.17.50 (fallback converted, json says so): trusted
             vrt = _lidar_vrt(sub, os.path.join(sub, name), "feet (raster unit 'ft'), converted")
             assert G.resolve_dem_z(vrt, "auto")[0] == G.Z_METERS
-        # the same old VRT without its band unit, read through its USGS 3DEP facts file (the
-        # record of the 1 m tiles): still stopped - the record does not cover the fallback
+        # the same old VRT without its band unit (every lidar VRT has one), beside its USGS 3DEP
+        # facts file: stopped - a facts file alone is not trusted (review round 2), with or
+        # without the json
         sub = os.path.join(d, "facts")
         os.makedirs(sub)
         vrt = _lidar_vrt(sub, _dem(sub, "fb_ft.tif", "ft", 951.0), unit="")
@@ -149,10 +151,9 @@ def dem_z_detect_stops_on_an_old_lidar_vrt_over_a_feet_fallback():
             fh.write("source: USGS 3DEP 1 m lidar DEM tiles (native, The National Map)\n"
                      "crs: EPSG:26914\nunits: metres\nfile_type: VRT over the native GeoTIFF "
                      "tiles (and the fallback DEM underneath, if any)\ncell_m: 10\n")
-        _stops(G, vrt, "built by Screening before 0.17.50", "fb_ft.tif")
-        os.remove(os.path.join(sub, "D1_1m_lidar.json"))         # no json: the facts file decides
-        got, how = G.resolve_dem_z(vrt, "auto")
-        assert got == G.Z_METERS and "D1_1m_lidar_dem.txt" in how, how
+        _stops(G, vrt, "D1_1m_lidar_dem.txt", "replaced or re-exported")
+        os.remove(os.path.join(sub, "D1_1m_lidar.json"))
+        _stops(G, vrt, "D1_1m_lidar_dem.txt", "replaced or re-exported")
         # a metre fallback (the Download DEM 10 m GeoTIFF of before 0.17.50 too): trusted
         sub = os.path.join(d, "m")
         os.makedirs(sub)
@@ -175,8 +176,8 @@ def rundam_units_note_says_how_the_unit_was_detected():
     d = tempfile.mkdtemp(prefix="demz_note_")
     try:
         src = _gis(algs, _old_download(d, "DWR-2801_10m_5070.tif"), 0)[0]
-        assert src.z_note.startswith("metres (detected: Download DEM record in the file: USGS 3DEP"), \
-            src.z_note
+        assert src.z_note.startswith("metres (detected: Download DEM record (in the file and "
+                                     "DWR-2801_10m_5070_dem.txt): USGS 3DEP"), src.z_note
         assert "chosen" not in src.z_note and "check" not in src.z_note.lower(), src.z_note
         src = _gis(algs, _dem(d, "ft.tif", "ft", 1100.0), 0)[0]
         assert src.z_note == "feet (detected: raster unit 'ft')", src.z_note

@@ -10,13 +10,15 @@ What counts as recorded, in this order:
      offset: GDAL applies the unit to the scaled values, the model reads the raw ones;
   2. a compound CRS's vertical unit;
   3. the Screening 'Download DEM' tool's own record of a file it wrote: the dataset metadata
-     SOURCE / CRS / UNITS / FILE_TYPE / CELL_M of write_local_dem (a warped copy keeps them), else
-     the <stem>_dem.txt facts file beside it when its file type, CRS and cell size are this
-     raster's. Only a USGS 3DEP record (ImageServer or the 1 m lidar tiles, metres in every
-     version) is trusted; an ND DWR LiDAR record is not, because Download DEM before Screening
-     0.17.50 could write ND DWR values that are not metres under 'units: metres' (older builds
-     mosaicked the ASCII_Grids_ft feet grids unconverted; a DEM_Imagine metre tile in a folder
-     named gft* was scaled x 0.3048).
+     SOURCE / CRS / UNITS / FILE_TYPE / CELL_M of write_local_dem AND the <stem>_dem.txt facts
+     file beside it, with the same source, the facts' file type, CRS and cell size this
+     raster's, and the raster not written well after the facts (download_record: either alone
+     can describe another raster - a gdal_translate -scale copy keeps the metadata, a file
+     re-exported over the download keeps the facts). Only a USGS 3DEP record (ImageServer or the
+     1 m lidar tiles, metres in every version) is trusted; an ND DWR LiDAR record is not,
+     because Download DEM before Screening 0.17.50 could write ND DWR values that are not metres
+     under 'units: metres' (older builds mosaicked the ASCII_Grids_ft feet grids unconverted; a
+     DEM_Imagine metre tile in a folder named gft* was scaled x 0.3048).
 A 1 m lidar VRT that Screening built before 0.17.50 over a fallback DEM (its <stem>.json has no
 'fallback_units'), read as metres by any of these, is trusted only when that fallback records
 metres: before, a feet fallback showed through the VRT as metres. An ND DWR LiDAR download that
@@ -187,28 +189,61 @@ def _facts_mismatch(ds, facts):
     return ""
 
 
+REPLACED_AFTER_S = 600.0        # a raster written this long after its facts file is not the one
+
+
 def download_record(ds, path=""):
     """(METERS, how) from the Download DEM tool's own record of the raster, ("", why) for a record
-    that is not trusted or does not describe it, ("", "") when there is none."""
+    that is not trusted or does not describe it, ("", "") when there is none.
+
+    Every Download DEM GeoTIFF carries its record twice: the dataset metadata (DOWNLOAD_KEYS)
+    and the <stem>_dem.txt facts file. Review round 2: both are needed, with the same source, the
+    facts' file type / CRS / cell size the raster's, and the raster not written more than
+    REPLACED_AFTER_S after the facts file. The metadata alone travels with a copy whatever the
+    copy did to the values (gdal_translate -scale to feet, a gdalwarp mosaic listing the download
+    first); the facts file alone stays beside a raster re-exported over the same name."""
     try:
         md = ds.GetMetadata() or {}
     except Exception:                                    # noqa
         md = {}
-    if all(str(md.get(k) or "").strip() for k in DOWNLOAD_KEYS):
-        got = _from_record(md["SOURCE"], md["UNITS"], "Download DEM record in the file")
-        if got[0] or got[1]:
-            return got
-    if not path:
-        return "", ""
-    side = os.path.splitext(_file(path))[0] + "_dem.txt"
-    facts = read_facts(side)
-    if not facts or not all(facts.get(k) for k in FACTS_KEYS):
+    in_file = all(str(md.get(k) or "").strip() for k in DOWNLOAD_KEYS)
+    side = os.path.splitext(_file(path))[0] + "_dem.txt" if path else ""
+    facts = read_facts(side) if side else None
+    if facts is not None and not all(facts.get(k) for k in FACTS_KEYS):
+        facts = None
+    if not in_file and facts is None:
         return "", ""
     name = os.path.basename(side)
+    if in_file:
+        source, units, where = md["SOURCE"], md["UNITS"], "Download DEM record in the file"
+    else:
+        source, units, where = facts["source"], facts["units"], "Download DEM facts file " + name
+    got, why = _from_record(source, units, where)
+    if not got:
+        return got, why
+    if facts is None:
+        return "", ("the raster carries a Download DEM record ({}) but no facts file {} beside it: "
+                    "a copy of a download keeps that record whatever it did to the values "
+                    "(gdal_translate -scale, a gdalwarp mosaic), so it is not trusted alone").format(
+                        source.strip(), name or "<stem>_dem.txt")
+    if not in_file:
+        return "", ("the facts file {} is beside a raster without the Download DEM record every "
+                    "download carries: the raster was replaced or re-exported").format(name)
     bad = _facts_mismatch(ds, facts)
     if bad:
         return "", "the facts file {} does not describe this raster ({})".format(name, bad)
-    return _from_record(facts["source"], facts["units"], "Download DEM facts file " + name)
+    if facts["source"].strip() != source.strip() or unit_choice(facts["units"]) != METERS:
+        return "", "the facts file {} ({}, units {}) is not the raster's record ({})".format(
+            name, facts["source"], facts["units"], source.strip())
+    try:
+        late = os.path.getmtime(_file(path)) - os.path.getmtime(side)
+    except OSError:
+        late = 0.0
+    if late > REPLACED_AFTER_S:
+        return "", ("{} was written {:.0f} min after its facts file {}: the record describes an "
+                    "earlier file").format(os.path.basename(_file(path)), late / 60.0, name)
+    return METERS, "Download DEM record (in the file and {}): {}, units {}".format(
+        name, source.strip(), str(units).strip())
 
 
 def _nd_dwr_record(ds, path):

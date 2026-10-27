@@ -274,6 +274,9 @@ def the_nd_ground_check_samples_the_whole_dem_and_says_when_it_cannot():
                "set 'DEM elevation units' to Meters")             # ran x 0.3048 before
         src = _gis(algs, path, 3)[0]
         assert src.z_check == "" and workflow.units_warning(src) == ""
+        # every finite non-nodata cell counts (no +-1e5 filter: a raw 130000 is not "no sample")
+        big = _dem(d, "big.tif", "", 130000.0)
+        _stops(lambda: _gis(algs, big, 3), "DEM median 130000.0", "Neither feet nor metres")
         # no valid cell anywhere: the run goes on, and the report says the unit is not checked
         empty = os.path.join(d, "empty.tif")
         ds = gdal.GetDriverByName("GTiff").Create(empty, 50, 50, 1, gdal.GDT_Float32)
@@ -325,23 +328,26 @@ def every_tool_reads_the_unit_the_run_reads():
     from nd_breach_runner.scripts import ndbreach_cli as cli
     d = tempfile.mkdtemp(prefix="demz_once_t_")
     try:
-        # a 0.17.49 download (no band unit, the USGS 3DEP record) warped to ND South feet: the run
-        # reads metres from the record; z_to_m_factor('auto') guessed feet from the CRS
-        old = _old_download(d, "D1_10m_5070.tif", value=700.0, sidecar=False)
-        ft_crs = os.path.join(d, "D1_2266.tif")
-        gdal.Warp(ft_crs, old, dstSRS="EPSG:2266").FlushCache()
-        assert G.resolve_dem_z(ft_crs, "auto")[0] == G.Z_METERS
-        f, note = G.z_to_m_factor(ft_crs, G.Z_AUTO)
-        assert f == 1.0 and note.startswith("metres (detected: Download DEM record"), note
         s = osr.SpatialReference()
         s.ImportFromEPSG(26914)
-        fine = cp.FineRaster(ft_crs, s.ExportToWkt(), G.Z_AUTO)
+        # a 0.17.49 download (no band unit, its USGS 3DEP record): metres, as the run reads it
+        old = _old_download(d, "D1_10m_5070.tif", value=700.0)
+        f, note = G.z_to_m_factor(old, G.Z_AUTO)
+        assert f == 1.0 and note.startswith("metres (detected: Download DEM record"), note
+        fine = cp.FineRaster(old, s.ExportToWkt(), G.Z_AUTO)
         assert fine.z_to_m == 1.0 and fine.z_choice == G.Z_METERS, (fine.z_to_m, fine.z_note)
-        # nothing recorded: refused with the run's message, never guessed from the CRS
-        plain = _dem(d, "plain.tif", "", 320.0)
-        _stops(lambda: G.z_to_m_factor(plain, G.Z_AUTO), "'DEM elevation units'",
-               "no elevation unit is recorded")
-        _stops(lambda: cp.FineRaster(plain, s.ExportToWkt(), G.Z_AUTO), "no elevation unit")
+        # its copy warped to ND South feet keeps only the metadata: the run stops, and so does
+        # every tool (z_to_m_factor('auto') guessed from the feet CRS and the median)
+        ft_crs = os.path.join(d, "D1_2266.tif")
+        gdal.Warp(ft_crs, old, dstSRS="EPSG:2266").FlushCache()
+        for fn in (lambda: G.resolve_dem_z(ft_crs, "auto"), lambda: G.z_to_m_factor(ft_crs),
+                   lambda: cp.FineRaster(ft_crs, s.ExportToWkt(), G.Z_AUTO)):
+            _stops(fn, "'DEM elevation units'", "not trusted alone")
+        # nothing recorded, in a feet CRS or a metre one: refused with the run's message
+        for plain in (_crs_dem(d, "plain_2266.tif", "EPSG:2266", 1050.0), _dem(d, "plain.tif", "", 320.0)):
+            _stops(lambda: G.z_to_m_factor(plain, G.Z_AUTO), "'DEM elevation units'",
+                   "no elevation unit is recorded")
+            _stops(lambda: cp.FineRaster(plain, s.ExportToWkt(), G.Z_AUTO), "no elevation unit")
         # an explicit unit the record contradicts stops the pre-check as it stops the run
         tagged = _dem(d, "m.tif", "m", 700.0)
         _stops(lambda: cp.FineRaster(tagged, s.ExportToWkt(), G.Z_FEET), "records metres")

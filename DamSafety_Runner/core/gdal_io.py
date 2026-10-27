@@ -52,7 +52,7 @@ def recorded_z_unit(path):
     horizontal CRS or the values (3.10.88). The rules are core/dem_zunit.recorded, which
     Screening's Download DEM uses for what it writes."""
     _gdal()
-    ds = GS.open_raster(path)
+    ds = GS.open_raster(str(path).split("|", 1)[0])      # 3.10.89: a QGIS '|option:' source
     return ZU.recorded(ds, path)
 
 
@@ -84,9 +84,10 @@ def resolve_dem_z(path, choice=Z_AUTO):
     that is wrong; a file whose values no single unit reads right (dem_zunit.data_problem) stops
     whatever the choice. Feet and US survey feet do not stop each other (2 ppm)."""
     if choice in (Z_FEET, Z_US_FEET, Z_METERS):
-        name = os.path.basename(str(path).split("|", 1)[0]) or str(path)
+        file_ = str(path).split("|", 1)[0]               # a QGIS source: 'x.tif|option:...'
+        name = os.path.basename(file_) or str(path)
         _gdal()
-        ds = GS.open_raster(path)
+        ds = GS.open_raster(file_)
         bad = ZU.data_problem(ds, path)
         if bad:
             raise ValueError("'DEM elevation units' is {}, but {}: {}.".format(
@@ -94,7 +95,6 @@ def resolve_dem_z(path, choice=Z_AUTO):
         got, how = ZU.recorded(ds, path)
         ds = None
         if got and not _same_family(got, choice):
-            file_ = str(path).split("|", 1)[0]
             raise ValueError(
                 "'DEM elevation units' is {}, but {} records {} ({}): set 'DEM elevation "
                 "units' to {} (or 'Detect from the raster'). If the record is wrong and the "

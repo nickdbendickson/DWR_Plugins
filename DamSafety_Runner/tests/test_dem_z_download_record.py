@@ -60,15 +60,27 @@ def dem_z_detect_reads_the_download_dem_record():
         both = _old_download(d, "DWR-2801_10m_5070.tif")
         got, how = G.resolve_dem_z(both, "auto")
         assert got == G.Z_METERS and "Download DEM record" in how and "units metres" in how, how
-        md_only = _old_download(d, "md_10m_5070.tif", sidecar=False)
-        assert G.resolve_dem_z(md_only, "auto")[0] == G.Z_METERS
-        side_only = _old_download(d, "side_10m_5070.tif", metadata=False)
-        got, how = G.resolve_dem_z(side_only, "auto")
-        assert got == G.Z_METERS and "side_10m_5070_dem.txt" in how, (got, how)
-        # a warped copy (the tool's extra CRS copy) keeps the dataset metadata
+        assert "DWR-2801_10m_5070_dem.txt" in how, how
+        # review round 2: one half of the record alone is not trusted - the metadata travels with
+        # any copy (gdal_translate -scale to feet keeps it), the facts file stays beside a raster
+        # re-exported over the download
+        for path, words in ((_old_download(d, "md_10m_5070.tif", sidecar=False), "not trusted alone"),
+                            (_old_download(d, "side_10m_5070.tif", metadata=False),
+                             "replaced or re-exported")):
+            try:
+                G.resolve_dem_z(path, "auto")
+                raise AssertionError("half a record must not pass: " + path)
+            except ValueError as e:
+                assert words in str(e), str(e)
+        # a warped copy (the tool's extra CRS copy before 0.17.50) keeps only the metadata:
+        # stopped (since 0.17.50 warp_to tags the copy's band unit)
         warped = os.path.join(d, "dem_26914.tif")
-        gdal.Warp(warped, md_only, dstSRS="EPSG:32614")
-        assert G.resolve_dem_z(warped, "auto")[0] == G.Z_METERS
+        gdal.Warp(warped, both, dstSRS="EPSG:32614")
+        try:
+            G.resolve_dem_z(warped, "auto")
+            raise AssertionError("a copy's metadata alone must not pass")
+        except ValueError as e:
+            assert "not trusted alone" in str(e), str(e)
         # UNITS alone (no SOURCE: not the tool's record) is not trusted; a band unit wins
         ds = gdal.Open(_dem(d, "units_only.tif"), gdal.GA_Update)
         ds.SetMetadataItem("UNITS", "metres")
