@@ -237,6 +237,18 @@ def reused_local_dem_is_tagged_only_when_it_is_a_usgs_download():
         assert res["VRT"] == nd and _unit(nd) == "", _unit(nd)
         assert any("before Screening 0.17.50" in w and "delete" in w for w in fbk.warnings), \
             fbk.warnings
+        assert any("Meters only if it is a DEM_Imagine download" in w for w in fbk.warnings)
+        # review round 3: a USGS 3DEP one whose record is no longer whole (rewritten an hour
+        # after its facts file) is told Meters as a USGS download, not 'a DEM_Imagine download'
+        old = _old_local(out, "D125", dd.product_info("usgs", 10))
+        t = os.path.getmtime(os.path.splitext(old)[0] + "_dem.txt")
+        os.utime(old, (t + 3600.0, t + 3600.0))
+        fbk = Feedback()
+        res = alg.processAlgorithm(dict(base, SOURCE=0, DAM_ID="D125"), QgsProcessingContext(), fbk)
+        assert res["VRT"] == old and _unit(old) == "", _unit(old)
+        w = [m for m in fbk.warnings if "before Screening 0.17.50" in m]
+        assert w and "Meters (a USGS 3DEP download is metres)" in w[0], fbk.warnings
+        assert "DEM_Imagine" not in w[0], w[0]
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
