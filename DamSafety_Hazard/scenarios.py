@@ -447,8 +447,11 @@ def mark_lines_incremental(results, min_depth_ft=DEFAULT_INCREMENTAL_DEPTH_FT,
             inc, note = True, "dry without breach"
         elif own_vz is not None and base_vz is not None and own_vz < base_vz:
             inc, note = True, "vehicle zone worse with breach"
-        elif r["max_depth"] - bd >= min_depth_ft:
-            inc, note = True, "+{:.1f} ft with breach".format(r["max_depth"] - bd)
+        elif r.get("grid_max_depth", r["max_depth"]) - bd >= min_depth_ft:
+            # 2.18.65: grid depth against the baseline's grid depth (max_depth may be the
+            # centreline overtopping, crown.py)
+            inc, note = True, "+{:.1f} ft with breach".format(
+                r.get("grid_max_depth", r["max_depth"]) - bd)
         else:
             inc, note = False, "overtopped without breach ({:.1f} ft)".format(bd)
         r["incremental"], r["incr_note"] = inc, note

@@ -1,4 +1,4 @@
-# DamSafety Hazard Lite 0.1.0
+# DamSafety Hazard Lite 0.1.1
 
 A small QGIS plugin: breach depth and velocity rasters in, hmax / vmax at every 911-addressed
 structure, overtopped road and inundated railroad out, plus the ND hazard class from
@@ -18,6 +18,7 @@ about 80,600 lines in DamSafety_Hazard. Only GDAL / OGR and numpy, so `core.run(
 | Roads | `ND_roads_NG911` | sampled every half cell; each wet run (>= 0.1 ft) is one spot at its deepest point |
 | Traffic | `NDDOT_traffic_counts` | the nearest station that sits on the same named road, within 1 mile |
 | Railroads | `NARN_rail_lines` | abandoned / removed / trail lines skipped |
+| Crown (0.1.1) | `WSE (Max).tif`, 1 m DEM | a wet road / rail stretch counts only where the max WSE is above the centreline crown of the 1 m DEM (bridge / notch cuts masked); no WSE or DEM: the depth raster, noted |
 | Trains/day | `FRA_grade_crossings` | highest day + night + switching count of the same railroad within 3 miles |
 
 ## Rules (REG_05.2026 Section 5.2, as the ND Dam Hazard plugin codes them)
@@ -38,7 +39,7 @@ The chart table is a verbatim copy of `damsuite/tm11_curves.py` (signed off by N
 
 - `hazard_summary.md`: the class, the reasons with section numbers, the items to verify, and tables.
 - `hazard_lite.gpkg`: `structures` (outlines), `road_spots`, `rail_spots` (points at the deepest spot), loaded into the project.
-- `structures.csv`, `roads.csv`, `railroads.csv`.
+- `structures.csv`, `roads.csv`, `railroads.csv` (0.1.1: depth basis, crown, WSE, freeboard), `line_crown_check.csv` (every wet stretch, counted or not, and why).
 
 ## Left out on purpose (compared with DamSafety_Hazard)
 

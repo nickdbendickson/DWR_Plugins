@@ -57,6 +57,7 @@ from .structures import (
     sampled_cells_layer, apply_type,
 )
 from .linear import analyze_roads, analyze_rail, roads_to_layer, rail_to_layer, FeatureIndex
+from .linear import checked_to_layer
 from .classification import (
     classify_nd, classify_tm11, summary_lines, write_summary, extra_criteria,
     lone_point_judgment, ms_rule_judgment,
@@ -744,6 +745,12 @@ def evaluation_key(cfg):
     for k in _EVAL_LAYERS:
         parts[k] = _layer_sig(cfg.get(k))
     parts["out"] = os.path.normcase(os.path.abspath(cfg["output_folder"] or ""))
+    # 2.18.65: the road / rail crown check reads the run's WSE (Max) and run_report.json
+    parts["line_crown"] = [bool(cfg.get("line_crown_check", True))] + [
+        _file_sig(os.path.join(os.path.dirname(os.path.abspath(str(sc.depth))), f))
+        for sc in cfg.get("scenarios") or [] if sc.depth
+        for f in ("WSE (Max).tif", os.path.join("_breach_model", "run_report.json"),
+                  os.path.join("_breach_model", "structures.json"))]
     parts["dam_folder"] = os.path.normcase(os.path.abspath(cfg.get("dam_folder") or ""))
     from .constants import SOURCE_OVERRIDES
     parts["sources"] = sorted((k, str(v)) for k, v in SOURCE_OVERRIDES.items())
@@ -1914,12 +1921,16 @@ def _classify_and_write(run, cfg, state):
                 (BND.to_layer(res.get("boundary"), sc.name, acrs,
                               "Model_Boundary_Check" + suffix),
                  "Model_Boundary_Check" + suffix, "Flag"),
+                (checked_to_layer(res["line_checks"], acrs, "Line_Crown_Check" + suffix)
+                 if res.get("line_checks") else None, "Line_Crown_Check" + suffix,
+                 "Decision"),
                 (EAP.notification_layer(structs, res, acrs, run.ctx,
                                         "EAP_Notification_List" + suffix)
                  if _eap_on(cfg, "list") else None, "EAP_Notification_List" + suffix,
                  "Type")):
             is_eap = base.startswith("EAP_")
-            dest = d_eap if is_eap else d_qa if base.startswith("Model_Boundary") else d_class
+            dest = d_eap if is_eap else d_qa if base.startswith(
+                ("Model_Boundary", "Line_Crown_Check")) else d_class
             if lyr is None or lyr.featureCount() == 0:
                 _retire_everywhere(out, base)     # never leave a previous run's result
                 continue
@@ -2849,6 +2860,32 @@ def _open_samplers(run, sc, lyrs):
     return samplers
 
 
+def _open_crown(run, sc, lyrs, samplers, acrs):
+    """2.18.65 (DWR-2801 review): samplers["crown"], the run's WSE (Max) and 1 m DEM for the
+    road / rail centreline crown check (crown.py), or samplers["crown_note"] saying why the
+    depth raster is used. Off with the setting line_crown_check = False."""
+    from . import crown as CR
+    samplers["crown"] = None
+    if not run.cfg.get("line_crown_check", True):
+        samplers["crown_note"] = "turned off (line_crown_check)"
+    else:
+        wse = (getattr(sc, "plan_rasters", None) or {}).get("wse")
+        src, note = CR.open_source(get_layer_path(lyrs["depth"]), acrs.toWkt(), wse)
+        samplers["crown"], samplers["crown_note"] = src, note
+    run.log("{}: roads / rail overtopping - {}{}".format(
+        sc.name, "" if samplers["crown"] is not None else "depth raster, no centreline crown "
+        "check: ", samplers["crown_note"]))
+
+
+def _log_line_checks(run, sc, rows):
+    from collections import Counter
+    if not rows:
+        return
+    n = Counter((r.get("kind"), (r.get("line_check") or {}).get("decision")) for r in rows)
+    run.log("{}: wet road / rail stretches: {} (QA/Line_Crown_Check)".format(
+        sc.name, ", ".join("{} {}: {}".format(k, d, c) for (k, d), c in sorted(n.items()))))
+
+
 def _run_scenario(run, sc, lyrs, structs, acrs, clip, inputs, cross_idx, tick, one_d):
     """Stage A of one scenario: raster sampling of the structures, roads,
     rail, facilities and the access network. Consequences, the increment
@@ -2865,7 +2902,7 @@ def _run_scenario(run, sc, lyrs, structs, acrs, clip, inputs, cross_idx, tick, o
             rec[k] = None
     samplers = _open_samplers(run, sc, lyrs)
     res = {"scenario": sc, "method": METHOD_MAXMAX, "roads": [], "access_edges": None,
-           "rails": [], "access": None, "facility_records": inputs.get("facilities") or [],
+           "rails": [], "line_checks": [], "access": None, "facility_records": inputs.get("facilities") or [],
            "dams_evaluated": inputs.get("dams_evaluated", False),
            "lifelines_evaluated": inputs.get("lifelines_evaluated", False),
            "crossings_evaluated": getattr(run, "crossings_evaluated", False)}
@@ -2885,6 +2922,8 @@ def _run_scenario(run, sc, lyrs, structs, acrs, clip, inputs, cross_idx, tick, o
         res["cell_size"] = (abs(samplers["depth"].gt[1]), abs(samplers["depth"].gt[5])) \
             if samplers["depth"].ok and samplers["depth"].gt else None
         if sc.role == ROLE_BREACH:
+            if ext is not None and (inputs["roads"] is not None or inputs["rail"] is not None):
+                _open_crown(run, sc, lyrs, samplers, acrs)
             if inputs["roads"] is not None and ext is not None:
                 run.mark("{}: roads".format(sc.name))
                 res["roads"] = analyze_roads(
@@ -2892,7 +2931,8 @@ def _run_scenario(run, sc, lyrs, structs, acrs, clip, inputs, cross_idx, tick, o
                     aadt_layers=inputs.get("aadt_layers") or [],
                     crossing_index=cross_idx, occupancy=float(cfg["occupancy"]),
                     speed_mph=float(cfg["speed_mph"]),
-                    progress_cb=lambda p, m: tick(60 + 0.2 * p, "{}: {}".format(sc.name, m)))
+                    progress_cb=lambda p, m: tick(60 + 0.2 * p, "{}: {}".format(sc.name, m)),
+                    checked=res["line_checks"])
                 if cfg["access"]:
                     run.mark("{}: sole-access analysis".format(sc.name))
                     acc = access_analysis(
@@ -2905,7 +2945,9 @@ def _run_scenario(run, sc, lyrs, structs, acrs, clip, inputs, cross_idx, tick, o
                 run.mark("{}: railroads".format(sc.name))
                 res["rails"] = analyze_rail(
                     inputs["rail"], samplers, acrs, run.ctx, ext, crossing_index=cross_idx,
-                    progress_cb=lambda p, m: tick(90 + 0.1 * p, "{}: {}".format(sc.name, m)))
+                    progress_cb=lambda p, m: tick(90 + 0.1 * p, "{}: {}".format(sc.name, m)),
+                    checked=res["line_checks"])
+            _log_line_checks(run, sc, res["line_checks"])
         elif inputs["roads"] is not None and cfg["access"]:
             # baseline: which structures are cut off even without the breach
             acc = access_analysis(

@@ -3,10 +3,15 @@
 per day) for the hazard classification.
 
 Lines are sampled every LINE_SAMPLE_STEP_FT; consecutive wet samples
-(depth > 0) form an inundated stretch. ND REG_05.2026 5.2.1.2 treats a
+(depth > 0) form a wet stretch. ND REG_05.2026 5.2.1.2 treats a
 road as impacted "if overtopped at any depth"; 5.2.1.3 does the same for
 railroads. Bridges are flagged because a 2D depth grid shows water under
 the deck.
+
+2.18.65 (DWR-2801 review): a wet stretch counts only when its grid depth
+reaches crown.ARRIVAL_FT (0.1 ft), it has an arrival time (when an arrival
+raster is given) and - when the run's WSE (Max) and 1 m DEM are there - the
+WSE is above the CENTRELINE CROWN (crown.py; the depth is then WSE - crown).
 """
 
 import math
@@ -27,6 +32,7 @@ from .constants import (
     ND_HIGH, ND_MEDIUM, ND_LOW, DEFAULT_VEHICLE_OCCUPANCY, DEFAULT_VEHICLE_SPEED_MPH,
     vehicle_curve_available,
 )
+from . import crown as CR
 from .helpers import (
     log_message, LimitedLogger, create_memory_layer, transform_geometry, transform_xy,
     buffer_distance_in_layer_units, classify_values, add_features_batched, is_null,
@@ -282,12 +288,34 @@ BATCH_POINTS = 2000000          # v2.6.2: line points per depth read (memory bou
 BATCH_FEATURES = 500
 
 
-def _stretches(pending, samplers, to_v, to_r, dist):
-    """(feature, stretch) of every flooded stretch of the densified lines
+def _depth_reader(sampler):
+    return lambda xy: sampler.values_at(np.asarray(xy)[:, 0], np.asarray(xy)[:, 1])
+
+
+def _check_record(decision, c, fallback_note):
+    """stretch["line_check"]: the decision and its basis (crown.py)."""
+    rec = {"decision": decision, "basis": CR.BASIS_GRID, "crown_ft": None, "wse_ft": None,
+           "freeboard_ft": None, "overtop_ft": None, "note": fallback_note or ""}
+    if c:
+        rec.update({k: c.get(k) for k in ("basis", "crown_ft", "wse_ft", "freeboard_ft",
+                                          "overtop_ft", "x", "y", "n_cut",
+                                          "n_opening_unmatched", "how")})
+        rec["note"] = c.get("note") or ""
+    return rec
+
+
+def _stretches(pending, samplers, to_v, to_r, dist, checked=None):
+    """(feature, stretch) of every overtopped stretch of the densified lines
     [(feature, points)], in their order: one depth read for all points and
-    one velocity / arrival read for all wet stretches."""
+    one velocity / arrival read for all wet stretches. 2.18.65: each wet
+    stretch is decided by crown.line_check (stretch["line_check"]); the ones
+    not counted are only appended to `checked` (with the counted ones)."""
     if not pending:
         return
+    src = samplers.get("crown")
+    fallback = "" if src is not None else str(samplers.get("crown_note") or "")
+    arrival_ok = bool(getattr(samplers.get("arr"), "ok", False))
+    depth_ft = _depth_reader(samplers["depth"])
     if len(pending) == 1:
         depths = [samplers["depth"].values_at(pending[0][1][:, 0], pending[0][1][:, 1])]
     else:
@@ -322,17 +350,30 @@ def _stretches(pending, samplers, to_v, to_r, dist):
             length_ft = max(LINE_SAMPLE_STEP_FT, dist.length_ft(sg))
         except Exception:
             length_ft = LINE_SAMPLE_STEP_FT * (i1 - i0 + 1)
-        yield feat, {
+        st = {
             "geom": sg, "length_ft": length_ft, "depth": ds, "vel": vs,
             "xs": pts[i0:i1 + 1, 0].copy(), "ys": pts[i0:i1 + 1, 1].copy(),
             "max_depth": float(np.nanmax(ds)), "max_vel": float(vs.max()),
             "dv_max": float(np.nanmax(ds * vs)),
             "arrival": float(np.nanmin(a)) if np.isfinite(a).any() else None,
         }
+        st["grid_max_depth"] = st["max_depth"]
+        decision, c = CR.line_check(st, arrival_ok, src, pts, i0, i1, depth_ft)
+        st["line_check"] = _check_record(decision, c, fallback)
+        if checked is not None:
+            checked.append((feat, st))
+        if decision != CR.DECISION_COUNTED:
+            continue
+        if c and c.get("basis") in (CR.BASIS_CROWN, CR.BASIS_RASTER):
+            od = float(c["overtop_ft"])        # the overtopping on the centreline
+            st["depth"] = np.minimum(ds, od)
+            st["max_depth"] = od
+            st["dv_max"] = float(np.nanmax(st["depth"] * vs))
+        yield feat, st
 
 
 def inundated_stretches(layer, samplers, analysis_crs, transform_ctx, filter_rect=None,
-                        progress_cb=None, label="line"):
+                        progress_cb=None, label="line", checked=None):
     """Yield (feature, stretch dict) for every flooded stretch of every line.
     Stretch: geom (analysis CRS), length_ft, max_depth, max_vel, arrival,
     depth/vel sample arrays."""
@@ -378,10 +419,10 @@ def inundated_stretches(layer, samplers, analysis_crs, transform_ctx, filter_rec
             npts += len(pts)
         nfeat += 1
         if not batch or npts >= BATCH_POINTS or nfeat >= BATCH_FEATURES:
-            for item in _stretches(pending, samplers, to_v, to_r, dist):
+            for item in _stretches(pending, samplers, to_v, to_r, dist, checked):
                 yield item
             pending, npts, nfeat = [], 0, 0
-    for item in _stretches(pending, samplers, to_v, to_r, dist):
+    for item in _stretches(pending, samplers, to_v, to_r, dist, checked):
         yield item
     problems.summary()
 
@@ -594,7 +635,7 @@ def nd_road_class(road_class, aadt):
 
 def analyze_roads(road_layer, samplers, analysis_crs, transform_ctx, filter_rect=None,
                   aadt_layers=(), crossing_index=None, occupancy=DEFAULT_VEHICLE_OCCUPANCY,
-                  speed_mph=DEFAULT_VEHICLE_SPEED_MPH, progress_cb=None):
+                  speed_mph=DEFAULT_VEHICLE_SPEED_MPH, progress_cb=None, checked=None):
     """Flooded road stretches with road class, paving, AADT (most recent
     of: the road's own attributes, AADT layers within AADT_SEARCH_FT, FRA
     crossings within CROSSING_AADT_SEARCH_FT), ACER vehicle zone and ND class."""
@@ -610,8 +651,9 @@ def analyze_roads(road_layer, samplers, analysis_crs, transform_ctx, filter_rect
     curves = curve_pair("vehicle") if veh else None
     vmax = curves[2] if veh else None
     results = []
+    local = [] if checked is not None else None
     for feat, st in inundated_stretches(road_layer, samplers, analysis_crs, transform_ctx,
-                                        filter_rect, progress_cb, "road"):
+                                        filter_rect, progress_cb, "road", local):
         attrs = feat.attributes()
         rclass, cbasis = reader.road_class(attrs)
         paved, pbasis = reader.paved(attrs, rclass)
@@ -653,6 +695,7 @@ def analyze_roads(road_layer, samplers, analysis_crs, transform_ctx, filter_rect
             "aadt_source": src, "nd_class": nd_cls, "nd_basis": nd_basis,
             "nd_judgment": judge, "vehicle_zone": vzone, "persons": persons,
             "beyond_chart": bool(veh and vmax is not None and st["max_vel"] > vmax), **st})
+    _checked(checked, local or [], "Road", reader.road_name)
     log_message("Roads: {} inundated stretches".format(len(results)))
     return results
 
@@ -708,7 +751,7 @@ def _norm_sub(text):
 
 
 def analyze_rail(rail_layer, samplers, analysis_crs, transform_ctx, filter_rect=None,
-                 crossing_index=None, progress_cb=None):
+                 crossing_index=None, progress_cb=None, checked=None):
     reader = AttrReader(rail_layer)
     owner_i = next((reader.low[n] for n in _OWNER_NAMES if n in reader.low), None)
     pass_i = next((reader.low[n] for n in _PASS_NAMES if n in reader.low), None)
@@ -721,8 +764,9 @@ def analyze_rail(rail_layer, samplers, analysis_crs, transform_ctx, filter_rect=
     to_a = QgsCoordinateTransform(rail_layer.crs(), analysis_crs, transform_ctx)
     results = []
     skipped = 0
+    local = [] if checked is not None else None
     for feat, st in inundated_stretches(rail_layer, samplers, analysis_crs, transform_ctx,
-                                        filter_rect, progress_cb, "rail line"):
+                                        filter_rect, progress_cb, "rail line", local):
         attrs = feat.attributes()
         net = "" if net_i is None or is_null(attrs[net_i]) else str(attrs[net_i]).strip().upper()
         if net in NARN_NO_TRAFFIC:
@@ -773,6 +817,8 @@ def analyze_rail(rail_layer, samplers, analysis_crs, transform_ctx, filter_rect=
             "passenger": passenger, "passenger_value": pval, "trains": trains,
             "trains_source": tsrc, "nd_class": nd_cls, "nd_basis": nd_basis,
             "nd_judgment": judge, **st})
+    _checked(checked, local or [], "Rail",
+             lambda a: "" if owner_i is None or is_null(a[owner_i]) else str(a[owner_i]))
     log_message("Rail: {} inundated stretches{}".format(
         len(results), "; {} on abandoned / removed lines or trails left out".format(skipped)
         if skipped else ""))
@@ -799,6 +845,11 @@ def _ft(ft, crs, lat):
 
 
 # ------------------------------------------------------------------ output --
+# 2.18.65: how each stretch was found overtopped (crown.py), after Notes
+CHECK_FIELDS = [
+    ("Depth_Basis", FT_STRING), ("Grid_Depth_ft", FT_DOUBLE), ("Crown_ft", FT_DOUBLE),
+    ("WSE_ft", FT_DOUBLE), ("Freeboard_ft", FT_DOUBLE),
+]
 ROAD_FIELDS = [
     ("Road_Name", FT_STRING), ("Road_Class", FT_STRING),
     ("Class_Basis", FT_STRING), ("Paved", FT_STRING),
@@ -809,7 +860,7 @@ ROAD_FIELDS = [
     ("Vehicle_Zone", FT_INT), ("Vehicle_Zone_Label", FT_STRING),
     ("Persons_At_Risk", FT_DOUBLE), ("ND_Class", FT_STRING),
     ("ND_Basis", FT_STRING), ("Source_FID", FT_INT), ("Notes", FT_STRING),
-]
+] + CHECK_FIELDS
 RAIL_FIELDS = [
     ("Railroad", FT_STRING), ("Subdivision", FT_STRING),
     ("Passenger", FT_STRING), ("Length_ft", FT_DOUBLE),
@@ -817,11 +868,82 @@ RAIL_FIELDS = [
     ("First_Arrival_hr", FT_DOUBLE), ("Trains_Per_Day", FT_DOUBLE),
     ("Trains_Source", FT_STRING), ("ND_Class", FT_STRING),
     ("ND_Basis", FT_STRING), ("Source_FID", FT_INT), ("Notes", FT_STRING),
-]
+] + CHECK_FIELDS
 
 
 def _nz(v):
     return NULL if v is None else v
+
+
+def _r2(v):
+    return NULL if v is None else round(float(v), 2)
+
+
+def check_values(r):
+    """CHECK_FIELDS values of a stretch (2.18.65)."""
+    lc = r.get("line_check") or {}
+    return [lc.get("basis") or CR.BASIS_GRID, _nz(r.get("grid_max_depth", r.get("max_depth"))),
+            _r2(lc.get("crown_ft")), _r2(lc.get("wse_ft")), _r2(lc.get("freeboard_ft"))]
+
+
+def check_note(r):
+    """The Notes text for the basis of a stretch's depth (2.18.65), '' when there is none."""
+    lc = r.get("line_check") or {}
+    basis = lc.get("basis") or CR.BASIS_GRID
+    if basis == CR.BASIS_CROWN:
+        n = "overtopped: WSE above the 1 m centreline crown"
+        if lc.get("n_cut"):
+            n += " (bridge / notch cut read on a deck stand-in from the approaches)"
+        if lc.get("n_opening_unmatched"):
+            n += "; a bare-earth opening with no mapped bridge was read as it is - verify"
+        return n
+    if basis == CR.BASIS_RASTER:
+        return ("depth raster used where the centreline has no 1 m crown / WSE - verify "
+                "bridges/culverts")
+    if lc.get("note"):
+        return ("no centreline crown check ({}): grid depth, which may be below the crown - "
+                "verify bridges/culverts".format(lc["note"]))
+    return ""
+
+
+def _checked(checked, local, kind, name_of):
+    """Line_Crown_Check rows (checked_to_layer) of the stretches `local` [(feature, st)]."""
+    if checked is None:
+        return
+    for feat, st in local:
+        checked.append(dict(st, kind=kind, name=name_of(feat.attributes()), fid=feat.id()))
+
+
+CHECK_LAYER_FIELDS = [
+    ("Line_Type", FT_STRING), ("Name", FT_STRING), ("Source_FID", FT_INT),
+    ("Length_ft", FT_DOUBLE), ("Grid_Depth_ft", FT_DOUBLE), ("First_Arrival_hr", FT_DOUBLE),
+    ("Decision", FT_STRING), ("Depth_Basis", FT_STRING), ("Crown_ft", FT_DOUBLE),
+    ("WSE_ft", FT_DOUBLE), ("Freeboard_ft", FT_DOUBLE), ("Overtop_ft", FT_DOUBLE),
+    ("Crown_X", FT_DOUBLE), ("Crown_Y", FT_DOUBLE), ("Note", FT_STRING),
+]
+
+
+def checked_to_layer(rows, crs, name="Line_Crown_Check"):
+    """QA layer of every wet road / rail stretch and why it was or was not counted (2.18.65)."""
+    lyr = create_memory_layer(name, WKB_LINESTRING, crs,
+                              [QgsField(n, t) for n, t in CHECK_LAYER_FIELDS])
+    fields = lyr.fields()
+    feats = []
+    for r in rows or []:
+        lc = r.get("line_check") or {}
+        f = QgsFeature(fields)
+        f.setGeometry(r["geom"])
+        f.setAttributes([
+            r.get("kind") or "", r.get("name") or "", int(r.get("fid", -1)), r["length_ft"],
+            _nz(r.get("grid_max_depth", r.get("max_depth"))), _nz(r.get("arrival")),
+            lc.get("decision") or "", lc.get("basis") or CR.BASIS_GRID,
+            _r2(lc.get("crown_ft")), _r2(lc.get("wse_ft")), _r2(lc.get("freeboard_ft")),
+            _r2(lc.get("overtop_ft")), _nz(lc.get("x")), _nz(lc.get("y")),
+            lc.get("note") or lc.get("how") or ""])
+        feats.append(f)
+    add_features_batched(lyr.dataProvider(), feats, FEATURE_BATCH_SIZE)
+    lyr.updateExtents()
+    return lyr
 
 
 def roads_to_layer(results, crs):
@@ -839,6 +961,8 @@ def roads_to_layer(results, crs):
             notes.append("ACER vehicle curve not configured")
         if r.get("beyond_chart"):
             notes.append("velocity above TM 11 Fig 4 range (16 ft/s) - evaluated at 16 ft/s")
+        if check_note(r):
+            notes.append(check_note(r))
         f = QgsFeature(fields)
         f.setGeometry(r["geom"])
         f.setAttributes([
@@ -846,7 +970,8 @@ def roads_to_layer(results, crs):
             "Yes" if r["bridge"] else "No", r["length_ft"], r["max_depth"], r["max_vel"],
             _nz(r["arrival"]), _nz(r["aadt"]), _nz(r["aadt_year"]), _nz(r["aadt_source"]),
             _nz(r["vehicle_zone"]), ZONE_LABELS.get(r["vehicle_zone"], "") or NULL,
-            _nz(r["persons"]), r["nd_class"], r["nd_basis"], int(r["fid"]), "; ".join(notes)])
+            _nz(r["persons"]), r["nd_class"], r["nd_basis"], int(r["fid"]), "; ".join(notes)]
+            + check_values(r))
         feats.append(f)
     add_features_batched(lyr.dataProvider(), feats, FEATURE_BATCH_SIZE)
     lyr.updateExtents()
@@ -859,7 +984,7 @@ def rail_to_layer(results, crs):
     fields = lyr.fields()
     feats = []
     for r in results:
-        notes = ["verify bridges/culverts - grid depth may be below the track"]
+        notes = [check_note(r) or "verify bridges/culverts - grid depth may be below the track"]
         if r["nd_judgment"]:
             notes.append("trains/day unknown")
         f = QgsFeature(fields)
@@ -868,7 +993,8 @@ def rail_to_layer(results, crs):
             r["railroad"], r["subdivision"],
             ("Yes ({})".format(r["passenger_value"]) if r["passenger"] else "No"),
             r["length_ft"], r["max_depth"], r["max_vel"], _nz(r["arrival"]), _nz(r["trains"]),
-            r["trains_source"], r["nd_class"], r["nd_basis"], int(r["fid"]), "; ".join(notes)])
+            r["trains_source"], r["nd_class"], r["nd_basis"], int(r["fid"]), "; ".join(notes)]
+            + check_values(r))
         feats.append(f)
     add_features_batched(lyr.dataProvider(), feats, FEATURE_BATCH_SIZE)
     lyr.updateExtents()
