@@ -254,9 +254,10 @@ class RunSettings:
         # core/hecras_crest.py)
         self.hecras_dam_axis = "crest"
         # v3.10.84: what the HEC-RAS mapped depth is measured from: None (default) =
-        # NDBREACH_HECRAS_DEPTH_BASIS, else "cell_min" (the cell's max WSE minus the cell's
-        # minimum terrain elevation); "terrain" = minus the terrain under each grid cell (the
-        # 3.10.79 default). Wet area and arrival use the same depth (core/hecras.depth_basis).
+        # NDBREACH_HECRAS_DEPTH_BASIS, else "terrain" (v3.10.92, the default again: the max WSE
+        # minus the run's fine DEM at the centre of each grid cell); "cell_min" = minus the
+        # cell's minimum terrain elevation (the 3.10.84 default). Wet area and arrival use the
+        # same depth (core/hecras.depth_basis).
         self.hecras_depth_basis = None
         # v3.10.27 (#91): water-body mask for the run report only (core/report_metrics.py): a
         # vector file path (several separated by ;;), a list of polygons in the work CRS, or
@@ -713,14 +714,30 @@ def anuga_threads_line(th):
 
 
 def hecras_depth_basis_line(rec):
-    """One line for run_report.md from hecras_stage.json's depth basis (3.10.84)."""
+    """One line for run_report.md from hecras_stage.json's depth basis (3.10.84; 3.10.92: the
+    terrain read and its datum check)."""
     b = rec.get("depth_basis")
     txt = {"cell_min": "cell minimum: max WSE minus the HEC-RAS cell's minimum terrain "
-                       "elevation (default)",
-           "terrain": "per-pixel terrain: max WSE minus the terrain under each grid cell"}
+                       "elevation",
+           "terrain": "per-pixel terrain (default): max WSE minus the terrain at the centre "
+                      "of each grid cell"}
     line = txt.get(b, str(b))
+    tr = rec.get("depth_terrain") or {}
+    if b == "terrain" and tr.get("source"):
+        line += " ({}{})".format({"run_dem": "the run's DEM", "hecras_terrain":
+                                  "the HEC-RAS terrain", "given": "the terrain given"}.get(
+                                      tr["source"], tr["source"]),
+                                 ", {:.2f} m cells".format(tr["cell_m"]) if tr.get("cell_m")
+                                 else "")
     if rec.get("depth_basis_requested") and rec.get("depth_basis_requested") != b:
-        line += " ({} asked for; no terrain)".format(rec["depth_basis_requested"])
+        line += " ({} asked for; {})".format(
+            rec["depth_basis_requested"],
+            "TERRAIN DATUM/UNIT MISMATCH" if rec.get("datum_stop") else "no terrain")
+    dc = rec.get("datum_check") or {}
+    if dc.get("status") in ("mismatch", "suspect"):
+        line += "; datum check: {} (median {:+.2f} ft)".format(dc["status"], dc["median_ft"])
+    elif dc.get("status") == "ok":
+        line += "; datum check ok"
     return line
 
 
@@ -1996,7 +2013,8 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
         hst = {}
     if isinstance(hst, dict) and hst.get("depth_basis"):
         report["hecras_depth_basis"] = {k: hst.get(k) for k in (
-            "depth_basis", "depth_basis_requested", "depth_basis_text", "depth_basis_compare")}
+            "depth_basis", "depth_basis_requested", "depth_basis_text", "depth_basis_compare",
+            "depth_terrain", "terrain_sample", "datum_check", "datum_stop", "depth_warnings")}
         summary["hecras_depth_basis"] = hecras_depth_basis_line(hst)
     report["summary"] = summary
     report["screening_pass_lisflood"] = screening

@@ -430,13 +430,13 @@ def chain_qgis_ops_hec_wait_and_import():
         open(dep, "w").close()
         calls = []
         ops = _ops({"ndhazard:hecrasplan": {"DEPTH": dep, "BOUNDARY": "/b.gpkg"}}, calls)
-        # 3.10.84: the default cell-minimum basis passes no terrain (was: always TERRAIN, the
-        # per-pixel depth the Runner no longer writes by default)
-        with _basis_env(None):
+        # 3.10.84: the cell-minimum basis passes no terrain; 3.10.92: the default per-pixel
+        # terrain basis passes the package's terrain again
+        with _basis_env("cell_min"):
             imp = ops.run("hazard_import", dam)
         assert "TERRAIN" not in calls[0][1] and imp["boundary"] == "/b.gpkg"
         assert imp["depth_basis"] == "cell_min" and imp["terrain"] == ""
-        with _basis_env("terrain"):                    # per pixel: the package's terrain
+        with _basis_env(None):                         # per pixel: the package's terrain
             imp = ops.run("hazard_import", dam)
         assert calls[1][1]["TERRAIN"].endswith("Terrain.tif") and imp["boundary"] == "/b.gpkg"
         assert imp["depth_basis"] == "terrain" and imp["terrain"] == calls[1][1]["TERRAIN"]
@@ -455,7 +455,9 @@ def chain_qgis_ops_hec_wait_and_import():
 def chain_hazard_import_depth_basis_follows_the_hecras_stage():
     """3.10.84: the chain's Hazard import uses the depth basis the HEC-RAS stage used: the
     Linux stage's hecras_stage.json for its own plan, else NDBREACH_HECRAS_DEPTH_BASIS (default
-    cell_min). Only the terrain basis looks for (and needs) a terrain."""
+    terrain since 3.10.92). Only the terrain basis looks for (and needs) a terrain; the
+    default one without a terrain uses the cell minimum, loudly; a 3.10.92 stage on the
+    terrain basis hands Hazard its own rasters (no TERRAIN)."""
     from nd_breach_runner.core import hecras
     assert CH.DEPTH_BASIS_ENV == hecras.DEPTH_BASIS_ENV
     root = _tmp()
@@ -482,12 +484,19 @@ def chain_hazard_import_depth_basis_follows_the_hecras_stage():
         ops = _ops({"ndhazard:hecrasplan": hazard}, calls)
         lines = []
         ops.log = lines.append
-        with _basis_env(None):                 # default: no terrain needed, none passed
+        with _basis_env("cell_min"):           # cell minimum: no terrain needed, none passed
             imp = ops.run("hazard_import", dam)
         assert "TERRAIN" not in calls[-1][1] and imp["depth_basis"] == "cell_min"
         assert imp["hazard_depth_basis"] == "cell_min" and imp["terrain"] == ""
         assert any("cell minimum" in m and "NDBREACH_HECRAS_DEPTH_BASIS=terrain" in m
                    and "read when this import runs" in m and "HEC-RAS stage runs" not in m
+                   for m in lines), lines
+        del lines[:]
+        with _basis_env(None):                 # 3.10.92 default terrain, none found: loud
+            imp = ops.run("hazard_import", dam)
+        assert "TERRAIN" not in calls[-1][1] and imp["depth_basis"] == "cell_min"
+        assert any("WARNING: no HEC-RAS terrain" in m and "HEC_TERRAIN" in m for m in lines)
+        assert any("no terrain found for the default" in m and "--terrain" in m
                    for m in lines), lines
         with _basis_env("terrain"):            # per pixel without a terrain: a clear error
             try:
@@ -520,6 +529,23 @@ def chain_hazard_import_depth_basis_follows_the_hecras_stage():
             imp = ops.run("hazard_import", dam)
         assert calls[-1][1]["TERRAIN"] == tif and imp["depth_basis"] == "terrain"
         assert imp["hazard_depth_basis"] == "terrain"
+        # 3.10.92: a stage that measured from the run's fine DEM: Hazard adopts its rasters
+        with open(os.path.join(hec, "hecras_stage.json"), "w") as f:
+            json.dump(dict(stage, depth_terrain={"source": "run_dem", "path": "/dem_1m.tif"}),
+                      f)
+        del lines[:]
+        with _basis_env(None):
+            imp = ops.run("hazard_import", dam)
+        assert "TERRAIN" not in calls[-1][1] and imp["depth_basis"] == "terrain"
+        assert any("stage's own" in m and "/dem_1m.tif" in m for m in lines), lines
+        dam.cv["HEC_TERRAIN"] = tif                     # a terrain given still wins
+        try:
+            with _basis_env(None):
+                ops.run("hazard_import", dam)
+            assert calls[-1][1]["TERRAIN"] == tif
+        finally:
+            dam.cv.pop("HEC_TERRAIN", None)
+        n += 2                                           # the two imports above
         with open(os.path.join(hec, "hecras_stage.json"), "w") as f:
             json.dump(dict(stage, depth_basis="cell_min"), f)
         del lines[:]

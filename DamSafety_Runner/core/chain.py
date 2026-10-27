@@ -103,9 +103,10 @@ KEYS = (
         "override; empty = look in the dam folder)"),
     Key("HEC_PLAN_HDF", "text", "", "A finished HEC-RAS plan HDF to use (per-dam override)"),
     Key("HEC_TERRAIN", "text", "", "HEC-RAS terrain GeoTIFF (empty = the package's Terrain "
-        "folder)", "3.10.84: used only for the per-pixel depth basis "
-        "(NDBREACH_HECRAS_DEPTH_BASIS=terrain, or a Linux HEC-RAS stage on that basis); the "
-        "default cell-minimum depth needs no terrain."),
+        "folder)", "3.10.84: used only for the per-pixel depth basis (the default "
+        "again since 3.10.92; a Linux HEC-RAS stage on that basis gives Hazard its own "
+        "rasters on the run's fine DEM unless this is set); the cell-minimum depth "
+        "(NDBREACH_HECRAS_DEPTH_BASIS=cell_min) needs no terrain."),
     Key("HAZARD_PROFILE", "text", "", "Hazard settings profile (.ndprofile.json) for the "
         "saved Hazard window state"),
     Key("STOP_AFTER", "enum", 0, "Stop each dam at", options=STOP_CHOICES),

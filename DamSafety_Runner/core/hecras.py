@@ -67,18 +67,26 @@ BASIS_REF = "Reference only"
 # 3.10.79: what the depth is measured from (info['depth_basis'])
 DEPTH_BASIS_TERRAIN = "terrain"     # WSE minus the terrain under each grid cell (terrain_depth)
 DEPTH_BASIS_CELL_MIN = "cell_min"   # WSE minus the HEC cell's minimum elevation (read_mesh)
-# 3.10.84: the mapped depth is the cell's max WSE minus the cell's MINIMUM terrain elevation by
-# default again (Nick, Oct 26 2026; reverses the 3.10.79 per-pixel default). The per-pixel
-# terrain basis stays selectable: RunSettings.hecras_depth_basis, the import algorithm's
-# Depth basis, `ndbreach_cli.py hecras-reexport --depth-basis`, or this variable.
+# 3.10.84: the mapped depth was the cell's max WSE minus the cell's MINIMUM terrain elevation
+# by default (Nick, Oct 26 2026). 3.10.92 (Nick, Oct 27 2026): the default is the actual
+# terrain again - max WSE minus the run's fine (1 m) terrain at the centre of each output
+# pixel (hecras_engine.fine_terrain_on_grid) - reversing the 3.10.84 default. The cell-min
+# basis stays selectable: RunSettings.hecras_depth_basis, the import algorithm's Depth
+# basis, `ndbreach_cli.py hecras-reexport --depth-basis cell_min`, or this variable.
 DEPTH_BASIS_ENV = "NDBREACH_HECRAS_DEPTH_BASIS"
-DEPTH_BASIS_DEFAULT = DEPTH_BASIS_CELL_MIN
-DEPTH_BASES = (DEPTH_BASIS_CELL_MIN, DEPTH_BASIS_TERRAIN)
+DEPTH_BASIS_DEFAULT = DEPTH_BASIS_TERRAIN
+DEPTH_BASES = (DEPTH_BASIS_TERRAIN, DEPTH_BASIS_CELL_MIN)
 DEPTH_BASIS_TEXT = {
     DEPTH_BASIS_CELL_MIN: "max WSE of the HEC-RAS cell minus the cell's minimum terrain "
                           "elevation (Cells Minimum Elevation), over the whole cell",
-    DEPTH_BASIS_TERRAIN: "max WSE of the HEC-RAS cell minus the terrain averaged onto each "
-                         "output grid cell (per pixel)"}
+    DEPTH_BASIS_TERRAIN: "max WSE of the HEC-RAS cell minus the actual terrain (the run's "
+                         "fine DEM) at the centre of each output grid cell (per pixel)"}
+# 3.10.92: the terrain basis compares its ground with the model's own cell minimum
+# elevations (same datum and unit as the WSE): a terrain on another vertical datum or in
+# another unit stops the terrain basis (DatumMismatch) unless this variable is 'warn'
+DATUM_CHECK_ENV = "NDBREACH_HECRAS_DATUM_CHECK"
+DATUM_TOL_FT = 1.0                  # median terrain below the cell minimum by more: a mismatch
+DATUM_UNIT_RATIO = 0.10             # median terrain / median cell minimum off 1 by more: units
 _BASIS_ALIASES = {"cell_min": DEPTH_BASIS_CELL_MIN, "cellmin": DEPTH_BASIS_CELL_MIN,
                   "cell-min": DEPTH_BASIS_CELL_MIN, "cell_minimum": DEPTH_BASIS_CELL_MIN,
                   "min": DEPTH_BASIS_CELL_MIN, "cell": DEPTH_BASIS_CELL_MIN,
@@ -89,7 +97,7 @@ _BASIS_ALIASES = {"cell_min": DEPTH_BASIS_CELL_MIN, "cellmin": DEPTH_BASIS_CELL_
 
 def depth_basis(value=None, environ=None):
     """The depth basis to use: `value` when given, else NDBREACH_HECRAS_DEPTH_BASIS, else
-    DEPTH_BASIS_DEFAULT ('cell_min'). Accepts 'cell_min' / 'cellmin' / 'min' and 'terrain' /
+    DEPTH_BASIS_DEFAULT ('terrain' since 3.10.92). Accepts 'cell_min' / 'cellmin' / 'min' and 'terrain' /
     'pixel' / 'per_pixel' (any case). Raises HecRasError for anything else."""
     env = os.environ if environ is None else environ
     raw = value if value not in (None, "") else env.get(DEPTH_BASIS_ENV, "")
@@ -98,12 +106,84 @@ def depth_basis(value=None, environ=None):
     b = _BASIS_ALIASES.get(str(raw).strip().lower())
     if b is None:
         src = "depth basis" if value not in (None, "") else DEPTH_BASIS_ENV
-        raise HecRasError("{} {!r}: use 'cell_min' (default) or 'terrain'".format(src, raw))
+        raise HecRasError("{} {!r}: use 'terrain' (default) or 'cell_min'".format(src, raw))
     return b
 
 
 class HecRasError(ValueError):
     pass
+
+
+class DatumMismatch(HecRasError):
+    """3.10.92: the terrain is not on the vertical datum / unit of the HEC-RAS model."""
+
+
+def datum_check(ground_ft, cmin_ft, mask=None, environ=None):
+    """3.10.92: is the terrain `ground_ft` on the same vertical datum and unit as the HEC-RAS
+    model? The model's WSE is on the datum of its own terrain, whose minimum over each cell
+    is `cmin_ft` (Cells Minimum Elevation, read with the HDF's unit). A point of the actual
+    terrain inside a cell is at or above that minimum, so over many pixels:
+
+      median(ground - cmin) < -DATUM_TOL_FT       the terrain sits lower: another datum
+      |median(ground) / median(cmin) - 1| > 10%   another unit (feet read as metres...)
+      5th percentile(ground - cmin) > +DATUM_TOL_FT  the terrain sits higher nearly
+                                                  everywhere: probably another datum
+
+    Returns {'status': 'ok' | 'mismatch' | 'suspect' | 'no_data', 'pixels', 'median_ft',
+    'p05_ft', 'ratio', 'message', 'fatal'}: 'mismatch' is fatal unless
+    NDBREACH_HECRAS_DATUM_CHECK=warn ('suspect' only warns)."""
+    env = os.environ if environ is None else environ
+    g = np.asarray(ground_ft, dtype=np.float64)
+    c = np.asarray(cmin_ft, dtype=np.float64)
+    ok = np.isfinite(g) & np.isfinite(c)
+    if mask is not None:
+        ok &= np.asarray(mask, dtype=bool)
+    rec = {"status": "no_data", "pixels": int(ok.sum()), "median_ft": None, "p05_ft": None,
+           "ratio": None, "tol_ft": DATUM_TOL_FT, "message": "", "fatal": False}
+    if rec["pixels"] < 3:
+        rec["message"] = ("Terrain datum check: too few pixels with both the terrain and a "
+                          "HEC-RAS cell to compare.")
+        return rec
+    dz = g[ok] - c[ok]
+    med, p05 = float(np.median(dz)), float(np.percentile(dz, 5))
+    mc = float(np.median(c[ok]))
+    ratio = float(np.median(g[ok]) / mc) if abs(mc) >= 100.0 else None
+    rec.update(median_ft=round(med, 3), p05_ft=round(p05, 3),
+               ratio=None if ratio is None else round(ratio, 4))
+    head = ("TERRAIN DATUM/UNIT MISMATCH: the terrain is {:+.2f} ft (median) from the HEC-RAS "
+            "model's cell minimum elevations over {:,} pixels{}. ").format(
+                med, rec["pixels"], "" if ratio is None else
+                " (ratio of the medians {:.3f})".format(ratio))
+    if ratio is not None and abs(ratio - 1.0) > DATUM_UNIT_RATIO:
+        rec["status"] = "mismatch"
+        rec["message"] = head + ("The terrain and the water surface are in different "
+                                 "elevation units: check the terrain's elevation unit "
+                                 "(hecras-reexport --terrain-z) or the run's DEM unit.")
+    elif med < -DATUM_TOL_FT:
+        rec["status"] = "mismatch"
+        rec["message"] = head + ("The terrain sits below the model's own ground, so it is "
+                                 "on another vertical datum (e.g. NGVD29 vs NAVD88) or another "
+                                 "surface than the model's terrain.")
+    elif p05 > DATUM_TOL_FT:
+        rec["status"] = "suspect"
+        rec["message"] = head + ("The terrain sits above the model's own ground at almost "
+                                 "every pixel (5th percentile {:+.2f} ft): check that it is on "
+                                 "the model's vertical datum.".format(p05))
+    else:
+        rec["status"] = "ok"
+        rec["message"] = ("Terrain datum check: the terrain matches the HEC-RAS model's cell "
+                          "minimum elevations (median {:+.2f} ft, 5th percentile {:+.2f} ft "
+                          "over {:,} pixels): the same vertical datum and unit.".format(
+                              med, p05, rec["pixels"]))
+    if rec["status"] == "mismatch":
+        if str(env.get(DATUM_CHECK_ENV, "")).strip().lower() == "warn":
+            rec["message"] += " Kept because {}=warn.".format(DATUM_CHECK_ENV)
+        else:
+            rec["fatal"] = True
+            rec["message"] += (" The terrain depth basis was stopped; fix the terrain, use "
+                               "the 'cell_min' depth basis, or set {}=warn to keep it."
+                               .format(DATUM_CHECK_ENV))
+    return rec
 
 
 # ============================================================================
@@ -1193,15 +1273,16 @@ FIELD_NAMES = ("depth", "wse", "velocity", "arrival", "time_of_max")
 
 # ============================================================================
 # 3.10.79: depth on the terrain of each grid cell (not the HEC cell's minimum);
-# 3.10.84: or (the default again) on the HEC cell's minimum, with the same pixel mapping
+# 3.10.84: or (the default then) on the HEC cell's minimum, with the same pixel mapping;
+# 3.10.92: the terrain basis is the default again, with a datum/unit check
 # ============================================================================
 def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
                   arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_hr=0.0, wet_ft=0.01, to_grid_xy=None,
                   want_arrival=True, reach=0.75, basis=None):
     """The HEC-RAS maxima on a regular grid with depth from the terrain under each GRID cell.
 
-    `terrain_ft` (ny, nx): the ground (ft) of each grid cell, e.g. the HEC-RAS terrain
-    averaged onto the grid (hecras_engine.terrain_on_grid). Each grid cell takes the water
+    `terrain_ft` (ny, nx): the ground (ft) of each grid cell, e.g. the run's fine terrain
+    at each grid cell's centre (hecras_engine.fine_terrain_on_grid). Each grid cell takes the water
     surface of its nearest HEC-RAS cell centre (the cell's WSE held flat over the cell, as
     RAS Mapper's default 'horizontal' surface), then
 
@@ -1216,13 +1297,19 @@ def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
     is used (counted in the notes). to_grid_xy maps the HEC-RAS cell centres into the grid's
     CRS (None: the same). Returns ({name: (ny, nx)} in ft, ft, ft/s, h; info).
 
-    3.10.84 `basis` (depth_basis(): None = NDBREACH_HECRAS_DEPTH_BASIS, else 'cell_min'):
+    3.10.84 `basis` (depth_basis(): None = NDBREACH_HECRAS_DEPTH_BASIS, else 'terrain'
+    since 3.10.92):
     'cell_min' measures from the HEC-RAS cell's minimum elevation over the whole cell (then
     `terrain_ft` may be None; it is used only for the comparison depth), 'terrain' from
     `terrain_ft` as above. The wet mask and the arrival time (first time WSE - ground >=
     arrival_depth_ft) always use the same ground as the depth. info: 'depth_basis',
     'depth_cell_min' and 'depth_terrain' (both bases on the grid, ft, for comparison;
-    'depth_terrain' None without a terrain)."""
+    'depth_terrain' None without a terrain).
+
+    3.10.92: with a terrain, datum_check() compares it with the cells' minimum elevations;
+    a mismatch raises DatumMismatch for the 'terrain' basis (NDBREACH_HECRAS_DATUM_CHECK=warn
+    keeps it with a warning). info 'datum_check' (the record, None without a terrain) and
+    'datum_warnings' (messages to show loudly)."""
     basis = depth_basis(basis)
     if terrain_ft is not None:
         terrain_ft = np.asarray(terrain_ft, dtype=np.float64)
@@ -1250,6 +1337,11 @@ def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
         else:
             no_terrain = np.zeros((ny, nx), dtype=bool)
             g_terrain = None
+        datum = None
+        if terrain_ft is not None:
+            datum = datum_check(terrain_ft, cmin, inside)
+            if datum["fatal"] and basis == DEPTH_BASIS_TERRAIN:
+                raise DatumMismatch(datum["message"])
         ground = cmin if basis == DEPTH_BASIS_CELL_MIN else g_terrain
         with np.errstate(invalid="ignore"):
             depth = np.clip(wse - ground, 0.0, None)
@@ -1290,7 +1382,16 @@ def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
         if no_terrain.any() and basis == DEPTH_BASIS_TERRAIN:
             notes.append("{:,} grid cells inside the mesh have no terrain; the HEC-RAS cell's "
                          "minimum elevation was used there.".format(int(no_terrain.sum())))
-        info.update({"notes": notes, "depth_basis": basis,
+        warns = []
+        if datum is not None:
+            datum = {k: v for k, v in datum.items() if k != "fatal"}
+            if datum["status"] in ("mismatch", "suspect"):
+                warns.append(datum["message"] + ("" if basis == DEPTH_BASIS_TERRAIN else
+                             " (the terrain gives only the comparison depth here)"))
+            elif datum["status"] == "ok":
+                notes.append(datum["message"])
+        info.update({"notes": notes, "depth_basis": basis, "datum_check": datum,
+                     "datum_warnings": warns,
                      "no_terrain_cells": int(no_terrain.sum()), "depth_cell_min": d_cmin,
                      "depth_terrain": d_terr, "inside_cells": int(inside.sum())})
         return out, info

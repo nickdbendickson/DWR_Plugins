@@ -1,6 +1,6 @@
-"""3.10.84: the HEC-RAS mapped depth is the cell's max WSE minus the cell's MINIMUM terrain
-elevation by default again (reverses the 3.10.79 per-pixel default); the per-pixel terrain
-basis stays selectable (argument, RunSettings.hecras_depth_basis, NDBREACH_HECRAS_DEPTH_BASIS,
+"""3.10.84: the HEC-RAS mapped depth could be the cell's max WSE minus the cell's MINIMUM
+terrain elevation (the 3.10.84 - 3.10.91 default; 3.10.92 makes the per-pixel terrain the
+default again, test_hecras_depth_terrain_default); the cell minimum stays selectable (argument, RunSettings.hecras_depth_basis, NDBREACH_HECRAS_DEPTH_BASIS,
 the re-export CLI's --depth-basis). The wet mask and the 0.1 ft arrival follow the depth of
 the basis used. Same synthetic 3 x 3 cell HDF as test_hecras_terrain_depth (a ditch cell)."""
 import json
@@ -41,10 +41,12 @@ class _Env:
 
 
 @test
-def hecras_depth_basis_default_is_cell_min_and_env_selects_terrain():
-    with _Env(None):
+def hecras_depth_basis_default_is_terrain_and_env_selects_cell_min():
+    with _Env(None):                                  # 3.10.92: terrain again (3.10.84: cell_min)
+        assert hecras.depth_basis() == hecras.DEPTH_BASIS_TERRAIN
+        assert hecras.DEPTH_BASIS_DEFAULT == hecras.DEPTH_BASIS_TERRAIN
+    with _Env("cell_min"):
         assert hecras.depth_basis() == hecras.DEPTH_BASIS_CELL_MIN
-        assert hecras.DEPTH_BASIS_DEFAULT == hecras.DEPTH_BASIS_CELL_MIN
     assert hecras.depth_basis(environ={hecras.DEPTH_BASIS_ENV: "Terrain"}) == "terrain"
     assert hecras.depth_basis(environ={hecras.DEPTH_BASIS_ENV: "per_pixel"}) == "terrain"
     assert hecras.depth_basis(environ={hecras.DEPTH_BASIS_ENV: "cellmin"}) == "cell_min"
@@ -61,10 +63,10 @@ def hecras_depth_basis_default_is_cell_min_and_env_selects_terrain():
 
 @test
 def hecras_cell_min_depth_floods_the_whole_ditch_cell_with_the_terrain_given():
-    """Default basis with a terrain: every pixel of the centre cell is WSE - cell min (5 ft);
-    the per-pixel depth is kept only as the comparison."""
+    """The cell-min basis with a terrain: every pixel of the centre cell is WSE - cell min
+    (5 ft); the per-pixel depth is kept only as the comparison."""
     t = _terrain()
-    with _Env(None):
+    with _Env("cell_min"):
         out, info = hecras.terrain_depth(_fake(), *_grid_args(), t)
     assert info["depth_basis"] == hecras.DEPTH_BASIS_CELL_MIN
     d = out["depth"]
@@ -84,10 +86,17 @@ def hecras_cell_min_depth_floods_the_whole_ditch_cell_with_the_terrain_given():
 
 @test
 def hecras_cell_min_needs_no_terrain_and_terrain_basis_does():
-    with _Env(None):
+    with _Env("cell_min"):
         out, info = hecras.terrain_depth(_fake(), *_grid_args(), None)
     assert info["depth_basis"] == "cell_min" and info["depth_terrain"] is None
     assert int(np.isfinite(out["depth"]).sum()) == NP * NP
+    for kw in ({"basis": "terrain"}, {}):        # 3.10.92: also the default basis
+        try:
+            with _Env(None):
+                hecras.terrain_depth(_fake(), *_grid_args(), None, **kw)
+            raise AssertionError("terrain basis without a terrain")
+        except hecras.HecRasError as e:
+            assert "terrain" in str(e)
     try:
         hecras.terrain_depth(_fake(), *_grid_args(), None, basis="terrain")
         raise AssertionError("terrain basis without a terrain")
@@ -134,10 +143,10 @@ def hecras_cell_min_arrival_between_output_steps_uses_time_of_max():
 
 
 @test
-def hecras_engine_results_default_cell_min_and_terrain_selectable():
+def hecras_engine_results_cell_min_selectable_and_terrain_default():
     like = Grid(np.zeros((3 * NP, 3 * NP)), 0.0, 3 * CELL, DX, crs_wkt=WKT)
     t = _terrain()
-    with _Env(None):
+    with _Env("cell_min"):
         info = {}
         a = hecras_engine.results(_fake(), like, terrain=t, info=info)
     assert info["depth_basis"] == info["depth_basis_requested"] == "cell_min"
@@ -146,7 +155,7 @@ def hecras_engine_results_default_cell_min_and_terrain_selectable():
     assert np.allclose(a["depth"][np.isfinite(a["depth"])], (WSE_C - DITCH_A) * FT)
     assert np.array_equal(np.isfinite(a["arrival"]), np.isfinite(a["depth"]))
     assert int(np.nansum(info["other_depth_m"] > 0.003)) == 2 * NP
-    with _Env("terrain"):
+    with _Env(None):                                 # 3.10.92: the default
         info2 = {}
         b = hecras_engine.results(_fake(), like, terrain=t, info=info2)
     assert info2["depth_basis"] == "terrain" and info2["other_basis"] == "cell_min"
@@ -228,7 +237,7 @@ def hecras_reexport_both_bases_and_cell_min_without_terrain():
 
     def body(tmp, patch):
         run = _reexport_fixture(tmp, patch)
-        with _Env(None):
+        with _Env("cell_min"):
             rep = hecras_engine.reexport_hecras_results(run, out_dir=os.path.join(tmp, "a"))
         assert rep["depth_basis"] == "cell_min" and rep["depth_basis_stage"] == "terrain"
         d = np.load(os.path.join(tmp, "a", "Depth (Max).npy"))
@@ -239,9 +248,11 @@ def hecras_reexport_both_bases_and_cell_min_without_terrain():
         assert abs(by["cell_min"]["ge_1ft_ac"] - NP * NP * px_ac) < 1e-9
         assert abs(by["terrain"]["ge_1ft_ac"] - 2 * NP * px_ac) < 1e-9
         assert rep["areas_new"] == by["cell_min"]
-        rep2 = hecras_engine.reexport_hecras_results(run, out_dir=os.path.join(tmp, "b"),
-                                                     depth_basis="terrain")
+        with _Env(None):                             # 3.10.92: terrain is the default
+            rep2 = hecras_engine.reexport_hecras_results(run, out_dir=os.path.join(tmp, "b"))
         assert rep2["depth_basis"] == "terrain"
+        assert rep2["datum_check"]["status"] == "ok", rep2["datum_check"]
+        assert rep2["depth_terrain"]["sample"] == "pixel_centre"
         d2 = np.load(os.path.join(tmp, "b", "Depth (Max).npy"))
         assert int(np.isfinite(d2).sum()) == 2 * NP
         js = json.load(open(os.path.join(tmp, "b", hecras_engine.REEXPORT_JSON)))

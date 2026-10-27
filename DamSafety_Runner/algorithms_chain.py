@@ -13,8 +13,9 @@ fails that stage with a plain message (the preflight says so before anything sta
   hazard_import  ndhazard:hecrasplan   (ft, ft/s, h, 2D-area boundary; 3.10.84: depth basis
                                         from the Linux HEC-RAS stage's hecras_stage.json for
                                         its plan, else NDBREACH_HECRAS_DEPTH_BASIS (default
-                                        cell_min); TERRAIN passed only for the per-pixel
-                                        'terrain' basis)
+                                        terrain since 3.10.92); TERRAIN passed only for the
+                                        per-pixel 'terrain' basis, and not when the Linux
+                                        stage's own terrain-basis rasters are adopted)
   classify       ndhazard:classify     (ND + TM11), then ndhazard:savedamstate (the dam's
                                         Hazard window state, to add scenarios later)
 """
@@ -304,30 +305,49 @@ class QgisOps(object):
     def run_hazard_import(self, dam):
         r = dam.outputs.get("hec_run") or {}
         plan = r.get("plan_hdf", "")
-        # 3.10.84: the depth basis the HEC-RAS stage used (cell minimum by default). Only the
-        # per-pixel 'terrain' basis needs the terrain; without TERRAIN ndhazard:hecrasplan
-        # makes its own cell-minimum depth from the plan (the Runner's basis), unless the
-        # newest current Runner re-export of the plan (or a fresh terrain stage) is on the
-        # terrain basis, which Hazard 2.18.63 then adopts
+        # 3.10.84: the depth basis the HEC-RAS stage used (the actual terrain per pixel by
+        # default again since 3.10.92). Only the per-pixel 'terrain' basis needs the terrain.
+        # 3.10.92: when the dam's own Linux HEC-RAS stage made the rasters of this plan on the
+        # terrain basis (the run's fine DEM at each grid cell's centre), no TERRAIN is passed:
+        # ndhazard:hecrasplan then adopts those rasters (Hazard 2.18.61 find_runner_rasters)
+        # rather than remaking the depth on the coarser HEC-RAS terrain; HEC_TERRAIN still
+        # forces a terrain. Without TERRAIN ndhazard:hecrasplan otherwise makes its own
+        # cell-minimum depth from the plan, unless the newest current Runner re-export of the
+        # plan is on the terrain basis, which Hazard 2.18.63 then adopts
         basis, why, stage = import_depth_basis(dam, plan)
         terrain = ""
+        no_terrain = False                # 3.10.92: the default terrain basis found none
         if basis == hecras.DEPTH_BASIS_TERRAIN:
             terrain = str(dam.cv.get("HEC_TERRAIN") or "").strip()
-            if not terrain and stage.get("terrain_tif") and \
+            own = (not terrain and stage.get("depth_basis") == hecras.DEPTH_BASIS_TERRAIN and
+                   stage.get("depth_terrain") is not None)
+            if own:
+                self.log("{}: HEC-RAS import depth basis: per pixel, the HEC-RAS stage's own "
+                         "rasters (max WSE minus {} at each grid cell's centre; {}); Hazard "
+                         "adopts them".format(dam.dam_id, (stage.get("depth_terrain") or {})
+                                              .get("path") or "the terrain", why))
+            if not terrain and not own and stage.get("terrain_tif") and \
                     os.path.isfile(str(stage["terrain_tif"])):
                 terrain = str(stage["terrain_tif"])          # the Linux stage's own terrain
-            if not terrain:
+            if not terrain and not own:
                 extra = [(dam.outputs.get("hec_build") or {}).get("package", "")]
                 if r.get("project"):
                     extra += [r["project"], os.path.dirname(r["project"])]
                 terrain = CH.find_terrain(plan, extra) or ""
-            if not terrain:
-                raise CH.ChainError("no HEC-RAS terrain GeoTIFF found next to {} (Terrain "
-                                    "folder) for the per-pixel 'terrain' depth basis ({}); "
-                                    "give HEC_TERRAIN for this dam".format(plan, why))
-            self.log("{}: HEC-RAS import depth basis: per pixel, max WSE minus the terrain "
-                     "{} ({})".format(dam.dam_id, terrain, why))
-        else:
+            if not terrain and not own:
+                if why != "the default":
+                    raise CH.ChainError("no HEC-RAS terrain GeoTIFF found next to {} (Terrain "
+                                        "folder) for the per-pixel 'terrain' depth basis ({}); "
+                                        "give HEC_TERRAIN for this dam".format(plan, why))
+                # 3.10.92: the default basis without any terrain: the cell minimum, said loudly
+                self.log("{}: WARNING: no HEC-RAS terrain GeoTIFF found next to {} for the "
+                         "default per-pixel terrain depth basis: the import uses the cell "
+                         "minimum (give HEC_TERRAIN for this dam)".format(dam.dam_id, plan))
+                basis, no_terrain = hecras.DEPTH_BASIS_CELL_MIN, True
+            elif terrain:
+                self.log("{}: HEC-RAS import depth basis: per pixel, max WSE minus the terrain "
+                         "{} ({})".format(dam.dam_id, terrain, why))
+        if basis == hecras.DEPTH_BASIS_CELL_MIN:
             env = hecras.DEPTH_BASIS_ENV
             # a re-export is used only when this import runs again: a resumed chain keeps it
             # as already done (its fingerprint, core/chain.stage_inputs, has HEC_TERRAIN and
@@ -340,7 +360,12 @@ class QgisOps(object):
                         "already done' runs the dam's HEC-RAS stage again too, which replaces "
                         "the results a re-export was made from)")
             found = ""
-            if stage and stage.get("depth_basis_requested") == hecras.DEPTH_BASIS_TERRAIN:
+            if no_terrain:     # the default basis without a terrain (logged above)
+                found = "; no terrain found for the default per-pixel basis"
+                how = ("give HEC_TERRAIN for this dam (read when this import runs), or " +
+                       reexport.format(folder=dam.folder, env=env,
+                                       terrain=" --terrain <the model's terrain GeoTIFF>"))
+            elif stage and stage.get("depth_basis_requested") == hecras.DEPTH_BASIS_TERRAIN:
                 # the stage was asked for per pixel but found no terrain (hecras_engine)
                 found = ("; the HEC-RAS stage was asked for per-pixel depth but found no "
                          "terrain GeoTIFF (_hecras/hecras_stage.json depth_basis_requested "
@@ -446,7 +471,7 @@ def import_depth_basis(dam, plan):
     """3.10.84: (basis, why, stage record or {}) of the chain's HEC-RAS import, decided as the
     HEC-RAS stage decided it: the depth_basis of the dam's _hecras/hecras_stage.json when the
     chain ran the Runner's Linux HEC-RAS stage and that record is of this plan, else
-    core/hecras.depth_basis() (NDBREACH_HECRAS_DEPTH_BASIS, default 'cell_min'). Raises
+    core/hecras.depth_basis() (NDBREACH_HECRAS_DEPTH_BASIS, default 'terrain' since 3.10.92). Raises
     ChainError for an unknown NDBREACH_HECRAS_DEPTH_BASIS."""
     if dam.mode == "run_linux":
         try:
