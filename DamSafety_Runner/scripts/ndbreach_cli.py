@@ -100,6 +100,7 @@ try:
     floodmod = importlib.import_module(PKG + ".core.flood")
     impmod = importlib.import_module(PKG + ".core.impacts")
     structmod = importlib.import_module(PKG + ".core.structures")
+    bsnap = importlib.import_module(PKG + ".core.bridge_snap")
     condmod = importlib.import_module(PKG + ".core.conditioning")
     nd_data = importlib.import_module(PKG + ".core.nd_data")
     estmod = importlib.import_module(PKG + ".core.estimate")
@@ -1217,6 +1218,8 @@ def apply_layers(st, cfg, setup, center_xy, cache, dem_projected=True):
                     inv_u * FT if inv_u is not None else None,
                     inv_d * FT if inv_d is not None else None,
                     name=str(g("S_NAME") or "{} {}".format(kind, i + 1))))
+                # 3.10.90: the facility a bridge carries (road / rail) for the bridge check
+                structs[-1].carries = bsnap.facility_kind(at)
                 i += 1
     st.structures = structs
     # DEM conditioning

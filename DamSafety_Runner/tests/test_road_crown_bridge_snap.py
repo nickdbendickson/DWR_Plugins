@@ -1,7 +1,8 @@
 """3.10.90 (DWR-3034 review): road overtopping depth on the road centreline at the road
-surface, structure cuts and bare-earth openings left out (core/road_profile), and inventory
-bridges moved to the road's opening / channel crossing (core/bridge_snap). Tiny synthetic
-data only."""
+surface, structure cuts and bare-earth openings read on a deck stand-in (core/road_profile),
+and inventory bridges checked against the road they carry and moved to its opening / channel
+crossing only on evidence (core/bridge_snap; the review's items B1-B7). Tiny synthetic data
+only."""
 import json
 import os
 import shutil
@@ -48,20 +49,55 @@ def _road_with_creek(X, Y, creek_x=155.0, half=15.0, depth=6.0, grade=0.0):
 ROAD = np.array([[-400.0, 0.0], [400.0, 0.0]])
 
 
-def _bridge(x, name, y0=-15.0, y1=15.0):
+def _bridge(x, name, y0=-15.0, y1=15.0, w=30.0, carries=""):
     from nd_breach_runner.core import structures as sm
-    return sm.Structure(kind=sm.KIND_BRIDGE, line=np.array([[x, y0], [x, y1]]), width_m=30.0,
-                        height_m=5.0, name=name, invert_up_m=95.0, invert_dn_m=95.0)
+    b = sm.Structure(kind=sm.KIND_BRIDGE, line=np.array([[x, y0], [x, y1]]), width_m=w,
+                     height_m=5.0, name=name, invert_up_m=95.0, invert_dn_m=95.0)
+    b.carries = carries
+    return b
+
+
+def _valley(X, Y, creeks=(155.0,), openings=((155.0, 15.0),), crown=ROAD_M, slope=0.004,
+            channel=1.5, grade=0.0, beds=None, road_y=(0.0,), half=10.0):
+    """A valley whose floor (90 m) falls `slope` toward the nearest creek, each creek a
+    `channel` m deep, 8 m wide channel running north-south; east-west road embankments at
+    `road_y` (crown + grade * x, `half` m each side); `openings` (x, half width): the bare
+    earth under a bridge deck (no deck in the LiDAR) on every road, at the floor or at
+    beds[i]."""
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    d = np.min([np.abs(X - cx) for cx in creeks], axis=0) if creeks else np.full(X.shape, 400.0)
+    floor = 90.0 + slope * np.minimum(d, 400.0) - np.where(d < 4.0, channel, 0.0)
+    z = floor.copy()
+    for ry in road_y:
+        on = np.abs(Y - ry) <= half
+        z = np.where(on, crown + grade * X, z)
+        for i, (ox, h) in enumerate(openings):
+            bed = floor if beds is None or beds[i] is None else np.full(X.shape, beds[i])
+            z = np.where(on & (np.abs(X - ox) <= h), bed, z)
+    return z
+
+
+def _snap(structs, fn, roads=(ROAD,), streams=(), rails=()):
+    from nd_breach_runner.core import bridge_snap as bs
+    return bs.snap_bridges(structs, list(roads), _Terrain(fn).read, list(streams),
+                           radius_m=300.0, rails=list(rails))
+
+
+def _row(rows, name):
+    return [r for r in rows if r["name"] == name][0]
 
 
 # ------------------------------------------------------------------ (b) bridge snap
 @test
 def bridge_snap_moves_a_misplaced_nbi_cut_to_the_road_opening_and_logs_the_distance():
+    """DWR-3034: the NBI cut on solid fill 190 m from Square Butte Creek's opening (the
+    valley falls to the creek; the opening's bare-earth bed is well below the ground beside the
+    road at the cut) moves onto the creek, with a run warning naming the move."""
     from nd_breach_runner.core import bridge_snap as bs
-    t = _Terrain(_road_with_creek)
+    t = _Terrain(_valley)
     b = _bridge(-35.0, "0025008224")              # 190 m from the creek, as on DWR-3034
     rows, notes, warns = bs.snap_bridges([b], [ROAD], t.read, [], radius_m=300.0)
-    assert not warns, warns
     r = rows[0]
     assert r["method"] == "dem_opening", r
     assert abs(r["moved_m"] - 190.0) < 6.0, r
@@ -69,10 +105,19 @@ def bridge_snap_moves_a_misplaced_nbi_cut_to_the_road_opening_and_logs_the_dista
     assert abs(mid[0] - 155.0) < 6.0 and abs(mid[1]) < 2.0, b.line
     assert abs(b.line[0][0] - b.line[-1][0]) < 1.0           # still across the road
     assert b.line[0][1] < b.line[-1][1]                       # same direction as given
-    assert b.invert_up_m is None and b.invert_dn_m is None    # re-read at the new place
+    assert b.invert_up_m is None and b.invert_dn_m is None    # cleared at the new place
     assert any("0025008224" in n and "moved" in n and str(int(round(r["moved_m"]))) in n
                for n in notes), notes
+    # B7: every move is a run warning with the name, from, to, distance and method
+    assert len(warns) == 1, warns
+    w = warns[0]
+    assert "0025008224" in w and "moved 190 m" in w and "dem_opening" in w, w
+    assert "[-35.0, 0.0]" in w and str(r["new_xy"]) in w, w
+    assert r["verified"], r
     assert t.reads                                            # read the DEM, nothing else
+    # snapped again (a re-run on the moved line): kept, verified
+    rows2, _n, warns2 = bs.snap_bridges([b], [ROAD], t.read, [], radius_m=300.0)
+    assert rows2[0]["method"] == "kept" and rows2[0]["verified"] and not warns2, rows2
 
 
 @test
@@ -98,6 +143,7 @@ def bridge_snap_follows_a_channel_crossing_when_the_dem_shows_no_opening():
     assert r["method"] == "channel_crossing", r
     assert abs(r["moved_m"] - 100.0) < 3.0, r
     assert abs(b.line.mean(axis=0)[0] - 100.0) < 3.0, b.line
+    assert len(warns) == 1 and "channel" in warns[0] and "moved 100 m" in warns[0], warns
 
 
 @test
@@ -122,7 +168,7 @@ def bridge_snap_falls_back_with_a_warning_when_no_crossing_is_found():
 def bridge_snap_leaves_culverts_and_guesses_alone_and_can_be_turned_off():
     from nd_breach_runner.core import bridge_snap as bs
     from nd_breach_runner.core import structures as sm
-    t = _Terrain(_road_with_creek)
+    t = _Terrain(_valley)
     c = sm.Structure(kind=sm.KIND_CULVERT if hasattr(sm, "KIND_CULVERT") else "culvert",
                      line=np.array([[-35.0, -15.0], [-35.0, 15.0]]), name="cv")
     g = _bridge(-35.0, "guess")
@@ -146,9 +192,361 @@ def bridge_snap_leaves_culverts_and_guesses_alone_and_can_be_turned_off():
 def bridge_snap_runs_in_the_runner_before_the_inverts_are_read():
     src = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "core",
                             "workflow.py"), encoding="utf-8").read()
-    i = src.index("bridge_snap.snap_bridges(")
+    i = src.index("bridge_snap.check_run(")
     assert i < src.index("reconcile_inverts(st.structures") < src.index("key_settings(st),")
-    assert 'report["bridge_snap"]' in src
+    assert 'report["bridge_snap"]' in src and "bridge_snap.report_lines(" in src
+
+
+def _moved(b, before):
+    return not np.allclose(np.asarray(b.line), before)
+
+
+def _sag_valley(X, Y):
+    """A 3 % road sag bottoming at x = 0 (a deck in the LiDAR there) over a valley falling to
+    a creek at x = 150 with an open bridge (no deck) there."""
+    z = _valley(X, Y, creeks=(150.0,), openings=((150.0, 6.0),), slope=0.01)
+    on = (np.abs(Y) <= 10.0) & (np.abs(X - 150.0) > 6.0)
+    return np.where(on, ROAD_M - 8.0 + 0.03 * np.minimum(np.abs(X), 120.0), z)
+
+
+@test
+def bridge_snap_b1_a_correct_bridge_is_not_moved_away_from_its_crossing():
+    """3.10.90 review (bridges F1): the keep tests run BEFORE any target is chosen. A bridge
+    whose deck (or a hydro-flattened water surface) is in the LiDAR, a weak or a wide opening,
+    no-data at the bridge, the road's low point or a channel line at the bridge: the cut stays
+    where the inventory put it, however good another opening within 300 m looks; one moves only
+    from solid embankment."""
+    flat_other = lambda X, Y: _road_with_creek(X, Y, creek_x=150.0, half=5.0,     # noqa: E731
+                                               depth=4.0)
+    cases = {
+        # deck in the LiDAR, flat ground, another stream's opening at 150 (auditor case 1)
+        "deck, flat": (flat_other, ()),
+        # deck in the LiDAR over its creek (the channel beside the road), and another creek's
+        # opening, lower, 150 m away
+        "deck, valley": (lambda X, Y: _valley(X, Y, creeks=(0.0, 150.0),
+                                              openings=((150.0, 6.0),)), ()),
+        # a weak opening (1.2 m) at the bridge and a 4 m one at 150 (auditor case 2)
+        "weak": (lambda X, Y: np.where((np.abs(Y) <= 10.0) & (np.abs(X) <= 4.0), 98.8,
+                                       _valley(X, Y, creeks=(150.0,), openings=((150.0, 6.0),),
+                                               slope=0.01)), ()),
+        # no-data (water) under the bridge (auditor case N)
+        "nodata": (lambda X, Y: np.where((np.abs(X) <= 10.0) & (np.abs(Y) <= 30.0), np.nan,
+                                         _valley(X, Y, creeks=(150.0,), slope=0.01)), ()),
+        # the road's low point: a 3 % sag bottoming at the deck in the LiDAR
+        "sag": (_sag_valley, ()),
+        # a channel line crosses the road at the bridge; a DEM opening 150 m away
+        "channel line": (lambda X, Y: _valley(X, Y, creeks=(150.0,), openings=((150.0, 6.0),),
+                                              slope=0.01),
+                         (np.array([[0.0, -300.0], [0.0, 300.0]]),
+                          np.array([[150.0, -300.0], [150.0, 300.0]]))),
+    }
+    for label, (fn, streams) in cases.items():
+        b = _bridge(0.0, label)
+        before = b.line.copy()
+        rows, notes, warns = _snap([b], fn, streams=streams)
+        r = rows[0]
+        assert not _moved(b, before) and r["method"] not in ("dem_opening",
+                                                             "channel_crossing"), (label, r)
+        assert b.invert_up_m == 95.0, label
+        if not r["verified"]:            # kept for want of evidence: said in a warning
+            assert len(warns) == 1 and label in warns[0] and "inventory location" in warns[0], \
+                (label, warns)
+    # a long bridge over a wide (100 m) opening, and a short span over a 200 m one: the
+    # shoulder window grows with the span, and the grade line sees the rest
+    for label, w, half in (("wide, long bridge", 100.0, 50.0), ("wider, short span", 10.0, 100.0)):
+        fn = lambda X, Y, h=half: _valley(X, Y, creeks=(0.0, 250.0),                  # noqa
+                                          openings=((0.0, h), (250.0, 6.0)), channel=0.0)
+        b = _bridge(0.0, label, w=w)
+        before = b.line.copy()
+        rows, notes, warns = _snap([b], fn)
+        assert rows[0]["method"] == "kept" and not _moved(b, before), (label, rows[0])
+
+
+@test
+def bridge_snap_b2_road_pieces_are_merged_and_a_road_end_is_not_judged():
+    """3.10.90 review (bridges F2): a road layer split at the bridge (an OSM bridge way) or at
+    an intersection is merged (end points within 1 m) before the profile is read, so the
+    opening at the split is seen; a crossing near an end that nothing continues cannot be
+    judged and the cut stays (with a warning)."""
+    from nd_breach_runner.core import bridge_snap as bs
+    fn = lambda X, Y: _valley(X, Y, creeks=(0.0, -200.0), openings=((0.0, 8.0), (-200.0, 6.0)))  # noqa
+    W = np.array([[-400.0, 0.0], [0.0, 0.0]])
+    E = np.array([[400.0, 0.0], [0.0, 0.0]])                 # digitised the other way
+    for label, x, pieces in (("split at the bridge", -2.0, (W, E)),
+                             ("split 10 m west", -12.0, (np.array([[-400.0, 0.0], [-10.0, 0.0]]),
+                                                         np.array([[-10.0, 0.0], [400.0, 0.0]])))):
+        b = _bridge(x, label)
+        before = b.line.copy()
+        rows, notes, warns = _snap([b], fn, roads=pieces)
+        assert rows[0]["method"] == "kept" and rows[0]["verified"] and not _moved(b, before), \
+            (label, rows[0])
+        assert not warns, warns
+    # the merge itself: three pieces, out of order and in both directions
+    parts = [np.array([[100.0, 0.0], [300.0, 5.0]]), np.array([[-200.0, 0.0], [0.0, 0.0]]),
+             np.array([[100.0, 0.0], [0.0, 0.0]])]
+    line, open_a, open_b, used = bs.merged_line(1, parts)
+    assert sorted(used) == [0, 1, 2] and open_a and open_b, (line, used)
+    assert np.allclose(line[0], [-200.0, 0.0]) and np.allclose(line[-1], [300.0, 5.0]), line
+    # a cross road at the end (a 90 degree turn) is not a continuation
+    line, _a, open_b, used = bs.merged_line(0, [np.array([[0.0, 0.0], [100.0, 0.0]]),
+                                                np.array([[100.0, 0.0], [100.0, 200.0]])])
+    assert sorted(used) == [0] and open_b
+    # a 5 m gap in the road layer 5 m from a misplaced bridge (DWR-3034-like valley): the
+    # profile cannot be judged there, so the cut stays, with a warning
+    b = _bridge(-30.0, "gap")
+    before = b.line.copy()
+    rows, notes, warns = _snap([b], _valley, roads=(np.array([[-400.0, 0.0], [-40.0, 0.0]]),
+                                                    np.array([[-35.0, 0.0], [400.0, 0.0]])))
+    assert rows[0]["method"] == "none" and not _moved(b, before), rows[0]
+    assert len(warns) == 1 and "gap" in warns[0] and "ends" in warns[0], warns
+
+
+@test
+def bridge_snap_b3_rail_bridges_stay_on_the_railway():
+    """3.10.90 review (bridges F3): a rail bridge (NBI 42A = 2, runner_culverts placed on /
+    meant for rail, rail in the facility carried) is matched to rail lines only; with none in
+    the run it is not checked. A bridge line crossing no centreline matches one only when its
+    midpoint is on that line's crown."""
+    from nd_breach_runner.core import bridge_snap as bs
+
+    def frail(X, Y):
+        z = _valley(X, Y, creeks=(0.0, 200.0), openings=((200.0, 6.0),), half=8.0)
+        rail = np.abs(Y + 30.0) <= 4.0
+        return np.where(rail, np.where(np.abs(X) <= 6.0, 88.5, 99.0), z)  # rail bridge at x=0
+    RAIL = np.array([[-400.0, -30.0], [400.0, -30.0]])
+    for carries in ("rail", ""):
+        b = _bridge(0.0, "RAIL_BR " + carries, -15.0, -45.0, w=12.0, carries=carries)
+        before = b.line.copy()
+        rows, notes, warns = _snap([b], frail)                   # no rail lines in the run
+        assert rows[0]["method"] == "none" and not _moved(b, before), rows[0]
+        assert len(warns) == 1 and "RAIL_BR" in warns[0], warns
+        if carries == "rail":
+            assert "rail" in rows[0]["note"], rows[0]
+        rows, notes, warns = _snap([b], frail, rails=(RAIL,))    # with the railway: kept there
+        assert rows[0]["method"] == "kept" and rows[0]["verified"], rows[0]
+        assert rows[0]["line"] == "rail", rows[0]
+    # a road bridge is not matched to a railway
+    b = _bridge(0.0, "ROAD_BR", -15.0, -45.0, w=12.0, carries="road")
+    rows, notes, warns = _snap([b], frail, roads=(), rails=(RAIL,))
+    assert rows[0]["method"] == "none", rows[0]
+    # the facility kind from the inventory's own fields
+    fk = bs.facility_kind
+    assert fk({"SERVICE_ON_042A": "2"}) == "rail" and fk({"service_on_042a": 1}) == "road"
+    assert fk({"servtypondesc": "2 Railroad"}) == "rail"
+    assert fk({"embankment": "road", "notes": "no rail line crosses a stream here: placed at a "
+               "road crossing"}) == "rail"
+    assert fk({"embankment": "rail"}) == "rail" and fk({"embankment": "road"}) == "road"
+    assert fk({"carried": "BNSF RAILWAY", "embankment": "road"}) == "rail"
+    assert fk({"carried": "ND 25"}) == "" and fk({}) == "" and fk(None) == ""
+
+
+@test
+def bridge_snap_b3_the_facility_kind_reaches_the_structure_from_qgis_and_the_cli():
+    import sys
+    import types
+    from nd_breach_runner.tests import fake_qgis
+    fake_qgis.install()
+    import importlib
+    from nd_breach_runner import algorithms as A
+    importlib.reload(A)
+    from nd_breach_runner.tests.fake_qgis import FakeGeometry, FakeFeature, FakeSource
+    alg = A.RunDamAlgorithm()
+    alg.initAlgorithm()
+    src = FakeSource([FakeFeature(FakeGeometry("line", [[(1530.0, 20.0), (1530.0, -20.0)]]),
+                                  kind="bridge", name="OSM 1 railway bridge", embankment="rail",
+                                  carried="rail"),
+                      FakeFeature(FakeGeometry("line", [[(1630.0, 20.0), (1630.0, -20.0)]]),
+                                  kind="bridge", name="NBI 2", SERVICE_ON_042A="1")],
+                     names=["kind", "name", "embankment", "carried", "SERVICE_ON_042A"])
+    st = types.SimpleNamespace(max_extent_mi=45.0)
+    alg.apply_features(st, {"STRUCTURES": src}, fake_qgis.QgsProcessingContext(),
+                       fake_qgis.QgsCoordinateReferenceSystem("EPSG:5070"), (0.0, 0.0))
+    assert [s.carries for s in st.structures] == ["rail", "road"], st.structures
+    assert "carries" not in st.structures[0].to_dict()          # the run key is unchanged
+    from nd_breach_runner.tests import test_cli as tc
+    c = tc.cli()
+    with tc.Tmp() as d:
+        p, _cfg = tc.base_config(d)
+        tc.dump(os.path.join(d, "s.geojson"), tc.fc([
+            tc.line([[300, -20], [300, 20]], kind="bridge", name="R1", embankment="rail"),
+            tc.line([[500, -20], [500, 20]], kind="bridge", name="B2")]))
+        cfg = json.load(open(p))
+        cfg["layers"] = {"structures": "s.geojson"}
+        tc.dump(p, cfg)
+        opts = c.build_parser().parse_args(["run", p, "--lisflood", sys.executable])
+        st = c.prepare(c.load_config(p), opts).st
+        assert {s.name: s.carries for s in st.structures} == {"R1": "rail", "B2": ""}, \
+            st.structures
+
+
+@test
+def bridge_snap_b4_the_nearest_crossing_not_the_deepest_and_no_grade_separation():
+    """3.10.90 review (bridges F4): the target is the NEAREST opening of at least 1.5 m (depth
+    only breaks a tie), never one past it; with channel lines an opening without one (a grade
+    separation) is no target, nor is one where another road or rail passes under."""
+    # the bridge 40 m from its creek's 3 m opening; a 7 m opening 200 m the other way
+    fn = lambda X, Y: _valley(X, Y, creeks=(0.0, -200.0), crown=91.5,              # noqa
+                              openings=((0.0, 10.0), (-200.0, 10.0)), beds=(None, 84.5))
+    b = _bridge(40.0, "A_off40")
+    rows, notes, warns = _snap([b], fn)
+    r = rows[0]
+    assert r["method"] == "dem_opening" and abs(b.line.mean(axis=0)[0]) < 3.0, r
+    assert abs(r["moved_m"] - 40.0) < 3.0, r
+    # channel lines in the run: the DEM opening at 60 has none (a grade separation); the creek's
+    # channel line crosses at -100 (its deck in the LiDAR)
+    fn = lambda X, Y: _valley(X, Y, creeks=(), openings=((60.0, 8.0),), slope=0.0)  # noqa
+    b = _bridge(0.0, "B")
+    rows, notes, warns = _snap([b], fn, streams=(np.array([[-100.0, -300.0], [-100.0, 300.0]]),))
+    assert rows[0]["method"] == "channel_crossing", rows[0]
+    assert abs(b.line.mean(axis=0)[0] + 100.0) < 3.0, b.line
+    # no channel lines: a county road passing under the highway's opening at 60 is a grade
+    # separation; the creek's opening further on is the target
+    fn = lambda X, Y: _valley(X, Y, openings=((60.0, 8.0), (155.0, 15.0)))         # noqa
+    b = _bridge(-35.0, "C")
+    county = np.array([[60.0, -300.0], [60.0, 300.0]])
+    rows, notes, warns = _snap([b], fn, roads=(ROAD, county))
+    assert rows[0]["method"] == "dem_opening" and abs(b.line.mean(axis=0)[0] - 155.0) < 6.0, \
+        rows[0]
+
+
+@test
+def bridge_snap_b5_each_crossing_goes_to_the_nearest_bridge_whatever_the_order():
+    """3.10.90 review (bridges F5): crossings are handed out once, nearest bridge first, so the
+    inventory's order does not matter; twin bridges of a divided highway each get their own
+    carriageway's opening (the first one's new place does not block the second)."""
+    import itertools
+    fn = lambda X, Y: _valley(X, Y, creeks=(150.0,), openings=((150.0, 10.0),))     # noqa
+    results = []
+    for order in itertools.permutations(("A_deck", "B_off40", "C_far")):
+        bs_ = {"A_deck": _bridge(0.0, "A_deck"), "B_off40": _bridge(190.0, "B_off40"),
+               "C_far": _bridge(-100.0, "C_far")}
+        rows, notes, warns = _snap([bs_[n] for n in order], fn)
+        results.append({n: (_row(rows, n)["method"], tuple(np.round(bs_[n].line.ravel(), 3)))
+                        for n in order})
+    assert all(r == results[0] for r in results), results
+    assert results[0]["B_off40"][0] == "dem_opening", results[0]
+    assert results[0]["A_deck"][0] == "none" and results[0]["C_far"][0] == "none", results[0]
+    # a divided highway: carriageways at y = 0 and y = 30, the creek's openings on both, twin
+    # NBI bridges both 120 m off
+    fn = lambda X, Y: _valley(X, Y, creeks=(0.0,), openings=((0.0, 10.0),),         # noqa
+                              road_y=(0.0, 30.0), half=8.0)
+    north = np.array([[-400.0, 30.0], [400.0, 30.0]])
+    for order in ((0, 1), (1, 0)):
+        twins = [_bridge(-120.0, "S", -12.0, 12.0), _bridge(-120.0, "N", 18.0, 42.0)]
+        rows, notes, warns = _snap([twins[i] for i in order], fn, roads=(ROAD, north))
+        for b, y in zip(twins, (0.0, 30.0)):
+            r = _row(rows, b.name)
+            assert r["method"] == "dem_opening", (order, r)
+            assert np.allclose(b.line.mean(axis=0), [0.0, y], atol=2.0), (order, b.line)
+        assert len(warns) == 2, warns
+
+
+@test
+def bridge_snap_b6_the_radius_reads_like_the_other_ndbreach_numbers():
+    """3.10.90 review (bridges F6): NDBREACH_BRIDGE_SNAP_M off / no / false = 0 = off, as
+    workflow._env_number reads the other NDBREACH_* numbers; a value that is not a number is
+    said; the radius is logged and recorded in run_report.json bridge_snap."""
+    import types
+    from nd_breach_runner.core import bridge_snap as bs
+    from nd_breach_runner.core import workflow as W
+    old = os.environ.get("NDBREACH_BRIDGE_SNAP_M")
+    try:
+        for v, want in (("off", 0.0), ("no", 0.0), ("FALSE", 0.0), ("0", 0.0), ("150", 150.0),
+                        ("", 300.0), ("abc", 300.0), ("-5", 0.0)):
+            os.environ["NDBREACH_BRIDGE_SNAP_M"] = v
+            assert bs.radius_from_env() == want, (v, bs.radius_from_env())
+            assert bs.radius_from_env() == max(0.0, W._env_number("BRIDGE_SNAP_M", 300.0)), v
+            b = _bridge(-35.0, "x")
+            rows, notes, warns = _snap_env([b], _valley)
+            if want == 0.0:
+                assert rows == [] and b.line[0][0] == -35.0 and "off" in notes[0], (v, notes)
+            else:
+                assert rows and any("{:g} m".format(want) in n for n in notes), (v, notes)
+            assert ("not a number" in " ".join(warns)) == (v == "abc"), (v, warns)
+        os.environ["NDBREACH_BRIDGE_SNAP_M"] = "off"
+        st = types.SimpleNamespace(structures=[_bridge(-35.0, "x")], road_lines=[ROAD],
+                                   rail_lines=[], edits=None)
+        entry, notes, warns, moved = bs.check_run(st, _Terrain(_valley).read)
+        assert entry["off"] and entry["radius_m"] == 0.0 and entry["env"] == "off" and not moved
+        os.environ["NDBREACH_BRIDGE_SNAP_M"] = "250"
+        entry, notes, warns, moved = bs.check_run(st, _Terrain(_valley).read)
+        assert entry["radius_m"] == 250.0 and moved and entry["moved"] == 1, entry
+        json.dumps(entry)                                       # goes into run_report.json
+    finally:
+        if old is None:
+            os.environ.pop("NDBREACH_BRIDGE_SNAP_M", None)
+        else:
+            os.environ["NDBREACH_BRIDGE_SNAP_M"] = old
+
+
+def _snap_env(structs, fn):
+    from nd_breach_runner.core import bridge_snap as bs
+    return bs.snap_bridges(structs, [ROAD], _Terrain(fn).read, [])
+
+
+_MIN_REPORT = {                         # as tests/test_culvert_match.py
+    "hydrograph": [], "policy": [], "run_finished": [], "tool": [],
+    "inflow_point": {"xy": [0.0, 0.0], "how": "given"},
+    "lisflood_runs": [{"run": 1, "bounds": [0.0, 0.0, 4000.0, 4000.0], "size_mi": [2.49, 2.49],
+                       "cells": 10000, "dem_coverage": 1.0, "sim_time_hr": 10.0,
+                       "runtime_min": 0.2, "edge_max_depth_ft": {"N": 0.0, "S": 0.0, "W": 0.0,
+                                                                 "E": 0.0},
+                       "edges_over_tolerance": [], "latest_arrival_hr": 9.0,
+                       "stats": {"cells": 10000, "cell_size_m": 40.0, "sim_time_hr": 10.0,
+                                 "max_depth_ft": 9.0, "max_velocity_fps": 11.0,
+                                 "flooded_acres": 1000.0, "peak_inflow_cfs": 25000.0,
+                                 "max_volume_error_pct": 0.0, "worst_interval_error_pct": 0.0,
+                                 "injected_acft": 1600.0, "in_domain_acft": 1400.0,
+                                 "velocity_written": True}}],
+    "outputs": {"final": {"depth": "d.tif", "velocity": "v.tif", "arrival": "a.tif",
+                          "wse": "w.tif"}},
+    "settings": {"edge_tolerance_ft": 1.0, "expand_step_mi": 3.0},
+    "summary": {"dam_id": "T1", "final_model": "LISFLOOD-FP", "peak_breach_cfs": 25000.0,
+                "breach_method": "piping", "storage_at_failure_acft": 1600.0,
+                "flooded_acres": 1000.0, "flooded_acres_over_arrival_depth": 900.0,
+                "max_depth_ft": 9.0, "max_velocity_fps": 11.0, "latest_arrival_hr": 9.0,
+                "lisflood_runs": 1, "domain_mi": [2.49, 2.49], "units": "ft"}}
+
+
+@test
+def bridge_snap_b7_moves_are_warnings_and_a_table_in_run_report_md():
+    """3.10.90 review (bridges F7): every moved bridge is a run warning (name, from, to,
+    distance, method) and run_report.md has a table of every bridge checked."""
+    import copy
+    import types
+    from nd_breach_runner.core import bridge_snap as bs
+    from nd_breach_runner.core import workflow as W
+    st = types.SimpleNamespace(structures=[_bridge(-35.0, "0025008224"),
+                                           _bridge(-252.0, "on the creek"),
+                                           _bridge(-100.0, "nowhere", 500.0, 530.0)],
+                               road_lines=[ROAD], rail_lines=[], edits=None)
+    fn = lambda X, Y: _valley(X, Y, creeks=(155.0, -250.0),                         # noqa
+                              openings=((155.0, 15.0), (-250.0, 10.0)))
+    old = os.environ.pop("NDBREACH_BRIDGE_SNAP_M", None)
+    try:
+        entry, notes, warns, moved = bs.check_run(st, _Terrain(fn).read)
+    finally:
+        if old is not None:
+            os.environ["NDBREACH_BRIDGE_SNAP_M"] = old
+    assert moved and entry["moved"] == 1 and entry["kept_verified"] == 1, entry
+    assert entry["not_verified"] == 1 and entry["radius_m"] == 300.0, entry
+    mv = [w for w in warns if "moved" in w]
+    assert len(mv) == 1 and "0025008224" in mv[0] and "from [-35.0, 0.0] to" in mv[0], warns
+    assert any("nowhere" in w and "inventory location" in w for w in warns), warns
+    r = copy.deepcopy(_MIN_REPORT)
+    assert "Inventory bridges checked" not in W.render_report(r)
+    r["bridge_snap"] = json.loads(json.dumps(entry))
+    md = W.render_report(r)
+    assert "## Inventory bridges checked against the road (3.10.90)" in md, md
+    row = [ln for ln in md.splitlines() if ln.startswith("| 0025008224 |")]
+    assert row and "| dem_opening | yes | 190 | -35.0, 0.0 | 155.0, 0.0 |" in row[0], row
+    assert any(ln.startswith("| on the creek |") and "| kept | yes | 0 |" in ln
+               for ln in md.splitlines()), md
+    assert any(ln.startswith("| nowhere |") and "| none | no |" in ln
+               for ln in md.splitlines()), md
+    # the snap off: said in the report
+    r["bridge_snap"] = {"radius_m": 0.0, "env": "off", "off": True, "bridges": []}
+    assert "every inventory bridge is cut where the inventory puts it" in W.render_report(r)
 
 
 # ------------------------------------------------------------------ (a) road crown depth
@@ -733,4 +1131,6 @@ def readme_documents_the_bridge_snap_radius_and_the_road_depth_basis():
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     text = open(os.path.join(here, "README.md"), encoding="utf-8").read()
     assert "NDBREACH_BRIDGE_SNAP_M" in text
+    # 3.10.90 review: a moved bridge's inverts are cleared, not re-read
+    assert "inverts are cleared" in text and "solid embankment" in text
     assert "Road surface DEM elevation units" in text and "deck stand-in" in text

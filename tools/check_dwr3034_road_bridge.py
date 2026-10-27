@@ -67,6 +67,7 @@ def main(argv=None):
     z_to_m, z_how = hecras_model._z_factor(rep, dem)
     cell = float(st.get("cell_size_m") or 30.0)
     roads = [np.asarray(ln, float) for ln in st.get("road_lines") or []]
+    rails = [np.asarray(ln, float) for ln in rep.get("rail_lines_xy") or []]
     sj = json.load(open(os.path.join(bm, "structures.json"), encoding="utf-8"))
     mine = [d for d in sj if a.nbi in str(d.get("name", ""))]
     if not mine:
@@ -78,13 +79,16 @@ def main(argv=None):
     s = sm.Structure(d["kind"], np.asarray(d["line"], float), float(d.get("width_m", 1.0)),
                      float(d.get("height_m", 1.0)), int(d.get("barrels", 1) or 1),
                      name=d["name"])
-    others = [np.asarray(o["line"], float) for o in sj if o is not d and len(o.get("line") or []) >= 2]
+    others = [(o.get("name") or o.get("kind"), np.asarray(o["line"], float)) for o in sj
+              if o is not d and len(o.get("line") or []) >= 2]
     old_line = np.asarray(s.line, float).copy()
     c_old = bs._mid(old_line)
     terr = gdal_io.GdalTerrain(dem, crs)
-    row = bs.snap_bridge(s, roads, terr.read, (), a.radius, taken=[bs._mid(o) for o in others])
+    # the run's channel lines are not in run_report.json: the check uses the DEM only
+    row = bs.snap_bridge(s, roads, terr.read, (), a.radius, occupied=others, rails=rails)
     print("\n(b) bridge cut location")
-    print("  method   ", row["method"], "-", row["note"])
+    print("  method   ", row["method"], "(verified)" if row.get("verified") else
+          "(not verified)", "-", row["note"])
     print("  old cut  ", np.round(old_line, 1).tolist(), "centre", row["old_xy"])
     print("  new cut  ", np.round(np.asarray(s.line), 1).tolist(), "centre", row["new_xy"])
     print("  moved    {:.1f} m".format(row["moved_m"]))

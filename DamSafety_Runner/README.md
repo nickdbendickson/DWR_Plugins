@@ -300,11 +300,23 @@ All optional layers, read only within about 45 mi of the dam:
   "Culvert and bridge lines for ND Dam Breach Runner" writes this layer from the NBI,
   OpenStreetMap and NDDOT's bridge inventory and centerline pipes.
   3.10.90: before the inverts are read, each inventory bridge is checked against the road or
-  rail centreline it carries (the run's road / rail layers; the command-line runner uses
-  `layers.receptor_roads` / `receptor_rail`) and its cut is moved to that line's opening in
-  the DEM, or its stream crossing, within `NDBREACH_BRIDGE_SNAP_M` metres (environment
-  variable; default 300, 0 = off). Every bridge, moved or not, is in `run_report.json`
-  `bridge_snap`.
+  rail centreline it carries (the run's road / rail layers, pieces whose ends touch merged;
+  the command-line runner uses `layers.receptor_roads` / `receptor_rail`; a rail bridge -
+  NBI item 42A, NDDOT "service on", runner_culverts' placement or rail in the facility
+  carried - only against rail lines). Its cut stays where the inventory put it unless the
+  evidence says that place is solid embankment: no opening in the DEM there, no channel line,
+  no channel in the ground beside the road, the road not dipping there (its low point, a sag
+  or a wide opening), DEM data there and a road line that does not end near it. Only then
+  does it move, to the NEAREST crossing along the road within `NDBREACH_BRIDGE_SNAP_M`
+  metres (environment variable; default 300; 0, off, no or false = off): a DEM opening whose
+  bare-earth bed is at least 1 m below the ground beside the road at the cut, or a channel
+  line crossing (with channel lines, an opening counts only with one: else it is a grade
+  separation; nor where another road or rail passes under). A crossing another structure
+  already cuts is not taken, and each crossing goes to the nearest bridge. A moved cut keeps
+  its length across the road and its inverts are cleared (the cut goes to the lowest ground
+  near its new ends). Every move is a run warning; the bridges kept without an opening or a
+  channel seen at the cut are named in one; every bridge is in `run_report.json`
+  `bridge_snap` (with the radius) and in a table in `run_report.md`.
 - **Channels to burn** (lines): cut into the DEM, with the bed forced to fall downstream so
   a LiDAR pit does not dam the channel.
 - **Ponds and reservoirs** (polygons): lowered to their bed (mean depth below the LiDAR

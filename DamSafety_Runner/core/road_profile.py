@@ -135,8 +135,9 @@ def _run_max(z, w, side):
 
 def _grade(s, z, baseline_m=None):
     """Per sample, the steepest grade touching it: over one step (baseline_m None, the
-    3.10.90 first version that bridge_snap uses) or over every baseline of `baseline_m` that
-    spans it (pixel steps, LiDAR noise and seams average out over several metres)."""
+    3.10.90 first version) or over every baseline of `baseline_m` that spans it (pixel steps,
+    LiDAR noise and seams average out over several metres; the road depth and core/bridge_snap
+    pass OPENING_BASELINE_M or more)."""
     n = len(z)
     step = float(np.median(np.diff(s))) or 1.0
     if not baseline_m:
@@ -190,7 +191,7 @@ def openings(s, z, min_m=OPENING_MIN_M, shoulder_m=OPENING_SHOULDER_M, grade=OPE
         a, b = max(0, i - look), min(n - 1, j + look)
         if baseline_m:
             steep = float(np.max(g[a:b + 1])) > grade
-        else:                                   # as 3.10.90 first had it (bridge_snap)
+        else:                                   # as the 3.10.90 first draft had it
             steep = b > a and float(np.max(g[a:b])) > grade
         if steep:
             dd = depth[i:j + 1]
