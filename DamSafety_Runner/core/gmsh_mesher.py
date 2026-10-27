@@ -407,6 +407,37 @@ def short_edge_counts(nodes, edges, kinds, pts, g, hmin, hch, hpt, hmax):
     return out
 
 
+CREST_ANGLE_DEG = 30.0      # an embedded edge this close to parallel to a crest line is on it
+
+
+def crest_edges(nodes, edges, kinds, crest_lines, hmin, max_angle_deg=CREST_ANGLE_DEG):
+    """Boolean per edge (3.10.91): a "line" edge whose midpoint is within 0.75 x hmin + 1 m
+    (node_lines' snap, plus a metre) of a crest line and that runs within max_angle_deg of
+    parallel to it. The edges of crossing lines (culverts, a REFINE_LINES stream) meet a
+    crest at an angle and are left out. All False with no crest lines."""
+    out = np.zeros(len(edges), bool)
+    cl = [np.asarray(c, float).reshape(-1, 2) for c in crest_lines or []]
+    cl = [c for c in cl if len(c) >= 2]
+    if not cl or not len(edges):
+        return out
+    tol = 0.75 * float(hmin) + 1.0
+    idx = _SegIndex(max(2.0 * tol, 50.0))
+    for k, c in enumerate(cl):
+        idx.add(c, k)
+    cos_max = math.cos(math.radians(max_angle_deg))
+    for k, ((a, b), kd) in enumerate(zip(edges, kinds)):
+        if kd != "line":
+            continue
+        pa, pb = np.asarray(nodes[a], float), np.asarray(nodes[b], float)
+        ab = pb - pa
+        L = float(np.hypot(*ab))
+        if L <= 0:
+            continue
+        r = idx.near(0.5 * (pa + pb))
+        out[k] = r is not None and r[0] <= tol and abs(float(np.dot(ab / L, r[2]))) > cos_max
+    return out
+
+
 def _dist_to_ring(p, ring):
     r = np.asarray(ring, float)
     a, b = r, np.roll(r, -1, axis=0)
@@ -633,8 +664,10 @@ def build_mesh(spec):
     line_min_area_m2, refine_footprint; 3.10.75 (HEC-RAS seeds): size_lines [{line, size,
     dist_min, dist_max}...], lines that only set the size (edge length `size` within dist_min
     of the line, growing to the far field by dist_max) and are not embedded (no nodes on
-    them; see size_lines_of). Returns dict(points, triangles (CCW), boundary
-    [[tri, edge]...], stats)."""
+    them; see size_lines_of); 3.10.91 (ANUGA crest hold, core/anuga_crest.py): crest_lines
+    [[...]...], road / rail crest centrelines embedded and sized as the lines (no triangle
+    straddles them), their mesh nodes returned as crest_nodes (indices into points).
+    Returns dict(points, triangles (CCW), boundary [[tri, edge]...], stats[, crest_nodes])."""
     g = default_sizes()
     g.update({k: v for k, v in spec.items() if k in g})
     sizing = resolve_sizing(spec, g)               # {} (and g untouched) when none is set
@@ -689,6 +722,11 @@ def build_mesh(spec):
     nodes, edges, kinds = node_lines(lines + chans, ["line"] * len(lines) + ["channel"] * len(chans),
                                      snap_m=0.75 * hmin)
     edges, kinds = keep_inside(nodes, edges, kinds, ring, hmin)
+    # 3.10.91: which embedded line edges lie along a crest line (spec "crest_lines", the
+    # Runner's road / rail crest centrelines, also given in "lines"); the nodes on them are
+    # returned as crest_nodes so the Runner can hold them at the 1 m crest elevation.
+    # Classification only: the mesh is the same with or without the key.
+    crest_edge = crest_edges(nodes, edges, kinds, shift(spec.get("crest_lines", [])), hmin)
     pts_in = [p for p in np.asarray(spec.get("points", []), float).reshape(-1, 2)
               if _inside(p, ring) and _dist_to_ring(p, ring) > hmin]
 
@@ -705,10 +743,12 @@ def build_mesh(spec):
         surf = geo.addPlaneSurface([geo.addCurveLoop(bl)])
         used = sorted(set(edges.ravel().tolist())) if len(edges) else []
         gp = {n: geo.addPoint(float(nodes[n][0]), float(nodes[n][1]), 0.0) for n in used}
-        line_c, chan_c, curve_of = [], [], []
-        for (a, b), kd in zip(edges, kinds):
+        line_c, chan_c, curve_of, crest_c = [], [], [], []
+        for k, ((a, b), kd) in enumerate(zip(edges, kinds)):
             curve_of.append(geo.addLine(gp[a], gp[b]))
             (line_c if kd == "line" else chan_c).append(curve_of[-1])
+            if crest_edge[k]:
+                crest_c.append(curve_of[-1])
         free = []
         for p in pts_in:      # a point on or near an embedded line would stop gmsh
             if not len(edges) or _dist_to_segments(p, nodes[edges[:, 0]], nodes[edges[:, 1]]) > hmin / 2.0:
@@ -779,6 +819,10 @@ def build_mesh(spec):
         for meth, nit in (g["optimize"] or ()):
             gmsh.model.mesh.optimize(str(meth), niter=int(nit))
         tags, xyz, _ = gmsh.model.mesh.getNodes()
+        crest_tags = set()
+        for c in crest_c:            # nodes on the crest curves, their end points included
+            ct, _x, _p = gmsh.model.mesh.getNodes(1, c, includeBoundary=True)
+            crest_tags.update(int(t) for t in ct)
         etypes, _, enodes = gmsh.model.mesh.getElements(2)
         tri_nodes = None
         for et, en in zip(etypes, enodes):
@@ -792,14 +836,15 @@ def build_mesh(spec):
     return finish(np.asarray(tags, np.int64), np.asarray(xyz).reshape(-1, 3)[:, :2] + origin,
                   tri_nodes,
                   g, mesh_s, n_lines=len(line_c), n_channel=len(chan_c), n_points=len(ptags),
-                  short_edges_fixed=len(short),
+                  short_edges_fixed=len(short), crest_tags=crest_tags if crest_c else None,
                   **dict({"sizing": sizing} if sizing else {},
                          **({"size_lines": len(size_lines)} if size_lines else {})))
 
 
-def finish(tags, xy, tri_nodes, g, mesh_s=0.0, **extra):
+def finish(tags, xy, tri_nodes, g, mesh_s=0.0, crest_tags=None, **extra):
     """Compact the gmsh arrays, orient triangles CCW, tag the outer edges and
-    apply the quality gate (min angle, min area)."""
+    apply the quality gate (min angle, min area). crest_tags (3.10.91): gmsh node tags on
+    crest curves; returned as crest_nodes, indices into points (only when given)."""
     used = np.unique(tri_nodes)
     pos = {int(t): i for i, t in enumerate(tags)}
     remap = {int(t): k for k, t in enumerate(used)}
@@ -826,7 +871,12 @@ def finish(tags, xy, tri_nodes, g, mesh_s=0.0, **extra):
     if area.min() < gate:
         raise MeshError("smallest triangle {:.2f} m2 is below the {:.1f} m2 gate ({:g} x the "
                         "smallest intended {:g} m2)".format(area.min(), gate, tol, intended))
-    return dict(points=pts, triangles=tri, boundary=boundary, stats=stats)
+    out = dict(points=pts, triangles=tri, boundary=boundary, stats=stats)
+    if crest_tags is not None:
+        cn = sorted(remap[int(t)] for t in crest_tags if int(t) in remap)
+        out["crest_nodes"] = np.asarray(cn, np.int64)
+        stats["crest_nodes"] = len(cn)
+    return out
 
 
 def gate_area(g):
@@ -883,8 +933,9 @@ def main(argv):
     except MeshError as e:
         print("MESHERROR " + str(e), flush=True)
         return 3
+    extra = {"mesh_crest_nodes": m["crest_nodes"]} if "crest_nodes" in m else {}
     np.savez(argv[2], mesh_points=m["points"], mesh_triangles=m["triangles"],
-             mesh_boundary=m["boundary"], mesh_stats=json.dumps(m["stats"]))
+             mesh_boundary=m["boundary"], mesh_stats=json.dumps(m["stats"]), **extra)
     print("MESHOK " + json.dumps(m["stats"]), flush=True)
     return 0
 
