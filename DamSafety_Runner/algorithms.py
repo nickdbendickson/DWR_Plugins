@@ -1116,7 +1116,10 @@ class _Base(QgsProcessingAlgorithm):
             dh = self.parameterAsDouble(parameters, "S_DEFAULT_HEIGHT_FT", context)
             a, b = tf(src)
             nbi43b = {n.lower(): n for n in names}.get("structure_type_043b", "")
-            want = list(fld.values()) + ([nbi43b] if nbi43b else [])
+            # 3.10.90: the facility a bridge carries (road / rail) for the bridge check
+            from .core.bridge_snap import FACILITY_FIELDS, facility_kind
+            fac = [n for n in names if n.lower() in FACILITY_FIELDS]
+            want = list(fld.values()) + ([nbi43b] if nbi43b else []) + fac
             for i, (line, at) in enumerate(qio.lines(src, a, b, center_xy, radius,
                                                     fields=want)):
                 ktxt = str(at.get(fld["S_KIND"]) or "").lower()
@@ -1143,6 +1146,7 @@ class _Base(QgsProcessingAlgorithm):
                 s = structs[-1]
                 s.source = "inventory"
                 s.surveyed = True
+                s.carries = facility_kind({n: at.get(n) for n in fac})
         self._structure_gate = None
         if src is not None:
             scrs = src.sourceCrs()

@@ -22,6 +22,7 @@ from .compat import SOURCE_LINE, SOURCE_POINT, SOURCE_POLYGON, set_advanced
 from .core import consequences as cons
 from .core import aadt_join
 from .core import nd_hazard as nh
+from .core import road_profile as rprof
 from .damsuite import structure_flags as sflags
 
 OUTPUT_NAMES = {"markdown": "Hazard Classification (ND 5.2).md",
@@ -82,7 +83,271 @@ SAMPLING = ("Points: the raster cell under the point. Polygons: the deepest cell
             "falls inside the footprint (the cell under the centroid when none does), with the "
             "maximum velocity over the footprint's wet cells, which is conservative (the "
             "velocity at the deepest cell is kept as well). Lines: sampled every half cell, the "
-            "deepest sample. Only features inside the rasters are read.")
+            "deepest sample. Roads (3.10.90, DWR-3034): the water surface over the road "
+            "surface along the centreline (1 m); bridge / notch cuts, and bare-earth openings "
+            "at a mapped bridge / notch, read on a deck stand-in from the approaches; culverts "
+            "not masked; the depth raster where there is no road surface or water surface, and "
+            "for the whole road when the road surface DEM cannot be used (see 'Road overtopping "
+            "depth'). Only features inside the rasters are read.")
+
+
+ROAD_BASIS_LABELS = ("Water surface over the road surface on the centreline (fine DEM; bridge "
+                     "/ notch cuts on a deck stand-in from the approaches)",
+                     "Model depth raster under the road (before 3.10.90)")
+# 3.10.90 review: the road surface DEM's own elevation unit (never the run DEM's factor)
+ROAD_DEM_UNITS = ("Detect (the raster's band unit or vertical CRS; unknown = depth raster)",
+                  "metres", "feet", "US survey feet")
+ROAD_DATUM_TOL_M = 1.0          # road surface DEM vs the run's own ground: median offset limit
+ROAD_DATUM_MIN_POINTS = 5       # ... over at least this many points (cells)
+ROAD_CHECK_STEP_M = 5.0         # centreline spacing of the datum check
+
+
+def run_report_of(folder):
+    """_breach_model/run_report.json as a dict ({} when it is not there or not readable)."""
+    try:
+        with open(os.path.join(folder, "_breach_model", "run_report.json"),
+                  encoding="utf-8") as f:
+            rep = json.load(f)
+        return rep if isinstance(rep, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _vertical_unit(path):
+    """(metres per unit, how) from a compound CRS's vertical unit, or (None, '')."""
+    try:
+        from osgeo import osr
+        from .damsuite import gdalsafe as GS
+        ds = GS.open_raster(path)
+        wkt = ds.GetProjection() if ds is not None else ""
+        if not wkt:
+            return None, ""
+        sr = osr.SpatialReference()
+        sr.ImportFromWkt(wkt)
+        if not sr.IsCompound():
+            return None, ""
+        v = sr.GetTargetLinearUnits("VERT_CS")
+    except Exception:
+        return None, ""
+    from .core.units import FT, US_FT
+    for f, name in ((1.0, "metres"), (FT, "feet"), (US_FT, "US survey feet")):
+        if v and abs(float(v) - f) < 1e-7:
+            return f, "{} (vertical CRS)".format(name)
+    return None, ""
+
+
+def dem_unit_of(path):
+    """(metres per DEM elevation unit, how) read from the raster itself: its band unit, else a
+    compound CRS's vertical unit. (None, why) when neither records it - no metres default (a
+    feet CRS or the elevation range alone is a guess, gdal_io.z_to_m_factor's 'check')."""
+    from .core import gdal_io
+    try:
+        f, note = gdal_io.z_to_m_factor(path)
+    except Exception as ex:                                       # noqa - reported
+        return None, "its elevation unit could not be read ({})".format(ex)
+    if "raster unit" in note:
+        return float(f), note
+    v, how = _vertical_unit(path)
+    if v is not None:
+        return v, how
+    return None, "no unit recorded in the raster ({})".format(note)
+
+
+def run_dem_unit(rep, path):
+    """(metres per unit, how) of the run's own DEM: run_report.json's dem_z_to_m, then its
+    dem_elevation_units (core/hecras_model._z_factor, the factor the run used, so the WSE
+    matches it), else the raster's own unit (dem_unit_of). (None, why) when nothing records
+    it: the caller reads the depth raster - never a metres default."""
+    note = str(rep.get("dem_elevation_units") or "").strip().lower()
+    if rep.get("dem_z_to_m") or note.startswith(("us survey feet", "feet", "metres")):
+        from .core import hecras_model
+        f, how = hecras_model._z_factor(rep, path)
+        return float(f), "run_report.json: {}".format(
+            how or "dem_z_to_m {:g}".format(float(f)))
+    f, how = dem_unit_of(path)
+    return f, ("run_report.json records no unit (written before Runner 3.10.16?); " + how
+               if f is None else how)
+
+
+def same_path(a, b):
+    """True when a and b name the same file: compared after abspath + normpath + normcase
+    (Windows: case and '/' vs '\\'), or os.path.samefile when both exist (PR #198 review)."""
+    if not a or not b:
+        return False
+    try:
+        if os.path.exists(a) and os.path.exists(b):
+            return os.path.samefile(a, b)
+    except OSError:
+        pass
+    n = lambda p: os.path.normcase(os.path.normpath(os.path.abspath(p)))      # noqa: E731
+    return n(a) == n(b)
+
+
+def relocate_in_folder(path, folder):
+    """`path` as recorded by another machine (or a moved run folder), found under the dam
+    folder: a relative path joined to the folder, else the longest tail of the recorded path
+    (split at '/' and '\\', so a Windows path is read on Linux / macOS too) that exists under
+    the folder. None when none does."""
+    if not path or not folder:
+        return None
+    parts = [p for p in re.split(r"[\\/]+", str(path)) if p and not p.endswith(":")]
+    for i in range(len(parts)):
+        cand = os.path.join(folder, *parts[i:])
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def road_dem_of(folder, rep=None):
+    """(DEM path or None, metres per unit or None, how, cell m) of the run's own DEM, from
+    _breach_model/run_report.json (settings.input_files.DEM). When that path does not exist
+    (the run folder was copied from another machine or moved), the DEM is looked for relative
+    to the dam folder (relocate_in_folder) and the how says so."""
+    rep = run_report_of(folder) if rep is None else rep
+    st = rep.get("settings") or {}
+    path = (st.get("input_files") or {}).get("DEM")
+    cell = st.get("cell_size_m")
+    if not path:
+        return None, None, "", cell
+    moved = ""
+    if not os.path.exists(path):
+        found = relocate_in_folder(path, folder)
+        if found is None:
+            return None, None, "", cell
+        moved = "; the recorded DEM {} does not exist here: read {} (relative to the dam " \
+                "folder)".format(path, found)
+        path = found
+    f, how = run_dem_unit(rep, path)
+    return path, f, (how or "") + moved, cell
+
+
+def structure_cuts_of(folder):
+    """The run's structures (_breach_model/structures.json); [] when none."""
+    try:
+        with open(os.path.join(folder, "_breach_model", "structures.json"),
+                  encoding="utf-8") as f:
+            got = json.load(f)
+        return got if isinstance(got, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def structures_in_raster_crs(structs, work_crs, raster_wkt):
+    """(structures with their lines moved from the run's work CRS into the rasters' CRS, note).
+    structures.json lines are in the work CRS (structures.Structure.line); the final rasters are
+    in the DEM's CRS when that is a projected non-metre CRS (State Plane ft). No work_crs: the
+    lines are taken as they are (a metre DEM: the rasters are in the work CRS)."""
+    structs = [s for s in structs or [] if isinstance(s, dict)]
+    if not structs:
+        return [], ""
+    if not work_crs:
+        return structs, ("run_report.json has no work_crs: structures.json lines taken in the "
+                         "rasters' CRS" if raster_wkt else "")
+    if not raster_wkt:
+        return structs, "the rasters have no CRS: structures.json lines taken as they are"
+    try:
+        from osgeo import osr
+        src, dst = osr.SpatialReference(), osr.SpatialReference()
+        try:
+            src.SetFromUserInput(str(work_crs))
+        except Exception:
+            src.SetFromUserInput(str(work_crs).split()[0])
+        dst.SetFromUserInput(str(raster_wkt))
+        for sr in (src, dst):
+            try:
+                sr.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+            except AttributeError:
+                pass
+        if src.IsSame(dst):
+            return structs, ""
+        tf = osr.CoordinateTransformation(src, dst)
+        out = []
+        for s in structs:
+            d = dict(s)
+            line = np.asarray(s.get("line") or [], dtype=float).reshape(-1, 2)
+            d["line"] = [list(p[:2]) for p in tf.TransformPoints(line.tolist())] \
+                if len(line) else []
+            out.append(d)
+        return out, ("structures.json lines moved from the run's work CRS ({}) into the "
+                     "rasters' CRS".format(str(work_crs).split("[")[0][:40]))
+    except Exception as ex:                                       # noqa - reported
+        return [], ("structures.json lines could not be moved into the rasters' CRS ({}); no "
+                    "structure corridor used".format(ex))
+
+
+def road_depth_rows(rd):
+    """Report lines (markdown sub-bullets) for each road read lower than the depth raster or
+    read from it (road_depth.dropped / lowered / raster_roads)."""
+    out = []
+
+    def xy(x, y):
+        return "?" if x is None or y is None else "{:.1f}, {:.1f}".format(x, y)
+
+    def row(label, rec):
+        return ("  - {}: {} - depth raster {:.2f} ft at ({}), centreline {:.2f} ft at ({}), "
+                "freeboard {} ft; wet points: {} in bridge / notch cuts, {} on an opening at "
+                "one, {} with no road surface, {} with no water surface, {} in a cut with no "
+                "approach: {}".format(
+                    label, rec["id"], rec["raster_depth_ft"],
+                    xy(rec["raster_x"], rec["raster_y"]), rec["centreline_depth_ft"],
+                    xy(rec.get("x"), rec.get("y")), rec.get("freeboard_ft"), rec.get("n_cut", 0),
+                    rec.get("n_opening", 0), rec.get("n_nodem", 0), rec.get("n_nowse", 0),
+                    rec.get("n_no_approach", 0), rec.get("reason", "")))
+    for rec in rd.get("dropped") or []:
+        out.append(row("Not counted as overtopped", rec))
+    for rec in rd.get("lowered") or []:
+        out.append(row("Overtopped, shallower than the depth raster", rec))
+    for rec in rd.get("raster_roads") or []:
+        out.append("  - Depth raster used: {} - {:.2f} ft at ({}): {}".format(
+            rec["id"], rec["raster_depth_ft"], xy(rec["raster_x"], rec["raster_y"]),
+            rec.get("reason", "")))
+    return out
+
+
+def _median_offset(a, b):
+    ok = np.isfinite(a) & np.isfinite(b)
+    if not ok.any():
+        return None, 0
+    return float(np.median(a[ok] - b[ok])), int(ok.sum())
+
+
+def model_ground_offset(road_dem, grid, wse_ft, depth_ft, pts, unit_m=1.0, pixel_m=1.0,
+                        average=True, exclude=None, max_cells=2000):
+    """(median of road surface DEM - the run's model ground (m), cells) over the wet cells
+    under `pts` (raster CRS): model ground = WSE (Max) - Depth (Max) of the cell (ft -> m), the
+    road surface DEM averaged over the cell (the run's default 'average' resample) or at its
+    centre. `exclude` (bool per point): points left out (inside structure cuts, whose cells
+    hold the cut ground)."""
+    pts = np.asarray(pts, dtype=float).reshape(-1, 2)
+    if exclude is not None:
+        pts = pts[~np.asarray(exclude, dtype=bool)]
+    if not len(pts):
+        return None, 0
+    c = np.floor((pts[:, 0] - grid.x0) / grid.dx).astype(int)
+    r = np.floor((grid.y0 - pts[:, 1]) / grid.dx).astype(int)
+    w, d = np.asarray(wse_ft, dtype=float), np.asarray(depth_ft, dtype=float)
+    ok = (r >= 0) & (c >= 0) & (r < w.shape[0]) & (c < w.shape[1])
+    cells = sorted(set(zip(r[ok].tolist(), c[ok].tolist())))
+    cells = [(i, j) for i, j in cells if np.isfinite(w[i, j]) and np.isfinite(d[i, j])
+             and d[i, j] > 0]
+    if len(cells) > max_cells:
+        cells = [cells[k] for k in np.linspace(0, len(cells) - 1, max_cells).astype(int)]
+    if not cells:
+        return None, 0
+    cell_m = grid.dx * float(unit_m or 1.0)
+    k = int(min(5, max(1, round(cell_m / max(float(pixel_m or 1.0), 1e-6))))) if average else 1
+    off = (np.arange(k) + 0.5) / k
+    out_a, out_b = [], []
+    for i, j in cells:
+        xs = grid.x0 + (j + off) * grid.dx
+        ys = grid.y0 - (i + off) * grid.dx
+        X, Y = np.meshgrid(xs, ys)
+        z = np.asarray(road_dem(np.column_stack([X.ravel(), Y.ravel()])), dtype=float)
+        if not np.isfinite(z).any():
+            continue
+        out_a.append(float(np.nanmean(z)))
+        out_b.append(float(w[i, j] - d[i, j]) * rprof.FT)
+    return _median_offset(np.asarray(out_a), np.asarray(out_b))
 
 
 # ------------------------------------------------------------------------------ helpers
@@ -486,6 +751,15 @@ class NDHazardAlgorithm(_ToolBase):
             "UNKNOWN_TRAINS", "Class of an overtopped railroad with no trains a day (a data "
                               "gap; at least Medium)",
             list(nh.CLASSES), defaultValue=nh.CLASSES.index(d.unknown_trains))))
+        self.addParameter(set_advanced(QgsProcessingParameterEnum(
+            "ROAD_DEPTH_BASIS", "Road overtopping depth",
+            list(ROAD_BASIS_LABELS), defaultValue=0)))
+        self._file("ROAD_DEM", "Road surface DEM (empty = the run's DEM from "
+                   "_breach_model/run_report.json; checked against the run's own ground)",
+                   advanced=True)
+        self.addParameter(set_advanced(QgsProcessingParameterEnum(
+            "ROAD_DEM_UNITS", "Road surface DEM elevation units",
+            list(ROAD_DEM_UNITS), defaultValue=0)))
         self._file("CHART_FILE", "Digitized ACER TM 11 chart file (.json; empty = the one "
                    "shipped with the plugin)", ext="json", advanced=True)
         self.addOutput(QgsProcessingOutputString("CLASS", "Hazard class"))
@@ -776,6 +1050,301 @@ class NDHazardAlgorithm(_ToolBase):
                 feedback.pushInfo("Extra {}: {} feature(s) from {} inside the rasters".format(
                     label, len(feats) - out_n, stem))
 
+    def _road_dem_units(self, parameters, context, path):
+        """(metres per unit or None, how) of the 'Road surface DEM': its own unit, never the
+        run DEM's factor."""
+        from .core.units import FT, US_FT
+        k = self.parameterAsEnum(parameters, "ROAD_DEM_UNITS", context)
+        if k == 1:
+            return 1.0, "metres (chosen)"
+        if k == 2:
+            return FT, "feet (chosen)"
+        if k == 3:
+            return US_FT, "US survey feet (chosen)"
+        return dem_unit_of(path)
+
+    @staticmethod
+    def _sample_parts(f, pts_list):
+        """f at each array of points, NaN for an array whose read fails (OSError, RuntimeError,
+        ValueError: a missing VRT tile); one array of all."""
+        out = []
+        for q in pts_list:
+            try:
+                out.append(np.asarray(f(q), dtype=float))
+            except (OSError, RuntimeError, ValueError):
+                out.append(np.full(len(q), np.nan))
+        return np.concatenate(out) if out else np.zeros(0)
+
+    def _road_dem_check(self, ground, ghow, roads, parts, grid, wse, depth, wet, unit_m, cuts_all,
+                        run_dem, run_z, given, rep):
+        """3.10.90 review: a 'Road surface DEM' is used only when it matches the run's own ground
+        (units and vertical datum): the median offset against the run's DEM at the wet centreline
+        points (all centreline points of the roads when fewer than ROAD_DATUM_MIN_POINTS are wet),
+        else against the run's model ground (WSE - depth) of the wet cells under them, within
+        ROAD_DATUM_TOL_M. Returns (why not, or '', the check's record)."""
+        step = ROAD_CHECK_STEP_M / unit_m
+        wet_l, all_l = [], []
+        for r in roads:
+            for p in parts.get(id(r)) or []:
+                q = rprof.densify(p, step)
+                all_l.append(q)
+                m = wet(q)
+                if m.any():
+                    wet_l.append(q[m])
+        if not wet_l:
+            return "", {"how": "no wet centreline point: nothing to check"}
+        med, n, against = None, 0, ""
+        if run_dem and run_z and not same_path(run_dem, given):
+            try:
+                ref = rprof.PointDEM(run_dem, run_z, grid.crs_wkt)
+            except Exception:                                    # noqa - the next reference
+                ref = None
+            if ref is not None:
+                use = wet_l if sum(len(q) for q in wet_l) >= ROAD_DATUM_MIN_POINTS else all_l
+                med, n = _median_offset(self._sample_parts(ground, use),
+                                        self._sample_parts(ref, use))
+                against = "the run's DEM {} at {} {}centreline point(s)".format(
+                    os.path.basename(run_dem), n, "wet " if use is wet_l else "")
+        if med is None or n < ROAD_DATUM_MIN_POINTS:
+            W = np.vstack(wet_l)
+            excl = rprof.in_cuts(W, cuts_all) if cuts_all else None
+            avg = str((rep.get("dem_resample") or {}).get("method") or "average") == "average"
+            try:
+                med, n = model_ground_offset(ground, grid, wse, depth, W, unit_m,
+                                             getattr(ground, "pixel_m", 1.0), average=avg,
+                                             exclude=excl)
+            except (OSError, RuntimeError, ValueError) as ex:
+                med, n = None, 0
+                against = "the run's model ground (read failed: {})".format(ex)
+            else:
+                against = "the run's model ground (WSE - depth) of {} wet cell(s) under the " \
+                          "roads, structure cuts left out".format(n)
+        chk = {"against": against, "points": n,
+               "median_offset_m": None if med is None else round(med, 3),
+               "tolerance_m": ROAD_DATUM_TOL_M, "units": ghow}
+        if med is None or n < ROAD_DATUM_MIN_POINTS:
+            return ("the road surface DEM could not be checked against the run's own ground "
+                    "({} comparable point(s); {}), so its units and vertical datum are not "
+                    "confirmed".format(n, against or "no reference"), chk)
+        if abs(med) > ROAD_DATUM_TOL_M:
+            return ("the road surface DEM reads {:+.2f} m from {} (median; more than {:g} m): "
+                    "its elevation units ({}) or vertical datum differ from the run's".format(
+                        med, against, ROAD_DATUM_TOL_M, ghow), chk)
+        return "", chk
+
+    @staticmethod
+    def _lower_reason(got):
+        out = []
+        fb = got.get("freeboard_ft")
+        if fb is not None:
+            out.append("the water surface is {:.2f} ft {} the road surface on the centreline"
+                       .format(abs(fb), "below" if fb >= 0 else "over"))
+        if got.get("n_cut"):
+            out.append("{} wet point(s) in bridge / notch cut corridors read on the deck "
+                       "stand-in (the lower approach), not the trench".format(got["n_cut"]))
+        if got.get("n_opening"):
+            out.append("{} on a bare-earth opening at a mapped bridge / notch read on the "
+                       "stand-in".format(got["n_opening"]))
+        nr = sum(got.get(k) or 0 for k in ("n_nodem", "n_nowse", "n_no_approach"))
+        if nr:
+            out.append("{} with no road surface, no water surface or no approach surface took "
+                       "the depth raster ({} ft)".format(
+                           nr, round(float(got.get("raster_points_ft") or 0.0), 2)))
+        out.append("the depth raster's cell holds the cell's averaged (or cut) ground, not the "
+                   "road surface")
+        return "; ".join(out)
+
+    def _road_crown(self, parameters, context, folder, grid, depth, roads, extra, feedback,
+                    wet_ft=nh.MIN_WET_FT):
+        """3.10.90 (DWR-3034): each road's overtopping depth from the water surface over the
+        road surface along its centreline (core/road_profile), in place of the deepest cell of
+        the depth raster. `depth` is the cleaned depth array (no-data 0). Every road read lower
+        than the depth raster, and every road that falls back to it, gets a Check and a row in
+        the report (road_depth.dropped / lowered / raster_roads). Returns the report entry."""
+        from .core import gdal_io, workflow
+        basis = rprof.BASIS_RASTER if self.parameterAsEnum(
+            parameters, "ROAD_DEPTH_BASIS", context) == 1 else rprof.BASIS_CENTRELINE
+        info = {"basis": basis, "dem": "", "dem_units": "", "roads_centreline": 0,
+                "roads_raster": 0, "dropped": [], "lowered": [], "raster_roads": [],
+                "text": ""}
+        parts = getattr(self, "_road_parts", {})
+        if not roads:
+            info["text"] = "no road read"
+            return info
+        if basis == rprof.BASIS_RASTER:
+            info["text"] = "the model depth raster under the road (chosen)"
+            info["roads_raster"] = len(roads)
+            return info
+        rep = run_report_of(folder)
+        wse_path = os.path.join(folder, workflow.FINAL_NAMES["wse"])
+        given = self._str(parameters, "ROAD_DEM", context)
+        run_dem, run_z, run_how, cell = road_dem_of(folder, rep)
+        why, z, zhow = "", None, ""
+        if given:
+            dem = given if os.path.exists(given) else None
+            if dem is None:
+                why = "the road surface DEM {} is not there".format(given)
+            else:
+                z, zhow = self._road_dem_units(parameters, context, dem)
+                if z is None:
+                    why = ("the road surface DEM {}: {}; set 'Road surface DEM elevation "
+                           "units'".format(os.path.basename(dem), zhow))
+        else:
+            dem, z, zhow = run_dem, run_z, run_how
+            if dem is None:
+                why = "no road surface DEM (the run's DEM is not in run_report.json or not there)"
+            elif z is None:
+                why = ("the run's DEM {}: {}; give it as 'Road surface DEM' with its elevation "
+                       "units".format(os.path.basename(dem), zhow))
+        if not os.path.exists(wse_path):
+            why = "no '{}' in the dam folder".format(workflow.FINAL_NAMES["wse"])
+        unit_m = 1.0
+        if not why and grid.crs_wkt:
+            try:
+                lu = gdal_io.linear_unit_m(grid.crs_wkt)
+            except Exception:                                    # noqa - metres assumed
+                lu = 1.0
+            if lu is None:
+                why = "the rasters' CRS is not projected"
+            else:
+                unit_m = float(lu)
+        ground = wse = None
+        if not why:
+            try:
+                wse = gdal_io.read_like(wse_path, grid, "near")
+                ground = rprof.PointDEM(dem, z, grid.crs_wkt)
+            except Exception as ex:                              # noqa - fall back
+                why = "the water surface or road DEM could not be read ({})".format(ex)
+        structs, cut_note = structures_in_raster_crs(structure_cuts_of(folder),
+                                                     rep.get("work_crs"), grid.crs_wkt)
+        if not why and cut_note.startswith("structures.json lines could not be moved"):
+            feedback.reportError("Check: road overtopping: " + cut_note + " (a bridge cut's "
+                                 "opening reads as it is).", fatalError=False)
+        cell_m = float(cell or grid.dx * unit_m)
+        cuts = rprof.cut_corridors(structs, cell_m, 0.0, unit_m)
+        cuts_all = rprof.cut_corridors(structs, cell_m, 0.0, unit_m, kinds=None)
+        depf = rprof.grid_sampler(grid, depth)
+
+        def wet(xy):
+            return np.nan_to_num(depf(xy)) > 0.0
+        if not why and given:
+            why, info["datum_check"] = self._road_dem_check(
+                ground, zhow, roads, parts, grid, wse, depth, wet, unit_m, cuts_all, run_dem,
+                run_z, given, rep)
+        if why:
+            info["basis"] = rprof.BASIS_RASTER
+            info["roads_raster"] = len(roads)
+            info["fallback"] = why
+            info["text"] = ("the model depth raster under the road for every road: " + why +
+                            ". A structure cut's trench can read as road overtopping.")
+            feedback.reportError("Check: road overtopping read from the depth raster for every "
+                                 "road: " + why, fatalError=False)
+            return info
+        wsef = rprof.grid_sampler(grid, wse)
+        info.update(dem=dem, dem_units=zhow)
+        n_c = n_hi = 0
+        n_cut_pts = n_open_pts = n_unm = n_ras_pts = 0
+        matched = set()
+        for r in roads:
+            pr = parts.get(id(r))
+            raster_ft = float(r.max_depth_ft or 0.0)
+            rx, ry = r.x, r.y
+            base = {"id": str(r.id), "raster_depth_ft": round(raster_ft, 2), "raster_x": rx,
+                    "raster_y": ry}
+            reason = ""
+            got = None
+            if not pr:
+                reason = "no centreline geometry"
+            else:
+                try:
+                    got = rprof.road_crown_depth(pr, wsef, ground, wet=wet, cuts=cuts,
+                                                 depth_ft=depf, unit_m=unit_m)
+                except (OSError, RuntimeError, ValueError) as ex:
+                    reason = "the road surface DEM could not be read ({})".format(ex)
+                if got is None and not reason:
+                    reason = "no wet centreline point has both a water surface and a road surface"
+            if got is None:
+                rec = dict(base, reason=reason)
+                info["raster_roads"].append(rec)
+                if raster_ft >= wet_ft:
+                    feedback.reportError("Check: road {}: overtopping read from the depth raster "
+                                         "({:.2f} ft): {}.".format(r.id, raster_ft, reason),
+                                         fatalError=False)
+                continue
+            n_c += 1
+            new = round(float(got["depth_ft"]), 2)
+            r.max_depth_ft = new
+            if got["x"] is not None:
+                r.x, r.y = got["x"], got["y"]
+            fb = None if got["freeboard_ft"] is None else round(float(got["freeboard_ft"]), 2)
+            n_cut_pts += got["n_cut"]
+            n_open_pts += got["n_opening"]
+            n_unm += got["n_opening_unmatched"]
+            n_ras = got["n_nodem"] + got["n_nowse"] + got["n_no_approach"]
+            n_ras_pts += n_ras
+            if got["n_cut"] or got["n_opening"]:
+                matched.add(str(r.id))
+            rec = dict(base, centreline_depth_ft=new, x=r.x, y=r.y, freeboard_ft=fb,
+                       n_cut=got["n_cut"], n_opening=got["n_opening"], n_nodem=got["n_nodem"],
+                       n_nowse=got["n_nowse"], n_no_approach=got["n_no_approach"])
+            extra[("road", str(r.id), r.x, r.y)] = {
+                "depth_basis": "centreline", "raster_depth_ft": round(raster_ft, 2),
+                "raster_x": rx, "raster_y": ry, "freeboard_ft": fb,
+                "centreline_points_in_cuts": got["n_cut"],
+                "centreline_points_in_openings": got["n_opening"],
+                "centreline_points_no_road_surface": got["n_nodem"],
+                "centreline_points_no_water_surface": got["n_nowse"],
+                "centreline_points_no_approach": got["n_no_approach"], "sampled": got["how"]}
+            if raster_ft >= wet_ft and new < round(raster_ft, 2):
+                status = "dropped" if new < wet_ft else "lowered"
+                rec.update(status=status, reason=self._lower_reason(got))
+                info[status].append(rec)
+                feedback.reportError(
+                    "Check: road {}: {} - the depth raster reads {:.2f} ft at ({}, {}); the road "
+                    "centreline reads {:.2f} ft{} ({}). Check it, or set 'Road overtopping depth' "
+                    "to the depth raster.".format(
+                        r.id, "not counted as overtopped" if status == "dropped" else
+                        "overtopped, shallower than the depth raster", raster_ft,
+                        None if rx is None else round(rx, 1),
+                        None if ry is None else round(ry, 1), new,
+                        "" if fb is None else " (freeboard {:.2f} ft)".format(fb),
+                        rec["reason"]), fatalError=False)
+            elif new > round(raster_ft, 2) + 0.005:
+                n_hi += 1
+            if n_ras and new >= wet_ft:
+                feedback.reportError(
+                    "Check: road {}: {} wet centreline point(s) read the depth raster ({:.2f} ft): "
+                    "{} with no road surface (DEM no-data or outside it), {} with no water "
+                    "surface, {} in a bridge / notch cut with no approach on the road line (a road "
+                    "layer split at the bridge).".format(
+                        r.id, n_ras, float(got["raster_points_ft"] or 0.0), got["n_nodem"],
+                        got["n_nowse"], got["n_no_approach"]),
+                    fatalError=False)
+        n_r = len(info["raster_roads"])
+        n_culv = sum(1 for s in structs if str(s.get("kind", "")).lower()
+                     not in rprof.MASK_KINDS)
+        info.update(roads_centreline=n_c, roads_raster=n_r, roads_higher=n_hi,
+                    bridge_notch_cuts=len(cuts), culverts_not_masked=n_culv,
+                    roads_on_a_stand_in=len(matched), points_on_cut_stand_in=n_cut_pts,
+                    points_on_opening_stand_in=n_open_pts, openings_unmatched=n_unm,
+                    points_from_depth_raster=n_ras_pts, unit_m=unit_m,
+                    structures_note=cut_note)
+        info["text"] = (
+            "water surface ('{}') minus the road surface ({}, {}) along the centreline every "
+            "{:g} m, for {} road(s); {} bridge / notch cut(s) in structures.json, {} road(s) "
+            "with wet points in one ({} point(s) read on the deck stand-in from the approaches)"
+            "{}; {} culvert(s) not masked (the fine DEM is the road over them); bare-earth "
+            "openings at a mapped bridge / notch: {} point(s) on the stand-in, {} other "
+            "opening(s) read as they are; {} wet point(s) with no road surface or water "
+            "surface took the depth raster; {} road(s) from the depth raster; {} road(s) no "
+            "longer overtopped and {} shallower than the depth raster (listed); {} deeper."
+        ).format(workflow.FINAL_NAMES["wse"], os.path.basename(dem), zhow, rprof.STEP_M, n_c,
+                 len(cuts), len(matched), n_cut_pts, " - " + cut_note if cut_note else "",
+                 n_culv, n_open_pts, n_unm, n_ras_pts, n_r, len(info["dropped"]),
+                 len(info["lowered"]), n_hi)
+        feedback.pushInfo("Road overtopping depth: " + info["text"])
+        return info
+
     def _keep_parts(self, road, geom, to_r):
         try:
             kind, parts, _c = _parts(geom, to_r)
@@ -872,6 +1441,8 @@ class NDHazardAlgorithm(_ToolBase):
         if not inputs:
             feedback.reportError("Check: no receptor layer was given; the class can only come "
                                  "out Low.", fatalError=False)
+        road_info = self._road_crown(parameters, context, folder, grid, sampler.d,
+                                     rec["roads"], extra, feedback, st.wet_ft)
         self._join_aadt(parameters, context, grid, crs, rec["roads"], feedback)
         try:
             c = nh.classify(rec["structures"], rec["roads"], rec["railroads"], rec["lifelines"],
@@ -884,7 +1455,8 @@ class NDHazardAlgorithm(_ToolBase):
         hz = aadt_join.hazard_module_class(folder)
         road_check = {"hazard_class_status": status, "hazard_module_class": hz,
                       "class_to_use": hz or c.hazard_class,
-                      "aadt_joined": getattr(self, "_aadt_log", [])}
+                      "aadt_joined": getattr(self, "_aadt_log", []),
+                      "road_depth": road_info}
         flag = _flagged_entry(folder)
         if flag:
             # 3.10.53: a flagged structure (damsuite/structure_flags.py, e.g. DWR-3161, the ND-23
@@ -981,6 +1553,10 @@ class NDHazardAlgorithm(_ToolBase):
             else:
                 lines.append("- {}: not given".format(k.replace("_", " ").capitalize()))
         lines += ["- Sampling: " + SAMPLING]
+        rd = road_check.get("road_depth") or {}
+        if rd:
+            lines += ["- Road overtopping depth: " + rd.get("text", "")]
+            lines += road_depth_rows(rd)
         if figures:
             lines += ["- Chart figures: " + ", ".join(figures)]
         with open(out["markdown"], "w", encoding="utf-8", newline="") as f:
@@ -996,6 +1572,7 @@ class NDHazardAlgorithm(_ToolBase):
                   "class_to_use": road_check.get("class_to_use", c.hazard_class),
                   "flagged_structure": road_check.get("flagged_structure", ""),
                   "aadt_joined": road_check.get("aadt_joined") or [],
+                  "road_depth": road_check.get("road_depth") or {},
                   "official": "The official classification is made by the ND Department of "
                               "Water Resources."})
         with open(out["json"], "w", encoding="utf-8", newline="") as f:
