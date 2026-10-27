@@ -430,6 +430,24 @@ def a_download_record_is_trusted_only_whole():
         with open(os.path.splitext(p)[0] + "_dem.txt", "w", encoding="utf-8") as fh:
             fh.write("source: {}\nunits: metres\n".format(USGS))
         _stops(lambda: G.resolve_dem_z(p, "auto"), "no elevation unit is recorded")
+        # review round 2: both halves of the record, agreeing, and the raster not replaced later
+        both = _old_download(d, "both_10m_5070.tif")
+        assert G.resolve_dem_z(both, "auto")[0] == G.Z_METERS
+        ft = os.path.join(d, "both_ft.tif")                 # a feet copy keeps the metadata
+        gdal.Translate(ft, both, scaleParams=[[0, 1, 0, 1 / 0.3048]],
+                       outputType=gdal.GDT_Float32).FlushCache()
+        _stops(lambda: G.resolve_dem_z(ft, "auto"), "not trusted alone")
+        side = os.path.splitext(both)[0] + "_dem.txt"
+        t = os.path.getmtime(side)
+        os.utime(both, (t + 3600.0, t + 3600.0))             # rewritten an hour after its facts
+        _stops(lambda: G.resolve_dem_z(both, "auto"), "60 min after its facts file")
+        os.utime(both, (t, t))
+        with open(side, encoding="utf-8") as fh:
+            text = fh.read()
+        with open(side, "w", encoding="utf-8") as fh:
+            fh.write(text.replace("source: " + USGS, "source: USGS 3DEP 1 m lidar tiles (native, TNM)"))
+        os.utime(side, (t, t))
+        _stops(lambda: G.resolve_dem_z(both, "auto"), "is not the raster's record")
         # a USGS record that says feet is not read as metres
         p = _old_download(d, "usgs_ft_10m_5070.tif", sidecar=False)
         ds = gdal.Open(p, gdal.GA_Update)
