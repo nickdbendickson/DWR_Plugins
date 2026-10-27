@@ -2016,7 +2016,11 @@ def hecras_crest_offcrest_round4_ridge_and_section_edges():
     the record's level less the tolerance but above the line's own ground less the tolerance
     and the datum allowance - lies between it and the pool; (d) a walk through a 40 degree bend (a bend: the
     heading it settles on is reset there) to a road 0.5 ft above the crest leaving it at 25
-    degrees 150 ft on ends on the dam's second leg, where it left it."""
+    degrees 150 ft on ends on the dam's second leg, where it left it; (e) _tops: a lower top
+    beside a higher one whose saddle with it lies less than `small` below it is the higher
+    one's shoulder, though the ground beyond the higher one is low; (f) evidence's `small`
+    is half the crest prominence, not `big`: a road 14 ft below the crest 150 ft upstream,
+    the pool's water 2 ft below the road beyond it, is another embankment."""
     # (a) the line's top to 10 ft, no data (the pool) 10-40 ft, a crest 3 ft higher at 60 ft
     # whose ground past the pool never falls below the line's top until behind it
     tt = np.arange(0.0, 101.0, 5.0)
@@ -2071,3 +2075,14 @@ def hecras_crest_offcrest_round4_ridge_and_section_edges():
         assert tr["ends"]["B"][0].startswith("a junction: another crest at its level"), tr
         assert abs(float(np.cross(d2, E))) < 0.5 * CW + 2.5 and float(E @ d2) > 100.0, \
             (side, E)
+    # (e)
+    tp = np.arange(0.0, 301.0, 5.0)
+    zp = np.interp(tp, [0, 100, 120, 135, 145, 160, 170, 200, 300],
+                   [110, 110, 125, 114, 114, 118, 118, 100, 100])
+    assert hc._tops(zp, tp, None, 8.0, 5.0, 60.0) == [(120.0, 125.0)]
+    # (f)
+    z, x0, yt, c = _valley_with(TOP, half=BIG, grid=True,
+                                roads=[(-800.0, 150.0, 800.0, 150.0, TOP - 14.0, 24.0)])
+    z = np.where(Y > 165.0, np.maximum(z, TOP - 16.0), z)
+    ok, ev = _evx(dam, (z, x0, yt, c), (30.0, 0.0))
+    assert not ok and ev["why"].startswith("another embankment lies 155 from the dam point"), ev
