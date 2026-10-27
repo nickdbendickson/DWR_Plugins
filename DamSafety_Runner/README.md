@@ -797,7 +797,14 @@ The same hook classifies each sensitivity case.
   on its band stops the run, which asks for Meters or Feet; the run never guesses from the CRS or
   the values. Every Download DEM output is metres; raw ND DWR ASCII_Grids_ft are feet. Set it
   explicitly for State Plane (US survey feet) LiDAR. How it was decided is in the run log and
-  the report ("metres (detected: raster unit 'm')").
+  the report ("metres (detected: raster unit 'm')"). An explicit Feet or Meters that the DEM's
+  record contradicts stops and names both; if the record is the wrong one, correct it
+  (`gdal_edit -units ft <dem>`) and run again. The unit is applied once: the DEM is warped to the
+  model grid as stored (no GDAL vertical shift). A DEM you warped yourself from a compound CRS
+  with a feet vertical to one without (gdalwarp or QGIS Warp without `-novshift`) holds metres
+  but keeps the band unit 'US survey foot': re-tag it (`gdal_edit -units m`) or warp it again
+  with `-novshift`. The culvert pre-check, the CLI and the HEC-RAS tools resolve the unit the
+  same way as a run.
 - **Cell size.** 10 m is a sensible default. 20-30 m is much faster for screening.
 
 ## Limits to keep in mind

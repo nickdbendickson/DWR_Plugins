@@ -350,9 +350,10 @@ The result, in the output folder:
   warped into it), clipped to the area, the newest collection on top. The coarser DEM sits
   underneath and shows only where no tile has data: **coarser DEM underneath**
   (`FALLBACK_DEM`), else `<DAM_ID>_10m_5070.tif` when it is in the output folder. The VRT is
-  tagged metres, so (0.17.50) a fallback whose band unit, vertical CRS or Download DEM record
-  says feet or US survey feet is converted to metres first, and one that records no unit is not
-  used (a warning; the json's `fallback_refused`).
+  tagged metres, so (0.17.50) a fallback whose band unit or vertical CRS says feet or US survey
+  feet is converted to metres first (once: the warp keeps the values as stored, without GDAL's
+  vertical shift), a Download DEM GeoTIFF is metres, and one that records no unit is not used
+  (a warning; the json's `fallback_refused`).
 - `<DAM_ID>_1m_lidar.json`: the source projects with their dates, the tiles (sha256), the
   fallback and its unit (`fallback_units`), the area, any missing tiles and the overlap choices.
 - `<DAM_ID>_1m_lidar_dem.txt`: the usual source / CRS / units facts.

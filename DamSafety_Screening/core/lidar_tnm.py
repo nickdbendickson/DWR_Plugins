@@ -599,10 +599,11 @@ def build_vrt(entries, vrt_path, fallback="", bounds_ll=None, meta=None, feedbac
     <vrt>.json with the sources. Returns (vrt_path, json_path).
 
     The VRT is tagged metres (band unit 'm'), so the fallback must be metres too (0.17.50): one
-    in feet or US survey feet (its band unit, vertical CRS or Download DEM record says so) is
-    converted (x 0.3048 / x 1200/3937) before it goes under the tiles; one that records no unit is
-    not used (warning; json 'fallback_refused'). Before, a feet fallback showed through the
-    VRT as metres and the Runner's 'Detect from the raster' read it so."""
+    in feet or US survey feet (its band unit or vertical CRS says so; a Download DEM record is
+    always metres) is converted (x 0.3048 / x 1200/3937) before it goes under the tiles; one that
+    records no unit is not used (warning; json 'fallback_refused'). Before, a feet fallback
+    showed through the VRT as metres and the Runner's 'Detect from the raster' read it so. The
+    warps keep the values as stored (no vertical shift), so that conversion is the only one."""
     from osgeo import gdal
     if not entries:
         raise TileError("no lidar tiles to build the VRT from")
