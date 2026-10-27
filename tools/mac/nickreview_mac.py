@@ -1301,7 +1301,7 @@ class Runner(object):
         # than theirs, stage_states): an unfinished stage it reads runs first, in this command
         st = self.states()
         run, first = self.needed(want, st)
-        for r in first:
+        for r in [] if ctx.a.list_data else first:
             readers = [s for s in run if r in READS[s] and st.get(s) is not None]
             self.log("{}: not finished ({}); it runs first, since {} {} its results".format(
                 r, st[r], ", ".join(readers), "reads" if len(readers) == 1 else "read"))
@@ -1837,11 +1837,11 @@ def main():
                 new, part = ctx.session.pending()
                 continued = [d for d in key["dams"] if ctx.session.dam(d).get("finished")]
                 out("--redo: the same command as the unfinished --redo session {} (started {}), "
-                    "so this run {} it instead of starting a new redo: the dams it already "
+                    "so this run {} instead of starting a new redo: the dams it already "
                     "redid are not redone again ({}); not redone yet: {}; begun: {}. To start a "
                     "new --redo of every dam instead, delete its file first: rm {}".format(
                         ctx.session.sid, ctx.session.rec.get("started"),
-                        "would continue (dry run)" if a.dry_run else "CONTINUES",
+                        "would continue it (dry run)" if a.dry_run else "CONTINUES it",
                         " ".join(continued) or "-", " ".join(new) or "-", " ".join(part) or "-",
                         shlex.quote(ctx.session.path)))
             elif not a.dry_run:
