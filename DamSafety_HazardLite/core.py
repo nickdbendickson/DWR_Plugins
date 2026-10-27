@@ -11,6 +11,11 @@ Inputs
   roads             ND NG9-1-1 road centerlines; AADT from the nearest NDDOT count station
                     on the same named road
   railroads         NARN rail lines; trains/day from FRA grade crossings of the same railroad
+  crown (0.1.1)     a road / rail stretch counts as overtopped only where WSE (Max) is above
+                    the 1 m DEM on the centreline (bridge / notch cuts of the run read on the
+                    approaches); found next to the depth raster in a Runner result (WSE (Max).tif,
+                    _breach_model/run_report.json, structures.json) or given; without them the
+                    depth raster, noted. No arrival raster here: only the 0.1 ft rule.
 
 Rules (REG_05.2026 Section 5.2, as used by the ND Dam Hazard plugin)
   High    habitable structure in the high danger zone of Fig. 5.1 (houses) / 5.2 (mobile
@@ -34,7 +39,7 @@ from . import tm11
 gdal.UseExceptions()
 ogr.UseExceptions()
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 REF = "ND Dam Safety Standards Policy REG_05.2026 (effective 04/01/2026), Section 5.2"
 WET_FT = 0.1               # inundated "to any degree": the suite's consequence depth
 OUTLINE_SNAP_FT = 30.0     # address point outside every outline: nearest outline this close
@@ -258,6 +263,177 @@ def structures(grid, bounds, address_path, outline_path, judgment_high=True, exc
     return out, excluded_ag
 
 
+# --------------------------------------------------- centreline crown (0.1.1) --
+CROWN_STEP_M = 1.0        # centreline read at 1 m steps
+CROWN_EXTEND_M = 60.0     # and this far past each end of a wet stretch (the cut approaches)
+CUT_BUFFER_M = 5.0
+CUT_KINDS = ("bridge", "notch")   # culverts are buried: the DEM is the road over them
+BASIS_CROWN = "WSE - 1 m centreline crown"
+BASIS_GRID = "depth raster (no crown check)"
+
+
+class _Points:
+    """A raster read at points of another CRS (nearest cell, small windows, nodata -> NaN)."""
+
+    def __init__(self, path, srs, scale=1.0):
+        self.ds = gdal.Open(path)
+        self.gt = self.ds.GetGeoTransform()
+        self.band = self.ds.GetRasterBand(1)
+        self.nd = self.band.GetNoDataValue()
+        self.scale = scale
+        own = osr.SpatialReference(wkt=self.ds.GetProjection())
+        own.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        self.tf = None if own.IsSame(srs) else osr.CoordinateTransformation(srs, own)
+
+    def __call__(self, xs, ys):
+        xs, ys = np.asarray(xs, float), np.asarray(ys, float)
+        if self.tf is not None and len(xs):
+            t = np.array(self.tf.TransformPoints(np.c_[xs, ys].tolist()))
+            xs, ys = t[:, 0], t[:, 1]
+        out = np.full(len(xs), np.nan)
+        if not len(xs):
+            return out
+        c = np.floor((xs - self.gt[0]) / self.gt[1]).astype(int)
+        r = np.floor((ys - self.gt[3]) / self.gt[5]).astype(int)
+        ok = (c >= 0) & (c < self.ds.RasterXSize) & (r >= 0) & (r < self.ds.RasterYSize)
+        if ok.any():
+            c0, c1, r0, r1 = c[ok].min(), c[ok].max(), r[ok].min(), r[ok].max()
+            a = self.band.ReadAsArray(int(c0), int(r0), int(c1 - c0 + 1),
+                                      int(r1 - r0 + 1)).astype(float)
+            v = a[r[ok] - r0, c[ok] - c0]
+            if self.nd is not None:
+                v[v == self.nd] = np.nan
+            v[v <= -9990.0] = np.nan
+            out[ok] = v * self.scale
+        return out
+
+
+def _json(path):
+    import json
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _dem_z_to_m(rep):
+    if rep.get("dem_z_to_m"):
+        return float(rep["dem_z_to_m"])
+    note = str(rep.get("dem_elevation_units") or "").strip().lower()
+    return 1200.0 / 3937.0 if note.startswith("us survey feet") else 0.3048 \
+        if note.startswith("feet") else 1.0 if note.startswith(("metres", "meters")) else None
+
+
+def _relocate_in_folder(path, folder):
+    """`path` recorded on another computer, found under `folder`: the longest tail of the path
+    (split at '/' and '\\') that exists there, else None (Runner relocate_in_folder)."""
+    parts = [p for p in re.split(r"[\\/]+", str(path or "")) if p and not p.endswith(":")]
+    for i in range(len(parts)):
+        cand = os.path.join(folder, *parts[i:])
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def open_crown(grid, depth_path, wse=None, dem=None, dem_z_to_m=None, structures=None,
+               metres=False):
+    """(crown source dict or None, note). Unset inputs are taken from a Runner result next to
+    the depth raster (WSE (Max).tif, _breach_model/run_report.json, structures.json)."""
+    folder = os.path.dirname(os.path.abspath(depth_path))
+    bm = os.path.join(folder, "_breach_model")
+    rep = _json(os.path.join(bm, "run_report.json"))
+    rep = rep if isinstance(rep, dict) else {}
+    wse = wse or os.path.join(folder, "WSE (Max).tif")
+    if not os.path.isfile(wse):
+        return None, "no WSE (Max) raster"
+    if not dem:
+        dem = ((rep.get("settings") or {}).get("input_files") or {}).get("DEM")
+        if dem and not os.path.exists(dem):
+            # a run folder copied from another computer (or moved): the recorded DEM looked
+            # for under the dam folder, as the Runner's road_dem_of (Runner 3.10.90, #198)
+            dem = _relocate_in_folder(dem, folder) or dem
+        if dem_z_to_m is None:
+            dem_z_to_m = _dem_z_to_m(rep) if rep else None
+    if not dem or not os.path.exists(dem):
+        return None, "no 1 m DEM ({})".format(dem or "none given or recorded")
+    if dem_z_to_m is None:
+        return None, "the DEM's elevation unit is not recorded"
+    if not grid.srs.IsProjected():
+        return None, "the depth raster CRS is not projected"
+    unit_m = float(grid.srs.GetLinearUnits() or 1.0)
+    if structures is None:
+        structures = _json(os.path.join(bm, "structures.json")) or []
+    cuts, note = [], ""
+    wsrs = None
+    if rep.get("work_crs"):
+        wsrs = osr.SpatialReference()
+        wsrs.SetFromUserInput(str(rep["work_crs"]))
+        wsrs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    tf = osr.CoordinateTransformation(wsrs, grid.srs) \
+        if wsrs is not None and not wsrs.IsSame(grid.srs) else None
+    cell = float((rep.get("settings") or {}).get("cell_size_m") or 30.0)
+    for st in structures if isinstance(structures, list) else []:
+        if not isinstance(st, dict) or str(st.get("kind", "")).lower() not in CUT_KINDS:
+            continue
+        try:
+            line = np.asarray(st.get("line"), float).reshape(-1, 2)
+            if tf is not None:
+                line = np.array(tf.TransformPoints(line.tolist()))[:, :2]
+            w = float(st.get("width_m") or 1.0) * max(1, int(st.get("barrels") or 1)) * 1.1
+        except (TypeError, ValueError):
+            continue
+        if len(line) and np.isfinite(line).all():
+            cuts.append((line, (0.5 * max(cell, w) + CUT_BUFFER_M) / unit_m))
+    try:
+        src = {"wse": _Points(wse, grid.srs, FT if metres else 1.0),
+               "dem": _Points(dem, grid.srs, dem_z_to_m * FT), "cuts": cuts, "unit_m": unit_m}
+    except Exception as ex:                                     # noqa - reported
+        return None, "WSE / DEM could not be opened ({})".format(ex)
+    return src, "centreline crown check: {} - 1 m DEM {}, {} bridge / notch cut(s){}".format(
+        os.path.basename(wse), os.path.basename(dem), len(cuts), note)
+
+
+def _seg_dist(xs, ys, line):
+    best = np.full(len(xs), np.inf)
+    for (x0, y0), (x1, y1) in zip(line[:-1], line[1:]) if len(line) > 1 else [(line[0], line[0])]:
+        dx, dy = x1 - x0, y1 - y0
+        L2 = dx * dx + dy * dy
+        t = np.clip(((xs - x0) * dx + (ys - y0) * dy) / L2, 0, 1) if L2 > 0 else 0.0
+        best = np.minimum(best, np.hypot(xs - (x0 + t * dx), ys - (y0 + t * dy)))
+    return best
+
+
+def crown_check(src, pts, cum, s0, s1):
+    """Centreline check of the wet stretch s0..s1 (along-line distance) of the line `pts`:
+    {basis, overtop_ft, crown_ft, wse_ft, freeboard_ft, n_cut} at the least-freeboard point,
+    or None when no wet point has both a crown and a WSE."""
+    u = src["unit_m"]
+    ext = CROWN_EXTEND_M / u
+    s = np.arange(max(0.0, s0 - ext), min(cum[-1], s1 + ext) + 1e-9, CROWN_STEP_M / u)
+    if not len(s):
+        return None
+    xs, ys = np.interp(s, cum, pts[:, 0]), np.interp(s, cum, pts[:, 1])
+    z = src["dem"](xs, ys)
+    cut = np.zeros(len(s), bool)
+    for line, half in src["cuts"]:
+        cut |= _seg_dist(xs, ys, line) <= half
+    if cut.any():
+        # a bridge / notch opening: read the crown on the approaches (a straight deck)
+        good = ~cut & np.isfinite(z)
+        z = np.where(cut, np.interp(s, s[good], z[good]) if good.any() else np.nan, z)
+    wet = (s >= s0 - 1e-9) & (s <= s1 + 1e-9)
+    w = src["wse"](xs[wet], ys[wet])
+    fb = z[wet] - w
+    ok = np.isfinite(fb)
+    if not ok.any():
+        return None
+    k = int(np.flatnonzero(ok)[np.argmin(fb[ok])])
+    return {"basis": BASIS_CROWN, "overtop_ft": round(max(0.0, -float(fb[k])), 2),
+            "crown_ft": round(float(z[wet][k]), 2), "wse_ft": round(float(w[k]), 2),
+            "freeboard_ft": round(float(fb[k]), 2), "n_cut": int((cut & wet).sum())}
+
+
 # ------------------------------------------------------------- lines -------
 def _parts(g):
     if g.GetGeometryCount() and ogr.GT_Flatten(g.GetGeometryType()) in (ogr.wkbMultiLineString,):
@@ -265,8 +441,11 @@ def _parts(g):
     return [g]
 
 
-def wet_stretches(grid, g):
-    """Contiguous runs of a line with depth >= WET_FT: length, hmax, vmax and the hmax spot."""
+def wet_stretches(grid, g, crown=None, crown_note="", checked=None):
+    """Contiguous runs of a line with depth >= WET_FT: length, hmax, vmax and the hmax spot.
+    0.1.1: with a crown source (open_crown), a run counts only where the WSE is above the
+    centreline crown (hmax_ft = that overtopping; grid_hmax_ft the raster's); every wet run
+    goes to `checked` with its decision."""
     step = grid.cell / 2.0
     res = []
     for part in _parts(g):
@@ -286,11 +465,33 @@ def wet_stretches(grid, g):
         edges = np.flatnonzero(np.diff(np.concatenate([[0], wet.astype(int), [0]])))
         for a, b in zip(edges[::2], edges[1::2]):
             k = a + int(np.argmax(d[a:b]))
-            res.append({"x": float(xs[k]), "y": float(ys[k]),
-                        "length_ft": round(max(b - a, 1) * step * grid.unit_ft),
-                        "hmax_ft": round(float(d[a:b].max()), 2),
-                        "vmax_fps": round(float(v[a:b].max()), 2),
-                        "xs": xs[a:b], "ys": ys[a:b]})
+            st = {"x": float(xs[k]), "y": float(ys[k]),
+                  "length_ft": round(max(b - a, 1) * step * grid.unit_ft),
+                  "hmax_ft": round(float(d[a:b].max()), 2),
+                  "vmax_fps": round(float(v[a:b].max()), 2),
+                  "xs": xs[a:b], "ys": ys[a:b]}
+            st["grid_hmax_ft"] = st["hmax_ft"]
+            st.update({"depth_basis": BASIS_GRID, "crown_ft": None, "wse_ft": None,
+                       "freeboard_ft": None, "decision": "counted", "check_note": crown_note})
+            if crown is not None:
+                lo = 0.5 * (s[a] + s[a - 1]) if a > 0 else s[a]
+                hi = 0.5 * (s[b - 1] + s[b]) if b < len(s) else s[b - 1]
+                c = crown_check(crown, pts, cum, lo, hi)
+                if c is None:
+                    st["check_note"] = "no wet centreline point with both a 1 m crown and a WSE"
+                else:
+                    st.update({"depth_basis": c["basis"], "crown_ft": c["crown_ft"],
+                               "wse_ft": c["wse_ft"], "freeboard_ft": c["freeboard_ft"],
+                               "check_note": "bridge / notch cut read on its approaches"
+                               if c["n_cut"] else ""})
+                    if c["overtop_ft"] > 0:
+                        st["hmax_ft"] = c["overtop_ft"]
+                    else:
+                        st["decision"] = "skipped: WSE not above the centreline crown"
+            if checked is not None:
+                checked.append(st)
+            if st["decision"] == "counted":
+                res.append(st)
     return res
 
 
@@ -307,7 +508,7 @@ _INTERSTATE = re.compile(r"^(INTERSTATE|I[- ]?\d)", re.I)
 _HIGHWAY = re.compile(r"(HIGHWAY|HWY|^US[- ]?\d|^ND[- ]?\d|^STATE)", re.I)
 
 
-def roads(grid, bounds, roads_path, counts_path):
+def roads(grid, bounds, roads_path, counts_path, crown=None, crown_note="", checked=None):
     pad = AADT_SEARCH_FT
     lines = read_layer(roads_path, grid, bounds, ["FULL_NAME", "RoadClass"], pad_ft=pad)
     stations = []
@@ -327,7 +528,7 @@ def roads(grid, bounds, roads_path, counts_path):
         name, rc = _txt(a["FULL_NAME"]).upper(), _txt(a["RoadClass"])
         if rc in ("Walkway", "Trail", "Parking Lot", "Alley"):
             continue
-        for st in wet_stretches(grid, g):
+        for st in wet_stretches(grid, g, crown, crown_note, checked):
             same = [s for s in stations if name and s["road"] == name]
             stn, sd = _near(same, st["x"], st["y"], AADT_SEARCH_FT / grid.unit_ft)
             aadt = stn["aadt"] if stn else None
@@ -351,7 +552,7 @@ def roads(grid, bounds, roads_path, counts_path):
     return out
 
 
-def railroads(grid, bounds, rail_path, crossings_path):
+def railroads(grid, bounds, rail_path, crossings_path, crown=None, crown_note="", checked=None):
     lines = read_layer(rail_path, grid, bounds, ["RROWNER1", "SUBDIV", "PASSNGR", "NET"])
     xings = []
     for g, a in read_layer(crossings_path, grid, bounds,
@@ -367,7 +568,7 @@ def railroads(grid, bounds, rail_path, crossings_path):
         if _txt(a["NET"]).upper() in ("A", "R", "T"):
             continue                                    # abandoned / removed / trail
         owner = _txt(a["RROWNER1"]).upper()
-        for st in wet_stretches(grid, g):
+        for st in wet_stretches(grid, g, crown, crown_note, checked):
             near = [c for c in xings if c["rr"] == owner and c["trains"] > 0 and
                     math.hypot(c["x"] - st["x"], c["y"] - st["y"]) * grid.unit_ft <= RAIL_SEARCH_FT]
             trains = max((c["trains"] for c in near), default=None)
@@ -464,13 +665,18 @@ def _write_csv(path, rows, cols):
 
 S_COLS = ["address", "units", "occupancy", "place_type", "matched", "chart", "cells", "hmax_ft", "vmax_fps",
           "gov_depth_ft", "gov_vel_fps", "zone", "nd_class", "build_id"]
+CHECK_COLS = ["depth_basis", "grid_hmax_ft", "crown_ft", "wse_ft", "freeboard_ft", "check_note"]
 R_COLS = ["road", "road_class", "length_ft", "hmax_ft", "vmax_fps", "aadt", "aadt_year", "station",
-          "station_ft", "nd_class", "basis"]
-L_COLS = ["railroad", "subdivision", "length_ft", "hmax_ft", "vmax_fps", "trains_day", "nd_class", "basis"]
+          "station_ft", "nd_class", "basis"] + CHECK_COLS
+L_COLS = ["railroad", "subdivision", "length_ft", "hmax_ft", "vmax_fps", "trains_day", "nd_class",
+          "basis"] + CHECK_COLS
+K_COLS = ["line", "x", "y", "length_ft", "grid_hmax_ft", "decision", "depth_basis", "crown_ft", "wse_ft",
+          "freeboard_ft", "check_note"]
 
 
 def run(depth, velocity, out_dir, layers, metres=False, judgment_high=True, exclude_ag=True,
-        dam_name="", log=print):
+        dam_name="", log=print, wse=None, dem=None, dem_z_to_m=None, cut_structures=None,
+        crown_check=True):
     os.makedirs(out_dir, exist_ok=True)
     grid = Grid(depth, velocity, metres)
     bounds = grid.wet_bounds()
@@ -480,10 +686,17 @@ def run(depth, velocity, out_dir, layers, metres=False, judgment_high=True, excl
                                 exclude_ag)
     log("Structures inundated: {}{}".format(len(s), " (excluded {} FEMA agricultural out-building(s))"
                                             .format(excluded_ag) if excluded_ag else ""))
-    r = roads(grid, bounds, layers["roads"], layers["counts"])
-    log("Road stretches overtopped: {}".format(len(r)))
-    l = railroads(grid, bounds, layers["rail"], layers["crossings"])
-    log("Rail stretches inundated: {}".format(len(l)))
+    crown, cnote = (open_crown(grid, depth, wse, dem, dem_z_to_m, cut_structures, metres)
+                    if crown_check else (None, "turned off"))
+    log("Roads / rail: " + (cnote if crown is not None else
+                            "depth raster, no centreline crown check: " + cnote))
+    if crown is None:
+        cnote = "depth raster, no crown check: " + cnote
+    checked_r, checked_l = [], []
+    r = roads(grid, bounds, layers["roads"], layers["counts"], crown, cnote, checked_r)
+    log("Road stretches overtopped: {} (of {} wet)".format(len(r), len(checked_r)))
+    l = railroads(grid, bounds, layers["rail"], layers["crossings"], crown, cnote, checked_l)
+    log("Rail stretches inundated: {} (of {} wet)".format(len(l), len(checked_l)))
     cls, reasons, verify = classify(s, r, l, judgment_high)
     if excluded_ag:
         verify.append("{} inundated FEMA agricultural out-building(s) were excluded (5.2.1.1 "
@@ -504,12 +717,17 @@ def run(depth, velocity, out_dir, layers, metres=False, judgment_high=True, excl
     _write_csv(os.path.join(out_dir, "structures.csv"), s, S_COLS)
     _write_csv(os.path.join(out_dir, "roads.csv"), r, R_COLS)
     _write_csv(os.path.join(out_dir, "railroads.csv"), l, L_COLS)
+    _write_csv(os.path.join(out_dir, "line_crown_check.csv"),
+               [dict(x, line="road") for x in checked_r] + [dict(x, line="rail")
+                                                            for x in checked_l], K_COLS)
 
     md = ["# ND hazard class: **{}**".format(cls.upper()), "",
           "{}  ".format(dam_name) if dam_name else "",
           "Basis: {}. DamSafety Hazard Lite {}. Screening result; the engineer of record classifies the dam.".format(REF, VERSION),
           "", "| Class | Section | Reason |", "|---|---|---|"]
     md += ["| {} | {} | {} |".format(*x) for x in reasons] or ["| Low | 5.2 | nothing inundated |"]
+    md += ["", "Roads / rail overtopping: {} (every wet stretch and why: line_crown_check.csv)."
+           .format(cnote)]
     if verify:
         md += ["", "**Verify:**", ""] + ["- " + v for v in verify]
     md += ["", "## Structures (911 address points on their outline)", "",
@@ -531,4 +749,4 @@ def run(depth, velocity, out_dir, layers, metres=False, judgment_high=True, excl
         fh.write("\n".join(md) + "\n")
     log("ND hazard class: {}".format(cls))
     return {"class": cls, "reasons": reasons, "verify": verify, "structures": s, "roads": r, "rail": l,
-            "gpkg": gpkg}
+            "gpkg": gpkg, "line_checks": checked_r + checked_l, "crown_note": cnote}

@@ -8,6 +8,7 @@ The grid is EPSG:5070 with 10 m cells; the layers are EPSG:4326 like the offline
   cols 100-149            depth 1 ft,  0.5 ft/s house and mobile home: low zone
   cols 150-199            dry
 """
+import json
 import os
 import shutil
 import sys
@@ -206,6 +207,92 @@ def main():
         check("gpkg layers", [ds.GetLayer(i).GetName() for i in range(ds.GetLayerCount())] ==
               ["structures", "road_spots", "rail_spots"] and ds.GetLayerByName("structures").GetFeatureCount() == 6)
         ds = None
+
+        check("no WSE next to the depth raster: depth raster, noted",
+              "no crown check" in res.get("crown_note", "") and
+              all(x["depth_basis"] == core.BASIS_GRID for x in res["roads"] + res["rail"]),
+              res.get("crown_note"))
+
+        # 0.1.1 crown check (DWR-2801): a 2 m embankment under the BNSF line (row 180), the
+        # RRVW line (row 190) on the ground; WSE 301 m everywhere, ground 300 m, crest 302 m
+        wse = os.path.join(tmp, "wse.tif")
+        ds = gdal.GetDriverByName("GTiff").Create(wse, N, N, 1, gdal.GDT_Float32)
+        ds.SetGeoTransform((X0, CELL, 0, Y0, 0, -CELL))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).WriteArray(np.full((N, N), 301.0 / 0.3048, np.float32))
+        ds = None
+        dem = os.path.join(tmp, "dem_1m.tif")
+        top = Y0 - 1700.0                         # rows 170 - 200 of the 10 m grid, at 1 m
+        yy = top - (np.arange(300) + 0.5)
+        ycl = Y0 - 1800.0
+        z = 300.0 + 2.0 * np.clip((8.0 - np.abs(yy - ycl)) / 5.0, 0.0, 1.0)
+        zz = np.repeat(z[:, None], 2000, axis=1).astype(np.float32)
+        ds = gdal.GetDriverByName("GTiff").Create(dem, 2000, 300, 1, gdal.GDT_Float32)
+        ds.SetGeoTransform((X0, 1.0, 0, top, 0, -1.0))
+        ds.SetProjection(srs(5070).ExportToWkt())
+        ds.GetRasterBand(1).WriteArray(zz)
+        ds = None
+        os.makedirs(os.path.join(tmp, "p4"))
+        res4 = core.run(depth, vel, os.path.join(tmp, "out4"), write_pack(os.path.join(tmp, "p4")),
+                        log=lambda m: None, wse=wse, dem=dem, dem_z_to_m=1.0, cut_structures=[])
+        rl4 = {x["railroad"]: x for x in res4["rail"]}
+        check("crown: rail toe cells under the embankment not counted (BNSF)", "BNSF" not in rl4,
+              list(rl4))
+        bn = [x for x in res4["line_checks"] if x.get("railroad") is None and
+              x["decision"].startswith("skipped") and abs(x["y"] - ycl) < 1]
+        check("crown: BNSF stretch recorded, crown 302 m, freeboard 3.28 ft",
+              bn and abs(bn[0]["crown_ft"] - 302 / 0.3048) < 0.05
+              and abs(bn[0]["freeboard_ft"] - 3.28) < 0.05, bn and bn[0])
+        rv = rl4.get("RRVW", {})
+        check("crown: line on the ground counted with the centreline overtopping",
+              rv.get("depth_basis") == core.BASIS_CROWN and abs(rv.get("hmax_ft", 0) - 3.28) < 0.05
+              and rv.get("grid_hmax_ft") == 4.0, rv)
+        r4 = {x["road"]: x for x in res4["roads"]}
+        check("crown: road outside the 1 m DEM counted on the depth raster, noted",
+              r4.get("INTERSTATE 94", {}).get("hmax_ft") == 4.0 and "no wet centreline point"
+              in r4["INTERSTATE 94"].get("check_note", ""), r4.get("INTERSTATE 94"))
+        # a 10 m notch through the BNSF embankment at col 50 (a bridge opening)
+        zz[:, 495:506] = 299.0
+        ds = gdal.Open(dem, 1)
+        ds.GetRasterBand(1).WriteArray(zz)
+        ds = None
+        bx = X0 + 500.0
+        for tag, st, want in (("cut", [{"kind": "bridge", "width_m": 10.0,
+                                         "line": [[bx, ycl - 40], [bx, ycl + 40]]}], False),
+                              ("nocut", [], True)):
+            os.makedirs(os.path.join(tmp, "p" + tag))
+            r5 = core.run(depth, vel, os.path.join(tmp, "o" + tag),
+                          write_pack(os.path.join(tmp, "p" + tag)), log=lambda m: None, wse=wse,
+                          dem=dem, dem_z_to_m=1.0, cut_structures=st)
+            check("crown: notch under the BNSF line {} -> counted {}".format(tag, want),
+                  ("BNSF" in {x["railroad"] for x in r5["rail"]}) == want,
+                  [x["decision"] for x in r5["line_checks"]])
+        out4 = os.path.join(tmp, "out4")
+        with open(os.path.join(out4, "railroads.csv")) as fh:
+            head = fh.readline().strip().split(",")
+        check("railroads.csv: check columns", head[-6:] == core.CHECK_COLS, head)
+        check("line_crown_check.csv written", os.path.isfile(os.path.join(out4,
+                                                                          "line_crown_check.csv")))
+
+        # a run folder copied from another computer: run_report.json records a Windows DEM
+        # path; the DEM is found under the dam folder (Runner road_dem_of, #198 review)
+        mv = os.path.join(tmp, "moved")
+        os.makedirs(os.path.join(mv, "_breach_model"))
+        os.makedirs(os.path.join(mv, "dem"))
+        for a, b in ((depth, "Depth (Max).tif"), (wse, "WSE (Max).tif"),
+                     (dem, os.path.join("dem", "dem_1m.tif"))):
+            shutil.copy(a, os.path.join(mv, b))
+        with open(os.path.join(mv, "_breach_model", "run_report.json"), "w") as fh:
+            json.dump({"dem_z_to_m": 1.0, "settings": {"input_files": {
+                "DEM": "C:\\Users\\nick\\DWR-2801\\dem\\dem_1m.tif"}}}, fh)
+        mdepth = os.path.join(mv, "Depth (Max).tif")
+        csrc, cn = core.open_crown(core.Grid(mdepth, vel), mdepth)
+        check("crown: a Windows DEM path in a copied run folder found under the dam folder",
+              csrc is not None, cn)
+        os.remove(os.path.join(mv, "dem", "dem_1m.tif"))
+        csrc, cn = core.open_crown(core.Grid(mdepth, vel), mdepth)
+        check("crown: recorded DEM nowhere here -> no crown source, noted",
+              csrc is None and "no 1 m DEM" in cn, cn)
 
         os.makedirs(os.path.join(tmp, "p2"))
         res2 = core.run(depth, vel, os.path.join(tmp, "out2"), write_pack(os.path.join(tmp, "p2")),

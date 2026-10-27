@@ -69,6 +69,8 @@ GROUPS = [
          "Population at risk against the DSS-WISE HCOM table", False),
         (SUBDIR_QA + "/Model_Boundary_Check.csv", "Model extent check (flood at the raster edge)",
          False),
+        (SUBDIR_QA + "/Line_Crown_Check*.csv", "Road / rail stretches: wet grid cells against "
+         "the WSE - 1 m centreline crown, counted or not and why (2.18.65)", False),
         (SUBDIR_QA + "/Model_Gate.csv", "Model gate: checks of the flood model before the "
          "classification (v2.10)", False),
         (SUBDIR_QA + "/Class_Probability.csv", "Class probability over a model ensemble "
