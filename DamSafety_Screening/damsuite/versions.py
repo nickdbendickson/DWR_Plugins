@@ -39,8 +39,8 @@ REQUIRES = {
                                "hand-off refuses a breach raster as its own baseline from 2.9.1; "
                                "dam.json from 2.10.0; the REG_05.2026 Fig. 5.1 / 5.2 curve table "
                                "(the same curves as this plugin) from 2.11.0; the chain's "
-                               "cell-minimum Hazard import relies on Hazard choosing the newest "
-                               "current Runner re-export from 2.18.63"),
+                               "Hazard import adopts the Runner's terrain-basis rasters (or the "
+                               "newest current Runner re-export) from 2.18.63"),
     ("ndhazard", "ndbreach"): ("3.1.1", "3.7.0",
                                "hand-off passes the dam folder only from 3.1.1; the culvert tool's "
                                "NDDOT inlet / outlet elevations are checked against the LiDAR only "

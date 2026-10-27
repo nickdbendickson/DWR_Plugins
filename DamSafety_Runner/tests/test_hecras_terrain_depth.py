@@ -253,7 +253,8 @@ def hecras_reexport_from_a_synthetic_hdf_into_a_new_folder():
         out = os.path.dirname(rep["outputs"]["depth"])
         assert os.path.dirname(out) == os.path.join(run, "_hecras"), out
         assert os.path.basename(out).startswith("reexport_")
-        assert seen == [(terrain, "average")], seen         # the model terrain, not HEC's copy
+        # 3.10.92: sampled at the grid cell centres (near), the model terrain, not HEC's copy
+        assert seen == [(terrain, "near")], seen
         assert open(old_depth).read() == "the run's own raster"
         assert rep["depth_basis"] == hecras.DEPTH_BASIS_TERRAIN and rep["results_hdf"] == hdf
         d = np.load(os.path.join(out, "Depth (Max).npy"))
