@@ -54,12 +54,14 @@ REJECT = ("print('MESHERROR smallest triangle 44.00 m2 is below the 45.0 m2 gate
           "(0.45 x the smallest intended 100 m2)'); raise SystemExit(3)\n")
 
 
-def _run(mode, mesher_body=REJECT, timeout=None, **kw):
+def _run(mode, mesher_body=REJECT, timeout=None, gmsh=None, **kw):
     """anuga_model.run on the synthetic case with a stand-in mesher and worker."""
     d = tempfile.mkdtemp(prefix="gmshgate_")
     w, m = _scripts(d, mesher_body)
     dem, flooded, inflow, hy, st, roads = _case()
     st.mesher = mode
+    if gmsh is not None:
+        st.gmsh = gmsh
     if timeout:
         st.gmsh_timeout_s = timeout
     logs = []
@@ -336,8 +338,18 @@ def gmsh_run_passes_road_embankments_into_the_mesh_spec_and_mesh():
                    terrain_read=None)
     spec = json.load(open(os.path.join(d, "a", "gmsh_mesh_in.json")))
     shutil.rmtree(d, ignore_errors=True)
-    # the synthetic DEM there has no fill: no embankment line added
-    assert len(spec["lines"]) == 2, len(spec["lines"])       # refine line + inlet
+    # the synthetic DEM there has no fill: no embankment line added; 3.10.91: the road is
+    # in the wet area, so it is a crest line (anuga_crest) unless the crest hold is off
+    assert len(spec["lines"]) == 3, len(spec["lines"])       # refine line + inlet + crest
+    assert len(spec["crest_lines"]) == 1, spec.get("crest_lines")
+    # NDBREACH_ANUGA_CREST=off: the Settings read it into anuga_gmsh (gmsh_env_options)
+    off = AM.gmsh_env_options(None, {"NDBREACH_ANUGA_CREST": "OFF"})
+    e, _, d = _run("gmsh", gmsh=off, terrain_read=None,
+                   embankment_lines=[[[dem.x0 + 2000.0, dem.y0 - 900.0],
+                                      [dem.x0 + 2000.0, dem.y0 - 1500.0]]])
+    spec = json.load(open(os.path.join(d, "a", "gmsh_mesh_in.json")))
+    shutil.rmtree(d, ignore_errors=True)
+    assert len(spec["lines"]) == 2 and "crest_lines" not in spec, spec["lines"]
     if not HAVE_GMSH:
         print("skip: gmsh not importable")
         return
