@@ -33,6 +33,7 @@ Pure GDAL + numpy (no QGIS): the callers give the depth reader for the fallback 
 import json
 import math
 import os
+import re
 
 import numpy as np
 
@@ -148,6 +149,38 @@ def _unit_m(crs_wkt):
     return float(sr.GetLinearUnits() or 1.0)
 
 
+def relocate_in_folder(path, folder):
+    """`path` as recorded by another machine (or a moved run folder), found under the dam
+    folder: the longest tail of the recorded path (split at '/' and '\\', so a Windows path is
+    read on Linux / macOS too) that exists under the folder. None when none does. The Runner's
+    algorithms_ndhazard.relocate_in_folder (Runner 3.10.90, PR #198 review)."""
+    if not path or not folder:
+        return None
+    parts = [p for p in re.split(r"[\\/]+", str(path)) if p and not p.endswith(":")]
+    for i in range(len(parts)):
+        cand = os.path.join(folder, *parts[i:])
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def run_dem(rep, folder):
+    """(DEM path or None, note) of the run's own 1 m DEM (run_report.json
+    settings.input_files.DEM). When the recorded path does not exist here (the run folder was
+    copied from another computer, or moved), the DEM is looked for under the dam folder, as the
+    Runner's road_dem_of does, and the note says so."""
+    dem = ((rep.get("settings") or {}).get("input_files") or {}).get("DEM")
+    if not dem:
+        return None, ""
+    if os.path.exists(dem):
+        return dem, ""
+    found = relocate_in_folder(dem, folder)
+    if found is None:
+        return None, ""
+    return found, "the recorded DEM {} does not exist here: read {} (relative to the dam " \
+        "folder)".format(dem, found)
+
+
 def open_source(depth_path, crs_wkt, wse_path=None):
     """(CrownSource or None, note). The run is the Runner result next to the depth raster:
     WSE (Max).tif (or `wse_path`) and _breach_model/run_report.json's DEM / structures.json.
@@ -162,9 +195,10 @@ def open_source(depth_path, crs_wkt, wse_path=None):
     if not isinstance(rep, dict):
         return None, "no Runner run_report.json (_breach_model) next to the depth raster"
     st = rep.get("settings") or {}
-    dem = (st.get("input_files") or {}).get("DEM")
-    if not dem or not os.path.exists(dem):
-        return None, "the run's 1 m DEM ({}) is not on this computer".format(dem or "none recorded")
+    dem, dnote = run_dem(rep, folder)
+    if dem is None:
+        rec = (st.get("input_files") or {}).get("DEM")
+        return None, "the run's 1 m DEM ({}) is not on this computer".format(rec or "none recorded")
     z = dem_unit(rep)
     if z is None:
         return None, "run_report.json records no DEM elevation unit (a run before Runner 3.10.16)"
@@ -181,6 +215,7 @@ def open_source(depth_path, crs_wkt, wse_path=None):
                                        rep.get("work_crs"), crs_wkt)
     cell = st.get("cell_size_m") or 30.0
     cuts = RP.cut_corridors(structs, float(cell), unit_m=unit_m)
+    snote = "; ".join(n for n in (dnote, snote) if n)
     info = {"wse": wse, "dem": dem, "dem_z_to_m": z, "cuts": len(cuts),
             "structures_note": snote, "cell_m": cell}
     return CrownSource(wr, dr, cuts, unit_m, info), \

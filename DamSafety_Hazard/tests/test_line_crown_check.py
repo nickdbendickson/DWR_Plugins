@@ -197,6 +197,30 @@ def main():
               chk[0]["line_check"]["decision"] == CR.DECISION_SHALLOW,
               [c["line_check"]["decision"] for c in chk])
 
+        # 4b. a run folder copied from another computer: the recorded (Windows) DEM path does
+        # not exist here; the DEM is found under the dam folder (Runner road_dem_of, #198)
+        fold = make_run(os.path.join(tmp, "moved"), 303.0)
+        os.makedirs(os.path.join(fold, "terrain"))
+        shutil.move(os.path.join(fold, "dem_1m.tif"), os.path.join(fold, "terrain", "dem_1m.tif"))
+        rp = os.path.join(fold, "_breach_model", "run_report.json")
+        with open(rp) as f:
+            rep = json.load(f)
+        rep["settings"]["input_files"]["DEM"] = "D:\\Dams\\DWR-2801\\terrain\\dem_1m.tif"
+        with open(rp, "w") as f:
+            json.dump(rep, f)
+        src, note = CR.open_source(os.path.join(fold, "Depth (Max).tif"),
+                                   QgsCoordinateReferenceSystem(CRS).toWkt())
+        check("moved run: DEM found relative to the dam folder, noted",
+              src is not None and "relative to the dam folder" in note and
+              src.info["dem"] == os.path.join(fold, "terrain", "dem_1m.tif"), note)
+        if src is not None:
+            src.close()
+        os.remove(os.path.join(fold, "terrain", "dem_1m.tif"))
+        src, note = CR.open_source(os.path.join(fold, "Depth (Max).tif"),
+                                   QgsCoordinateReferenceSystem(CRS).toWkt())
+        check("moved run, DEM nowhere here: no crown source", src is None and
+              "not on this computer" in note, note)
+
         # 5. fallbacks: no WSE raster, no run_report -> depth raster, noted
         for tag, kw, want in (("nowse", {"wse_file": False}, "no 'WSE (Max).tif'"),
                               ("norep", {"report": False}, "no Runner run_report.json")):

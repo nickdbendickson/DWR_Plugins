@@ -325,6 +325,17 @@ def _dem_z_to_m(rep):
         if note.startswith("feet") else 1.0 if note.startswith(("metres", "meters")) else None
 
 
+def _relocate_in_folder(path, folder):
+    """`path` recorded on another computer, found under `folder`: the longest tail of the path
+    (split at '/' and '\\') that exists there, else None (Runner relocate_in_folder)."""
+    parts = [p for p in re.split(r"[\\/]+", str(path or "")) if p and not p.endswith(":")]
+    for i in range(len(parts)):
+        cand = os.path.join(folder, *parts[i:])
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
 def open_crown(grid, depth_path, wse=None, dem=None, dem_z_to_m=None, structures=None,
                metres=False):
     """(crown source dict or None, note). Unset inputs are taken from a Runner result next to
@@ -338,6 +349,10 @@ def open_crown(grid, depth_path, wse=None, dem=None, dem_z_to_m=None, structures
         return None, "no WSE (Max) raster"
     if not dem:
         dem = ((rep.get("settings") or {}).get("input_files") or {}).get("DEM")
+        if dem and not os.path.exists(dem):
+            # a run folder copied from another computer (or moved): the recorded DEM looked
+            # for under the dam folder, as the Runner's road_dem_of (Runner 3.10.90, #198)
+            dem = _relocate_in_folder(dem, folder) or dem
         if dem_z_to_m is None:
             dem_z_to_m = _dem_z_to_m(rep) if rep else None
     if not dem or not os.path.exists(dem):

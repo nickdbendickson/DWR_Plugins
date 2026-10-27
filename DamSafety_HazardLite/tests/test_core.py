@@ -8,6 +8,7 @@ The grid is EPSG:5070 with 10 m cells; the layers are EPSG:4326 like the offline
   cols 100-149            depth 1 ft,  0.5 ft/s house and mobile home: low zone
   cols 150-199            dry
 """
+import json
 import os
 import shutil
 import sys
@@ -272,6 +273,26 @@ def main():
         check("railroads.csv: check columns", head[-6:] == core.CHECK_COLS, head)
         check("line_crown_check.csv written", os.path.isfile(os.path.join(out4,
                                                                           "line_crown_check.csv")))
+
+        # a run folder copied from another computer: run_report.json records a Windows DEM
+        # path; the DEM is found under the dam folder (Runner road_dem_of, #198 review)
+        mv = os.path.join(tmp, "moved")
+        os.makedirs(os.path.join(mv, "_breach_model"))
+        os.makedirs(os.path.join(mv, "dem"))
+        for a, b in ((depth, "Depth (Max).tif"), (wse, "WSE (Max).tif"),
+                     (dem, os.path.join("dem", "dem_1m.tif"))):
+            shutil.copy(a, os.path.join(mv, b))
+        with open(os.path.join(mv, "_breach_model", "run_report.json"), "w") as fh:
+            json.dump({"dem_z_to_m": 1.0, "settings": {"input_files": {
+                "DEM": "C:\\Users\\nick\\DWR-2801\\dem\\dem_1m.tif"}}}, fh)
+        mdepth = os.path.join(mv, "Depth (Max).tif")
+        csrc, cn = core.open_crown(core.Grid(mdepth, vel), mdepth)
+        check("crown: a Windows DEM path in a copied run folder found under the dam folder",
+              csrc is not None, cn)
+        os.remove(os.path.join(mv, "dem", "dem_1m.tif"))
+        csrc, cn = core.open_crown(core.Grid(mdepth, vel), mdepth)
+        check("crown: recorded DEM nowhere here -> no crown source, noted",
+              csrc is None and "no 1 m DEM" in cn, cn)
 
         os.makedirs(os.path.join(tmp, "p2"))
         res2 = core.run(depth, vel, os.path.join(tmp, "out2"), write_pack(os.path.join(tmp, "p2")),
