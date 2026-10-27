@@ -1379,15 +1379,16 @@ def hecras_crest_offcrest_build_model_a_failed_snap_keeps_the_dam_point():
 # --- 3.10.87, DWR #195 audit round 4: other embankments at any level, the scans back to the
 # pool on their own read of the DEM, the valley's flow from no dam line, the pool behind the
 # line, small-skew junctions, parts of the embankment ------------------------------------------
-def _flat_floor(dams=(), roads=(), half=BIG, c=10.0, pool_z=None):
-    """A wide flat valley (100 ft, rising 0.5 % upstream = north, walls past |x| = 1,500 ft)
+def _flat_floor(dams=(), roads=(), half=BIG, c=10.0, pool_z=None, slope=0.005, water=()):
+    """A wide flat valley (100 ft, rising `slope` upstream = north, walls past |x| = 1,500 ft)
     with embankments (x0, y0, x1, y1, crest z, crest w: 3:1 faces, square 1:1 ends) and road
     embankments as _valley_with's (2:1 sides); the pool's water surface at pool_z north of
-    y = 0. Returns (z, x0, ytop, c)."""
+    y = 0, and ponds (x0, x1, y0, y1, z: water at z within that box). Returns (z, x0, ytop,
+    c)."""
     xs = np.arange(-half, half, c) + 0.5 * c
     ys = np.arange(half, -half, -c) - 0.5 * c
     X, Y = np.meshgrid(xs, ys)
-    z = 100.0 + 0.005 * Y + 0.2 * np.maximum(np.abs(X) - 1500.0, 0.0)
+    z = 100.0 + slope * Y + 0.2 * np.maximum(np.abs(X) - 1500.0, 0.0)
     for x0, y0, x1, y1, cz, cw in dams:
         a, b = np.array((x0, y0), float), np.array((x1, y1), float)
         t = (b - a) / np.hypot(*(b - a))
@@ -1401,6 +1402,8 @@ def _flat_floor(dams=(), roads=(), half=BIG, c=10.0, pool_z=None):
         z = np.maximum(z, rz - np.maximum(rd - 0.5 * rw, 0.0) / 2.0)
     if pool_z is not None:
         z = np.where(Y > 0.0, np.maximum(z, pool_z), z)
+    for x0, x1, y0, y1, wz in water:
+        z = np.where((X > x0) & (X < x1) & (Y > y0) & (Y < y1), np.maximum(z, wz), z)
     return z, -half, half, c
 
 
@@ -1444,6 +1447,14 @@ def hecras_crest_offcrest_tops_flat_runs_and_valley_axis():
     tops = hc._tops(hill, t, None, 15.0, 1.0, 160.0)
     assert [round(t0 / 50.0) * 50 for t0, _ in tops] == [600, 700], tops
     assert hc._tops(hill, t, None, 15.0, 10.0, 160.0) == [(700.0, 125.0)], tops
+    # against a higher hill (its slope meets the embankment's face half a foot below the top):
+    # a shoulder of the hill, not a top - though the ground beyond the hill is low
+    hill = np.maximum(z1, 130.0 - 0.26 * np.abs(t - 540.0))
+    assert all(abs(t0 - 600.0) > 15.0 for t0, _ in hc._tops(hill, t, None, 15.0, 1.0, 160.0))
+    # a far side that falls only 3 ft (a pool 3 ft below the crest): `small`, not `big`
+    shallow = np.maximum(z, np.where(t > 600.0, np.maximum(115.0, dam), dam))
+    assert len(hc._tops(shallow, t, None, 15.0, 1.0, 160.0)) == 1
+    assert hc._tops(shallow, t, None, 15.0, 4.0, 160.0) == []
     # its far side left out of the DEM: inside the DEM it falls, beyond it it is no ground
     zh = np.where(t > 607.0, np.nan, z1)
     assert len(hc._tops(zh, t, np.ones(len(t), bool), 15.0, 1.0, 160.0)) == 1
@@ -1473,7 +1484,12 @@ def hecras_crest_offcrest_evidence_round4():
     the DEM - one that ends short of the pool is no evidence, and no data beyond the read is
     not a pool left out of the DEM; a part of the embankment (less than half the crest length
     on record, or its crest going on at its level past its ends for longer than itself); the
-    angle the WARNING prints (at the breach, to the run's flow at the valley's scale)."""
+    angle the WARNING prints (at the breach, to the run's flow at the valley's scale); and at
+    the rules' edges: the valley's scale 45-60 degrees off; a flood only 1.2 times as long as
+    wide; a nearly level dry floor, which is no water; a pond behind a road, which is no pool
+    to stop at; a pool left out of a DEM that ends upstream (reached); a few flooded cells far
+    upstream (the scans go past them); a road 35 degrees off a short dam's axis (only up the
+    valley do the scans meet the dam)."""
     dam = [(450.0, 0.0), (0.0, 0.0), (-450.0, 0.0)]
     ok, ev = _evx(dam, _valley_with(TOP, half=BIG, grid=True), (30.0, 0.0))
     assert ok and ev["pool_frac"] == 0.0 and ev["upstream_unreached_frac"] == 0.0, ev
@@ -1567,6 +1583,56 @@ def hecras_crest_offcrest_evidence_round4():
                   (30.0, 0.0))
     assert not ok and ev["why"].startswith("its crest goes on at its level"), ev
     assert min(ev["crest_past_ends"]) >= 290.0, ev
+    # (j) the valley's scale 45-60 degrees off square: a levee along the valley with the dam
+    # point a third of the way along it
+    fl = _valley_with(TOP, half=BIG, roads=[(-200.0, -60.0, -200.0, -1500.0, TOP, 24.0)])
+    wl = _cells((_GX > -200.0) & (_GX < 400.0) & (_GY < -60.0) & (_GY > -1400.0))
+    ok, ev = _evx([(-200.0, -100.0), (-200.0, -500.0), (-200.0, -900.0)], fl, (-180.0, -300.0),
+                  wet=wl)
+    assert not ok and "at the valley's scale" in ev["why"], ev
+    assert 45.0 < ev["valley_scale"]["off_square_deg"] < 60.0, ev
+    # (k) a dry pool and a flood a little longer than wide (1.2), square to the line: no clear
+    # long axis; a nearly level dry floor (0.1 ft per 100 ft) is no water
+    sq = _cells((np.abs(_GX) < 500.0) & (_GY < -120.0) & (_GY > -1300.0))
+    ok, ev = _evx(dam, _valley_with(TOP, half=BIG, grid=True), (30.0, 0.0), wet=sq)
+    assert not ok and ev["why"].startswith("the DEM shows the pool") and \
+        1.0 < ev["valley_scale"]["axis_ratio"] < 1.5, ev
+    g = _flat_floor(dams=[(-500.0, 0.0, 500.0, 0.0, TOP, CW)], slope=0.001)
+    ok, ev = _evx([(450.0, 0.0), (-450.0, 0.0)], g, (30.0, 0.0), wet=wide)
+    assert not ok and ev["why"].startswith("the DEM shows the pool") and \
+        ev["pool_frac"] == 0.0, ev
+    # (l) a road with a pond 170 ft long behind it and the dam 500 ft upstream: the pond is no
+    # pool to stop at (along the normal the pool is a quarter of the scan long)
+    g = _flat_floor(dams=[(-600.0, 0.0, 600.0, 0.0, TOP, CW)],
+                    roads=[(-800.0, -500.0, 800.0, -500.0, TOP + 5.0, 24.0)],
+                    water=[(-1500.0, 1500.0, -488.0, -250.0, 99.0)])
+    ok, ev = _evx([(450.0, -500.0), (0.0, -500.0), (-450.0, -500.0)], g, (30.0, -500.0),
+                  top_used=TOP + 5.0, wet=_wet_below(-620.0, 300.0))
+    assert not ok and ev["why"].startswith("another embankment lies between it and the pool"), ev
+    assert ev["pool_frac"] == 1.0, ev
+    # (m) the pool left out of the DEM, which ends 1,200 ft upstream: the scans reach the pool
+    z, x0, yt, c = _valley_with(TOP, half=BIG, grid=True, nodata_above=TOP - 0.5)
+    ok, ev = _evx(dam, (np.where(yy > 1200.0, np.nan, z), x0, yt, c), (30.0, 0.0), far_box=box,
+                  inside=lambda q: q[:, 1] <= 1200.0)
+    assert ok and ev["upstream_unreached_frac"] == 0.0, ev
+    # (n) a few flooded cells far upstream (2 %, past the pool's water): the scans go past
+    # the flood's upstream end
+    w = np.vstack([_cells((np.abs(_GX) < 300.0) & (_GY < -120.0)),
+                   _cells((np.abs(_GX) < 100.0) & (_GY > 1600.0) & (_GY < 1700.0))])
+    ok, ev = _evx(dam, _valley_with(TOP, half=BIG, grid=True, pool_z=TOP - 8.0), (30.0, 0.0),
+                  wet=w)
+    assert ok and ev["upstream_scan"] > 1800.0, ev
+    # (o) a road 35 degrees off a short dam's axis 500 ft below it (the dam reads 12 ft low):
+    # along the road's normal the scans pass the dam's ends; up the valley they meet it
+    t = np.radians(35.0)
+    road = [(360.0 * np.cos(t), -500.0 + 360.0 * np.sin(t)), (0.0, -500.0),
+            (-360.0 * np.cos(t), -500.0 - 360.0 * np.sin(t))]
+    g = _flat_floor(dams=[(-150.0, 0.0, 150.0, 0.0, TOP - 12.0, CW)],
+                    roads=[(800.0 * np.cos(t), -500.0 + 800.0 * np.sin(t), -800.0 * np.cos(t),
+                            -500.0 - 800.0 * np.sin(t), TOP + 5.0, 24.0)])
+    ok, ev = _evx(road, g, (30.0 * np.cos(t), -500.0 + 30.0 * np.sin(t)), top_used=TOP + 5.0,
+                  wet=_cells((np.abs(_GX) < 250.0) & (_GY < -900.0)))
+    assert not ok and ev["why"].startswith("another embankment lies between it and the pool"), ev
     # (i) the WARNING's angle: at the breach of a bent line, to the direction from the dam
     # point to the centroid of all the flood (not from the line's middle, not its chord's)
     bent = [(450.0, -120.0), (0.0, 0.0), (-450.0, 0.0)]
@@ -1591,7 +1657,8 @@ def hecras_crest_offcrest_crest_dam_line_round4():
     line is the dam's; (c) the dam point on the upstream face with the axis guessed 40 degrees
     off: both the crest at the DEM's level and a start from the crest nearby are lines off the
     old rule - the first is used when evidence takes it, the second when evidence does not take
-    the first, and evidence is given the level the crest was traced at; (d) a 500 ft dam in a
+    the first, and evidence is given the level the crest was traced at, and the DEM as the
+    window crest_dam_line read inside it and a wider read outside (far, far_box); (d) a 500 ft dam in a
     valley rising 4 % upstream (its scans run past crest_dam_line's window, on their own read
     of the DEM): traced, and with the DEM ending 800 ft upstream (no pool before that) not;
     (e) two lows 0.6 ft apart in depth (less than max(1 ft, 4 % of H)): not clear."""
@@ -1643,7 +1710,25 @@ def hecras_crest_offcrest_crest_dam_line_round4():
         line, sc, rec = _cdl(d, g, (0.0, 40.0), (np.sin(a), -np.cos(a)), wet=_wet_below(-120.0))
         assert rec["off_rule"] == "snap" and len(calls) == 2, (rec["off_rule"], calls)
         assert np.abs(line[:, 1]).max() < 15.0, line
+        # (f) evidence's DEM is crest_dam_line's window inside it, the wider read outside
+        # (here 20 ft cells for 6,000 ft of dam on record, the window 10 ft)
+        got = {}
+
+        def keep(*a_, **k_):
+            got.update(k_)
+            return real_ev(*a_, **k_)
+        hc.evidence = keep
+        try:
+            _cdl(d, g, (0.0, 40.0), (np.sin(a), -np.cos(a)), wet=_wet_below(-120.0),
+                 options={"dam_length_ft": 6000.0})
+        except hc.CrestTraceError:
+            pass
         hc.evidence = real_ev
+        O = np.array((2744000.0, 495000.0))
+        q = np.array([(x_, y_) for x_ in (-200.0, 0.0, 200.0) for y_ in (-15.0, -12.0, 12.0)])
+        assert np.abs(got["far"](q + O) - _grid_sampler(*g)(q)).max() < 0.01, \
+            got["far"](q + O) - _grid_sampler(*g)(q)
+        assert got["far_box"][2] - got["far_box"][0] > 40000.0, got["far_box"]
         # (d)
         c = 10.0
         xs = np.arange(-3000.0, 3000.0, c) + 0.5 * c

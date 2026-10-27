@@ -63,15 +63,17 @@ FLOW_AGREE_DEG = 40.0
 FLOW_PATH_CONE_DEG = 60.0
 VALLEY_MIN_FT = 1000.0
 # ... another ridge or level top beside the line, another embankment between it and the pool
-# (looked for UPSTREAM_SCAN_FT, or 1.5 line lengths, upstream of it), crest-high ground behind
-# it, or another ridge between it and the flood, in at most this fraction of its sections
+# (looked for max(UPSTREAM_SCAN_FT, 1.5 line lengths) upstream of it and as far again where
+# the DEM goes on, back to the pool), crest-high ground behind it, or another ridge between it
+# and the flood, in at most this fraction of its sections
 PARALLEL_MAX_FRAC = 0.25
 UPSTREAM_SCAN_FT = 1500.0
 # ... and the walk of a trace off the old rule stops at a junction - where its heading turns
 # more than JUNCTION_TURN_DEG from the one it settled on while the crest also goes on straight
-# past the bend's footprint (back to where the turn began), or where a level top is wider than
+# past the bend's footprint (back to where the turn began), where a level top is wider than
 # JUNCTION_WIDE_FRAC x the crest width on record (another embankment joins the crest there:
-# the walk does not turn onto it)
+# the walk does not turn onto it), or where another crest at its level lies beside it (DWR
+# #195 audit round 4: a road at a small angle, see _walk)
 JUNCTION_TURN_DEG = 20.0
 JUNCTION_WIDE_FRAC = 1.5
 # ... and its breach goes at its deepest section, also looked for along normals turned up to
@@ -505,7 +507,6 @@ def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap, wide=None):
                             why = ("a junction: the crest turns {:.0f} degrees where it also "
                                    "goes on straight (another embankment crosses it)".format(turn))
                             # back to where the turn began
-                            del pts[i_ref + 1:]
                             last_ok, since_gap = min(last_ok, i_ref), None
                             break
                         t_ref, i_ref = tau_new.copy(), len(pts)       # a bend: on from here
@@ -523,7 +524,6 @@ def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap, wide=None):
                         k = [i for i in range(len(pts)) if abs(float(np.cross(
                             t_ref, pts[i] - Q))) <= 0.5 * sep_min]
                         if k:
-                            del pts[k[-1] + 1:]
                             last_ok, since_gap = min(last_ok, k[-1]), None
                         break
             tau = tau_new

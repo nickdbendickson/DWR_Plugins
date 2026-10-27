@@ -2298,8 +2298,10 @@ def crest_dam_line(dem_path, srs, zf, units, dam, params, P, d, n_left, cell, tc
     (trace's relaxed paths), else from crest-high ground nearby that the ground climbs to from
     the dam point (hecras_crest.snap, within the toe distance plus half the crest width) - and
     used only with positive evidence that it is the dam (hecras_crest.evidence: near the dam
-    point, the ground climbing to it, the flood below it, the flow path below the breach square
-    to it, no other crest-high ridge beside it). Otherwise the old rule's error is raised,
+    point, the ground climbing to it, the flood below it and the valley's flow square to it,
+    the pool behind it, no other embankment at any level beside, across, at the ends of it or
+    between it and the pool or the flood - its scans on a wider read of the DEM, this window
+    inside it -, not a part of the embankment). Otherwise the old rule's error is raised,
     saying what was tried."""
     from . import hecras_crest as hc
     axis = -np.asarray(n_left, float)                  # A -> B
