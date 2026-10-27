@@ -1209,6 +1209,8 @@ class Runner(object):
             self.record["skipped"] = True
             if not kit:
                 self.report_streams()
+            if not ctx.dry:
+                self.left_out(run)
             return 0
         self.log("mode: {} | work {} | results {}".format(mode, self.w, self.df))
         notes = []
@@ -1437,16 +1439,27 @@ class Runner(object):
                     return 7
                 self.mark("hazbatch")
         if not ctx.dry:
-            # stages left out of this command (--stages) that read one that ran again
-            stale = {s: why for s, why in self.states().items() if why is not None and
-                     s not in run and os.path.isfile(os.path.join(self.status, s + ".ok"))}
-            if stale:
-                self.log("out of date now, not run by this command (--stages): {}; a run with "
-                         "them (e.g. without --stages) runs them again".format("; ".join(
-                             "{} ({})".format(s, why) for s, why in stale.items())))
-                self.record["out_of_date"] = stale
+            self.left_out(run)
         self.record["finished"] = now()
         return 0
+
+    def left_out(self, run):
+        """Log the stages this command (--stages) leaves out that are not finished although
+        they ran before: one they read ran again, or a --redo set them aside."""
+        stale = {}
+        for s, why in self.states().items():
+            ok = os.path.join(self.status, s + ".ok")
+            if why is None or s in run:
+                continue
+            if os.path.isfile(ok):
+                stale[s] = why
+            elif glob.glob(glob.escape(ok) + ".redo_*"):
+                stale[s] = "a --redo set its status/{}.ok aside".format(s)
+        if stale:
+            self.log("not finished, not run by this command (--stages): {}; a run with them "
+                     "(e.g. without --stages) runs them again".format("; ".join(
+                         "{} ({})".format(s, why) for s, why in stale.items())))
+            self.record["out_of_date"] = stale
 
     def checksums(self):
         """sha256 of every file this dam's stages read: each rundam and hazclass input (every
