@@ -226,16 +226,33 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         # nothing extra is sent). CULVERTS, not STRUCTURES: BLD is this tool's buildings layer.
         # 0.17.22: ONE engine choice (FORCE_ANUGA folded in; the old parameter is kept hidden so
         # saved models and histories still work: True = option 1)
-        P(QgsProcessingParameterEnum("ENGINE", "Runner engine", ho.ENGINE_LABELS, defaultValue=0))
+        # 0.17.51: per-parameter help for the engine / culvert controls (issue #35)
+        eng = QgsProcessingParameterEnum("ENGINE", "Runner engine", ho.ENGINE_LABELS, defaultValue=0)
+        if hasattr(eng, "setHelp"):
+            eng.setHelp("Which models the Runner uses. LISFLOOD-FP only is the default (fast extent). "
+                        "LISFLOOD-FP then ANUGA uses ANUGA for the final results (the old Force ANUGA). "
+                        "LISFLOOD-FP then HEC-RAS 2D needs HEC-RAS 6.6 set up. Culverts and bridges "
+                        "are modelled only by ANUGA or HEC-RAS.")
+        P(eng)
         P(cm.hide(QgsProcessingParameterBoolean("FORCE_ANUGA", "(before 0.17.22) force ANUGA = Runner "
                                                 "engine 'LISFLOOD-FP then ANUGA'", defaultValue=False,
                                                 optional=True)))
-        P(QgsProcessingParameterBoolean("REFINE_NEAR", "Runner: near-dam refine (re-runs the stretch "
-                                        "near the dam on a finer grid with the FV1 full shallow-water "
-                                        "solver; slower)", defaultValue=False))
-        P(QgsProcessingParameterFeatureSource("CULVERTS", "Culverts and bridges for the Runner (lines drawn "
-                                              "upstream end first; modelled by ANUGA only)", [ln],
-                                              optional=True))
+        ref = QgsProcessingParameterBoolean("REFINE_NEAR", "Runner: near-dam refine (re-runs the stretch "
+                                            "near the dam on a finer grid with the FV1 full shallow-water "
+                                            "solver; slower)", defaultValue=False)
+        if hasattr(ref, "setHelp"):
+            ref.setHelp("After the main run, re-run the area next to the dam on a finer grid with the "
+                        "FV1 full shallow-water solver. Slower; improves the near-dam results.")
+        P(ref)
+        cul = QgsProcessingParameterFeatureSource("CULVERTS", "Culverts and bridges for the Runner (lines drawn "
+                                                  "upstream end first; modelled by ANUGA only)", [ln],
+                                                  optional=True)
+        if hasattr(cul, "setHelp"):
+            cul.setHelp("Lines of culverts and bridges (upstream end first). Sent as STRUCTURES to the "
+                        "Runner and modelled only when ANUGA or HEC-RAS is the final engine. With "
+                        "LISFLOOD-FP only they are logged as not used. Numeric fields (width, height, "
+                        "barrels) accept only numeric columns.")
+        P(cul)
         numeric = ("C_WIDTH", "C_HEIGHT", "C_BARRELS")
         for k, _rk, desc in ho.CULVERT_FIELDS:
             P(set_advanced(QgsProcessingParameterField(
