@@ -7,10 +7,11 @@ import numpy as np
 from qgis.core import (QgsProcessingException, QgsProcessingOutputFile,
                        QgsProcessingOutputFolder, QgsProcessingOutputString,
                        QgsProcessingParameterBoolean, QgsProcessingParameterEnum,
-                       QgsProcessingParameterExtent, QgsProcessingParameterRasterLayer,
-                       QgsProcessingParameterString)
+                       QgsProcessingParameterExtent, QgsProcessingParameterFeatureSource,
+                       QgsProcessingParameterRasterLayer, QgsProcessingParameterString)
 
 from .algorithms_tools import _ToolBase
+from .compat import SOURCE_LINE
 from .core import benchmark, gdal_io, hecras, hecras_model, hecras_package, workflow
 from .core.units import ARRIVAL_DEPTH_FT
 
@@ -48,6 +49,25 @@ def _depth_basis_default():
         return DEPTH_BASIS_KEYS.index(hecras.depth_basis())
     except (hecras.HecRasError, ValueError):
         return 0
+
+
+def dam_line_points(source):
+    """3.10.87: the vertices of the first line feature of a layer (its first part), as
+    [(x, y), ...] in the layer's CRS; [] when it has none."""
+    if source is None:
+        return []
+    for f in source.getFeatures():
+        g = f.geometry()
+        if g is None or g.isEmpty():
+            continue
+        if g.isMultipart():
+            parts = g.asMultiPolyline()
+            pts = parts[0] if parts else []
+        else:
+            pts = g.asPolyline()
+        if len(pts) >= 2:
+            return [(float(p.x()), float(p.y())) for p in pts]
+    return []
 
 
 class HecRasExportAlgorithm(_ToolBase):
@@ -104,6 +124,11 @@ class HecRasExportAlgorithm(_ToolBase):
             optional=True))
         self._num("BREACH_STATION_FT", "Breach centre, ft along the dam line from its first "
                   "end (empty = the deepest dam section)", optional=True, minimum=0.0)
+        # 3.10.87: a dam line of your own (the crest, drawn from the left end looking
+        # downstream), when the trace from the DEM misses it
+        self.addParameter(QgsProcessingParameterFeatureSource(
+            "DAM_LINE", "Dam line (a line along the crest; empty = traced from the DEM)",
+            [SOURCE_LINE], optional=True))
         # 3.10.56: culverts and bridges of another run (the ANUGA run of the same dam)
         self._file("STRUCTURES_FROM", "Culverts and bridges from another run (its dam folder, "
                    "e.g. the ANUGA run; empty = this run's own)", folder=True)
@@ -158,6 +183,12 @@ class HecRasExportAlgorithm(_ToolBase):
             if parameters.get("BREACH_STATION_FT") not in (None, ""):
                 opts["breach_station_ft"] = self.parameterAsDouble(parameters,
                                                                    "BREACH_STATION_FT", context)
+            if parameters.get("DAM_LINE"):
+                src = self.parameterAsSource(parameters, "DAM_LINE", context)
+                line = dam_line_points(src)
+                if line:
+                    opts["dam_line_xy"] = line
+                    opts["dam_line_crs"] = src.sourceCrs().toWkt()
             sfrom = self._fileparam(parameters, "STRUCTURES_FROM", context) or None
             if sfrom:
                 opts["structures_from"] = sfrom

@@ -249,6 +249,27 @@ def test_qt6_metadata():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_mac_lisflood_patch_gate():
+    problems = []                                 # the real tree: the 8.3 diff carries every edit
+    C.check_mac_lisflood_patch(problems)
+    assert problems == [], problems
+    root = tempfile.mkdtemp(prefix="mac_patch_")
+    try:
+        real = open(os.path.join(C.ROOT, C.RUNNER_PATCHER), encoding="utf-8").read()
+        _w(root, C.MAC_PATCH, open(os.path.join(C.ROOT, C.MAC_PATCH), encoding="utf-8").read())
+        # a new Runner edit that the Mac diff does not carry
+        _w(root, C.RUNNER_PATCHER, real.replace("EDITS = [", 'EDITS = [\n    ("pars.cpp", "a;", '
+                                                '"a;\\n\\tnew_keyword_x;", "new_keyword_x"),', 1))
+        C.check_mac_lisflood_patch(problems, root)
+        assert len(problems) == 1 and "new_keyword_x" in problems[0], problems
+        problems[:] = []                          # no Mac package: nothing to check
+        os.remove(os.path.join(root, C.MAC_PATCH))
+        C.check_mac_lisflood_patch(problems, root)
+        assert problems == [], problems
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main():
     fails = 0
     for name, fn in sorted(globals().items()):

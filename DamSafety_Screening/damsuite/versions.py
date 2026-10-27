@@ -32,7 +32,7 @@ PLUGINS = {"ndhazard": "DamSafety_Hazard",
 LABELS = {"ndhazard": "DamSafety Hazard",
           "ndbreach": "DamSafety Runner",
           "ndscreen": "DamSafety Screening"}
-RELEASE = {"ndhazard": "2.18.64", "ndbreach": "3.10.89", "ndscreen": "0.17.50"}
+RELEASE = {"ndhazard": "2.18.64", "ndbreach": "3.10.87", "ndscreen": "0.17.49"}
 # minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
 REQUIRES = {
     ("ndbreach", "ndhazard"): ("2.9.1", "2.18.63",
@@ -46,12 +46,6 @@ REQUIRES = {
                                "NDDOT inlet / outlet elevations are checked against the LiDAR only "
                                "from 3.6.0 (older Runners use them as given); a proposed embankment "
                                "in dam.json is inserted on the grid only from 3.7.0"),
-    ("ndbreach", "ndscreen"): ("0", "0.17.50",
-                               "the Runner window's Download a DEM opens Screening's Download DEM; "
-                               "from 0.17.50 it records the elevation unit that the Runner's "
-                               "'Detect from the raster' reads, converts a feet fallback DEM under "
-                               "the 1 m lidar tiles to metres, and no longer takes metre ND DWR "
-                               "DEM_Imagine tiles for feet grids in a folder named gft*"),
     ("ndscreen", "ndbreach"): ("3.1.0", "3.7.0",
                                "tool 7b parameters; dam.json from 3.2.0; a proposed embankment is "
                                "inserted on the grid the Runner reads only from 3.7.0"),
