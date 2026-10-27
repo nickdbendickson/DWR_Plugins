@@ -17,16 +17,21 @@ Dams/NickReview/screen_maxstor) is written, as on the box: without it the Runner
 dam with its default crest length instead of the record's dam_length_ft. --allow-no-record
 runs it anyway (and says so in the log and the manifest).
 
-Finished stages are skipped. --redo runs again, in the same command, the stages in --stages
-that apply to the dam and every later stage that reads their results (READS below: precheck
-is a report no later stage reads); the other stages keep their results. prepare and
-structures do not apply to the kit dams (unless --no-kits), so '--redo --stages prepare'
-changes nothing for them. A --redo command is a session (<out>/redo_sessions/): run the same
-command again after a stop and it goes on where it stopped, without redoing the dams it
-already redid; a plain run while one is unfinished says so and prints its command.
-status/*.ok records the mode (kit or prepare) a stage ran in: a dam whose finished stages ran
-in the other mode is not run (the two would mix) unless --redo is given, which then runs every
-stage of the dam again.
+Finished stages are skipped. A stage is finished when its status/<stage>.ok is there, ran in
+the dam's mode, and is newer than the .ok of every stage it reads (READS below), each of them
+finished too: a stage that ran again makes the later stages that read it unfinished, and a
+stage never runs on unfinished results (an unfinished stage it reads runs first, in the same
+command). --redo runs again, in the same command, the stages in --stages that apply to the
+dam and every later stage that reads their results (precheck is a report no later stage
+reads); the other stages keep their results. prepare and structures do not apply to the kit
+dams (unless --no-kits), so '--redo --stages prepare' changes nothing for them. A --redo
+command is a session (<out>/redo_sessions/): run the same command again after a stop and it
+goes on where it stopped, without redoing the dams it already redid (it says so; to start a
+new redo instead, delete the session's file, which it prints); a failed precheck does not
+keep it open (it is listed as a problem). A plain run while one is unfinished says so and
+prints its command. status/*.ok records the mode (kit or prepare) a stage ran in: a dam whose
+finished stages ran in the other mode is not run (the two would mix) unless --redo is given,
+which then runs every stage of the dam again.
 
 On the box (no installer), --list-data runs without the solvers and plugins, with the box's
 QGIS python (any python with GDAL):
@@ -1742,13 +1747,14 @@ def main():
                     "that reads their results (precheck: only precheck; prepare and structures "
                     "do not apply to DWR-2801/2865/3034: they use the box preparation unless "
                     "--no-kits). Stopped, the same command goes on where it stopped "
-                    "(<out>/redo_sessions/)")
+                    "(<out>/redo_sessions/; delete the session's file to start a new redo)")
     ap.add_argument("--offline", action="store_true", help="NHD flowlines from the suite pack "
                     "instead of downloading 3DHP")
     ap.add_argument("--no-kits", action="store_true", help="prepare 2801/2865/3034 here too")
     ap.add_argument("--allow-no-record", action="store_true", help="run rundam even when the "
                     "Screening 7b record could not be written (results can differ from the box)")
-    ap.add_argument("--stages", default=",".join(STAGES))
+    ap.add_argument("--stages", default=",".join(STAGES), help="the stages to run (an unfinished "
+                    "stage one of them reads runs first)")
     ap.add_argument("--pack", default="", help="offline pack .sqlite (default: from --data)")
     # required, except with --list-data (a dry run that reads only the data files)
     ap.add_argument("--plugins", default="", help="the profile's python/plugins folder")

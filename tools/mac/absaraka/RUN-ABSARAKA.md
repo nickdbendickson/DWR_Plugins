@@ -33,8 +33,9 @@ versions, the settings and the sha256 of every file the steps read: each rundam 
 hazclass input (every file of a `;;` list), the DEM VRTs and the 1 m tiles that touch the
 dam's area, the box kit's `rundam.json` and `hazclass.json`, the Screening 7b inputs, the
 dam's `dam.json` as rundam read it, the suite settings CSV and the LISFLOOD-FP binary.
-Run it again and finished stages are skipped (a stopped `--redo` command too: run it again
-and it goes on where it stopped). `--redo` runs them again in the same command; with
+Run it again and finished stages are skipped (a stage that ran again makes the later stages
+that read it run again). A stopped `--redo` command goes on too: run it again and it goes on
+where it stopped, and says so. `--redo` runs them again in the same command; with
 `--stages`, the named stages that apply and every later stage that reads their results (for
 this dam the stages are precheck, record, rundam, hazclass, hazbatch; prepare and structures
 do not apply, the box prepared it, so `--redo --stages prepare` changes nothing). For
@@ -123,7 +124,7 @@ Processing ▸ **DamSafety Runner** ▸ **Run breach model for one dam**.
 | DEM elevation units | **Meters** (step 3b) |
 | Structures | `<DATA>/culvert_precheck_20261024/dwr2801/structures_2801_with9122221_invfix2.gpkg`, layer `runner_culverts` |
 | Structure fields | kind, span_ft, rise_ft, barrels, shape, invert_up, invert_dn, name |
-| Culvert inventory | `<DATA>/culvert_sources/research/nddot_centerline_pipes.gpkg`, `<DATA>/culvert_sources/nddot_bridge_inventory.gpkg`, `<DATA>/culvert_sources/ntad_nbi.gpkg`, match 75 m, burn matched off |
+| Culvert inventory | **one text field** (Advanced parameters: *Culvert guesses: inventory GeoPackages that size them, separated by ;;*) holding the three files `nddot_centerline_pipes.gpkg` (in `research/`), `nddot_bridge_inventory.gpkg` and `ntad_nbi.gpkg` of `<DATA>/culvert_sources/` as **absolute paths** (`/Users/<you>/...`; a `~` path is not found) separated by **`;;`** (not commas): paste the line the command below the table prints. Then match 75 m, burn matched off |
 | Receptors | `pack_NSI_structures_2801`, `pack_ND_roads_NG911_2801`, `pack_NARN_rail_lines_2801` (in `<DATA>/nickreview_rerun_20261023/dwr2801`) |
 | Water mask | `<DATA>/ND_Dam_Suite_Pack/hydro/NHD_waterbodies.gpkg` |
 | Engine | Models **LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)**, **Force ANUGA** on, cell 30 m, Manning 0.06 |
@@ -133,6 +134,18 @@ Processing ▸ **DamSafety Runner** ▸ **Run breach model for one dam**.
 | Work CRS / ANUGA buffer | EPSG:5070 / 2000 m |
 | Threads | 8 (the box used 6; threads do not change the results) |
 | Keep files / products | on / on |
+
+The *Culvert inventory* text, exactly (run this in Terminal and paste what it prints):
+
+```bash
+D="$HOME/dwr-dam-suite/NickReview_data/culvert_sources"
+echo "$D/research/nddot_centerline_pipes.gpkg;;$D/nddot_bridge_inventory.gpkg;;$D/ntad_nbi.gpkg"
+```
+
+It prints one line of this form (with your user name for `<you>`):
+`/Users/<you>/dwr-dam-suite/NickReview_data/culvert_sources/research/nddot_centerline_pipes.gpkg;;/Users/<you>/dwr-dam-suite/NickReview_data/culvert_sources/nddot_bridge_inventory.gpkg;;/Users/<you>/dwr-dam-suite/NickReview_data/culvert_sources/ntad_nbi.gpkg`.
+A path the Runner cannot open is skipped with only a note in the log ("Culvert inventory
+... not read"), and the culvert guesses are then sized differently from the box run.
 
 Then **Hazard class** (DAM_FOLDER = the DWR-2801 results folder): lethality 0,
 wet 0.1 ft, unknown AADT 1, unknown trains 1, passenger codes A,B,C, with the

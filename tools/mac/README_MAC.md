@@ -108,13 +108,21 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
   `absaraka/grok_settings_DWR-2801.json`).
 * **Resume:** stop with Ctrl-C any time (the log, the summary and the manifest of the
   dams so far are kept); run the same command again and finished stages are skipped.
-  That is true for a `--redo` command too: it keeps a record of its dams in
-  `redo_sessions/` (in the results folder), and run again it goes on with the dam it
-  stopped in and the dams it had not reached, without redoing the dams it already redid
-  (once every dam of it is redone, the same command starts a new redo). A run without
-  `--redo` while a `--redo` is unfinished warns at the start and the end (the dams that
-  `--redo` has not reached keep their earlier results) and prints the command that
-  finishes it (to drop an unfinished `--redo` instead, delete its file in `redo_sessions/`).
+  A stage counts as finished when its `work/<dam>/status/<stage>.ok` is there and is newer
+  than the `.ok` of every stage whose results it reads (the table below), so a stage that
+  ran again makes the later ones run again too, and no stage runs on missing or older
+  results: with `--stages`, a stage they read that is not finished runs first.
+* A stopped **`--redo`** command goes on too: it keeps a record of its dams in
+  `redo_sessions/` (in the results folder), and the same command run again goes on with
+  the dam it stopped in and the dams it had not reached, without redoing the dams it
+  already redid. It says so at the start and in the summary (with the date that `--redo`
+  started); to start a new `--redo` of every dam instead, delete that file first (the run
+  prints the `rm` command). Once every dam of it is redone (a failed precheck, a report,
+  counts as done and is listed as a problem), the same command starts a new `--redo`. A run
+  without `--redo` while a `--redo` is unfinished warns at the start and the end (the dams
+  that `--redo` has not reached keep their earlier results) and prints the command that
+  finishes it (to drop it instead, delete its file in `redo_sessions/`). Finished ones move
+  to `redo_sessions/closed/` (the last 20 are kept).
 * **`--redo`** runs finished stages again, in the same command: the stages in `--stages`
   (all of them by default) that apply to the dam, and every later stage that reads their
   results. The others keep their results. The stages run in the order prepare, structures,
@@ -128,12 +136,13 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
   | record | rundam, hazclass, hazbatch |
   | rundam | hazclass, hazbatch |
   | hazclass | hazbatch |
+  | hazbatch | nothing |
 
   prepare and structures do not apply to DWR-2801, DWR-2865 and DWR-3034 (they use the box
   preparation), so for them `--redo --stages prepare` changes nothing. A prepare step that
-  runs again extracts and downloads its inputs (3DHP streams too) again. To run one
-  finished stage again and nothing after it, delete its `work/<dam>/status/<stage>.ok`
-  and run with `--stages <stage>`, without `--redo`.
+  runs again extracts and downloads its inputs (3DHP streams too) again. Only precheck and
+  hazbatch can run again without the stages after them: any other stage that runs again
+  makes the later stages that read it run again in the next run that includes them.
 * `--no-kits` (prepare DWR-2801, DWR-2865 and DWR-3034 here instead of using the box
   preparation) on a dam that finished with its box preparation, or the reverse, does not
   run it: `status/*.ok` records the mode each stage ran in, and the two are never mixed.
@@ -185,10 +194,11 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
 * DWR-3161 (flagged road-fill structure) and DWR-4593 (breached) are not in the list.
 * If USGS 3DHP streams can't be downloaded (or the service answers an error or no
   flowlines), the script falls back to the NHD flowlines. Every later run of that dam says
-  so in its log and manifest (also a run that skips it as finished).
-  `--redo --stages prepare --dam <ID>` tries 3DHP again for that dam, and then every later
-  stage of it runs again too (structures, precheck, rundam, hazclass, hazbatch: hours).
-  With `--offline` it uses NHD again.
+  so in its log and manifest (also a run that skips it as finished), with the command that
+  tries 3DHP again for that dam: `--redo --stages prepare --dam <ID>` (plus `--no-kits` for
+  DWR-2801, DWR-2865 or DWR-3034 prepared here, and your `--data`/`--out`); then every
+  later stage of it runs again too (structures, precheck, rundam, hazclass, hazbatch:
+  hours). With `--offline` it uses NHD again.
 * In QGIS, set *Crest length* as `absaraka/RUN-ABSARAKA.md` step 3c says: an empty crest
   length with no `dam_length_ft` in the Dams folder's `dam.json` is the Runner's 400 ft
   default, not the length the box runs used.
