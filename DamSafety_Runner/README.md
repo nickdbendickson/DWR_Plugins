@@ -308,9 +308,11 @@ All optional layers, read only within about 45 mi of the dam:
   leaves it to the embankment Hazard placed it on). Its cut stays where the inventory put it unless the
   evidence says that place is solid embankment: no opening in the DEM there, no channel line,
   no channel in the ground beside the road (low ground that runs along the road - a ditch, a
-  borrow area, a pond at the toe - is not one; and low ground across the road gives way to a
-  clearly better crossing: an opening at least 3 m and twice as deep, at least half the span
-  wide, its bed as low, with a channel line there and none at the cut), the road not dipping there (its low point, a sag
+  borrow area, a pond at the toe - is not one, and such a cut moves to a clearly better
+  crossing: an opening at least 3 m and twice as deep, at least half the span wide, its bed as
+  low; low ground across the road at the cut always keeps it, since a deck in the LiDAR hides
+  the opening's depth and `CHANNEL_LINES` is often only the clipped main stem, so a channel
+  line elsewhere and none at the cut is no evidence), the road not dipping there (its low point, a sag
   or a wide opening; on a road sagging into a coulee a cut on the approach grade is not the
   low point and does not count), DEM data there and a road line that does not end near it. Only then
   does it move, to the NEAREST crossing along the road within `NDBREACH_BRIDGE_SNAP_M`
