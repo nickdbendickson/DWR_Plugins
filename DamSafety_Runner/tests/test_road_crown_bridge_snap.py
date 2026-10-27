@@ -115,9 +115,17 @@ def bridge_snap_moves_a_misplaced_nbi_cut_to_the_road_opening_and_logs_the_dista
     assert "[-35.0, 0.0]" in w and str(r["new_xy"]) in w, w
     assert r["verified"], r
     assert t.reads                                            # read the DEM, nothing else
-    # snapped again (a re-run on the moved line): kept, verified
+    # snapped again (a sub-run sharing the moved structure, PR #198 review finding 3): the
+    # move is reported from the original location, not 'kept, verified' at the moved cut
     rows2, _n, warns2 = bs.snap_bridges([b], [ROAD], t.read, [], radius_m=300.0)
-    assert rows2[0]["method"] == "kept" and rows2[0]["verified"] and not warns2, rows2
+    assert rows2[0]["method"] == "dem_opening" and rows2[0]["snapped_earlier"], rows2
+    assert rows2[0]["old_xy"] == [-35.0, 0.0] and rows2[0]["moved_m"] == r["moved_m"], rows2
+    assert len(warns2) == 1 and "[-35.0, 0.0]" in warns2[0], warns2
+    # a new structure on the moved line (no snap_from) is judged: kept, verified
+    from nd_breach_runner.core import structures as sm
+    b2 = sm.Structure(kind=sm.KIND_BRIDGE, line=b.line.copy(), width_m=30.0, name="B2")
+    rows3, _n, warns3 = bs.snap_bridges([b2], [ROAD], t.read, [], radius_m=300.0)
+    assert rows3[0]["method"] == "kept" and rows3[0]["verified"] and not warns3, rows3
 
 
 @test
@@ -1124,6 +1132,160 @@ def cli_runs_record_road_and_rail_lines_and_the_dem():
         assert os.path.samefile(st.input_files["DEM"], os.path.join(d, "dem.asc")), \
             st.input_files
         assert "DEM" in st.as_dict()["input_files"]
+
+
+# ------------------------------------------------------------------ PR #198 review (QGIS Dev)
+def _coulee(X, Y, grade):
+    """A road (y = 0, crown 100 m) sagging into a coulee: the crown falls `grade` each way to
+    the creek at x = 155, where the bare earth under the deck (no deck in the LiDAR) is open
+    for 15 m each side (pr198_scratch/repro_sag.py)."""
+    z = _valley(X, Y)
+    on = np.abs(Y) <= 10.0
+    z = np.where(on, 100.0 + grade * np.abs(X - 155.0), z)
+    return np.where(on & (np.abs(X - 155.0) <= 15.0), _valley(X, Y), z)
+
+
+@test
+def bridge_snap_r1_a_cut_on_the_approach_grade_of_a_sagging_road_moves_to_the_opening():
+    """PR #198 review, finding 1: on a road sagging into a coulee a misplaced cut on the near
+    slope has the far (creek) side of the road higher than itself, but it is not the road's
+    low point - the road keeps falling to the real opening. The dip rule no longer keeps it:
+    grades 1-4 %, cuts 40-80 m off all move to the opening, and the road crown then reads dry
+    (main 3.10.90 draft: kept, 21.3 ft of overtopping at 2 % / 60 m)."""
+    from nd_breach_runner.core import road_profile as rp
+    for grade in (0.01, 0.02, 0.03, 0.04):
+        for off in (40, 50, 60, 70, 80):
+            fn = lambda X, Y, g=grade: _coulee(X, Y, g)                      # noqa: E731
+            b = _bridge(155.0 - off, "SAG")
+            rows, notes, warns = _snap([b], fn)
+            r = rows[0]
+            assert r["method"] == "dem_opening" and r["verified"], (grade, off, r)
+            assert abs(r["moved_m"] - off) <= 2.0, (grade, off, r)
+            assert abs(float(np.mean(np.asarray(b.line)[:, 0])) - 155.0) <= 2.0, (grade, off)
+            if grade == 0.02 and off == 60:
+                ground = lambda xy: fn(np.asarray(xy)[:, 0], np.asarray(xy)[:, 1])  # noqa
+                wse = lambda xy: np.full(len(xy), 95.0 / FT)                         # noqa
+                got = rp.road_crown_depth([ROAD], wse, ground,
+                                          cuts=rp.cut_corridors([b], 10.0))
+                assert got["depth_ft"] == 0.0 and got["freeboard_ft"] > 16.0, got
+                assert got["n_opening_unmatched"] == 0, got
+    # the road's real low point (a deck in the LiDAR at the bottom of a sag) is still kept,
+    # with an open bridge on another creek inside the grade line
+    b = _bridge(0.0, "LOW POINT")
+    rows, notes, warns = _snap([b], _sag_valley)
+    assert rows[0]["method"] == "kept" and "dips" in rows[0]["note"], rows[0]
+
+
+@test
+def bridge_snap_r2_streets_named_after_the_railway_are_not_rail():
+    """PR #198 review, finding 2: a street word after the rail word names a street
+    ('RAILROAD AVE', 'Soo Street'); a compound road / rail name ('CO RD 12 / BNSF RY') does not
+    decide - the bridge falls to the embankment Hazard placed it on, else unknown."""
+    from nd_breach_runner.core import bridge_snap as bs
+    fk, nk = bs.facility_kind, bs.name_kind
+    for street in ("RAILROAD AVE", "Railroad Avenue", "Soo Street", "SOO LINE RD",
+                   "N RAILROAD ST", "Railway St.", "RR DR", "BNSF Blvd", "Railroad Ln",
+                   "Rail Way", "RAILROAD ROAD", "RAILWAY DRIVE"):
+        assert nk(street) == "" and fk({"carried": street}) == "", street
+        assert fk({"facility_carried_007": street, "embankment": "road"}) == "road", street
+    for rail in ("BNSF RAILWAY", "BNSF RY", "SOO LINE RAILROAD", "CPKC", "RR", "Amtrak",
+                 "RAILROAD", "DMVW RR"):
+        assert nk(rail) == "rail" and fk({"carried": rail, "embankment": "road"}) == "rail", \
+            rail
+    # compound names: undecided by the name; the embankment (or nothing) decides
+    for both in ("CO RD 12 / BNSF RY", "ND 25 OVER BNSF", "BNSF RY & 1ST AVE",
+                 "RAILROAD AVE / BNSF RY", "US 2, BNSF"):
+        assert nk(both) == "", both
+        assert fk({"carried": both}) == "", both
+        assert fk({"carried": both, "embankment": "rail"}) == "rail", both
+        assert fk({"carried": both, "embankment": "road"}) == "road", both
+    # the NBI / NDDOT service code still wins over any name
+    assert fk({"carried": "RAILROAD AVE", "service_on_042a": "2"}) == "rail"
+    assert fk({"carried": "BNSF RY", "service_on_042a": "1"}) == "road"
+
+
+@test
+def bridge_snap_r3_a_sub_run_sharing_the_moved_bridge_reports_the_move():
+    """PR #198 review, finding 3: _move edits the structure in place and sub-runs
+    (sensitivity, probabilistic, cascade, nested, refine) share it through shallow copies. The
+    original location is kept on the structure (snap_from) and a second pass reports the move
+    from it - never 'kept, verified' at the moved cut - and does not judge the bridge again."""
+    import copy
+    import types
+    from nd_breach_runner.core import bridge_snap as bs
+    from nd_breach_runner.core import structures as sm
+    fn = lambda X, Y: _valley(X, Y, creeks=(155.0,), openings=((155.0, 15.0),),    # noqa
+                              slope=0.01)
+    b = _bridge(-35.0, "0025008224")
+    orig = b.line.copy()
+    st = types.SimpleNamespace(structures=[b], road_lines=[ROAD], rail_lines=[], edits=None)
+    terr = _Terrain(fn)
+    e1, _n1, w1, moved1 = bs.check_run(st, terr.read)
+    r1 = e1["bridges"][0]
+    assert moved1 and r1["method"] == "dem_opening" and r1["moved_m"] > 150.0, r1
+    f = b.snap_from
+    assert f["xy"] == r1["old_xy"] and np.allclose(f["line"], orig), f
+    assert f["moved_m"] == r1["moved_m"] and f["to_xy"] == r1["new_xy"], f
+    assert "snap_from" not in b.to_dict() and b.invert_up_m is None
+    moved_line = np.asarray(b.line).copy()
+    for make in (copy.copy, lambda s: copy.copy(copy.copy(s))):
+        sub = make(st)                                  # as cascade / nested / refine do
+        n_reads = len(terr.reads)
+        e2, _n2, w2, moved2 = bs.check_run(sub, terr.read)
+        r2 = e2["bridges"][0]
+        assert r2["method"] == "dem_opening" and r2["verified"], r2
+        assert r2["old_xy"] == r1["old_xy"] and r2["new_xy"] == r1["new_xy"], r2
+        assert r2["moved_m"] == r1["moved_m"] and r2.get("snapped_earlier"), r2
+        assert e2["moved"] == 1 and e2["kept_verified"] == 0, e2
+        assert np.allclose(b.line, moved_line), "moved twice"
+        assert len(terr.reads) == n_reads, "judged again"
+        md = "\n".join(bs.report_lines(e2))
+        assert "{:.1f}, {:.1f}".format(*r1["old_xy"]) in md and "| kept |" not in md, md
+    # a structure without snap_from is judged as before; dataclass default
+    assert sm.Structure(kind="bridge", line=orig).snap_from is None
+
+
+@test
+def ndhazard_tool_paths_compare_across_platforms_and_the_dem_is_found_in_the_dam_folder():
+    """PR #198 review, finding 4: the road-surface DEM vs the run's DEM compared with
+    normcase / normpath (Windows case, '/' vs '\\'); road_dem_of finds the run's DEM relative
+    to the dam folder when run_report.json's absolute path does not exist (a run folder
+    copied from another machine)."""
+    an, _fq, _algs = __import__("nd_breach_runner.tests.test_ndhazard_tool",
+                                fromlist=["_load_tool"])._load_tool()
+    tmp = tempfile.mkdtemp()
+    try:
+        dam = os.path.join(tmp, "DWR-3034")
+        os.makedirs(os.path.join(dam, "_breach_model"))
+        os.makedirs(os.path.join(dam, "dem"))
+        dem = os.path.join(dam, "dem", "dem_1m.tif")
+        open(dem, "wb").close()
+        assert an.same_path(dem, os.path.join(dam, "dem", ".", "dem_1m.tif"))
+        assert an.same_path(dem, os.path.join(dam, "x", "..", "dem", "dem_1m.tif"))
+        assert not an.same_path(dem, os.path.join(dam, "dem_1m.tif"))
+        assert not an.same_path(dem, "") and not an.same_path(None, dem)
+        # normcase: what Windows sees as one path (ntpath on any platform)
+        import ntpath
+        n = lambda p: ntpath.normcase(ntpath.normpath(p))                     # noqa: E731
+        assert n(r"C:\Runs\DWR-3034\dem\DEM_1m.tif") == n("c:/runs/dwr-3034/dem/dem_1m.tif")
+        src = open(an.__file__, encoding="utf-8").read()
+        assert "os.path.abspath(run_dem) != os.path.abspath(given)" not in src
+        assert "not same_path(run_dem, given)" in src
+        unit = {"dem_z_to_m": 1.0, "dem_elevation_units": "metres"}
+        for recorded in (r"C:\Users\nick\ND\DWR-3034\dem\dem_1m.tif",
+                         "/Users/nick/ND/DWR-3034/dem/dem_1m.tif", "dem/dem_1m.tif",
+                         dem):
+            rep = dict(unit, settings={"input_files": {"DEM": recorded}, "cell_size_m": 2.0})
+            path, f, how, cell = an.road_dem_of(dam, rep)
+            assert path is not None and an.same_path(path, dem), (recorded, path, how)
+            assert cell == 2.0
+            if recorded != dem:
+                assert "relative to the dam folder" in how and recorded in how, how
+        rep = dict(unit, settings={"input_files": {"DEM": r"C:\elsewhere\other.tif"}})
+        assert an.road_dem_of(dam, rep)[0] is None
+        assert an.road_dem_of(dam, {"settings": {}})[0] is None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 @test
