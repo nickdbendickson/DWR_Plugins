@@ -299,6 +299,12 @@ All optional layers, read only within about 45 mi of the dam:
   `S_INVERT_TOL_FT`); without them the DEM at each end is the invert. ND Dam Hazard's
   "Culvert and bridge lines for ND Dam Breach Runner" writes this layer from the NBI,
   OpenStreetMap and NDDOT's bridge inventory and centerline pipes.
+  3.10.90: before the inverts are read, each inventory bridge is checked against the road or
+  rail centreline it carries (the run's road / rail layers; the command-line runner uses
+  `layers.receptor_roads` / `receptor_rail`) and its cut is moved to that line's opening in
+  the DEM, or its stream crossing, within `NDBREACH_BRIDGE_SNAP_M` metres (environment
+  variable; default 300, 0 = off). Every bridge, moved or not, is in `run_report.json`
+  `bridge_snap`.
 - **Channels to burn** (lines): cut into the DEM, with the bed forced to fall downstream so
   a LiDAR pit does not dam the channel.
 - **Ponds and reservoirs** (polygons): lowered to their bed (mean depth below the LiDAR
@@ -740,7 +746,27 @@ Sampling: a point takes its raster cell; a polygon the deepest cell whose centre
 (the centroid's cell for a footprint smaller than a cell), with the **maximum velocity over
 the footprint's wet cells** (conservative; the velocity at the deepest cell is in the GeoJSON);
 a line is sampled every half cell and takes its deepest sample. Depth and velocity maxima may
-not occur at the same time, so the chart point is an upper bound. Fields are matched by name
+not occur at the same time, so the chart point is an upper bound.
+
+**Road overtopping depth** (3.10.90, advanced `Road overtopping depth`): by default a road's
+depth is the water surface (`WSE (Max).tif`) minus the road surface along its centreline
+every 1 m, not the deepest depth cell (a cell holds its averaged ground, or the trench the
+Runner cut for a structure). The road surface is the run's fine DEM
+(`run_report.json` `settings.input_files.DEM`, in the unit the run recorded: `dem_z_to_m`,
+else `dem_elevation_units`, else the raster's own band unit; never assumed metres), or the
+advanced `Road surface DEM` in its own unit (`Road surface DEM elevation units`: Detect reads
+the band unit or vertical CRS) and checked against the run's own ground (its DEM, else the
+model ground WSE - depth; a median offset over 1 m, or an unknown unit, sends every road to
+the depth raster with a Check). Culverts are not masked: over a buried culvert the fine DEM is
+the road. In a bridge or notch cut (`_breach_model/structures.json`, moved into the rasters'
+CRS from the run's `work_crs`), and in a bare-earth opening that lines up with one, the road
+is read on a **deck stand-in**: the lower approach's surface (with a sag's grade carried in),
+never the trench or the bare earth under a removed deck. Other openings are read as they are.
+Wet points with no road surface or water surface take the depth raster there; a road whose
+DEM cannot be read keeps the depth raster. Every road read lower than the depth raster (no
+longer overtopped, or shallower) or read from it gets a Check and a row in the report's
+Inputs and `road_depth` (`dropped`, `lowered`, `raster_roads`). 'Model depth raster' keeps
+the depth raster for every road, as before 3.10.90. Fields are matched by name
 when not chosen (NSI `OCCTYPE`, USA Structures `OCC_CLS` / `PRIM_OCC`, `AADT`, TIGER `RTTYP`,
 FRA `PASSNGR` with codes A, B, C by default, NID `NIDID` / `HAZARD`); the log lists the fields
 used.

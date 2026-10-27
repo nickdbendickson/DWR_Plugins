@@ -6,8 +6,8 @@ Reads DAM_FOLDER/_breach_model/run_report.json (DEM, work CRS, road lines), stru
 the WSE / depth rasters, and prints:
   * the bridge cut's old and new location (core/bridge_snap) and the distance moved;
   * the overtopping depth over the road crown along the road(s) within --radius of the old
-    cut (core/road_profile): with the run's cuts masked, without the mask, and the legacy
-    deepest depth-raster sample.
+    cut (core/road_profile): with the run's bridge / notch cuts read on the deck stand-in,
+    without them, and the legacy deepest depth-raster sample.
 Writes nothing: no file is created or changed anywhere (stdout only). Light: one process,
 the DEM read in small windows."""
 import argparse
@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 from nd_breach_runner.core import bridge_snap as bs            # noqa: E402
 from nd_breach_runner.core import gdal_io                      # noqa: E402
+from nd_breach_runner.core import hecras_model                 # noqa: E402
 from nd_breach_runner.core import road_profile as rp           # noqa: E402
 from nd_breach_runner.core import structures as sm             # noqa: E402
 from nd_breach_runner.core.grid import Grid                    # noqa: E402
@@ -62,7 +63,8 @@ def main(argv=None):
     st = rep.get("settings") or {}
     dem = (st.get("input_files") or {}).get("DEM")
     crs = (rep.get("work_crs") or st.get("work_crs") or "EPSG:5070").split()[0]
-    z_to_m = float(rep.get("dem_z_to_m") or 1.0)
+    # the run's own record (dem_z_to_m, dem_elevation_units), else the raster's: no metres default
+    z_to_m, z_how = hecras_model._z_factor(rep, dem)
     cell = float(st.get("cell_size_m") or 30.0)
     roads = [np.asarray(ln, float) for ln in st.get("road_lines") or []]
     sj = json.load(open(os.path.join(bm, "structures.json"), encoding="utf-8"))
@@ -71,7 +73,7 @@ def main(argv=None):
         raise SystemExit("no structure named like {} in structures.json".format(a.nbi))
     d = mine[0]
     print("run      ", a.dam_folder)
-    print("DEM      ", dem, "(z x {:g}, {})".format(z_to_m, crs))
+    print("DEM      ", dem, "(z x {:g}: {}; {})".format(z_to_m, z_how, crs))
     print("bridge   ", d["name"])
     s = sm.Structure(d["kind"], np.asarray(d["line"], float), float(d.get("width_m", 1.0)),
                      float(d.get("height_m", 1.0)), int(d.get("barrels", 1) or 1),
@@ -97,15 +99,17 @@ def main(argv=None):
     ground = rp.PointDEM(dem, z_to_m, crs)
     print("\n(a) road overtopping within {:.0f} m of the old cut ({} road piece(s))".format(
         a.radius, len(parts)))
-    for label, cuts in (("centreline, run's cuts masked", rp.cut_corridors(sj, cell)),
-                        ("centreline, no mask", [])):
-        r = rp.road_crown_depth(parts, wsef, ground, wet=wet, cuts=cuts)
+    for label, cuts in (("centreline, deck stand-in in cuts", rp.cut_corridors(sj, cell)),
+                        ("centreline, no cut", [])):
+        r = rp.road_crown_depth(parts, wsef, ground, wet=wet, cuts=cuts, depth_ft=depf)
         if r is None:
-            print("  {:32s} no road surface on the DEM".format(label))
+            print("  {:32s} no wet point with a road surface and a water surface".format(label))
             continue
-        print("  {:32s} depth {:.2f} ft  freeboard {}  wet {}  in cuts {}  in openings {}".format(
-            label, r["depth_ft"], "-" if r["freeboard_ft"] is None else
-            "{:.2f} ft".format(r["freeboard_ft"]), r["n_wet"], r["n_cut"], r["n_opening"]))
+        print("  {:32s} depth {:.2f} ft  freeboard {}  wet {}  on the stand-in {} (cuts) {} "
+              "(openings)  depth raster at {}".format(
+                  label, r["depth_ft"], "-" if r["freeboard_ft"] is None else
+                  "{:.2f} ft".format(r["freeboard_ft"]), r["n_wet"], r["n_cut"],
+                  r["n_opening"], r["n_nodem"] + r["n_nowse"]))
     best = (0.0, None, None)
     for p in parts:
         dd = np.nan_to_num(depf(p))
