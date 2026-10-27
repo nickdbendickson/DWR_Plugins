@@ -15,14 +15,16 @@ NickReview screening record (Dams/NickReview/dams/<ID>/dam.json) with the same s
 rundam starts only after the Screening 7b record (dams/<ID>/dam.json, from
 Dams/NickReview/screen_maxstor) is written, as on the box: without it the Runner models the
 dam with its default crest length instead of the record's dam_length_ft. --allow-no-record
-runs it anyway (and says so in the log and the manifest); such a rundam counts as finished
-until a record is written, and then runs again (and hazclass and hazbatch after it).
+runs it anyway (on the record an earlier run wrote there, if there is one; it says which in the
+log and the manifest); such a rundam counts as finished until a record is written, and then
+runs again (and hazclass and hazbatch after it).
 
 Finished stages are skipped. A stage is finished when its status/<stage>.ok is there, ran in
 the dam's mode, and is newer than the .ok of every stage it reads (READS below), each of them
 finished too: a stage that ran again makes the later stages that read it unfinished, and a
 stage never runs on unfinished results (an unfinished stage it reads runs first, in the same
-command). So a stopped run goes on where it stopped when it is run again.
+command). So a stopped run goes on where it stopped when it is run again (a stopped --redo:
+by the command it prints, which is the same command without --redo; see below).
 
 --redo runs again the stages in --stages that apply to the dam and every later stage that
 reads their results (precheck is a report no later stage reads); the other stages keep their
@@ -34,10 +36,10 @@ nothing. Those stages are then not finished, so a --redo that stopped (Ctrl-C, a
 finished by the same command WITHOUT --redo (it prints that command): that run does only the
 stages still not finished. The same --redo command run again redoes all of them again. A
 failed precheck (a report) or, with --allow-no-record, a record that could not be written is
-listed as a problem in the summary and the manifest and stops nothing else; the next run of
-the dam tries it again. status/*.ok records the mode (kit or prepare) a stage ran in: a dam
-whose finished stages ran in the other mode is not run (the two would mix) unless --redo is
-given, which then runs every stage of the dam again.
+listed as not fatal in the summary and the manifest and stops nothing else; the next run of
+the dam tries it again (the printed finish command of a --redo too). status/*.ok records the
+mode (kit or prepare) a stage ran in: a dam whose finished stages ran in the other mode is not
+run (the two would mix) unless --redo is given, which then runs every stage of the dam again.
 
 On the box (no installer), --list-data runs without the solvers and plugins, with the box's
 QGIS python (any python with GDAL):
@@ -116,6 +118,23 @@ def screen_7b_files(dam):
             [SCREEN_MAXSTOR + "/3_stage_storage/curve_{}.csv".format(dam)])
 
 
+def earlier_record(path):
+    """A Screening 7b record an earlier run wrote into dams/<dam>/dam.json (path), which rundam
+    reads when this run could not write one (--allow-no-record): the time of its newest
+    screening entry, as dam.json gives it (the Screening plugin's tool name there is ndscreen).
+    None when the file is not there or has no screening entry (e.g. one a rundam made)."""
+    try:
+        with open(path) as f:
+            rec = json.load(f)
+        whens = [str(e["when"]) for e in list((rec.get("sources") or {}).values()) +
+                 list(rec.get("status") or []) if isinstance(e, dict) and
+                 e.get("tool") == "ndscreen" and e.get("when")]
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+    # (it goes into rundam.ok as earlier-record=<time>: no spaces, no '=')
+    return (re.sub(r"[^0-9A-Za-z:.+-]", "", max(whens))[:40] or "?") if whens else None
+
+
 # Section 2 of the NickReview rerun plan (same for every dam)
 RUNDAM_FIXED = {
     "METHOD": 0, "SCENARIO": 0, "BASELINE": True, "STOP_RULE": False,
@@ -149,6 +168,12 @@ LIDAR_SOURCE = "live download possible (USGS 3DEP 1 m, The National Map) or copy
 
 def now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def stamp():
+    """now() to the microsecond, for file names (manifest_<stamp>.json, <stage>.ok.redo_<stamp>):
+    two runs in the same second get two names."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H%M%S.%fZ")
 
 
 # -- output that survives a closed terminal / tee (Ctrl-C under run_nickreview.sh) -----------
@@ -227,6 +252,7 @@ class Ctx(object):
         self.warnings = []
         self.used = set()
         self.redo = {}           # --redo: dam -> what it set aside (redo_plan)
+        self.nonfatal = set()    # stages that failed, not fatal (the finish command retries them)
 
     # -- paths ---------------------------------------------------------------------------
     def d(self, box_path):
@@ -773,7 +799,9 @@ def fix_old_oks(w, dam):
     recorded the mode ok_modes reads for it and its file time (as t=; the file time is kept).
     Done when a run starts the dam, before it writes work/<dam>/rundam.json again: ok_modes
     reads the mode of such an .ok from that file, so after a rewrite it could read it wrong
-    (in that run and the next). Returns the stages fixed."""
+    (in that run and the next). The new text is written to a temporary file next to the .ok,
+    which gets the file time and then replaces the .ok: a stop (Ctrl-C) leaves the old .ok or
+    the fixed one, never an emptied .ok with a new file time. Returns the stages fixed."""
     fixed = []
     for s, m in ok_modes(w, dam).items():
         p = os.path.join(w, "status", s + ".ok")
@@ -781,10 +809,19 @@ def fix_old_oks(w, dam):
         if ok_mode(text) is not None:
             continue
         t = os.path.getmtime(p)
-        with open(p, "w") as f:
-            f.write("{} mode={}{}\n".format(text, m, "" if re.search(r"\bt=\d", text)
-                                           else " t={:.6f}".format(t)))
-        os.utime(p, (t, t))
+        tmp = p + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                f.write("{} mode={}{}\n".format(text, m, "" if re.search(r"\bt=\d", text)
+                                               else " t={:.6f}".format(t)))
+            os.utime(tmp, (t, t))
+            os.replace(tmp, p)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
         fixed.append(s)
     return fixed
 
@@ -793,9 +830,9 @@ def stage_states(w, dam, mode, not_done=()):
     """{stage: None when finished, else why not} for the stages that apply to dam in mode (kit
     mode: not prepare and structures). Finished: its status/<stage>.ok is there, ran in mode,
     and is newer than the .ok of every stage it reads (READS) that applies, each of them
-    finished too. A rundam run without the Screening 7b record (--allow-no-record) stays
-    finished until a record is written. not_done: stages taken as not finished (--redo
-    --dry-run shows them as run again)."""
+    finished too. A rundam run without a Screening 7b record written for it (--allow-no-record:
+    none, or an earlier one in dams/<dam>/dam.json) stays finished until a record is written.
+    not_done: stages taken as not finished (--redo --dry-run shows them as run again)."""
     status = os.path.join(w, "status")
     modes = ok_modes(w, dam)
     res, when = {}, {}
@@ -814,7 +851,9 @@ def stage_states(w, dam, mode, not_done=()):
             continue
         when[s] = ok_stamp(p)[0]
         res[s] = None
-        no_record = s == "rundam" and "no-record" in read_text(p)
+        tag = read_text(p) if s == "rundam" else ""
+        earlier = "earlier-record=" in tag
+        no_record = earlier or "no-record" in tag
         for r in READS[s]:
             if r not in res or (no_record and r == "record" and r not in modes):
                 continue
@@ -822,9 +861,12 @@ def stage_states(w, dam, mode, not_done=()):
                 res[s] = "it reads {}, which is not finished".format(r)
                 break
             if when[r] > when[s]:
-                res[s] = ("it ran without the Screening 7b record (--allow-no-record) and the "
-                          "record is there now" if no_record and r == "record" else
-                          "{} ran again after it (status/{}.ok is newer)".format(r, r))
+                if no_record and r == "record":
+                    res[s] = "it ran {} (--allow-no-record) and a record is there now".format(
+                        "on an earlier Screening 7b record" if earlier else
+                        "without the Screening 7b record")
+                else:
+                    res[s] = "{} ran again after it (status/{}.ok is newer)".format(r, r)
                 break
     return res
 
@@ -891,9 +933,13 @@ def redo_plan(ctx, dams):
 
 
 def set_aside(ctx, plan):
-    """Rename the status/<stage>.ok of plan (redo_plan) to <stage>.ok.redo_<time>, all of them.
-    Returns the suffix."""
-    suffix = ".redo_" + now().replace(":", "")
+    """Rename the status/<stage>.ok of plan (redo_plan) to <stage>.ok.redo_<time>, all of them
+    (never onto a file that is there: a counter is added). Returns the suffix."""
+    base = ".redo_" + stamp()
+    suffix, n = base, 1
+    while any(os.path.lexists(os.path.join(ctx.out, "work", dam, "status", s + ".ok" + suffix))
+              for dam, p in plan.items() for s in p["set_aside"]):
+        suffix, n = "{}_{}".format(base, n), n + 1
     for dam, p in plan.items():
         for s in p["set_aside"]:
             ok = os.path.join(ctx.out, "work", dam, "status", s + ".ok")
@@ -934,9 +980,10 @@ def redo_lines(plan, dry, asked):
 
 def finish_command(a, ctx):
     """The command that finishes a --redo that stopped: the same command without --redo, its
-    --stages every stage the --redo runs again (a plain run runs only the stages it names, and
-    of them only the ones not finished)."""
-    stages = {s for p in ctx.redo.values() for s in p["stages"]}
+    --stages every stage the --redo runs again and every stage that failed, not fatal, in it
+    (also one that ran first; a plain run runs only the stages it names, and of them only the
+    ones not finished)."""
+    stages = {s for p in ctx.redo.values() for s in p["stages"]} | ctx.nonfatal
     return run_command(a, ctx, redo=False, stages=[s for s in STAGES if s in stages] or None)
 
 
@@ -1317,6 +1364,7 @@ class Runner(object):
                 self.mark("precheck")
             elif not ctx.dry:      # not fatal: a report no later stage reads; the rest runs
                 logp = os.path.join(self.w, "culvert_precheck.log")
+                ctx.nonfatal.add("precheck")
                 self.log("WARNING: precheck (the culvert pre-check, a report) failed: exit {}, see "
                          "{}; the later stages still run, and the next run of the dam tries it "
                          "again".format(rc, logp))
@@ -1374,10 +1422,13 @@ class Runner(object):
                     record_err = "{}: {}".format(type(e).__name__, e)
                     self.log("record: NOT written ({})".format(record_err))
                     self.record["record_error"] = record_err
-                    if ctx.a.allow_no_record:         # not fatal: rundam runs without it
+                    if ctx.a.allow_no_record:         # not fatal: rundam does not wait for it
+                        ctx.nonfatal.add("record")
                         self.record.setdefault("nonfatal", []).append(
-                            "record not written: rundam runs without it (--allow-no-record) "
-                            "(see {}: {})".format(self.logf.name, record_err))
+                            "record not written: rundam {} (--allow-no-record) (see {}: {})".format(
+                                "reads the earlier one in dams/{}/dam.json".format(self.dam)
+                                if earlier_record(os.path.join(self.df, "dam.json")) else
+                                "runs without it", self.logf.name, record_err))
                     else:                             # rundam needs it (see the docstring)
                         ctx.problems.append("Screening 7b record not written ({}); copy "
                                             "Dams/NickReview/screen_maxstor (see the data list) "
@@ -1385,12 +1436,26 @@ class Runner(object):
                         self.log("record failed: rundam and the stages after it are not started")
                         return 4
         # 6-8 models and hazard
-        # (a rundam run without the record (--allow-no-record) is not finished once a record is
-        #  there: stage_states; it runs again, and hazclass and hazbatch after it)
+        # (a rundam run without a record written for it (--allow-no-record) is not finished
+        #  once a record is there: stage_states; it runs again, and hazclass and hazbatch after it)
+        no_record = ""       # rundam.ok's note: no-record, or earlier-record=<time> (stage_states)
         if self.due("rundam", run):
+            dj = os.path.join(self.df, "dam.json")
             if not ctx.dry and not self.done("record"):
                 why = record_err or "status/record.ok is missing (run '--stages record' first)"
-                if ctx.a.allow_no_record:
+                earlier = earlier_record(dj) if ctx.a.allow_no_record else None
+                if earlier:      # the Runner reads dams/<dam>/dam.json, so it runs on that one
+                    no_record = "earlier-record=" + earlier
+                    self.log("WARNING: no Screening 7b record was written ({}); because of "
+                             "--allow-no-record rundam runs on the EARLIER record in {} (its "
+                             "newest screening entry: {}): the crest length is that record's "
+                             "dam_length_ft, which a record written now can change; once one is "
+                             "written, rundam runs again".format(why, dj, earlier))
+                    self.note("rundam on the earlier Screening 7b record in {} (newest screening "
+                              "entry {}), not one written by this run (--allow-no-record): "
+                              "{}".format(dj, earlier, why))
+                elif ctx.a.allow_no_record:
+                    no_record = "no-record"
                     self.log("WARNING: rundam runs WITHOUT the Screening 7b record ({}) because "
                              "of --allow-no-record: the crest length is the Runner's default, "
                              "not the record's dam_length_ft, so results can differ from the box "
@@ -1406,12 +1471,11 @@ class Runner(object):
                 self.log("inputs missing, rundam not started:\n  " + "\n  ".join(ctx.problems))
                 return 4
             if not ctx.dry:      # the record rundam reads (the Runner adds to it while it runs)
-                dj = os.path.join(self.df, "dam.json")
                 self.record["dam_json_read_by_rundam"] = {dj: sha256(dj)}
             if self.run("rundam", self.qp() + ["run", "ndbreach:rundam", "-"], stdin=rj):
                 return 5
             if not ctx.dry:
-                self.mark("rundam", "" if self.done("record") else "no-record")
+                self.mark("rundam", no_record)
         if self.due("hazclass", run):
             if self.run("hazclass", self.qp() + ["run", "ndbreach:ndhazardclass", "-"], stdin=hj):
                 return 6
@@ -1667,8 +1731,9 @@ def main():
                     "instead of downloading 3DHP")
     ap.add_argument("--no-kits", action="store_true", help="prepare 2801/2865/3034 here too")
     ap.add_argument("--allow-no-record", action="store_true", help="run rundam even when the "
-                    "Screening 7b record could not be written (results can differ from the box; "
-                    "once a record is written, rundam, hazclass and hazbatch run again)")
+                    "Screening 7b record could not be written (on the record an earlier run "
+                    "wrote, if there is one; results can differ from the box; once a record is "
+                    "written, rundam, hazclass and hazbatch run again)")
     ap.add_argument("--stages", default=",".join(STAGES), help="the stages to run (an unfinished "
                     "stage one of them reads runs first)")
     ap.add_argument("--pack", default="", help="offline pack .sqlite (default: from --data)")
@@ -1730,7 +1795,10 @@ def main():
     st = os.environ.get("NDSUITE_SETTINGS")
     if st:
         manifest["settings_csv_sha256"] = {os.path.abspath(st): sha256(os.path.abspath(st))}
-    mp = os.path.join(ctx.out, "manifest_{}.json".format(now().replace(":", "")))
+    base = os.path.join(ctx.out, "manifest_" + stamp())
+    mp, n = base + ".json", 1
+    while os.path.exists(mp):            # never overwrite the manifest of another run
+        mp, n = "{}_{}.json".format(base, n), n + 1
 
     def save_manifest():
         if not a.dry_run:
@@ -1742,7 +1810,10 @@ def main():
         if not a.dry_run:
             shutil.rmtree(old, ignore_errors=True)
         out("NOTE: {} {} (the --redo records of an older version of this script, not used any "
-            "more: what an earlier --redo set aside is finished by a run without --redo)".format(
+            "more). What a --redo of that version set aside is finished by a run without "
+            "--redo. That version set a dam's stages aside only when it reached the dam, so a "
+            "--redo of it that did not finish may have left dams it had not reached with their "
+            "earlier results: run that --redo again for them (--dam)".format(
                 old, "is deleted by a real run" if a.dry_run else "deleted"))
     worst = 0
     try:
@@ -1806,6 +1877,8 @@ def main():
     finally:
         signal.signal(signal.SIGINT, signal.SIG_IGN)   # a second Ctrl-C must not lose the manifest
         if "redo" in manifest:
+            if not a.dry_run:    # with the stages that failed, not fatal, in this run
+                manifest["redo"]["finish_command"] = finish_command(a, ctx)
             manifest["redo"]["finished"] = not a.dry_run and worst == 0 and \
                 len(manifest["dams"]) == len(dams) and \
                 not any(d.get("nonfatal") for d in manifest["dams"])
