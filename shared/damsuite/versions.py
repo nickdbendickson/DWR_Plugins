@@ -32,7 +32,7 @@ PLUGINS = {"ndhazard": "DamSafety_Hazard",
 LABELS = {"ndhazard": "DamSafety Hazard",
           "ndbreach": "DamSafety Runner",
           "ndscreen": "DamSafety Screening"}
-RELEASE = {"ndhazard": "2.18.64", "ndbreach": "3.10.90", "ndscreen": "0.17.49"}
+RELEASE = {"ndhazard": "2.18.64", "ndbreach": "3.10.90", "ndscreen": "0.17.50"}
 # minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
 REQUIRES = {
     ("ndbreach", "ndhazard"): ("2.9.1", "2.18.63",
@@ -49,6 +49,9 @@ REQUIRES = {
     ("ndscreen", "ndbreach"): ("3.1.0", "3.7.0",
                                "tool 7b parameters; dam.json from 3.2.0; a proposed embankment is "
                                "inserted on the grid the Runner reads only from 3.7.0"),
+    ("ndbreach", "ndscreen"): ("0", "0.17.50",
+                               "Download DEM records the z-unit that Runner's 'Detect from the "
+                               "raster' reads from 0.17.50"),
     ("ndscreen", "ndhazard"): ("0", "2.11.0", "export for screening from 2.10.0; the REG_05.2026 "
                                "Fig. 5.1 / 5.2 curve table (the same curves as this plugin) from "
                                "2.11.0"),

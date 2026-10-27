@@ -78,14 +78,14 @@ def warp_dem_to_model_grid_reads_full_resolution_not_overviews():
         for cell in (5.0, 10.0):
             for alg in ("average", "bilinear"):
                 for src, ref in ((a, b), (v1, v2)):
-                    got = gdal_io.GdalTerrain(src, "EPSG:{}".format(EPSG), resample=alg).read(
-                        bounds, cell).data
-                    want = gdal_io.GdalTerrain(ref, "EPSG:{}".format(EPSG), resample=alg).read(
-                        bounds, cell).data
+                    got = gdal_io.GdalTerrain(src, "EPSG:{}".format(EPSG), gdal_io.Z_METERS,
+                                              resample=alg).read(bounds, cell).data
+                    want = gdal_io.GdalTerrain(ref, "EPSG:{}".format(EPSG), gdal_io.Z_METERS,
+                                               resample=alg).read(bounds, cell).data
                     assert np.allclose(got, want, atol=1e-4), (cell, alg, src,
                                                                float(np.nanmax(abs(got - want))))
-            g = gdal_io.GdalTerrain(a, "EPSG:{}".format(EPSG), resample="average").read(
-                bounds, cell).data
+            g = gdal_io.GdalTerrain(a, "EPSG:{}".format(EPSG), gdal_io.Z_METERS,
+                                    resample="average").read(bounds, cell).data
             assert np.allclose(g, _block_mean(_surface(0).astype("float64"), int(cell)),
                                atol=1e-3), (cell, float(np.nanmax(abs(g - _block_mean(
                                    _surface(0).astype("float64"), int(cell))))))

@@ -285,10 +285,12 @@ class AnimationAlgorithm(_ToolBase):
             try:
                 z = gdal_io.read_like(lyr.source(), grid, "bilinear")
                 choice = ZUNITS[self.parameterAsEnum(parameters, "DEM_Z", context)][0]
-                try:
-                    f, how = gdal_io.z_to_m_factor(lyr.source(), choice)
-                except Exception:
-                    f, how = 1.0, "metres (assumed)"
+                # 3.10.89 review round 3: the unit the raster records (the run's rule), else -
+                # a picture, not a model - its CRS's linear unit as before 3.10.88, and says so
+                # (it assumed metres for every DEM that records no unit)
+                f, how, warn = gdal_io.z_factor_or_guess(lyr.source(), choice)
+                if warn:
+                    feedback.reportError("Check: hillshade DEM " + warn, fatalError=False)
             except ImportError:
                 raise QgsProcessingException("GDAL's Python bindings are not available; run this "
                                              "from QGIS.")

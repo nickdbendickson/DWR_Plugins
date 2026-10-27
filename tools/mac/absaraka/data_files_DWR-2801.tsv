@@ -1,0 +1,121 @@
+bytes	copy_to (under ~/dwr-dam-suite/NickReview_data/)	source
+252372308	DEM/Cass_runner_10m/dam_-97.17_46.91_10m_5070.tif	copy (box-made DEM: 3DEP averaged/clipped)
+43041746	DEM/NickReview_runner_10m/DWR-10633/dam_-97.731387_47.246472_10m_5070.tif	copy (box-made DEM: 3DEP averaged/clipped)
+43444090	DEM/NickReview_runner_10m/DWR-2899/dam_-97.96932_46.79269_10m_5070.tif	copy (box-made DEM: 3DEP averaged/clipped)
+392031	DEM/NickReview_runner_1m/NickReview_runner_1m.vrt	copy (box-made DEM: 3DEP averaged/clipped)
+7927155	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x58y517_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7774064	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x58y518_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7638530	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x58y519_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7732786	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x58y520_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7420655	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x58y521_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7748763	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x58y522_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7739165	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x58y523_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7679017	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x58y524_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7799188	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x58y525_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7828774	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x59y517_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7857465	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x59y518_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7791714	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x59y519_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7687718	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x59y520_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7729501	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x59y521_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7702608	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x59y522_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7702087	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x59y523_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7749916	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x59y524_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7714756	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x59y525_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7776019	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x60y517_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7677308	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x60y518_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7591004	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x60y519_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7582744	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x60y520_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7492032	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x60y521_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7473920	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x60y522_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7410143	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x60y523_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7504715	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x60y524_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7309105	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x60y525_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7416488	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x61y517_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7132716	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x61y518_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7342229	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x61y519_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7546850	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x61y520_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7441422	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x61y521_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7544699	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x61y522_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7617594	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x61y523_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7646555	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x61y524_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7127503	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x61y525_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7312086	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x62y517_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7276752	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x62y518_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7026418	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x62y519_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6982230	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x62y520_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7139775	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x62y521_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7203951	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x62y522_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7056505	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x62y523_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+7285143	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x63y517_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6865481	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x63y518_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6796806	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x63y519_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6750526	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x63y520_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6735642	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x63y521_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6835764	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x63y522_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6782282	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x63y523_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6625079	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x64y518_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6735820	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x64y519_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6824114	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x64y520_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6573883	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x64y521_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6575374	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x64y522_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+6617702	DEM/NickReview_runner_1m/tiles_avg5m/USGS_1M_14_x64y523_ND_3DEPProcessing_D22_avg5m.tif	copy (box-made DEM: 3DEP averaged/clipped)
+278335180	DEM/lidar_1m_native/USGS_1M_14_x60y518_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+279620488	DEM/lidar_1m_native/USGS_1M_14_x60y519_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+282019274	DEM/lidar_1m_native/USGS_1M_14_x60y520_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+278614855	DEM/lidar_1m_native/USGS_1M_14_x60y521_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+279132017	DEM/lidar_1m_native/USGS_1M_14_x60y522_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+277278346	DEM/lidar_1m_native/USGS_1M_14_x60y523_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+266836104	DEM/lidar_1m_native/USGS_1M_14_x61y518_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+275295129	DEM/lidar_1m_native/USGS_1M_14_x61y519_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+282244904	DEM/lidar_1m_native/USGS_1M_14_x61y520_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+276636744	DEM/lidar_1m_native/USGS_1M_14_x61y521_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+279319749	DEM/lidar_1m_native/USGS_1M_14_x61y522_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+281120807	DEM/lidar_1m_native/USGS_1M_14_x61y523_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+278797488	DEM/lidar_1m_native/USGS_1M_14_x62y518_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+269639780	DEM/lidar_1m_native/USGS_1M_14_x62y519_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+269983358	DEM/lidar_1m_native/USGS_1M_14_x62y520_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+274532800	DEM/lidar_1m_native/USGS_1M_14_x62y521_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+275271437	DEM/lidar_1m_native/USGS_1M_14_x62y522_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+271559696	DEM/lidar_1m_native/USGS_1M_14_x62y523_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+264143559	DEM/lidar_1m_native/USGS_1M_14_x63y518_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+264435849	DEM/lidar_1m_native/USGS_1M_14_x63y519_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+265156548	DEM/lidar_1m_native/USGS_1M_14_x63y520_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+265014165	DEM/lidar_1m_native/USGS_1M_14_x63y521_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+266374482	DEM/lidar_1m_native/USGS_1M_14_x63y522_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+266271670	DEM/lidar_1m_native/USGS_1M_14_x63y523_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+260610106	DEM/lidar_1m_native/USGS_1M_14_x64y518_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+264685428	DEM/lidar_1m_native/USGS_1M_14_x64y519_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+266552284	DEM/lidar_1m_native/USGS_1M_14_x64y520_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+261678089	DEM/lidar_1m_native/USGS_1M_14_x64y521_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+262280098	DEM/lidar_1m_native/USGS_1M_14_x64y522_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+264010761	DEM/lidar_1m_native/USGS_1M_14_x64y523_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+265507573	DEM/lidar_1m_native/USGS_1M_14_x65y518_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+276579139	DEM/lidar_1m_native/USGS_1M_14_x65y519_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+278340303	DEM/lidar_1m_native/USGS_1M_14_x65y520_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+276756794	DEM/lidar_1m_native/USGS_1M_14_x65y521_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+273649405	DEM/lidar_1m_native/USGS_1M_14_x65y522_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+272013590	DEM/lidar_1m_native/USGS_1M_14_x65y523_ND_3DEPProcessing_D22.tif	live download possible (USGS 3DEP 1 m, The National Map) or copy
+3957	Dams/NickReview/dams/DWR-2801/dam.json	copy (NickReview screening record)
+?	Dams/NickReview/screen_maxstor/3_stage_storage/curve_DWR-2801.csv	copy (NickReview max-storage screening: Screening 7b record input)
+?	Dams/NickReview/screen_maxstor/4_breach_points.gpkg	copy (NickReview max-storage screening: Screening 7b record input)
+?	Dams/NickReview/screen_maxstor/8_hazard.gpkg	copy (NickReview max-storage screening: Screening 7b record input)
+290148352	ND_Dam_Suite_Pack/hydro/NHD_waterbodies.gpkg	ND_Dam_Suite_Pack (copy, or point --map at your own copy)
+278528	culvert_precheck_20261024/dwr2801/structures_2801_with9122221_invfix2.gpkg	copy (box culvert fix: invfix2 + NBI 9122221)
+118784	culvert_sources/nddot_bridge_inventory.gpkg	copy (box-made from NDDOT / NTAD downloads)
+118784	culvert_sources/ntad_nbi.gpkg	copy (box-made from NDDOT / NTAD downloads)
+5300224	culvert_sources/research/nddot_centerline_pipes.gpkg	copy (box-made from NDDOT / NTAD downloads)
+1991	nickreview_rerun_20261023/dwr2801/DWR-2801_composite_1m_full_native_v2.vrt	copy (box run kit: settings / DEM VRT)
+4168	nickreview_rerun_20261023/dwr2801/DWR-2801full_1m_5070.vrt	copy (box run kit: settings / DEM VRT)
+19172	nickreview_rerun_20261023/dwr2801/DWR-2801full_1m_utm14.vrt	copy (box run kit: settings / DEM VRT)
+1544	nickreview_rerun_20261023/dwr2801/outer5m_clip.vrt	copy (box run kit: settings / DEM VRT)
+1396736	nickreview_rerun_20261023/dwr2801/pack_HPMS_ND_2024_2801.gpkg	copy (offline-pack extract made on the box)
+143360	nickreview_rerun_20261023/dwr2801/pack_NARN_rail_lines_2801.gpkg	copy (offline-pack extract made on the box)
+180224	nickreview_rerun_20261023/dwr2801/pack_NDDOT_traffic_counts_2801.gpkg	copy (offline-pack extract made on the box)
+1056768	nickreview_rerun_20261023/dwr2801/pack_ND_county_roads_2801.gpkg	copy (offline-pack extract made on the box)
+3059712	nickreview_rerun_20261023/dwr2801/pack_ND_roads_NG911_2801.gpkg	copy (offline-pack extract made on the box)
+118784	nickreview_rerun_20261023/dwr2801/pack_NID_dams_2801_downstream.gpkg	copy (offline-pack extract made on the box)
+4091904	nickreview_rerun_20261023/dwr2801/pack_NSI_structures_2801.gpkg	copy (offline-pack extract made on the box)
+106496	nickreview_rerun_20261023/dwr2801/pack_OSM_lifelines_2801.gpkg	copy (offline-pack extract made on the box)
+106496	nickreview_rerun_20261023/dwr2801/pack_lifeline_nd_basic_care_2801.gpkg	copy (offline-pack extract made on the box)
+1183	nickreview_rerun_20261023/dwr2801_maincc5892e/hazclass.json	copy (box run kit: settings / DEM VRT)
+2037	nickreview_rerun_20261023/dwr2801_maincc5892e/rundam.json	copy (box run kit: settings / DEM VRT)

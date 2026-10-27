@@ -36,6 +36,8 @@ import urllib.parse
 import urllib.request
 
 from ..damsuite import gdalsafe as GS   # GDAL without switching its exception mode
+from . import dem_zunit as ZU           # 0.17.50: the fallback DEM's unit, as the Runner reads it
+from .warp_opts import no_vshift        # 0.17.50: warps keep the values as stored
 
 TNM_URL = "https://tnmaccess.nationalmap.gov/api/v1/products"
 DATASET = "Digital Elevation Model (DEM) 1 meter"
@@ -66,6 +68,11 @@ class TileError(IOError):
 def _info(feedback, msg):
     if feedback is not None:
         feedback.pushInfo(msg)
+
+
+def _warn(feedback, msg):
+    if feedback is not None:
+        getattr(feedback, "pushWarning", feedback.pushInfo)(msg)
 
 
 def _progress(feedback, pct):
@@ -559,12 +566,44 @@ def _bounds_in(bounds_ll, dst):
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+def fallback_unit(path):
+    """(choice, how) of the elevation unit a fallback DEM records (core/dem_zunit.recorded, the
+    Runner's 'Detect from the raster' rule), or ("", why)."""
+    try:
+        ds = GS.open_raster(path)
+    except RuntimeError as e:
+        return "", str(e)
+    try:
+        return ZU.recorded(ds, path)
+    finally:
+        ds = None
+
+
+def _exact_scale(vrt_path, f):
+    """Write the scale VRT's ScaleRatio with all its digits: GDAL writes 6 significant digits
+    (0.304801 for 1200/3937, 1.3 ppm off)."""
+    with open(vrt_path, encoding="utf-8") as fh:
+        xml = fh.read()
+    fixed = re.sub(r"<ScaleRatio>[^<]*</ScaleRatio>",
+                   "<ScaleRatio>{!r}</ScaleRatio>".format(float(f)), xml)
+    if fixed != xml:
+        with open(vrt_path, "w", encoding="utf-8") as fh:
+            fh.write(fixed)
+
+
 def build_vrt(entries, vrt_path, fallback="", bounds_ll=None, meta=None, feedback=None):
     """The per-dam VRT: the coarser `fallback` DEM (if given) at the bottom, then the tiles oldest
     collection first, so the newest lidar is on top and the fallback shows only where no tile has
     data. Everything is in the CRS most tiles have (other UTM zones and the fallback are warped
     into it as VRTs beside this one), at 1 m. bounds_ll clips the VRT to the dam's box. Writes
-    <vrt>.json with the sources. Returns (vrt_path, json_path)."""
+    <vrt>.json with the sources. Returns (vrt_path, json_path).
+
+    The VRT is tagged metres (band unit 'm'), so the fallback must be metres too (0.17.50): one
+    in feet or US survey feet (its band unit or vertical CRS says so; a Download DEM record is
+    always metres) is converted (x 0.3048 / x 1200/3937) before it goes under the tiles; one that
+    records no unit is not used (warning; json 'fallback_refused'). Before, a feet fallback
+    showed through the VRT as metres and the Runner's 'Detect from the raster' read it so. The
+    warps keep the values as stored (no vertical shift), so that conversion is the only one."""
     from osgeo import gdal
     if not entries:
         raise TileError("no lidar tiles to build the VRT from")
@@ -577,18 +616,50 @@ def build_vrt(entries, vrt_path, fallback="", bounds_ll=None, meta=None, feedbac
         counts[c] = counts.get(c, 0) + 1
     target = max(sorted(counts), key=lambda c: counts[c])
     sources, warped = [], []
+    fb_units, refused = "", ""
+    if fallback:
+        fb_got, fb_how = fallback_unit(fallback)
+        if not fb_got:
+            refused = "{}: {}".format(fallback, fb_how)
+            _warn(feedback, "The fallback DEM {} is not used: {}. The 1 m VRT is tagged metres, so "
+                            "the DEM underneath must record its unit (band unit, vertical CRS, or "
+                            "a USGS 3DEP Download DEM GeoTIFF); tag it (gdal_edit -units m, or ft) "
+                            "or give the Download DEM 10 m GeoTIFF. Where no lidar tile has data "
+                            "the VRT has holes.".format(os.path.basename(fallback), fb_how))
+            fallback = ""
     if fallback:
         fb = os.path.join(out_dir, "{}_fallback.vrt".format(stem))
-        GS.checked(gdal.Warp(fb, fallback, format="VRT", dstSRS=target, resampleAlg="bilinear",
-                             outputType=gdal.GDT_Float32, dstNodata=-999999), "warping " + fallback)
-        sources.append(fb)
+        # the values as stored (-novshift): the conversion below is the only one. GDAL's default
+        # vertical shift already turned a feet fallback into metres when its CRS or the tiles'
+        # is compound, and the scale VRT then converted it again (951 ft read as 88.4 m)
+        GS.checked(gdal.Warp(fb, fallback, **no_vshift(gdal, dict(
+            format="VRT", dstSRS=target, resampleAlg="bilinear", outputType=gdal.GDT_Float32,
+            dstNodata=-999999))), "warping " + fallback)
         warped.append(fb)
+        if fb_got == ZU.METERS:
+            fb_units = "metres ({})".format(fb_how)
+        else:
+            f = ZU.TO_M[fb_got]
+            fbm = os.path.join(out_dir, "{}_fallback_m.vrt".format(stem))
+            out = GS.checked(gdal.Translate(fbm, fb, format="VRT", outputType=gdal.GDT_Float32,
+                                            scaleParams=[[0.0, 1.0, 0.0, f]]),
+                             "converting " + fallback)
+            out = None
+            _exact_scale(fbm, f)
+            warped.append(fbm)
+            fb = fbm
+            fb_units = "{} ({}), converted x {:.10g} to metres".format(ZU.NAMES[fb_got], fb_how, f)
+            _warn(feedback, "The fallback DEM {} is in {} ({}): converted to metres (x {:.10g}) "
+                            "under the 1 m tiles.".format(os.path.basename(fallback),
+                                                          ZU.NAMES[fb_got], fb_how, f))
+        sources.append(fb)
     for e in entries:
         p = e["path"]
         if crs_of[p] != target:
             w = os.path.join(out_dir, "{}_{}_warped.vrt".format(stem, os.path.splitext(e["tile"])[0]))
-            GS.checked(gdal.Warp(w, p, format="VRT", dstSRS=target, xRes=1.0, yRes=1.0,
-                                 resampleAlg="bilinear", dstNodata=-999999), "warping " + p)
+            GS.checked(gdal.Warp(w, p, **no_vshift(gdal, dict(       # metres stay metres
+                format="VRT", dstSRS=target, xRes=1.0, yRes=1.0, resampleAlg="bilinear",
+                dstNodata=-999999))), "warping " + p)
             sources.append(w)
             warped.append(w)
             _info(feedback, "{} is in {}; warped to {} for the VRT".format(e["tile"], crs_of[p], target))
@@ -623,7 +694,8 @@ def build_vrt(entries, vrt_path, fallback="", bounds_ll=None, meta=None, feedbac
                                                   "publication_date", "url", "sha256", "bytes", "path")}
                       for e in entries],
             "order": "bottom to top: fallback, then tiles oldest collection first (newest on top)",
-            "fallback": fallback or "", "warped_helpers": warped, "bbox_ll": list(bounds_ll or []),
+            "fallback": fallback or "", "fallback_units": fb_units, "fallback_refused": refused,
+            "warped_helpers": warped, "bbox_ll": list(bounds_ll or []),
             "created": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
     info.update(meta or {})
     js = os.path.splitext(vrt_path)[0] + ".json"

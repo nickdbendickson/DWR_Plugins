@@ -8,7 +8,7 @@ from qgis.core import (QgsPointXY, QgsProcessingException, QgsProcessingOutputFi
                        QgsProcessingParameterRasterLayer, QgsProcessingParameterString)
 
 from .compat import ALG_NO_THREADING
-from .algorithms import _Base
+from .algorithms import _Base, ZUNITS
 from .core import (benchmark, conditioning as condmod, gdal_io, handoff, nd_data, products,
                    structures as structmod, workflow)
 from .core.units import FT, MILE, ARRIVAL_DEPTH_FT
@@ -195,8 +195,7 @@ class ConditionDemAlgorithm(_ToolBase):
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterRasterLayer("DEM", "DEM"))
         self.addParameter(QgsProcessingParameterEnum(
-            "DEM_Z", "DEM elevation units", ["Detect from the raster", "Feet", "US survey feet",
-                                              "Meters"], defaultValue=0))
+            "DEM_Z", "DEM elevation units", [z[1] for z in ZUNITS], defaultValue=0))
         self.addParameter(QgsProcessingParameterPoint("DAM_POINT", "Dam (point on the crest)"))
         self._num("RADIUS_MI", "Radius around the dam (mi)", 2.0, minimum=0.1)
         self._num("CELL", "Cell size (m; 10 m = 32.8 ft, the raster cell)", 10.0, minimum=1.0)

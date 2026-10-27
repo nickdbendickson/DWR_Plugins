@@ -36,8 +36,9 @@ TIER_LABELS = {workflow.TIER_LISFLOOD: "LISFLOOD-FP only",
                                      "(needs HEC-RAS 6.6)"}
 SCENARIO_LABELS = {workflow.SCENARIO_SUNNY: "Sunny day: no inflow, breach at the top of dam",
                    workflow.SCENARIO_FLOOD: "Flood (PMF): inflow with and without the breach"}
-Z_LABELS = {"auto": "Detect from the raster", "feet": "Feet", "us_feet": "US survey feet",
-            "meters": "Meters"}
+# the tool's DEM_Z text; 3.10.89 review round 3 appended the "(the raster's unit tag is wrong)"
+# choices after Meters, so the DEM_Z index of each id is unchanged
+Z_LABELS = dict(gdal_io.Z_CHOICE_LABELS)
 TRIGGER_LABELS = {floodmod.TRIGGER_PEAK: "at the highest pool level",
                   floodmod.TRIGGER_TIME: "at a set time (hours after the inflow starts)",
                   floodmod.TRIGGER_WSE: "when the pool reaches an elevation (ft)"}

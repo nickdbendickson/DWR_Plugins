@@ -159,7 +159,8 @@ def fill_grid(grid, tif_path):
     crs_wkt = getattr(grid, "crs_wkt", None)
     if crs_wkt and ds.GetProjection():
         kw["dstSRS"] = crs_wkt
-    warped = gdal.Warp("", ds, **kw)
+    from .warp_opts import no_vshift             # 3.10.89: the tile's metres as stored
+    warped = gdal.Warp("", ds, **no_vshift(gdal, kw))
     if warped is None:
         return grid
     arr = warped.GetRasterBand(1).ReadAsArray()

@@ -42,7 +42,7 @@ def test_tile_workdir_removed_on_success_and_failure():
 def _run(out, fail=False):
     seen = {}
 
-    def fake_download(extent, cell, work, stem, feedback=None):
+    def fake_download(extent, cell, work, stem, feedback=None, scope=0):   # 0.17.50: scope
         seen["work"] = work
         for i in range(29):
             open(os.path.join(work, "{}_t{}.tif".format(stem, i)), "w").close()
