@@ -39,6 +39,9 @@ _CHUNK_PX = 1200                    # Screening solve_gate.TILE_PX: the ImageSer
 def dem_facts_text(source_i, cell_m, buffer_mi=10.0, scope_i=0):
     """The line under the Runner's 'Download a DEM' box (3.10.88: says how many ImageServer
     chunks a 1 m dam download is, and what the native 1 m tile source writes). Pure: tested."""
+    if source_i == 2 and scope_i == 2:
+        return ("Native 1 m lidar tiles are not offered for the whole state (thousands of 10 km "
+                "tiles): choose Dam or County, or USGS 3DEP at 10 m for the state.")
     if source_i == 2:
         return ("Native 1 m lidar tiles from The National Map: 10 km GeoTIFFs at 1 m, UTM, "
                 "elevations in metres, about 270 MB each, kept as they are; the result is "
@@ -52,8 +55,12 @@ def dem_facts_text(source_i, cell_m, buffer_mi=10.0, scope_i=0):
         src = "USGS 3DEP ImageServer"
         native = "native CRS EPSG:5070, native units metres, native file GeoTIFF"
     else:
+        # 3.10.89: DEM_Imagine is UTM metres (EPSG:3721 is UTM 14N), as Screening's build_vrts
+        # reads it; only ASCII_Grids_ft is feet (State Plane) and it is converted
         src = "ND DWR QL2 LiDAR"
-        native = "native CRS QL2 feet (often EPSG:3721 or EPSG:2266), native units feet, native file Erdas Imagine .img"
+        native = ("native DEM_Imagine: Erdas Imagine .img, UTM metres (EPSG:26914 or EPSG:3721), "
+                  "elevations in metres; native ASCII_Grids_ft: ASCII grids in ND State Plane feet "
+                  "(EPSG:2265 / 2266), elevations in feet, converted x 0.3048")
     text = ("Local copy: source {src}; CRS EPSG:5070; units metres; file type GeoTIFF float32 "
             "tiled; cell {cell} m. {native}.").format(src=src, cell=cell_m, native=native)
     if source_i == 0 and scope_i == 0:
@@ -673,16 +680,25 @@ class NDBreachRunnerDialog(QDialog):
         if not folder:
             QMessageBox.warning(self, TITLE, "Choose a folder for the DEM.")
             return
+        if self.dem_scope.currentIndex() == 2 and self.dem_source.currentIndex() == 2:
+            # 3.10.89: the tool refuses the native 1 m tiles for the state; say so before asking
+            QMessageBox.warning(self, TITLE, dem_facts_text(2, 1, 10.0, 2))
+            return
         if self.dem_scope.currentIndex() == 2:
             n = QMessageBox.question(self, TITLE, "A statewide DEM is tiled and can take a long time. Continue?")
             if n != getattr(QMessageBox, 'StandardButton', QMessageBox).Yes:
                 return
+        # 3.10.89: COUNTY is the Processing enum's index, as Screening's window passes it - the
+        # tool dialog turned the county's name into index 0 (Adams) for every county
+        dd = _load_dem_download()
+        names = list(dd.county_names()) if dd is not None else []
+        county = self.dem_county.currentText()
         exec_tool_dialog(processing, "nddam:downloaddem", {
             "SOURCE": self.dem_source.currentIndex(),        # 2 = native 1 m lidar tiles (TNM)
             "SCOPE": self.dem_scope.currentIndex(),
             "DAM_POINT": self.dem_point.text().strip(),
             "BUFFER_MI": float(self.dem_buffer.value()),
-            "COUNTY": self.dem_county.currentText(),
+            "COUNTY": names.index(county) if county in names else 0,
             "RES": self.dem_res.currentIndex(),
             "CELL": 10.0 if self.dem_res.currentIndex() == 0 else 1.0,
             "DWR_PATH": self.dem_ftp.text().strip(),

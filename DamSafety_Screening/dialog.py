@@ -959,7 +959,8 @@ class NDDamScreeningDialog(QDialog):
         self.dem_fact.setWordWrap(True)
         grid.addWidget(self.dem_fact, 4, 0, 1, 4)
         self.dem_facts = QLabel(
-            "Output: GeoTIFF, EPSG:5070, metres. USGS native is the same. ND LiDAR native is feet, Imagine .img, then warped.")
+            "Output: GeoTIFF, EPSG:5070, metres. USGS native is the same. ND LiDAR native: DEM_Imagine .img in UTM "
+            "metres; ASCII_Grids_ft in State Plane feet, converted to metres. Then warped.")
         self.dem_facts.setWordWrap(True)
         grid.addWidget(self.dem_facts, 5, 0, 1, 4)
         off = QPushButton("Download offline layers for this county")
@@ -2497,7 +2498,8 @@ class NDDamScreeningDialog(QDialog):
             label.setText("USGS 3DEP 1 m lidar tiles: native GeoTIFF tiles, UTM metres, kept in the suite's "
                           "dem/lidar_1m folder. Result is a per-dam VRT. The first run lists the tiles and sizes.")
         elif index == 1:
-            label.setText("ND DWR LiDAR: feet, often EPSG:3721, .img. Saved copy is EPSG:5070, metres, GeoTIFF.")
+            label.setText("ND DWR LiDAR: DEM_Imagine .img in UTM metres (EPSG:26914 / 3721); ASCII_Grids_ft in State "
+                          "Plane feet, converted. Saved copy is EPSG:5070, metres, GeoTIFF.")
         else:
             label.setText("USGS 3DEP: EPSG:5070, metres, GeoTIFF.")
 

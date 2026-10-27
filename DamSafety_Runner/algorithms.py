@@ -888,12 +888,14 @@ class _Base(QgsProcessingAlgorithm):
             if has("NLCD_RASTER") else None
         zc = ZUNITS[self.parameterAsEnum(parameters, "DEM_Z", context)][0] \
             if has("DEM_Z") else "auto"
+        z_how = ""
         if zc == "auto":
             # 3.10.88: 'Detect from the raster' uses the unit the DEM records (band unit type or
             # vertical CRS: the Download DEM tool's files from Screening 0.17.50, 1 m lidar VRTs);
-            # a DEM with none still stops here, naming the setting.
+            # a DEM with none still stops here, naming the setting. 3.10.89: how it was detected
+            # goes into the units note (z_note) below.
             try:
-                zc, _how = gdal_io.resolve_dem_z(dem.source(), zc)
+                zc, z_how = gdal_io.resolve_dem_z(dem.source(), zc)
             except ValueError as e:
                 raise QgsProcessingException(str(e))
             except Exception as e:                       # noqa - unreadable DEM: say which setting
@@ -941,6 +943,8 @@ class _Base(QgsProcessingAlgorithm):
                                       n_default, **kw)
         except ValueError as e:                       # a bad NDBREACH_DEM_RESAMPLE value
             raise QgsProcessingException(str(e))
+        if z_how:                                     # detected, not chosen (3.10.89)
+            src.z_note = gdal_io.detected_z_note(zc, z_how)
         self._record("DEM resampling", "{} (from {})".format(src.resample, src.resample_source))
         dem_wkt = dem.crs().toWkt()
         target, res = None, None

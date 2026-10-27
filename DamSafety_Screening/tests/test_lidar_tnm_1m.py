@@ -372,6 +372,7 @@ def vrt_puts_the_newest_on_top_and_the_coarser_dem_underneath():
         ds.SetGeoTransform((x - 150, 10, 0, y + 150, 0, -10))
         ds.SetProjection(dst.ExportToWkt())
         ds.GetRasterBand(1).Fill(9.0)
+        ds.GetRasterBand(1).SetUnitType("m")       # as Download DEM writes it (0.17.50)
         ds = None
         gdal.Translate(fb, tmpfb)
         gdal.Unlink(tmpfb)

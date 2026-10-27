@@ -790,8 +790,14 @@ The same hook classifies each sensitivity case.
   highest DEM point within 30 m of the dam point and says so in the report.
 - **Surface area at the top of dam.** Without it the storage curve assumes volume grows
   with depth squared.
-- **DEM elevation units.** Detected from the raster when recorded; otherwise it assumes the
-  CRS's linear unit and warns. Set it explicitly for State Plane (US survey feet) LiDAR.
+- **DEM elevation units.** 'Detect from the raster' (the default) uses the unit the DEM
+  records: its band unit (m, ft, US survey foot), a compound CRS's vertical unit, or Screening's
+  Download DEM record of a USGS 3DEP download. A DEM with none (a plain GeoTIFF, a VRT of tiles,
+  an ASCII grid, an ND DWR LiDAR download made before Screening 0.17.50) or with a scale / offset
+  on its band stops the run, which asks for Meters or Feet; the run never guesses from the CRS or
+  the values. Every Download DEM output is metres; raw ND DWR ASCII_Grids_ft are feet. Set it
+  explicitly for State Plane (US survey feet) LiDAR. How it was decided is in the run log and
+  the report ("metres (detected: raster unit 'm')").
 - **Cell size.** 10 m is a sensible default. 20-30 m is much faster for screening.
 
 ## Limits to keep in mind

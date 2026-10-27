@@ -307,7 +307,7 @@ Download DEM (`nddam:downloaddem`, also the window's **Download DEM…** button)
 | Source | What you get |
 |---|---|
 | USGS 3DEP | The 3DEP ImageServer resampled to 10 m or 1 m, warped to one EPSG:5070 GeoTIFF. |
-| ND DWR LiDAR | ND QL2 tiles from lidar.dwr.nd.gov (DEM_Imagine 1 m, 2 km tiles), warped to one EPSG:5070 GeoTIFF. |
+| ND DWR LiDAR | ND QL2 tiles from lidar.dwr.nd.gov (DEM_Imagine 1 m, 2 km tiles, UTM metres; or ASCII_Grids_ft, ND State Plane feet, converted x 0.3048), warped to one EPSG:5070 GeoTIFF. |
 | **USGS 3DEP 1 m lidar tiles (native, TNM)** | The 3DEP 1 m lidar project tiles themselves (10 x 10 km GeoTIFFs at 1 m, NAD83 UTM metres, NAVD88, about 275 MB each) from The National Map, kept as they are, and a per-dam VRT over them. |
 
 How to run it (Processing toolbox > Dam screening > Download DEM, Source = *USGS 3DEP 1 m lidar
@@ -349,9 +349,12 @@ The result, in the output folder:
 - `<DAM_ID>_1m_lidar.vrt`: 1 m, in the UTM zone most tiles are in (a tile in another zone is
   warped into it), clipped to the area, the newest collection on top. The coarser DEM sits
   underneath and shows only where no tile has data: **coarser DEM underneath**
-  (`FALLBACK_DEM`), else `<DAM_ID>_10m_5070.tif` when it is in the output folder.
+  (`FALLBACK_DEM`), else `<DAM_ID>_10m_5070.tif` when it is in the output folder. The VRT is
+  tagged metres, so (0.17.50) a fallback whose band unit, vertical CRS or Download DEM record
+  says feet or US survey feet is converted to metres first, and one that records no unit is not
+  used (a warning; the json's `fallback_refused`).
 - `<DAM_ID>_1m_lidar.json`: the source projects with their dates, the tiles (sha256), the
-  fallback, the area, any missing tiles and the overlap choices.
+  fallback and its unit (`fallback_units`), the area, any missing tiles and the overlap choices.
 - `<DAM_ID>_1m_lidar_dem.txt`: the usual source / CRS / units facts.
 
 Nothing downloads when QGIS or the window opens.

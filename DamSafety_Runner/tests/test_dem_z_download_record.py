@@ -23,20 +23,29 @@ except ImportError:                                      # pragma: no cover - pl
     gdal = None
 
 
-def _old_download(folder, name, value=320.2, metadata=True, sidecar=True):
+USGS = "USGS 3DEP ImageServer (elevation.nationalmap.gov)"
+NDDWR = "ND DWR QL2 LiDAR (lidarftp.swc.nd.gov, lidar.dwr.nd.gov)"
+
+
+def _old_download(folder, name, value=320.2, metadata=True, sidecar=True, source=USGS,
+                  crs="EPSG:26914", cell=10):
     """A Download DEM GeoTIFF as Screening 0.17.49 wrote it: no band unit, the dataset metadata
-    and the facts file of write_local_dem / write_sidecar."""
+    and the facts file of write_local_dem / write_sidecar (_dem: EPSG:26914 at 10 m here; the
+    tool writes EPSG:5070 - the facts must be this raster's)."""
     path = _dem(folder, name, "", value)
     if metadata:
         ds = gdal.Open(path, gdal.GA_Update)
-        ds.SetMetadataItem("SOURCE", "USGS 3DEP ImageServer (elevation.nationalmap.gov)")
-        ds.SetMetadataItem("CRS", "EPSG:5070")
+        ds.SetMetadataItem("SOURCE", source)
+        ds.SetMetadataItem("CRS", crs)
         ds.SetMetadataItem("UNITS", "metres")
+        ds.SetMetadataItem("FILE_TYPE", "GeoTIFF float32, tiled, DEFLATE")
+        ds.SetMetadataItem("CELL_M", str(cell))
         ds = None
     if sidecar:
         with open(os.path.splitext(path)[0] + "_dem.txt", "w", encoding="utf-8") as fh:
-            fh.write("source: USGS 3DEP ImageServer (elevation.nationalmap.gov)\ncrs: EPSG:5070\n"
-                     "units: metres\nfile_type: GeoTIFF float32, tiled, DEFLATE\ncell_m: 10\n")
+            fh.write("source: {}\ncrs: {}\nunits: metres\nfile_type: GeoTIFF float32, tiled, "
+                     "DEFLATE\ncell_m: {}\nnative_source: x\nnative_crs: x\nnative_units: x\n"
+                     "native_file_type: x\n".format(source, crs, cell))
     return path
 
 
@@ -50,7 +59,7 @@ def dem_z_detect_reads_the_download_dem_record():
     try:
         both = _old_download(d, "DWR-2801_10m_5070.tif")
         got, how = G.resolve_dem_z(both, "auto")
-        assert got == G.Z_METERS and "UNITS=metres" in how, (got, how)
+        assert got == G.Z_METERS and "Download DEM record" in how and "units metres" in how, how
         md_only = _old_download(d, "md_10m_5070.tif", sidecar=False)
         assert G.resolve_dem_z(md_only, "auto")[0] == G.Z_METERS
         side_only = _old_download(d, "side_10m_5070.tif", metadata=False)

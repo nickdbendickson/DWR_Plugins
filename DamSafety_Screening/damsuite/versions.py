@@ -46,6 +46,12 @@ REQUIRES = {
                                "NDDOT inlet / outlet elevations are checked against the LiDAR only "
                                "from 3.6.0 (older Runners use them as given); a proposed embankment "
                                "in dam.json is inserted on the grid only from 3.7.0"),
+    ("ndbreach", "ndscreen"): ("0", "0.17.50",
+                               "the Runner window's Download a DEM opens Screening's Download DEM; "
+                               "from 0.17.50 it records the elevation unit that the Runner's "
+                               "'Detect from the raster' reads, converts a feet fallback DEM under "
+                               "the 1 m lidar tiles to metres, and no longer takes metre ND DWR "
+                               "DEM_Imagine tiles for feet grids in a folder named gft*"),
     ("ndscreen", "ndbreach"): ("3.1.0", "3.7.0",
                                "tool 7b parameters; dam.json from 3.2.0; a proposed embankment is "
                                "inserted on the grid the Runner reads only from 3.7.0"),

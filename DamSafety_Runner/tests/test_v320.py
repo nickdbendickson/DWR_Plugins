@@ -877,10 +877,15 @@ def version_checks_at_start_up_show_in_the_message_bar_and_log():
         msgs = p.check_versions({"ndhazard": "2.9.5"})
         assert [k for k, _t in msgs if k != "info"] == ["warning"] and bar[0][3] == 15
         bar.clear()
-        # not installed / current: nothing in the message bar
-        for v in ({}, {"ndhazard": "2.18.63", "ndscreen": "0.9.0"}):
+        # not installed / current: nothing in the message bar (3.10.89: Screening 0.17.50 is the
+        # soft minimum - its Download DEM records the unit 'Detect from the raster' reads)
+        for v in ({}, {"ndhazard": "2.18.63", "ndscreen": "0.17.50"}):
             msgs = p.check_versions(v)
             assert all(k == "info" for k, _t in msgs) and not bar, (v, msgs)
+        msgs = p.check_versions({"ndhazard": "2.18.63", "ndscreen": "0.17.49"})
+        assert [k for k, _t in msgs if k != "info"] == ["warning"], msgs
+        assert "0.17.50 or newer" in [t for k, t in msgs if k == "warning"][0], msgs
+        bar.clear()
         # initGui schedules the check (no QTimer in the stub: it runs at once) and loads
         # without ND Dam Hazard
         logged.clear()

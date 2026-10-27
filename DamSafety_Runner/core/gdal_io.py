@@ -8,15 +8,16 @@ import numpy as np
 from .grid import Grid, NODATA
 from .units import FT, US_FT
 from ..damsuite import gdalsafe as GS
+from . import dem_zunit as ZU
 from .warp_opts import no_overviews
 
-Z_AUTO, Z_FEET, Z_US_FEET, Z_METERS = "auto", "feet", "us_feet", "meters"
+Z_AUTO, Z_FEET, Z_US_FEET, Z_METERS = "auto", ZU.FEET, ZU.US_FEET, ZU.METERS
 Z_CHOICES = (Z_AUTO, Z_FEET, Z_US_FEET, Z_METERS)
 
-_FEET_NAMES = ("ft", "foot", "feet", "international foot", "intl foot")
-_US_FEET_NAMES = ("us survey foot", "us-ft", "ftus", "us_ft", "foot_us", "us foot",
-                  "us survey feet", "ft (us)", "survey foot")
-_METER_NAMES = ("m", "metre", "meter", "metres", "meters")
+# 3.10.89: one list of unit names with Screening (core/dem_zunit.py, byte-identical there)
+_FEET_NAMES = ZU.FEET_NAMES
+_US_FEET_NAMES = ZU.US_FEET_NAMES
+_METER_NAMES = ZU.METER_NAMES
 
 
 def _gdal():
@@ -77,87 +78,22 @@ def z_to_m_factor(path, choice=Z_AUTO):
 
 
 def recorded_z_unit(path):
-    """(choice, how) from the elevation unit the DEM itself records - its band unit type, else a
-    compound CRS's vertical unit, else (3.10.89) the Download DEM tool's own record
-    (download_record_unit) - or ("", why) when it records none. choice is Z_FEET,
-    Z_US_FEET or Z_METERS. Never guesses from the horizontal CRS or the values (3.10.88)."""
+    """(choice, how) from the elevation unit the DEM itself records - its band unit type (not
+    when band 1 has a scale / offset), else a compound CRS's vertical unit, else (3.10.89) the
+    Download DEM tool's own record of a USGS 3DEP download - or ("", why) when it records none
+    that can be trusted. choice is Z_FEET, Z_US_FEET or Z_METERS. Never guesses from the
+    horizontal CRS or the values (3.10.88). The rules are core/dem_zunit.recorded, which
+    Screening's Download DEM uses for what it writes."""
     _gdal()
     ds = GS.open_raster(path)
-    unit = (ds.GetRasterBand(1).GetUnitType() or "").strip().lower()
-    if unit in _US_FEET_NAMES:
-        return Z_US_FEET, "raster unit '{}'".format(unit)
-    if unit in _FEET_NAMES:
-        return Z_FEET, "raster unit '{}'".format(unit)
-    if unit in _METER_NAMES:
-        return Z_METERS, "raster unit '{}'".format(unit)
-    if unit:
-        return "", "the raster's unit '{}' is not feet or metres".format(unit)
-    from osgeo import osr
-    wkt = ds.GetProjection()
-    if wkt:
-        srs = osr.SpatialReference()
-        srs.ImportFromWkt(wkt)
-        try:
-            vert = srs.GetTargetLinearUnits("VERT_CS") if srs.IsCompound() else None
-        except Exception:
-            vert = None
-        if vert and abs(vert - US_FT) < 1e-7:
-            return Z_US_FEET, "vertical CRS in US survey feet"
-        if vert and abs(vert - FT) < 1e-7:
-            return Z_FEET, "vertical CRS in feet"
-        if vert and abs(vert - 1.0) < 1e-9:
-            return Z_METERS, "vertical CRS in metres"
-    got = download_record_unit(ds, path)
-    if got[0]:
-        return got
-    return "", ("no elevation unit is recorded in the raster (no band unit, no vertical CRS, "
-                "no Download DEM record)")
+    return ZU.recorded(ds, path)
 
 
-def _unit_choice(unit):
-    unit = (unit or "").strip().lower()
-    if unit in _US_FEET_NAMES:
-        return Z_US_FEET
-    if unit in _FEET_NAMES:
-        return Z_FEET
-    if unit in _METER_NAMES:
-        return Z_METERS
-    return ""
-
-
-def download_record_unit(ds, path):
-    """(choice, how) from the Screening Download DEM tool's own record of a GeoTIFF it wrote, or
-    ("", ""): the dataset metadata SOURCE + UNITS that write_local_dem sets (every Screening
-    version; a warped copy keeps it), else the <stem>_dem.txt facts file beside it ('units:').
-    3.10.89: the downloads of Screening 0.17.49 and earlier have no band unit, so 'Detect from
-    the raster' stopped on them (Nick, one-dam run, Absaraka DWR-2801)."""
-    try:
-        md = ds.GetMetadata() or {}
-    except Exception:
-        md = {}
-    if str(md.get("SOURCE") or "").strip() and str(md.get("UNITS") or "").strip():
-        got = _unit_choice(md.get("UNITS"))
-        if got:
-            return got, "Download DEM record UNITS={}".format(md.get("UNITS"))
-    side = os.path.splitext(str(path).split("|", 1)[0])[0] + "_dem.txt"
-    try:
-        with open(side, encoding="utf-8") as fh:
-            lines = fh.read().splitlines()
-    except (OSError, UnicodeDecodeError):
-        return "", ""
-    for line in lines:
-        key, _sep, val = line.partition(":")
-        if key.strip().lower() == "units":
-            got = _unit_choice(val)
-            if got:
-                return got, "Download DEM facts file {} (units: {})".format(
-                    os.path.basename(side), val.strip())
-    return "", ""
-
-
-DEM_Z_HELP = ("Set 'DEM elevation units' to Meters or Feet. Metres: USGS 3DEP downloads (the "
-              "'Download DEM' tool's GeoTIFFs and 1 m lidar VRTs), USGS 1 m lidar tiles, ND DWR "
-              "DEM_Imagine (.img). Feet: ND DWR QL2 ASCII_Grids_ft.")
+DEM_Z_HELP = ("Set 'DEM elevation units' to Meters or Feet. Metres: the 'Download DEM' "
+              "outputs (<id>_10m_5070.tif / <id>_1m_5070.tif - ND DWR ASCII_Grids_ft are "
+              "converted x 0.3048 - and <id>_1m_lidar.vrt), USGS 3DEP 1 m lidar tiles, ND DWR "
+              "DEM_Imagine (.img, UTM metres). Feet: the raw ND DWR QL2 ASCII_Grids_ft grids "
+              "(.asc, ND State Plane feet).")
 
 
 def resolve_dem_z(path, choice=Z_AUTO):
@@ -172,6 +108,13 @@ def resolve_dem_z(path, choice=Z_AUTO):
         return got, "detected: " + how
     raise ValueError("'DEM elevation units' is 'Detect from the raster', but {}: {}. {}".format(
         os.path.basename(str(path)) or path, how, DEM_Z_HELP))
+
+
+def detected_z_note(choice, how):
+    """The 'DEM elevations in ...' note (run log, report.json dem_elevation_units, the docx) of a
+    run whose unit was detected: "metres (detected: raster unit 'm')". 3.10.89: it said
+    "metres (chosen)" although the user had picked 'Detect from the raster'."""
+    return "{} ({})".format(ZU.NAMES.get(choice, choice), how)
 
 
 ND_GROUND_M = (200.0, 1100.0)      # North Dakota: 229 m (Pembina) to 1069 m (White Butte)

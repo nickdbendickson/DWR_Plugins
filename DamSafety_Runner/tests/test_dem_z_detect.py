@@ -111,7 +111,10 @@ def rundam_dem_z_detect_runs_a_tagged_dem_and_names_the_setting_otherwise():
         tagged = _dem(d, "dl_10m_5070.tif", "m")
         untagged = _dem(d, "plain.tif")
         src = _gis(algs, tagged, 0)[0]                   # 'Detect from the raster' + band unit m
-        assert abs(src.z_to_m - 1.0) < 1e-12 and "chosen" in src.z_note, src.z_note
+        # 3.10.89: the units note (run log, report.json, docx) says how, not "(chosen)"
+        assert abs(src.z_to_m - 1.0) < 1e-12, src.z_to_m
+        assert src.z_note == "metres (detected: raster unit 'm')", src.z_note
+        assert _gis(algs, tagged, 3)[0].z_note == "metres (chosen)"
         src = _gis(algs, _dem(d, "ft_tagged.tif", "ft", 1300.0), 0)[0]
         assert abs(src.z_to_m - 0.3048) < 1e-12, src.z_to_m
         _gis(algs, untagged, 3)                          # Meters chosen: runs as before
@@ -146,8 +149,17 @@ def dem_facts_count_imageserver_chunks_and_offer_the_native_1m_tiles():
         assert "export requests" not in D.dem_facts_text(0, 1, 10.0, 1)       # a county
         tn = D.dem_facts_text(2, 1, 10.0, 0)
         assert "10 km" in tn and "download the listed tiles" in tn and "metres" in tn, tn
+        # 3.10.89: ND DWR DEM_Imagine is UTM metres (EPSG:3721 is UTM 14N), as build_vrts reads
+        # it; only ASCII_Grids_ft is feet - the facts line said 'QL2 feet ... native units feet'
+        nd = D.dem_facts_text(1, 10, 10.0, 0)
+        assert "native units feet" not in nd and "QL2 feet" not in nd, nd
+        assert "DEM_Imagine: Erdas Imagine .img, UTM metres" in nd and "converted x 0.3048" in nd, nd
+        # the native tiles are not offered for the state (the tool refuses it)
+        st = D.dem_facts_text(2, 1, 10.0, 2)
+        assert "not offered for the whole state" in st and "10 km GeoTIFFs" not in st, st
         dlg = D.NDBreachRunnerDialog()
-        if not hasattr(dlg, "dem_source"):
+        # 3.10.89: vars(), not hasattr() - the fake QWidget answers every attribute name
+        if "dem_source" not in vars(dlg):
             print("SKIP the window part (DamSafety Screening not importable here)")
             return
         items = [dlg.dem_source.itemText(i) for i in range(dlg.dem_source.count())]
@@ -164,5 +176,18 @@ def dem_facts_count_imageserver_chunks_and_offer_the_native_1m_tiles():
             dlg._open_dem_download()
             alg, p = q.proc.DIALOGS[-1]
             assert alg == "nddam:downloaddem" and p["SOURCE"] == 2 and p["BUFFER_MI"] == 10.0, p
+            # 3.10.89: COUNTY is the enum index (a name became index 0, Adams, in the tool dialog)
+            names = [dlg.dem_county.itemText(i) for i in range(dlg.dem_county.count())]
+            assert "Stark" in names and names[0] != "Stark", names[:3]
+            dlg.dem_scope.setCurrentIndex(1)
+            dlg.dem_county.setCurrentIndex(names.index("Stark"))
+            dlg._open_dem_download()
+            p = q.proc.DIALOGS[-1][1]
+            assert isinstance(p["COUNTY"], int) and names[p["COUNTY"]] == "Stark", p["COUNTY"]
+            # SOURCE 2 for the whole state: refused here, before the tool is opened
+            n = len(q.proc.DIALOGS)
+            dlg.dem_scope.setCurrentIndex(2)
+            dlg._open_dem_download()
+            assert len(q.proc.DIALOGS) == n, q.proc.DIALOGS[-1]
         finally:
             shutil.rmtree(d, ignore_errors=True)
