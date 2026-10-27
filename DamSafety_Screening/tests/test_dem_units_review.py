@@ -114,13 +114,15 @@ def lidar_vrt_converts_a_feet_fallback_and_refuses_one_without_a_unit():
             vrt, js = lt.build_vrt(entries, os.path.join(os.path.dirname(fb), "D1_1m_lidar.vrt"),
                                    fb, feedback=fbk)
             assert _unit(vrt) == "m", _unit(vrt)
-            assert abs(_at(vrt, *outside) - want) < 0.01, (unit, _at(vrt, *outside), want)
+            # 1e-4: x 0.3048 and x 1200/3937 differ by 5.8e-4 m on 951 ft
+            assert abs(_at(vrt, *outside) - want) < 1e-4, (unit, _at(vrt, *outside), want)
             assert abs(_at(vrt, *inside) - 290.0) < 1e-4            # the tiles on top
             info = json.load(open(js, encoding="utf-8"))
             assert info["fallback"] == fb and info["fallback_units"].startswith(words), info
             assert info["fallback_refused"] == ""
             if unit != "m":
                 assert any("converted to metres" in w for w in fbk.warnings), fbk.warnings
+                assert "x {:.10g}".format(want / value) in info["fallback_units"], info
         # a Download DEM 10 m GeoTIFF from before 0.17.50 (no band unit, USGS 3DEP record): metres
         old = os.path.join(work, "old", "D1_10m_5070.tif")
         dd.write_local_dem(_tif(os.path.join(work, "old", "src.tif"), 290.0), old, 10,

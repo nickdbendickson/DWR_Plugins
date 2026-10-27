@@ -579,6 +579,18 @@ def fallback_unit(path):
         ds = None
 
 
+def _exact_scale(vrt_path, f):
+    """Write the scale VRT's ScaleRatio with all its digits: GDAL writes 6 significant digits
+    (0.304801 for 1200/3937, 1.3 ppm off)."""
+    with open(vrt_path, encoding="utf-8") as fh:
+        xml = fh.read()
+    fixed = re.sub(r"<ScaleRatio>[^<]*</ScaleRatio>",
+                   "<ScaleRatio>{!r}</ScaleRatio>".format(float(f)), xml)
+    if fixed != xml:
+        with open(vrt_path, "w", encoding="utf-8") as fh:
+            fh.write(fixed)
+
+
 def build_vrt(entries, vrt_path, fallback="", bounds_ll=None, meta=None, feedback=None):
     """The per-dam VRT: the coarser `fallback` DEM (if given) at the bottom, then the tiles oldest
     collection first, so the newest lidar is on top and the fallback shows only where no tile has
@@ -628,8 +640,11 @@ def build_vrt(entries, vrt_path, fallback="", bounds_ll=None, meta=None, feedbac
         else:
             f = ZU.TO_M[fb_got]
             fbm = os.path.join(out_dir, "{}_fallback_m.vrt".format(stem))
-            GS.checked(gdal.Translate(fbm, fb, format="VRT", outputType=gdal.GDT_Float32,
-                                      scaleParams=[[0.0, 1.0, 0.0, f]]), "converting " + fallback)
+            out = GS.checked(gdal.Translate(fbm, fb, format="VRT", outputType=gdal.GDT_Float32,
+                                            scaleParams=[[0.0, 1.0, 0.0, f]]),
+                             "converting " + fallback)
+            out = None
+            _exact_scale(fbm, f)
             warped.append(fbm)
             fb = fbm
             fb_units = "{} ({}), converted x {:.10g} to metres".format(ZU.NAMES[fb_got], fb_how, f)
