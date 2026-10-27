@@ -160,13 +160,14 @@ assert set(bp) == set(ar) == {ids["A"], ids["C"]}
 assert 120.0 < bp[ids["A"]]["flow_az"] < 240.0, bp[ids["A"]]["flow_az"]       # downhill, south
 assert bp[ids["A"]]["brch_method"] == "pond" and bp[ids["A"]]["height_m"] == a["est_crest_m"] - a["grade_m"]
 assert bp[ids["A"]]["dir_conf"] in ("medium", "low") and bp[ids["C"]]["crest_len_m"] > 0
-# not written: the natural depression (listed with its reason) and the pond outside the terrain (failed)
+# not written: the natural depression (listed with its reason). 0.17.54: the pond outside the local
+# DEM is not read at all (it was a FAILED row, and on a statewide layer one error per water body)
 ex = {str(f["wb_id"]): f for f in ctx.layers[r16["OUTX"]].getFeatures()}
-assert set(ex) == {"E", "F"}, set(ex)
+assert set(ex) == {"E"}, set(ex)
 assert ex["E"]["pond_type"] == pd.T_DEPRESSION and "natural depression" in ex["E"]["reason"]
-assert ex["F"]["pond_type"] == "FAILED" and "terrain" in ex["F"]["reason"]
-assert any("water body F" in e for e in fb.errors)
+assert not any("water body F" in e for e in fb.errors), fb.errors
 log = "\n".join(fb.log)
+assert "5 of the 6 water bodies of the layer are over the local DEM" in log, log
 assert "by type:" in log and "1 of the written water bodies have no breach flood" in log and "Not run in a real QGIS" in log
 print("OK (tool 16: types, storage, curves, clips, breach points, excluded list)")
 
