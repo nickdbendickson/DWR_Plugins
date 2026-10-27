@@ -23,6 +23,9 @@ deterministic, so they can gate every PR cheaply:
                         every style, chart and copy (DamSafety_Hazard/tests/test_zone_colors_reg05.py)
   6. golden baseline  — the built-in flood engine still reproduces the frozen regulatory numbers
                         (needs numpy, not scipy; skipped with a notice if numpy is absent)
+  7. mac LISFLOOD     — tools/mac/lisflood/lisflood-8.3-ndbreach.patch (the Mac build's fallback
+                        when the Runner's patcher does not apply) still adds every line the
+                        Runner's scripts/patch_lisflood.py adds
 
 Exit non-zero on any failure. The heavier per-plugin suites (real QGIS / scipy / real engines)
 run in a separate CI job that provisions QGIS; this job is the always-on hard gate.
@@ -67,6 +70,48 @@ def check_cross_plugin_identical(problems):
         if len(set(shas.values())) > 1:
             _fail(problems, "{} differs across {} (must stay byte-identical)".format(
                 name, " / ".join(plugins)))
+
+
+MAC_PATCH = "tools/mac/lisflood/lisflood-8.3-ndbreach.patch"
+RUNNER_PATCHER = "DamSafety_Runner/scripts/patch_lisflood.py"
+
+
+def patch_added_lines(text, prefix="LISFLOOD-FP-8.3/source/"):
+    """{source-relative file: set of stripped '+' lines} of a unified diff."""
+    added, cur = {}, None
+    for line in text.splitlines():
+        if line.startswith("+++ "):
+            path = line[4:].split("\t")[0].strip()
+            path = path[2:] if path.startswith("b/") else path
+            cur = path[len(prefix):] if path.startswith(prefix) else path
+            added.setdefault(cur, set())
+        elif line.startswith("+") and cur is not None:
+            added[cur].add(line[1:].strip())
+    return added
+
+
+def check_mac_lisflood_patch(problems, root=None):
+    """The Mac build (tools/mac/lisflood/build_lisflood.sh) runs the Runner's own
+    scripts/patch_lisflood.py and falls back to the bundled 8.3 diff: that diff must add every
+    line the patcher's EDITS add, so a new Runner edit cannot be missing from a Mac build."""
+    import importlib.util
+    root = root or ROOT
+    patch, patcher = os.path.join(root, MAC_PATCH), os.path.join(root, RUNNER_PATCHER)
+    if not os.path.isfile(patch):
+        return                                   # no Mac package in this tree
+    spec = importlib.util.spec_from_file_location("_runner_patch_lisflood", patcher)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                 # defines EDITS and main(); runs nothing
+    added = patch_added_lines(_read(patch))
+    for rel, old, new, marker in mod.EDITS:
+        olds = old if isinstance(old, tuple) else (old,)
+        old_lines = {x.strip() for o in olds for x in o.splitlines()}
+        have = added.get(rel, set())
+        need = [x.strip() for x in new.splitlines() if x.strip() and x.strip() not in old_lines]
+        missing = [x for x in need if x not in have]
+        if missing or not any(marker in x for x in have):
+            _fail(problems, "{} lacks the Runner patcher's edit of {} ({}): {}".format(
+                MAC_PATCH, rel, marker, "; ".join(missing) or "marker not added"))
 
 
 def check_damsuite_drift(problems):
@@ -518,6 +563,7 @@ def main():
                      ("fork parity", check_fork_parity),
                      ("qt6 enums", check_qt6_enums),
                      ("qt6 metadata", check_qt6_metadata),
+                     ("mac LISFLOOD patch vs the Runner's patcher", check_mac_lisflood_patch),
                      ("compile", check_compile), ("golden baseline", check_golden)):
         print("[ci] " + name)
         try:
