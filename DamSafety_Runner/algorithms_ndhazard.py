@@ -169,17 +169,56 @@ def run_dem_unit(rep, path):
                if f is None else how)
 
 
+def same_path(a, b):
+    """True when a and b name the same file: compared after abspath + normpath + normcase
+    (Windows: case and '/' vs '\\'), or os.path.samefile when both exist (PR #198 review)."""
+    if not a or not b:
+        return False
+    try:
+        if os.path.exists(a) and os.path.exists(b):
+            return os.path.samefile(a, b)
+    except OSError:
+        pass
+    n = lambda p: os.path.normcase(os.path.normpath(os.path.abspath(p)))      # noqa: E731
+    return n(a) == n(b)
+
+
+def relocate_in_folder(path, folder):
+    """`path` as recorded by another machine (or a moved run folder), found under the dam
+    folder: a relative path joined to the folder, else the longest tail of the recorded path
+    (split at '/' and '\\', so a Windows path is read on Linux / macOS too) that exists under
+    the folder. None when none does."""
+    if not path or not folder:
+        return None
+    parts = [p for p in re.split(r"[\\/]+", str(path)) if p and not p.endswith(":")]
+    for i in range(len(parts)):
+        cand = os.path.join(folder, *parts[i:])
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
 def road_dem_of(folder, rep=None):
     """(DEM path or None, metres per unit or None, how, cell m) of the run's own DEM, from
-    _breach_model/run_report.json (settings.input_files.DEM)."""
+    _breach_model/run_report.json (settings.input_files.DEM). When that path does not exist
+    (the run folder was copied from another machine or moved), the DEM is looked for relative
+    to the dam folder (relocate_in_folder) and the how says so."""
     rep = run_report_of(folder) if rep is None else rep
     st = rep.get("settings") or {}
     path = (st.get("input_files") or {}).get("DEM")
     cell = st.get("cell_size_m")
-    if not path or not os.path.exists(path):
+    if not path:
         return None, None, "", cell
+    moved = ""
+    if not os.path.exists(path):
+        found = relocate_in_folder(path, folder)
+        if found is None:
+            return None, None, "", cell
+        moved = "; the recorded DEM {} does not exist here: read {} (relative to the dam " \
+                "folder)".format(path, found)
+        path = found
     f, how = run_dem_unit(rep, path)
-    return path, f, how, cell
+    return path, f, (how or "") + moved, cell
 
 
 def structure_cuts_of(folder):
@@ -1055,7 +1094,7 @@ class NDHazardAlgorithm(_ToolBase):
         if not wet_l:
             return "", {"how": "no wet centreline point: nothing to check"}
         med, n, against = None, 0, ""
-        if run_dem and run_z and os.path.abspath(run_dem) != os.path.abspath(given):
+        if run_dem and run_z and not same_path(run_dem, given):
             try:
                 ref = rprof.PointDEM(run_dem, run_z, grid.crs_wkt)
             except Exception:                                    # noqa - the next reference
