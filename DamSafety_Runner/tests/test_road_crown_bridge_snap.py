@@ -1245,6 +1245,69 @@ def bridge_snap_r3_a_sub_run_sharing_the_moved_bridge_reports_the_move():
     assert sm.Structure(kind="bridge", line=orig).snap_from is None
 
 
+def _roadside_low(X, Y, strips, open_depth=7.0):
+    """DWR-3034 0025008224 (PR #198 follow-up): flat ground at 95.3 m beside a road (y = 0,
+    crown 100 m) with `strips` (x0, x1, side) 2.3 m deep 28-50 m off the centreline (a ditch,
+    borrow area or pond at the embankment toe; side +1 / -1) and Square Butte Creek's opening
+    at x = 155: 30 m wide, its bed at the strips' level when open_depth = 7 m."""
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    z = np.full(X.shape, 95.3)
+    for x0, x1, side in strips:
+        z = np.where((X >= x0) & (X <= x1) & (side * Y >= 28.0) & (side * Y <= 50.0), 93.0, z)
+    z = np.where(np.abs(X - 155.0) < 4.0, 93.0, z)                 # the creek channel
+    on = np.abs(Y) <= 10.0
+    z = np.where(on, 100.0, z)
+    return np.where(on & (np.abs(X - 155.0) <= 15.0), 100.0 - open_depth, z)
+
+
+@test
+def bridge_snap_r4_ground_lower_beside_the_road_does_not_hold_a_cut_from_a_clearly_better_opening():
+    """PR #198 follow-up (review 7c27c79's 'lower beside the road' keep held DWR-3034's
+    0025008224 190 m from its creek, 'kept, verified'): a ditch / borrow strip 2.3 m deep
+    running along the embankment toe at the cut is not a crossing, and the cut moves to the
+    creek's 7 m deep, 30 m wide opening; low ground only at the cut (a channel under a deck in
+    the LiDAR) still keeps it unless the nearest crossing is clearly better (deeper, wide, its
+    bed down at the ground beside the cut, a mapped flowline crossing there and none at the
+    cut); taken by another structure, it is kept again."""
+    from nd_breach_runner.core import structures as sm
+    ditch = [(-150.0, -10.0, 1), (-80.0, -15.0, -1)]       # 3034: ~105 m / ~55 m along the road
+    local = [(-48.0, -22.0, 1), (-48.0, -22.0, -1)]        # across the road at the cut only
+    creek = (np.array([[155.0, -300.0], [155.0, 300.0]]),)          # a mapped flowline
+    for strips, tag, streams in ((ditch, "runs along the road", ()),
+                                 (ditch, "runs along the road", creek),
+                                 (local, "lower at the cut than", creek)):
+        b = _bridge(-35.0, "0025008224", w=31.1)
+        rows, notes, warns = _snap([b], lambda X, Y, s=strips: _roadside_low(X, Y, s),
+                                   streams=streams)
+        r = rows[0]
+        assert r["method"] == "dem_opening" and r["verified"], (tag, r)
+        assert abs(r["moved_m"] - 190.0) < 6.0 and tag in r["note"], (tag, r)
+        assert "clearly better" in r["note"] and any("moved 190 m" in w for w in warns), r
+        assert abs(float(np.mean(np.asarray(b.line)[:, 0])) - 155.0) < 6.0, b.line
+    # low ground across the road at the cut (a channel under a deck in the LiDAR, which hides
+    # the opening's depth) still keeps the cut when the nearest opening is not clearly better
+    # - shallow, or deep but with no channel line saying the creek is there
+    for depth, streams in ((1.5, creek), (7.0, ())):
+        b = _bridge(-35.0, "LOCAL")
+        rows, _n, warns = _snap([b], lambda X, Y, d=depth: _roadside_low(X, Y, local, d),
+                                streams=streams)
+        assert rows[0]["method"] == "kept" and rows[0]["verified"], (depth, rows[0])
+        assert "not clearly better" in rows[0]["note"] and not warns, (rows[0], warns)
+    # ... and when the clearly better opening is already cut by another structure
+    b = _bridge(-35.0, "LOCAL")
+    other = sm.Structure(kind=sm.KIND_CULVERT, line=np.array([[155.0, -15.0], [155.0, 15.0]]),
+                         width_m=3.0, height_m=2.0, name="CREEK CULVERT")
+    rows, _n, warns = _snap([b, other], lambda X, Y: _roadside_low(X, Y, local), streams=creek)
+    assert rows[0]["method"] == "kept" and rows[0]["verified"], rows[0]
+    assert "CREEK CULVERT" in rows[0]["note"] and float(b.line[0][0]) == -35.0, rows[0]
+    # the ditch with no opening within the radius: not verified (named in the stay warning)
+    b = _bridge(-35.0, "DITCH")
+    rows, _n, warns = _snap([b], lambda X, Y: _roadside_low(X, Y, ditch, open_depth=0.0))
+    assert rows[0]["method"] == "none" and not rows[0]["verified"], rows[0]
+    assert "runs along the road" in rows[0]["note"] and any("DITCH" in w for w in warns), warns
+
+
 @test
 def ndhazard_tool_paths_compare_across_platforms_and_the_dem_is_found_in_the_dam_folder():
     """PR #198 review, finding 4: the road-surface DEM vs the run's DEM compared with
