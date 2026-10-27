@@ -70,14 +70,28 @@ The runs read the box's data from `~/dwr-dam-suite/NickReview_data/` (read only)
   must be copied, plus 44 Screening 7b record inputs in `Dams/NickReview/screen_maxstor/`.
 
 Each has a `.tsv` with every file, its size and where it goes (`?`: the screen_maxstor
-files were added after the sizes were measured on the box; `run_nickreview.sh --list-data`
-there writes both lists again with every size). To download the LiDAR tiles instead of
-copying them:
+files were added after the sizes were measured on the box). To download the LiDAR tiles
+instead of copying them:
 
 ```bash
 bash get_lidar_tiles.sh                              # Absaraka
 bash get_lidar_tiles.sh data_files_nickreview.tsv    # all dams
 ```
+
+On the box, `--list-data` writes both lists again with every size. The box has no installer
+(so no `damsafety_env.sh` for `run_nickreview.sh`): run `nickreview_mac.py` itself from a
+DWR_Plugins checkout, with any python that has GDAL (e.g. the box's QGIS python). It is a dry
+run, so it needs no solvers and no plugins, and it lists finished dams too:
+
+```bash
+cd DWR_Plugins/tools/mac
+python3 nickreview_mac.py --list-data data_files_nickreview.tsv \
+  --data /home/box/DamSafety --out /tmp/nr_list --dams-file nickreview_dams.txt
+python3 nickreview_mac.py --list-data absaraka/data_files_DWR-2801.tsv --dam DWR-2801 \
+  --data /home/box/DamSafety --out /tmp/nr_list --dams-file nickreview_dams.txt
+```
+
+Each writes the `.tsv` and the `DATA_TO_COPY_*.md` next to it (nothing goes to `--out`).
 
 ## 4. Run the NickReview dams
 
@@ -91,9 +105,16 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
   `absaraka/grok_settings_DWR-2801.json`).
 * **Resume:** stop with Ctrl-C any time (the log, the summary and the manifest of the
   dams so far are kept); run the same command again and finished stages are skipped.
-  `--redo` runs the stages in `--stages` (all of them by default) and every stage after
-  them again, and its prepare step extracts and downloads its inputs (3DHP streams too)
-  again; earlier stages keep their results.
+* **`--redo`** runs finished stages again, in the same command: the first stage in
+  `--stages` (all of them by default) that applies to the dam, and every stage after it
+  that applies (they read its results). The stages before it keep their results. The
+  stages run in the order prepare, structures, precheck, record, rundam, hazclass, hazbatch.
+  prepare and structures do not apply to DWR-2801, DWR-2865 and DWR-3034 (they use the box
+  preparation), so for them `--redo --stages prepare` changes nothing and
+  `--redo --stages record` runs record, rundam, hazclass and hazbatch. A prepare step that
+  runs again extracts and downloads its inputs (3DHP streams too) again. To run one
+  finished stage again and nothing after it (e.g. the report-only precheck), delete its
+  `work/<dam>/status/<stage>.ok` and run with `--stages <stage>`, without `--redo`.
 * rundam waits for the Screening 7b record (`dams/<dam>/dam.json`, from
   `Dams/NickReview/screen_maxstor`), as on the box: without it the Runner would use its
   default crest length. `--allow-no-record` runs it anyway and says so in the log.
@@ -103,7 +124,9 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
   `work/<dam>/run_<dam>.log`; a manifest per run with the versions, the settings and the
   sha256 of every file the dam's steps read (each rundam and hazclass input, every file of
   a `;;` list, the DEM VRTs and the DEM tiles that touch the dam's area, the streams and
-  the other structures inputs, the Screening 7b inputs, the LISFLOOD-FP binary).
+  the other structures inputs, the suite pack layers or offline pack the extracts were cut
+  from and `DWR_dams.gpkg` (prepared dams), the box kit's JSON files, the Screening 7b
+  inputs, the dam's `dam.json` as rundam read it, the LISFLOOD-FP binary).
 * The Mac is kept awake while it runs (`caffeinate`).
 
 **Walkthrough:** Absaraka step by step, including the DEM and every QGIS dialog value:
@@ -111,13 +134,15 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
 
 ## 5. Three things that trip people up in QGIS
 
-* **1 m DEM: "729 tiles".** The Runner dialog's *Download a DEM* box with *USGS 3DEP* at
-  *1 m* fetches an image service in 1.2 km pieces: the default 10 mile buffer is
-  27 × 27 = 729 requests, not lidar tiles (in Runner 3.10.86 that box has no native-tile
-  source). For a 1 m DEM use `get_lidar_tiles.sh` (the tiles the box used), or the
-  Screening plugin's Processing tool *Download DEM (dam, county, or state)* with Source
-  **USGS 3DEP 1 m lidar tiles (native, TNM)** (10 km tiles, about 25–40 for a dam; it
-  lists them before downloading). Details in `absaraka/RUN-ABSARAKA.md`, step 3a.
+* **1 m DEM: "729 tiles".** The Runner dialog's *Download a DEM* section with *USGS 3DEP*
+  at *1 m* fetches an image service in 1.2 km pieces: the default 10 mile buffer is
+  27 × 27 = 729 requests, not lidar tiles (in Runner 3.10.86 that section's Source list has
+  no native-tile source). For a 1 m DEM use `get_lidar_tiles.sh` (the tiles the box used),
+  or the Screening plugin's Processing tool *Download DEM (dam, county, or state)* with
+  Source **USGS 3DEP 1 m lidar tiles (native, TNM)** (10 km tiles, about 25–40 for a dam;
+  it lists them before downloading). The section's *Download DEM…* button opens that same
+  Screening tool, so you can also switch its Source there before you run it. Details in
+  `absaraka/RUN-ABSARAKA.md`, step 3a.
 * **"Set the DEM elevation unit (feet or metres)".** In *Run breach model for one dam*,
   set **DEM elevation units = Meters** (USGS 1 m lidar, 3DEP downloads and ND DWR .img are
   metres; only ND DWR QL2 ASCII grids are feet). In Runner 3.10.86 *Detect from the
@@ -136,8 +161,12 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
 * DWR-3161 (flagged road-fill structure) and DWR-4593 (breached) are not in the list.
 * If USGS 3DHP streams can't be downloaded (or the service answers an error or no
   flowlines), the script falls back to the NHD flowlines. Every later run of that dam says
-  so in its log and manifest, and `--redo --stages prepare` tries 3DHP again (`--offline`
-  always uses NHD).
+  so in its log and manifest (also a run that skips it as finished), and
+  `--redo --stages prepare` tries 3DHP again and runs every later stage of that dam again
+  (`--offline` always uses NHD).
+* In QGIS, set *Crest length* as `absaraka/RUN-ABSARAKA.md` step 3c says: an empty crest
+  length with no `dam_length_ft` in the Dams folder's `dam.json` is the Runner's 400 ft
+  default, not the length the box runs used.
 * OSM road crossings are only in the 2026-10-21 offline pack, which is in the data list.
 
 ## Folders it creates

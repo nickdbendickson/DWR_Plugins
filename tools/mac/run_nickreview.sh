@@ -12,8 +12,10 @@
 #   --dam ID         only this dam (repeat for more)
 #   --dams FILE      dam list                                         [nickreview_dams.txt]
 #   --threads N      CPU threads for LISFLOOD-FP / ANUGA              [8]
-#   --redo           run stages that finished before again (default: skip them): the stages
-#                    in --stages and every stage after them; earlier ones are kept
+#   --redo           run finished stages again (default: skip them), in this command: the
+#                    first stage in --stages that applies to the dam and every stage after it
+#                    that applies; earlier ones are kept (prepare and structures do not apply
+#                    to DWR-2801/2865/3034: they use the box preparation unless --no-kits)
 #   --stages LIST    subset of prepare,structures,precheck,record,rundam,hazclass,hazbatch
 #   --offline        NHD flowlines from the suite pack instead of downloading 3DHP streams
 #   --allow-no-record  run rundam even if the Screening 7b record (dam.json) could not be
@@ -23,13 +25,14 @@
 #   --map BOX=MAC    extra path mapping for box paths in the kit files (repeatable)
 #   --dry-run        print the commands and planned inputs; run and write nothing
 #   --list-data TSV  (box side) list every file the dams need (bytes, copy_to, source) and
-#                    write the DATA_TO_COPY_*.md summary next to it; implies --dry-run
+#                    write the DATA_TO_COPY_*.md summary next to it; implies --dry-run.
+#                    On the box (no installer) run nickreview_mac.py itself: see its --help
 #
 # Ctrl-C stops the run; the log, the summary and the manifest of the dams so far are kept.
 # shellcheck disable=SC2154  # DAMSAFETY_* / QGIS_PROCESS / NDBREACH_* come from the sourced env file (checked below)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for a in "$@"; do case "$a" in -h|--help) sed -n '2,28p' "$0"; exit 0 ;; *) ;; esac; done
+for a in "$@"; do case "$a" in -h|--help) sed -n '2,31p' "$0"; exit 0 ;; *) ;; esac; done
 ENVF="${DAMSAFETY_ENV_FILE:-$HOME/dwr-dam-suite/damsafety_env.sh}"
 if [[ ! -f "$ENVF" ]]; then
   echo "ERROR: $ENVF not found. Run install_dwr_suite_mac.sh first." >&2; exit 1
@@ -53,7 +56,7 @@ while [[ $# -gt 0 ]]; do
     --redo|--offline|--no-kits|--allow-no-record) PASS+=("$1"); shift ;;
     --dry-run) DRY=1; PASS+=("$1"); shift ;;
     --list-data) DRY=1; PASS+=("$1" "$2"); shift 2 ;;
-    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
     *) echo "ERROR: unknown option $1 (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -82,7 +85,7 @@ if [[ $DRY -eq 0 ]]; then
   if command -v caffeinate >/dev/null 2>&1; then CAFF=(caffeinate -i -s); fi
   # tee ignores Ctrl-C (SIGINT goes to the whole process group), so it keeps logging while
   # the Python script writes the "stopped" line, the summary and the manifest
-  "${CAFF[@]}" "$DAMSAFETY_QGIS_PYTHON" "$HERE/nickreview_mac.py" \
+  ${CAFF[@]+"${CAFF[@]}"} "$DAMSAFETY_QGIS_PYTHON" "$HERE/nickreview_mac.py" \
     --data "$DATA" --out "$OUT" --dams-file "$DAMS" --threads "$THREADS" \
     --plugins "$DAMSAFETY_PLUGINS" --qgis-process "$QGIS_PROCESS" \
     --anuga-python "$NDBREACH_ANUGA_PYTHON" --lisflood "$NDBREACH_LISFLOOD" \

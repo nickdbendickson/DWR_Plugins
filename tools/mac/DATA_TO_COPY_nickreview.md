@@ -6,7 +6,7 @@ Put every file at `~/dwr-dam-suite/NickReview_data/<copy_to>` (same sub-folders)
 - 9.79 GB of that is USGS 3DEP 1 m LiDAR that can be downloaded instead of copied; the rest (22.90 GB) must be copied from the box.
   To download them: `bash get_lidar_tiles.sh data_files_nickreview.tsv` (all 36 URLs and sizes checked against USGS on 2026-10-26).
 - The full per-file list (size, path, source) is `data_files_nickreview.tsv`.
-- Plus **44 Screening 7b record inputs** in `Dams/NickReview/screen_maxstor/` (`8_hazard.gpkg`, `4_breach_points.gpkg` and the 42 `3_stage_storage/curve_<ID>.csv`; a dam without a curve on the box has none to copy). They were added to the lists after the sizes were measured, so their size is `?` and they are not in the totals above; `run_nickreview.sh --list-data` on the box writes both lists again with every size.
+- Plus **44 Screening 7b record inputs** in `Dams/NickReview/screen_maxstor/` (`8_hazard.gpkg`, `4_breach_points.gpkg` and the 42 `3_stage_storage/curve_<ID>.csv`; a dam without a curve on the box has none to copy). They were added to the lists after the sizes were measured, so their size is `?` and they are not in the totals above; on the box, `nickreview_mac.py --list-data` writes both lists again with every size (the command is in README_MAC.md, section 3).
 
 | folder | files | size | source |
 |---|---:|---:|---|

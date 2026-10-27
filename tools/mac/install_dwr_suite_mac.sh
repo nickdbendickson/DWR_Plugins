@@ -228,7 +228,7 @@ if [ "$MODE" = "check" ]; then
   echo "  LISFLOOD-FP: $PREFIX/bin/lisflood  $st"
   echo "  profile:    $PROFILE_DIR"
   for p in "${DS_PLUGINS[@]}"; do
-    v="$(sed -n 's/^version=//p' "$PROFILE_DIR/python/plugins/$p/metadata.txt" 2>/dev/null | tr -d '\r')"
+    v="$(sed -n 's/^version=//p' "$PROFILE_DIR/python/plugins/$p/metadata.txt" 2>/dev/null | tr -d '\r' || true)"
     echo "    plugin $p: $( [ -d "$PROFILE_DIR/python/plugins/$p" ] && echo "installed ${v:-?}" || echo missing)"
   done
   echo "  Absaraka:   $PREFIX/absaraka-run  $( [ -f "$PREFIX/absaraka-run/Dams/DWR-2801/dam.json" ] && echo ready || echo missing)"
@@ -443,6 +443,39 @@ if [ -d "$ABSARAKA_SRC" ]; then
   (cd "$ABSARAKA_SRC" && find . -type d -exec mkdir -p "$RUN/{}" \; )
   (cd "$ABSARAKA_SRC" && find . -type f | while IFS= read -r f; do
      [ -e "$RUN/$f" ] || cp -p "$f" "$RUN/$f"; done)
+  # a dam.json already in the run folder (an earlier install, or the Runner / Screening wrote
+  # to it) keeps every field it has, null ones too (a null with its reason is the suite's
+  # "no value"); a field it does not have is added from the package copy with its source
+  # (e.g. dam_length_ft, so the Runner does not fall back to its 400 ft default crest length)
+  if [ -f "$ABSARAKA_SRC/Dams/DWR-2801/dam.json" ] && [ -f "$RUN/Dams/DWR-2801/dam.json" ]; then
+    qpy - "$ABSARAKA_SRC/Dams/DWR-2801/dam.json" "$RUN/Dams/DWR-2801/dam.json" <<'PY' \
+      || warn "Could not add the package's fields to $RUN/Dams/DWR-2801/dam.json (left as it is)."
+import json, os, sys
+src, dst = sys.argv[1], sys.argv[2]
+with open(src, encoding="utf-8") as f:
+    s = json.load(f)
+with open(dst, encoding="utf-8") as f:
+    d = json.load(f)
+if d.get("format") != s.get("format") or d.get("format_version") != s.get("format_version") \
+        or not isinstance(d.get("fields"), dict):
+    print("  dam.json: not the same record format as the package's; left as it is")
+    sys.exit(0)
+add = sorted(k for k, v in s["fields"].items() if v is not None and k not in d["fields"])
+if not add:
+    sys.exit(0)
+for k in add:
+    d["fields"][k] = s["fields"][k]
+    if k in (s.get("sources") or {}):
+        d.setdefault("sources", {})[k] = s["sources"][k]
+d["fields"] = {k: d["fields"][k] for k in sorted(d["fields"])}
+d["sources"] = {k: d["sources"][k] for k in sorted(d.get("sources") or {})}
+tmp = dst + ".tmp"
+with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+    f.write(json.dumps(d, indent=1, ensure_ascii=False) + "\n")
+os.replace(tmp, dst)
+print("  dam.json: added " + ", ".join(add) + " from the package copy")
+PY
+  fi
 fi
 mkdir -p "$RUN/suite" "$RUN/work" "$RUN/Dams/DWR-2801/data"
 if [ ! -f "$RUN/Dams/DWR-2801/dam.json" ]; then

@@ -16,6 +16,16 @@ rundam starts only after the Screening 7b record (dams/<ID>/dam.json, from
 Dams/NickReview/screen_maxstor) is written, as on the box: without it the Runner models the
 dam with its default crest length instead of the record's dam_length_ft. --allow-no-record
 runs it anyway (and says so in the log and the manifest).
+
+Finished stages are skipped. --redo runs again, in the same command, the first stage in
+--stages that applies to the dam and every stage after it that applies (they read its
+results); the stages before it keep their results. prepare and structures do not apply to the
+kit dams (unless --no-kits), so '--redo --stages prepare' changes nothing for them.
+
+On the box (no installer), --list-data runs without the solvers:
+  python3 nickreview_mac.py --list-data data_files_nickreview.tsv --data /home/box/DamSafety \\
+      --out /tmp/nr_list --dams-file nickreview_dams.txt
+(any python with GDAL; add --dam DWR-2801 and absaraka/data_files_DWR-2801.tsv for that list).
 """
 import argparse
 import csv
@@ -105,6 +115,7 @@ HAZBATCH_CSV = "Batch_Hazard_Classification.csv"   # ndhazard:batch's table (one
 STAGES = ["prepare", "structures", "precheck", "record", "rundam", "hazclass", "hazbatch"]
 KIT_SKIPS = ("prepare", "structures")               # the box preparation replaces these
 STREAMS_MARK = "streams_source.json"                # which streams file prepare made, and why
+SOURCES_MARK = "prepare_sources.json"               # the files prepare's extracts were cut from
 # the data lists (--list-data): header and the "source" column
 LIST_HEADER = "bytes\tcopy_to (under ~/dwr-dam-suite/NickReview_data/)\tsource\n"
 LIDAR_SOURCE = "live download possible (USGS 3DEP 1 m, The National Map) or copy"
@@ -548,13 +559,16 @@ def write_features(feats, dst, name):
         os.remove(tmp)
 
 
-def extract(ctx, name, bbox, dst, pack_reader, log):
+def extract(ctx, name, bbox, dst, pack_reader, log, read=None):
     """dst = the layer clipped to bbox (offline pack, else suite pack). Returns the feature
-    count, or None when there is no source (then an older dst is removed, never reused)."""
+    count, or None when there is no source (then an older dst is removed, never reused). The
+    file it was cut from is added to the list read (for the manifest's sha256)."""
+    read = [] if read is None else read
     if pack_reader is not None:
         try:
             feats = pack_reader.query(name, lonlat_box(bbox))
             write_features(feats, dst, name)
+            read.append(ctx.a.pack)
             log("  {} {} features (offline pack)".format(name, len(feats)))
             return len(feats)
         except Exception as e:  # not in the pack: fall back to the suite pack
@@ -566,6 +580,7 @@ def extract(ctx, name, bbox, dst, pack_reader, log):
         return None
     vector_to(dst, ctx.d(os.path.join(SUITE, rel)), layerName=name,
               spatFilter=list(bbox), spatSRS="EPSG:5070")
+    read.append(ctx.d(os.path.join(SUITE, rel)))
     n = feature_count(dst)
     log("  {} {} features (suite pack, clipped)".format(name, n))
     return n
@@ -634,6 +649,18 @@ def read_batch_row(hb, dam, since):
 
 
 # -- running -----------------------------------------------------------------------------------
+def stages_to_run(asked, kit, redo):
+    """The stages one command runs for a dam, in run order: the stages asked for (--stages) that
+    apply to it (prepare and structures do not apply to a dam with a box preparation); with
+    --redo, from the first of them on, every stage after it that applies too (they read its
+    results). [] when none applies."""
+    applies = [s for s in STAGES if not (kit and s in KIT_SKIPS)]
+    hit = [s for s in applies if s in asked]
+    if not hit:
+        return []
+    return applies[applies.index(hit[0]):] if redo else hit
+
+
 class Runner(object):
     def __init__(self, ctx, dam):
         self.ctx, self.dam = ctx, dam
@@ -648,6 +675,7 @@ class Runner(object):
         self.box = None
         self.dem_src = None
         self.inputs = {}         # group -> [files] read by this dam's stages (for the sha256)
+        self.redo_dry = set()    # --redo --dry-run: the stages shown as run again
 
     def log(self, msg):
         line = "[{}] {} {}".format(now(), self.dam, msg)
@@ -659,6 +687,8 @@ class Runner(object):
         self.record.setdefault("notes", []).append(text)
 
     def done(self, stage):
+        if stage in self.redo_dry:
+            return False
         return os.path.isfile(os.path.join(self.status, stage + ".ok"))
 
     def mark(self, stage, info=""):
@@ -707,7 +737,7 @@ class Runner(object):
         return rc
 
     def qp(self):
-        return [self.ctx.a.qgis_process]
+        return [self.ctx.a.qgis_process or "qgis_process"]   # empty only with --list-data
 
     # -- streams: 3DHP, or NHD (--offline / fallback), recorded in work/<dam>/streams_source.json
     def streams_file(self, source):
@@ -748,9 +778,12 @@ class Runner(object):
             sys.path.insert(0, os.path.join(ctx.a.plugins, "DamSafety_Runner"))
             from damsuite import offline_pack as op
             reader = op.PackReader(ctx.a.pack)
+        smark = os.path.join(self.w, SOURCES_MARK)
+        _remove(smark)
+        read = [ctx.d(CULVERT_SOURCES[0])]
         for n in EXTRACTS:
             extract(ctx, n, bbox, os.path.join(self.w, "pack_{}_{}.gpkg".format(n, self.num)),
-                    reader, self.log)
+                    reader, self.log, read)
         ds = os.path.join(self.w, "pack_NID_dams_{}_downstream.gpkg".format(self.num))
         src = os.path.join(self.w, "pack_NID_dams_{}.gpkg".format(self.num))
         if os.path.exists(src):
@@ -776,7 +809,7 @@ class Runner(object):
                 info.update(source="nhd", why="3DHP failed: {}".format(e)[:300])
         if info["source"] == "nhd":
             _remove(self.streams_file("3dhp"))
-            extract(ctx, "NHD_flowlines", bbox, self.streams_file("nhd"), None, self.log)
+            extract(ctx, "NHD_flowlines", bbox, self.streams_file("nhd"), None, self.log, read)
         info["file"] = self.streams_file(info["source"])
         info["features"] = feature_count(info["file"]) if os.path.isfile(info["file"]) else 0
         if not info["features"]:
@@ -784,26 +817,54 @@ class Runner(object):
                      "streams source and run again".format(info["file"]))
             return 8
         write_json(mark, info, indent=1)
+        write_json(smark, {"when": now(), "files": sorted(set(read))}, indent=1)
         return 0
+
+    def prepare_sources(self):
+        """The files the extracts, NDDOT pipes and NHD streams were cut from (prepare_sources.json);
+        for a work folder made before that file existed, every source prepare could have read."""
+        try:
+            with open(os.path.join(self.w, SOURCES_MARK)) as f:
+                return list(json.load(f)["files"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        ctx = self.ctx
+        return [ctx.d(CULVERT_SOURCES[0])] + ([ctx.a.pack] if ctx.a.pack else []) + \
+            [ctx.d(os.path.join(SUITE, f)) for f in SUITE_LAYERS.values()]
 
     def go(self):
         ctx = self.ctx
         kit = self.dam in KITS and not ctx.a.no_kits
         mode = "kit" if kit else "prepare"
+        self.record["mode"] = mode
         if not ctx.dry:
             os.makedirs(self.status, exist_ok=True)
             self.logf = open(os.path.join(self.w, "run_{}.log".format(self.dam)), "a")
-        if ctx.a.redo and not ctx.dry:
-            # --redo: the stages asked for and every stage after them (their inputs change);
-            # the earlier stages and their results stay as they are
-            self.invalidate(STAGES[min(STAGES.index(s) for s in ctx.a.stages):])
-        applicable = [s for s in ctx.a.stages if not (kit and s in KIT_SKIPS)]
-        if applicable and all(self.done(s) for s in applicable):
-            self.log("finished before (status/*.ok); skipped. --redo to run again")
+        want = stages_to_run(ctx.a.stages, kit, ctx.a.redo)
+        if not want and not ctx.a.list_data:
+            # e.g. --stages prepare for a dam with a box preparation: nothing applies, so
+            # nothing is invalidated and nothing runs
+            self.log("{}: not used for this dam ({} mode: the box preparation replaces {}); "
+                     "nothing to do".format(",".join(ctx.a.stages), mode, " and ".join(KIT_SKIPS)))
             self.record["skipped"] = True
             return 0
+        if ctx.a.redo:
+            # --redo: the first stage asked for that applies to this dam and every applicable
+            # stage after it run again in this command (they read its results); the earlier
+            # stages and their results stay as they are
+            if ctx.dry:
+                self.redo_dry = set(want)
+            else:
+                self.invalidate(want)
+            self.log("--redo: {} {}".format(", ".join(want), "would run again (dry run: no "
+                                            "status is changed)" if ctx.dry else "run again"))
+        elif not ctx.a.list_data and all(self.done(s) for s in want):
+            self.log("finished before (status/*.ok); skipped. --redo to run again")
+            self.record["skipped"] = True
+            if not kit:
+                self.report_streams()
+            return 0
         self.log("mode: {} | work {} | results {}".format(mode, self.w, self.df))
-        self.record["mode"] = mode
         notes = []
         if kit:
             r, h = kit_inputs(ctx, self.dam)
@@ -846,7 +907,6 @@ class Runner(object):
             need7b, opt7b = screen_7b_files(self.dam)       # the record stage's inputs
             ctx.used.update(f for f in (ctx.d(x) for x in need7b + opt7b) if os.path.isfile(f))
         bbox = self.box
-        want = ctx.a.stages
         prep_now = not kit and "prepare" in want and not self.done("prepare")
         # 1. extracts (prepare mode only)
         bbox_file = os.path.join(self.w, "extract_box.json")
@@ -883,6 +943,8 @@ class Runner(object):
                     "STREAMS": streams, "ROADS": pk("ND_roads_NG911"), "RAIL": pk("NARN_rail_lines")}
         if not kit:
             self.inputs["structures"] = list(s_inputs.values()) + ([ctx.a.pack] if ctx.a.pack else [])
+            # what the extracts were cut from, and the DWR dams layer (AREA_AC)
+            self.inputs["prepare"] = self.prepare_sources() + [ctx.d(DWR_DAMS)]
         if not kit and "structures" in want and not self.done("structures"):
             args = ["{}={}".format(k, v) for k, v in s_inputs.items()]
             args += ["EXTENT={},{},{},{} [EPSG:5070]".format(bbox[0], bbox[2], bbox[1], bbox[3]),
@@ -917,7 +979,8 @@ class Runner(object):
                 if x:
                     ctx.need(x, self.dam + " " + k)
         for k in ("LISFLOOD_EXE", "ANUGA_PYTHON"):
-            ctx.need(r[k], "solver " + k)
+            if r[k] or not ctx.a.list_data:          # --list-data may run without the solvers
+                ctx.need(r[k], "solver " + k)
         need7b, _opt7b = screen_7b_files(self.dam)
         if not self.done("record"):
             for x in need7b:
@@ -967,6 +1030,7 @@ class Runner(object):
             self.log("rundam ran without the Screening 7b record (--allow-no-record); the record "
                      "is there now, so rundam, hazclass and hazbatch run again")
             self.invalidate(("rundam", "hazclass", "hazbatch"))
+            want += [s for s in ("hazclass", "hazbatch") if s not in want]
         if "rundam" in want and not self.done("rundam"):
             if not ctx.dry and not self.done("record"):
                 why = record_err or "status/record.ok is missing (run '--stages record' first)"
@@ -985,6 +1049,9 @@ class Runner(object):
             if ctx.problems and not ctx.dry:
                 self.log("inputs missing, rundam not started:\n  " + "\n  ".join(ctx.problems))
                 return 4
+            if not ctx.dry:      # the record rundam reads (the Runner adds to it while it runs)
+                dj = os.path.join(self.df, "dam.json")
+                self.record["dam_json_read_by_rundam"] = {dj: sha256(dj)}
             if self.run("rundam", self.qp() + ["run", "ndbreach:rundam", "-"], stdin=rj):
                 return 5
             if not ctx.dry:
@@ -1021,9 +1088,13 @@ class Runner(object):
     def checksums(self):
         """sha256 of every file this dam's stages read: each rundam and hazclass input (every
         file of a ';;' list), the DEM VRTs and the DEM tiles that touch the dam's area, the
-        structures inputs (streams, extracts, NDDOT, offline pack; prepare mode), the Screening
-        7b inputs, the screening record, the box kit's JSON files (kit mode) and the two JSON
-        files written here; the LISFLOOD-FP binary too."""
+        structures inputs (streams, extracts, NDDOT, offline pack; prepare mode), the files the
+        extracts were cut from (suite pack layers or the offline pack, NHD flowlines, NDDOT
+        pipes) and the DWR dams layer (prepare mode), the Screening 7b inputs, the screening
+        record, the box kit's JSON files (kit mode) and the two JSON files written here; the
+        LISFLOOD-FP binary and the ANUGA python too (they are rundam inputs). The dam's own
+        dam.json is hashed when rundam starts (record["dam_json_read_by_rundam"]), since the
+        Runner and the hazard tools add to it afterwards."""
         ctx, files = self.ctx, []
         for grp in ("rundam_inputs", "hazclass_inputs"):
             for k, v in sorted((self.record.get(grp) or {}).items()):
@@ -1205,8 +1276,10 @@ def main():
     ap.add_argument("--dams-file", required=True)
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--redo", action="store_true", help="run finished stages again: those in "
-                    "--stages and every stage after them")
+    ap.add_argument("--redo", action="store_true", help="run finished stages again, in this "
+                    "command: the first stage in --stages that applies to the dam and every stage "
+                    "after it that applies (prepare and structures do not apply to "
+                    "DWR-2801/2865/3034: they use the box preparation unless --no-kits)")
     ap.add_argument("--offline", action="store_true", help="NHD flowlines from the suite pack "
                     "instead of downloading 3DHP")
     ap.add_argument("--no-kits", action="store_true", help="prepare 2801/2865/3034 here too")
@@ -1214,18 +1287,26 @@ def main():
                     "Screening 7b record could not be written (results can differ from the box)")
     ap.add_argument("--stages", default=",".join(STAGES))
     ap.add_argument("--pack", default="", help="offline pack .sqlite (default: from --data)")
-    ap.add_argument("--plugins", required=True, help="the profile's python/plugins folder")
-    ap.add_argument("--qgis-process", required=True)
-    ap.add_argument("--anuga-python", required=True)
-    ap.add_argument("--lisflood", required=True)
+    # required, except with --list-data (a dry run that reads only the data files)
+    ap.add_argument("--plugins", default="", help="the profile's python/plugins folder")
+    ap.add_argument("--qgis-process", default="")
+    ap.add_argument("--anuga-python", default="")
+    ap.add_argument("--lisflood", default="")
     ap.add_argument("--map", action="append", default=[], metavar="BOXPATH=MACPATH")
     ap.add_argument("--list-data", default="", metavar="TSV",
                     help="(on the box) write every data file these dams need, with sizes, the "
                          "path to copy it to under --data and its source (the data_files_*.tsv "
-                         "format), and the DATA_TO_COPY_*.md summary next to it; implies --dry-run")
+                         "format), and the DATA_TO_COPY_*.md summary next to it; implies --dry-run "
+                         "and lists finished dams too. --plugins, --qgis-process, --anuga-python "
+                         "and --lisflood may be left out (on the box: --data /home/box/DamSafety)")
     a = ap.parse_args()
     if a.list_data:
         a.dry_run = True
+    else:
+        lack = ["--" + k.replace("_", "-") for k in ("plugins", "qgis_process", "anuga_python",
+                                                     "lisflood") if not getattr(a, k)]
+        if lack:
+            ap.error("the following arguments are required: " + ", ".join(lack))
     a.stages = [s for s in a.stages.split(",") if s]
     bad_maps = [m for m in a.map if "=" not in m or not m.split("=", 1)[0].startswith("/")]
     if bad_maps:

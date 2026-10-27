@@ -31,9 +31,13 @@ Results go to `~/dwr-dam-suite/Dams/NickReview_mac/dams/DWR-2801/`. The dam's lo
 `.../NickReview_mac/logs/`, and `.../NickReview_mac/manifest_<time>.json` records the
 versions, the settings and the sha256 of every file the steps read: each rundam and
 hazclass input (every file of a `;;` list), the DEM VRTs and the 1 m tiles that touch the
-dam's area, the Screening 7b inputs and the LISFLOOD-FP binary.
-Run it again and finished stages are skipped; `--redo` runs them again (with `--stages`,
-those stages and the ones after them).
+dam's area, the box kit's `rundam.json` and `hazclass.json`, the Screening 7b inputs, the
+dam's `dam.json` as rundam read it and the LISFLOOD-FP binary.
+Run it again and finished stages are skipped. `--redo` runs them again in the same command;
+with `--stages`, the first named stage that applies and every later one (for this dam:
+precheck, record, rundam, hazclass, hazbatch; prepare and structures do not apply, the box
+prepared it, so `--redo --stages prepare` changes nothing). For example
+`--redo --stages rundam` runs rundam, hazclass and hazbatch again.
 
 ## 3. Or in QGIS (Runner dialog)
 
@@ -50,7 +54,7 @@ not the tiles Grok used. Cancel it and do one of these:
 
 ```bash
 cd ~/Downloads/DWR_Mac_Setup
-bash get_lidar_tiles.sh --dry-run        # lists the 36 tiles (9.79 GB)
+bash get_lidar_tiles.sh --dry-run        # lists the 36 tiles and their total, 9.79 GB
 bash get_lidar_tiles.sh                  # downloads them; re-run to resume
 bash run_nickreview.sh --dam DWR-2801 --stages record   # writes the DEM VRT, runs no model
 ```
@@ -63,8 +67,10 @@ points at the box's `/workspace/...` and `/home/box/...` folders and will not op
 correctly in QGIS on the Mac.
 
 **Option A (inside QGIS, for this or any other dam):** the Screening plugin's tool (the
-Runner dialog's *Download a DEM* box has no native-tile source in Runner 3.10.86):
-Processing ▸ **DamSafety Screening** ▸ Dam screening ▸ **Download DEM (dam, county, or state)**:
+Source list of the Runner dialog's *Download a DEM* section has no native-tile source in
+Runner 3.10.86, but its *Download DEM…* button opens this same tool, where you can switch
+Source): Processing ▸ **DamSafety Screening** ▸ Dam screening ▸ **Download DEM (dam,
+county, or state)**:
 
 | field | value |
 |---|---|
@@ -105,6 +111,8 @@ Processing ▸ **DamSafety Runner** ▸ **Run breach model for one dam**.
 | field | value |
 |---|---|
 | Dam | DWR-2801, Swan Buffalo Detention Dam 12, NID ND00199 |
+| Dams folder | `~/dwr-dam-suite/absaraka-run/Dams` (the installer sets it as the suite's Dams folder; the results go to its `DWR-2801` folder, not to the Terminal run's). Its `DWR-2801/dam.json` is the NickReview screening record plus `dam_length_ft` = 1,700 ft (the NID dam length) |
+| Crest length (ft) | the `dam_length_ft` of the dam's Screening 7b record, the crest length the box and Terminal runs use: `grep -m1 dam_length_ft ~/dwr-dam-suite/Dams/NickReview_mac/dams/DWR-2801/dam.json`. Option B's `--stages record` line writes that record (after option A, run that line once; it runs no model). Left empty, the Runner takes the Dams folder's 1,700 ft (its log says "Crest length (ft) from dam.json"); with no crest length anywhere it uses 400 ft |
 | Dam point | -106343.832, 2666591.505 [EPSG:5070] |
 | Height / storage / area | 27.5 ft / 1615.496 ac-ft / **154.5 ac** (DWR max pool area) |
 | Top of dam | 1069.117 ft |
