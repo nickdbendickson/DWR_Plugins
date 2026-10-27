@@ -159,13 +159,20 @@ def median_unit_problem(med, zc, how=""):
     return text
 
 
-def sample_median(ds, grid=7, win=24):
-    """(median, cells) of the DEM's valid cells in a grid x grid pattern of win x win
-    full-resolution windows spread over the whole raster - corners, edges and centre - else
-    of a decimated read of the whole raster (_median_value); (None, 0) when neither finds a
-    valid cell. 3.10.89: the run's ND ground check read only the top-left 200 x 200 cells and
-    was skipped without a word when they were nodata - a 1 m DEM clipped to a dam's box or
-    warped to EPSG:5070 - so Feet ran a metre DEM x 0.3048."""
+def sample_median(ds, grid=7, win=24, size=256):
+    """(median, cells) of the DEM's valid cells (finite, not its nodata value - as stored: an
+    unset nodata of -3.4e38 makes the median fail the ground check, which says so) in a
+    grid x grid pattern of win x win full-resolution windows spread over the whole raster -
+    corners, edges and centre - else in a decimated read of the whole raster (size x size);
+    (None, 0) when neither finds a valid cell. 3.10.89: the run's ND ground check read only the
+    top-left 200 x 200 cells and was skipped without a word when they were nodata - a 1 m DEM
+    clipped to a dam's box or warped to EPSG:5070 - so Feet ran a metre DEM x 0.3048."""
+    def valid(a, nd):
+        a = np.asarray(a, dtype=np.float64).ravel()
+        ok = np.isfinite(a)
+        if nd is not None:
+            ok &= a != nd
+        return a[ok]
     try:
         b = ds.GetRasterBand(1)
         nx, ny = ds.RasterXSize, ds.RasterYSize
@@ -173,24 +180,16 @@ def sample_median(ds, grid=7, win=24):
         w, h = min(win, nx), min(win, ny)
         xs = sorted({int(round((nx - w) * i / float(grid - 1))) for i in range(grid)})
         ys = sorted({int(round((ny - h) * j / float(grid - 1))) for j in range(grid)})
-        vals = []
-        for y in ys:
-            for x in xs:
-                a = b.ReadAsArray(x, y, w, h)
-                if a is None:
-                    continue
-                a = a.astype(np.float64).ravel()
-                ok = np.isfinite(a) & (a > -1e5) & (a < 1e5)
-                if nd is not None:
-                    ok &= a != nd
-                vals.append(a[ok])
-        flat = np.concatenate(vals) if vals else np.empty(0)
+        parts = [valid(b.ReadAsArray(x, y, w, h), nd) for y in ys for x in xs]
+        flat = np.concatenate(parts) if parts else np.empty(0)
+        if flat.size <= 10:
+            flat = valid(b.ReadAsArray(0, 0, nx, ny, buf_xsize=min(nx, size),
+                                       buf_ysize=min(ny, size)), nd)
     except Exception:                                    # noqa - unreadable: no sample
         flat = np.empty(0)
     if flat.size > 10:
         return float(np.median(flat)), int(flat.size)
-    med = _median_value(ds)
-    return (med, -1) if med is not None else (None, 0)
+    return None, 0
 
 
 NO_SAMPLE = ("the North Dakota ground check of the elevation unit found no valid elevation in a "
