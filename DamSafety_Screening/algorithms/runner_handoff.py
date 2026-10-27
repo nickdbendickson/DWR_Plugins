@@ -252,6 +252,14 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         P(cm.hide(QgsProcessingParameterBoolean("FORCE_ANUGA", "(before 0.17.22) force ANUGA = Runner "
                                                 "engine 'LISFLOOD-FP then ANUGA'", defaultValue=False,
                                                 optional=True)))
+        # 0.17.51: dry-run / validate-only mode (writes dam.json and notes, skips the Runner)
+        dry = QgsProcessingParameterBoolean("DRY_RUN", "Validate only (write dam.json and notes; do not run the Runner)",
+                                            defaultValue=False, optional=True)
+        if hasattr(dry, "setHelp"):
+            dry.setHelp("When checked, the tool checks parameters, writes the planned dam.json for each dam, "
+                        "and records the notes that would be sent, but does not launch the Runner or Hazard tools. "
+                        "Useful for confirming engine choice, surface area, and structure layers before a long run.")
+        P(dry)
         ref = QgsProcessingParameterBoolean("REFINE_NEAR", "Runner: near-dam refine (re-runs the stretch "
                                             "near the dam on a finer grid with the FV1 full shallow-water "
                                             "solver; slower)", defaultValue=False)
@@ -514,6 +522,10 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                             feedback.pushInfo("dam record: {}".format(jpath))
                     except Exception as e:      # the record must never stop the run
                         feedback.reportError("dam {}: dam.json not written: {}".format(dam_id, e))
+                    if self.parameterAsBool(params, "DRY_RUN", context):
+                        res["rn_status"] = "validated (dry-run; Runner not launched)"
+                        feedback.pushInfo("{}: dry-run — dam.json written, Runner skipped".format(dam_id))
+                        continue
                     r1 = processing.run(ho.RUNNER_ALG, p, context=context, feedback=steps,
                                         is_child_algorithm=True)
                     dfold = (r1 or {}).get("FOLDER") or dfold
