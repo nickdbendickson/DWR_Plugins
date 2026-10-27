@@ -1897,3 +1897,106 @@ def hecras_crest_offcrest_round4_small_rules():
     assert hc.valley_flow(dam, far_cells, (30.0, 0.0)) == {}
     ok, ev = _ev(dam, _valley_with(TOP, half=BIG), (30.0, 0.0), wet=far_cells)
     assert not ok and ev["why"].startswith("too few of the run's flooded cells near it"), ev
+
+
+@test
+def hecras_crest_offcrest_round4_walk_and_pool_edges():
+    """Round 4, the rules the round-4 mutation audit found untested: (a) _ridge on a level top
+    across the whole window on a crest 20 wide on record: 40 wide, falling on both sides past
+    the narrower windows, is a junction (its edges show in the widest one); wider than the
+    widest window, it runs on at its level, or into ground higher than the crest (the
+    abutment); one about as wide as the crest on record is followed toward its middle by no
+    more than the window allows; (b) the walk's first steps (the axis is a guess) do not look
+    for another crest beside it: a level pad at the crest's level 45 ft upstream of the dam
+    point does not end the walk there; (c) a road 0.5 ft above the crest leaving it at 8 and 10
+    degrees: the walk drifts onto it and bends where the two tops part, and the line ends where
+    it left the dam (back along the heading before that bend); (d) a curb along a plateau below
+    the dam is not another crest (it does not stand above the ground on both sides); (e) the
+    pool rule's water is at least the prominence below the crest: ground 1 ft below it is not
+    the pool; (f) a berm on the upstream face and a terrace at the crest's level past it:
+    another ridge beside it; (g) a dam whose end meets a hill rising upstream: the abutment;
+    (h) crest_dam_line gives evidence the crest length on record (the dam length, else the
+    longest line it traces): a 400 ft line along a road joining at 25 degrees is a part of a
+    1,400 ft trace, not the dam."""
+    # level at 100 from t0 to t1 across the section, falling 0.5 per ft past it (rising
+    # `hill` per ft past t1 instead, when given)
+    lvl = lambda t0, t1, hill=-0.5: (lambda q: np.where(
+        (q[:, 1] >= t0) & (q[:, 1] <= t1), 100.0, np.where(
+            q[:, 1] > t1, 100.0 + hill * (q[:, 1] - t1), 100.0 - 0.5 * (t0 - q[:, 1]))))
+    half = 10.0 * np.tan(np.radians(hc.TURN_MAX_DEG))
+    O, N = np.array([0.0, 0.0]), np.array([0.0, 1.0])
+    rd = lambda f: hc._ridge(f, O, N, half, 5.0, 20.0, 1.0)
+    # (a)
+    assert rd(lambda q: np.where(np.abs(q[:, 1]) <= 20.0, 100.0, 90.0)) == ("junction", 40.0)
+    assert rd(lvl(-60.0, 60.0)) == ("level", 90.0), rd(lvl(-60.0, 60.0))
+    assert rd(lvl(-60.0, 10.0, hill=0.5)) == ("abutment", 90.0), rd(lvl(-60.0, 10.0, hill=0.5))
+    R, zr = rd(lvl(-6.0, 22.0))
+    assert np.allclose(R, (0.0, half)) and zr == 100.0, R
+    # (b)
+    z, x0, yt, c = _valley_with(TOP + 5.0, grid=True)
+    X = (x0 + (np.arange(z.shape[1]) + 0.5) * c)[None, :] + 0 * z
+    Y = (yt - (np.arange(z.shape[0]) + 0.5) * c)[:, None] + 0 * z
+    zz = np.where((np.abs(X) < 45.0) & (np.abs(Y - 45.0) < 8.0), np.maximum(z, TOP + 5.0), z)
+    tr = hc.trace(_grid_sampler(zz, x0, yt, c), (0.0, 0.0), (-1.0, 0.0), TOP, H, 10.0, TOE,
+                  1500.0, 300.0, crest_w=CW)
+    assert tr["how"] == "datum" and tr["line"][:, 0].min() < -500.0 < 500.0 < \
+        tr["line"][:, 0].max(), tr["ends"]
+    assert not any(e[0].startswith("a junction") for e in tr["ends"].values()), tr["ends"]
+    # (c)
+    for th in (8.0, 10.0):
+        t = np.radians(th)
+        f = _valley_with(TOP + 5.0, half=1800.0, roads=[
+            (-150.0, 0.0, -150.0 - 900.0 * np.cos(t), -900.0 * np.sin(t), TOP + 5.5, 20.0)])
+        tr = hc.trace(f, (250.0, 0.0), (-1.0, 0.0), TOP, H, 10.0, TOE, 1500.0, 300.0,
+                      crest_w=CW)
+        l = tr["line"]
+        assert tr["ends"]["B"][0].startswith("a junction: another crest at its level"), tr["ends"]
+        assert np.abs(l[:, 1]).max() < 0.5 * CW + 2.5 and -260.0 < l[:, 0].min() < -150.0, \
+            (th, l[-6:])
+    # (d)
+    m = (np.abs(X) < 700.0) & (Y < -100.0) & (Y > -400.0)
+    zz = np.where(m, np.maximum(z, TOP + 4.0 + np.clip(1.0 - np.abs(Y + 105.0) / 5.0, 0.0,
+                                                        None)), z)
+    tr = hc.trace(_grid_sampler(zz, x0, yt, c), (30.0, 0.0), (-1.0, 0.0), TOP, H, 10.0, TOE,
+                  1500.0, 300.0, crest_w=CW)
+    assert hc.cumlen(tr["line"])[-1] > 1000.0, tr["ends"]
+    assert not any(e[0].startswith("a junction") for e in tr["ends"].values()), tr["ends"]
+    # (e)
+    dam = [(450.0, 0.0), (0.0, 0.0), (-450.0, 0.0)]
+    wide = _cells((np.abs(_GX) < 900.0) & (_GY < -120.0) & (_GY > -1100.0))
+    ok, ev = _evx(dam, _valley_with(TOP, half=BIG, grid=True, pool_z=TOP - 1.0), (30.0, 0.0),
+                  wet=wide)
+    assert not ok and ev["pool_frac"] == 0.0 and ev["why"].startswith(
+        "the DEM shows the pool (water, or no data) on its upstream side along only 0%"), ev
+    # (f)
+    z4, x4, y4, c4 = _valley_with(TOP, half=BIG, grid=True)
+    X4 = (x4 + (np.arange(z4.shape[1]) + 0.5) * c4)[None, :] + 0 * z4
+    Y4 = (y4 - (np.arange(z4.shape[0]) + 0.5) * c4)[:, None] + 0 * z4
+    m = np.abs(X4) < 700.0
+    z4 = np.where(m & (Y4 > 15.0) & (Y4 <= 120.0), np.maximum(z4, TOP - 3.0), z4)
+    z4 = np.where(m & (Y4 > 120.0) & (Y4 < 600.0), np.maximum(z4, TOP - 1.0), z4)
+    ok, ev = _evx(dam, (z4, x4, y4, c4), (30.0, 0.0))
+    assert not ok and ev["why"].startswith("another ridge runs beside it within"), ev
+    # (g)
+    zz = np.where(X < -100.0, np.maximum(z, TOP + 5.0 + 0.5 * np.maximum(Y - 10.0, 0.0)), z)
+    tr = hc.trace(_grid_sampler(zz, x0, yt, c), (100.0, 0.0), (-1.0, 0.0), TOP, H, 10.0, TOE,
+                  1500.0, 300.0, crest_w=CW)
+    assert tr["ends"]["B"][0].startswith("abutment tie-in: the crest's level top (") and \
+        tr["ends"]["B"][0].endswith("wide) runs into ground higher than the crest"), tr["ends"]
+    # (h)
+    from nd_breach_runner.tests import test_hecras_p0 as p0
+    if p0._skip():
+        return
+    d = tempfile.mkdtemp()
+    try:
+        t = np.radians(25.0)
+        g = _valley_with(TOP + 5.0, half=2400.0, grid=True, roads=[
+            (-150.0, 0.0, -150.0 - 900.0 * np.cos(t), 900.0 * np.sin(t), TOP + 5.0, 20.0)])
+        try:
+            _cdl(d, g, (250.0, 0.0), (0.0, -1.0), wet=_wet_below(-120.0))
+        except hc.CrestTraceError as e:
+            assert "less than 50% of the crest length on record (1,400)" in str(e), e
+        else:
+            raise AssertionError("a part of the embankment was used")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)

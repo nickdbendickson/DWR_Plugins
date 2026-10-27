@@ -307,9 +307,9 @@ def _ridge(sample, Y, nu, half, ds, wide=None, rise=None):
         # crest with another embankment joining it, a junction (returned as ('junction',
         # width)), where the middle of the combined top leads onto the other one - DWR #195
         # audit round 4: a junction when the top falls on both sides; one that runs to the
-        # window's end into ground more than `rise` above the crest is the abutment's hillside
-        # ('abutment', width); one that runs on at its level past the window's end is the
-        # abutment's shoulder or an embankment along the section ('level', width)
+        # widest window's end into ground more than `rise` above the crest is the abutment's
+        # hillside ('abutment', width); one that runs on at its level past that window's end
+        # is the abutment's shoulder or an embankment along the section ('level', width)
         lim = max(JUNCTION_WIDE_FRAC * float(wide), float(wide) + 2.0 * ds)
 
         def wider(a, b, zw, tw):
@@ -337,7 +337,9 @@ def _ridge(sample, Y, nu, half, ds, wide=None, rise=None):
                 if np.isfinite(zr):
                     return R, zr
                 break
-            if tw[b] - tw[a] > lim:
+            if f == 8.0 and tw[b] - tw[a] > lim:
+                # its edges never show: classified at the widest window (a top that fills a
+                # narrower one may still fall on both sides past it)
                 return wider(a, b, zwb, tw)
         zr = float(sample(Y[None, :])[0])
         if np.isfinite(zr):
@@ -462,6 +464,7 @@ def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap, wide=None):
     before_gap, since_gap, gap_len = 0, None, 0.0
     ds = 0.5 * step
     t_ref, i_ref = None, 0
+    t_prev = None                     # the heading before the last bend, and where it was
     sep_min = None if wide is None else 0.5 * float(wide) + step
     while walked < max_len - 1e-9:
         h = min(step, max_len - walked)
@@ -509,6 +512,7 @@ def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap, wide=None):
                             # back to where the turn began
                             last_ok, since_gap = min(last_ok, i_ref), None
                             break
+                        t_prev = (t_ref, len(pts))
                         t_ref, i_ref = tau_new.copy(), len(pts)       # a bend: on from here
                     elif turn <= 0.5 * JUNCTION_TURN_DEG:
                         i_ref = len(pts)
@@ -520,9 +524,15 @@ def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap, wide=None):
                         why = ("a junction: another crest at its level lies {:.0f} beside it "
                                "(another embankment joins, leaves or crosses it)".format(d_o))
                         # back to the last point within half that distance of the other
-                        # crest's line (where the walk left it), else stop here
+                        # crest's line (where the walk left it); none, and the walk bent since
+                        # it settled: the line along the heading before that bend, through
+                        # the points before it (the walk drifted onto a crest leaving the dam
+                        # and bent where the two tops parted); else stop here
                         k = [i for i in range(len(pts)) if abs(float(np.cross(
                             t_ref, pts[i] - Q))) <= 0.5 * sep_min]
+                        if not k and t_prev is not None:
+                            k = [i for i in range(t_prev[1]) if abs(float(np.cross(
+                                t_prev[0], pts[i] - Q))) <= 0.5 * sep_min]
                         if k:
                             last_ok, since_gap = min(last_ok, k[-1]), None
                         break
