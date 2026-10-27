@@ -46,11 +46,19 @@ class BreachDirection(QgsProcessingAlgorithm):
                 "the inventory location.")
 
     def initAlgorithm(self, config=None):
-        self.addParameter(QgsProcessingParameterFeatureSource(
-            self.DAMS, "Standardized dams", [SRC_POINT]))
-        self.addParameter(QgsProcessingParameterFeatureSource(
+        dams = QgsProcessingParameterFeatureSource(
+            self.DAMS, "Standardized dams", [SRC_POINT])
+        if hasattr(dams, "setHelp"):
+            dams.setHelp("Point layer of dams that already have standardized attributes. "
+                         "The tool uses these points to find the matching dam line and place the breach point.")
+        self.addParameter(dams)
+        lines = QgsProcessingParameterFeatureSource(
             self.LINES, "DWR dam lines", [SRC_LINE],
-            defaultValue="dams_linear_features"))
+            defaultValue="dams_linear_features")
+        if hasattr(lines, "setHelp"):
+            lines.setHelp("Line layer of dam embankments. The tool matches each dam point to the nearest line "
+                          "and uses the line direction to place the breach point and the flow arrow.")
+        self.addParameter(lines)
         self.addParameter(QgsProcessingParameterField(
             "LID", "Dam lines: structure ID field (joins to the DWR structure ID; primary match)",
             defaultValue="structure_id", parentLayerParameterName=self.LINES, optional=True))
@@ -60,9 +68,14 @@ class BreachDirection(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterFeatureSource(
             self.WB, "NHD HR waterbodies (polygons)", [SRC_POLYGON],
             optional=True))
-        self.addParameter(QgsProcessingParameterFile(
+        demd = QgsProcessingParameterFile(
             self.DEMDIR, "Folder of cached dam DEMs (optional)",
-            behavior=FILE_FOLDER, optional=True))
+            behavior=FILE_FOLDER, optional=True)
+        if hasattr(demd, "setHelp"):
+            demd.setHelp("Optional folder of pre-built DEM tiles named by dam ID. When present, the tool uses "
+                         "the terrain to place the breach point at the low point on the dam line instead of "
+                         "the nearest point to the inventory location.")
+        self.addParameter(demd)
         cm.distance_params(self.addParameter, "MATCH_FT", self.MATCH,
                            "Max distance from dam point to its dam line (ft)", 1000.0, min_ft=3.0)
         cm.distance_params(self.addParameter, "ARROW_FT", self.ARROW,
