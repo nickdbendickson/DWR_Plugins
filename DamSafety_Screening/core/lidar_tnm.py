@@ -37,6 +37,7 @@ import urllib.request
 
 from ..damsuite import gdalsafe as GS   # GDAL without switching its exception mode
 from . import dem_zunit as ZU           # 0.17.50: the fallback DEM's unit, as the Runner reads it
+from .warp_opts import no_vshift        # 0.17.50: warps keep the values as stored
 
 TNM_URL = "https://tnmaccess.nationalmap.gov/api/v1/products"
 DATASET = "Digital Elevation Model (DEM) 1 meter"
@@ -615,8 +616,12 @@ def build_vrt(entries, vrt_path, fallback="", bounds_ll=None, meta=None, feedbac
             fallback = ""
     if fallback:
         fb = os.path.join(out_dir, "{}_fallback.vrt".format(stem))
-        GS.checked(gdal.Warp(fb, fallback, format="VRT", dstSRS=target, resampleAlg="bilinear",
-                             outputType=gdal.GDT_Float32, dstNodata=-999999), "warping " + fallback)
+        # the values as stored (-novshift): the conversion below is the only one. GDAL's default
+        # vertical shift already turned a feet fallback into metres when its CRS or the tiles'
+        # is compound, and the scale VRT then converted it again (951 ft read as 88.4 m)
+        GS.checked(gdal.Warp(fb, fallback, **no_vshift(gdal, dict(
+            format="VRT", dstSRS=target, resampleAlg="bilinear", outputType=gdal.GDT_Float32,
+            dstNodata=-999999))), "warping " + fallback)
         warped.append(fb)
         if fb_got == ZU.METERS:
             fb_units = "metres ({})".format(fb_how)
@@ -636,8 +641,9 @@ def build_vrt(entries, vrt_path, fallback="", bounds_ll=None, meta=None, feedbac
         p = e["path"]
         if crs_of[p] != target:
             w = os.path.join(out_dir, "{}_{}_warped.vrt".format(stem, os.path.splitext(e["tile"])[0]))
-            GS.checked(gdal.Warp(w, p, format="VRT", dstSRS=target, xRes=1.0, yRes=1.0,
-                                 resampleAlg="bilinear", dstNodata=-999999), "warping " + p)
+            GS.checked(gdal.Warp(w, p, **no_vshift(gdal, dict(       # metres stay metres
+                format="VRT", dstSRS=target, xRes=1.0, yRes=1.0, resampleAlg="bilinear",
+                dstNodata=-999999))), "warping " + p)
             sources.append(w)
             warped.append(w)
             _info(feedback, "{} is in {}; warped to {} for the VRT".format(e["tile"], crs_of[p], target))

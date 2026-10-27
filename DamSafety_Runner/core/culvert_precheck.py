@@ -189,7 +189,13 @@ class FineRaster:
             s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
         self.unit = rs.GetLinearUnits()          # raster CRS units -> metres
         self.tr = None if rs.IsSame(ws) else osr.CoordinateTransformation(ws, rs)
-        self.z_to_m, self.z_note = gdal_io.z_to_m_factor(path, z_choice)
+        # 3.10.89: the unit as the run resolves it (rundam.json DEM_Z 0 = Detect: the unit the
+        # raster records, never a guess from its CRS; an explicit unit its record contradicts
+        # stops) - before, z_to_m_factor('auto') guessed from the CRS units
+        self.z_choice, how = gdal_io.resolve_dem_z(path, z_choice)
+        self.z_to_m, self.z_note = gdal_io.z_to_m_factor(path, self.z_choice)
+        if how != "chosen":
+            self.z_note = gdal_io.detected_z_note(self.z_choice, how)
 
     def _xy(self, xy):
         x, y = float(xy[0]), float(xy[1])
@@ -290,7 +296,7 @@ def check(structures_path, fine_dem, dam="", coverage=(), layer=None, fields=Non
     rec_notes = {}
     if reconcile and any(s.invert_up_m is not None or s.invert_dn_m is not None
                          for _f, _a, s in culverts):
-        terr = gdal_io.GdalTerrain(fine_dem, wkt, z_choice, resample=resample)
+        terr = gdal_io.GdalTerrain(fine_dem, wkt, fine.z_choice, resample=resample)
         structmod.reconcile_inverts([s for _f, _a, s in culverts], terr.read, reconcile_tol_m,
                                     min(float(model_cell), 3.0))
         rec_notes = {id(s): s.invert_note for _f, _a, s in culverts}

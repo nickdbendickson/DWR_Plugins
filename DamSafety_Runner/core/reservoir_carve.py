@@ -444,6 +444,7 @@ class CarvedTerrain(object):
         self.carve_depth = depth
         self.z_to_m = getattr(inner, "z_to_m", 1.0)
         self.z_note = getattr(inner, "z_note", "")
+        self.z_check = getattr(inner, "z_check", "")    # 3.10.89: the run report's warning
 
     def __getattr__(self, name):
         if name in ("inner", "carve_depth"):
@@ -546,10 +547,12 @@ def carve_tif(tif_path, depth_path, z_scale=1.0):
     ds = GS.checked(gdal.Open(tif_path, gdal.GA_Update), "opening {}".format(tif_path))
     gt = ds.GetGeoTransform()
     nx, ny = ds.RasterXSize, ds.RasterYSize
-    opts = gdal.WarpOptions(format="MEM", dstSRS=ds.GetProjection(),
-                            outputBounds=(gt[0], gt[3] + ny * gt[5], gt[0] + nx * gt[1], gt[3]),
-                            width=nx, height=ny, resampleAlg="average", srcNodata=-9999.0,
-                            dstNodata=0.0, outputType=gdal.GDT_Float32)
+    from .warp_opts import no_vshift             # 3.10.89: the depths stay metres
+    opts = gdal.WarpOptions(**no_vshift(gdal, dict(
+        format="MEM", dstSRS=ds.GetProjection(),
+        outputBounds=(gt[0], gt[3] + ny * gt[5], gt[0] + nx * gt[1], gt[3]),
+        width=nx, height=ny, resampleAlg="average", srcNodata=-9999.0,
+        dstNodata=0.0, outputType=gdal.GDT_Float32)))
     w = GS.checked(gdal.Warp("", depth_path, options=opts), "warping {}".format(depth_path))
     dep = w.GetRasterBand(1).ReadAsArray().astype(np.float64)
     dep = np.where(np.isfinite(dep) & (dep > 0), dep, 0.0) / float(z_scale)

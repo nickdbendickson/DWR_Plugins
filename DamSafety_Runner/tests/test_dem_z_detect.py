@@ -58,9 +58,24 @@ def dem_z_detect_reads_the_recorded_unit():
         assert G.resolve_dem_z(_dem(d, "metre.tif", "metre"), "auto")[0] == G.Z_METERS
         assert G.resolve_dem_z(_dem(d, "ft.tif", "ft", 1300.0), "auto")[0] == G.Z_FEET
         assert G.resolve_dem_z(_dem(d, "usft.tif", "US survey foot", 1300.0), "auto")[0] == G.Z_US_FEET
-        # an explicit choice is used as given, whatever the raster says
+        # an explicit choice is used as given when the raster records none, or the same unit
         assert G.resolve_dem_z(_dem(d, "none.tif"), "meters") == (G.Z_METERS, "chosen")
-        assert G.resolve_dem_z(os.path.join(d, "m.tif"), "feet")[0] == G.Z_FEET
+        assert G.resolve_dem_z(os.path.join(d, "ft.tif"), "feet") == (G.Z_FEET, "chosen")
+        assert G.resolve_dem_z(os.path.join(d, "ft.tif"), "us_feet")[0] == G.Z_US_FEET  # 2 ppm
+        # 3.10.89: ... but not against the unit it records (both named, and how to fix a wrong
+        # record); before, Feet on a metre-tagged DEM ran x 0.3048 above 656 m
+        for path, choice, words in ((os.path.join(d, "m.tif"), "feet",
+                                     ("is Feet", "records metres (raster unit 'm')",
+                                      "to Meters", "gdal_edit -units ft")),
+                                    (os.path.join(d, "usft.tif"), "meters",
+                                     ("is Meters", "records US survey feet", "to US survey feet",
+                                      "gdal_edit -units m"))):
+            try:
+                G.resolve_dem_z(path, choice)
+                raise AssertionError("{} as {} must stop".format(path, choice))
+            except ValueError as e:
+                for w in words:
+                    assert w in str(e), (w, str(e))
         # no unit recorded (a plain GeoTIFF, a BuildVRT mosaic - BuildVRT drops the tag): refused,
         # naming the setting; a horizontal metre CRS is not taken as the elevation unit
         for path in (os.path.join(d, "none.tif"), _vrt(d, "mosaic.vrt", [os.path.join(d, "m.tif")])):

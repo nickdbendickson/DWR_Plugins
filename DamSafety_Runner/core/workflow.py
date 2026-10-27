@@ -823,10 +823,13 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                             min(cs, 3.0))
     z_note = getattr(terrain_src, "z_note", "")
     report["dem_elevation_units"] = z_note
-    if "check" in z_note.lower():
-        warnings.append("DEM elevation units: {}. Set 'DEM elevation units' explicitly if this "
-                        "is wrong; a feet DEM read as metres gives a wrong flood without "
-                        "any error.".format(z_note))
+    # 3.10.89: a structured flag (terrain_src.z_check, the reason), not the word 'check' in the
+    # note - a detected note names its facts file, and a DEM named '..._check_...' warned
+    z_check = getattr(terrain_src, "z_check", "") or ""
+    if z_check:
+        warnings.append("DEM elevation units: {} - {}. Set 'DEM elevation units' explicitly if "
+                        "this is wrong; a feet DEM read as metres gives a wrong flood without "
+                        "any error.".format(z_note, z_check))
     z = near.masked()
     X, Y = np.meshgrid(near.x_centers(), near.y_centers())
     spec = getattr(st, "proposed", None)

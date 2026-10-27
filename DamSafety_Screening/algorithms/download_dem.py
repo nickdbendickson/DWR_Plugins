@@ -399,7 +399,12 @@ def _tag_reused(dest, side, feedback):
     """A reused local DEM written before Screening 0.17.50 has no band unit (0.17.50). One
     whose record is a USGS 3DEP download is tagged metres now (the ImageServer serves metres in
     every version); any other is left as it is, with a warning saying what to do - an ND DWR
-    LiDAR one is never tagged blindly (older builds could write feet grids labelled metres)."""
+    LiDAR one is never tagged blindly (older builds could write feet grids labelled metres).
+    One whose values no unit reads right stops (dem_zunit.data_problem): an ND DWR download
+    written before 0.17.50 in a gft* folder is tagged 'm' but holds DEM_Imagine metres x 0.3048."""
+    bad = dd.data_problem(dest)
+    if bad:
+        raise QgsProcessingException("Not reusing {}: {}.".format(os.path.basename(dest), bad))
     if dd.band_unit(dest):
         return
     got, how = dd.recorded_unit(dest)

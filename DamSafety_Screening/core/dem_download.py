@@ -9,7 +9,7 @@ import os
 from osgeo import gdal, osr
 
 from . import dem_zunit as ZU, nd_counties, terrain
-from .warp_opts import no_overviews
+from .warp_opts import no_overviews, no_vshift
 
 
 def _safe_extract(zf, dest):
@@ -156,6 +156,20 @@ def recorded_unit(path):
         return "", "cannot open {}".format(path)
     try:
         return ZU.recorded(ds, path)
+    finally:
+        ds = None
+
+
+def data_problem(path):
+    """dem_zunit.data_problem of a raster file: why no unit reads its values right, or ""."""
+    try:
+        ds = gdal.Open(path)
+    except Exception:                                    # noqa - exception mode
+        return ""
+    if ds is None:
+        return ""
+    try:
+        return ZU.data_problem(ds, path)
     finally:
         ds = None
 
@@ -606,9 +620,12 @@ def county_features():
 def warp_to(src, dest, epsg):
     """Warp one raster to dest in the given EPSG. Returns dest. 0.17.50: dest carries the unit
     src records (its band unit, which gdal.Warp keeps, else its Download DEM record); a source
-    that records none gives an untagged copy."""
-    gdal.Warp(dest, src, dstSRS="EPSG:{}".format(epsg), format="GTiff",
-              resampleAlg="bilinear", creationOptions=["COMPRESS=DEFLATE", "TILED=YES"])
+    that records none gives an untagged copy. The values are copied as stored (no vertical
+    shift: GDAL's default one converts them when a CRS is compound, and the tag would then be
+    wrong)."""
+    gdal.Warp(dest, src, **no_vshift(gdal, dict(
+        dstSRS="EPSG:{}".format(epsg), format="GTiff", resampleAlg="bilinear",
+        creationOptions=["COMPRESS=DEFLATE", "TILED=YES"])))
     got, _how = recorded_unit(src)
     if got:
         set_unit(dest, got)
@@ -714,6 +731,9 @@ def write_sidecar(tif_path, info):
         "native_crs: {}".format(info["native_crs"]),
         "native_units: {}".format(info["native_units"]),
         "native_file_type: {}".format(info["native_file_type"]),
+        # 0.17.50: which build wrote it - an ND DWR download without this line is older
+        # (dem_zunit.old_nd_dwr_problem)
+        "{}: {}".format(ZU.FACTS_WRITER_KEY, ZU.WRITER),
     ]
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -774,11 +794,13 @@ def write_local_dem(src, dest, cell_m, info, feedback=None):
     if feedback is not None:
         feedback.pushInfo(describe_product(info))
         feedback.pushInfo("writing {}".format(dest))
-    gdal.Warp(dest, src, **no_overviews(gdal, dict(      # 0.17.35: no source overviews
+    # 0.17.35: no source overviews; 0.17.50: the values as stored (no vertical shift), so the
+    # band unit of local_unit(src) is the unit of what is written
+    gdal.Warp(dest, src, **no_vshift(gdal, no_overviews(gdal, dict(
         dstSRS="EPSG:5070", xRes=float(cell_m), yRes=float(cell_m),
         resampleAlg="bilinear", outputType=gdal.GDT_Float32, dstNodata=-9999,
         format="GTiff",
-        creationOptions=["COMPRESS=DEFLATE", "TILED=YES", "BIGTIFF=IF_SAFER"])))
+        creationOptions=["COMPRESS=DEFLATE", "TILED=YES", "BIGTIFF=IF_SAFER"]))))
     ds = gdal.Open(dest, gdal.GA_Update)
     if ds is not None:
         ds.SetMetadataItem("SOURCE", info["source"])
@@ -786,6 +808,7 @@ def write_local_dem(src, dest, cell_m, info, feedback=None):
         ds.SetMetadataItem("UNITS", info["units"])
         ds.SetMetadataItem("FILE_TYPE", info["file_type"])
         ds.SetMetadataItem("CELL_M", str(info["cell_m"]))
+        ds.SetMetadataItem(ZU.WRITER_KEY, ZU.WRITER)     # 0.17.50: which build wrote it
         ds.SetDescription(describe_product(info))
         ds = None
     if got:

@@ -19,13 +19,24 @@ What counts as recorded, in this order:
      named gft* was scaled x 0.3048).
 A 1 m lidar VRT that Screening built before 0.17.50 over a fallback DEM (its <stem>.json has no
 'fallback_units'), read as metres by any of these, is trusted only when that fallback records
-metres: before, a feet fallback showed through the VRT as metres.
+metres: before, a feet fallback showed through the VRT as metres. An ND DWR LiDAR download that
+Screening wrote before 0.17.50 (no WRITER / written_by in its record) in a folder whose path has
+a part starting with 'gft' is refused whatever its band unit says: that version took every
+DEM_Imagine metre tile under such a folder for a feet grid, scaled it x 0.3048 and tagged it 'm'.
+data_problem() names these two - files whose values no single unit reads right - so an explicit
+choice stops on them too.
+A warped VRT whose GDAL vertical shift converts the elevations (APPLY_VERTICAL_SHIFT with a factor
+other than 1, gdalwarp from a compound CRS without -novshift) is refused: GDAL keeps the source's
+band unit ('US survey foot') on what are now metres. A GeoTIFF written that way carries no trace
+of it and reads as its band unit says - re-tag it (gdal_edit -units m) or warp with -novshift;
+the Runner's ND ground check stops the result below about 656 m.
 Never a guess from the horizontal CRS or the values.
 
 Same file in DamSafety_Runner/core and DamSafety_Screening/core (tools/ci_checks.py keeps them
 byte-identical). GDAL only; no QGIS imports."""
 import json
 import os
+import re
 
 FEET, US_FEET, METERS = "feet", "us_feet", "meters"
 FT = 0.3048                         # m per international foot
@@ -41,6 +52,8 @@ METER_NAMES = ("m", "metre", "meter", "metres", "meters")
 DOWNLOAD_KEYS = ("SOURCE", "CRS", "UNITS", "FILE_TYPE", "CELL_M")    # write_local_dem
 FACTS_KEYS = ("source", "crs", "units", "file_type", "cell_m")         # write_sidecar
 LIDAR_VRT_FORMAT = "damsuite/lidar_1m_vrt"                              # lidar_tnm.build_vrt
+WRITER_KEY, FACTS_WRITER_KEY = "WRITER", "written_by"   # Download DEM since Screening 0.17.50
+WRITER = "Screening 0.17.50 Download DEM"
 NONE_RECORDED = ("no elevation unit is recorded in the raster (no band unit, no vertical CRS, "
                  "no Download DEM record)")
 
@@ -198,6 +211,87 @@ def download_record(ds, path=""):
     return _from_record(facts["source"], facts["units"], "Download DEM facts file " + name)
 
 
+def _nd_dwr_record(ds, path):
+    """(source, writer) of an ND DWR LiDAR Download DEM record of the raster - the dataset
+    metadata, else a <stem>_dem.txt facts file that describes it - or None."""
+    try:
+        md = ds.GetMetadata() or {}
+    except Exception:                                    # noqa
+        md = {}
+    source = str(md.get("SOURCE") or "").strip()
+    if source.startswith("ND DWR"):
+        return source, str(md.get(WRITER_KEY) or "").strip()
+    if not path:
+        return None
+    facts = read_facts(os.path.splitext(_file(path))[0] + "_dem.txt")
+    if not facts or not all(facts.get(k) for k in FACTS_KEYS) or \
+            not facts["source"].startswith("ND DWR") or _facts_mismatch(ds, facts):
+        return None
+    return facts["source"], str(facts.get(FACTS_WRITER_KEY) or "").strip()
+
+
+def gft_part(path):
+    """The first folder of `path`'s absolute folder whose name starts with 'gft' (any case), or
+    "": where Download DEM before Screening 0.17.50 took DEM_Imagine tiles for feet grids."""
+    folder = os.path.dirname(os.path.abspath(_file(path))).replace("\\", "/")
+    for part in folder.split("/"):
+        if part.lower().startswith("gft"):
+            return part
+    return ""
+
+
+def old_nd_dwr_problem(ds, path):
+    """Why an ND DWR LiDAR download from Screening before 0.17.50 cannot be read in any unit,
+    or "": in a folder named gft* that version scaled the DEM_Imagine metres x 0.3048 (it took
+    them for the ASCII_Grids_ft feet grids) and tagged the result 'm'."""
+    if not path:
+        return ""
+    rec = _nd_dwr_record(ds, path)
+    if rec is None or rec[1]:
+        return ""
+    part = gft_part(path)
+    if not part:
+        return ""
+    return ("it is an ND DWR LiDAR download written by Screening before 0.17.50 in a folder "
+            "named '{}': that version took every DEM_Imagine tile under a folder whose name "
+            "starts with 'gft' for a feet grid, scaled its metres x 0.3048 and tagged them "
+            "metres, so no unit reads it right. Delete {} and {}_dem.txt and run Download DEM "
+            "again (Screening 0.17.50 or later)").format(
+                part, os.path.basename(_file(path)),
+                os.path.splitext(os.path.basename(_file(path)))[0])
+
+
+def vshift_problem(ds):
+    """Why a warped VRT's band unit does not describe its values, or "": GDAL's vertical shift
+    (gdalwarp without -novshift from or to a compound CRS) multiplies them by
+    MULT_FACTOR_VERTICAL_SHIFT and keeps the source's band unit."""
+    try:
+        if ds.GetDriver().ShortName != "VRT":
+            return ""
+        xml = "".join(ds.GetMetadata("xml:VRT") or [])
+    except Exception:                                    # noqa
+        return ""
+    if '<Option name="APPLY_VERTICAL_SHIFT">YES</Option>' not in xml:
+        return ""
+    got = re.search(r'<Option name="MULT_FACTOR_VERTICAL_SHIFT">([^<]+)</Option>', xml)
+    try:
+        f = float(got.group(1)) if got else 1.0
+    except ValueError:
+        f = 1.0
+    if abs(f - 1.0) < 1e-9:
+        return ""
+    return ("it is a warped VRT whose GDAL vertical shift multiplies the elevations by {:.10g} "
+            "while its band unit stays the source's; warp again with -novshift (or tag the "
+            "result with gdal_edit -units)").format(f)
+
+
+def data_problem(ds, path="", _depth=0):
+    """Why the values of this raster cannot be read right in any one unit, or "": a 1 m lidar
+    VRT from Screening before 0.17.50 over a feet or untagged fallback, an old ND DWR download in
+    a gft* folder. An explicit unit choice does not fix these: the file must be made again."""
+    return _old_lidar_vrt_problem(ds, path, _depth) or old_nd_dwr_problem(ds, path)
+
+
 def _old_lidar_vrt_problem(ds, path, depth):
     """Why a 1 m lidar VRT tagged metres from Screening before 0.17.50 cannot be trusted, or ""."""
     try:
@@ -236,7 +330,7 @@ def recorded(ds, path="", _depth=0):
     """(choice, how) from the elevation unit the open raster `ds` (file `path`) records, or
     ("", why). See the module docstring for the order."""
     band = ds.GetRasterBand(1)
-    bad = scale_offset_problem(band)
+    bad = scale_offset_problem(band) or vshift_problem(ds)
     if bad:
         return "", bad
     raw = (band.GetUnitType() or "").strip()
@@ -253,7 +347,7 @@ def recorded(ds, path="", _depth=0):
         if not got:
             return "", (how or NONE_RECORDED)
     if got == METERS:
-        bad = _old_lidar_vrt_problem(ds, path, _depth)
+        bad = data_problem(ds, path, _depth)
         if bad:
             return "", bad
     return got, how

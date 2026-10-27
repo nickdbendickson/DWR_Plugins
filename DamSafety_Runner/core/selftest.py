@@ -474,10 +474,13 @@ def check_terrain_read(case):
 
 
 def check_z_units(case):
-    f, note = gdal_io.z_to_m_factor(case.path, gdal_io.Z_AUTO)
-    assert f == 1.0 and "check" in note, \
-        "a raster with no unit in a metre CRS should give metres with a 'check' note, got " \
-        "{} / {}".format(f, note)
+    # 3.10.89: 'auto' is the run's rule (gdal_io.resolve_dem_z): a raster that records no unit
+    # is refused, naming the setting - never metres guessed from a metre CRS
+    try:
+        got = gdal_io.z_to_m_factor(case.path, gdal_io.Z_AUTO)
+        raise AssertionError("a raster with no unit must not be detected, got {}".format(got))
+    except ValueError as e:
+        assert "'DEM elevation units'" in str(e), str(e)
     got = []
     for unit, want in (("ft", FT), ("us-ft", US_FT), ("m", 1.0)):
         p = case.file("valley_{}.tif".format(unit.replace("-", "")))
@@ -490,7 +493,7 @@ def check_z_units(case):
     t = gdal_io.GdalTerrain(case.file("valley_ft.tif"), CRS, gdal_io.Z_AUTO)
     assert abs(t.z_to_m - FT) < 1e-12, "GdalTerrain(auto) z_to_m {} for a feet raster".format(
         t.z_to_m)
-    return "auto-detect: none -> metres with a 'check' note; ft, us-ft, m read from the band"
+    return "auto-detect: none -> refused, naming the setting; ft, us-ft, m read from the band"
 
 
 def check_manning_rasters(case):

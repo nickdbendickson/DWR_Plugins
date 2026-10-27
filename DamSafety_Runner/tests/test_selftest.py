@@ -113,7 +113,9 @@ class FakeGdalIo(object):
             return FT, "feet (raster unit '{}')".format(unit)
         if unit in ("m", "meter", "metre", "meters", "metres"):
             return 1.0, "metres (raster unit '{}')".format(unit)
-        return 1.0, "metres (no units recorded in the raster; check)"
+        # 3.10.89: as gdal_io.resolve_dem_z, never a guess
+        raise ValueError("'DEM elevation units' is 'Detect from the raster', but {}: no "
+                         "elevation unit is recorded in the raster".format(path))
 
     # -- reading and writing --------------------------------------------------------
     def read_grid(self, path):

@@ -889,37 +889,38 @@ class _Base(QgsProcessingAlgorithm):
         zc = ZUNITS[self.parameterAsEnum(parameters, "DEM_Z", context)][0] \
             if has("DEM_Z") else "auto"
         z_how = ""
-        if zc == "auto":
-            # 3.10.88: 'Detect from the raster' uses the unit the DEM records (band unit type or
-            # vertical CRS: the Download DEM tool's files from Screening 0.17.50, 1 m lidar VRTs);
-            # a DEM with none still stops here, naming the setting. 3.10.89: how it was detected
-            # goes into the units note (z_note) below.
-            try:
-                zc, z_how = gdal_io.resolve_dem_z(dem.source(), zc)
-            except ValueError as e:
-                raise QgsProcessingException(str(e))
-            except Exception as e:                       # noqa - unreadable DEM: say which setting
+        # 3.10.88: 'Detect from the raster' uses the unit the DEM records (band unit type,
+        # vertical CRS, the Download DEM record); a DEM with none still stops here, naming the
+        # setting. 3.10.89: how it was detected goes into the units note (z_note) below, and an
+        # explicit Feet / Meters that the DEM's record contradicts stops (gdal_io.resolve_dem_z).
+        try:
+            zc, z_how = gdal_io.resolve_dem_z(dem.source(), zc)
+        except ValueError as e:
+            raise QgsProcessingException(str(e))
+        except Exception as e:                           # noqa - unreadable DEM
+            if zc == "auto":                             # say which setting
                 raise QgsProcessingException("Could not read the DEM's elevation unit ({}). {}".format(
                     e, gdal_io.DEM_Z_HELP))
+            z_how = "chosen"                             # GdalTerrain reports the read error
+        if z_how == "chosen":
+            z_how = ""
         # ND ground is about 250-600 m. A units flip puts the median far outside that.
+        # 3.10.89: sampled over the whole DEM (gdal_io.sample_median), not the top-left 200 x
+        # 200 cells only - nodata there (a 1 m DEM clipped or warped to EPSG:5070) skipped the
+        # check without a word; a DEM where no valid cell is found says so in the run report.
+        z_check = ""
         try:
-            import numpy as np
             from osgeo import gdal
             ds = gdal.Open(dem.source())
             if ds is not None:
-                band = ds.GetRasterBand(1)
-                nodata = band.GetNoDataValue()
-                data = band.ReadAsArray(0, 0, min(ds.RasterXSize, 200), min(ds.RasterYSize, 200))
-                if data is not None:
-                    flat = data.astype(float).ravel()
-                    if nodata is not None:
-                        flat = flat[flat != nodata]
-                    flat = flat[np.isfinite(flat)]
-                    if flat.size > 10:
-                        # 3.10.89: the message names the unit that fits (gdal_io)
-                        problem = gdal_io.median_unit_problem(float(np.median(flat)), zc)
-                        if problem:
-                            raise QgsProcessingException(problem)
+                med, _cells = gdal_io.sample_median(ds)
+                ds = None
+                if med is None:
+                    z_check = gdal_io.NO_SAMPLE
+                else:
+                    problem = gdal_io.median_unit_problem(med, zc, z_how)
+                    if problem:
+                        raise QgsProcessingException(problem)
         except QgsProcessingException:
             raise
         except Exception:
@@ -945,6 +946,8 @@ class _Base(QgsProcessingAlgorithm):
             raise QgsProcessingException(str(e))
         if z_how:                                     # detected, not chosen (3.10.89)
             src.z_note = gdal_io.detected_z_note(zc, z_how)
+        if z_check:                                   # 3.10.89: a warning in the run report
+            src.z_check = z_check
         self._record("DEM resampling", "{} (from {})".format(src.resample, src.resample_source))
         dem_wkt = dem.crs().toWkt()
         target, res = None, None

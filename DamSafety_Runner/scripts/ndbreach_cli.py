@@ -752,7 +752,10 @@ class AscTerrain(object):
         elif z_choice == gdal_io.Z_METERS:
             self.z_to_m, self.z_note = 1.0, "metres (chosen)"
         else:
-            self.z_to_m, self.z_note = 1.0, "metres (an ESRI ASCII grid records no units; check)"
+            # 3.10.89: never a guess, as in a QGIS run (gdal_io.resolve_dem_z): an ESRI ASCII
+            # grid records no elevation unit (before: metres, with a 'check' note)
+            raise CliError("dem.z_units is auto, but the ESRI ASCII grid {} records no elevation "
+                           "unit: set dem.z_units to meters, feet or us_feet".format(dem_path))
 
     @property
     def bounds(self):
@@ -943,11 +946,18 @@ def _open_gdal(cfg, d, path, dam_pt, cache):
         raise CliError("The model CRS must be projected in metres ({} is not)".format(work_text))
     n, mpath, kw = manning_options(cfg)
     kw["resample"] = d.get("resample")
+    # 3.10.89: the unit as a QGIS run resolves it (gdal_io.resolve_dem_z): auto = the unit the
+    # DEM records, never a guess from its CRS; an explicit unit the DEM's record contradicts stops
     try:
-        terrain = gdal_io.GdalTerrain(path, work_text, d.get("z_units", gdal_io.Z_AUTO), mpath, n,
-                                      **kw)
+        zc, z_how = gdal_io.resolve_dem_z(path, d.get("z_units", gdal_io.Z_AUTO))
+    except ValueError as e:
+        raise CliError("{} (in the CLI config: dem.z_units)".format(e))
+    try:
+        terrain = gdal_io.GdalTerrain(path, work_text, zc, mpath, n, **kw)
     except ValueError as e:                            # a bad NDBREACH_DEM_RESAMPLE value
         raise CliError(str(e))
+    if z_how != "chosen":
+        terrain.z_note = gdal_io.detected_z_note(zc, z_how)
     unit = gdal_io.linear_unit_m(wkt)
     target, res = None, None
     if unit and not gdal_io.same_crs(wkt, work_text):
