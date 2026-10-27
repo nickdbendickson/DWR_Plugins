@@ -17,15 +17,22 @@ Dams/NickReview/screen_maxstor) is written, as on the box: without it the Runner
 dam with its default crest length instead of the record's dam_length_ft. --allow-no-record
 runs it anyway (and says so in the log and the manifest).
 
-Finished stages are skipped. --redo runs again, in the same command, the first stage in
---stages that applies to the dam and every stage after it that applies (they read its
-results); the stages before it keep their results. prepare and structures do not apply to the
-kit dams (unless --no-kits), so '--redo --stages prepare' changes nothing for them.
+Finished stages are skipped. --redo runs again, in the same command, the stages in --stages
+that apply to the dam and every later stage that reads their results (READS below: precheck
+is a report no later stage reads); the other stages keep their results. prepare and
+structures do not apply to the kit dams (unless --no-kits), so '--redo --stages prepare'
+changes nothing for them. A --redo command is a session (<out>/redo_sessions/): run the same
+command again after a stop and it goes on where it stopped, without redoing the dams it
+already redid; a plain run while one is unfinished says so and prints its command.
+status/*.ok records the mode (kit or prepare) a stage ran in: a dam whose finished stages ran
+in the other mode is not run (the two would mix) unless --redo is given, which then runs every
+stage of the dam again.
 
-On the box (no installer), --list-data runs without the solvers:
-  python3 nickreview_mac.py --list-data data_files_nickreview.tsv --data /home/box/DamSafety \\
-      --out /tmp/nr_list --dams-file nickreview_dams.txt
-(any python with GDAL; add --dam DWR-2801 and absaraka/data_files_DWR-2801.tsv for that list).
+On the box (no installer), --list-data runs without the solvers and plugins, with the box's
+QGIS python (any python with GDAL):
+  <the box's QGIS python> nickreview_mac.py --list-data data_files_nickreview.tsv \\
+      --data /home/box/DamSafety --out /tmp/nr_list --dams-file nickreview_dams.txt
+(add --dam DWR-2801 and absaraka/data_files_DWR-2801.tsv for that list).
 """
 import argparse
 import csv
@@ -35,6 +42,8 @@ import hashlib
 import json
 import os
 import platform
+import random
+import re
 import shlex
 import signal
 import subprocess
@@ -114,6 +123,12 @@ HAZBATCH_ARGS = ["DOWNLOADS=true", "REPORT=true", "EAP=false", "WORKERS=1", "TIM
 HAZBATCH_CSV = "Batch_Hazard_Classification.csv"   # ndhazard:batch's table (one row per dam)
 STAGES = ["prepare", "structures", "precheck", "record", "rundam", "hazclass", "hazbatch"]
 KIT_SKIPS = ("prepare", "structures")               # the box preparation replaces these
+# the earlier stages whose results each stage reads: --redo runs a stage again when one of
+# them runs again. precheck is a report no later stage reads; record reads only --data.
+READS = {"prepare": (), "structures": ("prepare",), "precheck": ("structures",), "record": (),
+         "rundam": ("prepare", "structures", "record"), "hazclass": ("prepare", "rundam"),
+         "hazbatch": ("rundam", "hazclass")}
+SESSIONS = "redo_sessions"                          # under --out: one file per --redo command
 STREAMS_MARK = "streams_source.json"                # which streams file prepare made, and why
 SOURCES_MARK = "prepare_sources.json"               # the files prepare's extracts were cut from
 # the data lists (--list-data): header and the "source" column
@@ -200,6 +215,8 @@ class Ctx(object):
         self.problems = []
         self.warnings = []
         self.used = set()
+        self.session = None      # the RedoSession of this --redo command
+        self.pending_redo = {}   # dam -> lines about an unfinished --redo that has not redone it
 
     # -- paths ---------------------------------------------------------------------------
     def d(self, box_path):
@@ -652,13 +669,191 @@ def read_batch_row(hb, dam, since):
 def stages_to_run(asked, kit, redo):
     """The stages one command runs for a dam, in run order: the stages asked for (--stages) that
     apply to it (prepare and structures do not apply to a dam with a box preparation); with
-    --redo, from the first of them on, every stage after it that applies too (they read its
-    results). [] when none applies."""
+    --redo, also every later stage that applies and reads the results of one that runs again
+    (READS; e.g. precheck: only precheck, record: record, rundam, hazclass, hazbatch). [] when
+    none applies."""
     applies = [s for s in STAGES if not (kit and s in KIT_SKIPS)]
-    hit = [s for s in applies if s in asked]
-    if not hit:
-        return []
-    return applies[applies.index(hit[0]):] if redo else hit
+    run = {s for s in applies if s in asked}
+    if redo:
+        for s in applies:                       # STAGES order: a stage reads only earlier ones
+            if any(r in run for r in READS[s]):
+                run.add(s)
+    return [s for s in applies if s in run]
+
+
+def is_kit(dam, no_kits):
+    return dam in KITS and not no_kits
+
+
+def ok_mode(text):
+    """The mode (kit / prepare) written in a status/<stage>.ok, or None (an older .ok)."""
+    m = re.search(r"\bmode=(kit|prepare)\b", text or "")
+    return m.group(1) if m else None
+
+
+def read_text(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def parse_time(t):
+    """now()'s text -> seconds since the epoch (None when it is not one)."""
+    try:
+        return datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+class RedoSession(object):
+    """One --redo command (<out>/redo_sessions/<id>.json): its dams and stages, and for each
+    dam when this command began its redo (its stages invalidated) and finished it. The same
+    --redo command run again continues the session: a dam it began is not invalidated again
+    (its stages finished since then are skipped) and the dams it has not reached are redone.
+    A dam is finished when every stage the session redoes for it has a status/<stage>.ok, in
+    its mode, written after the session began that dam (any run may write it, e.g. a plain
+    resume). The session is closed when all its dams are finished."""
+
+    def __init__(self, path, rec):
+        self.path, self.rec = path, rec
+
+    @property
+    def sid(self):
+        return self.rec.get("id", "?")
+
+    @staticmethod
+    def key(a, dams):
+        """What makes two --redo commands the same command."""
+        return {"dams": list(dams), "stages": [s for s in STAGES if s in a.stages],
+                "no_kits": bool(a.no_kits), "offline": bool(a.offline)}
+
+    @classmethod
+    def open_ones(cls, out_dir):
+        """The unfinished sessions in out_dir, oldest first (a damaged file is skipped)."""
+        found = []
+        for p in sorted(glob.glob(os.path.join(out_dir, SESSIONS, "*.json"))):
+            try:
+                with open(p) as f:
+                    rec = json.load(f)
+                if isinstance(rec, dict) and isinstance(rec.get("key"), dict) \
+                        and not rec.get("finished"):
+                    found.append(cls(p, rec))
+            except (OSError, ValueError):
+                out("WARNING: {} could not be read; ignored".format(p))
+        return sorted(found, key=lambda s: s.rec.get("started_epoch") or 0)
+
+    @classmethod
+    def new(cls, out_dir, key, command):
+        t = now()
+        sid = "{}_{:04x}".format(t.replace(":", "").replace("-", ""), random.getrandbits(16))
+        rec = {"id": sid, "started": t, "started_epoch": time.time(), "command": command,
+               "key": key, "dams": {}, "finished": None}
+        return cls(os.path.join(out_dir, SESSIONS, sid + ".json"), rec)
+
+    def save(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        write_json(self.path, self.rec, indent=1)
+
+    def dam(self, dam):
+        return self.rec.setdefault("dams", {}).setdefault(dam, {})
+
+    def began(self, dam):
+        return (self.rec.get("dams") or {}).get(dam, {}).get("began")
+
+    def begin(self, dam, stages):
+        d = self.dam(dam)
+        d.update(began=now(), began_epoch=time.time(), stages=list(stages))
+        d.pop("finished", None)
+        self.save()
+
+    def stages_of(self, dam):
+        d = (self.rec.get("dams") or {}).get(dam) or {}
+        if "stages" in d:
+            return d["stages"]
+        k = self.rec["key"]
+        return stages_to_run(k["stages"], is_kit(dam, k["no_kits"]), True)
+
+    def redone(self, out_dir, dam):
+        """Has every stage this session redoes for dam been run (in its mode) since the session
+        began that dam (or, for a dam it has not begun, since the session started)?"""
+        d = (self.rec.get("dams") or {}).get(dam) or {}
+        since = d.get("began_epoch") or self.rec.get("started_epoch") or 0
+        mode = "kit" if is_kit(dam, self.rec["key"]["no_kits"]) else "prepare"
+        for s in self.stages_of(dam):
+            p = os.path.join(out_dir, "work", dam, "status", s + ".ok")
+            if not os.path.isfile(p) or os.path.getmtime(p) < since - 1:
+                return False
+            if ok_mode(read_text(p)) not in (None, mode):
+                return False
+        return True
+
+    def refresh(self, out_dir, save=True):
+        """Mark the dams that are redone as finished, and the session when all are. Returns
+        True when the session is finished."""
+        changed = False
+        for dam in self.rec["key"]["dams"]:
+            if not self.dam(dam).get("finished") and self.redone(out_dir, dam):
+                self.dam(dam)["finished"] = now()
+                changed = True
+        if all(self.dam(d).get("finished") for d in self.rec["key"]["dams"]):
+            self.rec["finished"] = self.rec.get("finished") or now()
+            changed = True
+        if changed and save:
+            self.save()
+        return bool(self.rec.get("finished"))
+
+    def pending(self):
+        """(dams not begun, dams begun and not finished)."""
+        ds = self.rec.get("dams") or {}
+        todo = [d for d in self.rec["key"]["dams"] if not (ds.get(d) or {}).get("finished")]
+        return ([d for d in todo if not (ds.get(d) or {}).get("began")],
+                [d for d in todo if (ds.get(d) or {}).get("began")])
+
+    def describe(self):
+        """The lines a run prints about this unfinished session."""
+        new, part = self.pending()
+        k = self.rec["key"]
+        lines = ["an earlier --redo run did not finish (session {}, started {}; --redo of {} "
+                 "for {} dam(s)).".format(self.sid, self.rec.get("started"),
+                                          ",".join(k["stages"]), len(k["dams"]))]
+        if new:
+            lines.append("not redone yet (they keep their results from before that --redo): "
+                         + " ".join(new))
+        if part:
+            lines.append("redo begun, not finished (their remaining stages run in any run of "
+                         "them): " + " ".join(part))
+        lines.append("to finish that --redo, run its command again (the dams it already redid "
+                     "are not redone): " + self.rec.get("command", "?"))
+        return lines
+
+
+def redo_command(a, ctx):
+    """The run_nickreview.sh command that repeats this --redo (shown to continue a session)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    work = os.path.abspath(os.path.expanduser(os.environ.get("DAMSAFETY_WORK")
+                                              or "~/dwr-dam-suite"))
+    c = ["bash", os.path.join(here, "run_nickreview.sh"), "--redo"]
+    if [s for s in STAGES if s in a.stages] != STAGES:
+        c += ["--stages", ",".join(s for s in STAGES if s in a.stages)]
+    for flag in ("no_kits", "offline", "allow_no_record"):
+        if getattr(a, flag):
+            c.append("--" + flag.replace("_", "-"))
+    for d in a.dam:
+        c += ["--dam", d]
+    if os.path.abspath(a.dams_file) != os.path.join(here, "nickreview_dams.txt"):
+        c += ["--dams", os.path.abspath(a.dams_file)]
+    if ctx.data != os.path.join(work, "NickReview_data"):
+        c += ["--data", ctx.data]
+    if ctx.out != os.path.join(work, "Dams", "NickReview_mac"):
+        c += ["--out", ctx.out]
+    if a.pack_given:
+        c += ["--pack", a.pack_given]
+    for m in a.map:
+        c += ["--map", m]
+    return " ".join(shlex.quote(x) for x in c)
 
 
 class Runner(object):
@@ -676,6 +871,7 @@ class Runner(object):
         self.dem_src = None
         self.inputs = {}         # group -> [files] read by this dam's stages (for the sha256)
         self.redo_dry = set()    # --redo --dry-run: the stages shown as run again
+        self.mode = "kit" if is_kit(dam, ctx.a.no_kits) else "prepare"
 
     def log(self, msg):
         line = "[{}] {} {}".format(now(), self.dam, msg)
@@ -692,15 +888,33 @@ class Runner(object):
         return os.path.isfile(os.path.join(self.status, stage + ".ok"))
 
     def mark(self, stage, info=""):
+        """status/<stage>.ok: when, the mode the stage ran in, and a note (e.g. no-record)."""
         with open(os.path.join(self.status, stage + ".ok"), "w") as f:
-            f.write(now() + " " + info + "\n")
+            f.write("{} mode={}{}\n".format(now(), self.mode, " " + info if info else ""))
 
     def mark_info(self, stage):
-        try:
-            with open(os.path.join(self.status, stage + ".ok")) as f:
-                return f.read()
-        except OSError:
-            return ""
+        return read_text(os.path.join(self.status, stage + ".ok"))
+
+    def ok_modes(self):
+        """{stage: mode} of the finished stages. An .ok from before the mode was written:
+        prepare and structures, and every stage of a dam without a box preparation, ran in
+        prepare mode; another stage of a kit dam ran in prepare mode (--no-kits) only when a
+        prepare.ok at least as old as it is there, else in kit mode."""
+        modes, prep = {}, os.path.join(self.status, "prepare.ok")
+        for s in STAGES:
+            p = os.path.join(self.status, s + ".ok")
+            if not os.path.isfile(p):
+                continue
+            m = ok_mode(read_text(p))
+            if m is None:
+                if s in KIT_SKIPS or self.dam not in KITS:
+                    m = "prepare"
+                elif os.path.isfile(prep) and os.path.getmtime(prep) <= os.path.getmtime(p):
+                    m = "prepare"
+                else:
+                    m = "kit"
+            modes[s] = m
+        return modes
 
     def invalidate(self, stages):
         for s in stages:
@@ -756,6 +970,16 @@ class Runner(object):
                     "why": "an earlier run of this script" + (" (3DHP fallback)" if nhd else "")}
         return None
 
+    def refetch_hint(self):
+        """How to get the 3DHP streams for this dam (the NHD fallback's log lines)."""
+        later = ", ".join(stages_to_run(["prepare"], False, True)[1:])
+        cmd = "'--redo --stages prepare --dam {}'".format(self.dam)
+        if self.ctx.a.offline:
+            return ("{} without --offline fetches 3DHP (with --offline it uses NHD again); every "
+                    "later stage of this dam ({}) then runs again".format(cmd, later))
+        return "{} fetches 3DHP again; every later stage of this dam ({}) then runs again".format(
+            cmd, later)
+
     def report_streams(self):
         """Every run says which streams the structures were built on (and the manifest too)."""
         info = self.streams_info()
@@ -763,8 +987,8 @@ class Runner(object):
             return
         if info.get("source") == "nhd":
             self.log("  streams: NHD flowlines ({}{}), NOT the 3DHP streams the box runs used; "
-                     "'--redo --stages prepare' fetches 3DHP again".format(
-                         info.get("why", ""), ", " + info["when"] if info.get("when") else ""))
+                     "{}".format(info.get("why", ""), ", " + info["when"] if info.get("when")
+                                 else "", self.refetch_hint()))
             self.note("streams: NHD flowlines ({}) - differs from the box runs (3DHP)".format(
                 info.get("why", "")))
         else:
@@ -804,8 +1028,7 @@ class Runner(object):
                 _remove(self.streams_file("nhd"))       # an older fallback is not used again
             except Exception as e:  # USGS service down: NHD from the suite pack
                 self.log("  3DHP failed ({}); using NHD flowlines from the suite pack "
-                         "(differs from the box runs; '--redo --stages prepare' later fetches "
-                         "3DHP again)".format(e))
+                         "(differs from the box runs; later, {})".format(e, self.refetch_hint()))
                 info.update(source="nhd", why="3DHP failed: {}".format(e)[:300])
         if info["source"] == "nhd":
             _remove(self.streams_file("3dhp"))
@@ -834,12 +1057,15 @@ class Runner(object):
 
     def go(self):
         ctx = self.ctx
-        kit = self.dam in KITS and not ctx.a.no_kits
-        mode = "kit" if kit else "prepare"
+        kit = is_kit(self.dam, ctx.a.no_kits)
+        mode = self.mode
         self.record["mode"] = mode
         if not ctx.dry:
             os.makedirs(self.status, exist_ok=True)
             self.logf = open(os.path.join(self.w, "run_{}.log".format(self.dam)), "a")
+        for line in ctx.pending_redo.get(self.dam, []):     # an unfinished --redo of this dam
+            self.log("NOTE: " + line)
+            self.note(line)
         want = stages_to_run(ctx.a.stages, kit, ctx.a.redo)
         if not want and not ctx.a.list_data:
             # e.g. --stages prepare for a dam with a box preparation: nothing applies, so
@@ -848,18 +1074,54 @@ class Runner(object):
                      "nothing to do".format(",".join(ctx.a.stages), mode, " and ".join(KIT_SKIPS)))
             self.record["skipped"] = True
             return 0
-        if ctx.a.redo:
-            # --redo: the first stage asked for that applies to this dam and every applicable
-            # stage after it run again in this command (they read its results); the earlier
-            # stages and their results stay as they are
+        # status/*.ok of the other mode (e.g. --no-kits for a dam finished with its box
+        # preparation): never mix the two; --redo runs every stage again in this mode. (A kit
+        # run never reads what prepare and structures made, so their .ok do not count for it.)
+        other = {} if ctx.a.list_data else \
+            {s: m for s, m in self.ok_modes().items()
+             if m != mode and not (kit and s in KIT_SKIPS)}
+        if other:
+            was = sorted(set(other.values()))[0]
+            how = ("--no-kits: prepared here" if mode == "prepare" else
+                   "the box preparation; the earlier run had --no-kits")
+            self.record["mode_change"] = {"from": was, "to": mode, "stages": sorted(other)}
+            if not ctx.a.redo:
+                msg = ("finished stages ({}) ran in {} mode, and this command runs the dam in {} "
+                       "mode ({}). Not run, so the two are not mixed: add --redo to run every "
+                       "stage of it again in {} mode{}".format(
+                           ", ".join(s for s in STAGES if s in other), was, mode, how, mode,
+                           "" if mode == "prepare" else ", or add --no-kits to keep prepare mode"))
+                self.log(msg)
+                ctx.problems.append(msg)
+                return 2
+            want = stages_to_run(STAGES, kit, True)
+            self.log("mode change: finished stages ran in {} mode; --redo runs every stage "
+                     "again in {} mode ({})".format(was, mode, how))
+        sess = ctx.session
+        if ctx.a.redo and sess is not None and sess.began(self.dam) and not other:
+            # this --redo command ran before and stopped: the dam's redo began then (its stages
+            # were invalidated once); the stages finished since are skipped, the rest run
+            self.record["redo_session"] = {"id": sess.sid, "began": sess.began(self.dam)}
+            want = sess.stages_of(self.dam) or want
+            self.log("--redo session {}: this dam's redo began {}; its stages finished since then "
+                     "are skipped".format(sess.sid, sess.began(self.dam)))
+        elif ctx.a.redo:
+            # --redo: the stages asked for that apply to this dam and every later stage that
+            # reads their results run again in this command; the others keep their results
             if ctx.dry:
                 self.redo_dry = set(want)
             else:
-                self.invalidate(want)
-            self.log("--redo: {} {}".format(", ".join(want), "would run again (dry run: no "
-                                            "status is changed)" if ctx.dry else "run again"))
-        elif not ctx.a.list_data and all(self.done(s) for s in want):
-            self.log("finished before (status/*.ok); skipped. --redo to run again")
+                self.invalidate(STAGES if other else want)
+                if sess is not None:          # after the invalidation: a stop in between redoes
+                    sess.begin(self.dam, want)    # the invalidation, never skips it
+            if sess is not None:
+                self.record["redo_session"] = {"id": sess.sid, "began": now()}
+            self.log("--redo{}: {} {}".format(
+                " (session {})".format(sess.sid) if sess is not None else "", ", ".join(want),
+                "would run again (dry run: no status is changed)" if ctx.dry else "run again"))
+        if not self.redo_dry and not ctx.a.list_data and all(self.done(s) for s in want):
+            self.log("finished before (status/*.ok); skipped. {}".format(
+                "Its redo in this session is done" if ctx.a.redo else "--redo to run again"))
             self.record["skipped"] = True
             if not kit:
                 self.report_streams()
@@ -1091,7 +1353,8 @@ class Runner(object):
         structures inputs (streams, extracts, NDDOT, offline pack; prepare mode), the files the
         extracts were cut from (suite pack layers or the offline pack, NHD flowlines, NDDOT
         pipes) and the DWR dams layer (prepare mode), the Screening 7b inputs, the screening
-        record, the box kit's JSON files (kit mode) and the two JSON files written here; the
+        record, the box kit's JSON files (kit mode), the suite settings CSV the plugins read
+        (NDSUITE_SETTINGS: the --out copy) and the two JSON files written here; the
         LISFLOOD-FP binary and the ANUGA python too (they are rundam inputs). The dam's own
         dam.json is hashed when rundam starts (record["dam_json_read_by_rundam"]), since the
         Runner and the hazard tools add to it afterwards."""
@@ -1110,6 +1373,8 @@ class Runner(object):
         need7b, opt7b = screen_7b_files(self.dam)
         files += [ctx.d(x) for x in need7b + opt7b + [os.path.join(SCREEN_DAMS, self.dam, "dam.json")]]
         files += [os.path.join(self.w, j) for j in ("rundam.json", "hazclass.json")]
+        if os.environ.get("NDSUITE_SETTINGS"):
+            files.append(os.path.abspath(os.environ["NDSUITE_SETTINGS"]))
         seen, sums = set(), {}
         for f in files:
             if f not in seen and os.path.isfile(f):
@@ -1277,9 +1542,11 @@ def main():
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--redo", action="store_true", help="run finished stages again, in this "
-                    "command: the first stage in --stages that applies to the dam and every stage "
-                    "after it that applies (prepare and structures do not apply to "
-                    "DWR-2801/2865/3034: they use the box preparation unless --no-kits)")
+                    "command: the stages in --stages that apply to the dam and every later stage "
+                    "that reads their results (precheck: only precheck; prepare and structures "
+                    "do not apply to DWR-2801/2865/3034: they use the box preparation unless "
+                    "--no-kits). Stopped, the same command goes on where it stopped "
+                    "(<out>/redo_sessions/)")
     ap.add_argument("--offline", action="store_true", help="NHD flowlines from the suite pack "
                     "instead of downloading 3DHP")
     ap.add_argument("--no-kits", action="store_true", help="prepare 2801/2865/3034 here too")
@@ -1300,6 +1567,12 @@ def main():
                          "and lists finished dams too. --plugins, --qgis-process, --anuga-python "
                          "and --lisflood may be left out (on the box: --data /home/box/DamSafety)")
     a = ap.parse_args()
+    try:                                    # every mode reads the data with GDAL
+        __import__("osgeo.gdal")
+    except ImportError:
+        ap.error("this python ({}) has no GDAL (osgeo): run it with the QGIS python (on the box "
+                 "the box's QGIS python; on the Mac run_nickreview.sh)".format(sys.executable))
+    a.pack_given = a.pack
     if a.list_data:
         a.dry_run = True
     else:
@@ -1336,11 +1609,53 @@ def main():
                                        "NDBREACH_LISFLOOD", "NDBREACH_ANUGA_PYTHON",
                                        "OMP_NUM_THREADS", "NDBREACH_ANUGA_THREADS")},
         "settings_rundam": RUNDAM_FIXED, "hazbatch": HAZBATCH_ARGS, "dams": []}
+    st = os.environ.get("NDSUITE_SETTINGS")
+    if st:
+        manifest["settings_csv_sha256"] = {os.path.abspath(st): sha256(os.path.abspath(st))}
     mp = os.path.join(ctx.out, "manifest_{}.json".format(now().replace(":", "")))
 
     def save_manifest():
         if not a.dry_run:
             write_json(mp, manifest, indent=1, default=str)
+
+    # --redo sessions: continue this command's unfinished one, or start one; say which other
+    # --redo commands are unfinished (a plain run keeps the dams they have not reached as they are)
+    others = []
+    if not a.list_data:
+        opened = RedoSession.open_ones(ctx.out)
+        for s in opened:                    # dams finished by runs since (e.g. a plain resume)
+            s.refresh(ctx.out, save=not a.dry_run)
+        opened = [s for s in opened if not s.rec.get("finished")]
+        if a.redo:
+            key = RedoSession.key(a, dams)
+            same = [s for s in opened if s.rec.get("key") == key]
+            if same:
+                ctx.session = same[-1]
+                new, part = ctx.session.pending()
+                out("--redo: goes on with the unfinished --redo session {} of this command "
+                    "(started {}); not redone yet: {}; begun: {}".format(
+                        ctx.session.sid, ctx.session.rec.get("started"), " ".join(new) or "-",
+                        " ".join(part) or "-"))
+            elif not a.dry_run:
+                ctx.session = RedoSession.new(ctx.out, key, redo_command(a, ctx))
+                ctx.session.save()
+                out("--redo session {} ({}): run the same command again after a stop and it "
+                    "goes on where it stopped".format(ctx.session.sid, ctx.session.path))
+            else:
+                out("--redo (dry run): a new --redo session would start")
+        others = [s for s in opened if s is not ctx.session]
+        for s in others:
+            out("WARNING: " + "\n  ".join(s.describe()))
+            new, _part = s.pending()
+            for d in new:
+                ctx.pending_redo.setdefault(d, []).append(
+                    "the unfinished --redo session {} has not redone this dam yet (results from "
+                    "before that --redo); to finish it: {}".format(s.sid, s.rec.get("command")))
+        if ctx.session is not None:
+            manifest["redo_session"] = {"id": ctx.session.sid, "path": ctx.session.path,
+                                        "continued": bool(ctx.session.rec.get("dams"))}
+        if others:
+            manifest["unfinished_redo_sessions"] = [s.sid for s in others]
 
     worst = 0
     try:
@@ -1369,6 +1684,8 @@ def main():
                     run.record["checksums"] = "interrupted"; rc = run.record["rc"] = 130
                 except Exception as e:
                     run.record["checksums"] = "error: {}".format(e)
+            if ctx.session is not None and not a.dry_run and rc != 130:
+                ctx.session.refresh(ctx.out)        # this dam's redo finished (or not yet)
             if run.logf:
                 run.logf.close()
             save_manifest()                         # after every dam, so a stop keeps them
@@ -1406,6 +1723,18 @@ def main():
     out("\nsummary (dam, mode, exit, problems):")
     for s in summary:
         out("  {:10s} {:8s} {:3d} {}".format(*s))
+    sess = ctx.session
+    if sess is not None and not a.dry_run:
+        if sess.refresh(ctx.out):
+            out("--redo session {}: every dam of it is redone (closed)".format(sess.sid))
+        else:
+            new, part = sess.pending()
+            out("--redo session {} is not finished (not redone yet: {}; begun: {}). Run the same "
+                "command again to go on: {}".format(sess.sid, " ".join(new) or "-",
+                                                    " ".join(part) or "-", sess.rec.get("command")))
+    for s in others:
+        if a.dry_run or not s.refresh(ctx.out):
+            out("WARNING: " + "\n  ".join(s.describe()))
     return 0 if worst == 0 else (130 if worst == 130 else 1)
 
 
