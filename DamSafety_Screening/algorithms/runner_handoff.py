@@ -157,10 +157,25 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                                       parentLayerParameterName="DAMS", optional=True))
         P(QgsProcessingParameterEnum("WHICH", "Dams to send", ho.SELECT_LABELS, defaultValue=0))
         P(QgsProcessingParameterFeatureSource("BPTS", "Breach points (tool 4; joined by dam_id)", [pt]))
-        P(QgsProcessingParameterRasterLayer("DEM", "DEM for the runner (statewide DEM or VRT)"))
-        P(QgsProcessingParameterFolderDestination("DAMS_FOLDER", "Dams folder (the runner writes "
-                                                  "<folder>/<dam ID>/)"))
-        P(QgsProcessingParameterEnum("HYDRO", "Breach hydrograph", ho.HYDRO_LABELS, defaultValue=0))
+        dem = QgsProcessingParameterRasterLayer("DEM", "DEM for the runner (statewide DEM or VRT)")
+        if hasattr(dem, "setHelp"):
+            dem.setHelp("Elevation raster (or VRT) the Runner uses for the ground surface. "
+                        "Prefer a consistent unit (metres or feet) with the run settings. "
+                        "The tool does not reproject it; the Runner handles the CRS.")
+        P(dem)
+        dams_f = QgsProcessingParameterFolderDestination("DAMS_FOLDER", "Dams folder (the runner writes "
+                                                  "<folder>/<dam ID>/)")
+        if hasattr(dams_f, "setHelp"):
+            dams_f.setHelp("Folder where the Runner writes one sub-folder per dam ID. "
+                           "The tool also writes dam.json here before each run. "
+                           "Use an empty or new folder for a clean set of results.")
+        P(dams_f)
+        hy = QgsProcessingParameterEnum("HYDRO", "Breach hydrograph", ho.HYDRO_LABELS, defaultValue=0)
+        if hasattr(hy, "setHelp"):
+            hy.setHelp("How the breach hydrograph is supplied to the Runner. "
+                       "Default uses the Runner's own ND method. "
+                       "Or pass the screening tool-5 hydrograph CSV.")
+        P(hy)
         P(QgsProcessingParameterNumber("CELL", "Runner cell size (m; empty = runner default)",
                                        NUM_DOUBLE, optional=True, minValue=1.0))
         P(QgsProcessingParameterFile("CURVES", "Stage-storage curve folder (tool 3; optional, gives the "
@@ -478,7 +493,10 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                             p[key] = v
                     p.update(eng_p)
                     p.update(mask_p[0])
-                    notes = notes + eng_notes + mask_p[1]
+                    # 0.17.51: always lead with the effective engine so the choice is visible
+                    # even when saved settings or a hidden FORCE_ANUGA are involved
+                    engine_note = "engine: " + engine_text
+                    notes = [engine_note] + notes + eng_notes + mask_p[1]
                     res["rn_inputs"] = hz.limit_text(["sent: " + why] + notes)
                     res["rn_engine"] = engine_text
                     for n in notes:
