@@ -78,8 +78,11 @@ def hecras_depth_terrain_is_the_default_basis_again():
 
 @test
 def hecras_depth_import_tool_offers_terrain_first_and_cell_min():
+    # 3.10.92 review of #204: then terrain_mean, terrain_max and fine
     from nd_breach_runner import algorithms_hecras as ah
-    assert ah.DEPTH_BASIS_KEYS == ["terrain", "cell_min"]
+    assert ah.DEPTH_BASIS_KEYS == ["terrain", "cell_min", "terrain_mean", "terrain_max",
+                                   "fine"]
+    assert len(ah.DEPTH_BASIS_OPTIONS) == len(ah.DEPTH_BASIS_KEYS)
     assert "default" in ah.DEPTH_BASIS_OPTIONS[0] and "Terrain" in ah.DEPTH_BASIS_OPTIONS[0]
     assert "Cell minimum" in ah.DEPTH_BASIS_OPTIONS[1]
     with _Env(None):

@@ -1868,7 +1868,8 @@ def vertical_datum(path):
 
 
 def fine_terrain_on_grid(run_dir, like_grid, model_terrain=None, z=None, stage=None,
-                         notes=None, warnings=None, given=False, env=None, source=None):
+                         notes=None, warnings=None, given=False, env=None, source=None,
+                         sample=TERRAIN_SAMPLE, reader=None):
     """3.10.92: the ground (ft, (ny, nx) on like_grid) of the 'terrain' depth basis, and a
     record of it, or (None, record) when there is no terrain.
 
@@ -1880,7 +1881,12 @@ def fine_terrain_on_grid(run_dir, like_grid, model_terrain=None, z=None, stage=N
     given=True: `model_terrain` was chosen by the user (hecras-reexport --terrain) and is
     used as it is; source: 'auto' / 'dem' / 'model' instead of the variable. Both are written with no vertical shift, so they are on the DEM's datum,
     the datum of the model's WSE (hecras.datum_check verifies it on the depth).
-    `notes` / `warnings` (lists) receive what was read and any warning."""
+    `notes` / `warnings` (lists) receive what was read and any warning.
+
+    3.10.92 review of #204: sample 'average' = the mean ground over each grid cell (the
+    'terrain_mean' basis). `reader` (a list) receives a callable (x0, ytop, dx, nx, ny) ->
+    the same ground (ft, carve subtracted) on any finer grid in like_grid's CRS (nearest
+    terrain cell), for the 'terrain_max' and 'fine' bases (hecras_fine)."""
     from . import gdal_io
     from . import hecras_model as hm
     from . import reservoir_carve as rcarve
@@ -1891,7 +1897,8 @@ def fine_terrain_on_grid(run_dir, like_grid, model_terrain=None, z=None, stage=N
     dem, report = (None, {}) if given else run_dem(run_dir)
     dem_cell = _cell_m(dem) if dem else None
     mt_cell = _cell_m(mt) if mt else None
-    rec = {"sample": TERRAIN_SAMPLE, "source_setting": want, "source": None, "path": None,
+    alg = _SAMPLE_ALG.get(sample, "near")
+    rec = {"sample": sample, "source_setting": want, "source": None, "path": None,
            "cell_m": None, "run_dem": dem, "run_dem_cell_m": dem_cell, "model_terrain": mt,
            "model_terrain_cell_m": mt_cell, "z": None, "carve": None,
            "vertical_datum": None}
@@ -1903,17 +1910,19 @@ def fine_terrain_on_grid(run_dir, like_grid, model_terrain=None, z=None, stage=N
     t_ft = None
     if use_dem:
         try:
-            a = gdal_io.read_like(dem, like_grid, alg=_SAMPLE_ALG[TERRAIN_SAMPLE])
+            a = gdal_io.read_like(dem, like_grid, alg=alg)
             zw = []
             f, how = hm._z_factor(report, dem, zw)
             warnings.extend(zw)
             t_ft = a * (f / 0.3048)
+            ground_src = [dem, f / 0.3048, None]
             rc = report.get(rcarve.REPORT_KEY) or {}
             fn = (rc.get("files") or {}).get("depth")
             if rc.get("applied") and fn:
                 cp = fn if os.path.isabs(fn) else os.path.join(run_dir, hecras.MODEL_FOLDER, fn)
                 if os.path.exists(cp):
-                    dep = gdal_io.read_like(cp, like_grid, alg=_SAMPLE_ALG[TERRAIN_SAMPLE])
+                    dep = gdal_io.read_like(cp, like_grid, alg=alg)
+                    ground_src[2] = cp
                     dep = np.where(np.isfinite(dep) & (dep > 0), dep, 0.0)
                     t_ft = t_ft - dep / 0.3048
                     rec["carve"] = "the run's reservoir carve ({}) subtracted in {:,} grid " \
@@ -1930,7 +1939,8 @@ def fine_terrain_on_grid(run_dir, like_grid, model_terrain=None, z=None, stage=N
             t_ft = None
     if t_ft is None and mt is not None:
         tn = []
-        t_ft = terrain_on_grid(mt, like_grid, z=z, stage=stage, notes=tn)
+        t_ft = terrain_on_grid(mt, like_grid, z=z, stage=stage, notes=tn, sample=sample)
+        ground_src = [mt, terrain_z_factor(mt, z, stage)[0] / 0.3048, None]
         rec.update(source="given" if given else "hecras_terrain", path=mt, cell_m=mt_cell,
                    z=tn[0] if tn else None)
         warnings.extend(tn[1:])
@@ -1942,6 +1952,9 @@ def fine_terrain_on_grid(run_dir, like_grid, model_terrain=None, z=None, stage=N
                          "input_files DEM): the terrain depth is on the HEC-RAS model terrain.")
     if t_ft is None:
         return None, rec
+    if reader is not None:
+        reader.append(_ground_reader(ground_src[0], ground_src[1], ground_src[2],
+                                     like_grid.crs_wkt))
     vd = vertical_datum(rec["path"])
     vd_mt = vertical_datum(mt) if mt and mt != rec["path"] else ""
     if vd and vd_mt and vd != vd_mt:
@@ -1953,16 +1966,60 @@ def fine_terrain_on_grid(run_dir, like_grid, model_terrain=None, z=None, stage=N
                                    "the DEM's datum (checked against the model's cell minimum "
                                    "elevations: datum_check)")
     cell = "{:.2f} m cells".format(rec["cell_m"]) if rec["cell_m"] else "cells of unknown size"
-    notes.append("Terrain depth ground: {} {} ({}), sampled at the centre of each {:.1f} m "
+    notes.append("Terrain depth ground: {} {} ({}), {} each {:.1f} m "
                  "grid cell{}; elevations {}.".format(
                      {"run_dem": "the run's DEM", "hecras_terrain": "the HEC-RAS model terrain",
-                      "given": "the terrain given"}[rec["source"]], rec["path"], cell, dx_m,
+                      "given": "the terrain given"}[rec["source"]], rec["path"], cell,
+                     "averaged over" if sample == "average" else "sampled at the centre of",
+                     dx_m,
                      ("; " + rec["carve"]) if rec["carve"] else "", rec["z"]))
     return t_ft, rec
 
 
+def _ground_reader(path, to_ft, carve=None, crs_wkt=None):
+    """(x0, ytop, dx, nx, ny) -> the ground (ft) of raster `path` x to_ft on that grid (CRS
+    crs_wkt), nearest terrain cell, minus the reservoir carve depth raster `carve` (m)."""
+    from . import gdal_io
+
+    from .grid import Grid
+
+    def read(x0, ytop, dx, nx, ny):
+        g = Grid(np.zeros((int(ny), int(nx)), dtype=np.float32), x0, ytop, dx, crs_wkt=crs_wkt)
+        a = gdal_io.read_like(path, g, alg="near") * to_ft
+        if carve:
+            dep = gdal_io.read_like(carve, g, alg="near")
+            a = a - np.where(np.isfinite(dep) & (dep > 0), dep, 0.0) / 0.3048
+        return a
+    read.path = path
+    return read
+
+
+def terrain_sample(basis):
+    """How the terrain is read onto the output grid for a depth basis: 'average' for
+    'terrain_mean', else at the grid cell's centre (the fine bases read it again finer)."""
+    return "average" if basis == hecras.DEPTH_BASIS_TERRAIN_MEAN else TERRAIN_SAMPLE
+
+
+def fine_options(basis, like_grid, tinfo, reader, folder=None, environ=None, rasters=None):
+    """The `fine` dict of hecras.terrain_depth for the terrain_max / fine bases (None for the
+    others or without a ground reader): k from the output cell and the terrain's cell size,
+    the 'fine' aggregation (hecras_fine.FINE_AGG_ENV) and, for 'fine', the fine rasters
+    written into `folder` unless NDBREACH_HECRAS_FINE_RASTER=0 or rasters=False."""
+    from . import gdal_io, hecras_fine
+    if basis not in hecras.FINE_BASES or not reader:
+        return None
+    dx_m = like_grid.dx * ((gdal_io.linear_unit_m(like_grid.crs_wkt)
+                            if like_grid.crs_wkt else None) or 1.0)
+    k = hecras_fine.sub_factor(dx_m, (tinfo or {}).get("cell_m"))
+    on = hecras_fine.fine_rasters_on(rasters, environ)
+    return {"ground": reader[0], "k": k, "agg": hecras_fine.fine_agg(None, environ),
+            "rasters": hecras_fine.gdal_rasters(folder, like_grid.crs_wkt)
+            if (basis == hecras.DEPTH_BASIS_FINE and folder and on) else None,
+            "rasters_on": bool(on and basis == hecras.DEPTH_BASIS_FINE)}
+
+
 def results(hdf, like_grid, arrival_m=ARRIVAL_DEPTH_FT * 0.3048, t0_hr=0.0, to_grid_xy=None, area=None,
-            units=None, wet_m=0.003, terrain=None, info=None, depth_basis=None):
+            units=None, wet_m=0.003, terrain=None, info=None, depth_basis=None, fine=None):
     """The HEC-RAS maxima on the Runner grid as the workflow's final arrays, SI:
     {'depth' m, 'velocity' m/s, 'wse' m, 'arrival' h after breach initiation}, NaN where
     dry or outside the mesh. to_grid_xy(xy (n,2)) -> (n,2) maps the HEC-RAS model CRS to the
@@ -1978,7 +2035,11 @@ def results(hdf, like_grid, arrival_m=ARRIVAL_DEPTH_FT * 0.3048, t0_hr=0.0, to_g
     'terrain' (hecras.datum_check). The wet mask and the arrival time always follow the depth used
     (hecras.terrain_depth). `info` (a dict) receives the read details, 'depth_basis',
     'depth_basis_requested', and the depth of the other basis (m) as 'other_depth_m' with
-    'other_basis' (None when it cannot be made: 'terrain' without a terrain)."""
+    'other_basis' (None when it cannot be made: 'terrain' without a terrain).
+
+    3.10.92 review of #204: 'terrain_mean' (pass the MEAN ground per grid cell as `terrain`),
+    'terrain_max' and 'fine' (they also need `fine`, fine_options(); without it they fall
+    back to 'terrain' and say so). info 'fine' holds the fine record (hecras_fine)."""
     FT = 0.3048
     shape = (like_grid.ny, like_grid.nx)
     want = hecras.depth_basis(depth_basis)
@@ -1988,17 +2049,24 @@ def results(hdf, like_grid, arrival_m=ARRIVAL_DEPTH_FT * 0.3048, t0_hr=0.0, to_g
             np.asarray(terrain, dtype=float)
     basis = want if (want == hecras.DEPTH_BASIS_CELL_MIN or t_ft is not None) else \
         hecras.DEPTH_BASIS_CELL_MIN
+    fell = None
+    if basis in hecras.FINE_BASES and not (fine and fine.get("ground")):
+        basis, fell = hecras.DEPTH_BASIS_TERRAIN, (
+            "Depth basis '{}' was asked for but the fine terrain could not be read: the depth "
+            "is the terrain at each grid cell's centre ('terrain').".format(want))
     a, minfo = hecras.terrain_depth(hdf, like_grid.x0, like_grid.y0, like_grid.dx,
                                     like_grid.nx, like_grid.ny, t_ft, area=area,
                                     units=units, arrival_depth_ft=arrival_m / FT,
                                     t0_hr=t0_hr, wet_ft=wet_m / FT, to_grid_xy=to_grid_xy,
-                                    basis=basis)
+                                    basis=basis, fine=fine)
     d_cmin = minfo.pop("depth_cell_min")
     d_terr = minfo.pop("depth_terrain")
-    if basis != want:
+    if fell:
+        minfo["notes"] = list(minfo.get("notes") or []) + [fell]
+    elif basis != want:
         minfo["notes"] = list(minfo.get("notes") or []) + [
-            "Depth basis 'terrain' was asked for but there is no terrain: the depth is the "
-            "HEC-RAS cell's minimum elevation basis ('cell_min')."]
+            "Depth basis '{}' was asked for but there is no terrain: the depth is the "
+            "HEC-RAS cell's minimum elevation basis ('cell_min').".format(want)]
     if info is not None:
         info.update(minfo)
         info["depth_basis_requested"] = want
@@ -2100,10 +2168,15 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
         terrain = None
     arrival_ft = float(getattr(st, "arrival_depth_ft", ARRIVAL_DEPTH_FT))
     tnotes, twarn = [], []
+    want_basis = getattr(st, "hecras_depth_basis", None)
+    basis_req = hecras.depth_basis(want_basis)
+    sample = terrain_sample(basis_req)        # 3.10.92: 'terrain_mean' averages the ground
+    reader = []
     try:
         t_ft, tinfo = fine_terrain_on_grid(
             dam_folder, like, model_terrain=terrain, notes=tnotes, warnings=twarn, env=env,
-            stage={"terrain_tif": terrain, "model_wkt": r["info"].get("model_wkt")})
+            stage={"terrain_tif": terrain, "model_wkt": r["info"].get("model_wkt")},
+            sample=sample, reader=reader)
     except Exception as e:                       # noqa - the cell minimum then, said loudly
         t_ft, tinfo = None, {"source": None, "error": "{}: {}".format(type(e).__name__, e)}
         twarn.append("The terrain for the depth could not be read ({}); the depth is on the "
@@ -2111,11 +2184,30 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     for n in tnotes + ["WARNING: " + w for w in twarn]:
         log(n)
     rinfo = {}
-    want_basis = getattr(st, "hecras_depth_basis", None)
-    datum_stop = None
+    datum_stop = fine_stop = None
+    # 3.10.92: terrain_max / fine at the fine terrain's resolution; the fine rasters of
+    # 'fine' go into _hecras/ (NDBREACH_HECRAS_FINE_RASTER=0 skips them)
+    fine = fine_options(basis_req, like, tinfo, reader, folder=keep, environ=env)
+    t_fine = time.time()
     try:
-        arr = results(hdf, like, arrival_m=arrival_ft * 0.3048, t0_hr=results_t0_hr(r),
-                      to_grid_xy=tr, terrain=t_ft, info=rinfo, depth_basis=want_basis)
+        try:
+            arr = results(hdf, like, arrival_m=arrival_ft * 0.3048, t0_hr=results_t0_hr(r),
+                          to_grid_xy=tr, terrain=t_ft, info=rinfo, depth_basis=want_basis,
+                          fine=fine)
+        except hecras.DatumMismatch:
+            raise
+        except hecras.HecRasError as e:
+            if fine is None:
+                raise
+            # the fine basis could not be made (memory limit, no scipy): the model has run,
+            # so keep the per-pixel terrain basis and say so loudly
+            fine_stop = str(e)
+            log("WARNING: " + fine_stop)
+            rinfo = {}
+            arr = results(hdf, like, arrival_m=arrival_ft * 0.3048, t0_hr=results_t0_hr(r),
+                          to_grid_xy=tr, terrain=t_ft, info=rinfo,
+                          depth_basis=hecras.DEPTH_BASIS_TERRAIN)
+            rinfo["depth_basis_requested"] = basis_req
     except hecras.DatumMismatch as e:
         # the model has run (maybe for hours): keep its results on the cell minimum and say
         # so loudly; the re-export (hecras-reexport) stops instead
@@ -2150,9 +2242,12 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
            "depth_basis_compare": compare, "terrain_tif": terrain,
            # 3.10.92: the ground of the terrain basis (the run's DEM or the model terrain,
            # sampled at grid cell centres) and its datum / unit check
-           "depth_terrain": tinfo, "terrain_sample": TERRAIN_SAMPLE,
+           "depth_terrain": tinfo, "terrain_sample": tinfo.get("sample") or sample,
            "datum_check": rinfo.get("datum_check"), "datum_stop": datum_stop,
-           "depth_warnings": twarn + list(rinfo.get("datum_warnings") or []),
+           # 3.10.92: the terrain_max / fine record (fine points, aggregation, rasters, s)
+           "depth_fine": _fine_record(rinfo.get("fine"), t_fine), "fine_stop": fine_stop,
+           "depth_warnings": twarn + list(rinfo.get("datum_warnings") or []) +
+           ([fine_stop] if fine_stop else []),
            "model_wkt": r["info"].get("model_wkt"), "t0_hr": results_t0_hr(r),
            "arrival_depth_ft": arrival_ft}
     with open(os.path.join(keep, "hecras_stage.json"), "w", encoding="utf-8") as f:
@@ -2164,7 +2259,10 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
         warns.append(r["inflow_fallback"]["note"])
     if datum_stop:
         warns.append("HEC-RAS depth is from each cell's minimum elevation: " + datum_stop)
-    elif rinfo.get("depth_basis_requested") == hecras.DEPTH_BASIS_TERRAIN and t_ft is None:
+    elif fine_stop:
+        warns.append("HEC-RAS depth is from the terrain at each grid cell's centre: " +
+                     fine_stop)
+    elif rinfo.get("depth_basis_requested") in hecras.TERRAIN_BASES and t_ft is None:
         warns.append("HEC-RAS depth is from each cell's minimum elevation: the per-pixel "
                      "terrain basis was asked for but neither the run's DEM nor the model's "
                      "terrain GeoTIFF was found. Re-export with reexport_hecras_results and "
@@ -2205,6 +2303,19 @@ def _find_terrain(dirs):
     return None
 
 
+def _fine_record(finfo, t_start=None):
+    """The JSON record of hecras_fine's info: points, aggregation, rasters with their sizes
+    on disk, and the seconds since t_start."""
+    if not finfo:
+        return None
+    rec = dict(finfo)
+    rec["raster_bytes"] = {k: (os.path.getsize(p) if os.path.exists(p) else None)
+                           for k, p in (rec.get("rasters") or {}).items()}
+    if t_start is not None:
+        rec["seconds"] = round(time.time() - t_start, 1)
+    return rec
+
+
 def _depth_areas(d_ft, acre):
     """Wet / >= 0.1 ft / >= 1 ft areas (ac) of a depth grid in ft."""
     with np.errstate(invalid="ignore"):
@@ -2215,7 +2326,8 @@ def _depth_areas(d_ft, acre):
 
 def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=None,
                             t0_hr=None, arrival_depth_ft=None, model_wkt=None,
-                            terrain_z=None, overwrite=False, log=None, depth_basis=None):
+                            terrain_z=None, overwrite=False, log=None, depth_basis=None,
+                            fine_rasters=None):
     """Re-make the final HEC-RAS rasters of a finished run from its plan HDF and the model
     terrain (no HEC-RAS run): depth = max WSE minus the ground of the depth basis, the
     wet mask and arrival time on that depth (results(..., depth_basis=)).
@@ -2240,7 +2352,14 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
 
     Writes workflow.FINAL_NAMES and reexport.json (inputs, depth basis, areas old vs new)
     into out_dir, by default a NEW folder run_dir/_hecras/reexport_<UTC stamp>; it never
-    replaces existing rasters unless overwrite=True. Returns the report dict."""
+    replaces existing rasters unless overwrite=True. Returns the report dict.
+
+    3.10.92 review of #204: also 'terrain_mean' (the mean ground over each grid cell),
+    'terrain_max' (the deepest fine-terrain point of each grid cell; conservative) and 'fine'
+    (the WSE interpolated between the cell centres minus the fine terrain, an approximation
+    of RAS Mapper's sloped surface; writes hecras_fine.FINE_NAMES at the terrain's
+    resolution too unless fine_rasters=False / NDBREACH_HECRAS_FINE_RASTER=0, and the grid
+    cells by max or mean, NDBREACH_HECRAS_FINE_AGG). All run the same datum check."""
     from . import gdal_io, workflow
     say = log or (lambda m: None)
     run_dir = os.path.abspath(run_dir)
@@ -2281,7 +2400,7 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
     if not (terrain and os.path.exists(terrain)):
         terrain = None
     if terrain is None and not given and run_dem(run_dir)[0] is None and \
-            basis == hecras.DEPTH_BASIS_TERRAIN:
+            basis in hecras.TERRAIN_BASES:
         raise HecRasEngineError("no terrain found for the 'terrain' depth basis (the run's DEM, "
                                 "_breach_model/run_report.json input_files DEM, nor the HEC-RAS "
                                 "terrain GeoTIFF <project>/Terrain/*.tif); pass terrain=, or "
@@ -2314,7 +2433,9 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
                                datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ"))
     out_dir = os.path.abspath(out_dir)
     names = workflow.FINAL_NAMES
-    clash = [n for n in list(names.values()) + [REEXPORT_JSON]
+    from . import hecras_fine
+    clash = [n for n in list(names.values()) + [REEXPORT_JSON] +
+             (list(hecras_fine.FINE_NAMES.values()) if basis == hecras.DEPTH_BASIS_FINE else [])
              if os.path.exists(os.path.join(out_dir, n))]
     if clash and not overwrite:
         raise HecRasEngineError("{} already holds {}; choose another out_dir or pass "
@@ -2325,10 +2446,12 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
     tnotes, twarn = [], []
     # an explicit terrain_z is the unit of the HEC-RAS terrain: that terrain is read then
     zsrc = "model" if terrain_z and gdal_io.base_choice(terrain_z) != gdal_io.Z_AUTO else None
+    sample = terrain_sample(basis)
+    reader = []
     t_ft, tinfo = fine_terrain_on_grid(run_dir, grid, model_terrain=terrain, z=terrain_z,
                                        stage=stage, notes=tnotes, warnings=twarn, given=given,
-                                       source=zsrc)
-    if t_ft is None and basis == hecras.DEPTH_BASIS_TERRAIN:
+                                       source=zsrc, sample=sample, reader=reader)
+    if t_ft is None and basis in hecras.TERRAIN_BASES:
         raise HecRasEngineError("the terrain for the 'terrain' depth basis could not be read "
                                 "({}); pass terrain=, or use the 'cell_min' depth basis".format(
                                     "; ".join(twarn) or "no terrain"))
@@ -2337,11 +2460,16 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
     info = {}
     say("Reading {} (depth basis {})".format(hdf, basis))
     hst = os.stat(hdf)          # 3.10.84: recorded, so a later model run shows it is stale
+    fine = fine_options(basis, grid, tinfo, reader, folder=out_dir, rasters=fine_rasters)
+    if basis in hecras.FINE_BASES and fine is None:
+        raise HecRasEngineError("the fine terrain for the '{}' depth basis could not be read; "
+                                "pass terrain=, or use the 'terrain' basis".format(basis))
+    t_fine = time.time()
     try:          # 3.10.92: a terrain on another datum / unit stops the terrain basis here
         arr = results(hdf, grid, arrival_m=float(arrival_depth_ft) * 0.3048,
                       t0_hr=float(t0_hr), to_grid_xy=tr, terrain=t_ft, info=info,
-                      depth_basis=basis)
-    except hecras.DatumMismatch as e:
+                      depth_basis=basis, fine=fine)
+    except hecras.HecRasError as e:     # DatumMismatch, the fine basis's limit / scipy
         raise HecRasEngineError(str(e))
     for w in info.get("datum_warnings") or []:
         say("WARNING: " + w)
@@ -2366,16 +2494,21 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
            "depth_basis": info.get("depth_basis"),
            "depth_basis_stage": stage.get("depth_basis"),
            "method": hecras.DEPTH_BASIS_TEXT.get(info.get("depth_basis")) +
-           "; nearest HEC-RAS cell per grid cell; wet and arrival on that depth",
+           ("; nearest HEC-RAS cell per grid cell"
+            if info.get("depth_basis") not in hecras.FINE_BASES else "") +
+           "; wet and arrival on that depth",
            "no_terrain_cells": info.get("no_terrain_cells"),
            # 'areas_new' = the basis written; one entry per basis that could be made
            "areas_new": by_basis[info.get("depth_basis")], "areas_by_basis": by_basis,
            "areas_old_cell_min": by_basis.get(hecras.DEPTH_BASIS_CELL_MIN),
            "areas_terrain": by_basis.get(hecras.DEPTH_BASIS_TERRAIN),
            # 3.10.92: the ground of the terrain basis and its datum / unit check
-           "depth_terrain": tinfo, "terrain_sample": TERRAIN_SAMPLE,
+           "depth_terrain": tinfo, "terrain_sample": tinfo.get("sample") or sample,
            "datum_check": info.get("datum_check"),
-           "outputs": paths, "notes": tnotes + list(info.get("notes", [])),
+           # 3.10.92: the terrain_max / fine record (fine points, aggregation, rasters, s)
+           "depth_fine": _fine_record(info.get("fine"), t_fine),
+           "outputs": dict(paths, **{"fine_" + k: v for k, v in
+                                     ((info.get("fine") or {}).get("rasters") or {}).items()}), "notes": tnotes + list(info.get("notes", [])),
            # review round 3: a terrain whose unit had to be assumed (terrain_z_factor)
            "terrain_z": tinfo.get("z"),
            "warnings": twarn + list(info.get("datum_warnings") or [])}

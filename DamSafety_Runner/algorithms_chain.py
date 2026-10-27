@@ -316,6 +316,15 @@ class QgisOps(object):
         # plan is on the terrain basis, which Hazard 2.18.63 then adopts
         basis, why, stage = import_depth_basis(dam, plan)
         terrain = ""
+        if basis in hecras.TERRAIN_BASES and basis != hecras.DEPTH_BASIS_TERRAIN:
+            # 3.10.92 review of #204: Hazard (2.18.63) knows only 'terrain' and 'cell_min': the
+            # import makes its own per-pixel terrain depth; the Runner's own rasters of this
+            # basis stay in the dam folder (_hecras/hecras_stage.json, the re-export)
+            self.log("{}: WARNING: HEC-RAS depth basis '{}' ({}) is not one Hazard imports; "
+                     "the Hazard import makes its own per-pixel 'terrain' depth from the plan "
+                     "and the terrain (the Runner's '{}' rasters stay in the dam folder)"
+                     .format(dam.dam_id, basis, why, basis))
+            basis = hecras.DEPTH_BASIS_TERRAIN
         no_terrain = False                # 3.10.92: the default terrain basis found none
         if basis == hecras.DEPTH_BASIS_TERRAIN:
             terrain = str(dam.cv.get("HEC_TERRAIN") or "").strip()

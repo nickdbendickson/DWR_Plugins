@@ -36,8 +36,17 @@ US_SI = ["Detect from the file (US customary when it says nothing)", "US customa
 DEPTH_BASIS_OPTIONS = ["Terrain per pixel: max WSE minus the actual terrain at the centre of "
                        "each grid cell (default; the Terrain, else the dam folder's run DEM)",
                        "Cell minimum: max WSE minus the HEC-RAS cell's minimum terrain "
-                       "elevation"]
-DEPTH_BASIS_KEYS = [hecras.DEPTH_BASIS_TERRAIN, hecras.DEPTH_BASIS_CELL_MIN]
+                       "elevation",
+                       # 3.10.92 review of #204: three more (core/hecras_fine.py)
+                       "Terrain mean: max WSE minus the mean terrain over each grid cell",
+                       "Terrain max (conservative): the deepest point of the fine terrain in "
+                       "each grid cell (WSE of the nearest HEC-RAS cell)",
+                       "Fine (approximates RAS Mapper's sloped surface): WSE interpolated "
+                       "between wet cell centres minus the fine terrain; also writes "
+                       "Depth_fine / WSE_fine (Max).tif at the terrain's resolution"]
+DEPTH_BASIS_KEYS = [hecras.DEPTH_BASIS_TERRAIN, hecras.DEPTH_BASIS_CELL_MIN,
+                    hecras.DEPTH_BASIS_TERRAIN_MEAN, hecras.DEPTH_BASIS_TERRAIN_MAX,
+                    hecras.DEPTH_BASIS_FINE]
 # 3.10.89 review round 3: the Terrain's elevation unit (hecras_engine.terrain_z_factor)
 TERRAIN_Z_OPTIONS = ["Detect from the raster (else the Runner's record of its own terrain, else "
                      "the CRS's linear unit, with a warning)", "Feet", "US survey feet", "Meters"]
@@ -355,15 +364,16 @@ class HecRasImportAlgorithm(_ToolBase):
             stage = hecras_engine._read_json(os.path.join(
                 dam_folder, "_hecras", "hecras_stage.json")) if dam_folder else {}
             tnotes, twarn = [], []
-            t_ft = None
+            t_ft, _trec, reader = None, {}, []
             if terrain is not None or dam_folder:
                 t_ft, _trec = hecras_engine.fine_terrain_on_grid(
                     dam_folder, grid,
                     model_terrain=terrain.source() if terrain is not None else
                     stage.get("terrain_tif"),
                     z=TERRAIN_Z_KEYS[zi] if 0 <= zi < 4 else None, stage=stage,
-                    notes=tnotes, warnings=twarn, given=terrain is not None)
-            if basis == hecras.DEPTH_BASIS_TERRAIN and t_ft is None:
+                    notes=tnotes, warnings=twarn, given=terrain is not None,
+                    sample=hecras_engine.terrain_sample(basis), reader=reader)
+            if basis in hecras.TERRAIN_BASES and t_ft is None:
                 # no terrain anywhere: the cell minimum, said loudly (as the Linux stage does)
                 w = ("WARNING: no terrain for the per-pixel terrain depth basis (give the "
                      "Terrain the HEC-RAS model used, or a dam folder with its run DEM): the "
@@ -375,7 +385,9 @@ class HecRasImportAlgorithm(_ToolBase):
                 feedback.pushInfo(n)
             arrays, tinfo = hecras.terrain_depth(
                 hdf, x0, ytop, dx, nx, ny, t_ft,
-                area=self._str(parameters, "AREA", context) or None, basis=basis, **kw)
+                area=self._str(parameters, "AREA", context) or None, basis=basis,
+                fine=hecras_engine.fine_options(basis, grid, _trec, reader, folder=out_dir),
+                **kw)
             tinfo.pop("depth_cell_min", None)
             tinfo.pop("depth_terrain", None)
             tinfo["notes"] = list(tinfo.get("notes") or []) + twarn + \

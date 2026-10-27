@@ -1571,7 +1571,8 @@ def cmd_hecras_reexport(args):
             args.run_dir, out_dir=args.out or None, hdf=args.hdf or None,
             terrain=args.terrain or None, like=args.grid or None, t0_hr=args.t0_hr,
             arrival_depth_ft=args.arrival_depth_ft, terrain_z=args.terrain_z or None,
-            overwrite=args.overwrite, log=say, depth_basis=args.depth_basis or None)
+            overwrite=args.overwrite, log=say, depth_basis=args.depth_basis or None,
+            fine_rasters=False if args.no_fine_raster else None)
     except (eng.HecRasEngineError, eng.hecras.HecRasError, ValueError) as e:
         raise CliError(str(e))
     say("depth basis written: {}".format(rep["depth_basis"]))
@@ -1895,11 +1896,20 @@ def build_parser():
                    "(default 0.1 ft)")
     p.add_argument("--overwrite", action="store_true",
                    help="replace rasters already in --out")
-    p.add_argument("--depth-basis", default="", choices=["", "terrain", "cell_min"],
+    p.add_argument("--no-fine-raster", action="store_true",
+                   help="with --depth-basis fine: skip Depth_fine / WSE_fine (Max).tif (also "
+                   "NDBREACH_HECRAS_FINE_RASTER=0); NDBREACH_HECRAS_FINE_AGG=max|mean picks the "
+                   "grid cell aggregate of the fine depth (default max)")
+    p.add_argument("--depth-basis", default="",
+                   choices=["", "terrain", "cell_min", "terrain_mean", "terrain_max", "fine"],
                    help="depth = max WSE minus the actual terrain at the centre of each grid "
                    "cell ('terrain', the default again from 3.10.92: the run's fine DEM) or "
                    "minus the cell's minimum terrain elevation ('cell_min', the 3.10.84 "
-                   "default); default NDBREACH_HECRAS_DEPTH_BASIS, else terrain. A terrain on "
+                   "default); 'terrain_mean' = minus the mean terrain over each grid cell; "
+                   "'terrain_max' = the deepest fine-terrain point per grid cell "
+                   "(conservative); 'fine' = WSE interpolated between wet cell centres minus "
+                   "the fine terrain (an approximation of RAS Mapper's sloped surface); "
+                   "default NDBREACH_HECRAS_DEPTH_BASIS, else terrain. A terrain on "
                    "another vertical datum or unit than the model stops 'terrain' "
                    "(NDBREACH_HECRAS_DATUM_CHECK=warn keeps it)")
     p.set_defaults(func=cmd_hecras_reexport)
