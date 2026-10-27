@@ -26,8 +26,9 @@
 #                    runs first)
 #   --offline        NHD flowlines from the suite pack instead of downloading 3DHP streams
 #   --allow-no-record  run rundam even if the Screening 7b record (dam.json) could not be
-#                    written (the crest length then differs from the box runs; once a
-#                    record is written, rundam, hazclass and hazbatch run again)
+#                    written (on the record an earlier run wrote, if there is one; else the
+#                    crest length differs from the box runs; once a record is written,
+#                    rundam, hazclass and hazbatch run again)
 #   --pack FILE      offline pack .sqlite (default: the one in --data, if there)
 #   --no-kits        prepare DWR-2801/2865/3034 here instead of using the box preparation
 #                    (a dam finished in the other mode is not run without --redo)
@@ -38,12 +39,14 @@
 #                    On the box (no installer) run nickreview_mac.py itself: see its --help
 #
 # Ctrl-C stops the run; the log, the summary and the manifest of the dams so far are kept.
-# The same command again goes on: a stage is skipped when its status/<stage>.ok is there and
+# The same command again goes on (a stopped --redo: the command it prints, which is the same
+# command without --redo; the same --redo again redoes everything): a stage is skipped when
+# its status/<stage>.ok is there, ran in the dam's mode (kit or prepare, see --no-kits) and is
 # newer than the .ok of every stage it reads.
 # shellcheck disable=SC2154  # DAMSAFETY_* / QGIS_PROCESS / NDBREACH_* come from the sourced env file (checked below)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for a in "$@"; do case "$a" in -h|--help) sed -n '2,42p' "$0"; exit 0 ;; *) ;; esac; done
+for a in "$@"; do case "$a" in -h|--help) sed -n '2,45p' "$0"; exit 0 ;; *) ;; esac; done
 ENVF="${DAMSAFETY_ENV_FILE:-$HOME/dwr-dam-suite/damsafety_env.sh}"
 if [[ ! -f "$ENVF" ]]; then
   echo "ERROR: $ENVF not found. Run install_dwr_suite_mac.sh first." >&2; exit 1
@@ -67,7 +70,7 @@ while [[ $# -gt 0 ]]; do
     --redo|--offline|--no-kits|--allow-no-record) PASS+=("$1"); shift ;;
     --dry-run) DRY=1; PASS+=("$1"); shift ;;
     --list-data) DRY=1; PASS+=("$1" "$2"); shift 2 ;;
-    -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
     *) echo "ERROR: unknown option $1 (see --help)" >&2; exit 2 ;;
   esac
 done

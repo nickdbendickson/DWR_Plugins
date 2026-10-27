@@ -42,9 +42,12 @@ box prepared it, so `--redo --stages prepare` changes nothing). For example
 `--redo --stages precheck` only the precheck (a report no later stage reads). Before it
 runs anything, `--redo` sets aside the `status/<stage>.ok` of those stages (renamed to
 `<stage>.ok.redo_<time>`) and lists them. If it stops (Ctrl-C or a failure), finish it
-with the same command **without** `--redo`, which it prints ("to finish, run the same
-command WITHOUT --redo: ..."): that run does only what is not finished yet. The same
-`--redo` command again would redo all of those stages again.
+with the command it prints ("to finish, run the same command WITHOUT --redo: ..."), run
+as it is: it is the same command without `--redo`, and its `--stages` also lists the
+stages that read the ones you named (for `--redo --stages rundam` it has
+`--stages rundam,hazclass,hazbatch`; a hand-typed `--stages rundam` would leave hazclass
+and hazbatch not done). That run does only what is not finished yet. The same `--redo`
+command again would redo all of those stages again.
 
 ## 3. Or in QGIS (Runner dialog)
 
@@ -68,16 +71,17 @@ bash run_nickreview.sh --dam DWR-2801 --stages record   # writes the DEM VRT, ru
 
 The last line writes the DEM VRT with its paths changed to your Mac (and the dam's
 Screening 7b `dam.json`):
-`~/dwr-dam-suite/Dams/NickReview_mac/work/DWR-2801/dem/DWR-2801_composite_1m_full_native_v2.vrt`.
-Use **this** file as the DEM. The copy under `<DATA>/nickreview_rerun_20261023/` still
-points at the box's `/workspace/...` and `/home/box/...` folders and will not open
-correctly in QGIS on the Mac.
+`/Users/<you>/dwr-dam-suite/Dams/NickReview_mac/work/DWR-2801/dem/DWR-2801_composite_1m_full_native_v2.vrt`
+(your user name for `<you>`). Use **this** file as the DEM. The copy under
+`<DATA>/nickreview_rerun_20261023/` still points at the box's `/workspace/...` and
+`/home/box/...` folders and will not open correctly in QGIS on the Mac.
 
 **Option A (inside QGIS, for this or any other dam):** the Screening plugin's tool (the
 Source list of the Runner dialog's *Download a DEM* section has no native-tile source in
 Runner 3.10.86, but its *Download DEM…* button opens this same tool, where you can switch
 Source): Processing ▸ **DamSafety Screening** ▸ Dam screening ▸ **Download DEM (dam,
-county, or state)**:
+county, or state)**. Its folder fields do not expand `~`: type the full path
+(`/Users/<you>/...`, with your user name for `<you>`) or pick the folder with the **…** button.
 
 | field | value |
 |---|---|
@@ -85,10 +89,10 @@ county, or state)**:
 | 1 m tiles: box west,south,east,north in degrees | `-97.63262,46.71761,-96.90646,47.15281` (Grok's DWR-2801 model area; or leave empty and give the dam point below) |
 | Dam point, longitude,latitude | `-97.390918,46.984382` (only used when the box is empty, with the buffer) |
 | Dam ID | `DWR-2801` |
-| 1 m tiles: tile folder | e.g. `~/dwr-dam-suite/lidar_1m` (not `lidar_1m_native`: the tool only counts tiles listed in its own `lidar_1m_manifest.json`, so it would download the get_lidar_tiles.sh tiles again) |
+| 1 m tiles: tile folder | e.g. `/Users/<you>/dwr-dam-suite/lidar_1m` (not `lidar_1m_native`: the tool only counts tiles listed in its own `lidar_1m_manifest.json`, so it would download the get_lidar_tiles.sh tiles again) |
 | 1 m tiles: download the listed tiles | **off** the first time: it only lists the tiles and the total |
 | 1 m tiles: largest download for one run (GB) | the default **10** is enough: the tool counts GB as 1024³ bytes, and the 38 tiles are about 9.3–9.7 of those (10.0–10.4 GB in the decimal GB of the data lists) |
-| Output folder | e.g. `~/dwr-dam-suite/DEM/DWR-2801` |
+| Output folder | e.g. `/Users/<you>/dwr-dam-suite/DEM/DWR-2801` |
 
 Run it once: the log lists **38 tiles** for that box (Grok's 36 plus x66y518 and
 x66y519). Two projects publish x66y518 and x66y519 (ND_3DEPProcessing_D22, published
@@ -113,20 +117,22 @@ Terminal script already passes Meters.
 ### 3c. Run breach model
 
 Processing ▸ **DamSafety Runner** ▸ **Run breach model for one dam**.
-`<DATA>` = `~/dwr-dam-suite/NickReview_data`.
+`<DATA>` = `/Users/<you>/dwr-dam-suite/NickReview_data` (with your user name for `<you>`).
+The path fields of the QGIS tools below do not expand `~`: type full paths like these, or
+pick the file or folder with the **…** button.
 
 | field | value |
 |---|---|
 | Dam ID (NID ID) | `DWR-2801` (the DWR ID, not the NID ID: the Runner finds the dam's folder in the Dams folder by it) |
 | Dam name | Swan Buffalo Detention Dam 12 |
 | NID ID (advanced) | `ND00199` |
-| Dams folder | `~/dwr-dam-suite/absaraka-run/Dams` (the installer sets it as the suite's Dams folder; the results go to its `DWR-2801` folder, not to the Terminal run's). Its `DWR-2801/dam.json` is the NickReview screening record plus `dam_length_ft` = 1,700 ft (the NID dam length) |
+| Dams folder | `/Users/<you>/dwr-dam-suite/absaraka-run/Dams` (the installer sets it as the suite's Dams folder; the results go to its `DWR-2801` folder, not to the Terminal run's). Its `DWR-2801/dam.json` is the NickReview screening record plus `dam_length_ft` = 1,700 ft (the NID dam length) |
 | Crest length (ft) | the `dam_length_ft` of the dam's Screening 7b record, the crest length the box and Terminal runs use: `grep -m1 dam_length_ft ~/dwr-dam-suite/Dams/NickReview_mac/dams/DWR-2801/dam.json`. Option B's `--stages record` line writes that record (after option A, run that line once; it runs no model). Left empty, the Runner takes the Dams folder's 1,700 ft (its log says "Crest length (ft) from dam.json"); with no crest length anywhere it uses 400 ft |
 | Dam point | -106343.832, 2666591.505 [EPSG:5070] |
 | Height / storage / area | 27.5 ft / 1615.496 ac-ft / **154.5 ac** (DWR max pool area) |
 | Top of dam | 1069.117 ft |
-| Method / scenario | 0 / 0, baseline on, stop rule off |
-| DEM | `~/dwr-dam-suite/Dams/NickReview_mac/work/DWR-2801/dem/DWR-2801_composite_1m_full_native_v2.vrt` (step 3a, option B; or option A's `DWR-2801_1m_lidar.vrt`) |
+| Breach (ND 5.1.1(d)) / Scenario | **Piping failure, Froehlich (2008) parameters, routed** / **Sunny day: no inflow, breach at the top of dam (ND 5.1.1)** (the first entry of each list: `grok_settings_DWR-2801.json` gives them as 0 / 0). *Flood scenario: also run without the breach ...* on; *Class-stop rule* (advanced) off |
+| DEM | `/Users/<you>/dwr-dam-suite/Dams/NickReview_mac/work/DWR-2801/dem/DWR-2801_composite_1m_full_native_v2.vrt` (step 3a, option B; or option A's `DWR-2801_1m_lidar.vrt`) |
 | DEM elevation units | **Meters** (step 3b) |
 | Structures | `<DATA>/culvert_precheck_20261024/dwr2801/structures_2801_with9122221_invfix2.gpkg`, layer `runner_culverts` |
 | Structure fields | kind, span_ft, rise_ft, barrels, shape, invert_up, invert_dn, name |
@@ -153,10 +159,19 @@ It prints one line of this form (with your user name for `<you>`):
 A path the Runner cannot open is skipped with only a note in the log ("Culvert inventory
 ... not read"), and the culvert guesses are then sized differently from the box run.
 
-Then **Hazard class** (DAM_FOLDER = the DWR-2801 results folder): lethality 0,
-wet 0.1 ft, unknown AADT 1, unknown trains 1, passenger codes A,B,C, with the
-`pack_*_2801.gpkg` layers listed in `grok_settings_DWR-2801.json`. Three of its fields
-(Advanced parameters) are **text fields**, not layer pickers: *More road GeoPackages*
+Then **Hazard class**: Processing ▸ **DamSafety Runner** ▸ Data preparation and tools ▸
+**ND hazard classification (Section 5.2, ACER TM 11 charts)**, with
+*Dam folder with 'Depth (Max).tif' and 'Velocity (Max).tif'* = the DWR-2801 results folder
+(`/Users/<you>/dwr-dam-suite/absaraka-run/Dams/DWR-2801`),
+*Potentially lethal to occupants of habitable structures* = **2D model: ACER TM 11
+depth-velocity danger charts (ND Fig. 5.1/5.2)**, *'Any depth': inundated or overtopped
+from a depth of* = 0.1 ft, and in Advanced parameters *Class of an overtopped road with no
+AADT* = **Medium**, *Class of an overtopped railroad with no trains a day* = **Medium** and
+*Railroads: passenger field values ...* = `A,B,C` (all of these are the defaults;
+`grok_settings_DWR-2801.json` gives the three lists by the place of the entry, counted from
+0: LETHALITY 0 is the charts, UNKNOWN_AADT 1 and UNKNOWN_TRAINS 1 are Medium of Low, Medium,
+High), with the `pack_*_2801.gpkg` layers listed in `grok_settings_DWR-2801.json`. Three of
+its fields (Advanced parameters) are **text fields**, not layer pickers: *More road GeoPackages*
 (ROADS_MORE), *Traffic (AADT) GeoPackages* (AADT_LAYERS) and *More lifeline GeoPackages*
 (LIFELINES_MORE). Like the culvert inventory, they need **absolute paths**
 (`/Users/<you>/...`; a `~` path is not found) separated by **`;;`**. Run this in Terminal
@@ -180,10 +195,28 @@ and
 A path that cannot be opened does not stop the run: it is skipped with a message in the
 log ("Could not open extra Roads file ..." or "could not read the AADT layers"), and the
 class can then differ from the box run (roads without an AADT, for example, then get the
-unknown AADT 1).
+*Class of an overtopped road with no AADT*, Medium).
 
-Then **Hazard batch**: downloads on, report on, EAP off, 1 worker, 90 min timeout. Leave
-Hazard's offline_pack setting **empty**.
+Then **Hazard batch**: Processing ▸ **DamSafety Hazard** ▸ Dam hazard classification ▸
+**Batch hazard classification (folder of dams)**. It classifies every dam folder directly
+inside its *Folder containing the dam folders*, so give it a folder that holds only a link
+to the DWR-2801 results folder, as the Terminal run does (make it once in Terminal):
+
+```bash
+mkdir -p ~/dwr-dam-suite/absaraka-run/hazbatch
+ln -s ~/dwr-dam-suite/absaraka-run/Dams/DWR-2801 ~/dwr-dam-suite/absaraka-run/hazbatch/DWR-2801
+```
+
+| field | value |
+|---|---|
+| Folder containing the dam folders | `/Users/<you>/dwr-dam-suite/absaraka-run/hazbatch` |
+| Use the internet downloads (...) | on |
+| PDF report per dam | on |
+| EAP outputs per dam (...) | **off** |
+| Parallel worker processes (...) | 1 |
+| Worker processes: time limit per dam (minutes, 0 = none) | **90** (the default is 60) |
+
+Leave Hazard's offline_pack setting **empty**.
 
 Also set (the Terminal script does this for you) `NDBREACH_ANUGA_MESHER=gmsh` and
 `NDBREACH_DEM_RESAMPLE=average`.
