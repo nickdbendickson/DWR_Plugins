@@ -798,13 +798,27 @@ The same hook classifies each sensitivity case.
   the values. Every Download DEM output is metres; raw ND DWR ASCII_Grids_ft are feet. Set it
   explicitly for State Plane (US survey feet) LiDAR. How it was decided is in the run log and
   the report ("metres (detected: raster unit 'm')"). An explicit Feet or Meters that the DEM's
-  record contradicts stops and names both; if the record is the wrong one, correct it
-  (`gdal_edit -units ft <dem>`) and run again. The unit is applied once: the DEM is warped to the
+  record contradicts is decided by the DEM's median: when it is North Dakota ground (200-1100 m)
+  only in the chosen unit the run goes on, with a warning in the run report to correct the
+  record (`gdal_edit -units ft <dem>`); only in the recorded unit it stops (the record is right);
+  when the values cannot tell, it stops and names 'Feet / US survey feet / Meters (the raster's
+  unit tag is wrong)', the last three choices of the list, which run in that unit with the
+  warning (the CLI: `dem.z_units` `feet_tag_wrong` ...). A band with a scale or offset, a warped
+  VRT whose GDAL vertical shift converted the values, and an old Download DEM file no unit reads
+  right stop whatever the choice, naming the fix (QGIS Translate with `-unscale`, Warp with
+  `-novshift`, a new download). The unit is applied once: the DEM is warped to the
   model grid as stored (no GDAL vertical shift). A DEM you warped yourself from a compound CRS
   with a feet vertical to one without (gdalwarp or QGIS Warp without `-novshift`) holds metres
   but keeps the band unit 'US survey foot': re-tag it (`gdal_edit -units m`) or warp it again
-  with `-novshift`. The culvert pre-check, the CLI and the HEC-RAS tools resolve the unit the
-  same way as a run.
+  with `-novshift` (below about 656 m the ground check stops it, and Meters then runs it with
+  the warning). The culvert pre-check, the CLI and the wizard's DEM estimate resolve the unit
+  the same way as a run. The tools that must read a raster without a 'DEM elevation units' to
+  stop on - Import HEC-RAS results and `hecras-reexport` (their 'Terrain elevation units' /
+  `--terrain-z`), the animation hillshade, the HEC-RAS export of a run report older than 3.10.16
+  - read the recorded unit, else (the HEC-RAS tools) the Runner's own record of its HEC-RAS
+  terrain, else the CRS's linear unit as before 3.10.88, and say so in a warning. Run outputs
+  are written in the horizontal part of a compound DEM CRS, so a later warp without
+  `-novshift` does not rescale them.
 - **Cell size.** 10 m is a sensible default. 20-30 m is much faster for screening.
 
 ## Limits to keep in mind

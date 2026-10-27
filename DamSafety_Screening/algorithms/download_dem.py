@@ -413,11 +413,19 @@ def _tag_reused(dest, side, feedback):
             feedback.pushInfo("{} was written before Screening 0.17.50: band 1 is now tagged "
                               "metres ({})".format(os.path.basename(dest), how))
         return
+    src = dd.record_source(dest)
+    if src.startswith("USGS 3DEP"):                      # metres in every version
+        unit = "Meters (a USGS 3DEP download is metres)"
+    elif src.startswith("ND DWR"):
+        unit = ("Meters only if it is a DEM_Imagine download (one from ASCII_Grids_ft written "
+                "before 0.17.50 may hold feet)")
+    else:
+        unit = "the unit of its elevations"
     feedback.pushWarning(
         "{} was written before Screening 0.17.50 and records no elevation unit the Runner trusts "
         "({}). The Runner's 'Detect from the raster' stops on it: set 'DEM elevation units' to "
-        "Meters (a DEM_Imagine download), or delete {} and {} and run Download DEM again.".format(
-            os.path.basename(dest), how, os.path.basename(dest), os.path.basename(side)))
+        "{}, or delete {} and {} and run Download DEM again.".format(
+            os.path.basename(dest), how, unit, os.path.basename(dest), os.path.basename(side)))
 
 
 def _bearing(alg, parameters, context, feedback=None):

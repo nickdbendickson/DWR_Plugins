@@ -160,6 +160,21 @@ def recorded_unit(path):
         ds = None
 
 
+def record_source(path):
+    """The SOURCE of a Download DEM record of a raster - its metadata, else its <stem>_dem.txt
+    facts file - or "" (0.17.50 review round 3: the reuse warning names the right unit)."""
+    try:
+        ds = gdal.Open(path)
+        src = str((ds.GetMetadata() or {}).get("SOURCE") or "").strip() if ds is not None else ""
+        ds = None
+    except Exception:                                    # noqa - exception mode
+        src = ""
+    if not src:
+        facts = ZU.read_facts(os.path.splitext(path)[0] + "_dem.txt") or {}
+        src = str(facts.get("source") or "").strip()
+    return src
+
+
 def data_problem(path):
     """dem_zunit.data_problem of a raster file: why no unit reads its values right, or ""."""
     try:
