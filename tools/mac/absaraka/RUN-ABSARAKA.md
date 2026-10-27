@@ -34,13 +34,17 @@ hazclass input (every file of a `;;` list), the DEM VRTs and the 1 m tiles that 
 dam's area, the box kit's `rundam.json` and `hazclass.json`, the Screening 7b inputs, the
 dam's `dam.json` as rundam read it, the suite settings CSV and the LISFLOOD-FP binary.
 Run it again and finished stages are skipped (a stage that ran again makes the later stages
-that read it run again). A stopped `--redo` command goes on too: run it again and it goes on
-where it stopped, and says so. `--redo` runs them again in the same command; with
-`--stages`, the named stages that apply and every later stage that reads their results (for
-this dam the stages are precheck, record, rundam, hazclass, hazbatch; prepare and structures
-do not apply, the box prepared it, so `--redo --stages prepare` changes nothing). For
-example `--redo --stages rundam` runs rundam, hazclass and hazbatch again, and
-`--redo --stages precheck` only the precheck (a report no later stage reads).
+that read it run again). `--redo` runs finished stages again; with `--stages`, the named
+stages that apply and every later stage that reads their results (for this dam the stages
+are precheck, record, rundam, hazclass, hazbatch; prepare and structures do not apply, the
+box prepared it, so `--redo --stages prepare` changes nothing). For example
+`--redo --stages rundam` runs rundam, hazclass and hazbatch again, and
+`--redo --stages precheck` only the precheck (a report no later stage reads). Before it
+runs anything, `--redo` sets aside the `status/<stage>.ok` of those stages (renamed to
+`<stage>.ok.redo_<time>`) and lists them. If it stops (Ctrl-C or a failure), finish it
+with the same command **without** `--redo`, which it prints ("to finish, run the same
+command WITHOUT --redo: ..."): that run does only what is not finished yet. The same
+`--redo` command again would redo all of those stages again.
 
 ## 3. Or in QGIS (Runner dialog)
 
@@ -113,7 +117,9 @@ Processing ▸ **DamSafety Runner** ▸ **Run breach model for one dam**.
 
 | field | value |
 |---|---|
-| Dam | DWR-2801, Swan Buffalo Detention Dam 12, NID ND00199 |
+| Dam ID (NID ID) | `DWR-2801` (the DWR ID, not the NID ID: the Runner finds the dam's folder in the Dams folder by it) |
+| Dam name | Swan Buffalo Detention Dam 12 |
+| NID ID (advanced) | `ND00199` |
 | Dams folder | `~/dwr-dam-suite/absaraka-run/Dams` (the installer sets it as the suite's Dams folder; the results go to its `DWR-2801` folder, not to the Terminal run's). Its `DWR-2801/dam.json` is the NickReview screening record plus `dam_length_ft` = 1,700 ft (the NID dam length) |
 | Crest length (ft) | the `dam_length_ft` of the dam's Screening 7b record, the crest length the box and Terminal runs use: `grep -m1 dam_length_ft ~/dwr-dam-suite/Dams/NickReview_mac/dams/DWR-2801/dam.json`. Option B's `--stages record` line writes that record (after option A, run that line once; it runs no model). Left empty, the Runner takes the Dams folder's 1,700 ft (its log says "Crest length (ft) from dam.json"); with no crest length anywhere it uses 400 ft |
 | Dam point | -106343.832, 2666591.505 [EPSG:5070] |
@@ -149,8 +155,34 @@ A path the Runner cannot open is skipped with only a note in the log ("Culvert i
 
 Then **Hazard class** (DAM_FOLDER = the DWR-2801 results folder): lethality 0,
 wet 0.1 ft, unknown AADT 1, unknown trains 1, passenger codes A,B,C, with the
-`pack_*_2801.gpkg` layers listed in `grok_settings_DWR-2801.json`. Then **Hazard
-batch**: downloads on, report on, EAP off, 1 worker, 90 min timeout. Leave
+`pack_*_2801.gpkg` layers listed in `grok_settings_DWR-2801.json`. Three of its fields
+(Advanced parameters) are **text fields**, not layer pickers: *More road GeoPackages*
+(ROADS_MORE), *Traffic (AADT) GeoPackages* (AADT_LAYERS) and *More lifeline GeoPackages*
+(LIFELINES_MORE). Like the culvert inventory, they need **absolute paths**
+(`/Users/<you>/...`; a `~` path is not found) separated by **`;;`**. Run this in Terminal
+and paste each value line into the field named on the line above it:
+
+```bash
+K="$HOME/dwr-dam-suite/NickReview_data/nickreview_rerun_20261023/dwr2801"
+echo "More road GeoPackages (ROADS_MORE):"
+echo "$K/pack_ND_county_roads_2801.gpkg"
+echo "Traffic (AADT) GeoPackages (AADT_LAYERS):"
+echo "$K/pack_HPMS_ND_2024_2801.gpkg;;$K/pack_NDDOT_traffic_counts_2801.gpkg"
+echo "More lifeline GeoPackages (LIFELINES_MORE):"
+echo "$K/pack_lifeline_nd_basic_care_2801.gpkg"
+```
+
+It prints the three values in this form (with your user name for `<you>`):
+`/Users/<you>/dwr-dam-suite/NickReview_data/nickreview_rerun_20261023/dwr2801/pack_ND_county_roads_2801.gpkg`,
+`/Users/<you>/dwr-dam-suite/NickReview_data/nickreview_rerun_20261023/dwr2801/pack_HPMS_ND_2024_2801.gpkg;;/Users/<you>/dwr-dam-suite/NickReview_data/nickreview_rerun_20261023/dwr2801/pack_NDDOT_traffic_counts_2801.gpkg`
+and
+`/Users/<you>/dwr-dam-suite/NickReview_data/nickreview_rerun_20261023/dwr2801/pack_lifeline_nd_basic_care_2801.gpkg`.
+A path that cannot be opened does not stop the run: it is skipped with a message in the
+log ("Could not open extra Roads file ..." or "could not read the AADT layers"), and the
+class can then differ from the box run (roads without an AADT, for example, then get the
+unknown AADT 1).
+
+Then **Hazard batch**: downloads on, report on, EAP off, 1 worker, 90 min timeout. Leave
 Hazard's offline_pack setting **empty**.
 
 Also set (the Terminal script does this for you) `NDBREACH_ANUGA_MESHER=gmsh` and
