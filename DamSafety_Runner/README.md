@@ -175,6 +175,31 @@ the Runner finds `envs\*anuga*\python.exe` under `%USERPROFILE%\miniforge3`,
   again with `NDBREACH_ANUGA_RESUME=1` and the same settings. The preparation (LISFLOOD-FP
   pass, mesh input, fine bed) is redone; only the ANUGA time stepping continues.
 
+## ANUGA gmsh mesh: road and rail crests held at the 1 m DEM (3.10.91)
+With the gmsh mesher, ANUGA's bed is sampled at the mesh vertices / centroids, so a road
+embankment narrower than a triangle could read metres low (DWR-2801, Hwy 18 crest: 938.8 ft
+in the Oct 24 mesh against about 941.5 ft on the 1 m LiDAR, below the pond's 939.8 ft) and
+water flowed through it. Now, by default:
+
+- every road and rail centreline (`st.road_lines` / `st.rail_lines`) inside the mesh and within
+  `NDBREACH_ANUGA_CREST_PAD_M` (default 152.4 m = 500 ft) of the LISFLOOD-FP wet area is a crest
+  line: embedded in the mesh, so no triangle straddles it (`run_report.json`
+  `anuga_mesh.crest`: lines, km);
+- each mesh node on a crest line is held at the 1 m crest: the highest reading of the run's
+  fine DEM (else the model DEM), read every `NDBREACH_ANUGA_CREST_CELL_M` (1 m) along the line,
+  within the mesh's smallest edge plus `NDBREACH_ANUGA_CREST_HALF_WIDTH_M` (3 m) of the node.
+  The ANUGA worker only raises a vertex to it (never lowers one) and logs "crest hold";
+- not held: nodes in a bridge / notch cut corridor (`structures.json`, as the ND hazard tool's
+  road profile) and within 50 m of the inlet / breach line, so openings stay open.
+
+`NDBREACH_ANUGA_CREST=off` (also `no` / `false` / `0`) turns it off; it is separate from the
+off-by-default line bands (`NDBREACH_ANUGA_BAND`). The Runner's built-in mesher is unchanged.
+A crest sag narrower than about one crest edge (about 20 m) is not resolved. The HEC-RAS export
+is unchanged: its road / rail bands put cell faces on the centrelines and HEC-RAS's subgrid
+face tables come from the terrain, so the crest is held there already.
+Read-only check: `python tools/check_dwr2801_anuga_crest.py BREACH_MODEL_FOLDER DEM_1M --out DIR`
+(mesh only, no solve).
+
 ## HEC-RAS 2D compute: no wall-clock limit by default (3.10.48)
 With **Models = LISFLOOD-FP then HEC-RAS 2D**, the Linux RasUnsteady compute now runs until it finishes unless you set a limit.
 
