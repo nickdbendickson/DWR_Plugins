@@ -399,19 +399,17 @@ def dropins(folder, name):
     return _files(sub(folder, name), VECTOR_EXT)
 
 
-def dwr_layers(folder=None):
+def dwr_layers(folder=None, pack=True):
     """{"dwr_dams", "dwr_dam_lines", "dwr_unknown", "dwr_dugouts", "dwr_dugout_polygons": path or ""}
     from the dwr/ drop-in folder: a file whose name has "line" in it is the dam lines; 1.7.0: names
     with "unknown" are DWR's unknown structures, "dugout" its dugouts ("poly" in the name: the
     dugout polygons); the first other file is the dams inventory. The unknown-structure and dugout
-    files are also looked for in dwr/_other/ (where the offline pack keeps them)."""
+    files are also looked for in dwr/_other/ (where the offline pack keeps them).
+    damsuite 1.17.7: the engineer's own dwr/ file first; the active format-2 pack's DWR layer
+    (PACK_FILES) only for what dwr/ lacks (pack=False: dwr/ only). Before, the pack won."""
     folder = data_folder() if folder is None else folder
     out = {"dwr_dams": "", "dwr_dam_lines": "", "dwr_unknown": "", "dwr_dugouts": "",
            "dwr_dugout_polygons": ""}
-    # 1.10.0: the active format-2 pack's DWR layers first; dwr/ for what the pack lacks
-    pack = active_pack(folder)
-    for key, name in PACK_FILES.items():
-        out[key] = pack_file(name, pack) if pack else ""
     d = sub(folder, DWR)
     files = dropins(folder, DWR) + (_files(os.path.join(d, "_other"), VECTOR_EXT) if d else [])
     for p in files:
@@ -428,6 +426,11 @@ def dwr_layers(folder=None):
         else:
             key = "dwr_dams"
         out[key] = out[key] or p
+    if pack and not all(out.values()):
+        pk = active_pack(folder)
+        for key, name in PACK_FILES.items():
+            if not out[key] and pk:
+                out[key] = pack_file(name, pk)
     return out
 
 

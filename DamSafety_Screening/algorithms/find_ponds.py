@@ -29,7 +29,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
 
 from ..core import inventory as inv
 from ..core import nd_counties
-from ..core import ponds as pd, terrain
+from ..core import dugouts as dgm, ponds as pd, terrain
 from ..core.warp_opts import no_overviews
 from ..compat import (FIELD_ANY, FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_LINE, SRC_POINT,
                       SRC_POLYGON, WKB_LINESTRING, WKB_POINT)
@@ -50,7 +50,8 @@ POND_FIELDS = [("pond_type", FT_STRING), ("pond_conf", FT_STRING), ("no_flood", 
                ("above_grade_af", FT_DOUBLE), ("grade_m", FT_DOUBLE), ("head_ft", FT_DOUBLE),
                ("freeboard_ft", FT_DOUBLE), ("arc_deg", FT_DOUBLE), ("bank_deg", FT_DOUBLE),
                ("pool_method", FT_STRING), ("area_ac", FT_DOUBLE), ("wb_id", FT_STRING),
-               ("wb_type", FT_STRING), ("pond_notes", FT_STRING)]
+               ("wb_type", FT_STRING), ("pond_notes", FT_STRING),
+               ("dwr_dugout", FT_STRING)]     # 0.17.54: the matching DWR dugout's structure_id, last
 EXCLUDED_FIELDS = [("wb_id", FT_STRING), ("wb_type", FT_STRING), ("pond_type", FT_STRING),
                    ("reason", FT_STRING), ("area_ac", FT_DOUBLE), ("pool_m", FT_DOUBLE),
                    ("notes", FT_STRING)]
@@ -212,6 +213,11 @@ class FindPonds(QgsProcessingAlgorithm):
             "STORAGE: above the pool from the DEM, below the pool by the shoreline-slope proxy of "
             "tool 3 (the LiDAR cannot see under the water; the greatest depth is YOUR assumption). "
             "No inventory storage exists for ponds, so stor_method = estimated.\n"
+            "DWR dugouts (optional, 0.17.54; filled from the suite folder): a water body that "
+            "contains a DWR dugout point or polygon, or whose inside point is in a DWR dugout polygon "
+            "or within the buffer (default 100 ft = 30 m) of a DWR dugout point, gets dwr_dugout = "
+            "that structure_id and is classed a dugout whatever its LiDAR shape: only the water "
+            "above the natural ground is released. Empty = no change. "
             "EVERY THRESHOLD IS YOUR VALUE: the starting values are not standards. Natural depressions "
             "(prairie potholes) are left out of the dam layer unless you ask for them and are listed "
             "in the excluded-water-bodies layer with the reason. Check the classes on a few ponds "
@@ -287,6 +293,7 @@ class FindPonds(QgsProcessingAlgorithm):
         P(QgsProcessingParameterNumber(
             "CLIP_CELL", "Cell size of that clip (m; as tool 2 - 3 m = 9.8 ft)", NUM_DOUBLE, 3.0, minValue=0.5))
         cm.distance_params(P, "ARROW_FT", "ARROW_M", "Direction arrow length (ft)", 800.0, min_ft=30.0)
+        cm.dugout_params(P, "a found pond that is one is classed a dugout")
         P(QgsProcessingParameterFolderDestination("TERRAIN", "Terrain clips folder (dam_<ID>.tif)"))
         P(QgsProcessingParameterFolderDestination("CURVES", "Folder for stage-storage curves (CSV)"))
         P(QgsProcessingParameterFeatureSink("OUT", "Ponds and dugouts (dams with storage)", SRC_POINT))
@@ -481,6 +488,10 @@ class FindPonds(QgsProcessingAlgorithm):
 
         only = {x.strip().upper() for x in (S("ONLY_IDS") or "").split(",") if x.strip()}
         n_only = n_county = 0
+        dug = cm.dugout_index(self, params, context)              # 0.17.54: DWR dugouts
+        n_dug = 0
+        if dug is not None:
+            feedback.pushInfo(dug.summary())
         t0 = t_beat = time.time()
         i = 0
         for i, f in enumerate(wbs.getFeatures(req())):
@@ -549,7 +560,14 @@ class FindPonds(QgsProcessingAlgorithm):
                 water = rasterize([bytes(g.asWkb())], gt, shape)
                 other = rasterize(others, gt, shape) if others else None
                 hint = bool(dug_words and mentions(wb_type, dug_words))
-                res = pd.analyze_pond(dem, water, cell, pp, other=other, excavated_hint=hint)
+                dwr_sid, dwr_how = "", ""
+                if dug is not None:
+                    _k, rings = cm.geom_parts(g)
+                    m = dug.match_area(rings if _k == "polygon" else [], xy)
+                    if m:
+                        dwr_sid, dwr_how = m
+                res = pd.analyze_pond(dem, water, cell, pp, other=other, excavated_hint=hint,
+                                      dwr_dugout=dwr_sid)
             except Exception as e:                           # keep the batch going
                 n_fail += 1
                 feedback.reportError("water body {}: {}".format(wb_id, er.plain(e, wb_id, "16")))
@@ -566,6 +584,17 @@ class FindPonds(QgsProcessingAlgorithm):
                 continue
 
             notes = list(res.notes)
+            if dwr_sid:
+                n_dug += 1
+                notes.append("DWR dugout {}: {}".format(dwr_sid, dwr_how))
+                feedback.pushInfo("water body {}: DWR dugout {} ({})".format(wb_id, dwr_sid, dwr_how))
+                ag_note, ag_warn = dgm.above_grade_note(dug.above_grade_af.get(dwr_sid),
+                                                        res.above_grade_m3 / AF_M3)
+                if ag_note:
+                    notes.append(ag_note)
+                    if ag_warn:
+                        (getattr(feedback, "pushWarning", None) or feedback.pushInfo)(
+                            "water body {}: DWR dugout {}: {} - check it".format(wb_id, dwr_sid, ag_note))
             notes.append("stage-storage: {} points from the DEM, not a line from empty to full".format(
                 len(res.curve or [])))
             inv_field = S("INV_STOR") or ""
@@ -598,7 +627,7 @@ class FindPonds(QgsProcessingAlgorithm):
                    res.pond_type, res.confidence, "YES" if res.no_flood else "", res.no_flood_reason,
                    res.above_grade_m3, res.above_grade_m3 / AF_M3, res.ground_m, res.head_m / FT_M,
                    res.freeboard_m / FT_M, res.arc_deg, res.bank_slope_deg, res.pool_method, area_ac,
-                   wb_id, wb_type, "; ".join(notes)]
+                   wb_id, wb_type, "; ".join(notes), dwr_sid or None]
             o.setAttributes(row)
             sink.addFeature(o)
             with open(os.path.join(curves, "curve_{}.csv".format(pid)), "w", encoding="utf-8") as fh:
@@ -655,6 +684,9 @@ class FindPonds(QgsProcessingAlgorithm):
             raise QgsProcessingException("None of the water bodies matches the chosen IDs ({}); give a value of "
                                          "the ID field, a pond ID (POND-...) or a feature id.".format(
                                              ", ".join(sorted(only))))
+        if dug is not None:
+            feedback.pushInfo("{} written water bod(ies) matched a DWR dugout (dwr_dugout set, classed a "
+                              "dugout)".format(n_dug))
         feedback.pushInfo("by type: " + (", ".join("{} {}".format(v, k) for k, v in sorted(counts.items()))
                                          or "none"))
         n_nf = sum(1 for r in results if r.no_flood and not (r.pond_type == pd.T_DEPRESSION and not keep_dep))

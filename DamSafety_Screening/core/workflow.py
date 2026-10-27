@@ -452,6 +452,12 @@ def defaults(step, work, settings):
     def o(st, param="OUT"):
         return out(work, st, param)
 
+    def dugouts():
+        """0.17.54: the DWR dugouts (points and polygons) of the suite folder for tools 1 and 16,
+        found by suite_fill (no Inputs row of their own); nothing found = no change."""
+        put("DUGOUTS", src("dugouts"))
+        put("DUGOUT_POLYS", src("dugout_polygons"))
+
     def folder(st, param):
         return path(work, st, param)
 
@@ -495,6 +501,7 @@ def defaults(step, work, settings):
         put("DWR", S.get("dwr"))
         put("NID", S.get("nid"))
         put("ONLY_IDS", S.get("only_ids"))
+        dugouts()
         from .inventory import DWR_ALIASES, NID_ALIASES, match_fields, is_max_pool_area
         def layer_fields(uri):
             if not uri:
@@ -711,6 +718,7 @@ def defaults(step, work, settings):
         put("SRC", S["terrain_source"])
         put("LOCAL", S.get("local_dem"))
         put("ONLY_IDS", S.get("only_ids"))
+        dugouts()
     elif step == "19":
         put("SRC", S["terrain_source"])
         put("LOCAL", S.get("local_dem"))

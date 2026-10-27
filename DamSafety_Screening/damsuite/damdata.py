@@ -715,6 +715,14 @@ def _hydro():
 def _get_vector(rec, role, ddir, box, reader, data_folder, catalog, http_get, cancel, say):
     """One vector role from the pack, a drop-in file or a live service; None when no source."""
     path = os.path.join(ddir, "{}.gpkg".format(role))
+    # 0. damsuite 1.17.7: the engineer's own DWR export in dwr/ wins over the pack's copy
+    if role in ("dwr_dams", "dwr_dam_lines") and data_folder:
+        f = SD.dwr_layers(data_folder, pack=False).get(role)
+        if f:
+            feats = read_vector_file(f, box)
+            cnt = write_features(path, role, feats, f)
+            say("{}: {} from {}".format(LABELS.get(role, role), cnt, f))
+            return set_entry(rec, role, "{}|layername={}".format(path, role), "your file " + f, cnt)
     # 1. the offline pack
     if reader is not None:
         names = list(PACK_SETS.get(role, ()))

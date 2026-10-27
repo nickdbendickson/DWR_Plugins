@@ -740,7 +740,9 @@ class NDDamScreeningDialog(QDialog):
             "Pick the suite data folder. Empty slots are filled from the GeoPackage "
             "layer whose name and fields match (DWR dams, dam lines, NSI). A layer "
             "already chosen is left alone. Unknown structures and dugouts are not "
-            "the dam inventory.")
+            "the dam inventory: the DWR dugouts in the same folder are read by tools 1 "
+            "and 16 by themselves (a DWR dugout is not screened as a dam; a found pond "
+            "that is one is classed a dugout).")
         self.suite_btn.clicked.connect(self._fill_from_suite)
         lay.addWidget(self.suite_btn)
         self.suite_note = QLabel("")

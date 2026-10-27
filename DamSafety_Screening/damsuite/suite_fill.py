@@ -23,7 +23,10 @@ RULES = (
     ("waterbodies", ("nhd_waterbodies", "waterbodies", "nwi"), (), (), ("flow",)),
     ("lifelines", ("hospitals", "lifelines", "care_facilities"), (), (), ()),
     ("dugouts", ("dwr_dugouts",), ("longitude",), (), ("polygon",)),
-    ("dugout_polygons", ("dwr_dugout_polygons",), ("structure_id",), (), ()),
+    # 0.17.54: DWR's own export names DWR_Dugouts.gpkg / DWR_Dugouts_Polygons.gpkg ("dugouts" +
+    # "polygons"); points and polygons are told apart by the geometry as well (see scan)
+    ("dugout_polygons", ("dwr_dugout_polygons", "dwr_dugouts_polygons", "dugouts_polygons",
+                         "dugout_polygons", "dugout_poly"), ("structure_id",), (), ()),
     ("unknown", ("dwr_unknown",), ("dam_name",), (), ()),
     # individual files processing reads in addition to the one layer each slot holds
     ("address_points", ("address_points",), (), (), ()),
@@ -142,7 +145,14 @@ PACK_SLOTS = {
                   "lifeline_eia_power_plants"),
     "dwr": ("DWR_dams",),
     "dam_lines": ("DWR_dam_lines",),
+    # damsuite 1.17.7 (Screening 0.17.54): the DWR export files the pack builder adds with --dwr-folder
+    "unknown": ("DWR_unknown_structures",),
+    "dugouts": ("DWR_dugouts",),
+    "dugout_polygons": ("DWR_dugout_polygons",),
 }
+# slots a format-2 pack's dwr/ layer fills when the suite folder has no file for them. Only
+# these: the other pack layers reach the tools by their own routes, as before.
+DWR_SLOTS = ("dwr", "dam_lines", "unknown", "dugouts", "dugout_polygons")
 
 
 def pack_datasets(path):
@@ -177,9 +187,39 @@ def pack_slot(path, slot):
 _SCAN = {}
 
 
+def _pack_dwr(settings, roots):
+    """{slot: uri} of the DWR layers of the active format-2 offline pack (settings["pack"]
+    first, else the suite's pack: damsuite.suitedata.active_pack), or {} - none, a format-1
+    pack (not a QGIS layer), Data source = Download, or no suitedata beside this module."""
+    try:
+        from . import suitedata as SD
+    except Exception:                                            # noqa  (Setup's copy)
+        return {}
+    try:
+        pack = str((settings or {}).get("pack") or "").strip()
+        if not pack:
+            if SD.data_source() == SD.SOURCE_DOWNLOAD:
+                return {}
+            pack = SD.active_pack(roots[0] if roots else None)
+        if not pack or not os.path.isdir(pack):
+            return {}
+        out = {}
+        for slot in DWR_SLOTS:
+            for name in PACK_SLOTS.get(slot, ()):
+                f = SD.pack_file(name, pack)
+                if f:
+                    out[slot] = "{}|layername={}".format(f, name)
+                    break
+        return out
+    except Exception:                                            # noqa
+        return {}
+
+
 def layers_for_settings(settings):
     """Layers the chosen files already point at: the suite folder, or the folder
-    that holds the DWR file. Cached so the check does not walk the disk each slot."""
+    that holds the DWR file. Cached so the check does not walk the disk each slot.
+    damsuite 1.17.7: a DWR slot (DWR_SLOTS) no file fills comes from the offline pack's
+    dwr/ layer (a format-2 pack folder); a file of the engineer's own always wins."""
     found = {}
     settings = settings or {}
     roots = []
@@ -202,7 +242,25 @@ def layers_for_settings(settings):
             _SCAN[folder] = hit
         for key, uri in hit[1].items():
             found.setdefault(key, uri)
+    if any(not found.get(s) for s in DWR_SLOTS):
+        for key, uri in _pack_dwr(settings, roots).items():
+            found.setdefault(key, uri)
     return found
+
+
+def _pack_roots(folder, pack):
+    """The format-2 pack folder found in the suite folder (find_pack: the folder with
+    LAYERS.txt), whose layers rank below the engineer's own files; [] for none or a
+    format-1 pack."""
+    out = []
+    if pack and os.path.isdir(pack):
+        out.append(os.path.abspath(pack))
+    return out
+
+
+def _in(path, roots):
+    p = os.path.abspath(path)
+    return any(p == r or p.startswith(r.rstrip(os.sep) + os.sep) for r in roots)
 
 
 def scan(folder):
@@ -245,10 +303,13 @@ def scan(folder):
             if root.replace(base, "").count(os.sep) >= limit:
                 dirs.clear()
     notes.append("layers seen: {}".format(len(layers)))
+    # damsuite 1.17.7: a layer of the offline pack folder is only a fallback - a file of the
+    # engineer's own in the suite folder wins over it whatever the name scores
+    packs = _pack_roots(folder, pack)
     used = set()
     for slot, names, need, anyof, reject in RULES:
         best = None
-        best_score = 0
+        best_score = (0, 0)
         for path, layer, geom, fields in layers:
             key = (path, layer)
             low = layer.lower()
@@ -260,9 +321,19 @@ def scan(folder):
                 continue
             if slot == "dam_lines" and geom and "line" not in geom:
                 continue
+            if slot == "dugouts" and geom and "point" not in geom:
+                continue
+            if slot == "dugout_polygons" and (geom and "polygon" not in geom
+                                              or not ("dugout" in low and "poly" in low or
+                                                      "dugout" in os.path.basename(path).lower()
+                                                      and "poly" in os.path.basename(path).lower())):
+                continue
             score = _score(names, path, layer)
-            if score > best_score and key not in used:
-                best, best_score = key, score
+            if score <= 0 or key in used:
+                continue
+            rank = (0 if _in(path, packs) else 1, score)
+            if best is None or rank > best_score:
+                best, best_score = key, rank
         if best:
             used.add(best)
             uri = "{}|layername={}".format(best[0], best[1])

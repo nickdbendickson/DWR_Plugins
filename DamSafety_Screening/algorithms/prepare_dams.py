@@ -10,6 +10,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
                        QgsPointXY, QgsGeometry)
 
 from ..core import inventory as inv
+from ..core import dugouts as dg
 from ..compat import (FIELD_ANY, FIELD_NUMERIC, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_POINT, WKB_POINT)
 from . import _common as cm
 from ..damsuite import structure_flags as SF
@@ -94,7 +95,14 @@ class PrepareDams(QgsProcessingAlgorithm):
                 "maximum storage at the max pool, their difference above the lidar water surface.\n"
                 "inv_area_m2: the NORMAL-pool surface area (DWR normal_area / normal_are, NID "
                 "SURFACE_AREA). 0.17.49: on the suite GeoPackage it held max_pool_area before; a max-pool "
-                "field picked for it is used but warned in the log.")
+                "field picked for it is used but warned in the log.\n"
+                "DWR dugouts (optional, 0.17.54; filled from the suite folder's dwr_dugouts and "
+                "dwr_dugout_polygons): a dam inside a DWR dugout polygon or within the buffer "
+                "(default 100 ft = 30 m) of a DWR dugout point is a dugout, not a dam: it is left "
+                "out and listed in the log and in 1_dugouts.csv with the reason 'DWR dugout "
+                "<structure_id>'. A dam DWR gives a real hazard class (High / Significant / Medium "
+                "/ Low; not Undetermined) or that has an NID id is never left out: it is kept and "
+                "warned. Both empty = no change.")
 
     def initAlgorithm(self, config=None):
         for src, label in ((self.DWR, "ND DWR dams"), (self.NID, "NID dams")):
@@ -124,6 +132,7 @@ class PrepareDams(QgsProcessingAlgorithm):
             NUM_DOUBLE, 0.0, minValue=0))
         cm.distance_params(self.addParameter, "DIST_FT", self.DIST,
                            "Match distance (ft) for DWR/NID pairs without a shared NID ID", 1600.0, min_ft=0.0)
+        cm.dugout_params(self.addParameter, "a DWR dam that is one is not screened")
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUT, "Standardized dams", SRC_POINT))
 
@@ -233,6 +242,28 @@ class PrepareDams(QgsProcessingAlgorithm):
         def wanted(*ids):
             return not only or any(str(i).strip().upper() in only for i in ids if i not in (None, ""))
 
+        # --- 0.17.54: DWR dugouts (core/dugouts.py); empty inputs = no change
+        dug = cm.dugout_index(self, params, context)
+        dug_rows, warn = [], (getattr(feedback, "pushWarning", None) or feedback.pushInfo)
+        if dug is not None:
+            feedback.pushInfo(dug.summary())
+
+        def dugout(g, a, nid_id):
+            """True when this record is a DWR dugout to leave out (logged either way)."""
+            if dug is None:
+                return False
+            p = albers(g)
+            d = dg.decide(dug, p.x(), p.y(), a.get("hz"), nid_id)
+            if d is None:
+                return False
+            action, sid, text = d
+            dug_rows.append((a["id"], a.get("name") or "", sid, action, text))
+            if action == "exclude":
+                feedback.pushInfo("{}: left out - {}".format(a["id"], text))
+                return True
+            warn("{}: {}".format(a["id"], text))
+            return False
+
         recs, n_status, n_size, n_only = [], 0, 0, 0
         for i, (g, a) in enumerate(dwr):
             if not inv.status_ok(a["status"], keep):
@@ -252,6 +283,8 @@ class PrepareDams(QgsProcessingAlgorithm):
             if inv.size_skip(a["h"], a["ns"] or a["ms"], min_h, min_v):
                 n_size += 1
                 continue
+            if dugout(g, a, nid_id):
+                continue
             recs.append((g, a, src, nid_id))
         for j, (g, a) in enumerate(nid):
             if j in used:
@@ -262,6 +295,8 @@ class PrepareDams(QgsProcessingAlgorithm):
             a = dict(a); a["id"] = f"NID-{a['id']}"
             if not wanted(a["id"], a["id"][4:]):
                 n_only += 1
+                continue
+            if dugout(g, a, a["id"][4:]):
                 continue
             recs.append((g, a, "NID", a["id"][4:]))
 
@@ -284,12 +319,33 @@ class PrepareDams(QgsProcessingAlgorithm):
             f"{len(recs)} dams written | dropped by status: {n_status}, by size: {n_size} | "
             f"NID matched: {len(used)} ({n_by_id} by ID) | flagged shared volume: {sum(shared)}" +
             (f" | not in the chosen IDs: {n_only}" if only else "") +
-            (f" | flagged structures (no breach analysis): {n_flag}" if n_flag else ""))
+            (f" | flagged structures (no breach analysis): {n_flag}" if n_flag else "") +
+            (" | DWR dugouts left out: {}, kept with a warning: {}".format(
+                sum(1 for r in dug_rows if r[3] == "exclude"), sum(1 for r in dug_rows if r[3] == "keep"))
+             if dug is not None else ""))
         if only and not recs:
             raise QgsProcessingException("None of the dams matches the chosen IDs ({}); check the ID "
                                          "(DWR structure ID such as 5289, or DWR-5289).".format(", ".join(sorted(only))))
         self._write_field_map(params, context, dest)
+        if dug is not None:
+            self._write_dugouts(params, dest, dug_rows)
         return {self.OUT: dest}
+
+    def _write_dugouts(self, parameters, out_path, rows):
+        """<work>/1_dugouts.csv: each dam matched to a DWR dugout, left out or kept (0.17.54)."""
+        out = out_path or parameters.get(self.OUT)
+        folder = os.path.dirname(out) if isinstance(out, str) and out else ""
+        if not folder or not os.path.isdir(folder):
+            return
+        import csv
+        try:
+            with open(os.path.join(folder, "1_dugouts.csv"), "w", encoding="utf-8", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(["dam_id", "name", "dwr_dugout", "action", "reason"])
+                for r in rows:
+                    w.writerow(["{}".format(v) for v in r])
+        except OSError:
+            pass
 
     def _write_field_map(self, parameters, context, out_path=""):
         """Keep the fields the user set so a later chain run (workflow step 1) reads them from
