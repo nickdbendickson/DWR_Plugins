@@ -806,6 +806,28 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     def dem_for(model, bounds, cell):
         return model_dem(terrain_src, st.structures, model, bounds, cell, refill_paths)
 
+    # --- 3.10.90: inventory bridges snapped to the road's opening (DWR-3034) -----
+    if st.structures and any(s.kind == structmod.KIND_BRIDGE for s in st.structures):
+        from . import bridge_snap
+        try:
+            emb = list(getattr(st, "road_lines", None) or []) + \
+                list(getattr(st, "rail_lines", None) or [])
+            chans = [c.line for c in (st.edits.channels if st.edits is not None else [])]
+            snap_rows, snap_notes, snap_warn = bridge_snap.snap_bridges(
+                st.structures, emb, raw_terrain.read, chans)
+        except Exception as e:                                   # noqa - never stop the run
+            snap_rows, snap_notes, snap_warn = [], [], [
+                "inventory bridges not checked against the road crossings: {}".format(e)]
+        for n in snap_notes:
+            log(n)
+        for w in snap_warn:
+            log(w)
+            warnings.append(w)
+        if snap_rows:
+            report["bridge_snap"] = snap_rows
+            if any(r["method"] in ("dem_opening", "channel_crossing") for r in snap_rows):
+                report["settings"]["structures"] = [s.to_dict() for s in st.structures]
+
     # --- 3.5: inventory inlet / outlet elevations against the LiDAR -------------
     if st.structures:
         try:

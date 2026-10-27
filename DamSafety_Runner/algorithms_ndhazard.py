@@ -22,6 +22,7 @@ from .compat import SOURCE_LINE, SOURCE_POINT, SOURCE_POLYGON, set_advanced
 from .core import consequences as cons
 from .core import aadt_join
 from .core import nd_hazard as nh
+from .core import road_profile as rprof
 from .damsuite import structure_flags as sflags
 
 OUTPUT_NAMES = {"markdown": "Hazard Classification (ND 5.2).md",
@@ -82,7 +83,42 @@ SAMPLING = ("Points: the raster cell under the point. Polygons: the deepest cell
             "falls inside the footprint (the cell under the centroid when none does), with the "
             "maximum velocity over the footprint's wet cells, which is conservative (the "
             "velocity at the deepest cell is kept as well). Lines: sampled every half cell, the "
-            "deepest sample. Only features inside the rasters are read.")
+            "deepest sample. Roads (3.10.90, DWR-3034): the water surface over the road surface along "
+            "the centreline (1 m), structure cuts and bare-earth openings left out (see 'Road "
+            "overtopping depth'); the depth raster only where that cannot be read. Only "
+            "features inside the rasters are read.")
+
+
+ROAD_CUT_BUFFER_FT = 50.0       # ~ road_profile.CUT_BUFFER_M (15 m)
+ROAD_BASIS_LABELS = ("Water surface over the road surface on the centreline (fine DEM; "
+                     "structure cuts and bare-earth openings left out)",
+                     "Model depth raster under the road (before 3.10.90)")
+
+
+def road_dem_of(folder):
+    """(DEM path, metres per DEM unit, cell m) of the run, from _breach_model/run_report.json;
+    (None, 1.0, None) when it is not there."""
+    try:
+        with open(os.path.join(folder, "_breach_model", "run_report.json"),
+                  encoding="utf-8") as f:
+            rep = json.load(f)
+    except (OSError, ValueError):
+        return None, 1.0, None
+    st = rep.get("settings") or {}
+    path = (st.get("input_files") or {}).get("DEM")
+    return (path if path and os.path.exists(path) else None,
+            float(rep.get("dem_z_to_m") or 1.0), st.get("cell_size_m"))
+
+
+def structure_cuts_of(folder):
+    """The run's cut structures (_breach_model/structures.json); [] when none."""
+    try:
+        with open(os.path.join(folder, "_breach_model", "structures.json"),
+                  encoding="utf-8") as f:
+            got = json.load(f)
+        return got if isinstance(got, list) else []
+    except (OSError, ValueError):
+        return []
 
 
 # ------------------------------------------------------------------------------ helpers
@@ -486,6 +522,14 @@ class NDHazardAlgorithm(_ToolBase):
             "UNKNOWN_TRAINS", "Class of an overtopped railroad with no trains a day (a data "
                               "gap; at least Medium)",
             list(nh.CLASSES), defaultValue=nh.CLASSES.index(d.unknown_trains))))
+        self.addParameter(set_advanced(QgsProcessingParameterEnum(
+            "ROAD_DEPTH_BASIS", "Road overtopping depth",
+            list(ROAD_BASIS_LABELS), defaultValue=0)))
+        self._file("ROAD_DEM", "Road surface DEM (empty = the run's DEM from "
+                   "_breach_model/run_report.json)", advanced=True)
+        self._num("ROAD_CUT_BUFFER_FT", "Road overtopping: also leave out road this far beyond "
+                  "a structure cut's corridor (ft; default 50 ft is a placeholder - your value)",
+                  ROAD_CUT_BUFFER_FT, minimum=0.0, advanced=True)
         self._file("CHART_FILE", "Digitized ACER TM 11 chart file (.json; empty = the one "
                    "shipped with the plugin)", ext="json", advanced=True)
         self.addOutput(QgsProcessingOutputString("CLASS", "Hazard class"))
@@ -776,6 +820,95 @@ class NDHazardAlgorithm(_ToolBase):
                 feedback.pushInfo("Extra {}: {} feature(s) from {} inside the rasters".format(
                     label, len(feats) - out_n, stem))
 
+    def _road_crown(self, parameters, context, folder, grid, depth, roads, extra, feedback):
+        """3.10.90 (DWR-3034): each road's overtopping depth from the water surface over the
+        road surface along its centreline (core/road_profile), in place of the deepest cell of
+        the depth raster. Returns the report entry."""
+        from .core import workflow
+        basis = rprof.BASIS_RASTER if self.parameterAsEnum(
+            parameters, "ROAD_DEPTH_BASIS", context) == 1 else rprof.BASIS_CENTRELINE
+        info = {"basis": basis, "dem": "", "roads_centreline": 0, "roads_raster": 0,
+                "text": ""}
+        parts = getattr(self, "_road_parts", {})
+        if not roads:
+            info["text"] = "no road read"
+            return info
+        if basis == rprof.BASIS_RASTER:
+            info["text"] = "the model depth raster under the road (chosen)"
+            info["roads_raster"] = len(roads)
+            return info
+        why = ""
+        wse_path = os.path.join(folder, workflow.FINAL_NAMES["wse"])
+        dem, z_to_m, cell = road_dem_of(folder)
+        given = self._str(parameters, "ROAD_DEM", context)
+        if given:
+            dem = given if os.path.exists(given) else None
+            if dem is None:
+                why = "the road surface DEM {} is not there".format(given)
+        if not os.path.exists(wse_path):
+            why = "no '{}' in the dam folder".format(workflow.FINAL_NAMES["wse"])
+        elif dem is None and not why:
+            why = "no road surface DEM (the run's DEM is not in run_report.json or not there)"
+        ground = wse = None
+        if not why:
+            try:
+                from .core import gdal_io
+                wse = gdal_io.read_like(wse_path, grid, "near")
+                ground = rprof.PointDEM(dem, z_to_m, grid.crs_wkt)
+            except Exception as ex:                              # noqa - fall back
+                why = "the water surface or road DEM could not be read ({})".format(ex)
+        if why:
+            info["basis"] = rprof.BASIS_RASTER
+            info["roads_raster"] = len(roads)
+            info["text"] = ("the model depth raster under the road: " + why +
+                            ". A structure cut's trench can read as road overtopping.")
+            feedback.reportError("Check: road overtopping read from the depth raster: " + why,
+                                 fatalError=False)
+            return info
+        buf_ft = self.parameterAsDouble(parameters, "ROAD_CUT_BUFFER_FT", context)
+        buf = rprof.CUT_BUFFER_M if buf_ft is None else float(buf_ft) * rprof.FT
+        cuts = rprof.cut_corridors(structure_cuts_of(folder), cell or grid.dx, buf)
+        wsef = rprof.grid_sampler(grid, wse)
+        depf = rprof.grid_sampler(grid, depth)
+
+        def wet(xy):
+            return np.nan_to_num(depf(xy)) > 0.0
+        info["dem"] = dem
+        n_c = n_r = changed = 0
+        for r in roads:
+            pr = parts.get(id(r))
+            if not pr:
+                n_r += 1
+                continue
+            raster_ft, rx, ry = r.max_depth_ft, r.x, r.y
+            got = rprof.road_crown_depth(pr, wsef, ground, wet=wet, cuts=cuts)
+            if got is None:
+                n_r += 1
+                continue
+            n_c += 1
+            r.max_depth_ft = round(float(got["depth_ft"]), 2)
+            if got["x"] is not None:
+                r.x, r.y = got["x"], got["y"]
+            if (raster_ft or 0.0) > 0 and abs((raster_ft or 0.0) - r.max_depth_ft) >= 0.05:
+                changed += 1
+            extra[("road", str(r.id), r.x, r.y)] = {
+                "depth_basis": "centreline", "raster_depth_ft": round(float(raster_ft or 0), 2),
+                "raster_x": rx, "raster_y": ry,
+                "freeboard_ft": None if got["freeboard_ft"] is None else round(
+                    float(got["freeboard_ft"]), 2),
+                "centreline_points_in_cuts": got["n_cut"],
+                "centreline_points_in_openings": got["n_opening"], "sampled": got["how"]}
+        info.update(roads_centreline=n_c, roads_raster=n_r, roads_changed=changed,
+                    cut_buffer_ft=round(buf / rprof.FT, 1), structure_cuts=len(cuts))
+        info["text"] = ("water surface ('{}') minus the road surface ({}) along the centreline "
+                        "every {:g} m, for {} road(s); {} structure cut(s) (corridor + {:g} ft) "
+                        "and bare-earth openings left out; {} road(s) from the depth raster (no "
+                        "DEM there); {} road depth(s) differ from the depth raster.").format(
+                            workflow.FINAL_NAMES["wse"], os.path.basename(dem), rprof.STEP_M,
+                            n_c, len(cuts), round(buf / rprof.FT, 1), n_r, changed)
+        feedback.pushInfo("Road overtopping depth: " + info["text"])
+        return info
+
     def _keep_parts(self, road, geom, to_r):
         try:
             kind, parts, _c = _parts(geom, to_r)
@@ -872,6 +1005,8 @@ class NDHazardAlgorithm(_ToolBase):
         if not inputs:
             feedback.reportError("Check: no receptor layer was given; the class can only come "
                                  "out Low.", fatalError=False)
+        road_info = self._road_crown(parameters, context, folder, grid, with_f["depth"],
+                                     rec["roads"], extra, feedback)
         self._join_aadt(parameters, context, grid, crs, rec["roads"], feedback)
         try:
             c = nh.classify(rec["structures"], rec["roads"], rec["railroads"], rec["lifelines"],
@@ -884,7 +1019,8 @@ class NDHazardAlgorithm(_ToolBase):
         hz = aadt_join.hazard_module_class(folder)
         road_check = {"hazard_class_status": status, "hazard_module_class": hz,
                       "class_to_use": hz or c.hazard_class,
-                      "aadt_joined": getattr(self, "_aadt_log", [])}
+                      "aadt_joined": getattr(self, "_aadt_log", []),
+                      "road_depth": road_info}
         flag = _flagged_entry(folder)
         if flag:
             # 3.10.53: a flagged structure (damsuite/structure_flags.py, e.g. DWR-3161, the ND-23
@@ -981,6 +1117,9 @@ class NDHazardAlgorithm(_ToolBase):
             else:
                 lines.append("- {}: not given".format(k.replace("_", " ").capitalize()))
         lines += ["- Sampling: " + SAMPLING]
+        rd = road_check.get("road_depth") or {}
+        if rd:
+            lines += ["- Road overtopping depth: " + rd.get("text", "")]
         if figures:
             lines += ["- Chart figures: " + ", ".join(figures)]
         with open(out["markdown"], "w", encoding="utf-8", newline="") as f:
@@ -996,6 +1135,7 @@ class NDHazardAlgorithm(_ToolBase):
                   "class_to_use": road_check.get("class_to_use", c.hazard_class),
                   "flagged_structure": road_check.get("flagged_structure", ""),
                   "aadt_joined": road_check.get("aadt_joined") or [],
+                  "road_depth": road_check.get("road_depth") or {},
                   "official": "The official classification is made by the ND Department of "
                               "Water Resources."})
         with open(out["json"], "w", encoding="utf-8", newline="") as f:
