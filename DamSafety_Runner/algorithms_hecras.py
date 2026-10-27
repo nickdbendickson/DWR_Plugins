@@ -31,12 +31,22 @@ DAM_AXIS_LABELS = ["Along the embankment crest, traced from the DEM (default)",
 DAM_AXIS_MODES = ["crest", "straight"]
 US_SI = ["Detect from the file (US customary when it says nothing)", "US customary (ft)",
          "SI metric (m)"]
-# 3.10.84: what the imported HEC-RAS depth is measured from (core/hecras.depth_basis)
-DEPTH_BASIS_OPTIONS = ["Cell minimum: max WSE minus the HEC-RAS cell's minimum terrain "
-                       "elevation (default)",
-                       "Per pixel: max WSE minus the terrain under each grid cell (needs the "
-                       "Terrain)"]
-DEPTH_BASIS_KEYS = [hecras.DEPTH_BASIS_CELL_MIN, hecras.DEPTH_BASIS_TERRAIN]
+# 3.10.84: what the imported HEC-RAS depth is measured from (core/hecras.depth_basis);
+# 3.10.92: the actual terrain per pixel is the default again (first), cell minimum second
+DEPTH_BASIS_OPTIONS = ["Terrain per pixel: max WSE minus the actual terrain at the centre of "
+                       "each grid cell (default; the Terrain, else the dam folder's run DEM)",
+                       "Cell minimum: max WSE minus the HEC-RAS cell's minimum terrain "
+                       "elevation",
+                       # 3.10.92 review of #204: three more (core/hecras_fine.py)
+                       "Terrain mean: max WSE minus the mean terrain over each grid cell",
+                       "Terrain max (conservative): the deepest point of the fine terrain in "
+                       "each grid cell (WSE of the nearest HEC-RAS cell)",
+                       "Fine (approximates RAS Mapper's sloped surface): WSE interpolated "
+                       "between wet cell centres minus the fine terrain; also writes "
+                       "Depth_fine / WSE_fine (Max).tif at the terrain's resolution"]
+DEPTH_BASIS_KEYS = [hecras.DEPTH_BASIS_TERRAIN, hecras.DEPTH_BASIS_CELL_MIN,
+                    hecras.DEPTH_BASIS_TERRAIN_MEAN, hecras.DEPTH_BASIS_TERRAIN_MAX,
+                    hecras.DEPTH_BASIS_FINE]
 # 3.10.89 review round 3: the Terrain's elevation unit (hecras_engine.terrain_z_factor)
 TERRAIN_Z_OPTIONS = ["Detect from the raster (else the Runner's record of its own terrain, else "
                      "the CRS's linear unit, with a warning)", "Feet", "US survey feet", "Meters"]
@@ -44,7 +54,7 @@ TERRAIN_Z_KEYS = [gdal_io.Z_AUTO, gdal_io.Z_FEET, gdal_io.Z_US_FEET, gdal_io.Z_M
 
 
 def _depth_basis_default():
-    """Index of NDBREACH_HECRAS_DEPTH_BASIS (else cell minimum) in DEPTH_BASIS_KEYS."""
+    """Index of NDBREACH_HECRAS_DEPTH_BASIS (else terrain, 3.10.92) in DEPTH_BASIS_KEYS."""
     try:
         return DEPTH_BASIS_KEYS.index(hecras.depth_basis())
     except (hecras.HecRasError, ValueError):
@@ -228,17 +238,21 @@ class HecRasImportAlgorithm(_ToolBase):
         return ("Reads the maximum results of a HEC-RAS 2D plan HDF (.p##.hdf) and writes "
                 "GeoTIFFs 'HECRAS Depth (Max).tif', 'HECRAS Velocity (Max).tif', 'HECRAS "
                 "Arrival Time.tif' and 'HECRAS WSE (Max).tif' in ft, ft/s, hours and ft. The "
-                "Depth basis decides what depth is measured from (3.10.84): 'Cell minimum', the "
-                "default and the conservative one, is the HEC-RAS cell's maximum water surface "
-                "minus the cell's minimum terrain elevation, the same on every grid cell inside "
-                "it (a ditch or channel in a cell deepens the whole cell); 'Per pixel' is the "
-                "cell's maximum water surface minus the terrain under each grid cell and needs "
-                "the Terrain the model used. With the cell-minimum basis a given Terrain is not "
-                "used. 'Terrain elevation units': Detect reads the unit the Terrain records, "
+                "Depth basis decides what depth is measured from (3.10.92): 'Terrain per pixel', "
+                "the default, is the cell's maximum water surface minus the actual terrain at "
+                "the centre of each grid cell - the Terrain you give, else the dam folder's run "
+                "DEM (the fine LiDAR) when it is finer than the HEC-RAS terrain, else the "
+                "HEC-RAS terrain; 'Cell minimum' (the 3.10.84 default, conservative) is the "
+                "cell's maximum water surface minus the cell's minimum terrain elevation, the "
+                "same on every grid cell inside it (a ditch or channel in a cell deepens the "
+                "whole cell). With the cell-minimum basis the terrain gives only a comparison. "
+                "The terrain is checked against the model's cell minimum elevations: one on "
+                "another vertical datum or unit stops the per-pixel basis "
+                "(NDBREACH_HECRAS_DATUM_CHECK=warn keeps it with a warning). 'Terrain elevation units': Detect reads the unit the Terrain records, "
                 "else the Runner's record of its own HEC-RAS terrain, else assumes its CRS's "
                 "linear unit and says so; or choose Feet / US survey feet / Meters. The wet "
                 "area and the arrival time follow the depth of the basis chosen. "
-                "The Depth basis starts at NDBREACH_HECRAS_DEPTH_BASIS (else cell minimum). "
+                "The Depth basis starts at NDBREACH_HECRAS_DEPTH_BASIS (else terrain per pixel). "
                 "Velocity is the per-cell maximum when the file has one, else the maximum face "
                 "velocities averaged onto the cells. Arrival is the first time the depth reaches "
                 "the arrival depth, from the water surface time series, counted from the "
@@ -256,12 +270,13 @@ class HecRasImportAlgorithm(_ToolBase):
         self._file("DAM_FOLDER", "Dam folder (its Depth (Max).tif sets the grid; outputs "
                    "go to <dam folder>/_hecras)", folder=True)
         self.addParameter(QgsProcessingParameterRasterLayer(
-            "TERRAIN", "Terrain the HEC-RAS model used (needed for the per-pixel depth "
-            "basis; not used with the cell-minimum basis)", optional=True))
+            "TERRAIN", "Terrain to measure the depth from (empty = the dam folder's run DEM "
+            "or HEC-RAS terrain; the cell-minimum basis uses it only to compare)",
+            optional=True))
         self.addParameter(QgsProcessingParameterEnum(
             "TERRAIN_Z", "Terrain elevation units", TERRAIN_Z_OPTIONS, defaultValue=0,
             optional=True))
-        # 3.10.84: cell minimum is the default again; per pixel stays selectable
+        # 3.10.92: terrain per pixel is the default again; cell minimum stays selectable
         self.addParameter(QgsProcessingParameterEnum(
             "DEPTH_BASIS", "Depth basis (wet area and arrival follow it)", DEPTH_BASIS_OPTIONS,
             defaultValue=_depth_basis_default()))
@@ -292,6 +307,7 @@ class HecRasImportAlgorithm(_ToolBase):
         self.addOutput(QgsProcessingOutputFile("DEPTH", "HECRAS Depth (Max)"))
         self.addOutput(QgsProcessingOutputFile("SUMMARY", "Benchmark_Summary.csv"))
         self.addOutput(QgsProcessingOutputString("RESULT", "Result"))
+        self.addOutput(QgsProcessingOutputString("DEPTH_BASIS", "Depth basis used"))
 
     def processAlgorithm(self, parameters, context, feedback):
         self._need_gdal()
@@ -340,29 +356,43 @@ class HecRasImportAlgorithm(_ToolBase):
             grid = Grid(np.zeros((ny, nx)), x0, ytop, dx, crs_wkt=crs)
             terrain = self.parameterAsRasterLayer(parameters, "TERRAIN", context)
             basis = DEPTH_BASIS_KEYS[self.parameterAsEnum(parameters, "DEPTH_BASIS", context)]
-            if basis == hecras.DEPTH_BASIS_TERRAIN and terrain is None:
-                raise QgsProcessingException("The per-pixel terrain depth basis needs the "
-                                             "Terrain the HEC-RAS model used")
-            # 3.10.84: depth, wet area and arrival on the chosen basis (cell minimum default)
-            t_ft = None
-            tnotes = []
-            if terrain is not None:
-                from .core import hecras_engine
-                zi = self.parameterAsEnum(parameters, "TERRAIN_Z", context) \
-                    if parameters.get("TERRAIN_Z") is not None else 0
-                stage = hecras_engine._read_json(os.path.join(
-                    dam_folder, "_hecras", "hecras_stage.json")) if dam_folder else {}
-                t_ft = hecras_engine.terrain_on_grid(
-                    terrain.source(), grid, z=TERRAIN_Z_KEYS[zi] if 0 <= zi < 4 else None,
-                    stage=stage, notes=tnotes)
-                feedback.pushInfo(tnotes[0])             # a warning: 'Check:' below
+            # 3.10.92: depth, wet area and arrival on the chosen basis (terrain default): the
+            # Terrain given, else the dam folder's run DEM / HEC-RAS terrain, at cell centres
+            from .core import hecras_engine
+            zi = self.parameterAsEnum(parameters, "TERRAIN_Z", context) \
+                if parameters.get("TERRAIN_Z") is not None else 0
+            stage = hecras_engine._read_json(os.path.join(
+                dam_folder, "_hecras", "hecras_stage.json")) if dam_folder else {}
+            tnotes, twarn = [], []
+            t_ft, _trec, reader = None, {}, []
+            if terrain is not None or dam_folder:
+                t_ft, _trec = hecras_engine.fine_terrain_on_grid(
+                    dam_folder, grid,
+                    model_terrain=terrain.source() if terrain is not None else
+                    stage.get("terrain_tif"),
+                    z=TERRAIN_Z_KEYS[zi] if 0 <= zi < 4 else None, stage=stage,
+                    notes=tnotes, warnings=twarn, given=terrain is not None,
+                    sample=hecras_engine.terrain_sample(basis), reader=reader)
+            if basis in hecras.TERRAIN_BASES and t_ft is None:
+                # no terrain anywhere: the cell minimum, said loudly (as the Linux stage does)
+                w = ("WARNING: no terrain for the per-pixel terrain depth basis (give the "
+                     "Terrain the HEC-RAS model used, or a dam folder with its run DEM): the "
+                     "depth is measured from the HEC-RAS cell minimum instead")
+                feedback.reportError(w, fatalError=False)
+                twarn.append(w)
+                basis = hecras.DEPTH_BASIS_CELL_MIN
+            for n in tnotes:
+                feedback.pushInfo(n)
             arrays, tinfo = hecras.terrain_depth(
                 hdf, x0, ytop, dx, nx, ny, t_ft,
-                area=self._str(parameters, "AREA", context) or None, basis=basis, **kw)
+                area=self._str(parameters, "AREA", context) or None, basis=basis,
+                fine=hecras_engine.fine_options(basis, grid, _trec, reader, folder=out_dir),
+                **kw)
             tinfo.pop("depth_cell_min", None)
             tinfo.pop("depth_terrain", None)
-            tinfo["notes"] = list(tinfo.get("notes") or []) + tnotes[1:] + [
-                "Depth basis: " + hecras.DEPTH_BASIS_TEXT[basis] + "."]
+            tinfo["notes"] = list(tinfo.get("notes") or []) + twarn + \
+                list(tinfo.get("datum_warnings") or []) + [
+                    "Depth basis: " + hecras.DEPTH_BASIS_TEXT[basis] + "."]
             mesh.info = tinfo
         except (hecras.HecRasError, OSError, ValueError, RuntimeError) as e:
             raise QgsProcessingException(str(e))
@@ -389,7 +419,8 @@ class HecRasImportAlgorithm(_ToolBase):
                 raise QgsProcessingException(str(e))
             msg += "; " + verdict
         return {"FOLDER": out_dir, "DEPTH": paths.get("depth", ""), "SUMMARY": summary,
-                "RESULT": msg}
+                "RESULT": msg + "; depth basis {}".format(info.get("depth_basis")),
+                "DEPTH_BASIS": info.get("depth_basis") or ""}
 
     def _compare(self, parameters, context, dam_folder, grid, arrays, out_dir, writer,
                  feedback):

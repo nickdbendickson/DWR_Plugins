@@ -1571,10 +1571,19 @@ def cmd_hecras_reexport(args):
             args.run_dir, out_dir=args.out or None, hdf=args.hdf or None,
             terrain=args.terrain or None, like=args.grid or None, t0_hr=args.t0_hr,
             arrival_depth_ft=args.arrival_depth_ft, terrain_z=args.terrain_z or None,
-            overwrite=args.overwrite, log=say, depth_basis=args.depth_basis or None)
+            overwrite=args.overwrite, log=say, depth_basis=args.depth_basis or None,
+            fine_rasters=False if args.no_fine_raster else None)
     except (eng.HecRasEngineError, eng.hecras.HecRasError, ValueError) as e:
         raise CliError(str(e))
     say("depth basis written: {}".format(rep["depth_basis"]))
+    tr = rep.get("depth_terrain") or {}
+    if tr.get("source"):
+        say("terrain: {} {} ({})".format(tr["source"], tr.get("path"), tr.get("sample")))
+    dc = rep.get("datum_check") or {}
+    if dc.get("status"):
+        say("datum check: {}".format(dc["status"]))
+    for w in rep.get("warnings") or []:
+        say("WARNING: " + w)
     for k, a in rep["areas_by_basis"].items():
         say("{:<9} wet {:,.0f} ac, >=0.1 ft {:,.0f} ac, >=1 ft {:,.0f} ac".format(
             k, a["wet_ac"], a["ge_0p1ft_ac"], a["ge_1ft_ac"]))
@@ -1864,19 +1873,22 @@ def build_parser():
                    "(--help lists them)")
     p.set_defaults(func=cmd_culvert_precheck)
     p = sub.add_parser("hecras-reexport", help="HEC-RAS rasters again from a finished run's "
-                       ".p01.hdf: depth = WSE minus the cell minimum (default) or the "
-                       "terrain (no model run)")
+                       ".p01.hdf: depth = WSE minus the terrain (default) or the "
+                       "cell minimum (no model run)")
     p.add_argument("run_dir", metavar="DAM_FOLDER",
                    help="the dam folder (with _hecras/hecras_stage.json and Depth (Max).tif)")
     p.add_argument("--out", default="", help="folder to write (default: a new "
                    "DAM_FOLDER/_hecras/reexport_<time> folder)")
     p.add_argument("--hdf", default="", help="plan HDF (default: from hecras_stage.json)")
-    p.add_argument("--terrain", default="", help="HEC-RAS terrain GeoTIFF (default: "
-                   "<project>/Terrain/*.tif)")
+    p.add_argument("--terrain", default="", help="terrain GeoTIFF to measure the depth "
+                   "from, used as it is (default: the run's DEM when it is finer than the "
+                   "HEC-RAS terrain, else <project>/Terrain/*.tif; "
+                   "NDBREACH_HECRAS_DEPTH_TERRAIN=auto|dem|model)")
     p.add_argument("--grid", default="", help="raster whose grid to write on (default: the "
                    "folder's Depth (Max).tif)")
     p.add_argument("--terrain-z", default="", choices=["", "auto", "feet", "us_feet", "meters"],
-                   help="terrain elevation unit (default: the unit the raster records, else the "
+                   help="HEC-RAS terrain elevation unit; given, that terrain is read, not the run's "
+                   "DEM (default: the unit the raster records, else the "
                    "Runner's record of its own terrain, else its CRS's linear unit, with a "
                    "warning)")
     p.add_argument("--t0-hr", type=float, default=None, help="plan hour arrival counts from")
@@ -1884,11 +1896,22 @@ def build_parser():
                    "(default 0.1 ft)")
     p.add_argument("--overwrite", action="store_true",
                    help="replace rasters already in --out")
-    p.add_argument("--depth-basis", default="", choices=["", "cell_min", "terrain"],
-                   help="depth = max WSE minus the cell's minimum terrain elevation "
-                   "('cell_min', the default from 3.10.84) or minus the terrain of each grid "
-                   "cell ('terrain', the 3.10.79 default); default NDBREACH_HECRAS_DEPTH_BASIS, "
-                   "else cell_min")
+    p.add_argument("--no-fine-raster", action="store_true",
+                   help="with --depth-basis fine: skip Depth_fine / WSE_fine (Max).tif (also "
+                   "NDBREACH_HECRAS_FINE_RASTER=0); NDBREACH_HECRAS_FINE_AGG=max|mean picks the "
+                   "grid cell aggregate of the fine depth (default max)")
+    p.add_argument("--depth-basis", default="",
+                   choices=["", "terrain", "cell_min", "terrain_mean", "terrain_max", "fine"],
+                   help="depth = max WSE minus the actual terrain at the centre of each grid "
+                   "cell ('terrain', the default again from 3.10.92: the run's fine DEM) or "
+                   "minus the cell's minimum terrain elevation ('cell_min', the 3.10.84 "
+                   "default); 'terrain_mean' = minus the mean terrain over each grid cell; "
+                   "'terrain_max' = the deepest fine-terrain point per grid cell "
+                   "(conservative); 'fine' = WSE interpolated between wet cell centres minus "
+                   "the fine terrain (an approximation of RAS Mapper's sloped surface); "
+                   "default NDBREACH_HECRAS_DEPTH_BASIS, else terrain. A terrain on "
+                   "another vertical datum or unit than the model stops 'terrain' "
+                   "(NDBREACH_HECRAS_DATUM_CHECK=warn keeps it)")
     p.set_defaults(func=cmd_hecras_reexport)
     return ap
 
