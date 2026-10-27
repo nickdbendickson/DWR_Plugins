@@ -1266,46 +1266,81 @@ def bridge_snap_r4_ground_lower_beside_the_road_does_not_hold_a_cut_from_a_clear
     """PR #198 follow-up (review 7c27c79's 'lower beside the road' keep held DWR-3034's
     0025008224 190 m from its creek, 'kept, verified'): a ditch / borrow strip 2.3 m deep
     running along the embankment toe at the cut is not a crossing, and the cut moves to the
-    creek's 7 m deep, 30 m wide opening; low ground only at the cut (a channel under a deck in
-    the LiDAR) still keeps it unless the nearest crossing is clearly better (deeper, wide, its
-    bed down at the ground beside the cut, a mapped flowline crossing there and none at the
-    cut); taken by another structure, it is kept again."""
+    creek's 7 m deep, 30 m wide opening, with or without a channel line there. Low ground only
+    at the cut (across the road: a channel under a deck in the LiDAR) keeps it, whatever the
+    nearest crossing is - shallow, deep, with a channel line there and none at the cut, or
+    already cut by another structure (PR #198 review of 9c646d6)."""
     from nd_breach_runner.core import structures as sm
     ditch = [(-150.0, -10.0, 1), (-80.0, -15.0, -1)]       # 3034: ~105 m / ~55 m along the road
     local = [(-48.0, -22.0, 1), (-48.0, -22.0, -1)]        # across the road at the cut only
     creek = (np.array([[155.0, -300.0], [155.0, 300.0]]),)          # a mapped flowline
-    for strips, tag, streams in ((ditch, "runs along the road", ()),
-                                 (ditch, "runs along the road", creek),
-                                 (local, "lower at the cut than", creek)):
+    for streams in ((), creek):
         b = _bridge(-35.0, "0025008224", w=31.1)
-        rows, notes, warns = _snap([b], lambda X, Y, s=strips: _roadside_low(X, Y, s),
+        rows, notes, warns = _snap([b], lambda X, Y: _roadside_low(X, Y, ditch),
                                    streams=streams)
         r = rows[0]
-        assert r["method"] == "dem_opening" and r["verified"], (tag, r)
-        assert abs(r["moved_m"] - 190.0) < 6.0 and tag in r["note"], (tag, r)
+        assert r["method"] == "dem_opening" and r["verified"], (streams, r)
+        assert abs(r["moved_m"] - 190.0) < 6.0 and "runs along the road" in r["note"], r
         assert "clearly better" in r["note"] and any("moved 190 m" in w for w in warns), r
         assert abs(float(np.mean(np.asarray(b.line)[:, 0])) - 155.0) < 6.0, b.line
-    # low ground across the road at the cut (a channel under a deck in the LiDAR, which hides
-    # the opening's depth) still keeps the cut when the nearest opening is not clearly better
-    # - shallow, or deep but with no channel line saying the creek is there
-    for depth, streams in ((1.5, creek), (7.0, ())):
+    # low ground across the road at the cut: kept, verified, never overturned
+    for depth, streams in ((1.5, creek), (7.0, ()), (7.0, creek)):
         b = _bridge(-35.0, "LOCAL")
         rows, _n, warns = _snap([b], lambda X, Y, d=depth: _roadside_low(X, Y, local, d),
                                 streams=streams)
         assert rows[0]["method"] == "kept" and rows[0]["verified"], (depth, rows[0])
-        assert "not clearly better" in rows[0]["note"] and not warns, (rows[0], warns)
-    # ... and when the clearly better opening is already cut by another structure
+        assert "lower at the cut than" in rows[0]["note"], rows[0]
+        assert "does not overturn" in rows[0]["note"] and not warns, (rows[0], warns)
+        assert float(b.line[0][0]) == -35.0, b.line
+    # ... and when that opening is already cut by another structure
     b = _bridge(-35.0, "LOCAL")
     other = sm.Structure(kind=sm.KIND_CULVERT, line=np.array([[155.0, -15.0], [155.0, 15.0]]),
                          width_m=3.0, height_m=2.0, name="CREEK CULVERT")
     rows, _n, warns = _snap([b, other], lambda X, Y: _roadside_low(X, Y, local), streams=creek)
     assert rows[0]["method"] == "kept" and rows[0]["verified"], rows[0]
-    assert "CREEK CULVERT" in rows[0]["note"] and float(b.line[0][0]) == -35.0, rows[0]
+    assert float(b.line[0][0]) == -35.0, rows[0]
     # the ditch with no opening within the radius: not verified (named in the stay warning)
     b = _bridge(-35.0, "DITCH")
     rows, _n, warns = _snap([b], lambda X, Y: _roadside_low(X, Y, ditch, open_depth=0.0))
     assert rows[0]["method"] == "none" and not rows[0]["verified"], rows[0]
     assert "runs along the road" in rows[0]["note"] and any("DITCH" in w for w in warns), warns
+
+
+def _unmapped_creek_road(X, Y, channel=1.5):
+    """QGIS Dev probe R4 (PR #198 review of 9c646d6): a flat road (y = 0, crown 100 m) with
+    its deck in the LiDAR over a 1.5 m creek at x = 155 that has no channel line, and the main
+    stem 145 m along the road at x = 300 with a bare-earth opening (another bridge) and the only
+    channel line."""
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    d = np.minimum(np.abs(X - 155.0), np.abs(X - 300.0))
+    z = 90.0 + 0.004 * np.minimum(d, 400.0) - np.where(d < 4.0, channel, 0.0)
+    on = np.abs(Y) <= 10.0
+    return np.where(on & ~(np.abs(X - 300.0) <= 15.0), 100.0, z)
+
+
+@test
+def bridge_snap_r5_a_channel_line_missing_at_a_deck_in_the_lidar_does_not_move_the_cut():
+    """PR #198 review of 9c646d6 (probe R4): CHANNEL_LINES is often only the main stem, clipped
+    to the run radius, so a line at the main stem's opening and none at the cut is no evidence
+    the cut is misplaced. A correct bridge whose deck shows in the LiDAR over an unmapped 1.5 m
+    creek stays, kept and verified (fdab2c0's behaviour), instead of moving 145 m to the main
+    stem's opening."""
+    stem = [np.array([[300.0, -300.0], [300.0, 300.0]])]
+    for x in (155.0, 150.0, 160.0):
+        b = _bridge(x, "B")
+        orig = np.asarray(b.line).copy()
+        rows, _n, warns = _snap([b], _unmapped_creek_road, streams=stem)
+        r = rows[0]
+        assert r["method"] == "kept" and r["verified"] and r["moved_m"] == 0.0, (x, r)
+        assert "lower at the cut than" in r["note"] and "does not overturn" in r["note"], r
+        assert np.allclose(b.line, orig) and getattr(b, "snap_from", None) is None, b.line
+        assert not any("moved" in w for w in warns), warns
+    # the same layout with the creek mapped: kept by the channel line at the cut
+    b = _bridge(155.0, "B")
+    rows, _n, _w = _snap([b], _unmapped_creek_road,
+                         streams=stem + [np.array([[155.0, -300.0], [155.0, 300.0]])])
+    assert rows[0]["method"] == "kept" and "channel line crosses" in rows[0]["note"], rows[0]
 
 
 @test

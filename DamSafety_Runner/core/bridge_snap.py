@@ -25,15 +25,18 @@ line's midpoint:
    - the DEM opens there (a bridge's deck is not in bare-earth LiDAR), or a channel line
      (CHANNEL_LINES) crosses the road there: kept, verified;
    - the ground beside the road dips at least CHANNEL_M there (a channel under a deck that is
-     in the LiDAR, or a hydro-flattened water surface): kept, verified, unless the nearest
-     crossing (4.) is CLEARLY BETTER - a DEM opening at least CLEAR_DEPTH_M and CLEAR_FACTOR x
-     that dip deep, at least CLEAR_WIDTH_FRAC of the span wide (15 m cap), its bed down at the
-     ground beside the cut (within CHANNEL_M) and with a channel line (CHANNEL_LINES) within
-     STREAM_NEAR_M of it (none crosses at the cut: a deck in the LiDAR hides the opening's
-     depth, so depth alone never moves such a cut). Low ground that runs ALONG the road (on either side, within
-     CHANNEL_M of its lowest at the cut for DITCH_M past the cut, either way: a roadside ditch,
-     a borrow area or a pond at the embankment toe) is not a crossing and keeps nothing
-     (DWR-3034 0025008224, PR #198 follow-up);
+     in the LiDAR, or a hydro-flattened water surface): kept, verified, whatever the nearest
+     crossing is. A deck in the LiDAR hides the opening's depth, so a deeper opening elsewhere
+     is no evidence against the cut; nor is a channel line crossing there and none at the cut:
+     CHANNEL_LINES is often only the main stem, clipped to the run radius, and how much of the
+     cut's surroundings it covers cannot be judged from the lines, so a missing line at the
+     cut never moves it (PR #198 review of 9c646d6, probe R4). Low ground that runs ALONG the
+     road (on either side, within CHANNEL_M of its lowest at the cut for DITCH_M past the cut,
+     either way: a roadside ditch, a borrow area or a pond at the embankment toe) is not a
+     crossing and keeps nothing (DWR-3034 0025008224, PR #198 follow-up); such a cut moves
+     when the nearest crossing (4.) is CLEARLY BETTER - a DEM opening at least CLEAR_DEPTH_M
+     and CLEAR_FACTOR x the beside-road dip deep, at least CLEAR_WIDTH_FRAC of the span wide
+     (15 m cap), its bed down at the ground beside the cut (within CHANNEL_M);
    - the road dips at least DIP_M below the road on both sides, within the shoulder window
      (OPENING_SHOULDER_M plus half the span: wide openings) or along the grade line
      (GRADE_LINE_M each way): the road's low point, a sag, or an opening the opening rule cannot
@@ -46,7 +49,7 @@ line's midpoint:
    STREAM_NEAR_M of it (an opening without one is a grade separation). A DEM opening without a
    channel line is a target only when its bare-earth bed is at least BED_DROP_M below the ground
    beside the road at the cut (the valley bottom is there, not at the cut), or it is clearly
-   better than a cut with low ground beside it (3.). The bridge does not
+   better than a cut with low ground along the road beside it (3.). The bridge does not
    move when that nearest crossing is not a target, or another structure's line already crosses
    the road there (within TAKEN_M): it never moves past it.
 5. Crossings are handed out once, nearest bridge first, independent of the inventory's order:
@@ -435,8 +438,9 @@ def _clearly_better(t, ch, v_cut, span):
     road is lower' signal `ch`: a DEM opening at least CLEAR_DEPTH_M and CLEAR_FACTOR x ch
     deep, at least CLEAR_WIDTH_FRAC of the span wide (capped at 15 m), its bed down at the
     ground beside the cut (within CHANNEL_M), and with a channel line when the run has them
-    (the candidate list already requires it). Low ground across the road at the cut also
-    needs that channel line (_judge)."""
+    (the candidate list already requires it). Used only where the low ground runs along the
+    road (a ditch / borrow area / pond): low ground across the road at the cut is never
+    overturned (_judge)."""
     if t["how"] != "dem_opening" or t["depth"] is None:
         return False
     return (t["depth"] >= max(CLEAR_DEPTH_M, CLEAR_FACTOR * ch)
@@ -700,20 +704,23 @@ def _judge(s, pools, read_dem, streams, radius_m, keep_m=KEEP_M, step=STEP_M):
     txt = ("DEM opening {:.1f} m below the road, {:.0f} m wide{}".format(
         t["depth"], t["width"], ", with a channel line" if t["channel"] else "")
         if t["how"] == "dem_opening" else "channel line crossing")
-    # low ground across the road at the cut (not parallel) is a channel under a deck in the
-    # LiDAR as often as not, and such a deck hides the opening's depth: there a deeper opening
-    # alone never moves the cut (300 random layouts: 288 correct bridges would move to another
-    # creek's open bridge). It moves only when the run's channel lines say the creek is at the
-    # opening - a line crosses there, none at the cut (that keeps it above).
-    clear = (weak is not None and _clearly_better(t, ch, v_cut, span)
-             and (not keep_weak or bool(t["channel"])))
-    if keep_weak and not clear:
+    # Low ground ACROSS the road at the cut (not a parallel ditch) is a channel under a deck in
+    # the LiDAR as often as not, and such a deck hides the opening's depth: nothing about the
+    # nearest crossing overturns it. Not a deeper opening (300 random layouts: 288 correct
+    # bridges would move to another creek's open bridge), and not a channel line there with
+    # none at the cut either: CHANNEL_LINES is often only the main stem clipped to the run
+    # radius (algorithms.py), so a missing line at the cut is no evidence, and the lines'
+    # coverage of the cut's surroundings cannot be judged reliably (PR #198 review of 9c646d6,
+    # probe R4: a correct bridge over a 1.5 m unmapped creek moved 145 m to the main stem).
+    if keep_weak:
         row.update(method="kept", verified=True, new_xy=row["old_xy"], target_xy=None,
-                   note=weak + "; the nearest crossing ({}, {:.0f} m along the road) is not "
-                   "clearly better".format(txt, dist))
+                   note=weak + "; the nearest crossing ({}, {:.0f} m along the road) does not "
+                   "overturn low ground across the road at the cut (a deck in the LiDAR hides "
+                   "the opening's depth; a channel line missing at the cut is no evidence)"
+                   .format(txt, dist))
         return row, None
+    clear = weak is not None and _clearly_better(t, ch, v_cut, span)
     if clear:
-        t["weak_keep"] = weak if keep_weak else None     # the fallback when the target is taken
         t["txt_why"] = ("{}; the {} is clearly better (at least {:g} m and {:g} x deeper, "
                         "its bed down at the ground beside the cut)").format(
                             weak, "opening" if t["how"] == "dem_opening" else "crossing",
@@ -728,14 +735,6 @@ def _judge(s, pools, read_dem, streams, radius_m, keep_m=KEEP_M, step=STEP_M):
     t.update(dist=dist, txt=txt, pts=pts, s_al=s_al, i0=i0, c=c, L0=L0, line=line,
              p_old=pts[i0].copy(), kind=kind)
     return row, t
-
-
-def _weak_fallback(r, t):
-    """A cut the weak beside-road signal would have kept, whose clearly better crossing went to
-    another structure: kept, verified, as without that crossing."""
-    if t.get("weak_keep"):
-        r.update(method="kept", verified=True, new_xy=r["old_xy"],
-                 note=t["weak_keep"] + "; " + r["note"])
 
 
 def _taken_by(t, occupants):
@@ -858,7 +857,6 @@ def snap_bridges(structures, roads, read_dem, streams=(), radius_m=None, rails=(
             r["note"] = ("the nearest crossing ({}, {:.0f} m along the road at {}) is already "
                          "cut by {}: the cut stays at the inventory location").format(
                              t["txt"], t["dist"], r["target_xy"], who)
-            _weak_fallback(r, t)
             continue
         props.append((t["dist"], str(r["name"]), tuple(r["old_xy"]), s, r, t))
     # crossings handed out once, nearest bridge first (not in the inventory's order)
@@ -876,7 +874,6 @@ def snap_bridges(structures, roads, read_dem, streams=(), radius_m=None, rails=(
             r["note"] = ("the nearest crossing ({}, {:.0f} m along the road at {}) is nearer "
                          "bridge {} (moved there): the cut stays at the inventory "
                          "location").format(t["txt"], t["dist"], r["target_xy"], clash)
-            _weak_fallback(r, t)
             continue
         _move(s, t, r)
         given.append((t, r["name"]))
