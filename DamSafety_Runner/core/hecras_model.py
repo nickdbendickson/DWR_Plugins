@@ -1528,7 +1528,8 @@ def _flood_fill(mask, seed_rc):
 
 
 def _z_factor(report, dem_path):
-    """Metres per DEM elevation unit: the run's record, else GDAL's guess."""
+    """Metres per DEM elevation unit: the run's record, else the unit the DEM records
+    (gdal_io.z_to_m_factor 'auto' = resolve_dem_z; 3.10.89: no guess from the CRS)."""
     note = str(report.get("dem_elevation_units") or "").lower()
     if report.get("dem_z_to_m"):
         return float(report["dem_z_to_m"]), report.get("dem_elevation_units") or ""
