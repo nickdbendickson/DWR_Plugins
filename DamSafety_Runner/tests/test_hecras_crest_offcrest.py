@@ -165,6 +165,9 @@ def hecras_crest_offcrest_dam_line_points_reads_the_first_line():
 
     assert dam_line_points(None) == []
     assert dam_line_points(S([F(G([])), F(G([(1, 2), (3, 4)]))])) == [(1.0, 2.0), (3.0, 4.0)]
+    assert dam_line_points(S([F(G([(7, 7)])), F(G([(1, 2), (3, 4)]))])) == [(1.0, 2.0),
+                                                                          (3.0, 4.0)]
+    assert dam_line_points(S([F(None), F(G([(7, 7)]))])) == []
     assert dam_line_points(S([F(G([(0, 0), (5, 0), (9, 1)], multi=True))]))[-1] == (9.0, 1.0)
 
 
@@ -172,10 +175,11 @@ def hecras_crest_offcrest_dam_line_points_reads_the_first_line():
 # check against the run's flow, the breach on a crest traced off the record, a dam line of
 # your own ----------------------------------------------------------------------------------
 def _valley_with(top_dem, c=10.0, half=900.0, roads=(), notch=None, grid=False, cw=CW,
-                 nodata_above=None):
+                 nodata_above=None, pool_z=None):
     """_dem's valley and embankment (crest at top_dem, cw wide) plus road embankments (x0, y0,
     x1, y1, z, w: top w ft wide at z, 2:1 sides) and a crest notch (x, w, depth); the pool
-    left out of the DEM (no data) upstream below nodata_above. grid: (z, x0, ytop, c)."""
+    left out of the DEM (no data) upstream below nodata_above, or its water surface (level, as
+    LiDAR flattens it) at pool_z. grid: (z, x0, ytop, c)."""
     xs = np.arange(-half, half, c) + 0.5 * c
     ys = np.arange(half, -half, -c) - 0.5 * c
     X, Y = np.meshgrid(xs, ys)
@@ -191,6 +195,8 @@ def _valley_with(top_dem, c=10.0, half=900.0, roads=(), notch=None, grid=False, 
         z = np.maximum(z, rz - np.maximum(rd - 0.5 * rw, 0.0) / 2.0)
     if nodata_above is not None:
         z = np.where((Y > 0.0) & (z < nodata_above), np.nan, z)
+    if pool_z is not None:
+        z = np.where(Y > 0.0, np.maximum(z, pool_z), z)
     return (z, -half, half, c) if grid else _grid_sampler(z, -half, half, c)
 
 
@@ -206,13 +212,17 @@ def _wet_below(y, half=400.0, c=50.0):
 def hecras_crest_offcrest_the_old_rule_decides_where_it_traces():
     """R1 (round 2 of the DWR #195 audit): wherever the old rule (the highest ridge across the
     section, at the record's level) finds a crest, trace() returns its line - with a road 1-5 ft
-    above the dam 25-40 ft beyond half the toe distance, and the dam point on the crest or on
-    the road. Where it finds none, the dam point's ground is at the record's level (on the
-    crest, or on a road at the record's level), so the crest is not followed at the DEM's
-    level onto the higher ridge beside it (the datum allowance needs the dam point's ground
-    off the record): the error stands, and never the road."""
+    above the dam 25-40 ft beyond half the toe distance (and 60 ft: 110 ft from the dam), and
+    the dam point on the crest or on the road. Where it finds none, the dam point's ground is
+    at the record's level (on the crest, or on a road at the record's level), so the crest is
+    not followed at the DEM's level onto the higher ridge beside it (the datum allowance needs
+    the dam point's ground off the record): the error stands, and never the road - but for the
+    road 110 ft from the dam (no ridge at the record's level within the toe distance of the dam
+    point), which is followed at its own level, and evidence says it is not clearly the dam
+    (the dam lies across the section through the dam point)."""
     step = 32.8
-    for gap in (25.0, 30.0, 35.0, 40.0):
+    evid = 0
+    for gap in (25.0, 30.0, 35.0, 40.0, 60.0):
         yr = -(0.5 * TOE + gap)
         for dz in (1.0, 2.0, 3.0, 4.0, 5.0):
             f = _valley_with(TOP, half=2400.0, roads=[(-800.0, yr, 800.0, yr, TOP + dz, 24.0)])
@@ -241,9 +251,13 @@ def hecras_crest_offcrest_the_old_rule_decides_where_it_traces():
                                          step, wet_xy=_wet_below(yr - 60.0), wet_cell=50.0)
                     assert not ok and "another ridge" in ev["why"] and \
                         "from the dam point" in ev["why"], (gap, dz, ev)
+                    evid += 1
                     continue
                 assert np.array_equal(tr["line"], old["line"]), (gap, dz, P)
                 assert not tr["relaxed"] and tr["how"] == "" and tr["top_offset"] == 0.0
+    # (round 4) the road 110 ft from the dam (beyond the toe distance, so no ridge at the
+    # record's level near the dam point): the road at its own level, which evidence rejects
+    assert evid == 2, evid
     # the datum allowance is what the dam point's ground stops: given a dam point whose ground
     # is off the record (the start of a trace found elsewhere), the higher road is followed
     yr = -(0.5 * TOE + 40.0)
@@ -536,17 +550,20 @@ def hecras_crest_offcrest_evidence():
     across the valley with the flood below it passes (from its crest, its upstream face, the
     pool); each of the other cases fails one rule only - a dam point farther than the toe
     distance plus half the crest width and half a step from the line; a ridge between the dam
-    point and the line; the flood upstream of it; a levee along the valley (the flood seen
-    from the dam point's place on it runs along it; with the dam point at its middle, the flow
-    path below its breach does); the flood off to one side seen from the line's middle; the
+    point and the line; the flood upstream of it; a levee along the valley (at the valley's
+    scale the flow runs along it; with the dam point at its middle, the flow path below its
+    breach does); the flood near the dam point's place on a dam off to one side, square to it
+    from its middle and at the valley's scale; the flood off to one side seen from the line's
+    middle; the
     flow path and the flood disagreeing on the valley's flow; a flow path that runs off the
     DEM (the wider DEM, `far`, is the one it follows); a flow path that leaves the line 56
     degrees off square; another ridge across the section through the dam point; an end
     running into another ridge; a road
     beside part of it lower than the old test's level but within the datum allowance; another
     embankment between it and the pool (seen across a pool left out of the DEM only when the
-    DEM's footprint says that no data is inside it); a ridge between it and the flood in a
-    third of its sections; crest-high ground behind it."""
+    DEM's footprint says that no data is inside it; else the scans end at the dam's crest: no
+    evidence either); a ridge between it and the flood in a third of its sections; crest-high
+    ground behind it."""
     f = _valley_with(TOP, half=BIG)
     dam = [(450.0, 0.0), (0.0, 0.0), (-450.0, 0.0)]
     for P in ((30.0, 0.0), (30.0, 40.0), (30.0, TOE + 0.5 * CW)):
@@ -564,17 +581,33 @@ def hecras_crest_offcrest_evidence():
     ok, ev = _ev(dam, f, (30.0, 0.0), wet=_cells((_GY > 125.0) & (_GY < 425.0) &
                                                  (np.abs(_GX) < 375.0)))
     assert not ok and "downstream side" in ev["why"] and ev["flow"]["downstream_frac"] == 0.0, ev
-    # a levee along the valley, the flood all on its downstream side (flow_check cannot tell)
+    # a levee along the valley, the flood all on its downstream side (flow_check cannot tell):
+    # at the valley's scale (the direction from the dam point to the centroid of all the
+    # flood) the flow runs along it, wherever the dam point is on it (round 4)
     fl = _valley_with(TOP, half=BIG, roads=[(-200.0, -60.0, -200.0, -1500.0, TOP, 24.0)])
     lev = [(-200.0, -100.0), (-200.0, -500.0), (-200.0, -900.0)]
     wl = _cells((_GX > -200.0) & (_GX < 400.0) & (_GY < -60.0) & (_GY > -1400.0))
     assert hc.flow_check(np.asarray(lev), wl, 50.0)[0]
     ok, ev = _ev(lev, fl, (-180.0, -150.0), wet=wl)
-    assert not ok and "seen from the dam point's place on it" in ev["why"], ev
-    assert ev["valley"]["angle_from_dam_point_deg"] > 55.0, ev
+    assert not ok and "at the valley's scale" in ev["why"], ev
+    assert ev["valley_scale"]["off_square_deg"] > 45.0, ev
+    # ... with the dam point at its middle the flood's centroid is less than 45 degrees off
+    # square, and the flow path below its breach runs along it
     ok, ev = _ev(lev, fl, (-180.0, -500.0), wet=wl)
     assert not ok and ev["why"].startswith("the flow path below its breach leaves it"), ev
-    assert ev["valley"]["angle_from_dam_point_deg"] < 40.0 < ev["flow_path_angle_deg"], ev
+    assert ev["valley_scale"]["off_square_deg"] < 45.0 < ev["flow_path_angle_deg"], ev
+    # the flood near the dam point's place on the line (its east end) off to the east - a
+    # patch 950-1,150 ft east of it -, the rest below the line's middle and far downstream:
+    # from the line's middle and at the valley's scale the flow crosses it, from the dam
+    # point's place it does not
+    gx, gy = np.meshgrid(np.arange(-6000.0, 6000.0, 50.0), np.arange(-6000.0, 6000.0, 50.0))
+    m = (((np.abs(gx) < 400.0) & (gy < -120.0) & (gy > -300.0)) |
+         ((gx > 1400.0) & (gx < 1600.0) & (gy < -120.0) & (gy > -300.0)) |
+         ((np.abs(gx) < 1500.0) & (gy < -3500.0) & (gy > -5500.0)))
+    ok, ev = _ev(dam, f, (450.0, 0.0), wet=np.column_stack([gx[m], gy[m]]))
+    assert not ok and "seen from the dam point's place on it" in ev["why"], ev
+    assert ev["valley"]["angle_from_middle_deg"] < 5.0 and \
+        ev["valley_scale"]["off_square_deg"] < 10.0, ev
     # the flood off to the south-east: 42 degrees off seen from the middle, 15 from the dam
     # point at the east end
     ok, ev = _ev(dam, f, (400.0, 0.0), wet=_cells((_GX > 300.0) & (_GX < 900.0) &
@@ -639,10 +672,12 @@ def hecras_crest_offcrest_evidence():
     assert not ok and "between it and the pool" in ev["why"], ev
     assert ev["upstream_ridge_frac"] == 1.0 and ev["parallel_ridge_frac"] == 0.0, ev
     # ... also with the pool left out of the DEM from half a foot below the crest (no face
-    # behind the crest), when no data there is inside the DEM
+    # behind the crest), when no data there is inside the DEM; when it is not (the DEM's edge)
+    # the scans end at the dam's crest, short of the pool: no evidence either (round 4)
     fu = _valley_with(TOP, half=BIG, nodata_above=TOP - 0.5,
                       roads=[(-800.0, -400.0, 800.0, -400.0, TOP + 5.0, 24.0)])
-    assert _ev(road, fu, (30.0, -400.0), top_used=TOP + 5.0, wet=_wet_below(-520.0))[0]
+    ok, ev = _ev(road, fu, (30.0, -400.0), top_used=TOP + 5.0, wet=_wet_below(-520.0))
+    assert not ok and ev["why"].startswith("the DEM ends less than"), ev
     ok, ev = _ev(road, fu, (30.0, -400.0), top_used=TOP + 5.0, wet=_wet_below(-520.0),
                  inside=lambda q: np.ones(len(q), bool))
     assert not ok and "between it and the pool" in ev["why"], ev
@@ -673,13 +708,15 @@ def hecras_crest_offcrest_evidence():
 @test
 def hecras_crest_offcrest_walk_off_the_old_rule():
     """The walk of a trace off the old rule (here at the DEM's level, 5 ft above the record):
-    (a) on a level crest 100 ft wide (wider than three times the walk's window) it keeps to
-    the middle of the top instead of drifting across it a little every step; (b) where the
+    (a) on a level crest 100 ft wide on record (at least three times the half-width of the
+    walk's window: 1.5 windows) it keeps to the middle of the top instead of drifting across it
+    a little every step; (b) where the
     pool is left out of the DEM (no data) up to 3 ft below the crest of a 48 ft wide crest (a
     2 ft DEM), the side that runs into no data falls (the one face sample left is not the
     ground beside the crest), so the crest is followed past it; (c) a single high point past a
     stretch stepped over at the end (a knoll on the abutment) is not crest: the line ends
-    before it; (d) the walk of a start found nearby (start_within) at the record's level keeps
+    before it (a crest 16 ft wide on record, so the walk reaches the knoll; at 20 ft its square
+    end's level top stops it first, and that stop is not called a junction); (d) the walk of a start found nearby (start_within) at the record's level keeps
     to the middle of the 100 ft crest as well. The old rule's own walk is unchanged."""
     z, x0, ytop, c = _valley_with(TOP + 5.0, cw=100.0, grid=True)
     f = _grid_sampler(z, x0, ytop, c)
@@ -706,6 +743,15 @@ def hecras_crest_offcrest_walk_off_the_old_rule():
     tr = hc.trace(f, (30.0, 0.0), (-1.0, 0.0), TOP, H, 10.0, TOE, 3000.0, 300.0, crest_w=CW)
     assert tr["how"] == "datum" and -520.0 < tr["line"][:, 0].min() < -480.0, \
         tr["line"][:, 0].min()
+    # (round 4) its square end, where the crest's level top widens into the end slope, is not
+    # called a junction; with a crest 16 ft wide on record (no wide-crest rule: the end is
+    # 'the end of the embankment') the walk steps over the gap, finds the knoll and drops it -
+    # the knoll rule: 3-4 steps of crest past a 160 ft stretch stepped over
+    assert not any(v[0].startswith("a junction") for v in tr["ends"].values()), tr["ends"]
+    tr = hc.trace(f, (30.0, 0.0), (-1.0, 0.0), TOP, H, 10.0, TOE, 3000.0, 300.0, crest_w=16.0)
+    assert tr["how"] == "datum" and -520.0 < tr["line"][:, 0].min() < -480.0, \
+        tr["line"][:, 0].min()
+    assert tr["ends"]["A"][0].startswith("end of the embankment"), tr["ends"]
     old = hc.trace(f, (30.0, 0.0), (-1.0, 0.0), TOP + 5.0, H, 10.0, TOE, 3000.0, 300.0)
     assert old["line"][:, 0].min() < -640.0, old["line"][:, 0].min()
     # (d) a start found nearby (start_within), at the record's level, on the 100 ft crest: the
@@ -726,8 +772,12 @@ def hecras_crest_offcrest_walk_stops_at_a_junction():
     -150 at 25 degrees - the heading turns more than 20 degrees from the one it settled on while
     the crest goes on straight past the bend's footprint (it used to follow the road 160 ft
     down). Either way the walk ends where the road joins (a junction), the rest of the line is
-    the dam."""
-    for xj, th, rw, P, what in ((-300.0, 20.0, 24.0, (100.0, 0.0), "the level top is"),
+    the dam; at (a) the combined top runs on at its level past the widest window, so the stop
+    names both (the abutment's shoulder or an embankment joining). Round 4: (c) a road at the
+    crest's level (and half a foot above or below it) crossing at x = -150 at 10 degrees, below
+    the turn limit (round 3 followed such a road): another crest at the walk's level lies
+    across the section within the toe distance, so the walk ends where it is, on the dam."""
+    for xj, th, rw, P, what in ((-300.0, 20.0, 24.0, (100.0, 0.0), "the level top"),
                                 (-150.0, 25.0, 20.0, (250.0, 0.0), "the crest turns")):
         t = np.radians(th)
         f = _valley_with(TOP + 5.0, half=1800.0, roads=[
@@ -735,8 +785,21 @@ def hecras_crest_offcrest_walk_stops_at_a_junction():
         tr = hc.trace(f, P, (-1.0, 0.0), TOP, H, 10.0, TOE, 1500.0, 300.0, crest_w=CW)
         assert tr["how"] == "datum" and np.abs(tr["line"][:, 1]).max() < 15.0, (th, tr["ends"])
         assert xj - 80.0 < tr["line"][:, 0].min() < xj, (th, tr["line"][:, 0].min())
-        stop = [v[0] for v in tr["ends"].values() if v[0].startswith("a junction: " + what)]
+        stop = [v[0] for v in tr["ends"].values() if v[0].startswith("a junction: " + what) or
+                (what == "the level top" and v[0].startswith("the crest's level top is more "
+                                                              "than"))]
         assert stop, (th, tr["ends"])
+    t = np.radians(10.0)
+    for dz in (-0.5, 0.0, 0.5):
+        f = _valley_with(TOP + 5.0, half=1800.0, roads=[
+            (-150.0 + 900.0 * np.cos(t), 900.0 * np.sin(t), -150.0 - 900.0 * np.cos(t),
+             -900.0 * np.sin(t), TOP + 5.0 + dz, 20.0)])
+        tr = hc.trace(f, (250.0, 0.0), (-1.0, 0.0), TOP, H, 10.0, TOE, 1500.0, 300.0,
+                      crest_w=CW)
+        assert tr["how"] == "datum" and np.abs(tr["line"][:, 1]).max() < 3.0, (dz, tr["ends"])
+        assert hc.cumlen(tr["line"])[-1] < 200.0, (dz, hc.cumlen(tr["line"])[-1])
+        assert all(v[0].startswith("a junction: another crest at its level lies") for v in
+                   tr["ends"].values()), (dz, tr["ends"])
 
 
 @test
@@ -1122,8 +1185,8 @@ def hecras_crest_offcrest_build_model_snap_and_its_warning():
     off, the flood turned 20 degrees from the valley: the dam line is traced from the crest
     found nearby, along the crest, and the note about it is a WARNING with the old rule's
     reason, the distance from the dam point and the line's angle at the breach to the run's
-    flow (the direction from the line's middle to the flooded area: about 20 degrees here,
-    while the flow path below the breach follows the valley). With the record 4 ft below the
+    flow at the valley's scale (the direction from the dam point to the centroid of the flooded
+    area: about 20 degrees here, while the flow path below the breach follows the valley). With the record 4 ft below the
     DEM's crest and the pool 8 ft below it, the line from the start found nearby is followed
     at the DEM's crest level and the WARNING says so."""
     from nd_breach_runner.core import hecras_model as hm
@@ -1146,9 +1209,11 @@ def hecras_crest_offcrest_build_model_snap_and_its_warning():
         assert dist in notes[0] and 80.0 < ax["dam_point_to_line"] < 110.0, (notes, ax)
         assert 12.0 < ax["flow_angle_deg"] < 28.0 and ax["flow_path_angle_deg"] < 10.0, ax
         assert ax["flow_angle_deg"] == ax["evidence"]["flow_angle_deg"], ax
-        assert "at the breach, runs {:.0f} degrees off square to the run's flow (the direction " \
-            "from the line's middle to the run's flooded area)".format(ax["flow_angle_deg"]) in \
-            notes[0], notes
+        assert "at the breach, runs {:.0f} degrees off square to the run's flow at the " \
+            "valley's scale (the direction from the dam point to the centroid of the run's " \
+            "flooded area)".format(ax["flow_angle_deg"]) in notes[0], notes
+        assert abs(ax["flow_angle_local_deg"] - ax["flow_angle_deg"]) <= 15.0 and \
+            "the two disagree" not in notes[0], (ax, notes)
         assert ax["off_rule"] == "snap" and ax["evidence"]["flow"]["downstream_frac"] > 0.9, ax
         assert ", followed at the DEM's crest level" not in notes[0], notes
         # the cut follows the line: the dam point moved to its nearest point on it
@@ -1309,3 +1374,441 @@ def hecras_crest_offcrest_build_model_a_failed_snap_keeps_the_dam_point():
         assert Pw is not None
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+# --- 3.10.87, DWR #195 audit round 4: other embankments at any level, the scans back to the
+# pool on their own read of the DEM, the valley's flow from no dam line, the pool behind the
+# line, small-skew junctions, parts of the embankment ------------------------------------------
+def _flat_floor(dams=(), roads=(), half=BIG, c=10.0, pool_z=None):
+    """A wide flat valley (100 ft, rising 0.5 % upstream = north, walls past |x| = 1,500 ft)
+    with embankments (x0, y0, x1, y1, crest z, crest w: 3:1 faces, square 1:1 ends) and road
+    embankments as _valley_with's (2:1 sides); the pool's water surface at pool_z north of
+    y = 0. Returns (z, x0, ytop, c)."""
+    xs = np.arange(-half, half, c) + 0.5 * c
+    ys = np.arange(half, -half, -c) - 0.5 * c
+    X, Y = np.meshgrid(xs, ys)
+    z = 100.0 + 0.005 * Y + 0.2 * np.maximum(np.abs(X) - 1500.0, 0.0)
+    for x0, y0, x1, y1, cz, cw in dams:
+        a, b = np.array((x0, y0), float), np.array((x1, y1), float)
+        t = (b - a) / np.hypot(*(b - a))
+        u = (X - a[0]) * t[0] + (Y - a[1]) * t[1]
+        v = np.abs(-(X - a[0]) * t[1] + (Y - a[1]) * t[0])
+        L = float(np.hypot(*(b - a)))
+        z = np.maximum(z, cz - np.maximum(v - 0.5 * cw, 0.0) / 3.0 -
+                       np.maximum(np.maximum(-u, u - L), 0.0))
+    for x0, y0, x1, y1, rz, rw in roads:
+        rd = _seg_dist(X, Y, [(x0, y0), (x1, y1)])
+        z = np.maximum(z, rz - np.maximum(rd - 0.5 * rw, 0.0) / 2.0)
+    if pool_z is not None:
+        z = np.where(Y > 0.0, np.maximum(z, pool_z), z)
+    return z, -half, half, c
+
+
+def _evx(line, grid, P, top_used=TOP, wet=None, Hh=H, step=10.0, sc=None, **kw):
+    """evidence on a grid (z, x0, ytop, c) with the defaults of _ev and the height Hh."""
+    line = np.asarray(line, float)
+    f = _grid_sampler(*grid) if isinstance(grid, tuple) else grid
+    toe = 3.0 * Hh + 0.5 * CW
+    prom = max(2.0, 0.1 * Hh)
+    return hc.evidence(line, 0.5 * hc.cumlen(line)[-1] if sc is None else sc, f, P, TOP,
+                       top_used, max(3.0, 0.1 * Hh), prom, Hh, toe, CW, step,
+                       wet_xy=_wet_below(-120.0, half=300.0) if wet is None else wet,
+                       wet_cell=50.0, **kw)
+
+
+@test
+def hecras_crest_offcrest_tops_flat_runs_and_valley_axis():
+    """The round-4 helpers. _tops: another embankment along a profile at any level - a top
+    standing `big` above the lowest ground within `span` on one side and `small` on the other,
+    each only as far as the first higher ground (a lower embankment beside a hill is still one);
+    not the profile's start (nothing before it), not a terrace (no fall behind it), not a bump
+    smaller than `small`; no data that `hole` says is inside the DEM falls (a pool left out of
+    it), other no data is no ground. _flat_runs:
+    level stretches (LiDAR's water). valley_axis: from the dam point to the centroid of all the
+    flooded cells, their long axis and how clear it is."""
+    t = np.arange(0.0, 1500.0, 5.0)
+    z = 130.0 - np.minimum(t, 90.0) / 3.0                       # the line's own face
+    dam = 118.0 - np.maximum(np.abs(t - 600.0) - 10.0, 0.0) / 3.0   # another, 18 ft high
+    z1 = np.maximum(z, dam)
+    tops = hc._tops(z1, t, None, 15.0, 1.0, 160.0)
+    assert len(tops) == 1 and abs(tops[0][0] - 600.0) <= 10.0 and tops[0][1] == 118.0, tops
+    assert hc._tops(z1, t, None, 19.0, 1.0, 160.0) == []           # less than `big`
+    assert hc._tops(z1, t, None, 15.0, 1.0, 40.0) == []            # its faces past the span
+    terrace = np.maximum(z, np.where(t > 600.0, 118.0, 0.0))
+    assert hc._tops(terrace, t, None, 15.0, 1.0, 160.0) == []
+    bump = np.maximum(z, np.where(np.abs(t - 600.0) < 10.0, 100.6, 0.0))
+    assert hc._tops(bump, t, None, 0.2, 1.0, 160.0) == []
+    # beside a higher hill (100 ft on): each side's drop runs only to the first higher ground
+    # (the saddle between them), so both are tops
+    hill = np.maximum(z1, 125.0 - np.abs(t - 700.0) / 4.0)
+    tops = hc._tops(hill, t, None, 15.0, 1.0, 160.0)
+    assert [round(t0 / 50.0) * 50 for t0, _ in tops] == [600, 700], tops
+    assert hc._tops(hill, t, None, 15.0, 10.0, 160.0) == [(700.0, 125.0)], tops
+    # its far side left out of the DEM: inside the DEM it falls, beyond it it is no ground
+    zh = np.where(t > 607.0, np.nan, z1)
+    assert len(hc._tops(zh, t, np.ones(len(t), bool), 15.0, 1.0, 160.0)) == 1
+    assert hc._tops(zh, t, np.zeros(len(t), bool), 15.0, 1.0, 160.0) == []
+    runs = hc._flat_runs(np.r_[np.linspace(10.0, 9.0, 11), np.full(30, 8.5)],
+                         np.arange(41.0) * 10.0, 0.01, 100.0)
+    assert runs == [(110.0, 400.0, 8.5)], runs
+    assert hc._flat_runs(np.linspace(10.0, 9.7, 41), np.arange(41.0) * 10.0, 0.01, 100.0) == []
+    w = _wet_below(-120.0, half=300.0)
+    va = hc.valley_axis(w, (30.0, 0.0))
+    assert va["dir"][1] < -0.99 and abs(va["axis"][1]) > 0.99 and va["axis"][1] < 0.0, va
+    assert 2.5 < va["ratio"] < 3.5 and va["cells"] == len(w), va
+    assert hc.valley_axis(w[:9], (0.0, 0.0)) == {} and hc.valley_axis(None, (0.0, 0.0)) == {}
+
+
+@test
+def hecras_crest_offcrest_evidence_round4():
+    """evidence's round-4 rules, one at a time (each case fails that rule only; the base case,
+    a dam across a valley with a long narrow flood below it, passes): another embankment at
+    any level - one that reads far below the line, so lower than the old ridge level (the
+    line's ground less the tolerance and the datum allowance) - between the line and the pool
+    (a road 400 ft below a dam that reads 12 ft low; on a 300 ft line too, looked for past
+    500 ft), across the section through the dam point, beside the line, where its end runs
+    into it, and between it and the flood (a causeway across the pool); the pool behind the
+    line - with a dry pool and a flood with no clear long axis it is no dam, with the pool's
+    water or a pool left out of the DEM it is; the scans back to the pool on their own read of
+    the DEM - one that ends short of the pool is no evidence, and no data beyond the read is
+    not a pool left out of the DEM; a part of the embankment (less than half the crest length
+    on record, or its crest going on at its level past its ends for longer than itself); the
+    angle the WARNING prints (at the breach, to the run's flow at the valley's scale)."""
+    dam = [(450.0, 0.0), (0.0, 0.0), (-450.0, 0.0)]
+    ok, ev = _evx(dam, _valley_with(TOP, half=BIG, grid=True), (30.0, 0.0))
+    assert ok and ev["pool_frac"] == 0.0 and ev["upstream_unreached_frac"] == 0.0, ev
+    # the reference height: the lower of H and the line's own height above its toe (the
+    # median over its sections; the valley floor rises toward the abutments)
+    assert 20.0 < ev["embankment_test"]["reference_height"] < H, ev["embankment_test"]
+    # (a) a road 5 ft above the record 400 ft below a dam that reads 12 ft low: the dam lies
+    # between it and the pool, at no level the old rules look at (round 3 took the road)
+    g = _valley_with(TOP - 12.0, half=BIG, grid=True,
+                     roads=[(-800.0, -400.0, 800.0, -400.0, TOP + 5.0, 24.0)])
+    road = [(450.0, -400.0), (0.0, -400.0), (-450.0, -400.0)]
+    ok, ev = _evx(road, g, (30.0, -400.0), top_used=TOP + 5.0, wet=_wet_below(-520.0, 300.0))
+    assert not ok and ev["why"].startswith("another embankment lies between it and the pool"), ev
+    assert ev["other_ridge_level"] > TOP - 12.0, ev
+    # ... a 300 ft line on it too: the dam is looked for 1,500 ft back, past 1.5 line lengths
+    ok, ev = _evx([(150.0, -400.0), (-150.0, -400.0)], g, (30.0, -400.0), top_used=TOP + 5.0,
+                  wet=_wet_below(-520.0, 300.0))
+    assert not ok and ev["why"].startswith("another embankment lies between it and the pool"), ev
+    assert ev["upstream_scan"] == 1500.0, ev
+    # (b) a road 12 ft below the crest 250 ft downstream, inside the flood (the old section
+    # rule's level is 10.5 ft below the crest): across the section through the dam point
+    g = _valley_with(TOP, half=BIG, grid=True,
+                     roads=[(-800.0, -250.0, 800.0, -250.0, TOP - 12.0, 24.0)])
+    ok, ev = _evx(dam, g, (30.0, 0.0))
+    assert not ok and ev["why"].startswith("another embankment lies 2") and \
+        "from the dam point across the section through it" in ev["why"], ev
+    # (c) beside it, 150 ft upstream, 12 ft below the crest
+    g = _valley_with(TOP, half=BIG, grid=True,
+                     roads=[(-800.0, 150.0, 800.0, 150.0, TOP - 12.0, 24.0)])
+    ok, ev = _evx(dam, g, (300.0, 0.0))
+    assert not ok and ev["why"].startswith("another ridge runs beside it"), ev
+    # (d) a dam on a flat floor whose west end runs into a levee 18 ft high 150 ft beyond it
+    g = _flat_floor(dams=[(-300.0, 0.0, 300.0, 0.0, TOP, CW), (-450.0, -600.0, -450.0, 600.0,
+                                                               118.0, 10.0)])
+    ok, ev = _evx([(300.0, 0.0), (-300.0, 0.0)], g, (30.0, 0.0))
+    assert not ok and ev["why"].startswith("an end of it runs into another ridge 1"), ev
+    ok, ev = _evx([(300.0, 0.0), (-300.0, 0.0)], _flat_floor(dams=[(-300.0, 0.0, 300.0, 0.0,
+                                                                     TOP, CW)]), (30.0, 0.0))
+    assert ok, ev
+    # (e) a causeway 5 ft above the record across the pool 300 ft upstream of a dam that
+    # reads 12 ft low (H 20 on record: the old rule looks 13 ft below the causeway's level)
+    g = _valley_with(TOP - 12.0, half=BIG, grid=True,
+                     roads=[(-800.0, 300.0, 800.0, 300.0, TOP + 5.0, 24.0)])
+    ok, ev = _evx([(450.0, 300.0), (0.0, 300.0), (-450.0, 300.0)], g, (30.0, 300.0),
+                  top_used=TOP + 5.0, Hh=20.0)
+    assert not ok and "or another embankment, lies between it and the run's flooded" in \
+        ev["why"], ev
+    # (f) the pool behind it: a flood below the dam that is wider than long has no clear long
+    # axis, so with a dry pool the line is not taken ...
+    wide = _cells((np.abs(_GX) < 900.0) & (_GY < -120.0) & (_GY > -1100.0))
+    ok, ev = _evx(dam, _valley_with(TOP, half=BIG, grid=True), (30.0, 0.0), wet=wide)
+    assert not ok and ev["why"].startswith("the DEM shows the pool (water, or no data) on its "
+                                           "upstream side along only 0%"), ev
+    # ... with the pool's water (level, 8 ft below the crest) or a pool left out of the DEM it is
+    ok, ev = _evx(dam, _valley_with(TOP, half=BIG, grid=True, pool_z=TOP - 8.0), (30.0, 0.0),
+                  wet=wide)
+    assert ok and ev["pool_frac"] == 1.0, ev
+    ok, ev = _evx(dam, _valley_with(TOP, half=BIG, grid=True, nodata_above=TOP - 0.5),
+                  (30.0, 0.0), wet=wide, inside=lambda q: np.ones(len(q), bool))
+    assert ok and ev["pool_frac"] == 1.0, ev
+    # (g) the DEM ends 600 ft upstream (its read, far_box, goes on): what lies between the
+    # line and the pool is not known; with the pool's water before that it is the pool
+    z, x0, yt, c = _valley_with(TOP, half=BIG, grid=True)
+    yy = (yt - (np.arange(z.shape[0]) + 0.5) * c)[:, None]
+    box = (-BIG, -BIG, BIG, BIG)
+    inside = (lambda q: q[:, 1] <= 600.0)
+    ok, ev = _evx(dam, (np.where(yy > 600.0, np.nan, z), x0, yt, c), (30.0, 0.0),
+                  far_box=box, inside=inside)
+    assert not ok and ev["why"].startswith("the DEM ends less than 1,500 upstream of it"), ev
+    zp = _valley_with(TOP, half=BIG, grid=True, pool_z=TOP - 8.0)[0]
+    ok, ev = _evx(dam, (np.where(yy > 600.0, np.nan, zp), x0, yt, c), (30.0, 0.0),
+                  far_box=box, inside=inside)
+    assert ok, ev
+    # ... and where the read itself ends at 600 ft (the DEM going on), no data beyond it is
+    # not a pool left out of the DEM, whatever the footprint says (round 3 took the edge of
+    # crest_dam_line's window for a ridge with the pool behind it)
+    ok, ev = _evx(dam, (np.where(yy > 600.0, np.nan, z), x0, yt, c), (30.0, 0.0),
+                  far_box=(-BIG, -BIG, BIG, 600.0), inside=lambda q: np.ones(len(q), bool))
+    assert not ok and ev["why"].startswith("the DEM ends less than 1,500 upstream of it"), ev
+    ok, ev = _evx(dam, (np.where(yy > 600.0, np.nan, z), x0, yt, c), (30.0, 0.0),
+                  inside=lambda q: np.ones(len(q), bool))
+    assert ok and ev["upstream_unreached_frac"] == 0.0, ev
+    # (h) a part of the embankment: less than half the crest length on record; the middle
+    # third of the dam (its crest goes on at its level for 350 ft past each end)
+    ok, ev = _evx(dam, _valley_with(TOP, half=BIG, grid=True), (30.0, 0.0), rec_len=2000.0)
+    assert not ok and ev["why"].startswith("it is 900 long, less than 50% of the crest length "
+                                           "on record (2,000)"), ev
+    ok, ev = _evx(dam, _valley_with(TOP, half=BIG, grid=True), (30.0, 0.0), rec_len=1700.0)
+    assert ok, ev
+    ok, ev = _evx([(150.0, 0.0), (-150.0, 0.0)], _valley_with(TOP, half=BIG, grid=True),
+                  (30.0, 0.0))
+    assert not ok and ev["why"].startswith("its crest goes on at its level"), ev
+    assert min(ev["crest_past_ends"]) >= 290.0, ev
+    # (i) the WARNING's angle: at the breach of a bent line, to the direction from the dam
+    # point to the centroid of all the flood (not from the line's middle, not its chord's)
+    bent = [(450.0, -120.0), (0.0, 0.0), (-450.0, 0.0)]
+    sk = _cells((_GX > -400.0) & (_GX < 400.0) & (_GY < -200.0))
+    ok, ev = _evx(bent, _valley_with(TOP, half=BIG, grid=True), (30.0, 0.0), wet=sk,
+                  sc=700.0)
+    va = hc.valley_axis(sk, (30.0, 0.0))
+    nb = hc.left_normal(hc.tangent_at(np.asarray(bent), 700.0))
+    assert abs(ev["flow_angle_deg"] - hc.angle_deg(nb, va["dir"])) < 0.11, ev
+    vm = hc.valley_flow(bent, sk, (30.0, 0.0))["mid"]["dir"]
+    assert abs(ev["flow_angle_local_deg"] - hc.angle_deg(nb, vm)) < 0.11, ev
+    assert abs(ev["flow_angle_deg"] - ev["flow_angle_local_deg"]) > 1.0, ev
+
+
+@test
+def hecras_crest_offcrest_crest_dam_line_round4():
+    """crest_dam_line, round 4: (a) the dam point on a road 5 ft above the record 400 ft below
+    the dam: the line along the road is tried and evidence says the dam lies between it and
+    the pool (the old rule's error stands, with what was tried); (b) a road joining at 25
+    degrees and running into the pool, 900 ft of dam on record: the first trace (the crest at
+    the DEM's level) gets the crest width on record, so its walk stops at the junction and the
+    line is the dam's; (c) the dam point on the upstream face with the axis guessed 40 degrees
+    off: both the crest at the DEM's level and a start from the crest nearby are lines off the
+    old rule - the first is used when evidence takes it, the second when evidence does not take
+    the first, and evidence is given the level the crest was traced at; (d) a 500 ft dam in a
+    valley rising 4 % upstream (its scans run past crest_dam_line's window, on their own read
+    of the DEM): traced, and with the DEM ending 800 ft upstream (no pool before that) not;
+    (e) two lows 0.6 ft apart in depth (less than max(1 ft, 4 % of H)): not clear."""
+    from nd_breach_runner.tests import test_hecras_p0 as p0
+    if p0._skip():
+        return
+    d = tempfile.mkdtemp()
+    real_ev = hc.evidence
+    try:
+        # (a)
+        g = _valley_with(TOP, half=2400.0, grid=True,
+                         roads=[(-800.0, -400.0, 800.0, -400.0, TOP + 5.0, 24.0)])
+        try:
+            _cdl(d, g, (30.0, -400.0), (0.0, -1.0), wet=_wet_below(-520.0))
+        except hc.CrestTraceError as e:
+            assert str(e).startswith("no embankment crest within") and \
+                "the line it gives is not clearly the dam (another embankment lies between " \
+                "it and the pool" in str(e), e
+        else:
+            raise AssertionError("the road 400 ft below the dam was used")
+        # (b)
+        t = np.radians(25.0)
+        g = _valley_with(TOP + 5.0, half=2400.0, grid=True, roads=[
+            (-150.0, 0.0, -150.0 - 900.0 * np.cos(t), 900.0 * np.sin(t), TOP + 5.0, 20.0)])
+        line, sc, rec = _cdl(d, g, (250.0, 0.0), (0.0, -1.0), wet=_wet_below(-120.0),
+                             options={"dam_length_ft": 900.0})
+        assert rec["off_rule"] == "datum" and np.abs(line[:, 1]).max() < 5.0, rec["ends"]
+        assert -200.0 < line[:, 0].min() < -140.0, line[:, 0].min()
+        # (c)
+        a = np.radians(40.0)
+        g = _valley_with(TOP + 5.0, half=1800.0, grid=True)
+        calls = []
+
+        def spy(*a_, **k_):
+            r = real_ev(*a_, **k_)
+            calls.append((a_[5], r[0]))
+            return r
+        hc.evidence = spy
+        line, sc, rec = _cdl(d, g, (0.0, 40.0), (np.sin(a), -np.cos(a)), wet=_wet_below(-120.0))
+        assert rec["off_rule"] == "datum" and len(calls) == 1, (rec["off_rule"], calls)
+        assert abs(calls[0][0] - (TOP + 5.0)) < 0.5, calls
+
+        def first_not(*a_, **k_):
+            r = real_ev(*a_, **k_)
+            calls.append((a_[5], r[0]))
+            return (False, dict(r[1], why="test: not this one")) if len(calls) == 1 else r
+        calls[:] = []
+        hc.evidence = first_not
+        line, sc, rec = _cdl(d, g, (0.0, 40.0), (np.sin(a), -np.cos(a)), wet=_wet_below(-120.0))
+        assert rec["off_rule"] == "snap" and len(calls) == 2, (rec["off_rule"], calls)
+        assert np.abs(line[:, 1]).max() < 15.0, line
+        hc.evidence = real_ev
+        # (d)
+        c = 10.0
+        xs = np.arange(-3000.0, 3000.0, c) + 0.5 * c
+        X, Y = np.meshgrid(xs, xs[::-1])
+        z = np.maximum(100.0 + 40.0 * (np.abs(X) / 600.0) ** 1.5 + np.where(Y > 0, 0.04 * Y,
+                                                                             0.005 * Y),
+                       TOP + 5.0 - np.maximum(_seg_dist(X, Y, [(-700.0, 0.0), (700.0, 0.0)]) -
+                                              0.5 * CW, 0.0) / 3.0)
+        line, sc, rec = _cdl(d, (z, -3000.0, 3000.0, c), (30.0, 0.0), (0.0, -1.0),
+                             wet=_wet_below(-120.0), options={"dam_length_ft": 500.0})
+        assert rec["off_rule"] == "datum" and abs(hc.cumlen(line)[-1] - 500.0) < 5.0, rec
+        assert rec["evidence"]["upstream_ridge_frac"] == 0.0, rec["evidence"]
+        k = xs[::-1] < 800.0
+        try:
+            _cdl(d, (z[k], -3000.0, 800.0, c), (30.0, 0.0), (0.0, -1.0),
+                 wet=_wet_below(-120.0), options={"dam_length_ft": 500.0})
+        except hc.CrestTraceError as e:
+            assert "(the DEM ends less than 1,500 upstream of it, short of the pool" in str(e), e
+        else:
+            raise AssertionError("traced with the DEM ending 800 ft upstream")
+        # (e) channels 3.0 and 2.4 ft deep 500 ft apart under a crest at the DEM's level
+        z, x0, ytop, c = _valley_with(TOP + 5.0, half=1800.0, grid=True)
+        X = (x0 + (np.arange(z.shape[1]) + 0.5) * c)[None, :]
+        Y = (ytop - (np.arange(z.shape[0]) + 0.5) * c)[:, None]
+        two = np.maximum.reduce([np.where(np.abs(X - x_) < 20.0, dep * (1.0 - np.abs(X - x_) /
+                                                                         20.0), 0.0)
+                                 for x_, dep in ((-250.0, 3.0), (250.0, 2.4))])
+        flat = 100.0 + 0.005 * Y + 40.0 * (np.maximum(np.abs(X) - 600.0, 0.0) / 300.0) ** 1.5
+        dam_z = TOP + 5.0 - np.maximum(np.abs(Y) - 0.5 * CW, 0.0) / 3.0
+        z = np.maximum(flat - np.where(Y < -20.0, two, 0.0), np.where(np.abs(X) < 700.0, dam_z,
+                                                                       -1e9))
+        try:
+            _cdl(d, (z, x0, ytop, c), (30.0, 0.0), (0.0, -1.0), wet=_wet_below(-120.0))
+        except hc.CrestTraceError as e:
+            assert "was tried: its deepest section is not clear" in str(e) and \
+                "within 1.2 ft of it" in str(e), e
+        else:
+            raise AssertionError("a crest with two lows 0.6 ft apart in depth was used")
+    finally:
+        hc.evidence = real_ev
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test
+def hecras_crest_offcrest_export_tool_passes_the_dam_line_and_its_crs():
+    """The export tool's DAM_LINE (round 4): the first line feature's vertices go to the model
+    build as dam_line_xy with the layer's own CRS as dam_line_crs (build_model moves the line
+    into the model's CRS); a layer with no line of two vertices passes neither."""
+    from nd_breach_runner.tests.test_hecras import _algs
+    h, fq = _algs()
+    from nd_breach_runner.core import hecras as hcs
+    from nd_breach_runner.core import hecras_model as hm
+    from nd_breach_runner.core import hecras_package as hp
+
+    class P:
+        def __init__(self, x, y):
+            self._x, self._y = x, y
+
+        def x(self):
+            return self._x
+
+        def y(self):
+            return self._y
+
+    class G:
+        def __init__(self, pts):
+            self.pts = pts
+
+        def isEmpty(self):
+            return not self.pts
+
+        def isMultipart(self):
+            return False
+
+        def asPolyline(self):
+            return [P(*q) for q in self.pts]
+
+    class F:
+        def __init__(self, pts):
+            self.g = G(pts)
+
+        def geometry(self):
+            return self.g
+
+    class Crs:
+        def toWkt(self):
+            return "WKT-OF-THE-LAYER"
+
+    class Src:
+        def __init__(self, lines):
+            self.lines = lines
+
+        def getFeatures(self):
+            return iter([F(q) for q in self.lines])
+
+        def sourceCrs(self):
+            return Crs()
+
+    got = []
+    real_run, real_pkg = hcs.export_run, hp.build_package
+
+    def run(folder, out, dt, mf):
+        return {"hydrograph_txt": "h.txt", "hydrograph_csv": "h.csv", "table_csv": "t.csv",
+                "table_md": "t.md", "info": {"n": 3, "peak_cfs": 1.0, "peak_time_exported_hr": 1.0,
+                                             "peak_time_hr": 1.0, "volume_exported_acft": 1.0,
+                                             "volume_change_pct": 0.0, "notes": []}}
+
+    def pkg(folder, out_root=None, dt_min=None, crs=None, options=None, log=None):
+        got.append(dict(options or {}))
+        raise hm.HecRasModelError("test: not built")
+    try:
+        hcs.export_run, hp.build_package = run, pkg
+        a = h.HecRasExportAlgorithm()
+        a.initAlgorithm()
+        for lines, want in (([[(10.0, 20.0), (30.0, 40.0), (50.0, 41.0)]], True),
+                            ([[(10.0, 20.0)]], False)):
+            got[:] = []
+            a.processAlgorithm({"DAM_FOLDER": "/no/such", "DAM_LINE": Src(lines)},
+                               fq.QgsProcessingContext(), fq.QgsProcessingFeedback())
+            assert len(got) == 1, got
+            if want:
+                assert got[0]["dam_line_xy"] == [(10.0, 20.0), (30.0, 40.0), (50.0, 41.0)], got
+                assert got[0]["dam_line_crs"] == "WKT-OF-THE-LAYER", got
+            else:
+                assert "dam_line_xy" not in got[0] and "dam_line_crs" not in got[0], got
+    finally:
+        hcs.export_run, hp.build_package = real_run, real_pkg
+
+
+@test
+def hecras_crest_offcrest_round4_small_rules():
+    """Round 4, the survivors of the round-3 mutation audit: (a) the WARNING's angle clause
+    (off_rule_angle_text) - the valley's scale, and the flooded area near the line when the two
+    disagree by more than 15 degrees; (b) the datum rule from a dam point on no data (a pool
+    left out of the DEM: its ground is unknown, not at the record's level); (c) the flow path
+    looks no more than 60 degrees either side of its last step; (d) evidence takes no line
+    whose flooded cells near it are too few to tell the valley's flow (here all of them are
+    1,400-1,750 ft below a 900 ft line: inside flow_check's reach of two line lengths, outside
+    valley_flow's 1,350 ft)."""
+    from nd_breach_runner.core import hecras_model as hm
+    rec = {"flow_angle_deg": 12.4, "flow_angle_local_deg": 20.0,
+           "evidence": {"valley": {"radius": 1350.0}}}
+    t = hm.off_rule_angle_text(rec, "ft")
+    assert t == ("runs 12 degrees off square to the run's flow at the valley's scale (the "
+                 "direction from the dam point to the centroid of the run's flooded area)"), t
+    t = hm.off_rule_angle_text(dict(rec, flow_angle_local_deg=31.0), "ft")
+    assert t.endswith("; to the flooded area within 1,350 ft of its middle it runs 31 degrees "
+                      "off square - the two disagree, so check which way the flow crosses "
+                      "it"), t
+    # (b) the crest 5 ft above the record, the pool left out of the DEM: from a dam point on
+    # the pool the crest is followed at the DEM's level
+    z, x0, yt, c = _valley_with(TOP + 5.0, grid=True, nodata_above=TOP + 4.0)
+    f = _grid_sampler(z, x0, yt, c)
+    assert not np.isfinite(f(np.array([[30.0, 60.0]])))[0]
+    tr = hc.trace(f, (30.0, 60.0), (-1.0, 0.0), TOP, H, 10.0, TOE, 1500.0, 300.0, crest_w=CW)
+    assert tr["how"] == "datum" and abs(tr["top_offset"] - 5.0) < 0.5, tr
+    # (c) a plane falling 75 degrees off the heading: the first step turns 60 degrees, no more
+    a = np.radians(75.0)
+    p = hc.flow_path(lambda q: -(q[:, 0] * np.sin(a) + q[:, 1] * np.cos(a)), (0.0, 0.0),
+                     (0.0, 1.0), 10.0, 10.0)
+    assert abs(hc.angle_deg(p[1] - p[0], (0.0, 1.0)) - 60.0) < 0.5, p
+    # (d)
+    dam = [(450.0, 0.0), (0.0, 0.0), (-450.0, 0.0)]
+    far_cells = _cells((np.abs(_GX) < 400.0) & (_GY < -1400.0))
+    assert hc.flow_check(np.asarray(dam), far_cells, 50.0)[0]
+    assert hc.valley_flow(dam, far_cells, (30.0, 0.0)) == {}
+    ok, ev = _ev(dam, _valley_with(TOP, half=BIG), (30.0, 0.0), wet=far_cells)
+    assert not ok and ev["why"].startswith("too few of the run's flooded cells near it"), ev
