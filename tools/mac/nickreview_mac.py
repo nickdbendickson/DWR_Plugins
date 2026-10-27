@@ -1302,8 +1302,9 @@ class Runner(object):
         st = self.states()
         run, first = self.needed(want, st)
         for r in first:
-            self.log("{}: not finished ({}); it runs first, since {} read(s) its results".format(
-                r, st[r], ", ".join(s for s in run if r in READS[s] and st.get(s) is not None)))
+            readers = [s for s in run if r in READS[s] and st.get(s) is not None]
+            self.log("{}: not finished ({}); it runs first, since {} {} its results".format(
+                r, st[r], ", ".join(readers), "reads" if len(readers) == 1 else "read"))
         if first:
             self.record["ran_first"] = first
         if not self.redo_dry and not ctx.a.list_data and all(st[s] is None for s in run):
@@ -1836,10 +1837,11 @@ def main():
                 new, part = ctx.session.pending()
                 continued = [d for d in key["dams"] if ctx.session.dam(d).get("finished")]
                 out("--redo: the same command as the unfinished --redo session {} (started {}), "
-                    "so this run CONTINUES it instead of starting a new redo: the dams it already "
+                    "so this run {} it instead of starting a new redo: the dams it already "
                     "redid are not redone again ({}); not redone yet: {}; begun: {}. To start a "
                     "new --redo of every dam instead, delete its file first: rm {}".format(
                         ctx.session.sid, ctx.session.rec.get("started"),
+                        "would continue (dry run)" if a.dry_run else "CONTINUES",
                         " ".join(continued) or "-", " ".join(new) or "-", " ".join(part) or "-",
                         shlex.quote(ctx.session.path)))
             elif not a.dry_run:
@@ -1943,9 +1945,11 @@ def main():
     sess = ctx.session
     if sess is not None:
         if continued is not None:
-            out("--redo: this run CONTINUED the --redo session {} started {} (an earlier run of "
-                "the same command); the dams it had already redone were not redone again: "
-                "{}".format(sess.sid, sess.rec.get("started"), " ".join(continued) or "none"))
+            out("--redo: this run {} the --redo session {} started {} (an earlier run of the "
+                "same command); the dams it had already redone {} not redone again: {}".format(
+                    "would continue (dry run)" if a.dry_run else "CONTINUED", sess.sid,
+                    sess.rec.get("started"), "are" if a.dry_run else "were",
+                    " ".join(continued) or "none"))
         if a.dry_run:
             pass
         elif sess.rec.get("finished"):
