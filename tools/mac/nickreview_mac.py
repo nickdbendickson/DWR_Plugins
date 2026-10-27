@@ -816,7 +816,8 @@ class RedoSession(object):
     """One --redo command (<out>/redo_sessions/<id>.json): its dams and stages, and for each
     dam when this command began its redo (its stages invalidated) and finished it. The same
     --redo command run again continues the session: a dam it began is not invalidated again
-    (its stages finished since then are skipped) and the dams it has not reached are redone.
+    (its stages finished since then are skipped), nor one that other runs redid since it
+    started, and the other dams it has not reached are redone.
     A dam is finished when every stage the session redoes for it is finished (stage_states:
     in its mode and newer than what it reads) and was written after the session began that
     dam (any run may write it, e.g. a plain resume); a precheck (a report) that ran and
@@ -890,6 +891,9 @@ class RedoSession(object):
 
     def began(self, dam):
         return (self.rec.get("dams") or {}).get(dam, {}).get("began")
+
+    def finished(self, dam):
+        return (self.rec.get("dams") or {}).get(dam, {}).get("finished")
 
     def begin(self, dam, stages):
         d = self.dam(dam)
@@ -1154,9 +1158,10 @@ class Runner(object):
         later = ", ".join(stages_to_run(["prepare"], False, True)[1:])
         cmd = run_command(self.ctx.a, self.ctx, stages=["prepare"], dams=[self.dam],
                           no_kits=self.ctx.a.no_kits and self.dam in KITS, offline=False)
-        return "'{}' fetches 3DHP again{}; every later stage of this dam ({}) then runs " \
-            "again".format(cmd, " (with --offline it uses NHD again)" if self.ctx.a.offline
-                           else "", later)
+        why = "every later stage of this dam then runs again too: " + later
+        if self.ctx.a.offline:
+            why = "without --offline: with it, NHD is used again; " + why
+        return "to fetch 3DHP again ({}), run: {}".format(why, cmd)
 
     def report_streams(self):
         """Every run says which streams the structures were built on (and the manifest too)."""
@@ -1206,7 +1211,7 @@ class Runner(object):
                 _remove(self.streams_file("nhd"))       # an older fallback is not used again
             except Exception as e:  # USGS service down: NHD from the suite pack
                 self.log("  3DHP failed ({}); using NHD flowlines from the suite pack "
-                         "(differs from the box runs; later, {})".format(e, self.refetch_hint()))
+                         "(differs from the box runs); {}".format(e, self.refetch_hint()))
                 info.update(source="nhd", why="3DHP failed: {}".format(e)[:300])
         if info["source"] == "nhd":
             _remove(self.streams_file("3dhp"))
@@ -1276,13 +1281,21 @@ class Runner(object):
             self.log("mode change: finished stages ran in {} mode; --redo runs every stage "
                      "again in {} mode ({})".format(was, mode, how))
         sess = ctx.session
-        if ctx.a.redo and sess is not None and sess.began(self.dam) and not other:
+        if ctx.a.redo and sess is not None and not other and \
+                (sess.began(self.dam) or sess.finished(self.dam)):
             # this --redo command ran before and stopped: the dam's redo began then (its stages
-            # were invalidated once); the stages finished since are skipped, the rest run
-            self.record["redo_session"] = {"id": sess.sid, "began": sess.began(self.dam)}
+            # were invalidated once), or other runs since the session started redid its stages;
+            # the stages finished since are skipped, the rest run
+            self.record["redo_session"] = {"id": sess.sid, "began": sess.began(self.dam),
+                                           "finished": sess.finished(self.dam)}
             want = sess.stages_of(self.dam) or want
-            self.log("--redo session {}: this dam's redo began {}; its stages finished since then "
-                     "are skipped".format(sess.sid, sess.began(self.dam)))
+            if sess.began(self.dam):
+                self.log("--redo session {}: this dam's redo began {}; its stages finished since "
+                         "then are skipped".format(sess.sid, sess.began(self.dam)))
+            else:
+                self.log("--redo session {}: this dam's stages were redone by other runs since "
+                         "the session started ({}); they are not redone again".format(
+                             sess.sid, sess.rec.get("started")))
         elif ctx.a.redo:
             # --redo: the stages asked for that apply to this dam and every later stage that
             # reads their results run again in this command; the others keep their results
