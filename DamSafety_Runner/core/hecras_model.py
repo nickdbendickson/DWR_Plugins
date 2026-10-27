@@ -1527,9 +1527,12 @@ def _flood_fill(mask, seed_rc):
         reach = grown
 
 
-def _z_factor(report, dem_path):
-    """Metres per DEM elevation unit: the run's record, else the unit the DEM records
-    (gdal_io.z_to_m_factor 'auto' = resolve_dem_z; 3.10.89: no guess from the CRS)."""
+def _z_factor(report, dem_path, warn=None):
+    """Metres per DEM elevation unit: the run's record (dem_z_to_m since 3.10.16, else its units
+    note), else - a run report older than that - the unit the DEM records, else its CRS's
+    linear unit as before 3.10.88 (gdal_io.z_factor_or_guess), with a warning appended to the
+    list `warn`. 3.10.89 review round 3: that last case stopped the export, naming a 'DEM
+    elevation units' this tool does not have."""
     note = str(report.get("dem_elevation_units") or "").lower()
     if report.get("dem_z_to_m"):
         return float(report["dem_z_to_m"]), report.get("dem_elevation_units") or ""
@@ -1540,7 +1543,12 @@ def _z_factor(report, dem_path):
     if note.startswith("metres"):
         return 1.0, note
     from . import gdal_io
-    return gdal_io.z_to_m_factor(dem_path)
+    f, how, why = gdal_io.z_factor_or_guess(
+        dem_path, gdal_io.Z_AUTO, "the DEM's unit tag (gdal_edit -units) and export again")
+    if why and warn is not None:
+        warn.append("The run report records no DEM elevation unit (a run before Runner 3.10.16): "
+                    "DEM " + why)
+    return f, how
 
 
 def _work_crs(report, model_dir):
@@ -2728,7 +2736,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
 
     # --- terrain in the model CRS --------------------------------------------------
     progress(35, "terrain")
-    zf, znote = _z_factor(report, dem_path)
+    zf, znote = _z_factor(report, dem_path, warn=notes)
     dem_srs = srs_from(dem_wkt) if dem_wkt else srs
     dem_cell_u = abs(dem_gt[1]) * (dem_srs.GetLinearUnits() if dem_srs.IsProjected() else
                                    111320.0) / units.L

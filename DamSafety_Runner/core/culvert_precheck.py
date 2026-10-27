@@ -194,7 +194,8 @@ class FineRaster:
         # stops) - before, z_to_m_factor('auto') guessed from the CRS units
         self.z_choice, how = gdal_io.resolve_dem_z(path, z_choice)
         self.z_to_m, self.z_note = gdal_io.z_to_m_factor(path, self.z_choice)
-        if how != "chosen":
+        how, self.z_warning = gdal_io.z_how_parts(how)   # review round 3: chosen against the tag
+        if how:
             self.z_note = gdal_io.detected_z_note(self.z_choice, how)
 
     def _xy(self, xy):
@@ -386,7 +387,8 @@ def summarize(rows, dam, spath, lname, fine, cov, n_feat, n_culv, n_skip, reconc
         "dam": dam, "structures": os.path.abspath(spath), "layer": lname,
         "structures_sha256": sha256(spath),
         "fine_dem": os.path.abspath(fine.path), "fine_cell_m": round(fine.cell * fine.unit, 3),
-        "fine_z": fine.z_note, "coverage": [c.path for c in cov],
+        "fine_z": fine.z_note, "fine_z_warning": fine.z_warning or None,
+        "coverage": [c.path for c in cov],
         "features": n_feat, "culverts": n_culv, "culverts_skipped_by_runner": n_skip,
         "ends": len(rows),
         "ends_given": sum(r["given_invert_m"] is not None for r in rows),
@@ -418,6 +420,8 @@ def markdown(rows, s):
          "- Structures: `{}` (layer `{}`, sha256 `{}`)".format(s["structures"], s["layer"],
                                                              s["structures_sha256"]),
          "- Fine ground: `{}` (cell {} m, z {})".format(s["fine_dem"], s["fine_cell_m"], s["fine_z"])]
+    if s.get("fine_z_warning"):
+        L.append("- WARNING, elevation unit: " + s["fine_z_warning"])
     if s["coverage"]:
         L.append("- Source labels from: " + ", ".join("`{}`".format(c) for c in s["coverage"]))
     L += ["- Rule (Runner 3.10.71): lowest fine-grid ground within max(apron, {:.0f} m) of each "
@@ -484,7 +488,7 @@ def write(rows, summ, out_dir, stem):
 
 
 # ------------------------------------------------------------------------------ dam folder
-ZUNITS = (gdal_io.Z_AUTO, gdal_io.Z_FEET, gdal_io.Z_US_FEET, gdal_io.Z_METERS)  # DEM_Z enum
+ZUNITS = gdal_io.Z_CHOICES      # the DEM_Z enum (3.10.89: with the '... tag is wrong' choices)
 
 
 def find_dam_inputs(folder):

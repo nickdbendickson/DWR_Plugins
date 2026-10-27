@@ -28,10 +28,12 @@ DEM_Imagine metre tile under such a folder for a feet grid, scaled it x 0.3048 a
 data_problem() names these two - files whose values no single unit reads right - so an explicit
 choice stops on them too.
 A warped VRT whose GDAL vertical shift converts the elevations (APPLY_VERTICAL_SHIFT with a factor
-other than 1, gdalwarp from a compound CRS without -novshift) is refused: GDAL keeps the source's
-band unit ('US survey foot') on what are now metres. A GeoTIFF written that way carries no trace
-of it and reads as its band unit says - re-tag it (gdal_edit -units m) or warp with -novshift;
-the Runner's ND ground check stops the result below about 656 m.
+other than 1, gdalwarp from a compound CRS without -novshift) is refused, and so is a band with a
+scale or offset (a run reads the raw values): the Runner's explicit unit choices refuse them too
+(gdal_io.file_problem). GDAL keeps the source's band unit ('US survey foot') on what are now
+metres. A GeoTIFF written that way carries no trace of it and reads as its band unit says -
+re-tag it (gdal_edit -units m) or warp with -novshift; the Runner's ND ground check stops the
+result below about 656 m, and Meters then runs it with a warning (the values fit only metres).
 Never a guess from the horizontal CRS or the values.
 
 Same file in DamSafety_Runner/core and DamSafety_Screening/core (tools/ci_checks.py keeps them
@@ -109,8 +111,10 @@ def scale_offset_problem(band):
     if (scale is not None and abs(scale - 1.0) > 1e-12) or \
             (offset is not None and abs(offset) > 1e-12):
         return ("band 1 has a scale {} / offset {}: its unit applies to the scaled values, but a "
-                "run reads the raw ones. Write an unscaled copy (gdal_translate -unscale) and use "
-                "that").format(scale, offset)
+                "run reads the raw ones. Write an unscaled copy and use that: gdal_translate "
+                "-unscale, or in QGIS Raster > Conversion > Translate (Convert Format) with "
+                "-unscale under 'Additional command-line parameters' (the copy has no unit tag: "
+                "choose its unit, or tag it with gdal_edit -units)").format(scale, offset)
     return ""
 
 
@@ -316,8 +320,9 @@ def vshift_problem(ds):
     if abs(f - 1.0) < 1e-9:
         return ""
     return ("it is a warped VRT whose GDAL vertical shift multiplies the elevations by {:.10g} "
-            "while its band unit stays the source's; warp again with -novshift (or tag the "
-            "result with gdal_edit -units)").format(f)
+            "while its band unit stays the source's; warp the source again with -novshift (in "
+            "QGIS: Raster > Projections > Warp (Reproject), -novshift under 'Additional "
+            "command-line parameters'), or tag the result with gdal_edit -units").format(f)
 
 
 def data_problem(ds, path="", _depth=0):

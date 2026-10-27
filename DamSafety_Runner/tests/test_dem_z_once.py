@@ -223,11 +223,14 @@ def an_explicit_unit_the_dem_records_otherwise_stops():
         for z in (1, 2):                                 # Feet, US survey feet
             _stops(lambda: _gis(algs, west, z), "is Feet" if z == 1 else "is US survey feet",
                    "records metres (raster unit 'm')", "set 'DEM elevation units' to Meters",
-                   "gdal_edit -units")
+                   "cannot tell which is right (213 m as ",
+                   "choose '{} (the raster's unit tag is wrong)'".format(
+                       "Feet" if z == 1 else "US survey feet"), "gdal_edit -units")
         assert _gis(algs, west, 3)[0].z_to_m == 1.0
         ft = _dem(d, "ft.tif", "ft", 1150.0)
-        _stops(lambda: _gis(algs, ft, 3), "is Meters", "records feet", "to Feet",
-               "gdal_edit -units m")
+        msg = _stops(lambda: _gis(algs, ft, 3), "is Meters", "records feet",
+                     "only as feet (351 m as feet, 1150 m as metres)", "to Feet")
+        assert "tag is wrong" not in msg and "gdal_edit" not in msg, msg   # the record is right
         assert abs(_gis(algs, ft, 2)[0].z_to_m - US_FT) < 1e-12        # US feet on 'ft': 2 ppm
         plain = _dem(d, "plain.tif", "", 700.0)          # records nothing: the choice is used
         assert abs(_gis(algs, plain, 1)[0].z_to_m - 0.3048) < 1e-12
@@ -236,9 +239,14 @@ def an_explicit_unit_the_dem_records_otherwise_stops():
         ds.GetRasterBand(1).SetUnitType("ft")
         ds = None
         assert abs(_gis(algs, west, 1)[0].z_to_m - 0.3048) < 1e-12
-        # a compound CRS's vertical unit is a record too; a band unit overrides it
+        # a compound CRS's vertical unit is a record too (2300 there is 701 m as feet and not
+        # North Dakota as metres: Feet runs, saying the record is wrong); a band unit overrides it
         cm = _crs_dem(d, "c5703.tif", "EPSG:26914+5703", 2300.0)
-        _stops(lambda: _gis(algs, cm, 1), "c5703.tif records metres")
+        _stops(lambda: _gis(algs, cm, 3), "DEM median 2300.0 with units 'Meters'", "to Feet")
+        src = _gis(algs, cm, 1)[0]
+        assert abs(src.z_to_m - 0.3048) < 1e-12 and src.z_note == "feet (chosen)", src.z_note
+        assert "c5703.tif records metres" in src.z_check and "only as feet" in src.z_check, \
+            src.z_check
         ds = gdal.Open(cm, gdal.GA_Update)
         ds.GetRasterBand(1).SetUnitType("ft")
         ds = None
@@ -362,11 +370,15 @@ def every_tool_reads_the_unit_the_run_reads():
         # an explicit unit the record contradicts stops the pre-check as it stops the run
         tagged = _dem(d, "m.tif", "m", 700.0)
         _stops(lambda: cp.FineRaster(tagged, s.ExportToWkt(), G.Z_FEET), "records metres")
-        # HEC-RAS terrain: its tag decides; an untagged one is refused
+        # HEC-RAS terrain: its tag decides; an untagged one (review round 3: refused, naming a
+        # 'DEM elevation units' the HEC-RAS tools do not have) is read in its CRS's linear unit
+        # as before 3.10.88, with a warning naming the unit used and the tools' own setting
         grid = Grid(np.zeros((10, 10)), 600000.0, 5200000.0, 10.0, crs_wkt=s.ExportToWkt())
         t_ft = _dem(d, "t_ft.tif", "ft", 1300.0)
         assert abs(_med(he.terrain_on_grid(t_ft, grid)) - 1300.0) < 0.01
-        _stops(lambda: he.terrain_on_grid(plain, grid), "no elevation unit")
+        notes = []
+        assert abs(_med(he.terrain_on_grid(plain, grid, notes=notes)) - 320.0 / 0.3048) < 0.01
+        assert "metres (assumed" in notes[0] and "'Terrain elevation units'" in notes[1], notes
         # the CLI: an ESRI ASCII grid records no unit, so auto stops (it guessed metres)
         asc = os.path.join(d, "dem.asc")
         with open(asc, "w") as fh:

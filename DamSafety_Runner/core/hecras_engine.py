@@ -1723,13 +1723,71 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
 # ============================================================================
 # results -> the Runner grid
 # ============================================================================
-def terrain_on_grid(terrain, like_grid, z=None):
+TERRAIN_Z_SETTING = "'Terrain elevation units' (CLI: hecras-reexport --terrain-z)"
+
+
+def own_terrain_unit(terrain, stage):
+    """The elevation unit the Runner wrote its own HEC-RAS terrain in, or "": the run's
+    _hecras/hecras_stage.json names the terrain (terrain_tif) and the model CRS (model_wkt), and
+    hecras_model.write_terrain writes the model's project unit - feet for a feet model CRS,
+    metres for a metre one (hecras_model.crs_units). Not the run report's dem_z_to_m: that is
+    the DEM's unit, which the export converts to the project unit."""
+    from . import gdal_io
+    stage = stage or {}
+    t, wkt = stage.get("terrain_tif"), stage.get("model_wkt")
+    if not (terrain and t and wkt):
+        return ""
+    path = gdal_io._file(terrain)
+    try:
+        same = os.path.samefile(path, t)
+    except OSError:
+        same = os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(t))
+    lin = gdal_io.linear_unit_m(wkt) if same else None
+    if lin is None:
+        return ""
+    if abs(lin - 1.0) < 1e-9:
+        return gdal_io.Z_METERS
+    if abs(lin - 0.3048) < 1e-6 or abs(lin - 1200.0 / 3937.0) < 1e-6:
+        return gdal_io.Z_FEET
+    return ""
+
+
+def terrain_z_factor(terrain, z=None, stage=None):
+    """(metres per terrain elevation unit, how, warning) of a HEC-RAS terrain. z: an explicit
+    unit (gdal_io.Z_CHOICES) as given; else the unit the raster records; else, for the
+    Runner's own terrain (own_terrain_unit, from the run's hecras_stage.json `stage`), the unit
+    it was written in; else the CRS's linear unit as before Runner 3.10.88, with a warning
+    naming the unit used (gdal_io.z_factor_or_guess). 3.10.89 review round 3: an untagged
+    terrain (a RAS Mapper terrain in State Plane feet or UTM metres) stopped the import and the
+    re-export, naming a 'DEM elevation units' those tools do not have."""
+    from . import gdal_io
+    z = z or gdal_io.Z_AUTO
+    if gdal_io.base_choice(z) == gdal_io.Z_AUTO:
+        try:
+            got = gdal_io.recorded_z_unit(terrain)[0]
+        except Exception:                                # noqa - unreadable: the read says so
+            got = None
+        own = own_terrain_unit(terrain, stage) if got == "" else ""
+        if own:
+            return (gdal_io._TO_M[own], "{} (the Runner's own HEC-RAS terrain, written in the "
+                    "model's project units)".format(gdal_io.ZU.NAMES[own]), "")
+    f, how, warn = gdal_io.z_factor_or_guess(terrain, z, TERRAIN_Z_SETTING)
+    return f, how, ("HEC-RAS terrain " + warn) if warn else ""
+
+
+def terrain_on_grid(terrain, like_grid, z=None, stage=None, notes=None):
     """3.10.79: the terrain HEC-RAS used (its GeoTIFF, any CRS, ft or m elevations) averaged
     onto the grid of `like_grid` (its CRS), in ft; NaN where it has no data. z: the
-    elevation unit (gdal_io.Z_CHOICES), default from the raster's unit."""
+    elevation unit (gdal_io.Z_CHOICES), default from the raster (terrain_z_factor: its record,
+    the Runner's record of its own terrain - stage, the run's hecras_stage.json - else its CRS's
+    unit with a warning). `notes` (a list) receives how the unit was read and any warning."""
     from . import gdal_io
     a = gdal_io.read_like(terrain, like_grid, alg="average")
-    f, _how = gdal_io.z_to_m_factor(terrain, z or gdal_io.Z_AUTO)
+    f, how, warn = terrain_z_factor(terrain, z, stage)
+    if notes is not None:
+        notes.append("HEC-RAS terrain elevations: {}.".format(how))
+        if warn:
+            notes.append(warn)
     return a * (f / 0.3048)
 
 
@@ -1966,7 +2024,8 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
     like (the grid: 'Depth (Max).tif', else 'LISFLOOD-FP Depth (Max).tif'), model_wkt
     (stage, the project's hecras_engine.json, else the terrain's CRS), t0_hr (stage, else
     0) and arrival_depth_ft (stage, else 0.1). terrain_z: the terrain's elevation unit
-    (gdal_io.Z_CHOICES; default from the raster).
+    (gdal_io.Z_CHOICES; default terrain_z_factor: the raster's record, the stage's record of the
+    Runner's own terrain, else the CRS's linear unit with a warning in 'warnings').
 
     Writes workflow.FINAL_NAMES and reexport.json (inputs, depth basis, areas old vs new)
     into out_dir, by default a NEW folder run_dir/_hecras/reexport_<UTC stamp>; it never
@@ -2048,9 +2107,12 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
     grid = gdal_io.read_grid(like)
     tr = transformer(model_wkt, grid.crs_wkt) if model_wkt and grid.crs_wkt else None
     t_ft = None
+    tnotes = []
     if terrain:
         say("Terrain {} onto the grid of {}".format(terrain, like))
-        t_ft = terrain_on_grid(terrain, grid, z=terrain_z)
+        t_ft = terrain_on_grid(terrain, grid, z=terrain_z, stage=stage, notes=tnotes)
+        for i, n in enumerate(tnotes):
+            say(("WARNING: " if i else "") + n)
     info = {}
     say("Reading {} (depth basis {})".format(hdf, basis))
     hst = os.stat(hdf)          # 3.10.84: recorded, so a later model run shows it is stale
@@ -2083,7 +2145,9 @@ def reexport_hecras_results(run_dir, out_dir=None, hdf=None, terrain=None, like=
            "areas_new": by_basis[info.get("depth_basis")], "areas_by_basis": by_basis,
            "areas_old_cell_min": by_basis.get(hecras.DEPTH_BASIS_CELL_MIN),
            "areas_terrain": by_basis.get(hecras.DEPTH_BASIS_TERRAIN),
-           "outputs": paths, "notes": info.get("notes", [])}
+           "outputs": paths, "notes": tnotes[:1] + list(info.get("notes", [])),
+           # review round 3: a terrain whose unit had to be assumed (terrain_z_factor)
+           "terrain_z": tnotes[0] if tnotes else None, "warnings": tnotes[1:]}
     with open(os.path.join(out_dir, REEXPORT_JSON), "w", encoding="utf-8") as f:
         json.dump(rep, f, indent=1)
     say("Wrote {}".format(out_dir))

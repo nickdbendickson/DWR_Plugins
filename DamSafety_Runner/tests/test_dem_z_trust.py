@@ -26,12 +26,18 @@ except ImportError:                                      # pragma: no cover - pl
     gdal = None
 
 
-def _stops(G, path, *words):
+def _stops(G, path, *words, **kw):
+    """Detect stops, naming the setting; on a file no unit choice reads right (file_problem=True,
+    review round 3) without sending the user to Meters or Feet."""
     try:
         got = G.resolve_dem_z(path, "auto")
     except ValueError as e:
         msg = str(e)
-        assert "'DEM elevation units'" in msg and "Meters or Feet" in msg, msg
+        assert "'DEM elevation units'" in msg, msg
+        if kw.get("file_problem"):
+            assert "No unit choice reads this file right" in msg and "Meters or Feet" not in msg, msg
+        else:
+            assert "Meters or Feet" in msg, msg
         for w in words:
             assert w in msg, (w, msg)
         return msg
@@ -92,9 +98,29 @@ def dem_z_detect_stops_on_a_scaled_or_offset_band():
             if offset is not None:
                 ds.GetRasterBand(1).SetOffset(offset)
             ds = None
-            _stops(G, p, "scale", "gdal_translate -unscale")
-            # an explicit unit is used as given (as before)
-            assert G.resolve_dem_z(p, "meters") == (G.Z_METERS, "chosen")
+            _stops(G, p, "scale", "gdal_translate -unscale",
+                   "Raster > Conversion > Translate (Convert Format) with -unscale",
+                   file_problem=True)
+            # review round 3: an explicit unit stops too - it ran on the raw values (Meters on
+            # this raw 950 x 0.3048 band read 950 m; an offset band ran 350 m low)
+            for z in ("meters", "feet", "us_feet", "meters_tag_wrong"):
+                try:
+                    got = G.resolve_dem_z(p, z)
+                except ValueError as e:
+                    assert "has a scale" in str(e) and "-unscale" in str(e), str(e)
+                    assert "No unit choice reads this file right" in str(e), str(e)
+                else:
+                    raise AssertionError("{} as {} must stop: {}".format(name, z, got))
+            # the way through: the unscaled copy (GDAL drops the unit tag) reads right as chosen
+            un = os.path.join(d, "un_" + name)
+            gdal.Translate(un, p, unscale=True, outputType=gdal.GDT_Float32).FlushCache()
+            want = 950.0 * scale if scale is not None else 950.0 + offset
+            ds = gdal.Open(un)
+            a = ds.GetRasterBand(1).ReadAsArray()
+            ds = None
+            assert abs(float(a.mean()) - want) < 1e-3, (float(a.mean()), want)
+            _stops(G, un, "no elevation unit is recorded")
+            assert G.resolve_dem_z(un, "meters") == (G.Z_METERS, "chosen")
         # scale 1 / offset 0 (what a scaled-Translate VRT or an unscaled copy reports): fine
         p = _dem(d, "one.tif", "m")
         ds = gdal.Open(p, gdal.GA_Update)
@@ -137,13 +163,14 @@ def dem_z_detect_stops_on_an_old_lidar_vrt_over_a_feet_fallback():
             sub = os.path.join(d, name[:-4])
             os.makedirs(sub)
             vrt = _lidar_vrt(sub, _dem(sub, name, unit, value))
-            _stops(G, vrt, *words)
+            _stops(G, vrt, *words, file_problem=True)
             # the same VRT from Screening 0.17.50 (fallback converted, json says so): trusted
             vrt = _lidar_vrt(sub, os.path.join(sub, name), "feet (raster unit 'ft'), converted")
             assert G.resolve_dem_z(vrt, "auto")[0] == G.Z_METERS
         # the same old VRT without its band unit (every lidar VRT has one), beside its USGS 3DEP
-        # facts file: stopped - a facts file alone is not trusted (review round 2), with or
-        # without the json
+        # facts file: stopped - with its json it is the old VRT over a feet fallback that no unit
+        # reads right (review round 3: said so, not sent to a unit choice); without the json, a
+        # facts file alone is not trusted (review round 2)
         sub = os.path.join(d, "facts")
         os.makedirs(sub)
         vrt = _lidar_vrt(sub, _dem(sub, "fb_ft.tif", "ft", 951.0), unit="")
@@ -151,7 +178,7 @@ def dem_z_detect_stops_on_an_old_lidar_vrt_over_a_feet_fallback():
             fh.write("source: USGS 3DEP 1 m lidar DEM tiles (native, The National Map)\n"
                      "crs: EPSG:26914\nunits: metres\nfile_type: VRT over the native GeoTIFF "
                      "tiles (and the fallback DEM underneath, if any)\ncell_m: 10\n")
-        _stops(G, vrt, "D1_1m_lidar_dem.txt", "replaced or re-exported")
+        _stops(G, vrt, "built by Screening before 0.17.50", "fb_ft.tif", file_problem=True)
         os.remove(os.path.join(sub, "D1_1m_lidar.json"))
         _stops(G, vrt, "D1_1m_lidar_dem.txt", "replaced or re-exported")
         # a metre fallback (the Download DEM 10 m GeoTIFF of before 0.17.50 too): trusted
