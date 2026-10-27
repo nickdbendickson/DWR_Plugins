@@ -1660,13 +1660,15 @@ def main():
                     "results (precheck: only precheck; prepare and structures do not apply to "
                     "DWR-2801/2865/3034: they use the box preparation unless --no-kits). Their "
                     "status/<stage>.ok of every dam are set aside before the first dam runs "
-                    "(listed). Stopped, it is finished by the same command WITHOUT --redo (it "
-                    "prints it); the same --redo command again redoes all of them again")
+                    "(listed). Stopped or with failures, it is finished by the same command "
+                    "WITHOUT --redo (it prints it); the same --redo command again redoes all of "
+                    "them again")
     ap.add_argument("--offline", action="store_true", help="NHD flowlines from the suite pack "
                     "instead of downloading 3DHP")
     ap.add_argument("--no-kits", action="store_true", help="prepare 2801/2865/3034 here too")
     ap.add_argument("--allow-no-record", action="store_true", help="run rundam even when the "
-                    "Screening 7b record could not be written (results can differ from the box)")
+                    "Screening 7b record could not be written (results can differ from the box; "
+                    "once a record is written, rundam, hazclass and hazbatch run again)")
     ap.add_argument("--stages", default=",".join(STAGES), help="the stages to run (an unfinished "
                     "stage one of them reads runs first)")
     ap.add_argument("--pack", default="", help="offline pack .sqlite (default: from --data)")
