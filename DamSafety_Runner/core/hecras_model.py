@@ -1279,6 +1279,9 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             # your own (model CRS), which wins over the trace (see hecras_crest)
             "dam_axis": "crest", "breach_at": "auto", "breach_station_ft": None,
             "dam_line_xy": None,
+            # 3.10.87: the coordinate system of dam_line_xy when it is not the model's (the
+            # export tool's DAM_LINE layer passes its own)
+            "dam_line_crs": None,
             # 3.10.76: bands of small cells along roads, rail, structures and breaklines
             # (hecras_bands; None = the NDBREACH_BAND* variables, else hecras_bands.DEFAULTS:
             # on, 3 rows of 20 ft each side, graded 1.5:1, wet area + 500 ft)
@@ -2280,16 +2283,32 @@ def _dam_axis_rows(ax, L):
 
 
 def crest_dam_line(dem_path, srs, zf, units, dam, params, P, d, n_left, cell, tcell, o,
-                   user_line=None, inflow_m=None, dam_folder=None):
+                   user_line=None, inflow_m=None, dam_folder=None, wet_xy=None, wet_cell=None):
     """v3.10.22: the dam line along the embankment crest (model units, from A, the left end
     looking downstream, to B), the breach centre along it and how both were found. A user's
     dam line (user_line, model CRS) wins over the trace. Raises hecras_crest.CrestTraceError
-    when the crest cannot be traced (build_model then uses the straight line)."""
+    when the crest cannot be traced (build_model then uses the straight line).
+
+    3.10.87: the old rule (hecras_crest.trace with relax=False: the highest ridge across the
+    direction to the run's inflow point, at the top of dam on record) decides wherever it finds
+    a crest, and its line is used as it was. Only where it finds none, only with the run's
+    flooded area (wet_xy, the centres of its flooded cells, wet_cell wide) and only on a DEM
+    whose cell is no coarser than the crest width on record, a line off that rule is tried -
+    the crest at the DEM's level off the record or the dam point's own ridge
+    (trace's relaxed paths), else from crest-high ground nearby that the ground climbs to from
+    the dam point (hecras_crest.snap, within the toe distance plus half the crest width) - and
+    used only with positive evidence that it is the dam (hecras_crest.evidence: near the dam
+    point, the ground climbing to it, the flood below it and the valley's flow square to it,
+    the pool behind it, no other embankment at any level beside, across, at the ends of it or
+    between it and the pool or the flood - its scans on a wider read of the DEM, this window
+    inside it -, not a part of the embankment). Otherwise the old rule's error is raised,
+    saying what was tried."""
     from . import hecras_crest as hc
     axis = -np.asarray(n_left, float)                  # A -> B
     ft = units.from_ft(1.0)
     top_u = units.from_ft(dam.top_of_dam_ft)
     H = units.from_ft(dam.dam_height_ft)
+    cw = units.from_ft(dam.crest_width_ft or 20.0)
     toe = units.from_ft((dam.ds_slope_h or 3.0) * dam.dam_height_ft +
                         0.5 * (dam.crest_width_ft or 20.0))
     want_ft, want_src = dam_length_ft(dam, dam_folder, o.get("dam_length_ft"))
@@ -2318,14 +2337,226 @@ def crest_dam_line(dem_path, srs, zf, units, dam, params, P, d, n_left, cell, tc
         rec.update(source="your dam line", raw_points=int(len(user_line)))
         p0 = line[int(np.argmin(np.hypot(*(line - P).T)))]
     else:
-        tr = hc.trace(sample, P, axis, top_u, H, step, toe, max_len, gap, ft=ft)
+        try:
+            tr = hc.trace(sample, P, axis, top_u, H, step, toe, max_len, gap, ft=ft,
+                          relax=False)
+        except hc.CrestTraceError as e0:
+            if wet_xy is None:
+                raise
+            far_ = {}
+            # the DEM over a wider area, for the scans of a line off the old rule: the flow path
+            # below it (1.5 line lengths downstream) and the scans back to the pool (DWR #195
+            # audit round 4: max(1,500 ft, 1.5 line lengths) upstream and as far again for
+            # another embankment, past the window read above) - the window's own samples inside
+            # it, this read's outside; no data beyond far_box is outside the read, not the
+            # DEM's edge
+            h_ = pad + max(units.from_ft(hc.VALLEY_MIN_FT), 2.0 * max(
+                units.from_ft(hc.UPSTREAM_SCAN_FT), 1.5 * max_len)) + 4.0 * toe
+            far_box = (P[0] - h_, P[1] - h_, P[0] + h_, P[1] + h_)
+            win = (b[0] + step, b[1] + step, b[2] - step, b[3] - step)
+
+            def far(xy):
+                if "f" not in far_:
+                    fc = max(step, 2.0 * h_ / 2400.0)
+                    fa, fx0, fy0 = _warp(dem_path, srs, fc, alg="bilinear", bounds=far_box)
+                    fa = fa * float(zf) / units.L
+                    far_["f"] = (lambda q, fa=fa, fx0=fx0, fy0=fy0, fc=fc:
+                                 _sample(fa, fx0, fy0, fc, q))
+                q = np.asarray(xy, float).reshape(-1, 2)
+                inw = (q[:, 0] >= win[0]) & (q[:, 0] <= win[2]) & (q[:, 1] >= win[1]) & \
+                    (q[:, 1] <= win[3])
+                z = np.full(len(q), np.nan)
+                if inw.any():
+                    z[inw] = sample(q[inw])
+                if not inw.all():
+                    z[~inw] = far_["f"](q[~inw])
+                return z
+
+            def inside(xy):
+                # the DEM's footprint: no data inside it is a pool (or a gap) left out of it
+                if "i" not in far_:
+                    far_["i"] = _dem_footprint(dem_path, srs)
+                return hc.inside_polygon(far_["i"], xy)
+            return _crest_off_rule(hc, e0, sample, rec, units, dam, params, o, P, d, axis,
+                                   cell, step, toe, cw, top_u, H, max_len, gap, ft, wet_xy,
+                                   float(wet_cell or cell), inflow_m, far, inside, far_box,
+                                   max_len if want_ft else None)
         line = hc.tidy(tr["line"], step, cell, keep_len=max_len, centre=tr["p0"])
         p0 = tr["p0"]
         rec.update(source="traced from the DEM", raw_points=int(len(tr["line"])),
                    raw_length=round(float(hc.cumlen(tr["line"])[-1]), 1),
                    snap=round(tr["snap"], 2), tol=round(tr["tol"], 2), prom=round(tr["prom"], 2),
+                   top_offset=0.0,
                    ends={k: {"stop": v[0], "walked": round(v[1], 1)} for k, v in tr["ends"].items()},
                    raw_line=[[round(float(x), 2), round(float(y), 2)] for x, y in tr["line"]])
+    return _crest_breach(hc, line, sample, rec, units, dam, params, o, cell, toe, top_u, top_u,
+                         H, step, axis, inflow_m, p0)
+
+
+OFF_RULE_HOW = {
+    "datum": "at the DEM's crest level, {off:.1f} {u} {dir} the top of dam on record (another "
+             "vertical datum, or another embankment: a road beside the dam)",
+    "own": "along the ridge the dam point is on, at the top of dam on record (a higher ridge "
+           "lies across the direction to the run's inflow point there)",
+    "snap": "from crest-high ground {q:,.0f} {u} from the dam point that the ground climbs to "
+            "from it (no crest lies across the direction to the run's inflow point there)"}
+
+
+def off_rule_angle_text(rec, u=""):
+    """3.10.87 (DWR #195 audit round 4): the WARNING's angle of a dam line off the old rule -
+    at the breach, to the run's flow at the valley's scale (evidence's flow_angle_deg: the
+    direction from the dam point to the centroid of the run's flooded area), and, when the two
+    disagree by more than 15 degrees, to the flooded area near the line (flow_angle_local_deg:
+    from its middle, within the evidence's valley radius)."""
+    fa = float(rec.get("flow_angle_deg") or 0.0)
+    fl = float(rec.get("flow_angle_local_deg") or 0.0)
+    txt = ("runs {:.0f} degrees off square to the run's flow at the valley's scale (the "
+           "direction from the dam point to the centroid of the run's flooded area)".format(fa))
+    if abs(fa - fl) > 15.0:
+        radius = float(((rec.get("evidence") or {}).get("valley") or {}).get("radius") or 0.0)
+        txt += ("; to the flooded area within {:,.0f} {} of its middle it runs {:.0f} degrees "
+                "off square - the two disagree, so check which way the flow crosses it".format(
+                    radius, u, fl))
+    return txt
+
+
+def _dem_footprint(dem_path, srs, n=32):
+    """3.10.87: the outline of a DEM's grid (its extent, n points a side) in the model CRS."""
+    from ..damsuite import gdalsafe as GS
+    ds = GS.open_raster(dem_path)
+    gt, nx, ny, wkt = ds.GetGeoTransform(), ds.RasterXSize, ds.RasterYSize, ds.GetProjection()
+    ds = None
+    u = np.linspace(0.0, 1.0, n, endpoint=False)
+    px = np.concatenate([u * nx, np.full(n, nx), (1 - u) * nx, np.zeros(n)])
+    py = np.concatenate([np.zeros(n), u * ny, np.full(n, ny), (1 - u) * ny])
+    pts = np.column_stack([gt[0] + px * gt[1] + py * gt[2], gt[3] + px * gt[4] + py * gt[5]])
+    return transformer(srs_from(wkt), srs)(pts) if wkt else pts
+
+
+def _crest_off_rule(hc, e0, sample, rec, units, dam, params, o, P, d, axis, cell, step, toe,
+                    cw, top_u, H, max_len, gap, ft, wet_xy, wet_cell, inflow_m, far=None,
+                    inside=None, far_box=None, rec_len=None):
+    """crest_dam_line, where the old rule found no crest (e0): the lines off it - the dam
+    point's own trace with trace's relaxed paths, then a start from crest-high ground nearby
+    (snap) - each used only with hecras_crest.evidence (far: the DEM over a wider area, for its
+    scans, far_box its bounds; inside: the DEM's footprint; rec_len: the crest length on
+    record) and with a clear deepest section. Raises CrestTraceError with e0's message and what
+    was tried when none is."""
+    P = np.asarray(P, float)
+    if str(o.get("breach_at") or "auto").strip().lower() not in hc.BREACH_AT:
+        # an option that is not valid: the old rule's error and so its fallback, as before
+        # 3.10.87 (the straight line does not use the option; a traced one stops on it)
+        raise e0
+    if step > cw + 1e-6:
+        # a DEM coarser than the crest cannot place it to within half its width: the crest
+        # it shows off the record, or away from the dam point, is not evidence enough
+        raise hc.CrestTraceError(
+            "{}; no line off that rule was tried: the DEM's cell ({:,.1f} {u}) is coarser than "
+            "the crest width on record ({:,.1f} {u})".format(e0, step, cw, u=units.len_name),
+            on_ridge=e0.on_ridge)
+    zP = float(sample(P[None, :])[0])
+    va = hc.valley_axis(wet_xy, P)
+    cands, tried, snap_tried, on_ridge = [], [], None, False
+    try:
+        tr = hc.trace(sample, P, axis, top_u, H, step, toe, max_len, gap, ft=ft, crest_w=cw,
+                      dam_ground=zP)
+        cands.append((tr, axis, None))
+    except hc.CrestTraceError as e1:
+        on_ridge = e1.on_ridge
+    if on_ridge:
+        tried.append("the dam point is on or beside a crest the trace did not follow (a ridge "
+                     "or a level top off the record's level, or one at it that is no clear "
+                     "crest), so no start from other high ground nearby was tried")
+    else:
+        reach = toe + 0.5 * cw + 0.5 * step
+        sn = hc.snap(sample, P, top_u, max(units.from_ft(3.0), 0.1 * H), reach,
+                     max(2.0 * toe, units.from_ft(150.0)), step,
+                     allow=max(hc.DATUM_MIN_FT * ft, hc.DATUM_FRAC * H),
+                     prom=max(hc.PROM_MIN_FT * ft, hc.PROM_FRAC * H))
+        if sn is None:
+            if not cands:
+                tried.append("no crest-high ground that the ground climbs to from the dam point "
+                             "within {:,.0f} {} (about the toe distance plus half the crest "
+                             "width) to start from".format(reach, units.len_name))
+                snap_tried = {"found": False, "within": round(reach, 1)}
+        else:
+            Q, t = sn
+            if float(hc.left_normal(t) @ np.asarray(d, float)) < 0:
+                t = -t
+            snapped = {"from": [round(float(v), 2) for v in P],
+                       "to": [round(float(v), 2) for v in Q],
+                       "distance": round(float(np.hypot(*(Q - P))), 1),
+                       "turn_deg": round(hc.angle_deg(t, axis), 1)}
+            try:
+                tr = hc.trace(sample, Q, t, top_u, H, step, toe, max_len, gap, ft=ft, crest_w=cw,
+                              start_within=toe, dam_ground=zP)
+                cands.append((tr, t, snapped))
+            except hc.CrestTraceError as e2:
+                why = "a start from crest-high ground {:,.0f} {} away was tried: {}".format(
+                    snapped["distance"], units.len_name, e2)
+                tried.append(why)
+                snap_tried = dict(snapped, why=str(e2))
+    for tr, ax_, snapped in cands:
+        kind = "snap" if snapped else tr["how"] or "datum"
+        line = hc.tidy(tr["line"], step, cell, keep_len=max_len, centre=tr["p0"])
+        r_ = dict(rec, source="traced from the DEM", raw_points=int(len(tr["line"])),
+                  raw_length=round(float(hc.cumlen(tr["line"])[-1]), 1),
+                  snap=round(tr["snap"], 2), tol=round(tr["tol"], 2),
+                  prom=round(tr["prom"], 2), top_offset=round(tr["top_offset"], 2),
+                  ends={k: {"stop": v[0], "walked": round(v[1], 1)}
+                        for k, v in tr["ends"].items()},
+                  raw_line=[[round(float(x), 2), round(float(y), 2)] for x, y in tr["line"]],
+                  off_rule=kind, off_rule_how=tr["how"] or None)
+        if snapped:
+            r_.update(snapped_from=snapped["from"], snapped_to=snapped["to"],
+                      snap_distance=snapped["distance"], snap_turn_deg=snapped["turn_deg"])
+        what = ("a start from crest-high ground {:,.0f} {} away".format(
+            snapped["distance"], units.len_name) if snapped else
+            "the crest {}".format("at the DEM's level ({:+.1f} {} off the record)".format(
+                tr["top_offset"], units.len_name) if tr["how"] == "datum" else
+                "on the dam point's own ridge"))
+        try:
+            line2, sc, r_ = _crest_breach(hc, line, sample, r_, units, dam, params, o, cell, toe,
+                                          top_u, float(tr["top_used"]), H, step, ax_, inflow_m,
+                                          tr["p0"], clear=True)
+        except hc.CrestTraceError as e3:
+            tried.append("{} was tried: {}".format(what, e3))
+            if snapped:
+                snap_tried = dict(snapped, why=str(e3))
+            continue
+        ok, ev = hc.evidence(line2, sc, sample, P, top_u, float(tr["top_used"]), tr["tol"],
+                             tr["prom"], H, toe, cw, step, ft=ft, wet_xy=wet_xy,
+                             wet_cell=wet_cell, far=far, inside=inside, far_box=far_box,
+                             valley=va, rec_len=rec_len, raw=tr["line"])
+        r_["evidence"] = ev
+        if not ok:
+            tried.append("{} was tried: the line it gives is not clearly the dam ({})".format(
+                what, ev["why"]))
+            if snapped:
+                snap_tried = dict(snapped, why=ev["why"])
+            continue
+        r_.update(dam_point_to_line=ev["dam_point_to_line"],
+                  flow_angle_deg=ev["flow_angle_deg"],
+                  flow_angle_local_deg=ev["flow_angle_local_deg"],
+                  flow_path_angle_deg=ev["flow_path_angle_deg"], off_rule_reason=str(e0))
+        if snapped:
+            r_.update(snap_reason=str(e0))
+        return line2, sc, r_
+    raise hc.CrestTraceError("; ".join([str(e0)] + tried), on_ridge=on_ridge,
+                             snap_tried=snap_tried)
+
+
+def _crest_breach(hc, line, sample, rec, units, dam, params, o, cell, toe, top_u, top_pick, H,
+                  step, axis, inflow_m, p0, clear=False):
+    """crest_dam_line: the breach centre along the dam line, the line made straight across the
+    breach, and the record. 3.10.87: the breach is looked for where the crest is within the
+    tolerance of the top of dam on record or of `top_pick`, the level the crest was traced at
+    (the record for a dam line of your own), or in between; the breach and weir elevations keep
+    the record. clear (a line off the old rule, with the breach at its deepest section): that
+    section must be clear - the ground at the toe anywhere farther along the line than the
+    breach's top width at least max(1 ft, 4 % of H) higher than the lowest - else
+    CrestTraceError (two lows about as deep: where the breach goes is not clear on this
+    line)."""
     L = float(hc.cumlen(line)[-1])
     if L < 2.0 * cell:
         raise hc.CrestTraceError("the dam line along the crest is only {:,.0f} {} long".format(
@@ -2348,8 +2579,26 @@ def crest_dam_line(dem_path, srs, zf, units, dam, params, P, d, n_left, cell, tc
     else:
         if method == "inflow":
             method = "auto"
-        sc, how, detail = hc.pick_breach(line, sample, toe, cell, half_b, half_t, top_u, tol,
-                                         method, step)
+        # 3.10.87: the embankment part of the line is where the crest is within the tolerance
+        # of the top of dam on record or of the level the crest was traced at, or in between
+        # (a crest traced at the DEM's level off the record keeps its deepest section, not only
+        # its low spots at the record's level: a spillway notch)
+        lo_, hi_ = min(top_u, top_pick), max(top_u, top_pick)
+        sc, how, detail = hc.pick_breach(line, sample, toe, cell, half_b, half_t,
+                                         0.5 * (lo_ + hi_), tol + 0.5 * (hi_ - lo_), method, step,
+                                         apart=2.0 * half_t if clear else None,
+                                         gain=units.from_ft(hc.FAN_GAIN))
+        detail = dict(detail, crest_level_used=round(float(top_pick), 2),
+                      crest_band=[round(float(lo_ - tol), 2), round(float(hi_ + tol), 2)])
+        if clear and "toe_low" in detail:
+            nxt = detail.get("toe_ground_apart")
+            need = max(units.from_ft(1.0), 0.04 * H)
+            if nxt is not None and nxt - detail["toe_low"] < need:
+                raise hc.CrestTraceError(
+                    "its deepest section is not clear: the ground at its toe {:,.0f} {u} along "
+                    "it from the lowest ({:.2f}) is {:.2f}, within {:.1f} {u} of it".format(
+                        detail["toe_ground_apart_distance"], detail["toe_low"], nxt, need,
+                        u=units.len_name))
     bxy = hc.point_at(line, sc)
     # straight across the breach (its top width plus half a cell each side), so that the
     # breach is a rectangle in the crest's own frame there
@@ -2603,12 +2852,30 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         user_line = None
         if o.get("dam_line_xy"):
             user_line = np.asarray(o["dam_line_xy"], float).reshape(-1, 2)
+            if o.get("dam_line_crs"):
+                user_line = transformer(srs_from(o["dam_line_crs"]), srs)(user_line)
         elif report.get("crest_line_xy") and to_model is not None:
             user_line = to_model(report["crest_line_xy"])
+        # 3.10.87: the dam point and the flow frame as they were, for the straight fallback
+        # (notes about the dam line are added only after the last step that can give it up)
+        P_in, d_in, n_left_in = P.copy(), d.copy(), n_left.copy()
         try:
             crest_line, crest_sc, crest_rec = crest_dam_line(
                 dem_path, srs, zf_c, units, dam, params, P, d, n_left, cell, tcell_c, o,
-                user_line=user_line, inflow_m=inflow_m, dam_folder=dam_folder)
+                user_line=user_line, inflow_m=inflow_m, dam_folder=dam_folder,
+                wet_xy=np.column_stack([wx, wy]), wet_cell=acell)
+            off_rule = crest_rec.get("off_rule")
+            if off_rule or crest_rec.get("source") == "your dam line":
+                # 3.10.87: a dam line off the old rule (the old rule found no crest at the dam
+                # point), or your own: the cut, the pool, the storage check and the breach
+                # frame follow that line - the dam point moves onto it (its nearest point),
+                # the flow direction square to its chord
+                t_ = crest_line[-1] - crest_line[0]
+                t_ = t_ / (np.hypot(*t_) or 1.0)
+                P = hcrest.point_at(crest_line, hcrest.station_of(crest_line, P_in))
+                d = hcrest.left_normal(t_)
+                n_left = np.array([-d[1], d[0]])
+                crest_rec["dam_point_moved_to"] = [round(float(v), 2) for v in P]
             # the part inside the 2D area (the flooded area plus its buffer) only
             cl_geom = dom.Intersection(_line([tuple(q) for q in crest_line]))
             pieces = []
@@ -2631,14 +2898,54 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
                 crest_line = hcrest.min_spacing(piece, 0.5 * cell)
                 crest_sc = hcrest.station_of(crest_line, bxy_c)
                 crest_rec["clipped_to_2d_area"] = True
+            crest_rec["dam_point_to_line"] = round(float(point_segment_distance(
+                np.array([P_in[0]]), np.array([P_in[1]]), crest_line)[0]), 1)
+            if off_rule:
+                off = float(crest_rec.get("top_offset") or 0.0)
+                how_ = OFF_RULE_HOW[off_rule].format(
+                    off=abs(off), dir="above" if off > 0 else "below",
+                    q=float(crest_rec.get("snap_distance") or 0.0), u=units.len_name)
+                if off_rule == "snap" and off:
+                    how_ += ", followed at the DEM's crest level, {:.1f} {} {} the top of dam " \
+                        "on record".format(abs(off), units.len_name,
+                                           "above" if off > 0 else "below")
+                notes.append(
+                    "WARNING: the dam line is not the old rule's (the highest ridge across the "
+                    "direction to the run's inflow point, at the top of dam on record), which "
+                    "found no crest at the dam point ({}). It was traced {}. It lies {:,.0f} {u} "
+                    "from the dam point and, at the breach, {}.{} Check the dam line and the "
+                    "breach in RAS Mapper; give the dam line (DAM_LINE / dam_line_xy) or use "
+                    "dam_axis='straight' if it is not this dam.".format(
+                        crest_rec.get("off_rule_reason", ""), how_,
+                        crest_rec["dam_point_to_line"], off_rule_angle_text(crest_rec,
+                                                                            units.len_name),
+                        " The weir follows the higher of the terrain and the top of dam on "
+                        "record (here the DEM's crest), and the breach elevations use the top "
+                        "of dam on record." if off else "", u=units.len_name))
+                log(notes[-1])
         except hcrest.CrestTraceError as e:
+            # 3.10.87: the straight line goes through the dam point as given, across the flow
+            # as guessed (not through a point moved onto a line that is not used)
+            P, d, n_left = P_in, d_in, n_left_in
+            why_ = str(e)
+            if crest_rec.get("off_rule") and crest_rec.get("off_rule_reason"):
+                # a line off the old rule that a later step gave up: the old rule's reason
+                why_ = "{}; {} was tried: {}".format(
+                    crest_rec["off_rule_reason"], "a start from crest-high ground {:,.0f} {} "
+                    "away".format(crest_rec.get("snap_distance") or 0.0, units.len_name)
+                    if crest_rec.get("snapped_to") else "a crest off the old rule", e)
+            tried = getattr(e, "snap_tried", None)
+            if tried is None and crest_rec.get("snapped_to"):
+                tried = {"from": crest_rec.get("snapped_from"), "to": crest_rec["snapped_to"],
+                         "distance": crest_rec["snap_distance"], "why": str(e)}
             crest_line, crest_sc = None, None
-            crest_rec = {"asked": "crest", "used": "straight", "why": str(e),
-                         "fallback": True}
+            crest_rec = {"asked": "crest", "used": "straight", "why": why_, "fallback": True}
+            if tried is not None:
+                crest_rec["snap_tried"] = tried
             notes.append("WARNING: the dam line could not be traced along the crest ({}); the "
                          "straight line through the dam point across the flow is used "
                          "(dam_axis='straight'). Check the breach location and the dam line in "
-                         "RAS Mapper, or give a dam line (dam_line_xy).".format(e))
+                         "RAS Mapper, or give a dam line (dam_line_xy).".format(why_))
             log(notes[-1])
     span = 4.0 * math.sqrt(max(area_u2, 1.0)) + 10 * side
     cut = _line([P - n_left * span, P + n_left * span])
