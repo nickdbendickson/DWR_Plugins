@@ -95,8 +95,13 @@ class BreachHydrograph(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterFeatureSource(
             self.BPTS, "Breach points (output of tool 4, optional)",
             [SRC_POINT], optional=True))
-        self.addParameter(QgsProcessingParameterEnum(
-            self.MODE, "Breach mode", ["Piping (ND standard)", "Overtopping"], defaultValue=0))
+        mode = QgsProcessingParameterEnum(
+            self.MODE, "Breach mode", ["Piping (ND standard)", "Overtopping"], defaultValue=0)
+        if hasattr(mode, "setHelp"):
+            mode.setHelp("Piping is the ND standard for most dams. Overtopping is for dams that "
+                         "fail by water flowing over the crest. The choice changes the starting water level "
+                         "and the shape of the hydrograph.")
+        self.addParameter(mode)
         self.addParameter(QgsProcessingParameterEnum(
             self.METHOD, "Breach width / formation time equation",
             [bh.BREACH_METHODS[k][0] for k in self.METHODS], defaultValue=0))
@@ -111,13 +116,22 @@ class BreachHydrograph(QgsProcessingAlgorithm):
             self.addParameter(QgsProcessingParameterNumber(
                 val, f"Value for every dam: {label} ({unit}; 0 = not given)",
                 NUM_DOUBLE, 0.0, optional=True))
-        self.addParameter(QgsProcessingParameterBoolean(
-            self.SUNNY, "Also run sunny-day scenario at normal pool", defaultValue=False))
+        sunny = QgsProcessingParameterBoolean(
+            self.SUNNY, "Also run sunny-day scenario at normal pool", defaultValue=False)
+        if hasattr(sunny, "setHelp"):
+            sunny.setHelp("When checked, the tool also builds a hydrograph that starts at normal pool "
+                          "instead of the design flood level. Useful for comparing a sunny-day failure "
+                          "to a flood failure.")
+        self.addParameter(sunny)
         self.addParameter(QgsProcessingParameterNumber(
             self.EXP, "Below-pool storage exponent (2 = bowl, 3 = cone)",
             NUM_DOUBLE, 2.0, minValue=1.0, maxValue=4.0))
-        self.addParameter(QgsProcessingParameterFile(
-            self.OUTDIR, "Hydrograph CSV folder", behavior=FILE_FOLDER))
+        outd = QgsProcessingParameterFile(
+            self.OUTDIR, "Hydrograph CSV folder", behavior=FILE_FOLDER)
+        if hasattr(outd, "setHelp"):
+            outd.setHelp("Folder that receives one CSV hydrograph per dam. The Runner can read these "
+                         "files later as inflow.")
+        self.addParameter(outd)
         self.addParameter(QgsProcessingParameterFeatureSink(
             self.OUT, "Dams with breach parameters", SRC_POINT))
 
