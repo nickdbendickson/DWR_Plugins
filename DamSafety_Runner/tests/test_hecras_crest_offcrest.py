@@ -2000,3 +2000,74 @@ def hecras_crest_offcrest_round4_walk_and_pool_edges():
             raise AssertionError("a part of the embankment was used")
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+@test
+def hecras_crest_offcrest_round4_ridge_and_section_edges():
+    """Round 4, more rules the mutation audit found untested: (a) _ridges_along counts no data
+    inside the DEM right off the line's own top (a pool against its face) as leaving that top,
+    so a higher crest across the pool is another ridge; (b) _judge on a walk off the old rule
+    takes a side that runs from ground into no data as falling - not one that starts in no
+    data and climbs to ground as high as the crest past it (the abutment beyond a hole), and
+    _crest_ahead judges that way: a crest 110 ft wide whose upstream side runs into no data
+    goes on; (c) evidence: an embankment beyond the line's first end, as at its last; crest-high
+    ground anywhere from the toe distance to W upstream (here up to the DEM's edge 210 ft up,
+    not at W) is recorded; a dike 5 ft below the crest on rising ground 500 ft upstream - below
+    the record's level less the tolerance but above the line's own ground less the tolerance
+    and the datum allowance - lies between it and the pool; (d) a walk through a 40 degree bend (a bend: the
+    heading it settles on is reset there) to a road 0.5 ft above the crest leaving it at 25
+    degrees 150 ft on ends on the dam's second leg, where it left it."""
+    # (a) the line's top to 10 ft, no data (the pool) 10-40 ft, a crest 3 ft higher at 60 ft
+    # whose ground past the pool never falls below the line's top until behind it
+    tt = np.arange(0.0, 101.0, 5.0)
+    zz = np.where(tt <= 10.0, 100.0, np.where(tt <= 40.0, np.nan,
+                                              103.0 - np.abs(tt - 60.0) / 10.0))
+    assert hc._ridges_along(zz, tt, 1.0, 1.0, 90.0, hole=np.isnan(zz)) == [60.0]
+    # (b)
+    y = lambda q: q[:, 1]
+    hole_then_hill = lambda q: np.where(y(q) > 70.0, 100.0, np.where(
+        y(q) > 10.0, np.nan, 100.0 - np.maximum(np.abs(y(q)) - 10.0, 0.0) / 3.0))
+    R, nu = np.array([0.0, 0.0]), np.array([0.0, 1.0])
+    assert hc._judge(hole_then_hill, R, nu, 100.0, 100.0, 3.0, 100.0, 3.0, True) \
+        .startswith("abutment tie-in"), "a hole then a hill is not a fall"
+    wide_into_pool = lambda q: np.where(y(q) > 55.0, np.nan, 100.0 - np.maximum(
+        -y(q) - 55.0, 0.0) / 3.0)
+    assert hc._judge(wide_into_pool, R, nu, 100.0, 100.0, 3.0, 100.0, 3.0, True) == ""
+    assert hc._crest_ahead(wide_into_pool, np.array([100.0, 0.0]), np.array([-1.0, 0.0]),
+                           10.0, 100.0, 3.0, 100.0, 3.0, 120.0)
+    # (c)
+    g = _flat_floor(dams=[(-300.0, 0.0, 300.0, 0.0, TOP, CW), (450.0, -600.0, 450.0, 600.0,
+                                                               118.0, 10.0)])
+    ok, ev = _evx([(300.0, 0.0), (-300.0, 0.0)], g, (30.0, 0.0))
+    assert not ok and ev["why"].startswith("an end of it runs into another ridge 1"), ev
+    z, x0, yt, c = _valley_with(TOP, half=BIG, grid=True)
+    X = (x0 + (np.arange(z.shape[1]) + 0.5) * c)[None, :] + 0 * z
+    Y = (yt - (np.arange(z.shape[0]) + 0.5) * c)[:, None] + 0 * z
+    dam = [(450.0, 0.0), (0.0, 0.0), (-450.0, 0.0)]
+    zh = np.where((np.abs(X) < 700.0) & (Y > 110.0), np.maximum(z, TOP - 1.0), z)
+    k = Y[:, 0] < 210.0
+    ok, ev = _evx(dam, (zh[k], x0, 210.0, c), (30.0, 0.0))
+    assert not ok and ev["upstream_high_frac"] == 1.0, ev
+    m = (np.abs(X) < 800.0) & (Y > 150.0) & (Y < 2000.0)
+    zd = np.where(m, np.maximum(z, TOP - 8.0 + 0.002 * (Y - 150.0)), z)
+    zd = np.where(m, np.maximum(zd, TOP - 5.0 - np.maximum(np.abs(Y - 500.0) - 5.0, 0.0) / 4.0),
+                  zd)
+    ok, ev = _evx(dam, (zd, x0, yt, c), (30.0, 0.0))
+    assert ev["other_ridge_level"] < TOP - 5.0 and ev["upstream_ridge_frac"] == 1.0, ev
+    assert not ok and ev["why"].startswith("another embankment lies between it and the pool"), ev
+    # (d)
+    b = np.radians(40.0)
+    d2 = np.array((-np.cos(b), np.sin(b)))
+    for side in (1.0, -1.0):
+        J = 150.0 * d2
+        a = np.arctan2(d2[1], d2[0]) + side * np.radians(25.0)
+        Rd = J + 700.0 * np.array((np.cos(a), np.sin(a)))
+        g = _flat_floor(dams=[(400.0, 0.0, 0.0, 0.0, TOP + 5.0, CW),
+                              (0.0, 0.0, 400.0 * d2[0], 400.0 * d2[1], TOP + 5.0, CW)],
+                        roads=[(J[0], J[1], Rd[0], Rd[1], TOP + 5.5, 20.0)])
+        tr = hc.trace(_grid_sampler(*g), (250.0, 0.0), (-1.0, 0.0), TOP, H, 10.0, TOE, 1500.0,
+                      300.0, crest_w=CW)
+        E = tr["line"][-1]
+        assert tr["ends"]["B"][0].startswith("a junction: another crest at its level"), tr
+        assert abs(float(np.cross(d2, E))) < 0.5 * CW + 2.5 and float(E @ d2) > 100.0, \
+            (side, E)
