@@ -157,10 +157,25 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                                       parentLayerParameterName="DAMS", optional=True))
         P(QgsProcessingParameterEnum("WHICH", "Dams to send", ho.SELECT_LABELS, defaultValue=0))
         P(QgsProcessingParameterFeatureSource("BPTS", "Breach points (tool 4; joined by dam_id)", [pt]))
-        P(QgsProcessingParameterRasterLayer("DEM", "DEM for the runner (statewide DEM or VRT)"))
-        P(QgsProcessingParameterFolderDestination("DAMS_FOLDER", "Dams folder (the runner writes "
-                                                  "<folder>/<dam ID>/)"))
-        P(QgsProcessingParameterEnum("HYDRO", "Breach hydrograph", ho.HYDRO_LABELS, defaultValue=0))
+        dem = QgsProcessingParameterRasterLayer("DEM", "DEM for the runner (statewide DEM or VRT)")
+        if hasattr(dem, "setHelp"):
+            dem.setHelp("Elevation raster (or VRT) the Runner uses for the ground surface. "
+                        "Prefer a consistent unit (metres or feet) with the run settings. "
+                        "The tool does not reproject it; the Runner handles the CRS.")
+        P(dem)
+        dams_f = QgsProcessingParameterFolderDestination("DAMS_FOLDER", "Dams folder (the runner writes "
+                                                  "<folder>/<dam ID>/)")
+        if hasattr(dams_f, "setHelp"):
+            dams_f.setHelp("Folder where the Runner writes one sub-folder per dam ID. "
+                           "The tool also writes dam.json here before each run. "
+                           "Use an empty or new folder for a clean set of results.")
+        P(dams_f)
+        hy = QgsProcessingParameterEnum("HYDRO", "Breach hydrograph", ho.HYDRO_LABELS, defaultValue=0)
+        if hasattr(hy, "setHelp"):
+            hy.setHelp("How the breach hydrograph is supplied to the Runner. "
+                       "Default uses the Runner's own ND method. "
+                       "Or pass the screening tool-5 hydrograph CSV.")
+        P(hy)
         P(QgsProcessingParameterNumber("CELL", "Runner cell size (m; empty = runner default)",
                                        NUM_DOUBLE, optional=True, minValue=1.0))
         P(QgsProcessingParameterFile("CURVES", "Stage-storage curve folder (tool 3; optional, gives the "
@@ -226,16 +241,41 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         # nothing extra is sent). CULVERTS, not STRUCTURES: BLD is this tool's buildings layer.
         # 0.17.22: ONE engine choice (FORCE_ANUGA folded in; the old parameter is kept hidden so
         # saved models and histories still work: True = option 1)
-        P(QgsProcessingParameterEnum("ENGINE", "Runner engine", ho.ENGINE_LABELS, defaultValue=0))
+        # 0.17.51: per-parameter help for the engine / culvert controls (issue #35)
+        eng = QgsProcessingParameterEnum("ENGINE", "Runner engine", ho.ENGINE_LABELS, defaultValue=0)
+        if hasattr(eng, "setHelp"):
+            eng.setHelp("Which models the Runner uses. LISFLOOD-FP only is the default (fast extent). "
+                        "LISFLOOD-FP then ANUGA uses ANUGA for the final results (the old Force ANUGA). "
+                        "LISFLOOD-FP then HEC-RAS 2D needs HEC-RAS 6.6 set up. Culverts and bridges "
+                        "are modelled only by ANUGA or HEC-RAS.")
+        P(eng)
         P(cm.hide(QgsProcessingParameterBoolean("FORCE_ANUGA", "(before 0.17.22) force ANUGA = Runner "
                                                 "engine 'LISFLOOD-FP then ANUGA'", defaultValue=False,
                                                 optional=True)))
-        P(QgsProcessingParameterBoolean("REFINE_NEAR", "Runner: near-dam refine (re-runs the stretch "
-                                        "near the dam on a finer grid with the FV1 full shallow-water "
-                                        "solver; slower)", defaultValue=False))
-        P(QgsProcessingParameterFeatureSource("CULVERTS", "Culverts and bridges for the Runner (lines drawn "
-                                              "upstream end first; modelled by ANUGA only)", [ln],
-                                              optional=True))
+        # 0.17.51: dry-run / validate-only mode (writes dam.json and notes, skips the Runner)
+        dry = QgsProcessingParameterBoolean("DRY_RUN", "Validate only (write dam.json and notes; do not run the Runner)",
+                                            defaultValue=False, optional=True)
+        if hasattr(dry, "setHelp"):
+            dry.setHelp("When checked, the tool checks parameters, writes the planned dam.json for each dam, "
+                        "and records the notes that would be sent, but does not launch the Runner or Hazard tools. "
+                        "Useful for confirming engine choice, surface area, and structure layers before a long run.")
+        P(dry)
+        ref = QgsProcessingParameterBoolean("REFINE_NEAR", "Runner: near-dam refine (re-runs the stretch "
+                                            "near the dam on a finer grid with the FV1 full shallow-water "
+                                            "solver; slower)", defaultValue=False)
+        if hasattr(ref, "setHelp"):
+            ref.setHelp("After the main run, re-run the area next to the dam on a finer grid with the "
+                        "FV1 full shallow-water solver. Slower; improves the near-dam results.")
+        P(ref)
+        cul = QgsProcessingParameterFeatureSource("CULVERTS", "Culverts and bridges for the Runner (lines drawn "
+                                                  "upstream end first; modelled by ANUGA only)", [ln],
+                                                  optional=True)
+        if hasattr(cul, "setHelp"):
+            cul.setHelp("Lines of culverts and bridges (upstream end first). Sent as STRUCTURES to the "
+                        "Runner and modelled only when ANUGA or HEC-RAS is the final engine. With "
+                        "LISFLOOD-FP only they are logged as not used. Numeric fields (width, height, "
+                        "barrels) accept only numeric columns.")
+        P(cul)
         numeric = ("C_WIDTH", "C_HEIGHT", "C_BARRELS")
         for k, _rk, desc in ho.CULVERT_FIELDS:
             P(set_advanced(QgsProcessingParameterField(
@@ -461,7 +501,10 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                             p[key] = v
                     p.update(eng_p)
                     p.update(mask_p[0])
-                    notes = notes + eng_notes + mask_p[1]
+                    # 0.17.51: always lead with the effective engine so the choice is visible
+                    # even when saved settings or a hidden FORCE_ANUGA are involved
+                    engine_note = "engine: " + engine_text
+                    notes = [engine_note] + notes + eng_notes + mask_p[1]
                     res["rn_inputs"] = hz.limit_text(["sent: " + why] + notes)
                     res["rn_engine"] = engine_text
                     for n in notes:
@@ -479,6 +522,10 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                             feedback.pushInfo("dam record: {}".format(jpath))
                     except Exception as e:      # the record must never stop the run
                         feedback.reportError("dam {}: dam.json not written: {}".format(dam_id, e))
+                    if self.parameterAsBool(params, "DRY_RUN", context):
+                        res["rn_status"] = "validated (dry-run; Runner not launched)"
+                        feedback.pushInfo("{}: dry-run — dam.json written, Runner skipped".format(dam_id))
+                        continue
                     r1 = processing.run(ho.RUNNER_ALG, p, context=context, feedback=steps,
                                         is_child_algorithm=True)
                     dfold = (r1 or {}).get("FOLDER") or dfold
