@@ -200,13 +200,21 @@ def a_warp_that_converted_the_values_is_not_read_by_its_band_unit():
         vrt = os.path.join(d, "w.vrt")                   # gdalwarp without -novshift
         gdal.Warp(vrt, src, format="VRT", dstSRS="EPSG:26914").FlushCache()
         _stops(lambda: G.resolve_dem_z(vrt, "auto"), "vertical shift", "-novshift")
-        # the same warp written as a GeoTIFF keeps 'US survey foot' on metres and no trace:
-        # the ND ground check stops it below about 656 m and names the record
+        # the same warp written as a GeoTIFF: GDAL < 3.9 keeps 'US survey foot' on metres with
+        # no trace, the ND ground check stops it; GDAL >= 3.9 strips the band unit, so there is
+        # no recorded unit and Detect stops for that reason - both are safe
         tif = os.path.join(d, "w.tif")
         gdal.Warp(tif, src, dstSRS="EPSG:26914").FlushCache()
-        msg = _stops(lambda: _gis(algs, tif, 0), "396.2 with units 'US survey feet' "
-                     "(detected: raster unit 'us survey foot')", "to Meters", "record is wrong")
-        assert "121 m" in msg, msg
+        _ds = gdal.Open(tif)
+        kept_unit = bool(_ds.GetRasterBand(1).GetUnitType())
+        _ds = None
+        if kept_unit:
+            msg = _stops(lambda: _gis(algs, tif, 0), "396.2 with units 'US survey feet' "
+                         "(detected: raster unit 'us survey foot')", "to Meters", "record is wrong")
+            assert "121 m" in msg, msg
+        else:
+            _stops(lambda: _gis(algs, tif, 0), "no elevation unit is recorded",
+                   "Set 'DEM elevation units' to Meters or Feet")
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

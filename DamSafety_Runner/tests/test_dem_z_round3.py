@@ -302,14 +302,24 @@ def an_explicit_unit_stops_on_a_scaled_band_or_a_vertical_shift_vrt():
             msg = _stops(lambda: G.resolve_dem_z(vrt, z), "vertical shift", "-novshift",
                          "Warp (Reproject)", "No unit choice reads this file right")
             assert "Meters or Feet" not in msg, msg
-        # the same warp written as a GeoTIFF: Detect stops on the ground check, and Meters - the
-        # choice it names - runs, the values fitting North Dakota only as metres
+        # the same warp written as a GeoTIFF: GDAL < 3.9 keeps the band unit ('US survey foot'
+        # on metre values), the ground check catches it; GDAL >= 3.9 strips the band unit, so
+        # Detect stops on "no recorded unit" - both are safe
         tif = os.path.join(d, "w.tif")
         gdal.Warp(tif, src, dstSRS="EPSG:26914").FlushCache()
-        msg = _stops(lambda: _gis(algs, tif, 0), "to Meters", "the run goes on as Meters with a "
-                     "warning in its report, or correct the record (gdal_edit -units m)")
-        src_m = _gis(algs, tif, 3)[0]
-        assert src_m.z_to_m == 1.0 and "records US survey feet" in src_m.z_check, src_m.z_check
+        _ds = gdal.Open(tif)
+        kept_unit = bool(_ds.GetRasterBand(1).GetUnitType())
+        _ds = None
+        if kept_unit:
+            msg = _stops(lambda: _gis(algs, tif, 0), "to Meters", "the run goes on as Meters with a "
+                         "warning in its report, or correct the record (gdal_edit -units m)")
+            src_m = _gis(algs, tif, 3)[0]
+            assert src_m.z_to_m == 1.0 and "records US survey feet" in src_m.z_check, src_m.z_check
+        else:
+            _stops(lambda: _gis(algs, tif, 0), "no elevation unit is recorded",
+                   "Set 'DEM elevation units' to Meters or Feet")
+            src_m = _gis(algs, tif, 3)[0]
+            assert src_m.z_to_m == 1.0, src_m.z_to_m
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
