@@ -22,6 +22,7 @@ from . import conditioning as cond
 from . import structures as structmod
 from . import gmsh_mesher as gmshmod     # numpy only; gmsh is imported in build_mesh
 from . import anuga_dtdiag               # 3.10.70: numpy only (the worker's dt diagnostic)
+from . import anuga_crest as crestmod    # 3.10.91: road / rail crests held (numpy only)
 
 # Windows: no console window for a child program (QGIS is a GUI program, so each console
 # program it starts opens its own window, and closing that window kills the run)
@@ -450,7 +451,8 @@ def partial_note(workdir):
 
 
 def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_depth=None,
-              culverts=None, breaklines=None, regions=None, mesh=None, elevation=None):
+              culverts=None, breaklines=None, regions=None, mesh=None, elevation=None,
+              crest=None):
     job = {
         "dem": dem.masked().astype(np.float32), "dem_x0": dem.x0, "dem_y0": dem.y0,
         "dem_dx": dem.dx, "manning_n": st.manning_n,
@@ -481,6 +483,9 @@ def write_job(path, dem, outer, fine, inlet, hydrograph, st, out_grid, initial_d
         job["mesh_stats"] = json.dumps(mesh.get("stats", {}))
     if elevation:            # 3.10.31: the fine bed (prepare_elevation); absent = as before
         job.update(elevation)
+    if crest is not None and len(crest[0]):  # 3.10.91: crest nodes (x, y) and their z
+        job["crest_xy"] = np.asarray(crest[0], float).reshape(-1, 2)
+        job["crest_z"] = np.asarray(crest[1], float).ravel()
     job.update(checkpoint_job(st))   # 3.10.35: opt-in checkpoints; absent = as before
     job.update(dt_diag_job(st, getattr(dem, "crs_wkt", None)))   # 3.10.70; off = as before
     np.savez(path, **job)
@@ -526,7 +531,7 @@ GMSH_SIZING_ENV = (("NDBREACH_ANUGA_GMSH_GRADE_DIST_M", "grade_dist_m"),
                    # 3.10.76: the line band (band_options)
                    ("NDBREACH_ANUGA_BAND", "band"),
                    ("NDBREACH_ANUGA_BAND_CELL_M", "band_cell_m"),
-                   ("NDBREACH_ANUGA_BAND_DIST_M", "band_dist_m"))
+                   ("NDBREACH_ANUGA_BAND_DIST_M", "band_dist_m")) + crestmod.CREST_ENV
 REFINE_PAD_M = 200.0          # refine_footprint "wet": the LISFLOOD-FP wet area padded this much
 _FOOTPRINT_OFF = ("", "off", "none", "no", "false", "0")
 
@@ -546,7 +551,7 @@ def gmsh_env_options(gmsh=None, environ=None):
             continue
         out = dict(gmsh or {}) if out is None else out
         v = str(raw).strip()
-        if key == "band":
+        if key in ("band", "crest"):        # 3.10.91: crest (anuga_crest) as band
             out[key] = v.lower()
             continue
         if key == "refine_footprint":
@@ -585,6 +590,10 @@ def check_gmsh_options(st):
                 gmshmod.positive_number(key, o[key])
             except gmshmod.MeshError as e:
                 raise bad(key, e)
+    try:
+        crestmod.crest_options(o)           # 3.10.91: the crest hold's settings
+    except crestmod.CrestError as e:
+        raise ModelError("ANUGA gmsh crest hold: {}".format(e))
     fp = o.get("refine_footprint")
     if fp is None:
         return None
@@ -613,13 +622,18 @@ def wet_footprint(dem, flooded, inflow_xy, pad_m):
 
 
 def gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st, channel=None,
-              embankments=None, footprint=None):
+              embankments=None, footprint=None, crest_lines=None):
     """The gmsh_mesher input: outer ring, breaklines (REFINE_LINES, road and rail
     centrelines on embankments, culverts, the inlet/breach line), the flow path and the
     points that need small triangles (culvert ends, inflow). footprint: the ring for
     refine_footprint "wet" (wet_footprint); the spec then carries it instead of the word.
-    With no sizing option set the spec is the same as before 3.10.69."""
+    With no sizing option set the spec is the same as before 3.10.69.
+    crest_lines (3.10.91, anuga_crest): the road / rail crest lines; given, they are the
+    mesh lines instead of `embankments` (which they include) and go in the spec as
+    "crest_lines" too, so gmsh_mesher returns the nodes on them (crest_nodes)."""
     lines = [np.asarray(b, float).tolist() for b in (breaklines or [])]
+    if crest_lines:
+        embankments = crest_lines
     lines += [np.asarray(b, float).tolist() for b in (embankments or [])]
     lines.append(np.asarray(inlet, float).tolist())
     pts = [list(map(float, inflow_xy))]
@@ -644,7 +658,10 @@ def gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st, channel=No
         # follows (gmsh_mesher.gate_area: 0.45 x the smallest size asked for).
         spec["culvert_area_m2"] = culvert_area_m2(st)
     spec.update({k: v for k, v in (st.gmsh or {}).items()
-                 if not k.startswith("embankment") and k not in BAND_DEFAULTS})
+                 if not k.startswith("embankment") and k not in BAND_DEFAULTS
+                 and k not in crestmod.CREST_DEFAULTS})
+    if crest_lines:
+        spec["crest_lines"] = [np.asarray(c, float).tolist() for c in crest_lines]
     bo = band_options(st)
     if bo["on"]:
         # 3.10.76: the line band, size_lines (gmsh_mesher): edges of band_cell_m within
@@ -812,6 +829,79 @@ def find_embankments(lines, outer, dem, terrain_read, st, flooded=None):
                                  wet=wet)
 
 
+def crest_lines_for(lines, outer, dem, flooded, st):
+    """3.10.91 (anuga_crest): the road / rail crest lines for the gmsh mesh, every centreline
+    inside `outer` within crest_pad_m of the wet area (`flooded` on `dem`; all of them inside
+    `outer` without it). Returns (pieces or None, info for run_report anuga_mesh.crest)."""
+    o = crestmod.crest_options(getattr(st, "gmsh", None))
+    if not o["on"]:
+        return None, {"on": False, "reason": "off (anuga_gmsh crest / NDBREACH_ANUGA_CREST)"}
+    if not lines:
+        return None, {"on": True, "crest_lines": 0, "reason": "no road or rail lines"}
+    wet = None
+    if flooded is not None and np.asarray(flooded).shape == (dem.ny, dem.nx):
+        wet = (dem, terrain.dilate(np.asarray(flooded, bool), float(o["crest_pad_m"]), dem.dx))
+    try:
+        pieces, info = crestmod.crest_lines(lines, outer, wet)
+    except Exception as e:                      # noqa - the mesh is made without them
+        return None, {"on": True, "crest_lines": 0, "error": str(e)[:200]}
+    info.update(on=True, pad_m=float(o["crest_pad_m"]),
+                half_width_m=float(o["crest_half_width_m"]), cell_m=float(o["crest_cell_m"]))
+    return (pieces or None), info
+
+
+def crest_hold(mesh, pieces, spec, dem, structures, inlet, st, elevation_read=None,
+               terrain_read=None, native_m=None):
+    """3.10.91: ((x, y) of the held crest nodes, their crest z) and an info dict. The crest
+    profile is read from elevation_read (the fine bed's terrain), else terrain_read, else
+    the model DEM; bridge / notch cut corridors and the inlet are kept out."""
+    from . import road_profile
+    o = crestmod.crest_options(getattr(st, "gmsh", None))
+    info = {}
+    cn = mesh.get("crest_nodes")
+    if cn is None:
+        return None, {"held": 0, "reason": "the mesher returned no crest nodes"}
+    cell = max(float(o["crest_cell_m"]), float(native_m or 0.0))
+    read = elevation_read or terrain_read
+    if read is None:
+        def read(bounds, c, _g=dem):         # the model DEM (coarse): better than nothing
+            return _g
+        cell = max(cell, dem.dx)
+        info["profile_source"] = "model DEM"
+    else:
+        info["profile_source"] = "fine terrain" if elevation_read else "terrain"
+    t0 = time.time()
+    try:
+        profiles = [crestmod.crest_profile(p, read, cell, float(o["crest_half_width_m"]))
+                    for p in pieces]
+    except Exception as e:                      # noqa - the bed is then as before
+        return None, dict(info, held=0, error="crest profile: " + str(e)[:200])
+    pts = np.asarray(mesh["points"], float)
+    cn = np.asarray(cn, np.int64)
+    cuts = road_profile.cut_corridors(structures or [], dem.dx)
+    ko = crestmod.keep_out_mask(pts[cn], cuts, inlet)
+    la = spec.get("line_min_area_m2") or spec.get("min_area_m2") or \
+        gmshmod.default_sizes()["min_area_m2"]
+    hmin = 1.3 * gmshmod.h_of_area(float(la))
+    idx, z, hinfo = crestmod.hold_crest(pts, cn, pieces, profiles,
+                                        hmin + float(o["crest_half_width_m"]), ko)
+    info.update(hinfo, profile_cell_m=round(cell, 2), cut_corridors=len(cuts),
+                profile_s=round(time.time() - t0, 1))
+    return (pts[idx], z), info
+
+
+def crest_line(c):
+    """One log line for run_report anuga_mesh.crest."""
+    if c.get("error"):
+        return "WARNING: gmsh crest hold not applied ({}).".format(c["error"])
+    return ("gmsh crest hold: {} of {} crest node(s) held at the {:g} m crest profile "
+            "({} in a bridge / notch cut or at the inlet, {} off the line, {} with no "
+            "terrain).".format(c.get("held", 0), c.get("crest_nodes", 0),
+                               c.get("profile_cell_m", c.get("cell_m", 1.0)),
+                               c.get("kept_out", 0), c.get("off_line", 0),
+                               c.get("no_profile", 0)))
+
+
 def make_gmsh_mesh(workdir, spec, st):
     """Run gmsh_mesher.py in the ANUGA interpreter with a timeout. Returns
     (mesh dict, summary note), or (None, reason) when gmsh failed, timed out or the
@@ -838,6 +928,8 @@ def make_gmsh_mesh(workdir, spec, st):
     with np.load(op) as r:
         mesh = {"points": r["mesh_points"], "triangles": r["mesh_triangles"],
                 "boundary": r["mesh_boundary"], "stats": json.loads(str(r["mesh_stats"]))}
+        if "mesh_crest_nodes" in r.files:   # 3.10.91: nodes on the crest lines
+            mesh["crest_nodes"] = np.asarray(r["mesh_crest_nodes"], np.int64)
     s = mesh["stats"]
     note = ("ANUGA mesh from gmsh: {} triangles, smallest {:.0f} m2, minimum angle "
             "{:.1f} deg.".format(s.get("triangles"), s.get("min_area_m2", 0),
@@ -1145,7 +1237,7 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     step = max(5.0, float(np.sqrt(max(st.fine_area_m2, 1.0))))
     breaklines = clip_lines_to_polygon([cond.densify(np.asarray(b, float), step)
                                         for b in (refine_lines or [])], outer)
-    mesh, mnote = None, None
+    mesh, mnote, crest_pieces = None, None, None
     mesher = mesher_mode(st)
     minfo = {"requested": mesher, "used": "default", "rejected": None}
     if mesher in GMSH_MESHERS:
@@ -1160,6 +1252,12 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
             log("gmsh: {} road/rail embankment piece(s), {} km, become mesh lines.".format(
                 einfo["embankment_pieces"], einfo.get("embankment_km")))
         fp_mode = check_gmsh_options(st)           # 3.10.69: a bad value stops here
+        crest_pieces, minfo["crest"] = crest_lines_for(embankment_lines, outer, dem, flooded, st)
+        if log and crest_pieces:
+            log("gmsh crest hold: {} road/rail crest line(s), {} km within {:g} m of the wet "
+                "area, become mesh lines (NDBREACH_ANUGA_CREST=off turns it off).".format(
+                    minfo["crest"]["crest_lines"], minfo["crest"]["crest_km"],
+                    minfo["crest"]["pad_m"]))
         footprint = None
         if fp_mode == "wet":
             pad = float((st.gmsh or {}).get("refine_footprint_pad_m") or REFINE_PAD_M)
@@ -1167,7 +1265,7 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
             minfo["refine_footprint"] = {"mode": "wet", "pad_m": pad,
                                          "vertices": int(len(footprint))}
         spec = gmsh_spec(dem, outer, inflow_xy, inlet, culverts, breaklines, st,
-                         embankments=emb, footprint=footprint)
+                         embankments=emb, footprint=footprint, crest_lines=crest_pieces)
         if spec.get("size_lines"):
             bo = band_options(st)
             minfo["line_band"] = {"lines": len(spec["size_lines"]),
@@ -1211,6 +1309,15 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         if log:
             log("WARNING: " + mnote)
     have = bool(reuse) and os.path.exists(result)
+    crest = None
+    if mesh is not None and crest_pieces and not have:
+        crest, cinfo = crest_hold(mesh, crest_pieces, spec, dem, structures, inlet, st,
+                                  elevation_read, terrain_read, elevation_native_m)
+        minfo["crest"].update(cinfo)
+        if log:
+            log(crest_line(minfo["crest"]))
+    elif crest_pieces and mesh is None:
+        minfo["crest"].update(held=0, reason="no gmsh mesh (the default mesh has no crest hold)")
     if have:                 # the result is reused: the bed is not read again
         elev_job, elev_info = None, {"mode": "reused", "reason": "earlier result reused"}
     else:
@@ -1230,7 +1337,7 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     if log:
         log("ANUGA threads: {} ({}).".format(cst.threads, thr_rule))
     write_job(job, dem, outer, fine, inlet, hydrograph, cst, dem, initial_depth, culverts,
-              breaklines, regions, mesh=mesh, elevation=elev_job)
+              breaklines, regions, mesh=mesh, elevation=elev_job, crest=crest)
     np.savetxt(os.path.join(workdir, "mesh_boundary.csv"), outer, delimiter=",",
                header="x,y", comments="", fmt="%.3f")
     if len(fine):

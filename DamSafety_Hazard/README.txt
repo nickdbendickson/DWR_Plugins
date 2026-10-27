@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.18.64
+ND Dam Hazard Classification Helper - Version 2.18.65
 ====================================================
 
 WHAT IT DOES
@@ -829,6 +829,15 @@ NEW IN 1.3.0 - HAZARD CLASSIFICATION TAB
   bridge flag and the MOST RECENT AADT from (a) the road layer itself,
   including AADT_2023-style columns, (b) an optional AADT layer (NDDOT
   counts, HPMS) within 300 ft, (c) FRA crossing AADT within 100 ft.
+- 2.18.65: a wet road or rail stretch counts as overtopped only where the
+  maximum WSE is above the centreline crown read from the 1 m DEM (the
+  Runner's WSE (Max).tif and run_report.json beside the depth raster);
+  the wet toe cells beside an embankment do not count. Stretches with no
+  arrival time or shallower than 0.1 ft are skipped; bridge / notch cuts
+  are masked as in the Runner's road profile. Each stretch carries its
+  depth basis, crown, WSE and freeboard; outputs/QA/Line_Crown_Check lists
+  every wet stretch and why it was counted or not. No WSE or no 1 m DEM:
+  the depth raster as before, with a note.
 - Rail: the national rail network (FRA/BTS) and FRA grade crossings are
   downloaded for the area (or use your own layers); trains/day come from
   crossings of the same railroad within 3 miles; passenger lines flagged.

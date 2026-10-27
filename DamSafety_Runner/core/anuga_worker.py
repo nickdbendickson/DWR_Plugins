@@ -78,6 +78,39 @@ except ImportError:
     import anuga_dtdiag
 
 
+def crest_vertex_values(vertex_xy, vertex_values, crest_xy, crest_z, tol=1e-3):
+    """3.10.91 (core/anuga_crest.py, numpy only): vertex_values (T, 3) of the bed with every vertex at a
+    crest node (matched by coordinates within tol, vertex_xy (3T, 2) in the same frame as
+    crest_xy) raised to its crest z (never lowered). Returns (new values, info)."""
+    vv = np.array(vertex_values, float, copy=True)
+    flat = vv.reshape(-1)
+    vxy = np.asarray(vertex_xy, float).reshape(-1, 2)
+    cxy = np.asarray(crest_xy, float).reshape(-1, 2)
+    cz = np.asarray(crest_z, float).ravel()
+    info = {"crest_nodes": int(len(cz)), "vertices_matched": 0, "vertices_raised": 0,
+            "max_raise_m": 0.0, "mean_raise_m": 0.0}
+    if not len(cz) or not len(flat):
+        return vv, info
+    key = lambda a: [tuple(r) for r in np.round(np.asarray(a) / tol).astype(np.int64)]
+    zmap = {}
+    for k, z in zip(key(cxy), cz):
+        zmap[k] = max(z, zmap.get(k, -np.inf))
+    vk = key(vxy)
+    hit = np.array([k in zmap for k in vk], bool)
+    if not hit.any():
+        return vv, info
+    zt = np.array([zmap[k] for k, h in zip(vk, hit) if h], float)
+    old = flat[hit]
+    with np.errstate(invalid="ignore"):
+        new = np.where(np.isfinite(old), np.maximum(old, zt), zt)
+    raise_ = new - np.where(np.isfinite(old), old, new)
+    flat[hit] = new
+    info.update(vertices_matched=int(hit.sum()), vertices_raised=int((raise_ > 1e-9).sum()),
+                max_raise_m=round(float(raise_.max()), 3),
+                mean_raise_m=round(float(raise_.mean()), 3))
+    return vv, info
+
+
 def bilinear(dem, x0, y0, dx, x, y):
     a = dem
     ny, nx = a.shape
@@ -942,6 +975,19 @@ def main(job_path, out_path):
         else:
             domain.set_quantity("elevation", lambda x, y: bilinear(dem, lx0, ly0, dx, x, y),
                                 location="centroids")
+        if "crest_z" in job and job["crest_z"].size:
+            # 3.10.91: the road / rail crest nodes raised to their 1 m crest elevation
+            # (anuga_crest); the edges along a crest then carry it, whatever the bed mode
+            q = domain.quantities["elevation"]
+            vxy = np.asarray(domain.get_vertex_coordinates(absolute=True), float)
+            vv, cinfo = crest_vertex_values(vxy, q.vertex_values, to_local(job["crest_xy"]),
+                                            job["crest_z"])
+            if cinfo["vertices_matched"]:
+                domain.set_quantity("elevation", vv, location="vertices")
+            elev_stats["crest"] = cinfo
+            print("PROGRESS 0 crest hold: {} vertices at {} crest nodes, {} raised (up to "
+                  "{:.2f} m)".format(cinfo["vertices_matched"], cinfo["crest_nodes"],
+                                     cinfo["vertices_raised"], cinfo["max_raise_m"]), flush=True)
         if "manning" in job and job["manning"].size:
             man = fill_nan(job["manning"].astype(float))
             domain.set_quantity("friction", lambda x, y: bilinear(man, lx0, ly0, dx, x, y),
