@@ -332,7 +332,10 @@ All optional layers, read only within about 45 mi of the dam:
   'Soo Street', is not rail, and a name with both a road and a railway, 'CO RD 12 / BNSF RY',
   leaves it to the embankment Hazard placed it on). Its cut stays where the inventory put it unless the
   evidence says that place is solid embankment: no opening in the DEM there, no channel line,
-  no channel in the ground beside the road, the road not dipping there (its low point, a sag
+  no channel in the ground beside the road (low ground that runs along the road - a ditch, a
+  borrow area, a pond at the toe - is not one; and low ground across the road gives way to a
+  clearly better crossing: an opening at least 3 m and twice as deep, at least half the span
+  wide, its bed as low, with a channel line there and none at the cut), the road not dipping there (its low point, a sag
   or a wide opening; on a road sagging into a coulee a cut on the approach grade is not the
   low point and does not count), DEM data there and a road line that does not end near it. Only then
   does it move, to the NEAREST crossing along the road within `NDBREACH_BRIDGE_SNAP_M`
