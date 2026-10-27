@@ -114,7 +114,7 @@ bash run_nickreview.sh                    # all 42 dams in nickreview_dams.txt
   (once every dam of it is redone, the same command starts a new redo). A run without
   `--redo` while a `--redo` is unfinished warns at the start and the end (the dams that
   `--redo` has not reached keep their earlier results) and prints the command that
-  finishes it.
+  finishes it (to drop an unfinished `--redo` instead, delete its file in `redo_sessions/`).
 * **`--redo`** runs finished stages again, in the same command: the stages in `--stages`
   (all of them by default) that apply to the dam, and every later stage that reads their
   results. The others keep their results. The stages run in the order prepare, structures,

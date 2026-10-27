@@ -827,6 +827,7 @@ class RedoSession(object):
                          "them): " + " ".join(part))
         lines.append("to finish that --redo, run its command again (the dams it already redid "
                      "are not redone): " + self.rec.get("command", "?"))
+        lines.append("(to drop it instead, delete {})".format(self.path))
         return lines
 
 
