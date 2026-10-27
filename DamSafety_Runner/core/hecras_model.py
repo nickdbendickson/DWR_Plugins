@@ -2527,7 +2527,7 @@ def _crest_off_rule(hc, e0, sample, rec, units, dam, params, o, P, d, axis, cell
         ok, ev = hc.evidence(line2, sc, sample, P, top_u, float(tr["top_used"]), tr["tol"],
                              tr["prom"], H, toe, cw, step, ft=ft, wet_xy=wet_xy,
                              wet_cell=wet_cell, far=far, inside=inside, far_box=far_box,
-                             valley=va, rec_len=rec_len)
+                             valley=va, rec_len=rec_len, raw=tr["line"])
         r_["evidence"] = ev
         if not ok:
             tried.append("{} was tried: the line it gives is not clearly the dam ({})".format(

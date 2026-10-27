@@ -2086,3 +2086,77 @@ def hecras_crest_offcrest_round4_ridge_and_section_edges():
     z = np.where(Y > 165.0, np.maximum(z, TOP - 16.0), z)
     ok, ev = _evx(dam, (z, x0, yt, c), (30.0, 0.0))
     assert not ok and ev["why"].startswith("another embankment lies 155 from the dam point"), ev
+
+
+@test
+def hecras_crest_offcrest_round4_bench_dip_and_far_side():
+    """Round 4, rules the full gate's road families asked for: (a) _bench - off the line's own
+    top, ground at least `lvl` high starting within the toe distance and varying by no more
+    than BENCH_FLAT_FRAC of the crest prominence (not a face, not water, not one past the toe);
+    (b) evidence: a line along a road 4 ft above the crest on the dam's downstream face has
+    the dam's crest beside it on its upstream side, a bench at about the crest's level - which
+    one is the dam is not clear; the dam itself has no bench behind it; (c) where a line along
+    such a road steps over a 60 ft gap in it, its ground dips 10 ft and the dam's crest beside
+    it stands higher; (d) a line that cuts the corner of a dam bent 30 degrees (its own ground
+    dips there, the crest beside it) is rejected on that alone without the walk it was made
+    from, and passes with it (the corner is its own crest: DWR-2801's bend, where the straight
+    stretch across the breach cuts it); (e) _stands_far judges another crest beside the walk
+    by its far side only: a road abutting the dam (its near side at the dam's level) whose far
+    side falls stands, though _judge calls it an abutment tie-in; a far side that runs from
+    ground into no data falls, one that is level or no data from the start does not."""
+    # (a)
+    t = np.arange(0.0, 300.0, 5.0)
+    face = TOP - np.maximum(t - 10.0, 0.0) / 3.0
+    bench = np.maximum(face, np.where((t >= 30.0) & (t <= 70.0), TOP - 4.0, 0.0))
+    assert hc._bench(face, t, TOP - 10.0, 3.0, TOE, 140.0, 0.01, 100.0) == 0.0
+    assert 40.0 <= hc._bench(bench, t, TOP - 10.0, 3.0, TOE, 140.0, 0.01, 100.0) <= 50.0
+    assert hc._bench(bench, t, TOP - 3.0, 3.0, TOE, 140.0, 0.01, 100.0) == 0.0
+    past = np.maximum(face, np.where((t >= 110.0) & (t <= 150.0), TOP - 25.0, 0.0))
+    assert hc._bench(past, t, TOP - 30.0, 3.0, TOE, 300.0, 0.01, 100.0) == 0.0
+    water = np.maximum(face, np.where(t >= 30.0, TOP - 9.0, 0.0))
+    assert hc._bench(water, t, TOP - 10.0, 3.0, TOE, 300.0, 0.01, 100.0) == 0.0
+    # (b)
+    road = [(450.0, -24.0), (0.0, -24.0), (-450.0, -24.0)]
+    g = _valley_with(TOP, half=BIG, grid=True,
+                     roads=[(-800.0, -24.0, 800.0, -24.0, TOP + 4.0, 24.0)])
+    ok, ev = _evx(road, g, (30.0, -24.0), top_used=TOP + 4.0)
+    assert not ok and ev["why"].startswith("a bench at about the crest's level lies on its "
+                                           "upstream side") and ev["upstream_bench_frac"] == 1.0, ev
+    ok, ev = _evx([(450.0, 0.0), (0.0, 0.0), (-450.0, 0.0)],
+                  _valley_with(TOP, half=BIG, grid=True), (30.0, 0.0))
+    assert ok and ev["upstream_bench_frac"] == 0.0, ev
+    # (c)
+    zr, x0, yt, c = _valley_with(TOP, half=BIG, grid=True,
+                                 roads=[(-800.0, -40.0, 800.0, -40.0, TOP + 4.0, 24.0)])
+    z0 = _valley_with(TOP, half=BIG, grid=True)[0]
+    xx = (x0 + (np.arange(zr.shape[1]) + 0.5) * c)[None, :]
+    ok, ev = _evx([(450.0, -40.0), (0.0, -40.0), (-450.0, -40.0)],
+                  (np.where(np.abs(xx) < 30.0, z0, zr), x0, yt, c), (230.0, -40.0),
+                  top_used=TOP + 4.0)
+    assert not ok and ev["why"].startswith("where it dips 10.7 below its level, ground 6.7 "
+                                           "higher lies 45 beside it"), ev
+    # (d)
+    a = np.radians(-30.0)
+    E = (450.0 * np.cos(a), 450.0 * np.sin(a))
+    g = _flat_floor(dams=[(-450.0, 0.0, 0.0, 0.0, TOP, CW), (0.0, 0.0, E[0], E[1], TOP, CW)])
+    wet = _cells((np.abs(_GX) < 400.0) & (_GY < -120.0 + np.minimum(0.0, np.tan(a) * _GX)))
+    walk = np.array([E, (0.0, 0.0), (-450.0, 0.0)])
+    cut = [E, (150.0 * np.cos(a), 150.0 * np.sin(a)), (-150.0, 0.0), (-450.0, 0.0)]
+    ok, ev = _evx(cut, g, (-300.0, 0.0), wet=wet)
+    assert not ok and ev["why"].startswith("where it dips 5.6 below its level"), ev
+    ok, ev = _evx(cut, g, (-300.0, 0.0), wet=wet, raw=walk)
+    assert ok, ev
+    # (e) a road at y = -30 (136), the ground between it and the dam at 135 (abutting), its
+    # far side falling 1:2 past y = -40
+    y = lambda q: q[:, 1]
+    abut = lambda q: np.where(y(q) > -20.0, 135.0, np.where(y(q) >= -40.0, 136.0, 136.0 -
+                                                             (-y(q) - 40.0) / 2.0))
+    Q, out = np.array([0.0, -30.0]), np.array([0.0, -1.0])
+    assert hc._judge(abut, Q, out, 136.0, 136.0, 3.0, 100.0, 3.0, True).startswith(
+        "abutment tie-in")
+    assert hc._stands_far(abut, Q, out, 136.0, 100.0, 3.0)
+    level = lambda q: np.where(y(q) >= -40.0, 136.0, 135.0)
+    assert not hc._stands_far(level, Q, out, 136.0, 100.0, 3.0)
+    into_hole = lambda q: np.where(y(q) >= -60.0, 136.0, np.nan)
+    assert hc._stands_far(into_hole, Q, out, 136.0, 100.0, 3.0)
+    assert not hc._stands_far(lambda q: np.full(len(q), np.nan), Q, out, 136.0, 100.0, 3.0)

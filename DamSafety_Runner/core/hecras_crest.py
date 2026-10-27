@@ -105,6 +105,13 @@ EMB_SPAN_TOES = 1.5
 # - a line no longer than FRAGMENT_FRAC of the crest length on record, or one whose crest goes
 #   on at its level past its ends for longer than the line itself, is a part of the embankment
 FRAGMENT_FRAC = 0.5
+# - DWR #195 audit round 4: a bench on its upstream side, starting within the toe distance -
+#   off its own top, at least half the crest width on record of ground that varies by no more
+#   than BENCH_FLAT_FRAC of the crest prominence, at least the line's own ground less the
+#   tolerance and the datum allowance high (not water) - in more than PARALLEL_MAX_FRAC of its
+#   sections: the dam's crest beside a higher road or fill on its downstream face (a face, even
+#   a gentle one, falls more than that over the bench's width)
+BENCH_FLAT_FRAC = 0.4
 
 
 class CrestTraceError(ValueError):
@@ -426,6 +433,19 @@ def _judge(sample, R, nu, zr, top, tol, toe, prom, nan_falls=False):
     return ""
 
 
+def _stands_far(sample, Q, out, zq, toe, prom):
+    """3.10.87 (DWR #195 audit round 4): a crest at Q stands above the ground on its far side
+    (along `out`, away from the walk): the lowest ground there from a quarter of the toe distance
+    to the toe is at least `prom` below it - a side that runs from ground into no data (a pool left
+    out of the DEM) falls. Its near side is the walk's own crest when the two abut (a road
+    crossing the dam at a small angle), so it is not judged."""
+    tt = np.linspace(0.25 * toe, toe, 7)
+    v = sample(np.asarray(Q, float)[None, :] + tt[:, None] * np.asarray(out, float)[None, :])
+    if np.isfinite(v[0]) and not np.isfinite(v).all():
+        return True
+    return bool(np.isfinite(v).any() and zq - float(np.nanmin(v)) >= prom)
+
+
 def _crest_ahead(sample, X, tau, step, top, tol, toe, prom, past):
     """3.10.87: the crest goes on straight from X along tau: a ridge at the walk's level that
     stands above both sides from `past` ahead on for a toe distance more, at every step (within
@@ -451,13 +471,14 @@ def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap, wide=None):
     the crest also goes on straight past the bend's footprint (a road crossing it: the walk
     ends where the turn began), or a level top wider than the crest on record (_ridge). DWR
     #195 audit round 4: also where another crest at the walk's level, standing above the ground
-    on both sides, lies across the section more than half the crest width on record and a step
+    on its far side (_stands_far: its near side may be the walk's own crest, a road abutting
+    the dam), lies across the section more than half the crest width on record and a step
     beside it, within the toe distance (another embankment joining, leaving or crossing it at a
     small angle, below the turn limit): the walk ends where it drifted off that other crest's
-    line (the line through it along the heading the walk settled on: back to where it left the
-    dam, when it has turned onto a road), or here when it never was on it; and a level top that
-    runs into ground higher than the crest is the abutment ('abutment tie-in: ...'), not a
-    junction."""
+    line (the line through it along the heading the walk settled on, or the one before the
+    walk's last bend: back to where it left the dam, when it has turned onto a road), or here
+    when it never was on it; and a level top that runs into ground higher than the crest is
+    the abutment ('abutment tie-in: ...'), not a junction."""
     pts = [np.asarray(X0, float)]
     X, tau = pts[0], np.asarray(tau0, float) / (np.hypot(*tau0) or 1.0)
     walked, run, last_ok, why, nstep = 0.0, 0.0, 0, "the dam length", 0
@@ -518,7 +539,7 @@ def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap, wide=None):
                         i_ref = len(pts)
                     other = [(abs(tq), Q) for Q, zq, tq in _ridges(sample, R, nu, 0.5 * float(
                         wide) + toe, ds) if abs(tq) > sep_min and abs(zq - top) <= tol and
-                        not _judge(sample, Q, nu, zq, top, tol, toe, prom, True)]
+                        _stands_far(sample, Q, nu * math.copysign(1.0, tq), zq, toe, prom)]
                     if other:
                         d_o, Q = min(other, key=lambda o: o[0])
                         why = ("a junction: another crest at its level lies {:.0f} beside it "
@@ -974,6 +995,39 @@ def _tops(zz, tt, hole, big, small, span):
     return out
 
 
+def _bench(zz, tt, lvl, prom, toe, reach, flat, flen):
+    """3.10.87 (DWR #195 audit round 4): the longest bench along a profile from a line outward
+    (samples zz at offsets tt, ascending from the line): off the line's own top (the ground at
+    least half the crest prominence below the highest ground before it), a stretch of ground at
+    least `lvl` high that starts within `toe` of the line and runs no farther than `reach`,
+    varying by no more than BENCH_FLAT_FRAC of the crest prominence - not water (a level
+    stretch at least `flen` long within `flat`, as LiDAR flattens it) and not no data. Its
+    length (0 when there is none)."""
+    z = np.asarray(zz, float)
+    t = np.asarray(tt, float)
+    mx = np.fmax.accumulate(z) if len(z) else z
+    with np.errstate(invalid="ignore"):
+        off = np.nonzero(mx - z >= 0.5 * prom)[0]
+    if not len(off):
+        return 0.0
+    z, t = z[off[0]:], t[off[0]:]
+    with np.errstate(invalid="ignore"):
+        ok = np.isfinite(z) & (z >= lvl) & (t <= reach)
+    for t0, t1, _ in _flat_runs(z, t, flat, flen):
+        ok &= ~((t >= t0 - 1e-9) & (t <= t1 + 1e-9))
+    best, lim = 0.0, BENCH_FLAT_FRAC * float(prom)
+    for i in np.nonzero(ok & (t <= toe))[0]:
+        lo = hi = z[i]
+        for j in range(i + 1, len(z)):
+            if not ok[j]:
+                break
+            lo, hi = min(lo, z[j]), max(hi, z[j])
+            if hi - lo > lim:
+                break
+            best = max(best, float(t[j] - t[i]))
+    return best
+
+
 def _flat_runs(zz, tt, flat, length):
     """3.10.87 (DWR #195 audit round 4): the stretches of a profile at least `length` long whose
     ground varies by no more than `flat` (water, as LiDAR flattens it): [(t0, t1, z)]."""
@@ -1030,7 +1084,7 @@ def valley_flow(line, wet_xy, P=None, ft=1.0):
 
 def evidence(line, sc, sample, P, top_rec, top_used, tol, prom, height, toe, crest_w, step,
              ft=1.0, wet_xy=None, wet_cell=None, far=None, inside=None, far_box=None,
-             valley=None, rec_len=None):
+             valley=None, rec_len=None, raw=None):
     """3.10.87: the positive evidence a dam line traced off the old rule (trace's 'relaxed', or
     from a start found away from the dam point) needs before it is used - the old rule found no
     crest, so the line may be another embankment (a road or a dike beside, below or across the
@@ -1041,7 +1095,8 @@ def evidence(line, sc, sample, P, top_rec, top_used, tol, prom, height, toe, cre
     read, not ground), inside: f(xy) -> True inside the DEM's footprint (no data there is a pool
     left out of it, behind a crest: lower than any ground; no data outside it is the DEM's
     edge), valley: valley_axis (default from wet_xy and P), rec_len: the crest length on
-    record. All of:
+    record, raw: the walk the line was made from (trace's raw 'line': the line's own crest,
+    where smoothing or the straight stretch across the breach cut a corner). All of:
     (1) the dam point lies within the toe distance plus half the crest width and half a step
         of it (on its crest, its faces or the pool just above it);
     (2) the ground climbs from the dam point to it (no other ridge in between);
@@ -1066,7 +1121,13 @@ def evidence(line, sc, sample, P, top_rec, top_used, tol, prom, height, toe, cre
         no other ridge or level top beside it within twice the toe distance plus the crest
         width, on either side, in more than PARALLEL_MAX_FRAC of its sections; neither end
         runs into another ridge (a levee or a road ending at the dam's face); it impounds (no
-        crest-high ground behind it beyond the toe distance in more than that fraction); and
+        crest-high ground behind it beyond the toe distance in more than that fraction); no
+        bench on its upstream side (_bench, BENCH_FLAT_FRAC) in more than that fraction; where
+        it dips more than the tolerance below its level (a stretch it stepped over), no ground
+        beside it within the toe distance more than the crest prominence above its own ground
+        (it left the dam's crest there: a gap in a road beside it) - not ground on its own crest
+        elsewhere (the other arm of a bend) or on the walk it was made from (a corner it cut);
+        and
         no other embankment between it and the pool, looked for along its upstream normal and
         up the valley (against valley_axis's direction, unless the pool lies just upstream of
         it) all the way back - max(UPSTREAM_SCAN_FT, 1.5 line lengths, past the upstream end of
@@ -1254,6 +1315,38 @@ def evidence(line, sc, sample, P, top_rec, top_used, tol, prom, height, toe, cre
     lvl_lo = float(np.nanmedian(zl)) - tol - allow
     lvl = min(top_rec, top_used) - tol
     info["other_ridge_level"] = round(lvl_lo, 2)
+    # ... and on its crest where it dips (its ground more than the tolerance below its level: a
+    # stretch it stepped over): no ground beside it within the toe distance standing more than
+    # the crest prominence above its own ground there (a line that steps over a gap in a road
+    # beside the dam's crest, on the dam's face)
+    sd = np.arange(0.0, L + 1e-9, ds)
+    tb = np.arange(-toe, toe + 1e-9, ds)
+    own_b = np.abs(tb) <= 0.25 * crest_w + 0.5 * step + 1e-9     # its own ground: at the line
+    Xd = point_at(p, sd)
+    Nd = np.array([left_normal(tangent_at(p, s_)) for s_ in sd]).reshape(-1, 2)
+    qd = (Xd[:, None, :] + tb[None, :, None] * Nd[:, None, :]).reshape(-1, 2)
+    zd = far_(qd).reshape(len(sd), len(tb))
+    zf = np.where(np.isfinite(zd), zd, -np.inf)
+    z_own = np.max(np.where(own_b[None, :], zf, -np.inf), axis=1)
+    # beside: not on the line's own crest elsewhere (the other arm of a bend), nor on the walk
+    # it was made from (where smoothing, or the straight stretch across the breach, cut a
+    # corner of the crest: DWR-2801's bend)
+    near_line = _seg_nearest(p, qd)[0] <= 0.5 * crest_w + step
+    if raw is not None and len(raw) >= 2:
+        near_line |= _seg_nearest(raw, qd)[0] <= 0.5 * crest_w + step
+    near_line = near_line.reshape(len(sd), len(tb))
+    z_bes = np.max(np.where(own_b[None, :] | near_line, -np.inf, zf), axis=1)
+    with np.errstate(invalid="ignore"):
+        bad = np.isfinite(z_own) & np.isfinite(z_bes) & (z_own < top_used - tol) & \
+            (z_bes - z_own > prom)
+    if bad.any():
+        kb = int(np.argmax(np.where(bad, z_bes - z_own, -np.inf)))
+        tk = float(tb[int(np.argmax(np.where(own_b, -np.inf, zf[kb])))])
+        return False, dict(info, why="where it dips {:.1f} below its level, ground {:.1f} higher "
+                           "lies {:,.0f} beside it (a stretch stepped over beside the dam's "
+                           "crest: it is on a road or a face there)".format(
+                               top_used - float(z_own[kb]), float(z_bes[kb] - z_own[kb]),
+                               abs(tk)))
     # ... across the section through the dam point
     R4 = 3.0 * toe + crest_w
     t4 = np.arange(0.0, R4 + 1e-9, ds)
@@ -1305,7 +1398,7 @@ def evidence(line, sc, sample, P, top_rec, top_used, tol, prom, height, toe, cre
     own_w = 0.5 * crest_w + step
     w_lt = max(0.5 * crest_w, 2.0 * step)
     sides = (np.nonzero(tt >= 0)[0], np.nonzero(tt <= 0)[0][::-1])    # from the line out
-    par = high = upr = unr = n = 0
+    par = high = upr = unr = bench = n = 0
     for s in secs:
         Xs = point_at(p, s)
         n_ = left_normal(tangent_at(p, s))
@@ -1315,6 +1408,8 @@ def evidence(line, sc, sample, P, top_rec, top_used, tol, prom, height, toe, cre
         n += 1
         up = (tt <= -toe) & (tt >= -W)
         high += bool(np.any(np.isfinite(zz[up]) & (zz[up] >= lvl)))
+        bench += _bench(zz[sides[1]], np.abs(tt[sides[1]]), min(lvl, lvl_lo), prom, toe, W,
+                        flat, flen) >= 0.5 * crest_w - 1e-9
         blocked, reached, t_pool = False, True, np.inf
         zc = float(far_(Xs[None, :])[0])
         for k_, u_ in enumerate((-n_, -va["dir"])):
@@ -1373,6 +1468,7 @@ def evidence(line, sc, sample, P, top_rec, top_used, tol, prom, height, toe, cre
                     _level_tops(zr, tr_, w_lt, 0.25 * prom, prom, toe))
         found = found or any(abs(t_) <= W for t_ in others(Xs, n_, tt))
         par += found
+    info["upstream_bench_frac"] = round(bench / n, 3) if n else None
     info.update(sections=n, parallel_ridge_frac=round(par / n, 3) if n else None,
                 upstream_ridge_frac=round(upr / n, 3) if n else None,
                 upstream_unreached_frac=round(unr / n, 3) if n else None,
@@ -1395,6 +1491,11 @@ def evidence(line, sc, sample, P, top_rec, top_used, tol, prom, height, toe, cre
         return False, dict(info, why="crest-high ground lies behind it (on its upstream side, "
                            "beyond the toe distance) along {} of {} sections: a dam has its "
                            "pool there".format(high, n))
+    if bench > PARALLEL_MAX_FRAC * n:
+        return False, dict(info, why="a bench at about the crest's level lies on its upstream "
+                           "side, within the toe distance, along {} of {} sections (the dam's "
+                           "crest beside a higher road or fill on its downstream face: which "
+                           "one is the dam is not clear)".format(bench, n))
     # (7) not a part of the embankment
     if rec_len and L < FRAGMENT_FRAC * float(rec_len):
         return False, dict(info, why="it is {:,.0f} long, less than {:.0%} of the crest length "
