@@ -303,10 +303,13 @@ All optional layers, read only within about 45 mi of the dam:
   rail centreline it carries (the run's road / rail layers, pieces whose ends touch merged;
   the command-line runner uses `layers.receptor_roads` / `receptor_rail`; a rail bridge -
   NBI item 42A, NDDOT "service on", runner_culverts' placement or rail in the facility
-  carried - only against rail lines). Its cut stays where the inventory put it unless the
+  carried - only against rail lines; a street named after the railway, 'RAILROAD AVE' or
+  'Soo Street', is not rail, and a name with both a road and a railway, 'CO RD 12 / BNSF RY',
+  leaves it to the embankment Hazard placed it on). Its cut stays where the inventory put it unless the
   evidence says that place is solid embankment: no opening in the DEM there, no channel line,
   no channel in the ground beside the road, the road not dipping there (its low point, a sag
-  or a wide opening), DEM data there and a road line that does not end near it. Only then
+  or a wide opening; on a road sagging into a coulee a cut on the approach grade is not the
+  low point and does not count), DEM data there and a road line that does not end near it. Only then
   does it move, to the NEAREST crossing along the road within `NDBREACH_BRIDGE_SNAP_M`
   metres (environment variable; default 300; 0, off, no or false = off): a DEM opening whose
   bare-earth bed is at least 1 m below the ground beside the road at the cut, or a channel
@@ -316,7 +319,9 @@ All optional layers, read only within about 45 mi of the dam:
   its length across the road and its inverts are cleared (the cut goes to the lowest ground
   near its new ends). Every move is a run warning; the bridges kept without an opening or a
   channel seen at the cut are named in one; every bridge is in `run_report.json`
-  `bridge_snap` (with the radius) and in a table in `run_report.md`.
+  `bridge_snap` (with the radius) and in a table in `run_report.md`. A moved bridge keeps
+  where it came from, so a sub-run of the same run (sensitivity, cascade, nested, refine)
+  reports the same move rather than 'kept' at the new place, and is not moved again.
 - **Channels to burn** (lines): cut into the DEM, with the bed forced to fall downstream so
   a LiDAR pit does not dam the channel.
 - **Ponds and reservoirs** (polygons): lowered to their bed (mean depth below the LiDAR

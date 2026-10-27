@@ -83,7 +83,12 @@ def main(argv=None):
               if o is not d and len(o.get("line") or []) >= 2]
     old_line = np.asarray(s.line, float).copy()
     c_old = bs._mid(old_line)
-    terr = gdal_io.GdalTerrain(dem, crs)
+    # the unit decided above, passed on: since 3.10.89 GdalTerrain's default ('Detect from the
+    # raster') stops on a DEM that records no unit (DWR-3034's composite VRT)
+    choice = {1.0: gdal_io.Z_METERS, gdal_io.FT: gdal_io.Z_FEET,
+              gdal_io.US_FT: gdal_io.Z_US_FEET}.get(z_to_m)
+    terr = (gdal_io.GdalTerrain(dem, crs, z_choice=choice) if choice else
+            gdal_io.GdalTerrain(dem, crs))
     # the run's channel lines are not in run_report.json: the check uses the DEM only
     row = bs.snap_bridge(s, roads, terr.read, (), a.radius, occupied=others, rails=rails)
     print("\n(b) bridge cut location")

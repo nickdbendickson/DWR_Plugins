@@ -82,6 +82,14 @@ STEP_M = 1.0
 METHODS_MOVED = ("dem_opening", "channel_crossing")
 RAIL_WORDS = re.compile(r"\b(rail|rails|railway|railroad|railroads|rr|ry|bnsf|soo|cpkc|"
                         r"amtrak|dmvw|rrvw|rrv)\b", re.I)
+# a street word AFTER the rail word names a street ('RAILROAD AVE', 'Soo Street', 'SOO LINE RD')
+STREET_WORDS = re.compile(r"\b(ave|av|avenue|st|str|street|rd|road|dr|drive|blvd|boulevard|ln|"
+                          r"lane|way|pl|place|ct|court|pkwy|parkway|hwy|highway|cir|circle|ter|"
+                          r"terrace|trl|trail)\b\.?", re.I)
+# a road named in another part of a compound name ('CO RD 12 / BNSF RY')
+ROAD_MARKS = re.compile(r"\b(co\s*rd|cr|hwy|highway|us|nd|sh|i)\s*-?\s*\d+|\b(interstate|county "
+                        r"road|township road|twp)\b", re.I)
+NAME_PARTS = re.compile(r"\s*(?:/|\\|;|&|\+|\band\b|\bover\b|\bunder\b|\bat\b|,)\s*", re.I)
 
 
 def radius_from_env(default=SNAP_RADIUS_M, with_note=False):
@@ -120,7 +128,8 @@ def facility_kind(attrs):
     (service_on_042a: 2 railroad; 1, 5-8 highway), NDDOT's servtypondesc (the same codes),
     Hazard's runner_culverts (notes 'no rail / road line crosses a stream here' = the record was
     meant for that kind; else the embankment it was placed on), or rail words in the facility
-    carried (carried, facility_carried_007, facility)."""
+    carried (carried, facility_carried_007, facility; name_kind: not a street named after the
+    railway, not a compound road / rail name)."""
     low = {str(k).lower(): v for k, v in (attrs or {}).items()}
     for key in ("service_on_042a", "servtypondesc"):
         code = _txt(low.get(key)).split(" ")[0].lstrip("0")[:1]
@@ -133,10 +142,35 @@ def facility_kind(attrs):
     if m:
         return m.group(1)
     for key in ("carried", "facility_carried_007", "facility"):
-        if RAIL_WORDS.search(_txt(low.get(key))):
+        if name_kind(_txt(low.get(key))) == "rail":
             return "rail"
     emb = _txt(low.get("embankment")).lower()
     return emb if emb in ("road", "rail") else ""
+
+
+def name_kind(name):
+    """'rail' when a facility name says rail, else '' (the name does not decide).
+
+    The name is split into parts at '/', '\\', ';', '&', '+', ',', 'and', 'over', 'under' and
+    'at'. A part says rail when it has a rail word (RAIL_WORDS) with no street word
+    (STREET_WORDS: AVE, ST, STREET, RD, DR, BLVD, LN, WAY ...) after it: 'BNSF RAILWAY' and
+    'SOO LINE RAILROAD' are rail, 'RAILROAD AVE', 'Soo Street', 'N RAILROAD ST' are streets.
+    A compound name with a rail part AND a road part (a street word or a road number:
+    'CO RD 12 / BNSF RY', 'ND 25 OVER BNSF') is ambiguous - the record may be the road over the
+    railway, or the railway beside the road - so the name does not decide: the bridge falls to
+    the embankment Hazard placed it on, else unknown (matched to either kind of line; PR #198
+    review, finding 2)."""
+    rail = road = False
+    for part in NAME_PARTS.split(name or ""):
+        if not part.strip():
+            continue
+        hits = list(RAIL_WORDS.finditer(part))
+        streets = list(STREET_WORDS.finditer(part))
+        if hits and not any(st.start() >= hits[-1].end() for st in streets):
+            rail = True
+        elif streets or ROAD_MARKS.search(part):
+            road = True
+    return "rail" if rail and not road else ""
 
 
 FACILITY_FIELDS = ("service_on_042a", "servtypondesc", "notes", "carried",
@@ -357,6 +391,11 @@ def _window_max(z, s, lo, hi):
     return float(np.max(z[sel])) if sel.any() else np.nan
 
 
+def _window_min(z, s, lo, hi):
+    sel = (s >= lo) & (s < hi) & np.isfinite(z)
+    return float(np.min(z[sel])) if sel.any() else np.nan
+
+
 def _crossings(line, pts, s_al):
     """[(along-road s, point, unit direction of `line` there)] where polyline `line` crosses
     the densified road `pts`."""
@@ -496,12 +535,24 @@ def _judge(s, pools, read_dem, streams, radius_m, keep_m=KEEP_M, step=STEP_M):
     # --- the cut stays: the road dips there (its low point, a sag, a wide opening) ----------
     zw = float(np.min(z[w]))
     lo, hi = s0 - half_cut, s0 + half_cut
+    # A dip counts only where the cut is the road's LOCAL LOW POINT within that reach: the
+    # road on each side rises at least DIP_M somewhere AND nowhere drops more than DIP_M below
+    # the cut. On a road sagging into a coulee a misplaced cut on the near approach grade has
+    # the far (creek) side higher than itself, but the road keeps falling past it to the real
+    # opening: that is not the cut's sag (PR #198 review, finding 1).
     dips = []
     for reach_m in (shoulder, GRADE_LINE_M):
         ml = _window_max(z, s_al, lo - reach_m, lo)
         mr = _window_max(z, s_al, hi + 1e-9, hi + reach_m + 1e-9)
-        if np.isfinite(ml) and np.isfinite(mr):
-            dips.append(min(ml, mr) - zw)
+        if not (np.isfinite(ml) and np.isfinite(mr)):
+            continue
+        nl = _window_min(z, s_al, lo - reach_m, lo)
+        nr = _window_min(z, s_al, hi + 1e-9, hi + reach_m + 1e-9)
+        low = min(v for v in (nl, nr) if np.isfinite(v)) if np.isfinite([nl, nr]).any() \
+            else zw
+        if low < zw - DIP_M:
+            continue                      # the road goes lower within this reach: no sag here
+        dips.append(min(ml, mr) - zw)
     dip = max(dips) if dips else 0.0
     if dip >= DIP_M:
         row.update(method="kept", new_xy=row["old_xy"],
@@ -621,18 +672,41 @@ def _move(s, t, row):
         v = -v
     sin_new = abs(float(v[0] * t_new[1] - v[1] * t_new[0]))
     L = across / max(sin_new, 0.5)
+    snap_from = {"xy": row["old_xy"], "line": np.asarray(s.line, dtype=float).tolist(),
+                 "inverts": [s.invert_up_m, s.invert_dn_m]}
     s.line = np.array([p_new - 0.5 * L * v, p_new + 0.5 * L * v])
     s.invert_up_m = s.invert_dn_m = None      # cleared: the cut goes to the lowest ground there
     row.update(method=t["how"], verified=True, moved_m=round(moved, 1), new_xy=_xy(p_new),
                note="{}: cut moved {:.0f} m along the {}; inverts cleared (the cut goes to the "
                     "lowest ground near its new ends)".format(t["txt"], moved, t["kind"]))
+    # the original location on the structure itself (PR #198 review, finding 3): sub-runs
+    # (sensitivity, probabilistic, cascade, nested, refine) share this object through shallow
+    # copies; they report the move from it instead of judging the moved cut ('kept, verified')
+    snap_from.update(to_xy=row["new_xy"], moved_m=row["moved_m"], method=row["method"],
+                     line_kind=row["line"], target_xy=row["target_xy"], note=row["note"])
+    s.snap_from = snap_from
+
+
+def _row_snapped(s):
+    """The report row of a bridge an earlier pass of this run already moved (s.snap_from):
+    the move as it was made, not judged again (idempotent)."""
+    f = s.snap_from
+    return {"name": s.name or s.kind, "kind": s.kind, "carries": getattr(s, "carries", "") or "",
+            "method": f.get("method", "dem_opening"), "verified": True,
+            "moved_m": float(f.get("moved_m") or 0.0), "old_xy": f.get("xy"),
+            "new_xy": f.get("to_xy"), "line": f.get("line_kind", ""),
+            "target_xy": f.get("target_xy"), "note": f.get("note", ""),
+            "snapped_earlier": True}
 
 
 def snap_bridges(structures, roads, read_dem, streams=(), radius_m=None, rails=()):
     """Check (and, on evidence, move) every inventory bridge. roads / rails: centrelines (work
     CRS, m); a bridge whose facility kind is unknown matches either. read_dem(bounds, cell) ->
     Grid in metres (bare earth, no structure cuts). streams: channel lines. Returns (rows,
-    notes, warnings); moved structures' lines are replaced in place."""
+    notes, warnings); moved structures' lines are replaced in place and the original location
+    is kept on the structure (s.snap_from). Idempotent: a bridge with snap_from (moved by an
+    earlier pass, e.g. the parent run of a sub-run sharing the object) is reported as moved,
+    from its original location, and not judged again."""
     note_env = ""
     if radius_m is None:
         radius_m, _raw, note_env = radius_from_env(with_note=True)
@@ -658,6 +732,9 @@ def snap_bridges(structures, roads, read_dem, streams=(), radius_m=None, rails=(
         return rows, notes, warns
     judged = []
     for s in bridges:
+        if isinstance(getattr(s, "snap_from", None), dict):
+            judged.append((s, _row_snapped(s), None))     # moved earlier in this run
+            continue
         try:
             r, t = _judge(s, pools, read_dem, streams, radius_m)
         except Exception as ex:                                   # noqa - never stop a run
@@ -704,7 +781,9 @@ def snap_bridges(structures, roads, read_dem, streams=(), radius_m=None, rails=(
         rows.append(r)
         msg = "Bridge {}: {}".format(r["name"], r["note"])
         if r["method"] in METHODS_MOVED:
-            msg += " (from {} to {})".format(r["old_xy"], r["new_xy"])
+            msg += " (from {} to {}{})".format(r["old_xy"], r["new_xy"],
+                                               "; moved earlier in this run, not judged again"
+                                               if r.get("snapped_earlier") else "")
             warns.append("Inventory bridge {} moved {:.0f} m along the {} from {} to {} ({}: "
                          "{}); check it on the DEM".format(
                              r["name"], r["moved_m"], r["line"] or "road", r["old_xy"],
