@@ -270,6 +270,17 @@ def the_nd_ground_check_samples_the_whole_dem_and_says_when_it_cannot():
         ds = None
         med, cells = G.sample_median(gdal.Open(path))
         assert med == 320.0 and cells > 10, (med, cells)
+        # the sample is spread over the raster: a corner unlike the rest (30 there) does not decide
+        odd = os.path.join(d, "corner_30.tif")
+        a[:250, :250] = 30.0
+        ds = gdal.GetDriverByName("GTiff").Create(odd, 400, 400, 1, gdal.GDT_Float32)
+        ds.SetProjection(s.ExportToWkt())
+        ds.SetGeoTransform((CX - 200.0, 1.0, 0.0, CY + 200.0, 0.0, -1.0))
+        ds.GetRasterBand(1).WriteArray(a)
+        ds.GetRasterBand(1).SetNoDataValue(-9999.0)
+        ds = None
+        assert G.sample_median(gdal.Open(odd))[0] == 320.0
+        assert _gis(algs, odd, 3)[0].z_to_m == 1.0       # the top-left read stopped: median 30
         _stops(lambda: _gis(algs, path, 1), "DEM median 320.0 with units 'Feet'",
                "set 'DEM elevation units' to Meters")             # ran x 0.3048 before
         src = _gis(algs, path, 3)[0]
