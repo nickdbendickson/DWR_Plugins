@@ -44,11 +44,17 @@ class DownloadDem(QgsProcessingAlgorithm):
             "Resolution is 10 m or 1 m. "
             "USGS 3DEP: source USGS 3DEP ImageServer, native CRS EPSG:5070, "
             "native units metres, native file type GeoTIFF. "
-            "ND DWR LiDAR: source ND QL2 on lidarftp.swc.nd.gov, native CRS "
-            "the tile CRS (feet, often EPSG:3721 or EPSG:2266), native units "
-            "feet, native file type Erdas Imagine .img at 1 m. "
+            "ND DWR LiDAR: source ND QL2 on lidarftp.swc.nd.gov / lidar.dwr.nd.gov: "
+            "DEM_Imagine is Erdas Imagine .img at 1 m in the tile's UTM CRS (EPSG:26914 or "
+            "EPSG:3721, metres), elevations in metres; ASCII_Grids_ft are ASCII grids in ND "
+            "State Plane feet (EPSG:2265 / 2266), elevations in feet, converted x 0.3048 "
+            "(DEM_Imagine is used when both are there). "
             "Either source is saved as GeoTIFF float32, tiled, DEFLATE, "
-            "CRS EPSG:5070, units metres, at the chosen cell size. "
+            "CRS EPSG:5070, units metres (written as the band's unit, so the Runner's "
+            "'Detect from the raster' reads it), at the chosen cell size. "
+            "USGS 3DEP is fetched in 1,200 px export requests: at 1 m these are 1.2 km chunks, "
+            "so a 10 mi buffer is 27 x 27 = 729 requests - request chunks, not lidar tiles; "
+            "for 1 m the native tile source below is usually the better choice. "
             "A _dem.txt file next to the raster lists those facts. "
             "10 m is the working copy. 1 m is for one dam or a county you "
             "are about to inspect; a 1 m state is very large. "
@@ -63,9 +69,10 @@ class DownloadDem(QgsProcessingAlgorithm):
             "folder>/dem/lidar_1m/ (never the offline pack or a read-only folder); tiles already "
             "there are skipped and a cut download resumes. Where two projects cover the same "
             "tile the newest collection is used and the log says so. The result is "
-            "<DAM_ID>_1m_lidar.vrt in the output folder, with the coarser DEM underneath when "
-            "one is given or <DAM_ID>_10m_5070.tif is there, and <DAM_ID>_1m_lidar.json listing "
-            "the projects and tiles."
+            "<DAM_ID>_1m_lidar.vrt in the output folder (band unit metres), with the coarser "
+            "DEM underneath when one is given or <DAM_ID>_10m_5070.tif is there - converted to "
+            "metres when it records feet, not used when it records no unit - and "
+            "<DAM_ID>_1m_lidar.json listing the projects and tiles."
         )
 
     def initAlgorithm(self, config=None):
@@ -94,7 +101,7 @@ class DownloadDem(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterBoolean(
             "ASCII_FT", "ND LiDAR: also pull ASCII_Grids_ft (not used for the local GeoTIFF if Imagine is present)", False))
         self.addParameter(QgsProcessingParameterBoolean(
-            "IMAGINE", "ND LiDAR: DEM_Imagine (1 m feet)", True))
+            "IMAGINE", "ND LiDAR: DEM_Imagine (1 m, metres)", True))
         self.addParameter(QgsProcessingParameterString(
             "WORK_CRS", "Extra CRS (empty = EPSG:5070 only)", optional=True))
         # 0.17.29: USGS 3DEP 1 m lidar tiles (native, TNM); used only with that source
@@ -143,6 +150,7 @@ class DownloadDem(QgsProcessingAlgorithm):
         side = os.path.splitext(dest)[0] + "_dem.txt"
         if os.path.isfile(dest) and os.path.isfile(side):
             feedback.pushInfo("reusing {} ({})".format(dest, open(side, encoding="utf-8").read().replace("\n", "; ")))
+            _tag_reused(dest, side, feedback)
             return {"VRT": dest, "OUT": out}
         # Source tiles (~30 files, ~170 MB for a dam) go to a temporary folder that is removed
         # after the local GeoTIFF is written, on success and on failure alike.
@@ -207,7 +215,7 @@ class DownloadDem(QgsProcessingAlgorithm):
             extent = dd.to_5070(*box)
         else:
             extent = dd.to_5070(*dd.STATE)
-        return dd.download(extent, cell, out, stem + "_src", feedback)
+        return dd.download(extent, cell, out, stem + "_src", feedback, scope=scope)
 
     def _nd(self, parameters, context, feedback, out, scope, index_dir=None):
         products = []
@@ -246,10 +254,14 @@ class DownloadDem(QgsProcessingAlgorithm):
             raise QgsProcessingException(str(exc))
         native = dd.native_from_raster(vrt)
         native["source"] = "ND DWR LiDAR_NorthDakota_QL2 " + ", ".join(products)
-        if not native.get("file_type"):
-            native["file_type"] = "Erdas Imagine .img, 1 m" if "DEM_Imagine" in products else "ASCII grid, feet"
-        if not native.get("units"):
-            native["units"] = "feet"
+        # 0.17.50: the elevation unit of the product build_vrts used (native_from_raster's
+        # 'units' is the horizontal CRS's), not 'feet' for both
+        if os.path.basename(vrt) == "nd_lidar_ascii_m.vrt":
+            native["units"] = "feet (ASCII_Grids_ft, converted x 0.3048 to metres)"
+            native["file_type"] = "ESRI ASCII grid (.asc), feet"
+        else:
+            native["units"] = "metres (DEM_Imagine)"
+            native["file_type"] = "Erdas Imagine .img, 1 m"
         return vrt, native
 
 
@@ -364,7 +376,10 @@ class DownloadDem(QgsProcessingAlgorithm):
         except Exception as e:                               # noqa
             raise QgsProcessingException("building the VRT failed: {}".format(e))
         info = dd.product_info("tnm1m", 1, {})
-        info["crs"] = json.load(open(js, encoding="utf-8"))["crs"]
+        with open(js, encoding="utf-8") as fh:
+            built = json.load(fh)
+        info["crs"] = built["crs"]
+        fallback = built.get("fallback") or ""           # 0.17.50: "" when it was not used
         side = dd.write_sidecar(vrt, info)
         feedback.setProgress(100)
         feedback.pushInfo("projects: {}".format(", ".join(plan["projects"])))
@@ -378,6 +393,39 @@ class DownloadDem(QgsProcessingAlgorithm):
         if extra and extra != vrt:
             feedback.pushInfo("extra CRS copy: {}".format(extra))
         return {"VRT": vrt, "OUT": out}
+
+
+def _tag_reused(dest, side, feedback):
+    """A reused local DEM written before Screening 0.17.50 has no band unit (0.17.50). One
+    whose record is a USGS 3DEP download is tagged metres now (the ImageServer serves metres in
+    every version); any other is left as it is, with a warning saying what to do - an ND DWR
+    LiDAR one is never tagged blindly (older builds could write feet grids labelled metres).
+    One whose values no unit reads right stops (dem_zunit.data_problem): an ND DWR download
+    written before 0.17.50 in a gft* folder is tagged 'm' but holds DEM_Imagine metres x 0.3048."""
+    bad = dd.data_problem(dest)
+    if bad:
+        raise QgsProcessingException("Not reusing {}: {}.".format(os.path.basename(dest), bad))
+    if dd.band_unit(dest):
+        return
+    got, how = dd.recorded_unit(dest)
+    if got == dd.ZU.METERS:
+        if dd.set_metres(dest):
+            feedback.pushInfo("{} was written before Screening 0.17.50: band 1 is now tagged "
+                              "metres ({})".format(os.path.basename(dest), how))
+        return
+    src = dd.record_source(dest)
+    if src.startswith("USGS 3DEP"):                      # metres in every version
+        unit = "Meters (a USGS 3DEP download is metres)"
+    elif src.startswith("ND DWR"):
+        unit = ("Meters only if it is a DEM_Imagine download (one from ASCII_Grids_ft written "
+                "before 0.17.50 may hold feet)")
+    else:
+        unit = "the unit of its elevations"
+    feedback.pushWarning(
+        "{} was written before Screening 0.17.50 and records no elevation unit the Runner trusts "
+        "({}). The Runner's 'Detect from the raster' stops on it: set 'DEM elevation units' to "
+        "{}, or delete {} and {} and run Download DEM again.".format(
+            os.path.basename(dest), how, unit, os.path.basename(dest), os.path.basename(side)))
 
 
 def _bearing(alg, parameters, context, feedback=None):

@@ -890,7 +890,8 @@ def _classes():
             self.coverage = W.QLabel("")
             self.coverage.setWordWrap(True)
             form.addRow("", self.coverage)
-            self.dem_fact = W.QLabel("USGS 3DEP: EPSG:5070, metres, GeoTIFF. ND DWR LiDAR: feet, often EPSG:3721, .img. Saved copy is EPSG:5070, metres.")
+            self.dem_fact = W.QLabel("USGS 3DEP: EPSG:5070, metres, GeoTIFF. ND DWR LiDAR: DEM_Imagine .img in UTM metres "
+                                     "(ASCII_Grids_ft: State Plane feet, converted). Saved copy is EPSG:5070, metres.")
             self.dem_fact.setWordWrap(True)
             self.dem_fact.setStyleSheet("color: {};".format(TOKENS["muted"]))
             form.addRow("", self.dem_fact)

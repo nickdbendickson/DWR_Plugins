@@ -25,7 +25,9 @@ rasters are written as ESRI ASCII grids (`Depth (Max).asc`, ...) instead of GeoT
 The configuration is one JSON file (`template` writes all keys). Relative paths in it are
 relative to the file. Keys that start with an underscore are ignored, null means "not set".
 
-  dem        path, z_units (auto|feet|us_feet|meters), crs (ASCII DEMs), work_crs, reader,
+  dem        path, z_units (auto|feet|us_feet|meters; feet_tag_wrong|us_feet_tag_wrong|
+             meters_tag_wrong: that unit although the raster's unit tag says otherwise),
+             crs (ASCII DEMs), work_crs, reader,
              resample (GDAL name, e.g. average; null = NDBREACH_DEM_RESAMPLE, else average)
   dam        dam_id, name, point [x, y] and inflow_point in the DEM's CRS, and the fields of
              breach.DamData (dam_height_ft, storage_top_acft, top_of_dam_ft, ...); the short
@@ -390,7 +392,9 @@ TEMPLATE = {
              "in the DEM's CRS. `ndbreach_cli.py --help` describes every section.",
     "dem": {
         "_help": "GeoTIFF/VRT (needs GDAL) or ESRI ASCII .asc. z_units: auto|feet|us_feet|meters "
-                 "(set it: auto only trusts what the raster records). crs is for .asc DEMs "
+                 "(set it: auto only trusts what the raster records; feet_tag_wrong, "
+                 "us_feet_tag_wrong, meters_tag_wrong: that unit although the raster's unit tag "
+                 "says otherwise). crs is for .asc DEMs "
                  "(metric CRS). resample: how GeoTIFF/VRT terrain is resampled onto the model "
                  "grid (average|bilinear|near|cubic|...); null = the NDBREACH_DEM_RESAMPLE "
                  "environment variable, else average.",
@@ -745,6 +749,7 @@ class AscTerrain(object):
             except (OSError, ValueError, KeyError) as e:
                 raise CliError("cannot read the ESRI ASCII grid {}: {}: {}".format(
                     manning_path, type(e).__name__, e))
+        z_choice = gdal_io.base_choice(z_choice)       # an ASCII grid records no tag to be wrong
         if z_choice == gdal_io.Z_FEET:
             self.z_to_m, self.z_note = FT, "feet (chosen)"
         elif z_choice == gdal_io.Z_US_FEET:
@@ -752,7 +757,10 @@ class AscTerrain(object):
         elif z_choice == gdal_io.Z_METERS:
             self.z_to_m, self.z_note = 1.0, "metres (chosen)"
         else:
-            self.z_to_m, self.z_note = 1.0, "metres (an ESRI ASCII grid records no units; check)"
+            # 3.10.89: never a guess, as in a QGIS run (gdal_io.resolve_dem_z): an ESRI ASCII
+            # grid records no elevation unit (before: metres, with a 'check' note)
+            raise CliError("dem.z_units is auto, but the ESRI ASCII grid {} records no elevation "
+                           "unit: set dem.z_units to meters, feet or us_feet".format(dem_path))
 
     @property
     def bounds(self):
@@ -943,11 +951,24 @@ def _open_gdal(cfg, d, path, dam_pt, cache):
         raise CliError("The model CRS must be projected in metres ({} is not)".format(work_text))
     n, mpath, kw = manning_options(cfg)
     kw["resample"] = d.get("resample")
+    # 3.10.89: the unit as a QGIS run resolves it (gdal_io.resolve_dem_z): auto = the unit the
+    # DEM records, never a guess from its CRS; an explicit unit the DEM's record contradicts stops
     try:
-        terrain = gdal_io.GdalTerrain(path, work_text, d.get("z_units", gdal_io.Z_AUTO), mpath, n,
-                                      **kw)
+        zc, z_how = gdal_io.resolve_dem_z(path, d.get("z_units", gdal_io.Z_AUTO))
+    except ValueError as e:
+        raise CliError("{} (in the CLI config: dem.z_units = {}; the '... (the raster's unit tag "
+                       "is wrong)' choices are feet_tag_wrong, us_feet_tag_wrong and "
+                       "meters_tag_wrong)".format(e, "|".join(gdal_io.Z_CHOICES[:4])))
+    try:
+        terrain = gdal_io.GdalTerrain(path, work_text, zc, mpath, n, **kw)
     except ValueError as e:                            # a bad NDBREACH_DEM_RESAMPLE value
         raise CliError(str(e))
+    z_how, z_warn = gdal_io.z_how_parts(z_how)
+    if z_how:
+        terrain.z_note = gdal_io.detected_z_note(zc, z_how)
+    if z_warn:                  # review round 3: chosen against the DEM's tag - in the report
+        terrain.z_check = z_warn
+        say("WARNING: DEM elevation units: " + z_warn)
     unit = gdal_io.linear_unit_m(wkt)
     target, res = None, None
     if unit and not gdal_io.same_crs(wkt, work_text):
@@ -1535,7 +1556,7 @@ def cmd_hecras_reexport(args):
             terrain=args.terrain or None, like=args.grid or None, t0_hr=args.t0_hr,
             arrival_depth_ft=args.arrival_depth_ft, terrain_z=args.terrain_z or None,
             overwrite=args.overwrite, log=say, depth_basis=args.depth_basis or None)
-    except (eng.HecRasEngineError, eng.hecras.HecRasError) as e:
+    except (eng.HecRasEngineError, eng.hecras.HecRasError, ValueError) as e:
         raise CliError(str(e))
     say("depth basis written: {}".format(rep["depth_basis"]))
     for k, a in rep["areas_by_basis"].items():
@@ -1839,7 +1860,9 @@ def build_parser():
     p.add_argument("--grid", default="", help="raster whose grid to write on (default: the "
                    "folder's Depth (Max).tif)")
     p.add_argument("--terrain-z", default="", choices=["", "auto", "feet", "us_feet", "meters"],
-                   help="terrain elevation unit (default: from the raster)")
+                   help="terrain elevation unit (default: the unit the raster records, else the "
+                   "Runner's record of its own terrain, else its CRS's linear unit, with a "
+                   "warning)")
     p.add_argument("--t0-hr", type=float, default=None, help="plan hour arrival counts from")
     p.add_argument("--arrival-depth-ft", type=float, default=None, help="arrival depth "
                    "(default 0.1 ft)")

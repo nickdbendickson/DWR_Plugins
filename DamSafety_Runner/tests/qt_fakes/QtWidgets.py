@@ -253,6 +253,10 @@ class QComboBox(QWidget):
         if self._cur < 0:
             self._cur = 0
 
+    def addItems(self, texts):          # 3.10.88: the 'Download a DEM' source list is read back
+        for t in texts:
+            self.addItem(t)
+
     def clear(self):
         self._items = []
         self._cur = -1

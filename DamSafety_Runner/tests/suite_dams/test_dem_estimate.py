@@ -36,12 +36,13 @@ from DamSafety_Runner import wizard as WZ  # noqa: E402
 from DamSafety_Runner.suite_dams import dem_estimate as DE  # noqa: E402
 from DamSafety_Runner.suite_dams import dam_filter as DF  # noqa: E402
 
-# Synthetic site in EPSG:5070 near Fargo. A plain at 110 m; the dam crest along y = Y0 from
-# X0 - 100 to X0 + 100 (on the plain, 110 m); a reservoir pit at 102 m north of the dam,
-# 200 m x 200 m; the valley floor south of the dam at 100 m.
+# Synthetic site in EPSG:5070 near Fargo. A plain at 280 m; the dam crest along y = Y0 from
+# X0 - 100 to X0 + 100 (on the plain, 280 m); a reservoir pit at 272 m north of the dam,
+# 200 m x 200 m; the valley floor south of the dam at 270 m. (Runner 3.10.89: North Dakota
+# ground, as the run's unit rule - which the estimate now uses - checks it; it was 100-110 m.)
 X0, Y0 = -60000.0, 2632000.0
 CELL = 5.0
-CREST, POOL, TOE = 110.0, 102.0, 100.0
+CREST, POOL, TOE = 280.0, 272.0, 270.0
 VOL_M3 = (CREST - POOL) * 200.0 * 200.0               # 320,000 m3
 VOL_ACFT = VOL_M3 / 1233.48183754752                 # 259.4 ac-ft
 HEIGHT_FT = (CREST - TOE) / 0.3048                   # 32.8 ft
@@ -57,7 +58,9 @@ def _wgs(x, y):
     return osr.CoordinateTransformation(a, b).TransformPoint(x, y)[:2]
 
 
-def _dem(folder, leak=False, unit_ft=False, name="bowl.tif"):
+def _dem(folder, leak=False, unit="m", name="bowl.tif"):
+    """The site; unit: the band unit ('US survey foot' writes the values in US survey feet, ''
+    none)."""
     n = 800                                            # 4 km a side
     x0, y0 = X0 - n * CELL / 2, Y0 + n * CELL / 2
     X = x0 + (np.arange(n) + 0.5) * CELL
@@ -68,7 +71,7 @@ def _dem(folder, leak=False, unit_ft=False, name="bowl.tif"):
     z[(GY > Y0 + 10) & (GY < Y0 + 210) & (np.abs(GX - X0) < 100)] = POOL
     if leak:                                           # a channel from the pit to the edge
         z[(GY > Y0 + 10) & (np.abs(GX - X0) < 20)] = POOL
-    if unit_ft:
+    if unit == "US survey foot":
         z = z / (1200.0 / 3937.0)
     path = os.path.join(folder, name)
     ds = gdal.GetDriverByName("GTiff").Create(path, n, n, 1, gdal.GDT_Float32)
@@ -79,8 +82,8 @@ def _dem(folder, leak=False, unit_ft=False, name="bowl.tif"):
     band = ds.GetRasterBand(1)
     band.WriteArray(z.astype(np.float32))
     band.SetNoDataValue(-9999)
-    if unit_ft:
-        band.SetUnitType("US survey foot")
+    if unit:
+        band.SetUnitType(unit)
     ds = None
     return path
 
@@ -102,16 +105,35 @@ def test_bowl_height_and_storage():
 
 def test_us_survey_feet_dem_gives_the_same_answer():
     d = tempfile.mkdtemp()
-    res = DE.estimate(_dem(d, unit_ft=True), POINT, LINE, z_choice="meters")   # raster wins
-    assert "US survey feet" in res["notes"][0]
+    p = _dem(d, unit="US survey foot")
+    res = DE.estimate(p, POINT, LINE)                          # Detect: the raster's unit
+    assert "US survey feet (detected: raster unit 'us survey foot')" in res["notes"][0], res
     assert abs(res["height_ft"] - HEIGHT_FT) < 0.05
     assert abs(res["storage_acft"] - VOL_ACFT) / VOL_ACFT < 0.01
+    # Runner 3.10.89: the run's rule - an explicit Meters against the 'US survey foot' tag, the
+    # values (919 as metres, 280 m as US feet) cannot tell: no estimate, the way through named
+    # (before, the band unit silently overrode the page's choice)
+    with pytest.raises(DE.EstimateError) as e:
+        DE.estimate(p, POINT, LINE, z_choice="meters")
+    assert "Meters (the raster's unit tag is wrong)" in str(e.value)
+    assert "on the Terrain page" in str(e.value)
 
 
 def test_page_unit_choice_applies_when_the_raster_has_none():
     d = tempfile.mkdtemp()
-    res = DE.estimate(_dem(d), POINT, LINE, z_choice="feet")    # values read as feet
+    res = DE.estimate(_dem(d, unit=""), POINT, LINE, z_choice="feet")    # values read as feet
     assert abs(res["height_ft"] - (CREST - TOE)) < 0.05
+    assert "feet (chosen on the Terrain page)" in res["notes"][0]
+
+
+def test_no_recorded_unit_and_detect_gives_no_estimate():
+    """Runner 3.10.89: read as metres before ('check'), so an untagged feet DEM gave a height
+    3.28 x too high; now the estimate stops where the run would, naming the wizard's setting."""
+    d = tempfile.mkdtemp()
+    with pytest.raises(DE.EstimateError) as e:
+        DE.estimate(_dem(d, unit=""), POINT, LINE)
+    assert "no elevation unit is recorded" in str(e.value)
+    assert "'DEM elevation units' on the Terrain page" in str(e.value)
 
 
 def test_leaking_basin_gives_no_storage():
@@ -339,6 +361,7 @@ def test_estimate_error_is_shown(wiz, monkeypatch):
     srs = osr.SpatialReference()
     srs.ImportFromEPSG(5070)
     ds.SetProjection(srs.ExportToWkt())
+    ds.GetRasterBand(1).SetUnitType("m")
     ds = None
     # no DEM covers the dam: the button asks for one (the file dialog is answered here)
     from qgis.PyQt import QtWidgets

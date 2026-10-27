@@ -823,10 +823,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                             min(cs, 3.0))
     z_note = getattr(terrain_src, "z_note", "")
     report["dem_elevation_units"] = z_note
-    if "check" in z_note.lower():
-        warnings.append("DEM elevation units: {}. Set 'DEM elevation units' explicitly if this "
-                        "is wrong; a feet DEM read as metres gives a wrong flood without "
-                        "any error.".format(z_note))
+    z_warn = units_warning(terrain_src)
+    if z_warn:
+        warnings.append(z_warn)
     z = near.masked()
     X, Y = np.meshgrid(near.x_centers(), near.y_centers())
     spec = getattr(st, "proposed", None)
@@ -2270,6 +2269,19 @@ def _work_crs_text(writer, terrain_src):
         if v:
             return str(v)
     return None
+
+
+def units_warning(terrain_src):
+    """The run report's 'DEM elevation units' warning, or "". 3.10.89: from the structured flag
+    terrain_src.z_check (why the unit needs checking, e.g. gdal_io.NO_SAMPLE), not from the word
+    'check' in the units note - a detected note names its Download DEM facts file, so a DEM
+    named '..._check_...' warned."""
+    z_check = str(getattr(terrain_src, "z_check", "") or "")
+    if not z_check:
+        return ""
+    return ("DEM elevation units: {} - {}. Set 'DEM elevation units' explicitly if this is "
+            "wrong; a feet DEM read as metres gives a wrong flood without any error.".format(
+                getattr(terrain_src, "z_note", "") or "unknown", z_check))
 
 
 def _z_to_m_of(terrain_src):

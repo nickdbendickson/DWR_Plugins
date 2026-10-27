@@ -8,15 +8,29 @@ import numpy as np
 from .grid import Grid, NODATA
 from .units import FT, US_FT
 from ..damsuite import gdalsafe as GS
-from .warp_opts import no_overviews
+from . import dem_zunit as ZU
+from .warp_opts import no_overviews, no_vshift
 
-Z_AUTO, Z_FEET, Z_US_FEET, Z_METERS = "auto", "feet", "us_feet", "meters"
-Z_CHOICES = (Z_AUTO, Z_FEET, Z_US_FEET, Z_METERS)
+Z_AUTO, Z_FEET, Z_US_FEET, Z_METERS = "auto", ZU.FEET, ZU.US_FEET, ZU.METERS
+# 3.10.89 review round 3: an explicit unit used although the raster's unit tag says otherwise
+# ('Feet (the raster's unit tag is wrong)' ...). Appended: the DEM_Z indices 0-3 of saved
+# parameters, rundam.json and the wizard keep their meaning.
+Z_FEET_TAG_WRONG, Z_US_FEET_TAG_WRONG, Z_METERS_TAG_WRONG = (
+    "feet_tag_wrong", "us_feet_tag_wrong", "meters_tag_wrong")
+Z_TAG_WRONG = {Z_FEET_TAG_WRONG: Z_FEET, Z_US_FEET_TAG_WRONG: Z_US_FEET,
+               Z_METERS_TAG_WRONG: Z_METERS}
+Z_CHOICES = (Z_AUTO, Z_FEET, Z_US_FEET, Z_METERS, Z_FEET_TAG_WRONG, Z_US_FEET_TAG_WRONG,
+             Z_METERS_TAG_WRONG)
+Z_LABELS = {Z_FEET: "Feet", Z_US_FEET: "US survey feet", Z_METERS: "Meters"}
+Z_LABELS.update({k: "{} (the raster's unit tag is wrong)".format(Z_LABELS[v])
+                 for k, v in Z_TAG_WRONG.items()})
+Z_CHOICE_LABELS = dict(Z_LABELS, **{Z_AUTO: "Detect from the raster"})   # the DEM_Z enum text
+_TO_M = {Z_FEET: FT, Z_US_FEET: US_FT, Z_METERS: 1.0}
 
-_FEET_NAMES = ("ft", "foot", "feet", "international foot", "intl foot")
-_US_FEET_NAMES = ("us survey foot", "us-ft", "ftus", "us_ft", "foot_us", "us foot",
-                  "us survey feet", "ft (us)", "survey foot")
-_METER_NAMES = ("m", "metre", "meter", "metres", "meters")
+# 3.10.89: one list of unit names with Screening (core/dem_zunit.py, byte-identical there)
+_FEET_NAMES = ZU.FEET_NAMES
+_US_FEET_NAMES = ZU.US_FEET_NAMES
+_METER_NAMES = ZU.METER_NAMES
 
 
 def _gdal():
@@ -26,54 +40,238 @@ def _gdal():
     return gdal, osr
 
 
+def _file(path):
+    """The file of a QGIS raster source: 'x.tif|option:...' -> 'x.tif' (3.10.89)."""
+    return str(path).split("|", 1)[0]
+
+
+def base_choice(choice):
+    """The unit of a DEM_Z choice: 'feet_tag_wrong' -> 'feet'; others as they are."""
+    return Z_TAG_WRONG.get(choice, choice)
+
+
 def z_to_m_factor(path, choice=Z_AUTO):
-    """Factor that converts the DEM's elevations to metres, and how it was
-    decided."""
+    """Factor that converts the DEM's elevations to metres, and how it was decided. An explicit
+    choice as given; 'auto' (Detect from the raster) the unit the raster records, through
+    resolve_dem_z - the rule of a model run (3.10.89: the culvert pre-check, the CLI and the
+    self-test guessed feet or metres from the CRS units and the median here, so they could read
+    a DEM in another unit than the run did). ValueError, naming the setting, when 'auto' finds
+    no unit it can trust. A tool without that setting uses z_factor_or_guess."""
+    choice = base_choice(choice)
     if choice == Z_FEET:
         return FT, "feet (chosen)"
     if choice == Z_US_FEET:
         return US_FT, "US survey feet (chosen)"
     if choice == Z_METERS:
         return 1.0, "metres (chosen)"
-    gdal, osr = _gdal()
-    ds = GS.open_raster(path)
-    unit = (ds.GetRasterBand(1).GetUnitType() or "").strip().lower()
-    if unit in _US_FEET_NAMES:
-        return US_FT, "US survey feet (raster unit '{}')".format(unit)
-    if unit in _FEET_NAMES:
-        return FT, "feet (raster unit '{}')".format(unit)
-    if unit in _METER_NAMES:
-        return 1.0, "metres (raster unit '{}')".format(unit)
-    srs = osr.SpatialReference()
+    got, how = resolve_dem_z(path, Z_AUTO)
+    return _TO_M[got], detected_z_note(got, how)
+
+
+def guess_z_from_crs(path):
+    """(factor, note) by the rule of Runner 3.10.0-3.10.87 for a raster that records no unit: a
+    feet (or US feet) projected CRS gives feet unless the median fits North Dakota's ground only
+    as metres; any other CRS metres. Never for a model run (resolve_dem_z): only for what a tool
+    without a 'DEM elevation units' setting must read anyway - a HEC-RAS terrain, the
+    animation's hillshade, the HEC-RAS export of a run report older than 3.10.16 - and always
+    with a warning (z_factor_or_guess)."""
+    _, osr = _gdal()
+    ds = GS.open_raster(_file(path))
+    unit = (ds.GetRasterBand(1).GetUnitType() or "").strip()
+    got = ZU.unit_choice(unit) or ZU.vertical_unit(ds)
+    if got:                     # a band unit or vertical CRS the record rules did not trust
+        return _TO_M[got], "{} (assumed from the raster's {})".format(
+            ZU.NAMES[got], "band unit '{}'".format(unit.lower()) if unit else "vertical CRS")
     wkt = ds.GetProjection()
+    lin = None
     if wkt:
+        srs = osr.SpatialReference()
         srs.ImportFromWkt(wkt)
-        vert = None
+        lin = srs.GetLinearUnits() if srs.IsProjected() else None
+    if lin and (abs(lin - US_FT) < 1e-7 or abs(lin - FT) < 1e-7):
+        f, name = (US_FT, "US survey feet") if abs(lin - US_FT) < 1e-7 else (FT, "feet")
+        med, _n = sample_median(ds)
+        if med is not None and _nd_ground(med) and not _nd_ground(med * f):
+            return 1.0, ("metres (assumed: the CRS is in {} but a median of {:.0f} is North "
+                         "Dakota ground only as metres)").format(name, med)
+        return f, "{} (assumed from the CRS's linear unit)".format(name)
+    return 1.0, "metres (assumed: the CRS is not in feet)"
+
+
+def z_factor_or_guess(path, choice=Z_AUTO, setting="'DEM elevation units'"):
+    """(factor, how, warning) for a tool that must read the raster's values whatever it records:
+    an explicit choice as given; 'auto' the unit the raster records (resolve_dem_z), else
+    guess_z_from_crs - the rule before 3.10.88 - with a warning naming the unit used and
+    `setting`, the tool's own way to choose it. 3.10.89 review round 3: the HEC-RAS terrain
+    stopped there, naming a 'DEM elevation units' its tools do not have."""
+    unit = base_choice(choice)
+    name = os.path.basename(_file(path)) or str(path)
+    if unit in _TO_M:
+        f, how = z_to_m_factor(path, unit)
         try:
-            if srs.IsCompound():
-                vert = srs.GetTargetLinearUnits("VERT_CS")
-        except Exception:
-            vert = None
-        lin = vert or (srs.GetLinearUnits() if srs.IsProjected() else None)
-        if lin and (abs(lin - US_FT) < 1e-7 or abs(lin - FT) < 1e-7):
-            f, name = (US_FT, "US survey feet") if abs(lin - US_FT) < 1e-7 else (FT, "feet")
-            # 3.10.0: a feet CRS alone does not make feet elevations - a 3DEP metre DEM warped
-            # to ND State Plane feet keeps metre values. The elevations decide when only one
-            # reading lands in North Dakota's ground range.
-            med = _median_value(ds)
-            if med is not None:
-                as_ft, as_m = _nd_ground(med * f), _nd_ground(med)
-                if as_m and not as_ft:
-                    return 1.0, ("metres (no unit in the raster; its {} CRS suggests {}, but a "
-                                 "median of {:.0f} is below North Dakota's ground in {}; "
-                                 "check)").format(name, name, med, name)
-                if as_ft and not as_m:
-                    return f, ("{} (no unit in the raster; the CRS is in {} and a median of "
-                               "{:.0f} fits North Dakota's ground only as {}; check)").format(
-                                   name, name, med, name)
-            return f, ("{} (assumed from the CRS units; the elevations fit both feet and "
-                       "metres - set the units if this is wrong)").format(name)
-    return 1.0, "metres (no units recorded in the raster; check)"
+            got, rhow = recorded_z_unit(path)
+        except Exception:                                # noqa - GDAL reports it on the read
+            got, rhow = "", ""
+        if got and not _same_family(got, unit):
+            return f, how, ("{} records {} ({}), but {} is {}: read as {}, as chosen.".format(
+                name, ZU.NAMES[got], rhow, setting, Z_LABELS[unit], ZU.NAMES[unit]))
+        return f, how, ""
+    try:
+        f, how = z_to_m_factor(path, Z_AUTO)
+        return f, how, ""
+    except ValueError:
+        pass
+    got, why = recorded_z_unit(path)
+    f, how = guess_z_from_crs(path)
+    return f, how, ("{}: {}; its elevations are read as {}, as before Runner 3.10.88. If that is "
+                    "wrong, set {}.").format(name, why or ZU.NONE_RECORDED, how, setting)
+
+
+def recorded_z_unit(path):
+    """(choice, how) from the elevation unit the DEM itself records - its band unit type (not
+    when band 1 has a scale / offset), else a compound CRS's vertical unit, else (3.10.89) the
+    Download DEM tool's own record of a USGS 3DEP download - or ("", why) when it records none
+    that can be trusted. choice is Z_FEET, Z_US_FEET or Z_METERS. Never guesses from the
+    horizontal CRS or the values (3.10.88). The rules are core/dem_zunit.recorded, which
+    Screening's Download DEM uses for what it writes."""
+    _gdal()
+    ds = GS.open_raster(_file(path))                     # 3.10.89: a QGIS '|option:' source
+    return ZU.recorded(ds, path)
+
+
+DEM_Z_HELP = ("Set 'DEM elevation units' to Meters or Feet. Metres: the 'Download DEM' "
+              "outputs (<id>_10m_5070.tif / <id>_1m_5070.tif - ND DWR ASCII_Grids_ft are "
+              "converted x 0.3048 - and <id>_1m_lidar.vrt), USGS 3DEP 1 m lidar tiles, ND DWR "
+              "DEM_Imagine (.img, UTM metres). Feet: the raw ND DWR QL2 ASCII_Grids_ft grids "
+              "(.asc, ND State Plane feet).")
+
+
+_GDAL_EDIT_UNIT = {Z_FEET: "ft", Z_US_FEET: '"US survey foot"', Z_METERS: "m"}
+
+
+def _same_family(a, b):
+    """Feet and US survey feet (2 ppm apart) count as one unit; metres is the other."""
+    return (a == Z_METERS) == (b == Z_METERS)
+
+
+def file_problem(ds, path=""):
+    """Why no unit choice reads this raster's values right, or "": band 1's scale / offset (a
+    run reads the raw values), a warped VRT whose vertical shift converted the values under the
+    source's band unit, an old Download DEM file (dem_zunit.data_problem). 3.10.89 review round
+    3: an explicit unit stops on these as 'Detect from the raster' does - before, Meters on a
+    raw-feet band with scale 0.3048 read the feet as metres, and Feet on a vertical-shift VRT
+    converted its metres again."""
+    try:
+        band = ds.GetRasterBand(1)
+    except Exception:                                    # noqa - unreadable: GDAL says so later
+        return ""
+    return ZU.scale_offset_problem(band) or ZU.vshift_problem(ds) or ZU.data_problem(ds, path)
+
+
+def _ground_verdict(med, chosen, rec):
+    """Which of two readings of a DEM median is North Dakota ground: 'chosen', 'record', or
+    'unclear' (both, neither, or no valid cell found)."""
+    if med is None:
+        return "unclear"
+    c, r = _nd_ground(med * _TO_M[chosen]), _nd_ground(med * _TO_M[rec])
+    if c and not r:
+        return "chosen"
+    if r and not c:
+        return "record"
+    return "unclear"
+
+
+def _readings(med, a, b):
+    return "{:.0f} m as {}, {:.0f} m as {}".format(med * _TO_M[a], ZU.NAMES[a],
+                                                     med * _TO_M[b], ZU.NAMES[b])
+
+
+def resolve_dem_z(path, choice=Z_AUTO):
+    """The DEM elevation unit a model run uses, and how: "chosen", "chosen: <warning>" (an
+    explicit unit used against the raster's record - the run report says so; z_how_parts), or
+    "detected: ...". 'auto' (Detect from the raster): the unit the raster records
+    (recorded_z_unit); ValueError naming the setting when it records none it can trust - a run
+    never guesses feet or metres (3.10.88; before, 'auto' was refused even for a raster that
+    records its unit).
+
+    3.10.89: an explicit Feet / US survey feet / Meters is checked against the unit the raster
+    records - a Download DEM output tagged metres run as Feet read the ground x 0.3048, and the
+    ND ground check let it through above 656 m (south-west North Dakota). Feet and US survey
+    feet do not stop each other (2 ppm). A raster whose values no single unit reads right
+    (file_problem) stops whatever the choice. Review round 3: when the record says the other
+    unit, the DEM's median decides - North Dakota ground only in the chosen unit: the choice is
+    used, with a warning to correct the record; only in the recorded unit: stop, the record is
+    right; both, neither or no sample: stop, naming 'Feet (the raster's unit tag is wrong)' (the
+    Z_TAG_WRONG choices), the way through inside QGIS when the record is the wrong one."""
+    file_ = _file(path)
+    name = os.path.basename(file_) or str(path)
+    _gdal()
+    ds = GS.open_raster(file_)
+    if choice in Z_LABELS:
+        unit = base_choice(choice)
+        bad = file_problem(ds, path)
+        if bad:
+            raise ValueError("'DEM elevation units' is {}, but {}: {}. No unit choice reads this "
+                             "file right.".format(Z_LABELS[choice], name, bad))
+        got, how = ZU.recorded(ds, path)
+        if not got or _same_family(got, unit):
+            return unit, "chosen"
+        med, _n = sample_median(ds)
+        ds = None
+        verdict = _ground_verdict(med, unit, got)
+        fix = ("gdal_edit -units {} \"{}\" (for a format GDAL cannot edit, make a GeoTIFF copy "
+               "with gdal_translate and edit that)").format(_GDAL_EDIT_UNIT[unit], file_)
+        if verdict == "record":
+            raise ValueError(
+                "'DEM elevation units' is {}, but {} records {} ({}) and its median {:.1f} is "
+                "North Dakota ground only as {} ({}): set 'DEM elevation units' to {} (or "
+                "'Detect from the raster').".format(
+                    Z_LABELS[choice], name, ZU.NAMES[got], how, med, ZU.NAMES[got],
+                    _readings(med, got, unit), Z_LABELS[got]))
+        if verdict == "chosen" or choice in Z_TAG_WRONG:
+            why = ("its median {:.1f} is North Dakota ground only as {} ({})".format(
+                med, ZU.NAMES[unit], _readings(med, unit, got)) if verdict == "chosen" else
+                "'DEM elevation units' says the tag is wrong")
+            return unit, ("chosen: {} records {} ({}), but {}: read as {}, as chosen. Correct "
+                          "the record so 'Detect from the raster' reads it: {}.").format(
+                              name, ZU.NAMES[got], how, why, ZU.NAMES[unit], fix)
+        seen = ("no valid elevation was found to check which is right" if med is None else
+                "its median {:.1f} cannot tell which is right ({})".format(
+                    med, _readings(med, unit, got)))
+        raise ValueError(
+            "'DEM elevation units' is {}, but {} records {} ({}), and {}. If the record is right, "
+            "set 'DEM elevation units' to {} (or 'Detect from the raster'). If the elevations "
+            "really are {}, choose '{}', or correct the record first: {}.".format(
+                Z_LABELS[choice], name, ZU.NAMES[got], how, seen, Z_LABELS[got],
+                ZU.NAMES[unit], Z_LABELS[{v: k for k, v in Z_TAG_WRONG.items()}[unit]], fix))
+    got, how = ZU.recorded(ds, path)
+    if got:
+        return got, "detected: " + how
+    bad = file_problem(ds, path)
+    ds = None
+    if bad:                     # no choice reads it right: do not send the user to one
+        raise ValueError("'DEM elevation units' is 'Detect from the raster', but {}: {}. No "
+                         "unit choice reads this file right.".format(name, bad))
+    raise ValueError("'DEM elevation units' is 'Detect from the raster', but {}: {}. {}".format(
+        name, how, DEM_Z_HELP))
+
+
+def z_how_parts(how):
+    """(detected, warning) of resolve_dem_z's how: "detected: ..." -> (how, ""); "chosen" ->
+    ("", ""); "chosen: <warning>" -> ("", warning) - the run report's units warning."""
+    how = str(how or "")
+    if how.startswith("chosen: "):
+        return "", how[len("chosen: "):]
+    if how == "chosen":
+        return "", ""
+    return how, ""
+
+
+def detected_z_note(choice, how):
+    """The 'DEM elevations in ...' note (run log, report.json dem_elevation_units, the docx) of a
+    run whose unit was detected: "metres (detected: raster unit 'm')". 3.10.89: it said
+    "metres (chosen)" although the user had picked 'Detect from the raster'."""
+    return "{} ({})".format(ZU.NAMES.get(choice, choice), how)
 
 
 ND_GROUND_M = (200.0, 1100.0)      # North Dakota: 229 m (Pembina) to 1069 m (White Butte)
@@ -83,20 +281,76 @@ def _nd_ground(z_m):
     return ND_GROUND_M[0] <= z_m <= ND_GROUND_M[1]
 
 
-def _median_value(ds, size=256):
-    """Median of the DEM's valid cells from a decimated read, or None."""
+def median_unit_problem(med, zc, how=""):
+    """None when a DEM median `med` read in the unit `zc` is plausible North Dakota ground; else
+    the message, naming the unit that does fit (3.10.89). Stops when the metres value is outside
+    100-1200 m (as before), and also when the chosen reading is outside North Dakota's ground
+    (200-1100 m) while the other unit's fits: a 3DEP metre DEM run as Feet (about 99-200 m),
+    which passed before, and (3.10.89) a feet DEM read as metres at 1100-1200 m. `how` (the
+    detection, "detected: raster unit 'm'") is named when the unit was not chosen."""
+    zc = base_choice(zc)
+    f = _TO_M.get(zc, 1.0)
+    med_m = med * f
+    alt = Z_METERS if f != 1.0 else Z_FEET
+    alt_m = med * _TO_M[alt]
+    bad = med_m < 100 or med_m > 1200 or (not _nd_ground(med_m) and _nd_ground(alt_m))
+    if not bad:
+        return None
+    text = ("DEM median {:.1f} with units '{}'{} is {:.0f} m, outside the North Dakota ground "
+            "range (about 230-1070 m). ").format(
+                med, Z_LABELS.get(zc, zc), " ({})".format(how) if how else "", med_m)
+    if _nd_ground(alt_m):
+        text += ("Read as {} it is {:.0f} m, which fits: set 'DEM elevation units' to {}{}.").format(
+            "metres" if alt == Z_METERS else "feet", alt_m, Z_LABELS[alt],
+            " (USGS 3DEP downloads are metres)" if alt == Z_METERS else "")
+        if how:
+            # review round 3: that choice runs (resolve_dem_z: the values fit only it), with a
+            # warning in the run report; correcting the record lets Detect read it
+            text += (" The unit was read from the raster, so its record is wrong: the run goes "
+                     "on as {} with a warning in its report, or correct the record "
+                     "(gdal_edit -units {}) and keep 'Detect from the raster'.").format(
+                         Z_LABELS[alt], _GDAL_EDIT_UNIT[alt])
+    else:
+        text += ("Neither feet nor metres fits: check the DEM (a nodata value that is not set, "
+                 "or not this dam's DEM).")
+    return text
+
+
+def sample_median(ds, grid=7, win=24, size=256):
+    """(median, cells) of the DEM's valid cells (finite, not its nodata value - as stored: an
+    unset nodata of -3.4e38 makes the median fail the ground check, which says so) in a
+    grid x grid pattern of win x win full-resolution windows spread over the whole raster -
+    corners, edges and centre - else in a decimated read of the whole raster (size x size);
+    (None, 0) when neither finds a valid cell. 3.10.89: the run's ND ground check read only the
+    top-left 200 x 200 cells and was skipped without a word when they were nodata - a 1 m DEM
+    clipped to a dam's box or warped to EPSG:5070 - so Feet ran a metre DEM x 0.3048."""
+    def valid(a, nd):
+        a = np.asarray(a, dtype=np.float64).ravel()
+        ok = np.isfinite(a)
+        if nd is not None:
+            ok &= a != nd
+        return a[ok]
     try:
         b = ds.GetRasterBand(1)
         nx, ny = ds.RasterXSize, ds.RasterYSize
-        a = b.ReadAsArray(0, 0, nx, ny, buf_xsize=min(nx, size),
-                          buf_ysize=min(ny, size)).astype(np.float64)
         nd = b.GetNoDataValue()
-        ok = np.isfinite(a) & (a > -1e5) & (a < 1e5)
-        if nd is not None:
-            ok &= a != nd
-        return float(np.median(a[ok])) if ok.any() else None
-    except Exception:
-        return None
+        w, h = min(win, nx), min(win, ny)
+        xs = sorted({int(round((nx - w) * i / float(grid - 1))) for i in range(grid)})
+        ys = sorted({int(round((ny - h) * j / float(grid - 1))) for j in range(grid)})
+        parts = [valid(b.ReadAsArray(x, y, w, h), nd) for y in ys for x in xs]
+        flat = np.concatenate(parts) if parts else np.empty(0)
+        if flat.size <= 10:
+            flat = valid(b.ReadAsArray(0, 0, nx, ny, buf_xsize=min(nx, size),
+                                       buf_ysize=min(ny, size)), nd)
+    except Exception:                                    # noqa - unreadable: no sample
+        flat = np.empty(0)
+    if flat.size > 10:
+        return float(np.median(flat)), int(flat.size)
+    return None, 0
+
+
+NO_SAMPLE = ("the North Dakota ground check of the elevation unit found no valid elevation in a "
+             "sample of the whole DEM (check its nodata value); the unit is not checked")
 
 
 def utm_epsg(lon, lat):
@@ -142,14 +396,15 @@ class GdalTerrain:
     def __init__(self, dem_path, work_srs, z_choice=Z_AUTO, manning_path=None,
                  default_n=0.06, resample=None, manning_lut=None):
         gdal, _ = _gdal()
-        self.dem_path = dem_path
+        self.dem_path = _file(dem_path)   # 3.10.89: a QGIS 'x.tif|option:...' source
         self.work_srs = work_srs          # "EPSG:26914" or WKT
         self.z_to_m, self.z_note = z_to_m_factor(dem_path, z_choice)
+        self.z_check = ""            # 3.10.89: why the unit needs checking (a run report warning)
         self.manning_path = manning_path
         self.manning_lut = manning_lut       # set: the raster holds NLCD class codes
         self.default_n = default_n
         self.resample, self.resample_source = resolve_resample(resample)
-        ds = GS.open_raster(dem_path)
+        ds = GS.open_raster(self.dem_path)
         self.src_nodata = ds.GetRasterBand(1).GetNoDataValue()
 
     def _warp(self, path, bounds, cell, alg, src_nodata=None):
@@ -158,11 +413,14 @@ class GdalTerrain:
         nx = int(round((xmax - xmin) / cell))
         ny = int(round((ymax - ymin) / cell))
         xmax, ymin = xmin + nx * cell, ymax - ny * cell
-        # 3.10.43: from the full-resolution data, never the source's overviews (core/warp_opts)
-        opts = gdal.WarpOptions(**no_overviews(gdal, dict(
+        # 3.10.43: from the full-resolution data, never the source's overviews (core/warp_opts).
+        # 3.10.89: the values as stored (no vertical shift): read() applies z_to_m once - GDAL's
+        # default shift turned a feet compound-CRS DEM into metres when the work CRS is 2D, and
+        # z_to_m then converted it again (1300 ftUS read as 120.8 m, not 396.2 m)
+        opts = gdal.WarpOptions(**no_vshift(gdal, no_overviews(gdal, dict(
             format="MEM", dstSRS=self.work_srs, outputBounds=(xmin, ymin, xmax, ymax),
             width=nx, height=ny, resampleAlg=alg, dstNodata=NODATA,
-            outputType=gdal.GDT_Float32, srcNodata=src_nodata, multithread=True)))
+            outputType=gdal.GDT_Float32, srcNodata=src_nodata, multithread=True))))
         out = GS.checked(gdal.Warp("", path, options=opts), "warping {}".format(path))
         a = out.GetRasterBand(1).ReadAsArray().astype(np.float64)
         a[a == NODATA] = np.nan
@@ -205,9 +463,45 @@ class GdalTerrain:
         return g
 
 
+def horizontal_wkt(text):
+    """The WKT of a CRS (any SetFromUserInput text) without its vertical part, or `text` when it
+    has none or cannot be read: 'NAD83 / North Dakota North (ft) + NAVD88 height (ftUS)' ->
+    'NAD83 / North Dakota North (ft)'."""
+    _, osr = _gdal()
+    s = osr.SpatialReference()
+    try:
+        if s.SetFromUserInput(str(text)) != 0 or not s.IsCompound():
+            return text
+        if hasattr(s, "StripVertical"):                  # GDAL 3.6+
+            s.StripVertical()
+            return s.ExportToWkt()
+        h = osr.SpatialReference()                       # older GDAL: the PROJCS / GEOGCS node
+        for node in ("PROJCS", "GEOGCS"):
+            wkt = s.ExportToWkt()
+            i = wkt.find(node + "[")
+            if i < 0:
+                continue
+            depth, j = 0, i
+            for j in range(i, len(wkt)):
+                depth += {"[": 1, "]": -1}.get(wkt[j], 0)
+                if depth == 0 and wkt[j] == "]":
+                    break
+            if h.ImportFromWkt(wkt[i:j + 1]) == 0:
+                return h.ExportToWkt()
+    except Exception:                                    # noqa - not a CRS: as given
+        return text
+    return text
+
+
 class GeoTiffWriter:
     """writer for workflow.run_dam: writes the grid in the model CRS, then
-    (optionally) re-projects it to the DEM's CRS with nearest-neighbour."""
+    (optionally) re-projects it to the DEM's CRS with nearest-neighbour.
+
+    3.10.89 review round 3: in the horizontal part of those CRSs only. Depth, velocity, WSE and
+    arrival are written as computed; a compound target CRS (the DEM's 'ND North (ft) + NAVD88
+    height (ftUS)') labelled them with a vertical unit they are not in, and a later warp of the
+    file without -novshift (DamSafety Hazard's reproject_raster, QGIS's Warp) rescaled them by
+    that unit - depths x 0.3048. Main's writer had scaled them x 3.28 on the way in instead."""
 
     def __init__(self, work_srs, target_srs=None, target_res=None):
         self.work_srs = work_srs
@@ -226,7 +520,7 @@ class GeoTiffWriter:
                         "creating {}".format(tmp))
         ds.SetGeoTransform((grid.x0, grid.dx, 0.0, grid.y0, 0.0, -grid.dx))
         srs = osr.SpatialReference()
-        srs.SetFromUserInput(self.work_srs)
+        srs.SetFromUserInput(horizontal_wkt(self.work_srs))
         ds.SetProjection(srs.ExportToWkt())
         b = ds.GetRasterBand(1)
         b.SetNoDataValue(NODATA)
@@ -237,11 +531,12 @@ class GeoTiffWriter:
         if self.target_srs:
             if os.path.exists(path):
                 drv.Delete(path)
-            kw = dict(dstSRS=self.target_srs, resampleAlg="near", srcNodata=NODATA,
+            kw = dict(dstSRS=horizontal_wkt(self.target_srs), resampleAlg="near", srcNodata=NODATA,
                       dstNodata=NODATA, creationOptions=["COMPRESS=DEFLATE", "TILED=YES"])
             if self.target_res:
                 kw.update(xRes=self.target_res, yRes=self.target_res)
-            GS.checked(gdal.Warp(path, tmp, options=gdal.WarpOptions(**kw)),
+            # 3.10.89: metres stay metres in a compound target CRS (no vertical shift)
+            GS.checked(gdal.Warp(path, tmp, options=gdal.WarpOptions(**no_vshift(gdal, kw))),
                        "reprojecting {}".format(path))
             drv.Delete(tmp)
         return path
@@ -424,10 +719,11 @@ def nlcd_to_manning_raster(nlcd_path, out_path, lut=None, like_path=None):
     if like_path:
         like = GS.open_raster(like_path)
         gt = like.GetGeoTransform()
-        opts = gdal.WarpOptions(format="MEM", dstSRS=like.GetProjection(), xRes=abs(gt[1]),
-                                yRes=abs(gt[5]), outputBounds=(
-            gt[0], gt[3] + gt[5] * like.RasterYSize, gt[0] + gt[1] * like.RasterXSize, gt[3]),
-            resampleAlg="near", outputType=gdal.GDT_Float32)
+        opts = gdal.WarpOptions(**no_vshift(gdal, dict(   # 3.10.89: class codes as stored
+            format="MEM", dstSRS=like.GetProjection(), xRes=abs(gt[1]), yRes=abs(gt[5]),
+            outputBounds=(gt[0], gt[3] + gt[5] * like.RasterYSize,
+                          gt[0] + gt[1] * like.RasterXSize, gt[3]),
+            resampleAlg="near", outputType=gdal.GDT_Float32)))
         src = GS.checked(gdal.Warp("", src, options=opts), "warping {}".format(nlcd_path))
     band = src.GetRasterBand(1)
     codes = band.ReadAsArray().astype(np.float64)
@@ -455,11 +751,11 @@ def read_like(path, grid, alg="bilinear"):
     array with NaN for no data. Used to compare with another model's rasters."""
     gdal, _ = _gdal()
     xmin, ymin, xmax, ymax = grid.bounds
-    opts = gdal.WarpOptions(**no_overviews(gdal, dict(       # 3.10.43: no source overviews
+    opts = gdal.WarpOptions(**no_vshift(gdal, no_overviews(gdal, dict(   # 3.10.43 / 3.10.89
         format="MEM", dstSRS=grid.crs_wkt or None, outputBounds=(xmin, ymin, xmax, ymax),
         width=grid.nx, height=grid.ny, resampleAlg=alg, dstNodata=NODATA,
-        outputType=gdal.GDT_Float32)))
-    out = GS.checked(gdal.Warp("", path, options=opts), "warping {}".format(path))
+        outputType=gdal.GDT_Float32))))
+    out = GS.checked(gdal.Warp("", _file(path), options=opts), "warping {}".format(path))
     a = out.GetRasterBand(1).ReadAsArray().astype(np.float64)
     a[a == NODATA] = np.nan
     return a

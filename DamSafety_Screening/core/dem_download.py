@@ -3,12 +3,13 @@
 County boxes are download clips, padded, not survey boundaries. The service
 returns metres in EPSG:5070.
 """
+import math
 import os
 
 from osgeo import gdal, osr
 
-from . import nd_counties, terrain
-from .warp_opts import no_overviews
+from . import dem_zunit as ZU, nd_counties, terrain
+from .warp_opts import no_overviews, no_vshift
 
 
 def _safe_extract(zf, dest):
@@ -70,13 +71,139 @@ def point_box(lon, lat, buffer_mi, bearing_deg=None):
     return (cx - b, cy - b, cx + b, cy + b)
 
 
-def download(extent, cell_m, out_dir, stem, feedback=None):
-    """Download 3DEP tiles for an EPSG:5070 extent and write dem.vrt. Returns the VRT path."""
+def imageserver_chunks(extent, cell_m):
+    """(count, side_km) of the 3DEP ImageServer export requests for an EPSG:5070 extent at
+    cell_m: the box is cut into TILE_PX x TILE_PX pixel pieces (1.2 km at 1 m, 12 km at 10 m).
+    These are request chunks, not lidar tiles (0.17.50)."""
+    from .solve_gate import TILE_PX
+    step = TILE_PX * float(cell_m)
+    nx = max(1, int(math.ceil((extent[2] - extent[0]) / step - 1e-9)))
+    ny = max(1, int(math.ceil((extent[3] - extent[1]) / step - 1e-9)))
+    return nx * ny, step / 1000.0
+
+
+TNM_SOURCE = "USGS 3DEP 1 m lidar tiles (native, TNM)"      # Download DEM's SOURCE 2
+
+
+def chunk_note(count, cell_m, side_km, width_km=None, height_km=None, scope=0):
+    """One line for the log / the Runner's Download box about the ImageServer requests: at 1 m
+    over a dam's buffer they are hundreds of 1.2 km pieces (a 10 mi buffer: 27 x 27 = 729),
+    which is not the number of lidar tiles; the native 1 m source lists the 10 km lidar
+    project tiles instead (about 20 for that box). Empty when there is nothing to say.
+    scope is Download DEM's Area (0 dam, 1 county, 2 state): a smaller buffer is suggested only
+    for a dam, and the native tiles never for the state (that source refuses it)."""
+    if int(round(cell_m)) != 1 or count <= 100:
+        return ""
+    if width_km and height_km:
+        what = " over a {:.0f} x {:.0f} km box".format(width_km, height_km)
+    elif width_km:
+        what = " over a box {:.0f} km wide".format(width_km)
+    else:
+        what = ""
+    text = ("USGS 3DEP ImageServer at 1 m{}: {} export requests of {:.1f} km x {:.1f} km "
+            "(request chunks, not lidar tiles), mosaicked and warped into one GeoTIFF. ").format(
+                what, count, side_km, side_km)
+    if scope == 2:
+        return text + ("For the whole state use 10 m, or at 1 m a county or a box (the source "
+                       "'{}' does not take the whole state).").format(TNM_SOURCE)
+    text += ("For 1 m the source '{}' downloads the 10 km lidar tiles themselves (lists them "
+             "first)").format(TNM_SOURCE)
+    return text + (", or use a smaller buffer." if scope == 0 else ".")
+
+
+def set_unit(path, choice):
+    """Tag band 1 of a written DEM with the unit `choice` (dem_zunit FEET / US_FEET / METERS),
+    GeoTIFF or VRT. BuildVRT does not carry a band unit and the ImageServer tiles have none, so
+    the local copies had none and the Runner's 'Detect from the raster' could not tell feet
+    from metres (0.17.50). True when the tag was written."""
+    tag = ZU.band_tag(choice)
+    if not tag:
+        return False
+    try:
+        ds = gdal.Open(path, gdal.GA_Update)
+        if ds is None:
+            return False
+        ds.GetRasterBand(1).SetUnitType(tag)
+        ds.FlushCache()
+        ds = None
+        return True
+    except Exception:                                    # noqa - the sidecar still says metres
+        return False
+
+
+def set_metres(path):
+    """set_unit(path, METERS)."""
+    return set_unit(path, ZU.METERS)
+
+
+def band_unit(path):
+    """Band 1's unit type text of a raster ('' for none or unreadable)."""
+    try:
+        ds = gdal.Open(path)
+        return (ds.GetRasterBand(1).GetUnitType() or "").strip() if ds is not None else ""
+    except Exception:                                    # noqa
+        return ""
+
+
+def recorded_unit(path):
+    """(choice, how) of the elevation unit a raster records - core/dem_zunit.recorded, the rule
+    the Runner's 'Detect from the raster' applies - or ("", why) (0.17.50)."""
+    try:
+        ds = gdal.Open(path)
+    except Exception as e:                               # noqa - exception mode
+        return "", "cannot open {} ({})".format(path, e)
+    if ds is None:
+        return "", "cannot open {}".format(path)
+    try:
+        return ZU.recorded(ds, path)
+    finally:
+        ds = None
+
+
+def record_source(path):
+    """The SOURCE of a Download DEM record of a raster - its metadata, else its <stem>_dem.txt
+    facts file - or "" (0.17.50 review round 3: the reuse warning names the right unit)."""
+    try:
+        ds = gdal.Open(path)
+        src = str((ds.GetMetadata() or {}).get("SOURCE") or "").strip() if ds is not None else ""
+        ds = None
+    except Exception:                                    # noqa - exception mode
+        src = ""
+    if not src:
+        facts = ZU.read_facts(os.path.splitext(path)[0] + "_dem.txt") or {}
+        src = str(facts.get("source") or "").strip()
+    return src
+
+
+def data_problem(path):
+    """dem_zunit.data_problem of a raster file: why no unit reads its values right, or ""."""
+    try:
+        ds = gdal.Open(path)
+    except Exception:                                    # noqa - exception mode
+        return ""
+    if ds is None:
+        return ""
+    try:
+        return ZU.data_problem(ds, path)
+    finally:
+        ds = None
+
+
+def download(extent, cell_m, out_dir, stem, feedback=None, scope=0):
+    """Download 3DEP tiles for an EPSG:5070 extent and write dem.vrt. Returns the VRT path.
+    scope (0 dam, 1 county, 2 state) only shapes the request-count note (chunk_note)."""
     os.makedirs(out_dir, exist_ok=True)
     from .solve_gate import TILE_PX
     tiles = list(terrain.tile_extents(*extent, cell_m))
     if feedback is not None:
-        feedback.pushInfo("{} tiles at {} m ({} px a side)".format(len(tiles), cell_m, TILE_PX))
+        feedback.pushInfo("{} ImageServer export chunks at {} m ({} px = {:.1f} km a side; "
+                          "request pieces, not lidar tiles)".format(
+                              len(tiles), cell_m, TILE_PX, TILE_PX * float(cell_m) / 1000.0))
+        note = chunk_note(len(tiles), cell_m, TILE_PX * float(cell_m) / 1000.0,
+                          (extent[2] - extent[0]) / 1000.0, (extent[3] - extent[1]) / 1000.0,
+                          scope)
+        if note:
+            getattr(feedback, "pushWarning", feedback.pushInfo)(note)
     n = max(len(tiles), 1)
 
     def log(msg):
@@ -104,9 +231,27 @@ DWR_PASSWORD = "water"   # published guest login on the ND LiDAR download page
 FT_TO_M = 0.3048
 
 
-def _product_of(path):
-    p = path.replace("\\", "/")
-    if "/ASCII_Grids_ft/" in p or "/gft" in p.lower() or p.lower().endswith(".asc"):
+def _product_of(path, root=None):
+    """'ASCII_Grids_ft' or 'DEM_Imagine' for a raster unpacked under `root` (the download
+    folder): a .asc file, or a folder / file below root named ASCII_Grids_ft or gft<tile> (the
+    feet grids' zips), is a feet grid. 0.17.50: only the part of the path below root counts -
+    before, '/gft' anywhere in the whole path did, so with an output folder such as D:/gft_dems
+    or C:/Users/gftaylor every metre DEM_Imagine tile was taken for a feet grid (x 0.3048, then
+    labelled metres). Outside root, only the file's own folder and name count."""
+    p = os.path.abspath(path)
+    rel = None
+    if root:
+        try:
+            rel = os.path.relpath(p, os.path.abspath(root))
+        except ValueError:                               # another drive (Windows)
+            rel = None
+        if rel is not None and (rel == os.pardir or rel.startswith(os.pardir + os.sep)):
+            rel = None
+    if rel is None:
+        rel = os.path.join(os.path.basename(os.path.dirname(p)), os.path.basename(p))
+    parts = [x.lower() for x in rel.replace("\\", "/").split("/") if x]
+    if p.lower().endswith(".asc") or "ascii_grids_ft" in parts or \
+            any(x.startswith("gft") for x in parts):
         return "ASCII_Grids_ft"
     return "DEM_Imagine"
 
@@ -121,7 +266,7 @@ def build_vrts(rasters, out_dir, feedback=None):
     rasters = [r for r in rasters if not r.lower().endswith(".rrd")]
     by = {}
     for r in rasters:
-        by.setdefault(_product_of(r), []).append(r)
+        by.setdefault(_product_of(r, out_dir), []).append(r)
     if by.get("DEM_Imagine"):
         use = os.path.join(out_dir, "nd_lidar_imagine_m.vrt")
         gdal.BuildVRT(use, by["DEM_Imagine"])
@@ -488,9 +633,17 @@ def county_features():
 
 
 def warp_to(src, dest, epsg):
-    """Warp one raster to dest in the given EPSG. Returns dest."""
-    gdal.Warp(dest, src, dstSRS="EPSG:{}".format(epsg), format="GTiff",
-              resampleAlg="bilinear", creationOptions=["COMPRESS=DEFLATE", "TILED=YES"])
+    """Warp one raster to dest in the given EPSG. Returns dest. 0.17.50: dest carries the unit
+    src records (its band unit, which gdal.Warp keeps, else its Download DEM record); a source
+    that records none gives an untagged copy. The values are copied as stored (no vertical
+    shift: GDAL's default one converts them when a CRS is compound, and the tag would then be
+    wrong)."""
+    gdal.Warp(dest, src, **no_vshift(gdal, dict(
+        dstSRS="EPSG:{}".format(epsg), format="GTiff", resampleAlg="bilinear",
+        creationOptions=["COMPRESS=DEFLATE", "TILED=YES"])))
+    got, _how = recorded_unit(src)
+    if got:
+        set_unit(dest, got)
     return dest
 
 
@@ -566,8 +719,13 @@ def product_info(source, cell_m, native=None):
         "file_type": "GeoTIFF float32, tiled, DEFLATE",
         "cell_m": cell_m,
         "native_source": native.get("source") or "ND DWR LiDAR_NorthDakota_QL2 DEM_Imagine",
-        "native_crs": native.get("crs") or "QL2 tile CRS (feet; often EPSG:3721 or EPSG:2266)",
-        "native_units": native.get("units") or "feet",
+        # 0.17.50: DEM_Imagine is UTM metres (EPSG:26914 / 3721 are UTM 14N metres, which is
+        # how build_vrts reads it); only ASCII_Grids_ft is ND State Plane feet
+        "native_crs": native.get("crs") or ("QL2 tile CRS: DEM_Imagine UTM metres (EPSG:26914 or "
+                                            "EPSG:3721), ASCII_Grids_ft ND State Plane feet "
+                                            "(EPSG:2265 or EPSG:2266)"),
+        "native_units": native.get("units") or ("metres (DEM_Imagine); ASCII_Grids_ft feet, "
+                                                "converted x 0.3048"),
         "native_file_type": native.get("file_type") or "Erdas Imagine .img, 1 m",
     }
 
@@ -588,6 +746,9 @@ def write_sidecar(tif_path, info):
         "native_crs: {}".format(info["native_crs"]),
         "native_units: {}".format(info["native_units"]),
         "native_file_type: {}".format(info["native_file_type"]),
+        # 0.17.50: which build wrote it - an ND DWR download without this line is older
+        # (dem_zunit.old_nd_dwr_problem)
+        "{}: {}".format(ZU.FACTS_WRITER_KEY, ZU.WRITER),
     ]
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -617,17 +778,44 @@ def native_from_raster(path):
     return info
 
 
+def local_unit(src, info):
+    """(choice, how) of the elevation unit write_local_dem writes for `src`: the unit src records
+    (core/dem_zunit.recorded: build_vrts tags its VRTs), else metres for the USGS 3DEP
+    ImageServer, which serves metres and whose mosaic of tiles records no unit. Any other source
+    that records none gives ("", why): the copy is left untagged (0.17.50)."""
+    got, how = recorded_unit(src)
+    if got:
+        return got, how
+    if str(info.get("source") or "").startswith("USGS 3DEP") and \
+            ZU.unit_choice(info.get("units")) == ZU.METERS:
+        return ZU.METERS, "the USGS 3DEP ImageServer serves metres"
+    return "", how
+
+
 def write_local_dem(src, dest, cell_m, info, feedback=None):
-    """Warp src to one tiled EPSG:5070 GeoTIFF at cell_m and write the facts beside it."""
+    """Warp src to one tiled EPSG:5070 GeoTIFF at cell_m and write the facts beside it. 0.17.50:
+    band 1 is tagged with the unit of local_unit(src) (untagged when it finds none), and for a
+    feet unit UNITS and the facts file say feet, not the product's metres."""
     os.makedirs(os.path.dirname(os.path.abspath(dest)) or ".", exist_ok=True)
+    got, how = local_unit(src, info)
+    if got and got != ZU.METERS:
+        info = dict(info, units=ZU.NAMES[got])
+    if feedback is not None and got != ZU.METERS:
+        getattr(feedback, "pushWarning", feedback.pushInfo)(
+            "the local DEM is {} ({}): the Runner's 'DEM elevation units' must say so".format(
+                ZU.NAMES[got], how) if got else
+            "the local DEM records no elevation unit ({}): set 'DEM elevation units' in the "
+            "Runner".format(how))
     if feedback is not None:
         feedback.pushInfo(describe_product(info))
         feedback.pushInfo("writing {}".format(dest))
-    gdal.Warp(dest, src, **no_overviews(gdal, dict(      # 0.17.35: no source overviews
+    # 0.17.35: no source overviews; 0.17.50: the values as stored (no vertical shift), so the
+    # band unit of local_unit(src) is the unit of what is written
+    gdal.Warp(dest, src, **no_vshift(gdal, no_overviews(gdal, dict(
         dstSRS="EPSG:5070", xRes=float(cell_m), yRes=float(cell_m),
         resampleAlg="bilinear", outputType=gdal.GDT_Float32, dstNodata=-9999,
         format="GTiff",
-        creationOptions=["COMPRESS=DEFLATE", "TILED=YES", "BIGTIFF=IF_SAFER"])))
+        creationOptions=["COMPRESS=DEFLATE", "TILED=YES", "BIGTIFF=IF_SAFER"]))))
     ds = gdal.Open(dest, gdal.GA_Update)
     if ds is not None:
         ds.SetMetadataItem("SOURCE", info["source"])
@@ -635,7 +823,10 @@ def write_local_dem(src, dest, cell_m, info, feedback=None):
         ds.SetMetadataItem("UNITS", info["units"])
         ds.SetMetadataItem("FILE_TYPE", info["file_type"])
         ds.SetMetadataItem("CELL_M", str(info["cell_m"]))
+        ds.SetMetadataItem(ZU.WRITER_KEY, ZU.WRITER)     # 0.17.50: which build wrote it
         ds.SetDescription(describe_product(info))
         ds = None
+    if got:
+        set_unit(dest, got)                              # 0.17.50: the band records its unit
     side = write_sidecar(dest, info)
     return dest, side

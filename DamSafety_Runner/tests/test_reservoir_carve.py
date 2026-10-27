@@ -210,7 +210,7 @@ def reservoir_carve_run_hook_writes_a_copy_and_leaves_the_source_dem():
         ds.GetRasterBand(1).WriteArray(g.data.astype(np.float32))
         ds = None
         h0 = hashlib.sha256(open(src, "rb").read()).hexdigest()
-        terr = gdal_io.GdalTerrain(src, "EPSG:26914")
+        terr = gdal_io.GdalTerrain(src, "EPSG:26914", gdal_io.Z_METERS)
         dam = _dam()
         md = os.path.join(tmp, "_breach_model")
         report, warnings = {"work_crs": "EPSG:26914"}, []
@@ -337,7 +337,7 @@ def reservoir_carve_hecras_site_checks_see_the_carved_reservoir():
         p0 = [p for p in r0["notes"] if "SITE CHECK OVERRIDDEN" in p and "never lower" in p]
         assert p0, "the flat-water reservoir should fail the storage check"
         rc.run_hook(workflow.RunSettings(reservoir_carve="auto"), dam, (X0, Y0), (X0 + 80, Y0),
-                    gdal_io.GdalTerrain(dem, "EPSG:26914"), None, md, rep, [],
+                    gdal_io.GdalTerrain(dem, "EPSG:26914", gdal_io.Z_METERS), None, md, rep, [],
                     downstream=(1.0, 0.0), crs_wkt="EPSG:26914")
         assert rep[rc.REPORT_KEY]["applied"]
         save()

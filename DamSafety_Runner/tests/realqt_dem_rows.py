@@ -189,6 +189,51 @@ def test_collapsed_window_has_no_scroll_and_tabs_get_the_room():
             _close(d)
 
 
+def test_download_params_are_valid_for_the_real_tool():
+    """3.10.89: the Runner passed COUNTY as the county's name; the Processing enum takes an index,
+    so the tool dialog opened every county download as Adams (index 0). Real QGIS Processing
+    checks the parameters the window builds, for each source and area."""
+    import types
+    from qgis.core import QgsProcessingContext
+    S = importlib.import_module("DamSafety_Screening.algorithms.download_dem")
+    alg = S.DownloadDem()
+    alg.initAlgorithm()
+    names = list(importlib.import_module("DamSafety_Screening.core.dem_download").county_names())
+    captured = []
+    old_exec, old_proc = D.exec_tool_dialog, sys.modules.get("processing")
+    D.exec_tool_dialog = lambda proc, alg_id, params, parent=None: captured.append((alg_id, dict(params))) or {}
+    sys.modules["processing"] = types.ModuleType("processing")      # not opened: captured
+    out = tempfile.mkdtemp(prefix="demparams_")
+    try:
+        with Screen(1280, 800):
+            d = _open(True)
+            try:
+                d.dem_out.setText(out)
+                d.dem_point.setText("-97.390918,46.984382")
+                for src, scope, county in ((0, 1, "Stark"), (1, 1, "Burleigh"), (2, 1, "Stark"),
+                                           (2, 0, "Adams"), (0, 0, "Cass")):
+                    d.dem_source.setCurrentIndex(src)
+                    d.dem_scope.setCurrentIndex(scope)
+                    d.dem_county.setCurrentText(county)
+                    d._open_dem_download()
+                    alg_id, params = captured[-1]
+                    ctx = QgsProcessingContext()
+                    ok, msg = alg.checkParameterValues(params, ctx)
+                    assert alg_id == "nddam:downloaddem" and ok, (src, scope, county, msg, params)
+                    assert names[alg.parameterAsEnum(params, "COUNTY", ctx)] == county, (county, params)
+                    assert alg.parameterAsEnum(params, "SOURCE", ctx) == src
+            finally:
+                _close(d)
+    finally:
+        D.exec_tool_dialog = old_exec
+        if old_proc is None:
+            sys.modules.pop("processing", None)
+        else:
+            sys.modules["processing"] = old_proc
+        import shutil
+        shutil.rmtree(out, ignore_errors=True)
+
+
 def _teardown():
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     QgsApplication.exitQgis()

@@ -522,6 +522,7 @@ class ConditionedTerrain:
         self.default_n = default_n
         self.z_to_m = getattr(base, "z_to_m", 1.0)
         self.z_note = getattr(base, "z_note", "")
+        self.z_check = getattr(base, "z_check", "")      # 3.10.89: the run report's warning
         self.last_counts = {}
         self.last_manning_counts = {}
 

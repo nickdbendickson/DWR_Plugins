@@ -37,6 +37,10 @@ DEPTH_BASIS_OPTIONS = ["Cell minimum: max WSE minus the HEC-RAS cell's minimum t
                        "Per pixel: max WSE minus the terrain under each grid cell (needs the "
                        "Terrain)"]
 DEPTH_BASIS_KEYS = [hecras.DEPTH_BASIS_CELL_MIN, hecras.DEPTH_BASIS_TERRAIN]
+# 3.10.89 review round 3: the Terrain's elevation unit (hecras_engine.terrain_z_factor)
+TERRAIN_Z_OPTIONS = ["Detect from the raster (else the Runner's record of its own terrain, else "
+                     "the CRS's linear unit, with a warning)", "Feet", "US survey feet", "Meters"]
+TERRAIN_Z_KEYS = [gdal_io.Z_AUTO, gdal_io.Z_FEET, gdal_io.Z_US_FEET, gdal_io.Z_METERS]
 
 
 def _depth_basis_default():
@@ -230,7 +234,10 @@ class HecRasImportAlgorithm(_ToolBase):
                 "it (a ditch or channel in a cell deepens the whole cell); 'Per pixel' is the "
                 "cell's maximum water surface minus the terrain under each grid cell and needs "
                 "the Terrain the model used. With the cell-minimum basis a given Terrain is not "
-                "used. The wet area and the arrival time follow the depth of the basis chosen. "
+                "used. 'Terrain elevation units': Detect reads the unit the Terrain records, "
+                "else the Runner's record of its own HEC-RAS terrain, else assumes its CRS's "
+                "linear unit and says so; or choose Feet / US survey feet / Meters. The wet "
+                "area and the arrival time follow the depth of the basis chosen. "
                 "The Depth basis starts at NDBREACH_HECRAS_DEPTH_BASIS (else cell minimum). "
                 "Velocity is the per-cell maximum when the file has one, else the maximum face "
                 "velocities averaged onto the cells. Arrival is the first time the depth reaches "
@@ -251,6 +258,9 @@ class HecRasImportAlgorithm(_ToolBase):
         self.addParameter(QgsProcessingParameterRasterLayer(
             "TERRAIN", "Terrain the HEC-RAS model used (needed for the per-pixel depth "
             "basis; not used with the cell-minimum basis)", optional=True))
+        self.addParameter(QgsProcessingParameterEnum(
+            "TERRAIN_Z", "Terrain elevation units", TERRAIN_Z_OPTIONS, defaultValue=0,
+            optional=True))
         # 3.10.84: cell minimum is the default again; per pixel stays selectable
         self.addParameter(QgsProcessingParameterEnum(
             "DEPTH_BASIS", "Depth basis (wet area and arrival follow it)", DEPTH_BASIS_OPTIONS,
@@ -335,15 +345,23 @@ class HecRasImportAlgorithm(_ToolBase):
                                              "Terrain the HEC-RAS model used")
             # 3.10.84: depth, wet area and arrival on the chosen basis (cell minimum default)
             t_ft = None
+            tnotes = []
             if terrain is not None:
                 from .core import hecras_engine
-                t_ft = hecras_engine.terrain_on_grid(terrain.source(), grid)
+                zi = self.parameterAsEnum(parameters, "TERRAIN_Z", context) \
+                    if parameters.get("TERRAIN_Z") is not None else 0
+                stage = hecras_engine._read_json(os.path.join(
+                    dam_folder, "_hecras", "hecras_stage.json")) if dam_folder else {}
+                t_ft = hecras_engine.terrain_on_grid(
+                    terrain.source(), grid, z=TERRAIN_Z_KEYS[zi] if 0 <= zi < 4 else None,
+                    stage=stage, notes=tnotes)
+                feedback.pushInfo(tnotes[0])             # a warning: 'Check:' below
             arrays, tinfo = hecras.terrain_depth(
                 hdf, x0, ytop, dx, nx, ny, t_ft,
                 area=self._str(parameters, "AREA", context) or None, basis=basis, **kw)
             tinfo.pop("depth_cell_min", None)
             tinfo.pop("depth_terrain", None)
-            tinfo["notes"] = list(tinfo.get("notes") or []) + [
+            tinfo["notes"] = list(tinfo.get("notes") or []) + tnotes[1:] + [
                 "Depth basis: " + hecras.DEPTH_BASIS_TEXT[basis] + "."]
             mesh.info = tinfo
         except (hecras.HecRasError, OSError, ValueError, RuntimeError) as e:

@@ -18,7 +18,9 @@ DamSafety_Runner 3.10.17+ (#79):
   the reservoir mask            core/hecras_model.build_model: ground at or below the top of
                                 dam, upstream half-plane, within the radius, seeded at the
                                 lowest ground near the dam
-  z_to_m_factor and unit names  core/gdal_io.py
+The DEM's elevation unit is the run's (core/gdal_io.resolve_dem_z, imported; Runner 3.10.89):
+the wizard's 'DEM elevation units' as a run reads it, so the estimate never reads the DEM in
+another unit than the run will.
 No Qt here: it runs in a QgsTask and is tested without a display.
 """
 import math
@@ -34,50 +36,34 @@ RADII_M = (1500.0, 3000.0, 6000.0, 12000.0)   # tried in turn until the basin cl
 MAX_CELLS = 1600                      # per side of the window read (decimated above it)
 LABEL = "estimated from DEM (screening only)"
 
-_FEET_NAMES = ("ft", "foot", "feet", "international foot", "intl foot")
-_US_FEET_NAMES = ("us survey foot", "us-ft", "ftus", "us_ft", "foot_us", "us foot",
-                  "us survey feet", "ft (us)", "survey foot")
-_METER_NAMES = ("m", "metre", "meter", "metres", "meters")
-
-
 class EstimateError(ValueError):
     pass
 
 
-def z_to_m_factor(ds, choice=""):
-    """Metres per DEM elevation unit and how it was decided. The raster's own unit wins
-    (band unit type, then a compound CRS's vertical unit); else the page's choice
-    ('feet' / 'us_feet' / 'meters'); else metres. (gdal_io.z_to_m_factor, Runner.)"""
-    unit = (ds.GetRasterBand(1).GetUnitType() or "").strip().lower()
-    if unit in _US_FEET_NAMES:
-        return US_FT, "US survey feet (raster unit '{}')".format(unit)
-    if unit in _FEET_NAMES:
-        return FT, "feet (raster unit '{}')".format(unit)
-    if unit in _METER_NAMES:
-        return 1.0, "metres (raster unit '{}')".format(unit)
-    from osgeo import osr
-    wkt = ds.GetProjection()
-    if wkt:
-        srs = osr.SpatialReference()
-        srs.ImportFromWkt(wkt)
-        try:
-            vert = srs.GetTargetLinearUnits("VERT_CS") if srs.IsCompound() else None
-        except Exception:
-            vert = None
-        if vert and abs(vert - US_FT) < 1e-7:
-            return US_FT, "US survey feet (vertical CRS)"
-        if vert and abs(vert - FT) < 1e-7:
-            return FT, "feet (vertical CRS)"
-        if vert and abs(vert - 1.0) < 1e-9:
-            return 1.0, "metres (vertical CRS)"
-    choice = (choice or "").strip().lower()
-    if choice in ("us_feet", "us-ft"):
-        return US_FT, "US survey feet (chosen on the DEM page)"
-    if choice in ("feet", "ft"):
-        return FT, "feet (chosen on the DEM page)"
-    if choice in ("meters", "metres", "m"):
-        return 1.0, "metres (chosen on the DEM page)"
-    return 1.0, "metres (no unit recorded in the raster; check)"
+_CHOICE_NAMES = {"": "auto", "us-ft": "us_feet", "ft": "feet", "metres": "meters", "m": "meters"}
+
+
+def z_to_m_factor(ds, choice="", path=""):
+    """Metres per DEM elevation unit and how it was decided: the wizard's 'DEM elevation units'
+    (choice: '' / 'auto', 'feet', 'us_feet', 'meters' or a '..._tag_wrong' one) as a model run
+    resolves it (gdal_io.resolve_dem_z, Runner 3.10.89 review round 3). Before, the band unit
+    overrode an explicit choice without a word, the Download DEM record and the scale / vertical
+    shift guards were not read, and a DEM that records no unit was read as metres - an untagged
+    feet DEM gave a height 3.28 x too high. EstimateError, naming the wizard's setting, where
+    the run would stop."""
+    from ..core import gdal_io
+    choice = str(choice or "").strip().lower()
+    choice = _CHOICE_NAMES.get(choice, choice)
+    path = path or ds.GetDescription()
+    try:
+        got, how = gdal_io.resolve_dem_z(path, choice)
+    except ValueError as e:
+        raise EstimateError("{} (in this wizard: 'DEM elevation units' on the Terrain page)".format(e))
+    detected, warn = gdal_io.z_how_parts(how)
+    note = "{} ({})".format(gdal_io.ZU.NAMES[got], detected or "chosen on the Terrain page")
+    if warn:
+        note += "; WARNING: " + warn
+    return gdal_io._TO_M[got], note
 
 
 def _sample(a, x0, y0, cell, xy):
@@ -192,7 +178,7 @@ def estimate(dem_path, point_lonlat, line_lonlat=None, z_choice="", radii=RADII_
         raise EstimateError("The DEM could not be opened: {}".format(dem_path))
     if not ds.GetProjection():
         raise EstimateError("The DEM has no coordinate system.")
-    factor, unit_note = z_to_m_factor(ds, z_choice)
+    factor, unit_note = z_to_m_factor(ds, z_choice, str(dem_path))
     notes = ["DEM elevations: {}.".format(unit_note)]
     line = None
     if line_lonlat and len(line_lonlat) >= 2:

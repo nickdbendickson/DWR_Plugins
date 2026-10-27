@@ -47,7 +47,12 @@ TIERS = [(workflow.TIER_LISFLOOD, "LISFLOOD-FP only"),
                                 "needs HEC-RAS 6.6, see help)")]
 DEFAULT_MAX_EXTENT_MI = 20.0     # the run tools' and Setup's default largest domain side
 ZUNITS = [("auto", "Detect from the raster"), ("feet", "Feet"),
-          ("us_feet", "US survey feet"), ("meters", "Meters")]
+          ("us_feet", "US survey feet"), ("meters", "Meters"),
+          # 3.10.89 review round 3, appended (indices 0-3 unchanged): an explicit unit used
+          # although the raster's unit tag says otherwise (gdal_io.Z_TAG_WRONG)
+          ("feet_tag_wrong", "Feet (the raster's unit tag is wrong)"),
+          ("us_feet_tag_wrong", "US survey feet (the raster's unit tag is wrong)"),
+          ("meters_tag_wrong", "Meters (the raster's unit tag is wrong)")]
 # v3.2.0: one EAP map (ND Dam Hazard's map book); this tool's SVG is a preview
 EAP_MAP_CHOICES = [(c, prodmod.EAP_LABELS[c]) for c in prodmod.EAP_CHOICES]
 SCENARIOS = [(workflow.SCENARIO_SUNNY, "Sunny day: no inflow, breach at the top of dam "
@@ -888,31 +893,41 @@ class _Base(QgsProcessingAlgorithm):
             if has("NLCD_RASTER") else None
         zc = ZUNITS[self.parameterAsEnum(parameters, "DEM_Z", context)][0] \
             if has("DEM_Z") else "auto"
-        if zc == "auto":
-            raise QgsProcessingException("Set the DEM elevation unit (feet or metres). "
-                                         "QL2 ASCII grids are feet; a USGS IMG is usually metres.")
-        # ND ground is about 250-600 m. A units flip puts the median far outside that.
+        z_how = ""
+        # 3.10.88: 'Detect from the raster' uses the unit the DEM records (band unit type,
+        # vertical CRS, the Download DEM record); a DEM with none still stops here, naming the
+        # setting. 3.10.89: how it was detected goes into the units note (z_note) below, and an
+        # explicit Feet / Meters that the DEM's record contradicts stops (gdal_io.resolve_dem_z).
         try:
-            import numpy as np
+            zc, z_how = gdal_io.resolve_dem_z(dem.source(), zc)
+        except ValueError as e:
+            raise QgsProcessingException(str(e))
+        except Exception as e:                           # noqa - unreadable DEM
+            if zc == "auto":                             # say which setting
+                raise QgsProcessingException("Could not read the DEM's elevation unit ({}). {}".format(
+                    e, gdal_io.DEM_Z_HELP))
+            z_how = "chosen"                             # GdalTerrain reports the read error
+        # review round 3: "chosen: <why>" - an explicit unit used against the DEM's record (its
+        # values fit North Dakota ground only in that unit, or 'the raster's unit tag is wrong'
+        # was chosen): the run goes on, and the warning goes into the run report
+        z_how, z_warn = gdal_io.z_how_parts(z_how)
+        # ND ground is about 250-600 m. A units flip puts the median far outside that.
+        # 3.10.89: sampled over the whole DEM (gdal_io.sample_median), not the top-left 200 x
+        # 200 cells only - nodata there (a 1 m DEM clipped or warped to EPSG:5070) skipped the
+        # check without a word; a DEM where no valid cell is found says so in the run report.
+        z_check = z_warn
+        try:
             from osgeo import gdal
-            ds = gdal.Open(dem.source())
+            ds = gdal.Open(gdal_io._file(dem.source()))  # a QGIS 'x.tif|option:...' source
             if ds is not None:
-                band = ds.GetRasterBand(1)
-                nodata = band.GetNoDataValue()
-                data = band.ReadAsArray(0, 0, min(ds.RasterXSize, 200), min(ds.RasterYSize, 200))
-                if data is not None:
-                    flat = data.astype(float).ravel()
-                    if nodata is not None:
-                        flat = flat[flat != nodata]
-                    flat = flat[np.isfinite(flat)]
-                    if flat.size > 10:
-                        med = float(np.median(flat))
-                        in_ft = zc in ("feet", "us_feet")
-                        med_m = med * 0.3048 if in_ft else med
-                        if med_m < 100 or med_m > 1200:
-                            raise QgsProcessingException(
-                                "DEM median {:.1f} with units '{}' is outside the North Dakota "
-                                "ground range (about 250-600 m). Check the elevation unit.".format(med, zc))
+                med, _cells = gdal_io.sample_median(ds)
+                ds = None
+                if med is None:
+                    z_check = "; ".join(w for w in (z_warn, gdal_io.NO_SAMPLE) if w)
+                else:
+                    problem = gdal_io.median_unit_problem(med, zc, z_how)
+                    if problem:
+                        raise QgsProcessingException(problem)
         except QgsProcessingException:
             raise
         except Exception:
@@ -936,6 +951,10 @@ class _Base(QgsProcessingAlgorithm):
                                       n_default, **kw)
         except ValueError as e:                       # a bad NDBREACH_DEM_RESAMPLE value
             raise QgsProcessingException(str(e))
+        if z_how:                                     # detected, not chosen (3.10.89)
+            src.z_note = gdal_io.detected_z_note(zc, z_how)
+        if z_check:                                   # 3.10.89: a warning in the run report
+            src.z_check = z_check
         self._record("DEM resampling", "{} (from {})".format(src.resample, src.resample_source))
         dem_wkt = dem.crs().toWkt()
         target, res = None, None
