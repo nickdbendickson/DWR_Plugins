@@ -76,9 +76,13 @@ class DownloadDem(QgsProcessingAlgorithm):
         )
 
     def initAlgorithm(self, config=None):
-        self.addParameter(QgsProcessingParameterEnum(
+        src = QgsProcessingParameterEnum(
             "SOURCE", "Source", ["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)", lt_label()],
-            defaultValue=0))
+            defaultValue=0)
+        if hasattr(src, "setHelp"):
+            src.setHelp("Where the elevation comes from. USGS 3DEP is the public seamless product. "
+                        "ND DWR LiDAR uses the state FTP. The third option is for local lidar tiles.")
+        self.addParameter(src)
         self.addParameter(QgsProcessingParameterEnum(
             "RES", "Local DEM resolution", ["10 m", "1 m"], defaultValue=0))
         self.addParameter(QgsProcessingParameterEnum(
@@ -87,8 +91,12 @@ class DownloadDem(QgsProcessingAlgorithm):
             "DAM_POINT", "Dam point, longitude,latitude", optional=True))
         self.addParameter(QgsProcessingParameterString(
             "DAM_ID", "Dam ID (names the file <DAM_ID>_10m_5070.tif)", optional=True))
-        self.addParameter(QgsProcessingParameterNumber(
-            "BUFFER_MI", "Buffer around the dam (miles)", NUM_DOUBLE, 15.0, minValue=1.0))
+        buf = QgsProcessingParameterNumber(
+            "BUFFER_MI", "Buffer around the dam (miles)", NUM_DOUBLE, 15.0, minValue=1.0)
+        if hasattr(buf, "setHelp"):
+            buf.setHelp("Miles of ground around the dam point that the local DEM covers. "
+                        "Larger buffers are slower and bigger. 15 mi is a common starting size for a dam.")
+        self.addParameter(buf)
         self.addParameter(QgsProcessingParameterString(
             "BEARING_DEG", "Downstream bearing (deg from north; blank = centered on the dam)",
             optional=True))
@@ -126,7 +134,11 @@ class DownloadDem(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterFile(
             "FALLBACK_DEM", "1 m tiles: coarser DEM underneath (empty = <DAM_ID>_10m_5070.tif if present)",
             optional=True))
-        self.addParameter(QgsProcessingParameterFolderDestination("OUT", "Output folder"))
+        outp = QgsProcessingParameterFolderDestination("OUT", "Output folder")
+        if hasattr(outp, "setHelp"):
+            outp.setHelp("Folder that receives the local GeoTIFF (and VRT if built). "
+                         "The tool names the file from the dam ID and resolution.")
+        self.addParameter(outp)
         self.addOutput(QgsProcessingOutputFile("VRT", "Local DEM"))
 
     def processAlgorithm(self, parameters, context, feedback):
