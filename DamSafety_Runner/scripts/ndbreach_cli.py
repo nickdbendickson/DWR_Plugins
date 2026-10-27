@@ -102,6 +102,7 @@ try:
     floodmod = importlib.import_module(PKG + ".core.flood")
     impmod = importlib.import_module(PKG + ".core.impacts")
     structmod = importlib.import_module(PKG + ".core.structures")
+    bsnap = importlib.import_module(PKG + ".core.bridge_snap")
     condmod = importlib.import_module(PKG + ".core.conditioning")
     nd_data = importlib.import_module(PKG + ".core.nd_data")
     estmod = importlib.import_module(PKG + ".core.estimate")
@@ -1160,6 +1161,7 @@ def apply_layers(st, cfg, setup, center_xy, cache, dem_projected=True):
                              key, len(feats), radius / MILE))
 
     rec = impmod.Receptors()
+    road_lines, rail_lines = [], []
     for key, kind in (("receptor_points", impmod.KIND_STRUCTURE),
                       ("receptor_roads", impmod.KIND_ROAD),
                       ("receptor_rail", impmod.KIND_RAIL)):
@@ -1172,9 +1174,16 @@ def apply_layers(st, cfg, setup, center_xy, cache, dem_projected=True):
             rec.add_points(xy, kind, ids)
         else:
             kept = near(feats, "line")
-            rec.add_lines([p for parts, _pr in kept for p in parts if len(p) >= 2], kind)
+            lines = [np.asarray(p, dtype=float) for parts, _pr in kept for p in parts
+                     if len(p) >= 2]
+            rec.add_lines(lines, kind)
+            (road_lines if kind == impmod.KIND_ROAD else rail_lines).extend(lines)
         dropped(key, feats, kept)
     st.receptors = rec if len(rec) else None
+    # 3.10.90 (as algorithms.apply_features): the road / rail centrelines the inventory bridges
+    # are checked against (core/bridge_snap) and the culvert guesses use
+    st.road_lines = road_lines
+    st.rail_lines = rail_lines
     if st.receptors is not None:
         notes.append("Receptors within {:.0f} mi of the dam: {}".format(
             radius / MILE, impmod.count_text(rec, np.ones(len(rec), bool))))
@@ -1230,6 +1239,8 @@ def apply_layers(st, cfg, setup, center_xy, cache, dem_projected=True):
                     inv_u * FT if inv_u is not None else None,
                     inv_d * FT if inv_d is not None else None,
                     name=str(g("S_NAME") or "{} {}".format(kind, i + 1))))
+                # 3.10.90: the facility a bridge carries (road / rail) for the bridge check
+                structs[-1].carries = bsnap.facility_kind(at)
                 i += 1
     st.structures = structs
     # DEM conditioning
@@ -1308,6 +1319,11 @@ def prepare(cfg, opts, row=None, cache=None, layers=None, need_models=True, scen
         check_in_dem(ip, setup.dem_bounds, "the breach inflow point")
         inflow_xy = setup.frame.xy(ip[0], ip[1])
     st = build_settings(cfg, opts, need_models)
+    # 3.10.90 (as the QGIS tools' _record("DEM", ...)): run_report.json settings.input_files.DEM
+    # is the road surface the ND 5.2 tool reads overtopping against (and the run manifest's)
+    dem_path = cfg.path_of(cfg.section("dem").get("path"))
+    if dem_path and os.path.isfile(dem_path):
+        st.input_files = dict(getattr(st, "input_files", None) or {}, DEM=dem_path)
     files = nd_data.dam_input_files(folder)
     scen = scenario or cfg.get("scenario", "type", workflow.SCENARIO_SUNNY)
     if scen == "per_dam":

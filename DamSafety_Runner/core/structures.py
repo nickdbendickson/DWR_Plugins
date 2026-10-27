@@ -47,6 +47,14 @@ class Structure:
     min_cells: int = 0                  # >0: the cut line spans at least this many model cells
                                         # (inventory-matched guesses: a short line inside one
                                         # coarse cell has no lower ground at its ends to cut to)
+    carries: str = ""                   # 3.10.90: a bridge's facility, "road" / "rail" / ""
+                                        # (unknown; core/bridge_snap.facility_kind). Not in
+                                        # to_dict: the run key stays as before
+    snap_from: Optional[dict] = None    # PR #198 review: set when core/bridge_snap moved this
+                                        # bridge (from / to / distance / why). Sub-runs share
+                                        # the moved object (shallow copies): they report the
+                                        # move from it and never judge the bridge again. Not
+                                        # in to_dict
 
     def cut_line(self, cell):
         """The line the DEM cut follows at this cell size: as given, or lengthened

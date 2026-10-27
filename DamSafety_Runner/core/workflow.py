@@ -806,6 +806,22 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     def dem_for(model, bounds, cell):
         return model_dem(terrain_src, st.structures, model, bounds, cell, refill_paths)
 
+    # --- 3.10.90: inventory bridges checked against the road they carry (DWR-3034) -----
+    # moved to the road's opening only on evidence (core/bridge_snap); every move is a warning
+    if st.structures and any(s.kind == structmod.KIND_BRIDGE for s in st.structures):
+        from . import bridge_snap
+        snap_entry, snap_notes, snap_warn, snap_moved = bridge_snap.check_run(
+            st, raw_terrain.read)
+        for n in snap_notes:
+            log(n)
+        for w in snap_warn:
+            log(w)
+            warnings.append(w)
+        if snap_entry is not None:
+            report["bridge_snap"] = snap_entry
+            if snap_moved:
+                report["settings"]["structures"] = [s.to_dict() for s in st.structures]
+
     # --- 3.5: inventory inlet / outlet elevations against the LiDAR -------------
     if st.structures:
         try:
@@ -2711,6 +2727,9 @@ def render_report(r):
         lines += ["- " + c["note"], ""]
     if r.get("structures"):
         lines += ["## Structures", ""] + ["- " + x for x in r["structures"]] + [""]
+    if r.get("bridge_snap"):
+        from . import bridge_snap
+        lines += bridge_snap.report_lines(r["bridge_snap"])
     if r.get("culvert_matches"):
         lines += ["## Culvert matches", "",
                   "Road-crossing guesses sized from an inventory record within the match "
