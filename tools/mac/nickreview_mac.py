@@ -1739,9 +1739,9 @@ def main():
     if not a.list_data and os.path.isdir(old):
         if not a.dry_run:
             shutil.rmtree(old, ignore_errors=True)
-        out("NOTE: {} (kept by an older version of this script for --redo) is not used any "
-            "more{}; what an earlier --redo set aside is finished by a run without --redo".format(
-                old, " (a real run deletes it)" if a.dry_run else "; deleted"))
+        out("NOTE: {} {} (the --redo records of an older version of this script, not used any "
+            "more: what an earlier --redo set aside is finished by a run without --redo)".format(
+                old, "is deleted by a real run" if a.dry_run else "deleted"))
     worst = 0
     try:
         if not a.dry_run:
