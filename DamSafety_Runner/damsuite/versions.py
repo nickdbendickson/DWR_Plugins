@@ -32,7 +32,11 @@ PLUGINS = {"ndhazard": "DamSafety_Hazard",
 LABELS = {"ndhazard": "DamSafety Hazard",
           "ndbreach": "DamSafety Runner",
           "ndscreen": "DamSafety Screening"}
+<<<<<<< HEAD
 RELEASE = {"ndhazard": "2.18.66", "ndbreach": "3.10.94", "ndscreen": "0.17.54"}
+=======
+RELEASE = {"ndhazard": "2.18.67", "ndbreach": "3.10.95", "ndscreen": "0.17.53"}
+>>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
 # minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
 REQUIRES = {
     ("ndbreach", "ndhazard"): ("2.9.1", "2.18.63",

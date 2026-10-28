@@ -223,7 +223,8 @@ def read_crossings(layer, source_label, analysis_crs, transform_ctx, clip=None):
         ("owner", ("owner_022",)), ("built", ("year_built_027",)),
         ("scour", ("scour_critical_113",)), ("name", ("name",)),
         ("category", ("category",)), ("waterway", ("waterway",)),
-        ("railway", ("railway",)), ("osm_id", ("osm_id",)), ("operator", ("operator",)))}
+        ("railway", ("railway",)), ("osm_id", ("osm_id",)), ("operator", ("operator",)),
+        ("osm_nodes", ("osm_nodes",)), ("changeset", ("osm_changeset", "changeset")))}
     xf = QgsCoordinateTransform(layer.crs(), analysis_crs, transform_ctx)
     a_to_clip = clip.transform_from(analysis_crs) if clip is not None else None
     out = []
@@ -260,7 +261,9 @@ def read_crossings(layer, source_label, analysis_crs, transform_ctx, clip=None):
             rec = {"name": _attr(a, idx["name"]) or "(unnamed)", "category": cat,
                    "struct_no": _attr(a, idx["osm_id"]), "carried": _attr(a, idx["railway"]),
                    "crosses": _attr(a, idx["waterway"]), "adt": None, "adt_year": None,
-                   "owner": _attr(a, idx["operator"]), "built": None, "scour": ""}
+                   "owner": _attr(a, idx["operator"]), "built": None, "scour": "",
+                   "osm_nodes": _attr(a, idx["osm_nodes"]),          # 2.18.67: dedupe
+                   "osm_changeset": _attr(a, idx["changeset"])}
         rec.update({"kind": KIND_CROSSING, "source": source_label,
                     "geom": QgsGeometry.fromPointXY(QgsPointXY(pt))})
         out.append(rec)
@@ -274,24 +277,63 @@ def crossing_priority(rec):
     return (-adt, -rail, rec["name"])
 
 
+OSM_SAME_CROSSING_M = 5.0      # 2.18.67: two OSM crossings this close = one (DWR-3034 ford)
+_OSM_ID = re.compile(r"^(node|way|relation)/(\d+)$")
+
+
+def _osm_nodes(rec):
+    """The OSM node ids of a crossing record: its own id for a node, its 'osm_nodes' (a way's
+    node list, written by osm_parse.crossing_features since 2.18.67) otherwise."""
+    m = _OSM_ID.match(str(rec.get("struct_no") or ""))
+    nodes = set(str(rec.get("osm_nodes") or "").replace(";", ",").split(",")) - {""}
+    if m and m.group(1) == "node":
+        nodes.add(m.group(2))
+    return nodes
+
+
+def osm_same_crossing(r, k, dist, tol5):
+    """2.18.67 (DWR-3034 REVIEW 9.8 item 5): two OpenStreetMap crossing records that are one
+    structure mapped twice - an OSM node and a way (or two ways) that share a node, or that lie
+    within OSM_SAME_CROSSING_M (`tol5`, CRS units) with the same category or the same changeset.
+    DWR-3034: ford node/11121114805 and way/1198845155, 1.57 m apart, changeset 139990619."""
+    a, b = str(r.get("struct_no") or ""), str(k.get("struct_no") or "").split("; ")[0]
+    if not (_OSM_ID.match(a) and _OSM_ID.match(b)) or a == b:
+        return False
+    if _osm_nodes(r) & _osm_nodes(k):
+        return True
+    if dist > tol5:
+        return False
+    cs_r, cs_k = str(r.get("osm_changeset") or ""), str(k.get("osm_changeset") or "")
+    return r["category"] == k["category"] or (cs_r != "" and cs_r == cs_k)
+
+
 def dedupe(records, crs, lat=None):
     """Drop a lifeline record when an earlier one of the same category lies
     within FACILITY_DEDUP_FT (agency layers are read first, so they win over
     OSM); a dam when an earlier one has the same NID ID."""
     tol = _ft(FACILITY_DEDUP_FT, crs, lat)
     crossing_tol = _ft(100.0, crs, lat)
+    osm_tol = _ft(OSM_SAME_CROSSING_M / 0.3048, crs, lat)
     kept = []
     for r in records:
         c = r["geom"].centroid().asPoint()
         dup = None
         for k in kept:
+            if r["kind"] == KIND_CROSSING and k["kind"] == KIND_CROSSING \
+                    and r["source"] == k["source"]:
+                # 2.18.67: one OSM structure mapped as a node and a way (osm_same_crossing);
+                # other pairs of one source (twin bridges, neighbouring culverts) stay apart
+                kc = k["geom"].centroid().asPoint()
+                if osm_same_crossing(r, k, math.hypot(kc.x() - c.x(), kc.y() - c.y()),
+                                     osm_tol):
+                    dup = k
+                    k["struct_no"] = "{}; {}".format(k["struct_no"], r["struct_no"])
+                    break
+                continue
             if k["category"] != r["category"]:
                 continue
             if r["kind"] == KIND_CROSSING:
-                # the same structure from NBI and OSM; two records of one
-                # source (twin bridges, neighbouring culverts) stay apart
-                if r["source"] == k["source"]:
-                    continue
+                # the same structure from NBI and OSM
                 kc = k["geom"].centroid().asPoint()
                 if math.hypot(kc.x() - c.x(), kc.y() - c.y()) <= crossing_tol:
                     dup = k
@@ -315,6 +357,10 @@ def dedupe(records, crs, lat=None):
         if dup is None:
             kept.append(r)
         else:
+            if r["source"] == dup["source"]:    # 2.18.67: an OSM node / way pair, one source
+                if dup.get("name") in ("", "(unnamed)") and r.get("name"):
+                    dup["name"] = r["name"]
+                continue
             if r["source"] not in dup.setdefault("also_in", []):
                 dup["also_in"].append(r["source"])
             if dup.get("name") in ("", "(unnamed)") and r.get("name"):

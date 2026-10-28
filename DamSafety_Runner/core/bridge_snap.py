@@ -889,6 +889,8 @@ def snap_bridges(structures, roads, read_dem, streams=(), radius_m=None, rails=(
                              r["name"], r["moved_m"], r["line"] or "road", r["old_xy"],
                              r["new_xy"], r["method"], r["note"].split(": cut moved")[0]))
         notes.append(msg)
+    if rows:
+        notes.append("Inventory bridges: {}".format(snap_counts_text(snap_counts(rows))))
     stay = [r for r in rows if r["method"] not in METHODS_MOVED and not r["verified"]]
     if stay:
         warns.append("{} inventory bridge(s) stay at the inventory location without an opening "
@@ -932,8 +934,51 @@ def check_run(st, read_dem):
              "moved": sum(1 for r in rows if r["method"] in METHODS_MOVED),
              "kept_verified": sum(1 for r in rows if r["method"] == "kept" and r["verified"]),
              "not_verified": sum(1 for r in rows if r["method"] not in METHODS_MOVED
-                                 and not r["verified"])}
+                                 and not r["verified"]),
+             "counts": snap_counts(rows)}       # 3.10.95: the one breakdown (road / rail)
     return entry, notes, warns, entry["moved"] > 0
+
+
+SNAP_CLASSES = ("kept_verified", "kept_unverified", "none", "moved")
+SNAP_CLASS_LABELS = {"kept_verified": "kept, verified", "kept_unverified": "kept, not verified",
+                     "none": "not matched to a line", "moved": "moved"}
+
+
+def snap_class(r):
+    """3.10.95: one of SNAP_CLASSES for a bridge row: moved (METHODS_MOVED), kept and verified,
+    kept and not verified, or none (no line matched / not checked)."""
+    m = r.get("method")
+    if m in METHODS_MOVED:
+        return "moved"
+    if m == "kept":
+        return "kept_verified" if r.get("verified") else "kept_unverified"
+    return "none"
+
+
+def snap_counts(rows):
+    """3.10.95 (DWR-3034 REVIEW 9.8 item 6): the one breakdown of the bridge rows,
+    {class: {"total", "road", "rail"[, "other"]}} over SNAP_CLASSES, with 'carries' (else the
+    matched 'line') as road / rail. DWR-3034: kept_verified 49 = 24 + 25, kept_unverified
+    6 = 5 + 1, none 2 = 2 + 0, moved 1 = 1 + 0."""
+    out = {c: {"total": 0, "road": 0, "rail": 0} for c in SNAP_CLASSES}
+    for r in rows or ():
+        c = out[snap_class(r)]
+        k = r.get("carries") or r.get("line") or ""
+        k = k if k in ("road", "rail") else "other"
+        c["total"] += 1
+        c[k] = c.get(k, 0) + 1
+    return out
+
+
+def snap_counts_text(counts):
+    """'49 kept, verified (24 road + 25 rail); 6 kept, not verified (5 road + 1 rail); ...'"""
+    parts = []
+    for c in SNAP_CLASSES:
+        d = counts.get(c) or {}
+        extra = " + {} unknown".format(d["other"]) if d.get("other") else ""
+        parts.append("{} {} ({} road + {} rail{})".format(
+            d.get("total", 0), SNAP_CLASS_LABELS[c], d.get("road", 0), d.get("rail", 0), extra))
+    return "; ".join(parts)
 
 
 def report_lines(entry):
@@ -947,9 +992,11 @@ def report_lines(entry):
                       "it.".format(ENV, entry.get("env")), ""]
     if not rows:
         return out + [entry.get("note") or "No inventory bridge was checked.", ""]
+    counts = entry.get("counts") or snap_counts(rows)
     out += ["Radius {:g} m ({}). A bridge moves only when its inventory place is solid "
             "embankment and the nearest crossing is plain; 'verified' = an opening or a channel "
             "was seen at the final cut.".format(float(entry.get("radius_m") or 0.0), ENV), "",
+            "{} bridge(s): {}.".format(len(rows), snap_counts_text(counts)), "",
             "| Bridge | Carries | Result | Verified | Moved (m) | From (x, y) | To (x, y) | Why |",
             "|---|---|---|---|---|---|---|---|"]
     for r in rows:

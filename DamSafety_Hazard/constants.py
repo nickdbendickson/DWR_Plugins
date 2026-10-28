@@ -3,7 +3,11 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
+<<<<<<< HEAD
 PLUGIN_VERSION = "2.18.66"
+=======
+PLUGIN_VERSION = "2.18.67"
+>>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
