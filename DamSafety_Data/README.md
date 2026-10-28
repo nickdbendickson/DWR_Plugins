@@ -86,7 +86,7 @@ writes it twice from the same download, into a folder you pick:
 
 | Folder | Format | What reads it |
 |---|---|---|
-| `ND_Dam_Suite_Pack/` | 2: one GeoPackage per layer (structures, roads, railroads, lifelines, hydro, dwr, hifld, boundaries, landcover), `manifest.json`, `LAYERS.txt` | Setup, Hazard, Runner, Screening |
+| `ND_Dam_Suite_Pack/` | 2: one GeoPackage per layer (structures, roads, railroads, lifelines, hydro, dwr, hifld, barriers, boundaries, landcover), `manifest.json`, `LAYERS.txt` | Setup, Hazard, Runner, Screening |
 | `nd_offline_pack/nd_offline_pack.sqlite` + `manifest.json` | 1: every vector layer in one file (no raster; the manifest's `rasters_not_included` says so) | older plugin versions |
 | `ND_Dam_Suite_Pack_build/` | the work file and downloads | resume only; delete after the build if you like |
 
@@ -98,10 +98,69 @@ writes it twice from the same download, into a folder you pick:
   again" fetches all). Each manifest entry has the source URL, date, count and sha256.
 - It refuses a folder that is a pack, holds a pack it did not build, or holds the pack the
   plugins read now: an existing pack is never written into.
+- **Sources (PR #221, #223):**
+  - **HIFLD** (fire / EMS stations, local EOCs, local law enforcement, wastewater plants): the
+    Data Rescue Project's copies (portal.datarescueproject.org) kept on DataLumos / ICPSR.
+    DataLumos needs a free ICPSR login and its Terms of Use, so the builder does not download
+    them: download each layer (GeoJSON or shapefile zip) from its DataLumos project page
+    (fire 239161, EOC 239489, law enforcement 239493, wastewater 239262 - "ICIS Wastewater
+    Treatment Plants"; 240789 is a later copy of the same layer; 239290 / 239287 are only its
+    SIC / NAICS code tables and are ignored) into one folder and pick it as the HIFLD folder.
+    Features outside North Dakota are dropped. Without a file the layer is left out (the
+    manifest's `left_out` names the page). There is no mirror fallback.
+  - **HPMS and NDDOT, side by side.** `HPMS_ND_<year>` (FHWA HPMS, newest year that answers) and
+    `NDDOT_traffic_counts` are both in the pack so their AADT can be compared; both manifests
+    and LAYERS.txt say so (`note`).
+  - **ND DEQ** (`nddeq/`): `NDDEQ_landfills` (permitted landfills, Division of Waste
+    Management), `NDDEQ_source_water_protection_community` and
+    `NDDEQ_source_water_protection_noncommunity` (drinking-water source protection areas of
+    public water systems), from the ND GIS Hub (`All_Locations/MapServer` 12, 16, 17). DEQ does
+    not publish wastewater / NDPDES facilities, water treatment plants or intakes as GIS layers;
+    wastewater plants come from the HIFLD (EPA ICIS) layer above.
+  - **3DHP replaces NHD**, keeping the names `NHD_flowlines` / `NHD_waterbodies` (the Hazard /
+    Runner culvert tools and Setup look for those names). The USGS 3DHP map service
+    (`3DHP_all/MapServer` 50 flowlines, 60 waterbodies) is read and `gnis_name`, `gnis_id`,
+    `ftype`, `fcode` are added; the 3DHP fields stay. When 3DHP fails, the NHD service is used
+    and the manifest says why (`hydro_source`, `fallback_reason`).
+  - **SARP National Aquatic Barrier Inventory** (`barriers/`): `ABI_dams` and
+    `ABI_small_barriers_surveyed` from the public API (`tool.aquaticbarriers.org/api/v1/public/
+    <dams|barriers>/state?id=ND`); `ABI_road_crossings_unsurveyed` from the national
+    road-crossings download (about 600 MB, cached for a week), ND rows with
+    Surveyed = "not likely". Each has a `network` field (on-network / off-network) and a
+    `barrier_status` flag: `present`, `removed`, `excluded` or `removed+excluded` (from the
+    inventory's `removed` / `excluded` fields, which stay; removed and excluded barriers are
+    kept, not dropped; the manifests count each value). Terms: credit
+    NACC, SARP and NFHP; the manifests hold the citation, terms and data version.
+- Each manifest entry also has the source file's sha256 and, in the work folder,
+  `provenance.json` keeps them for resumed builds.
 - NLCD 2021 comes from the MRLC WCS; when that is down, from the Esri Annual NLCD image
   service (year 2021, same class codes); the manifest names the source used.
 - Command line: `python3 -m DamSafety_Data.pack_build --out <folder> [--bbox w,s,e,n]
-  [--only NAME,...] [--list] [--verify]`.
+  [--only NAME,...] [--hifld-folder DIR] [--list] [--verify]`.
+
+## Download imagery for these dams… (1.5.0)
+
+Data menu > **Download imagery for these dams…** fetches NAIP aerial imagery around each dam
+of a dams layer (all of it, the selected dams, or a list of dam ids) and writes one file per
+dam into `<output folder>/imagery/`:
+
+- `<dam_id>_naip_<year>.tif`: Cloud Optimized GeoTIFF, JPEG (YCbCr, quality 85) with internal
+  overviews, natural colour (NAIP bands 1-3), in the dam's NAD83 / UTM zone (EPSG 26913 or
+  26914). The dam id comes from `dam_id`, `nidid`, `structure_id`, … or the field you pick.
+- `manifest.json`: per dam the exportImage URL and request, the NAIP year and image names,
+  resolution, box, CRS, size and sha256.
+- Source: the USGS National Map NAIP Imagery ImageServer
+  (`imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer`; USDA FPAC NAIP,
+  0.6 m in North Dakota). Only the newest NAIP year on the dam's box is used.
+- Buffer: a radius, 2.5 km by default (a 5 km square). Resolution: 0.6 m (native), 1 m or
+  2 m. The box is fetched in pieces of at most 2000 × 2000 px (the server allows 4000).
+- The window shows the size before downloading. Measured at Bismarck (NAIP 2023, 0.6 m,
+  2.5 km): about 60 MB downloaded and 24 MB on disk per dam, about 5 minutes per dam.
+- Run again to resume: a dam whose file matches the manifest (same sha256 and settings) is
+  kept, and pieces already downloaded are reused. The output folder may not be (inside) a
+  pack, and nothing goes into the sqlite.
+- Command line: `python3 -m DamSafety_Data.imagery --dams <file> --out <folder> [--ids A,B]
+  [--id-field F] [--radius 2500] [--res 0.6|1|2] [--transfer jpeg|lossless] [--estimate]`.
 
 ## When it checks
 

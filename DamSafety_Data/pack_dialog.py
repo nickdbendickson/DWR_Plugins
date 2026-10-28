@@ -120,7 +120,7 @@ class PackDialog(QDialog):
         g.addWidget(self.dwr, 3, 1)
         g.addWidget(self._browse(self.dwr, folder=True), 3, 2)
         self.hifld = QLineEdit()
-        self.hifld.setPlaceholderText("Optional: a folder of HIFLD files (else downloaded)")
+        self.hifld.setPlaceholderText("Optional: a folder of HIFLD files downloaded from DataLumos (else left out)")
         g.addWidget(QLabel("HIFLD files:"), 4, 0)
         g.addWidget(self.hifld, 4, 1)
         g.addWidget(self._browse(self.hifld, folder=True), 4, 2)

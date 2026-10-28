@@ -48,9 +48,10 @@ GROUPS = (
     ("railroads", ("NARN_rail_lines", "FRA_grade_crossings")),
     ("lifelines", ("lifeline_", "OSM_lifelines")),
     ("hydro", ("3DHP_", "NHD_", "NID_dams")),
-    ("barriers", ("SARP_",)),
+    ("barriers", ("SARP_", "ABI_")),
     ("dwr", ("DWR_",)),
     ("hifld", ("HIFLD_",)),
+    ("nddeq", ("NDDEQ_",)),
     ("boundaries", ("ND_counties", "FEMA_flood_zones")),
 )
 RASTER_GROUP = "landcover"
