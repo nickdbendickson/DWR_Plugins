@@ -31,7 +31,6 @@ def _lines(path, *prefixes):
     return [ln for ln in t.replace("\r", "").split("\n") if ln.startswith(prefixes)]
 
 
-# ============================================================================ pure helpers
 @test
 def hecras_timing_breach_start_line_set_time_and_trigger():
     b = {"start_mode": "time", "start_hr": 0.25, "trigger_wse": 1069.11}
@@ -88,7 +87,6 @@ def hecras_timing_spillway_spec_from_options_and_dam_json():
         shutil.rmtree(d)
 
 
-# ============================================================================ build_model
 @test
 def hecras_timing_sunny_day_breach_starts_after_the_warm_up():
     if p0._skip():

@@ -461,7 +461,6 @@ def hecras_engine_geometry_hdf_state_reads_cells_terrain_and_tables():
         shutil.rmtree(t, ignore_errors=True)
 
 
-# ===================== compute: no wall-clock limit unless NDBREACH_HECRAS_TIMEOUT_S (3.10.48)
 @test
 def hecras_engine_compute_estimate_scales_but_imposes_no_limit():
     H = 3600.0

@@ -66,7 +66,6 @@ def _mesh(folder, half_w=300.0, top=400.0, bottom=-3000.0):
     return p
 
 
-# ============================================================================ pure helpers
 @test
 def hecras_solver_settings_defaults_env_option_and_bad_values():
     s = hs.settings({}, environ={})
@@ -226,7 +225,6 @@ def hecras_solver_wet_runs_on_a_ring():
     assert len(full) == 1 and len(full[0]) == n - 1       # never the whole ring
 
 
-# ============================================================================ written model
 @test
 def hecras_solver_plan_lines_default_and_env():
     if p0._skip():

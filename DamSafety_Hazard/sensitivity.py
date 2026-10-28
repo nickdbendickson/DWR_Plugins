@@ -753,11 +753,9 @@ def qa_folder(out_folder):
     return os.path.join(out_folder, SUBDIR_QA)
 
 
-# =============================================================================
 # v2.9: consequence sensitivity - the loss-of-life screening estimate and the
 # population at risk re-computed for other warning times, persons per dwelling,
 # time of day and flood-severity method (one factor at a time + envelope)
-# =============================================================================
 # SCREENING VALUES CHOSEN BY THE ENGINEER - not requirements of REG_05.2026,
 # TM 11, Graham (1999) or the RCEM guidelines
 DEFAULT_WARNING_SHIFTS_HR = (-0.5, 0.5, 1.0)   # warning issued this much earlier (-) / later (+)

@@ -146,7 +146,6 @@ def _natural(name):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
 
 
-# ============================================================== runs ==
 RUNNER_RUN_FORMAT = "ndbreach/probabilistic_run"      # nd_breach_runner probabilistic.RUN_FORMAT
 RUNNER_INDEX_FORMAT = "ndbreach/probabilistic_runs"   # ... RUNS_INDEX_FORMAT
 RUNS_INDEX = "index.json"
@@ -397,7 +396,6 @@ def find_runs(folder, max_runs=DEFAULT_MAX_RUNS):
     return st["runs"], st["notes"]
 
 
-# ========================================================== settings ==
 def _qa(dam_folder):
     return os.path.join(dam_folder, OUTPUT_FOLDER_NAME, SUBDIR_QA)
 
@@ -607,7 +605,6 @@ def run_config(base_kw, run, out_folder, dam_name, baseline=None, reviews=None):
     return kw, base_note
 
 
-# =========================================================== one run ==
 def run_key(kw):
     """Key of a run's inputs: its rasters (path, size, time, content digest), the settings
     and the data, the plugin version."""
@@ -768,7 +765,6 @@ def classify_run(run, kw, resume=True, gate=False, dam_folder=None, progress=Non
     return saved
 
 
-# ======================================================= aggregation ==
 def _weights(runs_ok):
     """(weights list, weighted?, note)."""
     ws = [_num(r.get("weight")) for r in runs_ok]
@@ -901,7 +897,6 @@ def summary_line(agg, n_failed=0, reference=None, unfinished=False):
     return text + tail + ". Only as good as the ensemble's parameter distributions."
 
 
-# ============================================================ the study ==
 def _reference(dam_folder, info, base_kw, ens_root, reviews, resume, progress, log):
     """Classify the dam's own rasters with the ensemble settings; compare with the dam's
     last-run class. None when there is nothing to compare."""
@@ -1162,7 +1157,6 @@ def _same_crs(ok, notes):
     return out
 
 
-# ============================================================== outputs ==
 def _pct(p):
     return "{:.3f}".format(p)
 

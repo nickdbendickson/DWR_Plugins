@@ -1348,7 +1348,6 @@ class _Base(QgsProcessingAlgorithm):
             self.load(context, res.vectors.get(k), "{} {}".format(dam_id, k.replace("_", " ")))
 
 
-# ============================================================================
 HecRasTierError = workflow.HecRasStageError      # 3.10.66: shared with the CLI
 hecras_tier_stage = workflow.run_hecras_stage
 hecras_done = workflow.hecras_done
@@ -1736,7 +1735,6 @@ class RunDamAlgorithm(_Base):
                 "EAP_MAP": res.eap_map, "FOLDER": folder}
 
 
-# ============================================================================
 class SensitivityAlgorithm(RunDamAlgorithm):
     def name(self):
         return "sensitivity"
@@ -1832,7 +1830,6 @@ class SensitivityAlgorithm(RunDamAlgorithm):
                 "VELOCITY": "", "ARRIVAL": "", "WSE": "", "EAP_MAP": ""}
 
 
-# ============================================================================
 BATCH_FIELDS = ("Dam", "Folder", "Status", "Scenario", "Final_Model", "Peak_Breach_cfs",
                 "Storage_At_Failure_acft", "Flooded_ac", "Max_Depth_ft", "Max_Velocity_fps",
                 "Latest_Arrival_hr", "Receptors_Flooded", "Runs", "Domain_mi", "Minutes",
@@ -2178,7 +2175,6 @@ class BatchAlgorithm(_Base):
         return {"SUMMARY": path, "COUNTS": msg}
 
 
-# ============================================================================
 class CascadeAlgorithm(_Base):
     def name(self):
         return "cascade"
@@ -2288,7 +2284,6 @@ class CascadeAlgorithm(_Base):
         return {"REPORT": out.report_md, "FOLDER": out.folder}
 
 
-# ============================================================================
 class HydrographAlgorithm(_Base):
     def name(self):
         return "hydrograph"
@@ -2354,7 +2349,6 @@ class HydrographAlgorithm(_Base):
         return {"OUTPUT": out}
 
 
-# ============================================================================
 class EstimateAlgorithm(RunDamAlgorithm):
     FLAG_GATE = False          # a time estimate is not a breach run: the flag is only noted
 
@@ -2400,7 +2394,6 @@ class EstimateAlgorithm(RunDamAlgorithm):
         return {"REPORT": " ".join(lines)}
 
 
-# ============================================================================
 class CheckAlgorithm(_Base):
     def name(self):
         return "check"

@@ -36,7 +36,6 @@ class _ToolBase(_Base):
         return p
 
 
-# ============================================================================
 class BuildVrtAlgorithm(_ToolBase):
     def name(self):
         return "buildvrt"
@@ -177,7 +176,6 @@ class NlcdManningAlgorithm(_ToolBase):
         return {"MANNING": out}
 
 
-# ============================================================================
 class ConditionDemAlgorithm(_ToolBase):
     def name(self):
         return "conditiondem"
@@ -248,7 +246,6 @@ class ConditionDemAlgorithm(_ToolBase):
         return {"CONDITIONED": out, "MANNING_OUT": man_out, "RESULT": msg}
 
 
-# ============================================================================
 class BenchmarkAlgorithm(_ToolBase):
     def name(self):
         return "benchmark"
@@ -317,7 +314,6 @@ class BenchmarkAlgorithm(_ToolBase):
         return {"SUMMARY": r["csv"], "REPORT": r["html"], "VERDICT": m["verdict"]}
 
 
-# ============================================================================
 class ClassifyAlgorithm(_ToolBase):
     def flags(self):
         # short, and it calls another plugin's algorithm: run it on the main thread

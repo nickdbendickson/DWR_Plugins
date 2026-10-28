@@ -130,7 +130,6 @@ def _skip():
     return _gdal()[0] is None
 
 
-# ============================================================================ pure helpers
 @test
 def test_hecras_p0_crest_is_never_a_hill():
     """DWR-3161: the highest ground within 400 m of a dam point on the crest was a 1937.8 ft
@@ -198,7 +197,6 @@ def test_hecras_p0_structure_block_keywords_are_hecs():
         shutil.rmtree(d)
 
 
-# ============================================================================ build_model
 @test
 def test_hecras_p0_build_model_on_a_synthetic_run():
     if _skip():
@@ -391,7 +389,6 @@ def test_hecras_p0_old_skeleton_writer_is_retired():
         shutil.rmtree(d)
 
 
-# ============================================================ TIER 2 fix: inflow walked downstream
 def _flow_line(folder, pts):
     m = os.path.join(folder, hecras.MODEL_FOLDER)
     with open(os.path.join(m, "qa_dam_inflow_and_flow_path.geojson"), "w",
@@ -488,7 +485,6 @@ def test_hecras_p0_no_valid_inflow_point_fails_with_the_real_reason():
     assert "has no inflow point" in he.inflow_missing_message({"status": "missing"})
 
 
-# ================================== inflow mode 'auto': fall back to the breach model (DWR-3161)
 def _flat_tailwater_run(d):
     """DWR-3161-like: the ground below the dam is flat (a water surface) only 1.5 m below the
     top of dam for the whole valley, so no point a quarter of the dam height (2.5 m) below
@@ -610,7 +606,6 @@ def test_hecras_p0_strict_hydrograph_mode_still_fails():
         "because the run recorded no inflow point.")
 
 
-# ======================= the fallback is not quiet when the point is on the wrong side (DWR-3161)
 @test
 def test_hecras_p0_inflow_side_problems_pure():
     P = (0.0, 0.0)
@@ -679,7 +674,6 @@ def test_hecras_p0_auto_refuses_a_quiet_fallback_on_a_side_conflict():
         shutil.rmtree(d)
 
 
-# ================== v3.10.17 site checks guard the breach model, not the hydrograph-inflow plan
 def _flat_toe_run(d):
     """The ground just below the dam is flat 1.5 m under the top of dam for 150 m (a pond, a
     water surface), then the valley falls away: the breach model fails the site checks (no

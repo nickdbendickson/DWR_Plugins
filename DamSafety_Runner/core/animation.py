@@ -42,9 +42,7 @@ class Cancelled(RuntimeError):
     pass
 
 
-# ======================================================================================
 # 5 x 7 bitmap font: 7 rows per glyph, 5 bits per row (bit 4 = left column)
-# ======================================================================================
 FONT = {
     "0": (0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E),
     "1": (0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E),
@@ -160,9 +158,7 @@ def fit_text(s, width, max_scale=3):
     return (s[:n] + ".." if n > 0 else ""), 1
 
 
-# ======================================================================================
 # palette: UI colours, hillshade greys, depth classes shaded by the terrain
-# ======================================================================================
 N_UI, N_GREY, N_SHADE = 16, 160, 16
 GREY0 = N_UI                        # 16..175 terrain greys (dark to light)
 WATER0 = N_UI + N_GREY              # 176..255 depth class c, shade l: WATER0 + 16 c + l
@@ -199,9 +195,7 @@ def build_palette():
 PALETTE = build_palette()
 
 
-# ======================================================================================
 # terrain
-# ======================================================================================
 def hillshade(z, dx, azimuth=315.0, altitude=45.0):
     """Hillshade of elevations `z` (rows north to south, cell size `dx` in the
     units of z) lit from `azimuth` (degrees clockwise from north) and `altitude`
@@ -274,9 +268,7 @@ def depth_class(depth_ft):
     return cls.astype(np.int64), wet
 
 
-# ======================================================================================
 # PNG and GIF writers
-# ======================================================================================
 def _png_chunk(kind, data):
     return (struct.pack(">I", len(data)) + kind + data
             + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
@@ -493,9 +485,7 @@ def write_gif(path, frames, delay_cs=25, optimize=True, palette=PALETTE):
     return path
 
 
-# ======================================================================================
 # the snapshot file
-# ======================================================================================
 def _read_exact(f, n):
     buf = bytearray()
     while len(buf) < n:
@@ -598,9 +588,7 @@ def read_grid_sidecar(npz_path):
         return {}
 
 
-# ======================================================================================
 # labels
-# ======================================================================================
 def frame_times_label(t_s, t_ref_hr=0.0):
     """'T+01:30 after breach initiation' (model time t_s seconds, breach at
     t_ref_hr hours of the record); 'T-00:45 before breach initiation' earlier."""
@@ -641,9 +629,7 @@ def _nice(v):
     return p
 
 
-# ======================================================================================
 # layout
-# ======================================================================================
 class _Layout:
     """Positions of the parts of a frame and the static image (title, legend,
     scale bar, map frame)."""
@@ -782,9 +768,7 @@ def _triangle(img, cx, cy, size, fill, outline):
                     img[yy, a:b] = col
 
 
-# ======================================================================================
 # the frames
-# ======================================================================================
 class AnimationResult:
     def __init__(self):
         self.out_dir = ""

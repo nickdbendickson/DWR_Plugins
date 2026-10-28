@@ -1892,9 +1892,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     return res
 
 
-# ============================================================================
 # a later final engine (TIER 2: HEC-RAS 2D after LISFLOOD-FP)
-# ============================================================================
 SCREENING_PREFIX = "LISFLOOD-FP "
 FINAL_VECTOR_NAMES = ("Flood Polygons (Max Depth).geojson", "Flood Extent.geojson",
                       "Arrival Zones.geojson", "Velocity Polygons.geojson",

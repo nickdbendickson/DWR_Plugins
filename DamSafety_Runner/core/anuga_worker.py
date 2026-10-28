@@ -1476,18 +1476,15 @@ def main(job_path, out_path):
         except Exception as e:      # noqa: BLE001 - a diagnostic never stops the run
             print("DT_DIAG off: {}".format(str(e)[:200]), flush=True)
             dtdiag = None
-<<<<<<< HEAD
     # 3.10.94: no single dry-domain step longer than the hydrograph interval (G5, DWR-3034)
     icap = InflowStepCap(domain, inflow_max_timestep(hyd_t, hyd_q, ystep),
                          inflow_end_time(hyd_t, hyd_q))
     if icap.active:
         print("PROGRESS 0 inflow step cap: {:.3g} s until t={:.0f}s".format(icap.cap, icap.t_end),
               flush=True)
-=======
     # 3.10.95: the first internal step's inflow (the G5 message names it when it is long)
     fstep = FirstStep(domain.get_time(), hyd_t, hyd_q,
                       resumed=bool(ckinfo and ckinfo.get("resumed_from_t_s") is not None))
->>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
     try:
         for t in domain.evolve(yieldstep=ystep, finaltime=sim_time):
             icap.update(domain, t)
@@ -1592,12 +1589,9 @@ def main(job_path, out_path):
         v0 = None
     balance = volume_balance(info["initial_volume_m3"], injected, vol_left, b_in, fs, v_solver,
                              solver_initial=v0, de=de)
-<<<<<<< HEAD
     balance["inflow_step_cap"] = icap.record()
-=======
     if fstep.record() is not None:
         balance["first_step"] = fstep.record()
->>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
     if mirror["boundaries"]:
         balance["inward_edges_mirrored"] = {"max_edges": mirror["max"],
                                             "yield_steps": mirror["steps"],

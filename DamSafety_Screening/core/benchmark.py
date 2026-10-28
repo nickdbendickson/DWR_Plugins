@@ -42,7 +42,6 @@ KIND_WORDS = {"depth": ("depth", "wd", "maxdepth", "d_max", "dmax"),
               "arrival": ("arrival", "arriv", "arrive", "time_to", "timeto", "tarr", "t_arr")}
 
 
-# ============================================================ copied from the Runner: START
 def _wet(depth, thr):
     return np.isfinite(depth) & (depth >= thr)
 
@@ -129,7 +128,6 @@ def difference_arrays(ours, ref, thr_ft=1.0):
     diff = np.where(wa | wb, np.nan_to_num(a) - np.nan_to_num(b), np.nan)
     code = np.where(wa & wb, 3.0, np.where(wa, 1.0, np.where(wb, 2.0, np.nan)))
     return {"Benchmark Depth Difference (ft).tif": diff, "Benchmark Extent Agreement.tif": code}
-# ============================================================ copied from the Runner: END
 
 
 # ---------------------------------------------------------------- this plugin's own part

@@ -1456,9 +1456,7 @@ def svg_to_png(svg_path, png_path, width_px=1600, backends=None, errors=None):
     return None
 
 
-# ======================================================================================
 # the submittal report
-# ======================================================================================
 MODEL_DIR = "_breach_model"
 # v3.2.0: one EAP map. ND Dam Hazard's map book (mapbook.py: BOOK_FILE "EAP_Map_Book.pdf" in
 # <dam folder>/outputs/EAP/, a time-stamped name when the file was locked) is the EAP map;

@@ -125,9 +125,7 @@ CASE_INFO = {
 }
 
 
-# ======================================================================================
 # analytic solutions
-# ======================================================================================
 def ritter_depth(x, t, h0, g=G_LISFLOOD):
     """Ritter (1892): depth at x (m from the dam, reservoir at x < 0) and t (s) after an
     instantaneous removal of a dam holding h0 over a dry, horizontal, frictionless bed:
@@ -275,9 +273,7 @@ def _front_position(x, h, thr):
     return float(x[i] + max(0.0, min(1.0, f)) * (x[i + 1] - x[i]))
 
 
-# ======================================================================================
 # a small SVG line plot (numbers on the axes with the decimals they need)
-# ======================================================================================
 PALETTE = ("#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", "#17becf")
 
 
@@ -430,9 +426,7 @@ def plot_svg(series, title, xlabel, ylabel, width=760, height=380, xlim=None, yl
                 width, height, "".join(out)))
 
 
-# ======================================================================================
 # results
-# ======================================================================================
 class SuiteResult(object):
     """What `run_suite` did: `cases` (list of case dicts, see `new_case`), `files` (paths of
     what was written), `info` ([(label, value)] computer and software), `out_dir`."""
@@ -572,9 +566,7 @@ def _fmt(v):
     return str(v)
 
 
-# ======================================================================================
 # running the models
-# ======================================================================================
 class _Ctx(object):
     def __init__(self, lisflood_exe, anuga_python, work, quick, threads, progress, log, cancel):
         self.lisflood_exe = lisflood_exe
@@ -734,9 +726,7 @@ def _walled_dem(bed, dx, x_left, wall="NSEW"):
     return Grid(z, x_left, ny * dx, dx), zw
 
 
-# ======================================================================================
 # case 1: Ritter (LISFLOOD-FP)
-# ======================================================================================
 def case_ritter(ctx):
     case = new_case("ritter")
     g, h0, T, S, n = G_LISFLOOD, 1.0, 60.0, 20.0, 0.001
@@ -850,9 +840,7 @@ def case_ritter(ctx):
     return _finish(case)
 
 
-# ======================================================================================
 # case 2: Stoker (LISFLOOD-FP)
-# ======================================================================================
 STOKER_RATIOS = (0.1, 0.25, 0.5)
 
 
@@ -979,9 +967,7 @@ def case_stoker(ctx):
     return _finish(case)
 
 
-# ======================================================================================
 # case 3: steady uniform flow (LISFLOOD-FP)
-# ======================================================================================
 def case_uniform(ctx):
     case = new_case("uniform")
     S, n, q, L, T = 0.001, 0.03, 1.0, 2000.0, 7200.0
@@ -1070,9 +1056,7 @@ def case_uniform(ctx):
     return _finish(case)
 
 
-# ======================================================================================
 # case 4: volume balance on the synthetic valley (LISFLOOD-FP)
-# ======================================================================================
 MASS_HYDROGRAPH = ([0.0, 900.0, 3600.0], [0.0, 150.0, 0.0])     # s, m3/s: 270,000 m3
 
 
@@ -1173,9 +1157,7 @@ def case_mass(ctx):
     return _finish(case)
 
 
-# ======================================================================================
 # case 5: radial spreading (LISFLOOD-FP)
-# ======================================================================================
 def _ray_radius(h, dx, r0, c0, ang, thr):
     """Distance from the centre of cell (r0, c0) along direction `ang` (radians from east,
     anticlockwise) to where the bilinearly interpolated depth drops below thr."""
@@ -1286,9 +1268,7 @@ def case_radial(ctx):
     return _finish(case)
 
 
-# ======================================================================================
 # case 6: ANUGA
-# ======================================================================================
 def case_anuga_ritter(ctx):
     case = new_case("anuga_ritter")
     g, h0, T = G_ANUGA, 1.0, 40.0
@@ -1519,9 +1499,7 @@ CASE_FUNCS = {"ritter": case_ritter, "stoker": case_stoker, "uniform": case_unif
               "anuga_uniform": case_anuga_uniform, "anuga_mass": case_anuga_mass}
 
 
-# ======================================================================================
 # the suite
-# ======================================================================================
 def select_cases(cases=None):
     """Case ids from None/'all', a list, or a comma-separated text; 'lisflood' and 'anuga'
     stand for their groups. Raises ValueError for an unknown id."""
@@ -1682,9 +1660,7 @@ def run_suite(lisflood_exe, anuga_python=None, out_dir=None, cases=None, quick=T
     return res
 
 
-# ======================================================================================
 # writing the record
-# ======================================================================================
 def write_plots(res):
     """plots/<id>.svg for every case with plot arrays. Returns {id: path}."""
     d = os.path.join(res.out_dir, "plots")
@@ -1976,9 +1952,7 @@ def write_record(res, path, figures=True, svg_backends=None, width_px=1400):
     return path
 
 
-# ======================================================================================
 # validation record from a benchmark folder
-# ======================================================================================
 BENCH_LABELS = {
     "threshold_ft": ("Wet threshold (ft)", "cells at least this deep count as flooded"),
     "wet_acres_ours": ("Flooded area, this tool (ac)", ""),
