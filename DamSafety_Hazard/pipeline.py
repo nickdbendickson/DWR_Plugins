@@ -1111,10 +1111,18 @@ def _lone911_report(run, cfg, structs, dates, streets, inputs):
                 if far else ""))
 
 
-def building_geometry_note(cfg, outlines, suite=None):
+MS_OFFLINE_WHY = ("offline-only mode is on (no internet requests) and the offline data pack "
+                  "never carries Microsoft footprints - turn offline-only off for this run "
+                  "(ND_DAM_HAZARD_OFFLINE_ONLY=false) to download them")
+
+
+def building_geometry_note(cfg, outlines, suite=None, offline=None):
     """2.18.53 (review): '' when Microsoft footprints are among the outline sources (or there are
     no outlines at all); otherwise the DATA SOURCES / judgment line that the building geometry is
-    FEMA (or other traced outlines) only, and why. `suite`: downloads_disabled() (default)."""
+    FEMA (or other traced outlines) only, and why. `suite`: downloads_disabled() (default).
+    2.18.68 (DWR-3034 REVIEW 9.8 item 7): `offline` (default _offline_now()): in offline-only
+    mode the footprints are never fetched (the pack has none), which the note now says instead
+    of "the download failed"."""
     if not outlines:
         return ""
     for fam, lyr in outlines:
@@ -1136,6 +1144,8 @@ def building_geometry_note(cfg, outlines, suite=None):
               "layer is in the project or data folder"
     elif not cfg.get("download_ms_footprints"):
         why = "the Microsoft footprint download is switched off"
+    elif (_offline_now() if offline is None else offline):
+        why = MS_OFFLINE_WHY
     else:
         why = "the download failed and there is no earlier copy (offline?)"
     return ("Building geometry: FEMA only - Microsoft footprints unavailable ({}). Structures "
@@ -2410,15 +2420,18 @@ def _collect_inputs(run, clip):
                                "({}) - building geometry; FEMA attributes matched onto them"
                                .format(n, os.path.basename(path)))
         elif lyr is None:
-            run.log(">>> NOTE: Microsoft building footprints not available - FEMA USA "
-                    "Structures outlines give the building geometry")
+            run.log(">>> NOTE: Microsoft building footprints not available{} - FEMA USA "
+                    "Structures outlines give the building geometry".format(
+                        " ({})".format(MS_OFFLINE_WHY) if _offline_now() else ""))
 
     # 2.18.54 review 3: NAIP 2025 flight dates (the lone-911 300 ft rule's imagery date)
     naip_lyr, naip_path, naip_why = None, None, cfg.pop("_naip_off_why", "")
     if "naip" in got:
         naip_lyr, n, naip_path = result("naip")
         if naip_lyr is None:
-            naip_why = "the download failed and there is no earlier copy (offline?)"
+            naip_why = "offline-only mode is on (no internet requests; the offline data pack " \
+                "has no NAIP flight dates)" if _offline_now() else \
+                "the download failed and there is no earlier copy (offline?)"
         elif not n:
             naip_lyr, naip_why = None, "no NAIP 2025 seamline over the study area"
     elif not naip_why:
