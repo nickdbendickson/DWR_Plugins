@@ -3,7 +3,11 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
+<<<<<<< HEAD
 PLUGIN_VERSION = "2.20.1"
+=======
+PLUGIN_VERSION = "2.19.2"
+>>>>>>> 85ac1c9 (Hazard 2.19.2: fix the ND DWR download (build_nd_pack --download-dwr))
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
@@ -110,7 +114,10 @@ XLSX_MAX_SHEET_NAME = 31
 # Quartic ORDER: DESCENDING POWERS [x^4, x^3, x^2, x^1, constant] - required
 # by evaluate_polynomial()'s Horner loop. Do NOT reorder.
 
-from .damsuite import tm11_curves as _TM11
+try:
+    from .damsuite import tm11_curves as _TM11
+except ImportError:      # 2.19.2: build_nd_pack.py run as a script (python build_nd_pack.py)
+    from damsuite import tm11_curves as _TM11      # noqa: E402
 
 
 class TableCurve(object):
