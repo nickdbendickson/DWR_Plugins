@@ -13,6 +13,7 @@ of routing a flood.
 """
 import math
 import os
+import time
 import zlib
 
 import numpy as np
@@ -27,6 +28,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
                        QgsCoordinateReferenceSystem, QgsProject)
 
 from ..core import inventory as inv
+from ..core import nd_counties
 from ..core import ponds as pd, terrain
 from ..core.warp_opts import no_overviews
 from ..compat import (FIELD_ANY, FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_LINE, SRC_POINT,
@@ -109,6 +111,69 @@ def clip_covers(path, ext):
     x1, y0 = x0 + ds.RasterXSize * gt[1], y1 + ds.RasterYSize * gt[5]
     return x0 <= ext[0] + 1 and y0 <= ext[1] + 1 and x1 >= ext[2] - 1 and y1 >= ext[3] - 1
 
+
+
+# 0.17.54: the USGS 3DEP service takes one or two downloads of a few seconds per water body (measured
+# 1.7-10.7 s each on the box, Absaraka 2026-10-27); above this many the tool says how long it may take
+SLOW_3DEP_N = 200
+SEC_3DEP = (3.0, 10.0)
+HEARTBEAT_S = 30.0
+
+
+def raster_box(path, crs_out="EPSG:5070"):
+    """(x0, y0, x1, y1) of a raster (a VRT mosaic) in crs_out, or None when it has no CRS."""
+    ds = gdal.Open(path)
+    if ds is None or not ds.GetProjection():
+        return None
+    gt, w, h = ds.GetGeoTransform(), ds.RasterXSize, ds.RasterYSize
+    xs = (gt[0], gt[0] + w * gt[1] + h * gt[2])
+    ys = (gt[3], gt[3] + w * gt[4] + h * gt[5])
+    src, dst = osr.SpatialReference(), osr.SpatialReference()
+    try:                                               # a CRS PROJ cannot read: read every water body
+        if src.ImportFromWkt(ds.GetProjection()) != 0 or dst.SetFromUserInput(crs_out) != 0:
+            return None
+        for r in (src, dst):
+            r.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        ct = osr.CoordinateTransformation(src, dst)
+    except Exception:
+        return None
+    pts = []
+    for k in range(11):                                # the edges, so a rotated box is covered
+        x = xs[0] + (xs[1] - xs[0]) * k / 10.0
+        y = ys[0] + (ys[1] - ys[0]) * k / 10.0
+        pts += [ct.TransformPoint(x, ys[0])[:2], ct.TransformPoint(x, ys[1])[:2],
+                ct.TransformPoint(xs[0], y)[:2], ct.TransformPoint(xs[1], y)[:2]]
+    return (min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts))
+
+
+def pad_m(pp, cell):
+    """The margin around a water body that its DEM window takes (m)."""
+    return pp.ring_m + 4.0 * cell
+
+
+def county_box(county, pad_deg=0.02):
+    """(west, south, east, north) in lon / lat around a North Dakota county, or None."""
+    name = nd_counties.normalize(county)
+    return nd_counties.box([name], pad_deg) if name else None
+
+
+def eta_text(sec):
+    """'about 3 min' / 'about 2.1 h' / 'about 4.5 days'."""
+    if sec < 90:
+        return "about {:.0f} s".format(sec)
+    if sec < 5400:
+        return "about {:.0f} min".format(sec / 60.0)
+    if sec < 172800:
+        return "about {:.1f} h".format(sec / 3600.0)
+    return "about {:.1f} days".format(sec / 86400.0)
+
+
+def heartbeat(i, n, analysed, written, failed, elapsed):
+    """The progress line pushed every HEARTBEAT_S seconds."""
+    each = elapsed / i if i else 0.0
+    left = " - {} left".format(eta_text(each * (n - i))) if i and n > i else ""
+    return "water body {} of {}: {} analysed, {} written, {} failed ({:.1f} s each){}".format(
+        i, n, analysed, written, failed, each, left)
 
 class FindPonds(QgsProcessingAlgorithm):
     def name(self): return "findponds"
@@ -350,11 +415,57 @@ class FindPonds(QgsProcessingAlgorithm):
         sl, dl = self.parameterAsSink(params, "OUTL", context, lf, WKB_LINESTRING, alb)
         sx, dx = self.parameterAsSink(params, "OUTX", context, xf, WKB_POINT, wgs)
 
-        total = wbs.featureCount() or 1
+        # 0.17.54: read only the water bodies the run can use. A local DEM: those over its extent
+        # (a statewide layer with a one-dam DEM read and skipped every other water body of the state).
+        # A county: those in its box (then the county test below, on the lon / lat of the water body).
+        county = S("COUNTY")
+        if county and county.strip() == nd_counties.ALL:
+            county = None
+        rect, where = None, []
+        if self._vrt:
+            rb = raster_box(self._vrt)
+            if rb:
+                rect = a2w.transformBoundingBox(QgsRectangle(rb[0] - pad_m(pp, cell), rb[1] - pad_m(pp, cell),
+                                                             rb[2] + pad_m(pp, cell), rb[3] + pad_m(pp, cell)))
+                where.append("over the local DEM")
+        if county:
+            cb = county_box(county)
+            if cb:
+                g2w = QgsCoordinateTransform(wgs, wbs.sourceCrs(), prj)
+                crect = g2w.transformBoundingBox(QgsRectangle(*cb))
+                if rect is None:
+                    rect = crect
+                elif rect.intersects(crect):
+                    rect = QgsRectangle(max(rect.xMinimum(), crect.xMinimum()),
+                                        max(rect.yMinimum(), crect.yMinimum()),
+                                        min(rect.xMaximum(), crect.xMaximum()),
+                                        min(rect.yMaximum(), crect.yMaximum()))
+                else:
+                    raise QgsProcessingException(
+                        "The local DEM does not cover County {}: no water body to analyse. Give a DEM "
+                        "folder over the county, or another county.".format(county))
+                where.append("in the box of County " + county)
+        total_all = wbs.featureCount()
+        req = (lambda: QgsFeatureRequest().setFilterRect(rect)) if rect is not None else QgsFeatureRequest
+        if rect is not None:
+            total = sum(1 for _ in wbs.getFeatures(req()))
+            feedback.pushInfo("{} of the {} water bodies of the layer are {}; the others are not read".format(
+                total, total_all, " and ".join(where)))
+        else:
+            total = total_all
+        if total and self._vrt is None and total > SLOW_3DEP_N:
+            feedback.pushWarning(
+                "{} water bodies with the USGS 3DEP service: each one is one or two downloads of a few "
+                "seconds ({} to {}), and the progress bar moves slowly. For a quicker run {}use Terrain "
+                "source = 'Local DEM folder', or give a water-body layer clipped to your area.".format(
+                    total, eta_text(total * SEC_3DEP[0]).replace("about ", ""),
+                    eta_text(total * SEC_3DEP[1]).replace("about ", ""),
+                    "" if county else "choose a County, "))
+        total = total or 1
         counts, results = {}, []
         n_size = n_fail = n_clip = n_empty = 0
         used_ids = set()
-        pad = pp.ring_m + 4.0 * cell
+        pad = pad_m(pp, cell)
 
         def excluded(f_wb_id, f_wb_type, kind, reason, area_ac, pool, notes, xy):
             if kind == "FAILED":
@@ -369,20 +480,33 @@ class FindPonds(QgsProcessingAlgorithm):
             sx.addFeature(o)
 
         only = {x.strip().upper() for x in (S("ONLY_IDS") or "").split(",") if x.strip()}
-        n_only = 0
-        county = S("COUNTY")
-        for i, f in enumerate(wbs.getFeatures()):
-            if county and not inv.feature_in_county(f, county):
-                n_only += 1
-                continue
+        n_only = n_county = 0
+        t0 = t_beat = time.time()
+        i = 0
+        for i, f in enumerate(wbs.getFeatures(req())):
             if feedback.isCanceled():
+                feedback.pushWarning("Cancelled at water body {} of {}".format(i, total))
                 break
             feedback.setProgress(100.0 * i / total)
+            now = time.time()
+            if i and now - t_beat >= HEARTBEAT_S:
+                t_beat = now
+                feedback.pushInfo(heartbeat(i, total, len(results) + n_fail,
+                                            sum(1 for r in results if keep_dep or r.pond_type != pd.T_DEPRESSION),
+                                            n_fail, now - t0))
             g = f.geometry()
             if g is None or g.isNull() or g.isEmpty():
                 n_empty += 1
                 continue
             g.transform(w2a)
+            if county:
+                # 0.17.54: the county test takes the lon / lat of the water body; it used the centroid
+                # in the layer's CRS, so a projected layer (EPSG:5070 / UTM) had none in any county
+                cg = g.centroid()
+                cg.transform(a2g)
+                if not inv.feature_in_county(f, county, point=cg.asPoint()):
+                    n_county += 1
+                    continue
             area_ac = g.area() / AC_M2
             wb_id = str(f[f_id]) if f_id and f[f_id] not in (None, "") else str(f.id())
             wb_type = str(f[f_type]) if f_type and f[f_type] not in (None, "") else ""
@@ -509,9 +633,24 @@ class FindPonds(QgsProcessingAlgorithm):
 
         n_written = sum(1 for r in results if not (r.pond_type == pd.T_DEPRESSION and not keep_dep))
         feedback.pushInfo("water bodies: {} analysed, {} written to the dam layer, {} outside your size "
-                          "limits, {} without geometry, {} failed{}".format(
+                          "limits, {} without geometry, {} failed{}{} ({:.0f} s)".format(
                               len(results) + n_fail, n_written, n_size, n_empty, n_fail,
-                              ", {} not in the chosen IDs".format(n_only) if only else ""))
+                              ", {} not in the chosen IDs".format(n_only) if only else "",
+                              ", {} outside County {}".format(n_county, county) if county else "",
+                              time.time() - t0))
+        n_dep = sum(1 for r in results if r.pond_type == pd.T_DEPRESSION)
+        if not n_written and not (only and not results and not n_fail):
+            why = []
+            if n_dep and not keep_dep:
+                why.append("{} natural depression(s) are in the 'Water bodies not written' layer (tick "
+                           "'Also write natural depressions' to keep them)".format(n_dep))
+            if county and n_county and not (results or n_fail or n_size):
+                why.append("no water body is in County {} (check the County)".format(county))
+            if n_fail:
+                why.append("{} failed (see the errors above)".format(n_fail))
+            if n_size:
+                why.append("{} are outside {} - {} ac".format(n_size, min_ac, max_ac))
+            feedback.pushWarning("No pond or dugout written: " + ("; ".join(why) or "no water body was read"))
         if only and not results and not n_fail:
             raise QgsProcessingException("None of the water bodies matches the chosen IDs ({}); give a value of "
                                          "the ID field, a pond ID (POND-...) or a feature id.".format(
