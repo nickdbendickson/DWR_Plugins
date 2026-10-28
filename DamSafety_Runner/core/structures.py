@@ -14,6 +14,7 @@ end:
 
 The report says which representation each structure got.
 """
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -42,6 +43,9 @@ class Structure:
     name: str = ""
     invert_note: str = ""               # 3.5: what became of inventory inverts (reconcile_inverts)
     invert_inventory: Optional[tuple] = None   # (up, dn) metres as the inventory gave them
+    invert_channel_bed: Optional[tuple] = None  # 3.10.96: (up, dn) channel bed from the LiDAR
+                                        # (reconcile_inverts); the ANUGA bed floor "channel".
+                                        # Not in to_dict: the run key stays as before
     source: str = "inventory"           # "inventory" or "guess"
     surveyed: bool = True               # a guess is not a measured culvert
     min_cells: int = 0                  # >0: the cut line spans at least this many model cells
@@ -97,9 +101,11 @@ def structure_edits(structures, cell, models):
     return out
 
 
-def anuga_culverts(structures, dem, mesh_polygon=None):
+def anuga_culverts(structures, dem, mesh_polygon=None, bed_floor="off"):
     """ANUGA culvert specs for the worker (dicts with end points and inverts
-    read from the DEM), and notes for those that cannot be used."""
+    read from the DEM), and notes for those that cannot be used. bed_floor (3.10.96,
+    NDBREACH_CULVERT_BED_FLOOR): "off" (the specs are as before), "enquiry" or "channel" -
+    the worker raises an invert below that bed to it (anuga_worker.apply_bed_floor)."""
     specs, notes = [], []
     for s in structures:
         if s.kind != KIND_CULVERT:
@@ -132,7 +138,56 @@ def anuga_culverts(structures, dem, mesh_polygon=None):
                       "shape": s.shape, "manning": s.manning, "losses": s.losses,
                       "apron": max(2.0, 1.0 * s.width_m), "name": s.name,
                       "invert_source": src})
+        if bed_floor and bed_floor != "off":
+            specs[-1]["bed_floor"] = bed_floor
+            cb = getattr(s, "invert_channel_bed", None)
+            if bed_floor == "channel" and cb is not None:
+                specs[-1]["channel_bed_m"] = [None if v is None else round(float(v), 3)
+                                              for v in cb]
     return specs, notes
+
+
+LOSSES_FIELDS = ("losses", "loss_coef", "k_loss")    # 3.10.96, case-insensitive
+LOSSES_RANGE = (0.0, 10.0)
+
+
+def losses_field(names):
+    """3.10.96: the STRUCTURES layer's loss-coefficient field (LOSSES_FIELDS), or ''."""
+    low = {str(n).lower(): n for n in names or ()}
+    return next((low[f] for f in LOSSES_FIELDS if f in low), "")
+
+
+def losses_value(v):
+    """3.10.96: (losses, ok) from a STRUCTURES attribute. Empty -> (None, True): the default
+    1.0 stays; a number within LOSSES_RANGE -> (value, True); anything else -> (None, False)."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None, True
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None, False
+    if f != f:                     # NULL read as NaN
+        return None, True
+    if not (LOSSES_RANGE[0] <= f <= LOSSES_RANGE[1]):
+        return None, False
+    return f, True
+
+
+BED_FLOOR_ENV = "NDBREACH_CULVERT_BED_FLOOR"
+BED_FLOOR_MODES = ("off", "enquiry", "channel")
+
+
+def bed_floor_setting(environ=None):
+    """3.10.96: the ANUGA culvert bed floor from NDBREACH_CULVERT_BED_FLOOR (off | enquiry |
+    channel; unset = off). Opt-in until the floor rule is agreed (DWR-3034 REVIEW 9.8)."""
+    v = str((os.environ if environ is None else environ).get(BED_FLOOR_ENV) or "off")
+    v = v.strip().lower()
+    if v in ("", "0", "no", "false", "none"):
+        v = "off"
+    if v not in BED_FLOOR_MODES:
+        raise ValueError("{} must be one of {}, not {!r}".format(
+            BED_FLOOR_ENV, ", ".join(BED_FLOOR_MODES), v))
+    return v
 
 
 # -------------------------------------------------- 3.10.71: inverts on ANUGA's bed --
@@ -211,7 +266,9 @@ def invert_record(specs):
                                                             c["invert_elevations"]],
              "invert_source": c.get("invert_source"), "ground_m": c.get("invert_ground_m"),
              "model_dem_m": c.get("invert_model_dem_m"), "search_m": c.get("invert_search_m"),
-             "enquiry_gap_m": c.get("enquiry_gap")} for c in specs]
+             "enquiry_gap_m": c.get("enquiry_gap"),
+             **({"channel_bed_m": c["channel_bed_m"]} if c.get("channel_bed_m") else {}),
+             **({"bed_floor": c["bed_floor"]} if c.get("bed_floor") else {})} for c in specs]
 
 
 def polyline_len(line):
@@ -235,6 +292,57 @@ def lidar_bed(grid, xy, radius):
         return None
 
 
+CHANNEL_REACH_M = 30.0     # 3.10.96: how far past each end the channel bed is looked for
+CHANNEL_CELL_M = 1.0       # ... on ground read this fine (a 3 m cell averages a narrow
+                           # channel with its banks)
+
+
+def channel_bed(grid, line, end, half, reach=CHANNEL_REACH_M):
+    """3.10.96: the lowest finite ground in the channel beyond one end of a culvert line:
+    a strip from the end outward along the line's own direction (0..reach m) and up to
+    `half` (at least a cell) to either side. None without ground there.
+
+    The disc around the end (lidar_bed) sits on the embankment's toe slope: at DWR-3034's
+    Boyd culvert it read 528.26 / 526.68 m at a 3 m cell where the channel 4-28 m out is
+    527.90-528.07 / 526.56-527.02 m on the 1 m LiDAR, which made the inventory inverts
+    (527.30 / 526.39 m) look like a datum shift (REVIEW 9.8 item 3)."""
+    try:
+        line = np.asarray(line, dtype=float)
+        p, q = (line[0], line[1]) if end == 0 else (line[-1], line[-2])
+        u = p - q
+        n_ = float(np.hypot(*u))
+        if n_ <= 0:
+            return None
+        u = u / n_
+        X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
+        z = grid.masked()
+        dx, dy = X - p[0], Y - p[1]
+        along = dx * u[0] + dy * u[1]
+        across = np.abs(-dx * u[1] + dy * u[0])
+        w = max(float(half), float(abs(grid.dx)))
+        near = (along >= 0) & (along <= reach) & (across <= w) & np.isfinite(z)
+        if not near.any():
+            return None
+        return float(np.nanmin(z[near]))
+    except Exception:                                            # noqa
+        return None
+
+
+CHANNEL_MIN_DROP_M = 0.15
+
+
+def end_bed(disc, channel):
+    """The LiDAR bed at one end: the channel beyond the end when it reads at least
+    CHANNEL_MIN_DROP_M (~0.5 ft) below the disc at the end (the disc is on the embankment's
+    toe slope), else the disc. Smaller drops are within the channel's own fall over
+    CHANNEL_REACH_M (0.5 % x 30 m), which would bias a downstream end low."""
+    if disc is None:
+        return channel
+    if channel is None or disc - channel < CHANNEL_MIN_DROP_M:
+        return disc
+    return channel
+
+
 def reconcile_inverts(structures, read_dem, tol_m, cell):
     """3.5: inventory inlet / outlet elevations (NDDOT pipes, a user's layer) against the LiDAR.
 
@@ -247,6 +355,11 @@ def reconcile_inverts(structures, read_dem, tol_m, cell):
         both moved by the mean offset;
       * otherwise -> the LiDAR bed at both ends (the inventory values kept for the report).
     A cover check notes a rise that does not fit under the road crown in the LiDAR.
+    3.10.96: the LiDAR bed at an end is the ground near the end (lidar_bed) unless the channel
+    beyond it (channel_bed, CHANNEL_REACH_M out on ground read at CHANNEL_CELL_M) reads
+    CHANNEL_MIN_DROP_M lower (end_bed): near the end the disc can read the embankment's toe
+    slope, not the channel (DWR-3034).
+    s.invert_channel_bed keeps the bed used.
     `read_dem(bounds, cell)` returns a Grid. Returns the notes; the structures are updated in
     place (invert_inventory keeps the given values)."""
     notes = []
@@ -268,6 +381,17 @@ def reconcile_inverts(structures, read_dem, tol_m, cell):
             notes.append("{}: {}".format(s.name or s.kind, s.invert_note))
             continue
         bed_up, bed_dn = lidar_bed(g, line[0], r), lidar_bed(g, line[-1], r)
+        ch_up = ch_dn = None
+        try:                                    # 3.10.96: the channel beyond each end
+            fc = min(float(cell), CHANNEL_CELL_M)
+            cp = CHANNEL_REACH_M + half + 2.0 * fc
+            gf = read_dem((min(line[:, 0]) - cp, min(line[:, 1]) - cp,
+                           max(line[:, 0]) + cp, max(line[:, 1]) + cp), fc)
+            ch_up, ch_dn = channel_bed(gf, line, 0, half), channel_bed(gf, line, -1, half)
+        except Exception:                                        # noqa - the disc only
+            pass
+        bed_up, bed_dn = end_bed(bed_up, ch_up), end_bed(bed_dn, ch_dn)
+        s.invert_channel_bed = (bed_up, bed_dn)
         inv_up, inv_dn = s.invert_up_m, s.invert_dn_m
         off_up = (inv_up - bed_up) if (inv_up is not None and bed_up is not None) else None
         off_dn = (inv_dn - bed_dn) if (inv_dn is not None and bed_dn is not None) else None
@@ -279,7 +403,7 @@ def reconcile_inverts(structures, read_dem, tol_m, cell):
         if not offs:
             s.invert_note = "inventory inverts kept unchecked (no DEM at the ends)"
         elif all(abs(o) <= tol_m for o in offs):
-            s.invert_note = "inventory inverts used ({} / {} from the LiDAR bed, within {:.1f} ft)".format(
+            s.invert_note = "inventory inverts used ({} / {} from the LiDAR channel bed, within {:.1f} ft)".format(
                 ft(off_up) if off_up is not None else "n/a", ft(off_dn) if off_dn is not None else "n/a", tol_m / FT)
             if inv_up is None and bed_up is not None:
                 s.invert_up_m = bed_up + (off_dn or 0.0)

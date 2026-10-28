@@ -179,7 +179,10 @@ def worker_passes_enquiry_gap_only_to_an_anuga_operator_that_has_it():
     op, rec = AW.add_boyd_culvert(fa, _Domain(), _job_culvert(), ends)
     assert fa.calls[-1]["enquiry_gap"] == 9.88 and fa.calls[-1]["apron"] == 2.0
     assert fa.calls[-1]["invert_elevations"] == [100.0, 99.5]
-    assert rec == {"enquiry_gap_m": 9.88, "enquiry_in_inlet": [False, True]}
+    # 3.10.96: + the bed under each end ("ends", or "ends_error" when it cannot be read)
+    assert {k: rec[k] for k in ("enquiry_gap_m", "enquiry_in_inlet")} == \
+        {"enquiry_gap_m": 9.88, "enquiry_in_inlet": [False, True]}, rec
+    assert set(rec) - {"enquiry_gap_m", "enquiry_in_inlet"} <= {"ends", "ends_error"}, rec
     fa = _FakeAnuga(False)                             # no keyword: the call as before
     op, rec = AW.add_boyd_culvert(fa, _Domain(), _job_culvert(), ends)
     assert "enquiry_gap" not in fa.calls[-1]

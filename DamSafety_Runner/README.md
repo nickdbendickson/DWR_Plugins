@@ -395,6 +395,14 @@ The run log and the report (`structure_inverts`, and each structure's line) say 
 structure. Layers without inverts behave exactly as before (DEM inverts). Nothing here was run in a real
 QGIS; the check is tested on synthetic terrain.
 
+3.10.96: the LiDAR bed at an end is the channel beyond it (the lowest 1 m ground up to 30 m out along
+the line) when that reads at least 0.5 ft below the ground at the end, which can sit on the
+embankment's toe slope (DWR-3034's inventory inverts looked like a -3.4 ft datum shift). A culvert
+layer's `losses` (or `loss_coef` / `k_loss`, 0-10) field sets the ANUGA entrance + exit loss per
+culvert. `NDBREACH_CULVERT_BED_FLOOR=enquiry|channel` (default off) raises an ANUGA culvert invert
+that sits below the bed at its enquiry point (or the LiDAR channel bed); the run records each
+end's beds and what each culvert operator moved (`operator_volumes.csv`).
+
 ## New in 3.5.0 (ND dam suite release set: ND Dam Hazard 2.13.0, ND Dam Breach Screening 0.13.0)
 
 Nothing here was run in a real QGIS (the simulated QGIS in three flavours); the model results are
