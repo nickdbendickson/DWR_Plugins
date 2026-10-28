@@ -155,4 +155,7 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _rc = main()
+    sys.stdout.flush()
+    # os._exit before the real-QgsApplication offscreen teardown (it can abort at shutdown)
+    os._exit(_rc)
