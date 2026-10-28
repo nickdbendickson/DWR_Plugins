@@ -186,6 +186,13 @@ BUILTIN = [
        "https://mapservice.dwr.nd.gov/swcwms", confidence="inferred",
        source="https://www.swc.nd.gov/info_edu/map_data_resources/mapservices.html",
        notes="layer names: use Test / Browse layers"),
+    _s("dwr_dam_lines_shapefile", "dwr_dam_lines", "ND DWR dam lines (shapefile download)",
+       "file",
+       "https://mapservice.dwr.nd.gov/php/downloadShape.php",
+       source="https://mapservice.dwr.nd.gov/index.php?active=Dams",
+       notes="Damsline layer (index 253). Full-dataset shapefile, NAD83 Geographic. "
+             "POST: layer=253, format=shapefile, extent=full. ~9,976 polylines. "
+             "Attributes: feature_id, low_head_d, structure_, status."),
     # --- hydrography (1.19.0: the USGS 3D Hydrography Program is the default; NHD stays listed)
     _s("usgs_3dhp_flowline", "flowlines", "USGS 3DHP flowlines", "arcgis_feature",
        _TNM + "rest/services/3DHP_all/MapServer/50",

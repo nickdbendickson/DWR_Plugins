@@ -296,6 +296,10 @@ ND_ADDRESS_POINTS_ITEM = ("https://gishubdata-ndgov.hub.arcgis.com/datasets/"
 # Esri Federal User Community mirror with the same schema (fallback).
 NID_URL = ("https://geospatial.sec.usace.army.mil/dls/rest/services/NID/"
            "National_Inventory_of_Dams_Public_Service/FeatureServer/0")
+# ND DWR MapService dam lines (Damsline layer, index 253). Full-dataset shapefile.
+DWR_DAM_LINES_URL = "https://mapservice.dwr.nd.gov/php/downloadShape.php"
+DWR_DAM_LINES_LAYER = 253  # Damsline
+
 NID_MIRROR_URL = ("https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/"
                   "NID_v1/FeatureServer/0")
 DAM_SEARCH_FT = 500.0         # a dam counts as flooded when depth > 0 within this of its point
