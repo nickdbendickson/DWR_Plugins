@@ -106,6 +106,18 @@ The thresholds are `AUTO_CHECKPOINT_HOURS`, `AUTO_CHECKPOINT_TRIANGLES`,
 | `anuga_partial_min` | `NDBREACH_ANUGA_PARTIAL_MIN` | 10 when checkpoints are on, else none | write `anuga_partial.npz` every that many wall-clock minutes (it is also written after every checkpoint); 0 = only after checkpoints |
 | `anuga_resume` | `NDBREACH_ANUGA_RESUME` (`1`) | off | continue the same ANUGA job from its newest complete checkpoint |
 
+**First-step inflow cap (3.10.94).** On a dry domain ANUGA has no CFL limit, so its first
+internal step used to be the whole yield step (300 s). The breach inlet adds
+0.5·(Q(t)+Q(t+dt))·dt per step, so that one step over the rising limb over-injected water
+(DWR-3034: 9,994 m³ booked for the first 300 s against the hydrograph's 5,929 m³, a G5
+volume ratio of 1.0461). While the hydrograph flows, ANUGA's largest step
+(`domain.evolve_max_timestep`) is now the hydrograph's sampling interval (its median
+spacing, at most 1/100 of its duration and the yield step, never below 0.5 s; 2.14 s on
+DWR-3034). The old limit comes back at the first yield step after the hydrograph ends, so
+the recession tail is not slowed; once water is on the mesh the CFL step is usually smaller
+anyway. `NDBREACH_ANUGA_INFLOW_MAX_DT` = seconds overrides the cap, `0` / `off` restores the
+old behaviour. The run report's volume balance records it (`inflow_step_cap`).
+
 Each variable can also be given without `NDBREACH_` (`ANUGA_CHECKPOINT_MIN`, ...), as with
 `ANUGA_MESHER`. The run's own **Resume** (`resume`) also resumes ANUGA when checkpoints are on.
 
