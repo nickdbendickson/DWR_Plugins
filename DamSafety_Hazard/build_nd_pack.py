@@ -1088,6 +1088,61 @@ def _pick(names_or_groups, table):
     return want
 
 
+
+# ND DWR MapService shapefile downloads (layer indices from mapservice.dwr.nd.gov)
+DWR_DOWNLOAD_URL = "https://mapservice.dwr.nd.gov/php/downloadShape.php"
+DWR_DOWNLOADS = (
+    ("DWR_dam_lines", 253, "Damsline"),
+    ("DWR_dams", 254, "Dams"),
+    ("DWR_dugout_polygons", 276, "DugoutsPoly"),
+    ("DWR_dugouts", 277, "Dugouts"),
+)
+
+
+def download_dwr_shapefiles(dest_folder, log=None):
+    """Download the four ND DWR layers as shapefile zips from the MapService.
+
+    POSTs to DWR_DOWNLOAD_URL with layer=<index>, format=shapefile, extent=full.
+    Saves each zip and extracts it into dest_folder. Returns the list of
+    extracted folders. The existing --dwr-folder path can then use them
+    after conversion to GeoPackage (or the files can be used directly if a
+    shapefile reader is available)."""
+    import urllib.request
+    import urllib.parse
+    os.makedirs(dest_folder, exist_ok=True)
+    out = []
+    for name, layer, label in DWR_DOWNLOADS:
+        data = urllib.parse.urlencode({
+            "layer": layer, "format": "shapefile", "extent": "full",
+        }).encode()
+        req = urllib.request.Request(DWR_DOWNLOAD_URL, data=data,
+                                     headers={"User-Agent": "DamSafety-pack"})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                raw = r.read()
+        except Exception as e:
+            if log:
+                log("  {} failed: {}".format(label, e))
+            continue
+        zpath = os.path.join(dest_folder, "{}.zip".format(name))
+        with open(zpath, "wb") as f:
+            f.write(raw)
+        # extract
+        sub = os.path.join(dest_folder, name)
+        os.makedirs(sub, exist_ok=True)
+        import zipfile
+        try:
+            with zipfile.ZipFile(zpath) as zf:
+                zf.extractall(sub)
+            out.append(sub)
+            if log:
+                log("  {} -> {} ({:,} bytes)".format(label, sub, len(raw)))
+        except zipfile.BadZipFile:
+            if log:
+                log("  {} is not a zip ({} bytes)".format(label, len(raw)))
+    return out
+
+
 def build(out_zip, pad=DEFAULT_PAD_DEG, only=None, skip=None, workers=None, refresh=False,
           sources_file=None, progress=None, log=None, dwr_folder=None):
     """Build (or resume / update) the pack and write out_zip. progress(pct,
@@ -1369,6 +1424,10 @@ def main(argv=None):
                     help="requests at once (default {})".format(C.DOWNLOAD_WORKERS))
     ap.add_argument("--sources", help="the plugin's data-source file (JSON) to use its "
                                       "addresses")
+    ap.add_argument("--download-dwr", metavar="FOLDER",
+                    help="download the four ND DWR layers (dams, dam lines, "
+                         "dugouts, dugout polygons) as shapefile zips from "
+                         "mapservice.dwr.nd.gov into FOLDER, then exit")
     ap.add_argument("--dwr-folder", metavar="PATH",
                     help="2.18.66: a folder with the ND DWR GeoPackages (DWR_Dams.gpkg, "
                          "DWR_Dam_Lines.gpkg, DWR_Unknown_Structures.gpkg, DWR_Dugouts.gpkg, "
@@ -1378,6 +1437,9 @@ def main(argv=None):
                          "lon / lat). --only dwr builds just these.")
     ap.add_argument("--list", action="store_true", help="list the data sets and stop")
     a = ap.parse_args(argv)
+    if a.download_dwr:
+        download_dwr_shapefiles(a.download_dwr, log=print)
+        return
     if a.list:
         try:
             table = datasets(a.dwr_folder)
