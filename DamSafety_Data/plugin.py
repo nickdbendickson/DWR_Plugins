@@ -65,6 +65,7 @@ class NdDataUpdaterPlugin:
         self.task_quiet = True
         self.dialog = None
         self.pack_dialog = None
+        self.imagery_dialog = None
         self.actions = []
         self.timer = None
         self.merger = gdal_merger()
@@ -89,8 +90,12 @@ class NdDataUpdaterPlugin:
         self.action_pack.setToolTip(
             "Download every pack layer and write a new ND_Dam_Suite_Pack (and nd_offline_pack)")
         self.action_pack.triggered.connect(self.build_offline_pack)
+        self.action_imagery = QAction("Download imagery for these dams\u2026", win)
+        self.action_imagery.setToolTip(
+            "NAIP aerial imagery around each dam of a layer, one GeoTIFF per dam")
+        self.action_imagery.triggered.connect(self.download_imagery)
         self.actions = [self.action_check, self.action_load, self.action_folder,
-                        self.action_settings, self.action_pack]
+                        self.action_settings, self.action_pack, self.action_imagery]
         try:
             from qgis.PyQt.QtWidgets import QMenu
         except ImportError:
@@ -132,6 +137,13 @@ class NdDataUpdaterPlugin:
             except RuntimeError:
                 pass
             self.pack_dialog = None
+        if getattr(self, "imagery_dialog", None) is not None:
+            try:
+                self.imagery_dialog.cancel()
+                self.imagery_dialog.close()
+            except RuntimeError:
+                pass
+            self.imagery_dialog = None
 
     # --------------------------------------------------------------- engine
 
@@ -364,3 +376,11 @@ class NdDataUpdaterPlugin:
             self.pack_dialog = PackDialog(self.iface.mainWindow())
         self.pack_dialog.show()
         self.pack_dialog.raise_()
+
+    def download_imagery(self):
+        """1.5.0: the Download imagery for these dams window (imagery_dialog.py)."""
+        from .imagery_dialog import ImageryDialog
+        if getattr(self, "imagery_dialog", None) is None:
+            self.imagery_dialog = ImageryDialog(self.iface.mainWindow())
+        self.imagery_dialog.show()
+        self.imagery_dialog.raise_()

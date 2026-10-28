@@ -278,6 +278,8 @@ def main():
           close=False)
     from DamSafety_Data.pack_dialog import PackDialog
     check("Data build offline pack", opened("Data build offline pack", lambda: PackDialog(None)))
+    from DamSafety_Data.imagery_dialog import ImageryDialog
+    check("Data download imagery", opened("Data download imagery", lambda: ImageryDialog(None)))
 
     from DamSafety_Setup.plugin import SetupWizard
     check("Setup wizard", opened("Setup wizard", lambda: SetupWizard(None)), close=False)

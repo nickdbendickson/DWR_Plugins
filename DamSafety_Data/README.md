@@ -126,6 +126,30 @@ writes it twice from the same download, into a folder you pick:
 - Command line: `python3 -m DamSafety_Data.pack_build --out <folder> [--bbox w,s,e,n]
   [--only NAME,...] [--hifld-folder DIR] [--hifld-mirrors] [--list] [--verify]`.
 
+## Download imagery for these dams… (1.5.0)
+
+Data menu > **Download imagery for these dams…** fetches NAIP aerial imagery around each dam
+of a dams layer (all of it, the selected dams, or a list of dam ids) and writes one file per
+dam into `<output folder>/imagery/`:
+
+- `<dam_id>_naip_<year>.tif`: Cloud Optimized GeoTIFF, JPEG (YCbCr, quality 85) with internal
+  overviews, natural colour (NAIP bands 1-3), in the dam's NAD83 / UTM zone (EPSG 26913 or
+  26914). The dam id comes from `dam_id`, `nidid`, `structure_id`, … or the field you pick.
+- `manifest.json`: per dam the exportImage URL and request, the NAIP year and image names,
+  resolution, box, CRS, size and sha256.
+- Source: the USGS National Map NAIP Imagery ImageServer
+  (`imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer`; USDA FPAC NAIP,
+  0.6 m in North Dakota). Only the newest NAIP year on the dam's box is used.
+- Buffer: a radius, 2.5 km by default (a 5 km square). Resolution: 0.6 m (native), 1 m or
+  2 m. The box is fetched in pieces of at most 2000 × 2000 px (the server allows 4000).
+- The window shows the size before downloading. Measured at Bismarck (NAIP 2023, 0.6 m,
+  2.5 km): about 60 MB downloaded and 24 MB on disk per dam, about 5 minutes per dam.
+- Run again to resume: a dam whose file matches the manifest (same sha256 and settings) is
+  kept, and pieces already downloaded are reused. The output folder may not be (inside) a
+  pack, and nothing goes into the sqlite.
+- Command line: `python3 -m DamSafety_Data.imagery --dams <file> --out <folder> [--ids A,B]
+  [--id-field F] [--radius 2500] [--res 0.6|1|2] [--transfer jpeg|lossless] [--estimate]`.
+
 ## When it checks
 
 - About 20 seconds after QGIS starts, then hourly while QGIS is open, but never
