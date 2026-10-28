@@ -1120,6 +1120,12 @@ class _Base(QgsProcessingAlgorithm):
             from .core.bridge_snap import FACILITY_FIELDS, facility_kind
             fac = [n for n in names if n.lower() in FACILITY_FIELDS]
             want = list(fld.values()) + ([nbi43b] if nbi43b else []) + fac
+            # 3.10.96: an optional per-structure loss coefficient (ANUGA's Boyd operator
+            # `losses`; 1.0 when absent) - structures.LOSSES_FIELDS
+            loss_f = structmod.losses_field(names)
+            if loss_f:
+                want.append(loss_f)
+            bad_losses = []
             for i, (line, at) in enumerate(qio.lines(src, a, b, center_xy, radius,
                                                     fields=want)):
                 ktxt = str(at.get(fld["S_KIND"]) or "").lower()
@@ -1147,6 +1153,17 @@ class _Base(QgsProcessingAlgorithm):
                 s.source = "inventory"
                 s.surveyed = True
                 s.carries = facility_kind({n: at.get(n) for n in fac})
+                if loss_f:
+                    lv, ok = structmod.losses_value(qio.num(at.get(loss_f)))
+                    if lv is not None:
+                        s.losses = lv
+                    elif not ok:
+                        bad_losses.append(s.name)
+            if loss_f and bad_losses:
+                notes.append("Structures: '{}' outside {:g}-{:g} or not a number for {} "
+                             "structure(s) ({}); 1.0 used.".format(
+                                 loss_f, structmod.LOSSES_RANGE[0], structmod.LOSSES_RANGE[1],
+                                 len(bad_losses), ", ".join(bad_losses[:5])))
         self._structure_gate = None
         if src is not None:
             scrs = src.sourceCrs()

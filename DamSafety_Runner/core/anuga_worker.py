@@ -260,6 +260,164 @@ def local_enquiry_gap(domain, ends, width, apron, gap):
     return (need, True) if need > gap else (gap, False)
 
 
+# ------------------------------------------- 3.10.96: culvert end beds and the bed floor --
+BED_FLOOR_OFF, BED_FLOOR_ENQUIRY, BED_FLOOR_CHANNEL = "off", "enquiry", "channel"
+BED_FLOOR_MODES = (BED_FLOOR_OFF, BED_FLOOR_ENQUIRY, BED_FLOOR_CHANNEL)
+BED_FLOOR_TOL_M = 0.05      # an invert this little below the floor is left alone
+
+
+def culvert_end_beds(domain, op):
+    """3.10.96 (DWR-3034 REVIEW 9.8 items 3-4): per culvert end, the bed ANUGA uses there -
+    the exchange (inlet) triangles' min / mean and count, the enquiry triangle's bed - and
+    the invert the operator got. Reporting only."""
+    el = domain.quantities["elevation"].centroid_values
+    out = []
+    for i in op.inlets:
+        if i is None:            # another MPI rank's end
+            out.append({})
+            continue
+        tri = np.asarray(i.triangle_indices, dtype=int)
+        inv = getattr(i, "invert_elevation", None)
+        out.append({"exchange_bed_min_m": round(float(el[tri].min()), 3) if tri.size else None,
+                    "exchange_bed_mean_m": round(float(np.mean(el[tri])), 3) if tri.size
+                    else None,
+                    "exchange_triangles": int(tri.size),
+                    "enquiry_bed_m": round(float(el[int(i.enquiry_index)]), 3),
+                    "invert_given_m": None if inv is None else round(float(inv), 3)})
+    return out
+
+
+def apply_bed_floor(op, ends, mode, channel_bed=None, tol_m=BED_FLOOR_TOL_M):
+    """3.10.96: raise an end's invert that is below its floor to the floor.
+
+    Below its bed an invert gives ANUGA's Boyd operator head that is not there
+    (Inlet_enquiry.get_enquiry_depth = stage - invert), so a dry end reads water. The floor
+    is the enquiry triangle's bed ("enquiry": the bed the operator reads the head on) or the
+    channel bed at that end from the LiDAR ("channel": structures.reconcile_inverts'
+    channel_bed_m; the enquiry bed where there is none). Not the exchange triangles' minimum:
+    triangles reaching onto the road fill bias it high (DWR-3034: exchange-bed mean
+    531.1 / 530.7 m against an enquiry bed of 527.93 / 527.04 m and a channel of about
+    527.9 / 526.7 m). mode "off": nothing changes. Updates `ends` (floor_m, floor_source,
+    raised_m, invert_used_m) and the operator; returns the number of ends raised."""
+    raised = 0
+    for k, (i, r) in enumerate(zip(op.inlets, ends)):
+        if i is None:
+            continue
+        inv = getattr(i, "invert_elevation", None)
+        floor, src = None, None
+        if mode == BED_FLOOR_CHANNEL and channel_bed is not None and k < len(channel_bed) \
+                and channel_bed[k] is not None:
+            floor, src = float(channel_bed[k]), BED_FLOOR_CHANNEL
+        elif mode in (BED_FLOOR_ENQUIRY, BED_FLOOR_CHANNEL):
+            floor, src = r["enquiry_bed_m"], BED_FLOOR_ENQUIRY
+        if floor is not None:
+            r["floor_m"], r["floor_source"] = round(float(floor), 3), src
+            if inv is not None and float(inv) < floor - tol_m:
+                i.invert_elevation = float(floor)
+                op.invert_elevations[k] = float(floor)
+                r["raised_m"] = round(float(floor) - float(inv), 3)
+                raised += 1
+        inv = getattr(i, "invert_elevation", None)
+        r["invert_used_m"] = None if inv is None else round(float(inv), 3)
+    return raised
+
+
+def bed_floor_mode(c):
+    """The job culvert's bed floor (anuga_model writes it from NDBREACH_CULVERT_BED_FLOOR;
+    absent = off, as before)."""
+    m = str(c.get("bed_floor") or BED_FLOOR_OFF).strip().lower()
+    return m if m in BED_FLOOR_MODES else BED_FLOOR_OFF
+
+
+# ------------------------------------------- 3.10.96: per-operator volume in / out --
+OPVOL_CSV = "operator_volumes.csv"
+OPVOL_FIELDS = ("t_s", "op", "name", "removed_m3", "added_m3", "net_m3", "calls")
+
+
+def _structure_classes():
+    """ANUGA's structure operator classes: anuga.Boyd_box_operator & co. build the parallel
+    ones (Parallel_Structure_operator, not a Structure_operator) even in a serial run."""
+    out = []
+    for mod, name in (("anuga.structures.structure_operator", "Structure_operator"),
+                      ("anuga.parallel.parallel_structure_operator",
+                       "Parallel_Structure_operator")):
+        try:
+            out.append(getattr(__import__(mod, fromlist=[name]), name))
+        except Exception:        # noqa: BLE001 - not in this ANUGA (or no mpi4py)
+            pass
+    return tuple(out)
+
+
+def install_operator_volume_log(anuga):
+    """3.10.96 (REVIEW 9.8 item 4): measure what each culvert / bridge operator moves.
+
+    A class-level wrap of (Parallel_)Structure_operator.__call__ reads both inlets' water volume before
+    and after each call and adds the decreases to op._opvol_removed and the increases to
+    op._opvol_added (plain floats on the operator, so a checkpoint keeps them). A Boyd
+    operator moves water from one end to the other, so the two should agree; a gap is water
+    the operator made or lost. Reads only. Returns True when installed."""
+    classes = _structure_classes()
+    for SO in classes:
+        if "_opvol_wrapped" not in SO.__dict__:
+            _wrap_call(SO)
+    return bool(classes)
+
+
+def _wrap_call(SO):
+    orig = SO.__call__
+
+    def _vols(op):
+        return [float(i.get_total_water_volume()) for i in op.inlets if i is not None]
+
+    def __call__(self):
+        try:
+            v0 = _vols(self)
+        except Exception:        # noqa: BLE001
+            return orig(self)
+        r = orig(self)
+        try:
+            d = [b - a for a, b in zip(v0, _vols(self))]
+            self._opvol_removed = getattr(self, "_opvol_removed", 0.0) + sum(-x for x in d if x < 0)
+            self._opvol_added = getattr(self, "_opvol_added", 0.0) + sum(x for x in d if x > 0)
+            self._opvol_calls = getattr(self, "_opvol_calls", 0) + 1
+        except Exception:        # noqa: BLE001 - reporting only
+            pass
+        return r
+    SO.__call__ = __call__
+    SO._opvol_wrapped = True
+
+
+def operator_volume_rows(domain, t, names):
+    """One row per structure operator (in the order they were built): what it removed from
+    and added to its two ends so far."""
+    classes = _structure_classes()
+    if not classes:
+        return []
+    ops = [o for o in getattr(domain, "fractional_step_operators", []) or []
+           if isinstance(o, classes)]
+    rows = []
+    for k, o in enumerate(ops):
+        rem, add = getattr(o, "_opvol_removed", 0.0), getattr(o, "_opvol_added", 0.0)
+        rows.append({"t_s": round(float(t), 1), "op": k,
+                     "name": names[k] if k < len(names) else "",
+                     "removed_m3": round(rem, 3), "added_m3": round(add, 3),
+                     "net_m3": round(add - rem, 3), "calls": getattr(o, "_opvol_calls", 0)})
+    return rows
+
+
+def write_operator_volumes(path, rows):
+    """Append the rows to operator_volumes.csv (header on a new file)."""
+    if not rows:
+        return
+    import csv
+    new = not os.path.exists(path)
+    with open(path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=OPVOL_FIELDS)
+        if new:
+            w.writeheader()
+        w.writerows(rows)
+
+
 def add_boyd_culvert(anuga, domain, c, ends):
     """3.10.71: one job culvert as a Boyd box / pipe operator. As before, plus the enquiry
     gap (job key 'enquiry_gap', m): the head is read one triangle edge beyond the inlet
@@ -314,6 +472,21 @@ def add_boyd_culvert(anuga, domain, c, ends):
     rec = {"enquiry_gap_m": gap, "enquiry_in_inlet": in_inlet}
     if note:
         rec["enquiry_note"] = note
+    try:                    # 3.10.96: the bed at each end, and the opt-in bed floor
+        beds = culvert_end_beds(domain, op)
+        mode = bed_floor_mode(c)
+        if mode != BED_FLOOR_OFF:
+            rec["bed_floor"] = mode
+            n = apply_bed_floor(op, beds, mode, c.get("channel_bed_m"))
+            if n:
+                print("CULVERT_BED_FLOOR {}: {} end(s) raised to the {} bed".format(
+                    c.get("name") or "culvert", n, mode), flush=True)
+        else:
+            for r in beds:
+                r["invert_used_m"] = r["invert_given_m"]
+        rec["ends"] = beds
+    except Exception as e:  # noqa: BLE001 - reporting (and the opt-in floor) only
+        rec["ends_error"] = str(e)[:200]
     return op, rec
 
 
@@ -1001,6 +1174,7 @@ def load_latest_checkpoint(anuga, ckdir, meta):
 
 def main(job_path, out_path):
     import anuga
+    opvol_on = install_operator_volume_log(anuga)     # 3.10.96: reads only
     job = dict(np.load(job_path, allow_pickle=False))
     s = lambda k: float(job[k])
     x_ref, y_ref = s("dem_x0"), s("dem_y0") - job["dem"].shape[0] * s("dem_dx")
@@ -1173,6 +1347,7 @@ def main(job_path, out_path):
             try:
                 _op, rec = add_boyd_culvert(anuga, domain, c, ends)
                 culvert_names.append(str(c.get("name") or "culvert"))
+                rec["op_index"] = len(culvert_names) - 1    # 3.10.96: operator_volumes row
             except Exception as e:
                 culvert_errors.append("{}: {}".format(c.get("name") or "culvert", str(e)[:200]))
                 rec = {"enquiry_gap_m": None, "enquiry_in_inlet": None}
@@ -1322,6 +1497,14 @@ def main(job_path, out_path):
                                                        clock.suffix(yc)), flush=True)
             if dtdiag is not None:
                 dtdiag.on_yield(domain, t, clock)
+            if opvol_on and info.get("culvert_names"):   # 3.10.96: operator_volumes.csv
+                try:
+                    write_operator_volumes(
+                        os.path.join(os.path.dirname(os.path.abspath(job_path)), OPVOL_CSV),
+                        operator_volume_rows(domain, t, info.get("culvert_names") or []))
+                except Exception as e:      # noqa: BLE001 - never stops the run
+                    print("OPVOL error {}".format(str(e)[:200]), flush=True)
+                    opvol_on = False
             if mirror["boundaries"]:
                 n_in = int(sum(int(b.inward_edges) for b in mirror["boundaries"]))
                 mirror["max"] = max(mirror["max"], n_in)
@@ -1428,6 +1611,9 @@ def main(job_path, out_path):
              "injected_m3": injected, "anuga_version": getattr(anuga, "__version__", "?"),
              "algorithm": str(job["algorithm"]), "elevation": info["elevation"],
              "boundary": info.get("boundary", "transmissive"), "volume_balance": balance}
+    if opvol_on and info.get("culvert_names"):     # 3.10.96: per-operator volume in / out
+        stats["operator_volumes"] = operator_volume_rows(domain, domain.get_time(),
+                                                         info.get("culvert_names") or [])
     # 3.10.47: the OpenMP thread count ANUGA ran with (read back at the end: Domain() and a
     # resumed checkpoint both go through it)
     _getter = getattr(anuga, "get_omp_num_threads", None)

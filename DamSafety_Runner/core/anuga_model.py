@@ -1230,7 +1230,11 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     inlet = inlet_line(inflow_xy, direction, inlet_width_m)
     job = os.path.join(workdir, "anuga_job.npz")
     result = os.path.join(workdir, "anuga_result.npz")
-    culverts, cnotes = structmod.anuga_culverts(structures or [], dem, outer)
+    try:                                        # 3.10.96: opt-in culvert bed floor
+        bed_floor = structmod.bed_floor_setting()
+    except ValueError as e:
+        raise ModelError(str(e))
+    culverts, cnotes = structmod.anuga_culverts(structures or [], dem, outer, bed_floor=bed_floor)
     for c in culverts:                          # 3.10.71: enquiry point past the inlet triangles
         c["enquiry_gap"] = enquiry_gap_m(st)
     regions = culvert_regions(culverts, st)     # small triangles at both culvert ends
@@ -1378,6 +1382,12 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         for r_, w_ in zip(rec, stats.get("culvert_enquiry") or []):
             r_.update(w_)
         stats["culvert_inverts"] = rec
+        ov = stats.get("operator_volumes") or []                       # 3.10.96
+        for r_ in rec:
+            k_ = r_.get("op_index")
+            if k_ is not None and 0 <= k_ < len(ov):
+                r_["operator_volume_m3"] = {k: ov[k_][k] for k in ("removed_m3", "added_m3",
+                                                                   "net_m3", "calls")}
     if stats.get("checkpoint"):          # 3.10.38: why checkpoints were on
         stats["checkpoint"]["rule"] = ck_rule
     if not have:                         # 3.10.47; a reused result keeps its own record
@@ -1423,11 +1433,48 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     for e in sorted({w.get("enquiry_note") for w in stats.get("culvert_enquiry") or []
                      if w.get("enquiry_note")}):
         notes.append("ANUGA culvert enquiry point: " + e)   # 3.10.71
+    notes.extend(culvert_bed_notes(stats))                  # 3.10.96
     if refine_lines and not stats.get("breaklines_used") and breaklines and mesh is None:
         notes.append("ANUGA: the embankment lines could not be used as mesh edges (they cross or "
                      "touch each other); the mesh was made without them.")
     return Envelopes(dem.like(depth, np.nan), dem.like(vel, np.nan), dem.like(arr, np.nan),
                      dem.like(wse, np.nan), stats, notes), outer, fine
+
+
+PHANTOM_HEAD_M = 0.3          # 3.10.96: an invert this far below its enquiry bed
+OPERATOR_IMBALANCE = 0.001    # |added - removed| / removed above this: the operator made water
+
+
+def culvert_bed_notes(stats):
+    """3.10.96 (DWR-3034 REVIEW 9.8 items 3-4): notes from the worker's per-end bed record
+    (stats['culvert_enquiry'][k]['ends']) and the per-operator volumes
+    (stats['operator_volumes']). An invert well below the bed the operator reads its head on
+    gives head that is not there (stage - invert on a dry end); NDBREACH_CULVERT_BED_FLOOR
+    =enquiry|channel raises it. An operator that adds more than it removes made water."""
+    out = []
+    names = {v.get("op"): v.get("name") for v in stats.get("operator_volumes") or []}
+    for k, w in enumerate(stats.get("culvert_enquiry") or []):
+        name = names.get(w.get("op_index")) or "culvert {}".format(k + 1)
+        for j, e in enumerate(w.get("ends") or []):
+            inv, bed = e.get("invert_used_m"), e.get("enquiry_bed_m")
+            side = "upstream" if j == 0 else "downstream"
+            if e.get("raised_m"):
+                out.append("ANUGA culvert {}: {} invert raised {:.2f} m to the {} bed ({:.2f} m; "
+                           "NDBREACH_CULVERT_BED_FLOOR).".format(name, side, e["raised_m"],
+                                                                 e.get("floor_source"),
+                                                                 e.get("floor_m")))
+            elif inv is not None and bed is not None and inv < bed - PHANTOM_HEAD_M:
+                out.append("ANUGA culvert {}: the {} invert ({:.2f} m) is {:.2f} m below the bed "
+                           "the operator reads its head on ({:.2f} m): it sees that much water "
+                           "on a dry end. Check the invert; NDBREACH_CULVERT_BED_FLOOR=enquiry "
+                           "or channel raises it.".format(name, side, inv, bed - inv, bed))
+    for v in stats.get("operator_volumes") or []:
+        rem, add = float(v.get("removed_m3") or 0.0), float(v.get("added_m3") or 0.0)
+        if rem > 1.0 and abs(add - rem) > OPERATOR_IMBALANCE * rem:
+            out.append("ANUGA culvert {}: the operator added {:,.0f} m3 and removed {:,.0f} m3 "
+                       "({:+.2%}).".format(v.get("name") or v.get("op"), add, rem,
+                                           (add - rem) / rem))
+    return out
 
 
 VOLUME_GAIN_LIMIT = 1.02       # 3.10.55: more water in the domain than this x the supply
