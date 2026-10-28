@@ -115,7 +115,6 @@ def note_failed_keys(meta, failed):
     return meta
 
 
-# ================================================================ profiles ==
 PROFILE_FORMAT = "ND_Dam_Hazard_Helper/settings_profile"
 PROFILE_FORMAT_VERSION = 1
 PROFILE_EXT = ".ndprofile.json"

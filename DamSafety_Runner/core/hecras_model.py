@@ -170,9 +170,7 @@ class HecRasModelError(ValueError):
     pass
 
 
-# ============================================================================
 # Units
-# ============================================================================
 class Units:
     """Project units of the HEC-RAS model, from the linear unit of its CRS."""
 
@@ -213,9 +211,7 @@ class Units:
         return float(c_us) * math.sqrt(FT) if self.si else float(c_us)
 
 
-# ============================================================================
 # Text formatting
-# ============================================================================
 def f8(v):
     """A number in an 8-character field (hecras.field8: decimals dropped to fit; a value that
     cannot fit raises HecRasModelError). None or NaN is a blank field."""
@@ -303,9 +299,7 @@ def safe_name(s, n=24):
     return s[:n]
 
 
-# ============================================================================
 # Model description (filled by build_model, or by hand in the tests)
-# ============================================================================
 class Model:
     """Everything the writers need, in project units and the model CRS."""
 
@@ -364,9 +358,7 @@ class Model:
             float(a[:, 1].max())
 
 
-# ============================================================================
 # Writers
-# ============================================================================
 def _centroid(pts):
     a = np.asarray(pts, dtype=float)
     return float(a[:, 0].mean()), float(a[:, 1].mean())
@@ -811,9 +803,7 @@ def write_text_files(m, folder, now=None):
     return out
 
 
-# ============================================================================
 # Pure geometry helpers (numpy)
-# ============================================================================
 def ring_area(pts):
     a = np.asarray(pts, dtype=float)
     x, y = a[:, 0], a[:, 1]
@@ -989,9 +979,7 @@ def breach_values(dam, params, units, crest_length_u):
     return b, wse0_ft, trig_ft, notes
 
 
-# ============================================================================
 # v3.12.0: culverts, bridges and notches inside the 2D area (numpy only)
-# ============================================================================
 STRUCT_FIELDS = ("width_m", "height_m", "barrels", "shape", "invert_up_m", "invert_dn_m",
                  "manning", "losses", "name")
 
@@ -1263,9 +1251,7 @@ def connection_name(text, used):
     return nm
 
 
-# ============================================================================
 # Building the model from a run (GDAL / OGR)
-# ============================================================================
 ND_LON = (-104.06, -96.55)
 ND_LAT = (45.93, 49.01)
 # NAD83 / North Dakota North (ft) and South (ft): North Dakota's State Plane is in
@@ -1863,10 +1849,8 @@ def _dem_value_m(dem_path, srs, xy, z_to_m):
         return None
 
 
-# ============================================================================
 # v3.10.17: site checks, breach invert vs the ground below the dam, dam line without a
 # recorded length, simulation window (DWR-3161 HEC-RAS test: 36 % volume error)
-# ============================================================================
 # A run whose dam point, dam height or storage curve do not fit the terrain gives a HEC-RAS
 # model that runs but means nothing (DWR-3161: breach bottom 1816.3 ft connected to cells at
 # 1840.5 ft, 4 ft of relief for a 28 ft dam, storage curve to 1816 ft over 201 ac against a
@@ -2168,10 +2152,8 @@ def breach_corner_margin(tcell, sb):
     return max(0.25 * tcell, math.sqrt(2.0) * tcell - 0.5 * sb + 0.25 * tcell)
 
 
-# ============================================================================
 # v3.10.22: breach start, spillway, the plugin's hydrograph on HEC-RAS's breach, solver
 # tolerances, gmsh computation points
-# ============================================================================
 SPILLWAY_KEYS = (("spillway_crest_ft", "spillway_width_ft"),
                  ("emergency_spillway_crest_ft", "emergency_spillway_width_ft"))
 

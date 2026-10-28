@@ -97,7 +97,6 @@ def _npy(path):
     return np.load(os.path.splitext(path)[0] + ".npy")
 
 
-# =================================================================== item 7: class-stop rule
 def _band_grid(nx=120, ny=40, dx=20.0):
     from nd_breach_runner.core.grid import Grid
     g = Grid(np.zeros((ny, nx)), 0.0, ny * dx / 2.0, dx)
@@ -279,7 +278,6 @@ def class_stop_rule_with_receptor_layers_needs_nothing_beyond_the_edge():
         shutil.rmtree(d, ignore_errors=True)
 
 
-# ======================================================= item 6: per-run rasters (probability)
 def _prob(folder, n=3, run_rasters=True, logs=None, **k):
     from nd_breach_runner.core import probabilistic as pm
     from nd_breach_runner.tests.synthetic import SyntheticTerrain, npy_writer
@@ -387,7 +385,6 @@ def probabilistic_tool_has_the_run_rasters_option():
     assert "class probability tool" in a.shortHelpString()
 
 
-# ================================================================== item 15: one EAP map
 @test
 def eap_preview_is_drawn_only_when_nd_dam_hazard_is_not_installed():
     from nd_breach_runner.core import products as pr
@@ -499,7 +496,6 @@ def word_report_lists_nd_dam_hazards_map_book_as_the_eap_map():
         shutil.rmtree(os.path.dirname(os.path.dirname(folder)), ignore_errors=True)
 
 
-# ======================================================================== item 2: dam.json
 def _record(folder, tool="ndhazard", version="2.10.0", **fields):
     from nd_breach_runner.damsuite import dam_record as dr
     rec = dr.load(folder, create=True)
@@ -832,7 +828,6 @@ def wizard_fills_empty_values_from_dam_json():
         shutil.rmtree(d, ignore_errors=True)
 
 
-# ================================================================ item 5: version checks
 @test
 def version_checks_at_start_up_show_in_the_message_bar_and_log():
     from nd_breach_runner.tests import fake_qgis as fq
@@ -938,7 +933,6 @@ def handoff_refuses_nd_dam_hazard_below_the_hard_minimum():
     assert callable(handoff.make_classifier(registry=Reg(), versions={"ndhazard": "2.10.0"}))
 
 
-# ============================================================================ the release
 @test
 def release_is_3_2_0_and_loads_without_nd_dam_hazard():
     import configparser
@@ -980,7 +974,6 @@ def release_is_3_2_0_and_loads_without_nd_dam_hazard():
             assert not any(m.split(".")[0] in ("qgis", "osgeo", "scipy", "PyQt5") for m in mods)
 
 
-# ======================================= hand-off: an NID parameter gets an NID, not a dam ID
 @test
 def handoff_gives_nid_parameters_an_nid_never_another_dam_id():
     from nd_breach_runner.core import handoff

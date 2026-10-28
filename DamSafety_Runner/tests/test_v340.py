@@ -37,7 +37,6 @@ def _band(grid, depth_m, half_m, x_from=0.0):
             "wse": np.where(np.isfinite(d), 100.0 + d, np.nan)}
 
 
-# ============================================================= item 1: cell-size check
 @test
 def lisflood_solver_keyword_is_written_to_the_par_file():
     from nd_breach_runner.core import lisflood as lf
@@ -195,7 +194,6 @@ def sensitivity_cell_check_runs_the_finer_grid_on_the_same_domain_and_reports():
         shutil.rmtree(d, ignore_errors=True)
 
 
-# ============================================================= item 2: near-dam refine
 @test
 def refine_counts_receptors_near_the_breach_and_decides():
     from nd_breach_runner.core import refine, impacts, structures, workflow, lisflood as lf
@@ -390,7 +388,6 @@ def refine_runs_an_fv1_fine_grid_and_merges_it_when_receptors_sit_near_the_breac
         shutil.rmtree(d, ignore_errors=True)
 
 
-# ============================================================= item 3: buildings
 @test
 def building_footprints_raise_the_dem_or_set_the_roughness():
     from nd_breach_runner.core import conditioning as cond
@@ -653,7 +650,6 @@ def conditioning_preview_tool_shows_the_buildings_and_writes_the_manning_grid():
         shutil.rmtree(d, ignore_errors=True)
 
 
-# ============================================================= item 4: feet audit
 _DEPTH_WORDS = re.compile(r"\b(depth|stage|elevation|height|rise|wse|water surface|level|"
                           r"invert|diameter|span|width)\b", re.I)
 # parameters whose "depth/height/width" is not a length in feet: a share, a product, a

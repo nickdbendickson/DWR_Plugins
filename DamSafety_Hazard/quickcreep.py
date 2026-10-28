@@ -86,7 +86,6 @@ def _params(params):
     return p
 
 
-# ======================================================== the last run ==
 def _slug(name):
     import re
     return re.sub(r"[^A-Za-z0-9]+", "_", str(name or "")).strip("_")[:40] or "Scenario"
@@ -203,7 +202,6 @@ def last_run_structures(dam_folder, governing, raster_crs, ctx):
     return None, "no structure table of a last run"
 
 
-# ========================================================== sampling ==
 def _xform(src, dst, ctx):
     from qgis.core import QgsCoordinateTransform
     try:
@@ -327,7 +325,6 @@ def sample_layer(layer, sampler, index, ctx, check=None):
     return out
 
 
-# ========================================================== matching ==
 class _Grid(object):
     """Points (x, y) and optional geometries, found by distance or containment."""
 
@@ -414,7 +411,6 @@ def matched(rec, grid, tol):
     return False
 
 
-# ============================================================== a dam ==
 def screen_dam(dam_folder, new_layer, prev_layer=None, params=None, ctx=None, check=None):
     """(row, structure rows) of one dam. Never raises for the dam's own problems (the row
     says FAILED / skipped); CancelledByUser passes through."""
@@ -544,7 +540,6 @@ def _srow(dam, change, r, crs_id, fresh_ids):
             ("No" if id(r) in fresh_ids else "Yes"), "Detail": ""}
 
 
-# ============================================================ the screen ==
 def run_quick_creep(parent, new_layer, prev_layer=None, params=None, progress=None,
                     log=None):
     """Screen every dam folder of `parent` (watch.dam_folders). Returns {"rows",

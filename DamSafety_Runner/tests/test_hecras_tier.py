@@ -50,7 +50,6 @@ def hecras_tier_stage_passes_its_env_to_the_project_writer():
     assert '"time_step"' in src and '"inflow_series"' in src
 
 
-# ===================================== TIER 2 fix: TIER 2 figures come from HEC-RAS, not LISFLOOD
 def _tif_ft(path, a, x0=500000.0, ytop=5200000.0, dx=10.0):
     from osgeo import gdal, osr
     gdal.UseExceptions()

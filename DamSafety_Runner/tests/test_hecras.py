@@ -32,7 +32,6 @@ def _has_h5py():
         return False
 
 
-# ============================================================================ export
 def _tri(peak_cfs=12345.67, t_peak_s=1980.0, t_end_s=7200.0):
     return br.Hydrograph(np.array([0.0, t_peak_s, t_end_s]),
                          np.array([0.0, peak_cfs * CFS, 0.0]), "test")
@@ -220,7 +219,6 @@ def hecras_export_run_reads_the_workflow_files():
         shutil.rmtree(d)
 
 
-# ============================================================================ HDF stand-in
 class _DS:
     def __init__(self, arr, attrs=None):
         self._a = np.asarray(arr)
@@ -370,7 +368,6 @@ def _expected_columns(vals):
     return np.tile(np.array(list(vals) + [np.nan, np.nan]), (N, 1))
 
 
-# ============================================================================ import
 @test
 def hecras_import_grids_from_a_synthetic_mesh():
     def check(src):
@@ -542,7 +539,6 @@ def hecras_import_as_reference_feeds_the_benchmark():
     _each_source(check)
 
 
-# ============================================================================ algorithms
 def _algs():
     from nd_breach_runner.tests import fake_qgis
     fake_qgis.install()

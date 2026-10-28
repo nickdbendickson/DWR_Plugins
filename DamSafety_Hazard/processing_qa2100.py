@@ -40,7 +40,6 @@ def _opt_float(alg, parameters, name, context, default=None):
             return default
 
 
-# ================================================================ ensemble ==
 class EnsembleAlgorithm(_Base):
     """v2.10: class probability over an ensemble of breach runs (ensemble.py)."""
 
@@ -122,7 +121,6 @@ class EnsembleAlgorithm(_Base):
                 "OUTPUT_FOLDER": res["folder"], "SUMMARY": res["summary"]}
 
 
-# ================================================================ model gate ==
 class ModelGateAlgorithm(_Base):
     """v2.10: checks of the model results before the classification (modelgate.py)."""
 
@@ -235,7 +233,6 @@ class ModelGateAlgorithm(_Base):
         return {"CSV": res["csv"], "STATUS": res["status"]}
 
 
-# ================================================================ quick creep ==
 class QuickCreepAlgorithm(_Base):
     """v2.10: statewide quick creep screen with a new structures layer (quickcreep.py)."""
 

@@ -223,9 +223,7 @@ def datum_check(ground_ft, cmin_ft, mask=None, environ=None):
     return rec
 
 
-# ============================================================================
 # Export: hydrograph
-# ============================================================================
 def ras_interval_label(dt_min):
     """HEC-RAS data interval text ('5MIN', '1HOUR', ...) or None when the step is not one of
     the intervals the boundary-condition editor offers."""
@@ -356,9 +354,7 @@ def write_hydrograph_files(hy, folder, dt_min=DEFAULT_STEP_MIN, stem="HECRAS Bre
     return {"txt": txt, "csv": csv_path, "info": info}
 
 
-# ============================================================================
 # Export: breach parameter table
-# ============================================================================
 BREACH_WEIR_COEF = 3.1        # the breach module's broad-crested weir, US units (Fread)
 
 
@@ -568,9 +564,7 @@ def write_ras_project(*args, **kwargs):
                       "HEC-RAS's); use core.hecras_package.build_package")
 
 
-# ============================================================================
 # Import: HDF discovery
-# ============================================================================
 def _norm(s):
     return re.sub(r"\s+", " ", str(s).lower()).strip()
 
@@ -887,9 +881,7 @@ def discover(catalog, area=None):
     return res
 
 
-# ============================================================================
 # Import: mesh results
-# ============================================================================
 class Mesh:
     """Per-cell results of one 2D flow area in US units, cells as points."""
 
@@ -1115,9 +1107,7 @@ def _first_reach(ts, t_hr, elev, thr, n, cols=None, rows=None, weights=None):
     return out
 
 
-# ============================================================================
 # Import: unstructured cells -> regular raster (pure-numpy nearest cell)
-# ============================================================================
 class SpatialHash:
     """Uniform-grid spatial hash for nearest-point queries (a KD-tree substitute)."""
 
@@ -1328,11 +1318,9 @@ def cell_index(mesh, x0, ytop, dx, nx, ny, reach=0.75, block=400000, cache=None,
 FIELD_NAMES = ("depth", "wse", "velocity", "arrival", "time_of_max")
 
 
-# ============================================================================
 # 3.10.79: depth on the terrain of each grid cell (not the HEC cell's minimum);
 # 3.10.84: or (the default then) on the HEC cell's minimum, with the same pixel mapping;
 # 3.10.92: the terrain basis is the default again, with a datum/unit check
-# ============================================================================
 def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
                   arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_hr=0.0, wet_ft=0.01, to_grid_xy=None,
                   want_arrival=True, reach=0.75, basis=None, fine=None):

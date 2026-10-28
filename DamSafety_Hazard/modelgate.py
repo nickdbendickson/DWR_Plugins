@@ -130,7 +130,6 @@ def worst(rows):
     return best
 
 
-# ============================================================ targets ==
 def _targets(target):
     """[{"name", "depth", "vel", "arr", "dv", "base_depth", "base_vel", "base_arr"}],
     dam folder, output folder, boundary layer - from a cfg, a paths dict or a folder."""
@@ -194,7 +193,6 @@ def _close(*smps):
                 pass
 
 
-# ============================================================ 1 edge ==
 def check_edge(item, p, boundary_layer=None):
     """Flood at the model edge (boundary.check)."""
     from qgis.core import QgsProject
@@ -250,7 +248,6 @@ def check_edge(item, p, boundary_layer=None):
     return [row("edge", PASS, reason, val, "{} ft".format(_fmt(warn)), name)]
 
 
-# =========================================================== 2 holes ==
 def _any_within(mask, g, axis, sign):
     """True where `mask` holds within 1..g cells in one direction along `axis`."""
     out = np.zeros(mask.shape, dtype=bool)
@@ -334,7 +331,6 @@ def check_holes(item, p):
     return [row("holes", WARN, reason, n, "any", name)]
 
 
-# ============================================================ 3 mass ==
 def find_run_report(dam_folder=None, depth=None):
     """The runner's run_report.json for these rasters: next to the depth raster
     (<raster folder>/_breach_model/), in the dam folder, or one level down; None."""
@@ -410,7 +406,6 @@ def check_run_report(path, p, name=""):
     return out
 
 
-# ========================================================== 4 breach ==
 def dam_point(dam_folder):
     """((x, y), crs id, source text) of the dam / breach point, or (None, None, why)."""
     if not dam_folder or not os.path.isdir(dam_folder):
@@ -486,7 +481,6 @@ def check_breach_velocity(item, p, dam_folder):
     return [row("breach", PASS, txt, vmax, "{} ft/s".format(_fmt(thr)), name)]
 
 
-# =========================================================== 5 units ==
 _LEVEL = {"ERROR": FAIL, "WARNING": WARN, "OK": PASS}
 
 
@@ -514,7 +508,6 @@ def check_units(item):
     return out or [row("units", SKIP, "nothing to check", scenario=name)]
 
 
-# ======================================================== 6 manifest ==
 _ROLE_NAMES = (("depth", "depth"), ("vel", "velocity"), ("arr", "arrival"), ("dv", "dv"),
                ("base_depth", "baseline depth"), ("base_vel", "baseline velocity"),
                ("base_arr", "baseline arrival"))
@@ -550,7 +543,6 @@ def check_manifest(item, dam_folder):
     return out
 
 
-# ============================================================== gate ==
 def gate(target, params=None, write=True, progress=None, log=None):
     """All checks for every breach scenario of `target` (pipeline cfg, paths dict, or dam
     folder). Returns {"status", "rows", "lines", "csv", "stop"}. `write`: QA/Model_Gate.csv

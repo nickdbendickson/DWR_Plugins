@@ -594,7 +594,6 @@ def verification_validation_record_algorithm_writes_the_docx():
                 assert str(e)
 
 
-# =================================================================== model tests (real runs)
 def _lf():
     exe = os.environ.get("NDBREACH_LISFLOOD", "")
     if not exe or not os.path.isfile(exe):

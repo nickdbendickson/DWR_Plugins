@@ -26,7 +26,6 @@ def _build(folder, **kw):
     return hm.build_model(folder, out_folder=os.path.join(folder, "model"), **kw)
 
 
-# ============================================================================ pure checks
 @test
 def hecras_site_breach_check_dwr3161_and_small_mismatch():
     # DWR-3161: breach bottom 1816.34 ft, ground below the dam 1840.45, top 1844.44, H 28.1
@@ -132,7 +131,6 @@ def hecras_site_simulation_window_rule():
     assert sim == 75.0
 
 
-# ============================================================================ build_model
 @test
 def hecras_site_build_stops_on_a_dam_that_is_not_there():
     """The DEM has a 10 m dam; the run says 30 m. The breach bottom is 20 m below the ground
@@ -284,7 +282,6 @@ def hecras_site_plan_time_step_window_and_breach_shape_note():
         shutil.rmtree(d)
 
 
-# ============================================================================ HDF reader
 class _DS:
     def __init__(self, shape, attrs=None):
         self.shape = shape

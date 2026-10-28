@@ -343,9 +343,7 @@ def compute_timeout_message(timeout, elapsed, text, sim_hours, estimate=None):
     return msg
 
 
-# ============================================================================
 # detect
-# ============================================================================
 def detect(env=None, platform=None, isfile=os.path.isfile, isdir=os.path.isdir,
            which=shutil.which):
     """What the HEC-RAS 2D engine can use here. Returns a dict:
@@ -407,9 +405,7 @@ def require(env=None, **kw):
     return d
 
 
-# ============================================================================
 # project writer
-# ============================================================================
 def inflow_bc_line(xy, direction, half=INFLOW_BC_HALF_FT):
     """A short straight BC line through `xy` across the flow `direction` (any length)."""
     d = np.asarray(direction, dtype=float)
@@ -845,9 +841,7 @@ def _write_engine_json(res, inflow_mode, inflow_bc, info):
                   f, indent=1)
 
 
-# ============================================================================
 # preprocess / compute (Linux: Wine + official Linux RasUnsteady)
-# ============================================================================
 def to_wine_path(path, prefix):
     """C:\\... for a path inside <prefix>/drive_c, else Z:\\... (Wine's root drive)."""
     p = os.path.abspath(path)
@@ -1720,9 +1714,7 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
     return out
 
 
-# ============================================================================
 # results -> the Runner grid
-# ============================================================================
 TERRAIN_Z_SETTING = "'Terrain elevation units' (CLI: hecras-reexport --terrain-z)"
 
 
@@ -2107,9 +2099,7 @@ def transformer(src_wkt, dst_wkt):
     return hm.transformer(hm.srs_from(src_wkt), hm.srs_from(dst_wkt))
 
 
-# ============================================================================
 # the Runner stage (TIER_HECRAS)
-# ============================================================================
 LISFLOOD_PREFIX = "LISFLOOD-FP "
 
 
@@ -2273,9 +2263,7 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
     return {"final": final, "hdf": hdf, "project": proj, "report": rep, "warnings": warns}
 
 
-# ============================================================================
 # 3.10.79: re-export the rasters of a finished HEC-RAS run (no model run)
-# ============================================================================
 REEXPORT_JSON = "reexport.json"
 
 

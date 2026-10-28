@@ -105,9 +105,7 @@ def _trapz(y, x):
     return float(np.trapezoid(y, x)) if hasattr(np, "trapezoid") else float(np.trapz(y, x))
 
 
-# ============================================================================================
 # Temporal distributions (cumulative fraction of the storm depth against fraction of the time)
-# ============================================================================================
 def uniform_fraction(x):
     return np.clip(np.asarray(x, dtype=float), 0.0, 1.0)
 
@@ -173,9 +171,7 @@ def read_cumulative_csv(path):
     return t / t[-1], f, float(t[-1])
 
 
-# ============================================================================================
 # Time of concentration
-# ============================================================================================
 def tc_scs_lag_hr(flow_length_ft, slope_pct, cn):
     """SCS (NRCS) lag equation, tc = lag / 0.6:
 
@@ -195,9 +191,7 @@ def tc_kirpich_hr(flow_length_ft, slope_pct):
     return 0.0078 * flow_length_ft ** 0.77 * s ** -0.385 / 60.0
 
 
-# ============================================================================================
 # Losses
-# ============================================================================================
 def adjust_cn(cn, amc="II"):
     """AMC I / III equivalents of an AMC II curve number (NEH-4 Ch. 10 conversions)."""
     amc = str(amc).upper()
@@ -265,11 +259,9 @@ def _excess(rain_in, dt_s, s, warnings):
     return ex, cn_eff
 
 
-# ============================================================================================
 # Unit hydrographs. All return (t_s, u) with u in m3/s per inch of excess over the basin, for
 # an excess pulse of duration dt, sampled at t = m dt (u[0] = 0), with sum(u) * dt equal to
 # 1 inch over the basin exactly.
-# ============================================================================================
 def gamma_shape_from_prf(prf):
     """M of the gamma (curvilinear) dimensionless hydrograph q/qp = (x e^(1-x))^M whose peak
     rate factor is `prf` (cfs per mi2 per inch, for time in hours). 484 gives M of about 3.7."""
@@ -351,9 +343,7 @@ def unit_hydrograph(area_mi2, dt_s, method="scs", lag_hr=None, prf=484.0, clark_
     return np.arange(len(u)) * dt_s, u
 
 
-# ============================================================================================
 # Settings
-# ============================================================================================
 def _normalise(settings):
     if not isinstance(settings, dict):
         raise HydrologyError("settings must be a dict")
@@ -452,9 +442,7 @@ def choose_time_step(tc_hr, duration_hr, clark_r_hr=None, dt_min=None):
     return d_s / n, n
 
 
-# ============================================================================================
 # Result
-# ============================================================================================
 @dataclass
 class HydrologyResult:
     t_s: np.ndarray                     # time from the start of the storm (s)
@@ -521,9 +509,7 @@ def _markdown(res, s, notes):
     return "\n".join(lines) + "\n"
 
 
-# ============================================================================================
 # The generator
-# ============================================================================================
 def hydrograph_from_settings(settings):
     """Build the inflow hydrograph from a settings dict (see the module docstring)."""
     s = _normalise(settings)

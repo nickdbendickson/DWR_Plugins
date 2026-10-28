@@ -95,7 +95,6 @@ def _gdal():
         return None, None
 
 
-# ============================================================================ the carve
 @test
 def reservoir_carve_matches_the_storage_curve_and_keeps_the_shoreline():
     dam = _dam()

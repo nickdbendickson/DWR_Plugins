@@ -147,7 +147,6 @@ _NID_RE = re.compile(r"\b([A-Z]{2}\d{5})\b")
 _DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 
-# ============================================================ file readers ==
 # (also used by formfill.py)
 def _set_csv_limit():
     try:
@@ -414,7 +413,6 @@ def review_counts(structs):
     return {"open": len(rows) - done, "reviewed": done, "listed": len(rows)}
 
 
-# ================================================= the suite (v2.10) ==
 def _iso(text):
     """ISO 8601 (to the second) of a date / time text the tools write, or None."""
     s = str(text or "").strip()
@@ -938,7 +936,6 @@ def suite_columns(row, folder, snap, log, parsed, screen_index=None, today=None)
     return notes
 
 
-# ================================================================== rows ==
 def _dam_folders(parent):
     from .watch import dam_folders
     return dam_folders(parent)
@@ -1152,7 +1149,6 @@ def collect(parent_folder, screening=None, today=None):
     return rows
 
 
-# ================================================================ writing ==
 def _free_path(path):
     """`path`, or a time-stamped name when the old file cannot be replaced
     (open in Excel / a browser on Windows)."""

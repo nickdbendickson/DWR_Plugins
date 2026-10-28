@@ -3,26 +3,11 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-<<<<<<< HEAD
-<<<<<<< HEAD
-PLUGIN_VERSION = "2.18.66"
-=======
-PLUGIN_VERSION = "2.18.67"
->>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
-=======
-<<<<<<< HEAD
-PLUGIN_VERSION = "2.18.68"
->>>>>>> e3d3be2 (Hazard 2.18.68: say why Microsoft footprints are missing in offline-only mode (DWR-3034 item 7))
-=======
-<<<<<<< HEAD
-PLUGIN_VERSION = "2.18.69"
->>>>>>> 96e9c72 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
->>>>>>> 07d0881 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
-=======
 PLUGIN_VERSION = "2.19.0"
->>>>>>> b0f85c4 (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
->>>>>>> 462e6af (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
->>>>>>> d3b282b (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
+PLUGIN_VERSION = "2.19.0"
+PLUGIN_VERSION = "2.19.0"
+PLUGIN_VERSION = "2.19.0"
+PLUGIN_VERSION = "2.19.0"
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
@@ -113,9 +98,7 @@ MAX_REPEATED_WARNINGS = 20
 # Excel refuses (asks to "repair") workbooks whose sheet names exceed 31 chars.
 XLSX_MAX_SHEET_NAME = 31
 
-# ==============================================================================
 # ACER TM 11 / ND REG_05.2026 FLOOD DANGER CURVES
-# ==============================================================================
 # v2.11.0: houses on foundations (ND Fig. 5.1 = TM 11 Fig. 2) and mobile homes
 # (ND Fig. 5.2 = TM 11 Fig. 3) come from the TABLE digitized by the engineer
 # from the REG_05.2026 figures (damsuite.tm11_curves - the same table in ND Dam
@@ -313,6 +296,13 @@ ND_ADDRESS_POINTS_ITEM = ("https://gishubdata-ndgov.hub.arcgis.com/datasets/"
 # Esri Federal User Community mirror with the same schema (fallback).
 NID_URL = ("https://geospatial.sec.usace.army.mil/dls/rest/services/NID/"
            "National_Inventory_of_Dams_Public_Service/FeatureServer/0")
+# ND DWR MapService dam lines (Damsline layer, index 253). Full-dataset shapefile.
+DWR_DAM_LINES_URL = "https://mapservice.dwr.nd.gov/php/downloadShape.php"
+DWR_DAM_LINES_LAYER = 253  # Damsline
+DWR_DAMS_LAYER = 254       # Dams (points)
+DWR_DUGOUTS_LAYER = 277    # Dugouts (points)
+DWR_DUGOUT_POLYGONS_LAYER = 276  # DugoutsPoly
+
 NID_MIRROR_URL = ("https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/"
                   "NID_v1/FeatureServer/0")
 DAM_SEARCH_FT = 500.0         # a dam counts as flooded when depth > 0 within this of its point
