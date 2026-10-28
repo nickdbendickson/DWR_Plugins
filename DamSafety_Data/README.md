@@ -98,16 +98,25 @@ writes it twice from the same download, into a folder you pick:
   again" fetches all). Each manifest entry has the source URL, date, count and sha256.
 - It refuses a folder that is a pack, holds a pack it did not build, or holds the pack the
   plugins read now: an existing pack is never written into.
-- **Sources (PR #221):**
+- **Sources (PR #221, #223):**
   - **HIFLD** (fire / EMS stations, local EOCs, local law enforcement, wastewater plants): the
     Data Rescue Project's copies (portal.datarescueproject.org) kept on DataLumos / ICPSR.
     DataLumos needs a free ICPSR login and its Terms of Use, so the builder does not download
     them: download each layer (GeoJSON or shapefile zip) from its DataLumos project page
-    (fire 239161, EOC 239489, law enforcement 239493, wastewater 239290) into one folder and
-    pick it as the HIFLD folder. Features outside North Dakota are dropped. Without a file the
-    layer is left out (the manifest's `left_out` names the page). `--hifld-mirrors` uses the
-    old FEMA / Esri mirrors instead.
-  - **No HPMS.** Traffic (AADT) comes from `NDDOT_traffic_counts` and `ND_county_roads`.
+    (fire 239161, EOC 239489, law enforcement 239493, wastewater 239262 - "ICIS Wastewater
+    Treatment Plants"; 240789 is a later copy of the same layer; 239290 / 239287 are only its
+    SIC / NAICS code tables and are ignored) into one folder and pick it as the HIFLD folder.
+    Features outside North Dakota are dropped. Without a file the layer is left out (the
+    manifest's `left_out` names the page). There is no mirror fallback.
+  - **HPMS and NDDOT, side by side.** `HPMS_ND_<year>` (FHWA HPMS, newest year that answers) and
+    `NDDOT_traffic_counts` are both in the pack so their AADT can be compared; both manifests
+    and LAYERS.txt say so (`note`).
+  - **ND DEQ** (`nddeq/`): `NDDEQ_landfills` (permitted landfills, Division of Waste
+    Management), `NDDEQ_source_water_protection_community` and
+    `NDDEQ_source_water_protection_noncommunity` (drinking-water source protection areas of
+    public water systems), from the ND GIS Hub (`All_Locations/MapServer` 12, 16, 17). DEQ does
+    not publish wastewater / NDPDES facilities, water treatment plants or intakes as GIS layers;
+    wastewater plants come from the HIFLD (EPA ICIS) layer above.
   - **3DHP replaces NHD**, keeping the names `NHD_flowlines` / `NHD_waterbodies` (the Hazard /
     Runner culvert tools and Setup look for those names). The USGS 3DHP map service
     (`3DHP_all/MapServer` 50 flowlines, 60 waterbodies) is read and `gnis_name`, `gnis_id`,
@@ -117,14 +126,17 @@ writes it twice from the same download, into a folder you pick:
     `ABI_small_barriers_surveyed` from the public API (`tool.aquaticbarriers.org/api/v1/public/
     <dams|barriers>/state?id=ND`); `ABI_road_crossings_unsurveyed` from the national
     road-crossings download (about 600 MB, cached for a week), ND rows with
-    Surveyed = "not likely". Each has a `network` field (on-network / off-network). Terms: credit
+    Surveyed = "not likely". Each has a `network` field (on-network / off-network) and a
+    `barrier_status` flag: `present`, `removed`, `excluded` or `removed+excluded` (from the
+    inventory's `removed` / `excluded` fields, which stay; removed and excluded barriers are
+    kept, not dropped; the manifests count each value). Terms: credit
     NACC, SARP and NFHP; the manifests hold the citation, terms and data version.
 - Each manifest entry also has the source file's sha256 and, in the work folder,
   `provenance.json` keeps them for resumed builds.
 - NLCD 2021 comes from the MRLC WCS; when that is down, from the Esri Annual NLCD image
   service (year 2021, same class codes); the manifest names the source used.
 - Command line: `python3 -m DamSafety_Data.pack_build --out <folder> [--bbox w,s,e,n]
-  [--only NAME,...] [--hifld-folder DIR] [--hifld-mirrors] [--list] [--verify]`.
+  [--only NAME,...] [--hifld-folder DIR] [--list] [--verify]`.
 
 ## Download imagery for these dams… (1.5.0)
 

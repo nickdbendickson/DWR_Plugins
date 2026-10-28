@@ -14,10 +14,12 @@ format-1 pack and converted to format 2 with gpkgpack.convert_v1; the NLCD raste
 format 2 with gpkgpack.add_raster_file. Run again to resume: finished layers are kept, only
 missing or failed ones are fetched (refresh=True fetches everything again).
 
-Sources (PR #221): HIFLD from user-supplied DataLumos files (Data Rescue Project; clipped to
-ND, left out without a file, the old mirrors only with hifld_mirrors); no HPMS; NHD_flowlines /
-NHD_waterbodies filled from USGS 3DHP with NHD-style fields (NHD service as fallback); the SARP
-Aquatic Barrier Inventory as ABI_* (public API + national road-crossings download). What each
+Sources (PR #221 / #223): HIFLD only from user-supplied DataLumos files (Data Rescue Project;
+clipped to ND, left out without a file - no other mirror); HPMS_ND_<year> kept next to
+NDDOT_traffic_counts for comparison; NHD_flowlines / NHD_waterbodies filled from USGS 3DHP with
+NHD-style fields (NHD service as fallback); the SARP Aquatic Barrier Inventory as ABI_* (public
+API + national road-crossings download; removed / excluded barriers kept and flagged in
+barrier_status); ND DEQ layers as NDDEQ_* (landfills, source water protection areas). What each
 layer was built from (file / URL, sha256, data version, terms) is kept in the work folder's
 provenance.json and copied into both manifests.
 
@@ -68,21 +70,26 @@ HIFLD = (
      ("state",)),
     ("HIFLD_local_law_enforcement", "HIFLD local law enforcement locations",
      239493, "Law enforcement", ("law", "police"), ()),
-    ("HIFLD_wastewater_treatment_plants", "EPA wastewater treatment plants (HIFLD)",
-     239290, "Wastewater treatment", ("wastewater",), ()),
+    # 239262 = "HIFLD OPEN Integrated Compliance Information System (ICIS) Wastewater Treatment
+    # Plants" (the point layer; 240789 is a later copy of the same layer, also accepted).
+    # 239290 / 239287 are its SIC / NAICS code tables (no points) - ruled out by name.
+    ("HIFLD_wastewater_treatment_plants", "EPA ICIS wastewater treatment plants (HIFLD)",
+     239262, "Wastewater treatment", ("wastewater",), ("sic", "naics")),
 )
-# the old public FEMA / Esri mirrors of the same HIFLD layers - only with hifld_mirrors=True
-HIFLD_MIRRORS = {
-    "HIFLD_fire_ems_stations": "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/"
-                               "services/Structures_Medical_Emergency_Response_v1/FeatureServer/2",
-    "HIFLD_local_eoc": "https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/"
-                       "Critical_Infrastructure_Map_Service/FeatureServer/13",
-    "HIFLD_local_law_enforcement": "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/"
-                                   "services/Structures_Law_Enforcement_v1/FeatureServer/0",
-    "HIFLD_wastewater_treatment_plants": "https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/"
-                                         "rest/services/wastewater_treatment_plants_epa_frs/"
-                                         "FeatureServer/0",
-}
+# ND Department of Environmental Quality layers published on the ND GIS Hub (public ArcGIS
+# REST; DEQ's own ArcGIS Online services hold no facility points). DEQ does not publish
+# wastewater / NDPDES facilities, public water system plants or intakes as GIS layers.
+NDDEQ_HUB = "https://ndgishub.nd.gov/arcgis/rest/services/All_Locations/MapServer/"
+NDDEQ = (
+    ("NDDEQ_landfills", "ND DEQ permitted landfills (Division of Waste Management)", 12,
+     "Selected landfills permitted in North Dakota; WasteType = the primary waste accepted"),
+    ("NDDEQ_source_water_protection_community", "ND DEQ source water protection areas - "
+     "community public water systems", 16, "Drinking-water source protection areas of "
+     "community public water systems (PWS_NAME, PWS_TYPE, PWS_SOURCE); intakes not published"),
+    ("NDDEQ_source_water_protection_noncommunity", "ND DEQ source water protection areas - "
+     "non-community public water systems", 17, "Drinking-water source protection areas of "
+     "non-community public water systems; intakes not published"),
+)
 # 3DHP (USGS 3D Hydrography Program) in place of NHD: the pack keeps the names NHD_flowlines /
 # NHD_waterbodies (the Hazard format-1 reader, Setup's suite_fill and the Hazard / Runner
 # culvert tools ask for those names); the features are 3DHP with the NHD-style fields added
@@ -108,6 +115,13 @@ ABI = (
      "stream crossings", {"mode": "zip", "kind": "road_crossings"}),
 )
 ABI_STATE, ABI_STATE_NAME = "ND", "North Dakota"
+# every barrier is kept (removed / excluded ones too); barrier_status says which they are
+ABI_NOTE = ("barrier_status = present / removed / excluded / removed+excluded (from the "
+            "inventory's removed and excluded fields, both kept; removed: no longer a barrier, "
+            "yearremoved gives the year; excluded: left out of SARP's network analysis). "
+            "network = on-network / off-network.")
+AADT_NOTE = ("AADT: both HPMS_ND_<year> (FHWA HPMS) and NDDOT_traffic_counts are in the pack, "
+             "for comparison")
 # ND DWR MapService downloads (qlay = the layer NAME; SpatiaLite keeps the full field names)
 DWR_URL = "https://mapservice.dwr.nd.gov/php/downloadShape.php"
 DWR_MAPFILE = "/Volumes/Data/WebServer/newswcprivate/mapfiles/swc.map"
@@ -139,20 +153,24 @@ def _e(name, label, group, kind, spec, **info):
             "info": info}
 
 
-def registry(dwr_folder=None, hifld_folder=None, nlcd_file=None, hifld_mirrors=False):
+def registry(dwr_folder=None, hifld_folder=None, nlcd_file=None):
     """Every layer of the pack: [{name, label, group, kind, spec, info}]. kind: the engine's
     arcgis / nsi / osm / local_gpkg, or hydro (3DHP, NHD if it fails), abi (Aquatic Barrier
     Inventory CSV), ogr (a local vector file), dwr_download, nlcd (the raster), none (cannot
-    be fetched: listed as left out). Same names as the reference ND_Dam_Suite_Pack. Not in it
-    (1.5.0, PR #221): the FHWA HPMS traffic years - NDDOT traffic counts and the county roads
-    carry the AADT. hifld_mirrors: a HIFLD layer without a file is downloaded from the old
-    public mirror (else it is left out)."""
+    be fetched: listed as left out). Same names as the reference ND_Dam_Suite_Pack, plus ABI_*
+    and NDDEQ_*. Both AADT sources are kept: HPMS_ND_<year> (FHWA HPMS, newest year that
+    answers) and NDDOT_traffic_counts, for comparison. A HIFLD layer without a file is left
+    out (DataLumos page named)."""
     from .damsuite import hydro3dhp as H
     hydro = {h[0]: h for h in HYDRO}
     out = []
     for n, l, g, k, s in BP.datasets(None):
         if k == "first_of" and n == "HPMS_ND":
-            continue                                    # HPMS left out (NDDOT counts instead)
+            out.append(_e(n, l, g, k, s, note=AADT_NOTE))
+            continue
+        if n == "NDDOT_traffic_counts":
+            out.append(_e(n, l, g, k, s, note=AADT_NOTE))
+            continue
         if n in hydro:
             _n, label, group, which = hydro[n]
             flow = which == "flowlines"
@@ -175,18 +193,19 @@ def registry(dwr_folder=None, hifld_folder=None, nlcd_file=None, hifld_mirrors=F
                           source="HIFLD Open (Data Rescue Project copy, DataLumos project {}): "
                                  "{}".format(proj, os.path.basename(
                                      files[name].replace("/vsizip/", "")))))
-        elif hifld_mirrors:
-            url = HIFLD_MIRRORS[name]
-            out.append(_e(name, label, "hifld", "arcgis", {"url": url}, category=cat,
-                          source="HIFLD layer (public mirror) " + url.split("/rest/")[0]))
         else:
             out.append(_e(name, label, "hifld", "none", {}, category=cat, why=(
                 "HIFLD Open is kept by the Data Rescue Project on DataLumos, which needs a free "
                 "ICPSR login and its Terms of Use to download: download the GeoJSON or "
                 "shapefile zip from {} and put it in the HIFLD folder of the build "
                 "window".format(dl))))
+    for name, label, lid, note in NDDEQ:
+        out.append(_e(name, label, "nddeq", "arcgis", {"url": NDDEQ_HUB + str(lid)}, note=note,
+                      source="ND Department of Environmental Quality, via the ND GIS Hub "
+                             "(All_Locations layer {})".format(lid)))
     for name, label, spec in ABI:
         out.append(_e(name, label, "barriers", "abi", dict(spec), category="aquatic barrier",
+                      note=ABI_NOTE,
                       source="SARP / NACC National Aquatic Barrier Inventory ({})".format(
                           "public API" if spec["mode"] == "api" else
                           "national road-crossings download")))
@@ -317,7 +336,7 @@ def nd_bbox(pad=DEFAULT_PAD):
 # -------------------------------------------------------------------- build --
 def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifld_folder=None,
           nlcd_file=None, active=(), workers=None, progress=None, log=None, cancel=None,
-          area="North Dakota", hifld_mirrors=False):
+          area="North Dakota"):
     """Build or resume the pack in out_parent (see the module text). only: layer names (None =
     all pack layers). Returns a summary dict {pack2, pack1, manifest2, manifest1, failed,
     left_out}."""
@@ -326,7 +345,7 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
     cancel = cancel or (lambda: False)
     p2, p1, wk = check_target(out_parent, active)
     bbox = tuple(float(v) for v in (bbox or nd_bbox()))
-    table = registry(dwr_folder, hifld_folder, nlcd_file, hifld_mirrors)
+    table = registry(dwr_folder, hifld_folder, nlcd_file)
     known = set(t["name"] for t in table)
     want = set(only) if only else None
     if want:
@@ -405,6 +424,9 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
     for t in table:
         infos[t["name"]].pop("why", None)
         infos[t["name"]].update(prov.get(t["name"]) or {})
+        if t["kind"] == "first_of":                     # HPMS_ND -> HPMS_ND_<year>
+            for c in t["spec"]["choices"]:
+                infos.setdefault(c[0], dict(infos[t["name"]]))
     if cancel():
         raise BP.BuildCancelled("cancelled")
     progress(90.0, "Writing nd_offline_pack (format 1)\u2026")
@@ -668,9 +690,22 @@ def _numeric_columns(head, rows):
     return out
 
 
+def _yes(v):
+    return str(v).strip().lower() in ("yes", "true", "1", "y")
+
+
+def barrier_status(props):
+    """present / removed / excluded / removed+excluded from the inventory's removed and
+    excluded fields (any case; missing = no)."""
+    low = {k.lower(): v for k, v in props.items()}
+    flags = [k for k in ("removed", "excluded") if _yes(low.get(k))]
+    return "+".join(flags) if flags else "present"
+
+
 def abi_features(head, rows, bbox):
     """Points (lon / lat) of the rows inside bbox, every column kept (numbers as numbers),
-    plus network = on-network / off-network (from hasnetwork / onnetwork)."""
+    plus network = on-network / off-network (from hasnetwork / onnetwork) and barrier_status
+    (present / removed / excluded / removed+excluded; no row is dropped)."""
     la, lo = head.index("lat"), head.index("lon")
     nk = head.index("hasnetwork") if "hasnetwork" in head else \
         head.index("onnetwork") if "onnetwork" in head else -1
@@ -696,6 +731,7 @@ def abi_features(head, rows, bbox):
         if nk >= 0:
             on = str(r[nk]).strip().lower() in ("yes", "true", "1")
             props["network"] = "on-network" if on else "off-network"
+        props["barrier_status"] = barrier_status(props)
         feats.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [
             round(x, 6), round(y, 6)]}, "properties": props})
     return feats
@@ -719,13 +755,15 @@ def _run_abi(ctx, t, bbox, wk, refresh):
     counts = {}
     for f in feats:
         p = f["properties"]
-        for k in ("network", "excluded", "removed"):
+        for k in ("network", "barrier_status"):
             if k in p:
                 key = "{}={}".format(k, p[k])
                 counts[key] = counts.get(key, 0) + 1
     prov["counts"] = counts
     prov["network_field"] = ("network: on-network / off-network (from the inventory's "
                              "hasnetwork / onnetwork); one layer, not two")
+    prov["flag_field"] = ("barrier_status: present / removed / excluded / removed+excluded "
+                          "(removed and excluded barriers are kept, not dropped)")
     n = w.finish("{} (data version {})".format(prov.get("filter"), prov.get("data_version")))
     return n, prov
 
@@ -1082,14 +1120,12 @@ def main(argv=None):
     ap.add_argument("--dwr-folder")
     ap.add_argument("--hifld-folder")
     ap.add_argument("--nlcd-file")
-    ap.add_argument("--hifld-mirrors", action="store_true",
-                    help="HIFLD layers without a file: the old public mirrors")
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--verify", action="store_true", help="only check the built packs")
     a = ap.parse_args(argv)
     if a.list:
-        for t in registry(a.dwr_folder, a.hifld_folder, a.nlcd_file, a.hifld_mirrors):
+        for t in registry(a.dwr_folder, a.hifld_folder, a.nlcd_file):
             print("{:36s} {:11s} {:13s} {}".format(t["name"], t["group"], t["kind"], t["label"]))
         return 0
     if a.verify:
@@ -1099,7 +1135,7 @@ def main(argv=None):
     bbox = [float(v) for v in a.bbox.split(",")] if a.bbox else None
     only = [x.strip() for x in a.only.split(",") if x.strip()] or None
     r = build(a.out, only=only, bbox=bbox, refresh=a.refresh, dwr_folder=a.dwr_folder,
-              hifld_folder=a.hifld_folder, nlcd_file=a.nlcd_file, hifld_mirrors=a.hifld_mirrors)
+              hifld_folder=a.hifld_folder, nlcd_file=a.nlcd_file)
     ok, lines = verify(os.path.abspath(a.out))
     print("\n".join(lines))
     return 1 if r["failed"] or not ok else 0

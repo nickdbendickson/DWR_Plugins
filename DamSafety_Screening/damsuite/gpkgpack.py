@@ -51,6 +51,7 @@ GROUPS = (
     ("barriers", ("SARP_", "ABI_")),
     ("dwr", ("DWR_",)),
     ("hifld", ("HIFLD_",)),
+    ("nddeq", ("NDDEQ_",)),
     ("boundaries", ("ND_counties", "FEMA_flood_zones")),
 )
 RASTER_GROUP = "landcover"

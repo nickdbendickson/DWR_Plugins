@@ -7,8 +7,10 @@ reference ND_Dam_Suite_Pack; one build writes format 2 AND format 1 from the sam
 pass packcheck, open with offline_pack.open_pack and hold the same layers and counts; the
 format-1 manifest names the raster it cannot hold; sha256 in the manifests; a second run
 downloads nothing and rewrites nothing; the refusal rules; Setup's suite_fill finds the layers.
-PR #221: no HPMS; HIFLD only from user-supplied (DataLumos) files, clipped to ND; 3DHP under the
-NHD names with the NHD service as fallback; the SARP Aquatic Barrier Inventory (ABI_*)."""
+PR #221 / #223: HPMS_ND_2024 and NDDOT_traffic_counts both kept (AADT comparison); HIFLD only
+from user-supplied (DataLumos) files, clipped to ND, no mirror; 3DHP under the NHD names with
+the NHD service as fallback; the SARP Aquatic Barrier Inventory (ABI_*, removed / excluded
+barriers kept and flagged in barrier_status); ND DEQ layers (NDDEQ_*)."""
 import csv
 import io
 import json
@@ -26,14 +28,16 @@ from DamSafety_Data import pack_build as PB  # noqa: E402
 REFERENCE = (
     "DWR_dam_lines", "DWR_dams", "DWR_dugout_polygons", "DWR_dugouts", "DWR_unknown_structures",
     "FRA_grade_crossings", "HIFLD_fire_ems_stations", "HIFLD_local_eoc",
-    "HIFLD_local_law_enforcement", "HIFLD_wastewater_treatment_plants",
+    "HIFLD_local_law_enforcement", "HIFLD_wastewater_treatment_plants", "HPMS_ND_2024",
     "NARN_rail_lines", "NBI_bridges", "NDDOT_traffic_counts", "NDGISHUB_address_points",
     "ND_counties", "ND_county_roads", "ND_roads_NG911", "NHD_flowlines", "NHD_waterbodies",
     "NID_dams", "NSI_structures", "OSM_campgrounds", "OSM_lifelines", "OSM_places",
     "USA_Structures", "lifeline_eia_power_plants", "lifeline_nd_assisted_living",
     "lifeline_nd_basic_care", "lifeline_nd_hospitals", "lifeline_nd_skilled_nursing",
     "NLCD_2021_landcover", "OSM_crossings", "OSM_trailer_parks",
-    "ABI_dams", "ABI_small_barriers_surveyed", "ABI_road_crossings_unsurveyed")
+    "ABI_dams", "ABI_small_barriers_surveyed", "ABI_road_crossings_unsurveyed",
+    "NDDEQ_landfills", "NDDEQ_source_water_protection_community",
+    "NDDEQ_source_water_protection_noncommunity")
 HIFLD_FILES = {"HIFLD_fire_ems_stations": "Fire_and_Emergency_Medical_Service_EMS_Stations.gpkg",
                "HIFLD_local_eoc": "Local_Emergency_Operations_Centers_EOC.gpkg",
                "HIFLD_local_law_enforcement": "Local_Law_Enforcement_Locations.gpkg",
@@ -61,25 +65,36 @@ def test_registry_covers_reference_pack():
     assert kinds["NLCD_2021_landcover"] == "nlcd"
     cats = {t["name"]: t["info"].get("category") for t in table if t["group"] == "hifld"}
     assert cats["HIFLD_local_eoc"] == "Emergency operations center"
-    assert not any(n.startswith("HPMS") for n in _names(table))           # HPMS removed
-    assert "NDDOT_traffic_counts" in kinds                                 # NDDOT kept
+    assert kinds["HPMS_ND"] == "first_of" and "NDDOT_traffic_counts" in kinds  # both AADT
+    t = {x["name"]: x for x in table}
+    assert "NDDOT_traffic_counts" in t["HPMS_ND"]["info"]["note"]
+    for n in ("NDDEQ_landfills", "NDDEQ_source_water_protection_community",
+              "NDDEQ_source_water_protection_noncommunity"):
+        assert t[n]["kind"] == "arcgis" and t[n]["group"] == "nddeq"
+        assert t[n]["spec"]["url"].startswith("https://ndgishub.nd.gov/arcgis/rest/")
+    from DamSafety_Data.damsuite import gpkgpack as GP
+    assert GP.group_of("NDDEQ_landfills") == "nddeq"
     assert kinds["NHD_flowlines"] == kinds["NHD_waterbodies"] == "hydro"
     t = {x["name"]: x for x in table}
     assert "3DHP_all/MapServer/50" in t["NHD_flowlines"]["spec"]["url"]
     assert "NHDPlus_HR" in t["NHD_flowlines"]["spec"]["fallback"]["url"] or \
         "nhd" in t["NHD_flowlines"]["spec"]["fallback"]["url"].lower()
-    # HIFLD: no file -> left out with the DataLumos page; mirrors only on request
+    # HIFLD: no file -> left out with the DataLumos page (no mirror any more)
     h = t["HIFLD_local_eoc"]
     assert h["kind"] == "none" and "datalumos.org" in h["info"]["why"]
-    m = {x["name"]: x for x in PB.registry(hifld_mirrors=True)}
-    assert m["HIFLD_local_eoc"]["kind"] == "arcgis"
+    assert not hasattr(PB, "HIFLD_MIRRORS")
+    assert t["HIFLD_wastewater_treatment_plants"]["info"]["why"].count("/239262")
+    with pytest.raises(TypeError):
+        PB.registry(hifld_mirrors=True)
     for n in ("ABI_dams", "ABI_small_barriers_surveyed", "ABI_road_crossings_unsurveyed"):
         assert t[n]["kind"] == "abi" and t[n]["group"] == "barriers"
 
 
 def test_hifld_files(tmp_path):
     for fn in list(HIFLD_FILES.values()) + ["State_Emergency_Operations_Centers_EOC.gpkg",
-                                            "metadata.json"]:
+                                            "metadata.json",
+                                            "ICIS_Wastewater_Treatment_Plants_SIC_Codes.zip",
+                                            "Wastewater_Treatment_Plants_NAICS_Codes.csv"]:
         (tmp_path / fn).write_text("x")
     got = PB._hifld_files(str(tmp_path))
     assert {k: os.path.basename(v) for k, v in got.items()} == HIFLD_FILES
@@ -99,6 +114,20 @@ def test_abi_features():
     assert p["huc8"] == "09030001" and p["height"] == 12 and p["network"] == "on-network"
     assert f[1]["properties"]["network"] == "off-network" and f[1]["properties"]["height"] is None
     assert f[0]["geometry"] == {"type": "Point", "coordinates": [-100.8, 46.8]}
+    assert p["barrier_status"] == "present"
+
+
+def test_barrier_status_kept_and_flagged():
+    head = ["sarpid", "lat", "lon", "hasnetwork", "removed", "excluded", "yearremoved"]
+    rows = [["a", "46.8", "-100.8", "True", "no", "no", ""],
+            ["b", "46.8", "-100.8", "True", "yes", "no", "2019"],
+            ["c", "46.8", "-100.8", "False", "no", "yes", ""],
+            ["d", "46.8", "-100.8", "False", "yes", "yes", "2001"]]
+    f = PB.abi_features(head, rows, BBOX)
+    assert [x["properties"]["barrier_status"] for x in f] == [
+        "present", "removed", "excluded", "removed+excluded"]               # none dropped
+    assert f[1]["properties"]["removed"] == "yes" and f[1]["properties"]["yearremoved"] == 2019
+    assert PB.barrier_status({"Removed": "Yes"}) == "removed"
 
 
 def test_registry_local_dwr_folder(tmp_path):
@@ -146,9 +175,10 @@ def _abi_download(calls):
             body = json.dumps({"data_version": "4.4.0", "data_publish_date": "10/09/2026",
                                "citation": "NACC 2026", "terms_of_use": "credit NACC"})
         elif "state?id=ND" in url:
-            body = _abi_csv(["sarpid", "lat", "lon", "hasnetwork", "huc8", "state"], [
+            body = _abi_csv(["sarpid", "lat", "lon", "hasnetwork", "huc8", "state", "removed",
+                             "excluded"], [
                 ["s%d" % i, "46.8", str(-100.8 + 0.001 * i), "True" if i else "False",
-                 "09030001", "ND"] for i in range(3)])
+                 "09030001", "ND", "yes" if i == 2 else "no", "no"] for i in range(3)])
         else:
             head = ["SARPID", "lat", "lon", "OnNetwork", "Surveyed", "State"]
             data = _abi_csv(head, [["c1", "46.8", "-100.8", "yes", "not likely", "North Dakota"],
@@ -264,7 +294,23 @@ def test_build_writes_both_formats(tmp_path, mocked):
     assert m2["datasets"]["HIFLD_fire_ems_stations"]["category"] == "Fire station"
     assert m1["datasets"]["HIFLD_fire_ems_stations"]["category"] == "Fire station"
     assert m2["datasets"]["DWR_dams"]["count"] == 4             # the point outside is clipped
-    assert not any(n.startswith("HPMS") for n in m2["datasets"])
+    # both AADT sources, documented in both manifests and LAYERS.txt
+    for m in (m1, m2):
+        assert "HPMS_ND_2024" in m["datasets"] and "NDDOT_traffic_counts" in m["datasets"]
+        assert "for comparison" in m["datasets"]["HPMS_ND_2024"]["note"]
+        assert "for comparison" in m["datasets"]["NDDOT_traffic_counts"]["note"]
+    assert m2["datasets"]["HPMS_ND_2024"]["file"] == "roads/HPMS_ND_2024.gpkg"
+    layers = (p2 / "LAYERS.txt").read_text()
+    assert "for comparison" in layers and "barrier_status" in layers
+    # ND DEQ layers: nddeq/ folder, URL / date / sha256 in both formats
+    for n in ("NDDEQ_landfills", "NDDEQ_source_water_protection_community",
+              "NDDEQ_source_water_protection_noncommunity"):
+        assert m2["datasets"][n]["file"] == "nddeq/{}.gpkg".format(n)
+        assert m1["datasets"][n]["count"] == m2["datasets"][n]["count"] == 3
+        assert m1["datasets"][n]["url"] and m2["datasets"][n]["fetched"]
+        assert len(m2["datasets"][n]["sha256"]) == 64 and m1["sha256"]
+        assert "Environmental Quality" in m1["datasets"][n]["source"]
+    assert "NDDEQ" in layers
     # HIFLD from the folder, the Minnesota point dropped; source page in both manifests
     for m in (m1, m2):
         e = m["datasets"]["HIFLD_local_eoc"]
@@ -277,7 +323,11 @@ def test_build_writes_both_formats(tmp_path, mocked):
     d = m2["datasets"]["ABI_dams"]
     assert d["count"] == 3 and d["file"].startswith("barriers/"), d
     assert d["data_version"] == "4.4.0" and d["citation"] and d["terms_of_use"]
-    assert d["counts"] == {"network=on-network": 2, "network=off-network": 1}
+    assert d["counts"] == {"network=on-network": 2, "network=off-network": 1,
+                           "barrier_status=present": 2, "barrier_status=removed": 1}
+    assert "barrier_status" in d["flag_field"] and "barrier_status" in d["note"]
+    assert sorted(f["properties"]["barrier_status"] for f in OP.open_pack(str(p1)).query(
+        "ABI_dams", BBOX)) == ["present", "present", "removed"]
     rc = m1["datasets"]["ABI_road_crossings_unsurveyed"]
     assert rc["count"] == 1 and "not likely" in rc["filter"] and rc["data_version"] == "4.4.0"
     assert [f["properties"]["sarpid"] for f in OP.open_pack(str(p1)).query(
