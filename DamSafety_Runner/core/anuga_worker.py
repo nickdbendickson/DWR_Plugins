@@ -351,6 +351,90 @@ class Hydrograph:
         return float(np.interp(t, self.t, self.q, right=0.0))
 
 
+INFLOW_MAX_DT_ENV = "NDBREACH_ANUGA_INFLOW_MAX_DT"
+INFLOW_MAX_DT_FLOOR_S = 0.5     # never cap below this (a very finely sampled hydrograph)
+INFLOW_MAX_DT_PER_DURATION = 100   # and at most 1/100 of the hydrograph's duration
+
+
+def inflow_max_timestep(hyd_t, hyd_q, yieldstep, environ=None):
+    """3.10.94 (DWR-3034 REVIEW 9.2, G5): the largest ANUGA time step allowed while the breach
+    hydrograph is still flowing, or None (no cap).
+
+    On a dry domain no CFL limit applies, so ANUGA's first step is the whole yield step (300 s
+    on DWR-3034). Inlet_operator adds 0.5*(Q(t)+Q(t+dt))*dt per step, so one 300 s step over
+    the rising limb booked 0.5*Q(300 s)*300 = 9,994 m3 against the hydrograph's true 5,929 m3
+    (+4,065 m3, G5 ratio 1.0461). Capping the step at the hydrograph's own sampling interval
+    makes the inlet integrate the hydrograph as sampled.
+
+    Cap = min(median positive hyd_t interval, duration / 100, yieldstep), not below 0.5 s.
+    NDBREACH_ANUGA_INFLOW_MAX_DT: a number of seconds overrides it; 0 / off = no cap (the
+    pre-3.10.94 behaviour)."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(INFLOW_MAX_DT_ENV, "") or "").strip().lower()
+    if raw in ("0", "off", "false", "no", "none"):
+        return None
+    if raw:
+        try:
+            v = float(raw)
+        except ValueError:
+            v = None
+        if v is not None:
+            return v if v > 0 else None
+    t = np.asarray(hyd_t, float).ravel()
+    q = np.asarray(hyd_q, float).ravel()
+    if t.size < 2 or not np.any(q > 0):
+        return None
+    d = np.diff(t)
+    d = d[d > 0]
+    if not d.size:
+        return None
+    cap = min(float(np.median(d)), float(t[-1] - t[0]) / INFLOW_MAX_DT_PER_DURATION)
+    if yieldstep and yieldstep > 0:
+        cap = min(cap, float(yieldstep))
+    return max(cap, INFLOW_MAX_DT_FLOOR_S)
+
+
+def inflow_end_time(hyd_t, hyd_q):
+    """The time after which the hydrograph adds no more water (its last Q > 0 point's next
+    sample; np.interp(right=0) gives 0 after hyd_t[-1])."""
+    t = np.asarray(hyd_t, float).ravel()
+    q = np.asarray(hyd_q, float).ravel()
+    nz = np.nonzero(q > 0)[0]
+    if not nz.size:
+        return float(t[0]) if t.size else 0.0
+    return float(t[min(int(nz[-1]) + 1, t.size - 1)])
+
+
+class InflowStepCap:
+    """3.10.94: holds domain.evolve_max_timestep at `cap` while the hydrograph flows and gives
+    the old limit back at the first yield step at or after its end (so the long recession
+    tail is not slowed). ANUGA's set_evolve_max_timestep only ever lowers the limit, so the
+    attribute is set directly. A resumed checkpoint carries the capped value; update() at the
+    first yield after the resume releases it when the hydrograph has ended."""
+
+    def __init__(self, domain, cap, t_end):
+        self.cap, self.t_end = cap, float(t_end)
+        self.old = getattr(domain, "evolve_max_timestep", None)
+        self.active = False
+        self.released_t = None
+        if cap is not None and float(domain.get_time()) < self.t_end:
+            if self.old is None or cap < float(self.old):
+                domain.evolve_max_timestep = float(cap)
+                self.active = True
+
+    def update(self, domain, t):
+        if self.active and float(t) >= self.t_end:
+            if self.old is not None:
+                domain.evolve_max_timestep = self.old
+            self.active = False
+            self.released_t = float(t)
+
+    def record(self):
+        return {"max_timestep_s": None if self.cap is None else round(float(self.cap), 4),
+                "applied": self.cap is not None and (self.active or self.released_t is not None),
+                "hydrograph_end_s": round(self.t_end, 3), "released_at_s": self.released_t}
+
+
 class Constant:
     """A constant function of time (picklable; ANUGA turns a plain number into a lambda)."""
 
@@ -1166,8 +1250,15 @@ def main(job_path, out_path):
         except Exception as e:      # noqa: BLE001 - a diagnostic never stops the run
             print("DT_DIAG off: {}".format(str(e)[:200]), flush=True)
             dtdiag = None
+    # 3.10.94: no single dry-domain step longer than the hydrograph interval (G5, DWR-3034)
+    icap = InflowStepCap(domain, inflow_max_timestep(hyd_t, hyd_q, ystep),
+                         inflow_end_time(hyd_t, hyd_q))
+    if icap.active:
+        print("PROGRESS 0 inflow step cap: {:.3g} s until t={:.0f}s".format(icap.cap, icap.t_end),
+              flush=True)
     try:
         for t in domain.evolve(yieldstep=ystep, finaltime=sim_time):
+            icap.update(domain, t)
             yc = clock.tick(domain, t)
             print("PROGRESS {:.2f} t={:.0f}s{}".format(100.0 * t / sim_time, t,
                                                        clock.suffix(yc)), flush=True)
@@ -1260,6 +1351,7 @@ def main(job_path, out_path):
         v0 = None
     balance = volume_balance(info["initial_volume_m3"], injected, vol_left, b_in, fs, v_solver,
                              solver_initial=v0, de=de)
+    balance["inflow_step_cap"] = icap.record()
     if mirror["boundaries"]:
         balance["inward_edges_mirrored"] = {"max_edges": mirror["max"],
                                             "yield_steps": mirror["steps"],
