@@ -187,6 +187,28 @@ the Runner finds `envs\*anuga*\python.exe` under `%USERPROFILE%\miniforge3`,
   again with `NDBREACH_ANUGA_RESUME=1` and the same settings. The preparation (LISFLOOD-FP
   pass, mesh input, fine bed) is redone; only the ANUGA time stepping continues.
 
+## QA maps on aerial imagery (3.11.0)
+`qa_inflow_map.png` and `qa_depth_map.png` are drawn over an aerial photo: ND DWR NAIP 2025
+(WMS), then Esri World Imagery, then USGS imagery - the first that answers. Esri street / town
+labels sit above the flood (online imagery only); each map has a scale bar (m and ft), a
+true-north arrow and a credit line (imagery, flight dates, CRS, plugin version).
+
+- `QA_BASEMAP` (Processing, advanced) / `qa_basemap` (run JSON, CLI): `auto` (default; imagery,
+  hillshade when offline), `imagery` (warns when it falls back) or `hillshade`.
+  `QA_BASEMAP_LABELS` / `qa_basemap_labels`: labels on (default) or off. A run JSON without
+  them runs as `auto`.
+- Offline (`ND_DAM_OFFLINE`, `NDBREACH_BASEMAP_OFFLINE`, `ND_DAM_HAZARD_OFFLINE_ONLY`, or
+  `ND_DAM_SUITE` set): no request; the offline pack's imagery, else the DEM hillshade as
+  before. 30 s network budget per map; a map never fails the run.
+- Tile cache: the user cache folder, `DamSafety/basemap_cache` (`NDBREACH_BASEMAP_CACHE` =
+  another folder or `off`; entries 90 days; `NDBREACH_BASEMAP_CACHE_MB`, default 200), never
+  in a run or input folder. `NDBREACH_BASEMAP_ORDER` / `NDBREACH_BASEMAP_SOURCES` (JSON) change
+  the sources.
+- Proxy: QGIS's proxy (`damsuite.netproxy`) when set, else the system proxy; certificates from
+  the system store plus `certifi`; checking is never turned off. Not yet tried behind a proxy
+  on Windows or macOS.
+- The basemap settings are not part of the ensemble cache key (pictures only).
+
 ## ANUGA gmsh mesh: road and rail crests held at the 1 m DEM (3.10.91)
 With the gmsh mesher, ANUGA's bed is sampled at the mesh vertices / centroids, so a road
 embankment narrower than a triangle could read metres low (DWR-2801, Hwy 18 crest: 938.8 ft
