@@ -264,7 +264,8 @@ class NDBreachRunnerDialog(QDialog):
         self.datum_combo = QComboBox()                       # 3.12.0: ELEV_DATUM
         for key, label in zip(pl.ELEV_DATUM_CHOICES, ("Auto (as stated; else NGVD29)",
                                                       "NAVD88 (use as given)",
-                                                      "NGVD29 (convert to NAVD88)")):
+                                                      "NGVD29 (convert to NAVD88)",
+                                                      "Local (use DEM)")):
             self.datum_combo.addItem(label, key)
         self.datum_combo.setToolTip(pl.ELEV_DATUM_TIP)
         self.datum_combo.currentIndexChanged.connect(self._changed)

@@ -13,6 +13,22 @@ PROJ's us_noaa_vertconc.tif is tried when both are installed (no network request
 network access is left as it is set); else the values are used unconverted, with a warning.
 No web service (NCAT) is called.
 
+Local datums (1.18.1, Nick 2026-10-28: "if elevation is 100 or similar, they would be local
+and would have to take actual elevations from dem"): plans often use an assumed datum (top of
+dam 100.0 ft). local_check() flags a top of dam (or, with no top, a pool) as local when
+  * it lies outside ND_MIN_FT .. ND_MAX_FT (500 - 3,600 ft; ND ground is about 750 ft at the
+    Red River to 3,506 ft at White Butte, so no ND elevation on NGVD29 / NAVD88 is outside it),
+  * it is more than DEM_TOL_FT (50 ft) from the DEM crest near the dam after the NGVD29 shift
+    (the NGVD29 / NAVD88 difference in ND is under 2.1 ft; the inventory heights are rarely
+    off by more than a few feet), or
+  * it is a round value (a multiple of 100 ft: 100, 1000, 1100 ...) more than ROUND_TOL_FT
+    (10 ft) from the DEM crest.
+A local value is not datum-converted: the top of dam becomes the DEM crest and every other
+dam elevation keeps its height relative to the local top (DEM top - (local top - value)).
+The record then has source_datum "local (assumed)" (or "local" when stated / chosen), method
+"DEM", the original values in fields and a warning. MODE "local" (the window's "Local (use
+DEM)") forces it; an explicit NAVD88 / NGVD29 choice turns the detection off.
+
     rec = plan(lon, lat, stated="", override="auto")
     rec["shift_ft"], rec["applied"], rec["warnings"]
     new = convert_ft(1071.15, rec, "top_of_dam_ft")    # 1072.239 at DWR-2801 (NCAT: 1072.24)
@@ -34,7 +50,15 @@ NGVD29 = "NGVD29"
 LOCAL = "local"
 TARGET = NAVD88
 AUTO = "auto"
-MODES = (AUTO, NAVD88, NGVD29)
+MODES = (AUTO, NAVD88, NGVD29, LOCAL)
+LOCAL_ASSUMED = "local (assumed)"   # source_datum of a value detected as local
+METHOD_DEM = "DEM"
+# local_check thresholds (see the module text)
+ND_MIN_FT = 500.0
+ND_MAX_FT = 3600.0
+DEM_TOL_FT = 50.0
+ROUND_TOL_FT = 10.0
+ROUND_STEP_FT = 100.0
 NAVD88_TAG = "NAVD88 ft"          # dam.json top_of_dam_datum of a converted (or NAVD88) value
 FT = 0.3048
 METHOD_GRID = "VERTCON grid (NOAA vertconc.gtx 2018, bundled ND clip, bilinear)"
@@ -65,11 +89,11 @@ def classify(text):
 
 
 def mode(text):
-    """The override setting from a text or an index (0 auto, 1 NAVD88, 2 NGVD29)."""
+    """The override setting from a text or an index (0 auto, 1 NAVD88, 2 NGVD29, 3 local)."""
     if isinstance(text, int) and not isinstance(text, bool):
         return MODES[text] if 0 <= text < len(MODES) else AUTO
     c = classify(text)
-    return c if c in (NAVD88, NGVD29) else AUTO
+    return c if c in (NAVD88, NGVD29, LOCAL) else AUTO
 
 
 def _grid():
@@ -138,7 +162,7 @@ def shift_m(lon, lat, use_pyproj=True):
 
 
 def resolve(stated="", override=AUTO):
-    """(source datum, how): the override when it is NAVD88 / NGVD29; else the stated datum
+    """(source datum, how): the override when it is NAVD88 / NGVD29 / local; else the stated datum
     when recognised; else (NGVD29, "assumed")."""
     o = mode(override)
     if o != AUTO:
@@ -162,9 +186,13 @@ def plan(lon, lat, stated="", override=AUTO, use_pyproj=True, what="the dam elev
             "set by the engineer" if how == "override" else "as stated")
         return rec
     if src == LOCAL:
-        rec["method"] = "none (local datum: not an elevation on the DEM's datum)"
-        rec["warnings"].append("The datum of {} is local ({!r}): they are not converted and "
-                               "cannot be compared with the NAVD88 DEM.".format(what, stated))
+        rec["method"] = METHOD_DEM
+        rec["local"] = True
+        rec["warnings"].append("The datum of {} is local ({}): they are not datum-converted; "
+                               "the top of dam is taken from the DEM and the other elevations "
+                               "keep their height below it.".format(
+                                   what, "set by the engineer" if how == "override"
+                                   else repr(stated)))
         return rec
     s, method = shift_m(lon, lat, use_pyproj)
     if s is None:
@@ -184,6 +212,37 @@ def plan(lon, lat, stated="", override=AUTO, use_pyproj=True, what="the dam elev
             "they already are.".format(what, " ({!r})".format(stated) if stated else "",
                                        s / FT, float(lat), float(lon)))
     return rec
+
+
+def local_check(value_ft, dem_crest_ft=None, shift_ft=0.0, what="top of dam"):
+    """(is_local, reason) for one elevation (ft, as given) against ND's range and, when given,
+    the DEM crest near the dam (ft NAVD88). shift_ft: the NGVD29 shift the value would get."""
+    try:
+        v = float(value_ft)
+    except (TypeError, ValueError):
+        return False, ""
+    if not math.isfinite(v):
+        return False, ""
+    if v < ND_MIN_FT or v > ND_MAX_FT:
+        return True, ("the {} {:.2f} ft is outside North Dakota's range of ground elevations "
+                      "(about 750 - 3,510 ft; checked {:.0f} - {:.0f} ft)".format(
+                          what, v, ND_MIN_FT, ND_MAX_FT))
+    try:
+        c = float(dem_crest_ft) if dem_crest_ft is not None else None
+    except (TypeError, ValueError):
+        c = None
+    if c is None or not math.isfinite(c):
+        return False, ""
+    d = v + float(shift_ft or 0.0) - c
+    if abs(d) > DEM_TOL_FT:
+        return True, ("the {} {:.2f} ft is {:+.1f} ft from the DEM crest near the dam "
+                      "({:.2f} ft NAVD88; more than {:.0f} ft)".format(what, v, d, c,
+                                                                       DEM_TOL_FT))
+    if abs(v / ROUND_STEP_FT - round(v / ROUND_STEP_FT)) < 1e-9 and abs(d) > ROUND_TOL_FT:
+        return True, ("the {} {:.2f} ft is a round value {:+.1f} ft from the DEM crest near "
+                      "the dam ({:.2f} ft NAVD88; more than {:.0f} ft)".format(
+                          what, v, d, c, ROUND_TOL_FT))
+    return False, ""
 
 
 def convert_ft(value_ft, rec, field=None):
@@ -229,18 +288,30 @@ def summary_lines(rec):
     if not rec:
         return []
     how = {"stated": "stated", "assumed": "NOT STATED - assumed",
-           "override": "set by the engineer"}.get(rec.get("how"), rec.get("how") or "")
+           "override": "set by the engineer",
+           "detected": "DETECTED from the values: " + str(rec.get("local_reason") or "")}.get(rec.get("how"), rec.get("how") or "")
     lines = ["Source datum: {} ({}{}); target NAVD88 (the DEM's).".format(
         rec.get("source_datum"), how,
         ", given as {!r}".format(rec["stated"]) if rec.get("stated") else "")]
-    if rec.get("applied"):
+    if rec.get("local"):
+        lines.append("Local datum: not converted; elevations taken from the DEM ({}{}).".format(
+            rec.get("dem_crest_from") or "DEM crest",
+            "; DEM top - local top = {:+.2f} ft".format(rec["local_offset_ft"])
+            if rec.get("local_offset_ft") is not None else ""))
+    elif rec.get("applied"):
         lines.append("Shift NGVD29 -> NAVD88: {:+.3f} ft ({:+.4f} m) at lat {}, lon {}; method: "
                      "{}.".format(rec.get("shift_ft", 0.0), rec.get("shift_m", 0.0),
                                   rec.get("lat"), rec.get("lon"), rec.get("method")))
     else:
         lines.append("No shift applied; method: {}.".format(rec.get("method")))
     for k, v in sorted((rec.get("fields") or {}).items()):
-        if rec.get("applied"):
+        if rec.get("local") and v.get("navd88") is None:
+            lines.append("{}: {:.2f} local -> not used ({})".format(
+                k, v["source"], v.get("note") or "no local top to place it"))
+        elif rec.get("local"):
+            lines.append("{}: {:.2f} local -> {:.2f} NAVD88 (DEM)".format(k, v["source"],
+                                                                         v["navd88"]))
+        elif rec.get("applied"):
             lines.append("{}: {:.2f} {} -> {:.2f} NAVD88".format(k, v["source"],
                                                                  rec.get("source_datum"),
                                                                  v["navd88"]))

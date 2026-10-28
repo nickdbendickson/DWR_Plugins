@@ -1883,9 +1883,12 @@ BATCH_SCENARIOS = [SCENARIOS[0][1], SCENARIOS[1][1],
                    "Per dam: flood if its folder has inputs/pmf_inflow.csv, else sunny day"]
 # 3.12.0: the source datum of the dam elevations (core/vdatum_run.py; damsuite/vdatum.py)
 ELEV_DATUMS = (("auto", "Auto: as stated in dam.json / the inventory (NGVD29 when not stated, "
-                        "with a warning)"),
+                        "with a warning; a local datum such as a 100 ft top is detected and "
+                        "taken from the DEM)"),
                ("NAVD88", "NAVD88 (the DEM's datum): used as given"),
-               ("NGVD29", "NGVD29: converted to NAVD88 with VERTCON at the dam"))
+               ("NGVD29", "NGVD29: converted to NAVD88 with VERTCON at the dam"),
+               ("local", "Local (use DEM): top of dam from the DEM, the other elevations kept "
+                         "relative to it"))
 ELEV_NOTE = "ft; converted NGVD29 -> NAVD88 unless stated as NAVD88"
 
 

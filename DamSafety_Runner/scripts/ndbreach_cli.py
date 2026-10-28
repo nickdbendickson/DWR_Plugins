@@ -205,7 +205,7 @@ MODEL_KEYS = {
     "anuga_buffer_m": ("anuga_buffer_m", ("num", 0.0, None)),
     "arrival_contours_hr": ("arrival_contours_hr", ("nums",)),
     # 3.12.0: the datum of the dam elevations (algorithms.ELEV_DATUMS; core/vdatum_run.py)
-    "elev_datum": ("elev_datum", ("enum", ("auto", "NAVD88", "NGVD29"))),
+    "elev_datum": ("elev_datum", ("enum", ("auto", "NAVD88", "NGVD29", "local"))),
 }
 SECTIONS = {
     "dem": {"path": ("path",), "z_units": ("enum", gdal_io.Z_CHOICES), "crs": ("str",),
@@ -1845,10 +1845,11 @@ def build_parser():
                        "CPUs is clamped to them for ANUGA")
 
     def datum(p):                                                 # 3.12.0
-        p.add_argument("--elev-datum", choices=("auto", "NAVD88", "NGVD29"), default=None,
+        p.add_argument("--elev-datum", choices=("auto", "NAVD88", "NGVD29", "local"), default=None,
                        help="datum of the dam elevations (overrides model.elev_datum). auto "
                        "(default): NGVD29 unless stated, converted to NAVD88 (the DEM) with "
-                       "VERTCON at the dam")
+                       "VERTCON at the dam; local: top of dam from the DEM, the rest kept "
+                       "relative to it")
 
     p = sub.add_parser("run", help="run one dam (the same outputs as the QGIS tool)")
     p.add_argument("config")

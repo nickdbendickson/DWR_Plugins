@@ -927,6 +927,31 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             raise brmod.BreachInputError("{}: no DEM data at the dam point".format(dam.dam_id))
         report["dem_crest_from"] = "DEM near the dam point (98th percentile, 30 m)"
     report["dem_crest_ft"] = round(crest_dem_ft, 2)
+    # --- 3.12.1 / damsuite 1.18.1: a local (assumed) datum - the top from the DEM ---------
+    # (core/vdatum_run.apply_local): e.g. a top of dam of 100.0 ft on the plans' own datum
+    if not spec and st.vertical_datum is not None:
+        try:
+            lc_ft, lc_from = crest_dem_ft, report.get("dem_crest_from", "DEM near the dam point")
+            if getattr(dam, "crest_line_xy", None):
+                c2, how2 = vdrun.dem_crest_on_line(terrain_src.read, dam.crest_line_xy,
+                                                   min(cs, 1.0))
+                if c2 is not None:
+                    lc_ft, lc_from = c2, how2
+            vrec, changed = vdrun.apply_local(dam, st, lc_ft, lc_from, log)
+            if changed:
+                report["vertical_datum"] = vdrun.VD.public(vrec)
+                for k in ("top_of_dam_ft", "pmf_max_wse_ft", "breach_bottom_ft"):
+                    report["dam"][k] = getattr(dam, k, None)
+                if report["settings"].get("flood") and st.flood is not None:
+                    report["settings"]["flood"].update(normal_pool_ft=st.flood.normal_pool_ft,
+                                                       trigger_value=st.flood.trigger_value)
+                warnings[:] = [w for w in warnings if "NGVD29 was assumed" not in w]
+                for w in vrec.get("warnings") or []:
+                    if w not in warnings:
+                        warnings.append(w)
+                report["crest_source"] = "DEM (local datum): " + lc_from
+        except Exception as e:                               # noqa - never stop the run for this
+            warnings.append("Local datum not checked: {}: {}".format(type(e).__name__, e))
     if not spec and dam.top_of_dam_ft is not None and dam.dam_height_ft:
         diff = crest_dem_ft - dam.top_of_dam_ft
         if abs(diff) > max(0.6 * dam.dam_height_ft, 8.0):

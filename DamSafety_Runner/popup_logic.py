@@ -89,12 +89,17 @@ DEFAULT_SETTINGS = {"dams_folder": "", "dam_id": "", "dem": "", "settings_file":
                     "hecras_dam_axis": "crest"}
 CARVE_CHOICES = ("off", "auto", "on")   # core/reservoir_carve.MODES, the RESERVOIR_CARVE enum
 # 3.12.0: the ELEV_DATUM enum (algorithms.ELEV_DATUMS): the source datum of the dam elevations
-ELEV_DATUM_CHOICES = ("auto", "NAVD88", "NGVD29")
+ELEV_DATUM_CHOICES = ("auto", "NAVD88", "NGVD29", "local")
 ELEV_DATUM_TIP = ("The datum of the dam elevations (top of dam, normal / PMF pool, spillway "
                   "rating, breach bottom). The DEM is NAVD88. Auto: the datum dam.json or the "
                   "inventory states; NGVD29 when none is stated (converted to NAVD88 with "
                   "VERTCON at the dam, with a warning). NAVD88: used as given. NGVD29: always "
-                  "converted. The shift is written to the run report and dam.json.")
+                  "converted. Local (use DEM): the elevations are on the plans' own "
+                  "datum (e.g. top of dam 100.0 ft): the top of dam is read from the DEM and "
+                  "the pools, spillway and breach bottom keep their height below it; Auto "
+                  "detects this (outside 500 - 3,600 ft, more than 50 ft from the DEM crest, or "
+                  "a round 100 ft multiple more than 10 ft from it). The shift is written to "
+                  "the run report and dam.json.")
 PLUGIN_KEY = "ndbreach"                 # the suite settings file key (damsuite.versions)
 TAB_ORDER = tuple(t for t, _tools in TABS)
 
@@ -587,7 +592,11 @@ def datum_info(folder, mode="auto"):
     elif src == VD.NAVD88:
         line += "; used as given (the DEM is NAVD88)"
     else:
-        line += "; local datum: not used as elevations"
+        line += "; local datum: the top of dam is taken from the DEM when it runs"
+    if src != VD.LOCAL and rec is not None and VD.mode(mode) == VD.AUTO:
+        hit, why = VD.local_check(rec.get("top_of_dam_ft"))
+        if hit:
+            line += ". Looks local ({}): the run will take the top from the DEM".format(why)
     return line
 
 

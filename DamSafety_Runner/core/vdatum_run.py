@@ -12,6 +12,8 @@ Not shifted: a top of dam read from the DEM (the run's own estimate), the tailwa
 (TW_STAGE_FT, DEM datum by definition), culvert inverts (checked against the LiDAR bed by
 structures.reconcile_inverts) and anything in metres from the DEM.
 
+Local datums (3.12.1, damsuite 1.18.1): apply_local() runs after the run reads the DEM crest (see there).
+
 apply() runs once per run: st.vertical_datum holds the record afterwards and a second call
 returns it unchanged (no double conversion)."""
 from ..damsuite import vdatum as VD
@@ -118,6 +120,154 @@ def apply(dam, st, lon, lat, stated=None, override=None, top_is_dem=False, log=N
         for line in VD.summary_lines(rec):
             log("Elevation datum: " + line)
     return rec
+
+
+def dem_crest_on_line(read, line_xy, cell_m=1.0, half_width_m=3.0):
+    """(crest ft, how) from the DEM along the dam line: the median of the DEM cells within
+    half_width_m of the line (the embankment crest is most of the line; the median ignores the
+    higher abutment ends and a low spillway / notch). (None, why) without a line or data."""
+    import numpy as np
+    pts = [(float(x), float(y)) for x, y in (line_xy or [])]
+    if len(pts) < 2:
+        return None, "no dam line"
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    pad = half_width_m + 2.0 * cell_m
+    g = read((min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad), cell_m)
+    z = g.masked()
+    X, Y = np.meshgrid(g.x_centers(), g.y_centers())
+    dist = np.full(z.shape, np.inf)
+    for (x0, y0), (x1, y1) in zip(pts[:-1], pts[1:]):
+        dx, dy = x1 - x0, y1 - y0
+        L2 = dx * dx + dy * dy
+        t = np.clip(((X - x0) * dx + (Y - y0) * dy) / L2, 0.0, 1.0) if L2 > 0 else 0.0
+        dist = np.minimum(dist, np.hypot(X - (x0 + t * dx), Y - (y0 + t * dy)))
+    zz = np.asarray(z, dtype=float)
+    sel = (dist <= half_width_m) & np.isfinite(zz)
+    if hasattr(z, "mask"):
+        sel &= ~np.ma.getmaskarray(z)
+    if not sel.any():
+        return None, "no DEM data along the dam line"
+    return float(np.median(zz[sel])) / FT, "DEM along the dam line (median within {:.0f} m)"\
+        .format(half_width_m)
+
+
+def apply_local(dam, st, dem_crest_ft, crest_from="DEM near the dam point", log=None):
+    """3.12.1 (damsuite 1.18.1) local datums (damsuite.vdatum.local_check): after the run has read the DEM crest,
+    a dam whose elevations are local (stated / chosen "local", or detected in auto) has its
+    top of dam replaced by the DEM crest and every other dam elevation moved by the same
+    amount (DEM top - (local top - value)), instead of the NGVD29 shift. Without a local top
+    the other elevations cannot be placed: the pools / breach bottom are dropped (the run
+    takes them from the DEM / the spillway rating) and a rating or outlets are left as given,
+    each with a warning. Returns (record, changed). Once per run."""
+    log = log or (lambda m: None)
+    rec = getattr(st, "vertical_datum", None)
+    if rec is None or rec.get("_local_done") or dem_crest_ft is None:
+        return rec, False
+    if rec.get("dam_id") is not None and getattr(dam, "dam_id", None) != rec.get("dam_id"):
+        return rec, False
+    f = rec.setdefault("fields", {})
+    if not f:                       # no dam elevation given: all from the DEM already
+        return rec, False
+    forced = bool(rec.get("local"))
+    why = ""
+    if not forced:
+        if rec.get("how") == "override":                # NAVD88 / NGVD29 chosen: no detection
+            return rec, False
+        sh = float(rec.get("shift_ft") or 0.0) if rec.get("applied") else 0.0
+        if "top_of_dam_ft" in f:
+            hit, why = VD.local_check(f["top_of_dam_ft"]["source"], dem_crest_ft, sh)
+        else:                       # no top given (DEM top): a pool far above the DEM crest
+            hit = False
+            for k, label in (("normal_pool_ft", "normal pool"),
+                             ("pmf_max_wse_ft", "PMF maximum pool"),
+                             ("trigger_wse_ft", "failure-trigger pool")):
+                if k in f:
+                    hit, why = VD.local_check(f[k]["source"], None, 0.0, label)
+                    if not hit and f[k]["source"] + sh - dem_crest_ft > VD.DEM_TOL_FT:
+                        hit, why = True, ("the {} {:.2f} ft is more than {:.0f} ft above the "
+                                          "DEM crest near the dam ({:.2f} ft)".format(
+                                              label, f[k]["source"], VD.DEM_TOL_FT,
+                                              dem_crest_ft))
+                    if hit:
+                        break
+        if not hit:
+            return rec, False
+    rec["_local_done"] = True
+    top = f.get("top_of_dam_ft")
+    offset = float(dem_crest_ft) - top["source"] if top else None
+    old_m = float(rec.get("_shift_m", 0.0)) if rec.get("applied") else 0.0
+    dropped, kept = [], []
+
+    def place(key):
+        e = f.get(key)
+        if e is None:
+            return None
+        if offset is None:
+            e.update(navd88=None, _navd88=None, note="no local top of dam to place it")
+            dropped.append(key)
+            return None
+        new = e["source"] + offset
+        e.update(navd88=round(new, 3), _navd88=new)
+        return new
+
+    if top:
+        dam.top_of_dam_ft = float(dem_crest_ft)
+        top.update(navd88=round(float(dem_crest_ft), 3), _navd88=float(dem_crest_ft))
+    for name in ("pmf_max_wse_ft", "breach_bottom_ft"):
+        if name in f:
+            setattr(dam, name, place(name))
+    fl = getattr(st, "flood", None)
+    if fl is not None:
+        if "normal_pool_ft" in f:
+            fl.normal_pool_ft = place("normal_pool_ft")
+        if "trigger_wse_ft" in f and fl.trigger == "wse":
+            v = place("trigger_wse_ft")
+            if v is None:
+                kept.append("trigger_wse_ft")
+                f["trigger_wse_ft"]["note"] = "used as given: no local top of dam to place it"
+            else:
+                fl.trigger_value = v
+        rel = [k for k in f if k == "spillway_rating_first_row_ft" or
+               (k.startswith("outlet_") and k.endswith("_invert_ft"))]
+        if offset is not None:
+            dm = offset * FT - old_m
+            sp = getattr(fl, "spillway", None)
+            if sp is not None and len(sp.elev_m):
+                sp.elev_m = sp.elev_m + dm
+            for c in getattr(fl, "outlets", None) or []:
+                c.invert_m = c.invert_m + dm
+            for k in rel:
+                place(k)
+        else:
+            for k in rel:
+                kept.append(k)
+                f[k].update(navd88=None, _navd88=None,
+                            note="left as given: no local top of dam to place it")
+    rec.update(source_datum=VD.LOCAL if forced else VD.LOCAL_ASSUMED,
+               how=rec.get("how") if forced else "detected", method=VD.METHOD_DEM,
+               applied=False, shift_m=0.0, shift_ft=0.0, local=True, local_reason=why,
+               dem_crest_ft=round(float(dem_crest_ft), 3), dem_crest_from=crest_from,
+               local_offset_ft=None if offset is None else round(offset, 3))
+    rec.pop("_shift_m", None)
+    rec["warnings"] = [w for w in rec.get("warnings") or []
+                       if "NGVD29 was assumed" not in w and "could not be converted" not in w]
+    msg = ("The dam elevations are on a local datum ({}): they were not datum-converted. The "
+           "top of dam is the {} ({:.2f} ft NAVD88){}.".format(
+               why or ("stated" if rec.get("how") == "stated" else "set by the engineer"),
+               crest_from, float(dem_crest_ft),
+               "; the other elevations keep their height below the local top ({:+.2f} ft)"
+               .format(offset) if offset is not None else
+               " (no local top of dam was given)"))
+    if dropped:
+        msg += " Not placed (no local top): {} - taken from the DEM / the spillway rating."\
+            .format(", ".join(dropped))
+    if kept:
+        msg += " Left as given (no local top): {}.".format(", ".join(kept))
+    msg += " Check against the as-built survey; set the datum to NAVD88 / NGVD29 if wrong."
+    rec["warnings"].append(msg)
+    for line in VD.summary_lines(rec):
+        log("Elevation datum: " + line)
+    return rec, True
 
 
 def lonlat_of(st, dam_xy=None, work_srs=None):

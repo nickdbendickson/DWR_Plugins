@@ -167,3 +167,161 @@ def test_vdatum_window_line():
     p = pl.defaults("rundam", "/tmp/x", "D1", {"elev_datum": "NGVD29"})
     assert p.get("ELEV_DATUM") == 2
     assert "ELEV_DATUM" not in pl.defaults("rundam", "/tmp/x", "D1", {})
+
+
+# --- 3.12.1 / damsuite 1.18.1: local (assumed) datums: elevations taken from the DEM ---------------
+# Nick 2026-10-28: "be assumed ngvd29, if elevation is 100 or similar, they would be local and
+# would have to take actual elevations from dem"
+DEM_CREST = 1072.60          # ft NAVD88, a DEM crest near DWR-2801
+
+
+def _flood(pool, trig, spill_ft, inv_ft):
+    import numpy as np
+    from nd_breach_runner.core import outlets as outmod
+    return types.SimpleNamespace(
+        normal_pool_ft=pool, trigger="wse", trigger_value=trig,
+        spillway=types.SimpleNamespace(elev_m=np.array(spill_ft) * 0.3048),
+        outlets=[outmod.Conduit("low", inv_ft * 0.3048, 0.6, 0.6)])
+
+
+@test
+def test_vdatum_local_check_thresholds():
+    VD = _VD()
+    assert VD.local_check(100.0)[0]                          # outside ND's range, no DEM needed
+    assert VD.local_check(4000.0)[0]
+    assert not VD.local_check(1071.15)[0]                    # plausible, no DEM to compare
+    assert not VD.local_check(1071.15, DEM_CREST, 1.09)[0]   # NGVD29 value next to the DEM
+    assert VD.local_check(1000.0, DEM_CREST, 1.09)[0]        # round, 71 ft off
+    assert VD.local_check(1100.0, DEM_CREST, 1.09)[0]        # round, 28 ft off (> 10)
+    assert not VD.local_check(1070.0, DEM_CREST, 1.09)[0]    # a 10 ft multiple is not "round"
+    hit, why = VD.local_check(1140.0, DEM_CREST, 1.09)       # 68.5 ft from the DEM
+    assert hit and "DEM crest" in why, why
+    assert VD.mode("local") == VD.LOCAL and VD.mode(3) == VD.LOCAL
+    assert VD.resolve("", "local") == (VD.LOCAL, "override")
+
+
+@test
+def test_vdatum_local_top_100_from_dem_relative_kept():
+    """top 100 ft (local): not converted; the top becomes the DEM crest and the pool,
+    trigger, spillway and outlet keep their height below the local top."""
+    from nd_breach_runner.core import vdatum_run as vdrun
+    dam = _dam(top=100.0, pmf=99.0, bottom=82.0)
+    fl = _flood(95.0, 98.0, [95.0, 97.5], 84.0)
+    st = _st(flood=fl)
+    vdrun.apply(dam, st, LON, LAT)                     # auto: NGVD29 assumed, shifted first
+    rec, changed = vdrun.apply_local(dam, st, DEM_CREST, "DEM near the dam point")
+    assert changed and rec["local"] and rec["source_datum"] == "local (assumed)", rec
+    assert rec["how"] == "detected" and rec["method"] == "DEM" and not rec["applied"]
+    assert abs(dam.top_of_dam_ft - DEM_CREST) < 1e-9
+    off = DEM_CREST - 100.0
+    assert abs(dam.pmf_max_wse_ft - (99.0 + off)) < 1e-6
+    assert abs(dam.breach_bottom_ft - (82.0 + off)) < 1e-6
+    assert abs(fl.normal_pool_ft - (DEM_CREST - 5.0)) < 1e-6
+    assert abs(fl.trigger_value - (DEM_CREST - 2.0)) < 1e-6
+    assert abs(fl.spillway.elev_m[0] / 0.3048 - (DEM_CREST - 5.0)) < 1e-6
+    assert abs(fl.spillway.elev_m[1] / 0.3048 - (DEM_CREST - 2.5)) < 1e-6
+    assert abs(fl.outlets[0].invert_m / 0.3048 - (DEM_CREST - 16.0)) < 1e-6
+    f = rec["fields"]
+    assert f["top_of_dam_ft"]["source"] == 100.0 and f["normal_pool_ft"]["source"] == 95.0
+    assert abs(f["top_of_dam_ft"]["navd88"] - DEM_CREST) < 1e-3
+    assert not any("NGVD29 was assumed" in w for w in rec["warnings"]), rec["warnings"]
+    assert any("local datum" in w for w in rec["warnings"]), rec["warnings"]
+    # once: a second call changes nothing
+    assert not vdrun.apply_local(dam, st, DEM_CREST + 5.0)[1]
+    assert abs(dam.top_of_dam_ft - DEM_CREST) < 1e-9
+    # the report / Hazard summary lines and the JSON record
+    VD = _VD()
+    txt = "\n".join(VD.summary_lines(VD.public(rec)))
+    assert "local (assumed)" in txt and "100.00 local -> 1072.60 NAVD88 (DEM)" in txt, txt
+    assert "WARNING" in txt
+    import json
+    json.dumps(VD.public(rec))
+    out, _n = vdrun.damjson_values(rec, {"top_of_dam_ft": dam.top_of_dam_ft})
+    assert "top_of_dam_datum" not in out          # dam.json keeps the plans' local values
+
+
+@test
+def test_vdatum_local_normal_value_still_converted():
+    from nd_breach_runner.core import vdatum_run as vdrun
+    dam = _dam(top=1071.15)
+    st = _st()
+    vdrun.apply(dam, st, LON, LAT)
+    rec, changed = vdrun.apply_local(dam, st, DEM_CREST)
+    assert not changed and rec["applied"] and not rec.get("local")
+    assert abs(dam.top_of_dam_ft - 1072.24) <= 0.02, dam.top_of_dam_ft
+
+
+@test
+def test_vdatum_local_override_and_explicit_datum():
+    from nd_breach_runner.core import vdatum_run as vdrun
+    # "Local (use DEM)" chosen: a plausible-looking value is still taken from the DEM
+    dam = _dam(top=1060.0, pmf=1058.0)
+    st = _st(elev_datum="local")
+    rec = vdrun.apply(dam, st, LON, LAT)
+    assert rec["local"] and not rec["applied"] and dam.top_of_dam_ft == 1060.0
+    rec, changed = vdrun.apply_local(dam, st, DEM_CREST)
+    assert changed and rec["source_datum"] == "local" and rec["how"] == "override"
+    assert abs(dam.top_of_dam_ft - DEM_CREST) < 1e-9
+    assert abs(dam.pmf_max_wse_ft - (DEM_CREST - 2.0)) < 1e-6
+    # NGVD29 chosen explicitly: no detection, even for 100 ft
+    dam = _dam(top=100.0)
+    st = _st(elev_datum="NGVD29")
+    vdrun.apply(dam, st, LON, LAT)
+    assert not vdrun.apply_local(dam, st, DEM_CREST)[1]
+    # stated "local" in dam.json / the inventory
+    dam = _dam(top=100.0)
+    st = _st(elev_datum_stated="Local (assumed)")
+    rec = vdrun.apply(dam, st, LON, LAT)
+    rec, changed = vdrun.apply_local(dam, st, DEM_CREST)
+    assert changed and rec["source_datum"] == "local" and rec["how"] == "stated"
+
+
+@test
+def test_vdatum_local_pool_without_top():
+    """No top given (the DEM's) and a local pool of 95 ft: detected; the pool cannot be placed,
+    so it is dropped (the run takes it from the spillway rating / DEM)."""
+    from nd_breach_runner.core import vdatum_run as vdrun
+    dam = _dam(top=None)
+    fl = types.SimpleNamespace(normal_pool_ft=95.0, trigger="peak", trigger_value=None,
+                               spillway=None, outlets=[])
+    st = _st(flood=fl)
+    vdrun.apply(dam, st, LON, LAT, top_is_dem=True)
+    rec, changed = vdrun.apply_local(dam, st, DEM_CREST)
+    assert changed and fl.normal_pool_ft is None and rec["local_offset_ft"] is None
+    assert rec["fields"]["normal_pool_ft"]["navd88"] is None
+    assert "not used" in "\n".join(_VD().summary_lines(rec))
+
+
+@test
+def test_vdatum_dem_crest_on_line():
+    import numpy as np
+    from nd_breach_runner.core import vdatum_run as vdrun
+
+    def read(bounds, cell):
+        x0, y0, x1, y1 = bounds
+        xs = np.arange(x0 + cell / 2, x1, cell)
+        ys = np.arange(y1 - cell / 2, y0, -cell)
+        X, Y = np.meshgrid(xs, ys)
+        z = np.where(np.abs(Y) <= 2.0, DEM_CREST * 0.3048, 1060.0 * 0.3048)   # crest band y=0
+        z = np.where(np.abs(X) > 45.0, 1080.0 * 0.3048, z)                    # high abutments
+        return types.SimpleNamespace(masked=lambda: np.ma.masked_invalid(z),
+                                     x_centers=lambda: xs, y_centers=lambda: ys)
+    c, how = vdrun.dem_crest_on_line(read, [(-50.0, 0.0), (50.0, 0.0)], 1.0)
+    assert abs(c - DEM_CREST) < 0.01 and "dam line" in how, (c, how)
+    assert vdrun.dem_crest_on_line(read, [], 1.0)[0] is None
+
+
+@test
+def test_vdatum_local_window_line_and_choice():
+    from nd_breach_runner import popup_logic as pl
+    assert pl.ELEV_DATUM_CHOICES[3] == "local"
+    d = tempfile.mkdtemp(prefix="vd_local_")
+    with open(os.path.join(d, "dam.json"), "w") as fh:
+        fh.write('{"format": "nd_dam_suite/dam_record", "format_version": 1, "fields": '
+                 '{"dam_id": "X-1", "top_of_dam_ft": 100.0, "lat": 46.983031, '
+                 '"lon": -97.391489}}')
+    line = pl.datum_info(d, "auto")
+    assert "Looks local" in line, line
+    assert "taken from the DEM" in pl.datum_info(d, "local")
+    from nd_breach_runner import algorithms as A
+    assert [k for k, _l in A.ELEV_DATUMS] == list(pl.ELEV_DATUM_CHOICES)
