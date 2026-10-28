@@ -20,7 +20,7 @@
   "priority.py": "bd7f1e7b86c1ecd93193f777a1fc4ab4508b1b918ff31546bb0479d2f8b0ccab",
   "record.py": "ad55837f431051825ba65dad6e9445b9d78d26623fb80d6abfdc373a9af1c4ce",
   "servers.py": "804991d33bd6b84cbe4cf683e1e6f668ab6f02442c74573c197a1d1c1d2c9b36",
-  "services.py": "3f0b5ea2c5243024484ce118c0a6afbb9b1620ffa0dadda11c3b84fd68154cc8",
+  "services.py": "43da2d748e78b8cb69c12cd27e8d0ad3f349c34e0d3721e9249534b88b1f6d3c",
   "settings.py": "87bb840224ffb56db7127ad2956b272b70d52f8ff2c71e3e39480003f4d5d8d1",
   "solvegate.py": "ce938b1c7930dc027ee60fecdc5a0aceb83c6b6e425fc8cd92fa80e3e029f1da",
   "structure_flags.py": "25864cea36e53112222f01e0a8e5eae32101598a586845b68ddf57bb9e5697f6",
@@ -43,6 +43,6 @@
   "versions.py"
  ],
  "pin": "damsuite-pin-v1",
- "pin_sha256": "73c6c11942e278f6348500d981f72c9382ea7d579c78b98fc3e1ba42b1690f1a",
+ "pin_sha256": "c208608cd65a252aee0550bfc61798b8e25f92f19fbdad0ff8ff7dfa40f49d9b",
  "source": "nickdbendickson/DWR_Plugins : shared/damsuite"
 }

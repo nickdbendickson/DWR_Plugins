@@ -193,6 +193,24 @@ BUILTIN = [
        notes="Damsline layer (index 253). Full-dataset shapefile, NAD83 Geographic. "
              "POST: layer=253, format=shapefile, extent=full. ~9,976 polylines. "
              "Attributes: feature_id, low_head_d, structure_, status."),
+    _s("dwr_dams_shapefile", "dwr_dams", "ND DWR dams (shapefile download)",
+       "file",
+       "https://mapservice.dwr.nd.gov/php/downloadShape.php",
+       source="https://mapservice.dwr.nd.gov/index.php?active=Dams",
+       notes="Dams layer (index 254). Full-dataset shapefile, NAD83 Geographic. "
+             "POST: layer=254, format=shapefile, extent=full."),
+    _s("dwr_dugouts_shapefile", "dwr_dugouts", "ND DWR dugouts (shapefile download)",
+       "file",
+       "https://mapservice.dwr.nd.gov/php/downloadShape.php",
+       source="https://mapservice.dwr.nd.gov/index.php?active=Dams",
+       notes="Dugouts layer (index 277). Full-dataset shapefile, NAD83 Geographic. "
+             "POST: layer=277, format=shapefile, extent=full."),
+    _s("dwr_dugout_polygons_shapefile", "dwr_dugout_polygons",
+       "ND DWR dugout polygons (shapefile download)", "file",
+       "https://mapservice.dwr.nd.gov/php/downloadShape.php",
+       source="https://mapservice.dwr.nd.gov/index.php?active=Dams",
+       notes="DugoutsPoly layer (index 276). Full-dataset shapefile, NAD83 Geographic. "
+             "POST: layer=276, format=shapefile, extent=full."),
     # --- hydrography (1.19.0: the USGS 3D Hydrography Program is the default; NHD stays listed)
     _s("usgs_3dhp_flowline", "flowlines", "USGS 3DHP flowlines", "arcgis_feature",
        _TNM + "rest/services/3DHP_all/MapServer/50",

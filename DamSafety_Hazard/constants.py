@@ -299,6 +299,9 @@ NID_URL = ("https://geospatial.sec.usace.army.mil/dls/rest/services/NID/"
 # ND DWR MapService dam lines (Damsline layer, index 253). Full-dataset shapefile.
 DWR_DAM_LINES_URL = "https://mapservice.dwr.nd.gov/php/downloadShape.php"
 DWR_DAM_LINES_LAYER = 253  # Damsline
+DWR_DAMS_LAYER = 254       # Dams (points)
+DWR_DUGOUTS_LAYER = 277    # Dugouts (points)
+DWR_DUGOUT_POLYGONS_LAYER = 276  # DugoutsPoly
 
 NID_MIRROR_URL = ("https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/"
                   "NID_v1/FeatureServer/0")
