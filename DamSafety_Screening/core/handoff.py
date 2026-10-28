@@ -43,7 +43,11 @@ RUNDAM_KEYS = ("DAM_ID", "DAM_NAME", "DAM_POINT", "HEIGHT_FT", "STORAGE_ACFT", "
                "DAMS_FOLDER", "CELL", "METHOD", "USER_CSV", "RECEPTOR_POINTS", "RECEPTOR_ROADS",
                "RECEPTOR_RAIL", "RECEPTOR_POINTS_MORE", "RECEPTOR_ROADS_MORE",
                "TIER", "FORCE_ANUGA", "REFINE_NEAR", "STRUCTURES", "S_KIND", "S_WIDTH", "S_HEIGHT",
-               "S_BARRELS", "S_SHAPE", "S_NAME", "WATER_MASK")
+               "S_BARRELS", "S_SHAPE", "S_NAME", "WATER_MASK", "DEM_Z")
+# rundam DEM_Z ('DEM elevation units') index of "Meters" in the Runner's list (auto, feet, US survey
+# feet, meters, ...); sent with a DEM 7b downloaded (0.17.55). Looked up from the installed
+# Runner at run time; this is the fallback.
+DEM_Z_METERS = 3
 # 7b engine choice (tool parameter -> rundam parameter). The Runner's TIER index 0 is
 # LISFLOOD-FP only, 1 is LISFLOOD-FP then ANUGA. "Solver" here is the Runner's near-dam FV1
 # refine (REFINE_NEAR); rundam has no other solver switch.

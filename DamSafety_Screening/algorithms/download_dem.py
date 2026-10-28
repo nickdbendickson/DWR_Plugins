@@ -166,16 +166,20 @@ class DownloadDem(QgsProcessingAlgorithm):
             return {"VRT": dest, "OUT": out}
         # Source tiles (~30 files, ~170 MB for a dam) go to a temporary folder that is removed
         # after the local GeoTIFF is written, on success and on failure alike.
-        with tile_workdir(out) as work:
-            if source_i == 1:
-                vrt, native = self._nd(parameters, context, feedback, work, scope, index_dir=out)
-                info = dd.product_info("ndlidar", cell, native)
-            else:
-                vrt = self._usgs(parameters, context, feedback, work, scope, cell, stem)
-                info = dd.product_info("usgs", cell)
-            feedback.setProgress(90)
-            feedback.pushInfo("writing the local GeoTIFF")
-            tif, side = dd.write_local_dem(vrt, dest, cell, info, feedback)
+        try:
+            with tile_workdir(out) as work:
+                if source_i == 1:
+                    vrt, native = self._nd(parameters, context, feedback, work, scope, index_dir=out)
+                    info = dd.product_info("ndlidar", cell, native)
+                else:
+                    vrt = self._usgs(parameters, context, feedback, work, scope, cell, stem)
+                    info = dd.product_info("usgs", cell)
+                feedback.setProgress(90)
+                feedback.pushInfo("writing the local GeoTIFF")
+                tif, side = dd.write_local_dem(vrt, dest, cell, info, feedback)
+        except dd.Cancelled:                    # 0.17.55: 3DEP stops at the next request
+            feedback.pushInfo("Cancelled. Nothing was written.")
+            return {"VRT": "", "OUT": out}
         feedback.setProgress(100)
         extra = _warp(tif, out, parameters, context, feedback)
         feedback.pushInfo("local DEM: {}".format(tif))

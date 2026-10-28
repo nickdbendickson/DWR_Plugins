@@ -189,9 +189,14 @@ def data_problem(path):
         ds = None
 
 
+class Cancelled(Exception):
+    """The user cancelled a 3DEP download (feedback.isCanceled(); 0.17.55)."""
+
+
 def download(extent, cell_m, out_dir, stem, feedback=None, scope=0):
     """Download 3DEP tiles for an EPSG:5070 extent and write dem.vrt. Returns the VRT path.
-    scope (0 dam, 1 county, 2 state) only shapes the request-count note (chunk_note)."""
+    scope (0 dam, 1 county, 2 state) only shapes the request-count note (chunk_note).
+    0.17.55: raises Cancelled before the next request once the user cancels."""
     os.makedirs(out_dir, exist_ok=True)
     from .solve_gate import TILE_PX
     tiles = list(terrain.tile_extents(*extent, cell_m))
@@ -213,6 +218,8 @@ def download(extent, cell_m, out_dir, stem, feedback=None, scope=0):
     def tick(i, total):
         if feedback is None:
             return
+        if getattr(feedback, "isCanceled", lambda: False)():
+            raise Cancelled("3DEP download cancelled after {} of {} requests".format(i, total))
         feedback.setProgress(int(80 * i / max(total, 1)))
         feedback.pushInfo("3DEP tile {} of {}".format(i + 1, total))
 

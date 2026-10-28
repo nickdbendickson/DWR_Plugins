@@ -15,6 +15,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSour
 from ..core import handoff as ho, hazard as hz
 from ..core import nd_hazard as nh
 from ..core import damrecord_io as dri
+from ..core import runner_dem as rdem
 from ..damsuite import versions as vs
 from . import _common as cm
 from ..compat import (FIELD_ANY, FIELD_NUMERIC, FILE_FOLDER, FT_STRING, GEOM_POINT, NUM_DOUBLE,
@@ -51,6 +52,24 @@ def _runner_anuga_setting():
         return ProcessingConfig.getSetting(ho.ANUGA_SETTING) or ""
     except Exception:                                            # noqa
         return ""
+
+
+def _meters_index(alg):
+    """Index of 'Meters' in the installed Runner's DEM_Z ('DEM elevation units') list, or None
+    when that Runner has no DEM_Z (then the units are left to it, with a warning)."""
+    try:
+        d = alg.parameterDefinition("DEM_Z")
+    except Exception:                                            # noqa
+        return None
+    if d is None:
+        return None
+    try:
+        for i, o in enumerate(d.options()):
+            if str(o).strip().lower() == "meters":
+                return i
+    except Exception:                                            # noqa - a test double
+        pass
+    return ho.DEM_Z_METERS
 
 
 def _user_method_index(alg):
@@ -119,6 +138,17 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                 "tool or the engineer put there is never overwritten (the conflict is logged and "
                 "kept in the file). The tool stops when an installed ND Dam Breach Runner is older "
                 "than this plugin needs (suite version check).\n"
+                "RUNNER DEM SOURCE (0.17.55): with no DEM loaded, 'Runner DEM source' can download one "
+                "for the chosen dams: the box around their breach points (after 'Dams to send') plus "
+                "'DEM download buffer (mi)' (default 10 mi = half the Runner's largest domain side). "
+                "The 10 m choice writes one USGS 3DEP GeoTIFF in EPSG:5070 (metres); the 1 m choice "
+                "downloads the native 10 km lidar tiles from The National Map into the suite's shared "
+                "tile folder (resumed, never the data pack) and builds a VRT over them. Files go to "
+                "'Folder for the downloaded DEM' (empty = <Dams folder>/_runner_dem) and are reused "
+                "on the next run for the same dams. The request count and size are logged first; a "
+                "download over 'Largest DEM download for one run (GB)' is refused before anything is "
+                "fetched. The downloaded DEM is sent with the Runner's 'DEM elevation units' set to "
+                "Meters.\n"
                 "WATER-BODY MASK (0.17.46, advanced; Runner 3.10.27 or later): the Runner's run report "
                 "can give the flooded area and speeds with and without the lakes and ponds that were "
                 "already there (rundam WATER_MASK). It changes the report only, never the flood model, "
@@ -157,12 +187,53 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                                       parentLayerParameterName="DAMS", optional=True))
         P(QgsProcessingParameterEnum("WHICH", "Dams to send", ho.SELECT_LABELS, defaultValue=0))
         P(QgsProcessingParameterFeatureSource("BPTS", "Breach points (tool 4; joined by dam_id)", [pt]))
-        dem = QgsProcessingParameterRasterLayer("DEM", "DEM for the runner (statewide DEM or VRT)")
+        # 0.17.55: optional - 'Runner DEM source' can download one for the chosen dams
+        dem = QgsProcessingParameterRasterLayer("DEM", "DEM for the runner (statewide DEM or VRT; empty = "
+                                                "download one, see 'Runner DEM source')", optional=True)
         if hasattr(dem, "setHelp"):
             dem.setHelp("Elevation raster (or VRT) the Runner uses for the ground surface. "
                         "Prefer a consistent unit (metres or feet) with the run settings. "
-                        "The tool does not reproject it; the Runner handles the CRS.")
+                        "The tool does not reproject it; the Runner handles the CRS. "
+                        "No DEM? Set 'Runner DEM source' to a download choice.")
         P(dem)
+        src = QgsProcessingParameterEnum("DEM_SOURCE", "Runner DEM source\u2026", rdem.SOURCE_LABELS,
+                                         defaultValue=rdem.SOURCE_GIVEN)
+        if hasattr(src, "setHelp"):
+            src.setHelp("'Use the DEM above' (default) sends the DEM you picked, as before. The download "
+                        "choices get a DEM covering the chosen dams' breach points plus the buffer: "
+                        "USGS 3DEP 10 m (one EPSG:5070 GeoTIFF, quick) or the native USGS 3DEP 1 m "
+                        "lidar tiles (10 km tiles from The National Map, large; a VRT over them). The "
+                        "file is reused on the next run and sent with the Runner's DEM elevation units "
+                        "set to Meters.")
+        P(src)
+        buf = QgsProcessingParameterNumber("DEM_BUFFER_MI", "DEM download buffer around the chosen dams (mi)",
+                                           NUM_DOUBLE, rdem.DEFAULT_BUFFER_MI, minValue=0.5, maxValue=60.0)
+        if hasattr(buf, "setHelp"):
+            buf.setHelp("How far past the outermost chosen dams the downloaded DEM reaches. 10 mi is "
+                        "half the Runner's default largest domain side (20 mi), so a Runner run does "
+                        "not leave the DEM.")
+        P(set_advanced(buf))
+        dfold = QgsProcessingParameterFile("DEM_FOLDER", "Folder for the downloaded DEM (empty = <Dams "
+                                           "folder>/{})".format(rdem.FOLDER_NAME),
+                                           behavior=FILE_FOLDER, optional=True)
+        if hasattr(dfold, "setHelp"):
+            dfold.setHelp("Where the downloaded 10 m GeoTIFF or 1 m VRT is written (the 1 m tiles "
+                          "themselves go to the suite's shared lidar tile folder). A file already "
+                          "there for the same dams is reused.")
+        P(set_advanced(dfold))
+        mx = QgsProcessingParameterNumber("DEM_MAX_GB", "Largest DEM download for one run (GB)", NUM_DOUBLE,
+                                          rdem.DEFAULT_MAX_GB, minValue=0.1)
+        if hasattr(mx, "setHelp"):
+            mx.setHelp("The tool works out the download size first and stops, before anything is "
+                       "downloaded, when it is over this. 1 m lidar tiles are about 0.2 to 0.5 GB "
+                       "each; 10 m for a county is well under 1 GB.")
+        P(set_advanced(mx))
+        tf = QgsProcessingParameterFile("DEM_TILE_FOLDER", "1 m lidar tile folder (empty = the suite's "
+                                        "shared tile folder)", behavior=FILE_FOLDER, optional=True)
+        if hasattr(tf, "setHelp"):
+            tf.setHelp("Where the native 1 m tiles are kept (shared with Download DEM, so a tile is "
+                       "downloaded once). Never inside the data pack.")
+        P(set_advanced(tf))
         dams_f = QgsProcessingParameterFolderDestination("DAMS_FOLDER", "Dams folder (the runner writes "
                                                   "<folder>/<dam ID>/)")
         if hasattr(dams_f, "setHelp"):
@@ -336,8 +407,12 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         S = lambda k: self.parameterAsString(params, k, context) or ""
         if dams is None or bpts is None:
             raise QgsProcessingException("Dams and breach points are required")
-        if params.get("DEM") in (None, ""):
-            raise QgsProcessingException("A DEM is required (statewide DEM or VRT)")
+        dem_source = self._dem_source(params, context)
+        if dem_source == rdem.SOURCE_GIVEN and params.get("DEM") in (None, ""):
+            raise QgsProcessingException(rdem.NO_DEM)
+        if dem_source != rdem.SOURCE_GIVEN and params.get("DEM") not in (None, ""):
+            _warn(feedback, "Runner DEM source is '{}': the DEM picked above is not used.".format(
+                rdem.SOURCE_LABELS[dem_source]))
         if nh.LETHALITY_METHODS[lethality] == nh.LETHALITY_CHARTS:
             # the runner's copy is byte-identical to core/acer_tm11_charts.json (same module
             # and data file in both plugins), so check here before hours of runs
@@ -455,6 +530,12 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         steps = QgsProcessingMultiStepFeedback(2 * n_send, feedback)
         feedback.pushInfo("{} of {} dams to send to ND Dam Breach Runner ({}); hydrograph: {}".format(
             sum(1 for c in chosen if c[2]), len(feats), ho.SELECT_LABELS[mode], ho.HYDRO_LABELS[hydro]))
+        dem_value, dem_p, dem_notes = params.get("DEM"), {}, []
+        if dem_source != rdem.SOURCE_GIVEN:            # 0.17.55: download it for the chosen dams
+            dem_value, dem_p, dem_notes = self._download_dem(
+                params, context, feedback, dem_source, folder, run_alg,
+                [bmap[str(c[1].get("dam_id") or c[0].id())] for c in chosen
+                 if c[2] and str(c[1].get("dam_id") or c[0].id()) in bmap])
         counts, agree = {"done": 0, "failed": 0, "skipped": 0}, {}
         k = 0
         for f, attrs, ok, why in chosen:
@@ -489,8 +570,10 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                         os.path.join(curves, f"curve_{dam_id}.csv") if curves else None,
                         cm.fval(f, names, "est_crest_m", float), cm.fval(f, names, "height_m", float),
                         attrs, curves_given=bool(curves))
-                    p, notes = ho.rundam_params(attrs, bmap[dam_id], cm.ALBERS, params.get("DEM"), folder,
+                    p, notes = ho.rundam_params(attrs, bmap[dam_id], cm.ALBERS, dem_value, folder,
                                                 cell, user_csv, area, user_idx, area_source=area_src)
+                    p.update(dem_p)
+                    notes = list(notes) + dem_notes
                     if anote:
                         notes = list(notes) + [anote]
                         _warn(feedback, "{}: {}".format(dam_id, anote))   # fallback or no area
@@ -566,7 +649,40 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         # 0.17.46: per-dam provenance for the run manifest (provider._with_manifest)
         self.manifest_extra = {"surface_area_source": dict(sorted(area_sources.items())),
                                "water_mask": mask_p[0].get("WATER_MASK") or "runner default"}
+        if dem_source != rdem.SOURCE_GIVEN:
+            self.manifest_extra["runner_dem"] = {"source": rdem.SOURCE_LABELS[dem_source],
+                                                 "path": dem_value, "units": "Meters"}
         return {"OUT": dest}
+
+    def _dem_source(self, params, context):
+        if self.parameterDefinition("DEM_SOURCE") is None or params.get("DEM_SOURCE") in (None, ""):
+            return rdem.SOURCE_GIVEN
+        v = self.parameterAsEnum(params, "DEM_SOURCE", context)
+        return v if v in (rdem.SOURCE_GIVEN, rdem.SOURCE_10M, rdem.SOURCE_1M) else rdem.SOURCE_GIVEN
+
+    def _download_dem(self, params, context, feedback, source, dams_folder, run_alg, points):
+        """(DEM path, extra rundam params, notes) for a downloaded Runner DEM (0.17.55)."""
+        num = lambda k, d: (self.parameterAsDouble(params, k, context)
+                            if params.get(k) not in (None, "") else d)
+        folder = (self.parameterAsString(params, "DEM_FOLDER", context) or "").strip() \
+            or rdem.default_folder(dams_folder)
+        tiles = (self.parameterAsString(params, "DEM_TILE_FOLDER", context) or "").strip()
+        dry = bool(params.get("DRY_RUN")) and self.parameterAsBool(params, "DRY_RUN", context)
+        kw = {"tile_folder": tiles} if source == rdem.SOURCE_1M else {}
+        try:
+            path = rdem.get_dem(source, points, num("DEM_BUFFER_MI", rdem.DEFAULT_BUFFER_MI), folder,
+                                num("DEM_MAX_GB", rdem.DEFAULT_MAX_GB), feedback, dry=dry, **kw)
+        except rdem.RunnerDemError as e:
+            raise QgsProcessingException(str(e))
+        idx = _meters_index(run_alg)
+        extra, notes = {}, ["DEM: {} ({})".format(path, rdem.SOURCE_LABELS[source])]
+        if idx is None:
+            _warn(feedback, "This Runner has no 'DEM elevation units' (DEM_Z) parameter: the downloaded "
+                  "DEM is metres (its band unit says so); update the Runner if it reads it otherwise.")
+        else:
+            extra["DEM_Z"] = idx
+            notes.append("DEM elevation units: Meters (DEM_Z {})".format(idx))
+        return path, extra, notes
 
     def _water_mask(self, params, context, run_alg, feedback):
         """({'WATER_MASK': ...} or {}, notes) for rundam (0.17.46); stops on a mask that was asked
