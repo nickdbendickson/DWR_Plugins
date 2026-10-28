@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.18.65
+ND Dam Hazard Classification Helper - Version 2.18.66
 ====================================================
 
 WHAT IT DOES
@@ -838,6 +838,13 @@ NEW IN 1.3.0 - HAZARD CLASSIFICATION TAB
   depth basis, crown, WSE and freeboard; outputs/QA/Line_Crown_Check lists
   every wet stretch and why it was counted or not. No WSE or no 1 m DEM:
   the depth raster as before, with a note.
+- 2.18.66: build_nd_pack --dwr-folder PATH adds the ND DWR GeoPackages
+  of that folder to the offline pack (DWR_dams, DWR_dam_lines,
+  DWR_unknown_structures, DWR_dugouts, DWR_dugout_polygons; group dwr),
+  reprojected to lon / lat with every attribute; the source file and date
+  are in the manifest. The plugins read them from the pack when the suite
+  folder has no DWR file; the engineer's own file always wins. Without
+  the option the build is the same as before.
 - Rail: the national rail network (FRA/BTS) and FRA grade crossings are
   downloaded for the area (or use your own layers); trains/day come from
   crossings of the same railroad within 3 miles; passenger lines flagged.

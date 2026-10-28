@@ -58,6 +58,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if __package__:                      # imported by the plugin (QGIS)
     from . import constants as C
     from . import osm_parse as O
+    from . import dwr_files as DF
     from .offline_pack import (PackWriter, DB_NAME, MANIFEST_NAME, ND_BBOX,
                                DEFAULT_PAD_DEG, PackError, STATUS_PARTIAL,
                                write_clean_copy)
@@ -66,6 +67,7 @@ else:                                # run as a script: the plugin folder is bes
         sys.path.insert(0, HERE)
     import constants as C            # noqa: E402  (no QGIS imports in these three)
     import osm_parse as O            # noqa: E402
+    import dwr_files as DF           # noqa: E402  (2.18.66: --dwr-folder; sqlite3 only)
     from offline_pack import (PackWriter, DB_NAME, MANIFEST_NAME, ND_BBOX,  # noqa: E402
                               DEFAULT_PAD_DEG, PackError, STATUS_PARTIAL,
                               write_clean_copy)
@@ -956,9 +958,12 @@ def fetch_osm(ctx, bbox, make_query, parse):
 
 
 # ------------------------------------------------------------- data sets --
-def datasets():
+def datasets(dwr_folder=None):
     """[(name, label, group, kind, spec)] - name = the plugin's download
-    name, so the plugin finds each data set under the name it asks for."""
+    name, so the plugin finds each data set under the name it asks for.
+    2.18.66: dwr_folder (a folder of the ND DWR GeoPackages): the DWR_* data sets of group
+    "dwr" (kind "local_gpkg") are added for the files found there; without it the list is
+    the same as before."""
     nhd_fields = "gnis_name,gnis_id,ftype,fcode,reachcode,lengthkm"
     d = [
         ("NSI_structures", "USACE National Structure Inventory", "nsi", "nsi", {}),
@@ -1007,7 +1012,58 @@ def datasets():
         ("OSM_places", "OpenStreetMap cities / towns / villages", "osm", "osm",
          {"query": O.places_query, "parse": O.place_features}),
     ]
+    if dwr_folder:
+        d += dwr_datasets(dwr_folder)
     return d
+
+
+def dwr_datasets(folder):
+    """2.18.66: the DWR_* data sets of the GeoPackages in `folder` (the suite folder's layer
+    rules, dwr_files.find_layers). A data set with no file is left out (and named)."""
+    try:
+        found = DF.find_layers(os.path.abspath(folder))
+    except DF.DwrFileError as e:
+        raise BuildError(str(e))
+    out = []
+    for name, slot, label, what in DF.DATASETS:
+        if name in found:
+            path, layer = found[name]
+            out.append((name, label, DF.GROUP, "local_gpkg",
+                        {"path": path, "layer": layer, "slot": slot, "what": what}))
+    if not out:
+        raise BuildError("no ND DWR GeoPackage found in {} (DWR_Dams.gpkg, DWR_Dam_Lines.gpkg, "
+                         "DWR_Unknown_Structures.gpkg, DWR_Dugouts.gpkg, "
+                         "DWR_Dugouts_Polygons.gpkg)".format(folder))
+    return out
+
+
+def fetch_local_gpkg(ctx, spec):
+    """2.18.66: one layer of a local GeoPackage into the pack: every attribute kept, the
+    geometry reprojected to lon / lat (dwr_files). Returns the manifest note: the source file,
+    its layer, CRS and file date."""
+    path, layer = spec["path"], spec["layer"]
+    try:
+        feats, info = DF.read_layer(path, layer)
+    except DF.DwrFileError as e:
+        raise BuildError(str(e))
+    ctx.sub(50, "{:,} features read".format(len(feats)))
+    ctx.writer.add(feats, DF.uid_of)
+    # kept as they are, but said: a feature wholly outside North Dakota (+ the pad) is most
+    # likely a bad geometry in the source (DWR dugout structure 2163, point and polygon)
+    x0, y0, x1, y1 = (ND_BBOX[0] - DEFAULT_PAD_DEG, ND_BBOX[1] - DEFAULT_PAD_DEG,
+                      ND_BBOX[2] + DEFAULT_PAD_DEG, ND_BBOX[3] + DEFAULT_PAD_DEG)
+    out = 0
+    for f in feats:
+        b = DF.bbox_of(f.get("geometry"))
+        if b and (b[2] < x0 or b[0] > x1 or b[3] < y0 or b[1] > y1):
+            out += 1
+    extra = []
+    if out:
+        extra.append("{:,} wholly outside North Dakota (kept)".format(out))
+    return "from {} layer {} (EPSG:{}{}, file dated {}, {:,} rows{})".format(
+        os.path.basename(path), layer, info["epsg"],
+        ", unit {:g} m".format(info["unit_m"]) if info["unit_m"] != 1.0 else "",
+        DF.file_date(path), info["rows"], "; " + ", ".join(extra) if extra else "")
 
 
 class _Ctx(object):
@@ -1026,16 +1082,19 @@ def _pick(names_or_groups, table):
     known = set(n for n, *_r in table) | set(g for _n, _l, g, _k, _s in table)
     bad = want - known
     if bad:
-        raise BuildError("unknown data set(s): {} (see --list)".format(", ".join(sorted(bad))))
+        raise BuildError("unknown data set(s): {} (see --list{})".format(
+            ", ".join(sorted(bad)), "; the dwr group needs --dwr-folder PATH" if (
+                "dwr" in bad or any(b.startswith("DWR_") for b in bad)) else ""))
     return want
 
 
 def build(out_zip, pad=DEFAULT_PAD_DEG, only=None, skip=None, workers=None, refresh=False,
-          sources_file=None, progress=None, log=None):
+          sources_file=None, progress=None, log=None, dwr_folder=None):
     """Build (or resume / update) the pack and write out_zip. progress(pct,
     msg) and log(msg) are optional callbacks; an exception raised by
     progress (a cancel) stops the build - the finished data sets are kept
-    for the next run. Returns the manifest."""
+    for the next run. Returns the manifest. 2.18.66: dwr_folder adds the ND DWR
+    GeoPackages of that folder (group "dwr"; read again on every run - they are local)."""
     log = log or print
     progress = progress or (lambda p, m: None)
     _CANCEL.clear()
@@ -1046,7 +1105,7 @@ def build(out_zip, pad=DEFAULT_PAD_DEG, only=None, skip=None, workers=None, refr
         if C.SOURCE_OVERRIDES:
             log("Data-source file {}: {} address(es) changed".format(
                 sources_file, len(C.SOURCE_OVERRIDES)))
-    table = datasets()
+    table = datasets(dwr_folder)
     only_set, skip_set = _pick(only, table), _pick(skip, table) or set()
     todo = [t for t in table if (only_set is None or t[0] in only_set or t[2] in only_set)
             and t[0] not in skip_set and t[2] not in skip_set]
@@ -1084,7 +1143,7 @@ def build(out_zip, pad=DEFAULT_PAD_DEG, only=None, skip=None, workers=None, refr
             names = [c[0] for c in spec["choices"]] if kind == "first_of" else [name]
             # (partial, or complete with gaps: fetched again - it may be complete now;
             # a failed re-fetch keeps what there is)
-            if not refresh and any(writer.done(x) for x in names):
+            if kind != "local_gpkg" and not refresh and any(writer.done(x) for x in names):
                 log("[{}/{}] {}: already in the pack (kept - --refresh fetches it "
                     "again)".format(i + 1, n, label))
                 continue
@@ -1174,6 +1233,17 @@ def _run_one(ctx, name, label, kind, spec, bbox):
             ctx.log("  the mirror failed too - the incomplete download is kept")
             return kept
         raise BuildError("; ".join(errors))
+    if kind == "local_gpkg":
+        # 2.18.66: a local file - read whole on every run (no chunks, nothing to resume)
+        w.begin(name, label, os.path.abspath(spec["path"]), resume=False,
+                signature=_signature(kind, spec, bbox))
+        ctx.status, ctx.gaps = "complete", []
+        try:
+            note = fetch_local_gpkg(ctx, spec)
+        except BaseException as e:
+            w.fail(name, str(e) if isinstance(e, BuildError) else "interrupted")
+            raise
+        return w.finish(note, status="complete")
     url = spec.get("url") or (C.NSI_API_URL if kind == "nsi" else C.OVERPASS_URL)
     # v2.8.0: continue the chunks an interrupted run stored (not with --refresh)
     kept = w.begin(name, label, url, resume=not getattr(ctx, "refresh", False),
@@ -1234,6 +1304,8 @@ def _signature(kind, spec, bbox):
                                           zlib.crc32(str(q).encode("utf-8")) & 0xffffffff)
         except Exception:
             return "osm|{}".format(OVERPASS_TILE_DEG)
+    if kind == "local_gpkg":
+        return "local_gpkg|{}|{}".format(spec.get("layer"), DF.file_date(spec["path"]))
     return kind
 
 
@@ -1297,11 +1369,24 @@ def main(argv=None):
                     help="requests at once (default {})".format(C.DOWNLOAD_WORKERS))
     ap.add_argument("--sources", help="the plugin's data-source file (JSON) to use its "
                                       "addresses")
+    ap.add_argument("--dwr-folder", metavar="PATH",
+                    help="2.18.66: a folder with the ND DWR GeoPackages (DWR_Dams.gpkg, "
+                         "DWR_Dam_Lines.gpkg, DWR_Unknown_Structures.gpkg, DWR_Dugouts.gpkg, "
+                         "DWR_Dugouts_Polygons.gpkg): adds them as the data sets DWR_dams, "
+                         "DWR_dam_lines, DWR_unknown_structures, DWR_dugouts, "
+                         "DWR_dugout_polygons (group dwr; all attributes, reprojected to "
+                         "lon / lat). --only dwr builds just these.")
     ap.add_argument("--list", action="store_true", help="list the data sets and stop")
     a = ap.parse_args(argv)
     if a.list:
-        for name, label, group, kind, spec in datasets():
-            src = spec.get("url") or ", ".join(spec.get("urls") or []) or \
+        try:
+            table = datasets(a.dwr_folder)
+        except BuildError as e:
+            print("ERROR: {}".format(e))
+            return 1
+        for name, label, group, kind, spec in table:
+            src = spec.get("path") and "{} | {}".format(spec["path"], spec["layer"]) or \
+                spec.get("url") or ", ".join(spec.get("urls") or []) or \
                 ", ".join(u for _n, u in spec.get("choices") or []) or \
                 (C.NSI_API_URL if kind == "nsi" else C.OVERPASS_URL)
             print("{:<32} group {:<10} {}\n{:<32} {}".format(name, group, label, "", src))
@@ -1323,7 +1408,7 @@ def main(argv=None):
         sys.stdout.flush()
     try:
         man = build(a.out, a.pad, a.only, a.skip, a.workers, a.refresh, a.sources,
-                    progress, log)
+                    progress, log, dwr_folder=a.dwr_folder)
     except (KeyboardInterrupt, BuildCancelled):
         print("\nStopped - the finished data sets are kept; run the same command to go on.")
         return 2

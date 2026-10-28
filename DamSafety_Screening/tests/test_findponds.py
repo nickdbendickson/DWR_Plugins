@@ -184,6 +184,37 @@ r16d = FindPonds().run_mock(dict(base, DUG_WORDS="pem", KEEP_DEP=False), ctx, Qg
 assert {str(f["wb_id"]) for f in ctx.layers[r16d["OUT"]].getFeatures()} == {"A", "B", "C", "E"}
 print("OK (resumable; keep depressions; excavated words)")
 
+# 0.17.54: DWR dugouts. No input: dwr_dugout empty everywhere (no change). A DWR dugout point in the
+# depression E and a DWR dugout polygon over the embankment pond A: both get dwr_dugout and are
+# classed dugouts (only the water above the natural ground is released); B and C keep theirs.
+assert all(f["dwr_dugout"] in (None, "") for f in out.getFeatures())
+dpts = make_layer([("structure_id", "double"), ("storage_above_grade_acft", "double")],
+                  [(QgsGeometry.fromPointXY(QgsPointXY(X0 + 1103.0, Y0 + 500.0)),
+                    {"structure_id": 9001.0, "storage_above_grade_acft": 25.0})], "point", "dugouts")
+dpol = make_layer([("structure_id", "double")], [(poly([(190, 490), (210, 490), (210, 510), (190, 510)]),
+                                              {"structure_id": 9002.0})], "polygon", "dugout_polys")
+fbd = QgsProcessingFeedback()
+r16e = FindPonds().run_mock(dict(base, DUGOUTS=ctx.add(dpts), DUGOUT_POLYS=ctx.add(dpol),
+                                 TERRAIN=os.path.join(work, "16d_terrain"), CURVES=os.path.join(work, "16d_curves")),
+                            ctx, fbd)
+dd = {str(f["wb_id"]): f for f in ctx.layers[r16e["OUT"]].getFeatures()}
+assert set(dd) == {"A", "B", "C", "E"}, set(dd)
+assert dd["E"]["dwr_dugout"] == "9001" and dd["E"]["pond_type"] == pd.T_DUGOUT, dict(zip(
+    [n for n, _ in fp.POND_FIELDS], [dd["E"][n] for n, _ in fp.POND_FIELDS]))
+assert dd["A"]["dwr_dugout"] == "9002" and dd["A"]["pond_type"] == pd.T_DUGOUT
+assert "DWR dugout 9002" in dd["A"]["pond_notes"] and "embankment pond shape" in dd["A"]["pond_notes"]
+assert dd["A"]["above_grade_m3"] >= 0.0 and dd["E"]["no_flood"] == "YES"
+assert dd["B"]["dwr_dugout"] in (None, "") and dd["C"]["dwr_dugout"] in (None, "")
+assert dd["C"]["pond_type"] == c["pond_type"] and abs(dd["C"]["above_grade_m3"] - c["above_grade_m3"]) < 1e-6
+assert any("2 written water bod(ies) matched a DWR dugout" in m for m in fbd.log), fbd.log
+assert [n for n, _ in fp.POND_FIELDS][-1] == "dwr_dugout"
+# DWR's storage_above_grade_acft is recorded beside the LiDAR value (which is what is released);
+# 25 ac-ft against the LiDAR's ~0 is a warning to check that dugout
+assert "DWR storage_above_grade_acft 25.00 ac-ft" in dd["E"]["pond_notes"], dd["E"]["pond_notes"]
+assert any("DWR dugout 9001" in m and "check it" in m for m in fbd.warnings), fbd.warnings
+assert "storage_above_grade_acft" not in (dd["A"]["pond_notes"] or "")
+print("OK (DWR dugouts: labelled and classed dugouts; empty = no change)")
+
 # ---------------------------------------------------------------- 5. tool 5 on the ponds
 r5 = BreachHydrograph().run_mock(dict(DAMS=r16["OUT"], CURVES=curves, BPTS=r16["OUTP"], MODE=0, METHOD=0,
                                       SUNNY=False, EXP=2.0, OUTDIR=os.path.join(work, "hydro")), ctx, fb)

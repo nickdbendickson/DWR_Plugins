@@ -178,9 +178,17 @@ def check_versions(problems):
             _fail(problems, "{}: metadata.txt missing".format(plugin))
             continue
         with open(meta, encoding="utf-8") as f:
-            m = re.search(r"^version=(.+)$", f.read(), re.M)
+            text = f.read()
+        m = re.search(r"^version=(.+)$", text, re.M)
         if not m or not ver_re.match(m.group(1).strip()):
             _fail(problems, "{}: metadata.txt version not x.y.z".format(plugin))
+        # a merge can leave a second version= / changelog= line behind: QGIS and
+        # configparser (strict) refuse the file (DuplicateOptionError)
+        for key in ("version", "changelog"):
+            n = len(re.findall(r"^{}=".format(key), text, re.M))
+            if n > 1:
+                _fail(problems, "{}: metadata.txt has {} '{}=' lines (one only; older "
+                      "entries go indented under changelog=)".format(plugin, n, key))
     # the vendored damsuite SUITE_VERSION must be identical everywhere it ships
     seen = {}
     for plugin in PLUGINS:

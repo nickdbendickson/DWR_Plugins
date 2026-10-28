@@ -358,3 +358,68 @@ def albers_parts(feature, transform):
         return None, []
     g.transform(transform)
     return geom_parts(g)
+
+
+# ------------------------------------------------------------------ DWR dugouts (0.17.54) --
+DUGOUT_KEYS = ("DUGOUTS", "DUGOUT_POLYS", "DUGOUT_BUF_FT")
+
+
+def dugout_params(add, what):
+    """The optional DWR dugout inputs of tools 1 and 16 (filled from the suite folder's dwr_dugouts
+    and dwr_dugout_polygons; empty = no change). `what` ends the point layer's label."""
+    from qgis.core import QgsProcessingParameterFeatureSource, QgsProcessingParameterNumber
+    from ..compat import SRC_POINT, SRC_POLYGON, NUM_DOUBLE, set_advanced
+    from ..core import dugouts as dg
+    add(QgsProcessingParameterFeatureSource(
+        "DUGOUTS", "DWR dugouts (points, optional; empty = none) - " + what, [SRC_POINT], optional=True))
+    add(QgsProcessingParameterFeatureSource(
+        "DUGOUT_POLYS", "DWR dugout polygons (optional; empty = none)", [SRC_POLYGON], optional=True))
+    add(set_advanced(QgsProcessingParameterNumber(
+        "DUGOUT_BUF_FT", "A place within this distance of a DWR dugout point is that dugout (ft; YOUR "
+        "value; 0 = polygons only)", NUM_DOUBLE, dg.DEFAULT_BUFFER_FT, minValue=0, maxValue=1000)))
+
+
+def _sid(f, names, fid):
+    for n in ("structure_id", "STRUCTURE_ID", "structure", "struct_id"):
+        if n in names and f[n] not in (None, ""):
+            v = f[n]
+            try:
+                if float(v) == int(float(v)):
+                    v = int(float(v))
+            except (TypeError, ValueError):
+                pass
+            return str(v)
+    return "fid {}".format(fid)
+
+
+def dugout_index(alg, params, context):
+    """A core.dugouts.DugoutIndex (EPSG:5070 m) of the tool's DWR dugout inputs, or None when
+    both are empty."""
+    from ..core import dugouts as dg
+    pts_src = alg.parameterAsSource(params, "DUGOUTS", context) if params.get("DUGOUTS") else None
+    pol_src = alg.parameterAsSource(params, "DUGOUT_POLYS", context) if params.get("DUGOUT_POLYS") else None
+    if pts_src is None and pol_src is None:
+        return None
+    buf_ft = params.get("DUGOUT_BUF_FT")
+    buf_m = (alg.parameterAsDouble(params, "DUGOUT_BUF_FT", context) if buf_ft not in (None, "")
+             else dg.DEFAULT_BUFFER_FT) * FT
+    pts, polys, above = [], [], {}
+    for src, out in ((pts_src, pts), (pol_src, polys)):
+        if src is None:
+            continue
+        tr = to_albers(src)
+        names = src.fields().names()
+        ag = next((n for n in ("storage_above_grade_acft", "storage_ab") if n in names), None)
+        for f in src.getFeatures():
+            kind, parts = albers_parts(f, tr)
+            sid = _sid(f, names, f.id())
+            if ag and f[ag] not in (None, ""):
+                try:
+                    above.setdefault(sid, float(f[ag]))
+                except (TypeError, ValueError):
+                    pass
+            if kind == "point" and out is pts:
+                pts.extend((sid, x, y) for x, y in parts)
+            elif kind == "polygon" and out is polys and parts:
+                polys.append((sid, parts))
+    return dg.DugoutIndex(pts, polys, buf_m, above_grade_af=above)

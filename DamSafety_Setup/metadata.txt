@@ -5,10 +5,11 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Start here for the DamSafety plugins: choose the suite data folder, then continue in DamSafety Runner's dam wizard.
 about=Checks the suite data folder (the offline pack or a folder of layer files), fills empty plugin slots from it and hands the folder and its scan to DamSafety Runner's dam wizard, which picks the dam, the DEM and the run. Also the suite setup / status window and the status dock.
-version=1.0.15
+version=1.0.16
 icon=icon.svg
 category=Plugins
-changelog=1.0.15 - Fix of the 2026-10-19 audit (R-H1): the Suite status dock's Linux LISFLOOD-FP build (scripts/build_lisflood_linux.sh, the same file as the Runner's) applies the arrival-depth patch and refuses an unpatched build. The audit's F-01 and F-03 are already handled by the GUI-grammar rework and the Runner's dam wizard, so they are not re-applied here.
+changelog=1.0.16 - The suite folder scan (suite_fill, same as damsuite 1.17.7) knows the DWR dugout points / polygons and unknown structures of an offline pack (dwr/DWR_*.gpkg) and DWR's own export names (DWR_Dugouts_Polygons.gpkg, the two-layer DWR_Dams.gpkg); a layer file of the engineer's own beats the same layer in a pack inside the folder.
+    1.0.15 - Fix of the 2026-10-19 audit (R-H1): the Suite status dock's Linux LISFLOOD-FP build (scripts/build_lisflood_linux.sh, the same file as the Runner's) applies the arrival-depth patch and refuses an unpatched build. The audit's F-01 and F-03 are already handled by the GUI-grammar rework and the Runner's dam wizard, so they are not re-applied here.
     1.0.14 - GUI grammar, part 3 (option A): Start here… is one page, the suite data folder (scanned as you type, the last folder filled in), then 'Continue…' opens DamSafety Runner's dam wizard with the folder and the scan carried over. Without DamSafety Runner, Continue… stays off and a red line says: 'DamSafety Runner is not installed — it provides the modelling tools. Install it, then Start here… again.' The old Dam, DEM and Run pages are gone: they only appeared without DamSafety Runner, and their last step opened a DamSafety Runner tool. Their NID fill, not-a-dam filter and DEM storage estimate moved to the Runner's dam wizard (Runner 3.10.36, with their tests); the Run page's max extent is set in the run tool's dialog. ui_widgets.py is the suite's shared copy. No default changes.
     1.0.13 - GUI grammar, part 1: plugin icon; wizard title 'DamSafety Setup — Set up one dam'; Browse… buttons; colours from the shared tokens.py. No default changes.
     1.0.11 - PR #94 (Claude's audit-fix campaign): M24 the Setup status panel is wired and released on unload; M4 pack_convert fixes. No default changes.

@@ -197,11 +197,14 @@ def _rim_toe(row, near_k, bw, face_deg):
     return float(row[k0]), float(row[k1]), k0, k1, still_falling
 
 
-def analyze_pond(dem, water, cell, params=None, other=None, excavated_hint=False):
+def analyze_pond(dem, water, cell, params=None, other=None, excavated_hint=False, dwr_dugout=""):
     """Analyse one water body. `dem` (m, NaN = no data) and `water` (bool) share a grid whose cell
     is `cell` m; the window must reach `params.ring_m` beyond the water. `other` marks other water
     bodies (left out of the ground statistics). `excavated_hint`: the layer's own attribute says
-    the water body is excavated (used only to tell a dugout from a natural depression)."""
+    the water body is excavated (used only to tell a dugout from a natural depression).
+    `dwr_dugout`: the DWR dugout structure_id this water body matches (core/dugouts.py); it is
+    then classed a dugout whatever the LiDAR shape, so only the water above the natural ground
+    (lowest rim over lowest toe, all sides) is released."""
     _need_scipy()
     p = params or PondParams()
     dem = np.asarray(dem, float).copy()
@@ -255,7 +258,14 @@ def analyze_pond(dem, water, cell, params=None, other=None, excavated_hint=False
         shore = 8.0
         notes.append("shore slope defaulted to 8 deg")
 
-    if arc >= p.min_arc_deg:
+    if dwr_dugout:
+        ptype, sel = T_DUGOUT, valid
+        notes.append("dugout because DWR lists it (DWR dugout {})".format(dwr_dugout))
+        if arc >= p.min_arc_deg:
+            notes.append("the LiDAR shows {:.0f} deg of the shore holding water above the ground (an "
+                         "embankment pond shape): kept a dugout as DWR lists it, released only above "
+                         "the lowest natural ground - check an aerial image".format(arc))
+    elif arc >= p.min_arc_deg:
         ptype, sel = T_EMBANKMENT, imp
     else:
         if imp:
