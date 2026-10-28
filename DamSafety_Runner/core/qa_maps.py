@@ -11,7 +11,16 @@
 
 QA_MAPS setting: "off" | "inflow" | "inflow+depth" (default). matplotlib (in the QGIS python)
 draws them; without it a plain Qt image is drawn (hillshade and symbols, no contours). A map
-never fails the run: write_qa_maps() catches everything and returns the problem as text."""
+never fails the run: write_qa_maps() catches everything and returns the problem as text.
+
+3.11.0 (Docs & QA aerial-basemap spec, Nick): both maps are drawn over an aerial photo
+(core/basemap.py: ND DWR NAIP 2025 WMS, then Esri World Imagery, then USGS) with Esri street /
+town labels above the flood, a scale bar (m and ft), a true-north arrow and a credit line
+(imagery, flight dates, CRS, plugin version). QA_BASEMAP ("qa_basemap") = auto (default) |
+imagery | hillshade; "qa_basemap_labels" (on). Offline, or when no service answers within the
+map's 30 s network budget: pack imagery, else the hillshade as before (the credit says which;
+"imagery" warns when it falls back). A grid with no CRS keeps the hillshade (no request).
+The depth is Blues 0.35-1 at 60 % opacity with the 0.1 ft extent outlined in yellow."""
 import math
 import os
 import time
@@ -25,6 +34,8 @@ DEFAULT_QA_MAPS = QA_BOTH
 INFLOW_PNG = "qa_inflow_map.png"
 DEPTH_PNG = "qa_depth_map.png"
 FT = 0.3048
+BASEMAP_PX = 1200          # longest side of the base map picture
+DEPTH_ALPHA = 0.6
 
 
 def normalize(mode):
@@ -88,9 +99,54 @@ def inflow_title(dam_id, inflow_z, top_m):
         dam_id, inflow_z / FT, (top_m - inflow_z) / FT, top_m / FT)
 
 
+def _bbox(ext):
+    return (ext[0], ext[2], ext[1], ext[3])
+
+
+def _px(bbox):
+    W, H = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    if W >= H:
+        return BASEMAP_PX, max(16, int(round(BASEMAP_PX * H / max(W, 1e-9))))
+    return max(16, int(round(BASEMAP_PX * W / max(H, 1e-9)))), BASEMAP_PX
+
+
+def _get_basemap(bbox, grid, opts):
+    """core.basemap.render() for the map (None for no base map at all: matplotlib-less)."""
+    from . import basemap as BM
+    o = dict(opts or {})
+    w, h = _px(bbox)
+    return BM.render(bbox, getattr(grid, "crs_wkt", None) or None, w, h,
+                     mode=o.get("mode", BM.DEFAULT_MODE), want_labels=o.get("labels", True),
+                     budget_s=o.get("budget_s", BM.BUDGET_S), avoid=o.get("avoid", ()),
+                     cache=o.get("cache"), opener=o.get("opener"), dirs=o.get("pack_dirs"))
+
+
+def _version():
+    try:
+        from .damjson import plugin_version
+        return "DamSafety Runner {}".format(plugin_version())
+    except Exception:                        # noqa: BLE001
+        return "DamSafety Runner"
+
+
+def _finish(fig, ax, bbox, grid, bm, opts):
+    """Scale bar, north arrow and credit; the map's record into opts["record"]."""
+    from . import basemap as BM
+    crs = getattr(grid, "crs_wkt", None) or None
+    _ang, bar_m = BM.decorate(ax, bbox, crs)
+    text = bm.credit(crs, _version(), (opts or {}).get("dem_label") or "the run's DEM")
+    BM.footer(fig, text, ax=ax)
+    rec = dict(bm.info)
+    rec.update(credit=text, north_arrow=True, scale_bar_m=bar_m)
+    if opts is not None and isinstance(opts.get("record"), dict):
+        opts["record"][opts.get("key", "map")] = rec
+    return rec
+
+
 def draw_inflow_map(path, grid, dam_id, dam_xy, inflow_xy, top_m, radius_m=None, trace=None,
-                    crest_line=None, breach_xy=None):
-    """qa_inflow_map.png. `grid` is a core.grid.Grid of terrain (m) around the dam."""
+                    crest_line=None, breach_xy=None, basemap=None):
+    """qa_inflow_map.png. `grid` is a core.grid.Grid of terrain (m) around the dam.
+    `basemap`: options for core.basemap.render (mode, labels, avoid, ...; None = defaults)."""
     half = max(3.0 * (radius_m or 90.0), 300.0)
     a, ext = _window(grid, dam_xy, half)
     r, c = grid.rc(*inflow_xy) if inflow_xy else (-1, -1)
@@ -101,38 +157,59 @@ def draw_inflow_map(path, grid, dam_id, dam_xy, inflow_xy, top_m, radius_m=None,
         plt = _plt()
     except Exception:                        # noqa: BLE001 - no matplotlib: plain Qt image
         return _qt_map(path, a, ext, grid.dx, title, dam_xy, inflow_xy, trace, None)
+    opts = dict(basemap or {}, key="inflow_map")
+    bbox = _bbox(ext)
+    bm = _get_basemap(bbox, grid, opts)
     fig, ax = plt.subplots(figsize=(8, 8))
     try:
-        ax.imshow(_hillshade(a, grid.dx), cmap="gray", extent=ext)
-        im = ax.imshow(a, cmap="terrain", alpha=0.5, extent=ext)
+        im = None
+        if bm.rgb is not None:
+            ax.imshow(bm.rgb, extent=ext, interpolation="bilinear", zorder=0)
+        else:
+            ax.imshow(_hillshade(a, grid.dx), cmap="gray", extent=ext, zorder=0)
+            im = ax.imshow(a, cmap="terrain", alpha=0.5, extent=ext, zorder=1)
         if np.isfinite(a).sum() > 4 and np.nanmax(a) > np.nanmin(a):
             lo, hi = np.nanmin(a), np.nanmax(a)
             step = max(0.5, round((hi - lo) / 12.0, 1))
             X = np.linspace(ext[0], ext[1], a.shape[1])
             Y = np.linspace(ext[3], ext[2], a.shape[0])
-            cs = ax.contour(X, Y, a, levels=np.arange(math.floor(lo), hi + step, step),
-                            colors="k", linewidths=0.4)
-            ax.clabel(cs, fontsize=6, fmt="%.0f")
+            if bm.rgb is not None:                       # over the photo: coloured contours
+                cs = ax.contour(X, Y, a, levels=np.arange(math.floor(lo), hi + step, step),
+                                cmap="terrain", linewidths=0.9, zorder=2)
+                ax.clabel(cs, fontsize=6, fmt="%.0f", colors="w")
+                im = cs
+            else:
+                cs = ax.contour(X, Y, a, levels=np.arange(math.floor(lo), hi + step, step),
+                                colors="k", linewidths=0.4, zorder=2)
+                ax.clabel(cs, fontsize=6, fmt="%.0f")
+        if bm.labels is not None:
+            ax.imshow(bm.labels, extent=ext, interpolation="bilinear", zorder=3)
         if crest_line:
             xy = np.asarray(crest_line, dtype=float)
-            ax.plot(xy[:, 0], xy[:, 1], "-", color="saddlebrown", lw=3, label="crest line")
+            ax.plot(xy[:, 0], xy[:, 1], "-", color="saddlebrown", lw=3, label="crest line",
+                    zorder=6)
         if trace is not None and len(trace) > 1:
             t = np.asarray(trace, dtype=float)
-            ax.plot(t[:, 0], t[:, 1], "b-", lw=1.5, label="downstream trace")
+            ax.plot(t[:, 0], t[:, 1], "-", color="deepskyblue" if bm.rgb is not None else "b",
+                    lw=1.5, label="downstream trace", zorder=6)
         if radius_m:
-            ax.add_patch(plt.Circle(dam_xy, radius_m, fill=False, ls=":", color="k",
+            ax.add_patch(plt.Circle(dam_xy, radius_m, fill=False, ls=":",
+                                    color="w" if bm.rgb is not None else "k", zorder=6,
                                     label="inflow search ({:.0f} m)".format(radius_m)))
         if breach_xy is not None and tuple(breach_xy) != tuple(dam_xy):
-            ax.plot(*breach_xy, "kx", ms=10, label="dam point given")
-        ax.plot(*dam_xy, "k*", ms=14, mec="w", label="breach (dam) point")
+            ax.plot(*breach_xy, "kx", ms=10, mec="w", label="dam point given", zorder=7)
+        ax.plot(*dam_xy, "k*", ms=14, mec="w", label="breach (dam) point", zorder=7)
         if inflow_xy:
-            ax.plot(*inflow_xy, "ro", ms=11, mec="w", label="breach inflow point")
+            ax.plot(*inflow_xy, "ro", ms=11, mec="w", label="breach inflow point", zorder=7)
         ax.set_xlim(ext[0], ext[1])
         ax.set_ylim(ext[2], ext[3])
+        ax.set_aspect("equal")
         ax.ticklabel_format(useOffset=False, style="plain")
         ax.set_title(title, fontsize=10)
-        ax.legend(fontsize=7, loc="lower left", framealpha=0.85)
-        fig.colorbar(im, ax=ax, shrink=0.6, label="elevation (m)")
+        ax.legend(fontsize=7, loc="lower left", framealpha=0.85).set_zorder(30)
+        if im is not None:
+            fig.colorbar(im, ax=ax, shrink=0.6, label="elevation (m)")
+        _finish(fig, ax, bbox, grid, bm, opts)
         fig.savefig(path, dpi=100, bbox_inches="tight")
     finally:
         plt.close(fig)
@@ -151,10 +228,11 @@ def depth_title(dam_id, acres, dmax_ft, metrics=None):
 
 
 def draw_depth_map(path, grid, depth_m, dam_id, dam_xy, inflow_xy=None, trace=None,
-                   metrics=None, water_mask=None):
-    """qa_depth_map.png: the max depth (ft) of the final model grid over its hillshade.
-    `metrics`: the run summary (report_metrics fields go into the title); `water_mask`: bool
-    array on `grid` drawn as a hatched outline (reporting only)."""
+                   metrics=None, water_mask=None, basemap=None):
+    """qa_depth_map.png: the max depth (ft) of the final model grid over an aerial photo (3.11.0;
+    the hillshade when there is none). `metrics`: the run summary (report_metrics fields go
+    into the title); `water_mask`: bool array on `grid` drawn as a hatched outline (reporting
+    only); `basemap`: options for core.basemap.render."""
     d = np.asarray(depth_m, dtype=float) / FT
     wet = np.isfinite(d) & (d > 0.1)
     z = grid.masked()
@@ -168,34 +246,53 @@ def draw_depth_map(path, grid, depth_m, dam_id, dam_xy, inflow_xy=None, trace=No
         plt = _plt()
     except Exception:                        # noqa: BLE001
         return _qt_map(path, z, ext, grid.dx, title, dam_xy, inflow_xy, trace, np.where(wet, d, np.nan))
+    lim = ext
+    if wet.any():
+        rr, cc = np.where(wet)
+        pad = 10 * grid.dx
+        lim = (max(ext[0], grid.x0 + cc.min() * grid.dx - pad),
+               min(ext[1], grid.x0 + (cc.max() + 1) * grid.dx + pad),
+               max(ext[2], grid.y0 - (rr.max() + 1) * grid.dx - pad),
+               min(ext[3], grid.y0 - rr.min() * grid.dx + pad))
+    bbox = _bbox(lim)
+    opts = dict(basemap or {}, key="depth_map")
+    bm = _get_basemap(bbox, grid, opts)
+    X = grid.x0 + (np.arange(grid.nx) + 0.5) * grid.dx
+    Y = grid.y0 - (np.arange(grid.ny) + 0.5) * grid.dx
     fig, ax = plt.subplots(figsize=(9, 8))
     try:
-        ax.imshow(_hillshade(z, grid.dx), cmap="gray", extent=ext)
-        im = ax.imshow(np.where(wet, d, np.nan), cmap="Blues", extent=ext, vmin=0,
-                       vmax=max(1.0, float(np.nanpercentile(d[wet], 98))) if wet.any() else 1.0)
+        from . import basemap as BM
+        if bm.rgb is not None:
+            ax.imshow(bm.rgb, extent=lim, interpolation="bilinear", zorder=0)
+        else:
+            ax.imshow(_hillshade(z, grid.dx), cmap="gray", extent=ext, zorder=0)
+        im = ax.imshow(np.where(wet, d, np.nan), cmap=BM.depth_cmap(), extent=ext, vmin=0,
+                       vmax=max(1.0, float(np.nanpercentile(d[wet], 98))) if wet.any() else 1.0,
+                       alpha=DEPTH_ALPHA, interpolation="nearest", zorder=2)
+        if bm.labels is not None:
+            ax.imshow(bm.labels, extent=lim, interpolation="bilinear", zorder=3)
+        if wet.any():
+            ax.contour(X, Y, wet.astype(float), levels=[0.5], colors="yellow", linewidths=1.0,
+                       zorder=4)
+            ax.plot([], [], "-", color="yellow", label="0.1 ft extent")
         if trace is not None and len(trace) > 1:
             t = np.asarray(trace, dtype=float)
-            ax.plot(t[:, 0], t[:, 1], "r-", lw=0.8, label="downstream trace")
+            ax.plot(t[:, 0], t[:, 1], "r-", lw=0.8, label="downstream trace", zorder=5)
         if wm is not None:
-            X = grid.x0 + (np.arange(grid.nx) + 0.5) * grid.dx
-            Y = grid.y0 - (np.arange(grid.ny) + 0.5) * grid.dx
             ax.contourf(X, Y, wm.astype(float), levels=[0.5, 1.5], colors="none",
-                        hatches=["////"])
+                        hatches=["////"], zorder=5)
             ax.contour(X, Y, wm.astype(float), levels=[0.5], colors="darkorange",
-                       linewidths=1.0)
+                       linewidths=1.0, zorder=5)
             ax.plot([], [], "-", color="darkorange", label="water-body mask (reporting only)")
-        ax.plot(*dam_xy, "k*", ms=12, mec="w", label="dam")
-        if wet.any():
-            rr, cc = np.where(wet)
-            pad = 10 * grid.dx
-            ax.set_xlim(max(ext[0], grid.x0 + cc.min() * grid.dx - pad),
-                        min(ext[1], grid.x0 + (cc.max() + 1) * grid.dx + pad))
-            ax.set_ylim(max(ext[2], grid.y0 - (rr.max() + 1) * grid.dx - pad),
-                        min(ext[3], grid.y0 - rr.min() * grid.dx + pad))
+        ax.plot(*dam_xy, "k*", ms=12, mec="w", label="dam", zorder=7)
+        ax.set_xlim(lim[0], lim[1])
+        ax.set_ylim(lim[2], lim[3])
+        ax.set_aspect("equal")
         ax.ticklabel_format(useOffset=False, style="plain")
         ax.set_title(title, fontsize=10)
-        ax.legend(fontsize=7, loc="lower left")
+        ax.legend(fontsize=7, loc="lower left", framealpha=0.85).set_zorder(30)
         fig.colorbar(im, ax=ax, shrink=0.6, label="max depth (ft)")
+        _finish(fig, ax, bbox, grid, bm, opts)
         fig.savefig(path, dpi=90, bbox_inches="tight")
     finally:
         plt.close(fig)
@@ -245,9 +342,13 @@ def _qt_map(path, a, ext, cell, title, dam_xy, inflow_xy, trace, depth_ft):
 
 def write_qa_maps(mode, out_folder, dam_id, terrain_grid, dam_xy, inflow_xy, top_m, radius_m=None,
                   trace=None, crest_line=None, breach_xy=None, model_grid=None, depth_m=None,
-                  log=None, metrics=None, water_mask=None):
+                  log=None, metrics=None, water_mask=None, basemap=None, basemap_labels=True,
+                  avoid=(), dem_label=None, basemap_opts=None):
     """Write the QA maps `mode` asks for into `out_folder`. Never raises.
-    Returns ({"inflow_map": path, "depth_map": path, "seconds": s, "mode": mode}, [problems])."""
+    Returns ({"inflow_map": path, "depth_map": path, "seconds": s, "mode": mode,
+    "basemap": {"mode", "inflow_map": {...}, "depth_map": {...}}}, [problems]).
+    basemap: qa_basemap (auto | imagery | hillshade); basemap_labels: qa_basemap_labels;
+    avoid: folders the tile cache must not be in (the run / input folders; out_folder always)."""
     out, problems = {}, []
     t0 = time.time()
     try:
@@ -257,17 +358,29 @@ def write_qa_maps(mode, out_folder, dam_id, terrain_grid, dam_xy, inflow_xy, top
     out["mode"] = mode
     if mode == QA_OFF:
         return out, problems
+    from . import basemap as BM
+    try:
+        bmode = BM.normalize_mode(basemap)
+    except ValueError as e:
+        problems.append(str(e))
+        bmode = BM.DEFAULT_MODE
+    record = {}
+    opts = dict(basemap_opts or {})
+    opts.update(mode=bmode, labels=bool(basemap_labels), record=record,
+                avoid=tuple(a for a in (tuple(avoid or ()) + (out_folder,)) if a),
+                dem_label=dem_label)
+    out["basemap"] = {"mode": bmode, "labels": bool(basemap_labels), "maps": record}
     try:
         os.makedirs(out_folder, exist_ok=True)
     except OSError as e:
         return out, ["QA maps not written: {}".format(e)]
     jobs = [("inflow_map", INFLOW_PNG, lambda p: draw_inflow_map(
-        p, terrain_grid, dam_id, dam_xy, inflow_xy, top_m, radius_m, trace, crest_line, breach_xy),
-        terrain_grid is not None)]
+        p, terrain_grid, dam_id, dam_xy, inflow_xy, top_m, radius_m, trace, crest_line, breach_xy,
+        basemap=opts), terrain_grid is not None)]
     if mode == QA_BOTH:
         jobs.append(("depth_map", DEPTH_PNG, lambda p: draw_depth_map(
-            p, model_grid, depth_m, dam_id, dam_xy, inflow_xy, trace, metrics, water_mask),
-            model_grid is not None and depth_m is not None))
+            p, model_grid, depth_m, dam_id, dam_xy, inflow_xy, trace, metrics, water_mask,
+            basemap=opts), model_grid is not None and depth_m is not None))
     for key, name, fn, ok in jobs:
         if not ok:
             problems.append("QA {} not written: no data for it".format(key.replace("_", " ")))
@@ -276,6 +389,13 @@ def write_qa_maps(mode, out_folder, dam_id, terrain_grid, dam_xy, inflow_xy, top
             out[key] = fn(os.path.join(out_folder, name))
         except Exception as e:  # noqa: BLE001 - a QA map never fails the run
             problems.append("QA {} not written: {}: {}".format(key.replace("_", " "), type(e).__name__, e))
+    for key, rec in record.items():
+        if rec.get("source") == "hillshade" and bmode == "imagery":
+            problems.append("QA {}: no aerial imagery ({}); drawn over the hillshade".format(
+                key.replace("_", " "), rec.get("fallback") or "no answer"))
+    credits = [rec.get("credit") for rec in record.values() if rec.get("credit")]
+    if credits:
+        out["basemap"]["credit"] = credits[0]
     out["seconds"] = round(time.time() - t0, 2)
     if log:
         for p in problems:

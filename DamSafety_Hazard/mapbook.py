@@ -319,10 +319,12 @@ def _item_text(f):
 def build(eap_folder, dam_name, scenario_name, crs, lat, ctx, depth_layer, arrival_layer,
           bands_path=None, contours_path=None, notif_layer=None, roads_layer=None,
           scale=12000, add_to_project=True, group=None, max_sheets=MAPBOOK_MAX_SHEETS,
-          imagery=False):
+          imagery=False, basemap=None):
     """Export EAP_Map_Book.pdf. Returns (pdf path or None, summary lines).
     imagery: aerial imagery under the maps (a summary line says whether the
-    maps have it)."""
+    maps have it). basemap (2.19.0): optional dict of labels (True), source
+    ("auto" | id), opacity (0.65), dem_path - see report.layout_imagery."""
+    bmo = dict(basemap or {})
     from .eap import style_arrival_bands
     from .styles import style_depth
     lines = []
@@ -377,10 +379,14 @@ def build(eap_folder, dam_name, scenario_name, crs, lat, ctx, depth_layer, arriv
     union = QgsRectangle(*sheets[0]["box"])
     for s in sheets[1:]:
         union.combineExtentWith(QgsRectangle(*s["box"]))
+    bm_info = {}
     map_layers, styles, img_used, img_cap, img_note = R.layout_imagery(
-        imagery, layers, add_to_project, union, crs)
+        imagery, layers, add_to_project, union, crs, labels=bmo.get("labels", True),
+        source=bmo.get("source", "auto"), opacity=bmo.get("opacity"),
+        dem_path=bmo.get("dem_path"), info=bm_info)
     if img_used:
         _KEEP.append(map_layers[-1])              # the imagery layer
+        _KEEP.extend(bm_info.get("labels") or [])
 
     project = QgsProject.instance()
     layout = QgsPrintLayout(project)
@@ -471,6 +477,8 @@ def build(eap_folder, dam_name, scenario_name, crs, lat, ctx, depth_layer, arriv
     if imagery:
         lines.append("Aerial imagery under the maps: {}".format(img_cap) if img_used else
                      "Map book made without aerial imagery: {}".format(img_note))
+        if bm_info:
+            lines.append(R.BM.source_line(bm_info))
     lines.extend(notes)
     if sheet_path:
         lines.append("Map sheet grid: EAP/{}".format(os.path.basename(sheet_path)))

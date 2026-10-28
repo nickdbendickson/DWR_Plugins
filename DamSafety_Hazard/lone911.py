@@ -17,6 +17,7 @@ a point against.
 import datetime
 import math
 import os
+import json
 import re
 import urllib.parse
 
@@ -67,6 +68,47 @@ def fetch_naip_dates(extent_4326, output_folder, progress_cb=None):
     from .download import fetch_arcgis_layer
     return fetch_arcgis_layer(NAIP_DATES_URLS[2025], extent_4326, output_folder,
                               NAIP_DATES_NAME, progress_cb=progress_cb, pack_fallback=False)
+
+
+DATES_TIMEOUT_S = 10.0
+
+
+def imagery_dates(extent_4326, year=2025, get=None, timeout_s=DATES_TIMEOUT_S):
+    """2.19.0 (shared with the report / map book credit): the NAIP `year` flight dates
+    (sorted datetime.date list, no repeats) of the seamline polygons intersecting
+    extent_4326 = (xmin, ymin, xmax, ymax) in lon / lat - one envelope query, no geometry.
+    Returns [] when no seamline covers the extent; raises on a failed request (the caller
+    says "date not read"). get(url, timeout_s) -> bytes (default: QGIS network stack)."""
+    base = NAIP_DATES_URLS.get(year)
+    if not base:
+        return []
+    x0, y0, x1, y1 = [float(v) for v in extent_4326]
+    q = {"geometry": "{:.6f},{:.6f},{:.6f},{:.6f}".format(x0, y0, x1, y1),
+         "geometryType": "esriGeometryEnvelope", "inSR": "4326",
+         "spatialRel": "esriSpatialRelIntersects", "outFields": "IDATE,SDATE",
+         "returnGeometry": "false", "f": "json"}
+    raw = (get or _http_get)(base.rstrip("/") + "/query?" + urllib.parse.urlencode(q),
+                             timeout_s)
+    data = json.loads(raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw)
+    if not isinstance(data, dict) or "error" in data:
+        raise ValueError("flight-date service error: {}".format(
+            (data or {}).get("error") if isinstance(data, dict) else data))
+    out = set()
+    for f in data.get("features") or []:
+        a = {str(k).upper(): v for k, v in (f.get("attributes") or {}).items()}
+        d = parse_flight_date(a.get("IDATE"), a.get("SDATE"))
+        if d is not None:
+            out.add(d)
+    return sorted(out)
+
+
+def dates_text(dates):
+    """'2025-07-13' / '2025-07-13 to 2025-08-02' ('' without)."""
+    dates = sorted(dates or [])
+    if not dates:
+        return ""
+    lo, hi = dates[0].isoformat(), dates[-1].isoformat()
+    return lo if lo == hi else "{} to {}".format(lo, hi)
 
 
 class ImageryDates(object):

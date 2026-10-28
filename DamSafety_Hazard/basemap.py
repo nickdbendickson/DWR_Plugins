@@ -20,9 +20,19 @@ already in the project is used as it is, visibility included. Offline (the
 probe) the maps are made without imagery and the caller gets a note.
 
 The service address is AERIAL_IMAGERY_URL in constants.py and can be changed
-in the data-source file (Readme tab > Edit data sources)."""
+in the data-source file (Readme tab > Edit data sources).
+
+2.19.0 (layouts): a chain of sources, the first that answers wins - ND DWR NAIP
+2025 (WMS), Esri World Imagery, the USGS tiles (AERIAL_SOURCES /
+AERIAL_SOURCE_ORDER; a changed AERIAL_IMAGERY_URL still means only that
+service). Esri street / town label tiles go ABOVE the flood layers. Offline:
+pack imagery (<pack>/imagery/*.tif|*.mbtiles covering the map), else a
+hillshade of the DEM when one is known, else none. The credit names the
+source and the flight dates of the map extent (NAIP seamlines; Esri
+identify) - see layout_basemap()."""
 
 import math
+import os
 import time
 from urllib.parse import quote, unquote, urlparse
 
@@ -195,7 +205,6 @@ def offline_only():
     (the same no-download rule the pipeline applies to the layer downloads).
     Lumo v1.6: the imagery probe used to go out in suite / offline-pack mode
     and could block up to PROBE_TIMEOUT_MS on a hung service."""
-    import os
     if any(os.environ.get(k) for k in SUITE_ENV_VARS):
         return True
     try:
@@ -243,7 +252,7 @@ def tile_url(url, x, y, z):
     return str(url).replace("{x}", str(x)).replace("{y}", str(y)).replace("{z}", str(z))
 
 
-def probe(url=None, lonlat=None, timeout_ms=PROBE_TIMEOUT_MS):
+def probe(url=None, lonlat=None, timeout_ms=PROBE_TIMEOUT_MS, request_url=None):
     """(ok, text): does the imagery service answer with a tile image? One
     small request (the tile at the map centre, level PROBE_ZOOM; level 0
     without a centre) through QGIS's network settings (proxy, auth). The
@@ -252,7 +261,7 @@ def probe(url=None, lonlat=None, timeout_ms=PROBE_TIMEOUT_MS):
     url = url or C.AERIAL_IMAGERY_URL
     if offline_only():
         return False, "offline mode (no internet requests)"
-    if not valid_url(url):
+    if request_url is None and not valid_url(url):
         return False, "the imagery address needs {x}, {y} and {z}"
     now = time.time()
     hit = _PROBES.get(url)
@@ -266,7 +275,7 @@ def probe(url=None, lonlat=None, timeout_ms=PROBE_TIMEOUT_MS):
         from qgis.PyQt.QtCore import QUrl
         from qgis.PyQt.QtNetwork import QNetworkRequest
         from .compat import NET_NO_ERROR, enum_value
-        req = QNetworkRequest(QUrl(tile_url(url, x, y, z)))
+        req = QNetworkRequest(QUrl(request_url or tile_url(url, x, y, z)))
         try:
             req.setTransferTimeout(int(timeout_ms))          # Qt >= 5.15
         except Exception:
@@ -296,37 +305,462 @@ def probe(url=None, lonlat=None, timeout_ms=PROBE_TIMEOUT_MS):
 
 def layout_imagery(add_to_project=True, rect=None, crs=None):
     """The imagery layer for the maps of a print layout: (layer or None,
-    caption, note). The note says why there is none (offline mode, service
-    not reachable, ...). add_to_project: the layout is kept in the project,
-    so its map layers must be project layers - the project's imagery layer
-    is used (added switched off when missing); otherwise a private layer
-    (keep a reference while the layout exists). Never raises."""
+    caption, note). Kept for callers of v2.9; 2.19.0 layouts use
+    layout_basemap() (source chain, labels, dates, offline fallback). Never raises."""
+    bm = layout_basemap(add_to_project, rect, crs, labels=False)
+    return bm["layer"], bm["caption"], bm["note"]
+
+
+# ------------------------------------------------------- 2.19.0: source chain --
+DATE_NOT_PUBLISHED = "date not published by the service"
+WMS_PROBE_PX = 64
+
+
+def sources(choice="auto"):
+    """The imagery sources to try, in order (dicts of constants.AERIAL_SOURCES with
+    "url" filled). choice: "auto" or a source id (only that one). A data-source file that
+    changed AERIAL_IMAGERY_URL keeps the pre-2.19 meaning: only that XYZ service."""
+    if "AERIAL_IMAGERY_URL" in C.SOURCE_OVERRIDES:
+        return [{"id": "custom_xyz", "kind": "xyz", "url": C.AERIAL_IMAGERY_URL,
+                 "zmax": C.AERIAL_MAX_ZOOM, "name": source_name(C.AERIAL_IMAGERY_URL),
+                 "resolution": "", "credit": source_name(C.AERIAL_IMAGERY_URL),
+                 "date_service": ""}]
+    by_id = {}
+    for src in C.AERIAL_SOURCES:
+        d = dict(src)
+        if d.get("id") == "usgs_imagery" and not d.get("url"):
+            d["url"] = C.AERIAL_IMAGERY_URL
+        by_id[d.get("id")] = d
+    choice = str(choice or "auto").strip()
+    order = [choice] if choice in by_id else list(C.AERIAL_SOURCE_ORDER)
+    if choice not in ("auto", "") and choice not in by_id:
+        log_message("Base map source '{}' is not known - the usual order is used".format(choice))
+    return [by_id[k] for k in order if k in by_id and by_id[k].get("url")]
+
+
+def layer_name(src):
+    """Project layer name of a source (the USGS one is the Review tab's layer)."""
+    if src.get("id") in ("usgs_imagery", "custom_xyz"):
+        return C.AERIAL_IMAGERY_NAME
+    return "Aerial imagery - {} (base map)".format(src.get("name") or src.get("id"))
+
+
+def wms_crs(src, crs=None):
+    """The CRS asked of a WMS: the map's when the service offers it, else EPSG:3857."""
     try:
-        if offline_only():
-            return None, None, "offline mode (no internet requests)"
+        auth = crs.authid() if crs is not None else ""
+    except Exception:
+        auth = ""
+    offered = [str(c).upper() for c in (src.get("crs_list") or ["EPSG:3857"])]
+    return auth if auth and auth.upper() in offered else "EPSG:3857"
+
+
+def wms_source_string(src, crs=None):
+    """Provider string of a WMS imagery layer."""
+    url = str(src["url"]).rstrip("?&")
+    return ("contextualWMSLegend=0&crs={}&dpiMode=7&format={}&layers={}&styles=&url={}"
+            .format(wms_crs(src, crs), src.get("format") or "image/jpeg",
+                    src.get("layer") or "", url))
+
+
+def wms_probe_url(src, lonlat):
+    """A small GetMap (EPSG:4326, ~1 km) at the map centre - the WMS service check."""
+    from urllib.parse import urlencode
+    lon, lat = lonlat if lonlat else (-100.5, 47.5)
+    d = 0.006
+    q = {"SERVICE": "WMS", "VERSION": "1.1.1", "REQUEST": "GetMap",
+         "LAYERS": src.get("layer") or "", "STYLES": "", "SRS": "EPSG:4326",
+         "BBOX": "{:.6f},{:.6f},{:.6f},{:.6f}".format(lon - d, lat - d, lon + d, lat + d),
+         "WIDTH": str(WMS_PROBE_PX), "HEIGHT": str(WMS_PROBE_PX),
+         "FORMAT": src.get("format") or "image/jpeg"}
+    return str(src["url"]).rstrip("?&") + "?" + urlencode(q)
+
+
+def _style(layer):
+    try:
+        from qgis.core import QgsBilinearRasterResampler
+        rf = layer.resampleFilter()
+        rf.setZoomedInResampler(QgsBilinearRasterResampler())
+        rf.setZoomedOutResampler(QgsBilinearRasterResampler())
+    except Exception:
+        pass
+    return layer
+
+
+def _open_layer(uri, name, provider):
+    """QgsRasterLayer(uri, name, provider) - the one place web layers are opened (a WMS
+    reads its capabilities here; the tests replace it)."""
+    return QgsRasterLayer(uri, name, provider)
+
+
+def source_uri(src, crs=None):
+    """Provider string ("wms" provider) of an imagery source."""
+    if src.get("kind") == "wms":
+        return wms_source_string(src, crs)
+    return source_string(src["url"], src.get("zmax"))
+
+
+def source_layer(src, crs=None, name=None):
+    """A new (private) QGIS layer of an imagery source, or None."""
+    layer = _open_layer(source_uri(src, crs), name or layer_name(src), "wms")
+    return _style(layer) if layer is not None and layer.isValid() else None
+
+
+def label_layers_new():
+    """New (private) label layers, top first: XYZ with tilePixelRatio=2, i.e. tiles one
+    zoom level coarser at double size (readable on paper), capped at AERIAL_LABEL_MAX_ZOOM."""
+    out = []
+    for i, url in enumerate(C.AERIAL_LABEL_URLS or []):
+        if not valid_url(url):
+            continue
+        uri = source_string(url, C.AERIAL_LABEL_MAX_ZOOM) + "&tilePixelRatio=2"
+        name = C.AERIAL_LABEL_NAME + ("" if i == 0 else " {}".format(i + 1))
+        layer = _open_layer(uri, name, "wms")
+        if layer is not None and layer.isValid():
+            out.append(layer)
+    return list(reversed(out))          # places above streets
+
+
+def _project_layer(name, make):
+    """The project layer called `name`, else make() added switched off at the bottom of
+    the tree and marked HIDDEN_PROP (the Review tab's rule). None when it cannot be."""
+    project = QgsProject.instance()
+    found = project.mapLayersByName(name)
+    if found:
+        return found[0]
+    layer = make()
+    if layer is None:
+        return None
+    project.addMapLayer(layer, False)
+    node = project.layerTreeRoot().addLayer(layer)
+    if node is not None:
+        node.setItemVisibilityChecked(False)
+    try:
+        layer.setCustomProperty(HIDDEN_PROP, True)
+    except Exception:
+        pass
+    return layer
+
+
+def _extent_4326(rect, crs):
+    try:
+        from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform
+        xf = QgsCoordinateTransform(crs, QgsCoordinateReferenceSystem("EPSG:4326"),
+                                    QgsProject.instance().transformContext())
+        r = rect if xf.isShortCircuited() else xf.transformBoundingBox(rect)
+        return (r.xMinimum(), r.yMinimum(), r.xMaximum(), r.yMaximum())
+    except Exception:
+        return None
+
+
+def http_get(url, timeout_s):
+    """GET through QGIS's network stack (proxy, auth, bundled certificates); patched in
+    the tests."""
+    from . import download as DL
+    return DL.http_get_bytes(url, DL.HTTP_USER_AGENT, timeout_s=timeout_s)
+
+
+def _esri_dates(service, lonlat, timeout_s=8.0):
+    """Esri World Imagery capture date(s) at the centre (identify, 'SRC_DATE'/'DATE')."""
+    import datetime
+    import json
+    from urllib.parse import urlencode
+    lon, lat = lonlat
+    d = 0.01
+    q = {"geometry": "{:.6f},{:.6f}".format(lon, lat), "geometryType": "esriGeometryPoint",
+         "sr": "4326", "layers": "all", "tolerance": "2", "returnGeometry": "false",
+         "mapExtent": "{},{},{},{}".format(lon - d, lat - d, lon + d, lat + d),
+         "imageDisplay": "400,400,96", "f": "json"}
+    raw = http_get(service.rstrip("/") + "/identify?" + urlencode(q), timeout_s)
+    data = json.loads(raw.decode("utf-8", "replace"))
+    out = set()
+    for r in data.get("results") or []:
+        a = r.get("attributes") or {}
+        for k, v in a.items():
+            ku = str(k).upper()
+            if not (ku.startswith("SRC_DATE") or ku.startswith("DATE")
+                    or ku.startswith("ACQUISITION")):
+                continue
+            v = str(v).strip()
+            try:
+                if len(v) == 8 and v.isdigit():
+                    out.add(datetime.date(int(v[:4]), int(v[4:6]), int(v[6:])))
+                else:
+                    from .lone911 import parse_flight_date
+                    dd = parse_flight_date(v)
+                    if dd:
+                        out.add(dd)
+            except ValueError:
+                pass
+    return sorted(out)
+
+
+def flight_dates(src, rect, crs):
+    """(dates, text) of the source over the map extent. dates: sorted list ([] = none
+    known); text: the 'flown ...' part of the credit. Never raises."""
+    from . import lone911 as LN
+    svc = str(src.get("date_service") or "")
+    try:
+        if svc.startswith("naip:"):
+            ext = _extent_4326(rect, crs) if rect is not None and crs is not None else None
+            if ext is None:
+                return [], "flight date not read (no map extent)"
+            dates = LN.imagery_dates(ext, year=int(svc.split(":", 1)[1]), get=http_get)
+            return dates, ("flown " + LN.dates_text(dates) if dates else
+                           "outside the NAIP flight-date seamlines")
+        if svc.startswith("esri:"):
+            ll = center_lonlat(rect, crs) if rect is not None and crs is not None else None
+            dates = _esri_dates(svc.split(":", 1)[1], ll) if ll else []
+            return dates, ("captured " + LN.dates_text(dates) if dates else DATE_NOT_PUBLISHED)
+    except Exception as e:
+        log_message("Imagery date not read ({}): {}".format(src.get("id"), e))
+        return [], "flight date not read ({})".format(str(e)[:80])
+    return [], DATE_NOT_PUBLISHED
+
+
+def probe_source(src, lonlat):
+    """(ok, text) of one source: a tile (XYZ) or a 64 px GetMap (WMS) must come back."""
+    if src.get("kind") == "wms":
+        return probe(src["url"], lonlat, request_url=wms_probe_url(src, lonlat))
+    return probe(src["url"], lonlat)
+
+
+# --------------------------------------------------------- offline fallback --
+def pack_dirs():
+    """Folders searched for offline imagery: <pack>/imagery of the configured offline
+    pack, ND_DAM_SUITE / NDSUITE_HOME /imagery (existing folders only)."""
+    out = []
+    roots = []
+    try:
+        from .download import offline_config
+        pack = str(offline_config()[0] or "").strip()
+        if pack:
+            roots.append(pack if os.path.isdir(pack) else os.path.dirname(pack))
+    except Exception:
+        pass
+    for k in ("ND_DAM_SUITE", "NDSUITE_HOME", "ND_DAM_HAZARD_OFFLINE_PACK"):
+        v = os.environ.get(k)
+        if v and v not in ("1", "true", "yes"):
+            roots.append(v if os.path.isdir(v) else os.path.dirname(v))
+    for r in roots:
+        d = os.path.join(r, "imagery")
+        if os.path.isdir(d) and d not in out:
+            out.append(d)
+    return out
+
+
+def pack_imagery(rect, crs, dirs=None):
+    """(layer, path) of the first pack imagery file (*.tif / *.tiff / *.mbtiles, any CRS)
+    whose extent covers the map, opened read-only without writing .aux.xml; (None, "")."""
+    from qgis.core import QgsCoordinateTransform
+    for d in (pack_dirs() if dirs is None else dirs):
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for n in names:
+            if not n.lower().endswith((".tif", ".tiff", ".mbtiles")):
+                continue
+            path = os.path.join(d, n)
+            old = os.environ.get("GDAL_PAM_ENABLED")
+            os.environ["GDAL_PAM_ENABLED"] = "NO"
+            try:
+                layer = QgsRasterLayer(path, "Aerial imagery - pack {} (base map)".format(n),
+                                       "gdal")
+            finally:
+                if old is None:
+                    os.environ.pop("GDAL_PAM_ENABLED", None)
+                else:
+                    os.environ["GDAL_PAM_ENABLED"] = old
+            if not layer.isValid():
+                continue
+            try:
+                xf = QgsCoordinateTransform(crs, layer.crs(),
+                                            QgsProject.instance().transformContext())
+                r = rect if xf.isShortCircuited() else xf.transformBoundingBox(rect)
+                if layer.extent().contains(r):
+                    return _style(layer), path
+            except Exception:
+                continue
+    return None, ""
+
+
+def pack_date(path):
+    """ACQUISITION_DATE / TIFFTAG_DATETIME of a pack file ('' when not set)."""
+    try:
+        from osgeo import gdal
+        gdal.SetConfigOption("GDAL_PAM_ENABLED", "NO")
+        ds = gdal.Open(path)
+        md = ds.GetMetadata() or {} if ds is not None else {}
+        v = md.get("ACQUISITION_DATE") or md.get("TIFFTAG_DATETIME") or ""
+        return str(v)[:10].replace(":", "-")
+    except Exception:
+        return ""
+    finally:
+        try:
+            gdal.SetConfigOption("GDAL_PAM_ENABLED", None)
+        except Exception:
+            pass
+
+
+def hillshade_layer(dem_path):
+    """A hillshade of the DEM (private layer) or None."""
+    if not dem_path or not os.path.isfile(str(dem_path)):
+        return None
+    try:
+        from qgis.core import QgsHillshadeRenderer
+        layer = QgsRasterLayer(str(dem_path), "Hillshade of {} (base map)".format(
+            os.path.basename(str(dem_path))), "gdal")
+        if not layer.isValid():
+            return None
+        r = QgsHillshadeRenderer(layer.dataProvider(), 1, 315.0, 45.0)
+        r.setZFactor(2.0)
+        layer.setRenderer(r)
+        return layer
+    except Exception as e:
+        log_message("Hillshade base map not made: {}".format(e))
+        return None
+
+
+def credit(info, crs=None):
+    """The credit line under a map: 'Imagery: <source> (<res>), flown <dates>; labels:
+    Esri reference (...); <CRS>; <plugin version>'."""
+    parts = []
+    if info.get("kind") == "imagery":
+        src = info.get("source") or {}
+        res = src.get("resolution")
+        parts.append("Imagery: {}{}, {}".format(src.get("credit") or src.get("name"),
+                                                " ({})".format(res) if res else "",
+                                                info.get("dates_text") or DATE_NOT_PUBLISHED))
+    elif info.get("kind") == "pack":
+        import os
+        parts.append("Imagery: offline pack {}{}".format(
+            os.path.basename(info.get("path") or ""),
+            ", flown " + info["dates_text"] if info.get("dates_text") else
+            ", " + DATE_NOT_PUBLISHED))
+    elif info.get("kind") == "hillshade":
+        import os
+        parts.append("Imagery not available ({}): hillshade of {}".format(
+            info.get("why") or "offline", os.path.basename(info.get("path") or "the DEM")))
+    else:
+        return ""
+    if info.get("labels"):
+        parts.append("labels: " + C.AERIAL_LABEL_CREDIT)
+    try:
+        if crs is not None and crs.authid():
+            parts.append(crs.authid())
+    except Exception:
+        pass
+    parts.append("{} v{}".format(C.PLUGIN_NAME, C.PLUGIN_VERSION))
+    return "; ".join(parts)
+
+
+def layout_basemap(add_to_project=True, rect=None, crs=None, source="auto", labels=True,
+                   dem_path=None):
+    """2.19.0: the base map of a print layout's maps. Returns a dict:
+      layer   - imagery (or pack / hillshade) layer, None without one
+      labels  - label layers (top first, [] when off / offline / not reachable)
+      caption - the credit line ('' without a base map)
+      note    - why the online imagery was not used ('' when it was)
+      kind    - "imagery" | "pack" | "hillshade" | ""
+      source / dates / dates_text / path / tried - what the summary DATA SOURCES records.
+    add_to_project: layers are project layers (added switched off, marked) so the kept
+    layout keeps them; else private layers (keep references). Never raises."""
+    info = {"layer": None, "labels": [], "caption": "", "note": "", "kind": "",
+            "source": None, "dates": [], "dates_text": "", "path": "", "tried": []}
+    try:
         from .helpers import on_main_thread
         in_project = bool(add_to_project) and on_main_thread()
-        existing = find_layer() if in_project else None
-        url = url_of(existing.source()) if existing is not None else C.AERIAL_IMAGERY_URL
-        lonlat = center_lonlat(rect, crs) if rect is not None and crs is not None else None
-        ok, text = probe(url, lonlat)
-        if not ok:
-            return None, None, text
-        if in_project:
-            state, text = ensure_aerial(visible=False)
-            layer = find_layer() if state != "failed" else None
-            if layer is None:
-                return None, None, text
+        why = ""
+        if offline_only():
+            why = "offline mode (no internet requests)"
         else:
-            layer = new_layer(url)
-            if layer is None:
-                return None, None, "QGIS could not open the aerial imagery service"
-        if not layer.isValid():
-            return None, None, "the aerial imagery layer is not valid"
-        return layer, caption(layer.source()), ""
+            lonlat = center_lonlat(rect, crs) if rect is not None and crs is not None else None
+            for src in sources(source):
+                ok, text = probe_source(src, lonlat)
+                if not ok:
+                    info["tried"].append("{}: {}".format(src["id"], text))
+                    continue
+                dates, dtext = flight_dates(src, rect, crs)
+                if dtext.startswith("outside the NAIP"):
+                    info["tried"].append("{}: {}".format(src["id"], dtext))
+                    continue
+                if in_project:
+                    lyr = _project_layer(layer_name(src), lambda s=src: source_layer(s, crs))
+                else:
+                    lyr = source_layer(src, crs)
+                if lyr is None or not lyr.isValid():
+                    info["tried"].append("{}: QGIS could not open it".format(src["id"]))
+                    continue
+                info.update(layer=lyr, kind="imagery", source=src, dates=dates,
+                            dates_text=dtext)
+                break
+            if info["layer"] is None:
+                why = "; ".join(info["tried"]) or "no imagery source set"
+        if info["layer"] is not None and labels:
+            if in_project:
+                info["labels"] = _project_labels()
+            else:
+                info["labels"] = label_layers_new()
+        if info["layer"] is None:
+            info["note"] = why
+            lyr, path = pack_imagery(rect, crs) if rect is not None and crs is not None \
+                else (None, "")
+            if lyr is not None:
+                if in_project:
+                    lyr = _project_layer(lyr.name(), lambda l=lyr: l)
+                d = pack_date(path)
+                info.update(layer=lyr, kind="pack", path=path, dates_text=d)
+            else:
+                lyr = hillshade_layer(dem_path)
+                if lyr is not None:
+                    if in_project:
+                        lyr = _project_layer(lyr.name(), lambda l=lyr: l)
+                    info.update(layer=lyr, kind="hillshade", path=str(dem_path),
+                                why="offline" if why.startswith("offline") else
+                                "no imagery service answered")
+        info["caption"] = credit(info, crs) if info["layer"] is not None else ""
+        info["labels"] = [x for x in info["labels"] if x is not None]
+        info["labels_used"] = bool(info["labels"])
+        if info["labels"] and info["caption"] and "labels:" not in info["caption"]:
+            info["caption"] = credit(dict(info, labels=True), crs)
     except Exception as e:
-        log_message("Aerial imagery for the maps skipped: {}".format(e))
-        return None, None, "aerial imagery not available ({})".format(e)
+        log_message("Base map for the maps skipped: {}".format(e))
+        info.update(layer=None, labels=[], caption="",
+                    note="aerial imagery not available ({})".format(e))
+    return info
+
+
+def _project_labels():
+    """The label layers as project layers (top first)."""
+    out = []
+    for lyr in label_layers_new():
+        name = lyr.name()
+        out.append(_project_layer(name, lambda l=lyr: l))
+    return out
+
+
+def source_line(info):
+    """DATA SOURCES line of the report / map book base map."""
+    kind = info.get("kind")
+    src = info.get("source") or {}
+    if kind == "imagery":
+        line = "Map base: {} [{}] {} - {}".format(src.get("name"), src.get("id"),
+                                                 src.get("url"), info.get("dates_text"))
+    elif kind == "pack":
+        line = "Map base: offline pack imagery {}{}".format(
+            info.get("path"), " - flown " + info["dates_text"] if info.get("dates_text")
+            else "")
+    elif kind == "hillshade":
+        line = "Map base: hillshade of {} (no aerial imagery: {})".format(
+            info.get("path"), info.get("note"))
+    else:
+        return "Map base: none ({})".format(info.get("note") or "off")
+    if info.get("labels"):
+        line += "; labels: " + ", ".join(C.AERIAL_LABEL_URLS)
+    if info.get("tried"):
+        line += "; not used: " + "; ".join(info["tried"])
+    return line
 
 
 def with_imagery(layers, imagery):

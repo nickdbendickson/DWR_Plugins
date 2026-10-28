@@ -267,6 +267,20 @@ def qa_maps_param(alg, parameters, context):
     return qa_maps.normalize(int(alg.parameterAsEnum(parameters, "QA_MAPS", context)))
 
 
+def qa_basemap_param(alg, parameters, context):
+    """(qa_basemap, qa_basemap_labels) from QA_BASEMAP / QA_BASEMAP_LABELS (3.11.0; the
+    defaults auto / on when the tool has no such parameter)."""
+    from .core import basemap
+    mode, labels = basemap.DEFAULT_MODE, True
+    if alg.parameterDefinition("QA_BASEMAP") is not None and \
+            parameters.get("QA_BASEMAP") not in (None, ""):
+        mode = basemap.MODES[int(alg.parameterAsEnum(parameters, "QA_BASEMAP", context))]
+    if alg.parameterDefinition("QA_BASEMAP_LABELS") is not None and \
+            parameters.get("QA_BASEMAP_LABELS") not in (None, ""):
+        labels = bool(alg.parameterAsBool(parameters, "QA_BASEMAP_LABELS", context))
+    return mode, labels
+
+
 def structure_points(structures):
     """Every vertex of the culvert / bridge lines as (x, y). A Structure's line is an ndarray,
     so it is checked against None, never with `or []` (ValueError: truth value ambiguous)."""
@@ -565,6 +579,14 @@ class _Base(QgsProcessingAlgorithm):
             "QA_MAPS", "QA maps written into the dam folder (qa_inflow_map.png, qa_depth_map.png)",
             list(qa_maps.QA_LABELS), defaultValue=qa_maps.QA_MODES.index(qa_maps.DEFAULT_QA_MAPS),
             optional=True)))
+        from .core import basemap
+        self.addParameter(set_advanced(QgsProcessingParameterEnum(
+            "QA_BASEMAP", "QA map base map (aerial photo: ND DWR NAIP 2025, Esri, USGS; offline: "
+            "the pack imagery or the hillshade)", list(basemap.MODE_LABELS),
+            defaultValue=basemap.MODES.index(basemap.DEFAULT_MODE), optional=True)))
+        self.addParameter(set_advanced(QgsProcessingParameterBoolean(
+            "QA_BASEMAP_LABELS", "Street and town labels on the QA maps (Esri reference)",
+            defaultValue=True, optional=True)))
         from .core import reservoir_carve
         self.addParameter(set_advanced(QgsProcessingParameterEnum(
             "RESERVOIR_CARVE", "Reservoir bottom carved from the storage curve, for a DEM whose "
@@ -751,6 +773,8 @@ class _Base(QgsProcessingAlgorithm):
             half_width_mi=g("HALF_WIDTH_MI"), expand_step_mi=g("STEP_MI"),
             max_extent_mi=g("MAX_EXTENT_MI"), max_iterations=int(g("MAX_RUNS")),
             qa_maps=qa_maps_param(self, parameters, context),
+            qa_basemap=qa_basemap_param(self, parameters, context)[0],
+            qa_basemap_labels=qa_basemap_param(self, parameters, context)[1],
             sim_time_hr=dur if dur > 0 else None,
             sim_max_hr=sim_max if sim_max > 0 else None, lisflood_exe=exe, anuga_python=py,
             threads=threads, anuga_fine_area_m2=g("ANUGA_FINE"),

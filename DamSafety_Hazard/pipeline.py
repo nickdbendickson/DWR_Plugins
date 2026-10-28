@@ -157,7 +157,12 @@ DEFAULTS.update({
     "download_ms_footprints": True, "outline_geometry": "auto", "fema_scene_shift": False,
     "fast_sampling": False,             # vectorised ring / band cell selection (fastsample.py)
     "zone_overviews": True, "input_overviews": False,       # raster pyramids
-    "report_imagery": False,            # aerial imagery under the maps of report / map book
+    # 2.19.0: on by default - ND NAIP 2025 / Esri / USGS under the report and map book maps,
+    # Esri street / town labels on top, flight dates in the credit (basemap.layout_basemap)
+    "report_imagery": True,             # aerial imagery under the maps of report / map book
+    "basemap_labels": True,             # street / town label tiles above the flood
+    "basemap_source": "auto",           # "auto" (the AERIAL_SOURCE_ORDER chain) or a source id
+    "basemap_opacity_flood": 0.65,      # flood raster opacity over the imagery
     "fast_run": False,                  # skip the EAP map book and aerial imagery only
     "evac_routes": True, "web_export": False,
     "temporal_animation": False, "temporal_breach_start": "", "temporal_step_min": 15,
@@ -223,6 +228,47 @@ def _eap_on(cfg, part):
 
 
 FAST_RUN_OFF = ("eap_mapbook", "report_imagery")
+
+
+def add_summary_source(txt_path, line):
+    """2.19.0: add a DATA SOURCES item to a written Hazard_Classification_Summary.txt (the
+    report's base map is known only after the summary is written). Never raises."""
+    try:
+        if not txt_path or not os.path.isfile(txt_path):
+            return False
+        with open(txt_path, encoding="utf-8") as fh:
+            rows = fh.read().split("\n")
+        if "DATA SOURCES" not in rows:
+            return False
+        i = rows.index("DATA SOURCES") + 1
+        while i < len(rows) and rows[i].startswith("  - "):
+            i += 1
+        rows.insert(i, "  - " + str(line))
+        with open(txt_path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(rows))
+        return True
+    except Exception as e:
+        log_message("Summary DATA SOURCES not updated: {}".format(e))
+        return False
+
+
+def basemap_options(cfg, scenario=None):
+    """2.19.0: the report / map book base map options of a run (report.layout_imagery):
+    labels, source, flood opacity and the DEM for the offline hillshade (a HEC-RAS plan's
+    terrain when the scenario has one)."""
+    try:
+        op = float(cfg.get("basemap_opacity_flood", 0.65))
+    except (TypeError, ValueError):
+        op = 0.65
+    dem = None
+    try:
+        dem = (dict(getattr(scenario, "plan_settings", None) or {}).get("dem")
+               or getattr(scenario, "dem", None) or None)
+    except Exception:
+        dem = None
+    return {"labels": bool(cfg.get("basemap_labels", True)),
+            "source": str(cfg.get("basemap_source") or "auto"),
+            "opacity": min(max(op, 0.0), 1.0), "dem_path": dem}
 
 
 def fast_run_config(cfg):
@@ -2184,9 +2230,15 @@ def _classify_and_write(run, cfg, state):
                     all_results=run.results,
                     hydraulics_group=plugin_group(dam_name, GRP_HYDRAULICS)
                     if cfg["add_to_project"] else None,
-                    imagery=bool(cfg.get("report_imagery", False)), info=rep_info)
+                    imagery=bool(cfg.get("report_imagery", False)), info=rep_info,
+                    basemap=basemap_options(cfg, gov))
                 if rep_info.get("imagery_note"):
                     run.log(">>> " + str(rep_info["imagery_note"]))
+                if cfg.get("report_imagery") and rep_info.get("basemap"):
+                    from .basemap import source_line
+                    bm_line = "Report maps - " + source_line(rep_info["basemap"])
+                    run.sources.append(bm_line)
+                    add_summary_source(paths.get("txt"), bm_line)
                 if report:
                     written.append(os.path.basename(report))
             except Exception as e:
@@ -3560,7 +3612,7 @@ def _map_book(run, gov, governing, layers, clip, dam_name, written, folder):
             roads_layer=(governing.get("layers") or {}).get("Roads_Inundated"),
             scale=int(cfg.get("mapbook_scale") or MAPBOOK_DEFAULT_SCALE),
             add_to_project=cfg["add_to_project"], group=plugin_group(dam_name, GRP_EAP),
-            imagery=bool(cfg.get("report_imagery", False)))
+            imagery=bool(cfg.get("report_imagery", False)), basemap=basemap_options(cfg, gov))
     except CancelledByUser:
         raise
     except Exception as e:
