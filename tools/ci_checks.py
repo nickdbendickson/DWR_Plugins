@@ -26,8 +26,16 @@ deterministic, so they can gate every PR cheaply:
   7. mac LISFLOOD     — tools/mac/lisflood/lisflood-8.3-ndbreach.patch (the Mac build's fallback
                         when the Runner's patcher does not apply) still adds every line the
                         Runner's scripts/patch_lisflood.py adds
-  8. merge markers   — no '<<<<<<< ' / '>>>>>>> ' line in any tracked text file, and one
+  8. merge markers   — no line matching ^(<<<<<<<|=======$|>>>>>>>) (git's conflict markers,
+                        the bare ======= separator included) in any tracked text file, and one
                         RELEASE = line in each damsuite versions.py (a bad stacked merge)
+  9. metadata format — every plugin metadata.txt reads the way QGIS reads it (configparser
+                        with % interpolation: a bare % makes the value unreadable, so the Plugin
+                        Manager shows an empty changelog); an indented continuation line only
+                        under changelog= / description= / about= (one after another key joins
+                        that key's value: hasProcessingProvider= became 'yes' + a changelog
+                        entry and qgis_process skipped the provider); one PLUGIN_VERSION in
+                        Hazard's constants.py
 
 Exit non-zero on any failure. The heavier per-plugin suites (real QGIS / scipy / real engines)
 run in a separate CI job that provisions QGIS; this job is the always-on hard gate.
@@ -569,8 +577,13 @@ MARKER_EXTS = (".py", ".txt", ".md", ".json", ".ui", ".qml", ".yml", ".yaml", ".
                ".toml", ".sh", ".csv", ".html", ".qrc", ".spec")
 
 
+MARKER_RE = re.compile(r"^(<<<<<<<|=======$|>>>>>>>)")
+
+
 def scan_merge_markers(root=None):
-    """(rel, line_no, line) for every '<<<<<<< ' / '>>>>>>> ' line in a tracked text file. A
+    """(rel, line_no, line) for every line matching MARKER_RE in a tracked text file: a line
+    starting with seven '<' or '>', or exactly seven '=' (git's separator; a longer or
+    shorter '=' rule such as README.txt's title underline is not one). A
     stacked-branch merge left these in docs/CHANGELOG.md, DamSafety_Hazard/README.txt and
     versions.py on main (2026-10-28); compile only catches the .py ones, and README.txt's first
     line was a marker, so the README version check above silently read nothing."""
@@ -591,8 +604,7 @@ def scan_merge_markers(root=None):
         try:
             with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as f:
                 for i, line in enumerate(f, 1):
-                    if line.startswith(("<<<<<<< ", ">>>>>>> ")) or line.rstrip("\r\n") in (
-                            "<<<<<<<", ">>>>>>>"):
+                    if MARKER_RE.match(line.rstrip("\r\n")):
                         out.append((rel, i, line.rstrip()[:80]))
         except OSError:
             continue
@@ -614,6 +626,70 @@ def check_merge_markers(problems, root=None):
                                 "others)".format(rel, n))
 
 
+MULTILINE_KEYS = ("changelog", "description", "about")
+
+
+def metadata_continuations(text):
+    """[(line_no, key, line)] of indented continuation lines under a metadata.txt key other
+    than MULTILINE_KEYS (a translated 'about[de]' counts as 'about'). configparser joins such a
+    line to the key's value."""
+    out, key = [], None
+    for i, line in enumerate((text or "").splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith(("#", ";")):
+            continue
+        if line[:1] in (" ", "\t"):
+            if key is not None and key.split("[", 1)[0].strip().lower() not in MULTILINE_KEYS:
+                out.append((i, key, line.strip()[:80]))
+            continue
+        if line.startswith("["):
+            key = None
+            continue
+        m = re.match(r"^([^=:]+)[=:]", line)
+        key = m.group(1).strip() if m else None
+    return out
+
+
+def metadata_read_errors(text):
+    """[message] of what QGIS's own read (qgis.utils / the Plugin Manager:
+    configparser.ConfigParser(), strict, BasicInterpolation) cannot get from metadata.txt."""
+    import configparser
+    cp = configparser.ConfigParser()
+    try:
+        cp.read_string(text or "")
+    except configparser.Error as e:
+        return ["not readable: {}".format(str(e).splitlines()[0][:160])]
+    out = []
+    for sec in cp.sections():
+        for opt in cp.options(sec):
+            try:
+                cp.get(sec, opt)
+            except configparser.Error as e:
+                out.append("[{}] {}: {} (write a percent sign as %%)".format(
+                    sec, opt, type(e).__name__))
+    return out
+
+
+def check_metadata_format(problems, root=None):
+    root = root or ROOT
+    for plugin in PLUGINS:
+        meta = os.path.join(root, plugin, "metadata.txt")
+        if not os.path.isfile(meta):
+            continue
+        text = _read(meta)
+        for msg in metadata_read_errors(text):
+            _fail(problems, "{}/metadata.txt: {}".format(plugin, msg))
+        for i, key, line in metadata_continuations(text):
+            _fail(problems, "{}/metadata.txt:{}: indented line after {}= joins its value "
+                            "(only changelog / description / about continue): {}".format(
+                                plugin, i, key, line))
+    const = os.path.join(root, "DamSafety_Hazard", "constants.py")
+    if os.path.isfile(const):
+        n = len(re.findall(r"^PLUGIN_VERSION\s*=", _read(const), re.M))
+        if n > 1:
+            _fail(problems, "DamSafety_Hazard/constants.py: {} PLUGIN_VERSION lines (one "
+                            "only)".format(n))
+
+
 def main():
     problems = []
     for name, fn in (("damsuite drift", check_damsuite_drift),
@@ -628,6 +704,7 @@ def main():
                      ("qt6 metadata", check_qt6_metadata),
                      ("mac LISFLOOD patch vs the Runner's patcher", check_mac_lisflood_patch),
                      ("merge-conflict markers", check_merge_markers),
+                     ("metadata format", check_metadata_format),
                      ("compile", check_compile), ("golden baseline", check_golden)):
         print("[ci] " + name)
         try:

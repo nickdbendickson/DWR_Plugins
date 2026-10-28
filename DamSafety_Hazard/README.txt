@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.19.0
+ND Dam Hazard Classification Helper - Version 2.19.1
 ====================================================
 
 WHAT IT DOES
@@ -829,6 +829,11 @@ NEW IN 1.3.0 - HAZARD CLASSIFICATION TAB
   bridge flag and the MOST RECENT AADT from (a) the road layer itself,
   including AADT_2023-style columns, (b) an optional AADT layer (NDDOT
   counts, HPMS) within 300 ft, (c) FRA crossing AADT within 100 ft.
+- 2.19.1: the map labels are used only when one label tile answers
+  (3 s check), so a dead label service no longer slows each map export
+  and the credit names labels only when they are on the maps; a check
+  that timed out says so; ND_DAM_OFFLINE=0 / false is not offline; the
+  metadata.txt fixes that let qgis_process load the Hazard provider.
 - 2.19.0: the report and map book are drawn over aerial imagery by
   default (ND NAIP 2025 from the ND DWR WMS, then Esri, then USGS), with
   street / town labels above the flood and a credit giving the imagery

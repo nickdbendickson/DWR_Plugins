@@ -295,35 +295,81 @@ def lidar_bed(grid, xy, radius):
 CHANNEL_REACH_M = 30.0     # 3.10.96: how far past each end the channel bed is looked for
 CHANNEL_CELL_M = 1.0       # ... on ground read this fine (a 3 m cell averages a narrow
                            # channel with its banks)
+CHANNEL_NEAR_M = 10.0      # 3.11.1: the bed at the end is read over the first 10 m ...
+CHANNEL_BED_PCT = 10.0     # ... as this low percentile of the slope-corrected thalweg
+CHANNEL_MIN_BINS = 4       # thalweg points needed to fit the channel's slope
 
 
-def channel_bed(grid, line, end, half, reach=CHANNEL_REACH_M):
-    """3.10.96: the lowest finite ground in the channel beyond one end of a culvert line:
-    a strip from the end outward along the line's own direction (0..reach m) and up to
-    `half` (at least a cell) to either side. None without ground there.
+def thalweg_profile(grid, line, end, half, reach=CHANNEL_REACH_M):
+    """3.11.1: (along, bed) arrays of the channel beyond one end of a culvert line: the
+    lowest finite ground in each 1 m (or one-cell) bin of a strip from the end outward
+    along the line's own direction (0..reach m), up to `half` (at least a cell) to either
+    side. None without ground there."""
+    line = np.asarray(line, dtype=float)
+    p, q = (line[0], line[1]) if end == 0 else (line[-1], line[-2])
+    u = p - q
+    n_ = float(np.hypot(*u))
+    if n_ <= 0:
+        return None
+    u = u / n_
+    X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
+    z = grid.masked()
+    dx, dy = X - p[0], Y - p[1]
+    along = dx * u[0] + dy * u[1]
+    across = np.abs(-dx * u[1] + dy * u[0])
+    w = max(float(half), float(abs(grid.dx)))
+    near = (along >= 0) & (along <= reach) & (across <= w) & np.isfinite(z)
+    if not near.any():
+        return None
+    a, b = along[near], z[near]
+    step = max(1.0, float(abs(grid.dx)))
+    k = np.floor(a / step).astype(int)
+    bins = np.unique(k)
+    return (np.array([(i + 0.5) * step for i in bins]),
+            np.array([float(b[k == i].min()) for i in bins]))
+
+
+def channel_slope(along, bed):
+    """3.11.1: the bed's fall per metre along the profile (Theil-Sen: the median of the
+    pairwise slopes, so a few toe-slope or pool points do not tilt it); 0 with too few
+    points."""
+    if along is None or len(along) < CHANNEL_MIN_BINS:
+        return 0.0
+    i, j = np.triu_indices(len(along), 1)
+    d = along[j] - along[i]
+    ok = d > 0
+    if not ok.any():
+        return 0.0
+    return float(np.median((bed[j] - bed[i])[ok] / d[ok]))
+
+
+def channel_bed(grid, line, end, half, reach=CHANNEL_REACH_M, near=CHANNEL_NEAR_M,
+                pct=CHANNEL_BED_PCT):
+    """3.10.96: the channel bed just beyond one end of a culvert line, from the strip
+    of thalweg_profile. None without ground there.
+
+    3.11.1 (smoke test of 7feee1f): the minimum over 0..30 m read a sloping channel's bed
+    up to slope x 30 m low at the downstream end (2 % -> 0.6 m = 2 ft), which rejected
+    correct inventory inverts. Now the channel's slope is fitted over the whole reach
+    (channel_slope), each thalweg point is carried back to the end along it, and the bed
+    is the `pct` percentile of those values over the first `near` m (a low percentile,
+    not the minimum, so one pit does not decide it).
 
     The disc around the end (lidar_bed) sits on the embankment's toe slope: at DWR-3034's
     Boyd culvert it read 528.26 / 526.68 m at a 3 m cell where the channel 4-28 m out is
     527.90-528.07 / 526.56-527.02 m on the 1 m LiDAR, which made the inventory inverts
     (527.30 / 526.39 m) look like a datum shift (REVIEW 9.8 item 3)."""
     try:
-        line = np.asarray(line, dtype=float)
-        p, q = (line[0], line[1]) if end == 0 else (line[-1], line[-2])
-        u = p - q
-        n_ = float(np.hypot(*u))
-        if n_ <= 0:
+        prof = thalweg_profile(grid, line, end, half, reach)
+        if prof is None:
             return None
-        u = u / n_
-        X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
-        z = grid.masked()
-        dx, dy = X - p[0], Y - p[1]
-        along = dx * u[0] + dy * u[1]
-        across = np.abs(-dx * u[1] + dy * u[0])
-        w = max(float(half), float(abs(grid.dx)))
-        near = (along >= 0) & (along <= reach) & (across <= w) & np.isfinite(z)
-        if not near.any():
-            return None
-        return float(np.nanmin(z[near]))
+        along, bed = prof
+        slope = channel_slope(along, bed)
+        at_end = bed - slope * along
+        sel = along <= max(float(near), 1.0)
+        if not sel.any():
+            sel = np.ones_like(along, dtype=bool)
+        return float(np.percentile(at_end[sel], pct))
     except Exception:                                            # noqa
         return None
 
@@ -334,8 +380,8 @@ CHANNEL_MIN_DROP_M = 0.15
 def end_bed(disc, channel):
     """The LiDAR bed at one end: the channel beyond the end when it reads at least
     CHANNEL_MIN_DROP_M (~0.5 ft) below the disc at the end (the disc is on the embankment's
-    toe slope), else the disc. Smaller drops are within the channel's own fall over
-    CHANNEL_REACH_M (0.5 % x 30 m), which would bias a downstream end low."""
+    toe slope), else the disc. 3.11.1: channel_bed is carried back to the end along the
+    channel's slope, so a smaller drop is noise, not the channel's own fall."""
     if disc is None:
         return channel
     if channel is None or disc - channel < CHANNEL_MIN_DROP_M:

@@ -192,14 +192,16 @@ def bed_notes_name_phantom_head_raised_ends_and_operator_imbalance():
         "operator_volumes": [{"op": 0, "name": "Boyd", "removed_m3": 1000.0,
                               "added_m3": 1000.5, "net_m3": 0.5, "calls": 10}]}
     n = AM.culvert_bed_notes(st)
-    assert len(n) == 1 and "Boyd: the upstream invert (527.30 m) is 0.63 m below" in n[0], n
+    assert len(n) == 1 and "Boyd: the upstream invert (527.30 m = 1730.00 ft) is 0.63 m (2.1 ft) " \
+        "below" in n[0], n
     st["operator_volumes"][0]["added_m3"] = 1100.0
     n = AM.culvert_bed_notes(st)
     assert len(n) == 2 and "added 1,100 m3 and removed 1,000 m3 (+10.00%)" in n[1], n
     st["culvert_enquiry"][0]["ends"][0].update(raised_m=0.626, floor_source="enquiry",
                                                 floor_m=527.93, invert_used_m=527.93)
     n = AM.culvert_bed_notes(st)
-    assert "upstream invert raised 0.63 m to the enquiry bed (527.93 m" in n[0], n
+    assert "upstream invert raised 0.63 m (2.1 ft) to the enquiry bed (527.93 m = 1732.05 ft" \
+        in n[0], n
     assert AM.culvert_bed_notes({}) == []
 
 

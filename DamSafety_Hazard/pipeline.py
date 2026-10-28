@@ -185,9 +185,11 @@ DEFAULTS.update(_MG.CFG_DEFAULTS)
 
 
 def downloads_disabled():
-    """ES.1(a): the suite / offline environment turns every download off."""
-    import os as _os
-    return bool(_os.environ.get("ND_DAM_SUITE") or _os.environ.get("ND_DAM_OFFLINE"))
+    """ES.1(a): the suite / offline environment turns every download off. 2.19.1:
+    ND_DAM_SUITE set, or ND_DAM_OFFLINE true (1 / true / yes / on; '0' / 'false' is not
+    offline) - the base map's rule (basemap.suite_offline, the Runner's _truthy)."""
+    from .basemap import suite_offline
+    return suite_offline()
 
 
 def resolve_point_layers(cfg, loc):

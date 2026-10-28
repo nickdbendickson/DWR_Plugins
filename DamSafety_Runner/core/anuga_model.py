@@ -1441,6 +1441,7 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
                      dem.like(wse, np.nan), stats, notes), outer, fine
 
 
+FT_M = 0.3048                 # 3.11.1: the culvert bed notes give feet too
 PHANTOM_HEAD_M = 0.3          # 3.10.96: an invert this far below its enquiry bed
 OPERATOR_IMBALANCE = 0.001    # |added - removed| / removed above this: the operator made water
 
@@ -1459,15 +1460,18 @@ def culvert_bed_notes(stats):
             inv, bed = e.get("invert_used_m"), e.get("enquiry_bed_m")
             side = "upstream" if j == 0 else "downstream"
             if e.get("raised_m"):
-                out.append("ANUGA culvert {}: {} invert raised {:.2f} m to the {} bed ({:.2f} m; "
-                           "NDBREACH_CULVERT_BED_FLOOR).".format(name, side, e["raised_m"],
-                                                                 e.get("floor_source"),
-                                                                 e.get("floor_m")))
+                out.append("ANUGA culvert {}: {} invert raised {:.2f} m ({:.1f} ft) to the {} "
+                           "bed ({:.2f} m = {:.2f} ft; NDBREACH_CULVERT_BED_FLOOR).".format(
+                               name, side, e["raised_m"], e["raised_m"] / FT_M,
+                               e.get("floor_source"), e.get("floor_m"),
+                               float(e.get("floor_m") or 0.0) / FT_M))
             elif inv is not None and bed is not None and inv < bed - PHANTOM_HEAD_M:
-                out.append("ANUGA culvert {}: the {} invert ({:.2f} m) is {:.2f} m below the bed "
-                           "the operator reads its head on ({:.2f} m): it sees that much water "
-                           "on a dry end. Check the invert; NDBREACH_CULVERT_BED_FLOOR=enquiry "
-                           "or channel raises it.".format(name, side, inv, bed - inv, bed))
+                out.append("ANUGA culvert {}: the {} invert ({:.2f} m = {:.2f} ft) is {:.2f} m "
+                           "({:.1f} ft) below the bed the operator reads its head on ({:.2f} m "
+                           "= {:.2f} ft): it sees that much water on a dry end. Check the "
+                           "invert; NDBREACH_CULVERT_BED_FLOOR=enquiry or channel raises it."
+                           .format(name, side, inv, inv / FT_M, bed - inv, (bed - inv) / FT_M,
+                                   bed, bed / FT_M))
     for v in stats.get("operator_volumes") or []:
         rem, add = float(v.get("removed_m3") or 0.0), float(v.get("added_m3") or 0.0)
         if rem > 1.0 and abs(add - rem) > OPERATOR_IMBALANCE * rem:
@@ -1483,11 +1487,31 @@ SOLVER_RESIDUAL_LIMIT = 0.005  # |ANUGA conservation residual| / supply above th
 POSITIVE_EDGE_INFLOW = 0.001   # net edge inflow / supply above this with outflow-only edges
 
 
+def structures_net(stats):
+    """3.11.1: the culvert / bridge operators' net volume (added - removed, m3) from
+    stats['operator_volumes'] (3.10.96, one cumulative row per operator), 0.0 when the run
+    had no culvert operator, None when it had some but their volumes were not logged."""
+    rows = stats.get("operator_volumes")
+    if rows:
+        last = {}
+        for r in rows:
+            last[r.get("op")] = r
+        return float(sum(float(r.get("added_m3") or 0.0) - float(r.get("removed_m3") or 0.0)
+                         for r in last.values()))
+    if not stats.get("culverts"):
+        return 0.0
+    return None
+
+
 def operator_share(stats, vb):
     """3.10.95: how much of a volume gain the inflow operators booked. ANUGA's fractional-step
-    volume integral ('operators_m3': the breach inlet; culverts only move water inside) minus
-    the hydrograph volume that entered ('injected_m3') = the inlet's integration excess, and its
-    share of the gain (in domain - supplied). None without both numbers or without a gain."""
+    volume integral ('operators_m3') minus the hydrograph volume that entered ('injected_m3')
+    = the operators' integration excess, and its share of the gain (in domain - supplied).
+    3.11.1 (#209 wording): the integral covers EVERY fractional-step operator - the breach
+    inlet and any culvert / bridge operators (which should net zero but need not). With
+    their net known (structures_net) it is split off: 'inlet_excess_m3' is the inlet's own
+    part, 'structures_net_m3' the culverts'; without it 'structures_net_m3' is None and the
+    excess may be either. None without both numbers or without a gain."""
     ops, inj = vb.get("operators_m3"), stats.get("injected_m3")
     if ops is None or inj is None:
         return None
@@ -1495,8 +1519,20 @@ def operator_share(stats, vb):
     if extra <= 0:
         return None
     ex = float(ops) - float(inj)
+    st = structures_net(stats)
     return {"operators_m3": float(ops), "injected_m3": float(inj), "excess_m3": ex,
-            "share": ex / extra}
+            "share": ex / extra, "structures_net_m3": st,
+            "inlet_excess_m3": None if st is None else ex - st}
+
+
+def step_cap_used(vb):
+    """3.11.1: True when the run held ANUGA's step at the first-step inflow cap (Runner
+    3.10.94, volume_balance['inflow_step_cap']['applied']), False when the record says it
+    was off, None for a run without the record (before 3.10.94)."""
+    cap = vb.get("inflow_step_cap")
+    if not isinstance(cap, dict):
+        return None
+    return bool(cap.get("applied"))
 
 
 def first_step_cause(vb):
@@ -1552,18 +1588,47 @@ def volume_note(stats, limit=VOLUME_GAIN_LIMIT):
         if share is not None and share["excess_m3"] > 0.5 * extra:
             # 3.10.95 (DWR-3034 REVIEW 9.8 item 2): the gain is in the inflow operators'
             # fractional-step integral, not the edge
-            why = ("the breach inlet added it: ANUGA's inflow operators (fractional-step "
-                   "integral) added {:,.0f} m3 against the hydrograph's {:,.0f} m3, so {:,.0f} m3 "
-                   "= {:.0%} of the gain is the inlet's own time integration".format(
-                       share["operators_m3"], share["injected_m3"], share["excess_m3"],
-                       share["share"]))
+            # 3.11.1 (#209): the integral is every operator's; the inlet is named alone only
+            # when the culvert operators' net is known and small
+            stn = share["structures_net_m3"]
+            inlet_only = stn is not None and abs(stn) <= 0.1 * abs(share["excess_m3"])
+            if inlet_only:
+                why = ("the breach inlet added it: ANUGA's operators (fractional-step "
+                       "integral) added {:,.0f} m3 against the hydrograph's {:,.0f} m3, so "
+                       "{:,.0f} m3 = {:.0%} of the gain is the inlet's own time "
+                       "integration".format(share["operators_m3"], share["injected_m3"],
+                                            share["excess_m3"], share["share"]))
+                if stn:
+                    why += " (culvert operators: {:+,.0f} m3 net)".format(stn)
+            else:
+                why = ("ANUGA's operators added it: their fractional-step integral (the breach "
+                       "inlet{}) added {:,.0f} m3 against the hydrograph's {:,.0f} m3, so "
+                       "{:,.0f} m3 = {:.0%} of the gain is operator water".format(
+                           " and the culvert / bridge operators" if stn is None or stn else "",
+                           share["operators_m3"], share["injected_m3"], share["excess_m3"],
+                           share["share"]))
+                if stn is None:
+                    why += (" (the culvert operators' own net was not logged, so the inlet's "
+                            "part is not known)")
+                else:
+                    why += (" ({:,.0f} m3 from the breach inlet, {:+,.0f} m3 net from the "
+                            "culvert / bridge operators)".format(share["inlet_excess_m3"], stn))
             if bi is not None:
                 why += " (edge: {:,.0f} m3 net)".format(bi)
             if fs:
                 why += "; " + fs
-            why += (". This is extra water at the breach, so the depths are conservative, not "
-                    "an edge or stability problem; a run with the first-step inflow cap "
-                    "(Runner 3.10.94) removes it")
+            why += ". This is extra water in the domain, so the depths are conservative, not " \
+                   "an edge or stability problem"
+            used = step_cap_used(vb)
+            inlet_part = share["excess_m3"] if inlet_only else share.get("inlet_excess_m3")
+            if used:
+                why += ("; the first-step inflow cap (Runner 3.10.94) was on in this run, so a "
+                        "rerun with it would not change this")
+            elif inlet_part is None or inlet_part > 0.5 * share["excess_m3"]:
+                why += ("; a run with the first-step inflow cap (Runner 3.10.94; it was {}) "
+                        "should remove the inlet's part".format(
+                            "off in this run" if used is False else
+                            "not recorded for this run"))
         elif bi is not None and bi > 0.5 * extra:
             edge = True
             why = ("ANUGA's boundary flux integral shows {:,.0f} m3 net inflow through the mesh "

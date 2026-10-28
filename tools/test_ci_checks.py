@@ -277,13 +277,54 @@ def test_merge_markers():
     try:
         _w(root, "docs/CHANGELOG.md", "# Changelog\n" + "<" * 7 + " HEAD\n- a\n=======\n- b\n"
                                       + ">" * 7 + " f4fdb0c (x)\n")
-        _w(root, "DamSafety_Hazard/README.txt", "Title\n=======\n")   # setext rule: fine
+        # a title underline of another length is not git's separator
+        _w(root, "DamSafety_Hazard/README.txt", "Title\n" + "=" * 52 + "\nAb\n" + "=" * 6 + "\n")
+        # a bare separator left alone after the other markers were removed by hand
+        _w(root, "docs/notes.txt", "kept a\n" + "=" * 7 + "\nkept b\n" + "=" * 7 + "  \n")
         _w(root, "shared/damsuite/versions.py", 'RELEASE = {"a": "1"}\nRELEASE = {"a": "1"}\n')
         C.check_merge_markers(problems, root)
         text = "\n".join(problems)
-        assert len(problems) == 3, problems
+        assert len(problems) == 5, problems
         assert "docs/CHANGELOG.md:2" in text and "docs/CHANGELOG.md:6" in text, problems
+        assert "docs/CHANGELOG.md:4" in text and "docs/notes.txt:2" in text, problems
+        assert "docs/notes.txt:4" not in text and "README" not in text, problems
         assert "2 'RELEASE =' lines" in text, problems
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_metadata_format():
+    problems = []                                 # the real tree is clean
+    C.check_metadata_format(problems)
+    assert problems == [], problems
+    good = ("[general]\nname=X\nversion=1.0.1\nchangelog=1.0.1 (a 5 %% gain)\n"
+            "    1.0.0 first\nabout=Long\n  text\nhasProcessingProvider=yes\nicon=icon.svg\n")
+    assert C.metadata_read_errors(good) == [] and C.metadata_continuations(good) == []
+    # a bare % (QGIS's read fails, the Plugin Manager shows an empty changelog)
+    bad = good.replace("5 %% gain", "5 % gain")
+    errs = C.metadata_read_errors(bad)
+    assert len(errs) == 1 and "changelog" in errs[0] and "%%" in errs[0], errs
+    # changelog lines after hasProcessingProvider= / icon= (Hazard 2.18.66, Runner 3.10.93)
+    bad = good.replace("hasProcessingProvider=yes\n", "hasProcessingProvider=yes\n"
+                       "    2.18.66 - entry\n      * detail\n") + "    * stray\n"
+    cont = C.metadata_continuations(bad)
+    assert [(k, ln) for _i, k, ln in cont] == [("hasProcessingProvider", "2.18.66 - entry"),
+                                               ("hasProcessingProvider", "* detail"),
+                                               ("icon", "* stray")], cont
+    import configparser
+    cp = configparser.ConfigParser()
+    cp.read_string(bad)
+    assert cp.get("general", "hasProcessingProvider") != "yes"     # why it matters
+    root = tempfile.mkdtemp(prefix="meta_")
+    try:
+        _w(root, "DamSafety_Hazard/metadata.txt", bad.replace("5 %% gain", "5 % gain"))
+        _w(root, "DamSafety_Hazard/constants.py", 'PLUGIN_VERSION = "1"\nPLUGIN_VERSION = "1"\n')
+        _w(root, "DamSafety_Runner/metadata.txt", good)
+        p = []
+        C.check_metadata_format(p, root)
+        text = "\n".join(p)
+        assert len(p) == 5, p
+        assert "DamSafety_Runner" not in text and "2 PLUGIN_VERSION lines" in text, p
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
