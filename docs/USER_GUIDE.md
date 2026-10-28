@@ -543,6 +543,53 @@ The old map styles were drawn at 75 % opacity, and the Hazard chart sign-off ove
 - This only changes how the layer is drawn in your project, not the files or the class.
 - Lower opacity lightens the colours, so they no longer match Figure 5.1 / 5.2 exactly. For a figure that a reviewer will compare with the standard, set the zone layer back to 100 % (or right-click the layer, *Styles > Default*, to reload the plugin style).
 
+## ANUGA: the first dry-domain step is capped while the hydrograph flows (#208, Runner 3.10.94)
+**Why.** On a dry domain ANUGA has no CFL limit, so its first internal step could be the whole 300 s yield step. The breach inflow was booked for that whole step at once, and the domain gained more water than the hydrograph gave it (DWR-3034's G5 volume check: +4.61 %, traced to that first step).
+
+- **The cap.** While the hydrograph still flows, ANUGA's step is held to min(the median hydrograph interval, the run duration / 100, the yield step), never below 0.5 s. The old limit comes back at the first yield after the hydrograph ends, so the rest of the run is not slowed.
+- **Override.** `NDBREACH_ANUGA_INFLOW_MAX_DT` = a number of seconds uses that cap instead; `0` or `off` gives the old behaviour.
+- **Where to see it.** The run log has `PROGRESS 0 inflow step cap: … s until t=…s`, and the volume balance records `inflow_step_cap`. The test `DamSafety_Runner/tests/test_anuga_inflow_step_cap.py` shows a volume ratio of 1.0000 with the cap and 1.2000 without it.
+- **Older runs.** ANUGA runs made before 3.10.94 (main fafc569) can carry this first-step gain. Re-check G5 on a rerun rather than on the old result.
+
+## Culvert inverts against the LiDAR channel bed, culvert losses, opt-in bed floor (#210, Runner 3.10.96)
+**The channel bed.** When the Runner checks a culvert's inventory inverts against the LiDAR (`reconcile_inverts`), each end's bed is now also read on a 1 m grid along the culvert line, up to 30 m out past the end (`structures.channel_bed`). That channel bed is used instead of the disc at the end (`structures.end_bed`) when it reads at least 0.15 m (about 0.5 ft) lower; otherwise, or if the 1 m read fails, the disc is used as before. On DWR-3034 the 3 m disc read the toe slope, not the channel.
+
+- **Tolerance.** Inventory inlet / outlet elevations are kept when they are within `S_INVERT_TOL_FT` (default 3 ft, an advanced Processing setting: "Structures: inventory inlet / outlet elevations are used when within this of the LiDAR bed at each end (ft; YOUR value)…") of the LiDAR bed at each end.
+- **What the check does** (now against the channel bed): both ends within the tolerance - the inventory inverts are used as given; both ends off by about the same amount (within 1 ft of each other) - taken as a datum shift, both moved by the mean offset onto the LiDAR (slope kept); otherwise - the LiDAR bed at both ends (the inventory values kept for the report). The structure's note says which.
+- **Culvert losses.** A structures layer field named `losses`, `loss_coef` or `k_loss` (any case) sets the ANUGA culvert loss coefficient. Allowed range 0-10; an empty value keeps the default 1.0; a value outside the range is ignored, with a note.
+- **Bed floor (opt-in, off by default).** `NDBREACH_CULVERT_BED_FLOOR` = `off` (default; unset, empty, `0`, `no`, `false` and `none` also mean off), `enquiry` (raise an invert that is below the bed the operator reads its head on to that bed) or `channel` (raise it to the LiDAR channel bed at that end, or the enquiry bed where there is none). Any other value stops the run with an error. There is no window or Processing setting for it. With it off the job and culvert specs are the same as before. Whether it should be on by default is still Nick's call (DWR-3034 REVIEW §9.9 Q2).
+- **Where to see it.** The run log names an invert that is well below its enquiry bed (it sees water on a dry end) and any end raised by the floor. `operator_volumes.csv` next to the ANUGA results (and `operator_volumes` in the stats) records what each culvert / bridge operator removed and added at each yield; per-end records are under `culvert_enquiry` … `ends`.
+
+## Offline-only runs say why Microsoft footprints are missing (#211, Hazard 2.18.68)
+Message only; nothing is fetched or classified differently. In offline-only mode (`ND_DAM_HAZARD_OFFLINE_ONLY` or the offline-only setting) Hazard makes no internet requests, and the offline data pack never carries Microsoft building footprints. The run log and the building-geometry note (DATA SOURCES / judgment) now say: "offline-only mode is on (no internet requests) and the offline data pack never carries Microsoft footprints - turn offline-only off for this run (ND_DAM_HAZARD_OFFLINE_ONLY=false) to download them". Before, the note said the download had failed.
+
+## Crossing depth in the 1 m channel (#212, Hazard 2.18.69)
+Every wet bridge, culvert and low-water crossing of a Runner result also gets the depth in the channel on the run's 1 m DEM: WSE (Max) minus the lowest 1 m ground within 50 ft (`CROSSING_RADIUS_FT`) of the crossing. It uses the same `WSE (Max).tif` and `run_report.json` DEM as the 2.18.65 crown check.
+
+- **New fields** in `Bridges_Culverts_Crossings`, after `Source`: `Channel_Depth_1m_ft`, `Channel_Bed_ft` and `Channel_Basis` ("WSE (Max) - lowest 1 m ground within 50 ft", or "no 1 m channel depth: …" with the reason: a HEC-RAS plan, your own rasters, an older run, the crown check off, or a geographic CRS).
+- **Unchanged:** `Max_Depth_ft` is still the 30 m 'Depth (Max)' cell, and it still decides Flooded and Charged. DWR-3034's ford read 3.24 ft on its 30 m cell and about 9.4 ft over the 1 m channel bed.
+- Whether the 1 m channel depth should decide fords is a policy question for Nick; until then, read it as information.
+
+## Aerial imagery under the report, map book and QA maps (#213, Hazard 2.19.0, Runner 3.11.0)
+**Sources, in order.** ND DWR NAIP 2025 (WMS, requested in the map's CRS), then Esri World Imagery, then USGS imagery. The first that answers is used; a timeout, an HTML / XML page or a blank picture moves on to the next. Hazard skips NAIP where the map lies outside the NAIP 2025 flight-date seamlines. Esri street and town labels are drawn above the flood, only over online imagery. A credit line under each map gives the source, the resolution, the flight date(s), the labels, the CRS and the plugin version.
+
+**Hazard (report and EAP map book).**
+- On by default. On the settings tab: **Aerial imagery under the maps of the PDF report and EAP map book** (`report_imagery`, on), **Street and town labels over the maps** (`basemap_labels`, on) and **Imagery source:** (`basemap_source`: *Automatic (NAIP 2025, then Esri, then USGS)*, or *Only* one source). The flood's opacity over imagery is `basemap_opacity_flood` (0.65), in the settings file / profile only.
+- The data-source file accepts `AERIAL_SOURCES`, `AERIAL_SOURCE_ORDER` and `AERIAL_LABEL_URLS`; an older `AERIAL_IMAGERY_URL` is still read.
+- DATA SOURCES in the summary gets a "Map base:" line.
+- Fast runs and ensemble members keep imagery off.
+- Offline means the offline-only setting is on, an offline data pack is set or found, or `ND_DAM_SUITE` / `ND_DAM_OFFLINE` is set. No request is made. The map uses the pack's own imagery (`<pack>/imagery/*.tif`, `*.tiff` or `*.mbtiles` covering the map), else a hillshade of the plan DEM, else no base map, with a note. So a machine with an offline pack never fetches web imagery for its reports (the PR asked Nick to confirm this rule).
+- The Review tab's "Aerial imagery when zooming" is unchanged (one USGS address).
+
+**Runner (QA maps).**
+- `qa_inflow_map.png` and `qa_depth_map.png` are drawn over the same sources, with labels, a scale bar (m and ft), a true-north arrow and the credit line.
+- **QA base map** (Processing, advanced: `QA_BASEMAP`; run JSON / CLI `qa_basemap`): *Auto (aerial imagery; hillshade when offline)* (default), *Aerial imagery* or *Hillshade only*. **Street and town labels on the QA maps (Esri reference)** (`QA_BASEMAP_LABELS` / `qa_basemap_labels`, on). A run JSON without these keys runs as Auto. *Aerial imagery* warns when it has to fall back; Auto is silent.
+- Offline (`ND_DAM_OFFLINE`, `NDBREACH_BASEMAP_OFFLINE` or `ND_DAM_HAZARD_OFFLINE_ONLY` true, or `ND_DAM_SUITE` set): the pack's imagery, else the DEM hillshade as before. The credit says which. Each map has a 30 s network budget, and a map never fails a run.
+- Tiles are cached in your user cache folder (`%LOCALAPPDATA%`, `~/Library/Caches` or `$XDG_CACHE_HOME`, then `DamSafety/basemap_cache`), never in a run or input folder. Entries last 90 days and the cache is capped at 200 MB. `NDBREACH_BASEMAP_CACHE` sets another folder or `off`; `NDBREACH_BASEMAP_CACHE_MB` changes the cap. `NDBREACH_BASEMAP_ORDER` and `NDBREACH_BASEMAP_SOURCES` (JSON) change the sources.
+- The basemap settings are not part of the result: changing them does not invalidate an ensemble's cached members.
+
+**Network.** Hazard goes through QGIS's network settings (proxy, authentication, certificates). The Runner uses the QGIS proxy when one is set, else the system proxy, with the system certificate store plus `certifi`. Neither turns certificate checking off: a proxy that inspects SSL with a private certificate authority has to be trusted by the operating system or QGIS.
+
 ## Not verified in this guide
 - These descriptions come from PR text and source code. None of the window steps were checked in a running QGIS.
 - The exact list of fixes in #27 and the details of #11 and #16 are summarized from PR titles and commit headlines only.
@@ -551,4 +598,7 @@ The old map styles were drawn at 75 % opacity, and the Hazard chart sign-off ove
 - The #132 (ANUGA threads) names, labels and rules were checked in main's source at caaf850 and against the PR's real-ANUGA check (`/workspace/anuga_threads_pr/real_check.log`). The Processing Options path was not opened in QGIS.
 - The #126 zone colours, labels and opacity were checked in main's source at 034e9d7 (`DamSafety_Hazard/helpers.py`, `styles/acer_zones.qml`, `styles/acer_zone_points.qml`). The QGIS menu paths in the transparency tip are the standard QGIS 3.34 ones; they weren't opened in a running QGIS for this guide.
 - The #171 offline-pack sections (formats, folder pack, pack check messages) were checked against the PR's diff at 6b24a2b (`damsuite/packcheck.py`, `DamSafety_Hazard/offline_pack.py`, `data_tab.py`, `datafolder_tab.py`, `download.py`, `pipeline.py`, `checks.py`, `DamSafety_Screening/core/preflight.py`, `DamSafety_Runner/core/report_metrics.py`). The real-pack results are SWE's. No window was opened in QGIS. Items marked *pending decision* wait on Nick.
+- The #208, #210, #211, #212 and #213 sections were checked in main's source at 7feee1f (Runner 3.11.0, Hazard 2.19.0) and in the PR diffs and texts. No QGIS window was opened and no model was run. The DWR-3034 figures come from its review (`reviews/DWR-3034/REVIEW.md`).
+- #213: by the PR, spec test 8 (Windows OSGeo4W 3.34 / macOS 3.40 behind a proxy) was not run, tests 4 and 5 used a synthetic Casselton fixture (not the DWR-2801, 3034 or 2865 results), and test 6 (the look against the review maps) was by eye only. The sample PNGs the PR names were never committed. CI has no matplotlib, so the Runner PNG checks skip there. That fast runs and ensemble members keep imagery off was checked in the Hazard code (`FAST_RUN_OFF`, `ensemble.py`); for the Runner only the ensemble cache key was checked. Hazard's "an offline pack means no web imagery" rule and the #210 bed floor default (off) are waiting for Nick, and so is whether the #212 1 m channel depth should decide fords.
+- Small oddity: Hazard's `report_imagery` default is True in `pipeline.DEFAULTS`, but two reads in `pipeline.py` fall back to False when the key is missing from the settings. Saved settings normally carry it; not tried in QGIS.
 - The installed copy of the plugins may lag behind main.
