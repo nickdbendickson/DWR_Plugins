@@ -262,7 +262,26 @@ def test_fema_only_geometry_is_in_sources_and_judgment():
     assert "switched off" in PL.building_geometry_note(
         {"download_ms_footprints": False}, [(ST.STRUCTURES_FAMILY, fema)], suite=False)
     assert "download failed" in PL.building_geometry_note(
-        {"download_ms_footprints": True}, [(ST.STRUCTURES_FAMILY, fema)], suite=False)
+        {"download_ms_footprints": True}, [(ST.STRUCTURES_FAMILY, fema)], suite=False,
+        offline=False)
+    # 2.18.68 (DWR-3034): offline-only with a pack - the cause, not "the download failed"
+    off = PL.building_geometry_note({"download_ms_footprints": True},
+                                    [(ST.STRUCTURES_FAMILY, fema)], suite=False, offline=True)
+    assert "download failed" not in off and "offline-only mode is on" in off \
+        and "never carries Microsoft footprints" in off \
+        and "ND_DAM_HAZARD_OFFLINE_ONLY=false" in off, off
+    import os as _os
+    old = {k: _os.environ.get(k) for k in ("ND_DAM_HAZARD_OFFLINE_ONLY",)}
+    try:                                       # the default reads the run's offline setting
+        _os.environ["ND_DAM_HAZARD_OFFLINE_ONLY"] = "1"
+        assert PL._offline_now() and "offline-only mode is on" in PL.building_geometry_note(
+            {"download_ms_footprints": True}, [(ST.STRUCTURES_FAMILY, fema)], suite=False)
+    finally:
+        for k, v in old.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
     nd = {"cls": "Low", "reasons": [], "judgment": [], "counts": {}}
     CL.extra_criteria(nd, [], {}, {"building_geometry_fallback": n})
     assert n not in nd["judgment"]                      # no structures: nothing to say

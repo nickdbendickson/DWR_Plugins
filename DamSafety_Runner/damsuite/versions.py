@@ -39,8 +39,13 @@ RELEASE = {"ndhazard": "2.18.66", "ndbreach": "3.10.94", "ndscreen": "0.17.54"}
 RELEASE = {"ndhazard": "2.18.67", "ndbreach": "3.10.95", "ndscreen": "0.17.53"}
 >>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
 =======
+<<<<<<< HEAD
 RELEASE = {"ndhazard": "2.18.65", "ndbreach": "3.10.96", "ndscreen": "0.17.53"}
 >>>>>>> fab2de0 (Runner 3.10.96: culvert datum-shift check against the LiDAR channel bed, culvert losses field, opt-in ANUGA bed floor, per-operator volume log (DWR-3034 REVIEW 9.8 items 3, 4))
+=======
+RELEASE = {"ndhazard": "2.18.68", "ndbreach": "3.10.92", "ndscreen": "0.17.53"}
+>>>>>>> e3d3be2 (Hazard 2.18.68: say why Microsoft footprints are missing in offline-only mode (DWR-3034 item 7))
+>>>>>>> e63e537 (Hazard 2.18.68: say why Microsoft footprints are missing in offline-only mode (DWR-3034 item 7))
 # minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
 REQUIRES = {
     ("ndbreach", "ndhazard"): ("2.9.1", "2.18.63",

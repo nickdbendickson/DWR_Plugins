@@ -6,6 +6,7 @@ supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
 <<<<<<< HEAD
+<<<<<<< HEAD
 version=2.18.66
 icon=icon.svg
 author=N.D. Bendickson
@@ -22,6 +23,14 @@ changelog=
       * Two OpenStreetMap crossings of one source that share a node, or lie within 5 m with the same category or the same changeset, are one structure (facilities.osm_same_crossing); the kept row lists both ids in Structure_No. DWR-3034's ford node/11121114805 + way/1198845155 (1.6 m apart) was two rows in Bridges_Culverts_Crossings.csv and two crossings in the Summary. Twin structures further apart, NBI / OSM pairs and other sources are unchanged.
       * The OSM download asks Overpass for 'out center meta' and keeps a way's node list and the changeset (osm_nodes / osm_changeset); an older pack file without them is merged by distance + category. Test: tests/test_osm_crossing_dedupe.py.
 >>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
+=======
+version=2.18.68
+icon=icon.svg
+author=N.D. Bendickson
+changelog=
+    2.18.68 - 2026-10-28 (offline-only runs say why Microsoft footprints are missing - DWR-3034 review)
+      * In offline-only mode (ND_DAM_HAZARD_OFFLINE_ONLY / the offline-only setting) Microsoft footprints are never fetched: the offline data pack does not carry them and no internet request is made. The building-geometry note (DATA SOURCES / judgment) and the run log now say so and how to get them (turn offline-only off for the run) instead of "the download failed and there is no earlier copy (offline?)"; the NAIP flight-date fallback likewise. DWR-3034's FEMA-only geometry was this case (pack nd_offline_pack_20261021, offline only); DWR-2801's run with ND_DAM_HAZARD_OFFLINE_ONLY=false downloaded them. Test: tests/test_footprint_geometry.py.
+>>>>>>> e3d3be2 (Hazard 2.18.68: say why Microsoft footprints are missing in offline-only mode (DWR-3034 item 7))
     2.18.65 - 2026-10-27 (roads and rail counted over the centreline crown - DWR-2801 review)
       * A wet road or rail stretch counts as overtopped only where the maximum WSE is above the centreline crown read from the 1 m DEM (WSE (Max).tif beside the depth raster, the Runner's 1 m DEM from _breach_model/run_report.json); the toe cells beside an embankment no longer count. Stretches with no arrival time and stretches shallower than 0.1 ft are skipped. Structure cuts (bridge / notch in structures.json) are masked the same way as the Runner's 3.10.90 road profile (the same road_profile module).
       * Roads_Inundated and Rail_Inundated carry Depth_Basis, Grid_Depth_ft, Crown_ft, WSE_ft and Freeboard_ft (the basis note in Notes); Max_Depth_ft is the overtopping over the crown. Every wet stretch, counted or not, and why: outputs/QA/Line_Crown_Check (GPKG / CSV, also in the submittal). No WSE or no 1 m DEM: the depth raster as before, with a note in the run log and on every stretch. Setting line_crown_check (on by default).
