@@ -64,6 +64,7 @@ class NdDataUpdaterPlugin:
         self.task = None
         self.task_quiet = True
         self.dialog = None
+        self.pack_dialog = None
         self.actions = []
         self.timer = None
         self.merger = gdal_merger()
@@ -84,9 +85,9 @@ class NdDataUpdaterPlugin:
         self.action_folder.triggered.connect(self.open_data_folder)
         self.action_settings = QAction("Settings and status\u2026", win)
         self.action_settings.triggered.connect(self.show_settings)
-        self.action_pack = QAction("About the offline pack…", win)
+        self.action_pack = QAction("Build offline pack\u2026", win)
         self.action_pack.setToolTip(
-            "Does not build a pack. Points at the Hazard plugin, which has the pack builder.")
+            "Download every pack layer and write a new ND_Dam_Suite_Pack (and nd_offline_pack)")
         self.action_pack.triggered.connect(self.build_offline_pack)
         self.actions = [self.action_check, self.action_load, self.action_folder,
                         self.action_settings, self.action_pack]
@@ -124,6 +125,13 @@ class NdDataUpdaterPlugin:
         self.iface.removeToolBarIcon(self.action_check)
         if self.dialog:
             self.dialog.close()
+        if self.pack_dialog is not None:
+            try:
+                self.pack_dialog.cancel()
+                self.pack_dialog.close()
+            except RuntimeError:
+                pass
+            self.pack_dialog = None
 
     # --------------------------------------------------------------- engine
 
@@ -350,13 +358,9 @@ class NdDataUpdaterPlugin:
                 self.dialog = None
 
     def build_offline_pack(self):
-        """Build the ND offline pack including 3DHP and Aquatic Barriers layers."""
-        from qgis.PyQt.QtWidgets import QMessageBox
-        QMessageBox.information(
-            self.iface.mainWindow(),
-            "About the offline pack",
-            "This menu does not download or write a pack.\n\n"
-            "The pack builder is in DamSafety Hazard, Data and Output tab, "
-            "or the command-line build_nd_pack.py."
-        )
-
+        """1.5.0: the Build offline pack window (pack_dialog.py)."""
+        from .pack_dialog import PackDialog
+        if getattr(self, "pack_dialog", None) is None:
+            self.pack_dialog = PackDialog(self.iface.mainWindow())
+        self.pack_dialog.show()
+        self.pack_dialog.raise_()

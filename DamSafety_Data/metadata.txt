@@ -5,7 +5,7 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Keeps an offline copy of North Dakota structure and building-footprint data on this computer and downloads new versions when the sources change.
 about=Downloads and maintains local North Dakota copies of the National Structure Inventory (NSI API; NSI 2026 and NSI 2022 merged into one layer by default), Microsoft building footprints, OpenStreetMap (Geofabrik), optionally FEMA/ORNL USA Structures, and optionally the USACE-NSI/nsi-generator source code. Each dataset is checked cheaply (checksum, ETag or latest commit) and only re-downloaded when it changed. Updates are staged and verified before replacing the local copy, so the data stays usable offline and an interrupted update never leaves partial files. Layers already in the project are reloaded after an update.
-version=1.4.4
+version=1.5.0
 author=ND Data Updater
 email=nd-data-updater@example.com
 repository=https://example.com/nd-data-updater
@@ -16,7 +16,8 @@ tags=north dakota,nsi,structures,building footprints,offline,update
 icon=icon.svg
 experimental=False
 deprecated=False
-changelog=1.4.4 - GUI grammar, part 2: Save and Cancel carry no icons (the suite's buttons are text only). No default changes.
+changelog=1.5.0 - Build offline pack… (Data menu) downloads every layer of the ND dam suite's offline pack (structures, roads, railroads, lifelines, hydro, DWR dams / dam lines / dugouts from the DWR MapService, ND_counties, the four HIFLD layers, NLCD 2021 land cover) into a folder you choose and writes it in both formats from the same download: a new ND_Dam_Suite_Pack (one GeoPackage per layer, format 2) and nd_offline_pack/nd_offline_pack.sqlite (every vector layer, format 1; the raster is format 2 only and named in its manifest). All pack layers or a chosen few; stopped builds resume and finished layers are kept. Both manifests give each layer's source URL, date, count and sha256. An existing pack (or the one the plugins read) is never written into. DWR_unknown_structures needs a local DWR file (not published online). No default changes.
+    1.4.4 - GUI grammar, part 2: Save and Cancel carry no icons (the suite's buttons are text only). No default changes.
     1.4.3 - GUI grammar, part 1: window title 'DamSafety Data 1.4.3' (was 'ND Data Updater'); ui_fit.py and tokens.py are the suite's shared copies (shared/ui/). No default changes.
     1.4.2 - PR #94 (Claude's audit-fix campaign): H14 Qt6 scoped-enum crashes fixed (qtcompat.py); M21, M22, M23, L3, P1: NSI generator hash, source fixes and the pid-lock rule (a lock never steals a live same-process lock). No default changes.
     1.4.1 - The Settings window is sized for the screen QGIS is on (else the screen under the mouse), not always the primary screen; it opens inside that screen and never larger than it, and the size cap follows it to another monitor (ui_fit.py, the same file as the Hazard's and Screening's).

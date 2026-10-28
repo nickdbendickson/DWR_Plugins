@@ -40,7 +40,9 @@ TOOLS = os.path.dirname(os.path.abspath(__file__))
 MASTER = os.path.join(ROOT, "shared", "damsuite")
 
 # plugins that vendor the FULL shared package (not DamSafety_Setup, which vendors a mini-subset)
-FULL_COPY_PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening")
+# DamSafety_Data (1.5.0): its offline pack builder writes format 2 with gpkgpack
+FULL_COPY_PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening",
+                     "DamSafety_Data")
 # a full-copy plugin carries every master module EXCEPT these (modules it has no use for);
 # a new master module with no exclusion propagates to every full copy.
 EXCLUDE = {
