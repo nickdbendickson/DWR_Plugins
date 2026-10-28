@@ -269,6 +269,24 @@ def test_mac_lisflood_patch_gate():
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
+def test_merge_markers():
+    problems = []                                 # the real tree is clean
+    C.check_merge_markers(problems)
+    assert problems == [], problems
+    root = tempfile.mkdtemp(prefix="markers_")
+    try:
+        _w(root, "docs/CHANGELOG.md", "# Changelog\n" + "<" * 7 + " HEAD\n- a\n=======\n- b\n"
+                                      + ">" * 7 + " f4fdb0c (x)\n")
+        _w(root, "DamSafety_Hazard/README.txt", "Title\n=======\n")   # setext rule: fine
+        _w(root, "shared/damsuite/versions.py", 'RELEASE = {"a": "1"}\nRELEASE = {"a": "1"}\n')
+        C.check_merge_markers(problems, root)
+        text = "\n".join(problems)
+        assert len(problems) == 3, problems
+        assert "docs/CHANGELOG.md:2" in text and "docs/CHANGELOG.md:6" in text, problems
+        assert "2 'RELEASE =' lines" in text, problems
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
 
 def main():
     fails = 0

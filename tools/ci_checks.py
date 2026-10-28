@@ -26,6 +26,8 @@ deterministic, so they can gate every PR cheaply:
   7. mac LISFLOOD     — tools/mac/lisflood/lisflood-8.3-ndbreach.patch (the Mac build's fallback
                         when the Runner's patcher does not apply) still adds every line the
                         Runner's scripts/patch_lisflood.py adds
+  8. merge markers   — no '<<<<<<< ' / '>>>>>>> ' line in any tracked text file, and one
+                        RELEASE = line in each damsuite versions.py (a bad stacked merge)
 
 Exit non-zero on any failure. The heavier per-plugin suites (real QGIS / scipy / real engines)
 run in a separate CI job that provisions QGIS; this job is the always-on hard gate.
@@ -562,6 +564,56 @@ def check_qt6_metadata(problems, root=None):
                 plugin, m.group(1).strip() if m else None))
 
 
+# ------------------------------------------------------------ merge debris ----------------
+MARKER_EXTS = (".py", ".txt", ".md", ".json", ".ui", ".qml", ".yml", ".yaml", ".cfg", ".ini",
+               ".toml", ".sh", ".csv", ".html", ".qrc", ".spec")
+
+
+def scan_merge_markers(root=None):
+    """(rel, line_no, line) for every '<<<<<<< ' / '>>>>>>> ' line in a tracked text file. A
+    stacked-branch merge left these in docs/CHANGELOG.md, DamSafety_Hazard/README.txt and
+    versions.py on main (2026-10-28); compile only catches the .py ones, and README.txt's first
+    line was a marker, so the README version check above silently read nothing."""
+    root = root or ROOT
+    try:
+        r = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True,
+                           timeout=60)
+        files = r.stdout.splitlines() if r.returncode == 0 else []
+    except Exception:
+        files = []
+    if not files:
+        files = [os.path.relpath(os.path.join(d, f), root)
+                 for d, _, fs in os.walk(root) if "/.git" not in d for f in fs]
+    out = []
+    for rel in files:
+        if not rel.lower().endswith(MARKER_EXTS):
+            continue
+        try:
+            with open(os.path.join(root, rel), encoding="utf-8", errors="replace") as f:
+                for i, line in enumerate(f, 1):
+                    if line.startswith(("<<<<<<< ", ">>>>>>> ")) or line.rstrip("\r\n") in (
+                            "<<<<<<<", ">>>>>>>"):
+                        out.append((rel, i, line.rstrip()[:80]))
+        except OSError:
+            continue
+    return out
+
+
+def check_merge_markers(problems, root=None):
+    root = root or ROOT
+    for rel, i, line in scan_merge_markers(root):
+        _fail(problems, "merge-conflict marker: {}:{}: {}".format(rel, i, line))
+    for plugin in (None,) + PLUGINS:
+        rel = os.path.join(plugin, "damsuite", "versions.py") if plugin else os.path.join(
+            "shared", "damsuite", "versions.py")
+        path = os.path.join(root, rel)
+        if os.path.isfile(path):
+            n = len(re.findall(r"^RELEASE\s*=", _read(path), re.M))
+            if n > 1:
+                _fail(problems, "{}: {} 'RELEASE =' lines (one only; a merge left the "
+                                "others)".format(rel, n))
+
+
 def main():
     problems = []
     for name, fn in (("damsuite drift", check_damsuite_drift),
@@ -575,6 +627,7 @@ def main():
                      ("qt6 enums", check_qt6_enums),
                      ("qt6 metadata", check_qt6_metadata),
                      ("mac LISFLOOD patch vs the Runner's patcher", check_mac_lisflood_patch),
+                     ("merge-conflict markers", check_merge_markers),
                      ("compile", check_compile), ("golden baseline", check_golden)):
         print("[ci] " + name)
         try:

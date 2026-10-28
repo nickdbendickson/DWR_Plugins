@@ -1,23 +1,4 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
-ND Dam Hazard Classification Helper - Version 2.18.66
-=======
-ND Dam Hazard Classification Helper - Version 2.18.67
->>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
-=======
-<<<<<<< HEAD
-ND Dam Hazard Classification Helper - Version 2.18.68
->>>>>>> e3d3be2 (Hazard 2.18.68: say why Microsoft footprints are missing in offline-only mode (DWR-3034 item 7))
-=======
-<<<<<<< HEAD
-ND Dam Hazard Classification Helper - Version 2.18.69
->>>>>>> 96e9c72 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
->>>>>>> 07d0881 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
-=======
 ND Dam Hazard Classification Helper - Version 2.19.0
->>>>>>> b0f85c4 (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
->>>>>>> 462e6af (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
->>>>>>> d3b282b (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
 ====================================================
 
 WHAT IT DOES
@@ -848,26 +829,24 @@ NEW IN 1.3.0 - HAZARD CLASSIFICATION TAB
   bridge flag and the MOST RECENT AADT from (a) the road layer itself,
   including AADT_2023-style columns, (b) an optional AADT layer (NDDOT
   counts, HPMS) within 300 ft, (c) FRA crossing AADT within 100 ft.
-<<<<<<< HEAD
+- 2.19.0: the report and map book are drawn over aerial imagery by
+  default (ND NAIP 2025 from the ND DWR WMS, then Esri, then USGS), with
+  street / town labels above the flood and a credit giving the imagery
+  source and flight date; offline, the pack's imagery or a hillshade
+  (settings basemap_source, basemap_labels, report_imagery).
 - 2.18.67: one OpenStreetMap crossing mapped as a node and a way (sharing
   a node, or within 5 m with the same category or changeset) is one
   structure; the kept row lists both OSM ids (DWR-3034's ford).
-=======
-<<<<<<< HEAD
 - 2.18.68: in offline-only mode the run log and the building-geometry
   note say why Microsoft footprints are missing (the offline data pack
   never carries them; turn offline-only off for the run) instead of "the
   download failed" (DWR-3034).
->>>>>>> e3d3be2 (Hazard 2.18.68: say why Microsoft footprints are missing in offline-only mode (DWR-3034 item 7))
-=======
 - 2.18.69: every wet bridge / culvert / crossing also gets its depth in
   the channel on the run's 1 m DEM (Channel_Depth_1m_ft: WSE (Max) minus
   the lowest 1 m ground within 50 ft, with Channel_Bed_ft and
   Channel_Basis); Max_Depth_ft stays the 30 m cell and still decides
   Flooded (DWR-3034: a ford read 3.24 ft on its 30 m cell, ~9.4 ft over
   the 1 m channel bed).
->>>>>>> 96e9c72 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
->>>>>>> 07d0881 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
 - 2.18.65: a wet road or rail stretch counts as overtopped only where the
   maximum WSE is above the centreline crown read from the 1 m DEM (the
   Runner's WSE (Max).tif and run_report.json beside the depth raster);
