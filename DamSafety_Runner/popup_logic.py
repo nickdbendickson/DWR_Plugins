@@ -30,6 +30,10 @@ TABS = (
          "or skip), the Hazard import and classification, then the next dam."),
         ("estimate", "Estimate the run time\u2026",
          "The plan and the time of a run for this dam, without running it."),
+        ("finishanuga", "Finish an ANUGA run after QGIS closed\u2026",
+         "ANUGA goes on when QGIS closes (3.12.2). This runs the dam again with the saved "
+         "settings and Resume on: it waits for the ANUGA run or uses its result, then writes "
+         "the rasters, products and report."),
     )),
     ("Model", (
         ("nested", "Nested fine grid near the dam\u2026", "A fine grid near the dam, a coarse one downstream."),
@@ -79,7 +83,8 @@ TOOL_LABEL = {t[0]: t[1] for t in ALL_TOOLS}
 WITH_DAM = frozenset({"rundam", "estimate", "sensitivity", "nested", "probabilistic"})   # + DEM
 WITH_DAMS_FOLDER = frozenset({"batch", "cascade"})                                       # + DEM
 WITH_DAM_FOLDER = frozenset({"products", "consequences", "ndhazardclass", "animation", "benchmark",
-                             "hecrasexport", "hecrasimport", "submittal"})              # DAM_FOLDER
+                             "hecrasexport", "hecrasimport", "submittal",
+                             "finishanuga"})                                            # DAM_FOLDER
 WITH_DAM_ID = frozenset({"products", "submittal"})
 WITH_DEM = frozenset({"conditiondem", "animation"})
 
@@ -194,7 +199,29 @@ def dam_status(folder):
     rows.append(("hecras", "HEC-RAS files", "yes" if _dir(folder, "_hecras") else "no", ""))
     rows.append(submittal_row(folder))
     rows.append(package_row(folder))
+    ar = anuga_worker_row(folder)
+    if ar:
+        rows.insert(2, ar)
     return rows
+
+
+def anuga_worker_row(folder):
+    """3.12.2: a detached ANUGA worker (core/anuga_detach.py) that is still running, or that
+    finished after its QGIS session ended and has no products yet; None otherwise."""
+    try:
+        from .core import run_params
+        waiting = run_params.pending_workers(folder)
+    except Exception:                                    # noqa: BLE001 - only a status line
+        return None
+    if not waiting:
+        return None
+    parts = []
+    for sub, w in waiting:
+        stt = w["status"] or {}
+        what = "running (pid {})".format(stt.get("pid")) if w["state"] == "running" else \
+            "finished, products not built yet"
+        parts.append("{}: {} since {}".format(sub, what, stt.get("started_utc")))
+    return ("anuga_worker", "ANUGA run after QGIS closed", "part", "; ".join(parts))
 
 
 def terrain_row(folder):
@@ -242,7 +269,8 @@ STAGE_LABELS = {"dam": "Dam", "terrain": "Terrain", "run": "Model run", "product
 TOOL_STATUS_KEY = {"rundam": "run", "batch": "run", "nested": "nested", "sensitivity": "sensitivity",
                    "probabilistic": "ensemble", "products": "products", "ndhazardclass": "preview",
                    "classify": "handoff", "animation": "animation", "submittal": "submittal",
-                   "hecrasexport": "hecras", "hecrasimport": "hecras"}
+                   "hecrasexport": "hecras", "hecrasimport": "hecras",
+                   "finishanuga": "anuga_worker"}                        # 3.12.2
 
 
 def tool_status(alg, rows):
@@ -497,6 +525,9 @@ def suggest(rows, code=""):
     """(tool, text): the tool the dam most likely needs next, from the folder and dam.json's
     next-action code. Only a suggestion."""
     st = {k: s for k, _l, s, _d in rows}
+    if st.get("anuga_worker") == "part":                                 # 3.12.2
+        return "finishanuga", ("An ANUGA run went on after QGIS closed: finish it (same "
+                               "settings, Resume on) to build the rasters, products and report.")
     if not rows or st.get("run") != "yes" or code == "model":
         return "rundam", "Run the breach model."
     if code == "classify" or (st.get("handoff") != "yes" and code in ("", "none")):

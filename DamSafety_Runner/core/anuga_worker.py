@@ -1637,8 +1637,10 @@ def main(job_path, out_path):
             os.remove(partial_path)                  # superseded by result.npz
             ckinfo["partial_removed_after_run"] = True
         stats["checkpoint"] = ckinfo
-    np.savez_compressed(out_path, depth=depth, velocity=vel, arrival_hr=arr, wse=wse,
-                        stats=json.dumps(stats))
+    # 3.12.2: atomic, so a session that finds the file (anuga_detach.worker_state) never
+    # reads half of it
+    savez_atomic(out_path, depth=depth, velocity=vel, arrival_hr=arr, wse=wse,
+                 stats=json.dumps(stats))
     print("PROGRESS 100 done", flush=True)
 
 
@@ -1646,4 +1648,11 @@ if __name__ == "__main__":
     if len(sys.argv) != 3:
         print(__doc__)
         sys.exit(2)
-    main(sys.argv[1], sys.argv[2])
+    # 3.12.2: detached from QGIS (core/anuga_detach.py): own log, status file, SIGPIPE /
+    # SIGHUP ignored, stdout failures never end the run
+    try:
+        from . import anuga_detach as _detach        # noqa: F401 - run as a module
+    except ImportError:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import anuga_detach as _detach
+    sys.exit(_detach.worker_entry(main, sys.argv[1], sys.argv[2]))

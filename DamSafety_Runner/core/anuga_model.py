@@ -8,15 +8,14 @@ downstream."""
 import json
 import math
 import os
-import queue
 import subprocess
-import threading
 import time
 
 import numpy as np
 
 from .lisflood import Envelopes, ModelError, Cancelled
 from . import terrain, wallclock
+from . import anuga_detach as detach   # 3.12.2: the worker runs detached from QGIS
 from .units import ARRIVAL_DEPTH_FT, FT
 from . import conditioning as cond
 from . import structures as structmod
@@ -1149,58 +1148,123 @@ def rejected_line(reason):
     return "gmsh mesh rejected: {}; used the default mesh".format(reason)
 
 
-def _launch(st, job, result, workdir, progress, cancel):
-    """Run the worker in the ANUGA interpreter; returns (process, log path)."""
+TIMEOUT_ENV = "NDBREACH_ANUGA_TIMEOUT_S"     # 3.12.2: optional wall-clock limit (none by default)
+
+
+def timeout_s(st=None):
+    """The ANUGA run's wall-clock limit in seconds, or None (no limit, as before): st.timeout_s
+    when set (> 0), else NDBREACH_ANUGA_TIMEOUT_S."""
+    for v in (getattr(st, "timeout_s", None), os.environ.get(TIMEOUT_ENV)):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            return v
+    return None
+
+
+def worker_env(st):
     env = dict(os.environ)
     # QGIS sets these for its own Python; the ANUGA interpreter must not inherit them.
     for k in ("PYTHONHOME", "PYTHONPATH", "QGIS_PREFIX_PATH", "PYTHONNOUSERSITE"):
         env.pop(k, None)
     if st.threads:          # run() passes the resolved count (resolve_threads), never 0
         env["OMP_NUM_THREADS"] = str(int(st.threads))
-    log_path = os.path.join(workdir, "anuga.log")
-    t0 = time.time()
-    with open(log_path, "w", encoding="utf-8") as logf:
-        proc = subprocess.Popen([st.python, "-u", WORKER, job, result], cwd=workdir, env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                bufsize=1, errors="replace", **NO_WINDOW)
-        lines = queue.Queue()
+    return env
 
-        def pump():
-            for ln in proc.stdout:
-                lines.put(ln)
-            lines.put(None)
 
-        threading.Thread(target=pump, daemon=True).start()
-        done = False
-        while not done:
-            if cancel and cancel():      # also while ANUGA is silent (meshing, start-up)
-                if checkpointing(st) and os.name != "nt":   # 3.10.35: flush the partial file
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=STOP_GRACE_S)
-                    except subprocess.TimeoutExpired:
-                        pass
-                proc.kill()
-                proc.wait()
-                raise Cancelled("cancelled")
-            try:
-                line = lines.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            if line is None:
-                done = True
-                continue
-            logf.write(line)
-            logf.flush()
-            if line.startswith("PROGRESS") and progress:
-                parts = line.split(None, 2)
-                try:
-                    progress(float(parts[1]), "ANUGA " + (parts[2].strip() if len(parts) > 2
-                                                          else ""))
-                except ValueError:
-                    pass
-        proc.wait()
+def _launch(st, job, result, workdir, progress, cancel, tag=None, log=None):
+    """Run the worker in the ANUGA interpreter; returns (process, log path).
+
+    3.12.2 (DWR-2801): the worker is detached (core/anuga_detach.py). It writes anuga.log
+    itself (stdout + stderr to the file, not a pipe QGIS owns), starts in its own session /
+    process group, and keeps anuga_worker.json (pid, state). QGIS tails the log for PROGRESS
+    lines; Cancel and the optional timeout stop it as before. When QGIS dies the worker goes
+    on and writes anuga_result.npz; a later run with the same settings adopts it (run())."""
+    proc, log_path, spath = detach.launch([st.python, "-u", WORKER, job, result], workdir,
+                                          worker_env(st), tag=tag, script=WORKER)
+    try:
+        _watch(proc, log_path, st, progress, cancel, log)
+    finally:
+        if proc.poll() is not None:
+            detach.finish_status(spath, proc.pid, proc.returncode)
     return proc, log_path
+
+
+def _stop(proc, st):
+    """Cancel / timeout: SIGTERM first when checkpoints are on (the worker flushes
+    anuga_partial.npz; 3.10.35), STOP_GRACE_S, then kill. Windows: kill (TerminateProcess)."""
+    if checkpointing(st) and os.name != "nt":
+        proc.terminate()
+        try:
+            proc.wait(timeout=STOP_GRACE_S)
+        except subprocess.TimeoutExpired:
+            pass
+    proc.kill()
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _watch(proc, log_path, st, progress, cancel, log=None, start_at_end=False, poll_s=0.5):
+    """Follow the worker's log until it exits: PROGRESS lines -> progress(pct, "ANUGA ..."),
+    cancel() -> stop and Cancelled, the optional wall-clock limit -> stop and ModelError."""
+    tail = detach.LogTail(log_path, start_at_end=start_at_end)
+    limit = timeout_s(st)
+    dl = wallclock.Deadline(limit, what="ANUGA", log=log)
+
+    def feed(final=False):
+        for line in tail.lines(final=final):
+            p = detach.parse_progress(line)
+            if p is not None and progress:
+                progress(p[0], "ANUGA " + p[1])
+
+    while True:
+        if cancel and cancel():      # also while ANUGA is silent (meshing, start-up)
+            _stop(proc, st)
+            raise Cancelled("cancelled")
+        feed()
+        if proc.poll() is not None:
+            feed(final=True)
+            return proc.returncode
+        if dl.expired():
+            _stop(proc, st)
+            feed(final=True)
+            raise ModelError("ANUGA stopped: it ran longer than the {:.0f} s limit ({}).{}".format(
+                limit, TIMEOUT_ENV, "\n" + partial_note(os.path.dirname(log_path))
+                if checkpointing(st) else ""))
+        time.sleep(poll_s)
+
+
+def _attach(w, st, progress, cancel, log=None):
+    """Wait for a worker an earlier session started (worker_state() dict `w`), following its
+    log like our own. Returns (handle, log path)."""
+    status = w["status"] or {}
+    spath = detach.status_path(w["workdir"])
+    log_path = status.get("log") or os.path.join(w["workdir"], detach.LOG_NAME)
+    proc = detach.Attached(status, spath)
+    if log:
+        log("ANUGA: waiting for the worker an earlier session started (pid {}, started {}); "
+            "its log: {}".format(proc.pid, status.get("started_utc"), log_path))
+    _watch(proc, log_path, st, progress, cancel, log)
+    return proc, log_path
+
+
+def adoption(workdir, result, run_key, reuse=False):
+    """What run() does with a worker an earlier session left in `workdir` (anuga_detach):
+    "wait" (running, same run key), "use" (finished, same key, not yet built into products -
+    or `reuse` asked for it), "busy" (running for other settings: a second worker would fight
+    it over the folder), or None (start a fresh worker as before)."""
+    w = detach.worker_state(workdir, result)
+    tag = ((w["status"] or {}).get("tag") or {})
+    same = run_key is not None and tag.get("run_key") == run_key
+    if w["state"] == detach.RUNNING:
+        return ("wait" if same else "busy"), w
+    if w["state"] == detach.FINISHED and same and (reuse or not w["processed"]):
+        return "use", w
+    return None, w
 
 
 def _tail_text(path, chars=2000):
@@ -1215,21 +1279,53 @@ def _tail_text(path, chars=2000):
 def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, st,
         progress=None, cancel=None, log=None, structures=None, initial_depth=None,
         refine_lines=None, reuse=False, embankment_lines=None, terrain_read=None,
-        elevation_read=None, elevation_native_m=None, elevation_label=None):
+        elevation_read=None, elevation_native_m=None, elevation_label=None, run_key=None):
     """embankment_lines: road / rail centrelines (work CRS); with a gmsh mesher the
     pieces on an embankment become mesh lines (find_embankments). terrain_read(bounds,
     cell) reads finer ground for that test. Neither changes the default mesh.
     elevation_read(bounds, cell) -> Grid: the terrain ANUGA's bed is sampled from
     (ANUGA_ELEVATION=fine, prepare_elevation; st.elevation), elevation_native_m its own
     cell size and elevation_label its name for the report. Without it the bed is the
-    model DEM `dem`, as before 3.10.31."""
+    model DEM `dem`, as before 3.10.31.
+
+    run_key (3.12.2): the run's checkpoint key (workflow). It is kept in the worker's status
+    file; a worker an earlier QGIS session left in `workdir` with the same key is adopted
+    (adoption()): still running -> this run waits for it; finished and not yet built into
+    products -> its anuga_result.npz is used like `reuse`. A worker still running for other
+    settings stops this run (ModelError) rather than start a second one in the folder."""
     if not st.python or not os.path.isfile(st.python):
         raise ModelError("ANUGA Python interpreter not found: {}".format(st.python))
     os.makedirs(workdir, exist_ok=True)
-    outer, fine = mesh_polygons(dem, flooded, inflow_xy, st)
-    inlet = inlet_line(inflow_xy, direction, inlet_width_m)
     job = os.path.join(workdir, "anuga_job.npz")
     result = os.path.join(workdir, "anuga_result.npz")
+    t0 = time.time()
+    act, w = adoption(workdir, result, run_key, reuse=reuse)
+    if act == "busy":
+        stt = w["status"] or {}
+        raise ModelError(
+            "An ANUGA worker started {} for other settings is still running in {} (pid {}). "
+            "Nothing was started. Wait for it, or stop it (it is not this run's), then run "
+            "again.".format(stt.get("started_utc"), workdir, stt.get("pid")))
+    if act == "wait":
+        _attach(w, st, progress, cancel, log)
+        act, w = adoption(workdir, result, run_key, reuse=True)
+        if act != "use":
+            stt = w["status"] or {}
+            raise ModelError("The ANUGA worker started {} (pid {}) ended without a result "
+                             "({}):\n{}".format(stt.get("started_utc"), stt.get("pid"),
+                                                w["state"], _tail_text(stt.get("log") or
+                                                                       os.path.join(workdir, detach.LOG_NAME))))
+    if act == "use":
+        reuse = True
+        tb = ((w["status"] or {}).get("tag") or {}).get("buffer_m")
+        if tb is not None and abs(float(tb) - float(st.buffer_m)) > 1e-6:
+            st.buffer_m = float(tb)        # the mesh the adopted result was computed on
+        if log:
+            log("ANUGA: using the result of the worker started {} (pid {}), which finished "
+                "after its QGIS session ended: {}".format(
+                    (w["status"] or {}).get("started_utc"), (w["status"] or {}).get("pid"), result))
+    outer, fine = mesh_polygons(dem, flooded, inflow_xy, st)
+    inlet = inlet_line(inflow_xy, direction, inlet_width_m)
     try:                                        # 3.10.96: opt-in culvert bed floor
         bed_floor = structmod.bed_floor_setting()
     except ValueError as e:
@@ -1349,7 +1445,6 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
                    header="x,y", comments="", fmt="%.3f")
     if os.path.exists(result) and not have:
         os.remove(result)
-    t0 = time.time()
     if have:
         log_path = os.path.join(workdir, "anuga.log")
 
@@ -1359,7 +1454,9 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     else:
         from ..damsuite.keepawake import keep_awake
         with keep_awake("ANUGA", log=log):
-            proc, log_path = _launch(cst, job, result, workdir, progress, cancel)
+            proc, log_path = _launch(cst, job, result, workdir, progress, cancel,
+                                     tag={"run_key": run_key, "buffer_m": float(st.buffer_m)},
+                                     log=log)
     if proc.returncode != 0 or not os.path.exists(result):
         tail = _tail_text(log_path)
         note = partial_note(workdir) if checkpoint_job(cst) else ""
@@ -1377,6 +1474,7 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
     with np.load(result) as r:
         stats = json.loads(str(r["stats"]))
         depth, vel, arr, wse = r["depth"], r["velocity"], r["arrival_hr"], r["wse"]
+    detach.mark_processed(workdir)           # 3.12.2: no longer pending for the window
     if not have and culverts:            # 3.10.71: the inverts the operators got, and why
         rec = structmod.invert_record(culverts)
         for r_, w_ in zip(rec, stats.get("culvert_enquiry") or []):
