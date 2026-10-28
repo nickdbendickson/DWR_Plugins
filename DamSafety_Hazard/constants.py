@@ -5,17 +5,17 @@ Classification Helper. Pure data - no QGIS imports needed here."""
 PLUGIN_NAME = "DamSafety Hazard"
 <<<<<<< HEAD
 <<<<<<< HEAD
-PLUGIN_VERSION = "2.18.66"
+PLUGIN_VERSION = "2.19.0"
 =======
-PLUGIN_VERSION = "2.18.67"
+PLUGIN_VERSION = "2.19.0"
 >>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
 =======
 <<<<<<< HEAD
-PLUGIN_VERSION = "2.18.68"
+PLUGIN_VERSION = "2.19.0"
 >>>>>>> e3d3be2 (Hazard 2.18.68: say why Microsoft footprints are missing in offline-only mode (DWR-3034 item 7))
 =======
 <<<<<<< HEAD
-PLUGIN_VERSION = "2.18.69"
+PLUGIN_VERSION = "2.19.0"
 >>>>>>> 96e9c72 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
 >>>>>>> 07d0881 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
 =======
