@@ -1,0 +1,539 @@
+{
+ "_about": "Runner 3.12.3 culvert prep test fixture: 8 culverts of DWR-2801's structures layer (structures_2801_with9122221.gpkg, built from the public NDDOT pipe and NBI inventories by ND Dam Hazard runnerculverts), the lowest native 1 m 3DEP LiDAR ground within 5 m of each end from the 2026-10-24 pre-check (fix5m/check_with9122221_fix, composite_1m_native36_over_5m_fix.vrt), and the inverts after the Nick-approved manual invfix / invfix2 (2026-10-25). fid 253 (09-122-22.1) carries a synthetic 10-vertex, 71.2 m line between its real ends, standing in for the line that was simplified by hand. No DEM data: the test builds small synthetic tiles from ground_m.",
+ "fields": [
+  [
+   "name",
+   "String"
+  ],
+  [
+   "kind",
+   "String"
+  ],
+  [
+   "span_ft",
+   "Real"
+  ],
+  [
+   "rise_ft",
+   "Real"
+  ],
+  [
+   "barrels",
+   "Integer64"
+  ],
+  [
+   "shape",
+   "String"
+  ],
+  [
+   "invert_up",
+   "Real"
+  ],
+  [
+   "invert_dn",
+   "Real"
+  ],
+  [
+   "source",
+   "String"
+  ],
+  [
+   "src_id",
+   "String"
+  ],
+  [
+   "carried",
+   "String"
+  ],
+  [
+   "crosses",
+   "String"
+  ],
+  [
+   "nbi_kind",
+   "String"
+  ],
+  [
+   "nbi_design",
+   "String"
+  ],
+  [
+   "n_spans",
+   "Integer64"
+  ],
+  [
+   "struct_len_ft",
+   "Real"
+  ],
+  [
+   "deck_w_ft",
+   "Real"
+  ],
+  [
+   "barrel_len_ft",
+   "Real"
+  ],
+  [
+   "material",
+   "String"
+  ],
+  [
+   "inv_text",
+   "String"
+  ],
+  [
+   "elev_left_ft",
+   "Real"
+  ],
+  [
+   "elev_right_ft",
+   "Real"
+  ],
+  [
+   "inlet_side",
+   "String"
+  ],
+  [
+   "end_section",
+   "String"
+  ],
+  [
+   "emb_width_ft",
+   "Real"
+  ],
+  [
+   "emb_width_src",
+   "String"
+  ],
+  [
+   "line_len_ft",
+   "Real"
+  ],
+  [
+   "line_len_src",
+   "String"
+  ],
+  [
+   "match_m",
+   "Real"
+  ],
+  [
+   "angle_deg",
+   "Real"
+  ],
+  [
+   "embankment",
+   "String"
+  ],
+  [
+   "emb_name",
+   "String"
+  ],
+  [
+   "stream",
+   "String"
+  ],
+  [
+   "stream_dir",
+   "String"
+  ],
+  [
+   "also_in",
+   "String"
+  ],
+  [
+   "notes",
+   "String"
+  ]
+ ],
+ "features": [
+  {
+   "fid": 253,
+   "wkt": "LINESTRING (-96286.0538 2659456.1414,-96279.1645 2659451.5688,-96272.9240 2659446.5562,-96267.3321 2659441.1038,-96262.3889 2659435.2114,-96258.0944 2659428.8791,-96254.4485 2659422.1069,-96251.4514 2659414.8947,-96249.1029 2659407.2426,-96247.4031 2659399.1506)",
+   "attrs": {
+    "name": "NDDOT 09-122-22.1 (COUNTY HIGHWAY over SWAN CREEK)",
+    "kind": "culvert",
+    "span_ft": 9.75,
+    "rise_ft": 6.58,
+    "barrels": 2,
+    "shape": "arch",
+    "invert_up": 940.75,
+    "invert_dn": 940.32,
+    "source": "NDDOT",
+    "src_id": "09-122-22.1",
+    "carried": "COUNTY HIGHWAY",
+    "crosses": "SWAN CREEK",
+    "nbi_kind": null,
+    "nbi_design": "Culvert",
+    "n_spans": 2,
+    "struct_len_ft": 26.0,
+    "deck_w_ft": null,
+    "barrel_len_ft": 168.0,
+    "material": "CSPA",
+    "inv_text": "(2) 117\" X 79\" X 168' CSPA",
+    "elev_left_ft": null,
+    "elev_right_ft": null,
+    "inlet_side": null,
+    "end_section": null,
+    "emb_width_ft": 32.8,
+    "emb_width_src": "road default (engineer parameter)",
+    "line_len_ft": 225.9,
+    "line_len_src": "straight chord of the placed line ends (barrel 168 ft + embankment margins); 8 interior vertices dropped",
+    "match_m": 1.3,
+    "angle_deg": 71.6,
+    "embankment": "road",
+    "emb_name": "34TH ST SE",
+    "stream": "Swan Creek",
+    "stream_dir": "as digitised (NHD: downstream)",
+    "also_in": "NBI 000000009122221 (COUNTY HIGHWAY over SWAN CREEK)",
+    "notes": "REVIEW 2026-10-24: simplified from 10 to 2 vertices (same end points). invert_up/invert_dn = lowest 1.21 m LiDAR ground within ~10 m of each end (286.74 / 286.61 m), NOT surveyed; the run used 288.33 / 288.50 m read from the 30 m model DEM. Inventory shape is a 117x79 in pipe-arch (Runner models it as a 2.97 x 2.01 m box)."
+   }
+  },
+  {
+   "fid": 254,
+   "wkt": "LINESTRING (-88725.3717184854 2654405.79299237,-88722.8503475827 2654403.94955186,-88715.2334185618 2654400.75671736,-88685.7680998748 2654399.9545898,-88680.0041102854 2654401.76642795,-88678.8995636668 2654402.0308729)",
+   "attrs": {
+    "name": "NDDOT pipe hwy 10 E RP 5+0.29 (Corrugated Metal Pipe 24 in)",
+    "kind": "culvert",
+    "span_ft": 2.0,
+    "rise_ft": 2.0,
+    "barrels": 1,
+    "shape": "pipe",
+    "invert_up": 915.5,
+    "invert_dn": 915.0,
+    "source": "NDDOT",
+    "src_id": "276@5.197",
+    "carried": "hwy 10 E RP 5+0.29",
+    "crosses": null,
+    "nbi_kind": null,
+    "nbi_design": "CORRUGATED METAL PIPE",
+    "n_spans": null,
+    "struct_len_ft": null,
+    "deck_w_ft": null,
+    "barrel_len_ft": 92.0,
+    "material": "Corrugated Metal Pipe",
+    "inv_text": "CORRUGATED METAL PIPE",
+    "elev_left_ft": 915.5,
+    "elev_right_ft": 915.0,
+    "inlet_side": "left (by elevation)",
+    "end_section": "Flared",
+    "emb_width_ft": 32.8,
+    "emb_width_src": "road default (engineer parameter)",
+    "line_len_ft": 157.6,
+    "line_len_src": "inventory barrel length 92 ft + 2 x margin",
+    "match_m": 144.5,
+    "angle_deg": 89.2,
+    "embankment": "road",
+    "emb_name": "158TH AVE SE",
+    "stream": null,
+    "stream_dir": "as digitised (NHD: downstream)",
+    "also_in": null,
+    "notes": null
+   }
+  },
+  {
+   "fid": 257,
+   "wkt": "LINESTRING (-73291.4111189927 2681635.42668132,-73278.690112619 2681635.49500997,-73248.8653969245 2681634.99599141)",
+   "attrs": {
+    "name": "NDDOT pipe hwy 29 N RP 83+0.70 (Reinforced Concrete Pipe 30 in)",
+    "kind": "culvert",
+    "span_ft": 2.5,
+    "rise_ft": 2.5,
+    "barrels": 1,
+    "shape": "pipe",
+    "invert_up": 885.02,
+    "invert_dn": 884.95,
+    "source": "NDDOT",
+    "src_id": "13@83.717",
+    "carried": "hwy 29 N RP 83+0.70",
+    "crosses": null,
+    "nbi_kind": null,
+    "nbi_design": "REINFORCED CONCRETE PIPE",
+    "n_spans": null,
+    "struct_len_ft": null,
+    "deck_w_ft": null,
+    "barrel_len_ft": 74.0,
+    "material": "Reinforced Concrete Pipe",
+    "inv_text": "REINFORCED CONCRETE PIPE",
+    "elev_left_ft": 885.02,
+    "elev_right_ft": 884.95,
+    "inlet_side": "left",
+    "end_section": "Flared",
+    "emb_width_ft": 32.8,
+    "emb_width_src": "road default (engineer parameter)",
+    "line_len_ft": 139.6,
+    "line_len_src": "inventory barrel length 74 ft + 2 x margin",
+    "match_m": 22.5,
+    "angle_deg": 75.8,
+    "embankment": "road",
+    "emb_name": "INTERSTATE 29",
+    "stream": null,
+    "stream_dir": "as digitised (NHD: downstream)",
+    "also_in": "NDDOT pipe hwy 29 N RP 83+0.74 (Reinforced Concrete Pipe 30 in); NDDOT pipe hwy 29 N RP 83+0.72 (Triple 48 x 0 in)",
+    "notes": "3 NDDOT records at this crossing (twin structures? verify the barrels)"
+   }
+  },
+  {
+   "fid": 263,
+   "wkt": "LINESTRING (-71966.900770851 2675195.28147166,-71923.7461360195 2675194.62156995)",
+   "attrs": {
+    "name": "NDDOT pipe hwy 29 N RP 79+0.62 (Reinforced Concrete Pipe 30 in)",
+    "kind": "culvert",
+    "span_ft": 2.5,
+    "rise_ft": 2.5,
+    "barrels": 1,
+    "shape": "pipe",
+    "invert_up": 883.18,
+    "invert_dn": 883.1,
+    "source": "NDDOT",
+    "src_id": "13@79.635",
+    "carried": "hwy 29 N RP 79+0.62",
+    "crosses": null,
+    "nbi_kind": null,
+    "nbi_design": "REINFORCED CONCRETE PIPE",
+    "n_spans": null,
+    "struct_len_ft": null,
+    "deck_w_ft": null,
+    "barrel_len_ft": 76.0,
+    "material": "Reinforced Concrete Pipe",
+    "inv_text": "REINFORCED CONCRETE PIPE",
+    "elev_left_ft": 883.18,
+    "elev_right_ft": 883.1,
+    "inlet_side": "left",
+    "end_section": "Traversabs",
+    "emb_width_ft": 32.8,
+    "emb_width_src": "road default (engineer parameter)",
+    "line_len_ft": 141.6,
+    "line_len_src": "inventory barrel length 76 ft + 2 x margin",
+    "match_m": 87.5,
+    "angle_deg": 89.8,
+    "embankment": "road",
+    "emb_name": "INTERSTATE 29",
+    "stream": null,
+    "stream_dir": "as digitised (NHD: downstream)",
+    "also_in": "NDDOT pipe hwy 29 N RP 79+0.55 (Reinforced Concrete Pipe 30 in); NDDOT pipe hwy 29 N RP 79+0.58 (Quard 72 x 0 in); NBI 0029078797 (INTERSTATE 29 over DRAINAGE DITCH)",
+    "notes": "3 NDDOT records at this crossing (twin structures? verify the barrels)"
+   }
+  },
+  {
+   "fid": 267,
+   "wkt": "LINESTRING (-92767.1818952246 2656214.47475846,-92767.1167723797 2656214.46832001,-92716.7075351427 2656214.32546455)",
+   "attrs": {
+    "name": "NDDOT pipe hwy 18 N RP 74+0.53 (Reinforced Concrete Pipe 24 in)",
+    "kind": "culvert",
+    "span_ft": 2.0,
+    "rise_ft": 2.0,
+    "barrels": 1,
+    "shape": "pipe",
+    "invert_up": 926.1,
+    "invert_dn": 926.3,
+    "source": "NDDOT",
+    "src_id": "274@67.012",
+    "carried": "hwy 18 N RP 74+0.53",
+    "crosses": null,
+    "nbi_kind": null,
+    "nbi_design": "REINFORCED CONCRETE PIPE",
+    "n_spans": null,
+    "struct_len_ft": null,
+    "deck_w_ft": null,
+    "barrel_len_ft": 100.0,
+    "material": "Reinforced Concrete Pipe",
+    "inv_text": "REINFORCED CONCRETE PIPE",
+    "elev_left_ft": 926.1,
+    "elev_right_ft": 926.3,
+    "inlet_side": "left",
+    "end_section": "Flared",
+    "emb_width_ft": 32.8,
+    "emb_width_src": "road default (engineer parameter)",
+    "line_len_ft": 165.6,
+    "line_len_src": "inventory barrel length 100 ft + 2 x margin",
+    "match_m": 94.2,
+    "angle_deg": 74.0,
+    "embankment": "road",
+    "emb_name": "GOVERNORS DR",
+    "stream": "Swan Creek",
+    "stream_dir": "as digitised (NHD: downstream)",
+    "also_in": "NBI 0018074581 (ND HIGHWAY 18 over SWAN CREEK)",
+    "notes": "the inventory's upstream end (left) is 0.2 ft lower than its downstream end: check the stream line's flow direction and the elevations"
+   }
+  },
+  {
+   "fid": 277,
+   "wkt": "LINESTRING (-108028.6292677 2654774.80565125,-108030.349906535 2654772.78435368,-108033.480688424 2654768.18078817,-108035.07074044 2654764.21863518,-108039.011353143 2654756.63777156,-108039.814601856 2654754.10323801,-108041.933889374 2654750.59180861,-108042.988143884 2654746.62169713,-108044.542034984 2654745.09475527,-108050.020334158 2654737.8557109)",
+   "attrs": {
+    "name": "NDDOT pipe hwy 94 W RP 321+0.77 (Reinforced Concrete Pipe 24 in)",
+    "kind": "culvert",
+    "span_ft": 2.0,
+    "rise_ft": 2.0,
+    "barrels": 1,
+    "shape": "pipe",
+    "invert_up": 1014.06,
+    "invert_dn": 1015.74,
+    "source": "NDDOT",
+    "src_id": "16@321.645",
+    "carried": "hwy 94 W RP 321+0.77",
+    "crosses": null,
+    "nbi_kind": null,
+    "nbi_design": "REINFORCED CONCRETE PIPE",
+    "n_spans": null,
+    "struct_len_ft": null,
+    "deck_w_ft": null,
+    "barrel_len_ft": 76.0,
+    "material": "Reinforced Concrete Pipe",
+    "inv_text": "REINFORCED CONCRETE PIPE",
+    "elev_left_ft": 1014.06,
+    "elev_right_ft": 1015.74,
+    "inlet_side": "left",
+    "end_section": "Flared",
+    "emb_width_ft": 32.8,
+    "emb_width_src": "road default (engineer parameter)",
+    "line_len_ft": 141.6,
+    "line_len_src": "inventory barrel length 76 ft + 2 x margin",
+    "match_m": 106.6,
+    "angle_deg": 72.9,
+    "embankment": "road",
+    "emb_name": "INTERSTATE 94",
+    "stream": null,
+    "stream_dir": "as digitised (NHD: downstream)",
+    "also_in": "NDDOT pipe hwy 94 E RP 321+0.68 (Reinforced Concrete Pipe 24 in)",
+    "notes": "the inventory's upstream end (left) is 1.7 ft lower than its downstream end: check the stream line's flow direction and the elevations; 2 NDDOT records at this crossing (twin structures? verify the barrels)"
+   }
+  },
+  {
+   "fid": 280,
+   "wkt": "LINESTRING (-76297.5176497686 2654502.13297531,-76295.8960568191 2654510.43756385,-76290.0189639731 2654552.55610282,-76290.0069668746 2654552.65180826)",
+   "attrs": {
+    "name": "NDDOT pipe hwy 94 E RP 341+0.42 (Reinforced Concrete Pipe 24 in)",
+    "kind": "culvert",
+    "span_ft": 2.0,
+    "rise_ft": 2.0,
+    "barrels": 1,
+    "shape": "pipe",
+    "invert_up": 893.2,
+    "invert_dn": 894.7,
+    "source": "NDDOT",
+    "src_id": "15@341.348",
+    "carried": "hwy 94 E RP 341+0.42",
+    "crosses": null,
+    "nbi_kind": null,
+    "nbi_design": "REINFORCED CONCRETE PIPE",
+    "n_spans": null,
+    "struct_len_ft": null,
+    "deck_w_ft": null,
+    "barrel_len_ft": 102.0,
+    "material": "Reinforced Concrete Pipe",
+    "inv_text": "REINFORCED CONCRETE PIPE",
+    "elev_left_ft": 894.7,
+    "elev_right_ft": 893.2,
+    "inlet_side": "right",
+    "end_section": "None",
+    "emb_width_ft": 32.8,
+    "emb_width_src": "road default (engineer parameter)",
+    "line_len_ft": 167.6,
+    "line_len_src": "inventory barrel length 102 ft + 2 x margin",
+    "match_m": 45.1,
+    "angle_deg": 82.3,
+    "embankment": "road",
+    "emb_name": "INTERSTATE 94",
+    "stream": null,
+    "stream_dir": "as digitised (NHD: downstream)",
+    "also_in": "NDDOT pipe hwy 94 E RP 341+0.36 (Reinforced Concrete Pipe 24 in); NBI 0094341391  L (INTERSTATE 94 over LEGAL DRAIN 14); NBI 0094341391  R (INTERSTATE 94 over LEGAL DRAIN 14)",
+    "notes": "the inventory's upstream end (right) is 1.5 ft lower than its downstream end: check the stream line's flow direction and the elevations; 2 NDDOT records at this crossing (twin structures? verify the barrels)"
+   }
+  },
+  {
+   "fid": 281,
+   "wkt": "LINESTRING (-86651.9651413219 2654564.67415303,-86652.7356724636 2654556.13461342,-86652.4938337718 2654525.02187632,-86652.2280568612 2654522.78503958)",
+   "attrs": {
+    "name": "NDDOT pipe hwy 94 E RP 335+0.03 (Reinforced Concrete Pipe 18 in)",
+    "kind": "culvert",
+    "span_ft": 1.5,
+    "rise_ft": 1.5,
+    "barrels": 1,
+    "shape": "pipe",
+    "invert_up": 915.5,
+    "invert_dn": 910.4,
+    "source": "NDDOT",
+    "src_id": "15@334.959",
+    "carried": "hwy 94 E RP 335+0.03",
+    "crosses": null,
+    "nbi_kind": null,
+    "nbi_design": "REINFORCED CONCRETE PIPE",
+    "n_spans": null,
+    "struct_len_ft": null,
+    "deck_w_ft": null,
+    "barrel_len_ft": 72.0,
+    "material": "Reinforced Concrete Pipe",
+    "inv_text": "REINFORCED CONCRETE PIPE",
+    "elev_left_ft": 915.5,
+    "elev_right_ft": 910.4,
+    "inlet_side": "left",
+    "end_section": "None",
+    "emb_width_ft": 32.8,
+    "emb_width_src": "road default (engineer parameter)",
+    "line_len_ft": 137.6,
+    "line_len_src": "inventory barrel length 72 ft + 2 x margin",
+    "match_m": 79.0,
+    "angle_deg": 88.8,
+    "embankment": "road",
+    "emb_name": "INTERSTATE 94",
+    "stream": "Swan Creek",
+    "stream_dir": "as digitised (NHD: downstream)",
+    "also_in": "NDDOT pipe hwy 94 E RP 334+0.96 (Reinforced Concrete Pipe 18 in); NBI 0094334998  L (INTERSTATE 94 over SWAN CREEK); NBI 0094334998  R (INTERSTATE 94 over SWAN CREEK)",
+    "notes": "2 NDDOT records at this crossing (twin structures? verify the barrels)"
+   }
+  }
+ ],
+ "ground_m": {
+  "253:upstream": 286.816,
+  "253:downstream": 286.623,
+  "254:upstream": 277.992,
+  "254:downstream": 278.032,
+  "257:upstream": 270.67,
+  "257:downstream": 269.0,
+  "263:upstream": 270.217,
+  "263:downstream": 268.797,
+  "267:upstream": 280.307,
+  "267:downstream": 280.26,
+  "277:upstream": 307.548,
+  "277:downstream": 310.133,
+  "280:upstream": 272.259,
+  "280:downstream": 271.89,
+  "281:upstream": 276.677,
+  "281:downstream": 276.599
+ },
+ "invfix2": {
+  "253": [
+   940.75,
+   940.32
+  ],
+  "254": [
+   912.05,
+   912.18
+  ],
+  "257": [
+   885.02,
+   882.55
+  ],
+  "263": [
+   883.18,
+   881.88
+  ],
+  "267": [
+   919.64,
+   919.49
+  ],
+  "277": [
+   1009.02,
+   1015.74
+  ],
+  "280": [
+   893.2,
+   892.03
+  ],
+  "281": [
+   907.73,
+   907.48
+  ]
+ }
+}

@@ -32,7 +32,11 @@ PLUGINS = {"ndhazard": "DamSafety_Hazard",
 LABELS = {"ndhazard": "DamSafety Hazard",
           "ndbreach": "DamSafety Runner",
           "ndscreen": "DamSafety Screening"}
+<<<<<<< HEAD
 RELEASE = {"ndhazard": "2.20.1", "ndbreach": "3.12.2", "ndscreen": "0.17.55"}
+=======
+RELEASE = {"ndhazard": "2.20.1", "ndbreach": "3.12.3", "ndscreen": "0.17.55"}
+>>>>>>> fcf5121 (Runner 3.12.3: culvert prep - corrected copy of the structures layer, big changes flagged for review)
 # minimum version of B that A needs when both are installed: (A, B): (hard_min, soft_min, reason)
 REQUIRES = {
     ("ndbreach", "ndhazard"): ("2.9.1", "2.18.63",

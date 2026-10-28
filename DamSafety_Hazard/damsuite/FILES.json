@@ -34,7 +34,11 @@
  "transformguard.py": "33f4cdb38bd1bb3f678c266b5221b1cbf721c81a29d6e2e18866c49270829ff1",
  "units.py": "2cd0b0208220ee8ae470c7c10adc8968cfd2bda7c05b9a836ab05130afc501d1",
  "vdatum.py": "4184108d42e1f58897d7d67e1dccb5d511b3fc1608deab72090da2b1511bb667",
+<<<<<<< HEAD
  "versions.py": "297a862934375333342f0cd86aea40a6c54c9f6b31d4e9babc51eae3b780d73b",
+=======
+ "versions.py": "bbeed6d0dec536738326db3ee315f8a6ca49cd70c15de26090e5c56ae71c6186",
+>>>>>>> fcf5121 (Runner 3.12.3: culvert prep - corrected copy of the structures layer, big changes flagged for review)
  "vertcon_nd.py": "337cc8512d2ddc31e2edd6986b15f7535ebb53ca791b5e08faf15c716af2c3a8",
  "xlsx_lite.py": "b7e9ad8d43f5ae4b4158f642b5abd11912811756228f07fe54713fb141605030"
 }

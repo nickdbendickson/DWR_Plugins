@@ -10,6 +10,8 @@
     python3 ndbreach_cli.py selftest                   what works on this computer
     python3 ndbreach_cli.py culvert-precheck --dam-folder DIR --out OUT
                                                        culvert inverts vs the fine ground
+    python3 ndbreach_cli.py culvert-prep --structures S.gpkg --fine-dem DEM.vrt --output S_prep.gpkg
+                                                       a corrected copy (big changes flagged)
     python3 ndbreach_cli.py hecras-reexport DAM_FOLDER [--out DIR]
                                                        HEC-RAS rasters again from the .p01.hdf
                                                        and the terrain (no model run)
@@ -1572,6 +1574,12 @@ def cmd_culvert_precheck(args):
     return cp.main(args.rest)
 
 
+def cmd_culvert_prep(args):
+    """3.12.3: a corrected COPY of a structures layer from the culvert pre-check."""
+    cp = importlib.import_module(PKG + ".core.culvert_prep")
+    return cp.main(args.rest)
+
+
 def cmd_hecras_reexport(args):
     """3.10.79: the HEC-RAS rasters of a finished run again from its plan HDF and terrain."""
     eng = importlib.import_module(PKG + ".core.hecras_engine")
@@ -1928,6 +1936,11 @@ def build_parser():
     p.add_argument("rest", nargs=argparse.REMAINDER, help="options of core/culvert_precheck.py "
                    "(--help lists them)")
     p.set_defaults(func=cmd_culvert_precheck)
+    p = sub.add_parser("culvert-prep", help="a corrected COPY of the structures layer from the "
+                       "culvert pre-check (big changes flagged for review)", add_help=False)
+    p.add_argument("rest", nargs=argparse.REMAINDER, help="options of core/culvert_prep.py "
+                   "(--help lists them)")
+    p.set_defaults(func=cmd_culvert_prep)
     p = sub.add_parser("hecras-reexport", help="HEC-RAS rasters again from a finished run's "
                        ".p01.hdf: depth = WSE minus the terrain (default) or the "
                        "cell minimum (no model run)")
@@ -1995,6 +2008,8 @@ def main(argv=None):
     if argv and argv[0] == "culvert-precheck":
         # its options start with -- (argparse's REMAINDER would not take them), passed as given
         return int(cmd_culvert_precheck(argparse.Namespace(rest=argv[1:])) or 0)
+    if argv and argv[0] == "culvert-prep":
+        return int(cmd_culvert_prep(argparse.Namespace(rest=argv[1:])) or 0)
     args = ap.parse_args(argv)
     old = _install_sigint() if args.command in ("run", "batch", "estimate") else None
     try:
