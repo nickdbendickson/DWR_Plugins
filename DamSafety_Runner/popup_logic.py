@@ -53,6 +53,9 @@ TABS = (
         ("nlcdmanning", "Manning's n from NLCD\u2026", "A Manning's n raster from land cover."),
         ("conditiondem", "Preview the DEM conditioning\u2026",
          "What the culvert / channel / pond conditioning does to the DEM around the dam."),
+        ("culvertprep", "Culvert prep: corrected copy of the structures layer\u2026",
+         "Culvert inverts set to the lowest native fine ground in a new copy (the input is not "
+         "changed); changes over the limit are flagged for review, with a change log."),
     )),
     ("Results", (
         ("products", "Flood polygons and EAP map from rasters\u2026", "Polygons, arrival contours, map."),

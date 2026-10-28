@@ -5,12 +5,13 @@ from qgis.core import (QgsPointXY, QgsProcessingException, QgsProcessingOutputFi
                        QgsProcessingOutputFolder, QgsProcessingOutputString,
                        QgsProcessingParameterEnum, QgsProcessingParameterExtent,
                        QgsProcessingParameterFileDestination, QgsProcessingParameterPoint,
-                       QgsProcessingParameterRasterLayer, QgsProcessingParameterString)
+                       QgsProcessingParameterRasterLayer, QgsProcessingParameterString,
+                       QgsProcessingParameterVectorLayer)
 
-from .compat import ALG_NO_THREADING
+from .compat import ALG_NO_THREADING, set_advanced
 from .algorithms import _Base, ZUNITS
-from .core import (benchmark, conditioning as condmod, gdal_io, handoff, nd_data, products,
-                   structures as structmod, workflow)
+from .core import (benchmark, conditioning as condmod, culvert_prep, gdal_io, handoff, nd_data,
+                   products, structures as structmod, workflow)
 from .core.units import FT, MILE, ARRIVAL_DEPTH_FT
 
 
@@ -431,6 +432,166 @@ class ProductsAlgorithm(_ToolBase):
         return {"FOLDER": folder, "EAP_MAP": res.eap_map}
 
 
+class CulvertPrepAlgorithm(_ToolBase):
+    """3.12.3: the structures layer's culvert prep (core/culvert_prep.py)."""
+    HAZARD_ALG = "ndhazard:runnerculverts"
+    BUILD_LAYERS = (("NBI", "National Bridge Inventory points (NBI_bridges)"),
+                    ("NDDOT", "NDDOT bridge inventory (Bridge_Inventory_External)"),
+                    ("NDDOT_PIPES", "NDDOT centerline pipes (Center_Line_Pipes)"),
+                    ("STREAMS", "Streams (NHD flowlines)"),
+                    ("ROADS", "Road lines"),
+                    ("RAIL", "Rail lines"))
+
+    def flags(self):
+        # it may call ND Dam Hazard's algorithm: run it on the main thread (as 'classify')
+        return super().flags() | ALG_NO_THREADING
+
+    def name(self):
+        return "culvertprep"
+
+    def displayName(self):
+        return "Culvert prep: corrected copy of the structures layer (review list)"
+
+    def shortHelpString(self):
+        return ("Before a run: checks each culvert end of a structures layer against the run's "
+                "fine DEM with the run's own rules (the culvert pre-check) and writes a "
+                "corrected COPY - the input layer is never changed.\n"
+                "An end whose given invert is more than 0.3 m above the lowest fine ground "
+                "within max(apron, 5 m) gets that lowest ground as its invert (LiDAR-derived, "
+                "not surveyed), with a note on the feature. A change is applied only when it is "
+                "within the limit (1 ft to start; the engineer's choice) and the end is on "
+                "native fine ground (the composite DEM's top source, 1 m cells or finer). "
+                "Larger changes, ends on a fill source or a coarser DEM, ends with no fine "
+                "ground (the run uses the model DEM there) and line straightening are FLAGGED: "
+                "left unchanged in the copy and listed in the change log for review.\n"
+                "The change log (culvert_prep_<dam>.md / .csv / .json, beside the copy) "
+                "records the sha256 of the input and of the copy and every item. To apply "
+                "flagged items, put yes in the accept column of the CSV (or list item ids in a "
+                "text file) and run again from the SAME input with it as the accept list.\n"
+                "No structures layer? Leave it empty and give the inventories: ND Dam Hazard's "
+                "'Culvert and bridge lines for ND Dam Breach Runner' builds it first "
+                "(layers left empty come from its offline data pack).\n"
+                "The run is unchanged: point the run's structures layer at the copy to use it. "
+                "The bed floor and the channel-bed check still apply in the run.")
+
+    def initAlgorithm(self, config=None):
+        self._file("STRUCTURES", "Structures GeoPackage (runner_culverts; empty = build it "
+                   "with ND Dam Hazard from the inventories below)", ext="gpkg")
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "DEM", "Fine DEM of the run (e.g. the composite 1 m over 5 m VRT)"))
+        self.addParameter(QgsProcessingParameterEnum(
+            "DEM_Z", "DEM elevation units", [z[1] for z in ZUNITS], defaultValue=0))
+        self._num("LIMIT_FT", "Flag invert changes larger than (ft; 1 ft to start, the "
+                  "engineer's choice)", culvert_prep.DEFAULT_LIMIT_FT, minimum=0.0)
+        self._file("ACCEPT", "Accept list (the change-log CSV with its accept column filled, or "
+                   "a text file of item ids; empty = none)")
+        self._bool("APPLY_AUTO", "Apply the small changes on native ground (off = apply the "
+                   "accepted items only)", True)
+        self._num("SIMPLIFY_RATIO", "Propose straightening culvert lines longer than this many "
+                  "times their end-point chord (0 = off; always flagged for review)", 0.0,
+                  minimum=0.0, advanced=True)
+        self._text("COVERAGE", "Fine DEM sources, top first ([label=]path; ...; empty = the "
+                   "composite VRT's own sources)", advanced=True)
+        self._text("DAM_ID", "Dam ID (log file names)")
+        for key, desc in self.BUILD_LAYERS:
+            self.addParameter(QgsProcessingParameterVectorLayer(
+                key, "Build: " + desc, optional=True))
+            set_advanced(self.parameterDefinition(key))
+        self._file("PACK", "Build: ND Dam Hazard offline data pack (empty = Hazard's own)",
+                   advanced=True)
+        self.addParameter(QgsProcessingParameterExtent("EXTENT", "Build: area", optional=True))
+        set_advanced(self.parameterDefinition("EXTENT"))
+        self._bool("OVERWRITE", "Replace an earlier output (never the input)", False,
+                   advanced=True)
+        self.addParameter(QgsProcessingParameterFileDestination(
+            "OUTPUT", "Corrected copy (a new GeoPackage)", "GeoPackage (*.gpkg)"))
+        self.addOutput(QgsProcessingOutputFile("CORRECTED", "Corrected copy"))
+        self.addOutput(QgsProcessingOutputFile("BUILT", "Structures built by ND Dam Hazard"))
+        self.addOutput(QgsProcessingOutputFile("LOG_MD", "Change log (.md)"))
+        self.addOutput(QgsProcessingOutputFile("LOG_CSV", "Change log / accept list (.csv)"))
+        self.addOutput(QgsProcessingOutputFile("LOG_JSON", "Change log (.json)"))
+        self.addOutput(QgsProcessingOutputString("RESULT", "Result"))
+
+    def _build(self, parameters, context, feedback, out_dir, stem, overwrite):
+        """The structures layer from ND Dam Hazard's runnerculverts, or an error."""
+        try:
+            handoff.check_version(self.HAZARD_ALG)
+            alg = handoff._reg().algorithmById(self.HAZARD_ALG)
+        except handoff.HandoffError as e:
+            raise QgsProcessingException(str(e))
+        if alg is None:
+            raise QgsProcessingException(
+                "No structures layer given and ND Dam Hazard ({}) is not installed: build the "
+                "layer with its 'Culvert and bridge lines for ND Dam Breach Runner' tool, or "
+                "give it here.".format(self.HAZARD_ALG))
+        built = os.path.join(out_dir, stem + "_built.gpkg")
+        if os.path.exists(built) and not overwrite:
+            raise QgsProcessingException("{} exists; remove it or tick 'Replace an earlier "
+                                         "output'".format(built))
+        params = {k: parameters[k] for k, _d in self.BUILD_LAYERS + (("PACK", ""), ("EXTENT", ""))
+                  if parameters.get(k) not in (None, "")}
+        params["OUTPUT"] = built
+        feedback.pushInfo("Building the structures layer with {} ...".format(self.HAZARD_ALG))
+        try:
+            res = handoff._run(alg, params, feedback)
+        except Exception as e:                                   # noqa  (Hazard's own error)
+            raise QgsProcessingException("{} failed: {}".format(self.HAZARD_ALG, e))
+        path = (res or {}).get("OUTPUT") or built
+        if not os.path.isfile(str(path).split("|")[0]):
+            raise QgsProcessingException("{} wrote no layer".format(self.HAZARD_ALG))
+        return str(path).split("|")[0]
+
+    def processAlgorithm(self, parameters, context, feedback):
+        self._need_gdal()
+        out = self._out(parameters, context)
+        dem = self.parameterAsRasterLayer(parameters, "DEM", context)
+        if dem is None:
+            raise QgsProcessingException("Choose the run's fine DEM")
+        dem_path = (dem.source() if hasattr(dem, "source") else str(dem)).split("|")[0]
+        z = ZUNITS[min(len(ZUNITS) - 1, self.parameterAsEnum(parameters, "DEM_Z", context))][0]
+        dam = self._str(parameters, "DAM_ID", context)
+        overwrite = self.parameterAsBool(parameters, "OVERWRITE", context)
+        stem = os.path.splitext(os.path.basename(out))[0]
+        src = self._fileparam(parameters, "STRUCTURES", context)
+        built = ""
+        if not src:
+            src = built = self._build(parameters, context, feedback, os.path.dirname(out), stem,
+                                      overwrite)
+        cov = [c.strip() for c in self._str(parameters, "COVERAGE", context).split(";")
+               if c.strip()]
+        ratio = self._opt(parameters, "SIMPLIFY_RATIO", context) or None
+        limit = self._opt(parameters, "LIMIT_FT", context)
+        try:
+            log = culvert_prep.prepare(
+                src, dem_path, out, dam=dam, coverage=cov or None, z_choice=z,
+                limit_ft=culvert_prep.DEFAULT_LIMIT_FT if limit is None else limit,
+                simplify_ratio=ratio,
+                accept_path=self._fileparam(parameters, "ACCEPT", context) or None,
+                apply_auto=self.parameterAsBool(parameters, "APPLY_AUTO", context),
+                overwrite=overwrite)
+        except (ValueError, RuntimeError, OSError) as e:
+            raise QgsProcessingException(str(e))
+        c = log["counts"]
+        n_flag = sum(c.get(k, 0) for k in (culvert_prep.ST_FLAGGED, culvert_prep.ST_STALE,
+                                           culvert_prep.ST_NOT_ACCEPTED))
+        msg = ("{} applied, {} accepted, {} flagged (unchanged, for review), {} listed; input "
+               "sha256 {}; copy {}".format(c.get(culvert_prep.ST_APPLIED, 0),
+                                           c.get(culvert_prep.ST_ACCEPTED, 0), n_flag,
+                                           c.get(culvert_prep.ST_REVIEW, 0),
+                                           log["input_sha256"], log["output"]))
+        feedback.pushInfo(msg)
+        if n_flag or c.get(culvert_prep.ST_REVIEW):
+            feedback.reportError("Check: {} items need review - see {}".format(
+                n_flag + c.get(culvert_prep.ST_REVIEW, 0), log["files"]["md"]), fatalError=False)
+        for iid in log["accepted_ids_not_found"]:
+            feedback.reportError("Check: accepted item {} is not proposed now".format(iid),
+                                 fatalError=False)
+        self.load(context, out, "Structures (culvert prep copy)")
+        return {"CORRECTED": out, "BUILT": built, "LOG_MD": log["files"]["md"],
+                "LOG_CSV": log["files"]["csv"], "LOG_JSON": log["files"]["json"],
+                "RESULT": msg}
+
+
 TOOL_ALGORITHMS = (BuildVrtAlgorithm, FillGapsAlgorithm, NlcdManningAlgorithm,
                    ConditionDemAlgorithm, BenchmarkAlgorithm, ClassifyAlgorithm,
-                   ProductsAlgorithm)
+                   ProductsAlgorithm, CulvertPrepAlgorithm)

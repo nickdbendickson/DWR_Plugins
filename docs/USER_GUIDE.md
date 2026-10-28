@@ -227,6 +227,26 @@ Before a dam's run, see which culvert inverts the run will change, read-only and
 - The output is `culvert_precheck_<dam>.md`, `.csv` and `.json`. With several dams there is also `culvert_precheck_index.json`.
 - The suggested invert is the lowest fine ground. It is not surveyed.
 
+## Culvert prep: a corrected copy of the structures layer (Runner 3.12.3)
+Automates the manual DWR-2801 culvert fixes: the pre-check's HIGH ends get the lowest native fine ground as their invert, in a **copy** of the structures layer, with a change log. Bigger changes are **flagged**, not applied. The run itself does not change: point the run's structures layer at the copy to use it.
+
+- **Processing:** DamSafety Runner > Tools > *Culvert prep: corrected copy of the structures layer (review list)*. **CLI:**
+
+      python DamSafety_Runner/scripts/ndbreach_cli.py culvert-prep --structures S.gpkg --fine-dem DEM.vrt \
+          --output S_prep.gpkg --dam ID [--dem-z meters] [--limit-ft 1] [--accept culvert_prep_ID.csv]
+
+- **No structures layer yet:** leave *Structures* empty and give the inventories (NBI, NDDOT bridges / pipes, streams, roads, rail; empty layers come from the offline pack). ND Dam Hazard's *Culvert and bridge lines for ND Dam Breach Runner* (`ndhazard:runnerculverts`) builds `<output>_built.gpkg` first. Hazard must be installed for this.
+- **The input is never written.** The tool refuses an output equal to the input or an existing output (unless *Replace an earlier output* is ticked; the input is still never replaced), writes the copy to a temporary file and renames it, and checks the input's sha256 afterwards.
+- **Proposed invert:** the lowest fine-DEM ground within max(apron, 5 m) of the end. This is the pre-check's rule (HIGH = given invert more than 0.3 m above that ground), rounded to 0.01 ft. It is LiDAR-derived, NOT surveyed.
+- **Applied** only when all of these hold: the change is at most the limit (**1 ft** to start; *Flag invert changes larger than*); the end is on native ground (the composite DEM's top source, 1 m cells or finer); and the line is single-part.
+- **Flagged** (unchanged in the copy and listed): larger changes, ends on a fill source or a coarser DEM, and multi-part lines.
+- **Listed for review only:** FALLBACK ends (no fine ground; the run uses the model DEM there) and non-HIGH ends on non-native ground.
+- **Line straightening** (e.g. 09-122-22.1) is off by default. With *Propose straightening …* > 0 (e.g. 1.02), a line longer than that many times its end-point chord gets a proposal to become the 2-vertex chord. It is always flagged and is applied only when accepted.
+- **Each changed feature** gets a note appended to `notes`: "PREP <date> (DamSafety Runner <version> culvert prep): invert_up a -> b ft = lowest fine-DEM ground within N m of the end (source, cell); …; LiDAR-derived, NOT surveyed". The copy's `runner_culverts_info` table gets a `culvert_prep` row (JSON: the input and its sha256, the limit, the counts).
+- **Change log** beside the copy (or `--log-dir`): `culvert_prep_<dam>.md`, `.csv` and `.json`. Each records the sha256 of the input and of the copy, the settings and one row per item (`item_id` such as `281:invert_dn` or `253:geometry`, status, old / proposed ft, ground, source, cell, reason). A post-check of the copy is in the JSON.
+- **Accepting flagged items:** put `yes` in the CSV's `accept` column (or list item ids, one per line, in a text file). Then run again **from the same input** with that file as *Accept list*. Accepted items are applied with "engineer-accepted" in the note. An accepted proposal that has since moved by more than 0.005 ft (different DEM or input) is `accept_stale` and is not applied. Untick *Apply the small changes …* (`--accepted-only`) to apply only accepted items. Ids that are not proposed now are reported.
+- The run's own culvert handling is unchanged: the 0.3 m cap, the opt-in bed floor (#210) and the inventory-vs-LiDAR channel-bed check (#218) still apply to the copy.
+
 ## Cross-platform (#32)
 - The plugins now read and write text as UTF-8 on every OS, so files with names, °, or – move cleanly between Windows and Linux.
 - CSVs no longer get blank rows on Windows.
