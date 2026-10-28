@@ -6,9 +6,14 @@ Needs GDAL (osgeo); skipped without it. Checks: the layer registry covers every 
 reference ND_Dam_Suite_Pack; one build writes format 2 AND format 1 from the same download, both
 pass packcheck, open with offline_pack.open_pack and hold the same layers and counts; the
 format-1 manifest names the raster it cannot hold; sha256 in the manifests; a second run
-downloads nothing and rewrites nothing; the refusal rules; Setup's suite_fill finds the layers."""
+downloads nothing and rewrites nothing; the refusal rules; Setup's suite_fill finds the layers.
+PR #221: no HPMS; HIFLD only from user-supplied (DataLumos) files, clipped to ND; 3DHP under the
+NHD names with the NHD service as fallback; the SARP Aquatic Barrier Inventory (ABI_*)."""
+import csv
+import io
 import json
 import os
+import zipfile
 
 import pytest
 
@@ -21,13 +26,18 @@ from DamSafety_Data import pack_build as PB  # noqa: E402
 REFERENCE = (
     "DWR_dam_lines", "DWR_dams", "DWR_dugout_polygons", "DWR_dugouts", "DWR_unknown_structures",
     "FRA_grade_crossings", "HIFLD_fire_ems_stations", "HIFLD_local_eoc",
-    "HIFLD_local_law_enforcement", "HIFLD_wastewater_treatment_plants", "HPMS_ND_2024",
+    "HIFLD_local_law_enforcement", "HIFLD_wastewater_treatment_plants",
     "NARN_rail_lines", "NBI_bridges", "NDDOT_traffic_counts", "NDGISHUB_address_points",
     "ND_counties", "ND_county_roads", "ND_roads_NG911", "NHD_flowlines", "NHD_waterbodies",
     "NID_dams", "NSI_structures", "OSM_campgrounds", "OSM_lifelines", "OSM_places",
     "USA_Structures", "lifeline_eia_power_plants", "lifeline_nd_assisted_living",
     "lifeline_nd_basic_care", "lifeline_nd_hospitals", "lifeline_nd_skilled_nursing",
-    "NLCD_2021_landcover")
+    "NLCD_2021_landcover", "OSM_crossings", "OSM_trailer_parks",
+    "ABI_dams", "ABI_small_barriers_surveyed", "ABI_road_crossings_unsurveyed")
+HIFLD_FILES = {"HIFLD_fire_ems_stations": "Fire_and_Emergency_Medical_Service_EMS_Stations.gpkg",
+               "HIFLD_local_eoc": "Local_Emergency_Operations_Centers_EOC.gpkg",
+               "HIFLD_local_law_enforcement": "Local_Law_Enforcement_Locations.gpkg",
+               "HIFLD_wastewater_treatment_plants": "Wastewater_Treatment_Plants.gpkg"}
 # the fields Setup's suite_fill looks for (DWR, NSI, NID)
 FIELDS = ("dam_name", "structure_id", "fd_id", "occtype", "nidid", "longitude")
 BBOX = (-100.85, 46.75, -100.70, 46.85)
@@ -51,6 +61,44 @@ def test_registry_covers_reference_pack():
     assert kinds["NLCD_2021_landcover"] == "nlcd"
     cats = {t["name"]: t["info"].get("category") for t in table if t["group"] == "hifld"}
     assert cats["HIFLD_local_eoc"] == "Emergency operations center"
+    assert not any(n.startswith("HPMS") for n in _names(table))           # HPMS removed
+    assert "NDDOT_traffic_counts" in kinds                                 # NDDOT kept
+    assert kinds["NHD_flowlines"] == kinds["NHD_waterbodies"] == "hydro"
+    t = {x["name"]: x for x in table}
+    assert "3DHP_all/MapServer/50" in t["NHD_flowlines"]["spec"]["url"]
+    assert "NHDPlus_HR" in t["NHD_flowlines"]["spec"]["fallback"]["url"] or \
+        "nhd" in t["NHD_flowlines"]["spec"]["fallback"]["url"].lower()
+    # HIFLD: no file -> left out with the DataLumos page; mirrors only on request
+    h = t["HIFLD_local_eoc"]
+    assert h["kind"] == "none" and "datalumos.org" in h["info"]["why"]
+    m = {x["name"]: x for x in PB.registry(hifld_mirrors=True)}
+    assert m["HIFLD_local_eoc"]["kind"] == "arcgis"
+    for n in ("ABI_dams", "ABI_small_barriers_surveyed", "ABI_road_crossings_unsurveyed"):
+        assert t[n]["kind"] == "abi" and t[n]["group"] == "barriers"
+
+
+def test_hifld_files(tmp_path):
+    for fn in list(HIFLD_FILES.values()) + ["State_Emergency_Operations_Centers_EOC.gpkg",
+                                            "metadata.json"]:
+        (tmp_path / fn).write_text("x")
+    got = PB._hifld_files(str(tmp_path))
+    assert {k: os.path.basename(v) for k, v in got.items()} == HIFLD_FILES
+    t = {x["name"]: x for x in PB.registry(hifld_folder=str(tmp_path))}
+    assert t["HIFLD_local_eoc"]["kind"] == "ogr"
+    assert t["HIFLD_local_eoc"]["info"]["source_page"].endswith("/239489")
+
+
+def test_abi_features():
+    head = ["sarpid", "lat", "lon", "huc8", "hasnetwork", "height", "name"]
+    rows = [["d1", "46.8", "-100.8", "09030001", "True", "12", "A"],
+            ["d2", "46.8", "-100.75", "09030002", "False", "", "B"],
+            ["d3", "48.0", "-97.0", "09020001", "True", "3", "C"]]           # outside
+    f = PB.abi_features(head, rows, BBOX)
+    assert [x["properties"]["sarpid"] for x in f] == ["d1", "d2"]
+    p = f[0]["properties"]
+    assert p["huc8"] == "09030001" and p["height"] == 12 and p["network"] == "on-network"
+    assert f[1]["properties"]["network"] == "off-network" and f[1]["properties"]["height"] is None
+    assert f[0]["geometry"] == {"type": "Point", "coordinates": [-100.8, 46.8]}
 
 
 def test_registry_local_dwr_folder(tmp_path):
@@ -59,6 +107,63 @@ def test_registry_local_dwr_folder(tmp_path):
     _gpkg(str(d / "DWR_Unknown_Structures.gpkg"), "DWR_Unknown_Structures", 2)
     t = {x["name"]: x for x in PB.registry(dwr_folder=str(d))}
     assert t["DWR_unknown_structures"]["kind"] == "local_gpkg"
+
+
+def _hifld_gpkg(path, layer):
+    """Four points in ND (one with a CWP_NAME) and one with STATE = MN inside the box: kept /
+    dropped by the ND filter."""
+    from osgeo import ogr, osr
+    ds = ogr.GetDriverByName("GPKG").CreateDataSource(path)
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(4326)
+    lyr = ds.CreateLayer(layer, srs, ogr.wkbPoint)
+    for k in ("CWP_NAME", "STATE"):
+        lyr.CreateField(ogr.FieldDefn(k, ogr.OFTString))
+    for i, st in enumerate(("ND", "ND", "North Dakota", "", "MN")):
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetField("CWP_NAME", "Plant %d" % i)
+        f.SetField("STATE", st)
+        f.SetGeometry(ogr.CreateGeometryFromWkt("POINT (%f 46.8)" % (-100.8 + 0.001 * i)))
+        lyr.CreateFeature(f)
+    ds = None
+
+
+def _abi_csv(head, rows):
+    b = io.StringIO()
+    w = csv.writer(b, quoting=csv.QUOTE_ALL)
+    w.writerow(head)
+    w.writerows(rows)
+    return b.getvalue()
+
+
+def _abi_download(calls):
+    """PB._download stand-in: the public API's state CSV / metadata and the national
+    road-crossings zip (two ND rows - one unsurveyed - and one Minnesota row)."""
+    def dl(url, dest, refresh, log, max_age=86400):
+        calls.append("ABI " + url.split("/public/")[-1].split("/downloads/")[-1])
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if url.endswith("/metadata"):
+            body = json.dumps({"data_version": "4.4.0", "data_publish_date": "10/09/2026",
+                               "citation": "NACC 2026", "terms_of_use": "credit NACC"})
+        elif "state?id=ND" in url:
+            body = _abi_csv(["sarpid", "lat", "lon", "hasnetwork", "huc8", "state"], [
+                ["s%d" % i, "46.8", str(-100.8 + 0.001 * i), "True" if i else "False",
+                 "09030001", "ND"] for i in range(3)])
+        else:
+            head = ["SARPID", "lat", "lon", "OnNetwork", "Surveyed", "State"]
+            data = _abi_csv(head, [["c1", "46.8", "-100.8", "yes", "not likely", "North Dakota"],
+                                   ["c2", "46.8", "-100.79", "yes", "yes", "North Dakota"],
+                                   ["c3", "46.8", "-100.78", "no", "not likely", "Minnesota"]])
+            with zipfile.ZipFile(dest, "w") as z:
+                z.writestr(PB.ABI_ROAD_MEMBER, data)
+                z.writestr("README.txt", "Data version: 4.4.0\nData published: 10/09/2026\n")
+                z.writestr("TERMS_OF_USE.txt", "By downloading these data, you agree.\n"
+                                               "Citation: NACC 2026\n")
+            return dest, True
+        with open(dest, "w") as f:
+            f.write(body)
+        return dest, True
+    return dl
 
 
 def _gpkg(path, layer, n, geojson=False):
@@ -120,11 +225,18 @@ def mocked(tmp_path, monkeypatch):
         return p, "https://dwr.example.test/" + qlay
     monkeypatch.setattr(BP, "_run_one", run_one)
     monkeypatch.setattr(PB, "dwr_download", dwr)
+    monkeypatch.setattr(PB, "_download", _abi_download(calls))
+    hf = tmp_path / "hifld"
+    hf.mkdir()
+    for n, fn in HIFLD_FILES.items():
+        _hifld_gpkg(str(hf / fn), n)
+    monkeypatch.setattr(PB, "_TEST_HIFLD", str(hf), raising=False)
     return calls, _tif(str(tmp_path / "nlcd.tif"))
 
 
 def _build(out, nlcd, **kw):
     lines = []
+    kw.setdefault("hifld_folder", getattr(PB, "_TEST_HIFLD", None))
     r = PB.build(str(out), bbox=BBOX, nlcd_file=nlcd, log=lines.append, **kw)
     return r, lines
 
@@ -152,6 +264,24 @@ def test_build_writes_both_formats(tmp_path, mocked):
     assert m2["datasets"]["HIFLD_fire_ems_stations"]["category"] == "Fire station"
     assert m1["datasets"]["HIFLD_fire_ems_stations"]["category"] == "Fire station"
     assert m2["datasets"]["DWR_dams"]["count"] == 4             # the point outside is clipped
+    assert not any(n.startswith("HPMS") for n in m2["datasets"])
+    # HIFLD from the folder, the Minnesota point dropped; source page in both manifests
+    for m in (m1, m2):
+        e = m["datasets"]["HIFLD_local_eoc"]
+        assert e["count"] == 4 and e["source_url"].endswith("/239489"), e
+        assert len(e["source_sha256"]) == 64
+    # 3DHP under the NHD names (the mock answers with plain features)
+    assert m2["datasets"]["NHD_flowlines"]["hydro_source"] == "3DHP"
+    assert m1["datasets"]["NHD_flowlines"]["hydro_3dhp_name"] == "3DHP_flowlines"
+    # Aquatic Barrier Inventory: API layers and the unsurveyed ND road crossings
+    d = m2["datasets"]["ABI_dams"]
+    assert d["count"] == 3 and d["file"].startswith("barriers/"), d
+    assert d["data_version"] == "4.4.0" and d["citation"] and d["terms_of_use"]
+    assert d["counts"] == {"network=on-network": 2, "network=off-network": 1}
+    rc = m1["datasets"]["ABI_road_crossings_unsurveyed"]
+    assert rc["count"] == 1 and "not likely" in rc["filter"] and rc["data_version"] == "4.4.0"
+    assert [f["properties"]["sarpid"] for f in OP.open_pack(str(p1)).query(
+        "ABI_road_crossings_unsurveyed", BBOX)] == ["c1"]
     rd = OP.open_pack(str(p1))
     f = rd.query("HIFLD_wastewater_treatment_plants", BBOX)
     f = list(f)[0]
@@ -206,3 +336,33 @@ def test_refusals(tmp_path):
     with pytest.raises(PB.PackBuildError):                        # read by the plugins now
         PB.check_target(str(ours), active=[str(ours / PB.PACK2)])
     PB.check_target(str(tmp_path / "empty"))
+
+
+def test_hydro_fallback_and_3dhp_fields(tmp_path, monkeypatch):
+    """3DHP answers: NHD-style fields added and work units counted; 3DHP fails: the NHD
+    service is used and the manifest says why."""
+    def run_one(ctx, name, label, kind, spec, bbox):
+        if "3DHP" in spec["url"] and name == "NHD_waterbodies":
+            raise OSError("HTTP 504")
+        w = ctx.writer
+        w.begin(name, label, spec["url"], resume=False)
+        p = {"id3dhp": "a1", "gnisidlabel": "Missouri River", "gnisid": "1",
+             "featuretypelabel": "Stream/River", "featuretype": 460,
+             "workunitid": "NHD"} if "3DHP" in spec["url"] else {"gnis_name": "Lake", "ftype": 390}
+        w.add([{"type": "Feature", "geometry": {"type": "LineString", "coordinates": [
+            [-100.8, 46.8], [-100.79, 46.81]]}, "properties": p}], lambda f: "x:1")
+        return w.finish("mock")
+    monkeypatch.setattr(BP, "_run_one", run_one)
+    monkeypatch.setattr(BP, "_NET_ERRORS", (OSError,))
+    out = tmp_path / "h"
+    out.mkdir()
+    r, lines = _build(out, None, only=["NHD_flowlines", "NHD_waterbodies"], hifld_folder=None)
+    assert not r["failed"], r["failed"]
+    m = r["manifest2"]["datasets"]
+    assert m["NHD_flowlines"]["hydro_source"] == "3DHP"
+    assert m["NHD_flowlines"]["coverage_3dhp"]["nhd_migrated"] == 1
+    assert m["NHD_waterbodies"]["hydro_source"] == "NHD" and "504" in m[
+        "NHD_waterbodies"]["fallback_reason"]
+    f = list(OP.open_pack(str(out / PB.PACK1)).query("NHD_flowlines", BBOX))[0]["properties"]
+    assert f["gnis_name"] == "Missouri River" and f["ftype"] == 460 and f["fcode"] == 46000
+    assert PB.verify(str(out))[0]

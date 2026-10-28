@@ -14,9 +14,16 @@ format-1 pack and converted to format 2 with gpkgpack.convert_v1; the NLCD raste
 format 2 with gpkgpack.add_raster_file. Run again to resume: finished layers are kept, only
 missing or failed ones are fetched (refresh=True fetches everything again).
 
+Sources (PR #221): HIFLD from user-supplied DataLumos files (Data Rescue Project; clipped to
+ND, left out without a file, the old mirrors only with hifld_mirrors); no HPMS; NHD_flowlines /
+NHD_waterbodies filled from USGS 3DHP with NHD-style fields (NHD service as fallback); the SARP
+Aquatic Barrier Inventory as ABI_* (public API + national road-crossings download). What each
+layer was built from (file / URL, sha256, data version, terms) is kept in the work folder's
+provenance.json and copied into both manifests.
+
 No QGIS import here (the dialog / task live in pack_dialog.py); GDAL is needed for the DWR and
 local-file layers and for the raster. Command line (for testing):
-    python3 -m DamSafety_Data.pack_build --out /tmp/x --bbox -100.9,46.7,-100.6,46.9 --only ND_counties
+    python3 -m DamSafety_Data.pack_build --out /tmp/x --bbox=-100.9,46.7,-100.6,46.9 --only ND_counties
 """
 import datetime
 import hashlib
@@ -40,30 +47,67 @@ PACK2 = GP.PACK_FOLDER                       # ND_Dam_Suite_Pack
 PACK1 = "nd_offline_pack"
 WORK = "ND_Dam_Suite_Pack_build"
 MARK = "data_updater_build"                  # manifest key: this pack was built here (updatable)
+PROV_NAME = "provenance.json"                # work folder: what each layer was built from
 BUILDER = "DamSafety_Data pack_build 1.5.0"
 ND_BBOX = OP.ND_BBOX
 DEFAULT_PAD = OP.DEFAULT_PAD_DEG
 
 ND_COUNTIES_URL = "https://ndgishub.nd.gov/arcgis/rest/services/All_GovtBoundaries/MapServer/20"
-# HIFLD lifeline layers: public FEMA / Esri mirrors of the HIFLD layers of the reference pack
+# HIFLD lifeline layers (1.5.0, PR #221): from the Data Rescue Project's copies of HIFLD Open
+# (https://portal.datarescueproject.org/ - the files are kept on DataLumos / ICPSR). DataLumos
+# needs a (free) ICPSR login and its Terms of Use to download, so the builder cannot fetch them:
+# download the file (GeoJSON or shapefile zip) and put it in the HIFLD folder of the build window.
+# (name, label, DataLumos project, category, file-name keys, keys that rule a file out)
+DATALUMOS = "https://www.datalumos.org/datalumos/project/{}"
 HIFLD = (
     ("HIFLD_fire_ems_stations", "HIFLD fire and emergency medical service (EMS) stations",
-     "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/"
-     "Structures_Medical_Emergency_Response_v1/FeatureServer/2", "Fire station",
-     ("fire", "ems")),
+     239161, "Fire station", ("fire", "ems"), ()),
     ("HIFLD_local_eoc", "HIFLD local emergency operations centers",
-     "https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/"
-     "Critical_Infrastructure_Map_Service/FeatureServer/13", "Emergency operations center",
-     ("eoc", "emergency_operations", "emergency operations")),
+     239489, "Emergency operations center",
+     ("eoc", "emergency_operations", "emergency-operations", "emergency operations"),
+     ("state",)),
     ("HIFLD_local_law_enforcement", "HIFLD local law enforcement locations",
-     "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/"
-     "Structures_Law_Enforcement_v1/FeatureServer/0", "Law enforcement",
-     ("law", "police")),
+     239493, "Law enforcement", ("law", "police"), ()),
     ("HIFLD_wastewater_treatment_plants", "EPA wastewater treatment plants (HIFLD)",
-     "https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/"
-     "wastewater_treatment_plants_epa_frs/FeatureServer/0", "Wastewater treatment",
-     ("wastewater",)),
+     239290, "Wastewater treatment", ("wastewater",), ()),
 )
+# the old public FEMA / Esri mirrors of the same HIFLD layers - only with hifld_mirrors=True
+HIFLD_MIRRORS = {
+    "HIFLD_fire_ems_stations": "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/"
+                               "services/Structures_Medical_Emergency_Response_v1/FeatureServer/2",
+    "HIFLD_local_eoc": "https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/"
+                       "Critical_Infrastructure_Map_Service/FeatureServer/13",
+    "HIFLD_local_law_enforcement": "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/"
+                                   "services/Structures_Law_Enforcement_v1/FeatureServer/0",
+    "HIFLD_wastewater_treatment_plants": "https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/"
+                                         "rest/services/wastewater_treatment_plants_epa_frs/"
+                                         "FeatureServer/0",
+}
+# 3DHP (USGS 3D Hydrography Program) in place of NHD: the pack keeps the names NHD_flowlines /
+# NHD_waterbodies (the Hazard format-1 reader, Setup's suite_fill and the Hazard / Runner
+# culvert tools ask for those names); the features are 3DHP with the NHD-style fields added
+# (damsuite.hydro3dhp). The NHD service is used only when 3DHP does not answer (manifest says so)
+HYDRO = (
+    ("NHD_flowlines", "USGS 3DHP flowlines (NHD fields added; NHD if 3DHP fails)", "nhd",
+     "flowlines"),
+    ("NHD_waterbodies", "USGS 3DHP waterbodies (NHD fields added; NHD if 3DHP fails)",
+     "waterbodies", "waterbodies"),
+)
+# SARP / NACC National Aquatic Barrier Inventory (https://tool.aquaticbarriers.org): the public
+# API (dams, surveyed small barriers: one state as CSV) and the national road-crossings download
+# (unsurveyed road / stream crossings are not in the public API)
+ABI_API = "https://tool.aquaticbarriers.org/api/v1/public"
+ABI_ROAD_ZIP = "https://tool.aquaticbarriers.org/downloads/national/road_crossings.zip"
+ABI_ROAD_MEMBER = "aquatic_barrier_ranks.csv"
+ABI = (
+    ("ABI_dams", "SARP Aquatic Barrier Inventory - dams (on- and off-network)",
+     {"mode": "api", "kind": "dams"}),
+    ("ABI_small_barriers_surveyed", "SARP Aquatic Barrier Inventory - surveyed road / stream "
+     "crossings (small barriers)", {"mode": "api", "kind": "barriers"}),
+    ("ABI_road_crossings_unsurveyed", "SARP Aquatic Barrier Inventory - unsurveyed road / "
+     "stream crossings", {"mode": "zip", "kind": "road_crossings"}),
+)
+ABI_STATE, ABI_STATE_NAME = "ND", "North Dakota"
 # ND DWR MapService downloads (qlay = the layer NAME; SpatiaLite keeps the full field names)
 DWR_URL = "https://mapservice.dwr.nd.gov/php/downloadShape.php"
 DWR_MAPFILE = "/Volumes/Data/WebServer/newswcprivate/mapfiles/swc.map"
@@ -95,22 +139,57 @@ def _e(name, label, group, kind, spec, **info):
             "info": info}
 
 
-def registry(dwr_folder=None, hifld_folder=None, nlcd_file=None):
+def registry(dwr_folder=None, hifld_folder=None, nlcd_file=None, hifld_mirrors=False):
     """Every layer of the pack: [{name, label, group, kind, spec, info}]. kind: the engine's
-    arcgis / first_of / nsi / osm / local_gpkg, or ogr (a local vector file), dwr_download,
-    nlcd (the raster), none (cannot be fetched: listed as left out). Same names as the
-    reference ND_Dam_Suite_Pack."""
-    out = [_e(n, l, g, k, s) for n, l, g, k, s in BP.datasets(None)]
+    arcgis / nsi / osm / local_gpkg, or hydro (3DHP, NHD if it fails), abi (Aquatic Barrier
+    Inventory CSV), ogr (a local vector file), dwr_download, nlcd (the raster), none (cannot
+    be fetched: listed as left out). Same names as the reference ND_Dam_Suite_Pack. Not in it
+    (1.5.0, PR #221): the FHWA HPMS traffic years - NDDOT traffic counts and the county roads
+    carry the AADT. hifld_mirrors: a HIFLD layer without a file is downloaded from the old
+    public mirror (else it is left out)."""
+    from .damsuite import hydro3dhp as H
+    hydro = {h[0]: h for h in HYDRO}
+    out = []
+    for n, l, g, k, s in BP.datasets(None):
+        if k == "first_of" and n == "HPMS_ND":
+            continue                                    # HPMS left out (NDDOT counts instead)
+        if n in hydro:
+            _n, label, group, which = hydro[n]
+            flow = which == "flowlines"
+            out.append(_e(n, label, group, "hydro", {
+                "url": H.FLOWLINE_URL if flow else H.WATERBODY_URL,
+                "fields": H.FLOW_FIELDS if flow else H.WB_FIELDS, "precision": 6,
+                "which": which, "fallback": s}, hydro_3dhp_name=H.ALIASES.get(n),
+                source="USGS 3D Hydrography Program (3DHP_all MapServer layer {}), NHD "
+                       "fields added".format(H.FLOWLINE_LAYER if flow else H.WATERBODY_LAYER)))
+            continue
+        out.append(_e(n, l, g, k, s))
     out.append(_e("ND_counties", "County boundaries (ND GIS Hub counties)", "boundaries",
                   "arcgis", {"url": ND_COUNTIES_URL}, source="ND GIS Hub county boundaries"))
     files = _hifld_files(hifld_folder)
-    for name, label, url, cat, _keys in HIFLD:
+    for name, label, proj, cat, _keys, _no in HIFLD:
+        dl = DATALUMOS.format(proj)
         if name in files:
-            out.append(_e(name, label, "hifld", "ogr", {"path": files[name]}, category=cat,
-                          source="HIFLD file {}".format(os.path.basename(files[name]))))
-        else:
+            out.append(_e(name, label, "hifld", "ogr", {"path": files[name], "state": "ND"},
+                          category=cat, source_page=dl,
+                          source="HIFLD Open (Data Rescue Project copy, DataLumos project {}): "
+                                 "{}".format(proj, os.path.basename(
+                                     files[name].replace("/vsizip/", "")))))
+        elif hifld_mirrors:
+            url = HIFLD_MIRRORS[name]
             out.append(_e(name, label, "hifld", "arcgis", {"url": url}, category=cat,
                           source="HIFLD layer (public mirror) " + url.split("/rest/")[0]))
+        else:
+            out.append(_e(name, label, "hifld", "none", {}, category=cat, why=(
+                "HIFLD Open is kept by the Data Rescue Project on DataLumos, which needs a free "
+                "ICPSR login and its Terms of Use to download: download the GeoJSON or "
+                "shapefile zip from {} and put it in the HIFLD folder of the build "
+                "window".format(dl))))
+    for name, label, spec in ABI:
+        out.append(_e(name, label, "barriers", "abi", dict(spec), category="aquatic barrier",
+                      source="SARP / NACC National Aquatic Barrier Inventory ({})".format(
+                          "public API" if spec["mode"] == "api" else
+                          "national road-crossings download")))
     local = {}
     if dwr_folder:
         try:
@@ -142,17 +221,19 @@ def layer_names(table=None):
 
 
 def _hifld_files(folder):
-    """{HIFLD name: file} for the vector files of `folder` whose name says what they are."""
+    """{HIFLD name: file} for the vector files of `folder` whose name says what they are (the
+    DataLumos downloads: <layer>-geojson.zip / -shapefile.zip, or an unpacked file)."""
     if not folder or not os.path.isdir(folder):
         return {}
     exts = (".gpkg", ".shp", ".geojson", ".json", ".zip", ".sqlite")
     out = {}
     for fn in sorted(os.listdir(folder)):
         low = fn.lower()
-        if not low.endswith(exts):
+        if not low.endswith(exts) or low == "metadata.json":
             continue
-        for name, _l, _u, _c, keys in HIFLD:
-            if name not in out and any(k in low for k in keys):
+        for name, _l, _p, _c, keys, no in HIFLD:
+            if name not in out and any(k in low for k in keys) and \
+                    not any(k in low for k in no):
                 p = os.path.join(folder, fn)
                 out[name] = ("/vsizip/" + p) if low.endswith(".zip") else p
     return out
@@ -236,7 +317,7 @@ def nd_bbox(pad=DEFAULT_PAD):
 # -------------------------------------------------------------------- build --
 def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifld_folder=None,
           nlcd_file=None, active=(), workers=None, progress=None, log=None, cancel=None,
-          area="North Dakota"):
+          area="North Dakota", hifld_mirrors=False):
     """Build or resume the pack in out_parent (see the module text). only: layer names (None =
     all pack layers). Returns a summary dict {pack2, pack1, manifest2, manifest1, failed,
     left_out}."""
@@ -245,7 +326,7 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
     cancel = cancel or (lambda: False)
     p2, p1, wk = check_target(out_parent, active)
     bbox = tuple(float(v) for v in (bbox or nd_bbox()))
-    table = registry(dwr_folder, hifld_folder, nlcd_file)
+    table = registry(dwr_folder, hifld_folder, nlcd_file, hifld_mirrors)
     known = set(t["name"] for t in table)
     want = set(only) if only else None
     if want:
@@ -255,6 +336,7 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
     todo = [t for t in table if want is None or t["name"] in want]
     os.makedirs(wk, exist_ok=True)
     db = os.path.join(wk, OP.DB_NAME)
+    prov = _read_json(os.path.join(wk, PROV_NAME)) or {}
     log("Offline pack for {} - area {:.4f}, {:.4f} to {:.4f}, {:.4f} (lon / lat)".format(
         area, *bbox))
     log("Output: {} and {}".format(p2, p1))
@@ -296,6 +378,11 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
             try:
                 if kind in ("ogr", "dwr_download"):
                     got = _run_file(ctx, t, bbox, wk, refresh)
+                    prov[name] = _file_prov(t, getattr(ctx, "file_path", ""))
+                elif kind == "hydro":
+                    got, prov[name] = _run_hydro(ctx, t, bbox)
+                elif kind == "abi":
+                    got, prov[name] = _run_abi(ctx, t, bbox, wk, refresh)
                 else:
                     got = BP._run_one(ctx, name, label, kind, t["spec"], bbox)
                 if name in TRANSFORMS:
@@ -303,9 +390,11 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
                 log("  done: {:,} features in {:.0f} s".format(got, time.time() - t0))
             except (OP.PackError, BP.BuildCancelled):
                 raise
-            except BP._NET_ERRORS + (PackBuildError, RuntimeError) as e:
+            except BP._NET_ERRORS + (PackBuildError, RuntimeError, ValueError) as e:
                 failed[name] = str(e)
                 log("  FAILED: {}".format(e))
+            finally:
+                _write_json(os.path.join(wk, PROV_NAME), prov)
         man1 = writer.manifest()
     finally:
         writer.close(finalize=False)
@@ -315,6 +404,7 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
     infos = {t["name"]: dict(t["info"]) for t in table}
     for t in table:
         infos[t["name"]].pop("why", None)
+        infos[t["name"]].update(prov.get(t["name"]) or {})
     if cancel():
         raise BP.BuildCancelled("cancelled")
     progress(90.0, "Writing nd_offline_pack (format 1)\u2026")
@@ -350,12 +440,13 @@ def _run_file(ctx, t, bbox, wk, refresh):
                                  ctx.log)
     else:
         path, url = spec["path"], spec["path"]
+    ctx.file_path = path
     w = ctx.writer
     w.begin(name, label, url, resume=False, signature="file|{}".format(path))
     try:
         n, skipped = 0, 0
         batch = []
-        for f in read_vector(path, bbox):
+        for f in read_vector(path, bbox, state=spec.get("state")):
             batch.append(f)
             if len(batch) >= 2000:
                 w.add(batch, _uid)
@@ -370,13 +461,297 @@ def _run_file(ctx, t, bbox, wk, refresh):
     return w.finish("from {}".format(os.path.basename(path.replace("/vsizip/", ""))))
 
 
+def _write_json(p, obj):
+    try:
+        with open(p + ".part", "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=1, sort_keys=True)
+        os.replace(p + ".part", p)
+    except OSError:
+        pass
+
+
+def _real_file(path):
+    """The file on disk behind a GDAL path (/vsizip/a.zip/inner -> a.zip)."""
+    p = path.replace("/vsizip/", "", 1) if path.startswith("/vsizip/") else path
+    while p and not os.path.isfile(p) and os.path.dirname(p) != p:
+        p = os.path.dirname(p)
+    return p if os.path.isfile(p) else ""
+
+
+def _file_prov(t, path):
+    """Manifest note of a layer read from a file: the file, its date and sha256 (and the
+    DataLumos page of a HIFLD file)."""
+    f = _real_file(path or t["spec"].get("path") or "")
+    out = {}
+    if f:
+        out.update(source_file=os.path.basename(f), source_sha256=_sha256(f),
+                   source_date=datetime.date.fromtimestamp(os.path.getmtime(f)).isoformat())
+    if t["info"].get("source_page"):
+        out["source_url"] = t["info"]["source_page"]
+    return out
+
+
+# --------------------------------------------------------------- 3DHP / NHD --
+def _run_hydro(ctx, t, bbox):
+    """3DHP flowlines / waterbodies under the NHD name (NHD fields added), the NHD service
+    when 3DHP fails or comes back incomplete and NHD answers in full. Returns (count, note)."""
+    from .damsuite import hydro3dhp as H
+    name, label, spec = t["name"], t["label"], t["spec"]
+    norm = H.normalise_flowline if spec["which"] == "flowlines" else H.normalise_waterbody
+    fb = spec["fallback"]
+    why = ""
+    try:
+        n = BP._run_one(ctx, name, label, "arcgis", {k: spec[k] for k in
+                                                     ("url", "fields", "precision")}, bbox)
+        if ctx.status == "complete":
+            return n, _hydro_note(ctx.writer.con, name, norm, spec["url"], None)
+        why = "3DHP incomplete ({} area(s) not read)".format(len(ctx.gaps or []))
+    except BP.BuildCancelled:
+        raise
+    except BP._NET_ERRORS as e:
+        why = "3DHP failed: {}".format(e)
+    ctx.log("  {} - trying the NHD service".format(why))
+    kept = ctx.status
+    try:
+        ctx.status, ctx.gaps = "complete", []
+        n2 = BP._run_one(ctx, name, label, "arcgis", fb, bbox)
+    except BP.BuildCancelled:
+        raise
+    except BP._NET_ERRORS as e:
+        if kept == "partial":
+            raise PackBuildError("{}; NHD failed too ({}) - run again".format(why, e))
+        raise PackBuildError("{}; NHD failed too: {}".format(why, e))
+    note = {"source": "USGS NHD (fallback: {})".format(why), "hydro_source": "NHD",
+            "fallback_reason": why, "source_url": fb["url"]}
+    return n2, note
+
+
+def _hydro_note(con, name, norm, url, why):
+    """Adds the NHD fields to the stored 3DHP features and counts where they come from (3DHP
+    work unit: 'NHD' = migrated from NHD, else elevation-derived hydrography)."""
+    units = {}
+
+    def fn(f):
+        f = norm(f)
+        p = f.get("properties") or {}
+        u = str(p.get("workunitid") or p.get("WORKUNITID") or "unknown")
+        units[u] = units.get(u, 0) + 1
+        return f
+    _rewrite(con, name, fn)
+    nhd = units.get("NHD", 0)
+    return {"hydro_source": "3DHP", "source_url": url,
+            "coverage_3dhp": {"features_by_workunit": units, "nhd_migrated": nhd,
+                              "elevation_derived": sum(units.values()) - nhd},
+            "fields_mapped": "gnis_name <- gnisidlabel, gnis_id <- gnisid, ftype / fcode <- "
+                             "featuretypelabel (fcode = ftype x 100), featuredate as a date; "
+                             "the 3DHP fields are kept (id3dhp, mainstemid, workunitid ...); "
+                             "no reachcode / permanent_identifier in 3DHP"}
+
+
+# --------------------------------------------------- Aquatic Barrier Inventory --
+def _download(url, dest, refresh, log, max_age=86400):
+    """url into the file dest (kept for max_age seconds; again with refresh). Returns
+    (dest, downloaded now)."""
+    if not refresh and os.path.isfile(dest) and time.time() - os.path.getmtime(dest) < max_age:
+        return dest, False
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    req = urllib.request.Request(url, headers={"User-Agent": BP._ua()})
+    n = 0
+    with urllib.request.urlopen(req, timeout=BP.TIMEOUT_S) as r, open(dest + ".part", "wb") as f:
+        for b in iter(lambda: r.read(1 << 20), b""):
+            f.write(b)
+            n += len(b)
+    os.replace(dest + ".part", dest)
+    if log:
+        log("  {}: {:,} bytes".format(url.split("?")[0], n))
+    return dest, True
+
+
+def _abi_meta(kind, dest, refresh, log):
+    """The public API's metadata (data_version, data_publish_date, citation, terms_of_use)."""
+    try:
+        p, _new = _download("{}/{}/metadata".format(ABI_API, kind),
+                            os.path.join(dest, "{}_metadata.json".format(kind)), refresh, log)
+        m = _read_json(p) or {}
+    except BP._NET_ERRORS + (OSError, ValueError) as e:
+        if log:
+            log("  ABI metadata not read ({})".format(e))
+        m = {}
+    return {k: m.get(k) for k in ("data_version", "data_publish_date", "citation",
+                                  "terms_of_use") if m.get(k)}
+
+
+def _readme_meta(text):
+    out = {}
+    for line in text.splitlines():
+        if line.startswith("Data version:"):
+            out["data_version"] = line.split(":", 1)[1].strip()
+        elif line.startswith("Data published:"):
+            out["data_publish_date"] = line.split(":", 1)[1].strip()
+    return out
+
+
+def abi_rows(t, dest, refresh=False, log=None):
+    """(header, rows, provenance) of one Aquatic Barrier Inventory layer for North Dakota.
+    api: <ABI_API>/<kind>/state?id=ND (CSV). zip: the national road-crossings download, its
+    North Dakota rows kept (cached as a small CSV) and only the unsurveyed ones (Surveyed =
+    'not likely'; 'yes' / 'likely' are the surveyed small barriers)."""
+    import csv
+    import io
+    spec = t["spec"]
+    kind = spec["kind"]
+    if spec["mode"] == "api":
+        url = "{}/{}/state?id={}".format(ABI_API, kind, ABI_STATE)
+        p, _new = _download(url, os.path.join(dest, "{}_{}.csv".format(kind, ABI_STATE)),
+                            refresh, log)
+        with open(p, encoding="utf-8", newline="") as f:
+            rd = csv.reader(f)
+            head = [h.strip().lower() for h in next(rd)]
+            rows = [r for r in rd if r]
+        prov = {"source_url": url, "source_sha256": _sha256(p),
+                "source_date": datetime.date.fromtimestamp(os.path.getmtime(p)).isoformat(),
+                "filter": "state = {} (public API)".format(ABI_STATE)}
+        prov.update(_abi_meta(kind, dest, refresh, log))
+        return head, rows, prov
+    zp, new = _download(ABI_ROAD_ZIP, os.path.join(dest, "road_crossings.zip"), refresh, log,
+                        max_age=7 * 86400)
+    cache = os.path.join(dest, "road_crossings_{}.csv".format(ABI_STATE))
+    with zipfile.ZipFile(zp) as z:
+        if new or refresh or not os.path.isfile(cache) or \
+                os.path.getmtime(cache) < os.path.getmtime(zp):
+            with z.open(ABI_ROAD_MEMBER) as raw, open(cache + ".part", "w", encoding="utf-8",
+                                                      newline="") as out:
+                lines = io.TextIOWrapper(raw, encoding="utf-8", newline="")
+                wr = csv.writer(out)
+                head = next(csv.reader([next(lines)]))
+                wr.writerow(head)
+                si = head.index("State")
+                key = '"{}"'.format(ABI_STATE_NAME)
+                # most of the 6 GB file is other states: a cheap text test first
+                for line in lines:
+                    if key in line:
+                        r = next(csv.reader([line]))
+                        if len(r) == len(head) and r[si] == ABI_STATE_NAME:
+                            wr.writerow(r)
+            os.replace(cache + ".part", cache)
+        meta = _readme_meta(z.read("README.txt").decode("utf-8", "replace"))
+        terms = z.read("TERMS_OF_USE.txt").decode("utf-8", "replace") \
+            if "TERMS_OF_USE.txt" in z.namelist() else ""
+    with open(cache, encoding="utf-8", newline="") as f:
+        rd = csv.reader(f)
+        head = [h.strip().lower() for h in next(rd)]
+        si = head.index("surveyed")
+        rows = [r for r in rd if r and r[si] == "not likely"]
+    prov = {"source_url": ABI_ROAD_ZIP, "source_sha256": _sha256(zp),
+            "source_file": "{} / {}".format(os.path.basename(zp), ABI_ROAD_MEMBER),
+            "source_date": datetime.date.fromtimestamp(os.path.getmtime(zp)).isoformat(),
+            "filter": "State = {}, Surveyed = 'not likely' (unsurveyed)".format(ABI_STATE_NAME)}
+    prov.update(meta)
+    if terms:
+        prov["terms_of_use"] = terms.split("By downloading", 1)[-1].split("For your", 1)[0]\
+            .strip()
+        prov["terms_of_use"] = "By downloading " + prov["terms_of_use"]
+        if "Citation:" in terms:
+            prov["citation"] = terms.split("Citation:", 1)[1].strip("-\n ").strip()
+    return head, rows, prov
+
+
+def _numeric_columns(head, rows):
+    """Columns whose every value is a number (no leading zero, so HUC codes stay text)."""
+    import re
+    num = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?([eE][-+]?\d+)?$")
+    out = set()
+    for i, h in enumerate(head):
+        vals = [r[i] for r in rows if i < len(r) and r[i] != ""]
+        if vals and all(num.match(v) for v in vals):
+            out.add(i)
+    return out
+
+
+def abi_features(head, rows, bbox):
+    """Points (lon / lat) of the rows inside bbox, every column kept (numbers as numbers),
+    plus network = on-network / off-network (from hasnetwork / onnetwork)."""
+    la, lo = head.index("lat"), head.index("lon")
+    nk = head.index("hasnetwork") if "hasnetwork" in head else \
+        head.index("onnetwork") if "onnetwork" in head else -1
+    nums = _numeric_columns(head, rows)
+    feats = []
+    for r in rows:
+        try:
+            x, y = float(r[lo]), float(r[la])
+        except (ValueError, IndexError):
+            continue
+        if not (bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]):
+            continue
+        props = {}
+        for i, h in enumerate(head):
+            if i in (la, lo) or i >= len(r):
+                continue
+            v = r[i]
+            if i in nums and v != "":
+                v = float(v) if any(c in v for c in ".eE") else int(v)
+            elif v == "":
+                v = None
+            props[h] = v
+        if nk >= 0:
+            on = str(r[nk]).strip().lower() in ("yes", "true", "1")
+            props["network"] = "on-network" if on else "off-network"
+        feats.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [
+            round(x, 6), round(y, 6)]}, "properties": props})
+    return feats
+
+
+def _run_abi(ctx, t, bbox, wk, refresh):
+    name, label = t["name"], t["label"]
+    head, rows, prov = abi_rows(t, os.path.join(wk, "downloads", "abi"), refresh, ctx.log)
+    feats = abi_features(head, rows, bbox)
+    w = ctx.writer
+    w.begin(name, label, prov["source_url"], resume=False,
+            signature="abi|{}|{}".format(prov.get("source_sha256"), prov.get("filter")))
+    try:
+        for i in range(0, len(feats), 2000):
+            w.add(feats[i:i + 2000], lambda f: "sarpid:{}".format(
+                f["properties"].get("sarpid") or id(f)))
+            ctx.sub(50, "{:,} features".format(min(len(feats), i + 2000)))
+    except Exception as e:
+        w.fail(name, str(e))
+        raise PackBuildError("{}: {}".format(name, e))
+    counts = {}
+    for f in feats:
+        p = f["properties"]
+        for k in ("network", "excluded", "removed"):
+            if k in p:
+                key = "{}={}".format(k, p[k])
+                counts[key] = counts.get(key, 0) + 1
+    prov["counts"] = counts
+    prov["network_field"] = ("network: on-network / off-network (from the inventory's "
+                             "hasnetwork / onnetwork); one layer, not two")
+    n = w.finish("{} (data version {})".format(prov.get("filter"), prov.get("data_version")))
+    return n, prov
+
+
 def _uid(f):
     return DF.uid_of(f) or None
 
 
-def read_vector(path, bbox):
+STATE_FIELDS = ("state", "state_abbr", "stusps", "st", "state_code", "fac_state", "statename",
+                "state_name")
+
+
+def _other_state(props, state):
+    """True when the feature's own state field names another state than `state` (two
+    letters; the full name of ND is also understood). No state field: False."""
+    names = {state.upper(), {"ND": "NORTH DAKOTA"}.get(state.upper(), state.upper())}
+    for k, v in props.items():
+        if k.lower() in STATE_FIELDS and isinstance(v, str) and v.strip():
+            return v.strip().upper() not in names
+    return False
+
+
+def read_vector(path, bbox, state=None):
     """GeoJSON features (lon / lat, every attribute) of the first layer of a vector file,
-    those touching bbox."""
+    those touching bbox (and, with state, those whose state field - if any - is that state:
+    a national HIFLD file clipped to North Dakota)."""
     from osgeo import gdal, ogr, osr
     gdal.UseExceptions()
     ds = ogr.Open(path)
@@ -411,6 +786,8 @@ def read_vector(path, bbox):
             if isinstance(v, (datetime.date, datetime.datetime)):
                 v = v.isoformat()
             props[nm] = v
+        if state and _other_state(props, state):
+            continue
         yield {"type": "Feature", "geometry": geom, "properties": props}
 
 
@@ -475,9 +852,9 @@ def write_format1(db, p1, man, infos, left, log):
     man = dict(man)
     man["created"] = stamp
     for k, v in man["datasets"].items():
-        for key in ("category", "source"):
-            if (infos.get(k) or {}).get(key):
-                v[key] = infos[k][key]
+        for key, val in (infos.get(k) or {}).items():
+            if val not in (None, "", {}, []):
+                v[key] = val
     man[MARK] = BUILDER
     man["left_out"] = dict(left)
     man["rasters_not_included"] = {
@@ -507,6 +884,8 @@ def write_format2(src_db, p2, man1, infos, left, refresh, log, cancel):
     extra = {k: {kk: vv for kk, vv in (infos.get(k) or {}).items() if vv} for k in infos}
     man2 = GP.convert_v1(src_db, p2, only=only, extra_info=extra, log=log,
                          cancel=cancel)
+    for k, e in (man2.get("datasets") or {}).items():           # provenance of kept layers too
+        e.update(extra.get(k) or {})
     for k, why in left.items():
         if k not in man2["datasets"]:
             man2.setdefault("left_out", {})[k] = why
@@ -703,12 +1082,14 @@ def main(argv=None):
     ap.add_argument("--dwr-folder")
     ap.add_argument("--hifld-folder")
     ap.add_argument("--nlcd-file")
+    ap.add_argument("--hifld-mirrors", action="store_true",
+                    help="HIFLD layers without a file: the old public mirrors")
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--verify", action="store_true", help="only check the built packs")
     a = ap.parse_args(argv)
     if a.list:
-        for t in registry(a.dwr_folder, a.hifld_folder, a.nlcd_file):
+        for t in registry(a.dwr_folder, a.hifld_folder, a.nlcd_file, a.hifld_mirrors):
             print("{:36s} {:11s} {:13s} {}".format(t["name"], t["group"], t["kind"], t["label"]))
         return 0
     if a.verify:
@@ -718,7 +1099,7 @@ def main(argv=None):
     bbox = [float(v) for v in a.bbox.split(",")] if a.bbox else None
     only = [x.strip() for x in a.only.split(",") if x.strip()] or None
     r = build(a.out, only=only, bbox=bbox, refresh=a.refresh, dwr_folder=a.dwr_folder,
-              hifld_folder=a.hifld_folder, nlcd_file=a.nlcd_file)
+              hifld_folder=a.hifld_folder, nlcd_file=a.nlcd_file, hifld_mirrors=a.hifld_mirrors)
     ok, lines = verify(os.path.abspath(a.out))
     print("\n".join(lines))
     return 1 if r["failed"] or not ok else 0
