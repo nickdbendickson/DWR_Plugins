@@ -1436,13 +1436,44 @@ SOLVER_RESIDUAL_LIMIT = 0.005  # |ANUGA conservation residual| / supply above th
 POSITIVE_EDGE_INFLOW = 0.001   # net edge inflow / supply above this with outflow-only edges
 
 
+def operator_share(stats, vb):
+    """3.10.95: how much of a volume gain the inflow operators booked. ANUGA's fractional-step
+    volume integral ('operators_m3': the breach inlet; culverts only move water inside) minus
+    the hydrograph volume that entered ('injected_m3') = the inlet's integration excess, and its
+    share of the gain (in domain - supplied). None without both numbers or without a gain."""
+    ops, inj = vb.get("operators_m3"), stats.get("injected_m3")
+    if ops is None or inj is None:
+        return None
+    extra = float(vb.get("in_domain_m3") or 0.0) - float(vb.get("supplied_m3") or 0.0)
+    if extra <= 0:
+        return None
+    ex = float(ops) - float(inj)
+    return {"operators_m3": float(ops), "injected_m3": float(inj), "excess_m3": ex,
+            "share": ex / extra}
+
+
+def first_step_cause(vb):
+    """3.10.95: a clause naming a long first ANUGA step as the cause ('' when it is not), from
+    the worker's volume_balance['first_step'] (anuga_worker.FirstStep)."""
+    f = vb.get("first_step") or {}
+    if f.get("dt_s") is None or not f.get("excess_m3") or f["excess_m3"] <= 0:
+        return ""
+    return ("ANUGA's first internal step on the dry domain was one {:,.0f} s step (no CFL limit "
+            "without water), and the inlet's 0.5*(Q(t)+Q(t+dt))*dt booked {:,.0f} m3 for the "
+            "{:,.0f} m3 the hydrograph delivers in that time: {:,.0f} m3 extra".format(
+                f["dt_s"], f["inlet_booked_m3"], f["hydrograph_m3"], f["excess_m3"]))
+
+
 def volume_note(stats, limit=VOLUME_GAIN_LIMIT):
     """3.10.55: a note when the water balance looks wrong. Fills stats['volume_balance'] for
     results written before 3.10.55. None when the balance is fine or unknown.
     - ratio (in domain / initial water plus breach hydrograph) > `limit`: a gain. The cause is
       named only as far as the numbers show it: ANUGA's net boundary flux integral says
       whether the extra water came in through the edge; without it the edge is the likely
-      cause (old transmissive edges), but an instability or the inlet's integration could do it.
+      cause (old transmissive edges). 3.10.95 (DWR-3034): when the inflow operators'
+      fractional-step integral holds most of the gain, the note says so (operator_share) and
+      names a long first step (first_step_cause) instead of the edge or an instability; an
+      instability is named only by the solver-residual line.
     - ratio > VOLUME_CHECK_LIMIT: a softer check line.
     - ANUGA's own conservation residual above SOLVER_RESIDUAL_LIMIT of the supply.
     - a positive net edge inflow with outflow-only edges (it should be <= 0).
@@ -1466,21 +1497,51 @@ def volume_note(stats, limit=VOLUME_GAIN_LIMIT):
     out = []
     if r > limit:
         extra = vb["in_domain_m3"] - vb["supplied_m3"]
-        if bi is not None and bi > 0.5 * extra:
+        share = operator_share(stats, vb)
+        fs = first_step_cause(vb)
+        resid_big = (vb.get("solver_residual_frac") is not None
+                     and abs(vb["solver_residual_frac"]) > SOLVER_RESIDUAL_LIMIT)
+        edge = False
+        if share is not None and share["excess_m3"] > 0.5 * extra:
+            # 3.10.95 (DWR-3034 REVIEW 9.8 item 2): the gain is in the inflow operators'
+            # fractional-step integral, not the edge
+            why = ("the breach inlet added it: ANUGA's inflow operators (fractional-step "
+                   "integral) added {:,.0f} m3 against the hydrograph's {:,.0f} m3, so {:,.0f} m3 "
+                   "= {:.0%} of the gain is the inlet's own time integration".format(
+                       share["operators_m3"], share["injected_m3"], share["excess_m3"],
+                       share["share"]))
+            if bi is not None:
+                why += " (edge: {:,.0f} m3 net)".format(bi)
+            if fs:
+                why += "; " + fs
+            why += (". This is extra water at the breach, so the depths are conservative, not "
+                    "an edge or stability problem; a run with the first-step inflow cap "
+                    "(Runner 3.10.94) removes it")
+        elif bi is not None and bi > 0.5 * extra:
+            edge = True
             why = ("ANUGA's boundary flux integral shows {:,.0f} m3 net inflow through the mesh "
                    "edge ({} boundary), so the extra water came in there".format(bi, kind))
         elif bi is not None:
             why = ("ANUGA's boundary flux integral shows only {:,.0f} m3 net through the edge, so "
-                   "the gain is probably not from the edge: check for an instability or the "
-                   "inflow".format(bi))
+                   "the gain is probably not from the edge".format(bi))
+            if share is not None:
+                why += ("; the inflow operators account for {:,.0f} m3 ({:.0%})".format(
+                    share["excess_m3"], share["share"]))
+            if fs:
+                why += "; " + fs
+            why += ("; ANUGA's own balance is off too (see below)" if resid_big else
+                    "; check the inflow")
         else:
-            why = ("it most likely came in through the mesh edge ({} boundary), though an "
-                   "instability could also cause it".format(kind))
+            edge = True
+            why = "it most likely came in through the mesh edge ({} boundary)".format(kind)
+            if fs:
+                why += ", unless the first step explains it: " + fs
         out.append("ANUGA volume check: the domain ends with {:.2f} x the water that went in "
                    "({:,.0f} m3 = {:,.0f} acre-ft more than the {:,.0f} m3 of initial water and "
-                   "breach inflow); {}. Treat the depths near the mesh edge with caution until "
-                   "this is resolved.".format(r, extra, extra / 1233.48184, vb["supplied_m3"],
-                                              why))
+                   "breach inflow); {}.{}".format(
+                       r, extra, extra / 1233.48184, vb["supplied_m3"], why,
+                       " Treat the depths near the mesh edge with caution until this is "
+                       "resolved." if edge else ""))
     elif r > VOLUME_CHECK_LIMIT:
         out.append("ANUGA volume check: the domain ends with {:.3f} x the water that went in, a "
                    "small gain (above {:.3f}); worth a look.".format(r, VOLUME_CHECK_LIMIT))

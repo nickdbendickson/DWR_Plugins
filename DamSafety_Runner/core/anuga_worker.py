@@ -658,6 +658,57 @@ MIRRORED_EDGES_NOTE = ("sampled at yield steps only; restarts from 0 when a run 
                        "checkpoint")
 
 
+def hydrograph_integral(hyd_t, hyd_q, a, b):
+    """The hydrograph's own volume (m3) from a to b: the trapezoid of np.interp(t, hyd_t,
+    hyd_q, right=0) (the Inlet_operator's Q) over the samples between a and b."""
+    t = np.asarray(hyd_t, float)
+    q = np.asarray(hyd_q, float)
+    if b <= a or len(t) == 0:
+        return 0.0
+    tt = np.unique(np.concatenate([[a, b], t[(t > a) & (t < b)]]))
+    if t[-1] < b:
+        tt = np.unique(np.concatenate([tt, [min(max(t[-1], a), b)]]))
+    qq = np.interp(tt, t, q, right=0.0)
+    return float(np.sum(0.5 * (qq[1:] + qq[:-1]) * np.diff(tt)))
+
+
+class FirstStep:
+    """3.10.95 (DWR-3034 REVIEW 9.8 item 2): what ANUGA's first evolve step did to the breach
+    inflow. On a dry domain there is no CFL limit, so the first internal step can be a whole
+    yield step; Inlet_operator books 0.5*(Q(t)+Q(t+dt))*dt for it, which over a rising limb is
+    more than the hydrograph delivers in that time (DWR-3034: 9,994 m3 for 5,929 m3). Read at
+    the first yield after the start: when that yield took one internal step its length is
+    exact, and 'inlet_booked_m3' - 'hydrograph_m3' = 'excess_m3' is that step's share of the
+    volume gain. A run resumed from a checkpoint records nothing (its first step is not the
+    run's). Reads only (time and step count)."""
+
+    def __init__(self, t_start, hyd_t, hyd_q, resumed=False):
+        self.t0 = float(t_start)
+        self.hyd_t, self.hyd_q = hyd_t, hyd_q
+        self.done = bool(resumed)
+        self.rec = None
+
+    def on_yield(self, t, steps):
+        if self.done or float(t) <= self.t0:
+            return
+        self.done = True
+        span = float(t) - self.t0
+        rec = {"first_yield_s": round(span, 3), "steps_in_first_yield": int(steps)}
+        if int(steps) == 1:
+            dt = span
+            q0, q1 = np.interp([self.t0, self.t0 + dt], self.hyd_t, self.hyd_q, right=0.0)
+            booked = 0.5 * float(q0 + q1) * dt
+            true = hydrograph_integral(self.hyd_t, self.hyd_q, self.t0, self.t0 + dt)
+            rec.update({"dt_s": round(dt, 3), "inlet_booked_m3": round(booked, 1),
+                        "hydrograph_m3": round(true, 1), "excess_m3": round(booked - true, 1)})
+        else:
+            rec["dt_s"] = None        # several steps: none longer than the yield, not exact
+        self.rec = rec
+
+    def record(self):
+        return self.rec
+
+
 def volume_balance(initial, injected, in_domain, boundary_in=None, operators=None,
                    solver_volume=None, solver_initial=None, de=True):
     """3.10.55: the end-of-run water balance (m3). 'ratio' = in domain / (initial + injected):
@@ -1250,16 +1301,23 @@ def main(job_path, out_path):
         except Exception as e:      # noqa: BLE001 - a diagnostic never stops the run
             print("DT_DIAG off: {}".format(str(e)[:200]), flush=True)
             dtdiag = None
+<<<<<<< HEAD
     # 3.10.94: no single dry-domain step longer than the hydrograph interval (G5, DWR-3034)
     icap = InflowStepCap(domain, inflow_max_timestep(hyd_t, hyd_q, ystep),
                          inflow_end_time(hyd_t, hyd_q))
     if icap.active:
         print("PROGRESS 0 inflow step cap: {:.3g} s until t={:.0f}s".format(icap.cap, icap.t_end),
               flush=True)
+=======
+    # 3.10.95: the first internal step's inflow (the G5 message names it when it is long)
+    fstep = FirstStep(domain.get_time(), hyd_t, hyd_q,
+                      resumed=bool(ckinfo and ckinfo.get("resumed_from_t_s") is not None))
+>>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
     try:
         for t in domain.evolve(yieldstep=ystep, finaltime=sim_time):
             icap.update(domain, t)
             yc = clock.tick(domain, t)
+            fstep.on_yield(t, yc["steps"])
             print("PROGRESS {:.2f} t={:.0f}s{}".format(100.0 * t / sim_time, t,
                                                        clock.suffix(yc)), flush=True)
             if dtdiag is not None:
@@ -1351,7 +1409,12 @@ def main(job_path, out_path):
         v0 = None
     balance = volume_balance(info["initial_volume_m3"], injected, vol_left, b_in, fs, v_solver,
                              solver_initial=v0, de=de)
+<<<<<<< HEAD
     balance["inflow_step_cap"] = icap.record()
+=======
+    if fstep.record() is not None:
+        balance["first_step"] = fstep.record()
+>>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
     if mirror["boundaries"]:
         balance["inward_edges_mirrored"] = {"max_edges": mirror["max"],
                                             "yield_steps": mirror["steps"],

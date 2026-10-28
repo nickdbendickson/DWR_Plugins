@@ -314,7 +314,9 @@ def crossings_query(extent_4326, queries=OSM_CROSSING_QUERIES, timeout=50):
     """Overpass query for culverts, fords / low-water crossings and railway
     bridges (OSM_CROSSING_QUERIES)."""
     bbox = _bbox(extent_4326)
-    return "[out:json][timeout:{}];({});out center tags;".format(
+    # 2.18.67: 'out center meta' (tags + a way's node list + changeset) so a structure mapped
+    # as a node and a way can be counted once (facilities.osm_same_crossing)
+    return "[out:json][timeout:{}];({});out center meta;".format(
         int(timeout), "".join("{}({});".format(f, bbox) for f, _c in queries))
 
 
@@ -341,7 +343,11 @@ def crossing_features(data):
                                      "railway": t.get("railway") or "",
                                      "operator": t.get("operator") or "",
                                      "osm_id": "{}/{}".format(el.get("type", ""),
-                                                              el.get("id", ""))}})
+                                                              el.get("id", "")),
+                                     # 2.18.67: dedupe of node / way pairs (facilities)
+                                     "osm_nodes": ",".join(str(n) for n in
+                                                           el.get("nodes") or ()),
+                                     "osm_changeset": str(el.get("changeset") or "")}})
     return feats
 
 

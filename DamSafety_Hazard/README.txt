@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 ND Dam Hazard Classification Helper - Version 2.18.66
+=======
+ND Dam Hazard Classification Helper - Version 2.18.67
+>>>>>>> f4fdb0c (Runner 3.10.95 / Hazard 2.18.67: G5 first-step note, OSM ford dedupe, one bridge-snap breakdown (DWR-3034 REVIEW 9.8 items 2, 5, 6))
 ====================================================
 
 WHAT IT DOES
@@ -829,6 +833,9 @@ NEW IN 1.3.0 - HAZARD CLASSIFICATION TAB
   bridge flag and the MOST RECENT AADT from (a) the road layer itself,
   including AADT_2023-style columns, (b) an optional AADT layer (NDDOT
   counts, HPMS) within 300 ft, (c) FRA crossing AADT within 100 ft.
+- 2.18.67: one OpenStreetMap crossing mapped as a node and a way (sharing
+  a node, or within 5 m with the same category or changeset) is one
+  structure; the kept row lists both OSM ids (DWR-3034's ford).
 - 2.18.65: a wet road or rail stretch counts as overtopped only where the
   maximum WSE is above the centreline crown read from the 1 m DEM (the
   Runner's WSE (Max).tif and run_report.json beside the depth raster);

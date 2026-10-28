@@ -163,7 +163,9 @@ def anuga_volume_balance_solver_residual_and_edge_inflow_checks():
     # gain the edge integral does not explain: not blamed on the edge
     g = aw.volume_balance(0.0, sup, sup * 1.5, boundary_in=1000.0)
     n = am.volume_note({"volume_balance": g, "boundary": "outflow"})
-    assert "probably not from the edge" in n and "instability" in n, n
+    assert "probably not from the edge" in n and "check the inflow" in n, n
+    # 3.10.95 (DWR-3034 G5-MSG): an instability is named only by the solver-residual line
+    assert "instability" not in n and "caution" not in n, n
     # without the operator integral (older ANUGA / non-DE): no solver residual, no crash
     assert "solver_residual_m3" not in aw.volume_balance(0.0, sup, sup, boundary_in=-1.0)
     # review 2: a non-DE algorithm - no flux-integral lines, the residual is 'not computed'
