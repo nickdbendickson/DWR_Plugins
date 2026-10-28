@@ -558,6 +558,32 @@ class _State:
         return self.data.get(k, default) if self.resumed else default
 
 
+def _detached_anuga_check(model_dir, key, log):
+    """3.12.2 (DWR-2801): an ANUGA worker an earlier QGIS session started goes on after that
+    session ends (core/anuga_detach.py). Before any model runs: one still running for other
+    settings stops this run (two workers would share the folder); one for these settings is
+    adopted when the ANUGA step comes (anuga_model.run: wait for it, then use its result)."""
+    from . import anuga_detach as detach
+    for sub in ("anuga", "anuga_base"):
+        wd = os.path.join(model_dir, sub)
+        if not os.path.isfile(detach.status_path(wd)):
+            continue
+        w = detach.worker_state(wd)
+        stt = w["status"] or {}
+        same = (stt.get("tag") or {}).get("run_key") == key
+        if w["state"] == detach.RUNNING and not same:
+            raise lfmod.ModelError(
+                "An ANUGA worker started {} for other settings is still running in {} (pid {}). "
+                "Nothing was run. Wait for it to finish, or stop it, then run again.".format(
+                    stt.get("started_utc"), wd, stt.get("pid")))
+        if same and (w["state"] == detach.RUNNING
+                     or (w["state"] == detach.FINISHED and not w["processed"])):
+            log("ANUGA ({}): the worker started {} (pid {}) is {}; this run uses its result "
+                "instead of running ANUGA again.".format(
+                    sub, stt.get("started_utc"), stt.get("pid"),
+                    "still running" if w["state"] == detach.RUNNING else "finished"))
+
+
 def attach_proposed(st, out_folder, dam, warnings, log):
     """Insert a proposed embankment from <out_folder>/dam.json onto every grid the
     models read. Nothing is done when the record has no such block, so a run of an
@@ -1041,6 +1067,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         log("Resuming from the checkpoint in {}".format(model_dir))
     elif st.resume:
         log("No matching checkpoint (nothing saved, or the settings changed): starting over.")
+    _detached_anuga_check(model_dir, state.key, log)       # 3.12.2
 
     # --- inflow point -------------------------------------------------------------
     h_m = dam.dam_height_ft * FT
@@ -1646,7 +1673,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             an_env, outer, fine = anmod.run(
                 os.path.join(model_dir, "anuga"), dem_a, flooded, inflow_xy, direction, width_m,
                 hy_a, ast, aprog, cancel, log, structures=st.structures, initial_depth=init_grid,
-                refine_lines=st.refine_lines, reuse=reuse and k == 0, **emb_kw)
+                refine_lines=st.refine_lines, reuse=reuse and k == 0,
+                run_key=state.key if k == 0 else None, **emb_kw)
             a_runs.append({"buffer_m": ast.buffer_m, "stats": an_env.stats})
             warnings += [n for n in an_env.notes if n not in warnings]
             edge_ft = an_env.stats.get("max_edge_depth_ft", 0.0)
@@ -1695,7 +1723,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                 os.path.join(model_dir, "anuga_base"), dem_a, fl_b, inflow_xy, direction,
                 width_m, hy_nb_a, ast, _span(progress, 82, 92), cancel, log,
                 structures=st.structures, initial_depth=init_grid, refine_lines=st.refine_lines,
-                reuse=reuse, **emb_kw)
+                reuse=reuse, run_key=state.key, **emb_kw)
             lf_base_arrays = write_qa("_base", an_base_env, "anuga", init_grid)
             bm = (an_base_env.stats or {}).get("mesh") or {}
             report["anuga_mesh"]["baseline"] = bm

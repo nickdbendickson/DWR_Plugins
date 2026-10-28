@@ -1599,6 +1599,35 @@ def cmd_hecras_reexport(args):
     return 0
 
 
+def cmd_anuga_status(args):
+    """3.12.2: the detached ANUGA workers of a dam folder (core/anuga_detach.py). Exit 0 when
+    none is waiting, 4 when one is running or finished without products ('run CONFIG
+    --resume' with the same configuration finishes it)."""
+    det = importlib.import_module(PKG + ".core.anuga_detach")
+    folder = args.dam_folder
+    waiting = False
+    for sub in ("anuga", "anuga_base"):
+        wd = os.path.join(folder, workflow.MODEL_FOLDER, sub)
+        if not os.path.isfile(det.status_path(wd)):
+            continue
+        w = det.worker_state(wd)
+        stt = w["status"] or {}
+        lp = det.last_progress(stt.get("log") or os.path.join(wd, det.LOG_NAME))
+        pend = w["state"] == det.RUNNING or (w["state"] == det.FINISHED and not w["processed"])
+        waiting = waiting or pend
+        say("{}: {}{} - pid {}, started {}{}{}".format(
+            sub, w["state"], " (products built)" if w["processed"] else "", stt.get("pid"),
+            stt.get("started_utc"), ", ended " + stt["ended_utc"] if stt.get("ended_utc") else "",
+            ", last progress {:.1f} % {}".format(lp[0], lp[1]) if lp else ""))
+    if not waiting:
+        say("no ANUGA run is waiting in {}".format(folder))
+        return 0
+    say("finish it: ndbreach_cli.py run CONFIG --resume (the same configuration), or in QGIS "
+        "'Finish an ANUGA run after QGIS closed' (qgis_process run ndbreach:finishanuga -- "
+        "DAM_FOLDER=...)")
+    return 4
+
+
 def cmd_selftest(args):
     st = importlib.import_module(PKG + ".core.selftest")
     return st.main(args.rest)
@@ -1831,7 +1860,7 @@ def build_parser():
         prog="ndbreach_cli.py", description="ND Dam Breach Runner without QGIS (see the top of "
         "this file, or `template`, for the configuration).",
         epilog="exit status: 0 done, 1 run/model failed, 2 bad input, 3 batch had failures, "
-               "130 cancelled")
+               "4 (anuga-status) an ANUGA run is waiting, 130 cancelled")
     sub = ap.add_subparsers(dest="command")
     sub.required = True
 
@@ -1853,7 +1882,9 @@ def build_parser():
 
     p = sub.add_parser("run", help="run one dam (the same outputs as the QGIS tool)")
     p.add_argument("config")
-    p.add_argument("--resume", action="store_true", help="reuse finished LISFLOOD-FP runs")
+    p.add_argument("--resume", action="store_true", help="reuse finished LISFLOOD-FP runs "
+                   "(and, 3.12.2, wait for / use an ANUGA run that went on after the session "
+                   "that started it ended; see anuga-status)")
     p.add_argument("--output", default="", help="output folder (overrides the configuration)")
     p.add_argument("--allow-flagged-structure", action="store_true",
                    help="run a flagged structure anyway (docs/Flagged_structures.md; results "
@@ -1885,6 +1916,10 @@ def build_parser():
     datum(p)
     models(p)
     p.set_defaults(func=cmd_batch)
+    p = sub.add_parser("anuga-status", help="is a detached ANUGA run waiting in a dam "
+                       "folder? (exit 4 when one is running or finished without products)")
+    p.add_argument("dam_folder", metavar="DAM_FOLDER")
+    p.set_defaults(func=cmd_anuga_status)
     p = sub.add_parser("selftest", help="test GDAL, the models and a small run on this computer")
     p.add_argument("rest", nargs=argparse.REMAINDER, help="options of core/selftest.py")
     p.set_defaults(func=cmd_selftest)

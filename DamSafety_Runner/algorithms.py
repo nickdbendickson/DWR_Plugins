@@ -706,7 +706,8 @@ class _Base(QgsProcessingAlgorithm):
         self._text("CONTOURS_HR", "Arrival zones (hours after breach initiation), comma "
                    "separated", "0.25, 0.5, 1, 2, 4, 8", advanced=True)
         self._bool("RESUME", "Resume: reuse LISFLOOD-FP runs already finished for the same "
-                   "settings", False, advanced=True)
+                   "settings (an ANUGA run that went on after QGIS closed is used in any case "
+                   "when the settings are the same)", False, advanced=True)
         self._bool("ANIMATE", "Animation: save depth snapshots and render a GIF / MP4 and "
                    "one GeoTIFF per frame (Animation folder)", False, advanced=True)
         self._num("ANIM_FRAMES", "Animation: about this many frames", 24, minimum=4,
@@ -1737,6 +1738,8 @@ class RunDamAlgorithm(_Base):
         except RuntimeError as e:
             raise QgsProcessingException(str(e))
         st.dam_record = dict(getattr(self, "_rec_info", None) or {})   # v3.2.0: dam.json
+        if self.name() == "rundam":
+            save_run_params(self, parameters, context, folder)          # 3.12.2
         fb = _Feedback(feedback)
         try:
             res = workflow.run_dam(dam, dam_xy, st, src, writer, folder, inflow,
@@ -2503,8 +2506,95 @@ class CheckAlgorithm(_Base):
         return {"RESULT": "\n".join(lines)}
 
 
+LAYER_PARAM_TYPES = ("raster", "vector", "source", "layer", "mesh", "pointcloud", "multilayer")
+
+
+def save_run_params(alg, parameters, context, folder):
+    """3.12.2: <dam folder>/_breach_model/run_params.json (core/run_params.py), project layers
+    written as their data sources so qgis_process can open them."""
+    from .core import run_params
+
+    def resolve(text):
+        try:
+            from qgis.core import QgsProcessingUtils
+            lyr = QgsProcessingUtils.mapLayerFromString(text, context, False)
+        except Exception:                                         # noqa: BLE001
+            lyr = None
+        return lyr.source() if lyr is not None else None
+    layers = set()
+    for d in alg.parameterDefinitions():
+        try:
+            if d.type() in LAYER_PARAM_TYPES:
+                layers.add(d.name())
+        except Exception:                                         # noqa: BLE001
+            pass
+    return run_params.save(folder, "{}:{}".format(PROVIDER_ID, alg.name()), parameters,
+                           resolve=resolve, layer_params=layers)
+
+
+class FinishAnugaAlgorithm(_Base):
+    """3.12.2 (DWR-2801): finish a dam whose QGIS session ended while ANUGA ran."""
+
+    def name(self):
+        return "finishanuga"
+
+    def displayName(self):
+        return "Finish an ANUGA run after QGIS closed"
+
+    def shortHelpString(self):
+        return ("Since 3.12.2 ANUGA runs detached from QGIS: it writes its own log "
+                "(_breach_model/anuga/anuga.log) and status (anuga_worker.json), and it goes on "
+                "when QGIS closes or crashes, then writes anuga_result.npz. This tool runs "
+                "'Run breach model for one dam' again with the parameters that run saved "
+                "(_breach_model/run_params.json) and Resume on: LISFLOOD-FP is reused, a worker "
+                "still running is waited for, a finished result is used, and the rasters, "
+                "products, run_report.json and the report are written as usual. It works the "
+                "same from qgis_process:\n\n"
+                "qgis_process run ndbreach:finishanuga -- DAM_FOLDER=/path/to/Dams/DWR-2801")
+
+    def initAlgorithm(self, config=None):
+        self._file("DAM_FOLDER", "Dam folder (the run's output folder, with _breach_model)",
+                   folder=True, optional=False)
+        self._bool("REQUIRE_WORKER", "Only when an ANUGA run is waiting (stop otherwise)", False)
+        self.addOutput(QgsProcessingOutputString("RESULT", "Result"))
+
+    def processAlgorithm(self, parameters, context, feedback):
+        from .core import run_params, anuga_detach
+        folder = self.parameterAsFile(parameters, "DAM_FOLDER", context)
+        if not folder or not os.path.isdir(folder):
+            raise QgsProcessingException("Choose the dam folder (it has a _breach_model folder).")
+        waiting = run_params.pending_workers(folder)
+        for sub, w in waiting:
+            stt = w["status"] or {}
+            lp = anuga_detach.last_progress(stt.get("log") or "")
+            feedback.pushInfo("ANUGA ({}): {} (pid {}, started {}){}".format(
+                sub, w["state"], stt.get("pid"), stt.get("started_utc"),
+                ", last progress {:.1f} %".format(lp[0]) if lp else ""))
+        if not waiting:
+            msg = "No ANUGA run is waiting in {}.".format(folder)
+            if self.parameterAsBool(parameters, "REQUIRE_WORKER", context):
+                raise QgsProcessingException(msg)
+            feedback.pushInfo(msg + " Running the dam again with Resume on.")
+        alg_id, params = run_params.load(folder)
+        if not params:
+            raise QgsProcessingException(
+                "{} has no _breach_model/run_params.json (written by 'Run breach model for one "
+                "dam' from 3.12.2). Run that tool with the same settings as before and Resume "
+                "on.".format(folder))
+        params["RESUME"] = True
+        try:
+            import processing
+        except ImportError:                                       # noqa
+            from qgis import processing
+        out = processing.run(alg_id or "{}:rundam".format(PROVIDER_ID), params, context=context,
+                             feedback=feedback, is_child_algorithm=True)
+        out = dict(out or {})
+        out["RESULT"] = "Finished: {}".format(folder)
+        return out
+
+
 CORE_ALGORITHMS = (RunDamAlgorithm, BatchAlgorithm, SensitivityAlgorithm, CascadeAlgorithm,
-                   HydrographAlgorithm, EstimateAlgorithm, CheckAlgorithm)
+                   HydrographAlgorithm, EstimateAlgorithm, CheckAlgorithm, FinishAnugaAlgorithm)
 from .algorithms_tools import TOOL_ALGORITHMS      # noqa: E402  (they build on _Base)
 from .algorithms_hydrology import HYDROLOGY_ALGORITHMS          # noqa: E402
 from .algorithms_adequacy import ADEQUACY_ALGORITHMS          # noqa: E402
