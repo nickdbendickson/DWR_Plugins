@@ -114,6 +114,8 @@ class RunSettings:
         self.expand_step_mi = 3.0
         self.max_extent_mi = 20.0      # = algorithms.DEFAULT_MAX_EXTENT_MI (was 60 before 2026-10)
         self.qa_maps = "inflow+depth"  # QA PNGs: off | inflow | inflow+depth (core/qa_maps.py)
+        self.qa_basemap = "auto"       # 3.11.0: under the QA maps: auto | imagery | hillshade
+        self.qa_basemap_labels = True  # 3.11.0: Esri street / town labels over the QA maps
         self.max_iterations = 6
         self.sim_time_hr = None          # None = automatic
         self.sim_max_hr = None           # None = the built-in cap; a number is the longest clock
@@ -2476,7 +2478,9 @@ def _qa_maps(report, st, dam, dam_xy, inflow_xy, top_m, qa_ctx, path, dem, fin, 
             radius_m=qa_ctx.get("radius_m"), trace=path,
             crest_line=getattr(dam, "crest_line_xy", None), breach_xy=qa_ctx.get("breach_xy"),
             model_grid=dem, depth_m=depth, metrics=report.get("summary"),
-            water_mask=water_mask)
+            water_mask=water_mask, basemap=getattr(st, "qa_basemap", None) or "auto",
+            basemap_labels=bool(getattr(st, "qa_basemap_labels", True)),
+            avoid=_qa_cache_avoid(st, out_folder))
         report["qa_maps"] = info
         for p in problems:
             warnings.append(p)
@@ -2486,6 +2490,17 @@ def _qa_maps(report, st, dam, dam_xy, inflow_xy, top_m, qa_ctx, path, dem, fin, 
                 os.path.basename(info[k]) for k in ("inflow_map", "depth_map") if info.get(k))))
     except Exception as e:  # noqa: BLE001 - QA maps are extras
         warnings.append("QA maps not written: {}: {}".format(type(e).__name__, e))
+
+
+def _qa_cache_avoid(st, out_folder):
+    """Folders the QA base-map tile cache must never be inside: the run's output folder and the
+    folders of its inputs (3.11.0)."""
+    out = [out_folder] if out_folder else []
+    for k in ("dem_path", "dem", "terrain_path", "manning_path", "input_folder"):
+        v = getattr(st, k, None)
+        if isinstance(v, str) and v:
+            out.append(v if os.path.isdir(v) else os.path.dirname(v))
+    return tuple(out)
 
 
 def _dem_resample_of(terrain_src):

@@ -1602,6 +1602,10 @@ def main():
         import scipy  # noqa: F401
     except ImportError:
         sys.exit("scipy is missing: run the tests with the QGIS Python (it ships scipy), not the system python3.")
+    # 3.11.0: the QA maps' aerial base map never asks the internet from the suite (CI, a box
+    # without a network); the base-map tests fake every fetch.
+    os.environ.setdefault("NDBREACH_BASEMAP_OFFLINE", "1")
+    os.environ.setdefault("NDBREACH_BASEMAP_CACHE", "off")
     _load_extra_test_modules()
     run_models = "--models" in sys.argv
     todo = TESTS + (MODEL_TESTS if run_models else [])

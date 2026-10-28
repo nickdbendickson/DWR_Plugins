@@ -49,7 +49,8 @@ _LITERAL = {
     "naip_flight_dates": True, "naip_clips": True, "misplaced_911_m": 150.0,
     "fema_scene_shift": False,
     "fast_sampling": False, "input_overviews": False, "zone_overviews": True,
-    "report_imagery": False,
+    "report_imagery": True, "basemap_labels": True, "basemap_source": "auto",
+    "basemap_opacity_flood": 0.65,
     "conseq_sensitivity": False, "conseq_sens_warning_hr": "-0.5, 0.5, 1.0",
     "conseq_sens_ppd": "2.0, 2.5, 3.0", "conseq_sens_population": True,
     "conseq_sens_severity": True,
@@ -151,7 +152,8 @@ class Extras290TabMixin(object):
         "mobile_min_length_spin", "mobile_max_length_spin", "mobile_lot_check",
         "trailer_parks_check", "ms_footprints_check", "fema_scene_shift_check",
         "fast_sampling_check", "input_overviews_check", "zone_overviews_check",
-        "report_imagery_check", "ms_imagery_date_edit", "naip_dates_check",
+        "report_imagery_check", "basemap_labels_check", "basemap_source_combo",
+        "ms_imagery_date_edit", "naip_dates_check",
         "naip_clips_check", "misplaced_911_spin",
         "conseq_sens_check", "conseq_warning_edit", "conseq_ppd_edit", "conseq_pop_check",
         "conseq_severity_check",
@@ -320,11 +322,34 @@ class Extras290TabMixin(object):
                                               "report and EAP map book")
         self.report_imagery_check.setChecked(bool(_default("report_imagery")))
         self.report_imagery_check.setToolTip(
-            "Puts the aerial imagery layer (the one the Review tab uses) under every map of "
-            "the PDF report and of the EAP map book. Skipped when offline or when the "
-            "imagery service does not answer - the maps are then made without it. A picture "
-            "for looking at; no result uses it.")
+            "Puts aerial imagery under every map of the PDF report and of the EAP map book: "
+            "ND DWR NAIP 2025 first, then Esri World Imagery, then USGS (the first that "
+            "answers). The credit under each map names the source and its flight dates. "
+            "Offline: imagery from the data pack (<pack>/imagery), else a hillshade when the "
+            "DEM is known, else none (the map says so). A picture for looking at; no result "
+            "uses it. On by default since 2.19.0.")
         form.addRow("", self.report_imagery_check)
+        self.basemap_labels_check = WrapCheckBox("Street and town labels over the maps")
+        self.basemap_labels_check.setChecked(bool(_default("basemap_labels")))
+        self.basemap_labels_check.setToolTip(
+            "Esri reference label tiles (roads, places) drawn above the flood on the report "
+            "and map book maps, when imagery is used.")
+        form.addRow("", self.basemap_labels_check)
+        self.basemap_source_combo = QComboBox()
+        self.basemap_source_combo.addItem("Automatic (NAIP 2025, then Esri, then USGS)", "auto")
+        try:
+            from . import constants as _C
+            for src in _C.AERIAL_SOURCES:
+                self.basemap_source_combo.addItem(
+                    "Only {}".format(src.get("name") or src.get("id")), src.get("id"))
+        except Exception:
+            pass
+        i = self.basemap_source_combo.findData(str(_default("basemap_source") or "auto"))
+        self.basemap_source_combo.setCurrentIndex(max(i, 0))
+        self.basemap_source_combo.setToolTip(
+            "Which imagery service the report and map book maps use. Automatic tries them in "
+            "order and takes the first that answers.")
+        form.addRow("  Imagery source:", self.basemap_source_combo)
 
         # -- consequence sensitivity
         self.conseq_sens_check = WrapCheckBox("Consequence sensitivity: re-estimate the lives in "
@@ -713,6 +738,9 @@ class Extras290TabMixin(object):
             "input_overviews": bool(self.input_overviews_check.isChecked()),
             "zone_overviews": bool(self.zone_overviews_check.isChecked()),
             "report_imagery": bool(self.report_imagery_check.isChecked()),
+            "basemap_labels": bool(self.basemap_labels_check.isChecked()),
+            "basemap_source": str(self.basemap_source_combo.currentData() or "auto"),
+            "basemap_opacity_flood": float(_default("basemap_opacity_flood")),
             "conseq_sensitivity": bool(self.conseq_sens_check.isChecked()),
             "conseq_sens_warning_hr": self.conseq_warning_edit.text().strip(),
             "conseq_sens_ppd": self.conseq_ppd_edit.text().strip(),

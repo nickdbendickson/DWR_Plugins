@@ -23,6 +23,11 @@ map. The depth raster is drawn semi-transparent in those map items only
 the canvas are not changed). Offline (the "offline only" setting, or the
 imagery service does not answer) the maps are made without imagery and the
 map pages say so.
+
+2.19.0: imagery on by default; the base map is the first source that answers
+(ND DWR NAIP 2025 WMS, Esri, USGS), Esri street / town label tiles are drawn
+ABOVE the flood, the credit names the source and its flight dates, and offline
+the maps use pack imagery or a hillshade (basemap.layout_basemap).
 """
 
 import math
@@ -205,7 +210,7 @@ def flood_style_overrides(layers, opacity=FLOOD_OPACITY_OVER_IMAGERY):
     return out
 
 
-def imagery_label(layout, used, caption, note, x, y, w, page, size=6):
+def imagery_label(layout, used, caption, note, x, y, w, page, size=6, h=8):
     """Under a map: the imagery credit, or why the map has no imagery
     (nothing when imagery was not asked for)."""
     if used and caption:
@@ -214,16 +219,24 @@ def imagery_label(layout, used, caption, note, x, y, w, page, size=6):
         text = "Aerial imagery not shown: {}".format(note)
     else:
         return None
-    return _label(layout, text, x, y, w, 5, page, size=size)
+    return _label(layout, text, x, y, w, h, page, size=size)
 
 
-def layout_imagery(imagery, layers, add_to_project, rect, crs):
-    """(map layers with the imagery last, style overrides or None, used,
-    caption, note) for the maps of a layout. imagery=False: the layers as
-    they are, no note."""
+def layout_imagery(imagery, layers, add_to_project, rect, crs, labels=True, source="auto",
+                   opacity=None, dem_path=None, info=None):
+    """(map layers top first: labels, the layers, the base map LAST; style overrides or
+    None, used, caption, note) for the maps of a layout. imagery=False: the layers as
+    they are, no note. 2.19.0: basemap.layout_basemap() picks the source (NAIP 2025 WMS,
+    Esri, USGS; offline: pack imagery or a hillshade of dem_path), adds the label tiles
+    ABOVE the flood (labels=True) and writes the credit with the flight dates. info: an
+    optional dict that receives the basemap record (summary DATA SOURCES)."""
     if not imagery:
         return list(layers), None, False, "", ""
-    img, cap, note = BM.layout_imagery(add_to_project, rect, crs)
+    bm = BM.layout_basemap(add_to_project, rect, crs, source=source, labels=labels,
+                           dem_path=dem_path)
+    if info is not None:
+        info.update(bm)
+    img, cap, note = bm["layer"], bm["caption"], bm["note"]
     map_layers = BM.with_imagery(layers, img)
     used = img is not None and bool(map_layers) and map_layers[-1] is img
     if img is not None and not used:
@@ -231,7 +244,11 @@ def layout_imagery(imagery, layers, add_to_project, rect, crs):
     if not used:
         return list(layers), None, False, "", note
     _KEEP.append(img)
-    return map_layers, flood_style_overrides(layers), True, cap or "", ""
+    lab = [x for x in (bm.get("labels") or []) if x is not None]
+    _KEEP.extend(lab)
+    map_layers = lab + map_layers
+    op = FLOOD_OPACITY_OVER_IMAGERY if opacity is None else float(opacity)
+    return map_layers, flood_style_overrides(layers, op), True, cap or "", ""
 
 
 def _fit(rect, aspect):
@@ -525,7 +542,7 @@ def _summary_page(layout, dam_name, res, scenario, all_results):
 
 def build_report(out_folder, dam_name, res, scenario, lines, structs, clip, scen_layers,
                  max_pages=8, add_to_project=True, all_results=None, hydraulics_group=None,
-                 imagery=False, info=None):
+                 imagery=False, info=None, basemap=None):
     """Build the layout and export Hazard_Classification_Report.pdf.
     Returns (pdf path, note) - note says when the usual file name could not
     be used (the old PDF is open in another program).
@@ -533,7 +550,10 @@ def build_report(out_folder, dam_name, res, scenario, lines, structs, clip, scen
     imagery: aerial imagery under the overview and zoom maps (skipped, with
     a note on the map pages, when offline). info: an optional dict that
     receives "imagery" (True when the maps have it), "imagery_caption" and
-    "imagery_note" (why there is none; "" when there is or it was off)."""
+    "imagery_note" (why there is none; "" when there is or it was off), and (2.19.0)
+    "basemap" (the basemap.layout_basemap record). basemap: optional dict of
+    labels (True), source ("auto" | id), opacity (0.65), dem_path."""
+    bmo = dict(basemap or {})
     project = QgsProject.instance()
     crs = clip.crs
     vec = [res.get("layers", {}).get(k) for k in ("Habitable_Structures", "Access_Cut_Off",
@@ -544,11 +564,14 @@ def build_report(out_folder, dam_name, res, scenario, lines, structs, clip, scen
     if depth is not None:
         layers.append(depth)
     _KEEP[:] = layers
+    bm_info = {}
     map_layers, styles, img_used, img_cap, img_note = layout_imagery(
-        imagery, layers, add_to_project, clip.rect, crs)
+        imagery, layers, add_to_project, clip.rect, crs,
+        labels=bmo.get("labels", True), source=bmo.get("source", "auto"),
+        opacity=bmo.get("opacity"), dem_path=bmo.get("dem_path"), info=bm_info)
     if info is not None:
         info.update({"imagery": img_used, "imagery_caption": img_cap,
-                     "imagery_note": img_note})
+                     "imagery_note": img_note, "basemap": bm_info})
     if imagery:
         log_message("Report maps: {}".format(
             "aerial imagery under the maps ({})".format(img_cap) if img_used else

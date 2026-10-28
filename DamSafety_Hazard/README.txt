@@ -9,9 +9,15 @@ ND Dam Hazard Classification Helper - Version 2.18.67
 ND Dam Hazard Classification Helper - Version 2.18.68
 >>>>>>> e3d3be2 (Hazard 2.18.68: say why Microsoft footprints are missing in offline-only mode (DWR-3034 item 7))
 =======
+<<<<<<< HEAD
 ND Dam Hazard Classification Helper - Version 2.18.69
 >>>>>>> 96e9c72 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
 >>>>>>> 07d0881 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
+=======
+ND Dam Hazard Classification Helper - Version 2.19.0
+>>>>>>> b0f85c4 (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
+>>>>>>> 462e6af (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
+>>>>>>> d3b282b (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
 ====================================================
 
 WHAT IT DOES

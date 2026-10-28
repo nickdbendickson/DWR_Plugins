@@ -14,9 +14,15 @@ PLUGIN_VERSION = "2.18.67"
 PLUGIN_VERSION = "2.18.68"
 >>>>>>> e3d3be2 (Hazard 2.18.68: say why Microsoft footprints are missing in offline-only mode (DWR-3034 item 7))
 =======
+<<<<<<< HEAD
 PLUGIN_VERSION = "2.18.69"
 >>>>>>> 96e9c72 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
 >>>>>>> 07d0881 (Hazard 2.18.69: crossing depth in the 1 m channel (DWR-3034 item 8))
+=======
+PLUGIN_VERSION = "2.19.0"
+>>>>>>> b0f85c4 (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
+>>>>>>> 462e6af (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
+>>>>>>> d3b282b (Hazard 2.19.0 / Runner 3.11.0: aerial basemap on report, map book and QA maps (NAIP 2025 / Esri / USGS, labels, flight dates, offline fallback))
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
@@ -455,6 +461,41 @@ AERIAL_IMAGERY_URL = ("https://basemap.nationalmap.gov/arcgis/rest/services/USGS
 AERIAL_IMAGERY_NAME = "Aerial imagery (base map)"
 AERIAL_IMAGERY_CREDIT = "Imagery: USGS National Map (or the service set in the data-source file)"
 AERIAL_MAX_ZOOM = 19
+# 2.19.0: the report / map book base map is the first of these that answers (per run):
+# ND DWR NAIP 2025 (WMS), Esri World Imagery, the USGS tiles above. Any entry (by id)
+# and the order can be changed in the data-source file; a changed AERIAL_IMAGERY_URL
+# there still means "only that XYZ service" (as before 2.19).
+AERIAL_SOURCES = [
+    {"id": "nd_naip_2025", "kind": "wms", "url": "https://aerial.dwr.nd.gov/dwrwms",
+     "layer": "NorthDakota_NAIP_2025_col_air", "format": "image/jpeg",
+     "crs_list": ["EPSG:5070", "EPSG:3857", "EPSG:4326", "EPSG:26914", "EPSG:5071",
+                  "EPSG:5072", "EPSG:6342", "EPSG:6343", "EPSG:2266"],
+     "name": "ND DWR NAIP 2025", "resolution": "0.6 m",
+     "credit": "USDA NAIP 2025 via ND DWR", "date_service": "naip:2025"},
+    {"id": "esri_world_imagery", "kind": "xyz",
+     "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/"
+            "tile/{z}/{y}/{x}", "zmax": 19,
+     "name": "Esri World Imagery", "resolution": "0.3-1 m",
+     "credit": "Esri World Imagery (Esri, Maxar, Earthstar Geographics, and the GIS User "
+               "Community)",
+     "date_service": "esri:https://services.arcgisonline.com/arcgis/rest/services/"
+                     "World_Imagery/MapServer"},
+    {"id": "usgs_imagery", "kind": "xyz", "url": "", "zmax": 16,      # "" = AERIAL_IMAGERY_URL
+     "name": "USGS National Map imagery", "resolution": "NAIP Plus",
+     "credit": "USGS National Map (public domain)", "date_service": ""},
+]
+AERIAL_SOURCE_ORDER = ["nd_naip_2025", "esri_world_imagery", "usgs_imagery"]
+# street / town labels drawn ABOVE the flood (tile zoom one level coarser, max 17, so the
+# text stays readable on paper)
+AERIAL_LABEL_URLS = [
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/"
+    "MapServer/tile/{z}/{y}/{x}",
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/"
+    "World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+]
+AERIAL_LABEL_MAX_ZOOM = 17
+AERIAL_LABEL_NAME = "Map labels (base map)"
+AERIAL_LABEL_CREDIT = "Esri reference (Esri, HERE, Garmin, OSM contributors)"
 # Review tab "Open web map" link: {lat} and {lon} are replaced by the structure's
 # position. Change it in the data-source file to use another web map.
 WEBMAP_URL_TEMPLATE = "https://www.google.com/maps/search/?api=1&query={lat}%2C{lon}"
@@ -468,7 +509,8 @@ SOURCE_KEYS = ("NSI_API_URL", "NARN_URL", "CROSSINGS_URL", "USA_STRUCTURES_URL",
                "ND_ADDRESS_POINTS_URL", "NID_URL", "NID_MIRROR_URL", "OVERPASS_URL",
                "ND_ROADS_URL", "HPMS_ND_URLS", "ND_COUNTY_ROADS_URL", "NBI_URL",
                "NDDOT_AADT_URL", "NHD_FLOWLINE_URL", "NHD_WATERBODY_URL", "AERIAL_IMAGERY_URL",
-               "WEBMAP_URL_TEMPLATE")
+               "WEBMAP_URL_TEMPLATE", "AERIAL_SOURCES", "AERIAL_SOURCE_ORDER",
+               "AERIAL_LABEL_URLS")
 SOURCES_FILE_NAME = "ND_Dam_Hazard_Helper_data_sources.json"
 SOURCE_OVERRIDES = {}          # what the file changed (shown in the run log)
 
@@ -517,7 +559,27 @@ def apply_source_overrides(path=None):
         SOURCE_OVERRIDES["_error"] = "{}: not a JSON object".format(path)
         return SOURCE_OVERRIDES
     for k, v in data.items():
-        if k in SOURCE_KEYS:
+        if k == "AERIAL_SOURCES":
+            # 2.19.0: a list of {"id": ..., changed keys}; entries merge by id, a new id is added
+            if not isinstance(v, list):
+                continue
+            merged = [dict(x) for x in g[k]]
+            for item in v:
+                if not (isinstance(item, dict) and isinstance(item.get("id"), str)):
+                    continue
+                url = item.get("url")
+                if url is not None and not (isinstance(url, str) and url.startswith("http")):
+                    continue
+                cur = next((x for x in merged if x["id"] == item["id"]), None)
+                if cur is None:
+                    if url and item.get("kind") in ("wms", "xyz"):
+                        merged.append(dict(item))
+                else:
+                    cur.update(item)
+            if merged != g[k]:
+                g[k] = merged
+                SOURCE_OVERRIDES[k] = v
+        elif k in SOURCE_KEYS:
             if isinstance(g[k], list) and isinstance(v, list) and all(
                     isinstance(x, str) for x in v):
                 if v != g[k]:

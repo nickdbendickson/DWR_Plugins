@@ -642,7 +642,8 @@ _KEY_SKIP = ("resume", "threads", "lisflood_exe", "anuga_python", "products", "k
              "write_final", "keep_arrays", "gauges", "gauge_massint_s", "fixed_plan", "receptors",
              "tier", "baseline", "arrival_contours_hr", "refine_lines", "anuga_fine_area_m2",
              "anuga_coarse_area_m2", "anuga_near_field_mi", "anuga_buffer_m", "anuga_algorithm",
-             "impact_look_ahead_mi", "incr_thresholds_ft", "water_mask")
+             "impact_look_ahead_mi", "incr_thresholds_ft", "water_mask",
+             "qa_basemap", "qa_basemap_labels")   # 3.11.0: pictures only, not the result
 
 
 def raster_names(thresholds_ft):
