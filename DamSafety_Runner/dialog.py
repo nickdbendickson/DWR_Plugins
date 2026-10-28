@@ -261,6 +261,17 @@ class NDBreachRunnerDialog(QDialog):
             "is. Auto: only when the DEM's pool holds far less than the storage curve. The "
             "source DEM is never changed.")
         self.carve_combo.currentIndexChanged.connect(self._changed)
+        self.datum_combo = QComboBox()                       # 3.12.0: ELEV_DATUM
+        for key, label in zip(pl.ELEV_DATUM_CHOICES, ("Auto (as stated; else NGVD29)",
+                                                      "NAVD88 (use as given)",
+                                                      "NGVD29 (convert to NAVD88)")):
+            self.datum_combo.addItem(label, key)
+        self.datum_combo.setToolTip(pl.ELEV_DATUM_TIP)
+        self.datum_combo.currentIndexChanged.connect(self._changed)
+        self.datum_combo.currentIndexChanged.connect(self._show_datum)
+        self.datum_label = QLabel("")
+        self.datum_label.setWordWrap(True)
+        self.datum_label.setToolTip(pl.ELEV_DATUM_TIP)
         self.hecras_gmsh = QCheckBox("Refine HEC-RAS mesh with Gmsh points (optional)")  # v3.10.22
         self.hecras_gmsh.setToolTip(pl.HECRAS_GMSH_TIP)
         self.hecras_gmsh.toggled.connect(self._changed)
@@ -303,6 +314,9 @@ class NDBreachRunnerDialog(QDialog):
         grid2.addWidget(self.carve_combo, 2, 1)
         grid2.addWidget(self.hecras_gmsh, 2, 2, 1, 2)
         grid2.addWidget(self.hecras_crest, 3, 2, 1, 2)
+        grid2.addWidget(QLabel("Elevation datum:"), 4, 0)
+        grid2.addWidget(self.datum_combo, 4, 1)
+        grid2.addWidget(self.datum_label, 4, 2, 1, 3)
         grid2.setColumnStretch(4, 1)
         self.adv_section = Collapsible("Advanced", adv)
         body.addWidget(self.adv_section)
@@ -404,6 +418,9 @@ class NDBreachRunnerDialog(QDialog):
             parts.append("HEC-RAS gmsh points")
         if getattr(self, "hecras_crest", None) is not None and not self.hecras_crest.isChecked():
             parts.append("HEC-RAS straight dam line")
+        dm = self.datum_combo.currentData() if hasattr(self, "datum_combo") else None
+        if dm and dm != "auto":
+            parts.append("elevations " + str(dm))
         self.adv_section.set_title("Advanced  ·  " + " · ".join(parts))
 
     def _open_settings(self):
@@ -840,6 +857,9 @@ class NDBreachRunnerDialog(QDialog):
             out["hecras_gmsh"] = True
         if not self.hecras_crest.isChecked():   # on (the default) leaves the saved state as before
             out["hecras_dam_axis"] = "straight"
+        dm = self.datum_combo.currentData() if hasattr(self, "datum_combo") else None
+        if dm and dm != "auto":             # auto (the default) leaves the saved state as before
+            out["elev_datum"] = dm
         return out
 
     def _apply(self, s):
@@ -871,6 +891,9 @@ class NDBreachRunnerDialog(QDialog):
         self.hecras_gmsh.setChecked(bool(s.get("hecras_gmsh", False)))
         self.hecras_crest.setChecked(
             str(s.get("hecras_dam_axis") or "crest").strip().lower() != "straight")
+        dm = str(s.get("elev_datum") or "auto").strip()
+        self.datum_combo.setCurrentIndex(pl.ELEV_DATUM_CHOICES.index(dm)
+                                         if dm in pl.ELEV_DATUM_CHOICES else 0)
 
     def _save_state(self):
         if self._loading:
@@ -1028,6 +1051,17 @@ class NDBreachRunnerDialog(QDialog):
         self.add_btn.setEnabled(have and bool(pl.result_files(folder)))
         self.status_label.setVisible(not have)           # the chips and Folder contents show it
         self._fill_card(s, folder, have, rows, text, has_json)
+        self._show_datum()
+
+    def _show_datum(self, *args):
+        """3.12.0: the detected datum of the dam's elevations and the shift at the dam."""
+        if not hasattr(self, "datum_label"):
+            return
+        try:
+            self.datum_label.setText(pl.datum_info(self.folder(),
+                                                   self.datum_combo.currentData() or "auto"))
+        except Exception as e:                                   # noqa
+            self.datum_label.setText("Elevation datum: {}".format(e))
 
     def _fill_card(self, s, folder, have, rows, record, has_json):
         """The dam card, the stage strip and the tool tags from the folder's status rows."""

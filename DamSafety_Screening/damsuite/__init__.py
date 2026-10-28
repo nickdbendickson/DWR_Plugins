@@ -46,6 +46,10 @@ Modules:
   packcheck   an offline data pack checked against its manifest.json on load: every layer
               there, with its count, fields, geometry type and CRS; format 1 / 2 detection
               (1.17.5)
+  vdatum      NGVD29 -> NAVD88 for dam elevations (VERTCON at the dam, offline): datum
+              detection, the shift and its record for the reports and dam.json (1.18.0)
+  vertcon_nd  NOAA's VERTCON grid clipped to North Dakota (public domain), read by vdatum
+              (1.18.0; written by tools/make_vertcon_nd.py)
 
 `selfcheck()` compares this package's files with FILES.json and returns a list of problems
 ("missing: x.py", "changed: x.py", "unexpected file: x.py"); [] means the copy is intact.
@@ -67,15 +71,16 @@ from . import hydro3dhp   # noqa: F401  (1.15.0)
 from . import netproxy   # noqa: F401  (1.16.2)
 from . import structure_flags   # noqa: F401  (1.17.2)
 from . import packcheck   # noqa: F401  (1.17.5)
+from . import vdatum   # noqa: F401  (1.18.0; vertcon_nd is read on first use)
 
-SUITE_VERSION = "1.17.7"   # 1.17.7: ND DWR dugouts - suite_fill dugout_polygons / unknown / DWR export names, the format-2 pack's dwr/DWR_*.gpkg as a fallback for the DWR slots (an engineer's file wins), suitedata.dwr_layers drop-in first (pack=), damdata reads an engineer's dwr/ file before the pack; 1.17.6: packcheck never raises - a broken manifest.json or a cut-short GeoPackage is a FAILED / unreadable result, zipped format-2 packs against their zip listing, a UTF-8 BOM manifest is FAILED (folder and zip), the summary names pack-level problems, pack_signature (#171 follow-up); 1.17.5: packcheck (offline pack vs manifest.json on load), damdata logs it; 1.17.4: suitedata skips dem/lidar_1m (Screening 1 m tile cache, #105); 1.17.3: record.py, pack_convert fixes (#94); 1.17.2: structure_flags (flagged structures); 1.17.1: one canonical package
+SUITE_VERSION = "1.18.0"   # 1.18.0: vdatum + vertcon_nd - NGVD29 -> NAVD88 (VERTCON, bundled ND grid, pyproj fallback) for dam elevations not stated as NAVD88; 1.17.7: ND DWR dugouts - suite_fill dugout_polygons / unknown / DWR export names, the format-2 pack's dwr/DWR_*.gpkg as a fallback for the DWR slots (an engineer's file wins), suitedata.dwr_layers drop-in first (pack=), damdata reads an engineer's dwr/ file before the pack; 1.17.6: packcheck never raises - a broken manifest.json or a cut-short GeoPackage is a FAILED / unreadable result, zipped format-2 packs against their zip listing, a UTF-8 BOM manifest is FAILED (folder and zip), the summary names pack-level problems, pack_signature (#171 follow-up); 1.17.5: packcheck (offline pack vs manifest.json on load), damdata logs it; 1.17.4: suitedata skips dem/lidar_1m (Screening 1 m tile cache, #105); 1.17.3: record.py, pack_convert fixes (#94); 1.17.2: structure_flags (flagged structures); 1.17.1: one canonical package
 FILES_NAME = "FILES.json"
 
 __all__ = ["SUITE_VERSION", "FILES_NAME", "selfcheck", "package_files", "chain", "dam_record",
            "gdalsafe", "settings", "suite_home", "tm11_curves", "units", "versions", "xlsx_lite",
            "offline_pack", "suitegpkg", "suitedata", "services", "terrain_cache", "damdata",
            "keepawake", "solvegate", "gpkgpack", "hydro3dhp", "netproxy", "structure_flags",
-           "packcheck"]
+           "packcheck", "vdatum"]
 
 
 def package_files(folder=None):

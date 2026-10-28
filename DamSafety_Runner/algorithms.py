@@ -30,6 +30,7 @@ from .core.lisflood import Cancelled, ModelError, check_lisflood
 from .damsuite import structure_flags as sflags
 from .core.anuga_model import check_anuga
 from .core.units import FT, MILE, ARRIVAL_DEPTH_FT
+from .core import vdatum_run as vdrun
 
 PROVIDER_ID = "ndbreach"
 SET_LISFLOOD = "NDBREACH_LISFLOOD_EXE"
@@ -384,6 +385,12 @@ class _Base(QgsProcessingAlgorithm):
             set_advanced(p)
         self.addParameter(p)
 
+    def add_datum_param(self):
+        """3.12.0: ELEV_DATUM, the source datum of the dam elevations (core/vdatum_run.py)."""
+        self.addParameter(QgsProcessingParameterEnum(
+            "ELEV_DATUM", "Vertical datum of the dam elevations (top of dam, pools, spillway, "
+            "breach bottom; the DEM is NAVD88)", [d[1] for d in ELEV_DATUMS], defaultValue=0))
+
     def _opt(self, parameters, name, context):
         v = parameters.get(name)
         if v is None or v == "" or (hasattr(v, "isNull") and v.isNull()):
@@ -446,7 +453,7 @@ class _Base(QgsProcessingAlgorithm):
         self._file("SPILLWAY_CSV", "Flood scenario: spillway rating CSV (elevation ft, "
                    "discharge cfs; empty = no spillway)", "csv")
         if per_dam:
-            self._num("NORMAL_POOL_FT", "Flood scenario: normal pool elevation (ft)",
+            self._num("NORMAL_POOL_FT", "Flood scenario: normal pool elevation (ft; datum as the top of dam)",
                       optional=True)
         self.addParameter(QgsProcessingParameterEnum(
             "TRIGGER", "Flood scenario: the dam fails", [t[1] for t in TRIGGERS],
@@ -840,6 +847,10 @@ class _Base(QgsProcessingAlgorithm):
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0
             st.refine_cell_m = g("REFINE_CELL") or 0.0
+        if self.parameterDefinition("ELEV_DATUM") is not None and \
+                parameters.get("ELEV_DATUM") not in (None, ""):               # 3.12.0
+            st.elev_datum = ELEV_DATUMS[min(len(ELEV_DATUMS) - 1, max(0, self.parameterAsEnum(
+                parameters, "ELEV_DATUM", context)))][0]
         self._inputs = {}
         st.input_files = self._inputs        # filled as the inputs are read; see _record
         return st
@@ -1435,14 +1446,15 @@ class RunDamAlgorithm(_Base):
                   minimum=0.1)
         self._num("STORAGE_ACFT", "Storage at the top of dam (ac-ft; empty = from dam.json)",
                   optional=True, minimum=0.01)
-        self._num("TOP_FT", "Top of dam elevation (ft, DEM datum; empty = from dam.json, else "
-                  "the highest DEM point within 30 m)", optional=True)
+        self._num("TOP_FT", "Top of dam elevation ({}; empty = from dam.json, else "
+                  "the highest DEM point within 30 m)".format(ELEV_NOTE), optional=True)
         self._num("AREA_AC", "Surface area at the top of dam (ac; empty = from dam.json)",
                   optional=True, minimum=0)
         self._num("PMF_FT", "Maximum reservoir level in the PMF (ft; used if lower than the "
                   "top of dam)", optional=True)
         self._num("BOTTOM_FT", "Breach bottom elevation (ft; empty = top of dam - height)",
                   optional=True)
+        self.add_datum_param()
         self.addParameter(QgsProcessingParameterPoint(
             "INFLOW_POINT", "Breach inflow point below the dam (empty = found from the DEM)",
             optional=True))
@@ -1493,9 +1505,13 @@ class RunDamAlgorithm(_Base):
                 damjson.source_text(rec, "dam_length_ft"), crest_len))
         if problem:
             notes.insert(0, problem)
+        stated, dnote = vdrun.stated_from_record(rec)        # 3.12.0
+        if dnote:
+            notes.append(dnote)
         self._dam_rec = rec
         self._rec_info = {"read": notes, "nid_id": vals.get("NID_ID"),
-                          "top_source": "record" if "TOP_FT" in used else "parameter"}
+                          "top_source": "record" if "TOP_FT" in used else "parameter",
+                          "elev_datum_stated": stated}
         for key, label in (("HEIGHT_FT", "Dam height"), ("STORAGE_ACFT", "Storage at the top "
                                                                          "of dam")):
             if vals.get(key) is None:
@@ -1627,7 +1643,20 @@ class RunDamAlgorithm(_Base):
         except brmod.BreachInputError as e:
             raise QgsProcessingException(str(e))
         xy = (dam_xy.x(), dam_xy.y()) if hasattr(dam_xy, "x") else dam_xy
+        self.apply_datum(dam, st, info, feedback)
         return dam, st, src, writer, xy, inflow, folder
+
+    def apply_datum(self, dam, st, info, feedback):
+        """3.12.0: the dam elevations to NAVD88 (core/vdatum_run.py) before the DEM checks
+        and the DEM top-of-dam fill: once per run (run_dam does not convert them again)."""
+        st.elev_datum_stated = (info or {}).get("elev_datum_stated") or ""
+        pt = (info or {}).get("point") or {}
+        rec = vdrun.apply(dam, st, pt.get("lon"), pt.get("lat"),
+                          top_is_dem=dam.top_of_dam_ft is None, log=feedback.pushInfo)
+        warn = getattr(feedback, "pushWarning", None) or feedback.pushInfo
+        for w in rec.get("warnings") or []:
+            warn("Elevation datum: " + w)
+        return rec
 
     def processAlgorithm(self, parameters, context, feedback):
         dam, st, src, writer, dam_xy, inflow, folder = self.prepare(parameters, context,
@@ -1852,6 +1881,14 @@ def _batch_metrics(s):
     return {col: ("" if s.get(k) is None else s.get(k)) for col, k in keys}
 BATCH_SCENARIOS = [SCENARIOS[0][1], SCENARIOS[1][1],
                    "Per dam: flood if its folder has inputs/pmf_inflow.csv, else sunny day"]
+# 3.12.0: the source datum of the dam elevations (core/vdatum_run.py; damsuite/vdatum.py)
+ELEV_DATUMS = (("auto", "Auto: as stated in dam.json / the inventory (NGVD29 when not stated, "
+                        "with a warning)"),
+               ("NAVD88", "NAVD88 (the DEM's datum): used as given"),
+               ("NGVD29", "NGVD29: converted to NAVD88 with VERTCON at the dam"))
+ELEV_NOTE = "ft; converted NGVD29 -> NAVD88 unless stated as NAVD88"
+
+
 BATCH_FIELD_KEYS = (("F_ID", "Dam ID field", False), ("F_NAME", "Dam name field", False),
                     ("F_HEIGHT", "Dam height field (ft)", True),
                     ("F_STORAGE", "Storage at the top of dam field (ac-ft)", True),
@@ -1863,7 +1900,9 @@ BATCH_FIELD_KEYS = (("F_ID", "Dam ID field", False), ("F_NAME", "Dam name field"
                     ("F_US", "Upstream slope field (H)", True),
                     ("F_DS", "Downstream slope field (H)", True),
                     ("F_LENGTH", "Crest length field (ft)", True),
-                    ("F_POOL", "Normal pool elevation field (ft), flood scenario", True))
+                    ("F_POOL", "Normal pool elevation field (ft), flood scenario", True),
+                    ("F_DATUM", "Vertical datum field of the elevations (text, e.g. NGVD29 / "
+                                "NAVD88; 3.12.0)", False))
 
 
 # 3.10.23: the dams-layer fields that can carry an NID id or a DWR structure id
@@ -1944,6 +1983,7 @@ class BatchAlgorithm(_Base):
         self._bool("BASELINE", "Flood scenario: also run without the breach", True)
         self._text("INCR_FT", "Incremental depth thresholds (ft; starting values 1, 2, 3 are "
                    "the engineer's)", "1, 2, 3", advanced=True)
+        self.add_datum_param()
         self.add_feature_params()
         self.add_model_params()
         self._bool("SKIP_DONE", "Skip dams whose folder already has 'Depth (Max).tif'", True)
@@ -2089,6 +2129,16 @@ class BatchAlgorithm(_Base):
                 src, writer, to_work, work = self.gis(parameters, context, dem.crs(), p)
                 xy = to_work.transform(QgsPointXY(p))
                 self._dam_rec = rec
+                stated, dnote = vdrun.stated_from_record(rec)    # 3.12.0
+                if fld.get("F_DATUM"):
+                    dv = feat[fld["F_DATUM"]]
+                    if dv not in (None, "") and str(dv).strip().upper() != "NULL":
+                        stated = str(dv).strip()
+                        dnote = ""
+                if dnote:
+                    notes.append(dnote)
+                st.elev_datum_stated = stated
+                st.vertical_datum = None                 # each dam gets its own conversion
                 st.dam_record = {"read": notes, "top_source": "record" if "TOP_FT" in used
                                  else "parameter",
                                  "point": self.point_info(p, dem.crs(), work, (xy.x(), xy.y()),
@@ -2248,6 +2298,10 @@ class CascadeAlgorithm(_Base):
                 us_slope_h=val(f, "F_US"), ds_slope_h=val(f, "F_DS"),
                 crest_length_ft=val(f, "F_LENGTH"),
                 name=str(f[fld["F_NAME"]]) if fld.get("F_NAME") else "")
+            if fld.get("F_DATUM"):                       # 3.12.0: the dam's stated datum
+                dv = f[fld["F_DATUM"]]
+                if dv not in (None, "") and str(dv).strip().upper() != "NULL":
+                    dam.elev_datum_stated = str(dv).strip()
             fi = None
             files = nd_data.dam_input_files(os.path.join(parent, _safe_name(dam_id)))
             pool = val(f, "F_POOL")
