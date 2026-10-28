@@ -2213,6 +2213,10 @@ def _classify_and_write(run, cfg, state):
                     break
         except Exception:
             pass
+        try:                                     # 2.20.0: the Runner's NGVD29 -> NAVD88 record
+            extra["datum"] = datum_lines(out, cfg.get("dam_folder") or "")
+        except Exception:
+            pass
         lines = summary_lines(governing["nd"], governing["tm11"], s_view, r_view, l_view,
                               dam_name, run.sources, one_d, extra=extra)
         paths = write_summary(out, lines, governing["nd"], governing["tm11"], run.ctx)
@@ -3693,3 +3697,26 @@ def _compare_last_run(run, gov, governing, scenarios, dam_name, written, folder)
     except Exception as e:
         run.log(">>> WARNING: comparison with the last run failed: {}".format(e))
         return ["Not compared: {}".format(e)]
+
+
+def datum_lines(out, dam_folder=""):
+    """2.20.0: summary lines of the vertical datum of the dam elevations the Runner used
+    (run_report.json "vertical_datum", else dam.json's "vertical_datum"): source datum,
+    NGVD29 -> NAVD88 shift and method (damsuite/vdatum.py). [] when neither records one."""
+    from .damsuite import vdatum as VD
+    cands = [os.path.join(out, "run_report.json")]
+    if dam_folder:
+        cands += [os.path.join(dam_folder, "_breach_model", "run_report.json"),
+                  os.path.join(dam_folder, "run_report.json"), os.path.join(dam_folder, "dam.json")]
+    for path in cands:
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        rec = data.get("vertical_datum") if isinstance(data, dict) else None
+        if isinstance(rec, dict) and rec:
+            return VD.summary_lines(rec) + ["(from {})".format(os.path.basename(path))]
+    return []

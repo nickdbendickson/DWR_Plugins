@@ -116,6 +116,9 @@ FIELD_SYNONYMS = {
     "F_US": ["upstreamslope", "usslope", "upslope", "upstreamslopeh"],
     "F_DS": ["downstreamslope", "dsslope", "downslope", "downstreamslopeh"],
     "F_LENGTH": ["damlength", "crestlength", "length", "damlengthft", "embankmentlength"],
+    # 3.12.0: the vertical datum of the elevations (text; a horizontal datum column is not one)
+    "F_DATUM": ["verticaldatum", "vertdatum", "elevdatum", "elevationdatum", "elevdatm",
+                "vdatum", "verticaldatm"],
 }
 
 

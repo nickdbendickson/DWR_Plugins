@@ -142,7 +142,7 @@ def _batch_metrics(s):
     return {col: ("" if s.get(k) is None else s.get(k)) for col, k in keys}
 # columns of the dams table -> what the batch tool calls them (algorithms.BATCH_FIELD_KEYS)
 BATCH_FIELD_KEYS = ("F_ID", "F_NAME", "F_HEIGHT", "F_STORAGE", "F_TOP", "F_AREA", "F_PMF",
-                    "F_BOTTOM", "F_CREST", "F_US", "F_DS", "F_LENGTH", "F_POOL")
+                    "F_BOTTOM", "F_CREST", "F_US", "F_DS", "F_LENGTH", "F_POOL", "F_DATUM")
 BATCH_TO_DAM = {"F_ID": "dam_id", "F_NAME": "name", "F_HEIGHT": "dam_height_ft",
                 "F_STORAGE": "storage_top_acft", "F_TOP": "top_of_dam_ft",
                 "F_AREA": "surface_area_top_ac", "F_PMF": "pmf_max_wse_ft",
@@ -204,6 +204,8 @@ MODEL_KEYS = {
     "anuga_near_field_mi": ("anuga_near_field_mi", ("num", 0.0, None)),
     "anuga_buffer_m": ("anuga_buffer_m", ("num", 0.0, None)),
     "arrival_contours_hr": ("arrival_contours_hr", ("nums",)),
+    # 3.12.0: the datum of the dam elevations (algorithms.ELEV_DATUMS; core/vdatum_run.py)
+    "elev_datum": ("elev_datum", ("enum", ("auto", "NAVD88", "NGVD29", "local"))),
 }
 SECTIONS = {
     "dem": {"path": ("path",), "z_units": ("enum", gdal_io.Z_CHOICES), "crs": ("str",),
@@ -1060,6 +1062,8 @@ def build_settings(cfg, opts, need_models=True):
     st.manning_n = cfg.get("manning", "n", st.manning_n)
     if getattr(opts, "threads", None) is not None:
         st.threads = opts.threads
+    if getattr(opts, "elev_datum", None):                      # 3.12.0
+        st.elev_datum = opts.elev_datum
     st.lisflood_exe, st.anuga_python = find_models(cfg, opts, need_lisflood=need_models,
                                                    need_anuga=None if need_models else False)
     if need_models and st.tier == workflow.TIER_HECRAS:    # 3.10.66: checked before any run
@@ -1747,6 +1751,9 @@ def cmd_batch(args):
             scen = _batch_scenario(cfg, folder)
             pool = num(row.get(fld["F_POOL"])) if fld.get("F_POOL") else None
             p = prepare(cfg, base_opts, vals, cache, layers, True, scen, pool)
+            if fld.get("F_DATUM"):                   # 3.12.0: the row's stated datum
+                p.st.elev_datum_stated = (row.get(fld["F_DATUM"]) or "").strip()
+                p.st.vertical_datum = None
             out["Scenario"] = p.st.scenario
             for note in p.notes:
                 say(note)
@@ -1837,6 +1844,13 @@ def build_parser():
                        "NDBREACH_ANUGA_THREADS, else CPUs - 2, at most 4. A count above the "
                        "CPUs is clamped to them for ANUGA")
 
+    def datum(p):                                                 # 3.12.0
+        p.add_argument("--elev-datum", choices=("auto", "NAVD88", "NGVD29", "local"), default=None,
+                       help="datum of the dam elevations (overrides model.elev_datum). auto "
+                       "(default): NGVD29 unless stated, converted to NAVD88 (the DEM) with "
+                       "VERTCON at the dam; local: top of dam from the DEM, the rest kept "
+                       "relative to it")
+
     p = sub.add_parser("run", help="run one dam (the same outputs as the QGIS tool)")
     p.add_argument("config")
     p.add_argument("--resume", action="store_true", help="reuse finished LISFLOOD-FP runs")
@@ -1844,6 +1858,7 @@ def build_parser():
     p.add_argument("--allow-flagged-structure", action="store_true",
                    help="run a flagged structure anyway (docs/Flagged_structures.md; results "
                         "for information only)")
+    datum(p)
     models(p)
     p.set_defaults(func=cmd_run)
     p = sub.add_parser("hydrograph", help="breach hydrograph only (no DEM needed)")
@@ -1867,6 +1882,7 @@ def build_parser():
     p.add_argument("--output", default="")
     p.add_argument("--limit", type=int, default=0, help="only the first N dams")
     p.add_argument("--verbose", action="store_true", help="tracebacks for unexpected errors")
+    datum(p)
     models(p)
     p.set_defaults(func=cmd_batch)
     p = sub.add_parser("selftest", help="test GDAL, the models and a small run on this computer")

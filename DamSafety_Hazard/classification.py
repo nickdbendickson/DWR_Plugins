@@ -768,6 +768,7 @@ def summary_lines(nd, tm11, structs, roads, rails, dam_name, sources, one_d, ext
                        ("changes", "CHANGES SINCE THE LAST RUN"),
                        ("method", "ACER ZONE METHOD"),
                        ("model_extent", "MODEL EXTENT CHECK"),
+                       ("datum", "VERTICAL DATUM OF THE DAM ELEVATIONS (NGVD29 -> NAVD88)"),
                        ("consequences", "CONSEQUENCES (screening)"),
                        ("hcom", "DSS-WISE HCOM CROSS-CHECK (population at risk)"),
                        ("popsource", "SECOND POPULATION SOURCE (census / gridded)"),

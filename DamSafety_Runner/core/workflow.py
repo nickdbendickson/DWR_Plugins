@@ -49,6 +49,7 @@ from . import terrain
 from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
+from . import vdatum_run as vdrun
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 
 def _metadata_version():
@@ -269,6 +270,13 @@ class RunSettings:
         # "off". None = NDBREACH_WATERBODY_MASK, else the dam folder's / the suite's waterbody
         # layer when there is one. Never changes the model.
         self.water_mask = None
+        # 3.12.0: the source datum of the dam elevations (core/vdatum_run.py): "auto" (dam.json
+        # / the inventory's stated datum, NGVD29 when none is stated), "NAVD88" or "NGVD29";
+        # elev_datum_stated is that stated text; vertical_datum is the conversion record once
+        # applied (set once per run: never converted twice)
+        self.elev_datum = "auto"
+        self.elev_datum_stated = None
+        self.vertical_datum = None
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError("unknown setting {}".format(k))
@@ -320,6 +328,10 @@ class RunSettings:
                 d[k] = len(v) if k == "refine_lines" else (v is not None)
             elif k == "dam_record":
                 d[k] = v is not None
+            elif k in ("vertical_datum", "elev_datum_stated"):
+                continue                 # 3.12.0: run_report["vertical_datum"] records them
+            elif k == "elev_datum" and v in ("auto", None, ""):
+                continue                 # 3.12.0: the default - the report stays as before
             elif k in ("anuga_mesher", "anuga_gmsh") and v in ("default", None):
                 continue                 # default mesh: the report stays as before
             elif (k == "anuga_elevation" and v == "fine") or (k == "anuga_elevation_cell_m"
@@ -866,6 +878,27 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         if inv_notes:
             report["structure_inverts"] = inv_notes
 
+    # --- 3.12.0: dam elevations NGVD29 -> NAVD88 (core/vdatum_run.py) ------------------
+    # the rundam / batch tools convert in prepare() (before their DEM checks); this covers the
+    # CLI, the wizard and any other caller. Never twice (see vdatum_run.apply).
+    try:
+        if st.vertical_datum is None or not getattr(dam, "_vdatum_done", False):
+            ll = vdrun.lonlat_of(st, dam_xy, getattr(writer, "work_srs", None)
+                                 or report.get("work_crs"))
+            vdrun.apply(dam, st, ll[0] if ll else None, ll[1] if ll else None,
+                        top_is_dem=dam.top_of_dam_ft is None, log=log)
+        report["vertical_datum"] = vdrun.VD.public(st.vertical_datum)
+        for k in ("top_of_dam_ft", "pmf_max_wse_ft", "breach_bottom_ft"):
+            report["dam"][k] = getattr(dam, k, None)
+        if report["settings"].get("flood") and st.flood is not None:
+            report["settings"]["flood"].update(normal_pool_ft=st.flood.normal_pool_ft,
+                                               trigger_value=st.flood.trigger_value)
+        for w in st.vertical_datum.get("warnings") or []:
+            if w not in warnings:
+                warnings.append(w)
+    except Exception as e:                                   # noqa - never stop the run for this
+        warnings.append("Elevation datum not checked: {}: {}".format(type(e).__name__, e))
+
     # --- top of dam from the DEM if not given ---------------------------------
     near = terrain_src.read((dam_xy[0] - 60, dam_xy[1] - 60, dam_xy[0] + 60, dam_xy[1] + 60),
                             min(cs, 3.0))
@@ -894,6 +927,31 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             raise brmod.BreachInputError("{}: no DEM data at the dam point".format(dam.dam_id))
         report["dem_crest_from"] = "DEM near the dam point (98th percentile, 30 m)"
     report["dem_crest_ft"] = round(crest_dem_ft, 2)
+    # --- 3.12.1 / damsuite 1.18.1: a local (assumed) datum - the top from the DEM ---------
+    # (core/vdatum_run.apply_local): e.g. a top of dam of 100.0 ft on the plans' own datum
+    if not spec and st.vertical_datum is not None:
+        try:
+            lc_ft, lc_from = crest_dem_ft, report.get("dem_crest_from", "DEM near the dam point")
+            if getattr(dam, "crest_line_xy", None):
+                c2, how2 = vdrun.dem_crest_on_line(terrain_src.read, dam.crest_line_xy,
+                                                   min(cs, 1.0))
+                if c2 is not None:
+                    lc_ft, lc_from = c2, how2
+            vrec, changed = vdrun.apply_local(dam, st, lc_ft, lc_from, log)
+            if changed:
+                report["vertical_datum"] = vdrun.VD.public(vrec)
+                for k in ("top_of_dam_ft", "pmf_max_wse_ft", "breach_bottom_ft"):
+                    report["dam"][k] = getattr(dam, k, None)
+                if report["settings"].get("flood") and st.flood is not None:
+                    report["settings"]["flood"].update(normal_pool_ft=st.flood.normal_pool_ft,
+                                                       trigger_value=st.flood.trigger_value)
+                warnings[:] = [w for w in warnings if "NGVD29 was assumed" not in w]
+                for w in vrec.get("warnings") or []:
+                    if w not in warnings:
+                        warnings.append(w)
+                report["crest_source"] = "DEM (local datum): " + lc_from
+        except Exception as e:                               # noqa - never stop the run for this
+            warnings.append("Local datum not checked: {}: {}".format(type(e).__name__, e))
     if not spec and dam.top_of_dam_ft is not None and dam.dam_height_ft:
         diff = crest_dem_ft - dam.top_of_dam_ft
         if abs(diff) > max(0.6 * dam.dam_height_ft, 8.0):
@@ -2258,6 +2316,8 @@ def _write_no_breach(res, report, warnings, model_dir, hy_nb):
     with open(res.report_md, "w", encoding="utf-8") as f:
         f.write("# Breach model run: {}\n\nThe dam does not fail in this flood.\n\n{}\n".format(
             res.dam_id, "\n".join("- " + w for w in warnings)))
+        if report.get("vertical_datum"):
+            f.write("\n" + "\n".join(vdrun.report_lines(report["vertical_datum"])) + "\n")
         if report.get("dam_record"):
             f.write("\n" + "\n".join(damjson.report_lines(report["dam_record"])) + "\n")
 
@@ -2272,6 +2332,8 @@ def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, war
     try:
         top_source = "dem" if top_from_dem else dr.get("top_source", "parameter")
         vals = damjson.values_used(dam, st, top_source, dr.get("point"), dr.get("nid_id"))
+        vrec = getattr(st, "vertical_datum", None)        # 3.12.0: NGVD29 -> NAVD88
+        vals, vnote = vdrun.damjson_values(vrec, vals, damjson.load(out_folder)[0])
 
         def rel(p):
             return os.path.relpath(p, out_folder).replace(os.sep, "/")
@@ -2298,7 +2360,11 @@ def _record_dam(dam, st, res, dam_xy, out_folder, top_from_dem, final_model, war
                           "crest")
             dem_note = fmt.format(crest_from or "DEM near the dam point")
         info = damjson.record_run(out_folder, vals, result, dr.get("read"),
-                                  dem_top_note=dem_note)
+                                  dem_top_note=dem_note,
+                                  extra={"vertical_datum": vdrun.VD.public(vrec)}
+                                  if vrec else None)
+        if vnote:
+            info["datum_note"] = vnote
     except Exception as e:           # the record is an extra; never lose the run for it
         info = {"error": "dam.json not updated: {}: {}".format(type(e).__name__, e),
                 "warnings": [], "read": list(dr.get("read") or [])}
@@ -2844,6 +2910,8 @@ def render_report(r):
                      "aerial imagery): {}".format(r["outputs"]["eap_map"]))
     elif r.get("eap_map_note"):
         lines.append("- EAP map: {}".format(r["eap_map_note"]))
+    if r.get("vertical_datum"):
+        lines += [""] + vdrun.report_lines(r["vertical_datum"])
     if r.get("dam_record"):
         from . import damjson
         lines += [""] + damjson.report_lines(r["dam_record"])

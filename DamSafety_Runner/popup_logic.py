@@ -88,6 +88,18 @@ DEFAULT_SETTINGS = {"dams_folder": "", "dam_id": "", "dem": "", "settings_file":
                     "reservoir_carve": "off", "hecras_gmsh": False,
                     "hecras_dam_axis": "crest"}
 CARVE_CHOICES = ("off", "auto", "on")   # core/reservoir_carve.MODES, the RESERVOIR_CARVE enum
+# 3.12.0: the ELEV_DATUM enum (algorithms.ELEV_DATUMS): the source datum of the dam elevations
+ELEV_DATUM_CHOICES = ("auto", "NAVD88", "NGVD29", "local")
+ELEV_DATUM_TIP = ("The datum of the dam elevations (top of dam, normal / PMF pool, spillway "
+                  "rating, breach bottom). The DEM is NAVD88. Auto: the datum dam.json or the "
+                  "inventory states; NGVD29 when none is stated (converted to NAVD88 with "
+                  "VERTCON at the dam, with a warning). NAVD88: used as given. NGVD29: always "
+                  "converted. Local (use DEM): the elevations are on the plans' own "
+                  "datum (e.g. top of dam 100.0 ft): the top of dam is read from the DEM and "
+                  "the pools, spillway and breach bottom keep their height below it; Auto "
+                  "detects this (outside 500 - 3,600 ft, more than 50 ft from the DEM crest, or "
+                  "a round 100 ft multiple more than 10 ft from it). The shift is written to "
+                  "the run report and dam.json.")
 PLUGIN_KEY = "ndbreach"                 # the suite settings file key (damsuite.versions)
 TAB_ORDER = tuple(t for t, _tools in TABS)
 
@@ -542,7 +554,50 @@ def defaults(alg, dams_folder, dam_id, settings=None):
             p["HECRAS_GMSH"] = True
         if str(S.get("hecras_dam_axis") or "crest").strip().lower() == "straight":
             p["HECRAS_CREST"] = False                                    # crest dam line
+    if alg in ("rundam", "batch"):                                       # 3.12.0
+        dm = str(S.get("elev_datum") or "auto").strip()
+        if dm in ELEV_DATUM_CHOICES and dm != "auto":
+            p["ELEV_DATUM"] = ELEV_DATUM_CHOICES.index(dm)
     return p
+
+
+def datum_info(folder, mode="auto"):
+    """3.12.0: one line for the Runner window: the datum of the dam folder's elevations as a
+    run would take it (dam.json's top_of_dam_datum, the ELEV_DATUM choice) and the NGVD29 ->
+    NAVD88 shift at the dam when dam.json has its location."""
+    try:
+        from .damsuite import vdatum as VD
+        from .core import vdatum_run as vdrun
+    except Exception as e:                                       # noqa
+        return "Elevation datum: not available ({})".format(e)
+    rec = None
+    if folder and os.path.isdir(folder):
+        try:
+            from .damsuite import dam_record as DR
+            rec = DR.load(folder)
+        except Exception:                                        # noqa
+            rec = None
+    stated, _note = vdrun.stated_from_record(rec)
+    src, how = VD.resolve(stated, mode)
+    text = {"override": "set here", "stated": "stated in dam.json ({!r})".format(stated),
+            "assumed": "not stated: NGVD29 assumed"}.get(how, how)
+    line = "Elevation datum: {} ({})".format(src, text)
+    if src == VD.NGVD29:
+        lon = rec.get("lon") if rec is not None else None
+        lat = rec.get("lat") if rec is not None else None
+        sm, _m = VD.shift_m(lon, lat) if lon is not None and lat is not None else (None, "")
+        line += "; converted to NAVD88 ({})".format(
+            "{:+.2f} ft at the dam".format(sm / VD.FT) if sm is not None else
+            "the shift is taken at the dam point when it runs")
+    elif src == VD.NAVD88:
+        line += "; used as given (the DEM is NAVD88)"
+    else:
+        line += "; local datum: the top of dam is taken from the DEM when it runs"
+    if src != VD.LOCAL and rec is not None and VD.mode(mode) == VD.AUTO:
+        hit, why = VD.local_check(rec.get("top_of_dam_ft"))
+        if hit:
+            line += ". Looks local ({}): the run will take the top from the DEM".format(why)
+    return line
 
 
 # v3.10.22: tooltip of the Runner's Advanced checkbox (and the HECRAS_GMSH parameter's help)

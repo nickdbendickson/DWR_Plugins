@@ -196,13 +196,14 @@ def values_used(dam, st=None, top_source="parameter", point=None, nid_id=None):
     return {k: x for k, x in v.items() if x not in (None, "")}
 
 
-def record_run(folder, values, result, notes=None, dem_top_note="", version=None):
+def record_run(folder, values, result, notes=None, dem_top_note="", version=None, extra=None):
     """Write the values a run used and a "modelled" status into <folder>/dam.json.
 
     values: {field: value} (values_used); result: the status result dict. Returns a dict
     for the run report: {"path", "written", "kept_from_record", "conflicts" (list of
     {"field", "dam_json", "this_run", "dam_json_source"}), "warnings" (sentences), "read"
-    (the notes from before the run), "error"}."""
+    (the notes from before the run), "error"}. extra: {top-level key: value} kept beside
+    the fields (3.12.0: "vertical_datum", the run's NGVD29 -> NAVD88 record)."""
     version = version or plugin_version()
     info = {"path": os.path.join(folder, dr.FILE_NAME), "written": [], "kept_from_record": [],
             "conflicts": [], "warnings": [], "read": list(notes or []), "error": ""}
@@ -241,6 +242,9 @@ def record_run(folder, values, result, notes=None, dem_top_note="", version=None
             "overwritten: check which is right and correct dam.json or the run's input."
             .format(k, _fmt(rec.get(k)), src, _fmt(values[k])))
     rec.add_status("modelled", TOOL, version, result=result)
+    for k, v in (extra or {}).items():
+        if v is not None:
+            rec.extra[k] = v
     try:
         rec.save()
     except OSError as e:
@@ -318,6 +322,8 @@ def report_lines(info):
     for c in info.get("conflicts") or []:
         lines.append("- CONFLICT {}: dam.json {} ({}), this run {}".format(
             c["field"], _fmt(c["dam_json"]), c["dam_json_source"], _fmt(c["this_run"])))
+    if info.get("datum_note"):
+        lines.append("- Elevation datum: " + info["datum_note"])
     if info.get("error"):
         lines.append("- " + info["error"])
     lines.append("- File: {}".format(info.get("path", "")))
