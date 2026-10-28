@@ -48,7 +48,12 @@ PROBE_ZOOM = 12                # tile level of the one-tile service check
 PROBE_TIMEOUT_MS = 8000        # transfer timeout of that check (Qt >= 5.15)
 PROBE_TTL_S = 300.0            # a check is re-used this long (report + map book)
 PROBE_TTL_FAIL_S = 60.0        # ... a failed one only this long (reconnected?)
-_PROBES = {}                   # url -> (time, ok, text)
+_PROBES = {}                   # probe_key(url, request_url) -> (time, ok, text)
+LABEL_PROBE_TIMEOUT_MS = 3000  # 2.19.1: one label tile must answer this fast before the
+                               # label layers go on the maps (a dead label host made each
+                               # layout export wait ~2 min and the credit still named labels)
+HILLSHADE_EXAGGERATION = 2.0   # 2.19.1: vertical exaggeration of the offline hillshade (ND
+                               # is flat); the z factor also converts degrees to metres
 _IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff", b"GIF8")
 
 
@@ -199,13 +204,25 @@ def set_visible(on):
 SUITE_ENV_VARS = ("ND_DAM_SUITE", "ND_DAM_OFFLINE")   # pipeline.py: no 25-layer download
 
 
+def _truthy(v):
+    """The Runner's rule (core/basemap._truthy): only 1 / true / yes / on switch a flag on."""
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def suite_offline():
+    """2.19.1: ND_DAM_SUITE set (a suite folder: any non-empty value) or ND_DAM_OFFLINE
+    true (1 / true / yes / on). ND_DAM_OFFLINE=0 / false / off no longer means offline."""
+    return bool(str(os.environ.get("ND_DAM_SUITE") or "").strip()) or \
+        _truthy(os.environ.get("ND_DAM_OFFLINE"))
+
+
 def offline_only():
     """True when the plugin must not ask the internet: the 'offline only'
     setting, an offline pack configured, or ND_DAM_SUITE / ND_DAM_OFFLINE set
     (the same no-download rule the pipeline applies to the layer downloads).
     Lumo v1.6: the imagery probe used to go out in suite / offline-pack mode
     and could block up to PROBE_TIMEOUT_MS on a hung service."""
-    if any(os.environ.get(k) for k in SUITE_ENV_VARS):
+    if suite_offline():
         return True
     try:
         from .download import offline_config
@@ -252,6 +269,19 @@ def tile_url(url, x, y, z):
     return str(url).replace("{x}", str(x)).replace("{y}", str(y)).replace("{z}", str(z))
 
 
+def probe_key(url, request_url=None):
+    """2.19.1: the cache key of a service check: the URL plus the request's own parameters
+    (a WMS layer / format / CRS), without the map position (BBOX, WIDTH, HEIGHT), so two
+    layers of one WMS endpoint are checked separately."""
+    if not request_url:
+        return str(url)
+    from urllib.parse import parse_qsl, urlsplit
+    q = sorted((k.upper(), v) for k, v in parse_qsl(urlsplit(str(request_url)).query,
+                                                    keep_blank_values=True)
+               if k.upper() not in ("BBOX", "WIDTH", "HEIGHT"))
+    return "{}|{}".format(url, "&".join("{}={}".format(k, v) for k, v in q))
+
+
 def probe(url=None, lonlat=None, timeout_ms=PROBE_TIMEOUT_MS, request_url=None):
     """(ok, text): does the imagery service answer with a tile image? One
     small request (the tile at the map centre, level PROBE_ZOOM; level 0
@@ -264,7 +294,8 @@ def probe(url=None, lonlat=None, timeout_ms=PROBE_TIMEOUT_MS, request_url=None):
     if request_url is None and not valid_url(url):
         return False, "the imagery address needs {x}, {y} and {z}"
     now = time.time()
-    hit = _PROBES.get(url)
+    key = probe_key(url, request_url)
+    hit = _PROBES.get(key)
     if hit is not None and now - hit[0] < (PROBE_TTL_S if hit[1] else PROBE_TTL_FAIL_S):
         return hit[1], hit[2]
     z = min(PROBE_ZOOM, int(C.AERIAL_MAX_ZOOM or PROBE_ZOOM)) if lonlat else 0
@@ -282,10 +313,10 @@ def probe(url=None, lonlat=None, timeout_ms=PROBE_TIMEOUT_MS, request_url=None):
             pass
         blocking = QgsBlockingNetworkRequest()
         # forceRefresh: a tile in QGIS's network cache must not pass for a connection
+        t0 = time.time()
         err = blocking.get(req, True)
         if enum_value(err) != enum_value(NET_NO_ERROR):
-            text = "the imagery service did not answer ({})".format(
-                blocking.errorMessage() or "network error")
+            text = probe_error_text(blocking.errorMessage(), time.time() - t0, timeout_ms)
         else:
             content = blocking.reply().content()
             data = bytes(content) if isinstance(content, (bytes, bytearray)) else \
@@ -297,10 +328,24 @@ def probe(url=None, lonlat=None, timeout_ms=PROBE_TIMEOUT_MS, request_url=None):
                        "error message?)"
     except Exception as e:
         text = "the imagery service could not be checked ({})".format(e)
-    _PROBES[url] = (now, ok, text)
+    _PROBES[key] = (now, ok, text)
     if not ok:
         log_message("Aerial imagery for the maps: " + text)
     return ok, text
+
+
+def probe_error_text(message, elapsed_s, timeout_ms):
+    """2.19.1: the text of a failed check. A request that ran to its timeout (or that Qt
+    cancelled with "Operation canceled", how a transfer timeout ends) says it timed out."""
+    msg = str(message or "").strip()
+    limit = float(timeout_ms or 0) / 1000.0
+    timed_out = (limit > 0 and elapsed_s >= 0.9 * limit) or "timed out" in msg.lower() \
+        or "canceled" in msg.lower() or "cancelled" in msg.lower()
+    if timed_out:
+        return "the imagery service did not answer within {:g} s (timed out{})".format(
+            limit if limit > 0 else round(elapsed_s, 1),
+            "; " + msg if msg and "cancel" not in msg.lower() else "")
+    return "the imagery service did not answer ({})".format(msg or "network error")
 
 
 def layout_imagery(add_to_project=True, rect=None, crs=None):
@@ -406,12 +451,46 @@ def source_layer(src, crs=None, name=None):
     return _style(layer) if layer is not None and layer.isValid() else None
 
 
-def label_layers_new():
+def label_checks(lonlat=None):
+    """2.19.1: [(url, ok, text)] of the label services: one tile each (probe(), cached like
+    the imagery checks, LABEL_PROBE_TIMEOUT_MS). A host that failed is not asked again for
+    its other label service. Never raises."""
+    out, dead = [], {}
+    for url in C.AERIAL_LABEL_URLS or []:
+        if not valid_url(url):
+            out.append((url, False, "the label address needs {x}, {y} and {z}"))
+            continue
+        host = urlparse(str(url)).netloc
+        if host in dead:
+            out.append((url, False, dead[host]))
+            continue
+        try:
+            ok, text = probe(url, lonlat, timeout_ms=LABEL_PROBE_TIMEOUT_MS)
+        except Exception as e:
+            ok, text = False, "the label service could not be checked ({})".format(e)
+        if not ok:
+            text = str(text).replace("the imagery service", "the label service")
+            dead[host] = text
+        out.append((url, ok, text))
+    return out
+
+
+def label_name(url):
+    """2.19.1: a label service's short name for the run log: the ArcGIS service
+    ('World_Transportation') or the host."""
+    parts = [p for p in urlparse(str(url)).path.split("/") if p]
+    if "MapServer" in parts and parts.index("MapServer") > 0:
+        return parts[parts.index("MapServer") - 1]
+    return urlparse(str(url)).netloc or str(url)
+
+
+def label_layers_new(urls=None):
     """New (private) label layers, top first: XYZ with tilePixelRatio=2, i.e. tiles one
-    zoom level coarser at double size (readable on paper), capped at AERIAL_LABEL_MAX_ZOOM."""
+    zoom level coarser at double size (readable on paper), capped at AERIAL_LABEL_MAX_ZOOM.
+    urls: the label services to use (2.19.1: the ones whose check passed); None = all."""
     out = []
     for i, url in enumerate(C.AERIAL_LABEL_URLS or []):
-        if not valid_url(url):
+        if not valid_url(url) or (urls is not None and url not in urls):
             continue
         uri = source_string(url, C.AERIAL_LABEL_MAX_ZOOM) + "&tilePixelRatio=2"
         name = C.AERIAL_LABEL_NAME + ("" if i == 0 else " {}".format(i + 1))
@@ -614,12 +693,27 @@ def hillshade_layer(dem_path):
         if not layer.isValid():
             return None
         r = QgsHillshadeRenderer(layer.dataProvider(), 1, 315.0, 45.0)
-        r.setZFactor(2.0)
+        r.setZFactor(hillshade_z_factor(layer))
         layer.setRenderer(r)
         return layer
     except Exception as e:
         log_message("Hillshade base map not made: {}".format(e))
         return None
+
+
+def hillshade_z_factor(layer, exaggeration=None):
+    """2.19.1: the hillshade's z factor: HILLSHADE_EXAGGERATION (2x; ND is flat) on a
+    projected DEM (elevations in its horizontal unit); on a geographic DEM (degrees) also
+    1 / metres per degree at the DEM's latitude, without which the relief vanishes."""
+    ex = HILLSHADE_EXAGGERATION if exaggeration is None else float(exaggeration)
+    try:
+        if layer.crs().isGeographic():
+            e = layer.extent()
+            lat = math.radians(max(-85.0, min(85.0, (e.yMinimum() + e.yMaximum()) / 2.0)))
+            return ex / (111320.0 * max(math.cos(lat), 0.05))
+    except Exception:
+        pass
+    return ex
 
 
 def credit(info, crs=None):
@@ -672,6 +766,7 @@ def layout_basemap(add_to_project=True, rect=None, crs=None, source="auto", labe
         from .helpers import on_main_thread
         in_project = bool(add_to_project) and on_main_thread()
         why = ""
+        lonlat = None
         if offline_only():
             why = "offline mode (no internet requests)"
         else:
@@ -698,10 +793,15 @@ def layout_basemap(add_to_project=True, rect=None, crs=None, source="auto", labe
             if info["layer"] is None:
                 why = "; ".join(info["tried"]) or "no imagery source set"
         if info["layer"] is not None and labels:
-            if in_project:
-                info["labels"] = _project_labels()
-            else:
-                info["labels"] = label_layers_new()
+            # 2.19.1: a label service is used only when one of its tiles came back
+            checks = label_checks(lonlat)
+            good = [u for u, ok, _t in checks if ok]
+            info["labels_tried"] = ["labels {}: {}".format(label_name(u), t)
+                                    for u, ok, t in checks if not ok]
+            info["label_urls"] = good
+            if good:
+                info["labels"] = _project_labels(good) if in_project else \
+                    label_layers_new(good)
         if info["layer"] is None:
             info["note"] = why
             lyr, path = pack_imagery(rect, crs) if rect is not None and crs is not None \
@@ -731,10 +831,10 @@ def layout_basemap(add_to_project=True, rect=None, crs=None, source="auto", labe
     return info
 
 
-def _project_labels():
+def _project_labels(urls=None):
     """The label layers as project layers (top first)."""
     out = []
-    for lyr in label_layers_new():
+    for lyr in label_layers_new(urls):
         name = lyr.name()
         out.append(_project_layer(name, lambda l=lyr: l))
     return out
@@ -752,14 +852,18 @@ def source_line(info):
             info.get("path"), " - flown " + info["dates_text"] if info.get("dates_text")
             else "")
     elif kind == "hillshade":
-        line = "Map base: hillshade of {} (no aerial imagery: {})".format(
-            info.get("path"), info.get("note"))
+        # 2.19.1: the failed sources are listed once, under "not used" (the note is the
+        # same list); offline mode has no list, so the note says why
+        line = "Map base: hillshade of {} (no aerial imagery{})".format(
+            info.get("path"), "" if info.get("tried") else ": {}".format(
+                info.get("note") or "offline"))
     else:
         return "Map base: none ({})".format(info.get("note") or "off")
     if info.get("labels"):
-        line += "; labels: " + ", ".join(C.AERIAL_LABEL_URLS)
-    if info.get("tried"):
-        line += "; not used: " + "; ".join(info["tried"])
+        line += "; labels: " + ", ".join(info.get("label_urls") or C.AERIAL_LABEL_URLS)
+    not_used = list(info.get("tried") or []) + list(info.get("labels_tried") or [])
+    if not_used:
+        line += "; not used: " + "; ".join(not_used)
     return line
 
 

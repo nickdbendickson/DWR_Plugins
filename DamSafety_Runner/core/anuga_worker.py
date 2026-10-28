@@ -889,7 +889,7 @@ def volume_balance(initial, injected, in_domain, boundary_in=None, operators=Non
     water left through the edge. With ANUGA's boundary flux integral (DE algorithms; + = net
     inflow): 'boundary_net_inflow_m3', 'edge_net_outflow_m3' (its loss side) and 'residual_m3'
     = in domain - initial - injected - boundary_in. With the operators' fractional-step
-    integral (the inlet; culverts move water inside) and ANUGA's own end volume:
+    integral (the breach inlet and any culvert / bridge operators) and ANUGA's own end volume:
     'solver_residual_m3' = solver_volume - initial - boundary_in - operators, ANUGA's
     conservation error (water_volume_statistics), and its fraction of the supply.
     3.10.55 review 2: solver_initial = ANUGA's own start volume (domain.volume_history[0], as in

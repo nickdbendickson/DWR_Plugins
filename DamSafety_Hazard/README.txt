@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.19.0
+ND Dam Hazard Classification Helper - Version 2.19.1
 ====================================================
 
 WHAT IT DOES
@@ -352,12 +352,13 @@ Maps
 - Aerial imagery under the maps of the PDF report and the EAP map book (2.19.0:
   ND DWR NAIP 2025, then Esri World Imagery, then USGS imagery - the first that
   answers; street and town labels over online imagery; a credit line with the
-  source and flight dates under each map). Settings: "Aerial imagery under the
+  source and flight dates under each map; 2.19.1: labels only when one label
+  tile answers within 3 s). Settings: "Aerial imagery under the
   maps of the PDF report and EAP map book", "Street and town labels over the
   maps", "Imagery source:". Data-source file: AERIAL_SOURCES,
   AERIAL_SOURCE_ORDER, AERIAL_LABEL_URLS (AERIAL_IMAGERY_URL still read).
-  Offline (offline-only on, an offline data pack set or found, or ND_DAM_SUITE
-  / ND_DAM_OFFLINE set - no imagery request is made): the pack's imagery
+  Offline (offline-only on, an offline data pack set or found, ND_DAM_SUITE
+  set, or ND_DAM_OFFLINE 1 / true / yes / on - no imagery request is made): the pack's imagery
   folder, else a hillshade of the DEM, else no base map and the page says so.
   Fast runs and ensembles keep it off.
 Hazard Classification tab, group 7 "Version 2.9 options" (all optional)
@@ -836,6 +837,11 @@ NEW IN 1.3.0 - HAZARD CLASSIFICATION TAB
   bridge flag and the MOST RECENT AADT from (a) the road layer itself,
   including AADT_2023-style columns, (b) an optional AADT layer (NDDOT
   counts, HPMS) within 300 ft, (c) FRA crossing AADT within 100 ft.
+- 2.19.1: the map labels are used only when one label tile answers
+  (3 s check), so a dead label service no longer slows each map export
+  and the credit names labels only when they are on the maps; a check
+  that timed out says so; ND_DAM_OFFLINE=0 / false is not offline; the
+  metadata.txt fixes that let qgis_process load the Hazard provider.
 - 2.19.0: aerial imagery (ND NAIP 2025 / Esri / USGS) under the report and
   map book maps by default, with labels and flight dates (see Maps above).
 - 2.18.69: every wet bridge / culvert / crossing also gets its depth in
