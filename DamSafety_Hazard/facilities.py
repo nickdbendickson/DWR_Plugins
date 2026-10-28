@@ -483,6 +483,41 @@ def evaluate(records, samplers, analysis_crs, transform_ctx, lat=None):
     return out
 
 
+def channel_depths(records, ev, src, why_none=""):
+    """2.18.69 (DWR-3034 review, item 8): for every wet crossing, the depth in the channel on
+    the run's 1 m DEM (crown.channel_depth: the deepest WSE (Max) - 1 m ground within
+    CROSSING_RADIUS_FT of the crossing point), added to its ev entry as "channel_depth",
+    "channel_bed", "channel_basis". Max_Depth_ft (the 30 m 'Depth (Max)' cell, which decides
+    Flooded / Charged) is not changed. `src` is the crown.CrownSource of the scenario (None:
+    each wet crossing's basis says why). Returns the number of crossings given a 1 m depth."""
+    from . import crown as CR
+    n = 0
+    for rec in records:
+        if rec.get("kind") != KIND_CROSSING:
+            continue
+        e = ev.get(rec["id"])
+        if not e or e.get("depth") is None:
+            continue
+        if src is None:
+            e["channel_basis"] = CR.BASIS_CHANNEL_NONE.format(
+                why_none or "no WSE (Max) / 1 m DEM of the run")
+            continue
+        try:
+            p = rec["geom"].centroid().asPoint() if rec.get("polygon") else rec["geom"].asPoint()
+            got = CR.channel_depth(src, p.x(), p.y(), CROSSING_RADIUS_FT)
+        except Exception as ex:                                 # noqa - reported per crossing
+            got, why = None, "read failed ({})".format(ex)
+        else:
+            why = "no 1 m ground below the WSE within {:g} ft".format(CROSSING_RADIUS_FT)
+        if got is None:
+            e["channel_basis"] = CR.BASIS_CHANNEL_NONE.format(why)
+            continue
+        e["channel_depth"], e["channel_bed"] = got["depth_ft"], got["bed_ft"]
+        e["channel_basis"] = CR.BASIS_CHANNEL.format(CROSSING_RADIUS_FT)
+        n += 1
+    return n
+
+
 def mark_incremental(records, breach_eval, base_eval, min_depth_ft):
     """{id: (charged?, note)} of the flooded facilities against the
     baseline evaluation (None = no baseline: every flooded one is charged)."""
@@ -543,7 +578,8 @@ CROSSING_FIELDS = [("Structure", FT_STRING), ("Category", FT_STRING),
                    ("Flooded", FT_STRING), ("Max_Depth_ft", FT_DOUBLE),
                    ("Arrival_hr", FT_DOUBLE), ("Base_Depth_ft", FT_DOUBLE),
                    ("Charged", FT_STRING), ("Note", FT_STRING), ("Basis", FT_STRING),
-                   ("Source", FT_STRING)]
+                   ("Source", FT_STRING), ("Channel_Depth_1m_ft", FT_DOUBLE),
+                   ("Channel_Bed_ft", FT_DOUBLE), ("Channel_Basis", FT_STRING)]
 
 
 def _round(v, n=2):
@@ -601,7 +637,9 @@ def facilities_layer(records, kind, ev, base_ev, charged, crs, name):
                              r.get("scour") or NULL, "Yes" if wet else "No",
                              _round(e.get("depth")), _round(e.get("arrival")),
                              _round(b.get("depth")), charged_txt, note or NULL,
-                             r.get("basis") or NULL, r["source"]])
+                             r.get("basis") or NULL, r["source"],
+                             _round(e.get("channel_depth")), _round(e.get("channel_bed")),
+                             e.get("channel_basis") or NULL])
         else:
             f.setAttributes([r["name"], r["category"], "Yes" if r.get("lifeline") else "No",
                              r.get("detail") or NULL, "Yes" if wet else "No",
@@ -633,6 +671,9 @@ def describe(recs, ev, n=4, dam=False):
                     extra.append("ADT {:,.0f}".format(r["adt"]))
         if d is not None:
             extra.append("{:.1f} ft".format(d))
+            cd = (ev.get(r["id"]) or {}).get("channel_depth")
+            if r.get("kind") == KIND_CROSSING and cd is not None:
+                extra.append("{:.1f} ft in the 1 m channel".format(cd))
         items.append("{} ({})".format(r["name"], ", ".join(extra)))
     more = "" if len(recs) <= n else " and {} more".format(len(recs) - n)
     return "; ".join(items) + more

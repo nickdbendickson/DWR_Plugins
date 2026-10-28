@@ -26,7 +26,7 @@ from .constants import (
     DEFAULT_ACCESS_SEARCH_FT, DEFAULT_WARNING_ISSUED_HR, ND_RANK, lifeline_downloads, DAM_SEARCH_FT,
     ND_ROADS_URL, HPMS_ND_URLS, ND_COUNTY_ROADS_URL,
     GRP_RESULTS, GRP_ZONES, GRP_SAMPLES, GRP_HYDRAULICS, GRP_EAP, STRUCTURES_FAMILY, SUBDIR_CLASSIFICATION, SUBDIR_EAP, SUBDIR_QA, OUTPUT_SUBDIRS, MAPBOOK_DEFAULT_SCALE, TRAVEL_STATION_MI, DEFAULT_PARCEL_MAX_ACRES,
-    NHD_FLOWLINE_URL, NDDOT_AADT_URL, NDDOT_AADT_LAYERS, ZONE_LABELS,
+    NHD_FLOWLINE_URL, NDDOT_AADT_URL, NDDOT_AADT_LAYERS, ZONE_LABELS, CROSSING_RADIUS_FT,
 )
 from .compat import MSG_WARNING, environment_summary
 from .helpers import (
@@ -2935,8 +2935,21 @@ def _run_scenario(run, sc, lyrs, structs, acrs, clip, inputs, cross_idx, tick, o
         res["cell_size"] = (abs(samplers["depth"].gt[1]), abs(samplers["depth"].gt[5])) \
             if samplers["depth"].ok and samplers["depth"].gt else None
         if sc.role == ROLE_BREACH:
-            if ext is not None and (inputs["roads"] is not None or inputs["rail"] is not None):
+            # 2.18.69 (DWR-3034 item 8): wet crossings get a 1 m channel depth as well
+            wet_x = [r for r in res["facility_records"] if r.get("kind") == FAC.KIND_CROSSING
+                     and (res["fac_eval"].get(r["id"]) or {}).get("depth") is not None]
+            if ext is not None and (inputs["roads"] is not None or inputs["rail"] is not None
+                                    or wet_x):
                 _open_crown(run, sc, lyrs, samplers, acrs)
+            if wet_x:
+                n_ch = FAC.channel_depths(wet_x, res["fac_eval"], samplers.get("crown"),
+                                          samplers.get("crown_note") or "")
+                run.log("{}: wet crossings: {} of {} with a 1 m channel depth (WSE (Max) - "
+                        "lowest 1 m ground within {:g} ft; Bridges_Culverts_Crossings "
+                        "Channel_Depth_1m_ft){}".format(
+                            sc.name, n_ch, len(wet_x), CROSSING_RADIUS_FT,
+                            "" if samplers.get("crown") is not None else
+                            " - " + str(samplers.get("crown_note") or "")))
             if inputs["roads"] is not None and ext is not None:
                 run.mark("{}: roads".format(sc.name))
                 res["roads"] = analyze_roads(
@@ -3371,7 +3384,11 @@ def _extra_sections(run, breaches, gov, qa_rows, inputs):
             line += ": " + FAC.describe(wet, ev, n=8)
         sec["crossings"] = [line, "Depth at a bridge includes the channel under it - confirm "
                             "deck / approach overtopping and culvert washout (layer "
-                            "Bridges_Culverts_Crossings, sorted by ADT)"]
+                            "Bridges_Culverts_Crossings, sorted by ADT)",
+                            "Max_Depth_ft is the 30 m depth cell; Channel_Depth_1m_ft is WSE "
+                            "(Max) - the lowest 1 m ground within {:g} ft (the water on a ford "
+                            "or culvert road, the channel under a bridge)".format(
+                                CROSSING_RADIUS_FT)]
     else:
         sec["crossings"] = ["Not screened - no bridge / culvert data downloaded"]
     n_out = sum(1 for _r, i in qa_rows if i.startswith("outline"))

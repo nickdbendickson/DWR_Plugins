@@ -293,3 +293,38 @@ def line_check(st, arrival_ok, src=None, pts=None, i0=0, i1=0, depth_ft=None):
     if c.get("basis") in (BASIS_CROWN, BASIS_RASTER) and not c.get("overtop_ft", 0.0) > 0.0:
         return DECISION_BELOW_CROWN, c
     return DECISION_COUNTED, c
+
+
+# --- 2.18.69 (DWR-3034 review, item 8): crossing depth in the channel on the 1 m DEM --------
+CHANNEL_STEP_M = 1.0         # the 1 m DEM is read on this grid around the crossing point
+BASIS_CHANNEL = "WSE (Max) - lowest 1 m ground within {:g} ft"
+BASIS_CHANNEL_NONE = "no 1 m channel depth: {}"
+
+
+def channel_depth(src, x, y, radius_ft, step_m=CHANNEL_STEP_M):
+    """Depth in the channel at a crossing point (x, y in the analysis CRS) on the run's 1 m
+    DEM: the deepest WSE (Max) - 1 m ground over a step_m grid within radius_ft of the point
+    (the thalweg the 30 m 'Depth (Max)' cell averages away - DWR-3034: a ford read 3.24 ft on
+    its 30 m cell, ~9.4 ft over the 1 m channel bed). For a ford or a culvert road it is the
+    water over the crossing; under a bridge it is the channel below the deck, not overtopping.
+    Returns {"depth_ft", "bed_ft", "wse_ft", "x", "y", "n"} or None when no point inside the
+    radius has both a 1 m ground and a WSE with water above the ground."""
+    if src is None or x is None or y is None:
+        return None
+    u = float(src.unit_m or 1.0)
+    r = float(radius_ft) * FT / u
+    st = float(step_m) / u
+    n = int(math.floor(r / st))
+    off = np.arange(-n, n + 1, dtype=float) * st
+    gx, gy = np.meshgrid(off, off)
+    keep = gx * gx + gy * gy <= r * r + 1e-9
+    xy = np.column_stack([gx[keep] + float(x), gy[keep] + float(y)])
+    ground = np.asarray(src.dem(xy), dtype=float) / FT
+    wse = src.wse_ft(xy)
+    d = wse - ground
+    ok = np.isfinite(d) & (d > 0.0)
+    if not ok.any():
+        return None
+    i = int(np.flatnonzero(ok)[np.argmax(d[ok])])
+    return {"depth_ft": float(d[i]), "bed_ft": float(ground[i]), "wse_ft": float(wse[i]),
+            "x": float(xy[i, 0]), "y": float(xy[i, 1]), "n": int(ok.sum())}
