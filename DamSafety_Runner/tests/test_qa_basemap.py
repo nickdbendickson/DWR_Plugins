@@ -408,10 +408,18 @@ def qa_basemap_cache_is_capped_and_never_in_run_folders():
         os.makedirs(run)
         with _env(NDBREACH_BASEMAP_CACHE=os.path.join(run, "cache")), _no_sockets():
             assert BM.Cache(avoid=(run,)).root == ""
-            info, _p = QA.write_qa_maps("inflow", run, "C1", _grid(), (-92780.0, 2657270.0),
-                                        None, 290.0, basemap_opts={"opener": FakeNet()})
-            assert info["basemap"]["maps"]["inflow_map"]["source"] == "nd_naip_2025"
-        assert sorted(os.listdir(run)) == ["qa_inflow_map.png"], os.listdir(run)
+            if _have_mpl():                 # the PNG needs matplotlib (not in the CI env)
+                info, _p = QA.write_qa_maps("inflow", run, "C1", _grid(),
+                                            (-92780.0, 2657270.0), None, 290.0,
+                                            basemap_opts={"opener": FakeNet()})
+                assert info["basemap"]["maps"]["inflow_map"]["source"] == "nd_naip_2025"
+            else:
+                print("   (map part skipped: no matplotlib)")
+            # the imagery path itself (no matplotlib): the cache asked for in the run folder is off
+            bm = BM.render(_bbox(), _wkt(), 200, 200, avoid=(run,), opener=FakeNet())
+            assert bm.source == "nd_naip_2025", bm.info
+        assert sorted(os.listdir(run)) in (["qa_inflow_map.png"], []), os.listdir(run)
+        assert not os.path.exists(os.path.join(run, "cache"))
         cdir = os.path.join(root, "user_cache")
         c = BM.Cache(root=cdir, cap_mb=0.01)                  # ~10 kB
         for i in range(8):
