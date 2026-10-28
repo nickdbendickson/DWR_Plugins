@@ -151,6 +151,24 @@ def dem_crest_on_line(read, line_xy, cell_m=1.0, half_width_m=3.0):
         .format(half_width_m)
 
 
+def _dem_units_suspect(dem_crest_ft, fields):
+    """Why the DEM crest cannot stand in for a local top (None when it can): outside ND's
+    ground (damsuite.vdatum ND_MIN_FT - ND_MAX_FT), or the DEM / top ratio is the
+    feet-metres factor (3.2808 within 3 %) - a DEM in the wrong units, which the run's
+    unit check reports instead of the DEM being taken as the top of dam."""
+    d = float(dem_crest_ft)
+    if not (VD.ND_MIN_FT <= d <= VD.ND_MAX_FT):
+        return ("the DEM crest {:.2f} ft is outside North Dakota's {:.0f} - {:.0f} ft (DEM units or "
+                "datum?)".format(d, VD.ND_MIN_FT, VD.ND_MAX_FT))
+    top = (fields.get("top_of_dam_ft") or {}).get("source")
+    if top:
+        for r in (d / float(top), float(top) / d):
+            if abs(r - 3.28084) / 3.28084 < 0.03:
+                return ("the DEM crest {:.2f} ft is {:.3f} x the top of dam {:.2f} ft - the feet / "
+                        "metres factor (DEM units?)".format(d, d / float(top), float(top)))
+    return None
+
+
 def apply_local(dam, st, dem_crest_ft, crest_from="DEM near the dam point", log=None):
     """3.12.1 (damsuite 1.18.1) local datums (damsuite.vdatum.local_check): after the run has read the DEM crest,
     a dam whose elevations are local (stated / chosen "local", or detected in auto) has its
@@ -192,6 +210,10 @@ def apply_local(dam, st, dem_crest_ft, crest_from="DEM near the dam point", log=
                         break
         if not hit:
             return rec, False
+    bad = _dem_units_suspect(dem_crest_ft, f)
+    if bad:                         # a DEM in the wrong units / datum: the run's unit checks say so
+        log("Local datum not applied: " + bad)
+        return rec, False
     rec["_local_done"] = True
     top = f.get("top_of_dam_ft")
     offset = float(dem_crest_ft) - top["source"] if top else None

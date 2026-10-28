@@ -252,6 +252,22 @@ def test_vdatum_local_normal_value_still_converted():
 
 
 @test
+def test_vdatum_local_not_applied_on_a_dem_in_the_wrong_units():
+    """A DEM in feet read as metres (x 3.28) or outside ND's ground is not taken as the
+    top of dam: the local step does nothing and the run's unit check reports it
+    (run_tests.wrong_dem_units_are_caught)."""
+    from nd_breach_runner.core import vdatum_run as vdrun
+    for top, dem_ft in ((1850.0, 1850.0 / 0.3048), (900.0, 900.0 / 0.3048), (100.0, 4500.0)):
+        dam = _dam(top=top)
+        st = _st()
+        vdrun.apply(dam, st, LON, LAT)
+        before = dam.top_of_dam_ft
+        rec, changed = vdrun.apply_local(dam, st, dem_ft)
+        assert not changed and not rec.get("local"), (top, dem_ft, rec)
+        assert dam.top_of_dam_ft == before
+
+
+@test
 def test_vdatum_local_override_and_explicit_datum():
     from nd_breach_runner.core import vdatum_run as vdrun
     # "Local (use DEM)" chosen: a plausible-looking value is still taken from the DEM
