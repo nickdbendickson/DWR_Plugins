@@ -130,4 +130,6 @@ check("an old pack file (no nodes / changeset): merged by distance + category",
       len(FAC.dedupe(old, CRS)) == 1, [r["struct_no"] for r in old])
 
 print("\n{} failure(s)".format(len(FAILS)))
-sys.exit(1 if FAILS else 0)
+sys.stdout.flush()
+# os._exit before the real-QgsApplication offscreen teardown (CI: std::bad_alloc at shutdown)
+os._exit(1 if FAILS else 0)
