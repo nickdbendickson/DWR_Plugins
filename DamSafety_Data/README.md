@@ -79,6 +79,30 @@ The one renamed field, 2022 `ground_elv_meters`, is written as the 2026
 `grnd_elv_m`. `nsi/nsi_summary.json` lists point counts per county and in total.
 Changing the version or the match distance rebuilds the NSI copy at the next check.
 
+## Build offline pack… (1.5.0)
+
+Data menu > **Build offline pack…** downloads every layer of the suite's offline pack and
+writes it twice from the same download, into a folder you pick:
+
+| Folder | Format | What reads it |
+|---|---|---|
+| `ND_Dam_Suite_Pack/` | 2: one GeoPackage per layer (structures, roads, railroads, lifelines, hydro, dwr, hifld, boundaries, landcover), `manifest.json`, `LAYERS.txt` | Setup, Hazard, Runner, Screening |
+| `nd_offline_pack/nd_offline_pack.sqlite` + `manifest.json` | 1: every vector layer in one file (no raster; the manifest's `rasters_not_included` says so) | older plugin versions |
+| `ND_Dam_Suite_Pack_build/` | the work file and downloads | resume only; delete after the build if you like |
+
+- **All pack layers** (default) or tick the ones you want. Area: all of North Dakota, a small
+  test box, or your own box.
+- Optional local files: a DWR folder (needed for `DWR_unknown_structures`, which the DWR
+  MapService does not publish), a HIFLD folder, an NLCD GeoTIFF.
+- Run it again to finish a stopped build: finished layers are kept ("Download everything
+  again" fetches all). Each manifest entry has the source URL, date, count and sha256.
+- It refuses a folder that is a pack, holds a pack it did not build, or holds the pack the
+  plugins read now: an existing pack is never written into.
+- NLCD 2021 comes from the MRLC WCS; when that is down, from the Esri Annual NLCD image
+  service (year 2021, same class codes); the manifest names the source used.
+- Command line: `python3 -m DamSafety_Data.pack_build --out <folder> [--bbox w,s,e,n]
+  [--only NAME,...] [--list] [--verify]`.
+
 ## When it checks
 
 - About 20 seconds after QGIS starts, then hourly while QGIS is open, but never

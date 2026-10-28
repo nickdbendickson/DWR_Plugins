@@ -63,6 +63,13 @@ IDENTICAL_ACROSS_PLUGINS = {
     # audit R-H1: the Suite status dock's Linux LISFLOOD-FP build applies the same patch
     "scripts/build_lisflood_linux.sh": ("DamSafety_Runner", "DamSafety_Setup"),
     "scripts/patch_lisflood.py": ("DamSafety_Runner", "DamSafety_Setup"),
+    # Data 1.5.0: the Hazard's pack engine, vendored so Data's "Build offline pack…" downloads
+    # exactly what the Hazard's build_nd_pack.py does (edit the Hazard copy, then copy it over)
+    "build_nd_pack.py": ("DamSafety_Hazard", "DamSafety_Data"),
+    "constants.py": ("DamSafety_Hazard", "DamSafety_Data"),
+    "osm_parse.py": ("DamSafety_Hazard", "DamSafety_Data"),
+    "dwr_files.py": ("DamSafety_Hazard", "DamSafety_Data"),
+    "offline_pack.py": ("DamSafety_Hazard", "DamSafety_Data"),
 }
 
 

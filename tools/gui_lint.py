@@ -276,6 +276,8 @@ def main():
     data = NdDataUpdaterPlugin(None)          # no iface: initGui is not called
     check("Data settings", opened("Data settings", lambda: SettingsDialog(data.settings, data, None)),
           close=False)
+    from DamSafety_Data.pack_dialog import PackDialog
+    check("Data build offline pack", opened("Data build offline pack", lambda: PackDialog(None)))
 
     from DamSafety_Setup.plugin import SetupWizard
     check("Setup wizard", opened("Setup wizard", lambda: SetupWizard(None)), close=False)
