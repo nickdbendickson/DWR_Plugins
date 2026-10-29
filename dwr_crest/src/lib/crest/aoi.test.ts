@@ -10,6 +10,7 @@ import {
   squareAoi,
 } from "./aoi.ts";
 import { analyze, screenReceptors } from "./engine.ts";
+import { SAMPLE_DAMS } from "./samples.ts";
 import { exportDamJson } from "./export.ts";
 import { dwr2801 } from "./fixtures.ts";
 import type { DamGeometry, DamRecord, GeoJSONFeature } from "./types.ts";
@@ -391,5 +392,164 @@ describe("no AOI and large AOI", () => {
     assert.equal(a.screen.level, "Review");
     assert.match(a.screen.label, /2 unresolved \(outside drawn area\)/);
     assert.ok(a.flood.aoi!.wetAtEdge);
+  });
+});
+
+describe("PR #6 follow-ups", () => {
+  // A. A breach on the outline (an edge or a corner) counts as inside within BOUNDARY_TOL_M.
+  it("A: breach on the top edge of a 6 km-wide area gives the same 3.0 km / 275 ac as a centred 6 km square", () => {
+    const centred = analyze(dam(squareAoi(SITE.lon, SITE.lat, 3)));
+    assert.equal(Math.round(centred.flood.acres), 275);
+    const edge = analyze(dam(rect(-3, 3, -3, 0)));
+    assert.equal(edge.flood.aoi!.applied, true);
+    assert.ok(Math.abs(edge.flood.lengthM - 3000) < 2, `reach ${edge.flood.lengthM}`);
+    assert.ok(Math.abs(edge.flood.acres - centred.flood.acres) < 0.5, `acres ${edge.flood.acres}`);
+    assert.equal(Math.round(edge.flood.acres), 275);
+    assert.equal(edge.screen.label, centred.screen.label);
+    assert.ok(!edge.flood.warnings.some((w) => w.includes("does not reach")));
+    assert.ok(
+      edge.flood.receptors.some((r) => !r.outsideAoi),
+      "receptors inside are resolved",
+    );
+  });
+
+  it("A: breach on a corner or a triangle vertex, and 0.5 m outside, count from the breach", () => {
+    const nudge = (aoi: GeoJSONFeature) => analyze(dam(aoi)).flood;
+    const corner = nudge(rect(0, 3, -3, 0));
+    const cornerIn = nudge(rect(-0.00001, 3, -3, 0.00001));
+    assert.ok(Math.abs(corner.lengthM - 3000) < 2);
+    assert.ok(
+      corner.acres > 100 && Math.abs(corner.acres - cornerIn.acres) < 0.5,
+      `${corner.acres}`,
+    );
+    const tri = nudge(
+      polygonKm(SITE, [
+        [0, 0],
+        [-3, -3],
+        [3, -3],
+      ]),
+    );
+    const triIn = nudge(
+      polygonKm(SITE, [
+        [0, 0.00001],
+        [-3, -3],
+        [3, -3],
+      ]),
+    );
+    assert.ok(Math.abs(tri.lengthM - 3000) < 2 && Math.abs(tri.acres - triIn.acres) < 0.5);
+    const near = analyze(dam(rect(-3, 3, -3, -0.0005)));
+    assert.ok(!near.flood.warnings.some((w) => w.includes("breach location is outside")));
+    assert.ok(Math.abs(near.flood.acres - 275) < 0.5);
+  });
+
+  // B. The samples carry a dam line and a reservoir point.
+  it("B: every sample has a dam-line direction; ND00199's runs SE (~130 deg) like the DSS-WISE flood", () => {
+    for (const d of SAMPLE_DAMS) {
+      assert.equal(d.geometry?.damLine?.geometry.type, "LineString", d.id);
+      assert.equal(d.geometry?.reservoirPoint?.geometry.type, "Point", d.id);
+      const loc = { lat: d.lat ?? NaN, lon: d.lon ?? NaN };
+      const line = d.geometry!.damLine!.geometry.coordinates as number[][];
+      const at = Number.isFinite(loc.lat)
+        ? loc
+        : { lon: (line[0][0] + line[1][0]) / 2, lat: (line[0][1] + line[1][1]) / 2 };
+      assert.equal(downstreamDirection(d.geometry, at).basis, "dam line", d.id);
+    }
+    const nd = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
+    const u = downstreamDirection(nd.geometry, { lat: nd.lat!, lon: nd.lon! }).u!;
+    const deg = ((Math.atan2(u[0], u[1]) * 180) / Math.PI + 360) % 360;
+    assert.ok(deg > 120 && deg < 140, `bearing ${deg}`);
+    assert.equal(analyze(nd).flood.aoi, null, "no AOI on the sample itself");
+  });
+
+  it("B: a 22 km corridor drawn along the ND00199 sample's valley keeps the full natural reach", () => {
+    const nd = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
+    const loc = { lat: nd.lat!, lon: nd.lon! };
+    const b = (130 * Math.PI) / 180;
+    const u = [Math.sin(b), Math.cos(b)];
+    const v = [u[1], -u[0]];
+    const c = (a: number, w: number): [number, number] => [
+      a * u[0] + w * v[0],
+      a * u[1] + w * v[1],
+    ];
+    const corridor = polygonKm(loc, [c(-0.05, -1), c(22, -1), c(22, 1), c(-0.05, 1)]);
+    const base = analyze(nd);
+    const a = analyze({ ...nd, geometry: { ...nd.geometry, aoi: corridor } });
+    assert.equal(a.flood.aoi!.applied, true);
+    assert.equal(a.flood.aoi!.directionBasis, "dam line");
+    assert.equal(a.flood.reachSource, "wet");
+    assert.equal(a.flood.lengthM, base.flood.lengthM);
+    assert.ok(a.flood.lengthM > 9000, `reach ${a.flood.lengthM}`);
+    assert.ok(
+      Math.abs(a.flood.acres - base.flood.acres) < 1,
+      `${a.flood.acres} vs ${base.flood.acres}`,
+    );
+    assert.equal(a.screen.label, base.screen.label);
+  });
+
+  // C. No direction and the breach outside: not applied (never assumed downstream).
+  it("C: no direction, AOI 2-5 km upstream: not applied, full flood, warns; never 5.0 km / 487 ac", () => {
+    const up = rect(-1, 1, 2, 5);
+    const a = analyze(dam(up, {}, {}));
+    assert.equal(a.flood.aoi!.applied, false);
+    assert.match(a.flood.aoi!.label, /^Drawn area not applied/);
+    assert.ok(
+      a.flood.warnings.some((w) =>
+        /breach location is outside the drawn area \(2\.0 km from it\).*downstream or upstream/.test(
+          w,
+        ),
+      ),
+    );
+    assert.equal(a.flood.lengthM, free.flood.lengthM);
+    assert.ok(Math.abs(a.flood.acres - free.flood.acres) < 1e-6);
+    assert.notEqual(Math.round(a.flood.acres), 487);
+    assert.equal(a.screen.label, free.screen.label);
+    assert.ok(a.flood.receptors.every((r) => !r.outsideAoi));
+    // A known High stays High (screened in full), it is not hidden behind the AOI.
+    const seeds = [house("House 0.5 km", 0.5)];
+    const h = analyze(dam(up, { receptors: seeds }, {}));
+    assert.equal(h.screen.level, "High");
+    // With a direction the same AOI is upstream: applied, nothing counted.
+    const d = analyze(dam(up));
+    assert.equal(d.flood.aoi!.applied, true);
+    assert.equal(d.flood.acres, 0);
+  });
+
+  it("C: no direction, breach on the outline: not applied, says 'on the drawn area's edge'", () => {
+    const a = analyze(dam(rect(-1, 1, -5, 0), {}, {}));
+    assert.equal(a.flood.aoi!.applied, false);
+    assert.ok(a.flood.warnings.some((w) => w.includes("on the drawn area's edge")));
+  });
+
+  // D. Wording.
+  it("D: a hole does not count as upstream area; the nearest-edge warning does not say 'downstream'", () => {
+    const pond: [number, number][][] = [
+      [
+        [-2, -1.5],
+        [2, -1.5],
+        [2, -1],
+        [-2, -1],
+      ],
+    ];
+    const h = analyze(dam(rect(-3, 3, -3, 1, pond)));
+    assert.ok(!h.flood.warnings.some((w) => w.includes("upstream of the breach")));
+    assert.ok(Math.abs(h.flood.aoi!.upstreamFrac! - 0.25) < 0.01, `${h.flood.aoi!.upstreamFrac}`);
+    const big = analyze(
+      dam(
+        rect(-3, 3, -2, 3, [
+          [
+            [-2, -1.5],
+            [2, -1.5],
+            [2, 2],
+            [-2, 2],
+          ],
+        ]),
+      ),
+    );
+    assert.ok(Math.abs(big.flood.aoi!.upstreamFrac! - 0.6) < 0.01, "filled outline, not net area");
+    const n = analyze(dam(squareAoi(SITE.lon, SITE.lat, 1), {}, {}));
+    assert.equal(n.flood.aoi!.reachBasis, "nearest-boundary");
+    const edge = n.flood.warnings.find((w) => w.startsWith("The schematic flood is still"))!;
+    assert.match(edge, /from the breach, direction unknown/);
+    assert.ok(!edge.includes("downstream"), edge);
   });
 });
