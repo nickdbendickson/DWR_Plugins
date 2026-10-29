@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.20.1
+ND Dam Hazard Classification Helper - Version 2.20.2
 ====================================================
 
 WHAT IT DOES
@@ -34,6 +34,13 @@ THE WINDOW (2.18.34)
 - Classify is the one run button ("Run everything" and "Run Hazard
   Classification" ran the same classification). Input errors show in the
   red box above it, not in a pop-up, and keep it off until they are fixed.
+
+NEW IN 2.20.2 (offline pack engine 1.3, shared with DamSafety Data 1.5.1)
+- build_nd_pack reads an ArcGIS layer area by area when asked (0.25 degree
+  tiles, a tile that times out is split) and fills only the areas it cannot
+  serve from a second service; a page refused with HTTP 400 is tried with
+  smaller pages; a DWR GeoPackage note gives the file's own date. No
+  classification changes.
 
 NEW IN 2.15.0 (with ND Dam Breach Runner 3.7.0 and ND Dam Breach Screening 0.14.0)
 - A proposed dam (Screening tool 19) is named in the summary and the PDF.

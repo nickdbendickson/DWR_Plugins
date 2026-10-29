@@ -107,7 +107,14 @@ writes it twice from the same download, into a folder you pick:
     Treatment Plants"; 240789 is a later copy of the same layer; 239290 / 239287 are only its
     SIC / NAICS code tables and are ignored) into one folder and pick it as the HIFLD folder.
     Features outside North Dakota are dropped. Without a file the layer is left out (the
-    manifest's `left_out` names the page). There is no mirror fallback.
+    manifest's `left_out` names the page). There is no mirror fallback. Since 1.5.1 the
+    manifest credits a file by what is known about it: the reference pack's four files
+    (recognised by sha256) get the source its manifest records (fire / EOC / law: the HIFLD
+    national shapefile from hsdl.org; wastewater: DataLumos, with a `provenance_check` note that
+    the reference manifest's project 239290 is the SIC-code table, the points being 239262);
+    any other file is credited as "supplied for the build" with its sha256 and
+    `source_origin: not recorded`. File dates are the file's own (GeoPackage last change), not
+    the day it was copied.
   - **HPMS and NDDOT, side by side.** `HPMS_ND_<year>` (FHWA HPMS, newest year that answers) and
     `NDDOT_traffic_counts` are both in the pack so their AADT can be compared; both manifests
     and LAYERS.txt say so (`note`).
@@ -120,8 +127,11 @@ writes it twice from the same download, into a folder you pick:
   - **3DHP replaces NHD**, keeping the names `NHD_flowlines` / `NHD_waterbodies` (the Hazard /
     Runner culvert tools and Setup look for those names). The USGS 3DHP map service
     (`3DHP_all/MapServer` 50 flowlines, 60 waterbodies) is read and `gnis_name`, `gnis_id`,
-    `ftype`, `fcode` are added; the 3DHP fields stay. When 3DHP fails, the NHD service is used
-    and the manifest says why (`hydro_source`, `fallback_reason`).
+    `ftype`, `fcode` are added; the 3DHP fields stay. Since 1.5.1 it is read area by area
+    (0.25 degree tiles; a tile that times out is split); only the areas 3DHP cannot serve are
+    filled from the NHD service. Every feature has `hydro_src` = `3DHP` or `NHD`, and the
+    manifest gives `hydro_source` (`3DHP`, `NHD` or `3DHP+NHD`), `count_3dhp` / `count_nhd`,
+    the areas filled or not read (`areas`) and `fallback_reason`.
   - **SARP National Aquatic Barrier Inventory** (`barriers/`): `ABI_dams` and
     `ABI_small_barriers_surveyed` from the public API (`tool.aquaticbarriers.org/api/v1/public/
     <dams|barriers>/state?id=ND`); `ABI_road_crossings_unsurveyed` from the national
