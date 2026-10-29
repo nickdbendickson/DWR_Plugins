@@ -1,0 +1,12 @@
+{
+ "method": "POST",
+ "url": "https://streamstats.usgs.gov/nssservices/scenarios/estimate?regions=ND",
+ "label": "DWR4031_sg74_estimate",
+ "request_body_sha256": "0da45f685e56027d2386c931568f57641a0996727482f688db62d64dc810d0c5",
+ "response_sha256": "dbcb108fa75f19b7dd9bdd00ba4512bff50dd00af7f0b9d7d7634befdfe444b8",
+ "bytes": 977,
+ "http_status": 200,
+ "elapsed_s": 0.05,
+ "retrieved_utc": "2026-10-29T14:58:04+00:00",
+ "client": "streamstats_client 0.1.0"
+}

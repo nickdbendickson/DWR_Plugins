@@ -1,4 +1,4 @@
-# DamSafety_PMP (ND PMP Tool, prototype v0.3.0): INTERNAL / EXPERIMENTAL
+# DamSafety_PMP (ND PMP Tool, prototype v0.4.0): INTERNAL / EXPERIMENTAL
 
 > **LICENSING / PERMISSION: READ FIRST**
 > - This plugin ports Applied Weather Associates' (AWA) ND PMP Evaluation Tool (2021) from the North Dakota statewide PMP study.
@@ -36,6 +36,33 @@ time_hr,flow_cfs,precip_in,excess_in
   - Inputs: `ND_PMP_DATA_HOME` (the PMP_Evaluation_Tool folder), the Medina test inputs (`medina_pmp/`, `pothole_ws/`, `NOAA_Dist_C.xlsx`, `dem3dep.tif`), and `ND_PMP_HMS_HOME`.
   - `validate_pothole.py` runs its synthetic-cone part whenever WhiteboxTools is found.
 - Use a conda/QGIS Python with GDAL ≥ 3.7. `run_tests.py` sets `PROJ_DATA` from the interpreter's prefix.
+- `tests/test_streamstats.py` (offline, saved StreamStats responses for DWR 2801 and DWR 4031, no QGIS) is in the light set. `tests/test_streamstats_dialog.py` opens the dialog offscreen with real QGIS and a mocked client (`QT_QPA_PLATFORM=offscreen`; run it with `python -c "import os, sys, pytest; rc = pytest.main([...]); os._exit(int(rc))"`, as CI does). Set `PMP_SHOTS=<folder>` to save screenshots.
+
+## Get basin data from StreamStats… (v0.4.0)
+
+**Plugins > DamSafety PMP > Get basin data from StreamStats…** fills the basin inputs for **Inflow hydrograph** from USGS StreamStats and shows a read-only sanity check for the PMF.
+
+1. **Outlet point.** Click **Pick on map…** and click the creek just below the dam, or choose a point layer and a dam and click **Use the dam point**. A dam's mapped point is often on the embankment or in the reservoir, off the stream line. If StreamStats can't snap it, the window says *"Not on the stream network … Move the point onto the channel just below the dam"* and nothing is filled.
+2. **Get basin data.** StreamStats outlines the basin. The window loads it as a layer (`<name>_watershed.geojson`) and fills:
+   - **Drainage area** (DRNAREA).
+   - **Non-contributing area, suggested**: ISOLAKESUM, the area draining to isolated lakes and potholes. This is only a starting value; you decide the non-contributing area (or run `pothole_storage`).
+   - **Tc / lag**: Kirpich (1940) from the longest flow path and its 10-85 slope (lag = 0.6 Tc), or the NRCS lag equation with **your own CN**. The window says which method was used. **CN is never taken from StreamStats.**
+3. **Sanity check (read-only).** The ND regression peaks for 50% to 0.2% AEP, with ~90% ranges from each equation's average standard error, and the Crippen & Bue (1977) maximum-flood envelope.
+4. **Open Inflow hydrograph…** opens the tool with the area, non-contributing area, Tc, lag and the StreamStats basin file filled (CN left as you set it). After the run, the tool compares the PMF peak with the 0.2% AEP peak and the envelope and writes `streamstats_pmf_check.json` next to the hydrographs. These are plain-language warnings; they never stop the run. **Open PMP tool…** opens `ndpmp:pmp` with the basin layer.
+
+The run runs in the background with progress and **Cancel**. Files go to the chosen folder: `<name>_watershed.geojson`, `<name>_streamstats_basin.json` (the values) and `<name>_streamstats_provenance.json` (service versions, query time, region, point and snapped point, every request with the sha256 of its answer, and the citations). Answers are cached in `<folder>/streamstats_cache/` by sha256 of the request; a cached file whose hash no longer matches is refused.
+
+**Source.** Williams-Sether, T., 2015, Regional regression equations to estimate peak-flow frequency at sites in North Dakota using data through 2009: U.S. Geological Survey Scientific Investigations Report 2015-5096, 12 p., https://doi.org/10.3133/sir20155096 (StreamStats ND, peak-flow region C equations, average standard errors 51-83%). Envelope: Crippen, J.R., and Bue, C.D., 1977, Maximum floodflows in the conterminous United States: U.S. Geological Survey Water-Supply Paper 1887, https://doi.org/10.3133/wsp1887.
+
+**Limits.**
+- The regression peaks are for **rural, unregulated** basins with characteristics inside the ranges used in SIR 2015-5096. The window warns when StreamStats flags a value outside them. They are not a PMF; they are a check on the order of magnitude.
+- The Crippen & Bue envelope is the largest observed US floods for the area, also not a PMF. A PMF well below the 0.2% AEP peak, or well above the envelope, deserves a second look; neither is proof of an error.
+- Pothole country: the drainage area is the whole outlined basin. How much of it contributes is your call.
+- North Dakota points only (the window checks the box 45.9-49.05 N, 104.1-96.5 W).
+
+**Services (Jan 2026 migration).** StreamStats moved to new open-source services (application 4.30.0, Dec 2025), and USGS switched the legacy `streamstatsservices` off on 2026-01-30; USGS notes results may differ slightly from the old services. This tool uses the new `ss-delineate` and `ss-hydro` services (versions recorded in the provenance file; tested with ss-delineate 1.2.0 and ss-hydro 1.4.0) and NSS for the regression equations. If USGS changes them again, the window says "StreamStats failed" with the reason; saved runs and the cache still work.
+
+**Using the USGS services.** StreamStats is a free public USGS service with no key. USGS asks for no more than 4 requests at once; this tool sends **one at a time, at least 2 s apart**, with the User-Agent `DamSafety_PMP/<version> (QGIS plugin; North Dakota dam safety; …)`, and reuses the cache, so asking again for the same point sends nothing. Requests use Python's `urllib`: they honour the `HTTPS_PROXY` / `HTTP_PROXY` environment variables, not the QGIS proxy settings. Results are provisional USGS products; check them before use.
 
 ---
 

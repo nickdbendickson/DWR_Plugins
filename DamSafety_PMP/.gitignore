@@ -13,6 +13,7 @@ syn_out/
 pothole_sens/
 *.json
 !**/FILES.json
+!tests/fixtures_streamstats/**/*.json
 *.gpkg
 *.tif
 *.shp

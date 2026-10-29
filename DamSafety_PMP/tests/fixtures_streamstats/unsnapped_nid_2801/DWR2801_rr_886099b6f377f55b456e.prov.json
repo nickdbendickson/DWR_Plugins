@@ -1,0 +1,12 @@
+{
+ "method": "POST",
+ "url": "https://streamstats.usgs.gov/nssservices/regressionregions/bylocation",
+ "label": "DWR2801_rr",
+ "request_body_sha256": "9ec6b9f5c00b4c5efa6a2c072227c5a5ed8d4ec975a2d7359e19b4c35bdfb7d8",
+ "response_sha256": "ce5b66c787b55d1ad895dc21fa8aeae419f8d1a77d16386bdb0daa26be053407",
+ "bytes": 2326,
+ "http_status": 200,
+ "elapsed_s": 4.77,
+ "retrieved_utc": "2026-10-29T14:58:31+00:00",
+ "client": "streamstats_client 0.1.0"
+}
