@@ -14,11 +14,13 @@ PLUGIN = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FT = 0.3048
 
 
+# 150 m lift: the bed is 250 m (820 ft), above the 0-500 ft local band. At 100 m (328 ft)
+# reconcile_inverts would treat the inventory as a local datum. Offsets are unchanged.
 def _road_over_channel(x, y):
-    """A channel along x = 0 flowing south (bed 100 m, falling 2 mm/m), a 5 m road embankment
-    along y = 0 (crest 105 m, 1:2 slopes) with the channel's slot filled - as LiDAR shows it."""
-    bed = 100.0 + 0.002 * y + 0.02 * np.abs(x)
-    emb = 105.0 - np.maximum(0.0, np.abs(y) - 6.0) * 0.5
+    """A channel along x = 0 flowing south (bed 250 m, falling 2 mm/m), a 5 m road embankment
+    along y = 0 (crest 255 m, 1:2 slopes) with the channel's slot filled - as LiDAR shows it."""
+    bed = 250.0 + 0.002 * y + 0.02 * np.abs(x)
+    emb = 255.0 - np.maximum(0.0, np.abs(y) - 6.0) * 0.5
     return np.maximum(bed, np.where(np.abs(y) < 16.0, emb, -1e9))
 
 
@@ -50,10 +52,10 @@ def _culvert(up, dn, kind="culvert", rise=1.0, name="C"):
 def v360_inventory_inverts_within_tolerance_are_used_as_given():
     from nd_breach_runner.core import structures as S
     tol = 3.0 * FT
-    s = _culvert(100.3, 99.8)                          # bed about 100.04 / 99.96
+    s = _culvert(250.3, 249.8)                          # bed about 250.04 / 249.96
     notes = S.reconcile_inverts([s], _Terrain().read, tol, 1.0)
-    assert s.invert_up_m == 100.3 and s.invert_dn_m == 99.8, (s.invert_up_m, s.invert_dn_m)
-    assert s.invert_inventory == (100.3, 99.8)
+    assert s.invert_up_m == 250.3 and s.invert_dn_m == 249.8, (s.invert_up_m, s.invert_dn_m)
+    assert s.invert_inventory == (250.3, 249.8)
     assert len(notes) == 1 and "inventory inverts used" in notes[0] and "within 3.0 ft" in notes[0], notes
     assert "+0.8 ft" in notes[0] and "-0.5 ft" in notes[0], notes
     assert "rise does not fit" not in notes[0]
@@ -67,19 +69,19 @@ def v360_inventory_inverts_within_tolerance_are_used_as_given():
 def v360_a_datum_shift_is_corrected_and_disagreement_falls_back_to_lidar():
     from nd_breach_runner.core import structures as S
     tol = 3.0 * FT
-    s = _culvert(102.04, 101.96)                       # both ends 2.0 m above the bed
+    s = _culvert(252.04, 251.96)                       # both ends 2.0 m above the bed
     notes = S.reconcile_inverts([s], _Terrain().read, tol, 1.0)
-    assert abs(s.invert_up_m - 100.04) < 0.05 and abs(s.invert_dn_m - 99.96) < 0.05, (s.invert_up_m, s.invert_dn_m)
+    assert abs(s.invert_up_m - 250.04) < 0.05 and abs(s.invert_dn_m - 249.96) < 0.05, (s.invert_up_m, s.invert_dn_m)
     assert abs((s.invert_up_m - s.invert_dn_m) - 0.08) < 1e-9        # the slope survives
     assert "datum shift" in notes[0] and "+6.5 ft" in notes[0], notes
-    assert s.invert_inventory == (102.04, 101.96)
-    s = _culvert(103.0, 99.0)                          # +3 m and -1 m: not one shift
+    assert s.invert_inventory == (252.04, 251.96)
+    s = _culvert(253.0, 249.0)                          # +3 m and -1 m: not one shift
     notes = S.reconcile_inverts([s], _Terrain().read, tol, 1.0)
     assert s.invert_up_m is None and s.invert_dn_m is None
     assert "disagree with the LiDAR" in notes[0] and "LiDAR inverts used" in notes[0], notes
-    assert s.invert_inventory == (103.0, 99.0)
+    assert s.invert_inventory == (253.0, 249.0)
     # a tolerance of 0 accepts nothing but a datum shift
-    s = _culvert(100.3, 99.8)
+    s = _culvert(250.3, 249.8)
     S.reconcile_inverts([s], _Terrain().read, 0.0, 1.0)
     assert s.invert_up_m is None and "disagree" in s.invert_note
 
@@ -88,29 +90,29 @@ def v360_a_datum_shift_is_corrected_and_disagreement_falls_back_to_lidar():
 def v360_one_end_only_cover_check_nodata_and_errors():
     from nd_breach_runner.core import structures as S
     tol = 3.0 * FT
-    s = _culvert(100.3, None)                          # the missing end: bed + the same offset
+    s = _culvert(250.3, None)                          # the missing end: bed + the same offset
     S.reconcile_inverts([s], _Terrain().read, tol, 1.0)
-    assert s.invert_up_m == 100.3 and abs(s.invert_dn_m - (99.96 + 0.26)) < 0.05, s.invert_dn_m
+    assert s.invert_up_m == 250.3 and abs(s.invert_dn_m - (249.96 + 0.26)) < 0.05, s.invert_dn_m
     assert "n/a" in s.invert_note
     # a 10 m rise cannot sit under a 5 m embankment: noted, the inverts still used
-    s = _culvert(100.3, 99.8, rise=10.0)
+    s = _culvert(250.3, 249.8, rise=10.0)
     S.reconcile_inverts([s], _Terrain().read, tol, 1.0)
-    assert s.invert_up_m == 100.3 and "rise does not fit under the road crown" in s.invert_note
+    assert s.invert_up_m == 250.3 and "rise does not fit under the road crown" in s.invert_note
     assert "32.8 ft rise" in s.invert_note and "cover -" in s.invert_note, s.invert_note
     # bridges get no cover note (no roof)
-    b = _culvert(100.3, 99.8, kind="bridge", rise=10.0)
+    b = _culvert(250.3, 249.8, kind="bridge", rise=10.0)
     S.reconcile_inverts([b], _Terrain().read, tol, 1.0)
     assert "rise does not fit" not in b.invert_note and "inventory inverts used" in b.invert_note
     # no-data cells (-9999) near an end are not "the lowest ground"
-    s = _culvert(100.3, 99.8)
+    s = _culvert(250.3, 249.8)
     S.reconcile_inverts([s], _Terrain(nodata_at=(0.0, 20.0)).read, tol, 1.0)
-    assert s.invert_up_m == 100.3 and "inventory inverts used" in s.invert_note, s.invert_note
+    assert s.invert_up_m == 250.3 and "inventory inverts used" in s.invert_note, s.invert_note
     # no DEM at all: kept, unchecked, and said so
     def boom(bounds, cell):
         raise IOError("no raster here")
-    s = _culvert(100.3, 99.8)
+    s = _culvert(250.3, 249.8)
     notes = S.reconcile_inverts([s], boom, tol, 1.0)
-    assert s.invert_up_m == 100.3 and "kept unchecked" in notes[0] and "no raster here" in notes[0]
+    assert s.invert_up_m == 250.3 and "kept unchecked" in notes[0] and "no raster here" in notes[0]
     # the report line carries the note
     rows = S.describe([s])
     assert "kept unchecked" in rows[0] and rows[0].startswith("C (culvert")
@@ -120,7 +122,7 @@ def v360_one_end_only_cover_check_nodata_and_errors():
 def v360_lidar_bed_is_the_lowest_finite_ground_within_the_radius():
     from nd_breach_runner.core import structures as S
     g = _Terrain().read((-10, -30, 10, 30), 1.0)
-    assert abs(S.lidar_bed(g, (0.0, 20.0), 2.0) - (100.0 + 0.002 * 19.5 + 0.01)) < 0.02
+    assert abs(S.lidar_bed(g, (0.0, 20.0), 2.0) - (250.0 + 0.002 * 19.5 + 0.01)) < 0.02
     assert S.lidar_bed(g, (500.0, 500.0), 2.0) is None
     g2 = _Terrain(nodata_at=(0.0, 20.0)).read((-10, -30, 10, 30), 1.0)
     bed = S.lidar_bed(g2, (0.0, 20.0), 3.0)

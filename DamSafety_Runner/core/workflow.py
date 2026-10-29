@@ -983,7 +983,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                  or report.get("work_crs"))
             vdrun.apply(dam, st, ll[0] if ll else None, ll[1] if ll else None,
                         top_is_dem=dam.top_of_dam_ft is None, log=log)
-        if struct_local:                     # 3.12.5: local (0-300 ft) culvert inverts
+        if struct_local:                     # 3.12.5: local (0-500 ft) culvert inverts
             st.vertical_datum["structures_local"] = struct_local
         if report.get("dam_point"):
             st.vertical_datum["dam_point"] = report["dam_point"]
@@ -1041,10 +1041,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                                    min(cs, 1.0))
                 if c2 is not None:
                     lc_ft, lc_from = c2, how2
-            # 3.12.5 (Nick 2026-10-29): 0 - 300 ft values are tied only to the mid-crest DEM
+            # 3.12.5 (Nick 2026-10-29): 0 - 500 ft values are tied only to the mid-crest DEM
             # crest; without it (no dam line / no DEM across it) they are flagged for review
             pre_tie = list(st.vertical_datum.get("warnings") or [])
-            # 3.12.5 (Nick 2026-10-29, "in that case, use dem elevations"): 0 - 300 ft values
+            # 3.12.5 (Nick 2026-10-29, "in that case, use dem elevations"): 0 - 500 ft values
             # of a dam whose top is real (no local crest) -> the DEM low point at the toe
             toe_line = getattr(dam, "crest_line_xy", None) or getattr(st, "midcrest_line", None)
             vrec, changed = vdrun.apply_local(
@@ -1076,7 +1076,7 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         except Exception as e:                               # noqa - never stop the run for this
             warnings.append("Local datum not checked: {}: {}".format(type(e).__name__, e))
     if st.vertical_datum is not None:
-        try:                        # 3.12.5: a 0 - 300 ft value never tied -> review
+        try:                        # 3.12.5: a 0 - 500 ft value never tied -> review
             if vdrun.finish_band(dam, st, "the local-datum tie did not run" if not spec else
                                  "proposed dam: no local-datum tie", log):
                 report["vertical_datum"] = vdrun.VD.public(st.vertical_datum)

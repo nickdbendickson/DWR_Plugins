@@ -5,10 +5,12 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.20.3
+version=2.20.4
 icon=icon.svg
 author=N.D. Bendickson
-changelog=2.20.3 (2026-10-29; the offline pack's HIFLD lifelines are read - Nick)
+changelog=2.20.4 (2026-10-29; the vertical datum section uses the 0-500 ft band)
+    * The summary still prints the Runner's record. The local band is 0-500 ft (damsuite 1.18.4, Runner 3.12.9): 301-500 ft is local and tied to the DEM, never VERTCON-shifted, whatever datum is stated. The heading is VERTICAL DATUM OF THE DAM ELEVATIONS. No classification change.
+    2.20.3 (2026-10-29; the offline pack's HIFLD lifelines are read - Nick)
     * The lifeline keys with no download address (lifeline_hifld_fire / ems / eoc / police / wastewater) resolve to the offline pack's HIFLD_* layers (constants.LIFELINE_PACK_SETS: HIFLD_fire_ems_stations for fire and EMS - read once, HIFLD_local_eoc, HIFLD_local_law_enforcement, HIFLD_wastewater_treatment_plants), format 1 and format 2; the old lifeline_<key> names still work. Used by the run's lifeline fetch (pipeline, datafetch), suiteexport and the reproduction file order.
     * Vendored damsuite 1.18.3 (format-1 pack readers, flood_zones claims no pack layer); offline_pack unpacks a zipped format-1 pack's rasters (NLCD) beside the sqlite.
     * Tests: tests/test_pack_lifelines.py.

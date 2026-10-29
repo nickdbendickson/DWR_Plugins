@@ -3706,7 +3706,7 @@ def _compare_last_run(run, gov, governing, scenarios, dam_name, written, folder)
 def datum_lines(out, dam_folder=""):
     """2.20.0 / 2.20.3: summary lines of the vertical datum the Runner recorded
     (run_report.json "vertical_datum", else dam.json's). damsuite 1.18.2 lines cover a
-    NGVD29 -> NAVD88 shift, a 0-300 ft local datum tied to the DEM, REVIEW / UNCONVERTED
+    NGVD29 -> NAVD88 shift, a 0-500 ft local datum tied to the DEM, REVIEW / UNCONVERTED
     values, a band value replaced by a DEM elevation, and the mid-crest dam point
     (also read from a sibling "dam_point" when the record does not carry one).
     [] when neither file records a datum."""

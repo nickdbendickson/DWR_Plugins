@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.20.3
+ND Dam Hazard Classification Helper - Version 2.20.4
 ====================================================
 
 WHAT IT DOES
@@ -844,6 +844,9 @@ NEW IN 1.3.0 - HAZARD CLASSIFICATION TAB
   bridge flag and the MOST RECENT AADT from (a) the road layer itself,
   including AADT_2023-style columns, (b) an optional AADT layer (NDDOT
   counts, HPMS) within 300 ft, (c) FRA crossing AADT within 100 ft.
+- 2.20.4: the same section uses the 0-500 ft band (Runner 3.12.9,
+  damsuite 1.18.4). An elevation from 0 through 500 ft is local and tied
+  to the DEM, including 301-500 ft. No classification change.
 - 2.20.3: that section is VERTICAL DATUM OF THE DAM ELEVATIONS. It shows
   the Runner 3.12.7 record (damsuite 1.18.2): a 0-300 ft datum as local
   and tied to the DEM, REVIEW / UNCONVERTED when there is no tie, a

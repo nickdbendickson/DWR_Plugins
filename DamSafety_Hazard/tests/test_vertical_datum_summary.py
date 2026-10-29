@@ -87,7 +87,7 @@ def _local_rec():
 
 
 def test_local_dem_tie(d):
-    """2.20.3: a 0-300 ft record, a REVIEW, a DEM-replaced band value, and a
+    """2.20.3: a 0-500 ft record, a REVIEW, a DEM-replaced band value, and a
     mid-crest dam point (including one stored beside the record) reach the summary."""
     dam = os.path.join(d, "D4031")
     os.makedirs(os.path.join(dam, "_breach_model"))
@@ -97,7 +97,7 @@ def test_local_dem_tie(d):
         json.dump({"vertical_datum": rec, "dam_point": point}, f)
     lines = P.datum_lines(os.path.join(d, "out"), dam)
     text = "\n".join(lines)
-    assert "0 - 300 ft rule" in text, text
+    assert "0 - 500 ft rule" in text, text
     assert "1609.79" in text and "DEM-derived" in text, text
     assert "Dam point at mid-crest" in text and "27.77" in text, text
     assert lines[-1] == "(from run_report.json)"
@@ -109,7 +109,7 @@ def test_local_dem_tie(d):
     navd["fields"] = {"streambed_ft": {"source": 100.0, "navd88": 1695.0, "dem_derived": True,
                                       "how": "DEM-derived: thalweg at the toe"}}
     ntext = "\n".join(VD.summary_lines(navd))
-    assert "0-300 ft, not used" in ntext and "1695.00" in ntext, ntext
+    assert "0-500 ft, not used" in ntext and "1695.00" in ntext, ntext
     nd = {"cls": "low", "counts": {}, "judgment": [], "reasons": []}
     tm11 = {"cls": "low", "lij": 0.0, "lij_structures_high": 0, "lij_structures_judgment": 0,
             "judgment_included": False, "lij_vehicles_high": 0.0, "lij_vehicles_judgment": 0.0,

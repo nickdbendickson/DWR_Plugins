@@ -29,9 +29,9 @@ The record then has source_datum "local (assumed)" (or "local" when stated / cho
 "DEM", the original values in fields and a warning. MODE "local" (the window's "Local (use
 DEM)") forces it; an explicit NAVD88 / NGVD29 choice turns the detection off.
 
-0 - 300 ft is always local (1.18.2, Nick 2026-10-28): a dam or structure elevation (crest / top,
+0 - 500 ft is always local (1.18.2, Nick 2026-10-28): a dam or structure elevation (crest / top,
 streambed, spillway, normal / max pool, outlet, culvert inverts ...) between LOCAL_MIN_FT and
-LOCAL_MAX_FT (0 - 300 ft, inclusive) is on a local datum - no North Dakota ground is that low -
+LOCAL_MAX_FT (0 - 500 ft, inclusive) is on a local datum - no North Dakota ground is that low -
 and is NEVER VERTCON-shifted, whatever the stated or chosen datum (1.18.2 as revised, Nick 2026-10-29:
 "Forget overrid datum. Convert local to navd 88." - no override wording: a band value is simply
 local and converted to NAVD88 by the DEM tie). It is local_check()'s first,
@@ -41,7 +41,7 @@ even in a record that is not local (it is flagged "local_elev" for the caller to
 drop). The elevations are then taken from the DEM (NAVD88): the top of dam from the DEM at
 mid-crest (midcrest.py), the others tied by the offset DEM crest - local crest ("DEM-derived").
 No split (Nick 2026-10-29): every elevation of a local record, in ND's range or not, gets
-the same DEM offset. In a record whose top is not local, a 0 - 300 ft value is tied by
+the same DEM offset. In a record whose top is not local, a 0 - 500 ft value is tied by
 the DEM crest when the top is local by another rule, else flagged for review; the
 other values follow the normal datum path. With no tie (no DEM crest, a DEM in the wrong units,
 no mid-crest, no local crest to tie by) the Runner flags the record for review (rec["review"])
@@ -80,9 +80,11 @@ ND_MIN_FT = 500.0
 ND_MAX_FT = 3600.0
 DEM_TOL_FT = 50.0
 ROUND_TOL_FT = 10.0
-# 1.18.2: any dam / structure elevation in this band (ft, inclusive) is local - never shifted
+# 1.18.4: widened from 0-300 to 0-500. 301-499 is below ND_MIN_FT, so no North Dakota
+# ground elevation, but 1.18.2 still VERTCON-shifted it unless another local rule ran.
+# 500 is included: the range test is v < 500, so 500.00 was the round value that slipped through.
 LOCAL_MIN_FT = 0.0
-LOCAL_MAX_FT = 300.0
+LOCAL_MAX_FT = 500.0
 LOCAL_BAND_WHY = ("between {:.0f} and {:.0f} ft: a local datum (no North Dakota ground is that "
                   "low), never datum-converted")
 ROUND_STEP_FT = 100.0
@@ -207,7 +209,7 @@ def resolve(stated="", override=AUTO):
 
 
 def is_local_elev(value_ft):
-    """1.18.2: True for an elevation (ft) between LOCAL_MIN_FT and LOCAL_MAX_FT (0 - 300 ft,
+    """1.18.2: True for an elevation (ft) between LOCAL_MIN_FT and LOCAL_MAX_FT (0 - 500 ft,
     inclusive): a local datum, never VERTCON-shifted. False for None / text / NaN."""
     try:
         v = float(value_ft)
@@ -217,7 +219,7 @@ def is_local_elev(value_ft):
 
 
 def local_band_hit(values):
-    """(key, value) of the value that makes a dam's elevations local under the 0 - 300 ft rule:
+    """(key, value) of the value that makes a dam's elevations local under the 0 - 500 ft rule:
     the top of dam ("top_of_dam_ft") when given, else the first pool in values (normal / PMF /
     trigger pool). None when none is in the band. values: {key: ft}."""
     values = values or {}
@@ -235,7 +237,7 @@ def plan(lon, lat, stated="", override=AUTO, use_pyproj=True, what="the dam elev
     """The conversion record for one dam (see the module text). Nothing is converted here;
     convert_ft() applies it to each value and lists it in rec["fields"].
     values (1.18.2): {key: ft} of the run's elevations; a top of dam (or, with no top, a pool)
-    between 0 and 300 ft makes the record local whatever the stated / chosen datum."""
+    between 0 and 500 ft makes the record local whatever the stated / chosen datum."""
     src, how = resolve(stated, override)
     rec = {"target": TARGET, "source_datum": src, "how": how, "stated": str(stated or ""),
            "override": mode(override), "lon": _r(lon, 6), "lat": _r(lat, 6),
@@ -260,7 +262,7 @@ def plan(lon, lat, stated="", override=AUTO, use_pyproj=True, what="the dam elev
         else:
             src_l, how_l = LOCAL_ASSUMED, "detected"
         rec.update(source_datum=src_l, how=how_l, method=METHOD_DEM, local=True,
-                   local_rule="0-300 ft", local_reason=why, chosen_datum=src,
+                   local_rule="0-500 ft", local_reason=why, chosen_datum=src,
                    chosen_how=how)
         msg = ("The datum of {} is local ({}): they are converted to NAVD88 by the DEM - the "
                "top of dam is taken from the DEM at mid-crest and the other local elevations "
@@ -350,7 +352,7 @@ def convert_ft(value_ft, rec, field=None):
         return value_ft
     if field and field in rec.get("fields", {}):
         return rec["fields"][field]["_navd88"]
-    band = is_local_elev(v)           # 1.18.2: 0 - 300 ft is local - never shifted
+    band = is_local_elev(v)           # 1.18.2: 0 - 500 ft is local - never shifted
     out = v + float(rec.get("_shift_m", rec.get("shift_m", 0.0))) / FT \
         if rec.get("applied") and not band else v
     if field:
@@ -433,12 +435,12 @@ def summary_lines(rec):
                 "; offset {:+.2f} ft".format(rec["local_offset_ft"])
                 if rec.get("local_offset_ft") is not None and k != "top_of_dam_ft" else ""))
         elif v.get("dem_derived") and v.get("navd88") is not None:
-            # Runner 3.12.5 (Nick 2026-10-29): a 0-300 ft value with a real top of dam,
+            # Runner 3.12.5 (Nick 2026-10-29): a 0-500 ft value with a real top of dam,
             # replaced by a DEM elevation (no local crest to tie it by)
-            lines.append("{}: {:.2f} (0-300 ft, not used) -> {:.2f} NAVD88 ({})".format(
+            lines.append("{}: {:.2f} (0-500 ft, not used) -> {:.2f} NAVD88 ({})".format(
                 k, v["source"], v["navd88"], v.get("how") or "DEM-derived"))
         elif v.get("local_elev"):
-            lines.append("{}: {:.2f} local (0-300 ft) -> {} ({})".format(
+            lines.append("{}: {:.2f} local (0-500 ft) -> {} ({})".format(
                 k, v["source"], "{:.2f}".format(v["navd88"]) if v.get("navd88") is not None
                 else "not used", v.get("note") or "not datum-converted"))
         elif rec.get("applied"):
@@ -474,7 +476,7 @@ def _source_line(rec):
         if rec.get("chosen_how") == "override" and ch:
             extra.append("ELEV_DATUM {} not applied to a local record".format(ch))
         how = "detected from the values{}{}".format(
-            " by the 0 - 300 ft rule" if rec.get("local_rule") else "",
+            " by the 0 - 500 ft rule" if rec.get("local_rule") else "",
             "; " + "; ".join(extra) if extra else "")
         if not rec.get("local_rule") and rec.get("local_reason"):
             how += ": " + str(rec["local_reason"])

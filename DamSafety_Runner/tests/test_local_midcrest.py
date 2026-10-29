@@ -1,4 +1,4 @@
-"""3.12.5 / damsuite 1.18.2 (Nick 2026-10-28): an elevation between 0 and 300 ft is always on a
+"""3.12.5 / damsuite 1.18.2 (Nick 2026-10-28): an elevation between 0 and 500 ft is always on a
 local datum (never VERTCON-shifted; the crest from the DEM at mid-crest, the others tied by the
 offset, "DEM-derived"), local culvert inverts tied to the LiDAR bed, and the dam point at
 mid-crest of the dam line (damsuite/midcrest.py, workflow.place_midcrest). No QGIS, no model
@@ -95,29 +95,31 @@ def test_midcrest_place_in_the_runner():
 
 
 @test
-def test_local_band_0_to_300_ft():
+def test_local_band_0_to_500_ft():
     VD = _VD()
-    for v in (0.0, 120.7, 300.0):
+    for v in (0.0, 120.7, 300.0, 301.0, 450.0, 500.0):
         assert VD.is_local_elev(v), v
         assert VD.local_check(v)[0], v
         assert VD.local_check(v, 1630.49, 1.0)[0], v       # first test: whatever the DEM
-    for v in (-1.0, 300.01, 301.0, 1071.15, None, "x", float("nan")):
+    for v in (-1.0, 500.01, 501.0, 1071.15, None, "x", float("nan")):
         assert not VD.is_local_elev(v), v
-    # 301+ follows #220: out of ND's range -> local; a plausible value is not
-    assert VD.local_check(301.0)[0] and not VD.local_check(1071.15)[0]
-    assert VD.local_check(301.0)[1] != VD.local_check(300.0)[1]
+    # 501 is inside the 500-3,600 window: not local with no DEM. Above 3,600 still is,
+    # and that reason is the range test, not the band.
+    assert not VD.local_check(501.0)[0] and not VD.local_check(1071.15)[0]
+    assert VD.local_check(4000.0)[0]
+    assert VD.local_check(4000.0)[1] != VD.local_check(500.0)[1]
     # a band value is never shifted, even under an applied NGVD29 record
     rec = VD.plan(LON, LAT, "", VD.AUTO, use_pyproj=False)
     assert rec["applied"] and not rec.get("local")
-    assert VD.convert_ft(95.0, rec, "x") == 95.0 and rec["fields"]["x"].get("local_elev")
-    assert VD.convert_ft(301.0, rec, "y") > 301.5                # out of the band: shifted
+    assert VD.convert_ft(450.0, rec, "x") == 450.0 and rec["fields"]["x"].get("local_elev")
+    assert VD.convert_ft(501.0, rec, "y") > 501.5               # out of the band: shifted
     # plan(values=) with a band top makes the record local whatever the choice (no override
     # wording, Nick 2026-10-29); no split: the choice is not kept for any value (no other_datum)
     for override in (VD.AUTO, VD.NGVD29, VD.NAVD88):
         r = VD.plan(LON, LAT, "NGVD29", override, use_pyproj=False,
                     values={"top_of_dam_ft": 120.7})
         assert r["local"] and not r["applied"] and r.get("local_rule"), (override, r)
-        assert any("between 0 and 300 ft" in w for w in r["warnings"]), r["warnings"]
+        assert any("between 0 and 500 ft" in w for w in r["warnings"]), r["warnings"]
         assert not any("overrid" in w for w in r["warnings"]), r["warnings"]
         assert "other_datum" not in r and "other_shift_ft" not in r, (override, r)
     r = VD.plan(LON, LAT, "", VD.AUTO, use_pyproj=False, values={"top_of_dam_ft": 1071.15})
@@ -152,7 +154,7 @@ def test_local_band_4031_offset():
         assert f["breach_bottom_ft"].get("how") == "DEM-derived"
         assert f["top_of_dam_ft"].get("how") == workflow.MIDCREST_FROM
         txt = "\n".join(VD.summary_lines(VD.public(rec)))
-        assert "DEM-derived" in txt and ("0 and 300" in txt or "0 - 300" in txt), txt
+        assert "DEM-derived" in txt and ("0 and 500" in txt or "0 - 300" in txt), txt
         # the dam point record (run_report / dam.json / Hazard summary read the same record)
         rec["dam_point"] = {"xy": [-407005.516, 2822706.843], "z_ft": 1630.49, "moved_m": 27.77,
                             "original_xy": [-407020.0, 2822683.0], "moved": True, "offset_m": 1.5,
@@ -181,8 +183,8 @@ def test_local_band_mixed_record_ties_not_drops():
     """Mixed records (Nick 2026-10-29, no split confirmed): a band top with a PMF pool in ND's
     range - every value of the local record, the ND-range one too, is DEM-tied by the same
     offset whatever datum is chosen (no VERTCON, no chosen-datum treatment); a top outside the
-    band but local (350 ft, outside ND's range) - its 0 - 300 ft values are tied by the DEM
-    crest instead of dropped."""
+    0 - 500 ft band but still local (550 ft, more than 50 ft from the DEM crest) - its band
+    values are tied by that same DEM offset instead of dropped."""
     from nd_breach_runner.core import vdatum_run as vdrun
     from nd_breach_runner.core import workflow
     VD = _VD()
@@ -204,27 +206,29 @@ def test_local_band_mixed_record_ties_not_drops():
         txt = "\n".join(VD.summary_lines(VD.public(rec)))
         assert "not local" not in txt and "North Dakota's range" not in txt, txt
         assert not any("North Dakota's range" in w for w in rec["warnings"]), rec["warnings"]
-    # top 350 ft (local: outside ND's range, not in the band), bottom 290 / spillway 297.7 (band)
-    fl = _flood(None, 298.0, [297.7, 299.0], 340.0)
-    dam, st = _tied(top=350.0, bottom=290.0, flood=fl)
+    # top 550 ft: inside 500-3,600, so not the band and not the range test, but 1,080 ft from
+    # the DEM crest, so local by the 50 ft rule. Band values stay within 100 ft of that top
+    # or the plausibility guard would drop them (offset = DEM crest - local top).
+    fl = _flood(None, 498.0, [497.7, 499.0], 500.0)
+    dam, st = _tied(top=550.0, bottom=490.0, flood=fl)
     rec = st.vertical_datum
     assert not rec.get("local") and dam.breach_bottom_ft is None          # held, not shifted
     assert rec["fields"]["breach_bottom_ft"].get("pending_tie")
     rec, changed = vdrun.apply_local(dam, st, 1630.49, workflow.MIDCREST_FROM)
-    off = 1630.49 - 350.0
+    off = 1630.49 - 550.0
     assert changed and rec["local"] and not rec.get("review"), rec
     assert abs(rec["local_offset_ft"] - off) < 1e-6
     assert abs(dam.top_of_dam_ft - 1630.49) < 1e-9
-    assert abs(dam.breach_bottom_ft - (290.0 + off)) < 1e-6, dam.breach_bottom_ft
-    assert abs(fl.trigger_value - (298.0 + off)) < 1e-6
-    assert abs(fl.spillway.elev_m[0] / FT - (297.7 + off)) < 1e-6        # not shifted first
-    assert abs(fl.outlets[0].invert_m / FT - (340.0 + off)) < 1e-6       # VERTCON undone
+    assert abs(dam.breach_bottom_ft - (490.0 + off)) < 1e-6, dam.breach_bottom_ft
+    assert abs(fl.trigger_value - (498.0 + off)) < 1e-6
+    assert abs(fl.spillway.elev_m[0] / FT - (497.7 + off)) < 1e-6        # not shifted first
+    assert abs(fl.outlets[0].invert_m / FT - (500.0 + off)) < 1e-6       # held, then tied
     assert not any(e.get("pending_tie") for e in rec["fields"].values())
 
 
 @test
 def test_local_band_no_local_crest_is_flagged_for_review():
-    """A real top of dam (ND's range) with 0 - 300 ft values: no local crest to tie them by -
+    """A real top of dam (ND's range) with 0 - 500 ft values: no local crest to tie them by -
     flagged for review, left unconverted (the pools / bottom out of the model)."""
     from nd_breach_runner.core import vdatum_run as vdrun
     VD = _VD()
@@ -285,7 +289,7 @@ def test_local_band_no_tie_is_flagged_for_review():
 
 @test
 def test_local_band_culvert_inverts():
-    """Inverts between 0 and 300 ft: tied to the LiDAR bed (one offset when both ends agree
+    """Inverts between 0 and 500 ft: tied to the LiDAR bed (one offset when both ends agree
     within 1 ft), logged; NDDOT inverts in the normal range: no datum conversion, as before."""
     from nd_breach_runner.core import structures as structmod
     from nd_breach_runner.core.grid import Grid
@@ -305,7 +309,7 @@ def test_local_band_culvert_inverts():
     assert s.invert_local and abs(s.invert_local["offset_ft"] - 1500.25) < 1e-6, s.invert_local
     assert abs(s.invert_up_m / FT - 1600.25) < 1e-6 and abs(s.invert_dn_m / FT - 1599.75) < 1e-6
     assert s.invert_local["source_ft"] == [100.0, 99.5] and "DEM-derived" in s.invert_local["method"]
-    assert "0-300 ft" in notes[0], notes
+    assert "0-500 ft" in notes[0], notes
     s = culv(100.0, 120.0)                  # ends disagree: the LiDAR bed at each end
     structmod.reconcile_inverts([s], read, 3.0 * FT, 1.0)
     assert s.invert_up_m is None and s.invert_dn_m is None and s.invert_local["offset_ft"] is None
@@ -405,7 +409,7 @@ def test_midcrest_edge_pick_flagged():
 
 @test
 def test_local_datum_messages():
-    """3.12.5 (Nick 2026-10-29) log / message fixes: no empty "(0 - 300 ft rule: )" for a
+    """3.12.5 (Nick 2026-10-29) log / message fixes: no empty "(0 - 500 ft rule: )" for a
     stated Local datum; no "100.00 local -> 100.00 NAVD88 (DEM-derived)" before the tie; no
     near-duplicate local warnings; a stated Local under ELEV_DATUM NAVD88 / NGVD29 is
     "local (stated ...)", not "local (assumed) (DETECTED ... given as 'Local')"."""
@@ -434,7 +438,7 @@ def test_local_datum_messages():
         assert changed and not rec.get("review"), rec
         # (1) the rule text is never empty
         assert not any("rule: )" in w for w in rec["warnings"]), rec["warnings"]
-        assert any("0 - 300 ft rule: the top of dam 100.00 ft is between 0 and 300" in w
+        assert any("0 - 500 ft rule: the top of dam 100.00 ft is between 0 and 500" in w
                    for w in rec["warnings"]), rec["warnings"]
         # (3) one local-datum warning, in the record and in the run's list
         loc = [w for w in rec["warnings"] if "local" in w.lower()]
@@ -449,15 +453,15 @@ def test_local_datum_messages():
     txt = "\n".join(VD.summary_lines(st.vertical_datum))
     first = txt.splitlines()[0]
     assert first.startswith("Source datum: local (assumed) (detected from the values by the "
-                            "0 - 300 ft rule"), first
-    assert "between 0 and 300" not in first and "Local datum rule: the top of dam" in txt, txt
+                            "0 - 500 ft rule"), first
+    assert "between 0 and 500" not in first and "Local datum rule: the top of dam" in txt, txt
 
 
 DEM_CREST_T = 1072.60
 
 
 # --- 3.12.5 (Nick 2026-10-29, "in that case, use dem elevations"): a real top of dam with
-# 0 - 300 ft values (Thompson Lake DWR-5930: NAVD 88, top 1718, streambed / outlet 100 ft)
+# 0 - 500 ft values (Thompson Lake DWR-5930: NAVD 88, top 1718, streambed / outlet 100 ft)
 def _toe_grid(crest_m=1718.0 * FT, pool_m=1713.7 * FT, ds_m=1700.0 * FT, thalweg_m=1695.0 * FT):
     """1 m grid, x -60..160, y -80..80: the dam line along y = 0 (x 0..100), the embankment
     |y| <= 6 m at the crest, the pool (y > 6) at the normal pool, the downstream ground (y < -6)
@@ -537,7 +541,7 @@ def test_band_values_with_real_top_use_dem_elevations():
         assert len(w) == 1 and "breach_bottom_ft 100.00 ft -> 1695.00 ft NAVD88" in w[0], w
         assert "outlet_low_invert_ft 100.00 ft" in w[0] and "NOT used as given" in w[0], w
         txt = "\n".join(VD.summary_lines(VD.public(rec)))
-        assert "breach_bottom_ft: 100.00 (0-300 ft, not used) -> 1695.00 NAVD88 (DEM-derived" \
+        assert "breach_bottom_ft: 100.00 (0-500 ft, not used) -> 1695.00 NAVD88 (DEM-derived" \
             in txt, txt
         assert "REVIEW" not in txt and "UNCONVERTED" not in txt, txt
         assert not vdrun.apply_local(dam, st, 1716.9, dem_low=low)[1] and calls == [1]  # once

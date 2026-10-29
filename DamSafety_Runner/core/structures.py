@@ -60,7 +60,7 @@ class Structure:
                                         # the moved object (shallow copies): they report the
                                         # move from it and never judge the bridge again. Not
                                         # in to_dict
-    invert_local: Optional[dict] = None  # 3.12.5: inverts given between 0 and 300 ft (a local
+    invert_local: Optional[dict] = None  # 3.12.5: inverts given between 0 and 500 ft (a local
                                         # datum, damsuite.vdatum.is_local_elev) tied to the
                                         # LiDAR bed (reconcile_inverts): source / NAVD88 ft,
                                         # offset, method. Not in to_dict
@@ -451,7 +451,7 @@ def reconcile_inverts(structures, read_dem, tol_m, cell):
 
         def ft(v):
             return "{:+.1f} ft".format(v / FT)
-        # 3.12.5 (damsuite 1.18.2): an invert between 0 and 300 ft is on a local datum - never
+        # 3.12.5 (damsuite 1.18.2): an invert between 0 and 500 ft is on a local datum - never
         # datum-converted; tied to the LiDAR channel bed ("DEM-derived"): one offset for both
         # ends when they agree within 1 ft (slope kept), else the LiDAR bed at each end.
         # Inverts in ND's normal range keep the checks below (no datum conversion, as before).
@@ -476,7 +476,7 @@ def reconcile_inverts(structures, read_dem, tol_m, cell):
                 "navd88_ft": [None if v is None else round(v / FT, 3) for v in (
                     (s.invert_up_m, s.invert_dn_m) if off_ft is not None else (bed_up, bed_dn))],
                 "offset_ft": None if off_ft is None else round(off_ft, 3), "method": how}
-            s.invert_note = ("inventory inverts {} ft are on a local datum (0-300 ft, never "
+            s.invert_note = ("inventory inverts {} ft are on a local datum (0-500 ft, never "
                              "datum-converted): {}{}").format(
                 " / ".join("n/a" if v is None else "{:.2f}".format(v / FT) for v in (inv_up, inv_dn)),
                 how, "" if off_ft is None else " ({:+.2f} ft)".format(off_ft))
