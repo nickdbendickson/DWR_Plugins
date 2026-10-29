@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Crest — Dam Breach Desk</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+<style>
+  :root { --bg:#f4f1ea; --card:#fff; --ink:#1c2430; --muted:#5c6b7a; --line:#e4ddd2; --teal:#0e768a; --sand:#f3ead7; --amber:#9a6700; --high:#9b2c2c; --sig:#0e768a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:#fff; border-bottom:1px solid var(--line); padding:14px 20px; display:flex; gap:14px; align-items:center; }
+  .mark { width:40px; height:40px; border-radius:8px; background:var(--teal); color:#fff; display:grid; place-items:center; font-weight:700; }
+  h1 { font-size:22px; margin:0; }
+  .sub { color:var(--muted); font-size:12px; letter-spacing:.12em; text-transform:uppercase; }
+  .layout { display:grid; grid-template-columns:240px 1fr; min-height:calc(100vh - 70px); }
+  aside { background:#fff; border-right:1px solid var(--line); padding:12px; }
+  main { padding:16px 18px 40px; }
+  button, select, input { font:inherit; }
+  .dam { display:block; width:100%; text-align:left; border:0; background:transparent; border-radius:8px; padding:8px 10px; cursor:pointer; }
+  .dam.on { background:var(--teal); color:#fff; }
+  .new { width:100%; margin-top:8px; height:40px; border-radius:8px; border:1px solid var(--teal); background:#fff; color:var(--teal); font-weight:600; cursor:pointer; }
+  nav { display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap; }
+  nav button { height:40px; border-radius:8px; border:1px solid var(--line); background:#fff; padding:0 14px; cursor:pointer; }
+  nav button.on { background:var(--teal); color:#fff; border-color:var(--teal); }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:12px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px; }
+  label { display:block; font-size:12px; color:var(--muted); }
+  input, select { width:100%; height:40px; margin-top:4px; border:1px solid var(--line); border-radius:8px; padding:0 10px; background:#fff; }
+  .kpis { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .kpi { background:var(--sand); border-radius:8px; padding:10px 12px; }
+  .kpi b { display:block; font-size:18px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:8px; border-top:1px solid var(--line); }
+  .pill { display:inline-block; padding:4px 10px; border-radius:8px; color:#fff; font-weight:700; }
+  .High { background:var(--high); } .Significant { background:var(--sig); } .Low { background:#1c2430; } .Review { background:var(--amber); }
+  #map { height:420px; border-radius:10px; border:1px solid var(--line); }
+  svg.hydro { width:100%; height:180px; background:#f7fbfc; border-radius:8px; }
+  .note { color:var(--muted); font-size:13px; }
+  .rowbtns { display:flex; gap:8px; flex-wrap:wrap; }
+  .rowbtns button { height:40px; border-radius:8px; border:0; background:var(--teal); color:#fff; padding:0 14px; cursor:pointer; }
+  @media (max-width:800px) { .layout { grid-template-columns:1fr; } .kpis { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="mark">▲</div>
+  <div>
+    <div class="sub">Dam breach desk</div>
+    <h1>Crest</h1>
+  </div>
+  <p class="note" style="max-width:520px;margin:0">Screening desk. Elevations, breach hydrograph, map layout, and export files. It does not run LISFLOOD and it does not assign an official hazard class.</p>
+</header>
+<div class="layout">
+  <aside>
+    <div id="list"></div>
+    <button class="new" id="add" type="button">＋ New dam</button>
+  </aside>
+  <main>
+    <nav id="steps"></nav>
+    <section id="view"></section>
+  </main>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<script>
+const STEPS = ["record","breach","flood","screen","report"];
+const LABELS = {record:"Record", breach:"Breach", flood:"Flood", screen:"Screen", report:"Report"};
+let dams = [], active = 0, step = "record", bundle = null, map;
+
+async function post(path, body) {
+  const r = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body || {})});
+  if (!r.ok) throw new Error("desk unavailable");
+  return r.json();
+}
+function num(n, d=0) {
+  if (n == null || !isFinite(n)) return "—";
+  return Number(n).toLocaleString("en-US", {minimumFractionDigits:d, maximumFractionDigits:d});
+}
+function cur() { return dams[active]; }
+async function refresh() {
+  bundle = await post("/api/bundle", {dam: cur()});
+  render();
+}
+function field(label, key, stepn) {
+  const v = cur()[key];
+  return `<label>${label}<input data-k="${key}" type="number" step="${stepn||1}" value="${v}"></label>`;
+}
+function text(label, key) {
+  return `<label>${label}<input data-k="${key}" data-text="1" value="${cur()[key] ?? ""}"></label>`;
+}
+function sel(label, key, opts) {
+  const o = opts.map(([id,t]) => `<option value="${id}" ${cur()[key]===id?"selected":""}>${t}</option>`).join("");
+  return `<label>${label}<select data-k="${key}">${o}</select></label>`;
+}
+function bind() {
+  document.querySelectorAll("[data-k]").forEach(el => {
+    el.addEventListener("change", () => {
+      const k = el.dataset.k;
+      cur()[k] = el.dataset.text ? el.value : (el.tagName==="SELECT" ? el.value : Number(el.value));
+      refresh();
+    });
+  });
+}
+function kpis(items) {
+  return `<div class="kpis">${items.map(([k,v]) => `<div class="kpi"><span class="note">${k}</span><b>${v}</b></div>`).join("")}</div>`;
+}
+function hydro(series) {
+  if (!series?.length) return "";
+  const max = Math.max(...series.map(p => p.qCfs), 1);
+  const w = 640, h = 160, pad = 8;
+  const d = series.map((p,i) => {
+    const x = pad + (i/(series.length-1))*(w-2*pad);
+    const y = h - pad - (p.qCfs/max)*(h-2*pad);
+    return `${i?"L":"M"}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return `<svg class="hydro" viewBox="0 0 ${w} ${h}"><path d="${d}" fill="none" stroke="#0e768a" stroke-width="2.5"/></svg>`;
+}
+function receptors() {
+  const rows = [...(bundle.analysis.flood.receptors||[])].sort((a,b)=>b.depthFt-a.depthFt);
+  return `<table><thead><tr><th>Feature</th><th>Kind</th><th>Depth ft</th><th>Vel ft/s</th><th>Arrival h</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td>${r.name}</td><td>${r.kind}</td><td>${r.flooded?num(r.depthFt,2):"dry"}</td><td>${r.flooded?num(r.velocityFps,2):"—"}</td><td>${r.arrivalHr==null?"—":num(r.arrivalHr,2)}</td></tr>`).join("")}
+  </tbody></table>`;
+}
+function download(name, text) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type:"text/plain"}));
+  a.download = name; a.click();
+}
+function renderList() {
+  document.getElementById("list").innerHTML = dams.map((d,i)=>`<button class="dam ${i===active?"on":""}" data-i="${i}"><b>${d.name}</b><div style="font-size:12px;opacity:.8">${d.nid}</div></button>`).join("");
+  document.querySelectorAll(".dam").forEach(b => b.onclick = () => { active = +b.dataset.i; step="record"; refresh(); });
+}
+function renderSteps() {
+  document.getElementById("steps").innerHTML = STEPS.map(s=>`<button class="${s===step?"on":""}" data-s="${s}">${LABELS[s]}</button>`).join("");
+  document.querySelectorAll("#steps button").forEach(b => b.onclick = () => { step = b.dataset.s; render(); });
+}
+function render() {
+  renderList(); renderSteps();
+  const a = bundle.analysis, d = cur();
+  const view = document.getElementById("view");
+  if (step==="record") {
+    view.innerHTML = `<div class="card"><h2>Dam record</h2><p class="note">${a.datum.rule}</p><div class="grid">
+      ${text("Name","name")}${text("NID","nid")}${text("County","county")}
+      ${field("Year","year")}${field("Height ft","heightFt",0.1)}${field("Length ft","lengthFt")}
+      ${field("Crest ft","crestFt",0.1)}${field("Streambed ft","streambedFt",0.1)}
+      ${field("Spillway ft","spillwayFt",0.1)}${field("Normal pool ft","normalPoolFt",0.1)}
+      ${field("Storage ac-ft","storageAcFt")}${field("Drainage mi²","drainageMi2",0.1)}
+      ${field("DEM crest ft","demCrestFt",0.1)}
+      ${sel("Datum","statedDatum",[["Local","Local"],["NAVD88","NAVD88"],["NGVD29","NGVD29"]])}
+    </div></div>
+    <div class="card"><h3>Tied to NAVD88</h3>
+      ${kpis([["Crest",num(a.datum.crestNavdFt,1)+" ft"],["Streambed",a.datum.streambedNavdFt==null?"not used":num(a.datum.streambedNavdFt,1)+" ft"],["Spillway",a.datum.spillwayNavdFt==null?"not used":num(a.datum.spillwayNavdFt,1)+" ft"],["Pool",a.datum.poolNavdFt==null?"not used":num(a.datum.poolNavdFt,1)+" ft"]])}
+      ${(a.datum.warnings||[]).map(w=>`<p class="note">${w}</p>`).join("")||`<p class="note">No review flags on this record.</p>`}
+    </div>`;
+  } else if (step==="breach") {
+    view.innerHTML = `<div class="card"><h2>Breach</h2><div class="grid">
+      ${sel("Method","method",[["froehlich","Froehlich 2008"],["macdonald","MacDonald"],["tr60","TR-60 width"]])}
+      ${sel("Failure","failureMode",[["overtopping","Overtopping"],["piping","Piping"]])}
+    </div>${kpis([["Average width",num(a.breach.widthFt,0)+" ft"],["Volume-fitted peak",num(a.breach.fittedPeakCfs,0)+" cfs"],["Froehlich peak",num(a.breach.empiricalPeakCfs,0)+" cfs"],["Formation",num(a.breach.timeHr,2)+" hr"]])}
+    <h3>Outflow</h3>${hydro(a.breach.series)}
+    ${(a.breach.notes||[]).map(n=>`<p class="note">${n}</p>`).join("")}
+    <div class="rowbtns"><button id="csv" type="button">Download hydrograph CSV</button></div></div>`;
+    document.getElementById("csv").onclick = () => download((d.nid||"dam")+"_hydrograph.csv", bundle.csv);
+  } else if (step==="flood") {
+    view.innerHTML = `<div class="card"><h2>Layout & schematic flood</h2>
+      <p class="note">Draw the dam line, place reservoir and breach points, and outline the downstream area. ${a.flood.engineLabel}.</p>
+      ${sel("Desk engine","engine",[["lisflood","LISFLOOD-style"],["anuga","ANUGA-style"],["routing","1D routing"]])}
+      <div id="map"></div>
+      ${kpis([["Max depth",num(a.flood.maxDepthFt,1)+" ft"],["Wet area",num(a.flood.acres,0)+" ac"],["Fastest seed",num(a.flood.maxVelocityFps,1)+" ft/s"]])}
+    </div>`;
+    mountMap();
+  } else if (step==="screen") {
+    view.innerHTML = `<div class="card"><p class="sub">Desk screen</p>
+      <p><span class="pill ${a.screen.level}">${a.screen.level}</span></p>
+      ${(a.screen.reasons||[]).map(r=>`<p>${r}</p>`).join("")}
+      ${receptors()}</div>`;
+  } else {
+    view.innerHTML = `<div class="card"><p class="sub">Read from this desk</p><h2>${d.name} <span class="note">(${d.nid})</span></h2>
+      <p class="note">${d.county?d.county+" · ":""}${a.breach.label} · ${a.flood.engineLabel}</p>
+      ${kpis([["Peak discharge",num(a.breach.fittedPeakCfs,0)+" cfs"],["Flooded area",num(a.flood.acres,0)+" ac"],["Max depth",num(a.flood.maxDepthFt,1)+" ft"],["Screen",a.screen.level]])}
+      ${hydro(a.breach.series)}
+      ${receptors()}
+      <div class="rowbtns">
+        <button id="csv" type="button">Hydrograph CSV</button>
+        <button id="json" type="button">dam.json</button>
+        <button id="par" type="button">LISFLOOD .par</button>
+        <button id="bci" type="button">.bci</button>
+        <button id="bdy" type="button">.bdy</button>
+      </div></div>`;
+    const id = d.nid || "dam";
+    document.getElementById("csv").onclick = () => download(id+"_hydrograph.csv", bundle.csv);
+    document.getElementById("json").onclick = () => download(id+"_dam.json", bundle.damJson);
+    document.getElementById("par").onclick = () => download(id+".par", bundle.par);
+    document.getElementById("bci").onclick = () => download(id+".bci", bundle.bci);
+    document.getElementById("bdy").onclick = () => download(id+".bdy", bundle.bdy);
+  }
+  bind();
+}
+function mountMap() {
+  if (map) { map.remove(); map = null; }
+  map = L.map("map").setView([46.8,-100.8], 10);
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}", {
+    attribution: "Tiles © Esri", maxZoom: 19
+  }).addTo(map);
+  const drawn = new L.FeatureGroup().addTo(map);
+  map.addControl(new L.Control.Draw({
+    edit: { featureGroup: drawn },
+    draw: { polyline: { shapeOptions: { color: "#8B5E3C", weight: 4 } }, polygon: { shapeOptions: { color: "#0E768A" } }, marker: true, circle: false, rectangle: false, circlemarker: false }
+  }));
+  const g = cur().geometry || {};
+  [g.reservoirPoint, g.breachPoint, g.damLine, g.aoi].filter(Boolean).forEach(f => {
+    L.geoJSON(f).eachLayer(l => drawn.addLayer(l));
+  });
+  function save() {
+    const next = {};
+    drawn.eachLayer(layer => {
+      if (!layer.toGeoJSON) return;
+      const geo = layer.toGeoJSON();
+      const t = geo.geometry && geo.geometry.type;
+      if (t === "Point") { if (!next.reservoirPoint) next.reservoirPoint = geo; else next.breachPoint = geo; }
+      else if (t === "LineString") next.damLine = geo;
+      else if (t === "Polygon") next.aoi = geo;
+    });
+    cur().geometry = next;
+    post("/api/bundle", {dam: cur()}).then(b => { bundle = b; });
+  }
+  map.on(L.Draw.Event.CREATED, e => { drawn.addLayer(e.layer); save(); });
+  map.on(L.Draw.Event.EDITED, save);
+  map.on(L.Draw.Event.DELETED, save);
+  setTimeout(() => map.invalidateSize(), 50);
+}
+document.getElementById("add").onclick = async () => {
+  const blank = await post("/api/dams", {});
+  dams.push(blank.blank);
+  active = dams.length - 1;
+  step = "record";
+  await refresh();
+};
+post("/api/dams", {}).then(async data => {
+  dams = data.dams;
+  await refresh();
+}).catch(err => {
+  document.getElementById("view").innerHTML = `<div class="card"><h2>Desk did not start</h2><p>${err.message}</p></div>`;
+});
+</script>
+</body>
+</html>
