@@ -273,10 +273,11 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
     <section className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-xl">Schematic flood</h2>
+          <h2 className="text-xl">Layout & schematic flood</h2>
           <p className="text-sm text-muted">
-            {result.flood.engineLabel}. Depth falls downstream. Receptors are seeds on this valley, not an inventory.
-            Desk reach {num(result.flood.lengthM / 1000, 1)} km
+            Draw the dam line, reservoir point, breach point, and downstream area (DSS-WISE style). Then see the
+            schematic flood: {result.flood.engineLabel}. Receptors are seeds on this valley, not an inventory. Desk
+            reach {num(result.flood.lengthM / 1000, 1)} km
             {result.flood.reachSource === "user" ? " (set by you)" : " (to the 0.1 ft wet limit)"}; receptors past it are
             unresolved.
           </p>
@@ -302,9 +303,6 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
           />
         </div>
       </div>
-      <div className="overflow-hidden rounded-md border border-line">
-        <ValleyMap flood={result.flood} />
-      </div>
       <div className="rounded-md border border-line bg-card p-4">
         <h3 className="text-lg">Dam line, points, and area of interest</h3>
         <p className="mt-1 text-sm text-muted">
@@ -320,6 +318,9 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
             <p className="text-sm text-muted">Loading the map…</p>
           )}
         </div>
+      </div>
+      <div className="overflow-hidden rounded-md border border-line">
+        <ValleyMap flood={result.flood} />
       </div>
       <div className="grid grid-cols-3 gap-px overflow-hidden rounded-sm bg-line">
         <Stat k="Max depth" v={`${num(result.flood.maxDepthFt, 1)} ft`} />
