@@ -62,6 +62,23 @@ describe("ND ranking (damsuite classify_nd)", () => {
     assert.equal(rankReceptor({ kind: "house", depthFt: 3.0, velocityFps: 0, judgmentAsProbable: false }).class, "Medium");
   });
 
+  it("labels a judgment-driven High, and the switch turns the judgment zone into Medium", () => {
+    const j = rankReceptor({ kind: "house", depthFt: 3.5, velocityFps: 2 });
+    assert.equal(j.zone, "judgment");
+    const on = screenReceptors([wet("Farmstead", "house", 3.5, 2)], [{ kind: "house" }]);
+    assert.equal(on.level, "High");
+    assert.equal(on.label, "High (judgment zone counted)");
+    assert.ok(on.judgment.length === 1);
+    const off = screenReceptors([wet("Farmstead", "house", 3.5, 2, { judgmentAsProbable: false })], [{ kind: "house" }], {
+      judgmentAsProbable: false,
+    });
+    assert.equal(off.level, "Medium");
+    assert.equal(off.label, "Medium");
+    assert.ok(off.judgment.length === 1, "still flagged for an engineer");
+    const hz = screenReceptors([wet("House", "house", 8, 4)], [{ kind: "house" }]);
+    assert.equal(hz.label, "High", "a TM 11 high-zone High is not relabelled");
+  });
+
   it("barns and quonsets are not homes", () => {
     const r = rankReceptor({ kind: "barn", depthFt: 4, velocityFps: 3 });
     assert.equal(r.class, null);

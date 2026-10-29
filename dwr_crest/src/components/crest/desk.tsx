@@ -133,7 +133,7 @@ export function Desk() {
           {step === "record" ? <RecordStep dam={dam} result={result} /> : null}
           {step === "breach" ? <BreachStep dam={dam} result={result} /> : null}
           {step === "flood" ? <FloodStep dam={dam} result={result} /> : null}
-          {step === "screen" ? <ScreenStep result={result} /> : null}
+          {step === "screen" ? <ScreenStep dam={dam} result={result} /> : null}
           {step === "report" ? <ReportStep dam={dam} result={result} /> : null}
 
           <button
@@ -307,20 +307,33 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   );
 }
 
-function ScreenStep({ result }: { result: ReturnType<typeof analyze> }) {
+function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+  const update = useDesk((s) => s.update);
   return (
     <section className="space-y-4">
       <div className="rounded-md border border-line bg-card p-4">
         <p className="text-xs tracking-widest text-muted uppercase">Desk screen</p>
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <span className={`rounded-sm px-3 py-1 text-lg ${LEVEL_CLASS[result.screen.level]}`}>
-            {result.screen.level}
+            {result.screen.label}
           </span>
           <p className="max-w-lg text-sm text-muted">
-            ND rules on the ACER TM 11 depth-velocity charts: a home in the high-danger or judgment zone reads High;
-            any wet home reads at least Medium (economic loss); roads by AADT and class. Barns and sheds do not count.
+            ND rules on the ACER TM 11 depth-velocity charts: a home in the high-danger zone reads High; in the judgment
+            zone it reads {result.screen.judgmentAsProbable ? "High (flagged)" : "Medium (flagged)"}; any wet home reads at
+            least Medium (economic loss); roads by AADT and class. Barns and sheds do not count.
             {result.screen.acerLevel ? ` Worst TM 11 zone: ${result.screen.acerLevel}.` : ""}
           </p>
+        </div>
+        <div className="mt-3 max-w-xs">
+          <SelectField
+            label="Judgment zone"
+            value={dam.judgmentAsProbable === false ? "medium" : "high"}
+            options={[
+              ["high", "Count as probable loss of life (High, damsuite default)"],
+              ["medium", "Do not count (Medium)"],
+            ]}
+            onChange={(v) => update({ judgmentAsProbable: v !== "medium" })}
+          />
         </div>
         <ul className="mt-4 space-y-2 text-sm">
           {result.screen.reasons.map((r) => (
@@ -362,7 +375,7 @@ function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         <Stat k="Max depth" v={`${num(result.flood.maxDepthFt, 1)} ft`} />
         <Stat k="Max velocity" v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
         <Stat k="Wet receptors" v={String(result.flood.receptors.filter((r) => r.flooded).length)} />
-        <Stat k="Screen" v={result.screen.level} />
+        <Stat k="Screen" v={result.screen.label} />
       </div>
       <div className="rounded-md border border-line bg-card p-4">
         <h3 className="text-lg">Breach hydrograph</h3>
