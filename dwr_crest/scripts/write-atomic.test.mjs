@@ -17,6 +17,12 @@ import { handOver, parseWriteAtomicArgs, stagingError } from "./write-atomic.mjs
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = join(TEMPLATE_ROOT, "scripts/write-atomic.mjs");
 
+// The og skill docs (.grok/skills/og, AGENTS.md) ship with the app template, not with Crest.
+// These pins run wherever those docs exist and skip, with this reason, where they don't.
+const OG_DOCS_MISSING =
+  !existsSync(join(TEMPLATE_ROOT, ".grok/skills/og/SKILL.md")) &&
+  "template og skill docs (.grok/skills/og, AGENTS.md) are not in this repo";
+
 function makeWorkspace() {
   const root = mkdtempSync(join(tmpdir(), "write-atomic-"));
   mkdirSync(join(root, "public"), { recursive: true });
@@ -162,6 +168,29 @@ test("cli: relative paths follow the script's root, not the caller's cwd", () =>
   assert.match(run.stderr, /stage outside/);
   assert.equal(readFileSync(join(root, "public/og.jpg.tmp"), "utf8"), "half a JPEG");
   assert.equal(existsSync(join(root, "public/og.jpg")), false);
+});
+
+test("every hand-over the og skill prints is one this script accepts", { skip: OG_DOCS_MISSING }, () => {
+  // The card and banner recipes live in the skill's references/, not SKILL.md.
+  const skillDir = join(TEMPLATE_ROOT, ".grok/skills/og");
+  const docs = [
+    join(skillDir, "SKILL.md"),
+    ...readdirSync(join(skillDir, "references")).map((f) => join(skillDir, "references", f)),
+  ];
+  const invocations = docs.flatMap(
+    (path) => readFileSync(path, "utf8").match(/node scripts\/write-atomic\.mjs[^\n`]*/g) ?? [],
+  );
+  assert.ok(invocations.length >= 3, "og.jpg, x-banner.jpg and site.json each hand over");
+  for (const line of invocations) {
+    const argv = line.replace("node scripts/write-atomic.mjs", "").trim().split(/\s+/);
+    const args = parseWriteAtomicArgs(argv);
+    assert.equal(args.error, undefined, line);
+    assert.equal(
+      stagingError({ staged: args.staged, target: args.target, publicDir: "/workspace/public" }),
+      null,
+      line,
+    );
+  }
 });
 
 test("cli: a missing staged file fails without touching the target", () => {
