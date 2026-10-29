@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --font-serif: "Source Serif 4", Georgia, serif;
+  --color-paper: #f3efe6;
+  --color-card: #fffdf8;
+  --color-ink: #1c2420;
+  --color-muted: #5c665e;
+  --color-line: #d8d0c2;
+  --color-water: #0e5f6e;
+  --color-water-deep: #0a3d48;
+  --color-sand: #e7dfd0;
+  --color-amber: #8a5a12;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    margin: 0;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+  h1, h2, h3 {
+    font-family: var(--font-serif);
+    text-wrap: balance;
+    font-weight: 560;
+    letter-spacing: -0.02em;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  p {
+    text-wrap: pretty;
+  }
+}
