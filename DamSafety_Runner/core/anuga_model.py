@@ -173,6 +173,10 @@ class AnugaSettings:
         self.partial_min = None
         self.resume = False
         self.resume_with_run = False
+        # 3.12.6: resume from a named checkpoint folder whose key differs from this job's
+        # (anuga_worker resume_from; "" = NDBREACH_ANUGA_RESUME_FROM, else none). The worker
+        # checks it against this job and logs every difference; see docs/USER_GUIDE.md.
+        self.resume_from = ""
         # 3.10.70: the worker's read-only time-step diagnostic (core/anuga_dtdiag.py):
         # 0 = off; N = a row of anuga/timestep_diag.csv every N yield steps
         self.dt_diag = 0
@@ -410,8 +414,25 @@ def resolve_checkpoints(st, outer, fine, mesh=None):
     pmin = getattr(st, "partial_min", None)
     cst.partial_min = float(pmin) if pmin is not None else (AUTO_PARTIAL_MIN if on else 0.0)
     cst.resume = bool(getattr(st, "resume", False)
-                      or (getattr(st, "resume_with_run", False) and on))
+                      or (getattr(st, "resume_with_run", False) and on)
+                      or resume_from(st))
     return cst, info
+
+
+RESUME_FROM_ENV = "NDBREACH_ANUGA_RESUME_FROM"          # = anuga_worker.RESUME_FROM_ENV
+RESUME_REF_JOB_ENV = "NDBREACH_ANUGA_RESUME_REF_JOB"    # = anuga_worker.RESUME_REF_JOB_ENV
+
+
+def resume_from(st):
+    """3.12.6: the checkpoint folder an explicit resume names ('' = none): st.resume_from,
+    else NDBREACH_ANUGA_RESUME_FROM."""
+    return str(getattr(st, "resume_from", "") or os.environ.get(RESUME_FROM_ENV, "")).strip()
+
+
+def resume_wanted(st):
+    """True when this run may continue from a checkpoint (any of the resume settings)."""
+    return bool(getattr(st, "resume", False) or getattr(st, "resume_with_run", False)
+                or resume_from(st))
 
 
 def checkpoint_job(st):
@@ -420,12 +441,19 @@ def checkpoint_job(st):
     every_min = float(getattr(st, "checkpoint_min", 0.0) or 0.0)   # None (unresolved) = 0
     steps = int(getattr(st, "checkpoint_steps", 0) or 0)
     partial = float(getattr(st, "partial_min", 0.0) or 0.0)
-    resume = bool(getattr(st, "resume", False))
+    rfrom = resume_from(st)
+    resume = bool(getattr(st, "resume", False)) or bool(rfrom)
     if every_min <= 0 and steps <= 0 and partial <= 0 and not resume:
         return {}
-    return {"ckpt_every_min": max(0.0, every_min), "ckpt_every_steps": max(0, steps),
-            "ckpt_keep": max(1, int(getattr(st, "checkpoint_keep", 2) or 2)),
-            "partial_every_min": max(0.0, partial), "resume": int(resume)}
+    out = {"ckpt_every_min": max(0.0, every_min), "ckpt_every_steps": max(0, steps),
+           "ckpt_keep": max(1, int(getattr(st, "checkpoint_keep", 2) or 2)),
+           "partial_every_min": max(0.0, partial), "resume": int(resume)}
+    if rfrom:                    # 3.12.6; outside the worker's fingerprint like the rest
+        out["resume_from"] = rfrom
+        ref = os.environ.get(RESUME_REF_JOB_ENV, "").strip()
+        if ref:
+            out["resume_ref_job"] = ref
+    return out
 
 
 def checkpointing(st):
@@ -901,12 +929,97 @@ def crest_line(c):
                                c.get("no_profile", 0)))
 
 
-def make_gmsh_mesh(workdir, spec, st):
-    """Run gmsh_mesher.py in the ANUGA interpreter with a timeout. Returns
-    (mesh dict, summary note), or (None, reason) when gmsh failed, timed out or the
-    mesh failed the quality gate; run() then stops or falls back (ANUGA_MESHER)."""
+MESH_KEY_NAME = "gmsh_mesh_key.json"
+
+
+def _canon(spec):
+    """The mesh input as gmsh_mesher reads it, without "threads" (how many threads gmsh
+    uses is not what it meshes), as sorted JSON."""
+    d = json.loads(json.dumps(spec))
+    d.pop("threads", None)
+    return json.dumps(d, sort_keys=True)
+
+
+def _sha(b):
+    import hashlib
+    return hashlib.sha256(b).hexdigest()
+
+
+def _mesher_sha():
+    with open(MESHER, "rb") as fh:
+        return _sha(fh.read())
+
+
+def reusable_gmsh_mesh(workdir, spec):
+    """3.12.6: None when the gmsh_mesh.npz in workdir was made from this same mesh input
+    (and, when recorded, the same gmsh_mesher.py), else why not. gmsh with several threads
+    does not give the same mesh twice (DWR-2801 r3: 344,866 then 344,856 triangles from the
+    same input), and the mesh is part of the worker's checkpoint key, so a resumed run
+    re-uses the mesh rather than make a new one. The npz is safe to re-use: make_gmsh_mesh
+    deletes it before each mesh and gmsh_mesher writes it only on success."""
     sp = os.path.join(workdir, "gmsh_mesh_in.json")
     op = os.path.join(workdir, "gmsh_mesh.npz")
+    kp = os.path.join(workdir, MESH_KEY_NAME)
+    if not (os.path.isfile(sp) and os.path.isfile(op)):
+        return "no earlier gmsh mesh"
+    try:
+        with open(sp, encoding="utf-8") as fh:
+            old = _canon(json.load(fh))
+    except Exception as e:                 # noqa - unreadable: mesh again
+        return "earlier mesh input unreadable ({})".format(str(e)[:100])
+    if old != _canon(spec):
+        return "the mesh input changed"
+    if os.path.isfile(kp):
+        try:
+            with open(kp, encoding="utf-8") as fh:
+                key = json.load(fh)
+        except Exception:                  # noqa
+            return "unreadable " + MESH_KEY_NAME
+        if key.get("spec_sha") != _sha(_canon(spec).encode()):
+            return "the mesh input changed"
+        if key.get("mesher_sha") != _mesher_sha():
+            return "gmsh_mesher.py changed"
+    return None
+
+
+def _load_gmsh_npz(op):
+    with np.load(op) as r:
+        mesh = {"points": r["mesh_points"], "triangles": r["mesh_triangles"],
+                "boundary": r["mesh_boundary"], "stats": json.loads(str(r["mesh_stats"]))}
+        if "mesh_crest_nodes" in r.files:   # 3.10.91: nodes on the crest lines
+            mesh["crest_nodes"] = np.asarray(r["mesh_crest_nodes"], np.int64)
+    return mesh
+
+
+def _gmsh_note(mesh):
+    s = mesh["stats"]
+    note = ("ANUGA mesh from gmsh: {} triangles, smallest {:.0f} m2, minimum angle "
+            "{:.1f} deg.".format(s.get("triangles"), s.get("min_area_m2", 0),
+                                 s.get("min_angle_deg", 0)))
+    if s.get("sizing"):                     # 3.10.69: only when a sizing option is set
+        note += " Sizing: " + sizing_line(s["sizing"]) + "."
+    return note
+
+
+def make_gmsh_mesh(workdir, spec, st, reuse=False):
+    """Run gmsh_mesher.py in the ANUGA interpreter with a timeout. Returns
+    (mesh dict, summary note), or (None, reason) when gmsh failed, timed out or the
+    mesh failed the quality gate; run() then stops or falls back (ANUGA_MESHER).
+    reuse (3.12.6, a resumed run): the mesh already in workdir is used when it was made
+    from the same input (reusable_gmsh_mesh), so the checkpoint key stays the same."""
+    sp = os.path.join(workdir, "gmsh_mesh_in.json")
+    op = os.path.join(workdir, "gmsh_mesh.npz")
+    if reuse and reusable_gmsh_mesh(workdir, spec) is None:
+        try:
+            mesh = _load_gmsh_npz(op)
+            mesh["reused"] = True
+            return mesh, _gmsh_note(mesh) + (" Re-used the mesh already made from the same "
+                                             "input (a resumed run keeps its checkpoint key).")
+        except Exception:                   # noqa - unreadable: mesh again
+            pass
+    kp = os.path.join(workdir, MESH_KEY_NAME)
+    if os.path.exists(kp):
+        os.remove(kp)
     with open(sp, "w", encoding="utf-8") as fh:
         json.dump(spec, fh)
     if os.path.exists(op):
@@ -924,18 +1037,14 @@ def make_gmsh_mesh(workdir, spec, st):
         why = next((m[len("MESHERROR "):] for m in msg if m.startswith("MESHERROR ")),
                    msg[-1][:200] if msg else "code {}".format(out.returncode))
         return None, why
-    with np.load(op) as r:
-        mesh = {"points": r["mesh_points"], "triangles": r["mesh_triangles"],
-                "boundary": r["mesh_boundary"], "stats": json.loads(str(r["mesh_stats"]))}
-        if "mesh_crest_nodes" in r.files:   # 3.10.91: nodes on the crest lines
-            mesh["crest_nodes"] = np.asarray(r["mesh_crest_nodes"], np.int64)
-    s = mesh["stats"]
-    note = ("ANUGA mesh from gmsh: {} triangles, smallest {:.0f} m2, minimum angle "
-            "{:.1f} deg.".format(s.get("triangles"), s.get("min_area_m2", 0),
-                                 s.get("min_angle_deg", 0)))
-    if s.get("sizing"):                     # 3.10.69: only when a sizing option is set
-        note += " Sizing: " + sizing_line(s["sizing"]) + "."
-    return mesh, note
+    mesh = _load_gmsh_npz(op)
+    try:                                    # 3.12.6: what this mesh was made from
+        with open(kp, "w", encoding="utf-8") as fh:
+            json.dump({"spec_sha": _sha(_canon(spec).encode()), "mesher_sha": _mesher_sha()},
+                      fh)
+    except OSError:                         # noqa - only re-use on resume needs it
+        pass
+    return mesh, _gmsh_note(mesh)
 
 
 def _mesher_sizes(spec):
@@ -1384,7 +1493,11 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
             minfo["sizing"] = sizing
             if log:
                 log("gmsh sizing: " + sizing_line(sizing))
-        mesh, msg = make_gmsh_mesh(workdir, spec, st)
+        no_reuse = reusable_gmsh_mesh(workdir, spec) if resume_wanted(st) else None
+        mesh, msg = make_gmsh_mesh(workdir, spec, st, reuse=resume_wanted(st))
+        if no_reuse and log:                       # 3.12.6
+            log("gmsh: a new mesh for this resumed run ({}); a checkpoint made on another "
+                "mesh is only resumed with {}.".format(no_reuse, RESUME_FROM_ENV))
         if mesh is None:
             minfo["rejected"] = msg
             if mesher == "gmsh":
@@ -1400,6 +1513,7 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         else:
             minfo["used"] = "gmsh"
             minfo["gmsh"] = mesh.get("stats", {})
+            minfo["reused"] = bool(mesh.get("reused"))     # 3.12.6
             mnote = msg
             if log:
                 log(msg)
