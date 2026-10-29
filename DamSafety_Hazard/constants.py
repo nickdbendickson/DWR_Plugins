@@ -3,7 +3,7 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-PLUGIN_VERSION = "2.20.2"
+PLUGIN_VERSION = "2.20.3"
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
@@ -343,6 +343,57 @@ def lifeline_downloads():
     """LIFELINE_SOURCES entries that have a download address (the HIFLD entries
     have none unless the data-source file gives one)."""
     return [t for t in LIFELINE_SOURCES if t[2]]
+
+
+# 2.20.3: the offline packs (Data's pack builder, build_nd_pack --hifld-folder) hold the HIFLD
+# layers as HIFLD_<layer>, not lifeline_<key>: the data sets a lifeline key reads, best first
+# (the old lifeline_<key> name keeps working). Fire and EMS stations are one HIFLD layer.
+LIFELINE_PACK_SETS = {
+    "hifld_fire": ("HIFLD_fire_ems_stations",),
+    "hifld_ems": ("HIFLD_fire_ems_stations",),
+    "hifld_eoc": ("HIFLD_local_eoc",),
+    "hifld_police": ("HIFLD_local_law_enforcement",),
+    "hifld_wastewater": ("HIFLD_wastewater_treatment_plants",),
+}
+
+
+def lifeline_names(key):
+    """The data-set names lifeline key `key` is read from, best first."""
+    return ("lifeline_" + key,) + LIFELINE_PACK_SETS.get(key, ())
+
+
+def lifeline_sets(has):
+    """[(key, label, url, category, data set)] of LIFELINE_SOURCES that `has(name)` answers
+    for (a pack / export source): per key the first of lifeline_names(key) it has; a data set
+    two keys share (HIFLD fire / EMS) is read once, by the first key."""
+    out, taken = [], set()
+    for key, label, url, cat in LIFELINE_SOURCES:
+        for name in lifeline_names(key):
+            if name in taken:
+                break
+            try:
+                ok = bool(has(name))
+            except Exception:                                    # noqa
+                ok = False
+            if ok:
+                taken.add(name)
+                out.append((key, label, url, cat, name))
+                break
+    return out
+
+
+def lifeline_fetches(has=None):
+    """[(key, label, url, category, data set name)] the run fetches: every entry with a
+    download address (as lifeline_downloads(), under lifeline_<key>), and 2.20.3 the
+    entries without one that the offline pack holds (`has`: the pack reader's has)."""
+    pack = {k: name for k, _l, _u, _c, name in (lifeline_sets(has) if has else [])}
+    out = []
+    for key, label, url, cat in LIFELINE_SOURCES:
+        if url:
+            out.append((key, label, url, cat, "lifeline_" + key))
+        elif key in pack:
+            out.append((key, label, url, cat, pack[key]))
+    return out
 
 
 # OpenStreetMap (Overpass API) fills the gaps: substations and drinking-water

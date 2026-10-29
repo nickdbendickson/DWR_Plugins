@@ -492,6 +492,7 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
                 man2.setdefault("left_out", {})[NLCD_NAME] = "download failed: {}".format(e)
             log("  NLCD FAILED: {}".format(e))
         _finish2(p2, man2)
+    man1 = nlcd_format1(p1, p2, man1, man2, log)      # 1.5.2: the raster in format 1 too
     progress(100.0, "Offline pack written")
     summary(man2, log)
     return {"pack2": p2, "pack1": p1, "manifest2": man2, "manifest1": man1, "failed": failed,
@@ -955,7 +956,7 @@ def _rewrite(con, name, fn):
 # ------------------------------------------------------------------ format 1 --
 def write_format1(db, p1, man, infos, left, log):
     """nd_offline_pack/nd_offline_pack.sqlite (a clean, indexed copy of the work file) and its
-    manifest.json (the raster is named as not included)."""
+    manifest.json (1.5.2: the NLCD raster is added beside it by nlcd_format1)."""
     os.makedirs(p1, exist_ok=True)
     dst = os.path.join(p1, OP.DB_NAME)
     tmp = dst + ".part"
@@ -978,14 +979,82 @@ def write_format1(db, p1, man, infos, left, log):
                 v[key] = val
     man[MARK] = BUILDER
     man["left_out"] = dict(left)
-    man["rasters_not_included"] = {
-        NLCD_NAME: "a format-1 pack holds vector layers only; the NLCD raster is in "
-                   "{}/landcover/{}.gpkg".format(PACK2, NLCD_NAME)}
+    man.pop("rasters_not_included", None)
+    old = _read_json(os.path.join(p1, OP.MANIFEST_NAME)) or {}
+    man["rasters"] = {k: e for k, e in (old.get("rasters") or {}).items()   # kept till re-copied
+                      if os.path.isfile(os.path.join(p1, *str(e.get("file", "")).split("/")))}
     man["sha256"] = _sha256(dst)
     with open(os.path.join(p1, OP.MANIFEST_NAME), "w", encoding="utf-8") as f:
         json.dump(man, f, indent=2, sort_keys=True)
     log("Format 1: {} ({:.1f} MB)".format(dst, os.path.getsize(dst) / 1048576.0))
     return man
+
+
+def nlcd_format1(p1, p2, man1, man2, log=None):
+    """1.5.2: the format-2 pack's NLCD land cover GeoPackage copied into the format-1 pack
+    (nd_offline_pack/landcover/NLCD_2021_landcover.gpkg, the same file) and listed in its
+    manifest "rasters", so the format-1 pack holds every layer the plugins read. A copy with
+    the same size and sha256 is kept. Without the raster in format 2 the format-1 manifest
+    names it as not included. Returns the format-1 manifest (rewritten)."""
+    log = log or (lambda m: None)
+    man1 = dict(man1)
+    e2 = (man2.get("rasters") or {}).get(NLCD_NAME) or {}
+    src = os.path.join(p2, *e2["file"].split("/")) if e2.get("file") else ""
+    rasters = dict(man1.get("rasters") or {})
+    if src and os.path.isfile(src):
+        dst = os.path.join(p1, *e2["file"].split("/"))
+        e1 = {k: v for k, v in e2.items() if not k.startswith("_")}
+        size = os.path.getsize(src)
+        sha = e2.get("sha256") if e2.get("_sha_size") == size else None
+        sha = sha or _sha256(src)
+        if not (os.path.isfile(dst) and os.path.getsize(dst) == size and _sha256(dst) == sha):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(src, dst + ".part")
+            os.replace(dst + ".part", dst)
+            log("Format 1: {} copied ({:.1f} MB)".format(e2["file"], size / 1048576.0))
+        e1.update(file_size=size, sha256=sha)
+        rasters[NLCD_NAME] = e1
+        man1.pop("rasters_not_included", None)
+    else:
+        rasters.pop(NLCD_NAME, None)
+        man1["rasters_not_included"] = {
+            NLCD_NAME: "the NLCD raster is not in {} either".format(PACK2)}
+    man1["rasters"] = rasters
+    with open(os.path.join(p1, OP.MANIFEST_NAME), "w", encoding="utf-8") as f:
+        json.dump(man1, f, indent=2, sort_keys=True)
+    return man1
+
+
+def zip_format1(p1, out_zip, log=None):
+    """1.5.2: the format-1 pack as one zip (nd_offline_pack/ with the sqlite, manifest.json,
+    README.txt and the rasters its manifest lists), for the plugins' Browse… (unpacked once
+    by offline_pack, rasters included). Returns out_zip."""
+    log = log or (lambda m: None)
+    man = _read_json(os.path.join(p1, OP.MANIFEST_NAME))
+    db = os.path.join(p1, OP.DB_NAME)
+    if not man or not os.path.isfile(db):
+        raise PackBuildError("{} is not a built format-1 pack".format(p1))
+    files = [OP.DB_NAME]
+    if os.path.isfile(os.path.join(p1, "README.txt")):
+        files.append("README.txt")
+    for k, e in sorted((man.get("rasters") or {}).items()):
+        rel = str((e or {}).get("file") or "")
+        if not rel or not os.path.isfile(os.path.join(p1, *rel.split("/"))):
+            raise PackBuildError("{}: raster {} missing ({})".format(p1, k, rel))
+        files.append(rel)
+    out_zip = os.path.abspath(out_zip)
+    if _inside(out_zip, p1):
+        raise PackBuildError("the zip cannot go inside the pack folder")
+    tmp = out_zip + ".part"
+    top = os.path.basename(os.path.normpath(p1))
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as z:
+        for rel in files:
+            z.write(os.path.join(p1, *rel.split("/")), top + "/" + rel,
+                    zipfile.ZIP_STORED if rel.endswith(".gpkg") else zipfile.ZIP_DEFLATED)
+        z.write(os.path.join(p1, OP.MANIFEST_NAME), top + "/" + OP.MANIFEST_NAME)  # last
+    os.replace(tmp, out_zip)
+    log("Format 1 zip: {} ({:.1f} MB)".format(out_zip, os.path.getsize(out_zip) / 1048576.0))
+    return out_zip
 
 
 # ------------------------------------------------------------------ format 2 --
@@ -1164,8 +1233,8 @@ def summary(man2, log):
 
 def verify(out_parent, deep=True):
     """Both packs of out_parent checked: packcheck (manifest vs data), opened by
-    offline_pack.open_pack, and the same layers with the same counts (the raster is format 2
-    only). Returns (ok, lines)."""
+    offline_pack.open_pack, and the same layers with the same counts; 1.5.2: the same rasters
+    (format 1 lists the NLCD copy). Returns (ok, lines)."""
     from .damsuite import packcheck as PC
     p2, p1 = os.path.join(out_parent, PACK2), os.path.join(out_parent, PACK1)
     lines, ok, counts = [], True, []
@@ -1193,6 +1262,22 @@ def verify(out_parent, deep=True):
     else:
         lines.append("format 1 and format 2: the same {} layer(s) and counts".format(
             len(counts[0])))
+    r1 = (_read_json(os.path.join(p1, OP.MANIFEST_NAME)) or {}).get("rasters") or {}
+    r2 = (GP.read_manifest(p2) or {}).get("rasters") or {} if os.path.isdir(p2) else {}
+    bad = []
+    for k, e in r2.items():
+        e1 = r1.get(k) or {}
+        f1 = os.path.join(p1, *str(e1.get("file", "")).split("/")) if e1.get("file") else ""
+        if not f1 or not os.path.isfile(f1) or (
+                e.get("sha256") and e1.get("sha256") and e.get("sha256") != e1.get("sha256")):
+            bad.append(k)
+        elif deep and e1.get("sha256") and _sha256(f1) != e1.get("sha256"):
+            bad.append(k)
+    if bad:
+        ok = False
+        lines.append("raster(s) not in format 1 (or different): " + ", ".join(sorted(bad)))
+    else:
+        lines.append("format 1 and format 2: the same {} raster(s)".format(len(r2)))
     return ok, lines
 
 
@@ -1208,6 +1293,8 @@ def main(argv=None):
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--verify", action="store_true", help="only check the built packs")
+    ap.add_argument("--zip1", metavar="ZIP",
+                    help="also write the format-1 pack (with its NLCD raster) as one zip")
     a = ap.parse_args(argv)
     if a.list:
         for t in registry(a.dwr_folder, a.hifld_folder, a.nlcd_file):
@@ -1216,6 +1303,8 @@ def main(argv=None):
     if a.verify:
         ok, lines = verify(os.path.abspath(a.out))
         print("\n".join(lines))
+        if ok and a.zip1:
+            zip_format1(os.path.join(os.path.abspath(a.out), PACK1), a.zip1, print)
         return 0 if ok else 1
     bbox = [float(v) for v in a.bbox.split(",")] if a.bbox else None
     only = [x.strip() for x in a.only.split(",") if x.strip()] or None
@@ -1223,6 +1312,8 @@ def main(argv=None):
               hifld_folder=a.hifld_folder, nlcd_file=a.nlcd_file)
     ok, lines = verify(os.path.abspath(a.out))
     print("\n".join(lines))
+    if ok and a.zip1:
+        zip_format1(r["pack1"], a.zip1, print)
     return 1 if r["failed"] or not ok else 0
 
 

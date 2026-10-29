@@ -895,13 +895,16 @@ def export(out_path, source, extent=None, structures="auto", mobile_rules=None, 
         # lifelines
         prog(82, "lifelines")
         sets = []
-        for key, _label, _url, cat in C.LIFELINE_SOURCES:
-            ds_name = "lifeline_" + key
-            if source.has(ds_name):
-                sets.append((ds_name, cat, get(ds_name)))
+        # 2.20.3: a key's pack data set is lifeline_<key> or (HIFLD) the pack's HIFLD_* layer
+        picked = C.lifeline_sets(source.has)
+        for _key, _label, _url, cat, ds_name in picked:
+            sets.append((ds_name, cat, get(ds_name)))
         if source.has("OSM_lifelines"):
             sets.append(("OSM_lifelines", None, get("OSM_lifelines")))
-        absent = [k for k, _l, _u, _c in C.LIFELINE_SOURCES if not source.has("lifeline_" + k)]
+        read = {p[0] for p in picked}
+        read_sets = {p[4] for p in picked}                   # (fire and EMS: one HIFLD layer)
+        absent = [k for k, _l, _u, _c in C.LIFELINE_SOURCES if k not in read
+                  and not any(n in read_sets for n in C.lifeline_names(k))]
         if absent:
             notes.append("lifeline layers not in the source: {} (HIFLD layers have no download "
                          "address since 2025; OpenStreetMap fills gaps)".format(", ".join(absent)))
