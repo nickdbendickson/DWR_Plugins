@@ -2,8 +2,12 @@
 /**
  * Deploy-time database migrator (node-postgres, `pg`).
  *
- * Runs during `npm run build` — on every Vercel deploy — applying pending files
- * in ../migrations to DATABASE_URL. Each file is applied in one transaction and
+ * Runs on every Vercel deploy via `npm run build:deploy` (vercel.json
+ * `buildCommand`: `npm run build && npm run db:migrate`), applying pending files
+ * in ../migrations to DATABASE_URL. Plain `npm run build` no longer migrates, so
+ * a local or CI build never touches a database. A custom pipeline that builds
+ * outside Vercel (`vercel build` honours vercel.json; `npm run build` then
+ * `vercel deploy --prebuilt` does not) must run `npm run db:migrate` itself. Each file is applied in one transaction and
  * recorded in a `_migrations` table, so it runs once and is safe to re-run.
  *
  * The read is non-recursive, so the opt-in auth schema under migrations/auth/

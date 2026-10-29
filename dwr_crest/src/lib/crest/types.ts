@@ -141,7 +141,7 @@ export type Analysis = {
       direction: string;
       directionBasis: "dam line" | "reservoir to breach" | "none";
       /** How the reach end was measured: along the downstream direction, or a fallback. */
-      reachBasis: "downstream" | "nearest-boundary" | "toward-aoi" | null;
+      reachBasis: "downstream" | "nearest-boundary" | null;
       /** "clipped": the schematic strip clipped to the polygon; "band": cut by distance only (direction unknown). */
       areaBasis: "clipped" | "band" | null;
       /** Share of the AOI upstream of the breach (null when the direction is unknown). */
