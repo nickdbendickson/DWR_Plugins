@@ -34,7 +34,8 @@ from nd_breach_runner.tests.registry import test, model_test  # noqa: E402
 
 ENV_KEYS = ("NDBREACH_ANUGA_CHECKPOINT_MIN", "NDBREACH_ANUGA_CHECKPOINT_STEPS",
             "NDBREACH_ANUGA_CHECKPOINT_KEEP", "NDBREACH_ANUGA_PARTIAL_MIN",
-            "NDBREACH_ANUGA_RESUME", "ANUGA_CHECKPOINT_MIN", "ANUGA_CHECKPOINT_STEPS",
+            "NDBREACH_ANUGA_RESUME", "NDBREACH_ANUGA_RESUME_FROM",
+            "NDBREACH_ANUGA_RESUME_REF_JOB", "NDBREACH_ANUGA_RESUME_FORCE", "ANUGA_CHECKPOINT_MIN", "ANUGA_CHECKPOINT_STEPS",
             "ANUGA_CHECKPOINT_KEEP", "ANUGA_PARTIAL_MIN", "ANUGA_RESUME")
 
 
@@ -271,8 +272,9 @@ def anuga_checkpoint_worker_results_equal_with_checkpoints_on():
         assert ck["partial_flushes"] == 7 and ck["checkpoints_removed_after_run"]
         assert not os.path.exists(os.path.join(d1, "anuga_checkpoints"))   # cleaned up
         assert not os.path.exists(os.path.join(d1, AW.PARTIAL_NAME))
-        assert {k: v for k, v in s1.items() if k not in ("checkpoint", "runtime_min")} == \
-            {k: v for k, v in s0.items() if k != "runtime_min"}
+        clock = ("runtime_min", "host_pauses")   # wall-clock timings vary under load
+        assert {k: v for k, v in s1.items() if k != "checkpoint" and k not in clock} == \
+            {k: v for k, v in s0.items() if k not in clock}
     finally:
         shutil.rmtree(d0)
         shutil.rmtree(d1)
@@ -322,6 +324,163 @@ def anuga_checkpoint_worker_resume_of_another_job_starts_over():
     finally:
         shutil.rmtree(d0)
         shutil.rmtree(d1)
+
+
+# ----------------------------------------------------------------------- 3.12.6 resume_from
+def _stopped(d, **extra):
+    """A run stopped at t=1000 s with checkpoints every 4 yield steps: its checkpoint
+    folder (newest 960 s) and the job file that wrote it (copied aside)."""
+    assert _fake_run(d, stop_at=1000.0, ckpt_every_steps=4, **extra) is None
+    ckroot = os.path.join(d, "anuga_checkpoints")
+    (fp,) = os.listdir(ckroot)
+    ref = os.path.join(d, "job_that_wrote_it.npz")
+    shutil.copy(os.path.join(d, "anuga_job.npz"), ref)
+    return os.path.join(ckroot, fp), ref
+
+
+def _snapshot(d):
+    return {n: os.path.getsize(os.path.join(d, n)) for n in sorted(os.listdir(d))}
+
+
+@test
+def anuga_checkpoint_digests_recorded_and_other_checkpoints_named():
+    d = tempfile.mkdtemp()
+    try:
+        old, _ = _stopped(d)
+        meta = AW.read_meta(old)
+        assert meta["job_digests"]["hyd_q"] and "resume" not in meta["job_digests"]
+        assert "dt_diag_every" not in meta["job_digests"]
+        # another mesh / bed (here manning_n) = another key: a fresh start that says why
+        with _Env(), contextlib.redirect_stdout(io.StringIO()):
+            g1, s1 = _grids(_fake_run(d, ckpt_every_steps=4, resume=1, manning_n=0.06))
+        ck = s1["checkpoint"]
+        assert ck["resumed_from_t_s"] is None and "no complete checkpoint" in ck["resume_skipped"]
+        (line,) = ck["other_checkpoints"]
+        assert line.startswith(old) and "t=960s" in line and "differs in manning_n" in line, line
+        assert os.path.isdir(old), "another job's checkpoints are left alone"
+    finally:
+        shutil.rmtree(d)
+
+
+@test
+def anuga_checkpoint_resume_from_names_the_folder_and_logs_differences():
+    d0, d1 = tempfile.mkdtemp(), tempfile.mkdtemp()
+    try:
+        g0, _ = _grids(_fake_run(d0))
+        old, _ = _stopped(d1)
+        before = _snapshot(old)
+        # a re-meshed job (here: another manning_n) resumes the named folder's own domain
+        g1, s1 = _grids(_fake_run(d1, ckpt_every_steps=4, manning_n=0.06,
+                                  resume_from=os.path.basename(old)))
+        _same(g0, g1)
+        ck = s1["checkpoint"]
+        assert ck["resumed_from_t_s"] == 960.0 and ck["resume_from"] == old, ck
+        assert ck["resumed_from_fingerprint"] == os.path.basename(old)
+        assert any("manning_n" in n for n in ck["resume_from_notes"]), ck["resume_from_notes"]
+        assert _snapshot(old) == before, "the named folder is only read"
+        assert ck["fingerprint"] != os.path.basename(old) and ck["checkpoints_saved"] == 3
+        # a finished run removes its own checkpoints, never the named folder
+        assert os.listdir(os.path.join(d1, "anuga_checkpoints")) == [os.path.basename(old)]
+        # the env var does the same (absolute path)
+        with _Env(NDBREACH_ANUGA_RESUME_FROM=old):
+            g2, s2 = _grids(_fake_run(d1, ckpt_every_steps=4))
+        _same(g0, g2)
+        assert s2["checkpoint"]["resumed_from_t_s"] == 960.0
+    finally:
+        shutil.rmtree(d0)
+        shutil.rmtree(d1)
+
+
+@test
+def anuga_checkpoint_resume_from_refuses_unsafe_or_unknown_never_starts_over():
+    d0, d1 = tempfile.mkdtemp(), tempfile.mkdtemp()
+    try:
+        g0, _ = _grids(_fake_run(d0))
+        old, ref = _stopped(d1)
+        hyd = np.array([0., 90., 20., 0.])
+        for kw, why in ((dict(hyd_q=hyd), "hyd_q"), (dict(sim=1500.0), "sim_time"),
+                        (dict(resume_from="nowhere"), "no checkpoint.json")):
+            kw.setdefault("resume_from", old)
+            try:
+                _fake_run(d1, ckpt_every_steps=4, **kw)
+                raise AssertionError("resumed: " + why)
+            except AW.ResumeError as e:
+                assert why in str(e), str(e)
+        with _Env(NDBREACH_ANUGA_RESUME_FORCE="1"):
+            _, s = _grids(_fake_run(d1, ckpt_every_steps=4, hyd_q=hyd, resume_from=old))
+        assert s["checkpoint"]["resumed_from_t_s"] == 960.0
+        assert any(n.startswith("FORCED") for n in s["checkpoint"]["resume_from_notes"])
+        # a checkpoint written before 3.12.6 (no job_digests): needs the job that wrote it
+        meta = AW.read_meta(old)
+        del meta["job_digests"]
+        AW.write_json_atomic(os.path.join(old, AW.META_NAME), meta)
+        try:
+            _fake_run(d1, ckpt_every_steps=4, manning_n=0.06, resume_from=old)
+            raise AssertionError("resumed without knowing its inputs")
+        except AW.ResumeError as e:
+            assert "not recorded" in str(e), str(e)
+        with _Env(NDBREACH_ANUGA_RESUME_REF_JOB=ref):
+            g1, s1 = _grids(_fake_run(d1, ckpt_every_steps=4, manning_n=0.06,
+                                      resume_from=old))
+        _same(g0, g1)
+        assert s1["checkpoint"]["resumed_from_t_s"] == 960.0
+        # naming the job's own folder is an ordinary resume (no reference needed)
+        _, s2 = _grids(_fake_run(d1, ckpt_every_steps=4, resume_from=old))
+        assert s2["checkpoint"]["resumed_from_t_s"] == 960.0
+        assert "resume_from" not in s2["checkpoint"]
+    finally:
+        shutil.rmtree(d0)
+        shutil.rmtree(d1)
+
+
+@test
+def anuga_checkpoint_resume_from_job_keys_stay_out_of_the_key():
+    job = {"dem": np.ones((3, 3), np.float32), "sim_time": np.float64(10.0)}
+    f0 = AW.job_fingerprint(job)
+    assert AW.job_fingerprint(dict(job, resume_from="/x", resume_ref_job="/y.npz",
+                                   dt_diag_every=5)) == f0
+    assert set(AW.job_digests(job)) == {"dem", "sim_time"}
+    st = AM.AnugaSettings("python")
+    with _Env(NDBREACH_ANUGA_RESUME_FROM="/ck/c835", NDBREACH_ANUGA_RESUME_REF_JOB="/j.npz"):
+        assert AM.resume_wanted(st)
+        j = AM.checkpoint_job(st)
+    assert j["resume"] == 1 and j["resume_from"] == "/ck/c835" and j["resume_ref_job"] == "/j.npz"
+    with _Env():
+        assert not AM.resume_wanted(st) and AM.checkpoint_job(st) == {}
+
+
+def _mesh_dir(spec):
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, "gmsh_mesh_in.json"), "w") as fh:
+        json.dump(spec, fh)
+    np.savez(os.path.join(d, "gmsh_mesh.npz"), mesh_points=np.zeros((3, 2)),
+             mesh_triangles=np.array([[0, 1, 2]]), mesh_boundary=np.zeros((3, 3), np.int64),
+             mesh_stats=json.dumps({"triangles": 1}))
+    return d
+
+
+@test
+def anuga_checkpoint_resumed_run_reuses_the_same_gmsh_mesh():
+    """gmsh with threads does not repeat its mesh (DWR-2801 r3); a resumed run keeps it."""
+    spec = {"outer": [[0, 0], [1, 0], [1, 1]], "points": [], "threads": 6}
+    st = AM.AnugaSettings(os.path.join(tempfile.gettempdir(), "no_such_python"))
+    st.gmsh_timeout_s = 5.0
+    d = _mesh_dir(spec)
+    try:
+        assert AM.reusable_gmsh_mesh(d, dict(spec, threads=1)) is None    # threads: not input
+        mesh, note = AM.make_gmsh_mesh(d, dict(spec, threads=2), st, reuse=True)
+        assert mesh["reused"] and len(mesh["triangles"]) == 1 and "Re-used" in note
+        assert AM.reusable_gmsh_mesh(d, dict(spec, points=[[0.5, 0.5]])) == \
+            "the mesh input changed"
+        with open(os.path.join(d, AM.MESH_KEY_NAME), "w") as fh:
+            json.dump({"spec_sha": AM._sha(AM._canon(spec).encode()), "mesher_sha": "x"}, fh)
+        assert AM.reusable_gmsh_mesh(d, spec) == "gmsh_mesher.py changed"
+        # not resuming: a new mesh as before (here gmsh cannot start: no mesh at all)
+        os.remove(os.path.join(d, AM.MESH_KEY_NAME))
+        mesh, why = AM.make_gmsh_mesh(d, spec, st, reuse=False)
+        assert mesh is None and not os.path.exists(os.path.join(d, "gmsh_mesh.npz")), why
+    finally:
+        shutil.rmtree(d)
 
 
 @test

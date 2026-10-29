@@ -382,6 +382,33 @@ At the end, `timestep_diag_summary.txt`, the log and `run_report.json` → `anug
 
 **The wall clock on every progress line (always on).** Each ANUGA progress line now ends with `utc=2026-10-24T09:54:53Z steps=358 dsteps=107 wall_s=0.1 rate=2.89e+03`: the time, the internal steps so far and since the last yield step, the wall seconds since the last yield step and the model seconds per wall second. A long `wall_s` with a normal `dsteps` means the computer paused (a host freeze); a large `dsteps` means ANUGA really took many small steps. The start of the line is unchanged, so the progress bar reads it as before.
 
+## Resuming an ANUGA run from a named checkpoint (Runner 3.12.6)
+**Why.** A checkpoint is resumed automatically only by the job that wrote it: its folder under `_breach_model/anuga/anuga_checkpoints/` is named by a key (a hash of the job's inputs - content only, never file times; the checkpoint settings, the thread count, gmsh's timings and the time-step diagnostic are left out). Until 3.12.6 the Runner made a new gmsh mesh on every start, and gmsh with several threads doesn't give the same mesh twice: DWR-2801 r3 was relaunched with resume on and got 344,856 triangles instead of 344,866 from the same mesh input, so the key changed (`c835230a18bc32d2` → `ce932027254a09f4`), no checkpoint matched and ANUGA started again at t = 0.
+
+**What changed.**
+- A resumed run (`NDBREACH_ANUGA_RESUME`, the run's own Resume, or a named folder below) re-uses `gmsh_mesh.npz` when it was made from the same mesh input (`gmsh_mesh_in.json`, thread count aside) and the same `gmsh_mesher.py` (`gmsh_mesh_key.json`, written after each mesh). The run log says `Re-used the mesh already made from the same input`, or why a new mesh was made. A run that isn't resuming meshes as before.
+- `checkpoint.json` records a digest of each job input (`job_digests`). When a resumed run finds no checkpoint of its own, the log lists the other checkpoint folders, their newest time and which inputs differ.
+- A checkpoint can be named explicitly:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `NDBREACH_ANUGA_RESUME_FROM` | unset | The checkpoint folder to resume: an absolute path, or a key (folder name) under `anuga_checkpoints`. Turns resume on. |
+| `NDBREACH_ANUGA_RESUME_REF_JOB` | unset | For a checkpoint written before 3.12.6 (no `job_digests`): the `anuga_job.npz` that wrote it, so the inputs can be compared. |
+| `NDBREACH_ANUGA_RESUME_FORCE` | unset | `1` resumes even when the check finds a difference that would stop it (below). |
+
+**The compatibility check.** Before anything runs, the worker compares this job with the checkpoint's: the simulated time and yield step, and every recorded input. Each difference is logged (`resume_from check: …`) and kept in `run_report.json` → `checkpoint.resume_from_notes`.
+- A different mesh, bed, friction or culvert set is allowed: the checkpoint's own domain is what continues, so its results are those of the original run.
+- A different simulated time, yield step, hydrograph, DEM or output grid stops the run with a message (`NDBREACH_ANUGA_RESUME_FORCE=1` overrides).
+- No loadable checkpoint in the folder, or inputs that can't be compared (an old checkpoint and no reference job), also stops the run. It never quietly starts again at t = 0.
+- The named folder is only read. New checkpoints go to the job's own folder (its `checkpoint.json` has `resumed_from`). If the job's own folder already has a checkpoint as new as the named one (a resumed run stopped again), that one is used.
+
+For example, before starting QGIS, the command-line run or the queue:
+```
+export NDBREACH_ANUGA_RESUME_FROM=c835230a18bc32d2
+export NDBREACH_ANUGA_RESUME_REF_JOB=/path/to/the/original/anuga_job.npz   # pre-3.12.6 checkpoint only
+```
+Unset them after the run, so a later run of another dam doesn't pick them up (it would stop at the check rather than run on the wrong checkpoint).
+
 ## Is a slow ANUGA run frozen or really slow? (Runner 3.10.73)
 `core/anuga_slowcheck.py` looks at a running (or stopped) ANUGA run **without touching it**: it only reads the log, the checkpoints and `/proc`, and needs nothing but python3.
 

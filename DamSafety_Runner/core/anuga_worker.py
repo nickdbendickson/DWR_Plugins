@@ -46,6 +46,19 @@ optional:
   resume          1 = continue from the newest complete checkpoint of the SAME job (same
                   fingerprint), envelope (max depth / velocity / WSE, arrival) included;
                   no usable checkpoint = a fresh start, said in stats["checkpoint"]
+  resume_from     (3.12.6) a checkpoint folder to resume from even though its fingerprint
+                  differs from this job's (an absolute path, or a fingerprint / folder under
+                  ckpt_dir); also NDBREACH_ANUGA_RESUME_FROM. The pickled domain (its mesh,
+                  bed, friction, culverts, inflow) is what runs on; the worker compares this
+                  job with the one that wrote the checkpoint (checkpoint.json "job_digests",
+                  or resume_ref_job / NDBREACH_ANUGA_RESUME_REF_JOB = that job's
+                  anuga_job.npz for a checkpoint written before 3.12.6), logs every input
+                  that differs, and stops (never a quiet fresh start) when the folder has no
+                  loadable checkpoint, when the inputs cannot be compared, or when one of
+                  RESUME_STRICT_KEYS (simulated time, yield step, hydrograph, DEM, output
+                  grid) differs - NDBREACH_ANUGA_RESUME_FORCE=1 overrides the last two.
+                  The named folder is only read; new checkpoints go to this job's own folder.
+  resume_ref_job  (3.12.6) see resume_from
 
   (3.10.70; absent = off. Never part of the checkpoint fingerprint; results never change)
   dt_diag_every   yield steps between rows of timestep_diag.csv (core/anuga_dtdiag.py: the
@@ -508,13 +521,24 @@ def fill_nan(a):
 # ------------------------------------------------------------- 3.10.35 checkpointing
 DOMAIN_NAME = "anuga_breach"
 CKPT_KEYS = ("ckpt_every_min", "ckpt_every_steps", "ckpt_keep", "ckpt_dir",
-             "partial_every_min", "resume")
+             "partial_every_min", "resume", "resume_from", "resume_ref_job")
 # not part of the fingerprint: the thread count and gmsh's own report (timings) do not
 # change the model, so a run can resume with another thread count
 # 3.10.70: nor the read-only time-step diagnostic (a run resumes with it turned on or off)
 FINGERPRINT_SKIP = CKPT_KEYS + ("threads", "mesh_stats") + anuga_dtdiag.DT_DIAG_KEYS
 PARTIAL_NAME = "anuga_partial.npz"
 META_NAME = "checkpoint.json"
+# 3.12.6 (DWR-2801 r3): an explicit resume from a named checkpoint folder (resume_from)
+RESUME_FROM_ENV = "NDBREACH_ANUGA_RESUME_FROM"
+RESUME_REF_JOB_ENV = "NDBREACH_ANUGA_RESUME_REF_JOB"
+RESUME_FORCE_ENV = "NDBREACH_ANUGA_RESUME_FORCE"
+# inputs the resumed run still reads from the job (the run length, the output grid and the
+# local origin) or that make it another flood (the hydrograph, the DEM): a difference stops
+# an explicit resume unless NDBREACH_ANUGA_RESUME_FORCE=1. Any other difference (the mesh,
+# the bed, culverts, friction ...) is logged: the checkpoint's own domain is what runs on.
+RESUME_STRICT_KEYS = ("sim_time", "yieldstep", "hyd_t", "hyd_q", "dem", "dem_x0", "dem_y0",
+                      "dem_dx", "arrival_depth", "velocity_min_depth", "out_x0", "out_y0",
+                      "out_dx", "out_nx", "out_ny")
 
 
 class Hydrograph:
@@ -979,7 +1003,7 @@ def checkpoint_config(job):
            "keep": int(max(1, g("ckpt_keep", 2))),
            "dir": str(job["ckpt_dir"]) if "ckpt_dir" in job else "anuga_checkpoints",
            "partial_every_min": max(0.0, g("partial_every_min")),
-           "resume": bool(g("resume"))}
+           "resume": bool(g("resume")) or bool(resume_from_setting(job))}
     cfg["checkpoint"] = cfg["every_min"] > 0 or cfg["every_steps"] > 0
     cfg["partial"] = cfg["checkpoint"] or cfg["partial_every_min"] > 0
     if not (cfg["checkpoint"] or cfg["partial"] or cfg["resume"]):
@@ -987,20 +1011,123 @@ def checkpoint_config(job):
     return cfg
 
 
+def _key_bytes(k, v):
+    a = np.asarray(v)
+    return (k.encode(), str(a.dtype).encode(), str(a.shape).encode(),
+            np.ascontiguousarray(a).tobytes())
+
+
 def job_fingerprint(job):
     """sha256 (16 hex) of everything in the job except FINGERPRINT_SKIP (the checkpoint
-    settings, threads, gmsh's timings): a checkpoint is only resumed by the job that wrote
-    it."""
+    settings, threads, gmsh's timings, the time-step diagnostic): a checkpoint is only
+    resumed by the job that wrote it. Content only - file times never enter it. (Unchanged
+    since 3.10.35, so older checkpoints keep their key.)"""
     h = hashlib.sha256()
     for k in sorted(job):
         if k in FINGERPRINT_SKIP:
             continue
-        a = np.asarray(job[k])
-        h.update(k.encode())
-        h.update(str(a.dtype).encode())
-        h.update(str(a.shape).encode())
-        h.update(np.ascontiguousarray(a).tobytes())
+        for b in _key_bytes(k, job[k]):
+            h.update(b)
     return h.hexdigest()[:16]
+
+
+def job_digests(job):
+    """3.12.6: {key: sha256 (16 hex)} of each fingerprinted job input, kept in
+    checkpoint.json so a later job whose fingerprint differs can say which inputs differ."""
+    out = {}
+    for k in sorted(job):
+        if k in FINGERPRINT_SKIP:
+            continue
+        h = hashlib.sha256()
+        for b in _key_bytes(k, job[k]):
+            h.update(b)
+        out[k] = h.hexdigest()[:16]
+    return out
+
+
+def digest_diff(old, new):
+    """Sorted keys whose digest differs or that only one side has."""
+    return sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+
+
+def other_checkpoints(root, fp, digests):
+    """3.12.6: one line per other fingerprint folder under `root` that lists a complete
+    checkpoint: its newest time and the job inputs that differ from this job's (when its
+    checkpoint.json recorded them). [] when there are none."""
+    lines = []
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return lines
+    for name in names:
+        d = os.path.join(root, name)
+        if name == fp or not os.path.isdir(d):
+            continue
+        m = read_meta(d)
+        if not m or not m.get("times"):
+            continue
+        if m.get("job_digests"):
+            diff = digest_diff(m["job_digests"], digests)
+            what = "differs in " + (", ".join(diff) if diff else "nothing recorded")
+        else:
+            what = "its inputs were not recorded (written before 3.12.6)"
+        lines.append("{} has a checkpoint at t={:g}s; {}".format(
+            d, max(float(t) for t in m["times"]), what))
+    return lines
+
+
+class ResumeError(RuntimeError):
+    """An explicit resume (resume_from) that cannot go ahead: the worker stops."""
+
+
+def resume_from_setting(job, environ=None):
+    """The resume_from folder asked for ('' = none): the job key, else the environment."""
+    env = os.environ if environ is None else environ
+    v = str(job["resume_from"]) if "resume_from" in job else env.get(RESUME_FROM_ENV, "")
+    return v.strip()
+
+
+def resolve_resume_dir(value, workdir, ck_dir_name):
+    """An absolute folder, else a fingerprint / folder under <workdir>/<ckpt_dir>, else a
+    path relative to the job's folder."""
+    if os.path.isabs(value):
+        return value
+    under = os.path.join(workdir, ck_dir_name, value)
+    return under if os.path.isdir(under) else os.path.join(workdir, value)
+
+
+def resume_check(job, meta, ref_digests=None, force=False):
+    """(notes, problems) of an explicit resume: notes are logged; any problem stops the
+    resume unless force. Compares the job with the checkpoint's recorded inputs
+    (meta["job_digests"], else ref_digests from the job file that wrote it)."""
+    notes, problems = [], []
+    for k, mk in (("sim_time", "sim_time_s"), ("yieldstep", "yieldstep_s")):
+        if k in job and mk in meta and float(job[k]) != float(meta[mk]):
+            problems.append("{} is {:g} s here, {:g} s in the checkpoint".format(
+                k, float(job[k]), float(meta[mk])))
+    rec = meta.get("job_digests") or ref_digests
+    if not rec:
+        problems.append("the checkpoint's inputs were not recorded (written before 3.12.6) "
+                        "and no reference job was given ({} = the anuga_job.npz that wrote "
+                        "it)".format(RESUME_REF_JOB_ENV))
+    else:
+        src = "checkpoint.json" if meta.get("job_digests") else "the reference job"
+        diff = digest_diff(rec, job_digests(job))
+        strict = [k for k in diff if k in RESUME_STRICT_KEYS]
+        other = [k for k in diff if k not in RESUME_STRICT_KEYS]
+        if not diff:
+            notes.append("every job input matches " + src)
+        if other:
+            notes.append("inputs that differ from {} (the checkpoint's own domain - mesh, bed, "
+                         "friction, culverts - runs on, not the job's): {}".format(
+                             src, ", ".join(other)))
+        if strict:
+            problems.append("inputs the resumed run depends on differ from {}: {}".format(
+                src, ", ".join(strict)))
+    if force and problems:
+        notes += ["FORCED ({}=1): {}".format(RESUME_FORCE_ENV, p) for p in problems]
+        problems = []
+    return notes, problems
 
 
 def checkpoint_path(ckdir, t):
@@ -1401,10 +1528,76 @@ def main(job_path, out_path):
                   "partial_every_min": ck["partial_every_min"], "resume": ck["resume"],
                   "checkpoints_saved": 0, "last_checkpoint_t_s": None,
                   "partial_flushes": 0, "last_partial_t_s": None, "resumed_from_t_s": None}
-        if ck["resume"]:
+        digests = job_digests(job)
+        rfrom = resume_from_setting(job)
+        rdir = rmeta = None
+        if rfrom:                                # 3.12.6: an explicit resume (resume_from)
+            rdir = os.path.abspath(resolve_resume_dir(rfrom, workdir, ck["dir"]))
+            rmeta = read_meta(rdir)
+            if not rmeta or not rmeta.get("times"):
+                raise ResumeError("resume_from {}: no checkpoint.json listing a complete "
+                                  "checkpoint there; nothing was run".format(rdir))
+            own = read_meta(ckdir)
+            if rdir == os.path.abspath(ckdir) or (
+                    own and own.get("fingerprint") == fp and own.get("times")
+                    and max(own["times"]) >= max(rmeta["times"])):
+                # this job's own checkpoints (e.g. a resumed run stopped again) are as new:
+                # the ordinary resume below uses them
+                print("PROGRESS 0 resume_from: this job's own checkpoint folder {} is used "
+                      "(as new as {})".format(ckdir, rdir), flush=True)
+                rdir = None
+        if rdir:
+            ckinfo["resume_from"] = rdir
+            ref = str(job["resume_ref_job"]) if "resume_ref_job" in job else \
+                os.environ.get(RESUME_REF_JOB_ENV, "")
+            ref_digests = None
+            if ref.strip() and not rmeta.get("job_digests"):
+                try:
+                    with np.load(ref.strip(), allow_pickle=False) as z:
+                        ref_digests = job_digests({k: z[k] for k in z.files})
+                except Exception as e:
+                    raise ResumeError("resume_from: the reference job {} cannot be read: "
+                                      "{}".format(ref.strip(), str(e)[:200]))
+            force = os.environ.get(RESUME_FORCE_ENV, "").strip().lower() in (
+                "1", "yes", "true", "on")
+            notes, problems = resume_check(job, rmeta, ref_digests, force)
+            if rmeta.get("anuga_version") != getattr(anuga, "__version__", "?"):
+                notes.append("written by ANUGA {}, this is ANUGA {}".format(
+                    rmeta.get("anuga_version"), getattr(anuga, "__version__", "?")))
+            for n in notes:
+                print("PROGRESS 0 resume_from check: " + n[:400], flush=True)
+            ckinfo["resume_from_notes"] = notes
+            if problems:
+                raise ResumeError("resume_from {}: {}. Nothing was run ({}=1 resumes "
+                                  "anyway).".format(rdir, "; ".join(problems),
+                                                    RESUME_FORCE_ENV))
+            dom, t_or_err = load_latest_checkpoint(anuga, rdir, rmeta)
+            envop = find_envelope(dom, Envelope) if dom is not None else None
+            if dom is None or envop is None:
+                raise ResumeError("resume_from {}: {}; nothing was run".format(
+                    rdir, "no checkpoint loaded: " + str(t_or_err) if dom is None
+                    else "the checkpoint has no envelope operator"))
+            domain, env, info = dom, envop, rmeta["info"]
+            ckinfo["resumed_from_t_s"] = t_or_err
+            ckinfo["resumed_from_fingerprint"] = rmeta.get("fingerprint")
+            domain.yieldstep_counter += 1
+            meta = None          # new checkpoints: this job's own folder; rdir is only read
+            if os.path.abspath(ckdir) != rdir and os.path.isdir(ckdir):
+                shutil.rmtree(ckdir, ignore_errors=True)
+            print("PROGRESS {:.2f} resumed from the checkpoint at t={:.0f}s in {}".format(
+                100.0 * t_or_err / sim_time, t_or_err, rdir), flush=True)
+        elif ck["resume"]:
             meta = read_meta(ckdir)
             if not meta or meta.get("fingerprint") != fp or not meta.get("times"):
                 ckinfo["resume_skipped"] = "no complete checkpoint of this job in " + ckdir
+                others = other_checkpoints(os.path.join(workdir, ck["dir"]), fp, digests)
+                if others:                       # 3.12.6: say why, and how to resume one
+                    ckinfo["other_checkpoints"] = others
+                    for o in others:
+                        print("PROGRESS 0 resume: another job's checkpoint: " + o[:400],
+                              flush=True)
+                    print("PROGRESS 0 resume: {}=<that folder> resumes it after a "
+                          "compatibility check".format(RESUME_FROM_ENV), flush=True)
             else:
                 dom, t_or_err = load_latest_checkpoint(anuga, ckdir, meta)
                 envop = find_envelope(dom, Envelope) if dom is not None else None
@@ -1449,7 +1642,12 @@ def main(job_path, out_path):
             if meta is None:
                 meta = {"fingerprint": ckinfo["fingerprint"], "times": [], "info": info,
                         "sim_time_s": sim_time, "yieldstep_s": ystep,
-                        "anuga_version": getattr(anuga, "__version__", "?")}
+                        "anuga_version": getattr(anuga, "__version__", "?"),
+                        "job_digests": digests}           # 3.12.6
+                if ckinfo.get("resume_from"):
+                    meta["resumed_from"] = {"dir": ckinfo["resume_from"],
+                                            "t_s": ckinfo["resumed_from_t_s"],
+                                            "fingerprint": ckinfo.get("resumed_from_fingerprint")}
                 write_json_atomic(os.path.join(ckdir, META_NAME), meta)
             if ck["every_min"] > 0:
                 # 3.12.4: the worker saves on its own monotonic timer (MonoTimer below);
