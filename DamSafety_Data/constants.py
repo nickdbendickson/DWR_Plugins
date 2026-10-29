@@ -110,7 +110,10 @@ XLSX_MAX_SHEET_NAME = 31
 # Quartic ORDER: DESCENDING POWERS [x^4, x^3, x^2, x^1, constant] - required
 # by evaluate_polynomial()'s Horner loop. Do NOT reorder.
 
-from .damsuite import tm11_curves as _TM11
+try:
+    from .damsuite import tm11_curves as _TM11
+except ImportError:      # 2.19.2: build_nd_pack.py run as a script (python build_nd_pack.py)
+    from damsuite import tm11_curves as _TM11      # noqa: E402
 
 
 class TableCurve(object):

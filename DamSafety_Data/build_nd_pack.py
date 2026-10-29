@@ -1089,9 +1089,17 @@ def _pick(names_or_groups, table):
 
 
 
-# ND DWR MapService shapefile downloads (layer indices from mapservice.dwr.nd.gov)
+# ND DWR MapService downloads. 2.19.2: the download form of mapservice.dwr.nd.gov
+# (index.php?active=Dams > Download Data) posts the layer NAME as qlay, whichextent all /
+# partial, srid, downloadformat shp / spat, mapext (the map's EPSG:2266 extent in feet,
+# '+'-separated) and map (the server's map file). The old request (layer=<index>,
+# format=shapefile, extent=full) is not understood: HTTP 200 with an empty body.
 DWR_DOWNLOAD_URL = "https://mapservice.dwr.nd.gov/php/downloadShape.php"
-DWR_DOWNLOADS = (
+DWR_MAPFILE = "/Volumes/Data/WebServer/newswcprivate/mapfiles/swc.map"
+# the web map's full extent (EPSG:2266, ND South State Plane, international feet)
+DWR_FULL_EXTENT = (1026879.6641881, 54774.288373765, 2999091.3458676, 1331032.7378794)
+DWR_FORMATS = {"shp": ".shp", "spat": ".sqlite"}
+DWR_DOWNLOADS = (     # (data set, MapService layer index (for reference), qlay = layer name)
     ("DWR_dam_lines", 253, "Damsline"),
     ("DWR_dams", 254, "Dams"),
     ("DWR_dugout_polygons", 276, "DugoutsPoly"),
@@ -1099,47 +1107,80 @@ DWR_DOWNLOADS = (
 )
 
 
-def download_dwr_shapefiles(dest_folder, log=None):
-    """Download the four ND DWR layers as shapefile zips from the MapService.
+def dwr_extent(bbox=None):
+    """mapext of a DWR download: a lon / lat bbox (west, south, east, north) as the EPSG:2266
+    box around it (feet, '+'-separated, the way the web map sends it); None -> the full map."""
+    if bbox is None:
+        box = DWR_FULL_EXTENT
+    else:
+        proj, unit = DF._KNOWN[2266]
+        w, s, e, n = (float(v) for v in bbox)
+        pts = [proj.forward(x, y) for x in (w, e) for y in (s, n)]
+        pts += [proj.forward((w + e) / 2.0, y) for y in (s, n)]    # the arc of the parallels
+        xs = [p[0] / unit for p in pts]
+        ys = [p[1] / unit for p in pts]
+        box = (min(xs), min(ys), max(xs), max(ys))
+    return "+".join("{:.3f}".format(v) for v in box)
 
-    POSTs to DWR_DOWNLOAD_URL with layer=<index>, format=shapefile, extent=full.
-    Saves each zip and extracts it into dest_folder. Returns the list of
-    extracted folders. The existing --dwr-folder path can then use them
-    after conversion to GeoPackage (or the files can be used directly if a
-    shapefile reader is available)."""
+
+def dwr_request(qlay, bbox=None, fmt="shp"):
+    """The form fields of one DWR MapService download (see DWR_DOWNLOAD_URL)."""
+    if fmt not in DWR_FORMATS:
+        raise BuildError("DWR download format must be one of {}".format(", ".join(DWR_FORMATS)))
+    return {"whichextent": "all" if bbox is None else "partial", "srid": "4269",
+            "downloadformat": fmt, "qlay": qlay, "mapext": dwr_extent(bbox),
+            "map": DWR_MAPFILE}
+
+
+def download_dwr_shapefiles(dest_folder, log=None, bbox=None, fmt="shp", only=None):
+    """Download the four ND DWR layers (dams, dam lines, dugouts, dugout polygons) from the
+    DWR MapService and extract each zip into dest_folder/<data set>/.
+
+    bbox (west, south, east, north, lon / lat) downloads only that area (the form's "Data
+    within current view"); None -> the full data set. fmt "shp" (shapefile: 10-character
+    field names) or "spat" (SpatiaLite: full field names). Coordinates NAD83 lon / lat
+    (srid 4269). only: data set names or qlay names to fetch (None -> all four).
+    Returns the list of extracted folders; a layer that fails is logged and skipped. An
+    answer that is not a zip (the old request got an empty one) is never saved as a .zip."""
     import urllib.request
     import urllib.parse
+    log = log or (lambda m: None)
     os.makedirs(dest_folder, exist_ok=True)
     out = []
-    for name, layer, label in DWR_DOWNLOADS:
-        data = urllib.parse.urlencode({
-            "layer": layer, "format": "shapefile", "extent": "full",
-        }).encode()
+    for name, _index, qlay in DWR_DOWNLOADS:
+        if only and name not in only and qlay not in only:
+            continue
+        data = urllib.parse.urlencode(dwr_request(qlay, bbox, fmt)).encode()
         req = urllib.request.Request(DWR_DOWNLOAD_URL, data=data,
-                                     headers={"User-Agent": "DamSafety-pack"})
+                                     headers={"User-Agent": _ua()})
         try:
-            with urllib.request.urlopen(req, timeout=120) as r:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
                 raw = r.read()
         except Exception as e:
-            if log:
-                log("  {} failed: {}".format(label, e))
+            log("  {} failed: {}".format(qlay, e))
+            continue
+        if not raw.startswith(b"PK"):
+            log("  {}: the DWR MapService sent no file ({} bytes)".format(qlay, len(raw)))
             continue
         zpath = os.path.join(dest_folder, "{}.zip".format(name))
-        with open(zpath, "wb") as f:
+        with open(zpath + ".part", "wb") as f:
             f.write(raw)
-        # extract
+        os.replace(zpath + ".part", zpath)
         sub = os.path.join(dest_folder, name)
         os.makedirs(sub, exist_ok=True)
-        import zipfile
         try:
             with zipfile.ZipFile(zpath) as zf:
                 zf.extractall(sub)
-            out.append(sub)
-            if log:
-                log("  {} -> {} ({:,} bytes)".format(label, sub, len(raw)))
+                names = zf.namelist()
         except zipfile.BadZipFile:
-            if log:
-                log("  {} is not a zip ({} bytes)".format(label, len(raw)))
+            log("  {} is not a zip ({} bytes)".format(qlay, len(raw)))
+            continue
+        if not any(n.lower().endswith(DWR_FORMATS[fmt]) for n in names):
+            log("  {}: the zip holds no {} file ({})".format(qlay, DWR_FORMATS[fmt],
+                                                             ", ".join(names)))
+            continue
+        out.append(sub)
+        log("  {} -> {} ({:,} bytes)".format(qlay, sub, len(raw)))
     return out
 
 
@@ -1428,6 +1469,13 @@ def main(argv=None):
                     help="download the four ND DWR layers (dams, dam lines, "
                          "dugouts, dugout polygons) as shapefile zips from "
                          "mapservice.dwr.nd.gov into FOLDER, then exit")
+    ap.add_argument("--dwr-bbox", metavar="W,S,E,N",
+                    help="2.19.2: with --download-dwr: only this lon / lat box, written "
+                         "with = (--dwr-bbox=-100.85,46.75,-100.70,46.85; default: the "
+                         "full data sets)")
+    ap.add_argument("--dwr-format", choices=sorted(DWR_FORMATS), default="shp",
+                    help="2.19.2: with --download-dwr: shp (shapefile) or spat "
+                         "(SpatiaLite, full field names)")
     ap.add_argument("--dwr-folder", metavar="PATH",
                     help="2.18.66: a folder with the ND DWR GeoPackages (DWR_Dams.gpkg, "
                          "DWR_Dam_Lines.gpkg, DWR_Unknown_Structures.gpkg, DWR_Dugouts.gpkg, "
@@ -1438,8 +1486,17 @@ def main(argv=None):
     ap.add_argument("--list", action="store_true", help="list the data sets and stop")
     a = ap.parse_args(argv)
     if a.download_dwr:
-        download_dwr_shapefiles(a.download_dwr, log=print)
-        return
+        bbox = None
+        if a.dwr_bbox:
+            try:
+                bbox = tuple(float(v) for v in a.dwr_bbox.split(","))
+                assert len(bbox) == 4 and bbox[0] < bbox[2] and bbox[1] < bbox[3]
+            except (ValueError, AssertionError):
+                print("ERROR: --dwr-bbox needs west,south,east,north in degrees")
+                return 1
+        got = download_dwr_shapefiles(a.download_dwr, log=print, bbox=bbox, fmt=a.dwr_format)
+        print("{} of {} DWR layer(s) downloaded".format(len(got), len(DWR_DOWNLOADS)))
+        return 0 if len(got) == len(DWR_DOWNLOADS) else 1
     if a.list:
         try:
             table = datasets(a.dwr_folder)
