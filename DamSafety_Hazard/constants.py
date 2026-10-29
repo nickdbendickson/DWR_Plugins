@@ -3,11 +3,7 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-<<<<<<< HEAD
 PLUGIN_VERSION = "2.20.1"
-=======
-PLUGIN_VERSION = "2.19.2"
->>>>>>> 85ac1c9 (Hazard 2.19.2: fix the ND DWR download (build_nd_pack --download-dwr))
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
