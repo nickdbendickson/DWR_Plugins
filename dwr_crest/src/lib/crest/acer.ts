@@ -1,16 +1,26 @@
-/** Port of the shared ACER TM 11 / REG_05.2026 depth-velocity charts from damsuite/tm11_curves.py.
- * Linear interpolation, depth on boundary takes higher zone, beyond axes = high danger.
+/** Port of the shared ACER TM 11 / REG_05.2026 depth-velocity charts from damsuite/tm11_curves.py,
+ * and of the ND class rules in damsuite/classification.py (classify_nd).
+ *
+ * Zone rules follow tm11_curves.zone(): linear interpolation of the low and high boundaries at the
+ * velocity (a velocity past the last chart column reads the last column), and a depth on a boundary
+ * takes the higher zone. A depth past the chart's depth axis is high danger. There is no
+ * velocity-past-axis rule: tm11_curves.zone() does not have one.
  */
 
-type Kind = "house" | "mobile";
+import type { RoadClass } from "./types.ts";
 
-const AXES: Record<Kind, [number, number]> = {
+export type ChartKind = "house" | "mobile";
+export type Zone = "low" | "judgment" | "high";
+export type NdClass = "High" | "Medium" | "Low";
+
+/** (velocity ft/s, depth ft) chart maxima. */
+export const AXES: Record<ChartKind, [number, number]> = {
   house: [25.0, 10.0],
   mobile: [16.0, 3.0],
 };
 
-// Truncated for brevity in this example; full table copied from tm11_curves.py CURVES
-const CURVES: Record<Kind, { v: number[]; low: number[]; high: number[] }> = {
+// Full tables copied from damsuite tm11_curves.py CURVES.
+const CURVES: Record<ChartKind, { v: number[]; low: number[]; high: number[] }> = {
   house: {
     v: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 14.5, 15, 15.5, 16, 16.5, 17, 17.5, 18, 18.5, 19, 19.5, 20, 20.5, 21, 21.5, 22, 22.5, 23, 23.5, 24, 24.5, 25],
     low: [2.94, 2.94, 2.916, 2.866, 2.816, 2.767, 2.711, 2.618, 2.568, 2.469, 2.417, 2.32, 2.246, 2.146, 2.049, 1.95, 1.873, 1.774, 1.675, 1.576, 1.476, 1.377, 1.278, 1.179, 1.091, 1.005, 0.906, 0.806, 0.732, 0.633, 0.558, 0.484, 0.429, 0.355, 0.285, 0.236, 0.136, 0.062, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -37,27 +47,97 @@ function interp(x: number, xs: number[], ys: number[]): number {
   return ys[lo] + t * (ys[hi] - ys[lo]);
 }
 
-export function zone(kind: Kind, depthFt: number, velocityFts: number): "low" | "judgment" | "high" {
+/** (low boundary ft, high boundary ft) at a velocity. Negative velocity reads as 0, as in the suite. */
+export function thresholds(kind: ChartKind, velocityFps: number): [number, number] {
   const c = CURVES[kind];
-  const [vmax] = AXES[kind];
-  const v = Math.max(0, Math.min(velocityFts, vmax)); // clamp; beyond axes treated as high by caller if desired
-  const lo = interp(v, c.v, c.low);
-  const hi = interp(v, c.v, c.high);
-  if (depthFt >= hi || velocityFts > vmax || velocityFts < 0) return "high";
-  if (depthFt >= lo && depthFt > 0) return "judgment";
+  const v = Math.max(0, Number.isFinite(velocityFps) ? velocityFps : 0);
+  return [interp(v, c.v, c.low), interp(v, c.v, c.high)];
+}
+
+/** "low", "judgment" or "high". A depth on a boundary takes the higher zone (ND 5.3). */
+export function zone(kind: ChartKind, depthFt: number, velocityFps: number): Zone {
+  const [lo, hi] = thresholds(kind, velocityFps);
+  const d = depthFt;
+  const dmax = AXES[kind][1];
+  if (d > dmax) return "high"; // past the chart's depth axis
+  if (d >= hi) return "high";
+  if (d >= lo && d > 0) return "judgment";
   return "low";
 }
 
-/** Ranking helper: maps zone + receptor kind to ND class contribution. */
-export function receptorClass(
-  kind: string,
-  depthFt: number,
-  velocityFts: number,
-  isMobile = false,
-): "High" | "Medium" | "Low" | null {
-  if (depthFt < 0.1) return null;
-  const z = zone(isMobile ? "mobile" : "house", depthFt, velocityFts);
-  if (z === "high" || z === "judgment") return "High";
-  if (z === "low") return "Medium"; // economic loss
-  return null;
+/** Depth (ft) at or above which a receptor counts as inundated (suite 0.1 ft wet threshold). */
+export const WET_FT = 0.1;
+
+export type RankInput = {
+  /** house, mobile, barn, road, rail */
+  kind: string;
+  depthFt: number;
+  velocityFps: number;
+  /** Roads: annual average daily traffic. */
+  aadt?: number;
+  roadClass?: RoadClass;
+  /** Structures: true = habitable. Barns and sheds default to false, houses to true. */
+  habitable?: boolean;
+  /** Judgment zone counts as High (classify_nd judgment_as_probable, the 5.3(f) default). */
+  judgmentAsProbable?: boolean;
+};
+
+export type Ranked = {
+  zone: Zone | null;
+  class: NdClass | null;
+  reason: string;
+  /** Needs an engineer: unknown AADT, unverified structure, or a judgment-zone call. */
+  judgment: boolean;
+};
+
+/** ND class contribution of one receptor (damsuite classification.classify_nd rules). */
+export function rankReceptor(input: RankInput): Ranked {
+  const { kind, depthFt, velocityFps } = input;
+  const wet = depthFt >= WET_FT;
+  if (kind === "road") {
+    if (!wet) return { zone: null, class: null, reason: "road not inundated", judgment: false };
+    if (input.roadClass === "interstate")
+      return { zone: null, class: "High", reason: "Interstate inundated (5.2.1.2(a))", judgment: false };
+    if (input.aadt != null && Number.isFinite(input.aadt)) {
+      if (input.aadt > 2000)
+        return { zone: null, class: "High", reason: `road AADT ${input.aadt} > 2,000 (5.2.1.2(a))`, judgment: false };
+      if (input.aadt >= 500)
+        return { zone: null, class: "Medium", reason: `road AADT ${input.aadt}, 500–2,000 (5.2.1.2(b))`, judgment: false };
+      if (input.roadClass === "us_state")
+        return { zone: null, class: "Medium", reason: "US or State highway inundated (5.2.1.2(b), at least Medium)", judgment: false };
+      return { zone: null, class: "Low", reason: `road AADT ${input.aadt} < 500`, judgment: false };
+    }
+    if (input.roadClass === "us_state")
+      return { zone: null, class: "Medium", reason: "US or State highway inundated (5.2.1.2(b), at least Medium)", judgment: false };
+    return { zone: null, class: null, reason: "road inundated, no AADT: needs judgment", judgment: true };
+  }
+  if (kind === "rail") {
+    if (!wet) return { zone: null, class: null, reason: "rail not inundated", judgment: false };
+    return { zone: null, class: "Medium", reason: "railroad inundated (at least Medium; High if passenger or ≥ 10 trains/day)", judgment: true };
+  }
+  const habitable = input.habitable ?? (kind === "house" || kind === "mobile");
+  const chart: ChartKind = kind === "mobile" ? "mobile" : "house";
+  const z = zone(chart, depthFt, velocityFps);
+  if (!habitable) {
+    return {
+      zone: wet ? z : null,
+      class: null,
+      reason: wet ? `${kind} is not habitable; not counted` : "dry",
+      judgment: false,
+    };
+  }
+  if (!wet) return { zone: z, class: null, reason: "dry", judgment: false };
+  if (z === "high") return { zone: z, class: "High", reason: `ACER TM 11 high-danger zone (${chart} chart)`, judgment: false };
+  if (z === "judgment") {
+    const asHigh = input.judgmentAsProbable ?? true;
+    return {
+      zone: z,
+      class: asHigh ? "High" : "Medium",
+      reason: asHigh
+        ? `ACER TM 11 judgment zone (${chart} chart), counted as probable loss of life (5.3(f))`
+        : `ACER TM 11 judgment zone (${chart} chart), not counted as probable loss of life`,
+      judgment: true,
+    };
+  }
+  return { zone: z, class: "Medium", reason: `inundated, ACER TM 11 low-danger zone (${chart} chart): economic loss (5.2.2)`, judgment: false };
 }

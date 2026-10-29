@@ -2,10 +2,10 @@ import type { DamRecord, ReceptorSeed } from "./types";
 
 function valley(prefix: string): ReceptorSeed[] {
   return [
-    { id: `${prefix}-road-1`, name: "Township road", kind: "road", station: 0.22, lateral: 0.15, padFt: 1.2 },
+    { id: `${prefix}-road-1`, name: "Township road", kind: "road", station: 0.22, lateral: 0.15, padFt: 1.2, aadt: 40 },
     { id: `${prefix}-farm`, name: "Farmstead", kind: "house", station: 0.4, lateral: -0.35, padFt: 3.4 },
-    { id: `${prefix}-barn`, name: "Machine shed", kind: "barn", station: 0.46, lateral: -0.55, padFt: 2.2 },
-    { id: `${prefix}-road-2`, name: "County road", kind: "road", station: 0.64, lateral: 0.05, padFt: 1.6 },
+    { id: `${prefix}-barn`, name: "Machine shed", kind: "barn", station: 0.46, lateral: -0.55, padFt: 2.2, habitable: false },
+    { id: `${prefix}-road-2`, name: "County road", kind: "road", station: 0.64, lateral: 0.05, padFt: 1.6, aadt: 320 },
     { id: `${prefix}-house`, name: "House on the bench", kind: "house", station: 0.8, lateral: 0.42, padFt: 6.5 },
   ];
 }

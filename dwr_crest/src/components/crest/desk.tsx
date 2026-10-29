@@ -20,7 +20,7 @@ const MapDraw = lazy(() => import("./MapDraw").then((m) => ({ default: m.MapDraw
 
 const LEVEL_CLASS: Record<ScreenLevel, string> = {
   High: "bg-amber text-card",
-  Significant: "bg-water text-card",
+  Medium: "bg-water text-card",
   Low: "bg-ink text-card",
   Review: "bg-sand text-ink",
 };
@@ -316,7 +316,9 @@ function ScreenStep({ result }: { result: ReturnType<typeof analyze> }) {
             {result.screen.level}
           </span>
           <p className="max-w-lg text-sm text-muted">
-            Houses or barns at 2 ft or more read High. A wet building under 2 ft, or a road at 1 ft, reads Significant. Otherwise Low.
+            ND rules on the ACER TM 11 depth-velocity charts: a home in the high-danger or judgment zone reads High;
+            any wet home reads at least Medium (economic loss); roads by AADT and class. Barns and sheds do not count.
+            {result.screen.acerLevel ? ` Worst TM 11 zone: ${result.screen.acerLevel}.` : ""}
           </p>
         </div>
         <ul className="mt-4 space-y-2 text-sm">
@@ -324,6 +326,16 @@ function ScreenStep({ result }: { result: ReturnType<typeof analyze> }) {
             <li key={r}>{r}</li>
           ))}
         </ul>
+        {result.screen.judgment.length > 0 ? (
+          <div className="mt-4 rounded-sm bg-sand p-3 text-sm">
+            <p className="font-medium">Needs an engineer&apos;s call</p>
+            <ul className="mt-1 space-y-1">
+              {result.screen.judgment.map((j) => (
+                <li key={j}>{j}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
       <ReceptorTable result={result} />
     </section>
@@ -383,6 +395,8 @@ function ReceptorTable({ result }: { result: ReturnType<typeof analyze> }) {
             <th className="px-3 py-2 font-medium">Vel ft/s</th>
             <th className="px-3 py-2 font-medium">Arrival h</th>
             <th className="px-3 py-2 font-medium">D × V</th>
+            <th className="px-3 py-2 font-medium">TM 11 zone</th>
+            <th className="px-3 py-2 font-medium">ND class</th>
           </tr>
         </thead>
         <tbody>
@@ -395,6 +409,10 @@ function ReceptorTable({ result }: { result: ReturnType<typeof analyze> }) {
               <td className="px-3 py-2 tabular-nums">{r.arrivalHr == null ? "—" : num(r.arrivalHr, 2)}</td>
               <td className="px-3 py-2 tabular-nums">
                 {r.flooded ? num(r.depthFt * r.velocityFps, 1) : "—"}
+              </td>
+              <td className="px-3 py-2">{r.flooded && r.zone ? r.zone : "—"}</td>
+              <td className="px-3 py-2" title={r.rankReason}>
+                {r.ndClass ?? "—"}
               </td>
             </tr>
           ))}

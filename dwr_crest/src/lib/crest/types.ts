@@ -2,9 +2,11 @@ export type DatumName = "Local" | "NAVD88" | "NGVD29";
 export type FailureMode = "overtopping" | "piping";
 export type BreachMethod = "froehlich" | "macdonald" | "tr60";
 export type EngineName = "lisflood" | "anuga" | "routing";
-export type ReceptorKind = "house" | "road" | "barn";
+export type ReceptorKind = "house" | "mobile" | "barn" | "road";
 export type StepId = "record" | "breach" | "flood" | "screen" | "report";
-export type ScreenLevel = "High" | "Significant" | "Low" | "Review";
+/** ND Dam Safety hazard classes (REG_05.2026 5.2), plus Review when the desk cannot screen. */
+export type ScreenLevel = "High" | "Medium" | "Low" | "Review";
+export type RoadClass = "interstate" | "us_state" | "other";
 
 export type ReceptorSeed = {
   id: string;
@@ -16,6 +18,11 @@ export type ReceptorSeed = {
   lateral: number;
   /** Feet the pad sits above the local channel bed. */
   padFt: number;
+  /** Roads: annual average daily traffic (HPMS). */
+  aadt?: number;
+  roadClass?: RoadClass;
+  /** Structures: habitable? Houses and mobile homes default to yes, barns and sheds to no. */
+  habitable?: boolean;
 };
 
 export type GeoJSONFeature = {
@@ -97,10 +104,21 @@ export type Analysis = {
       velocityFps: number;
       arrivalHr: number | null;
       flooded: boolean;
+      /** ACER TM 11 zone (structures only). */
+      zone: "low" | "judgment" | "high" | null;
+      /** ND class this receptor supports, or null if it does not count. */
+      ndClass: "High" | "Medium" | "Low" | null;
+      rankReason: string;
+      /** The class call needs an engineer (judgment zone, unknown AADT, rail service). */
+      needsJudgment: boolean;
     }[];
   };
   screen: {
     level: ScreenLevel;
+    /** Worst ACER TM 11 zone over habitable inundated structures, or null if none is wet. */
+    acerLevel: "low" | "judgment" | "high" | null;
     reasons: string[];
+    /** Items an engineer must decide (unknown AADT, judgment zone, unverified structures). */
+    judgment: string[];
   };
 };

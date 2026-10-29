@@ -1,4 +1,5 @@
-import type { Analysis, BreachMethod, DamRecord, EngineName, FailureMode } from "./types";
+import { rankReceptor } from "./acer.ts";
+import type { Analysis, BreachMethod, DamRecord, EngineName, FailureMode, ReceptorSeed, ScreenLevel } from "./types.ts";
 
 const FT = 0.3048;
 const ACFT_TO_M3 = 1233.48184;
@@ -254,44 +255,39 @@ export function analyze(dam: DamRecord): Analysis {
     const qHere = hydro.fittedPeakCfs * Math.exp(-decay.k * s);
     const velocity = flooded && depth > 0.05 ? clamp(qHere / (widthFt * depth), 0.1, 14) : 0;
     const arrival = flooded ? (timeHr * 0.85 + s * (lengthM / Math.max(velocity * FT, 0.3)) / 3600) : null;
+    const depthFt = flooded ? depth : 0;
+    const velocityFps = flooded ? velocity : 0;
+    const rank = rankReceptor({
+      kind: r.kind,
+      depthFt,
+      velocityFps,
+      aadt: r.aadt,
+      roadClass: r.roadClass,
+      habitable: r.habitable,
+    });
     return {
       id: r.id,
       name: r.name,
       kind: r.kind,
       station: s,
       lateral: r.lateral,
-      depthFt: flooded ? depth : 0,
-      velocityFps: flooded ? velocity : 0,
+      depthFt,
+      velocityFps,
       arrivalHr: arrival,
       flooded,
+      zone: rank.zone,
+      ndClass: rank.class,
+      rankReason: rank.reason,
+      needsJudgment: rank.judgment,
     };
   });
 
   const maxVelocityFps = receptors.reduce((m, r) => Math.max(m, r.velocityFps), 0);
-  const houses = receptors.filter((r) => r.kind === "house" || r.kind === "barn");
-  const deepHouse = houses.some((r) => r.depthFt >= 2);
-  const anyHouse = houses.some((r) => r.flooded);
-  const wetRoad = receptors.some((r) => r.kind === "road" && r.depthFt >= 1);
-
-  let level: Analysis["screen"]["level"] = "Low";
-  const reasons: string[] = [];
+  const screen = screenReceptors(receptors, dam.receptors);
   if (warnings.some((w) => w.startsWith("No DEM tie"))) {
-    level = "Review";
-    reasons.push("The crest could not be tied. Screening waits on a usable DEM crest.");
-  } else if (deepHouse) {
-    level = "High";
-    reasons.push("A house or barn is at least 2 ft deep in this schematic.");
-  } else if (anyHouse || wetRoad) {
-    level = "Significant";
-    reasons.push(
-      anyHouse
-        ? "A building is wet, but under 2 ft in this schematic."
-        : "A road is at least 1 ft deep. No building is wet.",
-    );
-  } else {
-    reasons.push("No seeded receptor is wet above 0.1 ft.");
+    screen.level = "Review";
+    screen.reasons.unshift("The crest could not be tied. Screening waits on a usable DEM crest.");
   }
-  reasons.push("This is a desk screen. It is not an ND Dam Safety or ACER classification.");
 
   return {
     datum: {
@@ -323,6 +319,43 @@ export function analyze(dam: DamRecord): Analysis {
       stations,
       receptors,
     },
-    screen: { level, reasons },
+    screen,
   };
+}
+
+type RankedReceptor = Analysis["flood"]["receptors"][number];
+
+const CLASS_ORDER: Record<"High" | "Medium" | "Low", number> = { High: 3, Medium: 2, Low: 1 };
+const ZONE_ORDER = { low: 1, judgment: 2, high: 3 } as const;
+
+/** ND class from ranked receptors (damsuite classify_nd): the worst receptor class governs. */
+export function screenReceptors(
+  receptors: Pick<RankedReceptor, "name" | "kind" | "depthFt" | "velocityFps" | "zone" | "ndClass" | "rankReason" | "needsJudgment">[],
+  seeds: Pick<ReceptorSeed, "kind" | "habitable">[] = [],
+): Analysis["screen"] {
+  let level: ScreenLevel = "Low";
+  let acerLevel: Analysis["screen"]["acerLevel"] = null;
+  const reasons: string[] = [];
+  const judgment: string[] = [];
+  receptors.forEach((r, i) => {
+    const habitable = seeds[i]?.habitable ?? (r.kind === "house" || r.kind === "mobile");
+    if (habitable && r.zone && r.ndClass) {
+      if (acerLevel == null || ZONE_ORDER[r.zone] > ZONE_ORDER[acerLevel]) acerLevel = r.zone;
+    }
+    if (r.ndClass) {
+      reasons.push(`${r.name}: ${r.ndClass} (${r.rankReason}; ${r.depthFt.toFixed(2)} ft at ${r.velocityFps.toFixed(2)} ft/s).`);
+      if (level === "Low" || CLASS_ORDER[r.ndClass] > CLASS_ORDER[level as "High" | "Medium" | "Low"]) level = r.ndClass;
+    } else if (r.depthFt > 0 && r.rankReason !== "dry") {
+      reasons.push(`${r.name}: not counted (${r.rankReason}).`);
+    }
+    if (r.needsJudgment) {
+      judgment.push(`${r.name}: ${r.rankReason}.`);
+    }
+  });
+  if (reasons.length === 0) reasons.push("No seeded receptor is wet at 0.1 ft or more.");
+  reasons.push(
+    "ND rules as in damsuite classify_nd: a habitable structure in the TM 11 high zone (or judgment zone, counted as probable loss of life) is High; any inundated habitable structure is at least Medium (economic, 5.2.2); roads by AADT and class. Barns and sheds are not habitable and do not count.",
+  );
+  reasons.push("This is a desk screen on a schematic valley. It is not an ND Dam Safety classification of record.");
+  return { level, acerLevel, reasons, judgment };
 }
