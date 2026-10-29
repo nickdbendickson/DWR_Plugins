@@ -126,7 +126,27 @@ export type Analysis = {
     acres: number;
     /** Desk reach length (m). */
     lengthM: number;
-    reachSource: "user" | "wet";
+    /** What ended the reach: the 0.1 ft wet limit, the user's reach, or the drawn area (AOI). */
+    reachSource: "user" | "wet" | "aoi";
+    /** Drawn area limit, or null when no AOI is drawn (behaviour then is unchanged). */
+    aoi: {
+      /** False when an AOI is drawn but cannot be placed (no breach location). */
+      applied: boolean;
+      /** Straight-line distance band from the breach the AOI covers (km). */
+      nearKm: number;
+      farKm: number;
+      /** AOI polygon area (acres). */
+      areaAc: number;
+      /** True when the AOI, not the wet limit or user reach, ended the reach. */
+      limitsReach: boolean;
+      /** Schematic depth at the reach end (ft); 0.1 ft or more with limitsReach means wet at the edge. */
+      edgeDepthFt: number;
+      wetAtEdge: boolean;
+      /** "Limited by drawn area: X km / Y ac", or why the AOI was not applied. */
+      label: string;
+    } | null;
+    /** Flood-step review flags (also listed in Things to check). */
+    warnings: string[];
     velocityBasis: string;
     stations: { s: number; xKm: number; halfM: number; depthFt: number }[];
     receptors: {
@@ -141,8 +161,10 @@ export type Analysis = {
       velocityFps: number;
       arrivalHr: number | null;
       flooded: boolean;
-      /** Past the desk reach: no depth computed, not screened. */
+      /** Past the desk reach or outside the drawn area: no depth computed, not screened. */
       unresolved: boolean;
+      /** Unresolved because it lies outside the drawn area (AOI). */
+      outsideAoi: boolean;
       /** ACER TM 11 zone (structures only). */
       zone: "low" | "judgment" | "high" | null;
       /** ND class this receptor supports, or null if it does not count. */
