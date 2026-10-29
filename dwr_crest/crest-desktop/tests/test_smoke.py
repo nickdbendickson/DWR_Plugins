@@ -191,7 +191,7 @@ const m = await import(process.argv[1]);
 const s = m.SAMPLE_DAMS.find((x) => x.nid === "ND00199");
 // DWR-2801 as the Breach Runner ran it (src/lib/crest/fixtures.ts) with H 27.50 / V 1615.5 / SA 154.5.
 const dam = { ...s, id: "dwr-2801", heightFt: 27.5, storageAcFt: 1615.5, surfaceAreaAc: 154.5, lengthFt: 1700,
-  crestFt: 1072.24, streambedFt: 1044.74, spillwayFt: NaN, normalPoolFt: NaN, statedDatum: "NAVD88", demCrestFt: 1071.15,
+  crestFt: 1071.09, streambedFt: 1043.59, spillwayFt: NaN, normalPoolFt: NaN, statedDatum: "NAVD88", demCrestFt: 1070.0,
   failureMode: "piping", method: "froehlich", engine: "anuga", reachKm: undefined, classOfRecord: undefined, sampleNote: undefined };
 const a = m.analyze(dam);
 const mlm = m.analyze({ ...dam, storageAcFt: 1612.59, method: "macdonald" });
@@ -208,7 +208,7 @@ console.log(JSON.stringify({ peak: a.breach.peakCfs, mlm: mlm.breach.peakCfs, sa
               f"sample crest {r['sampleCrest']} ft NAVD88 / H {r['sampleHeight']}, screen {r['sampleLabel']!r}")
         self.assertEqual(round(r["peak"]), 28671)  # old Python engine: 20,559
         self.assertLess(abs(r["mlm"] - 41584.7), 1)  # old Python engine: 129,168
-        self.assertAlmostEqual(r["sampleCrest"], 1072.24, places=2)  # old sample: 912
+        self.assertAlmostEqual(r["sampleCrest"], 1071.09, places=2)  # was 1072.24 (round 2), 912 before
         self.assertEqual(r["sampleHeight"], 27.5)
 
 
