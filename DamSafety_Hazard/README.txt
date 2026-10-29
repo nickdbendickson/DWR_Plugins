@@ -844,6 +844,11 @@ NEW IN 1.3.0 - HAZARD CLASSIFICATION TAB
   bridge flag and the MOST RECENT AADT from (a) the road layer itself,
   including AADT_2023-style columns, (b) an optional AADT layer (NDDOT
   counts, HPMS) within 300 ft, (c) FRA crossing AADT within 100 ft.
+- 2.20.3: that section is VERTICAL DATUM OF THE DAM ELEVATIONS. It shows
+  the Runner 3.12.7 record (damsuite 1.18.2): a 0-300 ft datum as local
+  and tied to the DEM, REVIEW / UNCONVERTED when there is no tie, a
+  0-300 ft value replaced by a DEM elevation, and the dam point moved
+  to mid-crest. The ND class does not change.
 - 2.20.0: the summary has a VERTICAL DATUM section (NGVD29 -> NAVD88):
   the dam elevations' source datum, stated or assumed, and the VERTCON
   shift and method, read from the Runner's run_report.json or dam.json.
