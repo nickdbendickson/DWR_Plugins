@@ -627,6 +627,19 @@ def datum_info(folder, mode="auto"):
         line += "; used as given (the DEM is NAVD88)"
     else:
         line += "; local datum: the top of dam is taken from the DEM when it runs"
+    # 3.12.5 (damsuite 1.18.2, Nick 2026-10-28 / 10-29): 0 - 300 ft is always local and is
+    # converted to NAVD88 by the DEM tie (no override wording)
+    band = None
+    if rec is not None and hasattr(VD, "local_band_hit"):
+        band = VD.local_band_hit({k: rec.get(k) for k in
+                                  ("top_of_dam_ft", "normal_pool_ft", "pmf_max_wse_ft")})
+    if band:
+        return ("Elevation datum: local (0 - 300 ft rule: {} {:.2f} ft); never "
+                "datum-converted: converted to NAVD88 by the DEM tie when it runs - the top of "
+                "dam taken from the DEM at mid-crest, the other local elevations DEM-derived (no tie, or "
+                "a tied value more than 100 ft from the DEM crest: flagged for review, left "
+                "unconverted)").format(
+                    band[0].replace("_ft", "").replace("_", " "), band[1])
     if src != VD.LOCAL and rec is not None and VD.mode(mode) == VD.AUTO:
         hit, why = VD.local_check(rec.get("top_of_dam_ft"))
         if hit:

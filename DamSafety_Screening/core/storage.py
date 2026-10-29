@@ -163,10 +163,12 @@ def below_pool_volume(dem, water_mask, cell, slope_deg, max_depth, shape_factor=
 
 def estimate_storage(dem, water_mask, cell, dam_xy_idx=None, crest_radius_m=50.0,
                      known_height_m=None, max_depth_m=None, steps=20,
-                     shape_factor=1.0):
+                     shape_factor=1.0, crest_z_m=None):
     """Main entry.  dem/water_mask are 2-D arrays on the same grid.
 
     dam_xy_idx: (row, col) of the dam point, used to find the crest.
+    crest_z_m: v0.17.56 - the DEM crest at mid-crest of the dam line (damsuite.midcrest); used
+    instead of the 98th percentile near the dam point (the height cap still applies).
     known_height_m: NID/state dam height, used to cap depth and crest.
     """
     notes = []
@@ -181,7 +183,10 @@ def estimate_storage(dem, water_mask, cell, dam_xy_idx=None, crest_radius_m=50.0
 
     # --- crest elevation -------------------------------------------------
     crest = None
-    if dam_xy_idx is not None:
+    if crest_z_m is not None and np.isfinite(crest_z_m) and crest_z_m > -9998.0:
+        crest = float(crest_z_m)
+        notes.append("crest from DEM at mid-crest of the dam line")
+    elif dam_xy_idx is not None:
         r, c = dam_xy_idx
         n = int(round(crest_radius_m / cell))
         win = dem[max(r - n, 0): r + n + 1, max(c - n, 0): c + n + 1]

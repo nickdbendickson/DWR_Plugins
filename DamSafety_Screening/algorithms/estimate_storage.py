@@ -6,13 +6,14 @@ from osgeo import gdal, ogr, osr
 from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFeatureSource,
                        QgsProcessingParameterFolderDestination, QgsProcessingParameterFile,
                        QgsProcessingParameterNumber, QgsProcessingParameterFeatureSink,
-                       QgsProcessingParameterEnum,
+                       QgsProcessingParameterEnum, QgsProcessingParameterField,
                        QgsFields, QgsField, QgsFeature,
                        QgsCoordinateTransform, QgsCoordinateReferenceSystem, QgsProject,
                        QgsFeatureRequest, QgsRectangle)
 
 from ..core import storage
-from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_POINT, SRC_POLYGON)
+from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_LINE, SRC_POINT,
+                      SRC_POLYGON)
 from . import _common as cm
 from ..core import errors as er
 from ..damsuite import gdalsafe as GS
@@ -43,6 +44,7 @@ class EstimateStorage(QgsProcessingAlgorithm):
     DAMS, WB, DEMDIR, SEARCH, SHAPE, OUT, CURVES = ("DAMS", "WB", "DEMDIR", "SEARCH",
                                                     "SHAPE", "OUT", "CURVES")
     STORAGE_CHOICE = "STORAGE_CHOICE"      # 0.17.27: the window's storage choice (0 Max)
+    LINES = "LINES"      # 0.17.56: DWR dam lines (optional) - the crest at mid-crest (damsuite.midcrest)
 
     def name(self): return "estimatestorage"
     def displayName(self): return "3 - Estimate reservoir storage"
@@ -103,6 +105,15 @@ class EstimateStorage(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterEnum(
             self.STORAGE_CHOICE, "Storage to use", list(storage.STORAGE_CHOICES),
             defaultValue=storage.STORAGE_MAX))
+        # 0.17.56 (Nick 2026-10-28): the crest is read at mid-crest of the dam's line (its
+        # midpoint by length, the highest DEM point across it +-25 m), not the 98th percentile
+        # near the dam point; dams without a line keep the old read (logged)
+        self.addParameter(QgsProcessingParameterFeatureSource(
+            self.LINES, "DWR dam lines (optional: the crest at mid-crest)", [SRC_LINE],
+            optional=True))
+        self.addParameter(QgsProcessingParameterField(
+            "LID", "Dam lines: structure ID field", defaultValue="structure_id",
+            parentLayerParameterName=self.LINES, optional=True))
         self.addParameter(QgsProcessingParameterFolderDestination(
             self.CURVES, "Folder for stage-storage curves (CSV)"))
         self.addParameter(QgsProcessingParameterFeatureSink(
@@ -180,6 +191,16 @@ class EstimateStorage(QgsProcessingAlgorithm):
         w2a = QgsCoordinateTransform(wbs.sourceCrs(), alb, QgsProject.instance())
         names = dams.fields().names()
         total = dams.featureCount() or 1
+        lines = (self.parameterAsSource(params, self.LINES, context)
+                 if self.parameterDefinition(self.LINES) is not None else None)
+        l2a = a2l = None
+        by_id = {}
+        if lines is not None:
+            l2a = QgsCoordinateTransform(lines.sourceCrs(), alb, QgsProject.instance())
+            a2l = QgsCoordinateTransform(alb, lines.sourceCrs(), QgsProject.instance())
+            by_id = cm.dam_line_index(lines, self.parameterAsString(params, "LID", context)
+                                      or "structure_id")
+        n_mid = 0
 
         for i, f in enumerate(dams.getFeatures()):
             if feedback.isCanceled(): break
@@ -223,8 +244,25 @@ class EstimateStorage(QgsProcessingAlgorithm):
 
                 h = f["height_m"] if "height_m" in names else None
                 h = float(h) if h not in (None, "") else None
+                mc = mc_note = None
+                if lines is not None:
+                    verts, how = cm.dam_line_verts(lines, by_id, dam_id, g, l2a, a2l, search)
+                    mc = cm.midcrest_on_dem(verts, arr, gt, (p.x(), p.y())) if verts else None
+                    if mc is not None:
+                        n_mid += 1
+                        mc_note = ("crest at mid-crest ({}): {:.2f} m NAVD88 at ({:.1f}, {:.1f}), "
+                                   "{:.1f} m from the dam point").format(
+                            how, mc["z_m"], mc["xy"][0], mc["xy"][1], mc["moved_m"])
+                    else:
+                        mc_note = "crest not at mid-crest: {}".format(
+                            how if not verts else "no DEM across the dam line's midpoint")
+                        feedback.pushWarning("dam {}: {}; the crest is read near the dam "
+                                             "point".format(dam_id, mc_note))
                 res = storage.estimate_storage(arr, mask, cell, (row, col),
-                                               known_height_m=h, shape_factor=shape)
+                                               known_height_m=h, shape_factor=shape,
+                                               crest_z_m=mc["_z_m"] if mc else None)
+                if mc_note:
+                    res.notes.append(mc_note)
                 note = "; ".join(res.notes)
                 # shallow-basin guard (ported from nd_ Screening 0.28.3): a basin whose whole
                 # curve, bed to crest, spans far less than the dam height is not the dam's
@@ -342,4 +380,11 @@ class EstimateStorage(QgsProcessingAlgorithm):
                 vals[k + 9] = "none"; vals[k + 10] = "none"; vals[k + 12] = note
             out.setAttributes(vals)
             sink.addFeature(out)
+        if lines is not None:
+            feedback.pushInfo("crest at mid-crest of the dam line: {} of {} dams".format(
+                n_mid, dams.featureCount()))
+        else:
+            # info, not a warning: without the optional layer the tool works as before 0.17.56
+            feedback.pushInfo("no dam lines given: the crest is read near each dam point (not "
+                              "at mid-crest)")
         return {self.OUT: dest}

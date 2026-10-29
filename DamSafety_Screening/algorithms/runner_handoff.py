@@ -444,16 +444,30 @@ class RunnerHandoff(QgsProcessingAlgorithm):
         if "dam_id" not in bnames:
             raise QgsProcessingException("The breach points have no dam_id field (tool 4 output expected)")
         bmap, blen = {}, {}
+        n_mid = 0
         for b in bpts.getFeatures():
             g = b.geometry()
             if g.isEmpty():
                 continue
             g.transform(b2a); p = cm.rep_point(g)
+            # 0.17.56 (damsuite 1.18.2): the dam point at mid-crest of the dam line (tool 4's
+            # mc_x / mc_y, EPSG:5070) when tool 4 found it; else the breach point as before
+            if "mc_x" in bnames and "mc_y" in bnames:
+                try:
+                    mx, my = float(b["mc_x"]), float(b["mc_y"])
+                except (TypeError, ValueError):
+                    mx = my = float("nan")
+                if mx == mx and my == my:
+                    p = (mx, my)
+                    n_mid += 1
             if p is not None:
                 bmap[str(b["dam_id"])] = p
                 if "crest_len_m" in bnames:          # tool 4: length of the mapped dam line
                     blen[str(b["dam_id"])] = b["crest_len_m"]
 
+        if "mc_x" in bnames:
+            feedback.pushInfo("Dam point at mid-crest of the dam line (tool 4): {} of {} dams; the "
+                              "others use the breach point.".format(n_mid, len(bmap)))
         bld = self.parameterAsSource(params, "BLD", context)
         bld_points = bld is not None and QgsWkbTypes.geometryType(bld.wkbType()) == GEOM_POINT
         if bld is not None and not bld_points:

@@ -50,6 +50,8 @@ Modules:
               detection, the shift and its record for the reports and dam.json (1.18.0)
   vertcon_nd  NOAA's VERTCON grid clipped to North Dakota (public domain), read by vdatum
               (1.18.0; written by tools/make_vertcon_nd.py)
+  midcrest    the dam point at mid-crest: the dam line's midpoint, then the highest DEM point
+              on the perpendicular profile (+-25 m), for Screening and the Runner (1.18.2)
 
 `selfcheck()` compares this package's files with FILES.json and returns a list of problems
 ("missing: x.py", "changed: x.py", "unexpected file: x.py"); [] means the copy is intact.
@@ -72,15 +74,16 @@ from . import netproxy   # noqa: F401  (1.16.2)
 from . import structure_flags   # noqa: F401  (1.17.2)
 from . import packcheck   # noqa: F401  (1.17.5)
 from . import vdatum   # noqa: F401  (1.18.0; vertcon_nd is read on first use)
+from . import midcrest   # noqa: F401  (1.18.2)
 
-SUITE_VERSION = "1.18.1"   # 1.18.1: vdatum local datums - local_check (outside 500-3600 ft, > 50 ft from the DEM crest, a round 100 ft multiple > 10 ft from it), mode "local", plan/summary_lines for elevations taken from the DEM; 1.18.0: vdatum + vertcon_nd - NGVD29 -> NAVD88 (VERTCON, bundled ND grid, pyproj fallback) for dam elevations not stated as NAVD88; 1.17.7: ND DWR dugouts - suite_fill dugout_polygons / unknown / DWR export names, the format-2 pack's dwr/DWR_*.gpkg as a fallback for the DWR slots (an engineer's file wins), suitedata.dwr_layers drop-in first (pack=), damdata reads an engineer's dwr/ file before the pack; 1.17.6: packcheck never raises - a broken manifest.json or a cut-short GeoPackage is a FAILED / unreadable result, zipped format-2 packs against their zip listing, a UTF-8 BOM manifest is FAILED (folder and zip), the summary names pack-level problems, pack_signature (#171 follow-up); 1.17.5: packcheck (offline pack vs manifest.json on load), damdata logs it; 1.17.4: suitedata skips dem/lidar_1m (Screening 1 m tile cache, #105); 1.17.3: record.py, pack_convert fixes (#94); 1.17.2: structure_flags (flagged structures); 1.17.1: one canonical package
+SUITE_VERSION = "1.18.2"   # 1.18.2: 0-300 ft is always local, converted to NAVD88 by the DEM tie whatever datum is chosen (no override; Nick 2026-10-29), other_datum for ND-range values of a local dam, summary_lines REVIEW / UNCONVERTED lines (vdatum.is_local_elev: local_check's first unconditional test, plan(values=) makes the record local, convert_ft never shifts such a value; summary_lines lists DEM-derived values, local culvert inverts and the dam point move) + midcrest (dam point at mid-crest from the dam line and the DEM, shared by Screening and the Runner); 1.18.1: vdatum local datums - local_check (outside 500-3600 ft, > 50 ft from the DEM crest, a round 100 ft multiple > 10 ft from it), mode "local", plan/summary_lines for elevations taken from the DEM; 1.18.0: vdatum + vertcon_nd - NGVD29 -> NAVD88 (VERTCON, bundled ND grid, pyproj fallback) for dam elevations not stated as NAVD88; 1.17.7: ND DWR dugouts - suite_fill dugout_polygons / unknown / DWR export names, the format-2 pack's dwr/DWR_*.gpkg as a fallback for the DWR slots (an engineer's file wins), suitedata.dwr_layers drop-in first (pack=), damdata reads an engineer's dwr/ file before the pack; 1.17.6: packcheck never raises - a broken manifest.json or a cut-short GeoPackage is a FAILED / unreadable result, zipped format-2 packs against their zip listing, a UTF-8 BOM manifest is FAILED (folder and zip), the summary names pack-level problems, pack_signature (#171 follow-up); 1.17.5: packcheck (offline pack vs manifest.json on load), damdata logs it; 1.17.4: suitedata skips dem/lidar_1m (Screening 1 m tile cache, #105); 1.17.3: record.py, pack_convert fixes (#94); 1.17.2: structure_flags (flagged structures); 1.17.1: one canonical package
 FILES_NAME = "FILES.json"
 
 __all__ = ["SUITE_VERSION", "FILES_NAME", "selfcheck", "package_files", "chain", "dam_record",
            "gdalsafe", "settings", "suite_home", "tm11_curves", "units", "versions", "xlsx_lite",
            "offline_pack", "suitegpkg", "suitedata", "services", "terrain_cache", "damdata",
            "keepawake", "solvegate", "gpkgpack", "hydro3dhp", "netproxy", "structure_flags",
-           "packcheck", "vdatum"]
+           "packcheck", "vdatum", "midcrest"]
 
 
 def package_files(folder=None):

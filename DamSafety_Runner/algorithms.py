@@ -1289,8 +1289,9 @@ class _Base(QgsProcessingAlgorithm):
                                  "model keeps bare terrain.".format(condmod.BUILDINGS_LABELS[mode]))
         st.edits = None if ed.empty() else ed
         st.breach_xy = None
+        st.midcrest_line = None
         src = self.parameterAsSource(parameters, "CREST_LINE", context)
-        if src is not None and parameters.get("BREACH_POSITION") not in (None, ""):
+        if src is not None:
             a, b = tf(src)
             # Pick this dam's crest line by its DWR structure id when the layer carries one
             # (else the nearest line within CREST_SNAP_M), so the breach is never placed on a
@@ -1301,13 +1302,17 @@ class _Base(QgsProcessingAlgorithm):
             self._crest_ids = None
             clines = qio.lines(src, a, b, center_xy, radius,
                                fields=[id_field] if id_field else ())
-            frac = self.parameterAsDouble(parameters, "BREACH_POSITION", context)
             crest, _dist, how = _pick_crest_line(clines, center_xy, ids, id_field)
             if crest is not None:
+                # 3.12.5: the line also places the dam point at mid-crest (workflow.place_midcrest)
+                st.midcrest_line = [(float(p[0]), float(p[1])) for p in np.asarray(crest)]
+            has_pos = parameters.get("BREACH_POSITION") not in (None, "")
+            frac = self.parameterAsDouble(parameters, "BREACH_POSITION", context) if has_pos else None
+            if crest is not None and has_pos:
                 st.breach_xy = _point_along_line(crest, frac)
                 notes.append("Breach starts at {:.0f}% along the crest line ({}).".format(
                     100 * frac, how))
-            elif clines:
+            elif clines and has_pos:
                 notes.append("Breach position along the crest was not used: {}.".format(how))
         src = self.parameterAsSource(parameters, "REFINE_LINES", context)
         st.refine_lines = []
@@ -1614,6 +1619,9 @@ class RunDamAlgorithm(_Base):
         pt = self.dam_point(parameters, context, dem.crs())
         src, writer, to_work, work = self.gis(parameters, context, dem.crs(), pt)
         dam_xy = to_work.transform(QgsPointXY(pt))
+        # 3.12.5: the point as given, before the snap to the dam line and the mid-crest move
+        # (workflow.place_midcrest records it and the move)
+        dam._point_original = (dam_xy.x(), dam_xy.y())
         snapped, note, line = self._crest_from_dam_line(parameters, context, work, (dam_xy.x(), dam_xy.y()))
         if snapped is not None:
             dam_xy = QgsPointXY(snapped[0], snapped[1])
