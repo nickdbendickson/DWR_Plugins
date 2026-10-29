@@ -553,3 +553,110 @@ describe("PR #6 follow-ups", () => {
     assert.ok(!edge.includes("downstream"), edge);
   });
 });
+
+describe("Round 3c: outline tolerance is the same on both sides of the flow", () => {
+  /** Reservoir 1 km upstream along -f: the direction is "reservoir to breach", along f. */
+  const along = (f: [number, number]): DamGeometry => ({
+    reservoirPoint: {
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "Point",
+        coordinates: (
+          polygonKm(SITE, [
+            [-f[0], -f[1]],
+            [0, 0],
+            [0.1, 0.1],
+          ]).geometry.coordinates as number[][][]
+        )[0][0],
+      },
+    },
+  });
+  /** 3 km x 3 km box with one edge on (or gapKm beside) the flow line, on the left or right of it. */
+  const box = (f: [number, number], side: "left" | "right", gapKm = 0) => {
+    const l = [-f[1], f[0]];
+    const k = side === "left" ? 1 : -1;
+    const p = (a: number, w: number): [number, number] => [
+      a * f[0] + k * w * l[0],
+      a * f[1] + k * w * l[1],
+    ];
+    return polygonKm(SITE, [p(0, gapKm), p(3, gapKm), p(3, 3), p(0, 3)]);
+  };
+  const dirs: [string, [number, number]][] = [
+    ["S", [0, -1]],
+    ["N", [0, 1]],
+    ["E", [1, 0]],
+    ["W", [-1, 0]],
+  ];
+  for (const [name, f] of dirs) {
+    it(`flow ${name}: a corner AOI on the left and on the right of the flow line give the same 3.0 km / 137.5 ac`, () => {
+      for (const side of ["left", "right"] as const) {
+        const a = analyze(dam(box(f, side), {}, along(f)));
+        assert.equal(a.flood.aoi!.directionBasis, "reservoir to breach");
+        assert.ok(Math.abs(a.flood.lengthM - 3000) < 2, `${side} reach ${a.flood.lengthM}`);
+        assert.ok(Math.abs(a.flood.acres - 137.5) < 0.5, `${side} acres ${a.flood.acres}`);
+        assert.ok(!a.flood.warnings.some((w) => w.includes("does not reach")), side);
+        assert.ok(
+          a.flood.receptors.some((r) => !r.outsideAoi),
+          `${side}: some receptor inside`,
+        );
+      }
+    });
+  }
+
+  it("a 0.5 m sideways gap between the flow line and the AOI edge counts as on the edge (both sides)", () => {
+    const f: [number, number] = [0, -1];
+    for (const side of ["left", "right"] as const) {
+      const a = analyze(dam(box(f, side, 0.0005), {}, along(f)));
+      assert.ok(Math.abs(a.flood.lengthM - 3000) < 2, `${side} reach ${a.flood.lengthM}`);
+      assert.ok(Math.abs(a.flood.acres - 137.5) < 1, `${side} acres ${a.flood.acres}`);
+      assert.ok(!a.flood.warnings.some((w) => w.includes("does not reach")));
+    }
+    // 5 m sideways is a real gap: the flood misses the AOI.
+    const far = analyze(dam(box(f, "right", 0.005), {}, along(f)));
+    assert.ok(far.flood.warnings.some((w) => w.includes("does not reach")));
+    assert.equal(far.flood.acres, 0);
+  });
+
+  it("the flow line along a hole's edge: the hole's outline counts as inside, its interior does not", () => {
+    // 6 km square around the breach with a hole whose west edge is the flow line (E 0..1, N -2..-1).
+    const a = analyze(
+      dam(
+        rect(-3, 3, -3, 3, [
+          [
+            [0, -2],
+            [1, -2],
+            [1, -1],
+            [0, -1],
+          ],
+        ]),
+      ),
+    );
+    assert.ok(Math.abs(a.flood.lengthM - 3000) < 2, `reach ${a.flood.lengthM}`);
+    const b = analyze(
+      dam(
+        rect(-3, 3, -3, 3, [
+          [
+            [-1, -2],
+            [0, -2],
+            [0, -1],
+            [-1, -1],
+          ],
+        ]),
+      ),
+    );
+    assert.ok(Math.abs(b.flood.lengthM - 3000) < 2, `mirrored hole reach ${b.flood.lengthM}`);
+    assert.ok(
+      Math.abs(a.flood.acres - b.flood.acres) < 0.5,
+      `${a.flood.acres} vs ${b.flood.acres}`,
+    );
+  });
+
+  it("case C: the screen reasons say the drawn area was not applied (Screen step, Report, export notes)", () => {
+    const a = analyze(dam(rect(-1, 1, 2, 5), {}, {}));
+    assert.match(a.screen.reasons[0], /^Drawn area not applied\..*screened in full/);
+    assert.match(exportDamJson(dam(rect(-1, 1, 2, 5), {}, {}), a), /Drawn area not applied/);
+    const ok = analyze(dam(rect(-1, 1, -5, 1)));
+    assert.ok(!ok.screen.reasons.some((r) => r.startsWith("Drawn area not applied")));
+  });
+});
