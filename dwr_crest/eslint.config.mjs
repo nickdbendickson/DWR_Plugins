@@ -15,6 +15,7 @@ export default tseslint.config(
       ".nitro/**",
       "node_modules/**",
       "src/routeTree.gen.ts",
+      "crest-desktop/crest/web/**",
     ],
   },
   js.configs.recommended,

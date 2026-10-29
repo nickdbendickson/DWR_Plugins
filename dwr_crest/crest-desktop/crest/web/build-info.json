@@ -1,0 +1,24 @@
+{
+  "app": "crest",
+  "builtBy": "npm run build:desktop",
+  "sources": {
+    "src/components/crest/charts.tsx": "bc2bd7cf68397388dd90cf1a3408a283bad6f49778cd6b4dbe4b791eb54bd70c",
+    "src/components/crest/desk.tsx": "bcde35f2240445e5515e07d4ca4ba7b8dcd59e59cc7799a3e3b17e933c8e558b",
+    "src/components/crest/MapDraw.tsx": "6cdcd87ac888c68394fa25aa197d7be0aaaac2ef41fd433e2f055760d43ad67d",
+    "src/desktop/engine-entry.ts": "69037599a1f94192c8bd00ac9a22901224685e2045c8dc47347349ca33f2b9c8",
+    "src/desktop/index.html": "d5024703baf83ce66d620c7da7416de21075a78b7222653d633e8404e472b0b3",
+    "src/desktop/main.tsx": "f198c2b420dda240bd39df936f0f9eb85241c3584b3339bb20da321f1ce00130",
+    "src/lib/crest/acer.ts": "1ead698befb2cc6e3644b8fe456901f9625e0773dcd462cced9bc3f3d7d42411",
+    "src/lib/crest/aoi.ts": "50df9bbbf8257d24c3916540ab062bcabc0c7579dacc368d8892722fb9ab759b",
+    "src/lib/crest/breach.ts": "ee2948906e19b1f3df20efef1ab2924ac46b06affe9e80771bc78ba08ead304f",
+    "src/lib/crest/engine.ts": "185b44a470a74da35668204d3c93d1882c353144757f024a2da3a069406b6d64",
+    "src/lib/crest/export.ts": "fc483a00a0323de76d4f8101bd04870d0e299b69cf60363f80699afa7de392dd",
+    "src/lib/crest/format.ts": "a4e6e8dff2d56ed51c10a65f5c7ac7578a361c1e73e511dbc855758baa0ef68d",
+    "src/lib/crest/mapview.ts": "000edef173bb47ef7f8be0e1205a151d578eaf79b9afd6dca0472cdace06091f",
+    "src/lib/crest/samples.ts": "640a32d28055e046f6770006c02b9162055244f43b6fbcc6a581c573239a3976",
+    "src/lib/crest/save.ts": "970c10bdf977dae064ec411f2abf03810fa9a75f3e87e7a7a9120060ca745ece",
+    "src/lib/crest/store.ts": "5ff857a0c7549138135abd8ab165a1e7ed94706d1f46b9bacb758130f1f5976d",
+    "src/lib/crest/vertcon_nd.ts": "dbf7a01da0a7727e44d46198c68ed701a967b58c4970732fbad947cc438c468d",
+    "src/styles.css": "3762b19a64fde11802fa70c80872caad747ccc5d855d7b4ec9eef234dcfa35fb"
+  }
+}
