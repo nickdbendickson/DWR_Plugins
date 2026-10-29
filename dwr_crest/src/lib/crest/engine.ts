@@ -63,14 +63,25 @@ function tieValue(
   return { navd: stated, warning: null };
 }
 
-function macdonald(storageAcFt: number, heightFt: number, lengthFt: number) {
-  const erodedAcFt = 0.0261 * (storageAcFt * heightFt) ** 0.769;
-  const throughFt = 16 + 3 * heightFt;
-  let widthFt = (erodedAcFt * 43560) / Math.max(heightFt * throughFt, 1);
+/** Embankment cross-section at the breach (ft²), trapezoid (Runner core/breach.py embankment_area_ft2). */
+function embankmentAreaFt2(heightFt: number, crestWidthFt: number, usH: number, dsH: number) {
+  return heightFt * (crestWidthFt + 0.5 * (usH + dsH) * heightFt);
+}
+
+/**
+ * MacDonald & Langridge-Monopolis (1984), earthfill, as Runner core/breach.py mlm_1984: SI only.
+ * Ver = 0.0261 (Vw·hw)^0.769 in m³ (Vw m³, hw m); tf = 0.0179 Ver^0.364 hours; average width =
+ * Ver / embankment cross-section (m²); side slope 1H:1V. The old desk form fed ac-ft·ft to the SI
+ * regression and read the result as ac-ft (about 13× the eroded volume on DWR-2801).
+ */
+function macdonald(volumeM3: number, hwM: number, heightFt: number, lengthFt: number) {
+  const erodedM3 = 0.0261 * (volumeM3 * Math.max(hwM, 0.01)) ** 0.769;
+  const timeHr = 0.0179 * erodedM3 ** 0.364;
+  const areaM2 = embankmentAreaFt2(heightFt, 12, 3, 3) * FT * FT;
+  let widthFt = erodedM3 / Math.max(areaM2, 1e-6) / FT;
   const capped = widthFt > lengthFt;
   widthFt = Math.min(widthFt, lengthFt);
-  const timeHr = clamp(0.0035 * heightFt * (storageAcFt / 200) ** 0.15, 0.15, 4);
-  return { widthFt, timeHr, erodedAcFt, capped };
+  return { widthFt, timeHr, erodedAcFt: erodedM3 / ACFT, capped };
 }
 
 function tr60(heightFt: number, lengthFt: number, mode: FailureMode) {
@@ -171,13 +182,13 @@ export function analyze(dam: DamRecord): Analysis {
   let capped = false;
 
   if (dam.method === "macdonald") {
-    const m = macdonald(storage, heightFt, lengthFt);
+    const m = macdonald(volumeM3, headM, heightFt, lengthFt);
     widthFt = m.widthFt;
     timeHr = m.timeHr;
     capped = m.capped;
     z = 1;
     notes.push(
-      `Eroded embankment about ${m.erodedAcFt.toFixed(0)} ac-ft (Wahl form of MacDonald, earthfill). Side slope taken as 1H:1V.`,
+      `Eroded embankment about ${m.erodedAcFt.toFixed(1)} ac-ft, MacDonald & Langridge-Monopolis (1984) earthfill in SI (Ver = 0.0261 (Vw·hw)^0.769 m³, tf = 0.0179 Ver^0.364 h), as the Runner. Width = Ver over an assumed embankment section (12 ft crest, 3H:1V slopes; enter the real geometry in the Runner). Side slope taken as 1H:1V.`,
     );
   } else if (dam.method === "tr60") {
     const t = tr60(heightFt, lengthFt, dam.failureMode);
@@ -247,10 +258,13 @@ export function analyze(dam: DamRecord): Analysis {
   }
   const acres = areaM2 / ACRE;
 
+  // The desk depth curve only resolves out to the 0.1 ft wet limit. A user reach past that limit
+  // extends the drawn valley, but structures beyond the wet limit stay unresolved, not dry.
+  const resolvedM = Math.min(lengthM, Math.max(wetReachM, 500));
   const receptors = dam.receptors.map((r) => {
     const xM =
       r.distanceKm != null && Number.isFinite(r.distanceKm) ? Math.max(0, r.distanceKm * 1000) : Math.max(0, r.station) * baseM;
-    const unresolved = xM > lengthM;
+    const unresolved = xM > resolvedM;
     const base = {
       id: r.id,
       name: r.name,
@@ -269,7 +283,10 @@ export function analyze(dam: DamRecord): Analysis {
         unresolved: true,
         zone: null,
         ndClass: null,
-        rankReason: `unresolved: ${(xM / 1000).toFixed(1)} km is past the ${(lengthM / 1000).toFixed(1)} km desk reach; not screened`,
+        rankReason:
+          xM > lengthM
+            ? `unresolved: ${(xM / 1000).toFixed(1)} km is past the ${(lengthM / 1000).toFixed(1)} km desk reach; not screened`
+            : `unresolved: ${(xM / 1000).toFixed(1)} km is past the desk curve's 0.1 ft wet limit (${(resolvedM / 1000).toFixed(1)} km), inside the ${(lengthM / 1000).toFixed(1)} km user reach; the desk cannot call it dry`,
         needsJudgment: true,
       };
     }
@@ -305,9 +322,12 @@ export function analyze(dam: DamRecord): Analysis {
   });
 
   const maxVelocityFps = receptors.reduce((m, r) => Math.max(m, r.velocityFps), 0);
-  const screen = screenReceptors(receptors, dam.receptors, { judgmentAsProbable: dam.judgmentAsProbable ?? true });
+  const screen = screenReceptors(receptors, dam.receptors, {
+    judgmentAsProbable: dam.judgmentAsProbable ?? true,
+  });
   if (warnings.some((w) => w.startsWith("No DEM tie"))) {
     screen.level = "Review";
+    screen.label = "Review (crest not tied)";
     screen.reasons.unshift("The crest could not be tied. Screening waits on a usable DEM crest.");
   }
 
@@ -399,11 +419,32 @@ export function screenReceptors(
   // A High that only judgment-zone structures produce is labelled as such: it is the 5.3(f) default, not a TM 11 high-zone finding.
   const highDrivers = receptors.filter((r) => r.ndClass === "High");
   const judgmentDriven = (level as ScreenLevel) === "High" && highDrivers.length > 0 && highDrivers.every((r) => r.zone === "judgment");
-  const label = judgmentDriven ? "High (judgment zone counted)" : level;
+  let label: string = judgmentDriven ? "High (judgment zone counted)" : level;
   if (judgmentDriven) {
     reasons.unshift(
       "High comes only from the ACER TM 11 judgment zone, counted as probable loss of life (damsuite default, 5.3(f)). An engineer may call it Medium; switch \"Judgment zone\" to test that.",
     );
+  }
+  // Nick (2026-10-29): a home or road past the modeled reach forces Review. It is never Low and never dropped.
+  // A resolved High stays High (it cannot go higher) but the label says what is unresolved.
+  const unresolvedCounting = receptors.filter((r, i) => {
+    if (!r.unresolved) return false;
+    const habitable = seeds[i]?.habitable ?? (r.kind === "house" || r.kind === "mobile");
+    return habitable || r.kind === "road";
+  }).length;
+  if (unresolvedCounting > 0) {
+    const n = `${unresolvedCounting} unresolved`;
+    const what = unresolvedCounting === 1 ? "home or road" : "homes or roads";
+    if ((level as ScreenLevel) === "High") {
+      label = `${label} (${n} past the reach)`;
+    } else {
+      const resolvedAs = level;
+      level = "Review";
+      label = `Review (${resolvedAs} on resolved receptors; ${n})`;
+      reasons.unshift(
+        `Held at Review: resolved receptors screen ${resolvedAs}, but ${n} ${what} past the modeled reach could raise it. Extend the reach or model the valley.`,
+      );
+    }
   }
   reasons.push(
     `ND rules as in damsuite classify_nd: a habitable structure in the TM 11 high zone is High; in the judgment zone it is ${

@@ -108,11 +108,73 @@ describe("desk valley reach", () => {
     assert.ok(a.screen.judgment.some((j) => j.startsWith("435")));
     assert.ok(a.screen.reasons.some((j) => j.includes("unresolved")));
 
-    // A user reach past 17.2 km resolves them on the decayed curve.
+    // Below High, the unresolved houses hold the screen at Review (default policy).
+    const padded = analyze({ ...base, receptors: seeds.map((r) => (r.id === "near" ? { ...r, padFt: 6 } : r)) });
+    assert.ok(padded.flood.receptors[2].ndClass !== "High");
+    assert.equal(padded.screen.level, "Review");
+
+    // RETEST blocker: a user reach past the 0.1 ft wet limit used to "resolve" 435/4069 as dry.
+    // They now stay unresolved (the desk curve is below its wet limit there, so it cannot call them dry).
     const long = analyze({ ...base, receptors: seeds, reachKm: 25 });
     assert.equal(long.flood.lengthM, 25000);
-    assert.equal(long.flood.receptors[1].unresolved, false);
     assert.equal(long.flood.reachSource, "user");
+    for (const r of long.flood.receptors.slice(0, 2)) {
+      assert.equal(r.unresolved, true, r.name);
+      assert.equal(r.ndClass, null);
+      assert.match(r.rankReason, /wet limit/);
+    }
+    assert.ok(long.screen.judgment.some((j) => j.startsWith("4069")));
+    const longFar = analyze({ ...base, receptors: seeds.slice(0, 2), reachKm: 25 });
+    assert.equal(longFar.screen.level, "Review", "was Low (both read dry)");
+  });
+
+  describe("MacDonald & Langridge-Monopolis units (RETEST engine.ts:120)", () => {
+    it("CHECK: DWR-2801 matches the Runner mlm_1984 routed peak (was 241,281 cfs)", () => {
+      // Runner rpkg/breach.py routed_hydrograph(METHOD_MLM), ND00199 1072.24 / H 27.5 / 1,612.59 ac-ft:
+      // SA 154.5 ac -> 41,584.7 cfs, no SA -> 38,904.4 cfs; width 126.9 ft, tf 0.499 h.
+      const withSa = analyze(dwr2801({ method: "macdonald", surfaceAreaAc: 154.5 })).breach;
+      assert.ok(Math.abs(withSa.peakCfs - 41584.7) < 1, `peak ${withSa.peakCfs}`);
+      assert.ok(Math.abs(withSa.widthFt - 126.9) < 0.1, `width ${withSa.widthFt}`);
+      assert.ok(Math.abs(withSa.timeHr - 0.499) < 0.001, `tf ${withSa.timeHr}`);
+      assert.equal(withSa.capped, false);
+      const noSa = analyze(dwr2801({ method: "macdonald", surfaceAreaAc: undefined })).breach;
+      assert.ok(Math.abs(noSa.peakCfs - 38904.4) < 1, `peak ${noSa.peakCfs}`);
+    });
+  });
+
+  describe("unresolved homes never leave the screen at Low (RETEST PR3 blocker)", () => {
+    const house = (id: string, distanceKm: number, padFt = 0) => ({
+      id,
+      name: id,
+      kind: "house" as const,
+      station: 0,
+      distanceKm,
+      lateral: 0,
+      padFt,
+    });
+    const base = dwr2801({ surfaceAreaAc: 154.5 });
+
+    it("CHECK: only 4069 seeded: was Low, now Review by default", () => {
+      const a = analyze({ ...base, receptors: [house("4069", 17.2)] });
+      assert.equal(a.flood.receptors[0].unresolved, true);
+      assert.equal(a.screen.level, "Review");
+      assert.match(a.screen.label, /^Review \(Low on resolved receptors; 1 unresolved\)$/);
+      assert.ok(a.screen.reasons[0].startsWith("Held at Review"));
+    });
+
+    it("CHECK: 435 and 4069 with pads +2 ft: was Low, now Review", () => {
+      const a = analyze({ ...base, receptors: [house("435", 14.8, 2), house("4069", 17.2, 2)] });
+      assert.equal(a.screen.level, "Review");
+    });
+
+    it("a resolved High is not lowered, and barns past the reach do not hold it", () => {
+      const hi = analyze({ ...base, receptors: [house("near", 0.2), house("4069", 17.2)] });
+      assert.equal(hi.screen.level, "High");
+      assert.match(hi.screen.label, /\(1 unresolved past the reach\)$/);
+      assert.equal(hi.flood.receptors[1].unresolved, true, "never dropped");
+      const barn = analyze({ ...base, receptors: [{ ...house("2134", 17.2), kind: "barn" as const }] });
+      assert.equal(barn.screen.level, "Low");
+    });
   });
 
   it("caps a user reach at MAX_REACH_KM", () => {
