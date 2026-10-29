@@ -76,6 +76,8 @@ export type DamRecord = {
   reachKm?: number;
   receptors: ReceptorSeed[];
   geometry?: DamGeometry;
+  /** ACER TM 11 judgment zone counts as probable loss of life (High), as damsuite classify_nd defaults. Default true. */
+  judgmentAsProbable?: boolean;
 };
 
 export type SeriesPoint = { tHr: number; qCfs: number };
@@ -146,6 +148,10 @@ export type Analysis = {
   };
   screen: {
     level: ScreenLevel;
+    /** Level as shown: "High (flagged: judgment zone)" when only judgment-zone structures make it High. */
+    label: string;
+    /** Whether the judgment zone counted as probable loss of life (damsuite JUDGMENT toggle). */
+    judgmentAsProbable: boolean;
     /** Worst ACER TM 11 zone over habitable inundated structures, or null if none is wet. */
     acerLevel: "low" | "judgment" | "high" | null;
     reasons: string[];
