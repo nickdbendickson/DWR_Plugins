@@ -46,6 +46,7 @@ class NDBreachRunnerPlugin:
         self.dialog = None
         self.home_action = None
         self.home_dialog = None
+        self.results_dock = None
 
     def initProcessing(self):
         """Register the Processing provider once. QGIS / qgis_process call this for a
@@ -70,6 +71,20 @@ class NDBreachRunnerPlugin:
         self.action.triggered.connect(self.run_plugin)
         self.iface.addPluginToMenu(MENU, self.action)
         self.actions.append(self.action)
+
+
+    def show_results_dock(self, folder=None, *args):
+        """Breach results panel for a finished dam folder. Does not run the model."""
+        from qgis.PyQt.QtCore import Qt
+        from .results_dock import ResultsDock
+        if self.results_dock is None:
+            self.results_dock = ResultsDock(self.iface)
+            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.results_dock)
+        if folder:
+            self.results_dock.set_folder(folder)
+        self.results_dock.show()
+        self.results_dock.raise_()
+
 
     def run_settings(self, *args):
         """Open the window and its Settings window (the suite settings grid)."""
@@ -133,6 +148,7 @@ class NDBreachRunnerPlugin:
             # imported here so a problem in the window cannot stop the plugin from loading
             from .dialog import NDBreachRunnerDialog
             self.dialog = NDBreachRunnerDialog(parent=self.iface.mainWindow(), iface=self.iface)
+            self.dialog.open_results = self.show_results_dock
         self.dialog.show()
         self.dialog.raise_()
         self.dialog.activateWindow()
@@ -153,6 +169,13 @@ class NDBreachRunnerPlugin:
             self.iface.showOptionsDialog(self.iface.mainWindow())
 
     def unload(self):
+        if self.results_dock is not None:
+            try:
+                self.iface.removeDockWidget(self.results_dock)
+                self.results_dock.deleteLater()
+            except RuntimeError:
+                pass
+            self.results_dock = None
         for a in self.actions:
             self.iface.removePluginMenu(MENU, a)
         self.actions = []

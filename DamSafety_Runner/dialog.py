@@ -470,6 +470,10 @@ class NDBreachRunnerDialog(QDialog):
         self.suggest_btn.clicked.connect(lambda _c=False: self._open_suggested())
         self.folder_btn = QPushButton("Open dam folder")
         self.folder_btn.clicked.connect(lambda _c=False: self._open_dam_folder())
+        self.results_btn = QPushButton("Breach results")
+        self.results_btn.setToolTip("The breach-results dock for this dam folder. "
+                                    "Reads the run already written. Does not run the model.")
+        self.results_btn.clicked.connect(lambda _c=False: self._open_results_dock())
         self.add_btn = QPushButton("Add results to project")
         self.add_btn.setToolTip("The final, baseline and incremental rasters and the flood polygons of "
                                 "the dam folder, with the suite's styles (styles/*.qml), in a layer group "
@@ -480,6 +484,7 @@ class NDBreachRunnerDialog(QDialog):
         self.wizard_btn.clicked.connect(lambda _c=False: self._open_tool(pl.WIZARD))
         row.addWidget(self.suggest_btn)
         row.addWidget(self.folder_btn)
+        row.addWidget(self.results_btn)
         row.addWidget(self.add_btn)
         row.addStretch(1)
         row.addWidget(self.wizard_btn)
@@ -1029,7 +1034,7 @@ class NDBreachRunnerDialog(QDialog):
             self.record_label.setText("")
             self.suggest_label.setText("")
             self._suggested = None
-            for b in (self.suggest_btn, self.folder_btn, self.add_btn):
+            for b in (self.suggest_btn, self.folder_btn, self.results_btn, self.add_btn):
                 b.setEnabled(False)
             return
         folder = self.folder()
@@ -1049,6 +1054,7 @@ class NDBreachRunnerDialog(QDialog):
         self._suggested = tool
         self.suggest_btn.setEnabled(bool(tool))
         self.folder_btn.setEnabled(have)
+        self.results_btn.setEnabled(have)
         self.add_btn.setEnabled(have and bool(pl.result_files(folder)))
         self.status_label.setVisible(not have)           # the chips and Folder contents show it
         self._fill_card(s, folder, have, rows, text, has_json)
@@ -1225,6 +1231,15 @@ class NDBreachRunnerDialog(QDialog):
                 self._log("!!! {}: {}".format(path, e))
         self._log("Added {} result layer(s) of {} to the project".format(added, folder))
         return added
+
+
+    def _open_results_dock(self):
+        """The panel next to the map. Not a second plugin menu entry."""
+        opener = getattr(self, "open_results", None)
+        if opener is None:
+            QMessageBox.information(self, TITLE, "The breach-results dock is not available.")
+            return
+        opener(self.folder())
 
     def _open_dam_folder(self):
         folder = self.folder()
