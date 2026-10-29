@@ -356,10 +356,10 @@ export function screenReceptors(
     }
   });
   if (reasons.length === 0) reasons.push("No seeded receptor is wet at 0.1 ft or more.");
-  // A High that only judgment-zone structures produce is labelled as such: it is the 5.3(f) default, not a TM 11 high-zone finding.
+  // Nick (2026-10-29): judgment zone counts as High by default, and a High that only judgment-zone structures produce reads "High (flagged: judgment zone)". It is the 5.3(f) default, not a TM 11 high-zone finding.
   const highDrivers = receptors.filter((r) => r.ndClass === "High");
   const judgmentDriven = (level as ScreenLevel) === "High" && highDrivers.length > 0 && highDrivers.every((r) => r.zone === "judgment");
-  const label = judgmentDriven ? "High (judgment zone counted)" : level;
+  const label = judgmentDriven ? "High (flagged: judgment zone)" : level;
   if (judgmentDriven) {
     reasons.unshift(
       "High comes only from the ACER TM 11 judgment zone, counted as probable loss of life (damsuite default, 5.3(f)). An engineer may call it Medium; switch \"Judgment zone\" to test that.",

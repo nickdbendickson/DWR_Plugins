@@ -67,7 +67,7 @@ describe("ND ranking (damsuite classify_nd)", () => {
     assert.equal(j.zone, "judgment");
     const on = screenReceptors([wet("Farmstead", "house", 3.5, 2)], [{ kind: "house" }]);
     assert.equal(on.level, "High");
-    assert.equal(on.label, "High (judgment zone counted)");
+    assert.equal(on.label, "High (flagged: judgment zone)");
     assert.ok(on.judgment.length === 1);
     const off = screenReceptors([wet("Farmstead", "house", 3.5, 2, { judgmentAsProbable: false })], [{ kind: "house" }], {
       judgmentAsProbable: false,
