@@ -21,6 +21,11 @@ PT_FIELDS = [("dam_id", FT_STRING), ("name", FT_STRING),
              ("flow_az", FT_DOUBLE), ("dir_method", FT_STRING),
              ("dir_conf", FT_STRING), ("brch_method", FT_STRING),
              ("height_m", FT_DOUBLE), ("notes", FT_STRING)]
+# 0.17.56 (damsuite 1.18.2): the dam point at mid-crest of the dam line (damsuite.midcrest) -
+# tool 4's own extra fields (tools 17/18 build their breach points on PT_FIELDS by position);
+# the Runner hand-off uses mc_x / mc_y (EPSG:5070) as the dam point when set
+MC_FIELDS = [("mc_x", FT_DOUBLE), ("mc_y", FT_DOUBLE), ("mc_z_m", FT_DOUBLE),
+             ("mc_moved_m", FT_DOUBLE)]
 
 
 class BreachDirection(QgsProcessingAlgorithm):
@@ -90,6 +95,24 @@ class BreachDirection(QgsProcessingAlgorithm):
             return None
         return fn
 
+    @staticmethod
+    def _midcrest(verts, path, ref):
+        """0.17.56: the mid-crest record (damsuite.midcrest) of the dam line on the cached dam
+        DEM, or None (no DEM, no data there)."""
+        if not path or not os.path.exists(path):
+            return None
+        try:
+            ds = cm.gdal_open(path)
+            arr = ds.GetRasterBand(1).ReadAsArray().astype("float64")
+            nd = ds.GetRasterBand(1).GetNoDataValue()
+            if nd is not None:
+                arr[arr == nd] = np.nan
+            gt = ds.GetGeoTransform()
+            ds = None
+        except Exception:                                # noqa - an extra; never stop the tool
+            return None
+        return cm.midcrest_on_dem(verts, arr, gt, ref)
+
     def processAlgorithm(self, params, context, feedback):
         dams = self.parameterAsSource(params, self.DAMS, context)
         lines = self.parameterAsSource(params, self.LINES, context)
@@ -102,7 +125,7 @@ class BreachDirection(QgsProcessingAlgorithm):
 
         alb = QgsCoordinateReferenceSystem("EPSG:5070")
         pf = QgsFields()
-        for n, t in PT_FIELDS: pf.append(QgsField(n, t))
+        for n, t in PT_FIELDS + MC_FIELDS: pf.append(QgsField(n, t))
         lf = QgsFields()
         for n, t in (("dam_id", FT_STRING), ("flow_az", FT_DOUBLE),
                      ("dir_conf", FT_STRING)): lf.append(QgsField(n, t))
@@ -118,7 +141,7 @@ class BreachDirection(QgsProcessingAlgorithm):
             a2w = QgsCoordinateTransform(alb, wbs.sourceCrs(), prj)
         names = dams.fields().names()
         total = dams.featureCount() or 1
-        stats = {"line": 0, "fallback": 0, "none": 0, "low": 0, "by_id": 0}
+        stats = {"line": 0, "fallback": 0, "none": 0, "low": 0, "by_id": 0, "mid": 0}
 
         # index dam lines by structure ID once (about 10k lines; cheap)
         by_id = {}
@@ -179,7 +202,9 @@ class BreachDirection(QgsProcessingAlgorithm):
                 p = QgsGeometry.fromPointXY(QgsPointXY(x, y))
                 return min(w.distance(p) for w in _g)
             water_fn = _water if wgeoms else None
-            dem_fn = self._dem_fn(os.path.join(demdir, f"dam_{dam_id}.tif")) if demdir else None
+            dem_path = os.path.join(demdir, f"dam_{dam_id}.tif") if demdir else None
+            dem_fn = self._dem_fn(dem_path)
+            mc_vals = [None] * len(MC_FIELDS)
 
             notes, res = [], None
             if cands:
@@ -199,6 +224,16 @@ class BreachDirection(QgsProcessingAlgorithm):
                 elif len(cands) > 1:
                     notes.append(f"{len(cands)} dam lines within {match:.0f} m; nearest used")
                 res = bd.resolve_breach(verts, ref, water_fn, dem_fn, h)
+                mc = self._midcrest(verts, dem_path, ref)
+                if mc is not None:
+                    mc_vals = [round(mc["xy"][0], 3), round(mc["xy"][1], 3),
+                               round(mc["z_m"], 3), round(mc["moved_m"], 2)]
+                    stats["mid"] += 1
+                    if mc.get("review"):     # damsuite 1.18.2: highest point at the profile edge
+                        notes.append("REVIEW mid-crest: " + mc["review"])
+                else:
+                    notes.append("dam point not moved to mid-crest (no cached DEM across the "
+                                 "dam line's midpoint)")
                 if res["ok"]:
                     stats["line"] += 1
                 else:
@@ -215,7 +250,8 @@ class BreachDirection(QgsProcessingAlgorithm):
                     stats["none"] += 1
                     o = QgsFeature(pf); o.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(*ref)))
                     o.setAttributes([dam_id, name, None, len(cands), None, None, None, "none",
-                                     "none", "none", h, "; ".join(notes + ["no direction"])])
+                                     "none", "none", h, "; ".join(notes + ["no direction"])]
+                                    + mc_vals)
                     sp.addFeature(o); continue
                 stats["fallback"] += 1
                 b = math.radians(az)
@@ -231,7 +267,7 @@ class BreachDirection(QgsProcessingAlgorithm):
             o.setAttributes([dam_id, name, cands[0][1] if cands else None, len(cands),
                              res["length_m"], res["axis_az"], res["flow_az"], res["dir_method"],
                              res["dir_conf"], res["breach_method"], h,
-                             "; ".join(notes + res["notes"])])
+                             "; ".join(notes + res["notes"])] + mc_vals)
             sp.addFeature(o)
             a = QgsFeature(lf)
             a.setGeometry(QgsGeometry.fromPolylineXY(
@@ -241,5 +277,6 @@ class BreachDirection(QgsProcessingAlgorithm):
 
         feedback.pushInfo(f"dam line used: {stats['line']} ({stats['by_id']} by structure ID), centroid fallback: "
                           f"{stats['fallback']}, no direction: {stats['none']}, "
-                          f"low confidence (review): {stats['low']}")
+                          f"low confidence (review): {stats['low']}; dam point at mid-crest: "
+                          f"{stats['mid']}")
         return {self.OUTP: dp, self.OUTL: dl}

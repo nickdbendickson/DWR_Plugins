@@ -549,6 +549,7 @@ def defaults(step, work, settings):
         put("WB", src("waterbodies"))
         put("DEMDIR", o("2"))
         put("STORAGE_CHOICE", int(S.get("storage_choice") or 0))     # tool 3 only (0.17.27)
+        put("LINES", src("dam_lines"))        # 0.17.56: the crest at mid-crest of the dam line
     elif step == "4":
         put("DAMS", o("3") or o("1"))
         put("LINES", src("dam_lines"))

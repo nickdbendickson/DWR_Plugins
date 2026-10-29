@@ -21,6 +21,7 @@ from typing import Optional
 import numpy as np
 
 from . import conditioning as cond
+from ..damsuite import vdatum as VD
 
 KIND_CULVERT = "culvert"
 KIND_BRIDGE = "bridge"
@@ -59,6 +60,10 @@ class Structure:
                                         # the moved object (shallow copies): they report the
                                         # move from it and never judge the bridge again. Not
                                         # in to_dict
+    invert_local: Optional[dict] = None  # 3.12.5: inverts given between 0 and 300 ft (a local
+                                        # datum, damsuite.vdatum.is_local_elev) tied to the
+                                        # LiDAR bed (reconcile_inverts): source / NAVD88 ft,
+                                        # offset, method. Not in to_dict
 
     def cut_line(self, cell):
         """The line the DEM cut follows at this cell size: as given, or lengthened
@@ -446,7 +451,36 @@ def reconcile_inverts(structures, read_dem, tol_m, cell):
 
         def ft(v):
             return "{:+.1f} ft".format(v / FT)
-        if not offs:
+        # 3.12.5 (damsuite 1.18.2): an invert between 0 and 300 ft is on a local datum - never
+        # datum-converted; tied to the LiDAR channel bed ("DEM-derived"): one offset for both
+        # ends when they agree within 1 ft (slope kept), else the LiDAR bed at each end.
+        # Inverts in ND's normal range keep the checks below (no datum conversion, as before).
+        band = [v is not None and VD.is_local_elev(v / FT) for v in (inv_up, inv_dn)]
+        if any(band):
+            if len(offs) == 2 and all(band) and abs(off_up - off_dn) <= 1.0 * FT:
+                shift = 0.5 * (off_up + off_dn)
+                s.invert_up_m, s.invert_dn_m = inv_up - shift, inv_dn - shift
+                how = "DEM-derived: one offset to the LiDAR channel bed (slope kept)"
+                off_ft = -shift / FT
+            elif offs:                  # as "LiDAR inverts used" below: the model reads the bed
+                s.invert_up_m, s.invert_dn_m = None, None
+                how = "DEM-derived: the LiDAR channel bed at each end"
+                off_ft = None
+            else:
+                s.invert_up_m, s.invert_dn_m = None, None
+                how = "dropped: no DEM at the ends (the model cuts to the LiDAR)"
+                off_ft = None
+            s.invert_local = {
+                "name": name, "source_ft": [None if v is None else round(v / FT, 3)
+                                            for v in (inv_up, inv_dn)],
+                "navd88_ft": [None if v is None else round(v / FT, 3) for v in (
+                    (s.invert_up_m, s.invert_dn_m) if off_ft is not None else (bed_up, bed_dn))],
+                "offset_ft": None if off_ft is None else round(off_ft, 3), "method": how}
+            s.invert_note = ("inventory inverts {} ft are on a local datum (0-300 ft, never "
+                             "datum-converted): {}{}").format(
+                " / ".join("n/a" if v is None else "{:.2f}".format(v / FT) for v in (inv_up, inv_dn)),
+                how, "" if off_ft is None else " ({:+.2f} ft)".format(off_ft))
+        elif not offs:
             s.invert_note = "inventory inverts kept unchecked (no DEM at the ends)"
         elif all(abs(o) <= tol_m for o in offs):
             s.invert_note = "inventory inverts used ({} / {} from the LiDAR channel bed, within {:.1f} ft)".format(

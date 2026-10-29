@@ -232,7 +232,8 @@ def test_vdatum_local_top_100_from_dem_relative_kept():
     # the report / Hazard summary lines and the JSON record
     VD = _VD()
     txt = "\n".join(VD.summary_lines(VD.public(rec)))
-    assert "local (assumed)" in txt and "100.00 local -> 1072.60 NAVD88 (DEM)" in txt, txt
+    assert "local (assumed)" in txt and "100.00 local -> 1072.60 NAVD88 (DEM near the dam point)" in txt
+    assert "(DEM-derived; offset +972.60 ft)" in txt  # 3.12.5: labelled, txt
     assert "WARNING" in txt
     import json
     json.dumps(VD.public(rec))
@@ -257,14 +258,25 @@ def test_vdatum_local_not_applied_on_a_dem_in_the_wrong_units():
     top of dam: the local step does nothing and the run's unit check reports it
     (run_tests.wrong_dem_units_are_caught)."""
     from nd_breach_runner.core import vdatum_run as vdrun
-    for top, dem_ft in ((1850.0, 1850.0 / 0.3048), (900.0, 900.0 / 0.3048), (100.0, 4500.0)):
+    cases = ((1850.0, 1850.0 / 0.3048), (900.0, 900.0 / 0.3048), (100.0, 4500.0))
+    # also without a mid-crest (no dam line: tie_ok False), as in run_tests' model test
+    for (top, dem_ft), tie_ok in [(c, t) for c in cases for t in (True, False)]:
         dam = _dam(top=top)
         st = _st()
         vdrun.apply(dam, st, LON, LAT)
         before = dam.top_of_dam_ft
-        rec, changed = vdrun.apply_local(dam, st, dem_ft)
-        assert not changed and not rec.get("local"), (top, dem_ft, rec)
-        assert dam.top_of_dam_ft == before
+        rec, changed = vdrun.apply_local(dam, st, dem_ft, tie_ok=tie_ok,
+                                         no_tie="no dam line")
+        # 3.12.5: 100 ft is local by the 0 - 300 ft rule (never converted); with no usable DEM
+        # tie it is flagged for review and left unconverted (Nick 2026-10-29), not guessed
+        assert bool(rec.get("local")) == (top <= 300.0), (top, dem_ft, rec)
+        if top <= 300.0:
+            assert changed and rec.get("review"), rec
+            assert rec["fields"]["top_of_dam_ft"].get("unconverted"), rec["fields"]
+            assert dam.top_of_dam_ft is None            # the run's own DEM estimate, flagged
+        else:
+            assert not changed, (top, dem_ft, rec)
+            assert dam.top_of_dam_ft == before
 
 
 @test
@@ -279,11 +291,21 @@ def test_vdatum_local_override_and_explicit_datum():
     assert changed and rec["source_datum"] == "local" and rec["how"] == "override"
     assert abs(dam.top_of_dam_ft - DEM_CREST) < 1e-9
     assert abs(dam.pmf_max_wse_ft - (DEM_CREST - 2.0)) < 1e-6
-    # NGVD29 chosen explicitly: no detection, even for 100 ft
-    dam = _dam(top=100.0)
+    # NGVD29 chosen explicitly: no detection for a plausible value ...
+    dam = _dam(top=1060.0)
     st = _st(elev_datum="NGVD29")
     vdrun.apply(dam, st, LON, LAT)
     assert not vdrun.apply_local(dam, st, DEM_CREST)[1]
+    # ... but 3.12.5 (0 - 300 ft rule): 100 ft is local whatever was chosen - converted to
+    # NAVD88 by the DEM tie, no "override" wording (Nick 2026-10-29)
+    dam = _dam(top=100.0)
+    st = _st(elev_datum="NGVD29")
+    vdrun.apply(dam, st, LON, LAT)
+    rec, changed = vdrun.apply_local(dam, st, DEM_CREST)
+    assert changed and rec["local"] and abs(dam.top_of_dam_ft - DEM_CREST) < 1e-9
+    assert not any("overridden" in w for w in rec["warnings"]), rec["warnings"]
+    assert not rec.get("review") and rec["fields"]["top_of_dam_ft"]["navd88"] == \
+        round(DEM_CREST, 3)
     # stated "local" in dam.json / the inventory
     dam = _dam(top=100.0)
     st = _st(elev_datum_stated="Local (assumed)")
@@ -337,7 +359,10 @@ def test_vdatum_local_window_line_and_choice():
                  '{"dam_id": "X-1", "top_of_dam_ft": 100.0, "lat": 46.983031, '
                  '"lon": -97.391489}}')
     line = pl.datum_info(d, "auto")
-    assert "Looks local" in line, line
+    assert "0 - 300 ft rule" in line and "never datum-converted" in line, line   # 3.12.5
+    for mode in ("NGVD29", "NAVD88"):                       # the rule beats an explicit choice
+        t = pl.datum_info(d, mode)
+        assert "0 - 300 ft rule" in t and "not used" not in t and "overrid" not in t, (mode, t)
     assert "taken from the DEM" in pl.datum_info(d, "local")
     from nd_breach_runner import algorithms as A
     assert [k for k, _l in A.ELEV_DATUMS] == list(pl.ELEV_DATUM_CHOICES)

@@ -50,6 +50,7 @@ from . import lisflood as lfmod
 from . import anuga_model as anmod
 from . import stoprule
 from . import vdatum_run as vdrun
+from ..damsuite import midcrest as mcmod
 from .units import FT, MILE, ACFT, CFS, ARRIVAL_DEPTH_FT
 
 def _metadata_version():
@@ -277,6 +278,9 @@ class RunSettings:
         self.elev_datum = "auto"
         self.elev_datum_stated = None
         self.vertical_datum = None
+        # 3.12.5: the dam (crest) line a batch run picked from CREST_LINE for the mid-crest dam
+        # point (damsuite.midcrest) when the dam has no crest_line_xy. Not in as_dict
+        self.midcrest_line = None
         for k, v in kw.items():
             if not hasattr(self, k):
                 raise TypeError("unknown setting {}".format(k))
@@ -328,7 +332,7 @@ class RunSettings:
                 d[k] = len(v) if k == "refine_lines" else (v is not None)
             elif k == "dam_record":
                 d[k] = v is not None
-            elif k in ("vertical_datum", "elev_datum_stated"):
+            elif k in ("vertical_datum", "elev_datum_stated", "midcrest_line"):
                 continue                 # 3.12.0: run_report["vertical_datum"] records them
             elif k == "elev_datum" and v in ("auto", None, ""):
                 continue                 # 3.12.0: the default - the report stays as before
@@ -815,6 +819,50 @@ def max_extent_warning(max_extent_mi, over):
             "before 2026-10) and re-run.".format(float(max_extent_mi or 0), ", ".join(over)))
 
 
+MIDCREST_FROM = "DEM at mid-crest (highest point across the dam line's midpoint, +-25 m)"
+
+
+def place_midcrest(dam, st, dam_xy, read, cell_m=1.0):
+    """3.12.5 (damsuite 1.18.2, Nick 2026-10-28): the dam point at mid-crest - the dam line's
+    midpoint by length, then the highest DEM point on the perpendicular profile +-25 m
+    (damsuite.midcrest). The line is dam.crest_line_xy (DAM_LINES) or st.midcrest_line (a
+    batch's CREST_LINE). Returns (xy, record): record keeps the original point
+    (dam._point_original, set before prepare() snapped it to the line, else dam_xy) and the
+    move. A breach position on the crest line (st.breach_xy) keeps the point where it is (the
+    record has moved=False and the mid-crest DEM crest is still used). Without a line or DEM:
+    (dam_xy, {"warning": ...}) - the point is used as given."""
+    orig = getattr(dam, "_point_original", None) or dam_xy
+    line = getattr(dam, "crest_line_xy", None) or getattr(st, "midcrest_line", None)
+    base = {"original_xy": [round(float(orig[0]), 3), round(float(orig[1]), 3)]}
+    if not line or len(line) < 2:
+        base["warning"] = ("no dam line: the dam point is used as given (not moved to mid-crest) "
+                           "and the crest is read from the DEM near it")
+        return dam_xy, base
+    pts = [(float(x), float(y)) for x, y in line]
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    pad = mcmod.HALF_WIDTH_M + 5.0 + 3.0 * float(cell_m)
+    try:
+        g = read((min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad), float(cell_m))
+        z = np.where(g.valid(), g.data, np.nan)
+        rec = mcmod.midcrest(pts, mcmod.bilinear(z, (g.x0, g.dx, 0.0, g.y0, 0.0, -g.dx)),
+                             original_xy=orig)
+    except Exception as e:                                   # noqa - never stop a run for this
+        base["warning"] = "mid-crest not read ({}: {}): the dam point is used as given".format(
+            type(e).__name__, e)
+        return dam_xy, base
+    if rec is None:
+        base["warning"] = "no DEM data across the dam line's midpoint: the dam point is used as given"
+        return dam_xy, base
+    rec["cell_m"] = float(cell_m)
+    if st.breach_xy is not None:
+        rec["moved"] = False
+        rec["note"] = ("the breach position on the crest line is the dam point (not moved); the "
+                       "crest elevation is the mid-crest DEM")
+        return dam_xy, rec
+    rec["moved"] = True
+    return (float(rec["_xy"][0]), float(rec["_xy"][1])), rec
+
+
 def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             progress=None, log=None, cancel=None):
     """dam: breach.DamData; dam_xy / inflow_xy in the working (metric) CRS.
@@ -903,6 +951,28 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             log(n)
         if inv_notes:
             report["structure_inverts"] = inv_notes
+    struct_local = [s.invert_local for s in (st.structures or [])
+                    if getattr(s, "invert_local", None)]
+
+    # --- 3.12.5 (damsuite 1.18.2): the dam point at mid-crest (place_midcrest) ----------------
+    mc_rec = None
+    mc_why = "no mid-crest (proposed dam)"
+    if not getattr(st, "proposed", None):
+        dam_xy, mc_rec = place_midcrest(dam, st, dam_xy, raw_terrain.read, min(cs, 1.0))
+        report["dam_point"] = mcmod.public(mc_rec)
+        report["dam_xy"] = [float(dam_xy[0]), float(dam_xy[1])]
+        line = mcmod.summary_line(mc_rec)
+        if line:
+            log(line)
+        if mc_rec.get("warning"):
+            warnings.append("Dam point: " + mc_rec["warning"] + ".")
+            mc_why = mc_rec["warning"]
+            mc_rec = None if "z_m" not in mc_rec else mc_rec
+        elif mc_rec.get("review"):
+            # 3.12.5 (Nick 2026-10-29): the highest point at the edge of the +-25 m profile -
+            # the pick is kept (method unchanged) but flagged
+            warnings.append("REVIEW: Dam point: " + mc_rec["review"] + ".")
+            report["crest_pick_review"] = mc_rec["review"]
 
     # --- 3.12.0: dam elevations NGVD29 -> NAVD88 (core/vdatum_run.py) ------------------
     # the rundam / batch tools convert in prepare() (before their DEM checks); this covers the
@@ -913,6 +983,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                                  or report.get("work_crs"))
             vdrun.apply(dam, st, ll[0] if ll else None, ll[1] if ll else None,
                         top_is_dem=dam.top_of_dam_ft is None, log=log)
+        if struct_local:                     # 3.12.5: local (0-300 ft) culvert inverts
+            st.vertical_datum["structures_local"] = struct_local
+        if report.get("dam_point"):
+            st.vertical_datum["dam_point"] = report["dam_point"]
         report["vertical_datum"] = vdrun.VD.public(st.vertical_datum)
         for k in ("top_of_dam_ft", "pmf_max_wse_ft", "breach_bottom_ft"):
             report["dam"][k] = getattr(dam, k, None)
@@ -942,6 +1016,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             z, X, Y, dam_xy, float(spec["crest_m"]), float(spec.get("crest_width_m") or 0.0))
         if err:
             raise brmod.BreachInputError("{}: {}".format(dam.dam_id, err))
+    elif mc_rec is not None:
+        # 3.12.5: the DEM at mid-crest (place_midcrest), not the 98th percentile near the point
+        crest_dem_ft = float(mc_rec["_z_m"]) / FT
+        report["dem_crest_from"] = MIDCREST_FROM
     else:
         # the 98th percentile of the DEM within 30 m, not the single highest cell (nanmax):
         # nanmax can latch onto a nearby hill, road embankment or spike and read the crest
@@ -958,12 +1036,21 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     if not spec and st.vertical_datum is not None:
         try:
             lc_ft, lc_from = crest_dem_ft, report.get("dem_crest_from", "DEM near the dam point")
-            if getattr(dam, "crest_line_xy", None):
+            if mc_rec is None and getattr(dam, "crest_line_xy", None):
                 c2, how2 = vdrun.dem_crest_on_line(terrain_src.read, dam.crest_line_xy,
                                                    min(cs, 1.0))
                 if c2 is not None:
                     lc_ft, lc_from = c2, how2
-            vrec, changed = vdrun.apply_local(dam, st, lc_ft, lc_from, log)
+            # 3.12.5 (Nick 2026-10-29): 0 - 300 ft values are tied only to the mid-crest DEM
+            # crest; without it (no dam line / no DEM across it) they are flagged for review
+            pre_tie = list(st.vertical_datum.get("warnings") or [])
+            # 3.12.5 (Nick 2026-10-29, "in that case, use dem elevations"): 0 - 300 ft values
+            # of a dam whose top is real (no local crest) -> the DEM low point at the toe
+            toe_line = getattr(dam, "crest_line_xy", None) or getattr(st, "midcrest_line", None)
+            vrec, changed = vdrun.apply_local(
+                dam, st, lc_ft, lc_from, log, tie_ok=mc_rec is not None, no_tie=mc_why,
+                dem_low=lambda: vdrun.dem_toe_low(raw_terrain.read, dam_xy, toe_line, dam,
+                                                  min(cs, 1.0)))
             if changed:
                 report["vertical_datum"] = vdrun.VD.public(vrec)
                 for k in ("top_of_dam_ft", "pmf_max_wse_ft", "breach_bottom_ft"):
@@ -971,13 +1058,38 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                 if report["settings"].get("flood") and st.flood is not None:
                     report["settings"]["flood"].update(normal_pool_ft=st.flood.normal_pool_ft,
                                                        trigger_value=st.flood.trigger_value)
-                warnings[:] = [w for w in warnings if "NGVD29 was assumed" not in w]
-                for w in vrec.get("warnings") or []:
-                    if w not in warnings:
-                        warnings.append(w)
-                report["crest_source"] = "DEM (local datum): " + lc_from
+                    if "trigger" in report["settings"]["flood"]:     # 3.12.5 guard: -> peak
+                        report["settings"]["flood"]["trigger"] = st.flood.trigger
+                    fd = report["settings"]["flood"]
+                    if "outlets" in fd:             # DEM-derived / dropped outlet inverts
+                        fd["outlets"] = [(c.name, c.invert_m, c.width_m, c.height_m, c.cd,
+                                          c.schedule) for c in (st.flood.outlets or [])]
+                    if "spillway" in fd:
+                        fd["spillway"] = st.flood.spillway is not None
+                # the pre-tie datum warnings the tie replaced (no near-duplicates)
+                vdrun.merge_tie_warnings(warnings, pre_tie, vrec.get("warnings") or [])
+                if vrec.get("band_dem"):            # the top is real: the crest is unchanged
+                    report["band_dem"] = {"low_ft": vrec.get("dem_low_ft"),
+                                          "how": vrec.get("dem_low_how")}
+                else:
+                    report["crest_source"] = "DEM (local datum): " + lc_from
         except Exception as e:                               # noqa - never stop the run for this
             warnings.append("Local datum not checked: {}: {}".format(type(e).__name__, e))
+    if st.vertical_datum is not None:
+        try:                        # 3.12.5: a 0 - 300 ft value never tied -> review
+            if vdrun.finish_band(dam, st, "the local-datum tie did not run" if not spec else
+                                 "proposed dam: no local-datum tie", log):
+                report["vertical_datum"] = vdrun.VD.public(st.vertical_datum)
+                for w in st.vertical_datum.get("warnings") or []:
+                    if w not in warnings:
+                        warnings.append(w)
+        except Exception as e:                               # noqa
+            warnings.append("Local datum review not checked: {}: {}".format(type(e).__name__, e))
+    if st.vertical_datum is not None and st.vertical_datum.get("review"):
+        report["datum_review"] = st.vertical_datum.get("review_reason") or True
+        if report.get("crest_source", "").startswith("DEM (local datum)") and \
+                st.vertical_datum.get("local_offset_ft") is None:
+            report["crest_source"] = "DEM (local datum NOT tied - review)"
     if not spec and dam.top_of_dam_ft is not None and dam.dam_height_ft:
         diff = crest_dem_ft - dam.top_of_dam_ft
         if abs(diff) > max(0.6 * dam.dam_height_ft, 8.0):

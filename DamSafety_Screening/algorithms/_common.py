@@ -12,6 +12,7 @@ from ..core.warp_opts import no_overviews
 from ..compat import (GEOM_LINE, GEOM_POINT, GEOM_POLYGON)
 from ..damsuite import gdalsafe as GS
 from ..damsuite import structure_flags as SF
+from ..damsuite import midcrest as MC
 
 ALBERS = "EPSG:5070"
 FT = 0.3048                      # metres per foot (user-facing depths are in feet since 0.11)
@@ -423,3 +424,65 @@ def dugout_index(alg, params, context):
             elif kind == "polygon" and out is polys and parts:
                 polys.append((sid, parts))
     return dg.DugoutIndex(pts, polys, buf_m, above_grade_af=above)
+
+
+def midcrest_on_dem(verts, arr, gt, original_xy=None):
+    """v0.17.56 (damsuite 1.18.2, Nick 2026-10-28): the dam point at mid-crest - the dam
+    line's midpoint by length, the highest DEM point on the perpendicular profile +-25 m
+    (damsuite.midcrest) - on a cached dam DEM (arr with NaN no-data, its north-up geotransform,
+    the line in the DEM's CRS). The record (xy, z_m, z_ft, moved_m, original_xy, ...) or None
+    (no line, no DEM data there, or an error)."""
+    if not verts or len(verts) < 2 or arr is None or gt is None:
+        return None
+    try:
+        return MC.midcrest([(float(x), float(y)) for x, y in verts],
+                           MC.bilinear(np.asarray(arr, float), tuple(gt)),
+                           original_xy=original_xy)
+    except Exception:                                    # noqa - an extra; never stop a tool
+        return None
+
+
+def dam_line_index(lines, lid):
+    """{structure id (int): [features]} of a DWR dam-line layer by its id field ({} without)."""
+    out = {}
+    if lines is not None and lid and lid in lines.fields().names():
+        for f in lines.getFeatures():
+            try:
+                out.setdefault(int(f[lid]), []).append(f)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def dam_line_verts(lines, by_id, dam_id, g_alb, l2a, a2l, match_m):
+    """The vertices (EPSG:5070) of a dam's line: by its DWR structure id ("DWR-<n>") when the
+    index has it, else the nearest line within match_m of the dam point (g_alb, a QgsGeometry
+    in EPSG:5070); the longest part of a multi-line. (verts, how) or (None, why)."""
+    cands = []
+    sid = None
+    if str(dam_id).startswith("DWR-"):
+        try:
+            sid = int(str(dam_id)[4:])
+        except ValueError:
+            sid = None
+    how = "DWR structure id"
+    if sid is not None and sid in by_id:
+        for f in by_id[sid]:
+            lg = f.geometry(); lg.transform(l2a)
+            cands.append((lg.distance(g_alb), lg))
+    elif lines is not None:
+        pt = g_alb.asPoint()
+        box = a2l.transformBoundingBox(QgsRectangle(pt.x() - match_m, pt.y() - match_m,
+                                                    pt.x() + match_m, pt.y() + match_m))
+        for f in lines.getFeatures(QgsFeatureRequest().setFilterRect(box)):
+            lg = f.geometry(); lg.transform(l2a)
+            d = lg.distance(g_alb)
+            if d <= match_m:
+                cands.append((d, lg))
+        how = "nearest dam line"
+    if not cands:
+        return None, "no dam line within {:.0f} m".format(match_m)
+    lg = min(cands, key=lambda c: c[0])[1]
+    parts = lg.asMultiPolyline() if lg.isMultipart() else [lg.asPolyline()]
+    part = max(parts, key=lambda pl: len(pl))
+    return [(p.x(), p.y()) for p in part], how
