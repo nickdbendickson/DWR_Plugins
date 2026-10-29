@@ -295,7 +295,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
             {result.flood.reachSource === "user"
               ? " (set by you)"
               : result.flood.reachSource === "aoi"
-                ? " (to the drawn area's farthest extent)"
+                ? " (to where the valley leaves the drawn area)"
                 : " (to the 0.1 ft wet limit)"}
             ; receptors past it{result.flood.aoi?.applied ? " or outside the drawn area" : ""} are unresolved.
           </p>
@@ -325,9 +325,10 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
         <h3 className="text-lg">Dam line, points, and area of interest</h3>
         <p className="mt-1 text-sm text-muted">
           Draw the dam line, the reservoir point (first marker), the breach point (second marker), and the area of
-          interest. They are saved on this dam record. A drawn area limits the schematic flood: the reach stops at its
-          farthest extent from the breach (straight line, since the desk valley has no centreline), and wet area, depth
-          and receptors count only inside it.
+          interest. They are saved on this dam record. A drawn area limits the schematic flood: the valley runs
+          downstream from the breach (the dam line&apos;s side away from the reservoir point), the reach stops where it
+          leaves the drawn area, the wet area is clipped to it, and receptors outside it are unresolved (a house that
+          would rank higher is still named).
         </p>
         <div className="mt-3">
           {mounted ? (
@@ -460,9 +461,19 @@ function AoiNote({ flood }: { flood: ReturnType<typeof analyze>["flood"] }) {
     <div className="rounded-md border border-line bg-sand p-3 text-sm">
       <p className="font-medium">{flood.aoi.label}</p>
       {flood.aoi.applied ? (
-        <p className="mt-1 text-muted">
-          Wet area inside the drawn area {num(flood.acres, 0)} ac; reach {num(flood.lengthM / 1000, 1)} km.
-        </p>
+        <>
+          <p className="mt-1 text-muted">
+            {flood.aoi.areaBasis === "clipped"
+              ? `Wet area of the schematic strip inside the drawn area: ${num(flood.acres, 0)} ac`
+              : `Wet area of the schematic strip within the drawn area's reach (direction unknown, so cut by distance, not clipped to the outline): ${num(flood.acres, 0)} ac`}
+            ; reach {num(flood.lengthM / 1000, 1)} km
+            {flood.aoi.maxDepthInsideFt < flood.maxDepthFt - 0.005
+              ? `; max depth ${num(flood.maxDepthFt, 1)} ft at the breach, ${num(flood.aoi.maxDepthInsideFt, 1)} ft inside the drawn area`
+              : ""}
+            .
+          </p>
+          {flood.aoi.direction ? <p className="mt-1 text-muted">{flood.aoi.direction}</p> : null}
+        </>
       ) : null}
       {flood.warnings.length > 0 ? (
         <ul className="mt-2 space-y-1 text-amber">

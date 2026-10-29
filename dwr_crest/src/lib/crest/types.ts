@@ -31,8 +31,8 @@ export type ReceptorSeed = {
 export type GeoJSONFeature = {
   type: "Feature";
   geometry: {
-    type: "Point" | "LineString" | "Polygon";
-    coordinates: number[] | number[][] | number[][][];
+    type: "Point" | "LineString" | "Polygon" | "MultiPolygon";
+    coordinates: number[] | number[][] | number[][][] | number[][][][];
   };
   properties: Record<string, unknown>;
 };
@@ -130,16 +130,27 @@ export type Analysis = {
     reachSource: "user" | "wet" | "aoi";
     /** Drawn area limit, or null when no AOI is drawn (behaviour then is unchanged). */
     aoi: {
-      /** False when an AOI is drawn but cannot be placed (no breach location). */
+      /** False when an AOI is drawn but cannot be used (no breach location, not a polygon, bad ring). */
       applied: boolean;
-      /** Straight-line distance band from the breach the AOI covers (km). */
+      /** Distance band along the downstream valley the AOI covers (km): where it starts and its nearest downstream exit. */
       nearKm: number;
       farKm: number;
-      /** AOI polygon area (acres). */
+      /** AOI area (acres), holes excluded. */
       areaAc: number;
+      /** How the downstream direction was found, in plain words. */
+      direction: string;
+      directionBasis: "dam line" | "reservoir to breach" | "none";
+      /** How the reach end was measured: along the downstream direction, or a fallback. */
+      reachBasis: "downstream" | "nearest-boundary" | "toward-aoi" | null;
+      /** "clipped": the schematic strip clipped to the polygon; "band": cut by distance only (direction unknown). */
+      areaBasis: "clipped" | "band" | null;
+      /** Share of the AOI upstream of the breach (null when the direction is unknown). */
+      upstreamFrac: number | null;
+      /** Deepest schematic depth inside the AOI (ft); below the flood max when the breach is outside it. */
+      maxDepthInsideFt: number;
       /** True when the AOI, not the wet limit or user reach, ended the reach. */
       limitsReach: boolean;
-      /** Schematic depth at the reach end (ft); 0.1 ft or more with limitsReach means wet at the edge. */
+      /** Schematic depth at the downstream exit (ft); 0.1 ft or more with limitsReach means wet at the edge. */
       edgeDepthFt: number;
       wetAtEdge: boolean;
       /** "Limited by drawn area: X km / Y ac", or why the AOI was not applied. */
@@ -165,6 +176,8 @@ export type Analysis = {
       unresolved: boolean;
       /** Unresolved because it lies outside the drawn area (AOI). */
       outsideAoi: boolean;
+      /** Outside the drawn area but inside the un-clipped desk reach: how it would rank without the AOI. */
+      wouldBe: { ndClass: "High" | "Medium" | "Low" | null; zone: "low" | "judgment" | "high" | null; depthFt: number; velocityFps: number } | null;
       /** ACER TM 11 zone (structures only). */
       zone: "low" | "judgment" | "high" | null;
       /** ND class this receptor supports, or null if it does not count. */
