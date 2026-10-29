@@ -1,1 +1,1 @@
-PROBE < < > END
+A<B&lt;C&D
