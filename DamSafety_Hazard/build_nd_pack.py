@@ -39,10 +39,12 @@ pack... (on a computer that is online).
 import argparse
 import contextvars
 import email.utils
+import hashlib
 import json
 import math
 import os
 import random
+import re
 import socket
 import sys
 import threading
@@ -61,7 +63,7 @@ if __package__:                      # imported by the plugin (QGIS)
     from . import dwr_files as DF
     from .offline_pack import (PackWriter, DB_NAME, MANIFEST_NAME, ND_BBOX,
                                DEFAULT_PAD_DEG, PackError, STATUS_PARTIAL,
-                               write_clean_copy)
+                               write_clean_copy, geom_bbox)
 else:                                # run as a script: the plugin folder is beside it
     if HERE not in sys.path:
         sys.path.insert(0, HERE)
@@ -70,9 +72,9 @@ else:                                # run as a script: the plugin folder is bes
     import dwr_files as DF           # noqa: E402  (2.18.66: --dwr-folder; sqlite3 only)
     from offline_pack import (PackWriter, DB_NAME, MANIFEST_NAME, ND_BBOX,  # noqa: E402
                               DEFAULT_PAD_DEG, PackError, STATUS_PARTIAL,
-                              write_clean_copy)
+                              write_clean_copy, geom_bbox)
 
-BUILDER_VERSION = "1.2"
+BUILDER_VERSION = "1.3"
 TIMEOUT_S = 180
 RETRIES = 5
 NSI_TILE_DEG = C.DOWNLOAD_TILE_DEG           # the plugin's tile size (the API is happy)
@@ -90,6 +92,17 @@ RETRY_AFTER_MAX_S = 120                      # longest Retry-After that is obeye
 RECOVER_AFTER = 8                            # successes in a row that give back one request
 HEARTBEAT_S = 5.0                            # progress is reported at least this often
 _SLICE_S = 0.25                              # how often a waiting thread looks at Cancel
+# 1.3 (Hazard 2.20.2 / Data 1.5.1): tiled object-id listing ("arcgis_tiled", the Data pack's
+# 3DHP hydro). The id query of a whole state times out (HTTP 504) on 3DHP; a 0.3 x 0.2 degree
+# box answers in seconds. A tile that fails is quartered (after a short pause) down to
+# TILED_SPLIT_DEPTH levels; what still fails is an area another service can fill.
+TILED_TILE_DEG = 0.25
+TILED_SPLIT_DEPTH = 4                        # 0.25 deg -> 1/16 of it at the deepest
+TILED_CHUNK = 250                            # features per request (long flowline geometry)
+SPLIT_PAUSE_S = 2.0                          # pause before a failed box is split (x level)
+# 1.3: a paged read answered HTTP 400 is tried again with smaller pages down to PAGE_MIN
+PAGE_MIN = 100
+PAGE_400_PAUSE_S = 10.0
 
 # v2.6.2: set when the build is cancelled - every worker stops at its next
 # request or back-off instead of running on (inside QGIS: until QGIS exits)
@@ -471,7 +484,9 @@ def http_json(url, params=None, post=False, retries=RETRIES, what=""):
             elif kind == "error":
                 net.backoff(reason, wait, attempt, retries)
             # busy / timeout: the shared pause holds every worker (acquire)
-    raise BuildError("{}{} ({})".format(what + ": " if what else "", url.split("?")[0], last))
+    err = BuildError("{}{} ({})".format(what + ": " if what else "", url.split("?")[0], last))
+    err.http_code = getattr(last, "code", None)          # 1.3: HTTP 400 on pages: smaller pages
+    raise err
 
 
 def _pool(ctx, workers, calls, on_result):
@@ -616,11 +631,14 @@ def _tile_key(t):
     return "tile:{:.6f},{:.6f},{:.6f},{:.6f}".format(*t)
 
 
-def _resume_ids(ctx, ids):
+def _resume_ids(ctx, ids, prefix="ids:", ignore=()):
     """The object ids already stored (chunks kept from an earlier run that are
     still valid for `ids`). A stored chunk holding an id the service no longer
     lists (features deleted meanwhile) is dropped whole - its remaining ids
-    are fetched again, so the result is what the service lists now."""
+    are fetched again, so the result is what the service lists now. 1.3:
+    prefix = the key start of these chunks; keys starting with one of `ignore`
+    belong to another part of the same data set (arcgis_tiled: the fill
+    service) and are left alone."""
     w = ctx.writer
     kept = w.chunks()
     if not kept:
@@ -628,7 +646,9 @@ def _resume_ids(ctx, ids):
     listed = set(ids)
     done, stale = set(), []
     for key, blob in kept.items():
-        cids = _unpack_json(blob) if key.startswith("ids:") and blob else None
+        if ignore and key.startswith(tuple(ignore)):
+            continue
+        cids = _unpack_json(blob) if key.startswith(prefix) and blob else None
         if not isinstance(cids, list) or not all(i in listed for i in cids):
             stale.append(key)
         else:
@@ -679,6 +699,42 @@ def _uid_arcgis(oid_field):
     return uid
 
 
+def _fetch_id_chunks(ctx, url, ids, done_ids, size, out_fields, precision, uid,
+                     prefix="", edit=None, progress=None):
+    """The features of `ids` (not in done_ids) in parallel chunks of `size`, each finished
+    chunk stored with its key (prefix + ids key). 1.3: edit(features) -> the features to
+    store (arcgis_tiled: tag / filter them); progress(done, total) instead of ctx.sub.
+    Returns (ids not read, health)."""
+    todo = [i for i in ids if i not in done_ids]
+    chunks = [todo[i:i + size] for i in range(0, len(todo), size)]
+    missing = []
+    finished = [len(done_ids)]
+    health = _Health()
+    show = progress or (lambda k, n: ctx.sub(100.0 * k / max(1, n), "{:,} of {:,} features".format(
+        min(n, k), n)))
+    if done_ids:
+        show(len(done_ids), len(ids))
+
+    def got(args, res):
+        ch = args[1]
+        if isinstance(res, Exception):
+            missing.extend(ch)
+        else:
+            feats, miss = res
+            if edit is not None:
+                feats = edit(feats)
+            if miss:                # not wholly read: no chunk record - read again next run
+                missing.extend(miss)
+                ctx.writer.add(feats, uid)
+            else:
+                ctx.writer.add(feats, uid, chunk=prefix + _ids_key(ch), payload=_pack_json(ch))
+        finished[0] += len(ch)
+        show(finished[0], len(ids))
+    _pool(ctx, ctx.workers, [(_arcgis_chunk_job, (url, ch, out_fields, precision, health))
+                             for ch in chunks], got)
+    return missing, health
+
+
 def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None):
     """Whole-area ArcGIS layer: the object ids first, then the features by
     id in parallel chunks. Services that cannot list ids are paged by
@@ -697,36 +753,14 @@ def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None):
     except BuildError as e:
         ctx.log("  object ids not listed ({}) - reading pages instead".format(e))
         return _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid,
-                                   edit=(info.get("editingInfo") or {}).get("lastEditDate"))
+                                   edit=(info.get("editingInfo") or {}).get("lastEditDate"),
+                                   why=_short(e))
     done_ids = _resume_ids(ctx, ids)
     ctx.log("  {:,} features".format(len(ids)))
     if not ids:
         return "none in the area"
-    todo = [i for i in ids if i not in done_ids]
-    chunks = [todo[i:i + size] for i in range(0, len(todo), size)]
-    missing = []
-    finished = [len(done_ids)]
-    health = _Health()
-    if done_ids:
-        ctx.sub(100.0 * len(done_ids) / len(ids), "{:,} of {:,} features".format(
-            len(done_ids), len(ids)))
-
-    def got(args, res):
-        ch = args[1]
-        if isinstance(res, Exception):
-            missing.extend(ch)
-        else:
-            feats, miss = res
-            if miss:                # not wholly read: no chunk record - read again next run
-                missing.extend(miss)
-                ctx.writer.add(feats, uid)
-            else:
-                ctx.writer.add(feats, uid, chunk=_ids_key(ch), payload=_pack_json(ch))
-        finished[0] += len(ch)
-        ctx.sub(100.0 * finished[0] / len(ids), "{:,} of {:,} features".format(
-            min(len(ids), finished[0]), len(ids)))
-    _pool(ctx, ctx.workers, [(_arcgis_chunk_job, (url, ch, out_fields, precision, health))
-                             for ch in chunks], got)
+    missing, health = _fetch_id_chunks(ctx, url, ids, done_ids, size, out_fields, precision,
+                                       uid)
     n = ctx.writer.count
     note = ""
     if health.down():
@@ -744,6 +778,349 @@ def fetch_arcgis(ctx, url, bbox, out_fields="*", precision=None):
             raise BuildError(note)
         ctx.status = STATUS_PARTIAL
     return note
+
+
+# ------------------------------------------------- tiled ArcGIS (1.3) --
+TILED_TILE_FAILS = 12                        # failed requests in a row inside one tile
+TILED_DOWN_TILES = 6                         # tiles in a row with nothing listed: service down
+
+
+def _pause(seconds):
+    """Cancel-aware wait (through the data set's NetSession when there is one)."""
+    if seconds <= 0:
+        return
+    net = _NET.get()
+    if net is not None:
+        net.sleep(seconds)
+    else:
+        _sleep_plain(seconds)
+
+
+def _list_ids_split(url, box, max_depth, budget, where="1=1", depth=0):
+    """1.3: the object ids of `box`, split on failure. Returns (leaves, failed): leaves =
+    [(box, [ids])] of the parts the service listed, failed = [box] of the parts it would not
+    list (HTTP 504 / time-outs / errors) even when quartered max_depth times. A failed box
+    waits SPLIT_PAUSE_S x level before it is split (back-off); budget (a _Health) stops the
+    splitting once the tile has failed too often in a row (its remaining parts: failed)."""
+    if budget.down():
+        return [], [tuple(box)]
+    try:
+        d = http_json(url.rstrip("/") + "/query", dict(_envelope(box), where=where,
+                                                         returnIdsOnly="true", f="json"),
+                      post=True, retries=3 if depth == 0 else 2, what="object ids")
+    except BuildCancelled:
+        raise
+    except BuildError as e:
+        budget.failed()
+        budget.last = _reason(e)
+        if depth >= max_depth or budget.down():
+            return [], [tuple(box)]
+        _pause(SPLIT_PAUSE_S * (depth + 1))
+        leaves, failed = [], []
+        for q in _split4(box):
+            a, b = _list_ids_split(url, q, max_depth, budget, where, depth + 1)
+            leaves += a
+            failed += b
+        return leaves, failed
+    budget.ok()
+    ids = (d.get("objectIds") if isinstance(d, dict) else None) or []
+    return [(tuple(box), sorted(int(i) for i in ids))], []
+
+
+def _reason(e):
+    """1.3: the short cause of a failed request ("HTTP Error 504: Gateway Time-out")."""
+    txt = str(e)
+    for pat in (r"HTTP Error \d+[^()]*", r"timed out", r"service error: [^()]*"):
+        m = re.search(pat, txt)
+        if m:
+            return m.group(0).strip().rstrip(")")
+    return _short(e)
+
+
+def _list_ids_tiled(ctx, url, tiles, max_depth, what):
+    """1.3: every tile listed in parallel (split on failure). Returns (leaves, failed,
+    {cause: failed requests})."""
+    leaves, failed, causes = [], [], {}
+    state = {"bad_row": 0, "done": 0}
+    lock = threading.Lock()
+
+    def job(tile):
+        with lock:
+            down = state["bad_row"] >= TILED_DOWN_TILES
+        if down:                            # the service is down: no more requests
+            return [], [tuple(tile)], "service not answering"
+        budget = _Health(limit=TILED_TILE_FAILS)
+        budget.last = ""
+        a, b = _list_ids_split(url, tile, max_depth, budget)
+        with lock:
+            state["bad_row"] = 0 if a else state["bad_row"] + 1
+        return a, b, budget.last
+
+    def got(args, res):
+        if isinstance(res, Exception):
+            failed.append(tuple(args[0]))
+            why = _reason(res)
+        else:
+            leaves.extend(res[0])
+            failed.extend(res[1])
+            why = res[2] if res[1] else ""
+        if why:
+            causes[why] = causes.get(why, 0) + 1
+        state["done"] += 1
+        ctx.sub(20.0 * state["done"] / max(1, len(tiles)), "{}: listing area {} of {}".format(
+            what, state["done"], len(tiles)))
+    _pool(ctx, ctx.workers, [(job, (t,)) for t in tiles], got)
+    return leaves, failed, causes
+
+
+class _BoxIndex(object):
+    """1.3: which of many small boxes holds a point / meets a box (grid of cells)."""
+
+    def __init__(self, boxes, cell=TILED_TILE_DEG):
+        self.boxes = [tuple(b) for b in boxes]
+        self.cell = float(cell)
+        self.grid = {}
+        for k, b in enumerate(self.boxes):
+            for c in self._cells(b):
+                self.grid.setdefault(c, []).append(k)
+
+    def _cells(self, b):
+        c = self.cell
+        for i in range(int(math.floor(b[0] / c)), int(math.floor(b[2] / c)) + 1):
+            for j in range(int(math.floor(b[1] / c)), int(math.floor(b[3] / c)) + 1):
+                yield (i, j)
+
+    def __bool__(self):
+        return bool(self.boxes)
+
+    def holds(self, x, y):
+        c = self.cell
+        for k in self.grid.get((int(math.floor(x / c)), int(math.floor(y / c))), ()):
+            b = self.boxes[k]
+            if b[0] <= x < b[2] and b[1] <= y < b[3]:
+                return True
+        return False
+
+    def meets(self, bb):
+        for cell in self._cells(bb):
+            for k in self.grid.get(cell, ()):
+                b = self.boxes[k]
+                if b[0] <= bb[2] and bb[0] <= b[2] and b[1] <= bb[3] and bb[1] <= b[3]:
+                    return True
+        return False
+
+
+def _owned(bb, area, index):
+    """1.3: does the region of `index` own a feature with bounding box bb? Its centre lies
+    in one of the boxes, or (centre outside the whole area) it touches one."""
+    cx, cy = (bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0
+    if index.holds(cx, cy):
+        return True
+    inside = area[0] <= cx <= area[2] and area[1] <= cy <= area[3]
+    return not inside and index.meets(bb)
+
+
+def _tagged_uid(tag, uid):
+    """1.3: "<tag>:<id>" - object ids of two services collide; no id: the geometry hash."""
+    def f(feat):
+        u = uid(feat)
+        if u is None:
+            g = feat.get("geometry")
+            u = "g:" + hashlib.sha1(json.dumps(g, sort_keys=True).encode("utf-8")).hexdigest()
+        return "{}:{}".format(tag, u)
+    return f
+
+
+def _layer_oid(info):
+    oid = info.get("objectIdField") or next(
+        (f.get("name") for f in info.get("fields") or []
+         if f.get("type") == "esriFieldTypeOID"), None)
+    mrc = int(info.get("maxRecordCount") or IDS_CHUNK)
+    return oid, mrc
+
+
+def _read_part(ctx, url, boxes, spec, tag, prefix, ignore, keep=None, first=0.0):
+    """1.3: one service's part of an arcgis_tiled data set - the ids of `boxes` (split on
+    failure), then the features in chunks. Returns (failed boxes, leaves [(box, ids)], ids not
+    read, error text or "")."""
+    try:
+        info = http_json(url.rstrip("/"), {"f": "json"}, what="layer description")
+    except BuildCancelled:
+        raise
+    except BuildError as e:
+        ctx.log("  {}: the layer description failed ({}) - none of its {} area(s) read".format(
+            tag, _short(e), len(boxes)))
+        return [tuple(b) for b in boxes], [], [], "layer description: " + _reason(e)
+    oid, mrc = _layer_oid(info)
+    leaves, failed, causes = _list_ids_tiled(ctx, url, boxes, int(spec.get(
+        "split_depth", TILED_SPLIT_DEPTH)), tag)
+    ids = sorted(set(i for _b, ii in leaves for i in ii))
+    ctx.log("  {}: {:,} features in {} area(s) listed, {} area(s) not listed".format(
+        tag, len(ids), len(leaves), len(failed)))
+    done = _resume_ids(ctx, ids, prefix=prefix, ignore=ignore)
+    field = spec.get("source_field") or "src"
+
+    def edit(feats):
+        out = []
+        for f in feats:
+            if keep is not None:
+                g = f.get("geometry") if isinstance(f, dict) else None
+                bb = geom_bbox(g) if g else None
+                if bb is None or not keep(bb):
+                    continue
+            props = f.get("properties")
+            if not isinstance(props, dict):
+                props = f["properties"] = {}
+            props[field] = tag
+            out.append(f)
+        return out
+
+    def show(k, n):
+        ctx.sub(first + 20.0 + 40.0 * k / max(1, n), "{}: {:,} of {:,} features".format(
+            tag, min(k, n), n))
+    size = max(1, min(int(spec.get("chunk") or TILED_CHUNK), mrc))
+    # prefix + "ids:..." keys (the fill part's prefix names its areas: other areas - stale)
+    missing, _h = _fetch_id_chunks(ctx, url, ids, done, size, spec.get("fields", "*"),
+                                   spec.get("precision"), _tagged_uid(tag, _uid_arcgis(oid)),
+                                   prefix=prefix if prefix != "ids:" else "", edit=edit,
+                                   progress=show)
+    why = ", ".join("{} x{}".format(k, v) if v > 1 else k for k, v in sorted(
+        causes.items(), key=lambda kv: -kv[1]))
+    return failed, leaves, missing, why
+
+
+def _boxes_key(boxes):
+    txt = ";".join("{:.5f},{:.5f},{:.5f},{:.5f}".format(*b) for b in sorted(boxes))
+    return "{:08x}".format(zlib.crc32(txt.encode("ascii")) & 0xffffffff)
+
+
+def _reconcile(ctx, area, nhd_index, tag, fill_tag):
+    """1.3: one source per place. Rows of `tag` owned by the fill region and rows of
+    fill_tag outside it are removed; the chunk records of removed rows are dropped too, so a
+    later run reads them again when its areas differ. Returns rows removed."""
+    w = ctx.writer
+    table = w._cur["table"]
+    drop = []
+    for fid, uid, x0, y0, x1, y1 in w.con.execute(
+            "SELECT fid, uid, minx, miny, maxx, maxy FROM {}".format(table)):
+        mine = _owned((x0, y0, x1, y1), area, nhd_index) if nhd_index else False
+        src = str(uid).split(":", 1)[0]
+        if (src == tag and mine) or (src == fill_tag and not mine):
+            drop.append(fid)
+    if not drop:
+        return 0
+    name = w._cur["name"]
+    spans = list(w.con.execute("SELECT ckey, fid_lo, fid_hi FROM chunks WHERE name=?",
+                               (name,)))
+    hit = set()
+    for fid in drop:
+        for key, lo, hi in spans:
+            if lo is not None and hi is not None and lo < fid <= hi:
+                hit.add(key)
+    for k in range(0, len(drop), 500):
+        part = drop[k:k + 500]
+        w.con.execute("DELETE FROM {} WHERE fid IN ({})".format(table, ",".join("?" * len(part))),
+                      part)
+    for key in hit:
+        w.con.execute("DELETE FROM chunks WHERE name=? AND ckey=?", (name, key))
+    w._cur["n"] = w.con.execute("SELECT COUNT(*) FROM {}".format(table)).fetchone()[0]
+    w.con.commit()
+    return len(drop)
+
+
+def _count_tag(ctx, tag):
+    w = ctx.writer
+    return w.con.execute("SELECT COUNT(*) FROM {} WHERE uid LIKE ?".format(w._cur["table"]),
+                         (tag + ":%",)).fetchone()[0]
+
+
+def _round_box(b):
+    return [round(float(v), 5) for v in b]
+
+
+def fetch_arcgis_tiled(ctx, url, bbox, spec):
+    """1.3 (Data 1.5.1, 3DHP hydro): an ArcGIS layer read area by area, another service
+    filling only the areas it cannot serve.
+
+    The object ids are listed per TILED_TILE_DEG tile (a tile that fails - HTTP 504, time-out
+    - is quartered after a pause, down to split_depth levels), then the features are read in
+    chunks. The areas whose ids could not be listed, or holding features that could not be
+    read, are then read from spec["fill"] (another ArcGIS layer, e.g. NHD, listed and split
+    the same way). Every feature carries properties[source_field] = its source tag, and its
+    uid is "<tag>:<id>". One source per place: a feature belongs to the fill service when the
+    centre of its bounding box lies in a fill area (or lies outside the whole area and the
+    feature touches a fill area); features of the other source there are removed, so tile
+    edges are not doubled. Fill areas the fill service cannot read either are the data set's
+    gaps (status partial). ctx.tiled gets the per-area report (counts per source, the failed
+    areas). Returns a note."""
+    tag = spec.get("tag") or "main"
+    fill = spec.get("fill") or None
+    if fill:
+        fill = dict(fill, source_field=fill.get("source_field") or spec.get("source_field"))
+    ftag = (fill or {}).get("tag") or "fill"
+    tiles = _tiles(bbox, float(spec.get("tile_deg") or TILED_TILE_DEG))
+    rep = {"tiles": len(tiles), "source": tag, "fill_source": ftag if fill else None}
+    ctx.tiled = rep
+    ctx.log("  {}: {} area(s) of {} degree".format(tag, len(tiles),
+                                                 spec.get("tile_deg") or TILED_TILE_DEG))
+    failed, leaves, missing, err = _read_part(ctx, url, tiles, spec, tag, "ids:", ("fill:",))
+    fill_boxes = list(failed)
+    if missing:
+        miss = set(missing)
+        fill_boxes += [b for b, ii in leaves if any(i in miss for i in ii)]
+    fill_boxes = sorted(set(tuple(b) for b in fill_boxes))
+    rep.update(areas_listed=len(leaves), areas_not_listed=len(failed),
+               missing_ids=len(missing), error=err or None)
+    if failed or missing:
+        why = []
+        if failed:
+            why.append("{} area(s) not listed{}".format(len(failed), " ({})".format(err)
+                                                        if err else ""))
+        if missing:
+            why.append("{:,} feature(s) not read".format(len(missing)))
+        rep["why"] = "; ".join(why)
+        ctx.log("  {}: {} - {} area(s) to fill{}".format(
+            tag, rep["why"], len(fill_boxes), " from " + ftag if fill else ""))
+    gaps, nhd_ok = list(fill_boxes), []
+    if fill_boxes and fill:
+        furl = fill["url"]
+        index = _BoxIndex(fill_boxes)
+        ctx.log("  {} fill: reading {} area(s) from {}".format(ftag, len(fill_boxes), furl))
+        net = NetSession(fill.get("label") or "{} fill".format(ftag), ctx.workers, log=ctx.log,
+                         on_beat=getattr(ctx, "beat", None))
+        token = _NET.set(net)
+        try:
+            f_failed, f_leaves, f_missing, f_err = _read_part(
+                ctx, furl, fill_boxes, fill, ftag, "fill:{}:".format(_boxes_key(fill_boxes)),
+                ("ids:",), keep=lambda bb: _owned(bb, bbox, index), first=40.0)
+        finally:
+            _NET.reset(token)
+        fmiss = set(f_missing)
+        nhd_ok = [b for b, ii in f_leaves if not any(i in fmiss for i in ii)]
+        gaps = sorted(set(tuple(b) for b in f_failed) |
+                      set(b for b, ii in f_leaves if any(i in fmiss for i in ii)))
+        rep.update(fill_areas_read=len(nhd_ok), fill_missing_ids=len(f_missing),
+                   fill_error=f_err or None)
+        ctx.log("  {} fill: {} of {} area(s) read{}".format(
+            ftag, len(nhd_ok), len(f_failed) + len(f_leaves),
+            "" if not gaps else " - {} area(s) not read by either service".format(len(gaps))))
+    removed = _reconcile(ctx, bbox, _BoxIndex(nhd_ok), tag, ftag)
+    n_main, n_fill = _count_tag(ctx, tag), _count_tag(ctx, ftag)
+    rep.update(count={tag: n_main, ftag: n_fill}, removed_overlap=removed,
+               fill_areas=[_round_box(b) for b in fill_boxes],
+               gap_areas=[_round_box(b) for b in gaps])
+    if not leaves and not nhd_ok:
+        raise BuildError("{} and {} both failed for the whole area ({}{})".format(
+            tag, ftag if fill else "no fill service", err or "nothing listed",
+            "; " + rep.get("fill_error") if rep.get("fill_error") else ""))
+    ctx.gaps = [tuple(b) for b in gaps]
+    if gaps:
+        ctx.status = STATUS_PARTIAL
+    if not fill_boxes:
+        return "{:,} features from {} ({} areas)".format(n_main, tag, len(tiles))
+    return "{:,} features from {}, {:,} from {} in {} of {} area(s){}".format(
+        n_main, tag, n_fill, ftag, len(nhd_ok) if fill else 0, len(fill_boxes),
+        "; {} area(s) not read".format(len(gaps)) if gaps else "")
 
 
 def _page_anchor(url, bbox, oid, edit=None):
@@ -778,7 +1155,37 @@ def _page_anchor(url, bbox, oid, edit=None):
     return a
 
 
-def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, edit=None):
+def _page_400(ctx, url, params, size, offset, err, why=""):
+    """1.3: a page the service refused with HTTP 400 (FEMA USA_Structures while its object-id
+    query answered "Invalid URL"): tried again after a pause with smaller pages (down to
+    PAGE_MIN). Returns (answer, page size used); BuildError with a plain reason when even the
+    smallest page is refused (the pages read so far stay stored for the next run)."""
+    sub = size // 2
+    while sub >= PAGE_MIN:
+        ctx.log("  page at feature {:,} refused (HTTP 400) - trying {} features per page after "
+                "{:.0f} s".format(offset, sub, PAGE_400_PAUSE_S))
+        _pause(PAGE_400_PAUSE_S)
+        try:
+            d = http_json(url.rstrip("/") + "/query", dict(params, resultRecordCount=sub),
+                          post=True, retries=2, what="page")
+            return d, sub
+        except BuildCancelled:
+            raise
+        except BuildError as e:
+            if getattr(e, "http_code", None) != 400:
+                raise
+        sub //= 2
+    raise BuildError(
+        "the service refused the page at feature {:,} with HTTP 400 Bad Request, also with "
+        "smaller pages (down to {}){}; {:,} features read so far are kept and the next run "
+        "continues from there - the service is probably down or changed its query rules, run "
+        "the build again later ({})".format(
+            offset, PAGE_MIN, " - its object-id list failed too ({})".format(why) if why else "",
+            ctx.writer.count, err))
+
+
+def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, edit=None,
+                        why=""):
     offset, page = 0, 0
     size = max(1, min(2000, mrc))
     # BP.1: pages are offsets - kept pages are only valid while the service holds
@@ -830,10 +1237,20 @@ def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, ed
             params["orderByFields"] = "{} ASC".format(oid)
         if precision is not None:
             params["geometryPrecision"] = str(precision)
-        d = http_json(url.rstrip("/") + "/query", params, post=True, what="page")
+        got_size = size
+        try:
+            d = http_json(url.rstrip("/") + "/query", params, post=True, what="page")
+        except BuildCancelled:
+            raise
+        except BuildError as e:
+            if getattr(e, "http_code", None) != 400:
+                raise
+            d, got_size = _page_400(ctx, url, params, size, offset, e, why)
         feats = d.get("features", []) if isinstance(d, dict) else []
         exceeded = bool(d.get("exceededTransferLimit") or
                         (d.get("properties") or {}).get("exceededTransferLimit"))
+        if got_size < size and len(feats) >= got_size:
+            exceeded = True                 # a smaller page came back full: more follow
         added = ctx.writer.add(feats, uid, chunk=key,
                                payload=_pack_json({"n": len(feats), "exceeded": exceeded}))
         page += 1
@@ -1060,10 +1477,13 @@ def fetch_local_gpkg(ctx, spec):
     extra = []
     if out:
         extra.append("{:,} wholly outside North Dakota (kept)".format(out))
-    return "from {} layer {} (EPSG:{}{}, file dated {}, {:,} rows{})".format(
+    # 1.3: the file's own date (GeoPackage last change), not the day it was copied here
+    day, how = DF.source_date(path, layer)
+    ctx.source_date = (day, how)
+    return "from {} layer {} (EPSG:{}{}, file dated {} ({}), {:,} rows{})".format(
         os.path.basename(path), layer, info["epsg"],
         ", unit {:g} m".format(info["unit_m"]) if info["unit_m"] != 1.0 else "",
-        DF.file_date(path), info["rows"], "; " + ", ".join(extra) if extra else "")
+        day, how, info["rows"], "; " + ", ".join(extra) if extra else "")
 
 
 class _Ctx(object):
@@ -1357,6 +1777,7 @@ def _run_one(ctx, name, label, kind, spec, bbox):
             except (ValueError, OverflowError):
                 ctx.log("  the kept chunks were started {}".format(started))
     ctx.status, ctx.gaps = "complete", []
+    ctx.tiled = None                         # 1.3: arcgis_tiled per-area report
     net = NetSession(label, ctx.workers, log=ctx.log, on_beat=getattr(ctx, "beat", None))
     token = _NET.set(net)
     try:
@@ -1367,6 +1788,8 @@ def _run_one(ctx, name, label, kind, spec, bbox):
                                 spec.get("precision"))
         elif kind == "osm":
             note = fetch_osm(ctx, bbox, spec["query"], spec["parse"])
+        elif kind == "arcgis_tiled":
+            note = fetch_arcgis_tiled(ctx, url, bbox, spec)
         else:
             raise BuildError("unknown kind " + kind)
     except BuildCancelled:
@@ -1391,6 +1814,11 @@ def _signature(kind, spec, bbox):
     reused: the settings that change what a chunk holds."""
     if kind == "arcgis":
         return "arcgis|{}|{}".format(spec.get("fields", "*"), spec.get("precision"))
+    if kind == "arcgis_tiled":
+        f = spec.get("fill") or {}
+        return "arcgis_tiled|{}|{}|{}|{}|{}|{}".format(
+            spec.get("fields", "*"), spec.get("precision"), spec.get("tile_deg"),
+            spec.get("tag"), f.get("url"), f.get("fields", "*"))
     if kind == "nsi":
         return "nsi|{}".format(NSI_TILE_DEG)
     if kind == "osm":

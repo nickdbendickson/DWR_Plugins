@@ -14,12 +14,13 @@ format-1 pack and converted to format 2 with gpkgpack.convert_v1; the NLCD raste
 format 2 with gpkgpack.add_raster_file. Run again to resume: finished layers are kept, only
 missing or failed ones are fetched (refresh=True fetches everything again).
 
-Sources (PR #221 / #223): HIFLD only from user-supplied DataLumos files (Data Rescue Project;
-clipped to ND, left out without a file - no other mirror); HPMS_ND_<year> kept next to
-NDDOT_traffic_counts for comparison; NHD_flowlines / NHD_waterbodies filled from USGS 3DHP with
-NHD-style fields (NHD service as fallback); the SARP Aquatic Barrier Inventory as ABI_* (public
-API + national road-crossings download; removed / excluded barriers kept and flagged in
-barrier_status); ND DEQ layers as NDDEQ_* (landfills, source water protection areas). What each
+Sources (PR #221 / #223): HIFLD only from user-supplied files (clipped to ND, left out without
+a file - no other mirror; the reference pack's files are credited by checksum, others neutrally);
+HPMS_ND_<year> kept next to NDDOT_traffic_counts for comparison; NHD_flowlines / NHD_waterbodies
+filled from USGS 3DHP with NHD-style fields, read area by area (1.5.1: the NHD service fills
+only the areas 3DHP cannot serve, hydro_src says which on every feature); the SARP Aquatic
+Barrier Inventory as ABI_* (public API + national road-crossings download; removed / excluded
+barriers kept and flagged in barrier_status); ND DEQ layers as NDDEQ_* (landfills, source water protection areas). What each
 layer was built from (file / URL, sha256, data version, terms) is kept in the work folder's
 provenance.json and copied into both manifests.
 
@@ -50,13 +51,13 @@ PACK1 = "nd_offline_pack"
 WORK = "ND_Dam_Suite_Pack_build"
 MARK = "data_updater_build"                  # manifest key: this pack was built here (updatable)
 PROV_NAME = "provenance.json"                # work folder: what each layer was built from
-BUILDER = "DamSafety_Data pack_build 1.5.0"
+BUILDER = "DamSafety_Data pack_build 1.5.1"
 ND_BBOX = OP.ND_BBOX
 DEFAULT_PAD = OP.DEFAULT_PAD_DEG
 
 ND_COUNTIES_URL = "https://ndgishub.nd.gov/arcgis/rest/services/All_GovtBoundaries/MapServer/20"
-# HIFLD lifeline layers (1.5.0, PR #221): from the Data Rescue Project's copies of HIFLD Open
-# (https://portal.datarescueproject.org/ - the files are kept on DataLumos / ICPSR). DataLumos
+# HIFLD lifeline layers (1.5.0, PR #221): HIFLD Open is published on DataLumos / ICPSR (by the
+# Data Rescue Project, https://portal.datarescueproject.org/) and on hsdl.org. DataLumos
 # needs a (free) ICPSR login and its Terms of Use to download, so the builder cannot fetch them:
 # download the file (GeoJSON or shapefile zip) and put it in the HIFLD folder of the build window.
 # (name, label, DataLumos project, category, file-name keys, keys that rule a file out)
@@ -76,6 +77,37 @@ HIFLD = (
     ("HIFLD_wastewater_treatment_plants", "EPA ICIS wastewater treatment plants (HIFLD)",
      239262, "Wastewater treatment", ("wastewater",), ("sic", "naics")),
 )
+# 1.5.1: where a HIFLD file came from is known only for the files of the reference pack
+# (ND_Dam_Suite_Pack/hifld, its manifest.json) - recognised by their sha256. Any other file is
+# credited neutrally (the file and its checksum; the DataLumos project that publishes the layer
+# as a pointer, not as a claim about where this copy came from).
+_HSDL = "HIFLD (Homeland Infrastructure Foundation-Level Data) national shapefile from hsdl.org"
+HIFLD_KNOWN = {
+    "ef17c81b73a723daa9be38773aa6f8a35af2a8a17dba19ad15c295dd741c6a30": {
+        "source": _HSDL + ", uploaded by Nick to the project (2026-10-06); clipped to North "
+                          "Dakota + 0.1 degree (the reference pack's file)",
+        "source_url": C.HIFLD_PORTAL_URL, "source_origin": "hsdl.org"},
+    "9867bb5f83c654e65783e259cd2ed1837e0e9352fe3bd8f93d3025a70f59612d": {
+        "source": _HSDL + ", uploaded by Nick to the project (2026-10-06); clipped to North "
+                          "Dakota + 0.1 degree (the reference pack's file)",
+        "source_url": C.HIFLD_PORTAL_URL, "source_origin": "hsdl.org"},
+    "51f7c2114a2f0c51e288b162da00c3e5c91f8ead71cee19003f11926015db552": {
+        "source": _HSDL + ", uploaded by Nick to the project (2026-10-06); clipped to North "
+                          "Dakota + 0.1 degree (the reference pack's file)",
+        "source_url": C.HIFLD_PORTAL_URL, "source_origin": "hsdl.org"},
+    # the reference manifest says "DataLumos, project 239290, downloaded by Nick 2026-10-06";
+    # DataLumos lists 239290 as the layer's SIC-code table (a 47 KB zip, no points) and 239262
+    # as the point layer this file holds (375 ND points, NPDES_ID / CWP_* fields): flagged
+    "a35916420f516b9f088c8b0b0c0779fe653a720cf7b04f55b9010d8ed4046e4b": {
+        "source": "HIFLD Open ICIS wastewater treatment plants on DataLumos, downloaded by Nick "
+                  "2026-10-06; 375 North Dakota points (NAME and CATEGORY fields added) (the "
+                  "reference pack's file)",
+        "source_url": DATALUMOS.format(239262), "source_origin": "DataLumos",
+        "provenance_check": "the reference pack's manifest names DataLumos project 239290, "
+                            "which DataLumos lists as the SIC-code table of this layer (no "
+                            "points); the points are project 239262 - not confirmed which "
+                            "download this file came from (sha256 recorded)"},
+}
 # ND Department of Environmental Quality layers published on the ND GIS Hub (public ArcGIS
 # REST; DEQ's own ArcGIS Online services hold no facility points). DEQ does not publish
 # wastewater / NDPDES facilities, public water system plants or intakes as GIS layers.
@@ -93,13 +125,20 @@ NDDEQ = (
 # 3DHP (USGS 3D Hydrography Program) in place of NHD: the pack keeps the names NHD_flowlines /
 # NHD_waterbodies (the Hazard format-1 reader, Setup's suite_fill and the Hazard / Runner
 # culvert tools ask for those names); the features are 3DHP with the NHD-style fields added
-# (damsuite.hydro3dhp). The NHD service is used only when 3DHP does not answer (manifest says so)
+# (damsuite.hydro3dhp). 1.5.1: read area by area (engine kind arcgis_tiled, 0.25 degree tiles,
+# a tile that times out is split); only the areas 3DHP cannot serve are filled from the NHD
+# service, every feature says which (HYDRO_SRC_FIELD), the manifest gives the counts per source
+# and the areas filled / not read.
 HYDRO = (
-    ("NHD_flowlines", "USGS 3DHP flowlines (NHD fields added; NHD if 3DHP fails)", "nhd",
-     "flowlines"),
-    ("NHD_waterbodies", "USGS 3DHP waterbodies (NHD fields added; NHD if 3DHP fails)",
-     "waterbodies", "waterbodies"),
+    ("NHD_flowlines", "USGS 3DHP flowlines (NHD fields added; NHD fills areas 3DHP cannot "
+     "serve)", "nhd", "flowlines"),
+    ("NHD_waterbodies", "USGS 3DHP waterbodies (NHD fields added; NHD fills areas 3DHP cannot "
+     "serve)", "waterbodies", "waterbodies"),
 )
+HYDRO_SRC_FIELD = "hydro_src"                 # 1.5.1: "3DHP" or "NHD" on every hydro feature
+HYDRO_TILE_DEG = 0.25
+HYDRO_SPLIT_DEPTH = 4                         # 0.25 degree -> 1/64 degree at the deepest
+HYDRO_CHUNK = 250                             # features per 3DHP request
 # SARP / NACC National Aquatic Barrier Inventory (https://tool.aquaticbarriers.org): the public
 # API (dams, surveyed small barriers: one state as CSV) and the national road-crossings download
 # (unsurveyed road / stream crossings are not in the public API)
@@ -155,8 +194,8 @@ def _e(name, label, group, kind, spec, **info):
 
 def registry(dwr_folder=None, hifld_folder=None, nlcd_file=None):
     """Every layer of the pack: [{name, label, group, kind, spec, info}]. kind: the engine's
-    arcgis / nsi / osm / local_gpkg, or hydro (3DHP, NHD if it fails), abi (Aquatic Barrier
-    Inventory CSV), ogr (a local vector file), dwr_download, nlcd (the raster), none (cannot
+    arcgis / nsi / osm / local_gpkg, or hydro (3DHP, NHD in the areas 3DHP cannot serve), abi
+    (Aquatic Barrier Inventory CSV), ogr (a local vector file), dwr_download, nlcd (the raster), none (cannot
     be fetched: listed as left out). Same names as the reference ND_Dam_Suite_Pack, plus ABI_*
     and NDDEQ_*. Both AADT sources are kept: HPMS_ND_<year> (FHWA HPMS, newest year that
     answers) and NDDOT_traffic_counts, for comparison. A HIFLD layer without a file is left
@@ -188,11 +227,13 @@ def registry(dwr_folder=None, hifld_folder=None, nlcd_file=None):
     for name, label, proj, cat, _keys, _no in HIFLD:
         dl = DATALUMOS.format(proj)
         if name in files:
+            # 1.5.1: no claim about where the file came from (see HIFLD_KNOWN, _file_prov)
             out.append(_e(name, label, "hifld", "ogr", {"path": files[name], "state": "ND"},
                           category=cat, source_page=dl,
-                          source="HIFLD Open (Data Rescue Project copy, DataLumos project {}): "
-                                 "{}".format(proj, os.path.basename(
-                                     files[name].replace("/vsizip/", "")))))
+                          source="HIFLD file supplied for the build: {} (where this copy came "
+                                 "from is not recorded; HIFLD Open publishes the layer on "
+                                 "DataLumos as project {})".format(os.path.basename(
+                                     files[name].replace("/vsizip/", "")), proj)))
         else:
             out.append(_e(name, label, "hifld", "none", {}, category=cat, why=(
                 "HIFLD Open is kept by the Data Rescue Project on DataLumos, which needs a free "
@@ -404,6 +445,10 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
                     got, prov[name] = _run_abi(ctx, t, bbox, wk, refresh)
                 else:
                     got = BP._run_one(ctx, name, label, kind, t["spec"], bbox)
+                    if kind == "local_gpkg" and getattr(ctx, "source_date", None):
+                        # 1.5.1: the file's own date (not the day it was copied here)
+                        prov[name] = {"source_date": ctx.source_date[0],
+                                      "source_date_from": ctx.source_date[1]}
                 if name in TRANSFORMS:
                     _rewrite(writer.con, name, TRANSFORMS[name])
                 log("  done: {:,} features in {:.0f} s".format(got, time.time() - t0))
@@ -502,72 +547,110 @@ def _real_file(path):
 
 def _file_prov(t, path):
     """Manifest note of a layer read from a file: the file, its date and sha256 (and the
-    DataLumos page of a HIFLD file)."""
+    DataLumos page of a HIFLD file). 1.5.1: the date is the file's own (GeoPackage last
+    change; else its modified time - source_date_from says which), and a HIFLD file of the
+    reference pack (HIFLD_KNOWN, by sha256) gets its recorded source."""
     f = _real_file(path or t["spec"].get("path") or "")
     out = {}
-    if f:
-        out.update(source_file=os.path.basename(f), source_sha256=_sha256(f),
-                   source_date=datetime.date.fromtimestamp(os.path.getmtime(f)).isoformat())
     if t["info"].get("source_page"):
         out["source_url"] = t["info"]["source_page"]
+    if f:
+        sha = _sha256(f)
+        day, how = DF.source_date(f) if f.lower().endswith(".gpkg") else (
+            datetime.date.fromtimestamp(os.path.getmtime(f)).isoformat(), "file modified")
+        out.update(source_file=os.path.basename(f), source_sha256=sha, source_date=day,
+                   source_date_from=how)
+        if t.get("group") == "hifld":
+            known = HIFLD_KNOWN.get(sha)
+            if known:
+                out.update(known)
+            else:
+                out["source_origin"] = "not recorded"
     return out
 
 
 # --------------------------------------------------------------- 3DHP / NHD --
+def _hydro_spec(spec):
+    """1.5.1: the engine spec (arcgis_tiled) of a hydro layer: 3DHP, filled from NHD."""
+    fb = spec["fallback"]
+    return {"url": spec["url"], "fields": spec["fields"], "precision": spec.get("precision"),
+            "tag": "3DHP", "source_field": HYDRO_SRC_FIELD, "tile_deg": HYDRO_TILE_DEG,
+            "split_depth": HYDRO_SPLIT_DEPTH, "chunk": HYDRO_CHUNK,
+            "fill": {"url": fb["url"], "fields": fb.get("fields", "*"),
+                     "precision": fb.get("precision"), "tag": "NHD",
+                     "label": "NHD fill ({})".format(spec.get("which", "hydro"))}}
+
+
 def _run_hydro(ctx, t, bbox):
-    """3DHP flowlines / waterbodies under the NHD name (NHD fields added), the NHD service
-    when 3DHP fails or comes back incomplete and NHD answers in full. Returns (count, note)."""
+    """3DHP flowlines / waterbodies under the NHD name (NHD fields added). 1.5.1: read area by
+    area - the 3DHP features read are kept and only the areas 3DHP cannot serve (ids not listed
+    after splitting the tile, HTTP 504 / time-outs; features not read) are filled from the NHD
+    service (one source per place, tile edges not doubled). Returns (count, note)."""
     from .damsuite import hydro3dhp as H
     name, label, spec = t["name"], t["label"], t["spec"]
     norm = H.normalise_flowline if spec["which"] == "flowlines" else H.normalise_waterbody
-    fb = spec["fallback"]
-    why = ""
-    try:
-        n = BP._run_one(ctx, name, label, "arcgis", {k: spec[k] for k in
-                                                     ("url", "fields", "precision")}, bbox)
-        if ctx.status == "complete":
-            return n, _hydro_note(ctx.writer.con, name, norm, spec["url"], None)
-        why = "3DHP incomplete ({} area(s) not read)".format(len(ctx.gaps or []))
-    except BP.BuildCancelled:
-        raise
-    except BP._NET_ERRORS as e:
-        why = "3DHP failed: {}".format(e)
-    ctx.log("  {} - trying the NHD service".format(why))
-    kept = ctx.status
-    try:
-        ctx.status, ctx.gaps = "complete", []
-        n2 = BP._run_one(ctx, name, label, "arcgis", fb, bbox)
-    except BP.BuildCancelled:
-        raise
-    except BP._NET_ERRORS as e:
-        if kept == "partial":
-            raise PackBuildError("{}; NHD failed too ({}) - run again".format(why, e))
-        raise PackBuildError("{}; NHD failed too: {}".format(why, e))
-    note = {"source": "USGS NHD (fallback: {})".format(why), "hydro_source": "NHD",
-            "fallback_reason": why, "source_url": fb["url"]}
-    return n2, note
+    ctx.tiled = None
+    n = BP._run_one(ctx, name, label, "arcgis_tiled", _hydro_spec(spec), bbox)
+    return n, _hydro_note(ctx.writer.con, name, norm, spec["url"],
+                          getattr(ctx, "tiled", None), spec["fallback"]["url"])
 
 
-def _hydro_note(con, name, norm, url, why):
-    """Adds the NHD fields to the stored 3DHP features and counts where they come from (3DHP
-    work unit: 'NHD' = migrated from NHD, else elevation-derived hydrography)."""
+def _hydro_note(con, name, norm, url, rep=None, nhd_url=None):
+    """Adds the NHD fields to the stored 3DHP features (not to the NHD ones filling areas) and
+    says where the features come from: per source (hydro_src) and, for 3DHP, per work unit
+    ('NHD' = migrated from NHD, else elevation-derived hydrography). rep: the engine's per-area
+    report (arcgis_tiled)."""
     units = {}
+    per = {"3DHP": 0, "NHD": 0}
 
     def fn(f):
-        f = norm(f)
         p = f.get("properties") or {}
+        if p.get(HYDRO_SRC_FIELD) == "NHD":
+            per["NHD"] += 1
+            return f
+        f = norm(f)
+        p = f.get("properties")
+        if isinstance(p, dict):
+            p[HYDRO_SRC_FIELD] = "3DHP"
+        else:
+            p = f["properties"] = {HYDRO_SRC_FIELD: "3DHP"}
+        per["3DHP"] += 1
         u = str(p.get("workunitid") or p.get("WORKUNITID") or "unknown")
         units[u] = units.get(u, 0) + 1
         return f
     _rewrite(con, name, fn)
     nhd = units.get("NHD", 0)
-    return {"hydro_source": "3DHP", "source_url": url,
-            "coverage_3dhp": {"features_by_workunit": units, "nhd_migrated": nhd,
-                              "elevation_derived": sum(units.values()) - nhd},
-            "fields_mapped": "gnis_name <- gnisidlabel, gnis_id <- gnisid, ftype / fcode <- "
-                             "featuretypelabel (fcode = ftype x 100), featuredate as a date; "
-                             "the 3DHP fields are kept (id3dhp, mainstemid, workunitid ...); "
-                             "no reachcode / permanent_identifier in 3DHP"}
+    rep = rep or {}
+    src = "3DHP" if not per["NHD"] else ("NHD" if not per["3DHP"] else "3DHP+NHD")
+    fill = rep.get("fill_areas") or []
+    gaps = rep.get("gap_areas") or []
+    out = {"hydro_source": src, "source_url": url, HYDRO_SRC_FIELD + "_field":
+           "{} = 3DHP or NHD on every feature".format(HYDRO_SRC_FIELD),
+           "count_3dhp": per["3DHP"], "count_nhd": per["NHD"],
+           "coverage_3dhp": {"features_by_workunit": units, "nhd_migrated": nhd,
+                             "elevation_derived": sum(units.values()) - nhd},
+           "fields_mapped": "gnis_name <- gnisidlabel, gnis_id <- gnisid, ftype / fcode <- "
+                            "featuretypelabel (fcode = ftype x 100), featuredate as a date; "
+                            "the 3DHP fields are kept (id3dhp, mainstemid, workunitid ...); "
+                            "no reachcode / permanent_identifier in 3DHP"}
+    if rep:
+        out["areas"] = {"tiles": rep.get("tiles"), "tile_deg": HYDRO_TILE_DEG,
+                        "not_from_3dhp": len(fill), "filled_from_nhd": rep.get(
+                            "fill_areas_read", 0), "not_read": len(gaps),
+                        "failed_3dhp_areas": fill, "gap_areas": gaps}
+    if fill:
+        why = "3DHP: {}".format(rep.get("why") or "{} area(s) not read".format(len(fill)))
+        out["fallback_reason"] = "{} - {} of {} area(s) filled from NHD{}".format(
+            why, rep.get("fill_areas_read", 0), len(fill),
+            "; {} area(s) read by neither service".format(len(gaps)) if gaps else "")
+        out["nhd_url"] = nhd_url
+        if src == "NHD":
+            out["source"] = "USGS NHD ({}) - 3DHP not available in any area".format(nhd_url)
+        else:
+            out["source"] = ("USGS 3DHP ({:,} features, NHD fields added) with USGS NHD in the "
+                             "{} area(s) 3DHP could not serve ({:,} features)".format(
+                                 per["3DHP"], len(fill), per["NHD"]))
+    return out
 
 
 # --------------------------------------------------- Aquatic Barrier Inventory --
@@ -919,7 +1002,9 @@ def write_format2(src_db, p2, man1, infos, left, refresh, log, cancel):
                 os.path.isfile(os.path.join(p2, *o["file"].split("/"))))
         if not same:
             only.add(k)
-    extra = {k: {kk: vv for kk, vv in (infos.get(k) or {}).items() if vv} for k in infos}
+    # 1.5.1: zero counts kept (count_3dhp 0), as in format 1
+    extra = {k: {kk: vv for kk, vv in (infos.get(k) or {}).items()
+                 if vv not in (None, "", {}, [])} for k in infos}
     man2 = GP.convert_v1(src_db, p2, only=only, extra_info=extra, log=log,
                          cancel=cancel)
     for k, e in (man2.get("datasets") or {}).items():           # provenance of kept layers too
