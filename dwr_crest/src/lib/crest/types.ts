@@ -18,12 +18,20 @@ export type ReceptorSeed = {
   padFt: number;
 };
 
-/** Optional drawn geometry for DSS-WISE style layout (GeoJSON Feature or Geometry) */
-export type DrawnGeometry = {
-  reservoirPoint?: GeoJSON.Point | null;
-  damLine?: GeoJSON.LineString | null;
-  breachPoint?: GeoJSON.Point | null;
-  aoi?: GeoJSON.Polygon | null;
+export type GeoJSONFeature = {
+  type: "Feature";
+  geometry: {
+    type: "Point" | "LineString" | "Polygon";
+    coordinates: number[] | number[][] | number[][][];
+  };
+  properties: Record<string, unknown>;
+};
+
+export type DamGeometry = {
+  reservoirPoint?: GeoJSONFeature;
+  damLine?: GeoJSONFeature;
+  breachPoint?: GeoJSONFeature;
+  aoi?: GeoJSONFeature;
 };
 
 export type DamRecord = {
@@ -46,8 +54,7 @@ export type DamRecord = {
   method: BreachMethod;
   engine: EngineName;
   receptors: ReceptorSeed[];
-  /** Optional interactive map geometry (Leaflet prototype) */
-  geometry?: DrawnGeometry;
+  geometry?: DamGeometry;
 };
 
 export type SeriesPoint = { tHr: number; qCfs: number };
