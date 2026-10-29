@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { tempDir } from "./test-tmp.mjs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import {
@@ -30,7 +30,7 @@ function makeWorkspace({
   narrowBytes = 200 * 1024,
   pendingAgeMs,
 } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "brand-check-"));
+  const root = tempDir("brand-check-");
   mkdirSync(join(root, "public"), { recursive: true });
   mkdirSync(join(root, "src/lib/og"), { recursive: true });
   mkdirSync(join(root, ".grok"), { recursive: true });

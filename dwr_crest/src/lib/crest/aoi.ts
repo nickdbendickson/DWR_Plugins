@@ -199,6 +199,11 @@ function distToRing(r: XY[], x: number, y: number) {
  * or a hole's ring) counts as inside. The plain crossing test (inRing) treats points exactly on some
  * edges as outside depending on the edge's side, so a flow line running along an AOI edge was inside
  * on one side of the flow and outside on the other (round 3c).
+ *
+ * Because `tol` applies on both sides of every edge, a gap narrower than 2 * tol (gaps under 2 m
+ * with BOUNDARY_TOL_M) is closed: a slot between two parts, or a hole, less than 2 m across the
+ * line counts as inside, and so does a line running less than 1 m beside the outline. 2 m or more
+ * stays open.
  */
 function inPartTol(p: Part, x: number, y: number, tol: number) {
   if (!inRing(p.outer, x, y) && distToRing(p.outer, x, y) > tol) return false;
@@ -513,6 +518,10 @@ export function aoiExtent(shape: Extract<AoiShape, { ok: true }>, dir: Downstrea
     );
   }
   const strip = reachBasis === "downstream" ? axis : null;
+  // Cross-sections use insideIntervals too, so the 1 m outline tolerance also widens each one by up
+  // to 1 m where it crosses an edge. That is deliberate (one inside test for the reach and the wet
+  // area) and small: about 0.01 ac on a 3 km reach (+0.005 ac for a 100 m corridor, +0.013 ac for a
+  // 400 m one, versus the strict test).
   const crossFrac = (xM: number, halfM: number) => {
     if (!strip) return null;
     if (halfM <= 0) return 0;

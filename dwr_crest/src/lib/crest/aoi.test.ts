@@ -618,6 +618,43 @@ describe("Round 3c: outline tolerance is the same on both sides of the flow", ()
     assert.equal(far.flood.acres, 0);
   });
 
+  it("gaps under 2 m across the flow are closed (1 m either side); 2 m or more stays open", () => {
+    // A slot between two parts, and a hole, each g km across the valley at 1 km downstream.
+    const parts = (g: number): GeoJSONFeature => {
+      const coords = (f: GeoJSONFeature) =>
+        (f.geometry as { coordinates: number[][][] }).coordinates;
+      return {
+        type: "Feature",
+        properties: {},
+        geometry: {
+          type: "MultiPolygon",
+          coordinates: [coords(rect(-1, 1, -1, 1)), coords(rect(-1, 1, -3, -1 - g))],
+        },
+      } as GeoJSONFeature;
+    };
+    const hole = (g: number) =>
+      rect(-3, 3, -3, 3, [
+        [
+          [-1, -1 - g],
+          [1, -1 - g],
+          [1, -1],
+          [-1, -1],
+        ],
+      ]);
+    for (const [name, aoi] of [
+      ["slot", parts],
+      ["hole", hole],
+    ] as const) {
+      const closed = analyze(dam(aoi(0.0019)));
+      assert.ok(
+        Math.abs(closed.flood.lengthM - 3000) < 2,
+        `${name} 1.9 m: ${closed.flood.lengthM}`,
+      );
+      const open = analyze(dam(aoi(0.0021)));
+      assert.ok(Math.abs(open.flood.lengthM - 1000) < 2, `${name} 2.1 m: ${open.flood.lengthM}`);
+    }
+  });
+
   it("the flow line along a hole's edge: the hole's outline counts as inside, its interior does not", () => {
     // 6 km square around the breach with a hole whose west edge is the flow line (E 0..1, N -2..-1).
     const a = analyze(

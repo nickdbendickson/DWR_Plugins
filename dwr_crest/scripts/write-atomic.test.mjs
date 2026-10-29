@@ -3,13 +3,12 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { tempDir } from "./test-tmp.mjs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { handOver, parseWriteAtomicArgs, stagingError } from "./write-atomic.mjs";
@@ -24,7 +23,7 @@ const OG_DOCS_MISSING =
   "template og skill docs (.grok/skills/og, AGENTS.md) are not in this repo";
 
 function makeWorkspace() {
-  const root = mkdtempSync(join(tmpdir(), "write-atomic-"));
+  const root = tempDir("write-atomic-");
   mkdirSync(join(root, "public"), { recursive: true });
   mkdirSync(join(root, ".grok"), { recursive: true });
   return root;
