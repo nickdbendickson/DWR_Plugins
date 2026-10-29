@@ -1,7 +1,7 @@
 """QGIS 4 (Qt6) readiness for DamSafety_PMP (no QGIS needed).
 
 metadata.txt declares supportsQt6=True with qgisMaximumVersion=4.99 (the suite convention), and the
-plugin code has no Qt imports and no Qt5-only spellings (unscoped Qt enums, PyQt5 imports, QVariant
+plugin code imports Qt only through qgis.PyQt (the StreamStats dialog, 0.4.0) and has no Qt5-only spellings (unscoped Qt enums, PyQt5 imports, QVariant
 field types, exec_()). The suite-wide checks are tools/ci_checks.py "qt6 enums" and "qt6 metadata"
 (both in CI); this test keeps the PMP side explicit.
 

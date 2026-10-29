@@ -22,7 +22,7 @@ import traceback
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools"))
 PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening", "DamSafety_Data",
-           "DamSafety_Setup", "DamSafety_HazardLite")
+           "DamSafety_Setup", "DamSafety_HazardLite", "DamSafety_PMP")
 
 # the plugins import as packages under their installed names, from a scratch folder
 ROOT = tempfile.mkdtemp(prefix="gui_lint_")
@@ -286,6 +286,9 @@ def main():
 
     from DamSafety_HazardLite.dialog import HazardLiteDialog
     check("Hazard Lite", opened("Hazard Lite", lambda: HazardLiteDialog(parent=None)))
+
+    from DamSafety_PMP.streamstats_dialog import StreamStatsDialog
+    check("PMP StreamStats", opened("PMP StreamStats", lambda: StreamStatsDialog(None, None)))
 
     for line in FAILS:
         print(line)
