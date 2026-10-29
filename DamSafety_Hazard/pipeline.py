@@ -2213,7 +2213,7 @@ def _classify_and_write(run, cfg, state):
                     break
         except Exception:
             pass
-        try:                                     # 2.20.0: the Runner's NGVD29 -> NAVD88 record
+        try:                                     # 2.20.0 / 2.20.3: the Runner's vertical-datum record
             extra["datum"] = datum_lines(out, cfg.get("dam_folder") or "")
         except Exception:
             pass
@@ -3700,9 +3700,12 @@ def _compare_last_run(run, gov, governing, scenarios, dam_name, written, folder)
 
 
 def datum_lines(out, dam_folder=""):
-    """2.20.0: summary lines of the vertical datum of the dam elevations the Runner used
-    (run_report.json "vertical_datum", else dam.json's "vertical_datum"): source datum,
-    NGVD29 -> NAVD88 shift and method (damsuite/vdatum.py). [] when neither records one."""
+    """2.20.0 / 2.20.3: summary lines of the vertical datum the Runner recorded
+    (run_report.json "vertical_datum", else dam.json's). damsuite 1.18.2 lines cover a
+    NGVD29 -> NAVD88 shift, a 0-300 ft local datum tied to the DEM, REVIEW / UNCONVERTED
+    values, a band value replaced by a DEM elevation, and the mid-crest dam point
+    (also read from a sibling "dam_point" when the record does not carry one).
+    [] when neither file records a datum."""
     from .damsuite import vdatum as VD
     cands = [os.path.join(out, "run_report.json")]
     if dam_folder:
@@ -3716,7 +3719,12 @@ def datum_lines(out, dam_folder=""):
                 data = json.load(f)
         except Exception:
             continue
-        rec = data.get("vertical_datum") if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            continue
+        rec = data.get("vertical_datum")
         if isinstance(rec, dict) and rec:
+            if not rec.get("dam_point") and isinstance(data.get("dam_point"), dict):
+                rec = dict(rec)
+                rec["dam_point"] = data["dam_point"]
             return VD.summary_lines(rec) + ["(from {})".format(os.path.basename(path))]
     return []
