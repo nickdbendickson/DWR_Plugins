@@ -46,10 +46,10 @@ class NDBreachRunnerPlugin:
         self.dialog = None
         self.home_action = None
         self.home_dialog = None
-
-    def initProcessing(self):
         self.results_dock = None
         self.results_action = None
+
+    def initProcessing(self):
         """Register the Processing provider once. QGIS / qgis_process call this for a
         hasProcessingProvider=yes plugin and initGui calls it too: 3.4.1 keeps the first
         provider (a second one was refused by the registry but replaced self.provider, so
