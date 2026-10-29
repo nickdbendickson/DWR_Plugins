@@ -63,6 +63,11 @@ export type DamRecord = {
   failureMode: FailureMode;
   method: BreachMethod;
   engine: EngineName;
+  /** Dam location (decimal degrees). Used for the VERTCON NGVD29 offset; the drawn breach point is the fallback. */
+  lat?: number;
+  lon?: number;
+  /** NGVD29 to NAVD88 offset (ft) entered by the user; overrides VERTCON. 0 or unset = use VERTCON. */
+  datumOffsetFt?: number;
   /** Reservoir surface area at the top of dam (acres). Sets the storage-depth curve for routing. */
   surfaceAreaAc?: number;
   /** Desk reach length (km). Default: until the schematic depth falls below 0.1 ft. */

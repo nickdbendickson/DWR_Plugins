@@ -19,6 +19,9 @@ export function dwr2801(over: Partial<DamRecord> = {}): DamRecord {
     failureMode: "piping",
     method: "froehlich",
     engine: "anuga",
+    // Runner inputs only: no surface area unless a test sets it (m = 2), auto reach.
+    surfaceAreaAc: undefined,
+    reachKm: undefined,
     ...over,
   };
 }
