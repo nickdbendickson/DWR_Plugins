@@ -204,6 +204,7 @@ export function analyze(dam: DamRecord): Analysis {
   } else {
     crestNavd = dam.crestFt;
     rule = "Elevations treated as NAVD88.";
+    if (dam.datumNote) rule += ` ${dam.datumNote}`;
   }
 
   const localRecord = localCrest && offsetFt != null;

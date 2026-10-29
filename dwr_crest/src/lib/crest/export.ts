@@ -26,6 +26,7 @@ export function exportDamJson(dam: DamRecord, analysis: Analysis): string {
     crest_ft: analysis.datum.crestNavdFt,
     crest_datum: "NAVD88",
     datum_rule: analysis.datum.rule,
+    datum_note: dam.datumNote ?? null,
     lat: loc?.lat ?? null,
     lon: loc?.lon ?? null,
     method: dam.method,

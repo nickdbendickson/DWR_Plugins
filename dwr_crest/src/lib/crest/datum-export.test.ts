@@ -71,16 +71,52 @@ describe("NGVD29 to NAVD88 (VERTCON)", () => {
   });
 });
 
-describe("ND00199 sample", () => {
-  it("carries the DWR-2801 lidar crest, bottom and piping mode", () => {
-    const s = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
-    assert.equal(s.crestFt, 1071.15);
-    assert.equal(s.streambedFt, 1044.74);
-    assert.equal(s.statedDatum, "NAVD88");
-    assert.equal(s.failureMode, "piping");
-    assert.ok(Math.abs(s.heightFt - (1071.15 - 1044.74)) < 1e-9);
-    const a = analyze(s);
+describe("ND00199 sample (Nick, 2026-10-29: crest 1072.24 NAVD88 from NGVD29 1071.15)", () => {
+  const sample = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
+
+  it("carries crest 1072.24 / bottom 1044.74 ft NAVD88, H 27.50 ft, piping, with the conversion noted", () => {
+    assert.equal(sample.crestFt, 1072.24);
+    assert.equal(sample.streambedFt, 1044.74);
+    assert.equal(sample.heightFt, 27.5);
+    assert.equal(sample.statedDatum, "NAVD88");
+    assert.equal(sample.storageAcFt, 1612.59);
+    assert.equal(sample.surfaceAreaAc, 154.5);
+    assert.equal(sample.failureMode, "piping");
+    assert.match(sample.datumNote ?? "", /converted from NGVD29 1071\.15/);
+  });
+
+  it("CHECK: loading the sample gives crest 1072.24 and H 27.50 with no second VERTCON shift", () => {
+    const a = analyze(sample);
+    assert.equal(a.datum.offsetFt, null, "no offset applied to a NAVD88 record");
+    assert.equal(a.datum.crestNavdFt, 1072.24);
+    assert.equal(a.datum.streambedNavdFt, 1044.74);
+    assert.equal(a.breach.headFt.toFixed(2), "27.50");
+    assert.match(a.datum.rule, /treated as NAVD88\. Crest converted from NGVD29 1071\.15/);
+    assert.doesNotMatch(a.datum.rule, /by VERTCON/);
     assert.equal(a.datum.warnings.length, 0, a.datum.warnings.join("; "));
+  });
+
+  it("CHECK: the same dam entered as NGVD29 1071.15 ties to the same 1072.24 and H 27.50", () => {
+    const a = analyze({
+      ...sample,
+      crestFt: 1071.15,
+      streambedFt: 1043.65,
+      statedDatum: "NGVD29",
+      datumNote: undefined,
+    });
+    assert.equal(a.datum.crestNavdFt.toFixed(2), "1072.24");
+    assert.equal(a.datum.streambedNavdFt!.toFixed(2), "1044.74");
+    assert.equal(a.breach.headFt.toFixed(2), "27.50");
+    assert.match(a.datum.rule, /by VERTCON/);
+    assert.equal(Math.round(a.breach.peakCfs), Math.round(analyze(sample).breach.peakCfs));
+  });
+
+  it("desk peak: 28,623 cfs with the 154.5 ac surface area, 26,205 cfs without (m = 2)", () => {
+    assert.equal(Math.round(analyze(sample).breach.peakCfs), 28623);
+    assert.equal(
+      Math.round(analyze({ ...sample, surfaceAreaAc: undefined }).breach.peakCfs),
+      26205,
+    );
   });
 });
 

@@ -7,7 +7,7 @@ export function dwr2801(over: Partial<DamRecord> = {}): DamRecord {
     ...SAMPLE_DAMS[0],
     id: "dwr-2801",
     nid: "ND00199",
-    heightFt: 1072.24 - 1044.74,
+    heightFt: 27.5,
     storageAcFt: 1612.59,
     lengthFt: 1700,
     crestFt: 1072.24,

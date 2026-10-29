@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import { analyze, MAX_REACH_KM } from "./engine.ts";
 import { dwr2801 } from "./fixtures.ts";
+import { SAMPLE_DAMS } from "./samples.ts";
 
 // DamSafety_Runner core/breach.py piping_hydrograph on DWR-2801 (top 1072.24 NAVD88, H 27.5 ft,
 // SA 154.5 ac): 1615.5 ac-ft -> 28,671 cfs; 1612.59 ac-ft -> 28,623 cfs; no SA (m = 2) -> 26,205 cfs.
@@ -20,6 +21,17 @@ describe("routed breach hydrograph (DWR-2801 regression)", () => {
     const b = analyze(dwr2801({ storageAcFt: 1615.5, surfaceAreaAc: 154.5 })).breach;
     assert.ok(Math.abs(b.peakCfs - 28671) / 28671 < 0.001, `peak ${b.peakCfs}`);
     assert.ok(Math.abs(b.empiricalPeakCfs - 21599) / 21599 < 0.002, `F95 ${b.empiricalPeakCfs}`);
+  });
+
+  it("the ND00199 sample is the same DWR-2801 dam as the fixture (1072.24 / 1044.74 NAVD88, H 27.50)", () => {
+    const s = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
+    const f = dwr2801();
+    for (const k of ["crestFt", "streambedFt", "heightFt", "storageAcFt", "statedDatum", "failureMode"] as const) {
+      assert.equal(s[k], f[k], k);
+    }
+    const ps = analyze(s).breach.peakCfs;
+    const pf = analyze(dwr2801({ surfaceAreaAc: 154.5 })).breach.peakCfs;
+    assert.ok(Math.abs(ps - pf) < 1, `sample ${ps} vs fixture ${pf}`);
   });
 
   it("without a surface area uses m = 2 (Runner 26,205 cfs)", () => {

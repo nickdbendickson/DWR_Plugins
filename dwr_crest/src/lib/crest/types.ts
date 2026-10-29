@@ -68,6 +68,8 @@ export type DamRecord = {
   lon?: number;
   /** NGVD29 to NAVD88 offset (ft) entered by the user; overrides VERTCON. 0 or unset = use VERTCON. */
   datumOffsetFt?: number;
+  /** Where the stated elevations came from, e.g. a datum conversion already applied. Shown with the datum rule. */
+  datumNote?: string;
   /** Reservoir surface area at the top of dam (acres). Sets the storage-depth curve for routing. */
   surfaceAreaAc?: number;
   /** Desk reach length (km). Default: until the schematic depth falls below 0.1 ft. */

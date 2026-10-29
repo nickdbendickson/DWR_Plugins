@@ -17,17 +17,19 @@ export const SAMPLE_DAMS: DamRecord[] = [
     nid: "ND00199",
     county: "Cass",
     year: 1960,
-    // DWR-2801 / r3 inputs: lidar crest 1071.15 and breach bottom 1044.74 ft NAVD88, piping.
-    // Height is crest minus bottom (26.41 ft). Storage 1,612.59 ac-ft, surface area 154.5 ac.
-    heightFt: 26.41,
+    // DWR-2801 / r3 inputs (Nick, 2026-10-29): crest 1072.24 ft NAVD88 = NGVD29 1071.15 + VERTCON 1.09 ft,
+    // already converted, so the datum is NAVD88 and nothing shifts it again. Breach bottom 1044.74 NAVD88,
+    // height 27.50 ft, piping. Storage 1,612.59 ac-ft (review/r3 hydrograph volume), surface area 154.5 ac.
+    heightFt: 27.5,
     lengthFt: 1700,
-    crestFt: 1071.15,
+    crestFt: 1072.24,
     streambedFt: 1044.74,
     spillwayFt: NaN,
     normalPoolFt: NaN,
     storageAcFt: 1612.59,
     drainageMi2: 13.7,
     statedDatum: "NAVD88",
+    datumNote: "Crest converted from NGVD29 1071.15 ft (+1.09 ft VERTCON at the site); do not shift again.",
     demCrestFt: 1071.15,
     lat: 46.98364,
     lon: -97.39064,
