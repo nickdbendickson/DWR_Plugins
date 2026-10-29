@@ -8,6 +8,7 @@ from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterFile, QgsPr
                        QgsProcessingOutputFolder)
 
 from .core.hydro import HydroConfig, run_folder
+from .core import streamstats
 
 D = QgsProcessingParameterNumber.Double
 
@@ -19,7 +20,12 @@ class InflowHydrographAlgorithm(QgsProcessingAlgorithm):
     def shortHelpString(self):
         return ("Reads nd_pmp hyetograph CSVs and computes inflow hydrographs (SCS CN or initial+constant losses; "
                 "SCS or Clark UH; constant or recession baseflow). Output: hydrographs/<storm_id>.csv "
-                "(time_hr, flow_cfs, precip_in, excess_in) + inflow_hydrograph_summary.csv. INTERNAL PROTOTYPE.")
+                "(time_hr, flow_cfs, precip_in, excess_in) + inflow_hydrograph_summary.csv. INTERNAL PROTOTYPE.<br><br>"
+                "Basin inputs: Plugins ▸ DamSafety PMP ▸ Get basin data from StreamStats… fills the "
+                "drainage area, a suggested non-contributing area and Tc / lag from USGS StreamStats, and sets "
+                "'StreamStats basin values'. With that file set, the largest peak is compared with the ND 0.2% "
+                "AEP regression peak and the Crippen & Bue envelope after the run (a warning in the log, "
+                "never a block; streamstats_pmf_check.json). The curve number is never taken from StreamStats.")
 
     def initAlgorithm(self, config=None):
         A = self.addParameter
@@ -53,8 +59,11 @@ class InflowHydrographAlgorithm(QgsProcessingAlgorithm):
                                        minValue=0, maxValue=1))
         A(QgsProcessingParameterNumber("POTHOLE_STORAGE_IN", "Abstraction depth override (in; 0 = from network)", D, 0,
                                        minValue=0))
+        A(QgsProcessingParameterFile("STREAMSTATS_JSON", "StreamStats basin values (*_streamstats_basin.json; "
+                                     "optional: compare the PMF peak)", extension="json", optional=True))
         self.addOutput(QgsProcessingOutputFile("SUMMARY_CSV", "inflow_hydrograph_summary.csv"))
         self.addOutput(QgsProcessingOutputFolder("HYDROGRAPH_FOLDER", "Hydrograph folder"))
+        self.addOutput(QgsProcessingOutputFile("STREAMSTATS_CHECK", "streamstats_pmf_check.json"))
 
     def _files_cfg(self, p, context):
         src = self.parameterAsFile(p, "HYETOGRAPHS", context)
@@ -84,4 +93,15 @@ class InflowHydrographAlgorithm(QgsProcessingAlgorithm):
             rows, sp = run_folder(files, out, cfg, log=feedback.pushInfo)
         except Exception as e:
             raise QgsProcessingException(str(e))
-        return {"OUTPUT_FOLDER": out, "SUMMARY_CSV": sp, "HYDROGRAPH_FOLDER": os.path.join(out, "hydrographs")}
+        res = {"OUTPUT_FOLDER": out, "SUMMARY_CSV": sp, "HYDROGRAPH_FOLDER": os.path.join(out, "hydrographs")}
+        ssj = self.parameterAsFile(p, "STREAMSTATS_JSON", context)
+        if ssj:
+            try:
+                msgs, written = streamstats.check_pmf_run(rows, ssj, out, cfg.area_mi2)
+            except Exception as e:  # a check, never a reason to fail the run
+                feedback.pushWarning("StreamStats check skipped: %s" % e)
+            else:
+                for level, text in msgs:
+                    (feedback.pushWarning if level == "WARNING" else feedback.pushInfo)("StreamStats check: " + text)
+                res["STREAMSTATS_CHECK"] = str(written["check"])
+        return res

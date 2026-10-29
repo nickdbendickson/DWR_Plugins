@@ -26,9 +26,9 @@ MASTER = os.path.join(ROOT, "shared", "ui")
 _HRS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening")
 # {file in shared/ui/: plugins that ship a copy at their root}
 SHARED = {
-    "tokens.py": _HRS + ("DamSafety_Data", "DamSafety_Setup", "DamSafety_HazardLite"),
-    "ui_widgets.py": _HRS + ("DamSafety_Setup", "DamSafety_HazardLite"),
-    "ui_fit.py": _HRS + ("DamSafety_Data", "DamSafety_HazardLite"),
+    "tokens.py": _HRS + ("DamSafety_Data", "DamSafety_Setup", "DamSafety_HazardLite", "DamSafety_PMP"),
+    "ui_widgets.py": _HRS + ("DamSafety_Setup", "DamSafety_HazardLite", "DamSafety_PMP"),
+    "ui_fit.py": _HRS + ("DamSafety_Data", "DamSafety_HazardLite", "DamSafety_PMP"),
     "suite_settings.py": _HRS,
     "suite_settings_tools.py": _HRS,
     "suite_styles.py": _HRS,

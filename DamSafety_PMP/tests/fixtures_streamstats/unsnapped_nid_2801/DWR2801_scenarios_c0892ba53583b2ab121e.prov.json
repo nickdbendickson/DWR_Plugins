@@ -1,0 +1,12 @@
+{
+ "method": "GET",
+ "url": "https://streamstats.usgs.gov/nssservices/scenarios?regressionregions=GC1810%2CGC1651%2CGC1646%2CGC140%2CGC1811%2CGC1828%2CGC1904%2CGC1928&regions=ND&statisticgroups=2",
+ "label": "DWR2801_scenarios",
+ "request_body_sha256": null,
+ "response_sha256": "fba65a7abb83b4a0a6b37f1e0bee53841d5082b47351800434cc203815bad7bc",
+ "bytes": 810,
+ "http_status": 200,
+ "elapsed_s": 0.06,
+ "retrieved_utc": "2026-10-29T14:58:34+00:00",
+ "client": "streamstats_client 0.1.0"
+}

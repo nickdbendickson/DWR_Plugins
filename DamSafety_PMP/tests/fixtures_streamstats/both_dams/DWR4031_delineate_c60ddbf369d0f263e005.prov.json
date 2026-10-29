@@ -1,0 +1,12 @@
+{
+ "method": "GET",
+ "url": "https://streamstats.usgs.gov/ss-delineate/v1/delineate/sshydro/ND?lat=48.2985029&lon=-101.4370363",
+ "label": "DWR4031_delineate",
+ "request_body_sha256": null,
+ "response_sha256": "16d92f6b82fff3c22655ccc3ddefb115bf54a920e4ee5d3445e78849f4d7cf12",
+ "bytes": 15087,
+ "http_status": 200,
+ "elapsed_s": 17.21,
+ "retrieved_utc": "2026-10-29T14:57:43+00:00",
+ "client": "streamstats_client 0.1.0"
+}

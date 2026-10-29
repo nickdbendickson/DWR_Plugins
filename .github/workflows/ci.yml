@@ -119,6 +119,15 @@ jobs:
           # os._exit after pytest: QGIS can segfault while Python tears it down at exit, after
           # every test has passed (the realqt scripts end the same way)
           python -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_Runner/tests/suite_dams', 'DamSafety_Setup/tests', 'DamSafety_Data/tests/test_pack_build.py', 'DamSafety_Data/tests/test_imagery.py']); sys.stdout.flush(); os._exit(int(rc))"
+      - name: PMP light tests + StreamStats (offline, real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          # saved StreamStats responses only: no request goes to USGS from CI
+          python DamSafety_PMP/tests/run_tests.py
+          python -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_PMP/tests/test_streamstats.py', 'DamSafety_PMP/tests/test_streamstats_dialog.py', 'DamSafety_PMP/tests/test_qgis_transport.py']); sys.stdout.flush(); os._exit(int(rc))"
 
   model-tests:
     # The Runner's --models suite: the fast tests plus every test that runs a real model.
