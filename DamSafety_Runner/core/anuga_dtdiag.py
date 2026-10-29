@@ -219,35 +219,157 @@ def _f(v):
         return None
 
 
+PAUSE_MIN_S = 10.0         # a host pause shorter than this is not reported (scheduler noise)
+PAUSE_CLOCK_FACTOR = 1.5   # realtime delta > 1.5 x the monotonic delta (and >= PAUSE_MIN_S)
+PAUSE_WALL_FACTOR = 3.0    # CPU check: wall >= 3 x the usual wall for the step count ...
+PAUSE_CORES_FACTOR = 0.3   # ... and CPU / wall below 0.3 x the usual cores in use
+PAUSE_BASELINE_N = 20      # recent unpaused yield steps the CPU check's baseline uses
+PAUSE_BASELINE_MIN = 3     # no CPU-check verdict before this many
+
+
+def _median(v):
+    v = sorted(v)
+    n = len(v)
+    if not n:
+        return None
+    return v[n // 2] if n % 2 else 0.5 * (v[n // 2 - 1] + v[n // 2])
+
+
 class YieldClock:
     """Always on (3.10.70): wall-clock UTC, internal steps (since the last yield and in total
     for this worker process) and wall seconds per yield, appended to each PROGRESS line so a
     frozen host (a big wall gap with a normal step count) and a real slowdown (many small
-    steps) can be told apart from anuga.log alone. Reads domain.number_of_steps only."""
+    steps) can be told apart from anuga.log alone. Reads domain.number_of_steps only.
 
-    def __init__(self, t_start=0.0):
-        self.wall = time.time()
+    3.12.4 (DWR-2801 r3: 12 "stalls" of 128-2083 s per 300 s of model time with normal step
+    counts were the box's VM being frozen) adds three clocks per yield step:
+      cpu_s   time.process_time() delta: CPU seconds of the WHOLE worker process, all threads
+              summed (ANUGA's OpenMP threads too), so cpu_s / mono_s ~ the cores in use
+      mono_s  time.monotonic() delta (wall seconds that never jump with the wall clock)
+      wall_s  time.time() delta, as before (kept on the realtime clock on purpose: monotonic
+              may not advance while a VM is frozen, the realtime clock does once it resumes)
+    and a host-pause estimate paused_s (>= PAUSE_MIN_S, else 0), the larger of:
+      clock check  realtime delta - monotonic delta, when realtime > PAUSE_CLOCK_FACTOR x
+                   monotonic (the VM was frozen and its clock stepped forward on resume)
+      CPU check    when monotonic DID run through the freeze: a wall time far above the usual
+                   one for a normal step count while the CPU barely moved -> the wall time
+                   the usual cores-in-use would not explain (mono_s - cpu_s / usual cores)
+    A paused step ends its PROGRESS line with "box paused ~N s"; totals in summary().
+    The clocks are injectable (tests)."""
+
+    def __init__(self, t_start=0.0, real=None, mono=None, cpu=None):
+        self._real = real or time.time
+        self._mono = mono or time.monotonic
+        self._cpu = cpu or time.process_time
+        self.wall = self._real()
+        self.mono = self._mono()
+        self.cpu = self._cpu()
         self.t = float(t_start)
         self.total = 0
+        self.base = []                 # [(dsteps, mono_s, cores)] of recent unpaused steps
+        self.paused_total = 0.0
+        self.paused_steps = 0
+        self.paused_max = 0.0
+        self.cpu_total = 0.0
+        self.mono_total = 0.0
+        self.wall_total = 0.0
+
+    def pause_estimate(self, steps, wall, mono, cpu):
+        """(paused seconds or 0.0, "clock" | "cpu" | None) for one yield step."""
+        clock = wall - mono if wall > PAUSE_CLOCK_FACTOR * max(mono, 0.0) else 0.0
+        cpu_p = 0.0
+        if len(self.base) >= PAUSE_BASELINE_MIN and mono > 0:
+            b_steps = _median([b[0] for b in self.base])
+            b_mono = _median([b[1] for b in self.base])
+            b_cores = _median([b[2] for b in self.base])
+            if b_mono and b_cores and b_cores > 0 \
+                    and mono >= PAUSE_WALL_FACTOR * b_mono \
+                    and steps <= 1.5 * max(b_steps or 0, 1) \
+                    and cpu / mono < PAUSE_CORES_FACTOR * b_cores:
+                cpu_p = max(0.0, mono - cpu / b_cores)
+        p, how = (clock, "clock") if clock >= cpu_p else (cpu_p, "cpu")
+        if p < PAUSE_MIN_S:
+            return 0.0, None
+        return p, how
 
     def tick(self, domain, t):
-        now = time.time()
+        now, mnow, cnow = self._real(), self._mono(), self._cpu()
         n = int(getattr(domain, "number_of_steps", 0) or 0)
         self.total += n
         wall, model = now - self.wall, float(t) - self.t
-        self.wall, self.t = now, float(t)
+        mono, cpu = max(0.0, mnow - self.mono), max(0.0, cnow - self.cpu)
+        self.wall, self.mono, self.cpu, self.t = now, mnow, cnow, float(t)
         rate = model / wall if wall > 0 and model > 0 else None
+        paused, how = self.pause_estimate(n, wall, mono, cpu)
+        if paused > 0:
+            self.paused_total += paused
+            self.paused_steps += 1
+            self.paused_max = max(self.paused_max, paused)
+        elif mono > 0:
+            self.base = (self.base + [(n, mono, cpu / mono)])[-PAUSE_BASELINE_N:]
+        self.cpu_total += cpu
+        self.mono_total += mono
+        self.wall_total += max(0.0, wall)
         return {"utc": utc_now(now), "steps": n, "steps_total": self.total, "wall_s": wall,
-                "model_s": model, "rate": rate}
+                "model_s": model, "rate": rate, "cpu_s": cpu, "mono_s": mono,
+                "paused_s": paused, "paused_by": how}
 
     @staticmethod
     def suffix(f):
-        """' utc=... steps=... dsteps=... wall_s=... rate=...' (appended to PROGRESS)."""
+        """' utc=... steps=... dsteps=... wall_s=... rate=...' (appended to PROGRESS), then
+        (3.12.4) ' cpu_s=... mono_s=... paused_s=...' and ' box paused ~N s' when paused."""
         s = " utc={} steps={} dsteps={} wall_s={:.1f}".format(f["utc"], f["steps_total"],
                                                              f["steps"], f["wall_s"])
         if f["rate"] is not None:
             s += " rate={:.3g}".format(f["rate"])
+        if "cpu_s" in f:
+            s += " cpu_s={:.1f} mono_s={:.1f} paused_s={:.0f}".format(
+                f["cpu_s"], f["mono_s"], f.get("paused_s") or 0.0)
+            if f.get("paused_s"):
+                s += " box paused ~{:.0f} s".format(f["paused_s"])
         return s
+
+    def summary(self):
+        """stats["host_pauses"]: the run's host-pause totals (this worker process)."""
+        return {"paused_s": round(self.paused_total, 1), "paused_yield_steps": self.paused_steps,
+                "largest_s": round(self.paused_max, 1), "cpu_s": round(self.cpu_total, 1),
+                "mono_s": round(self.mono_total, 1), "wall_s": round(self.wall_total, 1),
+                "note": "cpu_s = time.process_time(): all threads of the worker process; "
+                        "paused_s = realtime ahead of monotonic, or wall time the CPU does "
+                        "not explain at a normal step count (anuga_dtdiag.YieldClock)"}
+
+    def summary_line(self):
+        s = self.summary()
+        return "box paused ~{:.0f} s in total over {} yield step(s) (largest ~{:.0f} s); " \
+            "cpu_s={:.0f} mono_s={:.0f} wall_s={:.0f}".format(
+                s["paused_s"], s["paused_yield_steps"], s["largest_s"], s["cpu_s"],
+                s["mono_s"], s["wall_s"])
+
+
+class MonoTimer:
+    """3.12.4: the worker's checkpoint-every-N-minutes timer on time.monotonic() (ANUGA's own
+    checkpoint_time compares time.time(), so the first yield after a VM freeze always saved
+    an extra checkpoint). due() at a yield step; reset() after a save. Host pauses the
+    YieldClock found are taken off too (in case monotonic ran through the freeze)."""
+
+    def __init__(self, every_s, mono=None):
+        self.every_s = float(every_s)
+        self._mono = mono or time.monotonic
+        self.start = self._mono()
+        self.paused = 0.0
+
+    def add_pause(self, s):
+        self.paused += max(0.0, float(s or 0.0))
+
+    def elapsed(self):
+        return max(0.0, self._mono() - self.start - self.paused)
+
+    def due(self):
+        return self.every_s > 0 and self.elapsed() >= self.every_s
+
+    def reset(self):
+        self.start = self._mono()
+        self.paused = 0.0
 
 
 def _truncate_after(path, t_max):
