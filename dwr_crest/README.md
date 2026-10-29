@@ -1,8 +1,8 @@
 # Crest
 
-A standalone dam-breach desk. Edit a dam record, estimate a breach, sketch a downstream flood, and read a desk screen.
+A standalone dam-breach desk. Edit a dam record, estimate a breach, sketch a downstream flood, screen with the same ACER TM 11 / ND 5.2/5.3 rules as the DWR plugins, and export handoff packages for FIMsim or the QGIS Breach Runner.
 
-It does not run LISFLOOD, ANUGA, or HEC-RAS, and it does not assign an ND Dam Safety or ACER hazard class.
+It does not run a full 2D hydraulic solver in the browser. Official classification remains the ND Department of Water Resources'.
 
 ## Run
 
@@ -15,12 +15,16 @@ The desk opens on port 8080. Edits stay in the browser.
 
 ## What the steps do
 
-- **Record.** Height, storage, and elevations. A crest in the 0–300 ft band is treated as local and tied to the DEM crest. A local streambed on a real-datum record is replaced with crest minus height. NGVD29 is a flat +1 ft desk shift, not VERTCON.
-- **Breach.** Froehlich 2008, MacDonald & Langridge-Monopolis, or a TR-60 screening width. The plotted hydrograph is scaled so its volume matches storage. The Froehlich peak is shown beside that fitted peak.
-- **Flood.** A schematic valley. The desk engine only changes how fast depth falls downstream.
-- **Screen.** High if a house or barn is at least 2 ft deep, Significant if a building is wet or a road is at least 1 ft, otherwise Low. Review if the crest cannot be tied.
-- **Report.** One page of the numbers above.
+* **Record.** Height, storage, and elevations. Local crest-tie and datum handling as before.
+* **Breach.** Froehlich 2008, MacDonald & Langridge-Monopolis, or TR-60. Volume-fitted hydrograph. **Export CSV** (`time_hours,discharge_cms`) and minimal `dam.json` for the Runner / FIMsim.
+* **Flood.** Schematic valley with depth decay. Receptors are seeds.
+* **Screen.** Now applies the real ACER TM 11 depth-velocity charts (ported from `damsuite/tm11_curves.py`) plus ND ranking rules on the receptors. Simple threshold screen is still shown for comparison.
+* **Report.** Summary plus download links for the LISFLOOD package (`.par` / `.bci` / `.bdy` with point source just downstream of the dam).
 
-D×V is depth times velocity. It is not a pass or fail.
+## Handoff
 
-The three sample dams are illustrative. Swan Buffalo Detention 12 uses public-style NID figures; the other two are worked examples.
+Crest prepares the inputs and screens with the same rules. Use the exported files in FIMsim or the ND Dam Breach Runner for full routing and official review.
+
+D×V is shown but is not a pass/fail. Schematic depths are for screening only.
+
+The three sample dams are illustrative.
