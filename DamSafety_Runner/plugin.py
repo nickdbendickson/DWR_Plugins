@@ -48,6 +48,8 @@ class NDBreachRunnerPlugin:
         self.home_dialog = None
 
     def initProcessing(self):
+        self.results_dock = None
+        self.results_action = None
         """Register the Processing provider once. QGIS / qgis_process call this for a
         hasProcessingProvider=yes plugin and initGui calls it too: 3.4.1 keeps the first
         provider (a second one was refused by the registry but replaced self.provider, so
@@ -70,6 +72,22 @@ class NDBreachRunnerPlugin:
         self.action.triggered.connect(self.run_plugin)
         self.iface.addPluginToMenu(MENU, self.action)
         self.actions.append(self.action)
+        self.results_action = QAction("Breach results…", self.iface.mainWindow())
+        self.results_action.setObjectName("NDBreachResultsAction")
+        self.results_action.triggered.connect(self.show_results_dock)
+        self.iface.addPluginToMenu(MENU, self.results_action)
+        self.actions.append(self.results_action)
+
+
+    def show_results_dock(self, *args):
+        """Breach results panel. Reads a finished dam folder; does not run the model."""
+        from qgis.PyQt.QtCore import Qt
+        from .results_dock import ResultsDock
+        if self.results_dock is None:
+            self.results_dock = ResultsDock(self.iface)
+            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.results_dock)
+        self.results_dock.show()
+        self.results_dock.raise_()
 
     def run_settings(self, *args):
         """Open the window and its Settings window (the suite settings grid)."""
@@ -153,6 +171,13 @@ class NDBreachRunnerPlugin:
             self.iface.showOptionsDialog(self.iface.mainWindow())
 
     def unload(self):
+        if self.results_dock is not None:
+            try:
+                self.iface.removeDockWidget(self.results_dock)
+                self.results_dock.deleteLater()
+            except RuntimeError:
+                pass
+            self.results_dock = None
         for a in self.actions:
             self.iface.removePluginMenu(MENU, a)
         self.actions = []
@@ -168,6 +193,12 @@ class NDBreachRunnerPlugin:
             except (RuntimeError, TypeError, AttributeError):
                 pass
             self.action = None
+        if self.results_action is not None:
+            try:
+                self.results_action.triggered.disconnect(self.show_results_dock)
+            except (RuntimeError, TypeError, AttributeError):
+                pass
+            self.results_action = None
         if self._dialog_alive():
             try:
                 self.dialog.close()
