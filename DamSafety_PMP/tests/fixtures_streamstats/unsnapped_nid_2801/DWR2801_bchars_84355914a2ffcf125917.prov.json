@@ -1,0 +1,12 @@
+{
+ "method": "POST",
+ "url": "https://streamstats.usgs.gov/ss-hydro/v1/basin-characteristics/calculate",
+ "label": "DWR2801_bchars",
+ "request_body_sha256": "1c26d8630029142e54ad6fca44bde9a5236253e6f4cf4843c893dc7423997546",
+ "response_sha256": "4279a0925bc7f29cc487748e80251bca0375db8cd094a2c8f4af1ec948b41a2d",
+ "bytes": 4582,
+ "http_status": 200,
+ "elapsed_s": 3.53,
+ "retrieved_utc": "2026-10-29T14:58:41+00:00",
+ "client": "streamstats_client 0.1.0"
+}

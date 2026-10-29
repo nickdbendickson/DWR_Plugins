@@ -5,10 +5,12 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.20.1
+version=2.20.2
 icon=icon.svg
 author=N.D. Bendickson
-changelog=2.20.1 (2026-10-28; local datums in the vertical datum section)
+changelog=2.20.2 (2026-10-29; offline pack engine 1.3: area-by-area ArcGIS reads)
+    * build_nd_pack 1.3 (shared with DamSafety Data 1.5.1): new data-set kind arcgis_tiled - object ids listed per 0.25 degree tile, a tile that answers HTTP 504 / times out is quartered after a pause (down to 4 levels), and only the areas a service cannot serve are read from a second service (one source per place, tile edges not doubled, the source on every feature). A page refused with HTTP 400 (FEMA USA_Structures) is tried again with smaller pages and fails with a plain message. A DWR GeoPackage note gives the file's own date (GeoPackage last change), not the day it was copied. No classification changes.
+    2.20.1 (2026-10-28; local datums in the vertical datum section)
     * Vendored damsuite 1.18.1: the VERTICAL DATUM section shows a local (assumed) datum - e.g. a top of dam of 100.0 ft - as "not converted; elevations taken from the DEM", the DEM top minus the local top, each local value against the NAVD88 value the Runner used, and the warning (Runner 3.12.1).
     2.20.0 (2026-10-28; vertical datum section in the hazard summary)
     * The hazard summary gains VERTICAL DATUM OF THE DAM ELEVATIONS (NGVD29 -> NAVD88): the source datum, whether it was stated or assumed, the VERTCON shift and method, read from the Runner run_report.json or dam.json (Runner 3.12.0). Nothing is shown when no record has it.

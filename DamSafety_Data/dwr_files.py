@@ -250,6 +250,31 @@ def file_date(path):
     return datetime.date.fromtimestamp(os.path.getmtime(path)).isoformat()
 
 
+def source_date(path, layer=None):
+    """(date, how) of a GeoPackage's own content - Hazard 2.20.2 / Data 1.5.1: the file's
+    modified time is when it was COPIED to this computer, so the pack notes said "file dated" the
+    copy day. The date is gpkg_contents.last_change of `layer` (or the newest of the file),
+    how = "GeoPackage last change"; a file without it (not a GeoPackage, empty column): the
+    modified time, how = "file modified"."""
+    try:
+        con = sqlite3.connect("file:{}?mode=ro".format(
+            path.replace("?", "%3f").replace("#", "%23")), uri=True)
+        try:
+            if layer:
+                row = con.execute("SELECT last_change FROM gpkg_contents WHERE table_name=?",
+                                  (layer,)).fetchone()
+            else:
+                row = con.execute("SELECT MAX(last_change) FROM gpkg_contents").fetchone()
+        finally:
+            con.close()
+        txt = str(row[0] or "") if row else ""
+        if re.match(r"^\d{4}-\d{2}-\d{2}", txt):
+            return txt[:10], "GeoPackage last change"
+    except sqlite3.Error:
+        pass
+    return file_date(path), "file modified"
+
+
 def read_layer(path, layer):
     """(features as GeoJSON dicts in lon / lat with every attribute, info) of one layer.
     info: {"epsg", "unit_m", "rows", "empty"} - empty: rows with no / an empty geometry (the pack writer

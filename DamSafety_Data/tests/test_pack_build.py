@@ -388,31 +388,123 @@ def test_refusals(tmp_path):
     PB.check_target(str(tmp_path / "empty"))
 
 
-def test_hydro_fallback_and_3dhp_fields(tmp_path, monkeypatch):
-    """3DHP answers: NHD-style fields added and work units counted; 3DHP fails: the NHD
-    service is used and the manifest says why."""
-    def run_one(ctx, name, label, kind, spec, bbox):
-        if "3DHP" in spec["url"] and name == "NHD_waterbodies":
-            raise OSError("HTTP 504")
-        w = ctx.writer
-        w.begin(name, label, spec["url"], resume=False)
-        p = {"id3dhp": "a1", "gnisidlabel": "Missouri River", "gnisid": "1",
-             "featuretypelabel": "Stream/River", "featuretype": 460,
-             "workunitid": "NHD"} if "3DHP" in spec["url"] else {"gnis_name": "Lake", "ftype": 390}
-        w.add([{"type": "Feature", "geometry": {"type": "LineString", "coordinates": [
-            [-100.8, 46.8], [-100.79, 46.81]]}, "properties": p}], lambda f: "x:1")
-        return w.finish("mock")
-    monkeypatch.setattr(BP, "_run_one", run_one)
-    monkeypatch.setattr(BP, "_NET_ERRORS", (OSError,))
+class _Svc(object):
+    """1.5.1: a fake ArcGIS layer (PB's http_json replaced): a grid of short lines over BBOX;
+    object-id queries of a box holding `dead` always fail (HTTP 504); desc_fail: the layer
+    description fails (the whole service down)."""
+    def __init__(self, props, dead=None, desc_fail=False, first_id=1):
+        self.props, self.dead, self.desc_fail = props, dead, desc_fail
+        self.geoms = {}
+        for j in range(10):
+            for i in range(15):
+                x, y = -100.848 + 0.01 * i, 46.752 + 0.01 * j
+                self.geoms[first_id + i + 15 * j] = (x - 0.001, y - 0.001, x + 0.001, y + 0.001)
+
+    def __call__(self, url, params=None, post=False, retries=None, what=""):
+        p = params or {}
+        if what == "layer description":
+            if self.desc_fail:
+                e = BP.BuildError("layer description: {} (HTTP Error 504: Gateway Time-out)"
+                                  .format(url))
+                e.http_code = 504
+                raise e
+            return {"objectIdField": "OBJECTID", "maxRecordCount": 2000}
+        if p.get("returnIdsOnly"):
+            x0, y0, x1, y1 = (float(v) for v in p["geometry"].split(","))
+            if self.dead and x0 <= self.dead[0] <= x1 and y0 <= self.dead[1] <= y1:
+                e = BP.BuildError("object ids: {} (HTTP Error 504: Gateway Time-out)".format(url))
+                e.http_code = 504
+                raise e
+            return {"objectIds": [k for k, b in sorted(self.geoms.items()) if
+                                  b[0] <= x1 and x0 <= b[2] and b[1] <= y1 and y0 <= b[3]]}
+        ids = [int(v) for v in p["objectIds"].split(",")]
+        return {"features": [{"type": "Feature", "properties": dict(self.props, OBJECTID=i),
+                              "geometry": {"type": "LineString", "coordinates": [
+                                  list(self.geoms[i][:2]), list(self.geoms[i][2:])]}}
+                             for i in ids]}
+
+
+def test_hydro_per_area_fill_and_3dhp_fields(tmp_path, monkeypatch):
+    """1.5.1: 3DHP is read area by area; only the area it cannot serve (HTTP 504 even after
+    the split) is read from NHD - the 3DHP features read are kept, every feature says its
+    source (hydro_src), the manifest gives the counts and the areas; 3DHP down for a layer:
+    all from NHD, and the manifest says why (no more "0 area(s) not read")."""
+    from DamSafety_Data.damsuite import hydro3dhp as H
+    p3 = {"id3dhp": "a1", "gnisidlabel": "Missouri River", "gnisid": "1",
+          "featuretypelabel": "Stream/River", "featuretype": 460, "workunitid": "NHD"}
+    svc = {H.FLOWLINE_URL: _Svc(p3, dead=(-100.782, 46.772)),
+           H.WATERBODY_URL: _Svc(p3, desc_fail=True)}
+    nhd = _Svc({"gnis_name": "Lake", "ftype": 390}, first_id=1001)
+
+    def http_json(url, params=None, post=False, retries=None, what=""):
+        for u, s in svc.items():
+            if url.startswith(u):
+                return s(url, params, post, retries, what)
+        return nhd(url, params, post, retries, what)
+    monkeypatch.setattr(BP, "http_json", http_json)
+    monkeypatch.setattr(BP, "SPLIT_PAUSE_S", 0.0)
+    monkeypatch.setattr(PB, "HYDRO_TILE_DEG", 0.05)
+    monkeypatch.setattr(PB, "HYDRO_SPLIT_DEPTH", 2)
     out = tmp_path / "h"
     out.mkdir()
     r, lines = _build(out, None, only=["NHD_flowlines", "NHD_waterbodies"], hifld_folder=None)
     assert not r["failed"], r["failed"]
     m = r["manifest2"]["datasets"]
-    assert m["NHD_flowlines"]["hydro_source"] == "3DHP"
-    assert m["NHD_flowlines"]["coverage_3dhp"]["nhd_migrated"] == 1
-    assert m["NHD_waterbodies"]["hydro_source"] == "NHD" and "504" in m[
-        "NHD_waterbodies"]["fallback_reason"]
-    f = list(OP.open_pack(str(out / PB.PACK1)).query("NHD_flowlines", BBOX))[0]["properties"]
-    assert f["gnis_name"] == "Missouri River" and f["ftype"] == 460 and f["fcode"] == 46000
+    fl, wb = m["NHD_flowlines"], m["NHD_waterbodies"]
+    assert fl["hydro_source"] == "3DHP+NHD" and fl["count_3dhp"] == 149, fl
+    assert fl["count_nhd"] == 1 and fl["coverage_3dhp"]["nhd_migrated"] == 149, fl
+    a = fl["areas"]
+    assert a["not_from_3dhp"] == 1 and a["filled_from_nhd"] == 1 and a["not_read"] == 0, a
+    assert len(a["failed_3dhp_areas"]) == 1 and a["tile_deg"] == 0.05, a
+    assert fl["fallback_reason"].startswith("3DHP: 1 area(s) not listed (HTTP Error 504"), fl
+    assert "1 of 1 area(s) filled from NHD" in fl["fallback_reason"] and fl["nhd_url"], fl
+    assert "0 area(s) not read" not in json.dumps(m)
+    assert wb["hydro_source"] == "NHD" and wb["count_3dhp"] == 0 and wb["count_nhd"] == 150
+    assert wb["fallback_reason"].startswith("3DHP: 6 area(s) not listed (layer description: HTTP "
+                                            "Error 504: Gateway Time-out)"), wb
+    assert "504" in wb["fallback_reason"] and "6 of 6 area(s) filled from NHD" in wb[
+        "fallback_reason"], wb
+    assert any(x.startswith("  NHD fill: reading 1 area(s) from ") for x in lines), lines
+    pack = OP.open_pack(str(out / PB.PACK1))
+    feats = [f["properties"] for f in pack.query("NHD_flowlines", BBOX)]
+    assert sorted(set(f["hydro_src"] for f in feats)) == ["3DHP", "NHD"]
+    f3 = [f for f in feats if f["hydro_src"] == "3DHP"][0]
+    assert f3["gnis_name"] == "Missouri River" and f3["ftype"] == 460 and f3["fcode"] == 46000
+    fn = [f for f in feats if f["hydro_src"] == "NHD"][0]
+    assert fn["gnis_name"] == "Lake" and fn["ftype"] == 390 and "id3dhp" not in fn
+    assert all(f["hydro_src"] == "NHD" for f in (
+        g["properties"] for g in pack.query("NHD_waterbodies", BBOX)))
     assert PB.verify(str(out))[0]
+
+
+def test_hifld_provenance_by_checksum(tmp_path):
+    """1.5.1: a HIFLD file of the reference pack (by sha256) gets its recorded source; any other
+    file a neutral credit (no claim where it came from); the date is the file's own."""
+    f = tmp_path / "x.gpkg"
+    _hifld_gpkg(str(f), "HIFLD_local_eoc")
+    t = {"spec": {"path": str(f)}, "group": "hifld",
+         "info": {"source_page": PB.DATALUMOS.format(239489)}}
+    p = PB._file_prov(t, str(f))
+    assert p["source_origin"] == "not recorded" and p["source_url"].endswith("/239489"), p
+    assert len(p["source_sha256"]) == 64 and p["source_date_from"], p
+    sha = p["source_sha256"]
+    try:
+        PB.HIFLD_KNOWN[sha] = PB.HIFLD_KNOWN[
+            "9867bb5f83c654e65783e259cd2ed1837e0e9352fe3bd8f93d3025a70f59612d"]
+        p = PB._file_prov(t, str(f))
+        assert p["source_origin"] == "hsdl.org" and "hsdl.org" in p["source"], p
+        assert p["source_url"] == PB.C.HIFLD_PORTAL_URL, p
+    finally:
+        del PB.HIFLD_KNOWN[sha]
+    ww = PB.HIFLD_KNOWN["a35916420f516b9f088c8b0b0c0779fe653a720cf7b04f55b9010d8ed4046e4b"]
+    assert "239290" in ww["provenance_check"] and ww["source_url"].endswith("/239262")
+    hf = tmp_path / "hf"
+    hf.mkdir()
+    for n, fn in HIFLD_FILES.items():
+        _hifld_gpkg(str(hf / fn), n)
+    got = [e for e in PB.registry(hifld_folder=str(hf)) if e["group"] == "hifld" and
+           e["kind"] == "ogr"]
+    assert len(got) == 4
+    for e in got:
+        assert "Data Rescue Project copy" not in e["info"]["source"], e
+        assert "not recorded" in e["info"]["source"], e
