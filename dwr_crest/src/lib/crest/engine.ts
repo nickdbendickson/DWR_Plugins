@@ -288,6 +288,7 @@ export function analyze(dam: DamRecord): Analysis {
       aadt: r.aadt,
       roadClass: r.roadClass,
       habitable: r.habitable,
+      judgmentAsProbable: dam.judgmentAsProbable ?? true,
     });
     return {
       ...base,
@@ -304,7 +305,7 @@ export function analyze(dam: DamRecord): Analysis {
   });
 
   const maxVelocityFps = receptors.reduce((m, r) => Math.max(m, r.velocityFps), 0);
-  const screen = screenReceptors(receptors, dam.receptors);
+  const screen = screenReceptors(receptors, dam.receptors, { judgmentAsProbable: dam.judgmentAsProbable ?? true });
   if (warnings.some((w) => w.startsWith("No DEM tie"))) {
     screen.level = "Review";
     screen.reasons.unshift("The crest could not be tied. Screening waits on a usable DEM crest.");
@@ -363,7 +364,9 @@ export function screenReceptors(
     unresolved?: boolean;
   })[],
   seeds: Pick<ReceptorSeed, "kind" | "habitable">[] = [],
+  opts: { judgmentAsProbable?: boolean } = {},
 ): Analysis["screen"] {
+  const judgmentAsProbable = opts.judgmentAsProbable ?? true;
   let level: ScreenLevel = "Low";
   let acerLevel: Analysis["screen"]["acerLevel"] = null;
   const reasons: string[] = [];
@@ -393,9 +396,20 @@ export function screenReceptors(
     );
   }
   reasons.push("Velocities are desk estimates (continuity on the schematic section), so TM 11 zones near a curve are approximate.");
+  // A High that only judgment-zone structures produce is labelled as such: it is the 5.3(f) default, not a TM 11 high-zone finding.
+  const highDrivers = receptors.filter((r) => r.ndClass === "High");
+  const judgmentDriven = (level as ScreenLevel) === "High" && highDrivers.length > 0 && highDrivers.every((r) => r.zone === "judgment");
+  const label = judgmentDriven ? "High (judgment zone counted)" : level;
+  if (judgmentDriven) {
+    reasons.unshift(
+      "High comes only from the ACER TM 11 judgment zone, counted as probable loss of life (damsuite default, 5.3(f)). An engineer may call it Medium; switch \"Judgment zone\" to test that.",
+    );
+  }
   reasons.push(
-    "ND rules as in damsuite classify_nd: a habitable structure in the TM 11 high zone (or judgment zone, counted as probable loss of life) is High; any inundated habitable structure is at least Medium (economic, 5.2.2); roads by AADT and class. Barns and sheds are not habitable and do not count.",
+    `ND rules as in damsuite classify_nd: a habitable structure in the TM 11 high zone is High; in the judgment zone it is ${
+      judgmentAsProbable ? "counted as probable loss of life (High, flagged)" : "not counted as probable loss of life (Medium, flagged)"
+    }; any inundated habitable structure is at least Medium (economic, 5.2.2); roads by AADT and class. Barns and sheds are not habitable and do not count.`,
   );
   reasons.push("This is a desk screen on a schematic valley. It is not an ND Dam Safety classification of record.");
-  return { level, acerLevel, reasons, judgment };
+  return { level, label, judgmentAsProbable, acerLevel, reasons, judgment };
 }
