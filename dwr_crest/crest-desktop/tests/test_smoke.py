@@ -34,7 +34,7 @@ ASSET_RE = re.compile(r'(?:src|href)="\./(assets/[^"]+)"')
 IMPORT_RE = re.compile(r'(?:from\s*|import\s*\(?\s*)"\./([A-Za-z0-9_.-]+\.js)"')
 # Hosts a desk asset must never load from: the app has to work offline apart from basemap tiles.
 CDN_RE = re.compile(r"unpkg\.com|cdnjs\.cloudflare\.com|cdn\.jsdelivr\.net|fonts\.googleapis\.com|fonts\.gstatic\.com|esm\.sh|skypack")
-TILE_HOSTS = ("basemaps.cartocdn.com", "tile.openstreetmap.org", "arcgisonline.com")
+TILE_HOSTS = ("basemap.nationalmap.gov", "basemaps.cartocdn.com", "tile.openstreetmap.org", "arcgisonline.com")
 
 
 def sha256_lf(path: Path) -> str:
@@ -72,6 +72,8 @@ class BundleTests(unittest.TestCase):
     def test_offline_assets(self):
         index = (WEB / "index.html").read_text(encoding="utf-8")
         self.assertNotRegex(index, r'(?:src|href)="(?:https?:)?//', "index.html loads something remote")
+        icon = re.search(r'<link rel="icon"[^>]*href="\./([^"]+)"', index)
+        self.assertTrue(icon and (WEB / icon.group(1)).is_file(), "favicon missing (the window would 404 on it)")
         for f in (WEB / "assets").iterdir():
             if f.suffix not in (".js", ".css", ".html"):
                 continue
@@ -100,7 +102,7 @@ class BundleTests(unittest.TestCase):
 class SaveBridgeTests(unittest.TestCase):
     """Api.save_file with a stand-in pywebview: the Save dialog result decides where the export goes."""
 
-    def run_save(self, picked, name="nd00199.bdy", text="a\r\nb"):
+    def run_save(self, picked, name="nd00199.bdy", text="a\r\nb", api=None):
         calls = []
 
         class Win:
@@ -109,7 +111,7 @@ class SaveBridgeTests(unittest.TestCase):
                 return picked
 
         fake = types.SimpleNamespace(FileDialog=types.SimpleNamespace(SAVE=30), windows=[])
-        api = Api()
+        api = api or Api()
         api._window = Win()
         with mock.patch.dict(sys.modules, {"webview": fake}):
             return api.save_file(name, text), calls
@@ -127,6 +129,18 @@ class SaveBridgeTests(unittest.TestCase):
         res, calls = self.run_save(None, name="../../etc/x.csv")
         self.assertEqual(res, {"cancelled": True})
         self.assertEqual(calls[0][1]["save_filename"], "x.csv")
+
+    def test_remembers_last_save_folder(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as out:
+            settings = Path(d) / "settings.json"
+            _, calls = self.run_save(None, api=Api(settings_file=settings))
+            self.assertEqual(calls[0][1]["directory"], str(Path.home()))
+            target = Path(out) / "x.csv"
+            self.run_save((str(target),), name="x.csv", api=Api(settings_file=settings))
+            _, calls = self.run_save(None, api=Api(settings_file=settings))  # a new session reads the file
+            self.assertEqual(calls[0][1]["directory"], str(Path(out).resolve()))
+        _, calls = self.run_save(None, api=Api(settings_file=settings))  # folder gone: back to home
+        self.assertEqual(calls[0][1]["directory"], str(Path.home()))
 
     def test_window_not_exposed_to_js(self):
         self.assertFalse([k for k in vars(Api()) if not k.startswith("_")])

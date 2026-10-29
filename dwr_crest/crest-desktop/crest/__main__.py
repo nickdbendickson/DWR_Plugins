@@ -8,6 +8,7 @@ inside a webview. If pywebview cannot start, the desk opens in the system browse
 from __future__ import annotations
 
 import errno
+import json
 import os
 import sys
 import threading
@@ -102,8 +103,34 @@ def _file_types(name: str) -> tuple[str, ...]:
 class Api:
     """Exposed to the page as window.pywebview.api (see src/lib/crest/save.ts)."""
 
-    def __init__(self) -> None:
-        self._window = None  # underscore: pywebview does not expose it to JS
+    def __init__(self, settings_file: Path | None = None) -> None:
+        # Underscored attributes are not exposed to JS by pywebview.
+        self._window = None
+        self._settings_file = settings_file  # remembers the last Save folder across sessions
+
+    def _start_dir(self) -> str:
+        """The folder of the last export if it still exists, else the home folder."""
+        try:
+            last = json.loads(self._settings_file.read_text(encoding="utf-8")).get("last_save_dir") if self._settings_file else None
+        except (OSError, ValueError, AttributeError):
+            last = None
+        return last if isinstance(last, str) and Path(last).is_dir() else str(Path.home())
+
+    def _remember_dir(self, folder: Path) -> None:
+        if not self._settings_file:
+            return
+        try:
+            data = json.loads(self._settings_file.read_text(encoding="utf-8")) if self._settings_file.is_file() else {}
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data["last_save_dir"] = str(folder)
+        try:
+            self._settings_file.parent.mkdir(parents=True, exist_ok=True)
+            self._settings_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except OSError:
+            pass  # not worth failing an export over
 
     def save_file(self, name: str, text: str) -> dict:
         import webview
@@ -112,12 +139,13 @@ class Api:
         window = self._window or (webview.windows[0] if webview.windows else None)
         if window is None:
             return {"error": "no window"}
+        start = self._start_dir()
         try:
             picked = window.create_file_dialog(
-                _save_dialog_type(webview), directory=str(Path.home()), save_filename=name, file_types=_file_types(name)
+                _save_dialog_type(webview), directory=start, save_filename=name, file_types=_file_types(name)
             )
         except Exception:  # some backends reject the file_types filter
-            picked = window.create_file_dialog(_save_dialog_type(webview), directory=str(Path.home()), save_filename=name)
+            picked = window.create_file_dialog(_save_dialog_type(webview), directory=start, save_filename=name)
         if not picked:
             return {"cancelled": True}
         path = picked if isinstance(picked, str) else picked[0]
@@ -125,6 +153,7 @@ class Api:
             write_text(Path(path), text)
         except OSError as e:
             return {"error": str(e)}
+        self._remember_dir(Path(path).resolve().parent)
         return {"saved": str(path)}
 
 
@@ -144,10 +173,10 @@ def main() -> None:
             webview.settings["ALLOW_DOWNLOADS"] = True  # belt and braces; exports use the Save dialog bridge
         except Exception:
             pass
-        api = Api()
-        api._window = webview.create_window(TITLE, url, js_api=api, width=1280, height=860, min_size=(900, 600))
         store = storage_dir()
         store.mkdir(parents=True, exist_ok=True)
+        api = Api(settings_file=store / "crest-settings.json")
+        api._window = webview.create_window(TITLE, url, js_api=api, width=1280, height=860, min_size=(900, 600))
         webview.start(private_mode=False, storage_path=str(store))
     except Exception as e:  # no GUI backend: use the system browser (downloads work there)
         print(f"Crest desktop: no webview ({e}). Opening {url} in the browser; press Ctrl+C to stop.")

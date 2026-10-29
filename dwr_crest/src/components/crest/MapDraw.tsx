@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { MapContainer, TileLayer, FeatureGroup, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, FeatureGroup, LayersControl, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
@@ -7,8 +7,11 @@ import "leaflet-draw";
 import iconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
 import iconUrl from "leaflet/dist/images/marker-icon.png";
 import shadowUrl from "leaflet/dist/images/marker-shadow.png";
+import { basemaps } from "@/lib/crest/basemap";
 import { initialView, ND_CENTER } from "@/lib/crest/mapview";
 import type { DamGeometry, GeoJSONFeature } from "@/lib/crest/types";
+
+const LAYERS = basemaps(import.meta.env);
 
 // Marker icons are bundled (no CDN), so the map and drawing tools work offline; only basemap tiles need the network.
 delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl;
@@ -118,10 +121,13 @@ export function MapDraw({ geometry, lat, lon, onChange }: Props) {
         zoom={"zoom" in view ? view.zoom : 10}
         style={{ height: "100%", width: "100%" }}
       >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-        />
+        <LayersControl position="topright">
+          {LAYERS.map((b, i) => (
+            <LayersControl.BaseLayer key={b.id} name={b.name} checked={i === 0}>
+              <TileLayer url={b.url} attribution={b.attribution} maxZoom={19} maxNativeZoom={b.maxZoom} />
+            </LayersControl.BaseLayer>
+          ))}
+        </LayersControl>
         <DrawControl geometry={geometry} lat={lat} lon={lon} onChange={onChange} />
       </MapContainer>
     </div>

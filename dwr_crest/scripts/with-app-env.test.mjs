@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
+import { tempDir } from "./test-tmp.mjs";
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import {
   APP_ENV_REL_PATH,
   mergeAppEnv,
+  withLocalBin,
   parseAppEnv,
   projectRoot,
   readAppEnv,
@@ -18,7 +19,7 @@ const WRAPPER = join(projectRoot(), "scripts/with-app-env.mjs");
 const PRINT_FLAG = "process.stdout.write(String(process.env.VITE_AUTH_ENABLED));";
 
 function makeWorkspace(appEnvJson) {
-  const root = mkdtempSync(join(tmpdir(), "app-env-"));
+  const root = tempDir("app-env-");
   if (appEnvJson !== undefined) {
     mkdirSync(join(root, ".grok"), { recursive: true });
     writeFileSync(join(root, APP_ENV_REL_PATH), appEnvJson);
@@ -116,7 +117,7 @@ test("a signal-killed command is never reported as success", async () => {
 test("the CLI still runs when invoked through a symlinked path", async () => {
   // node realpaths import.meta.url but not process.argv[1], so a raw comparison
   // turns the wrapper into a no-op that exits 0 without starting anything.
-  const link = join(mkdtempSync(join(tmpdir(), "app-env-link-")), "scripts");
+  const link = join(tempDir("app-env-link-"), "scripts");
   symlinkSync(join(projectRoot(), "scripts"), link);
   const { stdout } = await execFileAsync(process.execPath, [
     join(link, "with-app-env.mjs"),
@@ -125,4 +126,19 @@ test("the CLI still runs when invoked through a symlinked path", async () => {
     PRINT_FLAG,
   ]);
   assert.equal(stdout, "false");
+});
+
+test("puts the project's node_modules/.bin first on PATH (vite resolves without npm run)", () => {
+  const root = "/repo";
+  const env = withLocalBin({ PATH: "/usr/bin" }, root);
+  assert.equal(env.PATH.split(":")[0], join(root, "node_modules", ".bin"));
+  assert.equal(withLocalBin(env, root).PATH, env.PATH);
+  assert.equal(withLocalBin({ Path: "C" }, root).Path.split(/[:;]/)[0], join(root, "node_modules", ".bin"));
+});
+
+test("the CLI finds vite with a PATH that lacks node_modules/.bin", async () => {
+  const { stdout } = await execFileAsync(process.execPath, [WRAPPER, "vite", "--version"], {
+    env: { PATH: "/usr/bin:/bin" },
+  });
+  assert.match(stdout, /vite\/\d/);
 });
