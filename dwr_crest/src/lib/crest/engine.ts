@@ -1,10 +1,7 @@
 import { rankReceptor } from "./acer.ts";
+import { ACFT, ACRE, CFS, FT, froehlich1995Peak, froehlich2008, routedHydrograph, thin } from "./breach.ts";
 import type { Analysis, BreachMethod, DamRecord, EngineName, FailureMode, ReceptorSeed, ScreenLevel } from "./types.ts";
 
-const FT = 0.3048;
-const ACFT_TO_M3 = 1233.48184;
-const CFS_PER_CMS = 35.3146667;
-const G = 9.80665;
 const TIE_BAND = 100;
 
 export const STEPS = [
@@ -66,14 +63,6 @@ function tieValue(
   return { navd: stated, warning: null };
 }
 
-function froehlich(volumeM3: number, heightM: number, mode: FailureMode) {
-  const ko = mode === "overtopping" ? 1.3 : 1.0;
-  const widthM = 0.27 * ko * volumeM3 ** 0.32 * heightM ** 0.04;
-  const timeS = 63.2 * Math.sqrt(volumeM3 / (G * heightM * heightM));
-  const peakCms = 0.607 * volumeM3 ** 0.295 * heightM ** 1.24;
-  return { widthM, timeS, peakCms };
-}
-
 function macdonald(storageAcFt: number, heightFt: number, lengthFt: number) {
   const erodedAcFt = 0.0261 * (storageAcFt * heightFt) ** 0.769;
   const throughFt = 16 + 3 * heightFt;
@@ -93,42 +82,18 @@ function tr60(heightFt: number, lengthFt: number, mode: FailureMode) {
   return { widthFt, timeHr, capped };
 }
 
-function hydrograph(peakCms: number, timeS: number, volumeM3: number) {
-  const n = 56;
-  const tEnd = timeS * 2.4;
-  const shape: { t: number; q: number }[] = [];
-  for (let i = 0; i <= n; i++) {
-    const t = (i / n) * tEnd;
-    let s: number;
-    if (t <= timeS) {
-      const p = 0.5 * (1 - Math.cos(Math.PI * (t / timeS)));
-      s = Math.sin((Math.PI * p) / 2);
-    } else {
-      s = Math.exp(-(t - timeS) / (0.42 * timeS));
-    }
-    shape.push({ t, q: s });
-  }
-  let area = 0;
-  for (let i = 1; i < shape.length; i++) {
-    area += 0.5 * (shape[i].q + shape[i - 1].q) * (shape[i].t - shape[i - 1].t);
-  }
-  const scale = area > 0 ? volumeM3 / area : peakCms;
-  const fittedCms = Math.max(...shape.map((p) => p.q)) * scale;
-  return {
-    empiricalPeakCfs: peakCms * CFS_PER_CMS,
-    fittedPeakCfs: fittedCms * CFS_PER_CMS,
-    series: shape.map((p) => ({
-      tHr: p.t / 3600,
-      qCfs: p.q * scale * CFS_PER_CMS,
-    })),
-  };
-}
-
+/** Decay rates of the schematic valley. These are desk curves, not runs of any 2D model. */
 const ENGINE_DECAY: Record<EngineName, { k: number; label: string }> = {
-  lisflood: { k: 1.85, label: "LISFLOOD-style spread" },
-  anuga: { k: 2.25, label: "ANUGA-style mesh" },
-  routing: { k: 3.15, label: "1D routing" },
+  lisflood: { k: 1.85, label: "Slow decay (schematic valley, not a LISFLOOD-FP run)" },
+  anuga: { k: 2.25, label: "Medium decay (schematic valley, not an ANUGA run)" },
+  routing: { k: 3.15, label: "Fast decay (schematic valley, not a routing model)" },
 };
+
+export const VELOCITY_BASIS =
+  "Estimate: continuity on the schematic section, V = Q(x) / (valley width × depth), with Q(x) the routed peak decayed like the depth; limited to 0.1–14 ft/s. Not a hydraulic model velocity.";
+
+/** Longest desk reach (km). Structures past the reach are reported unresolved. */
+export const MAX_REACH_KM = 100;
 
 const METHOD_LABEL: Record<BreachMethod, string> = {
   froehlich: "Froehlich 2008",
@@ -141,7 +106,7 @@ export function analyze(dam: DamRecord): Analysis {
   const storage = clamp(finite(dam.storageAcFt, 10), 1, 500000);
   const lengthFt = clamp(finite(dam.lengthFt, 100), 40, 20000);
   const heightM = heightFt * FT;
-  const volumeM3 = storage * ACFT_TO_M3;
+  const volumeM3 = storage * ACFT;
 
   const localCrest = isLocalElev(dam.crestFt);
   const warnings: string[] = [];
@@ -186,28 +151,43 @@ export function analyze(dam: DamRecord): Analysis {
     if (w) warnings.push(w);
   }
 
-  const fr = froehlich(volumeM3, heightM, dam.failureMode);
-  let widthFt = fr.widthM / FT;
-  let timeHr = fr.timeS / 3600;
-  let capped = false;
+  // Breach geometry (DamSafety_Runner core/breach.py _common): the reservoir bottom is the top of
+  // dam minus the dam height; the breach bottom is the tied streambed when it lies between them.
+  const topM = crestNavd * FT;
+  const resBottomM = topM - heightM;
+  let breachBottomM = resBottomM;
+  if (bed.navd != null && bed.navd * FT > resBottomM && bed.navd * FT < topM - FT) {
+    breachBottomM = bed.navd * FT;
+  }
+  const wse0M = topM; // ND 5.1.1 sunny day: pool at the top of dam
+  const headM = wse0M - breachBottomM;
+  const hbM = topM - breachBottomM;
   const notes: string[] = [];
+  const mode = dam.failureMode === "overtopping" ? "overtopping" : "piping";
+  const fr = froehlich2008(volumeM3, hbM, mode);
+  let widthFt = fr.bAvg / FT;
+  let timeHr = fr.tf / 3600;
+  let z: number = fr.z;
+  let capped = false;
 
   if (dam.method === "macdonald") {
     const m = macdonald(storage, heightFt, lengthFt);
     widthFt = m.widthFt;
     timeHr = m.timeHr;
     capped = m.capped;
+    z = 1;
     notes.push(
-      `Eroded embankment about ${m.erodedAcFt.toFixed(0)} ac-ft (Wahl form of MacDonald, earthfill).`,
+      `Eroded embankment about ${m.erodedAcFt.toFixed(0)} ac-ft (Wahl form of MacDonald, earthfill). Side slope taken as 1H:1V.`,
     );
   } else if (dam.method === "tr60") {
     const t = tr60(heightFt, lengthFt, dam.failureMode);
     widthFt = t.widthFt;
     timeHr = t.timeHr;
     capped = t.capped;
-    notes.push("Average width is a screening multiple of height, not a fitted regression.");
+    z = 0;
+    notes.push("TR-60 width is a screening multiple of height (rectangular opening), routed through the same weir.");
   } else {
-    notes.push("Width, time, and the reference peak are Froehlich 2008 / 1995 in SI, shown in feet and cfs.");
+    notes.push(`Froehlich (2008) ${mode}: average width, formation time and side slope ${z}H:1V in SI, shown in feet.`);
   }
 
   if (widthFt > lengthFt) {
@@ -216,45 +196,89 @@ export function analyze(dam: DamRecord): Analysis {
   }
   if (capped) notes.push("Breach width was capped at the dam length.");
 
-  const timeS = Math.max(timeHr, 0.05) * 3600;
-  const hydro = hydrograph(fr.peakCms, timeS, volumeM3);
+  const sa = finite(dam.surfaceAreaAc ?? NaN, NaN);
+  const routed = routedHydrograph({
+    topM,
+    resBottomM,
+    breachBottomM,
+    wse0M,
+    storageTopM3: volumeM3,
+    surfaceAreaTopM2: sa > 0 ? sa * ACRE : null,
+    bAvgM: widthFt * FT,
+    tfS: Math.max(timeHr, 0.05) * 3600,
+    z,
+  });
+  timeHr = routed.tfS / 3600;
+  const peakCfs = routed.peakCms / CFS;
+  const empiricalPeakCfs = froehlich1995Peak(routed.storageAtFailureM3, headM) / CFS;
+  const thinned = thin(routed.t, routed.q);
+  const series = thinned.t.map((t, i) => ({ tHr: t / 3600, qCfs: thinned.q[i] / CFS }));
   notes.push(
-    "The plotted hydrograph is sine-shaped, then scaled so its volume matches the stored water. The Froehlich peak is shown beside it and is not forced to that volume.",
+    "Outflow is routed through the opening (Runner core/breach.py): a trapezoidal weir, Q = 3.1·b·h^1.5 + 2.45·z·h^2.5 (US units), whose crest lowers from the top of dam to the breach bottom and whose bottom width grows linearly over the formation time, with the pool drawing down by level-pool routing until it is drained.",
   );
+  notes.push(
+    `Head on the breach ${fmtFt(headM / FT)} ft (top of dam to breach bottom). The Froehlich (1995) peak check uses that head, not the dam height.`,
+  );
+  notes.push(...routed.notes);
 
+  // Schematic valley. L0 sets the decay scale; the reach runs until the desk depth falls below
+  // the 0.1 ft wet threshold (or the reach the user sets), up to MAX_REACH_KM.
   const decay = ENGINE_DECAY[dam.engine] ?? ENGINE_DECAY.lisflood;
-  const maxDepthFt = clamp((heightFt * 0.42 * (hydro.fittedPeakCfs / 8000) ** 0.18), 0.4, heightFt * 0.9);
-  const lengthM = clamp(900 + Math.sqrt(storage) * 80, 1200, 6000);
-  const stations = Array.from({ length: 41 }, (_, i) => {
-    const s = i / 40;
-    const halfM = 28 + 340 * s ** 0.72;
-    const depthFt = maxDepthFt * Math.exp(-decay.k * s);
-    return { s, halfM, depthFt };
+  const maxDepthFt = clamp(heightFt * 0.42 * (peakCfs / 8000) ** 0.18, 0.4, heightFt * 0.9);
+  const baseM = 900 + Math.sqrt(storage) * 80;
+  const wetReachM = (baseM * Math.log(Math.max(maxDepthFt / 0.1, 1.0001))) / decay.k;
+  const userReachKm = finite(dam.reachKm ?? NaN, NaN);
+  const reachSource = userReachKm > 0 ? "user" : "wet";
+  const lengthM = clamp(userReachKm > 0 ? userReachKm * 1000 : wetReachM, 500, MAX_REACH_KM * 1000);
+  const depthAt = (xM: number) => maxDepthFt * Math.exp((-decay.k * xM) / baseM);
+  const halfAt = (xM: number) => 28 + 340 * (xM / baseM) ** 0.72;
+  const NST = 81;
+  const stations = Array.from({ length: NST }, (_, i) => {
+    const s = i / (NST - 1);
+    const xM = s * lengthM;
+    return { s, xKm: xM / 1000, halfM: halfAt(xM), depthFt: depthAt(xM) };
   });
 
-  const wetPairs: { a: (typeof stations)[number]; b: (typeof stations)[number] }[] = [];
+  let areaM2 = 0;
   for (let i = 1; i < stations.length; i++) {
     const a = stations[i - 1];
     const b = stations[i];
-    if (a.depthFt > 0.1 || b.depthFt > 0.1) wetPairs.push({ a, b });
+    if (a.depthFt > 0.1 || b.depthFt > 0.1) areaM2 += (b.s - a.s) * lengthM * (a.halfM + b.halfM);
   }
-  let areaM2 = 0;
-  for (const { a, b } of wetPairs) {
-    const dx = ((b.s - a.s) * lengthM);
-    areaM2 += dx * (a.halfM + b.halfM);
-  }
-  const acres = areaM2 / 4046.8564224;
+  const acres = areaM2 / ACRE;
 
   const receptors = dam.receptors.map((r) => {
-    const s = clamp(r.station, 0, 1);
-    const idx = Math.min(stations.length - 1, Math.round(s * (stations.length - 1)));
-    const st = stations[idx];
-    const depth = Math.max(0, st.depthFt - r.padFt);
+    const xM =
+      r.distanceKm != null && Number.isFinite(r.distanceKm) ? Math.max(0, r.distanceKm * 1000) : Math.max(0, r.station) * baseM;
+    const unresolved = xM > lengthM;
+    const base = {
+      id: r.id,
+      name: r.name,
+      kind: r.kind,
+      station: Math.min(1, xM / lengthM),
+      distanceKm: xM / 1000,
+      lateral: r.lateral,
+    };
+    if (unresolved) {
+      return {
+        ...base,
+        depthFt: 0,
+        velocityFps: 0,
+        arrivalHr: null,
+        flooded: false,
+        unresolved: true,
+        zone: null,
+        ndClass: null,
+        rankReason: `unresolved: ${(xM / 1000).toFixed(1)} km is past the ${(lengthM / 1000).toFixed(1)} km desk reach; not screened`,
+        needsJudgment: true,
+      };
+    }
+    const depth = Math.max(0, depthAt(xM) - r.padFt);
     const flooded = depth >= 0.1;
-    const widthFt = st.halfM * 2 * 3.28084;
-    const qHere = hydro.fittedPeakCfs * Math.exp(-decay.k * s);
+    const widthFt = halfAt(xM) * 2 * 3.28084;
+    const qHere = peakCfs * Math.exp((-decay.k * xM) / baseM);
     const velocity = flooded && depth > 0.05 ? clamp(qHere / (widthFt * depth), 0.1, 14) : 0;
-    const arrival = flooded ? (timeHr * 0.85 + s * (lengthM / Math.max(velocity * FT, 0.3)) / 3600) : null;
+    const arrival = flooded ? timeHr * 0.85 + xM / Math.max(velocity * FT, 0.3) / 3600 : null;
     const depthFt = flooded ? depth : 0;
     const velocityFps = flooded ? velocity : 0;
     const rank = rankReceptor({
@@ -266,15 +290,12 @@ export function analyze(dam: DamRecord): Analysis {
       habitable: r.habitable,
     });
     return {
-      id: r.id,
-      name: r.name,
-      kind: r.kind,
-      station: s,
-      lateral: r.lateral,
+      ...base,
       depthFt,
       velocityFps,
       arrivalHr: arrival,
       flooded,
+      unresolved: false,
       zone: rank.zone,
       ndClass: rank.class,
       rankReason: rank.reason,
@@ -304,10 +325,16 @@ export function analyze(dam: DamRecord): Analysis {
       widthFt,
       timeHr,
       capped,
-      empiricalPeakCfs: hydro.empiricalPeakCfs,
-      fittedPeakCfs: hydro.fittedPeakCfs,
-      volumeAcFt: storage,
-      series: hydro.series,
+      headFt: headM / FT,
+      bottomWidthFt: routed.bottomWidthM / FT,
+      sideSlope: z,
+      empiricalPeakCfs,
+      peakCfs,
+      timeToPeakHr: routed.timeToPeakS / 3600,
+      durationHr: routed.t[routed.t.length - 1] / 3600,
+      storageExponent: routed.storageExponent,
+      volumeAcFt: routed.releasedM3 / ACFT,
+      series,
       notes,
     },
     flood: {
@@ -316,6 +343,8 @@ export function analyze(dam: DamRecord): Analysis {
       maxVelocityFps,
       acres,
       lengthM,
+      reachSource,
+      velocityBasis: VELOCITY_BASIS,
       stations,
       receptors,
     },
@@ -330,7 +359,9 @@ const ZONE_ORDER = { low: 1, judgment: 2, high: 3 } as const;
 
 /** ND class from ranked receptors (damsuite classify_nd): the worst receptor class governs. */
 export function screenReceptors(
-  receptors: Pick<RankedReceptor, "name" | "kind" | "depthFt" | "velocityFps" | "zone" | "ndClass" | "rankReason" | "needsJudgment">[],
+  receptors: (Pick<RankedReceptor, "name" | "kind" | "depthFt" | "velocityFps" | "zone" | "ndClass" | "rankReason" | "needsJudgment"> & {
+    unresolved?: boolean;
+  })[],
   seeds: Pick<ReceptorSeed, "kind" | "habitable">[] = [],
 ): Analysis["screen"] {
   let level: ScreenLevel = "Low";
@@ -342,7 +373,9 @@ export function screenReceptors(
     if (habitable && r.zone && r.ndClass) {
       if (acerLevel == null || ZONE_ORDER[r.zone] > ZONE_ORDER[acerLevel]) acerLevel = r.zone;
     }
-    if (r.ndClass) {
+    if (r.unresolved) {
+      reasons.push(`${r.name}: ${r.rankReason}. The class could be higher than shown.`);
+    } else if (r.ndClass) {
       reasons.push(`${r.name}: ${r.ndClass} (${r.rankReason}; ${r.depthFt.toFixed(2)} ft at ${r.velocityFps.toFixed(2)} ft/s).`);
       if (level === "Low" || CLASS_ORDER[r.ndClass] > CLASS_ORDER[level as "High" | "Medium" | "Low"]) level = r.ndClass;
     } else if (r.depthFt > 0 && r.rankReason !== "dry") {
@@ -353,6 +386,13 @@ export function screenReceptors(
     }
   });
   if (reasons.length === 0) reasons.push("No seeded receptor is wet at 0.1 ft or more.");
+  const unresolved = receptors.filter((r) => r.unresolved).length;
+  if (unresolved > 0) {
+    reasons.push(
+      `${unresolved} receptor${unresolved === 1 ? " is" : "s are"} past the desk reach and unresolved. Extend the reach or model the valley before relying on this class.`,
+    );
+  }
+  reasons.push("Velocities are desk estimates (continuity on the schematic section), so TM 11 zones near a curve are approximate.");
   reasons.push(
     "ND rules as in damsuite classify_nd: a habitable structure in the TM 11 high zone (or judgment zone, counted as probable loss of life) is High; any inundated habitable structure is at least Medium (economic, 5.2.2); roads by AADT and class. Barns and sheds are not habitable and do not count.",
   );

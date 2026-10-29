@@ -169,6 +169,13 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
           <NumField label="Spillway" suffix="ft" value={dam.spillwayFt} step={0.1} onChange={(spillwayFt) => update({ spillwayFt })} />
           <NumField label="Normal pool" suffix="ft" value={dam.normalPoolFt} step={0.1} onChange={(normalPoolFt) => update({ normalPoolFt })} />
           <NumField label="Storage" suffix="ac-ft" value={dam.storageAcFt} onChange={(storageAcFt) => update({ storageAcFt })} />
+          <NumField
+            label="Surface area at top of dam"
+            suffix="ac, 0 = unknown"
+            value={dam.surfaceAreaAc ?? 0}
+            step={0.1}
+            onChange={(surfaceAreaAc) => update({ surfaceAreaAc })}
+          />
           <NumField label="Drainage" suffix="mi²" value={dam.drainageMi2} step={0.1} onChange={(drainageMi2) => update({ drainageMi2 })} />
           <NumField label="DEM crest" suffix="ft NAVD88" value={dam.demCrestFt} step={0.1} onChange={(demCrestFt) => update({ demCrestFt })} />
           <SelectField
@@ -235,9 +242,13 @@ function BreachStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         </div>
         <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-line sm:grid-cols-4">
           <Stat k="Average width" v={`${num(result.breach.widthFt, 0)} ft`} />
-          <Stat k="Volume-fitted peak" v={`${num(result.breach.fittedPeakCfs, 0)} cfs`} />
-          <Stat k="Froehlich peak" v={`${num(result.breach.empiricalPeakCfs, 0)} cfs`} />
-          <Stat k="Outflow volume" v={`${num(result.breach.volumeAcFt, 0)} ac-ft`} />
+          <Stat k="Head on breach" v={`${num(result.breach.headFt, 1)} ft`} />
+          <Stat k="Routed peak" v={`${num(result.breach.peakCfs, 0)} cfs`} />
+          <Stat k="Froehlich 1995 check" v={`${num(result.breach.empiricalPeakCfs, 0)} cfs`} />
+          <Stat k="Time to peak" v={`${num(result.breach.timeToPeakHr, 2)} hr`} />
+          <Stat k="Duration" v={`${num(result.breach.durationHr, 2)} hr`} />
+          <Stat k="Bottom width" v={`${num(result.breach.bottomWidthFt, 0)} ft`} />
+          <Stat k="Released volume" v={`${num(result.breach.volumeAcFt, 0)} ac-ft`} />
         </div>
       </div>
       <div className="rounded-md border border-line bg-card p-4">
@@ -265,18 +276,31 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
           <h2 className="text-xl">Schematic flood</h2>
           <p className="text-sm text-muted">
             {result.flood.engineLabel}. Depth falls downstream. Receptors are seeds on this valley, not an inventory.
+            Desk reach {num(result.flood.lengthM / 1000, 1)} km
+            {result.flood.reachSource === "user" ? " (set by you)" : " (to the 0.1 ft wet limit)"}; receptors past it are
+            unresolved.
           </p>
+          <p className="text-xs text-muted">Velocity: {result.flood.velocityBasis}</p>
         </div>
-        <SelectField
-          label="Desk engine"
-          value={dam.engine}
-          options={[
-            ["lisflood", "LISFLOOD-style"],
-            ["anuga", "ANUGA-style"],
-            ["routing", "1D routing"],
-          ]}
-          onChange={(engine) => update({ engine: engine as EngineName })}
-        />
+        <div className="flex flex-wrap items-end gap-3">
+          <SelectField
+            label="Desk decay curve"
+            value={dam.engine}
+            options={[
+              ["lisflood", "Slow decay (schematic)"],
+              ["anuga", "Medium decay (schematic)"],
+              ["routing", "Fast decay (schematic)"],
+            ]}
+            onChange={(engine) => update({ engine: engine as EngineName })}
+          />
+          <NumField
+            label="Reach"
+            suffix="km, 0 = auto"
+            value={dam.reachKm ?? 0}
+            step={0.5}
+            onChange={(reachKm) => update({ reachKm })}
+          />
+        </div>
       </div>
       <div className="overflow-hidden rounded-md border border-line">
         <ValleyMap flood={result.flood} />
@@ -300,7 +324,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
       <div className="grid grid-cols-3 gap-px overflow-hidden rounded-sm bg-line">
         <Stat k="Max depth" v={`${num(result.flood.maxDepthFt, 1)} ft`} />
         <Stat k="Wet area" v={`${num(result.flood.acres, 0)} ac`} />
-        <Stat k="Fastest seed" v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
+        <Stat k="Fastest seed (est.)" v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
       </div>
     </section>
   );
@@ -356,10 +380,10 @@ function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         </p>
       </div>
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-line sm:grid-cols-3">
-        <Stat k="Peak discharge" v={`${num(result.breach.fittedPeakCfs, 0)} cfs`} />
+        <Stat k="Peak discharge (routed)" v={`${num(result.breach.peakCfs, 0)} cfs`} />
         <Stat k="Flooded area" v={`${num(result.flood.acres, 0)} ac`} />
         <Stat k="Max depth" v={`${num(result.flood.maxDepthFt, 1)} ft`} />
-        <Stat k="Max velocity" v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
+        <Stat k="Max velocity (est.)" v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
         <Stat k="Wet receptors" v={String(result.flood.receptors.filter((r) => r.flooded).length)} />
         <Stat k="Screen" v={result.screen.level} />
       </div>
@@ -391,8 +415,9 @@ function ReceptorTable({ result }: { result: ReturnType<typeof analyze> }) {
           <tr>
             <th className="px-3 py-2 font-medium">Feature</th>
             <th className="px-3 py-2 font-medium">Kind</th>
+            <th className="px-3 py-2 font-medium">km</th>
             <th className="px-3 py-2 font-medium">Depth ft</th>
-            <th className="px-3 py-2 font-medium">Vel ft/s</th>
+            <th className="px-3 py-2 font-medium">Vel ft/s (est.)</th>
             <th className="px-3 py-2 font-medium">Arrival h</th>
             <th className="px-3 py-2 font-medium">D × V</th>
             <th className="px-3 py-2 font-medium">TM 11 zone</th>
@@ -404,7 +429,8 @@ function ReceptorTable({ result }: { result: ReturnType<typeof analyze> }) {
             <tr key={r.id} className="border-t border-line">
               <td className="px-3 py-2">{r.name}</td>
               <td className="px-3 py-2 capitalize">{r.kind}</td>
-              <td className="px-3 py-2 tabular-nums">{r.flooded ? num(r.depthFt, 2) : "dry"}</td>
+              <td className="px-3 py-2 tabular-nums">{num(r.distanceKm, 1)}</td>
+              <td className="px-3 py-2 tabular-nums">{r.unresolved ? "unresolved" : r.flooded ? num(r.depthFt, 2) : "dry"}</td>
               <td className="px-3 py-2 tabular-nums">{r.flooded ? num(r.velocityFps, 2) : "—"}</td>
               <td className="px-3 py-2 tabular-nums">{r.arrivalHr == null ? "—" : num(r.arrivalHr, 2)}</td>
               <td className="px-3 py-2 tabular-nums">
@@ -418,7 +444,7 @@ function ReceptorTable({ result }: { result: ReturnType<typeof analyze> }) {
           ))}
         </tbody>
       </table>
-      <p className="px-3 py-2 text-xs text-muted">D × V is depth times velocity. It is not a pass or fail.</p>
+      <p className="px-3 py-2 text-xs text-muted">D × V is depth times velocity. It is not a pass or fail. Velocities are desk estimates. Unresolved receptors are past the desk reach and are not screened.</p>
     </div>
   );
 }

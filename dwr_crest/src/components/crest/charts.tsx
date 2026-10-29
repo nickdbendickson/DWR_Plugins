@@ -82,12 +82,13 @@ export function ValleyMap({ flood }: { flood: Analysis["flood"] }) {
               cx={cx}
               cy={cy}
               r={r.kind === "road" ? 5 : 7}
-              fill={r.flooded ? "var(--color-card)" : "var(--color-ink)"}
+              fill={r.unresolved ? "none" : r.flooded ? "var(--color-card)" : "var(--color-ink)"}
               stroke="var(--color-ink)"
               strokeWidth="1.5"
+              strokeDasharray={r.unresolved ? "3 2" : undefined}
             />
             <text x={cx + 10} y={cy + 4} fill="var(--color-ink)" fontSize="12">
-              {r.name}
+              {r.unresolved ? `${r.name} (unresolved, ${r.distanceKm.toFixed(1)} km)` : r.name}
             </text>
           </g>
         );
