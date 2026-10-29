@@ -33,8 +33,9 @@ optional:
 
   (3.10.35; absent = no checkpoints, no partial file, as before. From 3.10.38
   anuga_model.resolve_checkpoints adds them for a long run; results never change)
-  ckpt_every_min  wall-clock minutes between ANUGA checkpoints (domain.set_checkpointing
-                  checkpoint_time); ckpt_every_steps = every that many yield steps instead
+  ckpt_every_min  wall-clock minutes between ANUGA checkpoints (3.12.4: timed by the worker
+                  on time.monotonic(), saved under ANUGA's pickle name; before, ANUGA's
+                  time.time() checkpoint_time); ckpt_every_steps = every that many yield steps instead
                   (used when ckpt_every_min is 0). 0 / absent = no checkpoints.
   ckpt_keep       newest checkpoints kept (default 2; older pickles are deleted)
   ckpt_dir        folder next to the job (default "anuga_checkpoints"); the pickles go in
@@ -57,6 +58,10 @@ stats as a JSON string. Progress goes to stdout as lines starting "PROGRESS".
 From 3.10.70 each yield step's line ends with utc=<wall clock> steps=<internal steps so far
 in this process> dsteps=<since the last yield> wall_s=<wall seconds since the last yield>
 rate=<model s per wall s> (appended; "PROGRESS <pct> t=<s>s" is unchanged).
+From 3.12.4 it also ends with cpu_s=<CPU s of the whole process, all threads> mono_s=<monotonic
+wall s> paused_s=<host pause estimate> and, for a paused step, "box paused ~N s"
+(anuga_dtdiag.YieldClock); after the last step a "box paused ~N s in total ..." line, and
+stats["host_pauses"] in result.npz.
 """
 import hashlib
 import inspect
@@ -1003,6 +1008,27 @@ def checkpoint_path(ckdir, t):
     return os.path.join(ckdir, DOMAIN_NAME) + "_" + str(float(t)) + ".pickle"
 
 
+def save_checkpoint(domain, ckdir, t):
+    """3.12.4: pickle the domain under ANUGA's own checkpoint name (as Domain.evolve does,
+    with the same pickler), via <name>.tmp + rename so a kill never leaves half a pickle.
+    '' when saved, else the error (the run goes on without checkpoints)."""
+    path = checkpoint_path(ckdir, t)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "wb") as f:
+            pickler().dump(domain, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        return ""
+    except Exception as e:      # noqa: BLE001 - never stops the run
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return "{}: {}".format(type(e).__name__, str(e)[:200])
+
+
 def write_json_atomic(path, obj):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -1403,6 +1429,7 @@ def main(job_path, out_path):
         domain, info = build_domain()
         env = Envelope(domain, arrival_depth, vmin_depth)
     ntri = info["triangles"]
+    mtimer = None                  # 3.12.4: the every-N-minutes checkpoint timer (monotonic)
     if ck is not None and ck["checkpoint"]:
         err, nbytes = trial_pickle(domain)
         ckinfo["checkpoint_mb"] = round(nbytes / 1024.0 ** 2, 3)
@@ -1425,8 +1452,12 @@ def main(job_path, out_path):
                         "anuga_version": getattr(anuga, "__version__", "?")}
                 write_json_atomic(os.path.join(ckdir, META_NAME), meta)
             if ck["every_min"] > 0:
-                domain.set_checkpointing(checkpoint=True, checkpoint_dir=ckdir,
-                                         checkpoint_time=60.0 * ck["every_min"])
+                # 3.12.4: the worker saves on its own monotonic timer (MonoTimer below);
+                # ANUGA's checkpoint_time compares time.time(), so the first yield after a
+                # VM freeze always saved an extra checkpoint
+                domain.set_checkpointing(checkpoint=False)
+                mtimer = anuga_dtdiag.MonoTimer(60.0 * ck["every_min"])
+                ckinfo["checkpoint_timer"] = "monotonic"
             else:
                 domain.set_checkpointing(checkpoint=True, checkpoint_dir=ckdir,
                                          checkpoint_step=ck["every_steps"])
@@ -1453,7 +1484,7 @@ def main(job_path, out_path):
             old_term = signal.signal(signal.SIGTERM, _term)
         except (ValueError, OSError, AttributeError):   # not the main thread / no SIGTERM
             old_term = None
-    last_flush = time.time()
+    last_flush = time.monotonic()       # 3.12.4: monotonic (a VM freeze is not a period)
     # 3.10.55: outflow-only edges that mirrored inward-moving water (sampled at each yield step)
     mirror = {"boundaries": list({id(b): b for b in (getattr(domain, "boundary_map", None)
                                                      or {}).values()
@@ -1490,6 +1521,7 @@ def main(job_path, out_path):
             icap.update(domain, t)
             yc = clock.tick(domain, t)
             fstep.on_yield(t, yc["steps"])
+            # 3.12.4: ... cpu_s= mono_s= paused_s= [box paused ~N s] appended (YieldClock)
             print("PROGRESS {:.2f} t={:.0f}s{}".format(100.0 * t / sim_time, t,
                                                        clock.suffix(yc)), flush=True)
             if dtdiag is not None:
@@ -1508,9 +1540,24 @@ def main(job_path, out_path):
                 mirror["steps"] += int(n_in > 0)
             if ck is None:
                 continue
-            saved = (ck["checkpoint"] and not ckinfo.get("checkpoint_error")
-                     and float(t) not in meta["times"]
-                     and os.path.exists(checkpoint_path(ckdir, t)))
+            if mtimer is not None and not ckinfo.get("checkpoint_error"):
+                if yc.get("paused_by") == "cpu":    # monotonic ran through that freeze
+                    mtimer.add_pause(yc.get("paused_s"))
+                saved = False
+                if mtimer.due() and float(t) not in meta["times"]:
+                    err = save_checkpoint(domain, ckdir, t)
+                    mtimer.reset()
+                    if err:
+                        ckinfo["checkpoint_error"] = "checkpoints stopped at t={:.0f}s: " \
+                            "{}".format(float(t), err)
+                        print("PROGRESS {:.2f} {}".format(100.0 * t / sim_time,
+                                                          ckinfo["checkpoint_error"]), flush=True)
+                    else:
+                        saved = True
+            else:
+                saved = (ck["checkpoint"] and not ckinfo.get("checkpoint_error")
+                         and float(t) not in meta["times"]
+                         and os.path.exists(checkpoint_path(ckdir, t)))
             if saved:
                 meta["times"] = prune_checkpoints(ckdir, meta["times"] + [float(t)], ck["keep"])
                 write_json_atomic(os.path.join(ckdir, META_NAME), meta)
@@ -1523,15 +1570,16 @@ def main(job_path, out_path):
                 if free is not None and free < 1.2 * ckinfo["checkpoint_mb"] * 1024.0 ** 2 \
                         + DISK_MARGIN_B:
                     domain.set_checkpointing(checkpoint=False)
+                    mtimer = None
                     ckinfo["checkpoint_error"] = "checkpoints stopped at t={:.0f}s: {:.0f} MB " \
                         "free".format(float(t), free / 1024.0 ** 2)
                     print("PROGRESS {:.2f} {}".format(100.0 * t / sim_time,
                                                       ckinfo["checkpoint_error"]), flush=True)
             if rindex is not None and (saved or (
                     ck["partial_every_min"] > 0
-                    and time.time() - last_flush >= 60.0 * ck["partial_every_min"])):
+                    and time.monotonic() - last_flush >= 60.0 * ck["partial_every_min"])):
                 flush(t, "checkpoint" if saved else "periodic")
-                last_flush = time.time()
+                last_flush = time.monotonic()
     except (SystemExit, KeyboardInterrupt):
         if rindex is not None:
             try:
@@ -1549,6 +1597,10 @@ def main(job_path, out_path):
                 dtdiag.f.flush()
             except Exception:           # noqa: BLE001
                 pass
+
+    # 3.12.4: the run's host-pause total (also stats["host_pauses"])
+    print("PROGRESS {:.2f} {}".format(100.0 * domain.get_time() / sim_time, clock.summary_line()),
+          flush=True)
 
     # volume check
     h = domain.quantities["stage"].centroid_values - domain.quantities["elevation"].centroid_values
@@ -1623,6 +1675,7 @@ def main(job_path, out_path):
     omp_note = runtime_note(threads, rt_n, rt_name, omp_note)
     if omp_note:
         stats["omp_note"] = omp_note
+    stats["host_pauses"] = clock.summary()
     if dtdiag is not None:
         stats["dt_diag"] = dtdiag.finish()
     if ck is not None:
