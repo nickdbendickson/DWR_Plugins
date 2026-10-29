@@ -162,8 +162,12 @@ def test_live_path_with_mock_fetcher_caches_and_paces(tmp_path):
             return 200, hit[0].read_bytes()
         raise AssertionError("unexpected request " + url)
 
-    c = ss.StreamStatsClient(tmp_path / "c", fetcher=fake, min_interval_s=0, plugin_version="test")
+    c = ss.StreamStatsClient(tmp_path / "c", fetcher=fake, min_interval_s=0, plugin_version="test",
+                             transport="qgis")
     r = c.run("ND", *POINTS["DWR2801"], "DWR2801_", check_versions=False)
+    assert r["transport"] == "qgis" and all(e["transport"] == "qgis" for e in r["requests"])
+    prov = json.loads(ss.save_run(r, tmp_path / "out", "DWR2801")["provenance"].read_text())
+    assert prov["transport"] == "qgis" and all(q["transport"] == "qgis" for q in prov["requests"])
     assert {p["code"]: p["q_cfs"] for p in ss.peak_table(r)}["PK0_2AEP"] == pytest.approx(1300.0)
     assert calls and all(ua and ua.startswith("DamSafety_PMP/test") for _m, _u, ua in calls)
     assert not any(e["cached"] for e in r["requests"])
@@ -171,6 +175,27 @@ def test_live_path_with_mock_fetcher_caches_and_paces(tmp_path):
     c2 = ss.StreamStatsClient(tmp_path / "c", fetcher=_no_net, offline=True, min_interval_s=0)
     c2.run("ND", *POINTS["DWR2801"], "DWR2801_")       # second run: all from the new cache
     assert len(calls) == n
+
+
+def test_network_error_is_plain_with_proxy_hint(tmp_path):
+    """urllib fallback (outside QGIS): nothing listening -> NetworkError naming the proxy env vars."""
+    import socket
+    sk = socket.socket()
+    sk.bind(("127.0.0.1", 0))
+    port = sk.getsockname()[1]
+    sk.close()
+    c = ss.StreamStatsClient(tmp_path / "c", min_interval_s=0)
+    with pytest.raises(ss.NetworkError) as ei:
+        c.request("GET", "http://127.0.0.1:%d/ss-delineate/v1/x" % port)
+    msg = str(ei.value)
+    assert msg.startswith("Could not reach StreamStats (127.0.0.1:%d): " % port)
+    assert "HTTPS_PROXY" in msg and "Errno" not in msg
+    assert isinstance(ei.value, ss.StreamStatsError) and "Traceback" not in msg
+
+
+def test_network_error_default_hint_is_qgis_proxy():
+    e = ss.NetworkError("https://streamstats.usgs.gov/x", "Connection refused")
+    assert "Settings > Options > Network" in str(e) and e.reason == "Connection refused"
 
 
 def test_cancel_stops_before_first_request(tmp_path):

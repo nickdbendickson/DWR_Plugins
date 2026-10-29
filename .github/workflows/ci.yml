@@ -127,7 +127,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           # saved StreamStats responses only: no request goes to USGS from CI
           python DamSafety_PMP/tests/run_tests.py
-          python -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_PMP/tests/test_streamstats.py', 'DamSafety_PMP/tests/test_streamstats_dialog.py']); sys.stdout.flush(); os._exit(int(rc))"
+          python -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_PMP/tests/test_streamstats.py', 'DamSafety_PMP/tests/test_streamstats_dialog.py', 'DamSafety_PMP/tests/test_qgis_transport.py']); sys.stdout.flush(); os._exit(int(rc))"
 
   model-tests:
     # The Runner's --models suite: the fast tests plus every test that runs a real model.

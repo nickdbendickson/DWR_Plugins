@@ -2,7 +2,10 @@
 Dakota peak-flow regression estimates for a dam's outlet point (read-only web services).
 
 Pure Python 3 standard library, typed, no QGIS: the plugin's dialog runs it in a QgsTask and the
-tests run it on saved responses with no network.
+tests run it on saved responses with no network. The HTTP transport is injected (`fetcher`): the
+plugin passes `qgis_transport.QgisFetcher` (QgsBlockingNetworkRequest, so QGIS's proxy,
+authentication and SSL settings apply); `http_fetch` (urllib) is only the fallback for headless
+use and tests.
 
 Workflow (the USGS 'StreamStatsFlowStatisticsWorkflow.ipynb'; the services that replaced the
 legacy streamstatsservices, which were switched off on 2026-01-30):
@@ -76,23 +79,46 @@ PEAK_GROUP = "Peak-Flow Statistics"
 ENVELOPE_CODE = "PKMAX_CB_R"
 ASEP = "Average standard error of prediction"
 
-# fetcher(method, url, body_bytes_or_None, headers) -> (status, body_bytes)
+# fetcher(method, url, body_bytes_or_None, headers) -> (status, body_bytes). A fetcher returns
+# any HTTP answer (also 4xx / 5xx, with its body) and raises NetworkError when there is none.
 Fetcher = Callable[[str, str, Optional[bytes], Dict[str, str]], Tuple[int, bytes]]
+TIMEOUT_S = 300.0
 
-
-def http_fetch(method: str, url: str, body: Optional[bytes],
-               headers: Dict[str, str]) -> Tuple[int, bytes]:
-    """urllib (honours the http(s)_proxy environment variables)."""
-    req = urllib.request.Request(url, data=body, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=300) as r:
-            return r.status, r.read()
-    except urllib.error.HTTPError as e:  # keep the error body for the message
-        return e.code, e.read()
+QGIS_PROXY_HINT = ("Check the internet connection and the proxy settings in QGIS (Settings > "
+                   "Options > Network), then try again.")
+ENV_PROXY_HINT = ("Check the internet connection and the HTTPS_PROXY / HTTP_PROXY environment "
+                  "variables, then try again.")
 
 
 class StreamStatsError(RuntimeError):
     pass
+
+
+class NetworkError(StreamStatsError):
+    """No HTTP answer (no connection, DNS, proxy, SSL, timeout). str() is the plain message."""
+
+    def __init__(self, url: str, reason: str, hint: str = QGIS_PROXY_HINT) -> None:
+        host = urllib.parse.urlsplit(url).netloc or url
+        super().__init__(f"Could not reach StreamStats ({host}): {reason}. {hint}")
+        self.url, self.reason = url, reason
+
+
+def http_fetch(method: str, url: str, body: Optional[bytes],
+               headers: Dict[str, str]) -> Tuple[int, bytes]:
+    """Fallback transport (headless / tests): urllib, which honours only the http(s)_proxy
+    environment variables, not QGIS's proxy settings."""
+    req = urllib.request.Request(url, data=body, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:  # keep the error body for the message
+        return e.code, e.read()
+    except (urllib.error.URLError, OSError) as e:   # incl. socket.timeout, ssl errors
+        reason = getattr(e, "reason", None) or e
+        text = getattr(reason, "strerror", None) or str(reason)        # no "[Errno 111]"
+        if isinstance(reason, TimeoutError) or "timed out" in text:
+            text = "no answer within %d s" % TIMEOUT_S
+        raise NetworkError(url, text or type(e).__name__, ENV_PROXY_HINT) from e
 
 
 class NotOnStreamError(StreamStatsError):
@@ -120,6 +146,7 @@ def _utc() -> str:
 class StreamStatsClient:
     cache_dir: Path
     fetcher: Fetcher = http_fetch
+    transport: str = "urllib"      # recorded in the provenance: 'qgis' (plugin) or 'urllib'
     offline: bool = False          # True: never touch the network (tests, reproducible reruns)
     min_interval_s: float = 2.0    # USGS politeness: serial requests, >= 2 s apart
     plugin_version: str = "?"
@@ -204,7 +231,8 @@ class StreamStatsClient:
                 "request_body_sha256": hashlib.sha256(body).hexdigest() if body else None,
                 "response_sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw),
                 "http_status": status, "elapsed_s": round(elapsed, 2), "retrieved_utc": _utc(),
-                "client": f"DamSafety_PMP streamstats.py {__version__}"}
+                "client": f"DamSafety_PMP streamstats.py {__version__}",
+                "transport": self.transport}
         prov_p.write_text(json.dumps(prov, indent=1), encoding="utf-8")
         if body:
             (self.cache_dir / f"{stem}.request.json").write_bytes(body)
@@ -223,7 +251,7 @@ class StreamStatsClient:
                 status, raw, _ = self._live("GET", url, None)
                 out[name] = (str(json.loads(raw)["info"]["version"]) if status == 200
                              else f"unknown (HTTP {status})")
-            except Cancelled:
+            except (Cancelled, NetworkError):
                 raise
             except Exception as e:                                    # noqa: BLE001
                 out[name] = f"unknown ({type(e).__name__})"
@@ -367,7 +395,8 @@ class StreamStatsClient:
                 "regression_regions": rrs, "basin_characteristics": bch,
                 "statistics": rows, "skipped_regression_regions": skipped,
                 "watershed_geojson": poly, "query_utc": t_query, "label": label,
-                "service_versions": versions, "requests": list(self.log)}
+                "service_versions": versions, "requests": list(self.log),
+                "transport": "cache only" if self.offline else self.transport}
 
 
 def polygon_area_sqmi(geom: Dict[str, Any]) -> float:
@@ -614,6 +643,7 @@ def save_run(result: Dict[str, Any], out_dir: Path, name: str, cn: Optional[floa
                     % (plugin_version, __version__),
             "query_utc": result.get("query_utc"), "written_utc": _utc(),
             "region": result.get("region"), "point_lonlat": result["input_lonlat"],
+            "transport": result.get("transport", "?"),
             "snapped_lonlat": result["snapped_lonlat"], "service_versions":
                 result.get("service_versions", {}),
             "services": {"ss-delineate": DELINEATE.split("/delineate")[0], "ss-hydro":
@@ -623,7 +653,8 @@ def save_run(result: Dict[str, Any], out_dir: Path, name: str, cn: Optional[floa
                           "four simultaneous requests and may change its rate limits).",
             "citations": CITATIONS,
             "requests": [{k: r.get(k) for k in ("method", "url", "http_status", "retrieved_utc",
-                                                "response_sha256", "cached", "cache_file")}
+                                                "response_sha256", "cached", "cache_file",
+                                                "transport")}
                          for r in result.get("requests", [])],
             "outputs_sha256": {ws.name: _sha256_file(ws), bp.name: _sha256_file(bp)}}
     pp = out_dir / f"{name}_streamstats_provenance.json"

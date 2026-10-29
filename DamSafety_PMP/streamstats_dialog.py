@@ -22,6 +22,7 @@ from qgis.core import (QgsApplication, QgsCoordinateReferenceSystem, QgsCoordina
                        QgsMessageLog, QgsProject, QgsSettings, QgsTask, QgsVectorLayer)
 
 from .core import streamstats as ss
+from .qgis_transport import make_fetcher
 from .tokens import TOKENS as T
 from .ui_fit import FitScroll, fit_window
 from .ui_widgets import ERROR, OK, WARNING, CheckPanel, Collapsible, InfoBanner, WrapLabel
@@ -59,7 +60,13 @@ def _fmt(v, nd=0):
 
 
 def default_client(cache_dir, task):
-    return ss.StreamStatsClient(cache_dir, plugin_version=plugin_version(),
+    """The plugin's client: QGIS networking (QGIS proxy / auth / SSL settings), urllib only when
+    QGIS is not running."""
+    fetcher, transport = make_fetcher()
+    if task is not None:
+        task.fetcher = fetcher               # so Cancel also aborts the request in flight
+    return ss.StreamStatsClient(cache_dir, fetcher=fetcher, transport=transport,
+                                plugin_version=plugin_version(),
                                 should_cancel=task.isCanceled if task is not None else None,
                                 progress=task.report if task is not None else None)
 
@@ -71,7 +78,14 @@ class StreamStatsTask(QgsTask):
         super().__init__("StreamStats basin data", QgsTask.Flag.CanCancel
                          if hasattr(QgsTask, "Flag") else QgsTask.CanCancel)
         self.job, self.on_done = job, on_done
+        self.fetcher = None
         self.result, self.error, self.message = None, None, ""
+
+    def cancel(self):
+        stop = getattr(self.fetcher, "cancel", None)
+        if stop is not None:
+            stop()                            # abort the QGIS request in flight
+        super().cancel()
 
     def report(self, message, pct):           # called by the client (worker thread)
         self.message = message
@@ -467,7 +481,7 @@ class StreamStatsDialog(QDialog):
     def cancel(self):
         if self.task is not None:
             self.task.cancel()
-            self.status.setText("Cancelling after the current request\u2026")
+            self.status.setText("Cancelling\u2026")
 
     def _done(self, task):
         self.task = None
@@ -483,6 +497,9 @@ class StreamStatsDialog(QDialog):
             if isinstance(err, ss.NotOnStreamError):
                 self.status.setText("Not on the stream network")
                 self._log(msg + (" (" + err.detail + ")" if err.detail else ""))
+            elif isinstance(err, ss.NetworkError):
+                self.status.setText("Could not reach StreamStats")
+                self._log(msg + " [" + err.url + "]")
             else:
                 msg = "StreamStats failed: " + msg
                 self.status.setText("Failed")
