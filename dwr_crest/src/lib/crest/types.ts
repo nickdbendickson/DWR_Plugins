@@ -141,7 +141,7 @@ export type Analysis = {
   };
   screen: {
     level: ScreenLevel;
-    /** Level as shown: "High (judgment zone counted)" when only judgment-zone structures make it High. */
+    /** Level as shown: "High (flagged: judgment zone)" when only judgment-zone structures make it High. */
     label: string;
     /** Whether the judgment zone counted as probable loss of life (damsuite JUDGMENT toggle). */
     judgmentAsProbable: boolean;

@@ -416,10 +416,10 @@ export function screenReceptors(
     );
   }
   reasons.push("Velocities are desk estimates (continuity on the schematic section), so TM 11 zones near a curve are approximate.");
-  // A High that only judgment-zone structures produce is labelled as such: it is the 5.3(f) default, not a TM 11 high-zone finding.
+  // Nick (2026-10-29): judgment zone counts as High by default, and a High that only judgment-zone structures produce reads "High (flagged: judgment zone)". It is the 5.3(f) default, not a TM 11 high-zone finding.
   const highDrivers = receptors.filter((r) => r.ndClass === "High");
   const judgmentDriven = (level as ScreenLevel) === "High" && highDrivers.length > 0 && highDrivers.every((r) => r.zone === "judgment");
-  let label: string = judgmentDriven ? "High (judgment zone counted)" : level;
+  let label: string = judgmentDriven ? "High (flagged: judgment zone)" : level;
   if (judgmentDriven) {
     reasons.unshift(
       "High comes only from the ACER TM 11 judgment zone, counted as probable loss of life (damsuite default, 5.3(f)). An engineer may call it Medium; switch \"Judgment zone\" to test that.",
@@ -436,7 +436,7 @@ export function screenReceptors(
     const n = `${unresolvedCounting} unresolved`;
     const what = unresolvedCounting === 1 ? "home or road" : "homes or roads";
     if ((level as ScreenLevel) === "High") {
-      label = `${label} (${n} past the reach)`;
+      label = label.endsWith(")") ? `${label.slice(0, -1)}; ${n} past the reach)` : `${label} (${n} past the reach)`;
     } else {
       const resolvedAs = level;
       level = "Review";
