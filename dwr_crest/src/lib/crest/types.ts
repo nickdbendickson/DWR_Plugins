@@ -70,6 +70,12 @@ export type DamRecord = {
   datumOffsetFt?: number;
   /** Where the stated elevations came from, e.g. a datum conversion already applied. Shown with the datum rule. */
   datumNote?: string;
+  /** Class of record, if one exists (e.g. a DWR benchmark). The desk screen is shown against it, never as it. */
+  classOfRecord?: string;
+  /** A note shown with the screen (sample records). */
+  sampleNote?: string;
+  /** LISFLOOD-FP export settings. Default: 10 m cells, point = breach location in UTM 14N. */
+  lisflood?: { cellSizeM?: number; pointX?: number; pointY?: number };
   /** Reservoir surface area at the top of dam (acres). Sets the storage-depth curve for routing. */
   surfaceAreaAc?: number;
   /** Desk reach length (km). Default: until the schematic depth falls below 0.1 ft. */
@@ -152,6 +158,8 @@ export type Analysis = {
     label: string;
     /** Whether the judgment zone counted as probable loss of life (damsuite JUDGMENT toggle). */
     judgmentAsProbable: boolean;
+    /** The record's class of record, if any (the desk screen is not it). */
+    classOfRecord: string | null;
     /** Worst ACER TM 11 zone over habitable inundated structures, or null if none is wet. */
     acerLevel: "low" | "judgment" | "high" | null;
     reasons: string[];

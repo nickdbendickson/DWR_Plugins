@@ -22,6 +22,8 @@ export function dwr2801(over: Partial<DamRecord> = {}): DamRecord {
     // Runner inputs only: no surface area unless a test sets it (m = 2), auto reach.
     surfaceAreaAc: undefined,
     reachKm: undefined,
+    classOfRecord: undefined,
+    sampleNote: undefined,
     ...over,
   };
 }

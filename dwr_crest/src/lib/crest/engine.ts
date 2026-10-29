@@ -62,12 +62,16 @@ function pointOf(f: GeoJSONFeature | undefined): { lon: number; lat: number } | 
   return null;
 }
 
-/** Dam location: entered lat/lon, else the drawn breach point, dam line or reservoir point. */
+/**
+ * Breach location: the drawn breach point first (NID points are often not at the breach), then
+ * the entered lat/lon, then the dam line or reservoir point.
+ */
 export function damLocation(dam: DamRecord): { lon: number; lat: number; source: string } | null {
-  if (Number.isFinite(dam.lat) && Number.isFinite(dam.lon)) return { lat: dam.lat!, lon: dam.lon!, source: "record" };
   const g = dam.geometry;
+  const bp = pointOf(g?.breachPoint);
+  if (bp) return { ...bp, source: "breach point" };
+  if (Number.isFinite(dam.lat) && Number.isFinite(dam.lon)) return { lat: dam.lat!, lon: dam.lon!, source: "record" };
   for (const [f, source] of [
-    [g?.breachPoint, "breach point"],
     [g?.damLine, "dam line"],
     [g?.reservoirPoint, "reservoir point"],
   ] as const) {
@@ -218,6 +222,12 @@ export function analyze(dam: DamRecord): Analysis {
     if (dam.datumNote) rule += ` ${dam.datumNote}`;
   }
 
+  const demCrest = finite(dam.demCrestFt ?? NaN, NaN);
+  if (!localCrest && Number.isFinite(demCrest) && Math.abs(demCrest - crestNavd) > 0.5) {
+    warnings.push(
+      `DEM crest ${demCrest.toFixed(2)} ft differs from the tied crest ${crestNavd.toFixed(2)} ft NAVD88 by ${Math.abs(demCrest - crestNavd).toFixed(2)} ft. Check that the DEM crest is NAVD88 (an NGVD29 value differs by about the VERTCON shift).`,
+    );
+  }
   const localRecord = localCrest && offsetFt != null;
   const bed = tieValue("Streambed", dam.streambedFt, offsetFt, crestNavd, localRecord);
   if (!localRecord && isLocalElev(dam.streambedFt)) {
@@ -394,6 +404,10 @@ export function analyze(dam: DamRecord): Analysis {
   const screen = screenReceptors(receptors, dam.receptors, {
     judgmentAsProbable: dam.judgmentAsProbable ?? true,
   });
+  if (dam.classOfRecord) {
+    screen.classOfRecord = dam.classOfRecord;
+    screen.reasons.unshift(`Class of record: ${dam.classOfRecord}. This desk screen (${screen.label}) is not the class of record.`);
+  }
   if (warnings.some((w) => w.startsWith("No DEM tie"))) {
     screen.level = "Review";
     screen.label = "Review (crest not tied)";
@@ -521,5 +535,5 @@ export function screenReceptors(
     }; any inundated habitable structure is at least Medium (economic, 5.2.2); roads by AADT and class. Barns and sheds are not habitable and do not count.`,
   );
   reasons.push("This is a desk screen on a schematic valley. It is not an ND Dam Safety classification of record.");
-  return { level, label, judgmentAsProbable, acerLevel, reasons, judgment };
+  return { level, label, judgmentAsProbable, classOfRecord: null, acerLevel, reasons, judgment };
 }

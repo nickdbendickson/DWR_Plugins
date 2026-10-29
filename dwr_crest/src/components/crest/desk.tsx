@@ -178,7 +178,7 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
             onChange={(surfaceAreaAc) => update({ surfaceAreaAc })}
           />
           <NumField label="Drainage" suffix="mi²" value={dam.drainageMi2} step={0.1} onChange={(drainageMi2) => update({ drainageMi2 })} />
-          <NumField label="DEM crest" suffix="ft NAVD88" value={dam.demCrestFt} step={0.1} onChange={(demCrestFt) => update({ demCrestFt })} />
+          <NumField label="DEM crest" suffix="ft NAVD88, from the DEM" value={dam.demCrestFt} step={0.1} onChange={(demCrestFt) => update({ demCrestFt })} />
           <SelectField
             label="Stated datum"
             value={dam.statedDatum}
@@ -360,6 +360,17 @@ function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
             {result.screen.acerLevel ? ` Worst TM 11 zone: ${result.screen.acerLevel}.` : ""}
           </p>
         </div>
+        {result.screen.classOfRecord || dam.sampleNote ? (
+          <div className="mt-3 rounded-sm border border-line bg-sand p-3 text-sm">
+            {result.screen.classOfRecord ? (
+              <p>
+                <span className="font-medium">Class of record: {result.screen.classOfRecord}.</span> The desk screen above
+                ({result.screen.label}) is not the class of record.
+              </p>
+            ) : null}
+            {dam.sampleNote ? <p className="mt-1 text-muted">{dam.sampleNote}</p> : null}
+          </div>
+        ) : null}
         <div className="mt-3 max-w-xs">
           <SelectField
             label="Judgment zone"
@@ -445,10 +456,18 @@ function download(name: string, text: string, type = "text/plain") {
 }
 
 function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+  const update = useDesk((s) => s.update);
   const root = (dam.nid || dam.id).toLowerCase().replace(/[^a-z0-9]/g, "_");
   const lisflood = useMemo(() => {
     try {
-      return { pkg: generateLisfloodPackage(dam, result.breach.series), error: null };
+      return {
+        pkg: generateLisfloodPackage(dam, result.breach.series, {
+          cellSizeM: dam.lisflood?.cellSizeM,
+          pointX: dam.lisflood?.pointX,
+          pointY: dam.lisflood?.pointY,
+        }),
+        error: null,
+      };
     } catch (e) {
       return { pkg: null, error: (e as Error).message };
     }
@@ -461,6 +480,30 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       <p className="mt-1 text-sm text-muted">
         Hand-off files for the Breach Runner and LISFLOOD-FP. The LISFLOOD package runs 72 h with the point source at the
         breach; you supply the DEM.
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <OptNumField
+          label="LISFLOOD cell size (m)"
+          value={dam.lisflood?.cellSizeM}
+          placeholder="10"
+          onChange={(cellSizeM) => update({ lisflood: { ...dam.lisflood, cellSizeM } })}
+        />
+        <OptNumField
+          label="Point X (DEM CRS, m)"
+          value={dam.lisflood?.pointX}
+          placeholder="breach point in UTM 14N"
+          onChange={(pointX) => update({ lisflood: { ...dam.lisflood, pointX } })}
+        />
+        <OptNumField
+          label="Point Y (DEM CRS, m)"
+          value={dam.lisflood?.pointY}
+          placeholder="breach point in UTM 14N"
+          onChange={(pointY) => update({ lisflood: { ...dam.lisflood, pointY } })}
+        />
+      </div>
+      <p className="mt-1 text-xs text-muted">
+        Default grid: NAD83 / UTM 14N at 10 m, point at the drawn breach point (else the record lat/lon). Leave blank for the
+        default; enter both X and Y for another DEM (e.g. the Runner&apos;s EPSG:5070 30 m grid).
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
         <button type="button" className={btn} onClick={() => download(`${root}_hydrograph.csv`, exportHydrographCsv(result.breach.series), "text/csv")}>
@@ -584,6 +627,32 @@ function NumField({
         step={step}
         value={Number.isFinite(value) ? value : 0}
         onChange={(e) => onChange(Number(e.target.value))}
+        className="mt-1 h-11 w-full rounded-sm border border-line bg-paper px-3 tabular-nums text-ink"
+      />
+    </label>
+  );
+}
+
+/** A number input that may be left blank (undefined = use the default). */
+function OptNumField({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: number | undefined;
+  placeholder?: string;
+  onChange: (v: number | undefined) => void;
+}) {
+  return (
+    <label className="block text-sm">
+      <span className="text-muted">{label}</span>
+      <input
+        type="number"
+        value={value != null && Number.isFinite(value) ? value : ""}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
         className="mt-1 h-11 w-full rounded-sm border border-line bg-paper px-3 tabular-nums text-ink"
       />
     </label>

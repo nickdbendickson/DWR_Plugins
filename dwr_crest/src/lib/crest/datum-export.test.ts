@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { analyze } from "./engine.ts";
+import { readFileSync } from "node:fs";
+
+import { analyze, damLocation } from "./engine.ts";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage, toUtm } from "./export.ts";
 import { dwr2801 } from "./fixtures.ts";
 import { SAMPLE_DAMS } from "./samples.ts";
@@ -172,11 +174,51 @@ describe("LISFLOOD-FP export", () => {
     assert.equal(u.zone, 14);
     assert.ok(u.x > 600000 && u.x < 700000 && u.y > 5_150_000 && u.y < 5_250_000, `${u.x} ${u.y}`);
     const lines = pkg.bci.trim().split("\n");
-    assert.equal(lines.length, 2);
+    assert.equal(lines.length, 6);
     const [p, x, y, kind, name] = lines[0].split(/\s+/);
     assert.deepEqual([p, kind, name], ["P", "QVAR", "breach"]);
     assert.ok(Math.abs(Number(x) - u.x) < 0.01 && Math.abs(Number(y) - u.y) < 0.01);
     assert.notEqual(Number(x), 0);
+  });
+
+  it("CHECK: .bci has FREE N/S/E/W edges (was none: LISFLOOD's default closed edges ponded)", () => {
+    const edges = pkg.bci.trim().split("\n").slice(2);
+    assert.deepEqual(
+      edges.map((l) => [l.split(/\s+/)[0], l.split(/\s+/)[3]]),
+      [["N", "FREE"], ["S", "FREE"], ["E", "FREE"], ["W", "FREE"]],
+    );
+    const ext = generateLisfloodPackage(dam, a.breach.series, { demExtent: { xmin: 0, xmax: 2000, ymin: 0, ymax: 400 } });
+    // Same lines as the Runner's golden run.bci for a 2000 x 400 m DEM.
+    assert.match(ext.bci, /^N 0\.000 2000\.000 FREE\nS 0\.000 2000\.000 FREE\nE 0\.000 400\.000 FREE\nW 0\.000 400\.000 FREE$/m);
+  });
+
+  it("cell size and point are options (the desk export panel passes them)", () => {
+    const p30 = generateLisfloodPackage(dam, a.breach.series, { cellSizeM: 30, pointX: -106278, pointY: 2666658 });
+    const [l1, l2] = p30.bci.split("\n");
+    assert.equal(l1, "P -106278.000 2666658.000 QVAR breach");
+    assert.equal(l2, "P -106248.000 2666658.000 QVAR breach");
+    assert.match(p30.bdy, /m3\/s \/ \(cell size x 2 inflow cells\)/);
+    const peak30 = Math.max(...p30.bdy.trim().split("\n").slice(3).map((l) => Number(l.split(" ")[0])));
+    assert.ok(Math.abs(peak30 - a.breach.peakCfs / 35.3146667 / 60) < 1e-4);
+    assert.match(p30.notes, /30 m cells/);
+    // A blank or bad cell size falls back to the 10 m default.
+    assert.equal(generateLisfloodPackage(dam, a.breach.series, { cellSizeM: 0 }).bci, pkg.bci);
+  });
+
+  it("CHECK: a drawn breach point wins over the record lat/lon (was: record first)", () => {
+    const bp = { lon: SITE.lon + 0.01, lat: SITE.lat - 0.005 };
+    const drawn = {
+      ...dam,
+      geometry: {
+        breachPoint: { type: "Feature" as const, geometry: { type: "Point" as const, coordinates: [bp.lon, bp.lat] }, properties: {} },
+      },
+    };
+    const loc = damLocation(drawn)!;
+    assert.equal(loc.source, "breach point");
+    const u = toUtm(bp.lon, bp.lat);
+    const [, x, y] = generateLisfloodPackage(drawn, a.breach.series).bci.split("\n")[0].split(" ");
+    assert.ok(Math.abs(Number(x) - u.x) < 0.01 && Math.abs(Number(y) - u.y) < 0.01);
+    assert.equal(damLocation(dam)!.source, "record");
   });
 
   it(".bdy is comment, name, 'N seconds', then value/time pairs in Q / (cell x 2 cells)", () => {
@@ -207,5 +249,30 @@ describe("LISFLOOD-FP export", () => {
     assert.equal(j.hydrograph_peak_cfs, a.breach.peakCfs);
     assert.equal(j.lat, SITE.lat);
     assert.equal(j.surface_area_top_ac, 154.5);
+  });
+});
+
+describe("sample note, DEM crest check and store key", () => {
+  const sample = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
+
+  it("CHECK: the ND00199 sample shows High (flagged) against its class of record ND MEDIUM", () => {
+    const a = analyze(sample);
+    assert.equal(a.screen.level, "High");
+    assert.equal(a.screen.label, "High (flagged: judgment zone)");
+    assert.match(a.screen.classOfRecord ?? "", /^ND MEDIUM \/ TM11 Significant/);
+    assert.match(a.screen.reasons[0], /^Class of record: ND MEDIUM .*is not the class of record\.$/);
+    assert.match(sample.sampleNote ?? "", /generic receptor seeds.*High \(flagged\).*not the class of record/);
+  });
+
+  it("warns when the DEM crest differs from the tied crest (NGVD29 value labelled NAVD88)", () => {
+    assert.ok(!analyze(sample).datum.warnings.some((w) => w.startsWith("DEM crest")), "sample DEM crest is NAVD88 now");
+    const a = analyze(dwr2801({ demCrestFt: 1071.15 }));
+    assert.ok(a.datum.warnings.some((w) => w.startsWith("DEM crest 1071.15 ft differs from the tied crest 1072.24 ft NAVD88 by 1.09 ft")));
+  });
+
+  it("the store key is bumped so old browsers drop the 912 ft sample", () => {
+    const src = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+    assert.match(src, /name: "crest-desk-v2"/);
+    assert.ok(!src.includes('name: "crest-desk-v1"'));
   });
 });

@@ -166,7 +166,7 @@ describe("desk valley reach", () => {
     });
     const base = dwr2801({ surfaceAreaAc: 154.5 });
 
-    it("CHECK: only 4069 seeded: was Low, now Review by default", () => {
+    it("CHECK: only 4069 seeded: was Low, now Review", () => {
       const a = analyze({ ...base, receptors: [house("4069", 17.2)] });
       assert.equal(a.flood.receptors[0].unresolved, true);
       assert.equal(a.screen.level, "Review");

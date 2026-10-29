@@ -93,6 +93,8 @@ export type LisfloodOptions = {
   pointY?: number;
   simHours?: number;
   fpfric?: number;
+  /** DEM extent (DEM CRS, metres) for the FREE edge lines. Default: a range that covers any edge. */
+  demExtent?: { xmin: number; xmax: number; ymin: number; ymax: number };
 };
 
 export type LisfloodPackage = { par: string; bci: string; bdy: string; notes: string };
@@ -103,7 +105,7 @@ export type LisfloodPackage = { par: string; bci: string; bdy: string; notes: st
  * m3/s per metre of cell width spread over `inflowCells` cells: Q / (cell size × cells).
  */
 export function generateLisfloodPackage(dam: DamRecord, series: SeriesPoint[], opts: LisfloodOptions = {}): LisfloodPackage {
-  const cell = opts.cellSizeM ?? 10;
+  const cell = opts.cellSizeM != null && Number.isFinite(opts.cellSizeM) && opts.cellSizeM > 0 ? opts.cellSizeM : 10;
   const cells = Math.max(1, Math.round(opts.inflowCells ?? 2));
   const simHours = opts.simHours ?? 72;
   const fpfric = opts.fpfric ?? 0.06;
@@ -143,9 +145,19 @@ export function generateLisfloodPackage(dam: DamRecord, series: SeriesPoint[], o
     "",
   ].join("\n");
 
-  // Point sources across the breach: the breach cell and the next (cells-1) cells east.
+  // Point sources across the breach: the breach cell and the next (cells-1) cells east. Then FREE
+  // (normal-depth) N/S/E/W edges, as the Runner's run.bci: LISFLOOD's default edges are closed, so a
+  // 72 h run would pond against the DEM edge. N/S lines span x, E/W lines span y.
+  const ext = opts.demExtent;
+  const [x0, x1, y0, y1] = ext ? [ext.xmin, ext.xmax, ext.ymin, ext.ymax] : [-1e8, 1e8, -1e8, 1e8];
   const bci =
-    Array.from({ length: cells }, (_, i) => `P ${(x! + i * cell).toFixed(3)} ${y!.toFixed(3)} QVAR breach`).join("\n") + "\n";
+    [
+      ...Array.from({ length: cells }, (_, i) => `P ${(x! + i * cell).toFixed(3)} ${y!.toFixed(3)} QVAR breach`),
+      `N ${x0.toFixed(3)} ${x1.toFixed(3)} FREE`,
+      `S ${x0.toFixed(3)} ${x1.toFixed(3)} FREE`,
+      `E ${y0.toFixed(3)} ${y1.toFixed(3)} FREE`,
+      `W ${y0.toFixed(3)} ${y1.toFixed(3)} FREE`,
+    ].join("\n") + "\n";
 
   const pts = [...series];
   const last = pts[pts.length - 1];
@@ -158,6 +170,10 @@ export function generateLisfloodPackage(dam: DamRecord, series: SeriesPoint[], o
   const bdy = bdyLines.join("\n") + "\n";
   const notes = [
     crsNote,
+    `Grid: ${cell} m cells; inflow over ${cells} cells. Default grid is NAD83 / UTM 14N at 10 m (Nick, 2026-10-29); the Runner's EPSG:5070 30 m grid needs the point and cell size entered.`,
+    ext
+      ? "Edges: FREE (normal depth) on N/S/E/W over the DEM extent given."
+      : "Edges: FREE (normal depth) on N/S/E/W; the ranges cover any DEM, so every edge cell is open.",
     `Supply ${resroot}.dem.asc (ASCII grid, NAVD88 metres) beside the .par.`,
     `fpfric ${fpfric} is a single floodplain Manning n; replace it with land-cover roughness for a study run.`,
   ].join("\n");
