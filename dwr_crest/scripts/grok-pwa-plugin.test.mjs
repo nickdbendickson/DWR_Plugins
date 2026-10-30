@@ -21,6 +21,11 @@ import { renderInstallPage } from "./grok-pwa-plugin.mjs";
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+// injectGrokPwaHead reads src/lib/og/site.json and public/og.jpg from process.cwd() by default.
+// Crest ships its own (title "Crest", a custom og.jpg), which the template expectations below
+// would pick up. Run from an empty workspace so they test the injector, not this app's card.
+process.chdir(mkdtempSync(join(tmpdir(), "grok-pwa-cwd-")));
+
 test("injects before </head>", () => {
   const out = injectGrokPwaHead("<html><head><title>x</title></head><body></body></html>");
   assert.match(out, /rel="manifest"/);

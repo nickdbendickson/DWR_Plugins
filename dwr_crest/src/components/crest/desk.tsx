@@ -1,11 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Droplets, Plus, RotateCcw } from "lucide-react";
 import { analyze, STEPS } from "@/lib/crest/engine";
 import { num } from "@/lib/crest/format";
 import { activeDam, useDesk } from "@/lib/crest/store";
-import type { BreachMethod, DamRecord, DatumName, EngineName, FailureMode, ScreenLevel, StepId } from "@/lib/crest/types";
+import type {
+  BreachMethod,
+  DamGeometry,
+  DamRecord,
+  DatumName,
+  EngineName,
+  FailureMode,
+  ScreenLevel,
+  StepId,
+} from "@/lib/crest/types";
 import { HydroChart, ValleyMap } from "./charts";
-import { MapDraw } from "./MapDraw";
+
+// Leaflet touches `window` when it loads, so the map is a client-only chunk.
+const MapDraw = lazy(() => import("./MapDraw").then((m) => ({ default: m.MapDraw })));
 
 const LEVEL_CLASS: Record<ScreenLevel, string> = {
   High: "bg-amber text-card",
@@ -244,13 +255,17 @@ function BreachStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
 
 function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
   const update = useDesk((s) => s.update);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const onGeometry = useCallback((geometry: DamGeometry) => update({ geometry }), [update]);
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-xl">Layout & schematic flood</h2>
           <p className="text-sm text-muted">
-            Draw the dam line, reservoir point, breach point, and downstream area (DSS-WISE style). Then see the schematic flood.
+            Draw the dam line, reservoir point, breach point, and downstream area (DSS-WISE style). Then see the
+            schematic flood: {result.flood.engineLabel}. Receptors are seeds on this valley, not an inventory.
           </p>
         </div>
         <SelectField
@@ -264,18 +279,25 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
           onChange={(engine) => update({ engine: engine as EngineName })}
         />
       </div>
-
-      <div className="overflow-hidden rounded-md border border-line bg-card p-2">
-        <MapDraw
-          geometry={dam.geometry}
-          onChange={(geometry) => update({ geometry })}
-        />
+      <div className="rounded-md border border-line bg-card p-4">
+        <h3 className="text-lg">Dam line, points, and area of interest</h3>
+        <p className="mt-1 text-sm text-muted">
+          Draw the dam line, the reservoir point (first marker), the breach point (second marker), and the area of
+          interest. They are saved on this dam record.
+        </p>
+        <div className="mt-3">
+          {mounted ? (
+            <Suspense fallback={<p className="text-sm text-muted">Loading the map…</p>}>
+              <MapDraw key={dam.id} geometry={dam.geometry} onChange={onGeometry} />
+            </Suspense>
+          ) : (
+            <p className="text-sm text-muted">Loading the map…</p>
+          )}
+        </div>
       </div>
-
       <div className="overflow-hidden rounded-md border border-line">
         <ValleyMap flood={result.flood} />
       </div>
-
       <div className="grid grid-cols-3 gap-px overflow-hidden rounded-sm bg-line">
         <Stat k="Max depth" v={`${num(result.flood.maxDepthFt, 1)} ft`} />
         <Stat k="Wet area" v={`${num(result.flood.acres, 0)} ac`} />
