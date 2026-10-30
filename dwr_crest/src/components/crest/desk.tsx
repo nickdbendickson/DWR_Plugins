@@ -20,7 +20,7 @@ const MapDraw = lazy(() => import("./MapDraw").then((m) => ({ default: m.MapDraw
 
 const LEVEL_CLASS: Record<ScreenLevel, string> = {
   High: "bg-amber text-card",
-  Significant: "bg-water text-card",
+  Medium: "bg-water text-card",
   Low: "bg-ink text-card",
   Review: "bg-sand text-ink",
 };
@@ -133,7 +133,7 @@ export function Desk() {
           {step === "record" ? <RecordStep dam={dam} result={result} /> : null}
           {step === "breach" ? <BreachStep dam={dam} result={result} /> : null}
           {step === "flood" ? <FloodStep dam={dam} result={result} /> : null}
-          {step === "screen" ? <ScreenStep result={result} /> : null}
+          {step === "screen" ? <ScreenStep dam={dam} result={result} /> : null}
           {step === "report" ? <ReportStep dam={dam} result={result} /> : null}
 
           <button
@@ -307,24 +307,49 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   );
 }
 
-function ScreenStep({ result }: { result: ReturnType<typeof analyze> }) {
+function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+  const update = useDesk((s) => s.update);
   return (
     <section className="space-y-4">
       <div className="rounded-md border border-line bg-card p-4">
         <p className="text-xs tracking-widest text-muted uppercase">Desk screen</p>
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <span className={`rounded-sm px-3 py-1 text-lg ${LEVEL_CLASS[result.screen.level]}`}>
-            {result.screen.level}
+            {result.screen.label}
           </span>
           <p className="max-w-lg text-sm text-muted">
-            Houses or barns at 2 ft or more read High. A wet building under 2 ft, or a road at 1 ft, reads Significant. Otherwise Low.
+            ND rules on the ACER TM 11 depth-velocity charts: a home in the high-danger zone reads High; in the judgment
+            zone it reads {result.screen.judgmentAsProbable ? "High (flagged)" : "Medium (flagged)"}; any wet home reads at
+            least Medium (economic loss); roads by AADT and class. Barns and sheds do not count.
+            {result.screen.acerLevel ? ` Worst TM 11 zone: ${result.screen.acerLevel}.` : ""}
           </p>
+        </div>
+        <div className="mt-3 max-w-xs">
+          <SelectField
+            label="Judgment zone"
+            value={dam.judgmentAsProbable === false ? "medium" : "high"}
+            options={[
+              ["high", "Count as probable loss of life (High, damsuite default)"],
+              ["medium", "Do not count (Medium)"],
+            ]}
+            onChange={(v) => update({ judgmentAsProbable: v !== "medium" })}
+          />
         </div>
         <ul className="mt-4 space-y-2 text-sm">
           {result.screen.reasons.map((r) => (
             <li key={r}>{r}</li>
           ))}
         </ul>
+        {result.screen.judgment.length > 0 ? (
+          <div className="mt-4 rounded-sm bg-sand p-3 text-sm">
+            <p className="font-medium">Needs an engineer&apos;s call</p>
+            <ul className="mt-1 space-y-1">
+              {result.screen.judgment.map((j) => (
+                <li key={j}>{j}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
       <ReceptorTable result={result} />
     </section>
@@ -350,7 +375,7 @@ function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         <Stat k="Max depth" v={`${num(result.flood.maxDepthFt, 1)} ft`} />
         <Stat k="Max velocity" v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
         <Stat k="Wet receptors" v={String(result.flood.receptors.filter((r) => r.flooded).length)} />
-        <Stat k="Screen" v={result.screen.level} />
+        <Stat k="Screen" v={result.screen.label} />
       </div>
       <div className="rounded-md border border-line bg-card p-4">
         <h3 className="text-lg">Breach hydrograph</h3>
@@ -384,6 +409,8 @@ function ReceptorTable({ result }: { result: ReturnType<typeof analyze> }) {
             <th className="px-3 py-2 font-medium">Vel ft/s</th>
             <th className="px-3 py-2 font-medium">Arrival h</th>
             <th className="px-3 py-2 font-medium">D × V</th>
+            <th className="px-3 py-2 font-medium">TM 11 zone</th>
+            <th className="px-3 py-2 font-medium">ND class</th>
           </tr>
         </thead>
         <tbody>
@@ -396,6 +423,10 @@ function ReceptorTable({ result }: { result: ReturnType<typeof analyze> }) {
               <td className="px-3 py-2 tabular-nums">{r.arrivalHr == null ? "—" : num(r.arrivalHr, 2)}</td>
               <td className="px-3 py-2 tabular-nums">
                 {r.flooded ? num(r.depthFt * r.velocityFps, 1) : "—"}
+              </td>
+              <td className="px-3 py-2">{r.flooded && r.zone ? r.zone : "—"}</td>
+              <td className="px-3 py-2" title={r.rankReason}>
+                {r.ndClass ?? "—"}
               </td>
             </tr>
           ))}

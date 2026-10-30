@@ -23,6 +23,10 @@ export function exportDamJson(dam: DamRecord, analysis: Analysis): string {
     failure_mode: dam.failureMode,
     screened: {
       level: analysis.screen.level,
+      level_label: analysis.screen.label,
+      judgment_as_probable: analysis.screen.judgmentAsProbable,
+      acer_level: analysis.screen.acerLevel,
+      judgment: analysis.screen.judgment,
       notes: analysis.screen.reasons,
     },
     hydrograph_peak_cfs: analysis.breach.fittedPeakCfs,
