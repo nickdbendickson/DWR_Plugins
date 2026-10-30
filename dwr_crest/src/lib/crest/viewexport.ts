@@ -201,6 +201,28 @@ function panelTops(el: HTMLElement): { cuts: number[]; minor: number[] } {
   return { cuts: kids.map(at), minor: kids.flatMap((k) => Array.from(k.children).map(at)) };
 }
 
+const SVG_PAINT = ["fill", "stroke", "stop-color"] as const;
+
+/**
+ * SVG paint given as CSS variables (fill="var(--color-sand)", the valley chart) is set to its computed colour
+ * while the picture is taken: in the copy the variables are gone, and some engines (Qt WebEngine) then paint it
+ * black. Returns the undo.
+ */
+function resolveSvgVars(el: HTMLElement): () => void {
+  const undo: (() => void)[] = [];
+  for (const node of Array.from(el.querySelectorAll<SVGElement>("svg *"))) {
+    for (const a of SVG_PAINT) {
+      const v = node.getAttribute(a);
+      if (!v || !v.includes("var(")) continue;
+      const css = getComputedStyle(node).getPropertyValue(a);
+      if (!css) continue;
+      node.setAttribute(a, css);
+      undo.push(() => node.setAttribute(a, v));
+    }
+  }
+  return () => undo.forEach((u) => u());
+}
+
 /** Draw the element (as it is on screen) into a canvas. */
 export async function captureView(el: HTMLElement): Promise<Capture> {
   const notes: string[] = [];
@@ -215,6 +237,7 @@ export async function captureView(el: HTMLElement): Promise<Capture> {
   const hidden = Array.from(el.querySelectorAll<HTMLElement>(`[${NO_EXPORT_ATTR}]`));
   const before = hidden.map((h) => h.style.display);
   hidden.forEach((h) => (h.style.display = "none"));
+  const restoreSvg = resolveSvgVars(el);
   let canvas: HTMLCanvasElement;
   let cuts: number[] = [];
   let minor: number[] = [];
@@ -238,6 +261,7 @@ export async function captureView(el: HTMLElement): Promise<Capture> {
     throw new Error(`the view could not be drawn into a picture (${(e as Error)?.message ?? String(e)})`);
   } finally {
     hidden.forEach((h, i) => (h.style.display = before[i]));
+    restoreSvg();
   }
   if (!canvas.width || !canvas.height) throw new Error("the view could not be drawn into a picture (empty result)");
   try {
