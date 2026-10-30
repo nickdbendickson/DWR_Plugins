@@ -237,4 +237,45 @@ def write_dam_folder(work: Path, dam: dict, analysis: dict) -> tuple[Path, list[
             continue
         lines.append(f"{t_hr:.4f},{q_cfs / 35.3146667:.4f}")
     (folder / "hydrograph.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    cfs_lines = ["time_hr,discharge_cfs"]
+    for point in series:
+        if not isinstance(point, dict):
+            continue
+        t_hr, q_cfs = _num(point.get("tHr")), _num(point.get("qCfs"))
+        if t_hr is None or q_cfs is None:
+            continue
+        cfs_lines.append(f"{t_hr:.4f},{q_cfs:.4f}")
+    inputs = folder / "inputs"
+    inputs.mkdir(exist_ok=True)
+    runner_csv = inputs / "breach_hydrograph.csv"
+    if runner_csv.is_file():
+        notes.append("Left inputs/breach_hydrograph.csv already in the dam folder.")
+    else:
+        runner_csv.write_text("\n".join(cfs_lines) + "\n", encoding="utf-8")
+        notes.append(
+            "Wrote inputs/breach_hydrograph.csv (time_hr, discharge_cfs). "
+            "The Runner reads it only for the own-hydrograph method."
+        )
     return folder, notes
+
+
+_FILE_OK = re.compile(
+    r"^(?:[A-Za-z0-9][A-Za-z0-9_.-]{0,80}\.(?:par|bci|bdy|geojson|kml|csv)|inputs/[A-Za-z0-9][A-Za-z0-9_.-]{0,80}\.csv)$"
+)
+
+
+def write_named_files(folder: Path, files) -> list[str]:
+    """Extra desk exports (LISFLOOD package, flood strip, PLSS). Names are a fixed pattern."""
+    written = []
+    if not isinstance(files, dict):
+        return written
+    for name, text in files.items():
+        if not isinstance(name, str) or not isinstance(text, str) or not _FILE_OK.match(name):
+            continue
+        if len(text) > 5_000_000:
+            continue
+        path = folder / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        written.append(name)
+    return written

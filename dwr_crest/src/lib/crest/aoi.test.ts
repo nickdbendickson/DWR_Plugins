@@ -63,6 +63,27 @@ describe("downstream direction from the record geometry", () => {
     assert.match(none.note, /no reservoir point/);
     assert.equal(downstreamDirection(undefined, SITE).basis, "none");
   });
+
+  it("an L-shaped embankment follows the segment at the breach, not the end-to-end chord", () => {
+    const kx = 111320 * Math.cos((SITE.lat * Math.PI) / 180);
+    const at = (eastM: number, northM: number): [number, number] => [
+      SITE.lon + eastM / kx,
+      SITE.lat + northM / 110574,
+    ];
+    const line: GeoJSONFeature = {
+      type: "Feature",
+      properties: {},
+      geometry: { type: "LineString", coordinates: [at(-200, 800), at(-200, 0), at(200, 0)] },
+    };
+    const reservoir: GeoJSONFeature = {
+      type: "Feature",
+      properties: {},
+      geometry: { type: "Point", coordinates: at(0, 400) },
+    };
+    const s = downstreamDirection({ damLine: line, reservoirPoint: reservoir }, SITE);
+    assert.equal(s.basis, "dam line");
+    assert.ok(Math.abs(s.u![0]) < 0.05 && s.u![1] < -0.95, `south down the valley, not along the chord: ${s.u}`);
+  });
 });
 
 describe("1. the reach runs to the nearest downstream exit, not the farthest corner", () => {

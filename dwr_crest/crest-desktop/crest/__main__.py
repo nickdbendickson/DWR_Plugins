@@ -23,7 +23,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from crest import WEB_DIR_NAME
-from crest.qgis_run import run_model, run_screening
+from crest.qgis_run import run_folder, run_layers, run_model, run_screening
 
 #: Fixed local port, so the desk's saved records (browser localStorage is per origin) survive a restart.
 #: If it is taken, a random port is used for that session.
@@ -40,8 +40,16 @@ def _job_log(job: dict, line: str) -> None:
         job["log"] += ("" if job["log"].endswith("\n") or not job["log"] else "\n") + str(line) + "\n"
 
 
-def start_job(kind: str, dam: dict, analysis: dict, work: str | None) -> dict:
-    """Write the dam folder and call the plugins on a background thread. Returns immediately."""
+def start_job(
+    kind: str,
+    dam: dict,
+    analysis: dict,
+    work: str | None,
+    model: str = "lisflood",
+    files=None,
+    source: str = "pack",
+) -> dict:
+    """Write the dam folder, fetch layers, or call the plugins on a background thread. Returns immediately."""
     job_id = uuid.uuid4().hex[:12]
     job = {"id": job_id, "done": False, "ok": False, "log": "", "folder": "", "work": ""}
     with _jobs_lock:
@@ -49,8 +57,15 @@ def start_job(kind: str, dam: dict, analysis: dict, work: str | None) -> dict:
 
     def work_job():
         try:
-            fn = run_screening if kind == "screen" else run_model
-            result = fn(dam or {}, analysis or {}, work, lambda line: _job_log(job, line))
+            log = lambda line: _job_log(job, line)
+            if kind == "layers":
+                result = run_layers(dam or {}, work, source, log)
+            elif kind == "folder":
+                result = run_folder(dam or {}, analysis or {}, work, log, files)
+            elif kind == "model":
+                result = run_model(dam or {}, analysis or {}, work, log, model, files, source)
+            else:
+                result = run_screening(dam or {}, analysis or {}, work, log, files)
             with _jobs_lock:
                 job["ok"] = bool(result.get("ok"))
                 job["folder"] = result.get("folder") or ""
@@ -113,11 +128,13 @@ class _Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path not in ("/api/screen", "/api/model"):
+        kinds = {"/api/screen": "screen", "/api/model": "model", "/api/folder": "folder", "/api/layers": "layers"}
+        kind = kinds.get(parsed.path)
+        if kind is None:
             self._send(404, b"not found", "text/plain")
             return
         length = int(self.headers.get("Content-Length", "0") or 0)
-        if length > 2_000_000:
+        if length > 20_000_000:
             self._send(413, b'{"error":"too large"}', "application/json")
             return
         raw = self.rfile.read(length) if length else b"{}"
@@ -133,8 +150,13 @@ class _Handler(SimpleHTTPRequestHandler):
         if payload.get("dem"):
             dam = dict(dam)
             dam["demPath"] = payload.get("dem")
-        kind = "screen" if parsed.path == "/api/screen" else "model"
-        body = json.dumps(start_job(kind, dam, payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}, payload.get("work")))
+        model = str(payload.get("model") or "lisflood")
+        source = str(payload.get("source") or "pack").lower()
+        if source not in ("pack", "download"):
+            source = "pack"
+        files = payload.get("files") if isinstance(payload.get("files"), dict) else None
+        analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
+        body = json.dumps(start_job(kind, dam, analysis, payload.get("work"), model, files, source))
         self._send(200, body.encode(), "application/json")
 
     def _send(self, code: int, body: bytes, content_type: str) -> None:
