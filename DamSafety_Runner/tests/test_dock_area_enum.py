@@ -1,4 +1,4 @@
-"""3.12.11 / Setup 1.0.18: runs tests/realqt_dock_area.py (real Qt, offscreen) in its own
+"""3.13.3 / Setup 1.0.18: runs tests/realqt_dock_area.py (real Qt, offscreen) in its own
 process, so the fake Qt of this suite does not get in the way. QGIS 4 / PyQt6 has no
 Qt.RightDockWidgetArea; the docks use Qt.DockWidgetArea.*."""
 import os

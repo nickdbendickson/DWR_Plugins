@@ -1,4 +1,4 @@
-"""Hazard 2.21.2 (fulltest 2026-10-30): ndhazard:classify with every DOWNLOAD_* switch off
+"""Hazard 2.22.2 (fulltest 2026-10-30): ndhazard:classify with every DOWNLOAD_* switch off
 downloads nothing - before, it still fetched the OpenStreetMap mobile-home parks, the
 Microsoft footprints and the NAIP flight dates (no switch of their own), and logged
 'mobile-home park download failed' offline.

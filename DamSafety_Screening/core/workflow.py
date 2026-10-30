@@ -498,7 +498,7 @@ def defaults(step, work, settings):
         for slot, param in TOOL0_SLOT.items():
             put(param, src(slot))
     elif step == "1":
-        # 0.17.59: the dam layers resolve as the preflight resolves them (an Inputs choice, else
+        # 0.18.1: the dam layers resolve as the preflight resolves them (an Inputs choice, else
         # the suite folder / package): with only suite_folder in the settings the preflight
         # passed and step 1 stopped with 'Provide a DWR layer, an NID layer, or both'
         dwr_uri, nid_uri = src("dwr"), src("nid")

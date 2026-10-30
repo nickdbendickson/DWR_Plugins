@@ -22,7 +22,7 @@ NEW = [("tri_result", FT_STRING), ("tri_reason", FT_STRING),
 
 
 def _wanted(f, names, only, dam_id=None):
-    """0.17.59: ONLY_IDS as tool 1 reads it: the dam id OR the NID id. Crest sends
+    """0.18.1: ONLY_IDS as tool 1 reads it: the dam id OR the NID id. Crest sends
     the NID id (ND00199) while tool 1 names the dam by its DWR id (DWR-2801), so
     matching dam_id alone dropped the one dam of a one-dam chain here."""
     if not only:

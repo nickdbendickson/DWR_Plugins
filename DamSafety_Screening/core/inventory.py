@@ -120,7 +120,7 @@ def match_fields(names, aliases):
 def resolve_fields(fld, names, aliases, tag="DWR"):
     """(role -> actual field name or None, {role: note}) for a layer with fields `names`.
 
-    0.17.59 (fulltest 2026-10-30): the tool-1 boxes default to the DWR shapefile's 10-character
+    0.18.1 (fulltest 2026-10-30): the tool-1 boxes default to the DWR shapefile's 10-character
     names (structure_, max_dam_he, ...), which the suite GeoPackage (structure_id,
     max_dam_height, ...) does not have, so every read failed with KeyError: 'structure_'. A
     chosen name is now matched ignoring case; one the layer does not have falls back to the

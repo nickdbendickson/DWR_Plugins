@@ -1,4 +1,4 @@
-"""Hazard 2.21.2 (fulltest 2026-10-30): report / map book legends are set to a manual layer
+"""Hazard 2.22.2 (fulltest 2026-10-30): report / map book legends are set to a manual layer
 list without the QGIS 4 DeprecationWarning for QgsLayoutItemLegend.setAutoUpdateModel()
 (compat.legend_manual: setSyncMode(Manual) on QGIS 4, setAutoUpdateModel(False) on QGIS 3).
 

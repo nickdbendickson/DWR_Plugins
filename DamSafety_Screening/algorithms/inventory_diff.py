@@ -38,7 +38,7 @@ def read_inventory(src, metric=False, tag="DWR"):
                                                    "status", "haz_existing")}
             rec["dam_id"] = str(rec["dam_id"] if rec["dam_id"] is not None else f.id())
         else:
-            fld, _n = inv.resolve_fields(dict(inv.DWR_DEFAULTS), names, inv.DWR_ALIASES)  # 0.17.59
+            fld, _n = inv.resolve_fields(dict(inv.DWR_DEFAULTS), names, inv.DWR_ALIASES)  # 0.18.1
             a = inv.standardize(lambda n, _f=f: _f[n], fld, metric, tag, i)
             rec = {"dam_id": f"{tag}-{a['id']}", "name": a["name"], "height_m": a["h"], "inv_norm_m3": a["ns"],
                    "inv_max_m3": a["ms"], "status": a["status"], "haz_existing": a["hz"]}

@@ -1,7 +1,7 @@
-ND Dam Hazard Classification Helper 2.21.2
+ND Dam Hazard Classification Helper 2.22.2
 ==========================================
-(2026-10-30; release set: ND Dam Breach Runner 3.12.11, ND Dam Breach Screening 0.17.59,
-DamSafety Setup 1.0.18. 2.21.1 is PR #240, so this is 2.21.2.)
+(2026-10-30; release set: ND Dam Breach Runner 3.13.3, ND Dam Breach Screening 0.18.1,
+DamSafety Setup 1.0.18. 2.22.0 is main (#241) and 2.22.1 is the open #244, so this is 2.22.2.)
 
 WHY
   The full test of 2026-10-30 (QGIS 3.34 and 4.2, the offline pack, DWR-2801 / ND00199)

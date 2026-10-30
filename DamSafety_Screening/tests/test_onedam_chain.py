@@ -1,4 +1,4 @@
-"""0.17.59: the one-dam (Crest ND00199) chain findings of 2026-10-30.
+"""0.18.1: the one-dam (Crest ND00199) chain findings of 2026-10-30.
 
 (a) step 1 takes the DWR / NID layers the way the preflight finds them (suite folder), not only
     from explicit dwr / nid keys; (b) the preflight disk estimate counts only the only_ids dams;

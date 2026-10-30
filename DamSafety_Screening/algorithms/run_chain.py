@@ -80,7 +80,7 @@ class RunChain(QgsProcessingAlgorithm):
         P(QgsProcessingParameterString("SETTINGS", "Settings (the window's JSON, or the suite settings "
                                        ".xlsx / .csv; file path or text; empty = defaults)",
                                        defaultValue="", optional=True, multiLine=True))
-        # 0.17.59: as the ND copy - Crest's one-dam handoff passes DAM_ID
+        # 0.18.1: as the ND copy - Crest's one-dam handoff passes DAM_ID
         P(QgsProcessingParameterString("DAM_ID", "Dam ID filter (DWR or NID ID; empty = all dams in the "
                                        "settings layer)", defaultValue="", optional=True))
         P(QgsProcessingParameterBoolean("PREFLIGHT", "Preflight check first (refuse to start on a FAIL)",
@@ -129,7 +129,7 @@ class RunChain(QgsProcessingAlgorithm):
         def log(m):
             lines.append(str(m))
             feedback.pushInfo(str(m))
-            if live[0] is not None:          # 0.17.59: line by line, so a killed run leaves its log
+            if live[0] is not None:          # 0.18.1: line by line, so a killed run leaves its log
                 try:
                     live[0].write(str(m) + "\n")
                     live[0].flush()

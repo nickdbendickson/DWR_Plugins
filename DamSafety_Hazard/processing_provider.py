@@ -339,8 +339,14 @@ class ClassifyAlgorithm(_Base):
                                         defaultValue=True))
         P(QgsProcessingParameterBoolean("ONE_D", "1D model (depth > 2 ft rule)",
                                         defaultValue=False))
-        P(QgsProcessingParameterBoolean("JUDGMENT", "Judgment zone counts as probable loss "
-                                        "of life", defaultValue=True))
+        # 2.22.0 (Nick, 10/30/2026): JUDGMENT is TM 11 only (judgment-zone persons in lives
+        # in jeopardy). ND puts judgment-zone houses at MEDIUM by rule; ND_JUDGMENT_HIGH is
+        # the old option (probable loss of life, HIGH), off by default.
+        P(QgsProcessingParameterBoolean("JUDGMENT", "TM 11: judgment-zone persons count in "
+                                        "lives in jeopardy", defaultValue=True))
+        P(QgsProcessingParameterBoolean("ND_JUDGMENT_HIGH", "ND old option: judgment-zone "
+                                        "houses count as probable loss of life (HIGH) - off: "
+                                        "MEDIUM by rule", defaultValue=False))
         P(QgsProcessingParameterBoolean("DOWNLOAD_NSI", "Download NSI", defaultValue=True))
         P(QgsProcessingParameterBoolean("DOWNLOAD_ADDRESS", "Download ND GIS Hub address "
                                         "points (if none loaded)", defaultValue=True))
@@ -453,6 +459,8 @@ class ClassifyAlgorithm(_Base):
             keep_dry=self.parameterAsBool(parameters, "KEEP_DRY", context),
             one_d=self.parameterAsBool(parameters, "ONE_D", context),
             judgment_as_probable=self.parameterAsBool(parameters, "JUDGMENT", context),
+            nd_judgment_as_probable=self.parameterAsBool(parameters, "ND_JUDGMENT_HIGH",
+                                                         context),
             download_nsi=self.parameterAsBool(parameters, "DOWNLOAD_NSI", context),
             download_address=self.parameterAsBool(parameters, "DOWNLOAD_ADDRESS", context),
             download_usa_structures=self.parameterAsBool(parameters, "DOWNLOAD_USA", context),
@@ -481,7 +489,7 @@ class ClassifyAlgorithm(_Base):
             centerline_layer=lyr("CENTERLINE"),
             compare_last_run=self.parameterAsBool(parameters, "COMPARE", context))
         if not any(self.parameterAsBool(parameters, p, context) for p in _DOWNLOAD_PARAMS):
-            # 2.21.2: every download switch off -> nothing is downloaded (the OSM mobile-home
+            # 2.22.2: every download switch off -> nothing is downloaded (the OSM mobile-home
             # parks, MS footprints and NAIP dates were still fetched); CONFIG_JSON may turn
             # one back on
             cfg.update(no_download_overrides())
@@ -631,10 +639,10 @@ _NO_DOWNLOADS = ("download_nsi", "download_address", "download_usa_structures", 
                  "download_crossings", "download_roads", "download_dams", "download_lifelines",
                  "download_crossings_structures", "download_camps", "download_flowlines",
                  "download_places", "download_ms_footprints",
-                 # 2.21.2 (fulltest 2026-10-30): these had no switch here, so a run with every
+                 # 2.22.2 (fulltest 2026-10-30): these had no switch here, so a run with every
                  # download off still fetched the OSM mobile-home parks, MS footprints and NAIP
                  "download_trailer_parks", "naip_flight_dates", "naip_clips")
-# the classify algorithm's own download switches; all off = no downloads at all (2.21.2)
+# the classify algorithm's own download switches; all off = no downloads at all (2.22.2)
 _DOWNLOAD_PARAMS = ("DOWNLOAD_NSI", "DOWNLOAD_ADDRESS", "DOWNLOAD_USA", "DOWNLOAD_RAIL",
                     "DOWNLOAD_DAMS", "DOWNLOAD_LIFELINES", "DOWNLOAD_ROADS",
                     "DOWNLOAD_CROSSINGS", "DOWNLOAD_CAMPS")
@@ -642,7 +650,7 @@ _DOWNLOAD_PARAMS = ("DOWNLOAD_NSI", "DOWNLOAD_ADDRESS", "DOWNLOAD_USA", "DOWNLOA
 
 def no_download_overrides():
     """{cfg key: False} for every download, the MS footprints, NAIP and the OSM mobile-home
-    parks included (2.21.2)."""
+    parks included (2.22.2)."""
     return {k: False for k in _NO_DOWNLOADS}
 
 

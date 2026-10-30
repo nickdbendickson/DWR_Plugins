@@ -1,4 +1,4 @@
-"""0.17.59 (fulltest 2026-10-30): tool 1 with its default DWR field boxes (the shapefile's
+"""0.18.1 (fulltest 2026-10-30): tool 1 with its default DWR field boxes (the shapefile's
 10-character names: structure_, max_dam_he, ...) on the suite GeoPackage (structure_id,
 max_dam_height, ...) failed every read with KeyError: 'structure_'. inventory.resolve_fields
 matches a chosen name ignoring case, falls back to the alias the layer has, else leaves the

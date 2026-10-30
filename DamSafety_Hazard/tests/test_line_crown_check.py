@@ -9,7 +9,7 @@ structures.json next to the rasters.
   * WSE 303 m over the crest counts, with the centreline overtopping (~3.28 ft), not the grid;
   * a bridge cut through the embankment (DEM notched to 299 m) is read on the deck stand-in
     (structures.json) - without the cut record the notch would count;
-  * a stretch shallower than 0.1 ft is skipped; one with no arrival time (2.21.2, fulltest
+  * a stretch shallower than 0.1 ft is skipped; one with no arrival time (2.22.2, fulltest
     ND00199) is counted on depth / the crown check and flagged 'arrival unknown' - still
     skipped when the WSE is below the crown;
   * no WSE / no run_report -> the depth raster as before, with the note;
@@ -189,7 +189,7 @@ def main():
         # an unmapped opening is read as it is (#198): the notch is wetter than the crown
         check("no cut record: the notch counts (read as it is)", len(res) == 1, lc)
 
-        # 4. no arrival time (2.21.2): counted conservatively, flagged; shallower than 0.1 ft
+        # 4. no arrival time (2.22.2): counted conservatively, flagged; shallower than 0.1 ft
         res, chk, _n = run_rail(make_run(os.path.join(tmp, "noarr"), 303.0, arrival=False))
         lc = chk[0]["line_check"] if chk else {}
         check("no arrival: counted, not skipped", len(res) == 1 and

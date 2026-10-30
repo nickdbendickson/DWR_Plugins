@@ -51,8 +51,8 @@ BASIS_GRID = "depth raster (no crown check)"
 
 DECISION_COUNTED = "counted"
 DECISION_SHALLOW = "skipped: grid depth below {:g} ft".format(ARRIVAL_FT)
-DECISION_NO_ARRIVAL = "skipped: no arrival time"   # no longer returned (2.21.2), kept for imports
-# 2.21.2 (fulltest 2026-10-30, ND00199): a wet stretch the arrival raster has no value on is
+DECISION_NO_ARRIVAL = "skipped: no arrival time"   # no longer returned (2.22.2), kept for imports
+# 2.22.2 (fulltest 2026-10-30, ND00199): a wet stretch the arrival raster has no value on is
 # no longer skipped. A partial arrival raster (DWR-2801: ~14 % of the wet cells) dropped every
 # such road, and ndhazard:classify fell to Low where the reference is High. It is now decided on
 # depth / velocity (and the crown check) like any other stretch and flagged 'arrival unknown'.
@@ -289,7 +289,7 @@ def line_check(st, arrival_ok, src=None, pts=None, i0=0, i1=0, depth_ft=None):
     """(decision, crown dict or None) of one wet stretch (a linear._stretches dict, before it
     is counted): below ARRIVAL_FT -> skipped; else, with a CrownSource, counted only when the
     centreline overtopping is above 0. A stretch with no arrival time (when there is an arrival
-    raster) is decided the same way (2.21.2); see arrival_unknown()."""
+    raster) is decided the same way (2.22.2); see arrival_unknown()."""
     if not (st.get("max_depth") or 0.0) >= ARRIVAL_FT:
         return DECISION_SHALLOW, None
     if src is None or pts is None:
