@@ -65,6 +65,8 @@ FORM_KEYS = [
     ("TM11_CLASS", "USBR ACER TM 11 classification, screening result"),
     ("LIVES_IN_JEOPARDY", "TM 11 lives in jeopardy (snapshot, else the summary)"),
     ("TM11_WITHOUT_JUDGMENT", "TM 11 class without the judgment-zone items (summary)"),
+    ("ND_WITHOUT_JUDGMENT", "ND class without the judgment-zone items counted as probable "
+                            "loss of life (summary, 2.21.1+)"),
     ("PAR", "Population at risk used by the loss-of-life screening (summary CONSEQUENCES)"),
     ("EST_LIFE_LOSS", "Estimated fatalities of the loss-of-life screening (summary)"),
     ("EST_LIFE_LOSS_RANGE", "Range of the estimated fatalities (summary)"),
@@ -192,7 +194,13 @@ def available_values(output_folder):
     v["LIVES_IN_JEOPARDY"] = _fmt(float(lij), 1) if lij is not None else None
     for x in sf.get("tm11_lines") or []:
         if x.startswith("Without judgment-zone items:"):
-            v["TM11_WITHOUT_JUDGMENT"] = x.split(":", 1)[1].strip()
+            # 2.21.1: "<TM 11 class> (TM 11 Table 1); ND class: <ND class>"
+            val = x.split(":", 1)[1].strip()
+            tm, _s, rest = val.partition(";")
+            v["TM11_WITHOUT_JUDGMENT"] = tm.replace("(TM 11 Table 1)", "").strip()
+            m = re.search(r"ND class:\s*(\S+)", rest)
+            if m:
+                v["ND_WITHOUT_JUDGMENT"] = m.group(1).capitalize()
     # ---- consequences
     _h, cons = PF.section(parsed, "CONSEQUENCES")
     for x in cons:

@@ -61,7 +61,7 @@ from .linear import analyze_roads, analyze_rail, roads_to_layer, rail_to_layer, 
 from .linear import checked_to_layer
 from .classification import (
     classify_nd, classify_tm11, summary_lines, write_summary, extra_criteria,
-    lone_point_judgment, ms_rule_judgment,
+    lone_point_judgment, ms_rule_judgment, nd_class_without_judgment,
 )
 from .styles import style_by_field, set_map_tip, style_outline
 from .hazard import METHOD_MAXMAX, METHOD_LABEL
@@ -1898,6 +1898,14 @@ def _classify_and_write(run, cfg, state):
                 sc.name, type(e).__name__, e))
             raise
         extra_criteria(nd, s_view, res, cfg)
+        if judge and (nd.get("counts") or {}).get("habitable_judgment"):
+            try:                                # 2.21.1 (DWR-4031): ND, not only TM 11
+                nd["cls_without_judgment"] = nd_class_without_judgment(
+                    s_view, r_view, l_view, res, cfg, one_d=one_d,
+                    roads_evaluated=inputs["roads_on"], rail_evaluated=inputs["rail_on"],
+                    structs_evaluated=inputs.get("structs_on", True))
+            except Exception as e:              # noqa - never fails the result
+                run.log("ND class without judgment-zone items: {}".format(e))
         try:                                    # 2.18.54: class resting on lone 911 points
             lone_point_judgment(nd, tm11, s_view, r_view, l_view, judgment_as_probable=judge,
                                 one_d=one_d, roads_evaluated=inputs["roads_on"],
