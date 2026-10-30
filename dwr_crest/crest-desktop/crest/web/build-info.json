@@ -3,7 +3,7 @@
   "builtBy": "npm run build:desktop",
   "sources": {
     "src/components/crest/charts.tsx": "bc2bd7cf68397388dd90cf1a3408a283bad6f49778cd6b4dbe4b791eb54bd70c",
-    "src/components/crest/desk.tsx": "2c9a95ecad5b4a1122dc7c2b9fb82113c654b66a96a14dce0a1097053934d6e0",
+    "src/components/crest/desk.tsx": "3d420720f8dd9eb7b16983a9d42c44866c5679ad8fdc73de18671327bb89209b",
     "src/components/crest/MapDraw.tsx": "b1050b7d93978462fb805590c51fa52ba8823f13fa20d17838e4e8b4e51a482d",
     "src/components/crest/NdDamPicker.tsx": "b27656a5b7bda3e437b134e8dc8a19060279f49521d21f83f8dad077e6cfae71",
     "src/desktop/engine-entry.ts": "69037599a1f94192c8bd00ac9a22901224685e2045c8dc47347349ca33f2b9c8",

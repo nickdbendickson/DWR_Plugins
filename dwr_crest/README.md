@@ -152,6 +152,8 @@ Needs **Python 3.10, 3.11 or 3.12** (3.12 recommended; 3.13 is not supported by 
    ```
 3. Optional app: `sh build_mac.sh` gives `dist/Crest.app`. It is unsigned, so the first time right-click it and choose Open.
 
+The Report step can hand the open dam to the QGIS plugins already installed on this Mac. **Write folder and run screening** writes `<work>/dams/<id>/` (`dam.json`, the drawn line, breach point, reservoir point, downstream area, and the hydrograph), runs `nddam:preflight` (tool 17), and starts `nddam:runchain` only when that preflight says READY. A FAIL stops there; a new `CrestDams` folder is expected to fail until it has the screening DEM and layers. **Run the flood model** is separate. It needs a DEM (`dem.tif` in the work folder, the DEM field, or `CREST_DEM`) and runs one dam: `ndbreach:rundam`, or `ndbreach_cli.py run` when both Point X and Point Y are filled in the DEM's coordinates. It does not start `ndbreach:batch`. The drawn line is longitude and latitude, so Crest does not send it as `DAM_LINES` and does not set `line_xy`. The log is on the Report step. `Crest.html` has no local server, so those two buttons work from `python run.py`, not from the one-file page.
+
 ### Linux
 `pip install -r requirements.txt` pulls `pywebview[qt]` (PyQt6 + Qt WebEngine, about 500 MB), then `python run.py`.
 

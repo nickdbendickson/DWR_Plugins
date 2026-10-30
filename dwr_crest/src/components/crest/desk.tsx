@@ -590,6 +590,7 @@ function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         </p>
       </div>
       <ExportPanel dam={dam} result={result} />
+      <PluginPanel dam={dam} result={result} />
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-line sm:grid-cols-3">
         <Stat k="Peak discharge (routed)" v={`${num(result.breach.peakCfs, 0)} cfs`} />
         <Stat k="Flooded area" v={`${num(result.flood.acres, 0)} ac`} />
@@ -616,6 +617,119 @@ function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
       ) : null}
       {dam.nidId ? <SourcesNote dam={dam} /> : null}
     </section>
+  );
+}
+
+const handoff = {
+  work: "",
+  dem: "",
+  log: "The screening chain has not been started.",
+  busy: false,
+};
+let handoffTimer = 0;
+
+function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (handoff.busy) bump((n) => n + 1);
+    }, 500);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const start = useCallback(
+    async (path: "/api/screen" | "/api/model") => {
+      if (handoffTimer) window.clearInterval(handoffTimer);
+      handoff.busy = true;
+      handoff.log = "Starting…\n";
+      bump((n) => n + 1);
+      try {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dam, analysis: result, work: handoff.work, dem: handoff.dem }),
+        });
+        if (!response.ok) throw new Error("The Crest server did not accept the job.");
+        const job = (await response.json()) as { id?: string };
+        if (!job.id) throw new Error("The Crest server did not return a job.");
+        handoffTimer = window.setInterval(async () => {
+          try {
+            const found = await (await fetch(`/api/job?id=${job.id}`)).json();
+            handoff.log = String(found.log || "");
+            if (found.done) {
+              window.clearInterval(handoffTimer);
+              handoffTimer = 0;
+              handoff.busy = false;
+              bump((n) => n + 1);
+            }
+          } catch {
+            window.clearInterval(handoffTimer);
+            handoffTimer = 0;
+            handoff.busy = false;
+            handoff.log = "Lost the job log.";
+            bump((n) => n + 1);
+          }
+        }, 1000);
+      } catch {
+        handoff.busy = false;
+        handoff.log =
+          "This page has no Crest server, so QGIS was not started. From the crest-desktop folder run: python run.py";
+        bump((n) => n + 1);
+      }
+    },
+    [dam, result],
+  );
+
+  const field = "mt-1 h-10 w-full rounded-sm border border-line bg-paper px-3 text-sm";
+  const btn =
+    "inline-flex h-10 items-center rounded-sm border border-water bg-water px-3 text-sm text-card disabled:cursor-not-allowed disabled:opacity-50";
+  return (
+    <div className="rounded-md border border-line bg-card p-4">
+      <h3 className="text-lg">Plugins already in QGIS</h3>
+      <p className="mt-1 text-sm text-muted">
+        Writes the dam folder, runs tool 17, and starts nddam:runchain only if the preflight passes. The flood model is a
+        separate button. A missing DEM or a preflight FAIL stops there. This is not an official class.
+      </p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <label className="text-xs text-muted">
+          Work folder
+          <input
+            className={field}
+            value={handoff.work}
+            placeholder="blank = CrestDams in your home folder"
+            onChange={(e) => {
+              handoff.work = e.target.value;
+              bump((n) => n + 1);
+            }}
+          />
+        </label>
+        <label className="text-xs text-muted">
+          DEM
+          <input
+            className={field}
+            value={handoff.dem}
+            placeholder="blank = dem.tif in the work folder, or CREST_DEM"
+            onChange={(e) => {
+              handoff.dem = e.target.value;
+              bump((n) => n + 1);
+            }}
+          />
+        </label>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" className={btn} disabled={handoff.busy} onClick={() => void start("/api/screen")}>
+          Write folder and run screening
+        </button>
+        <button type="button" className={btn} disabled={handoff.busy} onClick={() => void start("/api/model")}>
+          Run the flood model
+        </button>
+      </div>
+      <p className="mt-2 text-xs text-muted">
+        The flood button runs one dam (ndbreach:rundam, or ndbreach_cli.py when both Point X and Point Y are filled in the
+        DEM's coordinates). It does not start ndbreach:batch.
+      </p>
+      <pre className="mt-3 max-h-72 overflow-auto rounded-sm bg-paper p-3 text-xs whitespace-pre-wrap">{handoff.log}</pre>
+    </div>
   );
 }
 
