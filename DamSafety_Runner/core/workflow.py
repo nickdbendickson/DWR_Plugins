@@ -218,8 +218,12 @@ class RunSettings:
         self.inflow_max_from_dam_m = None  # v3.12.10: farthest inflow pick from the dam line
                                            # (default terrain.INFLOW_MAX_FROM_DAM_M, 150 m)
         self.inflow_toe_band_m = None    # v3.12.10: (min, max) m downstream of the dam line the
-                                         # inflow (lowest ground) is looked for (default
-                                         # terrain.INFLOW_TOE_BAND_M, 5-15 m)
+                                         # inflow (lowest ground) is looked for; None (default):
+                                         # 5 m to H x (downstream slope + 1) (v3.13.0, Nick;
+                                         # terrain.toe_band_for_dam)
+        self.inflow_toe_ds_slope_h = None  # v3.13.0: downstream slope (H:1V) for that outer limit;
+                                         # None: the dam's DS_SLOPE / F_DS, else 3:1 (4H)
+        self.inflow_toe_min_outer_m = None  # ... the outer limit at least this (default 15 m)
         self.inflow_toe_cell_m = None    # ... on the DEM read at this cell (default 1 m, or the
                                          # DEM's own cell when coarser)
         self.user_hydrograph_obj = None  # breach.Hydrograph used as given (nested runs)
@@ -2623,7 +2627,11 @@ def _toe_kwargs(dam, st):
     batch's CREST_LINE), the band and the fine cell."""
     return {"toe_line": getattr(dam, "crest_line_xy", None) or getattr(st, "midcrest_line", None),
             "toe_band_m": getattr(st, "inflow_toe_band_m", None),
-            "toe_cell_m": getattr(st, "inflow_toe_cell_m", None)}
+            "toe_cell_m": getattr(st, "inflow_toe_cell_m", None),
+            # v3.13.0: the outer limit H x (slope + 1) from the setting, else the dam's own slope
+            "toe_ds_slope_h": getattr(st, "inflow_toe_ds_slope_h", None)
+            or getattr(dam, "ds_slope_h", None),
+            "toe_min_outer_m": getattr(st, "inflow_toe_min_outer_m", None)}
 
 
 def _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy, band_m=None,
@@ -2647,13 +2655,15 @@ def _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy, band
 
 def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, warnings, log,
                        out=None, max_from_dam_m=None, toe_line=None, toe_band_m=None,
-                       toe_cell_m=None):
+                       toe_cell_m=None, toe_ds_slope_h=None, toe_min_outer_m=None):
     """find_inflow_point limited to the downstream side of the crest and outside the pool
     (core/terrain.downstream_direction, pool_mask). The pool needs terrain well past the
     reservoir, so it is read on its own (POOL_HALF_M around the dam, at the search cell).
     v3.12.10 (Nick): with a dam line (`toe_line`) and a downstream side, the inflow is the
-    lowest ground at the downstream toe (terrain.toe_band_inflow, 5-15 m out along the full
-    line on the 1 m DEM, outside the pool, widened while it is the dam's face);
+    lowest ground at the downstream toe (terrain.toe_band_inflow along the full line on the 1 m
+    DEM, outside the pool, widened while it is the dam's face). v3.13.0 (Nick): the band runs
+    5 m to H x (downstream slope + 1) out (terrain.toe_band_for_dam; 3:1 when the slope is not
+    known; `toe_band_m` overrides it);
     find_inflow_point (with its 150 m cap) is the fallback, with a warning, when there is no
     line or the band has no valid cell."""
     if toe_line is None:
@@ -2686,6 +2696,20 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     if out is not None:                  # v3.10.18: place_from_crest keeps to this side too
         out["direction"], out["how"] = direction, how
     if toe_line is not None and len(toe_line) >= 2 and direction is not None:
+        band_how = None
+        if toe_band_m is None:
+            toe_band_m, band_how, known = terrain.toe_band_for_dam(
+                h_m, toe_ds_slope_h, min_outer_m=toe_min_outer_m,
+                cap_m=max_from_dam_m)
+            if not known:
+                msg = ("Breach inflow: toe band {:.0f}-{:.0f} m ({}); check the inflow "
+                       "point.".format(toe_band_m[0], toe_band_m[1], band_how))
+                warnings.append(msg)
+                log(msg)
+            log("Breach inflow toe band: {:.0f}-{:.0f} m downstream of the dam line ({})".format(
+                toe_band_m[0], toe_band_m[1], band_how))
+        if out is not None:
+            out["toe_band_m"], out["toe_band_how"] = tuple(toe_band_m), band_how
         try:
             xy, why = _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy,
                                   toe_band_m, toe_cell_m, max_from_dam_m)

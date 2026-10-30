@@ -286,9 +286,14 @@ def find_inflow_point(grid, dam_xy, dam_height_m, top_m, radius_m=None, downstre
     return pt, note
 
 
-INFLOW_TOE_BAND_M = (5.0, 15.0)  # v3.12.10 (Nick: "use a 5-15 m toe strip"): the inflow is the
-                                 # lowest ground this far downstream of the dam line, along its
-                                 # full length
+INFLOW_TOE_INNER_M = 5.0         # v3.13.0 (Nick, "would do 2"): the toe search runs from this far
+                                 # downstream of the dam line ...
+INFLOW_TOE_DS_SLOPE_DEFAULT = 3.0  # ... out to H x (downstream slope + 1), H the dam height (m) and
+                                 # the slope H:1V (the dam's ds_slope_h; 3:1, i.e. 4H, unknown)
+INFLOW_TOE_MIN_OUTER_M = 15.0    # the outer limit is never nearer than this (a low dam: 5-15 m,
+                                 # Nick's earlier strip) ...
+INFLOW_TOE_BAND_M = (5.0, 30.0)  # ... and is this band, with a warning, when the dam height is not
+                                 # known (also toe_band_mask's default)
 INFLOW_TOE_CELL_M = 1.0          # ... read at this cell (or the DEM's own, when coarser)
 INFLOW_TOE_DROP = 0.75           # the strip's pick is the toe only when its ground is this
                                  # fraction of the dam height below the top of dam; else it is
@@ -300,6 +305,42 @@ INFLOW_TOE_WIDEN_M = 10.0        # ... its outer edge moving out by this, up to 
 INFLOW_TOE_SIDE_MIN = 0.25       # a segment of the dam line whose normal is closer than this
                                  # (cosine) to square with the downstream side has no known side
 NO_TOE = "no toe band"
+
+
+def toe_band_for_dam(h_m, ds_slope_h=None, inner_m=None, min_outer_m=None, cap_m=None):
+    """v3.13.0 (Nick: the toe search's outer limit is H x (downstream slope + 1)): the toe band
+    (inner, outer) m downstream of the dam line for a dam `h_m` high with a downstream slope of
+    `ds_slope_h`:1 (INFLOW_TOE_DS_SLOPE_DEFAULT when unknown). The outer limit is at least
+    `min_outer_m` (INFLOW_TOE_MIN_OUTER_M) and more than the inner limit, and never past `cap_m`
+    (INFLOW_MAX_FROM_DAM_M). Returns ((inner, outer), how, known) - known is False when the dam
+    height is unknown and INFLOW_TOE_BAND_M is used (the caller warns)."""
+    lo = INFLOW_TOE_INNER_M if inner_m is None else float(inner_m)
+    cap = INFLOW_MAX_FROM_DAM_M if cap_m is None else float(cap_m)
+    least = INFLOW_TOE_MIN_OUTER_M if min_outer_m is None else float(min_outer_m)
+    try:
+        h = float(h_m)
+    except (TypeError, ValueError):
+        h = float("nan")
+    if not (h > 0 and np.isfinite(h)):
+        lo, hi = INFLOW_TOE_BAND_M[0] if inner_m is None else lo, INFLOW_TOE_BAND_M[1]
+        return (lo, max(min(hi, cap), lo + 1.0)), (
+            "dam height not known: the default {:.0f}-{:.0f} m band".format(lo, hi)), False
+    try:
+        z = float(ds_slope_h)
+        z_how = "{:g}:1 downstream slope".format(z)
+    except (TypeError, ValueError):
+        z = float("nan")
+    if not (z > 0 and np.isfinite(z)):
+        z = INFLOW_TOE_DS_SLOPE_DEFAULT
+        z_how = "downstream slope not known, {:g}:1".format(z)
+    raw = h * (z + 1.0)
+    hi = min(max(raw, least, lo + 1.0), cap)
+    how = "H x (slope + 1) = {:.1f} m x {:g} = {:.1f} m ({})".format(h, z + 1.0, raw, z_how)
+    if hi > raw + 1e-6:
+        how += ", at least {:.0f} m".format(hi)
+    elif hi < raw - 1e-6:
+        how += ", capped at {:.0f} m".format(hi)
+    return (lo, hi), how, True
 
 
 def _line_foot(X, Y, line):
@@ -359,8 +400,9 @@ def toe_band_mask(grid, crest_line, downstream, band_m=None):
 def toe_band_inflow(grid, crest_line, downstream, dam_height_m, top_m, band_m=None,
                     pool=None, max_from_dam_m=None, dam_xy=None):
     """v3.12.10 (Nick, DWR-4031: "the inflow point at the dam toe at the lowest elevation";
-    "use a 5-15 m toe strip"): the lowest cell of the toe band (toe_band_mask: 5-15 m
-    downstream of the dam line along its full length) on `grid`, which should be the fine DEM
+    v3.13.0, "would do 2"): the lowest cell of the toe band (toe_band_mask: `band_m`, by default
+    toe_band_for_dam - 5 m to H x (3 + 1) - downstream of the dam line along its full length;
+    workflow passes the dam's own downstream slope) on `grid`, which should be the fine DEM
     (1 m). Ties (a flat) go to the cell nearest the dam line, then the dam point. Cells not
     below the top of dam do not count, nor cells in `pool` (a Grid of 0/1, the reservoir found
     at the search cell) more than half a pool cell's diagonal from the line (nearer, a coarse
@@ -374,8 +416,9 @@ def toe_band_inflow(grid, crest_line, downstream, dam_height_m, top_m, band_m=No
         return None, "{}: no dam line".format(NO_TOE)
     if downstream is None:
         return None, "{}: the downstream side of the dam line is not known".format(NO_TOE)
-    lo, hi = INFLOW_TOE_BAND_M if band_m is None else (float(band_m[0]), float(band_m[1]))
     cap = INFLOW_MAX_FROM_DAM_M if max_from_dam_m is None else float(max_from_dam_m)
+    lo, hi = (toe_band_for_dam(dam_height_m, cap_m=cap)[0] if band_m is None
+              else (float(band_m[0]), float(band_m[1])))
     hi = min(hi, cap)
     if hi <= lo:
         return None, "{}: the band {:.0f}-{:.0f} m is empty".format(NO_TOE, lo, hi)
