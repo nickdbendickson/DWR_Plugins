@@ -127,7 +127,7 @@ not need Node to run it. Everything is bundled (Leaflet, leaflet-draw, icons, st
 need the network. Your work is saved on the computer (the same autosave as the browser). Export buttons open a
 Save dialog.
 
-Needs **Python 3.10, 3.11 or 3.12** (3.12 recommended; 3.13 is not supported by the pinned GUI and PyInstaller stack).
+Needs **Python 3.10 or newer** to open the desk (3.14 is fine). Building `Crest.app` still needs 3.10–3.12; PyInstaller fails on 3.13 and newer.
 
 ### Windows 10/11
 1. Install Python 3.12 from python.org (tick "Add python.exe to PATH") and Git.
