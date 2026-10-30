@@ -127,7 +127,9 @@ def inflow_workflow_helper_uses_the_pool_read_and_warns():
     warnings, logs = [], []
     pt, why = workflow._downstream_inflow(Src(), local, Dam(), (0.0, 0.0), H_M, TOP_M, rad, 20.0,
                                           warnings, logs.append)
-    assert pt is not None and pt[0] > 0 and "downstream side" in why and not warnings, (pt, why)
+    assert pt is not None and pt[0] > 0 and "downstream side" in why, (pt, why)
+    # v3.12.10: no dam line, so not the toe band; the old search, with that one warning
+    assert len(warnings) == 1 and "not placed at the downstream toe" in warnings[0], warnings
     assert any("Downstream side of the crest" in m for m in logs)
 
 

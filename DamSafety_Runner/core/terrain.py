@@ -286,6 +286,116 @@ def find_inflow_point(grid, dam_xy, dam_height_m, top_m, radius_m=None, downstre
     return pt, note
 
 
+INFLOW_TOE_BAND_M = (5.0, 30.0)  # v3.12.10 (Nick): the inflow is the lowest ground this far
+                                 # downstream of the dam line, along its full length
+INFLOW_TOE_CELL_M = 1.0          # ... read at this cell (or the DEM's own, when coarser)
+INFLOW_TOE_WIDEN_M = 10.0        # the band's outer edge moves out by this while its lowest ground
+                                 # is not half the dam height below the top of dam (a tall dam's
+                                 # downstream face can fill the whole band), up to the cap
+NO_TOE = "no toe band"
+
+
+def _line_foot(X, Y, line):
+    """Distance of every (X, Y) from the polyline `line` and the nearest point on it (fx, fy)."""
+    a = np.asarray(line, dtype=float).reshape(-1, 2)
+    best = np.full(X.shape, np.inf)
+    fx = np.zeros(X.shape)
+    fy = np.zeros(X.shape)
+    for (x0, y0), (x1, y1) in zip(a[:-1], a[1:]):
+        vx, vy = x1 - x0, y1 - y0
+        L2 = vx * vx + vy * vy
+        t = np.clip(((X - x0) * vx + (Y - y0) * vy) / L2, 0.0, 1.0) if L2 > 0 else \
+            np.zeros(X.shape)
+        px, py = x0 + t * vx, y0 + t * vy
+        dd = np.hypot(px - X, py - Y)
+        m = dd < best
+        best = np.where(m, dd, best)
+        fx = np.where(m, px, fx)
+        fy = np.where(m, py, fy)
+    return best, fx, fy
+
+
+def toe_band_mask(grid, crest_line, downstream, band_m=None):
+    """v3.12.10: cells of `grid` in the toe band: band_m[0]..band_m[1] m from the dam line, on
+    its downstream side (the offset from the nearest point of the line within 60 degrees of
+    `downstream`, so the band runs along the full crest length and does not wrap round the
+    ends of the line onto the upstream side). Returns (mask, distance from the line)."""
+    lo, hi = INFLOW_TOE_BAND_M if band_m is None else (float(band_m[0]), float(band_m[1]))
+    X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
+    dl, fx, fy = _line_foot(X, Y, crest_line)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        along = ((X - fx) * downstream[0] + (Y - fy) * downstream[1]) / np.where(dl > 0, dl, 1.0)
+    return (dl >= lo) & (dl <= hi) & (along >= 0.5), dl
+
+
+def toe_band_inflow(grid, crest_line, downstream, dam_height_m, top_m, band_m=None,
+                    pool=None, max_from_dam_m=None, dam_xy=None):
+    """v3.12.10 (Nick, DWR-4031: "the inflow point at the dam toe at the lowest elevation"):
+    the lowest cell of the toe band (toe_band_mask: 5-30 m downstream of the dam line along its
+    full length) on `grid`, which should be the fine DEM (1 m). Ties (a flat) go to the cell
+    nearest the dam line, then the dam point. Cells in `pool` (a Grid of 0/1) or not below the
+    top of dam do not count. When the band's lowest ground is not half the dam height below
+    the top of dam, the outer edge moves out INFLOW_TOE_WIDEN_M at a time (never past
+    max_from_dam_m) and the first band that reaches it is used, else the first band.
+    Returns ((x, y), note) or (None, reason starting with NO_TOE): the caller falls back to
+    find_inflow_point."""
+    if crest_line is None or len(crest_line) < 2:
+        return None, "{}: no dam line".format(NO_TOE)
+    if downstream is None:
+        return None, "{}: the downstream side of the dam line is not known".format(NO_TOE)
+    lo, hi = INFLOW_TOE_BAND_M if band_m is None else (float(band_m[0]), float(band_m[1]))
+    cap = INFLOW_MAX_FROM_DAM_M if max_from_dam_m is None else float(max_from_dam_m)
+    hi = min(hi, cap)
+    if hi <= lo:
+        return None, "{}: the band {:.0f}-{:.0f} m is empty".format(NO_TOE, lo, hi)
+    z = grid.masked()
+    X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
+    ok = np.isfinite(z) & (z < float(top_m))
+    if pool is not None:
+        pr = np.floor((pool.y0 - Y) / pool.dx).astype(int)
+        pc = np.floor((X - pool.x0) / pool.dx).astype(int)
+        inside = (pr >= 0) & (pr < pool.ny) & (pc >= 0) & (pc < pool.nx)
+        in_pool = np.zeros(z.shape, dtype=bool)
+        in_pool[inside] = pool.data[pr[inside], pc[inside]] > 0.5
+        ok &= ~in_pool
+    a = np.asarray(crest_line, dtype=float).reshape(-1, 2)
+    ref = dam_xy if dam_xy is not None else tuple(a.mean(axis=0))
+    dref = np.hypot(X - ref[0], Y - ref[1])
+    need = float(top_m) - 0.5 * float(dam_height_m)
+    first = None
+    outer = hi
+    while True:
+        band, dl = toe_band_mask(grid, a, downstream, (lo, outer))
+        sel = band & ok
+        if sel.any():
+            idx = np.flatnonzero(sel)
+            k = idx[np.lexsort((dref.ravel()[idx], np.round(dl.ravel()[idx], 1),
+                                np.round(z.ravel()[idx], 2)))[0]]
+            r, c = np.unravel_index(k, z.shape)
+            pick = (r, c, outer)
+            if first is None:
+                first = pick
+            if z[r, c] <= need:
+                break
+        if outer >= cap - 1e-6:
+            pick = first
+            break
+        outer = min(cap, outer + INFLOW_TOE_WIDEN_M)
+    if pick is None:
+        return None, ("{}: no DEM cell below the top of dam (outside the pool) {:.0f}-{:.0f} m "
+                      "downstream of the dam line".format(NO_TOE, lo, hi))
+    r, c, outer = pick
+    drop = (float(top_m) - z[r, c]) / 0.3048
+    note = ("lowest ground at the downstream toe: {:.0f}-{:.0f} m downstream of the dam line "
+            "along its full length ({:g} m DEM), {:.0f} m from the line, {:.1f} ft below the "
+            "top of dam".format(lo, outer, grid.dx, dl[r, c], drop))
+    if outer > hi + 1e-6:
+        note += " (band widened from {:.0f} m: the ground nearer is the dam's face)".format(hi)
+    if z[r, c] > need:
+        note += "; less than half the dam height below the top of dam"
+    return (float(X[r, c]), float(Y[r, c])), note
+
+
 def _pick_inflow(X, Y, d, z, need, top_m, radius_m, ok, lim=None):
     if lim is None:
         lim = (d, np.inf, "dam point")

@@ -217,6 +217,11 @@ class RunSettings:
         self.inflow_width_m = None       # width the inflow is spread over (default: the breach width)
         self.inflow_max_from_dam_m = None  # v3.12.10: farthest inflow pick from the dam line
                                            # (default terrain.INFLOW_MAX_FROM_DAM_M, 150 m)
+        self.inflow_toe_band_m = None    # v3.12.10: (min, max) m downstream of the dam line the
+                                         # inflow (lowest ground) is looked for (default
+                                         # terrain.INFLOW_TOE_BAND_M, 5-30 m)
+        self.inflow_toe_cell_m = None    # ... on the DEM read at this cell (default 1 m, or the
+                                         # DEM's own cell when coarser)
         self.user_hydrograph_obj = None  # breach.Hydrograph used as given (nested runs)
         self.user_baseline_obj = None    # its no-breach counterpart, for the incremental rasters
         self.snapshot_frames = 0         # >0: depth snapshots for an animation (about this many frames)
@@ -1204,7 +1209,8 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
             inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
                                                 search_cell, warnings, log, out=ds_info,
                                                 max_from_dam_m=getattr(
-                                                    st, "inflow_max_from_dam_m", None))
+                                                    st, "inflow_max_from_dam_m", None),
+                                                **_toe_kwargs(dam, st))
             ds_dir = ds_info.get("direction")
             qa_ctx["downstream"] = ds_dir
             if inflow_xy is None:
@@ -2363,7 +2369,8 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
         inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
                                             search_cell, warnings, lambda *_a: None, out=ds_info,
                                             max_from_dam_m=getattr(
-                                                st, "inflow_max_from_dam_m", None))
+                                                st, "inflow_max_from_dam_m", None),
+                                            **_toe_kwargs(dam, st))
         if inflow_xy is None:
             inflow_xy, crest, why = terrain.place_from_crest(
                 local, dam_xy, h_m, top_m, search_rad, downstream=ds_info.get("direction"))
@@ -2611,11 +2618,45 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
         log(msg)
 
 
+def _toe_kwargs(dam, st):
+    """v3.12.10: the toe-band settings of _downstream_inflow: the dam line (DAM_LINES, else a
+    batch's CREST_LINE), the band and the fine cell."""
+    return {"toe_line": getattr(dam, "crest_line_xy", None) or getattr(st, "midcrest_line", None),
+            "toe_band_m": getattr(st, "inflow_toe_band_m", None),
+            "toe_cell_m": getattr(st, "inflow_toe_cell_m", None)}
+
+
+def _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy, band_m=None,
+                cell_m=None, max_from_dam_m=None):
+    """v3.12.10: terrain.toe_band_inflow on the fine DEM read around the dam line."""
+    lo, hi = terrain.INFLOW_TOE_BAND_M if band_m is None else (float(band_m[0]),
+                                                               float(band_m[1]))
+    cap = terrain.INFLOW_MAX_FROM_DAM_M if max_from_dam_m is None else float(max_from_dam_m)
+    cell = float(cell_m) if cell_m else terrain.INFLOW_TOE_CELL_M
+    native = terrain_native_cell(terrain_src)
+    if native and native > cell:
+        cell = native
+    a = np.asarray(toe_line, dtype=float).reshape(-1, 2)
+    # room for the band to widen up to the cap (terrain.INFLOW_TOE_WIDEN_M)
+    pad = max(hi, min(cap, hi + 60.0)) + 3.0 * cell
+    fine = terrain_src.read((a[:, 0].min() - pad, a[:, 1].min() - pad,
+                             a[:, 0].max() + pad, a[:, 1].max() + pad), cell)
+    return terrain.toe_band_inflow(fine, a, direction, h_m, top_m, band_m=(lo, hi), pool=pool,
+                                   max_from_dam_m=min(cap, hi + 60.0), dam_xy=dam_xy)
+
+
 def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, warnings, log,
-                       out=None, max_from_dam_m=None):
+                       out=None, max_from_dam_m=None, toe_line=None, toe_band_m=None,
+                       toe_cell_m=None):
     """find_inflow_point limited to the downstream side of the crest and outside the pool
     (core/terrain.downstream_direction, pool_mask). The pool needs terrain well past the
-    reservoir, so it is read on its own (POOL_HALF_M around the dam, at the search cell)."""
+    reservoir, so it is read on its own (POOL_HALF_M around the dam, at the search cell).
+    v3.12.10 (Nick): with a dam line (`toe_line`) and a downstream side, the inflow is the
+    lowest ground at the downstream toe (terrain.toe_band_inflow, 5-30 m out along the full
+    line on the 1 m DEM); find_inflow_point (with its 150 m cap) is the fallback, with a
+    warning, when there is no line or the band has no valid cell."""
+    if toe_line is None:
+        toe_line = getattr(dam, "crest_line_xy", None)
     half = terrain.POOL_HALF_M
     pool_grid = pool = direction = None
     try:
@@ -2643,6 +2684,28 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
         "({:.2f}, {:.2f}), {}".format(direction[0], direction[1], how) if direction else how))
     if out is not None:                  # v3.10.18: place_from_crest keeps to this side too
         out["direction"], out["how"] = direction, how
+    if toe_line is not None and len(toe_line) >= 2 and direction is not None:
+        try:
+            xy, why = _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, None, dam_xy,
+                                  toe_band_m, toe_cell_m, max_from_dam_m)
+        except Exception as e:                   # noqa: BLE001 - the old search is the fallback
+            xy, why = None, "{}: {}: {}".format(terrain.NO_TOE, type(e).__name__, e)
+        if xy is not None:
+            return xy, "{}, downstream side ({})".format(why, how)
+        toe_why = why
+    elif toe_line is None or len(toe_line) < 2:
+        toe_why = "{}: no dam line (DAM_LINES or CREST_LINE)".format(terrain.NO_TOE)
+    else:
+        toe_why = "{}: the downstream side of the dam line is not known".format(terrain.NO_TOE)
+    msg = ("Breach inflow: not placed at the downstream toe ({}); the lowest ground near the "
+           "dam point is used instead (within {:.0f} m of the dam {}). Check it, or give the "
+           "inflow point.".format(toe_why, terrain.INFLOW_MAX_FROM_DAM_M if max_from_dam_m is None
+                                  else float(max_from_dam_m),
+                                  "line" if getattr(dam, "crest_line_xy", None) else "point"))
+    warnings.append(msg)
+    log(msg)
+    if out is not None:
+        out["toe"] = toe_why
     xy, why = terrain.find_inflow_point(
         local, dam_xy, h_m, top_m, rad, downstream=direction, pool=pool,
         crest_line=getattr(dam, "crest_line_xy", None),
