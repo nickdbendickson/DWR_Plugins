@@ -31,6 +31,7 @@ from .helpers import create_memory_layer, export_layer_to_formats, prepare_outpu
 from .structures import OUT_PROBABLE, OUT_JUDGMENT, OUT_ECONOMIC, TYPE_MOBILE
 
 
+JUDGMENT_RULE_PREFIX = "MEDIUM - "     # 2.22.0: judgment-zone rule reason starts so
 PROVISIONAL_PREFIX = "PROVISIONAL - "   # FF.1: formfill skips this reason (not a criterion)
 
 
@@ -53,11 +54,16 @@ def _drop_low_reason(nd):
     nd["reasons"] = [r for r in nd["reasons"] if not r.startswith("LOW -")]
 
 
-def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
+def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
                 roads_evaluated=True, rail_evaluated=True, structs_evaluated=True):
     """Returns dict(cls, reasons[], judgment[], counts{}). v2.19.0: `structs_evaluated`
     False (no structure layer was given or downloaded) shows the structure rows as
-    "not evaluated" instead of "not met" and marks the class incomplete."""
+    "not evaluated" instead of "not met" and marks the class incomplete.
+
+    2.22.0 (Nick, 10/30/2026): a habitable structure in the ACER judgment zone makes
+    the dam MEDIUM by rule - not probable loss of life, not a provisional High.
+    `judgment_as_probable` True is the old conservative option (judgment zone counted
+    as probable loss of life, HIGH); it is kept as a non-default option."""
     # An empty inventory is not a Low dam. Low is only after structures,
     # roads and rail were actually tested.
     if not structs and not roads and not rails:
@@ -101,8 +107,12 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
             reasons.append("HIGH - " + msg + "; counted as probable loss of life "
                            "(conservative judgment-zone setting)")
         else:
-            judgment.append(msg + " - would make the dam HIGH if loss of life is judged "
-                            "probable")
+            # 2.22.0: the ND judgment-zone rule - MEDIUM, automatically
+            cls = _raise(cls, ND_MEDIUM)
+            reasons.append(JUDGMENT_RULE_PREFIX + "{} habitable structure(s) in the ACER "
+                           "judgment zone - classed MEDIUM by rule (judgment-zone houses "
+                           "are Medium, not probable loss of life) [5.2.1.1]".format(
+                               len(judg)))
     for r in roads:
         if r["nd_class"] == ND_HIGH:
             cls = ND_HIGH
@@ -206,7 +216,7 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
          "n/a (1D model)" if one_d else "{} ({} persons)".format(len(judg), persons(judg)),
          "?" if not se else
          "not met" if not judg else (ND_HIGH + " (judgment counted)" if judgment_as_probable
-                                     else "Judgment")),
+                                     else ND_MEDIUM + " (by rule)")),
         ("5.2.1.2", "Overtopped roads - Interstate or AADT > 2,000",
          "{} stretch(es)".format(len(road_high)) if roads_evaluated else "not evaluated",
          met(road_high, ND_HIGH) if roads_evaluated else "?"),
@@ -249,7 +259,9 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
                 "roads_high": len(road_high), "roads_medium": len(road_med),
                 "rail": len(rails), "rail_high": len(rail_high),
                 "unverified": len(unverified), "persons_probable": persons(probable),
-                "persons_judgment": persons(judg)}}
+                "persons_judgment": persons(judg)},
+            # 2.22.0: which judgment-zone rule classified this ("medium" = ND rule)
+            "judgment_rule": "probable" if judgment_as_probable else "medium"}
 
 
 def tm11_rows(tm11):
@@ -595,9 +607,11 @@ def lone_point_judgment(nd, tm11, structs, roads, rails, **kw):
     rest = [r for r in structs if id(r) not in ids]
     # (raw structure classes - the access / facility raises of extra_criteria do not
     # depend on these points)
+    kw = dict(kw)
+    tm11_j = kw.pop("tm11_judgment", True)     # 2.22.0: TM 11 has its own setting
     nd1 = classify_nd(structs, roads, rails, **kw)
     nd2 = classify_nd(rest, roads, rails, **kw)
-    tm2 = classify_tm11(rest, roads, judgment_as_probable=kw.get("judgment_as_probable", True))
+    tm2 = classify_tm11(rest, roads, judgment_as_probable=tm11_j)
     nd_rests = nd2["cls"] != nd1["cls"] and ND_RANK.get(nd2["cls"], -1) < \
         ND_RANK.get(nd["cls"], -1)
     if not nd_rests and tm2["cls"] == tm11["cls"]:
@@ -656,6 +670,7 @@ def ms_rule_judgment(nd, tm11, structs, roads, rails, clip_fn=None, **kw):
     from .constants import CLASS_HIGH, CLASS_JUDGMENT
     from .lone911 import misplaced_text, MISPLACED_911_M
     misplaced_m = kw.pop("misplaced_m", None) or MISPLACED_911_M
+    tm11_j = kw.pop("tm11_judgment", True)     # 2.22.0: TM 11 has its own setting
 
     def wet(r):
         return r.get("outcome") not in (None, OUT_DRY, OUT_TRACE)
@@ -690,8 +705,7 @@ def ms_rule_judgment(nd, tm11, structs, roads, rails, clip_fn=None, **kw):
             ids = {id(r) for r in wd}
             alt = [ms_rule_counted_copy(r) if id(r) in ids else r for r in structs]
             nd2 = classify_nd(alt, roads, rails, **kw)
-            tm2 = classify_tm11(alt, roads,
-                                judgment_as_probable=kw.get("judgment_as_probable", True))
+            tm2 = classify_tm11(alt, roads, judgment_as_probable=tm11_j)
             msg += (" Wet in a High or Judgment zone and not counted: {}. Counted, they would "
                     "give ND {} / TM 11 {} (LIJ {:.1f}); now ND {} / TM 11 {} (LIJ {:.1f}) - "
                     "confirm on imagery that no dwelling stands there.".format(
