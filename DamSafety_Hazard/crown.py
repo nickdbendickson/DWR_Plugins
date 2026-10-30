@@ -51,7 +51,13 @@ BASIS_GRID = "depth raster (no crown check)"
 
 DECISION_COUNTED = "counted"
 DECISION_SHALLOW = "skipped: grid depth below {:g} ft".format(ARRIVAL_FT)
-DECISION_NO_ARRIVAL = "skipped: no arrival time"
+DECISION_NO_ARRIVAL = "skipped: no arrival time"   # no longer returned (2.21.2), kept for imports
+# 2.21.2 (fulltest 2026-10-30, ND00199): a wet stretch the arrival raster has no value on is
+# no longer skipped. A partial arrival raster (DWR-2801: ~14 % of the wet cells) dropped every
+# such road, and ndhazard:classify fell to Low where the reference is High. It is now decided on
+# depth / velocity (and the crown check) like any other stretch and flagged 'arrival unknown'.
+NOTE_ARRIVAL_UNKNOWN = ("arrival unknown: the arrival raster has no value on this wet stretch; "
+                        "counted on depth / velocity with no warning time (conservative)")
 DECISION_BELOW_CROWN = "skipped: WSE not above the centreline crown"
 
 
@@ -281,18 +287,22 @@ def check_stretch(src, pts, i0, i1, depth_ft=None, extend_m=EXTEND_M):
 
 def line_check(st, arrival_ok, src=None, pts=None, i0=0, i1=0, depth_ft=None):
     """(decision, crown dict or None) of one wet stretch (a linear._stretches dict, before it
-    is counted): below ARRIVAL_FT or (with an arrival raster) no arrival time -> skipped; else,
-    with a CrownSource, counted only when the centreline overtopping is above 0."""
+    is counted): below ARRIVAL_FT -> skipped; else, with a CrownSource, counted only when the
+    centreline overtopping is above 0. A stretch with no arrival time (when there is an arrival
+    raster) is decided the same way (2.21.2); see arrival_unknown()."""
     if not (st.get("max_depth") or 0.0) >= ARRIVAL_FT:
         return DECISION_SHALLOW, None
-    if arrival_ok and st.get("arrival") is None:
-        return DECISION_NO_ARRIVAL, None
     if src is None or pts is None:
         return DECISION_COUNTED, None
     c = check_stretch(src, pts, i0, i1, depth_ft)
     if c.get("basis") in (BASIS_CROWN, BASIS_RASTER) and not c.get("overtop_ft", 0.0) > 0.0:
         return DECISION_BELOW_CROWN, c
     return DECISION_COUNTED, c
+
+
+def arrival_unknown(st, arrival_ok):
+    """True when there is an arrival raster but it has no value on the wet stretch `st`."""
+    return bool(arrival_ok) and st.get("arrival") is None
 
 
 # --- 2.18.69 (DWR-3034 review, item 8): crossing depth in the channel on the 1 m DEM --------

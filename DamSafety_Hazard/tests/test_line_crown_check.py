@@ -9,7 +9,9 @@ structures.json next to the rasters.
   * WSE 303 m over the crest counts, with the centreline overtopping (~3.28 ft), not the grid;
   * a bridge cut through the embankment (DEM notched to 299 m) is read on the deck stand-in
     (structures.json) - without the cut record the notch would count;
-  * a stretch with no arrival time, and one shallower than 0.1 ft, is skipped;
+  * a stretch shallower than 0.1 ft is skipped; one with no arrival time (2.21.2, fulltest
+    ND00199) is counted on depth / the crown check and flagged 'arrival unknown' - still
+    skipped when the WSE is below the crown;
   * no WSE / no run_report -> the depth raster as before, with the note;
   * the rail / road tables carry Depth_Basis / Grid_Depth_ft / Crown_ft / WSE_ft /
     Freeboard_ft after Notes, and the Line_Crown_Check QA layer lists every wet stretch;
@@ -187,11 +189,33 @@ def main():
         # an unmapped opening is read as it is (#198): the notch is wetter than the crown
         check("no cut record: the notch counts (read as it is)", len(res) == 1, lc)
 
-        # 4. skips: no arrival time; shallower than 0.1 ft
+        # 4. no arrival time (2.21.2): counted conservatively, flagged; shallower than 0.1 ft
         res, chk, _n = run_rail(make_run(os.path.join(tmp, "noarr"), 303.0, arrival=False))
-        check("no arrival: skipped", res == [] and chk and
-              chk[0]["line_check"]["decision"] == CR.DECISION_NO_ARRIVAL,
-              [c["line_check"]["decision"] for c in chk])
+        lc = chk[0]["line_check"] if chk else {}
+        check("no arrival: counted, not skipped", len(res) == 1 and
+              lc.get("decision") == CR.DECISION_COUNTED and lc.get("arrival_unknown") is True,
+              [c["line_check"] for c in chk])
+        check("no arrival: crown overtopping still used (~3.28 ft)",
+              res and abs(res[0]["max_depth"] - 3.28) < 0.1 and res[0]["arrival"] is None,
+              res and res[0]["max_depth"])
+        check("no arrival: Notes flag 'arrival unknown'",
+              res and LN.check_note(res[0]).startswith("arrival unknown") and
+              "centreline crown" in LN.check_note(res[0]), res and LN.check_note(res[0]))
+        qa = LN.checked_to_layer(chk, QgsCoordinateReferenceSystem(CRS))
+        qf = next(qa.getFeatures(), None)
+        check("no arrival: QA layer Note says arrival unknown",
+              qf is not None and str(qf["Note"]).startswith("arrival unknown"),
+              qf and qf.attributes())
+        check("no arrival: decision is never the old skip",
+              all(c["line_check"]["decision"] != CR.DECISION_NO_ARRIVAL for c in chk))
+        res, chk, _n = run_rail(make_run(os.path.join(tmp, "noarr_toe"), 301.0, arrival=False))
+        check("no arrival, WSE below the crown: still not counted (crown check applies)",
+              res == [] and chk and chk[0]["line_check"]["decision"] == CR.DECISION_BELOW_CROWN
+              and chk[0]["line_check"].get("arrival_unknown") is True,
+              [c["line_check"] for c in chk])
+        check("arrival time present: no arrival-unknown flag",
+              not run_rail(make_run(os.path.join(tmp, "witharr"), 303.0))[1][0]["line_check"]
+              .get("arrival_unknown"))
         res, chk, _n = run_rail(make_run(os.path.join(tmp, "shallow"), 303.0, depth_ft=0.05))
         check("0.05 ft: skipped", res == [] and chk and
               chk[0]["line_check"]["decision"] == CR.DECISION_SHALLOW,

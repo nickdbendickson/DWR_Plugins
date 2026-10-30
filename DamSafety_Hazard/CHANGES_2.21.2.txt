@@ -1,0 +1,41 @@
+ND Dam Hazard Classification Helper 2.21.2
+==========================================
+(2026-10-30; release set: ND Dam Breach Runner 3.12.11, ND Dam Breach Screening 0.17.59,
+DamSafety Setup 1.0.18. 2.21.1 is PR #240, so this is 2.21.2.)
+
+WHY
+  The full test of 2026-10-30 (QGIS 3.34 and 4.2, the offline pack, DWR-2801 / ND00199)
+  found three Hazard faults.
+
+WHAT CHANGED
+  1. Road / rail stretches with no arrival time are counted (crown.py, linear.py).
+     Before, a wet stretch where the arrival raster had no value was "skipped: no arrival
+     time" before the depth and crown checks. On the full-test inputs that skipped 123 road
+     and 2 rail stretches and ND00199 came out Low. Now such a stretch goes through the same
+     checks (grid depth >= 0.1 ft, WSE above the centreline crown) and, when it passes, is
+     counted with no warning time - the conservative reading. Its Note on the overtopped
+     layer and the QA/Line_Crown_Check Note start "arrival unknown: ...", whether it was
+     counted or skipped for depth / crown. crown.DECISION_NO_ARRIVAL is kept for imports
+     but is no longer returned. This matches nd_hazard, which already counted them with
+     arrival None.
+     ND00199 on the full-test inputs: HIGH (7 overtopped stretches of LANGER AVE S, State
+     highway, AADT 3,423); 49 counted and 109 skipped stretches carry "arrival unknown".
+
+  2. Downloads off means no download (processing_provider.py).
+     With every DOWNLOAD_* box false, classify still fetched the OSM mobile-home parks,
+     the Microsoft building footprints and the NAIP image dates ("Downloading 3 data
+     set(s)... ms, naip, parks"). no_download_overrides() now turns those off too when all
+     nine DOWNLOAD_* parameters are false, and the log says so. CONFIG_JSON is applied
+     after it, so a run can still turn one back on. Batch and watch use the same rule.
+
+  3. QGIS 4 legends (compat.py, report.py, mapbook.py).
+     QgsLegendModel / QgsLayoutItemLegend.setAutoUpdateModel is gone in QGIS 4.
+     compat.legend_manual(legend) calls setSyncMode(Qgis.LegendSyncMode.Manual) when it
+     exists, else setAutoUpdateModel(False).
+
+TESTS
+  tests/test_line_crown_check.py (no-arrival section rewritten), tests/test_classify_no_
+  downloads.py (new), tests/test_legend_sync.py (new). QGIS 3.34 and 4.2.
+
+NOT CHANGED
+  Classification rules, thresholds and outputs other than the Note text.

@@ -147,13 +147,11 @@ class PrepareDams(QgsProcessingAlgorithm):
                for k, _l, _t in FIELD_KEYS}
         names = [f.name() for f in src.fields()]
         aliases = inv.DWR_ALIASES if tag == "DWR" else inv.NID_ALIASES
-        found = inv.match_fields(names, aliases)
-        for k, _l, _t in FIELD_KEYS:
-            if not fld.get(k):
-                fld[k] = found.get(k)
-        for k in ("MA", "NE", "ME"):   # optional fields (0.17.46 / 0.17.47): never fail on them
-            if fld.get(k) and fld[k] not in names:
-                fld[k] = found.get(k)
+        # 0.17.59: a name the layer does not have (the shapefile defaults on the suite
+        # GeoPackage) falls back to the alias it has, else blank - never a KeyError
+        fld, notes = inv.resolve_fields(fld, names, aliases, tag)
+        self.__dict__.setdefault("_area_warn", []).extend(   # MA / NE / ME: optional, quiet
+            t for r, t in sorted(notes.items()) if r not in ("MA", "NE", "ME"))
         if inv.is_max_pool_area(fld.get("SA")):          # 0.17.49: kept, but said in the log
             self.__dict__.setdefault("_area_warn", []).append(
                 "{}: the surface area field is {}, the MAXIMUM-pool area; inv_area_m2 is the "

@@ -75,11 +75,10 @@ class NDBreachRunnerPlugin:
 
     def show_results_dock(self, folder=None, *args):
         """Breach results panel for a finished dam folder. Does not run the model."""
-        from qgis.PyQt.QtCore import Qt
-        from .results_dock import ResultsDock
+        from .results_dock import RIGHT_DOCK, ResultsDock
         if self.results_dock is None:
             self.results_dock = ResultsDock(self.iface)
-            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.results_dock)
+            self.iface.addDockWidget(RIGHT_DOCK, self.results_dock)
         if folder:
             self.results_dock.set_folder(folder)
         self.results_dock.show()
