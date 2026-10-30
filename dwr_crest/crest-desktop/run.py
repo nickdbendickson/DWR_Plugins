@@ -1,13 +1,9 @@
-"""Desktop entry. `python run.py` from this folder (Python 3.10–3.12)."""
+"""Desktop entry. `python run.py` from this folder (Python 3.10 or newer)."""
 
-import os
 import sys
 
-if not ((3, 10) <= sys.version_info[:2] <= (3, 12)) and not os.environ.get("CREST_ANY_PYTHON"):
-    sys.exit(
-        f"Crest desktop needs Python 3.10–3.12 (this is {sys.version.split()[0]}). "
-        "PyInstaller fails on 3.13. Set CREST_ANY_PYTHON=1 to try anyway."
-    )
+if sys.version_info[:2] < (3, 10):
+    sys.exit(f"Crest desktop needs Python 3.10 or newer (this is {sys.version.split()[0]}).")
 
 from crest.__main__ import main  # noqa: E402
 

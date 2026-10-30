@@ -127,7 +127,7 @@ not need Node to run it. Everything is bundled (Leaflet, leaflet-draw, icons, st
 need the network. Your work is saved on the computer (the same autosave as the browser). Export buttons open a
 Save dialog.
 
-Needs **Python 3.10, 3.11 or 3.12** (3.12 recommended; 3.13 is not supported by the pinned GUI and PyInstaller stack).
+Needs **Python 3.10 or newer** to open the desk (3.14 is fine). Building `Crest.app` still needs 3.10–3.12; PyInstaller fails on 3.13 and newer.
 
 ### Windows 10/11
 1. Install Python 3.12 from python.org (tick "Add python.exe to PATH") and Git.
@@ -151,6 +151,8 @@ Needs **Python 3.10, 3.11 or 3.12** (3.12 recommended; 3.13 is not supported by 
    python run.py
    ```
 3. Optional app: `sh build_mac.sh` gives `dist/Crest.app`. It is unsigned, so the first time right-click it and choose Open.
+
+The Report step can hand the open dam to the QGIS plugins already installed on this Mac. **Get layers** either uses the ND offline pack both plugin sets already share (`NDSUITE_DATA`, or `ndsuite/data_folder` in `~/.ndsuite/config.json`) or downloads a 3DEP DEM and NHD streams and waterbodies for the drawn area. **Write the dam folder** writes `<work>/dams/<id>/` (`dam.json`, the drawn line, breach point, reservoir point, downstream area, both hydrographs, the LISFLOOD `.par` / `.bci` / `.bdy`, and the flood strip) and does not start a model. **Write folder and run screening** does that write, runs `nddam:preflight` (tool 17), and starts `nddam:runchain` only when that preflight says READY. A FAIL stops there; a new `CrestDams` folder is expected to fail until it has the screening DEM and layers. **Run the flood model** is separate. Pick LISFLOOD-FP, LISFLOOD then ANUGA, LISFLOOD then HEC-RAS 2D, or the built-in screening engine. It needs a DEM (`dem.tif` in the work folder, the DEM field, the pack DEM, or `CREST_DEM`) and runs one dam: `ndbreach:rundam`, or `ndbreach_cli.py run` when both Point X and Point Y are filled in the DEM's coordinates. It does not start `ndbreach:batch`. The drawn line is longitude and latitude, so Crest does not send it as `DAM_LINES` and does not set `line_xy`. The flood strip is straight down the valley at the breach (the dam segment nearest the breach, not the end-to-end chord, and not later bends in the stream). The log is on the Report step. `Crest.html` has no local server, so those buttons work from `python run.py`, not from the one-file page.
 
 ### Linux
 `pip install -r requirements.txt` pulls `pywebview[qt]` (PyQt6 + Qt WebEngine, about 500 MB), then `python run.py`.

@@ -27,7 +27,7 @@ sys.path.insert(0, str(DESKTOP))
 import types  # noqa: E402
 from unittest import mock  # noqa: E402
 
-from crest.__main__ import Api, serve, web_dir, write_text  # noqa: E402
+from crest.__main__ import Api, _file_types, decode_b64, serve, web_dir, write_text  # noqa: E402
 
 WEB = web_dir()
 ASSET_RE = re.compile(r'(?:src|href)="\./(assets/[^"]+)"')
@@ -144,6 +144,69 @@ class SaveBridgeTests(unittest.TestCase):
 
     def test_window_not_exposed_to_js(self):
         self.assertFalse([k for k in vars(Api()) if not k.startswith("_")])
+
+
+class BinarySaveBridgeTests(unittest.TestCase):
+    """Api.save_file_b64 (view PDF / PNG): base64 in, the exact bytes on disk, same dialog as save_file."""
+
+    PDF = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n\x00\xff\r\n%%EOF\n"
+
+    def run_save(self, picked, name="nd00199_flood_view.pdf", b64=None, api=None):
+        import base64
+
+        calls = []
+
+        class Win:
+            def create_file_dialog(self, kind, **kw):
+                calls.append((kind, kw))
+                return picked
+
+        fake = types.SimpleNamespace(FileDialog=types.SimpleNamespace(SAVE=30), windows=[])
+        api = api or Api()
+        api._window = Win()
+        b64 = base64.b64encode(self.PDF).decode() if b64 is None else b64
+        with mock.patch.dict(sys.modules, {"webview": fake}):
+            return api.save_file_b64(name, b64), calls
+
+    def test_writes_exact_bytes(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = str(Path(d) / "out.pdf")
+            res, calls = self.run_save((target,))
+            self.assertEqual(res, {"saved": target})
+            self.assertEqual(Path(target).read_bytes(), self.PDF)  # no newline translation, no text encoding
+            self.assertEqual(calls[0][1]["save_filename"], "nd00199_flood_view.pdf")
+            self.assertEqual(calls[0][1]["file_types"], ("PDF (*.pdf)", "All files (*.*)"))
+            self.assertFalse(list(Path(d).glob("*.part")))
+
+    def test_png_filter_and_data_url(self):
+        import base64
+
+        with tempfile.TemporaryDirectory() as d:
+            target = str(Path(d) / "view.png")
+            png = b"\x89PNG\r\n\x1a\n" + bytes(range(256))
+            res, calls = self.run_save(target, name="x.png", b64="data:image/png;base64," + base64.b64encode(png).decode())
+            self.assertEqual(res, {"saved": target})
+            self.assertEqual(Path(target).read_bytes(), png)
+            self.assertEqual(calls[0][1]["file_types"][0], "PNG image (*.png)")
+
+    def test_bad_base64_is_an_error_without_a_dialog(self):
+        for bad in ("not base64!!", "", None, "QUJD="):
+            res, calls = self.run_save(("/nonexistent/x.pdf",), b64=bad) if bad is not None else self.run_save(None, b64=123)
+            self.assertIn("error", res, bad)
+            self.assertEqual(calls, [], "no Save dialog for a bad payload")
+
+    def test_cancel_and_path_stripping(self):
+        res, calls = self.run_save(None, name="../../etc/x.pdf")
+        self.assertEqual(res, {"cancelled": True})
+        self.assertEqual(calls[0][1]["save_filename"], "x.pdf")
+
+    def test_write_error_is_reported(self):
+        res, _ = self.run_save((str(Path(tempfile.gettempdir()) / "no_such_dir_crest" / "x.pdf"),))
+        self.assertIn("error", res)
+
+    def test_decode_b64(self):
+        self.assertEqual(decode_b64(" QUJD\n "), b"ABC")
+        self.assertEqual(_file_types("a.csv")[0], "CSV (*.csv)")  # the text exports keep their filters
 
 
 class ServedEngineTests(unittest.TestCase):

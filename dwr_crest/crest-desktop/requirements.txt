@@ -1,4 +1,5 @@
-# Crest desktop. Python 3.10–3.12 only (PyInstaller failed on 3.13; run.py refuses other versions).
+# Crest desktop. Run the desk on Python 3.10 or newer (3.14 is fine).
+# Building Crest.app with PyInstaller still needs 3.10–3.12 (it failed on 3.13).
 # pywebview pulls its own platform backend:
 #   Windows: EdgeChromium (WebView2) via pythonnet. WebView2 is built into Windows 11; on Windows 10 install the
 #            Microsoft Edge WebView2 Runtime if it is missing.

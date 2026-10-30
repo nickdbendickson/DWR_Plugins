@@ -1,0 +1,53 @@
+Crest desktop
+=============
+
+Python 3.10 or newer. Python 3.14 is fine. You do not need Node.
+
+1. Unzip this file.
+2. Open Terminal and go into the crest-desktop folder:
+     cd ~/Downloads/crest-desktop
+3. Install the window library (once):
+     python3 -m pip install -r requirements.txt
+4. Start the desk. Leave this Terminal window open.
+     python3 run.py
+
+If the window does not open, the desk opens in your browser instead.
+The same Terminal has to stay open while you use the desk.
+
+Report step — Plugins already in QGIS
+--------------------------------------
+These buttons need QGIS and the ND Dam plugins already installed.
+They do nothing from Crest.html by itself.
+
+Layers
+  ND offline pack: the folder both plugin sets already share
+  (NDSUITE_DATA, or ndsuite/data_folder in ~/.ndsuite/config.json).
+  Download DEM and streams for this area: a 3DEP DEM (about 10 m, EPSG:5070)
+  and NHD streams and waterbodies. DWR dams stay in the offline pack.
+
+Get layers
+  Downloads those layers, or writes the pack path so a headless chain can see it.
+
+Write the dam folder
+  <work>/dams/<id>/ with dam.json, the drawn geometries, hydrograph.csv,
+  inputs/breach_hydrograph.csv, the LISFLOOD .par .bci .bdy, and the flood strip.
+  No model is started.
+
+Write folder and run screening
+  Tool 17 (nddam:preflight), then nddam:runchain only if the preflight is READY.
+  A new CrestDams folder is expected to fail until it has a DEM and layers.
+
+Run the flood model
+  LISFLOOD-FP, LISFLOOD then ANUGA, LISFLOOD then HEC-RAS 2D, or the built-in
+  screening engine. All of them need a DEM. One dam only: ndbreach:rundam, or
+  ndbreach_cli.py when Point X and Point Y are both filled in the DEM's
+  coordinates. It does not start ndbreach:batch.
+
+The flood strip is a straight valley from the dam segment nearest the breach.
+It does not follow later bends in the stream.
+
+The drawn dam line is longitude and latitude. Crest does not send it as
+DAM_LINES and does not set line_xy.
+
+A blank work folder means ~/CrestDams.
+This desk screen is not an official ND Dam Safety or ACER class.
