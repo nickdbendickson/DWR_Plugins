@@ -9,6 +9,7 @@ import {
   countyOptions,
   damOptionLabel,
   demElevationsPatch,
+  DUGOUT_FIELD_HINTS,
   DWR_FIELD_HINTS,
   dwrElevationOffer,
   dwrReference,
@@ -256,7 +257,8 @@ export function NidRecordPanel({ dam }: { dam: DamRecord }) {
   const dwr = data?.dwr.get(dam.nidId);
   const dwrAsOf = data?.dwrSource?.pulledUtc.slice(0, 10) ?? "";
   const elevMissing = !Number.isFinite(dam.crestFt) || !Number.isFinite(dam.streambedFt) || !dam.statedDatum;
-  const offer = dwrElevationOffer(dwr, dam.lon, dam.lat);
+  const offer = dwrElevationOffer(dwr);
+  const dugout = data?.dugouts.get(dam.nidId);
   const w1 = nd ? heightWarningOnPick(nd, dwr) : null;
   const w2 = heightWarningOnElevations(dam);
   const storage = nd ? storageFor(nd) : null;
@@ -275,11 +277,11 @@ export function NidRecordPanel({ dam }: { dam: DamRecord }) {
             they are in; the engine shows Review (elevations missing) and runs no flood.
           </p>
           {offer.ok ? (
-            <p className="mt-1 text-muted">The DWR Dams file has {offer.datum} elevations for this dam; see the DWR card below.</p>
+            <p className="mt-1 text-muted">The DWR Dams file has NAVD 88 elevations for this dam ({offer.sourceNote}); see the DWR card below.</p>
           ) : null}
           <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
             <label className="block">
-              <span className="text-muted">Crest from the DEM (ft NAVD88)</span>
+              <span className="text-muted">Crest typed from a DEM (ft NAVD88)</span>
               <input
                 type="number"
                 step={0.01}
@@ -289,7 +291,7 @@ export function NidRecordPanel({ dam }: { dam: DamRecord }) {
               />
             </label>
             <label className="block">
-              <span className="text-muted">Breach bottom from the DEM (ft NAVD88)</span>
+              <span className="text-muted">Breach bottom typed from a DEM (ft NAVD88)</span>
               <input
                 type="number"
                 step={0.01}
@@ -304,10 +306,13 @@ export function NidRecordPanel({ dam }: { dam: DamRecord }) {
               onClick={() => update(demElevationsPatch(dam, Number(demCrest), Number(demBed)))}
               className="h-10 rounded-sm border border-line bg-card px-3 disabled:opacity-50"
             >
-              Use DEM values
+              Use typed DEM values
             </button>
           </div>
-          <p className="mt-1 text-xs text-muted">Or type them in the Crest, Streambed and datum fields below.</p>
+          <p className="mt-1 text-xs text-muted">
+            Values you read off a DEM and type here; Crest does not sample the DEM, and the DEM crest check is left as is.
+            Or type them in the Crest, Streambed and datum fields below.
+          </p>
         </div>
       ) : null}
 
@@ -368,16 +373,14 @@ export function NidRecordPanel({ dam }: { dam: DamRecord }) {
               </>
             ) : null}
           </dl>
+          {ref?.heldNote ? <p className="mt-2 text-amber">{ref.heldNote}</p> : null}
           {ref?.heightCheckNote ? <p className="mt-2 text-amber">{ref.heightCheckNote}</p> : null}
           {ref?.storageFlag ? <p className="mt-1 text-amber">{ref.storageFlag}</p> : null}
           {offer.ok ? (
             <div className="mt-2 rounded-sm bg-sand p-2">
-              <p>
-                {offer.datum} crest {offer.crestFt} ft, breach bottom {offer.streambedFt} ft
-                {offer.shiftFt != null
-                  ? ` → ${offer.crestNavdFt} / ${offer.streambedNavdFt} ft NAVD88 (VERTCON +${offer.shiftFt.toFixed(2)} ft at this dam)`
-                  : " (NAVD88)"}
-                .
+              <p data-testid="dwr-offer">
+                Crest {offer.crestNavdFt} ft, breach bottom {offer.streambedNavdFt} ft NAVD88, {offer.sourceNote}
+                {offer.shiftFt != null ? ` (DWR stated ${offer.statedCrestFt} / ${offer.statedStreambedFt} ft NGVD29)` : ""}.
               </p>
               <label className="mt-1 flex items-center gap-2">
                 <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
@@ -396,6 +399,27 @@ export function NidRecordPanel({ dam }: { dam: DamRecord }) {
             <p className="mt-2 text-muted">{offer.reason}</p>
           )}
           <p className="mt-2 text-xs text-muted">{data.dwrSource.attribution}</p>
+        </div>
+      ) : null}
+
+      {dugout ? (
+        <div className="rounded-md border border-line bg-sand/60 p-3 text-sm text-muted" data-testid="dwr-dugout">
+          <p className="font-medium">
+            DWR dugout record (reference only) <span>(structure {dugout.dwrId ?? "—"})</span>
+          </p>
+          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1">
+            <dt title={DUGOUT_FIELD_HINTS.maxDepthFt}>Depth</dt>
+            <dd>{fmt(dugout.maxDepthFt, " ft")}</dd>
+            <dt title={DUGOUT_FIELD_HINTS.maxHeightFt}>Height</dt>
+            <dd>{fmt(dugout.maxHeightFt, " ft")}</dd>
+            <dt title={DUGOUT_FIELD_HINTS.freeboardFt}>Freeboard</dt>
+            <dd>{fmt(dugout.freeboardFt, " ft")}</dd>
+            <dt title={DUGOUT_FIELD_HINTS.maxSurfaceAreaAc}>Surface area</dt>
+            <dd>{fmt(dugout.maxSurfaceAreaAc, " ac")}</dd>
+            <dt title={DUGOUT_FIELD_HINTS.maxStorageAcFt}>Storage</dt>
+            <dd>{fmt(dugout.maxStorageAcFt, " ac-ft")}</dd>
+          </dl>
+          <p className="mt-1 text-xs">Not used by the engine and never fills a field.</p>
         </div>
       ) : null}
 

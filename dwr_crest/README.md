@@ -16,7 +16,7 @@ Desk screening of small embankment dams: breach hydrograph, schematic valley flo
 | `npm run build:crest-html` | Builds the same desk into the one-file `Crest.html` at the repo root (committed). |
 | `npm run test:desktop` | Headless smoke test of the desktop app (Python, no GUI). |
 | `npm run data:nd-dams` | Rebuilds `src/lib/crest/data/nd_dams.json` from the NID (ND dam picker). Run only when asked. |
-| `npm run data:nd-dams-dwr -- --from data-raw/Dams.zip` | Rebuilds `src/lib/crest/data/nd_dams_dwr.json` from a downloaded DWR Dams layer. Run only when asked. |
+| `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp>` | Rebuilds `src/lib/crest/data/nd_dams_dwr.json` from a folder of DWR Dams and Dugouts CSVs already converted to NAVD 88. Run only when asked. |
 
 ### Deploys and migrations
 
@@ -77,10 +77,18 @@ DWR"), "edited (NID: x)" with a revert, or "not in NID: enter a value". **Unlink
   crest minus breach bottom (tolerance max(1 ft, 5% of it), +0.5 ft for a rounded NID height).
 - **Elevations are never filled from the NID** (it has none). The crest, breach bottom and datum stay blank, an amber
   banner asks for them, Next is disabled and the engine returns *Review (elevations missing)* with no flood until they
-  are entered: from the DEM (NAVD 88), typed, or, where the DWR record is in NGVD 29 or NAVD 88, with **Use DWR
-  elevations (checked against the dam file)** after a confirm. NGVD 29 values are converted by VERTCON at the dam's own
-  location (ND00199: 1070.0 / 1042.5 ft NGVD 29 -> 1071.09 / 1043.59 ft NAVD 88, H 27.5 ft). DWR elevations on a
-  local or blank datum are relative only and used just as an H check.
+  are entered: typed from a DEM (NAVD 88; Crest does not sample the DEM, so this does not set the DEM crest and the
+  DEM-vs-crest check still applies), typed in the fields, or, where the DWR record is in NGVD 29 or NAVD 88, with
+  **Use DWR elevations (checked against the dam file)** after a confirm. The offer is always NAVD 88, straight from the
+  bundle: NGVD 29 values were converted once, before the build, by per-point NOAA VERTCON and are labelled "converted
+  from NGVD29 (+x.xxx ft, VERTCON)" (ND00199: 1070.0 / 1042.5 ft NGVD 29 -> 1071.09 / 1043.59 ft NAVD 88, +1.089 ft,
+  H 27.5 ft); the stated value, datum and shift are kept as provenance and nothing is converted twice. Values the
+  conversion QC held (outside 700-3,600 ft under an NGVD 29 / NAVD 88 label: ND01032) are never offered. DWR
+  elevations on a local or blank datum are relative only and used just as an H check; `drawdown_e` is treated as
+  local and not carried. 91 of the 839 joined dams have a NAVD 88 offer.
+- **DWR dugout record (reference only).** Where a DWR Dugouts record has the dam's NID ID (108 dams), a grey box shows
+  its depth (ft), height (ft), freeboard (ft), surface area (ac) and storage (ac-ft). It never fills a field and does
+  not change the screen.
 - **Surface area** is never filled. The NID normal-pool area is shown as a reference and the DWR maximum-pool area has
   a **Use** button.
 - **NID hazard** is shown in grey as reported to the NID (FEMA class). It is not used by the screen and is not the class
@@ -91,13 +99,15 @@ DWR"), "edited (NID: x)" with a revert, or "not in NID: enter a value". **Unlink
 | Bundle | Source | Downloaded |
 |---|---|---|
 | `src/lib/crest/data/nd_dams.json` | U.S. Army Corps of Engineers, National Inventory of Dams, ND state CSV (`nid.sec.usace.army.mil`). No owner names (an NID owner can be a private person): an unnamed dam is labelled by its NID ID only, e.g. "(unnamed) · ND00971" / "Unnamed dam ND00971". | 2026-10-29 |
-| `src/lib/crest/data/nd_dams_dwr.json` | North Dakota Department of Water Resources, Dams layer (`mapservice.dwr.nd.gov`). Numeric fields, the vertical datum code, and the county where it differs; no owner, contact, remark or permit fields. Provisional, provided as is; field meanings are inferred. | 2026-10-29 |
+| `src/lib/crest/data/nd_dams_dwr.json` | North Dakota Department of Water Resources, Dams and Dugouts layers (`mapservice.dwr.nd.gov`). Dams: numeric fields, the stated vertical datum code, NAVD 88 values (NGVD 29 converted with NOAA VERTCON before the build; the stated value and shift kept), held-field names, and the county where it differs. Dugouts: five numeric reference fields for dugouts whose NID ID is a main dam. No owner, name, contact, designer, remark or permit fields. Provisional, provided as is; field meanings are inferred. | 2026-10-30 |
 
 The source URL, download time, SHA-256 of the raw file and the attribution are stored in each bundle and shown in the
 picker footer, the Report, the dam.json export and **About the dam data** at the bottom of the desk. Refresh only when
 asked: `npm run data:nd-dams` (downloads the NID CSV; `--from file.csv` to use a saved one; it fails on a schema change
-or if the dam count drops below 800 or more than 20% below the committed bundle, unless `--allow-shrink`), then `npm run data:nd-dams-dwr -- --from data-raw/Dams.zip`
-(a DWR Dams shapefile zip saved by hand). `data-raw/` is git-ignored. Rebuild the desktop bundle and `Crest.html`
+or if the dam count drops below 800 or more than 20% below the committed bundle, unless `--allow-shrink`), then `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp> --pulled <UTC time>`
+(a folder with `Dams_navd88.csv` and `Dugouts_navd88.csv`, converted to NAVD 88 by per-point VERTCON outside the app,
+plus `raw/` and `grids/` `SHA256SUMS.txt`; the build checks each NAVD 88 value against stated + shift and refuses a
+local value or a second conversion). `data-raw/` is git-ignored. Rebuild the desktop bundle and `Crest.html`
 afterwards.
 
 ## Crest.html (one file)

@@ -110,6 +110,10 @@ export type Provenance = {
   confirmed?: boolean;
   /** Short tag shown with the field, e.g. "NID Max Storage". */
   note?: string;
+  /** DWR elevations: the value and datum as DWR states them, and the VERTCON shift applied before the build. */
+  statedFt?: number;
+  statedDatum?: string;
+  vshiftFt?: number;
 };
 export type NidRef = {
   nidHeightFt: number | null;
