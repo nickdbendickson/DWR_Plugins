@@ -1369,8 +1369,12 @@ class NDHazardAlgorithm(_ToolBase):
         need = [r for r in roads if r.aadt is None and id(r) in parts]
         if not need:
             return
-        paths = [p.strip() for p in self._str(parameters, "AADT_LAYERS", context).split(";;")
-                 if p.strip()] or aadt_join.siblings(_source_path(parameters, "ROADS"))
+        # 3.13.2 (DWR-4031 toe10m): ROADS_MORE GeoPackages (ND county roads) are AADT
+        # sources too, as in the Hazard plugin - 87TH ST NW was "AADT unknown (assumed
+        # Medium)" here and AADT 60 in the Hazard summary
+        more = parameters.get("ROADS_MORE") if self.parameterDefinition("ROADS_MORE") else ""
+        paths = aadt_join.join_sources(self._str(parameters, "AADT_LAYERS", context),
+                                       _source_path(parameters, "ROADS"), more or "")
         if not paths:
             feedback.reportError("Check: no AADT layer given or found next to the roads file; "
                                  "{} road(s) have no AADT.".format(len(need)), fatalError=False)

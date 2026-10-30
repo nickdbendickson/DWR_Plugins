@@ -51,7 +51,8 @@ def _house(sid, depth, vel, persons=3):
 
 # the two review houses (depth / velocity only)
 H2801 = (4010, 3.10, 0.11)     # DWR-2801 Absaraka r4, 82 15th Ave N
-H4031 = (16775, 2.11, 6.95)    # DWR-4031 Washek toe run
+H4031 = (9953, 2.11, 6.95)     # DWR-4031 Washek toe run (Struct_ID 9953 in the toe-run
+#                                folder; earlier notes said 16775 - IDs differ by footprint set)
 
 
 def _result_row(nd):
@@ -72,7 +73,7 @@ def _run(structs, **kw):
 def test_review_houses_are_in_the_judgment_zone():
     for sid, d, v in (H2801, H4031):
         assert TC.zone("house", d, v) == TC.JUDGMENT, (sid, d, v, TC.thresholds("house", v))
-    print("ok 4010 (3.10 ft, 0.11 ft/s) and 16775 (2.11 ft, 6.95 ft/s) are judgment zone")
+    print("ok 4010 (3.10 ft, 0.11 ft/s) and 9953 (2.11 ft, 6.95 ft/s) are judgment zone")
 
 
 def test_default_is_medium_by_rule():

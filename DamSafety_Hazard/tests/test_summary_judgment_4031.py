@@ -1,6 +1,10 @@
 """Hazard 2.21.1 (DWR-4031 review): the summary's "Without judgment-zone items" line
 gives the ND class as well as TM 11's, and the 5.3(f) borderline rule is cited only
-when the borderline count is above 0. Synthetic structures, no rasters.
+when the borderline count is above 0. 2.22.1: only borderline structures that were
+actually moved to the higher class count for the 5.3(f) citation (DWR-2801 house 4026,
+QA re-test of #241). The judgment-zone house is Struct_ID 9953 in the DWR-4031 toe-run
+folder (the review notes called it 16775; Struct_IDs differ by footprint set).
+Synthetic structures, no rasters.
 
     QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_summary_judgment_4031.py
 """
@@ -29,9 +33,10 @@ HOUSE = "House on foundation"
 
 
 def _structs(near=None):
-    """Like DWR-4031: one judgment-zone house 0.053 ft past the ACER line, one more wet
-    house (5.2.2) and one dry house cut off (5.2.1.2)."""
-    j = {"id": 16775, "habitable": "Yes", "acer_type": HOUSE, "persons": 3,
+    """Like DWR-4031: one judgment-zone house 0.053 ft past the ACER line (Struct_ID 9953
+    in the toe-run folder, 2.111 ft at 6.95 ft/s), one more wet house (5.2.2) and one dry
+    house cut off (5.2.1.2)."""
+    j = {"id": 9953, "habitable": "Yes", "acer_type": HOUSE, "persons": 3,
          "zone": CLASS_JUDGMENT, "outcome": OUT_JUDGMENT, "margin_judg": -0.053,
          "damage_usd": 60000.0, "max_depth": 2.11}
     if near:
@@ -43,10 +48,10 @@ def _structs(near=None):
     return [j, e, c]
 
 
-def _classify(structs):
+def _classify(structs, cfg=None):
     nd = CL.classify_nd(structs, [], [], judgment_as_probable=True)
     tm = CL.classify_tm11(structs, [], judgment_as_probable=True)
-    CL.extra_criteria(nd, structs, {}, {})
+    CL.extra_criteria(nd, structs, {}, dict(cfg or {}))
     return nd, tm
 
 
@@ -67,13 +72,35 @@ def test_no_borderline_no_5_3f():
 
 
 def test_borderline_cites_5_3f():
-    nd, _tm = _classify(_structs(near="High"))
+    # 2.22.1: cited only when the borderline structure was moved up (setting on)
+    nd, _tm = _classify(_structs(near="High"), {"borderline_higher": True})
     row = [c for c in nd["criteria"] if c["section"] == "5.3(f)"][0]
-    assert row["found"] == "1", row
+    assert row["found"] == "1" and row["result"] == "counted higher", row
+    assert nd["borderline_moved"] == 1
     t = _text(nd)
     assert "borderline goes to the higher class, 5.3(f): 1 borderline structure(s)" in t, t
     assert "(conservative judgment-zone setting; borderline rule 5.3(f))" in t, t
-    print("ok borderline count 1 -> 5.3(f) cited")
+    print("ok borderline moved up -> 5.3(f) cited")
+
+
+def test_borderline_not_moved_no_5_3f():
+    """2.22.1 (DWR-2801 house 4026): a house 0.12 ft below the judgment line stays in
+    the low zone (borderline setting off) - it is listed in the 5.3(f) row but did not
+    change the class, so the old-option HIGH must not cite 5.3(f) or count it."""
+    structs = _structs()
+    structs.append({"id": 4026, "habitable": "Yes", "acer_type": HOUSE, "persons": 3,
+                    "zone": 3, "outcome": OUT_ECONOMIC, "near": "Judgment",
+                    "margin_judg": 0.12, "damage_usd": 20000.0, "max_depth": 1.2})
+    nd, _tm = _classify(structs, {"borderline_higher": False})
+    assert nd["cls"] == ND_HIGH and nd.get("provisional"), nd
+    row = [c for c in nd["criteria"] if c["section"] == "5.3(f)"][0]
+    assert row["found"] == "1" and row["result"] == "Judgment", row    # still listed
+    assert nd["borderline_moved"] == 0
+    reasons = "\n".join(nd["reasons"])
+    assert "5.3(f)" not in reasons, reasons
+    assert "borderline structure(s)" not in _text(nd), _text(nd)
+    assert "the judgment zone is counted as probable loss of life" in reasons, reasons
+    print("ok borderline not moved up (4026) -> no 5.3(f) citation or count")
 
 
 def test_nd_without_judgment_is_medium():
@@ -121,6 +148,7 @@ def test_formfill_reads_both(lines):
 if __name__ == "__main__":
     test_no_borderline_no_5_3f()
     test_borderline_cites_5_3f()
+    test_borderline_not_moved_no_5_3f()
     L = test_nd_without_judgment_is_medium()
     test_formfill_reads_both(L)
     print("all ok")
