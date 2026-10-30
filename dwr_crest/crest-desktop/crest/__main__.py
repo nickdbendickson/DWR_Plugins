@@ -289,6 +289,8 @@ def decode_b64(b64: str) -> bytes:
     text = "".join(text.split())
     if len(text) * 3 // 4 > MAX_BINARY_BYTES:
         raise ValueError("the export is too large")
+    if text and not _canonical_b64(text):
+        raise ValueError("the export was not valid base64")
     try:
         data = base64.b64decode(text, validate=True)
     except (binascii.Error, ValueError):
@@ -296,6 +298,24 @@ def decode_b64(b64: str) -> bytes:
     if not data:
         raise ValueError("the export is empty")
     return data
+
+
+def _canonical_b64(text: str) -> bool:
+    """True for canonical base64. Unpadded input is allowed; a stray '=' is not.
+
+    b64decode(..., validate=True) still accepts 'QUJD=' (a pad on a complete
+    group) and returns b'ABC'. That must not open a Save dialog.
+    """
+    pad = len(text) - len(text.rstrip("="))
+    if pad > 2 or "=" in text[: len(text) - pad]:
+        return False
+    body = text[: len(text) - pad]
+    if any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" for c in body):
+        return False
+    rem = len(body) % 4
+    if pad:
+        return (rem == 2 and pad == 2) or (rem == 3 and pad == 1)
+    return rem != 1
 
 
 def write_bytes(path: Path, data: bytes) -> None:
