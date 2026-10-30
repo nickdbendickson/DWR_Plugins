@@ -25,6 +25,7 @@ export const STEPS = [
   { id: "record", label: "Record" },
   { id: "breach", label: "Breach" },
   { id: "flood", label: "Flood" },
+  { id: "results", label: "Results" },
   { id: "screen", label: "Screen" },
   { id: "report", label: "Report" },
 ] as const;

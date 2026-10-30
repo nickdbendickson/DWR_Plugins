@@ -29,6 +29,8 @@ import type {
 } from "@/lib/crest/types";
 import { HydroChart, ValleyMap } from "./charts";
 import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel } from "./NdDamPicker";
+import { ResultsStep } from "./ResultsStep";
+import { useAnalysisOfRecord, useResultsSync, useStripOfRecord } from "./results-flow";
 
 // Leaflet touches `window` when it loads, so the map is a client-only chunk.
 const MapDraw = lazy(() => import("./MapDraw").then((m) => ({ default: m.MapDraw })));
@@ -59,6 +61,7 @@ export function Desk() {
 
   const dam = activeDam({ dams, activeId, step, setStep, select, update, add, addDam, restore });
   const result = useMemo(() => analyze(dam), [dam]);
+  useResultsSync(dam, result);
 
   return (
     <div className="min-h-screen bg-paper text-ink">
@@ -149,6 +152,7 @@ export function Desk() {
           {step === "record" ? <RecordStep dam={dam} result={result} /> : null}
           {step === "breach" ? <BreachStep dam={dam} result={result} /> : null}
           {step === "flood" ? <FloodStep dam={dam} result={result} /> : null}
+          {step === "results" ? <ResultsStep dam={dam} result={result} /> : null}
           {step === "screen" ? <ScreenStep dam={dam} result={result} /> : null}
           {step === "report" ? <ReportStep dam={dam} result={result} /> : null}
 
@@ -353,7 +357,8 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   useEffect(() => setMounted(true), []);
   const onGeometry = useCallback((geometry: DamGeometry) => update({ geometry }), [update]);
   const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
-  const plss = usePlss(dam, strip.strip);
+  const ofRecord = useStripOfRecord(dam, result);
+  const plss = usePlss(dam, ofRecord.strip);
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -424,7 +429,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
           )}
         </div>
       </div>
-      <PlssPanel strip={strip.strip} plss={plss} />
+      <PlssPanel strip={ofRecord.strip} plss={plss} basis={ofRecord.basis} />
       <div className="overflow-hidden rounded-md border border-line">
         <ValleyMap flood={result.flood} />
       </div>
@@ -438,7 +443,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   );
 }
 
-function PlssPanel({ strip, plss }: { strip: FloodStrip | null; plss: PlssState }) {
+function PlssPanel({ strip, plss, basis }: { strip: FloodStrip | null; plss: PlssState; basis: string }) {
   const update = useDesk((s) => s.update);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -471,6 +476,7 @@ function PlssPanel({ strip, plss }: { strip: FloodStrip | null; plss: PlssState 
           </button>
         ) : null}
       </div>
+      <p className="mt-1 text-xs text-muted" data-testid="plss-basis">Strip: {basis}.</p>
       {plss.message ? <p className="mt-1 text-sm text-muted" role="status">{plss.message}</p> : null}
       {error ? <p className="mt-1 text-sm text-amber" role="alert">{error}</p> : null}
       {t ? (
@@ -505,7 +511,7 @@ function PlssPanel({ strip, plss }: { strip: FloodStrip | null; plss: PlssState 
             {t.rows.length} sections, {num(t.listedAc, 1)} of the strip&apos;s {num(t.stripAc, 1)} ac. Slivers under {SLIVER_AC} ac
             not listed: {t.sliversIgnored}
             {t.uncoveredAc >= SLIVER_AC ? `; ${num(t.uncoveredAc, 1)} ac of the strip lies outside every fetched section` : ""}.
-            Approximate: the strip is the schematic desk valley, not a mapped flood extent. Looked up{" "}
+            {basis.startsWith("the schematic") ? "Approximate: the strip is the schematic desk valley, not a mapped flood extent." : `Strip from ${basis}.`} Looked up{" "}
             {new Date(t.fetchedAt).toLocaleString()} and saved with this dam.
           </p>
           <p className="mt-1 text-xs text-muted">{PLSS_ATTRIBUTION}</p>
@@ -515,12 +521,15 @@ function PlssPanel({ strip, plss }: { strip: FloodStrip | null; plss: PlssState 
   );
 }
 
-function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+function ScreenStep({ dam, result: deskResult }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
   const update = useDesk((s) => s.update);
+  const { result, ref } = useAnalysisOfRecord(dam, deskResult);
   return (
     <section className="space-y-4">
       <div className="rounded-md border border-line bg-card p-4">
-        <p className="text-xs tracking-widest text-muted uppercase">Desk screen</p>
+        <p className="text-xs tracking-widest text-muted uppercase" data-testid="screen-source">
+          {ref ? `Screen on the source of record: ${ref.label}` : "Desk screen"}
+        </p>
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <span className={`rounded-sm px-3 py-1 text-lg ${LEVEL_CLASS[result.screen.level]}`}>
             {result.screen.label}
@@ -576,7 +585,8 @@ function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
   );
 }
 
-function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+function ReportStep({ dam, result: deskResult }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+  const { result, ref, label } = useAnalysisOfRecord(dam, deskResult);
   return (
     <section className="space-y-4">
       <div>
@@ -588,13 +598,26 @@ function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
           {dam.county ? `${dam.county} · ` : ""}
           {result.breach.label} · {result.flood.engineLabel}
         </p>
+        <p className="text-sm" data-testid="report-source">
+          Source of record: <span className="font-medium">{label}</span>
+          {ref
+            ? ` (imported ${ref.importedAt.slice(0, 10)}; ${ref.files.join(", ")}). Depths, wet area, velocities and the screen are from this run; breach and hydrograph are the desk's.`
+            : " (schematic valley). Import a model run on the Results step to use it instead."}
+        </p>
+        {ref?.warnings.length ? (
+          <ul className="mt-1 list-disc pl-5 text-xs text-amber">
+            {ref.warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        ) : null}
       </div>
-      <ExportPanel dam={dam} result={result} />
+      <ExportPanel dam={dam} result={result} desk={deskResult} />
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-line sm:grid-cols-3">
         <Stat k="Peak discharge (routed)" v={`${num(result.breach.peakCfs, 0)} cfs`} />
         <Stat k="Flooded area" v={`${num(result.flood.acres, 0)} ac`} />
         <Stat k="Max depth" v={`${num(result.flood.maxDepthFt, 1)} ft`} />
-        <Stat k="Max velocity (est.)" v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
+        <Stat k={ref ? "Max velocity" : "Max velocity (est.)"} v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
         <Stat k="Wet receptors" v={String(result.flood.receptors.filter((r) => r.flooded).length)} />
         <Stat k="Screen" v={result.screen.label} />
       </div>
@@ -705,7 +728,7 @@ function StepNav({ step, setStep, blocked }: { step: StepId; setStep: (s: StepId
   );
 }
 
-function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+function ExportPanel({ dam, result, desk }: { dam: DamRecord; result: ReturnType<typeof analyze>; desk: ReturnType<typeof analyze> }) {
   const update = useDesk((s) => s.update);
   const root = (dam.nid || dam.id).toLowerCase().replace(/[^a-z0-9]/g, "_");
   const lisflood = useMemo(() => {
@@ -722,7 +745,7 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       return { pkg: null, error: (e as Error).message };
     }
   }, [dam, result.breach.series]);
-  const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
+  const strip = useStripOfRecord(dam, desk);
   const plss = usePlss(dam, strip.strip);
   const plssTable = plss.state === "ready" ? plss.table : null;
   const [saved, setSaved] = useState<string | null>(null);
@@ -788,7 +811,8 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         </button>
       </div>
       <p className="mt-2 text-xs text-muted">
-        Flood strip (WGS 84): {strip.strip ? "approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands." : strip.reason}
+        Flood strip (WGS 84): {strip.strip ? (dam.resultsOfRecord && !strip.basis.startsWith("the desk") ? `depth bands from ${strip.basis}.` : `approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands${dam.resultsOfRecord ? ` (${strip.basis})` : ""}.`) : strip.reason}
+        {dam.resultsOfRecord ? ` dam.json names the source of record (${dam.resultsOfRecord.label}).` : ""}
       </p>
       <p className="mt-1 text-xs text-muted">
         PLSS sections: {plssTable ? `${plssTable.rows.length} touched, listed in the strip GeoJSON/KML and the CSV. ${PLSS_ATTRIBUTION}` : plss.message}

@@ -4,7 +4,7 @@ export type FailureMode = "overtopping" | "piping";
 export type BreachMethod = "froehlich" | "macdonald" | "tr60";
 export type EngineName = "lisflood" | "anuga" | "routing";
 export type ReceptorKind = "house" | "mobile" | "barn" | "road";
-export type StepId = "record" | "breach" | "flood" | "screen" | "report";
+export type StepId = "record" | "breach" | "flood" | "results" | "screen" | "report";
 /** ND Dam Safety hazard classes (REG_05.2026 5.2), plus Review when the desk cannot screen. */
 export type ScreenLevel = "High" | "Medium" | "Low" | "Review";
 export type RoadClass = "interstate" | "us_state" | "other";
@@ -27,6 +27,12 @@ export type ReceptorSeed = {
   roadClass?: RoadClass;
   /** Structures: habitable? Houses and mobile homes default to yes, barns and sheds to no. */
   habitable?: boolean;
+  /**
+   * Mapped location (WGS 84). When set, model rasters are sampled here; otherwise at the place the desk's straight
+   * valley puts the seed (station / distanceKm along the downstream direction, lateral across the half-width).
+   */
+  lon?: number;
+  lat?: number;
 };
 
 export type GeoJSONFeature = {
@@ -86,6 +92,11 @@ export type DamRecord = {
   geometry?: DamGeometry;
   /** PLSS sections looked up for the flood strip (BLM CadNSDI), kept so the list works offline afterwards. */
   plss?: PlssCache;
+  /**
+   * Source of record for the Screen, the PLSS list and the Report: an imported model run's summary and its values at
+   * the receptors. Absent = the desk estimate (default). Never holds raster data, only these few numbers.
+   */
+  resultsOfRecord?: ResultsOfRecord;
   /** ACER TM 11 judgment zone counts as probable loss of life (High), as damsuite classify_nd defaults. Default true. */
   judgmentAsProbable?: boolean;
   /** Set when the record was filled from the NID (ND dam picker). Optional, so crest-desk-v2 state still loads. */
@@ -257,4 +268,57 @@ export type Analysis = {
     /** Items an engineer must decide (unknown AADT, judgment zone, unverified structures). */
     judgment: string[];
   };
+};
+
+/** Model rasters Crest can import for comparison (results.ts). */
+export type ResultSource = "lisflood" | "dsswise";
+
+/** Full-resolution summary of one imported run (raster.ts scanRun), downstream of the dam line unless "All". */
+export type RunStats = {
+  /** Deepest cell downstream of the dam line (ft) and anywhere in the raster, reservoir included (ft). */
+  peakDepthFt: number;
+  peakDepthAllFt: number;
+  /** Cells at or above 0.1 ft, as acres: downstream of the dam line, and the whole raster. */
+  wetAc: number;
+  wetAcAll: number;
+  /** Farthest wet cell along the downstream direction from the breach (km, straight line, not along the channel). */
+  farthestKm: number;
+  /** Max velocity over wet downstream cells (ft/s); null without a velocity raster. */
+  maxVelocityFps: number | null;
+  /** Latest arrival over wet downstream cells (h); null without an arrival raster. */
+  arrivalMaxHr: number | null;
+  /** Distance from the record's breach location to the nearest wet cell (m). */
+  nearestWetM: number;
+  /** Wet cells on the raster's outer edge (the flood may run off the grid). */
+  edgeWetCells: number;
+  /** Where the downstream ray from the breach leaves the raster (km), or null when the breach is outside it. */
+  coverKm: number | null;
+  cellM: number;
+  cells: number;
+  /** Breach location these numbers were computed for. */
+  breachLon: number;
+  breachLat: number;
+};
+
+export type ReceptorSample = {
+  id: string;
+  /** Inside the raster's extent. */
+  covered: boolean;
+  depthFt: number;
+  velocityFps: number | null;
+  arrivalHr: number | null;
+  lon: number;
+  lat: number;
+};
+
+export type ResultsOfRecord = {
+  source: ResultSource;
+  /** e.g. "LISFLOOD-FP (DWR-2801, ND Dam Breach Runner 3.11.1)" */
+  label: string;
+  files: string[];
+  importedAt: string;
+  crs: string;
+  stats: RunStats;
+  samples: ReceptorSample[];
+  warnings: string[];
 };
