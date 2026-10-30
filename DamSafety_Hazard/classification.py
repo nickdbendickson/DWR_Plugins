@@ -480,10 +480,18 @@ def extra_criteria(nd, structs, res, cfg, total=False):
                  "found": "{}".format(len(near)),
                  "result": "not met" if not near else "counted higher"
                  if cfg.get("borderline_higher") else "Judgment"})
-    if near:
+    # 2.22.1 (DWR-2801 house 4026, QA re-test of #241): 5.3(f) is cited only for
+    # borderline structures that were actually moved to the higher class (the
+    # borderline setting on, or a 1D structure counted higher). A structure merely
+    # within near_ft of the next boundary (still in its own zone) is listed in the
+    # 5.3(f) row but did not change the class.
+    moved = [s for s in near if cfg.get("borderline_higher") or s.get("near_raised")]
+    nd["borderline_moved"] = len(moved)
+    if moved:
         for i, r in enumerate(nd.get("reasons") or []):     # 2.21.1: only when counted
             if r.endswith("(conservative judgment-zone setting)"):
                 nd["reasons"][i] = r[:-1] + "; borderline rule 5.3(f))"
+    if near:
         hi = sum(1 for s in near if s["near"] == "High")
         at = nd.get("struct_items", 0)
         nd["struct_items"] = at + 1
@@ -554,9 +562,9 @@ def extra_criteria(nd, structs, res, cfg, total=False):
                 where = "within {:.2f} ft of the ACER judgment line".format(max(margins))
             # 2.21.1 (DWR-4031): cite the 5.3(f) borderline rule only when it counted
             # something; with 0 borderline structures High comes from the judgment zone
-            if near:
+            if moved:
                 why = ("borderline goes to the higher class, 5.3(f): {} borderline "
-                       "structure(s)".format(len(near)))
+                       "structure(s)".format(len(moved)))
             else:
                 why = "the judgment zone is counted as probable loss of life"
             msg = ("HIGH is provisional: the most-exposed judgment-zone dwelling is only "

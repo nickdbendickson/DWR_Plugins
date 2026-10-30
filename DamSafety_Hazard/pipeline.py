@@ -34,7 +34,7 @@ from .helpers import (
     log_message, export_layer_to_formats, add_layer_to_project, dam_display_name,
     RasterSampler, apply_acer11_style, reproject_raster, plugin_group, prune_empty_groups,
     redirected_outputs, prepare_output_path, remove_project_layers_for_path,
-    get_layer_path,
+    get_layer_path, buffer_distance_in_layer_units,
 )
 from .processing import (
     discover_project_layers, make_samplers, close_samplers, generate_hazard_rasters,
@@ -185,6 +185,24 @@ DEFAULTS.update({
 })
 from . import modelgate as _MG          # noqa: E402  (v2.10 model gate settings)
 DEFAULTS.update(_MG.CFG_DEFAULTS)
+
+FT_TO_M = 0.3048
+
+
+def depth_cell_label(cell_size_m):
+    """2.22.1 (DWR-4031 toe10m): the depth grid's cell for report text, e.g. "10 m",
+    "9.1 x 10 m" (non-square), or "depth-grid" when the size is not known. Was a
+    hard-coded "30 m"."""
+    try:
+        cx, cy = (float(v) for v in cell_size_m)
+    except (TypeError, ValueError):
+        return "depth-grid"
+    if not (cx > 0 and cy > 0):
+        return "depth-grid"
+
+    def f(v):
+        return "{:g}".format(round(v, 1) if v < 10 else round(v))
+    return "{} m".format(f(cx)) if f(cx) == f(cy) else "{} x {} m".format(f(cx), f(cy))
 
 
 
@@ -3012,6 +3030,16 @@ def _run_scenario(run, sc, lyrs, structs, acrs, clip, inputs, cross_idx, tick, o
                             fast_sampling=bool(cfg.get("fast_sampling")))
         res["cell_size"] = (abs(samplers["depth"].gt[1]), abs(samplers["depth"].gt[5])) \
             if samplers["depth"].ok and samplers["depth"].gt else None
+        # 2.22.1 (DWR-4031 toe10m): the depth grid's cell in metres, for report labels
+        # (was a hard-coded "30 m"; the toe10m grid is 10 m)
+        res["cell_size_m"] = None
+        if res["cell_size"]:
+            try:
+                ft_units = buffer_distance_in_layer_units(1.0, samplers["depth"].crs)
+                res["cell_size_m"] = tuple(c / ft_units * FT_TO_M for c in res["cell_size"]) \
+                    if ft_units and ft_units > 0 else None
+            except Exception:
+                res["cell_size_m"] = None
         if sc.role == ROLE_BREACH:
             # 2.18.69 (DWR-3034 item 8): wet crossings get a 1 m channel depth as well
             wet_x = [r for r in res["facility_records"] if r.get("kind") == FAC.KIND_CROSSING
@@ -3463,10 +3491,10 @@ def _extra_sections(run, breaches, gov, qa_rows, inputs):
         sec["crossings"] = [line, "Depth at a bridge includes the channel under it - confirm "
                             "deck / approach overtopping and culvert washout (layer "
                             "Bridges_Culverts_Crossings, sorted by ADT)",
-                            "Max_Depth_ft is the 30 m depth cell; Channel_Depth_1m_ft is WSE "
+                            "Max_Depth_ft is the {} depth cell; Channel_Depth_1m_ft is WSE "
                             "(Max) - the lowest 1 m ground within {:g} ft (the water on a ford "
                             "or culvert road, the channel under a bridge)".format(
-                                CROSSING_RADIUS_FT)]
+                                depth_cell_label(res.get("cell_size_m")), CROSSING_RADIUS_FT)]
     else:
         sec["crossings"] = ["Not screened - no bridge / culvert data downloaded"]
     n_out = sum(1 for _r, i in qa_rows if i.startswith("outline"))
