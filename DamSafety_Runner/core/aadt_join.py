@@ -52,6 +52,27 @@ def siblings(roads_path):
     return out
 
 
+def join_sources(aadt_layers="", roads_path="", roads_more=""):
+    """3.13.2 (DWR-4031 toe10m): the GeoPackages the AADT join reads. The AADT_LAYERS
+    list (";;"-separated), else the AADT files next to the roads layer, plus every
+    ROADS_MORE GeoPackage: a county-roads file given as extra roads carries the AADT the
+    Hazard plugin uses (87TH ST NW: AADT 60, county roads), and read_layers skips any file
+    without an AADT field. In order, each file once."""
+    paths = [p.strip() for p in str(aadt_layers or "").split(";;") if p.strip()] \
+        or siblings(roads_path)
+    for uri in str(roads_more or "").split(";;"):
+        p = uri.strip().split("|", 1)[0]
+        if p.lower().endswith(".gpkg") and os.path.isfile(p):
+            paths.append(p)
+    out, seen = [], set()
+    for p in paths:
+        k = os.path.normcase(os.path.abspath(p.split("|", 1)[0]))
+        if k not in seen:
+            seen.add(k)
+            out.append(p.split("|", 1)[0])
+    return out
+
+
 def _num(v):
     try:
         x = float(v)

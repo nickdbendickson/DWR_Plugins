@@ -506,7 +506,8 @@ def generated_inputs(ctx, dam, w):
         "DEM": ctx.d(DEFAULT_DEM), "WATER_MASK": ctx.d(WATER_MASK)})
     h = {"LETHALITY": 0, "STRUCTURES": pk("NSI_structures"), "S_ID": "fd_id", "S_OCC": "occtype",
          "ROADS": pk("ND_roads_NG911"), "ROADS_MORE": pk("ND_county_roads"),
-         "AADT_LAYERS": pk("HPMS_ND_2024") + ";;" + pk("NDDOT_traffic_counts"),
+         "AADT_LAYERS": ";;".join(pk(n) for n in ("HPMS_ND_2024", "NDDOT_traffic_counts",
+                                                   "ND_county_roads")),
          "RAIL": pk("NARN_rail_lines"), "T_PASSENGER": "PASSNGR", "PASSENGER_CODES": "A,B,C",
          "LIFELINES": pk("OSM_lifelines"), "LIFELINES_MORE": pk("lifeline_nd_basic_care"),
          "DOWNSTREAM_DAMS": os.path.join(w, "pack_NID_dams_{}_downstream.gpkg".format(num)),
