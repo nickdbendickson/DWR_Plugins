@@ -32,4 +32,9 @@ describe("Crest.html", () => {
     assert.doesNotMatch(html, /__VITE_PRELOAD__/, "unreplaced Vite placeholder: the lazy map would throw");
     assert.match(html, /<link rel="icon"[^>]*href="data:image\/svg\+xml/);
   });
+
+  it("can reach the BLM PLSS service (no Content-Security-Policy; service URL inlined)", () => {
+    assert.doesNotMatch(html, /Content-Security-Policy/i);
+    assert.ok(html.includes("https://gis.blm.gov/arcgis/rest/services/Cadastral/BLM_Natl_PLSS_CadNSDI/MapServer"));
+  });
 });

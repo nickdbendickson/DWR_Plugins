@@ -1,3 +1,4 @@
+import type { PlssCache } from "./plss.ts";
 export type DatumName = "Local" | "NAVD88" | "NGVD29";
 export type FailureMode = "overtopping" | "piping";
 export type BreachMethod = "froehlich" | "macdonald" | "tr60";
@@ -83,6 +84,8 @@ export type DamRecord = {
   reachKm?: number;
   receptors: ReceptorSeed[];
   geometry?: DamGeometry;
+  /** PLSS sections looked up for the flood strip (BLM CadNSDI), kept so the list works offline afterwards. */
+  plss?: PlssCache;
   /** ACER TM 11 judgment zone counts as probable loss of life (High), as damsuite classify_nd defaults. Default true. */
   judgmentAsProbable?: boolean;
   /** Set when the record was filled from the NID (ND dam picker). Optional, so crest-desk-v2 state still loads. */

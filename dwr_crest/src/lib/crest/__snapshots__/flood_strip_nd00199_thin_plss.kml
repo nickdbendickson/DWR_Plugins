@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>
+<name>ND00199 flood strip (approximate)</name>
+<description>Approximate screening strip, not a mapped flood extent.
+Dam ND00199 (Swan Buffalo Detention 12). Crest 1071.09 ft NAVD88. Peak 28,623 cfs.
+Schematic desk valley: max depth 14.53 ft, wet strip 11.07 km, 2323.4 ac.
+Downstream direction: the dam line's normal, on the side away from the reservoir point (bearing 131°).
+Engine: crest-desk-engine 2026.10.30.
+
+PLSS sections the strip touches (15, downstream order; wet ac, deepest depth band):
+1. T141N R53W Sec 33 (5th PM): 4.4 ac, 5–10 ft, 0.00–0.27 km
+2. T141N R53W Sec 34 (5th PM): 32.3 ac, 5–10 ft, 0.19–1.15 km
+3. T140N R53W Sec 4 (5th PM): 129.5 ac, 5–10 ft, 0.87–2.64 km
+4. T140N R53W Sec 3 (5th PM): 163.2 ac, 5–10 ft, 2.20–3.93 km
+5. T140N R53W Sec 10 (5th PM): 178.8 ac, 2–5 ft, 3.17–4.89 km
+6. T140N R53W Sec 11 (5th PM): 303.4 ac, 2–5 ft, 4.21–6.36 km
+7. T140N R53W Sec 14 (5th PM): 166.0 ac, 2–5 ft, 5.46–7.09 km
+8. T140N R53W Sec 12 (5th PM): 6.5 ac, 0.5–1 ft, 6.22–6.55 km
+9. T140N R53W Sec 13 (5th PM): 432.0 ac, 0.5–1 ft, 6.36–8.60 km
+10. T140N R53W Sec 24 (5th PM): 145.7 ac, 0.5–1 ft, 7.77–9.29 km
+11. T140N R52W Sec 18 (5th PM): 49.1 ac, 0.5–1 ft, 8.24–9.15 km
+12. T140N R52W Sec 19 (5th PM): 479.0 ac, 0.1–0.5 ft, 8.60–10.73 km
+13. T140N R52W Sec 20 (5th PM): 126.6 ac, 0.1–0.5 ft, 10.06–11.07 km
+14. T140N R52W Sec 30 (5th PM): 78.9 ac, 0.1–0.5 ft, 10.09–11.07 km
+15. T140N R52W Sec 29 (5th PM): 28.2 ac, 0.1–0.5 ft, 10.73–11.07 km
+Slivers under 0.1 ac not listed: 0.
+PLSS sections: BLM National PLSS CadNSDI (Bureau of Land Management), gis.blm.gov. Public data, provided as is; not a legal survey or land record. Fetched 2026-10-30T14:57:43.643Z.</description>
+<Style id="d0"><LineStyle><width>0</width></LineStyle><PolyStyle><color>73f2e3c6</color><outline>0</outline></PolyStyle></Style>
+<Style id="d1"><LineStyle><width>0</width></LineStyle><PolyStyle><color>73e6c993</color><outline>0</outline></PolyStyle></Style>
+<Style id="d2"><LineStyle><width>0</width></LineStyle><PolyStyle><color>73d6a85a</color><outline>0</outline></PolyStyle></Style>
+<Style id="d3"><LineStyle><width>0</width></LineStyle><PolyStyle><color>73bf7f2a</color><outline>0</outline></PolyStyle></Style>
+<Style id="d4"><LineStyle><width>0</width></LineStyle><PolyStyle><color>739c5c13</color><outline>0</outline></PolyStyle></Style>
+<Style id="d5"><LineStyle><width>0</width></LineStyle><PolyStyle><color>736b3008</color><outline>0</outline></PolyStyle></Style>
+<Placemark>
+<name>Depth 5–10 ft</name>
+<description>Approximate screening strip, not a mapped flood extent. Schematic depth 14.53 to 4.18 ft, 0.00–2.77 km downstream of the breach.</description>
+<styleUrl>#d4</styleUrl>
+<ExtendedData><Data name="disclaimer"><value>Approximate screening strip, not a mapped flood extent</value></Data><Data name="dam_id"><value>ND00199</value></Data><Data name="dam_name"><value>Swan Buffalo Detention 12</value></Data><Data name="crest_navd88_ft"><value>1071.09</value></Data><Data name="peak_cfs"><value>28623</value></Data><Data name="engine_version"><value>crest-desk-engine 2026.10.30</value></Data><Data name="band"><value>d4</value></Data><Data name="band_label"><value>5–10 ft</value></Data><Data name="depth_max_ft"><value>14.529</value></Data><Data name="depth_min_ft"><value>4.185</value></Data><Data name="from_km"><value>0</value></Data><Data name="to_km"><value>2.767</value></Data><Data name="segments"><value>1</value></Data><Data name="area_ac"><value>213.047</value></Data><Data name="color"><value>#135c9c</value></Data></ExtendedData>
+<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>-97.3908803,46.9834479 -97.3654367,46.9653885 -97.3605699,46.9692794 -97.3903997,46.9838321 -97.3908803,46.9834479</coordinates></LinearRing></outerBoundaryIs></Polygon>
+</Placemark>
+<Placemark>
+<name>Depth 2–5 ft</name>
+<description>Approximate screening strip, not a mapped flood extent. Schematic depth 4.18 to 1.21 ft, 2.77–5.53 km downstream of the breach.</description>
+<styleUrl>#d3</styleUrl>
+<ExtendedData><Data name="disclaimer"><value>Approximate screening strip, not a mapped flood extent</value></Data><Data name="dam_id"><value>ND00199</value></Data><Data name="dam_name"><value>Swan Buffalo Detention 12</value></Data><Data name="crest_navd88_ft"><value>1071.09</value></Data><Data name="peak_cfs"><value>28623</value></Data><Data name="engine_version"><value>crest-desk-engine 2026.10.30</value></Data><Data name="band"><value>d3</value></Data><Data name="band_label"><value>2–5 ft</value></Data><Data name="depth_max_ft"><value>4.185</value></Data><Data name="depth_min_ft"><value>1.205</value></Data><Data name="from_km"><value>2.767</value></Data><Data name="to_km"><value>5.534</value></Data><Data name="segments"><value>1</value></Data><Data name="area_ac"><value>500.907</value></Data><Data name="color"><value>#2a7fbf</value></Data></ExtendedData>
+<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>-97.3654367,46.9653885 -97.3392194,46.9479477 -97.3315138,46.9541082 -97.3605699,46.9692794 -97.3654367,46.9653885</coordinates></LinearRing></outerBoundaryIs></Polygon>
+</Placemark>
+<Placemark>
+<name>Depth 0.5–1 ft</name>
+<description>Approximate screening strip, not a mapped flood extent. Schematic depth 1.21 to 0.35 ft, 5.53–8.30 km downstream of the breach.</description>
+<styleUrl>#d1</styleUrl>
+<ExtendedData><Data name="disclaimer"><value>Approximate screening strip, not a mapped flood extent</value></Data><Data name="dam_id"><value>ND00199</value></Data><Data name="dam_name"><value>Swan Buffalo Detention 12</value></Data><Data name="crest_navd88_ft"><value>1071.09</value></Data><Data name="peak_cfs"><value>28623</value></Data><Data name="engine_version"><value>crest-desk-engine 2026.10.30</value></Data><Data name="band"><value>d1</value></Data><Data name="band_label"><value>0.5–1 ft</value></Data><Data name="depth_max_ft"><value>1.205</value></Data><Data name="depth_min_ft"><value>0.347</value></Data><Data name="from_km"><value>5.534</value></Data><Data name="to_km"><value>8.301</value></Data><Data name="segments"><value>1</value></Data><Data name="area_ac"><value>711.597</value></Data><Data name="color"><value>#93c9e6</value></Data></ExtendedData>
+<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>-97.3392194,46.9479477 -97.3128074,46.9306625 -97.3026524,46.9387813 -97.3315138,46.9541082 -97.3392194,46.9479477</coordinates></LinearRing></outerBoundaryIs></Polygon>
+</Placemark>
+<Placemark>
+<name>Depth 0.1–0.5 ft</name>
+<description>Approximate screening strip, not a mapped flood extent. Schematic depth 0.35 to 0.10 ft, 8.30–11.07 km downstream of the breach.</description>
+<styleUrl>#d0</styleUrl>
+<ExtendedData><Data name="disclaimer"><value>Approximate screening strip, not a mapped flood extent</value></Data><Data name="dam_id"><value>ND00199</value></Data><Data name="dam_name"><value>Swan Buffalo Detention 12</value></Data><Data name="crest_navd88_ft"><value>1071.09</value></Data><Data name="peak_cfs"><value>28623</value></Data><Data name="engine_version"><value>crest-desk-engine 2026.10.30</value></Data><Data name="band"><value>d0</value></Data><Data name="band_label"><value>0.1–0.5 ft</value></Data><Data name="depth_max_ft"><value>0.347</value></Data><Data name="depth_min_ft"><value>0.1</value></Data><Data name="from_km"><value>8.301</value></Data><Data name="to_km"><value>11.068</value></Data><Data name="segments"><value>1</value></Data><Data name="area_ac"><value>897.894</value></Data><Data name="color"><value>#c6e3f2</value></Data></ExtendedData>
+<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>-97.3128074,46.9306625 -97.2862839,46.9134665 -97.2739024,46.9233653 -97.3026524,46.9387813 -97.3128074,46.9306625</coordinates></LinearRing></outerBoundaryIs></Polygon>
+</Placemark>
+</Document>
+</kml>

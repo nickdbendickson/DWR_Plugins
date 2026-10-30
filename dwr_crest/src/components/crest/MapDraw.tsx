@@ -10,6 +10,7 @@ import shadowUrl from "leaflet/dist/images/marker-shadow.png";
 import { basemaps } from "@/lib/crest/basemap";
 import { DEPTH_BANDS, FLOOD_STRIP_DISCLAIMER, type FloodStrip } from "@/lib/crest/floodstrip";
 import { initialView, ND_CENTER } from "@/lib/crest/mapview";
+import { PLSS_ATTRIBUTION_SHORT, type PlssRow } from "@/lib/crest/plss";
 import type { DamGeometry, GeoJSONFeature } from "@/lib/crest/types";
 
 const LAYERS = basemaps(import.meta.env);
@@ -27,6 +28,9 @@ type Props = {
   /** Approximate flooded strip from the current result (null: none, see `stripMessage`). */
   strip?: FloodStrip | null;
   stripMessage?: string | null;
+  /** PLSS sections the strip touches (null: not looked up / not available, see `plssMessage`). */
+  plss?: PlssRow[] | null;
+  plssMessage?: string | null;
 };
 
 type GeoLayer = L.Layer & { toGeoJSON: () => GeoJSONFeature };
@@ -147,18 +151,89 @@ function FloodStripLayer({ strip, on }: { strip: FloodStrip | null | undefined; 
   return null;
 }
 
+const PLSS_PANE = "crest-plss";
+
+const escHtml = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * Touched PLSS sections: outlines and labels (section number; T/R once per township) in their own pane above the strip and
+ * under the drawn shapes, pointer events off and nothing interactive, so drawing and editing are unaffected.
+ */
+function PlssLayer({ rows, on }: { rows: PlssRow[] | null | undefined; on: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!map.getPane(PLSS_PANE)) {
+      const pane = map.createPane(PLSS_PANE);
+      pane.style.zIndex = "360";
+      pane.style.pointerEvents = "none";
+    }
+    if (!rows || rows.length === 0 || !on) return;
+    const group = L.featureGroup([], { attribution: PLSS_ATTRIBUTION_SHORT } as L.LayerOptions);
+    const townships = new Map<string, L.LatLngBounds>();
+    const label = (at: L.LatLng, html: string, w: number, h: number) =>
+      L.marker(at, {
+        pane: PLSS_PANE,
+        interactive: false,
+        keyboard: false,
+        icon: L.divIcon({ className: "crest-plss-label", iconSize: [w, h], iconAnchor: [w / 2, h / 2], html }),
+      });
+    for (const r of rows) {
+      const outline = L.geoJSON(
+        { type: "Feature", properties: {}, geometry: { type: "MultiPolygon", coordinates: r.coordinates } } as GeoJSON.Feature,
+        { pane: PLSS_PANE, interactive: false, style: () => ({ color: "#7a3b12", weight: 1.6, dashArray: "5 3", fill: false }) },
+      );
+      group.addLayer(outline);
+      const b = outline.getBounds();
+      const key = `${r.township} ${r.range}`;
+      townships.set(key, townships.has(key) ? townships.get(key)!.extend(b) : L.latLngBounds(b.getSouthWest(), b.getNorthEast()));
+      group.addLayer(
+        label(
+          b.getCenter(),
+          `<div data-testid="plss-label" style="text-align:center;font-weight:700;font-size:13px;line-height:20px;color:#5a2a0a;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff">Sec ${escHtml(r.section)}</div>`,
+          64,
+          20,
+        ),
+      );
+    }
+    // Township/range once per township, on the north edge of the sections it has in this list.
+    for (const [tr, b] of townships) {
+      group.addLayer(
+        label(
+          L.latLng(b.getNorth(), b.getCenter().lng),
+          `<div data-testid="plss-township-label" style="display:inline-block;padding:0 4px;border:1px solid #7a3b12;border-radius:2px;background:rgba(255,250,240,.92);font-size:11px;line-height:16px;font-style:italic;color:#5a2a0a;white-space:nowrap">${escHtml(tr)}</div>`,
+          88,
+          18,
+        ),
+      );
+    }
+    group.addTo(map);
+    return () => {
+      group.remove();
+    };
+  }, [map, rows, on]);
+  return null;
+}
+
 function StripLegend({
   strip,
   message,
   on,
   setOn,
   onZoom,
+  plss,
+  plssMessage,
+  plssOn,
+  setPlssOn,
 }: {
   strip: FloodStrip | null | undefined;
   message?: string | null;
   on: boolean;
   setOn: (v: boolean) => void;
   onZoom: () => void;
+  plss?: PlssRow[] | null;
+  plssMessage?: string | null;
+  plssOn: boolean;
+  setPlssOn: (v: boolean) => void;
 }) {
   const used = new Set(strip?.features.map((f) => f.properties.band) ?? []);
   return (
@@ -206,6 +281,24 @@ function StripLegend({
               <div style={{ color: "#5c5a52" }}>Schematic desk depth; not a model run.</div>
             </div>
           ) : null}
+          <div style={{ marginTop: 6, borderTop: "1px solid #e2dccf", paddingTop: 4 }}>
+            {plss && plss.length > 0 ? (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600 }}>
+                <input
+                  type="checkbox"
+                  checked={plssOn}
+                  onChange={(e) => setPlssOn(e.target.checked)}
+                  aria-label="Show the PLSS sections"
+                />
+                <span style={{ width: 14, height: 0, borderTop: "2px dashed #7a3b12", display: "inline-block" }} />
+                PLSS sections ({plss.length})
+              </label>
+            ) : (
+              <div data-testid="plss-legend-note" style={{ color: "#5c5a52" }}>
+                {plssMessage ?? "PLSS sections: not looked up."}
+              </div>
+            )}
+          </div>
         </>
       ) : (
         <div style={{ color: "#5c5a52" }}>{message ?? "No flood strip on the map."}</div>
@@ -214,10 +307,11 @@ function StripLegend({
   );
 }
 
-export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage }: Props) {
+export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage, plss, plssMessage }: Props) {
   const view = initialView(geometry, lat, lon);
   const center: [number, number] = "center" in view ? view.center : ND_CENTER;
   const [on, setOn] = useState(true);
+  const [plssOn, setPlssOn] = useState(true);
   const mapRef = useRef<L.Map | null>(null);
   const zoom = () => {
     const map = mapRef.current;
@@ -236,7 +330,17 @@ export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage }: P
         border: "1px solid var(--border)",
       }}
     >
-      <StripLegend strip={strip} message={stripMessage} on={on} setOn={setOn} onZoom={zoom} />
+      <StripLegend
+        strip={strip}
+        message={stripMessage}
+        on={on}
+        setOn={setOn}
+        onZoom={zoom}
+        plss={plss}
+        plssMessage={plssMessage}
+        plssOn={plssOn}
+        setPlssOn={setPlssOn}
+      />
       <MapContainer
         ref={mapRef}
         center={center}
@@ -251,6 +355,7 @@ export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage }: P
           ))}
         </LayersControl>
         <FloodStripLayer strip={strip} on={on} />
+        <PlssLayer rows={plss} on={plssOn} />
         <DrawControl geometry={geometry} lat={lat} lon={lon} onChange={onChange} />
       </MapContainer>
     </div>

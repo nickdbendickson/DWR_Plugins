@@ -332,8 +332,11 @@ function kmlColor(hex: string, alpha = 0x73) {
   return `${alpha.toString(16).padStart(2, "0")}${h.slice(4, 6)}${h.slice(2, 4)}${h.slice(0, 2)}`;
 }
 
-/** <root>_flood_strip.kml: the same polygons and facts, for Google Earth and the like. */
-export function exportFloodStripKml(strip: FloodStrip): string {
+/**
+ * <root>_flood_strip.kml: the same polygons and facts, for Google Earth and the like. `extra` adds lines to the
+ * document description (the PLSS section list, plss.ts).
+ */
+export function exportFloodStripKml(strip: FloodStrip, extra: string[] = []): string {
   const p = strip.properties;
   const desc = [
     `${p.disclaimer}.`,
@@ -341,6 +344,7 @@ export function exportFloodStripKml(strip: FloodStrip): string {
     `Schematic desk valley: max depth ${p.max_depth_ft.toFixed(2)} ft, wet strip ${p.wet_reach_km.toFixed(2)} km, ${p.strip_area_ac.toFixed(1)} ac${p.clipped_to_aoi ? ", clipped to the drawn area" : ""}.`,
     p.direction,
     `Engine: ${p.engine_version}.`,
+    ...extra,
   ].join("\n");
   const coords = (ring: number[][]) => ring.map(([lon, lat]) => `${lon},${lat}`).join(" ");
   const polygon = (rings: number[][][]) =>
