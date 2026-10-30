@@ -1,0 +1,82 @@
+ND Dam Hazard Classification Helper 2.21.0
+==========================================
+(2026-10-30; release set: ND Dam Breach Runner 3.12.9, ND Dam Breach Screening 0.17.58,
+damsuite 1.18.4 - only RELEASE ndhazard changed)
+
+WHAT CHANGED
+  Nick: "make it so that i have the option to name the dam, and if it doesn't have a
+  current folder in dams it would create it and put the rasters in it".
+
+  Classify > Setup has "Add model results to a dam…" (add_results_dialog.py), and
+  Processing has "Add model results to a dam" (ndhazard:adddamresults), which also
+  takes a CSV with one row per dam. Both use adddam.py, which has no Qt.
+
+  1. The dam. Type its ID (DWR-2801, ND00199, NID ND00199, 2801) or its name. The
+     dam's folder in the Dams folder is found by folder name or by dam_id / name /
+     nid_id / dwr_structure_id in its dam.json. Case, spaces, '-' and '_' are ignored, and an
+     ID's leading zeros. A dam is never guessed: if two folders fit, it stops and says so.
+     Folders the batch skips (_..., .…, outputs) are never matched.
+     If no folder fits, <Dams>/<typed name> is made with a dam.json (dam_record):
+     dam_id when the text is an ID, otherwise name. The Dams folder is the one given,
+     else the suite's Dams folder setting, else the Dam suite home's one, else the
+     default. ND_Dam_Suite_Pack is always refused.
+  2. The results go to <dam>/Hazard_inputs/Breach_<DSSWISE|HECRAS|LISFLOOD>, or to
+     No_Breach_<MODEL> for a no-breach run. A path part that starts with "No_Breach"
+     is what autodetect.find_rasters takes as the baseline. Classify and the batch need
+     no change.
+       DSS-WISE Lite  zip, folder or single raster: dsswise.convert (ft, ft/s, h).
+                      Its Depth_ft / Velocity_ftps outputs are renamed Depth_Max_ft /
+                      Velocity_Max_ftps: find_rasters reads "Depth_ft" as an output
+                      time and would pass it over. Units only assumed (not in the file
+                      name) need "accept".
+       HEC-RAS        RAS Mapper rasters: copied (a .vrt with its relative tiles and
+                      sidecars). When the band unit, the tiles' unit or the HEC-RAS
+                      project says SI, depth / velocity / D x V / WSE are converted to
+                      <name>_ft.tif / _ftps / _ft2ps instead. A .p##.hdf plan goes
+                      through rasimport.import_plan, with the terrain if given. Without
+                      the terrain it uses the cell minimum, with the usual warning.
+       LISFLOOD-FP    <run>.max (m), .maxVc / .Vmax (m/s), .inittm (h), .mxe (m):
+                      ESRI ASCII to float32 GeoTIFF in ft, ft/s and h, with the band
+                      unit set. The CRS comes from the CRS given, else the grid's .prj,
+                      else an ESRI .prj in the folder, else the dam's DEM if the grid
+                      centre lies on it. Otherwise it stops and asks for one.
+                      Snapshots (-0001.wd ...) are ignored. A folder with several runs
+                      needs the run's .max file chosen.
+  3. Never overwrite. A folder that already holds results is never written into: the
+     next free number is used (Breach_HECRAS_2) and the notes say so. The same source
+     (sha256) for the same scenario is reported as "already added" and nothing is copied.
+     The work is done in a hidden .adding_<id> folder and renamed at the end, so a
+     failure leaves nothing half-written.
+     The source is only read. It is refused when it lies inside the dam folder or holds
+     the Dams folder.
+  4. results_provenance.json goes in each results folder: tool, plugin version, time,
+     dam, source, file or folder, sha256, model, scenario, outputs and notes. dam.json
+     gets a "modelled" status with the folder and sha256, so the suite's next step is
+     classify.
+  5. After adding, find_rasters is run on the dam folder. If it would still take
+     another raster (an older "Depth (Max).tif" higher up), the notes say which one.
+     The batch's choice is not changed.
+
+  No classification change. Batch behaviour is unchanged.
+
+LIMITS
+  - A VRT that reads its tiles by full path still reads them there. The copy is not
+    self-contained, and the notes say so.
+  - A HEC-RAS plan without terrain gives the cell-minimum depth (warned).
+  - LISFLOOD-FP grids with no .prj and no DEM under them need the CRS typed in.
+  - No model is run. These are model results only.
+
+TESTS
+  tests/test_add_dam_results.py (20 tests, synthetic data) covers:
+  - matching and creating the dam folder
+  - never overwriting, and "already added"
+  - a DSS-WISE zip, and units that are only assumed
+  - RAS Mapper VRT and tiles, and SI conversion
+  - a HEC-RAS plan (stubbed import)
+  - LISFLOOD-FP .max / .maxVc / .inittm with a .prj and with a typed CRS, and several runs
+  - find_rasters picking the results up, and baseline placement
+  - refusals (pack, a dam folder as the root, the source inside the dam folder)
+  - the CSV
+  - the window offscreen, the Setup button, and the Processing algorithm
+  The tests pass on QGIS 3.34 and on QGIS 4. qgis_process run ndhazard:adddamresults was
+  also run into a temporary Dams folder on both.

@@ -626,6 +626,133 @@ _NO_DOWNLOADS = ("download_nsi", "download_address", "download_usa_structures", 
                  "download_places", "download_ms_footprints")
 
 
+class AddDamResultsAlgorithm(_Base):
+    """2.21.0: add one model's results (DSS-WISE Lite / HEC-RAS / LISFLOOD-FP) to a dam's
+    folder in the Dams folder, making the folder when the dam has none (adddam.py)."""
+
+    def name(self):
+        return "adddamresults"
+
+    def displayName(self):
+        return "Add model results to a dam"
+
+    def shortHelpString(self):
+        return ("Puts a model's results in the dam's folder in the Dams folder, where the "
+                "batch classification finds them. Name the dam (its ID such as DWR-2801, or "
+                "its name): when the Dams folder has no folder for it, one is made with a "
+                "dam.json. The results go to &lt;dam&gt;/Hazard_inputs/Breach_&lt;MODEL&gt; "
+                "(No_Breach_&lt;MODEL&gt; for a no-breach baseline); a folder that already "
+                "holds results is never written into - the next number is used. DSS-WISE "
+                "Lite zips / folders and LISFLOOD-FP .max / .maxVc / .inittm grids are "
+                "converted to feet, ft/s and hours; HEC-RAS exported rasters are copied (SI "
+                "rasters converted to feet); a HEC-RAS plan file (.p##.hdf) is converted by "
+                "the plan import. The source is only read. results_provenance.json records "
+                "the source, its sha256, the model and the time. A CSV with columns dam, "
+                "source (and optionally model, scenario, crs, terrain) adds many dams.")
+
+    def initAlgorithm(self, config=None):
+        from . import adddam as AD
+        self.addParameter(QgsProcessingParameterString(
+            "DAM", "Dam ID or name (a new dam folder is made when there is none)",
+            optional=True))
+        self.addParameter(QgsProcessingParameterFile(
+            "SOURCE", "Model results: zip, .p##.hdf, .max or raster file", behavior=FILE_FILE,
+            optional=True))
+        self.addParameter(QgsProcessingParameterFile(
+            "SOURCE_FOLDER", "or: folder of model results", behavior=FILE_FOLDER,
+            optional=True))
+        self.addParameter(QgsProcessingParameterEnum(
+            "MODEL", "Model", options=[lab for _k, lab in AD.MODELS], defaultValue=0))
+        self.addParameter(QgsProcessingParameterEnum(
+            "SCENARIO", "Scenario", options=[lab for _k, lab in AD.SCENARIOS],
+            defaultValue=0))
+        self.addParameter(QgsProcessingParameterFile(
+            "DAMS_FOLDER", "Dams folder (empty: the suite's Dams folder)",
+            behavior=FILE_FOLDER, optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            "CRS", "LISFLOOD-FP grids' coordinate system when they have no .prj (e.g. "
+            "EPSG:26914)", optional=True))
+        self.addParameter(QgsProcessingParameterFile(
+            "TERRAIN", "HEC-RAS plan: terrain raster for the depth (optional)",
+            behavior=FILE_FILE, optional=True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            "ACCEPT_ASSUMED", "DSS-WISE: accept US units (ft, ft/s, h) where a file name "
+            "states none", defaultValue=False))
+        self.addParameter(QgsProcessingParameterFile(
+            "CSV", "or: CSV of many dams (columns dam, source; optional model, scenario, crs, "
+            "terrain)", behavior=FILE_FILE, extension="csv", optional=True))
+        self.addOutput(QgsProcessingOutputString("DAM_FOLDER", "Dam folder"))
+        self.addOutput(QgsProcessingOutputFolder("RESULTS_FOLDER", "Results folder"))
+        self.addOutput(QgsProcessingOutputString("SUMMARY", "Summary"))
+
+    def processAlgorithm(self, parameters, context, feedback):
+        from . import adddam as AD
+        dams = self.parameterAsFile(parameters, "DAMS_FOLDER", context) or ""
+        accept = self.parameterAsBool(parameters, "ACCEPT_ASSUMED", context)
+        csv_path = self.parameterAsFile(parameters, "CSV", context) or ""
+        try:
+            if csv_path:
+                jobs = AD.read_csv(csv_path)
+                if not jobs:
+                    raise QgsProcessingException("{} lists no dams".format(csv_path))
+            else:
+                src = self.parameterAsFile(parameters, "SOURCE", context) or \
+                    self.parameterAsFile(parameters, "SOURCE_FOLDER", context) or ""
+                dam = (self.parameterAsString(parameters, "DAM", context) or "").strip()
+                if not dam or not src:
+                    raise QgsProcessingException("Name the dam and give its model results "
+                                                 "(or a CSV of many dams).")
+                jobs = [{"dam": dam, "source": src,
+                         "model": AD.MODELS[self.parameterAsEnum(parameters, "MODEL",
+                                                                 context)][0],
+                         "scenario": AD.SCENARIOS[self.parameterAsEnum(parameters, "SCENARIO",
+                                                                       context)][0],
+                         "crs": self.parameterAsString(parameters, "CRS", context) or "",
+                         "terrain": self.parameterAsFile(parameters, "TERRAIN", context) or ""}]
+        except AD.AddResultsError as e:
+            raise QgsProcessingException(str(e)) from e
+        lines, last, failed = [], None, 0
+        for i, job in enumerate(jobs):
+            if feedback.isCanceled():
+                break
+            n = len(jobs)
+            try:
+                res = AD.add_results(job["dam"], job["source"], job["model"], job["scenario"],
+                                     dams_folder=dams, crs=job.get("crs", ""),
+                                     terrain=job.get("terrain", ""), accept_assumed=accept,
+                                     progress=_progress(feedback, 100.0 * i / n,
+                                                        100.0 * (i + 1) / n))
+            except CancelledByUser as e:
+                raise QgsProcessingException("Cancelled") from e
+            except AD.AddResultsError as e:
+                if n == 1:
+                    raise QgsProcessingException(str(e)) from e
+                failed += 1
+                feedback.reportError("{}: {}".format(job["dam"], e), False)
+                lines.append("{}: NOT added - {}".format(job["dam"], e))
+                continue
+            except Exception as e:                # never an unhandled crash
+                _report_traceback(feedback)
+                if n == 1:
+                    raise QgsProcessingException("Unexpected error: {!r}".format(e)) from e
+                failed += 1
+                lines.append("{}: NOT added - {!r}".format(job["dam"], e))
+                continue
+            last = res
+            for line in AD.summary(res):
+                if "WARNING" in line and hasattr(feedback, "pushWarning"):
+                    feedback.pushWarning(line)
+                else:
+                    feedback.pushInfo(line)
+            lines.append("{}: {}".format(job["dam"], AD.summary(res)[0]))
+        if len(jobs) > 1:
+            feedback.pushInfo("{} of {} dam(s) done, {} failed".format(
+                len(jobs) - failed, len(jobs), failed))
+        return {"DAM_FOLDER": last["dam_folder"] if last else "",
+                "RESULTS_FOLDER": last["folder"] if last else "",
+                "SUMMARY": "\n".join(lines)}
+
+
 def _prepare_dam(folder, cfg_over):
     """(row, kw) of one dam folder: the batch row with Dam / Folder / Depth_Raster /
     Baseline, and the pipeline settings (config keywords) of its run - kw is None
@@ -1406,7 +1533,7 @@ class FormFillAlgorithm(_Base):
 SUITE_KEY = "ndhazard"                    # the suite settings file key (damsuite.versions)
 SETTINGS_TABS = ("Classification", "Models", "Review & QA", "Dam suite", "Other")
 _TOOL_TAB = {"acerzones": "Classification", "classify": "Classification", "batch": "Classification",
-             "fillform": "Classification", "dsswise": "Models", "hecrasplan": "Models", "damsinseries": "Models",
+             "fillform": "Classification", "dsswise": "Models", "adddamresults": "Models", "hecrasplan": "Models", "damsinseries": "Models",
              "portfolio": "Models", "reproduce": "Models", "creepwatch": "Review & QA", "ensemble": "Review & QA",
              "modelgate": "Review & QA", "quickcreep": "Review & QA", "reviewpackage": "Review & QA",
              "reviewsummary": "Review & QA", "markreviewed": "Review & QA", "runnerculverts": "Dam suite",
@@ -1445,7 +1572,7 @@ class Provider(QgsProcessingProvider):
         from .rulecompare_alg import RuleCompareAlgorithm
         from .markreviewed_alg import MarkReviewedAlgorithm          # v2.12
         classes = [AcerZonesAlgorithm, ClassifyAlgorithm, BatchAlgorithm, DssWiseAlgorithm, RasPlanAlgorithm,
-                   WatchAlgorithm, SeriesAlgorithm, PortfolioAlgorithm, ReproduceAlgorithm, FormFillAlgorithm,
+                   AddDamResultsAlgorithm, WatchAlgorithm, SeriesAlgorithm, PortfolioAlgorithm, ReproduceAlgorithm, FormFillAlgorithm,
                    SaveDamStateAlgorithm]
         classes += list(QA_ALGORITHMS)
         classes += [type(a) for a in review_algorithms()]
