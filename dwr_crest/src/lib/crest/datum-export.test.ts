@@ -12,14 +12,14 @@ import { vertconShiftFt } from "./vertcon_nd.ts";
 const SITE = { lat: 46.98364, lon: -97.39064 };
 
 describe("NGVD29 to NAVD88 (VERTCON)", () => {
-  it("CHECK: DWR-2801 1071.15 ft NGVD29 ties to 1072.24 ft NAVD88 (+1.09 ft)", () => {
+  it("CHECK: DWR-2801 1070.0 ft NGVD29 ties to 1071.09 ft NAVD88 (+1.09 ft)", () => {
     const shift = vertconShiftFt(SITE.lon, SITE.lat)!;
     assert.ok(Math.abs(shift - 1.0886) < 0.001, `shift ${shift}`);
     const a = analyze(
-      dwr2801({ crestFt: 1071.15, streambedFt: 1043.65, statedDatum: "NGVD29", ...SITE }),
+      dwr2801({ crestFt: 1070.0, streambedFt: 1042.5, statedDatum: "NGVD29", ...SITE }),
     );
-    assert.equal(a.datum.crestNavdFt.toFixed(2), "1072.24");
-    assert.equal(a.datum.streambedNavdFt!.toFixed(2), "1044.74");
+    assert.equal(a.datum.crestNavdFt.toFixed(2), "1071.09");
+    assert.equal(a.datum.streambedNavdFt!.toFixed(2), "1043.59");
     assert.match(a.datum.rule, /VERTCON/);
   });
 
@@ -32,7 +32,7 @@ describe("NGVD29 to NAVD88 (VERTCON)", () => {
 
   it("uses an entered offset over the grid, and warns when they disagree", () => {
     const a = analyze(
-      dwr2801({ crestFt: 1071.15, statedDatum: "NGVD29", ...SITE, datumOffsetFt: 1.5 }),
+      dwr2801({ crestFt: 1070.0, statedDatum: "NGVD29", ...SITE, datumOffsetFt: 1.5 }),
     );
     assert.equal(a.datum.offsetFt, 1.5);
     assert.ok(a.datum.warnings.some((w) => w.includes("differs from VERTCON")));
@@ -41,7 +41,7 @@ describe("NGVD29 to NAVD88 (VERTCON)", () => {
   it("falls back to the drawn breach point for the location", () => {
     const a = analyze(
       dwr2801({
-        crestFt: 1071.15,
+        crestFt: 1070.0,
         statedDatum: "NGVD29",
         lat: undefined,
         lon: undefined,
@@ -54,60 +54,60 @@ describe("NGVD29 to NAVD88 (VERTCON)", () => {
         },
       }),
     );
-    assert.equal(a.datum.crestNavdFt.toFixed(2), "1072.24");
+    assert.equal(a.datum.crestNavdFt.toFixed(2), "1071.09");
     assert.match(a.datum.rule, /breach point/);
   });
 
   it("leaves NGVD29 unconverted with a warning when there is no location or offset", () => {
     const a = analyze(
       dwr2801({
-        crestFt: 1071.15,
+        crestFt: 1070.0,
         statedDatum: "NGVD29",
         lat: undefined,
         lon: undefined,
         geometry: undefined,
       }),
     );
-    assert.equal(a.datum.crestNavdFt, 1071.15);
+    assert.equal(a.datum.crestNavdFt, 1070.0);
     assert.ok(a.datum.warnings.some((w) => w.startsWith("NGVD29 offset unknown")));
   });
 });
 
-describe("ND00199 sample (Nick, 2026-10-29: crest 1072.24 NAVD88 from NGVD29 1071.15)", () => {
+describe("ND00199 sample (Nick, 2026-10-29: crest 1071.09 NAVD88 from NGVD29 1070.0)", () => {
   const sample = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
 
-  it("carries crest 1072.24 / bottom 1044.74 ft NAVD88, H 27.50 ft, piping, with the conversion noted", () => {
-    assert.equal(sample.crestFt, 1072.24);
-    assert.equal(sample.streambedFt, 1044.74);
+  it("carries crest 1071.09 / bottom 1043.59 ft NAVD88, H 27.50 ft, piping, with the conversion noted", () => {
+    assert.equal(sample.crestFt, 1071.09);
+    assert.equal(sample.streambedFt, 1043.59);
     assert.equal(sample.heightFt, 27.5);
     assert.equal(sample.statedDatum, "NAVD88");
     assert.equal(sample.storageAcFt, 1612.59);
     assert.equal(sample.surfaceAreaAc, 154.5);
     assert.equal(sample.failureMode, "piping");
-    assert.match(sample.datumNote ?? "", /converted from NGVD29 1071\.15/);
+    assert.match(sample.datumNote ?? "", /converted from NGVD29 1070\.0/);
   });
 
-  it("CHECK: loading the sample gives crest 1072.24 and H 27.50 with no second VERTCON shift", () => {
+  it("CHECK: loading the sample gives crest 1071.09 and H 27.50 with no second VERTCON shift", () => {
     const a = analyze(sample);
     assert.equal(a.datum.offsetFt, null, "no offset applied to a NAVD88 record");
-    assert.equal(a.datum.crestNavdFt, 1072.24);
-    assert.equal(a.datum.streambedNavdFt, 1044.74);
+    assert.equal(a.datum.crestNavdFt, 1071.09);
+    assert.equal(a.datum.streambedNavdFt, 1043.59);
     assert.equal(a.breach.headFt.toFixed(2), "27.50");
-    assert.match(a.datum.rule, /treated as NAVD88\. Crest converted from NGVD29 1071\.15/);
+    assert.match(a.datum.rule, /treated as NAVD88\. Crest converted from NGVD29 1070\.0/);
     assert.doesNotMatch(a.datum.rule, /by VERTCON/);
     assert.equal(a.datum.warnings.length, 0, a.datum.warnings.join("; "));
   });
 
-  it("CHECK: the same dam entered as NGVD29 1071.15 ties to the same 1072.24 and H 27.50", () => {
+  it("CHECK: the same dam entered as NGVD29 1070.0 ties to the same 1071.09 and H 27.50", () => {
     const a = analyze({
       ...sample,
-      crestFt: 1071.15,
-      streambedFt: 1043.65,
+      crestFt: 1070.0,
+      streambedFt: 1042.5,
       statedDatum: "NGVD29",
       datumNote: undefined,
     });
-    assert.equal(a.datum.crestNavdFt.toFixed(2), "1072.24");
-    assert.equal(a.datum.streambedNavdFt!.toFixed(2), "1044.74");
+    assert.equal(a.datum.crestNavdFt.toFixed(2), "1071.09");
+    assert.equal(a.datum.streambedNavdFt!.toFixed(2), "1043.59");
     assert.equal(a.breach.headFt.toFixed(2), "27.50");
     assert.match(a.datum.rule, /by VERTCON/);
     assert.equal(Math.round(a.breach.peakCfs), Math.round(analyze(sample).breach.peakCfs));
@@ -266,8 +266,8 @@ describe("sample note, DEM crest check and store key", () => {
 
   it("warns when the DEM crest differs from the tied crest (NGVD29 value labelled NAVD88)", () => {
     assert.ok(!analyze(sample).datum.warnings.some((w) => w.startsWith("DEM crest")), "sample DEM crest is NAVD88 now");
-    const a = analyze(dwr2801({ demCrestFt: 1071.15 }));
-    assert.ok(a.datum.warnings.some((w) => w.startsWith("DEM crest 1071.15 ft differs from the tied crest 1072.24 ft NAVD88 by 1.09 ft")));
+    const a = analyze(dwr2801({ demCrestFt: 1070.0 }));
+    assert.ok(a.datum.warnings.some((w) => w.startsWith("DEM crest 1070.00 ft differs from the tied crest 1071.09 ft NAVD88 by 1.09 ft")));
   });
 
   it("the store key is bumped so old browsers drop the 912 ft sample", () => {

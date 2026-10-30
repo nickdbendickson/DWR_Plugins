@@ -58,7 +58,8 @@ export type DamRecord = {
   normalPoolFt: number;
   storageAcFt: number;
   drainageMi2: number;
-  statedDatum: DatumName;
+  /** "" = not chosen yet (a record filled from the NID, which has no elevations or datum). */
+  statedDatum: DatumName | "";
   demCrestFt: number;
   failureMode: FailureMode;
   method: BreachMethod;
@@ -84,6 +85,54 @@ export type DamRecord = {
   geometry?: DamGeometry;
   /** ACER TM 11 judgment zone counts as probable loss of life (High), as damsuite classify_nd defaults. Default true. */
   judgmentAsProbable?: boolean;
+  /** Set when the record was filled from the NID (ND dam picker). Optional, so crest-desk-v2 state still loads. */
+  nidId?: string;
+  /** The NID's hazard class (FEMA) as reported to the NID. Shown on Record and Screen; never used by the screen and
+   * never the class of record. */
+  nidHazard?: NidHazard;
+  /** Where filled values came from, by DamRecord field (e.g. "heightFt"). An edit keeps the entry, so the desk can
+   * show "edited (NID: x)" and offer a revert. */
+  provenance?: Partial<Record<string, Provenance>>;
+  /** Read-only NID reference values (not used by the engine). */
+  nidRef?: NidRef;
+};
+
+export type NidHazard = "Low" | "Significant" | "High" | "Undetermined";
+export type ProvenanceSource = "NID" | "DWR" | "DEM";
+export type Provenance = {
+  src: ProvenanceSource;
+  /** Source field, e.g. "NID Height (Ft)" or "max_pool_e". */
+  field: string;
+  value: number | string | null;
+  /** Date of the source data (NID download or DWR pull, YYYY-MM-DD). */
+  asOf: string;
+  /** Set when the user confirmed a suggested value (DWR elevations). */
+  confirmed?: boolean;
+  /** Short tag shown with the field, e.g. "NID Max Storage". */
+  note?: string;
+};
+export type NidRef = {
+  nidHeightFt: number | null;
+  damHeightFt: number | null;
+  structuralHeightFt: number | null;
+  hydraulicHeightFt: number | null;
+  nidStorageAcFt: number | null;
+  maxStorageAcFt: number | null;
+  normalStorageAcFt: number | null;
+  surfaceAreaNormalAc: number | null;
+  river: string | null;
+  city: string | null;
+  purpose: string | null;
+  damType: string | null;
+  nidUpdated: string | null;
+  lastInspection: string | null;
+  eap: string | null;
+  countyNote: string | null;
+  /** NID download date (YYYY-MM-DD). */
+  downloaded: string;
+  attribution: string;
+  /** Set when the dam joined the DWR Dams layer. */
+  dwrAttribution?: string;
 };
 
 export type SeriesPoint = { tHr: number; qCfs: number };

@@ -15,6 +15,8 @@ Desk screening of small embankment dams: breach hydrograph, schematic valley flo
 | `npm run build:desktop` | Builds the desk into `crest-desktop/crest/web/` for the desktop app (committed; see below). |
 | `npm run build:crest-html` | Builds the same desk into the one-file `Crest.html` at the repo root (committed). |
 | `npm run test:desktop` | Headless smoke test of the desktop app (Python, no GUI). |
+| `npm run data:nd-dams` | Rebuilds `src/lib/crest/data/nd_dams.json` from the NID (ND dam picker). Run only when asked. |
+| `npm run data:nd-dams-dwr -- --from data-raw/Dams.zip` | Rebuilds `src/lib/crest/data/nd_dams_dwr.json` from a downloaded DWR Dams layer. Run only when asked. |
 
 ### Deploys and migrations
 
@@ -57,6 +59,46 @@ with USGS Imagery + Topo and OpenStreetMap in the layer switcher. Tiles are the 
 another XYZ tile server, set `VITE_CREST_TILE_URL` (with `{z}`, `{x}` and `{y}`) and `VITE_CREST_TILE_ATTRIBUTION` at
 build time; it becomes the default layer (`src/lib/crest/basemap.ts`). The desktop bundle and `Crest.html` pick it up
 when rebuilt with the variable set.
+
+## North Dakota dam picker (NID, with DWR values)
+
+On the Record step, **Fill from the NID** picks a county and then a dam (type a name, other name such as "Absaraka",
+or NID ID such as `ND00199` / `199`). After a confirm ("Apply to this record" or "New record from NID"), it fills the
+name, NID ID, county, year, location, height, length, storage and drainage area, each tagged "from NID" (or "from
+DWR"), "edited (NID: x)" with a revert, or "not in NID: enter a value". **Unlink NID** drops the link and the tags.
+
+- **Dams:** the NID's 948 North Dakota main dams (Federal ID equal to NID ID; associated structures such as
+  `ND00145S001` are left out). ND00182 is listed under Clay (as the NID has it), with a note that its point lies in
+  Cass Co., ND.
+- **Storage V** is the NID Storage, with a chip saying whether it is the NID Max Storage or the Normal Storage (no max
+  reported, with a warning). Over 500,000 ac-ft gets a note that the breach equations are out of range.
+- **Height H** is the DWR maximum dam height where the dam joins the DWR file (830 dams, "from DWR"), else the NID
+  Height (whole feet). Warnings W-H1 and W-H2 flag an NID height that looks structural, and an H that disagrees with
+  crest minus breach bottom (tolerance max(1 ft, 5% of it), +0.5 ft for a rounded NID height).
+- **Elevations are never filled from the NID** (it has none). The crest, breach bottom and datum stay blank, an amber
+  banner asks for them, Next is disabled and the engine returns *Review (elevations missing)* with no flood until they
+  are entered: from the DEM (NAVD 88), typed, or, where the DWR record is in NGVD 29 or NAVD 88, with **Use DWR
+  elevations (checked against the dam file)** after a confirm. NGVD 29 values are converted by VERTCON at the dam's own
+  location (ND00199: 1070.0 / 1042.5 ft NGVD 29 -> 1071.09 / 1043.59 ft NAVD 88, H 27.5 ft). DWR elevations on a
+  local or blank datum are relative only and used just as an H check.
+- **Surface area** is never filled. The NID normal-pool area is shown as a reference and the DWR maximum-pool area has
+  a **Use** button.
+- **NID hazard** is shown in grey as reported to the NID (FEMA class). It is not used by the screen and is not the class
+  of record.
+
+**Data and sources.** Both bundles are offline, loaded on demand (no network use by the picker):
+
+| Bundle | Source | Downloaded |
+|---|---|---|
+| `src/lib/crest/data/nd_dams.json` | U.S. Army Corps of Engineers, National Inventory of Dams, ND state CSV (`nid.sec.usace.army.mil`). No owner names (an NID owner can be a private person): an unnamed dam is labelled by its NID ID only, e.g. "(unnamed) · ND00971" / "Unnamed dam ND00971". | 2026-10-29 |
+| `src/lib/crest/data/nd_dams_dwr.json` | North Dakota Department of Water Resources, Dams layer (`mapservice.dwr.nd.gov`). Numeric fields, the vertical datum code, and the county where it differs; no owner, contact, remark or permit fields. Provisional, provided as is; field meanings are inferred. | 2026-10-29 |
+
+The source URL, download time, SHA-256 of the raw file and the attribution are stored in each bundle and shown in the
+picker footer, the Report, the dam.json export and **About the dam data** at the bottom of the desk. Refresh only when
+asked: `npm run data:nd-dams` (downloads the NID CSV; `--from file.csv` to use a saved one; it fails on a schema change
+or if the dam count drops below 800 or more than 20% below the committed bundle, unless `--allow-shrink`), then `npm run data:nd-dams-dwr -- --from data-raw/Dams.zip`
+(a DWR Dams shapefile zip saved by hand). `data-raw/` is git-ignored. Rebuild the desktop bundle and `Crest.html`
+afterwards.
 
 ## Crest.html (one file)
 
