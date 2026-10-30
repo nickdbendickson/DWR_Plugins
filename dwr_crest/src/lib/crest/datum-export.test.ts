@@ -259,7 +259,8 @@ describe("sample note, DEM crest check and store key", () => {
     const a = analyze(sample);
     assert.equal(a.screen.level, "High");
     assert.equal(a.screen.label, "High (flagged: judgment zone)");
-    assert.match(a.screen.classOfRecord ?? "", /^ND MEDIUM \/ TM11 Significant/);
+    assert.equal(a.screen.classOfRecord, "ND MEDIUM (NID hazard Significant)");
+    assert.doesNotMatch(`${a.screen.classOfRecord} ${sample.sampleNote}`, /TM11 Significant|benchmark\)/);
     assert.match(a.screen.reasons[0], /^Class of record: ND MEDIUM .*is not the class of record\.$/);
     assert.match(sample.sampleNote ?? "", /generic receptor seeds.*High \(flagged\).*not the class of record/);
   });

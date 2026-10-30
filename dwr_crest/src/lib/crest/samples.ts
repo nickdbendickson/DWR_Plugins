@@ -50,6 +50,15 @@ const PRAIRIE_GEOMETRY: DamGeometry = {
 const ILLUSTRATIVE_NOTE =
   "Fictional dam. Its map placement (an east-west dam line with the pool to the north, so the valley runs south) is illustrative, not a surveyed site.";
 
+const VALLEY_PREFIXES = ["abs", "loc", "new"];
+const VALLEY_KEYS = ["road-1", "farm", "barn", "road-2", "house"];
+
+/** True for one of the generic valley seeds a sample or a new record starts with (not a surveyed receptor). */
+export function isGenericSeed(r: Pick<ReceptorSeed, "id">): boolean {
+  const i = r.id.indexOf("-");
+  return i > 0 && VALLEY_PREFIXES.includes(r.id.slice(0, i)) && VALLEY_KEYS.includes(r.id.slice(i + 1));
+}
+
 function valley(prefix: string): ReceptorSeed[] {
   return [
     {
@@ -111,7 +120,9 @@ export const SAMPLE_DAMS: DamRecord[] = [
     // (Replaces 1072.24 / 1044.74.) Piping. Storage 1,612.59 ac-ft (the review's value, = the r3 hydrograph
     // volume), surface area 154.5 ac. DEM crest given in NAVD88 too (1070.0 is NGVD29).
     // Generic receptor seeds, kept on purpose (Nick): the Farmstead lands in the TM 11 judgment zone, so
-    // the sample screens High (flagged); the class of record is ND MEDIUM / TM11 Significant.
+    // the sample screens High (flagged). Class of record: ND MEDIUM, from the NID hazard (Significant). The full
+    // test of 2026-10-30 found "TM11 Significant (DWR-2801 benchmark)" unsupported (the TM 11 runs read Low, the
+    // ANUGA reference High), so the sample no longer states it; the official class is the engineer's call.
     heightFt: 27.5,
     lengthFt: 1700,
     crestFt: 1071.09,
@@ -124,9 +135,9 @@ export const SAMPLE_DAMS: DamRecord[] = [
     datumNote:
       "Crest converted from NGVD29 1070.0 ft (DWR Dams file; +1.09 ft VERTCON at the site); do not shift again.",
     demCrestFt: 1071.09,
-    classOfRecord: "ND MEDIUM / TM11 Significant (DWR-2801 benchmark)",
+    classOfRecord: "ND MEDIUM (NID hazard Significant)",
     sampleNote:
-      "Sample with generic receptor seeds, not the DWR-2801 benchmark structures. With the judgment zone counted as High (the default), the generic Farmstead falls in the ACER TM 11 judgment zone, so this desk screen reads High (flagged). That is a flag for an engineer, not the class of record (ND MEDIUM / TM11 Significant).",
+      "Sample with generic receptor seeds, not the DWR-2801 benchmark structures. With the judgment zone counted as High (the default), the generic Farmstead falls in the ACER TM 11 judgment zone, so this desk screen reads High (flagged). That is a flag for an engineer, not the class of record (ND MEDIUM, from the NID hazard Significant).",
     lat: 46.98364,
     lon: -97.39064,
     geometry: ND00199_GEOMETRY,

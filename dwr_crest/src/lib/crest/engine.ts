@@ -1,5 +1,6 @@
 import { rankReceptor } from "./acer.ts";
 import { type AoiExtent, aoiExtent, downstreamDirection, fmtAc, fmtKm, hasAoi, readAoi } from "./aoi.ts";
+import { isGenericSeed } from "./samples.ts";
 import { vertconShiftFt } from "./vertcon_nd.ts";
 import { ACFT, ACRE, CFS, FT, froehlich1995Peak, froehlich2008, routedHydrograph, thin } from "./breach.ts";
 import type {
@@ -627,6 +628,21 @@ export function analyze(dam: DamRecord): Analysis {
   const screen = screenReceptors(receptors, dam.receptors, {
     judgmentAsProbable: dam.judgmentAsProbable ?? true,
   });
+  // Full test 2026-10-30: a record placed on the map (e.g. a new record from NID) with no dam line and no
+  // reservoir point has no downstream direction, so no flood strip. When its receptors are still only the
+  // generic valley seeds nothing about this site was screened, so the Screen step gives no class. Receptors
+  // the engineer entered are screened in full as before (a known High is never hidden).
+  const site = damLocation(dam);
+  const siteDir = site ? downstreamDirection(dam.geometry, site) : null;
+  const onlyGeneric = dam.receptors.length > 0 && dam.receptors.every(isGenericSeed);
+  if (siteDir && !siteDir.u && onlyGeneric) {
+    const would = screen.label;
+    screen.level = "Review";
+    screen.label = "Not assessed (downstream direction unknown)";
+    screen.reasons.unshift(
+      `Not assessed. ${siteDir.note} With no flood strip the generic receptor seeds are not placed on this site's valley: they would screen ${would}, which is not a screen of this site. Enter the real receptors too.`,
+    );
+  }
   const aoiNotApplied = aoiOut as Analysis["flood"]["aoi"];
   if (aoiNotApplied && !aoiNotApplied.applied) {
     // Shown in the Screen step's reasons and carried into the Report's JSON export notes.

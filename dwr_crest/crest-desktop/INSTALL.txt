@@ -36,6 +36,20 @@ Write the dam folder
 Write folder and run screening
   Tool 17 (nddam:preflight), then nddam:runchain only if the preflight is READY.
   A new CrestDams folder is expected to fail until it has a DEM and layers.
+  Only this dam is screened: its id goes to the chain as DAM_ID and as
+  only_ids in <work>/crest_settings.json.
+  The chain names a dam that is in the DWR layer by its DWR id, so ND00199
+  shows up as DWR-2801 in 1_dams.gpkg and every later output. After the
+  chain, Crest reads that name from 1_dams.gpkg and the dam's row of
+  10_reports/summary.csv (screening class, class of record, confidence,
+  review) into the log. It does not change the Crest record: the chain's
+  class is a screening result, not an official class.
+  Cancel (shown while a job runs) stops qgis_process. To set a time limit,
+  set CREST_SCREENING_TIMEOUT_S (seconds) before python run.py. There is no
+  default limit: one dam with a local DEM took over 45 minutes.
+  For a one-dam run with a local DEM, larger_clips 2 in the screening
+  plugin's settings is a reasonable choice. Crest does not set it; the
+  plugin default is unchanged.
 
 Run the flood model
   LISFLOOD-FP, LISFLOOD then ANUGA, LISFLOOD then HEC-RAS 2D, or the built-in

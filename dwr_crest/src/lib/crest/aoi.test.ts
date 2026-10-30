@@ -523,7 +523,10 @@ describe("PR #6 follow-ups", () => {
     assert.equal(a.flood.lengthM, free.flood.lengthM);
     assert.ok(Math.abs(a.flood.acres - free.flood.acres) < 1e-6);
     assert.notEqual(Math.round(a.flood.acres), 487);
-    assert.equal(a.screen.label, free.screen.label);
+    // No direction and only the generic seeds: Not assessed (full test 2026-10-30); the seeds are still
+    // screened in full behind it, never cut by the drawn area.
+    assert.equal(a.screen.label, "Not assessed (downstream direction unknown)");
+    assert.ok(a.screen.reasons.some((r) => r.includes(`they would screen ${free.screen.label},`)));
     assert.ok(a.flood.receptors.every((r) => !r.outsideAoi));
     // A known High stays High (screened in full), it is not hidden behind the AOI.
     const seeds = [house("House 0.5 km", 0.5)];

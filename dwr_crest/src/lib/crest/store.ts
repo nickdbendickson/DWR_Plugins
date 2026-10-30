@@ -42,9 +42,13 @@ export const useDesk = create<DeskState>()(
     // instead of the old crest-desk-v1 records; old data under v1 is left alone, not migrated.
     // version 1 (round 2, 2026-10-29): the ND00199 sample moved to the DWR values + VERTCON, 1071.09 / 1043.59 NAVD88.
     // Same key, so the user's other records stay; an untouched old sample (1072.24 / 1044.74) is updated in place.
-    { name: "crest-desk-v2", skipHydration: true, version: 1, migrate: migrateDesk },
+    // version 2 (full test 2026-10-30): the ND00199 sample's class of record no longer claims "TM11 Significant
+    // (DWR-2801 benchmark)"; an unedited old text is updated in place.
+    { name: "crest-desk-v2", skipHydration: true, version: 2, migrate: migrateDesk },
   ),
 );
+
+const OLD_ND00199_CLASS = "ND MEDIUM / TM11 Significant (DWR-2801 benchmark)";
 
 /** Persisted desk state from an older version -> current. Only rewrites an unedited ND00199 sample. */
 export function migrateDesk(persisted: unknown, version: number): DeskState {
@@ -54,6 +58,14 @@ export function migrateDesk(persisted: unknown, version: number): DeskState {
     state.dams = state.dams.map((d) =>
       now && d.id === "nd00199" && d.crestFt === 1072.24 && d.streambedFt === 1044.74
         ? { ...d, crestFt: now.crestFt, streambedFt: now.streambedFt, demCrestFt: now.demCrestFt, datumNote: now.datumNote }
+        : d,
+    );
+  }
+  if (version < 2 && Array.isArray(state.dams)) {
+    const now = SAMPLE_DAMS.find((d) => d.id === "nd00199");
+    state.dams = state.dams.map((d) =>
+      now && d.id === "nd00199" && d.classOfRecord === OLD_ND00199_CLASS
+        ? { ...d, classOfRecord: now.classOfRecord, sampleNote: now.sampleNote }
         : d,
     );
   }

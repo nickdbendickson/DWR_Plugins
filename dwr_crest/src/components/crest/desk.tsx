@@ -633,6 +633,7 @@ const handoff = {
   source: "pack",
   log: "The screening chain has not been started.",
   busy: false,
+  job: "",
 };
 let handoffTimer = 0;
 
@@ -695,6 +696,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         if (!response.ok) throw new Error("The Crest server did not accept the job.");
         const job = (await response.json()) as { id?: string };
         if (!job.id) throw new Error("The Crest server did not return a job.");
+        handoff.job = job.id;
         handoffTimer = window.setInterval(async () => {
           try {
             const found = await (await fetch(`/api/job?id=${job.id}`)).json();
@@ -703,12 +705,14 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
               window.clearInterval(handoffTimer);
               handoffTimer = 0;
               handoff.busy = false;
+              handoff.job = "";
               bump((n) => n + 1);
             }
           } catch {
             window.clearInterval(handoffTimer);
             handoffTimer = 0;
             handoff.busy = false;
+            handoff.job = "";
             handoff.log = "Lost the job log.";
             bump((n) => n + 1);
           }
@@ -723,6 +727,15 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
     [dam, result, files],
   );
 
+  const cancel = useCallback(async () => {
+    if (!handoff.job) return;
+    try {
+      await fetch(`/api/cancel?id=${handoff.job}`, { method: "POST" });
+    } catch {
+      /* the job log shows whether the run stopped */
+    }
+  }, []);
+
   const field = "mt-1 h-10 w-full rounded-sm border border-line bg-paper px-3 text-sm";
   const btn =
     "inline-flex h-10 items-center rounded-sm border border-water bg-water px-3 text-sm text-card disabled:cursor-not-allowed disabled:opacity-50";
@@ -732,8 +745,8 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       <p className="mt-1 text-sm text-muted">
         Writes the dam folder the plugins read, including the LISFLOOD package and the flood strip. Get layers downloads
         a DEM and streams for this area, or uses the ND offline pack both plugin sets already share. Screening runs tool
-        17 and starts nddam:runchain only if the preflight passes. A missing DEM or a preflight FAIL stops there. This is
-        not an official class.
+        17 and starts nddam:runchain only if the preflight passes. A missing DEM or a preflight FAIL stops there. Cancel
+        stops QGIS; CREST_SCREENING_TIMEOUT_S sets a time limit. This is not an official class.
       </p>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-xs text-muted">
@@ -804,6 +817,15 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         <button type="button" className={btn} disabled={handoff.busy} onClick={() => void start("/api/model")}>
           Run the flood model
         </button>
+        {handoff.busy && handoff.job ? (
+          <button
+            type="button"
+            className="inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm"
+            onClick={() => void cancel()}
+          >
+            Cancel
+          </button>
+        ) : null}
       </div>
       <p className="mt-2 text-xs text-muted">
         The flood button runs one dam (ndbreach:rundam, or ndbreach_cli.py when both Point X and Point Y are filled in the

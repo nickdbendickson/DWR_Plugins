@@ -33,6 +33,7 @@ TITLE = "Crest — Dam Breach Desk"
 
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
+_cancels: dict[str, threading.Event] = {}
 
 
 def _job_log(job: dict, line: str) -> None:
@@ -48,12 +49,18 @@ def start_job(
     model: str = "lisflood",
     files=None,
     source: str = "pack",
+    timeout: float | None = None,
 ) -> dict:
-    """Write the dam folder, fetch layers, or call the plugins on a background thread. Returns immediately."""
+    """Write the dam folder, fetch layers, or call the plugins on a background thread. Returns immediately.
+
+    cancel_job(id) stops a screening or model run (qgis_process / the CLI); timeout (seconds) limits the
+    screening chain (else CREST_SCREENING_TIMEOUT_S, else none)."""
     job_id = uuid.uuid4().hex[:12]
-    job = {"id": job_id, "done": False, "ok": False, "log": "", "folder": "", "work": ""}
+    job = {"id": job_id, "done": False, "ok": False, "log": "", "folder": "", "work": "", "cancelled": False}
+    cancel = threading.Event()
     with _jobs_lock:
         _jobs[job_id] = job
+        _cancels[job_id] = cancel
 
     def work_job():
         try:
@@ -63,11 +70,16 @@ def start_job(
             elif kind == "folder":
                 result = run_folder(dam or {}, analysis or {}, work, log, files)
             elif kind == "model":
-                result = run_model(dam or {}, analysis or {}, work, log, model, files, source)
+                result = run_model(dam or {}, analysis or {}, work, log, model, files, source, cancel=cancel)
             else:
-                result = run_screening(dam or {}, analysis or {}, work, log, files)
+                result = run_screening(dam or {}, analysis or {}, work, log, files, timeout=timeout, cancel=cancel)
             with _jobs_lock:
                 job["ok"] = bool(result.get("ok"))
+                job["cancelled"] = bool(result.get("cancelled"))
+                if result.get("chainIds"):
+                    job["chainIds"] = list(result["chainIds"])
+                if result.get("chainResult"):
+                    job["chainResult"] = list(result["chainResult"])
                 job["folder"] = result.get("folder") or ""
                 job["work"] = result.get("work") or ""
         except Exception as exc:
@@ -75,9 +87,24 @@ def start_job(
         finally:
             with _jobs_lock:
                 job["done"] = True
+                _cancels.pop(job_id, None)
 
     threading.Thread(target=work_job, daemon=True).start()
     return {"id": job_id}
+
+
+def cancel_job(job_id: str) -> dict:
+    """Ask a running job to stop. Layers and folder jobs run no external program and finish on their own."""
+    with _jobs_lock:
+        found = _jobs.get(job_id)
+        event = _cancels.get(job_id)
+        if not found:
+            return {"error": "no job"}
+        if found["done"] or event is None:
+            return {"id": job_id, "done": True}
+        event.set()
+    _job_log(found, "Cancel requested. Stopping qgis_process…")
+    return {"id": job_id, "cancelling": True}
 
 
 def job_snapshot(job_id: str) -> dict | None:
@@ -130,6 +157,11 @@ class _Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         kinds = {"/api/screen": "screen", "/api/model": "model", "/api/folder": "folder", "/api/layers": "layers"}
         kind = kinds.get(parsed.path)
+        if parsed.path == "/api/cancel":
+            job_id = (parse_qs(parsed.query).get("id") or [""])[0]
+            found = cancel_job(job_id)
+            self._send(404 if found.get("error") else 200, json.dumps(found).encode(), "application/json")
+            return
         if kind is None:
             self._send(404, b"not found", "text/plain")
             return
@@ -156,7 +188,9 @@ class _Handler(SimpleHTTPRequestHandler):
             source = "pack"
         files = payload.get("files") if isinstance(payload.get("files"), dict) else None
         analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
-        body = json.dumps(start_job(kind, dam, analysis, payload.get("work"), model, files, source))
+        timeout = payload.get("timeout")
+        timeout = timeout if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) else None
+        body = json.dumps(start_job(kind, dam, analysis, payload.get("work"), model, files, source, timeout))
         self._send(200, body.encode(), "application/json")
 
     def _send(self, code: int, body: bytes, content_type: str) -> None:

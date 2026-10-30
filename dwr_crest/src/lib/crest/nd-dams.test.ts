@@ -391,3 +391,40 @@ describe("stored desk migration (crest-desk-v2, version 0 -> 1)", () => {
     assert.equal(now.crestFt, 1071.09);
   });
 });
+
+describe("a new record from NID with no dam line (full test 2026-10-30)", () => {
+  it("has no flood strip, so the Screen step reads Not assessed, not High from the generic seeds", () => {
+    // the elevations the full test entered (the ND00199 sample's), the receptors left as the generic seeds
+    const sample = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
+    const { crestFt, streambedFt, demCrestFt, statedDatum, heightFt, storageAcFt } = sample;
+    const r = { ...filled("ND00199"), crestFt, streambedFt, demCrestFt, statedDatum, heightFt, storageAcFt };
+    assert.equal(r.geometry?.damLine, undefined);
+    const a = analyze(r);
+    assert.equal(a.screen.level, "Review");
+    assert.equal(a.screen.label, "Not assessed (downstream direction unknown)");
+    assert.match(a.screen.reasons[0], /^Not assessed\. Downstream direction unknown: .*would screen High \(flagged: judgment zone\), which is not a screen of this site\. Enter the real receptors too\.$/);
+    // receptors the engineer entered are screened in full, as before (a known High is never hidden)
+    const own = analyze({ ...r, receptors: r.receptors.map((x) => ({ ...x, id: `my-${x.id}` })) });
+    assert.notEqual(own.screen.label, "Not assessed (downstream direction unknown)");
+  });
+
+  it("the same record with the dam line drawn is screened as before", () => {
+    const sample = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
+    const { crestFt, streambedFt, demCrestFt, statedDatum, heightFt, storageAcFt } = sample;
+    const a = analyze({ ...filled("ND00199"), crestFt, streambedFt, demCrestFt, statedDatum, heightFt, storageAcFt, geometry: sample.geometry });
+    assert.notEqual(a.screen.label, "Not assessed (downstream direction unknown)");
+    assert.ok(!a.screen.reasons.some((x) => x.startsWith("Not assessed")));
+  });
+});
+
+describe("saved desk, version 1 -> 2", () => {
+  it("an unedited ND00199 sample loses the TM11 Significant claim; an edited class is kept", () => {
+    const now = SAMPLE_DAMS.find((d) => d.id === "nd00199")!;
+    const old = { ...now, classOfRecord: "ND MEDIUM / TM11 Significant (DWR-2801 benchmark)", sampleNote: "old" };
+    const m = migrateDesk({ dams: [old] }, 1);
+    assert.equal(m.dams[0].classOfRecord, "ND MEDIUM (NID hazard Significant)");
+    assert.equal(m.dams[0].sampleNote, now.sampleNote);
+    const mine = { ...now, classOfRecord: "High (my review)" };
+    assert.equal(migrateDesk({ dams: [mine] }, 1).dams[0].classOfRecord, "High (my review)");
+  });
+});
