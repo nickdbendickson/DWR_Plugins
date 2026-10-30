@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { readFileSync } from "node:fs";
 
-import { analyze, damLocation } from "./engine.ts";
+import { analyze, crestNavdLabel, damLocation } from "./engine.ts";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage, toUtm } from "./export.ts";
 import { dwr2801 } from "./fixtures.ts";
 import { SAMPLE_DAMS } from "./samples.ts";
@@ -15,10 +15,10 @@ describe("NGVD29 to NAVD88 (VERTCON)", () => {
   it("CHECK: DWR-2801 1070.0 ft NGVD29 ties to 1071.09 ft NAVD88 (+1.09 ft)", () => {
     const shift = vertconShiftFt(SITE.lon, SITE.lat)!;
     assert.ok(Math.abs(shift - 1.0886) < 0.001, `shift ${shift}`);
-    const a = analyze(
-      dwr2801({ crestFt: 1070.0, streambedFt: 1042.5, statedDatum: "NGVD29", ...SITE }),
-    );
+    const dam = dwr2801({ crestFt: 1070.0, streambedFt: 1042.5, statedDatum: "NGVD29", ...SITE });
+    const a = analyze(dam);
     assert.equal(a.datum.crestNavdFt.toFixed(2), "1071.09");
+    assert.equal(crestNavdLabel(dam, a.datum), "1071.09 ft NAVD88, converted from NGVD 29");
     assert.equal(a.datum.streambedNavdFt!.toFixed(2), "1043.59");
     assert.match(a.datum.rule, /VERTCON/);
   });
@@ -94,6 +94,7 @@ describe("ND00199 sample (Nick, 2026-10-29: crest 1071.09 NAVD88 from NGVD29 107
     assert.equal(a.datum.streambedNavdFt, 1043.59);
     assert.equal(a.breach.headFt.toFixed(2), "27.50");
     assert.match(a.datum.rule, /treated as NAVD88\. Crest converted from NGVD29 1070\.0/);
+    assert.equal(crestNavdLabel(sample, a.datum), "1071.09 ft NAVD88, converted");
     assert.doesNotMatch(a.datum.rule, /by VERTCON/);
     assert.equal(a.datum.warnings.length, 0, a.datum.warnings.join("; "));
   });

@@ -1,6 +1,6 @@
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-react";
-import { analyze, STEPS } from "@/lib/crest/engine";
+import { analyze, crestNavdLabel, STEPS } from "@/lib/crest/engine";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
 import { floodStrip, type FloodStrip } from "@/lib/crest/floodstrip";
 import {
@@ -246,7 +246,16 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
           <NumField label="Year" value={dam.year} onChange={(year) => update({ year })} tag={<FieldTag dam={dam} field="year" />} />
           <NumField label="Height" suffix="ft" value={dam.heightFt} step={0.1} onChange={(heightFt) => update({ heightFt })} tag={<FieldTag dam={dam} field="heightFt" />} />
           <NumField label="Length" suffix="ft" value={dam.lengthFt} onChange={(lengthFt) => update({ lengthFt })} tag={<FieldTag dam={dam} field="lengthFt" />} />
-          <NumField label="Crest" suffix="ft" value={dam.crestFt} step={0.1} onChange={(crestFt) => update({ crestFt })} tag={<FieldTag dam={dam} field="crestFt" />} />
+          <NumField label="Crest" suffix="ft" value={dam.crestFt} step={0.1} onChange={(crestFt) => update({ crestFt })} tag={
+            <>
+              <FieldTag dam={dam} field="crestFt" />
+              {crestNavdLabel(dam, result.datum).includes("converted") ? (
+                <span className="mt-1 block text-xs text-muted" data-testid="crest-converted">
+                  {crestNavdLabel(dam, result.datum)}
+                </span>
+              ) : null}
+            </>
+          } />
           <NumField label="Streambed (breach bottom)" suffix="ft" value={dam.streambedFt} step={0.1} onChange={(streambedFt) => update({ streambedFt })} tag={<FieldTag dam={dam} field="streambedFt" />} />
           <NumField label="Spillway" suffix="ft" value={dam.spillwayFt} step={0.1} onChange={(spillwayFt) => update({ spillwayFt })} />
           <NumField label="Normal pool" suffix="ft" value={dam.normalPoolFt} step={0.1} onChange={(normalPoolFt) => update({ normalPoolFt })} />
@@ -292,7 +301,7 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
       <aside className="rounded-md border border-line bg-sand p-4">
         <h3 className="text-lg">Tied to NAVD88</h3>
         <dl className="mt-3 space-y-2 text-sm">
-          <Row k="Crest" v={`${num(result.datum.crestNavdFt, 2)} ft`} />
+          <Row k="Crest" v={crestNavdLabel(dam, result.datum)} />
           <Row k="Streambed" v={result.datum.streambedNavdFt == null ? "not used" : `${num(result.datum.streambedNavdFt, 1)} ft`} />
           <Row k="Spillway" v={result.datum.spillwayNavdFt == null ? "not used" : `${num(result.datum.spillwayNavdFt, 1)} ft`} />
           <Row k="Pool" v={result.datum.poolNavdFt == null ? "not used" : `${num(result.datum.poolNavdFt, 1)} ft`} />
@@ -632,7 +641,6 @@ function Nd911Panel({
                     <th className="px-2 py-1">Address</th>
                     <th className="px-2 py-1">Depth band</th>
                     <th className="px-2 py-1">km downstream</th>
-                    <th className="px-2 py-1">Ground NAVD88</th>
                     <th className="px-2 py-1">Place type</th>
                     <th className="px-2 py-1">For review</th>
                   </tr>
@@ -647,9 +655,6 @@ function Nd911Panel({
                         <td className="px-2 py-1">{r.address}</td>
                         <td className="px-2 py-1">{r.bandLabel}</td>
                         <td className="px-2 py-1 tabular-nums">{num(r.downstreamKm, 2)}</td>
-                        <td className="px-2 py-1 tabular-nums" data-testid="nd911-elev">
-                          {r.elevNavdFt == null ? "not given" : `${r.elevNavdFt} ft`}
-                        </td>
                         <td className="px-2 py-1">{r.placeType || "—"}</td>
                         <td className="px-2 py-1">
                           {seed ? (
@@ -685,15 +690,14 @@ function Nd911Panel({
           ) : null}
           <p className="mt-2 text-xs text-muted">
             Inside means within the {t.against}&apos;s depth bands; the band is the one the point falls in. An address point
-            marks an address, not a surveyed structure or floor height. The ground column is the published Elev in feet
-            NAVD88 (it already matches the USGS 3DEP surface where a county filled it in; 0 is not a height). Added points become home seeds on the channel
+            marks an address, not a surveyed structure or floor height. Added points become home seeds on the channel
             bed (pad 0 ft, the desk&apos;s deepest case) at their distance downstream, listed under &quot;Needs an
             engineer&apos;s call&quot; until you classify them. Looked up{" "}
             {new Date(t.fetchedAt).toLocaleString()} and saved with this dam.
           </p>
           <p className="mt-1 text-xs text-muted">
-            Fields kept: the published address, unit, community, ZIP, county, place type, placement, ground elevation
-            (Elev, feet NAVD88), and the NG911 site id. Not kept: {ND911_DROPPED_FIELDS.slice(0, 3).map((d) => d.field).join(", ")} (free text that can name people
+            Fields kept: the published address, unit, community, ZIP, county, place type and placement, and the NG911 site
+            id. Not kept: {ND911_DROPPED_FIELDS.slice(0, 3).map((d) => d.field).join(", ")} (free text that can name people
             or businesses) and duplicate or record-keeping fields. {ND911_ATTRIBUTION}
           </p>
         </>

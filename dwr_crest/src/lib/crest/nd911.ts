@@ -13,11 +13,6 @@ import type { Analysis, DamRecord, ReceptorSeed } from "./types.ts";
  * below are requested; the points that come back are saved on the dam record, so the map, the list and the exports
  * keep working offline afterwards. Nothing statewide is bundled.
  *
- * Elev, where a county filled it in, is an integer foot height that already matches the USGS 3DEP NAVD88
- * surface (within about 1 ft in Burleigh County, the only county that publishes it). It is shown as feet
- * NAVD88 with no NGVD29 shift: adding VERTCON would put those points about 1.4 ft high. 0 and negative
- * values are "not published", not a ground height (most of the state, including the ND00199 sample, is 0).
- *
  * The points only inform: they never change the desk screen by themselves. "Add as structures for review" turns
  * chosen points into receptor seeds that the user then classifies (habitable or not), and they can be removed again.
  */
@@ -61,7 +56,6 @@ export const ND911_FIELDS = [
   "DateUpdate",
   "SOURCE",
   "ACCURACY",
-  "Elev",
 ] as const;
 
 /**
@@ -76,27 +70,8 @@ export const ND911_DROPPED_FIELDS: { field: string; why: string }[] = [
   { field: "LSt_PreDir, LSt_Name, LSt_Type, LSt_PosDir, MSAG_ADD", why: "legacy / MSAG duplicates of the address" },
   { field: "Post_Code4, Seat, Nbrhd_Comm, Country, AddCode, AddDataURI, ESN", why: "not needed for the list (ESN is a dispatch zone code)" },
   { field: "Effective, Expire, LOCAL_ID, OBJECTID, OBJECTID_1", why: "record keeping" },
-  { field: "Long, Lat", why: "duplicates of the point geometry" },
+  { field: "Long, Lat, Elev", why: "duplicates of the point geometry (Elev is not shown)" },
 ];
-
-/**
- * Published `Elev` as feet NAVD88, or null when the county did not publish one.
- *
- * Burleigh County's integers (1,621–2,242 ft) match USGS 3DEP NAVD88 at the same lon/lat within about 1 ft
- * (for example 2,219 vs 2,219.1, and 2,242 vs 2,242.8). That is already NAVD88, not NGVD29: the ND VERTCON
- * shift there is about +1.4 ft, and adding it moves the point off the 3DEP surface. 0 is the unpublished
- * sentinel (385,626 of 438,257 points, including all of Cass County). −1 is the other sentinel (14 points).
- */
-export function elevNavdFt(raw: unknown): number | null {
-  const n = typeof raw === "number" ? raw : NaN;
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return Math.round(n);
-}
-
-/** "2242 ft NAVD88", or "not given" when the county left Elev empty. */
-export function nd911ElevLabel(ft: number | null): string {
-  return ft == null ? "not given" : `${ft} ft NAVD88`;
-}
 
 export type Nd911Point = {
   /** NENA NG911 site id (Site_NGUID). */
@@ -119,8 +94,6 @@ export type Nd911Point = {
   accuracy: string;
   /** DateUpdate as an ISO date (yyyy-mm-dd), or "". */
   updated: string;
-  /** Ground elevation in feet NAVD88, or null when Elev was not published (0 or negative). */
-  elevNavdFt: number | null;
   lon: number;
   lat: number;
 };
@@ -148,8 +121,6 @@ export type Nd911Row = {
   offsetM: number;
   lon: number;
   lat: number;
-  /** Ground elevation in feet NAVD88, or null when the county did not publish Elev. */
-  elevNavdFt: number | null;
   /** Already added as a receptor seed for review. */
   added: boolean;
 };
@@ -247,7 +218,6 @@ export function readPoints(features: ServiceFeature[]): Nd911Point[] {
       source: s("SOURCE"),
       accuracy: s("ACCURACY"),
       updated: isoDate(p.DateUpdate),
-      elevNavdFt: elevNavdFt(p.Elev),
       lon: r6(lon),
       lat: r6(lat),
     });
@@ -362,7 +332,6 @@ export function nd911Table(dam: DamRecord, area: FloodStrip, cache: Nd911Cache, 
       offsetM: Math.round(x * n[0] + y * n[1]),
       lon: p.lon,
       lat: p.lat,
-      elevNavdFt: p.elevNavdFt,
       added: added.has(seedId(p.nguid, p.lon, p.lat)),
     });
   }
@@ -473,7 +442,6 @@ export function exportNd911Csv(t: Nd911Table, cache: Nd911Cache): string {
     "updated",
     "lon",
     "lat",
-    "elev_navd88_ft",
     "added_for_review",
     "tested_against",
     "source",
@@ -499,7 +467,6 @@ export function exportNd911Csv(t: Nd911Table, cache: Nd911Cache): string {
         p?.updated ?? "",
         r.lon.toFixed(6),
         r.lat.toFixed(6),
-        r.elevNavdFt ?? "",
         r.added ? "yes" : "no",
         t.against,
         src,
@@ -536,7 +503,6 @@ export function nd911Features(t: Nd911Table) {
       offset_m: r.offsetM,
       place_type: r.placeType,
       placement: r.placement,
-      elev_navd88_ft: r.elevNavdFt,
       site_nguid: r.nguid,
       added_for_review: r.added,
       source: ND911_ATTRIBUTION_SHORT,
@@ -549,7 +515,7 @@ export function nd911KmlLines(t: Nd911Table): string[] {
   return [
     "",
     `911 address points inside the ${t.against} (${t.rows.length} of ${t.total} in the box, downstream order):`,
-    ...t.rows.map((r) => `${r.order}. ${r.address}: ${r.bandLabel}, ${r.downstreamKm.toFixed(2)} km downstream, ground ${nd911ElevLabel(r.elevNavdFt)}`),
+    ...t.rows.map((r) => `${r.order}. ${r.address}: ${r.bandLabel}, ${r.downstreamKm.toFixed(2)} km downstream`),
     `${t.attribution} Fetched ${t.fetchedAt}.`,
   ];
 }
@@ -566,8 +532,8 @@ export function nd911KmlPlacemarks(t: Nd911Table): string[] {
       [
         "<Placemark>",
         `<name>${esc(r.address)}</name>`,
-        `<description>${esc(`${r.bandLabel}; ${r.downstreamKm.toFixed(2)} km downstream of the breach; ground ${nd911ElevLabel(r.elevNavdFt)}; place type ${r.placeType || "not given"}. ${ND911_ATTRIBUTION_SHORT}.`)}</description>`,
-        `<ExtendedData><Data name="site_nguid"><value>${esc(r.nguid)}</value></Data><Data name="depth_band"><value>${esc(r.bandLabel)}</value></Data><Data name="downstream_km"><value>${r.downstreamKm}</value></Data><Data name="elev_navd88_ft"><value>${r.elevNavdFt ?? ""}</value></Data></ExtendedData>`,
+        `<description>${esc(`${r.bandLabel}; ${r.downstreamKm.toFixed(2)} km downstream of the breach; place type ${r.placeType || "not given"}. ${ND911_ATTRIBUTION_SHORT}.`)}</description>`,
+        `<ExtendedData><Data name="site_nguid"><value>${esc(r.nguid)}</value></Data><Data name="depth_band"><value>${esc(r.bandLabel)}</value></Data><Data name="downstream_km"><value>${r.downstreamKm}</value></Data></ExtendedData>`,
         `<Point><coordinates>${r.lon},${r.lat}</coordinates></Point>`,
         "</Placemark>",
       ].join(""),

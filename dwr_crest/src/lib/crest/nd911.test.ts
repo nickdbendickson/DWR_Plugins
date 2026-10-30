@@ -16,9 +16,7 @@ import {
   ND911_FIELDS,
   ND911_LAYER,
   ND911_OFFLINE,
-  elevNavdFt,
   nd911Bbox,
-  nd911ElevLabel,
   nd911QueryUrl,
   nd911Seed,
   nd911State,
@@ -78,26 +76,6 @@ describe("query: real service URL, kept fields only", () => {
     ]);
     assert.equal(p.address, "1 MAIN ST Unit 2, ABSARAKA, ND 58002");
     assert.ok(!JSON.stringify(p).includes("Somebody"));
-    assert.equal(p.elevNavdFt, null);
-  });
-  it("shows published Elev as feet NAVD88 and treats 0 and -1 as not given", () => {
-    // Burleigh County publishes integer feet that already sit on the USGS 3DEP NAVD88 surface.
-    // Do not add the NGVD29 VERTCON shift (about +1.4 ft there).
-    assert.equal(elevNavdFt(2242), 2242);
-    assert.equal(elevNavdFt(2219.1), 2219);
-    assert.equal(elevNavdFt(0), null);
-    assert.equal(elevNavdFt(-1), null);
-    assert.equal(elevNavdFt(null), null);
-    assert.equal(nd911ElevLabel(2242), "2242 ft NAVD88");
-    assert.equal(nd911ElevLabel(null), "not given");
-    const [p] = readPoints([
-      {
-        properties: { ADDRESS: "5195 Highway 36", Elev: 2242, Post_Comm: "BISMARCK", State: "ND", Post_Code: "58504" },
-        geometry: { type: "Point", coordinates: [-100.708856, 47.14004] },
-      },
-    ]);
-    assert.equal(p.elevNavdFt, 2242);
-    assert.equal(nd911ElevLabel(p.elevNavdFt), "2242 ft NAVD88");
   });
 });
 
@@ -130,9 +108,6 @@ describe("ND00199: the 45 real points around the strip", () => {
       ],
     );
     for (const r of t.rows) assert.ok(r.downstreamKm >= 0 && r.downstreamKm <= RESULT.flood.lengthM / 1000);
-    // Cass County publishes Elev 0. That is not a height, so the list says the ground was not given.
-    for (const r of t.rows) assert.equal(r.elevNavdFt, null);
-    assert.equal(nd911ElevLabel(t.rows[0].elevNavdFt), "not given");
   });
 });
 
@@ -232,8 +207,6 @@ describe("911 exports (snapshot)", async () => {
   it("CSV, GeoJSON and KML carry the points inside and the attribution", () => {
     assert.equal(csv.trim().split("\n").length, 6);
     assert.ok(csv.includes("ND GIS Hub NG911 Site/Structure Address Points"));
-    assert.ok(csv.includes("elev_navd88_ft"));
-    assert.ok(kml.includes("ground not given"));
     const pts = gj.features.filter((f: { properties: { kind?: string } }) => f.properties.kind === "nd911_address_point");
     assert.equal(pts.length, 5);
     assert.equal(gj.properties.nd911_points_inside, 5);
@@ -241,21 +214,6 @@ describe("911 exports (snapshot)", async () => {
     assert.equal((kml.match(/<Point>/g) ?? []).length, 5);
     assert.ok(kml.includes("ND GIS Hub NG911 Site/Structure Address Points"));
     assert.equal(exportFloodGeoJson(STRIP, null, null), exportFloodStripGeoJson(STRIP));
-  });
-  it("a published elevation is written as feet NAVD88", async () => {
-    const cache = await fetchNd911(STRIP, fake([PAGE]).fn, NOW);
-    const hit = cache.points.find((p) => p.address.startsWith("3210 150TH"));
-    assert.ok(hit);
-    hit.elevNavdFt = 1044;
-    const t = nd911Table(ND, STRIP, cache);
-    const row = t.rows.find((r) => r.address.startsWith("3210"));
-    assert.equal(row?.elevNavdFt, 1044);
-    assert.equal(nd911ElevLabel(row?.elevNavdFt ?? null), "1044 ft NAVD88");
-    assert.ok(exportNd911Csv(t, cache).includes(",1044,"));
-    const gj = JSON.parse(exportFloodGeoJson(STRIP, null, t));
-    const feat = gj.features.find((f: { properties: { address?: string } }) => f.properties.address?.startsWith("3210"));
-    assert.equal(feat.properties.elev_navd88_ft, 1044);
-    assert.ok(exportFloodKml(STRIP, null, t).includes("ground 1044 ft NAVD88"));
   });
   it("band lookup respects the strip and nothing outside it", () => {
     assert.equal(bandAt(STRIP, -96, 46), null);
