@@ -61,7 +61,7 @@ from .linear import analyze_roads, analyze_rail, roads_to_layer, rail_to_layer, 
 from .linear import checked_to_layer
 from .classification import (
     classify_nd, classify_tm11, summary_lines, write_summary, extra_criteria,
-    lone_point_judgment, ms_rule_judgment,
+    lone_point_judgment, ms_rule_judgment, nd_class_without_judgment,
 )
 from .styles import style_by_field, set_map_tip, style_outline
 from .hazard import METHOD_MAXMAX, METHOD_LABEL
@@ -87,7 +87,10 @@ DEFAULTS = {
     "download_rail": True, "download_crossings": True,
     "road_layer": None, "aadt_layer": None, "rail_layer": None, "crossing_layer": None,
     "extra_outline_layer": None, "osm_layer": "auto", "point_sources": "auto",
-    "one_d": False, "judgment_as_probable": True,
+    # 2.22.0 (Nick, 10/30/2026): judgment_as_probable is TM 11 only now (judgment-zone
+    # persons in lives in jeopardy); the ND class puts judgment-zone houses at MEDIUM by
+    # rule unless the old option nd_judgment_as_probable (probable loss of life, HIGH) is on
+    "one_d": False, "judgment_as_probable": True, "nd_judgment_as_probable": False,
     "persons_per_dwelling": TM11_PERSONS_PER_DWELLING,
     "min_area_ft2": DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     "occupancy": DEFAULT_VEHICLE_OCCUPANCY, "speed_mph": DEFAULT_VEHICLE_SPEED_MPH,
@@ -1798,7 +1801,8 @@ def _classify_and_write(run, cfg, state):
         run.sources.append(forced_line)
     one_d = bool(cfg.get("one_d")) or run.forced_1d
     cfg["one_d"] = one_d                    # what the classification used (run log)
-    judge = cfg["judgment_as_probable"]
+    judge = cfg["judgment_as_probable"]                 # TM 11 lives in jeopardy
+    nd_judge = bool(cfg.get("nd_judgment_as_probable", False))  # 2.22.0: ND, old option
 
     # ---- engineer review and the habitability rules ---------------------------
     run.tick(82, "Applying the review decisions and the rules\u2026")
@@ -1889,7 +1893,8 @@ def _classify_and_write(run, cfg, state):
                                   if res.get("incremental") else
                                   (structs, res["roads"], res["rails"]))
         try:
-            nd = classify_nd(s_view, r_view, l_view, judgment_as_probable=judge, one_d=one_d,
+            nd = classify_nd(s_view, r_view, l_view, judgment_as_probable=nd_judge,
+                             one_d=one_d,
                              roads_evaluated=inputs["roads_on"], rail_evaluated=inputs["rail_on"],
                              structs_evaluated=inputs.get("structs_on", True))
             tm11 = classify_tm11(s_view, r_view, judgment_as_probable=judge)
@@ -1898,15 +1903,25 @@ def _classify_and_write(run, cfg, state):
                 sc.name, type(e).__name__, e))
             raise
         extra_criteria(nd, s_view, res, cfg)
+        if nd_judge and (nd.get("counts") or {}).get("habitable_judgment"):
+            try:                                # 2.21.1 (DWR-4031): ND, not only TM 11
+                nd["cls_without_judgment"] = nd_class_without_judgment(
+                    s_view, r_view, l_view, res, cfg, one_d=one_d,
+                    roads_evaluated=inputs["roads_on"], rail_evaluated=inputs["rail_on"],
+                    structs_evaluated=inputs.get("structs_on", True))
+            except Exception as e:              # noqa - never fails the result
+                run.log("ND class without judgment-zone items: {}".format(e))
         try:                                    # 2.18.54: class resting on lone 911 points
-            lone_point_judgment(nd, tm11, s_view, r_view, l_view, judgment_as_probable=judge,
+            lone_point_judgment(nd, tm11, s_view, r_view, l_view,
+                                judgment_as_probable=nd_judge, tm11_judgment=judge,
                                 one_d=one_d, roads_evaluated=inputs["roads_on"],
                                 rail_evaluated=inputs["rail_on"],
                                 structs_evaluated=inputs.get("structs_on", True))
         except Exception as e:                  # noqa - never fails the result
             run.log("lone 911 point check: {}".format(e))
         try:                                    # 2.18.54 review 2: the 300 ft rule's drops
-            ms_rule_judgment(nd, tm11, s_view, r_view, l_view, judgment_as_probable=judge,
+            ms_rule_judgment(nd, tm11, s_view, r_view, l_view, judgment_as_probable=nd_judge,
+                             tm11_judgment=judge,
                              clip_fn=clips.clip,
                              misplaced_m=float(cfg.get("misplaced_911_m") or 0) or None,
                              one_d=one_d, roads_evaluated=inputs["roads_on"],
@@ -1919,7 +1934,8 @@ def _classify_and_write(run, cfg, state):
         res.pop("nd_total", None)
         res.pop("tm11_total", None)
         if res.get("incremental"):
-            nd_t = classify_nd(structs, res["roads"], res["rails"], judgment_as_probable=judge,
+            nd_t = classify_nd(structs, res["roads"], res["rails"],
+                               judgment_as_probable=nd_judge,
                                one_d=one_d, roads_evaluated=inputs["roads_on"],
                                rail_evaluated=inputs["rail_on"],
                                structs_evaluated=inputs.get("structs_on", True))
@@ -2096,7 +2112,7 @@ def _classify_and_write(run, cfg, state):
     from . import pipeline_extras as PX
     more = {}
     more["sensitivity"] = PX.sensitivity_step(run, gov, governing, structs, base_snaps, layers,
-                                              inputs, one_d, judge, d_qa, written)
+                                              inputs, one_d, nd_judge, d_qa, written)
     more["conseq_sensitivity"] = PX.conseq_sensitivity_step(run, gov, governing, structs, d_qa,
                                                             written)
     more["evacuation"] = PX.evacuation_step(run, gov, governing, structs, layers, inputs, d_qa,
@@ -2121,7 +2137,7 @@ def _classify_and_write(run, cfg, state):
             _retire_everywhere(out, base)
     s_view, r_view, l_view = governing["views"]
     from . import robustness as ROB
-    rob = ROB.analyse(s_view, governing["nd"], judgment_as_probable=judge, one_d=one_d,
+    rob = ROB.analyse(s_view, governing["nd"], judgment_as_probable=nd_judge, one_d=one_d,
                       roads=r_view, rails=l_view)
     governing["margin"] = rob
     more["margin"] = rob["lines"]
@@ -3500,7 +3516,8 @@ def _future_development(run, gov, governing, structs, layers, clip, dam_name, wr
     try:
         lyr, summ = DEV.screen(parcels, structs, samplers, clip.crs, run.ctx, clip=clip,
                                lat=clip.lat, max_acres=float(cfg.get("parcel_max_acres") or 5.0),
-                               judgment_as_probable=cfg["judgment_as_probable"],
+                               judgment_as_probable=bool(
+                                   cfg.get("nd_judgment_as_probable", False)),
                                one_d=cfg["one_d"])
     except CancelledByUser:
         raise

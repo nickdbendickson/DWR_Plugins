@@ -31,6 +31,7 @@ from .helpers import create_memory_layer, export_layer_to_formats, prepare_outpu
 from .structures import OUT_PROBABLE, OUT_JUDGMENT, OUT_ECONOMIC, TYPE_MOBILE
 
 
+JUDGMENT_RULE_PREFIX = "MEDIUM - "     # 2.22.0: judgment-zone rule reason starts so
 PROVISIONAL_PREFIX = "PROVISIONAL - "   # FF.1: formfill skips this reason (not a criterion)
 
 
@@ -53,11 +54,16 @@ def _drop_low_reason(nd):
     nd["reasons"] = [r for r in nd["reasons"] if not r.startswith("LOW -")]
 
 
-def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
+def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
                 roads_evaluated=True, rail_evaluated=True, structs_evaluated=True):
     """Returns dict(cls, reasons[], judgment[], counts{}). v2.19.0: `structs_evaluated`
     False (no structure layer was given or downloaded) shows the structure rows as
-    "not evaluated" instead of "not met" and marks the class incomplete."""
+    "not evaluated" instead of "not met" and marks the class incomplete.
+
+    2.22.0 (Nick, 10/30/2026): a habitable structure in the ACER judgment zone makes
+    the dam MEDIUM by rule - not probable loss of life, not a provisional High.
+    `judgment_as_probable` True is the old conservative option (judgment zone counted
+    as probable loss of life, HIGH); it is kept as a non-default option."""
     # An empty inventory is not a Low dam. Low is only after structures,
     # roads and rail were actually tested.
     if not structs and not roads and not rails:
@@ -95,11 +101,18 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
                "required [5.2.1.1]".format(len(judg)))
         if judgment_as_probable:
             cls = _raise(cls, ND_HIGH)
+            # 2.21.1 (DWR-4031): this is the judgment-zone setting, not the 5.3(f)
+            # borderline count (which can be 0); extra_criteria adds the 5.3(f) citation
+            # only when that count is above 0
             reasons.append("HIGH - " + msg + "; counted as probable loss of life "
-                           "(conservative, borderline rule 5.3(f))")
+                           "(conservative judgment-zone setting)")
         else:
-            judgment.append(msg + " - would make the dam HIGH if loss of life is judged "
-                            "probable")
+            # 2.22.0: the ND judgment-zone rule - MEDIUM, automatically
+            cls = _raise(cls, ND_MEDIUM)
+            reasons.append(JUDGMENT_RULE_PREFIX + "{} habitable structure(s) in the ACER "
+                           "judgment zone - classed MEDIUM by rule (judgment-zone houses "
+                           "are Medium, not probable loss of life) [5.2.1.1]".format(
+                               len(judg)))
     for r in roads:
         if r["nd_class"] == ND_HIGH:
             cls = ND_HIGH
@@ -203,7 +216,7 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
          "n/a (1D model)" if one_d else "{} ({} persons)".format(len(judg), persons(judg)),
          "?" if not se else
          "not met" if not judg else (ND_HIGH + " (judgment counted)" if judgment_as_probable
-                                     else "Judgment")),
+                                     else ND_MEDIUM + " (by rule)")),
         ("5.2.1.2", "Overtopped roads - Interstate or AADT > 2,000",
          "{} stretch(es)".format(len(road_high)) if roads_evaluated else "not evaluated",
          met(road_high, ND_HIGH) if roads_evaluated else "?"),
@@ -246,7 +259,9 @@ def classify_nd(structs, roads, rails, judgment_as_probable=True, one_d=False,
                 "roads_high": len(road_high), "roads_medium": len(road_med),
                 "rail": len(rails), "rail_high": len(rail_high),
                 "unverified": len(unverified), "persons_probable": persons(probable),
-                "persons_judgment": persons(judg)}}
+                "persons_judgment": persons(judg)},
+            # 2.22.0: which judgment-zone rule classified this ("medium" = ND rule)
+            "judgment_rule": "probable" if judgment_as_probable else "medium"}
 
 
 def tm11_rows(tm11):
@@ -265,7 +280,7 @@ def tm11_rows(tm11):
          "{:.1f}".format(g("lij_vehicles_judgment") or 0)),
         ("Lives in jeopardy (LIJ)", "{:.1f}".format(g("lij") or 0)),
         ("Table 1: Low 0 / Significant 1 - 6 / High > 6", str(g("cls", "")).upper()),
-        ("Without judgment-zone items", str(g("cls_without_judgment", ""))),
+        ("Without judgment-zone items (TM 11 Table 1)", str(g("cls_without_judgment", ""))),
     ]
 
 
@@ -466,6 +481,9 @@ def extra_criteria(nd, structs, res, cfg, total=False):
                  "result": "not met" if not near else "counted higher"
                  if cfg.get("borderline_higher") else "Judgment"})
     if near:
+        for i, r in enumerate(nd.get("reasons") or []):     # 2.21.1: only when counted
+            if r.endswith("(conservative judgment-zone setting)"):
+                nd["reasons"][i] = r[:-1] + "; borderline rule 5.3(f))"
         hi = sum(1 for s in near if s["near"] == "High")
         at = nd.get("struct_items", 0)
         nd["struct_items"] = at + 1
@@ -534,17 +552,47 @@ def extra_criteria(nd, structs, res, cfg, total=False):
                 where = "{:.2f} ft past the ACER judgment line".format(max(margins))
             else:
                 where = "within {:.2f} ft of the ACER judgment line".format(max(margins))
+            # 2.21.1 (DWR-4031): cite the 5.3(f) borderline rule only when it counted
+            # something; with 0 borderline structures High comes from the judgment zone
+            if near:
+                why = ("borderline goes to the higher class, 5.3(f): {} borderline "
+                       "structure(s)".format(len(near)))
+            else:
+                why = "the judgment zone is counted as probable loss of life"
             msg = ("HIGH is provisional: the most-exposed judgment-zone dwelling is only "
                    "{}, inside the vertical error of a "
-                   "lidar crest and a coarse grid. The class stays High (borderline goes "
-                   "to the higher class, 5.3(f)); confirm the buildings are habitable and "
-                   "the depths before the class is final.".format(where))
+                   "lidar crest and a coarse grid. The class stays High ({}); confirm the "
+                   "buildings are habitable and the depths before the class is "
+                   "final.".format(where, why))
             nd["judgment"].insert(0, msg)
             nd["reasons"].insert(0, PROVISIONAL_PREFIX + msg)
     result = "HIGH (provisional)" if nd.get("provisional") else nd["cls"].upper()
     crit.append({"section": "Result", "criterion": "ND hazard classification (screening)",
                  "found": "", "result": result})
     return nd
+
+
+def nd_class_without_judgment(structs, roads, rails, res, cfg, total=False, **kw):
+    """2.21.1 (DWR-4031): the ND class with the ACER judgment-zone dwellings NOT counted
+    as probable loss of life (they still count as inundated, 5.2.2) - the ND counterpart
+    of TM 11's "without judgment-zone items". Same inputs as classify_nd + extra_criteria;
+    nothing passed in is changed."""
+    kw = dict(kw)
+    kw["judgment_as_probable"] = False
+    nd0 = classify_nd(structs, roads, rails, **kw)
+    if nd0.get("cls") in ND_RANK:
+        extra_criteria(nd0, structs, res if res is not None else {}, dict(cfg or {}),
+                       total=total)
+    return nd0["cls"]
+
+
+def without_judgment_text(nd, tm11):
+    """The summary's "Without judgment-zone items" value, both classes labelled."""
+    t = "{} (TM 11 Table 1)".format(tm11.get("cls_without_judgment", ""))
+    ndw = nd.get("cls_without_judgment")
+    if ndw:
+        t += "; ND class: {}".format(str(ndw).upper())
+    return t
 
 
 def lone_point_judgment(nd, tm11, structs, roads, rails, **kw):
@@ -559,9 +607,11 @@ def lone_point_judgment(nd, tm11, structs, roads, rails, **kw):
     rest = [r for r in structs if id(r) not in ids]
     # (raw structure classes - the access / facility raises of extra_criteria do not
     # depend on these points)
+    kw = dict(kw)
+    tm11_j = kw.pop("tm11_judgment", True)     # 2.22.0: TM 11 has its own setting
     nd1 = classify_nd(structs, roads, rails, **kw)
     nd2 = classify_nd(rest, roads, rails, **kw)
-    tm2 = classify_tm11(rest, roads, judgment_as_probable=kw.get("judgment_as_probable", True))
+    tm2 = classify_tm11(rest, roads, judgment_as_probable=tm11_j)
     nd_rests = nd2["cls"] != nd1["cls"] and ND_RANK.get(nd2["cls"], -1) < \
         ND_RANK.get(nd["cls"], -1)
     if not nd_rests and tm2["cls"] == tm11["cls"]:
@@ -620,6 +670,7 @@ def ms_rule_judgment(nd, tm11, structs, roads, rails, clip_fn=None, **kw):
     from .constants import CLASS_HIGH, CLASS_JUDGMENT
     from .lone911 import misplaced_text, MISPLACED_911_M
     misplaced_m = kw.pop("misplaced_m", None) or MISPLACED_911_M
+    tm11_j = kw.pop("tm11_judgment", True)     # 2.22.0: TM 11 has its own setting
 
     def wet(r):
         return r.get("outcome") not in (None, OUT_DRY, OUT_TRACE)
@@ -654,8 +705,7 @@ def ms_rule_judgment(nd, tm11, structs, roads, rails, clip_fn=None, **kw):
             ids = {id(r) for r in wd}
             alt = [ms_rule_counted_copy(r) if id(r) in ids else r for r in structs]
             nd2 = classify_nd(alt, roads, rails, **kw)
-            tm2 = classify_tm11(alt, roads,
-                                judgment_as_probable=kw.get("judgment_as_probable", True))
+            tm2 = classify_tm11(alt, roads, judgment_as_probable=tm11_j)
             msg += (" Wet in a High or Judgment zone and not counted: {}. Counted, they would "
                     "give ND {} / TM 11 {} (LIJ {:.1f}); now ND {} / TM 11 {} (LIJ {:.1f}) - "
                     "confirm on imagery that no dwelling stands there.".format(
@@ -744,7 +794,7 @@ def summary_lines(nd, tm11, structs, roads, rails, dam_name, sources, one_d, ext
         "included" if tm11["judgment_included"] else "not included"))
     L.append("  Motorists (estimate): high {:.1f}, judgment {:.1f}".format(
         tm11["lij_vehicles_high"], tm11["lij_vehicles_judgment"]))
-    L.append("  Without judgment-zone items: {}".format(tm11["cls_without_judgment"]))
+    L.append("  Without judgment-zone items: {}".format(without_judgment_text(nd, tm11)))
     for n in tm11["notes"]:
         L.append("  Note: " + n)
     L.append("")
@@ -820,6 +870,9 @@ def write_summary(output_folder, lines, nd, tm11, transform_ctx):
               tm11["cls"]),
              ("TM 11 lives in jeopardy", "{:.1f}".format(tm11["lij"])),
              ("TM 11 without judgment-zone items", tm11["cls_without_judgment"])]
+    if nd.get("cls_without_judgment"):                  # 2.21.1 (DWR-4031)
+        rows.append(("ND classification without judgment-zone items",
+                     nd["cls_without_judgment"]))
     rows += [("Judgment item", j) for j in nd["judgment"]]
     feats = []
     for k, v in rows:

@@ -56,8 +56,9 @@ class HazardClassification(QgsProcessingAlgorithm):
                 "(economic loss); a US / State highway (5.2.1.2(b), any AADT), AADT 500-2,000 or sole access to an occupied location; any other "
                 "railroad; a lifeline facility inundated; a Medium (or unclassified) dam reached. "
                 "LOW: only uninhabited buildings, private or AADT < 500 local / county roads, or nothing of these is "
-                "reached. Borderline results take the higher class (5.3): the charts' judgment zone "
-                "and an unknown velocity count as potentially lethal (hz_border = yes when every "
+                "reached. A habitable structure in the charts' judgment zone is MEDIUM by rule (not "
+                "potentially lethal). Borderline results take the higher class (5.3): an unknown "
+                "velocity counts as potentially lethal (hz_border = yes when every "
                 "governing finding is borderline or rests on an assumption).\n"
                 "LETHALITY (default): the ACER TM 11 depth-velocity charts (ND Fig. 5.1 houses, 5.2 "
                 "mobile homes) - they must be digitized and checked first; the chart file shipped is "
@@ -553,9 +554,11 @@ class HazardClassification(QgsProcessingAlgorithm):
                         continue
                     lethal = "n/a"
                     if fnd.kind == "structure" and w[2] != "uninhabited building":
-                        lethal = ("YES (judgment zone, 5.3)" if fnd.zone == nh.ZONE_JUDGMENT else
+                        lethal = ("YES (judgment zone, 5.3; old option)" if fnd.zone == nh.ZONE_JUDGMENT else
                                   "YES (borderline, 5.3)" if fnd.borderline else "YES") \
-                            if fnd.level == nh.HIGH else "no"
+                            if fnd.level == nh.HIGH else \
+                            ("no (judgment zone, MEDIUM by rule)" if fnd.zone == nh.ZONE_JUDGMENT
+                             else "no")
                     it = QgsFeature(ifields)
                     it.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(w[0][0], w[0][1])))
                     it.setAttributes([dam_id, w[2], w[1]["depth_m"], w[1].get("vel_ms"), w[1].get("dv_m2s"),

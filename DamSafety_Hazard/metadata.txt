@@ -5,10 +5,18 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.21.0
+version=2.22.0
 icon=icon.svg
 author=N.D. Bendickson
-changelog=2.21.0 (2026-10-30; name a dam and add its model results - Nick)
+changelog=2.22.0 (2026-10-30; a house in the ACER judgment zone is ND MEDIUM by rule - Nick)
+    * Nick: "any house in the judgement zone should be automatically labeled as medium hazard". A habitable structure in the ACER judgment zone (between the judgment and high-danger boundaries) makes the dam ND MEDIUM by rule [5.2.1.1]; it is not probable loss of life and no longer makes a provisional HIGH. Houses in the high danger zone still make it HIGH. The summary says "classed MEDIUM by rule".
+    * The old setting (judgment zone counted as probable loss of life, HIGH) is kept as an option, off by default (Nick): Classify > "ND: count ACER judgment-zone houses as probable loss of life (HIGH)", Processing ND_JUDGMENT_HIGH, setting nd_judgment_as_probable. The existing JUDGMENT / "judgment zone" setting now applies to ACER TM 11 lives in jeopardy only (default on), so the TM 11 class is unchanged and saved dam states that had it on do not bring back HIGH.
+    * Tests: tests/test_judgment_zone_medium_rule.py.
+    2.21.1 (2026-10-30; summary wording from the DWR-4031 review - Nick)
+    * "Without judgment-zone items" gives the ND class as well as TM 11's, both labelled: "Low (TM 11 Table 1); ND class: MEDIUM" (DWR-4031: the line said Low, which is TM 11; without the judgment-zone house the ND class is MEDIUM from 5.2.2 and 5.2.1.2). Also a summary table row and the form key ND_WITHOUT_JUDGMENT.
+    * The 5.3(f) borderline rule is cited in the reasons and the PROVISIONAL note only when the 5.3(f) borderline count is above 0. With 0 the note says High stays because the judgment zone is counted as probable loss of life. No class changes.
+    * Tests: tests/test_summary_judgment_4031.py.
+    2.21.0 (2026-10-30; name a dam and add its model results - Nick)
     * Classify > Setup: "Add model results to a dam…" and the Processing tool ndhazard:adddamresults (a CSV for many dams). Type the dam's ID or name; its folder in the Dams folder is found by folder name or dam.json ID / name (case, spaces, dashes and an ID's leading zeros ignored) or made with a dam.json. DSS-WISE Lite zips / folders, HEC-RAS RAS Mapper rasters or a .p##.hdf plan, and LISFLOOD-FP .max / .maxVc / .Vmax / .inittm / .mxe grids go to <dam>/Hazard_inputs/Breach_<MODEL> (No_Breach_<MODEL> for the baseline), where the batch finds them. Never overwrites (next free number) and never touches the source; results_provenance.json records source, sha256, model, time and version; dam.json gets the status modelled. No classification change.
     * Tests: tests/test_add_dam_results.py.
     2.20.4 (2026-10-29; the vertical datum section uses the 0-500 ft band)
