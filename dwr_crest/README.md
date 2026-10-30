@@ -47,7 +47,10 @@ rank higher is still named, so a known High is never hidden).
      downstream; the flood and every receptor are screened in full and a warning says why.
 
 **Breach on the outline.** A breach within 1 m of the outline (on an edge or a corner) counts as inside, so an area
-drawn from the dam line downstream is not lost to rounding.
+drawn from the dam line downstream is not lost to rounding. The same 1 m tolerance applies on both sides of every
+edge along the valley, so the flow line counts as inside when it runs on or less than 1 m beside the outline, and
+gaps under 2 m (a slot between two parts or a hole less than 2 m across the valley) are closed; a gap of 2 m or
+more ends the reach. Cross-sections use the same test, which adds about 0.01 ac.
 
 **Upstream warning.** If more than half of the area's filled outline (holes ignored) lies upstream of the breach, a
 warning asks you to check the drawing.

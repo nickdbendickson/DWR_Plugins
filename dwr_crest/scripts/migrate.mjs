@@ -2,13 +2,16 @@
 /**
  * Deploy-time database migrator (node-postgres, `pg`).
  *
- * Runs on every Vercel deploy via `npm run build:deploy` (vercel.json
- * `buildCommand`: `npm run build && npm run db:migrate`), applying pending files
- * in ../migrations to DATABASE_URL. Plain `npm run build` no longer migrates, so
- * a local or CI build never touches a database. A custom pipeline that builds
- * outside Vercel (`vercel build` honours vercel.json; `npm run build` then
- * `vercel deploy --prebuilt` does not) must run `npm run db:migrate` itself. Each file is applied in one transaction and
- * recorded in a `_migrations` table, so it runs once and is safe to re-run.
+ * Runs on every Vercel deploy: vercel.json sets `buildCommand` to
+ * `npm run build:deploy`, and the package.json script `build:deploy` is
+ * `npm run build && npm run db:migrate`. It applies pending files in
+ * ../migrations to DATABASE_URL. Plain `npm run build` does not migrate, so a
+ * local or CI build never touches a database. `vercel build` honours
+ * vercel.json; a pipeline that runs `npm run build` and then
+ * `vercel deploy --prebuilt` must run `npm run db:migrate` itself.
+ *
+ * Each file is applied in one transaction and recorded in a `_migrations`
+ * table, so it runs once and is safe to re-run.
  *
  * The read is non-recursive, so the opt-in auth schema under migrations/auth/
  * is not applied to an app that never asked for sign-in.

@@ -432,8 +432,9 @@ export function analyze(dam: DamRecord): Analysis {
     const shape = loc ? readAoi(dam.geometry?.aoi, loc) : null;
     if (!loc) notApplied("Drawn area not applied: no breach location. Draw the breach point or enter the dam latitude and longitude.");
     else if (shape && !shape.ok) notApplied(shape.reason);
-    else if (shape && shape.ok) {
-      const dir = downstreamDirection(dam.geometry, loc);
+    // The downstream direction is computed once, here, and reused below.
+    const dir = loc && shape?.ok ? downstreamDirection(dam.geometry, loc) : null;
+    if (shape && shape.ok && dir) {
       aoi = aoiExtent(shape, dir);
       floodWarnings.push(...aoi.warnings);
     }
@@ -441,8 +442,7 @@ export function analyze(dam: DamRecord): Analysis {
       // No direction and the breach outside the AOI: it cannot be placed, so it is not applied.
       notApplied(aoi.unplacedReason);
       aoi = null;
-    } else if (aoi && loc) {
-      const dir = downstreamDirection(dam.geometry, loc);
+    } else if (aoi && dir) {
       const limitsReach = aoi.coversDownstream && aoi.farM < naturalLengthM;
       if (limitsReach) {
         lengthM = Math.max(aoi.farM, 50);
@@ -627,6 +627,14 @@ export function analyze(dam: DamRecord): Analysis {
   const screen = screenReceptors(receptors, dam.receptors, {
     judgmentAsProbable: dam.judgmentAsProbable ?? true,
   });
+  const aoiNotApplied = aoiOut as Analysis["flood"]["aoi"];
+  if (aoiNotApplied && !aoiNotApplied.applied) {
+    // Shown in the Screen step's reasons and carried into the Report's JSON export notes.
+    const full = "This screen is for the full flood and every receptor, with no drawn-area limit.";
+    screen.reasons.unshift(
+      aoiNotApplied.label.includes("screened in full") ? aoiNotApplied.label : `${aoiNotApplied.label} ${full}`,
+    );
+  }
   if (dam.classOfRecord) {
     screen.classOfRecord = dam.classOfRecord;
     screen.reasons.unshift(`Class of record: ${dam.classOfRecord}. This desk screen (${screen.label}) is not the class of record.`);
