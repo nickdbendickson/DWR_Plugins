@@ -10,7 +10,7 @@ import shadowUrl from "leaflet/dist/images/marker-shadow.png";
 import { basemaps } from "@/lib/crest/basemap";
 import { DEPTH_BANDS, FLOOD_STRIP_DISCLAIMER, type FloodStrip } from "@/lib/crest/floodstrip";
 import { initialView, ND_CENTER } from "@/lib/crest/mapview";
-import { ND911_ATTRIBUTION_SHORT, nd911ElevLabel, type Nd911Point, type Nd911Row } from "@/lib/crest/nd911";
+import { ND911_ATTRIBUTION_SHORT, type Nd911Point, type Nd911Row } from "@/lib/crest/nd911";
 import { DEM_ATTRIBUTION_SHORT, OUTLINE_LABEL, type TerrainOutline } from "@/lib/crest/outline";
 import { PLSS_ATTRIBUTION_SHORT, type PlssRow } from "@/lib/crest/plss";
 import type { DamGeometry, GeoJSONFeature } from "@/lib/crest/types";
@@ -260,8 +260,7 @@ const ND911_OUT = "#6b6b6b";
 
 /**
  * 911 address points: small circles in their own pane above the drawn shapes' fill. Points inside the strip are red
- * and larger, the others grey. They are interactive only for the hover tooltip (address, ground elevation in
- * feet NAVD88, place type, placement).
+ * and larger, the others grey. They are interactive only for the hover tooltip (address, place type, placement).
  */
 function Nd911Layer({ pts, on, against }: { pts: Props["nd911"]; on: boolean; against: string }) {
   const map = useMap();
@@ -272,19 +271,19 @@ function Nd911Layer({ pts, on, against }: { pts: Props["nd911"]; on: boolean; ag
     }
     if (!pts || !on) return;
     const group = L.featureGroup([], { attribution: ND911_ATTRIBUTION_SHORT } as L.LayerOptions);
-    const tip = (address: string, placeType: string, placement: string, elev: number | null, extra: string) =>
-      `<div data-testid="nd911-tip" style="font-size:12px;line-height:1.35"><b>${escHtml(address)}</b><br/>Ground: ${escHtml(nd911ElevLabel(elev))}<br/>Place type: ${escHtml(placeType || "not given")}; placement: ${escHtml(placement || "not given")}${extra}</div>`;
+    const tip = (address: string, placeType: string, placement: string, extra: string) =>
+      `<div data-testid="nd911-tip" style="font-size:12px;line-height:1.35"><b>${escHtml(address)}</b><br/>Place type: ${escHtml(placeType || "not given")}; placement: ${escHtml(placement || "not given")}${extra}</div>`;
     for (const p of pts.outside) {
       group.addLayer(
         L.circleMarker([p.lat, p.lon], { pane: ND911_PANE, radius: 3.5, color: "#fff", weight: 1, fillColor: ND911_OUT, fillOpacity: 0.9 }).bindTooltip(
-          tip(p.address, p.placeType, p.placement, p.elevNavdFt, `<br/>Outside the ${against}`),
+          tip(p.address, p.placeType, p.placement, `<br/>Outside the ${against}`),
         ),
       );
     }
     for (const r of pts.inside) {
       group.addLayer(
         L.circleMarker([r.lat, r.lon], { pane: ND911_PANE, radius: 6, color: "#fff", weight: 1.5, fillColor: ND911_IN, fillOpacity: 1 }).bindTooltip(
-          tip(r.address, r.placeType, r.placement, r.elevNavdFt, `<br/>Inside: ${escHtml(r.bandLabel)}, ${r.downstreamKm.toFixed(2)} km downstream${r.added ? "<br/>Added for review" : ""}`),
+          tip(r.address, r.placeType, r.placement, `<br/>Inside: ${escHtml(r.bandLabel)}, ${r.downstreamKm.toFixed(2)} km downstream${r.added ? "<br/>Added for review" : ""}`),
         ),
       );
     }

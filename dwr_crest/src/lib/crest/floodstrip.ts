@@ -7,7 +7,7 @@ import type { Analysis, DamRecord } from "./types.ts";
  * Flood strip: the desk's schematic flood laid on the real map (Nick, 2026-10-30).
  *
  * The engine (engine.ts) works on a straight 1-D valley: stations at distance x downstream of the breach along the
- * downstream direction (aoi.ts downstreamDirection: the dam-line chord's normal, away from the reservoir point), each
+ * downstream direction (aoi.ts downstreamDirection: the dam segment nearest the breach, away from the reservoir), each
  * with a half-width halfM and a depth. This module draws exactly that strip: the wet stations (depth >= WET_FT),
  * offset ±halfM perpendicular to the same straight centreline, in the same local metres around the breach location
  * the engine's AOI clip uses, then back to WGS 84. When a drawn area (AOI) is applied, the strip is clipped to it (and

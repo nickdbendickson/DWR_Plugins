@@ -9,7 +9,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from crest.handoff import HandoffError, _dem_point, write_dam_folder
+from crest.handoff import HandoffError, _dem_point, write_dam_folder, write_named_files
+from crest.layers import download_aoi, find_suite_folder, suite_dem, use_offline_pack, write_settings
 
 # qgis_process accepts the enum text. The index would silently change if the plugin reorders methods.
 METHOD_LABEL = {
@@ -28,6 +29,26 @@ CLI_METHOD = {
     ("tr60", "piping"): "tr60",
     ("tr60", "overtopping"): "tr60",
 }
+
+# qgis_process enum text, then the CLI model.tier value.
+MODELS = {
+    "lisflood": ("LISFLOOD-FP only", "lisflood", False),
+    "anuga": (
+        "LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)",
+        "lisflood+anuga",
+        False,
+    ),
+    "hecras": (
+        "LISFLOOD-FP then HEC-RAS 2D (final results from HEC-RAS; needs HEC-RAS 6.6, see help)",
+        "lisflood+hecras",
+        False,
+    ),
+    "builtin": ("LISFLOOD-FP only", "lisflood", True),
+}
+
+
+def model_choice(name: str | None) -> tuple[str, str, bool]:
+    return MODELS.get(str(name or "lisflood"), MODELS["lisflood"])
 
 
 def find_qgis_process() -> str | None:
@@ -69,13 +90,17 @@ def work_dir(requested: str | None) -> Path:
     return path.resolve()
 
 
-def dem_path(work: Path, dam: dict) -> str | None:
+def dem_path(work: Path, dam: dict, source: str = "pack") -> str | None:
     for raw in (dam.get("demPath"), os.environ.get("CREST_DEM"), work / "dem.tif", work / "dem.vrt"):
         if not raw:
             continue
         path = Path(str(raw)).expanduser()
         if path.is_file():
             return str(path.resolve())
+    if source == "pack":
+        found = suite_dem(find_suite_folder())
+        if found:
+            return found
     return None
 
 
@@ -127,7 +152,7 @@ def _opt_num(cmd: list[str], flag: str, value) -> None:
     cmd.append(f"--{flag}={number}")
 
 
-def _prepare(dam: dict, analysis: dict, work: str | None, log):
+def _prepare(dam: dict, analysis: dict, work: str | None, log, files=None):
     root = work_dir(work)
     try:
         folder, notes = write_dam_folder(root, dam, analysis or {})
@@ -136,13 +161,48 @@ def _prepare(dam: dict, analysis: dict, work: str | None, log):
         return None
     for note in notes:
         log(note)
+    extra = write_named_files(folder, files)
+    if extra:
+        log("Also wrote: " + ", ".join(extra))
     log(f"Wrote {folder / 'dam.json'}")
     log("Geometries: dam line, breach point, reservoir point, downstream area, when they were drawn.")
+    log("Folder layout: <work>/dams/<id>/ with dam.json, the drawn geometries, hydrograph.csv, and inputs/.")
     return root, folder
 
 
-def run_screening(dam: dict, analysis: dict, work: str | None, log) -> dict:
-    prepared = _prepare(dam or {}, analysis or {}, work, log)
+def _settings_arg(root: Path, log) -> list[str]:
+    suite = find_suite_folder()
+    dem = suite_dem(suite)
+    if not suite and not (root / "dem.tif").is_file():
+        return []
+    path = write_settings(root, suite, dem or (str(root / "dem.tif") if (root / "dem.tif").is_file() else None))
+    if suite:
+        log(f"Screening settings use the ND offline pack: {suite}")
+    return [f"--SETTINGS={path}"]
+
+
+def run_folder(dam: dict, analysis: dict, work: str | None, log, files=None) -> dict:
+    prepared = _prepare(dam or {}, analysis or {}, work, log, files)
+    if prepared is None:
+        return {"ok": False, "stopped": True, "folder": "", "work": ""}
+    root, folder = prepared
+    log("The dam folder is written. No model was started.")
+    return {"ok": True, "stopped": False, "folder": str(folder), "work": str(root)}
+
+
+def run_layers(dam: dict, work: str | None, source: str, log) -> dict:
+    root = work_dir(work)
+    if source == "download":
+        result = download_aoi(root, dam or {}, log)
+    else:
+        result = use_offline_pack(root, log)
+    result["work"] = str(root)
+    result.setdefault("folder", "")
+    return result
+
+
+def run_screening(dam: dict, analysis: dict, work: str | None, log, files=None) -> dict:
+    prepared = _prepare(dam or {}, analysis or {}, work, log, files)
     if prepared is None:
         return {"ok": False, "stopped": True, "folder": "", "work": ""}
     root, folder = prepared
@@ -153,9 +213,10 @@ def run_screening(dam: dict, analysis: dict, work: str | None, log) -> dict:
         log("Install QGIS, or set QGIS_PROCESS to the qgis_process program.")
         return {"ok": False, "stopped": True, "folder": str(folder), "work": str(root)}
     report = root / "preflight.txt"
+    settings = _settings_arg(root, log)
     log(f"Tool 17: {exe} run nddam:preflight")
     code, text = _run(
-        [exe, "run", "nddam:preflight", f"--WORK={root}", f"--REPORT={report}"],
+        [exe, "run", "nddam:preflight", f"--WORK={root}", f"--REPORT={report}", *settings],
         timeout=180,
     )
     report_text = ""
@@ -181,6 +242,7 @@ def run_screening(dam: dict, analysis: dict, work: str | None, log) -> dict:
             "--PREFLIGHT=true",
             "--FAIL_ON_ERROR=true",
             f"--LOG={chain_log}",
+            *settings,
         ],
         timeout=None,
     )
@@ -196,21 +258,25 @@ def run_screening(dam: dict, analysis: dict, work: str | None, log) -> dict:
     return {"ok": True, "stopped": False, "folder": str(folder), "work": str(root)}
 
 
-def run_model(dam: dict, analysis: dict, work: str | None, log) -> dict:
+def run_model(dam: dict, analysis: dict, work: str | None, log, model: str = "lisflood", files=None, source: str = "pack") -> dict:
     dam = dam or {}
-    prepared = _prepare(dam, analysis or {}, work, log)
+    prepared = _prepare(dam, analysis or {}, work, log, files)
     if prepared is None:
         return {"ok": False, "stopped": True, "folder": "", "work": ""}
     root, folder = prepared
     dams = root / "dams"
     dam_id = str(dam.get("nid") or dam.get("id") or "dam")
-    dem = dem_path(root, dam)
+    label, cli_tier, builtin = model_choice(model)
+    dem = dem_path(root, dam, source)
     if not dem:
-        log("No DEM. Put dem.tif in the work folder, type a DEM path, or set CREST_DEM. The flood model was not started.")
+        log("No DEM, so the flood model was not started. The dam folder above was still written.")
+        log("Type a DEM path, choose Get layers (download for this area, or the ND offline pack), or set CREST_DEM.")
+        log("The built-in engine is still a raster model. It is not the desk's schematic flood, and it also needs a DEM.")
         return {"ok": False, "stopped": True, "folder": str(folder), "work": str(root)}
     point = _dem_point(dam)
     datum = (analysis or {}).get("datum") if isinstance((analysis or {}).get("datum"), dict) else {}
     key = _method_key(dam)
+    log(f"Flood model: {label}" + (" with the built-in screening engine (not LISFLOOD-FP)." if builtin else "."))
     cli = find_ndbreach_cli()
     if cli and point:
         config = {
@@ -224,6 +290,7 @@ def run_model(dam: dict, analysis: dict, work: str | None, log) -> dict:
                 "point": point,
             },
             "breach": {"method": CLI_METHOD[key]},
+            "model": {"tier": cli_tier, **({"lisflood_exe": "builtin"} if builtin else {})},
             "output": {"folder": str(dams)},
         }
         path = folder / "runner_config.json"
@@ -249,7 +316,10 @@ def run_model(dam: dict, analysis: dict, work: str | None, log) -> dict:
         f"--DAMS_FOLDER={dams}",
         f"--DEM={dem}",
         f"--METHOD={METHOD_LABEL[key]}",
+        f"--TIER={label}",
     ]
+    if builtin:
+        cmd.append("--LISFLOOD_EXE=builtin")
     _opt_num(cmd, "HEIGHT_FT", dam.get("heightFt"))
     _opt_num(cmd, "STORAGE_ACFT", dam.get("storageAcFt"))
     _opt_num(cmd, "TOP_FT", datum.get("crestNavdFt"))

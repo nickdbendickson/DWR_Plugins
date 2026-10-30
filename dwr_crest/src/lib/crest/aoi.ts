@@ -5,7 +5,7 @@ import type { DamGeometry, GeoJSONFeature } from "./types.ts";
  *
  * The desk valley is schematic: a straight 1-D valley with distance downstream and no drawn
  * centreline. Its direction is taken from the record's geometry (`downstreamDirection`): the dam
- * line's normal pointing away from the reservoir point, else the bearing from the reservoir point
+ * line's segment nearest the breach, pointing away from the reservoir point, else the bearing from the reservoir point
  * to the breach location. The reach ends where a ray from the breach along that direction leaves the
  * AOI (its nearest downstream exit), the wet area is the schematic strip clipped to the AOI polygon,
  * and receptors past the exit are outside the drawn area.
@@ -381,16 +381,33 @@ function unit(x: number, y: number): XY | null {
 
 /**
  * Downstream direction from the record's geometry, in local metres around the breach location.
- * 1. Dam line: the normal to its CHORD (the straight line from its first to its last vertex), on the
- *    side away from the reservoir point. The vertices in between are not used. For a straight or
- *    gently curved embankment that is the valley axis. For a strongly curved, L- or U-shaped
- *    embankment (one that wraps around the pool) the chord can run across the valley and point
- *    the valley off-axis or even upstream. Example: the DSS-WISE embankment of ND00199 (6 vertices,
- *    L-shaped) has a chord whose normal points WNW, away from the real flood (SE). Draw the dam
- *    line as the straight stretch through the breach instead, as the samples do.
+ * 1. Dam line: the normal of the segment nearest the breach (the valley axis where the embankment
+ *    crosses the stream), on the side away from the reservoir point. A curved or L-shaped line is
+ *    not taken end to end: that chord can run across the valley. Example: the DSS-WISE embankment
+ *    of ND00199 is a 6-vertex L whose end-to-end chord points WNW, away from the real flood (SE).
+ *    The segment through the breach points downstream.
  * 2. No dam line: the bearing from the reservoir point to the breach location.
  * Otherwise none (the caller falls back and warns).
+ * The strip is still straight. It follows the stream's direction leaving the dam, not later bends.
  */
+function segmentNearBreach(pts: XY[]): { a: XY; b: XY } | null {
+  let best: { a: XY; b: XY; dist: number } | null = null;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const len2 = dx * dx + dy * dy;
+    if (len2 < 25) continue;
+    let t = -(a[0] * dx + a[1] * dy) / len2;
+    if (t < 0) t = 0;
+    else if (t > 1) t = 1;
+    const dist = Math.hypot(a[0] + t * dx, a[1] + t * dy);
+    if (!best || dist < best.dist) best = { a, b, dist };
+  }
+  return best;
+}
+
 export function downstreamDirection(
   g: DamGeometry | undefined,
   breach: LonLat & { source?: string },
@@ -405,23 +422,22 @@ export function downstreamDirection(
     g?.damLine?.geometry?.type === "LineString" ? cleanRing(g.damLine.geometry.coordinates) : [];
   let why = "";
   if (line.length >= 2) {
-    const pts = project([line[0], line[line.length - 1]], breach);
-    const n = unit(-(pts[1][1] - pts[0][1]), pts[1][0] - pts[0][0]);
-    if (!n || Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]) < 5)
-      why = "the dam line is too short to give a direction";
-    else if (!R)
-      why = "the dam line has two sides and there is no reservoir point to say which is upstream";
+    const pts = project(line, breach);
+    const seg = segmentNearBreach(pts);
+    if (!seg) why = "the dam line is too short to give a direction";
+    else if (!R) why = "the dam line has two sides and there is no reservoir point to say which is upstream";
     else {
-      const mx = (pts[0][0] + pts[1][0]) / 2;
-      const my = (pts[0][1] + pts[1][1]) / 2;
-      const s = n[0] * (R[0] - mx) + n[1] * (R[1] - my);
-      if (Math.abs(s) < 5) why = "the reservoir point sits on the dam line";
+      const n = unit(-(seg.b[1] - seg.a[1]), seg.b[0] - seg.a[0]);
+      const mx = (seg.a[0] + seg.b[0]) / 2;
+      const my = (seg.a[1] + seg.b[1]) / 2;
+      const s = n ? n[0] * (R[0] - mx) + n[1] * (R[1] - my) : 0;
+      if (!n || Math.abs(s) < 5) why = "the reservoir point sits on the dam line";
       else {
         const u: XY = s > 0 ? [-n[0], -n[1]] : n;
         return {
           u,
           basis: "dam line",
-          note: `Downstream direction: the dam line's normal, on the side away from the reservoir point (bearing ${bearing(u)}°).`,
+          note: `Downstream direction: across the dam at the breach, away from the reservoir (bearing ${bearing(u)}°). A curved embankment uses the segment nearest the breach. The strip is straight down that valley; it does not follow later bends in the stream.`,
         };
       }
     }
