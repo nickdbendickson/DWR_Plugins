@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MapContainer, TileLayer, FeatureGroup, LayersControl, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -8,6 +8,7 @@ import iconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
 import iconUrl from "leaflet/dist/images/marker-icon.png";
 import shadowUrl from "leaflet/dist/images/marker-shadow.png";
 import { basemaps } from "@/lib/crest/basemap";
+import { DEPTH_BANDS, FLOOD_STRIP_DISCLAIMER, type FloodStrip } from "@/lib/crest/floodstrip";
 import { initialView, ND_CENTER } from "@/lib/crest/mapview";
 import type { DamGeometry, GeoJSONFeature } from "@/lib/crest/types";
 
@@ -23,6 +24,9 @@ type Props = {
   lat?: number;
   lon?: number;
   onChange: (g: DamGeometry) => void;
+  /** Approximate flooded strip from the current result (null: none, see `stripMessage`). */
+  strip?: FloodStrip | null;
+  stripMessage?: string | null;
 };
 
 type GeoLayer = L.Layer & { toGeoJSON: () => GeoJSONFeature };
@@ -111,12 +115,130 @@ function DrawControl({ geometry, lat, lon, onChange }: Props) {
   return <FeatureGroup ref={groupRef} />;
 }
 
-export function MapDraw({ geometry, lat, lon, onChange }: Props) {
+const STRIP_PANE = "crest-flood-strip";
+
+/**
+ * The flood strip as a read-only overlay: its own pane under the drawn shapes (overlayPane is 400) with pointer
+ * events off, so it never catches a click meant for drawing or editing. Rebuilt whenever the result changes.
+ */
+function FloodStripLayer({ strip, on }: { strip: FloodStrip | null | undefined; on: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!map.getPane(STRIP_PANE)) {
+      const pane = map.createPane(STRIP_PANE);
+      pane.style.zIndex = "350";
+      pane.style.pointerEvents = "none";
+    }
+    if (!strip || !on) return;
+    const layer = L.geoJSON(strip as unknown as GeoJSON.FeatureCollection, {
+      pane: STRIP_PANE,
+      interactive: false,
+      style: (f) => ({
+        stroke: false,
+        fill: true,
+        fillColor: (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf",
+        fillOpacity: 0.45,
+      }),
+    }).addTo(map);
+    return () => {
+      layer.remove();
+    };
+  }, [map, strip, on]);
+  return null;
+}
+
+function StripLegend({
+  strip,
+  message,
+  on,
+  setOn,
+  onZoom,
+}: {
+  strip: FloodStrip | null | undefined;
+  message?: string | null;
+  on: boolean;
+  setOn: (v: boolean) => void;
+  onZoom: () => void;
+}) {
+  const used = new Set(strip?.features.map((f) => f.properties.band) ?? []);
+  return (
+    <div
+      data-testid="flood-strip-legend"
+      style={{
+        position: "absolute",
+        left: 8,
+        bottom: 8,
+        zIndex: 1000,
+        maxWidth: 260,
+        background: "rgba(255,255,255,0.92)",
+        border: "1px solid #c9c2b4",
+        borderRadius: 6,
+        padding: "6px 8px",
+        fontSize: 12,
+        lineHeight: 1.35,
+        color: "#1f2a30",
+      }}
+    >
+      {strip ? (
+        <>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600 }}>
+            <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} aria-label="Show the flood strip" />
+            Flood strip
+            <button
+              type="button"
+              onClick={onZoom}
+              style={{ marginLeft: "auto", fontWeight: 400, textDecoration: "underline", background: "none", border: 0, cursor: "pointer" }}
+            >
+              zoom to
+            </button>
+          </label>
+          <div style={{ marginTop: 2, color: "#5c5a52" }}>{FLOOD_STRIP_DISCLAIMER}.</div>
+          {on ? (
+            <div style={{ marginTop: 4 }}>
+              {DEPTH_BANDS.filter((b) => used.has(b.id))
+                .reverse()
+                .map((b) => (
+                  <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ width: 14, height: 10, background: b.color, opacity: 0.75, display: "inline-block" }} />
+                    {b.label}
+                  </div>
+                ))}
+              <div style={{ color: "#5c5a52" }}>Schematic desk depth; not a model run.</div>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div style={{ color: "#5c5a52" }}>{message ?? "No flood strip on the map."}</div>
+      )}
+    </div>
+  );
+}
+
+export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage }: Props) {
   const view = initialView(geometry, lat, lon);
   const center: [number, number] = "center" in view ? view.center : ND_CENTER;
+  const [on, setOn] = useState(true);
+  const mapRef = useRef<L.Map | null>(null);
+  const zoom = () => {
+    const map = mapRef.current;
+    if (!map || !strip) return;
+    const b = L.geoJSON(strip as unknown as GeoJSON.FeatureCollection).getBounds();
+    if (b.isValid()) map.fitBounds(b, { padding: [24, 24] });
+  };
   return (
-    <div style={{ height: 480, width: "100%", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
+    <div
+      style={{
+        position: "relative",
+        height: 480,
+        width: "100%",
+        borderRadius: 8,
+        overflow: "hidden",
+        border: "1px solid var(--border)",
+      }}
+    >
+      <StripLegend strip={strip} message={stripMessage} on={on} setOn={setOn} onZoom={zoom} />
       <MapContainer
+        ref={mapRef}
         center={center}
         zoom={"zoom" in view ? view.zoom : 10}
         style={{ height: "100%", width: "100%" }}
@@ -128,6 +250,7 @@ export function MapDraw({ geometry, lat, lon, onChange }: Props) {
             </LayersControl.BaseLayer>
           ))}
         </LayersControl>
+        <FloodStripLayer strip={strip} on={on} />
         <DrawControl geometry={geometry} lat={lat} lon={lon} onChange={onChange} />
       </MapContainer>
     </div>

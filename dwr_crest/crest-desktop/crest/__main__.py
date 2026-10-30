@@ -94,7 +94,7 @@ def _save_dialog_type(webview_mod):
 
 def _file_types(name: str) -> tuple[str, ...]:
     ext = Path(name).suffix.lower().lstrip(".")
-    labels = {"csv": "CSV", "json": "JSON", "par": "LISFLOOD parameters", "bci": "LISFLOOD boundary", "bdy": "LISFLOOD hydrograph"}
+    labels = {"csv": "CSV", "json": "JSON", "par": "LISFLOOD parameters", "bci": "LISFLOOD boundary", "bdy": "LISFLOOD hydrograph", "geojson": "GeoJSON", "kml": "KML"}
     if ext in labels:
         return (f"{labels[ext]} (*.{ext})", "All files (*.*)")
     return ("All files (*.*)",)

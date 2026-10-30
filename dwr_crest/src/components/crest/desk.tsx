@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react
 import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-react";
 import { analyze, STEPS } from "@/lib/crest/engine";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
+import { exportFloodStripGeoJson, exportFloodStripKml, floodStrip } from "@/lib/crest/floodstrip";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { activeDam, useDesk } from "@/lib/crest/store";
@@ -284,6 +285,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const onGeometry = useCallback((geometry: DamGeometry) => update({ geometry }), [update]);
+  const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -337,7 +339,15 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
         <div className="mt-3">
           {mounted ? (
             <Suspense fallback={<p className="text-sm text-muted">Loading the map…</p>}>
-              <MapDraw key={dam.id} geometry={dam.geometry} lat={dam.lat} lon={dam.lon} onChange={onGeometry} />
+              <MapDraw
+                key={dam.id}
+                geometry={dam.geometry}
+                lat={dam.lat}
+                lon={dam.lon}
+                onChange={onGeometry}
+                strip={strip.strip}
+                stripMessage={strip.reason}
+              />
             </Suspense>
           ) : (
             <p className="text-sm text-muted">Loading the map…</p>
@@ -532,6 +542,7 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       return { pkg: null, error: (e as Error).message };
     }
   }, [dam, result.breach.series]);
+  const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
   const [saved, setSaved] = useState<string | null>(null);
   const save = useCallback(async (name: string, text: string, type?: string) => {
     const r = await saveText(name, text, type);
@@ -566,7 +577,28 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
             LISFLOOD .{ext}
           </button>
         ))}
+        <button
+          type="button"
+          className={btn}
+          disabled={!strip.strip}
+          title={strip.reason ?? undefined}
+          onClick={() => strip.strip && void save(`${root}_flood_strip.geojson`, exportFloodStripGeoJson(strip.strip), "application/geo+json")}
+        >
+          Flood strip GeoJSON
+        </button>
+        <button
+          type="button"
+          className={btn}
+          disabled={!strip.strip}
+          title={strip.reason ?? undefined}
+          onClick={() => strip.strip && void save(`${root}_flood_strip.kml`, exportFloodStripKml(strip.strip), "application/vnd.google-earth.kml+xml")}
+        >
+          Flood strip KML
+        </button>
       </div>
+      <p className="mt-2 text-xs text-muted">
+        Flood strip (WGS 84): {strip.strip ? "approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands." : strip.reason}
+      </p>
       {saved ? (
         <p className="mt-2 text-xs text-muted" role="status">
           {saved}
