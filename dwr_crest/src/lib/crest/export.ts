@@ -66,6 +66,16 @@ export function exportDamJson(dam: DamRecord, analysis: Analysis): string {
           },
         }
       : {}),
+    // Only for records filled from the NID (ND dam picker), so other dam.json files are unchanged.
+    ...(dam.nidId
+      ? {
+          nid_id: dam.nidId,
+          nid_hazard: dam.nidHazard ?? null,
+          nid_hazard_note: "As reported to the NID (FEMA class). Not used by the desk screen; not the class of record.",
+          provenance: dam.provenance ?? {},
+          attribution: [dam.nidRef?.attribution, dam.nidRef?.dwrAttribution].filter(Boolean),
+        }
+      : {}),
   };
   return JSON.stringify(obj, null, 2) + "\n";
 }

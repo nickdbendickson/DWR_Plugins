@@ -22,7 +22,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const APP_ENV_REL_PATH = ".grok/app-env.json";
@@ -82,6 +82,18 @@ export function exitStatusFromChild(code, signal) {
   return code ?? 1;
 }
 
+/**
+ * `env` with `<root>/node_modules/.bin` first on PATH, so `vite` resolves to the project's copy even when this
+ * wrapper runs outside `npm run` (which is what normally puts `.bin` on PATH). Windows spells the key `Path`.
+ */
+export function withLocalBin(env, root) {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+  const bin = join(root, "node_modules", ".bin");
+  const parts = (env[key] ?? "").split(delimiter).filter(Boolean);
+  if (parts[0] === bin) return env;
+  return { ...env, [key]: [bin, ...parts].join(delimiter) };
+}
+
 /** The workspace root (this file lives in `<root>/scripts/`). */
 export function projectRoot() {
   return dirname(dirname(fileURLToPath(import.meta.url)));
@@ -110,7 +122,8 @@ function main(argv) {
     console.error("usage: node scripts/with-app-env.mjs <command> [args…]");
     process.exit(2);
   }
-  const env = mergeAppEnv(readAppEnv(projectRoot()), process.env);
+  const root = projectRoot();
+  const env = withLocalBin(mergeAppEnv(readAppEnv(root), process.env), root);
   const child = spawn(command, args, { stdio: "inherit", env });
   // The dev server is long-running and is stopped by signalling this wrapper.
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {

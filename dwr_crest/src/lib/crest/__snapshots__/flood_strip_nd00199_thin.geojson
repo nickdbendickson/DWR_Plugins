@@ -1,0 +1,210 @@
+{
+  "type": "FeatureCollection",
+  "properties": {
+    "disclaimer": "Approximate screening strip, not a mapped flood extent",
+    "dam_id": "ND00199",
+    "dam_name": "Swan Buffalo Detention 12",
+    "crest_navd88_ft": 1071.09,
+    "peak_cfs": 28623,
+    "engine_version": "crest-desk-engine 2026.10.30",
+    "max_depth_ft": 14.529,
+    "reach_km": 11.068,
+    "wet_reach_km": 11.068,
+    "direction": "Downstream direction: the dam line's normal, on the side away from the reservoir point (bearing 131°).",
+    "clipped_to_aoi": false,
+    "strip_area_ac": 2323.446,
+    "engine_wet_area_ac": 2358.287,
+    "breach_lon": -97.39064,
+    "breach_lat": 46.98364
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "disclaimer": "Approximate screening strip, not a mapped flood extent",
+        "dam_id": "ND00199",
+        "dam_name": "Swan Buffalo Detention 12",
+        "crest_navd88_ft": 1071.09,
+        "peak_cfs": 28623,
+        "engine_version": "crest-desk-engine 2026.10.30",
+        "band": "d4",
+        "band_label": "5–10 ft",
+        "depth_max_ft": 14.529,
+        "depth_min_ft": 4.185,
+        "from_km": 0,
+        "to_km": 2.767,
+        "segments": 1,
+        "area_ac": 213.047,
+        "color": "#135c9c"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -97.3908803,
+              46.9834479
+            ],
+            [
+              -97.3654367,
+              46.9653885
+            ],
+            [
+              -97.3605699,
+              46.9692794
+            ],
+            [
+              -97.3903997,
+              46.9838321
+            ],
+            [
+              -97.3908803,
+              46.9834479
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "disclaimer": "Approximate screening strip, not a mapped flood extent",
+        "dam_id": "ND00199",
+        "dam_name": "Swan Buffalo Detention 12",
+        "crest_navd88_ft": 1071.09,
+        "peak_cfs": 28623,
+        "engine_version": "crest-desk-engine 2026.10.30",
+        "band": "d3",
+        "band_label": "2–5 ft",
+        "depth_max_ft": 4.185,
+        "depth_min_ft": 1.205,
+        "from_km": 2.767,
+        "to_km": 5.534,
+        "segments": 1,
+        "area_ac": 500.907,
+        "color": "#2a7fbf"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -97.3654367,
+              46.9653885
+            ],
+            [
+              -97.3392194,
+              46.9479477
+            ],
+            [
+              -97.3315138,
+              46.9541082
+            ],
+            [
+              -97.3605699,
+              46.9692794
+            ],
+            [
+              -97.3654367,
+              46.9653885
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "disclaimer": "Approximate screening strip, not a mapped flood extent",
+        "dam_id": "ND00199",
+        "dam_name": "Swan Buffalo Detention 12",
+        "crest_navd88_ft": 1071.09,
+        "peak_cfs": 28623,
+        "engine_version": "crest-desk-engine 2026.10.30",
+        "band": "d1",
+        "band_label": "0.5–1 ft",
+        "depth_max_ft": 1.205,
+        "depth_min_ft": 0.347,
+        "from_km": 5.534,
+        "to_km": 8.301,
+        "segments": 1,
+        "area_ac": 711.597,
+        "color": "#93c9e6"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -97.3392194,
+              46.9479477
+            ],
+            [
+              -97.3128074,
+              46.9306625
+            ],
+            [
+              -97.3026524,
+              46.9387813
+            ],
+            [
+              -97.3315138,
+              46.9541082
+            ],
+            [
+              -97.3392194,
+              46.9479477
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "disclaimer": "Approximate screening strip, not a mapped flood extent",
+        "dam_id": "ND00199",
+        "dam_name": "Swan Buffalo Detention 12",
+        "crest_navd88_ft": 1071.09,
+        "peak_cfs": 28623,
+        "engine_version": "crest-desk-engine 2026.10.30",
+        "band": "d0",
+        "band_label": "0.1–0.5 ft",
+        "depth_max_ft": 0.347,
+        "depth_min_ft": 0.1,
+        "from_km": 8.301,
+        "to_km": 11.068,
+        "segments": 1,
+        "area_ac": 897.894,
+        "color": "#c6e3f2"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -97.3128074,
+              46.9306625
+            ],
+            [
+              -97.2862839,
+              46.9134665
+            ],
+            [
+              -97.2739024,
+              46.9233653
+            ],
+            [
+              -97.3026524,
+              46.9387813
+            ],
+            [
+              -97.3128074,
+              46.9306625
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

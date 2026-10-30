@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
+import { tempDir } from "./test-tmp.mjs";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { tempDir } from "./test-tmp.mjs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import {

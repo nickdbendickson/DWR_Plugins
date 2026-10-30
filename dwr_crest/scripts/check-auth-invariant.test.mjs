@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
+import { tempDir } from "./test-tmp.mjs";
 import { execFile } from "node:child_process";
 import { symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { tempDir } from "./test-tmp.mjs";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import {

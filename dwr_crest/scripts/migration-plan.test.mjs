@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { tempDir } from "./test-tmp.mjs";
 import {
   existsSync,
   mkdirSync,
@@ -7,7 +8,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { tempDir } from "./test-tmp.mjs";
 import { test } from "node:test";
 import { isMigrationFile, migrationName, pendingMigrations } from "./migration-plan.mjs";
 import { projectRoot } from "./with-app-env.mjs";

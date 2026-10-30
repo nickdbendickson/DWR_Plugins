@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
+import { tempDir } from "./test-tmp.mjs";
 import { execFile } from "node:child_process";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tempDir } from "./test-tmp.mjs";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import {
   APP_ENV_REL_PATH,
   mergeAppEnv,
+  withLocalBin,
   parseAppEnv,
   projectRoot,
   readAppEnv,
@@ -125,4 +126,19 @@ test("the CLI still runs when invoked through a symlinked path", async () => {
     PRINT_FLAG,
   ]);
   assert.equal(stdout, "false");
+});
+
+test("puts the project's node_modules/.bin first on PATH (vite resolves without npm run)", () => {
+  const root = "/repo";
+  const env = withLocalBin({ PATH: "/usr/bin" }, root);
+  assert.equal(env.PATH.split(":")[0], join(root, "node_modules", ".bin"));
+  assert.equal(withLocalBin(env, root).PATH, env.PATH);
+  assert.equal(withLocalBin({ Path: "C" }, root).Path.split(/[:;]/)[0], join(root, "node_modules", ".bin"));
+});
+
+test("the CLI finds vite with a PATH that lacks node_modules/.bin", async () => {
+  const { stdout } = await execFileAsync(process.execPath, [WRAPPER, "vite", "--version"], {
+    env: { PATH: "/usr/bin:/bin" },
+  });
+  assert.match(stdout, /vite\/\d/);
 });

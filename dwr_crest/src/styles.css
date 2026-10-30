@@ -1,3 +1,43 @@
+@import "tailwindcss";
+/* The desk (src/components/crest) is written with Tailwind utilities. Scan all of src/, also for the desktop build,
+   whose Vite root is src/desktop. */
+@source "./";
+
+/* Utility colours (bg-card, text-muted, border-line, var(--color-sand) in charts.tsx, …) map onto the design
+   system variables below, so the redesign palette and field mode apply to them too. */
+@theme inline {
+  --font-sans: 'Segoe UI', system-ui, -apple-system, Arial, sans-serif;
+  --color-paper: var(--bg);
+  --color-card: var(--panel);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--border);
+  --color-water: var(--teal);
+  --color-water-deep: var(--teal-dark);
+  --color-sand: var(--sand);
+  --color-amber: var(--amber);
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    margin: 0;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
 /* Crest redesigned design system — based on mockup stylesheet */
 :root {
   --bg: #F5F5F0;
@@ -14,6 +54,7 @@
   --amber-bg: #FEF3C7;
   --green: #15803D;
   --green-bg: #DCFCE7;
+  --sand: #ECE9E1;
   --radius: 10px;
   --shadow: 0 1px 3px rgba(31, 41, 51, 0.08), 0 4px 12px rgba(31, 41, 51, 0.06);
 }
@@ -30,6 +71,7 @@ body.field-mode {
   --red-bg: #2D1B1B;
   --amber-bg: #2D2311;
   --green-bg: #1B2D1B;
+  --sand: #2A3340;
 }
 
 .crest-app {
