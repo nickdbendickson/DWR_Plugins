@@ -2,7 +2,17 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react
 import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-react";
 import { analyze, STEPS } from "@/lib/crest/engine";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
-import { exportFloodStripGeoJson, exportFloodStripKml, floodStrip } from "@/lib/crest/floodstrip";
+import { floodStrip, type FloodStrip } from "@/lib/crest/floodstrip";
+import {
+  exportFloodStripGeoJsonWithPlss,
+  exportFloodStripKmlWithPlss,
+  exportPlssCsv,
+  fetchPlss,
+  PLSS_ATTRIBUTION,
+  plssState,
+  SLIVER_AC,
+  type PlssState,
+} from "@/lib/crest/plss";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { activeDam, useDesk } from "@/lib/crest/store";
@@ -151,8 +161,42 @@ export function Desk() {
           </button>
         </main>
       </div>
+      <footer className="border-t border-line bg-card">
+        <div className="mx-auto max-w-6xl px-4 py-3 text-xs text-muted">
+          <details>
+            <summary className="cursor-pointer">About Crest and its data sources</summary>
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              <li>Crest is a desk screen for dam breach studies. It does not run LISFLOOD, ANUGA, or HEC-RAS and does not assign an official hazard class.</li>
+              <li>Basemaps: USGS The National Map, or OpenStreetMap contributors (as credited on the map).</li>
+              <li data-testid="plss-attribution">{PLSS_ATTRIBUTION}</li>
+            </ul>
+          </details>
+          <p className="mt-1">Data: {PLSS_ATTRIBUTION.split(" Public data")[0]}.</p>
+        </div>
+      </footer>
     </div>
   );
+}
+
+/** navigator.onLine, kept current (true where there is no navigator, e.g. the first server render). */
+function useOnline() {
+  const [online, setOnline] = useState(true);
+  useEffect(() => {
+    const set = () => setOnline(typeof navigator === "undefined" ? true : navigator.onLine);
+    set();
+    window.addEventListener("online", set);
+    window.addEventListener("offline", set);
+    return () => {
+      window.removeEventListener("online", set);
+      window.removeEventListener("offline", set);
+    };
+  }, []);
+  return online;
+}
+
+function usePlss(dam: DamRecord, strip: FloodStrip | null): PlssState {
+  const online = useOnline();
+  return useMemo(() => plssState(dam, strip, online), [dam, strip, online]);
 }
 
 function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
@@ -286,6 +330,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   useEffect(() => setMounted(true), []);
   const onGeometry = useCallback((geometry: DamGeometry) => update({ geometry }), [update]);
   const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
+  const plss = usePlss(dam, strip.strip);
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -347,6 +392,8 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
                 onChange={onGeometry}
                 strip={strip.strip}
                 stripMessage={strip.reason}
+                plss={plss.state === "ready" ? plss.table.rows : null}
+                plssMessage={plss.state === "ready" ? null : plss.message}
               />
             </Suspense>
           ) : (
@@ -354,6 +401,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
           )}
         </div>
       </div>
+      <PlssPanel strip={strip.strip} plss={plss} />
       <div className="overflow-hidden rounded-md border border-line">
         <ValleyMap flood={result.flood} />
       </div>
@@ -364,6 +412,83 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
       </div>
       <AoiNote flood={result.flood} />
     </section>
+  );
+}
+
+function PlssPanel({ strip, plss }: { strip: FloodStrip | null; plss: PlssState }) {
+  const update = useDesk((s) => s.update);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (plss.state === "none") return null;
+  const lookUp = async () => {
+    if (!strip) return;
+    setBusy(true);
+    setError(null);
+    try {
+      update({ plss: await fetchPlss(strip) });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const t = plss.state === "ready" ? plss.table : null;
+  return (
+    <div className="rounded-md border border-line bg-card p-4" data-testid="plss-panel">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-lg">PLSS sections the strip touches</h3>
+        {plss.state !== "offline" ? (
+          <button
+            type="button"
+            onClick={() => void lookUp()}
+            disabled={busy}
+            className="inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50"
+          >
+            {busy ? "Looking up…" : t ? "Look up again" : "Look up PLSS sections"}
+          </button>
+        ) : null}
+      </div>
+      {plss.message ? <p className="mt-1 text-sm text-muted" role="status">{plss.message}</p> : null}
+      {error ? <p className="mt-1 text-sm text-amber" role="alert">{error}</p> : null}
+      {t ? (
+        <>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-sm" data-testid="plss-table">
+              <thead className="text-left text-xs tracking-wide text-muted uppercase">
+                <tr>
+                  <th className="px-2 py-1">#</th>
+                  <th className="px-2 py-1">Section</th>
+                  <th className="px-2 py-1">Wet ac</th>
+                  <th className="px-2 py-1">Deepest band</th>
+                  <th className="px-2 py-1">km downstream</th>
+                </tr>
+              </thead>
+              <tbody>
+                {t.rows.map((r) => (
+                  <tr key={r.id} className="border-t border-line">
+                    <td className="px-2 py-1 tabular-nums">{r.order}</td>
+                    <td className="px-2 py-1">{r.label}</td>
+                    <td className="px-2 py-1 tabular-nums">{num(r.wetAc, 1)}</td>
+                    <td className="px-2 py-1">{r.bandLabel}</td>
+                    <td className="px-2 py-1 tabular-nums">
+                      {num(r.fromKm, 2)}–{num(r.toKm, 2)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            {t.rows.length} sections, {num(t.listedAc, 1)} of the strip&apos;s {num(t.stripAc, 1)} ac. Slivers under {SLIVER_AC} ac
+            not listed: {t.sliversIgnored}
+            {t.uncoveredAc >= SLIVER_AC ? `; ${num(t.uncoveredAc, 1)} ac of the strip lies outside every fetched section` : ""}.
+            Approximate: the strip is the schematic desk valley, not a mapped flood extent. Looked up{" "}
+            {new Date(t.fetchedAt).toLocaleString()} and saved with this dam.
+          </p>
+          <p className="mt-1 text-xs text-muted">{PLSS_ATTRIBUTION}</p>
+        </>
+      ) : null}
+    </div>
   );
 }
 
@@ -543,6 +668,8 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
     }
   }, [dam, result.breach.series]);
   const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
+  const plss = usePlss(dam, strip.strip);
+  const plssTable = plss.state === "ready" ? plss.table : null;
   const [saved, setSaved] = useState<string | null>(null);
   const save = useCallback(async (name: string, text: string, type?: string) => {
     const r = await saveText(name, text, type);
@@ -582,7 +709,7 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
           className={btn}
           disabled={!strip.strip}
           title={strip.reason ?? undefined}
-          onClick={() => strip.strip && void save(`${root}_flood_strip.geojson`, exportFloodStripGeoJson(strip.strip), "application/geo+json")}
+          onClick={() => strip.strip && void save(`${root}_flood_strip.geojson`, exportFloodStripGeoJsonWithPlss(strip.strip, plssTable), "application/geo+json")}
         >
           Flood strip GeoJSON
         </button>
@@ -591,13 +718,25 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
           className={btn}
           disabled={!strip.strip}
           title={strip.reason ?? undefined}
-          onClick={() => strip.strip && void save(`${root}_flood_strip.kml`, exportFloodStripKml(strip.strip), "application/vnd.google-earth.kml+xml")}
+          onClick={() => strip.strip && void save(`${root}_flood_strip.kml`, exportFloodStripKmlWithPlss(strip.strip, plssTable), "application/vnd.google-earth.kml+xml")}
         >
           Flood strip KML
+        </button>
+        <button
+          type="button"
+          className={btn}
+          disabled={!plssTable}
+          title={plssTable ? undefined : (plss.message ?? undefined)}
+          onClick={() => plssTable && void save(`${root}_plss_sections.csv`, exportPlssCsv(plssTable), "text/csv")}
+        >
+          PLSS sections CSV
         </button>
       </div>
       <p className="mt-2 text-xs text-muted">
         Flood strip (WGS 84): {strip.strip ? "approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands." : strip.reason}
+      </p>
+      <p className="mt-1 text-xs text-muted">
+        PLSS sections: {plssTable ? `${plssTable.rows.length} touched, listed in the strip GeoJSON/KML and the CSV. ${PLSS_ATTRIBUTION}` : plss.message}
       </p>
       {saved ? (
         <p className="mt-2 text-xs text-muted" role="status">
