@@ -2632,10 +2632,28 @@ def _toe_kwargs(dam, st):
     return {"toe_line": getattr(dam, "crest_line_xy", None) or getattr(st, "midcrest_line", None),
             "toe_band_m": getattr(st, "inflow_toe_band_m", None),
             "toe_cell_m": getattr(st, "inflow_toe_cell_m", None),
-            # v3.13.0: the outer limit H x (slope + 1) from the setting, else the dam's own slope
-            "toe_ds_slope_h": getattr(st, "inflow_toe_ds_slope_h", None)
-            or getattr(dam, "ds_slope_h", None),
-            "toe_min_outer_m": getattr(st, "inflow_toe_min_outer_m", None)}
+            "toe_min_outer_m": getattr(st, "inflow_toe_min_outer_m", None),
+            **_toe_slope(dam, st)}
+
+
+def _toe_slope(dam, st):
+    """v3.13.0: the downstream slope of the toe band's outer limit H x (slope + 1) and where it
+    is from: the setting (inflow_toe_ds_slope_h), the dam's DS_SLOPE / F_DS, the DWR record's
+    downstream_slope (dam.dwr_ds_slope_h, core/dwr_slope.apply_to_dam; Nick: "downstream slope
+    data is in dwr data"), else None (3:1 and a warning)."""
+    for v, src in ((getattr(st, "inflow_toe_ds_slope_h", None), "the run setting"),
+                   (getattr(dam, "ds_slope_h", None), "DS_SLOPE / F_DS"),
+                   (getattr(dam, "dwr_ds_slope_h", None),
+                    getattr(dam, "dwr_ds_slope_note", None) or "the DWR record")):
+        try:
+            z = float(v)
+        except (TypeError, ValueError):
+            continue
+        if z > 0 and math.isfinite(z):
+            return {"toe_ds_slope_h": z, "toe_ds_slope_src": src}
+    why = getattr(dam, "dwr_ds_slope_note", None)
+    return {"toe_ds_slope_h": None, "toe_ds_slope_src": "no DS_SLOPE / F_DS; {}".format(
+        why or "no DWR record downstream_slope")}
 
 
 def _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy, band_m=None,
@@ -2659,7 +2677,8 @@ def _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy, band
 
 def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, warnings, log,
                        out=None, max_from_dam_m=None, toe_line=None, toe_band_m=None,
-                       toe_cell_m=None, toe_ds_slope_h=None, toe_min_outer_m=None):
+                       toe_cell_m=None, toe_ds_slope_h=None, toe_min_outer_m=None,
+                       toe_ds_slope_src=None):
     """find_inflow_point limited to the downstream side of the crest and outside the pool
     (core/terrain.downstream_direction, pool_mask). The pool needs terrain well past the
     reservoir, so it is read on its own (POOL_HALF_M around the dam, at the search cell).
@@ -2705,9 +2724,19 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
             toe_band_m, band_how, known = terrain.toe_band_for_dam(
                 h_m, toe_ds_slope_h, min_outer_m=toe_min_outer_m,
                 cap_m=max_from_dam_m)
+            if toe_ds_slope_src:
+                band_how += "; slope: {}".format(toe_ds_slope_src)
             if not known:
                 msg = ("Breach inflow: toe band {:.0f}-{:.0f} m ({}); check the inflow "
                        "point.".format(toe_band_m[0], toe_band_m[1], band_how))
+                warnings.append(msg)
+                log(msg)
+            elif toe_ds_slope_h is None:      # v3.13.0 (Nick): 3:1 when no slope is known
+                msg = ("Breach inflow: the dam's downstream slope is not known ({}); the toe "
+                       "band uses {:g}:1, {:.0f}-{:.0f} m. Give DS_SLOPE / F_DS to check it."
+                       .format(toe_ds_slope_src or "no DS_SLOPE / F_DS",
+                               terrain.INFLOW_TOE_DS_SLOPE_DEFAULT, toe_band_m[0],
+                               toe_band_m[1]))
                 warnings.append(msg)
                 log(msg)
             log("Breach inflow toe band: {:.0f}-{:.0f} m downstream of the dam line ({})".format(

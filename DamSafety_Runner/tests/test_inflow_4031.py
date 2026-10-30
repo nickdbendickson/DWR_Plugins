@@ -148,11 +148,15 @@ def inflow_4031_workflow_helper_finds_the_toe():
 
     class Dam(object):
         crest_line_xy = LINE
+        dwr_ds_slope_h = 2.0              # DWR-4031's record: downstream_slope "2"
+        dwr_ds_slope_note = "DWR record downstream_slope '2' = 2:1"
     rad = max(90.0, 8.0 * H_M)
     local = Src().read((-430, -430, 430, 430), 20.0)
     warnings, logs, info = [], [], {}
     pt, why = workflow._downstream_inflow(Src(), local, Dam(), (0.0, 0.0), H_M, TOP_M, rad, 20.0,
-                                          warnings, logs.append, out=info)
+                                          warnings, logs.append, out=info,
+                                          **workflow._toe_kwargs(Dam(), object()))
+    assert "2:1" in info["toe_band_how"] and "DWR record" in info["toe_band_how"], info
     assert pt is not None and 10 < pt[0] < 90 and abs(pt[1]) < 80, (pt, why)
     assert info["direction"][0] > 0.9 and not warnings, (info, warnings)
 

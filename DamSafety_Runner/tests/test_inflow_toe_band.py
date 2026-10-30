@@ -152,6 +152,7 @@ def _workflow_pick(line, crest_line=None, band=None):
 
     class Dam(object):
         crest_line_xy = crest_line
+        ds_slope_h = 3.0                  # given (DS_SLOPE): no "slope not known" warning
 
     class St(object):
         midcrest_line = line if crest_line is None else None
