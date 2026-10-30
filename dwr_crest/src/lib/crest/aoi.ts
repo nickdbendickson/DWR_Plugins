@@ -31,7 +31,7 @@ export const TINY_AOI_M = 100;
 export const BOUNDARY_TOL_M = 1;
 
 export type XY = [number, number];
-type Part = { outer: XY[]; holes: XY[][] };
+export type Part = { outer: XY[]; holes: XY[][] };
 type LonLat = { lon: number; lat: number };
 
 export type DirectionBasis = "dam line" | "reservoir to breach" | "none";
@@ -79,6 +79,22 @@ export type AoiShape =
 function project(pts: number[][], o: LonLat): XY[] {
   const kx = M_PER_DEG_LON_EQ * Math.cos((o.lat * Math.PI) / 180);
   return pts.map(([lon, lat]) => [(lon - o.lon) * kx, (lat - o.lat) * M_PER_DEG_LAT]);
+}
+
+/** The local metres used here (and by the engine's AOI clip): east/north from `o`, equirectangular at o's latitude. */
+export function toLocal(lon: number, lat: number, o: LonLat): XY {
+  return project([[lon, lat]], o)[0];
+}
+
+/** Inverse of toLocal: local metres around `o` back to [lon, lat] (WGS 84 / NAD 83 degrees). */
+export function fromLocal(p: XY, o: LonLat): [number, number] {
+  const kx = M_PER_DEG_LON_EQ * Math.cos((o.lat * Math.PI) / 180);
+  return [o.lon + p[0] / kx, o.lat + p[1] / M_PER_DEG_LAT];
+}
+
+/** Signed area of a ring in its own units (counter-clockwise positive). */
+export function ringArea(r: XY[]) {
+  return signedArea(r);
 }
 
 function cleanRing(ring: unknown): number[][] {

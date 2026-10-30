@@ -15,6 +15,12 @@ import type {
 
 const TIE_BAND = 100;
 
+/**
+ * Desk engine version, carried in exports that describe engine output (the flood strip). Bump it when the schematic
+ * valley, breach routing or datum rules change what the desk computes.
+ */
+export const ENGINE_VERSION = "crest-desk-engine 2026.10.30";
+
 export const STEPS = [
   { id: "record", label: "Record" },
   { id: "breach", label: "Breach" },
