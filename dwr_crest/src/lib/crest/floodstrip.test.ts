@@ -134,7 +134,7 @@ describe("flood strip on the ND00199 sample (no drawn area)", () => {
     for (const f of strip.features) {
       assert.equal(f.properties.disclaimer, FLOOD_STRIP_DISCLAIMER);
       assert.equal(f.properties.dam_id, "ND00199");
-      assert.equal(f.properties.crest_navd88_ft, 1072.24);
+      assert.equal(f.properties.crest_navd88_ft, ND.crestFt);
       assert.equal(f.properties.peak_cfs, Math.round(result.breach.peakCfs));
       assert.equal(f.properties.engine_version, ENGINE_VERSION);
       assert.ok(f.properties.depth_max_ft >= f.properties.depth_min_ft);
@@ -338,7 +338,7 @@ describe("flood strip exports (snapshot)", () => {
     for (const s of [
       FLOOD_STRIP_DISCLAIMER,
       "ND00199",
-      "1072.24 ft NAVD88",
+      `${ND.crestFt.toFixed(2)} ft NAVD88`,
       `${Math.round(r.breach.peakCfs).toLocaleString("en-US")} cfs`,
       ENGINE_VERSION,
     ])

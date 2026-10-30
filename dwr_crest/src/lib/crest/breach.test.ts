@@ -5,7 +5,7 @@ import { analyze, MAX_REACH_KM } from "./engine.ts";
 import { dwr2801 } from "./fixtures.ts";
 import { SAMPLE_DAMS } from "./samples.ts";
 
-// DamSafety_Runner core/breach.py piping_hydrograph on DWR-2801 (top 1072.24 NAVD88, H 27.5 ft,
+// DamSafety_Runner core/breach.py piping_hydrograph on DWR-2801 (top 1071.09 NAVD88, H 27.5 ft,
 // SA 154.5 ac): 1615.5 ac-ft -> 28,671 cfs; 1612.59 ac-ft -> 28,623 cfs; no SA (m = 2) -> 26,205 cfs.
 describe("routed breach hydrograph (DWR-2801 regression)", () => {
   it("CHECK: DWR-2801 piping peak near 28,671 cfs (Runner), not the old 20,540", () => {
@@ -23,7 +23,7 @@ describe("routed breach hydrograph (DWR-2801 regression)", () => {
     assert.ok(Math.abs(b.empiricalPeakCfs - 21599) / 21599 < 0.002, `F95 ${b.empiricalPeakCfs}`);
   });
 
-  it("the ND00199 sample is the same DWR-2801 dam as the fixture (1072.24 / 1044.74 NAVD88, H 27.50)", () => {
+  it("the ND00199 sample is the same DWR-2801 dam as the fixture (1071.09 / 1043.59 NAVD88, H 27.50)", () => {
     const s = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
     const f = dwr2801();
     for (const k of ["crestFt", "streambedFt", "heightFt", "storageAcFt", "statedDatum", "failureMode"] as const) {
@@ -142,7 +142,7 @@ describe("desk valley reach", () => {
 
   describe("MacDonald & Langridge-Monopolis units (RETEST engine.ts:120)", () => {
     it("CHECK: DWR-2801 matches the Runner mlm_1984 routed peak (was 241,281 cfs)", () => {
-      // Runner rpkg/breach.py routed_hydrograph(METHOD_MLM), ND00199 1072.24 / H 27.5 / 1,612.59 ac-ft:
+      // Runner rpkg/breach.py routed_hydrograph(METHOD_MLM), ND00199 1071.09 / H 27.5 / 1,612.59 ac-ft:
       // SA 154.5 ac -> 41,584.7 cfs, no SA -> 38,904.4 cfs; width 126.9 ft, tf 0.499 h.
       const withSa = analyze(dwr2801({ method: "macdonald", surfaceAreaAc: 154.5 })).breach;
       assert.ok(Math.abs(withSa.peakCfs - 41584.7) < 1, `peak ${withSa.peakCfs}`);

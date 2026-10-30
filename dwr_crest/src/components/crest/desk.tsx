@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-react";
 import { analyze, STEPS } from "@/lib/crest/engine";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
@@ -15,6 +15,7 @@ import {
 } from "@/lib/crest/plss";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
+import { missingForNext } from "@/lib/crest/nd-dams";
 import { activeDam, useDesk } from "@/lib/crest/store";
 import type {
   BreachMethod,
@@ -27,6 +28,7 @@ import type {
   StepId,
 } from "@/lib/crest/types";
 import { HydroChart, ValleyMap } from "./charts";
+import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel } from "./NdDamPicker";
 
 // Leaflet touches `window` when it loads, so the map is a client-only chunk.
 const MapDraw = lazy(() => import("./MapDraw").then((m) => ({ default: m.MapDraw })));
@@ -47,6 +49,7 @@ export function Desk() {
   const update = useDesk((s) => s.update);
   const add = useDesk((s) => s.add);
   const restore = useDesk((s) => s.restore);
+  const addDam = useDesk((s) => s.addDam);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -54,7 +57,7 @@ export function Desk() {
     setReady(true);
   }, []);
 
-  const dam = activeDam({ dams, activeId, step, setStep, select, update, add, restore });
+  const dam = activeDam({ dams, activeId, step, setStep, select, update, add, addDam, restore });
   const result = useMemo(() => analyze(dam), [dam]);
 
   return (
@@ -149,7 +152,7 @@ export function Desk() {
           {step === "screen" ? <ScreenStep dam={dam} result={result} /> : null}
           {step === "report" ? <ReportStep dam={dam} result={result} /> : null}
 
-          <StepNav step={step} setStep={setStep} />
+          <StepNav step={step} setStep={setStep} blocked={step === "record" ? missingForNext(dam) : []} />
 
           <button
             type="button"
@@ -159,6 +162,7 @@ export function Desk() {
             <RotateCcw className="size-4" aria-hidden="true" />
             Restore samples
           </button>
+          <AboutData />
         </main>
       </div>
       <footer className="border-t border-line bg-card">
@@ -205,36 +209,55 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
     <section className="grid gap-4 lg:grid-cols-[1fr_280px]">
       <div className="rounded-md border border-line bg-card p-4">
         <h2 className="text-xl">Dam record</h2>
-        <p className="mt-1 text-sm text-muted">{result.datum.rule}</p>
+        <div className="mt-3">
+          <NdDamPicker dam={dam} />
+        </div>
+        <NidHazardLine dam={dam} />
+        <p className="mt-2 text-sm text-muted">{result.datum.rule}</p>
+        {dam.nidId ? (
+          <div className="mt-3">
+            <NidRecordPanel dam={dam} />
+          </div>
+        ) : null}
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <TextField label="Name" value={dam.name} onChange={(name) => update({ name })} />
-          <TextField label="NID" value={dam.nid} onChange={(nid) => update({ nid })} />
-          <TextField label="County" value={dam.county} onChange={(county) => update({ county })} />
-          <NumField label="Year" value={dam.year} onChange={(year) => update({ year })} />
-          <NumField label="Height" suffix="ft" value={dam.heightFt} onChange={(heightFt) => update({ heightFt })} />
-          <NumField label="Length" suffix="ft" value={dam.lengthFt} onChange={(lengthFt) => update({ lengthFt })} />
-          <NumField label="Crest" suffix="ft" value={dam.crestFt} step={0.1} onChange={(crestFt) => update({ crestFt })} />
-          <NumField label="Streambed" suffix="ft" value={dam.streambedFt} step={0.1} onChange={(streambedFt) => update({ streambedFt })} />
+          <TextField label="Name" value={dam.name} onChange={(name) => update({ name })} tag={<FieldTag dam={dam} field="name" />} />
+          <TextField label="NID" value={dam.nid} onChange={(nid) => update({ nid })} tag={<FieldTag dam={dam} field="nid" />} />
+          <TextField label="County" value={dam.county} onChange={(county) => update({ county })} tag={<FieldTag dam={dam} field="county" />} />
+          <NumField label="Year" value={dam.year} onChange={(year) => update({ year })} tag={<FieldTag dam={dam} field="year" />} />
+          <NumField label="Height" suffix="ft" value={dam.heightFt} step={0.1} onChange={(heightFt) => update({ heightFt })} tag={<FieldTag dam={dam} field="heightFt" />} />
+          <NumField label="Length" suffix="ft" value={dam.lengthFt} onChange={(lengthFt) => update({ lengthFt })} tag={<FieldTag dam={dam} field="lengthFt" />} />
+          <NumField label="Crest" suffix="ft" value={dam.crestFt} step={0.1} onChange={(crestFt) => update({ crestFt })} tag={<FieldTag dam={dam} field="crestFt" />} />
+          <NumField label="Streambed (breach bottom)" suffix="ft" value={dam.streambedFt} step={0.1} onChange={(streambedFt) => update({ streambedFt })} tag={<FieldTag dam={dam} field="streambedFt" />} />
           <NumField label="Spillway" suffix="ft" value={dam.spillwayFt} step={0.1} onChange={(spillwayFt) => update({ spillwayFt })} />
           <NumField label="Normal pool" suffix="ft" value={dam.normalPoolFt} step={0.1} onChange={(normalPoolFt) => update({ normalPoolFt })} />
-          <NumField label="Storage" suffix="ac-ft" value={dam.storageAcFt} onChange={(storageAcFt) => update({ storageAcFt })} />
+          <NumField label="Storage" suffix="ac-ft" value={dam.storageAcFt} onChange={(storageAcFt) => update({ storageAcFt })} tag={<FieldTag dam={dam} field="storageAcFt" />} />
           <NumField
             label="Surface area at top of dam"
             suffix="ac, 0 = unknown"
             value={dam.surfaceAreaAc ?? 0}
             step={0.1}
             onChange={(surfaceAreaAc) => update({ surfaceAreaAc })}
+            tag={
+              <>
+                <FieldTag dam={dam} field="surfaceAreaAc" />
+                {dam.nidRef?.surfaceAreaNormalAc != null ? (
+                  <span className="mt-1 block text-xs text-muted">
+                    NID normal-pool area {dam.nidRef.surfaceAreaNormalAc} ac (reference only; not the area at the top of dam)
+                  </span>
+                ) : null}
+              </>
+            }
           />
-          <NumField label="Drainage" suffix="mi²" value={dam.drainageMi2} step={0.1} onChange={(drainageMi2) => update({ drainageMi2 })} />
+          <NumField label="Drainage" suffix="mi²" value={dam.drainageMi2} step={0.1} onChange={(drainageMi2) => update({ drainageMi2 })} tag={<FieldTag dam={dam} field="drainageMi2" />} />
           <NumField label="DEM crest" suffix="ft NAVD88, from the DEM" value={dam.demCrestFt} step={0.1} onChange={(demCrestFt) => update({ demCrestFt })} />
           <SelectField
             label="Stated datum"
             value={dam.statedDatum}
-            options={["Local", "NAVD88", "NGVD29"]}
+            options={[...(dam.statedDatum === "" ? [["", "— choose —"] as [string, string]] : []), "Local", "NAVD88", "NGVD29"]}
             onChange={(statedDatum) => update({ statedDatum: statedDatum as DatumName })}
           />
-          <NumField label="Latitude" suffix="°" value={dam.lat ?? NaN} step={0.00001} onChange={(lat) => update({ lat })} />
-          <NumField label="Longitude" suffix="°" value={dam.lon ?? NaN} step={0.00001} onChange={(lon) => update({ lon })} />
+          <NumField label="Latitude" suffix="°" value={dam.lat ?? NaN} step={0.00001} onChange={(lat) => update({ lat })} tag={<FieldTag dam={dam} field="lat" />} />
+          <NumField label="Longitude" suffix="°" value={dam.lon ?? NaN} step={0.00001} onChange={(lon) => update({ lon })} tag={<FieldTag dam={dam} field="lon" />} />
           {dam.statedDatum === "NGVD29" ? (
             <NumField
               label="NGVD29 → NAVD88 offset"
@@ -509,6 +532,7 @@ function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
             {result.screen.acerLevel ? ` Worst TM 11 zone: ${result.screen.acerLevel}.` : ""}
           </p>
         </div>
+        <NidHazardLine dam={dam} />
         {result.screen.classOfRecord || dam.sampleNote ? (
           <div className="mt-3 rounded-sm border border-line bg-sand p-3 text-sm">
             {result.screen.classOfRecord ? (
@@ -590,7 +614,30 @@ function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
           </ul>
         </div>
       ) : null}
+      {dam.nidId ? <SourcesNote dam={dam} /> : null}
     </section>
+  );
+}
+
+function SourcesNote({ dam }: { dam: DamRecord }) {
+  const prov = Object.entries(dam.provenance ?? {});
+  return (
+    <div className="rounded-md border border-line bg-card p-4 text-sm" data-testid="report-sources">
+      <h3 className="text-lg">Sources</h3>
+      <NidHazardLine dam={dam} />
+      <ul className="mt-2 space-y-1">
+        {prov.map(([field, p]) =>
+          p ? (
+            <li key={field}>
+              {field}: {String(p.value)} from {p.src} {p.field} ({p.asOf}
+              {p.confirmed ? ", confirmed by the user" : ""})
+            </li>
+          ) : null,
+        )}
+      </ul>
+      {dam.nidRef ? <p className="mt-2 text-xs text-muted">{dam.nidRef.attribution}</p> : null}
+      {dam.nidRef?.dwrAttribution ? <p className="mt-1 text-xs text-muted">{dam.nidRef.dwrAttribution}</p> : null}
+    </div>
   );
 }
 
@@ -625,7 +672,7 @@ function AoiNote({ flood }: { flood: ReturnType<typeof analyze>["flood"] }) {
   );
 }
 
-function StepNav({ step, setStep }: { step: StepId; setStep: (s: StepId) => void }) {
+function StepNav({ step, setStep, blocked }: { step: StepId; setStep: (s: StepId) => void; blocked: string[] }) {
   const i = STEPS.findIndex((s) => s.id === step);
   const prev = i > 0 ? STEPS[i - 1] : null;
   const next = i >= 0 && i < STEPS.length - 1 ? STEPS[i + 1] : null;
@@ -641,10 +688,18 @@ function StepNav({ step, setStep }: { step: StepId; setStep: (s: StepId) => void
         <span />
       )}
       {next ? (
-        <button type="button" onClick={() => setStep(next.id)} className={`${btn} border-water bg-water text-card`}>
-          Next: {next.label}
-          <ChevronRight className="size-4" aria-hidden="true" />
-        </button>
+        <span className="flex flex-col items-end gap-1">
+          <button
+            type="button"
+            disabled={blocked.length > 0}
+            onClick={() => setStep(next.id)}
+            className={`${btn} border-water bg-water text-card disabled:cursor-not-allowed disabled:opacity-50`}
+          >
+            Next: {next.label}
+            <ChevronRight className="size-4" aria-hidden="true" />
+          </button>
+          {blocked.length > 0 ? <span className="text-xs text-amber">Enter first: {blocked.join(", ")}</span> : null}
+        </span>
       ) : null}
     </nav>
   );
@@ -833,7 +888,17 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-function TextField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function TextField({
+  label,
+  value,
+  onChange,
+  tag,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  tag?: ReactNode;
+}) {
   return (
     <label className="block text-sm">
       <span className="text-muted">{label}</span>
@@ -842,6 +907,7 @@ function TextField({ label, value, onChange }: { label: string; value: string; o
         onChange={(e) => onChange(e.target.value)}
         className="mt-1 h-11 w-full rounded-sm border border-line bg-paper px-3 text-ink"
       />
+      {tag}
     </label>
   );
 }
@@ -852,12 +918,14 @@ function NumField({
   onChange,
   suffix,
   step = 1,
+  tag,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
   suffix?: string;
   step?: number;
+  tag?: ReactNode;
 }) {
   return (
     <label className="block text-sm">
@@ -868,10 +936,12 @@ function NumField({
       <input
         type="number"
         step={step}
-        value={Number.isFinite(value) ? value : 0}
-        onChange={(e) => onChange(Number(e.target.value))}
+        // A missing value (NaN) shows blank, never 0; clearing the box makes it missing again.
+        value={Number.isFinite(value) ? value : ""}
+        onChange={(e) => onChange(e.target.value === "" ? Number.NaN : Number(e.target.value))}
         className="mt-1 h-11 w-full rounded-sm border border-line bg-paper px-3 tabular-nums text-ink"
       />
+      {tag}
     </label>
   );
 }

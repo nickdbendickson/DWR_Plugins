@@ -176,7 +176,76 @@ const METHOD_LABEL: Record<BreachMethod, string> = {
   tr60: "TR-60 screening width",
 };
 
+/**
+ * Why the record cannot be screened yet, or null. A record filled from the NID has no elevations or datum (the NID
+ * carries none), so its crest and breach bottom are NaN and its datum unset until the user enters them.
+ */
+export function elevationsMissing(dam: DamRecord): string | null {
+  const miss: string[] = [];
+  if (!Number.isFinite(dam.crestFt)) miss.push("crest");
+  if (!Number.isFinite(dam.streambedFt)) miss.push("breach bottom");
+  if (!dam.statedDatum) miss.push("datum");
+  return miss.length ? miss.join(", ") : null;
+}
+
+/** Engine guard: no flood and a Review screen until the crest, breach bottom and datum are entered. */
+function reviewMissingElevations(dam: DamRecord, missing: string): Analysis {
+  const msg = `Elevations missing (${missing}). Enter the top-of-dam (crest) and breach-bottom elevations and their datum; nothing is computed until then.`;
+  return {
+    datum: {
+      rule: "Elevations missing: no crest, breach bottom or datum yet.",
+      offsetFt: null,
+      crestNavdFt: Number.NaN,
+      streambedNavdFt: null,
+      spillwayNavdFt: null,
+      poolNavdFt: null,
+      warnings: [msg],
+    },
+    breach: {
+      label: METHOD_LABEL[dam.method],
+      widthFt: Number.NaN,
+      timeHr: Number.NaN,
+      capped: false,
+      headFt: Number.NaN,
+      bottomWidthFt: Number.NaN,
+      sideSlope: Number.NaN,
+      empiricalPeakCfs: Number.NaN,
+      peakCfs: Number.NaN,
+      timeToPeakHr: Number.NaN,
+      durationHr: Number.NaN,
+      storageExponent: Number.NaN,
+      volumeAcFt: Number.NaN,
+      series: [],
+      notes: [msg],
+    },
+    flood: {
+      engineLabel: "not run (elevations missing)",
+      maxDepthFt: 0,
+      maxVelocityFps: 0,
+      acres: 0,
+      lengthM: 0,
+      reachSource: "wet",
+      aoi: null,
+      warnings: [],
+      velocityBasis: "not run",
+      stations: [],
+      receptors: [],
+    },
+    screen: {
+      level: "Review",
+      label: "Review (elevations missing)",
+      judgmentAsProbable: dam.judgmentAsProbable ?? true,
+      classOfRecord: dam.classOfRecord ?? null,
+      acerLevel: null,
+      reasons: [msg],
+      judgment: [],
+    },
+  };
+}
+
 export function analyze(dam: DamRecord): Analysis {
+  const missing = elevationsMissing(dam);
+  if (missing) return reviewMissingElevations(dam, missing);
   const warnings: string[] = [];
   const heightFt = bounded(warnings, "Height", dam.heightFt, 10, 4, 200, "ft");
   const storage = bounded(warnings, "Storage", dam.storageAcFt, 10, 1, 500000, "ac-ft");
@@ -363,8 +432,9 @@ export function analyze(dam: DamRecord): Analysis {
     const shape = loc ? readAoi(dam.geometry?.aoi, loc) : null;
     if (!loc) notApplied("Drawn area not applied: no breach location. Draw the breach point or enter the dam latitude and longitude.");
     else if (shape && !shape.ok) notApplied(shape.reason);
-    else if (shape && shape.ok) {
-      const dir = downstreamDirection(dam.geometry, loc);
+    // The downstream direction is computed once, here, and reused below.
+    const dir = loc && shape?.ok ? downstreamDirection(dam.geometry, loc) : null;
+    if (shape && shape.ok && dir) {
       aoi = aoiExtent(shape, dir);
       floodWarnings.push(...aoi.warnings);
     }
@@ -372,8 +442,7 @@ export function analyze(dam: DamRecord): Analysis {
       // No direction and the breach outside the AOI: it cannot be placed, so it is not applied.
       notApplied(aoi.unplacedReason);
       aoi = null;
-    } else if (aoi && loc) {
-      const dir = downstreamDirection(dam.geometry, loc);
+    } else if (aoi && dir) {
       const limitsReach = aoi.coversDownstream && aoi.farM < naturalLengthM;
       if (limitsReach) {
         lengthM = Math.max(aoi.farM, 50);
@@ -558,6 +627,14 @@ export function analyze(dam: DamRecord): Analysis {
   const screen = screenReceptors(receptors, dam.receptors, {
     judgmentAsProbable: dam.judgmentAsProbable ?? true,
   });
+  const aoiNotApplied = aoiOut as Analysis["flood"]["aoi"];
+  if (aoiNotApplied && !aoiNotApplied.applied) {
+    // Shown in the Screen step's reasons and carried into the Report's JSON export notes.
+    const full = "This screen is for the full flood and every receptor, with no drawn-area limit.";
+    screen.reasons.unshift(
+      aoiNotApplied.label.includes("screened in full") ? aoiNotApplied.label : `${aoiNotApplied.label} ${full}`,
+    );
+  }
   if (dam.classOfRecord) {
     screen.classOfRecord = dam.classOfRecord;
     screen.reasons.unshift(`Class of record: ${dam.classOfRecord}. This desk screen (${screen.label}) is not the class of record.`);
