@@ -1,12 +1,15 @@
 """Open the Crest desk in a desktop window.
 
 Serves the bundled web desk (crest/web/, built by `npm run build:desktop`) on 127.0.0.1 and shows it in a pywebview
-window. Exports go through a native Save dialog (`window.pywebview.api.save_file`), because blob downloads do nothing
+window. Exports go through a native Save dialog (`window.pywebview.api.save_file`, and `save_file_b64` for the view
+PDF / PNG), because blob downloads do nothing
 inside a webview. If pywebview cannot start, the desk opens in the system browser, where downloads work as usual.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import errno
 import json
 import os
@@ -182,7 +185,7 @@ def _save_dialog_type(webview_mod):
 
 def _file_types(name: str) -> tuple[str, ...]:
     ext = Path(name).suffix.lower().lstrip(".")
-    labels = {"csv": "CSV", "json": "JSON", "par": "LISFLOOD parameters", "bci": "LISFLOOD boundary", "bdy": "LISFLOOD hydrograph", "geojson": "GeoJSON", "kml": "KML"}
+    labels = {"csv": "CSV", "json": "JSON", "par": "LISFLOOD parameters", "bci": "LISFLOOD boundary", "bdy": "LISFLOOD hydrograph", "geojson": "GeoJSON", "kml": "KML", "pdf": "PDF", "png": "PNG image"}
     if ext in labels:
         return (f"{labels[ext]} (*.{ext})", "All files (*.*)")
     return ("All files (*.*)",)
@@ -243,6 +246,71 @@ class Api:
             return {"error": str(e)}
         self._remember_dir(Path(path).resolve().parent)
         return {"saved": str(path)}
+
+    def save_file_b64(self, name: str, b64: str) -> dict:
+        """Binary exports (the view PDF / PNG): `b64` is the file as base64. Same Save dialog as save_file."""
+        import webview
+
+        try:
+            data = decode_b64(b64)
+        except ValueError as e:
+            return {"error": str(e)}
+        name = Path(str(name or "crest_export.bin")).name or "crest_export.bin"
+        window = self._window or (webview.windows[0] if webview.windows else None)
+        if window is None:
+            return {"error": "no window"}
+        start = self._start_dir()
+        try:
+            picked = window.create_file_dialog(
+                _save_dialog_type(webview), directory=start, save_filename=name, file_types=_file_types(name)
+            )
+        except Exception:  # some backends reject the file_types filter
+            picked = window.create_file_dialog(_save_dialog_type(webview), directory=start, save_filename=name)
+        if not picked:
+            return {"cancelled": True}
+        path = picked if isinstance(picked, str) else picked[0]
+        try:
+            write_bytes(Path(path), data)
+        except OSError as e:
+            return {"error": str(e)}
+        self._remember_dir(Path(path).resolve().parent)
+        return {"saved": str(path)}
+
+
+#: Largest binary export accepted from the page (a view PDF is a few MB).
+MAX_BINARY_BYTES = 100 * 1024 * 1024
+
+
+def decode_b64(b64: str) -> bytes:
+    """Strict base64 (a `data:...;base64,` prefix is allowed). Raises ValueError on anything else."""
+    if not isinstance(b64, str):
+        raise ValueError("the export was not sent as base64 text")
+    text = b64.split(",", 1)[1] if b64.startswith("data:") and "," in b64 else b64
+    text = "".join(text.split())
+    if len(text) * 3 // 4 > MAX_BINARY_BYTES:
+        raise ValueError("the export is too large")
+    try:
+        data = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("the export was not valid base64") from None
+    if not data:
+        raise ValueError("the export is empty")
+    return data
+
+
+def write_bytes(path: Path, data: bytes) -> None:
+    """Write a binary export as is; a partial file is not left behind if the write fails."""
+    tmp = path.with_name(path.name + ".part")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def write_text(path: Path, text: str) -> None:

@@ -1,4 +1,4 @@
-import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-react";
 import { analyze, STEPS } from "@/lib/crest/engine";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
@@ -29,6 +29,7 @@ import type {
 } from "@/lib/crest/types";
 import { HydroChart, ValleyMap } from "./charts";
 import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel } from "./NdDamPicker";
+import { ViewExport } from "./ViewExport";
 
 // Leaflet touches `window` when it loads, so the map is a client-only chunk.
 const MapDraw = lazy(() => import("./MapDraw").then((m) => ({ default: m.MapDraw })));
@@ -354,8 +355,9 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   const onGeometry = useCallback((geometry: DamGeometry) => update({ geometry }), [update]);
   const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
   const plss = usePlss(dam, strip.strip);
+  const view = useRef<HTMLElement>(null);
   return (
-    <section className="space-y-4">
+    <section ref={view} className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-xl">Layout & schematic flood</h2>
@@ -390,6 +392,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
             step={0.5}
             onChange={(reachKm) => update({ reachKm })}
           />
+          <ViewExport target={view} kind="flood" dam={dam} result={result} />
         </div>
       </div>
       <div className="rounded-md border border-line bg-card p-4">
@@ -577,17 +580,21 @@ function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
 }
 
 function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+  const view = useRef<HTMLElement>(null);
   return (
-    <section className="space-y-4">
-      <div>
-        <p className="text-xs tracking-widest text-muted uppercase">Read from this desk</p>
-        <h2 className="text-2xl">
-          {dam.name} <span className="text-muted">({dam.nid})</span>
-        </h2>
-        <p className="text-sm text-muted">
-          {dam.county ? `${dam.county} · ` : ""}
-          {result.breach.label} · {result.flood.engineLabel}
-        </p>
+    <section ref={view} className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-xs tracking-widest text-muted uppercase">Read from this desk</p>
+          <h2 className="text-2xl">
+            {dam.name} <span className="text-muted">({dam.nid})</span>
+          </h2>
+          <p className="text-sm text-muted">
+            {dam.county ? `${dam.county} · ` : ""}
+            {result.breach.label} · {result.flood.engineLabel}
+          </p>
+        </div>
+        <ViewExport target={view} kind="report" dam={dam} result={result} />
       </div>
       <ExportPanel dam={dam} result={result} />
       <PluginPanel dam={dam} result={result} />
