@@ -11,6 +11,7 @@ import { basemaps } from "@/lib/crest/basemap";
 import { DEPTH_BANDS, FLOOD_STRIP_DISCLAIMER, type FloodStrip } from "@/lib/crest/floodstrip";
 import { initialView, ND_CENTER } from "@/lib/crest/mapview";
 import { ND911_ATTRIBUTION_SHORT, type Nd911Point, type Nd911Row } from "@/lib/crest/nd911";
+import { DEM_ATTRIBUTION_SHORT, OUTLINE_LABEL, type TerrainOutline } from "@/lib/crest/outline";
 import { PLSS_ATTRIBUTION_SHORT, type PlssRow } from "@/lib/crest/plss";
 import type { DamGeometry, GeoJSONFeature } from "@/lib/crest/types";
 
@@ -35,6 +36,9 @@ type Props = {
   /** 911 address points: inside the strip (listed) and the rest of the looked-up box (null: not looked up). */
   nd911?: { inside: Nd911Row[]; outside: Nd911Point[] } | null;
   nd911Message?: string | null;
+  /** Terrain outline from 3DEP (null: not built, see `outlineMessage`). */
+  outline?: TerrainOutline | null;
+  outlineMessage?: string | null;
 };
 
 type GeoLayer = L.Layer & { toGeoJSON: () => GeoJSONFeature };
@@ -129,7 +133,7 @@ const STRIP_PANE = "crest-flood-strip";
  * The flood strip as a read-only overlay: its own pane under the drawn shapes (overlayPane is 400) with pointer
  * events off, so it never catches a click meant for drawing or editing. Rebuilt whenever the result changes.
  */
-function FloodStripLayer({ strip, on }: { strip: FloodStrip | null | undefined; on: boolean }) {
+function FloodStripLayer({ strip, on, dashed }: { strip: FloodStrip | null | undefined; on: boolean; dashed: boolean }) {
   const map = useMap();
   useEffect(() => {
     if (!map.getPane(STRIP_PANE)) {
@@ -141,17 +145,49 @@ function FloodStripLayer({ strip, on }: { strip: FloodStrip | null | undefined; 
     const layer = L.geoJSON(strip as unknown as GeoJSON.FeatureCollection, {
       pane: STRIP_PANE,
       interactive: false,
-      style: (f) => ({
-        stroke: false,
-        fill: true,
-        fillColor: (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf",
-        fillOpacity: 0.45,
-      }),
+      // Under a terrain outline the strip is only the fallback: a dashed edge and a faint fill.
+      style: (f) =>
+        dashed
+          ? { stroke: true, color: "#1d5f8f", weight: 1.2, dashArray: "6 4", opacity: 0.8, fill: true, fillColor: "#2a7fbf", fillOpacity: 0.06 }
+          : {
+              stroke: false,
+              fill: true,
+              fillColor: (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf",
+              fillOpacity: 0.45,
+            },
     }).addTo(map);
     return () => {
       layer.remove();
     };
-  }, [map, strip, on]);
+  }, [map, strip, on, dashed]);
+  return null;
+}
+
+const OUTLINE_PANE = "crest-terrain-outline";
+
+/** The terrain outline: depth-band fills with a thin edge, above the strip and under the PLSS lines, not interactive. */
+function OutlineLayer({ outline, on }: { outline: TerrainOutline | null | undefined; on: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!map.getPane(OUTLINE_PANE)) {
+      const pane = map.createPane(OUTLINE_PANE);
+      pane.style.zIndex = "355";
+      pane.style.pointerEvents = "none";
+    }
+    if (!outline || !on) return;
+    const layer = L.geoJSON(outline as unknown as GeoJSON.FeatureCollection, {
+      pane: OUTLINE_PANE,
+      interactive: false,
+      attribution: DEM_ATTRIBUTION_SHORT,
+      style: (f) => {
+        const color = (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf";
+        return { stroke: true, color, weight: 0.8, opacity: 0.9, fill: true, fillColor: color, fillOpacity: 0.55 };
+      },
+    } as L.GeoJSONOptions).addTo(map);
+    return () => {
+      layer.remove();
+    };
+  }, [map, outline, on]);
   return null;
 }
 
@@ -226,7 +262,7 @@ const ND911_OUT = "#6b6b6b";
  * 911 address points: small circles in their own pane above the drawn shapes' fill. Points inside the strip are red
  * and larger, the others grey. They are interactive only for the hover tooltip (address, place type, placement).
  */
-function Nd911Layer({ pts, on }: { pts: Props["nd911"]; on: boolean }) {
+function Nd911Layer({ pts, on, against }: { pts: Props["nd911"]; on: boolean; against: string }) {
   const map = useMap();
   useEffect(() => {
     if (!map.getPane(ND911_PANE)) {
@@ -240,7 +276,7 @@ function Nd911Layer({ pts, on }: { pts: Props["nd911"]; on: boolean }) {
     for (const p of pts.outside) {
       group.addLayer(
         L.circleMarker([p.lat, p.lon], { pane: ND911_PANE, radius: 3.5, color: "#fff", weight: 1, fillColor: ND911_OUT, fillOpacity: 0.9 }).bindTooltip(
-          tip(p.address, p.placeType, p.placement, "<br/>Outside the strip"),
+          tip(p.address, p.placeType, p.placement, `<br/>Outside the ${against}`),
         ),
       );
     }
@@ -255,7 +291,7 @@ function Nd911Layer({ pts, on }: { pts: Props["nd911"]; on: boolean }) {
     return () => {
       group.remove();
     };
-  }, [map, pts, on]);
+  }, [map, pts, on, against]);
   return null;
 }
 
@@ -273,6 +309,10 @@ function StripLegend({
   nd911Message,
   nd911On,
   setNd911On,
+  outline,
+  outlineMessage,
+  outlineOn,
+  setOutlineOn,
 }: {
   strip: FloodStrip | null | undefined;
   message?: string | null;
@@ -287,8 +327,13 @@ function StripLegend({
   nd911Message?: string | null;
   nd911On: boolean;
   setNd911On: (v: boolean) => void;
+  outline?: TerrainOutline | null;
+  outlineMessage?: string | null;
+  outlineOn: boolean;
+  setOutlineOn: (v: boolean) => void;
 }) {
-  const used = new Set(strip?.features.map((f) => f.properties.band) ?? []);
+  const showOutline = !!outline && outlineOn;
+  const used = new Set((showOutline ? outline : strip)?.features.map((f) => f.properties.band) ?? []);
   return (
     <div
       data-testid="flood-strip-legend"
@@ -320,8 +365,30 @@ function StripLegend({
               zoom to
             </button>
           </label>
-          <div style={{ marginTop: 2, color: "#5c5a52" }}>{FLOOD_STRIP_DISCLAIMER}.</div>
-          {on ? (
+          <div style={{ marginTop: 2, color: "#5c5a52" }}>
+            {FLOOD_STRIP_DISCLAIMER}.{showOutline && on ? " Dashed: the fallback under the terrain outline." : ""}
+          </div>
+          {outline ? (
+            <>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, marginTop: 4 }}>
+                <input
+                  type="checkbox"
+                  checked={outlineOn}
+                  onChange={(e) => setOutlineOn(e.target.checked)}
+                  aria-label="Show the terrain outline"
+                />
+                Terrain outline (approximate)
+              </label>
+              <div data-testid="outline-legend-note" style={{ marginTop: 2, color: "#5c5a52" }}>
+                {OUTLINE_LABEL}; {outline.properties.outline_area_ac.toFixed(0)} ac.
+              </div>
+            </>
+          ) : (
+            <div data-testid="outline-legend-note" style={{ marginTop: 4, color: "#5c5a52" }}>
+              {outlineMessage ?? "Terrain outline: not built."}
+            </div>
+          )}
+          {on || showOutline ? (
             <div style={{ marginTop: 4 }}>
               {DEPTH_BANDS.filter((b) => used.has(b.id))
                 .reverse()
@@ -331,7 +398,9 @@ function StripLegend({
                     {b.label}
                   </div>
                 ))}
-              <div style={{ color: "#5c5a52" }}>Schematic desk depth; not a model run.</div>
+              <div style={{ color: "#5c5a52" }}>
+                {showOutline ? "Desk depth over the terrain; not a model run." : "Schematic desk depth; not a model run."}
+              </div>
             </div>
           ) : null}
           <div style={{ marginTop: 6, borderTop: "1px solid #e2dccf", paddingTop: 4 }}>
@@ -376,17 +445,32 @@ function StripLegend({
   );
 }
 
-export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage, plss, plssMessage, nd911, nd911Message }: Props) {
+export function MapDraw({
+  geometry,
+  lat,
+  lon,
+  onChange,
+  strip,
+  stripMessage,
+  plss,
+  plssMessage,
+  nd911,
+  nd911Message,
+  outline,
+  outlineMessage,
+}: Props) {
   const view = initialView(geometry, lat, lon);
   const center: [number, number] = "center" in view ? view.center : ND_CENTER;
   const [on, setOn] = useState(true);
   const [plssOn, setPlssOn] = useState(true);
   const [nd911On, setNd911On] = useState(true);
+  const [outlineOn, setOutlineOn] = useState(true);
   const mapRef = useRef<L.Map | null>(null);
   const zoom = () => {
     const map = mapRef.current;
     if (!map || !strip) return;
     const b = L.geoJSON(strip as unknown as GeoJSON.FeatureCollection).getBounds();
+    if (outline) b.extend(L.geoJSON(outline as unknown as GeoJSON.FeatureCollection).getBounds());
     if (b.isValid()) map.fitBounds(b, { padding: [24, 24] });
   };
   return (
@@ -414,6 +498,10 @@ export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage, pls
         nd911Message={nd911Message}
         nd911On={nd911On}
         setNd911On={setNd911On}
+        outline={outline}
+        outlineMessage={outlineMessage}
+        outlineOn={outlineOn}
+        setOutlineOn={setOutlineOn}
       />
       <MapContainer
         ref={mapRef}
@@ -428,9 +516,10 @@ export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage, pls
             </LayersControl.BaseLayer>
           ))}
         </LayersControl>
-        <FloodStripLayer strip={strip} on={on} />
+        <FloodStripLayer strip={strip} on={on} dashed={!!outline && outlineOn} />
+        <OutlineLayer outline={outline} on={outlineOn} />
         <PlssLayer rows={plss} on={plssOn} />
-        <Nd911Layer pts={nd911} on={nd911On} />
+        <Nd911Layer pts={nd911} on={nd911On} against={outline ? "terrain outline" : "strip"} />
         <DrawControl geometry={geometry} lat={lat} lon={lon} onChange={onChange} />
       </MapContainer>
     </div>

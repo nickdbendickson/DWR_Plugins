@@ -25,6 +25,19 @@ import {
   type Nd911Row,
   type Nd911State,
 } from "@/lib/crest/nd911";
+import {
+  buildOutline,
+  DEM_ATTRIBUTION,
+  DEM_ATTRIBUTION_SHORT,
+  demRequest,
+  fetchDem,
+  lookupArea,
+  OUTLINE_LABEL,
+  outlineAcresNote,
+  outlineInputs,
+  outlineState,
+  type OutlineState,
+} from "@/lib/crest/outline";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { activeDam, useDesk } from "@/lib/crest/store";
@@ -182,10 +195,11 @@ export function Desk() {
               <li>Basemaps: USGS The National Map, or OpenStreetMap contributors (as credited on the map).</li>
               <li data-testid="plss-attribution">{PLSS_ATTRIBUTION}</li>
               <li data-testid="nd911-attribution">{ND911_ATTRIBUTION}</li>
+              <li data-testid="dem-attribution">{DEM_ATTRIBUTION}</li>
             </ul>
           </details>
           <p className="mt-1">
-            Data: {PLSS_ATTRIBUTION.split(" Public data")[0]}; {ND911_ATTRIBUTION.split(" Public data")[0]}.
+            Data: {PLSS_ATTRIBUTION.split(" Public data")[0]}; {ND911_ATTRIBUTION.split(" Public data")[0]}; {DEM_ATTRIBUTION_SHORT}.
           </p>
         </div>
       </footer>
@@ -209,14 +223,22 @@ function useOnline() {
   return online;
 }
 
-function usePlss(dam: DamRecord, strip: FloodStrip | null): PlssState {
+/**
+ * The flood areas of one dam: the schematic strip, the terrain outline when it is built, and the PLSS and 911 lists
+ * against the outline when there is one (else the strip). Lookups cover the strip and the outline together, so one
+ * saved lookup serves both.
+ */
+function useFloodAreas(dam: DamRecord, result: ReturnType<typeof analyze>) {
   const online = useOnline();
-  return useMemo(() => plssState(dam, strip, online), [dam, strip, online]);
-}
-
-function useNd911(dam: DamRecord, strip: FloodStrip | null): Nd911State {
-  const online = useOnline();
-  return useMemo(() => nd911State(dam, strip, online), [dam, strip, online]);
+  const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
+  const outline = useMemo(() => outlineState(dam, result, online), [dam, result, online]);
+  const ol = outline.state === "ready" ? outline.outline : null;
+  const against = ol ? "terrain outline" : "flood strip";
+  const area = ol ?? strip.strip;
+  const lookup = useMemo(() => (strip.strip ? lookupArea(strip.strip, ol) : null), [strip.strip, ol]);
+  const plss = useMemo<PlssState>(() => plssState(dam, area, online, against), [dam, area, online, against]);
+  const nd911 = useMemo<Nd911State>(() => nd911State(dam, area, online, against), [dam, area, online, against]);
+  return { online, strip, outline, ol, area, against, lookup, plss, nd911 };
 }
 
 function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
@@ -349,9 +371,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const onGeometry = useCallback((geometry: DamGeometry) => update({ geometry }), [update]);
-  const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
-  const plss = usePlss(dam, strip.strip);
-  const nd911 = useNd911(dam, strip.strip);
+  const { strip, outline, ol, against, lookup, plss, nd911 } = useFloodAreas(dam, result);
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -417,6 +437,8 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
                 plssMessage={plss.state === "ready" ? null : plss.message}
                 nd911={nd911.state === "ready" ? { inside: nd911.table.rows, outside: nd911.table.outside } : null}
                 nd911Message={nd911.state === "ready" ? null : nd911.message}
+                outline={ol}
+                outlineMessage={outline.state === "ready" ? null : outline.message}
               />
             </Suspense>
           ) : (
@@ -424,8 +446,9 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
           )}
         </div>
       </div>
-      <PlssPanel strip={strip.strip} plss={plss} />
-      <Nd911Panel dam={dam} result={result} strip={strip.strip} nd911={nd911} />
+      <OutlinePanel dam={dam} result={result} outline={outline} />
+      <PlssPanel lookup={lookup} plss={plss} against={against} />
+      <Nd911Panel dam={dam} result={result} lookup={lookup} nd911={nd911} />
       <div className="overflow-hidden rounded-md border border-line">
         <ValleyMap flood={result.flood} />
       </div>
@@ -439,17 +462,115 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   );
 }
 
-function PlssPanel({ strip, plss }: { strip: FloodStrip | null; plss: PlssState }) {
+const breathe = () => new Promise<void>((r) => setTimeout(r, 0));
+
+/**
+ * The terrain outline: built on request from one 3DEP terrain request (about 3.5 MB for a 10 km reach), saved on the
+ * dam so it shows offline. The build runs in short chunks so the page stays responsive.
+ */
+function OutlinePanel({ dam, result, outline }: { dam: DamRecord; result: ReturnType<typeof analyze>; outline: OutlineState }) {
+  const update = useDesk((s) => s.update);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (outline.state === "none") return null;
+  const build = async () => {
+    const io = outlineInputs(dam, result);
+    if (!io.ok) return setError(io.reason);
+    const id = dam.id;
+    setError(null);
+    try {
+      const req = demRequest(io.inputs);
+      setBusy(`Fetching the 3DEP terrain (${req.width} × ${req.height} cells at ${num(req.cellM, 0)} m)…`);
+      const grid = await fetchDem(req);
+      setBusy("Tracing the outline on the terrain…");
+      const r = await buildOutline(dam, result, grid, { yieldFn: breathe });
+      if (useDesk.getState().activeId !== id) return;
+      if (r.ok) update({ outline: r.cache });
+      else setError(r.reason);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const s = outline.state === "ready" ? outline.stats : null;
+  const btn = "inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50";
+  return (
+    <div className="rounded-md border border-line bg-card p-4" data-testid="outline-panel">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-lg">Terrain outline (approximate)</h3>
+        <div className="flex flex-wrap gap-2">
+          {outline.state !== "offline" ? (
+            <button type="button" onClick={() => void build()} disabled={busy != null} className={btn}>
+              {busy ? "Building…" : s ? "Build again" : "Build the terrain outline"}
+            </button>
+          ) : null}
+          {dam.outline ? (
+            <button type="button" onClick={() => update({ outline: undefined })} disabled={busy != null} className={btn}>
+              Remove outline
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <p className="mt-1 text-sm font-medium" data-testid="outline-label">
+        {OUTLINE_LABEL}.
+      </p>
+      {outline.message ? (
+        <p className="mt-1 text-sm text-muted" role="status">
+          {outline.message}
+        </p>
+      ) : null}
+      {busy ? (
+        <p className="mt-1 text-sm text-muted" role="status">
+          {busy}
+        </p>
+      ) : null}
+      {error ? (
+        <p className="mt-1 text-sm text-amber" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {s ? (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-line sm:grid-cols-4">
+            <Stat k="Outline area" v={`${num(s.outlineAc, 0)} ac`} />
+            <Stat k="Engine wet area" v={`${num(s.engineAc, 0)} ac`} />
+            <Stat k="Channel traced" v={`${num(s.channelKm, 1)} km`} />
+            <Stat k="Bed, top to end" v={`${num(s.bedTopFt, 0)} → ${num(s.bedEndFt, 0)} ft`} />
+          </div>
+          <p className="mt-2 text-sm" data-testid="outline-acres-note">
+            {outlineAcresNote(s)}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            By depth band:{" "}
+            {s.bands.map((b) => `${b.label} ${num(b.ac, 0)} ac`).join(" · ")}. The PLSS and 911 lists below are against
+            this outline; the strip stays on the map as the fallback.
+          </p>
+          <p className="mt-1 text-xs text-muted" data-testid="outline-dem">
+            Terrain: {s.dem.width} × {s.dem.height} cells at {num(s.dem.cellM, 0)} m ({num(s.dem.bytes / 1e6, 1)} MB, NAVD88),
+            {s.dem.missing ? ` ${s.dem.missing} cells missing,` : ""} {s.rings} rings after smoothing; {s.droppedPatches}{" "}
+            patches under the minimum dropped, {s.filledHoles} holes filled. Water surface = the traced channel bed (pits
+            filled) + the desk depth at that distance downstream; ground must be under it and connected to the channel.
+            Built {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} and saved with this dam (the
+            terrain itself is not kept). {DEM_ATTRIBUTION}
+          </p>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function PlssPanel({ lookup, plss, against }: { lookup: FloodStrip | null; plss: PlssState; against: string }) {
   const update = useDesk((s) => s.update);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (plss.state === "none") return null;
   const lookUp = async () => {
-    if (!strip) return;
+    if (!lookup) return;
     setBusy(true);
     setError(null);
     try {
-      update({ plss: await fetchPlss(strip) });
+      update({ plss: await fetchPlss(lookup) });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -460,7 +581,7 @@ function PlssPanel({ strip, plss }: { strip: FloodStrip | null; plss: PlssState 
   return (
     <div className="rounded-md border border-line bg-card p-4" data-testid="plss-panel">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-lg">PLSS sections the strip touches</h3>
+        <h3 className="text-lg">PLSS sections the {against === "flood strip" ? "strip" : against} touches</h3>
         {plss.state !== "offline" ? (
           <button
             type="button"
@@ -503,10 +624,13 @@ function PlssPanel({ strip, plss }: { strip: FloodStrip | null; plss: PlssState 
             </table>
           </div>
           <p className="mt-2 text-xs text-muted">
-            {t.rows.length} sections, {num(t.listedAc, 1)} of the strip&apos;s {num(t.stripAc, 1)} ac. Slivers under {SLIVER_AC} ac
+            {t.rows.length} sections, {num(t.listedAc, 1)} of the {against}&apos;s {num(t.stripAc, 1)} ac. Slivers under {SLIVER_AC} ac
             not listed: {t.sliversIgnored}
-            {t.uncoveredAc >= SLIVER_AC ? `; ${num(t.uncoveredAc, 1)} ac of the strip lies outside every fetched section` : ""}.
-            Approximate: the strip is the schematic desk valley, not a mapped flood extent. Looked up{" "}
+            {t.uncoveredAc >= SLIVER_AC ? `; ${num(t.uncoveredAc, 1)} ac of the ${against} lies outside every fetched section` : ""}.
+            {against === "flood strip"
+              ? " Approximate: the strip is the schematic desk valley, not a mapped flood extent."
+              : ` ${OUTLINE_LABEL}.`}{" "}
+            Looked up{" "}
             {new Date(t.fetchedAt).toLocaleString()} and saved with this dam.
           </p>
           <p className="mt-1 text-xs text-muted">{PLSS_ATTRIBUTION}</p>
@@ -529,12 +653,12 @@ const HAB_OPTIONS: [string, string][] = [
 function Nd911Panel({
   dam,
   result,
-  strip,
+  lookup,
   nd911,
 }: {
   dam: DamRecord;
   result: ReturnType<typeof analyze>;
-  strip: FloodStrip | null;
+  lookup: FloodStrip | null;
   nd911: Nd911State;
 }) {
   const update = useDesk((s) => s.update);
@@ -542,11 +666,11 @@ function Nd911Panel({
   const [error, setError] = useState<string | null>(null);
   if (nd911.state === "none") return null;
   const lookUp = async () => {
-    if (!strip) return;
+    if (!lookup) return;
     setBusy(true);
     setError(null);
     try {
-      update({ nd911: await fetchNd911(strip) });
+      update({ nd911: await fetchNd911(lookup) });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -856,11 +980,14 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       return { pkg: null, error: (e as Error).message };
     }
   }, [dam, result.breach.series]);
-  const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
-  const plss = usePlss(dam, strip.strip);
+  const { online, strip, outline, ol, plss, nd911 } = useFloodAreas(dam, result);
+  // Lists against the outline when it is built (and in its exports); the strip's own exports keep the strip's lists.
   const plssTable = plss.state === "ready" ? plss.table : null;
-  const nd911 = useNd911(dam, strip.strip);
   const nd911Table = nd911.state === "ready" ? nd911.table : null;
+  const stripPlss = useMemo(() => (ol ? plssState(dam, strip.strip, online) : plss), [ol, dam, strip.strip, online, plss]);
+  const stripNd911 = useMemo(() => (ol ? nd911State(dam, strip.strip, online) : nd911), [ol, dam, strip.strip, online, nd911]);
+  const stripPlssTable = stripPlss.state === "ready" ? stripPlss.table : null;
+  const stripNd911Table = stripNd911.state === "ready" ? stripNd911.table : null;
   const [saved, setSaved] = useState<string | null>(null);
   const save = useCallback(async (name: string, text: string, type?: string) => {
     const r = await saveText(name, text, type);
@@ -900,7 +1027,7 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
           className={btn}
           disabled={!strip.strip}
           title={strip.reason ?? undefined}
-          onClick={() => strip.strip && void save(`${root}_flood_strip.geojson`, exportFloodGeoJson(strip.strip, plssTable, nd911Table), "application/geo+json")}
+          onClick={() => strip.strip && void save(`${root}_flood_strip.geojson`, exportFloodGeoJson(strip.strip, stripPlssTable, stripNd911Table), "application/geo+json")}
         >
           Flood strip GeoJSON
         </button>
@@ -909,9 +1036,27 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
           className={btn}
           disabled={!strip.strip}
           title={strip.reason ?? undefined}
-          onClick={() => strip.strip && void save(`${root}_flood_strip.kml`, exportFloodKml(strip.strip, plssTable, nd911Table), "application/vnd.google-earth.kml+xml")}
+          onClick={() => strip.strip && void save(`${root}_flood_strip.kml`, exportFloodKml(strip.strip, stripPlssTable, stripNd911Table), "application/vnd.google-earth.kml+xml")}
         >
           Flood strip KML
+        </button>
+        <button
+          type="button"
+          className={btn}
+          disabled={!ol}
+          title={ol ? undefined : (outline.message ?? undefined)}
+          onClick={() => ol && void save(`${root}_terrain_outline.geojson`, exportFloodGeoJson(ol, plssTable, nd911Table), "application/geo+json")}
+        >
+          Terrain outline GeoJSON
+        </button>
+        <button
+          type="button"
+          className={btn}
+          disabled={!ol}
+          title={ol ? undefined : (outline.message ?? undefined)}
+          onClick={() => ol && void save(`${root}_terrain_outline.kml`, exportFloodKml(ol, plssTable, nd911Table), "application/vnd.google-earth.kml+xml")}
+        >
+          Terrain outline KML
         </button>
         <button
           type="button"
@@ -935,13 +1080,22 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       <p className="mt-2 text-xs text-muted">
         Flood strip (WGS 84): {strip.strip ? "approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands." : strip.reason}
       </p>
+      <p className="mt-1 text-xs text-muted" data-testid="outline-export-note">
+        Terrain outline (WGS 84):{" "}
+        {ol
+          ? `${OUTLINE_LABEL}; ${num(ol.properties.outline_area_ac, 1)} ac, depth bands, with the PLSS and 911 lists against the outline. ${DEM_ATTRIBUTION_SHORT}.`
+          : outline.message}
+      </p>
       <p className="mt-1 text-xs text-muted">
-        PLSS sections: {plssTable ? `${plssTable.rows.length} touched, listed in the strip GeoJSON/KML and the CSV. ${PLSS_ATTRIBUTION}` : plss.message}
+        PLSS sections:{" "}
+        {plssTable
+          ? `${plssTable.rows.length} touched${ol ? ` by the terrain outline (in its GeoJSON/KML and the CSV)${stripPlssTable ? `; ${stripPlssTable.rows.length} by the strip (in the strip files)` : ""}` : ", listed in the strip GeoJSON/KML and the CSV"}. ${PLSS_ATTRIBUTION}`
+          : plss.message}
       </p>
       <p className="mt-1 text-xs text-muted" data-testid="nd911-export-note">
         911 address points:{" "}
         {nd911Table
-          ? `${nd911Table.rows.length} inside the ${nd911Table.against}, as points in the strip GeoJSON/KML and in the CSV. ${ND911_ATTRIBUTION}`
+          ? `${nd911Table.rows.length} inside the ${nd911Table.against}${ol ? ` (in its GeoJSON/KML and the CSV)${stripNd911Table ? `; ${stripNd911Table.rows.length} inside the flood strip (in the strip files)` : ""}` : ", as points in the strip GeoJSON/KML and in the CSV"}. ${ND911_ATTRIBUTION}`
           : nd911.message}
       </p>
       {saved ? (

@@ -1,3 +1,4 @@
+import type { OutlineCache } from "./outline.ts";
 import type { Nd911Cache } from "./nd911.ts";
 import type { PlssCache } from "./plss.ts";
 export type DatumName = "Local" | "NAVD88" | "NGVD29";
@@ -92,6 +93,8 @@ export type DamRecord = {
   plss?: PlssCache;
   /** ND NG911 address points looked up around the flood strip (ND GIS Hub), kept for offline use. */
   nd911?: Nd911Cache;
+  /** Terrain outline built on request from 3DEP terrain (outline.ts), with the input fingerprint it was built for. */
+  outline?: OutlineCache;
   /** ACER TM 11 judgment zone counts as probable loss of life (High), as damsuite classify_nd defaults. Default true. */
   judgmentAsProbable?: boolean;
 };
