@@ -34,7 +34,10 @@ export const useDesk = create<DeskState>()(
       },
       restore: () => set({ dams: SAMPLE_DAMS, activeId: SAMPLE_DAMS[0].id, step: "record" }),
     }),
-    { name: "crest-desk-v1", skipHydration: true },
+    // v2 (2026-10-29): the ND00199 sample changed (912 ft / H 28 -> 1072.24 NAVD88 / H 27.50) and the
+    // screen levels changed. A new key makes returning browsers start from the current samples
+    // instead of the old crest-desk-v1 records; old data under v1 is left alone, not migrated.
+    { name: "crest-desk-v2", skipHydration: true },
   ),
 );
 

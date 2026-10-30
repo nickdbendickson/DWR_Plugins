@@ -1,6 +1,16 @@
 import { rankReceptor } from "./acer.ts";
+import { vertconShiftFt } from "./vertcon_nd.ts";
 import { ACFT, ACRE, CFS, FT, froehlich1995Peak, froehlich2008, routedHydrograph, thin } from "./breach.ts";
-import type { Analysis, BreachMethod, DamRecord, EngineName, FailureMode, ReceptorSeed, ScreenLevel } from "./types.ts";
+import type {
+  Analysis,
+  BreachMethod,
+  DamRecord,
+  EngineName,
+  FailureMode,
+  GeoJSONFeature,
+  ReceptorSeed,
+  ScreenLevel,
+} from "./types.ts";
 
 const TIE_BAND = 100;
 
@@ -22,6 +32,53 @@ function finite(n: number, fallback: number) {
 
 export function isLocalElev(ft: number) {
   return Number.isFinite(ft) && ft >= 0 && ft <= 300;
+}
+
+function signed(n: number) {
+  return `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(2)}`;
+}
+
+/** Clamp an input to the desk range and say so, instead of clamping silently. */
+function bounded(warnings: string[], label: string, v: number, fallback: number, lo: number, hi: number, unit: string) {
+  if (!Number.isFinite(v)) {
+    warnings.push(`${label} is missing. Using ${fallback.toLocaleString("en-US")} ${unit} as a placeholder.`);
+    return fallback;
+  }
+  if (v < lo || v > hi) {
+    const c = clamp(v, lo, hi);
+    warnings.push(
+      `${label} ${v.toLocaleString("en-US")} ${unit} is outside the desk range ${lo.toLocaleString("en-US")}–${hi.toLocaleString("en-US")} ${unit}. Using ${c.toLocaleString("en-US")} ${unit}.`,
+    );
+    return c;
+  }
+  return v;
+}
+
+function pointOf(f: GeoJSONFeature | undefined): { lon: number; lat: number } | null {
+  if (!f) return null;
+  let c: unknown = f.geometry.coordinates;
+  while (Array.isArray(c) && Array.isArray(c[0])) c = c[0];
+  if (Array.isArray(c) && Number.isFinite(c[0]) && Number.isFinite(c[1])) return { lon: c[0] as number, lat: c[1] as number };
+  return null;
+}
+
+/**
+ * Breach location: the drawn breach point first (NID points are often not at the breach), then
+ * the entered lat/lon, then the dam line or reservoir point.
+ */
+export function damLocation(dam: DamRecord): { lon: number; lat: number; source: string } | null {
+  const g = dam.geometry;
+  const bp = pointOf(g?.breachPoint);
+  if (bp) return { ...bp, source: "breach point" };
+  if (Number.isFinite(dam.lat) && Number.isFinite(dam.lon)) return { lat: dam.lat!, lon: dam.lon!, source: "record" };
+  for (const [f, source] of [
+    [g?.damLine, "dam line"],
+    [g?.reservoirPoint, "reservoir point"],
+  ] as const) {
+    const p = pointOf(f);
+    if (p) return { ...p, source };
+  }
+  return null;
 }
 
 function fmtFt(n: number) {
@@ -113,14 +170,14 @@ const METHOD_LABEL: Record<BreachMethod, string> = {
 };
 
 export function analyze(dam: DamRecord): Analysis {
-  const heightFt = clamp(finite(dam.heightFt, 10), 4, 200);
-  const storage = clamp(finite(dam.storageAcFt, 10), 1, 500000);
-  const lengthFt = clamp(finite(dam.lengthFt, 100), 40, 20000);
+  const warnings: string[] = [];
+  const heightFt = bounded(warnings, "Height", dam.heightFt, 10, 4, 200, "ft");
+  const storage = bounded(warnings, "Storage", dam.storageAcFt, 10, 1, 500000, "ac-ft");
+  const lengthFt = bounded(warnings, "Length", dam.lengthFt, 100, 40, 20000, "ft");
   const heightM = heightFt * FT;
   const volumeM3 = storage * ACFT;
 
   const localCrest = isLocalElev(dam.crestFt);
-  const warnings: string[] = [];
   let offsetFt: number | null = null;
   let crestNavd = finite(dam.crestFt, 1000);
   let rule = "Stated elevations used as NAVD88.";
@@ -137,9 +194,24 @@ export function analyze(dam: DamRecord): Analysis {
       rule = `0–300 ft is local. Offset ${fmtFt(offsetFt)} ft from the DEM crest. Datum choice is not applied.`;
     }
   } else if (dam.statedDatum === "NGVD29") {
-    offsetFt = 1;
-    crestNavd = dam.crestFt + 1;
-    rule = "NGVD29 desk shift +1.0 ft toward NAVD88. Not the VERTCON grid.";
+    const loc = damLocation(dam);
+    const manual = finite(dam.datumOffsetFt ?? NaN, NaN);
+    const grid = loc ? vertconShiftFt(loc.lon, loc.lat) : null;
+    if (Number.isFinite(manual) && manual !== 0) {
+      offsetFt = manual;
+      rule = `NGVD29 to NAVD88 by the offset you entered, ${signed(manual)} ft.`;
+      if (grid != null && Math.abs(grid - manual) > 0.2) {
+        warnings.push(`Entered NGVD29 offset ${signed(manual)} ft differs from VERTCON here (${signed(grid)} ft).`);
+      }
+    } else if (grid != null && loc) {
+      offsetFt = grid;
+      rule = `NGVD29 to NAVD88 by VERTCON at ${loc.lat.toFixed(5)}, ${loc.lon.toFixed(5)} (${loc.source}): ${signed(grid)} ft.`;
+    } else {
+      offsetFt = null;
+      rule = "NGVD29 stated, but no location inside the ND VERTCON grid and no offset entered. Elevations left unconverted.";
+      warnings.push("NGVD29 offset unknown: enter the dam location or an offset. Elevations left in NGVD29.");
+    }
+    crestNavd += offsetFt ?? 0;
   } else if (dam.statedDatum === "Local" && !localCrest) {
     rule = "Marked Local, but the crest is outside 0–300 ft. Treated as NAVD88 and flagged.";
     warnings.push("Stated datum Local does not match a 0–300 ft crest.");
@@ -147,8 +219,15 @@ export function analyze(dam: DamRecord): Analysis {
   } else {
     crestNavd = dam.crestFt;
     rule = "Elevations treated as NAVD88.";
+    if (dam.datumNote) rule += ` ${dam.datumNote}`;
   }
 
+  const demCrest = finite(dam.demCrestFt ?? NaN, NaN);
+  if (!localCrest && Number.isFinite(demCrest) && Math.abs(demCrest - crestNavd) > 0.5) {
+    warnings.push(
+      `DEM crest ${demCrest.toFixed(2)} ft differs from the tied crest ${crestNavd.toFixed(2)} ft NAVD88 by ${Math.abs(demCrest - crestNavd).toFixed(2)} ft. Check that the DEM crest is NAVD88 (an NGVD29 value differs by about the VERTCON shift).`,
+    );
+  }
   const localRecord = localCrest && offsetFt != null;
   const bed = tieValue("Streambed", dam.streambedFt, offsetFt, crestNavd, localRecord);
   if (!localRecord && isLocalElev(dam.streambedFt)) {
@@ -325,6 +404,10 @@ export function analyze(dam: DamRecord): Analysis {
   const screen = screenReceptors(receptors, dam.receptors, {
     judgmentAsProbable: dam.judgmentAsProbable ?? true,
   });
+  if (dam.classOfRecord) {
+    screen.classOfRecord = dam.classOfRecord;
+    screen.reasons.unshift(`Class of record: ${dam.classOfRecord}. This desk screen (${screen.label}) is not the class of record.`);
+  }
   if (warnings.some((w) => w.startsWith("No DEM tie"))) {
     screen.level = "Review";
     screen.label = "Review (crest not tied)";
@@ -452,5 +535,5 @@ export function screenReceptors(
     }; any inundated habitable structure is at least Medium (economic, 5.2.2); roads by AADT and class. Barns and sheds are not habitable and do not count.`,
   );
   reasons.push("This is a desk screen on a schematic valley. It is not an ND Dam Safety classification of record.");
-  return { level, label, judgmentAsProbable, acerLevel, reasons, judgment };
+  return { level, label, judgmentAsProbable, classOfRecord: null, acerLevel, reasons, judgment };
 }

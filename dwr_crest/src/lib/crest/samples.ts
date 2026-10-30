@@ -17,17 +17,30 @@ export const SAMPLE_DAMS: DamRecord[] = [
     nid: "ND00199",
     county: "Cass",
     year: 1960,
-    heightFt: 28,
+    // DWR-2801 benchmark (Nick's ruling, 2026-10-29): crest 1072.24 ft NAVD88 = the NGVD29 record crest
+    // 1071.15 + VERTCON 1.09 ft, already converted, so the datum is NAVD88 and nothing shifts it again.
+    // Breach bottom 1044.74 NAVD88, height 27.50 ft, piping. Storage 1,612.59 ac-ft (the review's value,
+    // = the r3 hydrograph volume), surface area 154.5 ac. DEM crest given in NAVD88 too (1071.15 is NGVD29).
+    // Generic receptor seeds, kept on purpose (Nick): the Farmstead lands in the TM 11 judgment zone, so
+    // the sample screens High (flagged); the class of record is ND MEDIUM / TM11 Significant.
+    heightFt: 27.5,
     lengthFt: 1700,
-    crestFt: 912,
-    streambedFt: 884,
-    spillwayFt: 908,
-    normalPoolFt: 900,
-    storageAcFt: 1615.5,
+    crestFt: 1072.24,
+    streambedFt: 1044.74,
+    spillwayFt: NaN,
+    normalPoolFt: NaN,
+    storageAcFt: 1612.59,
     drainageMi2: 13.7,
     statedDatum: "NAVD88",
-    demCrestFt: 912.4,
-    failureMode: "overtopping",
+    datumNote: "Crest converted from NGVD29 1071.15 ft (+1.09 ft VERTCON at the site); do not shift again.",
+    demCrestFt: 1072.24,
+    classOfRecord: "ND MEDIUM / TM11 Significant (DWR-2801 benchmark)",
+    sampleNote:
+      "Sample with generic receptor seeds, not the DWR-2801 benchmark structures. With the judgment zone counted as High (the default), the generic Farmstead falls in the ACER TM 11 judgment zone, so this desk screen reads High (flagged). That is a flag for an engineer, not the class of record (ND MEDIUM / TM11 Significant).",
+    lat: 46.98364,
+    lon: -97.39064,
+    surfaceAreaAc: 154.5,
+    failureMode: "piping",
     method: "froehlich",
     engine: "lisflood",
     receptors: valley("abs"),
