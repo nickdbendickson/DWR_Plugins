@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.20.4
+ND Dam Hazard Classification Helper - Version 2.21.0
 ====================================================
 
 WHAT IT DOES
@@ -34,6 +34,47 @@ THE WINDOW (2.18.34)
 - Classify is the one run button ("Run everything" and "Run Hazard
   Classification" ran the same classification). Input errors show in the
   red box above it, not in a pop-up, and keep it off until they are fixed.
+
+ADDING A DAM'S MODEL RESULTS (NEW IN 2.21.0)
+- Classify > Setup has "Add model results to a dam…". Type the dam's ID
+  (DWR-2801, ND00199, 2801) or its name - the box suggests the dams already
+  in the Dams folder - choose the model results and press Add results.
+- If the Dams folder has a folder for that dam, the results go into it.
+  The folder is found by its name or by the ID / name in its dam.json;
+  capitals, spaces and dashes do not matter, nor an ID's leading zeros
+  (dwr 2801 = DWR-2801 = DWR-02801). If there is no folder, one is made with that name and a
+  dam.json. The window says which before you add anything.
+- The results go to <dam folder>/Hazard_inputs/Breach_<model> (or
+  No_Breach_<model> for the no-breach run, which is then the baseline).
+  Classify and the batch (Classify every dam) find them there by
+  themselves; "Use this dam folder" puts the folder in the Setup box.
+- What each model needs:
+  DSS-WISE Lite - the package zip or its folder. Converted as by the
+    DSS-WISE import (feet, ft/s, hours). If a file name does not say its
+    units, tick "accept US units" after checking the report.
+  HEC-RAS - the rasters RAS Mapper exported (Depth (Max).vrt with its tile
+    folder, Velocity, Arrival...): copied as they are. If the raster or its
+    HEC-RAS project says SI units, depth and velocity are converted to feet.
+    Or a plan's results file (.p01.hdf): converted by the HEC-RAS plan
+    import. Give the terrain for a true depth; without it the depth is the
+    cell minimum and you are warned.
+  LISFLOOD-FP - the run's <name>.max (depth), .maxVc or .Vmax (velocity),
+    .inittm (arrival) and .mxe (water surface), metres and hours. They are
+    turned into GeoTIFFs in feet. LISFLOOD-FP writes no coordinate system:
+    it is taken from a .prj beside them, else from the dam's DEM when the
+    grid lies on it, else you type it (e.g. EPSG:26914).
+- Nothing is overwritten and nothing is moved: the results you picked are
+  only read. A second set goes to Breach_<model>_2 and the window says so;
+  the same results added again are not copied twice. Each folder has
+  results_provenance.json (where they came from, their sha256, the model,
+  the time and the plugin version) and dam.json records "modelled".
+- If another raster in the dam folder would still be taken first (for
+  example an older "Depth (Max).tif" at the top), you are told which; move
+  the old one into a sub-folder named "old".
+- Many dams at once: the Processing tool "Add model results to a dam"
+  (DamSafety Hazard > Dam hazard classification, ndhazard:adddamresults)
+  with a CSV of dam, source and optionally model, scenario, crs, terrain -
+  one row per dam. A row that fails is reported; the others are added.
 
 NEW IN 2.20.2 (offline pack engine 1.3, shared with DamSafety Data 1.5.1)
 - build_nd_pack reads an ArcGIS layer area by area when asked (0.25 degree

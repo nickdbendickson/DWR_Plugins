@@ -180,8 +180,15 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             "Depth (Max), Velocity (Max), Arrival Time and D * V (Max). Done automatically "
             "when the raster boxes are empty.")
         self.find_rasters_btn.clicked.connect(lambda *a: self._auto_fill_rasters(force=True))
+        # 2.21.0: name a dam and add its model results to its folder (made when missing)
+        self.add_results_btn = QPushButton("Add model results to a dam\u2026")
+        self.add_results_btn.setToolTip(
+            "Name the dam and choose its DSS-WISE, HEC-RAS or LISFLOOD-FP results: they are "
+            "put in the dam's folder in the Dams folder (a new folder when it has none)")
+        self.add_results_btn.clicked.connect(self.open_add_results)
         dam_layout.addWidget(self.dam_folder_edit, 0, 0, 1, 3)
         dam_layout.setColumnStretch(0, 1)
+        dam_layout.addWidget(self.add_results_btn, 1, 0)
         dam_layout.addWidget(self.dam_browse_btn, 1, 1)
         dam_layout.addWidget(self.find_rasters_btn, 1, 2)
         dam_group.setLayout(dam_layout)
@@ -530,6 +537,13 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self._classification_button_state()
 
     # ------------------------------------------------------------ BROWSERS --
+    def open_add_results(self, *args):
+        """2.21.0: the 'Add model results to a dam' window; 'Use this dam folder' puts the
+        dam folder in the Setup box."""
+        from .add_results_dialog import AddResultsDialog
+        self.add_results_dialog = AddResultsDialog(self, on_use=self.dam_folder_edit.setText)
+        (getattr(self.add_results_dialog, "exec_", None) or self.add_results_dialog.exec)()
+
     def browse_dam_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Dam Project Folder",
                                                   self.config_dam_folder or "")
@@ -931,6 +945,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
     def _set_busy(self, busy):
         self._busy = busy
         for name in ("check_btn", "run_all_btn", "find_rasters_btn", "dam_browse_btn",
+                     "add_results_btn",
                      "depth_browse_btn", "vel_browse_btn", "arr_browse_btn",
                      "output_browse_btn", "selftest_btn", "refresh_layers_btn",
                      # 2.18.34: the gear menu's run actions and the Results tools

@@ -204,8 +204,8 @@ def _v2_checks(rep, rasters, utm, ctx, tmp, structs):
         from .processing_provider import Provider
         prov = Provider()
         prov.refreshAlgorithms()
-        # acerzones, classify, batch, dsswise and (v2.5) hecrasplan; (2.18.59) savedamstate
-        rep.check("Processing provider loads 21 algorithms", len(prov.algorithms()) == 21,
+        # acerzones, classify, batch, dsswise and (v2.5) hecrasplan; (2.18.59) savedamstate; (2.21.0) adddamresults
+        rep.check("Processing provider loads 22 algorithms", len(prov.algorithms()) == 22,
                   len(prov.algorithms()))
     except Exception:
         rep.error("Processing provider", traceback.format_exc())

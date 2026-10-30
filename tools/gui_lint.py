@@ -249,6 +249,9 @@ def main():
     if haz is not None:
         check("Hazard suite settings", getattr(haz, "suite_settings_dialog", None))
         check("Hazard documentation", getattr(haz, "readme_dialog", None))
+    from DamSafety_Hazard.add_results_dialog import AddResultsDialog
+    check("Hazard add model results",
+          opened("Hazard add model results", lambda: AddResultsDialog(None)))
 
     from DamSafety_Runner.dialog import NDBreachRunnerDialog
     run = opened("Runner main", lambda: NDBreachRunnerDialog())
