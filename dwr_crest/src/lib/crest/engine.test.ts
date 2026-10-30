@@ -8,7 +8,7 @@ describe("crest engine", () => {
   it("analyzes every sample and a blank record without throwing", () => {
     for (const dam of [...SAMPLE_DAMS, blankDam()]) {
       const a = analyze(dam);
-      assert.ok(Number.isFinite(a.breach.fittedPeakCfs), dam.id);
+      assert.ok(Number.isFinite(a.breach.peakCfs), dam.id);
       assert.ok(a.breach.series.length > 2, dam.id);
     }
   });

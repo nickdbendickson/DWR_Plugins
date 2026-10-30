@@ -12,8 +12,11 @@ export type ReceptorSeed = {
   id: string;
   name: string;
   kind: ReceptorKind;
-  /** 0 at the dam, 1 at the downstream end of the desk valley. */
+  /** Distance as a fraction of the base valley length (0 at the dam). Values above 1 lie further
+   * downstream; anything past the desk reach is reported unresolved. Ignored when distanceKm is set. */
   station: number;
+  /** Distance downstream of the dam along the valley, km. Overrides station. */
+  distanceKm?: number;
   /** -1 left bank to +1 right bank. */
   lateral: number;
   /** Feet the pad sits above the local channel bed. */
@@ -60,6 +63,10 @@ export type DamRecord = {
   failureMode: FailureMode;
   method: BreachMethod;
   engine: EngineName;
+  /** Reservoir surface area at the top of dam (acres). Sets the storage-depth curve for routing. */
+  surfaceAreaAc?: number;
+  /** Desk reach length (km). Default: until the schematic depth falls below 0.1 ft. */
+  reachKm?: number;
   receptors: ReceptorSeed[];
   geometry?: DamGeometry;
   /** ACER TM 11 judgment zone counts as probable loss of life (High), as damsuite classify_nd defaults. Default true. */
@@ -83,8 +90,18 @@ export type Analysis = {
     widthFt: number;
     timeHr: number;
     capped: boolean;
+    /** Head on the breach at failure: pool (top of dam) minus breach bottom. */
+    headFt: number;
+    bottomWidthFt: number;
+    sideSlope: number;
+    /** Froehlich (1995) regression peak on the head (a check). */
     empiricalPeakCfs: number;
-    fittedPeakCfs: number;
+    /** Peak of the routed weir hydrograph. */
+    peakCfs: number;
+    timeToPeakHr: number;
+    durationHr: number;
+    storageExponent: number;
+    /** Released volume (ac-ft). */
     volumeAcFt: number;
     series: SeriesPoint[];
     notes: string[];
@@ -94,18 +111,25 @@ export type Analysis = {
     maxDepthFt: number;
     maxVelocityFps: number;
     acres: number;
+    /** Desk reach length (m). */
     lengthM: number;
-    stations: { s: number; halfM: number; depthFt: number }[];
+    reachSource: "user" | "wet";
+    velocityBasis: string;
+    stations: { s: number; xKm: number; halfM: number; depthFt: number }[];
     receptors: {
       id: string;
       name: string;
       kind: ReceptorKind;
+      /** Fraction of the desk reach (1 = end; unresolved receptors sit at 1). */
       station: number;
+      distanceKm: number;
       lateral: number;
       depthFt: number;
       velocityFps: number;
       arrivalHr: number | null;
       flooded: boolean;
+      /** Past the desk reach: no depth computed, not screened. */
+      unresolved: boolean;
       /** ACER TM 11 zone (structures only). */
       zone: "low" | "judgment" | "high" | null;
       /** ND class this receptor supports, or null if it does not count. */

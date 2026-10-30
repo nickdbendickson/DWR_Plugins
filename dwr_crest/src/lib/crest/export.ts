@@ -29,7 +29,7 @@ export function exportDamJson(dam: DamRecord, analysis: Analysis): string {
       judgment: analysis.screen.judgment,
       notes: analysis.screen.reasons,
     },
-    hydrograph_peak_cfs: analysis.breach.fittedPeakCfs,
+    hydrograph_peak_cfs: analysis.breach.peakCfs,
     volume_acft: analysis.breach.volumeAcFt,
   };
   return JSON.stringify(obj, null, 2) + "\n";
