@@ -1,6 +1,6 @@
 """Runner 3.10.72: culvert-precheck (core/culvert_precheck.py, `ndbreach_cli.py culvert-precheck`).
 
-A flat 1 m DEM at 100 m with a no-data block on the east side, and a structures GeoPackage in feet
+A flat 1 m DEM at 250 m with a no-data block on the east side, and a structures GeoPackage in feet
 like the Runner's layer. Expected, from the 3.10.71 rule (lowest fine ground within
 max(apron, 5 m), cap at ground + 0.3 m):
   * A: given inverts sit 0.584 / 0.554 m above a 250 m bed (820 ft, above the
@@ -117,7 +117,7 @@ def culvert_precheck_flags_high_fallback_and_skipped():
         assert abs(a["given_invert_m"] - INV_UP_FT * FT) < 1e-3 and abs(a["fine_ground_m"] - GROUND_M) < 1e-6
         assert abs(a["delta_m"] - (INV_UP_FT * FT - GROUND_M)) < 1e-3
         assert a["runner_source"] == "given_capped" and abs(a["runner_invert_m"] - (GROUND_M + 0.3)) < 1e-6
-        assert abs(a["suggested_invert_m"] - 100.0) < 1e-6 and a["fallback"] == "no"
+        assert abs(a["suggested_invert_m"] - GROUND_M) < 1e-6 and a["fallback"] == "no"
         assert "within 3.0 ft" in a["reconcile_note"], a["reconcile_note"]
         assert r[("A", "downstream")]["flag"] == cp.FLAG_HIGH
         for e in ("upstream", "downstream"):
