@@ -80,33 +80,117 @@ NO_DOWNSTREAM = "no cell on the downstream side of the crest qualified"
 POOL_HALF_M = 1000.0          # half-width of the terrain read to find the pool (depression)
 
 
-def pool_mask(grid, dam_height_m):
+POOL_SHALLOW_M = 0.1          # v3.12.10: fill that counts in a shallow pool against the dam
+POOL_TOUCH_M = 60.0           # v3.12.10: a pool this close to the dam line (or point) is its own
+INFLOW_MAX_FROM_DAM_M = 150.0  # v3.12.10: the inflow search never goes further from the dam line
+INFLOW_FAR = "CHECK THE INFLOW POINT"
+
+
+def dam_distance(X, Y, dam_xy, crest_line=None):
+    """Distance (m) of every (X, Y) from the dam line (the DWR crest line), else the dam point."""
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+    a = None
+    if crest_line is not None and len(crest_line) >= 2:
+        a = np.asarray(crest_line, dtype=float).reshape(-1, 2)
+    if a is None:
+        return np.hypot(X - dam_xy[0], Y - dam_xy[1])
+    best = np.full(X.shape, np.inf)
+    for (x0, y0), (x1, y1) in zip(a[:-1], a[1:]):
+        vx, vy = x1 - x0, y1 - y0
+        L2 = vx * vx + vy * vy
+        t = np.clip(((X - x0) * vx + (Y - y0) * vy) / L2, 0.0, 1.0) if L2 > 0 else 0.0
+        best = np.minimum(best, np.hypot(x0 + t * vx - X, y0 + t * vy - Y))
+    return best
+
+
+def pool_at_dam(mask, grid, dam_xy, crest_line=None, touch_m=None):
+    """v3.12.10: the parts (8-connected) of `mask` that reach within touch_m (default
+    max(POOL_TOUCH_M, 3 cells)) of the dam line, else the dam point. A depression elsewhere
+    (DWR-4031: a closed low 450 m ESE of the dam) is not this dam's reservoir."""
+    from scipy.ndimage import label
+    mask = np.asarray(mask, dtype=bool)
+    out = np.zeros(mask.shape, dtype=bool)
+    if not mask.any():
+        return out
+    lab, n = label(mask, structure=np.ones((3, 3), dtype=bool))
+    X, Y = np.meshgrid(grid.x_centers(), grid.y_centers())
+    touch = max(POOL_TOUCH_M, 3.0 * grid.dx) if touch_m is None else float(touch_m)
+    ids = np.unique(lab[mask & (dam_distance(X, Y, dam_xy, crest_line) <= touch)])
+    ids = ids[ids > 0]
+    return np.isin(lab, ids) if ids.size else out
+
+
+def pool_mask(grid, dam_height_m, dam_xy=None, top_m=None, crest_line=None):
     """Cells of a closed depression on `grid` (the reservoir behind an embankment): filled
     (priority flood from the grid edges) minus ground deeper than max(0.5 m, 15 % of the dam
     height). A downstream toe or channel drains off the grid and is not in it. The grid must
-    reach well past the reservoir (POOL_HALF_M) or the basin drains through the grid edge."""
+    reach well past the reservoir (POOL_HALF_M) or the basin drains through the grid edge.
+
+    v3.12.10: with `dam_xy` and `top_m`, a SHALLOW pool against the dam is added: more than
+    POOL_SHALLOW_M of fill, ground between the top of dam and half the dam height below it,
+    in a part that reaches the dam line (pool_at_dam). A hydro-flattened reservoir is a flat at
+    its water surface with little fill behind the embankment (DWR-4031: 1.1 ft, against the
+    3.1 ft the depth rule needs) and was not a pool at all."""
     z = grid.masked()
     fill = priority_flood(z) - z
-    return np.isfinite(fill) & (fill > max(0.5, 0.15 * float(dam_height_m)))
+    good = np.isfinite(fill)
+    deep = good & (fill > max(0.5, 0.15 * float(dam_height_m)))
+    if dam_xy is None or top_m is None:
+        return deep
+    h = float(dam_height_m)
+    with np.errstate(invalid="ignore"):
+        shallow = good & (fill > POOL_SHALLOW_M) & (z >= float(top_m) - 0.5 * h) & \
+            (z <= float(top_m))
+    return deep | pool_at_dam(shallow, grid, dam_xy, crest_line)
+
+
+def _lower_side(grid, crest_line, n, dam_height_m, offsets=(20.0, 40.0, 60.0, 80.0)):
+    """v3.12.10: +1 when the ground along `n` (unit normal of the crest line) is clearly lower
+    than on the other side (median of samples 20-80 m off the line), -1 for the other side,
+    0 when it is not clear (less than max(0.5 m, 10 % of the dam height) apart)."""
+    a = np.asarray(crest_line, dtype=float).reshape(-1, 2)
+    pts = list(a) + [0.5 * (p + q) for p, q in zip(a[:-1], a[1:])]
+    z = grid.masked()
+    side = {1: [], -1: []}
+    for s in offsets:
+        s = max(s, 1.5 * grid.dx)
+        for p in pts:
+            for sg in (1, -1):
+                r, c = grid.rc(p[0] + sg * s * n[0], p[1] + sg * s * n[1])
+                if grid.inside(r, c) and np.isfinite(z[r, c]):
+                    side[sg].append(float(z[r, c]))
+    if len(side[1]) < 3 or len(side[-1]) < 3:
+        return 0
+    diff = float(np.median(side[1]) - np.median(side[-1]))
+    if abs(diff) < max(0.5, 0.1 * float(dam_height_m)):
+        return 0
+    return -1 if diff > 0 else 1
 
 
 def downstream_direction(pool_grid, dam_xy, dam_height_m, crest_line=None, crest_xy=None,
-                         near_m=600.0):
+                         near_m=600.0, top_m=None):
     """Unit vector from the crest towards downstream, and how it was found, or (None, why).
 
-      1. the crest line's normal, the side away from the pool (else the side the trace takes);
+      1. the crest line's normal, the side away from the pool (else the clearly lower side,
+         else the side the trace takes);
       2. no crest line: away from the pool (the centroid of the depression within near_m);
       3. no pool: the steepest-descent trace from the dam point;
       4. else the trace from place_from_crest's crest (`crest_xy`).
     The trace alone is the weakest: on a dry or hydro-flattened basin it descends into the
-    reservoir (Absaraka DWR-2801), which is why the pool comes first."""
+    reservoir (Absaraka DWR-2801), which is why the pool comes first.
+    v3.12.10: the pool is only the depression that reaches the dam line (pool_at_dam), with the
+    shallow pool pool_mask finds when `top_m` is given. Before, any depression within near_m
+    counted: on DWR-4031 the hydro-flattened reservoir was not a pool and a closed low 450 m
+    ESE was, which turned the downstream side round."""
     def unit(v):
         n = math.hypot(v[0], v[1])
         return (v[0] / n, v[1] / n) if n > 1e-9 else None
 
     away = None
     if pool_grid is not None:
-        pool = pool_mask(pool_grid, dam_height_m)
+        pool = pool_at_dam(pool_mask(pool_grid, dam_height_m, dam_xy, top_m, crest_line),
+                           pool_grid, dam_xy, crest_line)
         X, Y = np.meshgrid(pool_grid.x_centers(), pool_grid.y_centers())
         near = pool & (np.hypot(X - dam_xy[0], Y - dam_xy[1]) <= near_m)
         if near.sum() >= 3:
@@ -127,6 +211,11 @@ def downstream_direction(pool_grid, dam_xy, dam_height_m, crest_line=None, crest
         if t is not None:
             n = (-t[1], t[0])
             ref, how = away, "crest-line normal away from the pool"
+            if ref is None and pool_grid is not None:
+                lower = _lower_side(pool_grid, crest_line, n, dam_height_m)
+                if lower:
+                    ref = (lower * n[0], lower * n[1])
+                    how = "crest-line normal on the lower side (no pool against the dam)"
             if ref is None:
                 ref, how = trace_dir(dam_xy), "crest-line normal on the downstream trace's side"
             if ref is not None:
@@ -145,7 +234,7 @@ def downstream_direction(pool_grid, dam_xy, dam_height_m, crest_line=None, crest
 
 
 def find_inflow_point(grid, dam_xy, dam_height_m, top_m, radius_m=None, downstream=None,
-                      pool=None):
+                      pool=None, crest_line=None, max_from_dam_m=None):
     """The breach inflow goes in just downstream of the embankment. Look for
     the lowest DEM cell within the usual radius that is clearly below the reservoir (at least
     half the dam height below the top of dam); ties (a flat or hydro-flattened floor) go to the
@@ -157,6 +246,12 @@ def find_inflow_point(grid, dam_xy, dam_height_m, top_m, radius_m=None, downstre
     of the crest, and `pool` (a Grid of 0/1, see pool_mask) drops cells in the reservoir: the
     lowest cell near a dry dam can be the reservoir floor (Absaraka DWR-2801). When no cell
     passes those, the unconstrained pick is returned and the note starts with NO_DOWNSTREAM.
+
+    v3.12.10: no pick is further than `max_from_dam_m` (INFLOW_MAX_FROM_DAM_M) from the dam
+    line (`crest_line`), else the dam point. Before, the wider search had no limit and took a
+    farmyard draw 393 m from DWR-4031. When the only low-enough ground is further out, the
+    lowest ground within the limit (on the downstream side) is used and the note starts with
+    INFLOW_FAR.
 
     Returns ((x, y), note) or (None, reason)."""
     if radius_m is None:
@@ -178,15 +273,23 @@ def find_inflow_point(grid, dam_xy, dam_height_m, top_m, radius_m=None, downstre
         in_pool[inside] = pool.data[pr[inside], pc[inside]] > 0.5
         ok &= ~in_pool
     constrained = downstream is not None or pool is not None
-    pt, note = _pick_inflow(X, Y, d, z, need, top_m, radius_m, ok)
-    if pt is None and constrained:
-        pt, note2 = _pick_inflow(X, Y, d, z, need, top_m, radius_m, np.ones(z.shape, dtype=bool))
+    cap = INFLOW_MAX_FROM_DAM_M if max_from_dam_m is None else float(max_from_dam_m)
+    dline = dam_distance(X, Y, dam_xy, crest_line)
+    lim = (dline, cap, "dam line" if crest_line is not None and len(crest_line) >= 2
+           else "dam point")
+    pt, note = _pick_inflow(X, Y, d, z, need, top_m, radius_m, ok, lim)
+    if pt is None and constrained and not note.startswith(INFLOW_FAR):
+        pt, note2 = _pick_inflow(X, Y, d, z, need, top_m, radius_m, np.ones(z.shape, dtype=bool),
+                                 lim)
         if pt is not None:
             return pt, "{}; used {} (check it)".format(NO_DOWNSTREAM, note2)
     return pt, note
 
 
-def _pick_inflow(X, Y, d, z, need, top_m, radius_m, ok):
+def _pick_inflow(X, Y, d, z, need, top_m, radius_m, ok, lim=None):
+    if lim is None:
+        lim = (d, np.inf, "dam point")
+    dline, cap, what = lim
     radii = [radius_m]
     wider = max(radius_m, 400.0)
     if wider > radius_m + 1.0:
@@ -202,6 +305,25 @@ def _pick_inflow(X, Y, d, z, need, top_m, radius_m, ok):
         sel = near & (z <= need)
         if not sel.any():
             continue
+        if not (sel & (dline <= cap)).any():
+            # v3.12.10: only ground beyond the limit is low enough: not this dam's toe
+            far = float(dline[sel].min())
+            cand = (dline <= cap) & np.isfinite(z) & ok & (z < top_m)
+            if not cand.any():
+                return None, ("{}: the nearest ground at least half the dam height below the "
+                              "top of dam is {:.0f} m from the {} (limit {:.0f} m) and nothing "
+                              "nearer is below the top of dam; give the inflow point below the "
+                              "dam".format(INFLOW_FAR, far, what, cap))
+            idx = np.flatnonzero(cand)
+            k = idx[np.lexsort((dline.ravel()[idx], np.round(z.ravel()[idx], 3)))[0]]
+            r, c = np.unravel_index(k, z.shape)
+            return (float(X[r, c]), float(Y[r, c])), (
+                "{}: the nearest ground at least half the dam height below the top of dam is "
+                "{:.0f} m from the {} (limit {:.0f} m); used the lowest ground within {:.0f} m, "
+                "{:.0f} m from the {}, {:.1f} ft below the top of dam".format(
+                    INFLOW_FAR, far, what, cap, cap, dline[r, c], what,
+                    (top_m - z[r, c]) / 0.3048))
+        sel &= dline <= cap
         idx = np.flatnonzero(sel)
         if rad > radius_m + 1.0:
             # the wider search: the NEAREST low-enough cell (the lowest of a 400 m circle may
@@ -406,13 +528,32 @@ def place_from_crest(grid, dam_xy, dam_height_m, top_m, radius_m=400.0, downstre
 SIDE_PROBLEM = "CHECK THE DAM POINT"
 
 
-def inflow_side_check(dam_xy, inflow_xy, path, downstream=None):
+def inflow_side_check(dam_xy, inflow_xy, path, downstream=None, crest_line=None,
+                      max_from_dam_m=None):
     """v3.10.18: is the breach inflow on the downstream side, as the flow trace from it says?
     Flags (a) a trace from the inflow that runs back over the dam point, (b) an inflow
     behind the dam relative to the trace's own direction, (c) an inflow on the other side of
-    the crest from `downstream`. Returns {'ok', 'problems', ...}."""
+    the crest from `downstream`.
+    v3.12.10, checks that do not lean on how the point was picked (on DWR-4031 (a)-(c) passed a
+    point 393 m away whose trace ran against the downstream side, cos -0.80):
+    (d) the trace runs against `downstream` (cosine < 0), (e) the inflow is more than
+    `max_from_dam_m` (INFLOW_MAX_FROM_DAM_M) from the dam line (`crest_line`) or point: 'far'
+    (a note, not one of the side 'problems'), (f) with a crest line and no (d): the trace runs back towards the dam line (against the
+    line's normal on the inflow's side). Returns {'ok', 'problems', ...}."""
     d0 = math.hypot(inflow_xy[0] - dam_xy[0], inflow_xy[1] - dam_xy[1])
     out = {"ok": True, "problems": [], "inflow_from_dam_m": round(d0, 1)}
+    has_line = crest_line is not None and len(crest_line) >= 2
+    cap = INFLOW_MAX_FROM_DAM_M if max_from_dam_m is None else float(max_from_dam_m)
+    dl = float(dam_distance(np.array([inflow_xy[0]]), np.array([inflow_xy[1]]), dam_xy,
+                            crest_line if has_line else None)[0])
+    if has_line:
+        out["inflow_from_dam_line_m"] = round(dl, 1)
+    if dl > cap:
+        # a distance, not a side disagreement: reported apart from 'problems' (and 'ok')
+        out["far"] = ("the inflow point is {:.0f} m from the {}, more than {:.0f} m: it is "
+                      "probably not this dam's toe".format(
+                          dl, "dam line" if has_line else "dam point", cap))
+    fd = None
     if path is not None and len(path) >= 2:
         dmin = min(math.hypot(p[0] - dam_xy[0], p[1] - dam_xy[1]) for p in path[1:])
         out["trace_min_to_dam_m"] = round(dmin, 1)
@@ -421,7 +562,9 @@ def inflow_side_check(dam_xy, inflow_xy, path, downstream=None):
                                    "point ({:.0f} m from it)".format(dmin))
         fd = flow_direction(path)
         out["trace_direction"] = [round(fd[0], 3), round(fd[1], 3)]
-        if d0 > 1.0 and _side(inflow_xy, dam_xy, fd) < 0:
+        nf = math.hypot(fd[0], fd[1])
+        fd = (fd[0] / nf, fd[1] / nf) if nf > 1e-9 else None
+        if fd is not None and d0 > 1.0 and _side(inflow_xy, dam_xy, fd) < 0:
             out["problems"].append("the inflow point is behind the dam relative to the flow "
                                    "trace's direction ({:.2f}, {:.2f})".format(*fd))
     if downstream is not None:
@@ -429,6 +572,30 @@ def inflow_side_check(dam_xy, inflow_xy, path, downstream=None):
         if d0 > 1.0 and _side(inflow_xy, dam_xy, downstream) < 0:
             out["problems"].append("the inflow point is on the upstream side of the crest "
                                    "(downstream is ({:.2f}, {:.2f}))".format(*downstream))
+    against = False
+    if downstream is not None and fd is not None:
+        cos = fd[0] * downstream[0] + fd[1] * downstream[1]
+        out["trace_vs_downstream"] = round(cos, 2)
+        if cos < 0:
+            against = True
+            out["problems"].append("the flow trace from the inflow point runs against the "
+                                   "downstream side (cosine {:.2f}): the downstream side or the "
+                                   "inflow point is wrong".format(cos))
+    if has_line and fd is not None:
+        a = np.asarray(crest_line, dtype=float).reshape(-1, 2)
+        tx, ty = a[-1, 0] - a[0, 0], a[-1, 1] - a[0, 1]
+        nt = math.hypot(tx, ty)
+        if nt > 1e-9:
+            n = (-ty / nt, tx / nt)
+            mid = (0.5 * (a[0, 0] + a[-1, 0]), 0.5 * (a[0, 1] + a[-1, 1]))
+            if _side(inflow_xy, mid, n) < 0:
+                n = (-n[0], -n[1])
+            cos = fd[0] * n[0] + fd[1] * n[1]
+            out["trace_vs_dam_line_normal"] = round(cos, 2)
+            if cos < 0 and not against:
+                out["problems"].append("the flow trace from the inflow point runs back towards "
+                                       "the dam line (cosine {:.2f} with the line's normal on "
+                                       "the inflow's side)".format(cos))
     out["ok"] = not out["problems"]
     return out
 

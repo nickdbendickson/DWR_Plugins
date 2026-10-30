@@ -215,6 +215,8 @@ class RunSettings:
         self.input_files = {}            # {label: path} of the inputs, recorded in the run manifest
         self.breach_xy = None            # point on the crest where the breach starts (default: dam_xy)
         self.inflow_width_m = None       # width the inflow is spread over (default: the breach width)
+        self.inflow_max_from_dam_m = None  # v3.12.10: farthest inflow pick from the dam line
+                                           # (default terrain.INFLOW_MAX_FROM_DAM_M, 150 m)
         self.user_hydrograph_obj = None  # breach.Hydrograph used as given (nested runs)
         self.user_baseline_obj = None    # its no-breach counterpart, for the incremental rasters
         self.snapshot_frames = 0         # >0: depth snapshots for an animation (about this many frames)
@@ -1200,7 +1202,9 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         if inflow_xy is None:
             ds_info = {}
             inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
-                                                search_cell, warnings, log, out=ds_info)
+                                                search_cell, warnings, log, out=ds_info,
+                                                max_from_dam_m=getattr(
+                                                    st, "inflow_max_from_dam_m", None))
             ds_dir = ds_info.get("direction")
             qa_ctx["downstream"] = ds_dir
             if inflow_xy is None:
@@ -2357,7 +2361,9 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
                                  search_cell)
         ds_info = {}
         inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
-                                            search_cell, warnings, lambda *_a: None, out=ds_info)
+                                            search_cell, warnings, lambda *_a: None, out=ds_info,
+                                            max_from_dam_m=getattr(
+                                                st, "inflow_max_from_dam_m", None))
         if inflow_xy is None:
             inflow_xy, crest, why = terrain.place_from_crest(
                 local, dam_xy, h_m, top_m, search_rad, downstream=ds_info.get("direction"))
@@ -2558,7 +2564,9 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
     inflow_point.side_check and dam_point_checks."""
     if from_plan:
         return
-    chk = terrain.inflow_side_check(dam_xy, inflow_xy, path, downstream)
+    chk = terrain.inflow_side_check(dam_xy, inflow_xy, path, downstream,
+                                    crest_line=getattr(dam, "crest_line_xy", None),
+                                    max_from_dam_m=getattr(st, "inflow_max_from_dam_m", None))
     report.setdefault("inflow_point", {})["side_check"] = chk
     if not chk["ok"]:
         msg = ("{}: the breach inflow point ({:.1f}, {:.1f}) and the flow trace disagree on "
@@ -2567,6 +2575,14 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
                "(DAM_LINES).".format(terrain.SIDE_PROBLEM, inflow_xy[0], inflow_xy[1],
                                      "; ".join(chk["problems"])))
         warnings.insert(0, msg)
+        log(msg)
+    if chk.get("far"):
+        # v3.12.10: DWR-4031's first run put the inflow 393 m away in a farmyard draw
+        msg = ("{}: {} ({:.1f}, {:.1f}). Give the inflow point (just below the dam) if it is "
+               "not the downstream toe.".format(terrain.INFLOW_FAR, chk["far"], inflow_xy[0],
+                                                inflow_xy[1]))
+        if not any(w.startswith("Breach inflow: " + terrain.INFLOW_FAR) for w in warnings):
+            warnings.insert(0, msg)
         log(msg)
     roads = getattr(st, "road_lines", None) or []
     rd = terrain.nearest_line_distance(dam_xy, roads) if roads else None
@@ -2596,7 +2612,7 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
 
 
 def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, warnings, log,
-                       out=None):
+                       out=None, max_from_dam_m=None):
     """find_inflow_point limited to the downstream side of the crest and outside the pool
     (core/terrain.downstream_direction, pool_mask). The pool needs terrain well past the
     reservoir, so it is read on its own (POOL_HALF_M around the dam, at the search cell)."""
@@ -2605,7 +2621,10 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     try:
         pool_grid = terrain_src.read((dam_xy[0] - half, dam_xy[1] - half,
                                       dam_xy[0] + half, dam_xy[1] + half), cell)
-        pool = pool_grid.like(terrain.pool_mask(pool_grid, h_m).astype(float), nodata=-1.0)
+        # v3.12.10: with the shallow (hydro-flattened) pool against the dam line
+        pool = pool_grid.like(terrain.pool_mask(
+            pool_grid, h_m, dam_xy, top_m, getattr(dam, "crest_line_xy", None)).astype(float),
+            nodata=-1.0)
     except Exception as e:                       # noqa: BLE001 - the pool is a refinement
         log("Pool behind the dam not found ({}); the inflow search uses the side test only."
             .format(e))
@@ -2617,15 +2636,22 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
             crest_xy = terrain.embankment_crest(local, dam_xy, h_m, top_m, max(rad, 400.0))[0]
         direction, how = terrain.downstream_direction(
             pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
-            crest_xy=crest_xy)
+            crest_xy=crest_xy, top_m=top_m)
     except Exception as e:                       # noqa: BLE001
         direction, how = None, "downstream direction failed: {}".format(e)
     log("Downstream side of the crest: {}".format(
         "({:.2f}, {:.2f}), {}".format(direction[0], direction[1], how) if direction else how))
     if out is not None:                  # v3.10.18: place_from_crest keeps to this side too
         out["direction"], out["how"] = direction, how
-    xy, why = terrain.find_inflow_point(local, dam_xy, h_m, top_m, rad, downstream=direction,
-                                        pool=pool)
+    xy, why = terrain.find_inflow_point(
+        local, dam_xy, h_m, top_m, rad, downstream=direction, pool=pool,
+        crest_line=getattr(dam, "crest_line_xy", None),
+        max_from_dam_m=max_from_dam_m)
+    if why.startswith(terrain.INFLOW_FAR):
+        # v3.12.10: the low ground is far from the dam (DWR-4031: 393 m, a farmyard draw)
+        warnings.insert(0, "Breach inflow: {}. Give the inflow point (just below the dam) if "
+                           "this is not the downstream toe.".format(why))
+        log(warnings[0])
     if why.startswith(terrain.NO_DOWNSTREAM):
         warnings.append("Breach inflow: {}. Give the inflow point (just below the dam) if this "
                         "is not the downstream toe.".format(why))
