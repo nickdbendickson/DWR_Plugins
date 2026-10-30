@@ -361,6 +361,13 @@ export function analyze(dam: DamRecord): Analysis {
       const dir = downstreamDirection(dam.geometry, loc);
       aoi = aoiExtent(shape, dir);
       floodWarnings.push(...aoi.warnings);
+    }
+    if (aoi?.unplacedReason) {
+      // No direction and the breach outside the AOI: it cannot be placed, so it is not applied.
+      notApplied(aoi.unplacedReason);
+      aoi = null;
+    } else if (aoi && loc) {
+      const dir = downstreamDirection(dam.geometry, loc);
       const limitsReach = aoi.coversDownstream && aoi.farM < naturalLengthM;
       if (limitsReach) {
         lengthM = Math.max(aoi.farM, 50);
@@ -375,9 +382,13 @@ export function analyze(dam: DamRecord): Analysis {
       const edgeDepthFt = aoi.coversDownstream ? depthAt(aoi.farM) : 0;
       const wetAtEdge = limitsReach && edgeDepthFt >= 0.1;
       if (wetAtEdge) {
-        const where = aoi.reachBasis === "nearest-boundary" ? "at the drawn area's nearest edge" : "where the valley leaves the drawn area";
+        // Nearest-boundary fallback: the direction is unknown, so the distance is not "downstream".
+        const where =
+          aoi.reachBasis === "nearest-boundary"
+            ? `at the drawn area's nearest edge (${fmtKm(aoi.farM)} from the breach, direction unknown`
+            : `where the valley leaves the drawn area (${fmtKm(aoi.farM)} downstream`;
         floodWarnings.push(
-          `The schematic flood is still ${fmtFt(edgeDepthFt)} ft deep ${where} (${fmtKm(aoi.farM)} downstream; wet limit ${(wetReachM / 1000).toFixed(1)} km). The drawn area may be too small.`,
+          `The schematic flood is still ${fmtFt(edgeDepthFt)} ft deep ${where}; wet limit ${(wetReachM / 1000).toFixed(1)} km). The drawn area may be too small.`,
         );
       }
       aoiOut = {
@@ -387,7 +398,7 @@ export function analyze(dam: DamRecord): Analysis {
         areaAc: aoi.areaAc,
         direction: dir.note,
         directionBasis: dir.basis,
-        reachBasis: aoi.reachBasis,
+        reachBasis: aoi.reachBasis === "unplaced" ? null : aoi.reachBasis,
         areaBasis: aoi.axis ? "clipped" : "band",
         upstreamFrac: aoi.upstreamFrac,
         maxDepthInsideFt,

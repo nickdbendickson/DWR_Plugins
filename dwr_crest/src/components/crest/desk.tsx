@@ -328,7 +328,10 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
           interest. They are saved on this dam record. A drawn area limits the schematic flood: the valley runs
           downstream from the breach (the dam line&apos;s side away from the reservoir point), the reach stops where it
           leaves the drawn area, the wet area is clipped to it, and receptors outside it are unresolved (a house that
-          would rank higher is still named).
+          would rank higher is still named). The direction is square to the straight line from the dam line&apos;s first
+          point to its last, so only the end points count: for a curved or L-shaped dam, draw just the straight stretch
+          through the breach. With no dam line or reservoir point, a drawn area around the breach is cut at its nearest
+          edge, and one that does not contain the breach is not applied.
         </p>
         <div className="mt-3">
           {mounted ? (

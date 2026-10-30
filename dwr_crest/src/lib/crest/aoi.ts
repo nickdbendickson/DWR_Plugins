@@ -27,6 +27,8 @@ const RAY_M = 1_000_000;
 /** Smaller than this is reported as a tiny drawn area. */
 export const TINY_AOI_AC = 1;
 export const TINY_AOI_M = 100;
+/** A breach within this distance (m) of the AOI's edge counts as on it: drawn from the dam, not beside it. */
+export const BOUNDARY_TOL_M = 1;
 
 export type XY = [number, number];
 type Part = { outer: XY[]; holes: XY[][] };
@@ -50,11 +52,17 @@ export type AoiExtent = {
   /** AOI area (acres): outer rings minus holes, summed over parts used. */
   areaAc: number;
   breachInside: boolean;
-  /** False when the downstream ray never enters the AOI (it is upstream or off to the side). */
+  /** False when the downstream ray never enters the AOI (upstream or off to the side), or it cannot be placed. */
   coversDownstream: boolean;
-  /** "downstream": ray along the known direction; "nearest-boundary" / "toward-aoi": fallbacks. */
-  reachBasis: "downstream" | "nearest-boundary" | "toward-aoi";
-  /** Share of the AOI area upstream of the breach (null when the direction is unknown). */
+  /**
+   * "downstream": ray along the known direction. Fallbacks with no direction: "nearest-boundary"
+   * (breach inside: cut at the nearest edge), "unplaced" (breach outside or on the edge: the AOI
+   * cannot be put upstream or downstream, so the caller does not apply it).
+   */
+  reachBasis: "downstream" | "nearest-boundary" | "unplaced";
+  /** Why the AOI cannot be placed ("unplaced"): the caller does not apply it. Null otherwise. */
+  unplacedReason: string | null;
+  /** Share of the AOI's filled outline (holes ignored) upstream of the breach (null when the direction is unknown). */
   upstreamFrac: number | null;
   /** Unit vector the strip is laid along, or null when the wet area can only be cut by distance. */
   axis: XY | null;
@@ -324,7 +332,13 @@ function unit(x: number, y: number): XY | null {
 
 /**
  * Downstream direction from the record's geometry, in local metres around the breach location.
- * 1. Dam line: its normal (from the chord, first to last vertex), on the side away from the reservoir point.
+ * 1. Dam line: the normal to its CHORD (the straight line from its first to its last vertex), on the
+ *    side away from the reservoir point. The vertices in between are not used. For a straight or
+ *    gently curved embankment that is the valley axis. For a strongly curved, L- or U-shaped
+ *    embankment (one that wraps around the pool) the chord can run across the valley and point
+ *    the valley off-axis or even upstream. Example: the DSS-WISE embankment of ND00199 (6 vertices,
+ *    L-shaped) has a chord whose normal points WNW, away from the real flood (SE). Draw the dam
+ *    line as the straight stretch through the breach instead, as the samples do.
  * 2. No dam line: the bearing from the reservoir point to the breach location.
  * Otherwise none (the caller falls back and warns).
  */
@@ -406,39 +420,43 @@ export function aoiExtent(shape: Extract<AoiShape, { ok: true }>, dir: Downstrea
   const es = edges(parts);
   const warnings = [...shape.warnings];
   const areaM2 = parts.reduce((s, p) => s + partArea(p), 0);
-  const breachInside = parts.some((p) => inPart(p, 0, 0));
+  const strictlyInside = parts.some((p) => inPart(p, 0, 0));
   let nearestM = Infinity;
-  let nearestPt: XY = [0, 0];
   for (const [a, b] of es) {
     const c = closestOnSeg(a, b);
-    const d = Math.hypot(c[0], c[1]);
-    if (d < nearestM) {
-      nearestM = d;
-      nearestPt = c;
-    }
+    nearestM = Math.min(nearestM, Math.hypot(c[0], c[1]));
   }
-  let axis = dir.u;
+  // On the edge: a breach within BOUNDARY_TOL_M of the outline (or a corner) is drawn from the dam.
+  const onEdge = !strictlyInside && nearestM <= BOUNDARY_TOL_M;
+  const axis = dir.u;
+  let breachInside = strictlyInside;
   let reachBasis: AoiExtent["reachBasis"] = "downstream";
   let nearM = 0;
   let farM = 0;
   let coversDownstream = true;
-  if (!axis && breachInside) {
+  let unplacedReason: string | null = null;
+  if (!axis && strictlyInside && nearestM > BOUNDARY_TOL_M) {
     reachBasis = "nearest-boundary";
     farM = nearestM;
     warnings.push(
-      `${dir.note} The reach is cut at the drawn area's nearest edge in any direction (${fmtKm(nearestM)}), the shortest it could be, and the wet area is cut by distance only.`,
+      `${dir.note} The reach is cut at the drawn area's nearest edge in any direction (${fmtKm(nearestM)} from the breach), the shortest it could be, and the wet area is cut by distance only.`,
     );
+  } else if (!axis) {
+    // No direction and the breach outside (or on the edge): nothing says whether the drawn area is
+    // downstream or upstream (round 3 assumed downstream, so an upstream AOI counted 487 ac).
+    // Conservative: the AOI is not applied, so the flood and every receptor are screened in full,
+    // exactly as with no AOI, and the warning says why.
+    reachBasis = "unplaced";
+    coversDownstream = false;
+    breachInside = false;
+    unplacedReason = `Drawn area not applied. ${dir.note} The breach location is ${onEdge || strictlyInside ? "on the drawn area's edge" : `outside the drawn area (${fmtKm(nearestM)} from it)`}, so there is no way to tell whether the area is downstream or upstream of the dam; the flood and every receptor are screened in full, as with no drawn area.`;
   } else {
-    if (!axis) {
-      reachBasis = "toward-aoi";
-      axis = unit(nearestPt[0], nearestPt[1]);
-      warnings.push(
-        `${dir.note} The valley is assumed to run from the breach toward the drawn area's nearest point (${fmtKm(nearestM)} away).`,
-      );
-    }
-    const iv = axis ? insideIntervals(parts, es, [0, 0], [axis[0] * RAY_M, axis[1] * RAY_M]) : [];
-    const first = breachInside ? iv.find((v) => v[0] < 1e-6) : iv.find((v) => v[0] > 0);
+    const iv = insideIntervals(parts, es, [0, 0], [axis[0] * RAY_M, axis[1] * RAY_M]);
+    // The first stretch of the downstream ray inside the AOI. One that starts within
+    // BOUNDARY_TOL_M of the breach (breach inside, on the edge, or on a corner) counts from 0.
+    const first = iv.find((v) => v[1] - v[0] > 1e-6);
     if (first) {
+      if (first[0] <= BOUNDARY_TOL_M) breachInside = true;
       nearM = breachInside ? 0 : first[0];
       farM = first[1];
     } else {
@@ -449,15 +467,11 @@ export function aoiExtent(shape: Extract<AoiShape, { ok: true }>, dir: Downstrea
     }
   }
   let upstreamFrac: number | null = null;
-  if (dir.u && areaM2 > 0) {
-    const up = parts.reduce(
-      (s, p) =>
-        s +
-        upstreamArea(p.outer, dir.u!) -
-        p.holes.reduce((h, r) => h + upstreamArea(r, dir.u!), 0),
-      0,
-    );
-    upstreamFrac = Math.max(0, Math.min(1, up / areaM2));
+  // On the filled outline: a hole (a pond, a farmyard) is not "upstream area" and should not tip the warning.
+  const filledM2 = parts.reduce((s, p) => s + Math.abs(signedArea(p.outer)), 0);
+  if (dir.u && filledM2 > 0) {
+    const up = parts.reduce((s, p) => s + upstreamArea(p.outer, dir.u!), 0);
+    upstreamFrac = Math.max(0, Math.min(1, up / filledM2));
     if (upstreamFrac > 0.5) {
       warnings.push(
         `Most of the drawn area (${Math.round(upstreamFrac * 100)}%) is upstream of the breach. The flood runs downstream; check the drawn area covers the valley below the dam.`,
@@ -470,7 +484,7 @@ export function aoiExtent(shape: Extract<AoiShape, { ok: true }>, dir: Downstrea
       `The drawn area is tiny (${fmtKm(Math.max(0, farM - nearM))} along the valley, ${fmtAc(areaAc)} ac). It probably does not cover the flood; redraw it.`,
     );
   }
-  const strip = reachBasis === "nearest-boundary" ? null : axis;
+  const strip = reachBasis === "downstream" ? axis : null;
   const crossFrac = (xM: number, halfM: number) => {
     if (!strip) return null;
     if (halfM <= 0) return 0;
@@ -488,6 +502,7 @@ export function aoiExtent(shape: Extract<AoiShape, { ok: true }>, dir: Downstrea
     breachInside,
     coversDownstream,
     reachBasis,
+    unplacedReason,
     upstreamFrac,
     axis: strip,
     parts: parts.length,
