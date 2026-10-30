@@ -1,4 +1,5 @@
 import { rankReceptor } from "./acer.ts";
+import { type AoiExtent, aoiExtent, downstreamDirection, fmtAc, fmtKm, hasAoi, readAoi } from "./aoi.ts";
 import { vertconShiftFt } from "./vertcon_nd.ts";
 import { ACFT, ACRE, CFS, FT, froehlich1995Peak, froehlich2008, routedHydrograph, thin } from "./breach.ts";
 import type {
@@ -318,9 +319,85 @@ export function analyze(dam: DamRecord): Analysis {
   const baseM = 900 + Math.sqrt(storage) * 80;
   const wetReachM = (baseM * Math.log(Math.max(maxDepthFt / 0.1, 1.0001))) / decay.k;
   const userReachKm = finite(dam.reachKm ?? NaN, NaN);
-  const reachSource = userReachKm > 0 ? "user" : "wet";
-  const lengthM = clamp(userReachKm > 0 ? userReachKm * 1000 : wetReachM, 500, MAX_REACH_KM * 1000);
+  let reachSource: Analysis["flood"]["reachSource"] = userReachKm > 0 ? "user" : "wet";
+  const naturalLengthM = clamp(userReachKm > 0 ? userReachKm * 1000 : wetReachM, 500, MAX_REACH_KM * 1000);
   const depthAt = (xM: number) => maxDepthFt * Math.exp((-decay.k * xM) / baseM);
+  const floodWarnings: string[] = [];
+
+  // Drawn area of interest (Nick 2026-10-29; round 3 fixes). The schematic valley is laid along the
+  // downstream direction from the record's geometry (aoi.ts downstreamDirection). The reach stops
+  // where it leaves the AOI (nearest downstream exit); the wet area is the schematic strip clipped
+  // to the AOI polygon; receptors outside are unresolved (outside drawn area) but, inside the
+  // un-clipped reach, still ranked as "would be" so a known High is never hidden. No AOI drawn:
+  // everything below runs as before.
+  let lengthM = naturalLengthM;
+  let aoiOut: Analysis["flood"]["aoi"] = null;
+  let aoi: AoiExtent | null = null;
+  const notApplied = (w: string) => {
+    floodWarnings.push(w);
+    aoiOut = {
+      applied: false,
+      nearKm: 0,
+      farKm: 0,
+      areaAc: 0,
+      direction: "",
+      directionBasis: "none",
+      reachBasis: null,
+      areaBasis: null,
+      upstreamFrac: null,
+      maxDepthInsideFt: 0,
+      limitsReach: false,
+      edgeDepthFt: 0,
+      wetAtEdge: false,
+      label: w,
+    };
+  };
+  if (hasAoi(dam.geometry?.aoi)) {
+    const loc = damLocation(dam);
+    const shape = loc ? readAoi(dam.geometry?.aoi, loc) : null;
+    if (!loc) notApplied("Drawn area not applied: no breach location. Draw the breach point or enter the dam latitude and longitude.");
+    else if (shape && !shape.ok) notApplied(shape.reason);
+    else if (shape && shape.ok) {
+      const dir = downstreamDirection(dam.geometry, loc);
+      aoi = aoiExtent(shape, dir);
+      floodWarnings.push(...aoi.warnings);
+      const limitsReach = aoi.coversDownstream && aoi.farM < naturalLengthM;
+      if (limitsReach) {
+        lengthM = Math.max(aoi.farM, 50);
+        reachSource = "aoi";
+      }
+      const maxDepthInsideFt = aoi.coversDownstream && aoi.nearM < lengthM ? depthAt(aoi.nearM) : 0;
+      if (!aoi.breachInside && aoi.coversDownstream) {
+        floodWarnings.push(
+          `The breach location is outside the drawn area; the valley enters it ${fmtKm(aoi.nearM)} downstream. Only the valley from there on is counted. The flood's max depth (${fmtFt(maxDepthFt)} ft) is at the breach, outside the drawn area; inside it the schematic depth peaks at ${fmtFt(maxDepthInsideFt)} ft.`,
+        );
+      }
+      const edgeDepthFt = aoi.coversDownstream ? depthAt(aoi.farM) : 0;
+      const wetAtEdge = limitsReach && edgeDepthFt >= 0.1;
+      if (wetAtEdge) {
+        const where = aoi.reachBasis === "nearest-boundary" ? "at the drawn area's nearest edge" : "where the valley leaves the drawn area";
+        floodWarnings.push(
+          `The schematic flood is still ${fmtFt(edgeDepthFt)} ft deep ${where} (${fmtKm(aoi.farM)} downstream; wet limit ${(wetReachM / 1000).toFixed(1)} km). The drawn area may be too small.`,
+        );
+      }
+      aoiOut = {
+        applied: true,
+        nearKm: aoi.nearM / 1000,
+        farKm: aoi.farM / 1000,
+        areaAc: aoi.areaAc,
+        direction: dir.note,
+        directionBasis: dir.basis,
+        reachBasis: aoi.reachBasis,
+        areaBasis: aoi.axis ? "clipped" : "band",
+        upstreamFrac: aoi.upstreamFrac,
+        maxDepthInsideFt,
+        limitsReach,
+        edgeDepthFt,
+        wetAtEdge,
+        label: "",
+      };
+    }
+  }
   const halfAt = (xM: number) => 28 + 340 * (xM / baseM) ** 0.72;
   const NST = 81;
   const stations = Array.from({ length: NST }, (_, i) => {
@@ -329,46 +406,52 @@ export function analyze(dam: DamRecord): Analysis {
     return { s, xKm: xM / 1000, halfM: halfAt(xM), depthFt: depthAt(xM) };
   });
 
+  const clipFromM = aoi ? aoi.nearM : 0;
+  const SUB = 16;
   let areaM2 = 0;
   for (let i = 1; i < stations.length; i++) {
     const a = stations[i - 1];
     const b = stations[i];
-    if (a.depthFt > 0.1 || b.depthFt > 0.1) areaM2 += (b.s - a.s) * lengthM * (a.halfM + b.halfM);
+    if (a.depthFt > 0.1 || b.depthFt > 0.1) {
+      const seg = (b.s - a.s) * lengthM * (a.halfM + b.halfM);
+      const xa = a.s * lengthM;
+      const xb = b.s * lengthM;
+      if (!aoi) areaM2 += seg;
+      else if (!aoi.coversDownstream) continue;
+      else if (aoi.axis) {
+        // Schematic strip laid along the downstream direction, clipped to the AOI polygon.
+        for (let k = 0; k < SUB; k++) {
+          const f = (k + 0.5) / SUB;
+          const x = xa + f * (xb - xa);
+          if (x < clipFromM) continue;
+          const h = a.halfM + f * (b.halfM - a.halfM);
+          areaM2 += ((xb - xa) / SUB) * 2 * h * (aoi.crossFrac(x, h) ?? 1);
+        }
+      } else {
+        const frac = clamp((xb - Math.max(xa, clipFromM)) / Math.max(xb - xa, 1e-9), 0, 1);
+        areaM2 += seg * frac;
+      }
+    }
   }
-  const acres = areaM2 / ACRE;
+  let acres = areaM2 / ACRE;
+  if (aoi && aoiOut) {
+    const o = aoiOut as NonNullable<Analysis["flood"]["aoi"]>;
+    // Direction unknown: the strip cannot be placed on the polygon; it cannot exceed the polygon's area.
+    if (!aoi.axis) acres = Math.min(acres, aoi.areaAc);
+    const parts = aoi.parts > 1 ? `, ${aoi.parts} parts` : "";
+    o.label = !aoi.coversDownstream
+      ? `Drawn area: does not reach the valley downstream of the breach (${fmtAc(aoi.areaAc)} ac${parts})`
+      : o.limitsReach
+        ? `Limited by drawn area: ${fmtKm(aoi.farM)} / ${fmtAc(aoi.areaAc)} ac${parts}`
+        : `Drawn area: ${fmtKm(aoi.farM)} / ${fmtAc(aoi.areaAc)} ac${parts} (the ${reachSource === "user" ? "reach you set" : "0.1 ft wet limit"} ends first, at ${(lengthM / 1000).toFixed(1)} km)`;
+  }
+  warnings.push(...floodWarnings);
 
   // The desk depth curve only resolves out to the 0.1 ft wet limit. A user reach past that limit
   // extends the drawn valley, but structures beyond the wet limit stay unresolved, not dry.
   const resolvedM = Math.min(lengthM, Math.max(wetReachM, 500));
-  const receptors = dam.receptors.map((r) => {
-    const xM =
-      r.distanceKm != null && Number.isFinite(r.distanceKm) ? Math.max(0, r.distanceKm * 1000) : Math.max(0, r.station) * baseM;
-    const unresolved = xM > resolvedM;
-    const base = {
-      id: r.id,
-      name: r.name,
-      kind: r.kind,
-      station: Math.min(1, xM / lengthM),
-      distanceKm: xM / 1000,
-      lateral: r.lateral,
-    };
-    if (unresolved) {
-      return {
-        ...base,
-        depthFt: 0,
-        velocityFps: 0,
-        arrivalHr: null,
-        flooded: false,
-        unresolved: true,
-        zone: null,
-        ndClass: null,
-        rankReason:
-          xM > lengthM
-            ? `unresolved: ${(xM / 1000).toFixed(1)} km is past the ${(lengthM / 1000).toFixed(1)} km desk reach; not screened`
-            : `unresolved: ${(xM / 1000).toFixed(1)} km is past the desk curve's 0.1 ft wet limit (${(resolvedM / 1000).toFixed(1)} km), inside the ${(lengthM / 1000).toFixed(1)} km user reach; the desk cannot call it dry`,
-        needsJudgment: true,
-      };
-    }
+  const naturalResolvedM = Math.min(naturalLengthM, Math.max(wetReachM, 500));
+  const rankAt = (r: ReceptorSeed, xM: number) => {
     const depth = Math.max(0, depthAt(xM) - r.padFt);
     const flooded = depth >= 0.1;
     const widthFt = halfAt(xM) * 2 * 3.28084;
@@ -386,6 +469,58 @@ export function analyze(dam: DamRecord): Analysis {
       habitable: r.habitable,
       judgmentAsProbable: dam.judgmentAsProbable ?? true,
     });
+    return { depthFt, velocityFps, arrival, flooded, rank };
+  };
+  const receptors = dam.receptors.map((r) => {
+    const xM =
+      r.distanceKm != null && Number.isFinite(r.distanceKm) ? Math.max(0, r.distanceKm * 1000) : Math.max(0, r.station) * baseM;
+    const outsideAoi = aoi != null && (!aoi.coversDownstream || xM > aoi.farM || xM < aoi.nearM);
+    const unresolved = outsideAoi || xM > resolvedM;
+    const base = {
+      id: r.id,
+      name: r.name,
+      kind: r.kind,
+      station: Math.min(1, xM / lengthM),
+      distanceKm: xM / 1000,
+      lateral: r.lateral,
+    };
+    if (unresolved) {
+      let wouldBe: RankedReceptor["wouldBe"] = null;
+      let wbText = "";
+      if (outsideAoi && xM <= naturalResolvedM) {
+        const w = rankAt(r, xM);
+        wouldBe = { ndClass: w.rank.class, zone: w.rank.zone, depthFt: w.depthFt, velocityFps: w.velocityFps };
+        wbText = w.rank.class
+          ? `; without the drawn area it would be ${w.rank.class} (${w.rank.reason}; ${w.depthFt.toFixed(2)} ft at ${w.velocityFps.toFixed(2)} ft/s)`
+          : `; without the drawn area it would not count (${w.rank.reason})`;
+      }
+      const where = !outsideAoi
+        ? ""
+        : !aoi!.coversDownstream
+          ? "the drawn area does not reach the valley downstream of the breach"
+          : xM > aoi!.farM
+            ? `${(xM / 1000).toFixed(1)} km is past where the valley leaves the drawn area, ${fmtKm(aoi!.farM)} downstream`
+            : `${(xM / 1000).toFixed(1)} km is before the valley enters the drawn area, ${fmtKm(aoi!.nearM)} downstream`;
+      return {
+        ...base,
+        depthFt: 0,
+        velocityFps: 0,
+        arrivalHr: null,
+        flooded: false,
+        unresolved: true,
+        outsideAoi,
+        wouldBe,
+        zone: null,
+        ndClass: null,
+        rankReason: outsideAoi
+          ? `unresolved (outside drawn area): ${where}; not screened${wbText}`
+          : xM > lengthM
+            ? `unresolved: ${(xM / 1000).toFixed(1)} km is past the ${(lengthM / 1000).toFixed(1)} km desk reach; not screened`
+            : `unresolved: ${(xM / 1000).toFixed(1)} km is past the desk curve's 0.1 ft wet limit (${(resolvedM / 1000).toFixed(1)} km), inside the ${(lengthM / 1000).toFixed(1)} km user reach; the desk cannot call it dry`,
+        needsJudgment: true,
+      };
+    }
+    const { depthFt, velocityFps, arrival, flooded, rank } = rankAt(r, xM);
     return {
       ...base,
       depthFt,
@@ -393,6 +528,8 @@ export function analyze(dam: DamRecord): Analysis {
       arrivalHr: arrival,
       flooded,
       unresolved: false,
+      outsideAoi: false,
+      wouldBe: null,
       zone: rank.zone,
       ndClass: rank.class,
       rankReason: rank.reason,
@@ -448,6 +585,8 @@ export function analyze(dam: DamRecord): Analysis {
       acres,
       lengthM,
       reachSource,
+      aoi: aoiOut,
+      warnings: floodWarnings,
       velocityBasis: VELOCITY_BASIS,
       stations,
       receptors,
@@ -465,6 +604,8 @@ const ZONE_ORDER = { low: 1, judgment: 2, high: 3 } as const;
 export function screenReceptors(
   receptors: (Pick<RankedReceptor, "name" | "kind" | "depthFt" | "velocityFps" | "zone" | "ndClass" | "rankReason" | "needsJudgment"> & {
     unresolved?: boolean;
+    outsideAoi?: boolean;
+    wouldBe?: RankedReceptor["wouldBe"];
   })[],
   seeds: Pick<ReceptorSeed, "kind" | "habitable">[] = [],
   opts: { judgmentAsProbable?: boolean } = {},
@@ -492,10 +633,16 @@ export function screenReceptors(
     }
   });
   if (reasons.length === 0) reasons.push("No seeded receptor is wet at 0.1 ft or more.");
-  const unresolved = receptors.filter((r) => r.unresolved).length;
+  const outside = receptors.filter((r) => r.unresolved && r.outsideAoi).length;
+  const unresolved = receptors.filter((r) => r.unresolved).length - outside;
   if (unresolved > 0) {
     reasons.push(
       `${unresolved} receptor${unresolved === 1 ? " is" : "s are"} past the desk reach and unresolved. Extend the reach or model the valley before relying on this class.`,
+    );
+  }
+  if (outside > 0) {
+    reasons.push(
+      `${outside} receptor${outside === 1 ? " is" : "s are"} outside the drawn area and unresolved. Enlarge the drawn area before relying on this class.`,
     );
   }
   reasons.push("Velocities are desk estimates (continuity on the schematic section), so TM 11 zones near a curve are approximate.");
@@ -510,22 +657,51 @@ export function screenReceptors(
   }
   // Nick (2026-10-29): a home or road past the modeled reach forces Review. It is never Low and never dropped.
   // A resolved High stays High (it cannot go higher) but the label says what is unresolved.
-  const unresolvedCounting = receptors.filter((r, i) => {
+  // Same rule for a receptor outside the drawn area (Nick 2026-10-29): unresolved, forces Review.
+  const counting = receptors.filter((r, i) => {
     if (!r.unresolved) return false;
     const habitable = seeds[i]?.habitable ?? (r.kind === "house" || r.kind === "mobile");
     return habitable || r.kind === "road";
-  }).length;
+  });
+  const unresolvedCounting = counting.length;
   if (unresolvedCounting > 0) {
-    const n = `${unresolvedCounting} unresolved`;
+    const outsideCounting = counting.filter((r) => r.outsideAoi).length;
+    const n =
+      outsideCounting === 0
+        ? `${unresolvedCounting} unresolved`
+        : outsideCounting === unresolvedCounting
+          ? `${unresolvedCounting} unresolved (outside drawn area)`
+          : `${unresolvedCounting} unresolved (${outsideCounting} outside drawn area)`;
+    const where = outsideCounting === 0 ? "past the reach" : outsideCounting === unresolvedCounting ? "outside the drawn area" : "past the reach or outside the drawn area";
     const what = unresolvedCounting === 1 ? "home or road" : "homes or roads";
-    if ((level as ScreenLevel) === "High") {
-      label = label.endsWith(")") ? `${label.slice(0, -1)}; ${n} past the reach)` : `${label} (${n} past the reach)`;
+    // Never hide a known High (Nick 2026-10-29, round 3): a receptor outside the drawn area but inside the
+    // un-clipped reach is still ranked; if it would screen above the resolved receptors, the label says so.
+    const would = counting.filter((r) => r.outsideAoi && r.wouldBe?.ndClass);
+    const wbClass = would.reduce<"High" | "Medium" | "Low" | null>(
+      (m, r) => (m == null || CLASS_ORDER[r.wouldBe!.ndClass!] > CLASS_ORDER[m] ? r.wouldBe!.ndClass! : m),
+      null,
+    );
+    const resolvedRank = (level as ScreenLevel) === "Low" ? 1 : CLASS_ORDER[level as "High" | "Medium" | "Low"];
+    if (wbClass && CLASS_ORDER[wbClass] > resolvedRank) {
+      const resolvedAs = level;
+      const top = would.filter((r) => r.wouldBe!.ndClass === wbClass);
+      const flagged = wbClass === "High" && top.every((r) => r.wouldBe!.zone === "judgment") ? " (flagged: judgment zone)" : "";
+      const names = top.length <= 2 ? top.map((r) => r.name).join(" and ") : `${top[0].name} and ${top.length - 1} more`;
+      const rest = unresolvedCounting - top.length;
+      level = "Review";
+      label = `Review (would be ${wbClass}${flagged}: ${names} outside drawn area${rest > 0 ? `; ${rest} more unresolved` : ""})`;
+      reasons.unshift(
+        `Held at Review: ${top.length === 1 ? `${top[0].name} is` : `${top.length} receptors are`} outside the drawn area but inside the desk reach and would screen ${wbClass}${flagged} without it. Resolved receptors alone screen ${resolvedAs}. Enlarge the drawn area or model the valley before relying on a lower class.`,
+      );
+    } else if ((level as ScreenLevel) === "High") {
+      const tag = outsideCounting === 0 ? `${n} past the reach` : n.replace(" (", ", ").replace(")", "");
+      label = label.endsWith(")") ? `${label.slice(0, -1)}; ${tag})` : `${label} (${tag})`;
     } else {
       const resolvedAs = level;
       level = "Review";
       label = `Review (${resolvedAs} on resolved receptors; ${n})`;
       reasons.unshift(
-        `Held at Review: resolved receptors screen ${resolvedAs}, but ${n} ${what} past the modeled reach could raise it. Extend the reach or model the valley.`,
+        `Held at Review: resolved receptors screen ${resolvedAs}, but ${unresolvedCounting} unresolved ${what} ${where === "past the reach" ? "past the modeled reach" : where} could raise it. ${outsideCounting > 0 ? "Enlarge the drawn area, extend the reach," : "Extend the reach"} or model the valley.`,
       );
     }
   }

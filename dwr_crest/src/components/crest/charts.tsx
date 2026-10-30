@@ -69,8 +69,14 @@ export function ValleyMap({ flood }: { flood: Analysis["flood"] }) {
       <text x="40" y={h / 2 - 54} fill="var(--color-ink)" fontSize="12">
         Dam
       </text>
-      <text x={w - 120} y={h - 16} fill="var(--color-muted)" fontSize="12">
-        {(lengthM / 1000).toFixed(1)} km downstream
+      <text
+        x={flood.reachSource === "aoi" ? w - 12 : w - 120}
+        y={h - 16}
+        textAnchor={flood.reachSource === "aoi" ? "end" : undefined}
+        fill="var(--color-muted)"
+        fontSize="12"
+      >
+        {(lengthM / 1000).toFixed(1)} km downstream{flood.reachSource === "aoi" ? " (drawn area limit)" : ""}
       </text>
       {receptors.map((r) => {
         const half = stations[Math.round(r.station * (stations.length - 1))]?.halfM ?? maxHalf;

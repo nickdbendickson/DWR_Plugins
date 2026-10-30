@@ -42,6 +42,30 @@ export function exportDamJson(dam: DamRecord, analysis: Analysis): string {
     hydrograph_peak_cfs: analysis.breach.peakCfs,
     froehlich_1995_peak_cfs: analysis.breach.empiricalPeakCfs,
     volume_acft: analysis.breach.volumeAcFt,
+    // Only when an AOI is drawn, so dam.json is unchanged without one.
+    ...(analysis.flood.aoi
+      ? {
+          aoi_limit: {
+            applied: analysis.flood.aoi.applied,
+            label: analysis.flood.aoi.label,
+            near_km: analysis.flood.aoi.nearKm,
+            far_km: analysis.flood.aoi.farKm,
+            direction_basis: analysis.flood.aoi.directionBasis,
+            direction: analysis.flood.aoi.direction,
+            reach_basis: analysis.flood.aoi.reachBasis,
+            area_basis: analysis.flood.aoi.areaBasis,
+            upstream_frac: analysis.flood.aoi.upstreamFrac,
+            max_depth_ft: analysis.flood.maxDepthFt,
+            max_depth_inside_ft: analysis.flood.aoi.maxDepthInsideFt,
+            edge_depth_ft: analysis.flood.aoi.edgeDepthFt,
+            area_ac: analysis.flood.aoi.areaAc,
+            limits_reach: analysis.flood.aoi.limitsReach,
+            wet_at_edge: analysis.flood.aoi.wetAtEdge,
+            reach_km: analysis.flood.lengthM / 1000,
+            wet_area_ac: analysis.flood.acres,
+          },
+        }
+      : {}),
   };
   return JSON.stringify(obj, null, 2) + "\n";
 }
