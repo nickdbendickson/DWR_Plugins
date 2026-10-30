@@ -68,8 +68,8 @@ describe("ND ranking (damsuite classify_nd)", () => {
     assert.match(old.reason, /old option, 5\.3\)/);
   });
 
-  it("CHECK: the DWR-2801 house 4010 (3.10 ft, 0.11 ft/s) and DWR-4031 house 16775 (2.11 ft, 6.95 ft/s) screen Medium", () => {
-    for (const [name, d, v] of [["4010", 3.1, 0.11], ["16775", 2.11, 6.95]] as const) {
+  it("CHECK: the DWR-2801 house 4010 (3.10 ft, 0.11 ft/s) and DWR-4031 house 9953 (2.111 ft, 6.95 ft/s; toe run, was 16775) screen Medium", () => {
+    for (const [name, d, v] of [["4010", 3.1, 0.11], ["9953", 2.111, 6.95]] as const) {
       const r = rankReceptor({ kind: "house", depthFt: d, velocityFps: v });
       assert.equal(r.zone, "judgment", name);
       assert.equal(r.class, "Medium", name);

@@ -113,6 +113,14 @@ plus `raw/` and `grids/` `SHA256SUMS.txt`; the build checks each NAVD 88 value a
 local value or a second conversion). `data-raw/` is git-ignored. Rebuild the desktop bundle and `Crest.html`
 afterwards.
 
+## Judgment-zone homes (ND rule)
+
+A home in the ACER TM 11 judgment zone screens **ND Medium by rule** (Nick, 10/30/2026): it is not counted as probable
+loss of life and is not flagged High. Homes in the high zone stay High, and TM 11 lives in jeopardy is unchanged. The
+old rule is kept as an option, off by default: on the desk, **Judgment zone** -> *Count as probable loss of life (High,
+old option)* (`judgmentAsProbable: true` in the dam record) screens such a home High (flagged: judgment zone). A saved
+record that chose it keeps it; a record without the setting screens Medium.
+
 ## Crest.html (one file)
 
 `Crest.html` is the whole desk in a single file that opens in any browser, with no install and no server: the same
