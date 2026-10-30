@@ -1487,7 +1487,11 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         arr_max = float(np.nanmax(lf_env.arrival_hr.data)) if np.isfinite(
             lf_env.arrival_hr.data).any() else 0.0
         still_moving = arr_max > 0.9 * sim_time / 3600.0
-        rec = {"run": it, "bounds": [round(b, 1) for b in bounds],
+        # 3.13.2 (DWR-4031 toe10m): "run" is the domain run (a clock extension keeps it,
+        # by design); "pass" numbers every LISFLOOD-FP pass so the report can tell them apart
+        rec = {"run": it, "pass": len(iterations) + 1,
+               "clock_extension": bool(iterations) and iterations[-1].get("run") == it,
+               "bounds": [round(b, 1) for b in bounds],
                "size_mi": [round((bounds[2] - bounds[0]) / MILE, 2),
                            round((bounds[3] - bounds[1]) / MILE, 2)],
                "cells": int(dem.data.size), "dem_coverage": round(cover, 4),
@@ -2802,6 +2806,7 @@ def scr_has_final(r):
 
 
 def render_report(r):
+    from .report_docx import pass_number, domain_run_text, peak_inflow_text   # stdlib only
     s = r["summary"]
     h = r["hydrograph"]
     lines = ["# Breach model run: {}".format(s["dam_id"]), "",
@@ -2928,21 +2933,22 @@ def render_report(r):
             "; with receptor layers an edge is left alone when no structure, road or rail lies "
             "in the flood's path within {} mi".format(r["settings"]["impact_look_ahead_mi"])
             if r["settings"].get("receptors") else ""), "",
-        "| Run | Size (mi) | Cells | Hours | Edge depth N/S/E/W (ft) | Over | Minutes |",
-        "|---|---|---|---|---|---|---|"]
-    for it in r["lisflood_runs"]:
+        "| Pass | Domain run | Size (mi) | Cells | Hours | Edge depth N/S/E/W (ft) | Over "
+        "| Minutes |",
+        "|---|---|---|---|---|---|---|---|"]
+    for i, it in enumerate(r["lisflood_runs"]):
         e = it["edge_max_depth_ft"]
-        lines.append("| {} | {} x {} | {:,} | {} | {}/{}/{}/{} | {} | {} |".format(
-            it["run"], it["size_mi"][0], it["size_mi"][1], it["cells"], it["sim_time_hr"],
+        lines.append("| {} | {} | {} x {} | {:,} | {} | {}/{}/{}/{} | {} | {} |".format(
+            pass_number(it, i), domain_run_text(r["lisflood_runs"], i),
+            it["size_mi"][0], it["size_mi"][1], it["cells"], it["sim_time_hr"],
             e["N"], e["S"], e["E"], e["W"],
             ", ".join(it.get("edges_over_after_class_stop", it.get(
                 "edges_over_after_receptors", it["edges_over_tolerance"]))) or "none",
             it["runtime_min"]))
     last = r["lisflood_runs"][-1]["stats"]
-    lines += ["", "{} (last run): max volume error {}% of the breach volume, "
-              "peak inflow {} cfs.".format(r.get("flood_engine_short", "LISFLOOD-FP"),
-                                           last.get("max_volume_error_pct"),
-                                           last.get("peak_inflow_cfs")), ""]
+    lines += ["", "{} (last pass): max volume error {}% of the breach volume, {}.".format(
+        r.get("flood_engine_short", "LISFLOOD-FP"), last.get("max_volume_error_pct"),
+        peak_inflow_text(last)), ""]
     cs = r.get("class_stop_rule")
     if cs:
         lines += ["## Class-stop rule (v3.2.0)", "",

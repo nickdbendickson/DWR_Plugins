@@ -1550,7 +1550,9 @@ _UNIT_SUFFIX = ((u"_acft", u" (ac-ft)"), (u"_cfs", u" (cfs)"), (u"_ft2s", u" (ft
                 (u"_fps", u" (ft/s)"), (u"_ft", u" (ft)"), (u"_hr", u" (h)"), (u"_mi", u" (mi)"),
                 (u"_min", u" (min)"), (u"_pct", u" (%)"), (u"_ac", u" (ac)"),
                 (u"_m2", u" (m²)"), (u"_m", u" (m)"))
-LABELS = {
+LABELS = {"peak_inflow_input_cfs": "Peak inflow, breach hydrograph (cfs)",
+          "peak_inflow_cfs": "Peak inflow at the .mass output samples (cfs)",
+          
     "starting_wse_ft": "Starting water-surface elevation (ft)",
     "starting_wse_rule": "Starting level rule", "breach_bottom_ft": "Breach bottom elevation (ft)",
     "hw_ft": "Water depth above breach bottom, Hw (ft)", "hb_ft": "Breach height, Hb (ft)",
@@ -1603,6 +1605,41 @@ SENS_LABELS = {"case": "Case", "group": "Varied", "method": "Method", "peak_cfs"
                    "Velocity P99 (ft/s)", "max_velocity_depth_ft": "Depth at max velocity (ft)",
                "flooded_ac_masked": "Flooded, water bodies masked (ac)",
                "flooded_ac_ge_1ft_masked": "Flooded >= 1 ft, water bodies masked (ac)"}
+
+
+def pass_number(it, i):
+    """3.13.2 (DWR-4031 toe10m): a LISFLOOD-FP pass's number, 1, 2, ... in order
+    (older run reports without "pass": the position in the list)."""
+    p = it.get("pass") if isinstance(it, dict) else None
+    return p if isinstance(p, int) and p > 0 else i + 1
+
+
+def domain_run_text(runs, i):
+    """The domain run of pass i, with "(clock extended)" when the pass only lengthened
+    the clock of the domain run before it (the same run number, by design)."""
+    it = runs[i]
+    run = it.get("run")
+    ext = it.get("clock_extension")
+    if ext is None:      # older report: the same run number as the pass before
+        ext = i > 0 and runs[i - 1].get("run") == run
+    return "{}{}".format(fmt_val(run), " (clock extended)" if ext else "")
+
+
+def peak_inflow_text(stats):
+    """The peak inflow for report text. The breach hydrograph's peak when known, with
+    the largest Qin at the .mass output samples labelled as such when it differs (the
+    samples every massint s can miss a short peak: DWR-4031 toe10m, 1,696 against
+    1,570 cfs); older run reports: the .mass value, labelled."""
+    stats = stats or {}
+    q_in, q_mass = stats.get("peak_inflow_input_cfs"), stats.get("peak_inflow_cfs")
+    mi = stats.get("massint_s")
+    at = " (every {} s)".format(fmt_val(mi)) if isinstance(mi, (int, float)) else ""
+    if q_in is None:
+        return "peak inflow {} cfs at the .mass output samples{}".format(fmt_val(q_mass), at)
+    txt = "peak inflow {} cfs (breach hydrograph)".format(fmt_val(q_in))
+    if q_mass is not None and abs(float(q_mass) - float(q_in)) >= 1.0:
+        txt += "; {} cfs at the .mass output samples{}".format(fmt_val(q_mass), at)
+    return txt
 
 
 def label_of(key):
@@ -2292,21 +2329,23 @@ class _Report(object):
                         "deeper than {} ft moves out by {} mi and the model runs again.".format(
                             fmt_val(st.get("edge_tolerance_ft", 1.0)),
                             fmt_val(st.get("expand_step_mi", 3.0))))
-            table = [["Run", "Size (mi)", "Cells", "Hours", "Edge depth N/S/E/W (ft)",
-                      "Edges over", "Vol. error (%)", "Min"]]
-            for it in runs:
+            table = [["Pass", "Domain run", "Size (mi)", "Cells", "Hours",
+                      "Edge depth N/S/E/W (ft)", "Edges over", "Vol. error (%)", "Min"]]
+            for i, it in enumerate(runs):
                 e = it.get("edge_max_depth_ft") or {}
                 over = it.get("edges_over_after_class_stop", it.get(
                     "edges_over_after_receptors", it.get("edges_over_tolerance"))) or []
                 size = it.get("size_mi") or ["", ""]
-                table.append([fmt_val(it.get("run")), "{} x {}".format(*size[:2]),
+                table.append([fmt_val(pass_number(it, i)), domain_run_text(runs, i),
+                              "{} x {}".format(*size[:2]),
                               fmt_val(it.get("cells")), fmt_val(it.get("sim_time_hr")),
                               "/".join(fmt_val(e.get(k)) for k in "NSEW"),
                               ", ".join(over) or "none",
                               fmt_val((it.get("stats") or {}).get("max_volume_error_pct")),
                               fmt_val(it.get("runtime_min"))])
-            d.table(table, align=[None, None, "right", "right", None, None, "right", "right"],
-                    caption="{} runs".format(rep.get("flood_engine_short") or "LISFLOOD-FP"))
+            d.table(table, align=[None, None, None, "right", "right", None, None, "right",
+                                  "right"],
+                    caption="{} passes".format(rep.get("flood_engine_short") or "LISFLOOD-FP"))
             dec = rep.get("receptor_edge_decisions") or []
             drows = []
             for rec in dec:
@@ -2324,10 +2363,11 @@ class _Report(object):
             last = runs[-1].get("stats") or {}
             mb = [(label_of(k), fmt_val(last.get(k))) for k in (
                 "cells", "cell_size_m", "sim_time_hr", "injected_acft", "in_domain_acft",
-                "max_volume_error_pct", "worst_interval_error_pct", "peak_inflow_cfs",
-                "flooded_acres", "max_depth_ft", "max_velocity_fps") if last.get(k) is not None]
+                "max_volume_error_pct", "worst_interval_error_pct", "peak_inflow_input_cfs",
+                "peak_inflow_cfs", "flooded_acres", "max_depth_ft", "max_velocity_fps")
+                if last.get(k) is not None]
             if mb:
-                self.sub("Mass balance (last run)")
+                self.sub("Mass balance (last pass)")
                 self.kv(mb, head=("Quantity", "Value"), caption="LISFLOOD-FP mass balance")
                 err = last.get("max_volume_error_pct")
                 if isinstance(err, (int, float)):

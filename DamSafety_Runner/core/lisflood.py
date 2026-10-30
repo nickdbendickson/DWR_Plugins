@@ -606,6 +606,15 @@ def read_gauges(workdir, st, name="run"):
     return out
 
 
+def _hydrograph_peak_cfs(hydrograph):
+    """The breach inflow hydrograph's peak (cfs), or None when it has none."""
+    try:
+        q = float(hydrograph.peak_cfs)
+    except Exception:
+        return None
+    return round(q, 0) if q > 0 else None
+
+
 def read_results(workdir, dem, st, hydrograph, name="run"):
     res = os.path.join(workdir, "results")
 
@@ -653,6 +662,11 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         "flooded_acres": round(float((hmax >= st.arrival_depth_m).sum()) * dem.dx ** 2
                                / ACRE, 1),
         "peak_inflow_cfs": round(qin_max / CFS, 0),
+        # 3.13.2 (DWR-4031 toe10m): peak_inflow_cfs is the largest Qin at the .mass output
+        # samples (every massint s), which can miss a short breach peak (1,570 against
+        # the hydrograph's 1,696 cfs); the report gives the hydrograph peak as the inflow
+        "peak_inflow_input_cfs": _hydrograph_peak_cfs(hydrograph),
+        "massint_s": float(st.massint_s),
         "max_volume_error_pct": round(100.0 * abs(verr) / injected, 3) if injected else None,
         "worst_interval_error_pct": round(100.0 * worst / injected, 3) if injected else None,
         "injected_acft": round(injected / ACFT, 2),

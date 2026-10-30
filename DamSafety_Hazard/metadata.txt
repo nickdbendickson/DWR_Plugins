@@ -5,10 +5,14 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.22.0
+version=2.22.1
 icon=icon.svg
 author=N.D. Bendickson
-changelog=2.22.0 (2026-10-30; a house in the ACER judgment zone is ND MEDIUM by rule - Nick)
+changelog=2.22.1 (2026-10-30; report text from the DWR-4031 toe10m run and the #241 re-test)
+    * Summary crossings note: "Max_Depth_ft is the <cell> depth cell" gives the depth grid's actual cell size (10 m on the toe10m run; was a hard-coded "30 m").
+    * 5.3(f) is cited (judgment-zone reason, PROVISIONAL note) and counted only for borderline structures actually moved to the higher class. With the old ND judgment-zone option on, DWR-2801 cited "5.3(f): 1 borderline structure(s)" for house 4026, which stayed in the low zone. The 5.3(f) criteria row still lists borderline structures. No class change.
+    * Tests and changelog: the DWR-4031 toe-run judgment-zone house is Struct_ID 9953 (2.111 ft at 6.95 ft/s), not 16775 (a dry house in that folder; Struct_IDs differ by footprint set).
+    2.22.0 (2026-10-30; a house in the ACER judgment zone is ND MEDIUM by rule - Nick)
     * Nick: "any house in the judgement zone should be automatically labeled as medium hazard". A habitable structure in the ACER judgment zone (between the judgment and high-danger boundaries) makes the dam ND MEDIUM by rule [5.2.1.1]; it is not probable loss of life and no longer makes a provisional HIGH. Houses in the high danger zone still make it HIGH. The summary says "classed MEDIUM by rule".
     * The old setting (judgment zone counted as probable loss of life, HIGH) is kept as an option, off by default (Nick): Classify > "ND: count ACER judgment-zone houses as probable loss of life (HIGH)", Processing ND_JUDGMENT_HIGH, setting nd_judgment_as_probable. The existing JUDGMENT / "judgment zone" setting now applies to ACER TM 11 lives in jeopardy only (default on), so the TM 11 class is unchanged and saved dam states that had it on do not bring back HIGH.
     * Tests: tests/test_judgment_zone_medium_rule.py.
