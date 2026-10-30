@@ -3,17 +3,20 @@
  *
  * Data: two offline bundles, loaded on demand by dynamic import (no network; see nd-dams.test.ts):
  *   data/nd_dams.json      the NID's ND main dams (scripts/build-nd-dams.mjs, refreshed only on request)
- *   data/nd_dams_dwr.json  numeric DWR Dams-layer fields joined on NID ID (scripts/build-nd-dams-dwr.mjs)
+ *   data/nd_dams_dwr.json  numeric DWR Dams-layer fields joined on NID ID, NGVD 29 already converted to NAVD 88 by
+ *                          per-point VERTCON before the build, plus DWR Dugouts reference fields
+ *                          (scripts/build-nd-dams-dwr.mjs)
  *
  * Rules (SPEC_crest_nd_dam_picker.md section 13, Nick's decisions 1-12):
  * - H = DWR max_dam_he where the dam joins ("from DWR", decimal ft), else NID Height (whole ft, rounded).
  * - V = NID Storage (= max(Max, Normal)); chip says which. Surface area is never filled.
- * - Elevations are never filled from the NID. DWR elevations are offered only in NGVD 29 / NAVD 88 and only after
- *   the user confirms; NGVD 29 converts through the engine's VERTCON path at the dam's own location. Local or blank
- *   DWR datum: never offered as elevations; top - streambed is an H check only.
+ * - Elevations are never filled from the NID. DWR elevations are offered only as NAVD 88 (published, or converted
+ *   from NGVD 29 by per-point VERTCON in the bundle; no conversion happens here) and only after the user confirms.
+ *   Values the bundle holds (elev_qc: outside 700-3,600 ft) are never offered. Local or blank DWR datum: never
+ *   offered as elevations; top - streambed is an H check only.
+ * - DWR dugout records are shown for reference only; they never fill a field or change the screen.
  * - NID hazard is shown as reported (FEMA class), never used by the screen and never the class of record.
  */
-import { vertconShiftFt } from "./vertcon_nd.ts";
 import type { DamRecord, NidHazard, NidRef, Provenance } from "./types.ts";
 
 export type NdDam = {
@@ -63,30 +66,62 @@ export type DwrDam = {
   topWidthFt: number | null;
   /** DWR county, only where it differs from the NID county. */
   county: string | null;
+  /** NAVD 88 values from the bundle (converted from NGVD 29 by VERTCON, or published); null when not offered. */
+  topNavdFt: number | null;
+  streambedNavdFt: number | null;
+  auxSpillwayNavdFt: number | null;
+  normalPoolNavdFt: number | null;
+  /** VERTCON shift applied before the build (NGVD 29), 0 for NAVD 88, null otherwise. Provenance only. */
+  vshiftFt: number | null;
+  /** Stated fields held by the QC (comma-separated DWR field names), never offered. */
+  held: string | null;
 };
 
-type Bundle = { cols: string[]; rows: unknown[][]; source: Record<string, unknown> };
+/** DWR Dugouts-layer record for a main dam: reference only (units as DWR gives them). */
+export type DwrDugout = {
+  nid: string;
+  dwrId: number | null;
+  maxDepthFt: number | null;
+  maxHeightFt: number | null;
+  freeboardFt: number | null;
+  maxSurfaceAreaAc: number | null;
+  maxStorageAcFt: number | null;
+};
+
+type Table = { cols: string[]; rows: unknown[][] };
+type Bundle = Table & { source: Record<string, unknown>; dugouts?: Table };
 export type NidSource = { url: string; fetchedUtc: string; rows: number; attribution: string };
-export type DwrSource = { formUrl: string; pulledUtc: string; matched: number; disclaimer: string; attribution: string };
+export type DwrSource = {
+  formUrl: string;
+  layers?: string;
+  pulledUtc: string;
+  matched: number;
+  conversion?: string;
+  disclaimer: string;
+  attribution: string;
+};
 export type NdData = {
   dams: NdDam[];
   byNid: Map<string, NdDam>;
   dwr: Map<string, DwrDam>;
+  dugouts: Map<string, DwrDugout>;
   nidSource: NidSource;
   dwrSource: DwrSource | null;
 };
 
-export function decode<T>(b: Bundle): T[] {
+export function decode<T>(b: Table): T[] {
   return b.rows.map((r) => Object.fromEntries(b.cols.map((c, i) => [c, r[i] ?? null])) as T);
 }
 
 export function makeNdData(nid: Bundle, dwr: Bundle | null): NdData {
   const dams = decode<NdDam>(nid);
   const dw = dwr ? decode<DwrDam>(dwr) : [];
+  const dg = dwr?.dugouts ? decode<DwrDugout>(dwr.dugouts) : [];
   return {
     dams,
     byNid: new Map(dams.map((d) => [d.nid, d])),
     dwr: new Map(dw.map((d) => [d.nid, d])),
+    dugouts: new Map(dg.map((d) => [d.nid, d])),
     nidSource: nid.source as unknown as NidSource,
     dwrSource: dwr ? (dwr.source as unknown as DwrSource) : null,
   };
@@ -444,21 +479,27 @@ export function heightWarningOnElevations(dam: DamRecord): HeightWarning | null 
 export type DwrElevationOffer =
   | {
       ok: true;
-      datum: "NGVD29" | "NAVD88";
-      crestFt: number;
-      streambedFt: number;
-      /** VERTCON shift at the dam's own location (NGVD29 only). */
+      /** The DWR record's stated datum (provenance); the offered values are always NAVD 88. */
+      statedDatum: "NGVD29" | "NAVD88";
+      statedCrestFt: number;
+      statedStreambedFt: number;
+      /** VERTCON shift applied before the build (NGVD 29 only), else null. */
       shiftFt: number | null;
       crestNavdFt: number;
       streambedNavdFt: number;
+      /** "converted from NGVD29 (+1.089 ft, VERTCON)" or "published in NAVD 88". */
+      sourceNote: string;
     }
   | { ok: false; reason: string };
 
+const fmtShift = (s: number) => `${s >= 0 ? "+" : "-"}${Math.abs(s).toFixed(3)} ft`;
+
 /**
- * DWR elevations are offered only when the DWR datum is NGVD 29 or NAVD 88 and both values exist. NGVD 29 converts
- * with the per-location VERTCON shift (vertcon_nd.ts, the engine's path), never a flat offset.
+ * DWR elevations are offered only as NAVD 88, straight from the bundle: published NAVD 88, or NGVD 29 converted
+ * before the build by per-point VERTCON. No shift is applied here (never a second conversion). Held values (elev_qc)
+ * and local or blank datums are never offered.
  */
-export function dwrElevationOffer(dwr: DwrDam | undefined, lon?: number | null, lat?: number | null): DwrElevationOffer {
+export function dwrElevationOffer(dwr: DwrDam | undefined): DwrElevationOffer {
   if (!dwr) return { ok: false, reason: "No DWR record for this dam." };
   if (dwr.datum === "Local" || dwr.datum == null)
     return {
@@ -467,58 +508,88 @@ export function dwrElevationOffer(dwr: DwrDam | undefined, lon?: number | null, 
         "DWR elevations are on a local datum (or no datum is given): relative only, not usable as elevations. Enter the crest and breach bottom from the DEM or type them.",
     };
   if (dwr.datum === "Other") return { ok: false, reason: "DWR datum is not NGVD 29 or NAVD 88; not offered." };
-  if (dwr.topElevFt == null || dwr.streambedElevFt == null)
-    return { ok: false, reason: "The DWR record lacks the top-of-dam or streambed elevation." };
-  let shift: number | null = null;
-  if (dwr.datum === "NGVD29") {
-    shift = lon != null && lat != null ? vertconShiftFt(lon, lat) : null;
-    if (shift == null) return { ok: false, reason: "No VERTCON shift at this location; NGVD 29 values cannot be converted." };
-  }
-  const s = shift ?? 0;
+  const held = (dwr.held ?? "").split(",").filter(Boolean);
+  if (held.includes("max_pool_e") || held.includes("streambed_"))
+    return {
+      ok: false,
+      reason: `DWR labels these ${DATUM_LABEL[dwr.datum]}, but the values (${dwr.topElevFt ?? "—"} / ${dwr.streambedElevFt ?? "—"} ft) are outside 700-3,600 ft and look relative: held, not offered. Enter the crest and breach bottom from the DEM or type them.`,
+    };
+  if (dwr.topElevFt == null || dwr.streambedElevFt == null || dwr.topNavdFt == null || dwr.streambedNavdFt == null)
+    return { ok: false, reason: "The DWR record lacks a NAVD 88 top-of-dam or streambed elevation." };
+  const shift = dwr.datum === "NGVD29" ? dwr.vshiftFt : null;
+  if (dwr.datum === "NGVD29" && shift == null)
+    return { ok: false, reason: "No VERTCON shift recorded for this NGVD 29 record; not offered." };
   return {
     ok: true,
-    datum: dwr.datum,
-    crestFt: dwr.topElevFt,
-    streambedFt: dwr.streambedElevFt,
+    statedDatum: dwr.datum,
+    statedCrestFt: dwr.topElevFt,
+    statedStreambedFt: dwr.streambedElevFt,
     shiftFt: shift,
-    crestNavdFt: Math.round((dwr.topElevFt + s) * 100) / 100,
-    streambedNavdFt: Math.round((dwr.streambedElevFt + s) * 100) / 100,
+    crestNavdFt: dwr.topNavdFt,
+    streambedNavdFt: dwr.streambedNavdFt,
+    sourceNote: shift != null ? `converted from NGVD29 (${fmtShift(shift)}, VERTCON)` : "published in NAVD 88",
   };
 }
 
 /**
- * "Use DWR elevations (checked against the dam file)": the stated DWR values in their own datum (the engine applies
- * VERTCON for NGVD29), with confirmed provenance.
+ * "Use DWR elevations (checked against the dam file)": the NAVD 88 values from the bundle, stated datum NAVD88 (so
+ * the engine applies no shift), with confirmed provenance that keeps the DWR stated value, datum and VERTCON shift.
  */
 export function applyDwrElevationsPatch(dam: DamRecord, dwr: DwrDam, asOf: string): Partial<DamRecord> {
-  const offer = dwrElevationOffer(dwr, dam.lon, dam.lat);
+  const offer = dwrElevationOffer(dwr);
   if (!offer.ok) return {};
-  const p = (field: string, value: number): Provenance => ({ src: "DWR", field, value, asOf, confirmed: true });
+  const p = (field: string, value: number, stated: number): Provenance => ({
+    src: "DWR",
+    field: `${field}_navd88`,
+    value,
+    asOf,
+    confirmed: true,
+    note: offer.sourceNote,
+    statedFt: stated,
+    statedDatum: offer.statedDatum,
+    ...(offer.shiftFt != null ? { vshiftFt: offer.shiftFt } : {}),
+  });
   return {
-    crestFt: offer.crestFt,
-    streambedFt: offer.streambedFt,
-    statedDatum: offer.datum,
+    crestFt: offer.crestNavdFt,
+    streambedFt: offer.streambedNavdFt,
+    statedDatum: "NAVD88",
     datumOffsetFt: undefined,
     provenance: {
       ...dam.provenance,
-      crestFt: p("max_pool_e", offer.crestFt),
-      streambedFt: p("streambed_", offer.streambedFt),
-      statedDatum: { src: "DWR", field: "vertical_d", value: offer.datum, asOf, confirmed: true },
+      crestFt: p("max_pool_e", offer.crestNavdFt, offer.statedCrestFt),
+      streambedFt: p("streambed_", offer.streambedNavdFt, offer.statedStreambedFt),
+      statedDatum: {
+        src: "DWR",
+        field: "vertical_d",
+        value: "NAVD88",
+        asOf,
+        confirmed: true,
+        note: offer.sourceNote,
+        statedDatum: offer.statedDatum,
+        ...(offer.shiftFt != null ? { vshiftFt: offer.shiftFt } : {}),
+      },
     },
   };
 }
 
-/** "Enter from the DEM": crest and breach bottom read off the DEM (NAVD 88), tagged "from DEM". */
+/**
+ * "Typed from a DEM": crest and breach bottom the user read off a DEM (NAVD 88) and typed in, tagged "typed from DEM".
+ * Nothing is sampled here, so the typed crest is NOT copied into demCrestFt: the engine's DEM-vs-crest check keeps
+ * whatever DEM crest the record has and can still fire.
+ */
 export function demElevationsPatch(dam: DamRecord, crestFt: number, streambedFt: number, demName = "DEM"): Partial<DamRecord> {
   const asOf = new Date().toISOString().slice(0, 10);
-  const p = (field: string, value: number): Provenance => ({ src: "DEM", field, value, asOf, note: demName });
+  const p = (field: string, value: number): Provenance => ({ src: "DEM", field, value, asOf, note: `typed in (${demName})` });
   return {
     crestFt,
     streambedFt,
-    demCrestFt: crestFt,
     statedDatum: "NAVD88",
     datumOffsetFt: undefined,
-    provenance: { ...dam.provenance, crestFt: p("crest (DEM)", crestFt), streambedFt: p("streambed (DEM)", streambedFt) },
+    provenance: {
+      ...dam.provenance,
+      crestFt: p("crest (typed from DEM)", crestFt),
+      streambedFt: p("streambed (typed from DEM)", streambedFt),
+    },
   };
 }
 
@@ -545,6 +616,8 @@ export type DwrReference = {
   normalPoolElevFt: number | null;
   county: string | null;
   datumLabel: string;
+  /** Set when the bundle holds the stated values (elev_qc). */
+  heldNote: string | null;
 };
 
 const DATUM_LABEL: Record<string, string> = {
@@ -580,6 +653,9 @@ export function dwrReference(d: NdDam, dwr: DwrDam, H: number): DwrReference {
     normalPoolElevFt: dwr.normalPoolElevFt,
     county: dwr.county,
     datumLabel: dwr.datum ? DATUM_LABEL[dwr.datum] : "no datum given, relative only",
+    heldNote: dwr.held
+      ? `Held by the QC (outside 700-3,600 ft, looks relative despite the ${dwr.datum ? DATUM_LABEL[dwr.datum] : ""} label): ${dwr.held.split(",").join(", ")}. Not offered as elevations.`
+      : null,
   };
 }
 
@@ -592,7 +668,17 @@ export const DWR_FIELD_HINTS: Record<string, string> = {
   normalPoolElevFt: "normal_ele: normal pool elevation, ft (inferred).",
   maxPoolStorageAcFt: "max_pool_v: storage at maximum pool, ac-ft (inferred).",
   maxPoolAreaAc: "max_pool_a: surface area at maximum pool, acres (inferred).",
-  datum: "vertical_d: vertical datum of the elevations (NGVD 29, NAVD 88, Local or blank).",
+  datum: "vertical_d: vertical datum of the elevations as DWR states it (NGVD 29, NAVD 88, Local or blank).",
+  navd: "NAVD 88 value carried in the bundle: NGVD 29 converted by per-point NOAA VERTCON before the build, or published NAVD 88.",
+};
+
+/** Hover text for the DWR Dugouts fields (inferred; reference only). */
+export const DUGOUT_FIELD_HINTS: Record<string, string> = {
+  maxDepthFt: "max_depth: maximum depth, ft (inferred).",
+  maxHeightFt: "max_height: maximum height, ft (inferred).",
+  freeboardFt: "freeboard: freeboard, ft (inferred).",
+  maxSurfaceAreaAc: "max_surfac: maximum surface area, acres (inferred).",
+  maxStorageAcFt: "max_storag: maximum storage, acre-feet (inferred).",
 };
 
 /** NID hazard line on Record and Screen. Neutral; not used by the screen. */

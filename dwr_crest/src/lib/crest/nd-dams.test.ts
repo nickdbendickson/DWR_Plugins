@@ -31,6 +31,7 @@ import {
 } from "./nd-dams.ts";
 import { blankDam, SAMPLE_DAMS } from "./samples.ts";
 import { migrateDesk } from "./store.ts";
+import { vertconShiftFt } from "./vertcon_nd.ts";
 import type { DamRecord } from "./types.ts";
 
 const data = await loadNdData();
@@ -49,7 +50,8 @@ describe("ND dam bundles", () => {
     assert.equal(data.dams.length, 948);
     assert.equal(data.dwr.size, 839);
     assert.equal(data.nidSource.fetchedUtc, "2026-10-29T21:56:00Z");
-    assert.equal(data.dwrSource?.pulledUtc, "2026-10-29T22:07:32Z");
+    assert.equal(data.dwrSource?.pulledUtc, "2026-10-30T14:31:02Z");
+    assert.equal(data.dugouts.size, 108);
     assert.match(data.dwrSource!.disclaimer, /provisional/i);
   });
 
@@ -207,7 +209,7 @@ describe("height warnings", () => {
     const r = filled("ND00199");
     const withElev = { ...r, ...applyDwrElevationsPatch(r, data.dwr.get("ND00199")!, "2026-10-29") };
     assert.equal(heightWarningOnElevations(withElev), null);
-    const off = { ...withElev, streambedFt: 1037.5 };
+    const off = { ...withElev, streambedFt: 1038.59 };
     const w = heightWarningOnElevations(off);
     assert.equal(w?.id, "W-H2");
     assert.equal(w?.useHeightFt, 32.5);
@@ -223,36 +225,67 @@ describe("height warnings", () => {
 });
 
 describe("DWR card", () => {
-  it("ND00199: NGVD 29 1070.0 / 1042.5 offered as 1071.09 / 1043.59 NAVD 88 (VERTCON at the dam)", () => {
-    const d = dam("ND00199");
-    const o = dwrElevationOffer(data.dwr.get("ND00199"), d.lon, d.lat);
+  it("ND00199: NGVD 29 1070.0 / 1042.5 offered as the bundle's 1071.09 / 1043.59 NAVD 88, converted from NGVD29 (+1.089 ft, VERTCON)", () => {
+    const o = dwrElevationOffer(data.dwr.get("ND00199"));
     assert.ok(o.ok);
     if (!o.ok) return;
-    assert.equal(o.datum, "NGVD29");
+    assert.equal(o.statedDatum, "NGVD29");
+    assert.equal(o.statedCrestFt, 1070);
     assert.equal(o.crestNavdFt, 1071.09);
     assert.equal(o.streambedNavdFt, 1043.59);
-    assert.ok(Math.abs(o.shiftFt! - 1.0886) < 0.001);
+    assert.equal(o.shiftFt, 1.0887);
+    assert.equal(o.sourceNote, "converted from NGVD29 (+1.089 ft, VERTCON)");
   });
 
-  it("using them (after confirming) stores the stated NGVD values; the engine ties to 1071.09 / 1043.59, H 27.5", () => {
+  it("the bundle's VERTCON shift agrees with the engine's own grid at the dam (within 0.01 ft)", () => {
+    const d = dam("ND00199");
+    assert.ok(Math.abs(vertconShiftFt(d.lon!, d.lat!)! - data.dwr.get("ND00199")!.vshiftFt!) < 0.01);
+  });
+
+  it("using them (after confirming) stores NAVD88 directly, no second conversion: 1071.09 / 1043.59, H 27.5", () => {
     const r = filled("ND00199");
-    const p = applyDwrElevationsPatch(r, data.dwr.get("ND00199")!, "2026-10-29");
-    assert.equal(p.provenance?.crestFt?.confirmed, true);
+    const p = applyDwrElevationsPatch(r, data.dwr.get("ND00199")!, "2026-10-30");
+    assert.equal(p.crestFt, 1071.09);
+    assert.equal(p.streambedFt, 1043.59);
+    assert.equal(p.statedDatum, "NAVD88");
+    const c = p.provenance!.crestFt!;
+    assert.equal(c.confirmed, true);
+    assert.equal(c.field, "max_pool_e_navd88");
+    assert.equal(c.statedFt, 1070);
+    assert.equal(c.statedDatum, "NGVD29");
+    assert.equal(c.vshiftFt, 1.0887);
     const a = analyze({ ...r, ...p });
     assert.equal(a.datum.crestNavdFt.toFixed(2), "1071.09");
     assert.equal(a.datum.streambedNavdFt!.toFixed(2), "1043.59");
     assert.equal(a.breach.headFt.toFixed(2), "27.50");
     assert.deepEqual(missingForNext({ ...r, ...p }), []);
+    assert.equal(fieldTag({ ...r, ...p }, "crestFt")?.text, "from DWR: converted from NGVD29 (+1.089 ft, VERTCON)");
   });
 
-  it("Local or blank DWR datum is never offered as elevations; NAVD 88 needs no shift", () => {
+  it("91 NAVD 88 offers; Local or blank DWR datum never offered; NAVD 88 published needs no shift", () => {
+    assert.equal([...data.dwr.values()].filter((x) => dwrElevationOffer(x).ok).length, 91);
     const local = [...data.dwr.values()].find((x) => x.datum === "Local" && x.topElevFt != null)!;
-    const o = dwrElevationOffer(local, -100, 47);
+    const o = dwrElevationOffer(local);
     assert.equal(o.ok, false);
     if (!o.ok) assert.match(o.reason, /local datum/);
-    assert.equal(dwrElevationOffer(data.dwr.get("ND00145"), -101.4, 47.5).ok, false);
-    const navd = dwrElevationOffer(data.dwr.get("ND00182"), -96.8, 46.7);
-    assert.ok(navd.ok && navd.shiftFt === null && navd.crestNavdFt === 894.08);
+    assert.equal(dwrElevationOffer(data.dwr.get("ND00145")).ok, false);
+    const navd = dwrElevationOffer(data.dwr.get("ND00182"));
+    assert.ok(navd.ok && navd.shiftFt === null && navd.crestNavdFt === 894.08 && navd.sourceNote === "published in NAVD 88");
+    for (const x of data.dwr.values())
+      if (x.datum === "Local" || x.datum == null) assert.ok(x.topNavdFt == null && x.streambedNavdFt == null, x.nid);
+  });
+
+  it("elev_qc: ND01032 (NGVD 29 labelled, 128 / 100 ft) is held and never offered; the card says why", () => {
+    const x = data.dwr.get("ND01032")!;
+    assert.equal(x.held, "max_pool_e,streambed_,emergenc_2,normal_ele");
+    assert.equal(x.topNavdFt, null);
+    const o = dwrElevationOffer(x);
+    assert.equal(o.ok, false);
+    if (!o.ok) assert.match(o.reason, /held, not offered/);
+    const r = filled("ND01032");
+    assert.deepEqual(applyDwrElevationsPatch(r, x, "2026-10-30"), {});
+    assert.match(dwrReference(dam("ND01032"), x, r.heightFt).heldNote!, /Held by the QC/);
+    assert.equal(dwrReference(dam("ND00199"), data.dwr.get("ND00199")!, 27.5).heldNote, null);
   });
 
   it("reference values: Local datum label, H check, max-pool storage flag above 5%", () => {
@@ -264,13 +297,48 @@ describe("DWR card", () => {
     assert.equal(dwrReference(dam(local.nid), local, 1).datumLabel, "local datum, relative only");
   });
 
-  it("max-pool area only by Use; DEM entry is NAVD 88 tagged from DEM", () => {
+  it("max-pool area only by Use; typed DEM entry is NAVD 88, tagged typed, and never copied into demCrestFt", () => {
     const r = filled("ND00199");
     assert.equal(r.surfaceAreaAc, undefined);
     assert.equal(dwrAreaPatch(r, data.dwr.get("ND00199")!, "2026-10-29").surfaceAreaAc, 154.5);
     const dem = demElevationsPatch(r, 1071.1, 1043.6);
     assert.equal(dem.statedDatum, "NAVD88");
     assert.equal(dem.provenance?.crestFt?.src, "DEM");
+    assert.match(dem.provenance!.crestFt!.field, /typed from DEM/);
+    assert.ok(!("demCrestFt" in dem));
+  });
+
+  it("M1: after typed DEM values the DEM-vs-crest check can still fire against a sampled DEM crest", () => {
+    const r = { ...filled("ND00199"), demCrestFt: 1071.09 };
+    const typedOk = { ...r, ...demElevationsPatch(r, 1071.1, 1043.6) };
+    assert.equal(typedOk.demCrestFt, 1071.09);
+    assert.ok(!analyze(typedOk).datum.warnings.some((w) => /^DEM crest/.test(w)));
+    const typedNgvd = { ...r, ...demElevationsPatch(r, 1070.0, 1042.5) };
+    assert.ok(analyze(typedNgvd).datum.warnings.some((w) => /^DEM crest 1071\.09 ft differs from the tied crest 1070\.00/.test(w)));
+  });
+});
+
+describe("DWR dugouts (reference only)", () => {
+  it("108 dugout records keyed by NID ID, all main dams, numeric fields only", () => {
+    assert.equal(data.dugouts.size, 108);
+    const ids = new Set(data.dams.map((d) => d.nid));
+    for (const [k, g] of data.dugouts) {
+      assert.ok(ids.has(k), k);
+      assert.deepEqual(Object.keys(g).sort(), ["dwrId", "freeboardFt", "maxDepthFt", "maxHeightFt", "maxStorageAcFt", "maxSurfaceAreaAc", "nid"]);
+    }
+    assert.match(data.dwrSource!.attribution, /Dams and Dugouts layers/);
+  });
+
+  it("never fills a field or changes the screen: no prefill or analysis input reads it", () => {
+    const src = readFileSync(new URL("./nd-dams.ts", import.meta.url), "utf8");
+    for (const fn of ["prefillPatch", "applyDwrElevationsPatch", "demElevationsPatch", "dwrAreaPatch", "heightFor"]) {
+      const at = src.indexOf(`export function ${fn}(`);
+      assert.ok(at >= 0, fn);
+      const body = src.slice(at, src.indexOf("\nexport ", at + 1));
+      assert.doesNotMatch(body, /dugout/i, fn);
+    }
+    for (const f of ["./engine.ts", "./export.ts"])
+      assert.doesNotMatch(readFileSync(new URL(f, import.meta.url), "utf8"), /dugout/i, f);
   });
 });
 
@@ -286,7 +354,7 @@ describe("engine guard and export", () => {
 
   it("NID hazard is never fed into the screen or the class of record", () => {
     const r = filled("ND00199");
-    const p = { ...r, ...applyDwrElevationsPatch(r, data.dwr.get("ND00199")!, "2026-10-29") };
+    const p = { ...r, ...applyDwrElevationsPatch(r, data.dwr.get("ND00199")!, "2026-10-30") };
     const a = analyze(p);
     const b = analyze({ ...p, nidHazard: "High" });
     assert.equal(a.screen.level, b.screen.level);
