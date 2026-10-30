@@ -12,18 +12,60 @@ import json
 import os
 import sys
 import threading
+import uuid
 import webbrowser
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from crest import WEB_DIR_NAME
+from crest.qgis_run import run_model, run_screening
 
 #: Fixed local port, so the desk's saved records (browser localStorage is per origin) survive a restart.
 #: If it is taken, a random port is used for that session.
 PREFERRED_PORT = 47231
 
 TITLE = "Crest — Dam Breach Desk"
+
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _job_log(job: dict, line: str) -> None:
+    with _jobs_lock:
+        job["log"] += ("" if job["log"].endswith("\n") or not job["log"] else "\n") + str(line) + "\n"
+
+
+def start_job(kind: str, dam: dict, analysis: dict, work: str | None) -> dict:
+    """Write the dam folder and call the plugins on a background thread. Returns immediately."""
+    job_id = uuid.uuid4().hex[:12]
+    job = {"id": job_id, "done": False, "ok": False, "log": "", "folder": "", "work": ""}
+    with _jobs_lock:
+        _jobs[job_id] = job
+
+    def work_job():
+        try:
+            fn = run_screening if kind == "screen" else run_model
+            result = fn(dam or {}, analysis or {}, work, lambda line: _job_log(job, line))
+            with _jobs_lock:
+                job["ok"] = bool(result.get("ok"))
+                job["folder"] = result.get("folder") or ""
+                job["work"] = result.get("work") or ""
+        except Exception as exc:
+            _job_log(job, f"Crest stopped: {exc}")
+        finally:
+            with _jobs_lock:
+                job["done"] = True
+
+    threading.Thread(target=work_job, daemon=True).start()
+    return {"id": job_id}
+
+
+def job_snapshot(job_id: str) -> dict | None:
+    with _jobs_lock:
+        found = _jobs.get(job_id)
+        return dict(found) if found else None
 
 
 def web_dir() -> Path:
@@ -53,6 +95,52 @@ class _Handler(SimpleHTTPRequestHandler):
         ".json": "application/json",
         ".html": "text/html; charset=utf-8",
     }
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/job":
+            job_id = (parse_qs(parsed.query).get("id") or [""])[0]
+            found = job_snapshot(job_id)
+            if not found:
+                self._send(404, b'{"error":"no job"}', "application/json")
+                return
+            self._send(200, json.dumps(found).encode(), "application/json")
+            return
+        super().do_GET()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path not in ("/api/screen", "/api/model"):
+            self._send(404, b"not found", "text/plain")
+            return
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        if length > 2_000_000:
+            self._send(413, b'{"error":"too large"}', "application/json")
+            return
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            payload = json.loads(raw.decode() or "{}")
+        except json.JSONDecodeError:
+            self._send(400, b'{"error":"bad json"}', "application/json")
+            return
+        if not isinstance(payload, dict):
+            self._send(400, b'{"error":"bad json"}', "application/json")
+            return
+        dam = payload.get("dam") if isinstance(payload.get("dam"), dict) else {}
+        if payload.get("dem"):
+            dam = dict(dam)
+            dam["demPath"] = payload.get("dem")
+        kind = "screen" if parsed.path == "/api/screen" else "model"
+        body = json.dumps(start_job(kind, dam, payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}, payload.get("work")))
+        self._send(200, body.encode(), "application/json")
+
+    def _send(self, code: int, body: bytes, content_type: str) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, fmt, *args):  # quiet
         return
