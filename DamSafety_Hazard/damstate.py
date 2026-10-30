@@ -25,6 +25,7 @@ NONE_TOKEN = "__none__"
 # classify tool parameter -> the window's widget (same meaning, same type: True/False)
 CLASSIFY_TO_WIDGET = {
     "KEEP_DRY": "keep_dry_check", "JUDGMENT": "judgment_check",
+    "ND_JUDGMENT_HIGH": "nd_judgment_check",
     "DOWNLOAD_NSI": "nsi_download_check", "DOWNLOAD_ADDRESS": "addr_download_check",
     "DOWNLOAD_USA": "usa_download_check", "DOWNLOAD_DAMS": "dams_download_check",
     "DOWNLOAD_LIFELINES": "lifelines_download_check", "EAP": "eap_check",

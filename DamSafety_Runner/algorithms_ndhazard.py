@@ -12,7 +12,8 @@ import re
 
 import numpy as np
 from qgis.core import (QgsCoordinateTransform, QgsProcessingException, QgsProcessingOutputFile,
-                       QgsProcessingOutputString, QgsProcessingParameterEnum,
+                       QgsProcessingOutputString, QgsProcessingParameterBoolean,
+                       QgsProcessingParameterEnum,
                        QgsProcessingParameterFeatureSource)
 
 from . import qgis_io as qio
@@ -651,8 +652,9 @@ class NDHazardAlgorithm(_ToolBase):
                 "dam folder.\n\n"
                 "Habitable structures (5.2.1.1; unknown or blank occupancy counts as habitable): "
                 "2D model: potentially lethal by the ACER TM 11 depth-velocity charts (ND Fig. "
-                "5.1 houses, 5.2 mobile homes) -> High; the judgment zone is borderline and "
-                "takes the higher class (5.3). 1D model: deeper than 2 ft -> High. Inundated "
+                "5.1 houses, 5.2 mobile homes) -> High; a habitable structure in the judgment zone "
+                "is Medium by rule (the old option 'judgment zone counts as potentially lethal' "
+                "makes it High, 5.3). 1D model: deeper than 2 ft -> High. Inundated "
                 "at any depth -> at least Medium (economic loss). Roads (5.2.1.2): AADT > 2,000 "
                 "or interstate -> High, US / State highway (5.2.1.2(b), any AADT) or 500-2,000 -> "
                 "Medium, private or < 500 (local / county roads) -> Low, sole "
@@ -740,6 +742,10 @@ class NDHazardAlgorithm(_ToolBase):
             [nh.LETHALITY_LABELS[m] for m in nh.LETHALITY_METHODS],
             defaultValue=nh.LETHALITY_METHODS.index(nh.LETHALITY_CHARTS)))
         d = nh.Settings()
+        self.addParameter(set_advanced(QgsProcessingParameterBoolean(
+            "JUDGMENT_HIGH", "Old option: a habitable structure in the ACER judgment zone counts "
+                             "as potentially lethal (High) - off: Medium by rule",
+            defaultValue=d.judgment_zone_high)))
         self._num("WET_FT", "'Any depth': inundated or overtopped from a depth of (ft; at "
                   "least {:g}: a dry cell reads 0; the starting value {:g} is the engineer's "
                   "allowance for model noise, a screening value you choose)".format(
@@ -776,7 +782,9 @@ class NDHazardAlgorithm(_ToolBase):
                 lethality=nh.LETHALITY_METHODS[e("LETHALITY")],
                 wet_ft=self.parameterAsDouble(parameters, "WET_FT", context),
                 unknown_aadt=nh.CLASSES[e("UNKNOWN_AADT")],
-                unknown_trains=nh.CLASSES[e("UNKNOWN_TRAINS")]).validate()
+                unknown_trains=nh.CLASSES[e("UNKNOWN_TRAINS")],
+                judgment_zone_high=self.parameterAsBool(parameters, "JUDGMENT_HIGH", context)
+            ).validate()
         except (ValueError, IndexError) as ex:
             raise QgsProcessingException(str(ex))
 
