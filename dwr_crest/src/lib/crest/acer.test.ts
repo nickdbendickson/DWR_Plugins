@@ -55,27 +55,49 @@ describe("ND ranking (damsuite classify_nd)", () => {
     assert.equal(s.acerLevel, "low");
   });
 
-  it("judgment zone counts as High by default (5.3(f)) and is flagged", () => {
+  it("Nick 2026-10-30: a home in the judgment zone is Medium by rule; the old option still makes it High (5.3)", () => {
     const r = rankReceptor({ kind: "house", depthFt: 3.0, velocityFps: 0 });
-    assert.equal(r.class, "High");
-    assert.equal(r.judgment, true);
-    assert.equal(rankReceptor({ kind: "house", depthFt: 3.0, velocityFps: 0, judgmentAsProbable: false }).class, "Medium");
+    assert.equal(r.zone, "judgment");
+    assert.equal(r.class, "Medium");
+    assert.equal(r.judgment, false, "automatic, not an engineer's call");
+    assert.match(r.reason, /Medium by rule/);
+    assert.doesNotMatch(r.reason, /5\.3/);
+    const old = rankReceptor({ kind: "house", depthFt: 3.0, velocityFps: 0, judgmentAsProbable: true });
+    assert.equal(old.class, "High");
+    assert.equal(old.judgment, true);
+    assert.match(old.reason, /old option, 5\.3\)/);
   });
 
-  it("labels a judgment-driven High, and the switch turns the judgment zone into Medium", () => {
+  it("CHECK: the DWR-2801 house 4010 (3.10 ft, 0.11 ft/s) and DWR-4031 house 16775 (2.11 ft, 6.95 ft/s) screen Medium", () => {
+    for (const [name, d, v] of [["4010", 3.1, 0.11], ["16775", 2.11, 6.95]] as const) {
+      const r = rankReceptor({ kind: "house", depthFt: d, velocityFps: v });
+      assert.equal(r.zone, "judgment", name);
+      assert.equal(r.class, "Medium", name);
+      const s = screenReceptors([wet(name, "house", d, v)], [{ kind: "house" }]);
+      assert.equal(s.level, "Medium", name);
+      assert.equal(s.label, "Medium", name);
+      assert.equal(s.judgmentAsProbable, false);
+      assert.equal(s.judgment.length, 0, name);
+      assert.ok(s.reasons.some((x) => /Medium by rule/.test(x)), s.reasons.join("\n"));
+      assert.ok(!s.reasons.some((x) => /5\.3\(f\)/.test(x)), "no 5.3(f) citation");
+    }
+  });
+
+  it("labels a judgment-driven High under the old option; by default the judgment zone is Medium", () => {
     const j = rankReceptor({ kind: "house", depthFt: 3.5, velocityFps: 2 });
     assert.equal(j.zone, "judgment");
-    const on = screenReceptors([wet("Farmstead", "house", 3.5, 2)], [{ kind: "house" }]);
+    const def = screenReceptors([wet("Farmstead", "house", 3.5, 2)], [{ kind: "house" }]);
+    assert.equal(def.level, "Medium");
+    assert.equal(def.label, "Medium");
+    const on = screenReceptors([wet("Farmstead", "house", 3.5, 2, { judgmentAsProbable: true })], [{ kind: "house" }], {
+      judgmentAsProbable: true,
+    });
     assert.equal(on.level, "High");
     assert.equal(on.label, "High (flagged: judgment zone)");
-    assert.ok(on.judgment.length === 1);
-    const off = screenReceptors([wet("Farmstead", "house", 3.5, 2, { judgmentAsProbable: false })], [{ kind: "house" }], {
-      judgmentAsProbable: false,
-    });
-    assert.equal(off.level, "Medium");
-    assert.equal(off.label, "Medium");
-    assert.ok(off.judgment.length === 1, "still flagged for an engineer");
+    assert.ok(on.judgment.length === 1, "the old option is flagged for an engineer");
+    assert.match(on.reasons[0], /old option, 5\.3/);
     const hz = screenReceptors([wet("House", "house", 8, 4)], [{ kind: "house" }]);
+    assert.equal(hz.level, "High", "a TM 11 high-zone home is still High");
     assert.equal(hz.label, "High", "a TM 11 high-zone High is not relabelled");
   });
 

@@ -255,13 +255,18 @@ describe("LISFLOOD-FP export", () => {
 describe("sample note, DEM crest check and store key", () => {
   const sample = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
 
-  it("CHECK: the ND00199 sample shows High (flagged) against its class of record ND MEDIUM", () => {
+  it("CHECK: the ND00199 sample screens Medium by rule (judgment-zone Farmstead), High (flagged) only with the old option", () => {
     const a = analyze(sample);
-    assert.equal(a.screen.level, "High");
-    assert.equal(a.screen.label, "High (flagged: judgment zone)");
+    assert.equal(a.screen.level, "Medium");
+    assert.equal(a.screen.label, "Medium");
+    assert.equal(a.screen.judgmentAsProbable, false);
+    assert.ok(a.screen.reasons.some((r) => /judgment zone .*Medium by rule/.test(r)), a.screen.reasons.join("\n"));
     assert.match(a.screen.classOfRecord ?? "", /^ND MEDIUM \/ TM11 Significant/);
     assert.match(a.screen.reasons[0], /^Class of record: ND MEDIUM .*is not the class of record\.$/);
-    assert.match(sample.sampleNote ?? "", /generic receptor seeds.*High \(flagged\).*not the class of record/);
+    assert.match(sample.sampleNote ?? "", /generic receptor seeds.*Medium by rule.*High \(flagged\).*not the class of record/);
+    const old = analyze({ ...sample, judgmentAsProbable: true });
+    assert.equal(old.screen.level, "High");
+    assert.equal(old.screen.label, "High (flagged: judgment zone)");
   });
 
   it("warns when the DEM crest differs from the tied crest (NGVD29 value labelled NAVD88)", () => {

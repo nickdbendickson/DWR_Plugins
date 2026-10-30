@@ -529,7 +529,7 @@ function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
           </span>
           <p className="max-w-lg text-sm text-muted">
             ND rules on the ACER TM 11 depth-velocity charts: a home in the high-danger zone reads High; in the judgment
-            zone it reads {result.screen.judgmentAsProbable ? "High (flagged)" : "Medium (flagged)"}; any wet home reads at
+            zone it reads {result.screen.judgmentAsProbable ? "High (flagged; old option)" : "Medium by rule"}; any wet home reads at
             least Medium (economic loss); roads by AADT and class. Barns and sheds do not count.
             {result.screen.acerLevel ? ` Worst TM 11 zone: ${result.screen.acerLevel}.` : ""}
           </p>
@@ -549,12 +549,12 @@ function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         <div className="mt-3 max-w-xs">
           <SelectField
             label="Judgment zone"
-            value={dam.judgmentAsProbable === false ? "medium" : "high"}
+            value={dam.judgmentAsProbable === true ? "high" : "medium"}
             options={[
-              ["high", "Count as probable loss of life (High, damsuite default)"],
-              ["medium", "Do not count (Medium)"],
+              ["medium", "Medium by rule (default)"],
+              ["high", "Count as probable loss of life (High, old option)"],
             ]}
-            onChange={(v) => update({ judgmentAsProbable: v !== "medium" })}
+            onChange={(v) => update({ judgmentAsProbable: v === "high" })}
           />
         </div>
         <ul className="mt-4 space-y-2 text-sm">
