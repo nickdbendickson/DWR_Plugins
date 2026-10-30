@@ -12,8 +12,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from crest.handoff import HandoffError, write_dam_folder  # noqa: E402
-from crest.qgis_run import run_model, run_screening  # noqa: E402
+from crest.handoff import HandoffError, write_dam_folder, write_named_files  # noqa: E402
+from crest.layers import download_aoi, use_offline_pack  # noqa: E402
+from crest.qgis_run import run_folder, run_model, run_screening  # noqa: E402
 
 DAM = {
     "nid": "ND00199",
@@ -120,6 +121,22 @@ class FolderTests(unittest.TestCase):
             for name in ("dam_line.geojson", "breach_point.geojson", "reservoir_point.geojson", "downstream_area.geojson", "hydrograph.csv"):
                 self.assertTrue((folder / name).is_file(), name)
             self.assertTrue((folder / "hydrograph.csv").read_text(encoding="utf-8").startswith("time_hours,discharge_cms\n"))
+            runner = folder / "inputs" / "breach_hydrograph.csv"
+            self.assertTrue(runner.read_text(encoding="utf-8").startswith("time_hr,discharge_cfs\n"))
+            self.assertIn("1.0000,100.0000", runner.read_text(encoding="utf-8"))
+            runner.write_text("keep\n", encoding="utf-8")
+            _, notes2 = write_dam_folder(Path(d), DAM, ANALYSIS)
+            self.assertEqual(runner.read_text(encoding="utf-8"), "keep\n")
+            self.assertTrue(any("already" in n for n in notes2))
+            written = write_named_files(folder, {
+                "nd00199.par": "par text",
+                "flood_strip.geojson": "{}",
+                "inputs/extra.csv": "a,b\n",
+                "../secret.par": "no",
+                "inputs/../no.csv": "no",
+            })
+            self.assertEqual(sorted(written), ["flood_strip.geojson", "inputs/extra.csv", "nd00199.par"])
+            self.assertFalse((folder / "secret.par").exists())
 
             record["fields"]["height_ft"] = 99
             record["sources"]["height_ft"] = {"tool": "ndbreach", "version": "1", "when": "2020-01-01T00:00:00", "note": ""}
@@ -156,11 +173,13 @@ class GateTests(unittest.TestCase):
             "CREST_NDBREACH_CLI": os.environ.get("CREST_NDBREACH_CLI"),
             "CREST_PYTHON": os.environ.get("CREST_PYTHON"),
             "CREST_DEM": os.environ.get("CREST_DEM"),
+            "NDSUITE_DATA": os.environ.get("NDSUITE_DATA"),
         }
         os.environ["QGIS_PROCESS"] = str(self.qgis)
         os.environ["CALLS"] = str(self.calls)
         os.environ.pop("CREST_NDBREACH_CLI", None)
         os.environ.pop("CREST_DEM", None)
+        os.environ.pop("NDSUITE_DATA", None)
 
     def tearDown(self):
         for key, value in self.env.items():
@@ -246,6 +265,138 @@ class GateTests(unittest.TestCase):
         config = json.loads((Path(result["folder"]) / "runner_config.json").read_text(encoding="utf-8"))
         self.assertEqual(config["dam"]["point"], [500000, 5200000])
         self.assertEqual(config["breach"]["method"], "piping")
+        self.assertEqual(config["model"]["tier"], "lisflood")
+        self.assertNotIn("lisflood_exe", config["model"])
+
+    def test_folder_writes_exports_and_does_not_start_qgis(self):
+        result = run_folder(DAM, ANALYSIS, str(self.root / "work"), self.log(), {"nd00199.par": "par text", "../no.par": "no"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(self.calls_text(), "")
+        folder = Path(result["folder"])
+        self.assertEqual((folder / "nd00199.par").read_text(encoding="utf-8"), "par text")
+        self.assertFalse((folder.parent / "no.par").exists())
+        self.assertTrue(any("No model was started" in line for line in self.lines))
+
+    def test_model_sends_the_chosen_tier_and_builtin(self):
+        os.environ["QGIS_MODE"] = "pass"
+        work = self.root / "work"
+        work.mkdir()
+        (work / "dem.tif").write_bytes(b"not a real dem")
+        result = run_model(DAM, ANALYSIS, str(work), self.log(), model="anuga")
+        self.assertTrue(result["ok"])
+        text = self.calls_text()
+        self.assertIn("--TIER=LISFLOOD-FP for the extent, then ANUGA (final results from ANUGA)", text)
+        self.assertNotIn("LISFLOOD_EXE", text)
+        self.calls.write_text("", encoding="utf-8")
+        dam = {**DAM, "lisflood": {"pointX": 500000, "pointY": 5200000}}
+        os.environ["CREST_NDBREACH_CLI"] = str(self.cli)
+        os.environ["CREST_PYTHON"] = "python3"
+        result = run_model(dam, ANALYSIS, str(work), self.log(), model="builtin")
+        self.assertTrue(result["ok"])
+        config = json.loads((Path(result["folder"]) / "runner_config.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["model"]["tier"], "lisflood")
+        self.assertEqual(config["model"]["lisflood_exe"], "builtin")
+
+    def test_pack_dem_is_used_without_a_network(self):
+        pack = self.root / "pack"
+        (pack / "dem").mkdir(parents=True)
+        (pack / "dem" / "lidar_1m").mkdir()
+        (pack / "dem" / "mosaic.vrt").write_text("<VRTDataset></VRTDataset>", encoding="utf-8")
+        os.environ["NDSUITE_DATA"] = str(pack)
+        os.environ["QGIS_MODE"] = "pass"
+        result = run_model(DAM, ANALYSIS, str(self.root / "work"), self.log(), source="pack")
+        self.assertTrue(result["ok"])
+        text = self.calls_text()
+        self.assertIn("mosaic.vrt", text)
+        self.assertNotIn("lidar_1m", text)
+        self.assertIn("--TIER=LISFLOOD-FP only", text)
+        screen = run_screening(DAM, ANALYSIS, str(self.root / "work"), self.log())
+        self.assertTrue(screen["ok"])
+        settings = json.loads((self.root / "work" / "crest_settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(settings["suite_folder"], str(pack.resolve()))
+        self.assertEqual(settings["terrain_source"], 1)
+        self.assertTrue(settings["local_dem"].endswith("/dem"))
+        self.assertIn("--SETTINGS=", self.calls_text())
+
+    def test_download_uses_the_supplied_fetch(self):
+        saved = []
+
+        def fetch(url, dest):
+            saved.append(url)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"x")
+
+        work = self.root / "dl"
+        result = download_aoi(work, DAM, self.log(), fetch=fetch)
+        self.assertTrue(result["ok"])
+        self.assertTrue((work / "dem.tif").is_file())
+        self.assertTrue((work / "aoi" / "streams.geojson").is_file())
+        self.assertTrue((work / "aoi" / "waterbodies.geojson").is_file())
+        self.assertTrue(any("3DEPElevation" in url and "imageSR=5070" in url for url in saved))
+        self.assertTrue(any("/6/query" in url for url in saved))
+        self.assertTrue(any("/12/query" in url for url in saved))
+        self.assertTrue((work / "crest_settings.json").is_file())
+
+    def test_missing_pack_does_not_invent_a_folder(self):
+        result = use_offline_pack(self.root / "work", self.log())
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("No ND offline pack folder" in line for line in self.lines))
+
+    def test_http_folder_and_layers(self):
+        import time
+        import urllib.error
+        import urllib.request
+
+        from crest.__main__ import job_snapshot, serve
+
+        server = serve(port=0)
+        try:
+            port = server.server_address[1]
+            body = json.dumps({
+                "dam": DAM,
+                "analysis": ANALYSIS,
+                "work": str(self.root / "httpwork"),
+                "model": "hecras",
+                "source": "pack",
+                "files": {"flood_strip.kml": "<kml></kml>"},
+            }).encode()
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/folder",
+                data=body,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(request, timeout=5) as response:
+                job = json.loads(response.read())
+            found = None
+            for _ in range(50):
+                found = job_snapshot(job["id"])
+                if found and found["done"]:
+                    break
+                time.sleep(0.05)
+            self.assertTrue(found and found["done"] and found["ok"])
+            self.assertTrue((Path(found["folder"]) / "flood_strip.kml").is_file())
+            layers = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/layers",
+                data=json.dumps({"dam": DAM, "work": str(self.root / "httpwork"), "source": "pack"}).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(layers, timeout=5) as response:
+                layer_job = json.loads(response.read())
+            found = None
+            for _ in range(50):
+                found = job_snapshot(layer_job["id"])
+                if found and found["done"]:
+                    break
+                time.sleep(0.05)
+            self.assertTrue(found and found["done"])
+            self.assertFalse(found["ok"])
+            self.assertIn("No ND offline pack folder", found["log"])
+            missing = urllib.request.Request(f"http://127.0.0.1:{port}/api/nope", data=b"{}", method="POST")
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(missing, timeout=5)
+            self.assertEqual(caught.exception.code, 404)
+        finally:
+            server.shutdown()
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@
     "max_depth_ft": 14.529,
     "reach_km": 11.068,
     "wet_reach_km": 11.068,
-    "direction": "Downstream direction: the dam line's normal, on the side away from the reservoir point (bearing 131°).",
+    "direction": "Downstream direction: across the dam at the breach, away from the reservoir (bearing 131°). A curved embankment uses the segment nearest the breach. The strip is straight down that valley; it does not follow later bends in the stream.",
     "clipped_to_aoi": false,
     "strip_area_ac": 2323.446,
     "engine_wet_area_ac": 2358.287,

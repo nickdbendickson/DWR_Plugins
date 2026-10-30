@@ -1,9 +1,11 @@
-import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-react";
 import { analyze, crestNavdLabel, STEPS } from "@/lib/crest/engine";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
 import { floodStrip, type FloodStrip } from "@/lib/crest/floodstrip";
 import {
+  exportFloodStripGeoJsonWithPlss,
+  exportFloodStripKmlWithPlss,
   exportPlssCsv,
   fetchPlss,
   PLSS_ATTRIBUTION,
@@ -41,6 +43,7 @@ import type {
 } from "@/lib/crest/types";
 import { HydroChart, ValleyMap } from "./charts";
 import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel } from "./NdDamPicker";
+import { ViewExport } from "./ViewExport";
 
 // Leaflet touches `window` when it loads, so the map is a client-only chunk.
 const MapDraw = lazy(() => import("./MapDraw").then((m) => ({ default: m.MapDraw })));
@@ -384,8 +387,9 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
   const plss = usePlss(dam, strip.strip);
   const nd911 = useNd911(dam, strip.strip);
+  const view = useRef<HTMLElement>(null);
   return (
-    <section className="space-y-4">
+    <section ref={view} className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-xl">Layout & schematic flood</h2>
@@ -420,6 +424,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
             step={0.5}
             onChange={(reachKm) => update({ reachKm })}
           />
+          <ViewExport target={view} kind="flood" dam={dam} result={result} />
         </div>
       </div>
       <div className="rounded-md border border-line bg-card p-4">
@@ -427,12 +432,11 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
         <p className="mt-1 text-sm text-muted">
           Draw the dam line, the reservoir point (first marker), the breach point (second marker), and the area of
           interest. They are saved on this dam record. A drawn area limits the schematic flood: the valley runs
-          downstream from the breach (the dam line&apos;s side away from the reservoir point), the reach stops where it
+          downstream from the breach (across the dam at the breach, away from the reservoir; a curved dam uses the
+          segment nearest the breach, not the line from end to end), the reach stops where it
           leaves the drawn area, the wet area is clipped to it, and receptors outside it are unresolved (a house that
-          would rank higher is still named). The direction is square to the straight line from the dam line&apos;s first
-          point to its last, so only the end points count: for a curved or L-shaped dam, draw just the straight stretch
-          through the breach. With no dam line or reservoir point, a drawn area around the breach is cut at its nearest
-          edge, and one that does not contain the breach is not applied.
+          would rank higher is still named). The strip is straight down that valley. It does not follow later bends
+          in the stream. With no dam line or reservoir point, a drawn area around the breach is cut at its nearest edge, and one that does not contain the breach is not applied.
         </p>
         <div className="mt-3">
           {mounted ? (
@@ -775,17 +779,21 @@ function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
 }
 
 function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+  const view = useRef<HTMLElement>(null);
   return (
-    <section className="space-y-4">
-      <div>
-        <p className="text-xs tracking-widest text-muted uppercase">Read from this desk</p>
-        <h2 className="text-2xl">
-          {dam.name} <span className="text-muted">({dam.nid})</span>
-        </h2>
-        <p className="text-sm text-muted">
-          {dam.county ? `${dam.county} · ` : ""}
-          {result.breach.label} · {result.flood.engineLabel}
-        </p>
+    <section ref={view} className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-xs tracking-widest text-muted uppercase">Read from this desk</p>
+          <h2 className="text-2xl">
+            {dam.name} <span className="text-muted">({dam.nid})</span>
+          </h2>
+          <p className="text-sm text-muted">
+            {dam.county ? `${dam.county} · ` : ""}
+            {result.breach.label} · {result.flood.engineLabel}
+          </p>
+        </div>
+        <ViewExport target={view} kind="report" dam={dam} result={result} />
       </div>
       <ExportPanel dam={dam} result={result} />
       <PluginPanel dam={dam} result={result} />
@@ -821,10 +829,14 @@ function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
 const handoff = {
   work: "",
   dem: "",
+  model: "lisflood",
+  source: "pack",
   log: "The screening chain has not been started.",
   busy: false,
 };
 let handoffTimer = 0;
+
+type JobPath = "/api/screen" | "/api/model" | "/api/folder" | "/api/layers";
 
 function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
   const [, bump] = useState(0);
@@ -834,9 +846,34 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
     }, 500);
     return () => window.clearInterval(id);
   }, []);
+  const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
+  const plss = usePlss(dam, strip.strip);
+  const files = useMemo(() => {
+    const out: Record<string, string> = {};
+    const root = (dam.nid || dam.id).toLowerCase().replace(/[^a-z0-9]/g, "_").replace(/^_+/, "") || "dam";
+    try {
+      const pkg = generateLisfloodPackage(dam, result.breach.series, {
+        cellSizeM: dam.lisflood?.cellSizeM,
+        pointX: dam.lisflood?.pointX,
+        pointY: dam.lisflood?.pointY,
+      });
+      out[`${root}.par`] = pkg.par;
+      out[`${root}.bci`] = pkg.bci;
+      out[`${root}.bdy`] = pkg.bdy;
+    } catch {
+      /* the package stays out of the folder when the desk cannot build it */
+    }
+    if (strip.strip) {
+      const table = plss.state === "ready" ? plss.table : null;
+      out["flood_strip.geojson"] = exportFloodStripGeoJsonWithPlss(strip.strip, table);
+      out["flood_strip.kml"] = exportFloodStripKmlWithPlss(strip.strip, table);
+      if (table) out["plss.csv"] = exportPlssCsv(table);
+    }
+    return out;
+  }, [dam, result.breach.series, strip.strip, plss]);
 
   const start = useCallback(
-    async (path: "/api/screen" | "/api/model") => {
+    async (path: JobPath) => {
       if (handoffTimer) window.clearInterval(handoffTimer);
       handoff.busy = true;
       handoff.log = "Starting…\n";
@@ -845,7 +882,15 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         const response = await fetch(path, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dam, analysis: result, work: handoff.work, dem: handoff.dem }),
+          body: JSON.stringify({
+            dam,
+            analysis: result,
+            work: handoff.work,
+            dem: handoff.dem,
+            model: handoff.model,
+            source: handoff.source,
+            files: path === "/api/layers" ? undefined : files,
+          }),
         });
         if (!response.ok) throw new Error("The Crest server did not accept the job.");
         const job = (await response.json()) as { id?: string };
@@ -875,7 +920,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         bump((n) => n + 1);
       }
     },
-    [dam, result],
+    [dam, result, files],
   );
 
   const field = "mt-1 h-10 w-full rounded-sm border border-line bg-paper px-3 text-sm";
@@ -885,8 +930,10 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
     <div className="rounded-md border border-line bg-card p-4">
       <h3 className="text-lg">Plugins already in QGIS</h3>
       <p className="mt-1 text-sm text-muted">
-        Writes the dam folder, runs tool 17, and starts nddam:runchain only if the preflight passes. The flood model is a
-        separate button. A missing DEM or a preflight FAIL stops there. This is not an official class.
+        Writes the dam folder the plugins read, including the LISFLOOD package and the flood strip. Get layers downloads
+        a DEM and streams for this area, or uses the ND offline pack both plugin sets already share. Screening runs tool
+        17 and starts nddam:runchain only if the preflight passes. A missing DEM or a preflight FAIL stops there. This is
+        not an official class.
       </p>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-xs text-muted">
@@ -906,15 +953,51 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
           <input
             className={field}
             value={handoff.dem}
-            placeholder="blank = dem.tif in the work folder, or CREST_DEM"
+            placeholder="blank = dem.tif, the pack DEM, or CREST_DEM"
             onChange={(e) => {
               handoff.dem = e.target.value;
               bump((n) => n + 1);
             }}
           />
         </label>
+        <label className="text-xs text-muted">
+          Flood model
+          <select
+            className={field}
+            value={handoff.model}
+            onChange={(e) => {
+              handoff.model = e.target.value;
+              bump((n) => n + 1);
+            }}
+          >
+            <option value="lisflood">LISFLOOD-FP only</option>
+            <option value="anuga">LISFLOOD-FP, then ANUGA</option>
+            <option value="hecras">LISFLOOD-FP, then HEC-RAS 2D</option>
+            <option value="builtin">Built-in screening engine (still needs a DEM)</option>
+          </select>
+        </label>
+        <label className="text-xs text-muted">
+          Layers
+          <select
+            className={field}
+            value={handoff.source}
+            onChange={(e) => {
+              handoff.source = e.target.value;
+              bump((n) => n + 1);
+            }}
+          >
+            <option value="pack">ND offline pack (both plugin sets)</option>
+            <option value="download">Download DEM and streams for this area</option>
+          </select>
+        </label>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" className={btn} disabled={handoff.busy} onClick={() => void start("/api/layers")}>
+          Get layers
+        </button>
+        <button type="button" className={btn} disabled={handoff.busy} onClick={() => void start("/api/folder")}>
+          Write the dam folder
+        </button>
         <button type="button" className={btn} disabled={handoff.busy} onClick={() => void start("/api/screen")}>
           Write folder and run screening
         </button>
@@ -924,7 +1007,8 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       </div>
       <p className="mt-2 text-xs text-muted">
         The flood button runs one dam (ndbreach:rundam, or ndbreach_cli.py when both Point X and Point Y are filled in the
-        DEM's coordinates). It does not start ndbreach:batch.
+        DEM's coordinates). It does not start ndbreach:batch. The drawn line stays longitude and latitude, so it is
+        not sent as DAM_LINES.
       </p>
       <pre className="mt-3 max-h-72 overflow-auto rounded-sm bg-paper p-3 text-xs whitespace-pre-wrap">{handoff.log}</pre>
     </div>
