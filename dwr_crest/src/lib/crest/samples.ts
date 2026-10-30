@@ -105,24 +105,25 @@ export const SAMPLE_DAMS: DamRecord[] = [
     nid: "ND00199",
     county: "Cass",
     year: 1960,
-    // DWR-2801 benchmark (Nick's ruling, 2026-10-29): crest 1072.24 ft NAVD88 = the NGVD29 record crest
-    // 1071.15 + VERTCON 1.09 ft, already converted, so the datum is NAVD88 and nothing shifts it again.
-    // Breach bottom 1044.74 NAVD88, height 27.50 ft, piping. Storage 1,612.59 ac-ft (the review's value,
-    // = the r3 hydrograph volume), surface area 154.5 ac. DEM crest given in NAVD88 too (1071.15 is NGVD29).
+    // Nick, round 2 (2026-10-29 5:18 PM CDT, decision 9): the DWR Dams file values plus the VERTCON shift at this
+    // dam's own location (+1.0886 ft): top of dam 1070.0 NGVD29 -> 1071.09 ft NAVD88, streambed 1042.5 NGVD29 ->
+    // 1043.59 ft NAVD88, so H stays 27.50 ft. Already converted, so the datum is NAVD88 and nothing shifts it again.
+    // (Replaces 1072.24 / 1044.74.) Piping. Storage 1,612.59 ac-ft (the review's value, = the r3 hydrograph
+    // volume), surface area 154.5 ac. DEM crest given in NAVD88 too (1070.0 is NGVD29).
     // Generic receptor seeds, kept on purpose (Nick): the Farmstead lands in the TM 11 judgment zone, so
     // the sample screens High (flagged); the class of record is ND MEDIUM / TM11 Significant.
     heightFt: 27.5,
     lengthFt: 1700,
-    crestFt: 1072.24,
-    streambedFt: 1044.74,
+    crestFt: 1071.09,
+    streambedFt: 1043.59,
     spillwayFt: NaN,
     normalPoolFt: NaN,
     storageAcFt: 1612.59,
     drainageMi2: 13.7,
     statedDatum: "NAVD88",
     datumNote:
-      "Crest converted from NGVD29 1071.15 ft (+1.09 ft VERTCON at the site); do not shift again.",
-    demCrestFt: 1072.24,
+      "Crest converted from NGVD29 1070.0 ft (DWR Dams file; +1.09 ft VERTCON at the site); do not shift again.",
+    demCrestFt: 1071.09,
     classOfRecord: "ND MEDIUM / TM11 Significant (DWR-2801 benchmark)",
     sampleNote:
       "Sample with generic receptor seeds, not the DWR-2801 benchmark structures. With the judgment zone counted as High (the default), the generic Farmstead falls in the ACER TM 11 judgment zone, so this desk screen reads High (flagged). That is a flag for an engineer, not the class of record (ND MEDIUM / TM11 Significant).",

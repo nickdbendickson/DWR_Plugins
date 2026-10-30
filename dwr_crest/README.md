@@ -15,6 +15,8 @@ Desk screening of small embankment dams: breach hydrograph, schematic valley flo
 | `npm run build:desktop` | Builds the desk into `crest-desktop/crest/web/` for the desktop app (committed; see below). |
 | `npm run build:crest-html` | Builds the same desk into the one-file `Crest.html` at the repo root (committed). |
 | `npm run test:desktop` | Headless smoke test of the desktop app (Python, no GUI). |
+| `npm run data:nd-dams` | Rebuilds `src/lib/crest/data/nd_dams.json` from the NID (ND dam picker). Run only when asked. |
+| `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp>` | Rebuilds `src/lib/crest/data/nd_dams_dwr.json` from a folder of DWR Dams and Dugouts CSVs already converted to NAVD 88. Run only when asked. |
 
 ### Deploys and migrations
 
@@ -45,7 +47,10 @@ rank higher is still named, so a known High is never hidden).
      downstream; the flood and every receptor are screened in full and a warning says why.
 
 **Breach on the outline.** A breach within 1 m of the outline (on an edge or a corner) counts as inside, so an area
-drawn from the dam line downstream is not lost to rounding.
+drawn from the dam line downstream is not lost to rounding. The same 1 m tolerance applies on both sides of every
+edge along the valley, so the flow line counts as inside when it runs on or less than 1 m beside the outline, and
+gaps under 2 m (a slot between two parts or a hole less than 2 m across the valley) are closed; a gap of 2 m or
+more ends the reach. Cross-sections use the same test, which adds about 0.01 ac.
 
 **Upstream warning.** If more than half of the area's filled outline (holes ignored) lies upstream of the breach, a
 warning asks you to check the drawing.
@@ -57,6 +62,56 @@ with USGS Imagery + Topo and OpenStreetMap in the layer switcher. Tiles are the 
 another XYZ tile server, set `VITE_CREST_TILE_URL` (with `{z}`, `{x}` and `{y}`) and `VITE_CREST_TILE_ATTRIBUTION` at
 build time; it becomes the default layer (`src/lib/crest/basemap.ts`). The desktop bundle and `Crest.html` pick it up
 when rebuilt with the variable set.
+
+## North Dakota dam picker (NID, with DWR values)
+
+On the Record step, **Fill from the NID** picks a county and then a dam (type a name, other name such as "Absaraka",
+or NID ID such as `ND00199` / `199`). After a confirm ("Apply to this record" or "New record from NID"), it fills the
+name, NID ID, county, year, location, height, length, storage and drainage area, each tagged "from NID" (or "from
+DWR"), "edited (NID: x)" with a revert, or "not in NID: enter a value". **Unlink NID** drops the link and the tags.
+
+- **Dams:** the NID's 948 North Dakota main dams (Federal ID equal to NID ID; associated structures such as
+  `ND00145S001` are left out). ND00182 is listed under Clay (as the NID has it), with a note that its point lies in
+  Cass Co., ND.
+- **Storage V** is the NID Storage, with a chip saying whether it is the NID Max Storage or the Normal Storage (no max
+  reported, with a warning). Over 500,000 ac-ft gets a note that the breach equations are out of range.
+- **Height H** is the DWR maximum dam height where the dam joins the DWR file (830 dams, "from DWR"), else the NID
+  Height (whole feet). Warnings W-H1 and W-H2 flag an NID height that looks structural, and an H that disagrees with
+  crest minus breach bottom (tolerance max(1 ft, 5% of it), +0.5 ft for a rounded NID height).
+- **Elevations are never filled from the NID** (it has none). The crest, breach bottom and datum stay blank, an amber
+  banner asks for them, Next is disabled and the engine returns *Review (elevations missing)* with no flood until they
+  are entered: typed from a DEM (NAVD 88; Crest does not sample the DEM, so this does not set the DEM crest and the
+  DEM-vs-crest check still applies), typed in the fields, or, where the DWR record is in NGVD 29 or NAVD 88, with
+  **Use DWR elevations (checked against the dam file)** after a confirm. The offer is always NAVD 88, straight from the
+  bundle: NGVD 29 values were converted once, before the build, by per-point NOAA VERTCON and are labelled "converted
+  from NGVD29 (+x.xxx ft, VERTCON)" (ND00199: 1070.0 / 1042.5 ft NGVD 29 -> 1071.09 / 1043.59 ft NAVD 88, +1.089 ft,
+  H 27.5 ft); the stated value, datum and shift are kept as provenance and nothing is converted twice. Values the
+  conversion QC held (outside 700-3,600 ft under an NGVD 29 / NAVD 88 label: ND01032) are never offered. DWR
+  elevations on a local or blank datum are relative only and used just as an H check; `drawdown_e` is treated as
+  local and not carried. 91 of the 839 joined dams have a NAVD 88 offer.
+- **DWR dugout record (reference only).** Where a DWR Dugouts record has the dam's NID ID (108 dams), a grey box shows
+  its depth (ft), height (ft), freeboard (ft), surface area (ac) and storage (ac-ft). It never fills a field and does
+  not change the screen.
+- **Surface area** is never filled. The NID normal-pool area is shown as a reference and the DWR maximum-pool area has
+  a **Use** button.
+- **NID hazard** is shown in grey as reported to the NID (FEMA class). It is not used by the screen and is not the class
+  of record.
+
+**Data and sources.** Both bundles are offline, loaded on demand (no network use by the picker):
+
+| Bundle | Source | Downloaded |
+|---|---|---|
+| `src/lib/crest/data/nd_dams.json` | U.S. Army Corps of Engineers, National Inventory of Dams, ND state CSV (`nid.sec.usace.army.mil`). No owner names (an NID owner can be a private person): an unnamed dam is labelled by its NID ID only, e.g. "(unnamed) · ND00971" / "Unnamed dam ND00971". | 2026-10-29 |
+| `src/lib/crest/data/nd_dams_dwr.json` | North Dakota Department of Water Resources, Dams and Dugouts layers (`mapservice.dwr.nd.gov`). Dams: numeric fields, the stated vertical datum code, NAVD 88 values (NGVD 29 converted with NOAA VERTCON before the build; the stated value and shift kept), held-field names, and the county where it differs. Dugouts: five numeric reference fields for dugouts whose NID ID is a main dam. No owner, name, contact, designer, remark or permit fields. Provisional, provided as is; field meanings are inferred. | 2026-10-30 |
+
+The source URL, download time, SHA-256 of the raw file and the attribution are stored in each bundle and shown in the
+picker footer, the Report, the dam.json export and **About the dam data** at the bottom of the desk. Refresh only when
+asked: `npm run data:nd-dams` (downloads the NID CSV; `--from file.csv` to use a saved one; it fails on a schema change
+or if the dam count drops below 800 or more than 20% below the committed bundle, unless `--allow-shrink`), then `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp> --pulled <UTC time>`
+(a folder with `Dams_navd88.csv` and `Dugouts_navd88.csv`, converted to NAVD 88 by per-point VERTCON outside the app,
+plus `raw/` and `grids/` `SHA256SUMS.txt`; the build checks each NAVD 88 value against stated + shift and refuses a
+local value or a second conversion). `data-raw/` is git-ignored. Rebuild the desktop bundle and `Crest.html`
+afterwards.
 
 ## Crest.html (one file)
 
@@ -96,6 +151,8 @@ Needs **Python 3.10, 3.11 or 3.12** (3.12 recommended; 3.13 is not supported by 
    python run.py
    ```
 3. Optional app: `sh build_mac.sh` gives `dist/Crest.app`. It is unsigned, so the first time right-click it and choose Open.
+
+The Report step can hand the open dam to the QGIS plugins already installed on this Mac. **Write folder and run screening** writes `<work>/dams/<id>/` (`dam.json`, the drawn line, breach point, reservoir point, downstream area, and the hydrograph), runs `nddam:preflight` (tool 17), and starts `nddam:runchain` only when that preflight says READY. A FAIL stops there; a new `CrestDams` folder is expected to fail until it has the screening DEM and layers. **Run the flood model** is separate. It needs a DEM (`dem.tif` in the work folder, the DEM field, or `CREST_DEM`) and runs one dam: `ndbreach:rundam`, or `ndbreach_cli.py run` when both Point X and Point Y are filled in the DEM's coordinates. It does not start `ndbreach:batch`. The drawn line is longitude and latitude, so Crest does not send it as `DAM_LINES` and does not set `line_xy`. The log is on the Report step. `Crest.html` has no local server, so those two buttons work from `python run.py`, not from the one-file page.
 
 ### Linux
 `pip install -r requirements.txt` pulls `pywebview[qt]` (PyQt6 + Qt WebEngine, about 500 MB), then `python run.py`.

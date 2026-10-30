@@ -199,6 +199,33 @@ function inPart(p: Part, x: number, y: number) {
   return inRing(p.outer, x, y) && !p.holes.some((h) => inRing(h, x, y));
 }
 
+function distToRing(r: XY[], x: number, y: number) {
+  let d = Infinity;
+  for (let i = 0; i < r.length; i++) {
+    const a = r[i];
+    const b = r[(i + 1) % r.length];
+    const c = closestOnSeg([a[0] - x, a[1] - y], [b[0] - x, b[1] - y]);
+    d = Math.min(d, Math.hypot(c[0], c[1]));
+  }
+  return d;
+}
+
+/**
+ * Closed point-in-part test with a tolerance: a point within `tol` metres of the outline (outer ring
+ * or a hole's ring) counts as inside. The plain crossing test (inRing) treats points exactly on some
+ * edges as outside depending on the edge's side, so a flow line running along an AOI edge was inside
+ * on one side of the flow and outside on the other (round 3c).
+ *
+ * Because `tol` applies on both sides of every edge, a gap narrower than 2 * tol (gaps under 2 m
+ * with BOUNDARY_TOL_M) is closed: a slot between two parts, or a hole, less than 2 m across the
+ * line counts as inside, and so does a line running less than 1 m beside the outline. 2 m or more
+ * stays open.
+ */
+function inPartTol(p: Part, x: number, y: number, tol: number) {
+  if (!inRing(p.outer, x, y) && distToRing(p.outer, x, y) > tol) return false;
+  return !p.holes.some((h) => inRing(h, x, y) && distToRing(h, x, y) > tol);
+}
+
 function partArea(p: Part) {
   return Math.abs(signedArea(p.outer)) - p.holes.reduce((s, h) => s + Math.abs(signedArea(h)), 0);
 }
@@ -228,12 +255,18 @@ function insideIntervals(parts: Part[], es: [XY, XY][], a: XY, b: XY): [number, 
     const s = ((c[0] - a[0]) * dy - (c[1] - a[1]) * dx) / den;
     if (t > 0 && t < 1 && s >= 0 && s <= 1) ts.push(t);
   }
+  // Also break at each vertex's projection onto A-B, so a stretch that runs along an edge (or within
+  // BOUNDARY_TOL_M of it) without crossing anything starts and stops where that edge does.
+  for (const [c] of es) {
+    const t = ((c[0] - a[0]) * dx + (c[1] - a[1]) * dy) / (len * len);
+    if (t > 0 && t < 1) ts.push(t);
+  }
   ts.sort((p, q) => p - q);
   const out: [number, number][] = [];
   for (let i = 1; i < ts.length; i++) {
     if (ts[i] - ts[i - 1] < 1e-12) continue;
     const m = (ts[i] + ts[i - 1]) / 2;
-    if (parts.some((p) => inPart(p, a[0] + m * dx, a[1] + m * dy))) {
+    if (parts.some((p) => inPartTol(p, a[0] + m * dx, a[1] + m * dy, BOUNDARY_TOL_M))) {
       const last = out[out.length - 1];
       if (last && Math.abs(last[1] - ts[i - 1] * len) < 1e-6) last[1] = ts[i] * len;
       else out.push([ts[i - 1] * len, ts[i] * len]);
@@ -501,6 +534,10 @@ export function aoiExtent(shape: Extract<AoiShape, { ok: true }>, dir: Downstrea
     );
   }
   const strip = reachBasis === "downstream" ? axis : null;
+  // Cross-sections use insideIntervals too, so the 1 m outline tolerance also widens each one by up
+  // to 1 m where it crosses an edge. That is deliberate (one inside test for the reach and the wet
+  // area) and small: about 0.01 ac on a 3 km reach (+0.005 ac for a 100 m corridor, +0.013 ac for a
+  // 400 m one, versus the strict test).
   const crossFrac = (xM: number, halfM: number) => {
     if (!strip) return null;
     if (halfM <= 0) return 0;

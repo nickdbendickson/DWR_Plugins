@@ -3,7 +3,6 @@ import { tempDir } from "./test-tmp.mjs";
 import {
   existsSync,
   mkdirSync,
- 
   readFileSync,
   readdirSync,
   writeFileSync,
