@@ -624,7 +624,7 @@ export function screenReceptors(
     outsideAoi?: boolean;
     wouldBe?: RankedReceptor["wouldBe"];
   })[],
-  seeds: Pick<ReceptorSeed, "kind" | "habitable">[] = [],
+  seeds: Pick<ReceptorSeed, "kind" | "habitable" | "source">[] = [],
   opts: { judgmentAsProbable?: boolean } = {},
 ): Analysis["screen"] {
   const judgmentAsProbable = opts.judgmentAsProbable ?? true;
@@ -647,6 +647,10 @@ export function screenReceptors(
     }
     if (r.needsJudgment) {
       judgment.push(`${r.name}: ${r.rankReason}.`);
+    }
+    // Added from a 911 address point (nd911.ts) and not classified yet: counted as a home until the user says.
+    if (seeds[i]?.source === "nd911" && seeds[i]?.habitable == null) {
+      judgment.push(`${r.name}: added from a 911 address point; classify it habitable or not (counted as habitable until you do).`);
     }
   });
   if (reasons.length === 0) reasons.push("No seeded receptor is wet at 0.1 ft or more.");

@@ -334,9 +334,10 @@ function kmlColor(hex: string, alpha = 0x73) {
 
 /**
  * <root>_flood_strip.kml: the same polygons and facts, for Google Earth and the like. `extra` adds lines to the
- * document description (the PLSS section list, plss.ts).
+ * document description (the PLSS section list, plss.ts);
+ * `placemarks` adds KML after the bands (the 911 address points, nd911.ts).
  */
-export function exportFloodStripKml(strip: FloodStrip, extra: string[] = []): string {
+export function exportFloodStripKml(strip: FloodStrip, extra: string[] = [], placemarks: string[] = []): string {
   const p = strip.properties;
   const desc = [
     `${p.disclaimer}.`,
@@ -391,6 +392,7 @@ export function exportFloodStripKml(strip: FloodStrip, extra: string[] = []): st
       `<description>${esc(desc)}</description>`,
       ...styles,
       ...marks,
+      ...placemarks,
       "</Document>",
       "</kml>",
     ].join("\n") + "\n"

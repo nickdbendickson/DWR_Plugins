@@ -1,3 +1,4 @@
+import type { Nd911Cache } from "./nd911.ts";
 import type { PlssCache } from "./plss.ts";
 export type DatumName = "Local" | "NAVD88" | "NGVD29";
 export type FailureMode = "overtopping" | "piping";
@@ -27,6 +28,10 @@ export type ReceptorSeed = {
   roadClass?: RoadClass;
   /** Structures: habitable? Houses and mobile homes default to yes, barns and sheds to no. */
   habitable?: boolean;
+  /** Where the seed came from when the desk made it: "nd911" = added from an ND NG911 address point for review. */
+  source?: "nd911";
+  /** The source's id (Site_NGUID for nd911). */
+  sourceRef?: string;
 };
 
 export type GeoJSONFeature = {
@@ -85,6 +90,8 @@ export type DamRecord = {
   geometry?: DamGeometry;
   /** PLSS sections looked up for the flood strip (BLM CadNSDI), kept so the list works offline afterwards. */
   plss?: PlssCache;
+  /** ND NG911 address points looked up around the flood strip (ND GIS Hub), kept for offline use. */
+  nd911?: Nd911Cache;
   /** ACER TM 11 judgment zone counts as probable loss of life (High), as damsuite classify_nd defaults. Default true. */
   judgmentAsProbable?: boolean;
 };

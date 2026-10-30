@@ -4,8 +4,6 @@ import { analyze, STEPS } from "@/lib/crest/engine";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
 import { floodStrip, type FloodStrip } from "@/lib/crest/floodstrip";
 import {
-  exportFloodStripGeoJsonWithPlss,
-  exportFloodStripKmlWithPlss,
   exportPlssCsv,
   fetchPlss,
   PLSS_ATTRIBUTION,
@@ -13,6 +11,20 @@ import {
   SLIVER_AC,
   type PlssState,
 } from "@/lib/crest/plss";
+import {
+  addNd911Seeds,
+  exportFloodGeoJson,
+  exportFloodKml,
+  exportNd911Csv,
+  fetchNd911,
+  ND911_ATTRIBUTION,
+  ND911_DROPPED_FIELDS,
+  nd911State,
+  removeNd911Seeds,
+  seedId,
+  type Nd911Row,
+  type Nd911State,
+} from "@/lib/crest/nd911";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { activeDam, useDesk } from "@/lib/crest/store";
@@ -169,9 +181,12 @@ export function Desk() {
               <li>Crest is a desk screen for dam breach studies. It does not run LISFLOOD, ANUGA, or HEC-RAS and does not assign an official hazard class.</li>
               <li>Basemaps: USGS The National Map, or OpenStreetMap contributors (as credited on the map).</li>
               <li data-testid="plss-attribution">{PLSS_ATTRIBUTION}</li>
+              <li data-testid="nd911-attribution">{ND911_ATTRIBUTION}</li>
             </ul>
           </details>
-          <p className="mt-1">Data: {PLSS_ATTRIBUTION.split(" Public data")[0]}.</p>
+          <p className="mt-1">
+            Data: {PLSS_ATTRIBUTION.split(" Public data")[0]}; {ND911_ATTRIBUTION.split(" Public data")[0]}.
+          </p>
         </div>
       </footer>
     </div>
@@ -197,6 +212,11 @@ function useOnline() {
 function usePlss(dam: DamRecord, strip: FloodStrip | null): PlssState {
   const online = useOnline();
   return useMemo(() => plssState(dam, strip, online), [dam, strip, online]);
+}
+
+function useNd911(dam: DamRecord, strip: FloodStrip | null): Nd911State {
+  const online = useOnline();
+  return useMemo(() => nd911State(dam, strip, online), [dam, strip, online]);
 }
 
 function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
@@ -331,6 +351,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   const onGeometry = useCallback((geometry: DamGeometry) => update({ geometry }), [update]);
   const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
   const plss = usePlss(dam, strip.strip);
+  const nd911 = useNd911(dam, strip.strip);
   return (
     <section className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -394,6 +415,8 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
                 stripMessage={strip.reason}
                 plss={plss.state === "ready" ? plss.table.rows : null}
                 plssMessage={plss.state === "ready" ? null : plss.message}
+                nd911={nd911.state === "ready" ? { inside: nd911.table.rows, outside: nd911.table.outside } : null}
+                nd911Message={nd911.state === "ready" ? null : nd911.message}
               />
             </Suspense>
           ) : (
@@ -402,6 +425,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
         </div>
       </div>
       <PlssPanel strip={strip.strip} plss={plss} />
+      <Nd911Panel dam={dam} result={result} strip={strip.strip} nd911={nd911} />
       <div className="overflow-hidden rounded-md border border-line">
         <ValleyMap flood={result.flood} />
       </div>
@@ -487,6 +511,171 @@ function PlssPanel({ strip, plss }: { strip: FloodStrip | null; plss: PlssState 
           </p>
           <p className="mt-1 text-xs text-muted">{PLSS_ATTRIBUTION}</p>
         </>
+      ) : null}
+    </div>
+  );
+}
+
+const HAB_OPTIONS: [string, string][] = [
+  ["", "Not classified (counted as habitable)"],
+  ["yes", "Habitable"],
+  ["no", "Not habitable"],
+];
+
+/**
+ * 911 address points: looked up on request, listed when inside the strip. They never change the screen on their own;
+ * "Add for review" makes receptor seeds the user classifies, and "Remove" takes them away again.
+ */
+function Nd911Panel({
+  dam,
+  result,
+  strip,
+  nd911,
+}: {
+  dam: DamRecord;
+  result: ReturnType<typeof analyze>;
+  strip: FloodStrip | null;
+  nd911: Nd911State;
+}) {
+  const update = useDesk((s) => s.update);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (nd911.state === "none") return null;
+  const lookUp = async () => {
+    if (!strip) return;
+    setBusy(true);
+    setError(null);
+    try {
+      update({ nd911: await fetchNd911(strip) });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const t = nd911.state === "ready" ? nd911.table : null;
+  const seeds = new Map(dam.receptors.filter((r) => r.source === "nd911").map((r) => [r.id, r]));
+  const addRows = (rows: Nd911Row[]) => update({ receptors: addNd911Seeds(dam.receptors, rows, result) });
+  const remove = (ids?: string[]) => update({ receptors: removeNd911Seeds(dam.receptors, ids) });
+  const classify = (id: string, v: string) =>
+    update({
+      receptors: dam.receptors.map((r) => (r.id === id ? { ...r, habitable: v === "" ? undefined : v === "yes" } : r)),
+    });
+  const notAdded = t ? t.rows.filter((r) => !r.added) : [];
+  const btn = "inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50";
+  const small = "inline-flex h-9 items-center rounded-sm border border-line bg-paper px-2 text-xs text-ink";
+  return (
+    <div className="rounded-md border border-line bg-card p-4" data-testid="nd911-panel">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-lg">911 address points {t ? `inside the ${t.against}` : "near the strip"}</h3>
+        {nd911.state !== "offline" ? (
+          <button type="button" onClick={() => void lookUp()} disabled={busy} className={btn}>
+            {busy ? "Looking up…" : t ? "Look up again" : "Look up 911 address points"}
+          </button>
+        ) : null}
+      </div>
+      {nd911.message ? (
+        <p className="mt-1 text-sm text-muted" role="status">
+          {nd911.message}
+        </p>
+      ) : null}
+      {error ? (
+        <p className="mt-1 text-sm text-amber" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {t ? (
+        <>
+          <p className="mt-1 text-sm" data-testid="nd911-count">
+            <span className="font-medium">{t.rows.length}</span> of {t.total} address points in the looked-up box are inside
+            the {t.against}. They do not change the desk screen unless you add them for review.
+          </p>
+          {t.rows.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" className={btn} disabled={notAdded.length === 0} onClick={() => addRows(notAdded)}>
+                Add all {notAdded.length || ""} as structures for review
+              </button>
+              <button type="button" className={btn} disabled={seeds.size === 0} onClick={() => remove()}>
+                Remove 911 structures{seeds.size ? ` (${seeds.size})` : ""}
+              </button>
+            </div>
+          ) : null}
+          {t.rows.length > 0 ? (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-sm" data-testid="nd911-table">
+                <thead className="text-left text-xs tracking-wide text-muted uppercase">
+                  <tr>
+                    <th className="px-2 py-1">#</th>
+                    <th className="px-2 py-1">Address</th>
+                    <th className="px-2 py-1">Depth band</th>
+                    <th className="px-2 py-1">km downstream</th>
+                    <th className="px-2 py-1">Place type</th>
+                    <th className="px-2 py-1">For review</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {t.rows.map((r) => {
+                    const id = seedId(r.nguid, r.lon, r.lat);
+                    const seed = seeds.get(id);
+                    return (
+                      <tr key={id} className="border-t border-line align-top">
+                        <td className="px-2 py-1 tabular-nums">{r.order}</td>
+                        <td className="px-2 py-1">{r.address}</td>
+                        <td className="px-2 py-1">{r.bandLabel}</td>
+                        <td className="px-2 py-1 tabular-nums">{num(r.downstreamKm, 2)}</td>
+                        <td className="px-2 py-1">{r.placeType || "—"}</td>
+                        <td className="px-2 py-1">
+                          {seed ? (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <select
+                                aria-label={`Classify ${r.address}`}
+                                className="h-9 rounded-sm border border-line bg-paper px-2 text-xs"
+                                value={seed.habitable == null ? "" : seed.habitable ? "yes" : "no"}
+                                onChange={(e) => classify(id, e.target.value)}
+                              >
+                                {HAB_OPTIONS.map(([v, l]) => (
+                                  <option key={v} value={v}>
+                                    {l}
+                                  </option>
+                                ))}
+                              </select>
+                              <button type="button" className={small} onClick={() => remove([id])}>
+                                Remove
+                              </button>
+                            </div>
+                          ) : (
+                            <button type="button" className={small} onClick={() => addRows([r])}>
+                              Add as structure
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+          <p className="mt-2 text-xs text-muted">
+            Inside means within the {t.against}&apos;s depth bands; the band is the one the point falls in. An address point
+            marks an address, not a surveyed structure or floor height. Added points become home seeds on the channel
+            bed (pad 0 ft, the desk&apos;s deepest case) at their distance downstream, listed under &quot;Needs an
+            engineer&apos;s call&quot; until you classify them. Looked up{" "}
+            {new Date(t.fetchedAt).toLocaleString()} and saved with this dam.
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            Fields kept: the published address, unit, community, ZIP, county, place type and placement, and the NG911 site
+            id. Not kept: {ND911_DROPPED_FIELDS.slice(0, 3).map((d) => d.field).join(", ")} (free text that can name people
+            or businesses) and duplicate or record-keeping fields. {ND911_ATTRIBUTION}
+          </p>
+        </>
+      ) : null}
+      {!t && seeds.size > 0 ? (
+        <div className="mt-2">
+          <button type="button" className={btn} onClick={() => remove()}>
+            Remove 911 structures ({seeds.size})
+          </button>
+        </div>
       ) : null}
     </div>
   );
@@ -670,6 +859,8 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
   const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
   const plss = usePlss(dam, strip.strip);
   const plssTable = plss.state === "ready" ? plss.table : null;
+  const nd911 = useNd911(dam, strip.strip);
+  const nd911Table = nd911.state === "ready" ? nd911.table : null;
   const [saved, setSaved] = useState<string | null>(null);
   const save = useCallback(async (name: string, text: string, type?: string) => {
     const r = await saveText(name, text, type);
@@ -709,7 +900,7 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
           className={btn}
           disabled={!strip.strip}
           title={strip.reason ?? undefined}
-          onClick={() => strip.strip && void save(`${root}_flood_strip.geojson`, exportFloodStripGeoJsonWithPlss(strip.strip, plssTable), "application/geo+json")}
+          onClick={() => strip.strip && void save(`${root}_flood_strip.geojson`, exportFloodGeoJson(strip.strip, plssTable, nd911Table), "application/geo+json")}
         >
           Flood strip GeoJSON
         </button>
@@ -718,7 +909,7 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
           className={btn}
           disabled={!strip.strip}
           title={strip.reason ?? undefined}
-          onClick={() => strip.strip && void save(`${root}_flood_strip.kml`, exportFloodStripKmlWithPlss(strip.strip, plssTable), "application/vnd.google-earth.kml+xml")}
+          onClick={() => strip.strip && void save(`${root}_flood_strip.kml`, exportFloodKml(strip.strip, plssTable, nd911Table), "application/vnd.google-earth.kml+xml")}
         >
           Flood strip KML
         </button>
@@ -731,12 +922,27 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         >
           PLSS sections CSV
         </button>
+        <button
+          type="button"
+          className={btn}
+          disabled={!nd911Table || !dam.nd911}
+          title={nd911Table ? undefined : (nd911.message ?? undefined)}
+          onClick={() => nd911Table && dam.nd911 && void save(`${root}_911_address_points.csv`, exportNd911Csv(nd911Table, dam.nd911), "text/csv")}
+        >
+          911 address points CSV
+        </button>
       </div>
       <p className="mt-2 text-xs text-muted">
         Flood strip (WGS 84): {strip.strip ? "approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands." : strip.reason}
       </p>
       <p className="mt-1 text-xs text-muted">
         PLSS sections: {plssTable ? `${plssTable.rows.length} touched, listed in the strip GeoJSON/KML and the CSV. ${PLSS_ATTRIBUTION}` : plss.message}
+      </p>
+      <p className="mt-1 text-xs text-muted" data-testid="nd911-export-note">
+        911 address points:{" "}
+        {nd911Table
+          ? `${nd911Table.rows.length} inside the ${nd911Table.against}, as points in the strip GeoJSON/KML and in the CSV. ${ND911_ATTRIBUTION}`
+          : nd911.message}
       </p>
       {saved ? (
         <p className="mt-2 text-xs text-muted" role="status">
