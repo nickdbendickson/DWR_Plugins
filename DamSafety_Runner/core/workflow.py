@@ -219,7 +219,7 @@ class RunSettings:
                                            # (default terrain.INFLOW_MAX_FROM_DAM_M, 150 m)
         self.inflow_toe_band_m = None    # v3.12.10: (min, max) m downstream of the dam line the
                                          # inflow (lowest ground) is looked for (default
-                                         # terrain.INFLOW_TOE_BAND_M, 5-30 m)
+                                         # terrain.INFLOW_TOE_BAND_M, 5-15 m)
         self.inflow_toe_cell_m = None    # ... on the DEM read at this cell (default 1 m, or the
                                          # DEM's own cell when coarser)
         self.user_hydrograph_obj = None  # breach.Hydrograph used as given (nested runs)
@@ -2652,9 +2652,10 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     (core/terrain.downstream_direction, pool_mask). The pool needs terrain well past the
     reservoir, so it is read on its own (POOL_HALF_M around the dam, at the search cell).
     v3.12.10 (Nick): with a dam line (`toe_line`) and a downstream side, the inflow is the
-    lowest ground at the downstream toe (terrain.toe_band_inflow, 5-30 m out along the full
-    line on the 1 m DEM); find_inflow_point (with its 150 m cap) is the fallback, with a
-    warning, when there is no line or the band has no valid cell."""
+    lowest ground at the downstream toe (terrain.toe_band_inflow, 5-15 m out along the full
+    line on the 1 m DEM, outside the pool, widened while it is the dam's face);
+    find_inflow_point (with its 150 m cap) is the fallback, with a warning, when there is no
+    line or the band has no valid cell."""
     if toe_line is None:
         toe_line = getattr(dam, "crest_line_xy", None)
     half = terrain.POOL_HALF_M
@@ -2686,7 +2687,7 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
         out["direction"], out["how"] = direction, how
     if toe_line is not None and len(toe_line) >= 2 and direction is not None:
         try:
-            xy, why = _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, None, dam_xy,
+            xy, why = _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy,
                                   toe_band_m, toe_cell_m, max_from_dam_m)
         except Exception as e:                   # noqa: BLE001 - the old search is the fallback
             xy, why = None, "{}: {}: {}".format(terrain.NO_TOE, type(e).__name__, e)
