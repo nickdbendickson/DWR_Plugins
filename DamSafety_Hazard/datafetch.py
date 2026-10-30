@@ -29,14 +29,14 @@ from qgis.core import (
 
 from .constants import (
     NARN_URL, CROSSINGS_URL, ND_ROADS_URL, HPMS_ND_URLS, ND_COUNTY_ROADS_URL, NDDOT_AADT_URL,
-    NDDOT_AADT_LAYERS, NHD_FLOWLINE_URL, lifeline_downloads, RAIL_CROSSING_SEARCH_MI,
+    NDDOT_AADT_LAYERS, NHD_FLOWLINE_URL, lifeline_fetches, RAIL_CROSSING_SEARCH_MI,
     GRP_DATA, SUBDIR_DATA,
 )
 from .compat import MSG_WARNING
 from .download import (
     fetch_nsi, fetch_nd_address_points, fetch_usa_structures, fetch_osm_camps,
     fetch_arcgis_layer, fetch_dams, fetch_osm_lifelines, fetch_nbi, fetch_osm_crossings,
-    fetch_osm_places, try_download, STALE_USED, PACK_USED,
+    fetch_osm_places, try_download, STALE_USED, PACK_USED, pack_has,
     configure_tile_cache_from_cfg, tile_cache_report_lines,
 )
 from .extent import distance_xy_in_crs
@@ -342,9 +342,10 @@ def _fetch(key, ext, xing, big, out, progress):
         return got[0]
     if key == "lifelines":
         parts = []
-        for k, label, url, _cat in lifeline_downloads():
+        # 2.20.3: the offline pack's HIFLD_* layers too (they have no download address)
+        for _k, label, url, _cat, ds in lifeline_fetches(pack_has()):
             parts.append((label, try_download(label, fetch_arcgis_layer, url, ext, out,
-                                              "lifeline_" + k)[0]))
+                                              ds)[0]))
         parts.append(("OpenStreetMap", try_download("OpenStreetMap lifelines",
                                                     fetch_osm_lifelines, ext, out)[0]))
         return _merge(parts)

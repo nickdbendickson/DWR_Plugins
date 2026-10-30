@@ -66,7 +66,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 
 from . import history as HIS
-from .constants import PLUGIN_NAME, PLUGIN_VERSION, SUBDIR_QA, LIFELINE_SOURCES
+from .constants import PLUGIN_NAME, PLUGIN_VERSION, SUBDIR_QA, LIFELINE_SOURCES, lifeline_names
 
 RUN_SETTINGS_FILE = "Run_Settings.json"
 PACKAGE_SETTINGS_FILE = "Run_Settings_package.json"
@@ -882,7 +882,8 @@ def _lifeline_rank(path):
     if b.startswith("osm_lifelines"):
         return len(LIFELINE_SOURCES) + 1
     for i, src in enumerate(LIFELINE_SOURCES):
-        if b.startswith("lifeline_{}_".format(src[0].lower())):
+        # 2.20.3: or the offline pack's HIFLD_* data set the key was read from
+        if any(b.startswith(n.lower() + "_") for n in lifeline_names(src[0])):
             return i + 1
     return 0
 

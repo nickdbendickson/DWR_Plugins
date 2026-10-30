@@ -79,7 +79,9 @@ PACK_SETS = {"structures": ("USA_Structures",), "structure_points": ("NSI_struct
              "nid_dams": ("NID_dams",), "flowlines": ("3DHP_flowlines", "NHD_flowlines"),
              "waterbodies": ("3DHP_waterbodies", "NHD_waterbodies"), "dwr_dams": ("DWR_dams",),
              "dwr_dam_lines": ("DWR_dam_lines",), "counties": ("ND_counties",),
-             "flood_zones": ("FEMA_flood_zones",), "lifelines": ()}
+             "flood_zones": (), "lifelines": ()}
+# damsuite 1.18.3: no pack holds the FEMA flood zones (build_nd_pack never had them; the Data pack
+# builder does not add them) - the role always comes from its service, so it claims no pack layer
 # role -> the suite service role (services.ROLES) used for a live download
 SERVICE_ROLE = {"structure_points": None, "lifelines": None}
 MI = 1609.344

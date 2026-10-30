@@ -5,7 +5,7 @@
 Needs GDAL (osgeo); skipped without it. Checks: the layer registry covers every layer of the
 reference ND_Dam_Suite_Pack; one build writes format 2 AND format 1 from the same download, both
 pass packcheck, open with offline_pack.open_pack and hold the same layers and counts; the
-format-1 manifest names the raster it cannot hold; sha256 in the manifests; a second run
+format-1 pack holds the NLCD raster too (1.5.2); sha256 in the manifests; a second run
 downloads nothing and rewrites nothing; the refusal rules; Setup's suite_fill finds the layers.
 PR #221 / #223: HPMS_ND_2024 and NDDOT_traffic_counts both kept (AADT comparison); HIFLD only
 from user-supplied (DataLumos) files, clipped to ND, no mirror; 3DHP under the NHD names with
@@ -283,8 +283,13 @@ def test_build_writes_both_formats(tmp_path, mocked):
     assert (p1 / "nd_offline_pack.sqlite").is_file() and (p2 / "LAYERS.txt").is_file()
     m1 = json.load(open(str(p1 / "manifest.json")))
     m2 = json.load(open(str(p2 / "manifest.json")))
-    assert "NLCD_2021_landcover" in m1["rasters_not_included"]
-    assert "NLCD_2021_landcover" in m2["rasters"]
+    # 1.5.2: the format-1 pack holds the NLCD land cover too (the same file as format 2)
+    assert "rasters_not_included" not in m1
+    assert m1["rasters"]["NLCD_2021_landcover"]["file"] == \
+        m2["rasters"]["NLCD_2021_landcover"]["file"] == "landcover/NLCD_2021_landcover.gpkg"
+    assert m1["rasters"]["NLCD_2021_landcover"]["sha256"] == \
+        m2["rasters"]["NLCD_2021_landcover"]["sha256"]
+    assert (p1 / "landcover" / "NLCD_2021_landcover.gpkg").is_file()
     assert set(m1["datasets"]) == set(m2["datasets"])
     assert set(REFERENCE) - {"NLCD_2021_landcover", "DWR_unknown_structures"} <= set(
         m2["datasets"])

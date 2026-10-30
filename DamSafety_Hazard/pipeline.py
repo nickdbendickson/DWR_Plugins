@@ -23,7 +23,8 @@ from .constants import (
     NARN_URL, CROSSINGS_URL, TM11_PERSONS_PER_DWELLING, DEFAULT_MIN_UNVERIFIED_AREA_FT2,
     DEFAULT_VEHICLE_OCCUPANCY, DEFAULT_VEHICLE_SPEED_MPH, RAIL_CROSSING_SEARCH_MI,
     DEFAULT_EXTENT_BUFFER_FT, DEFAULT_NEAR_THRESHOLD_FT, DEFAULT_INCREMENTAL_DEPTH_FT,
-    DEFAULT_ACCESS_SEARCH_FT, DEFAULT_WARNING_ISSUED_HR, ND_RANK, lifeline_downloads, DAM_SEARCH_FT,
+    DEFAULT_ACCESS_SEARCH_FT, DEFAULT_WARNING_ISSUED_HR, ND_RANK, DAM_SEARCH_FT, LIFELINE_SOURCES,
+    lifeline_fetches,
     ND_ROADS_URL, HPMS_ND_URLS, ND_COUNTY_ROADS_URL,
     GRP_RESULTS, GRP_ZONES, GRP_SAMPLES, GRP_HYDRAULICS, GRP_EAP, STRUCTURES_FAMILY, SUBDIR_CLASSIFICATION, SUBDIR_EAP, SUBDIR_QA, OUTPUT_SUBDIRS, MAPBOOK_DEFAULT_SCALE, TRAVEL_STATION_MI, DEFAULT_PARCEL_MAX_ACRES,
     NHD_FLOWLINE_URL, NDDOT_AADT_URL, NDDOT_AADT_LAYERS, ZONE_LABELS, CROSSING_RADIUS_FT,
@@ -44,7 +45,7 @@ from .osm_processing import (
 from .download import (
     fetch_nsi, fetch_arcgis_layer, fetch_nd_address_points, fetch_usa_structures, try_download,
     fetch_dams, fetch_osm_lifelines, fetch_nbi, fetch_osm_crossings, STALE_USED, PACK_USED,
-    fetch_osm_camps, fetch_osm_places, parallel_map, fetch_osm_trailer_parks,
+    fetch_osm_camps, fetch_osm_places, parallel_map, fetch_osm_trailer_parks, pack_has,
 )
 from .helpers import CancelledByUser
 from . import facilities as FAC
@@ -2381,9 +2382,10 @@ def _collect_inputs(run, clip):
         if cfg.get("download_dams") and "dams" not in run.local_roles:
             want("nid", "National Inventory of Dams", fetch_dams, ext4326, out)
         if cfg.get("download_lifelines"):
-            for key, label, url, _cat in lifeline_downloads():
-                want("life_" + key, label, fetch_arcgis_layer, url, ext4326, out,
-                     "lifeline_" + key)
+            # 2.20.3: the HIFLD layers (no download address) from the offline pack that holds
+            # them (HIFLD_* data sets, or the old lifeline_hifld_* names)
+            for key, label, url, _cat, ds in lifeline_fetches(pack_has()):
+                want("life_" + key, label, fetch_arcgis_layer, url, ext4326, out, ds)
             want("life_osm", "OpenStreetMap lifelines", fetch_osm_lifelines, ext4326, out)
         if cfg.get("download_crossings_structures") and "bridges" not in loc:
             want("nbi", "National Bridge Inventory", fetch_nbi, ext4326, out)
@@ -2622,7 +2624,7 @@ def _used_inputs(cfg, got, loc):
         # 2.18.62: the traffic counts, crossings and lifelines in the order the run reads
         # them, and only those it reads (_traffic_layers: the newest HPMS year that answered,
         # else NDDOT, plus the county roads; _collect_facilities: NBI before OSM, the agency
-        # lifelines in lifeline_downloads() order before OSM) - a reproduction hands them
+        # lifelines in LIFELINE_SOURCES order before OSM) - a reproduction hands them
         # over as they are (reproduce.INPUTS_FORMAT)
         ordered = [k for k in got if k.startswith("hpms_") and got[k] and got[k][0] is not None]
         ordered = sorted(ordered, reverse=True)[:1]
@@ -2630,7 +2632,7 @@ def _used_inputs(cfg, got, loc):
         if not ordered and nd and nd[0] is not None and (len(nd) < 2 or nd[1]):
             ordered.append("nddot")
         ordered += ["county", "nbi", "xosm"]
-        ordered += ["life_" + k for k, _l, _u, _c in lifeline_downloads()] + ["life_osm"]
+        ordered += ["life_" + k for k, _l, _u, _c in LIFELINE_SOURCES] + ["life_osm"]
         for key in ordered + [k for k in got if k not in ordered and k != "nddot"
                               and not k.startswith("hpms_")]:
             val = got.get(key)
@@ -2642,7 +2644,7 @@ def _used_inputs(cfg, got, loc):
             elif key.startswith("hpms_"):
                 add("aadt", path)
             elif key.startswith("life_"):
-                cats = {k: c for k, _l, _u, c in lifeline_downloads()}
+                cats = {k: c for k, _l, _u, c in LIFELINE_SOURCES}
                 add("lifelines", path, cats.get(key[5:]))
     except Exception:                                    # noqa: BLE001 - a record only
         pass
@@ -2870,7 +2872,9 @@ def _collect_facilities(run, clip, ext4326, got):
         life_on = True
     if "life_osm" in got:
         failed = []
-        for key, label, url, cat in lifeline_downloads():
+        for key, label, url, cat in LIFELINE_SOURCES:          # 2.20.3: those fetched
+            if "life_" + key not in got:
+                continue
             lyr, n, path = got.get("life_" + key) or (None, 0, None)
             if lyr is None:
                 failed.append(label)

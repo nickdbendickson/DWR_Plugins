@@ -153,6 +153,12 @@ PACK_SLOTS = {
 # slots a format-2 pack's dwr/ layer fills when the suite folder has no file for them. Only
 # these: the other pack layers reach the tools by their own routes, as before.
 DWR_SLOTS = ("dwr", "dam_lines", "unknown", "dugouts", "dugout_polygons")
+# damsuite 1.18.3: a format-1 pack (nd_offline_pack.sqlite) has no GeoPackage a scan could find:
+# these slots come from it (damsuite.suitedata writes the data set to a GeoPackage in its cache)
+V1_SLOTS = DWR_SLOTS + ("nid",)
+# where the damsuite package lives when this file is DamSafety_Setup's own copy
+_SUITEDATA_PKGS = ("DamSafety_Runner", "nd_breach_runner", "DamSafety_Screening",
+                   "DamSafety_Hazard", "DamSafety_Data")
 
 
 def pack_datasets(path):
@@ -187,13 +193,52 @@ def pack_slot(path, slot):
 _SCAN = {}
 
 
-def _pack_dwr(settings, roots):
-    """{slot: uri} of the DWR layers of the active format-2 offline pack (settings["pack"]
-    first, else the suite's pack: damsuite.suitedata.active_pack), or {} - none, a format-1
-    pack (not a QGIS layer), Data source = Download, or no suitedata beside this module."""
+def _suitedata():
+    """damsuite.suitedata: the one beside this module, else (DamSafety_Setup's copy) an
+    installed suite plugin's; None without one."""
     try:
         from . import suitedata as SD
+        return SD
     except Exception:                                            # noqa  (Setup's copy)
+        pass
+    import importlib
+    for pkg in _SUITEDATA_PKGS:
+        try:
+            return importlib.import_module(pkg + ".damsuite.suitedata")
+        except Exception:                                        # noqa
+            continue
+    return None
+
+
+def _v1_slots(pack, slots=V1_SLOTS):
+    """{slot: uri} of a format-1 pack (nd_offline_pack.sqlite, or its folder) for `slots`:
+    the GeoPackage damsuite.suitedata writes each data set to. {} for any other pack."""
+    SD = _suitedata()
+    if SD is None or not pack:
+        return {}
+    try:
+        db = SD._v1_db(pack)
+        if not db:
+            return {}
+        out = {}
+        for slot in slots:
+            for name in PACK_SLOTS.get(slot, ()):
+                f = SD.pack_file(name, db)
+                if f:
+                    out[slot] = "{}|layername={}".format(f, name)
+                    break
+        return out
+    except Exception:                                            # noqa
+        return {}
+
+
+def _pack_dwr(settings, roots):
+    """{slot: uri} of the DWR layers of the active format-2 offline pack (settings["pack"]
+    first, else the suite's pack: damsuite.suitedata.active_pack), or {} - none, Data source =
+    Download, or no suitedata beside this module. damsuite 1.18.3: a format-1 pack (the
+    .sqlite or its folder) fills the DWR slots and the NID (V1_SLOTS) as well."""
+    SD = _suitedata()
+    if SD is None:
         return {}
     try:
         pack = str((settings or {}).get("pack") or "").strip()
@@ -201,6 +246,8 @@ def _pack_dwr(settings, roots):
             if SD.data_source() == SD.SOURCE_DOWNLOAD:
                 return {}
             pack = SD.active_pack(roots[0] if roots else None)
+        if pack and SD._v1_db(pack):
+            return _v1_slots(pack)
         if not pack or not os.path.isdir(pack):
             return {}
         out = {}
@@ -242,7 +289,7 @@ def layers_for_settings(settings):
             _SCAN[folder] = hit
         for key, uri in hit[1].items():
             found.setdefault(key, uri)
-    if any(not found.get(s) for s in DWR_SLOTS):
+    if any(not found.get(s) for s in V1_SLOTS):
         for key, uri in _pack_dwr(settings, roots).items():
             found.setdefault(key, uri)
     return found
@@ -339,4 +386,9 @@ def scan(folder):
             uri = "{}|layername={}".format(best[0], best[1])
             found[slot] = uri
             notes.append("{}: {}".format(slot, uri))
+    # damsuite 1.18.3: a format-1 pack found here fills what no file did (DWR, NID)
+    if pack and pack.lower().endswith(".sqlite") and any(not found.get(s) for s in V1_SLOTS):
+        for slot, uri in _v1_slots(pack, [s for s in V1_SLOTS if not found.get(s)]).items():
+            found[slot] = uri
+            notes.append("{}: {} (format-1 pack)".format(slot, uri))
     return found, notes

@@ -648,6 +648,22 @@ def set_offline_config(path, offline_only):
 REQUIRED_PACK_LAYERS = ("NSI_structures",)
 
 
+def pack_has(name=None):
+    """2.20.3: has() of the chosen offline pack's reader (pack_reader), or None without a pack
+    (or one that cannot be opened). With `name`: whether the pack holds that data set."""
+    try:
+        if not offline_config()[0]:
+            return None if name is None else False
+        reader = pack_reader()
+    except CancelledByUser:
+        raise
+    except Exception:                                    # noqa: BLE001 - no pack
+        reader = None
+    if reader is None:
+        return None if name is None else False
+    return reader.has if name is None else bool(reader.has(name))
+
+
 def pack_reader(log=None, errors=None):
     """The chosen offline data pack (offline_pack.PackReader, or for a
     format-2 folder damsuite.gpkgpack.GpkgPackReader), or None when none is
