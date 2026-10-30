@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
+import { tempDir } from "./test-tmp.mjs";
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
+ 
   readFileSync,
   readdirSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { isMigrationFile, migrationName, pendingMigrations } from "./migration-plan.mjs";
@@ -75,7 +75,7 @@ test("this workspace's auth schema copy is byte-identical to its source", () => 
 });
 
 test("the copy check reads both files and catches an edit", () => {
-  const root = mkdtempSync(join(tmpdir(), "auth-schema-"));
+  const root = tempDir("auth-schema-");
   mkdirSync(join(root, "migrations/auth"), { recursive: true });
   writeFileSync(join(root, "migrations/auth", AUTH_MIGRATION), "create table t ();\n");
   assert.equal(authSchemaCopy(root), null);

@@ -1,2 +1,10 @@
-pywebview>=5.0
-pyinstaller>=6.0
+# Crest desktop. Python 3.10–3.12 only (PyInstaller failed on 3.13; run.py refuses other versions).
+# pywebview pulls its own platform backend:
+#   Windows: EdgeChromium (WebView2) via pythonnet. WebView2 is built into Windows 11; on Windows 10 install the
+#            Microsoft Edge WebView2 Runtime if it is missing.
+#   macOS:   Cocoa / WebKit via pyobjc (pyobjc-core, pyobjc-framework-Cocoa, -WebKit, -Quartz, -Security, -UniformTypeIdentifiers).
+#   Linux:   no backend by default, so the [qt] extra adds PyQt6 + QtWebEngine (about 500 MB).
+pywebview>=5.0,<7; sys_platform == "win32"
+pywebview>=5.0,<7; sys_platform == "darwin"
+pywebview[qt]>=5.0,<7; sys_platform == "linux"
+pyinstaller>=6.0,<7; python_version >= "3.10" and python_version < "3.13"

@@ -1,32 +1,38 @@
 import { useEffect, useRef } from "react";
-import { MapContainer, TileLayer, FeatureGroup, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, FeatureGroup, LayersControl, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
 import "leaflet-draw";
+import iconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
+import iconUrl from "leaflet/dist/images/marker-icon.png";
+import shadowUrl from "leaflet/dist/images/marker-shadow.png";
+import { basemaps } from "@/lib/crest/basemap";
+import { initialView, ND_CENTER } from "@/lib/crest/mapview";
 import type { DamGeometry, GeoJSONFeature } from "@/lib/crest/types";
 
-// Fix default icon paths for Vite
+const LAYERS = basemaps(import.meta.env);
+
+// Marker icons are bundled (no CDN), so the map and drawing tools work offline; only basemap tiles need the network.
 delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-});
+L.Icon.Default.mergeOptions({ iconRetinaUrl, iconUrl, shadowUrl });
 
 type Props = {
   geometry?: DamGeometry;
+  /** Record lat/lon, used to open the map on the dam when nothing is drawn yet. */
+  lat?: number;
+  lon?: number;
   onChange: (g: DamGeometry) => void;
 };
 
 type GeoLayer = L.Layer & { toGeoJSON: () => GeoJSONFeature };
 
-function DrawControl({ geometry, onChange }: Props) {
+function DrawControl({ geometry, lat, lon, onChange }: Props) {
   const map = useMap();
   const groupRef = useRef<L.FeatureGroup>(null);
   // The saved geometry seeds the layer once; later edits come from the map itself.
   // Re-running the effect on every save would re-add the same layers and controls.
-  const initial = useRef(geometry);
+  const initial = useRef({ geometry, lat, lon });
   const changeRef = useRef(onChange);
   changeRef.current = onChange;
 
@@ -75,8 +81,8 @@ function DrawControl({ geometry, onChange }: Props) {
     map.on(L.Draw.Event.EDITED, onEdited);
     map.on(L.Draw.Event.DELETED, onDeleted);
 
-    // Load existing geometry
-    const g = initial.current;
+    // Load existing geometry, then open on the dam / breach point (not a fixed regional view).
+    const { geometry: g, lat: lat0, lon: lon0 } = initial.current;
     if (g) {
       const feats = [g.reservoirPoint, g.breachPoint, g.damLine, g.aoi].filter(
         (f): f is GeoJSONFeature => Boolean(f),
@@ -84,10 +90,13 @@ function DrawControl({ geometry, onChange }: Props) {
       for (const feat of feats) {
         L.geoJSON(feat as unknown as GeoJSON.Feature).eachLayer((l) => group.addLayer(l));
       }
-      if (feats.length > 0) {
-        const bounds = group.getBounds();
-        if (bounds.isValid()) map.fitBounds(bounds, { maxZoom: 15, padding: [24, 24] });
-      }
+    }
+    const view = initialView(g, lat0, lon0);
+    if ("fit" in view) {
+      const bounds = L.geoJSON(view.fit as unknown as GeoJSON.Feature[]).getBounds();
+      if (bounds.isValid()) map.fitBounds(bounds, { maxZoom: 15, padding: [24, 24] });
+    } else {
+      map.setView(view.center, view.zoom);
     }
 
     return () => {
@@ -102,19 +111,24 @@ function DrawControl({ geometry, onChange }: Props) {
   return <FeatureGroup ref={groupRef} />;
 }
 
-export function MapDraw({ geometry, onChange }: Props) {
+export function MapDraw({ geometry, lat, lon, onChange }: Props) {
+  const view = initialView(geometry, lat, lon);
+  const center: [number, number] = "center" in view ? view.center : ND_CENTER;
   return (
     <div style={{ height: 480, width: "100%", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
       <MapContainer
-        center={[46.8, -100.8]} // ND-ish default
-        zoom={10}
+        center={center}
+        zoom={"zoom" in view ? view.zoom : 10}
         style={{ height: "100%", width: "100%" }}
       >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-        />
-        <DrawControl geometry={geometry} onChange={onChange} />
+        <LayersControl position="topright">
+          {LAYERS.map((b, i) => (
+            <LayersControl.BaseLayer key={b.id} name={b.name} checked={i === 0}>
+              <TileLayer url={b.url} attribution={b.attribution} maxZoom={19} maxNativeZoom={b.maxZoom} />
+            </LayersControl.BaseLayer>
+          ))}
+        </LayersControl>
+        <DrawControl geometry={geometry} lat={lat} lon={lon} onChange={onChange} />
       </MapContainer>
     </div>
   );

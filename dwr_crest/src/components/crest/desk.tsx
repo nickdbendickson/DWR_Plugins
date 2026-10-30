@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-rea
 import { analyze, STEPS } from "@/lib/crest/engine";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
 import { num } from "@/lib/crest/format";
+import { saveText } from "@/lib/crest/save";
 import { activeDam, useDesk } from "@/lib/crest/store";
 import type {
   BreachMethod,
@@ -336,7 +337,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
         <div className="mt-3">
           {mounted ? (
             <Suspense fallback={<p className="text-sm text-muted">Loading the map…</p>}>
-              <MapDraw key={dam.id} geometry={dam.geometry} onChange={onGeometry} />
+              <MapDraw key={dam.id} geometry={dam.geometry} lat={dam.lat} lon={dam.lon} onChange={onGeometry} />
             </Suspense>
           ) : (
             <p className="text-sm text-muted">Loading the map…</p>
@@ -429,6 +430,7 @@ function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
           {result.breach.label} · {result.flood.engineLabel}
         </p>
       </div>
+      <ExportPanel dam={dam} result={result} />
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-line sm:grid-cols-3">
         <Stat k="Peak discharge (routed)" v={`${num(result.breach.peakCfs, 0)} cfs`} />
         <Stat k="Flooded area" v={`${num(result.flood.acres, 0)} ac`} />
@@ -443,7 +445,6 @@ function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         <HydroChart series={result.breach.series} />
       </div>
       <ReceptorTable result={result} />
-      <ExportPanel dam={dam} result={result} />
       {result.datum.warnings.length > 0 ? (
         <div className="rounded-md border border-line bg-sand p-4">
           <h3 className="text-lg">Things to check</h3>
@@ -514,17 +515,6 @@ function StepNav({ step, setStep }: { step: StepId; setStep: (s: StepId) => void
   );
 }
 
-function download(name: string, text: string, type = "text/plain") {
-  const url = URL.createObjectURL(new Blob([text], { type }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
 function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
   const update = useDesk((s) => s.update);
   const root = (dam.nid || dam.id).toLowerCase().replace(/[^a-z0-9]/g, "_");
@@ -542,6 +532,13 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       return { pkg: null, error: (e as Error).message };
     }
   }, [dam, result.breach.series]);
+  const [saved, setSaved] = useState<string | null>(null);
+  const save = useCallback(async (name: string, text: string, type?: string) => {
+    const r = await saveText(name, text, type);
+    if (r.status === "saved") setSaved(r.path ? `Saved ${r.path}` : null);
+    else if (r.status === "cancelled") setSaved(null);
+    else setSaved(`Could not save ${name}: ${r.message}`);
+  }, []);
   const btn =
     "inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:cursor-not-allowed disabled:opacity-50";
   return (
@@ -551,6 +548,30 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         Hand-off files for the Breach Runner and LISFLOOD-FP. The LISFLOOD package runs 72 h with the point source at the
         breach; you supply the DEM.
       </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" className={btn} onClick={() => void save(`${root}_hydrograph.csv`, exportHydrographCsv(result.breach.series), "text/csv")}>
+          Hydrograph CSV
+        </button>
+        <button type="button" className={btn} onClick={() => void save(`${root}_dam.json`, exportDamJson(dam, result), "application/json")}>
+          dam.json
+        </button>
+        {(["par", "bci", "bdy"] as const).map((ext) => (
+          <button
+            key={ext}
+            type="button"
+            className={btn}
+            disabled={!lisflood.pkg}
+            onClick={() => lisflood.pkg && void save(`${root}.${ext}`, lisflood.pkg[ext])}
+          >
+            LISFLOOD .{ext}
+          </button>
+        ))}
+      </div>
+      {saved ? (
+        <p className="mt-2 text-xs text-muted" role="status">
+          {saved}
+        </p>
+      ) : null}
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         <OptNumField
           label="LISFLOOD cell size (m)"
@@ -575,25 +596,6 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         Default grid: NAD83 / UTM 14N at 10 m, point at the drawn breach point (else the record lat/lon). Leave blank for the
         default; enter both X and Y for another DEM (e.g. the Runner&apos;s EPSG:5070 30 m grid).
       </p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button type="button" className={btn} onClick={() => download(`${root}_hydrograph.csv`, exportHydrographCsv(result.breach.series), "text/csv")}>
-          Hydrograph CSV
-        </button>
-        <button type="button" className={btn} onClick={() => download(`${root}_dam.json`, exportDamJson(dam, result), "application/json")}>
-          dam.json
-        </button>
-        {(["par", "bci", "bdy"] as const).map((ext) => (
-          <button
-            key={ext}
-            type="button"
-            className={btn}
-            disabled={!lisflood.pkg}
-            onClick={() => lisflood.pkg && download(`${root}.${ext}`, lisflood.pkg[ext])}
-          >
-            LISFLOOD .{ext}
-          </button>
-        ))}
-      </div>
       <p className="mt-2 text-xs whitespace-pre-line text-muted">{lisflood.pkg ? lisflood.pkg.notes : lisflood.error}</p>
     </div>
   );
