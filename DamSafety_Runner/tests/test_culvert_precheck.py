@@ -1,9 +1,11 @@
 """Runner 3.10.72: culvert-precheck (core/culvert_precheck.py, `ndbreach_cli.py culvert-precheck`).
 
-A flat 1 m DEM at 100 m with a no-data block on the east side, and a structures GeoPackage in feet
+A flat 1 m DEM at 250 m with a no-data block on the east side, and a structures GeoPackage in feet
 like the Runner's layer. Expected, from the 3.10.71 rule (lowest fine ground within
 max(apron, 5 m), cap at ground + 0.3 m):
-  * A: given 330.0 / 329.9 ft (100.58 / 100.55 m) gives HIGH at both ends; the Runner caps them to 100.3 m;
+  * A: given inverts sit 0.584 / 0.554 m above a 250 m bed (820 ft, above the
+    0-500 ft local band; the old 100 m bed is 328 ft and is now inside it).
+    HIGH at both ends; the Runner caps them to ground + 0.3 m;
   * B: no inverts and both ends in the no-data block gives FALLBACK (the Runner uses the 30 m DEM);
   * C: no inverts gives fine_grid, with the suggested invert = ground (no flag);
   * D: 3 m long (< 2 x width) gives SKIPPED; a bridge is not a culvert and is not listed.
@@ -20,6 +22,12 @@ from nd_breach_runner.tests.registry import test
 
 EPSG = 5070
 FT = 0.3048
+# 250 m = 820 ft, above the 0-500 ft local band. The old 100 m bed is 328 ft,
+# which reconcile_inverts now treats as a local datum. The foot inverts keep
+# the same offset above the bed that 330.0 / 329.9 ft had over 100 m.
+GROUND_M = 250.0
+INV_UP_FT = (GROUND_M + (330.0 * FT - 100.0)) / FT
+INV_DN_FT = (GROUND_M + (329.9 * FT - 100.0)) / FT
 
 
 def _gdal():
@@ -29,7 +37,7 @@ def _gdal():
     return gdal, ogr, osr
 
 
-def _dem(path, ground=100.0, nodata_from_col=300, x0=0.0, y0=1000.0, n=400):
+def _dem(path, ground=GROUND_M, nodata_from_col=300, x0=0.0, y0=1000.0, n=400):
     gdal, _ogr, osr = _gdal()
     s = osr.SpatialReference()
     s.ImportFromEPSG(EPSG)
@@ -56,7 +64,7 @@ def _structures(path):
                  ("rise_ft", ogr.OFTReal), ("barrels", ogr.OFTInteger), ("shape", ogr.OFTString),
                  ("invert_up", ogr.OFTReal), ("invert_dn", ogr.OFTReal), ("src_id", ogr.OFTString)):
         lyr.CreateField(ogr.FieldDefn(n, t))
-    rows = [("A", "culvert", 4.0, 4.0, 1, "box", 330.0, 329.9, "idA", [(50, 900), (50, 860)]),
+    rows = [("A", "culvert", 4.0, 4.0, 1, "box", INV_UP_FT, INV_DN_FT, "idA", [(50, 900), (50, 860)]),
             ("B", "culvert", 3.0, 3.0, 1, "pipe", None, None, "idB", [(350, 900), (350, 860)]),
             ("C", "culvert", 6.0, 4.0, 2, "arch", None, None, "idC", [(102, 800), (102, 760)]),
             ("D", "culvert", 6.0, 4.0, 1, "box", None, None, "idD", [(150, 700), (150, 697)]),
@@ -106,10 +114,10 @@ def culvert_precheck_flags_high_fallback_and_skipped():
         assert not any(k[0] == "E" for k in r), "bridges are not culverts"
         a = r[("A", "upstream")]
         assert a["flag"] == cp.FLAG_HIGH, a
-        assert abs(a["given_invert_m"] - 330.0 * FT) < 1e-3 and abs(a["fine_ground_m"] - 100.0) < 1e-6
-        assert abs(a["delta_m"] - (330.0 * FT - 100.0)) < 1e-3
-        assert a["runner_source"] == "given_capped" and abs(a["runner_invert_m"] - 100.3) < 1e-6
-        assert abs(a["suggested_invert_m"] - 100.0) < 1e-6 and a["fallback"] == "no"
+        assert abs(a["given_invert_m"] - INV_UP_FT * FT) < 1e-3 and abs(a["fine_ground_m"] - GROUND_M) < 1e-6
+        assert abs(a["delta_m"] - (INV_UP_FT * FT - GROUND_M)) < 1e-3
+        assert a["runner_source"] == "given_capped" and abs(a["runner_invert_m"] - (GROUND_M + 0.3)) < 1e-6
+        assert abs(a["suggested_invert_m"] - GROUND_M) < 1e-6 and a["fallback"] == "no"
         assert "within 3.0 ft" in a["reconcile_note"], a["reconcile_note"]
         assert r[("A", "downstream")]["flag"] == cp.FLAG_HIGH
         for e in ("upstream", "downstream"):
@@ -120,7 +128,7 @@ def culvert_precheck_flags_high_fallback_and_skipped():
         c = r[("C", "upstream")]
         # apron = max(2, 6 ft) = 2 m -> radius 5 m: the low cell 1.6 m away counts
         assert c["flag"] == "" and c["runner_source"] == "fine_grid", c
-        assert abs(c["fine_ground_m"] - 99.5) < 1e-6 and abs(c["suggested_invert_m"] - 99.5) < 1e-6
+        assert abs(c["fine_ground_m"] - (GROUND_M - 0.5)) < 1e-6 and abs(c["suggested_invert_m"] - (GROUND_M - 0.5)) < 1e-6
         assert c["shape"] == "box" and c["barrels"] == 2 and c["search_m"] == 5.0
         assert r[("D", "upstream")]["flag"] == cp.FLAG_SKIPPED
         assert s["ends_high"] == 2 and s["culverts_high"] == 1

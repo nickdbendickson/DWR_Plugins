@@ -15,7 +15,7 @@ structures.reconcile_inverts) and anything in metres from the DEM.
 Local datums (3.12.1, damsuite 1.18.1): apply_local() runs after the run reads the DEM crest (see there).
 
 3.12.5 (damsuite 1.18.2, Nick 2026-10-28; revised 2026-10-29: "Forget overrid datum. Convert
-local to navd 88."): any elevation between 0 and 300 ft is local, is never VERTCON-shifted and is
+local to navd 88."): any elevation between 0 and 500 ft is local, is never VERTCON-shifted and is
 converted to NAVD88 by the DEM tie - whatever datum is stated or chosen (no override wording).
 apply() hands the run's values to vdatum.plan, which makes the record local when the top of dam
 (or, with no top, a pool) is in that band; apply_local() then ties it to the DEM at mid-crest
@@ -23,7 +23,7 @@ apply() hands the run's values to vdatum.plan, which makes the record local when
 local value + offset ("DEM-derived"). No split (Nick 2026-10-29): every elevation of such a
 local record, inside ND's range or not, is tied by the same offset; the datum choice is not
 applied to any of them.
-A 0 - 300 ft value of a dam whose top is not in the band (mixed) is held at apply()
+A 0 - 500 ft value of a dam whose top is not in the band (mixed) is held at apply()
 (local_band_leftovers: pools / breach bottom out of the model, the rest as given) and tied by
 the same offset when apply_local finds the top local (by any local_check rule, e.g. 350 ft).
 With no local crest to tie by - the top of dam is real (NAVD88 / NGVD29) - such values are not
@@ -76,13 +76,13 @@ def _conv(v, rec, key):
         return float(v)
     if abs(float(v) - f["source"]) < 5e-4:
         return f["_navd88"]
-    if VD.is_local_elev(v):                 # 3.12.5: 0 - 300 ft is local - never shifted
+    if VD.is_local_elev(v):                 # 3.12.5: 0 - 500 ft is local - never shifted
         return float(v)
     return float(v) + (float(rec.get("_shift_m", 0.0)) / FT if rec.get("applied") else 0.0)
 
 
 def run_values(dam, st, top_is_dem=False):
-    """{key: ft} of the run's dam elevations, as given (for vdatum.plan's 0 - 300 ft rule)."""
+    """{key: ft} of the run's dam elevations, as given (for vdatum.plan's 0 - 500 ft rule)."""
     out = {}
     for name, _label in DAM_FIELDS:
         if name == "top_of_dam_ft" and top_is_dem:
@@ -99,12 +99,12 @@ def run_values(dam, st, top_is_dem=False):
     return out
 
 
-PENDING_NOTE = ("0-300 ft local value: tied to the DEM crest at mid-crest if the top of dam is "
+PENDING_NOTE = ("0-500 ft local value: tied to the DEM crest at mid-crest if the top of dam is "
                 "local, else flagged for review")
 
 
 def local_band_leftovers(dam, st, rec, log=None):
-    """3.12.5: values between 0 and 300 ft in a record that is NOT local yet (the top of dam is
+    """3.12.5: values between 0 and 500 ft in a record that is NOT local yet (the top of dam is
     not in the band): never shifted (convert_ft) and held until apply_local decides - the
     pools / breach bottom are taken out of the model (None: the DEM / the spillway rating
     until tied), a trigger pool, rating or outlet stays as given. Marked "pending_tie".
@@ -124,7 +124,7 @@ def local_band_leftovers(dam, st, rec, log=None):
         elif base == "normal_pool_ft" and fl is not None:
             fl.normal_pool_ft = None
         f[k].update(navd88=None, _navd88=None, pending_tie=True, note=PENDING_NOTE)
-    (log or (lambda m: None))("Elevation datum: 0-300 ft local value(s) held for the DEM tie: "
+    (log or (lambda m: None))("Elevation datum: 0-500 ft local value(s) held for the DEM tie: "
                               + ", ".join(keys))
     return keys
 
@@ -150,14 +150,14 @@ def _unconverted_note(key, reason):
 
 
 def _review_leftovers(rec, keys, reason, log):
-    """Flag a record whose 0 - 300 ft values cannot be tied (no local crest) for review."""
+    """Flag a record whose 0 - 500 ft values cannot be tied (no local crest) for review."""
     f = rec.get("fields") or {}
     for k in keys:
         f[k].pop("pending_tie", None)
         f[k].update(navd88=None, _navd88=None, unconverted=True,
                     note=_unconverted_note(k, reason))
     rec.update(review=True, review_reason=reason, _local_done=True, tie="review")
-    msg = ("REVIEW: elevation(s) between 0 and 300 ft are on a local datum but cannot be tied "
+    msg = ("REVIEW: elevation(s) between 0 and 500 ft are on a local datum but cannot be tied "
            "to the DEM ({}). They were NOT converted: {}. Check the datum before using this "
            "run.".format(reason, ", ".join(keys)))
     rec.setdefault("warnings", []).append(msg)
@@ -166,7 +166,7 @@ def _review_leftovers(rec, keys, reason, log):
 
 
 def finish_band(dam, st, reason="the local-datum tie did not run", log=None):
-    """After run_dam's local-datum step: a 0 - 300 ft value still waiting for the tie (or a
+    """After run_dam's local-datum step: a 0 - 500 ft value still waiting for the tie (or a
     band record never tied) is flagged for review. Returns True when it flagged something."""
     log = log or (lambda m: None)
     rec = getattr(st, "vertical_datum", None)
@@ -199,7 +199,7 @@ def apply(dam, st, lon, lat, stated=None, override=None, top_is_dem=False, log=N
             override = getattr(st, "elev_datum", VD.AUTO) or VD.AUTO
         try:
             rec = VD.plan(lon, lat, stated, override,
-                          values=run_values(dam, st, top_is_dem))     # 3.12.5: 0 - 300 ft
+                          values=run_values(dam, st, top_is_dem))     # 3.12.5: 0 - 500 ft
         except Exception as e:                          # noqa - never stop a run for this
             rec = {"target": VD.TARGET, "source_datum": "", "how": "", "stated": stated,
                    "override": VD.mode(override), "lon": lon, "lat": lat, "shift_m": 0.0,
@@ -281,7 +281,7 @@ def dem_crest_on_line(read, line_xy, cell_m=1.0, half_width_m=3.0):
         .format(half_width_m)
 
 
-# 3.12.5 (Nick 2026-10-29, "in that case, use dem elevations"): a 0 - 300 ft value of a dam whose
+# 3.12.5 (Nick 2026-10-29, "in that case, use dem elevations"): a 0 - 500 ft value of a dam whose
 # top of dam is real (no local crest to tie it by) is replaced by a DEM elevation
 TOE_REACH_M = 30.0          # the band past the downstream toe searched for the low point
 TOE_SLOPE_H = 3.0           # downstream slope (H:1V) when the dam has none (hecras_model's)
@@ -353,14 +353,14 @@ def dem_toe_low(read, dam_xy, line_xy, dam, cell_m=1.0, reach_m=TOE_REACH_M):
                             "{:.0f} - {:.0f} m from the dam line on its lower side".format(toe, far))
 
 
-# what replaces a 0 - 300 ft value that has no DEM elevation of its own
+# what replaces a 0 - 500 ft value that has no DEM elevation of its own
 _DEM_ROUTING = {"pmf_max_wse_ft": "the PMF pool is taken from the DEM storage / the routing",
                 "trigger_wse_ft": "the breach starts at the peak pool of the routing"}
 
 
 def _dem_leftovers(dam, st, rec, keys, dem_crest_ft, dem_low, log):
     """3.12.5 (Nick 2026-10-29, "in that case, use dem elevations"): the record's top of dam is
-    real (NAVD88 / NGVD29), so its 0 - 300 ft values have no local crest to tie them by. They
+    real (NAVD88 / NGVD29), so its 0 - 500 ft values have no local crest to tie them by. They
     are not used as given: the streambed / breach bottom and the outlet inverts become the DEM
     low point at the downstream toe (dem_low), labelled "DEM-derived", with a warning naming
     the value given; the PMF pool and a trigger pool come from the routing, the normal pool
@@ -392,7 +392,7 @@ def _dem_leftovers(dam, st, rec, keys, dem_crest_ft, dem_low, log):
 
     def dem_set(k, e, v, how):
         e.update(navd88=round(v, 3), _navd88=v, how=how, dem_derived=True,
-                 note="DEM-derived: the value given ({:.2f} ft) is in the 0 - 300 ft band and the "
+                 note="DEM-derived: the value given ({:.2f} ft) is in the 0 - 500 ft band and the "
                       "top of dam is not local - replaced by the {}".format(e["source"], low_how))
         done.append((k, e["source"], v, how))
 
@@ -420,7 +420,7 @@ def _dem_leftovers(dam, st, rec, keys, dem_crest_ft, dem_low, log):
                 outlets[k].invert_m = low_ft * FT
         elif base in _DEM_ROUTING:
             e.update(navd88=None, _navd88=None, how="routing", replaced=True,
-                     note="not used: the value given ({:.2f} ft) is in the 0 - 300 ft band and "
+                     note="not used: the value given ({:.2f} ft) is in the 0 - 500 ft band and "
                           "the top of dam is not local - {}".format(e["source"], _DEM_ROUTING[base]))
             done.append((k, e["source"], None, _DEM_ROUTING[base]))
             if base == "pmf_max_wse_ft":
@@ -432,7 +432,7 @@ def _dem_leftovers(dam, st, rec, keys, dem_crest_ft, dem_low, log):
             if sp is not None and len(sp.elev_m) and not band_sp:
                 v = float(getattr(sp, "crest_m", sp.elev_m[0])) / FT
                 e.update(navd88=None, _navd88=None, how="spillway rating", replaced=True,
-                         note="not used: the value given ({:.2f} ft) is in the 0 - 300 ft band "
+                         note="not used: the value given ({:.2f} ft) is in the 0 - 500 ft band "
                               "and the top of dam is not local - the run takes the normal pool "
                               "from the spillway rating's crest ({:.2f} ft)".format(e["source"], v))
                 done.append((k, e["source"], None, "the spillway rating's crest ({:.2f} ft)"
@@ -461,17 +461,17 @@ def _dem_leftovers(dam, st, rec, keys, dem_crest_ft, dem_low, log):
         for k, src, v, how in done)
     if done:
         msg = ("The top of dam {} is on a real datum (not local), so the value(s) "
-               "between 0 and 300 ft cannot be tied by a local crest and are NOT used as given; "
+               "between 0 and 500 ft cannot be tied by a local crest and are NOT used as given; "
                "replaced by DEM elevations (Nick 2026-10-29): {}. Check against the as-built "
                "survey.".format("{:.2f} ft".format(top) if top is not None else "",
                                 what))
         rec.setdefault("warnings", []).append(msg)
         log("Elevation datum: " + msg)
     if flagged:
-        rr = "0 - 300 ft value(s) with no DEM elevation to replace them: {}".format(
+        rr = "0 - 500 ft value(s) with no DEM elevation to replace them: {}".format(
             ", ".join(k for k, *_ in flagged))
         rec.update(review=True, review_reason=rr, tie="review")
-        msg = ("REVIEW: elevation(s) between 0 and 300 ft with a real top of dam have no DEM "
+        msg = ("REVIEW: elevation(s) between 0 and 500 ft with a real top of dam have no DEM "
                "elevation to replace them and are NOT used: {}. Check them before using this "
                "run.".format("; ".join("{} {:.2f} ft ({}; {})".format(k, src, why, use)
                                        for k, src, why, use in flagged)))
@@ -502,15 +502,15 @@ def _dem_units_suspect(dem_crest_ft, fields):
 
 def apply_local(dam, st, dem_crest_ft, crest_from="DEM near the dam point", log=None,
                 tie_ok=True, no_tie="", dem_low=None):
-    """3.12.1 (damsuite 1.18.1) local datums (damsuite.vdatum.local_check), 3.12.5 the 0 - 300 ft
+    """3.12.1 (damsuite 1.18.1) local datums (damsuite.vdatum.local_check), 3.12.5 the 0 - 500 ft
     rule (see the module text): after the run has read the DEM crest, a dam whose elevations
-    are local (stated / chosen "local", detected in auto, or 0 - 300 ft whatever the choice)
+    are local (stated / chosen "local", detected in auto, or 0 - 500 ft whatever the choice)
     has its top of dam replaced by the DEM crest and every other local elevation moved by the
     same amount (offset = DEM crest - local top), instead of the NGVD29 shift.
     tie_ok False (no mid-crest; no_tie says why) or no DEM crest / a DEM in the wrong units:
-    a record with 0 - 300 ft values is flagged for review and left unconverted (never
+    a record with 0 - 500 ft values is flagged for review and left unconverted (never
     guessed); so is one with no local top of dam to tie by. A record whose top of dam is real
-    (NAVD88 / NGVD29, not local) with 0 - 300 ft values has no local crest to tie them by: with
+    (NAVD88 / NGVD29, not local) with 0 - 500 ft values has no local crest to tie them by: with
     a DEM crest and dem_low ((ft, how) or a callable returning it: dem_toe_low) they are
     replaced by DEM elevations (_dem_leftovers, Nick 2026-10-29), else flagged for review.
     Returns (record, changed). Once."""
@@ -525,7 +525,7 @@ def apply_local(dam, st, dem_crest_ft, crest_from="DEM near the dam point", log=
         return rec, False
     band = bool(rec.get("local_rule"))
     pending = [k for k, e in f.items() if e.get("pending_tie")]
-    strict = band or bool(pending)          # 0 - 300 ft values: never guess a tie
+    strict = band or bool(pending)          # 0 - 500 ft values: never guess a tie
     if dem_crest_ft is None:
         no_tie_why = "no DEM crest at the dam"
     else:
@@ -576,7 +576,7 @@ def apply_local(dam, st, dem_crest_ft, crest_from="DEM near the dam point", log=
             if rec.get("tie") == VD.TIE_PENDING:
                 rec["tie"] = "not applied ({})".format(bad)
             return rec, False
-        no_tie_why = None           # 1.18.1 record (no 0 - 300 ft value): the crest near the point
+        no_tie_why = None           # 1.18.1 record (no 0 - 500 ft value): the crest near the point
     rec["_local_done"] = True
     top = f.get("top_of_dam_ft")
     review = no_tie_why if strict else None
@@ -667,7 +667,7 @@ def apply_local(dam, st, dem_crest_ft, crest_from="DEM near the dam point", log=
                     drop.append(c)
         if drop:
             fl.outlets = [c for c in fl.outlets if c not in drop]
-    if forced and (band or rec.get("how") == "detected"):   # 3.12.5: the 0 - 300 ft rule
+    if forced and (band or rec.get("how") == "detected"):   # 3.12.5: the 0 - 500 ft rule
         why = rec.get("local_reason") or why            # (a stated Local too: no empty rule)
     rec.update(source_datum=VD.LOCAL if forced and rec.get("how") != "detected"
                else VD.LOCAL_ASSUMED,
@@ -680,9 +680,9 @@ def apply_local(dam, st, dem_crest_ft, crest_from="DEM near the dam point", log=
     pre = rec.pop("_pre_tie_warning", None)     # plan's pre-tie local note: replaced below
     rec["warnings"] = [w for w in rec.get("warnings") or []
                        if "NGVD29 was assumed" not in w and "could not be converted" not in w
-                       and "between 0 and 300 ft" not in w and w != pre]
+                       and "between 0 and 500 ft" not in w and w != pre]
     rec["tie"] = "review" if review else "done"
-    label = "a local datum (0 - 300 ft rule: {})".format(why) if band else \
+    label = "a local datum (0 - 500 ft rule: {})".format(why) if band else \
         "a local datum ({})".format(why or ("stated" if rec.get("how") == "stated"
                                             else "set by the engineer"))
     if review:
