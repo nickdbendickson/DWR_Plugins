@@ -1,0 +1,15 @@
+{
+ "bbox": [
+  -97.39321415,
+  46.90457585,
+  -97.26285374,
+  46.985698
+ ],
+ "width": 330,
+ "height": 299,
+ "cellM": 30,
+ "fetchedAt": "2026-10-30",
+ "source": "USGS 3DEP Elevation ImageServer exportImage for ND00199 (the desk's demRequest at 30 m)",
+ "encoding": "gzip of little-endian uint16: centimetres above 250 m (metres NAVD88 = v / 100 + 250), row-major from the north-west corner; no missing cells",
+ "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage?bbox=-97.39321415%2C46.90457585%2C-97.26285374%2C46.985698&bboxSR=4326&imageSR=4326&size=330%2C299&format=bsq&pixelType=F32&noData=-9999&interpolation=RSP_BilinearInterpolation&f=image"
+}

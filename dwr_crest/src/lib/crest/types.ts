@@ -1,3 +1,5 @@
+import type { OutlineCache } from "./outline.ts";
+import type { Nd911Cache } from "./nd911.ts";
 import type { PlssCache } from "./plss.ts";
 export type DatumName = "Local" | "NAVD88" | "NGVD29";
 export type FailureMode = "overtopping" | "piping";
@@ -33,6 +35,10 @@ export type ReceptorSeed = {
    */
   lon?: number;
   lat?: number;
+  /** Where the seed came from when the desk made it: "nd911" = added from an ND NG911 address point for review. */
+  source?: "nd911";
+  /** The source's id (Site_NGUID for nd911). */
+  sourceRef?: string;
 };
 
 export type GeoJSONFeature = {
@@ -97,6 +103,10 @@ export type DamRecord = {
    * the receptors. Absent = the desk estimate (default). Never holds raster data, only these few numbers.
    */
   resultsOfRecord?: ResultsOfRecord;
+  /** ND NG911 address points looked up around the flood strip (ND GIS Hub), kept for offline use. */
+  nd911?: Nd911Cache;
+  /** Terrain outline built on request from 3DEP terrain (outline.ts), with the input fingerprint it was built for. */
+  outline?: OutlineCache;
   /** ACER TM 11 judgment zone counts as probable loss of life (High), as damsuite classify_nd defaults. Default true. */
   judgmentAsProbable?: boolean;
   /** Set when the record was filled from the NID (ND dam picker). Optional, so crest-desk-v2 state still loads. */
