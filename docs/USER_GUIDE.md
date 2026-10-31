@@ -1,4 +1,4 @@
-# DamSafety plugins: user guide (changes through 2026-10-21, main 034e9d7)
+# DamSafety plugins: user guide (changes through 2026-10-31, main 1e3e2f7)
 
 This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84, #92, #93, #96, #131 (arrival depth), #132 (ANUGA threads), #137 (HEC-RAS time limit) and #126 (zone colours). Other merged PRs (#85-#90, #94, #100-#105, …) are listed in CHANGELOG.md only. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
 
@@ -639,6 +639,44 @@ Every wet bridge, culvert and low-water crossing of a Runner result also gets th
 - The basemap settings are not part of the result: changing them does not invalidate an ensemble's cached members.
 
 **Network.** Hazard goes through QGIS's network settings (proxy, authentication, certificates). The Runner uses the QGIS proxy when one is set, else the system proxy, with the system certificate store plus `certifi`. Neither turns certificate checking off: a proxy that inspects SSL with a private certificate authority has to be trusted by the operating system or QGIS.
+
+## Where the breach inflow goes in: the dam toe (Runner 3.13.0+, on main 1e3e2f7)
+
+The Runner now puts the breach inflow at the dam's toe, at the lowest ground just downstream of the dam. Here's how it finds that point:
+
+1. It reads the DEM on a 1 m grid (or at the DEM's own cell size, if that is coarser) along the full length of the dam line.
+2. It searches a strip downstream of the dam line. The strip starts **5 m** out from the dam line and ends at **H x (downstream slope + 1)**, where H is the dam height in metres and the downstream slope is H:1V.
+3. The downstream slope comes from, in this order: the run's own toe-slope setting (`inflow_toe_ds_slope_h`); the dam's DS_SLOPE (single dam) or F_DS (batch / CLI); the dam's DWR record (`downstream_slope` in DWR_dams); otherwise **3:1**, with a warning in the log. Only the toe search uses the DWR value. The breach model and the HEC-RAS embankment still use DS_SLOPE / F_DS.
+4. The outer end of the strip is never closer than **15 m** and never farther than **150 m** from the dam line. The 5 m start is fixed; the 15-150 m limits apply to the outer end only.
+5. The inflow is the lowest cell in that strip.
+
+Two special cases:
+
+- **Dam height not known:** the strip is 5-30 m, with a warning.
+- **The lowest cell is still on the dam's face:** if the strip's lowest ground isn't at least 75 % of the dam height below the top of dam, the strip widens outward 10 m at a time (up to 60 m more, never past 150 m) until it reaches the toe. DWR-2801 needed this.
+
+The run log shows the strip it used and how it worked it out. For example, DWR-4031 (20.7 ft = 6.31 m high, DWR slope 2:1) used a 5-18.9 m strip and its inflow was about 18 m downstream of the dam. DWR-2801 (27.5 ft, DWR 2.5:1) uses 5-29.3 m.
+
+You can still choose an inflow point yourself (INFLOW_POINT); that overrides the search.
+
+## A house in the judgment zone makes the dam MEDIUM (Hazard 2.22.0, Runner 3.13.0, Screening 0.18.0; #241)
+
+Nick's rule (10/30/2026): any house in the ACER judgment zone is labeled **medium hazard**, in every plugin set and in Crest.
+
+- A habitable structure between the ACER judgment line and the high-danger line makes the dam **ND MEDIUM**.
+- A house above the high-danger line still makes the dam **HIGH**.
+- The old behaviour (count judgment-zone houses as probable loss of life, which gives HIGH) is still there as an option. It is **off by default**:
+  - Hazard Classify tab: "ND: count ACER judgment-zone houses as probable loss of life (HIGH) - old option".
+  - Processing: `ND_JUDGMENT_HIGH` (default False).
+  - Setting / dam state: `nd_judgment_as_probable` (default False).
+- The TM 11 setting `JUDGMENT` / `judgment_as_probable` ("judgment-zone persons count in lives in jeopardy") is separate. It only affects the ACER TM 11 class and still defaults to on.
+- A Runner chain classification doesn't pass `ND_JUDGMENT_HIGH`, so it always uses the default (MEDIUM).
+
+Example: DWR-4031 (Washek), 10 m toe run. House 16775's centroid is below the judgment line, but its northwest corner cell is in the judgment zone. The class of record is MEDIUM (Nick, 10/31: "Would be medium hazard and judgement call for engineer").
+
+## Offline runs use the Oct 29 offline pack
+
+Offline runs now use `offline_packs_20261029_full`. The older `offline_packs_20261021` pack no longer exists, so point any saved "Pack:" setting or script at the Oct 29 pack.
 
 ## Not verified in this guide
 - These descriptions come from PR text and source code. None of the window steps were checked in a running QGIS.
