@@ -1,0 +1,15 @@
+DamSafety Setup 1.0.18 - the Suite status dock on QGIS 4
+========================================================
+(2026-10-30, from the full test on QGIS 4.2.)
+
+Why
+  plugin.py added the Suite status dock with Qt.LeftDockWidgetArea. QGIS 4 (PyQt6) has
+  only the scoped enum, so the plugin failed to load there.
+
+What changed
+  LEFT_DOCK = Qt.DockWidgetArea.LeftDockWidgetArea (Qt.LeftDockWidgetArea on an older
+  PyQt5), used by addDockWidget. Runner 3.13.4 fixes its results dock the same way.
+
+Test
+  DamSafety_Runner/tests/test_dock_area_enum.py (real Qt, QGIS 3.34 and 4.2): both docks
+  land in their area and no bare Qt.*DockWidgetArea is left in the plugins.

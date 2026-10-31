@@ -117,6 +117,33 @@ def match_fields(names, aliases):
     return out
 
 
+def resolve_fields(fld, names, aliases, tag="DWR"):
+    """(role -> actual field name or None, {role: note}) for a layer with fields `names`.
+
+    0.18.1 (fulltest 2026-10-30): the tool-1 boxes default to the DWR shapefile's 10-character
+    names (structure_, max_dam_he, ...), which the suite GeoPackage (structure_id,
+    max_dam_height, ...) does not have, so every read failed with KeyError: 'structure_'. A
+    chosen name is now matched ignoring case; one the layer does not have falls back to the
+    alias the layer has (DWR_ALIASES / NID_ALIASES), else the role is left blank - never a
+    KeyError. A note says which name was used instead."""
+    have = {str(n).lower(): n for n in names}
+    found = match_fields(names, aliases)
+    out, notes = {}, {}
+    for role in set(fld) | set(found):
+        want = fld.get(role)
+        if not want:
+            out[role] = found.get(role)
+            continue
+        real = have.get(str(want).lower())
+        if real is not None:
+            out[role] = real
+            continue
+        out[role] = found.get(role)
+        notes[role] = "{}: the layer has no field '{}' ({}); {}".format(
+            tag, want, role, "using '{}'".format(out[role]) if out[role] else "left blank")
+    return out, notes
+
+
 def is_max_pool_area(name):
     """True for a field name that holds the maximum-pool area (not the normal-pool area)."""
     return str(name or "").strip().lower() in MAX_POOL_AREA_NAMES

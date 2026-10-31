@@ -360,6 +360,8 @@ def _stretches(pending, samplers, to_v, to_r, dist, checked=None):
         st["grid_max_depth"] = st["max_depth"]
         decision, c = CR.line_check(st, arrival_ok, src, pts, i0, i1, depth_ft)
         st["line_check"] = _check_record(decision, c, fallback)
+        if CR.arrival_unknown(st, arrival_ok):
+            st["line_check"]["arrival_unknown"] = True
         if checked is not None:
             checked.append((feat, st))
         if decision != CR.DECISION_COUNTED:
@@ -889,6 +891,13 @@ def check_values(r):
 def check_note(r):
     """The Notes text for the basis of a stretch's depth (2.18.65), '' when there is none."""
     lc = r.get("line_check") or {}
+    n = _check_note(lc)
+    if lc.get("arrival_unknown"):
+        n = CR.NOTE_ARRIVAL_UNKNOWN + ("; " + n if n else "")
+    return n
+
+
+def _check_note(lc):
     basis = lc.get("basis") or CR.BASIS_GRID
     if basis == CR.BASIS_CROWN:
         n = "overtopped: WSE above the 1 m centreline crown"
@@ -939,7 +948,8 @@ def checked_to_layer(rows, crs, name="Line_Crown_Check"):
             lc.get("decision") or "", lc.get("basis") or CR.BASIS_GRID,
             _r2(lc.get("crown_ft")), _r2(lc.get("wse_ft")), _r2(lc.get("freeboard_ft")),
             _r2(lc.get("overtop_ft")), _nz(lc.get("x")), _nz(lc.get("y")),
-            lc.get("note") or lc.get("how") or ""])
+            "; ".join(x for x in ((CR.NOTE_ARRIVAL_UNKNOWN if lc.get("arrival_unknown")
+                                   else ""), lc.get("note") or lc.get("how") or "") if x)])
         feats.append(f)
     add_features_batched(lyr.dataProvider(), feats, FEATURE_BATCH_SIZE)
     lyr.updateExtents()

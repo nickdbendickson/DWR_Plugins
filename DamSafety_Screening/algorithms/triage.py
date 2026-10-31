@@ -20,6 +20,17 @@ NEW = [("tri_result", FT_STRING), ("tri_reason", FT_STRING),
        ("tri_audit", FT_STRING), ("tri_tif", FT_STRING)]
 
 
+
+def _wanted(f, names, only, dam_id=None):
+    """0.18.1: ONLY_IDS as tool 1 reads it: the dam id OR the NID id. Crest sends
+    the NID id (ND00199) while tool 1 names the dam by its DWR id (DWR-2801), so
+    matching dam_id alone dropped the one dam of a one-dam chain here."""
+    if not only:
+        return True
+    ids = (dam_id if dam_id is not None else (cm.fval(f, names, "dam_id") or f.id()),
+           cm.fval(f, names, "nid_id"))
+    return any(str(i).strip().upper() in only for i in ids if i not in (None, ""))
+
 class _NoFlood(Exception):
     """A pond marked no_flood = YES by tool 16."""
 
@@ -160,7 +171,7 @@ class Triage(QgsProcessingAlgorithm):
         d2a = cm.to_albers(dams)
         dam_pts = []
         for f in dams.getFeatures():
-            if only and str(cm.fval(f, names, "dam_id") or f.id()).strip().upper() not in only:
+            if not _wanted(f, names, only):
                 continue
             g = f.geometry()
             if g is not None and not g.isEmpty():
@@ -227,7 +238,7 @@ class Triage(QgsProcessingAlgorithm):
             if feedback.isCanceled(): break
             feedback.setProgress(100.0 * i / total)
             dam_id = str(get(f, "dam_id") or f.id())
-            if only and dam_id.strip().upper() not in only:
+            if not _wanted(f, names, only, dam_id):
                 continue
             a = cm.blank_attrs(fields, f)
             result, reason, reach, hits, tif = "needs 2D", "", None, 0, None

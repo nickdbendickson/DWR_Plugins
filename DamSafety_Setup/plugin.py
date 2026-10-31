@@ -16,6 +16,13 @@ from qgis.PyQt.QtWidgets import (
 
 MENU = "&Dam safety"
 
+# 1.0.18: the status dock's area as the Qt enum (Qt6 / PyQt6 refuses the bare int 1 that
+# addDockWidget was given; QGIS 4 fulltest 2026-10-30)
+try:
+    LEFT_DOCK = Qt.DockWidgetArea.LeftDockWidgetArea
+except AttributeError:                 # pragma: no cover - older PyQt5
+    LEFT_DOCK = Qt.LeftDockWidgetArea
+
 # page ids (the order addPage is called in)
 FOLDER_PAGE = 0
 from .tokens import TOKENS  # noqa: E402
@@ -129,7 +136,7 @@ class SetupPlugin(object):
         if self.dock is None:
             from .status_dock import SuiteStatusDock
             self.dock = SuiteStatusDock(self.iface)
-            self.iface.addDockWidget(1, self.dock)
+            self.iface.addDockWidget(LEFT_DOCK, self.dock)
         self.dock.refresh()
         self.dock.show()
 

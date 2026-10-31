@@ -42,6 +42,7 @@ from qgis.core import (
 )
 
 from .compat import _first, enum_value, DIST_FEET, DIST_MILES
+from .compat import legend_manual
 from .constants import (
     PLUGIN_NAME, PLUGIN_VERSION, CLASS_HIGH, CLASS_JUDGMENT, CLASS_LOW, ZONE_LABELS,
     ND_POLICY_REF, TM11_REF,
@@ -277,7 +278,7 @@ def _decorations(layout, m, layers, page):
         leg.setTitle("Legend")
         leg.setLinkedMap(m)
         try:
-            leg.setAutoUpdateModel(False)
+            legend_manual(leg)
             root = leg.model().rootGroup()
             root.removeAllChildren()
             for lyr in layers:

@@ -5,10 +5,15 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.22.1
+version=2.22.2
 icon=icon.svg
 author=N.D. Bendickson
-changelog=2.22.1 (2026-10-30; report text from the DWR-4031 toe10m run and the #241 re-test)
+changelog=2.22.2 (2026-10-30; fixes from the 2026-10-30 full test - Nick. 2.22.1 is #244)
+    * Road / rail crown check: a wet stretch with no value on the arrival raster is no longer skipped ("skipped: no arrival time"). It goes through the depth / crown checks like any other and is counted with no warning time (conservative); its Note / QA Note starts "arrival unknown". On the full-test inputs ND00199 was Low because 123 roads and 2 rail stretches were skipped this way; it is now High (7 overtopped stretches on State highways with AADT > 2,000).
+    * Classify with every Download box off downloads nothing: the OSM mobile-home parks, Microsoft footprints and NAIP dates were still fetched. CONFIG_JSON can still turn one on. Batch and watch the same.
+    * Report and mapbook legends: setAutoUpdateModel is gone in QGIS 4; compat.legend_manual uses setSyncMode(Manual) there and setAutoUpdateModel(False) on QGIS 3.
+    * Tests: tests/test_line_crown_check.py (updated), test_classify_no_downloads.py, test_legend_sync.py.
+    2.22.1 (2026-10-30; report text from the DWR-4031 toe10m run and the #241 re-test)
     * Summary crossings note: "Max_Depth_ft is the <cell> depth cell" gives the depth grid's actual cell size (10 m on the toe10m run; was a hard-coded "30 m").
     * 5.3(f) is cited (judgment-zone reason, PROVISIONAL note) and counted only for borderline structures actually moved to the higher class. With the old ND judgment-zone option on, DWR-2801 cited "5.3(f): 1 borderline structure(s)" for house 4026, which stayed in the low zone. The 5.3(f) criteria row still lists borderline structures. No class change.
     * Tests and changelog: the DWR-4031 toe-run judgment-zone house is Struct_ID 9953 (2.111 ft at 6.95 ft/s), not 16775 (a dry house in that folder; Struct_IDs differ by footprint set).

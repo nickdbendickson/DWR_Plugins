@@ -498,8 +498,12 @@ def defaults(step, work, settings):
         for slot, param in TOOL0_SLOT.items():
             put(param, src(slot))
     elif step == "1":
-        put("DWR", S.get("dwr"))
-        put("NID", S.get("nid"))
+        # 0.18.1: the dam layers resolve as the preflight resolves them (an Inputs choice, else
+        # the suite folder / package): with only suite_folder in the settings the preflight
+        # passed and step 1 stopped with 'Provide a DWR layer, an NID layer, or both'
+        dwr_uri, nid_uri = src("dwr"), src("nid")
+        put("DWR", dwr_uri)
+        put("NID", nid_uri)
         put("ONLY_IDS", S.get("only_ids"))
         dugouts()
         from .inventory import DWR_ALIASES, NID_ALIASES, match_fields, is_max_pool_area
@@ -527,8 +531,8 @@ def defaults(step, work, settings):
                     saved.update(loaded)
             except (OSError, ValueError):
                 pass
-        for prefix, uri, aliases in (("DWR", S.get("dwr"), DWR_ALIASES),
-                                     ("NID", S.get("nid"), NID_ALIASES)):
+        for prefix, uri, aliases in (("DWR", dwr_uri, DWR_ALIASES),
+                                     ("NID", nid_uri, NID_ALIASES)):
             matched = match_fields(layer_fields(uri), aliases)
             for role, field in matched.items():
                 key = "{}_{}".format(prefix, role)

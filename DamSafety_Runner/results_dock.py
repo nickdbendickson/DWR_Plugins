@@ -29,6 +29,12 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+# 3.13.4 (built as 3.13.3): dock areas as the scoped Qt enum (QGIS 4 / PyQt6 has no Qt.RightDockWidgetArea;
+# fulltest 2026-10-30). plugin.py uses RIGHT_DOCK for addDockWidget.
+_DWA = getattr(Qt, "DockWidgetArea", Qt)
+LEFT_DOCK = _DWA.LeftDockWidgetArea
+RIGHT_DOCK = _DWA.RightDockWidgetArea
+
 
 def _load_json(path):
     if not path or not os.path.isfile(path):
@@ -128,7 +134,7 @@ class ResultsDock(QDockWidget):
         self.setObjectName("NdBreachResultsDock")
         self._folder = None
         self._model_dir = None
-        self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self.setAllowedAreas(LEFT_DOCK | RIGHT_DOCK)
 
         root = QWidget()
         lay = QVBoxLayout(root)

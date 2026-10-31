@@ -488,6 +488,13 @@ class ClassifyAlgorithm(_Base):
             eap_travel=self.parameterAsBool(parameters, "EAP_TRAVEL", context),
             centerline_layer=lyr("CENTERLINE"),
             compare_last_run=self.parameterAsBool(parameters, "COMPARE", context))
+        if not any(self.parameterAsBool(parameters, p, context) for p in _DOWNLOAD_PARAMS):
+            # 2.22.2: every download switch off -> nothing is downloaded (the OSM mobile-home
+            # parks, MS footprints and NAIP dates were still fetched); CONFIG_JSON may turn
+            # one back on
+            cfg.update(no_download_overrides())
+            feedback.pushInfo("Downloads are off: no data is downloaded (OSM mobile-home "
+                              "parks, Microsoft footprints and NAIP dates included)")
         extra_path = self.parameterAsFile(parameters, "CONFIG_JSON", context)
         result_path = ""
         if extra_path:
@@ -631,7 +638,20 @@ _ONE_D_NOTE = "depth-only (1D) criterion - no velocity data"
 _NO_DOWNLOADS = ("download_nsi", "download_address", "download_usa_structures", "download_rail",
                  "download_crossings", "download_roads", "download_dams", "download_lifelines",
                  "download_crossings_structures", "download_camps", "download_flowlines",
-                 "download_places", "download_ms_footprints")
+                 "download_places", "download_ms_footprints",
+                 # 2.22.2 (fulltest 2026-10-30): these had no switch here, so a run with every
+                 # download off still fetched the OSM mobile-home parks, MS footprints and NAIP
+                 "download_trailer_parks", "naip_flight_dates", "naip_clips")
+# the classify algorithm's own download switches; all off = no downloads at all (2.22.2)
+_DOWNLOAD_PARAMS = ("DOWNLOAD_NSI", "DOWNLOAD_ADDRESS", "DOWNLOAD_USA", "DOWNLOAD_RAIL",
+                    "DOWNLOAD_DAMS", "DOWNLOAD_LIFELINES", "DOWNLOAD_ROADS",
+                    "DOWNLOAD_CROSSINGS", "DOWNLOAD_CAMPS")
+
+
+def no_download_overrides():
+    """{cfg key: False} for every download, the MS footprints, NAIP and the OSM mobile-home
+    parks included (2.22.2)."""
+    return {k: False for k in _NO_DOWNLOADS}
 
 
 class AddDamResultsAlgorithm(_Base):
@@ -1031,7 +1051,7 @@ class BatchAlgorithm(_Base):
         over = {"report_pdf": self.parameterAsBool(parameters, "REPORT", context),
                 "eap": self.parameterAsBool(parameters, "EAP", context)}
         if not dl:
-            over.update({k: False for k in _NO_DOWNLOADS})
+            over.update(no_download_overrides())
         workers = self._int(parameters, "WORKERS", context, 1)
         timeout = self._int(parameters, "TIMEOUT_MIN", context, WT_TIMEOUT_MIN) * 60
         if self.parameterAsEnum(parameters, "BOUNDARY", context) == 1:
@@ -1116,7 +1136,7 @@ class WatchAlgorithm(_Base):
         over = {"report_pdf": self.parameterAsBool(parameters, "REPORT", context),
                 "eap": self.parameterAsBool(parameters, "EAP", context)}
         if not self.parameterAsBool(parameters, "DOWNLOADS", context):
-            over.update({k: False for k in _NO_DOWNLOADS})
+            over.update(no_download_overrides())
         workers = self._int(parameters, "WORKERS", context, 1)
         timeout = self._int(parameters, "TIMEOUT_MIN", context, WT_TIMEOUT_MIN) * 60
         info = {}

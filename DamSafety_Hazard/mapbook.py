@@ -32,6 +32,7 @@ from qgis.core import (
 )
 
 from .compat import FT_INT, FT_DOUBLE, NULL, WKB_POLYGON, DIST_FEET, DIST_MILES
+from .compat import legend_manual
 from .constants import (
     PLUGIN_NAME, PLUGIN_VERSION, MAPBOOK_SCALES, MAPBOOK_MAX_SHEETS, MAPBOOK_TABLE_ROWS,
 )
@@ -286,7 +287,7 @@ def _legend(layout, m, layers, x, y, w, h, page):
         leg.setTitle("Legend")
         leg.setLinkedMap(m)
         try:
-            leg.setAutoUpdateModel(False)
+            legend_manual(leg)
             root = leg.model().rootGroup()
             root.removeAllChildren()
             for lyr in layers:
