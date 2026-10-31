@@ -672,7 +672,7 @@ Nick's rule (10/30/2026): any house in the ACER judgment zone is labeled **mediu
 - The TM 11 setting `JUDGMENT` / `judgment_as_probable` ("judgment-zone persons count in lives in jeopardy") is separate. It only affects the ACER TM 11 class and still defaults to on.
 - A Runner chain classification doesn't pass `ND_JUDGMENT_HIGH`, so it always uses the default (MEDIUM).
 
-Example: DWR-4031 (Washek), 10 m toe run. House 16775's centroid is below the judgment line, but its northwest corner cell is in the judgment zone. The class of record is MEDIUM (Nick, 10/31: "Would be medium hazard and judgement call for engineer").
+Example: DWR-4031 (Washek), 10 m toe run. House 16775's centroid is below the judgment line, but its northwest corner cell is in the judgment zone. The class of record is MEDIUM (Nick, Oct 30, 6:11 PM CDT: "Would be medium hazard and judgement call for engineer").
 
 ## Offline runs use the Oct 29 offline pack
 
