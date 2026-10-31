@@ -737,7 +737,10 @@ def inflow_side_check(dam_xy, inflow_xy, path, downstream=None, crest_line=None,
     (d) the trace runs against `downstream` (cosine < 0), (e) the inflow is more than
     `max_from_dam_m` (INFLOW_MAX_FROM_DAM_M) from the dam line (`crest_line`) or point: 'far'
     (a note, not one of the side 'problems'), (f) with a crest line and no (d): the trace runs back towards the dam line (against the
-    line's normal on the inflow's side). Returns {'ok', 'problems', ...}."""
+    line's normal on the inflow's side).
+    3.13.5: (b) is a problem only with no `downstream` and no `crest_line`; else a 'notes'
+    entry (DWR-6141: the trace ran along the toe, a false CHECK THE DAM POINT). Returns
+    {'ok', 'problems', ...}."""
     d0 = math.hypot(inflow_xy[0] - dam_xy[0], inflow_xy[1] - dam_xy[1])
     out = {"ok": True, "problems": [], "inflow_from_dam_m": round(d0, 1)}
     has_line = crest_line is not None and len(crest_line) >= 2
@@ -763,8 +766,20 @@ def inflow_side_check(dam_xy, inflow_xy, path, downstream=None, crest_line=None,
         nf = math.hypot(fd[0], fd[1])
         fd = (fd[0] / nf, fd[1] / nf) if nf > 1e-9 else None
         if fd is not None and d0 > 1.0 and _side(inflow_xy, dam_xy, fd) < 0:
-            out["problems"].append("the inflow point is behind the dam relative to the flow "
-                                   "trace's direction ({:.2f}, {:.2f})".format(*fd))
+            # 3.13.5 (DWR-6141 Taskers Coulee): (b) measures the inflow from the dam POINT
+            # along the trace's first 200 m. When the trace first runs along the toe (parallel
+            # to the dam) and the inflow is off to one side of mid-crest - a bent or long dam -
+            # it says "behind" for a point that is downstream (6141: 33 m NE of the dam line,
+            # trace east along the toe then north, cos 0.59 with the line normal). With a
+            # downstream side or a dam line, (c), (d) and (f) test the side directly, so (b)
+            # is only a note there; it is still a problem with neither.
+            msg = ("the inflow point is behind the dam relative to the flow "
+                   "trace's direction ({:.2f}, {:.2f})".format(*fd))
+            if downstream is None and not has_line:
+                out["problems"].append(msg)
+            else:
+                out["notes"] = out.get("notes", []) + [msg + " (not a problem: the "
+                               "downstream side / dam line checks decide)"]
     if downstream is not None:
         out["downstream"] = [round(downstream[0], 3), round(downstream[1], 3)]
         if d0 > 1.0 and _side(inflow_xy, dam_xy, downstream) < 0:
