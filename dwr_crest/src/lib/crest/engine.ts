@@ -651,6 +651,14 @@ export function analyze(dam: DamRecord): Analysis {
     screen.classOfRecord = dam.classOfRecord;
     screen.reasons.unshift(`Class of record: ${dam.classOfRecord}. This desk screen (${screen.label}) is not the class of record.`);
   }
+  if (dam.receptorSource === "nd911" && !dam.nd911AutoAdded) {
+    // No structures yet because the 911 points are not looked up: do not let an empty list read Low.
+    screen.level = "Review";
+    screen.label = "Review (911 points not looked up)";
+    screen.reasons.unshift(
+      "Structures for this dam come from ND 911 address points inside the flood strip. Look them up on the Flood step before relying on the class.",
+    );
+  }
   if (warnings.some((w) => w.startsWith("No DEM tie"))) {
     screen.level = "Review";
     screen.label = "Review (crest not tied)";

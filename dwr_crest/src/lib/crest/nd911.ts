@@ -416,6 +416,20 @@ export function removeNd911Seeds(receptors: ReceptorSeed[], ids?: string[]): Rec
   return receptors.filter((r) => !(r.source === "nd911" && (!only || only.has(r.id))));
 }
 
+/** True when a picked ND dam (receptorSource "nd911") should look its 911 points up without a click. */
+export function wantsNd911Lookup(dam: DamRecord, state: Nd911State): boolean {
+  return dam.receptorSource === "nd911" && !dam.nd911AutoAdded && state.state === "lookup";
+}
+
+/**
+ * For a picked ND dam: once the points are listed, add every point inside the strip as a receptor seed (once; later
+ * removals and classifications stick). Null when there is nothing to do.
+ */
+export function nd911AutoPatch(dam: DamRecord, state: Nd911State, result: Pick<Analysis, "flood">): Partial<DamRecord> | null {
+  if (dam.receptorSource !== "nd911" || dam.nd911AutoAdded || state.state !== "ready") return null;
+  return { receptors: addNd911Seeds(dam.receptors, state.table.rows, result), nd911AutoAdded: true };
+}
+
 // ---- exports ------------------------------------------------------------------------------------------------
 
 const csvCell = (v: string | number) => {

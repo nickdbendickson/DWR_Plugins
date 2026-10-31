@@ -98,6 +98,14 @@ export type DamRecord = {
   outline?: OutlineCache;
   /** ACER TM 11 judgment zone counts as probable loss of life (High), as damsuite classify_nd defaults. Default true. */
   judgmentAsProbable?: boolean;
+  /**
+   * Where the hazard-screen structures come from. "nd911" (picked ND dams): ND NG911 address points inside the flood
+   * strip, looked up and added automatically. Unset: the record's own seeds (samples and blank records keep the
+   * generic demo seeds).
+   */
+  receptorSource?: "nd911";
+  /** Set once the 911 points inside the strip were added automatically, so removals stick. */
+  nd911AutoAdded?: boolean;
   /** Set when the record was filled from the NID (ND dam picker). Optional, so crest-desk-v2 state still loads. */
   nidId?: string;
   /** The NID's hazard class (FEMA) as reported to the NID. Shown on Record and Screen; never used by the screen and

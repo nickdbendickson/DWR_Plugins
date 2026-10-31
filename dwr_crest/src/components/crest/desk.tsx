@@ -19,6 +19,8 @@ import {
   exportFloodKml,
   exportNd911Csv,
   fetchNd911,
+  nd911AutoPatch,
+  wantsNd911Lookup,
   ND911_ATTRIBUTION,
   ND911_DROPPED_FIELDS,
   nd911State,
@@ -700,6 +702,21 @@ function Nd911Panel({
   const update = useDesk((s) => s.update);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Picked ND dams: look the points up and add the ones inside the strip without a click (once).
+  const autoTried = useRef(false);
+  useEffect(() => {
+    if (!lookup || autoTried.current || !wantsNd911Lookup(dam, nd911)) return;
+    autoTried.current = true;
+    setBusy(true);
+    fetchNd911(lookup)
+      .then((c) => update({ nd911: c }))
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setBusy(false));
+  }, [dam, nd911, lookup, update]);
+  useEffect(() => {
+    const p = nd911AutoPatch(dam, nd911, result);
+    if (p) update(p);
+  }, [dam, nd911, result, update]);
   if (nd911.state === "none") return null;
   const lookUp = async () => {
     if (!lookup) return;

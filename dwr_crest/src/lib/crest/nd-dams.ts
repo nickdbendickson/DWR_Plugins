@@ -375,7 +375,13 @@ export function prefillPatch(
       sampleNote: undefined,
       geometry: undefined,
       reachKm: undefined,
-      judgmentAsProbable: undefined,
+      // Real receptors (Nick 2026-10-31): a picked ND dam drops the generic demo seeds and screens ND 911 address
+      // points inside the flood strip (added automatically once looked up). Judgment zone = ND MEDIUM, high zone = HIGH.
+      receptors: [],
+      receptorSource: "nd911",
+      nd911AutoAdded: undefined,
+      nd911: undefined,
+      judgmentAsProbable: false,
     } as Partial<DamRecord>);
     if (current?.surfaceAreaAc != null) replaced.push("surfaceAreaAc");
     if (current?.classOfRecord) replaced.push("classOfRecord");
