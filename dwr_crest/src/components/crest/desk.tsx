@@ -15,7 +15,7 @@ import {
 } from "@/lib/crest/plss";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
-import { missingForNext } from "@/lib/crest/nd-dams";
+import { demTieOffer, missingForNext, needsDemTie } from "@/lib/crest/nd-dams";
 import { activeDam, useDesk } from "@/lib/crest/store";
 import type {
   BreachMethod,
@@ -204,6 +204,26 @@ function usePlss(dam: DamRecord, strip: FloodStrip | null): PlssState {
   return useMemo(() => plssState(dam, strip, online), [dam, strip, online]);
 }
 
+function DemTiePanel({ dam }: { dam: DamRecord }) {
+  const update = useDesk((s) => s.update);
+  if (!needsDemTie(dam)) return null;
+  const offer = demTieOffer(dam);
+  return (
+    <div className="mt-3 rounded-md border border-line bg-sand p-3 text-sm" data-testid="dem-tie">
+      <p>
+        Datum is {dam.statedDatum === "" ? "blank" : "local"}: tie the elevations to the DEM crest (NAVD 88). Crest 0–300 ft counts as local and
+        is shifted by the DEM mid-crest offset; a mismatch over 100 ft is flagged for review.
+      </p>
+      {offer.review ? <p className="mt-1 font-semibold text-red-700">{offer.review}</p> : <p className="mt-1 text-muted">{offer.note}</p>}
+      {offer.patch ? (
+        <button type="button" className="mt-2 rounded border border-line bg-card px-3 py-1" onClick={() => update(offer.patch!)}>
+          Tie to DEM crest{offer.offsetFt ? ` (${offer.offsetFt > 0 ? "+" : ""}${offer.offsetFt} ft)` : ""}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
   const update = useDesk((s) => s.update);
   return (
@@ -215,6 +235,7 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         </div>
         <NidHazardLine dam={dam} />
         <p className="mt-2 text-sm text-muted">{result.datum.rule}</p>
+        <DemTiePanel dam={dam} />
         {dam.nidId ? (
           <div className="mt-3">
             <NidRecordPanel dam={dam} />
