@@ -64,7 +64,7 @@ describe("build-nd-dams-dwr (CSV fixture)", () => {
     assert.equal(d.datum, "NGVD29");
     assert.equal(d.held, "max_pool_e,streambed_,emergenc_2,normal_ele");
     assert.deepEqual([d.topNavdFt, d.streambedNavdFt, d.auxSpillwayNavdFt, d.normalPoolNavdFt], [null, null, null, null]);
-    assert.deepEqual(b.source.held, ["ND01032:max_pool_e,streambed_,emergenc_2,normal_ele"]);
+    assert.deepEqual(b.source.held.filter((h) => !h.startsWith("DWR-")), ["ND01032:max_pool_e,streambed_,emergenc_2,normal_ele"]);
     // A held field stays null even if the folder had (wrongly) filled its NAVD 88 value.
     const bad = DAMS_FIXTURE.map((r) => (r.national_i === "ND01032" ? { ...r, max_pool_e_navd88: 129.76 } : r));
     assert.equal(rec(build({ ...fixtureCsvs(), damsCsv: toCsv(DAM_FIELDS, bad) }), "ND01032").topNavdFt, null);
@@ -189,13 +189,14 @@ describe("committed nd_dams_dwr.json", () => {
   const b = JSON.parse(text);
   const nidText = readFileSync(join(here, "../src/lib/crest/data/nd_dams.json"), "utf8");
   const col = (r, c) => r[b.cols.indexOf(c)];
+  const main = b.rows.filter((r) => !String(r[0]).startsWith("DWR-"));
   it("joins 839 of the 948 main dams; 830 with a DWR height; 91 NAVD 88 offers; 108 dugouts", () => {
-    assert.equal(b.rows.length, 839);
-    assert.equal(b.rows.filter((r) => col(r, "heightFt") != null).length, 830);
+    assert.equal(main.length, 839);
+    assert.equal(b.source.matched, 839);
+    assert.equal(main.filter((r) => col(r, "heightFt") != null).length, 830);
     assert.deepEqual(b.cols, COLS);
-    assert.equal(b.rows.filter((r) => col(r, "topNavdFt") != null && col(r, "streambedNavdFt") != null).length, 91);
-    assert.equal(b.source.navd88Offers, 91);
-    assert.equal(b.dugouts.rows.length, 108);
+    assert.equal(main.filter((r) => col(r, "topNavdFt") != null && col(r, "streambedNavdFt") != null).length, 91);
+    assert.equal(b.dugouts.rows.filter((r) => !String(r[0]).startsWith("DWR-")).length, 108);
     assert.equal(b.source.pulledUtc, "2026-10-30T14:31:02Z");
   });
   it("ND00199 is DWR 2801: 1070.0 / 1042.5 NGVD 29 -> 1071.09 / 1043.59 NAVD 88, H 27.5", () => {
@@ -204,12 +205,24 @@ describe("committed nd_dams_dwr.json", () => {
     assert.deepEqual([col(r, "topNavdFt"), col(r, "streambedNavdFt"), col(r, "vshiftFt")], [1071.09, 1043.59, 1.0887]);
   });
   it("only ND01032 is held; no Local or blank record carries a NAVD 88 value", () => {
-    assert.deepEqual(b.source.held, ["ND01032:max_pool_e,streambed_,emergenc_2,normal_ele"]);
+    assert.deepEqual(b.source.held.filter((h) => !h.startsWith("DWR-")), ["ND01032:max_pool_e,streambed_,emergenc_2,normal_ele"]);
     for (const r of b.rows)
       if (col(r, "datum") === "Local" || col(r, "datum") == null) assert.equal(col(r, "topNavdFt"), null, r[0]);
   });
-  it("both bundles together fit 330 KB; DWR <= 30 KB gzipped", () => {
-    assert.ok(Buffer.byteLength(text) + Buffer.byteLength(nidText) <= 330_000);
-    assert.ok(gzipSync(text, { level: 9 }).length <= 30_000);
+  it("DWR-only dams: one picker row and one card row each, keyed DWR-<structure>, none in the NID bundle", () => {
+    const nidIds = new Set(JSON.parse(nidText).rows.map((r) => r[0]));
+    const only = b.dwrOnly.rows;
+    assert.equal(only.length, b.source.dwrOnly);
+    assert.ok(only.length > 1000);
+    const cards = new Set(b.rows.filter((r) => String(r[0]).startsWith("DWR-")).map((r) => r[0]));
+    for (const r of only) {
+      assert.ok(cards.has(r[0]), r[0]);
+      assert.ok(!nidIds.has(r[1]), r[1]);
+    }
+    assert.ok(only.some((r) => r[0] === "DWR-4031" && r[1] === "ND30554"));
+  });
+  it("both bundles together fit 600 KB; DWR <= 80 KB gzipped (with the DWR-only dams)", () => {
+    assert.ok(Buffer.byteLength(text) + Buffer.byteLength(nidText) <= 600_000);
+    assert.ok(gzipSync(text, { level: 9 }).length <= 80_000);
   });
 });
