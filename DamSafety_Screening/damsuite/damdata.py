@@ -294,8 +294,11 @@ def dam_values(props):
     out = {"name": g("name", "dam_name", "damname"),
            "nid_id": g("nidid", "nid_id"),
            "county": g("county", "countyname", "county_name"),
-           "height_ft": _num(g("nid_height", "dam_height", "height_ft", "height",
-                               "structural_height")),
+           # the largest height the record gives: the conservative side for a breach
+           "height_ft": max([v for v in (_num(props.get(k)) for k in
+                                         ("nid_height", "dam_height", "height_ft", "height",
+                                          "structural_height")) if v] or [None],
+                            key=lambda v: v or 0),
            # the largest storage the record gives: the conservative side for a breach
            "storage_acft": max([v for v in (_num(g("nid_storage")), _num(g("max_storage")),
                                             _num(g("storage_acft")), _num(g("storage")),

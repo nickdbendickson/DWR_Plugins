@@ -566,7 +566,13 @@ def list_layers(service, text):
 
 
 def urllib_get(url, timeout=60):
-    """http_get without QGIS's network client (QGIS's proxy setting still applies, 1.16.2)."""
+    """http_get without QGIS's network client (QGIS's proxy setting still applies, 1.16.2).
+
+    Only http and https. A file: URL or anything else is refused."""
+    parts = urllib.parse.urlparse(url or "")
+    if parts.scheme not in ("http", "https"):
+        raise ServiceError("refusing {}: only http and https are fetched".format(
+            parts.scheme or "a URL with no scheme"))
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with netproxy.urlopen(req, timeout=timeout) as r:
         return r.read()

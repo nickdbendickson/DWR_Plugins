@@ -265,6 +265,19 @@ def _gpkg_manifest(pack):
     return m
 
 
+
+def _safe_rel(file):
+    """A manifest file entry that stays inside the pack folder, or "".
+
+    Same rule as offline_pack._v1_rasters: no absolute path, no drive letter,
+    no ".." and no empty segment. A tampered pack must not point at another file."""
+    f = str(file or "").replace('\\', "/")
+    parts = f.split("/")
+    if not f or f.startswith("/") or ":" in f or ".." in parts or "" in parts:
+        return ""
+    return f
+
+
 def pack_file(name, pack=None, kind="datasets"):
     """1.10.0: the file of data set (kind "datasets") or raster (kind "rasters") `name` in a
     format-2 pack (the active pack by default), or "" (no such layer, Download mode).
@@ -272,16 +285,19 @@ def pack_file(name, pack=None, kind="datasets"):
     (_v1_layer), a raster the file its manifest lists next to the .sqlite."""
     pack = active_pack() if pack is None else pack
     e = (_gpkg_manifest(pack).get(kind) or {}).get(name) or {}
-    if e.get("file"):
-        p = os.path.join(pack, *e["file"].split("/"))
+    rel = _safe_rel(e.get("file"))
+    if rel:
+        p = os.path.join(pack, *rel.split("/"))
         return p if os.path.isfile(p) else ""
+    if e.get("file"):
+        return ""
     db = _v1_db(pack)
     if not db:
         return ""
     e = (_v1_manifest(db).get(kind) or {}).get(name) or {}
     if kind == "rasters":
-        p = os.path.join(os.path.dirname(db), *str(e.get("file") or "").split("/")) \
-            if e.get("file") else ""
+        rel = _safe_rel(e.get("file"))
+        p = os.path.join(os.path.dirname(db), *rel.split("/")) if rel else ""
         return p if p and os.path.isfile(p) else ""
     return _v1_layer(db, name) if e else ""
 
@@ -725,6 +741,11 @@ def status(folder=None, now=None):
     out["terrain_mb"] = round(_size(tdir) / 1e6, 1) if os.path.isdir(tdir) else 0.0
     out["nlcd"] = nlcd_raster(folder)
     out["dem"] = local_dem(folder)
+    dem_files = rasters(folder, DEM)
+    if not any(p.lower().endswith(".vrt") for p in dem_files) and len(dem_files) > 1:
+        out["problems"].append(
+            "dem/ has {} rasters and no .vrt mosaic, so none is used. Make one VRT, "
+            "or leave a single raster.".format(len(dem_files)))
     out["dwr"] = dwr_layers(folder)
     out["hifld"] = [p for p, _c in hifld_layers(folder)]
     return out
