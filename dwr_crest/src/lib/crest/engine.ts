@@ -651,8 +651,9 @@ export function analyze(dam: DamRecord): Analysis {
     screen.classOfRecord = dam.classOfRecord;
     screen.reasons.unshift(`Class of record: ${dam.classOfRecord}. This desk screen (${screen.label}) is not the class of record.`);
   }
-  if (dam.receptorSource === "nd911" && !dam.nd911AutoAdded) {
-    // No structures yet because the 911 points are not looked up: do not let an empty list read Low.
+  if (dam.receptorSource === "nd911" && !dam.nd911AutoAdded && screen.level !== "Review") {
+    // No structures yet because the 911 points are not looked up: do not let an empty list read Low. A Review
+    // already set (for example Not assessed, no strip to look up in) is more specific and stays.
     screen.level = "Review";
     screen.label = "Review (911 points not looked up)";
     screen.reasons.unshift(
