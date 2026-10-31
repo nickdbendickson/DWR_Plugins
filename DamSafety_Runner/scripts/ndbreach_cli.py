@@ -1351,6 +1351,11 @@ def prepare(cfg, opts, row=None, cache=None, layers=None, need_models=True, scen
         if not os.path.isfile(st.user_hydrograph):
             raise CliError("the hydrograph CSV does not exist: {}".format(st.user_hydrograph))
     notes = list(setup.notes)
+    # v3.13.0 (Nick): the inflow toe band's downstream slope from the DWR record when F_DS /
+    # dam.ds_slope_h is empty (the dam folder's DWR dams, else the suite's / offline pack's)
+    n = importlib.import_module(PKG + ".core.dwr_slope").apply_to_dam(dam, folder)
+    if n:
+        notes.append(n)
     dem_projected = True
     notes += apply_layers(st, cfg, setup, dam_xy, layers or LayerCache(), dem_projected)
     if st.scenario == workflow.SCENARIO_FLOOD:

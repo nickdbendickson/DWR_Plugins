@@ -8,7 +8,7 @@ Why
 
 What changed
   LEFT_DOCK = Qt.DockWidgetArea.LeftDockWidgetArea (Qt.LeftDockWidgetArea on an older
-  PyQt5), used by addDockWidget. Runner 3.13.3 fixes its results dock the same way.
+  PyQt5), used by addDockWidget. Runner 3.13.4 fixes its results dock the same way.
 
 Test
   DamSafety_Runner/tests/test_dock_area_enum.py (real Qt, QGIS 3.34 and 4.2): both docks

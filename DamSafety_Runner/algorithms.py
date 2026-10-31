@@ -31,6 +31,7 @@ from .damsuite import structure_flags as sflags
 from .core.anuga_model import check_anuga
 from .core.units import FT, MILE, ARRIVAL_DEPTH_FT
 from .core import vdatum_run as vdrun
+from .core import dwr_slope
 
 PROVIDER_ID = "ndbreach"
 SET_LISFLOOD = "NDBREACH_LISFLOOD_EXE"
@@ -1643,6 +1644,10 @@ class RunDamAlgorithm(_Base):
                               _safe_name(dam.dam_id))
         feedback.pushInfo("Model CRS {}; DEM elevations in {}".format(work.authid(), src.z_note))
         self._crest_ids = _dwr_ids(dam.dam_id, getattr(self, "_dam_rec", None))
+        # v3.13.0 (Nick): the toe band's downstream slope from the DWR record when DS_SLOPE is empty
+        n = dwr_slope.apply_to_dam(dam, folder, getattr(self, "_dam_rec", None))
+        if n:
+            feedback.pushInfo(n)
         for n in self.apply_features(st, parameters, context, work, (dam_xy.x(), dam_xy.y())):
             feedback.pushInfo(n)
         try:
@@ -2130,6 +2135,9 @@ class BatchAlgorithm(_Base):
                     breach_bottom_ft=val(feat, "F_BOTTOM"), crest_width_ft=val(feat, "F_CREST"),
                     us_slope_h=val(feat, "F_US"), ds_slope_h=val(feat, "F_DS"),
                     crest_length_ft=val(feat, "F_LENGTH"), name=vals.get("DAM_NAME") or "")
+                n_ = dwr_slope.apply_to_dam(dam, folder, rec)     # v3.13.0: F_DS empty
+                if n_:
+                    feedback.pushInfo("{}: {}".format(dam_id, n_))
                 files = nd_data.dam_input_files(folder)
                 st = copy.copy(base_st)
                 flood = scen_i == 1 or (scen_i == 2 and "pmf_inflow" in files)
@@ -2317,6 +2325,9 @@ class CascadeAlgorithm(_Base):
                 if dv not in (None, "") and str(dv).strip().upper() != "NULL":
                     dam.elev_datum_stated = str(dv).strip()
             fi = None
+            n_ = dwr_slope.apply_to_dam(dam, os.path.join(parent, _safe_name(dam_id)))  # 3.13.0
+            if n_:
+                feedback.pushInfo("{}: {}".format(dam_id, n_))
             files = nd_data.dam_input_files(os.path.join(parent, _safe_name(dam_id)))
             pool = val(f, "F_POOL")
             if pool is not None or files.get("pmf_inflow"):

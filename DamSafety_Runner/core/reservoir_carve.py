@@ -583,7 +583,8 @@ def downstream_for(terrain_src, dam, dam_xy, h_m, top_m, inflow_xy, cell, log=No
         pool_grid = terrain_src.read((dam_xy[0] - half, dam_xy[1] - half,
                                       dam_xy[0] + half, dam_xy[1] + half), cell)
         d, how = terrain.downstream_direction(pool_grid, dam_xy, h_m,
-                                              crest_line=getattr(dam, "crest_line_xy", None))
+                                              crest_line=getattr(dam, "crest_line_xy", None),
+                                              top_m=top_m)
     except Exception as e:                    # noqa: BLE001
         d, how = None, "downstream direction failed: {}".format(e)
     if d is None and inflow_xy is not None:

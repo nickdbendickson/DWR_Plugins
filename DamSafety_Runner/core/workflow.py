@@ -215,6 +215,17 @@ class RunSettings:
         self.input_files = {}            # {label: path} of the inputs, recorded in the run manifest
         self.breach_xy = None            # point on the crest where the breach starts (default: dam_xy)
         self.inflow_width_m = None       # width the inflow is spread over (default: the breach width)
+        self.inflow_max_from_dam_m = None  # v3.12.10: farthest inflow pick from the dam line
+                                           # (default terrain.INFLOW_MAX_FROM_DAM_M, 150 m)
+        self.inflow_toe_band_m = None    # v3.12.10: (min, max) m downstream of the dam line the
+                                         # inflow (lowest ground) is looked for; None (default):
+                                         # 5 m to H x (downstream slope + 1) (v3.13.0, Nick;
+                                         # terrain.toe_band_for_dam)
+        self.inflow_toe_ds_slope_h = None  # v3.13.0: downstream slope (H:1V) for that outer limit;
+                                         # None: the dam's DS_SLOPE / F_DS, else 3:1 (4H)
+        self.inflow_toe_min_outer_m = None  # ... the outer limit at least this (default 15 m)
+        self.inflow_toe_cell_m = None    # ... on the DEM read at this cell (default 1 m, or the
+                                         # DEM's own cell when coarser)
         self.user_hydrograph_obj = None  # breach.Hydrograph used as given (nested runs)
         self.user_baseline_obj = None    # its no-breach counterpart, for the incremental rasters
         self.snapshot_frames = 0         # >0: depth snapshots for an animation (about this many frames)
@@ -1200,7 +1211,10 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         if inflow_xy is None:
             ds_info = {}
             inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
-                                                search_cell, warnings, log, out=ds_info)
+                                                search_cell, warnings, log, out=ds_info,
+                                                max_from_dam_m=getattr(
+                                                    st, "inflow_max_from_dam_m", None),
+                                                **_toe_kwargs(dam, st))
             ds_dir = ds_info.get("direction")
             qa_ctx["downstream"] = ds_dir
             if inflow_xy is None:
@@ -2361,7 +2375,10 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
                                  search_cell)
         ds_info = {}
         inflow_xy, why = _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad,
-                                            search_cell, warnings, lambda *_a: None, out=ds_info)
+                                            search_cell, warnings, lambda *_a: None, out=ds_info,
+                                            max_from_dam_m=getattr(
+                                                st, "inflow_max_from_dam_m", None),
+                                            **_toe_kwargs(dam, st))
         if inflow_xy is None:
             inflow_xy, crest, why = terrain.place_from_crest(
                 local, dam_xy, h_m, top_m, search_rad, downstream=ds_info.get("direction"))
@@ -2562,7 +2579,9 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
     inflow_point.side_check and dam_point_checks."""
     if from_plan:
         return
-    chk = terrain.inflow_side_check(dam_xy, inflow_xy, path, downstream)
+    chk = terrain.inflow_side_check(dam_xy, inflow_xy, path, downstream,
+                                    crest_line=getattr(dam, "crest_line_xy", None),
+                                    max_from_dam_m=getattr(st, "inflow_max_from_dam_m", None))
     report.setdefault("inflow_point", {})["side_check"] = chk
     if not chk["ok"]:
         msg = ("{}: the breach inflow point ({:.1f}, {:.1f}) and the flow trace disagree on "
@@ -2571,6 +2590,14 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
                "(DAM_LINES).".format(terrain.SIDE_PROBLEM, inflow_xy[0], inflow_xy[1],
                                      "; ".join(chk["problems"])))
         warnings.insert(0, msg)
+        log(msg)
+    if chk.get("far"):
+        # v3.12.10: DWR-4031's first run put the inflow 393 m away in a farmyard draw
+        msg = ("{}: {} ({:.1f}, {:.1f}). Give the inflow point (just below the dam) if it is "
+               "not the downstream toe.".format(terrain.INFLOW_FAR, chk["far"], inflow_xy[0],
+                                                inflow_xy[1]))
+        if not any(w.startswith("Breach inflow: " + terrain.INFLOW_FAR) for w in warnings):
+            warnings.insert(0, msg)
         log(msg)
     roads = getattr(st, "road_lines", None) or []
     rd = terrain.nearest_line_distance(dam_xy, roads) if roads else None
@@ -2599,17 +2626,80 @@ def _check_inflow_site(report, st, dam, dam_xy, inflow_xy, path, downstream, fro
         log(msg)
 
 
+def _toe_kwargs(dam, st):
+    """v3.12.10: the toe-band settings of _downstream_inflow: the dam line (DAM_LINES, else a
+    batch's CREST_LINE), the band and the fine cell."""
+    return {"toe_line": getattr(dam, "crest_line_xy", None) or getattr(st, "midcrest_line", None),
+            "toe_band_m": getattr(st, "inflow_toe_band_m", None),
+            "toe_cell_m": getattr(st, "inflow_toe_cell_m", None),
+            "toe_min_outer_m": getattr(st, "inflow_toe_min_outer_m", None),
+            **_toe_slope(dam, st)}
+
+
+def _toe_slope(dam, st):
+    """v3.13.0: the downstream slope of the toe band's outer limit H x (slope + 1) and where it
+    is from: the setting (inflow_toe_ds_slope_h), the dam's DS_SLOPE / F_DS, the DWR record's
+    downstream_slope (dam.dwr_ds_slope_h, core/dwr_slope.apply_to_dam; Nick: "downstream slope
+    data is in dwr data"), else None (3:1 and a warning)."""
+    for v, src in ((getattr(st, "inflow_toe_ds_slope_h", None), "the run setting"),
+                   (getattr(dam, "ds_slope_h", None), "DS_SLOPE / F_DS"),
+                   (getattr(dam, "dwr_ds_slope_h", None),
+                    getattr(dam, "dwr_ds_slope_note", None) or "the DWR record")):
+        try:
+            z = float(v)
+        except (TypeError, ValueError):
+            continue
+        if z > 0 and math.isfinite(z):
+            return {"toe_ds_slope_h": z, "toe_ds_slope_src": src}
+    why = getattr(dam, "dwr_ds_slope_note", None)
+    return {"toe_ds_slope_h": None, "toe_ds_slope_src": "no DS_SLOPE / F_DS; {}".format(
+        why or "no DWR record downstream_slope")}
+
+
+def _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy, band_m=None,
+                cell_m=None, max_from_dam_m=None):
+    """v3.12.10: terrain.toe_band_inflow on the fine DEM read around the dam line."""
+    lo, hi = terrain.INFLOW_TOE_BAND_M if band_m is None else (float(band_m[0]),
+                                                               float(band_m[1]))
+    cap = terrain.INFLOW_MAX_FROM_DAM_M if max_from_dam_m is None else float(max_from_dam_m)
+    cell = float(cell_m) if cell_m else terrain.INFLOW_TOE_CELL_M
+    native = terrain_native_cell(terrain_src)
+    if native and native > cell:
+        cell = native
+    a = np.asarray(toe_line, dtype=float).reshape(-1, 2)
+    # room for the band to widen up to the cap (terrain.INFLOW_TOE_WIDEN_M)
+    pad = max(hi, min(cap, hi + 60.0)) + 3.0 * cell
+    fine = terrain_src.read((a[:, 0].min() - pad, a[:, 1].min() - pad,
+                             a[:, 0].max() + pad, a[:, 1].max() + pad), cell)
+    return terrain.toe_band_inflow(fine, a, direction, h_m, top_m, band_m=(lo, hi), pool=pool,
+                                   max_from_dam_m=min(cap, hi + 60.0), dam_xy=dam_xy)
+
+
 def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, warnings, log,
-                       out=None):
+                       out=None, max_from_dam_m=None, toe_line=None, toe_band_m=None,
+                       toe_cell_m=None, toe_ds_slope_h=None, toe_min_outer_m=None,
+                       toe_ds_slope_src=None):
     """find_inflow_point limited to the downstream side of the crest and outside the pool
     (core/terrain.downstream_direction, pool_mask). The pool needs terrain well past the
-    reservoir, so it is read on its own (POOL_HALF_M around the dam, at the search cell)."""
+    reservoir, so it is read on its own (POOL_HALF_M around the dam, at the search cell).
+    v3.12.10 (Nick): with a dam line (`toe_line`) and a downstream side, the inflow is the
+    lowest ground at the downstream toe (terrain.toe_band_inflow along the full line on the 1 m
+    DEM, outside the pool, widened while it is the dam's face). v3.13.0 (Nick): the band runs
+    5 m to H x (downstream slope + 1) out (terrain.toe_band_for_dam; 3:1 when the slope is not
+    known; `toe_band_m` overrides it);
+    find_inflow_point (with its 150 m cap) is the fallback, with a warning, when there is no
+    line or the band has no valid cell."""
+    if toe_line is None:
+        toe_line = getattr(dam, "crest_line_xy", None)
     half = terrain.POOL_HALF_M
     pool_grid = pool = direction = None
     try:
         pool_grid = terrain_src.read((dam_xy[0] - half, dam_xy[1] - half,
                                       dam_xy[0] + half, dam_xy[1] + half), cell)
-        pool = pool_grid.like(terrain.pool_mask(pool_grid, h_m).astype(float), nodata=-1.0)
+        # v3.12.10: with the shallow (hydro-flattened) pool against the dam line
+        pool = pool_grid.like(terrain.pool_mask(
+            pool_grid, h_m, dam_xy, top_m, getattr(dam, "crest_line_xy", None)).astype(float),
+            nodata=-1.0)
     except Exception as e:                       # noqa: BLE001 - the pool is a refinement
         log("Pool behind the dam not found ({}); the inflow search uses the side test only."
             .format(e))
@@ -2621,15 +2711,68 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
             crest_xy = terrain.embankment_crest(local, dam_xy, h_m, top_m, max(rad, 400.0))[0]
         direction, how = terrain.downstream_direction(
             pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
-            crest_xy=crest_xy)
+            crest_xy=crest_xy, top_m=top_m)
     except Exception as e:                       # noqa: BLE001
         direction, how = None, "downstream direction failed: {}".format(e)
     log("Downstream side of the crest: {}".format(
         "({:.2f}, {:.2f}), {}".format(direction[0], direction[1], how) if direction else how))
     if out is not None:                  # v3.10.18: place_from_crest keeps to this side too
         out["direction"], out["how"] = direction, how
-    xy, why = terrain.find_inflow_point(local, dam_xy, h_m, top_m, rad, downstream=direction,
-                                        pool=pool)
+    if toe_line is not None and len(toe_line) >= 2 and direction is not None:
+        band_how = None
+        if toe_band_m is None:
+            toe_band_m, band_how, known = terrain.toe_band_for_dam(
+                h_m, toe_ds_slope_h, min_outer_m=toe_min_outer_m,
+                cap_m=max_from_dam_m)
+            if toe_ds_slope_src:
+                band_how += "; slope: {}".format(toe_ds_slope_src)
+            if not known:
+                msg = ("Breach inflow: toe band {:.0f}-{:.0f} m ({}); check the inflow "
+                       "point.".format(toe_band_m[0], toe_band_m[1], band_how))
+                warnings.append(msg)
+                log(msg)
+            elif toe_ds_slope_h is None:      # v3.13.0 (Nick): 3:1 when no slope is known
+                msg = ("Breach inflow: the dam's downstream slope is not known ({}); the toe "
+                       "band uses {:g}:1, {:.0f}-{:.0f} m. Give DS_SLOPE / F_DS to check it."
+                       .format(toe_ds_slope_src or "no DS_SLOPE / F_DS",
+                               terrain.INFLOW_TOE_DS_SLOPE_DEFAULT, toe_band_m[0],
+                               toe_band_m[1]))
+                warnings.append(msg)
+                log(msg)
+            log("Breach inflow toe band: {:.0f}-{:.0f} m downstream of the dam line ({})".format(
+                toe_band_m[0], toe_band_m[1], band_how))
+        if out is not None:
+            out["toe_band_m"], out["toe_band_how"] = tuple(toe_band_m), band_how
+        try:
+            xy, why = _toe_inflow(terrain_src, toe_line, direction, h_m, top_m, pool, dam_xy,
+                                  toe_band_m, toe_cell_m, max_from_dam_m)
+        except Exception as e:                   # noqa: BLE001 - the old search is the fallback
+            xy, why = None, "{}: {}: {}".format(terrain.NO_TOE, type(e).__name__, e)
+        if xy is not None:
+            return xy, "{}, downstream side ({})".format(why, how)
+        toe_why = why
+    elif toe_line is None or len(toe_line) < 2:
+        toe_why = "{}: no dam line (DAM_LINES or CREST_LINE)".format(terrain.NO_TOE)
+    else:
+        toe_why = "{}: the downstream side of the dam line is not known".format(terrain.NO_TOE)
+    msg = ("Breach inflow: not placed at the downstream toe ({}); the lowest ground near the "
+           "dam point is used instead (within {:.0f} m of the dam {}). Check it, or give the "
+           "inflow point.".format(toe_why, terrain.INFLOW_MAX_FROM_DAM_M if max_from_dam_m is None
+                                  else float(max_from_dam_m),
+                                  "line" if getattr(dam, "crest_line_xy", None) else "point"))
+    warnings.append(msg)
+    log(msg)
+    if out is not None:
+        out["toe"] = toe_why
+    xy, why = terrain.find_inflow_point(
+        local, dam_xy, h_m, top_m, rad, downstream=direction, pool=pool,
+        crest_line=getattr(dam, "crest_line_xy", None),
+        max_from_dam_m=max_from_dam_m)
+    if why.startswith(terrain.INFLOW_FAR):
+        # v3.12.10: the low ground is far from the dam (DWR-4031: 393 m, a farmyard draw)
+        warnings.insert(0, "Breach inflow: {}. Give the inflow point (just below the dam) if "
+                           "this is not the downstream toe.".format(why))
+        log(warnings[0])
     if why.startswith(terrain.NO_DOWNSTREAM):
         warnings.append("Breach inflow: {}. Give the inflow point (just below the dam) if this "
                         "is not the downstream toe.".format(why))

@@ -1,4 +1,4 @@
-"""3.13.3 / Setup 1.0.18 (QGIS 4 fulltest 2026-10-30): the docks are added with the scoped
+"""3.13.4 (built as 3.13.3) / Setup 1.0.18 (QGIS 4 fulltest 2026-10-30): the docks are added with the scoped
 Qt.DockWidgetArea enum. QGIS 4 (PyQt6) has no Qt.RightDockWidgetArea / Qt.LeftDockWidgetArea,
 so the Runner's results dock and Setup's status dock raised AttributeError / TypeError there.
 

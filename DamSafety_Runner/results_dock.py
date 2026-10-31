@@ -29,7 +29,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-# 3.13.3: dock areas as the scoped Qt enum (QGIS 4 / PyQt6 has no Qt.RightDockWidgetArea;
+# 3.13.4 (built as 3.13.3): dock areas as the scoped Qt enum (QGIS 4 / PyQt6 has no Qt.RightDockWidgetArea;
 # fulltest 2026-10-30). plugin.py uses RIGHT_DOCK for addDockWidget.
 _DWA = getattr(Qt, "DockWidgetArea", Qt)
 LEFT_DOCK = _DWA.LeftDockWidgetArea

@@ -1,6 +1,6 @@
 ND Dam Hazard Classification Helper 2.22.2
 ==========================================
-(2026-10-30; release set: ND Dam Breach Runner 3.13.3, ND Dam Breach Screening 0.18.1,
+(2026-10-30; release set: ND Dam Breach Runner 3.13.4, ND Dam Breach Screening 0.18.1,
 DamSafety Setup 1.0.18. 2.22.0 is main (#241) and 2.22.1 is #244, so this is 2.22.2.)
 
 WHY
