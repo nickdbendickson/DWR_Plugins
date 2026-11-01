@@ -81,6 +81,24 @@ export const DUGOUT_FIELDS = [
   ["maxStorageAcFt", "max_storag"],
 ];
 export const DUGOUT_COLS = DUGOUT_FIELDS.map(([c]) => c);
+/**
+ * DWR-only dams (not a main dam in the NID bundle, e.g. structure 4031 / ND30554): location and numeric fields only,
+ * for the picker. Key "DWR-<structure_>". Their DWR card row (same key) is in `rows`, so Local / blank datums carry
+ * no elevations (tie them to the DEM on the Record step). Only Intact records with a height and a location; by default
+ * only those DWR lists with an NID ID that the NID main-dam bundle lacks (`--dwr-only all` adds the ~2,700 with no
+ * NID ID, about +110 KB gzipped).
+ */
+export const DWR_ONLY_FIELDS = [
+  ["key", "structure_"],
+  ["nidId", "national_i"],
+  ["county", "county"],
+  ["lat", "latitude"],
+  ["lon", "longitude"],
+  ["yearCompleted", "year_built"],
+  ["drainageMi2", "tot_draina"],
+];
+export const DWR_ONLY_COLS = DWR_ONLY_FIELDS.map(([c]) => c);
+export const dwrOnlyKey = (structure) => `DWR-${Number(structure)}`;
 /** Never read into the output (spec §9 + Nick's rule: no owner names or other personal fields). */
 export const EXCLUDED = {
   dams: ["primary_ow", "other_resp", "owner_type", "private_da", "remarks", "water_perm", "dam_name", "other_rese", "former_nam"],
@@ -238,20 +256,52 @@ export function buildDwr({ damsCsv, dugoutsCsv }, nid, opts = {}) {
   out.sort((a, b) => a.nid.localeCompare(b.nid));
 
   const mainIds = new Set(nid.map((d) => d.nid));
+  const joined = new Set(out.map((r) => r.dwrId));
+  const only = [];
+  const onlyByNid = new Map();
+  for (const r of dams.rows) {
+    const sid = Number(r.structure_);
+    const id = (r.national_i ?? "").trim();
+    if (!sid || joined.has(sid) || mainIds.has(id)) continue;
+    if ((opts.dwrOnly ?? "nid") === "nid" && !id) continue; // default: only records DWR ties to an NID ID
+    if ((r.status ?? "").trim() !== "Intact" || numv(r.max_dam_he) == null) continue;
+    const lat = numv(r.latitude);
+    const lon = numv(r.longitude);
+    if (lat == null || lon == null || lat < 45.9 || lat > 49.1 || lon < -104.2 || lon > -96.5) continue;
+    const key = dwrOnlyKey(sid);
+    const card = damRow({ nid: key, county: null }, r);
+    datums[`dwrOnly:${card.datum ?? "blank"}`] = (datums[`dwrOnly:${card.datum ?? "blank"}`] ?? 0) + 1;
+    out.push(card);
+    const y = Number(r.year_built);
+    only.push({
+      key,
+      nidId: id || null,
+      county: (r.county ?? "").trim() || null,
+      lat: Math.round(lat * 1e5) / 1e5,
+      lon: Math.round(lon * 1e5) / 1e5,
+      yearCompleted: y >= 1800 && y <= 2100 ? y : null,
+      drainageMi2: numv(r.tot_draina),
+    });
+    if (id) onlyByNid.set(id, key);
+  }
+  out.sort((a, b) => a.nid.localeCompare(b.nid));
+  only.sort((a, b) => a.key.localeCompare(b.key, "en", { numeric: true }));
+
   const dugByNid = new Map();
   let dugWithNid = 0;
   for (const r of dug.rows) {
     const id = (r.national_i ?? "").trim();
     if (!id) continue;
     dugWithNid++;
-    if (!mainIds.has(id)) continue;
-    if (dugByNid.has(id)) {
-      log(`${id}: more than one dugout record; kept structure ${dugByNid.get(id).dwrId}`);
+    if (!mainIds.has(id) && !onlyByNid.has(id)) continue;
+    const dkey = mainIds.has(id) ? id : onlyByNid.get(id);
+    if (dugByNid.has(dkey)) {
+      log(`${dkey}: more than one dugout record; kept structure ${dugByNid.get(dkey).dwrId}`);
       continue;
     }
     const rec = {};
-    for (const [col, f] of DUGOUT_FIELDS) rec[col] = col === "nid" ? id : col === "dwrId" ? Number(r[f]) || null : numv(r[f]);
-    dugByNid.set(id, rec);
+    for (const [col, f] of DUGOUT_FIELDS) rec[col] = col === "nid" ? dkey : col === "dwrId" ? Number(r[f]) || null : numv(r[f]);
+    dugByNid.set(dkey, rec);
   }
   const dugouts = [...dugByNid.values()].sort((a, b) => a.nid.localeCompare(b.nid));
 
@@ -273,7 +323,8 @@ export function buildDwr({ damsCsv, dugoutsCsv }, nid, opts = {}) {
       conversion: CONVERSION,
       ...(opts.gridSha256 ? { gridSha256: opts.gridSha256 } : {}),
       records: dams.rows.length,
-      matched: out.length,
+      matched: out.length - only.length,
+      dwrOnly: only.length,
       skipped,
       datums: Object.fromEntries(Object.entries(datums).sort(([a], [b]) => a.localeCompare(b))),
       navd88Offers: offers,
@@ -286,6 +337,7 @@ export function buildDwr({ damsCsv, dugoutsCsv }, nid, opts = {}) {
     cols: COLS,
     rows: out.map((r) => COLS.map((c) => r[c])),
     dugouts: { cols: DUGOUT_COLS, rows: dugouts.map((r) => DUGOUT_COLS.map((c) => r[c])) },
+    dwrOnly: { cols: DWR_ONLY_COLS, rows: only.map((r) => DWR_ONLY_COLS.map((c) => r[c])) },
   };
 }
 
@@ -324,13 +376,14 @@ export function main(argv) {
     rawSha256: readSums(join(from, "raw", "SHA256SUMS.txt")),
     gridSha256: readSums(join(from, "grids", "SHA256SUMS.txt")),
     log: (m) => console.log(`[nd-dams-dwr] ${m}`),
+    dwrOnly: arg("--dwr-only") ?? "nid",
   });
   const text = JSON.stringify(bundle);
   mkdirSync(dirname(outFile), { recursive: true });
   writeFileSync(outFile, text);
   const s = bundle.source;
   console.log(
-    `[nd-dams-dwr] ${s.records} DWR dam records, ${s.matched} joined to ${nid.length} NID main dams; datums ${JSON.stringify(s.datums)}; NAVD 88 offers ${s.navd88Offers}; held ${s.held.join(" ") || "none"}; dugouts ${s.dugouts.matched} of ${s.dugouts.records}`,
+    `[nd-dams-dwr] ${s.records} DWR dam records, ${s.matched} joined to ${nid.length} NID main dams; ${s.dwrOnly} DWR-only dams; datums ${JSON.stringify(s.datums)}; NAVD 88 offers ${s.navd88Offers}; held ${s.held.join(" ") || "none"}; dugouts ${s.dugouts.matched} of ${s.dugouts.records}`,
   );
   console.log(`[nd-dams-dwr] wrote ${outFile} (${text.length} bytes)`);
   return bundle;

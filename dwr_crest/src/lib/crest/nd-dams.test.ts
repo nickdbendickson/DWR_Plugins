@@ -48,20 +48,21 @@ const filled = (nid: string, current: DamRecord = blankDam()): DamRecord => ({
 
 describe("ND dam bundles", () => {
   it("load offline: 948 NID main dams, 839 DWR joins, sources and dates recorded", () => {
-    assert.equal(data.dams.length, 948);
-    assert.equal(data.dwr.size, 839);
+    assert.equal(data.dams.filter((d) => d.source !== "DWR").length, 948);
+    assert.equal([...data.dwr.keys()].filter((k) => !k.startsWith("DWR-")).length, 839);
+    assert.equal(data.dams.filter((d) => d.source === "DWR").length, 1341);
     assert.equal(data.nidSource.fetchedUtc, "2026-10-29T21:56:00Z");
     assert.equal(data.dwrSource?.pulledUtc, "2026-10-30T14:31:02Z");
-    assert.equal(data.dugouts.size, 108);
+    assert.equal([...data.dugouts.keys()].filter((k) => !k.startsWith("DWR-")).length, 108);
     assert.match(data.dwrSource!.disclaimer, /provisional/i);
   });
 
-  it("size budget: NID <= 250 KB raw / 70 KB gzipped; NID + DWR <= 330 KB", () => {
+  it("size budget: NID <= 250 KB raw / 70 KB gzipped; NID + DWR (with DWR-only dams) <= 600 KB", () => {
     const nid = readFileSync(new URL("./data/nd_dams.json", import.meta.url));
     const dwr = readFileSync(new URL("./data/nd_dams_dwr.json", import.meta.url));
     assert.ok(nid.length <= 250_000, `${nid.length}`);
     assert.ok(gzipSync(nid, { level: 9 }).length <= 70_000);
-    assert.ok(nid.length + dwr.length <= 330_000);
+    assert.ok(nid.length + dwr.length <= 600_000);
   });
 
   it("the picker modules never fetch: data comes by dynamic import only", () => {
@@ -80,7 +81,8 @@ describe("search and labels", () => {
       assert.ok(searchDams(data.dams, q).some((d) => d.nid === "ND00199"), q);
     assert.equal(fold("Lac Qui Parlé — Dam"), "lac qui parle dam");
     assert.ok(!searchDams(data.dams, "absaraka", "Barnes").length);
-    assert.equal(searchDams(data.dams, "").length, 948);
+    assert.equal(searchDams(data.dams, "").length, 948 + 1341);
+    assert.ok(searchDams(data.dams, "4031").some((d) => d.nid === "DWR-4031"));
   });
 
   it("option label: name · NID ID · NID hazard · H ft · V ac-ft", () => {
@@ -104,7 +106,7 @@ describe("search and labels", () => {
 
   it("counties with counts; Clay is flagged as not an ND county", () => {
     const opts = countyOptions(data.dams);
-    assert.equal(opts.reduce((s, o) => s + o.count, 0), 948);
+    assert.equal(opts.reduce((s, o) => s + o.count, 0), 948 + 1341);
     assert.equal(opts.find((o) => o.county === "Clay")?.label, "Clay (1) (not an ND county, see note)");
     assert.match(opts.find((o) => o.county === "Cass")!.label, /^Cass \(\d+\)$/);
   });
@@ -267,7 +269,7 @@ describe("DWR card", () => {
   });
 
   it("91 NAVD 88 offers; Local or blank DWR datum never offered; NAVD 88 published needs no shift", () => {
-    assert.equal([...data.dwr.values()].filter((x) => dwrElevationOffer(x).ok).length, 91);
+    assert.equal([...data.dwr.values()].filter((x) => !x.nid.startsWith("DWR-") && dwrElevationOffer(x).ok).length, 91);
     const local = [...data.dwr.values()].find((x) => x.datum === "Local" && x.topElevFt != null)!;
     const o = dwrElevationOffer(local);
     assert.equal(o.ok, false);
@@ -324,7 +326,7 @@ describe("DWR card", () => {
 
 describe("DWR dugouts (reference only)", () => {
   it("108 dugout records keyed by NID ID, all main dams, numeric fields only", () => {
-    assert.equal(data.dugouts.size, 108);
+    assert.equal([...data.dugouts.keys()].filter((k) => !k.startsWith("DWR-")).length, 108);
     const ids = new Set(data.dams.map((d) => d.nid));
     for (const [k, g] of data.dugouts) {
       assert.ok(ids.has(k), k);
