@@ -615,6 +615,68 @@ export function demElevationsPatch(dam: DamRecord, crestFt: number, streambedFt:
   };
 }
 
+export type DemTieOffer = {
+  /** Patch to apply, or null when nothing should be written (no DEM crest, or a mismatch to review). */
+  patch: Partial<DamRecord> | null;
+  /** "local": 0-300 ft values shifted by the DEM crest offset; "as-is": values already look like NAVD 88. */
+  mode: "local" | "as-is" | null;
+  offsetFt: number | null;
+  /** Set when the record crest and the DEM crest differ by more than 100 ft (after any local shift). */
+  review: string | null;
+  note: string;
+};
+
+/** Datum is blank or Local: the record elevations need a NAVD 88 tie before they mean anything absolute. */
+export function needsDemTie(dam: DamRecord): boolean {
+  return dam.statedDatum === "" || dam.statedDatum === "Local";
+}
+
+/**
+ * Record-step DEM tie for a blank or local DWR datum, the same rule as the Runner:
+ * a crest of 0-300 ft is a local value and every elevation (crest, streambed, spillway, normal pool) is moved to
+ * NAVD 88 by the offset DEM mid-crest minus record crest. A larger crest is taken as already NAVD 88-like; if it
+ * is more than 100 ft from the DEM crest the tie is not offered and the record is flagged for review.
+ */
+export function demTieOffer(dam: DamRecord, demName = "DEM mid-crest"): DemTieOffer {
+  const dem = dam.demCrestFt;
+  const crest = dam.crestFt;
+  if (!needsDemTie(dam)) return { patch: null, mode: null, offsetFt: null, review: null, note: "Datum is stated; no DEM tie needed." };
+  if (!Number.isFinite(dem) || !Number.isFinite(crest))
+    return { patch: null, mode: null, offsetFt: null, review: null, note: "Needs a record crest and a DEM crest to tie." };
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  const local = crest >= 0 && crest <= 300;
+  const offsetFt = local ? round2(dem - crest) : 0;
+  const tiedCrest = round2(crest + offsetFt);
+  const mismatch = Math.abs(tiedCrest - dem);
+  if (mismatch > 100) {
+    return {
+      patch: null,
+      mode: "as-is",
+      offsetFt: null,
+      review: `Record crest ${crest} ft is ${round2(mismatch)} ft from the DEM crest ${dem} ft (over 100 ft): review the datum before tying.`,
+      note: "Not tied.",
+    };
+  }
+  const shift = (v: number) => (Number.isFinite(v) ? round2(v + offsetFt) : v);
+  const base = demElevationsPatch(dam, tiedCrest, shift(dam.streambedFt), demName);
+  const asOf = new Date().toISOString().slice(0, 10);
+  const why = local
+    ? `local ${dam.statedDatum === "" ? "(blank datum) " : ""}value + ${offsetFt} ft (DEM mid-crest ${dem} − record crest ${crest})`
+    : `blank/local datum but value already NAVD 88-like (within ${round2(mismatch)} ft of the DEM crest)`;
+  const prov = (field: string, value: number): Provenance => ({ src: "DEM", field, value, asOf, note: `DEM tie: ${why}` });
+  const patch: Partial<DamRecord> = {
+    ...base,
+    spillwayFt: shift(dam.spillwayFt),
+    normalPoolFt: shift(dam.normalPoolFt),
+    provenance: {
+      ...base.provenance,
+      crestFt: prov("crest (DEM-tied)", tiedCrest),
+      streambedFt: prov("streambed (DEM-tied)", shift(dam.streambedFt)),
+    },
+  };
+  return { patch, mode: local ? "local" : "as-is", offsetFt, review: null, note: `Tie: ${why}.` };
+}
+
 /** "Use" for DWR max_pool_a (never auto-filled). */
 export function dwrAreaPatch(dam: DamRecord, dwr: DwrDam, asOf: string): Partial<DamRecord> {
   if (dwr.maxPoolAreaAc == null) return {};
