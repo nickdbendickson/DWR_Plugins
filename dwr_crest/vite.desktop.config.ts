@@ -10,6 +10,10 @@
  * Build with `npm run build:desktop`. The bundle is committed so `python run.py` needs no Node. build-info.json lists
  * every repo source file that went into it with its SHA-256; the desktop tests recompute those hashes and fail when the
  * committed bundle is older than the sources (rebuild and commit it).
+ *
+ * Build after `npm ci`, so node_modules matches package-lock.json. The build is reproducible from the lockfile (two
+ * builds give identical files); a bundle built after a plain `npm install` picked up React 19.3.1 instead of the
+ * locked 19.3.0, and a later lockfile build then rewrote Crest.html and the assets with small diffs.
  */
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -109,9 +113,11 @@ const desktop = defineConfig({
       input: { index: r("./src/desktop/index.html"), engine: r("./src/desktop/engine-entry.ts") },
       preserveEntrySignatures: "exports-only",
       output: {
-        // Stable names keep the committed bundle's diffs readable.
+        // Stable names keep the committed bundle's diffs readable. Rollup names a shared chunk after one of its
+        // modules, and which one moves with small source edits (samples.js became export.js), so the one chunk
+        // index and engine share always keeps the name it was first committed under.
         entryFileNames: "assets/[name].js",
-        chunkFileNames: "assets/[name].js",
+        chunkFileNames: (chunk) => (chunk.isDynamicEntry ? "assets/[name].js" : "assets/samples.js"),
         assetFileNames: "assets/[name][extname]",
       },
     },

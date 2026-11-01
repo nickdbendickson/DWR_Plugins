@@ -6,6 +6,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -14,7 +16,7 @@ sys.path.insert(0, str(HERE.parent))
 
 from crest.handoff import HandoffError, write_dam_folder, write_named_files  # noqa: E402
 from crest.layers import download_aoi, use_offline_pack  # noqa: E402
-from crest.qgis_run import run_folder, run_model, run_screening  # noqa: E402
+from crest.qgis_run import chain_names, chain_results, run_folder, run_model, run_screening  # noqa: E402
 
 DAM = {
     "nid": "ND00199",
@@ -83,7 +85,27 @@ if "preflight" in joined:
     print("FAILS:\t0")
     sys.exit(0)
 if "runchain" in joined or "rundam" in joined:
-    print("started")
+    print("started", flush=True)
+    if mode == "slow":
+        import time
+        time.sleep(60)
+    if mode == "outputs" and "runchain" in joined:
+        import csv, sqlite3
+        work = Path(next(a.split("=", 1)[1] for a in args if a.startswith("--WORK=")))
+        (work / "1_dams.gpkg").unlink(missing_ok=True)
+        con = sqlite3.connect(work / "1_dams.gpkg")
+        con.execute("CREATE TABLE gpkg_contents (table_name TEXT, data_type TEXT)")
+        con.execute("INSERT INTO gpkg_contents VALUES ('dams', 'features')")
+        con.execute("CREATE TABLE dams (fid INTEGER PRIMARY KEY, dam_id TEXT, nid_id TEXT)")
+        con.execute("INSERT INTO dams (dam_id, nid_id) VALUES ('DWR-2801', 'ND00199'), ('DWR-1', 'ND00001')")
+        con.commit()
+        con.close()
+        (work / "10_reports").mkdir(exist_ok=True)
+        with (work / "10_reports" / "summary.csv").open("w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["dam_id", "name", "hz_class", "haz_existing", "hz_vs_existing", "hz_conf", "review"])
+            w.writerow(["DWR-2801", "Test dam", "Significant", "Significant", "same", "medium", ""])
+            w.writerow(["DWR-1", "Other", "High", "Low", "higher", "low", "check"])
     sys.exit(0)
 print("unexpected", joined)
 sys.exit(9)
@@ -174,7 +196,9 @@ class GateTests(unittest.TestCase):
             "CREST_PYTHON": os.environ.get("CREST_PYTHON"),
             "CREST_DEM": os.environ.get("CREST_DEM"),
             "NDSUITE_DATA": os.environ.get("NDSUITE_DATA"),
+            "CREST_SCREENING_TIMEOUT_S": os.environ.get("CREST_SCREENING_TIMEOUT_S"),
         }
+        os.environ.pop("CREST_SCREENING_TIMEOUT_S", None)
         os.environ["QGIS_PROCESS"] = str(self.qgis)
         os.environ["CALLS"] = str(self.calls)
         os.environ.pop("CREST_NDBREACH_CLI", None)
@@ -224,6 +248,19 @@ class GateTests(unittest.TestCase):
         self.assertIn("nddam:runchain", text)
         self.assertIn("--PREFLIGHT=true", text)
         self.assertIn("--FAIL_ON_ERROR=true", text)
+
+    def test_chain_settings_name_the_dam(self):
+        # DamSafety_Screening's nddam:runchain has no DAM_ID parameter: it screens the dams in
+        # settings["only_ids"], so the handoff writes the dam there even with no pack or DEM.
+        os.environ["QGIS_MODE"] = "pass"
+        result = run_screening(DAM, ANALYSIS, str(self.root / "work"), self.log())
+        self.assertTrue(result["ok"])
+        path = self.root / "work" / "crest_settings.json"
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(settings["only_ids"], "ND00199")
+        text = self.calls_text()
+        self.assertIn(f"--SETTINGS={path}", text)
+        self.assertIn("--DAM_ID=ND00199", text)
         self.assertIn("--DAM_ID=ND00199", text)
 
     def test_model_without_dem_stops(self):
@@ -316,6 +353,7 @@ class GateTests(unittest.TestCase):
         self.assertEqual(settings["suite_folder"], str(pack.resolve()))
         self.assertEqual(settings["terrain_source"], 1)
         self.assertTrue(settings["local_dem"].endswith("/dem"))
+        self.assertEqual(settings["only_ids"], "ND00199")
         self.assertIn("--SETTINGS=", self.calls_text())
 
     def test_download_uses_the_supplied_fetch(self):
@@ -397,6 +435,55 @@ class GateTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 404)
         finally:
             server.shutdown()
+
+
+    def test_timeout_stops_the_chain(self):
+        os.environ["QGIS_MODE"] = "slow"
+        started = time.monotonic()
+        result = run_screening(DAM, ANALYSIS, str(self.root / "work"), self.log(), timeout=1.5)
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["timedOut"])
+        self.assertTrue(any("Stopped" in line for line in self.lines))
+
+    def test_timeout_from_environment(self):
+        os.environ["QGIS_MODE"] = "slow"
+        os.environ["CREST_SCREENING_TIMEOUT_S"] = "1"
+        started = time.monotonic()
+        result = run_screening(DAM, ANALYSIS, str(self.root / "work"), self.log())
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertTrue(result["timedOut"])
+
+    def test_cancel_stops_the_chain(self):
+        os.environ["QGIS_MODE"] = "slow"
+        cancel = threading.Event()
+        threading.Timer(1.5, cancel.set).start()
+        started = time.monotonic()
+        result = run_screening(DAM, ANALYSIS, str(self.root / "work"), self.log(), cancel=cancel)
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["cancelled"])
+
+    def test_chain_name_and_result_are_read_back(self):
+        os.environ["QGIS_MODE"] = "outputs"
+        work = self.root / "work"
+        result = run_screening(DAM, ANALYSIS, str(work), self.log())
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["chainIds"], ["DWR-2801"])
+        self.assertEqual([r["dam_id"] for r in result["chainResult"]], ["DWR-2801"])
+        text = "\n".join(self.lines)
+        self.assertIn("name this dam DWR-2801 (Crest: ND00199)", text)
+        self.assertIn("Screening result for DWR-2801: Significant", text)
+        self.assertIn("not an official class", text)
+        # A second run in the same work folder sends both names, so later tools keep the dam.
+        run_screening(DAM, ANALYSIS, str(work), self.log())
+        self.assertIn("--DAM_ID=ND00199,DWR-2801", self.calls_text())
+        settings = json.loads((work / "crest_settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(settings["only_ids"], "ND00199,DWR-2801")
+
+    def test_read_back_helpers_without_outputs(self):
+        self.assertEqual(chain_names(self.root, "ND00199"), [])
+        self.assertEqual(chain_results(self.root, ["DWR-2801"]), [])
 
 
 if __name__ == "__main__":
