@@ -107,7 +107,8 @@ export type DamRecord = {
   nd911?: Nd911Cache;
   /** Terrain outline built on request from 3DEP terrain (outline.ts), with the input fingerprint it was built for. */
   outline?: OutlineCache;
-  /** ACER TM 11 judgment zone counts as probable loss of life (High), as damsuite classify_nd defaults. Default true. */
+  /** Old option: ACER TM 11 judgment zone counts as probable loss of life (High, 5.3). Default false: a judgment-zone
+   *  home is Medium by rule (Nick, 2026-10-30), as damsuite classify_nd now defaults. */
   judgmentAsProbable?: boolean;
   /** Set when the record was filled from the NID (ND dam picker). Optional, so crest-desk-v2 state still loads. */
   nidId?: string;
