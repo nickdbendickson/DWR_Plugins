@@ -273,7 +273,13 @@ def nd_hazard_shipped_charts_are_signed_off():
 @test
 def nd_hazard_sampling_matches_the_runner_tool():
     """The shared samplers (used by the screening plugin) and the runner tool's Sampler give
-    the same depth and velocity for the same raster and footprint."""
+    the same depth for the same raster and footprint. Polygon velocity follows two documented
+    rules (Nick to decide whether they should be one): the shared sample_footprint pairs the
+    velocity with the deepest cell (db9c665 'Screening pairs depth and velocity from the same
+    cell'; 3af4328 copied it to the Runner's core/nd_hazard.py), and the runner tool's Sampler
+    classifies with the maximum velocity over the wet cells (SAMPLING text: 'conservative (the
+    velocity at the deepest cell is kept as well)'), keeping the same-cell value in
+    vel_at_max_fts. So: vel_at_max_fts == the shared velocity, and vel_fts >= it."""
     import numpy as np
     from nd_breach_runner.tests import fake_qgis
     fake_qgis.install()
@@ -295,7 +301,10 @@ def nd_hazard_sampling_matches_the_runner_tool():
         a = s.polygon([np.array(ring)], (cx + w / 2, cy + h / 2))
         dd, vv, _how = nh.sample_footprint(d, v, 100.0, 700.0, 10.0, ring, 0.1)
         assert abs(a["depth_ft"] - dd) < 1e-9, (a, dd)
-        assert (a["vel_fts"] is None and vv is None) or abs(a["vel_fts"] - vv) < 1e-9, (a, vv)
+        vk = a["vel_at_max_fts"]
+        assert (vk is None and vv is None) or abs(vk - vv) < 1e-9, (a, vv)
+        if vv is not None:
+            assert a["vel_fts"] is not None and a["vel_fts"] >= vv - 1e-9, (a, vv)
     line = [(105.0, 695.0), (390.0, 430.0), (480.0, 600.0)]
     a = s.lines([np.array(line)])
     assert abs(a["depth_ft"] - nh.sample_line_max(d, 100.0, 700.0, 10.0, line)) < 1e-9
