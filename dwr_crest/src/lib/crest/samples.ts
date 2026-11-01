@@ -213,8 +213,9 @@ export function blankDam(): DamRecord {
     lengthFt: 800,
     crestFt: 100,
     streambedFt: 82,
-    spillwayFt: 96,
-    normalPoolFt: 92,
+    // Blank until the owner supplies them; never invent outlet levels.
+    spillwayFt: Number.NaN,
+    normalPoolFt: Number.NaN,
     storageAcFt: 200,
     drainageMi2: 4,
     statedDatum: "Local",
