@@ -43,4 +43,9 @@ describe("crest-desktop bundle", () => {
     const js = readdirSync(join(web, "assets")).filter((f) => f.endsWith(".js"));
     assert.ok(js.some((f) => readFileSync(join(web, "assets", f), "utf8").includes("https://services1.arcgis.com/GOcSXpzwBHyk2nog/arcgis/rest/services/NDGISHUBSiteStructureAddressPoints/FeatureServer/0")));
   });
+
+  it("can reach the USGS 3DEP terrain service for the terrain outline: URL in the bundle", () => {
+    const js = readdirSync(join(web, "assets")).filter((f) => f.endsWith(".js"));
+    assert.ok(js.some((f) => readFileSync(join(web, "assets", f), "utf8").includes("https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer")));
+  });
 });
