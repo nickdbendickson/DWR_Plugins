@@ -76,6 +76,26 @@ export function exportDamJson(dam: DamRecord, analysis: Analysis): string {
           attribution: [dam.nidRef?.attribution, dam.nidRef?.dwrAttribution].filter(Boolean),
         }
       : {}),
+    // Only when an imported model run is the source of record (Results step), so dam.json is unchanged otherwise.
+    ...(dam.resultsOfRecord
+      ? {
+          source_of_record: {
+            source: dam.resultsOfRecord.source,
+            label: dam.resultsOfRecord.label,
+            files: dam.resultsOfRecord.files,
+            imported_at: dam.resultsOfRecord.importedAt,
+            crs: dam.resultsOfRecord.crs,
+            peak_depth_ft: dam.resultsOfRecord.stats.peakDepthFt,
+            wet_area_ac: dam.resultsOfRecord.stats.wetAc,
+            farthest_wet_km: dam.resultsOfRecord.stats.farthestKm,
+            max_velocity_fps: dam.resultsOfRecord.stats.maxVelocityFps,
+            arrival_max_hr: dam.resultsOfRecord.stats.arrivalMaxHr,
+            cell_m: dam.resultsOfRecord.stats.cellM,
+            warnings: dam.resultsOfRecord.warnings,
+            note: "The screen above ranks the receptors on this run's rasters. Breach and hydrograph are the desk's.",
+          },
+        }
+      : {}),
   };
   return JSON.stringify(obj, null, 2) + "\n";
 }

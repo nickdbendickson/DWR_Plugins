@@ -494,6 +494,28 @@ export type DwrElevationOffer =
 
 const fmtShift = (s: number) => `${s >= 0 ? "+" : "-"}${Math.abs(s).toFixed(3)} ft`;
 
+export type ShownElev = { text: string; note: string | null };
+
+/** Top of dam as the card shows it: the NAVD 88 crest, with a note when that number was converted. */
+export function shownCrest(dwr: DwrDam): ShownElev {
+  if (dwr.topNavdFt == null) return { text: dwr.topElevFt == null ? "—" : `${dwr.topElevFt} ft`, note: null };
+  return shownNavd(dwr, dwr.topNavdFt, dwr.topElevFt);
+}
+
+/** Auxiliary spillway crest, same rule as the top of dam. */
+export function shownSpillwayCrest(dwr: DwrDam): ShownElev {
+  if (dwr.auxSpillwayNavdFt == null)
+    return { text: dwr.auxSpillwayElevFt == null ? "—" : `${dwr.auxSpillwayElevFt} ft`, note: null };
+  return shownNavd(dwr, dwr.auxSpillwayNavdFt, dwr.auxSpillwayElevFt);
+}
+
+function shownNavd(dwr: DwrDam, navd: number, stated: number | null): ShownElev {
+  const text = `${navd} ft NAVD88`;
+  if (dwr.datum === "NGVD29" && stated != null && dwr.vshiftFt != null)
+    return { text, note: `converted from NGVD 29 ${stated} ft (${fmtShift(dwr.vshiftFt)}, VERTCON)` };
+  return { text, note: null };
+}
+
 /**
  * DWR elevations are offered only as NAVD 88, straight from the bundle: published NAVD 88, or NGVD 29 converted
  * before the build by per-point VERTCON. No shift is applied here (never a second conversion). Held values (elev_qc)
