@@ -1,6 +1,7 @@
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-react";
 import { analyze, crestNavdLabel, STEPS } from "@/lib/crest/engine";
+import { lookupPads, padPoints } from "@/lib/crest/nd911-pads";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
 import { floodStrip, type FloodStrip } from "@/lib/crest/floodstrip";
 import {
@@ -19,6 +20,8 @@ import {
   exportFloodKml,
   exportNd911Csv,
   fetchNd911,
+  nd911AutoPatch,
+  wantsNd911Lookup,
   ND911_ATTRIBUTION,
   ND911_DROPPED_FIELDS,
   nd911State,
@@ -730,6 +733,31 @@ function Nd911Panel({
   const update = useDesk((s) => s.update);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Picked ND dams: look the points up and add the ones inside the strip without a click (once).
+  const autoTried = useRef(false);
+  useEffect(() => {
+    if (!lookup || autoTried.current || !wantsNd911Lookup(dam, nd911)) return;
+    autoTried.current = true;
+    setBusy(true);
+    fetchNd911(lookup)
+      .then((c) => update({ nd911: c }))
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setBusy(false));
+  }, [dam, nd911, lookup, update]);
+  useEffect(() => {
+    const p = nd911AutoPatch(dam, nd911, result);
+    if (p) update(p);
+  }, [dam, nd911, result, update]);
+  // Pads for the 911 seeds: ground at the point minus the channel bed at its station, from 3DEP (once per seed).
+  const padTried = useRef(new Set<string>());
+  useEffect(() => {
+    const todo = padPoints(dam).filter((p) => !padTried.current.has(p.id));
+    if (todo.length === 0) return;
+    todo.forEach((p) => padTried.current.add(p.id));
+    lookupPads(dam, result)
+      .then((receptors) => receptors && update({ receptors }))
+      .catch((e) => setError((e as Error).message));
+  }, [dam, result, update]);
   if (nd911.state === "none") return null;
   const lookUp = async () => {
     if (!lookup) return;
