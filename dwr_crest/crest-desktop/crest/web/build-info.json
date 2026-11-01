@@ -30,7 +30,7 @@
     "src/lib/crest/outline.ts": "ae8e5c87f4b9ba50365f91be3c580b54567a7cb1ff22467e845786923e93335e",
     "src/lib/crest/pdf.ts": "42bfe103a660b9bd936a9b246986e2da29a40da01e4e8be84f0bbdc453897926",
     "src/lib/crest/plss.ts": "8149695ffa03458d003ba69e7fdf6cb66ebe51fc20c7a72dee3c3c7b3f37f50b",
-    "src/lib/crest/raster-engine.ts": "f19bd7c62ed5e2e0d6552d0b9556025d43c018dc8f7cb3f40de8d87bddb95dbe",
+    "src/lib/crest/raster-engine.ts": "341d2d53430f381d3ab921b7dcddfbfa1c8d223bba722b9e32ac8f478d3741b9",
     "src/lib/crest/raster-meta.ts": "97b616a0668a61853d65e489e4c365213f1d19c736f5f9cbbc143baec562480f",
     "src/lib/crest/raster.ts": "2a6ef2bfc7b37044f90e7d4a42f2f7c1814db71247269941f1765d1ddb02bad1",
     "src/lib/crest/raster.worker.ts": "2061292c40f7f280b089b3c467cd84b8f2e5d285bdcc1475e9b2b3a4076724b0",

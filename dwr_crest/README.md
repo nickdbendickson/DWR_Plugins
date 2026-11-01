@@ -15,6 +15,7 @@ Desk screening of small embankment dams: breach hydrograph, schematic valley flo
 | `npm run build:desktop` | Builds the desk into `crest-desktop/crest/web/` for the desktop app (committed; see below). |
 | `npm run build:crest-html` | Builds the same desk into the one-file `Crest.html` at the repo root (committed). |
 | `npm run test:desktop` | Headless smoke test of the desktop app (Python, no GUI). |
+| `npm run validate:crest -- --runner <dam folder or zip> --crest <flood.geojson> [--receptors <points.csv>]` | Scores a Crest flood layer (strip or terrain outline export) against a Breach Runner / LISFLOOD-FP run: recall, precision, CSI, area ratio, depth bias, and depth / velocity / arrival at receptors (`src/lib/crest/validation.ts`). Run by hand. |
 | `npm run data:nd-dams` | Rebuilds `src/lib/crest/data/nd_dams.json` from the NID (ND dam picker). Run only when asked. |
 | `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp>` | Rebuilds `src/lib/crest/data/nd_dams_dwr.json` from a folder of DWR Dams and Dugouts CSVs already converted to NAVD 88. Run only when asked. |
 
