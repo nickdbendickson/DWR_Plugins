@@ -45,7 +45,7 @@ import {
 } from "@/lib/crest/outline";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
-import { missingForNext } from "@/lib/crest/nd-dams";
+import { demTieOffer, missingForNext, needsDemTie } from "@/lib/crest/nd-dams";
 import { activeDam, useDesk } from "@/lib/crest/store";
 import type {
   BreachMethod,
@@ -59,6 +59,8 @@ import type {
 } from "@/lib/crest/types";
 import { HydroChart, ValleyMap } from "./charts";
 import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel } from "./NdDamPicker";
+import { ResultsStep } from "./ResultsStep";
+import { useAnalysisOfRecord, useResultsSync, useStripOfRecord } from "./results-flow";
 import { ViewExport } from "./ViewExport";
 
 // Leaflet touches `window` when it loads, so the map is a client-only chunk.
@@ -90,6 +92,7 @@ export function Desk() {
 
   const dam = activeDam({ dams, activeId, step, setStep, select, update, add, addDam, restore });
   const result = useMemo(() => analyze(dam), [dam]);
+  useResultsSync(dam, result);
 
   return (
     <div className="min-h-screen bg-paper text-ink">
@@ -180,6 +183,7 @@ export function Desk() {
           {step === "record" ? <RecordStep dam={dam} result={result} /> : null}
           {step === "breach" ? <BreachStep dam={dam} result={result} /> : null}
           {step === "flood" ? <FloodStep dam={dam} result={result} /> : null}
+          {step === "results" ? <ResultsStep dam={dam} result={result} /> : null}
           {step === "screen" ? <ScreenStep dam={dam} result={result} /> : null}
           {step === "report" ? <ReportStep dam={dam} result={result} /> : null}
 
@@ -240,7 +244,9 @@ function useOnline() {
  */
 function useFloodAreas(dam: DamRecord, result: ReturnType<typeof analyze>) {
   const online = useOnline();
-  const strip = useMemo(() => floodStrip(dam, result), [dam, result]);
+  // The strip of record: an imported run's raster strip when it is the source of record and loaded, else the desk strip.
+  const strip = useStripOfRecord(dam, result);
+  const basis = strip.basis;
   const outline = useMemo(() => outlineState(dam, result, online), [dam, result, online]);
   const ol = outline.state === "ready" ? outline.outline : null;
   const against = ol ? "terrain outline" : "flood strip";
@@ -248,7 +254,27 @@ function useFloodAreas(dam: DamRecord, result: ReturnType<typeof analyze>) {
   const lookup = useMemo(() => (strip.strip ? lookupArea(strip.strip, ol) : null), [strip.strip, ol]);
   const plss = useMemo<PlssState>(() => plssState(dam, area, online, against), [dam, area, online, against]);
   const nd911 = useMemo<Nd911State>(() => nd911State(dam, area, online, against), [dam, area, online, against]);
-  return { online, strip, outline, ol, area, against, lookup, plss, nd911 };
+  return { online, strip, outline, ol, area, against, lookup, plss, nd911, basis };
+}
+
+function DemTiePanel({ dam }: { dam: DamRecord }) {
+  const update = useDesk((s) => s.update);
+  if (!needsDemTie(dam)) return null;
+  const offer = demTieOffer(dam);
+  return (
+    <div className="mt-3 rounded-md border border-line bg-sand p-3 text-sm" data-testid="dem-tie">
+      <p>
+        Datum is {dam.statedDatum === "" ? "blank" : "local"}: tie the elevations to the DEM crest (NAVD 88). Crest 0–300 ft counts as local and
+        is shifted by the DEM mid-crest offset; a mismatch over 100 ft is flagged for review.
+      </p>
+      {offer.review ? <p className="mt-1 font-semibold text-red-700">{offer.review}</p> : <p className="mt-1 text-muted">{offer.note}</p>}
+      {offer.patch ? (
+        <button type="button" className="mt-2 rounded border border-line bg-card px-3 py-1" onClick={() => update(offer.patch!)}>
+          Tie to DEM crest{offer.offsetFt ? ` (${offer.offsetFt > 0 ? "+" : ""}${offer.offsetFt} ft)` : ""}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
@@ -262,6 +288,7 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         </div>
         <NidHazardLine dam={dam} />
         <p className="mt-2 text-sm text-muted">{result.datum.rule}</p>
+        <DemTiePanel dam={dam} />
         {dam.nidId ? (
           <div className="mt-3">
             <NidRecordPanel dam={dam} />
@@ -409,7 +436,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   const onGeometry = useCallback((geometry: DamGeometry) => update({ geometry }), [update]);
-  const { strip, outline, ol, against, lookup, plss, nd911 } = useFloodAreas(dam, result);
+  const { strip, outline, ol, against, lookup, plss, nd911, basis } = useFloodAreas(dam, result);
   const view = useRef<HTMLElement>(null);
   return (
     <section ref={view} className="space-y-4">
@@ -486,7 +513,7 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
         </div>
       </div>
       <OutlinePanel dam={dam} result={result} outline={outline} />
-      <PlssPanel lookup={lookup} plss={plss} against={against} />
+      <PlssPanel lookup={lookup} plss={plss} against={against} basis={basis} />
       <Nd911Panel dam={dam} result={result} lookup={lookup} nd911={nd911} />
       <div className="overflow-hidden rounded-md border border-line">
         <ValleyMap flood={result.flood} />
@@ -599,7 +626,7 @@ function OutlinePanel({ dam, result, outline }: { dam: DamRecord; result: Return
   );
 }
 
-function PlssPanel({ lookup, plss, against }: { lookup: FloodStrip | null; plss: PlssState; against: string }) {
+function PlssPanel({ lookup, plss, against, basis }: { lookup: FloodStrip | null; plss: PlssState; against: string; basis: string }) {
   const update = useDesk((s) => s.update);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -632,6 +659,7 @@ function PlssPanel({ lookup, plss, against }: { lookup: FloodStrip | null; plss:
           </button>
         ) : null}
       </div>
+      <p className="mt-1 text-xs text-muted" data-testid="plss-basis">Strip: {basis}.</p>
       {plss.message ? <p className="mt-1 text-sm text-muted" role="status">{plss.message}</p> : null}
       {error ? <p className="mt-1 text-sm text-amber" role="alert">{error}</p> : null}
       {t ? (
@@ -666,9 +694,11 @@ function PlssPanel({ lookup, plss, against }: { lookup: FloodStrip | null; plss:
             {t.rows.length} sections, {num(t.listedAc, 1)} of the {against}&apos;s {num(t.stripAc, 1)} ac. Slivers under {SLIVER_AC} ac
             not listed: {t.sliversIgnored}
             {t.uncoveredAc >= SLIVER_AC ? `; ${num(t.uncoveredAc, 1)} ac of the ${against} lies outside every fetched section` : ""}.
-            {against === "flood strip"
-              ? " Approximate: the strip is the schematic desk valley, not a mapped flood extent."
-              : ` ${OUTLINE_LABEL}.`}{" "}
+            {against !== "flood strip"
+              ? ` ${OUTLINE_LABEL}.`
+              : basis.startsWith("the schematic")
+                ? " Approximate: the strip is the schematic desk valley, not a mapped flood extent."
+                : ` Strip from ${basis}.`}{" "}
             Looked up{" "}
             {new Date(t.fetchedAt).toLocaleString()} and saved with this dam.
           </p>
@@ -869,19 +899,22 @@ function Nd911Panel({
   );
 }
 
-function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+function ScreenStep({ dam, result: deskResult }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
   const update = useDesk((s) => s.update);
+  const { result, ref } = useAnalysisOfRecord(dam, deskResult);
   return (
     <section className="space-y-4">
       <div className="rounded-md border border-line bg-card p-4">
-        <p className="text-xs tracking-widest text-muted uppercase">Desk screen</p>
+        <p className="text-xs tracking-widest text-muted uppercase" data-testid="screen-source">
+          {ref ? `Screen on the source of record: ${ref.label}` : "Desk screen"}
+        </p>
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <span className={`rounded-sm px-3 py-1 text-lg ${LEVEL_CLASS[result.screen.level]}`}>
             {result.screen.label}
           </span>
           <p className="max-w-lg text-sm text-muted">
             ND rules on the ACER TM 11 depth-velocity charts: a home in the high-danger zone reads High; in the judgment
-            zone it reads {result.screen.judgmentAsProbable ? "High (flagged)" : "Medium (flagged)"}; any wet home reads at
+            zone it reads {result.screen.judgmentAsProbable ? "High (flagged; old option)" : "Medium by rule"}; any wet home reads at
             least Medium (economic loss); roads by AADT and class. Barns and sheds do not count.
             {result.screen.acerLevel ? ` Worst TM 11 zone: ${result.screen.acerLevel}.` : ""}
           </p>
@@ -901,12 +934,12 @@ function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         <div className="mt-3 max-w-xs">
           <SelectField
             label="Judgment zone"
-            value={dam.judgmentAsProbable === false ? "medium" : "high"}
+            value={dam.judgmentAsProbable === true ? "high" : "medium"}
             options={[
-              ["high", "Count as probable loss of life (High, damsuite default)"],
-              ["medium", "Do not count (Medium)"],
+              ["medium", "Medium by rule (default)"],
+              ["high", "Count as probable loss of life (High, old option)"],
             ]}
-            onChange={(v) => update({ judgmentAsProbable: v !== "medium" })}
+            onChange={(v) => update({ judgmentAsProbable: v === "high" })}
           />
         </div>
         <ul className="mt-4 space-y-2 text-sm">
@@ -930,7 +963,8 @@ function ScreenStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
   );
 }
 
-function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+function ReportStep({ dam, result: deskResult }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+  const { result, ref, label } = useAnalysisOfRecord(dam, deskResult);
   const view = useRef<HTMLElement>(null);
   return (
     <section ref={view} className="space-y-4">
@@ -944,16 +978,29 @@ function ReportStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
             {dam.county ? `${dam.county} · ` : ""}
             {result.breach.label} · {result.flood.engineLabel}
           </p>
+          <p className="text-sm" data-testid="report-source">
+            Source of record: <span className="font-medium">{label}</span>
+            {ref
+              ? ` (imported ${ref.importedAt.slice(0, 10)}; ${ref.files.join(", ")}). Depths, wet area, velocities and the screen are from this run; breach and hydrograph are the desk's.`
+              : " (schematic valley). Import a model run on the Results step to use it instead."}
+          </p>
+          {ref?.warnings.length ? (
+            <ul className="mt-1 list-disc pl-5 text-xs text-amber">
+              {ref.warnings.map((w) => (
+                <li key={w}>{w}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
         <ViewExport target={view} kind="report" dam={dam} result={result} />
       </div>
-      <ExportPanel dam={dam} result={result} />
+      <ExportPanel dam={dam} result={result} desk={deskResult} />
       <PluginPanel dam={dam} result={result} />
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-line sm:grid-cols-3">
         <Stat k="Peak discharge (routed)" v={`${num(result.breach.peakCfs, 0)} cfs`} />
         <Stat k="Flooded area" v={`${num(result.flood.acres, 0)} ac`} />
         <Stat k="Max depth" v={`${num(result.flood.maxDepthFt, 1)} ft`} />
-        <Stat k="Max velocity (est.)" v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
+        <Stat k={ref ? "Max velocity" : "Max velocity (est.)"} v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
         <Stat k="Wet receptors" v={String(result.flood.receptors.filter((r) => r.flooded).length)} />
         <Stat k="Screen" v={result.screen.label} />
       </div>
@@ -985,6 +1032,7 @@ const handoff = {
   source: "pack",
   log: "The screening chain has not been started.",
   busy: false,
+  job: "",
 };
 let handoffTimer = 0;
 
@@ -1048,6 +1096,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         if (!response.ok) throw new Error("The Crest server did not accept the job.");
         const job = (await response.json()) as { id?: string };
         if (!job.id) throw new Error("The Crest server did not return a job.");
+        handoff.job = job.id;
         handoffTimer = window.setInterval(async () => {
           try {
             const found = await (await fetch(`/api/job?id=${job.id}`)).json();
@@ -1056,12 +1105,14 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
               window.clearInterval(handoffTimer);
               handoffTimer = 0;
               handoff.busy = false;
+              handoff.job = "";
               bump((n) => n + 1);
             }
           } catch {
             window.clearInterval(handoffTimer);
             handoffTimer = 0;
             handoff.busy = false;
+            handoff.job = "";
             handoff.log = "Lost the job log.";
             bump((n) => n + 1);
           }
@@ -1076,6 +1127,15 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
     [dam, result, files],
   );
 
+  const cancel = useCallback(async () => {
+    if (!handoff.job) return;
+    try {
+      await fetch(`/api/cancel?id=${handoff.job}`, { method: "POST" });
+    } catch {
+      /* the job log shows whether the run stopped */
+    }
+  }, []);
+
   const field = "mt-1 h-10 w-full rounded-sm border border-line bg-paper px-3 text-sm";
   const btn =
     "inline-flex h-10 items-center rounded-sm border border-water bg-water px-3 text-sm text-card disabled:cursor-not-allowed disabled:opacity-50";
@@ -1085,8 +1145,8 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       <p className="mt-1 text-sm text-muted">
         Writes the dam folder the plugins read, including the LISFLOOD package and the flood strip. Get layers downloads
         a DEM and streams for this area, or uses the ND offline pack both plugin sets already share. Screening runs tool
-        17 and starts nddam:runchain only if the preflight passes. A missing DEM or a preflight FAIL stops there. This is
-        not an official class.
+        17 and starts nddam:runchain only if the preflight passes. A missing DEM or a preflight FAIL stops there. Cancel
+        stops QGIS; CREST_SCREENING_TIMEOUT_S sets a time limit. This is not an official class.
       </p>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <label className="text-xs text-muted">
@@ -1157,6 +1217,15 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         <button type="button" className={btn} disabled={handoff.busy} onClick={() => void start("/api/model")}>
           Run the flood model
         </button>
+        {handoff.busy && handoff.job ? (
+          <button
+            type="button"
+            className="inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm"
+            onClick={() => void cancel()}
+          >
+            Cancel
+          </button>
+        ) : null}
       </div>
       <p className="mt-2 text-xs text-muted">
         The flood button runs one dam (ndbreach:rundam, or ndbreach_cli.py when both Point X and Point Y are filled in the
@@ -1254,7 +1323,7 @@ function StepNav({ step, setStep, blocked }: { step: StepId; setStep: (s: StepId
   );
 }
 
-function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
+function ExportPanel({ dam, result, desk }: { dam: DamRecord; result: ReturnType<typeof analyze>; desk: ReturnType<typeof analyze> }) {
   const update = useDesk((s) => s.update);
   const root = (dam.nid || dam.id).toLowerCase().replace(/[^a-z0-9]/g, "_");
   const lisflood = useMemo(() => {
@@ -1271,7 +1340,8 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       return { pkg: null, error: (e as Error).message };
     }
   }, [dam, result.breach.series]);
-  const { online, strip, outline, ol, plss, nd911 } = useFloodAreas(dam, result);
+  // The strip of record (desk strip, or an imported run's raster strip), and the outline when it is built.
+  const { online, strip, outline, ol, plss, nd911 } = useFloodAreas(dam, desk);
   // Lists against the outline when it is built (and in its exports); the strip's own exports keep the strip's lists.
   const plssTable = plss.state === "ready" ? plss.table : null;
   const nd911Table = nd911.state === "ready" ? nd911.table : null;
@@ -1369,7 +1439,8 @@ function ExportPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         </button>
       </div>
       <p className="mt-2 text-xs text-muted">
-        Flood strip (WGS 84): {strip.strip ? "approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands." : strip.reason}
+        Flood strip (WGS 84): {strip.strip ? (dam.resultsOfRecord && !strip.basis.startsWith("the desk") ? `depth bands from ${strip.basis}.` : `approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands${dam.resultsOfRecord ? ` (${strip.basis})` : ""}.`) : strip.reason}
+        {dam.resultsOfRecord ? ` dam.json names the source of record (${dam.resultsOfRecord.label}).` : ""}
       </p>
       <p className="mt-1 text-xs text-muted" data-testid="outline-export-note">
         Terrain outline (WGS 84):{" "}

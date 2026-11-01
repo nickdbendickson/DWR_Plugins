@@ -78,7 +78,8 @@ export type RankInput = {
   roadClass?: RoadClass;
   /** Structures: true = habitable. Barns and sheds default to false, houses to true. */
   habitable?: boolean;
-  /** Judgment zone counts as High (classify_nd judgment_as_probable, the 5.3(f) default). */
+  /** Old option: judgment zone counts as probable loss of life (High, 5.3). Default false (Nick, 2026-10-30): a
+   *  habitable structure in the judgment zone is Medium by rule, as damsuite classify_nd now defaults. */
   judgmentAsProbable?: boolean;
 };
 
@@ -129,14 +130,17 @@ export function rankReceptor(input: RankInput): Ranked {
   if (!wet) return { zone: z, class: null, reason: "dry", judgment: false };
   if (z === "high") return { zone: z, class: "High", reason: `ACER TM 11 high-danger zone (${chart} chart)`, judgment: false };
   if (z === "judgment") {
-    const asHigh = input.judgmentAsProbable ?? true;
+    // Nick (2026-10-30): any house in the judgment zone is automatically Medium (not probable loss of life,
+    // not an engineer's call). The old setting (judgment zone counted as probable loss of life, High) is an
+    // option, off by default.
+    const asHigh = input.judgmentAsProbable ?? false;
     return {
       zone: z,
       class: asHigh ? "High" : "Medium",
       reason: asHigh
-        ? `ACER TM 11 judgment zone (${chart} chart), counted as probable loss of life (5.3(f))`
-        : `ACER TM 11 judgment zone (${chart} chart), not counted as probable loss of life`,
-      judgment: true,
+        ? `ACER TM 11 judgment zone (${chart} chart), counted as probable loss of life (old option, 5.3)`
+        : `ACER TM 11 judgment zone (${chart} chart): Medium by rule (judgment-zone homes are Medium, not probable loss of life)`,
+      judgment: asHigh,
     };
   }
   return { zone: z, class: "Medium", reason: `inundated, ACER TM 11 low-danger zone (${chart} chart): economic loss (5.2.2)`, judgment: false };

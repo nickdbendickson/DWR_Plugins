@@ -26,3 +26,12 @@ describe("crest engine", () => {
     assert.ok(Math.abs((a.datum.streambedNavdFt ?? 0) - (100 + 1629 - 120.7)) < 1e-9);
   });
 });
+
+import { test } from "node:test";
+test("blankDam leaves spillway and normal pool blank", () => {
+  const d = blankDam();
+  assert.ok(Number.isNaN(d.spillwayFt));
+  assert.ok(Number.isNaN(d.normalPoolFt));
+  const a = analyze(d);
+  assert.ok(a);
+});

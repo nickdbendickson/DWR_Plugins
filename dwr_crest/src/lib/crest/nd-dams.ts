@@ -46,6 +46,10 @@ export type NdDam = {
   nidUpdated: string | null;
   lastInspection: string | null;
   eap: string | null;
+  /** "DWR" for a DWR-only dam (not in the NID bundle); the NID fields are then empty and nid is "DWR-<structure>". */
+  source?: "DWR";
+  /** DWR-only dams: the NID ID DWR lists, if any (not in the NID main-dam bundle). */
+  dwrNidId?: string | null;
 };
 
 export type DwrDatum = "NGVD29" | "NAVD88" | "Local" | "Other";
@@ -89,7 +93,43 @@ export type DwrDugout = {
 };
 
 type Table = { cols: string[]; rows: unknown[][] };
-type Bundle = Table & { source: Record<string, unknown>; dugouts?: Table };
+type Bundle = Table & { source: Record<string, unknown>; dugouts?: Table; dwrOnly?: Table };
+type DwrOnlyRow = { key: string; nidId: string | null; county: string | null; lat: number; lon: number; yearCompleted: number | null; drainageMi2: number | null };
+
+/** Picker entry for a DWR-only dam: location and numeric fields only (no names), storage from DWR max_pool_v. */
+export function dwrOnlyDam(r: DwrOnlyRow, dwr: DwrDam | undefined): NdDam {
+  const v = dwr?.maxPoolStorageAcFt ?? null;
+  return {
+    nid: r.key,
+    name: `${r.key} (DWR only${r.nidId ? `, ${r.nidId}` : ""})`,
+    otherNames: null,
+    county: r.county ?? "",
+    countyNote: null,
+    lat: r.lat,
+    lon: r.lon,
+    nidHeightFt: null,
+    damHeightFt: null,
+    structuralHeightFt: null,
+    hydraulicHeightFt: null,
+    nidStorageAcFt: v,
+    maxStorageAcFt: v,
+    normalStorageAcFt: dwr?.normalStorageAcFt ?? null,
+    surfaceAreaNormalAc: dwr?.normalAreaAc ?? null,
+    lengthFt: dwr?.lengthFt ?? null,
+    yearCompleted: r.yearCompleted,
+    drainageMi2: r.drainageMi2,
+    nidHazard: null,
+    river: null,
+    city: null,
+    purpose: null,
+    damType: null,
+    nidUpdated: null,
+    lastInspection: null,
+    eap: null,
+    source: "DWR",
+    dwrNidId: r.nidId,
+  };
+}
 export type NidSource = { url: string; fetchedUtc: string; rows: number; attribution: string };
 export type DwrSource = {
   formUrl: string;
@@ -114,13 +154,15 @@ export function decode<T>(b: Table): T[] {
 }
 
 export function makeNdData(nid: Bundle, dwr: Bundle | null): NdData {
-  const dams = decode<NdDam>(nid);
   const dw = dwr ? decode<DwrDam>(dwr) : [];
+  const dwrMap = new Map(dw.map((d) => [d.nid, d]));
+  const only = dwr?.dwrOnly ? decode<DwrOnlyRow>(dwr.dwrOnly).map((r) => dwrOnlyDam(r, dwrMap.get(r.key))) : [];
+  const dams = [...decode<NdDam>(nid), ...only];
   const dg = dwr?.dugouts ? decode<DwrDugout>(dwr.dugouts) : [];
   return {
     dams,
     byNid: new Map(dams.map((d) => [d.nid, d])),
-    dwr: new Map(dw.map((d) => [d.nid, d])),
+    dwr: dwrMap,
     dugouts: new Map(dg.map((d) => [d.nid, d])),
     nidSource: nid.source as unknown as NidSource,
     dwrSource: dwr ? (dwr.source as unknown as DwrSource) : null,
@@ -312,13 +354,12 @@ export function prefillPatch(
   const v = storageFor(d);
   const nan = Number.NaN;
   const prov: Record<string, Provenance> = {};
-  const nidP = (field: string, value: number | string | null, note?: string): Provenance => ({
-    src: "NID",
-    field,
-    value,
-    asOf,
-    ...(note ? { note } : {}),
-  });
+  const dwrOnly = d.source === "DWR";
+  const dwrAsOf = data.dwrSource?.pulledUtc.slice(0, 10) ?? asOf;
+  const nidP = (field: string, value: number | string | null, note?: string): Provenance =>
+    dwrOnly
+      ? { src: "DWR", field: `DWR record (${field.replace(/^NID /, "")})`, value, asOf: dwrAsOf, note: note ? `DWR-only dam; ${note}` : "DWR-only dam (not in the NID)" }
+      : { src: "NID", field, value, asOf, ...(note ? { note } : {}) };
   const name = d.name ?? d.otherNames ?? `Unnamed dam ${d.nid}`;
   prov.name = nidP(d.name ? "Dam Name" : d.otherNames ? "Other Names" : "Dam Name (blank)", name);
   prov.nid = nidP("NID ID", d.nid);
@@ -338,7 +379,7 @@ export function prefillPatch(
           }
         : nidP("NID Height (Ft)", h.value, "NID Height (whole ft)");
   if (d.lengthFt != null) prov.lengthFt = nidP("Dam Length (Ft)", d.lengthFt);
-  if (Number.isFinite(v.value)) prov.storageAcFt = nidP("NID Storage (Acre-Ft)", v.value, v.chip);
+  if (Number.isFinite(v.value)) prov.storageAcFt = nidP(dwrOnly ? "max_pool_v" : "NID Storage (Acre-Ft)", v.value, dwrOnly ? "DWR max-pool storage" : v.chip);
   if (d.drainageMi2 != null) prov.drainageMi2 = nidP("Drainage Area (Sq Miles)", d.drainageMi2);
 
   const patch: Partial<DamRecord> = {
@@ -619,6 +660,68 @@ export function demElevationsPatch(dam: DamRecord, crestFt: number, streambedFt:
       streambedFt: p("streambed (typed from DEM)", streambedFt),
     },
   };
+}
+
+export type DemTieOffer = {
+  /** Patch to apply, or null when nothing should be written (no DEM crest, or a mismatch to review). */
+  patch: Partial<DamRecord> | null;
+  /** "local": 0-300 ft values shifted by the DEM crest offset; "as-is": values already look like NAVD 88. */
+  mode: "local" | "as-is" | null;
+  offsetFt: number | null;
+  /** Set when the record crest and the DEM crest differ by more than 100 ft (after any local shift). */
+  review: string | null;
+  note: string;
+};
+
+/** Datum is blank or Local: the record elevations need a NAVD 88 tie before they mean anything absolute. */
+export function needsDemTie(dam: DamRecord): boolean {
+  return dam.statedDatum === "" || dam.statedDatum === "Local";
+}
+
+/**
+ * Record-step DEM tie for a blank or local DWR datum, the same rule as the Runner:
+ * a crest of 0-300 ft is a local value and every elevation (crest, streambed, spillway, normal pool) is moved to
+ * NAVD 88 by the offset DEM mid-crest minus record crest. A larger crest is taken as already NAVD 88-like; if it
+ * is more than 100 ft from the DEM crest the tie is not offered and the record is flagged for review.
+ */
+export function demTieOffer(dam: DamRecord, demName = "DEM mid-crest"): DemTieOffer {
+  const dem = dam.demCrestFt;
+  const crest = dam.crestFt;
+  if (!needsDemTie(dam)) return { patch: null, mode: null, offsetFt: null, review: null, note: "Datum is stated; no DEM tie needed." };
+  if (!Number.isFinite(dem) || !Number.isFinite(crest))
+    return { patch: null, mode: null, offsetFt: null, review: null, note: "Needs a record crest and a DEM crest to tie." };
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  const local = crest >= 0 && crest <= 300;
+  const offsetFt = local ? round2(dem - crest) : 0;
+  const tiedCrest = round2(crest + offsetFt);
+  const mismatch = Math.abs(tiedCrest - dem);
+  if (mismatch > 100) {
+    return {
+      patch: null,
+      mode: "as-is",
+      offsetFt: null,
+      review: `Record crest ${crest} ft is ${round2(mismatch)} ft from the DEM crest ${dem} ft (over 100 ft): review the datum before tying.`,
+      note: "Not tied.",
+    };
+  }
+  const shift = (v: number) => (Number.isFinite(v) ? round2(v + offsetFt) : v);
+  const base = demElevationsPatch(dam, tiedCrest, shift(dam.streambedFt), demName);
+  const asOf = new Date().toISOString().slice(0, 10);
+  const why = local
+    ? `local ${dam.statedDatum === "" ? "(blank datum) " : ""}value + ${offsetFt} ft (DEM mid-crest ${dem} − record crest ${crest})`
+    : `blank/local datum but value already NAVD 88-like (within ${round2(mismatch)} ft of the DEM crest)`;
+  const prov = (field: string, value: number): Provenance => ({ src: "DEM", field, value, asOf, note: `DEM tie: ${why}` });
+  const patch: Partial<DamRecord> = {
+    ...base,
+    spillwayFt: shift(dam.spillwayFt),
+    normalPoolFt: shift(dam.normalPoolFt),
+    provenance: {
+      ...base.provenance,
+      crestFt: prov("crest (DEM-tied)", tiedCrest),
+      streambedFt: prov("streambed (DEM-tied)", shift(dam.streambedFt)),
+    },
+  };
+  return { patch, mode: local ? "local" : "as-is", offsetFt, review: null, note: `Tie: ${why}.` };
 }
 
 /** "Use" for DWR max_pool_a (never auto-filled). */
