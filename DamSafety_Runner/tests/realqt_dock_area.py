@@ -75,5 +75,44 @@ for plug in ("DamSafety_Runner", "DamSafety_Setup", "DamSafety_Hazard", "DamSafe
                                                       line, ctx.strip()))
 check("no bare Qt.*DockWidgetArea outside a fallback", not bare, bare)
 
+# 3.13.6: the results dock on a synthetic dam folder (Hazard line, stale warning, relabel,
+# layer buttons, expandable warnings)
+import json as _json, shutil as _sh, tempfile as _tf  # noqa: E401,E402
+_d = _tf.mkdtemp(prefix="rdock_qt_")
+os.makedirs(os.path.join(_d, "_breach_model"))
+os.makedirs(os.path.join(_d, "outputs"))
+_json.dump({"summary": {"dam_id": "T-1", "receptors_flooded": "37 structures, 1.0 km of road"},
+            "warnings": ["w1", "w2"]},
+           open(os.path.join(_d, "_breach_model", "run_report.json"), "w"))
+open(os.path.join(_d, "outputs", "Hazard_Classification_Summary.txt"), "w").write(
+    "DamSafety Hazard v2.0.0 - Hazard Classification Summary\n"
+    "ND HAZARD CLASSIFICATION (screening): HIGH\n"
+    "  - MEDIUM - 45 habitable structure(s) inundated (economic loss) [5.2.2]\n"
+    "ACER TM 11 CLASSIFICATION: SIGNIFICANT\n")
+
+
+class _Iface:
+    def mainWindow(self):
+        return win
+
+
+rdock = rd.ResultsDock(_Iface())
+rdock.set_folder(_d)
+check("results dock: Runner receptors relabelled, Hazard count beside",
+      "37 Runner receptor structure(s)" in rdock.summary.text() and
+      "Hazard: 45 flooded habitable" in rdock.summary.text(), rdock.summary.text())
+check("results dock: Hazard line", "Hazard 2.0.0: ND High" in rdock.hazard.text(),
+      rdock.hazard.text())
+check("results dock: stale summary warned (installed Hazard is newer)",
+      rdock.stale.isVisibleTo(rdock) and "2.0.0" in rdock.stale.text(), rdock.stale.text())
+check("results dock: warnings collapsed then listed",
+      not rdock.warn_list.isVisibleTo(rdock) and rdock.warn_list.count() == 2 and
+      "2 thing(s) to check" in rdock.warn_toggle.text(), rdock.warn_toggle.text())
+rdock.warn_toggle.setChecked(True)
+check("results dock: warnings expand", rdock.warn_list.isVisibleTo(rdock))
+check("results dock: no layer files, buttons off",
+      not any(b.isEnabled() for b in rdock.layer_buttons.values()))
+_sh.rmtree(_d, ignore_errors=True)
+
 print("\n{} failure(s)".format(len(FAILS)) if FAILS else "\nall checks passed")
 sys.exit(1 if FAILS else 0)
