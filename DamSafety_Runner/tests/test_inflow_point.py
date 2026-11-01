@@ -179,7 +179,10 @@ def inflow_side_check_flags_a_point_behind_the_dam():
     path = [(-489751.8, 2792670.5 + 40.0 * k) for k in range(30)]
     chk = terrain.inflow_side_check((-489749.0, 2792707.7), (-489749.0, 2792667.7), path,
                                     (-0.2, 0.98))
-    assert not chk["ok"] and len(chk["problems"]) == 3, chk
+    # 3.13.5: with a downstream side, "behind the dam relative to the trace" is a note, not a
+    # third problem (DWR-6141); the run-back (a) and the upstream side (c) still flag it
+    assert not chk["ok"] and len(chk["problems"]) == 2, chk
+    assert any("behind the dam" in n for n in chk["notes"]), chk
     assert chk["trace_min_to_dam_m"] < 5.0
     ok = terrain.inflow_side_check((-489749.0, 2792707.7), (-489749.0, 2792767.7),
                                    [(-489751.8, 2792770.5 + 40.0 * k) for k in range(30)],
