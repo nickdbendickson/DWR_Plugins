@@ -259,13 +259,16 @@ class ResultsDock(QDockWidget):
         if hydro_path and nrows:
             bits.append("{} hydrograph rows".format(nrows))
         self.summary.setText(" · ".join(bits))
-        self._show_hazard(dam_dir, model_dir, hz)
+        self._show_hazard(dam_dir, model_dir, hz, report)
         self._fill_warnings(warns)
         self._report = report
         self._layers = RI.layer_paths(dam_dir, model_dir, report, hz)
+        self._counts = RI.flooded_counts(self._layers)
         for key, b in self.layer_buttons.items():
             b.setEnabled(key in self._layers)
-            b.setToolTip(self._layers.get(key, "Not in this dam folder"))
+            b.setText(RI.layer_label(key, self._counts))
+            b.setToolTip(RI.layer_tooltip(key, self._layers[key], self._counts)
+                         if key in self._layers else "Not in this dam folder")
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, value in enumerate(row):
@@ -273,23 +276,34 @@ class ResultsDock(QDockWidget):
         self.table.resizeColumnsToContents()
         self._model_dir = model_dir
 
-    def _show_hazard(self, dam_dir, model_dir, hz):
+    def _show_hazard(self, dam_dir, model_dir, hz, report=None):
         run_t = RI.run_output_mtime(dam_dir, model_dir)
         stale = RI.staleness(hz, _installed_hazard(), run_t)
         newer = bool(hz and run_t is not None and hz.get("mtime", run_t) < run_t - 1.0)
         rec = RI.record_status(dam_dir, {"rasters_newer_than_class": newer})
-        lines = [RI.class_line(hz, rec)]
+        cor = RI.class_of_record(dam_dir, model_dir, hz, report)
+        lines = [RI.class_line(hz, rec, cor)]
+        if cor.get("review") and cor["review"].get("note"):
+            lines.append("Note: {}".format(cor["review"]["note"]))
+        if cor.get("state") == "invalid":
+            lines.append("review.json ignored: {}".format("; ".join(cor["problems"][:3])))
         if rec.get("status"):
             lines.append("Status: {}{}".format(
                 rec["status"], " (by {} {})".format(rec.get("classified_by"),
                                                     rec.get("classified_version"))
                 if rec.get("classified_by") else ""))
-        if rec.get("next_action"):
+        inst = _installed_hazard()
+        if stale:
+            lines.append("Next: Re-classify with the installed Hazard{} - the Hazard summary is "
+                         "stale.".format(" " + inst if inst else ""))
+        elif rec.get("next_action"):
             lines.append("Next: {}".format(rec["next_action"][1]))
         if not rec.get("has_record"):
             lines.append("No dam.json in this folder.")
         self.hazard.setText("\n".join(lines))
-        self.stale.setText("\n".join("Stale: " + w for w in stale))
+        stale = stale + ["Class of record: " + w for w in cor.get("warnings") or []]
+        self.stale.setText("\n".join(w if w.startswith("Class of record") else "Stale: " + w
+                                     for w in stale))
         self.stale.setVisible(bool(stale))
 
     def _fill_warnings(self, warns):
@@ -311,7 +325,7 @@ class ResultsDock(QDockWidget):
             return None
         from qgis.core import QgsProject, QgsRasterLayer, QgsVectorLayer
         dam = os.path.basename(os.path.dirname(self._model_dir or "")) or ""
-        name = "{} {}".format(dam, RI.LAYER_LABELS[key]).strip()
+        name = "{} {}".format(dam, RI.layer_label(key, getattr(self, "_counts", None))).strip()
         if key in RI.FINAL_NAMES:
             lyr = QgsRasterLayer(path, name)
         elif key == "receptors":
@@ -322,6 +336,8 @@ class ResultsDock(QDockWidget):
         if not lyr.isValid():
             self.summary.setText("Could not open {}".format(path))
             return None
+        if key in RI.LAYER_FILTERS:
+            lyr.setSubsetString(RI.LAYER_FILTERS[key])
         QgsProject.instance().addMapLayer(lyr)
         return lyr
 

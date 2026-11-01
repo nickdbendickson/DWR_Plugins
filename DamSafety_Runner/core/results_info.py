@@ -8,9 +8,10 @@ Docs & QA dock test on main db9c665 against DWR-2801 r4 (Nick: "Yes", 2026-11-01
     class, TM 11 class, provisional flag, the 5.2.2 flooded habitable structure count.
   * record_status(dam_dir)   reads dam.json: the newest non-preview "classified" status (class,
     tool version) and dam_record.next_action.
-  * class_of_record(record)  HOOK. Where an engineer's class of record is stored is NOT decided
-    (Nick decides). CLASS_OF_RECORD_KEYS is empty on purpose, so this returns None and the dock
-    says "class of record: not recorded". Once Nick picks a place, read it here only.
+  * class_of_record(dam_dir, ...)  the engineer's class of record from review.json in the dam
+    folder (core/review_record.py; Nick, 2026-11-01), with warnings when it applies to another
+    run or overrides a printed class the current summary no longer shows. Missing or invalid
+    file: "class of record: not recorded". This module never writes review.json.
   * staleness(...)           warnings when the summary is older than the installed Hazard
     version or than the run outputs (run_report.json, the final rasters).
   * layer_paths(...)         depth / velocity / arrival rasters, receptors_flooded.csv and
@@ -28,14 +29,14 @@ SUMMARY_JSON = "Hazard_Classification_Summary.json"
 HAZARD_STRUCTURES = os.path.join("Classification", "Habitable_Structures.gpkg")
 LAYER_KEYS = ("depth", "velocity", "arrival", "receptors", "hazard_structures")
 LAYER_LABELS = {"depth": "Depth", "velocity": "Velocity", "arrival": "Arrival",
-                "receptors": "Flooded receptors", "hazard_structures": "Hazard structures"}
+                "receptors": "Flooded receptors", "hazard_structures": "Wet Hazard structures"}
+# Vector layers load filtered to the flooded / wet features (Docs & QA: the unfiltered layers
+# held all 673 receptors and all 3,809 Hazard structures). Subset strings: delimitedtext takes a
+# QGIS expression, OGR (GeoPackage) takes SQL; both read these the same.
+LAYER_FILTERS = {"receptors": '"depth_ft" > 0', "hazard_structures": '"Max_Depth_ft" > 0'}
 FINAL_NAMES = {"depth": "Depth (Max).tif", "velocity": "Velocity (Max).tif",
                "arrival": "Arrival Time.tif"}
 
-# HOOK - class of record. Nick decides where an engineer's class of record lives; until then
-# nothing is read. Add the key path here (e.g. ("fields", "<name>") or ("status", "<step>"))
-# when it is decided; class_of_record() then reads it. Do not guess one.
-CLASS_OF_RECORD_KEYS = ()
 
 
 def _load_json(path):
@@ -118,16 +119,13 @@ def hazard_summary(dam_dir, record_data=None):
     return info
 
 
-def class_of_record(record_data):
-    """HOOK: the engineer's class of record, or None. Storage not decided (Nick decides);
-    reads only the keys listed in CLASS_OF_RECORD_KEYS, which is empty."""
-    for keys in CLASS_OF_RECORD_KEYS:
-        node = record_data
-        for k in keys:
-            node = node.get(k) if isinstance(node, dict) else None
-        if node:
-            return str(node)
-    return None
+def class_of_record(dam_dir, model_dir=None, summary=None, report=None):
+    """review.json, read defensively: {"state", "review", "problems", "warnings"}."""
+    from . import review_record as RR
+    out = RR.read_review(dam_dir)
+    run_id = (report or {}).get("run_started") if isinstance(report, dict) else None
+    out["warnings"] = RR.mismatches(out.get("review"), dam_dir, model_dir, run_id, summary)
+    return out
 
 
 def record_status(dam_dir, facts=None):
@@ -137,7 +135,6 @@ def record_status(dam_dir, facts=None):
     if not out["has_record"]:
         return out
     data = _load_json(path)
-    out["class_of_record"] = class_of_record(data)
     try:
         from ..damsuite import dam_record as DR
         rec = DR.load(dam_dir)
@@ -185,8 +182,9 @@ def staleness(summary, installed_hazard=None, run_mtime=None):
     return warns
 
 
-def class_line(summary, record):
-    """One display line: printed ND / TM 11 class, provisional, and the class of record."""
+def class_line(summary, record, cor=None):
+    """One display line: printed ND / TM 11 class, provisional, and the class of record
+    (cor = class_of_record(...); None or invalid: 'not recorded')."""
     nd = (summary or {}).get("nd_class") or (record or {}).get("nd_class")
     tm = (summary or {}).get("tm11_class") or (record or {}).get("tm11_class")
     if not nd and not tm:
@@ -197,11 +195,16 @@ def class_line(summary, record):
     bits.append("TM 11 {}".format(tm or "?"))
     v = (summary or {}).get("hazard_version") or (record or {}).get("classified_version")
     text = "Hazard {}: {}".format(v or "?", ", ".join(bits))
-    cor = (record or {}).get("class_of_record")
-    if cor and nd and cor.strip().lower() != str(nd).strip().lower():
-        text += " · class of record {} (differs from printed {})".format(cor, nd)
-    elif cor:
-        text += " · class of record {}".format(cor)
+    rv = (cor or {}).get("review") if isinstance(cor, dict) else None
+    if rv:
+        c_nd, c_tm = rv["nd_class_of_record"], rv["tm11_class_of_record"]
+        differs = [x for x, p in ((c_nd, nd), (c_tm, tm))
+                   if p and str(x).lower() != str(p).strip().lower()]
+        text += " · class of record ND {}, TM 11 {} ({}, {}){}".format(
+            c_nd, c_tm, rv["decided_by"], rv["decided_on"],
+            " - differs from printed" if differs else "")
+    elif isinstance(cor, dict) and cor.get("state") == "invalid":
+        text += " · class of record: not recorded (review.json invalid)"
     else:
         text += " · class of record: not recorded"
     return text
@@ -233,6 +236,70 @@ def layer_paths(dam_dir, model_dir, report, summary=None):
     if os.path.isfile(p):
         out["hazard_structures"] = p
     return out
+
+
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def flooded_counts(layers):
+    """{key: (n_filtered, n_total, detail)} for the filtered vector layers; read-only, never
+    raises (a key is left out when its file cannot be read)."""
+    out = {}
+    p = (layers or {}).get("receptors")
+    if p:
+        try:
+            import csv
+            with open(p, encoding="utf-8", errors="replace", newline="") as f:
+                rows = list(csv.DictReader(f))
+            wet = [r for r in rows if (_num(r.get("depth_ft")) or 0) > 0]
+            kinds = {}
+            for r in wet:
+                kinds[r.get("kind") or "?"] = kinds.get(r.get("kind") or "?", 0) + 1
+            out["receptors"] = (len(wet), len(rows), kinds)
+        except Exception:
+            pass
+    p = (layers or {}).get("hazard_structures")
+    if p:
+        try:
+            import sqlite3
+            from urllib.parse import quote
+            con = sqlite3.connect("file:{}?mode=ro&immutable=1".format(
+                quote(os.path.abspath(p))), uri=True)
+            try:
+                tab = con.execute("SELECT table_name FROM gpkg_contents WHERE data_type="
+                                  "'features' LIMIT 1").fetchone()[0]
+                q = 'SELECT COUNT(*), SUM(CASE WHEN "Max_Depth_ft" > 0 THEN 1 ELSE 0 END), ' \
+                    'SUM(CASE WHEN "Max_Depth_ft" > 0 AND "Habitable" = \'Yes\' THEN 1 ' \
+                    'ELSE 0 END) FROM "{}"'.format(tab.replace('"', '""'))
+                n, wet, hab = con.execute(q).fetchone()
+            finally:
+                con.close()
+            out["hazard_structures"] = (int(wet or 0), int(n or 0), {"habitable": int(hab or 0)})
+        except Exception:
+            pass
+    return out
+
+
+def layer_label(key, counts=None):
+    """Button / layer name, with the filtered count when known: 'Flooded receptors (673)'."""
+    c = (counts or {}).get(key)
+    return "{} ({})".format(LAYER_LABELS[key], c[0]) if c else LAYER_LABELS[key]
+
+
+def layer_tooltip(key, path, counts=None):
+    c = (counts or {}).get(key)
+    if key == "receptors" and c:
+        kinds = ", ".join("{} {}".format(v, k) for k, v in sorted(c[2].items()))
+        return "{}\nRunner receptors with depth > 0: {} of {} ({})".format(path, c[0], c[1], kinds)
+    if key == "hazard_structures" and c:
+        return ("{}\nHazard structures with Max_Depth_ft > 0: {} of {} ({} marked habitable). "
+                "Hazard's 5.2.2 count also applies its own outcome rules.".format(
+                    path, c[0], c[1], c[2]["habitable"]))
+    return path
 
 
 def receptor_csv_uri(path, crs):

@@ -105,6 +105,9 @@ check("results dock: Hazard line", "Hazard 2.0.0: ND High" in rdock.hazard.text(
       rdock.hazard.text())
 check("results dock: stale summary warned (installed Hazard is newer)",
       rdock.stale.isVisibleTo(rdock) and "2.0.0" in rdock.stale.text(), rdock.stale.text())
+check("results dock: stale summary - Next says re-classify, never 'Nothing to do'",
+      "Next: Re-classify with the installed Hazard" in rdock.hazard.text() and
+      "Nothing to do" not in rdock.hazard.text(), rdock.hazard.text())
 check("results dock: warnings collapsed then listed",
       not rdock.warn_list.isVisibleTo(rdock) and rdock.warn_list.count() == 2 and
       "2 thing(s) to check" in rdock.warn_toggle.text(), rdock.warn_toggle.text())
@@ -112,6 +115,24 @@ rdock.warn_toggle.setChecked(True)
 check("results dock: warnings expand", rdock.warn_list.isVisibleTo(rdock))
 check("results dock: no layer files, buttons off",
       not any(b.isEnabled() for b in rdock.layer_buttons.values()))
+_json.dump({"schema": "damsafety-review-v1", "nd_class_of_record": "Medium",
+            "tm11_class_of_record": "Significant", "decided_by": "N. B.",
+            "decided_on": "2026-11-01", "note": "test",
+            "overrides": {"nd_class": "Medium", "hazard_version": "2.0.0"},
+            "applies_to": {"run_folder": "_breach_model"}},
+           open(os.path.join(_d, "review.json"), "w"))
+rdock.set_folder(_d)
+check("results dock: class of record from review.json beside the printed class",
+      "class of record ND Medium, TM 11 Significant (N. B., 2026-11-01) - differs from printed"
+      in rdock.hazard.text(), rdock.hazard.text())
+check("results dock: review overriding another printed class is flagged",
+      "Class of record: class of record overrides printed ND class Medium" in rdock.stale.text(),
+      rdock.stale.text())
+with open(os.path.join(_d, "review.json"), "w") as _f:
+    _f.write("{broken")
+rdock.set_folder(_d)
+check("results dock: invalid review.json is not recorded",
+      "not recorded (review.json invalid)" in rdock.hazard.text(), rdock.hazard.text())
 _sh.rmtree(_d, ignore_errors=True)
 
 print("\n{} failure(s)".format(len(FAILS)) if FAILS else "\nall checks passed")
