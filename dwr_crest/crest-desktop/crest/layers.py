@@ -62,8 +62,13 @@ def pack_note(folder: str) -> str:
     return "No ND_Dam_Suite_Pack or nd_offline_pack was sitting in that folder. The dem/, dwr/, and hifld/ folders are still used."
 
 
-def write_settings(work: Path, suite: str | None, dem_file: str | None) -> Path:
+def write_settings(work: Path, suite: str | None, dem_file: str | None, only_ids: str | None = None) -> Path:
+    """crest_settings.json for --SETTINGS. only_ids limits the DWR screening chain to that dam:
+    DamSafety_Screening's nddam:runchain has no DAM_ID parameter and reads the filter from the
+    settings' only_ids (the nd_ runchain takes DAM_ID as well)."""
     data: dict = {}
+    if only_ids:
+        data["only_ids"] = str(only_ids).strip()
     if suite:
         data["suite_folder"] = suite
     if dem_file:
