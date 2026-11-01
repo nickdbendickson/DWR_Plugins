@@ -25,6 +25,7 @@ import {
   prefillPatch,
   revertPatch,
   searchDams,
+  shownCrest,
   storageFor,
   unlinkPatch,
   type NdDam,
@@ -235,6 +236,9 @@ describe("DWR card", () => {
     assert.equal(o.streambedNavdFt, 1043.59);
     assert.equal(o.shiftFt, 1.0887);
     assert.equal(o.sourceNote, "converted from NGVD29 (+1.089 ft, VERTCON)");
+    const crest = shownCrest(data.dwr.get("ND00199")!);
+    assert.equal(crest.text, "1071.09 ft NAVD88");
+    assert.equal(crest.note, "converted from NGVD 29 1070 ft (+1.089 ft, VERTCON)");
   });
 
   it("the bundle's VERTCON shift agrees with the engine's own grid at the dam (within 0.01 ft)", () => {

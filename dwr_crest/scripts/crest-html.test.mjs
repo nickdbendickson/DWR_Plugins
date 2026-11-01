@@ -37,4 +37,8 @@ describe("Crest.html", () => {
     assert.doesNotMatch(html, /Content-Security-Policy/i);
     assert.ok(html.includes("https://gis.blm.gov/arcgis/rest/services/Cadastral/BLM_Natl_PLSS_CadNSDI/MapServer"));
   });
+
+  it("can reach the ND NG911 address point service (URL inlined)", () => {
+    assert.ok(html.includes("https://services1.arcgis.com/GOcSXpzwBHyk2nog/arcgis/rest/services/NDGISHUBSiteStructureAddressPoints/FeatureServer/0"));
+  });
 });

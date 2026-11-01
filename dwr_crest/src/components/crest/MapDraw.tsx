@@ -10,6 +10,7 @@ import shadowUrl from "leaflet/dist/images/marker-shadow.png";
 import { basemaps } from "@/lib/crest/basemap";
 import { DEPTH_BANDS, FLOOD_STRIP_DISCLAIMER, type FloodStrip } from "@/lib/crest/floodstrip";
 import { initialView, ND_CENTER } from "@/lib/crest/mapview";
+import { ND911_ATTRIBUTION_SHORT, type Nd911Point, type Nd911Row } from "@/lib/crest/nd911";
 import { PLSS_ATTRIBUTION_SHORT, type PlssRow } from "@/lib/crest/plss";
 import type { DamGeometry, GeoJSONFeature } from "@/lib/crest/types";
 
@@ -31,6 +32,9 @@ type Props = {
   /** PLSS sections the strip touches (null: not looked up / not available, see `plssMessage`). */
   plss?: PlssRow[] | null;
   plssMessage?: string | null;
+  /** 911 address points: inside the strip (listed) and the rest of the looked-up box (null: not looked up). */
+  nd911?: { inside: Nd911Row[]; outside: Nd911Point[] } | null;
+  nd911Message?: string | null;
 };
 
 type GeoLayer = L.Layer & { toGeoJSON: () => GeoJSONFeature };
@@ -214,6 +218,47 @@ function PlssLayer({ rows, on }: { rows: PlssRow[] | null | undefined; on: boole
   return null;
 }
 
+const ND911_PANE = "crest-nd911";
+const ND911_IN = "#b3261e";
+const ND911_OUT = "#6b6b6b";
+
+/**
+ * 911 address points: small circles in their own pane above the drawn shapes' fill. Points inside the strip are red
+ * and larger, the others grey. They are interactive only for the hover tooltip (address, place type, placement).
+ */
+function Nd911Layer({ pts, on }: { pts: Props["nd911"]; on: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!map.getPane(ND911_PANE)) {
+      const pane = map.createPane(ND911_PANE);
+      pane.style.zIndex = "420";
+    }
+    if (!pts || !on) return;
+    const group = L.featureGroup([], { attribution: ND911_ATTRIBUTION_SHORT } as L.LayerOptions);
+    const tip = (address: string, placeType: string, placement: string, extra: string) =>
+      `<div data-testid="nd911-tip" style="font-size:12px;line-height:1.35"><b>${escHtml(address)}</b><br/>Place type: ${escHtml(placeType || "not given")}; placement: ${escHtml(placement || "not given")}${extra}</div>`;
+    for (const p of pts.outside) {
+      group.addLayer(
+        L.circleMarker([p.lat, p.lon], { pane: ND911_PANE, radius: 3.5, color: "#fff", weight: 1, fillColor: ND911_OUT, fillOpacity: 0.9 }).bindTooltip(
+          tip(p.address, p.placeType, p.placement, "<br/>Outside the strip"),
+        ),
+      );
+    }
+    for (const r of pts.inside) {
+      group.addLayer(
+        L.circleMarker([r.lat, r.lon], { pane: ND911_PANE, radius: 6, color: "#fff", weight: 1.5, fillColor: ND911_IN, fillOpacity: 1 }).bindTooltip(
+          tip(r.address, r.placeType, r.placement, `<br/>Inside: ${escHtml(r.bandLabel)}, ${r.downstreamKm.toFixed(2)} km downstream${r.added ? "<br/>Added for review" : ""}`),
+        ),
+      );
+    }
+    group.addTo(map);
+    return () => {
+      group.remove();
+    };
+  }, [map, pts, on]);
+  return null;
+}
+
 function StripLegend({
   strip,
   message,
@@ -224,6 +269,10 @@ function StripLegend({
   plssMessage,
   plssOn,
   setPlssOn,
+  nd911,
+  nd911Message,
+  nd911On,
+  setNd911On,
 }: {
   strip: FloodStrip | null | undefined;
   message?: string | null;
@@ -234,6 +283,10 @@ function StripLegend({
   plssMessage?: string | null;
   plssOn: boolean;
   setPlssOn: (v: boolean) => void;
+  nd911?: Props["nd911"];
+  nd911Message?: string | null;
+  nd911On: boolean;
+  setNd911On: (v: boolean) => void;
 }) {
   const used = new Set(strip?.features.map((f) => f.properties.band) ?? []);
   return (
@@ -298,6 +351,22 @@ function StripLegend({
                 {plssMessage ?? "PLSS sections: not looked up."}
               </div>
             )}
+            {nd911 ? (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, marginTop: 2 }}>
+                <input
+                  type="checkbox"
+                  checked={nd911On}
+                  onChange={(e) => setNd911On(e.target.checked)}
+                  aria-label="Show the 911 address points"
+                />
+                <span style={{ width: 9, height: 9, borderRadius: 9, background: ND911_IN, display: "inline-block" }} />
+                911 address points ({nd911.inside.length} inside of {nd911.inside.length + nd911.outside.length})
+              </label>
+            ) : (
+              <div data-testid="nd911-legend-note" style={{ color: "#5c5a52" }}>
+                {nd911Message ?? "911 address points: not looked up."}
+              </div>
+            )}
           </div>
         </>
       ) : (
@@ -307,11 +376,12 @@ function StripLegend({
   );
 }
 
-export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage, plss, plssMessage }: Props) {
+export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage, plss, plssMessage, nd911, nd911Message }: Props) {
   const view = initialView(geometry, lat, lon);
   const center: [number, number] = "center" in view ? view.center : ND_CENTER;
   const [on, setOn] = useState(true);
   const [plssOn, setPlssOn] = useState(true);
+  const [nd911On, setNd911On] = useState(true);
   const mapRef = useRef<L.Map | null>(null);
   const zoom = () => {
     const map = mapRef.current;
@@ -340,6 +410,10 @@ export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage, pls
         plssMessage={plssMessage}
         plssOn={plssOn}
         setPlssOn={setPlssOn}
+        nd911={nd911}
+        nd911Message={nd911Message}
+        nd911On={nd911On}
+        setNd911On={setNd911On}
       />
       <MapContainer
         ref={mapRef}
@@ -356,6 +430,7 @@ export function MapDraw({ geometry, lat, lon, onChange, strip, stripMessage, pls
         </LayersControl>
         <FloodStripLayer strip={strip} on={on} />
         <PlssLayer rows={plss} on={plssOn} />
+        <Nd911Layer pts={nd911} on={nd911On} />
         <DrawControl geometry={geometry} lat={lat} lon={lon} onChange={onChange} />
       </MapContainer>
     </div>
