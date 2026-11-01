@@ -26,6 +26,8 @@ import {
   storageFor,
   unlinkPatch,
   dwrAreaPatch,
+  shownCrest,
+  shownSpillwayCrest,
 } from "@/lib/crest/nd-dams";
 import { blankDam } from "@/lib/crest/samples";
 import { useDesk } from "@/lib/crest/store";
@@ -344,7 +346,10 @@ export function NidRecordPanel({ dam }: { dam: DamRecord }) {
             <dt className="text-muted" title={DWR_FIELD_HINTS.datum}>Datum</dt>
             <dd>{ref?.datumLabel}</dd>
             <dt className="text-muted" title={DWR_FIELD_HINTS.topElevFt}>Top of dam (inferred)</dt>
-            <dd>{fmt(dwr.topElevFt, " ft")}</dd>
+            <dd data-testid="dwr-crest">
+              {shownCrest(dwr).text}
+              {shownCrest(dwr).note ? <span className="mt-0.5 block text-xs text-muted">{shownCrest(dwr).note}</span> : null}
+            </dd>
             <dt className="text-muted" title={DWR_FIELD_HINTS.streambedElevFt}>Streambed (inferred)</dt>
             <dd>{fmt(dwr.streambedElevFt, " ft")}</dd>
             <dt className="text-muted" title={DWR_FIELD_HINTS.heightFt}>DWR height (inferred)</dt>
@@ -353,8 +358,13 @@ export function NidRecordPanel({ dam }: { dam: DamRecord }) {
             <dd>{fmt(ref?.heightCheckFt, " ft")}</dd>
             <dt className="text-muted" title={DWR_FIELD_HINTS.maxPoolStorageAcFt}>Max-pool storage (inferred)</dt>
             <dd>{fmt(dwr.maxPoolStorageAcFt, " ac-ft")}</dd>
-            <dt className="text-muted" title={DWR_FIELD_HINTS.auxSpillwayElevFt}>Aux spillway (inferred)</dt>
-            <dd>{fmt(dwr.auxSpillwayElevFt, " ft")}</dd>
+            <dt className="text-muted" title={DWR_FIELD_HINTS.auxSpillwayElevFt}>Aux spillway crest (inferred)</dt>
+            <dd data-testid="dwr-spillway-crest">
+              {shownSpillwayCrest(dwr).text}
+              {shownSpillwayCrest(dwr).note ? (
+                <span className="mt-0.5 block text-xs text-muted">{shownSpillwayCrest(dwr).note}</span>
+              ) : null}
+            </dd>
             <dt className="text-muted" title={DWR_FIELD_HINTS.normalPoolElevFt}>Normal pool (inferred)</dt>
             <dd>{fmt(dwr.normalPoolElevFt, " ft")}</dd>
             <dt className="text-muted" title={DWR_FIELD_HINTS.maxPoolAreaAc}>Max-pool area (inferred)</dt>

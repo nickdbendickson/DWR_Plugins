@@ -111,7 +111,8 @@ export const SAMPLE_DAMS: DamRecord[] = [
     // (Replaces 1072.24 / 1044.74.) Piping. Storage 1,612.59 ac-ft (the review's value, = the r3 hydrograph
     // volume), surface area 154.5 ac. DEM crest given in NAVD88 too (1070.0 is NGVD29).
     // Generic receptor seeds, kept on purpose (Nick): the Farmstead lands in the TM 11 judgment zone, so
-    // the sample screens High (flagged); the class of record is ND MEDIUM / TM11 Significant.
+    // the sample screens Medium by rule (Nick 2026-10-30; High (flagged) only with the old option); the class
+    // of record is ND MEDIUM / TM11 Significant.
     heightFt: 27.5,
     lengthFt: 1700,
     crestFt: 1071.09,
@@ -126,7 +127,7 @@ export const SAMPLE_DAMS: DamRecord[] = [
     demCrestFt: 1071.09,
     classOfRecord: "ND MEDIUM / TM11 Significant (DWR-2801 benchmark)",
     sampleNote:
-      "Sample with generic receptor seeds, not the DWR-2801 benchmark structures. With the judgment zone counted as High (the default), the generic Farmstead falls in the ACER TM 11 judgment zone, so this desk screen reads High (flagged). That is a flag for an engineer, not the class of record (ND MEDIUM / TM11 Significant).",
+      "Sample with generic receptor seeds, not the DWR-2801 benchmark structures. The generic Farmstead falls in the ACER TM 11 judgment zone, so this desk screen reads Medium by rule (judgment-zone homes are Medium). With the old option (judgment zone counted as probable loss of life) it reads High (flagged). The desk screen is not the class of record (ND MEDIUM / TM11 Significant).",
     lat: 46.98364,
     lon: -97.39064,
     geometry: ND00199_GEOMETRY,
