@@ -34,6 +34,13 @@ LAYER_LABELS = {"depth": "Depth", "velocity": "Velocity", "arrival": "Arrival",
 # held all 673 receptors and all 3,809 Hazard structures). Subset strings: delimitedtext takes a
 # QGIS expression, OGR (GeoPackage) takes SQL; both read these the same.
 LAYER_FILTERS = {"receptors": '"depth_ft" > 0', "hazard_structures": '"Max_Depth_ft" > 0'}
+def read_only_ogr_uri(path):
+    """OGR URI that opens a GeoPackage/SQLite without writing (GDAL IMMUTABLE open option)."""
+    if str(path).lower().endswith((".gpkg", ".sqlite", ".db")):
+        return "{}|option:IMMUTABLE=YES".format(path)
+    return str(path)
+
+
 FINAL_NAMES = {"depth": "Depth (Max).tif", "velocity": "Velocity (Max).tif",
                "arrival": "Arrival Time.tif"}
 
@@ -309,6 +316,12 @@ def receptor_csv_uri(path, crs):
     if crs:
         uri += "&crs=" + str(crs)
     return uri
+
+
+def receptor_ogr_csv_uri(path):
+    """OGR CSV URI of receptors_flooded.csv (points from x, y; numeric fields typed)."""
+    return "{}|option:X_POSSIBLE_NAMES=x|option:Y_POSSIBLE_NAMES=y" \
+           "|option:AUTODETECT_TYPE=YES".format(path)
 
 
 def warning_texts(report):

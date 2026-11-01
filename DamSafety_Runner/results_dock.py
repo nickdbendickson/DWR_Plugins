@@ -326,13 +326,27 @@ class ResultsDock(QDockWidget):
         from qgis.core import QgsProject, QgsRasterLayer, QgsVectorLayer
         dam = os.path.basename(os.path.dirname(self._model_dir or "")) or ""
         name = "{} {}".format(dam, RI.layer_label(key, getattr(self, "_counts", None))).strip()
+        # 3.13.6: every layer button opens its data read-only (Docs & QA: the GeoPackage was
+        # opened read-write and its change counter, md5 and mtime changed). Vector layers use
+        # forceReadOnly, GeoPackages also the IMMUTABLE open option; the subset string is only a
+        # provider filter and writes nothing. Rasters: the gdal provider opens read-only.
         if key in RI.FINAL_NAMES:
-            lyr = QgsRasterLayer(path, name)
-        elif key == "receptors":
-            crs = (getattr(self, "_report", None) or {}).get("work_crs")
-            lyr = QgsVectorLayer(RI.receptor_csv_uri(path, crs), name, "delimitedtext")
+            lyr = QgsRasterLayer(path, name, "gdal")
         else:
-            lyr = QgsVectorLayer(path, name, "ogr")
+            opts = QgsVectorLayer.LayerOptions()
+            opts.forceReadOnly = True
+            if key == "receptors":
+                crs = (getattr(self, "_report", None) or {}).get("work_crs")
+                lyr = QgsVectorLayer(RI.receptor_csv_uri(path, crs), name, "delimitedtext", opts)
+                if not lyr.isValid():   # no delimitedtext provider: OGR's CSV driver, read-only
+                    lyr = QgsVectorLayer(RI.receptor_ogr_csv_uri(path), name, "ogr", opts)
+                    if lyr.isValid() and crs:
+                        from qgis.core import QgsCoordinateReferenceSystem
+                        lyr.setCrs(QgsCoordinateReferenceSystem(str(crs)))
+            else:
+                lyr = QgsVectorLayer(RI.read_only_ogr_uri(path), name, "ogr", opts)
+            if lyr.isValid() and not lyr.readOnly():
+                lyr.setReadOnly(True)
         if not lyr.isValid():
             self.summary.setText("Could not open {}".format(path))
             return None
