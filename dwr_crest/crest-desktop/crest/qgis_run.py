@@ -517,7 +517,7 @@ def run_model(
 
 def _python_for(cli: str) -> str:
     chosen = os.environ.get("CREST_PYTHON")
-    if chosen:
+    if chosen and Path(chosen).is_file():
         return chosen
     for candidate in (
         "/Applications/QGIS.app/Contents/MacOS/bin/python3",

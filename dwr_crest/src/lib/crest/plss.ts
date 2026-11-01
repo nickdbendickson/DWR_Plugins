@@ -451,7 +451,7 @@ export function plssTable(dam: DamRecord, strip: FloodStrip, cache: PlssCache): 
 }
 
 /** What the desk can show for the PLSS list right now: the table from the cache, or why not (and what to do). */
-export function plssState(dam: DamRecord, strip: FloodStrip | null, online: boolean): PlssState {
+export function plssState(dam: DamRecord, strip: FloodStrip | null, online: boolean, against = "flood strip"): PlssState {
   if (!strip) return { state: "none", message: "No flood strip, so no PLSS sections." };
   const cache = dam.plss;
   const need = stripBbox(strip);
@@ -459,13 +459,13 @@ export function plssState(dam: DamRecord, strip: FloodStrip | null, online: bool
     return { state: "ready", table: plssTable(dam, strip, cache), message: null };
   }
   if (cache) {
-    const msg = "The flood strip now reaches past the PLSS sections saved with this dam.";
+    const msg = `The ${against} now reaches past the PLSS sections saved with this dam.`;
     return online
       ? { state: "lookup", message: `${msg} Look them up again.` }
       : { state: "offline", message: `${msg} ${PLSS_OFFLINE}` };
   }
   return online
-    ? { state: "lookup", message: "PLSS sections are not looked up yet for this strip (one query to the BLM PLSS service)." }
+    ? { state: "lookup", message: `PLSS sections are not looked up yet for this ${against === "flood strip" ? "strip" : against} (one query to the BLM PLSS service).` }
     : { state: "offline", message: PLSS_OFFLINE };
 }
 

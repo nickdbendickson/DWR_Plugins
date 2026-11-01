@@ -37,4 +37,12 @@ describe("Crest.html", () => {
     assert.doesNotMatch(html, /Content-Security-Policy/i);
     assert.ok(html.includes("https://gis.blm.gov/arcgis/rest/services/Cadastral/BLM_Natl_PLSS_CadNSDI/MapServer"));
   });
+
+  it("can reach the ND NG911 address point service (URL inlined)", () => {
+    assert.ok(html.includes("https://services1.arcgis.com/GOcSXpzwBHyk2nog/arcgis/rest/services/NDGISHUBSiteStructureAddressPoints/FeatureServer/0"));
+  });
+
+  it("can reach the USGS 3DEP terrain service for the terrain outline (URL inlined)", () => {
+    assert.ok(html.includes("https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer"));
+  });
 });

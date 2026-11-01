@@ -26,6 +26,7 @@ export const STEPS = [
   { id: "record", label: "Record" },
   { id: "breach", label: "Breach" },
   { id: "flood", label: "Flood" },
+  { id: "results", label: "Results" },
   { id: "screen", label: "Screen" },
   { id: "report", label: "Report" },
 ] as const;
@@ -189,6 +190,18 @@ export function elevationsMissing(dam: DamRecord): string | null {
   return miss.length ? miss.join(", ") : null;
 }
 
+/**
+ * Crest as feet NAVD88. When the stated value was shifted, or the record says it was converted, the label says so.
+ */
+export function crestNavdLabel(dam: DamRecord, datum: { crestNavdFt: number; offsetFt: number | null }): string {
+  if (!Number.isFinite(datum.crestNavdFt)) return "—";
+  const ft = `${datum.crestNavdFt.toFixed(2)} ft NAVD88`;
+  if (dam.statedDatum === "NGVD29" && datum.offsetFt != null) return `${ft}, converted from NGVD 29`;
+  if (datum.offsetFt != null && dam.statedDatum !== "NAVD88") return `${ft}, converted from local`;
+  if (/converted/i.test(`${dam.datumNote ?? ""} ${dam.provenance?.crestFt?.note ?? ""}`)) return `${ft}, converted`;
+  return ft;
+}
+
 /** Engine guard: no flood and a Review screen until the crest, breach bottom and datum are entered. */
 function reviewMissingElevations(dam: DamRecord, missing: string): Analysis {
   const msg = `Elevations missing (${missing}). Enter the top-of-dam (crest) and breach-bottom elevations and their datum; nothing is computed until then.`;
@@ -235,7 +248,7 @@ function reviewMissingElevations(dam: DamRecord, missing: string): Analysis {
     screen: {
       level: "Review",
       label: "Review (elevations missing)",
-      judgmentAsProbable: dam.judgmentAsProbable ?? true,
+      judgmentAsProbable: dam.judgmentAsProbable ?? false,
       classOfRecord: dam.classOfRecord ?? null,
       acerLevel: null,
       reasons: [msg],
@@ -554,7 +567,7 @@ export function analyze(dam: DamRecord): Analysis {
       aadt: r.aadt,
       roadClass: r.roadClass,
       habitable: r.habitable,
-      judgmentAsProbable: dam.judgmentAsProbable ?? true,
+      judgmentAsProbable: dam.judgmentAsProbable ?? false,
     });
     return { depthFt, velocityFps, arrival, flooded, rank };
   };
@@ -626,7 +639,7 @@ export function analyze(dam: DamRecord): Analysis {
 
   const maxVelocityFps = receptors.reduce((m, r) => Math.max(m, r.velocityFps), 0);
   const screen = screenReceptors(receptors, dam.receptors, {
-    judgmentAsProbable: dam.judgmentAsProbable ?? true,
+    judgmentAsProbable: dam.judgmentAsProbable ?? false,
   });
   // Full test 2026-10-30: a record placed on the map (e.g. a new record from NID) with no dam line and no
   // reservoir point has no downstream direction, so no flood strip. When its receptors are still only the
@@ -717,10 +730,10 @@ export function screenReceptors(
     outsideAoi?: boolean;
     wouldBe?: RankedReceptor["wouldBe"];
   })[],
-  seeds: Pick<ReceptorSeed, "kind" | "habitable">[] = [],
+  seeds: Pick<ReceptorSeed, "kind" | "habitable" | "source">[] = [],
   opts: { judgmentAsProbable?: boolean } = {},
 ): Analysis["screen"] {
-  const judgmentAsProbable = opts.judgmentAsProbable ?? true;
+  const judgmentAsProbable = opts.judgmentAsProbable ?? false;
   let level: ScreenLevel = "Low";
   let acerLevel: Analysis["screen"]["acerLevel"] = null;
   const reasons: string[] = [];
@@ -741,6 +754,10 @@ export function screenReceptors(
     if (r.needsJudgment) {
       judgment.push(`${r.name}: ${r.rankReason}.`);
     }
+    // Added from a 911 address point (nd911.ts) and not classified yet: counted as a home until the user says.
+    if (seeds[i]?.source === "nd911" && seeds[i]?.habitable == null) {
+      judgment.push(`${r.name}: added from a 911 address point; classify it habitable or not (counted as habitable until you do).`);
+    }
   });
   if (reasons.length === 0) reasons.push("No seeded receptor is wet at 0.1 ft or more.");
   const outside = receptors.filter((r) => r.unresolved && r.outsideAoi).length;
@@ -756,13 +773,14 @@ export function screenReceptors(
     );
   }
   reasons.push("Velocities are desk estimates (continuity on the schematic section), so TM 11 zones near a curve are approximate.");
-  // Nick (2026-10-29): judgment zone counts as High by default, and a High that only judgment-zone structures produce reads "High (flagged: judgment zone)". It is the 5.3(f) default, not a TM 11 high-zone finding.
+  // Nick (2026-10-30): a home in the judgment zone is Medium by rule. Only the old option (judgment zone counted as
+  // probable loss of life) can make a High from judgment-zone structures alone; that High reads "High (flagged: judgment zone)".
   const highDrivers = receptors.filter((r) => r.ndClass === "High");
   const judgmentDriven = (level as ScreenLevel) === "High" && highDrivers.length > 0 && highDrivers.every((r) => r.zone === "judgment");
   let label: string = judgmentDriven ? "High (flagged: judgment zone)" : level;
   if (judgmentDriven) {
     reasons.unshift(
-      "High comes only from the ACER TM 11 judgment zone, counted as probable loss of life (damsuite default, 5.3(f)). An engineer may call it Medium; switch \"Judgment zone\" to test that.",
+      "High comes only from the ACER TM 11 judgment zone, counted as probable loss of life (old option, 5.3). By rule a judgment-zone home is Medium; switch \"Judgment zone\" back to the default to see that.",
     );
   }
   // Nick (2026-10-29): a home or road past the modeled reach forces Review. It is never Low and never dropped.
@@ -817,7 +835,9 @@ export function screenReceptors(
   }
   reasons.push(
     `ND rules as in damsuite classify_nd: a habitable structure in the TM 11 high zone is High; in the judgment zone it is ${
-      judgmentAsProbable ? "counted as probable loss of life (High, flagged)" : "not counted as probable loss of life (Medium, flagged)"
+      judgmentAsProbable
+        ? "counted as probable loss of life (High, flagged; old option)"
+        : "Medium by rule (not probable loss of life)"
     }; any inundated habitable structure is at least Medium (economic, 5.2.2); roads by AADT and class. Barns and sheds are not habitable and do not count.`,
   );
   reasons.push("This is a desk screen on a schematic valley. It is not an ND Dam Safety classification of record.");

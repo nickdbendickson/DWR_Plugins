@@ -83,6 +83,8 @@ export type FloodStrip = {
     engine_wet_area_ac: number;
     breach_lon: number;
     breach_lat: number;
+    /** KML document name, when not the strip's (the terrain outline, outline.ts). */
+    title?: string;
   };
   features: StripFeature[];
 };
@@ -334,14 +336,17 @@ function kmlColor(hex: string, alpha = 0x73) {
 
 /**
  * <root>_flood_strip.kml: the same polygons and facts, for Google Earth and the like. `extra` adds lines to the
- * document description (the PLSS section list, plss.ts).
+ * document description (the PLSS section list, plss.ts);
+ * `placemarks` adds KML after the bands (the 911 address points, nd911.ts).
  */
-export function exportFloodStripKml(strip: FloodStrip, extra: string[] = []): string {
+export function exportFloodStripKml(strip: FloodStrip, extra: string[] = [], placemarks: string[] = []): string {
   const p = strip.properties;
   const desc = [
     `${p.disclaimer}.`,
     `Dam ${p.dam_id} (${p.dam_name}). Crest ${p.crest_navd88_ft.toFixed(2)} ft NAVD88. Peak ${p.peak_cfs.toLocaleString("en-US")} cfs.`,
-    `Schematic desk valley: max depth ${p.max_depth_ft.toFixed(2)} ft, wet strip ${p.wet_reach_km.toFixed(2)} km, ${p.strip_area_ac.toFixed(1)} ac${p.clipped_to_aoi ? ", clipped to the drawn area" : ""}.`,
+    p.title
+      ? `Terrain outline: ${p.strip_area_ac.toFixed(1)} ac (engine wet area ${p.engine_wet_area_ac.toFixed(1)} ac), desk max depth ${p.max_depth_ft.toFixed(2)} ft.`
+      : `Schematic desk valley: max depth ${p.max_depth_ft.toFixed(2)} ft, wet strip ${p.wet_reach_km.toFixed(2)} km, ${p.strip_area_ac.toFixed(1)} ac${p.clipped_to_aoi ? ", clipped to the drawn area" : ""}.`,
     p.direction,
     `Engine: ${p.engine_version}.`,
     ...extra,
@@ -387,10 +392,11 @@ export function exportFloodStripKml(strip: FloodStrip, extra: string[] = []): st
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<kml xmlns="http://www.opengis.net/kml/2.2">',
       "<Document>",
-      `<name>${esc(`${p.dam_id} flood strip (approximate)`)}</name>`,
+      `<name>${esc(p.title ?? `${p.dam_id} flood strip (approximate)`)}</name>`,
       `<description>${esc(desc)}</description>`,
       ...styles,
       ...marks,
+      ...placemarks,
       "</Document>",
       "</kml>",
     ].join("\n") + "\n"

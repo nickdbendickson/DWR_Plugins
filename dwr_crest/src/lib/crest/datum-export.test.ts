@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { readFileSync } from "node:fs";
 
-import { analyze, damLocation } from "./engine.ts";
+import { analyze, crestNavdLabel, damLocation } from "./engine.ts";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage, toUtm } from "./export.ts";
 import { dwr2801 } from "./fixtures.ts";
 import { SAMPLE_DAMS } from "./samples.ts";
@@ -15,10 +15,10 @@ describe("NGVD29 to NAVD88 (VERTCON)", () => {
   it("CHECK: DWR-2801 1070.0 ft NGVD29 ties to 1071.09 ft NAVD88 (+1.09 ft)", () => {
     const shift = vertconShiftFt(SITE.lon, SITE.lat)!;
     assert.ok(Math.abs(shift - 1.0886) < 0.001, `shift ${shift}`);
-    const a = analyze(
-      dwr2801({ crestFt: 1070.0, streambedFt: 1042.5, statedDatum: "NGVD29", ...SITE }),
-    );
+    const dam = dwr2801({ crestFt: 1070.0, streambedFt: 1042.5, statedDatum: "NGVD29", ...SITE });
+    const a = analyze(dam);
     assert.equal(a.datum.crestNavdFt.toFixed(2), "1071.09");
+    assert.equal(crestNavdLabel(dam, a.datum), "1071.09 ft NAVD88, converted from NGVD 29");
     assert.equal(a.datum.streambedNavdFt!.toFixed(2), "1043.59");
     assert.match(a.datum.rule, /VERTCON/);
   });
@@ -94,6 +94,7 @@ describe("ND00199 sample (Nick, 2026-10-29: crest 1071.09 NAVD88 from NGVD29 107
     assert.equal(a.datum.streambedNavdFt, 1043.59);
     assert.equal(a.breach.headFt.toFixed(2), "27.50");
     assert.match(a.datum.rule, /treated as NAVD88\. Crest converted from NGVD29 1070\.0/);
+    assert.equal(crestNavdLabel(sample, a.datum), "1071.09 ft NAVD88, converted");
     assert.doesNotMatch(a.datum.rule, /by VERTCON/);
     assert.equal(a.datum.warnings.length, 0, a.datum.warnings.join("; "));
   });
@@ -255,14 +256,18 @@ describe("LISFLOOD-FP export", () => {
 describe("sample note, DEM crest check and store key", () => {
   const sample = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
 
-  it("CHECK: the ND00199 sample shows High (flagged) against its class of record ND MEDIUM", () => {
+  it("CHECK: the ND00199 sample screens Medium by rule (judgment-zone Farmstead), High (flagged) only with the old option", () => {
     const a = analyze(sample);
-    assert.equal(a.screen.level, "High");
-    assert.equal(a.screen.label, "High (flagged: judgment zone)");
-    assert.equal(a.screen.classOfRecord, "ND MEDIUM (NID hazard Significant)");
-    assert.doesNotMatch(`${a.screen.classOfRecord} ${sample.sampleNote}`, /TM11 Significant|benchmark\)/);
+    assert.equal(a.screen.level, "Medium");
+    assert.equal(a.screen.label, "Medium");
+    assert.equal(a.screen.judgmentAsProbable, false);
+    assert.ok(a.screen.reasons.some((r) => /judgment zone .*Medium by rule/.test(r)), a.screen.reasons.join("\n"));
+    assert.match(a.screen.classOfRecord ?? "", /^ND MEDIUM \/ TM11 Significant/);
     assert.match(a.screen.reasons[0], /^Class of record: ND MEDIUM .*is not the class of record\.$/);
-    assert.match(sample.sampleNote ?? "", /generic receptor seeds.*High \(flagged\).*not the class of record/);
+    assert.match(sample.sampleNote ?? "", /generic receptor seeds.*Medium by rule.*High \(flagged\).*not the class of record/);
+    const old = analyze({ ...sample, judgmentAsProbable: true });
+    assert.equal(old.screen.level, "High");
+    assert.equal(old.screen.label, "High (flagged: judgment zone)");
   });
 
   it("warns when the DEM crest differs from the tied crest (NGVD29 value labelled NAVD88)", () => {
