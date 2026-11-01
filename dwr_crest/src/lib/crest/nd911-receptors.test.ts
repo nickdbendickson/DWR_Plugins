@@ -58,7 +58,8 @@ describe("real receptors: picked ND dams screen ND 911 points, samples keep the 
     const cleared: DamRecord = { ...done, receptors: removeNd911Seeds(done.receptors) };
     assert.equal(nd911AutoPatch(cleared, nd911State(cleared, strip, true), r), null);
     const screened = analyze(done);
-    assert.doesNotMatch(screened.screen.label, /not looked up/);
+    assert.doesNotMatch(screened.screen.label, /911 points not looked up/);
+    assert.match(screened.screen.label, /911 ground heights not looked up/);
     assert.ok(!/flagged: judgment zone\)/.test(screened.screen.label) || /Medium/.test(screened.screen.label));
   });
 

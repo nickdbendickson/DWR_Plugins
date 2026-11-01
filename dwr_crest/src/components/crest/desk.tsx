@@ -1,6 +1,7 @@
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-react";
 import { analyze, crestNavdLabel, STEPS } from "@/lib/crest/engine";
+import { lookupPads, padPoints } from "@/lib/crest/nd911-pads";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
 import { floodStrip, type FloodStrip } from "@/lib/crest/floodstrip";
 import {
@@ -717,6 +718,16 @@ function Nd911Panel({
     const p = nd911AutoPatch(dam, nd911, result);
     if (p) update(p);
   }, [dam, nd911, result, update]);
+  // Pads for the 911 seeds: ground at the point minus the channel bed at its station, from 3DEP (once per seed).
+  const padTried = useRef(new Set<string>());
+  useEffect(() => {
+    const todo = padPoints(dam).filter((p) => !padTried.current.has(p.id));
+    if (todo.length === 0) return;
+    todo.forEach((p) => padTried.current.add(p.id));
+    lookupPads(dam, result)
+      .then((receptors) => receptors && update({ receptors }))
+      .catch((e) => setError((e as Error).message));
+  }, [dam, result, update]);
   if (nd911.state === "none") return null;
   const lookUp = async () => {
     if (!lookup) return;

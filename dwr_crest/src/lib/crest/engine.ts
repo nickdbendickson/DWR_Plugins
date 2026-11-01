@@ -660,6 +660,26 @@ export function analyze(dam: DamRecord): Analysis {
       "Structures for this dam come from ND 911 address points inside the flood strip. Look them up on the Flood step before relying on the class.",
     );
   }
+  const n911 = dam.receptors.filter((r) => r.source === "nd911");
+  const noPad = n911.filter((r) => r.padSource == null);
+  const estPad = n911.filter((r) => r.padSource === "estimated");
+  if (dam.receptorSource === "nd911" && noPad.length > 0 && screen.level !== "Review") {
+    // 911 seeds sit on the channel bed (pad 0) until their ground height is read: hold rather than over-screen.
+    screen.level = "Review";
+    screen.label = "Review (911 ground heights not looked up)";
+    screen.reasons.unshift(
+      `${noPad.length} structure${noPad.length === 1 ? "" : "s"} from 911 address points still sit on the channel bed (pad 0). Their ground height above the bed is read from 3DEP terrain on the Flood step.`,
+    );
+  }
+  if (estPad.length > 0) {
+    const t = `Pad estimated for ${estPad.map((r) => r.name).join(", ")}: no terrain at the point, kept on the channel bed (pad 0). Enter the real pad height.`;
+    screen.judgment.push(t);
+    if (screen.level !== "Review") {
+      screen.reasons.unshift(`Held at Review: ${t}`);
+      screen.label = `Review (${screen.label}; pad estimated)`;
+      screen.level = "Review";
+    }
+  }
   if (warnings.some((w) => w.startsWith("No DEM tie"))) {
     screen.level = "Review";
     screen.label = "Review (crest not tied)";

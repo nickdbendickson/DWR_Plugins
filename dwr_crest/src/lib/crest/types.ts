@@ -33,6 +33,13 @@ export type ReceptorSeed = {
   source?: "nd911";
   /** The source's id (Site_NGUID for nd911). */
   sourceRef?: string;
+  /**
+   * How padFt was set for a 911 seed (nd911-pads.ts): "dem" = 3DEP ground - section bed, "dem-slope" = ground -
+   * streambed at the dam along the valley slope, "estimated" = no terrain at the point, pad kept 0 (Review). Unset
+   * on a 911 seed = not looked up yet.
+   */
+  padSource?: "dem" | "dem-slope" | "estimated";
+  padNote?: string;
 };
 
 export type GeoJSONFeature = {
