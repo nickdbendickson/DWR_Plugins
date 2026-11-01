@@ -25,6 +25,7 @@ export const STEPS = [
   { id: "record", label: "Record" },
   { id: "breach", label: "Breach" },
   { id: "flood", label: "Flood" },
+  { id: "results", label: "Results" },
   { id: "screen", label: "Screen" },
   { id: "report", label: "Report" },
 ] as const;
@@ -186,6 +187,18 @@ export function elevationsMissing(dam: DamRecord): string | null {
   if (!Number.isFinite(dam.streambedFt)) miss.push("breach bottom");
   if (!dam.statedDatum) miss.push("datum");
   return miss.length ? miss.join(", ") : null;
+}
+
+/**
+ * Crest as feet NAVD88. When the stated value was shifted, or the record says it was converted, the label says so.
+ */
+export function crestNavdLabel(dam: DamRecord, datum: { crestNavdFt: number; offsetFt: number | null }): string {
+  if (!Number.isFinite(datum.crestNavdFt)) return "—";
+  const ft = `${datum.crestNavdFt.toFixed(2)} ft NAVD88`;
+  if (dam.statedDatum === "NGVD29" && datum.offsetFt != null) return `${ft}, converted from NGVD 29`;
+  if (datum.offsetFt != null && dam.statedDatum !== "NAVD88") return `${ft}, converted from local`;
+  if (/converted/i.test(`${dam.datumNote ?? ""} ${dam.provenance?.crestFt?.note ?? ""}`)) return `${ft}, converted`;
+  return ft;
 }
 
 /** Engine guard: no flood and a Review screen until the crest, breach bottom and datum are entered. */
@@ -701,7 +714,7 @@ export function screenReceptors(
     outsideAoi?: boolean;
     wouldBe?: RankedReceptor["wouldBe"];
   })[],
-  seeds: Pick<ReceptorSeed, "kind" | "habitable">[] = [],
+  seeds: Pick<ReceptorSeed, "kind" | "habitable" | "source">[] = [],
   opts: { judgmentAsProbable?: boolean } = {},
 ): Analysis["screen"] {
   const judgmentAsProbable = opts.judgmentAsProbable ?? false;
@@ -724,6 +737,10 @@ export function screenReceptors(
     }
     if (r.needsJudgment) {
       judgment.push(`${r.name}: ${r.rankReason}.`);
+    }
+    // Added from a 911 address point (nd911.ts) and not classified yet: counted as a home until the user says.
+    if (seeds[i]?.source === "nd911" && seeds[i]?.habitable == null) {
+      judgment.push(`${r.name}: added from a 911 address point; classify it habitable or not (counted as habitable until you do).`);
     }
   });
   if (reasons.length === 0) reasons.push("No seeded receptor is wet at 0.1 ft or more.");
