@@ -50,6 +50,15 @@ const PRAIRIE_GEOMETRY: DamGeometry = {
 const ILLUSTRATIVE_NOTE =
   "Fictional dam. Its map placement (an east-west dam line with the pool to the north, so the valley runs south) is illustrative, not a surveyed site.";
 
+const VALLEY_PREFIXES = ["abs", "loc", "new"];
+const VALLEY_KEYS = ["road-1", "farm", "barn", "road-2", "house"];
+
+/** True for one of the generic valley seeds a sample or a new record starts with (not a surveyed receptor). */
+export function isGenericSeed(r: Pick<ReceptorSeed, "id">): boolean {
+  const i = r.id.indexOf("-");
+  return i > 0 && VALLEY_PREFIXES.includes(r.id.slice(0, i)) && VALLEY_KEYS.includes(r.id.slice(i + 1));
+}
+
 function valley(prefix: string): ReceptorSeed[] {
   return [
     {
@@ -125,7 +134,7 @@ export const SAMPLE_DAMS: DamRecord[] = [
     datumNote:
       "Crest converted from NGVD29 1070.0 ft (DWR Dams file; +1.09 ft VERTCON at the site); do not shift again.",
     demCrestFt: 1071.09,
-    classOfRecord: "ND MEDIUM / TM11 Significant (DWR-2801 benchmark)",
+    classOfRecord: "ND MEDIUM (NID hazard Significant)",
     sampleNote:
       "Sample with generic receptor seeds, not the DWR-2801 benchmark structures. The generic Farmstead falls in the ACER TM 11 judgment zone, so this desk screen reads Medium by rule (judgment-zone homes are Medium). With the old option (judgment zone counted as probable loss of life) it reads High (flagged). The desk screen is not the class of record (ND MEDIUM / TM11 Significant).",
     lat: 46.98364,

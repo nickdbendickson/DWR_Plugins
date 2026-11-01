@@ -1,1 +1,1 @@
-import{t as e}from"./basedecoder.js";var t=class extends e{decodeBlock(e){return e}};export{t as default};
+import{t as e}from"./samples4.js";var t=class extends e{decodeBlock(e){return e}};export{t as default};
