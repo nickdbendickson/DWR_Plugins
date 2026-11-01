@@ -34,9 +34,14 @@ MIN_SHARE = 0.3
 MIN_LEN_M = 150.0       # or this much road on one value (long segments, partial overlap)
 SHORT_M = 100.0         # a road this short that no line follows takes the lines it touches
 # sibling files ND_Dam_Suite_Pack/roads/ carries (found next to the ROADS layer)
-SIBLING_PATTERNS = (re.compile(r"^hpms_nd_\d{4}\.gpkg$", re.I),
-                    re.compile(r"^nddot_traffic_counts\.gpkg$", re.I),
-                    re.compile(r"^nd_county_roads\.gpkg$", re.I))
+# 3.13.5: also the per-dam clips "pack_<name>_<dam>.gpkg" (pack_HPMS_ND_2024_6141.gpkg,
+# pack_ND_county_roads_6141.gpkg ...) next to pack_ND_roads_NG911_6141.gpkg: DWR-6141's Runner
+# classification found none of them (no ROADS_MORE) and said "AADT unknown" where the Hazard
+# summary had the county-roads AADT
+_PRE, _SUF = r"^(?:pack_)?", r"(?:_[A-Za-z0-9-]+)?\.gpkg$"
+SIBLING_PATTERNS = (re.compile(_PRE + r"hpms_nd_\d{4}" + _SUF, re.I),
+                    re.compile(_PRE + r"nddot_traffic_counts" + _SUF, re.I),
+                    re.compile(_PRE + r"nd_county_roads" + _SUF, re.I))
 
 
 def siblings(roads_path):

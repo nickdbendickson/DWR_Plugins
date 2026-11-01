@@ -1184,6 +1184,20 @@ def _page_400(ctx, url, params, size, offset, err, why=""):
             ctx.writer.count, err))
 
 
+def _feat_oid(feat, oid):
+    """The object id of one ArcGIS feature, or None."""
+    if not oid or not isinstance(feat, dict):
+        return None
+    props = feat.get("properties") or feat.get("attributes") or {}
+    if oid in props:
+        return props[oid]
+    low = oid.lower()
+    for k, v in props.items():
+        if str(k).lower() == low:
+            return v
+    return None
+
+
 def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, edit=None,
                         why=""):
     offset, page = 0, 0
@@ -1220,11 +1234,21 @@ def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, ed
         ctx.writer.add([], uid, chunk=akey, payload=_pack_json(now))
     if pages:
         ctx.log("  resuming: {} page(s) already stored".format(len(pages)))
+    prev_last = None
     while True:
         key = "page:{}:{}".format(size, offset)
         meta = _unpack_json(kept[key]) if kept.get(key) else None
         if isinstance(meta, dict) and isinstance(meta.get("n"), int):
             nfe, exceeded = meta["n"], bool(meta.get("exceeded"))
+            if oid and prev_last is not None and meta.get("first_oid") is not None \
+                    and meta["first_oid"] <= prev_last:
+                ctx.log("  stored page order no longer holds ({} then {}); starting over"
+                        .format(prev_last, meta["first_oid"]))
+                ctx.writer.restart_stage()
+                kept, pages, offset, page, prev_last = {}, [], 0, 0, None
+                continue
+            if meta.get("last_oid") is not None:
+                prev_last = meta["last_oid"]
             page += 1
             ctx.sub(min(95.0, page), "{:,} features".format(ctx.writer.count))
             if not nfe or (nfe < size and not exceeded):
@@ -1251,8 +1275,18 @@ def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, ed
                         (d.get("properties") or {}).get("exceededTransferLimit"))
         if got_size < size and len(feats) >= got_size:
             exceeded = True                 # a smaller page came back full: more follow
-        added = ctx.writer.add(feats, uid, chunk=key,
-                               payload=_pack_json({"n": len(feats), "exceeded": exceeded}))
+        oids = [_feat_oid(f, oid) for f in feats]
+        oids = [v for v in oids if v is not None]
+        payload = {"n": len(feats), "exceeded": exceeded}
+        if oids:
+            payload["first_oid"], payload["last_oid"] = oids[0], oids[-1]
+        if oid and prev_last is not None and oids and oids[0] <= prev_last:
+            ctx.log("  page order changed (first oid {} is not after {}); starting the pages over"
+                    .format(oids[0], prev_last))
+            ctx.writer.restart_stage()
+            kept, pages, offset, page, prev_last = {}, [], 0, 0, None
+            continue
+        added = ctx.writer.add(feats, uid, chunk=key, payload=_pack_json(payload))
         page += 1
         ctx.sub(min(95.0, page), "{:,} features".format(ctx.writer.count))
         if not feats or (len(feats) < size and not exceeded):
@@ -1260,6 +1294,8 @@ def _fetch_arcgis_pages(ctx, url, bbox, oid, mrc, out_fields, precision, uid, ed
         if added == 0:
             return "the service repeats the same page (no paging) - {:,} kept".format(
                 ctx.writer.count)
+        if oids:
+            prev_last = oids[-1]
         offset += len(feats)
 
 

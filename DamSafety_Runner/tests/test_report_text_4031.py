@@ -82,8 +82,9 @@ def aadt_join_reads_roads_more_4031():
                              county + "|layername=ND_county_roads;;" + hpms + ";;"
                              + os.path.join(d, "missing.gpkg"))
         assert got == [hpms, cnt, county], got        # county added once, missing skipped
-        # no AADT_LAYERS: siblings by name (none here) + ROADS_MORE
-        assert A.join_sources("", os.path.join(d, "roads.gpkg"), county) == [county]
+        # no AADT_LAYERS: siblings by name + ROADS_MORE. 3.13.5: the per-dam pack_*_4031
+        # clips next to the roads layer are siblings too (before: none here)
+        assert A.join_sources("", os.path.join(d, "roads.gpkg"), county) == [hpms, cnt, county]
     finally:
         shutil.rmtree(d, ignore_errors=True)
     # an NG911 segment along a county-roads line with AADT 60 takes 60 (Low, 5.2.1.2)
