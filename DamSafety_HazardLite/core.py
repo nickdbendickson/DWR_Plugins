@@ -255,7 +255,8 @@ def structures(grid, bounds, address_path, outline_path, judgment_high=True, exc
                     "units": len(s["addresses"]), "build_id": s["build_id"], "occupancy": s["occ"],
                     "place_type": ", ".join(sorted(p for p in s["place"] if p)), "matched": s["how"], "chart": "Fig. 5.2 mobile home" if kind == "mobile" else "Fig. 5.1 house",
                     "cells": len(d), "hmax_ft": round(float(d.max()), 2), "vmax_fps": round(float(v.max()), 2),
-                    "gov_depth_ft": round(gd, 2), "gov_vel_fps": round(gv, 2),
+                    "gov_depth_ft": round(gd, 2), "gov_vel_fps": None if gv is None else round(gv, 2),
+                    "velocity_unknown": gv is None,
                     "zone": tm11.ZONE_NAMES[zone], "nd_class": nd})
     out.sort(key=lambda r: (-{"High": 2, "Judgment": 1, "Low": 0}[r["zone"]], -r["hmax_ft"]))
     return out, excluded_ag
@@ -266,13 +267,15 @@ def peak_zone(kind, d, v):
     """(zone, depth ft, velocity ft/s) a structure is classified on: its peak depth with the
     peak velocity over its wet cells (depth >= WET_FT), even when they come from different
     cells (Nick, 2026-11-01, TM 11 practice, option C). Never less severe than any one wet
-    cell (dry cells, depth < WET_FT, are not read); with no velocity the depth alone."""
+    cell (dry cells, depth < WET_FT, are not read). When no wet cell has a velocity (all NaN)
+    the zone is read on depth alone and the velocity is None (velocity unknown, flagged in the
+    summary as the Screening Feinberg path does); a dry cell's velocity is never used."""
     d = np.asarray(d, dtype=float)
     v = np.asarray(v, dtype=float)
     dpk = float(np.nanmax(d))
     wet = (d >= WET_FT) & np.isfinite(v)
-    vpk = float(v[wet].max()) if wet.any() else (float(np.nanmax(v)) if np.isfinite(v).any() else 0.0)
-    zone = int(tm11.zones(kind, [dpk], [vpk])[0])
+    vpk = float(v[wet].max()) if wet.any() else None     # None: velocity unknown
+    zone = int(tm11.zones(kind, [dpk], [0.0 if vpk is None else vpk])[0])
     wet = d >= WET_FT                  # the floor reads the wet cells only, as the pair does
     if wet.any():
         cells = tm11.zones(kind, d[wet], np.where(np.isfinite(v[wet]), v[wet], 0.0))
@@ -638,6 +641,10 @@ def classify(structs, rds, rails, judgment_high=True):
         verify.append("{} rail stretch(es) with trains/day unknown".format(nl))
     if jz and not judgment_high:
         verify.append("judgment-zone structures decide High vs Medium")
+    nv = sum(bool(s.get("velocity_unknown")) for s in structs)
+    if nv:
+        verify.append("{} structure(s) with velocity unknown at every wet cell: zone read on depth "
+                      "alone (verify the velocity)".format(nv))
     no_outline = sum(s["matched"].startswith("no outline") for s in structs)
     if no_outline:
         verify.append("{} inundated address point(s) with no outline (sampled on a {:.0f} ft circle)".format(

@@ -165,6 +165,9 @@ def peak_pair_checks():
     pz = core.peak_zone("house", dd, vv)
     check("dry cells do not set the worst-cell floor",
           pz[0] == int(tm11.zones("house", [1.0], [0.5])[0]) and pz[0] < dry_alone, (pz, dry_alone))
+    zu, du, vu = core.peak_zone("house", np.array([1.0, 0.05]), np.array([np.nan, 40.0]))
+    check("all wet velocities NaN: depth alone, velocity None, never a dry cell's velocity",
+          (zu, du, vu) == (int(tm11.zones("house", [1.0], [0.0])[0]), 1.0, None), (zu, du, vu))
     check("NaN velocity is skipped", core.peak_zone("house", np.array([2.0, 1.0]),
                                                     np.array([np.nan, 3.0]))[2] == 3.0)
 
