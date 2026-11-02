@@ -15,12 +15,13 @@
  */
 
 import { floodStrip } from "./floodstrip.ts";
-import { buildOutline, polygonizeDepth } from "./outline.ts";
+import { buildOutline, DEM_SERVICE, DEM_ATTRIBUTION, outlineInputs, polygonizeDepth } from "./outline.ts";
 import { buildRoutedFlood, type RoutedFloodOptions, type RoutedFloodResult } from "./routed-flood.ts";
 import type { Analysis, DamRecord } from "./types.ts";
 
-import type { DemGrid, OutlineCache, TerrainOutline } from "./outline.ts";
-import type { Centerline } from "./sections.ts";
+import type { DemGrid, OutlineCache, OutlineStats, RoutedSummary } from "./outline.ts";
+
+const ACRE_M2 = 4046.8564224;
 
 /** Map-and-export label for the routed flood, distinct from the bathtub outline's OUTLINE_LABEL. */
 export const ROUTED_LABEL = "Routed terrain flood from 3DEP terrain and the breach hydrograph (Muskingum-Cunge routing + terrain fill), not a full 2-D hydraulic model";
@@ -60,20 +61,67 @@ export function chooseInundationLayer(result: Analysis): LayerChoice {
 export type InundationResult =
   | {
       ok: true;
-      layer: "routed";
+      /** The layer actually built (may be "outline" after a routed build failed and fell back). */
+      layer: "outline" | "routed";
       choice: LayerChoice;
-      routed: RoutedFloodResult;
-      /** The routed depth grid polygonised into FloodStrip-shaped band features, so it draws and exports like the outline. */
-      outline: TerrainOutline;
-      areaAc: number;
-      fellBackToOutline: false;
+      /** Ready to save on the dam (dam.outline) and to draw/export, whichever layer it holds. */
+      cache: OutlineCache;
+      /** The routed build, when the built layer is the routed flood. */
+      routed?: RoutedFloodResult;
+      fellBackToOutline: boolean;
     }
-  | { ok: true; layer: "outline"; choice: LayerChoice; cache: OutlineCache; centerline: Centerline; fellBackToOutline: boolean }
   | { ok: false; reason: string };
+
+/** Build the OutlineCache for a routed flood: the polygonised bands, a synthesized OutlineStats, and the routed facts. */
+function routedCache(
+  dam: DamRecord,
+  result: Analysis,
+  g: DemGrid,
+  routed: Extract<RoutedFloodResult, { ok: true }>,
+  fingerprint: string,
+): OutlineCache {
+  const common = floodStrip(dam, result).strip!.properties;
+  const poly = polygonizeDepth(g, routed.depthFt, { common, label: ROUTED_LABEL, title: `${common.dam_id} routed terrain flood` });
+  const rings = poly.outline.features.reduce(
+    (s, f) => s + (f.geometry.type === "Polygon" ? f.geometry.coordinates.length : f.geometry.coordinates.reduce((t, p) => t + p.length, 0)),
+    0,
+  );
+  const stats: OutlineStats = {
+    dem: { width: g.width, height: g.height, cellM: g.cellM, cells: g.width * g.height, bytes: g.width * g.height * 4, bbox: g.bbox, missing: 0 },
+    outlineAc: poly.areaAc,
+    engineAc: common.engine_wet_area_ac,
+    stripAc: common.strip_area_ac,
+    wetCells: poly.wetCells,
+    wetCellAc: Math.round(((poly.wetCells * g.cellM * g.cellM) / ACRE_M2) * 1000) / 1000,
+    bands: poly.bands,
+    bedTopFt: 0,
+    bedEndFt: 0,
+    channelKm: routed.stats.channelKm,
+    reachKm: 0,
+    hitsCorridor: routed.stats.reachedEdge,
+    rings,
+    droppedPatches: 0,
+    filledHoles: 0,
+  };
+  const r: RoutedSummary = {
+    floodedAc: routed.stats.floodedAc,
+    peakInCfs: routed.stats.peakInCfs,
+    peakOutCfs: routed.stats.peakOutCfs,
+    routedPeakFellBy: routed.stats.routedPeakFellBy,
+    channelKm: routed.stats.channelKm,
+    sections: routed.stats.sections,
+    cappedSections: routed.stats.cappedSections,
+    volumeFlag: routed.stats.volumeFlag,
+    reachedEdge: routed.stats.reachedEdge,
+    notes: routed.notes,
+  };
+  return { fingerprint, builtAt: new Date().toISOString(), source: DEM_SERVICE, attribution: DEM_ATTRIBUTION, stats, outline: poly.outline, layer: "routed", routed: r };
+}
 
 /**
  * Build the inundation layer the gate picks. When the gate picks routed but the routed build fails (e.g. too short a
- * channel), it falls back to the outline rather than returning nothing, and flags that it did.
+ * channel), it falls back to the outline rather than returning nothing, and flags that it did. Either way it returns a
+ * single OutlineCache to save on the dam and draw/export.
  */
 export async function buildInundation(
   dam: DamRecord,
@@ -82,32 +130,27 @@ export async function buildInundation(
   opts: RoutedFloodOptions = {},
 ): Promise<InundationResult> {
   const choice = chooseInundationLayer(result);
+  const io = outlineInputs(dam, result);
+  if (!io.ok) return { ok: false, reason: io.reason };
 
   if (choice.layer === "routed") {
     const routed = await buildRoutedFlood(dam, result, g, opts);
     if (routed.ok) {
-      const common = floodStrip(dam, result).strip!.properties;
-      const poly = polygonizeDepth(g, routed.depthFt, {
-        common,
-        label: ROUTED_LABEL,
-        title: `${common.dam_id} routed terrain flood`,
-      });
-      return { ok: true, layer: "routed", choice, routed, outline: poly.outline, areaAc: poly.areaAc, fellBackToOutline: false };
+      return { ok: true, layer: "routed", choice, cache: routedCache(dam, result, g, routed, io.inputs.fingerprint), routed, fellBackToOutline: false };
     }
     // Routed was picked but could not be built; fall back to the outline so the desk still gets a layer.
-    const built = await buildOutline(dam, result, g);
+    const built = await buildOutline(dam, result, g, { yieldFn: opts.yieldFn });
     if (!built.ok) return { ok: false, reason: `${routed.reason} Outline fallback also failed: ${built.reason}` };
     return {
       ok: true,
       layer: "outline",
       choice: { ...choice, reason: `${choice.reason} (Routed could not be built: ${routed.reason} Fell back to the outline.)` },
       cache: built.cache,
-      centerline: built.centerline,
       fellBackToOutline: true,
     };
   }
 
-  const built = await buildOutline(dam, result, g);
+  const built = await buildOutline(dam, result, g, { yieldFn: opts.yieldFn });
   if (!built.ok) return { ok: false, reason: built.reason };
-  return { ok: true, layer: "outline", choice, cache: built.cache, centerline: built.centerline, fellBackToOutline: false };
+  return { ok: true, layer: "outline", choice, cache: built.cache, fellBackToOutline: false };
 }

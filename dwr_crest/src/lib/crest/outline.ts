@@ -113,6 +113,21 @@ export type TerrainOutline = FloodStrip & {
   };
 };
 
+/** Routed-flood facts for the desk panel, when the saved layer is the routed flood rather than the bathtub outline. */
+export type RoutedSummary = {
+  floodedAc: number;
+  peakInCfs: number;
+  peakOutCfs: number;
+  /** Fraction the routed peak fell by, end to end (0..1). */
+  routedPeakFellBy: number;
+  channelKm: number;
+  sections: number;
+  cappedSections: number;
+  volumeFlag: boolean;
+  reachedEdge: boolean;
+  notes: string[];
+};
+
 export type OutlineCache = {
   fingerprint: string;
   builtAt: string;
@@ -120,11 +135,23 @@ export type OutlineCache = {
   attribution: string;
   stats: OutlineStats;
   outline: TerrainOutline;
+  /** Which inundation layer this cache holds. Absent means the bathtub outline (back-compatible with saved dams). */
+  layer?: "outline" | "routed";
+  /** Present when layer is "routed": the routed-flood facts the panel shows in place of the outline's. */
+  routed?: RoutedSummary;
 };
 
 export type OutlineState =
   | { state: "none"; message: string }
-  | { state: "ready"; outline: TerrainOutline; stats: OutlineStats; builtAt: string; message: null }
+  | {
+      state: "ready";
+      outline: TerrainOutline;
+      stats: OutlineStats;
+      builtAt: string;
+      message: null;
+      layer: "outline" | "routed";
+      routed?: RoutedSummary;
+    }
   | { state: "build" | "offline"; message: string };
 
 // ---- inputs and the DEM request -------------------------------------------------------------------------------
@@ -984,6 +1011,7 @@ export async function buildOutline(
       attribution: DEM_ATTRIBUTION,
       stats,
       outline,
+      layer: "outline",
     },
   };
 }
@@ -994,7 +1022,7 @@ export function outlineState(dam: DamRecord, result: Analysis, online: boolean):
   if (!io.ok) return { state: "none", message: io.reason };
   const c = dam.outline;
   if (c && c.fingerprint === io.inputs.fingerprint)
-    return { state: "ready", outline: c.outline, stats: c.stats, builtAt: c.builtAt, message: null };
+    return { state: "ready", outline: c.outline, stats: c.stats, builtAt: c.builtAt, message: null, layer: c.layer ?? "outline", routed: c.routed };
   if (c) {
     const msg = "The desk inputs changed since the terrain outline was built.";
     return online ? { state: "build", message: `${msg} Build it again.` } : { state: "offline", message: `${msg} ${OUTLINE_OFFLINE}` };

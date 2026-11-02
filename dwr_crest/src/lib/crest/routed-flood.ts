@@ -38,6 +38,8 @@ export type RoutedFloodOptions = {
   volumeLimit?: boolean;
   /** Floor on the lateral decay slope (m/m); higher stops the sideways spread sooner. Default 0.0005. */
   slopeFloor?: number;
+  /** Called every so many cells during the DEM trace so a long build can let the page breathe. */
+  yieldFn?: () => Promise<void>;
 };
 
 export type RoutedFloodResult = {
@@ -77,7 +79,7 @@ export async function buildRoutedFlood(
   const series = result.breach.series;
   if (!series || series.length < 2) return { ok: false, reason: "No routed flood: the breach has no outflow hydrograph." };
 
-  const built = await buildOutline(dam, result, g);
+  const built = await buildOutline(dam, result, g, { yieldFn: opts.yieldFn });
   if (!built.ok) return { ok: false, reason: built.reason.replace("No terrain outline", "No routed flood") };
   const centerline = built.centerline;
   if (centerline.pts.length < 2) return { ok: false, reason: "No routed flood: the traced channel is too short." };

@@ -1,10 +1,14 @@
 // The inundation-layer gate: routed for large floods, bathtub outline for small ones, decided on released volume.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { gunzipSync } from "node:zlib";
 
-import { GATE_VOLUME_ACFT, chooseInundationLayer } from "./inundation.ts";
+import { analyze } from "./engine.ts";
+import { buildInundation, GATE_VOLUME_ACFT, chooseInundationLayer } from "./inundation.ts";
 import type { DemGrid } from "./outline.ts";
-import { polygonizeDepth } from "./outline.ts";
+import { outlineInputs, polygonizeDepth } from "./outline.ts";
+import { SAMPLE_DAMS } from "./samples.ts";
 import type { Analysis } from "./types.ts";
 
 const withVolume = (volumeAcFt: number) => ({ breach: { volumeAcFt } }) as unknown as Analysis;
@@ -63,5 +67,36 @@ describe("polygonizeDepth", () => {
     const empty = polygonizeDepth(g, new Float32Array(W * H), { common, label: "x", title: "y" });
     assert.equal(empty.outline.features.length, 0);
     assert.equal(empty.wetCells, 0);
+  });
+});
+
+describe("buildInundation on ND00199 (30 m fixture, 1,609 ac-ft → routed)", () => {
+  const ND = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
+  const RESULT = analyze(ND);
+  const fx = (name: string) => new URL(`./__fixtures__/${name}`, import.meta.url);
+  const META = JSON.parse(readFileSync(fx("dem3dep_nd00199_30m.json"), "utf8"));
+  const U16 = new Uint16Array(new Uint8Array(gunzipSync(readFileSync(fx("dem3dep_nd00199_30m.u16cm.gz")))).buffer);
+  const DEM: DemGrid = { bbox: META.bbox, width: META.width, height: META.height, cellM: META.cellM, z: Float32Array.from(U16, (v) => v / 100 + 250) };
+
+  it("builds the routed layer the gate picks and returns a ready-to-save cache", async () => {
+    const r = await buildInundation(ND, RESULT, DEM);
+    assert.ok(r.ok, r.ok ? "" : r.reason);
+    if (!r.ok) return;
+    assert.equal(r.layer, "routed");
+    assert.equal(r.fellBackToOutline, false);
+    assert.ok(r.routed?.ok);
+    // The cache is a routed OutlineCache: tagged, carries the routed summary, draws like the outline.
+    assert.equal(r.cache.layer, "routed");
+    assert.ok(r.cache.routed);
+    assert.equal(r.cache.outline.type, "FeatureCollection");
+    assert.ok(r.cache.stats.outlineAc >= 0);
+    // The fingerprint matches the outline inputs, so outlineState reads it as "ready" for this dam.
+    const io = outlineInputs(ND, RESULT);
+    assert.ok(io.ok);
+    if (io.ok) assert.equal(r.cache.fingerprint, io.inputs.fingerprint);
+    // The routed summary carries the flags and the attenuated peak.
+    assert.ok(r.cache.routed!.peakInCfs > 0);
+    assert.ok(r.cache.routed!.peakOutCfs <= r.cache.routed!.peakInCfs + 1);
+    assert.equal(typeof r.cache.routed!.volumeFlag, "boolean");
   });
 });
