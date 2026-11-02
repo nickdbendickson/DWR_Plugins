@@ -1295,7 +1295,12 @@ def _classes():
         def add_steps(self):
             """A step line at the top of each page: where it sits in Start here\u2026"""
             self.strips = {}
-            for n, page_id in enumerate(self.pageIds()):
+            try:
+                ids = list(self.pageIds())
+            except Exception as e:                               # noqa - a stub Qt (tests)
+                _log("Step line not added: {}".format(e))
+                return
+            for n, page_id in enumerate(ids):
                 page = self.page(page_id)
                 lay = page.layout()
                 if lay is None or not hasattr(lay, "insertWidget"):
