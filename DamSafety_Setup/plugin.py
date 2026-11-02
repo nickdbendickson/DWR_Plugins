@@ -43,19 +43,77 @@ def _set_reason(lbl, text):
     lbl.setVisible(bool(text))
 
 
-def scan_marks_html(found):
-    """The folder scan as coloured marks: a green check for each layer found, a circle
-    for each missing one (red for the DWR dams, which Next needs; grey otherwise)."""
-    rows = []
-    for key, label in (("dwr", "DWR dams"), ("dam_lines", "Dam lines"),
-                       ("structures", "NSI structures"), ("roads", "Roads"), ("rail", "Rail")):
-        if key in (found or {}):
-            mark, color = "\u2713", GREEN
+# Style A (2026-11-02): each layer of the folder scan with what it is for, so a missing optional
+# layer reads as "less detail", not as an error. The notes are user-tested wording: keep them.
+SCAN_LAYERS = (
+    ("dwr", "DWR dams", "required \u2014 the dam list comes from here"),
+    ("dam_lines", "Dam lines", "optional \u2014 locates crests precisely"),
+    ("structures", "NSI structures", "optional \u2014 improves receptor mapping"),
+    ("roads", "Roads", "optional \u2014 road-crossing impacts"),
+    ("rail", "Rail", "optional \u2014 rail-crossing impacts"),
+)
+SCAN_ENOUGH = "\u2713 Enough to continue \u2014 missing layers only reduce detail."
+
+# The steps of Start here\u2026 end to end: this page, then DamSafety Runner's dam wizard
+# (DamSafety_Runner/wizard.py WIZARD_STEPS, the same names), then the run tool's dialog.
+WIZARD_STEPS = ("Data folder", "Dam", "Terrain", "Scenario", "Models", "Review", "Run tool")
+
+
+def steps_html(current, folder_done):
+    """The Start here\u2026 steps on one wrapping line, the mark first (docs/gui-grammar.md):
+    done = green check, this page = blue triangle in bold, later = grey circle. The Runner's
+    wizard has the same function (DamSafety_Runner/wizard.py)."""
+    parts = []
+    for i, name in enumerate(WIZARD_STEPS):
+        if i == current:
+            parts.append("<b style='color:{}; white-space:nowrap'>\u25b6 {}</b>".format(TOKENS["link"], name))
+        elif i < current or (i == 0 and folder_done):
+            parts.append("<span style='color:{}; white-space:nowrap'>\u2713 {}</span>".format(GREEN, name))
         else:
-            mark, color = "\u25cb", RED if key == "dwr" else GREY
-        rows.append("<span style='color:{}'>{}</span> {}{}".format(
-            color, mark, html.escape(label), "" if key in (found or {}) else " (missing)"))
+            parts.append("<span style='color:{}; white-space:nowrap'>\u25cb {}</span>".format(GREY, name))
+    return " \u2192 ".join(parts)
+
+
+def scan_marks_html(found):
+    """The folder scan as a per-layer status list: a green check for each layer found, a red
+    cross and what the layer is for when it is missing, then a green line when the DWR dams
+    (the one layer Next needs) are there."""
+    found = found or {}
+    rows = []
+    for key, label, note in SCAN_LAYERS:
+        if key in found:
+            rows.append("<span style='color:{}'>\u2713 {}</span> \u2014 found".format(
+                GREEN, html.escape(label)))
+        else:
+            rows.append("<span style='color:{}'>\u2715 {}</span> \u2014 {}".format(
+                RED, html.escape(label), html.escape(note)))
+    if "dwr" in found:
+        rows.append("<br><span style='color:{}'>{}</span>".format(GREEN, html.escape(SCAN_ENOUGH)))
     return "<br>".join(rows)
+
+
+def _log(text, level="Warning"):
+    """Write to the QGIS message log (DamSafety Setup tab). Never raises."""
+    try:
+        from qgis.core import QgsMessageLog, Qgis
+        QgsMessageLog.logMessage(text, "DamSafety Setup",
+                                 getattr(getattr(Qgis, "MessageLevel", Qgis), level))
+    except Exception:                                            # noqa - headless: stderr
+        import sys
+        sys.stderr.write("DamSafety Setup: {}\n".format(text))
+
+
+def _msg(text, level="Warning"):
+    """A message the user sees: the QGIS message bar, else the message log. Never raises."""
+    _log(text, level)
+    try:
+        from qgis.utils import iface
+        from qgis.core import Qgis
+        iface.messageBar().pushMessage("Dam safety", text,
+                                       level=getattr(getattr(Qgis, "MessageLevel", Qgis), level),
+                                       duration=8)
+    except Exception:                                            # noqa - no main window (tests)
+        return
 
 
 def _plugin_icon():
@@ -168,14 +226,16 @@ def runner_wizard_module():
     try:
         import importlib
         from qgis.utils import plugins
-    except Exception:                                            # noqa
+    except Exception:                                            # noqa - outside QGIS: no Runner
         return None
     for name in RUNNER_PLUGINS:
         if plugins.get(name) is None:
             continue
         try:
             return importlib.import_module(name + ".wizard")
-        except Exception:                                        # noqa
+        except Exception as e:                                   # noqa - tell, then try the next
+            _msg("{} is installed but its dam wizard did not load ({}). Reinstall it, then "
+                 "Start here\u2026 again.".format(name, e))
             continue
     return None
 
@@ -193,8 +253,8 @@ class SetupWizard(QWizard):
         try:
             finish = getattr(QWizard, "FinishButton", None) or QWizard.WizardButton.FinishButton
             self.setButtonText(finish, "Continue\u2026")
-        except Exception:                                        # noqa
-            pass
+        except Exception as e:                                   # noqa
+            _log("Continue\u2026 label not set: {}".format(e))
 
     def data_folder(self):
         return self.page(FOLDER_PAGE).path.text().strip()
@@ -207,6 +267,10 @@ class FolderPage(QWizardPage):
         self.setTitle("Suite data folder")
         self.setSubTitle("The offline pack or the folder of layer files. Results never go here.")
         lay = QVBoxLayout()
+        self.steps = QLabel(steps_html(0, False))  # where this page sits in Start here\u2026
+        self.steps.setWordWrap(True)                # wraps in a narrow window, never widens it
+        self.steps.setTextFormat(getattr(Qt, 'TextFormat', Qt).RichText)
+        lay.addWidget(self.steps)
         row = QHBoxLayout()
         self.path = QLineEdit()
         browse = QPushButton("Browse\u2026")
@@ -238,7 +302,8 @@ class FolderPage(QWizardPage):
         try:
             from .damsuite.suite_config import get
             saved = get("data_folder") or ""
-        except Exception:                                        # noqa
+        except Exception as e:                                   # noqa
+            _log("Last suite data folder not read: {}".format(e))
             saved = ""
         if saved and os.path.isdir(saved):
             self.path.setText(saved)     # the folder chosen last time, checked now
@@ -305,14 +370,12 @@ class FolderPage(QWizardPage):
 
 
 def ensure_dams_folder(path):
-    """Create the chosen Dams folder (only that folder; damsuite/layout.py). Never raises."""
+    """Create the chosen Dams folder (only that folder; damsuite/layout.py). Never raises; a
+    failure is logged and shown in the message bar (Style A: no silent failures)."""
     try:
         from .damsuite import layout as LY
         return LY.ensure_dams_folder(path) if path else []
     except Exception as e:
-        try:
-            from qgis.core import QgsMessageLog, Qgis
-            QgsMessageLog.logMessage("Dams folder not created: {}".format(e), "DamSafety Setup", getattr(Qgis, 'MessageLevel', Qgis).Warning)
-        except Exception:
-            pass
+        _msg("The Dams folder was not created ({}). Pick a folder you can write to in "
+             "Suite setup / status.".format(e))
         return []
