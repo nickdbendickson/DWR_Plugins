@@ -26,6 +26,7 @@ from .core import results_info as RI
 from qgis.PyQt.QtCore import Qt, QUrl
 from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtWidgets import (
+    QAbstractItemView,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
@@ -46,6 +47,10 @@ LEFT_DOCK = _DWA.LeftDockWidgetArea
 RIGHT_DOCK = _DWA.RightDockWidgetArea
 _TIF = getattr(Qt, "TextInteractionFlag", Qt)
 _TEXT_SELECTABLE = _TIF.TextSelectableByMouse
+# 3.13.6: QGIS 4 / PyQt6 scopes these under QAbstractItemView (QTableWidget.NoEditTriggers /
+# .SelectRows raise AttributeError there); PyQt5 has them unscoped on the class.
+_EDIT_TRIGGER = getattr(QAbstractItemView, "EditTrigger", QAbstractItemView)
+_SEL_BEHAVIOR = getattr(QAbstractItemView, "SelectionBehavior", QAbstractItemView)
 
 
 def _load_json(path):
@@ -197,8 +202,8 @@ class ResultsDock(QDockWidget):
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             ["Feature", "Kind", "Depth ft", "Vel ft/s", "Arrival h"])
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setEditTriggers(_EDIT_TRIGGER.NoEditTriggers)
+        self.table.setSelectionBehavior(_SEL_BEHAVIOR.SelectRows)
         lay.addWidget(self.table, 1)
         self.setWidget(root)
 
