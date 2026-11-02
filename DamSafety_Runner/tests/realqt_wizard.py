@@ -98,6 +98,12 @@ def main():
     pump()
     assert w.windowTitle() == "DamSafety Runner — Model one dam", w.windowTitle()
     pg = w.currentPage()
+    # Style A: every page shows the Start here… steps; Setup's folder is done, the dam is next
+    n0, strip = w.strips[w.currentId()]
+    assert n0 == 1 and len(w.strips) == 5, (n0, len(w.strips))
+    assert strip.text() == WZ.steps_html(1, True), strip.text()
+    assert "✓ Data folder" in strip.text() and "▶ Dam" in strip.text()
+    assert "○ Run tool" in strip.text() and strip.wordWrap()
     # 1. the suite folder's dams are the source, with a county filter and 'Name (ID)' labels
     assert pg.layer.currentText() == "DWR dams (suite data folder)", pg.layer.currentText()
     counties = [pg.county.itemText(i) for i in range(pg.county.count())]
@@ -133,6 +139,14 @@ def main():
     # 5. the terrain page: the coverage line and the Advanced header with its values
     tp = w.currentPage()
     assert tp.dem.currentText() == "dem_homme", tp.dem.currentText()
+    # Style A: the strip moved on; the jargon fields carry the user-tested wording
+    steps = w.strips[w.currentId()][1].text()
+    assert "✓ Dam" in steps and "▶ Terrain" in steps and "○ Scenario" in steps, steps
+    assert tp.z.toolTip() == WZ.FIELD_TIPS["zunit"] and "off by 3×" in tp.z.toolTip()
+    assert tp.z.whatsThis() == WZ.FIELD_TIPS["zunit"]
+    assert tp.dem_res.toolTip() == WZ.FIELD_TIPS["res"]
+    mp = w.page(w.pageIds()[3])
+    assert mp.cell.toolTip() == WZ.FIELD_TIPS["cell"]
     assert tp.coverage.text().startswith("✓"), tp.coverage.text()
     assert tp.advanced.title().startswith("Advanced") and "0.060" in tp.advanced.title()
     tp.n.setValue(0.08)

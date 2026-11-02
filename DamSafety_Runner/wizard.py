@@ -36,6 +36,37 @@ from .core import nd_data
 
 TITLE = "DamSafety Runner"
 
+# Style A (2026-11-02): the steps of DamSafety Setup's Start here\u2026 end to end, shown as a
+# step line on every page (DamSafety_Setup/plugin.py WIZARD_STEPS, the same names). Index 0 is
+# Setup's folder page; the wizard's pages are 1-5; the run tool's dialog is last.
+WIZARD_STEPS = ("Data folder", "Dam", "Terrain", "Scenario", "Models", "Review", "Run tool")
+
+# Plain-language help on the jargon fields. User-tested wording: keep it as written.
+FIELD_TIPS = {
+    "zunit": ("How heights are stored in the file. USGS IMG downloads are metres; older county "
+              "LiDAR (QL2) is feet. Pick wrong and every depth is off by 3\u00d7."),
+    "res": ("Grid spacing of the downloaded terrain. 10 m is right for screening; 1 m is only "
+            "needed for the dam face itself."),
+    "cell": ("Terrain grid the model runs on. Finer = slower. 10 m matches the 3DEP download."),
+}
+TIP_HINT = "(i) Hover any field for what it means."
+
+
+def steps_html(current, folder_done):
+    """The Start here\u2026 steps on one wrapping line, the mark first (docs/gui-grammar.md):
+    done = green check, this page = blue triangle in bold, later = grey circle. DamSafety
+    Setup's plugin.py has the same function."""
+    from .tokens import TOKENS
+    parts = []
+    for i, name in enumerate(WIZARD_STEPS):
+        if i == current:
+            parts.append("<b style='color:{}; white-space:nowrap'>\u25b6 {}</b>".format(TOKENS["link"], name))
+        elif i < current or (i == 0 and folder_done):
+            parts.append("<span style='color:{}; white-space:nowrap'>\u2713 {}</span>".format(TOKENS["success"], name))
+        else:
+            parts.append("<span style='color:{}; white-space:nowrap'>\u25cb {}</span>".format(TOKENS["off"], name))
+    return " \u2192 ".join(parts)
+
 
 # ------------------------------------------------------------------------------- messages
 def _message(kind, text, detail="", parent=None):
@@ -46,6 +77,17 @@ def _message(kind, text, detail="", parent=None):
         box(parent, TITLE, text + ("\n\n" + detail if detail else ""))
     except Exception:
         sys.stderr.write("{}: {}\n{}\n".format(TITLE, text, detail))
+
+
+def _log(text):
+    """A note in the QGIS message log (DamSafety Runner tab) for a step that has a fallback, so
+    nothing fails silently; stderr outside QGIS. Never raises."""
+    try:
+        from qgis.core import QgsMessageLog, Qgis
+        QgsMessageLog.logMessage(text, TITLE, getattr(getattr(Qgis, "MessageLevel", Qgis),
+                                                      "Warning"))
+    except Exception:                                            # noqa - outside QGIS
+        sys.stderr.write("{}: {}\n".format(TITLE, text))
 
 
 def _safe(default=None, what="the wizard"):
@@ -73,8 +115,8 @@ def _busy(on):
             QtWidgets.QApplication.setOverrideCursor(QtGui.QCursor(shape))
         else:
             QtWidgets.QApplication.restoreOverrideCursor()
-    except Exception:
-        pass
+    except Exception as e:
+        _log("Busy cursor not changed: {}".format(e))
 
 
 # ------------------------------------------------------------------------------- QGIS access
@@ -99,8 +141,8 @@ def _find_models():
     try:
         from .algorithms import SET_ANUGA, SET_LISFLOOD, _setting
         exe, py = _setting(SET_LISFLOOD), _setting(SET_ANUGA)
-    except Exception:
-        pass
+    except Exception as e:
+        _log("Model settings not read, auto-detecting the engines: {}".format(e))
     if not exe or not os.path.isfile(exe):
         exe = nd_data.detect_lisflood()
     if not py or not os.path.isfile(py):
@@ -785,8 +827,8 @@ def _classes():
                         .transform(QgsPointXY(ll[0], ll[1]))
                     if lyr.extent().contains(p):
                         return src
-            except Exception:                                    # noqa
-                pass
+            except Exception as e:                               # noqa
+                _log("No loaded DEM checked for the dam point: {}".format(e))
             return ""
 
         @_safe(what="the DEM estimate")
@@ -914,6 +956,10 @@ def _classes():
                                         "downstream.")
             form.addRow("Downstream bearing", self.dem_bearing)
             form.addRow("DEM elevation units", self.z)
+            self.z.setToolTip(FIELD_TIPS["zunit"])
+            self.z.setWhatsThis(FIELD_TIPS["zunit"])          # Shift+F1 from the keyboard
+            self.dem_res.setToolTip(FIELD_TIPS["res"])
+            self.dem_res.setWhatsThis(FIELD_TIPS["res"])
             form.addRow("Dams folder", box)
             outer.addLayout(form)
             # roughness: optional, folded; the header shows the values so nothing hides
@@ -924,6 +970,9 @@ def _classes():
             f2.addRow("Manning's n where there is no raster", self.n)
             self.advanced = Collapsible("Advanced", rough)
             outer.addWidget(self.advanced)
+            hint = W.QLabel(TIP_HINT)
+            hint.setStyleSheet("color: {};".format(TOKENS["muted"]))
+            outer.addWidget(hint)
             self.problems = red_label()
             outer.addWidget(self.problems)
             outer.addStretch(1)
@@ -1127,6 +1176,8 @@ def _classes():
             self.cell.setSuffix(" m")
             form.addRow("Models", self.tier)
             form.addRow("Cell size (m; 10 m = 32.8 ft)", self.cell)
+            self.cell.setToolTip(FIELD_TIPS["cell"])
+            self.cell.setWhatsThis(FIELD_TIPS["cell"])
             outer.addLayout(form)
             self.button = W.QPushButton("Estimate the run time")
             self.result = W.QLabel("")
@@ -1213,8 +1264,8 @@ def _classes():
                 finish = getattr(W.QWizard, "FinishButton", None) or \
                     W.QWizard.WizardButton.FinishButton
                 wiz.setButtonText(finish, "Open the tool\u2026")
-            except Exception:
-                pass
+            except Exception as e:
+                _log("'Open the tool\u2026' label not set: {}".format(e))
 
         @_safe(default=False, what="the review page")
         def validatePage(self):
@@ -1233,11 +1284,32 @@ def _classes():
             self.session = EstimateSession()
             for page in (DamPage(), TerrainPage(), ScenarioPage(), ModelPage(), ReviewPage()):
                 self.addPage(page)
+            self.add_steps()
             try:
                 wrap_wizard(self)
                 fit_window(self, (800, 780))     # the dam page's two groups
-            except Exception:
-                pass
+            except Exception as e:
+                _log("Wizard window not fitted to the screen: {}".format(e))
+            self.currentIdChanged.connect(self.show_step)
+
+        def add_steps(self):
+            """A step line at the top of each page: where it sits in Start here\u2026"""
+            self.strips = {}
+            for n, page_id in enumerate(self.pageIds()):
+                page = self.page(page_id)
+                lay = page.layout()
+                if lay is None or not hasattr(lay, "insertWidget"):
+                    continue
+                strip = W.QLabel("")
+                strip.setWordWrap(True)          # wraps in a narrow window, never widens it
+                lay.insertWidget(0, strip)
+                self.strips[page_id] = (n + 1, strip)    # 0 is Setup's folder page
+
+        def show_step(self, page_id):
+            if page_id not in self.strips:
+                return
+            n, strip = self.strips[page_id]
+            strip.setText(steps_html(n, bool(self.found or self.answers.get("data_folder"))))
 
     _CLASSES.update({"Wizard": Wizard, "DamPage": DamPage, "TerrainPage": TerrainPage,
                      "ScenarioPage": ScenarioPage, "ModelPage": ModelPage,
