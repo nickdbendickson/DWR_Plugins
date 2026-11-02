@@ -31,7 +31,6 @@ import {
   type Nd911State,
 } from "@/lib/crest/nd911";
 import {
-  buildOutline,
   DEM_ATTRIBUTION,
   DEM_ATTRIBUTION_SHORT,
   demRequest,
@@ -43,6 +42,7 @@ import {
   outlineState,
   type OutlineState,
 } from "@/lib/crest/outline";
+import { buildInundation, ROUTED_LABEL } from "@/lib/crest/inundation";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { demTieOffer, missingForNext, needsDemTie } from "@/lib/crest/nd-dams";
@@ -250,7 +250,7 @@ function useFloodAreas(dam: DamRecord, result: ReturnType<typeof analyze>) {
   const basis = strip.basis;
   const outline = useMemo(() => outlineState(dam, result, online), [dam, result, online]);
   const ol = outline.state === "ready" ? outline.outline : null;
-  const against = ol ? "terrain outline" : "flood strip";
+  const against = ol ? (outline.state === "ready" && outline.layer === "routed" ? "routed flood" : "terrain outline") : "flood strip";
   const area = ol ?? strip.strip;
   const lookup = useMemo(() => (strip.strip ? lookupArea(strip.strip, ol) : null), [strip.strip, ol]);
   const plss = useMemo<PlssState>(() => plssState(dam, area, online, against), [dam, area, online, against]);
@@ -456,6 +456,10 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
             ; receptors past it{result.flood.aoi?.applied ? " or outside the drawn area" : ""} are unresolved.
           </p>
           <p className="text-xs text-muted">Velocity: {result.flood.velocityBasis}</p>
+          <p className="mt-1 text-xs text-muted">
+            The schematic flood is a dated screening aid, not an inundation map. Build the terrain inundation layer below
+            (3DEP terrain) for the layer of record; the schematic strip stays only as the last-resort fallback.
+          </p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <SelectField
@@ -549,8 +553,8 @@ function OutlinePanel({ dam, result, outline }: { dam: DamRecord; result: Return
       const req = demRequest(io.inputs);
       setBusy(`Fetching the 3DEP terrain (${req.width} × ${req.height} cells at ${num(req.cellM, 0)} m)…`);
       const grid = await fetchDem(req);
-      setBusy("Tracing the outline on the terrain…");
-      const r = await buildOutline(dam, result, grid, { yieldFn: breathe });
+      setBusy("Building the inundation layer on the terrain…");
+      const r = await buildInundation(dam, result, grid, { yieldFn: breathe });
       if (useDesk.getState().activeId !== id) return;
       if (r.ok) update({ outline: r.cache });
       else setError(r.reason);
@@ -561,26 +565,32 @@ function OutlinePanel({ dam, result, outline }: { dam: DamRecord; result: Return
     }
   };
   const s = outline.state === "ready" ? outline.stats : null;
+  const layer = outline.state === "ready" ? outline.layer : "outline";
+  const routed = outline.state === "ready" ? outline.routed : undefined;
   const btn = "inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50";
   return (
     <div className="rounded-md border border-line bg-card p-4" data-testid="outline-panel">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-lg">Terrain outline (approximate)</h3>
+        <h3 className="text-lg">Terrain inundation (approximate)</h3>
         <div className="flex flex-wrap gap-2">
           {outline.state !== "offline" ? (
             <button type="button" onClick={() => void build()} disabled={busy != null} className={btn}>
-              {busy ? "Building…" : s ? "Build again" : "Build the terrain outline"}
+              {busy ? "Building…" : s ? "Build again" : "Build the inundation layer"}
             </button>
           ) : null}
           {dam.outline ? (
             <button type="button" onClick={() => update({ outline: undefined })} disabled={busy != null} className={btn}>
-              Remove outline
+              Remove layer
             </button>
           ) : null}
         </div>
       </div>
       <p className="mt-1 text-sm font-medium" data-testid="outline-label">
-        {OUTLINE_LABEL}.
+        {layer === "routed" ? ROUTED_LABEL : OUTLINE_LABEL}.
+      </p>
+      <p className="mt-1 text-sm text-muted" data-testid="inundation-primary-note">
+        This terrain layer is Crest's inundation layer of record. The schematic flood strip is a dated last resort, kept
+        only for offline use or until this layer is built; build this once and it is saved with the dam.
       </p>
       {outline.message ? (
         <p className="mt-1 text-sm text-muted" role="status">
@@ -597,7 +607,39 @@ function OutlinePanel({ dam, result, outline }: { dam: DamRecord; result: Return
           {error}
         </p>
       ) : null}
-      {s ? (
+      {s && routed ? (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-line sm:grid-cols-4">
+            <Stat k="Flooded area" v={`${num(routed.floodedAc, 0)} ac`} />
+            <Stat k="Routed peak out" v={`${num(routed.peakOutCfs, 0)} cfs`} />
+            <Stat k="Peak attenuated" v={`${num(routed.routedPeakFellBy * 100, 0)} %`} />
+            <Stat k="Channel routed" v={`${num(routed.channelKm, 1)} km`} />
+          </div>
+          <p className="mt-2 text-sm" data-testid="routed-note">
+            The routed flood carries the breach hydrograph down the drainage the terrain traces ({num(routed.channelKm, 1)} km),
+            attenuating the {num(routed.peakInCfs, 0)} cfs breach peak to {num(routed.peakOutCfs, 0)} cfs, then fills the water
+            surface onto the ground.{" "}
+            {routed.cappedSections > 0
+              ? `${routed.cappedSections} of ${routed.sections} cross-sections could not carry the routed peak within the cut height, so their stage is a floor, not a fit.`
+              : `All ${routed.sections} cross-sections carried the routed peak.`}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            By depth band: {s.bands.map((b) => `${b.label} ${num(b.ac, 0)} ac`).join(" · ")}. The PLSS and 911 lists below are
+            against this flood; the dated flood strip stays on the map only as the last-resort fallback.
+          </p>
+          {routed.notes.length ? (
+            <p className="mt-1 text-xs text-amber" data-testid="routed-flags">
+              {routed.notes.join(" ")}
+            </p>
+          ) : null}
+          <p className="mt-1 text-xs text-muted" data-testid="outline-dem">
+            Terrain: {s.dem.width} × {s.dem.height} cells at {num(s.dem.cellM, 0)} m (NAVD88); depth from Muskingum-Cunge
+            routing of the breach hydrograph on DEM cross-sections and a terrain fill, not a full 2-D hydraulic model. Built{" "}
+            {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} and saved with this dam (the terrain
+            itself is not kept). {DEM_ATTRIBUTION}
+          </p>
+        </>
+      ) : s ? (
         <>
           <div className="mt-3 grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-line sm:grid-cols-4">
             <Stat k="Outline area" v={`${num(s.outlineAc, 0)} ac`} />
@@ -611,7 +653,7 @@ function OutlinePanel({ dam, result, outline }: { dam: DamRecord; result: Return
           <p className="mt-1 text-xs text-muted">
             By depth band:{" "}
             {s.bands.map((b) => `${b.label} ${num(b.ac, 0)} ac`).join(" · ")}. The PLSS and 911 lists below are against
-            this outline; the strip stays on the map as the fallback.
+            this outline; the dated flood strip stays on the map only as the last-resort fallback.
           </p>
           <p className="mt-1 text-xs text-muted" data-testid="outline-dem">
             Terrain: {s.dem.width} × {s.dem.height} cells at {num(s.dem.cellM, 0)} m ({num(s.dem.bytes / 1e6, 1)} MB, NAVD88),
@@ -695,11 +737,13 @@ function PlssPanel({ lookup, plss, against, basis }: { lookup: FloodStrip | null
             {t.rows.length} sections, {num(t.listedAc, 1)} of the {against}&apos;s {num(t.stripAc, 1)} ac. Slivers under {SLIVER_AC} ac
             not listed: {t.sliversIgnored}
             {t.uncoveredAc >= SLIVER_AC ? `; ${num(t.uncoveredAc, 1)} ac of the ${against} lies outside every fetched section` : ""}.
-            {against !== "flood strip"
-              ? ` ${OUTLINE_LABEL}.`
-              : basis.startsWith("the schematic")
-                ? " Approximate: the strip is the schematic desk valley, not a mapped flood extent."
-                : ` Strip from ${basis}.`}{" "}
+            {against === "routed flood"
+              ? ` ${ROUTED_LABEL}.`
+              : against !== "flood strip"
+                ? ` ${OUTLINE_LABEL}.`
+                : basis.startsWith("the schematic")
+                  ? " Approximate, and a dated last resort: the strip is the schematic desk valley, not a mapped flood extent — build the terrain inundation layer for the current method."
+                  : ` Strip from ${basis}.`}{" "}
             Looked up{" "}
             {new Date(t.fetchedAt).toLocaleString()} and saved with this dam.
           </p>
@@ -1418,13 +1462,13 @@ function ExportPanel({ dam, result, desk }: { dam: DamRecord; result: ReturnType
         </button>
       </div>
       <p className="mt-2 text-xs text-muted">
-        Flood strip (WGS 84): {strip.strip ? (dam.resultsOfRecord && !strip.basis.startsWith("the desk") ? `depth bands from ${strip.basis}.` : `approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands${dam.resultsOfRecord ? ` (${strip.basis})` : ""}.`) : strip.reason}
+        Flood strip (WGS 84): {strip.strip ? (dam.resultsOfRecord && !strip.basis.startsWith("the desk") ? `depth bands from ${strip.basis}.` : `dated last resort — an approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands${dam.resultsOfRecord ? ` (${strip.basis})` : ""}. Build the terrain inundation layer for the current method.`) : strip.reason}
         {dam.resultsOfRecord ? ` dam.json names the source of record (${dam.resultsOfRecord.label}).` : ""}
       </p>
       <p className="mt-1 text-xs text-muted" data-testid="outline-export-note">
-        Terrain outline (WGS 84):{" "}
+        {outline.state === "ready" && outline.layer === "routed" ? "Routed terrain flood" : "Terrain outline"} (WGS 84):{" "}
         {ol
-          ? `${OUTLINE_LABEL}; ${num(ol.properties.outline_area_ac, 1)} ac, depth bands, with the PLSS and 911 lists against the outline. ${DEM_ATTRIBUTION_SHORT}.`
+          ? `${outline.state === "ready" && outline.layer === "routed" ? ROUTED_LABEL : OUTLINE_LABEL}; ${num(ol.properties.outline_area_ac, 1)} ac, depth bands, with the PLSS and 911 lists against it. ${DEM_ATTRIBUTION_SHORT}.`
           : outline.message}
       </p>
       <p className="mt-1 text-xs text-muted">

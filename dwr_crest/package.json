@@ -16,6 +16,7 @@
     "data:nd-dams-dwr": "node scripts/build-nd-dams-dwr.mjs",
     "build:crest-html": "node node_modules/vite/bin/vite.js build -c vite.desktop.config.ts --mode singlefile",
     "test:desktop": "python3 crest-desktop/tests/test_smoke.py",
+    "validate:crest": "node --experimental-strip-types scripts/validate-crest.mjs",
     "build:dev": "node scripts/with-app-env.mjs vite build --mode development",
     "preview": "node scripts/with-app-env.mjs vite preview",
     "preview:restart": "node scripts/preview.mjs restart",

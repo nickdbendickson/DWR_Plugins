@@ -429,5 +429,10 @@ export function createEngine() {
         return true;
     }
   }
-  return { handle };
+  /** The retained grid and projection of an imported run (the validation harness), or null. */
+  function get(key: string): Layer | null {
+    const run = runs.get(key);
+    return run ? { grid: run.retained, proj: run.proj } : null;
+  }
+  return { handle, get };
 }
