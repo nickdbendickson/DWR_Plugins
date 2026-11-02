@@ -34,6 +34,10 @@ export type RoutedFloodOptions = {
   maxHours?: number;
   /** A cell is wet at this depth (m). Default 0.03 (~0.1 ft). */
   minDepthM?: number;
+  /** Cap the fill at the released breach volume instead of only flagging the over-spread. Default false. */
+  volumeLimit?: boolean;
+  /** Floor on the lateral decay slope (m/m); higher stops the sideways spread sooner. Default 0.0005. */
+  slopeFloor?: number;
 };
 
 export type RoutedFloodResult = {
@@ -95,6 +99,8 @@ export async function buildRoutedFlood(
   const fill = fillFlood(g, centerline, routed.sections, {
     minDepthM: opts.minDepthM ?? 0.03,
     availableVolumeM3: result.breach.volumeAcFt * ACFT,
+    volumeLimit: opts.volumeLimit ?? false,
+    slopeFloor: opts.slopeFloor,
   });
 
   const N = g.width * g.height;

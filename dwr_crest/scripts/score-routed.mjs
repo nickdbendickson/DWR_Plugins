@@ -23,7 +23,9 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith("--")) throw new Error(`unexpected ${a}`);
-    o[a.slice(2)] = argv[++i];
+    const key = a.slice(2);
+    if (key === "volume-limit") o[key] = true;
+    else o[key] = argv[++i];
   }
   for (const k of ["dam", "runner"]) if (!o[k]) throw new Error(`--${k} is required`);
   return o;
@@ -49,7 +51,11 @@ export async function main(argv, log = console.log) {
   log(`  DEM ${dem.width}×${dem.height} @ ${dem.cellM.toFixed(1)} m`);
 
   log("Building the routed flood…");
-  const rf = await buildRoutedFlood(dam, result, dem);
+  const rf = await buildRoutedFlood(dam, result, dem, {
+    volumeLimit: o["volume-limit"] != null,
+    slopeFloor: o["slope-floor"] != null ? Number(o["slope-floor"]) : undefined,
+    sectionHalfWidthM: o["half-width"] != null ? Number(o["half-width"]) : undefined,
+  });
   if (!rf.ok) throw new Error(rf.reason);
   log(`  routed: peak in ${rf.stats.peakInCfs} cfs → out ${rf.stats.peakOutCfs} cfs (fell ${(rf.stats.routedPeakFellBy * 100).toFixed(0)}%), ${rf.stats.sections} sections, flooded ${rf.stats.floodedAc} ac`);
   for (const n of rf.notes) log(`  note: ${n}`);

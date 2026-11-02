@@ -38,6 +38,12 @@ export type FillOptions = {
   maxWetCells?: number;
   /** The water volume the breach supplies (m³); when given, the result flags a fill that lays down more. */
   availableVolumeM3?: number;
+  /**
+   * Cap the fill at availableVolumeM3 instead of only flagging it. The heap spreads highest-water-first, so stopping
+   * at the cap keeps the deepest, most connected water and trims the shallow far-spread fringe the volume can't
+   * support. Default false (envelope + flag, the method as first agreed).
+   */
+  volumeLimit?: boolean;
 };
 
 export type FillResult = {
@@ -128,6 +134,7 @@ export function fillFlood(g: DemGrid, line: Centerline, sections: RoutedSection[
   const minDepth = opts.minDepthM ?? 0.03;
   const slopeFloor = opts.slopeFloor ?? 0.0005;
   const maxWet = opts.maxWetCells ?? 4_000_000;
+  const volumeCap = opts.volumeLimit && opts.availableVolumeM3 != null ? opts.availableVolumeM3 : Infinity;
   const kx = kxOf(line.loc.lat);
   const dlon = (g.bbox[2] - g.bbox[0]) / W;
   const dlat = (g.bbox[3] - g.bbox[1]) / H;
@@ -200,6 +207,10 @@ export function fillFlood(g: DemGrid, line: Centerline, sections: RoutedSection[
       wetCells++;
       volumeM3 += d * cellM2;
       if (wetCells > maxWet) break;
+      // Volume-limited fill: once the laid-down volume reaches what the breach supplies, stop. The heap pops highest
+      // water first, so every cell still queued carries a lower surface than this one — stopping trims the shallow,
+      // far-spread fringe and keeps the deepest water.
+      if (volumeM3 >= volumeCap) break;
     }
     const ci = c % W;
     const cj = (c - ci) / W;
