@@ -455,6 +455,10 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
             ; receptors past it{result.flood.aoi?.applied ? " or outside the drawn area" : ""} are unresolved.
           </p>
           <p className="text-xs text-muted">Velocity: {result.flood.velocityBasis}</p>
+          <p className="mt-1 text-xs text-muted">
+            The schematic flood is a dated screening aid, not an inundation map. Build the terrain inundation layer below
+            (3DEP terrain) for the layer of record; the schematic strip stays only as the last-resort fallback.
+          </p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <SelectField
@@ -583,6 +587,10 @@ function OutlinePanel({ dam, result, outline }: { dam: DamRecord; result: Return
       <p className="mt-1 text-sm font-medium" data-testid="outline-label">
         {layer === "routed" ? ROUTED_LABEL : OUTLINE_LABEL}.
       </p>
+      <p className="mt-1 text-sm text-muted" data-testid="inundation-primary-note">
+        This terrain layer is Crest's inundation layer of record. The schematic flood strip is a dated last resort, kept
+        only for offline use or until this layer is built; build this once and it is saved with the dam.
+      </p>
       {outline.message ? (
         <p className="mt-1 text-sm text-muted" role="status">
           {outline.message}
@@ -616,7 +624,7 @@ function OutlinePanel({ dam, result, outline }: { dam: DamRecord; result: Return
           </p>
           <p className="mt-1 text-xs text-muted">
             By depth band: {s.bands.map((b) => `${b.label} ${num(b.ac, 0)} ac`).join(" · ")}. The PLSS and 911 lists below are
-            against this flood; the strip stays on the map as the fallback.
+            against this flood; the dated flood strip stays on the map only as the last-resort fallback.
           </p>
           {routed.notes.length ? (
             <p className="mt-1 text-xs text-amber" data-testid="routed-flags">
@@ -644,7 +652,7 @@ function OutlinePanel({ dam, result, outline }: { dam: DamRecord; result: Return
           <p className="mt-1 text-xs text-muted">
             By depth band:{" "}
             {s.bands.map((b) => `${b.label} ${num(b.ac, 0)} ac`).join(" · ")}. The PLSS and 911 lists below are against
-            this outline; the strip stays on the map as the fallback.
+            this outline; the dated flood strip stays on the map only as the last-resort fallback.
           </p>
           <p className="mt-1 text-xs text-muted" data-testid="outline-dem">
             Terrain: {s.dem.width} × {s.dem.height} cells at {num(s.dem.cellM, 0)} m ({num(s.dem.bytes / 1e6, 1)} MB, NAVD88),
@@ -728,11 +736,13 @@ function PlssPanel({ lookup, plss, against, basis }: { lookup: FloodStrip | null
             {t.rows.length} sections, {num(t.listedAc, 1)} of the {against}&apos;s {num(t.stripAc, 1)} ac. Slivers under {SLIVER_AC} ac
             not listed: {t.sliversIgnored}
             {t.uncoveredAc >= SLIVER_AC ? `; ${num(t.uncoveredAc, 1)} ac of the ${against} lies outside every fetched section` : ""}.
-            {against !== "flood strip"
-              ? ` ${OUTLINE_LABEL}.`
-              : basis.startsWith("the schematic")
-                ? " Approximate: the strip is the schematic desk valley, not a mapped flood extent."
-                : ` Strip from ${basis}.`}{" "}
+            {against === "routed flood"
+              ? ` ${ROUTED_LABEL}.`
+              : against !== "flood strip"
+                ? ` ${OUTLINE_LABEL}.`
+                : basis.startsWith("the schematic")
+                  ? " Approximate, and a dated last resort: the strip is the schematic desk valley, not a mapped flood extent — build the terrain inundation layer for the current method."
+                  : ` Strip from ${basis}.`}{" "}
             Looked up{" "}
             {new Date(t.fetchedAt).toLocaleString()} and saved with this dam.
           </p>
@@ -1473,7 +1483,7 @@ function ExportPanel({ dam, result, desk }: { dam: DamRecord; result: ReturnType
         </button>
       </div>
       <p className="mt-2 text-xs text-muted">
-        Flood strip (WGS 84): {strip.strip ? (dam.resultsOfRecord && !strip.basis.startsWith("the desk") ? `depth bands from ${strip.basis}.` : `approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands${dam.resultsOfRecord ? ` (${strip.basis})` : ""}.`) : strip.reason}
+        Flood strip (WGS 84): {strip.strip ? (dam.resultsOfRecord && !strip.basis.startsWith("the desk") ? `depth bands from ${strip.basis}.` : `dated last resort — an approximate screening strip, not a mapped flood extent; the schematic desk valley drawn as depth bands${dam.resultsOfRecord ? ` (${strip.basis})` : ""}. Build the terrain inundation layer for the current method.`) : strip.reason}
         {dam.resultsOfRecord ? ` dam.json names the source of record (${dam.resultsOfRecord.label}).` : ""}
       </p>
       <p className="mt-1 text-xs text-muted" data-testid="outline-export-note">
