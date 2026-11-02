@@ -14,12 +14,16 @@
  * DEM and no model to decide; buildInundation then builds only the layer the gate picks.
  */
 
-import { buildOutline } from "./outline.ts";
+import { floodStrip } from "./floodstrip.ts";
+import { buildOutline, polygonizeDepth } from "./outline.ts";
 import { buildRoutedFlood, type RoutedFloodOptions, type RoutedFloodResult } from "./routed-flood.ts";
 import type { Analysis, DamRecord } from "./types.ts";
 
-import type { DemGrid, OutlineCache } from "./outline.ts";
+import type { DemGrid, OutlineCache, TerrainOutline } from "./outline.ts";
 import type { Centerline } from "./sections.ts";
+
+/** Map-and-export label for the routed flood, distinct from the bathtub outline's OUTLINE_LABEL. */
+export const ROUTED_LABEL = "Routed terrain flood from 3DEP terrain and the breach hydrograph (Muskingum-Cunge routing + terrain fill), not a full 2-D hydraulic model";
 
 /**
  * Released breach volume (ac-ft) at or above which the routed flood is used instead of the bathtub outline. Between
@@ -54,7 +58,16 @@ export function chooseInundationLayer(result: Analysis): LayerChoice {
 }
 
 export type InundationResult =
-  | { ok: true; layer: "routed"; choice: LayerChoice; routed: RoutedFloodResult; fellBackToOutline: false }
+  | {
+      ok: true;
+      layer: "routed";
+      choice: LayerChoice;
+      routed: RoutedFloodResult;
+      /** The routed depth grid polygonised into FloodStrip-shaped band features, so it draws and exports like the outline. */
+      outline: TerrainOutline;
+      areaAc: number;
+      fellBackToOutline: false;
+    }
   | { ok: true; layer: "outline"; choice: LayerChoice; cache: OutlineCache; centerline: Centerline; fellBackToOutline: boolean }
   | { ok: false; reason: string };
 
@@ -72,7 +85,15 @@ export async function buildInundation(
 
   if (choice.layer === "routed") {
     const routed = await buildRoutedFlood(dam, result, g, opts);
-    if (routed.ok) return { ok: true, layer: "routed", choice, routed, fellBackToOutline: false };
+    if (routed.ok) {
+      const common = floodStrip(dam, result).strip!.properties;
+      const poly = polygonizeDepth(g, routed.depthFt, {
+        common,
+        label: ROUTED_LABEL,
+        title: `${common.dam_id} routed terrain flood`,
+      });
+      return { ok: true, layer: "routed", choice, routed, outline: poly.outline, areaAc: poly.areaAc, fellBackToOutline: false };
+    }
     // Routed was picked but could not be built; fall back to the outline so the desk still gets a layer.
     const built = await buildOutline(dam, result, g);
     if (!built.ok) return { ok: false, reason: `${routed.reason} Outline fallback also failed: ${built.reason}` };

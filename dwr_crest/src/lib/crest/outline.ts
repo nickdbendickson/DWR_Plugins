@@ -494,6 +494,136 @@ class MinHeap {
 const r7 = (n: number) => Math.round(n * 1e7) / 1e7;
 const r3 = (n: number) => Math.round(n * 1e3) / 1e3;
 
+export type PolygonizedDepth = {
+  /** FloodStrip-shaped band polygons (lon/lat), so the map, legend, PLSS/911 lists and exports read it like the strip. */
+  outline: TerrainOutline;
+  bands: OutlineStats["bands"];
+  /** Drawn (smoothed) polygon area, acres. */
+  areaAc: number;
+  wetCells: number;
+};
+
+/**
+ * Turn a depth grid (feet, row-major from the NW, 0 or NaN where dry) on a DEM frame into FloodStrip-shaped band
+ * polygons — the same depth-band → 3×3 mode filter → cell-edge trace → Chaikin pipeline the terrain outline draws,
+ * so a routed flood (routed-flood.ts) draws and exports exactly like the bathtub outline. Pure; no `along`, so the
+ * per-band from_km/to_km are left at 0. Shares the band tracing with buildOutline but does not run its hydrology.
+ *
+ * NOTE: the band → polygon tail here mirrors buildOutline's; if that pipeline changes, change both (or unify them).
+ */
+export function polygonizeDepth(
+  g: DemGrid,
+  depthFt: Float32Array,
+  opts: { common: FloodStrip["properties"]; label: string; title: string },
+): PolygonizedDepth {
+  const W = g.width;
+  const H = g.height;
+  const N = W * H;
+  const dlon = (g.bbox[2] - g.bbox[0]) / W;
+  const dlat = (g.bbox[3] - g.bbox[1]) / H;
+  const midLat = (g.bbox[1] + g.bbox[3]) / 2;
+  const kx = M_PER_DEG_LON_EQ * Math.cos((midLat * Math.PI) / 180);
+  const cellM2 = dlon * kx * dlat * M_PER_DEG_LAT;
+  const toLonLat = (p: XY): [number, number] => [r7(g.bbox[0] + p[0] * dlon), r7(g.bbox[3] + p[1] * dlat)];
+  const wet = (k: number) => Number.isFinite(depthFt[k]) && depthFt[k] >= WET_FT - 1e-9;
+
+  // Depth bands + one 3×3 mode pass, as the outline does.
+  const idx = new Map(DEPTH_BANDS.map((b, i) => [b.id, i]));
+  const band0 = new Int8Array(N).fill(-1);
+  for (let k = 0; k < N; k++) if (wet(k)) band0[k] = idx.get(bandFor(Math.max(WET_FT, depthFt[k])).id)!;
+  const band = new Int8Array(band0);
+  const cnt = new Int32Array(DEPTH_BANDS.length);
+  for (let j = 0; j < H; j++)
+    for (let i = 0; i < W; i++) {
+      const k = j * W + i;
+      if (band0[k] < 0) continue;
+      cnt.fill(0);
+      for (let dj = -1; dj <= 1; dj++)
+        for (let di = -1; di <= 1; di++) {
+          const ii = i + di;
+          const jj = j + dj;
+          if (ii < 0 || jj < 0 || ii >= W || jj >= H) continue;
+          const b = band0[jj * W + ii];
+          if (b >= 0) cnt[b]++;
+        }
+      let best = band0[k];
+      for (let b = 0; b < cnt.length; b++) if (cnt[b] > cnt[best]) best = b;
+      band[k] = best;
+    }
+
+  const features: StripFeature[] = [];
+  const bands: OutlineStats["bands"] = [];
+  let wetCells = 0;
+  let polyAc = 0;
+  for (let b = 0; b < DEPTH_BANDS.length; b++) {
+    const mask = new Uint8Array(N);
+    let cells = 0;
+    let dMax = -Infinity;
+    let dMin = Infinity;
+    for (let k = 0; k < N; k++)
+      if (band[k] === b) {
+        mask[k] = 1;
+        cells++;
+        const dft = Math.max(WET_FT, depthFt[k]);
+        dMax = Math.max(dMax, dft);
+        dMin = Math.min(dMin, dft);
+      }
+    if (cells === 0) continue;
+    wetCells += cells;
+    const polys = polygonsOf(mask, W, H);
+    if (polys.length === 0) continue;
+    let cellArea = 0;
+    const coords = polys.map((rings) =>
+      rings.map((r, ri) => {
+        const smooth = chaikin(r);
+        cellArea += (ri === 0 ? 1 : -1) * Math.abs(shoelace(smooth));
+        const sm = smooth.map(toLonLat);
+        return [...sm, sm[0]];
+      }),
+    );
+    const ac = (cellArea * cellM2) / ACRE_M2;
+    polyAc += ac;
+    bands.push({ band: DEPTH_BANDS[b].id, label: DEPTH_BANDS[b].label, ac: r3(ac) });
+    features.push({
+      type: "Feature",
+      properties: {
+        ...opts.common,
+        disclaimer: opts.label,
+        band: DEPTH_BANDS[b].id,
+        band_label: DEPTH_BANDS[b].label,
+        depth_max_ft: r3(dMax),
+        depth_min_ft: r3(dMin),
+        from_km: 0,
+        to_km: 0,
+        segments: 0,
+        area_ac: r3(ac),
+        color: DEPTH_BANDS[b].color,
+      },
+      geometry: coords.length === 1 ? { type: "Polygon", coordinates: coords[0] } : { type: "MultiPolygon", coordinates: coords },
+    });
+  }
+
+  const areaAc = r3(polyAc);
+  const outline: TerrainOutline = {
+    type: "FeatureCollection",
+    properties: {
+      ...opts.common,
+      disclaimer: opts.label,
+      title: opts.title,
+      kind: "terrain_outline",
+      strip_area_ac: areaAc,
+      outline_area_ac: areaAc,
+      dem_source: DEM_SERVICE,
+      dem_cell_m: r3(g.cellM),
+      dem_width: W,
+      dem_height: H,
+      corridor: "none (routed flood on terrain)",
+    },
+    features,
+  };
+  return { outline, bands, areaAc, wetCells };
+}
+
 /**
  * Build the outline on a DEM. Returns FloodStrip-shaped band features (so the PLSS and 911 lists, the map legend and
  * the exports read it like the strip) and the numbers behind it.
