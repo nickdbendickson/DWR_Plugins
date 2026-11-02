@@ -97,7 +97,8 @@ def test_folder_page_next_follows_the_scan(wiz):
     page.path.setText(empty)
     page._scan()
     assert not _next_enabled(wiz) and "No DWR dams" in page.reason.text()
-    assert "\u25cb" in page.note.text() and P.RED in page.note.text()       # red circle: DWR
+    assert "\u2715 DWR dams" in page.note.text() and P.RED in page.note.text()   # red cross
+    assert P.SCAN_ENOUGH not in page.note.text()
     suite = _suite(DAMS)
     page.path.setText(suite)
     assert not _next_enabled(wiz)                     # typed, not scanned yet
@@ -105,6 +106,7 @@ def test_folder_page_next_follows_the_scan(wiz):
     _pump()
     assert page.isComplete() and _next_enabled(wiz) and not page.reason.isVisibleTo(page)
     assert "\u2713" in page.note.text() and P.GREEN in page.note.text()
+    assert P.SCAN_ENOUGH in page.note.text()
     assert SC.get("data_folder") == suite             # saved only once the dams are found
 
 
@@ -162,6 +164,8 @@ def test_continue_hands_the_scan_to_the_runner_wizard(monkeypatch):
 
 def test_folder_scan_marks():
     txt = P.scan_marks_html({"dwr": "x", "roads": "y"})
-    assert txt.count("\u2713") == 2 and txt.count("\u25cb") == 3
-    assert P.RED not in txt                           # DWR found: no red mark
-    assert P.RED in P.scan_marks_html({})
+    # 1.0.19 (Style A): found = green check, missing = red cross with what the layer is for,
+    # and the green "Enough to continue" line (its own check) once the DWR dams are there
+    assert txt.count("\u2713") == 3 and txt.count("\u2715") == 3
+    assert "optional \u2014" in txt and P.SCAN_ENOUGH in txt
+    assert P.SCAN_ENOUGH not in P.scan_marks_html({})
