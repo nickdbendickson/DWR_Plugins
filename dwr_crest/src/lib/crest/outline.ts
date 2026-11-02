@@ -3,6 +3,7 @@ import { downstreamDirection, readAoi, type Part, type XY } from "./aoi.ts";
 import { damLocation, ENGINE_VERSION } from "./engine.ts";
 import { bandFor, DEPTH_BANDS, floodStrip, type FloodStrip, type StripFeature } from "./floodstrip.ts";
 import type { Bbox } from "./plss.ts";
+import type { Centerline } from "./sections.ts";
 import type { Analysis, DamRecord } from "./types.ts";
 
 /**
@@ -502,7 +503,7 @@ export async function buildOutline(
   result: Analysis,
   g: DemGrid,
   opts: BuildOptions = {},
-): Promise<{ ok: true; cache: OutlineCache } | { ok: false; reason: string }> {
+): Promise<{ ok: true; cache: OutlineCache; centerline: Centerline } | { ok: false; reason: string }> {
   const io = outlineInputs(dam, result);
   if (!io.ok) return io;
   const inp = io.inputs;
@@ -834,8 +835,18 @@ export async function buildOutline(
     },
     features,
   };
+  // The traced channel as a local-frame polyline, for the section cutter (sections.ts) and the routed flood. Sibling
+  // to the cache, so it is not part of what is saved on the dam.
+  const centerline: Centerline = {
+    loc: { lon: loc.lon, lat: loc.lat },
+    pts: path.map((k, p) => {
+      const i = k % W;
+      return { e: cellX(i), n: cellY((k - i) / W), x: pathA[p] };
+    }),
+  };
   return {
     ok: true,
+    centerline,
     cache: {
       fingerprint: inp.fingerprint,
       builtAt: (opts.builtAt ?? new Date()).toISOString(),
