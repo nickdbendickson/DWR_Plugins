@@ -265,16 +265,19 @@ def structures(grid, bounds, address_path, outline_path, judgment_high=True, exc
 def peak_zone(kind, d, v):
     """(zone, depth ft, velocity ft/s) a structure is classified on: its peak depth with the
     peak velocity over its wet cells (depth >= WET_FT), even when they come from different
-    cells (Nick, 2026-11-01, TM 11 practice, option C). Never less severe than its worst
-    single cell; with no velocity the depth alone."""
+    cells (Nick, 2026-11-01, TM 11 practice, option C). Never less severe than any one wet
+    cell (dry cells, depth < WET_FT, are not read); with no velocity the depth alone."""
     d = np.asarray(d, dtype=float)
     v = np.asarray(v, dtype=float)
     dpk = float(np.nanmax(d))
     wet = (d >= WET_FT) & np.isfinite(v)
     vpk = float(v[wet].max()) if wet.any() else (float(np.nanmax(v)) if np.isfinite(v).any() else 0.0)
     zone = int(tm11.zones(kind, [dpk], [vpk])[0])
-    cells = tm11.zones(kind, d, np.where(np.isfinite(v), v, 0.0))
-    return max(zone, int(cells.max())), dpk, vpk
+    wet = d >= WET_FT                  # the floor reads the wet cells only, as the pair does
+    if wet.any():
+        cells = tm11.zones(kind, d[wet], np.where(np.isfinite(v[wet]), v[wet], 0.0))
+        zone = max(zone, int(cells.max()))
+    return zone, dpk, vpk
 
 # --------------------------------------------------- centreline crown (0.1.1) --
 CROWN_STEP_M = 1.0        # centreline read at 1 m steps

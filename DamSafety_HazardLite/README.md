@@ -31,8 +31,11 @@ about 80,600 lines in DamSafety_Hazard. Only GDAL / OGR and numpy, so `core.run(
   highway, or a road with AADT 500 to 2,000 [5.2.1.2]; any other inundated railroad [5.2.1.3].
 - **Low**: none of these.
 
-A structure's zone comes from its worst cell (each cell's own depth and velocity on the chart). The table
-reports hmax and vmax over the outline, and the depth and velocity of the governing cell.
+A structure's zone comes from its peak depth with the peak velocity over its wet cells (depth >= 0.1 ft),
+even when they come from different cells (TM 11 practice, Nick 2026-11-01). It is never less severe than
+any one wet cell's own depth and velocity on the chart; dry cells (< 0.1 ft) are not read. The table
+reports hmax and vmax over the outline, and the peak depth and peak wet velocity the zone is read at
+(gov_depth_ft, gov_vel_fps).
 The chart table is a verbatim copy of `damsuite/tm11_curves.py` (signed off by Nicholas Bendickson, 2026-10-12).
 
 ## Outputs (output folder)

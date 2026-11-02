@@ -158,6 +158,13 @@ def peak_pair_checks():
     per_cell = int(tm11.zones("house", d[:2], v[:2]).max())
     check("peak pair from different cells is High when no wet cell alone is",
           zone == tm11.HIGH and per_cell != tm11.HIGH, (zone, per_cell))
+    # a dry cell (< WET_FT) does not set the floor, whatever its velocity: here the damp cell
+    # alone would be High only if read, and the pair is not High
+    dd = np.array([1.0, 0.05]); vv = np.array([0.5, 40.0])
+    dry_alone = int(tm11.zones("house", dd[1:], vv[1:])[0])
+    pz = core.peak_zone("house", dd, vv)
+    check("dry cells do not set the worst-cell floor",
+          pz[0] == int(tm11.zones("house", [1.0], [0.5])[0]) and pz[0] < dry_alone, (pz, dry_alone))
     check("NaN velocity is skipped", core.peak_zone("house", np.array([2.0, 1.0]),
                                                     np.array([np.nan, 3.0]))[2] == 3.0)
 
