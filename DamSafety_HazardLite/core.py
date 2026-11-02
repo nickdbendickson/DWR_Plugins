@@ -244,9 +244,7 @@ def structures(grid, bounds, address_path, outline_path, judgment_high=True, exc
         if exclude_ag and is_ag and not residential:
             excluded_ag += 1
             continue
-        z = tm11.zones(kind, d, v)
-        k = int(np.lexsort((d, z))[-1])                 # governing cell: worst zone, then deepest
-        zone = int(z[k])
+        zone, gd, gv = peak_zone(kind, d, v)
         if zone == tm11.HIGH or (zone == tm11.JUDGMENT and judgment_high):
             nd = "High"
         else:
@@ -257,11 +255,26 @@ def structures(grid, bounds, address_path, outline_path, judgment_high=True, exc
                     "units": len(s["addresses"]), "build_id": s["build_id"], "occupancy": s["occ"],
                     "place_type": ", ".join(sorted(p for p in s["place"] if p)), "matched": s["how"], "chart": "Fig. 5.2 mobile home" if kind == "mobile" else "Fig. 5.1 house",
                     "cells": len(d), "hmax_ft": round(float(d.max()), 2), "vmax_fps": round(float(v.max()), 2),
-                    "gov_depth_ft": round(float(d[k]), 2), "gov_vel_fps": round(float(v[k]), 2),
+                    "gov_depth_ft": round(gd, 2), "gov_vel_fps": round(gv, 2),
                     "zone": tm11.ZONE_NAMES[zone], "nd_class": nd})
     out.sort(key=lambda r: (-{"High": 2, "Judgment": 1, "Low": 0}[r["zone"]], -r["hmax_ft"]))
     return out, excluded_ag
 
+
+
+def peak_zone(kind, d, v):
+    """(zone, depth ft, velocity ft/s) a structure is classified on: its peak depth with the
+    peak velocity over its wet cells (depth >= WET_FT), even when they come from different
+    cells (Nick, 2026-11-01, TM 11 practice, option C). Never less severe than its worst
+    single cell; with no velocity the depth alone."""
+    d = np.asarray(d, dtype=float)
+    v = np.asarray(v, dtype=float)
+    dpk = float(np.nanmax(d))
+    wet = (d >= WET_FT) & np.isfinite(v)
+    vpk = float(v[wet].max()) if wet.any() else (float(np.nanmax(v)) if np.isfinite(v).any() else 0.0)
+    zone = int(tm11.zones(kind, [dpk], [vpk])[0])
+    cells = tm11.zones(kind, d, np.where(np.isfinite(v), v, 0.0))
+    return max(zone, int(cells.max())), dpk, vpk
 
 # --------------------------------------------------- centreline crown (0.1.1) --
 CROWN_STEP_M = 1.0        # centreline read at 1 m steps

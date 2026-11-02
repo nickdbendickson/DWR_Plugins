@@ -149,7 +149,21 @@ def write_pack(folder):
     return p
 
 
+def peak_pair_checks():
+    """Option C (Nick, 2026-11-01): peak depth with the peak wet velocity, from any cells."""
+    d = np.array([5.0, 1.0, 0.05])     # deepest cell slow, a wet cell fast, a damp cell fastest
+    v = np.array([0.5, 9.0, 15.0])
+    zone, gd, gv = core.peak_zone("house", d, v)
+    check("peak pair: deepest depth with the fastest wet velocity", (gd, gv) == (5.0, 9.0), (gd, gv))
+    per_cell = int(tm11.zones("house", d[:2], v[:2]).max())
+    check("peak pair from different cells is High when no wet cell alone is",
+          zone == tm11.HIGH and per_cell != tm11.HIGH, (zone, per_cell))
+    check("NaN velocity is skipped", core.peak_zone("house", np.array([2.0, 1.0]),
+                                                    np.array([np.nan, 3.0]))[2] == 3.0)
+
+
 def main():
+    peak_pair_checks()
     # the chart table must stay the suite's signed-off table
     sys.path.insert(0, os.path.join(ROOT, "shared", "damsuite"))
     import tm11_curves
