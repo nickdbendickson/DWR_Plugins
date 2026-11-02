@@ -3,9 +3,10 @@
   "builtBy": "npm run build:desktop",
   "sources": {
     "src/components/crest/charts.tsx": "bc2bd7cf68397388dd90cf1a3408a283bad6f49778cd6b4dbe4b791eb54bd70c",
-    "src/components/crest/desk.tsx": "eae7a4a675786cab18d555ed1efd4be65503294a41a97b8ab1e7d1563bd6bc49",
+    "src/components/crest/desk.tsx": "433a16a0ffe55358e28996a309d1e88ef1a74316c6badef562801045c2b68d4e",
     "src/components/crest/MapDraw.tsx": "e42fde7bd1841616c2445248cf4703f3615fe9497da97c1cd5f11729ae9259e6",
     "src/components/crest/NdDamPicker.tsx": "bc4aed6ac6feee896bbcfbefd1b5a681724191fbf8715b1ac1d30c18b261d54e",
+    "src/components/crest/PaperReport.tsx": "2ab730f6e21760b6715919fced1aebd2c28b72d635ecb221027a363597baa0ec",
     "src/components/crest/results-flow.ts": "d0cf8a55ea8c78e869d0ac2d012da7246c14548637b131554866d427729d2f99",
     "src/components/crest/ResultsMap.tsx": "743ae6f89b70283a0e1376dcb30e37e9f43a2f76d33b0b27bbbda1218f942507",
     "src/components/crest/ResultsStep.tsx": "a748898b8fbe7f1241353fa3a67f76dced0953af149bbeafefed263f82903dcd",
@@ -30,6 +31,7 @@
     "src/lib/crest/nd911-pads.ts": "fd756847fdcf85289627ca1fb946a47a27818bdb85c209e3dd745c9d0b5e736d",
     "src/lib/crest/nd911.ts": "06dd12052d7262d66a424c31be81ae9eabf85085c2246f77cdb3ac12a17246f2",
     "src/lib/crest/outline.ts": "012a3cb5b86206cfed77c94627c3704b895ffdc71c7decbbc363f2a6fb058b32",
+    "src/lib/crest/paper.ts": "07465212eaf550c15f923c7e871326889bfc76817d33e35d5c7c1d5227949ec6",
     "src/lib/crest/pdf.ts": "42bfe103a660b9bd936a9b246986e2da29a40da01e4e8be84f0bbdc453897926",
     "src/lib/crest/plss.ts": "8149695ffa03458d003ba69e7fdf6cb66ebe51fc20c7a72dee3c3c7b3f37f50b",
     "src/lib/crest/raster-engine.ts": "341d2d53430f381d3ab921b7dcddfbfa1c8d223bba722b9e32ac8f478d3741b9",
@@ -47,6 +49,6 @@
     "src/lib/crest/store.ts": "d20a91c7ed06fa0f0e78deec5fbb8d42e82bcc9c9da0b35b2a2321294b8940e1",
     "src/lib/crest/vertcon_nd.ts": "dbf7a01da0a7727e44d46198c68ed701a967b58c4970732fbad947cc438c468d",
     "src/lib/crest/viewexport.ts": "53ffbc7b545e270277093af67411bca73d292eb3a2c924fa9f740f793e6a2afd",
-    "src/styles.css": "302a1ed2340a2fec1cf5dc4d515609ebd3a211db16f165b7de06b64e3cee05ba"
+    "src/styles.css": "527b722ac060e0814b8d026a536e0808a2058ef457128188d47bd81adcf79a4b"
   }
 }

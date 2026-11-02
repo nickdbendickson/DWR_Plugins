@@ -401,3 +401,73 @@ tr.hl-low td:first-child { border-left: 4px solid var(--green); }
 .hydro { background: #FCFCFA; border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
 .footnote { font-size: 11.5px; color: var(--muted); margin-top: 10px; }
 .hidden { display: none; }
+
+/* ---------- Style 3: the paper report (src/components/crest/PaperReport.tsx) ----------
+   One sheet on screen and on paper: a second copy is portalled into .crest-print-root, which is the only thing
+   printed. The toolbar is screen-only; the running foot repeats the disclaimer on every printed sheet. */
+:root {
+  --paper-ink: #2B2A26;
+  --paper-rule: #D8D4C8;
+  --paper-mute: #6B6255;
+  --paper-bg-note: #F5F2E9;
+  --paper-stamp: #B45309;
+}
+.crest-print-root { display: none; }
+.paper-toolbar { max-width: 800px; margin: 0 auto; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.paper-toolbar button { padding: 7px 14px; border-radius: 7px; border: 1px solid var(--border); background: var(--panel);
+  color: var(--ink); cursor: pointer; font-size: 13px; }
+.paper-toolbar-note { font-size: 11px; color: var(--muted); margin-left: auto; }
+.paper-status { max-width: 800px; margin: 6px auto 0; font-size: 12px; color: var(--muted); }
+.paper { background: #fff; border: 1px solid var(--paper-rule); border-radius: 4px; padding: 32px 40px;
+  max-width: 800px; margin: 12px auto 24px; box-shadow: 0 6px 24px rgba(0, 0, 0, .08);
+  font-family: Georgia, 'Times New Roman', serif; color: var(--paper-ink); line-height: 1.4; }
+@media (max-width: 640px) { .paper { padding: 20px 16px; } }
+.paper .kicker { font-size: 10px; letter-spacing: .14em; color: var(--paper-mute); font-family: Arial, sans-serif; }
+.paper .p-title { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.paper .p-title h1 { font-size: 21px; margin: 2px 0 0; line-height: 1.2; font-weight: 700; }
+.paper .rule { border: none; border-top: 2.5px solid var(--paper-ink); margin: 12px 0; }
+.paper .p-meta { display: flex; justify-content: space-between; gap: 6px 16px; font-size: 11.5px; color: var(--paper-mute);
+  font-family: Arial, sans-serif; flex-wrap: wrap; }
+.paper .kpitab, .paper .recepttab { width: 100%; border-collapse: collapse; margin: 14px 0; font-family: Arial, sans-serif; font-size: 12px; }
+.paper .kpitab thead th, .paper .recepttab thead th { background: var(--paper-ink); color: #fff; padding: 6px 9px; text-align: left;
+  font-size: 9.5px; letter-spacing: .06em; border: none; }
+.paper .kpitab td, .paper .recepttab td, .paper .kpitab tbody th, .paper .recepttab tbody th { border: 1px solid var(--paper-rule);
+  padding: 6px 9px; text-align: left; font-weight: 400; font-size: 12px; letter-spacing: 0; color: var(--paper-ink); background: none; }
+.paper tr td:first-child { border-left: 1px solid var(--paper-rule); }
+.paper .notice { background: var(--paper-bg-note); border-left: 3px solid var(--paper-stamp); padding: 9px 13px;
+  font-family: Arial, sans-serif; font-size: 11.5px; color: #5B4A0F; margin: 12px 0; }
+.paper .notice ul { margin: 6px 0 2px 18px; list-style: disc; }
+.paper .notice li { margin-bottom: 3px; }
+.paper .stamp { border: 2px solid var(--paper-stamp); color: var(--paper-stamp); font-weight: 700; padding: 4px 11px;
+  font-family: Arial, sans-serif; font-size: 11px; display: inline-block; transform: rotate(3deg); letter-spacing: .04em; }
+.paper .stamp--high { border-color: #B91C1C; color: #B91C1C; }
+.paper .stamp--low { border-color: #15803D; color: #15803D; }
+.paper .stamp--none { border-color: var(--paper-mute); color: var(--paper-mute); }
+.paper .p-chart { border: 1px solid var(--paper-rule); padding: 7px; margin: 12px 0; background: #FCFCFA; page-break-inside: avoid; }
+.paper .p-chart figcaption { font-size: 9.5px; font-family: Arial, sans-serif; color: var(--paper-mute); text-align: center; margin-top: 4px; }
+.paper .p-section h2 { font-size: 14px; margin: 16px 0 6px; font-weight: 700; break-after: avoid; page-break-after: avoid; }
+.paper .p-chart svg { display: block; max-height: 190px; margin: 0 auto; }
+.paper .p-section p, .paper .p-section li { font-size: 12.5px; }
+.paper .p-section ul { margin: 4px 0 4px 18px; list-style: disc; }
+.paper .p-sign { display: flex; gap: 24px; margin-top: 24px; font-family: Arial, sans-serif; font-size: 10.5px;
+  color: var(--paper-mute); page-break-inside: avoid; }
+.paper .p-sign .line { border-top: 1px solid var(--paper-mute); padding-top: 4px; flex: 1; }
+.paper .fine { font-size: 10px; color: var(--paper-mute); font-family: Arial, sans-serif; }
+.paper .foot { margin-top: 20px; border-top: 1px solid var(--paper-rule); padding-top: 6px; font-size: 9px;
+  font-family: Arial, sans-serif; color: var(--paper-mute); }
+.paper .paper-runfoot { display: none; }
+.paper .p-scroll { overflow-x: auto; }
+
+@media print {
+  @page { size: letter; margin: 0.55in 0.55in 0.75in; }
+  body { background: #fff !important; }
+  body > :not(.crest-print-root) { display: none !important; }
+  .crest-print-root { display: block; }
+  .crest-print-root .paper { box-shadow: none; border: none; margin: 0; max-width: none; padding: 0; }
+  .paper thead { display: table-header-group; }
+  .paper tr { page-break-inside: avoid; }
+  .paper { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .paper .paper-runfoot { display: block; position: fixed; bottom: 0; left: 0; right: 0; text-align: center;
+    font-size: 8.5px; font-family: Arial, sans-serif; color: var(--paper-mute); background: #fff; padding-top: 2px; }
+  .paper .foot { margin-bottom: 0.3in; }
+}

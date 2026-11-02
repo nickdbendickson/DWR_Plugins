@@ -61,6 +61,7 @@ import { HydroChart, ValleyMap } from "./charts";
 import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel } from "./NdDamPicker";
 import { ResultsStep } from "./ResultsStep";
 import { useAnalysisOfRecord, useResultsSync, useStripOfRecord } from "./results-flow";
+import { PaperReport } from "./PaperReport";
 import { ViewExport } from "./ViewExport";
 
 // Leaflet touches `window` when it loads, so the map is a client-only chunk.
@@ -1038,32 +1039,10 @@ function ReportStep({ dam, result: deskResult }: { dam: DamRecord; result: Retur
         </div>
         <ViewExport target={view} kind="report" dam={dam} result={result} />
       </div>
+      <AoiNote flood={result.flood} />
+      <PaperReport dam={dam} result={result} source={label} runWarnings={ref?.warnings ?? []} />
       <ExportPanel dam={dam} result={result} desk={deskResult} />
       <PluginPanel dam={dam} result={result} />
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-line sm:grid-cols-3">
-        <Stat k="Peak discharge (routed)" v={`${num(result.breach.peakCfs, 0)} cfs`} />
-        <Stat k="Flooded area" v={`${num(result.flood.acres, 0)} ac`} />
-        <Stat k="Max depth" v={`${num(result.flood.maxDepthFt, 1)} ft`} />
-        <Stat k={ref ? "Max velocity" : "Max velocity (est.)"} v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
-        <Stat k="Wet receptors" v={String(result.flood.receptors.filter((r) => r.flooded).length)} />
-        <Stat k="Screen" v={result.screen.label} />
-      </div>
-      <AoiNote flood={result.flood} />
-      <div className="rounded-md border border-line bg-card p-4">
-        <h3 className="text-lg">Breach hydrograph</h3>
-        <HydroChart series={result.breach.series} />
-      </div>
-      <ReceptorTable result={result} />
-      {result.datum.warnings.length > 0 ? (
-        <div className="rounded-md border border-line bg-sand p-4">
-          <h3 className="text-lg">Things to check</h3>
-          <ul className="mt-2 space-y-2 text-sm">
-            {result.datum.warnings.map((w) => (
-              <li key={w}>{w}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
       {dam.nidId ? <SourcesNote dam={dam} /> : null}
     </section>
   );
