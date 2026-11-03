@@ -64,6 +64,8 @@ export type StripFeature = {
     /** Schematic depth (ft) at the band's upstream and downstream station. */
     depth_max_ft: number;
     depth_min_ft: number;
+    /** Mean depth (ft) of the band's cells, clamped into the band (terrain layers; absent on the strip). */
+    depth_mean_ft?: number;
     /** Distance downstream of the breach (km) where the band starts and ends, before any AOI clip. */
     from_km: number;
     to_km: number;

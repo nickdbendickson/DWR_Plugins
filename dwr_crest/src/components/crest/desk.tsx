@@ -39,11 +39,12 @@ import {
   OUTLINE_LABEL,
   outlineAcresNote,
   traceStartNote,
+  deepCellsNote,
   outlineInputs,
   outlineState,
   type OutlineState,
 } from "@/lib/crest/outline";
-import { buildInundation, ROUTED_LABEL } from "@/lib/crest/inundation";
+import { buildInundation, ROUTED_LABEL, volumeCheck } from "@/lib/crest/inundation";
 import { layerOfRecord } from "@/lib/crest/layer-of-record";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
@@ -626,6 +627,12 @@ function OutlinePanel({
   const layer = outline.state === "ready" ? outline.layer : "outline";
   const rec = layerOfRecord(dam, result, outline);
   const routed = outline.state === "ready" ? outline.routed : undefined;
+  const vol = s ? volumeCheck(routed ? routed.fillAcFt : s.laidAcFt, routed ? routed.releasedAcFt : result.breach.volumeAcFt) : null;
+  const volLine = vol ? (
+    <p className={"mt-1 text-sm " + (vol.warn ? "text-amber" : "text-muted")} role={vol.warn ? "alert" : undefined} data-testid="outline-volume-check">
+      {vol.text}
+    </p>
+  ) : null;
   const btn = "inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50";
   return (
     <div className="rounded-md border border-line bg-card p-4" data-testid="outline-panel">
@@ -687,6 +694,12 @@ function OutlinePanel({
             By depth band: {s.bands.map((b) => `${b.label} ${num(b.ac, 0)} ac`).join(" · ")}. The PLSS and 911 lists below are
             against this flood; the dated flood strip stays on the map only as the last-resort fallback.
           </p>
+          {deepCellsNote(s) ? (
+            <p className="mt-1 text-xs text-amber" role="status" data-testid="outline-deep-cells">
+              {deepCellsNote(s)}
+            </p>
+          ) : null}
+          {volLine}
           {routed.notes.length ? (
             <p className="mt-1 text-xs text-amber" data-testid="routed-flags">
               {routed.notes.join(" ")}
@@ -710,9 +723,15 @@ function OutlinePanel({
           <p className="mt-2 text-sm" data-testid="outline-acres-note">
             {outlineAcresNote(s)}
           </p>
+          {volLine}
           {traceStartNote(s) ? (
             <p className="mt-1 text-sm" data-testid="outline-trace-start">
               {traceStartNote(s)}
+            </p>
+          ) : null}
+          {deepCellsNote(s) ? (
+            <p className="mt-1 text-xs text-amber" role="status" data-testid="outline-deep-cells">
+              {deepCellsNote(s)}
             </p>
           ) : null}
           <p className="mt-1 text-xs text-muted">

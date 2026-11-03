@@ -20,7 +20,7 @@
  */
 
 import { floodStrip } from "./floodstrip.ts";
-import { buildOutline, DEM_SERVICE, DEM_ATTRIBUTION, outlineInputs, polygonizeDepth } from "./outline.ts";
+import { buildOutline, DEM_SERVICE, depthCapFt, DEM_ATTRIBUTION, outlineInputs, polygonizeDepth } from "./outline.ts";
 import { buildRoutedFlood, type RoutedFloodOptions, type RoutedFloodResult } from "./routed-flood.ts";
 import type { Analysis, DamRecord } from "./types.ts";
 
@@ -40,6 +40,30 @@ export const ROUTED_METHOD = "spread" as const;
  * large dams are run. See [[crest-fast-inundation-method]].
  */
 export const GATE_VOLUME_ACFT = 500;
+
+/**
+ * Plausible band for water laid down ÷ water released. A moving flood's max-depth envelope holds more than the release
+ * (the LISFLOOD envelopes on the baseline run 3.6–4.4×), so the band is set around them; outside it the desk warns.
+ */
+export const VOLUME_RATIO_BAND = { lo: 2, hi: 6 } as const;
+
+export type VolumeCheck = { laidAcFt: number; releasedAcFt: number; ratio: number; warn: boolean; text: string };
+
+/** Volume laid down vs released, with a warning outside VOLUME_RATIO_BAND. null when either is unknown. */
+export function volumeCheck(laidAcFt: number | null | undefined, releasedAcFt: number | null | undefined): VolumeCheck | null {
+  if (typeof laidAcFt !== "number" || typeof releasedAcFt !== "number") return null;
+  if (!Number.isFinite(laidAcFt) || !Number.isFinite(releasedAcFt) || releasedAcFt <= 0) return null;
+  const ratio = laidAcFt / releasedAcFt;
+  const { lo, hi } = VOLUME_RATIO_BAND;
+  const warn = ratio < lo || ratio > hi;
+  const base = `Volume: ${Math.round(laidAcFt).toLocaleString()} ac-ft laid down for ${Math.round(releasedAcFt).toLocaleString()} ac-ft released (${ratio.toFixed(1)}×).`;
+  const text = !warn
+    ? `${base} Inside the ${lo}–${hi}× a moving flood's max-depth envelope usually holds.`
+    : ratio > hi
+      ? `${base} Above ${hi}×: the layer holds far more water than the breach releases, so its extent and depths are likely too big. Check against a model run.`
+      : `${base} Below ${lo}×: the layer holds less water than a moving flood's envelope usually does, so its extent and depths may be too small. Check against a model run.`;
+  return { laidAcFt, releasedAcFt, ratio, warn, text };
+}
 
 export type LayerChoice = {
   /** The layer the gate picks for this dam. */
@@ -89,7 +113,7 @@ function routedCache(
   fingerprint: string,
 ): OutlineCache {
   const common = floodStrip(dam, result).strip!.properties;
-  const poly = polygonizeDepth(g, routed.depthFt, { common, label: ROUTED_LABEL, title: `${common.dam_id} routed terrain flood` });
+  const poly = polygonizeDepth(g, routed.depthFt, { common, label: ROUTED_LABEL, title: `${common.dam_id} routed terrain flood`, capFt: depthCapFt(dam.heightFt) });
   const rings = poly.outline.features.reduce(
     (s, f) => s + (f.geometry.type === "Polygon" ? f.geometry.coordinates.length : f.geometry.coordinates.reduce((t, p) => t + p.length, 0)),
     0,
@@ -113,6 +137,7 @@ function routedCache(
     rings,
     droppedPatches: null,
     filledHoles: null,
+    ...(poly.deepCells ? { deepCells: poly.deepCells } : {}),
   };
   const r: RoutedSummary = {
     floodedAc: routed.stats.floodedAc,

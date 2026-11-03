@@ -55,9 +55,11 @@ export type CandRaster = { depth: Float32Array; velocity: Float32Array | null; a
 
 export type Downstream = { lon: number; lat: number; u: [number, number] };
 
-/** Depth (ft) a polygon feature stands for: depth_max_ft, else the middle of its depth band, else just wet. */
+/** Depth (ft) a polygon feature stands for: depth_mean_ft (terrain layers), else the middle of depth_min_ft–depth_max_ft, else just wet. */
 export function featureDepth(f: DepthFeature): number {
   const p = f.properties ?? {};
+  const mean = Number(p.depth_mean_ft);
+  if (Number.isFinite(mean) && mean > 0) return mean;
   const hi = Number(p.depth_max_ft);
   const lo = Number(p.depth_min_ft);
   if (Number.isFinite(hi) && hi > 0) return Number.isFinite(lo) && lo > 0 && lo <= hi ? (lo + hi) / 2 : hi;

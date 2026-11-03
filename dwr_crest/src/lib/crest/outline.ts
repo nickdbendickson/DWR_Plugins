@@ -52,12 +52,72 @@ const WET_M = WET_FT * FT;
 const ACRE_M2 = 4046.8564224;
 /** Same equirectangular frame as aoi.ts toLocal. */
 const M_PER_DEG_LAT = 110574;
+const ACRE_FT_M3 = 1233.48184;
 const M_PER_DEG_LON_EQ = 111320;
 
 export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300), 2000);
 /** Bumped when the terrain request or the trace changes, so layers saved before rebuild. 2 = 2026-11-03: exact DEM
  *  box (adjustAspectRatio=false), toe start, trace margin. */
 export const TRACE_VERSION = 2;
+
+/**
+ * The depth cap is the dam height itself (Nick, 2026-11-03: no margin). A breach cannot stand water deeper than the dam
+ * that held it back, so a deeper cell is a pit, pond, quarry or DEM sink under the water surface, not a flood depth.
+ * Such cells stay wet (the extent is unchanged) but their depth is clamped to the cap and counted, so one 200 ft sink
+ * no longer sets a band's depth or the depth bias against a model run (DWR-2801 +49 ft, ND00199 275.8 ft).
+ */
+export function depthCapFt(heightFt: number | null | undefined): number {
+  return typeof heightFt === "number" && Number.isFinite(heightFt) && heightFt > 0 ? heightFt : Infinity;
+}
+
+/** Cells deeper than the cap (pits, ponds, sinks), clamped and flagged. */
+export type DeepCells = { capFt: number; cells: number; rawMaxFt: number };
+
+/**
+ * Per-band depth stats that stay inside the band: each cell's depth is clamped to the cap and then into the range of
+ * the band the 3 × 3 mode pass gave it, so a band's min/max/mean never run past its label (the old 0.1–143 ft in the
+ * 2–5 ft band). Returns an accumulator; call add(rawFt) per cell, then done().
+ */
+export function bandDepthAcc(b: number, capFt: number) {
+  const lo = DEPTH_BANDS[b].minFt;
+  const hi = Math.max(lo, Math.min(DEPTH_BANDS[b].maxFt, capFt));
+  let dMax = -Infinity;
+  let dMin = Infinity;
+  let sum = 0;
+  let n = 0;
+  return {
+    add(rawFt: number) {
+      const d = Math.min(hi, Math.max(lo, Math.min(capFt, Math.max(WET_FT, rawFt))));
+      dMax = Math.max(dMax, d);
+      dMin = Math.min(dMin, d);
+      sum += d;
+      n++;
+    },
+    done: () => ({ dMax, dMin, dMean: n ? sum / n : 0 }),
+  };
+}
+
+/** Count the cells deeper than the cap. */
+export function deepCellsOf(depthFt: ArrayLike<number>, capFt: number, scale = 1): DeepCells | undefined {
+  if (!Number.isFinite(capFt)) return undefined;
+  let cells = 0;
+  let rawMaxFt = 0;
+  for (let k = 0; k < depthFt.length; k++) {
+    const d = depthFt[k] / scale;
+    if (Number.isFinite(d) && d > capFt) {
+      cells++;
+      rawMaxFt = Math.max(rawMaxFt, d);
+    }
+  }
+  return cells ? { capFt: Math.round(capFt * 10) / 10, cells, rawMaxFt: Math.round(rawMaxFt * 10) / 10 } : undefined;
+}
+
+/** One line for the desk when cells were clamped, or null. */
+export function deepCellsNote(s: Pick<OutlineStats, "deepCells">): string | null {
+  const d = s.deepCells;
+  if (!d) return null;
+  return `${d.cells.toLocaleString()} cell${d.cells === 1 ? "" : "s"} under the water surface sit deeper than the dam height (${d.capFt.toFixed(1)} ft; deepest ${d.rawMaxFt.toFixed(0)} ft), likely pits, ponds or terrain sinks. They stay in the extent, but their depth is capped at the dam height in the bands and exports. Check them on the map.`;
+}
 
 /** Margin (m) added around the corridor box when fetching the DEM, so the drainage trace has room to bend. */
 export const TRACE_PAD_M = 500;
@@ -112,6 +172,10 @@ export type OutlineStats = {
    * way (the routed/spread flood), so a reader never takes 0 as "none dropped / none filled". */
   droppedPatches: number | null;
   filledHoles: number | null;
+  /** Cells deeper than the dam height, clamped (absent when none, or on older layers). */
+  deepCells?: DeepCells;
+  /** Water laid down by the layer (ac-ft, from the clamped cell depths), when measured. */
+  laidAcFt?: number;
 };
 
 export type TerrainOutline = FloodStrip & {
@@ -566,6 +630,7 @@ export type PolygonizedDepth = {
   /** Drawn (smoothed) polygon area, acres. */
   areaAc: number;
   wetCells: number;
+  deepCells?: DeepCells;
 };
 
 /**
@@ -579,8 +644,9 @@ export type PolygonizedDepth = {
 export function polygonizeDepth(
   g: DemGrid,
   depthFt: Float32Array,
-  opts: { common: FloodStrip["properties"]; label: string; title: string },
+  opts: { common: FloodStrip["properties"]; label: string; title: string; capFt?: number },
 ): PolygonizedDepth {
+  const capFt = opts.capFt ?? Infinity;
   const W = g.width;
   const H = g.height;
   const N = W * H;
@@ -623,17 +689,15 @@ export function polygonizeDepth(
   for (let b = 0; b < DEPTH_BANDS.length; b++) {
     const mask = new Uint8Array(N);
     let cells = 0;
-    let dMax = -Infinity;
-    let dMin = Infinity;
+    const acc = bandDepthAcc(b, capFt);
     for (let k = 0; k < N; k++)
       if (band[k] === b) {
         mask[k] = 1;
         cells++;
-        const dft = Math.max(WET_FT, depthFt[k]);
-        dMax = Math.max(dMax, dft);
-        dMin = Math.min(dMin, dft);
+        acc.add(depthFt[k]);
       }
     if (cells === 0) continue;
+    const { dMax, dMin, dMean } = acc.done();
     wetCells += cells;
     const polys = polygonsOf(mask, W, H);
     if (polys.length === 0) continue;
@@ -658,6 +722,7 @@ export function polygonizeDepth(
         band_label: DEPTH_BANDS[b].label,
         depth_max_ft: r3(dMax),
         depth_min_ft: r3(dMin),
+        depth_mean_ft: r3(dMean),
         from_km: 0,
         to_km: 0,
         segments: 0,
@@ -686,7 +751,8 @@ export function polygonizeDepth(
     },
     features,
   };
-  return { outline, bands, areaAc, wetCells };
+  const deepCells = deepCellsOf(depthFt, capFt);
+  return { outline, bands, areaAc, wetCells, ...(deepCells ? { deepCells } : {}) };
 }
 
 /**
@@ -1017,6 +1083,12 @@ async function buildOutlineImpl(
     if (depth[k] < 0 && dom[k] && valid(k) && dryC.sizes[dryC.lab[k]] < MIN_CELLS && !dryC.border[dryC.lab[k]]) depth[k] = WET_M;
   await breathe(N);
 
+  // Depth cap (dam height, no margin): deeper cells are pits/sinks under the surface, clamped and flagged.
+  const capFt = depthCapFt(dam.heightFt);
+  const deepCells = deepCellsOf(depth, capFt, FT);
+  let laidM3 = 0;
+  for (let k = 0; k < N; k++) if (depth[k] >= 0) laidM3 += Math.min(depth[k], capFt * FT) * cellM2;
+
   // Bands, one 3 × 3 mode pass.
   const band0 = new Int8Array(N).fill(-1);
   const idx = new Map(DEPTH_BANDS.map((b, i) => [b.id, i]));
@@ -1054,21 +1126,19 @@ async function buildOutlineImpl(
   for (let b = 0; b < DEPTH_BANDS.length; b++) {
     const mask = new Uint8Array(N);
     let cells = 0;
-    let dMax = -Infinity;
-    let dMin = Infinity;
+    const acc = bandDepthAcc(b, capFt);
     let lo = Infinity;
     let hi = -Infinity;
     for (let k = 0; k < N; k++)
       if (band[k] === b) {
         mask[k] = 1;
         cells++;
-        const dft = Math.max(WET_FT, depth[k] / FT);
-        dMax = Math.max(dMax, dft);
-        dMin = Math.min(dMin, dft);
+        acc.add(depth[k] / FT);
         lo = Math.min(lo, along[k]);
         hi = Math.max(hi, along[k]);
       }
     if (cells === 0) continue;
+    const { dMax, dMin, dMean } = acc.done();
     wetCells += cells;
     reach = Math.max(reach, hi);
     const polys = polygonsOf(mask, W, H);
@@ -1096,6 +1166,7 @@ async function buildOutlineImpl(
         band_label: DEPTH_BANDS[b].label,
         depth_max_ft: r3(dMax),
         depth_min_ft: r3(dMin),
+        depth_mean_ft: r3(dMean),
         from_km: r3(Math.max(0, lo) / 1000),
         to_km: r3(hi / 1000),
         segments: 0,
@@ -1125,6 +1196,8 @@ async function buildOutlineImpl(
     rings: features.reduce((s, f) => s + (f.geometry.type === "Polygon" ? f.geometry.coordinates.length : f.geometry.coordinates.reduce((t, p) => t + p.length, 0)), 0),
     droppedPatches,
     filledHoles,
+    ...(deepCells ? { deepCells } : {}),
+    laidAcFt: r3(laidM3 / ACRE_FT_M3),
   };
   const outline: TerrainOutline = {
     type: "FeatureCollection",
