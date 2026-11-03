@@ -43,6 +43,7 @@ import {
   type OutlineState,
 } from "@/lib/crest/outline";
 import { buildInundation, ROUTED_LABEL } from "@/lib/crest/inundation";
+import { layerOfRecord } from "@/lib/crest/layer-of-record";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { demTieOffer, missingForNext, needsDemTie } from "@/lib/crest/nd-dams";
@@ -268,9 +269,12 @@ function useFloodAreas(dam: DamRecord, result: ReturnType<typeof analyze>) {
   const basis = strip.basis;
   const outline = useMemo(() => outlineState(dam, result, online), [dam, result, online]);
   const ol = outline.state === "ready" ? outline.outline : null;
-  const against = ol ? (outline.state === "ready" && outline.layer === "routed" ? "routed flood" : "terrain outline") : "flood strip";
-  const area = ol ?? strip.strip;
-  const lookup = useMemo(() => (strip.strip ? lookupArea(strip.strip, ol) : null), [strip.strip, ol]);
+  // An imported run of record is the layer of record whatever the gate picks (layer-of-record.ts): once its raster
+  // strip is built, the PLSS and 911 lists run against it, not against the terrain layer.
+  const run = strip.fromRun && dam.resultsOfRecord ? dam.resultsOfRecord.label : null;
+  const against = run ? `${run} run` : ol ? (outline.state === "ready" && outline.layer === "routed" ? "routed flood" : "terrain outline") : "flood strip";
+  const area = run ? strip.strip : (ol ?? strip.strip);
+  const lookup = useMemo(() => (strip.strip ? (run ? strip.strip : lookupArea(strip.strip, ol)) : null), [strip.strip, ol, run]);
   const plss = useMemo<PlssState>(() => plssState(dam, area, online, against), [dam, area, online, against]);
   const nd911 = useMemo<Nd911State>(() => nd911State(dam, area, online, against), [dam, area, online, against]);
   return { online, strip, outline, ol, area, against, lookup, plss, nd911, basis };
@@ -619,6 +623,7 @@ function OutlinePanel({
   };
   const s = outline.state === "ready" ? outline.stats : null;
   const layer = outline.state === "ready" ? outline.layer : "outline";
+  const rec = layerOfRecord(dam, result, outline);
   const routed = outline.state === "ready" ? outline.routed : undefined;
   const btn = "inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50";
   return (
@@ -641,9 +646,8 @@ function OutlinePanel({
       <p className="mt-1 text-sm font-medium" data-testid="outline-label">
         {layer === "routed" ? ROUTED_LABEL : OUTLINE_LABEL}.
       </p>
-      <p className="mt-1 text-sm text-muted" data-testid="inundation-primary-note">
-        This terrain layer is Crest's inundation layer of record. The schematic flood strip is a dated last resort, kept
-        only for offline use or until this layer is built; build this once and it is saved with the dam.
+      <p className={"mt-1 text-sm " + (rec.needsRunner ? "text-amber" : "text-muted")} role={rec.needsRunner ? "alert" : undefined} data-testid="inundation-primary-note">
+        {rec.note}
       </p>
       {outline.message ? (
         <p className="mt-1 text-sm text-muted" role="status">

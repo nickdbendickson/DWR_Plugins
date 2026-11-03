@@ -4,9 +4,10 @@
  * src/components/crest/Dashboard.tsx.
  */
 import type { FloodStrip } from "./floodstrip.ts";
+import type { LayerOfRecord } from "./layer-of-record.ts";
 import type { OutlineState } from "./outline.ts";
 import { PAPER_DISCLAIMER } from "./paper.ts";
-import type { Analysis } from "./types.ts";
+import type { Analysis, ResultsOfRecord } from "./types.ts";
 
 /** Design tokens (the same hex values as the :root variables in src/styles.css). */
 export const crest = {
@@ -45,9 +46,11 @@ export function flagSeverity(flag: {
 export type DashFlag = { key: string; text: string; sev: Exclude<Severity, "ok"> | "info" };
 
 /** The method behind the depth layer the dashboard shows. */
-export type DashMethod = "routed" | "outline" | "strip-legacy";
+export type DashMethod = "runner" | "model" | "routed" | "outline" | "strip-legacy";
 
-export function dashMethod(outline: OutlineState): DashMethod {
+/** An imported run of record wins over the fast layer whatever the flood-size gate picks (layer-of-record.ts). */
+export function dashMethod(outline: OutlineState, record: ResultsOfRecord | null = null): DashMethod {
+  if (record) return record.source === "lisflood" ? "runner" : "model";
   return outline.state === "ready"
     ? outline.layer === "routed"
       ? "routed"
@@ -56,6 +59,8 @@ export function dashMethod(outline: OutlineState): DashMethod {
 }
 
 export const METHOD_LABEL: Record<DashMethod, string> = {
+  runner: "Layer of record: ND Breach Runner run (LISFLOOD-FP)",
+  model: "Layer of record: imported model run",
   routed: "Fast layer (terrain method): routed flood",
   outline: "Fast layer (terrain method): terrain outline",
   "strip-legacy": "Legacy strip — dated fallback",
@@ -69,9 +74,33 @@ export const METHOD_LABEL: Record<DashMethod, string> = {
 export function dashboardFlags(
   result: Analysis,
   outline: OutlineState,
-  opts: { volume?: { wet: number; release: number; reservoir?: number } } = {},
+  opts: {
+    volume?: { wet: number; release: number; reservoir?: number };
+    /** The layer of record (layer-of-record.ts). A run of record replaces the fast layer's own flags. */
+    record?: LayerOfRecord;
+    /** The run of record's raster strip is on the map (its rasters are loaded in this session). */
+    recordMapped?: boolean;
+  } = {},
 ): DashFlag[] {
   const out: DashFlag[] = [];
+  const rec = opts.record;
+  if (rec?.ref) {
+    if (!opts.recordMapped)
+      out.push({
+        key: "record-unmapped",
+        sev: "info",
+        text: `Layer of record is ${rec.label}; import its rasters on Results to map it. The map shows the terrain layer for comparison only.`,
+      });
+    if (rec.ref.stats.edgeWetCells > 0)
+      out.push({ key: "edge", sev: "info", text: "Model flood touches its raster edge — extent may be larger" });
+    return finishFlags(out, result);
+  }
+  if (rec?.needsRunner)
+    out.push({
+      key: "runner-needed",
+      sev: "critical",
+      text: `Large flood, no Runner run: ${Math.round(rec.releasedAcFt).toLocaleString("en-US")} ac-ft released, and the fast layer can badly under-predict a flood this size (about 0.10× of the modeled area on DWR-2801). Run it in the ND Breach Runner and import the run on Results.`,
+    });
   if (opts.volume) {
     const sev = flagSeverity({
       wet_volume: opts.volume.wet,
@@ -105,6 +134,10 @@ export function dashboardFlags(
       sev: "warning",
       text: `Showing the legacy strip: ${outline.message}`,
     });
+  return finishFlags(out, result);
+}
+
+function finishFlags(out: DashFlag[], result: Analysis): DashFlag[] {
   for (const [i, w] of result.datum.warnings.entries())
     out.push({ key: `datum-${i}`, sev: "warning", text: w });
   for (const [i, w] of result.flood.warnings.entries())

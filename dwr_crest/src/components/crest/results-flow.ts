@@ -6,6 +6,7 @@
 import { useEffect, useMemo } from "react";
 import type { analyze } from "@/lib/crest/engine";
 import { floodStrip, type FloodStrip, type StripCommon } from "@/lib/crest/floodstrip";
+import { adoptRunAsRecord } from "@/lib/crest/layer-of-record";
 import type { InFile } from "@/lib/crest/raster-engine";
 import { wantFile } from "@/lib/crest/raster-meta";
 import { results } from "@/lib/crest/results-client";
@@ -139,6 +140,15 @@ export function useResultsSync(dam: DamRecord, result: Analysis) {
           .catch(() => {});
         continue;
       }
+      // A clean Runner run becomes the layer of record on its own, whatever the flood-size gate picks
+      // (layer-of-record.ts). The strip is built on the next pass, once the record names this run.
+      if (adoptRunAsRecord(dam, { source: run.source, blocked: allChecks(dam, result, run).some((c) => c.level === "error") })) {
+        const ref = refFromRun(dam, result, run);
+        if (ref) {
+          update({ resultsOfRecord: ref });
+          continue;
+        }
+      }
       const rec = dam.resultsOfRecord;
       if (rec?.source === run.source) {
         const ref = refFromRun(dam, result, run);
@@ -170,21 +180,24 @@ export function useStripOfRecord(dam: DamRecord, result: Analysis): {
   reason: string | null;
   basis: string;
   pending: boolean;
+  /** The strip is the source of record's own raster strip (an imported run), not the desk's. */
+  fromRun: boolean;
 } {
   const run = useResults((s) => (dam.resultsOfRecord ? s.runs[runKey(dam.id, dam.resultsOfRecord.source)] : undefined));
   return useMemo(() => {
     const desk = floodStrip(dam, result);
     const rec = dam.resultsOfRecord;
-    if (!rec) return { strip: desk.strip, reason: desk.reason, basis: "the schematic desk strip", pending: false };
+    if (!rec) return { strip: desk.strip, reason: desk.reason, basis: "the schematic desk strip", pending: false, fromRun: false };
     if (run?.strip)
-      return { strip: run.strip, reason: null, basis: `the ${rec.label} max-depth raster (source of record)`, pending: false };
+      return { strip: run.strip, reason: null, basis: `the ${rec.label} max-depth raster (source of record)`, pending: false, fromRun: true };
     if (run?.status === "ready" && run.strip === undefined)
-      return { strip: desk.strip, reason: desk.reason, basis: `the desk strip until the ${rec.label} strip is built`, pending: true };
+      return { strip: desk.strip, reason: desk.reason, basis: `the desk strip until the ${rec.label} strip is built`, pending: true, fromRun: false };
     return {
       strip: desk.strip,
       reason: desk.reason,
       basis: `the desk strip: ${rec.label} is the source of record but its rasters are not loaded in this session (import them on Results to list its sections)`,
       pending: false,
+      fromRun: false,
     };
   }, [dam, result, run]);
 }

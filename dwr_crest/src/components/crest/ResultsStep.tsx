@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import type { analyze } from "@/lib/crest/engine";
+import { analyze } from "@/lib/crest/engine";
 import { DEPTH_BANDS, floodStrip } from "@/lib/crest/floodstrip";
+import { isLargeFlood, RUNNER_SOURCE, runnerNeededText, runnerWorklist, worklistCsv } from "@/lib/crest/layer-of-record";
 import { CRS_DEFS, DIFF_BINS } from "@/lib/crest/raster-meta";
 import { results } from "@/lib/crest/results-client";
 import {
@@ -66,6 +67,7 @@ export function ResultsStep({ dam, result }: { dam: DamRecord; result: Analysis 
         </div>
       </div>
       <SourceOfRecord dam={dam} result={result} runs={runs} ready={ready} />
+      <RunnerWorklist />
       <MapPanel dam={dam} result={result} runs={runs} ready={ready} />
       <CompareTable dam={dam} result={result} runs={runs} ready={ready} />
       <StructureTable dam={dam} result={result} runs={runs} ready={ready} />
@@ -194,10 +196,11 @@ function SourceOfRecord({ dam, result, runs, ready }: { dam: DamRecord; result: 
     else if (rec?.source === s) options.push({ id: s, text: `${rec.label} (saved; rasters not loaded)`, disabled: false });
   }
   const choose = (id: string) => {
-    if (id === "desk") return update({ resultsOfRecord: undefined });
+    // Choosing the desk with a run loaded is remembered, so the Runner run is not adopted again on its own.
+    if (id === "desk") return update({ resultsOfRecord: undefined, sourceOfRecordChoice: ready.length ? "desk" : undefined });
     const run = runs[id as ResultSource];
     const ref = run ? refFromRun(dam, result, run) : null;
-    if (ref) update({ resultsOfRecord: ref });
+    if (ref) update({ resultsOfRecord: ref, sourceOfRecordChoice: undefined });
   };
   return (
     <div className="rounded-md border border-line bg-card p-4" data-testid="source-of-record">
@@ -215,9 +218,17 @@ function SourceOfRecord({ dam, result, runs, ready }: { dam: DamRecord; result: 
         <p className="max-w-3xl text-sm text-muted">
           Drives the Screen (receptor depths and velocities from this source, ranked with TM 11), the PLSS section list and the Report,
           and is named in the Report and in dam.json. Breach and hydrograph stay the desk's.
-          {ready.length === 0 && !rec ? " Import a run to choose it." : ""}
+          {ready.length === 0 && !rec ? " Import a run to choose it." : ""} A Runner (LISFLOOD-FP) run that passes the import checks
+          becomes the source of record on its own, whatever the flood-size gate would pick for the terrain layer.
         </p>
       </div>
+      {!rec && isLargeFlood(result) ? (
+        <p className="mt-2 text-sm text-amber" role="alert" data-testid="runner-needed">
+          {dam.sourceOfRecordChoice === "desk" && runs[RUNNER_SOURCE]?.status === "ready"
+            ? `The desk estimate is chosen over the loaded Runner run on a large flood (${f0(result.breach.volumeAcFt)} ac-ft released). The terrain layers can badly under-predict a flood this size; choose the Runner run unless its import checks are wrong.`
+            : runnerNeededText(result.breach.volumeAcFt)}
+        </p>
+      ) : null}
       {rec?.warnings.length ? (
         <ul className="mt-2 list-disc pl-5 text-xs text-amber">
           {rec.warnings.map((w, i) => (
@@ -233,6 +244,12 @@ type Rendered = { overlays: Overlay[]; fit: Bounds | null; compare?: import("@/l
 
 function MapPanel({ dam, result, runs, ready }: { dam: DamRecord; result: Analysis; runs: Partial<Record<ResultSource, RunState>>; ready: ResultSource[] }) {
   const [mode, setMode] = useState<MapMode>("desk");
+  // The source of record's raster is the layer of record, so the map opens on it once it is loaded.
+  const recSource = dam.resultsOfRecord?.source;
+  const recReady = !!recSource && ready.includes(recSource);
+  useEffect(() => {
+    if (recReady && recSource) setMode((m) => (m === "desk" ? recSource : m));
+  }, [recReady, recSource]);
   const [flip, setFlip] = useState(false);
   const desk = useMemo(() => floodStrip(dam, result).strip, [dam, result]);
   const rc = useMemo(() => resultsContext(dam, result), [dam, result]);
@@ -508,6 +525,97 @@ function StructureTable({ dam, result, runs, ready }: { dam: DamRecord; result: 
         run's grid. Flags: wet in one source and dry in another, a different TM 11 zone or ND class, or a depth spread over 1 ft
         and half the deepest.
       </p>
+    </div>
+  );
+}
+
+/**
+ * Large dams (released volume at or above the flood-size gate) in this browser with no imported model run as their
+ * record: the terrain layer is all their screen rests on, and it can under-predict a flood that size.
+ */
+function RunnerWorklist() {
+  const dams = useDesk((s) => s.dams);
+  const activeId = useDesk((s) => s.activeId);
+  const select = useDesk((s) => s.select);
+  const setStep = useDesk((s) => s.setStep);
+  const runs = useResults((s) => s.runs);
+  const loaded = useMemo(
+    () => new Set(Object.values(runs).filter((r) => r.source === RUNNER_SOURCE && r.status === "ready").map((r) => r.damId)),
+    [runs],
+  );
+  const rows = useMemo(() => runnerWorklist(dams, analyze, loaded), [dams, loaded]);
+  const download = () => {
+    const blob = new Blob([worklistCsv(rows)], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "crest-runner-worklist.csv";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  return (
+    <div className="rounded-md border border-line bg-card p-4" data-testid="runner-worklist">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-lg">Large dams still needing a Runner run</h3>
+        {rows.length ? (
+          <button type="button" onClick={download} className="inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink">
+            Download worklist (CSV)
+          </button>
+        ) : null}
+      </div>
+      <p className="mt-1 text-sm text-muted">
+        Dams in this browser whose breach releases at least the flood-size gate's volume and whose layer of record is still a terrain
+        layer, largest release first. Run each in the ND Breach Runner and import the run here.
+      </p>
+      {rows.length === 0 ? (
+        <p className="mt-2 text-sm" data-testid="runner-worklist-empty">
+          None: every large dam here has an imported model run as its layer of record.
+        </p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-sm" data-testid="runner-worklist-table">
+            <thead className="text-left text-xs tracking-wide text-muted uppercase">
+              <tr>
+                <th className="px-2 py-1">Dam</th>
+                <th className="px-2 py-1">County</th>
+                <th className="px-2 py-1">Height ft</th>
+                <th className="px-2 py-1">Storage ac-ft</th>
+                <th className="px-2 py-1">Released ac-ft</th>
+                <th className="px-2 py-1">Breach peak cfs</th>
+                <th className="px-2 py-1">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-t border-line">
+                  <td className="px-2 py-1">
+                    {r.id === activeId ? (
+                      <span className="font-medium">{r.name} (this dam)</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="text-left underline"
+                        onClick={() => {
+                          select(r.id);
+                          setStep("results");
+                        }}
+                      >
+                        {r.name}
+                      </button>
+                    )}
+                    {r.nid ? <span className="ml-1 text-xs text-muted">{r.nid}</span> : null}
+                  </td>
+                  <td className="px-2 py-1">{r.county}</td>
+                  <td className="px-2 py-1 tabular-nums">{f1(r.heightFt)}</td>
+                  <td className="px-2 py-1 tabular-nums">{f0(r.storageAcFt)}</td>
+                  <td className="px-2 py-1 tabular-nums">{f0(r.releasedAcFt)}</td>
+                  <td className="px-2 py-1 tabular-nums">{f0(r.peakCfs)}</td>
+                  <td className="px-2 py-1">{r.status}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

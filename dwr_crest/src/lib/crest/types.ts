@@ -110,6 +110,11 @@ export type DamRecord = {
    * the receptors. Absent = the desk estimate (default). Never holds raster data, only these few numbers.
    */
   resultsOfRecord?: ResultsOfRecord;
+  /**
+   * "desk": the user chose the desk estimate over a loaded run on Results, so a Runner run is not adopted as the source
+   * of record on its own (layer-of-record.ts). Absent = a clean Runner run becomes the record when it is imported.
+   */
+  sourceOfRecordChoice?: "desk";
   /** ND NG911 address points looked up around the flood strip (ND GIS Hub), kept for offline use. */
   nd911?: Nd911Cache;
   /** Terrain outline built on request from 3DEP terrain (outline.ts), with the input fingerprint it was built for. */

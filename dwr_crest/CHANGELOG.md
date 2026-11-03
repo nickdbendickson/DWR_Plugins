@@ -2,6 +2,15 @@
 
 ## 2026-11-03
 
+- **A Runner run is the layer of record.** When a dam has an imported ND Breach Runner (LISFLOOD-FP) run, that run is the
+  inundation layer of record whatever the flood-size gate picks; the terrain layer stays only as a comparison. A run that
+  passes the import checks becomes the source of record on its own (choosing the desk estimate on Results is remembered
+  and stops that). The PLSS and 911 lists, the Dashboard depth layer and the Results map follow the run once its rasters
+  are loaded. Reason: on large floods the terrain layers can badly under-predict (the outline covered about 0.10× of the
+  Runner's flooded area on DWR-2801).
+- **Runner worklist.** Results lists the large dams (released volume at or above the gate) whose layer of record is still a
+  terrain layer, largest release first, with a CSV download. Those dams get a critical flag on the Dashboard and a warning
+  on the Flood step's terrain panel until a run is imported.
 - **Guided setup (Style C).** A new first step, "Guided setup": a rail of setup steps (Dam record, Breach, Terrain
   layer, Review results) beside a live map of the current record and flood layer. Each step card shows its state
   (done, active, broken) and a broken step says why on its own card, never in a modal. The terrain build shows its
