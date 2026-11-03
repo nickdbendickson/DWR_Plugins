@@ -20,7 +20,16 @@ CLP, then NBI (no rise, no shape), then CLP records whose LOC_ERROR is not "NO E
 position is not trusted); distance decides within a rank.
 A guess near a structure from the STRUCTURES layer is dropped: that crossing is
 already modelled. Matched guesses are cut into the DEM only when the engineer asks
-for it (Settings.culvert_burn_matched); unmatched guesses never are.
+for it (Settings.culvert_burn_matched).
+
+3.14.0 (DWR-10554 run on main 33a93c0; Nick, 2026-11-03): unmatched guesses are cut into the
+DEM too, as GUESSED / UNVERIFIED culverts (Settings.culvert_burn_guesses, on by default; the
+Processing tool's CULVERT_BURN_GUESSES). They use the same cut as a matched guess - the line
+along the channel through the crossing (burn_line), lengthened to BURN_MIN_CELLS model cells,
+inverts from the lowest LiDAR ground at each end (lidar_inverts) - at the guess size (one
+1.2 x 0.9 m box). guess_structures returns them with source "guess", surveyed False and the
+name still starting with 'guess:'. Before 3.14.0 they were only listed in
+culvert_candidates.csv and had no effect on the flow.
 """
 
 import math
@@ -470,6 +479,36 @@ def matched_structures(rows, min_cells=BURN_MIN_CELLS):
             name=g.get("name") or "")
         s.source = g.get("source") or "inventory"
         s.surveyed = True
+        s.min_cells = int(min_cells)
+        out.append(s)
+    return out
+
+
+GUESS_NOTE = ("cut into the DEM as a GUESSED, UNVERIFIED culvert (size assumed, not "
+              "surveyed); turn off with culvert_burn_guesses / CULVERT_BURN_GUESSES")
+
+
+def guess_structures(rows, min_cells=BURN_MIN_CELLS):
+    """structures.Structure objects for the UNMATCHED guesses (no inventory match), for
+    cutting into the DEM as guessed / unverified culverts (3.14.0). The cut is the one a
+    matched guess gets (burn_line, min_cells); size, barrels and shape are the guess's own
+    (1.2 x 0.9 m box from guess_crossings). source "guess", surveyed False. Matched rows are
+    left to matched_structures (culvert_burn_matched)."""
+    import numpy as np
+    from . import structures as structmod
+    out = []
+    for g in rows or []:
+        if g.get("match_m") is not None or g.get("line") is None or len(g.get("line")) < 2:
+            continue
+        name = g.get("name") or "guess"
+        if not name.startswith("guess:"):
+            name = "guess: " + name
+        s = structmod.Structure(
+            "culvert", np.asarray(burn_line(g), dtype=float), float(g.get("width_m") or 1.2),
+            float(g.get("height_m") or 0.9), int(g.get("barrels") or 1), g.get("shape") or "box",
+            name=name)
+        s.source = "guess"
+        s.surveyed = False
         s.min_cells = int(min_cells)
         out.append(s)
     return out

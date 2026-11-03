@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Runner 3.14.0: guessed culverts are cut into the DEM, marked unverified (Nick: "do culvert ideas", from the DWR-10554 run on main 33a93c0).** RELEASE ndbreach 3.14.0; damsuite content otherwise unchanged.
+  - **Found.** The 7 road x channel guesses on DWR-10554 (one 1.2 x 0.9 m box each, `culvert_candidates.csv`) were listed but "not cut into the DEM", so the model saw a solid embankment where a culvert almost certainly is.
+  - **Change.** `culvert_guess.guess_structures` turns each unmatched guess into a culvert with the same cut a matched guess gets (`burn_line` along the channel, `BURN_MIN_CELLS`, `lidar_inverts`); `source` guess, `surveyed` false, the name starts with `guess:`, the CSV `note` says it was cut, and `run_report` gets `culvert_guesses_cut` and a "Guessed culverts cut into the DEM (unverified)" section. Matched guesses still follow `culvert_burn_matched` (off).
+  - **Setting.** `culvert_burn_guesses` / `CULVERT_BURN_GUESSES` (default on, advanced); off lists them only, as before.
+  - **Class.** On DWR-10554 the crossings are overtopped by 1.6-3.4 ft; a 1.2 x 0.9 m box passes a small fraction of that flow, so the class is not expected to change (no model re-run in this PR).
+  - Tests: `DamSafety_Runner/tests/test_culvert_match.py` (two new).
+
 - **Hazard 2.22.4: DSS-WISE result names with units after the quantity are autodetected (Nick: "Do the DSS-WISE autodetect fix PR").** RELEASE ndhazard 2.22.4; damsuite content otherwise unchanged.
   - **Found.** `autodetect._is_time_step` took the text after "Depth"/"Velocity" for an output time, so `Depth_ft.tif`, `Velocity_ftps.tif`, `Depth_m.asc` ... were skipped in the dam folder (any case, any depth of sub-folder). A label made only of unit words is no longer a time step; `Depth_0100`, `Depth (01JAN2020 12:00:00)` still are.
   - **Units.** `dsswise.detect_units` reads units right after the quantity word: `Velocity_ft_s` / `Velocity_ft_per_s` are ft/s and `Depth_m` / `Velocity_m_s` are m, m/s (were "assumed ft / ft/s"). `MaxDepth_in_Ft` style names are unchanged.
