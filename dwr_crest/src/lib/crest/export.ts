@@ -224,7 +224,7 @@ export function generateLisfloodPackage(dam: DamRecord, series: SeriesPoint[], o
   const bdy = bdyLines.join("\n") + "\n";
   const notes = [
     crsNote,
-    `Grid: ${cell} m cells; inflow over ${cells} cells. Default grid is NAD83 / UTM 14N at 10 m (Nick, 2026-10-29); the Runner's EPSG:5070 30 m grid needs the point and cell size entered.`,
+    `Grid: ${cell} m cells; inflow over ${cells} cells. The default grid is NAD83 / UTM at 10 m in the zone for the dam's longitude (stated above, Nick, 2026-10-29); the Runner's EPSG:5070 30 m grid needs the point and cell size entered.`,
     ext
       ? "Edges: FREE (normal depth) on N/S/E/W over the DEM extent given."
       : "Edges: FREE (normal depth) on N/S/E/W; the ranges cover any DEM, so every edge cell is open.",

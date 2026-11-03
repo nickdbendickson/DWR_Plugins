@@ -113,6 +113,24 @@ describe("scoreExtent", () => {
     assert.equal(e.cells, W * H);
   });
 
+  it("ignores non-polygon features mixed in (the strip carries 911 Points)", () => {
+    const R = ref();
+    const rings = [rect(R.proj, R.x0, R.x0 + W * DX, R.by - 100, R.by + 100)];
+    const withPoint: Candidate = {
+      kind: "polygons",
+      features: [
+        { properties: { site_nguid: "a" }, geometry: { type: "Point", coordinates: R.proj.inv(R.x0, R.by) } },
+        { properties: { depth_max_ft: 2 }, geometry: { type: "Polygon", coordinates: rings } },
+      ],
+    } as unknown as Candidate;
+    // Before the guard this threw "rings is not iterable" on the Point's [lon, lat] coordinates.
+    const e = scoreExtent(R, rasterizeCandidate(withPoint, R));
+    const only = scoreExtent(R, rasterizeCandidate(poly(rings), R));
+    assert.equal(e.cells, only.cells);
+    near(e.recall, only.recall, 1e-9, "recall unaffected by the Point");
+    near(e.precision, only.precision, 1e-9, "precision unaffected by the Point");
+  });
+
   it("gives half recall for a half-width strip and half precision for a double-width one", () => {
     const R = ref();
     const half = scoreExtent(R, rasterizeCandidate(poly([rect(R.proj, R.x0, R.x0 + W * DX, R.by - 50, R.by + 50)]), R));

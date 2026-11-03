@@ -72,8 +72,8 @@ export function PaperReport(props: Props) {
         <button type="button" onClick={() => void csv()}>
           ⬇ CSV (structure impacts)
         </button>
-        <button type="button" onClick={print} title="Opens the print dialog: choose Save as PDF">
-          📄 Download PDF report
+        <button type="button" onClick={print} title="Opens the print dialog: choose Save as PDF as the destination">
+          📄 Save as PDF…
         </button>
         <span className="paper-toolbar-note">This page prints exactly as shown.</span>
       </div>
