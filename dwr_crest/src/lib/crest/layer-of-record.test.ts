@@ -32,6 +32,9 @@ const routedSummary: RoutedSummary = {
   cappedSections: 0,
   volumeFlag: true,
   reachedEdge: true,
+  fillAcFt: 50000,
+  releasedAcFt: 1600,
+  volumeRatio: 31,
   notes: [],
 };
 const ready = (layer: "outline" | "routed"): OutlineState =>
