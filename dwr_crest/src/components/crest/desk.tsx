@@ -675,8 +675,10 @@ function OutlinePanel({
           </div>
           <p className="mt-2 text-sm" data-testid="routed-note">
             The routed flood carries the breach hydrograph down the drainage the terrain traces ({num(routed.channelKm, 1)} km),
-            attenuating the {num(routed.peakInCfs, 0)} cfs breach peak to {num(routed.peakOutCfs, 0)} cfs, then fills the water
-            surface onto the ground.{" "}
+            attenuating the {num(routed.peakInCfs, 0)} cfs breach peak to {num(routed.peakOutCfs, 0)} cfs,{" "}
+            {routed.method === "spread"
+              ? `then pours the water each stretch holds at its own peak onto the ground beside it (${num(routed.fillAcFt, 0)} ac-ft laid down for ${num(routed.releasedAcFt, 0)} ac-ft released, ${num(routed.volumeRatio, 1)}×).`
+              : "then fills the water surface onto the ground."}{" "}
             {routed.cappedSections > 0
               ? `${routed.cappedSections} of ${routed.sections} cross-sections could not carry the routed peak within the cut height, so their stage is a floor, not a fit.`
               : `All ${routed.sections} cross-sections carried the routed peak.`}
@@ -692,7 +694,7 @@ function OutlinePanel({
           ) : null}
           <p className="mt-1 text-xs text-muted" data-testid="outline-dem">
             Terrain: {s.dem.width} × {s.dem.height} cells at {num(s.dem.cellM, 0)} m (NAVD88); depth from Muskingum-Cunge
-            routing of the breach hydrograph on DEM cross-sections and a terrain fill, not a full 2-D hydraulic model. Built{" "}
+            routing of the breach hydrograph on DEM cross-sections and {routed.method === "spread" ? "a volume spread" : "a terrain fill"}, not a full 2-D hydraulic model. Built{" "}
             {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} and saved with this dam (the terrain
             itself is not kept). {DEM_ATTRIBUTION}
           </p>

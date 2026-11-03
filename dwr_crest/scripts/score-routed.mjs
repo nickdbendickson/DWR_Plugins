@@ -4,10 +4,10 @@
  * and outline. One-off, for the baseline comparison (Nick, 2026-11-02); not part of the app.
  *
  *   node --experimental-strip-types scripts/score-routed.mjs --dam <record.json> --runner <dam folder> [--json out.json]
- *     [--spread [--breach-path]] [--probes 300]
+ *     [--spread [--breach-path] [--no-basins]] [--probes 300]
  *
  * --spread scores the quasi-dynamic volume spread (spread.ts) instead of the stage fill; --breach-path makes it
- * follow the water from the breach instead of the outline's drainage trace. --probes sets how many points on the model's wet
+ * follow the water from the breach instead of the outline's drainage trace; --no-basins turns off closed-basin storage. --probes sets how many points on the model's wet
  * cells compare depth, velocity and arrival.
  *
  * It fetches the same corridor DEM the terrain outline uses, builds the routed flood on it, and scores its depth grid
@@ -29,7 +29,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith("--")) throw new Error(`unexpected ${a}`);
     const key = a.slice(2);
-    if (key === "volume-limit" || key === "spread" || key === "breach-path") o[key] = true;
+    if (key === "volume-limit" || key === "spread" || key === "breach-path" || key === "no-basins") o[key] = true;
     else o[key] = argv[++i];
   }
   for (const k of ["dam", "runner"]) if (!o[k]) throw new Error(`--${k} is required`);
@@ -85,6 +85,7 @@ export async function main(argv, log = console.log) {
     sectionHalfWidthM: o["half-width"] != null ? Number(o["half-width"]) : undefined,
     method: o.spread ? "spread" : "stage",
     breachPath: o["breach-path"] ? true : undefined,
+    basins: o["no-basins"] ? false : undefined,
   });
   if (!rf.ok) throw new Error(rf.reason);
   log(`  routed: peak in ${rf.stats.peakInCfs} cfs → out ${rf.stats.peakOutCfs} cfs (fell ${(rf.stats.routedPeakFellBy * 100).toFixed(0)}%), ${rf.stats.sections} sections, flooded ${rf.stats.floodedAc} ac`);
