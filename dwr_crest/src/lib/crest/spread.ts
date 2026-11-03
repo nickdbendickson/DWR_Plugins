@@ -57,7 +57,18 @@ export type SpreadOptions = {
   rough?: RoughnessOptions;
   /** The breach's released volume (m³), for the envelope-to-release ratio. */
   releasedM3?: number;
+  /**
+   * Treat each closed basin the traced channel enters as storage the wave must fill before it can pass (default true;
+   * needs releasedM3). A basin that holds all the water still travelling ends the flood there as one level pool; a
+   * smaller one fills to its spill level and the rest carries on. See spreadVolume.
+   */
+  basins?: boolean;
+  /** A basin counts only when it is at least this deep below its spill level (m). Default BASIN_MIN_DEPTH_M. */
+  basinMinDepthM?: number;
 };
+
+/** Default for SpreadOptions.basinMinDepthM. */
+export const BASIN_MIN_DEPTH_M = 1.0;
 
 export type SpreadResult = {
   width: number;
@@ -84,6 +95,13 @@ export type SpreadResult = {
   travellingM3: number;
   /** Stretches whose ground ran out before the slice was poured (the pool stands deeper than the terrain shows). */
   exhaustedStretches: number;
+  /** Closed basins on the channel the wave filled to their spill level and passed. */
+  basinsFilled: number;
+  /**
+   * Where the flood ended in a closed basin that holds all the water still travelling (the DEM has no way through it:
+   * a road or rail fill with no culvert in the DEM, or a real basin); null when it never did.
+   */
+  stoppedIn: { atM: number; spillM: number; capacityM3: number; heldM3: number; areaAc: number } | null;
   stretches: number;
   reachedEdge: boolean;
 };
@@ -237,8 +255,8 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
   // passed, so it is taken out of the volume still travelling down the valley (below). The routing alone has no such
   // dead storage, which is why it carries a small flood the whole length of the reach.
   const pitDepth = new Float32Array(N);
+  const lvl = new Float64Array(N).fill(NaN);
   if (opts.releasedM3 != null && opts.releasedM3 > 0) {
-    const lvl = new Float64Array(N).fill(NaN);
     const neg = new Float64Array(N);
     const h2 = new MaxHeap(neg, Math.max(1024, 2 * (W + H)));
     for (let k = 0; k < N; k++) {
@@ -269,6 +287,64 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     for (let k = 0; k < N; k++) if (Number.isFinite(lvl[k])) pitDepth[k] = Math.max(0, lvl[k] - g.z[k]);
   }
 
+  // 3c. Closed basins on the channel. A basin is a connected set of cells below one spill level (they share the
+  // priority flood's level exactly). The routing has no idea a basin is there: on DWR-3034 a 22 ft road fill with no
+  // culvert in the DEM closes a 233 ac-ft basin 1.7 km down, the LISFLOOD-FP run ponds the whole 71 ac-ft release
+  // behind it, and the Muskingum-Cunge wave (which only sees the cut sections' thalwegs) runs on through it at
+  // 4,000 cfs. Before the wave can pass a basin it has to fill it, so (below) each basin the channel enters takes its
+  // capacity out of the water still travelling, and a basin that can hold all of that water ends the flood.
+  const basinOf = new Int32Array(N).fill(-1);
+  const basinCap: number[] = [];
+  const basinStart: number[] = [];
+  const basinCells: number[] = [];
+  const basinAtStretch = new Map<number, number[]>();
+  if ((opts.basins ?? true) && opts.releasedM3 != null && opts.releasedM3 > 0) {
+    const PIT_EPS = 1e-3;
+    const minBasin = opts.basinMinDepthM ?? BASIN_MIN_DEPTH_M;
+    const stack: number[] = [];
+    for (const k0 of channel) {
+      if (label[k0] < 0 || basinOf[k0] !== -1 || !(pitDepth[k0] > PIT_EPS)) continue;
+      const id = basinCap.length;
+      basinStart.push(basinCells.length);
+      let cap = 0;
+      let deepest = 0;
+      const from = basinCells.length;
+      basinOf[k0] = id;
+      stack.push(k0);
+      while (stack.length) {
+        const c = stack.pop()!;
+        basinCells.push(c);
+        cap += pitDepth[c] * cellM2;
+        deepest = Math.max(deepest, pitDepth[c]);
+        const ci = c % W;
+        const cj = (c - ci) / W;
+        for (let t = 0; t < 8; t++) {
+          const i = ci + DI[t];
+          const j = cj + DJ[t];
+          if (i < 0 || j < 0 || i >= W || j >= H) continue;
+          const m = j * W + i;
+          if (basinOf[m] !== -1 || !(pitDepth[m] > PIT_EPS) || lvl[m] !== lvl[k0]) continue;
+          basinOf[m] = id;
+          stack.push(m);
+        }
+      }
+      if (deepest < minBasin) {
+        // Too shallow to matter as a barrier: its water is counted as before (dead storage under the slices).
+        for (let r = from; r < basinCells.length; r++) basinOf[basinCells[r]] = -2;
+        basinCells.length = from;
+        basinStart.pop();
+        continue;
+      }
+      basinCap.push(cap);
+      // The basin acts at the first stretch whose channel enters it (channel cells are in trace order).
+      const at = basinAtStretch.get(label[k0]) ?? [];
+      at.push(id);
+      basinAtStretch.set(label[k0], at);
+    }
+    basinStart.push(basinCells.length);
+  }
+  const basinHeld = new Float64Array(basinCap.length);
+
   // 4. Pour each stretch's slice: the level h (above the reference bed) at which the pool over the stretch's reachable
   // cells, taken in spill order, holds exactly the slice's volume.
   const counts = new Int32Array(nS + 1);
@@ -288,8 +364,64 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
   let retainedM3 = 0;
   const v0 = opts.releasedM3 != null && opts.releasedM3 > 0 ? opts.releasedM3 : 0;
   let travelling = v0;
+  let basinsFilled = 0;
+  let stoppedIn: SpreadResult["stoppedIn"] = null;
   const sqrtOf = (s: number) => Math.sqrt(Math.max(s, 1e-6));
+  // Lay a level pool holding `vol` (m³) over a basin's cells, lowest ground first (still water: velocity 0).
+  const poolBasin = (id: number, vol: number, tArr: number) => {
+    const cells = basinCells.slice(basinStart[id], basinStart[id + 1]).sort((p, q) => g.z[p] - g.z[q]);
+    const target = vol / cellM2;
+    let n = 0;
+    let sumZ = 0;
+    let h = lvl[cells[0]];
+    for (let r = 0; r < cells.length; r++) {
+      n++;
+      sumZ += g.z[cells[r]];
+      const next = r + 1 < cells.length ? g.z[cells[r + 1]] : Infinity;
+      const hh = (target + sumZ) / n;
+      if (hh <= next) {
+        h = Math.min(hh, lvl[cells[0]]);
+        break;
+      }
+    }
+    let area = 0;
+    for (let r = 0; r < n; r++) {
+      const k = cells[r];
+      const d = h - g.z[k];
+      if (d < minDepth) continue;
+      area += cellM2;
+      if (d > depthM[k]) {
+        depthM[k] = d;
+        wseOut[k] = h;
+        velOut[k] = 0;
+        arrOut[k] = Number.isFinite(arrOut[k]) ? Math.min(arrOut[k], tArr) : tArr;
+      }
+    }
+    return { h, area };
+  };
   for (let j = 0; j + 1 < nS; j++) {
+    // Closed basins the channel enters in this stretch: the wave fills each before it can go on.
+    let stop = false;
+    for (const id of basinAtStretch.get(j) ?? []) {
+      const room = basinCap[id] - basinHeld[id];
+      if (!(room > 0)) continue;
+      const tArr = sections[j].tArrivalS ?? sections[j].tPeakS;
+      if (travelling <= room) {
+        const held = basinHeld[id] + travelling;
+        const { area } = poolBasin(id, held, tArr);
+        retainedM3 += travelling;
+        stoppedIn = { atM: sections[j].x, spillM: lvl[basinCells[basinStart[id]]], capacityM3: basinCap[id], heldM3: held, areaAc: area / ACRE_M2 };
+        travelling = 0;
+        stop = true;
+        break;
+      }
+      poolBasin(id, basinCap[id], tArr);
+      basinHeld[id] = basinCap[id];
+      basinsFilled++;
+      retainedM3 += room;
+      travelling -= room;
+    }
+    if (stop) break;
     // The slice shrinks with the water already left behind in depressions upstream (the wave carries less).
     const v = sections[j].storeMaxM3 * (v0 > 0 ? travelling / v0 : 1);
     const a = counts[j];
@@ -334,8 +466,17 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
       const k = cells[r];
       const d = bed[k] + h - g.z[k];
       if (d < minDepth) continue;
+      // A basin the wave already filled keeps its (deeper) standing pool.
+      if (basinOf[k] >= 0 && depthM[k] > d) continue;
       depthM[k] = d;
-      dead += Math.min(d, pitDepth[k]) * cellM2;
+      const kept = Math.min(d, pitDepth[k]) * cellM2;
+      const bid = basinOf[k];
+      if (bid >= 0) {
+        // Water already standing in a basin counts against its room, once.
+        const add = Math.min(kept, Math.max(0, basinCap[bid] - basinHeld[bid]));
+        basinHeld[bid] += add;
+        dead += add;
+      } else dead += kept;
       wseOut[k] = bed[k] + h;
       const nn = d <= rough.bankfullM ? rough.nChannel : rough.nFloodplain;
       // Froude ≤ 1: a pool too thin for the stretch's peak would otherwise need impossible speeds to pass it.
@@ -376,6 +517,8 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     retainedM3,
     travellingM3: travelling,
     exhaustedStretches: exhausted,
+    basinsFilled,
+    stoppedIn,
     stretches,
     reachedEdge,
   };

@@ -159,6 +159,60 @@ describe("spreadVolume: water left in depressions leaves the wave", () => {
   });
 });
 
+describe("spreadVolume: a closed basin that holds the flood ends it", () => {
+  // DWR-3034's case: a road fill with no culvert in the DEM across the valley 800 m down closes a basin far bigger
+  // than the release. The routed sections know nothing of it (they carry the wave straight on), so without the basin
+  // rule the slices keep pouring below the fill.
+  const fill = (n: number) => (Math.abs(n) <= 20 ? 6 : 0);
+  const dem = synthDem(200, 10, (e, n) => 100 + 0.01 * n + 0.02 * Math.abs(e) + fill(n));
+  const line = straight(800, -800);
+  const secs = sections(33, () => 20_000);
+  const released = 30_000;
+  const at = idxOf(dem);
+  const stopped = spreadVolume(dem, line, secs, { minDepthM: 0.01, releasedM3: released });
+  const through = spreadVolume(dem, line, secs, { minDepthM: 0.01, releasedM3: released, basins: false });
+
+  it("stops at the fill as one level pool and leaves the valley below it dry", () => {
+    assert.ok(stopped.stoppedIn, "the flood ends in the basin");
+    assert.ok(stopped.stoppedIn!.capacityM3 > released);
+    // The fill's pond backs up to n ≈ 600 (6 m of fill on a 1% valley), 200 m down the channel: the flood ends there.
+    assert.ok(Math.abs(stopped.stoppedIn!.atM - 200) <= 60, `ends where the pond starts (${stopped.stoppedIn!.atM} m)`);
+    assert.equal(stopped.travellingM3, 0);
+    for (let n = -30; n >= -700; n -= 50) assert.equal(stopped.depthM[at(0, n)], 0, `dry below the fill at n=${n}`);
+    // The pond is level: the same water surface at the fill and 100 m up the valley.
+    const w1 = stopped.wseM[at(0, 30)];
+    const w2 = stopped.wseM[at(0, 100)];
+    assert.ok(Number.isFinite(w1) && Math.abs(w1 - w2) < 1e-4, `${w1} vs ${w2}`);
+    assert.ok(w1 < 106, "below the fill's crest");
+  });
+
+  it("basins: false keeps the old per-cell dead storage only", () => {
+    assert.equal(through.stoppedIn, null);
+    assert.equal(through.basinsFilled, 0);
+  });
+
+  it("a basin shallower than basinMinDepthM is not a barrier", () => {
+    const low = synthDem(200, 10, (e, n) => 100 + 0.01 * n + 0.02 * Math.abs(e) + (Math.abs(n) <= 20 ? 0.6 : 0));
+    const r = spreadVolume(low, line, secs, { minDepthM: 0.01, releasedM3: released });
+    assert.equal(r.stoppedIn, null);
+    assert.equal(r.basinsFilled, 0);
+  });
+});
+
+describe("spreadVolume: a smaller basin fills to its spill level and the rest goes on", () => {
+  const dem = synthDem(200, 10, (e, n) => 100 + 0.01 * n + 0.02 * Math.abs(e) + (Math.abs(n) <= 20 ? 1.5 : 0));
+  const line = straight(800, -800);
+  const r = spreadVolume(dem, line, sections(33, () => 20_000), { minDepthM: 0.01, releasedM3: 60_000 });
+  const at = idxOf(dem);
+
+  it("fills the basin to its spill and still floods below the fill", () => {
+    assert.equal(r.stoppedIn, null);
+    assert.equal(r.basinsFilled, 1);
+    assert.ok(r.travellingM3 < 60_000);
+    assert.ok(r.depthM[at(0, -300)] > 0);
+  });
+});
+
 describe("routeMuskingumCunge: stretch storage from continuity", () => {
   // A rectangular channel, 10 sections 200 m apart; a triangular inflow of known volume.
   const tables = Array.from({ length: 10 }, (_, j) => {
