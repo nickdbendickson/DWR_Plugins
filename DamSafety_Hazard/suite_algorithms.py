@@ -261,7 +261,7 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
             "inventory (Bridge_Inventory_External) and centerline pipes (Center_Line_Pipes).\n"
             "Each structure is placed where a stream crosses a road or rail line within the "
             "search distance of its point (the nearest crossing; rail first for railroad "
-            "bridges). The line follows the stream, upstream end first (NHD flowlines are "
+            "bridges). The line follows the stream, upstream end first (3DHP flowlines are "
             "digitised in the flow direction; tick 'reversed' for streams drawn upstream), and "
             "is (embankment top width + 2 x side margin) long, divided by the sine of the "
             "crossing angle (at least 30 degrees). The top width is the NBI deck / roadway "
@@ -317,7 +317,7 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
         P(QgsProcessingParameterVectorLayer("NDDOT_PIPES", "NDDOT centerline pipes (points; "
                                             "Center_Line_Pipes - diameter, length and the two "
                                             "end elevations)", [SRC_POINT], optional=True))
-        P(QgsProcessingParameterVectorLayer("STREAMS", "Streams (NHD flowlines or a "
+        P(QgsProcessingParameterVectorLayer("STREAMS", "Streams (3DHP flowlines or a "
                                             "centerline)", [SRC_LINE], optional=True))
         P(QgsProcessingParameterBoolean("STREAM_REVERSED", "Stream lines are digitised "
                                         "UPSTREAM (not NHD): reverse them",

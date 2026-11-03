@@ -10,7 +10,7 @@ import os
 
 from qgis.PyQt.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGroupBox, QFormLayout, QSpinBox,
-    QCheckBox, QComboBox, QWidget, QMessageBox, QLineEdit, QScrollArea, QFileDialog,
+    QComboBox, QWidget, QMessageBox, QLineEdit, QScrollArea, QFileDialog,
 )
 from qgis.core import QgsProject, QgsRasterLayer
 
@@ -95,7 +95,7 @@ class DataTabMixin(object):
             self.data_area_combo.addItem(text, key)
         self.data_area_combo.setToolTip(
             "Flooded area: structures, facilities, dams and towns only where the depth "
-            "raster is wet, plus the flood buffer. Roads, rail and NHD flowlines always keep "
+            "raster is wet, plus the flood buffer. Roads, rail and 3DHP flowlines always keep "
             "the whole study area (sole access and the travel-time trace need the network "
             "beyond the flood).")
         aform.addRow("Save data for:", self.data_area_combo)
@@ -222,11 +222,11 @@ class DataTabMixin(object):
         self.centerline_combo = QComboBox()
         self.centerline_combo.setToolTip(
             "A line along the channel from the dam downstream (parts are joined). Without "
-            "one, USGS NHD flowlines are downloaded and traced downstream from the dam's NID "
+            "one, USGS 3DHP flowlines are downloaded and traced downstream from the dam's NID "
             "point (or the first cell the flood reaches).")
         cform.addRow("Channel centerline:", self.centerline_combo)
         self.flowlines_download_check = WrapCheckBox(
-            "USGS NHD flowlines and OpenStreetMap towns (internet)")
+            "USGS 3DHP flowlines and OpenStreetMap towns (internet)")
         self.flowlines_download_check.setChecked(True)
         cform.addRow("", self.flowlines_download_check)
         cgrp.setLayout(cform)

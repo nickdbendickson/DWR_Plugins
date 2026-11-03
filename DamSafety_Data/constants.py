@@ -3,7 +3,7 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-PLUGIN_VERSION = "2.23.0"
+PLUGIN_VERSION = "2.23.2"
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
@@ -476,9 +476,14 @@ CAMP_POINT_RADIUS_FT = 150.0  # campground mapped as a point: this circle is eva
 # distance from the place point within which its first flooded structure counts
 OSM_PLACE_RADIUS_FT = {"city": 10560.0, "town": 5280.0, "village": 2640.0,
                        "hamlet": 1320.0}
-# USGS National Hydrography Dataset flowlines (large scale) for the channel
-# centerline of the travel-time table when none is given
+# USGS National Hydrography Dataset flowlines (large scale) - the fallback of the 3DHP
+# flowlines in the Suite data and servers list (damsuite.services) and the ND pack build
 NHD_FLOWLINE_URL = ("https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/6")
+# 2.22.6 (audit 2026-11-03, Nick: "3DHP"): the channel centerline of the travel-time table
+# (when none is given) and the run's flowlines come from the USGS 3D Hydrography Program
+# (3DHP) service, as the nd Hazard Helper 1.19.0; each feature also gets the NHD properties
+# gnis_name, ftype ... (damsuite.hydro3dhp)
+HYDRO3DHP_FLOWLINE_URL = ("https://hydro.nationalmap.gov/arcgis/rest/services/3DHP_all/MapServer/50")
 # USGS National Map NHD waterbodies, large scale (same service as the flowlines, layer 12)
 NHD_WATERBODY_URL = ("https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/12")
 TRAVEL_STATION_MI = 0.5       # travel-time table: a station every ... miles

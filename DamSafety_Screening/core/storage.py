@@ -238,18 +238,15 @@ def estimate_storage(dem, water_mask, cell, dam_xy_idx=None, crest_radius_m=50.0
     elif spill is not None:                  # water runs out above this level; crest held at spill
         crest = min(crest, spill)
     if leak_note:
-        notes.append(leak_note)
-        conf_leak = True
-    else:
-        conf_leak = False
+        notes.append(leak_note)          # "... (DEM storage leak guard)": confidence low below
     above = curve_above[-1][1]
     curve = [(e, v + below) for e, v in curve_above]
 
-    conf = "medium"
-    if any("defaulted" in s or "not found" in s or "storage leak" in s for s in notes):
-        conf = "low"
-    elif known_height_m:
-        conf = "medium"
+    # 0.18.4 (audit 2026-11-03): low when a value was defaulted / not found or the leak guard
+    # held the storage (its note says "storage leak"), else medium - the unused conf_leak flag
+    # and the "medium" known-height branch (the same as the default) are gone; same result
+    conf = "low" if any("defaulted" in s or "not found" in s or "storage leak" in s
+                        for s in notes) else "medium"
     return StorageResult(pool, crest, area_m2, below, above, below + above,
                          dmax, slope, conf, curve, notes)
 

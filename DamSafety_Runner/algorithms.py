@@ -527,7 +527,10 @@ class _Base(QgsProcessingAlgorithm):
                   "75 is the engineer's, a screening value you choose)", 75.0, minimum=1.0,
                   advanced=True)
         self._bool("CULVERT_BURN_MATCHED", "Culvert guesses: cut the inventory-matched ones into "
-                   "the DEM (unmatched guesses are never cut)", False, advanced=True)
+                   "the DEM at the inventory size", False, advanced=True)
+        self._bool("CULVERT_BURN_GUESSES", "Culvert guesses: cut the unmatched ones into the DEM "
+                   "as guessed, unverified 1.2 x 0.9 m boxes (off = list them only)", True,
+                   advanced=True)
         # v3.4.0: building footprints as obstructions (polygons in the structures layer)
         self.addParameter(set_advanced(QgsProcessingParameterEnum(
             "BUILDINGS", "Buildings: how polygon footprints in the structures layer enter the "
@@ -1101,6 +1104,8 @@ class _Base(QgsProcessingAlgorithm):
                    if self.parameterDefinition("CULVERT_MATCH_M") is not None else 75.0) or 75.0
         burn_matched = bool(self.parameterDefinition("CULVERT_BURN_MATCHED") is not None and
                             self.parameterAsBool(parameters, "CULVERT_BURN_MATCHED", context))
+        burn_guesses = bool(self.parameterDefinition("CULVERT_BURN_GUESSES") is None or
+                            self.parameterAsBool(parameters, "CULVERT_BURN_GUESSES", context))
         inventory = []
         for path in str(parameters.get("CULVERT_INVENTORY") or "").split(";;"):
             path = path.strip().split("|", 1)[0]
@@ -1231,13 +1236,17 @@ class _Base(QgsProcessingAlgorithm):
                     n_m = sum(1 for r in rows if r.get("match_m") is not None)
                     notes.append("{} culvert candidate(s) where a road crosses a channel, {} sized "
                                  "from the inventory. Listed in culvert_candidates.csv. "
-                                 "{}".format(len(rows), n_m,
-                                             "Matched ones are cut into the DEM." if
-                                             (n_m and burn_matched) else "Not cut into the DEM."))
+                                 "Matched: {}. Unmatched: {}.".format(
+                                     len(rows), n_m,
+                                     "cut into the DEM" if burn_matched else
+                                     "not cut into the DEM",
+                                     "cut into the DEM as guessed, unverified culverts" if
+                                     burn_guesses else "not cut into the DEM"))
         st.structures = structs
         st.culvert_inventory = inventory
         st.culvert_match_m = match_m
         st.culvert_burn_matched = burn_matched
+        st.culvert_burn_guesses = burn_guesses
         try:
             st.invert_tol_m = float(self.parameterAsDouble(parameters, "S_INVERT_TOL_FT", context)) * FT
         except Exception:                                        # noqa
