@@ -431,30 +431,65 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     slicesM3 += v;
     const cells = Array.from(order.subarray(a, b)).sort((p, q) => spill[p] - spill[q]);
     const target = v / cellM2; // m of depth summed over cells
-    let n = 0;
-    let sumG = 0;
-    let h = NaN;
-    for (let r = 0; r < cells.length; r++) {
-      const k = cells[r];
-      n++;
-      sumG += g.z[k] - bed[k];
-      const next = r + 1 < cells.length ? spill[cells[r + 1]] : Infinity;
-      const hh = (target + sumG) / n;
-      if (hh <= next) {
-        h = hh;
-        break;
+    // Pour the slice as one or more level pools. Cells join a pool in spill (connection) order; a pool can only rise
+    // to a saddle it has the volume to top. If adding the next cell would drop the computed level below that cell's
+    // own saddle, there isn't enough water to carry the pool over it: the near side caps at the saddle and the
+    // remainder perches as a fresh pool beyond it. Without this (a single running average over all the cells) a slice
+    // too small to top a saddle but big enough to reach it would be smeared across the saddle, pulling the near-side
+    // surface below the saddle it supposedly crossed and laying a sheet of water in the low behind it — a dry gap in
+    // the channel and ~an extra slice of water in the wrong place. (M13)
+    const levelOf = new Float64Array(cells.length).fill(NaN);
+    let budget = target;
+    let start = 0;
+    while (start < cells.length && budget > 1e-9) {
+      let cnt = 0;
+      let sumG = 0;
+      let level = NaN;
+      let end = cells.length - 1;
+      let capped = false;
+      for (let r = start; r < cells.length; r++) {
+        const k = cells[r];
+        cnt++;
+        sumG += g.z[k] - bed[k];
+        const hh = (budget + sumG) / cnt;
+        if (r > start && hh < spill[k]) {
+          // Too little water to carry the pool over this cell's saddle: cap the near side at the saddle, perch the rest.
+          level = spill[k];
+          end = r - 1;
+          capped = true;
+          break;
+        }
+        const next = r + 1 < cells.length ? spill[cells[r + 1]] : Infinity;
+        if (hh <= next) {
+          level = hh;
+          end = r;
+          break;
+        }
+      }
+      if (!Number.isFinite(level)) break;
+      let consumed = 0;
+      for (let r = start; r <= end; r++) {
+        levelOf[r] = level;
+        consumed += level - (g.z[cells[r]] - bed[cells[r]]);
+      }
+      budget -= consumed;
+      if (capped) {
+        start = end + 1; // the overflow perches starting at the cell beyond the saddle
+      } else {
+        if (end === cells.length - 1) exhausted++; // the pool stood over every cell of the stretch
+        break; // a contained pool took the whole remaining budget
       }
     }
-    if (!Number.isFinite(h)) continue;
-    if (n === cells.length) exhausted++;
     // Velocity: Manning on each wet cell, then one factor so the stretch passes its routed peak (Σ v·d·w = Qpeak,
     // with each cell's width across the flow its area over the stretch length).
     const dx = Math.max(cellM, sections[j + 1].x - sections[j].x);
     const sS = sqrtOf(sections[j].slopeStage);
     let qMan = 0;
-    for (let r = 0; r < n; r++) {
+    for (let r = 0; r < cells.length; r++) {
+      const level = levelOf[r];
+      if (!Number.isFinite(level)) continue;
       const k = cells[r];
-      const d = bed[k] + h - g.z[k];
+      const d = bed[k] + level - g.z[k];
       if (d < minDepth) continue;
       const nn = d <= rough.bankfullM ? rough.nChannel : rough.nFloodplain;
       qMan += (Math.pow(d, 5 / 3) * sS * cellM2) / (nn * dx);
@@ -462,9 +497,11 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     const scale = qMan > 0 ? sections[j].peakCms / qMan : 0;
     const tArr = sections[j].tArrivalS ?? sections[j].tPeakS;
     let dead = 0;
-    for (let r = 0; r < n; r++) {
+    for (let r = 0; r < cells.length; r++) {
+      const level = levelOf[r];
+      if (!Number.isFinite(level)) continue;
       const k = cells[r];
-      const d = bed[k] + h - g.z[k];
+      const d = bed[k] + level - g.z[k];
       if (d < minDepth) continue;
       // A basin the wave already filled keeps its (deeper) standing pool.
       if (basinOf[k] >= 0 && depthM[k] > d) continue;
@@ -477,7 +514,7 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
         basinHeld[bid] += add;
         dead += add;
       } else dead += kept;
-      wseOut[k] = bed[k] + h;
+      wseOut[k] = bed[k] + level;
       const nn = d <= rough.bankfullM ? rough.nChannel : rough.nFloodplain;
       // Froude ≤ 1: a pool too thin for the stretch's peak would otherwise need impossible speeds to pass it.
       velOut[k] = Math.min((scale * Math.pow(d, 2 / 3) * sS) / nn, Math.sqrt(9.80665 * d));

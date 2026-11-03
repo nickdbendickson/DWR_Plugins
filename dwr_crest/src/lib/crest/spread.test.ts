@@ -141,6 +141,29 @@ describe("spreadVolume: spill order", () => {
   });
 });
 
+describe("spreadVolume: a slice is never smeared across an untopped saddle (M13)", () => {
+  // A wall on the reservoir side, a flat floor at 100, a 3 m ridge (crest 103) at e = 60..80, and a deep, wide pit
+  // (ground 95) beyond it. A slice big enough to reach the ridge but too small to fill the pit up to the ridge must
+  // not drop the channel surface below the ridge it had to top: it caps at the crest and perches the overflow in the
+  // pit. The old single running-average pour averaged the deep pit cells in and pulled the channel surface below the
+  // crest while still wetting the pit — water laid across a saddle the pool never actually topped.
+  const ground = (e: number) => (e < -5 ? 200 : e >= 60 && e < 80 ? 103 : e >= 80 && e < 300 ? 95 : 100 + 0.002 * Math.abs(e));
+  const dem = synthDem(160, 10, (e) => ground(e));
+  const line = straight(400, -400);
+  const at = idxOf(dem);
+  const r = spreadVolume(dem, line, sections(17, () => 40_000), { minDepthM: 0.01 });
+
+  it("pins the channel at the ridge crest when the pit beyond it is wet", () => {
+    assert.ok(r.depthM[at(120, 0)] > 0, "the pit beyond the ridge takes the overflow");
+    const chWse = r.wseM[at(0, 0)];
+    assert.ok(Number.isFinite(chWse), "the channel is wet");
+    // Water is in the pit only because the pool topped the 103 crest, so the channel surface cannot sit below it.
+    assert.ok(chWse >= 103 - 1e-3, `channel surface ${chWse} must reach the ridge crest 103`);
+    // The pit's surface perches below the crest (the overflow sitting in the low), not level with the channel.
+    assert.ok(r.wseM[at(120, 0)] < chWse + 1e-6);
+  });
+});
+
 describe("spreadVolume: water left in depressions leaves the wave", () => {
   // A valley with a deep closed pit across it just below the top: what fills the pit no longer travels.
   const dem = synthDem(200, 10, (e, n) => {
