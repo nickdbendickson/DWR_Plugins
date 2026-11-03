@@ -190,7 +190,6 @@ def run_pothole(dem_path, basin_path, out_dir, z_factor_to_m=1.0, min_depth_m=0.
     potf = pot_mask.ravel()
     state[~flat_valid] = 0
     state[potf] = 0
-    any_exit = np.zeros(nr * nc, np.int8)   # reaches ANY exit cleanly
     any_state = state.copy()
     for start in np.nonzero(flat_valid)[0]:
         if state[start] != -1:

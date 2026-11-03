@@ -68,7 +68,6 @@ class NDPMPAlgorithm(QgsProcessingAlgorithm):
         # Export basin to a temporary GeoPackage in its own CRS so the core (pure OGR) can read it
         tmp = os.path.join(QgsProcessingUtils.tempFolder(), "nd_pmp_basin_%d.gpkg" % os.getpid())
         opts = QgsVectorFileWriter.SaveVectorOptions(); opts.driverName = "GPKG"; opts.layerName = "basin"
-        sink, err = None, None
         writer = QgsVectorFileWriter.create(tmp, src.fields(), src.wkbType(), src.sourceCrs(),
                                             QgsCoordinateTransformContext(), opts)
         for f in src.getFeatures():
