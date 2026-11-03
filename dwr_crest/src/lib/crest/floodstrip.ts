@@ -141,6 +141,22 @@ export function clipToConvex(subject: XY[], clip: XY[]): XY[] {
   return d.length >= 3 && Math.abs(ringArea(d)) > 1e-6 ? d : [];
 }
 
+/** Is every vertex of `ring` strictly inside the convex counter-clockwise ring `clip`? Used to keep only AOI
+ * holes that lie wholly inside the clipped band. A hole straddling a band edge, clipped to the band on its
+ * own, runs along that boundary and coincides with the clipped outer ring there — a shell-touching hole that
+ * GeoJSON/KML consumers reject. Dropping such a hole shows its sub-area as flooded instead (conservative for
+ * screening) and never emits an invalid polygon. A hole wholly inside the band is already ⊂ outer∩band. */
+function whollyInsideConvex(ring: XY[], clip: XY[]): boolean {
+  return ring.every((p) => {
+    for (let i = 0; i < clip.length; i++) {
+      const a = clip[i];
+      const b = clip[(i + 1) % clip.length];
+      if ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]) < 1e-6) return false;
+    }
+    return true;
+  });
+}
+
 /** Counter-clockwise outer ring, clockwise holes (RFC 7946 §3.1.6). */
 function orient(rings: XY[][]): XY[][] {
   return rings.map((r, i) => {
@@ -259,7 +275,10 @@ export function floodStrip(dam: DamRecord, result: Analysis): FloodStripResult {
       for (const p of parts) {
         const outer = clipToConvex(p.outer, band);
         if (outer.length === 0) continue;
-        const holes = p.holes.map((h) => clipToConvex(h, band)).filter((h) => h.length > 0);
+        // Keep a hole only if it lies wholly inside the band. Clipping a straddling hole to the band on its
+        // own would make it touch the clipped outer along the boundary (an invalid shell-touching hole); see
+        // whollyInsideConvex. A dropped hole's area just shows as flooded, which is conservative here.
+        const holes = p.holes.filter((h) => h.length >= 3 && whollyInsideConvex(h, band));
         polys.push([outer, ...holes]);
       }
     }

@@ -248,6 +248,35 @@ describe("flood strip with a drawn area on ND00199", () => {
     );
     assert.ok(ratio > 0.95 && ratio < 1.05, `ratio ${ratio}`);
   });
+
+  // M10: a hole that spans several depth bands used to be clipped to each band on its own, leaving a
+  // fragment running along the band edge that coincided with the shell (an invalid hole). It is now
+  // dropped instead — valid output, its area shown as flooded (conservative).
+  it("a hole straddling depth-band edges is dropped, not cut into shell-touching fragments", () => {
+    const b = Math.atan2(U[0], U[1]);
+    const u = [Math.sin(b), Math.cos(b)];
+    const v = [u[1], -u[0]];
+    const c = (a: number, x: number): [number, number] => [a * u[0] + x * v[0], a * u[1] + x * v[1]];
+    // Hole off the centreline (so it does not end the reach) spanning 0.5–5 km downstream — crossing many
+    // depth-band boundaries, so it is wholly inside no single band.
+    const aoi = polygonKm(
+      LOC,
+      [c(-0.05, -3), c(20, -3), c(20, 3), c(-0.05, 3)],
+      [[c(0.5, 0.2), c(5, 0.2), c(5, 0.6), c(0.5, 0.6)]],
+    );
+    const d = withAoi(aoi);
+    const r = analyze(d);
+    const strip = floodFootprint(d, r)!;
+    assertValid(strip);
+    // Not assertInside: the dropped hole's area is now (deliberately) flooded, i.e. outside the drawn hole.
+    assert.ok(
+      rings(strip).every((p) => p.length === 1),
+      "the straddling hole is dropped, so every polygon is a single ring with no interior hole",
+    );
+    // Its area shows as flooded, so the strip is not smaller than the engine's flood.
+    const ratio = areaAc(strip) / r.flood.acres;
+    assert.ok(ratio > 0.95 && ratio < 1.05, `ratio ${ratio}`);
+  });
 });
 
 describe("no strip: no geometry, nothing wet, or nothing inside the drawn area", () => {

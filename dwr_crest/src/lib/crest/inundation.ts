@@ -102,14 +102,17 @@ function routedCache(
     wetCells: poly.wetCells,
     wetCellAc: Math.round(((poly.wetCells * g.cellM * g.cellM) / ACRE_M2) * 1000) / 1000,
     bands: poly.bands,
-    bedTopFt: 0,
-    bedEndFt: 0,
+    // The routed/spread flood does not trace a channel the way the terrain outline does, so these are
+    // not measured here. null (not 0) keeps any reader from taking a bed elevation, reach, or cleanup
+    // count as real. channelKm and hitsCorridor come from the routing and are genuine.
+    bedTopFt: null,
+    bedEndFt: null,
     channelKm: routed.stats.channelKm,
-    reachKm: 0,
+    reachKm: null,
     hitsCorridor: routed.stats.reachedEdge,
     rings,
-    droppedPatches: 0,
-    filledHoles: 0,
+    droppedPatches: null,
+    filledHoles: null,
   };
   const r: RoutedSummary = {
     floodedAc: routed.stats.floodedAc,

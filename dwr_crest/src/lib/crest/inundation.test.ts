@@ -90,6 +90,14 @@ describe("buildInundation on ND00199 (30 m fixture, 1,609 ac-ft → routed)", ()
     assert.ok(r.cache.routed);
     assert.equal(r.cache.outline.type, "FeatureCollection");
     assert.ok(r.cache.stats.outlineAc >= 0);
+    // The routed layer traces no channel, so the bed/reach/cleanup stats are null, not a fake 0 that a
+    // reader would take as measured. channelKm (from the routing) is still a real number.
+    assert.equal(r.cache.stats.bedTopFt, null);
+    assert.equal(r.cache.stats.bedEndFt, null);
+    assert.equal(r.cache.stats.reachKm, null);
+    assert.equal(r.cache.stats.droppedPatches, null);
+    assert.equal(r.cache.stats.filledHoles, null);
+    assert.ok(r.cache.stats.channelKm >= 0);
     // The fingerprint matches the outline inputs, so outlineState reads it as "ready" for this dam.
     const io = outlineInputs(ND, RESULT);
     assert.ok(io.ok);

@@ -138,6 +138,8 @@ describe("ND00199 outline on the real 3DEP terrain (30 m fixture)", () => {
   const s = CACHE.stats;
   it("follows the creek from the breach, wet ground under the desk water surface", () => {
     assert.equal(s.dem.missing, 0);
+    // The traced outline measures these (they are null only on the routed/spread layer).
+    assert.ok(s.reachKm != null && s.bedTopFt != null && s.bedEndFt != null, "outline path measures bed and reach");
     assert.ok(s.channelKm > s.reachKm, "the traced creek bends, so it is longer than the straight reach");
     assert.ok(s.reachKm > 10 && s.reachKm <= RESULT.flood.lengthM / 1000 + 0.05, String(s.reachKm));
     // Bed: starts at the toe, 1046.2 ft, next to the record streambed (1043.59 ft) and below the crest (1071.09 ft);

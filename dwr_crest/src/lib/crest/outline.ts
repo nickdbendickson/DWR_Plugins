@@ -95,20 +95,23 @@ export type OutlineStats = {
   /** Acres of the wet cells before smoothing (the polygons' outlineAc is a little less: corners cut, tiny rings dropped). */
   wetCellAc: number;
   bands: { band: string; label: string; ac: number }[];
-  /** Channel bed (ft NAVD88, pits filled) at the top and the bottom of the traced channel. */
-  bedTopFt: number;
-  bedEndFt: number;
+  /** Channel bed (ft NAVD88, pits filled) at the top and the bottom of the traced channel. null when the
+   * layer did not trace a channel (the routed/spread flood), so a reader never takes 0 ft as measured. */
+  bedTopFt: number | null;
+  bedEndFt: number | null;
   /** How the trace's first cell was chosen (absent on outlines built before 2026-11-03: the old axis start). */
   traceStart?: TraceStart;
   /** Length of the traced channel (km), along its bends. */
   channelKm: number;
-  /** Distance downstream (km) of the farthest wet cell. */
-  reachKm: number;
+  /** Distance downstream (km) of the farthest wet cell. null when not traced (routed/spread flood). */
+  reachKm: number | null;
   /** The water reached the corridor limit somewhere (it would spread further). */
   hitsCorridor: boolean;
   rings: number;
-  droppedPatches: number;
-  filledHoles: number;
+  /** Connected-component cleanup counts from the terrain trace. null when the layer was not traced that
+   * way (the routed/spread flood), so a reader never takes 0 as "none dropped / none filled". */
+  droppedPatches: number | null;
+  filledHoles: number | null;
 };
 
 export type TerrainOutline = FloodStrip & {
