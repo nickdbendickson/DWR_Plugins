@@ -50,6 +50,19 @@ describe("buildRoutedFlood on ND00199 (30 m fixture)", () => {
     assert.equal(typeof RF.stats.reachedEdge, "boolean");
   });
 
+  it("routes the Breach step's own peak: the Flood step's breach peak equals the routed breach peak", () => {
+    for (const r of [RF, SP]) {
+      assert.ok(r.ok);
+      if (!r.ok) continue;
+      assert.equal(r.stats.peakInCfs, Math.round(RESULT.breach.peakCfs));
+    }
+    // The QA record (overtopping, NID storage and length, no surface area): 29,321 cfs on both steps, not 29,077.
+    const qa = { ...ND, failureMode: "overtopping" as const, storageAcFt: 1615.5, lengthFt: 1700, surfaceAreaAc: undefined };
+    const res = analyze(qa);
+    assert.equal(Math.round(res.breach.peakCfs), 29321);
+    assert.equal(res.breach.series.reduce((m, p) => Math.max(m, p.qCfs), 0), res.breach.peakCfs);
+  });
+
   it("carries the volume-ratio provenance fields", () => {
     assert.ok(RF.ok);
     if (!RF.ok) return;
@@ -58,7 +71,8 @@ describe("buildRoutedFlood on ND00199 (30 m fixture)", () => {
     // volumeRatio is fillAcFt over the released volume, so it reproduces the fill from the ratio.
     if (RF.stats.releasedAcFt > 0) {
       const expected = Math.round((RF.stats.fillAcFt / RF.stats.releasedAcFt) * 10) / 10;
-      assert.equal(RF.stats.volumeRatio, expected);
+      // The stat is computed from the unrounded volumes, so allow the two roundings (fill to 1 ac-ft, ratio to 0.1).
+      assert.ok(Math.abs(RF.stats.volumeRatio - expected) <= 0.1 + 1e-9, `${RF.stats.volumeRatio} vs ${expected}`);
     }
   });
 

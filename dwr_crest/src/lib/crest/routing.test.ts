@@ -115,6 +115,15 @@ const triangle = (peak: number, tp: number, tEnd: number) => {
 };
 
 describe("routeMuskingumCunge", () => {
+  it("carries the inflow peak itself at the first section, even when the peak falls between default steps", () => {
+    // Peak at 1,117 s: with the default step (tp/30 ≈ 37.2 s, then rounded) the clock would straddle it.
+    const tS = [0, 1117, 4000];
+    const qCms = [0, 830.25, 0];
+    const r = routeMuskingumCunge({ tS, qCms }, channel(5_000, 500, 0.001), { maxHours: 12 });
+    near(r.sections[0].peakCms, 830.25, 1e-9, "first-section peak");
+    near(r.sections[0].tPeakS, 1117, 1e-9, "first-section peak time");
+  });
+
   it("passes a steady flow unchanged and conserves volume", () => {
     const tables = channel(10_000, 500, 0.001);
     const steady = { tS: [0, 3600 * 6], qCms: [100, 100] };

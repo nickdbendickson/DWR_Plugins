@@ -359,7 +359,11 @@ export function routeMuskingumCunge(
   for (let i = 1; i < n; i++) if (inflow.qCms[i] > inflow.qCms[ip]) ip = i;
   const qPeakIn = inflow.qCms[ip];
   const tp = Math.max(60, inflow.tS[ip] - inflow.tS[0]);
-  const dt = opts.dtS ?? Math.max(1, Math.min(60, tp / 30));
+  // Step so the clock lands exactly on the inflow peak: the first section then carries the breach peak itself (the
+  // Flood step's "breach peak" equals the Breach step's routed peak), instead of the hydrograph sampled between steps.
+  const dt0 = opts.dtS ?? Math.max(1, Math.min(60, tp / 30));
+  const tpIn = inflow.tS[ip] - inflow.tS[0];
+  const dt = opts.dtS == null && tpIn > 0 ? tpIn / Math.ceil(tpIn / dt0) : dt0;
   const maxT = (opts.maxHours ?? 48) * 3600;
   const frac = opts.recessionFraction ?? 0.02;
 
@@ -449,7 +453,7 @@ export function routeMuskingumCunge(
     volIn += qin * dt;
     volOut += Q[nc] * dt;
     step++;
-    time += dt;
+    time = inflow.tS[0] + step * dt;
     const last = tables.length - 1;
     if (peak[last] > lastPeakSeen) lastPeakSeen = peak[last];
     const hydrographDone = time >= inflow.tS[inflow.tS.length - 1];
