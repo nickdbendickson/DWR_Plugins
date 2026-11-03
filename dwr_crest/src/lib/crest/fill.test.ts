@@ -63,6 +63,8 @@ function sec(x: number, wseM: number, slopeStage: number, bedM = wseM - 2): Rout
     topWidthM: 30,
     velocityMps: 1,
     capped: false,
+    storeMaxM3: 0,
+    tStoreMaxS: 0,
   };
 }
 

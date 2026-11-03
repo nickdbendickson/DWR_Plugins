@@ -17,6 +17,7 @@ const U16 = new Uint16Array(new Uint8Array(gunzipSync(readFileSync(fx("dem3dep_n
 const DEM: DemGrid = { bbox: META.bbox, width: META.width, height: META.height, cellM: META.cellM, z: Float32Array.from(U16, (v) => v / 100 + 250) };
 
 const RF = await buildRoutedFlood(ND, RESULT, DEM);
+const SP = await buildRoutedFlood(ND, RESULT, DEM, { method: "spread" });
 
 describe("buildRoutedFlood on ND00199 (30 m fixture)", () => {
   it("runs the whole chain and returns a depth grid on the DEM frame", () => {
@@ -65,5 +66,37 @@ describe("buildRoutedFlood on ND00199 (30 m fixture)", () => {
     const noSeries = { ...RESULT, breach: { ...RESULT.breach, series: [] } };
     const r = await buildRoutedFlood(ND, noSeries, DEM);
     assert.equal(r.ok, false);
+  });
+});
+
+describe("buildRoutedFlood, method spread (quasi-dynamic volume spread)", () => {
+  it("builds a layer with depth, velocity and arrival on the DEM frame", () => {
+    assert.ok(SP.ok, SP.ok ? "" : SP.reason);
+    if (!SP.ok) return;
+    assert.equal(SP.method, "spread");
+    assert.ok(SP.velocityFps && SP.arrivalHr);
+    let wet = 0;
+    for (let k = 0; k < SP.depthFt.length; k++)
+      if (SP.depthFt[k] > 0) {
+        wet++;
+        assert.ok(Number.isFinite(SP.velocityFps![k]) && SP.velocityFps![k] >= 0);
+        assert.ok(Number.isFinite(SP.arrivalHr![k]) && SP.arrivalHr![k] >= 0);
+      }
+    assert.ok(wet > 0);
+  });
+
+  it("records the method and an envelope-to-release ratio far below the stage fill's", () => {
+    assert.ok(SP.ok && RF.ok);
+    if (!SP.ok || !RF.ok) return;
+    assert.ok(SP.notes.some((n) => n.startsWith("Volume spread:")));
+    assert.ok(SP.stats.volumeRatio > 0);
+    assert.ok(SP.stats.volumeRatio < RF.stats.volumeRatio, `${SP.stats.volumeRatio} vs ${RF.stats.volumeRatio}`);
+  });
+
+  it("leaves the stage method unchanged by default", () => {
+    assert.ok(RF.ok);
+    if (!RF.ok) return;
+    assert.equal(RF.method, "stage");
+    assert.equal(RF.velocityFps, undefined);
   });
 });

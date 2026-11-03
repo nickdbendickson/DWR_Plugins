@@ -56,10 +56,9 @@ export type SectionTable = {
 };
 
 /** Hydraulic properties of the wet region around the thalweg at one stage. */
-export function wetAt(sec: Section, stage: number, bankM: number, rough: RoughnessOptions) {
+export function wetAt(sec: Section, stage: number, bankM: number, rough: RoughnessOptions, thalweg?: number) {
   const n = sec.offsets.length;
-  let it = 0;
-  for (let i = 1; i < n; i++) if (sec.z[i] < sec.z[it]) it = i;
+  const it = thalweg ?? thalwegIndex(sec);
   if (stage <= sec.z[it]) return { area: 0, topWidth: 0, perimeter: 0, conveyance: 0 };
   // Channel part: ground below bankM; floodplain part: above. Each gets its own area and perimeter.
   let aC = 0, pC = 0, aF = 0, pF = 0, top = 0;
@@ -109,14 +108,45 @@ export function wetAt(sec: Section, stage: number, bankM: number, rough: Roughne
 }
 
 /**
+ * Index of the section's thalweg: the lowest ground point, anywhere across the profile (default) or only within
+ * `windowM` of the traced channel (offset 0). On a wide cut the global low can be a neighbouring valley or a pit
+ * hundreds of metres off the channel, which leaves the table (and the routing's celerity there) degenerate.
+ */
+export function thalwegIndex(sec: Section, windowM?: number): number {
+  const n = sec.offsets.length;
+  let it = -1;
+  for (let i = 0; i < n; i++) {
+    if (windowM != null && Math.abs(sec.offsets[i]) > windowM) continue;
+    if (it < 0 || sec.z[i] < sec.z[it]) it = i;
+  }
+  if (it >= 0) return it;
+  it = 0;
+  for (let i = 1; i < n; i++) if (sec.z[i] < sec.z[it]) it = i;
+  return it;
+}
+
+export type TableOptions = {
+  /** Bumps lower than this (m) don't end the table (DEM noise); 0 = the first descent ends it (as merged). */
+  ridgeTolM?: number;
+  /** Look for the thalweg only within this distance (m) of the traced channel; default anywhere. */
+  thalwegWindowM?: number;
+};
+
+/**
  * The section's hydraulic table from the bed up to the lower bank top (or `capM` above the bed), every `stepM`.
  * The lower bank top is where the walk would leave the profile, so the table is the connected region only.
  */
-export function sectionTable(sec: Section, rough: RoughnessOptions = DEFAULT_ROUGHNESS, capM = 30, stepM = 0.05): SectionTable {
+export function sectionTable(
+  sec: Section,
+  rough: RoughnessOptions = DEFAULT_ROUGHNESS,
+  capM = 30,
+  stepM = 0.05,
+  topts: TableOptions = {},
+): SectionTable {
   const n = sec.offsets.length;
   if (n < 3) throw new Error("A section needs at least three points.");
-  let it = 0;
-  for (let i = 1; i < n; i++) if (sec.z[i] < sec.z[it]) it = i;
+  const ridgeTolM = topts.ridgeTolM ?? 0;
+  const it = thalwegIndex(sec, topts.thalwegWindowM);
   const bed = sec.z[it];
   // The containing bank each side: walking out from the thalweg, the first ridge crest the water would spill over
   // (the elevation after which the ground descends into a disconnected low). Using the global max each side would
@@ -127,7 +157,9 @@ export function sectionTable(sec: Section, rough: RoughnessOptions = DEFAULT_ROU
       if (sec.z[i] > best) best = sec.z[i];
       const j = i + dir;
       if (j < 0 || j >= n) break; // reached the profile edge
-      if (sec.z[i] > sec.z[j]) return best; // descends beyond here: this ridge contains the wet region
+      // Descends beyond here: this ridge contains the wet region. With ridgeTolM > 0 a bump only counts once the ground
+      // beyond it falls that far below the highest point so far, so DEM noise of a few centimetres doesn't end the table.
+      if (ridgeTolM > 0 ? sec.z[j] < best - ridgeTolM : sec.z[i] > sec.z[j]) return best;
     }
     return best;
   };
@@ -141,7 +173,7 @@ export function sectionTable(sec: Section, rough: RoughnessOptions = DEFAULT_ROU
   const bank = bed + rough.bankfullM;
   for (let r = 1; r < rows; r++) {
     const h = Math.min(maxDepth, r * stepM);
-    const w = wetAt(sec, bed + h, bank, rough);
+    const w = wetAt(sec, bed + h, bank, rough, it);
     depth[r] = h;
     area[r] = w.area;
     topWidth[r] = w.topWidth;
@@ -251,6 +283,14 @@ export type RoutedSection = {
   topWidthM: number;
   velocityMps: number;
   capped: boolean;
+  /**
+   * Largest water volume (m³) held in the stretch from this section to the next at any one moment, and when (s). From
+   * the routing's own continuity, S(t) = ∫ (Q_this − Q_next) dt, so it is exactly the storage the conserving scheme
+   * carries; summed over stretches it is the 1-D max-envelope volume (each stretch at its own peak), not a release.
+   * 0 for the last section (nothing below it in the reach).
+   */
+  storeMaxM3: number;
+  tStoreMaxS: number;
   /** Thinned hydrograph (s, m³/s), when kept. */
   t?: number[];
   q?: number[];
@@ -367,6 +407,11 @@ export function routeMuskingumCunge(
   for (const k of subReaches) bIdx.push(bIdx[bIdx.length - 1] + k);
   const keep = opts.keepPoints ?? 0;
   const series: { t: number[]; q: number[] }[] = tables.map(() => ({ t: [], q: [] }));
+  // Storage in each stretch (section j to j+1), integrated from continuity with the same rectangle rule as volIn and
+  // volOut, so Σ store = volIn − volOut at every step.
+  const store = new Float64Array(tables.length);
+  const storeMax = new Float64Array(tables.length);
+  const tStoreMax = new Float64Array(tables.length);
   let volIn = 0;
   let volOut = 0;
   let step = 0;
@@ -392,6 +437,13 @@ export function routeMuskingumCunge(
       if (keep > 0) {
         series[j].t.push(time);
         series[j].q.push(q);
+      }
+    }
+    for (let j = 0; j + 1 < tables.length; j++) {
+      store[j] += (Q[bIdx[j]] - Q[bIdx[j + 1]]) * dt;
+      if (store[j] > storeMax[j]) {
+        storeMax[j] = store[j];
+        tStoreMax[j] = time;
       }
     }
     volIn += qin * dt;
@@ -441,6 +493,8 @@ export function routeMuskingumCunge(
       topWidthM: nd.topWidthM,
       velocityMps: nd.velocityMps,
       capped: nd.capped,
+      storeMaxM3: storeMax[j],
+      tStoreMaxS: tStoreMax[j],
       ...(s ? { t: s.t, q: s.q } : {}),
     };
   });
