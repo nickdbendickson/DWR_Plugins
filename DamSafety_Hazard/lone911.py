@@ -264,7 +264,6 @@ class StreetIndex(object):
         """(QgsPointXY in the analysis CRS, street label) of address `num` on street `key`,
         interpolated along the segment whose range holds it (the one nearest `near` when
         several do), or None."""
-        from qgis.core import QgsGeometry
         best = None
         for g, sides in self.by_key.get(key, ()):
             for lo, hi, par in sides:

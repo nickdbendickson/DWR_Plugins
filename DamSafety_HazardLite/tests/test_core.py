@@ -192,7 +192,15 @@ def main():
         check("structure in the deep patch: High zone", s.get("1 HIGH ST", {}).get("zone") == "High")
         b = s.get("2 JUDGMENT ST", {})
         check("point outside its outline snaps to the nearest one", b.get("build_id") == 2, b.get("matched"))
-        check("judgment zone counted as High", b.get("zone") == "Judgment" and b.get("nd_class") == "High")
+        check("judgment zone is ND MEDIUM by rule by default (0.1.2)",
+              b.get("zone") == "Judgment" and b.get("nd_class") == "Medium", b.get("nd_class"))
+        jz = [x for x in res["reasons"] if x[1] == "5.2.1.1" and "judgment zone" in x[2]]
+        check("judgment-zone reason reads 'ND MEDIUM by rule'",
+              len(jz) == 1 and jz[0][0] == "Medium" and "ND MEDIUM by rule" in jz[0][2], jz)
+        check("no 'decide High vs Medium' verify line", not any("High vs Medium" in v for v in res["verify"]))
+        with open(os.path.join(tmp, "out", "structures.csv")) as fh:
+            hdr = fh.readline().strip().split(",")
+        check("velocity_unknown is a structures.csv column", "velocity_unknown" in hdr, hdr)
         c = s.get("3 MOBILE CT", {})
         check("manufactured home on Fig. 5.2, low zone, Medium",
               c.get("chart", "").startswith("Fig. 5.2") and c.get("zone") == "Low" and c.get("nd_class") == "Medium")
@@ -320,9 +328,9 @@ def main():
 
         os.makedirs(os.path.join(tmp, "p2"))
         res2 = core.run(depth, vel, os.path.join(tmp, "out2"), write_pack(os.path.join(tmp, "p2")),
-                        judgment_high=False, log=lambda m: None)
+                        judgment_high=True, log=lambda m: None)
         b2 = {x["address"]: x for x in res2["structures"]}["2 JUDGMENT ST"]
-        check("judgment zone not counted when switched off", b2["nd_class"] == "Medium")
+        check("old option on: judgment zone counted as High", b2["nd_class"] == "High")
 
         os.makedirs(os.path.join(tmp, "p3"))
         res3 = core.run(depth, vel, os.path.join(tmp, "out3"), write_pack(os.path.join(tmp, "p3")),

@@ -19,7 +19,7 @@ classification cfg.
 import os
 
 from qgis.PyQt.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel, QGroupBox, QCheckBox,
+    QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel, QGroupBox,
     QMessageBox,
 )
 

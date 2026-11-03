@@ -15,7 +15,7 @@ import os
 import traceback
 
 from qgis.PyQt.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QWidget, QLineEdit, QCheckBox, QTextEdit,
+    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QWidget, QLineEdit, QTextEdit,
     QFileDialog, QMessageBox, QFormLayout, QGroupBox, QDoubleSpinBox,
 )
 from qgis.core import QgsRasterLayer
