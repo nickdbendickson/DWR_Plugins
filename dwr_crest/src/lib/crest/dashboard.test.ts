@@ -37,6 +37,9 @@ const routed = (over: Partial<RoutedSummary> = {}): RoutedSummary => ({
   sections: 20,
   cappedSections: 0,
   volumeFlag: false,
+  fillAcFt: 0,
+  releasedAcFt: 0,
+  volumeRatio: 0,
   reachedEdge: false,
   notes: [],
   ...over,
@@ -221,5 +224,20 @@ describe("Style B dashboard", () => {
       src,
       /`The fill lays down \$\{.*\} ac-ft, more than the breach releases \(\$\{.*\} ac-ft\)/,
     );
+  });
+
+  it("reads the volume provenance fields in preference to the note", () => {
+    // A current layer carries fillAcFt/releasedAcFt, so routedVolumes reads them straight, no note needed.
+    const v = routedVolumes(
+      ready(routed({ volumeFlag: true, fillAcFt: 2400, releasedAcFt: 800, volumeRatio: 3 })),
+      1000,
+    )!;
+    assert.deepEqual(v, { wet: 2400, release: 800, reservoir: 1000 });
+    // The fields win even when an older note disagrees (the fields are authoritative).
+    const v2 = routedVolumes(
+      ready(routed({ volumeFlag: true, fillAcFt: 2400, releasedAcFt: 800, notes: ["The fill lays down 999 ac-ft, more than the breach releases (111 ac-ft):"] })),
+      1000,
+    )!;
+    assert.deepEqual(v2, { wet: 2400, release: 800, reservoir: 1000 });
   });
 });

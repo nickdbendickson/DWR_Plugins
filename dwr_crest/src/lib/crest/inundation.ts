@@ -112,6 +112,9 @@ function routedCache(
     sections: routed.stats.sections,
     cappedSections: routed.stats.cappedSections,
     volumeFlag: routed.stats.volumeFlag,
+    fillAcFt: routed.stats.fillAcFt,
+    releasedAcFt: routed.stats.releasedAcFt,
+    volumeRatio: routed.stats.volumeRatio,
     reachedEdge: routed.stats.reachedEdge,
     notes: routed.notes,
   };
