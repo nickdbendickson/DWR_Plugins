@@ -2427,6 +2427,22 @@ def mark_mobile_parks(structs, parks, analysis_crs, transform_ctx, parks_crs=Non
     return len(marked)
 
 
+def _fill_missing_velocity(v):
+    """Replace NaN velocities (wet cells the velocity raster does not cover) with the peak
+    finite velocity in the same array, or 0 when none is finite (2.22.5, audit 2026-11-03;
+    the nd Hazard Helper's fill).
+
+    Filling with 0 biased the classification OPTIMISTICALLY: on the ACER depth-velocity curves
+    a lower velocity is a less severe zone, so a structure whose deepest cells happened to lack
+    velocity was read on the safe-looking side of the truth. The structure's own peak finite
+    velocity keeps the fill bounded by real data and leans conservative; with no finite velocity
+    anywhere (the raster does not cover this structure at all) it falls back to 0 - depth only.
+    """
+    finite = v[np.isfinite(v)]
+    fill = float(finite.max()) if finite.size else 0.0
+    return np.where(np.isnan(v), fill, v)
+
+
 def peak_pair(d, v, vel_ok):
     """(peak depth, peak velocity over the wet cells) of one structure as 1-element arrays,
     the pair its zone is classified on (2.22.3, TM 11 practice: the two may come from
@@ -3013,9 +3029,12 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             a0, a1 = int(offs[i]), int(offs[i + 1])
             v = v_all[a0:a1]
             a = a_all[a0:a1]
+            # 2.22.5: velocity is known when the raster gives a value at one of the wet cells
+            vel_known = bool(vel_ok and np.isfinite(v).any())
+            rec["vel_unknown"] = bool(vel_ok and not vel_known)
             if np.isnan(v).any() and vel_ok:
                 rec["vel_missing"] = True
-                v = np.where(np.isnan(v), 0.0, v)
+                v = _fill_missing_velocity(v)
             if keep_cells:
                 rec["cells_xy"] = (np.array(xs, dtype=np.float64), np.array(ys, dtype=np.float64))
             if keep_dv:
@@ -3029,17 +3048,20 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
             # ARRIVAL_FT: 0.1 ft by default since Runner 3.10.53, 1 ft before - a shallower
             # flood never sets it) - said in Notes
             rec["arrival_below"] = rec["arrival"] is None and bool(samplers["arr"].ok)
-            dvv = None
-            if dv_all is not None:
-                dvv = dv_all[a0:a1]
-                rec["dv_max"] = float(np.nanmax(dvv)) if np.isfinite(dvv).any() else None
-            elif vel_ok and (not rec["vel_missing"] or v.any()):
-                dvv = d * v
-                rec["dv_max"] = float(dvv.max())
             # 2.22.3 (Nick, 2026-11-01, option C - TM 11 practice): the structure is
             # classified on its peak depth AND the peak velocity over its wet cells, even when
             # they come from different cells; the per-cell zones only say where it is worst.
             dpk, vpk = peak_pair(d, v, vel_ok)
+            # 2.22.5 (audit 2026-11-03, option C): DV is the peak depth x the peak wet-cell
+            # velocity - the pair the zone is classified on - never a DV raster's value (a DV
+            # raster is information only: it may mark where the worst cell is). Velocity
+            # unknown at every wet cell: no DV (None), not depth x 0.
+            if vel_known:
+                rec["dv_max"] = float(dpk[0] * vpk[0])
+                dvv = d * v
+            else:
+                rec["dv_max"] = None
+                dvv = dv_all[a0:a1] if dv_all is not None else None
             types = {}
             for typ in (TYPE_HOUSE, TYPE_MOBILE):
                 zcls = classify_values(d, v, *curves[typ])
@@ -3378,7 +3400,10 @@ def structure_notes(rec):
     if rec.get("mobile_occupied"):
         notes.append(NOTE_MOBILE_OCCUPIED)
     if rec.get("vel_missing"):
-        notes.append("velocity missing on some wet cells (used 0)")
+        notes.append("velocity missing on some wet cells (filled with the structure's peak "
+                     "velocity, else 0) - verify")
+    if rec.get("vel_unknown"):
+        notes.append("velocity unknown at every wet cell - depth only, no DV - verify")
     if rec.get("arrival_below") and rec.get("max_depth") is not None:
         notes.append(NOTE_ARRIVAL_BELOW.format(rec["max_depth"]))
     if rec["category"] == CAT_UNVERIFIED:

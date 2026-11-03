@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Hazard 2.22.5: DV is peak depth x peak wet-cell velocity; missing velocity filled with the structure's peak (2026-11-03 audit, fix C; option C).** RELEASE ndhazard 2.22.5; damsuite content otherwise unchanged.
+  - **DV.** `structures.evaluate_structures`: `dv_max` = peak depth x peak wet-cell velocity (`peak_pair`, the pair the zone is classified on), never sampled from a DV raster (a DV raster only marks where the worst cell is). With the velocity unknown at every wet cell `dv_max` is None, `consequences.flood_severity` says "velocity unknown - no DV" (depth only) and Notes say "velocity unknown at every wet cell - depth only, no DV - verify".
+  - **Missing velocity.** A NaN velocity on a wet cell is filled with the structure's peak velocity, else 0 (`_fill_missing_velocity`, as the nd Hazard Helper 2.35.x); was 0, which read the structure on the optimistic side. Notes: "velocity missing on some wet cells (filled with the structure's peak velocity, else 0) - verify".
+  - Test: `DamSafety_Hazard/tests/test_dv_peak_pair.py` (new).
+
 - **Hazard 2.22.4: DSS-WISE result names with units after the quantity are autodetected (Nick: "Do the DSS-WISE autodetect fix PR").** RELEASE ndhazard 2.22.4; damsuite content otherwise unchanged.
   - **Found.** `autodetect._is_time_step` took the text after "Depth"/"Velocity" for an output time, so `Depth_ft.tif`, `Velocity_ftps.tif`, `Depth_m.asc` ... were skipped in the dam folder (any case, any depth of sub-folder). A label made only of unit words is no longer a time step; `Depth_0100`, `Depth (01JAN2020 12:00:00)` still are.
   - **Units.** `dsswise.detect_units` reads units right after the quantity word: `Velocity_ft_s` / `Velocity_ft_per_s` are ft/s and `Depth_m` / `Velocity_m_s` are m, m/s (were "assumed ft / ft/s"). `MaxDepth_in_Ft` style names are unchanged.
