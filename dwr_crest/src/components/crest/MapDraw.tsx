@@ -439,7 +439,7 @@ function StripLegend({
           </div>
         </>
       ) : (
-        <div style={{ color: "#5c5a52" }}>{message ?? "No flood strip on the map."}</div>
+        <div style={{ color: "#5c5a52" }}>{message ?? "No flood strip placed on the map yet — draw the dam line to place it. The schematic estimate below is computed from the record and still applies."}</div>
       )}
     </div>
   );
