@@ -275,11 +275,20 @@ export function analyze(dam: DamRecord): Analysis {
   let rule = "Stated elevations used as NAVD88.";
 
   if (localCrest) {
-    const dem = finite(dam.demCrestFt, 1000);
-    if (dem < 500 || dem > 3600) {
-      rule = "0–300 ft crest, but the DEM crest is outside 500–3,600 ft. Flagged for review.";
+    // A local (0–300 ft) crest only ties to NAVD88 through an entered DEM crest. Guard that it is actually present and
+    // in range BEFORE using it: a missing DEM crest must not fall back to a fabricated value (1000 ft sits inside the
+    // 500–3,600 band, so the old fallback silently invented an offset and fed it to the breach, depths and screen with
+    // no warning). Not finite, or out of band, lands in the flagged branch, which forces the screen to Review below.
+    const dem = finite(dam.demCrestFt, NaN);
+    if (!Number.isFinite(dem) || dem < 500 || dem > 3600) {
+      rule = Number.isFinite(dem)
+        ? "0–300 ft crest, but the DEM crest is outside 500–3,600 ft. Flagged for review."
+        : "0–300 ft crest, but no DEM crest was entered to tie it. Flagged for review.";
       warnings.push("No DEM tie. Crest left unconverted.");
-      crestNavd = dem;
+      // Leave the crest genuinely unconverted — the stated local value, offset null — in BOTH the missing and the
+      // out-of-band case. Keeping an out-of-band DEM value here (the old behaviour) made the "Crest left unconverted"
+      // warning untrue and fed that discarded value into exports and reports; the Review hold only guards the screen.
+      crestNavd = dam.crestFt;
     } else {
       offsetFt = dem - dam.crestFt;
       crestNavd = dem;
