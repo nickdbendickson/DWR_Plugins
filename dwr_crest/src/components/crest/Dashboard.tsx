@@ -16,6 +16,7 @@ import {
   type SortKey,
   sortReceptors,
   type DashFlag,
+  boundsOf,
   routedVolumes,
 } from "@/lib/crest/dashboard";
 import { num } from "@/lib/crest/format";
@@ -25,7 +26,7 @@ import { receptorPoints, SOURCE_LABEL } from "@/lib/crest/results";
 import { runKey, useResults } from "@/lib/crest/results-store";
 import type { Analysis, DamRecord, ResultSource } from "@/lib/crest/types";
 import type { DashPoint } from "./DashboardMap";
-import type { Bounds, Overlay } from "./ResultsMap";
+import type { Overlay } from "./ResultsMap";
 import { useAnalysisOfRecord } from "./results-flow";
 
 const DashboardMap = lazy(() =>
@@ -39,24 +40,6 @@ const CLASS_COLOR: Record<string, string> = {
 };
 const cls = (r: string | null) =>
   r === "High" ? "high" : r === "Medium" ? "sig" : r === "Low" ? "low" : "none";
-
-function boundsOf(fc: FloodStrip | null): Bounds | null {
-  if (!fc) return null;
-  let w = Infinity,
-    s = Infinity,
-    e = -Infinity,
-    n = -Infinity;
-  const walk = (c: unknown): void => {
-    if (Array.isArray(c) && typeof c[0] === "number") {
-      w = Math.min(w, c[0] as number);
-      e = Math.max(e, c[0] as number);
-      s = Math.min(s, c[1] as number);
-      n = Math.max(n, c[1] as number);
-    } else if (Array.isArray(c)) c.forEach(walk);
-  };
-  for (const f of fc.features) walk((f.geometry as { coordinates: unknown }).coordinates);
-  return Number.isFinite(w) ? { west: w, south: s, east: e, north: n } : null;
-}
 
 function toUrl(px: Uint8ClampedArray, w: number, h: number) {
   const c = document.createElement("canvas");
