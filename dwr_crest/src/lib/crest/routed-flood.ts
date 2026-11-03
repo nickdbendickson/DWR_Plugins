@@ -53,6 +53,11 @@ export type RoutedFloodOptions = {
   method?: "stage" | "spread";
   /** Spread only: follow the breach's own flow path rather than the outline's drainage trace (default false). */
   breachPath?: boolean;
+  /**
+   * Spread only: closed basins on the channel hold water the wave must fill before it passes, and one that holds all of
+   * it ends the flood (default true). See spread.ts step 3c.
+   */
+  basins?: boolean;
   /** Spread only: bumps lower than this (m) don't end a section's hydraulic table. Default SPREAD_RIDGE_TOL_M. */
   ridgeTolM?: number;
   /** Called every so many cells during the DEM trace so a long build can let the page breathe. */
@@ -184,6 +189,7 @@ export async function buildRoutedFlood(
     const sp = spreadVolume(g, centerline, routed.sections, {
       minDepthM: opts.minDepthM ?? 0.03,
       releasedM3: releasedAcFt * ACFT,
+      basins: opts.basins ?? true,
     });
     for (let k = 0; k < N; k++) depthFt[k] = sp.depthM[k] > 0 ? sp.depthM[k] / FT : 0;
     velocityFps = new Float32Array(N).fill(NaN);
@@ -207,6 +213,12 @@ export async function buildRoutedFlood(
       notes.push(
         `${(sp.retainedM3 / ACFT).toFixed(0)} ac-ft is left behind in depressions on the way down; ${sp.travellingM3 > 0 ? `${(sp.travellingM3 / ACFT).toFixed(0)} ac-ft is still travelling at the end of the traced reach` : "the flood is spent before the end of the traced reach"}.`,
       );
+    if (sp.stoppedIn)
+      notes.push(
+        `The flood ends ${(sp.stoppedIn.atM / 1000).toFixed(1)} km down in a closed basin that holds ${(sp.stoppedIn.capacityM3 / ACFT).toFixed(0)} ac-ft below its spill level (${(sp.stoppedIn.spillM / FT).toFixed(0)} ft), more than the ${(sp.stoppedIn.heldM3 / ACFT).toFixed(0)} ac-ft that reaches it: it stands there as a ${sp.stoppedIn.areaAc.toFixed(0)} ac pond. If the basin is closed by a road or rail fill, check for a culvert or bridge the DEM doesn't show.`,
+      );
+    if (sp.basinsFilled)
+      notes.push(`${sp.basinsFilled} closed basin${sp.basinsFilled === 1 ? "" : "s"} on the channel filled to the spill level before the wave passed.`);
     if (sp.exhaustedStretches)
       notes.push(`${sp.exhaustedStretches} stretch${sp.exhaustedStretches === 1 ? "" : "es"} ran out of ground before the slice was poured (the DEM is too small there).`);
     notes.push(
