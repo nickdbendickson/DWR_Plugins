@@ -13,11 +13,13 @@ import type { Analysis, DamRecord } from "./types.ts";
  * depth. This lays that depth on real ground:
  *
  *  1. 3DEP DEM (about 10 m, metres NAVD88) over a box around the strip centreline, each side
- *     min(max(3 × halfM, 300 m), 2000 m) wide, clipped to the drawn area when one is applied.
+ *     min(max(3 × halfM, 300 m), 2000 m) wide plus a 500 m margin for the trace, clipped to the drawn area when one
+ *     is applied. Requested with adjustAspectRatio=false, so the grid covers exactly that box.
  *  2. Drainage on that DEM: a priority-flood (with a tiny epsilon) from the domain's edges fills pits and ponds to
  *     their spill level and gives every cell a downhill receiver. The channel is the drainage path followed from
- *     the breach (60 m below it on the centreline, clear of the dam) to the last wet station's distance, so it
- *     follows the real creek's bends instead of the engine's straight line.
+ *     the toe below the dam (the Breach Runner's inflow rule: ground at least half the dam height below the top of
+ *     dam, on the downstream side; lowest within max(90 m, 8 × height), else nearest within 400 m) to the last wet
+ *     station's distance, so it follows the real creek's bends instead of the engine's straight line.
  *  3. Water surface on each channel cell = its filled bed + the desk depth (ft × 0.3048 m) at its distance
  *     downstream (the farthest distance reached so far along the channel; linear between stations).
  *  4. Wet cells: ground below the surface of the channel cell they connect to (4-neighbour spread from the channel)
@@ -53,6 +55,12 @@ const M_PER_DEG_LAT = 110574;
 const M_PER_DEG_LON_EQ = 111320;
 
 export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300), 2000);
+/** Bumped when the terrain request or the trace changes, so layers saved before rebuild. 2 = 2026-11-03: exact DEM
+ *  box (adjustAspectRatio=false), toe start, trace margin. */
+export const TRACE_VERSION = 2;
+
+/** Margin (m) added around the corridor box when fetching the DEM, so the drainage trace has room to bend. */
+export const TRACE_PAD_M = 500;
 export const searchHalfM = (halfM: number) => Math.max(1.5 * halfM, 150);
 
 export type OutlineInputs = {
@@ -90,6 +98,8 @@ export type OutlineStats = {
   /** Channel bed (ft NAVD88, pits filled) at the top and the bottom of the traced channel. */
   bedTopFt: number;
   bedEndFt: number;
+  /** How the trace's first cell was chosen (absent on outlines built before 2026-11-03: the old axis start). */
+  traceStart?: TraceStart;
   /** Length of the traced channel (km), along its bends. */
   channelKm: number;
   /** Distance downstream (km) of the farthest wet cell. */
@@ -194,6 +204,7 @@ export function outlineInputs(dam: DamRecord, result: Analysis): { ok: true; inp
   const fingerprint = fnv(
     JSON.stringify({
       v: ENGINE_VERSION,
+      t: TRACE_VERSION,
       o: [r(loc.lon * 1e4), r(loc.lat * 1e4)],
       u: u.map(r),
       st: st.map((s) => [r(s.x), r(s.h), r(s.d)]),
@@ -234,6 +245,11 @@ export function demRequest(inp: OutlineInputs, cellM = OUTLINE_CELL_M, maxPx = O
     const w = corridorHalfM(s.h);
     for (const t of [-w, w]) add(u[0] * s.x + n[0] * t, u[1] * s.x + n[1] * t);
   }
+  // Room around the corridor for the drainage trace: a creek that bends out toward the box edge would otherwise leave
+  // the DEM there and end the trace (ND00199's creek runs east 200 m inside the north edge of the bare corridor box).
+  const pad = TRACE_PAD_M / M_PER_DEG_LAT;
+  const padLon = TRACE_PAD_M / kx;
+  b = [b[0] - padLon, b[1] - pad, b[2] + padLon, b[3] + pad];
   if (inp.parts) {
     let a: Bbox = [180, 90, -180, -90];
     for (const p of inp.parts)
@@ -256,7 +272,7 @@ export function demRequest(inp: OutlineInputs, cellM = OUTLINE_CELL_M, maxPx = O
   return { bbox: [r8(b[0]), r8(south), r8(east), r8(b[3])], width, height, cellM: Math.round(cell * 1000) / 1000 };
 }
 
-/** exportImage URL: raw little-endian float32 (bsq), WGS 84 in and out, bilinear resampling, metres NAVD88. */
+/** exportImage URL: raw little-endian float32 (bsq), WGS 84 in and out, exactly the requested bbox, bilinear, metres NAVD88. */
 export function demUrl(req: DemRequest) {
   const q = new URLSearchParams({
     bbox: req.bbox.join(","),
@@ -267,6 +283,9 @@ export function demUrl(req: DemRequest) {
     pixelType: "F32",
     noData: String(NODATA),
     interpolation: "RSP_BilinearInterpolation",
+    // Without this the server keeps square pixels in degrees and silently widens the latitude extent by about
+    // 1/cos(lat) (1.5× in ND), so every cell sits hundreds of metres from where the grid says it is.
+    adjustAspectRatio: "false",
     f: "image",
   });
   return `${DEM_SERVICE}/exportImage?${q.toString()}`;
@@ -285,11 +304,19 @@ export function parseBsq(buf: ArrayBuffer, width: number, height: number): Float
 
 type Fetch = (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; arrayBuffer: () => Promise<ArrayBuffer> }>;
 
-export async function fetchDem(req: DemRequest, fetchFn: Fetch = fetch as unknown as Fetch): Promise<DemGrid> {
+/** Waits before retrying a 3DEP answer of 5xx (the service often answers 502 a few times, then serves the image). */
+export const DEM_RETRY_MS = [1500, 4000];
+
+export async function fetchDem(req: DemRequest, fetchFn: Fetch = fetch as unknown as Fetch, retryMs: number[] = DEM_RETRY_MS): Promise<DemGrid> {
   const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
   const timer = ctl ? setTimeout(() => ctl.abort(), 90_000) : null;
   try {
-    const res = await fetchFn(demUrl(req), ctl ? { signal: ctl.signal } : undefined);
+    let res = await fetchFn(demUrl(req), ctl ? { signal: ctl.signal } : undefined);
+    for (const ms of retryMs) {
+      if (res.ok || res.status < 500) break;
+      await new Promise((r) => setTimeout(r, ms));
+      res = await fetchFn(demUrl(req), ctl ? { signal: ctl.signal } : undefined);
+    }
     if (!res.ok) throw new Error(`The 3DEP terrain service answered ${res.status}.`);
     return { ...req, z: parseBsq(await res.arrayBuffer(), req.width, req.height) };
   } catch (e) {
@@ -661,6 +688,85 @@ export function polygonizeDepth(
  * Build the outline on a DEM. Returns FloodStrip-shaped band features (so the PLSS and 911 lists, the map legend and
  * the exports read it like the strip) and the numbers behind it.
  */
+/** How the traced channel's first cell was chosen. */
+export type TraceStart = {
+  /** "toe": lowest ground in the usual radius; "toe-wide": nearest low-enough ground out to TOE_WIDE_M; "axis": none
+   *  qualified, so the old start on the downstream axis SKIP_M below the breach. */
+  how: "toe" | "toe-wide" | "axis";
+  /** Distance from the dam point (m) and ground below the top of dam (ft) at the start cell; absent for "axis". */
+  fromDamM?: number;
+  belowTopFt?: number;
+};
+
+/** Second search radius for the toe, as the Runner's (terrain.py): a wide embankment can put the toe out there. */
+export const TOE_WIDE_M = 400;
+
+type ToeGrid = {
+  W: number;
+  H: number;
+  cellX: (i: number) => number;
+  cellY: (j: number) => number;
+  along: Float32Array;
+  dom: Uint8Array;
+  a0: number;
+  cellM: number;
+  valid: (k: number) => boolean;
+};
+
+/**
+ * The toe below the dam, where the channel trace starts. Mirrors the Breach Runner's find_inflow_point: among cells on
+ * the downstream side of the dam (inside the drainage domain), take those at least half the dam height below the top
+ * of dam; in the usual radius max(90 m, 8 × height) the LOWEST (ties to the nearest), else out to TOE_WIDE_M the
+ * NEAREST (ties to the lower; the lowest of a wide circle can be a far valley). k = -1 when none qualifies.
+ */
+export function findToe(
+  g: DemGrid,
+  dam: Pick<DamRecord, "heightFt">,
+  crestNavdFt: number,
+  t: ToeGrid,
+): { k: number; start: TraceStart } {
+  const none = { k: -1, start: { how: "axis" as const } };
+  const hM = dam.heightFt * FT;
+  if (!(hM > 0)) return none;
+  // Top of dam: the tied crest, or the highest ground within a cell or two of the dam point when there is none.
+  let topM = crestNavdFt * FT;
+  const r1 = Math.max(90, 8 * hM);
+  const rr = Math.max(r1, TOE_WIDE_M);
+  const cand: { k: number; d: number; z: number }[] = [];
+  let groundTop = -Infinity;
+  for (let j = 0; j < t.H; j++) {
+    const y = t.cellY(j);
+    if (Math.abs(y) > rr) continue;
+    for (let i = 0; i < t.W; i++) {
+      const x = t.cellX(i);
+      const d = Math.hypot(x, y);
+      if (d > rr) continue;
+      const k = j * t.W + i;
+      if (!t.valid(k)) continue;
+      if (d <= 2 * t.cellM) groundTop = Math.max(groundTop, g.z[k]);
+      if (t.dom[k] && t.along[k] > t.a0) cand.push({ k, d, z: g.z[k] });
+    }
+  }
+  if (!Number.isFinite(topM)) topM = groundTop;
+  if (!Number.isFinite(topM)) return none;
+  const need = topM - 0.5 * hM;
+  const ok = cand.filter((c) => c.z <= need);
+  const pick = (c: { k: number; d: number; z: number }, how: "toe" | "toe-wide") => ({
+    k: c.k,
+    start: { how, fromDamM: r3(c.d), belowTopFt: r3((topM - c.z) / FT) },
+  });
+  const inner = ok.filter((c) => c.d <= r1);
+  if (inner.length) {
+    inner.sort((a, b) => Math.round(a.z * 1000) - Math.round(b.z * 1000) || a.d - b.d);
+    return pick(inner[0], "toe");
+  }
+  if (ok.length) {
+    ok.sort((a, b) => a.d - b.d || a.z - b.z);
+    return pick(ok[0], "toe-wide");
+  }
+  return none;
+}
+
 export async function buildOutline(
   dam: DamRecord,
   result: Analysis,
@@ -763,21 +869,31 @@ export async function buildOutline(
   }
   await breathe(N);
 
-  // Channel: follow the drainage from the breach (on the centreline, SKIP_M below it) until past the last wet station.
-  let k0 = cellAt(u[0] * Math.max(SKIP_M, a0 + cellM), u[1] * Math.max(SKIP_M, a0 + cellM));
-  if (k0 < 0 || !dom[k0]) {
-    // Nearest domain cell on the cross-line there.
+  // The old start, kept as the fallback when no ground below the dam qualifies as the toe: on the centreline,
+  // SKIP_M below the breach, or the nearest domain cell on the cross-line there.
+  const fallbackStart = () => {
+    const ax = Math.max(SKIP_M, a0 + cellM);
+    let k = cellAt(u[0] * ax, u[1] * ax);
+    if (k >= 0 && dom[k]) return k;
     let best = Infinity;
     const n: XY = [-u[1], u[0]];
-    const ax = Math.max(SKIP_M, a0 + cellM);
     for (let t = -searchHalfM(st[0].h); t <= searchHalfM(st[0].h); t += cellM / 2) {
-      const k = cellAt(u[0] * ax + n[0] * t, u[1] * ax + n[1] * t);
-      if (k >= 0 && dom[k] && Math.abs(t) < best) {
+      const c = cellAt(u[0] * ax + n[0] * t, u[1] * ax + n[1] * t);
+      if (c >= 0 && dom[c] && Math.abs(t) < best) {
         best = Math.abs(t);
-        k0 = k;
+        k = c;
       }
     }
-  }
+    return k;
+  };
+
+  // Channel start: the toe below the dam, found the way the Breach Runner finds its inflow point (terrain.py
+  // find_inflow_point), then the drainage followed from there. A fixed step down the bearing can land on a valley
+  // side or a knoll when the dam point sits off the creek or the bearing is a few degrees out, and the trace then
+  // runs down a different drainage, with a bed above the crest (DWR-4031, DWR-6141).
+  const toe = findToe(g, dam, result.datum.crestNavdFt, { W, H, cellX, cellY, along, dom, a0, cellM, valid });
+  let k0 = toe.k;
+  if (k0 < 0) k0 = fallbackStart();
   if (k0 < 0 || !dom[k0]) return { ok: false, reason: "No terrain outline: no terrain found just below the breach." };
   const path: number[] = [];
   const pathA: number[] = [];
@@ -974,6 +1090,7 @@ export async function buildOutline(
     bands: bandsAc,
     bedTopFt: r3(fill[path[0]] / FT),
     bedEndFt: r3(fill[path[path.length - 1]] / FT),
+    traceStart: toe.k >= 0 ? toe.start : { how: "axis" },
     channelKm: r3(channelM / 1000),
     reachKm: r3(reach / 1000),
     hitsCorridor,
@@ -1030,7 +1147,9 @@ export function outlineState(dam: DamRecord, result: Analysis, online: boolean):
   if (c && c.fingerprint === io.inputs.fingerprint)
     return { state: "ready", outline: c.outline, stats: c.stats, builtAt: c.builtAt, message: null, layer: c.layer ?? "outline", routed: c.routed };
   if (c) {
-    const msg = "The desk inputs changed since the terrain outline was built.";
+    const msg = c.stats.traceStart
+      ? "The desk inputs changed since the terrain outline was built."
+      : "This terrain layer was built before the 2026-11-03 terrain fix (its terrain grid sat up to hundreds of metres off, so the traced channel could miss the flood).";
     return online ? { state: "build", message: `${msg} Build it again.` } : { state: "offline", message: `${msg} ${OUTLINE_OFFLINE}` };
   }
   return online
@@ -1039,6 +1158,16 @@ export function outlineState(dam: DamRecord, result: Analysis, online: boolean):
 }
 
 /** Plain words for the outline acres against the engine's wet acres. */
+/** One line on where the traced channel starts, for the desk panel. */
+export function traceStartNote(s: OutlineStats): string | null {
+  const t = s.traceStart;
+  if (!t) return null;
+  if (t.how === "axis")
+    return "No ground at least half the dam height below the top of dam within 400 m downstream, so the channel starts 60 m down the downstream axis. Check the dam point, the dam line and the crest.";
+  const at = `Channel traced from the toe, ${Math.round(t.fromDamM ?? 0)} m from the dam point and ${Math.round(t.belowTopFt ?? 0)} ft below the top of dam.`;
+  return t.how === "toe-wide" ? `${at} That is outside the usual search radius, so check the dam point.` : at;
+}
+
 export function outlineAcresNote(s: OutlineStats): string {
   const pct = s.engineAc > 0 ? Math.round((100 * (s.outlineAc - s.engineAc)) / s.engineAc) : 0;
   const more = s.outlineAc >= s.engineAc;

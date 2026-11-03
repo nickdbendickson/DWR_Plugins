@@ -38,6 +38,7 @@ import {
   lookupArea,
   OUTLINE_LABEL,
   outlineAcresNote,
+  traceStartNote,
   outlineInputs,
   outlineState,
   type OutlineState,
@@ -707,6 +708,11 @@ function OutlinePanel({
           <p className="mt-2 text-sm" data-testid="outline-acres-note">
             {outlineAcresNote(s)}
           </p>
+          {traceStartNote(s) ? (
+            <p className="mt-1 text-sm" data-testid="outline-trace-start">
+              {traceStartNote(s)}
+            </p>
+          ) : null}
           <p className="mt-1 text-xs text-muted">
             By depth band:{" "}
             {s.bands.map((b) => `${b.label} ${num(b.ac, 0)} ac`).join(" · ")}. The PLSS and 911 lists below are against
