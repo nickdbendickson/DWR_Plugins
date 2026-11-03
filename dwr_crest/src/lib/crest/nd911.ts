@@ -306,6 +306,9 @@ export function bandAt(area: FloodStrip, lon: number, lat: number): { id: string
 function frame(dam: DamRecord, area: FloodStrip) {
   const loc = damLocation(dam) ?? { lon: area.properties.breach_lon, lat: area.properties.breach_lat };
   const o = { lon: area.properties.breach_lon, lat: area.properties.breach_lat };
+  // Last-resort bearing: downstreamDirection returns no u only when the geometry can't give one (which also means no
+  // strip would have been built), so this due-south fallback is effectively unreached. If it ever did fire it would
+  // only reorder the receptor table (downstreamKm), not change any screening result.
   const u = downstreamDirection(dam.geometry, loc).u ?? ([0, -1] as XY);
   // Right of downstream: u rotated clockwise.
   const n: XY = [u[1], -u[0]];
@@ -438,7 +441,7 @@ export function nd911AutoPatch(dam: DamRecord, state: Nd911State, result: Pick<A
 
 const csvCell = (v: string | number) => {
   const s = String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
 /** <root>_911_address_points.csv: the points inside, downstream order, with the source on every row. */

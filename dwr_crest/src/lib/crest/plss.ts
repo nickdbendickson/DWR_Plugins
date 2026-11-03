@@ -340,6 +340,9 @@ function clipPoly(poly: LocalPoly, tri: XY[], u: XY) {
 export function plssTable(dam: DamRecord, strip: FloodStrip, cache: PlssCache): PlssTable {
   const loc = damLocation(dam) ?? { lon: strip.properties.breach_lon, lat: strip.properties.breach_lat };
   const o = { lon: strip.properties.breach_lon, lat: strip.properties.breach_lat };
+  // Last-resort bearing: downstreamDirection returns no u only when the geometry can't give one (which also means no
+  // strip would have been built), so this due-south fallback is effectively unreached. If it ever did fire it would
+  // only reorder the section table (fromKm/toKm), not change any wet-acre total.
   const u = downstreamDirection(dam.geometry, loc).u ?? ([0, -1] as XY);
   const rank = new Map(DEPTH_BANDS.map((b, i) => [b.id, i]));
 
@@ -501,7 +504,7 @@ export function plssProperties(t: PlssTable) {
 
 const csvCell = (v: string | number) => {
   const s = String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
 /** <root>_plss_sections.csv: one row per touched section, downstream order, with the source on every row. */

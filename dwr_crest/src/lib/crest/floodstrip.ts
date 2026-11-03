@@ -34,6 +34,13 @@ export const DEPTH_BANDS: DepthBand[] = [
   { id: "d5", label: "10 ft and deeper", minFt: 10, maxFt: Infinity, color: "#08306b" },
 ];
 
+// INVARIANT: strictly ascending by minFt (shallow→deep). bandFor/raster.bandIndex scan from the deepest end and take
+// the first band the depth reaches, and the receptor overlap rule (nd911.bandAt) ranks by array index so the largest
+// index = the deepest band wins. Reorder or regroup these and that "deeper wins" quietly flips to "shallower wins"
+// (anti-conservative), so the order is pinned here rather than left to convention.
+for (let i = 1; i < DEPTH_BANDS.length; i++)
+  if (!(DEPTH_BANDS[i].minFt > DEPTH_BANDS[i - 1].minFt)) throw new Error("DEPTH_BANDS must be strictly ascending by minFt (shallow→deep)");
+
 export function bandFor(depthFt: number): DepthBand {
   for (let i = DEPTH_BANDS.length - 1; i >= 0; i--)
     if (depthFt >= DEPTH_BANDS[i].minFt) return DEPTH_BANDS[i];
