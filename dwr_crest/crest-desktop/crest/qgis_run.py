@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import re
 import shutil
@@ -14,6 +15,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
+from urllib.parse import quote
 
 from crest.handoff import HandoffError, _dem_point, write_dam_folder, write_named_files
 from crest.layers import download_aoi, find_suite_folder, suite_dem, use_offline_pack, write_settings
@@ -159,8 +161,10 @@ def _ready(text: str) -> bool | None:
     return None
 
 
-STOPPED_TIMEOUT = 124
-STOPPED_CANCEL = 130
+# Internal sentinels for a run we stopped ourselves. Kept clear of the common real exit codes 124 (coreutils
+# timeout) and 130 (SIGINT) so a plugin that genuinely exits 124/130 is not misread as a Crest timeout/cancel.
+STOPPED_TIMEOUT = 224
+STOPPED_CANCEL = 230
 
 
 def screening_timeout(value=None) -> float | None:
@@ -317,7 +321,7 @@ def _opt_num(cmd: list[str], flag: str, value) -> None:
         number = float(value)
     except (TypeError, ValueError):
         return
-    if number != number:  # NaN
+    if not math.isfinite(number):  # NaN or ±Infinity
         return
     cmd.append(f"--{flag}={number}")
 
@@ -385,7 +389,8 @@ def chain_names(root: Path, dam_id: str) -> list[str]:
         return []
     found: list[str] = []
     try:
-        con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        # quote the path: a '?' or '#' in a work-folder name would otherwise be read as the URI's query/fragment.
+        con = sqlite3.connect(f"file:{quote(path.as_posix())}?mode=ro", uri=True)
     except sqlite3.Error:
         return []
     try:

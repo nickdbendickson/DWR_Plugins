@@ -21,6 +21,7 @@ from crest.handoff import HandoffError, write_dam_folder, write_named_files  # n
 from crest.layers import download_aoi, use_offline_pack  # noqa: E402
 from crest.qgis_run import (  # noqa: E402
     _collect_bounded,
+    _opt_num,
     _taskkill_tree,
     chain_names,
     chain_results,
@@ -632,6 +633,44 @@ class RobustnessTests(unittest.TestCase):
         # On this POSIX CI host taskkill is absent, so the helper returns False (the caller then falls back to
         # terminate()/kill()); on Windows it runs taskkill and returns True. Either way it must not raise.
         self.assertIsInstance(_taskkill_tree(2_000_000_000), bool)
+
+    # ---- M6: misc hardening ----------------------------------------------------------------------------------
+    def test_file_ok_rejects_a_trailing_newline(self):
+        # \Z, not $: a name ending in a newline must not pass the allow-list (would have with $).
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d)
+            written = write_named_files(folder, {"ok.par": "x", "evil.par\n": "y"})
+            self.assertEqual(written, ["ok.par"])
+            self.assertFalse((folder / "evil.par\n").exists())
+
+    def test_opt_num_rejects_non_finite(self):
+        cmd: list[str] = []
+        _opt_num(cmd, "TOP_FT", float("inf"))
+        _opt_num(cmd, "TOP_FT", float("-inf"))
+        _opt_num(cmd, "TOP_FT", float("nan"))
+        self.assertEqual(cmd, [], "±Infinity and NaN must not reach the command line")
+        _opt_num(cmd, "TOP_FT", 12.5)
+        self.assertEqual(cmd, ["--TOP_FT=12.5"])
+
+    def test_chain_names_handles_a_work_path_with_a_question_mark(self):
+        # A '?' in the work-folder name must not break the SQLite file: URI (it would be read as a query, leaving
+        # the path truncated so the open fails and the dam is silently not found). Build a minimal gpkg and look
+        # it up through a ?-named folder: without the quote fix this returns [], with it the chain name is found.
+        import sqlite3
+
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d) / "q? dir"
+            work.mkdir()
+            con = sqlite3.connect(str(work / "1_dams.gpkg"))
+            try:
+                con.execute("CREATE TABLE gpkg_contents (table_name TEXT, data_type TEXT)")
+                con.execute("INSERT INTO gpkg_contents VALUES ('dams', 'features')")
+                con.execute("CREATE TABLE dams (dam_id TEXT, nid_id TEXT)")
+                con.execute("INSERT INTO dams VALUES ('DWR-2801', 'ND00199')")
+                con.commit()
+            finally:
+                con.close()
+            self.assertEqual(chain_names(work, "ND00199"), ["DWR-2801"])
 
 
 if __name__ == "__main__":

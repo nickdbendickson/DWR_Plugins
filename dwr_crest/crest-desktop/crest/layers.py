@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -75,7 +76,17 @@ def write_settings(work: Path, suite: str | None, dem_file: str | None, only_ids
         data["terrain_source"] = 1
         data["local_dem"] = str(Path(dem_file).resolve().parent)
     path = work / "crest_settings.json"
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    # Atomic write: a crash mid-write must not leave a truncated settings file for the next run to read.
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
     return path
 
 

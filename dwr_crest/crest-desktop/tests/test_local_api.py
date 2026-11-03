@@ -84,6 +84,33 @@ class LocalApiTests(unittest.TestCase):
             status, _ = self.req("GET", path, host=f"evil.example:{self.port}")
             self.assertEqual(status, 403, path)
 
+    def _raw_post(self, extra_headers, body: bytes | None):
+        """POST /api/folder with headers set by hand (to send a chunked or malformed framing the req() helper
+        can't). Returns the status code."""
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.putrequest("POST", "/api/folder", skip_host=True, skip_accept_encoding=True)
+        conn.putheader("Host", f"127.0.0.1:{self.port}")
+        conn.putheader(m.TOKEN_HEADER, m.API_TOKEN)
+        conn.putheader("Content-Type", "application/json")
+        for key, value in extra_headers.items():
+            conn.putheader(key, value)
+        conn.endheaders()
+        if body is not None:
+            conn.send(body)
+        r = conn.getresponse()
+        status = r.status
+        r.read()
+        conn.close()
+        return status
+
+    def test_chunked_body_rejected(self):
+        # A chunked body would read as empty and start a job with defaults; it must be a 400 instead.
+        self.assertEqual(self._raw_post({"Transfer-Encoding": "chunked"}, b"0\r\n\r\n"), 400)
+
+    def test_bad_content_length_rejected(self):
+        # A non-numeric Content-Length must be a 400, not an unhandled exception in the handler thread.
+        self.assertEqual(self._raw_post({"Content-Length": "not-a-number"}, None), 400)
+
     def test_job_get_needs_token(self):
         status, _ = self.req("GET", "/api/job?id=x", token=False)
         self.assertEqual(status, 403)

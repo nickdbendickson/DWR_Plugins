@@ -241,7 +241,19 @@ class _Handler(SimpleHTTPRequestHandler):
             return
         if not self._api_allowed(need_json=True):
             return
-        length = int(self.headers.get("Content-Length", "0") or 0)
+        # This handler reads a fixed Content-Length body; a chunked body would read as empty and start a job with
+        # defaults instead of failing, so reject it explicitly. A malformed Content-Length is a 400, not a 500.
+        if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+            self._send(400, b'{"error":"chunked request bodies are not supported"}', "application/json")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            self._send(400, b'{"error":"bad content length"}', "application/json")
+            return
+        if length < 0:
+            self._send(400, b'{"error":"bad content length"}', "application/json")
+            return
         if length > 20_000_000:
             self._send(413, b'{"error":"too large"}', "application/json")
             return
@@ -471,9 +483,20 @@ def write_bytes(path: Path, data: bytes) -> None:
 
 
 def write_text(path: Path, text: str) -> None:
-    """Write an export exactly as the desk produced it (UTF-8, no newline translation)."""
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(str(text))
+    """Write an export exactly as the desk produced it (UTF-8, no newline translation).
+
+    Atomic: a crash mid-write never leaves a truncated export in place of a file the user may already have had."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(str(text))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def main() -> None:

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # One lock per dam folder. The desktop server runs one thread per request, so two jobs on the same dam would both
@@ -82,7 +83,21 @@ def _line(feature):
 
 
 def _dump(path: Path, obj) -> None:
-    path.write_text(json.dumps(obj, indent=2) + "\n", encoding="utf-8")
+    """Write JSON atomically. A crash mid-write must not leave a truncated dam.json — write_dam_folder then
+    refuses to overwrite it (not a valid record) and the folder is stuck until someone deletes the file by hand.
+    Write to a unique sibling .part, then os.replace (the pattern write_bytes already uses for binary exports).
+    The temp name carries pid+thread id so two threads writing the same file (e.g. shared geometry exports) do
+    not share one .part and race each other's replace."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.part")
+    try:
+        tmp.write_text(json.dumps(obj, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _feature(kind: str, feature) -> dict | None:
@@ -204,7 +219,7 @@ def write_dam_folder(work: Path, dam: dict, analysis: dict, append_status: bool 
         sources = record.setdefault("sources", {})
         if not isinstance(fields, dict) or not isinstance(sources, dict):
             raise HandoffError(f"{path} has a damaged fields or sources block. It was not overwritten.")
-        when = datetime.now().isoformat(timespec="seconds")
+        when = datetime.now(timezone.utc).isoformat(timespec="seconds")
         for key, value in incoming.items():
             if value in (None, ""):
                 continue
@@ -303,8 +318,10 @@ def write_dam_folder(work: Path, dam: dict, analysis: dict, append_status: bool 
     return folder, notes
 
 
+# \Z, not $: in Python $ also matches just before a trailing newline, so "evil.par\n" would pass. \Z anchors the
+# true end of the string.
 _FILE_OK = re.compile(
-    r"^(?:[A-Za-z0-9][A-Za-z0-9_.-]{0,80}\.(?:par|bci|bdy|geojson|kml|csv)|inputs/[A-Za-z0-9][A-Za-z0-9_.-]{0,80}\.csv)$"
+    r"^(?:[A-Za-z0-9][A-Za-z0-9_.-]{0,80}\.(?:par|bci|bdy|geojson|kml|csv)|inputs/[A-Za-z0-9][A-Za-z0-9_.-]{0,80}\.csv)\Z"
 )
 
 
