@@ -1177,8 +1177,9 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       handoff.busy = true;
       handoff.log = "Starting…\n";
       bump((n) => n + 1);
+      let response: Response;
       try {
-        const response = await fetch(path, {
+        response = await fetch(path, {
           method: "POST",
           headers: crestApiHeaders(true),
           body: JSON.stringify({
@@ -1191,9 +1192,18 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
             files: path === "/api/layers" ? undefined : files,
           }),
         });
-        if (!response.ok) throw new Error("The Crest server did not accept the job.");
+      } catch {
+        // fetch itself rejected: nothing is listening on this origin, so there is no desktop server running.
+        handoff.busy = false;
+        handoff.log =
+          "This page has no Crest server, so QGIS was not started. From the crest-desktop folder run: python run.py";
+        bump((n) => n + 1);
+        return;
+      }
+      try {
+        if (!response.ok) throw new Error(`The Crest server rejected the job (HTTP ${response.status}).`);
         const job = (await response.json()) as { id?: string };
-        if (!job.id) throw new Error("The Crest server did not return a job.");
+        if (!job.id) throw new Error("The Crest server did not return a job id.");
         handoff.job = job.id;
         handoffTimer = window.setInterval(async () => {
           try {
@@ -1215,10 +1225,10 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
             bump((n) => n + 1);
           }
         }, 1000);
-      } catch {
+      } catch (e) {
+        // A response came back, so a server is there — surface its real error, not the generic "no server" text.
         handoff.busy = false;
-        handoff.log =
-          "This page has no Crest server, so QGIS was not started. From the crest-desktop folder run: python run.py";
+        handoff.log = `The Crest server returned an error: ${(e as Error).message}`;
         bump((n) => n + 1);
       }
     },

@@ -52,7 +52,13 @@ const OLD_ND00199_CLASS = "ND MEDIUM / TM11 Significant (DWR-2801 benchmark)";
 
 /** Persisted desk state from an older version -> current. Only rewrites an unedited ND00199 sample. */
 export function migrateDesk(persisted: unknown, version: number): DeskState {
-  const state = (persisted ?? {}) as DeskState;
+  // A corrupted or non-object persisted value (a primitive, null, or an array) must not be cast blindly to
+  // DeskState: the migration below and activeDam() both read state.dams, so a bad value would crash on load
+  // rather than fall back to the samples. Start fresh from the current samples when the stored shape is wrong.
+  const defaults = (): DeskState => ({ ...({} as DeskState), dams: SAMPLE_DAMS, activeId: SAMPLE_DAMS[0].id, step: "setup" });
+  if (persisted === null || typeof persisted !== "object" || Array.isArray(persisted)) return defaults();
+  const state = persisted as DeskState;
+  if (!Array.isArray(state.dams)) return defaults();
   if (version < 1 && Array.isArray(state.dams)) {
     const now = SAMPLE_DAMS.find((d) => d.id === "nd00199");
     state.dams = state.dams.map((d) =>
