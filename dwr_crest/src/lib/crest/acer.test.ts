@@ -47,6 +47,15 @@ describe("ACER TM 11 zones (damsuite tm11_curves.zone)", () => {
 });
 
 describe("ND ranking (damsuite classify_nd)", () => {
+  it("a non-finite depth forces judgment, never a silent dry/Low", () => {
+    for (const kind of ["house", "mobile", "road", "barn", "rail"] as const) {
+      const r = rankReceptor({ kind, depthFt: Number.NaN, velocityFps: 0 });
+      assert.equal(r.judgment, true, `${kind} with NaN depth must need judgment`);
+      assert.equal(r.class, null, `${kind} with NaN depth must not get a class`);
+      assert.match(r.reason, /unknown/, r.reason);
+    }
+  });
+
   it("CHECK: a house at 2.45 ft and low velocity screens Medium, not High", () => {
     const r = rankReceptor({ kind: "house", depthFt: 2.45, velocityFps: 0.03 });
     assert.equal(r.class, "Medium");

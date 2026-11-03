@@ -94,6 +94,13 @@ export type Ranked = {
 /** ND class contribution of one receptor (damsuite classification.classify_nd rules). */
 export function rankReceptor(input: RankInput): Ranked {
   const { kind, depthFt, velocityFps } = input;
+  // A non-finite depth is unknown, not dry. depthFt >= WET_FT is false for NaN, which would otherwise
+  // read as "not inundated" and drop the receptor from the screen — the opposite of the codebase's
+  // discipline, where an unknown forces judgment. The engine coerces NaN depths to 0 before it reaches
+  // here, so this is defensive, but rankReceptor is exported and must not silently swallow a bad depth.
+  if (!Number.isFinite(depthFt)) {
+    return { zone: null, class: null, reason: "depth is unknown (not finite): needs judgment", judgment: true };
+  }
   const wet = depthFt >= WET_FT;
   if (kind === "road") {
     if (!wet) return { zone: null, class: null, reason: "road not inundated", judgment: false };

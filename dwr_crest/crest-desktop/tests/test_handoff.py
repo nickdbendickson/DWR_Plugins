@@ -18,7 +18,7 @@ import io  # noqa: E402
 
 import crest.__main__ as m  # noqa: E402
 from crest.handoff import HandoffError, write_dam_folder, write_named_files  # noqa: E402
-from crest.layers import download_aoi, use_offline_pack  # noqa: E402
+from crest.layers import _nums, download_aoi, use_offline_pack  # noqa: E402
 from crest.qgis_run import (  # noqa: E402
     _collect_bounded,
     _opt_num,
@@ -224,6 +224,30 @@ class FolderTests(unittest.TestCase):
             with self.assertRaises(HandoffError):
                 write_dam_folder(Path(d), DAM, ANALYSIS)
             self.assertEqual(json.loads((folder / "dam.json").read_text(encoding="utf-8"))["format"], "something-else")
+
+    def test_status_null_is_coerced_not_crash(self):
+        # Another tool may leave "status": null (or a non-list); setdefault(...).append would then raise
+        # AttributeError instead of appending gracefully. The record must be repaired, not crash.
+        with tempfile.TemporaryDirectory() as d:
+            folder = Path(d) / "dams" / "ND00199"
+            folder.mkdir(parents=True)
+            (folder / "dam.json").write_text(json.dumps({
+                "format": "nd_dam_suite/dam_record", "format_version": 1,
+                "fields": {}, "sources": {}, "status": None, "conflicts": [],
+            }), encoding="utf-8")
+            write_dam_folder(Path(d), DAM, ANALYSIS)  # must not raise
+            rec = json.loads((folder / "dam.json").read_text(encoding="utf-8"))
+            self.assertIsInstance(rec["status"], list)
+            self.assertEqual(rec["status"][-1]["step"], "screened")
+
+
+class NumsTests(unittest.TestCase):
+    def test_nums_drops_non_finite(self):
+        # Python's json parses NaN/Infinity, which would otherwise reach int(width_m / 10) and crash the
+        # download job. _nums must filter them so only finite coordinates survive.
+        self.assertEqual(_nums([1.0, float("nan"), 2.0, float("inf"), -float("inf")]), [1.0, 2.0])
+        self.assertEqual(_nums(float("nan")), [])
+        self.assertEqual(_nums([[1.0, float("nan")], [3.0, 4.0]]), [1.0, 3.0, 4.0])
 
 
 class GateTests(unittest.TestCase):

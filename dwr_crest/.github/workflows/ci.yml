@@ -29,3 +29,17 @@ jobs:
       # crest-html bundle-hash check (Crest.html and the desktop bundle match their source).
       - name: Test
         run: npm test
+
+  # The crest-desktop Python server/handoff tests (stdlib unittest, no third-party deps). They were not run in
+  # CI before, so the desktop robustness fixes only had local coverage; this gates them too.
+  desktop-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Desktop tests
+        working-directory: crest-desktop
+        run: python -m unittest discover -s tests

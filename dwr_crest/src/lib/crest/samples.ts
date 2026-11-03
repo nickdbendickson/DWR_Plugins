@@ -107,6 +107,17 @@ function valley(prefix: string): ReceptorSeed[] {
   ];
 }
 
+// ND00199's generic seeds are pinned to the downstream distances they were modelled at — each station
+// times the old per-dam base-valley scale (baseM) for this storage — so the M3 fix that places a
+// station-only seed by the reach length (lengthM) rather than baseM does not move this calibrated
+// flagship sample. The Farmstead stays in the TM 11 judgment zone and the desk screen stays Medium,
+// matching the ND MEDIUM class of record. Recomputed (not rounded) so placement is identical to before.
+// Other valley() samples adopt the corrected station-of-reach placement.
+function nd00199Receptors(): ReceptorSeed[] {
+  const baseM = 900 + Math.sqrt(1612.59) * 80; // storageAcFt 1612.59; keep in sync with the sample below
+  return valley("abs").map((r) => ({ ...r, distanceKm: (r.station * baseM) / 1000 }));
+}
+
 export const SAMPLE_DAMS: DamRecord[] = [
   {
     id: "nd00199",
@@ -144,7 +155,7 @@ export const SAMPLE_DAMS: DamRecord[] = [
     failureMode: "piping",
     method: "froehlich",
     engine: "lisflood",
-    receptors: valley("abs"),
+    receptors: nd00199Receptors(),
   },
   {
     id: "local-sample",

@@ -63,6 +63,17 @@ class LocalApiTests(unittest.TestCase):
     def test_token_is_random_and_long(self):
         self.assertGreaterEqual(len(m.API_TOKEN), 32)
 
+    def test_single_cache_control_header(self):
+        # Cache-Control: no-store is added by the end_headers() override; _send must not also emit it,
+        # or every API/static response carries the header twice.
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/index.html", headers={"Host": f"127.0.0.1:{self.port}"})
+        r = conn.getresponse()
+        r.read()
+        cache = [v for (k, v) in r.getheaders() if k.lower() == "cache-control"]
+        conn.close()
+        self.assertEqual(cache, ["no-store"], f"exactly one Cache-Control header, got {cache}")
+
     def test_post_without_token_rejected(self):
         status, _ = self.req("POST", "/api/folder", {"dam": {"id": "x"}}, token=False)
         self.assertEqual(status, 403)

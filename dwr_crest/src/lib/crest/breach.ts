@@ -116,6 +116,11 @@ export function routedHydrograph(inp: RoutedInput): Routed {
     bBottom = 0;
   }
   const tf = Math.max(inp.tfS, 60);
+  if (Number.isFinite(inp.tfS) && inp.tfS < 60) {
+    notes.push(
+      `Formation time ${inp.tfS.toFixed(0)} s was raised to a 60 s floor; the hydrograph and its peak use 60 s.`,
+    );
+  }
   const zc0 = Math.min(inp.wse0M, inp.topM);
   const vs = res.volume(inp.wse0M);
   const vDead = res.volume(bottom);

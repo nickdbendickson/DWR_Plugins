@@ -2,8 +2,30 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { analyze, MAX_REACH_KM } from "./engine.ts";
+import { routedHydrograph, type RoutedInput } from "./breach.ts";
 import { dwr2801 } from "./fixtures.ts";
 import { SAMPLE_DAMS } from "./samples.ts";
+
+describe("formation-time 60 s floor", () => {
+  const base: RoutedInput = {
+    topM: 10,
+    resBottomM: 0,
+    breachBottomM: 0,
+    wse0M: 10,
+    storageTopM3: 1_000_000,
+    bAvgM: 20,
+    tfS: 30,
+    z: 1,
+  };
+  it("notes when a sub-60 s formation time is raised to the floor", () => {
+    const r = routedHydrograph({ ...base, tfS: 30 });
+    assert.ok(r.notes.some((n) => /raised to a 60 s floor/.test(n)), r.notes.join("\n"));
+  });
+  it("adds no floor note when the formation time is already past 60 s", () => {
+    const r = routedHydrograph({ ...base, tfS: 120 });
+    assert.ok(!r.notes.some((n) => /60 s floor/.test(n)), r.notes.join("\n"));
+  });
+});
 
 // DamSafety_Runner core/breach.py piping_hydrograph on DWR-2801 (top 1071.09 NAVD88, H 27.5 ft,
 // SA 154.5 ac): 1615.5 ac-ft -> 28,671 cfs; 1612.59 ac-ft -> 28,623 cfs; no SA (m = 2) -> 26,205 cfs.

@@ -50,6 +50,23 @@ describe("crest engine", () => {
 });
 
 import { test } from "node:test";
+
+test("a station-only receptor is placed by the reach length, not the decay scale", () => {
+  // station is a 0..1 fraction of the desk reach (lengthM): station 0 at the breach, 1 at the reach
+  // end. A 15 km user reach with a single station=0.5 seed (no distanceKm) must land at ~7.5 km down
+  // the valley. Before the M3 fix the seed was placed at station * baseM (the decay/width scale,
+  // ~4 km here), collapsing it to ~2 km just below the breach where the curve is deepest and fastest,
+  // which over-ranked the generic seed's TM 11 zone.
+  const d = dwr2801({
+    reachKm: 15,
+    receptors: [{ id: "s", name: "s", kind: "house", station: 0.5, lateral: 0, padFt: 0 }],
+  });
+  const r = analyze(d).flood.receptors[0];
+  assert.ok(Math.abs(r.station - 0.5) < 0.01, `station round-trips: ${r.station}`);
+  assert.ok(Math.abs(r.distanceKm - 7.5) < 0.2, `~7.5 km down the 15 km reach, not collapsed: ${r.distanceKm}`);
+  assert.ok(r.distanceKm > 5, `clearly mid-reach, not ~2 km near the breach: ${r.distanceKm}`);
+});
+
 test("blankDam leaves spillway and normal pool blank", () => {
   const d = blankDam();
   assert.ok(Number.isNaN(d.spillwayFt));

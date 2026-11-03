@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import urllib.error
@@ -92,7 +93,9 @@ def write_settings(work: Path, suite: str | None, dem_file: str | None, only_ids
 
 def _nums(value):
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return [float(value)]
+        # Python's json accepts NaN/Infinity literals, so a malformed request can carry non-finite
+        # coordinates. Drop them here: they would otherwise reach int(width_m / 10) and crash the job.
+        return [float(value)] if math.isfinite(value) else []
     if isinstance(value, list):
         out = []
         for item in value:

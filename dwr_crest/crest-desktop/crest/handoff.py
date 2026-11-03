@@ -249,7 +249,12 @@ def write_dam_folder(work: Path, dam: dict, analysis: dict, append_status: bool 
             )
         if append_status:
             reasons = screen.get("reasons") if isinstance(screen.get("reasons"), list) else []
-            record.setdefault("status", []).append({
+            # A record written by another tool may carry "status": null (or a non-list); setdefault would
+            # then return that value and .append() would raise AttributeError instead of the graceful
+            # HandoffError. Coerce to a list, as fields/sources are guarded above.
+            if not isinstance(record.get("status"), list):
+                record["status"] = []
+            record["status"].append({
                 "step": "screened",
                 "tool": TOOL,
                 "version": VERSION,
