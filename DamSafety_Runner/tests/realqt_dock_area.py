@@ -163,7 +163,7 @@ _paths["receptors"] = os.path.join(_ro, "receptors_flooded.csv")
 _paths["hazard_structures"] = _gp
 _time.sleep(1.1)
 def _snap():
-    return ({k: (_hl.md5(open(p, "rb").read()).hexdigest(), os.stat(p).st_mtime_ns)
+    return ({k: (_hl.md5(open(p, "rb").read(), usedforsecurity=False).hexdigest(), os.stat(p).st_mtime_ns)
              for k, p in _paths.items()}, sorted(os.listdir(_ro)))
 _before = _snap()
 rdock._layers = dict(_paths); rdock._counts = None; rdock._report = {"work_crs": "EPSG:2265"}

@@ -68,7 +68,7 @@ def dams_box_5070(points, buffer_mi=DEFAULT_BUFFER_MI):
 def box_key(box):
     """A short stable key of the box (to the metre) for the file names."""
     txt = ",".join("{:.0f}".format(v) for v in box)
-    return hashlib.sha1(txt.encode("ascii")).hexdigest()[:8]
+    return hashlib.sha1(txt.encode("ascii"), usedforsecurity=False).hexdigest()[:8]
 
 
 def stem(box, n_dams):
