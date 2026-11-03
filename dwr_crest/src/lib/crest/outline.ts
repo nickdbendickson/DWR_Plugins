@@ -124,6 +124,12 @@ export type RoutedSummary = {
   sections: number;
   cappedSections: number;
   volumeFlag: boolean;
+  /** Water volume the fill lays down (ac-ft). */
+  fillAcFt: number;
+  /** Breach volume released (ac-ft). */
+  releasedAcFt: number;
+  /** fillAcFt / releasedAcFt — the volume the max-surface envelope invents over the release (method provenance). */
+  volumeRatio: number;
   reachedEdge: boolean;
   notes: string[];
 };

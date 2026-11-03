@@ -122,16 +122,24 @@ export function dashboardFlags(
 }
 
 /**
- * The fast layer's wet and released volumes, for the volume flag's severity. The saved routed summary keeps only the
- * yes/no flag, so the numbers come from the note src/lib/crest/routed-flood.ts writes when the flag is raised
- * ("The fill lays down N ac-ft, more than the breach releases (M ac-ft) ..."). The reservoir volume is the record's
- * storage. Null when there is no such note (no flag, or an older saved layer).
+ * The fast layer's wet and released volumes, for the volume flag's severity. The routed summary now carries them as
+ * fillAcFt/releasedAcFt (the provenance fields), so read those when present; fall back to the note
+ * src/lib/crest/routed-flood.ts writes when the flag is raised ("The fill lays down N ac-ft, more than the breach
+ * releases (M ac-ft) ...") for layers saved before those fields existed. The reservoir volume is the record's storage.
+ * Null when there is no flag or no recoverable numbers.
  */
 export function routedVolumes(
   outline: OutlineState,
   storageAcFt: number,
 ): { wet: number; release: number; reservoir?: number } | null {
   if (outline.state !== "ready" || !outline.routed?.volumeFlag) return null;
+  const r = outline.routed;
+  if (r.releasedAcFt != null && r.releasedAcFt > 0 && r.fillAcFt != null)
+    return {
+      wet: r.fillAcFt,
+      release: r.releasedAcFt,
+      reservoir: storageAcFt > 0 ? storageAcFt : undefined,
+    };
   for (const n of outline.routed.notes) {
     const m =
       /The fill lays down ([\d.]+) ac-ft, more than the breach releases \(([\d.]+) ac-ft\)/.exec(n);
