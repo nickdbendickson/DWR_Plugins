@@ -1,4 +1,4 @@
-# DamSafety Hazard Lite 0.1.1
+# DamSafety Hazard Lite 0.1.2
 
 A small QGIS plugin: breach depth and velocity rasters in, hmax / vmax at every 911-addressed
 structure, overtopped road and inundated railroad out, plus the ND hazard class from
@@ -24,10 +24,12 @@ about 80,600 lines in DamSafety_Hazard. Only GDAL / OGR and numpy, so `core.run(
 ## Rules (REG_05.2026 Section 5.2, as the ND Dam Hazard plugin codes them)
 
 - **High**: a habitable structure in the high danger zone of Fig. 5.1 (houses) or Fig. 5.2
-  (mobile homes, from FEMA "Manufactured Home" or 911 "MOBILE HOME") [5.2.1.1]. The judgment zone counts as
-  High by default (5.3 borderline rule; can be switched off). An overtopped Interstate or road with AADT > 2,000
+  (mobile homes, from FEMA "Manufactured Home" or 911 "MOBILE HOME") [5.2.1.1]. A habitable structure in the
+  judgment zone is **ND MEDIUM by rule** (0.1.2, Nick 2026-11-03, as DamSafety Hazard does); only
+  structures above the high line drive High. The old "count the judgment zone as High" setting is
+  kept as an option, off by default. An overtopped Interstate or road with AADT > 2,000
   [5.2.1.2]. An inundated passenger line, or a freight line with 10 or more trains/day [5.2.1.3].
-- **Medium**: a habitable structure inundated to any degree (>= 0.1 ft) [5.2.2]; an overtopped US or State
+- **Medium**: a habitable structure in the judgment zone, by rule [5.2.1.1]; a habitable structure inundated to any degree (>= 0.1 ft) [5.2.2]; an overtopped US or State
   highway, or a road with AADT 500 to 2,000 [5.2.1.2]; any other inundated railroad [5.2.1.3].
 - **Low**: none of these.
 
@@ -36,6 +38,10 @@ even when they come from different cells (TM 11 practice, Nick 2026-11-01). It i
 any one wet cell's own depth and velocity on the chart; dry cells (< 0.1 ft) are not read. The table
 reports hmax and vmax over the outline, and the peak depth and peak wet velocity the zone is read at
 (gov_depth_ft, gov_vel_fps).
+Velocity unknown: when no wet cell of a structure has a velocity value (all NaN / nodata), the zone
+is read on the peak depth alone, `gov_vel_fps` and `vmax_fps` are blank, `velocity_unknown` is 1 in
+`structures.csv` / the gpkg, and the summary's Verify list counts these structures. A dry cell's
+velocity is never used.
 The chart table is a verbatim copy of `damsuite/tm11_curves.py` (signed off by Nicholas Bendickson, 2026-10-12).
 
 ## Outputs (output folder)
