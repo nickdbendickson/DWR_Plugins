@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **HazardLite 0.1.2: the judgment zone is ND MEDIUM by rule by default (audit 2026-11-03, Nick: "Fix all").** No damsuite change; no other plugin changes.
+  - `judgment_high` defaults to False in `core.structures/classify/run`, the window tick and the Processing `JUDGMENT_HIGH` parameter (label: "Count the judgment zone as High (old option; off = ND MEDIUM by rule)"). Off, the 5.2.1.1 reason is Medium and reads "judgment zone - ND MEDIUM by rule"; houses above the high line still drive High.
+  - Docs & QA nits: `velocity_unknown` is in `S_COLS` (CSV and gpkg), `vmax_fps` is `nanmax` (blank when all NaN), README covers velocity unknown.
+  - Test: `DamSafety_HazardLite/tests/test_core.py`.
+
 - **Hazard 2.22.4: DSS-WISE result names with units after the quantity are autodetected (Nick: "Do the DSS-WISE autodetect fix PR").** RELEASE ndhazard 2.22.4; damsuite content otherwise unchanged.
   - **Found.** `autodetect._is_time_step` took the text after "Depth"/"Velocity" for an output time, so `Depth_ft.tif`, `Velocity_ftps.tif`, `Depth_m.asc` ... were skipped in the dam folder (any case, any depth of sub-folder). A label made only of unit words is no longer a time step; `Depth_0100`, `Depth (01JAN2020 12:00:00)` still are.
   - **Units.** `dsswise.detect_units` reads units right after the quantity word: `Velocity_ft_s` / `Velocity_ft_per_s` are ft/s and `Depth_m` / `Velocity_m_s` are m, m/s (were "assumed ft / ft/s"). `MaxDepth_in_Ft` style names are unchanged.
