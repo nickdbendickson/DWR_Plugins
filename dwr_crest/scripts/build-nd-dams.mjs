@@ -251,6 +251,7 @@ export function buildNdDams(csvText, opts = {}) {
     sha256Raw: createHash("sha256").update(csvText).digest("hex"),
     rows: out.length,
     dropped,
+    warnings,
     counties: Object.fromEntries(Object.entries(counties).sort(([a], [b]) => a.localeCompare(b))),
     hazards: Object.fromEntries(Object.entries(hazards).sort(([a], [b]) => a.localeCompare(b))),
     inventoryPass: null,

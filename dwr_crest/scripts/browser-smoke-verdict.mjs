@@ -96,6 +96,12 @@ export function compareToBaseline(current, baseline) {
       }
     }
   }
+  // A viewport the baseline covered but the current run no longer reports is itself a divergence: the loop above only
+  // walks the current run's viewports, so a dropped one would otherwise pass silently.
+  const curViewports = current?.viewports ?? {};
+  for (const name of Object.keys(baseViewports)) {
+    if (!(name in curViewports)) reasons.push(`${name}: viewport present in baseline is missing from this run`);
+  }
   return { divergesFromBaseline: reasons.length > 0, reasons };
 }
 export function baselineComparison(current, rawText) {

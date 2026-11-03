@@ -46,9 +46,11 @@ export type RoutedFloodOptions = {
    */
   floodplainDepthMarginM?: number;
   /**
-   * How the routed flood is laid on the terrain. "stage" (default, the method as merged): seed the channel with the
-   * Manning stage and carry that surface across the floodplain (fill.ts). "spread": pour each stretch's peak storage
-   * from the routing as a level pool on its own ground (spread.ts), the quasi-dynamic 2-D volume spread.
+   * How the routed flood is laid on the terrain. "spread" (default, the shipped layer of record): pour each stretch's
+   * peak storage from the routing as a level pool on its own ground (spread.ts), the quasi-dynamic 2-D volume spread.
+   * "stage" (the method as first merged, retired as the default): seed the channel with the Manning stage and carry
+   * that surface across the floodplain (fill.ts); its surface decays only slowly, so it over-pours where the terrain
+   * falls away. The desk always passes "spread" (inundation.ts ROUTED_METHOD); "stage" is kept for comparison runs.
    */
   method?: "stage" | "spread";
   /** Spread only: follow the breach's own flow path rather than the outline's drainage trace (default false). */
@@ -135,10 +137,13 @@ export async function buildRoutedFlood(
     return { ok: false, reason: built.reason.replace("No terrain outline", "No routed flood") };
   let centerline = built.centerline;
   let pathNote: string | null = null;
+  // Default to the spread, the shipped layer of record: a caller that omits method gets what the desk ships, not the
+  // retired stage fill. The desk passes it explicitly (inundation.ts), so this only guards a direct caller.
+  const method = opts.method ?? "spread";
   // Optionally the spread follows the breach's own flow path (spread.ts breachPath) instead of the outline's drainage
   // trace. Off by default: once the DEM registration and trace start were fixed (crest PR #35) the trace scored better
   // on all four baseline dams and kept the envelope volume near the LISFLOOD band; the path detours through potholes.
-  if ((opts.method ?? "stage") === "spread" && (opts.breachPath ?? false) && centerline.pts.length) {
+  if (method === "spread" && (opts.breachPath ?? false) && centerline.pts.length) {
     const io = outlineInputs(dam, result);
     const p = io.ok ? breachPath(g, centerline.loc, io.inputs.u as [number, number], centerline.pts[0]) : null;
     if (p && p.pts.length >= 2) {
@@ -161,7 +166,7 @@ export async function buildRoutedFlood(
   // past bumps lower than SPREAD_RIDGE_TOL_M. The stage method keeps the tables as merged.
   // It also looks for each section's thalweg near the traced channel rather than anywhere on the 1 km cut.
   const tableOpts =
-    (opts.method ?? "stage") === "spread"
+    method === "spread"
       ? { ridgeTolM: opts.ridgeTolM ?? SPREAD_RIDGE_TOL_M, thalwegWindowM: SPREAD_THALWEG_WINDOW_M }
       : {};
   const tables = sections.map((s) => sectionTable(s, undefined, undefined, undefined, tableOpts));
@@ -172,7 +177,6 @@ export async function buildRoutedFlood(
   };
   const routed = routeMuskingumCunge(inflow, tables, { maxHours: opts.maxHours ?? 72 });
 
-  const method = opts.method ?? "stage";
   const releasedAcFt = result.breach.volumeAcFt;
   const N = g.width * g.height;
   const depthFt = new Float32Array(N);
@@ -248,8 +252,9 @@ export async function buildRoutedFlood(
   const peakOutCfs = routed.sections[routed.sections.length - 1].peakCms / CFS;
   const channelM = centerline.pts.length ? centerline.pts[centerline.pts.length - 1].x : 0;
   if (reachedEdge)
+    // After the routing notes, which a flow-path note (unshifted above) pushes down by one.
     notes.splice(
-      routed.notes.length,
+      routed.notes.length + (pathNote ? 1 : 0),
       0,
       "The routed flood reached the edge of the DEM; it would spread further than the DEM shows.",
     );

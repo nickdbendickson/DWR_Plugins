@@ -64,6 +64,13 @@ test("status change diverges", () => {
   assert.match(reasons.join(";"), /desktop: HTTP status changed 200 -> 500/);
 });
 
+test("a viewport present in the baseline but missing from this run diverges", () => {
+  const current = { viewports: { desktop: viewport() } }; // mobile dropped out
+  const { divergesFromBaseline, reasons } = compareToBaseline(current, verdict());
+  assert.equal(divergesFromBaseline, true);
+  assert.match(reasons.join(";"), /mobile: viewport present in baseline is missing from this run/);
+});
+
 test("title change diverges", () => {
   const { divergesFromBaseline, reasons } = compareToBaseline(
     verdict({ title: "Error" }),
