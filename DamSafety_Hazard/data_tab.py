@@ -10,7 +10,7 @@ import os
 
 from qgis.PyQt.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGroupBox, QFormLayout, QSpinBox,
-    QCheckBox, QComboBox, QWidget, QMessageBox, QLineEdit, QScrollArea, QFileDialog,
+    QComboBox, QWidget, QMessageBox, QLineEdit, QScrollArea, QFileDialog,
 )
 from qgis.core import QgsProject, QgsRasterLayer
 
