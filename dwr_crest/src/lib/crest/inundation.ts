@@ -12,6 +12,11 @@
  * The threshold is calibrated on thin data (one large dam on the win side), so GATE_VOLUME_ACFT is a tunable constant,
  * not a law; a few more large-dam runs should firm it up. The gate is a-priori (released volume only), so it needs no
  * DEM and no model to decide; buildInundation then builds only the layer the gate picks.
+ *
+ * Since 2026-11-03 (Nick) the routed layer is the quasi-dynamic 2-D volume spread (spread.ts) rather than the stage
+ * fill: on the corrected DEM (crest PR #35) with closed-basin storage (PR #36) it beats the outline on all four
+ * baseline dams and lays down 2–6× the release, where the stage fill laid down 31–779×. The stage fill stays available
+ * with { method: "stage" }.
  */
 
 import { floodStrip } from "./floodstrip.ts";
@@ -24,7 +29,10 @@ import type { DemGrid, OutlineCache, OutlineStats, RoutedSummary } from "./outli
 const ACRE_M2 = 4046.8564224;
 
 /** Map-and-export label for the routed flood, distinct from the bathtub outline's OUTLINE_LABEL. */
-export const ROUTED_LABEL = "Routed terrain flood from 3DEP terrain and the breach hydrograph (Muskingum-Cunge routing + terrain fill), not a full 2-D hydraulic model";
+export const ROUTED_LABEL = "Routed terrain flood from 3DEP terrain and the breach hydrograph (Muskingum-Cunge routing + volume spread), not a full 2-D hydraulic model";
+
+/** How the desk lays the routed flood on the terrain (routed-flood.ts RoutedFloodOptions.method). */
+export const ROUTED_METHOD = "spread" as const;
 
 /**
  * Released breach volume (ac-ft) at or above which the routed flood is used instead of the bathtub outline. Between
@@ -115,6 +123,7 @@ function routedCache(
     fillAcFt: routed.stats.fillAcFt,
     releasedAcFt: routed.stats.releasedAcFt,
     volumeRatio: routed.stats.volumeRatio,
+    method: routed.method,
     reachedEdge: routed.stats.reachedEdge,
     notes: routed.notes,
   };
@@ -137,7 +146,7 @@ export async function buildInundation(
   if (!io.ok) return { ok: false, reason: io.reason };
 
   if (choice.layer === "routed") {
-    const routed = await buildRoutedFlood(dam, result, g, opts);
+    const routed = await buildRoutedFlood(dam, result, g, { method: ROUTED_METHOD, ...opts });
     if (routed.ok) {
       return { ok: true, layer: "routed", choice, cache: routedCache(dam, result, g, routed, io.inputs.fingerprint), routed, fellBackToOutline: false };
     }

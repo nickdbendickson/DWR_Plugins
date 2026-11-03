@@ -7,7 +7,7 @@ import { gunzipSync } from "node:zlib";
 import { analyze } from "./engine.ts";
 import { buildInundation, GATE_VOLUME_ACFT, chooseInundationLayer } from "./inundation.ts";
 import type { DemGrid } from "./outline.ts";
-import { outlineInputs, polygonizeDepth } from "./outline.ts";
+import { outlineInputs, outlineState, polygonizeDepth } from "./outline.ts";
 import { SAMPLE_DAMS } from "./samples.ts";
 import type { Analysis } from "./types.ts";
 
@@ -98,5 +98,23 @@ describe("buildInundation on ND00199 (30 m fixture, 1,609 ac-ft → routed)", ()
     assert.ok(r.cache.routed!.peakInCfs > 0);
     assert.ok(r.cache.routed!.peakOutCfs <= r.cache.routed!.peakInCfs + 1);
     assert.equal(typeof r.cache.routed!.volumeFlag, "boolean");
+    // The desk's routed layer is the volume spread, and the saved summary says so.
+    assert.equal(r.routed?.ok && r.routed.method, "spread");
+    assert.equal(r.cache.routed!.method, "spread");
+    assert.equal(outlineState({ ...ND, outline: r.cache }, RESULT, true).state, "ready");
+  });
+
+  it("still builds the stage fill when asked, and reads a saved stage-fill layer as stale", async () => {
+    const r = await buildInundation(ND, RESULT, DEM, { method: "stage" });
+    assert.ok(r.ok && r.layer === "routed");
+    if (!r.ok) return;
+    assert.equal(r.cache.routed!.method, "stage");
+    const { method: _drop, ...legacy } = r.cache.routed!;
+    void _drop;
+    for (const routed of [r.cache.routed!, legacy]) {
+      const st = outlineState({ ...ND, outline: { ...r.cache, routed } }, RESULT, true);
+      assert.equal(st.state, "build");
+      assert.match(st.message ?? "", /old stage fill/);
+    }
   });
 });
