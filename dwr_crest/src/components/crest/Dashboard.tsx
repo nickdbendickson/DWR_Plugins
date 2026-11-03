@@ -27,7 +27,8 @@ import { runKey, useResults } from "@/lib/crest/results-store";
 import type { Analysis, DamRecord, ResultSource } from "@/lib/crest/types";
 import type { DashPoint } from "./DashboardMap";
 import type { Overlay } from "./ResultsMap";
-import { useAnalysisOfRecord } from "./results-flow";
+import { useAnalysisOfRecord, useStripOfRecord } from "./results-flow";
+import { layerOfRecord, RUNNER_SOURCE } from "@/lib/crest/layer-of-record";
 
 const DashboardMap = lazy(() =>
   import("./DashboardMap").then((m) => ({ default: m.DashboardMap })),
@@ -60,18 +61,25 @@ export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result:
   const { result, ref, label: source } = useAnalysisOfRecord(dam, deskResult);
   const online = typeof navigator === "undefined" ? true : navigator.onLine;
   const outline = useMemo(() => outlineState(dam, result, online), [dam, result, online]);
-  const method = dashMethod(outline);
+  // A run of record is the layer of record whatever the flood-size gate picks; its raster strip is the depth layer
+  // once its rasters are loaded, else the fast layer stands in (flagged as comparison only).
+  const record = useMemo(() => layerOfRecord(dam, result, outline), [dam, result, outline]);
+  const method = dashMethod(outline, dam.resultsOfRecord ?? null);
+  const recordStrip = useStripOfRecord(dam, deskResult);
+  const runStrip = recordStrip.fromRun ? recordStrip.strip : null;
   const depth = useMemo<FloodStrip | null>(
-    () => (outline.state === "ready" ? outline.outline : floodStrip(dam, result).strip),
-    [outline, dam, result],
+    () => runStrip ?? (outline.state === "ready" ? outline.outline : floodStrip(dam, result).strip),
+    [runStrip, outline, dam, result],
   );
   const fit = useMemo(() => boundsOf(depth), [depth]);
   const flags = useMemo(
     () =>
       dashboardFlags(result, outline, {
         volume: routedVolumes(outline, dam.storageAcFt) ?? undefined,
+        record,
+        recordMapped: !!runStrip,
       }),
-    [result, outline, dam.storageAcFt],
+    [result, outline, dam.storageAcFt, record, runStrip],
   );
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>(DEFAULT_LAYERS);
   const [acked, setAcked] = useState(false);
@@ -110,8 +118,11 @@ export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result:
 
   // Compare with a Runner run: the imported LISFLOOD-FP (else DSS-WISE) max depth, when loaded in this session.
   const runs = useResults((s) => s.runs);
+  const preferred: ResultSource[] = dam.resultsOfRecord
+    ? [dam.resultsOfRecord.source, ...(["lisflood", "dsswise"] as ResultSource[]).filter((x) => x !== dam.resultsOfRecord!.source)]
+    : [RUNNER_SOURCE, "dsswise"];
   const runner =
-    (["lisflood", "dsswise"] as ResultSource[]).find(
+    preferred.find(
       (s) => runs[runKey(dam.id, s)]?.status === "ready",
     ) ?? null;
   const [overlay, setOverlay] = useState<{ key: string; overlays: Overlay[]; error?: string }>({
@@ -254,9 +265,11 @@ function LayerRail({
             </p>
           ))}
           <p className="mini">
-            {method === "strip-legacy"
-              ? "Schematic strip, not a mapped extent."
-              : "Fast terrain layer, not a 2-D model."}
+            {method === "runner" || method === "model"
+              ? "Imported model run of record (max depth, cells merged to 60 m) where its rasters are loaded; otherwise the terrain layer for comparison."
+              : method === "strip-legacy"
+                ? "Schematic strip, not a mapped extent."
+                : "Fast terrain layer, not a 2-D model."}
           </p>
         </>
       ) : null}
