@@ -57,7 +57,7 @@ function toUrl(px: Uint8ClampedArray, w: number, h: number) {
  * record and saved fast layer as the Flood and Report steps; it changes nothing.
  */
 export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result: Analysis }) {
-  const { result, label: source } = useAnalysisOfRecord(dam, deskResult);
+  const { result, ref, label: source } = useAnalysisOfRecord(dam, deskResult);
   const online = typeof navigator === "undefined" ? true : navigator.onLine;
   const outline = useMemo(() => outlineState(dam, result, online), [dam, result, online]);
   const method = dashMethod(outline);
@@ -193,7 +193,7 @@ export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result:
         <ImpactsTable receptors={searchReceptors(result.flood.receptors, q)} gated={gated} />
       </div>
 
-      <StatusBar flags={flags} critical={critical} acked={acked} onAck={() => setAcked(true)} />
+      <StatusBar source={source} modeled={ref != null} flags={flags} critical={critical} acked={acked} onAck={() => setAcked(true)} />
       <p className="disclaimer">{DISCLAIMER}</p>
     </section>
   );
@@ -499,11 +499,15 @@ function pageWindow(page: number, pages: number): number[] {
 const SEV_WORD = { critical: "Critical", warning: "Warning", info: "Note" } as const;
 
 function StatusBar({
+  source,
+  modeled,
   flags,
   critical,
   acked,
   onAck,
 }: {
+  source: string;
+  modeled: boolean;
   flags: DashFlag[];
   critical?: DashFlag;
   acked: boolean;
@@ -512,7 +516,9 @@ function StatusBar({
   return (
     <footer className="status-bar" data-testid="dash-status">
       <span>
-        <span className="dot">●</span> Model completed
+        {/* Honest status: a completed 2-D model only when one was imported; otherwise the desk schematic. */}
+        <span className="dot">●</span>{" "}
+        {modeled ? `${source} — model completed` : `${source} — screening estimate, no 2-D model run`}
       </span>
       {flags.map((f) => (
         <span key={f.key} className={"flag-pill " + f.sev} data-testid={`flag-${f.sev}`}>

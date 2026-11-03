@@ -389,7 +389,9 @@ function CompareTable({ result, runs, ready }: { dam: DamRecord; result: Analysi
     { k: "Peak depth incl. reservoir (ft)", desk: "—", run: (c) => f1(c.st.peakDepthAllFt) },
     { k: "Wet area ≥ 0.1 ft downstream (ac)", desk: f0(d.wetAc), run: (c) => f0(c.st.wetAc) },
     { k: "Farthest wet downstream (km)", desk: f1(d.farthestKm, 2), run: (c) => f1(c.st.farthestKm, 2) },
-    { k: "Max velocity (ft/s)", desk: f1(d.maxVelocityFps), run: (c) => f1(c.st.maxVelocityFps) },
+    // A desk max velocity of 0 means no receptor produced an estimate (none entered, or none flooded), not a still
+    // flood — show "—" rather than "0.0", which reads as a zero-velocity flood against the 0.1–14 ft/s scale.
+    { k: "Max velocity (ft/s)", desk: d.maxVelocityFps ? f1(d.maxVelocityFps) : "—", run: (c) => f1(c.st.maxVelocityFps) },
     { k: "Latest arrival, wet cells (h)", desk: d.arrivalMaxHr == null ? "—" : `${f1(d.arrivalMaxHr)} (receptors)`, run: (c) => f1(c.st.arrivalMaxHr) },
     { k: "Grid coverage downstream (km)", desk: f1(result.flood.lengthM / 1000, 2) + " (reach)", run: (c) => f1(c.st.coverKm, 2) },
     { k: "Nearest wet cell to breach (m)", desk: "—", run: (c) => f0(c.st.nearestWetM) },
