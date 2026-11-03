@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 from crest.handoff import HandoffError, _dem_point, write_dam_folder, write_named_files
@@ -180,27 +181,86 @@ def screening_timeout(value=None) -> float | None:
     return None
 
 
+def _taskkill_tree(pid: int) -> bool:
+    """Force-kill a Windows process and its whole child tree. True if taskkill ran, False if it is unavailable.
+
+    proc.terminate() on Windows posts WM_CLOSE/TerminateProcess to qgis_process alone, leaving the LISFLOOD-FP /
+    ANUGA / HEC-RAS children it spawned running — they keep burning CPU and writing into the work folder after a
+    cancel or timeout. taskkill /T walks the tree; /F forces it.
+    """
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return True
+    except OSError:
+        return False
+
+
 def _stop(proc: subprocess.Popen) -> None:
-    """Stop qgis_process and what it started (its own process group on POSIX)."""
+    """Stop qgis_process and what it started: its process group on POSIX, its whole tree on Windows."""
     try:
         if os.name == "posix":
             os.killpg(proc.pid, signal.SIGTERM)
-        else:
+        elif not _taskkill_tree(proc.pid):
             proc.terminate()
         proc.wait(timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         try:
             if os.name == "posix":
                 os.killpg(proc.pid, signal.SIGKILL)
-            else:
+            elif not _taskkill_tree(proc.pid):
                 proc.kill()
         except OSError:
             pass
 
 
+# A 45-minute chain can emit tens of MB of progress text. The job manager holds every job's log in memory, so keep
+# only the head and tail of a run's output and note how much was dropped from the middle.
+_OUTPUT_HEAD_CHARS = 100_000
+_OUTPUT_TAIL_CHARS = 100_000
+
+
+def _collect_bounded(stream, head_cap: int = _OUTPUT_HEAD_CHARS, tail_cap: int = _OUTPUT_TAIL_CHARS) -> str:
+    """Read all of stream but retain only the first head_cap and last tail_cap characters, with a count of the
+    dropped middle. Reads in blocks so the full output is never held in memory at once."""
+    head: list[str] = []
+    head_len = 0
+    tail: deque[str] = deque()
+    tail_len = 0
+    dropped = 0
+    while True:
+        try:
+            block = stream.read(8192)
+        except (ValueError, OSError):
+            break  # stream closed while the process was being stopped
+        if not block:
+            break
+        if head_len < head_cap:
+            take = min(len(block), head_cap - head_len)
+            head.append(block[:take])
+            head_len += take
+            block = block[take:]
+            if not block:
+                continue
+        tail.append(block)
+        tail_len += len(block)
+        while tail_len > tail_cap and len(tail) > 1:
+            removed = tail.popleft()
+            tail_len -= len(removed)
+            dropped += len(removed)
+    text = "".join(head)
+    if dropped:
+        text += f"\n[... {dropped:,} characters of output omitted ...]\n"
+    return text + "".join(tail)
+
+
 def _run(cmd: list[str], timeout: float | None, cancel: threading.Event | None = None) -> tuple[int, str]:
     """Run cmd and return (exit code, output). timeout (seconds) gives 124, cancel.set() gives 130;
-    both stop the process (and its children) and keep the output so far."""
+    both stop the process (and its children) and keep the output so far. Very long output is kept head + tail only."""
     kwargs = {"start_new_session": True} if os.name == "posix" else {}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -209,8 +269,10 @@ def _run(cmd: list[str], timeout: float | None, cancel: threading.Event | None =
                                 errors="replace", **kwargs)
     except OSError as exc:
         return 127, f"Could not start {cmd[0]}: {exc}\n"
-    chunks: list[str] = []
-    reader = threading.Thread(target=lambda: chunks.append(proc.stdout.read() if proc.stdout else ""), daemon=True)
+    captured: list[str] = []
+    reader = threading.Thread(
+        target=lambda: captured.append(_collect_bounded(proc.stdout) if proc.stdout else ""), daemon=True
+    )
     reader.start()
     start = time.monotonic()
     stopped = None
@@ -230,7 +292,7 @@ def _run(cmd: list[str], timeout: float | None, cancel: threading.Event | None =
         pass
     if proc.stdout is not None and not reader.is_alive():
         proc.stdout.close()
-    out = "".join(chunks)
+    out = "".join(captured)
     if stopped == STOPPED_TIMEOUT:
         return stopped, out + f"\nStopped: the command ran longer than {timeout:g} s.\n"
     if stopped == STOPPED_CANCEL:
@@ -260,10 +322,10 @@ def _opt_num(cmd: list[str], flag: str, value) -> None:
     cmd.append(f"--{flag}={number}")
 
 
-def _prepare(dam: dict, analysis: dict, work: str | None, log, files=None):
+def _prepare(dam: dict, analysis: dict, work: str | None, log, files=None, append_status: bool = True):
     root = work_dir(work)
     try:
-        folder, notes = write_dam_folder(root, dam, analysis or {})
+        folder, notes = write_dam_folder(root, dam, analysis or {}, append_status=append_status)
     except HandoffError as exc:
         log(str(exc))
         return None
@@ -291,7 +353,9 @@ def _settings_arg(root: Path, log, only_ids: str | None = None) -> list[str]:
 
 
 def run_folder(dam: dict, analysis: dict, work: str | None, log, files=None) -> dict:
-    prepared = _prepare(dam or {}, analysis or {}, work, log, files)
+    # A plain folder export does not run a screening, so it does not append a screened status entry;
+    # repeated exports of the same dam would otherwise keep growing the status list (audit H3).
+    prepared = _prepare(dam or {}, analysis or {}, work, log, files, append_status=False)
     if prepared is None:
         return {"ok": False, "stopped": True, "folder": "", "work": ""}
     root, folder = prepared

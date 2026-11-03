@@ -5,8 +5,25 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
+
+# One lock per dam folder. The desktop server runs one thread per request, so two jobs on the same dam would both
+# read dam.json, merge, and write — the second clobbering the first (a lost field or status entry). Serialise the
+# read-merge-write per folder. Keyed by resolved path; the set stays tiny (a handful of dams per session).
+_folder_locks: dict[str, threading.Lock] = {}
+_folder_locks_guard = threading.Lock()
+
+
+def _folder_lock(folder: Path) -> threading.Lock:
+    key = str(folder)
+    with _folder_locks_guard:
+        lock = _folder_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _folder_locks[key] = lock
+        return lock
 
 PHRASE = "proposed — embankment inserted from the drawn line"
 FT = 0.3048
@@ -111,12 +128,16 @@ def _tied_datum_text(dam: dict, datum_block: dict) -> str | None:
     return "NAVD88 ft"
 
 
-def write_dam_folder(work: Path, dam: dict, analysis: dict) -> tuple[Path, list[str]]:
+def write_dam_folder(work: Path, dam: dict, analysis: dict, append_status: bool = True) -> tuple[Path, list[str]]:
     """<work>/dams/<id>/dam.json plus the drawn geometries and the hydrograph.
 
     An existing dam.json keeps values another tool already set. Crest fills only
-    empty fields and appends a screened status. A file that is not a suite
-    record is left untouched.
+    empty fields and, when append_status is true, appends one screened status entry.
+    A plain folder export passes append_status=false so repeated exports do not keep
+    growing the status list. A file that is not a suite record is left untouched.
+
+    The read-merge-write is serialised per folder (see _folder_lock) so two concurrent
+    jobs on the same dam cannot clobber each other's dam.json.
     """
     dam = dam or {}
     analysis = analysis or {}
@@ -162,72 +183,74 @@ def write_dam_folder(work: Path, dam: dict, analysis: dict) -> tuple[Path, list[
     # crs is the CRS of projected x/y. Lon/lat does not set it.
 
     path = folder / "dam.json"
-    if path.is_file():
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise HandoffError(f"{path} is not valid JSON. It was not overwritten.") from exc
-        if not isinstance(record, dict) or record.get("format") != FORMAT:
-            raise HandoffError(f"{path} is not an nd_dam_suite dam record. It was not overwritten.")
-    else:
-        record = {
-            "format": FORMAT,
-            "format_version": 1,
-            "fields": {},
-            "sources": {},
-            "status": [],
-            "conflicts": [],
-        }
-    fields = record.setdefault("fields", {})
-    sources = record.setdefault("sources", {})
-    if not isinstance(fields, dict) or not isinstance(sources, dict):
-        raise HandoffError(f"{path} has a damaged fields or sources block. It was not overwritten.")
-    when = datetime.now().isoformat(timespec="seconds")
-    for key, value in incoming.items():
-        if value in (None, ""):
-            continue
-        if fields.get(key) in (None, ""):
-            fields[key] = value
-            sources[key] = {"tool": TOOL, "version": VERSION, "when": when, "note": "Crest desk"}
-    existing = record.get("proposed_embankment")
-    if isinstance(existing, dict) and existing.get("line_xy"):
-        notes.append(
-            "Kept the proposed embankment already in dam.json. It already has a crest line in map coordinates."
-        )
-    elif line and crest is not None:
-        record["proposed_embankment"] = {
-            "phrase": PHRASE,
-            "dam_id": dam_id,
-            "line_lonlat": [[round(x, 7), round(y, 7)] for x, y in line],
-            "crest_m": round(float(crest) * FT, 3),
-            "crest_len_m": round(float(_num(dam.get("lengthFt")) or 0) * FT, 2),
-            "height_m": round(float(_num(dam.get("heightFt")) or 0) * FT, 3),
-            "crest_note": (
-                "line_xy is not set. Crest stored longitude and latitude. "
-                "The Runner inserts the embankment only after the line is projected to the DEM CRS."
-            ),
-        }
-        notes.append(
-            "line_xy is not set. The drawn line is longitude and latitude, so the Runner will not insert the embankment."
-        )
-    reasons = screen.get("reasons") if isinstance(screen.get("reasons"), list) else []
-    record.setdefault("status", []).append({
-        "step": "screened",
-        "tool": TOOL,
-        "version": VERSION,
-        "when": when,
-        "result": {
-            "level": screen.get("level"),
-            "level_label": screen.get("label"),
-            "method": dam.get("method"),
-            "failure_mode": dam.get("failureMode"),
-            "fitted_peak_cfs": _num(breach_block.get("peakCfs")),
-            "width_ft": _num(breach_block.get("widthFt")),
-            "notes": reasons,
-            "preview": True,
-        },
-    })
-    _dump(path, record)
+    with _folder_lock(folder):
+        if path.is_file():
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise HandoffError(f"{path} is not valid JSON. It was not overwritten.") from exc
+            if not isinstance(record, dict) or record.get("format") != FORMAT:
+                raise HandoffError(f"{path} is not an nd_dam_suite dam record. It was not overwritten.")
+        else:
+            record = {
+                "format": FORMAT,
+                "format_version": 1,
+                "fields": {},
+                "sources": {},
+                "status": [],
+                "conflicts": [],
+            }
+        fields = record.setdefault("fields", {})
+        sources = record.setdefault("sources", {})
+        if not isinstance(fields, dict) or not isinstance(sources, dict):
+            raise HandoffError(f"{path} has a damaged fields or sources block. It was not overwritten.")
+        when = datetime.now().isoformat(timespec="seconds")
+        for key, value in incoming.items():
+            if value in (None, ""):
+                continue
+            if fields.get(key) in (None, ""):
+                fields[key] = value
+                sources[key] = {"tool": TOOL, "version": VERSION, "when": when, "note": "Crest desk"}
+        existing = record.get("proposed_embankment")
+        if isinstance(existing, dict) and existing.get("line_xy"):
+            notes.append(
+                "Kept the proposed embankment already in dam.json. It already has a crest line in map coordinates."
+            )
+        elif line and crest is not None:
+            record["proposed_embankment"] = {
+                "phrase": PHRASE,
+                "dam_id": dam_id,
+                "line_lonlat": [[round(x, 7), round(y, 7)] for x, y in line],
+                "crest_m": round(float(crest) * FT, 3),
+                "crest_len_m": round(float(_num(dam.get("lengthFt")) or 0) * FT, 2),
+                "height_m": round(float(_num(dam.get("heightFt")) or 0) * FT, 3),
+                "crest_note": (
+                    "line_xy is not set. Crest stored longitude and latitude. "
+                    "The Runner inserts the embankment only after the line is projected to the DEM CRS."
+                ),
+            }
+            notes.append(
+                "line_xy is not set. The drawn line is longitude and latitude, so the Runner will not insert the embankment."
+            )
+        if append_status:
+            reasons = screen.get("reasons") if isinstance(screen.get("reasons"), list) else []
+            record.setdefault("status", []).append({
+                "step": "screened",
+                "tool": TOOL,
+                "version": VERSION,
+                "when": when,
+                "result": {
+                    "level": screen.get("level"),
+                    "level_label": screen.get("label"),
+                    "method": dam.get("method"),
+                    "failure_mode": dam.get("failureMode"),
+                    "fitted_peak_cfs": _num(breach_block.get("peakCfs")),
+                    "width_ft": _num(breach_block.get("widthFt")),
+                    "notes": reasons,
+                    "preview": True,
+                },
+            })
+        _dump(path, record)
 
     pieces = []
     for kind, feature in (

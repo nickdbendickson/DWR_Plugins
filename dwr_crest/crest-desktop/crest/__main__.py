@@ -44,6 +44,23 @@ _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 _cancels: dict[str, threading.Event] = {}
 
+#: Keep this many jobs so the desk can still poll a just-finished run; evict the oldest finished ones past it.
+#: Without a cap, finished jobs (each holding its whole log) accumulate for the life of the process.
+MAX_JOBS = 40
+
+
+def _evict_finished_locked() -> None:
+    """Drop the oldest finished jobs once over MAX_JOBS. Running jobs are never evicted. Call under _jobs_lock.
+
+    _jobs is insertion-ordered, so the finished ids come out oldest-first and the newest finished jobs are kept.
+    """
+    if len(_jobs) <= MAX_JOBS:
+        return
+    finished = [jid for jid, job in _jobs.items() if job.get("done")]
+    for jid in finished[: len(_jobs) - MAX_JOBS]:
+        _jobs.pop(jid, None)
+        _cancels.pop(jid, None)
+
 
 def _job_log(job: dict, line: str) -> None:
     with _jobs_lock:
@@ -70,6 +87,7 @@ def start_job(
     with _jobs_lock:
         _jobs[job_id] = job
         _cancels[job_id] = cancel
+        _evict_finished_locked()
 
     def work_job():
         try:

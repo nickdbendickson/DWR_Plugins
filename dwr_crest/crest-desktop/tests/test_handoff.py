@@ -14,9 +14,20 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
+import io  # noqa: E402
+
+import crest.__main__ as m  # noqa: E402
 from crest.handoff import HandoffError, write_dam_folder, write_named_files  # noqa: E402
 from crest.layers import download_aoi, use_offline_pack  # noqa: E402
-from crest.qgis_run import chain_names, chain_results, run_folder, run_model, run_screening  # noqa: E402
+from crest.qgis_run import (  # noqa: E402
+    _collect_bounded,
+    _taskkill_tree,
+    chain_names,
+    chain_results,
+    run_folder,
+    run_model,
+    run_screening,
+)
 
 DAM = {
     "nid": "ND00199",
@@ -523,6 +534,104 @@ class GateTests(unittest.TestCase):
     def test_read_back_helpers_without_outputs(self):
         self.assertEqual(chain_names(self.root, "ND00199"), [])
         self.assertEqual(chain_results(self.root, ["DWR-2801"]), [])
+
+
+class RobustnessTests(unittest.TestCase):
+    """Audit H1 (Windows tree-kill), H2 (bounded output + job eviction), H3 (per-folder lock + status gating)."""
+
+    # ---- H3: status append is gated, and a plain folder export does not log a screening -------------------
+    def test_append_status_false_writes_no_screened_entry(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder, _ = write_dam_folder(Path(d), DAM, ANALYSIS, append_status=False)
+            record = json.loads((folder / "dam.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["status"], [])
+            # The merged fields are still written — only the screening log entry is withheld.
+            self.assertEqual(record["fields"]["height_ft"], 27.5)
+
+    def test_plain_folder_export_does_not_grow_the_status_list(self):
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d) / "work"
+            log = lambda line: None
+            for _ in range(3):
+                result = run_folder(DAM, ANALYSIS, str(work), log)
+            record = json.loads((Path(result["folder"]) / "dam.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["status"], [], "a plain folder export must not append a screened status")
+
+    def test_screening_still_appends_one_status_per_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder, _ = write_dam_folder(Path(d), DAM, ANALYSIS)  # default append_status=True
+            record = json.loads((folder / "dam.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(record["status"]), 1)
+            self.assertEqual(record["status"][-1]["step"], "screened")
+
+    def test_concurrent_writes_to_one_folder_lose_no_status_entry(self):
+        # Without the per-folder lock, concurrent read-merge-write on the same dam.json would drop appends.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            n = 12
+            start = threading.Event()
+            errors: list[Exception] = []
+
+            def writer():
+                start.wait()
+                try:
+                    write_dam_folder(root, DAM, ANALYSIS)  # each appends one screened status
+                except Exception as exc:  # noqa: BLE001 — surface any error to the assertion
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=writer) for _ in range(n)]
+            for t in threads:
+                t.start()
+            start.set()
+            for t in threads:
+                t.join(timeout=20)
+            self.assertEqual(errors, [])
+            folder = root / "dams" / "ND00199"
+            record = json.loads((folder / "dam.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(record["status"]), n, "every concurrent write must land its status entry")
+
+    # ---- H2: run output is kept head + tail only -------------------------------------------------------------
+    def test_collect_bounded_keeps_head_and_tail_and_notes_the_drop(self):
+        block = 8192
+        data = "A" * block + "B" * (block * 5) + "C" * block
+        text = _collect_bounded(io.StringIO(data), head_cap=block, tail_cap=block)
+        self.assertTrue(text.startswith("A" * 100))
+        self.assertTrue(text.rstrip().endswith("C" * 100))
+        self.assertNotIn("B", text, "the middle must be dropped, not retained")
+        self.assertIn("omitted", text)
+        self.assertLess(len(text), len(data))
+
+    def test_collect_bounded_keeps_short_output_whole(self):
+        text = _collect_bounded(io.StringIO("short output\n"), head_cap=8192, tail_cap=8192)
+        self.assertEqual(text, "short output\n")
+
+    # ---- H2: finished jobs are evicted past the cap, running jobs never are ----------------------------------
+    def test_finished_jobs_evicted_past_cap_running_kept(self):
+        with m._jobs_lock:
+            saved_jobs = dict(m._jobs)
+            saved_cancels = dict(m._cancels)
+            m._jobs.clear()
+            m._cancels.clear()
+            m._jobs["run"] = {"id": "run", "done": False}  # a running job, inserted first (oldest)
+            for i in range(m.MAX_JOBS + 5):
+                m._jobs[f"d{i}"] = {"id": f"d{i}", "done": True}
+            m._evict_finished_locked()
+            ids = list(m._jobs)
+            # restore
+            m._jobs.clear()
+            m._jobs.update(saved_jobs)
+            m._cancels.clear()
+            m._cancels.update(saved_cancels)
+        self.assertEqual(len(ids), m.MAX_JOBS)
+        self.assertIn("run", ids, "a running job is never evicted")
+        self.assertNotIn("d0", ids, "the oldest finished job is evicted first")
+        self.assertIn(f"d{m.MAX_JOBS + 4}", ids, "the newest finished job is kept")
+
+    # ---- H1: Windows tree-kill helper degrades gracefully when taskkill is absent ----------------------------
+    def test_taskkill_tree_returns_bool_and_never_raises(self):
+        # On this POSIX CI host taskkill is absent, so the helper returns False (the caller then falls back to
+        # terminate()/kill()); on Windows it runs taskkill and returns True. Either way it must not raise.
+        self.assertIsInstance(_taskkill_tree(2_000_000_000), bool)
 
 
 if __name__ == "__main__":
