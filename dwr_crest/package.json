@@ -4,7 +4,20 @@
   "sideEffects": false,
   "type": "module",
   "overrides": {
-    "nf3": "0.3.17"
+    "nf3": "0.3.17",
+    "seroval": "^1.6.11",
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    },
+    "eslint": {
+      "minimatch": "^11.0.1"
+    },
+    "@eslint/config-array": {
+      "minimatch": "^11.0.1"
+    },
+    "@eslint/eslintrc": {
+      "minimatch": "^11.0.1"
+    }
   },
   "scripts": {
     "dev": "node scripts/with-app-env.mjs vite dev --host 0.0.0.0 --port 8080",
@@ -90,7 +103,7 @@
     "typescript": "^5.7.0",
     "vaul": "^1.1.2",
     "vite": "^8.2.0",
-    "zod": "^4.4.0",
+    "zod": "^4.6.6",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
