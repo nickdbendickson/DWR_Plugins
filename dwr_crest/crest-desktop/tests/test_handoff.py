@@ -141,6 +141,25 @@ class FolderTests(unittest.TestCase):
             self.assertNotIn("streambed_ft", fields2)
             self.assertNotIn("streambed_datum", fields2)
 
+    def test_labels_tied_elevations_navd88_whatever_the_stated_datum(self):
+        cases = [
+            # Local 0-300 ft crest tied to the DEM: the written values are NAVD88, not "local".
+            ({"statedDatum": "Local"}, {"offsetFt": 1509.76, "warnings": []}, "NAVD88 ft"),
+            # NGVD29 shifted by VERTCON: NAVD88.
+            ({"statedDatum": "NGVD29"}, {"offsetFt": 0.4, "warnings": []}, "NAVD88 ft"),
+            # NGVD29 with no shift available: still NGVD29.
+            ({"statedDatum": "NGVD29"}, {"offsetFt": None, "warnings": ["NGVD29 offset unknown"]}, "NGVD29 ft"),
+            # Local crest with no DEM tie: left as stated.
+            ({"statedDatum": "Local"}, {"offsetFt": None, "warnings": ["No DEM tie. Crest left unconverted."]}, "local"),
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            for i, (dam_patch, datum_patch, want) in enumerate(cases):
+                analysis = {**ANALYSIS, "datum": {**ANALYSIS["datum"], **datum_patch}}
+                folder, _ = write_dam_folder(Path(d) / str(i), {**DAM, **dam_patch}, analysis)
+                fields = json.loads((folder / "dam.json").read_text(encoding="utf-8"))["fields"]
+                self.assertEqual(fields["top_of_dam_datum"], want, dam_patch)
+                self.assertEqual(fields["streambed_datum"], want, dam_patch)
+
     def test_writes_suite_record_and_keeps_other_tools(self):
         with tempfile.TemporaryDirectory() as d:
             folder, notes = write_dam_folder(Path(d), DAM, ANALYSIS)

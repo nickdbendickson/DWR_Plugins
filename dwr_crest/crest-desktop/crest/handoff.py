@@ -93,6 +93,24 @@ def _dem_point(dam: dict):
     return [x, y]
 
 
+def _tied_datum_text(dam: dict, datum_block: dict) -> str | None:
+    """The datum of the desk's tied elevations (crestNavdFt, streambedNavdFt, poolNavdFt).
+
+    The desk converts stated elevations to NAVD88 (an NGVD29 offset, or a local 0-300 ft crest tied to the DEM crest),
+    so the values are NAVD88 unless the tie failed. Labelling them with the stated datum put a DEM-tied ~1,630 ft crest
+    in dam.json as "local", and an NGVD29 dam's shifted value as "NGVD29 ft".
+    """
+    stated = dam.get("statedDatum") or ""
+    warnings = datum_block.get("warnings") if isinstance(datum_block.get("warnings"), list) else []
+    if any(str(w).startswith("No DEM tie") for w in warnings):
+        # A local crest that could not be tied is left as stated.
+        return {"Local": "local", "NGVD29": "NGVD29 ft", "NAVD88": "NAVD88 ft"}.get(stated)
+    if stated == "NGVD29" and datum_block.get("offsetFt") is None:
+        # No VERTCON shift or entered offset: the values are still NGVD29.
+        return "NGVD29 ft"
+    return "NAVD88 ft"
+
+
 def write_dam_folder(work: Path, dam: dict, analysis: dict) -> tuple[Path, list[str]]:
     """<work>/dams/<id>/dam.json plus the drawn geometries and the hydrograph.
 
@@ -116,8 +134,7 @@ def write_dam_folder(work: Path, dam: dict, analysis: dict) -> tuple[Path, list[
     crest = _num(datum_block.get("crestNavdFt"))
     # The breach bottom, tied the same way as the crest (Docs & QA N3). Written with its own datum field.
     streambed = _num(datum_block.get("streambedNavdFt"))
-    datum = dam.get("statedDatum") or ""
-    datum_text = {"Local": "local", "NGVD29": "NGVD29 ft", "NAVD88": "NAVD88 ft"}.get(datum)
+    datum_text = _tied_datum_text(dam, datum_block)
     nid = str(dam.get("nidId") or "")
     if not nid and re.fullmatch(r"[A-Za-z]{2}\d+", str(dam.get("nid") or "")):
         nid = str(dam.get("nid"))
