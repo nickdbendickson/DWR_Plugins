@@ -16,6 +16,7 @@ import {
   type SortKey,
   sortReceptors,
   type DashFlag,
+  boundsOf,
   routedVolumes,
 } from "@/lib/crest/dashboard";
 import { num } from "@/lib/crest/format";
@@ -25,7 +26,7 @@ import { receptorPoints, SOURCE_LABEL } from "@/lib/crest/results";
 import { runKey, useResults } from "@/lib/crest/results-store";
 import type { Analysis, DamRecord, ResultSource } from "@/lib/crest/types";
 import type { DashPoint } from "./DashboardMap";
-import type { Bounds, Overlay } from "./ResultsMap";
+import type { Overlay } from "./ResultsMap";
 import { useAnalysisOfRecord } from "./results-flow";
 
 const DashboardMap = lazy(() =>
@@ -39,24 +40,6 @@ const CLASS_COLOR: Record<string, string> = {
 };
 const cls = (r: string | null) =>
   r === "High" ? "high" : r === "Medium" ? "sig" : r === "Low" ? "low" : "none";
-
-function boundsOf(fc: FloodStrip | null): Bounds | null {
-  if (!fc) return null;
-  let w = Infinity,
-    s = Infinity,
-    e = -Infinity,
-    n = -Infinity;
-  const walk = (c: unknown): void => {
-    if (Array.isArray(c) && typeof c[0] === "number") {
-      w = Math.min(w, c[0] as number);
-      e = Math.max(e, c[0] as number);
-      s = Math.min(s, c[1] as number);
-      n = Math.max(n, c[1] as number);
-    } else if (Array.isArray(c)) c.forEach(walk);
-  };
-  for (const f of fc.features) walk((f.geometry as { coordinates: unknown }).coordinates);
-  return Number.isFinite(w) ? { west: w, south: s, east: e, north: n } : null;
-}
 
 function toUrl(px: Uint8ClampedArray, w: number, h: number) {
   const c = document.createElement("canvas");
@@ -74,7 +57,7 @@ function toUrl(px: Uint8ClampedArray, w: number, h: number) {
  * record and saved fast layer as the Flood and Report steps; it changes nothing.
  */
 export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result: Analysis }) {
-  const { result, label: source } = useAnalysisOfRecord(dam, deskResult);
+  const { result, ref, label: source } = useAnalysisOfRecord(dam, deskResult);
   const online = typeof navigator === "undefined" ? true : navigator.onLine;
   const outline = useMemo(() => outlineState(dam, result, online), [dam, result, online]);
   const method = dashMethod(outline);
@@ -210,7 +193,7 @@ export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result:
         <ImpactsTable receptors={searchReceptors(result.flood.receptors, q)} gated={gated} />
       </div>
 
-      <StatusBar flags={flags} critical={critical} acked={acked} onAck={() => setAcked(true)} />
+      <StatusBar source={source} modeled={ref != null} flags={flags} critical={critical} acked={acked} onAck={() => setAcked(true)} />
       <p className="disclaimer">{DISCLAIMER}</p>
     </section>
   );
@@ -516,11 +499,15 @@ function pageWindow(page: number, pages: number): number[] {
 const SEV_WORD = { critical: "Critical", warning: "Warning", info: "Note" } as const;
 
 function StatusBar({
+  source,
+  modeled,
   flags,
   critical,
   acked,
   onAck,
 }: {
+  source: string;
+  modeled: boolean;
   flags: DashFlag[];
   critical?: DashFlag;
   acked: boolean;
@@ -529,7 +516,9 @@ function StatusBar({
   return (
     <footer className="status-bar" data-testid="dash-status">
       <span>
-        <span className="dot">●</span> Model completed
+        {/* Honest status: a completed 2-D model only when one was imported; otherwise the desk schematic. */}
+        <span className="dot">●</span>{" "}
+        {modeled ? `${source} — model completed` : `${source} — screening estimate, no 2-D model run`}
       </span>
       {flags.map((f) => (
         <span key={f.key} className={"flag-pill " + f.sev} data-testid={`flag-${f.sev}`}>

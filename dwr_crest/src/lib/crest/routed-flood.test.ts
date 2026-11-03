@@ -49,6 +49,18 @@ describe("buildRoutedFlood on ND00199 (30 m fixture)", () => {
     assert.equal(typeof RF.stats.reachedEdge, "boolean");
   });
 
+  it("carries the volume-ratio provenance fields", () => {
+    assert.ok(RF.ok);
+    if (!RF.ok) return;
+    assert.equal(RF.stats.releasedAcFt, Math.round(RESULT.breach.volumeAcFt));
+    assert.ok(RF.stats.fillAcFt >= 0);
+    // volumeRatio is fillAcFt over the released volume, so it reproduces the fill from the ratio.
+    if (RF.stats.releasedAcFt > 0) {
+      const expected = Math.round((RF.stats.fillAcFt / RF.stats.releasedAcFt) * 10) / 10;
+      assert.equal(RF.stats.volumeRatio, expected);
+    }
+  });
+
   it("fails cleanly when the breach has no hydrograph", async () => {
     const noSeries = { ...RESULT, breach: { ...RESULT.breach, series: [] } };
     const r = await buildRoutedFlood(ND, noSeries, DEM);

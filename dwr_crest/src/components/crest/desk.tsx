@@ -63,6 +63,7 @@ import { ResultsStep } from "./ResultsStep";
 import { useAnalysisOfRecord, useResultsSync, useStripOfRecord } from "./results-flow";
 import { PaperReport } from "./PaperReport";
 import { Dashboard } from "./Dashboard";
+import { HybridSetup } from "./HybridSetup";
 import { ViewExport } from "./ViewExport";
 
 // Leaflet touches `window` when it loads, so the map is a client-only chunk.
@@ -182,6 +183,21 @@ export function Desk() {
             })}
           </nav>
 
+          {step === "setup" ? (
+            <HybridSetup
+              dam={dam}
+              result={result}
+              renderStep={(k, onStatus) =>
+                k === "record" ? (
+                  <RecordStep dam={dam} result={result} />
+                ) : k === "breach" ? (
+                  <BreachStep dam={dam} result={result} />
+                ) : (
+                  <TerrainStep dam={dam} result={result} onStatus={onStatus} />
+                )
+              }
+            />
+          ) : null}
           {step === "record" ? <RecordStep dam={dam} result={result} /> : null}
           {step === "breach" ? <BreachStep dam={dam} result={result} /> : null}
           {step === "flood" ? <FloodStep dam={dam} result={result} /> : null}
@@ -528,10 +544,33 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
       <div className="grid grid-cols-3 gap-px overflow-hidden rounded-sm bg-line">
         <Stat k="Max depth" v={`${num(result.flood.maxDepthFt, 1)} ft`} />
         <Stat k="Wet area" v={`${num(result.flood.acres, 0)} ac`} />
-        <Stat k="Fastest seed (est.)" v={`${num(result.flood.maxVelocityFps, 1)} ft/s`} />
+        {/* 0 means no receptor velocity was estimated (none entered, or none flooded) — show "—", not a false 0.0. */}
+        <Stat k="Fastest seed (est.)" v={result.flood.maxVelocityFps ? `${num(result.flood.maxVelocityFps, 1)} ft/s` : "—"} />
       </div>
       <AoiNote flood={result.flood} />
     </section>
+  );
+}
+
+/** The guided setup's terrain step: the Flood step's terrain build panel, reporting its progress to the step rail. */
+function TerrainStep({
+  dam,
+  result,
+  onStatus,
+}: {
+  dam: DamRecord;
+  result: ReturnType<typeof analyze>;
+  onStatus: (s: { busy: string | null; error: string | null }) => void;
+}) {
+  const online = useOnline();
+  const outline = useMemo(() => outlineState(dam, result, online), [dam, result, online]);
+  return outline.state === "none" ? (
+    <div className="rounded-md border border-line bg-card p-4">
+      <h3 className="text-lg">Terrain inundation (approximate)</h3>
+      <p className="mt-1 text-sm text-muted">{outline.message}</p>
+    </div>
+  ) : (
+    <OutlinePanel dam={dam} result={result} outline={outline} onStatus={onStatus} />
   );
 }
 
@@ -541,10 +580,22 @@ const breathe = () => new Promise<void>((r) => setTimeout(r, 0));
  * The terrain outline: built on request from one 3DEP terrain request (about 3.5 MB for a 10 km reach), saved on the
  * dam so it shows offline. The build runs in short chunks so the page stays responsive.
  */
-function OutlinePanel({ dam, result, outline }: { dam: DamRecord; result: ReturnType<typeof analyze>; outline: OutlineState }) {
+function OutlinePanel({
+  dam,
+  result,
+  outline,
+  onStatus,
+}: {
+  dam: DamRecord;
+  result: ReturnType<typeof analyze>;
+  outline: OutlineState;
+  /** The guided setup's step rail listens here for the build's progress and errors. */
+  onStatus?: (s: { busy: string | null; error: string | null }) => void;
+}) {
   const update = useDesk((s) => s.update);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => onStatus?.({ busy, error }), [busy, error, onStatus]);
   if (outline.state === "none") return null;
   const build = async () => {
     const io = outlineInputs(dam, result);
@@ -1361,6 +1412,10 @@ function StepNav({ step, setStep, blocked }: { step: StepId; setStep: (s: StepId
 function ExportPanel({ dam, result, desk }: { dam: DamRecord; result: ReturnType<typeof analyze>; desk: ReturnType<typeof analyze> }) {
   const update = useDesk((s) => s.update);
   const root = (dam.nid || dam.id).toLowerCase().replace(/[^a-z0-9]/g, "_");
+  // UTM zone for the dam's longitude, so the grid hint matches the zone the export actually projects into
+  // (western ND is 13N, central/eastern 14N) rather than always claiming 14N.
+  const utmZone = dam.lon != null && Number.isFinite(dam.lon) ? Math.floor((dam.lon + 180) / 6) + 1 : null;
+  const utmLabel = utmZone ? `UTM ${utmZone}N` : "UTM (zone for the dam's longitude)";
   const lisflood = useMemo(() => {
     try {
       return {
@@ -1510,18 +1565,18 @@ function ExportPanel({ dam, result, desk }: { dam: DamRecord; result: ReturnType
         <OptNumField
           label="Point X (DEM CRS, m)"
           value={dam.lisflood?.pointX}
-          placeholder="breach point in UTM 14N"
+          placeholder={`breach point in ${utmLabel}`}
           onChange={(pointX) => update({ lisflood: { ...dam.lisflood, pointX } })}
         />
         <OptNumField
           label="Point Y (DEM CRS, m)"
           value={dam.lisflood?.pointY}
-          placeholder="breach point in UTM 14N"
+          placeholder={`breach point in ${utmLabel}`}
           onChange={(pointY) => update({ lisflood: { ...dam.lisflood, pointY } })}
         />
       </div>
       <p className="mt-1 text-xs text-muted">
-        Default grid: NAD83 / UTM 14N at 10 m, point at the drawn breach point (else the record lat/lon). Leave blank for the
+        Default grid: NAD83 / {utmLabel} at 10 m, point at the drawn breach point (else the record lat/lon). Leave blank for the
         default; enter both X and Y for another DEM (e.g. the Runner&apos;s EPSG:5070 30 m grid).
       </p>
       <p className="mt-2 text-xs whitespace-pre-line text-muted">{lisflood.pkg ? lisflood.pkg.notes : lisflood.error}</p>

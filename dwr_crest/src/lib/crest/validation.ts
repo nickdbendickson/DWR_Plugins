@@ -119,7 +119,9 @@ export function rasterizeCandidate(cand: Candidate, ref: RefLayer): CandRaster {
   let arrival: Float32Array | null = null;
   if (cand.kind === "polygons") {
     for (const f of cand.features) {
-      if (!f.geometry) continue;
+      // Skip non-area features: the flood strip mixes 911 Point features in with its polygon, and a Point's
+      // coordinates are a bare [lon, lat], which would feed a number into fillPolygon ("rings is not iterable").
+      if (!f.geometry || (f.geometry.type !== "Polygon" && f.geometry.type !== "MultiPolygon")) continue;
       const d = featureDepth(f);
       const polys = f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates;
       for (const rings of polys)

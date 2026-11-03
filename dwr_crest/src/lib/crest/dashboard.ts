@@ -3,6 +3,7 @@
  * the dashboard's flags, sorting and paging the structure table, the hydrograph peak); the view is
  * src/components/crest/Dashboard.tsx.
  */
+import type { FloodStrip } from "./floodstrip.ts";
 import type { OutlineState } from "./outline.ts";
 import { PAPER_DISCLAIMER } from "./paper.ts";
 import type { Analysis } from "./types.ts";
@@ -121,16 +122,24 @@ export function dashboardFlags(
 }
 
 /**
- * The fast layer's wet and released volumes, for the volume flag's severity. The saved routed summary keeps only the
- * yes/no flag, so the numbers come from the note src/lib/crest/routed-flood.ts writes when the flag is raised
- * ("The fill lays down N ac-ft, more than the breach releases (M ac-ft) ..."). The reservoir volume is the record's
- * storage. Null when there is no such note (no flag, or an older saved layer).
+ * The fast layer's wet and released volumes, for the volume flag's severity. The routed summary now carries them as
+ * fillAcFt/releasedAcFt (the provenance fields), so read those when present; fall back to the note
+ * src/lib/crest/routed-flood.ts writes when the flag is raised ("The fill lays down N ac-ft, more than the breach
+ * releases (M ac-ft) ...") for layers saved before those fields existed. The reservoir volume is the record's storage.
+ * Null when there is no flag or no recoverable numbers.
  */
 export function routedVolumes(
   outline: OutlineState,
   storageAcFt: number,
 ): { wet: number; release: number; reservoir?: number } | null {
   if (outline.state !== "ready" || !outline.routed?.volumeFlag) return null;
+  const r = outline.routed;
+  if (r.releasedAcFt != null && r.releasedAcFt > 0 && r.fillAcFt != null)
+    return {
+      wet: r.fillAcFt,
+      release: r.releasedAcFt,
+      reservoir: storageAcFt > 0 ? storageAcFt : undefined,
+    };
   for (const n of outline.routed.notes) {
     const m =
       /The fill lays down ([\d.]+) ac-ft, more than the breach releases \(([\d.]+) ac-ft\)/.exec(n);
@@ -204,6 +213,27 @@ export function searchReceptors(rows: Receptor[], q: string): Receptor[] {
 export function peakOf(series: Analysis["breach"]["series"]): { tHr: number; qCfs: number } | null {
   if (!series.length) return null;
   return series.reduce((m, p) => (p.qCfs > m.qCfs ? p : m), series[0]);
+}
+
+export type Bounds = { west: number; south: number; east: number; north: number };
+
+/** The lon/lat box around a depth layer (strip or fast-layer polygons), for fitting the map. */
+export function boundsOf(fc: FloodStrip | null): Bounds | null {
+  if (!fc) return null;
+  let w = Infinity,
+    s = Infinity,
+    e = -Infinity,
+    n = -Infinity;
+  const walk = (c: unknown): void => {
+    if (Array.isArray(c) && typeof c[0] === "number") {
+      w = Math.min(w, c[0] as number);
+      e = Math.max(e, c[0] as number);
+      s = Math.min(s, c[1] as number);
+      n = Math.max(n, c[1] as number);
+    } else if (Array.isArray(c)) c.forEach(walk);
+  };
+  for (const f of fc.features) walk((f.geometry as { coordinates: unknown }).coordinates);
+  return Number.isFinite(w) ? { west: w, south: s, east: e, north: n } : null;
 }
 
 export type LayerKey = "depth" | "arrival" | "structures" | "hillshade" | "runnerOverlay";
