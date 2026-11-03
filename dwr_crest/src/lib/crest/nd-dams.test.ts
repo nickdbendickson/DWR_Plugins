@@ -399,19 +399,24 @@ describe("stored desk migration (crest-desk-v2, version 0 -> 1)", () => {
 });
 
 describe("a new record from NID with no dam line (full test 2026-10-30)", () => {
-  it("has no flood strip, so the Screen step reads Not assessed, not High from the generic seeds", () => {
-    // the elevations the full test entered (the ND00199 sample's), the receptors left as the generic seeds
+  it("has no flood strip and no looked-up 911 points, so the Screen step holds at Review, not High", () => {
+    // A record filled from the NID takes its structures from ND 911 address points (receptorSource "nd911") and starts
+    // with none; with no dam line there is also no flood strip. Either alone holds the screen at Review, so an empty
+    // list never reads as a real class. (The full-test record once carried generic seeds and read "Not assessed"; a
+    // picked NID record is nd911 now, so the 911-not-looked-up guard is what protects it.)
     const sample = SAMPLE_DAMS.find((d) => d.nid === "ND00199")!;
     const { crestFt, streambedFt, demCrestFt, statedDatum, heightFt, storageAcFt } = sample;
     const r = { ...filled("ND00199"), crestFt, streambedFt, demCrestFt, statedDatum, heightFt, storageAcFt };
     assert.equal(r.geometry?.damLine, undefined);
+    assert.equal(r.receptorSource, "nd911");
+    assert.equal(r.receptors.length, 0);
     const a = analyze(r);
     assert.equal(a.screen.level, "Review");
-    assert.equal(a.screen.label, "Not assessed (downstream direction unknown)");
-    assert.match(a.screen.reasons[0], /^Not assessed\. Downstream direction unknown: .*would screen High \(flagged: judgment zone\), which is not a screen of this site\. Enter the real receptors too\.$/);
-    // receptors the engineer entered are screened in full, as before (a known High is never hidden)
-    const own = analyze({ ...r, receptors: r.receptors.map((x) => ({ ...x, id: `my-${x.id}` })) });
-    assert.notEqual(own.screen.label, "Not assessed (downstream direction unknown)");
+    assert.equal(a.screen.label, "Review (911 points not looked up)");
+    assert.match(a.screen.reasons[0], /^Structures for this dam come from ND 911 address points/);
+    // A record the engineer screens in full (real receptors, not nd911) is not forced to Review by this guard.
+    const own = analyze({ ...r, receptorSource: undefined, receptors: sample.receptors.map((x) => ({ ...x, id: `my-${x.id}` })), geometry: sample.geometry });
+    assert.notEqual(own.screen.label, "Review (911 points not looked up)");
   });
 
   it("the same record with the dam line drawn is screened as before", () => {

@@ -38,9 +38,23 @@ export type RoutedFloodOptions = {
   volumeLimit?: boolean;
   /** Floor on the lateral decay slope (m/m); higher stops the sideways spread sooner. Default 0.0005. */
   slopeFloor?: number;
+  /**
+   * Cap a floodplain cell's depth at the channel stage that fed it plus this margin (m). Off the channel the carried
+   * water surface decays only slowly, so where the terrain falls away it would make many-metre-deep water the breach
+   * never supplies; the footprint stays about right but the depth (and so the volume) blows out. Default 1.0.
+   */
+  floodplainDepthMarginM?: number;
   /** Called every so many cells during the DEM trace so a long build can let the page breathe. */
   yieldFn?: () => Promise<void>;
 };
+
+/**
+ * Default margin (m) for the floodplain depth cap. A floodplain cell is allowed to be at most its seeding channel
+ * stage plus this much deep. One metre keeps the realistic floodplain depth (the baseline's DWR-2801 depth bias falls
+ * from +21.5 ft to +3.4 ft against the LISFLOOD-FP run, matching the model, with no loss of extent or CSI) while
+ * removing the spurious deep pours the bare envelope invents where the ground drops away from the channel.
+ */
+export const FLOODPLAIN_DEPTH_MARGIN_M = 1.0;
 
 export type RoutedFloodResult = {
   ok: true;
@@ -77,18 +91,22 @@ export async function buildRoutedFlood(
   opts: RoutedFloodOptions = {},
 ): Promise<RoutedFloodResult | RoutedFloodFail> {
   const series = result.breach.series;
-  if (!series || series.length < 2) return { ok: false, reason: "No routed flood: the breach has no outflow hydrograph." };
+  if (!series || series.length < 2)
+    return { ok: false, reason: "No routed flood: the breach has no outflow hydrograph." };
 
   const built = await buildOutline(dam, result, g, { yieldFn: opts.yieldFn });
-  if (!built.ok) return { ok: false, reason: built.reason.replace("No terrain outline", "No routed flood") };
+  if (!built.ok)
+    return { ok: false, reason: built.reason.replace("No terrain outline", "No routed flood") };
   const centerline = built.centerline;
-  if (centerline.pts.length < 2) return { ok: false, reason: "No routed flood: the traced channel is too short." };
+  if (centerline.pts.length < 2)
+    return { ok: false, reason: "No routed flood: the traced channel is too short." };
 
   const sections = cutSections(g, centerline, {
     stationM: opts.stationM ?? 50,
     halfWidthM: opts.sectionHalfWidthM ?? 500,
   });
-  if (sections.length < 2) return { ok: false, reason: "No routed flood: fewer than two usable cross-sections were cut." };
+  if (sections.length < 2)
+    return { ok: false, reason: "No routed flood: fewer than two usable cross-sections were cut." };
 
   const tables = sections.map((s) => sectionTable(s));
   // The breach outflow hydrograph (SI) is the routing inflow at the first section.
@@ -103,6 +121,7 @@ export async function buildRoutedFlood(
     availableVolumeM3: result.breach.volumeAcFt * ACFT,
     volumeLimit: opts.volumeLimit ?? false,
     slopeFloor: opts.slopeFloor,
+    maxFloodplainDepthM: opts.floodplainDepthMarginM ?? FLOODPLAIN_DEPTH_MARGIN_M,
   });
 
   const N = g.width * g.height;
@@ -113,7 +132,10 @@ export async function buildRoutedFlood(
   const peakOutCfs = routed.sections[routed.sections.length - 1].peakCms / CFS;
   const channelM = centerline.pts.length ? centerline.pts[centerline.pts.length - 1].x : 0;
   const notes = [...routed.notes];
-  if (fill.reachedEdge) notes.push("The routed flood reached the edge of the DEM; it would spread further than the DEM shows.");
+  if (fill.reachedEdge)
+    notes.push(
+      "The routed flood reached the edge of the DEM; it would spread further than the DEM shows.",
+    );
   if (fill.volumeFlag)
     notes.push(
       `The fill lays down ${(fill.volumeM3 / ACFT).toFixed(0)} ac-ft, more than the breach releases (${result.breach.volumeAcFt.toFixed(0)} ac-ft): the water-surface envelope is wider than the released volume supports.`,

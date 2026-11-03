@@ -102,7 +102,9 @@ describe("fillFlood: bathtub on a sloping valley", () => {
     assert.ok(r.depthM[idx(80, 0)] > 0, "80 m from the channel is wet");
     assert.equal(r.depthM[idx(130, 0)], 0, "130 m from the channel is dry");
     // Depth falls with distance from the thalweg.
-    assert.ok(r.depthM[idx(0, 0)] > r.depthM[idx(60, 0)] && r.depthM[idx(60, 0)] > r.depthM[idx(95, 0)]);
+    assert.ok(
+      r.depthM[idx(0, 0)] > r.depthM[idx(60, 0)] && r.depthM[idx(60, 0)] > r.depthM[idx(95, 0)],
+    );
   });
 
   it("the water surface equals ground + depth and never exceeds the seeded surface", () => {
@@ -142,7 +144,41 @@ describe("fillFlood: backfill and spillover", () => {
     });
     const rGate = fillFlood(gated, line, sections, { minDepthM: 0.03 });
     const { idx: iGate } = frame(gated);
-    assert.ok(rGate.depthM[iGate(300, 0)] > 0, "far basin wet after the saddle drops below the surface");
+    assert.ok(
+      rGate.depthM[iGate(300, 0)] > 0,
+      "far basin wet after the saddle drops below the surface",
+    );
+  });
+});
+
+describe("fillFlood: floodplain depth cap", () => {
+  // Channel seeds on a plain at 103 with a flat routed surface 104 (seed stage 1 m); a pit drops to 99 beside it.
+  const line = straight(500, -500);
+  const sections: RoutedSection[] = [];
+  for (let x = 0; x <= 1000; x += 50) sections.push(sec(x, 104, 0.001, 102));
+  const dem = synthDem(160, 10, (e, n) => (Math.hypot(e - 150, n) < 25 ? 99 : 103));
+  const { idx } = frame(dem);
+
+  it("caps a floodplain cell's depth at its seed stage plus the margin, without moving the wet edge", () => {
+    const uncapped = fillFlood(dem, line, sections, { minDepthM: 0.03 });
+    const capped = fillFlood(dem, line, sections, { minDepthM: 0.03, maxFloodplainDepthM: 1 });
+    const pit = idx(150, 0);
+    // Without a cap the pit fills to the 104 surface (~5 m); with the cap the seed stage is 1 m, so depth ≤ 1 + 1 = 2 m.
+    assert.ok(uncapped.depthM[pit] > 4, `uncapped pit ${uncapped.depthM[pit]}`);
+    assert.ok(
+      capped.depthM[pit] <= 2 + 1e-6 && capped.depthM[pit] > 1.5,
+      `capped pit ${capped.depthM[pit]}`,
+    );
+    // The footprint is unchanged: the same cells are wet, the cap only trims depth (and so the laid-down volume).
+    assert.equal(capped.wetCells, uncapped.wetCells, "same wet extent");
+    assert.ok(capped.volumeM3 < uncapped.volumeM3, "less volume");
+    assert.ok(capped.depthM[idx(80, 0)] > 0, "the plain between stays wet");
+  });
+
+  it("no cap by default (the bare envelope is unchanged)", () => {
+    const a = fillFlood(dem, line, sections, { minDepthM: 0.03 });
+    const b = fillFlood(dem, line, sections, { minDepthM: 0.03, maxFloodplainDepthM: Infinity });
+    assert.equal(a.volumeM3, b.volumeM3);
   });
 });
 
