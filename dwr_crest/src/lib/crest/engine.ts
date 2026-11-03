@@ -23,6 +23,7 @@ const TIE_BAND = 100;
 export const ENGINE_VERSION = "crest-desk-engine 2026.10.30";
 
 export const STEPS = [
+  { id: "setup", label: "Guided setup" },
   { id: "record", label: "Record" },
   { id: "breach", label: "Breach" },
   { id: "flood", label: "Flood" },
