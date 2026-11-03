@@ -153,6 +153,22 @@ class FolderTests(unittest.TestCase):
             self.assertNotIn("streambed_ft", fields2)
             self.assertNotIn("streambed_datum", fields2)
 
+    def test_sources_cite_the_dwr_field_not_just_crest_desk(self):
+        prov = {
+            "streambedFt": {"src": "DWR", "field": "streambed__navd88", "value": 1043.59},
+            "crestFt": {"src": "DWR", "field": "max_pool_e_navd88", "value": 1071.09},
+        }
+        with tempfile.TemporaryDirectory() as d:
+            folder, _ = write_dam_folder(Path(d), {**DAM, "provenance": prov}, ANALYSIS)
+            sources = json.loads((folder / "dam.json").read_text(encoding="utf-8"))["sources"]
+            self.assertIn("DWR streambed__navd88", sources["streambed_ft"]["note"])
+            self.assertIn("DWR max_pool_e_navd88", sources["top_of_dam_ft"]["note"])
+            self.assertEqual(sources["dam_id"]["note"], "Crest desk")
+            typed = {"streambedFt": {"src": "DEM", "field": "streambed (typed from DEM)"}}
+            folder2, _ = write_dam_folder(Path(d) / "b", {**DAM, "provenance": typed}, ANALYSIS)
+            sources2 = json.loads((folder2 / "dam.json").read_text(encoding="utf-8"))["sources"]
+            self.assertEqual(sources2["streambed_ft"]["note"], "Crest desk, streambed (typed from DEM)")
+
     def test_labels_tied_elevations_navd88_whatever_the_stated_datum(self):
         cases = [
             # Local 0-300 ft crest tied to the DEM: the written values are NAVD88, not "local".

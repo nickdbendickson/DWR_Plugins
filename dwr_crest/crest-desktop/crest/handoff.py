@@ -143,6 +143,35 @@ def _tied_datum_text(dam: dict, datum_block: dict) -> str | None:
     return "NAVD88 ft"
 
 
+# dam.json field -> the desk record's provenance key, so a field's source names where the value came from.
+_PROVENANCE_KEY = {
+    "height_ft": "heightFt",
+    "storage_acft": "storageAcFt",
+    "surface_area_ac": "surfaceAreaAc",
+    "dam_length_ft": "lengthFt",
+    "top_of_dam_ft": "crestFt",
+    "top_of_dam_datum": "statedDatum",
+    "streambed_ft": "streambedFt",
+    "streambed_datum": "statedDatum",
+    "normal_pool_ft": "normalPoolFt",
+    "county": "county",
+}
+
+
+def _source_note(dam: dict, key: str) -> str:
+    """Where a field came from: the DWR/NID field it was read from (e.g. "DWR streambed__navd88"), else "Crest desk"."""
+    prov = dam.get("provenance") if isinstance(dam.get("provenance"), dict) else {}
+    entry = prov.get(_PROVENANCE_KEY.get(key, ""))
+    if isinstance(entry, dict):
+        src = str(entry.get("src") or "").strip()
+        field = str(entry.get("field") or "").strip()
+        if src == "DEM":
+            return f"Crest desk, {field}" if field else "Crest desk, typed from DEM"
+        if src and field:
+            return f"{src} {field} via Crest desk"
+    return "Crest desk"
+
+
 def write_dam_folder(work: Path, dam: dict, analysis: dict, append_status: bool = True) -> tuple[Path, list[str]]:
     """<work>/dams/<id>/dam.json plus the drawn geometries and the hydrograph.
 
@@ -225,7 +254,7 @@ def write_dam_folder(work: Path, dam: dict, analysis: dict, append_status: bool 
                 continue
             if fields.get(key) in (None, ""):
                 fields[key] = value
-                sources[key] = {"tool": TOOL, "version": VERSION, "when": when, "note": "Crest desk"}
+                sources[key] = {"tool": TOOL, "version": VERSION, "when": when, "note": _source_note(dam, key)}
         existing = record.get("proposed_embankment")
         if isinstance(existing, dict) and existing.get("line_xy"):
             notes.append(

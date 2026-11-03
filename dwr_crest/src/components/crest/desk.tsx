@@ -382,9 +382,9 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         <h3 className="text-lg">Tied to NAVD88</h3>
         <dl className="mt-3 space-y-2 text-sm">
           <Row k="Crest" v={crestNavdLabel(dam, result.datum)} />
-          <Row k="Streambed" v={result.datum.streambedNavdFt == null ? "not used" : `${num(result.datum.streambedNavdFt, 1)} ft`} />
-          <Row k="Spillway" v={result.datum.spillwayNavdFt == null ? "not used" : `${num(result.datum.spillwayNavdFt, 1)} ft`} />
-          <Row k="Pool" v={result.datum.poolNavdFt == null ? "not used" : `${num(result.datum.poolNavdFt, 1)} ft`} />
+          <Row k="Streambed" v={result.datum.streambedNavdFt == null ? "not used" : `${num(result.datum.streambedNavdFt, 1)} ft NAVD88`} />
+          <Row k="Spillway" v={result.datum.spillwayNavdFt == null ? "not used" : `${num(result.datum.spillwayNavdFt, 1)} ft NAVD88`} />
+          <Row k="Pool" v={result.datum.poolNavdFt == null ? "not used" : `${num(result.datum.poolNavdFt, 1)} ft NAVD88`} />
           <Row k="Offset" v={result.datum.offsetFt == null ? "—" : `${num(result.datum.offsetFt, 2)} ft`} />
         </dl>
         {result.datum.warnings.length > 0 ? (

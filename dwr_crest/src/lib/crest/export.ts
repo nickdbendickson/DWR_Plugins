@@ -25,6 +25,9 @@ export function exportDamJson(dam: DamRecord, analysis: Analysis): string {
     length_ft: dam.lengthFt,
     crest_ft: analysis.datum.crestNavdFt,
     crest_datum: "NAVD88",
+    // The breach bottom, tied the same way as the crest, at the top level as the desktop Write-dam-folder dam.json has it.
+    streambed_ft: Number.isFinite(analysis.datum.streambedNavdFt) ? analysis.datum.streambedNavdFt : null,
+    streambed_datum: Number.isFinite(analysis.datum.streambedNavdFt) ? "NAVD88" : null,
     datum_rule: analysis.datum.rule,
     datum_note: dam.datumNote ?? null,
     lat: loc?.lat ?? null,
