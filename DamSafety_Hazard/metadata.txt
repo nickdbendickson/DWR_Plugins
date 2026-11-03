@@ -5,10 +5,11 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Consolidates dam hazard data and generates ACER-11 hazard classifications (Class 1=High/Red, 2=Judgment/Yellow, 3=Low/Green)
 about=Classifies dam hazard under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11. Consolidates NSI / ND GIS Hub address points, POIs and FEMA_Structures building outlines inside the study area (raster extent + 25 ft) against dam-break Depth, Velocity and Arrival rasters (GPKG, CSV, XLSX outputs), joins points to building outlines with 5-ft edge-buffer hazard zones, and generates ACER-11 (USBR TM 11, 1988) hazard classification rasters for houses on foundations and mobile homes.
-version=2.22.4
+version=2.22.6
 icon=icon.svg
 author=N.D. Bendickson
-changelog=2.22.4 (2026-11-03; DSS-WISE / hand-export names with units after the quantity - Depth_ft, Velocity_ftps, Depth_m, Velocity_ft_per_s - are found in the dam folder (were skipped as time steps) and their units read from the name; metric names in a dam folder are flagged. Test test_dsswise_unit_names.py.)
+changelog=2.22.6 (2026-11-03; audit fix D, wording sync with the nd Hazard Helper. Nick: "3DHP" - the travel-time channel flowlines are downloaded from the USGS 3DHP service (3DHP_all/MapServer/50, was the NHD service nhd/MapServer/6) and get the NHD properties gnis_name, ftype ... (damsuite.hydro3dhp.normaliser_for_url, as the Helper 1.19.0); the labels say '3DHP flowlines'. The dz log line says ft/s (was fps). Waterbodies stay on the NHD service.)
+    2.22.4 (2026-11-03; DSS-WISE / hand-export names with units after the quantity - Depth_ft, Velocity_ftps, Depth_m, Velocity_ft_per_s - are found in the dam folder (were skipped as time steps) and their units read from the name; metric names in a dam folder are flagged. Test test_dsswise_unit_names.py.)
     2.22.3 (2026-11-01; option C, Nick: a structure's zone is classified on its peak depth with the peak velocity over its wet cells (structures.peak_pair), not cell by cell; can only keep or raise the zone. Margins from the same pair. Test test_peak_depth_peak_velocity.py.)
     2.22.2 (2026-10-30; fixes from the 2026-10-30 full test - Nick. 2.22.1 is #244)
     * Road / rail crown check: a wet stretch with no value on the arrival raster is no longer skipped ("skipped: no arrival time"). It goes through the depth / crown checks like any other and is counted with no warning time (conservative); its Note / QA Note starts "arrival unknown". On the full-test inputs ND00199 was Low because 123 roads and 2 rail stretches were skipped this way; it is now High (7 overtopped stretches on State highways with AADT > 2,000).

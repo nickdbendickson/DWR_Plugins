@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Hazard 2.22.6, Runner 3.13.10, Screening 0.18.3, Data 1.5.3, PMP 0.4.1: wording sync (2026-11-03 audit, fix D).** RELEASE ndhazard 2.22.6, ndbreach 3.13.10, ndscreen 0.18.3; damsuite loss.py docstring only.
+  - **3DHP flowlines (Nick: "3DHP").** `constants.NHD_FLOWLINE_URL` (Hazard and Data, the shared constants.py) is the USGS 3DHP service `3DHP_all/MapServer/50` (was `nhd/MapServer/6`), as the nd Hazard Helper 1.19.0; `download._fetch_arcgis_live` gives each 3DHP feature the NHD properties (`damsuite.hydro3dhp.normaliser_for_url`). Hazard labels and messages say "3DHP flowlines" (pipeline.py, pipeline_extras, classify_tab, data_tab, datafetch, estimate, processing_provider, traveltime, termination, datafolder, suite_algorithms, runnerculverts). Data set names (`NHD_flowlines`) and identifiers unchanged; waterbodies stay on NHD.
+  - **Spelling.** judgement -> judgment (Runner report_docx, damsuite loss.py; Nick's quotes unchanged); meters -> metres in prose (Hazard helpers docstring, Screening handoff comment) - the "Meters" DEM-unit choice labels and unit-name lists are left, the Screening -> Runner hand-off matches the label; fps -> ft/s (Hazard helpers.py dz log).
+  - **PMP name.** metadata `name=DamSafety PMP (prototype)` (was "ND PMP Tool (prototype)"), as its window title.
+
 - **Hazard 2.22.4: DSS-WISE result names with units after the quantity are autodetected (Nick: "Do the DSS-WISE autodetect fix PR").** RELEASE ndhazard 2.22.4; damsuite content otherwise unchanged.
   - **Found.** `autodetect._is_time_step` took the text after "Depth"/"Velocity" for an output time, so `Depth_ft.tif`, `Velocity_ftps.tif`, `Depth_m.asc` ... were skipped in the dam folder (any case, any depth of sub-folder). A label made only of unit words is no longer a time step; `Depth_0100`, `Depth (01JAN2020 12:00:00)` still are.
   - **Units.** `dsswise.detect_units` reads units right after the quantity word: `Velocity_ft_s` / `Velocity_ft_per_s` are ft/s and `Depth_m` / `Velocity_m_s` are m, m/s (were "assumed ft / ft/s"). `MaxDepth_in_Ft` style names are unchanged.

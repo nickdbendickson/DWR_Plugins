@@ -75,7 +75,7 @@ It runs as a QGIS Processing algorithm. **It has not been validated against ArcG
 | | |
 |---|---|
 | Plugin folder / module | `DamSafety_PMP` in this repo (was `nd_pmp`) |
-| Plugin name (metadata) | ND PMP Tool (prototype), version 0.1.0, experimental |
+| Plugin name (metadata) | DamSafety PMP (prototype) (was "ND PMP Tool (prototype)" to 0.4.0), version 0.4.1, experimental |
 | Processing provider id | `ndpmp` ("ND PMP (prototype)") |
 | Algorithm ids | `ndpmp:pmp` ("PMP Evaluation (main tool)"), `ndpmp:inflow_hydrograph`, `ndpmp:pothole_storage` (v0.2.0) |
 | Data-folder setting | QgsSettings key `nd_pmp/data_home` (remembered after each run) |
