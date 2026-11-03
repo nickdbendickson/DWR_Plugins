@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Hazard 2.23.1, Runner 3.14.2, Screening 0.18.4, HazardLite 0.1.3: lint and the Runner window width (2026-11-03 audit, fix E).** RELEASE ndhazard 2.23.1, ndbreach 3.14.2, ndscreen 0.18.4; damsuite unchanged.
+  - **Runner window.** "Guided wizard…" on its own row under the four Run-tab result buttons; `_fit_body_width` sets the window's minimum width to the scrolled body's minimum plus the frame (capped at the screen). At 800 x 600 the body needed about 800 px and Browse… / File… / Guided wizard… were clipped (audit shot DamSafety_Runner__002); now about 660 px.
+  - **Screening storage.py.** `conf_leak` was set and never read, and both branches gave "medium". Kept the behaviour: low when a value was defaulted / not found or the storage-leak guard held the storage (its note contains "storage leak"), else medium - as the nd copy. Code simplified, result unchanged.
+  - **Lint.** hecras_model.py weir-cell note F522 (unused `u`); HazardLite dialog.py unused `v`, `QWidget`, `T`; Runner tests/run_tests.py second `fake_qgis as fq` (F811); unused imports: QCheckBox in seven Hazard tabs, lone911 QgsGeometry, hecras_fine math, hecras_windows shutil. Left on purpose: compat / qtcompat / ui_check_panel / PMP core re-exports and the optional-dependency probes (h5py, cairosvg, scipy Voronoi, contourpy, osgeo.gdal, win32com, matplotlib), and local F841s whose right-hand side does work.
+
 - **Hazard 2.22.4: DSS-WISE result names with units after the quantity are autodetected (Nick: "Do the DSS-WISE autodetect fix PR").** RELEASE ndhazard 2.22.4; damsuite content otherwise unchanged.
   - **Found.** `autodetect._is_time_step` took the text after "Depth"/"Velocity" for an output time, so `Depth_ft.tif`, `Velocity_ftps.tif`, `Depth_m.asc` ... were skipped in the dam folder (any case, any depth of sub-folder). A label made only of unit words is no longer a time step; `Depth_0100`, `Depth (01JAN2020 12:00:00)` still are.
   - **Units.** `dsswise.detect_units` reads units right after the quantity word: `Velocity_ft_s` / `Velocity_ft_per_s` are ft/s and `Depth_m` / `Velocity_m_s` are m, m/s (were "assumed ft / ft/s"). `MaxDepth_in_Ft` style names are unchanged.

@@ -24,7 +24,6 @@ cell instead of only the cell's centre ('terrain') or its mean ground ('terrain_
 The work is tiled (TILE_FINE fine points per tile side), single-threaded numpy, only over
 the output cells that a wet HEC-RAS cell can reach, and stops above FINE_MAX_MPX_ENV million
 fine points (HecRasError) so a run never runs out of memory here."""
-import math
 import os
 
 import numpy as np

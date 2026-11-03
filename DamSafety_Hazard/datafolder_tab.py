@@ -23,7 +23,7 @@ import json
 import os
 
 from qgis.PyQt.QtWidgets import (
-    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGroupBox, QCheckBox, QComboBox,
+    QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGroupBox, QComboBox,
     QLineEdit, QTableWidget, QTableWidgetItem, QMessageBox, QFileDialog,
 )
 

@@ -4358,7 +4358,7 @@ def weir_cells_precheck(pts, perim, conn_line, weir, top_u, terrain_tif, srs, ce
                          "; ".join("cell {} (stations {:,.1f}-{:,.1f}) lowest ground {:.2f}, "
                                    "weir {:.2f}, {:+.2f} {u}".format(
                                        x["cell"], x["from"], x["to"], x["min_elev"],
-                                       x["weir_min"], x["above"], u=L) for x in bad), u=L))
+                                       x["weir_min"], x["above"], u=L) for x in bad)))
     return r
 
 

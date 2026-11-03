@@ -372,6 +372,7 @@ class NDBreachRunnerDialog(QDialog):
         self.run_dam_btn.setDefault(False)
         self.run_dam_btn.setDefault(True)
         fit_window(self, key=SIZE_KEY)
+        self._fit_body_width()
         self._sync_advanced_title()
 
     def _section_toggled(self, on):
@@ -381,6 +382,21 @@ class NDBreachRunnerDialog(QDialog):
                 QTimer.singleShot(0, self._grow_for_body)
             except Exception:                                    # noqa
                 self._grow_for_body()
+
+    def _fit_body_width(self):
+        """3.14.2 (audit 2026-11-03): the window's minimum width is the scrolled body's minimum
+        width plus the window frame around it (never more than the screen fit_window allows), so
+        no button in the dam rows or the Run tab is clipped behind a horizontal scroll bar."""
+        try:
+            need = self.body_widget.minimumSizeHint().width() + \
+                (self.width() - self.body_scroll.viewport().width())
+            need = min(need, self.maximumWidth())
+            if need > self.minimumWidth():
+                self.setMinimumWidth(need)
+            if self.width() < need:
+                self.resize(need, self.height())
+        except Exception:                                        # noqa - sizing never breaks the window
+            pass
 
     def _grow_for_body(self):
         """After a section opens: make the window taller by what the scroll area is short of,
@@ -487,8 +503,14 @@ class NDBreachRunnerDialog(QDialog):
         row.addWidget(self.results_btn)
         row.addWidget(self.add_btn)
         row.addStretch(1)
-        row.addWidget(self.wizard_btn)
         lay.addLayout(row)
+        # 3.14.2 (audit 2026-11-03): "Guided wizard…" on its own row under the four result
+        # buttons - in one row the five set a minimum width (about 800 px) wider than the window
+        # on an 800 x 600 screen, and the dam rows' buttons were clipped ("Brow…", "Fil…")
+        row2 = QHBoxLayout()
+        row2.addStretch(1)
+        row2.addWidget(self.wizard_btn)
+        lay.addLayout(row2)
         w.setLayout(lay)
         return w
 
