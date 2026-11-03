@@ -281,3 +281,73 @@ describe("breachPath: follow the water from the breach", () => {
     for (let i = 1; i < p!.pts.length; i++) assert.ok(p!.pts[i].x > p!.pts[i - 1].x);
   });
 });
+
+describe("spreadVolume: a stretch that runs out of ground is held at the cap, not stacked", () => {
+  // A narrow DEM (600 m across, 2 % side slopes: the ground within reach rises only ~6 m above the channel) and one
+  // stretch handed far more water than that ground can hold. Before the cap the whole slice stacked on the stretch as
+  // depth (277 ft on a 27.5 ft dam on DWR-2801); now the pool is held at the cap and the surplus is withheld.
+  const dem = synthDem(60, 10, (e, n) => 100 + 0.002 * n + 0.02 * Math.abs(e));
+  const line = straight(250, -250);
+  const at = idxOf(dem);
+  const H = 8; // dam height (m): the hard cap is 2 H = 16 m
+  const RELEASED = 5_000_000;
+  const secs = sections(11, (j) => (j === 4 ? RELEASED : 0)); // stretch 4 is x = 200..250 m (n = 50..0)
+  const r = spreadVolume(dem, line, secs, { minDepthM: 0.01, releasedM3: RELEASED, maxLevelM: 2 * H });
+  const maxDepth = (d: Float32Array) => {
+    let m = 0;
+    for (const v of d) if (v > m) m = v;
+    return m;
+  };
+
+  it("holds the pool at the level that just reaches the last cell (above the routed stage + 1 ft)", () => {
+    assert.equal(r.exhaustedStretches, 1);
+    assert.equal(r.cappedStretches, 1);
+    // The highest reachable ground is ~5.9 m above the channel bed (2 % over 295 m), above stage 1 m + 0.3 m.
+    const m = maxDepth(r.depthM);
+    assert.ok(m > 5.5 && m < 6.5, `max depth ${m} m`);
+    assert.ok(r.depthM[at(280, 25)] > 0.2 && r.depthM[at(280, 25)] < 0.5, "the ground just below the last cell is barely wet");
+    assert.ok(r.unpouredM3 > 0.9 * RELEASED, `almost all of the slice is withheld (${r.unpouredM3})`);
+  });
+
+  it("balances: poured + withheld = the slice, and the released ledger still holds", () => {
+    assert.ok(Math.abs(r.pouredM3 + r.unpouredM3 - r.slicesM3) / r.slicesM3 < 1e-9, `${r.pouredM3} + ${r.unpouredM3} vs ${r.slicesM3}`);
+    assert.ok(r.pouredM3 > 0);
+    assert.ok(Math.abs(r.retainedM3 + r.travellingM3 - RELEASED) / RELEASED < 0.01);
+    assert.ok(Math.abs(r.volumeM3 - r.pouredM3) / r.pouredM3 < 0.03, "what is laid down is what was poured");
+  });
+
+  it("never stands deeper than the hard cap, and the ground above it stays dry", () => {
+    const low = spreadVolume(dem, line, secs, { minDepthM: 0.01, releasedM3: RELEASED, maxLevelM: 3 });
+    const m = maxDepth(low.depthM);
+    assert.ok(m <= 3 + 1e-6 && m > 2.9, `max depth ${m} m`);
+    assert.equal(low.depthM[at(290, 25)], 0, "ground 5.8 m above the bed stays dry under a 3 m cap");
+    assert.ok(low.depthM[at(0, 25)] > 2.9, "the channel stands at the cap");
+    assert.ok(low.unpouredM3 > r.unpouredM3);
+    assert.ok(Math.abs(low.pouredM3 + low.unpouredM3 - low.slicesM3) / low.slicesM3 < 1e-9);
+  });
+
+  it("the routed stage + 1 ft is the floor of the cap when the reachable ground is lower", () => {
+    // Flat ground: every cell is reachable at ~0 m above the bed, so the cap is the stage (1 m) + 0.3048 m.
+    const flat = synthDem(60, 10, (e, n) => 100 + 0.002 * n + 0.0001 * Math.abs(e));
+    const f = spreadVolume(flat, line, secs, { minDepthM: 0.01, releasedM3: RELEASED, maxLevelM: 2 * H });
+    const m = maxDepth(f.depthM);
+    assert.equal(f.cappedStretches, 1);
+    assert.ok(Math.abs(m - 1.3048) < 0.05, `max depth ${m} m`);
+  });
+});
+
+describe("spreadVolume: the cap leaves a pool the terrain contains untouched", () => {
+  const dem = synthDem(200, 10, (e, n) => 100 + 0.002 * n + 0.02 * Math.abs(e));
+  const line = straight(800, -800);
+  const secs = sections(33, () => 20_000);
+  const a = spreadVolume(dem, line, secs, { minDepthM: 0.001, releasedM3: 100_000 });
+  const b = spreadVolume(dem, line, secs, { minDepthM: 0.001, releasedM3: 100_000, maxLevelM: 0.5 });
+
+  it("is bit-identical with a cap far below the pools when no stretch runs out of ground", () => {
+    assert.equal(a.exhaustedStretches, 0);
+    assert.equal(b.cappedStretches, 0);
+    assert.equal(b.unpouredM3, 0);
+    assert.deepEqual(b.depthM, a.depthM);
+    assert.ok(Math.abs(a.pouredM3 - a.slicesM3) / a.slicesM3 < 1e-9);
+  });
+});

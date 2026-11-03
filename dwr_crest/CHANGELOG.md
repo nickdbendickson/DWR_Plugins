@@ -2,6 +2,26 @@
 
 ## 2026-11-03
 
+- **The routed flood grows its terrain downstream on demand (issue #62).** The terrain box was sized from the schematic
+  stations before any water was routed, and the drainage trace stopped at the schematic's last station or the box's
+  edge; on DWR-2801 59 % of the Runner's flood lay outside the terrain entirely. The desk now grows the box and the
+  trace downstream only while the routed wave still reaches the end of the traced channel wet, with water above a floor
+  (5 % of the release or 10 ac-ft, the lesser) still travelling, and not stopped in a closed basin: at most four rounds,
+  each a quarter of the channel (1–4 km) along the channel's own end direction, on the same cell lattice. A contained
+  flood gets the single build it always got, cell for cell (DWR-4031, 0.354 unchanged). When the loop stops with water
+  still at the edge the layer says so (an "incomplete downstream" alert with the ac-ft stranded) and a Runner run is the
+  layer of record there. Four-dam re-score against LISFLOOD-FP at 0.1 ft: DWR-2801 CSI 0.157 → 0.227 (recall 17 → 31 %,
+  +13.5 km, flagged incomplete), DWR-2865 0.299 → 0.295, DWR-3034 0.701 (ends in a basin, not grown), DWR-4031 0.354.
+  Saved routed layers ask to be built again.
+- **An exhausted spread stretch is held at the cap, not stacked.** A stretch whose pool had risen over every reachable
+  cell took the whole rest of its slice as depth: 277 ft of water on the 27.5 ft DWR-2801 and a +3.5 ft depth bias
+  against both LISFLOOD-FP and DSS-WISE. The pool is now held at the routed stage + 1 ft (or the level that just reaches
+  the last cell), never above 2× the dam height; the surplus is withheld and reported. 2801's deepest cell falls from
+  277.6 to 23.4 ft and its depth bias against the Runner from +3.6 to +1.0 ft; no dam's footprint changes.
+- **Scoring at a chosen wet depth.** `validate-crest.mjs` and `score-routed.mjs` take `--wet-ft` (default 0.1 ft) and
+  the report says which threshold it used. At 0.1 ft the 2-D models disagree with each other on a flat plain by
+  thousands of acres of thin sheet (LISFLOOD-FP vs ANUGA on DWR-2801: CSI 0.46); at 1 ft they agree (0.58), so a 1 ft
+  score says how a layer does where the water matters.
 - **The routed flood is now the volume spread.** For large dams (the flood-size gate's routed side) the desk now pours
   the water each stretch of the routed channel holds at its own peak onto the ground beside it, instead of carrying the
   Manning stage across the floodplain. A closed basin on the channel (for example behind a road fill with no culvert in

@@ -20,11 +20,12 @@
  */
 
 import { floodStrip } from "./floodstrip.ts";
-import { buildOutline, DEM_SERVICE, depthCapFt, DEM_ATTRIBUTION, outlineInputs, polygonizeDepth } from "./outline.ts";
+import { buildOutline, DEM_SERVICE, depthCapFt, DEM_ATTRIBUTION, demRequest, fetchDem, outlineInputs, polygonizeDepth } from "./outline.ts";
+import { buildRoutedFloodReach, type ReachRound, reachStatus } from "./reach.ts";
 import { buildRoutedFlood, type RoutedFloodOptions, type RoutedFloodResult } from "./routed-flood.ts";
 import type { Analysis, DamRecord } from "./types.ts";
 
-import type { DemGrid, OutlineCache, OutlineStats, RoutedSummary } from "./outline.ts";
+import type { DemGrid, DemRequest, OutlineCache, OutlineStats, ReachSummary, RoutedSummary } from "./outline.ts";
 
 const ACRE_M2 = 4046.8564224;
 
@@ -111,6 +112,7 @@ function routedCache(
   g: DemGrid,
   routed: Extract<RoutedFloodResult, { ok: true }>,
   fingerprint: string,
+  reach?: ReachSummary,
 ): OutlineCache {
   const common = floodStrip(dam, result).strip!.properties;
   const poly = polygonizeDepth(g, routed.depthFt, { common, label: ROUTED_LABEL, title: `${common.dam_id} routed terrain flood`, capFt: depthCapFt(dam.heightFt) });
@@ -153,6 +155,13 @@ function routedCache(
     volumeRatio: routed.stats.volumeRatio,
     method: routed.method,
     reachedEdge: routed.stats.reachedEdge,
+    exhaustedStretches: routed.stats.exhaustedStretches,
+    cappedStretches: routed.stats.cappedStretches,
+    unpouredAcFt: routed.stats.unpouredAcFt,
+    travellingAcFt: routed.stats.travellingAcFt,
+    wetEndKm: routed.stats.wetEndKm,
+    stoppedInBasin: routed.stats.stoppedInBasin,
+    ...(reach ? { reach } : {}),
     notes: routed.notes,
   };
   return { fingerprint, builtAt: new Date().toISOString(), source: DEM_SERVICE, attribution: DEM_ATTRIBUTION, stats, outline: poly.outline, layer: "routed", routed: r };
@@ -193,4 +202,62 @@ export async function buildInundation(
   const built = await buildOutline(dam, result, g, { yieldFn: opts.yieldFn });
   if (!built.ok) return { ok: false, reason: built.reason };
   return { ok: true, layer: "outline", choice, cache: built.cache, fellBackToOutline: false };
+}
+
+export type InundationReachOptions = {
+  yieldFn?: () => Promise<void>;
+  /** Progress lines for the desk ("Fetching the 3DEP terrain…", "growing the terrain 2.2 km downstream…"). */
+  onStatus?: (text: string) => void;
+  /** The terrain fetch (fetchDem by default; tests pass their own). */
+  fetch?: (req: DemRequest) => Promise<DemGrid>;
+  /** Extension rounds allowed for the routed flood (reach.ts REACH_MAX_ROUNDS by default; 0 builds once). */
+  maxRounds?: number;
+};
+
+/**
+ * Fetch the terrain and build the inundation layer the gate picks, growing the terrain downstream on demand when the
+ * layer is the routed flood (reach.ts). This is what the desk's build button runs: the terrain outline gets the one
+ * corridor box it always got; the routed flood gets the box grown while the routed wave still reaches its edge with
+ * water to carry, and its summary says how the reach ended (RoutedSummary.reach).
+ */
+export async function buildInundationReach(dam: DamRecord, result: Analysis, opts: InundationReachOptions = {}): Promise<InundationResult> {
+  const choice = chooseInundationLayer(result);
+  const io = outlineInputs(dam, result);
+  if (!io.ok) return { ok: false, reason: io.reason };
+  const fetchFn = opts.fetch ?? fetchDem;
+  if (choice.layer === "routed") {
+    const rb = await buildRoutedFloodReach(dam, result, {
+      inputs: io.inputs,
+      method: ROUTED_METHOD,
+      yieldFn: opts.yieldFn,
+      fetch: fetchFn,
+      maxRounds: opts.maxRounds,
+      onRound: (r: ReachRound) => opts.onStatus?.(reachStatus(r)),
+    });
+    if (rb.routed.ok)
+      return {
+        ok: true,
+        layer: "routed",
+        choice,
+        cache: routedCache(dam, result, rb.grid, rb.routed, io.inputs.fingerprint, rb.reach),
+        routed: rb.routed,
+        fellBackToOutline: false,
+      };
+    // Routed was picked but could not be built; fall back to the outline on the terrain fetched so the desk still gets a layer.
+    opts.onStatus?.("Building the terrain outline instead…");
+    const built = await buildOutline(dam, result, rb.grid, { yieldFn: opts.yieldFn });
+    if (!built.ok) return { ok: false, reason: `${rb.routed.reason} Outline fallback also failed: ${built.reason}` };
+    return {
+      ok: true,
+      layer: "outline",
+      choice: { ...choice, reason: `${choice.reason} (Routed could not be built: ${rb.routed.reason} Fell back to the outline.)` },
+      cache: built.cache,
+      fellBackToOutline: true,
+    };
+  }
+  const req = demRequest(io.inputs);
+  opts.onStatus?.(`Fetching the 3DEP terrain (${req.width} × ${req.height} cells at ${Math.round(req.cellM)} m)…`);
+  const grid = await fetchFn(req);
+  opts.onStatus?.("Building the inundation layer on the terrain…");
+  return buildInundation(dam, result, grid, { yieldFn: opts.yieldFn });
 }

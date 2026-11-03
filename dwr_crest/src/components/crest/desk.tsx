@@ -33,8 +33,6 @@ import {
 import {
   DEM_ATTRIBUTION,
   DEM_ATTRIBUTION_SHORT,
-  demRequest,
-  fetchDem,
   lookupArea,
   OUTLINE_LABEL,
   outlineAcresNote,
@@ -44,7 +42,7 @@ import {
   outlineState,
   type OutlineState,
 } from "@/lib/crest/outline";
-import { buildInundation, ROUTED_LABEL, volumeCheck } from "@/lib/crest/inundation";
+import { buildInundationReach, ROUTED_LABEL, volumeCheck } from "@/lib/crest/inundation";
 import { layerOfRecord } from "@/lib/crest/layer-of-record";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
@@ -609,11 +607,8 @@ function OutlinePanel({
     const id = dam.id;
     setError(null);
     try {
-      const req = demRequest(io.inputs);
-      setBusy(`Fetching the 3DEP terrain (${req.width} × ${req.height} cells at ${num(req.cellM, 0)} m)…`);
-      const grid = await fetchDem(req);
-      setBusy("Building the inundation layer on the terrain…");
-      const r = await buildInundation(dam, result, grid, { yieldFn: breathe });
+      setBusy("Preparing the terrain request…");
+      const r = await buildInundationReach(dam, result, { yieldFn: breathe, onStatus: setBusy });
       if (useDesk.getState().activeId !== id) return;
       if (r.ok) update({ outline: r.cache });
       else setError(r.reason);
@@ -694,6 +689,13 @@ function OutlinePanel({
             By depth band: {s.bands.map((b) => `${b.label} ${num(b.ac, 0)} ac`).join(" · ")}. The PLSS and 911 lists below are
             against this flood; the dated flood strip stays on the map only as the last-resort fallback.
           </p>
+          {routed.reach?.incomplete ? (
+            <p className="mt-1 text-sm text-amber" role="alert" data-testid="routed-incomplete">
+              Incomplete downstream: after {routed.reach.rounds} terrain extension{routed.reach.rounds === 1 ? "" : "s"} (+
+              {num(routed.reach.extendedKm, 1)} km) the routed wave still reaches the terrain's edge with {num(routed.reach.strandedAcFt, 0)} ac-ft
+              to carry. The flood runs further than this layer shows; a Runner run is the layer of record there.
+            </p>
+          ) : null}
           {deepCellsNote(s) ? (
             <p className="mt-1 text-xs text-amber" role="status" data-testid="outline-deep-cells">
               {deepCellsNote(s)}

@@ -10,6 +10,7 @@
  *     [--breach lon,lat] [--bearing deg]   breach location and downstream bearing (else from the GeoJSON's properties)
  *     [--crs EPSG:xxxxx]                   CRS of ASCII grids without one (default: dam.json's, else EPSG:32614)
  *     [--kind house|mobile]                TM 11 chart for the receptor zones (default house)
+ *     [--wet-ft 0.1]                       depth both layers count as wet at (1 ft is where the 2-D models agree)
  *     [--json <out.json>]                  also write the full report (every receptor row)
  *
  * The flood strip and terrain outline GeoJSON carry breach_lon / breach_lat and the direction note ("bearing 130°"),
@@ -41,6 +42,10 @@ export function parseArgs(argv) {
     } else if (a === "--bearing") o.bearing = Number(v());
     else if (a === "--crs") o.crs = v();
     else if (a === "--kind") o.kind = v();
+    else if (a === "--wet-ft") {
+      o.wetFt = Number(v());
+      if (!(o.wetFt > 0)) throw new Error("--wet-ft needs a depth in feet");
+    }
     else if (a === "--json") o.json = v();
     else if (a === "--label") (o.labels ??= []).push(v());
     else throw new Error(`unknown option ${a}`);
@@ -182,6 +187,7 @@ export async function main(argv, log = console.log) {
       points,
       downstream,
       kind: o.kind,
+      wetFt: o.wetFt,
     }),
   );
   for (const r of reports) log("\n" + formatReport(r));

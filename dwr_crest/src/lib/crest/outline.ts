@@ -57,8 +57,9 @@ const M_PER_DEG_LON_EQ = 111320;
 
 export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300), 2000);
 /** Bumped when the terrain request or the trace changes, so layers saved before rebuild. 2 = 2026-11-03: exact DEM
- *  box (adjustAspectRatio=false), toe start, trace margin. */
-export const TRACE_VERSION = 2;
+ *  box (adjustAspectRatio=false), toe start, trace margin. 3 = 2026-11-03: the routed flood's demand-driven downstream
+ *  reach (reach.ts) and the exhausted-stretch cap (spread.ts). */
+export const TRACE_VERSION = 3;
 
 /**
  * The depth cap is the dam height itself (Nick, 2026-11-03: no margin). A breach cannot stand water deeper than the dam
@@ -210,7 +211,57 @@ export type RoutedSummary = {
   /** How the flood was laid on the terrain; absent on layers built before the volume spread became the default. */
   method?: "stage" | "spread";
   reachedEdge: boolean;
+  /** Spread only: ac-ft still travelling at the end of the traced reach, and how far down the channel the water got (km). */
+  travellingAcFt?: number;
+  wetEndKm?: number;
+  /** Spread only: the flood ended in a closed basin that holds all the water still travelling. */
+  stoppedInBasin?: boolean;
+  /** The demand-driven downstream reach (reach.ts); absent on layers built before it. */
+  reach?: ReachSummary;
+  /**
+   * Spread only; absent on layers built before the cap: stretches that ran out of ground, those held at the cap, and
+   * the ac-ft of the slices withheld (water that would stand beyond the ground shown).
+   */
+  exhaustedStretches?: number;
+  cappedStretches?: number;
+  unpouredAcFt?: number;
   notes: string[];
+};
+
+/** Why the demand-driven reach (reach.ts) stopped extending the terrain downstream. */
+export type ReachStop =
+  /** The flood does not reach the terrain's edge, or the water stops short of the traced channel's end. */
+  | "contained"
+  /** The flood ends in a closed basin that holds all the water still travelling. */
+  | "basin"
+  /** Less water is still travelling at the edge than the floor (5 % of the release or 10 ac-ft, whichever is less). */
+  | "volume-floor"
+  /** The round cap (REACH_MAX_ROUNDS) was reached with water still at the edge: the layer is incomplete downstream. */
+  | "round-cap"
+  /** Growing the terrain again would coarsen its cells past the limit: incomplete downstream. */
+  | "dem-limit"
+  /** The terrain could not grow (the drawn area clips it): incomplete downstream. */
+  | "no-growth"
+  /** The routed flood could not be rebuilt on the grown terrain; the previous round's layer is kept: incomplete. */
+  | "trace-failed"
+  /** The grown terrain could not be fetched (the 3DEP service failed); the previous round's layer is kept: incomplete. */
+  | "fetch-failed"
+  /** No demand signal (the stage fill, or no routed flood). */
+  | "none";
+
+export type ReachSummary = {
+  /** Extension rounds that were built (0 = the single build every layer used to get). */
+  rounds: number;
+  /** How far the terrain was grown downstream in all (km, along the channel's end direction). */
+  extendedKm: number;
+  stoppedBecause: ReachStop;
+  /** The wave still reached the edge with water above the floor when the loop stopped: the flood runs further. */
+  incomplete: boolean;
+  /** ac-ft still travelling at the edge when an incomplete loop stopped (0 when complete). */
+  strandedAcFt: number;
+  /** The terrain the final layer was built on. */
+  demCellM: number;
+  demCells: number;
 };
 
 export type OutlineCache = {
@@ -403,6 +454,11 @@ export type BuildOptions = {
   /** Called every so many cells so a long build can let the page breathe (the desk passes a setTimeout(0)). */
   yieldFn?: () => Promise<void>;
   builtAt?: Date;
+  /**
+   * Use these inputs instead of outlineInputs(dam, result): the demand-driven reach (reach.ts) passes the schematic's
+   * inputs with lastX (where the trace may stop) pushed downstream, round by round.
+   */
+  inputs?: OutlineInputs;
 };
 
 /** Even-odd scanline mask of the AOI parts (local metres) on the grid. */
@@ -854,7 +910,7 @@ async function buildOutlineImpl(
 ): Promise<{ ok: true; cache: OutlineCache | null; centerline: Centerline } | { ok: false; reason: string }> {
   const io = outlineInputs(dam, result);
   if (!io.ok) return io;
-  const inp = io.inputs;
+  const inp = opts.inputs ?? io.inputs;
   const strip = floodStrip(dam, result).strip!;
   const { loc, u, st } = inp;
   const W = g.width;

@@ -108,6 +108,20 @@ describe("buildRoutedFlood, method spread (quasi-dynamic volume spread)", () => 
     assert.ok(SP.stats.volumeRatio < RF.stats.volumeRatio, `${SP.stats.volumeRatio} vs ${RF.stats.volumeRatio}`);
   });
 
+  it("carries the exhausted-stretch cap's accounting in the stats (zero for the stage fill)", () => {
+    assert.ok(SP.ok && RF.ok);
+    if (!SP.ok || !RF.ok) return;
+    for (const s of [SP.stats, RF.stats]) {
+      assert.ok(Number.isInteger(s.exhaustedStretches) && s.exhaustedStretches >= 0);
+      assert.ok(Number.isInteger(s.cappedStretches) && s.cappedStretches <= s.exhaustedStretches);
+      assert.ok(Number.isFinite(s.unpouredAcFt) && s.unpouredAcFt >= 0);
+    }
+    assert.equal(RF.stats.exhaustedStretches, 0);
+    assert.equal(RF.stats.unpouredAcFt, 0);
+    if (SP.stats.cappedStretches) assert.ok(SP.notes.some((n) => /held at the routed stage \+ 1 ft/.test(n)));
+    else assert.equal(SP.stats.unpouredAcFt, 0);
+  });
+
   it("defaults to the spread method when none is given", () => {
     assert.ok(DEF.ok);
     if (!DEF.ok) return;

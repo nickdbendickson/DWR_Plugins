@@ -65,10 +65,22 @@ export type SpreadOptions = {
   basins?: boolean;
   /** A basin counts only when it is at least this deep below its spill level (m). Default BASIN_MIN_DEPTH_M. */
   basinMinDepthM?: number;
+  /**
+   * Ceiling on a pool's level above its stretch's channel bed once the stretch has run out of ground (m); the routed
+   * flood passes 2× the dam's height. A pool the terrain contains is never cut by it. See spreadVolume step 4.
+   */
+  maxLevelM?: number;
 };
 
 /** Default for SpreadOptions.basinMinDepthM. */
 export const BASIN_MIN_DEPTH_M = 1.0;
+
+/**
+ * How far above the routing's own stage a stretch that has run out of ground may still rise (m; 1 ft). The cap on an
+ * exhausted stretch is the routed stage plus this, or the level that just reaches the stretch's last cell, whichever
+ * is higher, and never above SpreadOptions.maxLevelM.
+ */
+export const EXHAUST_STAGE_ALLOWANCE_M = 0.3048;
 
 export type SpreadResult = {
   width: number;
@@ -93,8 +105,24 @@ export type SpreadResult = {
   retainedM3: number;
   /** The volume still travelling past the last stretch poured (m³); 0 when the flood was all left behind. */
   travellingM3: number;
-  /** Stretches whose ground ran out before the slice was poured (the pool stands deeper than the terrain shows). */
+  /**
+   * Stretches whose pool stood over every reachable cell: the ground ran out (at the lateral limit or the DEM's edge)
+   * before the slice was poured.
+   */
   exhaustedStretches: number;
+  /**
+   * Of those, the stretches whose pool was held at the cap (the routed stage + EXHAUST_STAGE_ALLOWANCE_M or the level
+   * that just reaches the last cell, whichever is higher; never above maxLevelM) with part of the slice withheld.
+   */
+  cappedStretches: number;
+  /** Σ of the slices laid on the ground (m³), every wet cell however thin: slicesM3 − unpouredM3. */
+  pouredM3: number;
+  /**
+   * The part of the slices the cap withheld (m³): water the routing holds in a stretch whose reachable ground could
+   * not take it without the pool standing deeper than the routed stage allows. It would stand beyond the DEM or the
+   * lateral limit, not deeper on the cells shown. Before the cap it was stacked on them (277 ft on a 27.5 ft dam).
+   */
+  unpouredM3: number;
   /** Closed basins on the channel the wave filled to their spill level and passed. */
   basinsFilled: number;
   /**
@@ -104,6 +132,11 @@ export type SpreadResult = {
   stoppedIn: { atM: number; spillM: number; capacityM3: number; heldM3: number; areaAc: number } | null;
   stretches: number;
   reachedEdge: boolean;
+  /**
+   * How far down the channel the water got (m along the centreline, the downstream end of the last stretch with a wet
+   * channel cell; 0 when none). The reach loop (reach.ts) reads it against the traced channel's end.
+   */
+  wetEndM: number;
 };
 
 /**
@@ -359,7 +392,10 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
   const velOut = new Float32Array(N).fill(NaN);
   const arrOut = new Float32Array(N).fill(NaN);
   let slicesM3 = 0;
+  let pouredM3 = 0;
+  let unpouredM3 = 0;
   let exhausted = 0;
+  let capped = 0;
   let stretches = 0;
   let retainedM3 = 0;
   const v0 = opts.releasedM3 != null && opts.releasedM3 > 0 ? opts.releasedM3 : 0;
@@ -438,15 +474,24 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     // too small to top a saddle but big enough to reach it would be smeared across the saddle, pulling the near-side
     // surface below the saddle it supposedly crossed and laying a sheet of water in the low behind it — a dry gap in
     // the channel and ~an extra slice of water in the wrong place. (M13)
+    // When the pool has risen over every reachable cell (the stretch ran out of ground at the lateral limit or the
+    // DEM's edge) the slice can no longer spread, only stack: without a cap the whole remainder went on as depth,
+    // 277 ft on a 27.5 ft dam on DWR-2801, and the +3.5 ft bias against both LISFLOOD-FP and DSS-WISE. So an
+    // exhausted pool is held at the routed stage + 1 ft or the level that just reaches its last cell, whichever is
+    // higher, and never above maxLevelM (2× the dam height); the surplus is withheld and reported (unpouredM3). It is
+    // water that would stand beyond the ground shown, not deeper on it.
     const levelOf = new Float64Array(cells.length).fill(NaN);
+    const stageCap = (Number.isFinite(sections[j].stageM) ? sections[j].stageM : 0) + EXHAUST_STAGE_ALLOWANCE_M;
     let budget = target;
     let start = 0;
+    let exhaustedHere = false;
+    let cappedHere = false;
     while (start < cells.length && budget > 1e-9) {
       let cnt = 0;
       let sumG = 0;
       let level = NaN;
       let end = cells.length - 1;
-      let capped = false;
+      let perched = false;
       for (let r = start; r < cells.length; r++) {
         const k = cells[r];
         cnt++;
@@ -456,13 +501,27 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
           // Too little water to carry the pool over this cell's saddle: cap the near side at the saddle, perch the rest.
           level = spill[k];
           end = r - 1;
-          capped = true;
+          perched = true;
           break;
         }
-        const next = r + 1 < cells.length ? spill[cells[r + 1]] : Infinity;
+        const last = r + 1 >= cells.length;
+        const next = last ? Infinity : spill[cells[r + 1]];
         if (hh <= next) {
           level = hh;
           end = r;
+          if (last) {
+            // The pool stood over every cell of the stretch: hold it at the cap and withhold the rest.
+            exhaustedHere = true;
+            let cap = Math.max(stageCap, spill[k]);
+            if (opts.maxLevelM != null && opts.maxLevelM > 0) cap = Math.min(cap, opts.maxLevelM);
+            if (hh > cap + 1e-9) {
+              level = cap;
+              cappedHere = true;
+              // Under a hard cap below the last cell's saddle, the cells it no longer reaches stay dry.
+              while (end >= start && spill[cells[end]] > cap) end--;
+              if (end < start) level = NaN;
+            }
+          }
           break;
         }
       }
@@ -473,12 +532,15 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
         consumed += level - (g.z[cells[r]] - bed[cells[r]]);
       }
       budget -= consumed;
-      if (capped) {
+      if (perched) {
         start = end + 1; // the overflow perches starting at the cell beyond the saddle
-      } else {
-        if (end === cells.length - 1) exhausted++; // the pool stood over every cell of the stretch
-        break; // a contained pool took the whole remaining budget
-      }
+      } else break; // a contained (or capped) pool took the remaining budget
+    }
+    pouredM3 += Math.max(0, target - budget) * cellM2;
+    if (exhaustedHere) exhausted++;
+    if (cappedHere) {
+      capped++;
+      unpouredM3 += Math.max(0, budget) * cellM2;
     }
     // Velocity: Manning on each wet cell, then one factor so the stretch passes its routed peak (Σ v·d·w = Qpeak,
     // with each cell's width across the flow its area over the stretch length).
@@ -530,6 +592,9 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
   let wetCells = 0;
   let volumeM3 = 0;
   let reachedEdge = false;
+  let lastWet = -1;
+  for (const k of channel) if (depthM[k] > 0 && label[k] > lastWet) lastWet = label[k];
+  const wetEndM = lastWet >= 0 ? sections[Math.min(lastWet + 1, nS - 1)].x : 0;
   for (let k = 0; k < N; k++) {
     if (depthM[k] <= 0) continue;
     wetCells++;
@@ -554,10 +619,14 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     retainedM3,
     travellingM3: travelling,
     exhaustedStretches: exhausted,
+    cappedStretches: capped,
+    pouredM3,
+    unpouredM3,
     basinsFilled,
     stoppedIn,
     stretches,
     reachedEdge,
+    wetEndM,
   };
 }
 

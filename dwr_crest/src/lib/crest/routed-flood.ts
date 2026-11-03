@@ -19,7 +19,7 @@
 import { ACFT, CFS, FT } from "./breach.ts";
 import { fillFlood } from "./fill.ts";
 import { breachPath, spreadVolume } from "./spread.ts";
-import { outlineInputs, traceChannel } from "./outline.ts";
+import { type OutlineInputs, outlineInputs, traceChannel } from "./outline.ts";
 import { type RoutedSection, routeMuskingumCunge, sectionTable } from "./routing.ts";
 import { type Centerline, cutSections } from "./sections.ts";
 import type { Analysis, DamRecord } from "./types.ts";
@@ -64,6 +64,11 @@ export type RoutedFloodOptions = {
   ridgeTolM?: number;
   /** Called every so many cells during the DEM trace so a long build can let the page breathe. */
   yieldFn?: () => Promise<void>;
+  /**
+   * The outline inputs to trace with instead of outlineInputs(dam, result): the demand-driven reach (reach.ts) passes
+   * them with lastX pushed downstream so the trace may run past the schematic's last station.
+   */
+  inputs?: OutlineInputs;
 };
 
 /**
@@ -109,6 +114,14 @@ export type RoutedFloodResult = {
     volumeFlag: boolean;
     reachedEdge: boolean;
     routedPeakFellBy: number;
+    /** Spread only (0 for the stage fill): stretches that ran out of ground, those held at the cap, and the ac-ft withheld. */
+    exhaustedStretches: number;
+    cappedStretches: number;
+    unpouredAcFt: number;
+    /** Spread only (0 / false for the stage fill): the demand signal the reach loop reads, rounded for display. */
+    travellingAcFt: number;
+    wetEndKm: number;
+    stoppedInBasin: boolean;
     /** Water volume the fill lays down (ac-ft). */
     fillAcFt: number;
     /** Breach volume released (ac-ft), the denominator of the volume ratio. */
@@ -116,6 +129,11 @@ export type RoutedFloodResult = {
     /** fillAcFt / releasedAcFt: how many times the released volume the max-surface envelope lays down (provenance). */
     volumeRatio: number;
   };
+  /**
+   * Spread only: the unrounded demand signal for the downstream reach (reach.ts). The wave still reaches the end of the
+   * traced channel (wetEndM against channelEndM), has this much water still travelling, and was not stopped in a basin.
+   */
+  demand?: { reachedEdge: boolean; travellingM3: number; wetEndM: number; channelEndM: number; stoppedInBasin: boolean };
   notes: string[];
 };
 
@@ -132,7 +150,7 @@ export async function buildRoutedFlood(
   if (!series || series.length < 2)
     return { ok: false, reason: "No routed flood: the breach has no outflow hydrograph." };
 
-  const built = await traceChannel(dam, result, g, { yieldFn: opts.yieldFn });
+  const built = await traceChannel(dam, result, g, { yieldFn: opts.yieldFn, inputs: opts.inputs });
   if (!built.ok)
     return { ok: false, reason: built.reason.replace("No terrain outline", "No routed flood") };
   let centerline = built.centerline;
@@ -144,7 +162,7 @@ export async function buildRoutedFlood(
   // trace. Off by default: once the DEM registration and trace start were fixed (crest PR #35) the trace scored better
   // on all four baseline dams and kept the envelope volume near the LISFLOOD band; the path detours through potholes.
   if (method === "spread" && (opts.breachPath ?? false) && centerline.pts.length) {
-    const io = outlineInputs(dam, result);
+    const io = opts.inputs ? ({ ok: true, inputs: opts.inputs } as const) : outlineInputs(dam, result);
     const p = io.ok ? breachPath(g, centerline.loc, io.inputs.u as [number, number], centerline.pts[0]) : null;
     if (p && p.pts.length >= 2) {
       centerline = p;
@@ -189,12 +207,28 @@ export async function buildRoutedFlood(
   let reachedEdge: boolean;
   let velocityFps: Float32Array | undefined;
   let arrivalHr: Float32Array | undefined;
+  let exhaustedStretches = 0;
+  let cappedStretches = 0;
+  let unpouredM3 = 0;
+  let demand: RoutedFloodResult["demand"];
   if (method === "spread") {
     const sp = spreadVolume(g, centerline, routed.sections, {
       minDepthM: opts.minDepthM ?? 0.03,
       releasedM3: releasedAcFt * ACFT,
       basins: opts.basins ?? true,
+      // A stretch that runs out of ground is held at the routed stage + 1 ft and never above 2× the dam's height.
+      maxLevelM: Number.isFinite(dam.heightFt) && dam.heightFt > 0 ? 2 * dam.heightFt * FT : undefined,
     });
+    exhaustedStretches = sp.exhaustedStretches;
+    cappedStretches = sp.cappedStretches;
+    unpouredM3 = sp.unpouredM3;
+    demand = {
+      reachedEdge: sp.reachedEdge,
+      travellingM3: sp.travellingM3,
+      wetEndM: sp.wetEndM,
+      channelEndM: centerline.pts[centerline.pts.length - 1].x,
+      stoppedInBasin: sp.stoppedIn != null,
+    };
     for (let k = 0; k < N; k++) depthFt[k] = sp.depthM[k] > 0 ? sp.depthM[k] / FT : 0;
     velocityFps = new Float32Array(N).fill(NaN);
     arrivalHr = new Float32Array(N).fill(NaN);
@@ -224,7 +258,12 @@ export async function buildRoutedFlood(
     if (sp.basinsFilled)
       notes.push(`${sp.basinsFilled} closed basin${sp.basinsFilled === 1 ? "" : "s"} on the channel filled to the spill level before the wave passed.`);
     if (sp.exhaustedStretches)
-      notes.push(`${sp.exhaustedStretches} stretch${sp.exhaustedStretches === 1 ? "" : "es"} ran out of ground before the slice was poured (the DEM is too small there).`);
+      notes.push(
+        `${sp.exhaustedStretches} stretch${sp.exhaustedStretches === 1 ? "" : "es"} ran out of ground before the slice was poured (the DEM is too small there)` +
+          (sp.cappedStretches
+            ? `; on ${sp.cappedStretches} the pool is held at the routed stage + 1 ft (never above 2× the dam height) and ${(sp.unpouredM3 / ACFT).toFixed(0)} ac-ft of the slices is not laid down: it would stand beyond the ground shown, not deeper on it.`
+            : "."),
+      );
     notes.push(
       "A level pool reaches only ground below its level: a breach front that surges over a low divide can wet ground this layer leaves dry (a known under-prediction).",
     );
@@ -284,7 +323,14 @@ export async function buildRoutedFlood(
       fillAcFt: Math.round(fillAcFt),
       releasedAcFt: Math.round(releasedAcFt),
       volumeRatio: releasedAcFt > 0 ? Math.round((fillAcFt / releasedAcFt) * 10) / 10 : 0,
+      exhaustedStretches,
+      cappedStretches,
+      unpouredAcFt: Math.round(unpouredM3 / ACFT),
+      travellingAcFt: demand ? Math.round(demand.travellingM3 / ACFT) : 0,
+      wetEndKm: demand ? Math.round(demand.wetEndM / 100) / 10 : 0,
+      stoppedInBasin: demand?.stoppedInBasin ?? false,
     },
+    ...(demand ? { demand } : {}),
     notes,
   };
 }
