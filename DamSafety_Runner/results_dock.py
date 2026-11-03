@@ -10,21 +10,32 @@ Works in DamSafety_Runner and nd_breach_runner. The dock looks for
 ``core/dashboard_html.py`` if that module is installed, then opens it.
 
 The numbers are the run's own summary. This dock does not classify hazard.
+
+3.13.6 (Docs & QA dock test, DWR-2801 r4): a Hazard line from DamSafety Hazard's own
+Hazard_Classification_Summary.txt and dam.json (ND / TM 11 class, provisional, Hazard version,
+status, next action, the class of record hook), a stale-summary warning, the structure count
+labelled as the Runner's receptors with Hazard's flooded count beside it, layer-load buttons
+and the run warnings as an expandable list. The reading is core/results_info.py.
 """
 import csv
 import json
 import os
 
+from .core import results_info as RI
+
 from qgis.PyQt.QtCore import Qt, QUrl
 from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtWidgets import (
+    QAbstractItemView,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QTableWidget,
+    QListWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -34,6 +45,12 @@ from qgis.PyQt.QtWidgets import (
 _DWA = getattr(Qt, "DockWidgetArea", Qt)
 LEFT_DOCK = _DWA.LeftDockWidgetArea
 RIGHT_DOCK = _DWA.RightDockWidgetArea
+_TIF = getattr(Qt, "TextInteractionFlag", Qt)
+_TEXT_SELECTABLE = _TIF.TextSelectableByMouse
+# 3.13.6: QGIS 4 / PyQt6 scopes these under QAbstractItemView (QTableWidget.NoEditTriggers /
+# .SelectRows raise AttributeError there); PyQt5 has them unscoped on the class.
+_EDIT_TRIGGER = getattr(QAbstractItemView, "EditTrigger", QAbstractItemView)
+_SEL_BEHAVIOR = getattr(QAbstractItemView, "SelectionBehavior", QAbstractItemView)
 
 
 def _load_json(path):
@@ -127,6 +144,19 @@ def _receptors(path):
     return rows
 
 
+
+def _ro_raster_source(path):
+    """GDAL source for opening a run raster without writing beside it. GDAL PAM saves the
+    statistics QGIS computes as <raster>.aux.xml next to the file; through /vsisubfile/ (the
+    whole file as a read-only byte range) GDAL cannot write a sidecar, so the run folder stays
+    unchanged. Georeferencing is inside the GeoTIFF. Plain path if the size cannot be read."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return path
+    return "/vsisubfile/0_{},{}".format(size, os.path.abspath(path))
+
+
 class ResultsDock(QDockWidget):
     def __init__(self, iface, parent=None):
         super().__init__("Breach results", parent or iface.mainWindow())
@@ -151,12 +181,43 @@ class ResultsDock(QDockWidget):
         buttons.addWidget(dash_btn)
         lay.addLayout(buttons)
 
+        self.hazard = QLabel("")
+        self.hazard.setWordWrap(True)
+        self.hazard.setTextInteractionFlags(_TEXT_SELECTABLE)
+        lay.addWidget(self.hazard)
+        self.stale = QLabel("")
+        self.stale.setWordWrap(True)
+        self.stale.setStyleSheet("color: #b45309;")
+        self.stale.setVisible(False)
+        lay.addWidget(self.stale)
+
+        layers = QHBoxLayout()
+        self.layer_buttons = {}
+        for key in RI.LAYER_KEYS:
+            b = QPushButton(RI.LAYER_LABELS[key])
+            b.setToolTip("Add this layer to the map")
+            b.setEnabled(False)
+            b.clicked.connect(lambda _=False, k=key: self.load_layer(k))
+            layers.addWidget(b)
+            self.layer_buttons[key] = b
+        lay.addLayout(layers)
+
+        self.warn_toggle = QToolButton()
+        self.warn_toggle.setCheckable(True)
+        self.warn_toggle.setVisible(False)
+        self.warn_toggle.toggled.connect(self._show_warnings)
+        lay.addWidget(self.warn_toggle)
+        self.warn_list = QListWidget()
+        self.warn_list.setWordWrap(True)
+        self.warn_list.setVisible(False)
+        lay.addWidget(self.warn_list)
+
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             ["Feature", "Kind", "Depth ft", "Vel ft/s", "Arrival h"])
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        lay.addWidget(self.table)
+        self.table.setEditTriggers(_EDIT_TRIGGER.NoEditTriggers)
+        self.table.setSelectionBehavior(_SEL_BEHAVIOR.SelectRows)
+        lay.addWidget(self.table, 1)
         self.setWidget(root)
 
     def choose_folder(self):
@@ -205,22 +266,114 @@ class ResultsDock(QDockWidget):
             bits.append("{:.0f} ac".format(float(summary["flooded_acres"])))
         if summary.get("max_depth_ft") is not None:
             bits.append("max depth {:.1f} ft".format(float(summary["max_depth_ft"])))
+        dam_dir = os.path.dirname(model_dir) if os.path.basename(model_dir) == "_breach_model" \
+            else model_dir
+        hz = RI.hazard_summary(dam_dir)
         if summary.get("receptors_flooded"):
-            bits.append(str(summary["receptors_flooded"]))
-        warns = report.get("warnings") or []
-        if warns:
-            bits.append("{} thing(s) to check".format(len(warns)))
+            bits.append(_relabel_receptors(summary["receptors_flooded"], report, hz))
+        warns = RI.warning_texts(report)
         if not report_path:
             bits.append("no run_report.json in this folder")
         if hydro_path and nrows:
             bits.append("{} hydrograph rows".format(nrows))
         self.summary.setText(" · ".join(bits))
+        self._show_hazard(dam_dir, model_dir, hz, report)
+        self._fill_warnings(warns)
+        self._report = report
+        self._layers = RI.layer_paths(dam_dir, model_dir, report, hz)
+        self._counts = RI.flooded_counts(self._layers)
+        for key, b in self.layer_buttons.items():
+            b.setEnabled(key in self._layers)
+            b.setText(RI.layer_label(key, self._counts))
+            b.setToolTip(RI.layer_tooltip(key, self._layers[key], self._counts)
+                         if key in self._layers else "Not in this dam folder")
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, value in enumerate(row):
                 self.table.setItem(r, c, QTableWidgetItem(value))
         self.table.resizeColumnsToContents()
         self._model_dir = model_dir
+
+    def _show_hazard(self, dam_dir, model_dir, hz, report=None):
+        run_t = RI.run_output_mtime(dam_dir, model_dir)
+        stale = RI.staleness(hz, _installed_hazard(), run_t)
+        newer = bool(hz and run_t is not None and hz.get("mtime", run_t) < run_t - 1.0)
+        rec = RI.record_status(dam_dir, {"rasters_newer_than_class": newer})
+        cor = RI.class_of_record(dam_dir, model_dir, hz, report)
+        lines = [RI.class_line(hz, rec, cor)]
+        if cor.get("review") and cor["review"].get("note"):
+            lines.append("Note: {}".format(cor["review"]["note"]))
+        if cor.get("state") == "invalid":
+            lines.append("review.json ignored: {}".format("; ".join(cor["problems"][:3])))
+        if rec.get("status"):
+            lines.append("Status: {}{}".format(
+                rec["status"], " (by {} {})".format(rec.get("classified_by"),
+                                                    rec.get("classified_version"))
+                if rec.get("classified_by") else ""))
+        inst = _installed_hazard()
+        if stale:
+            lines.append("Next: Re-classify with the installed Hazard{} - the Hazard summary is "
+                         "stale.".format(" " + inst if inst else ""))
+        elif rec.get("next_action"):
+            lines.append("Next: {}".format(rec["next_action"][1]))
+        if not rec.get("has_record"):
+            lines.append("No dam.json in this folder.")
+        self.hazard.setText("\n".join(lines))
+        stale = stale + ["Class of record: " + w for w in cor.get("warnings") or []]
+        self.stale.setText("\n".join(w if w.startswith("Class of record") else "Stale: " + w
+                                     for w in stale))
+        self.stale.setVisible(bool(stale))
+
+    def _fill_warnings(self, warns):
+        self.warn_list.clear()
+        self.warn_list.addItems(warns)
+        self._nwarn = len(warns)
+        self.warn_toggle.setVisible(bool(warns))
+        self.warn_toggle.setChecked(False)
+        self._show_warnings(False)
+
+    def _show_warnings(self, on):
+        n = getattr(self, "_nwarn", 0)
+        self.warn_toggle.setText("{} {} thing(s) to check".format("▾" if on else "▸", n))
+        self.warn_list.setVisible(bool(on) and n > 0)
+
+    def load_layer(self, key):
+        path = (getattr(self, "_layers", None) or {}).get(key)
+        if not path:
+            return None
+        from qgis.core import QgsProject, QgsRasterLayer, QgsVectorLayer
+        dam = os.path.basename(os.path.dirname(self._model_dir or "")) or ""
+        name = "{} {}".format(dam, RI.layer_label(key, getattr(self, "_counts", None))).strip()
+        # 3.13.6: every layer button opens its data read-only (Docs & QA: the GeoPackage was
+        # opened read-write and its change counter, md5 and mtime changed). Vector layers use
+        # forceReadOnly, GeoPackages also the IMMUTABLE open option; the subset string is only a
+        # provider filter and writes nothing. Rasters: the gdal provider opens read-only.
+        if key in RI.FINAL_NAMES:
+            # 3.13.9: QGIS's gdal provider stored its statistics in a <raster>.aux.xml beside
+            # the file (GDAL PAM) when the layer closed; open through /vsisubfile/ instead.
+            lyr = QgsRasterLayer(_ro_raster_source(path), name, "gdal")
+        else:
+            opts = QgsVectorLayer.LayerOptions()
+            opts.forceReadOnly = True
+            if key == "receptors":
+                crs = (getattr(self, "_report", None) or {}).get("work_crs")
+                lyr = QgsVectorLayer(RI.receptor_csv_uri(path, crs), name, "delimitedtext", opts)
+                if not lyr.isValid():   # no delimitedtext provider: OGR's CSV driver, read-only
+                    lyr = QgsVectorLayer(RI.receptor_ogr_csv_uri(path), name, "ogr", opts)
+                    if lyr.isValid() and crs:
+                        from qgis.core import QgsCoordinateReferenceSystem
+                        lyr.setCrs(QgsCoordinateReferenceSystem(str(crs)))
+            else:
+                lyr = QgsVectorLayer(RI.read_only_ogr_uri(path), name, "ogr", opts)
+            if lyr.isValid() and not lyr.readOnly():
+                lyr.setReadOnly(True)
+        if not lyr.isValid():
+            self.summary.setText("Could not open {}".format(path))
+            return None
+        if key in RI.LAYER_FILTERS:
+            lyr.setSubsetString(RI.LAYER_FILTERS[key])
+        QgsProject.instance().addMapLayer(lyr)
+        return lyr
 
     def open_dashboard(self):
         folder = self._model_dir or self._folder
@@ -239,6 +392,41 @@ class ResultsDock(QDockWidget):
             self.summary.setText(
                 "No dashboard.html yet. Add core/dashboard_html.py so this button can write it."
             )
+
+
+def _relabel_receptors(text, report, hz):
+    """'37 structures, 18.5 km of road' -> '37 Runner receptor structure(s), 18.5 km of road
+    (Hazard: 45 flooded habitable)': the Runner counts its receptor points, Hazard its own."""
+    parts = [p.strip() for p in str(text).split(",")]
+    m = parts[0].split()
+    if len(m) == 2 and m[1] == "structures" and m[0].isdigit():
+        parts[0] = RI.structure_count_text(int(m[0]), {})
+    out = ", ".join(parts)
+    n_haz = (hz or {}).get("flooded_structures")
+    if n_haz is not None:
+        out += " (Hazard: {} flooded habitable)".format(n_haz)
+    return out
+
+
+def _installed_hazard():
+    try:
+        from .damsuite import versions
+        v = versions.installed("ndhazard")
+    except Exception:
+        v = None
+    if v:
+        return v
+    # not loaded in this QGIS: the Hazard plugin folder beside this one (same plugins folder)
+    meta = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "DamSafety_Hazard", "metadata.txt")
+    try:
+        with open(meta, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("version="):
+                    return line.split("=", 1)[1].strip() or None
+    except OSError:
+        pass
+    return None
 
 
 def _load_writer():
