@@ -471,3 +471,62 @@ tr.hl-low td:first-child { border-left: 4px solid var(--green); }
     font-size: 8.5px; font-family: Arial, sans-serif; color: var(--paper-mute); background: #fff; padding-top: 2px; }
   .paper .foot { margin-bottom: 0.3in; }
 }
+
+/* Style B (Crest build pack): map-first results dashboard. Scoped to .dash-root so the desk's own .dot/.badge/table
+   rules are untouched. The map takes at least half the viewport height (acceptance B1). */
+.dash-root { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--panel); margin-top: 12px; }
+.dash-root .dash-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.dash-root .dash-brand { font-weight: 800; color: var(--teal-dark); }
+.dash-root .chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--teal-light); color: var(--teal-dark); }
+.dash-root .chip.legacy { background: var(--amber-bg); color: var(--amber); }
+.dash-root .dash-search { margin-left: auto; border: 1px solid var(--border); border-radius: 7px; padding: 5px 10px; font-size: 12px; width: 180px; max-width: 100%; background: var(--panel); color: var(--ink); }
+.dash-root .dash-body { display: flex; min-height: 0; }
+.dash-root .dash-map { flex: 1; position: relative; min-width: 0; height: 60vh; min-height: 50vh; }
+.dash-root .dash-leaflet { position: absolute; inset: 0; }
+.dash-root .dash-layers { width: 180px; flex: none; background: var(--panel); border-left: 1px solid var(--border); padding: 12px; font-size: 12px; overflow-y: auto; height: 60vh; min-height: 50vh; }
+.dash-root .dash-layers h5 { font-size: 10px; letter-spacing: 0.08em; color: var(--muted); margin: 10px 0 4px; }
+.dash-root .dash-layers h5:first-child { margin-top: 0; }
+.dash-root .layer-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px; cursor: pointer; }
+.dash-root .layer-row.off { opacity: 0.55; }
+.dash-root .mini { font-size: 11px; color: var(--muted); margin: 2px 0 6px; }
+.dash-root .legend-row { display: flex; align-items: center; gap: 6px; font-size: 11px; margin: 2px 0; }
+.dash-root .legend-row span { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.dash-root .dash-bottom { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; padding: 12px; background: var(--bg); }
+.dash-root .dash-impacts { grid-column: 1 / -1; }
+@media (min-width: 1500px) { .dash-root .dash-bottom { grid-template-columns: 1.2fr 0.8fr 2fr; } .dash-root .dash-impacts { grid-column: auto; } }
+.dash-root .pane { background: var(--panel); border-radius: 7px; padding: 10px; box-shadow: var(--shadow); min-width: 0; }
+.dash-root .pane h4 { font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.dash-root .kpi-stack { display: flex; flex-direction: column; gap: 7px; }
+.dash-root .kpi-card { border-left: 4px solid var(--teal); padding: 5px 9px; background: var(--panel); border-radius: 5px; box-shadow: var(--shadow); }
+.dash-root .kpi-card.warn { border-left-color: var(--red); }
+.dash-root .kpi-card .v { font-size: 16px; font-weight: 800; }
+.dash-root .kpi-card .l { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.dash-root .dash-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dash-root .dash-table thead th { text-align: left; font-size: 10px; letter-spacing: 0.05em; color: var(--muted); padding: 4px 5px; border-bottom: 1.5px solid var(--border); white-space: nowrap; }
+.dash-root .dash-table thead th button { font: inherit; color: inherit; letter-spacing: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline dotted; }
+.dash-root .dash-table tbody th, .dash-root .dash-table td { padding: 4px 5px; color: var(--ink); letter-spacing: normal; font-size: 12px; border-bottom: 1px solid var(--border); text-align: left; font-weight: 400; }
+.dash-root .badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
+.dash-root .badge.high { background: var(--red-bg); color: var(--red); }
+.dash-root .badge.sig { background: var(--amber-bg); color: var(--amber); }
+.dash-root .badge.low { background: var(--green-bg); color: var(--green); }
+.dash-root .gate-msg { color: var(--amber); font-weight: 600; padding: 12px 5px; }
+.dash-root .tbl-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 6px; }
+.dash-root .pg { display: flex; gap: 3px; }
+.dash-root .pg button { min-width: 24px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--ink); }
+.dash-root .pg button.cur { background: var(--teal); border-color: var(--teal); color: #fff; }
+.dash-root .pg button:disabled { opacity: 0.4; cursor: default; }
+.dash-root .status-bar { background: #1F2933; color: #fff; font-size: 11px; padding: 6px 16px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.dash-root .status-bar .dot { display: inline; width: auto; height: auto; margin: 0; color: #6EE7B7; font-weight: 700; }
+.dash-root .flag-pill { font-size: 11px; padding: 3px 9px; border-radius: 999px; font-weight: 600; }
+.dash-root .flag-pill.warning { background: #FEF3C7; color: #92400E; border: 1px solid #F2C078; }
+.dash-root .flag-pill.critical { background: #FEE2E2; color: #B91C1C; border: 1px solid #FCA5A5; }
+.dash-root .flag-pill.info { background: #E0F2F5; color: #0B5C6C; border: 1px solid #B7DEE6; }
+.dash-root .ack-btn { margin-left: auto; background: #FCD34D; color: #1F2933; border: none; border-radius: 5px; padding: 3px 10px; font-weight: 700; font-size: 11px; cursor: pointer; }
+.dash-root .disclaimer { font-size: 11px; color: var(--muted); padding: 6px 16px; }
+.dash-arrival { background: rgba(255, 255, 255, 0.9); border: 1px solid #0B5C6C; border-radius: 4px; color: #0B5C6C; font: 600 11px/1.2 'Segoe UI', system-ui, sans-serif; padding: 1px 4px; white-space: nowrap; width: auto !important; height: auto !important; }
+@media (max-width: 900px) {
+  .dash-root .dash-bottom { grid-template-columns: 1fr; }
+  .dash-root .dash-body { flex-direction: column; }
+  .dash-root .dash-layers { width: auto; height: auto; min-height: 0; border-left: 0; border-top: 1px solid var(--border); }
+  .dash-root .dash-search { margin-left: 0; width: 100%; }
+}
