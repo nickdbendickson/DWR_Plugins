@@ -385,8 +385,11 @@ class GateTests(unittest.TestCase):
         import urllib.error
         import urllib.request
 
-        from crest.__main__ import job_snapshot, serve
+        from crest.__main__ import API_TOKEN, TOKEN_HEADER, job_snapshot, serve
 
+        # jobs sent over the API may only write under the allowed roots (crest.qgis_run.resolve_work)
+        os.environ["CREST_WORK_ROOTS"] = str(self.root)
+        self.addCleanup(os.environ.pop, "CREST_WORK_ROOTS", None)
         server = serve(port=0)
         try:
             port = server.server_address[1]
@@ -401,7 +404,7 @@ class GateTests(unittest.TestCase):
             request = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/folder",
                 data=body,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", TOKEN_HEADER: API_TOKEN},
             )
             with urllib.request.urlopen(request, timeout=5) as response:
                 job = json.loads(response.read())
@@ -416,7 +419,7 @@ class GateTests(unittest.TestCase):
             layers = urllib.request.Request(
                 f"http://127.0.0.1:{port}/api/layers",
                 data=json.dumps({"dam": DAM, "work": str(self.root / "httpwork"), "source": "pack"}).encode(),
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", TOKEN_HEADER: API_TOKEN},
             )
             with urllib.request.urlopen(layers, timeout=5) as response:
                 layer_job = json.loads(response.read())
@@ -429,7 +432,8 @@ class GateTests(unittest.TestCase):
             self.assertTrue(found and found["done"])
             self.assertFalse(found["ok"])
             self.assertIn("No ND offline pack folder", found["log"])
-            missing = urllib.request.Request(f"http://127.0.0.1:{port}/api/nope", data=b"{}", method="POST")
+            missing = urllib.request.Request(f"http://127.0.0.1:{port}/api/nope", data=b"{}", method="POST", headers={TOKEN_HEADER: API_TOKEN}
+            )
             with self.assertRaises(urllib.error.HTTPError) as caught:
                 urllib.request.urlopen(missing, timeout=5)
             self.assertEqual(caught.exception.code, 404)
