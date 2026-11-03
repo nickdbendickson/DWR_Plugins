@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { tempDir } from "./test-tmp.mjs";
 import { execFile } from "node:child_process";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import {
@@ -137,8 +137,10 @@ test("puts the project's node_modules/.bin first on PATH (vite resolves without 
 });
 
 test("the CLI finds vite with a PATH that lacks node_modules/.bin", async () => {
+  // A PATH without the project's node_modules/.bin (what the wrapper must add), but still with node itself, so
+  // vite's `#!/usr/bin/env node` shebang resolves wherever node lives (not only when it is in /usr/bin).
   const { stdout } = await execFileAsync(process.execPath, [WRAPPER, "vite", "--version"], {
-    env: { PATH: "/usr/bin:/bin" },
+    env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin` },
   });
   assert.match(stdout, /vite\/\d/);
 });
