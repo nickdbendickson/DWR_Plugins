@@ -990,8 +990,11 @@ export async function buildOutline(
   const dryC = components(W, H, (k) => depth[k] < 0);
   let filledHoles = 0;
   for (let s = 1; s < dryC.sizes.length; s++) if (dryC.sizes[s] < MIN_CELLS && !dryC.border[s]) filledHoles++;
+  // Fill a small interior dry pocket only where the cell is in the domain and has valid terrain. Without the
+  // dom/valid guard the cleanup would wet a tiny NODATA hole or an out-of-AOI pocket, pushing the outline past
+  // the drawn area and over missing terrain — contradicting its own clipped_to_aoi provenance.
   for (let k = 0; k < N; k++)
-    if (depth[k] < 0 && dryC.sizes[dryC.lab[k]] < MIN_CELLS && !dryC.border[dryC.lab[k]]) depth[k] = WET_M;
+    if (depth[k] < 0 && dom[k] && valid(k) && dryC.sizes[dryC.lab[k]] < MIN_CELLS && !dryC.border[dryC.lab[k]]) depth[k] = WET_M;
   await breathe(N);
 
   // Bands, one 3 × 3 mode pass.
