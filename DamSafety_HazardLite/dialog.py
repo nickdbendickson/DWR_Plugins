@@ -62,8 +62,8 @@ class HazardLiteDialog(QDialog):
         root.addLayout(grid)
 
         self.metres = QCheckBox("Rasters are in metres and m/s")
-        self.judgment = QCheckBox("Count the judgment zone as High (5.3 borderline rule)")
-        self.judgment.setChecked(True)
+        self.judgment = QCheckBox("Count the judgment zone as High (old option; off = ND MEDIUM by rule)")
+        self.judgment.setChecked(False)
         self.exclude_ag = QCheckBox("Exclude FEMA agricultural out-buildings (5.2.1.1)")
         self.exclude_ag.setChecked(True)
         root.addWidget(self.metres)

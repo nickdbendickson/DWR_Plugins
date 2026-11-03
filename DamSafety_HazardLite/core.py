@@ -19,10 +19,13 @@ Inputs
 
 Rules (REG_05.2026 Section 5.2, as used by the ND Dam Hazard plugin)
   High    habitable structure in the high danger zone of Fig. 5.1 (houses) / 5.2 (mobile
-          homes) [5.2.1.1]; judgment zone counted as High unless switched off [5.2.1.1, 5.3]
+          homes) [5.2.1.1]; the judgment zone is ND MEDIUM by rule (0.1.2, Nick: any house in
+          the judgment zone is Medium; houses above the high line drive High). The old
+          "count the judgment zone as High" setting stays as an option, off by default
           overtopped Interstate or road with AADT > 2,000 [5.2.1.2]
           inundated passenger line or freight line with >= 10 trains/day [5.2.1.3]
-  Medium  habitable structure inundated to any degree [5.2.2]; overtopped US / State highway
+  Medium  habitable structure in the judgment zone, by rule [5.2.1.1]; habitable structure
+          inundated to any degree [5.2.2]; overtopped US / State highway
           or road with AADT 500 - 2,000 [5.2.1.2]; any other inundated railroad [5.2.1.3]
   Low     none of the above
 """
@@ -39,7 +42,7 @@ from . import tm11
 gdal.UseExceptions()
 ogr.UseExceptions()
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 REF = "ND Dam Safety Standards Policy REG_05.2026 (effective 04/01/2026), Section 5.2"
 WET_FT = 0.1               # inundated "to any degree": the suite's consequence depth
 OUTLINE_SNAP_FT = 30.0     # address point outside every outline: nearest outline this close
@@ -190,7 +193,7 @@ RESIDENTIAL_PLACE = ("RESIDENCE", "MOBILE HOME", "SINGLE FAMILY", "MULTI-FAMILY"
                      "MULTI - FAMILY", "DUPLEX", "APARTMENT")
 
 
-def structures(grid, bounds, address_path, outline_path, judgment_high=True, exclude_ag=True):
+def structures(grid, bounds, address_path, outline_path, judgment_high=False, exclude_ag=True):
     pts = read_layer(address_path, grid, bounds, ["ADDRESS", "Place_Type", "Site_NGUID", "Unit"])
     outl = read_layer(outline_path, grid, bounds, ["BUILD_ID", "PRIM_OCC", "OCC_CLS"],
                       pad_ft=OUTLINE_SNAP_FT)
@@ -254,7 +257,7 @@ def structures(grid, bounds, address_path, outline_path, judgment_high=True, exc
                     "address": "; ".join(sorted(set(s["addresses"])))[:250],
                     "units": len(s["addresses"]), "build_id": s["build_id"], "occupancy": s["occ"],
                     "place_type": ", ".join(sorted(p for p in s["place"] if p)), "matched": s["how"], "chart": "Fig. 5.2 mobile home" if kind == "mobile" else "Fig. 5.1 house",
-                    "cells": len(d), "hmax_ft": round(float(d.max()), 2), "vmax_fps": round(float(v.max()), 2),
+                    "cells": len(d), "hmax_ft": round(float(d.max()), 2), "vmax_fps": (round(float(np.nanmax(v)), 2) if np.isfinite(v).any() else None),
                     "gov_depth_ft": round(gd, 2), "gov_vel_fps": None if gv is None else round(gv, 2),
                     "velocity_unknown": gv is None,
                     "zone": tm11.ZONE_NAMES[zone], "nd_class": nd})
@@ -607,17 +610,20 @@ def railroads(grid, bounds, rail_path, crossings_path, crown=None, crown_note=""
 
 
 # ------------------------------------------------------------ classification --
-def classify(structs, rds, rails, judgment_high=True):
+def classify(structs, rds, rails, judgment_high=False):
     reasons = []
     hi = [s for s in structs if s["zone"] == "High"]
     jz = [s for s in structs if s["zone"] == "Judgment"]
     if hi:
         reasons.append(("High", "5.2.1.1", "{} habitable structure(s) in the high danger zone".format(len(hi))))
     if jz:
-        reasons.append(("High" if judgment_high else "Judgment", "5.2.1.1",
+        # 0.1.2 (Nick, 2026-11-03): ND puts judgment-zone houses at MEDIUM by rule, as Hazard
+        # does; counting them as High is the old conservative option, off by default
+        reasons.append(("High" if judgment_high else "Medium", "5.2.1.1",
                         "{} habitable structure(s) in the judgment zone{}".format(
-                            len(jz), " (counted as High, 5.3 borderline rule)" if judgment_high else
-                            " - engineer decides whether loss of life is probable")))
+                            len(jz), " - counted as High (old conservative option)" if judgment_high else
+                            " - ND MEDIUM by rule (judgment-zone houses are Medium, not probable "
+                            "loss of life)")))
     for items, sec, what in ((rds, "5.2.1.2", "overtopped road stretch(es)"),
                              (rails, "5.2.1.3", "inundated railroad stretch(es)")):
         for cls in ("High", "Medium"):
@@ -639,8 +645,6 @@ def classify(structs, rds, rails, judgment_high=True):
     nl = sum(r["verify"] for r in rails)
     if nl:
         verify.append("{} rail stretch(es) with trains/day unknown".format(nl))
-    if jz and not judgment_high:
-        verify.append("judgment-zone structures decide High vs Medium")
     nv = sum(bool(s.get("velocity_unknown")) for s in structs)
     if nv:
         verify.append("{} structure(s) with velocity unknown at every wet cell: zone read on depth "
@@ -687,7 +691,7 @@ def _write_csv(path, rows, cols):
 
 
 S_COLS = ["address", "units", "occupancy", "place_type", "matched", "chart", "cells", "hmax_ft", "vmax_fps",
-          "gov_depth_ft", "gov_vel_fps", "zone", "nd_class", "build_id"]
+          "gov_depth_ft", "gov_vel_fps", "velocity_unknown", "zone", "nd_class", "build_id"]
 CHECK_COLS = ["depth_basis", "grid_hmax_ft", "crown_ft", "wse_ft", "freeboard_ft", "check_note"]
 R_COLS = ["road", "road_class", "length_ft", "hmax_ft", "vmax_fps", "aadt", "aadt_year", "station",
           "station_ft", "nd_class", "basis"] + CHECK_COLS
@@ -697,7 +701,7 @@ K_COLS = ["line", "x", "y", "length_ft", "grid_hmax_ft", "decision", "depth_basi
           "freeboard_ft", "check_note"]
 
 
-def run(depth, velocity, out_dir, layers, metres=False, judgment_high=True, exclude_ag=True,
+def run(depth, velocity, out_dir, layers, metres=False, judgment_high=False, exclude_ag=True,
         dam_name="", log=print, wse=None, dem=None, dem_z_to_m=None, cut_structures=None,
         crown_check=True):
     os.makedirs(out_dir, exist_ok=True)
@@ -730,7 +734,7 @@ def run(depth, velocity, out_dir, layers, metres=False, judgment_high=True, excl
         os.remove(gpkg)
     S, R, I = ogr.OFTString, ogr.OFTReal, ogr.OFTInteger
     _write_gpkg(gpkg, "structures", grid.srs, s, ogr.wkbMultiPolygon,
-                [(c, R if c.endswith(("_ft", "_fps")) else I if c in ("units", "cells", "build_id") else S)
+                [(c, R if c.endswith(("_ft", "_fps")) else I if c in ("units", "cells", "build_id", "velocity_unknown") else S)
                  for c in S_COLS])
     _write_gpkg(gpkg, "road_spots", grid.srs, r, ogr.wkbPoint,
                 [(c, R if c.endswith(("_ft", "_fps")) else I if c in ("aadt", "aadt_year", "station_ft") else S)

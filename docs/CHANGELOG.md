@@ -6,6 +6,10 @@
   - **DV.** `structures.evaluate_structures`: `dv_max` = peak depth x peak wet-cell velocity (`peak_pair`, the pair the zone is classified on), never sampled from a DV raster (a DV raster only marks where the worst cell is). With the velocity unknown at every wet cell `dv_max` is None, `consequences.flood_severity` says "velocity unknown - no DV" (depth only) and Notes say "velocity unknown at every wet cell - depth only, no DV - verify".
   - **Missing velocity.** A NaN velocity on a wet cell is filled with the structure's peak velocity, else 0 (`_fill_missing_velocity`, as the nd Hazard Helper 2.35.x); was 0, which read the structure on the optimistic side. Notes: "velocity missing on some wet cells (filled with the structure's peak velocity, else 0) - verify".
   - Test: `DamSafety_Hazard/tests/test_dv_peak_pair.py` (new).
+- **HazardLite 0.1.2: the judgment zone is ND MEDIUM by rule by default (audit 2026-11-03, Nick: "Fix all").** No damsuite change; no other plugin changes.
+  - `judgment_high` defaults to False in `core.structures/classify/run`, the window tick and the Processing `JUDGMENT_HIGH` parameter (label: "Count the judgment zone as High (old option; off = ND MEDIUM by rule)"). Off, the 5.2.1.1 reason is Medium and reads "judgment zone - ND MEDIUM by rule"; houses above the high line still drive High.
+  - Docs & QA nits: `velocity_unknown` is in `S_COLS` (CSV and gpkg), `vmax_fps` is `nanmax` (blank when all NaN), README covers velocity unknown.
+  - Test: `DamSafety_HazardLite/tests/test_core.py`.
 
 - **Hazard 2.22.4: DSS-WISE result names with units after the quantity are autodetected (Nick: "Do the DSS-WISE autodetect fix PR").** RELEASE ndhazard 2.22.4; damsuite content otherwise unchanged.
   - **Found.** `autodetect._is_time_step` took the text after "Depth"/"Velocity" for an output time, so `Depth_ft.tif`, `Velocity_ftps.tif`, `Depth_m.asc` ... were skipped in the dam folder (any case, any depth of sub-folder). A label made only of unit words is no longer a time step; `Depth_0100`, `Depth (01JAN2020 12:00:00)` still are.
