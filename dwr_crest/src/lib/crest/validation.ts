@@ -14,6 +14,11 @@
  *  - receptors: depth, velocity and arrival at each point from both layers, wet/dry agreement, the TM 11 zone from
  *    each when both carry velocity, and summary errors (bias, MAE, RMSE).
  *
+ * Extent and receptors are scored separately: the extent raster is built from the candidate's area geometry only
+ * (Polygon / MultiPolygon) and any Point features (the 911 receptors the flood strip carries) are skipped there, so
+ * the overlap/recall/CSI numbers are polygon-vs-model. The receptor points are scored on their own below, by sampling
+ * both layers at each point location — not by whether a receptor cell falls inside the candidate's extent raster.
+ *
  * Only cells downstream of the breach count when a downstream direction is given, as renderCompare does.
  * Pure module (no DOM); it runs in node for the four-dam scoring (scripts/validate-crest.mjs) and in tests.
  */

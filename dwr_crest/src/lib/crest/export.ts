@@ -184,6 +184,9 @@ export function generateLisfloodPackage(dam: DamRecord, series: SeriesPoint[], o
   const simS = Math.round(simHours * 3600);
   const par = [
     `# Crest desk export for ${dam.name} (${dam.nid || dam.id}). ${simHours} h run so the recession drains.`,
+    `# Written for LISFLOOD-FP 5.x-8.x (the ND Runner's build): QVAR point sources are m3/s per metre of cell width`,
+    `# (m2/s) = Q / (cell size x inflow cells). A LISFLOOD-FP that expects total m3/s for point sources would read this`,
+    `# as 1/(cell x cells) of the breach discharge; re-scale the .bdy before using it with such a version.`,
     `DEMfile ${resroot}.dem.asc`,
     `resroot ${resroot}`,
     "dirroot results",
@@ -216,7 +219,7 @@ export function generateLisfloodPackage(dam: DamRecord, series: SeriesPoint[], o
   const pts = [...series];
   const last = pts[pts.length - 1];
   if (!last || last.tHr * 3600 < simS) pts.push({ tHr: simHours, qCfs: 0 });
-  const bdyLines = [`breach hydrograph: m3/s / (cell size x ${cells} inflow cells)`, "breach", `${pts.length} seconds`];
+  const bdyLines = [`breach hydrograph: m2/s (m3/s / (cell size x ${cells} inflow cells)); LISFLOOD-FP 5.x-8.x QVAR convention`, "breach", `${pts.length} seconds`];
   for (const p of pts) {
     const unit = p.qCfs / CFS_PER_CMS / (cell * cells);
     bdyLines.push(`${unit.toFixed(6)} ${(p.tHr * 3600).toFixed(4)}`);
@@ -230,6 +233,7 @@ export function generateLisfloodPackage(dam: DamRecord, series: SeriesPoint[], o
       : "Edges: FREE (normal depth) on N/S/E/W; the ranges cover any DEM, so every edge cell is open.",
     `Supply ${resroot}.dem.asc (ASCII grid, NAVD88 metres) beside the .par.`,
     `fpfric ${fpfric} is a single floodplain Manning n; replace it with land-cover roughness for a study run.`,
+    `LISFLOOD-FP version: the .bdy QVAR values are m3/s per metre of cell width (m2/s), the 5.x-8.x convention. Import into a build that expects total m3/s for point sources would under-read the inflow by cell x cells; re-scale first.`,
   ].join("\n");
   return { par, bci, bdy, notes };
 }

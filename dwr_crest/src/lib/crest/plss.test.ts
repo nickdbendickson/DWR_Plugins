@@ -209,6 +209,20 @@ describe("online lookup, cache and offline message (no network: fetch is faked)"
     assert.equal(urls.length, 2);
   });
 
+  it("keeps paging on a full page even when the service omits exceededTransferLimit", async () => {
+    // f=geojson can drop the flag; a full page (PAGE sections) must still fetch the next page, a short one ends it.
+    const base = FIXTURE.sections[0] as PlssSection;
+    const full = Array.from({ length: 1000 }, (_, i) => ({ ...base, id: `SYN-${i}`, plssid: `SYN-${i}` }));
+    const urls: string[] = [];
+    const fake = async (url: string) => {
+      urls.push(url);
+      return urls.length === 1 ? page(full.map(asService), false) : page([], false);
+    };
+    const cache = await fetchPlss(STRIP, fake, new Date("2026-10-30T14:57:43Z"));
+    assert.equal(urls.length, 2, "a full page without the flag still fetches the next page");
+    assert.equal(cache.sections.length, 1000);
+  });
+
   it("a strip past the cached box asks again (offline: says it needs a connection)", () => {
     const small: PlssCache = { ...FIXTURE, bbox: [O.lon - 0.01, O.lat - 0.01, O.lon + 0.01, O.lat + 0.01] };
     const off = plssState({ ...ND, plss: small }, STRIP, false);

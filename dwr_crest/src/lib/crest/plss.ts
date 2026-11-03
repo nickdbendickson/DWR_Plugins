@@ -232,8 +232,14 @@ export async function fetchPlss(strip: FloodStrip, fetchFn: Fetch = fetch as unk
     if (body.error) throw new Error(`PLSS lookup failed: ${body.error.message ?? "service error"}.`);
     const feats = body.features ?? [];
     sections.push(...readSections(feats));
-    const more = body.exceededTransferLimit ?? body.properties?.exceededTransferLimit ?? false;
+    // Keep paging while the service flags more OR it returned a full page: f=geojson responses can omit
+    // exceededTransferLimit, so a full page is the reliable "there may be more" signal and a short page proves
+    // completion. Without this a large strip would silently stop at one page and report the missing sections' ground
+    // as uncovered — a fetch gap dressed as a data gap.
+    const flagged = body.exceededTransferLimit ?? body.properties?.exceededTransferLimit ?? false;
+    const more = flagged || feats.length >= PAGE;
     if (!more || feats.length === 0) break;
+    if (page === MAX_PAGES - 1) throw new Error(`PLSS lookup stopped at ${MAX_PAGES * PAGE} sections; draw a smaller area.`);
   }
   const seen = new Set<string>();
   return {

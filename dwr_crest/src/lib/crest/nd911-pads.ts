@@ -11,6 +11,14 @@ import type { Analysis, DamRecord, ReceptorSeed } from "./types.ts";
  * slope: the dam's streambed, which keeps the pad small). If the ground at the point cannot be read, pad stays 0 and
  * the seed is marked "estimated" so the screen asks for review. The engine already screens depth = channel depth - pad,
  * clamped at 0, so a point above the water is dry.
+ *
+ * ASSUMPTION (stated, not enforced): the pad's bed (the lowest DEM cell across the section) and the bed the desk's
+ * channel depth is measured from (the schematic streambed lowered along the slope) are taken to agree. Where they
+ * don't, the subtraction is off: a DEM pit or borrow pit below the thalweg inside the corridor reads as a lower bed,
+ * which inflates the pad and so under-screens the point (the anti-conservative direction, like DWR-2801's pothole
+ * country); a straight-bearing section that misses a meander reads the floodplain as the bed, which shrinks the pad
+ * and over-screens (conservative). Reconciling the two beds (e.g. clamping the pad bed to the schematic bed at the
+ * station) changes receptor depths and so needs a methodology call and re-validation; it is deliberately left here.
  */
 
 export const FT_PER_M = 1 / 0.3048;

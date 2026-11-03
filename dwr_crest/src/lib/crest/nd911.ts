@@ -253,7 +253,11 @@ export async function fetchNd911(
     if (body.error) throw new Error(`911 address point lookup failed: ${body.error.message ?? "service error"}.`);
     const feats = body.features ?? [];
     points.push(...readPoints(feats));
-    const more = body.exceededTransferLimit ?? body.properties?.exceededTransferLimit ?? false;
+    // Keep paging while the service flags more OR it returned a full page: f=geojson responses can omit
+    // exceededTransferLimit (classic ArcGIS only sets it on f=json), so a full page is the reliable "there may be more"
+    // signal and a short page is the proof of completion. Without this a dense area would silently stop at one page.
+    const flagged = body.exceededTransferLimit ?? body.properties?.exceededTransferLimit ?? false;
+    const more = flagged || feats.length >= PAGE;
     if (!more || feats.length === 0) break;
     if (page === MAX_PAGES - 1) throw new Error(`911 address point lookup stopped at ${MAX_PAGES * PAGE} points; draw a smaller area.`);
   }

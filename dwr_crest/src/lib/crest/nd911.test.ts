@@ -125,6 +125,19 @@ describe("paging and errors (fetch is faked)", () => {
     assert.deepEqual(urls.map((u) => new URL(u).searchParams.get("resultOffset")), ["0", "2000", "4000"]);
     assert.equal(c.points.length, 45);
   });
+  it("keeps paging on a full page even when the service omits exceededTransferLimit", async () => {
+    // f=geojson can drop the flag; a full page (PAGE features) must still trigger the next fetch, and a short page ends it.
+    const one = PAGE.features[0] as { properties: Record<string, unknown>; geometry: unknown };
+    const full = Array.from({ length: 2000 }, (_, i) => ({ ...one, properties: { ...one.properties, Site_NGUID: `SYN-${i}` } }));
+    const pages = [
+      { type: "FeatureCollection", features: full }, // exactly PAGE, no flag
+      { type: "FeatureCollection", features: [] }, // short page proves completion
+    ];
+    const { fn, urls } = fake(pages);
+    const c = await fetchNd911(STRIP, fn, NOW);
+    assert.equal(urls.length, 2, "a full page without the flag still fetches the next page");
+    assert.equal(c.points.length, 2000);
+  });
   it("a failed lookup says it needs a connection", async () => {
     const fn = async () => {
       throw new TypeError("Failed to fetch");
