@@ -1162,6 +1162,8 @@ class _Base(QgsProcessingAlgorithm):
             loss_f = structmod.losses_field(names)
             if loss_f:
                 want.append(loss_f)
+            # 3.14.1: ND Dam Hazard's source / src_id, for OSM (mapped, not surveyed) labels
+            want += [n for n in names if n.lower() in ("source", "src_id") and n not in want]
             bad_losses = []
             for i, (line, at) in enumerate(qio.lines(src, a, b, center_xy, radius,
                                                     fields=want)):
@@ -1186,9 +1188,7 @@ class _Base(QgsProcessingAlgorithm):
                     inv_u * FT if inv_u is not None else None,
                     inv_d * FT if inv_d is not None else None,
                     name=str(at.get(fld["S_NAME"]) or "{} {}".format(kind, i + 1))))
-                s = structs[-1]
-                s.source = "inventory"
-                s.surveyed = True
+                s = structmod.label_source(structs[-1], at)       # 3.14.1: OSM = mapped only
                 s.carries = facility_kind({n: at.get(n) for n in fac})
                 if loss_f:
                     lv, ok = structmod.losses_value(qio.num(at.get(loss_f)))

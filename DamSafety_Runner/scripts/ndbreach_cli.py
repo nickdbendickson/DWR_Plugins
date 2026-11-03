@@ -1252,6 +1252,7 @@ def apply_layers(st, cfg, setup, center_xy, cache, dem_projected=True):
                     name=str(g("S_NAME") or "{} {}".format(kind, i + 1))))
                 # 3.10.90: the facility a bridge carries (road / rail) for the bridge check
                 structs[-1].carries = bsnap.facility_kind(at)
+                structmod.label_source(structs[-1], at)          # 3.14.1: OSM = mapped only
                 i += 1
     st.structures = structs
     # DEM conditioning

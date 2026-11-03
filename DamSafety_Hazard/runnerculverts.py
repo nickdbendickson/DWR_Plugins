@@ -111,6 +111,14 @@ INFO_TABLE = "runner_culverts_info"
 
 # engineer-chosen screening parameters (defaults are placeholders, not standards)
 DEFAULTS = {"search_m": 150.0,          # structure point to the stream / road crossing
+            # 2.23.0: OSM culvert / ford points are snapped only to a stream x road / rail
+            # crossing within osm_search_m (bridges keep search_m; the smaller wins). The
+            # point is the middle of the mapped culvert way, so it lies near its crossing, but
+            # OSM and 3DHP / NHD are digitised apart: on DWR-10554 way/492688522 (BNSF ZAP
+            # SPUR) is 3.6 m off the rail, 15.5 m off the 3DHP line and 46.3 m from the 3DHP x
+            # rail crossing. 60 m places it (and 39 of the run's OSM culverts, 34 at 30 m, 43
+            # at 150 m) while keeping a culvert off the next crossing along the embankment.
+            "osm_search_m": 60.0,
             "road_width_m": 10.0,       # embankment top width of a road (about 33 ft)
             "rail_width_m": 6.0,        # embankment top width of a railroad (about 20 ft)
             "margin_m": 10.0,           # added on EACH side for the side slopes
@@ -214,8 +222,11 @@ def osm_record(props, xy):
     p = _low(props)
     cat = _txt(p.get("category"))
     c = cat.lower()
+    rail = bool(_txt(p.get("railway")))
     if c.startswith("culvert"):
-        kind, prefer = KIND_CULVERT, "road"
+        # 2.23.0: a culvert mapped under a railway prefers the rail line; otherwise the
+        # nearest stream crossing of any road or rail line (prefer None)
+        kind, prefer = KIND_CULVERT, "rail" if rail else None
     elif "ford" in c or "low-water" in c or "low water" in c:
         kind, prefer = KIND_NOTCH, "road"
     elif "bridge" in c:
@@ -230,7 +241,9 @@ def osm_record(props, xy):
            "carried": _txt(p.get("railway")), "crosses": _txt(p.get("waterway")),
            "nbi_kind": "", "nbi_design": "", "prefer": prefer, "span_ft": None,
            "n_spans": None, "barrels": None, "struct_len_ft": None, "deck_w_ft": None,
-           "deck_w_src": "", "notes": []}
+           "deck_w_src": "", "near_m": None if kind == KIND_BRIDGE else "osm_search_m",
+           "notes": ["OpenStreetMap {} (mapped location; size not in OSM, not surveyed)".format(
+               oid or "?")]}
     if kind == KIND_NOTCH:
         rec["notes"].append("ford / low-water crossing: written as a notch (no opening "
                             "through an embankment is expected)")
@@ -739,6 +752,9 @@ def place(records, streams, roads=(), rails=(), params=None):
                             "src_id": rec["src_id"], "reason": reason}))
     for rec in records:
         x, y = rec["x"], rec["y"]
+        search = float(P["search_m"])
+        if rec.get("near_m"):                       # 2.23.0: OSM culverts / fords
+            search = min(search, float(P.get(rec["near_m"]) or search))
         segs = list(S.segments_near(x, y, search))
         if not segs:
             fail(rec, "no stream line within {:g} m".format(search))
@@ -756,7 +772,7 @@ def place(records, streams, roads=(), rails=(), params=None):
                     t, _u, (ix, iy) = hit
                     dd = math.hypot(ix - x, iy - y)
                     if dd <= search:
-                        hits.append((0 if ek == rec["prefer"] else 1, dd, ek, k, pi, si, t,
+                        hits.append((0 if rec["prefer"] in (None, ek) else 1, dd, ek, k, pi, si, t,
                                      (ix, iy), _angle(a, b, c, d), lines.items[ek2]["name"],
                                      (c, d)))
         rec_notes = list(rec.get("notes") or [])

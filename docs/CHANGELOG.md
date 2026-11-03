@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Runner 3.14.1 / Hazard 2.23.0: OpenStreetMap culverts in the structures layer (Nick: "do culvert ideas", from the DWR-10554 run on main 33a93c0).** RELEASE ndbreach 3.14.1, ndhazard 2.23.0 (numbered above the 3.14.0 guessed-culvert PR); damsuite content otherwise unchanged.
+  - **Found.** OSM way/492688522 (Culvert under the BNSF ZAP SPUR, near EPSG:5070 -440541, 2717772) was never modelled: the structures layer was built without OSM, and Culvert prep had no OSM input.
+  - **Hazard `runnerculverts`.** New `osm_search_m` / `OSM_SEARCH_FT` (default 60 m): an OSM culvert or ford is placed only on a stream x road / rail crossing that close (bridges keep `search_m`, 150 m; the smaller wins). On DWR-10554 the example is 3.6 m off the rail, 15.5 m off the 3DHP line and 46.3 m from the 3DHP x rail crossing; 60 m places it and 39 of the 79 OSM records as culverts (30 m: 34 and not the example; 150 m: 43). An OSM culvert with no railway tag takes the nearest crossing of any road or rail line (was: a road first). `source` OSM, `src_id` the way; the notes say mapped location, size not surveyed.
+  - **Runner.** Culvert prep's build step has a `Build: OpenStreetMap crossings` input; a STRUCTURES feature with `source` OSM is labelled `OSM way/...`, not surveyed, in the run report (`core/structures.label_source`, Processing tool and `ndbreach_cli`). No size in OSM: the default culvert size (`S_DEFAULT_WIDTH/HEIGHT`, 4 ft).
+  - **Class.** On DWR-10554 the crossings are overtopped by 1.6-3.4 ft; a 4 ft culvert passes a small fraction of that flow, so the class is not expected to change (no model re-run in this PR).
+  - Tests: `DamSafety_Hazard/tests/test_runnerculverts_osm.py`, `DamSafety_Runner/tests/test_osm_structures.py` (new).
+
 - **Hazard 2.22.4: DSS-WISE result names with units after the quantity are autodetected (Nick: "Do the DSS-WISE autodetect fix PR").** RELEASE ndhazard 2.22.4; damsuite content otherwise unchanged.
   - **Found.** `autodetect._is_time_step` took the text after "Depth"/"Velocity" for an output time, so `Depth_ft.tif`, `Velocity_ftps.tif`, `Depth_m.asc` ... were skipped in the dam folder (any case, any depth of sub-folder). A label made only of unit words is no longer a time step; `Depth_0100`, `Depth (01JAN2020 12:00:00)` still are.
   - **Units.** `dsswise.detect_units` reads units right after the quantity word: `Velocity_ft_s` / `Velocity_ft_per_s` are ft/s and `Depth_m` / `Velocity_m_s` are m, m/s (were "assumed ft / ft/s"). `MaxDepth_in_Ft` style names are unchanged.
