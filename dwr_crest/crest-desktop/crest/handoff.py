@@ -114,6 +114,8 @@ def write_dam_folder(work: Path, dam: dict, analysis: dict) -> tuple[Path, list[
     reservoir = _point(geom.get("reservoirPoint"))
     line = _line(geom.get("damLine"))
     crest = _num(datum_block.get("crestNavdFt"))
+    # The breach bottom, tied the same way as the crest (Docs & QA N3). Written with its own datum field.
+    streambed = _num(datum_block.get("streambedNavdFt"))
     datum = dam.get("statedDatum") or ""
     datum_text = {"Local": "local", "NGVD29": "NGVD29 ft", "NAVD88": "NAVD88 ft"}.get(datum)
     nid = str(dam.get("nidId") or "")
@@ -131,6 +133,8 @@ def write_dam_folder(work: Path, dam: dict, analysis: dict) -> tuple[Path, list[
         "top_of_dam_ft": crest,
         "normal_pool_ft": _num(datum_block.get("poolNavdFt")),
         "top_of_dam_datum": datum_text if crest is not None else None,
+        "streambed_ft": streambed,
+        "streambed_datum": datum_text if streambed is not None else None,
     }
     if breach:
         incoming["lon"], incoming["lat"] = breach

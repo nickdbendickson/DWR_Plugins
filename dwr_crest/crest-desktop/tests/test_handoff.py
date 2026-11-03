@@ -55,7 +55,7 @@ DAM = {
     },
 }
 ANALYSIS = {
-    "datum": {"crestNavdFt": 1071.09, "poolNavdFt": 1060.0},
+    "datum": {"crestNavdFt": 1071.09, "poolNavdFt": 1060.0, "streambedNavdFt": 1043.59},
     "breach": {"peakCfs": 20933, "widthFt": 80, "series": [{"tHr": 0, "qCfs": 0}, {"tHr": 1, "qCfs": 100}]},
     "screen": {"level": "High", "label": "High (flagged)", "reasons": ["desk screen"]},
 }
@@ -125,6 +125,22 @@ def _exe(path: Path, text: str) -> None:
 
 
 class FolderTests(unittest.TestCase):
+    def test_writes_streambed_with_datum_and_source_like_top_of_dam(self):
+        with tempfile.TemporaryDirectory() as d:
+            folder, _ = write_dam_folder(Path(d), DAM, ANALYSIS)
+            record = json.loads((folder / "dam.json").read_text(encoding="utf-8"))
+            fields, sources = record["fields"], record["sources"]
+            self.assertEqual(fields["streambed_ft"], 1043.59)
+            self.assertEqual(fields["streambed_datum"], fields["top_of_dam_datum"])
+            for key in ("streambed_ft", "streambed_datum"):
+                self.assertEqual(sources[key]["tool"], sources["top_of_dam_ft"]["tool"])
+                self.assertIn("when", sources[key])
+            no_bed = {**ANALYSIS, "datum": {"crestNavdFt": 1071.09}}
+            folder2, _ = write_dam_folder(Path(d) / "b", DAM, no_bed)
+            fields2 = json.loads((folder2 / "dam.json").read_text(encoding="utf-8"))["fields"]
+            self.assertNotIn("streambed_ft", fields2)
+            self.assertNotIn("streambed_datum", fields2)
+
     def test_writes_suite_record_and_keeps_other_tools(self):
         with tempfile.TemporaryDirectory() as d:
             folder, notes = write_dam_folder(Path(d), DAM, ANALYSIS)
