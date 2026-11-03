@@ -772,12 +772,20 @@ export function findToe(
   return none;
 }
 
-export async function buildOutline(
+/**
+ * Build the terrain outline, or (traceOnly) only the drainage trace. The trace is the first half of the work: the
+ * drainage priority-flood, the toe and the channel path. The bathtub flood, the speck/hole cleanup, the band mode pass
+ * and the polygonisation are the expensive second half, and the routed flood (routed-flood.ts) needs only the trace
+ * (its section cutter works from the centreline). traceOnly returns right after the centreline so that build skips the
+ * second half; the full build runs the whole body unchanged. (M12)
+ */
+async function buildOutlineImpl(
   dam: DamRecord,
   result: Analysis,
   g: DemGrid,
-  opts: BuildOptions = {},
-): Promise<{ ok: true; cache: OutlineCache; centerline: Centerline } | { ok: false; reason: string }> {
+  opts: BuildOptions,
+  traceOnly: boolean,
+): Promise<{ ok: true; cache: OutlineCache | null; centerline: Centerline } | { ok: false; reason: string }> {
   const io = outlineInputs(dam, result);
   if (!io.ok) return io;
   const inp = io.inputs;
@@ -914,6 +922,18 @@ export async function buildOutline(
     const di = (path[p] % W) - (path[p - 1] % W);
     channelM += di !== 0 && Math.abs(path[p] - path[p - 1]) !== 1 ? cellM * Math.SQRT2 : cellM;
   }
+
+  // The traced channel as a local-frame polyline, for the section cutter (sections.ts) and the routed flood. Sibling
+  // to the cache, so it is not part of what is saved on the dam. Built here so a traceOnly caller can return before the
+  // bathtub flood and polygonisation.
+  const centerline: Centerline = {
+    loc: { lon: loc.lon, lat: loc.lat },
+    pts: path.map((k, p) => {
+      const i = k % W;
+      return { e: cellX(i), n: cellY((k - i) / W), x: pathA[p] };
+    }),
+  };
+  if (traceOnly) return { ok: true, centerline, cache: null };
 
   // Flood (height above the nearest channel cell): each cell takes the water surface of its nearest channel cell
   // (filled bed + the desk depth at that cell's distance downstream) and is wet when its ground is under that surface
@@ -1123,15 +1143,6 @@ export async function buildOutline(
     },
     features,
   };
-  // The traced channel as a local-frame polyline, for the section cutter (sections.ts) and the routed flood. Sibling
-  // to the cache, so it is not part of what is saved on the dam.
-  const centerline: Centerline = {
-    loc: { lon: loc.lon, lat: loc.lat },
-    pts: path.map((k, p) => {
-      const i = k % W;
-      return { e: cellX(i), n: cellY((k - i) / W), x: pathA[p] };
-    }),
-  };
   return {
     ok: true,
     centerline,
@@ -1145,6 +1156,34 @@ export async function buildOutline(
       layer: "outline",
     },
   };
+}
+
+/** Build the terrain outline on a DEM (the full flood: trace, bathtub, bands, polygons) plus its centreline. */
+export async function buildOutline(
+  dam: DamRecord,
+  result: Analysis,
+  g: DemGrid,
+  opts: BuildOptions = {},
+): Promise<{ ok: true; cache: OutlineCache; centerline: Centerline } | { ok: false; reason: string }> {
+  const r = await buildOutlineImpl(dam, result, g, opts, false);
+  if (!r.ok) return r;
+  return { ok: true, cache: r.cache!, centerline: r.centerline };
+}
+
+/**
+ * Just the drainage trace (the outline's centreline), without the bathtub flood, cleanup, bands or polygonisation.
+ * The routed flood needs only this; building the full outline just to read its centreline would throw the expensive
+ * half away.
+ */
+export async function traceChannel(
+  dam: DamRecord,
+  result: Analysis,
+  g: DemGrid,
+  opts: BuildOptions = {},
+): Promise<{ ok: true; centerline: Centerline } | { ok: false; reason: string }> {
+  const r = await buildOutlineImpl(dam, result, g, opts, true);
+  if (!r.ok) return r;
+  return { ok: true, centerline: r.centerline };
 }
 
 /** What the desk can show for the outline now: the saved one (if built from the same inputs), or what to do. */

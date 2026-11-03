@@ -19,7 +19,7 @@
 import { ACFT, CFS, FT } from "./breach.ts";
 import { fillFlood } from "./fill.ts";
 import { breachPath, spreadVolume } from "./spread.ts";
-import { buildOutline, outlineInputs } from "./outline.ts";
+import { outlineInputs, traceChannel } from "./outline.ts";
 import { type RoutedSection, routeMuskingumCunge, sectionTable } from "./routing.ts";
 import { type Centerline, cutSections } from "./sections.ts";
 import type { Analysis, DamRecord } from "./types.ts";
@@ -119,7 +119,7 @@ export type RoutedFloodResult = {
 
 export type RoutedFloodFail = { ok: false; reason: string };
 
-/** Build the routed flood on a DEM. Reuses buildOutline for the DEM drainage trace (its centreline). */
+/** Build the routed flood on a DEM. Uses traceChannel for the DEM drainage trace (its centreline) only. */
 export async function buildRoutedFlood(
   dam: DamRecord,
   result: Analysis,
@@ -130,7 +130,7 @@ export async function buildRoutedFlood(
   if (!series || series.length < 2)
     return { ok: false, reason: "No routed flood: the breach has no outflow hydrograph." };
 
-  const built = await buildOutline(dam, result, g, { yieldFn: opts.yieldFn });
+  const built = await traceChannel(dam, result, g, { yieldFn: opts.yieldFn });
   if (!built.ok)
     return { ok: false, reason: built.reason.replace("No terrain outline", "No routed flood") };
   let centerline = built.centerline;
