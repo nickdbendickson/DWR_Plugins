@@ -1665,6 +1665,11 @@ def _arcgis_features_tiled(cache, url, extent_4326, name, where, progress_cb):
     return _merge_tile_features(lists, extent_4326)
 
 
+def _hydro3dhp():
+    from .damsuite import hydro3dhp
+    return hydro3dhp
+
+
 def _fetch_arcgis_live(url, extent_4326, path, name, where, progress_cb):
     cache = active_tile_cache()
     if cache is not None:
@@ -1672,6 +1677,10 @@ def _fetch_arcgis_live(url, extent_4326, path, name, where, progress_cb):
         features = _arcgis_features_tiled(cache, url, extent_4326, name, where, progress_cb)
     else:
         features = _arcgis_collect(url, extent_4326, name, where, progress_cb)[0]
+    # 2.22.6: 3DHP flowlines / waterbodies also get the NHD properties (gnis_name, ftype ...)
+    norm = _hydro3dhp().normaliser_for_url(url)
+    if norm is not None:
+        features = norm(features)
     _write_fc(path, features)
     log_message("{}: {} features downloaded".format(name, len(features)))
     if not features:

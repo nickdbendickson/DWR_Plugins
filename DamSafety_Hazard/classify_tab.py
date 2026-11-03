@@ -740,7 +740,7 @@ class ClassificationTabMixin(object):
             fill(self.parcel_combo, [("(none)", _NONE), ("(auto-detect 'parcel' layer)", _AUTO)],
                  polys)
         if hasattr(self, "centerline_combo"):
-            fill(self.centerline_combo, [("(none - trace USGS NHD flowlines)", _NONE),
+            fill(self.centerline_combo, [("(none - trace USGS 3DHP flowlines)", _NONE),
                                          ("(auto-detect centerline layer)", _AUTO)], lines)
         fill(self.road_combo, [("(auto-detect road layer, else download ND roads + traffic)",
                                 _AUTO), ("(download ND GIS Hub roads + HPMS traffic)", _DOWNLOAD),

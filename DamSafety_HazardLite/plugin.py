@@ -32,7 +32,7 @@ class Classify(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterRasterLayer("VELOCITY", "Max velocity raster"))
         self.addParameter(QgsProcessingParameterBoolean("METRES", "Rasters are in m and m/s", False))
         self.addParameter(QgsProcessingParameterBoolean(
-            "JUDGMENT_HIGH", "Count the judgment zone as High (5.3 borderline rule)", True))
+            "JUDGMENT_HIGH", "Count the judgment zone as High (old option; off = ND MEDIUM by rule)", False))
         self.addParameter(QgsProcessingParameterBoolean(
             "EXCLUDE_AG", "Exclude FEMA agricultural out-buildings (5.2.1.1)", True))
         pack = QgsSettings().value("ndsuite/pack_path", os.environ.get("NDSUITE_PACK", ""))

@@ -396,7 +396,7 @@ class ClassifyAlgorithm(_Base):
         P(QgsProcessingParameterBoolean("EAP_TRAVEL", "EAP: travel-time table along the "
                                         "channel", defaultValue=True))
         P(QgsProcessingParameterVectorLayer("CENTERLINE", "EAP: channel centerline (empty: "
-                                            "trace USGS NHD flowlines)", [SRC_LINE],
+                                            "trace USGS 3DHP flowlines)", [SRC_LINE],
                                             optional=True))
         P(QgsProcessingParameterBoolean("COMPARE", "Compare with the last run",
                                         defaultValue=True))
