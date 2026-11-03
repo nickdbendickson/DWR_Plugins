@@ -329,6 +329,9 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
         for ft_key, m_key, label, dkey, lo in (
                 ("SEARCH_FT", "SEARCH_M", "Search distance from a structure's point to a stream / "
                  "road crossing (ft; YOUR value)", "search_m", 3.0),
+                ("OSM_SEARCH_FT", "OSM_SEARCH_M", "OpenStreetMap culverts / fords: search distance "
+                 "to a stream / road or rail crossing (ft; YOUR value; the point is on the "
+                 "culvert itself)", "osm_search_m", 3.0),
                 ("ROAD_WIDTH_FT", "ROAD_WIDTH_M", "Road embankment top width when the record has "
                  "none (ft; YOUR value)", "road_width_m", 0.0),
                 ("RAIL_WIDTH_FT", "RAIL_WIDTH_M", "Rail embankment top width (ft; YOUR value)",
@@ -388,6 +391,8 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
                                          "crossings or an NDDOT layer (or an offline data pack "
                                          "that holds them)")
         params = {"search_m": self._metres(parameters, context, "SEARCH_FT", "SEARCH_M", RC.DEFAULTS["search_m"]),
+                  "osm_search_m": self._metres(parameters, context, "OSM_SEARCH_FT", "OSM_SEARCH_M",
+                                               RC.DEFAULTS["osm_search_m"]),
                   "road_width_m": self._metres(parameters, context, "ROAD_WIDTH_FT", "ROAD_WIDTH_M",
                                                RC.DEFAULTS["road_width_m"]),
                   "rail_width_m": self._metres(parameters, context, "RAIL_WIDTH_FT", "RAIL_WIDTH_M",

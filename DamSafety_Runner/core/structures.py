@@ -520,13 +520,32 @@ def reconcile_inverts(structures, read_dem, tol_m, cell):
     return notes
 
 
+def label_source(s, attrs):
+    """3.14.1: label a structure read from a STRUCTURES layer by its 'source' / 'src_id'
+    fields (ND Dam Hazard's runner_culverts layer). OSM records are a MAPPED location with no
+    size: source "OSM way/...", surveyed False. Anything else stays an inventory structure."""
+    a = {str(k).lower(): v for k, v in (attrs or {}).items()}
+    src = str(a.get("source") or "").strip()
+    sid = str(a.get("src_id") or "").strip()
+    if src.upper() == "OSM":
+        s.source = ("OSM " + sid) if sid else "OSM"
+        s.surveyed = False
+    else:
+        s.source = "inventory"
+        s.surveyed = True
+    return s
+
+
 def describe(structures):
     """One line per structure for the run report."""
     rows = []
     for s in structures:
         tail = ""
         if getattr(s, "surveyed", True) is False:
-            tail = "; not surveyed (a guess, not a measured culvert)"
+            src = str(getattr(s, "source", "") or "")
+            tail = ("; mapped in OpenStreetMap ({}), size not surveyed".format(src)
+                    if src.startswith("OSM") else
+                    "; not surveyed (a guess, not a measured culvert)")
         if s.kind == KIND_CULVERT:
             rows.append("{} (culvert, {} x {:.2f} x {:.2f} m {}): LISFLOOD-FP open cut; ANUGA "
                         "culvert operator{}{}".format(s.name or "?", s.barrels, s.width_m,

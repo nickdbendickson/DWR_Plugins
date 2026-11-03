@@ -438,6 +438,7 @@ class CulvertPrepAlgorithm(_ToolBase):
     BUILD_LAYERS = (("NBI", "National Bridge Inventory points (NBI_bridges)"),
                     ("NDDOT", "NDDOT bridge inventory (Bridge_Inventory_External)"),
                     ("NDDOT_PIPES", "NDDOT centerline pipes (Center_Line_Pipes)"),
+                    ("OSM", "OpenStreetMap crossings (OSM_crossings; culverts, fords, bridges)"),
                     ("STREAMS", "Streams (NHD flowlines)"),
                     ("ROADS", "Road lines"),
                     ("RAIL", "Rail lines"))
