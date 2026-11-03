@@ -39,6 +39,13 @@ export type FillOptions = {
   /** The water volume the breach supplies (m³); when given, the result flags a fill that lays down more. */
   availableVolumeM3?: number;
   /**
+   * Cap each off-channel cell's depth at its seed's routed stage plus this margin (m). Off the channel the carried
+   * surface pours into lower ground, so without a cap a 1 m channel stage makes many-metre-deep water wherever the
+   * terrain falls away — the envelope's volume blows out while its footprint stays about right. Capping the floodplain
+   * depth to the stage that fed it keeps the extent and takes out the spurious depth. Default Infinity (no cap).
+   */
+  maxFloodplainDepthM?: number;
+  /**
    * Cap the fill at availableVolumeM3 instead of only flagging it. The heap spreads highest-water-first, so stopping
    * at the cap keeps the deepest, most connected water and trims the shallow far-spread fringe the volume can't
    * support. Default false (envelope + flag, the method as first agreed).
@@ -117,7 +124,10 @@ function stageAt(sections: RoutedSection[], x: number): { wse: number; slope: nu
       const a = sections[i - 1];
       const b = sections[i];
       const t = b.x > a.x ? (x - a.x) / (b.x - a.x) : 0;
-      return { wse: a.wseM + t * (b.wseM - a.wseM), slope: a.slopeStage + t * (b.slopeStage - a.slopeStage) };
+      return {
+        wse: a.wseM + t * (b.wseM - a.wseM),
+        slope: a.slopeStage + t * (b.slopeStage - a.slopeStage),
+      };
     }
   const last = sections[sections.length - 1];
   return { wse: last.wseM, slope: last.slopeStage };
@@ -127,14 +137,20 @@ function stageAt(sections: RoutedSection[], x: number): { wse: number; slope: nu
  * Fill the flood from the routed stages. Seeds the channel cells under the centreline with the routed WSE, then
  * spreads with the max-heap.
  */
-export function fillFlood(g: DemGrid, line: Centerline, sections: RoutedSection[], opts: FillOptions = {}): FillResult {
+export function fillFlood(
+  g: DemGrid,
+  line: Centerline,
+  sections: RoutedSection[],
+  opts: FillOptions = {},
+): FillResult {
   const W = g.width;
   const H = g.height;
   const N = W * H;
   const minDepth = opts.minDepthM ?? 0.03;
   const slopeFloor = opts.slopeFloor ?? 0.0005;
   const maxWet = opts.maxWetCells ?? 4_000_000;
-  const volumeCap = opts.volumeLimit && opts.availableVolumeM3 != null ? opts.availableVolumeM3 : Infinity;
+  const volumeCap =
+    opts.volumeLimit && opts.availableVolumeM3 != null ? opts.availableVolumeM3 : Infinity;
   const kx = kxOf(line.loc.lat);
   const dlon = (g.bbox[2] - g.bbox[0]) / W;
   const dlat = (g.bbox[3] - g.bbox[1]) / H;
@@ -156,6 +172,10 @@ export function fillFlood(g: DemGrid, line: Centerline, sections: RoutedSection[
 
   const wse = new Float64Array(N).fill(-Infinity);
   const srcSlope = new Float64Array(N);
+  // The routed stage (m above bed) at each cell's seed, carried with the surface so a floodplain cell's depth can be
+  // capped to the channel depth that fed it (plus the margin). Seeded cells get the section's stage; spread copies it.
+  const srcStage = new Float64Array(N);
+  const stageCap = opts.maxFloodplainDepthM ?? Infinity;
   const heap = new MaxHeap(wse, Math.max(1024, Math.ceil(N / 8)));
   const seeded = new Uint8Array(N);
 
@@ -180,6 +200,7 @@ export function fillFlood(g: DemGrid, line: Centerline, sections: RoutedSection[
       if (st.wse > wse[k]) {
         wse[k] = st.wse;
         srcSlope[k] = Math.max(slopeFloor, st.slope);
+        srcStage[k] = st.wse - g.z[k];
         seeded[k] = 1;
         heap.push(k);
       }
@@ -200,7 +221,8 @@ export function fillFlood(g: DemGrid, line: Centerline, sections: RoutedSection[
     if (done[c]) continue;
     done[c] = 1;
     const surf = wse[c];
-    const d = surf - g.z[c];
+    const cap = Number.isFinite(stageCap) ? Math.max(0, srcStage[c]) + stageCap : Infinity;
+    const d = Math.min(surf - g.z[c], cap);
     if (d >= minDepth) {
       depthM[c] = d;
       outWse[c] = surf;
@@ -228,6 +250,7 @@ export function fillFlood(g: DemGrid, line: Centerline, sections: RoutedSection[
       if (carried > wse[m]) {
         wse[m] = carried;
         srcSlope[m] = srcSlope[c];
+        srcStage[m] = srcStage[c];
         heap.push(m);
       }
     }
@@ -235,5 +258,15 @@ export function fillFlood(g: DemGrid, line: Centerline, sections: RoutedSection[
 
   const floodedAc = (wetCells * cellM2) / ACRE_M2;
   const volumeFlag = opts.availableVolumeM3 != null && volumeM3 > opts.availableVolumeM3;
-  return { width: W, height: H, depthM, wseM: outWse, wetCells, floodedAc, volumeM3, volumeFlag, reachedEdge };
+  return {
+    width: W,
+    height: H,
+    depthM,
+    wseM: outWse,
+    wetCells,
+    floodedAc,
+    volumeM3,
+    volumeFlag,
+    reachedEdge,
+  };
 }
