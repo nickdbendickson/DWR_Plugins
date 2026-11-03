@@ -88,6 +88,40 @@ def find_ndbreach_cli() -> str | None:
     return None
 
 
+class WorkFolderError(ValueError):
+    """The requested work folder is outside the allowed roots."""
+
+
+def allowed_work_roots() -> list[Path]:
+    """Folders a job sent over the local API may write under: ~/CrestDams, CREST_WORK, and any folders listed in
+    CREST_WORK_ROOTS (os.pathsep separated)."""
+    raw = [str(Path.home() / "CrestDams"), os.environ.get("CREST_WORK") or ""]
+    raw += (os.environ.get("CREST_WORK_ROOTS") or "").split(os.pathsep)
+    roots = []
+    for r in raw:
+        if r.strip():
+            roots.append(Path(r.strip()).expanduser().resolve())
+    return roots
+
+
+def resolve_work(requested) -> str | None:
+    """Validate a work folder from an API request. Empty means the default. The path is resolved (symlinks and
+    '..' included) and must be one of the allowed roots or inside one; otherwise WorkFolderError."""
+    if requested is None or (isinstance(requested, str) and not requested.strip()):
+        return None
+    if not isinstance(requested, str) or "\x00" in requested:
+        raise WorkFolderError("the work folder is not a valid path")
+    path = Path(requested.strip()).expanduser()
+    if not path.is_absolute():
+        path = Path.home() / "CrestDams" / path
+    resolved = path.resolve()
+    for root in allowed_work_roots():
+        if resolved == root or root in resolved.parents:
+            return str(resolved)
+    roots = ", ".join(str(r) for r in allowed_work_roots())
+    raise WorkFolderError(f"the work folder must be inside {roots} (set CREST_WORK_ROOTS to allow others)")
+
+
 def work_dir(requested: str | None) -> Path:
     raw = (requested or os.environ.get("CREST_WORK") or "").strip()
     path = Path(raw).expanduser() if raw else Path.home() / "CrestDams"

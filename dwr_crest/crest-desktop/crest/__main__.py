@@ -11,8 +11,10 @@ from __future__ import annotations
 import base64
 import binascii
 import errno
+import hmac
 import json
 import os
+import secrets
 import sys
 import threading
 import uuid
@@ -23,13 +25,20 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from crest import WEB_DIR_NAME
-from crest.qgis_run import run_folder, run_layers, run_model, run_screening
+from crest.qgis_run import WorkFolderError, resolve_work, run_folder, run_layers, run_model, run_screening
 
 #: Fixed local port, so the desk's saved records (browser localStorage is per origin) survive a restart.
 #: If it is taken, a random port is used for that session.
 PREFERRED_PORT = 47231
 
 TITLE = "Crest — Dam Breach Desk"
+
+#: Random per-launch secret. The served index.html carries it in <meta name="crest-token">; every /api/ call must
+#: send it back in the X-Crest-Token header. A custom header also forces a CORS preflight, which this server never
+#: answers, so other web origins cannot reach the API from a browser.
+TOKEN_HEADER = "X-Crest-Token"
+API_TOKEN = secrets.token_urlsafe(32)
+_LOCAL_HOSTS = ("127.0.0.1", "localhost")
 
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
@@ -141,8 +150,53 @@ class _Handler(SimpleHTTPRequestHandler):
         ".html": "text/html; charset=utf-8",
     }
 
+    # ---- request checks (see TOKEN_HEADER) -------------------------------------------------------------------
+    def _port(self) -> int:
+        return int(self.server.server_address[1])
+
+    def _host_ok(self) -> bool:
+        """Host must name this loopback server (blocks DNS rebinding)."""
+        host = (self.headers.get("Host") or "").strip().lower()
+        return host in {f"{h}:{self._port()}" for h in _LOCAL_HOSTS}
+
+    def _origin_ok(self) -> bool:
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        return origin.strip().lower() in {f"http://{h}:{self._port()}" for h in _LOCAL_HOSTS}
+
+    def _token_ok(self) -> bool:
+        return hmac.compare_digest((self.headers.get(TOKEN_HEADER) or "").encode(), API_TOKEN.encode())
+
+    def _api_allowed(self, need_json: bool = False) -> bool:
+        """Sends a 403/415 and returns False when the request is not from the desk itself."""
+        if not (self._host_ok() and self._origin_ok() and self._token_ok()):
+            self._send(403, b'{"error":"forbidden"}', "application/json")
+            return False
+        if need_json:
+            ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if ctype != "application/json":
+                self._send(415, b'{"error":"content type must be application/json"}', "application/json")
+                return False
+        return True
+
+    def _serve_index(self) -> None:
+        index = Path(self.directory) / "index.html"
+        html = index.read_text(encoding="utf-8")
+        meta = f'<meta name="crest-token" content="{API_TOKEN}">'
+        html = html.replace("<head>", "<head>" + meta, 1) if "<head>" in html else meta + html
+        self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
+
     def do_GET(self):
+        if not self._host_ok():
+            self._send(403, b"forbidden", "text/plain")
+            return
         parsed = urlparse(self.path)
+        if parsed.path in ("/", "/index.html"):
+            self._serve_index()
+            return
+        if parsed.path.startswith("/api/") and not self._api_allowed():
+            return
         if parsed.path == "/api/job":
             job_id = (parse_qs(parsed.query).get("id") or [""])[0]
             found = job_snapshot(job_id)
@@ -157,6 +211,8 @@ class _Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         kinds = {"/api/screen": "screen", "/api/model": "model", "/api/folder": "folder", "/api/layers": "layers"}
         kind = kinds.get(parsed.path)
+        if not self._api_allowed():
+            return
         if parsed.path == "/api/cancel":
             job_id = (parse_qs(parsed.query).get("id") or [""])[0]
             found = cancel_job(job_id)
@@ -164,6 +220,8 @@ class _Handler(SimpleHTTPRequestHandler):
             return
         if kind is None:
             self._send(404, b"not found", "text/plain")
+            return
+        if not self._api_allowed(need_json=True):
             return
         length = int(self.headers.get("Content-Length", "0") or 0)
         if length > 20_000_000:
@@ -190,7 +248,12 @@ class _Handler(SimpleHTTPRequestHandler):
         analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
         timeout = payload.get("timeout")
         timeout = timeout if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) else None
-        body = json.dumps(start_job(kind, dam, analysis, payload.get("work"), model, files, source, timeout))
+        try:
+            work = resolve_work(payload.get("work"))
+        except WorkFolderError as exc:
+            self._send(400, json.dumps({"error": str(exc)}).encode(), "application/json")
+            return
+        body = json.dumps(start_job(kind, dam, analysis, work, model, files, source, timeout))
         self._send(200, body.encode(), "application/json")
 
     def _send(self, code: int, body: bytes, content_type: str) -> None:

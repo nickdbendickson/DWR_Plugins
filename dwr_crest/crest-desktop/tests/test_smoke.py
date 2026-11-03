@@ -226,7 +226,12 @@ class ServedEngineTests(unittest.TestCase):
 
     def test_serves_the_bundle(self):
         body, ctype = self.get("/index.html")
-        self.assertEqual(body, (WEB / "index.html").read_bytes())
+        # the server adds the per-launch API token (crest.__main__.API_TOKEN) to the page it serves
+        from crest.__main__ import API_TOKEN
+
+        meta = f'<meta name="crest-token" content="{API_TOKEN}">'.encode()
+        self.assertIn(meta, body)
+        self.assertEqual(body.replace(meta, b"", 1), (WEB / "index.html").read_bytes())
         self.assertIn("text/html", ctype)
         for ref in ASSET_RE.findall(body.decode("utf-8")):
             data, ctype = self.get("/" + ref)

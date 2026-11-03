@@ -1118,6 +1118,16 @@ let handoffTimer = 0;
 
 type JobPath = "/api/screen" | "/api/model" | "/api/folder" | "/api/layers";
 
+/** The desktop server puts a per-launch token in <meta name="crest-token"> of the page it serves; every /api/ call
+ * must send it back (crest-desktop/crest/__main__.py). */
+function crestApiHeaders(json = false): Record<string, string> {
+  const token =
+    typeof document === "undefined"
+      ? ""
+      : (document.querySelector('meta[name="crest-token"]')?.getAttribute("content") ?? "");
+  return { ...(json ? { "Content-Type": "application/json" } : {}), "X-Crest-Token": token };
+}
+
 function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
   const [, bump] = useState(0);
   useEffect(() => {
@@ -1162,7 +1172,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
       try {
         const response = await fetch(path, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: crestApiHeaders(true),
           body: JSON.stringify({
             dam,
             analysis: result,
@@ -1179,7 +1189,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
         handoff.job = job.id;
         handoffTimer = window.setInterval(async () => {
           try {
-            const found = await (await fetch(`/api/job?id=${job.id}`)).json();
+            const found = await (await fetch(`/api/job?id=${job.id}`, { headers: crestApiHeaders() })).json();
             handoff.log = String(found.log || "");
             if (found.done) {
               window.clearInterval(handoffTimer);
@@ -1210,7 +1220,7 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
   const cancel = useCallback(async () => {
     if (!handoff.job) return;
     try {
-      await fetch(`/api/cancel?id=${handoff.job}`, { method: "POST" });
+      await fetch(`/api/cancel?id=${handoff.job}`, { method: "POST", headers: crestApiHeaders() });
     } catch {
       /* the job log shows whether the run stopped */
     }
