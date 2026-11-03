@@ -62,6 +62,7 @@ import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel } from 
 import { ResultsStep } from "./ResultsStep";
 import { useAnalysisOfRecord, useResultsSync, useStripOfRecord } from "./results-flow";
 import { PaperReport } from "./PaperReport";
+import { Dashboard } from "./Dashboard";
 import { ViewExport } from "./ViewExport";
 
 // Leaflet touches `window` when it loads, so the map is a client-only chunk.
@@ -185,6 +186,7 @@ export function Desk() {
           {step === "breach" ? <BreachStep dam={dam} result={result} /> : null}
           {step === "flood" ? <FloodStep dam={dam} result={result} /> : null}
           {step === "results" ? <ResultsStep dam={dam} result={result} /> : null}
+          {step === "dashboard" ? <Dashboard dam={dam} result={result} /> : null}
           {step === "screen" ? <ScreenStep dam={dam} result={result} /> : null}
           {step === "report" ? <ReportStep dam={dam} result={result} /> : null}
 

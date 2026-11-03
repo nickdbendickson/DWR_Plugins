@@ -3,7 +3,9 @@
   "builtBy": "npm run build:desktop",
   "sources": {
     "src/components/crest/charts.tsx": "bc2bd7cf68397388dd90cf1a3408a283bad6f49778cd6b4dbe4b791eb54bd70c",
-    "src/components/crest/desk.tsx": "433a16a0ffe55358e28996a309d1e88ef1a74316c6badef562801045c2b68d4e",
+    "src/components/crest/Dashboard.tsx": "242feca5c43ee2ec6b657ee304d6d4d35b698143a2ef441a46b7953b3eaeca05",
+    "src/components/crest/DashboardMap.tsx": "36b5cc5f5359a28348d707fec08d7fc17a6098582df8602b704937ac1c4ef363",
+    "src/components/crest/desk.tsx": "4dc160d67b259870845bcbc782f9cccf7a5e84c6e5bcc8d958c9002873531c5c",
     "src/components/crest/MapDraw.tsx": "e42fde7bd1841616c2445248cf4703f3615fe9497da97c1cd5f11729ae9259e6",
     "src/components/crest/NdDamPicker.tsx": "bc4aed6ac6feee896bbcfbefd1b5a681724191fbf8715b1ac1d30c18b261d54e",
     "src/components/crest/PaperReport.tsx": "2ab730f6e21760b6715919fced1aebd2c28b72d635ecb221027a363597baa0ec",
@@ -18,9 +20,10 @@
     "src/lib/crest/aoi.ts": "724bb00049ce932ad689228a664ee2f879620673bc77031af73b1e644ce3d604",
     "src/lib/crest/basemap.ts": "906546631c8a05c597943dad7a6c90b26e647802db65e4c283dd17fb6032afda",
     "src/lib/crest/breach.ts": "ee2948906e19b1f3df20efef1ab2924ac46b06affe9e80771bc78ba08ead304f",
+    "src/lib/crest/dashboard.ts": "b74f2693a4ae7150584bf072e4b1d642ec67c84b182da411d6c2e5f81e9c77a6",
     "src/lib/crest/data/nd_dams_dwr.json": "ed19c8f888eacf70b8defc275f68ad0354afb839a9eabe00d02a645156517f39",
     "src/lib/crest/data/nd_dams.json": "8841dce422ee0917bf7372c33665a2b150d980422130a06f40bccd12dd49f731",
-    "src/lib/crest/engine.ts": "8694ba981b0710b8694b36da8d2b6cd0037e53860cbc84a23a285c62f52a64ba",
+    "src/lib/crest/engine.ts": "6ae8747b15da6a7a744864dc015000f9b7e96c72be7bbada59828b0905a122c2",
     "src/lib/crest/export.ts": "ac266a607b809f69a8db47fbe416a31d34109f47e6d0157515e499608a801a27",
     "src/lib/crest/fill.ts": "a6a76896abbf9a17d8849090aa03b781ca0ed27653fa7476c25163c141fcfa99",
     "src/lib/crest/floodstrip.ts": "3ec3c8b647a456bf2c09db354a7424dee72e673ef0c5a9d8d446e0a9e6b6bf69",
@@ -49,6 +52,6 @@
     "src/lib/crest/store.ts": "d20a91c7ed06fa0f0e78deec5fbb8d42e82bcc9c9da0b35b2a2321294b8940e1",
     "src/lib/crest/vertcon_nd.ts": "dbf7a01da0a7727e44d46198c68ed701a967b58c4970732fbad947cc438c468d",
     "src/lib/crest/viewexport.ts": "53ffbc7b545e270277093af67411bca73d292eb3a2c924fa9f740f793e6a2afd",
-    "src/styles.css": "527b722ac060e0814b8d026a536e0808a2058ef457128188d47bd81adcf79a4b"
+    "src/styles.css": "ea2bc943e6a674feef239705c868558bd3d863fb090100d43b4aee6ea383f182"
   }
 }
