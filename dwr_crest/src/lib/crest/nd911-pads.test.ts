@@ -55,6 +55,38 @@ describe("911 pads: ground at the point minus the channel bed at its station", (
     assert.ok(b.padFt >= 0 && b.padFt < 0.5, JSON.stringify(b));
   });
 
+  it("a pit below the thalweg is clamped to the schematic bed, never inflating the pad (anti-conservative guard)", () => {
+    // A 10 m borrow-pit gouged into the channel line (|y| < 40 m) at the 1.0 km station. Without the clamp the
+    // section's lowest cell reads ~10 m below the thalweg and inflates the pad; with the clamp the pad bed holds at
+    // the schematic streambed (the valley slope fitted from the clean anchor sections downstream).
+    const pit = (x: number, y: number) => x > 980 && x < 1020 && Math.abs(y) < 40;
+    const bbox: [number, number, number, number] = [LOC.lon - 200 / KX, LOC.lat - 800 / KY, LOC.lon + 3200 / KX, LOC.lat + 800 / KY];
+    const width = 340,
+      height = 160;
+    const z = new Float32Array(width * height);
+    for (let j = 0; j < height; j++)
+      for (let i = 0; i < width; i++) {
+        const lon = bbox[0] + ((i + 0.5) / width) * (bbox[2] - bbox[0]);
+        const lat = bbox[3] - ((j + 0.5) / height) * (bbox[3] - bbox[1]);
+        const x = (lon - LOC.lon) * KX;
+        const y = (lat - LOC.lat) * KY;
+        z[j * width + i] = bedM(x) + 0.02 * Math.abs(y) - (pit(x, y) ? 10 : 0);
+      }
+    const gp: DemGrid = { bbox, width, height, cellM: 10, z };
+    const yFor11 = (11 / FT_PER_M) / 0.02; // ~168 m off the channel, clear of the pit
+    const house = { id: "h", ...at(1000, yFor11), distanceKm: 1.0 };
+    // Clean anchor sections (no pit) downstream fix the valley slope so the schematic bed sits near the true bed.
+    const anchors = [1500, 2000, 2500, 3000].map((d) => ({ id: `a${d}`, ...at(d, 50), distanceKm: d / 1000 }));
+    const pads = computePads([house, ...anchors], gp, FRAME);
+    const r = pads.find((p) => p.id === "h")!;
+    assert.equal(r.padSource, "dem", JSON.stringify(r));
+    assert.match(r.note, /clamped up to the schematic streambed/);
+    // The raw pit bed would have given ground - pitBed (~44 ft). Clamped pad is ~ground - schematic bed (~12 ft).
+    const pitPad = r.groundFt! - (bedM(1000) - 10) * FT_PER_M;
+    assert.ok(r.padFt < pitPad - 20, `clamped pad ${r.padFt} must be far below the unclamped ${pitPad.toFixed(1)}`);
+    assert.ok(Math.abs(r.padFt - 11) <= 2.5, `clamped pad ${r.padFt} should be near the true 11 ft`);
+  });
+
   it("no terrain at the point: pad 0, flagged estimated", () => {
     const [r] = computePads([{ id: "a", ...at(982, 120), distanceKm: 0.982 }], null, FRAME);
     assert.deepEqual([r.padFt, r.padSource], [0, "estimated"]);

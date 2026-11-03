@@ -12,13 +12,13 @@ import type { Analysis, DamRecord, ReceptorSeed } from "./types.ts";
  * the seed is marked "estimated" so the screen asks for review. The engine already screens depth = channel depth - pad,
  * clamped at 0, so a point above the water is dry.
  *
- * ASSUMPTION (stated, not enforced): the pad's bed (the lowest DEM cell across the section) and the bed the desk's
- * channel depth is measured from (the schematic streambed lowered along the slope) are taken to agree. Where they
- * don't, the subtraction is off: a DEM pit or borrow pit below the thalweg inside the corridor reads as a lower bed,
- * which inflates the pad and so under-screens the point (the anti-conservative direction, like DWR-2801's pothole
- * country); a straight-bearing section that misses a meander reads the floodplain as the bed, which shrinks the pad
- * and over-screens (conservative). Reconciling the two beds (e.g. clamping the pad bed to the schematic bed at the
- * station) changes receptor depths and so needs a methodology call and re-validation; it is deliberately left here.
+ * BED RECONCILIATION (Nick's 2026-11-03 methodology call): the pad's bed (the lowest DEM cell across the section) and
+ * the bed the desk's channel depth is measured from (the schematic streambed lowered along the slope) must agree for
+ * the engine's depth = channel depth - pad to be sound. Where the DEM section bed sits BELOW the schematic bed - a pit
+ * or borrow pit below the thalweg inside the corridor, like DWR-2801's pothole country - it would inflate the pad and
+ * under-screen the point (the anti-conservative direction), so the pad bed is clamped up to the schematic bed. A
+ * straight-bearing section that misses a meander reads the floodplain as the bed, which shrinks the pad and over-
+ * screens (conservative); that direction is left alone, so the clamp only ever makes a point wetter, never drier.
  */
 
 export const FT_PER_M = 1 / 0.3048;
@@ -27,6 +27,8 @@ const M_PER_DEG_LON_EQ = 111320;
 const NODATA = -9999;
 /** Section sample spacing (m). */
 const STEP_M = 5;
+/** Pad-bed clamp dead-band (ft): below this the schematic and DEM beds are taken to agree (DEM vertical noise). */
+const CLAMP_EPS_FT = 0.05;
 
 export type PadPoint = { id: string; lon: number; lat: number; distanceKm: number };
 export type PadResult = { id: string; padFt: number; padSource: "dem" | "dem-slope" | "estimated"; groundFt: number | null; bedFt: number | null; note: string };
@@ -96,8 +98,21 @@ export function computePads(points: PadPoint[], g: DemGrid | null, f: Frame): Pa
     if (groundFt == null)
       return { id: p.id, padFt: 0, padSource: "estimated", groundFt: null, bedFt, note: "pad estimated: no terrain at the point; kept on the channel bed (pad 0)" };
     if (bedFt != null) {
-      const pad = Math.max(0, groundFt - bedFt);
-      return { id: p.id, padFt: Math.round(pad * 10) / 10, padSource: "dem", groundFt, bedFt, note: `ground ${groundFt.toFixed(1)} ft - bed ${bedFt.toFixed(1)} ft (3DEP)` };
+      // Reconcile the two beds (ASSUMPTION note above). The engine's channel depth is measured from the schematic
+      // streambed (dam bed lowered along the fitted valley slope), so a DEM section bed that sits BELOW the schematic
+      // bed - a pit or borrow pit under the thalweg - would inflate the pad and under-screen the point (anti-
+      // conservative). Clamp the pad bed up to the schematic bed; a DEM bed above it (a meander/floodplain read) is
+      // left alone, keeping the conservative over-screen. (Nick, 2026-11-03 methodology call.)
+      const schematic = f.streambedFt - slope * p.distanceKm * 1000;
+      // CLAMP_EPS_FT keeps sub-DEM-resolution noise (the straight-line schematic almost never lands exactly on the
+      // sampled bed) from flipping the bed; only a real pit, below the schematic by more than this, is reconciled.
+      const bedUsed = Number.isFinite(schematic) && schematic > bedFt + CLAMP_EPS_FT ? schematic : bedFt;
+      const pad = Math.max(0, groundFt - bedUsed);
+      const note =
+        bedUsed !== bedFt
+          ? `ground ${groundFt.toFixed(1)} ft - bed ${bedUsed.toFixed(1)} ft (3DEP section bed ${bedFt.toFixed(1)} ft clamped up to the schematic streambed)`
+          : `ground ${groundFt.toFixed(1)} ft - bed ${bedFt.toFixed(1)} ft (3DEP)`;
+      return { id: p.id, padFt: Math.round(pad * 10) / 10, padSource: "dem", groundFt, bedFt: bedUsed, note };
     }
     const b = f.streambedFt - slope * p.distanceKm * 1000;
     if (!Number.isFinite(b))
