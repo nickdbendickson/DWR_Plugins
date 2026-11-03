@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Runner 3.14.3 (built as 3.14.0): guessed culverts are cut into the DEM, marked unverified (Nick: "do culvert ideas", from the DWR-10554 run on main 33a93c0).** RELEASE ndbreach 3.14.3; damsuite content otherwise unchanged.
+  - **Found.** The 7 road x channel guesses on DWR-10554 (one 1.2 x 0.9 m box each, `culvert_candidates.csv`) were listed but "not cut into the DEM", so the model saw a solid embankment where a culvert almost certainly is.
+  - **Change.** `culvert_guess.guess_structures` turns each unmatched guess into a culvert with the same cut a matched guess gets (`burn_line` along the channel, `BURN_MIN_CELLS`, `lidar_inverts`); `source` guess, `surveyed` false, the name starts with `guess:`, the CSV `note` says it was cut, and `run_report` gets `culvert_guesses_cut` and a "Guessed culverts cut into the DEM (unverified)" section. Matched guesses still follow `culvert_burn_matched` (off).
+  - **Setting.** `culvert_burn_guesses` / `CULVERT_BURN_GUESSES` (default on, advanced); off lists them only, as before.
+  - **Class.** On DWR-10554 the crossings are overtopped by 1.6-3.4 ft; a 1.2 x 0.9 m box passes a small fraction of that flow, so the class is not expected to change (no model re-run in this PR).
+  - Tests: `DamSafety_Runner/tests/test_culvert_match.py` (two new).
 - **Hazard 2.23.1, Runner 3.14.2, Screening 0.18.4, HazardLite 0.1.3: lint and the Runner window width (2026-11-03 audit, fix E).** RELEASE ndhazard 2.23.1, ndbreach 3.14.2, ndscreen 0.18.4; damsuite unchanged.
   - **Runner window.** "Guided wizard…" on its own row under the four Run-tab result buttons; `_fit_body_width` sets the window's minimum width to the scrolled body's minimum plus the frame (capped at the screen). At 800 x 600 the body needed about 800 px and Browse… / File… / Guided wizard… were clipped (audit shot DamSafety_Runner__002); now about 660 px.
   - **Screening storage.py.** `conf_leak` was set and never read, and both branches gave "medium". Kept the behaviour: low when a value was defaulted / not found or the storage-leak guard held the storage (its note contains "storage leak"), else medium - as the nd copy. Code simplified, result unchanged.
