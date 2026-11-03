@@ -20,7 +20,8 @@ import re
 
 from .constants import OUTPUT_FOLDER_NAME
 from . import damfolder as DF
-from .dsswise import (detect_role, R_DEPTH, R_VEL, R_DV, R_ARR, R_DEM, R_WSE, R_PEAK,
+from .dsswise import (detect_role, detect_units, R_DEPTH, R_VEL, R_DV, R_ARR, R_DEM, R_WSE,
+                      R_PEAK,
                       RASTER_EXT)
 
 # RAS Mapper time-step exports "Depth (01JAN2020 12:00:00).tif": recognised
@@ -74,7 +75,22 @@ def _is_time_step(name):
         return False
     if re.match(r"^(x|times|by)[\s_\-]*(vel|velocity|speed)(?![a-z])", label):   # D x V product
         return False
+    # 2.22.4: "Depth_ft", "Velocity_ftps", "Depth_m", "Velocity_ft_per_s" (DSS-WISE /
+    # hand exports): the rest is only units, not an output time
+    if _is_units_label(label):
+        return False
     return bool(label) and label not in SKIP_LABELS and not label.startswith("max")
+
+
+_UNIT_WORDS = {"ft", "feet", "foot", "m", "meter", "meters", "metre", "metres", "in", "per",
+               "s", "sec", "second", "seconds", "fps", "ftps", "ftpersec", "ftpersecond",
+               "mps", "mpersec", "ms", "fts", "ft2", "m2", "ft2s", "ft2ps", "m2s", "m2ps",
+               "us", "si"}
+
+
+def _is_units_label(label):
+    toks = [t for t in re.split(r"[^a-z0-9]+", label.lower()) if t]
+    return bool(toks) and all(t in _UNIT_WORDS for t in toks)
 
 
 # a "max" token (Max, Hmax, Dmax, Vmax, "(Max)"), not "max" inside a word ("Maxwell",
@@ -173,6 +189,18 @@ def find_rasters(folder):
         if len(paths) > 1:
             out["notes"].append("{}: {} other candidate(s), e.g. {}".format(
                 key, len(paths) - 1, os.path.relpath(paths[1], root)))
+    # 2.22.4: dam-folder rasters are read in plugin units (ft, ft/s); a name that
+    # says metres ("Depth_m", "Velocity_m_s") is flagged, not silently read as feet
+    for key in ("depth", "vel", "base_depth", "base_vel"):
+        if out.get(key):
+            role = R_VEL if key.endswith("vel") else R_DEPTH
+            units, basis = detect_units(os.path.basename(out[key]), role)
+            if basis == "file name" and units in ("m", "m/s"):
+                out["notes"].append(
+                    "WARNING: {} is named in {} but dam-folder rasters are read as {}; "
+                    "import it with the DSS-WISE import (which converts) or convert it "
+                    "first".format(os.path.relpath(out[key], root), units,
+                                   "ft/s" if role == R_VEL else "ft"))
     return out
 
 

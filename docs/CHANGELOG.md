@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Hazard 2.22.4: DSS-WISE result names with units after the quantity are autodetected (Nick: "Do the DSS-WISE autodetect fix PR").** RELEASE ndhazard 2.22.4; damsuite content otherwise unchanged.
+  - **Found.** `autodetect._is_time_step` took the text after "Depth"/"Velocity" for an output time, so `Depth_ft.tif`, `Velocity_ftps.tif`, `Depth_m.asc` ... were skipped in the dam folder (any case, any depth of sub-folder). A label made only of unit words is no longer a time step; `Depth_0100`, `Depth (01JAN2020 12:00:00)` still are.
+  - **Units.** `dsswise.detect_units` reads units right after the quantity word: `Velocity_ft_s` / `Velocity_ft_per_s` are ft/s and `Depth_m` / `Velocity_m_s` are m, m/s (were "assumed ft / ft/s"). `MaxDepth_in_Ft` style names are unchanged.
+  - **Metric in a dam folder.** Dam-folder rasters are read as ft, ft/s; a depth or velocity whose name says m or m/s now gets a WARNING note pointing to the DSS-WISE import, which converts.
+  - Test: `DamSafety_Hazard/tests/test_dsswise_unit_names.py` (new).
+
 - **Runner 3.13.9 (built as 3.13.6; #248/#249 took 3.13.7/3.13.8): Breach results dock shows the hazard class (Docs & QA dock test, main db9c665, DWR-2801 r4; Nick: "Yes").** RELEASE ndbreach 3.13.9; damsuite content otherwise unchanged. Reading is `DamSafety_Runner/core/results_info.py` (no Qt).
   - **Hazard line.** ND / TM 11 class, provisional flag and Hazard version from `Hazard_Classification_Summary.txt` (a `Hazard_Classification_Summary.json` wins key by key if one exists) in the output folder dam.json's classified status names; status and `dam_record.next_action` from dam.json. 2801 r4 reads "Hazard 2.19.1: ND High (provisional), TM 11 Significant".
   - **Layer buttons open their data read-only (Docs & QA re-test of 70ed432).** The Wet Hazard structures button had opened Habitable_Structures.gpkg read-write (change counter, md5 and mtime changed). All five buttons now open read-only: vector layers with `forceReadOnly` (GeoPackage also with the GDAL `IMMUTABLE=YES` open option; receptors fall back to OGR's read-only CSV driver when the delimitedtext provider is absent), rasters through the read-only gdal provider. The flooded/wet filter is a provider subset string and writes nothing. Tested: loading all five from a copy leaves every md5, mtime and the folder listing unchanged.
