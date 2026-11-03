@@ -272,8 +272,11 @@ def nd_hazard_shipped_charts_are_signed_off():
 
 @test
 def nd_hazard_sampling_matches_the_runner_tool():
-    """The shared samplers (used by the screening plugin) and the runner tool's Sampler give
-    the same depth and velocity for the same raster and footprint."""
+    """The shared samplers (Screening, Runner core/nd_hazard.py) and the runner tool's Sampler
+    give the same depth and the same classifying velocity for the same raster and footprint:
+    the peak depth and the peak velocity over the wet cells, even from different cells (TM 11
+    practice, Nick 2026-11-01, option C; reverts db9c665's same-cell pairing that #246 /
+    3af4328 copied into the Runner). vel_at_max_fts (the deepest cell's) is information only."""
     import numpy as np
     from nd_breach_runner.tests import fake_qgis
     fake_qgis.install()
@@ -296,6 +299,18 @@ def nd_hazard_sampling_matches_the_runner_tool():
         dd, vv, _how = nh.sample_footprint(d, v, 100.0, 700.0, 10.0, ring, 0.1)
         assert abs(a["depth_ft"] - dd) < 1e-9, (a, dd)
         assert (a["vel_fts"] is None and vv is None) or abs(a["vel_fts"] - vv) < 1e-9, (a, vv)
+        if a["vel_at_max_fts"] is not None and vv is not None:
+            assert a["vel_fts"] >= a["vel_at_max_fts"] - 1e-9, a
+    # peak depth and peak velocity from different cells: both tools classify on the pair
+    d2 = np.zeros((3, 3)); v2 = np.zeros((3, 3))
+    d2[1, 0], v2[1, 0] = 3.0, 1.0          # deepest cell, slow
+    d2[1, 2], v2[1, 2] = 0.5, 8.0          # shallower wet cell, fast
+    d2[0, 1], v2[0, 1] = 0.05, 12.0        # below the wet depth: not counted
+    g2 = Grid(np.zeros((3, 3)), 0.0, 30.0, 10.0)
+    ring2 = [(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0)]
+    a2 = an.Sampler(g2, d2, v2, wet_ft=0.1).polygon([np.array(ring2)], (15.0, 15.0))
+    assert (a2["depth_ft"], a2["vel_fts"], a2["vel_at_max_fts"]) == (3.0, 8.0, 1.0), a2
+    assert nh.sample_footprint(d2, v2, 0.0, 30.0, 10.0, ring2, 0.1)[:2] == (3.0, 8.0)
     line = [(105.0, 695.0), (390.0, 430.0), (480.0, 600.0)]
     a = s.lines([np.array(line)])
     assert abs(a["depth_ft"] - nh.sample_line_max(d, 100.0, 700.0, 10.0, line)) < 1e-9
