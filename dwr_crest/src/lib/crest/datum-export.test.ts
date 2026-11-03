@@ -262,7 +262,7 @@ describe("sample note, DEM crest check and store key", () => {
     assert.equal(a.screen.label, "Medium");
     assert.equal(a.screen.judgmentAsProbable, false);
     assert.ok(a.screen.reasons.some((r) => /judgment zone .*Medium by rule/.test(r)), a.screen.reasons.join("\n"));
-    assert.match(a.screen.classOfRecord ?? "", /^ND MEDIUM \/ TM11 Significant/);
+    assert.match(a.screen.classOfRecord ?? "", /^ND MEDIUM \(NID hazard Significant\)/);
     assert.match(a.screen.reasons[0], /^Class of record: ND MEDIUM .*is not the class of record\.$/);
     assert.match(sample.sampleNote ?? "", /generic receptor seeds.*Medium by rule.*High \(flagged\).*not the class of record/);
     const old = analyze({ ...sample, judgmentAsProbable: true });
