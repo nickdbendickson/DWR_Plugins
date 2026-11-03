@@ -51,7 +51,7 @@ export type RoutedFloodOptions = {
    * from the routing as a level pool on its own ground (spread.ts), the quasi-dynamic 2-D volume spread.
    */
   method?: "stage" | "spread";
-  /** Spread only: follow the breach's own flow path (default true) rather than the outline's drainage trace. */
+  /** Spread only: follow the breach's own flow path rather than the outline's drainage trace (default false). */
   breachPath?: boolean;
   /** Spread only: bumps lower than this (m) don't end a section's hydraulic table. Default SPREAD_RIDGE_TOL_M. */
   ridgeTolM?: number;
@@ -130,9 +130,10 @@ export async function buildRoutedFlood(
     return { ok: false, reason: built.reason.replace("No terrain outline", "No routed flood") };
   let centerline = built.centerline;
   let pathNote: string | null = null;
-  // The spread follows the breach's own flow path (spread.ts breachPath) instead of the outline's drainage trace,
-  // unless told not to; it starts where the trace starts (just below the breach on the desk bearing).
-  if ((opts.method ?? "stage") === "spread" && (opts.breachPath ?? true) && centerline.pts.length) {
+  // Optionally the spread follows the breach's own flow path (spread.ts breachPath) instead of the outline's drainage
+  // trace. Off by default: once the DEM registration and trace start were fixed (crest PR #35) the trace scored better
+  // on all four baseline dams and kept the envelope volume near the LISFLOOD band; the path detours through potholes.
+  if ((opts.method ?? "stage") === "spread" && (opts.breachPath ?? false) && centerline.pts.length) {
     const io = outlineInputs(dam, result);
     const p = io.ok ? breachPath(g, centerline.loc, io.inputs.u as [number, number], centerline.pts[0]) : null;
     if (p && p.pts.length >= 2) {
