@@ -140,6 +140,8 @@ export type RoutedSummary = {
   releasedAcFt: number;
   /** fillAcFt / releasedAcFt — the volume the max-surface envelope invents over the release (method provenance). */
   volumeRatio: number;
+  /** How the flood was laid on the terrain; absent on layers built before the volume spread became the default. */
+  method?: "stage" | "spread";
   reachedEdge: boolean;
   notes: string[];
 };
@@ -1144,10 +1146,14 @@ export function outlineState(dam: DamRecord, result: Analysis, online: boolean):
   const io = outlineInputs(dam, result);
   if (!io.ok) return { state: "none", message: io.reason };
   const c = dam.outline;
-  if (c && c.fingerprint === io.inputs.fingerprint)
+  // A routed layer saved before the volume spread became the desk's method (2026-11-03) is the old stage fill.
+  const oldStage = c?.layer === "routed" && c.routed?.method !== "spread";
+  if (c && c.fingerprint === io.inputs.fingerprint && !oldStage)
     return { state: "ready", outline: c.outline, stats: c.stats, builtAt: c.builtAt, message: null, layer: c.layer ?? "outline", routed: c.routed };
   if (c) {
-    const msg = c.stats.traceStart
+    const msg = oldStage
+      ? "This routed flood was built with the old stage fill, which spread up to hundreds of times the released water; the desk now pours the routed volume instead."
+      : c.stats.traceStart
       ? "The desk inputs changed since the terrain outline was built."
       : "This terrain layer was built before the 2026-11-03 terrain fix (its terrain grid sat up to hundreds of metres off, so the traced channel could miss the flood).";
     return online ? { state: "build", message: `${msg} Build it again.` } : { state: "offline", message: `${msg} ${OUTLINE_OFFLINE}` };

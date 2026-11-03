@@ -2,6 +2,13 @@
 
 ## 2026-11-03
 
+- **The routed flood is now the volume spread.** For large dams (the flood-size gate's routed side) the desk now pours
+  the water each stretch of the routed channel holds at its own peak onto the ground beside it, instead of carrying the
+  Manning stage across the floodplain. A closed basin on the channel (for example behind a road fill with no culvert in
+  the terrain) has to fill before the flood passes, and ends the flood if it can hold it all. Against the four-dam
+  LISFLOOD-FP baseline it beats the terrain outline on every dam (CSI 0.16/0.30/0.70/0.35 vs 0.10/0.23/0.58/0.23) and
+  lays down 2–6× the released water, where the old stage fill laid down 31–779×. A saved routed layer built with the
+  old stage fill asks to be built again. Small dams still get the terrain outline.
 - **A Runner run is the layer of record.** When a dam has an imported ND Breach Runner (LISFLOOD-FP) run, that run is the
   inundation layer of record whatever the flood-size gate picks; the terrain layer stays only as a comparison. A run that
   passes the import checks becomes the source of record on its own (choosing the desk estimate on Results is remembered
