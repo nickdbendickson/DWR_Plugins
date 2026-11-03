@@ -32,6 +32,9 @@ const routed: RoutedSummary = {
   sections: 20,
   cappedSections: 0,
   volumeFlag: false,
+  fillAcFt: 0,
+  releasedAcFt: 0,
+  volumeRatio: 0,
   reachedEdge: false,
   notes: [],
 };

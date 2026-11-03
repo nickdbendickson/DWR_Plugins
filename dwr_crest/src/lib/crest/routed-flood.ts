@@ -77,6 +77,12 @@ export type RoutedFloodResult = {
     volumeFlag: boolean;
     reachedEdge: boolean;
     routedPeakFellBy: number;
+    /** Water volume the fill lays down (ac-ft). */
+    fillAcFt: number;
+    /** Breach volume released (ac-ft), the denominator of the volume ratio. */
+    releasedAcFt: number;
+    /** fillAcFt / releasedAcFt: how many times the released volume the max-surface envelope lays down (provenance). */
+    volumeRatio: number;
   };
   notes: string[];
 };
@@ -160,6 +166,9 @@ export async function buildRoutedFlood(
       volumeFlag: fill.volumeFlag,
       reachedEdge: fill.reachedEdge,
       routedPeakFellBy: peakInCfs > 0 ? Math.round((1 - peakOutCfs / peakInCfs) * 100) / 100 : 0,
+      fillAcFt: Math.round(fill.volumeM3 / ACFT),
+      releasedAcFt: Math.round(result.breach.volumeAcFt),
+      volumeRatio: result.breach.volumeAcFt > 0 ? Math.round((fill.volumeM3 / ACFT / result.breach.volumeAcFt) * 10) / 10 : 0,
     },
     notes,
   };
