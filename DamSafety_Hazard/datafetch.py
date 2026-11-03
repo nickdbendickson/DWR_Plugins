@@ -29,7 +29,7 @@ from qgis.core import (
 
 from .constants import (
     NARN_URL, CROSSINGS_URL, ND_ROADS_URL, HPMS_ND_URLS, ND_COUNTY_ROADS_URL, NDDOT_AADT_URL,
-    NDDOT_AADT_LAYERS, NHD_FLOWLINE_URL, lifeline_fetches, RAIL_CROSSING_SEARCH_MI,
+    NDDOT_AADT_LAYERS, HYDRO3DHP_FLOWLINE_URL, lifeline_fetches, RAIL_CROSSING_SEARCH_MI,
     GRP_DATA, SUBDIR_DATA,
 )
 from .compat import MSG_WARNING
@@ -350,7 +350,7 @@ def _fetch(key, ext, xing, big, out, progress):
                                                     fetch_osm_lifelines, ext, out)[0]))
         return _merge(parts)
     if key == "flowlines":
-        return try_download("USGS 3DHP flowlines", fetch_arcgis_layer, NHD_FLOWLINE_URL, ext,
+        return try_download("USGS 3DHP flowlines", fetch_arcgis_layer, HYDRO3DHP_FLOWLINE_URL, ext,
                             out, "NHD_flowlines")[0]
     if key == "places":
         return try_download("OpenStreetMap places", fetch_osm_places, big, out)[0]

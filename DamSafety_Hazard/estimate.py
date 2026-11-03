@@ -317,7 +317,7 @@ def planned_downloads(cfg, area):
     if (travel or _on(cfg, "termination", False)) and \
             cfg.get("centerline_layer", none) in (None, none) and "centerline" not in loc \
             and _on(cfg, "download_flowlines"):
-        arc("NHD_flowlines", "USGS 3DHP flowlines", C.NHD_FLOWLINE_URL)
+        arc("NHD_flowlines", "USGS 3DHP flowlines", C.HYDRO3DHP_FLOWLINE_URL)
     return jobs
 
 
