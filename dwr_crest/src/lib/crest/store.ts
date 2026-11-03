@@ -21,9 +21,9 @@ export const useDesk = create<DeskState>()(
     (set, get) => ({
       dams: SAMPLE_DAMS,
       activeId: SAMPLE_DAMS[0].id,
-      step: "record",
+      step: "setup",
       setStep: (step) => set({ step }),
-      select: (id) => set({ activeId: id, step: "record" }),
+      select: (id) => set({ activeId: id, step: "setup" }),
       update: (patch) => {
         const { dams, activeId } = get();
         set({
@@ -32,10 +32,10 @@ export const useDesk = create<DeskState>()(
       },
       add: () => {
         const dam = blankDam();
-        set({ dams: [...get().dams, dam], activeId: dam.id, step: "record" });
+        set({ dams: [...get().dams, dam], activeId: dam.id, step: "setup" });
       },
-      addDam: (dam) => set({ dams: [...get().dams, dam], activeId: dam.id, step: "record" }),
-      restore: () => set({ dams: SAMPLE_DAMS, activeId: SAMPLE_DAMS[0].id, step: "record" }),
+      addDam: (dam) => set({ dams: [...get().dams, dam], activeId: dam.id, step: "setup" }),
+      restore: () => set({ dams: SAMPLE_DAMS, activeId: SAMPLE_DAMS[0].id, step: "setup" }),
     }),
     // v2 (2026-10-29): the ND00199 sample changed (912 ft / H 28 -> 1072.24 NAVD88 / H 27.50; round 2 moved it to 1071.09, migrated below) and the
     // screen levels changed. A new key makes returning browsers start from the current samples
