@@ -71,7 +71,7 @@ export type FillResult = {
 };
 
 /** Binary max-heap of cell indices keyed by `key[k]` (highest first). */
-class MaxHeap {
+export class MaxHeap {
   private a: Int32Array;
   private key: Float64Array;
   size = 0;

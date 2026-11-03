@@ -4,6 +4,11 @@
  * and outline. One-off, for the baseline comparison (Nick, 2026-11-02); not part of the app.
  *
  *   node --experimental-strip-types scripts/score-routed.mjs --dam <record.json> --runner <dam folder> [--json out.json]
+ *     [--spread [--trace]] [--probes 300]
+ *
+ * --spread scores the quasi-dynamic volume spread (spread.ts) instead of the stage fill; --trace makes it use the
+ * outline's drainage trace instead of the breach's own flow path. --probes sets how many points on the model's wet
+ * cells compare depth, velocity and arrival.
  *
  * It fetches the same corridor DEM the terrain outline uses, builds the routed flood on it, and scores its depth grid
  * (the harness's lonlat candidate) against the Runner rasters.
@@ -24,11 +29,34 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith("--")) throw new Error(`unexpected ${a}`);
     const key = a.slice(2);
-    if (key === "volume-limit") o[key] = true;
+    if (key === "volume-limit" || key === "spread" || key === "trace") o[key] = true;
     else o[key] = argv[++i];
   }
   for (const k of ["dam", "runner"]) if (!o[k]) throw new Error(`--${k} is required`);
   return o;
+}
+
+/** Even-stride probe points on the reference run's wet cells (downstream of the breach when known). */
+export function probePoints(ref, downstream, want) {
+  const g = ref.grid;
+  const wet = [];
+  for (let r = 0; r < g.height; r++)
+    for (let c = 0; c < g.width; c++) {
+      const i = r * g.width + c;
+      if (!(g.depth[i] >= 0.1)) continue;
+      const [lon, lat] = ref.proj.inv(g.x0 + (c + 0.5) * g.dx, g.y0 - (r + 0.5) * g.dy);
+      if (downstream) {
+        const e = (lon - downstream.lon) * 111320 * Math.cos((downstream.lat * Math.PI) / 180);
+        const n = (lat - downstream.lat) * 110574;
+        if (e * downstream.u[0] + n * downstream.u[1] < 0) continue;
+      }
+      wet.push({ lon, lat });
+    }
+  if (!want || !wet.length) return [];
+  const stride = Math.max(1, Math.floor(wet.length / want));
+  const pts = [];
+  for (let i = 0; i < wet.length; i += stride) pts.push({ id: `p${pts.length}`, ...wet[i] });
+  return pts;
 }
 
 export async function main(argv, log = console.log) {
@@ -55,6 +83,8 @@ export async function main(argv, log = console.log) {
     volumeLimit: o["volume-limit"] != null,
     slopeFloor: o["slope-floor"] != null ? Number(o["slope-floor"]) : undefined,
     sectionHalfWidthM: o["half-width"] != null ? Number(o["half-width"]) : undefined,
+    method: o.spread ? "spread" : "stage",
+    breachPath: o.trace ? false : undefined,
   });
   if (!rf.ok) throw new Error(rf.reason);
   log(`  routed: peak in ${rf.stats.peakInCfs} cfs → out ${rf.stats.peakOutCfs} cfs (fell ${(rf.stats.routedPeakFellBy * 100).toFixed(0)}%), ${rf.stats.sections} sections, flooded ${rf.stats.floodedAc} ac`);
@@ -70,8 +100,19 @@ export async function main(argv, log = console.log) {
   log(`Model: ${summary.label}, ${summary.width} × ${summary.height} cells of ${summary.cellM} m (${summary.crs})`);
   if (summary.stats) log(`  wet downstream ${summary.stats.wetAc.toFixed(0)} ac, peak depth ${summary.stats.peakDepthFt.toFixed(1)} ft`);
 
-  const cand = { kind: "lonlat", bbox: rf.bbox, width: rf.width, height: rf.height, depth: rf.depthFt };
-  const report = validate(cand, ref, { label: "routed terrain flood", reference: summary.label, points: [], downstream });
+  const cand = {
+    kind: "lonlat",
+    bbox: rf.bbox,
+    width: rf.width,
+    height: rf.height,
+    depth: rf.depthFt,
+    velocity: rf.velocityFps ?? null,
+    arrival: rf.arrivalHr ?? null,
+  };
+  // Probe receptors: about --probes points on the model's wet cells downstream of the breach (an even stride), so
+  // depth, velocity and arrival can be compared where the model says there is water.
+  const points = probePoints(ref, downstream, Number(o.probes ?? 300));
+  const report = validate(cand, ref, { label: `routed terrain flood (${rf.method})`, reference: summary.label, points, downstream });
   log("\n" + formatReport(report));
 
   if (o.json) {
