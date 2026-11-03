@@ -144,6 +144,19 @@ def _receptors(path):
     return rows
 
 
+
+def _ro_raster_source(path):
+    """GDAL source for opening a run raster without writing beside it. GDAL PAM saves the
+    statistics QGIS computes as <raster>.aux.xml next to the file; through /vsisubfile/ (the
+    whole file as a read-only byte range) GDAL cannot write a sidecar, so the run folder stays
+    unchanged. Georeferencing is inside the GeoTIFF. Plain path if the size cannot be read."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return path
+    return "/vsisubfile/0_{},{}".format(size, os.path.abspath(path))
+
+
 class ResultsDock(QDockWidget):
     def __init__(self, iface, parent=None):
         super().__init__("Breach results", parent or iface.mainWindow())
@@ -336,7 +349,9 @@ class ResultsDock(QDockWidget):
         # forceReadOnly, GeoPackages also the IMMUTABLE open option; the subset string is only a
         # provider filter and writes nothing. Rasters: the gdal provider opens read-only.
         if key in RI.FINAL_NAMES:
-            lyr = QgsRasterLayer(path, name, "gdal")
+            # 3.13.9: QGIS's gdal provider stored its statistics in a <raster>.aux.xml beside
+            # the file (GDAL PAM) when the layer closed; open through /vsisubfile/ instead.
+            lyr = QgsRasterLayer(_ro_raster_source(path), name, "gdal")
         else:
             opts = QgsVectorLayer.LayerOptions()
             opts.forceReadOnly = True

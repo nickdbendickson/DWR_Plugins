@@ -11,6 +11,7 @@
   - **Layer buttons** Depth, Velocity, Arrival, Flooded receptors (receptors_flooded.csv as points in the run's work CRS), Hazard structures (outputs/Classification/Habitable_Structures.gpkg); files in the dam folder first, then the paths run_report.json recorded.
   - **Stale summary: the Next line says "Re-classify with the installed Hazard <version>"**, never "Nothing to do".
   - **Vector layers load filtered:** "Flooded receptors (N)" with `"depth_ft" > 0`, "Wet Hazard structures (N)" with `"Max_Depth_ft" > 0` (2801 r4: 673 of 673 receptors, 79 of 3,809 Hazard structures, 53 of them habitable; Hazard's 5.2.2 count of 45 also applies its outcome rules, said in the tooltip).
+  - **Rasters open through `/vsisubfile/` (3.13.9, CI of 48e366b):** QGIS's statistics were saved as `<raster>.aux.xml` beside Depth/Velocity/Arrival (GDAL PAM) when the layer closed; the read-only byte-range path lets GDAL write no sidecar, so the run folder listing stays unchanged.
   - **"140 thing(s) to check"** is a toggle that lists the run warnings.
   - Tests: `DamSafety_Runner/tests/test_results_dock_hazard.py` (new), `DamSafety_Runner/tests/test_review_record.py` (new), `tests/realqt_dock_area.py` (results dock checks).
 - **Runner 3.13.8 / Setup 1.0.19 (built as 3.13.6; #248 took 3.13.7): Style A wizard polish (Crest build pack brief, 2026-11-02; adapted to the one-page Setup of 1.0.14, Nick's choice).** RELEASE ndbreach 3.13.8; damsuite content otherwise unchanged. No parameter the run tool gets changes (`wizard_logic.build_rundam_params` untouched).
