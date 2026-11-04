@@ -59,8 +59,10 @@ const M_PER_DEG_LON_EQ = 111320;
 export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300), 2000);
 /** Bumped when the terrain request or the trace changes, so layers saved before rebuild. 2 = 2026-11-03: exact DEM
  *  box (adjustAspectRatio=false), toe start, trace margin. 3 = 2026-11-03: the routed flood's demand-driven downstream
- *  reach (reach.ts) and the exhausted-stretch cap (spread.ts). */
-export const TRACE_VERSION = 3;
+ *  reach (reach.ts) and the exhausted-stretch cap (spread.ts). 4 = 2026-11-04: the spread's ground by straight-line
+ *  nearest channel cell and the saddle pour's lowest-first tie order (spread.ts). 5 = 2026-11-04: the terrain-triggered
+ *  router — MCT on confined reaches, frozen Muskingum-Cunge on flat plains and tiny pools (routing.ts). */
+export const TRACE_VERSION = 5;
 
 /**
  * The depth cap is the dam height itself (Nick, 2026-11-03: no margin). A breach cannot stand water deeper than the dam

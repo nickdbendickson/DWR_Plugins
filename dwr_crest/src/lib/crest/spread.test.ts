@@ -351,3 +351,81 @@ describe("spreadVolume: the cap leaves a pool the terrain contains untouched", (
     assert.ok(Math.abs(a.pouredM3 - a.slicesM3) / a.slicesM3 < 1e-9);
   });
 });
+
+describe("spreadVolume: a stretch's ground is the land nearest it in a straight line, not by grid steps", () => {
+  // A channel running diagonally (south-east) across a gently tilted plain, a V across it so every stretch floods its
+  // own ground. Each stretch's arrival is its own (300 + 60 j s), so a wet cell's arrival says which stretch it was
+  // poured from. Counted in grid steps (|Δi| + |Δj|, the old 4-neighbour search) a point 300 m off a 45° channel is
+  // equally near ~600 m of channel and was handed to whichever cell the search reached first: whole grid columns went
+  // to one stretch, so a cell 300 m off the channel could carry a stretch several hundred metres up or down it.
+  const r2 = Math.SQRT1_2;
+  const along = (e: number, n: number) => (e - n) * r2; // distance down the diagonal from the origin
+  const across = (e: number, n: number) => (e + n) * r2; // offset from it (north-east positive)
+  const dem = synthDem(240, 10, (e, n) => 100 - 0.001 * along(e, n) + 0.003 * Math.abs(across(e, n)));
+  const pts: { e: number; n: number; x: number }[] = [];
+  for (let x = 0; x <= 1500; x += 10) pts.push({ e: (x - 750) * r2, n: -(x - 750) * r2, x });
+  const line: Centerline = { loc: LOC, pts };
+  const secs = sections(31, () => 60_000).map((s) => ({ ...s, bedM: 100 - 0.001 * (s.x - 750) }));
+  const r = spreadVolume(dem, line, secs, { minDepthM: 0.001 });
+  const at = idxOf(dem);
+
+  it("pours a cell 300 m off the channel from the stretch beside it", () => {
+    let checked = 0;
+    for (const x of [400, 600, 800, 1000]) {
+      for (const side of [-1, 1]) {
+        // The foot of the perpendicular is at channel distance x; step 300 m out across the channel.
+        const e = (x - 750) * r2 + side * 300 * r2;
+        const n = -(x - 750) * r2 + side * 300 * r2;
+        const k = at(e, n);
+        assert.ok(k >= 0 && r.depthM[k] > 0, `cell 300 m off at x=${x} is wet`);
+        const j = Math.round((r.arrivalS[k] - 300) / 60);
+        // Its stretch covers x (50 m stretches; one either side for the cell's own size).
+        assert.ok(Math.abs(j * 50 + 25 - x) <= 75, `cell beside x=${x} m poured from stretch ${j} (${j * 50}-${j * 50 + 50} m)`);
+        checked++;
+      }
+    }
+    assert.equal(checked, 8);
+  });
+});
+
+describe("spreadVolume: water that tops a saddle fills the low behind it lowest ground first", () => {
+  // Channel at e = 0, a bank (crest 101) at e = 20..40, and beyond it a wide low whose ground varies cell to cell
+  // between 99.0 and 99.9 (all of it below the bank, so it all shares the bank's spill height). A slice that tops the
+  // bank but cannot fill the low must stand at the bank on the channel side and lie in the low's LOWEST cells, and
+  // exactly hold its volume. The old pour perched it over the low in raster order (north rows first).
+  const lowG = (e: number, n: number) => 99 + 0.9 * (((Math.round(e / 10) * 7 + Math.round(n / 10) * 13) % 10 + 10) % 10) / 10;
+  const ground = (e: number, n: number) => (e < -5 ? 200 : e >= 20 && e < 40 ? 101 : e >= 40 && e < 600 ? lowG(e, n) : 100);
+  const dem = synthDem(160, 10, (e, n) => ground(e, n));
+  const line = straight(400, -400);
+  const at = idxOf(dem);
+  const secs = sections(17, () => 5_000);
+  const r = spreadVolume(dem, line, secs, { minDepthM: 1e-6 });
+
+  it("stands at the bank on the channel side", () => {
+    const w = r.wseM[at(0, 0)];
+    assert.ok(Math.abs(w - 101) < 1e-6, `channel surface ${w} is the bank crest 101`);
+  });
+
+  it("wets the low's lowest cells first", () => {
+    // Within one stretch (n from 0 to -40 lies in stretch 8: x 400..450), every wet cell in the low is lower than
+    // every dry one.
+    let maxWet = -Infinity;
+    let minDry = Infinity;
+    let wet = 0;
+    for (let e = 45; e < 590; e += 10)
+      for (let n = -5; n > -45; n -= 10) {
+        const k = at(e, n);
+        if (r.depthM[k] > 0) {
+          wet++;
+          maxWet = Math.max(maxWet, dem.z[k]);
+        } else minDry = Math.min(minDry, dem.z[k]);
+      }
+    assert.ok(wet > 0 && minDry < Infinity, `the low is partly wet (${wet} wet, dry from ${minDry})`);
+    assert.ok(maxWet <= minDry + 1e-6, `wet ground up to ${maxWet} but dry ground from ${minDry}`);
+  });
+
+  it("lays down exactly the slices", () => {
+    const want = secs.reduce((s, x) => s + x.storeMaxM3, 0);
+    assert.ok(Math.abs(r.volumeM3 - want) / want < 1e-6, `${r.volumeM3} vs ${want}`);
+  });
+});

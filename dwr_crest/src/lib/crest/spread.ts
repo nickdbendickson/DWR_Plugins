@@ -156,7 +156,6 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
   const cellMy = dlat * M_PER_DEG_LAT;
   const cellM = Math.min(cellMx, cellMy);
   const cellM2 = cellMx * cellMy;
-  const maxSteps = Math.ceil((opts.maxLateralM ?? 3000) / cellM);
   const valid = (k: number) => {
     const z = g.z[k];
     return Number.isFinite(z) && z > NODATA + 1 && z < 9000;
@@ -203,9 +202,6 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
   const label = new Int32Array(N).fill(-1);
   const bed = new Float64Array(N).fill(NaN);
   const dist = new Int32Array(N).fill(-1);
-  const queue = new Int32Array(N);
-  let qh = 0;
-  let qt = 0;
   const channel: number[] = [];
   for (let p = 0; p + 1 < line.pts.length; p++) {
     const a = line.pts[p];
@@ -220,30 +216,78 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
       dist[k] = 0;
       label[k] = j;
       bed[k] = g.z[k];
-      queue[qt++] = k;
       channel.push(k);
     }
   }
 
-  // 2. Nearest channel cell (4-neighbour BFS): each cell joins the stretch of the channel cell nearest it and is
-  // measured against that cell's bed. Cells nearest the part of the trace past the last section stay unlabelled.
-  const D4I = [1, -1, 0, 0];
-  const D4J = [0, 0, 1, -1];
-  while (qh < qt) {
-    const c = queue[qh++];
-    if (dist[c] >= maxSteps) continue;
-    const ci = c % W;
-    const cj = (c - ci) / W;
-    for (let t = 0; t < 4; t++) {
-      const i = ci + D4I[t];
-      const j = cj + D4J[t];
-      if (i < 0 || j < 0 || i >= W || j >= H) continue;
-      const m = j * W + i;
-      if (dist[m] >= 0 || !valid(m)) continue;
-      dist[m] = dist[c] + 1;
-      label[m] = label[c];
-      bed[m] = bed[c];
-      queue[qt++] = m;
+  // 2. Nearest channel cell: each cell joins the stretch of the channel cell nearest it in a straight line (up to
+  // maxLateralM) and is measured against that cell's bed. Cells nearest the part of the trace past the last section
+  // stay unlabelled. The nearest cell is found by handing each cell's nearest channel cell on to its neighbours, two
+  // raster sweeps each way (a vector distance transform; exact to within about a cell).
+  //
+  // This used to be a 4-neighbour breadth-first search, i.e. nearest by grid steps (|Δi| + |Δj|). Under that measure a
+  // point off a slanting channel is equally near a whole run of channel cells, and the search's queue order handed
+  // whole grid columns (or rows) to one of them: wherever the channel ran on a slant, a stretch's ground became a strip
+  // one or two cells wide reaching up to 3 km due north or south, across other drainages and up and down slopes, and
+  // its level pool stood in whatever lows that strip crossed. On the flat DWR-2801 plain that drew the flood as a comb
+  // of north-south stripes kilometres off the channel, deep where a stripe crossed a low and dry between (part of the
+  // "deeper and narrower than LISFLOOD" of crest #63 §4).
+  const maxD2 = (opts.maxLateralM ?? 3000) ** 2;
+  {
+    const seedOf = new Int32Array(N).fill(-1);
+    const d2 = new Float64Array(N).fill(Infinity);
+    for (const k of channel) {
+      seedOf[k] = k;
+      d2[k] = 0;
+    }
+    const take = (k: number, i: number, j: number) => {
+      if (i < 0 || j < 0 || i >= W || j >= H) return;
+      const sk = seedOf[j * W + i];
+      if (sk < 0) return;
+      const di = (k % W) - (sk % W);
+      const dj = (k - (k % W)) / W - (sk - (sk % W)) / W;
+      const d = (di * cellMx) ** 2 + (dj * cellMy) ** 2;
+      if (d < d2[k]) {
+        d2[k] = d;
+        seedOf[k] = sk;
+      }
+    };
+    for (let sweep = 0; sweep < 2; sweep++) {
+      for (let j = 0; j < H; j++) {
+        for (let i = 0; i < W; i++) {
+          const k = j * W + i;
+          if (!valid(k)) continue;
+          take(k, i - 1, j);
+          take(k, i - 1, j - 1);
+          take(k, i, j - 1);
+          take(k, i + 1, j - 1);
+        }
+        for (let i = W - 1; i >= 0; i--) {
+          const k = j * W + i;
+          if (valid(k)) take(k, i + 1, j);
+        }
+      }
+      for (let j = H - 1; j >= 0; j--) {
+        for (let i = W - 1; i >= 0; i--) {
+          const k = j * W + i;
+          if (!valid(k)) continue;
+          take(k, i + 1, j);
+          take(k, i + 1, j + 1);
+          take(k, i, j + 1);
+          take(k, i - 1, j + 1);
+        }
+        for (let i = 0; i < W; i++) {
+          const k = j * W + i;
+          if (valid(k)) take(k, i - 1, j);
+        }
+      }
+    }
+    for (let k = 0; k < N; k++) {
+      if (dist[k] === 0 || seedOf[k] < 0 || !valid(k) || d2[k] > maxD2) continue;
+      const sk = seedOf[k];
+      dist[k] = Math.max(1, Math.round(Math.sqrt(d2[k]) / cellM));
+      label[k] = label[sk];
+      bed[k] = bed[sk];
     }
   }
   for (let k = 0; k < N; k++) if (label[k] === 0 && dist[k] > 0 && behindDam(k)) label[k] = -1;
@@ -465,15 +509,19 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     if (!(v > 0) || b <= a) continue;
     stretches++;
     slicesM3 += v;
-    const cells = Array.from(order.subarray(a, b)).sort((p, q) => spill[p] - spill[q]);
+    // Spill (connection) order, ties lowest ground first: every cell behind one saddle shares that saddle's spill
+    // height, and the water that tops it runs to the lowest of them first. (Ties used to keep raster order.)
+    const cells = Array.from(order.subarray(a, b)).sort((p, q) => spill[p] - spill[q] || g.z[p] - bed[p] - (g.z[q] - bed[q]));
     const target = v / cellM2; // m of depth summed over cells
-    // Pour the slice as one or more level pools. Cells join a pool in spill (connection) order; a pool can only rise
-    // to a saddle it has the volume to top. If adding the next cell would drop the computed level below that cell's
-    // own saddle, there isn't enough water to carry the pool over it: the near side caps at the saddle and the
-    // remainder perches as a fresh pool beyond it. Without this (a single running average over all the cells) a slice
-    // too small to top a saddle but big enough to reach it would be smeared across the saddle, pulling the near-side
-    // surface below the saddle it supposedly crossed and laying a sheet of water in the low behind it — a dry gap in
-    // the channel and ~an extra slice of water in the wrong place. (M13)
+    // Pour the slice as a static fill-and-spill from the channel. With the cells of spill height ≤ L all standing at
+    // level L, the pool holds F(L) = Σ (L − ground). F rises steadily between saddles and jumps at a saddle by the
+    // room below it in the low behind (every cell behind a saddle shares the saddle's spill height, so they join as
+    // one tie group). The slice's level is where F reaches it. When the slice runs out inside a jump, the pool stands
+    // at the saddle on the near side and the rest runs into the low behind it, lowest ground first, as its own level
+    // pool below the saddle. A slice too small to top a saddle is never laid across it (M13). (The earlier pour
+    // perched that remainder over the tie group in raster order, north row first, and solved its level with every
+    // member counted, so ground standing above the level was credited with negative depth and the water landed on
+    // the low's northern cells rather than its lowest.)
     // When the pool has risen over every reachable cell (the stretch ran out of ground at the lateral limit or the
     // DEM's edge) the slice can no longer spread, only stack: without a cap the whole remainder went on as depth,
     // 277 ft on a 27.5 ft dam on DWR-2801, and the +3.5 ft bias against both LISFLOOD-FP and DSS-WISE. So an
@@ -481,60 +529,81 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     // higher, and never above maxLevelM (2× the dam height); the surplus is withheld and reported (unpouredM3). It is
     // water that would stand beyond the ground shown, not deeper on it.
     const levelOf = new Float64Array(cells.length).fill(NaN);
+    const groundOf = (r: number) => g.z[cells[r]] - bed[cells[r]];
     const stageCap = (Number.isFinite(sections[j].stageM) ? sections[j].stageM : 0) + EXHAUST_STAGE_ALLOWANCE_M;
     let budget = target;
-    let start = 0;
     let exhaustedHere = false;
     let cappedHere = false;
-    while (start < cells.length && budget > 1e-9) {
+    {
       let cnt = 0;
       let sumG = 0;
-      let level = NaN;
-      let end = cells.length - 1;
-      let perched = false;
-      for (let r = start; r < cells.length; r++) {
-        const k = cells[r];
-        cnt++;
-        sumG += g.z[k] - bed[k];
-        const hh = (budget + sumG) / cnt;
-        if (r > start && hh < spill[k]) {
-          // Too little water to carry the pool over this cell's saddle: cap the near side at the saddle, perch the rest.
-          level = spill[k];
-          end = r - 1;
-          perched = true;
+      let r = 0;
+      let settled = false;
+      while (r < cells.length && !settled) {
+        // The next tie group: every cell at this spill height.
+        const S = spill[cells[r]];
+        let e = r;
+        let jump = 0;
+        while (e < cells.length && spill[cells[e]] === S) {
+          jump += S - groundOf(e);
+          e++;
+        }
+        const fBefore = cnt * S - sumG; // what the pool holds standing at S before the group joins
+        if (cnt > 0 && target <= fBefore) {
+          // The level settles below this saddle.
+          const L = (target + sumG) / cnt;
+          for (let q = 0; q < r; q++) levelOf[q] = L;
+          budget = 0;
+          settled = true;
           break;
         }
-        const last = r + 1 >= cells.length;
-        const next = last ? Infinity : spill[cells[r + 1]];
-        if (hh <= next) {
-          level = hh;
-          end = r;
-          if (last) {
-            // The pool stood over every cell of the stretch: hold it at the cap and withhold the rest.
-            exhaustedHere = true;
-            let cap = Math.max(stageCap, spill[k]);
-            if (opts.maxLevelM != null && opts.maxLevelM > 0) cap = Math.min(cap, opts.maxLevelM);
-            if (hh > cap + 1e-9) {
-              level = cap;
-              cappedHere = true;
-              // Under a hard cap below the last cell's saddle, the cells it no longer reaches stay dry.
-              while (end >= start && spill[cells[end]] > cap) end--;
-              if (end < start) level = NaN;
+        if (target <= fBefore + jump) {
+          // Runs out inside the jump: the near side stands at S, the rest fills the group lowest ground first.
+          for (let q = 0; q < r; q++) levelOf[q] = S;
+          const rest = target - Math.max(0, fBefore);
+          let n = 0;
+          let sg = 0;
+          let L = S;
+          for (let q = r; q < e; q++) {
+            n++;
+            sg += groundOf(q);
+            const nextG = q + 1 < e ? groundOf(q + 1) : S;
+            const hh = (rest + sg) / n;
+            if (hh <= nextG) {
+              L = Math.min(hh, S);
+              break;
             }
           }
+          for (let q = r; q < r + n; q++) levelOf[q] = L;
+          budget = 0;
+          settled = true;
           break;
         }
+        cnt += e - r;
+        for (let q = r; q < e; q++) sumG += groundOf(q);
+        r = e;
       }
-      if (!Number.isFinite(level)) break;
-      let consumed = 0;
-      for (let r = start; r <= end; r++) {
-        levelOf[r] = level;
-        consumed += level - (g.z[cells[r]] - bed[cells[r]]);
+      if (!settled && cnt > 0) {
+        // The pool stood over every cell of the stretch: hold it at the cap and withhold the rest.
+        exhaustedHere = true;
+        const hh = (target + sumG) / cnt;
+        let cap = Math.max(stageCap, spill[cells[cells.length - 1]]);
+        if (opts.maxLevelM != null && opts.maxLevelM > 0) cap = Math.min(cap, opts.maxLevelM);
+        let L = hh;
+        let end = cells.length - 1;
+        if (hh > cap + 1e-9) {
+          L = cap;
+          cappedHere = true;
+          // Under a hard cap below the last cell's saddle, the cells it no longer reaches stay dry.
+          while (end >= 0 && spill[cells[end]] > cap) end--;
+        }
+        let consumed = 0;
+        for (let q = 0; q <= end; q++) {
+          levelOf[q] = L;
+          consumed += L - groundOf(q);
+        }
+        budget = target - consumed;
       }
-      budget -= consumed;
-      if (perched) {
-        start = end + 1; // the overflow perches starting at the cell beyond the saddle
-      } else break; // a contained (or capped) pool took the remaining budget
     }
     pouredM3 += Math.max(0, target - budget) * cellM2;
     if (exhaustedHere) exhausted++;

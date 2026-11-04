@@ -33,6 +33,12 @@ export type RoutedFloodOptions = {
   sectionHalfWidthM?: number;
   /** Longest simulated time for the routing (h). Default 72. */
   maxHours?: number;
+  /**
+   * Which Muskingum-Cunge variant routes each reach: "mc" (frozen coefficients everywhere), "mct" (variable-parameter
+   * Todini everywhere), or "auto" (the default: MCT on confined reaches, MC on flat plains and tiny pools). See
+   * RoutingOptions.router.
+   */
+  router?: "mc" | "mct" | "auto";
   /** A cell is wet at this depth (m). Default 0.03 (~0.1 ft). */
   minDepthM?: number;
   /** Cap the fill at the released breach volume instead of only flagging the over-spread. Default false. */
@@ -193,7 +199,14 @@ export async function buildRoutedFlood(
     tS: series.map((p) => p.tHr * 3600),
     qCms: series.map((p) => p.qCfs * CFS),
   };
-  const routed = routeMuskingumCunge(inflow, tables, { maxHours: opts.maxHours ?? 72 });
+  // Terrain-triggered routing: MCT in defined valleys, frozen MC on flat plains and tiny pools (routing.ts router).
+  // "auto" holds the MC footprint where it is right (2801 plain, 4031 pool) and takes MCT's attenuation where it helps
+  // (2865 incised, 3034 confined). The confinement trigger (0.0015) is insensitive from 0.0005 to 0.002 on the four
+  // baseline dams; see the sweep in /mnt/project-files/crest-inundation/mct-terrain-router-2026-11-04/.
+  const routed = routeMuskingumCunge(inflow, tables, {
+    maxHours: opts.maxHours ?? 72,
+    router: opts.router ?? "auto",
+  });
 
   const releasedAcFt = result.breach.volumeAcFt;
   const N = g.width * g.height;

@@ -182,3 +182,65 @@ describe("routeMuskingumCunge", () => {
     assert.match(r.notes.join(" "), /cannot carry the routed peak/);
   });
 });
+
+/** A channel whose upstream half is steep and downstream half is flat, to exercise the per-reach terrain trigger. */
+function mixedChannel(steepS: number, flatS: number, b = 30) {
+  const secs: Section[] = [];
+  let bed = 100;
+  let x = 0;
+  for (let i = 0; i < 10; i++) {
+    secs.push(rectSection(x, b, 8, bed, 300));
+    const s = i < 5 ? steepS : flatS; // reach i connects section i to i+1
+    bed -= s * 500;
+    x += 500;
+  }
+  secs.push(rectSection(x, b, 8, bed, 300));
+  return secs.map((s) => sectionTable(s, DEFAULT_ROUGHNESS, 30, 0.05));
+}
+
+describe("routeMuskingumCunge: MCT and the terrain trigger", () => {
+  const tri = triangle(400, 1800, 6 * 3600);
+
+  it("conserves mass with the MCT (variable-parameter Todini) router", () => {
+    // A steady flow passes unchanged: the varying-parameter coefficients still sum to 1 every step, so with no toe to
+    // clamp the balance is exact (the Todini mass-conservative property, the whole reason to prefer it over naive VPMC).
+    const tables = channel(15_000, 500, 0.001);
+    const steady = routeMuskingumCunge({ tS: [0, 3600 * 6], qCms: [100, 100] }, tables, { router: "mct", maxHours: 6 });
+    for (const s of steady.sections) near(s.peakCms, 100, 0.002, `MCT steady peak at ${s.x}`);
+    // On a wave, MCT never manufactures volume (unlike naive VPMC's ~20 %): volume out stays at or below volume in,
+    // the only leak being the shared non-negativity clamp on the recession toe, well under a percent.
+    const r = routeMuskingumCunge(tri, tables, { router: "mct", maxHours: 72, recessionFraction: 0.0002 });
+    assert.ok(r.volumeOutM3 <= r.volumeInM3 * 1.01, `MCT manufactures no volume: ${r.volumeOutM3} vs ${r.volumeInM3}`);
+    assert.ok(r.sections.every((s) => Number.isFinite(s.peakCms) && s.peakCms >= 0), "MCT peaks finite and non-negative");
+    for (let j = 1; j < r.sections.length; j++)
+      assert.ok(r.sections[j].peakCms <= r.sections[j - 1].peakCms + 1e-6, `MCT peak falls at ${r.sections[j].x}`);
+  });
+
+  it("'auto' with a high trigger is identical to plain MC, and 'auto' on a confined channel turns MCT on", () => {
+    const tables = channel(10_000, 500, 0.002);
+    const mc = routeMuskingumCunge(tri, tables, { router: "mc", maxHours: 48, keepPoints: 20 });
+    // A trigger above any real slope leaves every reach on frozen MC: the peaks must match MC to machine precision.
+    const autoHigh = routeMuskingumCunge(tri, tables, { router: "auto", confineSlopeTrigger: 1, maxHours: 48, keepPoints: 20 });
+    for (let j = 0; j < tables.length; j++) near(autoHigh.sections[j].peakCms, mc.sections[j].peakCms, 1e-12, `auto(high)=MC at ${tables[j].x}`);
+    assert.ok(/0 of \d+ reaches confined/.test(autoHigh.notes.join(" ")), "auto(high) uses no MCT");
+    // On this confined channel a low trigger puts every reach on MCT.
+    const autoLow = routeMuskingumCunge(tri, tables, { router: "auto", confineSlopeTrigger: 0.0005, maxHours: 48 });
+    const m = autoLow.notes.join(" ").match(/(\d+) of (\d+) reaches confined/);
+    assert.ok(m && Number(m[1]) === Number(m[2]) && Number(m[1]) > 0, `auto(low) uses MCT on every reach: ${autoLow.notes.join(" ")}`);
+  });
+
+  it("picks MCT on the steep half and MC on the flat half of a mixed channel", () => {
+    const tables = mixedChannel(0.003, 0.0003);
+    const r = routeMuskingumCunge(tri, tables, { router: "auto", confineSlopeTrigger: 0.0015, maxHours: 48 });
+    const m = r.notes.join(" ").match(/(\d+) of (\d+) reaches confined/);
+    assert.ok(m, "auto reports its split");
+    const mct = Number(m![1]);
+    const total = Number(m![2]);
+    // The five steep reaches qualify, the five flat ones do not — a genuine per-reach split, not all-or-nothing.
+    assert.ok(mct > 0 && mct < total, `mixed channel splits the router: ${mct} of ${total}`);
+    assert.equal(mct, 5);
+    // The result is still physical: peaks fall downstream and mass is not created beyond the shared toe clamp.
+    assert.ok(r.volumeOutM3 <= r.volumeInM3 * 1.01, `mixed-router manufactures no volume: ${r.volumeOutM3} vs ${r.volumeInM3}`);
+    for (let j = 1; j < r.sections.length; j++) assert.ok(r.sections[j].peakCms <= r.sections[j - 1].peakCms + 1e-6, `peak falls at ${r.sections[j].x}`);
+  });
+});

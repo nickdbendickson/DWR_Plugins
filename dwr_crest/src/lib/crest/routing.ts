@@ -251,6 +251,21 @@ function propsAtQ(t: SectionTable, q: number, slope: number) {
   return { ...nd, celerity: c };
 }
 
+/**
+ * Muskingum routing coefficients from the Courant and cell-Reynolds numbers (Ponce 1989, eq. 9-56):
+ *   C = c·Δt/Δx (Courant),  D = q/(B·S·c·Δx) (cell Reynolds),
+ *   O₂ = C0·I₂ + C1·I₁ + C2·O₁,  C0=(−1+C+D)/(1+C+D), C1=(1+C−D)/(1+C+D), C2=(1−C+D)/(1+C+D).
+ * C0+C1+C2 = 1 for any C, D, so the step conserves mass exactly whatever celerity and width are used. This is the
+ * form the frozen scheme freezes at the peak and the MCT scheme recomputes each step at the local flow; q here is the
+ * reach-referenced discharge per unit of the time step, B the top width and S the bed slope.
+ */
+function mcCoeffsCourant(c: number, B: number, slope: number, dx: number, dt: number, q: number) {
+  const C = (c * dt) / dx;
+  const D = q / (Math.max(1, B) * Math.max(1e-9, slope) * Math.max(1e-6, c) * dx);
+  const denom = 1 + C + D;
+  return { C0: (-1 + C + D) / denom, C1: (1 + C - D) / denom, C2: (1 - C + D) / denom };
+}
+
 export type RoutingOptions = {
   rough?: RoughnessOptions;
   /** Slope floors: for the routing parameters and for normal depth (the plan's two floors). */
@@ -263,6 +278,21 @@ export type RoutingOptions = {
   maxHours?: number;
   /** Points kept per section hydrograph (0 = none). */
   keepPoints?: number;
+  /**
+   * Which Muskingum-Cunge variant routes each reach.
+   *  - "mc"  : the frozen-coefficient scheme everywhere (parameters set once at the inflow peak). The default when
+   *            unset; conserves mass exactly and is accurate on flat multi-thread reaches where the overbank wave
+   *            translates rather than attenuating.
+   *  - "mct" : the variable-parameter, mass-conservative Muskingum-Cunge-Todini scheme everywhere (parameters
+   *            recomputed each step at the local reference discharge). It captures the real attenuation in a defined
+   *            valley but over-damps a flat, shallow overbank (celerity collapses, the wave bogs).
+   *  - "auto": MCT on reaches confined enough to carry the wave (bed slope ≥ `confineSlopeTrigger` and the section
+   *            holding the peak within its banks), MC on flat plains and tiny pools. This is the terrain trigger:
+   *            one dam can be confined upstream and a plain downstream, so the choice is per reach, not per dam.
+   */
+  router?: "mc" | "mct" | "auto";
+  /** "auto" routes a reach with MCT when its bed slope (before the floor) is at least this; default 0.0015. */
+  confineSlopeTrigger?: number;
 };
 
 export type RoutedSection = {
@@ -379,8 +409,29 @@ export function routeMuskingumCunge(
   // of its own volume. Freezing the coefficients makes C0+C1+C2 = 1 a genuine volume balance and conserves mass to
   // machine precision, at the cost of the stage-dependent wave speed within one event (acceptable for a first layer;
   // the Todini mass-conservative correction is the route to full VPMC if it is ever wanted).
+  // A reach is routed with MCT when the terrain trigger says it is confined enough to carry the wave: a real bed slope
+  // and a section that holds the inflow peak within its banks (not a flat plain where the peak spills over). "mc" and
+  // "mct" force the whole reach one way; "auto" (and the unset default of "mc") decide per reach.
+  const router = opts.router ?? "mc";
+  const trigger = opts.confineSlopeTrigger ?? 0.0015;
+  const mctForReach = (j: number, rawSlope: number): boolean => {
+    if (router === "mc") return false;
+    if (router === "mct") return true;
+    // "auto": confined = a real slope and the upstream section carries the peak within its cut (not capped/spilling).
+    const confined = rawSlope >= trigger && !normalDepth(tables[j], qPeakIn, slopes[j]).capped;
+    return confined;
+  };
+  // Raw (unfloored) slopes for the trigger; slopes[] is the floored version used for the hydraulics.
+  const rawSlopes: number[] = [];
+  for (let j = 0; j + 1 < tables.length; j++) {
+    const dx = tables[j + 1].x - tables[j].x;
+    rawSlopes.push(dx > 0 ? (tables[j].bedM - tables[j + 1].bedM) / dx : 0);
+  }
   const subReaches: number[] = [];
-  const cells: { C0: number; C1: number; C2: number }[] = [];
+  // Each cell is either a frozen MC cell (C0..C2 fixed) or an MCT cell carrying the geometry to recompute them each
+  // step. A null C0 marks an MCT cell.
+  const cells: { C0: number; C1: number; C2: number; mct: boolean; dx: number; slope: number; ta: SectionTable; tb: SectionTable }[] = [];
+  let mctReaches = 0;
   for (let j = 0; j + 1 < tables.length; j++) {
     const L = tables[j + 1].x - tables[j].x;
     const pa = propsAtQ(tables[j], qPeakIn, slopes[j]);
@@ -390,16 +441,22 @@ export function routeMuskingumCunge(
     const dxMax = c * dt; // Courant number 1 at the reference peak
     const k = Math.max(1, Math.ceil(L / Math.max(1e-6, dxMax)));
     const dx = L / k; // Courant ≤ 1 after the ceil
+    const mct = mctForReach(j, rawSlopes[j]);
+    if (mct) mctReaches++;
+    // Frozen coefficients at the reference peak (used directly by MC cells, and as the MCT cell's first guess). The
+    // original K/X form with the physical clamp X∈[0,0.5]; it equals the Courant/Reynolds form (mcCoeffsCourant) when X
+    // is unclamped, but the clamp keeps the frozen scheme stable on flat reaches, so it is preserved exactly.
     const K = dx / c;
-    // Cunge's X from the grid (cell) Reynolds number, clamped to the physical [0, 0.5].
     const X = Math.max(0, Math.min(0.5, 0.5 * (1 - qPeakIn / (top * slopes[j] * c * dx))));
     const D = 2 * K * (1 - X) + dt;
     const C0 = (dt - 2 * K * X) / D;
     const C1 = (dt + 2 * K * X) / D;
     const C2 = (2 * K * (1 - X) - dt) / D;
     subReaches.push(k);
-    for (let s = 0; s < k; s++) cells.push({ C0, C1, C2 });
+    for (let s = 0; s < k; s++) cells.push({ C0, C1, C2, mct, dx, slope: slopes[j], ta: tables[j], tb: tables[j + 1] });
   }
+  if (router === "auto")
+    notes.push(`Terrain router: ${mctReaches} of ${subReaches.length} reaches confined enough for MCT (bed slope ≥ ${trigger}); the rest route with frozen Muskingum-Cunge.`);
   const nc = cells.length;
   const Q = new Float64Array(nc + 1); // discharge at cell boundaries, current step
   const Qp = new Float64Array(nc + 1); // previous step
@@ -426,10 +483,30 @@ export function routeMuskingumCunge(
     Qp.set(Q);
     Q[0] = qin;
     for (let i = 0; i < nc; i++) {
-      const { C0, C1, C2 } = cells[i];
-      // Frozen-coefficient Muskingum step. The max(0,·) only trims a small numerical undershoot on the toe; because
-      // the coefficients sum to 1 the balance is otherwise exact (see the cell-build note).
-      Q[i + 1] = Math.max(0, C0 * Q[i] + C1 * Qp[i] + C2 * Qp[i + 1]);
+      const cell = cells[i];
+      const I1 = Qp[i];
+      const I2 = Q[i];
+      const O1 = Qp[i + 1];
+      if (!cell.mct) {
+        // Frozen-coefficient Muskingum step. The max(0,·) only trims a small numerical undershoot on the toe; because
+        // the coefficients sum to 1 the balance is otherwise exact (see the cell-build note).
+        Q[i + 1] = Math.max(0, cell.C0 * I2 + cell.C1 * I1 + cell.C2 * O1);
+        continue;
+      }
+      // MCT: recompute the coefficients at the reach-referenced discharge q* = ¼(I1+I2+O1+O2), iterating on O2 because
+      // it depends on the coefficients it feeds. The coefficients always sum to 1, so each step conserves mass whatever
+      // the local celerity and width are (the Todini mass-conservative property); two passes converge here.
+      let O2 = Math.max(0, cell.C0 * I2 + cell.C1 * I1 + cell.C2 * O1); // frozen result as the first guess
+      for (let it = 0; it < 2; it++) {
+        const qRef = Math.max(1e-6, 0.25 * (I1 + I2 + O1 + O2));
+        const pa = propsAtQ(cell.ta, qRef, cell.slope);
+        const pb = propsAtQ(cell.tb, qRef, cell.slope);
+        const c = Math.max(1e-6, 0.5 * (pa.celerity + pb.celerity));
+        const B = Math.max(1, 0.5 * (pa.topWidthM + pb.topWidthM));
+        const co = mcCoeffsCourant(c, B, cell.slope, cell.dx, dt, qRef);
+        O2 = Math.max(0, co.C0 * I2 + co.C1 * I1 + co.C2 * O1);
+      }
+      Q[i + 1] = O2;
     }
     for (let j = 0; j < tables.length; j++) {
       const q = Q[bIdx[j]];
