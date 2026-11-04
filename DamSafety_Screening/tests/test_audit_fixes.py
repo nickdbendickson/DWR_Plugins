@@ -167,7 +167,7 @@ def test_lisflood_is_vetted_and_logged():
     old_path, old_env = os.environ.get("PATH", ""), os.environ.pop("NDBREACH_LISFLOOD", None)
     try:
         good = os.path.join(d, "good"); os.makedirs(good); os.chmod(good, 0o755)
-        bad = os.path.join(d, "bad"); os.makedirs(bad); os.chmod(bad, 0o777)
+        bad = os.path.join(d, "bad"); os.makedirs(bad); os.chmod(bad, 0o777)  # nosec B103  # test fixture: deliberately world-writable dir
         for folder in (good, bad):
             exe = os.path.join(folder, "lisflood")
             with open(exe, "w") as fh:

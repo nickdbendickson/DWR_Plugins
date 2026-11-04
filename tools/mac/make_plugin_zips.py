@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build the plugin zips the Mac installer installs (tools/mac/plugins/*.zip) from the HEAD
 commit of this repo checkout (git archive): committed files only, so uncommitted edits never
-reach a Mac; tests/, __pycache__, *.pyc and dotfiles are left out. plugins/SHA256SUMS lists
+reach a Mac; tests/, __pycache__, *.pyc and dotfiles are left out (except the plugin-root
+.secrets.baseline/.bandit that plugins.qgis.org's security scan reads). plugins/SHA256SUMS lists
 each zip's sha256 and, on its first line, the commit the zips were built from.
 
     python3 tools/mac/make_plugin_zips.py          (zips are git-ignored)
@@ -19,6 +20,8 @@ REPO = subprocess.check_output(["git", "-C", HERE, "rev-parse", "--show-toplevel
 OUT = os.path.join(HERE, "plugins")
 PLUGINS = ["DamSafety_Setup", "DamSafety_Data", "DamSafety_Screening", "DamSafety_Runner",
            "DamSafety_Hazard", "DamSafety_HazardLite", "DamSafety_PMP"]
+# plugins.qgis.org security-scan config files, kept at the plugin root next to metadata.txt
+SCAN_CONFIGS = (".secrets.baseline", ".bandit")
 FIXED = (2026, 1, 1, 0, 0, 0)  # fixed timestamps -> same files give the same zip
 
 
@@ -36,7 +39,8 @@ def version(files, p):
 def keep(rel):
     parts = rel.split("/")
     return not ("tests" in parts or "__pycache__" in parts or rel.endswith((".pyc", ".pyo"))
-                or any(x.startswith(".") for x in parts))
+                or any(x.startswith(".") for x in parts[:-1])
+                or (parts[-1].startswith(".") and not (len(parts) == 2 and parts[-1] in SCAN_CONFIGS)))
 
 
 def committed_files(commit, plugin):

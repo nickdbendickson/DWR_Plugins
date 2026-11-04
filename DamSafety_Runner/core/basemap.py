@@ -220,7 +220,7 @@ class Cache(object):
             self.root = ""                  # never a cache inside a run / input folder
 
     def _path(self, url):
-        h = hashlib.md5(url.encode("utf-8")).hexdigest()
+        h = hashlib.md5(url.encode("utf-8"), usedforsecurity=False).hexdigest()
         return os.path.join(self.root, h[:2], h + ".bin")
 
     def get(self, url):

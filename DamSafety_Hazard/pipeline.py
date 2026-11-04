@@ -587,7 +587,7 @@ def _layer_sig(lyr):
             return sig + ["count", n, "{:.4f},{:.4f},{:.4f},{:.4f}".format(
                 ext.xMinimum(), ext.yMinimum(), ext.xMaximum(), ext.yMaximum())]
         import hashlib
-        h = hashlib.md5()
+        h = hashlib.md5(usedforsecurity=False)
         for f in lyr.getFeatures():
             h.update(repr(f.attributes()).encode("utf-8", "replace"))
             g = f.geometry()

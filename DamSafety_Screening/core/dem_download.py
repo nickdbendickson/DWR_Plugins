@@ -438,14 +438,14 @@ def _log_warning(message):
 
 
 def _ftp():
-    import ftplib
+    import ftplib  # nosec B402  # ND DWR LiDAR server offers only anonymous/guest FTP of public data; no private credentials
     if not ftp_allowed():
         raise IOError("FTP to {} is off (plain-text protocol); ND LiDAR tiles and the tile index "
                       "come over HTTPS. A staged FTP package path needs FTP: to allow it, set the "
                       "QGIS setting {} to true (Settings > Options > Advanced) or "
                       "ND_LIDAR_ALLOW_FTP=1.".format(DWR_HOST, FTP_SETTING))
     _log_warning("Using plain-text FTP to {} (opt-in setting {} is on)".format(DWR_HOST, FTP_SETTING))
-    ftp = ftplib.FTP(DWR_HOST, timeout=120)
+    ftp = ftplib.FTP(DWR_HOST, timeout=120)  # nosec B321  # ND DWR LiDAR server offers only anonymous/guest FTP of public data; no private credentials
     try:
         ftp.login(DWR_USER, DWR_PASSWORD)
     except BaseException:
