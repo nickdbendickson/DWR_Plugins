@@ -4,7 +4,7 @@ import datetime
 import os
 
 from qgis.PyQt.QtCore import Qt
-from .ui_fit import fit_window
+from .ui_fit import fit_window, scroll_page
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
@@ -122,6 +122,11 @@ class SettingsDialog(QDialog):
                                          "on this schedule and replaced only if it changed.")
                 src_form.addRow("    Re-check NSI every:", self.nsi_days)
                 self.nsi_mode = QComboBox()
+                # 2026-11-03: sized to 24 characters (the full text shows when it opens), so
+                # the window's body fits 800 px with no sideways scroll
+                _adj = getattr(QComboBox, "SizeAdjustPolicy", QComboBox)
+                self.nsi_mode.setSizeAdjustPolicy(_adj.AdjustToMinimumContentsLengthWithIcon)
+                self.nsi_mode.setMinimumContentsLength(24)
                 for value, label in NSI_MODE_LABELS:
                     self.nsi_mode.addItem(label, value)
                 index = self.nsi_mode.findData(settings.nsi_mode)
@@ -184,8 +189,11 @@ class SettingsDialog(QDialog):
         cancel = buttons.button(_sb.Cancel)
         if cancel is not None:
             cancel.setText("Close")
+        # 2026-11-03 (GUI review at 800x600): the window needed 841 px of height. The body
+        # scrolls now; Save / Close stay under it.
+        scroll_page(self)
+        self.layout().addWidget(buttons)
         fit_window(self, (720, 640))
-        layout.addWidget(buttons)
 
         self.refresh_status()
 

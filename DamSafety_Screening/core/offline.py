@@ -24,6 +24,18 @@ COUNTIES = dict(_COUNTY_BOXES) or {
 }
 
 
+def _normaliser(url):
+    """damsuite.hydro3dhp.normaliser_for_url (None for a layer that is not 3DHP)."""
+    try:
+        try:
+            from ..damsuite import hydro3dhp
+        except ImportError:
+            from damsuite import hydro3dhp
+        return hydro3dhp.normaliser_for_url(url)
+    except Exception:                                            # noqa
+        return None
+
+
 def servers_path(gpkg):
     return os.path.splitext(gpkg)[0] + "_servers.json"
 
@@ -117,6 +129,9 @@ def download_county(gpkg, county="Eddy", feedback=None):
         geo = os.path.join(tmp, src["layer"] + ".geojson")
         try:
             feats = _query(src["url"], bbox, feedback, src["name"])
+            norm = _normaliser(src["url"])
+            if norm is not None and feats:
+                feats = norm(feats)         # 3DHP: the NHD-style gnis_name, ftype ... added
             if not feats:
                 notes.append("{}: no features in {}".format(src["layer"], key))
                 continue

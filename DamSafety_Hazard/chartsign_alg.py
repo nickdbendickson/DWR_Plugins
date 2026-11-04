@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """v2.10 Processing algorithm ndhazard:chartsignoff - ACER TM 11 chart sign-off
-(chartsign.py): the chart file for ND Dam Breach Runner / Screening from ND Dam
+(chartsign.py): the chart file for DamSafety Runner / Screening from ND Dam
 Hazard's curves, overlay SVGs on the engineer's scans of TM 11 Figs 2 and 3,
 and a sign-off record. Register it in processing_provider.Provider.loadAlgorithms.
 

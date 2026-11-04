@@ -1,4 +1,4 @@
-"""Processing algorithms of the ND Dam Breach Runner provider (id ndbreach)."""
+"""Processing algorithms of the DamSafety Runner provider (id ndbreach)."""
 import copy
 import csv
 import math
@@ -300,6 +300,15 @@ def dem_resample_param(index):
     i = int(index or 0)
     return gdal_io.RESAMPLE_METHODS[i - 1] if 0 < i <= len(gdal_io.RESAMPLE_METHODS) else None
 
+
+def _set_help(param, text):
+    """The long explanation of a parameter in its help / tooltip (QGIS >= 3.16), so the
+    label in the Processing panel stays short (2026-11-03 GUI fix)."""
+    try:
+        param.setHelp(text)
+    except Exception:                                            # noqa - older QGIS / test double
+        pass
+
 class _Feedback:
     """Adapts QgsProcessingFeedback to the workflow callbacks."""
 
@@ -340,9 +349,11 @@ class _Base(QgsProcessingAlgorithm):
 
     # -- parameter helpers ------------------------------------------------------
     def _num(self, name, desc, default=None, optional=False, minimum=None, maximum=None,
-             integer=False, advanced=False):
+             integer=False, advanced=False, help=None):
         p = QgsProcessingParameterNumber(name, desc, NUM_INT if integer else NUM_DOUBLE,
                                          defaultValue=default, optional=optional)
+        if help:
+            _set_help(p, help)
         if minimum is not None:
             p.setMinimum(minimum)
         if maximum is not None:
@@ -357,8 +368,10 @@ class _Base(QgsProcessingAlgorithm):
             set_advanced(p)
         self.addParameter(p)
 
-    def _bool(self, name, desc, default=False, advanced=False):
+    def _bool(self, name, desc, default=False, advanced=False, help=None):
         p = QgsProcessingParameterBoolean(name, desc, default)
+        if help:
+            _set_help(p, help)
         if advanced:
             set_advanced(p)
         self.addParameter(p)
@@ -464,8 +477,8 @@ class _Base(QgsProcessingAlgorithm):
         if per_dam:
             self._file("BASELINE_CSV", "Flood scenario, own hydrographs: outflow without the "
                        "breach CSV", "csv", advanced=True)
-        self._bool("BASELINE", "Flood scenario: also run without the breach and write the "
-                   "incremental depth and WSE rise", True)
+        self._bool("BASELINE", "Flood scenario: also run without the breach (incremental)", True,
+                   help="Also run without the breach and write the incremental depth and WSE rise.")
         self._text("INCR_FT", "Incremental depth thresholds (ft), comma separated (starting "
                    "values 1, 2, 3 are the engineer's; compare with ND 6.4 yourself)", "1, 2, 3",
                    advanced=True)
@@ -515,10 +528,11 @@ class _Base(QgsProcessingAlgorithm):
         self._num("S_DEFAULT_HEIGHT_FT", "Structures: rise when there is no rise field (ft; "
                   "starting value 4 is the engineer's, a screening value you choose)",
                   4.0, minimum=0.5, advanced=True)
-        self._num("S_INVERT_TOL_FT", "Structures: inventory inlet / outlet elevations are used when within "
-                  "this of the LiDAR bed at each end (ft; YOUR value). Both ends off by the same amount = "
-                  "a datum shift, moved to the LiDAR; farther off = the LiDAR inverts are used and the run "
-                  "report says so", 3.0, minimum=0.0, advanced=True)
+        self._num("S_INVERT_TOL_FT", "Structures: inventory invert tolerance to the LiDAR bed "
+                  "(ft; YOUR value)", 3.0, minimum=0.0, advanced=True,
+                  help="Inventory inlet / outlet elevations are used when within this of the "
+                  "LiDAR bed at each end. Both ends off by the same amount = a datum shift, moved "
+                  "to the LiDAR; farther off = the LiDAR inverts are used and the run report says so.")
         self._text("CULVERT_INVENTORY", "Culvert guesses: inventory GeoPackages that size them, "
                    "separated by ;; (NDDOT bridge inventory, NDDOT Center Line Pipes, NTAD NBI; "
                    "NBI item 43B = 19 is a culvert)", advanced=True)
@@ -526,11 +540,15 @@ class _Base(QgsProcessingAlgorithm):
                   "within (m; also drops a guess this close to a STRUCTURES line; starting value "
                   "75 is the engineer's, a screening value you choose)", 75.0, minimum=1.0,
                   advanced=True)
-        self._bool("CULVERT_BURN_MATCHED", "Culvert guesses: cut the inventory-matched ones into "
-                   "the DEM at the inventory size", False, advanced=True)
-        self._bool("CULVERT_BURN_GUESSES", "Culvert guesses: cut the unmatched ones into the DEM "
-                   "as guessed, unverified 1.2 x 0.9 m boxes (off = list them only)", True,
-                   advanced=True)
+        self._bool("CULVERT_BURN_MATCHED", "Culvert guesses: cut matched ones into the DEM",
+                   False, advanced=True,
+                   help="Cut the inventory-matched culvert guesses into the DEM at the inventory "
+                   "size. Saved as a default in the Settings window (Dam tab).")
+        self._bool("CULVERT_BURN_GUESSES", "Culvert guesses: cut unmatched ones into the DEM", True,
+                   advanced=True,
+                   help="Cut the unmatched culvert guesses into the DEM as guessed, unverified "
+                   "1.2 x 0.9 m boxes (off = list them only). Saved as a default in the "
+                   "Settings window (Dam tab), so it is kept when the dialog is reopened.")
         # v3.4.0: building footprints as obstructions (polygons in the structures layer)
         self.addParameter(set_advanced(QgsProcessingParameterEnum(
             "BUILDINGS", "Buildings: how polygon footprints in the structures layer enter the "
@@ -611,19 +629,17 @@ class _Base(QgsProcessingAlgorithm):
                    "waterbodies layer when there is one)", optional=True, advanced=True)
         self.addParameter(QgsProcessingParameterEnum("TIER", "Models",
                                                      [t[1] for t in TIERS], defaultValue=0))
-        self._bool("FORCE_ANUGA", "Force ANUGA: final results come from ANUGA even when "
-                   "Models is set to LISFLOOD-FP only", False)
+        self._bool("FORCE_ANUGA", "Force ANUGA for the final results", False,
+                   help="Final results come from ANUGA even when Models is set to LISFLOOD-FP only.")
         # v3.10.22: optional, off by default (core/hecras_seeds.py)
         p = QgsProcessingParameterBoolean(
-            "HECRAS_GMSH", "Refine HEC-RAS mesh with Gmsh points (optional; needs gmsh, falls "
-            "back to the regular grid)", False, optional=True)
+            "HECRAS_GMSH", "Refine HEC-RAS mesh with Gmsh points (optional)", False, optional=True)
         if hasattr(p, "setHelp"):
             p.setHelp(HECRAS_GMSH_TIP)
         self.addParameter(set_advanced(p))
         # on by default: the HEC-RAS dam line along the crest (core/hecras_crest.py)
         p = QgsProcessingParameterBoolean(
-            "HECRAS_CREST", "HEC-RAS dam line follows the crest (recommended; off = a straight "
-            "line across the flow)", True, optional=True)
+            "HECRAS_CREST", "HEC-RAS dam line follows the crest (recommended)", True, optional=True)
         if hasattr(p, "setHelp"):
             p.setHelp(HECRAS_CREST_TIP)
         self.addParameter(set_advanced(p))
@@ -647,19 +663,23 @@ class _Base(QgsProcessingAlgorithm):
                   "than (ft; starting value 1 is the engineer's, a screening value you choose)",
                   1.0, minimum=0.01)
         # v3.4.0: near-dam refine on a fine FV1 grid (refine.py)
-        self._bool("REFINE_NEAR", "Near-dam refine: re-run the zone near the dam on a fine "
-                   "grid with the FV1 solver when receptors sit within the flagged distance "
-                   "(the ACC velocities there are unreliable; LISFLOOD-FP final results only; "
-                   "off by default: FV1 writes no max velocity)", False, advanced=True)
+        self._bool("REFINE_NEAR", "Near-dam refine: re-run near the dam on a fine FV1 grid",
+                   False, advanced=True,
+                   help="Re-run the zone near the dam on a fine grid with the FV1 solver when "
+                   "receptors sit within the flagged distance (the ACC velocities there are "
+                   "unreliable; LISFLOOD-FP final results only; off by default: FV1 writes no "
+                   "max velocity).")
         self._num("REFINE_DIST_MI", "Near-dam refine: flagged distance from the breach point "
                   "(mi; starting value 1 is the engineer's, a screening value you choose)",
                   1.0, minimum=0.05, advanced=True)
         self._num("REFINE_CELL", "Near-dam refine: fine cell size (m; 0 = half the model cell; "
                   "10 m = 32.8 ft)", 0.0, minimum=0.0, advanced=True)
-        self._bool("STOP_RULE", "Class-stop rule: accept an edge where the flood's depth (or "
-                   "its rise over the no-breach baseline) stays below the threshold along the "
-                   "flow path near it and no receptor lies beyond (ND Dam Hazard's "
-                   "termination-point rule; off by default so a flood is not cut off)", False, advanced=True)
+        self._bool("STOP_RULE", "Class-stop rule: accept a shallow edge with no receptor beyond",
+                   False, advanced=True,
+                   help="Accept an edge where the flood's depth (or its rise over the no-breach "
+                   "baseline) stays below the threshold along the flow path near it and no "
+                   "receptor lies beyond (ND Dam Hazard's termination-point rule; off by default "
+                   "so a flood is not cut off).")
         self._num("STOP_THRESHOLD_FT", "Class-stop rule: threshold for the depth or the rise "
                   "(ft; starting value 2 = ND Dam Hazard's default, a screening value you "
                   "choose)", stoprule.DEFAULT_THRESHOLD_FT, minimum=0.01, advanced=True)
@@ -702,18 +722,23 @@ class _Base(QgsProcessingAlgorithm):
                    "to the real file). Empty = provider setting or auto-detected",
                    advanced=True)
         self._bool("KEEP_FILES", "Keep the model input and output files", True, advanced=True)
-        self._bool("PRODUCTS", "Write flood polygons, arrival zones, a GeoPackage, the EAP "
-                   "inundation map preview and the HTML report", True, advanced=True)
+        self._bool("PRODUCTS", "Write the flood products and the HTML report", True, advanced=True,
+                   help="Write flood polygons, arrival zones, a GeoPackage, the EAP inundation "
+                   "map preview and the HTML report.")
         self.addParameter(set_advanced(QgsProcessingParameterEnum(
             "EAP_MAP", "EAP map (the EAP map is ND Dam Hazard's map book on aerial imagery)",
             [c[1] for c in EAP_MAP_CHOICES], defaultValue=0)))
         self._text("CONTOURS_HR", "Arrival zones (hours after breach initiation), comma "
                    "separated", "0.25, 0.5, 1, 2, 4, 8", advanced=True)
-        self._bool("RESUME", "Resume: reuse LISFLOOD-FP runs already finished for the same "
-                   "settings (an ANUGA run that went on after QGIS closed is used in any case "
-                   "when the settings are the same)", False, advanced=True)
-        self._bool("ANIMATE", "Animation: save depth snapshots and render a GIF / MP4 and "
-                   "one GeoTIFF per frame (Animation folder)", False, advanced=True)
+        self._bool("RESUME", "Resume: reuse finished LISFLOOD-FP runs (same settings)", False,
+                   advanced=True,
+                   help="Reuse LISFLOOD-FP runs already finished for the same settings (an ANUGA "
+                   "run that went on after QGIS closed is used in any case when the settings "
+                   "are the same).")
+        self._bool("ANIMATE", "Animation: depth snapshots as GIF / MP4 and GeoTIFFs", False,
+                   advanced=True,
+                   help="Save depth snapshots and render a GIF / MP4 and one GeoTIFF per frame "
+                   "(Animation folder).")
         self._num("ANIM_FRAMES", "Animation: about this many frames", 24, minimum=4,
                   maximum=240, integer=True, advanced=True)
         self._file("DAMS_FOLDER", "Dams folder (each dam gets a folder named after its ID)",
@@ -761,12 +786,12 @@ class _Base(QgsProcessingAlgorithm):
         if need_models and (not exe or not os.path.isfile(exe)):
             raise QgsProcessingException(
                 "Set the LISFLOOD-FP executable in Processing > Options > Providers > "
-                "ND Dam Breach Runner (or in the advanced parameters); none was found on this "
+                "DamSafety Runner (or in the advanced parameters); none was found on this "
                 "computer. Found: '{}'".format(exe))
         if need_models and tier == workflow.TIER_BOTH and (not py or not os.path.isfile(py)):
             raise QgsProcessingException(
                 "Set the ANUGA Python interpreter in Processing > Options > Providers > "
-                "ND Dam Breach Runner; none was found on this computer. Found: '{}'".format(py))
+                "DamSafety Runner; none was found on this computer. Found: '{}'".format(py))
         if need_models and tier == workflow.TIER_HECRAS:
             from .core import hecras_engine
             d = hecras_engine.detect()
@@ -1478,9 +1503,10 @@ class RunDamAlgorithm(_Base):
         self.add_scenario_params(per_dam=True)
         self.add_feature_params()
         self.add_model_params()
-        self._bool("ALLOW_FLAGGED_STRUCTURE", "Run a flagged structure anyway (e.g. a road fill "
-                   "over backwater, docs/Flagged_structures.md; results for information only, "
-                   "the hazard of record stays)", False, advanced=True)
+        self._bool("ALLOW_FLAGGED_STRUCTURE", "Run a flagged structure anyway (information only)",
+                   False, advanced=True,
+                   help="E.g. a road fill over backwater (docs/Flagged_structures.md); the results "
+                   "are for information only and the hazard of record stays.")
         self.addOutput(QgsProcessingOutputRasterLayer("DEPTH", "Depth (Max)"))
         self.addOutput(QgsProcessingOutputRasterLayer("VELOCITY", "Velocity (Max)"))
         self.addOutput(QgsProcessingOutputRasterLayer("ARRIVAL", "Arrival Time"))
@@ -2514,7 +2540,7 @@ class CheckAlgorithm(_Base):
                 lines.append("PROBLEM LISFLOOD-FP not found. Build it with "
                              "scripts/build_lisflood_linux.sh on Linux or scripts/build_lisflood_macos.sh on macOS (both "
                              "apply the arrival-depth patch, scripts/patch_lisflood.py) and set its path in Processing > "
-                             "Options > Providers > ND Dam Breach Runner.")
+                             "Options > Providers > DamSafety Runner.")
             else:
                 r = check_lisflood(exe, os.path.join(tmp, "lisflood"))
                 lines.append(("OK " if r["ok"] and r.get("patched") else "PROBLEM ") +

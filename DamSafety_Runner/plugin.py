@@ -1,12 +1,12 @@
 """QGIS plugin entry: registers the Processing provider and adds a menu.
 
-v3.3.0: Plugins > ND Dam Breach Runner > "Open the Runner window..." opens a popup window
+v3.3.0: Plugins > DamSafety Runner > "Open the Runner window..." opens a popup window
 (dialog.py): the Dams folder and dam, what is in the dam's folder, and every tool below on tabs.
 The menu entries stay.
 
 v3.2.0: once QGIS has loaded its plugins (a zero-delay timer after initGui), the versions of
 the other ND dam suite plugins are checked (damsuite.versions.check("ndbreach")); problems go
-to the message bar and the "ND Dam Breach Runner" log. The plugin loads and works without ND
+to the message bar and the "DamSafety Runner" log. The plugin loads and works without ND
 Dam Hazard or ND Dam Breach Screening installed."""
 from qgis.core import QgsApplication
 

@@ -145,31 +145,33 @@ class ClassificationTabMixin(object):
         self.pages_spin.setRange(0, 40)
         self.pages_spin.setValue(8)
         rform.addRow("Zoom map pages (max):", self.pages_spin)
-        self.compare_check = WrapCheckBox("Compare with the last run (what changed - "
-                                       "QA/Changes_Since_Last_Run.csv)")
+        self.compare_check = WrapCheckBox("Compare with the last run")
         self.compare_check.setChecked(True)
+        # 2026-11-03 GUI fix: short labels (fit 640 x 480); the detail is in the tooltips
+        self.compare_check.setToolTip("What changed since the last run - "
+                                      "QA/Changes_Since_Last_Run.csv.")
         rform.addRow("", self.compare_check)
         # v2.6: the map products of the former Main Consolidation
-        self.zone_rasters_check = WrapCheckBox("ACER zone rasters - houses, mobile homes, vehicles "
-                                            "(Classification/Hazard_*.tif)")
+        self.zone_rasters_check = WrapCheckBox("ACER zone rasters (Hazard_*.tif)")
         self.zone_rasters_check.setChecked(True)
-        self.zone_rasters_check.setToolTip("Every cell classified from its max depth with its "
+        self.zone_rasters_check.setToolTip("Houses, mobile homes, vehicles "
+                                           "(Classification/Hazard_*.tif). Every cell classified from its max depth with its "
                                            "max velocity (TM 11 Figs 2-4). Needs the velocity "
                                            "raster.")
         rform.addRow("", self.zone_rasters_check)
-        self.sampled_cells_check = WrapCheckBox("Layer of the raster cells read for each structure "
-                                             "(QA/Structure_Sampled_Cells)")
+        self.sampled_cells_check = WrapCheckBox("Layer of the cells read per structure")
         self.sampled_cells_check.setChecked(True)
-        self.sampled_cells_check.setToolTip("The evaluation areas (outline + 5-ft edge ring) "
+        self.sampled_cells_check.setToolTip("The raster cells read for each structure "
+                                            "(QA/Structure_Sampled_Cells). The evaluation areas (outline + 5-ft edge ring) "
                                             "are always written to QA/Structure_Evaluation_Areas;"
                                             " this adds the cells behind them.")
         rform.addRow("", self.sampled_cells_check)
-        self.reuse_check = WrapCheckBox("Re-use the last run's downloads, inventory and raster "
-                                     "sampling when unchanged (fast re-runs)")
+        self.reuse_check = WrapCheckBox("Re-use unchanged downloads and sampling")
         self.reuse_check.setChecked(True)
         self.reuse_check.setToolTip(
-            "A run first checks the rasters and files by their CONTENT (SHA-256 digest, "
-            "the same digest the ND Dam Breach Runner writes into its run manifest - a file "
+            "Re-use the last run's downloads, inventory and raster sampling when unchanged "
+            "(fast re-runs). A run first checks the rasters and files by their CONTENT (SHA-256 digest, "
+            "the same digest the DamSafety Runner writes into its run manifest - a file "
             "touched or copied without a change is unchanged; one rewritten with other values "
             "is changed even when its size and date are the same), the chosen layers, the "
             "download choices and the settings that shape the sampling. When nothing changed since "

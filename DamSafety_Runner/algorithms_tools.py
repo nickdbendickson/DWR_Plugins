@@ -439,7 +439,7 @@ class CulvertPrepAlgorithm(_ToolBase):
                     ("NDDOT", "NDDOT bridge inventory (Bridge_Inventory_External)"),
                     ("NDDOT_PIPES", "NDDOT centerline pipes (Center_Line_Pipes)"),
                     ("OSM", "OpenStreetMap crossings (OSM_crossings; culverts, fords, bridges)"),
-                    ("STREAMS", "Streams (NHD flowlines)"),
+                    ("STREAMS", "Streams (3DHP or NHD flowlines)"),
                     ("ROADS", "Road lines"),
                     ("RAIL", "Rail lines"))
 
@@ -470,7 +470,7 @@ class CulvertPrepAlgorithm(_ToolBase):
                 "flagged items, put yes in the accept column of the CSV (or list item ids in a "
                 "text file) and run again from the SAME input with it as the accept list.\n"
                 "No structures layer? Leave it empty and give the inventories: ND Dam Hazard's "
-                "'Culvert and bridge lines for ND Dam Breach Runner' builds it first "
+                "'Culvert and bridge lines for DamSafety Runner' builds it first "
                 "(layers left empty come from its offline data pack).\n"
                 "The run is unchanged: point the run's structures layer at the copy to use it. "
                 "The bed floor and the channel-bed check still apply in the run.")
@@ -523,7 +523,7 @@ class CulvertPrepAlgorithm(_ToolBase):
         if alg is None:
             raise QgsProcessingException(
                 "No structures layer given and ND Dam Hazard ({}) is not installed: build the "
-                "layer with its 'Culvert and bridge lines for ND Dam Breach Runner' tool, or "
+                "layer with its 'Culvert and bridge lines for DamSafety Runner' tool, or "
                 "give it here.".format(self.HAZARD_ALG))
         built = os.path.join(out_dir, stem + "_built.gpkg")
         if os.path.exists(built) and not overwrite:

@@ -13,7 +13,7 @@ from qgis.PyQt.QtWidgets import (
 
 from . import pack_build as PB
 from .qtcompat import MSG_INFO, MSG_WARNING, TASK_CAN_CANCEL, _first
-from .ui_fit import fit_window
+from .ui_fit import fit_window, scroll_page
 
 CHECKED = _first(lambda: Qt.CheckState.Checked, lambda: Qt.Checked)
 UNCHECKED = _first(lambda: Qt.CheckState.Unchecked, lambda: Qt.Unchecked)
@@ -164,7 +164,10 @@ class PackDialog(QDialog):
         close.clicked.connect(self.close)
         for b in (self.go, self.stop, close):
             row.addWidget(b)
-        lay.addLayout(row)
+        # 2026-11-03 (GUI review at 800x600): the window needed 645 px of height. The body
+        # scrolls now; the Build / Stop / Close row stays under it.
+        scroll_page(self)
+        self.layout().addLayout(row)
         self.timer = QTimer(self)
         self.timer.setInterval(500)
         self.timer.timeout.connect(self._poll)

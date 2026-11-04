@@ -386,7 +386,7 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
                 out.append(check(OK, "Dams without a dam line", "every dam has a dam line"))
     layer("structures", "Structures", any(k in steps for k in ("6", "8")), None, any_of=STRUCT_FIELDS)
     optional = any(k in steps for k in ("6", "7", "8", "9"))
-    layer("streams", "NHD flowlines", optional or any(k in steps for k in ("3", "7")), "line")
+    layer("streams", "3DHP flowlines", optional or any(k in steps for k in ("3", "7")), "line")
     layer("roads", "Roads", optional, "line")
     layer("rail", "Railroads", optional, "line")
     layer("lifelines", "Lifeline facilities", optional)
