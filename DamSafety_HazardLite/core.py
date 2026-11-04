@@ -42,7 +42,21 @@ from . import tm11
 gdal.UseExceptions()
 ogr.UseExceptions()
 
-VERSION = "0.1.2"
+
+
+def _metadata_version():
+    """0.1.4 (GUI check 2026-11-04): the version comes from metadata.txt, so the window title and
+    the report cannot fall behind it again (the title said 0.1.2 while metadata.txt said 0.1.3)."""
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata.txt")
+        with open(path, encoding="utf-8") as f:
+            m = re.search(r"^version\s*=\s*(\S+)", f.read(), re.M)
+        return m.group(1) if m else "?"
+    except OSError:
+        return "?"
+
+
+VERSION = _metadata_version()
 REF = "ND Dam Safety Standards Policy REG_05.2026 (effective 04/01/2026), Section 5.2"
 WET_FT = 0.1               # inundated "to any degree": the suite's consequence depth
 OUTLINE_SNAP_FT = 30.0     # address point outside every outline: nearest outline this close

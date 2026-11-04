@@ -10,6 +10,7 @@ The grid is EPSG:5070 with 10 m cells; the layers are EPSG:4326 like the offline
 """
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -339,6 +340,12 @@ def main():
               "8 AG SHED" in {x["address"]: x for x in res3["structures"]})
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    # 0.1.4 (GUI check 2026-11-04): the window title once said 0.1.2 with metadata.txt at 0.1.3
+    with open(os.path.join(os.path.dirname(os.path.abspath(core.__file__)), "metadata.txt"),
+              encoding="utf-8") as f:
+        meta = re.search(r"^version=(\S+)", f.read(), re.M).group(1)
+    check("VERSION (window title, report) is metadata.txt's version", core.VERSION == meta,
+          (core.VERSION, meta))
     print("\n{} failed".format(len(FAILS)) if FAILS else "\nall passed")
     return 1 if FAILS else 0
 

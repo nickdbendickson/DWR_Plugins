@@ -131,6 +131,10 @@ def _vertical_policy(widget, name):
         pass
 
 
+# 3.14.6: the window's own minimum width; _fit_body_width raises it only when the body needs more
+MIN_WIDTH = 760
+
+
 class NDBreachRunnerDialog(QDialog):
     """The popup window. `iface` is optional (used by the wizard)."""
 
@@ -139,7 +143,7 @@ class NDBreachRunnerDialog(QDialog):
         self.iface = iface
         self._loading = True
         self.setWindowTitle("{} {}".format(TITLE, plugin_version()).strip())
-        self.setMinimumWidth(820)
+        self.setMinimumWidth(MIN_WIDTH)                          # 3.14.6: was 820, wider than 800 px
         self.setMinimumHeight(560)
         self.resize(860, 640)
         self.tool_button = {}
@@ -388,8 +392,14 @@ class NDBreachRunnerDialog(QDialog):
         width plus the window frame around it (never more than the screen fit_window allows), so
         no button in the dam rows or the Run tab is clipped behind a horizontal scroll bar."""
         try:
-            need = self.body_widget.minimumSizeHint().width() + \
-                (self.width() - self.body_scroll.viewport().width())
+            # 3.14.6 (GUI check 2026-11-04): the room around the body is the window's margins
+            # plus a vertical scroll bar. It was measured as width - viewport width, but before
+            # the first show the viewport still has its default size, so that came out at about
+            # 340 px instead of about 40 and the minimum width at 829-867 px (over 800 px).
+            m = self.layout().contentsMargins()
+            bar = self.body_scroll.verticalScrollBar().sizeHint().width()
+            need = self.body_widget.minimumSizeHint().width() + m.left() + m.right() + bar + \
+                2 * self.body_scroll.frameWidth()
             need = min(need, self.maximumWidth())
             if need > self.minimumWidth():
                 self.setMinimumWidth(need)

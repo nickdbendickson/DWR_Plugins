@@ -5,12 +5,14 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=hmax / vmax at 911-addressed structures, roads (NDDOT AADT) and railroads, and the ND REG_05.2026 Section 5.2 hazard class, from breach depth and velocity rasters.
 about=One Processing tool (Processing Toolbox > DamSafety Hazard Lite). Reads the ND Dam Suite offline pack: 911 address points on their FEMA outline, NG9-1-1 roads with NDDOT traffic counts, NARN rail with FRA crossings. Screening aid; the engineer of record classifies the dam.
-version=0.1.3
+version=0.1.4
 icon=icon.svg
 author=N.D. Bendickson
 experimental=True
 hasProcessingProvider=yes
 changelog=
+    0.1.4 - 2026-11-04 (GUI check of 2026-11-04)
+      * The window title and the report take the version from metadata.txt (core.VERSION said 0.1.2 while metadata.txt said 0.1.3). Test: tests/test_core.py
     0.1.2 - 2026-11-03 (audit of 2026-11-03; Nick: judgment zone ND MEDIUM by rule)
       * A house in the judgment zone is ND MEDIUM by rule, as DamSafety Hazard; "Count the judgment zone as High" is now the old option, off by default. The reason reads "judgment zone - ND MEDIUM by rule"; the "decide High vs Medium" verify line is gone.
       * structures.csv / gpkg gain velocity_unknown; vmax_fps uses nanmax (blank when every cell is NaN). README covers the velocity-unknown case.

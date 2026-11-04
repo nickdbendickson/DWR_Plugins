@@ -4,7 +4,7 @@ import os
 import subprocess
 
 from qgis.PyQt.QtWidgets import (
-    QDockWidget, QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QFileDialog,
+    QDockWidget, QWidget, QVBoxLayout, QLabel, QPushButton, QGridLayout, QFileDialog,
 )
 
 
@@ -18,8 +18,10 @@ class SuiteStatusDock(QDockWidget):
         self.rows = QLabel("")
         self.rows.setWordWrap(True)
         self.lay.addWidget(self.rows)
-        row = QHBoxLayout()
-        for label, fn, tip in (
+        # 1.0.20 (GUI check 2026-11-04): four buttons in one row needed 500 px, wider than a
+        # 420 px dock; they now sit two to a row
+        row = QGridLayout()
+        for i, (label, fn, tip) in enumerate((
             ("Change folders\u2026", self._change,
              "Pick the suite data folder, then the Dams folder. Results never go in the data folder."),
             ("Build LISFLOOD-FP\u2026", self._build_lisflood,
@@ -28,11 +30,11 @@ class SuiteStatusDock(QDockWidget):
              "Create the optional ANUGA conda environment."),
             ("Convert old pack\u2026", self._convert,
              "Convert an older offline pack into the current layout."),
-        ):
+        )):
             b = QPushButton(label)
             b.setToolTip(tip)
             b.clicked.connect(fn)
-            row.addWidget(b)
+            row.addWidget(b, i // 2, i % 2)
         self.lay.addLayout(row)
         self.setWidget(body)
         self.refresh()

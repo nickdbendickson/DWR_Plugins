@@ -97,6 +97,19 @@ class _Iface:
 
 
 rdock = rd.ResultsDock(_Iface())
+# 3.14.6 / Setup 1.0.20 (GUI check 2026-11-04): both docks fit a 420 px dock area (the results
+# dock's five layer buttons in one row needed 529 px, Setup's four buttons 500 px)
+DOCK_W = 420
+check("results dock: fits a {} px dock".format(DOCK_W),
+      rdock.widget().minimumSizeHint().width() <= DOCK_W, rdock.widget().minimumSizeHint().width())
+try:
+    from DamSafety_Setup.status_dock import SuiteStatusDock    # noqa: E402
+    _sdock = SuiteStatusDock(_Iface())
+    check("Setup status dock: fits a {} px dock".format(DOCK_W),
+          _sdock.widget().minimumSizeHint().width() <= DOCK_W,
+          _sdock.widget().minimumSizeHint().width())
+except ImportError as _e:                                       # pragma: no cover
+    print("SKIP Setup status dock width ({})".format(_e))
 rdock.set_folder(_d)
 check("results dock: Runner receptors relabelled, Hazard count beside",
       "37 Runner receptor structure(s)" in rdock.summary.text() and

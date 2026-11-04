@@ -1845,12 +1845,14 @@ class SensitivityAlgorithm(RunDamAlgorithm):
         self._text("SENS_WIDTH", "Breach width factors", "0.7, 1.4")
         self._text("SENS_TIME", "Formation time factors", "0.5, 2")
         self._text("SENS_N", "Manning's n factors", "0.75, 1.3")
-        self._bool("SENS_METHODS", "Also run the other parameter methods (Froehlich 2008 "
-                   "overtopping, Froehlich 1995, MacDonald, Von Thun & Gillette, TR-60)", True)
-        self._bool("SENS_CELL", "Cell-size convergence check: run the base case again at half "
-                   "the cell size on the same domain and report the fit index between the two "
-                   "depth rasters and whether the Runner's ND 5.2 preview class holds "
-                   "(class_stable_grid)", True)
+        # 3.14.6 (GUI check 2026-11-04): short labels, the detail in the help (1270-1400 px wide)
+        self._bool("SENS_METHODS", "Also run the other parameter methods", True,
+                   help="Also run the other parameter methods: Froehlich 2008 overtopping, "
+                   "Froehlich 1995, MacDonald, Von Thun & Gillette, TR-60.")
+        self._bool("SENS_CELL", "Cell-size convergence check (half the cell size)", True,
+                   help="Run the base case again at half the cell size on the same domain and "
+                   "report the fit index between the two depth rasters and whether the Runner's "
+                   "ND 5.2 preview class holds (class_stable_grid).")
         self._num("SENS_MAX_CELLS", "Cell-size check: most cells in the finer run (the budget; "
                   "when half the cell size needs more, the next coarser factor that fits is "
                   "run and the report says so; starting value {:,} is the engineer's)".format(

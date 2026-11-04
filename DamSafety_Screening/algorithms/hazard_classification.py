@@ -165,9 +165,13 @@ class HazardClassification(QgsProcessingAlgorithm):
                                                minValue=hz.MIN_WET_M, optional=True)))
         P(QgsProcessingParameterNumber("RULE", "ND 1D rule: lethal depth at structures (ft; 1D models only)",
                                        NUM_DOUBLE, 2.0, minValue=0.1))
-        P(QgsProcessingParameterBoolean("INCREMENTAL", "Count impacts from the INCREMENTAL depth (breach minus "
-                                        "tool-7 no-breach baseline; screening approximation of ND's "
-                                        "flood-scenario comparison)", defaultValue=False))
+        # 0.18.6 (GUI check 2026-11-04): short label, the detail in the help (950 px wide)
+        inc = QgsProcessingParameterBoolean("INCREMENTAL", "Count impacts from the INCREMENTAL depth",
+                                            defaultValue=False)
+        if hasattr(inc, "setHelp"):
+            inc.setHelp("Count impacts from the INCREMENTAL depth: breach minus the tool-7 no-breach "
+                        "baseline (a screening approximation of ND's flood-scenario comparison).")
+        P(inc)
         P(QgsProcessingParameterFeatureSink("OUT", "Dams with hazard classification", SRC_POINT))
         P(QgsProcessingParameterFeatureSink("IMP", "Impacted features", SRC_POINT))
 
