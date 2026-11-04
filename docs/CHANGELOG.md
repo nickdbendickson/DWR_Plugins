@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Test only: `test_dem_z_once` with a geoid grid (second GUI check of 2026-11-04).** No plugin change, no version change.
+  - **Found.** Still failed with `PROJ_NETWORK=ON` on a machine that reaches cdn.proj.org. The test makes a deliberately bad warp (no `-novshift`) to check that the run refuses it. With a geoid grid, GDAL also turns that warp's NAVD88 heights into ellipsoidal ones (396.2 -> 370.7, about -25 m in ND), and the test expected the no-grid number 396.2 in the stop message. The run still stopped.
+  - **Change.** The expected numbers are read from the warped file, so the test passes with or without the grid. Reproduced with the NOAA grids installed locally (proj-data 1.9): failed before, passes with `PROJ_NETWORK` ON and OFF, with and without grids.
+  - **Real runs.** With the geoid grid present, the Runner's own reads of a compound-CRS DEM keep its heights (`dem_unit_is_applied_once_through_a_compound_crs`: GdalTerrain, read_like, the HEC-RAS terrain, all at 396.24 m from 1300 ftUS). The other DEM-unit and vertical-datum suites also pass with the grid.
 - **Runner 3.14.6 / Hazard 2.23.4 / Screening 0.18.6 / Setup 1.0.20 / Hazard Lite 0.1.4: GUI check fixes (GUI + test check of 2026-11-04 on main 395c277; Nick: "Yes").** RELEASE ndbreach 3.14.6, ndhazard 2.23.4, ndscreen 0.18.6; damsuite content otherwise unchanged (pin rewritten for versions.py).
   - **Runner window.** Minimum width 760 (was 820). `_fit_body_width` measured the frame around the body as window width minus the scroll area's viewport, before the first show, when the viewport still has its default size: about 340 px of "frame", so the window could not shrink below 829-867 px. It now adds the window margins and the vertical scroll bar to the body's minimum (about 40 px).
   - **Dam suite home** (`shared/ui/suite_home.py`, synced): no fixed 900 px minimum; `fit_window` opens it at 960 x 600 where the screen has room and lets it shrink to the screen, never below its button rows.
