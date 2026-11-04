@@ -331,9 +331,9 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                         "and records the notes that would be sent, but does not launch the Runner or Hazard tools. "
                         "Useful for confirming engine choice, surface area, and structure layers before a long run.")
         P(dry)
-        ref = QgsProcessingParameterBoolean("REFINE_NEAR", "Runner: near-dam refine (re-runs the stretch "
-                                            "near the dam on a finer grid with the FV1 full shallow-water "
-                                            "solver; slower)", defaultValue=False)
+        # 0.18.6 (GUI check 2026-11-04): short label (765 px wide); the help below has the detail
+        ref = QgsProcessingParameterBoolean("REFINE_NEAR", "Runner: near-dam refine (slower)",
+                                            defaultValue=False)
         if hasattr(ref, "setHelp"):
             ref.setHelp("After the main run, re-run the area next to the dam on a finer grid with the "
                         "FV1 full shallow-water solver. Slower; improves the near-dam results.")

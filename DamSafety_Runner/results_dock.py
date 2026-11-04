@@ -29,6 +29,7 @@ from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QDockWidget,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -191,14 +192,20 @@ class ResultsDock(QDockWidget):
         self.stale.setVisible(False)
         lay.addWidget(self.stale)
 
-        layers = QHBoxLayout()
+        # 3.14.6 (GUI check 2026-11-04): the five layer buttons in one row needed 529 px, wider
+        # than a 420 px dock; the three rasters now sit on one row and the two vector layers on
+        # a second
+        layers = QGridLayout()
         self.layer_buttons = {}
-        for key in RI.LAYER_KEYS:
+        for i, key in enumerate(RI.LAYER_KEYS):
             b = QPushButton(RI.LAYER_LABELS[key])
             b.setToolTip("Add this layer to the map")
             b.setEnabled(False)
             b.clicked.connect(lambda _=False, k=key: self.load_layer(k))
-            layers.addWidget(b)
+            if i < 3:
+                layers.addWidget(b, 0, i * 2, 1, 2)
+            else:
+                layers.addWidget(b, 1, (i - 3) * 3, 1, 3)
             self.layer_buttons[key] = b
         lay.addLayout(layers)
 

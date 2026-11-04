@@ -24,6 +24,7 @@ from qgis.PyQt.QtWidgets import (
 
 from .damsuite import suite_home as SH
 from .damsuite import versions as VS
+from .ui_fit import fit_window
 
 TITLE = "Dam suite home"
 SCOPE = "NDDamSuite"
@@ -91,8 +92,17 @@ class SuiteHomeDialog(QDialog):
         self.opened_from = opened_from
         self.rows = []
         self.setWindowTitle(TITLE)
-        self.setMinimumWidth(900)
         self._build()
+        # GUI check 2026-11-04: a fixed 900 px minimum was wider than an 800 x 600 screen. The
+        # window now opens at 960 x 600 where the screen has room and may shrink to the screen
+        # (fit_window: the table scrolls and the buttons keep their own rows).
+        fit_window(self, prefer=(960, 600))
+        try:                                                     # never cut a button row short
+            need = min(self.layout().minimumSize().width(), self.maximumWidth())
+            if need > self.minimumWidth():
+                self.setMinimumWidth(need)
+        except Exception:                                        # noqa - sizing never breaks the window
+            pass
         self._load()
         self.refresh()
 

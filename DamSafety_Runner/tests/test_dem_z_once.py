@@ -38,13 +38,34 @@ CX, CY = 600200.0, 5199800.0                             # UTM 14N, the box the 
 BOX = (CX - 100.0, CY - 100.0, CX + 100.0, CY + 100.0)
 
 
+class _ProjOffline:
+    """3.14.6 (GUI check 2026-11-04): PROJ's network grids off while a test builds and reads its
+    made-up DEMs. With PROJ_NETWORK=ON, NAD83(2011) -> NAD83 picks a NADCON5 grid from
+    cdn.proj.org; where that download fails the transformation returns inf, the made-up DEM
+    gets an inf geotransform and the read comes back 0.0 - the test then failed on the
+    environment, not on the vertical unit it checks. These tests are about the unit only, so
+    they run on PROJ's built-in transformations, whatever the machine's setting."""
+
+    def __enter__(self):
+        self.was = osr.GetPROJEnableNetwork() if hasattr(osr, "GetPROJEnableNetwork") else None
+        if self.was:
+            osr.SetPROJEnableNetwork(False)
+        return self
+
+    def __exit__(self, *_exc):
+        if self.was:
+            osr.SetPROJEnableNetwork(True)
+        return False
+
+
 def _to(x, y, src, dst):
     a, b = osr.SpatialReference(), osr.SpatialReference()
     a.SetFromUserInput(src)
     b.SetFromUserInput(dst)
     for s in (a, b):
         s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    return osr.CoordinateTransformation(a, b).TransformPoint(x, y)[:2]
+    with _ProjOffline():
+        return osr.CoordinateTransformation(a, b).TransformPoint(x, y)[:2]
 
 
 def _crs_dem(folder, name, crs, value, unit="", n=60, nodata=-9999.0):
