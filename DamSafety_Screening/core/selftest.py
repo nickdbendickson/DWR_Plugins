@@ -140,9 +140,10 @@ def _pond_problem(curves, terrain, res):
     return ""
 
 
-def steps(work, layers, dem_folder, engine=2, cell_m=20.0, sim_h=1.0):
+def steps(work, layers, dem_folder, engine=2, cell_m=20.0, sim_h=1.0, exe=""):
     """[(step, algorithm, params(prev_results) -> dict, check(results) -> problem text or "")].
-    `layers`: {name: layer} as made by the caller; `prev` is {step: results dict}."""
+    `layers`: {name: layer} as made by the caller; `prev` is {step: results dict}. 0.18.5: `exe`,
+    the LISFLOOD-FP executable for step 7 (empty: not passed - the tool's own fallback)."""
     T = "TEMPORARY_OUTPUT"
     j = lambda *a: os.path.join(work, *a)                                   # noqa: E731
 
@@ -193,7 +194,8 @@ def steps(work, layers, dem_folder, engine=2, cell_m=20.0, sim_h=1.0):
                        "CORR": True, "CORRW_FT": 984.252, "RMAX_FT": 6561.68, "STREAMS": layers["streams"],
                        "DAMLINES": layers["damlines"], "LID": "structure_id", "CASCADE": 0,
                        "NDEF": 0.05, "NMULT": 1.0, "WORKERS": 1, "TMO": 5.0, "SKIPTRI": False,
-                       "KEEP": False, "OUTDIR": j("7_simulations"), "OUT": T},
+                       "KEEP": False, "OUTDIR": j("7_simulations"), "OUT": T,
+                       **({"EXE": exe} if exe else {})},
          lambda res: "" if os.path.isfile(j("7_simulations", "{}_td_depth.tif".format(DAM_ID))) else
          "7_simulations/{}_td_depth.tif not written (status in the results layer)".format(DAM_ID)),
         ("8", "hazardclassification",
@@ -219,12 +221,12 @@ def steps(work, layers, dem_folder, engine=2, cell_m=20.0, sim_h=1.0):
 
 
 def run_selftest(work, layers, dem_folder, run, log=None, engine=2, cell_m=20.0, sim_h=1.0,
-                 versions=None):
+                 versions=None, exe=""):
     """Run the steps. `run(alg_id, params)` -> results dict (processing.run); `layers` from
     layer_specs() made by the caller. Returns {"ok", "rows": [...], "report": text}."""
     log = log or (lambda m: None)
     rows, prev, ok = [], {}, True
-    for step, alg, mk, check in steps(work, layers, dem_folder, engine, cell_m, sim_h):
+    for step, alg, mk, check in steps(work, layers, dem_folder, engine, cell_m, sim_h, exe):
         t0 = time.time()
         aid = "nddam:" + alg
         try:
