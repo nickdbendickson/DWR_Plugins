@@ -926,7 +926,7 @@ def _tagged_uid(tag, uid):
         u = uid(feat)
         if u is None:
             g = feat.get("geometry")
-            u = "g:" + hashlib.sha1(json.dumps(g, sort_keys=True).encode("utf-8")).hexdigest()
+            u = "g:" + hashlib.sha1(json.dumps(g, sort_keys=True).encode("utf-8"), usedforsecurity=False).hexdigest()
         return "{}:{}".format(tag, u)
     return f
 

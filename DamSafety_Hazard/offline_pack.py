@@ -595,7 +595,7 @@ class PackWriter(object):
                 # OP.4: a hash of the WHOLE geometry (a 400-character prefix made two
                 # long lines with the same first vertices one feature)
                 uid = "g:" + hashlib.sha1(json.dumps(g, sort_keys=True).encode(
-                    "utf-8")).hexdigest()
+                    "utf-8"), usedforsecurity=False).hexdigest()
             cur["maxw"] = max(cur["maxw"], bb[2] - bb[0])
             cur["maxh"] = max(cur["maxh"], bb[3] - bb[1])
             cur["types"].add(g.get("type"))

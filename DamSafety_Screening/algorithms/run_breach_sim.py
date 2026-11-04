@@ -123,6 +123,7 @@ ENGINES = ["LISFLOOD-FP ACC (fast, local inertial)", "LISFLOOD-FP FV1 (full shal
            "Built-in, reservoir in the grid (gradual breach, like DSS-WISE)"]
 TERRAIN = ["Cached clips only (tool 2)", "USGS 3DEP service", "Local DEM folder"]
 SCENARIOS = ["td - top of dam (ND standard)", "sd - sunny day"]
+EXE_FILTER = "All files (*)"     # the LISFLOOD-FP binary has no extension on macOS / Linux
 BUILDINGS = ["Not represented (bare terrain)", "Raise the DEM at building footprints",
              "Manning's n at building footprints"]                  # order = rn.BUILDING_MODES
 BASE_KEYS = ("base_depth", "base_vel", "incr_depth")                 # extra rasters when BASELINE is on

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Screening 0.18.5: the self-test takes the LISFLOOD-FP executable (fork parity with nd Screening 0.17.0; Nick: "Yes fix").** RELEASE ndscreen 0.18.5; damsuite content otherwise unchanged.
+  - **Found.** Running tool 14 headless on a Mac (`qgis_process run nddam:selftest -- ENGINE=0 EXE=...`) failed at step 7: DamSafety's self-test had no `EXE` parameter and passed none to tool 7, so a LISFLOOD-FP engine worked only when tool 7 found the binary on its own (`NDBREACH_LISFLOOD` or PATH). The nd copy fixed this in 0.17.0.
+  - **Change.** `algorithms/selftest.py`: optional `EXE` file parameter (filter `run_breach_sim.EXE_FILTER`, "All files (*)", since the binary has no extension on macOS / Linux), passed to `core.selftest.run_selftest(..., exe=)` and on to step 7's `EXE`. Empty leaves `EXE` out of step 7, so tool 7 falls back as before. Tool 7 itself is unchanged.
+  - Test: `DamSafety_Screening/tests/test_selftest_exe.py` (new).
 - **Runner 3.14.5 / Hazard 2.23.3 / Screening 0.18.5 / Data 1.5.4: GUI fit fixes and 3DHP labels (QGIS Dev's 800x600 review; Nick approved Nov 3).** RELEASE ndbreach 3.14.5, ndhazard 2.23.3, ndscreen 0.18.5; damsuite `servers.py` changed (below), pin `tools/damsuite_pin.json` rewritten.
   - **Narrower Processing panels.** Long labels on `rundam` (STOP_RULE, REFINE_NEAR, RESUME, ANIMATE, PRODUCTS, ALLOW_FLAGGED_STRUCTURE, CULVERT_BURN_*, S_INVERT_TOL_FT, BASELINE, FORCE_ANUGA, HECRAS_*) and `runnerculverts` (SEARCH_FT, OSM_SEARCH_FT, USE_NBI_WIDTH, ALLOW_NO_EMBANKMENT, PASS_ELEVATIONS) are shortened; the detail moved to the parameter help. The Settings window grid shows the help (`suite_settings_tools.param_defs` carries `help`).
   - **Persistence.** CULVERT_BURN_GUESSES and OSM_SEARCH_FT are already rows in the Settings window (Dam / Hazard tabs), so a saved value is the default when the tool is reopened; the help now says so, and a test proves the round trip.
