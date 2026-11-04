@@ -19,6 +19,7 @@
  * with { method: "stage" }.
  */
 
+import { type ExtentSensitivity, extentSensitivity } from "./extent.ts";
 import { floodStrip } from "./floodstrip.ts";
 import { buildOutline, DEM_SERVICE, depthCapFt, DEM_ATTRIBUTION, demRequest, fetchDem, outlineInputs, polygonizeDepth } from "./outline.ts";
 import { buildRoutedFloodReach, type ReachRound, reachStatus } from "./reach.ts";
@@ -140,6 +141,7 @@ function routedCache(
     droppedPatches: null,
     filledHoles: null,
     ...(poly.deepCells ? { deepCells: poly.deepCells } : {}),
+    extent: { ...extentSensitivity(g, routed.depthFt), basis: "routed-layer", stoppedInBasin: routed.stats.stoppedInBasin, volumeRatio: routed.stats.volumeRatio },
   };
   const r: RoutedSummary = {
     floodedAc: routed.stats.floodedAc,
@@ -201,7 +203,30 @@ export async function buildInundation(
 
   const built = await buildOutline(dam, result, g, { yieldFn: opts.yieldFn });
   if (!built.ok) return { ok: false, reason: built.reason };
-  return { ok: true, layer: "outline", choice, cache: built.cache, fellBackToOutline: false };
+  const extent = await probeExtent(dam, result, g, opts);
+  const cache = extent ? { ...built.cache, stats: { ...built.cache.stats, extent } } : built.cache;
+  return { ok: true, layer: "outline", choice, cache, fellBackToOutline: false };
+}
+
+/**
+ * The triage's terrain confidence for a dam whose layer is the terrain outline (triage.ts). The extent check was fit
+ * on the routed volume spread, which follows the water and holds the released volume; the outline's bathtub footprint
+ * does not, so its own fringe says little about the terrain. So a spread is built on the same terrain as a probe, its
+ * edge sensitivity measured, and the spread itself thrown away: the outline stays the layer. null when the probe
+ * cannot be built (the triage then reads the dam as uncertain).
+ */
+export async function probeExtent(dam: DamRecord, result: Analysis, g: DemGrid, opts: RoutedFloodOptions = {}): Promise<ExtentSensitivity | null> {
+  try {
+    const probe = await buildRoutedFlood(dam, result, g, { ...opts, method: ROUTED_METHOD });
+    if (!probe.ok) return null;
+    return { ...extentSensitivity(g, probe.depthFt), basis: "routed-probe",
+      stoppedInBasin: probe.stats.stoppedInBasin,
+      volumeRatio: probe.stats.volumeRatio,
+      reachedEdge: probe.stats.reachedEdge && probe.stats.travellingAcFt > 0,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export type InundationReachOptions = {

@@ -1,6 +1,7 @@
 import { WET_FT } from "./acer.ts";
 import { downstreamDirection, readAoi, type Part, type XY } from "./aoi.ts";
 import { damLocation, ENGINE_VERSION } from "./engine.ts";
+import type { ExtentSensitivity } from "./extent.ts";
 import { bandFor, DEPTH_BANDS, floodStrip, type FloodStrip, type StripFeature } from "./floodstrip.ts";
 import type { Bbox } from "./plss.ts";
 import type { Centerline } from "./sections.ts";
@@ -177,6 +178,13 @@ export type OutlineStats = {
   deepCells?: DeepCells;
   /** Water laid down by the layer (ac-ft, from the clamped cell depths), when measured. */
   laidAcFt?: number;
+  /**
+   * How far the routed flood's edge moves with a foot of depth error (extent.ts), the terrain confidence behind the
+   * per-dam triage (triage.ts). On a routed layer it is measured on the layer itself; on a terrain outline it is
+   * measured on a routed-spread probe built on the same terrain (the outline's bathtub footprint is not what the
+   * thresholds were fit on). Absent on layers built before 2026-11-04, or when the probe could not be built.
+   */
+  extent?: ExtentSensitivity;
 };
 
 export type TerrainOutline = FloodStrip & {

@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-11-04
+
+- **Per-dam triage: "Clearly trivial: screen only", "Uncertain: run it" or "Needs a Runner run".** Crest is the suite's
+  fast first-pass screener, never the layer of record, so each dam now gets an explicit call and a terrain confidence
+  instead of only a footprint. Needs a Runner run: a large flood (the flood-size gate), a routed layer that is
+  incomplete downstream, or anything flooded in Crest's screen. Clearly trivial: nothing flooded, on a complete footprint
+  with high confidence. Everything else is uncertain. The confidence comes from a new extent check saved with the layer
+  (`stats.extent`): how far the flood's edge moves with a foot of depth error (Crest's depth bias against the 2-D models
+  is about a foot), measured on Crest's routed spread and the DEM it was built on. High at 60 m or less (confined valley
+  or closed basin), Medium above it (open terrain: the footprint is a minimum), Low when the footprint is incomplete or
+  unchecked; the words match the published accuracy envelope. A terrain-outline dam gets the check from a routed-spread
+  probe on the same terrain (the outline stays the layer). On the four-dam baseline: DWR-3034 26 m (High; uncertain only
+  because it ends at a road-fill basin a culvert could drain), DWR-2801 127 m (Needs a Runner run, Low: large and
+  incomplete), DWR-4031 149 m and DWR-2865 158 m (Uncertain, Medium). The threshold is fit on four dams and is
+  provisional. The Flood step shows the call with its reasons, the Dashboard carries it as a flag, and
+  `scripts/triage-dams.mjs` triages a list of dam records into a CSV, Runner jobs first. Saved layers built before this
+  show "build it again for a confidence".
+
 ## 2026-11-03
 
 - **The routed flood grows its terrain downstream on demand (issue #62).** The terrain box was sized from the schematic

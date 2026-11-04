@@ -29,6 +29,7 @@ import type { DashPoint } from "./DashboardMap";
 import type { Overlay } from "./ResultsMap";
 import { useAnalysisOfRecord, useStripOfRecord } from "./results-flow";
 import { layerOfRecord, RUNNER_SOURCE } from "@/lib/crest/layer-of-record";
+import { triageDam } from "@/lib/crest/triage";
 
 const DashboardMap = lazy(() =>
   import("./DashboardMap").then((m) => ({ default: m.DashboardMap })),
@@ -64,6 +65,7 @@ export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result:
   // A run of record is the layer of record whatever the flood-size gate picks; its raster strip is the depth layer
   // once its rasters are loaded, else the fast layer stands in (flagged as comparison only).
   const record = useMemo(() => layerOfRecord(dam, result, outline), [dam, result, outline]);
+  const triage = useMemo(() => triageDam(dam, result, outline), [dam, result, outline]);
   const method = dashMethod(outline, dam.resultsOfRecord ?? null);
   const recordStrip = useStripOfRecord(dam, deskResult);
   const runStrip = recordStrip.fromRun ? recordStrip.strip : null;
@@ -78,8 +80,9 @@ export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result:
         volume: routedVolumes(outline, dam.storageAcFt) ?? undefined,
         record,
         recordMapped: !!runStrip,
+        triage,
       }),
-    [result, outline, dam.storageAcFt, record, runStrip],
+    [result, outline, dam.storageAcFt, record, runStrip, triage],
   );
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>(DEFAULT_LAYERS);
   const [acked, setAcked] = useState(false);

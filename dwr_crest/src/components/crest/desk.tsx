@@ -44,6 +44,7 @@ import {
 } from "@/lib/crest/outline";
 import { buildInundationReach, ROUTED_LABEL, volumeCheck } from "@/lib/crest/inundation";
 import { layerOfRecord } from "@/lib/crest/layer-of-record";
+import { CONFIDENCE_LABEL, triageDam } from "@/lib/crest/triage";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { demTieOffer, missingForNext, needsDemTie } from "@/lib/crest/nd-dams";
@@ -621,6 +622,7 @@ function OutlinePanel({
   const s = outline.state === "ready" ? outline.stats : null;
   const layer = outline.state === "ready" ? outline.layer : "outline";
   const rec = layerOfRecord(dam, result, outline);
+  const triage = triageDam(dam, result, outline);
   const routed = outline.state === "ready" ? outline.routed : undefined;
   const vol = s ? volumeCheck(routed ? routed.fillAcFt : s.laidAcFt, routed ? routed.releasedAcFt : result.breach.volumeAcFt) : null;
   const volLine = vol ? (
@@ -652,6 +654,21 @@ function OutlinePanel({
       <p className={"mt-1 text-sm " + (rec.needsRunner ? "text-amber" : "text-muted")} role={rec.needsRunner ? "alert" : undefined} data-testid="inundation-primary-note">
         {rec.note}
       </p>
+      {!dam.resultsOfRecord ? (
+        <div className="mt-2 rounded-sm border border-line bg-paper p-3" data-testid="triage">
+          <p className={"text-sm font-medium " + (triage.recommendation === "needs-runner" ? "text-amber" : "")}>
+            Triage: {triage.label} · {CONFIDENCE_LABEL[triage.confidence]}
+          </p>
+          <ul className="mt-1 list-disc pl-5 text-sm text-muted">
+            {triage.reasons.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+          <p className="mt-1 text-xs text-muted">
+            A screening call for ordering the Runner worklist, not a hazard classification: Crest is a screening stand-in, never the layer of record.
+          </p>
+        </div>
+      ) : null}
       {outline.message ? (
         <p className="mt-1 text-sm text-muted" role="status">
           {outline.message}
