@@ -41,6 +41,13 @@
   provisional. The Flood step shows the call with its reasons, the Dashboard carries it as a flag, and
   `scripts/triage-dams.mjs` triages a list of dam records into a CSV, Runner jobs first. Saved layers built before this
   show "build it again for a confidence".
+- **Published accuracy envelope (`docs/accuracy-envelope.md`).** A trust map of where a Crest footprint can screen and
+  where it needs a Runner run, scored on all four baselines at 0.1 ft and 1 ft (1 ft is the headline: the 2-D
+  references agree with each other there). Confined valley / basin (DWR-3034) high, CSI 0.71 at 1 ft; incised valley
+  (2865) medium, 0.30; tiny pool (4031) extent only, 0.17 at 1 ft; flat multi-channel plain (2801) low, 0.19, run the
+  Runner. An *incomplete downstream* alert on the routed layer means the dam needs a Runner run. The 0.35 CSI floor is
+  retired: LISFLOOD-FP, ANUGA and DSS-WISE agree with each other on 2801 only at 0.34–0.49 at 0.1 ft. 2801 against
+  five references (LISFLOOD-FP 20/10/5 m, ANUGA, DSS-WISE): CSI 0.19–0.25 at 1 ft (median 0.21). Scored on 34524e0.
 
 ## 2026-11-03
 

@@ -3,6 +3,9 @@
 Desk screening of small embankment dams: breach hydrograph, schematic valley flood, receptor ranking
 (ACER TM 11), and a datum-aware export. The engine is the pure `analyze()` in `src/lib/crest/engine.ts`.
 
+Crest is a screen, not the layer of record. Where its flood footprint can be trusted and where a Breach Runner run is
+needed is in [docs/accuracy-envelope.md](docs/accuracy-envelope.md).
+
 ## Scripts
 
 | Script | What it does |
