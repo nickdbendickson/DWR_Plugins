@@ -155,7 +155,7 @@ ROLE_LABELS = {
     "rail": "rail lines", "crossings": "rail grade crossings",
     "bridges": "bridges / culverts / low-water crossings", "dams": "dams (NID)",
     "lifelines": "lifeline facilities", "boundary": "model boundary polygon",
-    "parcels": "parcels", "centerline": "channel centerline / NHD flowlines"}
+    "parcels": "parcels", "centerline": "channel centerline / 3DHP flowlines"}
 ROLE_GROUP = {"nsi": 3, "address": 3, "usa": 3, "outlines": 3, "camps": 3, "roads": 4,
               "aadt": 4, "rail": 4, "crossings": 4, "bridges": 4, "dams": 5, "lifelines": 5,
               "boundary": 5, "parcels": 5, "centerline": 6}

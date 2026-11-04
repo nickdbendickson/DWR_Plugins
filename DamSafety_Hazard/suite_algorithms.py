@@ -261,7 +261,7 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
             "inventory (Bridge_Inventory_External) and centerline pipes (Center_Line_Pipes).\n"
             "Each structure is placed where a stream crosses a road or rail line within the "
             "search distance of its point (the nearest crossing; rail first for railroad "
-            "bridges). The line follows the stream, upstream end first (NHD flowlines are "
+            "bridges). The line follows the stream, upstream end first (3DHP flowlines are "
             "digitised in the flow direction; tick 'reversed' for streams drawn upstream), and "
             "is (embankment top width + 2 x side margin) long, divided by the sine of the "
             "crossing angle (at least 30 degrees). The top width is the NBI deck / roadway "
@@ -317,7 +317,7 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
         P(QgsProcessingParameterVectorLayer("NDDOT_PIPES", "NDDOT centerline pipes (points; "
                                             "Center_Line_Pipes - diameter, length and the two "
                                             "end elevations)", [SRC_POINT], optional=True))
-        P(QgsProcessingParameterVectorLayer("STREAMS", "Streams (NHD flowlines or a "
+        P(QgsProcessingParameterVectorLayer("STREAMS", "Streams (3DHP flowlines or a "
                                             "centerline)", [SRC_LINE], optional=True))
         P(QgsProcessingParameterBoolean("STREAM_REVERSED", "Stream lines are digitised "
                                         "UPSTREAM (not NHD): reverse them",
@@ -329,6 +329,9 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
         for ft_key, m_key, label, dkey, lo in (
                 ("SEARCH_FT", "SEARCH_M", "Search distance from a structure's point to a stream / "
                  "road crossing (ft; YOUR value)", "search_m", 3.0),
+                ("OSM_SEARCH_FT", "OSM_SEARCH_M", "OpenStreetMap culverts / fords: search distance "
+                 "to a stream / road or rail crossing (ft; YOUR value; the point is on the "
+                 "culvert itself)", "osm_search_m", 3.0),
                 ("ROAD_WIDTH_FT", "ROAD_WIDTH_M", "Road embankment top width when the record has "
                  "none (ft; YOUR value)", "road_width_m", 0.0),
                 ("RAIL_WIDTH_FT", "RAIL_WIDTH_M", "Rail embankment top width (ft; YOUR value)",
@@ -388,6 +391,8 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
                                          "crossings or an NDDOT layer (or an offline data pack "
                                          "that holds them)")
         params = {"search_m": self._metres(parameters, context, "SEARCH_FT", "SEARCH_M", RC.DEFAULTS["search_m"]),
+                  "osm_search_m": self._metres(parameters, context, "OSM_SEARCH_FT", "OSM_SEARCH_M",
+                                               RC.DEFAULTS["osm_search_m"]),
                   "road_width_m": self._metres(parameters, context, "ROAD_WIDTH_FT", "ROAD_WIDTH_M",
                                                RC.DEFAULTS["road_width_m"]),
                   "rail_width_m": self._metres(parameters, context, "RAIL_WIDTH_FT", "RAIL_WIDTH_M",

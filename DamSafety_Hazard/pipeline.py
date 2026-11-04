@@ -27,7 +27,7 @@ from .constants import (
     lifeline_fetches,
     ND_ROADS_URL, HPMS_ND_URLS, ND_COUNTY_ROADS_URL,
     GRP_RESULTS, GRP_ZONES, GRP_SAMPLES, GRP_HYDRAULICS, GRP_EAP, STRUCTURES_FAMILY, SUBDIR_CLASSIFICATION, SUBDIR_EAP, SUBDIR_QA, OUTPUT_SUBDIRS, MAPBOOK_DEFAULT_SCALE, TRAVEL_STATION_MI, DEFAULT_PARCEL_MAX_ACRES,
-    NHD_FLOWLINE_URL, NDDOT_AADT_URL, NDDOT_AADT_LAYERS, ZONE_LABELS, CROSSING_RADIUS_FT,
+    HYDRO3DHP_FLOWLINE_URL, NDDOT_AADT_URL, NDDOT_AADT_LAYERS, ZONE_LABELS, CROSSING_RADIUS_FT,
 )
 from .compat import MSG_WARNING, environment_summary
 from .helpers import (
@@ -2438,7 +2438,7 @@ def _collect_inputs(run, clip):
         # v2.8: the termination point needs the channel too, with or without the travel table
         if (travel or cfg.get("termination")) and cfg.get("centerline_layer") is None \
                 and cfg.get("download_flowlines"):
-            want("flow", "USGS NHD flowlines", fetch_arcgis_layer, NHD_FLOWLINE_URL, ext4326,
+            want("flow", "USGS 3DHP flowlines", fetch_arcgis_layer, HYDRO3DHP_FLOWLINE_URL, ext4326,
                  out, "NHD_flowlines")
     labels = {k: lbl for k, lbl, _f, _a in jobs}
     got = {}
@@ -3611,7 +3611,7 @@ def _travel_time(run, gov, governing, structs, layers, inputs, clip, dam_name, w
     peak = _peak_raster(cfg, gov)
     flow = None
     if inputs.get("flowlines"):
-        flow = QgsVectorLayer(inputs["flowlines"], "NHD flowlines", "ogr")
+        flow = QgsVectorLayer(inputs["flowlines"], "3DHP flowlines", "ogr")
         if not flow.isValid():
             flow = None
     try:
@@ -3638,7 +3638,7 @@ def _travel_time(run, gov, governing, structs, layers, inputs, clip, dam_name, w
             _retire_everywhere(run.out, base)
         msg = "; ".join((result or {}).get("notes") or []) or "no centerline"
         if cfg.get("centerline_layer") is None and not inputs.get("flowlines"):
-            msg = "no centerline layer given and no NHD flowlines downloaded"
+            msg = "no centerline layer given and no 3DHP flowlines downloaded"
         run.log(">>> Travel-time table not made: {}".format(msg))
         return ["Travel-time table not made: {}".format(msg)]
     if peak:

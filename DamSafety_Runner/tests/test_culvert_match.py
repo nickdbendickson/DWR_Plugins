@@ -399,3 +399,62 @@ def clp_plan_datum_inverts_reach_run_report_json_and_md():
     assert "- NDDOT CLP 276:0.2466: left 938.0 ft, right 937.5 ft (datum: plan)." in md, md
     r["culvert_matches"] = [other]
     assert "Plan-datum inverts" not in W.render_report(r)
+
+
+def _unmatched_burn_case():
+    from nd_breach_runner.core import culvert_guess as cg
+    guesses = cg.guess_crossings([[(0.0, -500.0), (0.0, 500.0)]], [[(-600.0, 0.0), (600.0, 0.0)]])
+    rows, _ = cg.match_inventory(guesses, [], 75.0)      # no inventory: a pure guess
+    assert len(rows) == 1 and rows[0].get("match_m") is None
+    return rows
+
+
+@register
+def culvert_unmatched_guess_is_cut_into_the_engine_dem_and_labeled():
+    """3.14.0 (DWR-10554): an unmatched guess becomes a GUESSED / UNVERIFIED 1.2 x 0.9 m box,
+    cut along the channel like a matched one, and changes the DEM at 40 m."""
+    from nd_breach_runner.core import culvert_guess as cg
+    from nd_breach_runner.core import structures as S
+    from nd_breach_runner.core import workflow as W
+    rows = _unmatched_burn_case()
+    assert cg.matched_structures(rows) == []
+    ss = cg.guess_structures(rows)
+    assert len(ss) == 1
+    s = ss[0]
+    assert s.source == "guess" and s.surveyed is False and s.name.startswith("guess:")
+    assert abs(s.width_m - 1.2) < 1e-9 and abs(s.height_m - 0.9) < 1e-9 and s.barrels == 1
+    assert s.min_cells == cg.BURN_MIN_CELLS
+    line = np.asarray(s.line)
+    assert abs(line[0][1]) < 1e-6 and abs(line[-1][1]) < 1e-6 and line[0][0] < line[-1][0]
+    assert "not surveyed" in S.describe(ss)[0]
+    terr = _AveragedRoad()
+    cg.lidar_inverts(ss, terr.read, 1.0)
+    assert s.invert_up_m is not None and s.invert_up_m < 300.0 + 0.002 * 30
+    bounds = (-400.0, -400.0, 400.0, 400.0)
+    base = W.model_dem(terr, [], "lisflood", bounds, 40.0)
+    got = W.model_dem(terr, ss, "lisflood", bounds, 40.0)
+    diff = base.data - got.data
+    assert (diff >= -1e-9).all() and diff.max() > 0.3
+    # matched rows are not doubled up as guesses
+    assert cg.guess_structures(_matched_burn_case()) == []
+
+
+@register
+def culvert_guess_cut_report_section_and_off_switch():
+    import copy
+    from nd_breach_runner.core import workflow as W
+    st = W.RunSettings()
+    assert st.culvert_burn_guesses is True and st.culvert_burn_matched is False
+    r = copy.deepcopy(_MIN_REPORT)
+    assert "Guessed culverts cut" not in W.render_report(r)
+    r["culvert_guesses_cut"] = [{"name": "guess: road 1 crosses channel 1", "width_m": 1.2,
+                                 "height_m": 0.9, "barrels": 1, "shape": "box",
+                                 "invert_up_m": 300.0 * FT, "invert_dn_m": 299.5 * FT}]
+    md = W.render_report(r)
+    assert "## Guessed culverts cut into the DEM (unverified)" in md
+    assert "| guess: road 1 crosses channel 1 | 3.9 | 3.0 | 1 | box | 300.0 / 299.5 |" in md, md
+    # the off switch: the workflow block only cuts when culvert_burn_guesses is set
+    src = open(os.path.join(HERE, "..", "core", "workflow.py")).read()
+    assert 'getattr(st, "culvert_burn_guesses", True)' in src
+    alg = open(os.path.join(HERE, "..", "algorithms.py")).read()
+    assert '"CULVERT_BURN_GUESSES"' in alg and "st.culvert_burn_guesses = burn_guesses" in alg

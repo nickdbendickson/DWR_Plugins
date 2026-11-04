@@ -192,13 +192,16 @@ class RunSettings:
         self.structures = []             # structures.Structure
         self.road_lines = []             # road polylines in the work CRS (culvert guesses)
         self.rail_lines = []             # rail polylines in the work CRS (gmsh embankment lines)
-        self.culvert_candidates = []     # listed in culvert_candidates.csv; not cut into the DEM
+        self.culvert_candidates = []     # listed in culvert_candidates.csv
         # culvert matching: inventory records (culvert_guess.inventory_record dicts, work CRS)
         # size a guess within culvert_match_m; matched guesses are cut into the DEM only
         # when culvert_burn_matched is set (screening values chosen by the engineer)
         self.culvert_inventory = []
         self.culvert_match_m = 75.0
         self.culvert_burn_matched = False
+        # 3.14.0: unmatched guesses are cut into the DEM as guessed / unverified culverts
+        # (culvert_guess.guess_structures); False = listed only, as before 3.14.0
+        self.culvert_burn_guesses = True
         self.invert_tol_m = 3.0 * 0.3048  # 3.5: inventory inverts within this of the LiDAR bed are used
         self.edits = None                # conditioning.Edits (channels, ponds, notches)
         self.refine_lines = []           # polylines used as ANUGA mesh edges
@@ -1319,11 +1322,40 @@ def run_dam(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
                     "culvert_burn_matched to cut them", os.path.basename(csv_path)))
             log(warnings[-1])
         if len(candidates) > n_match:
-            warnings.append(
-                "{} culvert candidate(s) where a road crosses a channel or the flow path. "
-                "They are listed in {} and are not cut into the DEM. "
-                "The name starts with 'guess:'. They were not surveyed.".format(
-                    len(candidates) - n_match, os.path.basename(csv_path)))
+            n_guess = len(candidates) - n_match
+            if bool(getattr(st, "culvert_burn_guesses", True)):
+                unmatched = [c for c in candidates if c.get("match_m") is None]
+                gss = cgmod.guess_structures(unmatched)
+                try:
+                    for n in cgmod.lidar_inverts(gss, terrain_src.read, min(cs, 1.0)):
+                        log(n)
+                except Exception as e:                           # noqa - never stop the run
+                    log("guessed culvert inverts not read from the LiDAR: {}".format(e))
+                for c, g in zip(unmatched, gss):
+                    c["invert_up_m"], c["invert_dn_m"] = g.invert_up_m, g.invert_dn_m
+                    c["note"] = cgmod.GUESS_NOTE
+                    c["burned"] = True
+                st.structures = list(st.structures) + gss
+                cgmod.write_candidates_csv(csv_path, candidates)
+                report["culvert_guesses_cut"] = [
+                    {"name": g.name, "width_m": g.width_m, "height_m": g.height_m,
+                     "barrels": g.barrels, "shape": g.shape, "source": "guess",
+                     "surveyed": False, "invert_up_m": g.invert_up_m,
+                     "invert_dn_m": g.invert_dn_m} for g in gss]
+                warnings.append(
+                    "{} culvert candidate(s) where a road crosses a channel or the flow path "
+                    "were cut into the DEM as GUESSED, UNVERIFIED culverts (one 1.2 x 0.9 m "
+                    "box each, inverts from the LiDAR; size not surveyed). They are listed in "
+                    "{}; the name starts with 'guess:'. Set culvert_burn_guesses "
+                    "(CULVERT_BURN_GUESSES) off to list them only.".format(
+                        n_guess, os.path.basename(csv_path)))
+            else:
+                warnings.append(
+                    "{} culvert candidate(s) where a road crosses a channel or the flow path. "
+                    "They are listed in {} and are not cut into the DEM "
+                    "(culvert_burn_guesses is off). "
+                    "The name starts with 'guess:'. They were not surveyed.".format(
+                        n_guess, os.path.basename(csv_path)))
             log(warnings[-1])
     max_extent = st.max_extent_mi * MILE
     step = st.expand_step_mi * MILE
@@ -3158,6 +3190,23 @@ def render_report(r):
                     "?" if rt is None else "{:.1f}".format(rt),
                     "datum: " + str(m.get("invert_datum") or "plan"),
                     m.get("plan_datum_note") or ""))
+        lines.append("")
+    if r.get("culvert_guesses_cut"):
+        lines += ["## Guessed culverts cut into the DEM (unverified)", "",
+                  "Road-crossing guesses with no inventory record, cut into the model DEM at an "
+                  "assumed size. GUESSED: location from the road x channel crossing, size not "
+                  "surveyed. Set culvert_burn_guesses (CULVERT_BURN_GUESSES) off to leave them "
+                  "out.", "",
+                  "| Guess | Span (ft) | Rise (ft) | Barrels | Shape | Inverts up / down (ft) |",
+                  "|---|---|---|---|---|---|"]
+        for m in r["culvert_guesses_cut"]:
+            iu, idn = m.get("invert_up_m"), m.get("invert_dn_m")
+            inv = "{:.1f} / {:.1f}".format(iu / FT, idn / FT) if (iu is not None and
+                                                                   idn is not None) else ""
+            lines.append("| {} | {:.1f} | {:.1f} | {} | {} | {} |".format(
+                str(m.get("name", "")).replace("|", "/"), float(m.get("width_m") or 0.0) / FT,
+                float(m.get("height_m") or 0.0) / FT, m.get("barrels", ""), m.get("shape", ""),
+                inv))
         lines.append("")
     if r.get("receptors"):
         lines += ["## Receptors", ""]

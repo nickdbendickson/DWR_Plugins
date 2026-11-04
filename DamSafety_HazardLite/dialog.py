@@ -10,12 +10,11 @@ import traceback
 
 
 from qgis.PyQt.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-                                 QLineEdit, QPushButton, QCheckBox, QFileDialog, QWidget,
+                                 QLineEdit, QPushButton, QCheckBox, QFileDialog,
                                  QPlainTextEdit, QToolButton, QMenu, QMessageBox)
 
 from .ui_fit import fit_window
 from .ui_widgets import InfoBanner, CheckPanel, Collapsible, StageStrip, ERROR, OK
-from .tokens import TOKENS as T
 from . import core
 
 def _enum(cls, scope, name):
@@ -62,8 +61,8 @@ class HazardLiteDialog(QDialog):
         root.addLayout(grid)
 
         self.metres = QCheckBox("Rasters are in metres and m/s")
-        self.judgment = QCheckBox("Count the judgment zone as High (5.3 borderline rule)")
-        self.judgment.setChecked(True)
+        self.judgment = QCheckBox("Count the judgment zone as High (old option; off = ND MEDIUM by rule)")
+        self.judgment.setChecked(False)
         self.exclude_ag = QCheckBox("Exclude FEMA agricultural out-buildings (5.2.1.1)")
         self.exclude_ag.setChecked(True)
         root.addWidget(self.metres)
@@ -174,7 +173,7 @@ class HazardLiteDialog(QDialog):
             self.log.appendPlainText("{} [{}] {}".format(cls, sec, why))
         if self.iface is not None:
             for lyr in ("structures", "road_spots", "rail_spots"):
-                v = self.iface.addVectorLayer("{}|layername={}".format(res["gpkg"], lyr), lyr, "ogr")
+                self.iface.addVectorLayer("{}|layername={}".format(res["gpkg"], lyr), lyr, "ogr")
         QMessageBox.information(self, "Hazard Lite", "ND hazard class: {}\n\nSummary written to {}".format(
             res["class"], os.path.join(self.out.text(), "hazard_summary.md")))
 

@@ -15,7 +15,7 @@ import traceback
 
 from qgis.PyQt.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGroupBox, QFormLayout,
-    QSpinBox, QDoubleSpinBox, QCheckBox, QComboBox, QWidget, QMessageBox, QFileDialog,
+    QSpinBox, QDoubleSpinBox, QComboBox, QWidget, QMessageBox, QFileDialog,
     QLineEdit,
 )
 from qgis.core import QgsProject, QgsVectorLayer, QgsRasterLayer

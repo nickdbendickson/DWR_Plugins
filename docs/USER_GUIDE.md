@@ -199,7 +199,8 @@ Labels below are from main (checked at 18ae1f5). These are advanced Runner param
   - NDDOT wins over NBI
   - bridges never size a guess
   - a guess this close to a STRUCTURES line is dropped
-- **`CULVERT_BURN_MATCHED`** (default **off**): "Culvert guesses: cut the inventory-matched ones into the DEM (unmatched guesses are never cut)". The burn uses inverts read from the LiDAR DEM (`invert_up_m`/`invert_dn_m` in the report).
+- **`CULVERT_BURN_MATCHED`** (default **off**): "Culvert guesses: cut the inventory-matched ones into the DEM at the inventory size".
+- **`CULVERT_BURN_GUESSES`** (default **on**, Runner 3.14.0): "Culvert guesses: cut the unmatched ones into the DEM as guessed, unverified 1.2 x 0.9 m boxes (off = list them only)". Same cut as a matched guess (along the channel, at least 2 model cells, LiDAR inverts); `source` "guess", `surveyed` false, the name starts with `guess:`, the `note` column of `culvert_candidates.csv` and `culvert_guesses_cut` in `run_report.json` say they were cut. Settings key `culvert_burn_guesses`. The burn uses inverts read from the LiDAR DEM (`invert_up_m`/`invert_dn_m` in the report).
 - **Output:** the run report gains a `culvert_matches` table (name, source, match_m, size, barrels, shape, burned, inverts). `culvert_candidates.csv` gains `barrels` and `match_m`.
 
 ## ANUGA culvert inverts and enquiry points (Runner 3.10.71)

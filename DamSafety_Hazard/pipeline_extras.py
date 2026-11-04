@@ -168,7 +168,7 @@ def termination_step(run, gov, governing, layers, inputs, clip, dam_name, d_qa, 
                     dam_pt = None
             flow = None
             if inputs.get("flowlines"):
-                flow = QgsVectorLayer(inputs["flowlines"], "NHD flowlines", "ogr")
+                flow = QgsVectorLayer(inputs["flowlines"], "3DHP flowlines", "ogr")
                 if not flow.isValid():
                     flow = None
             spacing = float(cfg.get("travel_station_mi") or TRAVEL_STATION_MI)
@@ -179,7 +179,7 @@ def termination_step(run, gov, governing, layers, inputs, clip, dam_name, d_qa, 
             if not line:
                 msg = "; ".join(notes) or "no centerline"
                 if cfg.get("centerline_layer") is None and not inputs.get("flowlines"):
-                    msg = "no centerline layer given and no NHD flowlines downloaded"
+                    msg = "no centerline layer given and no 3DHP flowlines downloaded"
                 run.log(">>> Termination point not made: " + msg)
                 return ["Termination point not made: " + msg]
             res = TM.analyze(line, depth, clip.crs, run.ctx, clip.lat, base_sampler=base,
