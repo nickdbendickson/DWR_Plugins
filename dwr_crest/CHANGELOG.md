@@ -2,6 +2,22 @@
 
 ## 2026-11-04
 
+- **The web app renders on the server without crashing, and hydrates without tearing the page down.** Crest is a
+  TanStack Start (SSR) app. Two things broke a production (`vite preview`) load. The Leaflet maps touch `window` at
+  module load, and they were `lazy()` inside `Suspense` with no client guard, so a map in the first render threw
+  `ReferenceError: window is not defined` on the server. And the guided-setup step card read `navigator.onLine`
+  straight during render, so the server (no `navigator`, treated as online) and a first client render that happened to
+  be offline produced different step text and React threw a #418 hydration mismatch, regenerating the whole tree on
+  every load. Maps now render inside a `ClientOnly` boundary (`useSyncExternalStore`, so the server and the first
+  client pass agree on the fallback), and online status comes from the shared SSR-safe `useOnline` hook (starts
+  `true`, updates after mount) instead of an inline `navigator.onLine` read. Verified against the production preview:
+  no server `window` error, no #418. The static desktop bundle was already clean.
+- **The Results step no longer overflows a phone screen.** Its top `<section>` was a grid with an unconstrained
+  (`auto`) column, so its cards sized to their content (573 px) and ran off a 390 px viewport. The column is now
+  `minmax(0,1fr)` and the map cell `min-w-0`, so the content wraps to fit; the wide layout is unchanged.
+- **crest-desktop fits an 800 px screen.** The pywebview window's `min_size` was `(900, 600)`, wider than an 800 px
+  display; it is now `(760, 560)`.
+
 - **Desktop "Run the flood model" without a DEM point works again: Crest sends the Runner's option numbers, not
   their text.** With Point X / Y blank the desk runs `ndbreach:rundam` through `qgis_process`, passing METHOD and TIER
   as the option text. QGIS 3.34's `qgis_process` rejects that text ("Incorrect parameter value for METHOD", then

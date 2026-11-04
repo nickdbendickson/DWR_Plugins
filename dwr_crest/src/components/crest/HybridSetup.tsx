@@ -15,7 +15,9 @@ import { receptorPoints } from "@/lib/crest/results";
 import { useDesk } from "@/lib/crest/store";
 import type { Analysis, DamRecord } from "@/lib/crest/types";
 import type { DashFlag } from "@/lib/crest/dashboard";
+import { ClientOnly } from "./ClientOnly";
 import type { DashPoint } from "./DashboardMap";
+import { useOnline } from "./use-online";
 
 const DashboardMap = lazy(() =>
   import("./DashboardMap").then((m) => ({ default: m.DashboardMap })),
@@ -51,7 +53,7 @@ export function HybridSetup({
   const setStep = useDesk((s) => s.setStep);
   const [active, setActive] = useState<GuidedKey>("record");
   const [build, setBuild] = useState<BuildStatus>({ busy: null, error: null });
-  const online = typeof navigator === "undefined" ? true : navigator.onLine;
+  const online = useOnline();
   const outline = useMemo(() => outlineState(dam, result, online), [dam, result, online]);
   const steps = useMemo(
     () => guidedSteps(dam, result, outline, active, build),
@@ -131,16 +133,18 @@ export function HybridSetup({
           </p>
         </aside>
         <div className="hyb-map" data-testid="guided-map">
-          <Suspense fallback={<p className="p-4 text-sm text-muted">Loading the map…</p>}>
-            <DashboardMap
-              depth={depth}
-              points={points}
-              arrival={[]}
-              hillshade={false}
-              overlays={[]}
-              fit={fit}
-            />
-          </Suspense>
+          <ClientOnly fallback={<p className="p-4 text-sm text-muted">Loading the map…</p>}>
+            <Suspense fallback={<p className="p-4 text-sm text-muted">Loading the map…</p>}>
+              <DashboardMap
+                depth={depth}
+                points={points}
+                arrival={[]}
+                hillshade={false}
+                overlays={[]}
+                fit={fit}
+              />
+            </Suspense>
+          </ClientOnly>
           <FlagStack flags={flags} />
         </div>
       </div>

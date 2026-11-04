@@ -64,6 +64,7 @@ import type {
   StepId,
 } from "@/lib/crest/types";
 import { HydroChart, ValleyMap } from "./charts";
+import { useOnline } from "./use-online";
 import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel } from "./NdDamPicker";
 import { ResultsStep } from "./ResultsStep";
 import { useAnalysisOfRecord, useResultsSync, useStripOfRecord } from "./results-flow";
@@ -244,22 +245,6 @@ export function Desk() {
       </footer>
     </div>
   );
-}
-
-/** navigator.onLine, kept current (true where there is no navigator, e.g. the first server render). */
-function useOnline() {
-  const [online, setOnline] = useState(true);
-  useEffect(() => {
-    const set = () => setOnline(typeof navigator === "undefined" ? true : navigator.onLine);
-    set();
-    window.addEventListener("online", set);
-    window.addEventListener("offline", set);
-    return () => {
-      window.removeEventListener("online", set);
-      window.removeEventListener("offline", set);
-    };
-  }, []);
-  return online;
 }
 
 /**
