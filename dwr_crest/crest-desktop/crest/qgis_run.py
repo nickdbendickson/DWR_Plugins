@@ -20,7 +20,9 @@ from urllib.parse import quote
 from crest.handoff import HandoffError, _dem_point, write_dam_folder, write_named_files
 from crest.layers import download_aoi, find_suite_folder, suite_dem, use_offline_pack, write_settings
 
-# qgis_process accepts the enum text. The index would silently change if the plugin reorders methods.
+# The Runner's option text. qgis_process (QGIS 3.34) rejects option text for these enums ("Incorrect parameter
+# value for METHOD"), so enum_value() looks the text up in `qgis_process help ndbreach:rundam` and sends its index;
+# a hard-coded index would silently change if the plugin reordered its options.
 METHOD_LABEL = {
     ("froehlich", "piping"): "Piping failure, Froehlich (2008) parameters, routed",
     ("froehlich", "overtopping"): "Overtopping failure, Froehlich (2008) parameters, routed",
@@ -302,6 +304,33 @@ def _run(cmd: list[str], timeout: float | None, cancel: threading.Event | None =
     if stopped == STOPPED_CANCEL:
         return stopped, out + "\nStopped: cancelled in Crest.\n"
     return proc.returncode, out
+
+
+_ENUM_HELP: dict[tuple[str, str], str] = {}
+_ENUM_ROW = re.compile(r"^\s*-\s*(\d+):\s*(.*?)\s*$")
+
+
+def enum_value(exe: str, alg: str, param: str, label: str) -> str:
+    """The index of option `label` of enum `param`, read from `qgis_process help alg` (cached per exe/alg).
+    Falls back to the label itself when help cannot be read or does not list it."""
+    key = (exe, alg)
+    if key not in _ENUM_HELP:
+        try:
+            out = subprocess.run([exe, "help", alg], capture_output=True, text=True, timeout=180,
+                                 stdin=subprocess.DEVNULL)
+            _ENUM_HELP[key] = out.stdout if out.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            _ENUM_HELP[key] = ""
+    inside = False
+    for line in _ENUM_HELP[key].splitlines():
+        if re.match(r"^[A-Z0-9_]+:", line):
+            inside = line.startswith(param + ":")
+            continue
+        if inside:
+            m = _ENUM_ROW.match(line)
+            if m and m.group(2) == label:
+                return m.group(1)
+    return label
 
 
 def _method_key(dam: dict) -> tuple[str, str]:
@@ -601,8 +630,8 @@ def run_model(
         f"--DAM_ID={dam_id}",
         f"--DAMS_FOLDER={dams}",
         f"--DEM={dem}",
-        f"--METHOD={METHOD_LABEL[key]}",
-        f"--TIER={label}",
+        f"--METHOD={enum_value(exe, 'ndbreach:rundam', 'METHOD', METHOD_LABEL[key])}",
+        f"--TIER={enum_value(exe, 'ndbreach:rundam', 'TIER', label)}",
     ]
     if builtin:
         cmd.append("--LISFLOOD_EXE=builtin")

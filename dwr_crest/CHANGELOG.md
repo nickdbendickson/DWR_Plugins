@@ -2,6 +2,15 @@
 
 ## 2026-11-04
 
+- **Desktop "Run the flood model" without a DEM point works again: Crest sends the Runner's option numbers, not
+  their text.** With Point X / Y blank the desk runs `ndbreach:rundam` through `qgis_process`, passing METHOD and TIER
+  as the option text. QGIS 3.34's `qgis_process` rejects that text ("Incorrect parameter value for METHOD", then
+  TIER), so the button failed on both plugin sets (ND Runner 3.27.5, DamSafety Runner 3.14.5). Crest now reads the
+  option list from `qgis_process help ndbreach:rundam` once per run and sends the matching index, so a reordered
+  plugin still gets the right option; if help cannot be read it sends the text as before. The `ndbreach_cli.py` path
+  (Point X / Y filled in) was not affected. Test: `crest-desktop/tests/test_handoff.py`
+  (`test_model_sends_enum_indexes_read_from_help`).
+
 - **The routing reads the terrain: a Muskingum-Cunge-Todini wave in defined valleys, a frozen Muskingum-Cunge wave on
   flat plains and tiny pools.** The frozen-coefficient Muskingum-Cunge translates a wave down a flat, wide reach about
   right but attenuates it too little in a cut valley, where the real wave slows and flattens as it fills the overbank.
