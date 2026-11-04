@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Screening 0.18.5: the self-test takes the LISFLOOD-FP executable (fork parity with nd Screening 0.17.0; Nick: "Yes fix").** RELEASE ndscreen 0.18.5; damsuite content otherwise unchanged.
+  - **Found.** Running tool 14 headless on a Mac (`qgis_process run nddam:selftest -- ENGINE=0 EXE=...`) failed at step 7: DamSafety's self-test had no `EXE` parameter and passed none to tool 7, so a LISFLOOD-FP engine worked only when tool 7 found the binary on its own (`NDBREACH_LISFLOOD` or PATH). The nd copy fixed this in 0.17.0.
+  - **Change.** `algorithms/selftest.py`: optional `EXE` file parameter (filter `run_breach_sim.EXE_FILTER`, "All files (*)", since the binary has no extension on macOS / Linux), passed to `core.selftest.run_selftest(..., exe=)` and on to step 7's `EXE`. Empty leaves `EXE` out of step 7, so tool 7 falls back as before. Tool 7 itself is unchanged.
+  - Test: `DamSafety_Screening/tests/test_selftest_exe.py` (new).
 - **Runner 3.14.4 / Hazard 2.23.2: OpenStreetMap culverts in the structures layer (Nick: "do culvert ideas", from the DWR-10554 run on main 33a93c0).** RELEASE ndbreach 3.14.4, ndhazard 2.23.2 (numbered above the 3.14.0 guessed-culvert PR); damsuite content otherwise unchanged.
   - **Found.** OSM way/492688522 (Culvert under the BNSF ZAP SPUR, near EPSG:5070 -440541, 2717772) was never modelled: the structures layer was built without OSM, and Culvert prep had no OSM input.
   - **Hazard `runnerculverts`.** New `osm_search_m` / `OSM_SEARCH_FT` (default 60 m): an OSM culvert or ford is placed only on a stream x road / rail crossing that close (bridges keep `search_m`, 150 m; the smaller wins). On DWR-10554 the example is 3.6 m off the rail, 15.5 m off the 3DHP line and 46.3 m from the 3DHP x rail crossing; 60 m places it and 39 of the 79 OSM records as culverts (30 m: 34 and not the example; 150 m: 43). An OSM culvert with no railway tag takes the nearest crossing of any road or rail line (was: a road first). `source` OSM, `src_id` the way; the notes say mapped location, size not surveyed.

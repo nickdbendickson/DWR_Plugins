@@ -5,10 +5,11 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 hasProcessingProvider=yes
 description=Popup window (Run tab, settings grid, preflight check, run one dam, review) and Processing tools for batch screening of North Dakota dams and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching (3DEP / local LiDAR), storage estimation, breach direction and hydrographs, quick triage, 2D flood simulation (LISFLOOD-FP or built-in engine, reservoir-in-grid option, parallel), hazard classification under ND Dam Safety Standards Sec. 5.2/5.3 with the ACER TM 11 depth-velocity charts (same rules module as ND Dam Breach Runner), hand-off of chosen dams to ND Dam Breach Runner for detailed runs, sensitivity and reports.
-version=0.18.4
+version=0.18.5
 icon=icon.svg
 category=Plugins
-changelog=0.18.4 (2026-11-03; audit fix E: core/storage.py: the unused conf_leak flag and the 'medium' known-height branch (the same as the default) removed; the confidence is unchanged - low when a value was defaulted / not found or the DEM storage-leak guard held the storage (its note says 'storage leak'), else medium, as the nd copy.)
+changelog=0.18.5 (2026-11-04; Nick: the self-test (tool 14) has an EXE parameter, as the nd copy 0.17.0: the LISFLOOD-FP executable for step 7 with the LISFLOOD engines (0 / 1). It was never passed, so step 7 with a LISFLOOD engine failed unless tool 7 found the binary itself (NDBREACH_LISFLOOD or PATH). Empty = not passed, tool 7's own fallback, as before. Tests: tests/test_selftest_exe.py)
+    0.18.4 (2026-11-03; audit fix E: core/storage.py: the unused conf_leak flag and the 'medium' known-height branch (the same as the default) removed; the confidence is unchanged - low when a value was defaulted / not found or the DEM storage-leak guard held the storage (its note says 'storage leak'), else medium, as the nd copy.)
     0.18.3 (2026-11-03; audit fix D: damsuite loss.py docstring judgment; core/handoff.py comment metres. No behaviour change.)
     0.18.2 (2026-11-01; option C, Nick: peak depth with the peak velocity over the wet cells, even from different cells - core/nd_hazard.py and core/hazard.py Grid polygon (dv = footprint max). Reverts db9c665's same-cell velocity.)
     0.18.1 (2026-10-30; tool 1 with its default DWR field boxes on the suite GeoPackage failed with KeyError: 'structure_' - the defaults are the DWR shapefile's 10-character names. A chosen field is matched ignoring case; one the layer does not have falls back to the alias it has (structure_id, max_dam_height, ...) with a warning, else is left blank - never a KeyError. Inventory changes the same. Tests: tests/test_dwr_default_fields.py)

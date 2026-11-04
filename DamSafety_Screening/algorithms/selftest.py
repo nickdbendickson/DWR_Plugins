@@ -5,11 +5,12 @@ import tempfile
 
 from qgis.core import (QgsProcessingAlgorithm, QgsProcessingParameterBoolean, QgsProcessingParameterNumber,
                        QgsProcessingParameterEnum, QgsProcessingParameterFileDestination,
+                       QgsProcessingParameterFile,
                        QgsProcessingParameterFolderDestination, QgsProcessingException)
 
 from ..core import selftest as st
 from . import run_breach_sim as rbs
-from ..compat import NUM_DOUBLE
+from ..compat import FILE_FILE, NUM_DOUBLE
 
 QVARIANT = {"string": "String", "double": "Double", "int": "Int"}
 
@@ -89,6 +90,11 @@ class SelfTest(QgsProcessingAlgorithm):
     def initAlgorithm(self, config=None):
         P = self.addParameter
         P(QgsProcessingParameterEnum("ENGINE", "Flood engine for step 7", rbs.ENGINES, defaultValue=2))
+        # 0.18.5 (from the nd copy 0.17.0): the LISFLOOD-FP engines (0 / 1) need the executable; it was
+        # never passed to step 7
+        P(QgsProcessingParameterFile("EXE", "LISFLOOD-FP executable for step 7 (LISFLOOD engines only; "
+                                     "empty = what tool 7 falls back to)", behavior=FILE_FILE,
+                                     fileFilter=rbs.EXE_FILTER, optional=True))
         P(QgsProcessingParameterNumber("CELL", "Model cell size for step 7 (m; 20 m = 65.6 ft; small = quick)",
                                        NUM_DOUBLE, 20.0, minValue=5.0))
         P(QgsProcessingParameterNumber("SIMH", "Simulated time for step 7 (h)", NUM_DOUBLE,
@@ -102,6 +108,7 @@ class SelfTest(QgsProcessingAlgorithm):
     def processAlgorithm(self, params, context, feedback):
         from qgis import processing
         engine = self.parameterAsEnum(params, "ENGINE", context)
+        exe = (self.parameterAsString(params, "EXE", context) or "").strip()
         cell = self.parameterAsDouble(params, "CELL", context)
         simh = self.parameterAsDouble(params, "SIMH", context)
         keep = self.parameterAsBool(params, "KEEP", context)
@@ -129,7 +136,7 @@ class SelfTest(QgsProcessingAlgorithm):
             return processing.run(aid, p, context=context, feedback=feedback, is_child_algorithm=True)
 
         result = st.run_selftest(sandbox, layers, dem_folder, run, log=feedback.pushInfo, engine=engine,
-                                 cell_m=cell, sim_h=simh, versions=software_versions())
+                                 cell_m=cell, sim_h=simh, versions=software_versions(), exe=exe)
         text = result["report"] + "\nWork folder: {}{}\n".format(sandbox, "" if keep else " (temporary)")
         if report and report.upper() != "TEMPORARY_OUTPUT":
             os.makedirs(os.path.dirname(os.path.abspath(report)) or ".", exist_ok=True)
