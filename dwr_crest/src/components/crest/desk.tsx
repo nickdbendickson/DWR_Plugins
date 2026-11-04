@@ -38,6 +38,10 @@ import {
   outlineAcresNote,
   traceStartNote,
   deepCellsNote,
+  pitsExcludedNote,
+  channelPitsNote,
+  volumeLimitNote,
+  SMALL_RELEASE_ACFT,
   outlineInputs,
   outlineState,
   type OutlineState,
@@ -624,11 +628,32 @@ function OutlinePanel({
   const rec = layerOfRecord(dam, result, outline);
   const triage = triageDam(dam, result, outline);
   const routed = outline.state === "ready" ? outline.routed : undefined;
-  const vol = s ? volumeCheck(routed ? routed.fillAcFt : s.laidAcFt, routed ? routed.releasedAcFt : result.breach.volumeAcFt) : null;
+  // The volume soft limit is the outline's (outline.ts); the routed flood keeps its own volume logic.
+  const vol = s
+    ? volumeCheck(routed ? routed.fillAcFt : s.laidAcFt, routed ? routed.releasedAcFt : result.breach.volumeAcFt, {
+        rawLaidAcFt: routed ? null : s.volumeLimit?.rawLaidAcFt,
+      })
+    : null;
+  const limitNote = s && !routed ? volumeLimitNote(s, result.breach.volumeAcFt) : null;
   const volLine = vol ? (
-    <p className={"mt-1 text-sm " + (vol.warn ? "text-amber" : "text-muted")} role={vol.warn ? "alert" : undefined} data-testid="outline-volume-check">
-      {vol.text}
-    </p>
+    <>
+      {vol.label ? (
+        <p className="mt-1 text-sm font-medium text-amber" role="status" data-testid="outline-volume-label">
+          <span className="rounded-sm border border-amber px-1.5 py-0.5">{vol.label}</span>{" "}
+          <span className="font-normal">
+            Under {SMALL_RELEASE_ACFT} ac-ft released: a terrain layer is a poor guide to so little water. Run this dam in the ND Breach Runner and import the run on Results.
+          </span>
+        </p>
+      ) : null}
+      <p className={"mt-1 text-sm " + (vol.warn ? "text-amber" : "text-muted")} role={vol.warn ? "alert" : undefined} data-testid="outline-volume-check">
+        {vol.text}
+      </p>
+      {limitNote ? (
+        <p className="mt-1 text-xs text-muted" data-testid="outline-volume-limit">
+          {limitNote}
+        </p>
+      ) : null}
+    </>
   ) : null;
   const btn = "inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50";
   return (
@@ -746,6 +771,16 @@ function OutlinePanel({
           {traceStartNote(s) ? (
             <p className="mt-1 text-sm" data-testid="outline-trace-start">
               {traceStartNote(s)}
+            </p>
+          ) : null}
+          {channelPitsNote(s) ? (
+            <p className="mt-1 text-xs text-muted" data-testid="outline-channel-pits">
+              {channelPitsNote(s)}
+            </p>
+          ) : null}
+          {pitsExcludedNote(s) ? (
+            <p className="mt-1 text-xs text-muted" data-testid="outline-pits-excluded">
+              {pitsExcludedNote(s)}
             </p>
           ) : null}
           {deepCellsNote(s) ? (

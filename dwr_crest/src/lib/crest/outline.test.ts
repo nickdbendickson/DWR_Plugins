@@ -23,6 +23,7 @@ import {
   outlineInputs,
   outlineState,
   parseBsq,
+  pitsExcludedNote,
   traceStartNote,
 } from "./outline.ts";
 import { bboxContains, type PlssCache, plssState, plssTable, stripBbox } from "./plss.ts";
@@ -326,5 +327,56 @@ describe("PLSS and 911 lists against the outline", async () => {
     assert.match(kml, /ND00199 terrain outline \(approximate\)/);
     assert.ok(kml.includes(OUTLINE_LABEL));
     assert.ok(kml.includes("ND GIS Hub NG911"));
+  });
+});
+
+describe("pits and ponds off the channel are not flood storage (Docs & QA on #57, 2026-11-03)", () => {
+  // A ground point inside one of the outline's shallow bands (0.1–2 ft), well away from the traced channel.
+  const inside = (pt: [number, number], ring: number[][]) => {
+    let c = false;
+    for (let a = 0, b = ring.length - 1; a < ring.length; b = a++) {
+      const [xa, ya] = ring[a];
+      const [xb, yb] = ring[b];
+      if (ya > pt[1] !== yb > pt[1] && pt[0] < ((xb - xa) * (pt[1] - ya)) / (yb - ya) + xa) c = !c;
+    }
+    return c;
+  };
+  const shallow = OUTLINE.features.filter((f) => ["d0", "d1", "d2"].includes(f.properties.band));
+  const inShallow = (pt: [number, number]) =>
+    shallow.some((f) => (f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates).some((p) => inside(pt, p[0]) && !p.slice(1).some((h) => inside(pt, h))));
+  const lonOf = (i: number) => DEM.bbox[0] + ((i + 0.5) / DEM.width) * (DEM.bbox[2] - DEM.bbox[0]);
+  const latOf = (j: number) => DEM.bbox[3] - ((j + 0.5) / DEM.height) * (DEM.bbox[3] - DEM.bbox[1]);
+  const spot = (() => {
+    for (let j = 3; j < DEM.height - 3; j += 2)
+      for (let i = 3; i < DEM.width - 3; i += 2) {
+        let ok = true;
+        for (let dj = -2; dj <= 2 && ok; dj++) for (let di = -2; di <= 2 && ok; di++) ok = inShallow([lonOf(i + di), latOf(j + dj)]);
+        if (ok) return { i, j };
+      }
+    return null;
+  })();
+
+  it("a 5 m pothole dug in the shallow floodplain adds no water and no depth", async () => {
+    assert.ok(spot, "found a shallow floodplain spot");
+    const z = Float32Array.from(DEM.z);
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) z[(spot.j + dj) * DEM.width + spot.i + di] -= 5;
+    const dug = await buildOutline(ND, RESULT, { ...DEM, z }, { builtAt: NOW });
+    assert.ok(dug.ok);
+    const before = CACHE.stats;
+    const after = dug.cache.stats;
+    // The pit holds 9 × 900 m² × 5 m ≈ 33 ac-ft. Measured from its spill level, it adds next to nothing (within the 3 × 3 smoothing of the ground it replaced).
+    assert.ok(Math.abs((after.laidAcFt ?? 0) - (before.laidAcFt ?? 0)) < 3, `${before.laidAcFt} → ${after.laidAcFt}`);
+    // The extent moves only by the band polygons' smoothing around the dug cells.
+    assert.ok(Math.abs(after.outlineAc - before.outlineAc) < 10, `${before.outlineAc} → ${after.outlineAc}`);
+    assert.equal(after.bands.find((b) => b.band === "d5")?.ac, before.bands.find((b) => b.band === "d5")?.ac);
+    // The desk's pit note is driven by pitsExcluded, which every terrain outline that re-measured a cell carries.
+    assert.ok(after.pitsExcluded && after.pitsExcluded.acFt > 0, JSON.stringify(after.pitsExcluded));
+    assert.ok(pitsExcludedNote(after));
+  });
+
+  it("says how much pit and low-basin storage it left out", () => {
+    const n = pitsExcludedNote({ pitsExcluded: { cells: 1234, acFt: 840.4 } });
+    assert.match(n!, /At least 840 ac-ft of pit, pond and low-basin storage \(1,234 cells\) is left out/);
+    assert.equal(pitsExcludedNote({}), null);
   });
 });

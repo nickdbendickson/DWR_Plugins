@@ -73,3 +73,21 @@ describe("volumeCheck (laid down vs released, warn outside 2–6×)", () => {
     assert.equal(volumeCheck(undefined, 10), null);
   });
 });
+
+describe("bands on a dam under 10 ft (Docs & QA on #57: the 10 ft band reported 10 ft over a 7 ft cap)", () => {
+  it("cells over the cap go to the top band at or under the cap, never the 10 ft and deeper band", () => {
+    const W = 20;
+    const H = 20;
+    const g: DemGrid = { bbox: [-100, 47, -99.99, 47.01], width: W, height: H, cellM: 10, z: new Float32Array(W * H) };
+    const depthFt = new Float32Array(W * H);
+    for (let j = 4; j < 16; j++) for (let i = 4; i < 16; i++) depthFt[j * W + i] = j < 10 ? 3 : 14; // 14 ft sink half
+    const common = { dam_id: "TEST", kind: "flood_strip" } as unknown as Parameters<typeof polygonizeDepth>[2]["common"];
+    const p = polygonizeDepth(g, depthFt, { common, label: "t", title: "t", capFt: 7 });
+    assert.equal(p.outline.features.find((f) => f.properties.band === "d5"), undefined);
+    const top = p.outline.features.find((f) => f.properties.band === "d4")!;
+    assert.ok(top, "the 5–10 ft band holds the capped cells");
+    assert.equal(top.properties.depth_max_ft, 7);
+    for (const f of p.outline.features) assert.ok(f.properties.depth_max_ft <= 7, `${f.properties.band} ${f.properties.depth_max_ft}`);
+    assert.equal(p.deepCells?.cells, 72);
+  });
+});

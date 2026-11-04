@@ -21,7 +21,19 @@
 
 import { type ExtentSensitivity, extentSensitivity } from "./extent.ts";
 import { floodStrip } from "./floodstrip.ts";
-import { buildOutline, DEM_SERVICE, depthCapFt, DEM_ATTRIBUTION, demRequest, fetchDem, outlineInputs, polygonizeDepth } from "./outline.ts";
+import {
+  buildOutline,
+  DEM_SERVICE,
+  depthCapFt,
+  DEM_ATTRIBUTION,
+  demRequest,
+  fetchDem,
+  outlineInputs,
+  polygonizeDepth,
+  SMALL_RELEASE_LABEL,
+  smallRelease,
+  VOLUME_TARGET_RATIO,
+} from "./outline.ts";
 import { buildRoutedFloodReach, type ReachRound, reachStatus } from "./reach.ts";
 import { buildRoutedFlood, type RoutedFloodOptions, type RoutedFloodResult } from "./routed-flood.ts";
 import type { Analysis, DamRecord } from "./types.ts";
@@ -49,22 +61,50 @@ export const GATE_VOLUME_ACFT = 500;
  */
 export const VOLUME_RATIO_BAND = { lo: 2, hi: 6 } as const;
 
-export type VolumeCheck = { laidAcFt: number; releasedAcFt: number; ratio: number; warn: boolean; text: string };
+export type VolumeCheck = {
+  laidAcFt: number;
+  releasedAcFt: number;
+  ratio: number;
+  warn: boolean;
+  text: string;
+  /** SMALL_RELEASE_LABEL ("volume-limited, run the Runner") when the release is under SMALL_RELEASE_ACFT, else null. */
+  label: string | null;
+};
 
-/** Volume laid down vs released, with a warning outside VOLUME_RATIO_BAND. null when either is unknown. */
-export function volumeCheck(laidAcFt: number | null | undefined, releasedAcFt: number | null | undefined): VolumeCheck | null {
+/**
+ * Volume laid down vs released, with a warning outside VOLUME_RATIO_BAND. null when either is unknown. `rawLaidAcFt`
+ * is what the outline laid before the volume soft limit lowered it (outline.ts VolumeLimit): the text says the layer
+ * was limited. Amber (warn) outside the band or on a release under SMALL_RELEASE_ACFT; a limited layer back inside the
+ * band is neutral.
+ */
+export function volumeCheck(
+  laidAcFt: number | null | undefined,
+  releasedAcFt: number | null | undefined,
+  opts: { rawLaidAcFt?: number | null } = {},
+): VolumeCheck | null {
   if (typeof laidAcFt !== "number" || typeof releasedAcFt !== "number") return null;
   if (!Number.isFinite(laidAcFt) || !Number.isFinite(releasedAcFt) || releasedAcFt <= 0) return null;
   const ratio = laidAcFt / releasedAcFt;
   const { lo, hi } = VOLUME_RATIO_BAND;
-  const warn = ratio < lo || ratio > hi;
-  const base = `Volume: ${Math.round(laidAcFt).toLocaleString()} ac-ft laid down for ${Math.round(releasedAcFt).toLocaleString()} ac-ft released (${ratio.toFixed(1)}×).`;
-  const text = !warn
-    ? `${base} Inside the ${lo}–${hi}× a moving flood's max-depth envelope usually holds.`
-    : ratio > hi
-      ? `${base} Above ${hi}×: the layer holds far more water than the breach releases, so its extent and depths are likely too big. Check against a model run.`
-      : `${base} Below ${lo}×: the layer holds less water than a moving flood's envelope usually does, so its extent and depths may be too small. Check against a model run.`;
-  return { laidAcFt, releasedAcFt, ratio, warn, text };
+  const raw = typeof opts.rawLaidAcFt === "number" && Number.isFinite(opts.rawLaidAcFt) ? opts.rawLaidAcFt / releasedAcFt : null;
+  const limited = raw != null && raw > hi;
+  const outside = ratio < lo || ratio > hi;
+  const small = smallRelease(releasedAcFt);
+  // Amber outside the band and on releases under SMALL_RELEASE_ACFT; a volume-limited layer that ends up inside the
+  // band (about VOLUME_TARGET_RATIO ×) reads neutral (Nick, 2026-11-03 22:43 CST).
+  const warn = outside || small;
+  const n = (x: number) => (x < 10 ? x.toFixed(1) : Math.round(x).toLocaleString("en-US"));
+  const label = small ? SMALL_RELEASE_LABEL : null;
+  const base = `Volume: ${n(laidAcFt)} ac-ft laid down for ${n(releasedAcFt)} ac-ft released (${ratio.toFixed(1)}×).`;
+  const text = limited
+    ? `${base} Volume-limited: as first laid it held ${n(opts.rawLaidAcFt!)} ac-ft (${raw.toFixed(1)}×, above ${hi}×), so its water surface was lowered to about ${VOLUME_TARGET_RATIO}×` +
+      (outside ? `, but it still lies outside the ${lo}–${hi}× band. Check against a model run.` : `, inside the ${lo}–${hi}× band.`)
+    : !outside
+      ? `${base} Inside the ${lo}–${hi}× a moving flood's max-depth envelope usually holds.`
+      : ratio > hi
+        ? `${base} Above ${hi}×: the layer holds far more water than the breach releases, so its extent and depths are likely too big. Check against a model run.`
+        : `${base} Below ${lo}×: the layer holds less water than a moving flood's envelope usually does, so its extent and depths may be too small. Check against a model run.`;
+  return { laidAcFt, releasedAcFt, ratio, warn, text, label };
 }
 
 export type LayerChoice = {
