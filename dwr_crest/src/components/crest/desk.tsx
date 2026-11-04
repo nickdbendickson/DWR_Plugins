@@ -33,18 +33,22 @@ import {
 import {
   DEM_ATTRIBUTION,
   DEM_ATTRIBUTION_SHORT,
-  demRequest,
-  fetchDem,
   lookupArea,
   OUTLINE_LABEL,
   outlineAcresNote,
   traceStartNote,
+  deepCellsNote,
+  pitsExcludedNote,
+  channelPitsNote,
+  volumeLimitNote,
+  SMALL_RELEASE_ACFT,
   outlineInputs,
   outlineState,
   type OutlineState,
 } from "@/lib/crest/outline";
-import { buildInundation, ROUTED_LABEL } from "@/lib/crest/inundation";
+import { buildInundationReach, ROUTED_LABEL, volumeCheck } from "@/lib/crest/inundation";
 import { layerOfRecord } from "@/lib/crest/layer-of-record";
+import { CONFIDENCE_LABEL, triageDam } from "@/lib/crest/triage";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { demTieOffer, missingForNext, needsDemTie } from "@/lib/crest/nd-dams";
@@ -60,6 +64,7 @@ import type {
   StepId,
 } from "@/lib/crest/types";
 import { HydroChart, ValleyMap } from "./charts";
+import { useOnline } from "./use-online";
 import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel } from "./NdDamPicker";
 import { ResultsStep } from "./ResultsStep";
 import { useAnalysisOfRecord, useResultsSync, useStripOfRecord } from "./results-flow";
@@ -242,22 +247,6 @@ export function Desk() {
   );
 }
 
-/** navigator.onLine, kept current (true where there is no navigator, e.g. the first server render). */
-function useOnline() {
-  const [online, setOnline] = useState(true);
-  useEffect(() => {
-    const set = () => setOnline(typeof navigator === "undefined" ? true : navigator.onLine);
-    set();
-    window.addEventListener("online", set);
-    window.addEventListener("offline", set);
-    return () => {
-      window.removeEventListener("online", set);
-      window.removeEventListener("offline", set);
-    };
-  }, []);
-  return online;
-}
-
 /**
  * The flood areas of one dam: the schematic strip, the terrain outline when it is built, and the PLSS and 911 lists
  * against the outline when there is one (else the strip). Lookups cover the strip and the outline together, so one
@@ -381,9 +370,9 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         <h3 className="text-lg">Tied to NAVD88</h3>
         <dl className="mt-3 space-y-2 text-sm">
           <Row k="Crest" v={crestNavdLabel(dam, result.datum)} />
-          <Row k="Streambed" v={result.datum.streambedNavdFt == null ? "not used" : `${num(result.datum.streambedNavdFt, 1)} ft`} />
-          <Row k="Spillway" v={result.datum.spillwayNavdFt == null ? "not used" : `${num(result.datum.spillwayNavdFt, 1)} ft`} />
-          <Row k="Pool" v={result.datum.poolNavdFt == null ? "not used" : `${num(result.datum.poolNavdFt, 1)} ft`} />
+          <Row k="Streambed" v={result.datum.streambedNavdFt == null ? "not used" : `${num(result.datum.streambedNavdFt, 1)} ft NAVD88`} />
+          <Row k="Spillway" v={result.datum.spillwayNavdFt == null ? "not used" : `${num(result.datum.spillwayNavdFt, 1)} ft NAVD88`} />
+          <Row k="Pool" v={result.datum.poolNavdFt == null ? "not used" : `${num(result.datum.poolNavdFt, 1)} ft NAVD88`} />
           <Row k="Offset" v={result.datum.offsetFt == null ? "—" : `${num(result.datum.offsetFt, 2)} ft`} />
         </dl>
         {result.datum.warnings.length > 0 ? (
@@ -608,11 +597,8 @@ function OutlinePanel({
     const id = dam.id;
     setError(null);
     try {
-      const req = demRequest(io.inputs);
-      setBusy(`Fetching the 3DEP terrain (${req.width} × ${req.height} cells at ${num(req.cellM, 0)} m)…`);
-      const grid = await fetchDem(req);
-      setBusy("Building the inundation layer on the terrain…");
-      const r = await buildInundation(dam, result, grid, { yieldFn: breathe });
+      setBusy("Preparing the terrain request…");
+      const r = await buildInundationReach(dam, result, { yieldFn: breathe, onStatus: setBusy });
       if (useDesk.getState().activeId !== id) return;
       if (r.ok) update({ outline: r.cache });
       else setError(r.reason);
@@ -625,7 +611,35 @@ function OutlinePanel({
   const s = outline.state === "ready" ? outline.stats : null;
   const layer = outline.state === "ready" ? outline.layer : "outline";
   const rec = layerOfRecord(dam, result, outline);
+  const triage = triageDam(dam, result, outline);
   const routed = outline.state === "ready" ? outline.routed : undefined;
+  // The volume soft limit is the outline's (outline.ts); the routed flood keeps its own volume logic.
+  const vol = s
+    ? volumeCheck(routed ? routed.fillAcFt : s.laidAcFt, routed ? routed.releasedAcFt : result.breach.volumeAcFt, {
+        rawLaidAcFt: routed ? null : s.volumeLimit?.rawLaidAcFt,
+      })
+    : null;
+  const limitNote = s && !routed ? volumeLimitNote(s, result.breach.volumeAcFt) : null;
+  const volLine = vol ? (
+    <>
+      {vol.label ? (
+        <p className="mt-1 text-sm font-medium text-amber" role="status" data-testid="outline-volume-label">
+          <span className="rounded-sm border border-amber px-1.5 py-0.5">{vol.label}</span>{" "}
+          <span className="font-normal">
+            Under {SMALL_RELEASE_ACFT} ac-ft released: a terrain layer is a poor guide to so little water. Run this dam in the ND Breach Runner and import the run on Results.
+          </span>
+        </p>
+      ) : null}
+      <p className={"mt-1 text-sm " + (vol.warn ? "text-amber" : "text-muted")} role={vol.warn ? "alert" : undefined} data-testid="outline-volume-check">
+        {vol.text}
+      </p>
+      {limitNote ? (
+        <p className="mt-1 text-xs text-muted" data-testid="outline-volume-limit">
+          {limitNote}
+        </p>
+      ) : null}
+    </>
+  ) : null;
   const btn = "inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50";
   return (
     <div className="rounded-md border border-line bg-card p-4" data-testid="outline-panel">
@@ -650,6 +664,21 @@ function OutlinePanel({
       <p className={"mt-1 text-sm " + (rec.needsRunner ? "text-amber" : "text-muted")} role={rec.needsRunner ? "alert" : undefined} data-testid="inundation-primary-note">
         {rec.note}
       </p>
+      {!dam.resultsOfRecord ? (
+        <div className="mt-2 rounded-sm border border-line bg-paper p-3" data-testid="triage">
+          <p className={"text-sm font-medium " + (triage.recommendation === "needs-runner" ? "text-amber" : "")}>
+            Triage: {triage.label} · {CONFIDENCE_LABEL[triage.confidence]}
+          </p>
+          <ul className="mt-1 list-disc pl-5 text-sm text-muted">
+            {triage.reasons.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+          <p className="mt-1 text-xs text-muted">
+            A screening call for ordering the Runner worklist, not a hazard classification: Crest is a screening stand-in, never the layer of record.
+          </p>
+        </div>
+      ) : null}
       {outline.message ? (
         <p className="mt-1 text-sm text-muted" role="status">
           {outline.message}
@@ -687,6 +716,19 @@ function OutlinePanel({
             By depth band: {s.bands.map((b) => `${b.label} ${num(b.ac, 0)} ac`).join(" · ")}. The PLSS and 911 lists below are
             against this flood; the dated flood strip stays on the map only as the last-resort fallback.
           </p>
+          {routed.reach?.incomplete ? (
+            <p className="mt-1 text-sm text-amber" role="alert" data-testid="routed-incomplete">
+              Incomplete downstream: after {routed.reach.rounds} terrain extension{routed.reach.rounds === 1 ? "" : "s"} (+
+              {num(routed.reach.extendedKm, 1)} km) the routed wave still reaches the terrain's edge with {num(routed.reach.strandedAcFt, 0)} ac-ft
+              to carry. The flood runs further than this layer shows; a Runner run is the layer of record there.
+            </p>
+          ) : null}
+          {deepCellsNote(s) ? (
+            <p className="mt-1 text-xs text-amber" role="status" data-testid="outline-deep-cells">
+              {deepCellsNote(s)}
+            </p>
+          ) : null}
+          {volLine}
           {routed.notes.length ? (
             <p className="mt-1 text-xs text-amber" data-testid="routed-flags">
               {routed.notes.join(" ")}
@@ -710,9 +752,25 @@ function OutlinePanel({
           <p className="mt-2 text-sm" data-testid="outline-acres-note">
             {outlineAcresNote(s)}
           </p>
+          {volLine}
           {traceStartNote(s) ? (
             <p className="mt-1 text-sm" data-testid="outline-trace-start">
               {traceStartNote(s)}
+            </p>
+          ) : null}
+          {channelPitsNote(s) ? (
+            <p className="mt-1 text-xs text-muted" data-testid="outline-channel-pits">
+              {channelPitsNote(s)}
+            </p>
+          ) : null}
+          {pitsExcludedNote(s) ? (
+            <p className="mt-1 text-xs text-muted" data-testid="outline-pits-excluded">
+              {pitsExcludedNote(s)}
+            </p>
+          ) : null}
+          {deepCellsNote(s) ? (
+            <p className="mt-1 text-xs text-amber" role="status" data-testid="outline-deep-cells">
+              {deepCellsNote(s)}
             </p>
           ) : null}
           <p className="mt-1 text-xs text-muted">

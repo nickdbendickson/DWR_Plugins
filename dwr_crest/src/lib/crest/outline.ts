@@ -1,6 +1,7 @@
 import { WET_FT } from "./acer.ts";
 import { downstreamDirection, readAoi, type Part, type XY } from "./aoi.ts";
 import { damLocation, ENGINE_VERSION } from "./engine.ts";
+import type { ExtentSensitivity } from "./extent.ts";
 import { bandFor, DEPTH_BANDS, floodStrip, type FloodStrip, type StripFeature } from "./floodstrip.ts";
 import type { Bbox } from "./plss.ts";
 import type { Centerline } from "./sections.ts";
@@ -52,12 +53,270 @@ const WET_M = WET_FT * FT;
 const ACRE_M2 = 4046.8564224;
 /** Same equirectangular frame as aoi.ts toLocal. */
 const M_PER_DEG_LAT = 110574;
+const ACRE_FT_M3 = 1233.48184;
 const M_PER_DEG_LON_EQ = 111320;
 
 export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300), 2000);
 /** Bumped when the terrain request or the trace changes, so layers saved before rebuild. 2 = 2026-11-03: exact DEM
- *  box (adjustAspectRatio=false), toe start, trace margin. */
-export const TRACE_VERSION = 2;
+ *  box (adjustAspectRatio=false), toe start, trace margin. 3 = 2026-11-03: the routed flood's demand-driven downstream
+ *  reach (reach.ts) and the exhausted-stretch cap (spread.ts). 4 = 2026-11-04: the spread's ground by straight-line
+ *  nearest channel cell and the saddle pour's lowest-first tie order (spread.ts). 5 = 2026-11-04: the terrain-triggered
+ *  router — MCT on confined reaches, frozen Muskingum-Cunge on flat plains and tiny pools (routing.ts). 6 = 2026-11-04:
+ *  the outline leaves out pit, pond and side-basin storage and bands on the capped depth. 7 = 2026-11-04: the outline
+ *  volume soft limit (about 5× the release), channel pits counted against the release, and suspected crossings. */
+export const TRACE_VERSION = 7;
+
+/**
+ * The depth cap is the dam height itself (Nick, 2026-11-03: no margin). A breach cannot stand water deeper than the dam
+ * that held it back, so a deeper cell is a pit, pond, quarry or DEM sink under the water surface, not a flood depth.
+ * Such cells stay wet (the extent is unchanged) but their depth is clamped to the cap and counted, so one 200 ft sink
+ * no longer sets a band's depth or the depth bias against a model run (DWR-2801 +49 ft, ND00199 275.8 ft).
+ */
+export function depthCapFt(heightFt: number | null | undefined): number {
+  return typeof heightFt === "number" && Number.isFinite(heightFt) && heightFt > 0 ? heightFt : Infinity;
+}
+
+/** Cells deeper than the cap (pits, ponds, sinks), clamped and flagged. */
+export type DeepCells = { capFt: number; cells: number; rawMaxFt: number };
+
+/**
+ * Per-band depth stats that stay inside the band: each cell's depth is clamped to the cap and then into the range of
+ * the band the 3 × 3 mode pass gave it, so a band's min/max/mean never run past its label (the old 0.1–143 ft in the
+ * 2–5 ft band). Returns an accumulator; call add(rawFt) per cell, then done().
+ */
+export function bandDepthAcc(b: number, capFt: number) {
+  // A band can only hold cells at or under the cap (they are banded on the capped depth), so its stats never run past
+  // the cap either: on a dam under 10 ft the "10 ft and deeper" band is never formed, rather than reporting 10 ft.
+  const lo = DEPTH_BANDS[b].minFt;
+  const hi = Math.max(lo, Math.min(DEPTH_BANDS[b].maxFt, capFt));
+  let dMax = -Infinity;
+  let dMin = Infinity;
+  let sum = 0;
+  let n = 0;
+  return {
+    add(rawFt: number) {
+      const d = Math.min(hi, Math.max(lo, Math.min(capFt, Math.max(WET_FT, rawFt))));
+      dMax = Math.max(dMax, d);
+      dMin = Math.min(dMin, d);
+      sum += d;
+      n++;
+    },
+    done: () => ({ dMax, dMin, dMean: n ? sum / n : 0 }),
+  };
+}
+
+/** Count the cells deeper than the cap. */
+export function deepCellsOf(depthFt: ArrayLike<number>, capFt: number, scale = 1): DeepCells | undefined {
+  if (!Number.isFinite(capFt)) return undefined;
+  let cells = 0;
+  let rawMaxFt = 0;
+  for (let k = 0; k < depthFt.length; k++) {
+    const d = depthFt[k] / scale;
+    if (Number.isFinite(d) && d > capFt) {
+      cells++;
+      rawMaxFt = Math.max(rawMaxFt, d);
+    }
+  }
+  return cells ? { capFt: Math.round(capFt * 10) / 10, cells, rawMaxFt: Math.round(rawMaxFt * 10) / 10 } : undefined;
+}
+
+/** Cells whose depth the outline re-measured from a pit's spill level or a side basin's own drainage level. */
+export type PitsExcluded = { cells: number; acFt: number };
+
+/** One line for the desk when pit and pond water was left out, or null. */
+export function pitsExcludedNote(s: Pick<OutlineStats, "pitsExcluded">): string | null {
+  const p = s.pitsExcluded;
+  if (!p) return null;
+  return `At least ${Math.round(p.acFt).toLocaleString()} ac-ft of pit, pond and low-basin storage (${p.cells.toLocaleString()} cells) is left out: off the traced channel, depth counts from a pit's spill level, and ground draining lower than the channel bed takes the flow depth rather than the channel's whole surface.`;
+}
+
+/** One line for the desk when cells were clamped, or null. */
+export function deepCellsNote(s: Pick<OutlineStats, "deepCells">): string | null {
+  const d = s.deepCells;
+  if (!d) return null;
+  return `${d.cells.toLocaleString()} cell${d.cells === 1 ? "" : "s"} under the water surface sit deeper than the dam height (${d.capFt.toFixed(1)} ft; deepest ${d.rawMaxFt.toFixed(0)} ft), likely pits, ponds or terrain sinks. They stay in the extent, but their depth is capped at the dam height in the bands and exports. Check them on the map.`;
+}
+
+/**
+ * Volume soft limit (Nick, 2026-11-03). The outline aims for about VOLUME_TARGET_RATIO × the released volume (a moving
+ * flood's max-depth envelope holds more than the release; the LISFLOOD envelopes on the baseline run 3.6–4.4×). When the
+ * outline as built lays more than VOLUME_SHRINK_ABOVE × the release, the water surface above the channel bed is lowered
+ * (the desk depths scaled by one factor) until it lays about VOLUME_TARGET_RATIO ×. The 2–6× warning
+ * (inundation.ts VOLUME_RATIO_BAND) stays.
+ */
+export const VOLUME_TARGET_RATIO = 5;
+export const VOLUME_SHRINK_ABOVE = 6;
+/** Bisection steps and the accepted shortfall below the target (2 %). */
+export const VOLUME_LIMIT_STEPS = 24;
+export const VOLUME_LIMIT_TOL = 0.02;
+/** Releases under this (ac-ft) are labelled SMALL_RELEASE_LABEL: a terrain layer is a poor guide to so little water. */
+export const SMALL_RELEASE_ACFT = 25;
+export const SMALL_RELEASE_LABEL = "volume-limited, run the Runner";
+export const smallRelease = (releasedAcFt: number | null | undefined) =>
+  typeof releasedAcFt === "number" && Number.isFinite(releasedAcFt) && releasedAcFt > 0 && releasedAcFt < SMALL_RELEASE_ACFT;
+
+/** What the volume soft limit did: the outline as first laid, and the scale the desk depths took to reach the target. */
+export type VolumeLimit = { targetRatio: number; shrinkAbove: number; rawLaidAcFt: number; rawWetAc: number; depthScale: number };
+
+/** One line for the desk when the volume limit lowered the water surface, or null. */
+export function volumeLimitNote(s: Pick<OutlineStats, "volumeLimit" | "laidAcFt">, releasedAcFt: number): string | null {
+  const v = s.volumeLimit;
+  if (!v || !(releasedAcFt > 0)) return null;
+  const n = (x: number) => Math.round(x).toLocaleString("en-US");
+  const now = typeof s.laidAcFt === "number" ? ` It now lays ${n(s.laidAcFt)} ac-ft (${(s.laidAcFt / releasedAcFt).toFixed(1)}×).` : "";
+  return (
+    `Volume-limited: as first laid, the outline held ${n(v.rawLaidAcFt)} ac-ft over ${n(v.rawWetAc)} ac, ` +
+    `${(v.rawLaidAcFt / releasedAcFt).toFixed(1)}× the ${releasedAcFt < 10 ? releasedAcFt.toFixed(1) : n(releasedAcFt)} ac-ft released (over ${v.shrinkAbove}×), ` +
+    `so the water surface above the channel bed was lowered to ${Math.round(v.depthScale * 100)} % of the desk depths, aiming for about ${v.targetRatio}×; depth and extent shrink together.${now}`
+  );
+}
+
+/**
+ * Suspected crossings (Nick, 2026-11-03 22:43 CST: very large and road-crossing channel pits let the flood pass through).
+ * A channel pit is flagged when its bowl below the spill level is more than the release still left when the flood
+ * reaches it, or more than CROSSING_STORAGE_MULT × the dam's storage (when known), or when a mapped road (a road
+ * receptor with a location) lies within ROAD_CROSSING_M of it. Such a "pit" is most often the DEM's picture of a road
+ * embankment with its culvert missing, or a stock pond the flood runs through, not storage the breach must fill.
+ * CROSSING_STORAGE_MULT is Docs & QA's suggested threshold (Nick ruled only "pass through"): adjustable.
+ */
+export const CROSSING_STORAGE_MULT = 1.5;
+/** A road receptor this close (m) to a channel pit's cells marks the pit as a road crossing. */
+export const ROAD_CROSSING_M = 60;
+export type CrossingWhy = "over_remaining_release" | "over_storage" | "road";
+
+/** A flagged channel pit: where it is, its bowl, and the modest storage charged against the release for it. */
+export type CrossingPit = { atKm: number; lon: number; lat: number; pitAcFt: number; chargedAcFt: number; why: CrossingWhy[] };
+
+/** Pits the channel runs through: how many, their bowls, what the release fills, and where it runs out. */
+export type ChannelPits = {
+  pits: number;
+  /** Bowl storage below the spill levels of every pit the channel runs through (ac-ft). */
+  storageAcFt: number;
+  /** Of that, what is charged against the release (ac-ft): full bowls, crossings' shallow sheets, the stop pit's share. */
+  countedAcFt: number;
+  /** The pit the release runs out in: its bowl, what it holds, and where it is (the flood stops there). */
+  stop?: { pitAcFt: number; heldAcFt: number; atKm: number; lon?: number; lat?: number; crossing?: boolean; why?: CrossingWhy[] };
+  /** Suspected crossings the flood passed through (absent when none, or on layers built before trace version 6). */
+  crossings?: CrossingPit[];
+};
+
+export type PitBowl = {
+  z: ArrayLike<number>;
+  spill: ArrayLike<number>;
+  /** The desk's flow depth (m) where the channel enters the pit: a crossing is charged its footprint at this depth. */
+  flowM?: number;
+  /** A mapped road lies at the pit. */
+  road?: boolean;
+};
+export type PitBudget = {
+  storageM3: number;
+  countedM3: number;
+  stop: { index: number; levelM: number; pitM3: number; heldM3: number; crossing: boolean; why: CrossingWhy[] } | null;
+  crossings: { index: number; pitM3: number; chargeM3: number; why: CrossingWhy[] }[];
+};
+
+/** What a crossing is charged (m³): its wetted footprint at the flow depth, no more than its bowl. */
+export function crossingChargeM3(p: PitBowl, cellM2: number): number {
+  const d = Math.max(0, p.flowM ?? 0);
+  let full = 0;
+  for (let i = 0; i < p.z.length; i++) full += Math.max(0, p.spill[i] - p.z[i]);
+  return Math.min(full, p.z.length * d) * cellM2;
+}
+
+/** Bowl volume (m³) below `level` (no higher than each cell's spill level). */
+export function bowlM3(p: PitBowl, level: number, cellM2: number): number {
+  let v = 0;
+  for (let i = 0; i < p.z.length; i++) v += Math.max(0, Math.min(level, p.spill[i]) - p.z[i]);
+  return v * cellM2;
+}
+
+/**
+ * Channel pits against the release (Nick, 2026-11-03). Pits the channel runs through, in channel order: each takes its
+ * bowl below its spill level out of the release before the flood moves on downstream. A pit the remaining release can
+ * fill counts in full (as a large release does). A suspected crossing (CROSSING_STORAGE_MULT above: a bowl bigger than
+ * the release left, or than 1.5 × the storage, or a mapped road) lets the flood pass through and is charged only its
+ * wetted footprint at the flow depth (crossingChargeM3). Only when even that is more than what is left does the
+ * release run out there, holding the rest at the level it reaches (bisection), and the flood goes no further. A
+ * release of Infinity (unknown) counts every pit in full unless it is over the storage or at a road.
+ */
+export function channelPitBudget(pits: PitBowl[], releasedM3: number, cellM2: number, opts: { storageM3?: number | null } = {}): PitBudget {
+  let left = releasedM3;
+  let storageM3 = 0;
+  let countedM3 = 0;
+  let stop: PitBudget["stop"] = null;
+  const crossings: PitBudget["crossings"] = [];
+  const stor = typeof opts.storageM3 === "number" && Number.isFinite(opts.storageM3) && opts.storageM3 > 0 ? opts.storageM3 : null;
+  for (let i = 0; i < pits.length; i++) {
+    const p = pits[i];
+    let top = -Infinity;
+    let bottom = Infinity;
+    for (let c = 0; c < p.z.length; c++) {
+      top = Math.max(top, p.spill[c]);
+      bottom = Math.min(bottom, p.z[c]);
+    }
+    const full = bowlM3(p, top, cellM2);
+    storageM3 += full;
+    if (stop) continue;
+    const why: CrossingWhy[] = [];
+    if (full > left) why.push("over_remaining_release");
+    if (stor != null && full > CROSSING_STORAGE_MULT * stor) why.push("over_storage");
+    if (p.road) why.push("road");
+    if (why.length === 0) {
+      left -= full;
+      countedM3 += full;
+      continue;
+    }
+    // A suspected crossing: the flood passes through, charged only its footprint at the flow depth.
+    const charge = crossingChargeM3(p, cellM2);
+    if (charge <= left) {
+      left -= charge;
+      countedM3 += charge;
+      crossings.push({ index: i, pitM3: full, chargeM3: charge, why });
+      continue;
+    }
+    let lo = bottom;
+    let hi = top;
+    for (let it = 0; it < 40; it++) {
+      const mid = (lo + hi) / 2;
+      if (bowlM3(p, mid, cellM2) <= left) lo = mid;
+      else hi = mid;
+    }
+    const held = bowlM3(p, lo, cellM2);
+    countedM3 += held;
+    stop = { index: i, levelM: lo, pitM3: full, heldM3: held, crossing: true, why };
+  }
+  return { storageM3, countedM3, stop, crossings };
+}
+
+/** One line for the desk on the pits the channel runs through, or null. */
+export function channelPitsNote(s: Pick<OutlineStats, "channelPits">): string | null {
+  const c = s.channelPits;
+  if (!c) return null;
+  const n = (x: number) => (x < 10 ? x.toFixed(1) : Math.round(x).toLocaleString("en-US"));
+  const head = `The channel runs through ${c.pits} pit${c.pits === 1 ? "" : "s"} holding ${n(c.storageAcFt)} ac-ft below their spill levels; they take their storage out of the release before the flood moves on downstream.`;
+  const why: Record<CrossingWhy, string> = {
+    over_remaining_release: "bigger than the release left",
+    over_storage: `over ${CROSSING_STORAGE_MULT}× the storage`,
+    road: "at a mapped road",
+  };
+  const at = (x: { atKm: number; lon?: number; lat?: number }) =>
+    `${x.atKm.toFixed(2)} km` + (typeof x.lon === "number" && typeof x.lat === "number" ? ` (${x.lat.toFixed(5)}, ${x.lon.toFixed(5)})` : "");
+  const xs = c.crossings ?? [];
+  const cross = xs.length
+    ? ` Suspected crossing${xs.length === 1 ? "" : "s"} the flood passes through, charged only ${xs.length === 1 ? "its" : "their"} footprint at the flow depth: ` +
+      xs.map((x) => `${at(x)}, ${n(x.pitAcFt)} ac-ft bowl, ${n(x.chargedAcFt)} charged (${x.why.map((w) => why[w]).join(", ")})`).join("; ") +
+      "."
+    : "";
+  return c.stop
+    ? `${head}${cross} The release runs out in the pit at ${at(c.stop)} (it fills ${n(c.stop.heldAcFt)} of its ${n(c.stop.pitAcFt)} ac-ft), so the outline stops there` + (c.stop.crossing && c.stop.why?.length ? ` (a suspected crossing: ${c.stop.why.map((w) => why[w]).join(", ")}, but even its footprint at the flow depth is more than the release left).` : ".")
+    : `${head}${cross} The release covers them all (${n(c.countedAcFt)} ac-ft charged).`;
+}
+
+/**
+ * A cell is in a closed depression (pit, pothole, dry pond) when the drainage fill stands this far above its ground.
+ * 0.03 m keeps the fill's 1e-5 m epsilon and DEM noise out.
+ */
+export const PIT_TOL_M = 0.03;
 
 /** Margin (m) added around the corridor box when fetching the DEM, so the drainage trace has room to bend. */
 export const TRACE_PAD_M = 500;
@@ -112,6 +371,25 @@ export type OutlineStats = {
    * way (the routed/spread flood), so a reader never takes 0 as "none dropped / none filled". */
   droppedPatches: number | null;
   filledHoles: number | null;
+  /** Cells deeper than the dam height, clamped (absent when none, or on older layers). */
+  deepCells?: DeepCells;
+  /** Pit, pond and side-basin water the outline no longer counts (absent when none, or on older layers). */
+  pitsExcluded?: PitsExcluded;
+  /** Pits the traced channel runs through, counted against the release (absent when none, or on older layers). */
+  channelPits?: ChannelPits;
+  /** The volume soft limit lowered the water surface (absent when it did not, or on older layers). */
+  volumeLimit?: VolumeLimit;
+  /** SMALL_RELEASE_LABEL when the release is under SMALL_RELEASE_ACFT (absent otherwise, or on older layers). */
+  volumeLabel?: string;
+  /** Water laid down by the layer (ac-ft, from the clamped cell depths), when measured. */
+  laidAcFt?: number;
+  /**
+   * How far the routed flood's edge moves with a foot of depth error (extent.ts), the terrain confidence behind the
+   * per-dam triage (triage.ts). On a routed layer it is measured on the layer itself; on a terrain outline it is
+   * measured on a routed-spread probe built on the same terrain (the outline's bathtub footprint is not what the
+   * thresholds were fit on). Absent on layers built before 2026-11-04, or when the probe could not be built.
+   */
+  extent?: ExtentSensitivity;
 };
 
 export type TerrainOutline = FloodStrip & {
@@ -123,6 +401,16 @@ export type TerrainOutline = FloodStrip & {
     dem_width: number;
     dem_height: number;
     corridor: string;
+    /** The volume soft limit's note, when it lowered the water surface. */
+    volume_limit?: string;
+    /** "volume-limited, run the Runner" on releases under SMALL_RELEASE_ACFT. */
+    volume_label?: string;
+    /** Channel pits against the release (trace version 6 on): totals, where the release ran out, suspected crossings. */
+    channel_pits?: { pits: number; storage_ac_ft: number; counted_ac_ft: number };
+    /** Where the release ran out in a channel pit and the outline stops; null when it did not. */
+    channel_pit_stop?: { at_km: number; lon: number; lat: number; held_ac_ft: number; pit_ac_ft: number; crossing: boolean; why: CrossingWhy[] } | null;
+    /** Suspected crossings the flood passed through ([] when none). */
+    suspected_crossings?: { at_km: number; lon: number; lat: number; pit_ac_ft: number; charged_ac_ft: number; why: CrossingWhy[] }[];
   };
 };
 
@@ -146,7 +434,57 @@ export type RoutedSummary = {
   /** How the flood was laid on the terrain; absent on layers built before the volume spread became the default. */
   method?: "stage" | "spread";
   reachedEdge: boolean;
+  /** Spread only: ac-ft still travelling at the end of the traced reach, and how far down the channel the water got (km). */
+  travellingAcFt?: number;
+  wetEndKm?: number;
+  /** Spread only: the flood ended in a closed basin that holds all the water still travelling. */
+  stoppedInBasin?: boolean;
+  /** The demand-driven downstream reach (reach.ts); absent on layers built before it. */
+  reach?: ReachSummary;
+  /**
+   * Spread only; absent on layers built before the cap: stretches that ran out of ground, those held at the cap, and
+   * the ac-ft of the slices withheld (water that would stand beyond the ground shown).
+   */
+  exhaustedStretches?: number;
+  cappedStretches?: number;
+  unpouredAcFt?: number;
   notes: string[];
+};
+
+/** Why the demand-driven reach (reach.ts) stopped extending the terrain downstream. */
+export type ReachStop =
+  /** The flood does not reach the terrain's edge, or the water stops short of the traced channel's end. */
+  | "contained"
+  /** The flood ends in a closed basin that holds all the water still travelling. */
+  | "basin"
+  /** Less water is still travelling at the edge than the floor (5 % of the release or 10 ac-ft, whichever is less). */
+  | "volume-floor"
+  /** The round cap (REACH_MAX_ROUNDS) was reached with water still at the edge: the layer is incomplete downstream. */
+  | "round-cap"
+  /** Growing the terrain again would coarsen its cells past the limit: incomplete downstream. */
+  | "dem-limit"
+  /** The terrain could not grow (the drawn area clips it): incomplete downstream. */
+  | "no-growth"
+  /** The routed flood could not be rebuilt on the grown terrain; the previous round's layer is kept: incomplete. */
+  | "trace-failed"
+  /** The grown terrain could not be fetched (the 3DEP service failed); the previous round's layer is kept: incomplete. */
+  | "fetch-failed"
+  /** No demand signal (the stage fill, or no routed flood). */
+  | "none";
+
+export type ReachSummary = {
+  /** Extension rounds that were built (0 = the single build every layer used to get). */
+  rounds: number;
+  /** How far the terrain was grown downstream in all (km, along the channel's end direction). */
+  extendedKm: number;
+  stoppedBecause: ReachStop;
+  /** The wave still reached the edge with water above the floor when the loop stopped: the flood runs further. */
+  incomplete: boolean;
+  /** ac-ft still travelling at the edge when an incomplete loop stopped (0 when complete). */
+  strandedAcFt: number;
+  /** The terrain the final layer was built on. */
+  demCellM: number;
+  demCells: number;
 };
 
 export type OutlineCache = {
@@ -215,12 +553,21 @@ export function outlineInputs(dam: DamRecord, result: Analysis): { ok: true; inp
       st: st.map((s) => [r(s.x), r(s.h), r(s.d)]),
       a: parts,
       f: r(fromM),
+      s: Number.isFinite(dam.storageAcFt) ? r(dam.storageAcFt) : null,
+      rd: roadPoints(dam).map((q) => [r(q.lon * 1e4), r(q.lat * 1e4)]),
     }),
   );
   return { ok: true, inputs: { loc, u, st, parts, fromM, lastX: st[st.length - 1].x, fingerprint } };
 }
 
 const kxOf = (lat: number) => M_PER_DEG_LON_EQ * Math.cos((lat * Math.PI) / 180);
+
+/** Mapped roads the desk knows of: road receptors with a location (Crest holds no road network). */
+export function roadPoints(dam: DamRecord): { lon: number; lat: number }[] {
+  return (dam.receptors ?? [])
+    .filter((r) => r.kind === "road" && typeof r.lon === "number" && typeof r.lat === "number" && Number.isFinite(r.lon) && Number.isFinite(r.lat))
+    .map((r) => ({ lon: r.lon!, lat: r.lat! }));
+}
 
 /** Interpolate a station value by distance downstream (clamped to the ends). */
 function interp(st: OutlineInputs["st"], x: number, key: "h" | "d"): number {
@@ -339,6 +686,11 @@ export type BuildOptions = {
   /** Called every so many cells so a long build can let the page breathe (the desk passes a setTimeout(0)). */
   yieldFn?: () => Promise<void>;
   builtAt?: Date;
+  /**
+   * Use these inputs instead of outlineInputs(dam, result): the demand-driven reach (reach.ts) passes the schematic's
+   * inputs with lastX (where the trace may stop) pushed downstream, round by round.
+   */
+  inputs?: OutlineInputs;
 };
 
 /** Even-odd scanline mask of the AOI parts (local metres) on the grid. */
@@ -566,6 +918,7 @@ export type PolygonizedDepth = {
   /** Drawn (smoothed) polygon area, acres. */
   areaAc: number;
   wetCells: number;
+  deepCells?: DeepCells;
 };
 
 /**
@@ -579,8 +932,9 @@ export type PolygonizedDepth = {
 export function polygonizeDepth(
   g: DemGrid,
   depthFt: Float32Array,
-  opts: { common: FloodStrip["properties"]; label: string; title: string },
+  opts: { common: FloodStrip["properties"]; label: string; title: string; capFt?: number },
 ): PolygonizedDepth {
+  const capFt = opts.capFt ?? Infinity;
   const W = g.width;
   const H = g.height;
   const N = W * H;
@@ -595,7 +949,7 @@ export function polygonizeDepth(
   // Depth bands + one 3×3 mode pass, as the outline does.
   const idx = new Map(DEPTH_BANDS.map((b, i) => [b.id, i]));
   const band0 = new Int8Array(N).fill(-1);
-  for (let k = 0; k < N; k++) if (wet(k)) band0[k] = idx.get(bandFor(Math.max(WET_FT, depthFt[k])).id)!;
+  for (let k = 0; k < N; k++) if (wet(k)) band0[k] = idx.get(bandFor(Math.max(WET_FT, Math.min(capFt, depthFt[k]))).id)!;
   const band = new Int8Array(band0);
   const cnt = new Int32Array(DEPTH_BANDS.length);
   for (let j = 0; j < H; j++)
@@ -623,17 +977,15 @@ export function polygonizeDepth(
   for (let b = 0; b < DEPTH_BANDS.length; b++) {
     const mask = new Uint8Array(N);
     let cells = 0;
-    let dMax = -Infinity;
-    let dMin = Infinity;
+    const acc = bandDepthAcc(b, capFt);
     for (let k = 0; k < N; k++)
       if (band[k] === b) {
         mask[k] = 1;
         cells++;
-        const dft = Math.max(WET_FT, depthFt[k]);
-        dMax = Math.max(dMax, dft);
-        dMin = Math.min(dMin, dft);
+        acc.add(depthFt[k]);
       }
     if (cells === 0) continue;
+    const { dMax, dMin, dMean } = acc.done();
     wetCells += cells;
     const polys = polygonsOf(mask, W, H);
     if (polys.length === 0) continue;
@@ -658,6 +1010,7 @@ export function polygonizeDepth(
         band_label: DEPTH_BANDS[b].label,
         depth_max_ft: r3(dMax),
         depth_min_ft: r3(dMin),
+        depth_mean_ft: r3(dMean),
         from_km: 0,
         to_km: 0,
         segments: 0,
@@ -686,7 +1039,8 @@ export function polygonizeDepth(
     },
     features,
   };
-  return { outline, bands, areaAc, wetCells };
+  const deepCells = deepCellsOf(depthFt, capFt);
+  return { outline, bands, areaAc, wetCells, ...(deepCells ? { deepCells } : {}) };
 }
 
 /**
@@ -772,15 +1126,23 @@ export function findToe(
   return none;
 }
 
-export async function buildOutline(
+/**
+ * Build the terrain outline, or (traceOnly) only the drainage trace. The trace is the first half of the work: the
+ * drainage priority-flood, the toe and the channel path. The bathtub flood, the speck/hole cleanup, the band mode pass
+ * and the polygonisation are the expensive second half, and the routed flood (routed-flood.ts) needs only the trace
+ * (its section cutter works from the centreline). traceOnly returns right after the centreline so that build skips the
+ * second half; the full build runs the whole body unchanged. (M12)
+ */
+async function buildOutlineImpl(
   dam: DamRecord,
   result: Analysis,
   g: DemGrid,
-  opts: BuildOptions = {},
-): Promise<{ ok: true; cache: OutlineCache; centerline: Centerline } | { ok: false; reason: string }> {
+  opts: BuildOptions,
+  traceOnly: boolean,
+): Promise<{ ok: true; cache: OutlineCache | null; centerline: Centerline } | { ok: false; reason: string }> {
   const io = outlineInputs(dam, result);
   if (!io.ok) return io;
-  const inp = io.inputs;
+  const inp = opts.inputs ?? io.inputs;
   const strip = floodStrip(dam, result).strip!;
   const { loc, u, st } = inp;
   const W = g.width;
@@ -915,20 +1277,35 @@ export async function buildOutline(
     channelM += di !== 0 && Math.abs(path[p] - path[p - 1]) !== 1 ? cellM * Math.SQRT2 : cellM;
   }
 
+  // The traced channel as a local-frame polyline, for the section cutter (sections.ts) and the routed flood. Sibling
+  // to the cache, so it is not part of what is saved on the dam. Built here so a traceOnly caller can return before the
+  // bathtub flood and polygonisation.
+  const centerline: Centerline = {
+    loc: { lon: loc.lon, lat: loc.lat },
+    pts: path.map((k, p) => {
+      const i = k % W;
+      return { e: cellX(i), n: cellY((k - i) / W), x: pathA[p] };
+    }),
+  };
+  if (traceOnly) return { ok: true, centerline, cache: null };
+
   // Flood (height above the nearest channel cell): each cell takes the water surface of its nearest channel cell
   // (filled bed + the desk depth at that cell's distance downstream) and is wet when its ground is under that surface
   // by 0.1 ft, within the corridor width of that channel cell, and connected (4-neighbour) to the channel.
-  const wseC = new Float32Array(N);
+  const deskD = new Float32Array(N);
   const roomC = new Float32Array(N);
   const src = new Int32Array(N).fill(-1);
+  /** Index along the path of each channel cell (its first visit). */
+  const pathIdx = new Int32Array(N).fill(-1);
   const q = new Int32Array(N);
   let tail = 0;
   for (let p = 0; p < path.length; p++) {
     const k = path[p];
     if (src[k] >= 0) continue;
-    wseC[k] = fill[k] + interp(st, pathA[p], "d") * FT;
+    deskD[k] = interp(st, pathA[p], "d") * FT;
     roomC[k] = corridorHalfM(interp(st, pathA[p], "h"));
     src[k] = k;
+    pathIdx[k] = p;
     q[tail++] = k;
   }
   const dist2 = (m: number, s0: number) => {
@@ -951,53 +1328,255 @@ export async function buildOutline(
     }
     if ((head & 0x3ffff) === 0) await breathe(0x40000);
   }
-  const depth = new Float32Array(N).fill(-1);
-  const under = (m: number) => {
-    const s0 = src[m];
-    return s0 >= 0 && along[m] <= inp.lastX && wseC[s0] - g.z[m] >= WET_M - 1e-9;
-  };
-  const inRoom = (m: number) => dist2(m, src[m]) * cellM2 <= roomC[src[m]] * roomC[src[m]];
-  tail = 0;
-  for (const k of path)
-    if (depth[k] < 0 && under(k)) {
-      depth[k] = wseC[k] - g.z[k];
-      q[tail++] = k;
+  // Pits, ponds and side basins (Docs & QA on #57, 2026-11-03). The channel's surface is fill + d at the channel, and a
+  // cell used to take it whole: ground that drains to a lower level than that channel bed (a pond or low basin beside a
+  // steep reach, DWR-4031's 1567 ft pond under a 1584 ft bed) stood 17–21 ft deep, and a closed pothole off the channel
+  // counted its whole bowl. Neither is water the breach can lay there: water reaching a lower basin runs on down it at
+  // about the flow depth, and a pothole off the channel is water already there (or storage a small release never fills).
+  // So each cell's surface is the lower of the channel's and its own drainage level (fill) plus the channel's flow
+  // depth, and an off-channel pit counts only the water above its spill level. Cells left with less than 0.1 ft fall out
+  // of the extent, and anything reached only through them falls out with it (the 4-neighbour flood below).
+  // Closed depressions (filled above the ground by more than PIT_TOL_M) that the traced channel passes through: the
+  // breach flow runs through these and fills them, so their bowl counts, but only up to the water the breach releases
+  // (channelPitBudget below). Others are off the channel.
+  const pitC = components(W, H, (k) => !!dom[k] && fill[k] - g.z[k] > PIT_TOL_M);
+  const pitOnChannel = new Uint8Array(pitC.sizes.length);
+  for (const k of path) if (pitC.lab[k] > 0) pitOnChannel[pitC.lab[k]] = 1;
+  await breathe(N);
+  const offPit = (m: number) => pitC.lab[m] > 0 && !pitOnChannel[pitC.lab[m]];
+  // Channel pits against the release (Nick, 2026-11-03): in channel order, each pit the channel runs through takes its
+  // bowl (below its spill level) out of the released volume before the flood moves on downstream. A pit the remaining
+  // release cannot fill holds what is left at the level that volume reaches, and the flood stops there.
+  const releasedM3 = Number.isFinite(result.breach.volumeAcFt) && result.breach.volumeAcFt > 0 ? result.breach.volumeAcFt * ACRE_FT_M3 : Infinity;
+  const pitOrder: number[] = [];
+  const pitFirstP = new Map<number, number>();
+  for (let p = 0; p < path.length; p++) {
+    const c = pitC.lab[path[p]];
+    if (c > 0 && !pitFirstP.has(c)) {
+      pitFirstP.set(c, p);
+      pitOrder.push(c);
     }
-  let hitsCorridor = false;
-  for (let head = 0; head < tail; head++) {
-    const k = q[head];
-    nbrs(k, nb);
-    for (let t = 0; t < 4; t++) {
-      const m = nb[t];
-      if (m < 0 || depth[m] >= 0 || !dom[m] || !under(m)) continue;
-      if (!inRoom(m)) {
-        hitsCorridor = true;
-        continue;
-      }
-      depth[m] = wseC[src[m]] - g.z[m];
-      q[tail++] = m;
-    }
-    if ((head & 0x3ffff) === 0) await breathe(0x40000);
   }
-  if (tail === 0) return { ok: false, reason: "No terrain outline: no ground connected to the channel lies under the desk water surface." };
+  const pitCells = new Map<number, number[]>();
+  for (const c of pitOrder) pitCells.set(c, []);
+  for (let k = 0; k < N; k++) {
+    const c = pitC.lab[k];
+    if (c > 0 && pitOnChannel[c]) pitCells.get(c)!.push(k);
+  }
+  // Mapped roads (road receptors with a location): the channel pits within ROAD_CROSSING_M of one.
+  const roadPit = new Set<number>();
+  {
+    const rc = Math.ceil(ROAD_CROSSING_M / cellM);
+    for (const rp of roadPoints(dam)) {
+      const i0 = Math.floor((rp.lon - g.bbox[0]) / dlon);
+      const j0 = Math.floor((g.bbox[3] - rp.lat) / dlat);
+      for (let j = j0 - rc; j <= j0 + rc; j++)
+        for (let i = i0 - rc; i <= i0 + rc; i++) {
+          if (i < 0 || j < 0 || i >= W || j >= H) continue;
+          const k = j * W + i;
+          const c = pitC.lab[k];
+          if (c > 0 && pitOnChannel[c] && Math.hypot(cellX(i) - (rp.lon - loc.lon) * kx, cellY(j) - (rp.lat - loc.lat) * M_PER_DEG_LAT) <= ROAD_CROSSING_M + cellM / 2)
+            roadPit.add(c);
+        }
+    }
+  }
+  const storageM3 = Number.isFinite(dam.storageAcFt) && dam.storageAcFt > 0 ? dam.storageAcFt * ACRE_FT_M3 : null;
+  const budget = channelPitBudget(
+    pitOrder.map((c) => {
+      const cells = pitCells.get(c)!;
+      return {
+        z: cells.map((k) => g.z[k]),
+        spill: cells.map((k) => fill[k]),
+        flowM: deskD[path[pitFirstP.get(c)!]],
+        road: roadPit.has(c),
+      };
+    }),
+    releasedM3,
+    cellM2,
+    { storageM3 },
+  );
+  /** Suspected crossings (labels): the flood passes through, its depth there no more than the flow depth. */
+  const crossingPit = new Set(budget.crossings.map((x) => pitOrder[x.index]));
+  const inCrossing = (m: number) => crossingPit.size > 0 && crossingPit.has(pitC.lab[m]);
+  /** The pit the release runs out in (label), its water level (m), and the path index the flood stops at. */
+  const stopPit = budget.stop ? pitOrder[budget.stop.index] : -1;
+  const stopLevel = budget.stop ? budget.stop.levelM : 0;
+  const cutP = budget.stop ? pitFirstP.get(stopPit)! : Infinity;
+  const inStopPit = (m: number) => stopPit > 0 && pitC.lab[m] === stopPit;
+  await breathe(N);
 
-  // Specks and pinholes.
-  const wetC = components(W, H, (k) => depth[k] >= 0);
-  let droppedPatches = 0;
-  for (let s = 1; s < wetC.sizes.length; s++) if (wetC.sizes[s] < MIN_CELLS) droppedPatches++;
-  for (let k = 0; k < N; k++) if (depth[k] >= 0 && wetC.sizes[wetC.lab[k]] < MIN_CELLS) depth[k] = -1;
-  await breathe(N);
-  const dryC = components(W, H, (k) => depth[k] < 0);
-  let filledHoles = 0;
-  for (let s = 1; s < dryC.sizes.length; s++) if (dryC.sizes[s] < MIN_CELLS && !dryC.border[s]) filledHoles++;
-  for (let k = 0; k < N; k++)
-    if (depth[k] < 0 && dryC.sizes[dryC.lab[k]] < MIN_CELLS && !dryC.border[dryC.lab[k]]) depth[k] = WET_M;
-  await breathe(N);
+  const capFt = depthCapFt(dam.heightFt);
+  /**
+   * The bathtub flood with the desk depths scaled by `scale` (1 = the desk's own; the volume limit lowers it), then
+   * the speck and pinhole cleanup, then the volume laid down from the capped depths.
+   */
+  const lay = async (scale: number) => {
+    /** Water surface at a cell: the channel's, no higher than the cell's own drainage level plus the flow depth there. */
+    const wseAt = (m: number) => {
+      if (inStopPit(m)) return Math.min(stopLevel, fill[m]);
+      const s0 = src[m];
+      const d0 = deskD[s0] * scale;
+      const w = Math.min(fill[s0] + d0, fill[m] + d0);
+      // A suspected crossing: a sheet at the flow depth over its ground, not its bowl filled to the spill level.
+      return inCrossing(m) ? Math.min(w, g.z[m] + d0) : w;
+    };
+    /** The floor water is measured from: the ground, or an off-channel pit's spill level. */
+    const floorAt = (m: number) => (offPit(m) ? fill[m] : g.z[m]);
+    const depth = new Float32Array(N).fill(-1);
+    const under = (m: number) => {
+      const s0 = src[m];
+      if (s0 < 0 || along[m] > inp.lastX) return false;
+      if (!inStopPit(m) && pathIdx[s0] >= cutP) return false;
+      return wseAt(m) - floorAt(m) >= WET_M - 1e-9;
+    };
+    const inRoom = (m: number) => dist2(m, src[m]) * cellM2 <= roomC[src[m]] * roomC[src[m]];
+    let n = 0;
+    for (const k of path)
+      if (depth[k] < 0 && under(k)) {
+        depth[k] = wseAt(k) - floorAt(k);
+        q[n++] = k;
+      }
+    let hitsCorridor = false;
+    for (let head = 0; head < n; head++) {
+      const k = q[head];
+      nbrs(k, nb);
+      for (let t = 0; t < 4; t++) {
+        const m = nb[t];
+        if (m < 0 || depth[m] >= 0 || !dom[m] || !under(m)) continue;
+        if (!inRoom(m)) {
+          hitsCorridor = true;
+          continue;
+        }
+        depth[m] = wseAt(m) - floorAt(m);
+        q[n++] = m;
+      }
+      if ((head & 0x3ffff) === 0) await breathe(0x40000);
+    }
+    if (n === 0) return null;
+    // What the rebasing took out of the cells still in the extent, against the channel's surface taken whole (cells
+    // that fell out of the extent are not counted, so this is a floor): for the desk note.
+    let pitCellsOut = 0;
+    let pitM3 = 0;
+    for (let k = 0; k < N; k++) {
+      if (depth[k] < 0) continue;
+      const old = fill[src[k]] + deskD[src[k]] * scale - g.z[k];
+      const now = depth[k];
+      if (old - now > PIT_TOL_M) {
+        pitCellsOut++;
+        pitM3 += (old - now) * cellM2;
+      }
+    }
+
+    // Specks and pinholes.
+    const wetC = components(W, H, (k) => depth[k] >= 0);
+    let droppedPatches = 0;
+    for (let s = 1; s < wetC.sizes.length; s++) if (wetC.sizes[s] < MIN_CELLS) droppedPatches++;
+    for (let k = 0; k < N; k++) if (depth[k] >= 0 && wetC.sizes[wetC.lab[k]] < MIN_CELLS) depth[k] = -1;
+    await breathe(N);
+    const dryC = components(W, H, (k) => depth[k] < 0);
+    let filledHoles = 0;
+    for (let s = 1; s < dryC.sizes.length; s++) if (dryC.sizes[s] < MIN_CELLS && !dryC.border[s]) filledHoles++;
+    // Fill a small interior dry pocket only where the cell is in the domain and has valid terrain. Without the
+    // dom/valid guard the cleanup would wet a tiny NODATA hole or an out-of-AOI pocket, pushing the outline past
+    // the drawn area and over missing terrain — contradicting its own clipped_to_aoi provenance.
+    for (let k = 0; k < N; k++)
+      if (depth[k] < 0 && dom[k] && valid(k) && dryC.sizes[dryC.lab[k]] < MIN_CELLS && !dryC.border[dryC.lab[k]]) depth[k] = WET_M;
+    await breathe(N);
+    // Depth cap (dam height, no margin): deeper cells are pits/sinks under the surface, clamped and flagged.
+    let laidM3 = 0;
+    let wet = 0;
+    for (let k = 0; k < N; k++)
+      if (depth[k] >= 0) {
+        laidM3 += Math.min(depth[k], capFt * FT) * cellM2;
+        wet++;
+      }
+    return { depth, hitsCorridor, pitCells: pitCellsOut, pitM3, droppedPatches, filledHoles, laidM3, wet };
+  };
+
+  const first = await lay(1);
+  if (!first || first.wet === 0) return { ok: false, reason: "No terrain outline: no ground connected to the channel lies under the desk water surface." };
+  // Volume soft limit (Nick, 2026-11-03): aim for about VOLUME_TARGET_RATIO × the release. Over VOLUME_SHRINK_ABOVE ×,
+  // lower the water surface above the channel bed (the desk depths scaled by one factor, found by bisection) until the
+  // outline lays about the target; depth and extent shrink together, as a smaller flood's would.
+  let laid = first;
+  let volumeLimit: VolumeLimit | undefined;
+  if (Number.isFinite(releasedM3) && laid.laidM3 > VOLUME_SHRINK_ABOVE * releasedM3) {
+    const target = VOLUME_TARGET_RATIO * releasedM3;
+    const raw = laid;
+    let lo = 0;
+    let hi = 1;
+    let best: Awaited<ReturnType<typeof lay>> = null;
+    let bestScale = 0;
+    for (let it = 0; it < VOLUME_LIMIT_STEPS; it++) {
+      const mid = (lo + hi) / 2;
+      const r = await lay(mid);
+      if (r && r.laidM3 <= target) {
+        lo = mid;
+        if (r.wet > 0) {
+          best = r;
+          bestScale = mid;
+        }
+        if (r.laidM3 >= target * (1 - VOLUME_LIMIT_TOL)) break;
+      } else hi = mid;
+    }
+    if (!best) {
+      best = await lay(lo);
+      bestScale = lo;
+    }
+    if (best && best.wet > 0) {
+      laid = best;
+      volumeLimit = {
+        targetRatio: VOLUME_TARGET_RATIO,
+        shrinkAbove: VOLUME_SHRINK_ABOVE,
+        rawLaidAcFt: r3(raw.laidM3 / ACRE_FT_M3),
+        rawWetAc: r3((raw.wet * cellM2) / ACRE_M2),
+        depthScale: r3(bestScale),
+      };
+    }
+  }
+  const { depth, hitsCorridor, droppedPatches, filledHoles, laidM3 } = laid;
+  const pitCellsN = laid.pitCells;
+  const pitM3 = laid.pitM3;
+  const deepCells = deepCellsOf(depth, capFt, FT);
+  const lonLatOfCell = (k: number) => ({ lon: r7(g.bbox[0] + ((k % W) + 0.5) * dlon), lat: r7(g.bbox[3] - (Math.floor(k / W) + 0.5) * dlat) });
+  const channelPits: ChannelPits | undefined = pitOrder.length
+    ? {
+        pits: pitOrder.length,
+        storageAcFt: r3(budget.storageM3 / ACRE_FT_M3),
+        countedAcFt: r3(budget.countedM3 / ACRE_FT_M3),
+        ...(budget.stop
+          ? {
+              stop: {
+                pitAcFt: r3(budget.stop.pitM3 / ACRE_FT_M3),
+                heldAcFt: r3(budget.stop.heldM3 / ACRE_FT_M3),
+                atKm: r3(Math.max(0, pathA[cutP]) / 1000),
+                ...lonLatOfCell(path[cutP]),
+                crossing: budget.stop.crossing,
+                why: budget.stop.why,
+              },
+            }
+          : {}),
+        ...(budget.crossings.length
+          ? {
+              crossings: budget.crossings.map((x) => {
+                const p0 = pitFirstP.get(pitOrder[x.index])!;
+                return {
+                  atKm: r3(Math.max(0, pathA[p0]) / 1000),
+                  ...lonLatOfCell(path[p0]),
+                  pitAcFt: r3(x.pitM3 / ACRE_FT_M3),
+                  chargedAcFt: r3(x.chargeM3 / ACRE_FT_M3),
+                  why: x.why,
+                };
+              }),
+            }
+          : {}),
+      }
+    : undefined;
 
   // Bands, one 3 × 3 mode pass.
   const band0 = new Int8Array(N).fill(-1);
   const idx = new Map(DEPTH_BANDS.map((b, i) => [b.id, i]));
-  for (let k = 0; k < N; k++) if (depth[k] >= 0) band0[k] = idx.get(bandFor(Math.max(WET_FT, depth[k] / FT)).id)!;
+  for (let k = 0; k < N; k++) if (depth[k] >= 0) band0[k] = idx.get(bandFor(Math.max(WET_FT, Math.min(capFt, depth[k] / FT))).id)!;
   const band = new Int8Array(band0);
   const cnt = new Int32Array(DEPTH_BANDS.length);
   for (let j = 0; j < H; j++) {
@@ -1031,21 +1610,19 @@ export async function buildOutline(
   for (let b = 0; b < DEPTH_BANDS.length; b++) {
     const mask = new Uint8Array(N);
     let cells = 0;
-    let dMax = -Infinity;
-    let dMin = Infinity;
+    const acc = bandDepthAcc(b, capFt);
     let lo = Infinity;
     let hi = -Infinity;
     for (let k = 0; k < N; k++)
       if (band[k] === b) {
         mask[k] = 1;
         cells++;
-        const dft = Math.max(WET_FT, depth[k] / FT);
-        dMax = Math.max(dMax, dft);
-        dMin = Math.min(dMin, dft);
+        acc.add(depth[k] / FT);
         lo = Math.min(lo, along[k]);
         hi = Math.max(hi, along[k]);
       }
     if (cells === 0) continue;
+    const { dMax, dMin, dMean } = acc.done();
     wetCells += cells;
     reach = Math.max(reach, hi);
     const polys = polygonsOf(mask, W, H);
@@ -1073,6 +1650,7 @@ export async function buildOutline(
         band_label: DEPTH_BANDS[b].label,
         depth_max_ft: r3(dMax),
         depth_min_ft: r3(dMin),
+        depth_mean_ft: r3(dMean),
         from_km: r3(Math.max(0, lo) / 1000),
         to_km: r3(hi / 1000),
         segments: 0,
@@ -1102,6 +1680,12 @@ export async function buildOutline(
     rings: features.reduce((s, f) => s + (f.geometry.type === "Polygon" ? f.geometry.coordinates.length : f.geometry.coordinates.reduce((t, p) => t + p.length, 0)), 0),
     droppedPatches,
     filledHoles,
+    ...(deepCells ? { deepCells } : {}),
+    ...(pitCellsN ? { pitsExcluded: { cells: pitCellsN, acFt: r3(pitM3 / ACRE_FT_M3) } } : {}),
+    ...(channelPits ? { channelPits } : {}),
+    ...(volumeLimit ? { volumeLimit } : {}),
+    ...(smallRelease(result.breach.volumeAcFt) ? { volumeLabel: SMALL_RELEASE_LABEL } : {}),
+    laidAcFt: r3(laidM3 / ACRE_FT_M3),
   };
   const outline: TerrainOutline = {
     type: "FeatureCollection",
@@ -1117,17 +1701,34 @@ export async function buildOutline(
       dem_width: W,
       dem_height: H,
       corridor: "up to min(max(3 × half-width, 300 m), 2000 m) from the traced channel",
+      ...(volumeLimit ? { volume_limit: volumeLimitNote({ volumeLimit, laidAcFt: stats.laidAcFt }, result.breach.volumeAcFt) ?? "" } : {}),
+      ...(stats.volumeLabel ? { volume_label: stats.volumeLabel } : {}),
+      ...(channelPits
+        ? {
+            channel_pits: { pits: channelPits.pits, storage_ac_ft: channelPits.storageAcFt, counted_ac_ft: channelPits.countedAcFt },
+            channel_pit_stop: channelPits.stop
+              ? {
+                  at_km: channelPits.stop.atKm,
+                  lon: channelPits.stop.lon!,
+                  lat: channelPits.stop.lat!,
+                  held_ac_ft: channelPits.stop.heldAcFt,
+                  pit_ac_ft: channelPits.stop.pitAcFt,
+                  crossing: !!channelPits.stop.crossing,
+                  why: channelPits.stop.why ?? [],
+                }
+              : null,
+            suspected_crossings: (channelPits.crossings ?? []).map((x) => ({
+              at_km: x.atKm,
+              lon: x.lon,
+              lat: x.lat,
+              pit_ac_ft: x.pitAcFt,
+              charged_ac_ft: x.chargedAcFt,
+              why: x.why,
+            })),
+          }
+        : {}),
     },
     features,
-  };
-  // The traced channel as a local-frame polyline, for the section cutter (sections.ts) and the routed flood. Sibling
-  // to the cache, so it is not part of what is saved on the dam.
-  const centerline: Centerline = {
-    loc: { lon: loc.lon, lat: loc.lat },
-    pts: path.map((k, p) => {
-      const i = k % W;
-      return { e: cellX(i), n: cellY((k - i) / W), x: pathA[p] };
-    }),
   };
   return {
     ok: true,
@@ -1142,6 +1743,34 @@ export async function buildOutline(
       layer: "outline",
     },
   };
+}
+
+/** Build the terrain outline on a DEM (the full flood: trace, bathtub, bands, polygons) plus its centreline. */
+export async function buildOutline(
+  dam: DamRecord,
+  result: Analysis,
+  g: DemGrid,
+  opts: BuildOptions = {},
+): Promise<{ ok: true; cache: OutlineCache; centerline: Centerline } | { ok: false; reason: string }> {
+  const r = await buildOutlineImpl(dam, result, g, opts, false);
+  if (!r.ok) return r;
+  return { ok: true, cache: r.cache!, centerline: r.centerline };
+}
+
+/**
+ * Just the drainage trace (the outline's centreline), without the bathtub flood, cleanup, bands or polygonisation.
+ * The routed flood needs only this; building the full outline just to read its centreline would throw the expensive
+ * half away.
+ */
+export async function traceChannel(
+  dam: DamRecord,
+  result: Analysis,
+  g: DemGrid,
+  opts: BuildOptions = {},
+): Promise<{ ok: true; centerline: Centerline } | { ok: false; reason: string }> {
+  const r = await buildOutlineImpl(dam, result, g, opts, true);
+  if (!r.ok) return r;
+  return { ok: true, centerline: r.centerline };
 }
 
 /** What the desk can show for the outline now: the saved one (if built from the same inputs), or what to do. */

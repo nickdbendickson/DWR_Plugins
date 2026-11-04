@@ -14,6 +14,11 @@
  *  - receptors: depth, velocity and arrival at each point from both layers, wet/dry agreement, the TM 11 zone from
  *    each when both carry velocity, and summary errors (bias, MAE, RMSE).
  *
+ * Extent and receptors are scored separately: the extent raster is built from the candidate's area geometry only
+ * (Polygon / MultiPolygon) and any Point features (the 911 receptors the flood strip carries) are skipped there, so
+ * the overlap/recall/CSI numbers are polygon-vs-model. The receptor points are scored on their own below, by sampling
+ * both layers at each point location — not by whether a receptor cell falls inside the candidate's extent raster.
+ *
  * Only cells downstream of the breach count when a downstream direction is given, as renderCompare does.
  * Pure module (no DOM); it runs in node for the four-dam scoring (scripts/validate-crest.mjs) and in tests.
  */
@@ -50,9 +55,11 @@ export type CandRaster = { depth: Float32Array; velocity: Float32Array | null; a
 
 export type Downstream = { lon: number; lat: number; u: [number, number] };
 
-/** Depth (ft) a polygon feature stands for: depth_max_ft, else the middle of its depth band, else just wet. */
+/** Depth (ft) a polygon feature stands for: depth_mean_ft (terrain layers), else the middle of depth_min_ft–depth_max_ft, else just wet. */
 export function featureDepth(f: DepthFeature): number {
   const p = f.properties ?? {};
+  const mean = Number(p.depth_mean_ft);
+  if (Number.isFinite(mean) && mean > 0) return mean;
   const hi = Number(p.depth_max_ft);
   const lo = Number(p.depth_min_ft);
   if (Number.isFinite(hi) && hi > 0) return Number.isFinite(lo) && lo > 0 && lo <= hi ? (lo + hi) / 2 : hi;
@@ -164,7 +171,9 @@ export function rasterizeCandidate(cand: Candidate, ref: RefLayer): CandRaster {
 }
 
 export type ExtentScore = {
-  /** Acres wet (≥ 0.1 ft) in the reference, in the candidate, and the overlap split. */
+  /** The depth (ft) a cell counts as wet at, in both layers (WET_FT unless the caller scores at a higher threshold). */
+  wetFt: number;
+  /** Acres wet (≥ wetFt) in the reference, in the candidate, and the overlap split. */
   refAc: number;
   candAc: number;
   bothAc: number;
@@ -206,7 +215,14 @@ function downstreamMask(g: GridGeo, proj: Projector, downstream: Downstream | nu
   return m;
 }
 
-export function scoreExtent(ref: RefLayer, cand: CandRaster, downstream?: Downstream | null): ExtentScore {
+/**
+ * Score the candidate's footprint against the reference's, cell by cell on the reference grid. `wetFt` is the depth a
+ * cell counts as wet at in both (WET_FT, 0.1 ft, by default). At 0.1 ft the 2-D models themselves disagree on a flat
+ * plain by thousands of acres of thin sheet (LISFLOOD-FP vs ANUGA on DWR-2801: CSI 0.46); at 1 ft they agree (0.58),
+ * so a 1 ft score says how the candidate does where the water matters, and the pair together says how much of a
+ * disagreement is thin sheet.
+ */
+export function scoreExtent(ref: RefLayer, cand: CandRaster, downstream?: Downstream | null, wetFt = WET_FT): ExtentScore {
   const g = ref.grid;
   const mask = downstreamMask(g, ref.proj, downstream);
   const cellAc = (g.dx * g.dy) / SQM_PER_AC;
@@ -222,8 +238,8 @@ export function scoreExtent(ref: RefLayer, cand: CandRaster, downstream?: Downst
     cells++;
     const dr = g.depth[i];
     const dc = cand.depth[i];
-    const R = dr >= WET_FT;
-    const C = dc >= WET_FT;
+    const R = dr >= wetFt;
+    const C = dc >= wetFt;
     if (R && Number.isNaN(dc)) outside++;
     if (R && C) {
       both++;
@@ -238,6 +254,7 @@ export function scoreExtent(ref: RefLayer, cand: CandRaster, downstream?: Downst
   const bothAc = both * cellAc;
   const union = both + refOnly + candOnly;
   return {
+    wetFt,
     refAc,
     candAc,
     bothAc,
@@ -293,7 +310,7 @@ export type ReceptorSummary = {
   zoneAgree: number;
 };
 
-export function scoreReceptors(points: ReceptorPoint[], ref: RefLayer, cand: CandRaster, defaultKind: ChartKind = "house"): ReceptorScore[] {
+export function scoreReceptors(points: ReceptorPoint[], ref: RefLayer, cand: CandRaster, defaultKind: ChartKind = "house", wetFt = WET_FT): ReceptorScore[] {
   const g = ref.grid;
   return points.map((p) => {
     const s = samplePoint(g, ref.proj, p.lon, p.lat);
@@ -315,7 +332,7 @@ export function scoreReceptors(points: ReceptorPoint[], ref: RefLayer, cand: Can
         arrivalDiffHr: null,
       };
     const cd = cand.depth[i];
-    const cWet = cd >= WET_FT;
+    const cWet = cd >= wetFt;
     const cv = cand.velocity ? cand.velocity[i] : NaN;
     const ca = cand.arrival ? cand.arrival[i] : NaN;
     const candS = {
@@ -325,7 +342,7 @@ export function scoreReceptors(points: ReceptorPoint[], ref: RefLayer, cand: Can
       wet: cWet,
       zone: null as Zone | null,
     };
-    const rWet = s.depthFt >= WET_FT;
+    const rWet = s.depthFt >= wetFt;
     const refS = { depthFt: s.depthFt, velocityFps: s.velocityFps, arrivalHr: s.arrivalHr, wet: rWet, zone: zoneOf(s.depthFt, s.velocityFps, rWet) };
     candS.zone = zoneOf(candS.depthFt, candS.velocityFps, cWet);
     const verdict = rWet && cWet ? "both wet" : !rWet && !cWet ? "both dry" : rWet ? "missed" : "extra";
@@ -385,11 +402,11 @@ export type ValidationReport = {
 export function validate(
   cand: Candidate,
   ref: RefLayer,
-  opts: { label: string; reference: string; points?: ReceptorPoint[]; downstream?: Downstream | null; kind?: ChartKind },
+  opts: { label: string; reference: string; points?: ReceptorPoint[]; downstream?: Downstream | null; kind?: ChartKind; wetFt?: number },
 ): ValidationReport {
   const raster = rasterizeCandidate(cand, ref);
-  const extent = scoreExtent(ref, raster, opts.downstream);
-  const rows = scoreReceptors(opts.points ?? [], ref, raster, opts.kind);
+  const extent = scoreExtent(ref, raster, opts.downstream, opts.wetFt);
+  const rows = scoreReceptors(opts.points ?? [], ref, raster, opts.kind, opts.wetFt);
   return { label: opts.label, reference: opts.reference, extent, receptors: { rows, summary: summarizeReceptors(rows) }, downstreamOnly: !!opts.downstream };
 }
 
@@ -404,7 +421,7 @@ export function formatReport(r: ValidationReport): string {
   const lines = [
     `${r.label} vs ${r.reference}${r.downstreamOnly ? " (downstream of the breach only)" : ""}`,
     `  extent    model ${ac(e.refAc)}, candidate ${ac(e.candAc)} (${e.areaRatio.toFixed(2)} × the model), both ${ac(e.bothAc)}`,
-    `            recall ${pct(e.recall)}  precision ${pct(e.precision)}  CSI ${e.csi.toFixed(2)}  cell ${e.cellM.toFixed(0)} m`,
+    `            recall ${pct(e.recall)}  precision ${pct(e.precision)}  CSI ${e.csi.toFixed(2)}  cell ${e.cellM.toFixed(0)} m  wet ≥ ${e.wetFt} ft`,
     `  depth     where both wet: bias ${ft(e.depthBiasFt)}, mean |diff| ${e.meanAbsDepthFt.toFixed(2)} ft, p90 ${e.p90AbsDepthFt.toFixed(2)} ft`,
   ];
   if (e.refOutsideCandAc > 0) lines.push(`  domain    ${ac(e.refOutsideCandAc)} of the model's flood lies outside the candidate grid`);

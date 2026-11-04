@@ -16,8 +16,9 @@ const META = JSON.parse(readFileSync(fx("dem3dep_nd00199_30m.json"), "utf8"));
 const U16 = new Uint16Array(new Uint8Array(gunzipSync(readFileSync(fx("dem3dep_nd00199_30m.u16cm.gz")))).buffer);
 const DEM: DemGrid = { bbox: META.bbox, width: META.width, height: META.height, cellM: META.cellM, z: Float32Array.from(U16, (v) => v / 100 + 250) };
 
-const RF = await buildRoutedFlood(ND, RESULT, DEM);
+const RF = await buildRoutedFlood(ND, RESULT, DEM, { method: "stage" });
 const SP = await buildRoutedFlood(ND, RESULT, DEM, { method: "spread" });
+const DEF = await buildRoutedFlood(ND, RESULT, DEM); // no method → the shipped default
 
 describe("buildRoutedFlood on ND00199 (30 m fixture)", () => {
   it("runs the whole chain and returns a depth grid on the DEM frame", () => {
@@ -107,7 +108,27 @@ describe("buildRoutedFlood, method spread (quasi-dynamic volume spread)", () => 
     assert.ok(SP.stats.volumeRatio < RF.stats.volumeRatio, `${SP.stats.volumeRatio} vs ${RF.stats.volumeRatio}`);
   });
 
-  it("leaves the stage method unchanged by default", () => {
+  it("carries the exhausted-stretch cap's accounting in the stats (zero for the stage fill)", () => {
+    assert.ok(SP.ok && RF.ok);
+    if (!SP.ok || !RF.ok) return;
+    for (const s of [SP.stats, RF.stats]) {
+      assert.ok(Number.isInteger(s.exhaustedStretches) && s.exhaustedStretches >= 0);
+      assert.ok(Number.isInteger(s.cappedStretches) && s.cappedStretches <= s.exhaustedStretches);
+      assert.ok(Number.isFinite(s.unpouredAcFt) && s.unpouredAcFt >= 0);
+    }
+    assert.equal(RF.stats.exhaustedStretches, 0);
+    assert.equal(RF.stats.unpouredAcFt, 0);
+    if (SP.stats.cappedStretches) assert.ok(SP.notes.some((n) => /held at the routed stage \+ 1 ft/.test(n)));
+    else assert.equal(SP.stats.unpouredAcFt, 0);
+  });
+
+  it("defaults to the spread method when none is given", () => {
+    assert.ok(DEF.ok);
+    if (!DEF.ok) return;
+    assert.equal(DEF.method, "spread");
+  });
+
+  it("the explicit stage method carries no velocity or arrival", () => {
     assert.ok(RF.ok);
     if (!RF.ok) return;
     assert.equal(RF.method, "stage");

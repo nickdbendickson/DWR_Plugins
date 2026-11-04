@@ -120,8 +120,10 @@ export function stations(line: Centerline, stationM: number, tangentWindowM: num
 }
 
 /**
- * Cut sections along the centreline. The offset axis points to the left of the downstream direction then across to
- * the right (so a section reads left to right looking downstream); offset 0 is the centreline point.
+ * Cut sections along the centreline. The normal points to the left of the downstream direction, and the offsets run
+ * from −half to +half, so the profile reads from the right bank (negative offsets) across to the left bank (positive)
+ * looking downstream; offset 0 is the centreline point. The table reads the offsets symmetrically, so the order is a
+ * labelling convention, not a value the routing depends on.
  */
 export function cutSections(g: DemGrid, line: Centerline, opts: CutOptions = {}): Section[] {
   const stationM = opts.stationM ?? 50;
@@ -136,7 +138,8 @@ export function cutSections(g: DemGrid, line: Centerline, opts: CutOptions = {})
   const sections: Section[] = [];
   const half = Math.max(1, Math.round(halfWidthM / sampleM));
   for (const s of sts) {
-    // Normal to the tangent: rotate the unit tangent +90° (left), march from -half..+half across to the right.
+    // Normal to the tangent: rotate the unit tangent +90° (points left of downstream). Marching from -half..+half then
+    // runs from the right bank (negative offsets) across to the left bank (positive) looking downstream.
     const ne = -s.tn;
     const nn = s.te;
     const offsets: number[] = [];

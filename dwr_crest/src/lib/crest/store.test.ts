@@ -1,6 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { activeDam, migrateDesk } from "./store.ts";
+import { activeDam, applyPatch, migrateDesk } from "./store.ts";
+import { analyze } from "./engine.ts";
+import type { DamRecord } from "./types.ts";
 import { SAMPLE_DAMS } from "./samples.ts";
 
 describe("migrateDesk", () => {
@@ -33,5 +35,27 @@ describe("migrateDesk", () => {
     const now = SAMPLE_DAMS.find((d) => d.id === "nd00199");
     assert.equal(state.dams[0].crestFt, now?.crestFt);
     assert.equal(state.activeId, "nd00199");
+  });
+});
+
+describe("applyPatch (Docs & QA on #57: a stale NGVD29 note after the crest is retyped)", () => {
+  const dam = { ...SAMPLE_DAMS[0], crestFt: 1630.46, statedDatum: "NAVD88", datumNote: "Crest converted from NGVD29 (1630.0 + 0.46 ft)." } as DamRecord;
+  it("a typed crest clears the datum note, so datum_note and datum_rule stop carrying it", () => {
+    const next = applyPatch(dam, { crestFt: 1631.2 });
+    assert.equal(next.crestFt, 1631.2);
+    assert.equal(next.datumNote, undefined);
+    assert.equal(analyze(next).datum.rule, "Elevations treated as NAVD88.");
+  });
+  it("a typed streambed clears it the same way (Docs & QA on #64)", () => {
+    const next = applyPatch(dam, { streambedFt: (dam.streambedFt ?? 0) + 1 });
+    assert.equal(next.datumNote, undefined);
+    assert.equal(next.crestFt, dam.crestFt);
+    assert.equal(analyze(next).datum.rule, "Elevations treated as NAVD88.");
+    assert.equal(applyPatch(dam, { streambedFt: dam.streambedFt }).datumNote, dam.datumNote);
+  });
+  it("other edits, the same crest, or a patch that sets the note itself keep it", () => {
+    assert.equal(applyPatch(dam, { name: "x" }).datumNote, dam.datumNote);
+    assert.equal(applyPatch(dam, { crestFt: 1630.46 }).datumNote, dam.datumNote);
+    assert.equal(applyPatch(dam, { crestFt: 1600, datumNote: "n" }).datumNote, "n");
   });
 });

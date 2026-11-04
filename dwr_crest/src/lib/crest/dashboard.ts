@@ -6,6 +6,7 @@
 import type { FloodStrip } from "./floodstrip.ts";
 import type { LayerOfRecord } from "./layer-of-record.ts";
 import type { OutlineState } from "./outline.ts";
+import type { Triage } from "./triage.ts";
 import { PAPER_DISCLAIMER } from "./paper.ts";
 import type { Analysis, ResultsOfRecord } from "./types.ts";
 
@@ -78,6 +79,8 @@ export function dashboardFlags(
     volume?: { wet: number; release: number; reservoir?: number };
     /** The layer of record (layer-of-record.ts). A run of record replaces the fast layer's own flags. */
     record?: LayerOfRecord;
+    /** The per-dam triage call (triage.ts), shown as one flag when given. */
+    triage?: Triage;
     /** The run of record's raster strip is on the map (its rasters are loaded in this session). */
     recordMapped?: boolean;
   } = {},
@@ -95,6 +98,13 @@ export function dashboardFlags(
       out.push({ key: "edge", sev: "info", text: "Model flood touches its raster edge — extent may be larger" });
     return finishFlags(out, result);
   }
+  if (opts.triage)
+    out.push({
+      key: "triage",
+      // A large flood already raises the critical runner-needed flag; the triage line rides along as a warning.
+      sev: opts.triage.recommendation === "needs-runner" ? "warning" : "info",
+      text: `Triage: ${opts.triage.label} (${opts.triage.confidence} confidence)`,
+    });
   if (rec?.needsRunner)
     out.push({
       key: "runner-needed",

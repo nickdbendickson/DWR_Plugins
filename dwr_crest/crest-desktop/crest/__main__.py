@@ -513,7 +513,7 @@ def main() -> None:
         store = storage_dir()
         store.mkdir(parents=True, exist_ok=True)
         api = Api(settings_file=store / "crest-settings.json")
-        api._window = webview.create_window(TITLE, url, js_api=api, width=1280, height=860, min_size=(900, 600))
+        api._window = webview.create_window(TITLE, url, js_api=api, width=1280, height=860, min_size=(760, 560))
         webview.start(private_mode=False, storage_path=str(store))
     except Exception as e:  # no GUI backend: use the system browser (downloads work there)
         print(f"Crest desktop: no webview ({e}). Opening {url} in the browser; press Ctrl+C to stop.")

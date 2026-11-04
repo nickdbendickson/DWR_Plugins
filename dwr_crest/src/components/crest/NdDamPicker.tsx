@@ -268,6 +268,9 @@ export function NidRecordPanel({ dam }: { dam: DamRecord }) {
   const r = dam.nidRef;
   const fmt = (v: number | null | undefined, u = "") => (v == null ? "—" : `${v.toLocaleString("en-US")}${u}`);
   const demOk = demCrest !== "" && demBed !== "" && Number.isFinite(Number(demCrest)) && Number.isFinite(Number(demBed));
+  // Typed values only reach the record on the button; say so while they differ from what the record holds.
+  const demPending =
+    (demCrest !== "" && Number(demCrest) !== dam.crestFt) || (demBed !== "" && Number(demBed) !== dam.streambedFt);
 
   return (
     <div className="space-y-3">
@@ -311,6 +314,12 @@ export function NidRecordPanel({ dam }: { dam: DamRecord }) {
               Use typed DEM values
             </button>
           </div>
+          {demPending ? (
+            <p className="mt-1 text-xs text-amber" data-testid="dem-typed-pending">
+              Not applied yet. Click Use typed DEM values to put these in the record; until then the record keeps its current
+              crest and breach bottom.
+            </p>
+          ) : null}
           <p className="mt-1 text-xs text-muted">
             Values you read off a DEM and type here; Crest does not sample the DEM, and the DEM crest check is left as is.
             Or type them in the Crest, Streambed and datum fields below.

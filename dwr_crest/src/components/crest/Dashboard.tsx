@@ -1,4 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+
+import { ClientOnly } from "./ClientOnly";
+import { useOnline } from "./use-online";
 import { DEPTH_BANDS, floodStrip, type FloodStrip } from "@/lib/crest/floodstrip";
 import {
   crest,
@@ -29,6 +32,7 @@ import type { DashPoint } from "./DashboardMap";
 import type { Overlay } from "./ResultsMap";
 import { useAnalysisOfRecord, useStripOfRecord } from "./results-flow";
 import { layerOfRecord, RUNNER_SOURCE } from "@/lib/crest/layer-of-record";
+import { triageDam } from "@/lib/crest/triage";
 
 const DashboardMap = lazy(() =>
   import("./DashboardMap").then((m) => ({ default: m.DashboardMap })),
@@ -59,11 +63,12 @@ function toUrl(px: Uint8ClampedArray, w: number, h: number) {
  */
 export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result: Analysis }) {
   const { result, ref, label: source } = useAnalysisOfRecord(dam, deskResult);
-  const online = typeof navigator === "undefined" ? true : navigator.onLine;
+  const online = useOnline();
   const outline = useMemo(() => outlineState(dam, result, online), [dam, result, online]);
   // A run of record is the layer of record whatever the flood-size gate picks; its raster strip is the depth layer
   // once its rasters are loaded, else the fast layer stands in (flagged as comparison only).
   const record = useMemo(() => layerOfRecord(dam, result, outline), [dam, result, outline]);
+  const triage = useMemo(() => triageDam(dam, result, outline), [dam, result, outline]);
   const method = dashMethod(outline, dam.resultsOfRecord ?? null);
   const recordStrip = useStripOfRecord(dam, deskResult);
   const runStrip = recordStrip.fromRun ? recordStrip.strip : null;
@@ -78,8 +83,9 @@ export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result:
         volume: routedVolumes(outline, dam.storageAcFt) ?? undefined,
         record,
         recordMapped: !!runStrip,
+        triage,
       }),
-    [result, outline, dam.storageAcFt, record, runStrip],
+    [result, outline, dam.storageAcFt, record, runStrip, triage],
   );
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>(DEFAULT_LAYERS);
   const [acked, setAcked] = useState(false);
@@ -178,16 +184,18 @@ export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result:
 
       <div className="dash-body">
         <div className="dash-map" data-testid="dash-map">
-          <Suspense fallback={<p className="p-4 text-sm text-muted">Loading the map…</p>}>
-            <DashboardMap
-              depth={layers.depth ? depth : null}
-              points={layers.structures ? points : []}
-              arrival={layers.arrival ? arrival : []}
-              hillshade={layers.hillshade}
-              overlays={layers.runnerOverlay ? overlay.overlays : []}
-              fit={fit}
-            />
-          </Suspense>
+          <ClientOnly fallback={<p className="p-4 text-sm text-muted">Loading the map…</p>}>
+            <Suspense fallback={<p className="p-4 text-sm text-muted">Loading the map…</p>}>
+              <DashboardMap
+                depth={layers.depth ? depth : null}
+                points={layers.structures ? points : []}
+                arrival={layers.arrival ? arrival : []}
+                hillshade={layers.hillshade}
+                overlays={layers.runnerOverlay ? overlay.overlays : []}
+                fit={fit}
+              />
+            </Suspense>
+          </ClientOnly>
         </div>
         <LayerRail
           layers={layers}

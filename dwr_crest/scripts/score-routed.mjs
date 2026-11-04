@@ -4,14 +4,16 @@
  * and outline. One-off, for the baseline comparison (Nick, 2026-11-02); not part of the app.
  *
  *   node --experimental-strip-types scripts/score-routed.mjs --dam <record.json> --runner <dam folder> [--json out.json]
- *     [--spread [--breach-path] [--no-basins]] [--probes 300]
+ *     [--spread [--breach-path] [--no-basins] [--no-reach]] [--probes 300] [--wet-ft 0.1]
  *
  * --spread scores the quasi-dynamic volume spread (spread.ts) instead of the stage fill; --breach-path makes it
- * follow the water from the breach instead of the outline's drainage trace; --no-basins turns off closed-basin storage. --probes sets how many points on the model's wet
- * cells compare depth, velocity and arrival.
+ * follow the water from the breach instead of the outline's drainage trace; --no-basins turns off closed-basin storage;
+ * --no-reach builds once on the corridor DEM instead of growing the terrain downstream on demand (reach.ts, what the
+ * desk does). --probes sets how many points on the model's wet cells compare depth, velocity and arrival. --wet-ft
+ * scores both layers as wet at that depth instead of 0.1 ft (1 ft is where the 2-D models agree with each other).
  *
- * It fetches the same corridor DEM the terrain outline uses, builds the routed flood on it, and scores its depth grid
- * (the harness's lonlat candidate) against the Runner rasters.
+ * It fetches the same corridor DEM the terrain outline uses (grown downstream on demand for the spread), builds the
+ * routed flood on it, and scores its depth grid (the harness's lonlat candidate) against the Runner rasters.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -19,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { analyze } from "../src/lib/crest/engine.ts";
 import { demRequest, fetchDem, outlineInputs } from "../src/lib/crest/outline.ts";
 import { createEngine } from "../src/lib/crest/raster-engine.ts";
+import { buildRoutedFloodReach } from "../src/lib/crest/reach.ts";
 import { buildRoutedFlood } from "../src/lib/crest/routed-flood.ts";
 import { formatReport, validate } from "../src/lib/crest/validation.ts";
 import { runnerFiles } from "./validate-crest.mjs";
@@ -29,7 +32,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith("--")) throw new Error(`unexpected ${a}`);
     const key = a.slice(2);
-    if (key === "volume-limit" || key === "spread" || key === "breach-path" || key === "no-basins") o[key] = true;
+    if (key === "volume-limit" || key === "spread" || key === "breach-path" || key === "no-basins" || key === "no-reach") o[key] = true;
     else o[key] = argv[++i];
   }
   for (const k of ["dam", "runner"]) if (!o[k]) throw new Error(`--${k} is required`);
@@ -37,13 +40,13 @@ function parseArgs(argv) {
 }
 
 /** Even-stride probe points on the reference run's wet cells (downstream of the breach when known). */
-export function probePoints(ref, downstream, want) {
+export function probePoints(ref, downstream, want, wetFt = 0.1) {
   const g = ref.grid;
   const wet = [];
   for (let r = 0; r < g.height; r++)
     for (let c = 0; c < g.width; c++) {
       const i = r * g.width + c;
-      if (!(g.depth[i] >= 0.1)) continue;
+      if (!(g.depth[i] >= wetFt)) continue;
       const [lon, lat] = ref.proj.inv(g.x0 + (c + 0.5) * g.dx, g.y0 - (r + 0.5) * g.dy);
       if (downstream) {
         const e = (lon - downstream.lon) * 111320 * Math.cos((downstream.lat * Math.PI) / 180);
@@ -73,21 +76,38 @@ export async function main(argv, log = console.log) {
   const haveBreach = Number.isFinite(breach.lon) && Number.isFinite(breach.lat);
   const downstream = u && haveBreach ? { ...breach, u } : null;
 
-  log(`Fetching the DEM for ${dam.id}…`);
-  const req = demRequest(io.inputs);
-  const dem = await fetchDem(req);
-  log(`  DEM ${dem.width}×${dem.height} @ ${dem.cellM.toFixed(1)} m`);
-
-  log("Building the routed flood…");
-  const rf = await buildRoutedFlood(dam, result, dem, {
+  const rfOpts = {
     volumeLimit: o["volume-limit"] != null,
     slopeFloor: o["slope-floor"] != null ? Number(o["slope-floor"]) : undefined,
     sectionHalfWidthM: o["half-width"] != null ? Number(o["half-width"]) : undefined,
     method: o.spread ? "spread" : "stage",
     breachPath: o["breach-path"] ? true : undefined,
     basins: o["no-basins"] ? false : undefined,
-  });
-  if (!rf.ok) throw new Error(rf.reason);
+  };
+  let rf;
+  let dem;
+  let reach = null;
+  if (o.spread && !o["no-reach"]) {
+    // What the desk does: the corridor DEM, grown downstream while the routed wave still reaches its edge with water.
+    const rb = await buildRoutedFloodReach(dam, result, {
+      ...rfOpts,
+      inputs: io.inputs,
+      onRound: (r) => log(r.round === 0 ? (r.stage === "fetch" ? `Fetching the DEM for ${dam.id} (${r.req.width}×${r.req.height} @ ${r.req.cellM} m)…` : "Building the routed flood…") : r.stage === "fetch" ? `  reach round ${r.round}: ${r.travellingAcFt.toFixed(0)} ac-ft still at the edge, growing the DEM ${r.stepKm.toFixed(1)} km downstream (${r.req.width}×${r.req.height} @ ${r.req.cellM} m)…` : `  reach round ${r.round}: rebuilding the routed flood…`),
+    });
+    if (!rb.routed.ok) throw new Error(rb.routed.reason);
+    rf = rb.routed;
+    dem = rb.grid;
+    reach = rb.reach;
+    log(`  reach: ${reach.rounds} round${reach.rounds === 1 ? "" : "s"} (+${reach.extendedKm} km), stopped: ${reach.stoppedBecause}${reach.incomplete ? `, INCOMPLETE (${reach.strandedAcFt} ac-ft stranded)` : ""}; DEM ${dem.width}×${dem.height} @ ${dem.cellM.toFixed(1)} m`);
+  } else {
+    log(`Fetching the DEM for ${dam.id}…`);
+    const req = demRequest(io.inputs);
+    dem = await fetchDem(req);
+    log(`  DEM ${dem.width}×${dem.height} @ ${dem.cellM.toFixed(1)} m`);
+    log("Building the routed flood…");
+    rf = await buildRoutedFlood(dam, result, dem, rfOpts);
+    if (!rf.ok) throw new Error(rf.reason);
+  }
   log(`  routed: peak in ${rf.stats.peakInCfs} cfs → out ${rf.stats.peakOutCfs} cfs (fell ${(rf.stats.routedPeakFellBy * 100).toFixed(0)}%), ${rf.stats.sections} sections, flooded ${rf.stats.floodedAc} ac`);
   for (const n of rf.notes) log(`  note: ${n}`);
 
@@ -112,12 +132,14 @@ export async function main(argv, log = console.log) {
   };
   // Probe receptors: about --probes points on the model's wet cells downstream of the breach (an even stride), so
   // depth, velocity and arrival can be compared where the model says there is water.
-  const points = probePoints(ref, downstream, Number(o.probes ?? 300));
-  const report = validate(cand, ref, { label: `routed terrain flood (${rf.method})`, reference: summary.label, points, downstream });
+  const wetFt = o["wet-ft"] != null ? Number(o["wet-ft"]) : undefined;
+  if (wetFt != null && !(wetFt > 0)) throw new Error("--wet-ft needs a depth in feet");
+  const points = probePoints(ref, downstream, Number(o.probes ?? 300), wetFt ?? 0.1);
+  const report = validate(cand, ref, { label: `routed terrain flood (${rf.method})`, reference: summary.label, points, downstream, wetFt });
   log("\n" + formatReport(report));
 
   if (o.json) {
-    writeFileSync(o.json, JSON.stringify({ dam: dam.id, runner: o.runner, routed: rf.stats, report }, null, 2));
+    writeFileSync(o.json, JSON.stringify({ dam: dam.id, runner: o.runner, wetFt: wetFt ?? 0.1, routed: rf.stats, reach, dem: { width: dem.width, height: dem.height, cellM: dem.cellM, bbox: dem.bbox }, report }, null, 2));
     log(`\nWrote ${o.json}`);
   }
   return report;

@@ -34,6 +34,13 @@ export const DEPTH_BANDS: DepthBand[] = [
   { id: "d5", label: "10 ft and deeper", minFt: 10, maxFt: Infinity, color: "#08306b" },
 ];
 
+// INVARIANT: strictly ascending by minFt (shallow→deep). bandFor/raster.bandIndex scan from the deepest end and take
+// the first band the depth reaches, and the receptor overlap rule (nd911.bandAt) ranks by array index so the largest
+// index = the deepest band wins. Reorder or regroup these and that "deeper wins" quietly flips to "shallower wins"
+// (anti-conservative), so the order is pinned here rather than left to convention.
+for (let i = 1; i < DEPTH_BANDS.length; i++)
+  if (!(DEPTH_BANDS[i].minFt > DEPTH_BANDS[i - 1].minFt)) throw new Error("DEPTH_BANDS must be strictly ascending by minFt (shallow→deep)");
+
 export function bandFor(depthFt: number): DepthBand {
   for (let i = DEPTH_BANDS.length - 1; i >= 0; i--)
     if (depthFt >= DEPTH_BANDS[i].minFt) return DEPTH_BANDS[i];
@@ -57,6 +64,8 @@ export type StripFeature = {
     /** Schematic depth (ft) at the band's upstream and downstream station. */
     depth_max_ft: number;
     depth_min_ft: number;
+    /** Mean depth (ft) of the band's cells, clamped into the band (terrain layers; absent on the strip). */
+    depth_mean_ft?: number;
     /** Distance downstream of the breach (km) where the band starts and ends, before any AOI clip. */
     from_km: number;
     to_km: number;

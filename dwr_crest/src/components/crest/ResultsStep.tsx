@@ -19,6 +19,7 @@ import {
 import { runKey, type RunState, useResults } from "@/lib/crest/results-store";
 import { useDesk } from "@/lib/crest/store";
 import type { DamRecord, ResultSource } from "@/lib/crest/types";
+import { ClientOnly } from "./ClientOnly";
 import type { Bounds, MapPoint, Overlay } from "./ResultsMap";
 import { allChecks, dropRun, importRun, pickFiles, refFromRun } from "./results-flow";
 
@@ -51,7 +52,7 @@ export function ResultsStep({ dam, result }: { dam: DamRecord; result: Analysis 
   const runs: Partial<Record<ResultSource, RunState>> = { lisflood: lis, dsswise: dss };
   const ready = SOURCES.filter((s) => runs[s]?.status === "ready" && runs[s]?.summary?.stats);
   return (
-    <section className="grid gap-4" data-testid="results-step">
+    <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4" data-testid="results-step">
       <div className="rounded-md border border-line bg-card p-4">
         <h2 className="text-xl">Results: imported model runs</h2>
         <p className="mt-1 text-sm text-muted">
@@ -339,10 +340,14 @@ function MapPanel({ dam, result, runs, ready }: { dam: DamRecord; result: Analys
         ) : null}
         {out.busy ? <span className="text-sm text-muted">Rendering…</span> : null}
       </div>
-      <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_220px]">
-        <Suspense fallback={<p className="text-sm text-muted">Loading the map…</p>}>
-          <ResultsMap overlays={showDesk ? [] : out.overlays} strip={showDesk ? desk : null} points={points} fit={showDesk ? deskFit : out.fit ?? deskFit} />
-        </Suspense>
+      <div className="mt-3 grid min-w-0 gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+        <div className="min-w-0">
+          <ClientOnly fallback={<p className="text-sm text-muted">Loading the map…</p>}>
+            <Suspense fallback={<p className="text-sm text-muted">Loading the map…</p>}>
+              <ResultsMap overlays={showDesk ? [] : out.overlays} strip={showDesk ? desk : null} points={points} fit={showDesk ? deskFit : out.fit ?? deskFit} />
+            </Suspense>
+          </ClientOnly>
+        </div>
         <div className="text-xs" data-testid="results-legend">
           {mode === "compare" ? (
             <>

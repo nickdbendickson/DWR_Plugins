@@ -110,6 +110,27 @@ describe("buildInundation on ND00199 (30 m fixture, 1,609 ac-ft → routed)", ()
     assert.equal(r.routed?.ok && r.routed.method, "spread");
     assert.equal(r.cache.routed!.method, "spread");
     assert.equal(outlineState({ ...ND, outline: r.cache }, RESULT, true).state, "ready");
+    // The triage's extent check is measured on the routed layer itself and saved with it.
+    const e = r.cache.stats.extent!;
+    assert.equal(e.basis, "routed-layer");
+    assert.ok(e.wetAc > 0 && e.edgeM > 0 && e.outShiftM >= 0);
+    assert.equal(e.volumeRatio, r.cache.routed!.volumeRatio);
+  });
+
+  it("measures a terrain outline's extent check on a routed-spread probe, and keeps the outline as the layer", async () => {
+    const smallNd = { ...ND, storageAcFt: 120, surfaceAreaAc: 20 };
+    const res = analyze(smallNd);
+    assert.ok(res.breach.volumeAcFt < GATE_VOLUME_ACFT);
+    const r = await buildInundation(smallNd, res, DEM);
+    assert.ok(r.ok, r.ok ? "" : r.reason);
+    if (!r.ok) return;
+    assert.equal(r.layer, "outline");
+    assert.equal(r.cache.routed, undefined);
+    const e = r.cache.stats.extent!;
+    assert.equal(e.basis, "routed-probe");
+    assert.ok(e.wetAc > 0);
+    assert.equal(typeof e.stoppedInBasin, "boolean");
+    assert.equal(typeof e.reachedEdge, "boolean");
   });
 
   it("still builds the stage fill when asked, and reads a saved stage-fill layer as stale", async () => {

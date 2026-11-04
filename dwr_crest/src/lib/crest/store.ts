@@ -27,7 +27,7 @@ export const useDesk = create<DeskState>()(
       update: (patch) => {
         const { dams, activeId } = get();
         set({
-          dams: dams.map((d) => (d.id === activeId ? { ...d, ...patch, id: d.id } : d)),
+          dams: dams.map((d) => (d.id === activeId ? applyPatch(d, patch) : d)),
         });
       },
       add: () => {
@@ -47,6 +47,19 @@ export const useDesk = create<DeskState>()(
     { name: "crest-desk-v2", skipHydration: true, version: 2, migrate: migrateDesk },
   ),
 );
+
+/**
+ * Apply a desk edit to a record. A crest or streambed typed over the stored one drops the stored datum note (e.g. "Crest converted
+ * from NGVD29 …"): the note described the old number, and left in place it kept riding on the record's datum_rule and
+ * datum_note after the retype (DWR-4031 QA, 2026-11-03). Everything else is a plain merge.
+ */
+export function applyPatch(d: DamRecord, patch: Partial<DamRecord>): DamRecord {
+  const next = { ...d, ...patch, id: d.id };
+  // The crest and the streambed are both elevations the note's conversion was applied to, so retyping either clears it.
+  const retyped = (["crestFt", "streambedFt"] as const).some((f) => f in patch && patch[f] !== d[f]);
+  if (retyped && !("datumNote" in patch)) delete next.datumNote;
+  return next;
+}
 
 const OLD_ND00199_CLASS = "ND MEDIUM / TM11 Significant (DWR-2801 benchmark)";
 

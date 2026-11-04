@@ -79,6 +79,21 @@ args = sys.argv[1:]
 Path(os.environ["CALLS"]).open("a").write("\n".join(args) + "\n---\n")
 mode = os.environ.get("QGIS_MODE", "fail")
 joined = " ".join(args)
+if args[:1] == ["help"]:
+    if mode != "help":
+        sys.exit(1)
+    print("METHOD: Breach (ND 5.1.1(d))")
+    print("\tArgument type:\tenum")
+    print("\tAvailable values:")
+    print("\t\t- 0: Piping failure with a pipe (orifice) phase, Froehlich (2008) size and time")
+    print("\t\t- 1: Piping failure, Froehlich (2008) parameters, routed")
+    print("TIER: Model")
+    print("\tAvailable values:")
+    print("\t\t- 0: Built-in only")
+    print("\t\t- 1: LISFLOOD-FP only")
+    sys.exit(0)
+if mode == "help":
+    mode = "pass"
 if "preflight" in joined:
     report = next((a.split("=", 1)[1] for a in args if a.startswith("--REPORT=")), "")
     if mode == "report-fail":
@@ -152,6 +167,22 @@ class FolderTests(unittest.TestCase):
             fields2 = json.loads((folder2 / "dam.json").read_text(encoding="utf-8"))["fields"]
             self.assertNotIn("streambed_ft", fields2)
             self.assertNotIn("streambed_datum", fields2)
+
+    def test_sources_cite_the_dwr_field_not_just_crest_desk(self):
+        prov = {
+            "streambedFt": {"src": "DWR", "field": "streambed__navd88", "value": 1043.59},
+            "crestFt": {"src": "DWR", "field": "max_pool_e_navd88", "value": 1071.09},
+        }
+        with tempfile.TemporaryDirectory() as d:
+            folder, _ = write_dam_folder(Path(d), {**DAM, "provenance": prov}, ANALYSIS)
+            sources = json.loads((folder / "dam.json").read_text(encoding="utf-8"))["sources"]
+            self.assertIn("DWR streambed__navd88", sources["streambed_ft"]["note"])
+            self.assertIn("DWR max_pool_e_navd88", sources["top_of_dam_ft"]["note"])
+            self.assertEqual(sources["dam_id"]["note"], "Crest desk")
+            typed = {"streambedFt": {"src": "DEM", "field": "streambed (typed from DEM)"}}
+            folder2, _ = write_dam_folder(Path(d) / "b", {**DAM, "provenance": typed}, ANALYSIS)
+            sources2 = json.loads((folder2 / "dam.json").read_text(encoding="utf-8"))["sources"]
+            self.assertEqual(sources2["streambed_ft"]["note"], "Crest desk, streambed (typed from DEM)")
 
     def test_labels_tied_elevations_navd88_whatever_the_stated_datum(self):
         cases = [
@@ -341,6 +372,26 @@ class GateTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(any("No DEM" in line for line in self.lines))
         self.assertEqual(self.calls_text(), "")
+
+    def test_model_sends_enum_indexes_read_from_help(self):
+        # qgis_process 3.34 rejects option text for ndbreach:rundam's METHOD / TIER ("Incorrect parameter value"),
+        # so the index is read from `qgis_process help` (here deliberately not the plugin's real order).
+        import crest.qgis_run as qr
+
+        qr._ENUM_HELP.clear()
+        os.environ["QGIS_MODE"] = "help"
+        os.environ["CREST_NDBREACH_CLI"] = str(self.cli)
+        work = self.root / "work"
+        work.mkdir()
+        (work / "dem.tif").write_bytes(b"not a real dem")
+        try:
+            result = run_model(DAM, ANALYSIS, str(work), self.log())
+        finally:
+            qr._ENUM_HELP.clear()
+        self.assertTrue(result["ok"])
+        text = self.calls_text()
+        self.assertIn("--METHOD=1\n", text)
+        self.assertIn("--TIER=1\n", text)
 
     def test_model_uses_rundam_not_batch_or_a_lonlat_line(self):
         os.environ["QGIS_MODE"] = "pass"

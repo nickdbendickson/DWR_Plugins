@@ -721,3 +721,14 @@ describe("Round 3c: outline tolerance is the same on both sides of the flow", ()
     assert.ok(!ok.screen.reasons.some((r) => r.startsWith("Drawn area not applied")));
   });
 });
+
+describe("Report dam.json streambed", () => {
+  it("puts streambed_ft and streambed_datum at the top level next to crest_ft", () => {
+    const a = analyze(dwr2801());
+    const j = JSON.parse(exportDamJson(dwr2801(), a));
+    assert.equal(j.streambed_ft, a.datum.streambedNavdFt);
+    assert.ok(Number.isFinite(j.streambed_ft));
+    assert.equal(j.streambed_datum, "NAVD88");
+    assert.equal(j.crest_datum, "NAVD88");
+  });
+});

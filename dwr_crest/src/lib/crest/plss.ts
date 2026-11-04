@@ -232,8 +232,14 @@ export async function fetchPlss(strip: FloodStrip, fetchFn: Fetch = fetch as unk
     if (body.error) throw new Error(`PLSS lookup failed: ${body.error.message ?? "service error"}.`);
     const feats = body.features ?? [];
     sections.push(...readSections(feats));
-    const more = body.exceededTransferLimit ?? body.properties?.exceededTransferLimit ?? false;
+    // Keep paging while the service flags more OR it returned a full page: f=geojson responses can omit
+    // exceededTransferLimit, so a full page is the reliable "there may be more" signal and a short page proves
+    // completion. Without this a large strip would silently stop at one page and report the missing sections' ground
+    // as uncovered — a fetch gap dressed as a data gap.
+    const flagged = body.exceededTransferLimit ?? body.properties?.exceededTransferLimit ?? false;
+    const more = flagged || feats.length >= PAGE;
     if (!more || feats.length === 0) break;
+    if (page === MAX_PAGES - 1) throw new Error(`PLSS lookup stopped at ${MAX_PAGES * PAGE} sections; draw a smaller area.`);
   }
   const seen = new Set<string>();
   return {
@@ -334,6 +340,9 @@ function clipPoly(poly: LocalPoly, tri: XY[], u: XY) {
 export function plssTable(dam: DamRecord, strip: FloodStrip, cache: PlssCache): PlssTable {
   const loc = damLocation(dam) ?? { lon: strip.properties.breach_lon, lat: strip.properties.breach_lat };
   const o = { lon: strip.properties.breach_lon, lat: strip.properties.breach_lat };
+  // Last-resort bearing: downstreamDirection returns no u only when the geometry can't give one (which also means no
+  // strip would have been built), so this due-south fallback is effectively unreached. If it ever did fire it would
+  // only reorder the section table (fromKm/toKm), not change any wet-acre total.
   const u = downstreamDirection(dam.geometry, loc).u ?? ([0, -1] as XY);
   const rank = new Map(DEPTH_BANDS.map((b, i) => [b.id, i]));
 
@@ -495,7 +504,7 @@ export function plssProperties(t: PlssTable) {
 
 const csvCell = (v: string | number) => {
   const s = String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
 /** <root>_plss_sections.csv: one row per touched section, downstream order, with the source on every row. */

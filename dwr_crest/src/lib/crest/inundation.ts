@@ -19,12 +19,26 @@
  * with { method: "stage" }.
  */
 
+import { type ExtentSensitivity, extentSensitivity } from "./extent.ts";
 import { floodStrip } from "./floodstrip.ts";
-import { buildOutline, DEM_SERVICE, DEM_ATTRIBUTION, outlineInputs, polygonizeDepth } from "./outline.ts";
+import {
+  buildOutline,
+  DEM_SERVICE,
+  depthCapFt,
+  DEM_ATTRIBUTION,
+  demRequest,
+  fetchDem,
+  outlineInputs,
+  polygonizeDepth,
+  SMALL_RELEASE_LABEL,
+  smallRelease,
+  VOLUME_TARGET_RATIO,
+} from "./outline.ts";
+import { buildRoutedFloodReach, type ReachRound, reachStatus } from "./reach.ts";
 import { buildRoutedFlood, type RoutedFloodOptions, type RoutedFloodResult } from "./routed-flood.ts";
 import type { Analysis, DamRecord } from "./types.ts";
 
-import type { DemGrid, OutlineCache, OutlineStats, RoutedSummary } from "./outline.ts";
+import type { DemGrid, DemRequest, OutlineCache, OutlineStats, ReachSummary, RoutedSummary } from "./outline.ts";
 
 const ACRE_M2 = 4046.8564224;
 
@@ -40,6 +54,58 @@ export const ROUTED_METHOD = "spread" as const;
  * large dams are run. See [[crest-fast-inundation-method]].
  */
 export const GATE_VOLUME_ACFT = 500;
+
+/**
+ * Plausible band for water laid down ÷ water released. A moving flood's max-depth envelope holds more than the release
+ * (the LISFLOOD envelopes on the baseline run 3.6–4.4×), so the band is set around them; outside it the desk warns.
+ */
+export const VOLUME_RATIO_BAND = { lo: 2, hi: 6 } as const;
+
+export type VolumeCheck = {
+  laidAcFt: number;
+  releasedAcFt: number;
+  ratio: number;
+  warn: boolean;
+  text: string;
+  /** SMALL_RELEASE_LABEL ("volume-limited, run the Runner") when the release is under SMALL_RELEASE_ACFT, else null. */
+  label: string | null;
+};
+
+/**
+ * Volume laid down vs released, with a warning outside VOLUME_RATIO_BAND. null when either is unknown. `rawLaidAcFt`
+ * is what the outline laid before the volume soft limit lowered it (outline.ts VolumeLimit): the text says the layer
+ * was limited. Amber (warn) outside the band or on a release under SMALL_RELEASE_ACFT; a limited layer back inside the
+ * band is neutral.
+ */
+export function volumeCheck(
+  laidAcFt: number | null | undefined,
+  releasedAcFt: number | null | undefined,
+  opts: { rawLaidAcFt?: number | null } = {},
+): VolumeCheck | null {
+  if (typeof laidAcFt !== "number" || typeof releasedAcFt !== "number") return null;
+  if (!Number.isFinite(laidAcFt) || !Number.isFinite(releasedAcFt) || releasedAcFt <= 0) return null;
+  const ratio = laidAcFt / releasedAcFt;
+  const { lo, hi } = VOLUME_RATIO_BAND;
+  const raw = typeof opts.rawLaidAcFt === "number" && Number.isFinite(opts.rawLaidAcFt) ? opts.rawLaidAcFt / releasedAcFt : null;
+  const limited = raw != null && raw > hi;
+  const outside = ratio < lo || ratio > hi;
+  const small = smallRelease(releasedAcFt);
+  // Amber outside the band and on releases under SMALL_RELEASE_ACFT; a volume-limited layer that ends up inside the
+  // band (about VOLUME_TARGET_RATIO ×) reads neutral (Nick, 2026-11-03 22:43 CST).
+  const warn = outside || small;
+  const n = (x: number) => (x < 10 ? x.toFixed(1) : Math.round(x).toLocaleString("en-US"));
+  const label = small ? SMALL_RELEASE_LABEL : null;
+  const base = `Volume: ${n(laidAcFt)} ac-ft laid down for ${n(releasedAcFt)} ac-ft released (${ratio.toFixed(1)}×).`;
+  const text = limited
+    ? `${base} Volume-limited: as first laid it held ${n(opts.rawLaidAcFt!)} ac-ft (${raw.toFixed(1)}×, above ${hi}×), so its water surface was lowered to about ${VOLUME_TARGET_RATIO}×` +
+      (outside ? `, but it still lies outside the ${lo}–${hi}× band. Check against a model run.` : `, inside the ${lo}–${hi}× band.`)
+    : !outside
+      ? `${base} Inside the ${lo}–${hi}× a moving flood's max-depth envelope usually holds.`
+      : ratio > hi
+        ? `${base} Above ${hi}×: the layer holds far more water than the breach releases, so its extent and depths are likely too big. Check against a model run.`
+        : `${base} Below ${lo}×: the layer holds less water than a moving flood's envelope usually does, so its extent and depths may be too small. Check against a model run.`;
+  return { laidAcFt, releasedAcFt, ratio, warn, text, label };
+}
 
 export type LayerChoice = {
   /** The layer the gate picks for this dam. */
@@ -87,9 +153,10 @@ function routedCache(
   g: DemGrid,
   routed: Extract<RoutedFloodResult, { ok: true }>,
   fingerprint: string,
+  reach?: ReachSummary,
 ): OutlineCache {
   const common = floodStrip(dam, result).strip!.properties;
-  const poly = polygonizeDepth(g, routed.depthFt, { common, label: ROUTED_LABEL, title: `${common.dam_id} routed terrain flood` });
+  const poly = polygonizeDepth(g, routed.depthFt, { common, label: ROUTED_LABEL, title: `${common.dam_id} routed terrain flood`, capFt: depthCapFt(dam.heightFt) });
   const rings = poly.outline.features.reduce(
     (s, f) => s + (f.geometry.type === "Polygon" ? f.geometry.coordinates.length : f.geometry.coordinates.reduce((t, p) => t + p.length, 0)),
     0,
@@ -113,6 +180,8 @@ function routedCache(
     rings,
     droppedPatches: null,
     filledHoles: null,
+    ...(poly.deepCells ? { deepCells: poly.deepCells } : {}),
+    extent: { ...extentSensitivity(g, routed.depthFt), basis: "routed-layer", stoppedInBasin: routed.stats.stoppedInBasin, volumeRatio: routed.stats.volumeRatio },
   };
   const r: RoutedSummary = {
     floodedAc: routed.stats.floodedAc,
@@ -128,6 +197,13 @@ function routedCache(
     volumeRatio: routed.stats.volumeRatio,
     method: routed.method,
     reachedEdge: routed.stats.reachedEdge,
+    exhaustedStretches: routed.stats.exhaustedStretches,
+    cappedStretches: routed.stats.cappedStretches,
+    unpouredAcFt: routed.stats.unpouredAcFt,
+    travellingAcFt: routed.stats.travellingAcFt,
+    wetEndKm: routed.stats.wetEndKm,
+    stoppedInBasin: routed.stats.stoppedInBasin,
+    ...(reach ? { reach } : {}),
     notes: routed.notes,
   };
   return { fingerprint, builtAt: new Date().toISOString(), source: DEM_SERVICE, attribution: DEM_ATTRIBUTION, stats, outline: poly.outline, layer: "routed", routed: r };
@@ -167,5 +243,86 @@ export async function buildInundation(
 
   const built = await buildOutline(dam, result, g, { yieldFn: opts.yieldFn });
   if (!built.ok) return { ok: false, reason: built.reason };
-  return { ok: true, layer: "outline", choice, cache: built.cache, fellBackToOutline: false };
+  const extent = await probeExtent(dam, result, g, opts);
+  const cache = extent ? { ...built.cache, stats: { ...built.cache.stats, extent } } : built.cache;
+  return { ok: true, layer: "outline", choice, cache, fellBackToOutline: false };
+}
+
+/**
+ * The triage's terrain confidence for a dam whose layer is the terrain outline (triage.ts). The extent check was fit
+ * on the routed volume spread, which follows the water and holds the released volume; the outline's bathtub footprint
+ * does not, so its own fringe says little about the terrain. So a spread is built on the same terrain as a probe, its
+ * edge sensitivity measured, and the spread itself thrown away: the outline stays the layer. null when the probe
+ * cannot be built (the triage then reads the dam as uncertain).
+ */
+export async function probeExtent(dam: DamRecord, result: Analysis, g: DemGrid, opts: RoutedFloodOptions = {}): Promise<ExtentSensitivity | null> {
+  try {
+    const probe = await buildRoutedFlood(dam, result, g, { ...opts, method: ROUTED_METHOD });
+    if (!probe.ok) return null;
+    return { ...extentSensitivity(g, probe.depthFt), basis: "routed-probe",
+      stoppedInBasin: probe.stats.stoppedInBasin,
+      volumeRatio: probe.stats.volumeRatio,
+      reachedEdge: probe.stats.reachedEdge && probe.stats.travellingAcFt > 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export type InundationReachOptions = {
+  yieldFn?: () => Promise<void>;
+  /** Progress lines for the desk ("Fetching the 3DEP terrain…", "growing the terrain 2.2 km downstream…"). */
+  onStatus?: (text: string) => void;
+  /** The terrain fetch (fetchDem by default; tests pass their own). */
+  fetch?: (req: DemRequest) => Promise<DemGrid>;
+  /** Extension rounds allowed for the routed flood (reach.ts REACH_MAX_ROUNDS by default; 0 builds once). */
+  maxRounds?: number;
+};
+
+/**
+ * Fetch the terrain and build the inundation layer the gate picks, growing the terrain downstream on demand when the
+ * layer is the routed flood (reach.ts). This is what the desk's build button runs: the terrain outline gets the one
+ * corridor box it always got; the routed flood gets the box grown while the routed wave still reaches its edge with
+ * water to carry, and its summary says how the reach ended (RoutedSummary.reach).
+ */
+export async function buildInundationReach(dam: DamRecord, result: Analysis, opts: InundationReachOptions = {}): Promise<InundationResult> {
+  const choice = chooseInundationLayer(result);
+  const io = outlineInputs(dam, result);
+  if (!io.ok) return { ok: false, reason: io.reason };
+  const fetchFn = opts.fetch ?? fetchDem;
+  if (choice.layer === "routed") {
+    const rb = await buildRoutedFloodReach(dam, result, {
+      inputs: io.inputs,
+      method: ROUTED_METHOD,
+      yieldFn: opts.yieldFn,
+      fetch: fetchFn,
+      maxRounds: opts.maxRounds,
+      onRound: (r: ReachRound) => opts.onStatus?.(reachStatus(r)),
+    });
+    if (rb.routed.ok)
+      return {
+        ok: true,
+        layer: "routed",
+        choice,
+        cache: routedCache(dam, result, rb.grid, rb.routed, io.inputs.fingerprint, rb.reach),
+        routed: rb.routed,
+        fellBackToOutline: false,
+      };
+    // Routed was picked but could not be built; fall back to the outline on the terrain fetched so the desk still gets a layer.
+    opts.onStatus?.("Building the terrain outline instead…");
+    const built = await buildOutline(dam, result, rb.grid, { yieldFn: opts.yieldFn });
+    if (!built.ok) return { ok: false, reason: `${rb.routed.reason} Outline fallback also failed: ${built.reason}` };
+    return {
+      ok: true,
+      layer: "outline",
+      choice: { ...choice, reason: `${choice.reason} (Routed could not be built: ${rb.routed.reason} Fell back to the outline.)` },
+      cache: built.cache,
+      fellBackToOutline: true,
+    };
+  }
+  const req = demRequest(io.inputs);
+  opts.onStatus?.(`Fetching the 3DEP terrain (${req.width} × ${req.height} cells at ${Math.round(req.cellM)} m)…`);
+  const grid = await fetchFn(req);
+  opts.onStatus?.("Building the inundation layer on the terrain…");
+  return buildInundation(dam, result, grid, { yieldFn: opts.yieldFn });
 }
