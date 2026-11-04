@@ -25,8 +25,10 @@ SERVERS = [
 VECTOR_SOURCES = [
     {"layer": "dams", "name": "NID dams",
      "url": "https://geospatial.sec.usace.army.mil/dls/rest/services/NID/National_Inventory_of_Dams_Public_Service/FeatureServer/0"},
-    {"layer": "flowlines", "name": "NHD flowlines",
-     "url": "https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/6"},
+    # 2026-11-03: the suite's current stream source is USGS 3DHP (hydro3dhp.FLOWLINE_URL), as
+    # the Hazard downloads; the features get the NHD-style fields (core/offline.py)
+    {"layer": "flowlines", "name": "3DHP flowlines",
+     "url": "https://hydro.nationalmap.gov/arcgis/rest/services/3DHP_all/MapServer/50"},
     {"layer": "waterbodies", "name": "NHD waterbodies",
      "url": "https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/12"},
     {"layer": "roads", "name": "ND GIS Hub roads",

@@ -126,7 +126,7 @@ def _ftype(v):
 
 
 def trace(lines, start, tol, max_len, search):
-    """Downstream path through flowlines digitised in flow direction (NHD).
+    """Downstream path through flowlines digitised in flow direction (3DHP / NHD).
     lines: [{"pts": [(x, y)...], "name": str, "ftype": code}]. Starts on the
     line closest to `start` (within `search`), at the point closest to it.
     Returns (pts, [names], note)."""

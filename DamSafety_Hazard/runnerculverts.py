@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""v2.10 (dam suite item 8), extended in 2.14: culvert / bridge lines for ND Dam Breach Runner.
+"""v2.10 (dam suite item 8), extended in 2.14: culvert / bridge lines for DamSafety Runner.
 
 Bare-earth LiDAR shows a road or rail embankment as a wall across the stream;
 the Runner's "Culverts, bridges and notches" layer (lines, UPSTREAM END FIRST,
@@ -30,7 +30,7 @@ Placement, per structure point P (all in EPSG:5070 metres):
     lengthened for skew);
  3. otherwise the structure is listed as not placed, with the reason.
 The line follows the stream through that point, upstream end first: the
-stream's digitised direction is taken as the flow direction (NHD), or the
+stream's digitised direction is taken as the flow direction (3DHP / NHD), or the
 reverse when STREAM_REVERSED is set. Its length along the stream is the
 inventory's barrel length + 2 x MARGIN_M when the record has one (NDDOT; the
 barrel already runs toe to toe), else (embankment top width + 2 x MARGIN_M) /
@@ -42,7 +42,7 @@ USE_NBI_WIDTH is set, else the engineer's ROAD_WIDTH_M / RAIL_WIDTH_M. MARGIN_M
 stands for the side slopes. All of these are SCREENING PARAMETERS chosen by the
 engineer; the defaults are placeholders, not standards.
 
-Fields (the names ND Dam Breach Runner matches: core/structures.py and
+Fields (the names DamSafety Runner matches: core/structures.py and
 algorithms.STRUCT_FIELD_SYNONYMS - kind, span_ft, rise_ft, barrels, shape,
 invert_up, invert_dn, name; units feet):
   kind       culvert / bridge / notch (NBI item 43B = 19 and NDDOT design "Culvert"
@@ -124,7 +124,7 @@ DEFAULTS = {"search_m": 150.0,          # structure point to the stream / road c
             "margin_m": 10.0,           # added on EACH side for the side slopes
             "use_nbi_width": True,      # NBI deck / roadway width instead of road_width_m
             "allow_no_embankment": False,
-            "stream_reversed": False,   # streams digitised upstream (not NHD)
+            "stream_reversed": False,   # streams digitised upstream (not 3DHP / NHD)
             "dedupe_m": 30.0,           # records placed this close together = one crossing
             "min_angle_deg": 30.0,
             "pass_elevations": True}    # 2.14: NDDOT end elevations written as the inverts
@@ -822,7 +822,7 @@ def place(records, streams, roads=(), rails=(), params=None):
         stream = S.items[k]
         pts = [tuple(p) for p in stream["parts"][pi]]
         ch = _chainage(pts, si, t)
-        direction = "as digitised (NHD: downstream)"
+        direction = "as digitised (3DHP / NHD: downstream)"
         if P["stream_reversed"]:
             total = G.line_length(pts)
             pts = pts[::-1]
@@ -1043,7 +1043,7 @@ def write(out_path, placed, not_placed, params=None, sources=None):
     w = G.GpkgWriter(out_path)
     try:
         lyr = w.layer(LAYER, "LINESTRING", FIELDS,
-                      description="Culverts, bridges and notches for ND Dam Breach Runner "
+                      description="Culverts, bridges and notches for DamSafety Runner "
                                   "(lines, upstream end first)")
         for g, a in placed:
             lyr.add(g, a)
@@ -1061,7 +1061,7 @@ def write(out_path, placed, not_placed, params=None, sources=None):
                      ("not_placed", str(len(not_placed))),
                      ("parameters", json.dumps(P, sort_keys=True)),
                      ("sources", json.dumps(sources or {}, sort_keys=True)),
-                     ("for", "ND Dam Breach Runner: 'Culverts, bridges and notches' (lines, "
+                     ("for", "DamSafety Runner: 'Culverts, bridges and notches' (lines, "
                              "upstream end first); fields kind, span_ft, rise_ft, barrels, shape, "
                              "invert_up, invert_dn, name are matched by name"),
                      ("inverts", "invert_up / invert_dn (ft) are NDDOT end elevations as written "

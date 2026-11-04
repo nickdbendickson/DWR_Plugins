@@ -39,7 +39,8 @@ Layers written (all EPSG:5070):
                     as linear.analyze_rail finds them (same railroad, on the line or the
                     same subdivision first, within RAIL_CROSSING_SEARCH_MI), level
                     (linear.nd_rail_class).
-  flowlines         USGS NHD flowlines as the pack holds them (name and type only).
+  flowlines         USGS 3DHP flowlines as the pack holds them (NHD-style name and type; an
+                    older pack built from the NHD service holds NHD flowlines).
   lifelines         5.2.2 lifeline facilities (ND GIS Hub / EIA / HIFLD layers in the
                     source, OpenStreetMap) as points with category (and kind = category,
                     the field name Screening's tool 8 looks for); care facilities and
@@ -786,7 +787,7 @@ def export(out_path, source, extent=None, structures="auto", mobile_rules=None, 
             lyr = w.layer("structures", gtype, STRUCTURE_FIELDS,
                           description="{} with ND Dam Hazard habitability".format(ds))
             pts = w.layer("structure_points", "POINT", STRUCTURE_FIELDS,
-                          description="structures as points (receptors for ND Dam Breach Runner)")
+                          description="structures as points (receptors for DamSafety Runner)")
             no_geom = 0
             kept = []
             for g, a in rows:
@@ -875,7 +876,7 @@ def export(out_path, source, extent=None, structures="auto", mobile_rules=None, 
             feats = get("NHD_flowlines")
             fields, rows = passthrough(feats, extra=[("source", "text")])
             lyr = w.layer("flowlines", "MULTILINESTRING", fields,
-                          description="USGS NHD flowlines (digitised in flow direction)")
+                          description="USGS 3DHP flowlines (NHD in older packs; digitised in flow direction)")
             for g, a in rows:
                 a["source"] = "NHD_flowlines"
                 lyr.add(g, a)

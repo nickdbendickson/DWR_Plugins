@@ -233,7 +233,13 @@ class SettingsGrid(QWidget):
                     changed = typed is not None and not DS._same(typed, s.default, s)
                     num = QTableWidgetItem(str(i + 1))
                     _set_flags(num, FLAGS_FIXED)
-                    label = QTableWidgetItem(s.label + (YOUR_MARK if s.your else ""))
+                    # 11/03/2026 (QGIS Dev): one parameter in several tools read as duplicate rows -
+                    # each such row says which tool it belongs to
+                    same = [o for o in rows if o.label == s.label]
+                    text = s.label
+                    if len(same) > 1:
+                        text = "{} \u2014 {}".format(s.label, s.tool_title or s.tool)
+                    label = QTableWidgetItem(text + (YOUR_MARK if s.your else ""))
                     label.setToolTip("{}\n{} - {} ({})".format(s.label, s.tool_title or s.tool, s.key,
                                                              s.help or "").strip())
                     _set_flags(label, FLAGS_FIXED)

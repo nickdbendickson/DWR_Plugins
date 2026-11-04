@@ -93,7 +93,8 @@ def param_defs(alg):
         if _get(p, "isDestination", False):
             continue
         d = {"name": _get(p, "name", ""), "description": _get(p, "description", "") or "",
-             "type": _type_name(p), "default": _get(p, "defaultValue", None), "hidden": _hidden(p)}
+             "type": _type_name(p), "default": _get(p, "defaultValue", None), "hidden": _hidden(p),
+             "help": _get(p, "help", "") or ""}         # 2026-11-03: the detail moved out of labels
         opts = _get(p, "options", None)
         d["options"] = list(opts) if opts else []
         if DS.kind_of(d["type"]) == "number":

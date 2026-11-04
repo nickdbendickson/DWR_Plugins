@@ -328,7 +328,7 @@ class RunBreachSim(QgsProcessingAlgorithm):
                 "widened, if it reaches the terrain edge a larger clip is loaded (from 3DEP or the "
                 "local folder when selected); if the flood is still spreading at the end, the run "
                 "is extended.\n"
-                "ROAD CROSSINGS: with stream lines (NHD flowlines) supplied, short road fills that "
+                "ROAD CROSSINGS: with stream lines (3DHP flowlines) supplied, short road fills that "
                 "block a stream are cut at the model resolution (culvert gap); DWR dam lines are "
                 "never cut.\n"
                 "CASCADE: other DWR dams reached by the flood are listed with the depth over their "
@@ -386,7 +386,7 @@ class RunBreachSim(QgsProcessingAlgorithm):
         cm.distance_params(P, "CORRW_FT", "CORRW", "Starting corridor half-width (ft)", 5280.0, min_ft=150.0)
         cm.distance_params(P, "RMAX_FT", "RMAX", "Largest terrain clip half-width (ft)", 42240.0, min_ft=1500.0)
         P(QgsProcessingParameterFeatureSource("STREAMS", "Stream lines for road-crossing cuts "
-                                              "(NHD flowlines, optional)", [SRC_LINE],
+                                              "(3DHP flowlines, optional)", [SRC_LINE],
                                               optional=True))
         P(QgsProcessingParameterFeatureSource("ROADCUT", "Only cut where these roads cross (optional)",
                                               [SRC_LINE], optional=True))

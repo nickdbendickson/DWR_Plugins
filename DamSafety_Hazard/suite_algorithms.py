@@ -2,7 +2,7 @@
 """v2.10: Processing algorithms of the dam-suite exports (for the "ndhazard"
 provider; the lead registers them in processing_provider.Provider.loadAlgorithms):
 
-  ndhazard:runnerculverts  culvert / bridge lines for ND Dam Breach Runner
+  ndhazard:runnerculverts  culvert / bridge lines for DamSafety Runner
                            (runnerculverts.py, dam suite item 8)
   ndhazard:suiteexport     one GeoPackage in ND Dam Breach Screening's data
                            package schema (suiteexport.py, dam suite item 12)
@@ -26,6 +26,44 @@ from qgis.core import (
 from .compat import _first
 
 FT_M = 0.3048
+
+
+# 2026-11-03 GUI fix: a sensible top for the search distances (ft) and their long notes
+_FT_MAX = {"SEARCH_FT": 3280.8, "OSM_SEARCH_FT": 3280.8}
+_FT_HELP = {"SEARCH_FT": "Search distance from a structure's point to a stream / road "
+            "crossing (ft; YOUR value).",
+            "OSM_SEARCH_FT": "OpenStreetMap culverts / fords: search distance to a stream / road "
+            "or rail crossing (ft; YOUR value; the point is on the culvert itself). Saved as a "
+            "default in the Suite settings, so it is kept when the dialog is reopened."}
+
+
+def _help_of(alg, name, text):
+    """`_help` on the tool's parameter `name` (nothing on a test double without it)."""
+    try:
+        _help(alg.parameterDefinition(name), text)
+    except Exception:                                            # noqa
+        pass
+
+
+def _decimals(param, n):
+    """Show `n` decimals in the Processing dialog's spin box (widget metadata, QGIS 3.x / 4)."""
+    try:
+        md = dict(param.metadata() or {})
+        ww = dict(md.get("widget_wrapper") or {})
+        ww["decimals"] = n
+        md["widget_wrapper"] = ww
+        param.setMetadata(md)
+    except Exception:                                            # noqa
+        pass
+
+
+def _help(param, text):
+    """The long explanation in the parameter's help / tooltip (QGIS >= 3.16)."""
+    try:
+        if param is not None:
+            param.setHelp(text)
+    except Exception:                                            # noqa
+        pass
 
 
 def _hidden(param):
@@ -244,17 +282,17 @@ def parse_extent(text):
 
 
 class RunnerCulvertsAlgorithm(_SuiteBase):
-    """Culvert / bridge lines for ND Dam Breach Runner (runnerculverts.py)."""
+    """Culvert / bridge lines for DamSafety Runner (runnerculverts.py)."""
 
     def name(self):
         return "runnerculverts"
 
     def displayName(self):
-        return "Culvert and bridge lines for ND Dam Breach Runner"
+        return "Culvert and bridge lines for DamSafety Runner"
 
     def shortHelpString(self):
         return (
-            "Writes the lines ND Dam Breach Runner opens through road and rail embankments "
+            "Writes the lines DamSafety Runner opens through road and rail embankments "
             "('Culverts, bridges and notches': lines, upstream end first; fields kind, span_ft, "
             "rise_ft, barrels, shape, invert_up, invert_dn, name, matched by name) from the "
             "National Bridge Inventory, OpenStreetMap crossings and, when given, NDDOT's bridge "
@@ -273,7 +311,7 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
             "left and right are as seen looking from the lower station number to the higher "
             "(that direction is read from the neighbouring pipes on the route, else HWY_DIR), "
             "and the side the stream comes from is the inlet (an inlet below the outlet is "
-            "noted). Their datum is not stated, so ND Dam Breach Runner compares them with "
+            "noted). Their datum is not stated, so DamSafety Runner compares them with "
             "the LiDAR bed before using "
             "them (its 'inventory elevation tolerance', 3 ft to start: within it they are used, "
             "both ends off alike is corrected as a datum shift, otherwise the LiDAR inverts are "
@@ -320,38 +358,46 @@ class RunnerCulvertsAlgorithm(_SuiteBase):
         P(QgsProcessingParameterVectorLayer("STREAMS", "Streams (3DHP flowlines or a "
                                             "centerline)", [SRC_LINE], optional=True))
         P(QgsProcessingParameterBoolean("STREAM_REVERSED", "Stream lines are digitised "
-                                        "UPSTREAM (not NHD): reverse them",
+                                        "UPSTREAM (not 3DHP): reverse them",
                                         defaultValue=D["stream_reversed"]))
         P(QgsProcessingParameterVectorLayer("ROADS", "Road lines", [SRC_LINE], optional=True))
         P(QgsProcessingParameterVectorLayer("RAIL", "Rail lines", [SRC_LINE], optional=True))
         self._add_source_params()
         # 2.13: the engineer sees feet; the metre parameters stay, hidden, for saved models
         for ft_key, m_key, label, dkey, lo in (
-                ("SEARCH_FT", "SEARCH_M", "Search distance from a structure's point to a stream / "
-                 "road crossing (ft; YOUR value)", "search_m", 3.0),
-                ("OSM_SEARCH_FT", "OSM_SEARCH_M", "OpenStreetMap culverts / fords: search distance "
-                 "to a stream / road or rail crossing (ft; YOUR value; the point is on the "
-                 "culvert itself)", "osm_search_m", 3.0),
+                ("SEARCH_FT", "SEARCH_M", "Search distance to a stream / road crossing "
+                 "(ft; YOUR value)", "search_m", 3.0),
+                ("OSM_SEARCH_FT", "OSM_SEARCH_M", "OpenStreetMap culvert search distance "
+                 "(ft; YOUR value)", "osm_search_m", 3.0),
                 ("ROAD_WIDTH_FT", "ROAD_WIDTH_M", "Road embankment top width when the record has "
                  "none (ft; YOUR value)", "road_width_m", 0.0),
                 ("RAIL_WIDTH_FT", "RAIL_WIDTH_M", "Rail embankment top width (ft; YOUR value)",
                  "rail_width_m", 0.0),
                 ("MARGIN_FT", "MARGIN_M", "Added on each side for the side slopes (ft; YOUR value)",
                  "margin_m", 0.0)):
-            P(QgsProcessingParameterNumber(ft_key, label, type=NUM_DOUBLE,
-                                           defaultValue=round(D[dkey] / FT_M, 1), minValue=lo))
+            num = QgsProcessingParameterNumber(ft_key, label, type=NUM_DOUBLE,
+                                               defaultValue=round(D[dkey] / FT_M, 1), minValue=lo,
+                                               maxValue=_FT_MAX.get(ft_key, 1e9))
+            # 2026-11-03 GUI fix: feet to 0.1 ft, not 6 decimals; the detail goes to the help
+            _decimals(num, 1)
+            if ft_key in _FT_HELP:
+                _help(num, _FT_HELP[ft_key])
+            P(num)
             P(_hidden(QgsProcessingParameterNumber(m_key, "(before 2.13) {} (m)".format(label.split("(")[0].strip()),
                                                    type=NUM_DOUBLE, optional=True)))
-        P(QgsProcessingParameterBoolean("USE_NBI_WIDTH", "Use the NBI deck / roadway width "
-                                        "when the record has one",
+        P(QgsProcessingParameterBoolean("USE_NBI_WIDTH", "Use the NBI deck / roadway width",
                                         defaultValue=D["use_nbi_width"]))
-        P(QgsProcessingParameterBoolean("ALLOW_NO_EMBANKMENT", "Place a structure on the "
-                                        "stream alone when no road / rail line crosses it "
-                                        "nearby", defaultValue=D["allow_no_embankment"]))
-        P(QgsProcessingParameterBoolean("PASS_ELEVATIONS", "Write the NDDOT end elevations as "
-                                        "the inverts, in feet - the Runner checks them against "
-                                        "the LiDAR bed before using them; off: the Runner reads "
-                                        "the DEM", defaultValue=D["pass_elevations"]))
+        _help_of(self, "USE_NBI_WIDTH",
+              "Use the NBI deck / roadway width when the record has one.")
+        P(QgsProcessingParameterBoolean("ALLOW_NO_EMBANKMENT", "Place structures with no road / "
+                                        "rail crossing", defaultValue=D["allow_no_embankment"]))
+        _help_of(self, "ALLOW_NO_EMBANKMENT",
+              "Place a structure on the stream alone when no road / rail line crosses it nearby.")
+        P(QgsProcessingParameterBoolean("PASS_ELEVATIONS", "Write the NDDOT end elevations "
+                                        "as the inverts", defaultValue=D["pass_elevations"]))
+        _help_of(self, "PASS_ELEVATIONS",
+              "Write the NDDOT end elevations as the inverts, in feet - the Runner checks them "
+              "against the LiDAR bed before using them; off: the Runner reads the DEM.")
         self._add_output("OUTPUT", "Culvert lines (GeoPackage)")
         self.addOutput(QgsProcessingOutputFile("CSV", "Structures not placed (CSV)"))
         self.addOutput(QgsProcessingOutputString("SUMMARY", "Summary"))
@@ -436,7 +482,7 @@ class SuiteExportAlgorithm(_SuiteBase):
             "pack or a folder of its downloads: structures (habitable 1/0, mobile 1/0, occ_cls, "
             "prim_occ - ND Dam Hazard's own habitability and manufactured-home rules on each "
             "structure's attributes; 'Unverified' is written as habitable = 1), "
-            "structure_points (the same as points, for ND Dam Breach Runner's receptors), "
+            "structure_points (the same as points, for DamSafety Runner's receptors), "
             "roads (aadt, road_class, level - AADT joined the way ND Dam Hazard's "
             "classification joins it; unknown AADT stays empty, never 0), railroads "
             "(passenger, trains_day, level), flowlines, lifelines (category) and dams (NID).\n"
