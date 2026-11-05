@@ -37,6 +37,11 @@ DWR_NAMES = ["NSI_structures", "NDGISHUB_address_points", "USA_Structures", "NID
              "lifeline_nd_assisted_living", "lifeline_eia_power_plants", "NBI_bridges",
              "NHD_flowlines", "NHD_waterbodies", "OSM_lifelines", "OSM_crossings",
              "OSM_campgrounds", "OSM_trailer_parks", "OSM_places"]
+# packbuild 1.1 (suite 1.18.7): the layers both suites hold the same way, appended to each list
+SHARED_NAMES = ["ABI_dams", "ABI_small_barriers_surveyed", "ABI_road_crossings_unsurveyed",
+                "USGS_stream_crossings", "NDDEQ_landfills",
+                "NDDEQ_source_water_protection_community",
+                "NDDEQ_source_water_protection_noncommunity"]
 
 
 @case
@@ -58,7 +63,7 @@ def test_the_shims_are_the_shared_modules():
 @case
 def test_dwr_layer_list_is_unchanged():
     names = [t[0] for t in E.datasets()]
-    assert names == DWR_NAMES, names
+    assert names == DWR_NAMES + SHARED_NAMES, names
     assert not [n for n in names if n.startswith(("3DHP_", "SARP_"))], names
     # the old group names still pick (no ND aliases here: nhd stays nhd)
     table = E.datasets()
@@ -68,8 +73,7 @@ def test_dwr_layer_list_is_unchanged():
 
 @case
 def test_nd_layer_list_is_there_too():
-    """The ND list reads the ND constants (SARP_*, 3DHP): with a stand-in that has them it
-    builds; the next merge step gives both suites one list."""
+    """The ND list reads the ND constants (3DHP): with a stand-in that has them it builds."""
     class NDC(object):
         def __getattr__(self, k):
             return getattr(C, k) if hasattr(C, k) else "https://example.org/{}".format(k)
@@ -82,16 +86,86 @@ def test_nd_layer_list_is_there_too():
         assert E._pick("nhd", E.datasets()) == {"hydro"}       # the ND group aliases
     finally:
         E.C.__dict__["_mod"] = real
-    for n in ("3DHP_flowlines", "3DHP_waterbodies", "SARP_dams", "SARP_surveyed_crossings",
-              "SARP_unsurveyed_crossings", "USGS_stream_crossings"):
+    for n in ["3DHP_flowlines", "3DHP_waterbodies"] + SHARED_NAMES:
         assert n in nd, (n, nd)
+    assert not [n for n in nd if n.startswith("SARP_")], nd
+
+
+@case
+def test_one_barrier_list_for_both_suites():
+    """packbuild 1.1: the barrier and ND DEQ layers are the same entries in both lists; the old
+    ND names (SARP_*) answer to the ABI_* layers in the pack readers and in --only."""
+    from DamSafety_Data.damsuite import hydro3dhp as H
+    from DamSafety_Data.damsuite import abi as A
+    shared = E.shared_datasets()
+    assert [t[0] for t in shared] == SHARED_NAMES
+    dwr = {t[0]: t for t in E.datasets(layers="dwr")}
+    for t in shared:
+        assert dwr[t[0]] == t
+    kinds = {t[0]: (t[2], t[3]) for t in shared}
+    assert kinds["ABI_dams"] == ("barriers", "abi")
+    assert kinds["NDDEQ_landfills"] == ("nddeq", "arcgis")
+    assert A.OLD_NAMES == {"SARP_dams": "ABI_dams",
+                           "SARP_surveyed_crossings": "ABI_small_barriers_surveyed",
+                           "SARP_unsurveyed_crossings": "ABI_road_crossings_unsurveyed"}
+    for old, new in A.OLD_NAMES.items():
+        assert H.real_name(old, {new}) == new and H.real_name(new, {old}) == old
+    assert H.real_name("3DHP_flowlines", {"NHD_flowlines"}) == "NHD_flowlines"
+    # --only with an old name (the ND list's aliases)
+    assert E._GROUP_ALIASES["SARP_dams"] == "ABI_dams"
+    assert E._signature("abi", {"mode": "zip", "kind": "road_crossings"}, None) == \
+        "abi|zip|road_crossings"
+
+
+@case
+def test_fetch_abi_writes_points():
+    """kind "abi": the public API CSV through the engine's resumable download."""
+    import tempfile
+    from DamSafety_Data import offline_pack as OP
+    d = tempfile.mkdtemp()
+    w = OP.PackWriter(os.path.join(d, "work.sqlite"), (-104.1, 45.9, -96.5, 49.1))
+    got = []
+
+    def fake_dl(url, dest, max_age=None, refresh=False, beat=None):
+        got.append(url)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w") as f:
+            if url.endswith("/metadata"):
+                f.write('{"data_version": "4.4.0"}')
+            else:
+                f.write('"sarpid","lat","lon","hasnetwork","removed","huc8"\n'
+                        '"a1","46.8","-100.8","true","no","09030001"\n'
+                        '"a2","46.8","-100.7","false","yes","09030001"\n'
+                        '"a3","40.0","-90.0","true","no","07"\n')
+        return dest, True
+    real = E._download_resume
+    E._download_resume = fake_dl
+
+    class Ctx(object):
+        writer, refresh = w, False
+
+        def log(self, m):
+            pass
+
+        def sub(self, p, m=""):
+            pass
+    try:
+        w.begin("ABI_dams", "x", "u", resume=False, signature="abi|api|dams")
+        note = E.fetch_abi(Ctx(), (-104.1, 45.9, -96.5, 49.1), {"mode": "api", "kind": "dams"})
+        n = w.finish(note)
+    finally:
+        E._download_resume = real
+        w.close()
+    assert n == 2, n
+    assert "state?id=ND" in got[0] and got[1].endswith("/dams/metadata"), got
+    assert "data version 4.4.0" in note, note
 
 
 @case
 def test_kinds_the_engine_runs():
     import inspect
     src = inspect.getsource(E._run_one)
-    for kind in ("nsi", "arcgis", "osm", "arcgis_tiled", "sarp_zip", "local_gpkg", "first_of"):
+    for kind in ("nsi", "arcgis", "osm", "arcgis_tiled", "abi", "local_gpkg", "first_of"):
         assert '"{}"'.format(kind) in src, kind
     sig = inspect.signature(E.build).parameters
     for p in ("dwr_folder", "files", "box"):
