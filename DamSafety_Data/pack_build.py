@@ -20,7 +20,8 @@ HPMS_ND_<year> kept next to NDDOT_traffic_counts for comparison; NHD_flowlines /
 filled from USGS 3DHP with NHD-style fields, read area by area (1.5.1: the NHD service fills
 only the areas 3DHP cannot serve, hydro_src says which on every feature); the SARP Aquatic
 Barrier Inventory as ABI_* (public API + national road-crossings download; removed / excluded
-barriers kept and flagged in barrier_status); ND DEQ layers as NDDEQ_* (landfills, source water protection areas). What each
+barriers kept and flagged in barrier_status); 1.5.5: USGS_stream_crossings (USGS Database of
+Stream Crossings, the modelled base of the unsurveyed crossings); ND DEQ layers as NDDEQ_* (landfills, source water protection areas). What each
 layer was built from (file / URL, sha256, data version, terms) is kept in the work folder's
 provenance.json and copied into both manifests.
 
@@ -51,11 +52,22 @@ PACK1 = "nd_offline_pack"
 WORK = "ND_Dam_Suite_Pack_build"
 MARK = "data_updater_build"                  # manifest key: this pack was built here (updatable)
 PROV_NAME = "provenance.json"                # work folder: what each layer was built from
-BUILDER = "DamSafety_Data pack_build 1.5.1"
+BUILDER = "DamSafety_Data pack_build 1.5.5"
 ND_BBOX = OP.ND_BBOX
 DEFAULT_PAD = OP.DEFAULT_PAD_DEG
 
 ND_COUNTIES_URL = "https://ndgishub.nd.gov/arcgis/rest/services/All_GovtBoundaries/MapServer/20"
+# 1.5.5: the USGS Database of Stream Crossings in the United States (Wieferich 2022,
+# doi:10.5066/P9YX6KTB; TIGER 2020 roads x NHD HR flowlines, bridge / culvert type from the 2019
+# NBI) - the modelled base the inventory's unsurveyed road / stream crossings are built on
+USGS_STREAM_CROSSINGS_URL = ("https://services.arcgis.com/v01gqwM5QqNysAAi/ArcGIS/rest/services/"
+                             "stream_crossings/FeatureServer/0")
+# OBJECTID is kept as the row key: some crossings appear more than once under one
+# stream_crossing_id (one row per TIGER road line or structure type), all of them are kept
+USGS_CROSSING_FIELDS = ("OBJECTID,stream_crossing_id,nhdhr_permanent_identifier,"
+                        "nhdhr_gnis_stream_name,tiger2020_linearids,tiger2020_feature_names,"
+                        "nhdhr_reachcode,nhdhr_fdate,tiger2020_mtfcc_feature_class,"
+                        "crossing_type")
 # HIFLD lifeline layers (1.5.0, PR #221): HIFLD Open is published on DataLumos / ICPSR (by the
 # Data Rescue Project, https://portal.datarescueproject.org/) and on hsdl.org. DataLumos
 # needs a (free) ICPSR login and its Terms of Use to download, so the builder cannot fetch them:
@@ -250,6 +262,14 @@ def registry(dwr_folder=None, hifld_folder=None, nlcd_file=None):
                       source="SARP / NACC National Aquatic Barrier Inventory ({})".format(
                           "public API" if spec["mode"] == "api" else
                           "national road-crossings download")))
+    out.append(_e("USGS_stream_crossings", "USGS road / stream crossings (Database of Stream "
+                  "Crossings in the United States)", "barriers", "arcgis",
+                  {"url": USGS_STREAM_CROSSINGS_URL, "fields": USGS_CROSSING_FIELDS,
+                   "precision": 6}, category="aquatic barrier",
+                  source="Wieferich, D.J., 2022, Database of Stream Crossings in the United "
+                         "States: U.S. Geological Survey data release, doi:10.5066/P9YX6KTB "
+                         "(TIGER 2020 roads x NHD High Resolution flowlines; modelled, not "
+                         "field-checked)"))
     local = {}
     if dwr_folder:
         try:
