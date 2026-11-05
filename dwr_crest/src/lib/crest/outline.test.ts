@@ -21,6 +21,7 @@ import {
   findToe,
   outlineAcresNote,
   outlineInputs,
+  extentOf,
   outlineState,
   parseBsq,
   pitsExcludedNote,
@@ -378,5 +379,46 @@ describe("pits and ponds off the channel are not flood storage (Docs & QA on #57
     const n = pitsExcludedNote({ pitsExcluded: { cells: 1234, acFt: 840.4 } });
     assert.match(n!, /At least 840 ac-ft of pit, pond and low-basin storage \(1,234 cells\) is left out/);
     assert.equal(pitsExcludedNote({}), null);
+  });
+});
+
+describe("flood extent line (option 3 of the 2026-11-05 outline mock-up)", () => {
+  it("the ND00199 outline carries one extent line around its bands, inside the DEM box", () => {
+    const e = OUTLINE.extent;
+    assert.ok(e, "extent built");
+    assert.equal(e.properties.kind, "flood_extent");
+    assert.equal(e.geometry.type, "MultiLineString");
+    for (const line of e.geometry.coordinates) {
+      assert.deepEqual(line[0], line[line.length - 1], "closed");
+      for (const [x, y] of line) assert.ok(x >= DEM.bbox[0] - 1e-7 && x <= DEM.bbox[2] + 1e-7 && y >= DEM.bbox[1] - 1e-7 && y <= DEM.bbox[3] + 1e-7);
+    }
+    // The line closes gaps and drops slivers, so it encloses at least most of what the bands cover, never far more.
+    assert.ok(e.properties.area_ac > 0.9 * CACHE.stats.outlineAc && e.properties.area_ac < 1.6 * CACHE.stats.outlineAc, String(e.properties.area_ac));
+    assert.ok(!OUTLINE.features.some((f) => (f.properties as { kind?: string }).kind === "flood_extent"), "kept out of the band features");
+  });
+
+  it("bridges a gap narrower than the closing width and drops an island under EXTENT_MIN_AC", () => {
+    // 10 m cells: two 30 × 30 blocks 4 cells (40 m) apart, plus a 3 × 3 island far off (0.2 ac).
+    const W = 100;
+    const H = 60;
+    const wet = new Uint8Array(W * H);
+    const block = (i0: number, j0: number, n: number) => {
+      for (let j = j0; j < j0 + n; j++) for (let i = i0; i < i0 + n; i++) wet[j * W + i] = 1;
+    };
+    block(5, 15, 30);
+    block(39, 15, 30);
+    block(90, 2, 3);
+    const e = extentOf(wet, W, H, 10, 100, ([x, y]) => [x, y], "test");
+    assert.ok(e);
+    assert.equal(e.geometry.coordinates.length, 1, "one ring: the gap is bridged, the island dropped");
+    assert.equal(extentOf(new Uint8Array(W * H), W, H, 10, 100, ([x, y]) => [x, y], "dry"), null);
+  });
+
+  it("goes out as one more feature in the GeoJSON export", () => {
+    const gj = JSON.parse(exportFloodGeoJson(OUTLINE, null, null));
+    assert.equal(gj.extent, undefined, "not left as a foreign member");
+    const ext = gj.features.filter((f: { properties: { kind?: string } }) => f.properties.kind === "flood_extent");
+    assert.equal(ext.length, 1);
+    assert.equal(gj.features.length, OUTLINE.features.length + 1);
   });
 });

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { MapContainer, TileLayer, LayersControl, useMap } from "react-leaflet";
 import L from "leaflet";
+import { extentLine } from "./extent-layer";
 import "leaflet/dist/leaflet.css";
 import { basemaps } from "@/lib/crest/basemap";
 import type { FloodStrip } from "@/lib/crest/floodstrip";
@@ -58,6 +59,8 @@ function Layers({ overlays, strip, points }: Omit<Props, "fit">) {
           }),
         }),
       );
+    const edge = strip ? extentLine(strip, PANE) : null;
+    if (edge) group.addLayer(edge);
     for (const p of points) {
       const m = L.circleMarker([p.lat, p.lon], {
         radius: p.kind === "receptor" ? 6 : 7,

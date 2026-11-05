@@ -32,7 +32,7 @@ import {
   type ReachSummary,
   TRACE_PAD_M,
 } from "./outline.ts";
-import { buildRoutedFlood, type RoutedFloodFail, type RoutedFloodOptions, type RoutedFloodResult } from "./routed-flood.ts";
+import { buildRoutedFlood, type RoutedFloodFail, type RoutedFloodOptions, type RoutedFloodResult, settleRoutedFlood } from "./routed-flood.ts";
 import type { Centerline } from "./sections.ts";
 import type { Analysis, DamRecord } from "./types.ts";
 
@@ -246,7 +246,9 @@ export async function buildRoutedFloodReach(dam: DamRecord, result: Analysis, op
   onRound?.({ round: 0, stage: "fetch", req, stepKm: 0, travellingAcFt: 0 });
   let grid = await fetchFn(req);
   onRound?.({ round: 0, stage: "build", req, stepKm: 0, travellingAcFt: 0 });
-  let routed = await build(dam, result, grid, { ...rfOpts, inputs });
+  // Rounds are built unsettled (the demand signal doesn't depend on it) and only the round kept is settled, below.
+  const settleSweeps = rfOpts.settleSweeps;
+  let routed = await build(dam, result, grid, { ...rfOpts, inputs, settleSweeps: 0 });
   let rounds = 0;
   let extendedM = 0;
   let stop: ReachStop;
@@ -292,7 +294,7 @@ export async function buildRoutedFloodReach(dam: DamRecord, result: Analysis, op
       break;
     }
     onRound?.({ round: rounds + 1, stage: "build", req: ext.req, stepKm: stepM / 1000, travellingAcFt: d.travellingAcFt });
-    const routed2 = await build(dam, result, grid2, { ...rfOpts, inputs: next });
+    const routed2 = await build(dam, result, grid2, { ...rfOpts, inputs: next, settleSweeps: 0 });
     if (!routed2.ok) {
       // Keep the round that built; say the flood runs further.
       stop = "trace-failed";
@@ -316,6 +318,7 @@ export async function buildRoutedFloodReach(dam: DamRecord, result: Analysis, op
     demCellM: req.cellM,
     demCells: req.width * req.height,
   };
+  if (routed.ok) await settleRoutedFlood(grid, routed, { sweeps: settleSweeps, minDepthM: rfOpts.minDepthM, yieldFn: rfOpts.yieldFn });
   if (routed.ok) {
     const note = reachNote(reach);
     if (note) routed.notes.push(note);

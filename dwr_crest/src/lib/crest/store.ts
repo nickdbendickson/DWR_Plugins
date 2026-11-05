@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
+import { deleteOutline, loadOutlines, outlineSync, withoutOutline } from "./outline-store.ts";
 import { blankDam, SAMPLE_DAMS } from "./samples.ts";
 import type { DamRecord, StepId } from "./types.ts";
 
@@ -15,6 +16,41 @@ type DeskState = {
   addDam: (dam: DamRecord) => void;
   restore: () => void;
 };
+
+/**
+ * localStorage, read lazily, with a full store never thrown into the desk. zustand persist writes on every set(), so a
+ * QuotaExceededError there came out of update() itself and the desk showed it as the build's error (Safari's text,
+ * "The quota has been exceeded."). The heavy inundation layers no longer go here (outline-store.ts); if the light
+ * records still don't fit, the edit stands in this tab and only the save is skipped.
+ */
+export const deskStorage: StateStorage = {
+  getItem: (name) => {
+    try {
+      return globalThis.localStorage?.getItem(name) ?? null;
+    } catch {
+      return null;
+    }
+  },
+  setItem: (name, value) => {
+    try {
+      globalThis.localStorage?.setItem(name, value);
+    } catch (e) {
+      console.warn(`Crest: could not save the desk in this browser (${(e as Error).message}).`);
+    }
+  },
+  removeItem: (name) => {
+    try {
+      globalThis.localStorage?.removeItem(name);
+    } catch {
+      /* nothing to remove */
+    }
+  },
+};
+
+/** What localStorage keeps: the records without their inundation layers (those go to IndexedDB, outline-store.ts). */
+export function persistedDesk(s: Pick<DeskState, "dams" | "activeId" | "step">) {
+  return { dams: s.dams.map(withoutOutline), activeId: s.activeId, step: s.step };
+}
 
 export const useDesk = create<DeskState>()(
   persist(
@@ -44,9 +80,44 @@ export const useDesk = create<DeskState>()(
     // Same key, so the user's other records stay; an untouched old sample (1072.24 / 1044.74) is updated in place.
     // version 2 (full test 2026-10-30): the ND00199 sample's class of record no longer claims "TM11 Significant
     // (DWR-2801 benchmark)"; an unedited old text is updated in place.
-    { name: "crest-desk-v2", skipHydration: true, version: 2, migrate: migrateDesk },
+    // 2026-11-05: the records only (persistedDesk); each dam's inundation layer is kept in IndexedDB (hydrateDesk).
+    {
+      name: "crest-desk-v2",
+      skipHydration: true,
+      version: 2,
+      migrate: migrateDesk,
+      storage: createJSONStorage(() => deskStorage),
+      partialize: (s) => persistedDesk(s) as unknown as DeskState,
+    },
   ),
 );
+
+let hydrating: Promise<void> | null = null;
+
+/**
+ * Load the saved desk: the records from localStorage, then each dam's inundation layer from IndexedDB, and from then
+ * on keep IndexedDB in step with the layers. A layer saved inside the records by an older Crest is kept and moved
+ * across (the next save writes the records without it). Runs once per page.
+ */
+export function hydrateDesk(): Promise<void> {
+  if (hydrating) return hydrating;
+  hydrating = (async () => {
+    await useDesk.persist.rehydrate();
+    const kept = await loadOutlines();
+    const dams = useDesk.getState().dams;
+    const ids = new Set(dams.map((d) => d.id));
+    if (dams.some((d) => !d.outline && kept.has(d.id)))
+      useDesk.setState({ dams: dams.map((d) => (!d.outline && kept.has(d.id) ? { ...d, outline: kept.get(d.id) } : d)) });
+    for (const id of kept.keys()) if (!ids.has(id)) void deleteOutline(id);
+    // Seeded with what IndexedDB already holds, so those layers aren't written straight back.
+    const sync = outlineSync(undefined, new Map([...kept].filter(([id]) => ids.has(id))));
+    sync(useDesk.getState().dams);
+    useDesk.subscribe((s, prev) => {
+      if (s.dams !== prev.dams) sync(s.dams);
+    });
+  })();
+  return hydrating;
+}
 
 /**
  * Apply a desk edit to a record. A crest or streambed typed over the stored one drops the stored datum note (e.g. "Crest converted

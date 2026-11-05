@@ -4,12 +4,12 @@
  * and outline. One-off, for the baseline comparison (Nick, 2026-11-02); not part of the app.
  *
  *   node --experimental-strip-types scripts/score-routed.mjs --dam <record.json> --runner <dam folder> [--json out.json]
- *     [--spread [--breach-path] [--no-basins] [--no-reach]] [--probes 300] [--wet-ft 0.1]
+ *     [--spread [--breach-path] [--no-basins] [--no-reach] [--settle N]] [--probes 300] [--wet-ft 0.1]
  *
  * --spread scores the quasi-dynamic volume spread (spread.ts) instead of the stage fill; --breach-path makes it
  * follow the water from the breach instead of the outline's drainage trace; --no-basins turns off closed-basin storage;
  * --no-reach builds once on the corridor DEM instead of growing the terrain downstream on demand (reach.ts, what the
- * desk does). --probes sets how many points on the model's wet cells compare depth, velocity and arrival. --wet-ft
+ * desk does). --settle sets the sweeps that let the spread's pools settle into one sheet (0 = as poured). --probes sets how many points on the model's wet cells compare depth, velocity and arrival. --wet-ft
  * scores both layers as wet at that depth instead of 0.1 ft (1 ft is where the 2-D models agree with each other).
  *
  * It fetches the same corridor DEM the terrain outline uses (grown downstream on demand for the spread), builds the
@@ -83,6 +83,7 @@ export async function main(argv, log = console.log) {
     method: o.spread ? "spread" : "stage",
     breachPath: o["breach-path"] ? true : undefined,
     basins: o["no-basins"] ? false : undefined,
+    settleSweeps: o.settle != null ? Number(o.settle) : undefined,
   };
   let rf;
   let dem;

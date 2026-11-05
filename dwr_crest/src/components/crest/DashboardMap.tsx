@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { LayersControl, MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
+import { extentLine } from "./extent-layer";
 import "leaflet/dist/leaflet.css";
 import { basemaps } from "@/lib/crest/basemap";
 import { HILLSHADE_URL } from "@/lib/crest/dashboard";
@@ -101,16 +102,21 @@ export function DashboardMap({ depth, points, arrival, hillshade, overlays, fit 
         deps={[depth]}
         build={(pane) =>
           depth
-            ? L.geoJSON(depth as unknown as GeoJSON.FeatureCollection, {
-                pane,
-                interactive: false,
-                style: (f) => ({
-                  stroke: false,
-                  fill: true,
-                  fillColor: (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf",
-                  fillOpacity: 0.6,
-                }),
-              })
+            ? L.featureGroup(
+                [
+                  L.geoJSON(depth as unknown as GeoJSON.FeatureCollection, {
+                    pane,
+                    interactive: false,
+                    style: (f) => ({
+                      stroke: false,
+                      fill: true,
+                      fillColor: (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf",
+                      fillOpacity: 0.6,
+                    }),
+                  }),
+                  extentLine(depth, pane),
+                ].filter((l): l is L.Layer => l != null),
+              )
             : null
         }
       />

@@ -133,6 +133,11 @@ export type SpreadResult = {
   stretches: number;
   reachedEdge: boolean;
   /**
+   * The spread's ground: 1 on every cell some stretch could pour on (within maxLateralM of the channel, not behind the
+   * dam). settlePools lets the water move only over this ground.
+   */
+  ground: Uint8Array;
+  /**
    * How far down the channel the water got (m along the centreline, the downstream end of the last stretch with a wet
    * channel cell; 0 when none). The reach loop (reach.ts) reads it against the traced channel's end.
    */
@@ -673,6 +678,8 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     if (i === 0 || j === 0 || i === W - 1 || j === H - 1) reachedEdge = true;
   }
   const rel = opts.releasedM3;
+  const ground = new Uint8Array(N);
+  for (let k = 0; k < N; k++) if (label[k] >= 0 && valid(k)) ground[k] = 1;
   return {
     width: W,
     height: H,
@@ -695,8 +702,174 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     stoppedIn,
     stretches,
     reachedEdge,
+    ground,
     wetEndM,
   };
+}
+
+/** Default sweeps of settlePools on the desk's routed flood. */
+export const SETTLE_SWEEPS = 100;
+/** Fraction of the surface difference that crosses an edge in one sweep (≤ 0.25 keeps the explicit relaxation stable). */
+const SETTLE_RATE = 0.2;
+
+export type SettleLayer = {
+  /** Depth per cell (0 where dry), in the layer's own length unit; changed in place. */
+  depth: Float32Array;
+  /** Velocity and arrival per cell (NaN where dry); a newly wet cell takes them from the pool that reached it. */
+  velocity?: Float32Array;
+  arrival?: Float32Array;
+};
+
+/**
+ * Let the poured pools find one water surface (Nick, 2026-11-05: the routed flood looked "patchy").
+ *
+ * Each stretch of the spread is about one routing step long (tens of metres) while its ground reaches up to
+ * maxLateralM sideways, so on a plain or round a bend its ground is a long thin wedge fanning out from the channel, and
+ * each slice stands at its own level on its own wedge. Next to a pool at one level lies the next stretch's dry wedge:
+ * lower ground the water never reached only because it belonged to another stretch. On the DWR-2801 plain that drew
+ * the flood as a fan of wet and dry wedges.
+ *
+ * This lets the poured water run for `sweeps` sweeps of a conservative level relaxation: across every 4-neighbour edge
+ * between two cells of `ground`, water moves from the higher surface to the lower, SETTLE_RATE of the difference, and
+ * never more than the giver holds above the wet threshold, so no film creeps out of a pool and no cell goes below zero.
+ * Water is only moved, never made or lost (Σ depth is conserved to rounding, less the films under `minDepth` dropped at
+ * the end), and it moves at most a cell per sweep, so pools join where they stood side by side while the water stays
+ * where the routing put it down the valley. Works in any length unit; `minDepth` and `gravity` must be in it.
+ */
+export async function settlePools(
+  g: DemGrid,
+  ground: Uint8Array,
+  layer: SettleLayer,
+  opts: { sweeps: number; minDepth: number; zScale?: number; gravity?: number; yieldFn?: () => Promise<void> },
+): Promise<{ wetCells: number; volume: number }> {
+  const W = g.width;
+  const H = g.height;
+  const N = W * H;
+  const sweeps = Math.max(0, Math.floor(opts.sweeps));
+  const minDepth = opts.minDepth;
+  const zs = opts.zScale ?? 1;
+  const out = layer.depth;
+  let i0 = W;
+  let i1 = -1;
+  let j0 = H;
+  let j1 = -1;
+  for (let k = 0; k < N; k++) {
+    if (!(out[k] > 0)) continue;
+    const i = k % W;
+    const j = (k - i) / W;
+    if (i < i0) i0 = i;
+    if (i > i1) i1 = i;
+    if (j < j0) j0 = j;
+    if (j > j1) j1 = j;
+  }
+  if (i1 < 0 || sweeps === 0) {
+    let wetCells = 0;
+    let volume = 0;
+    for (let k = 0; k < N; k++)
+      if (out[k] > 0) {
+        wetCells++;
+        volume += out[k];
+      }
+    return { wetCells, volume };
+  }
+  i0 = Math.max(0, i0 - sweeps);
+  i1 = Math.min(W - 1, i1 + sweeps);
+  j0 = Math.max(0, j0 - sweeps);
+  j1 = Math.min(H - 1, j1 + sweeps);
+  const z = new Float64Array(N);
+  const d = new Float64Array(N);
+  for (let k = 0; k < N; k++) {
+    z[k] = g.z[k] * zs;
+    d[k] = out[k] > 0 ? out[k] : 0;
+  }
+  const delta = new Float64Array(N);
+  const from = new Int32Array(N).fill(-1);
+  const R = SETTLE_RATE;
+  const applyRow = (j: number) => {
+    for (let k = j * W + i0, e = j * W + i1; k <= e; k++) {
+      if (delta[k] === 0) continue;
+      d[k] = Math.max(0, d[k] + delta[k]);
+      delta[k] = 0;
+    }
+  };
+  for (let s = 0; s < sweeps; s++) {
+    for (let j = j0; j <= j1; j++) {
+      const row = j * W;
+      for (let i = i0; i <= i1; i++) {
+        const a = row + i;
+        if (!ground[a]) continue;
+        const da = d[a];
+        // Each edge once, to the east and to the south. Most of the box is dry: two dry cells move nothing.
+        for (let t = 0; t < 2; t++) {
+          if (t === 0 ? i >= i1 : j >= j1) continue;
+          const b = t === 0 ? a + 1 : a + W;
+          const db = d[b];
+          if (!ground[b] || (da <= 0 && db <= 0)) continue;
+          const diff = z[a] + da - (z[b] + db);
+          if (diff > 0) {
+            const q = R * Math.min(diff, da - minDepth);
+            if (q > 0) {
+              delta[a] -= q;
+              delta[b] += q;
+              if (from[b] < 0 && !(db > 0)) from[b] = a;
+            }
+          } else if (diff < 0) {
+            const q = R * Math.min(-diff, db - minDepth);
+            if (q > 0) {
+              delta[b] -= q;
+              delta[a] += q;
+              if (from[a] < 0 && !(da > 0)) from[a] = b;
+            }
+          }
+        }
+      }
+      // Row j-1 has had all its edges: apply its change now (the sweep reads the depths as they stood).
+      if (j > j0) applyRow(j - 1);
+    }
+    applyRow(j1);
+    if (opts.yieldFn && s % 10 === 9) await opts.yieldFn();
+  }
+  // A newly wet cell takes the arrival and velocity of the pool that first reached it (chains are followed back).
+  const vel = layer.velocity;
+  const arr = layer.arrival;
+  if (vel || arr) {
+    for (let pass = 0; pass <= sweeps; pass++) {
+      let more = false;
+      for (let j = j0; j <= j1; j++)
+        for (let i = i0; i <= i1; i++) {
+          const k = j * W + i;
+          const f = from[k];
+          if (f < 0 || out[k] > 0) continue;
+          const src = arr ? arr[f] : vel![f];
+          if (!Number.isFinite(src)) {
+            more = true;
+            continue;
+          }
+          if (arr) arr[k] = arr[f];
+          if (vel) vel[k] = vel[f];
+          out[k] = -1; // reached: mark so the chain moves on (cleared below)
+        }
+      if (!more) break;
+    }
+  }
+  const gr = opts.gravity ?? 9.80665;
+  let wetCells = 0;
+  let volume = 0;
+  for (let j = j0; j <= j1; j++)
+    for (let i = i0; i <= i1; i++) {
+      const k = j * W + i;
+      const dk = d[k] >= minDepth ? d[k] : 0;
+      out[k] = dk;
+      if (dk > 0) {
+        wetCells++;
+        volume += dk;
+        if (vel) vel[k] = Math.min(Number.isFinite(vel[k]) ? vel[k] : 0, Math.sqrt(gr * dk));
+      } else {
+        if (vel) vel[k] = NaN;
+        if (arr) arr[k] = NaN;
+      }
+    }
+  return { wetCells, volume };
 }
 
 /**

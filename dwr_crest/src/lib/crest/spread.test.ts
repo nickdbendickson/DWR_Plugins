@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import type { DemGrid } from "./outline.ts";
 import { routeMuskingumCunge, type RoutedSection, sectionTable } from "./routing.ts";
 import type { Centerline } from "./sections.ts";
-import { breachPath, spreadVolume } from "./spread.ts";
+import { breachPath, settlePools, spreadVolume } from "./spread.ts";
 
 const M_PER_DEG_LAT = 110574;
 const kxOf = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 180);
@@ -427,5 +427,80 @@ describe("spreadVolume: water that tops a saddle fills the low behind it lowest 
   it("lays down exactly the slices", () => {
     const want = secs.reduce((s, x) => s + x.storeMaxM3, 0);
     assert.ok(Math.abs(r.volumeM3 - want) / want < 1e-6, `${r.volumeM3} vs ${want}`);
+  });
+});
+
+describe("settlePools: the poured pools find one surface (patchy layer, 2026-11-05)", () => {
+  // A flat 40 × 40 plain at 10 m cells; every cell is spread ground unless a test says otherwise.
+  const flat = (W = 40, z = (_i: number, _j: number) => 0): DemGrid => {
+    const g = synthDem(W, 10, () => 0);
+    for (let j = 0; j < W; j++) for (let i = 0; i < W; i++) g.z[j * W + i] = z(i, j);
+    return g;
+  };
+  const sum = (a: Float32Array) => a.reduce((s, x) => s + (x > 0 ? x : 0), 0);
+
+  it("joins a pool and the dry wedge beside it into one sheet, moving water without making or losing any", async () => {
+    // The 2801 pattern: one stretch's wedge holds water, its neighbour's wedge (lower ground) is dry.
+    const g = flat(40, (i) => (i < 20 ? 0 : -0.1));
+    const depth = new Float32Array(40 * 40);
+    for (let j = 0; j < 40; j++) for (let i = 0; i < 20; i++) depth[j * 40 + i] = 0.5;
+    const before = sum(depth);
+    const ground = new Uint8Array(40 * 40).fill(1);
+    await settlePools(g, ground, { depth }, { sweeps: 400, minDepth: 0.03 });
+    assert.ok(Math.abs(sum(depth) - before) / before < 1e-4, "volume conserved");
+    // The water has run across the edge into the dry wedge, and there is no step in the surface at the old edge. It
+    // moves about a cell a sweep, so over a few hundred sweeps it leans toward level rather than reaching it.
+    for (const i of [20, 25, 30]) assert.ok(depth[20 * 40 + i] > 0.03, `column ${i} wet`);
+    const wse = (i: number) => g.z[20 * 40 + i] + depth[20 * 40 + i];
+    assert.ok(Math.abs(wse(19) - wse(20)) < 0.02, `step at the edge ${wse(19).toFixed(3)} vs ${wse(20).toFixed(3)}`);
+    assert.ok(wse(0) - wse(30) < 0.6, "the surface leans toward level");
+  });
+
+  it("never lifts water over ground above its surface, and never leaves the spread's ground", async () => {
+    // A 1 m wall at column 20; the pool on the left stands 0.5 m deep. Columns ≥ 30 are not the spread's ground.
+    const g = flat(40, (i) => (i === 20 ? 1 : 0));
+    const depth = new Float32Array(40 * 40);
+    for (let j = 0; j < 40; j++) for (let i = 0; i < 10; i++) depth[j * 40 + i] = 0.5;
+    const ground = new Uint8Array(40 * 40);
+    for (let j = 0; j < 40; j++) for (let i = 0; i < 30; i++) ground[j * 40 + i] = 1;
+    const before = sum(depth);
+    await settlePools(g, ground, { depth }, { sweeps: 300, minDepth: 0.03 });
+    for (let j = 0; j < 40; j++) for (let i = 20; i < 40; i++) assert.equal(depth[j * 40 + i], 0, `(${i}, ${j}) dry`);
+    assert.ok(Math.abs(sum(depth) - before) / before < 1e-4);
+  });
+
+  it("keeps a thin film from creeping: water under the wet threshold doesn't move", async () => {
+    const g = flat(20);
+    const depth = new Float32Array(400);
+    depth[10 * 20 + 10] = 0.02;
+    await settlePools(g, new Uint8Array(400).fill(1), { depth }, { sweeps: 50, minDepth: 0.03 });
+    assert.equal(depth.filter((d) => d > 0).length, 0, "a lone film under the wet threshold is dropped, never spread");
+  });
+
+  it("hands a newly wet cell the arrival and velocity of the pool that reached it, capped at Froude 1", async () => {
+    const g = flat(20);
+    const depth = new Float32Array(400);
+    const velocity = new Float32Array(400).fill(NaN);
+    const arrival = new Float32Array(400).fill(NaN);
+    for (let j = 0; j < 20; j++)
+      for (let i = 0; i < 5; i++) {
+        depth[j * 20 + i] = 1;
+        velocity[j * 20 + i] = 50;
+        arrival[j * 20 + i] = 3600;
+      }
+    await settlePools(g, new Uint8Array(400).fill(1), { depth, velocity, arrival }, { sweeps: 60, minDepth: 0.03 });
+    const k = 10 * 20 + 8;
+    assert.ok(depth[k] > 0.03);
+    assert.equal(arrival[k], 3600);
+    assert.ok(Math.abs(velocity[k] - Math.sqrt(9.80665 * depth[k])) < 1e-3, "Froude-capped");
+    for (let q = 0; q < 400; q++) if (!(depth[q] > 0)) assert.ok(Number.isNaN(arrival[q]) && Number.isNaN(velocity[q]));
+  });
+
+  it("0 sweeps leaves the pools exactly as poured", async () => {
+    const g = flat(20, (i) => i * 0.01);
+    const depth = new Float32Array(400).map((_, k) => (k % 3 === 0 ? 0.4 : 0));
+    const copy = Float32Array.from(depth);
+    await settlePools(g, new Uint8Array(400).fill(1), { depth }, { sweeps: 0, minDepth: 0.03 });
+    assert.deepEqual(depth, copy);
   });
 });

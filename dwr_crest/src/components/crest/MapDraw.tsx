@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { MapContainer, TileLayer, FeatureGroup, LayersControl, useMap } from "react-leaflet";
 import L from "leaflet";
+import { extentLine } from "./extent-layer";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
 import "leaflet-draw";
@@ -227,17 +228,22 @@ function OutlineLayer({ outline, on }: { outline: TerrainOutline | null | undefi
       pane.style.pointerEvents = "none";
     }
     if (!outline || !on) return;
+    // A layer built with the generalized extent line (trace version 8 on) draws the bands without their own edges and one
+    // dark line around the flood (option 3 of the 2026-11-05 mock-up); an older saved layer keeps its band edges.
+    const extent = outline.extent;
     const layer = L.geoJSON(outline as unknown as GeoJSON.FeatureCollection, {
       pane: OUTLINE_PANE,
       interactive: false,
       attribution: DEM_ATTRIBUTION_SHORT,
       style: (f) => {
         const color = (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf";
-        return { stroke: true, color, weight: 0.8, opacity: 0.9, fill: true, fillColor: color, fillOpacity: 0.55 };
+        return { stroke: !extent, color, weight: 0.8, opacity: 0.9, fill: true, fillColor: color, fillOpacity: 0.55 };
       },
     } as L.GeoJSONOptions).addTo(map);
+    const edge = extentLine(outline, OUTLINE_PANE)?.addTo(map) ?? null;
     return () => {
       layer.remove();
+      edge?.remove();
     };
   }, [map, outline, on]);
   return null;

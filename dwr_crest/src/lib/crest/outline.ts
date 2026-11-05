@@ -63,8 +63,9 @@ export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300
  *  nearest channel cell and the saddle pour's lowest-first tie order (spread.ts). 5 = 2026-11-04: the terrain-triggered
  *  router — MCT on confined reaches, frozen Muskingum-Cunge on flat plains and tiny pools (routing.ts). 6 = 2026-11-04:
  *  the outline leaves out pit, pond and side-basin storage and bands on the capped depth. 7 = 2026-11-04: the outline
- *  volume soft limit (about 5× the release), channel pits counted against the release, and suspected crossings. */
-export const TRACE_VERSION = 7;
+ *  volume soft limit (about 5× the release), channel pits counted against the release, and suspected crossings. 8 =
+ *  2026-11-05: the routed spread's pools settle into one sheet (spread.ts settlePools). */
+export const TRACE_VERSION = 8;
 
 /**
  * The depth cap is the dam height itself (Nick, 2026-11-03: no margin). A breach cannot stand water deeper than the dam
@@ -392,7 +393,19 @@ export type OutlineStats = {
   extent?: ExtentSensitivity;
 };
 
+/** The layer's outer boundary as drawn (extentOf): one dark line around the flood, for the map and the GeoJSON export. */
+export type ExtentFeature = {
+  type: "Feature";
+  properties: { kind: "flood_extent"; label: string; close_m: number; min_island_ac: number; area_ac: number };
+  geometry: { type: "MultiLineString"; coordinates: [number, number][][] };
+};
+
 export type TerrainOutline = FloodStrip & {
+  /**
+   * Foreign member (RFC 7946 §6.1): the generalized flood extent line (trace version 8 on). Kept out of `features` so
+   * the band lists, legend and acres read the bands only; exportFloodGeoJson adds it as a feature for GIS.
+   */
+  extent?: ExtentFeature;
   properties: FloodStrip["properties"] & {
     kind: "terrain_outline";
     outline_area_ac: number;
@@ -887,6 +900,68 @@ function polygonsOf(mask: Uint8Array, W: number, H: number): XY[][][] {
   return outers.map((o) => [o.r.pts, ...o.holes]);
 }
 
+/** Gaps narrower than about twice this (m) are closed in the drawn extent line. */
+export const EXTENT_CLOSE_M = 30;
+/** Islands and holes smaller than this (ac) are left out of the drawn extent line. */
+export const EXTENT_MIN_AC = 5;
+
+/** Square (Chebyshev) dilation or erosion of a 0/1 mask by r cells, as a row pass then a column pass. */
+function morph(mask: Uint8Array, W: number, H: number, r: number, grow: boolean): Uint8Array {
+  const pass = (src: Uint8Array, along: "row" | "col") => {
+    const out = new Uint8Array(src.length);
+    const n = along === "row" ? W : H;
+    const lines = along === "row" ? H : W;
+    const at = (line: number, t: number) => (along === "row" ? line * W + t : t * W + line);
+    for (let line = 0; line < lines; line++) {
+      // Running count of set cells in the window [t − r, t + r]; outside the grid counts as unset.
+      let cnt = 0;
+      for (let t = 0; t <= Math.min(r, n - 1); t++) cnt += src[at(line, t)];
+      for (let t = 0; t < n; t++) {
+        const width = Math.min(n - 1, t + r) - Math.max(0, t - r) + 1;
+        out[at(line, t)] = grow ? (cnt > 0 ? 1 : 0) : cnt === width ? 1 : 0;
+        if (t + r + 1 < n) cnt += src[at(line, t + r + 1)];
+        if (t - r >= 0) cnt -= src[at(line, t - r)];
+      }
+    }
+    return out;
+  };
+  return pass(pass(mask, "row"), "col");
+}
+
+/**
+ * The flood's generalized outer boundary (Nick, 2026-11-05, option 3 of the outline mock-up): the wet mask closed by
+ * EXTENT_CLOSE_M (gaps narrower than about twice that are bridged), islands and holes under EXTENT_MIN_AC dropped, the
+ * cell edges smoothed. It is a drawing aid around the depth bands, which stay the exact wet cells. Null when nothing
+ * is left.
+ */
+export function extentOf(
+  wet: Uint8Array,
+  W: number,
+  H: number,
+  cellM: number,
+  cellM2: number,
+  toLonLat: (p: XY) => [number, number],
+  label: string,
+): ExtentFeature | null {
+  const r = Math.max(1, Math.round(EXTENT_CLOSE_M / cellM));
+  const closed = morph(morph(wet, W, H, r, true), W, H, r, false);
+  const minCells = (EXTENT_MIN_AC * ACRE_M2) / cellM2;
+  const rings = traceRings(closed, W, H).filter((q) => Math.abs(q.area) >= minCells);
+  if (!rings.some((q) => q.area > 0)) return null;
+  let area = 0;
+  const coordinates = rings.map((q) => {
+    const sm = chaikin(chaikin(q.pts));
+    area += shoelace(sm);
+    const ll = sm.map(toLonLat);
+    return [...ll, ll[0]];
+  });
+  return {
+    type: "Feature",
+    properties: { kind: "flood_extent", label, close_m: EXTENT_CLOSE_M, min_island_ac: EXTENT_MIN_AC, area_ac: r3((area * cellM2) / ACRE_M2) },
+    geometry: { type: "MultiLineString", coordinates },
+  };
+}
+
 /** Binary min-heap of cell indices keyed by `key[k]`. */
 class MinHeap {
   private a: Int32Array;
@@ -1042,7 +1117,11 @@ export function polygonizeDepth(
   }
 
   const areaAc = r3(polyAc);
+  const wetMask = new Uint8Array(N);
+  for (let k = 0; k < N; k++) if (band[k] >= 0) wetMask[k] = 1;
+  const extent = extentOf(wetMask, W, H, Math.sqrt(cellM2), cellM2, toLonLat, `${opts.title}: flood extent (generalized)`);
   const outline: TerrainOutline = {
+    ...(extent ? { extent } : {}),
     type: "FeatureCollection",
     properties: {
       ...opts.common,
@@ -1708,7 +1787,11 @@ async function buildOutlineImpl(
     ...(smallRelease(result.breach.volumeAcFt) ? { volumeLabel: SMALL_RELEASE_LABEL } : {}),
     laidAcFt: r3(laidM3 / ACRE_FT_M3),
   };
+  const wetMask = new Uint8Array(N);
+  for (let k = 0; k < N; k++) if (band[k] >= 0) wetMask[k] = 1;
+  const extent = extentOf(wetMask, W, H, cellM, cellM2, toLonLat, `${common.dam_id} terrain outline: flood extent (generalized)`);
   const outline: TerrainOutline = {
+    ...(extent ? { extent } : {}),
     type: "FeatureCollection",
     properties: {
       ...common,

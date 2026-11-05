@@ -2,6 +2,27 @@
 
 ## 2026-11-05
 
+- **Building a big inundation layer no longer fails with "The quota has been exceeded."** The desk saved its whole
+  state, each dam's built layer included, to localStorage on every edit. A routed terrain flood is a large GeoJSON
+  (ND00199 / DWR-2801: 5.2 MB), past Safari's ~5 MB per-site limit, so the save threw a QuotaExceededError out of the
+  desk's `update()` and the guided setup showed it on the Terrain layer step. The layers now live in IndexedDB, one
+  record per dam (`src/lib/crest/outline-store.ts`), and localStorage keeps only the light records (4.5 KB for the
+  sample desk, from 5.2 MB). A layer saved by an older Crest is moved across on load. Saving to localStorage can no
+  longer throw into the desk: a full store only logs a warning. Tests: `store.test.ts` (a 200 KB quota stand-in).
+- **The routed flood draws as one sheet instead of a fan of wedges.** Each spread stretch is about one routing step
+  long while its ground reaches up to 3 km sideways, so on a plain or round a bend its ground is a long thin wedge and
+  each slice stood at its own level on its own wedge: next to a wet wedge lay a dry one on lower ground, dry only
+  because it belonged to another stretch. The pools now settle (`spread.ts settlePools`, 100 sweeps): across every
+  edge of the spread's ground, water moves from the higher surface to the lower, never more than the giver holds above
+  the wet threshold, so water is only moved, never added. The reach loop's demand signal is the pour's, unchanged, and
+  only the round kept is settled. CSI vs the LISFLOOD baseline (0.1 ft / 1 ft): 2801 0.255/0.192 → 0.331/0.233,
+  2865 0.327/0.303 → 0.344/0.350, 3034 0.765/0.714 → 0.840/0.765, 4031 0.362/0.165 → 0.429/0.136 (4031 at 1 ft is
+  8 ac of reference). TRACE_VERSION 8. `score-routed.mjs --settle N` (0 = as poured).
+- **The terrain layer has an outline.** A dark line around the flood (Nick picked option 3 of the mock-up): the wet
+  cells closed by 30 m (gaps under about 60 m bridged), islands and holes under 5 ac left out, edges smoothed
+  (`outline.ts extentOf`). The depth bands stay the exact wet cells and lose their own thin edges. It is drawn on the
+  guided-setup, Flood and Results maps, and goes out in the terrain GeoJSON as one more feature (`kind:
+  "flood_extent"`). A layer built before this keeps its old look until it is built again.
 - **Batch screen: many structures at once, including every DWR dam and the DWR dugouts.** A new **Batch** view picks
   structures one by one, by county, by HUC8 watershed or statewide, from the NID main dams (948), the DWR Dams layer
   (8,955 more, all statuses but Removed / Not Built) and the DWR Dugouts layer (1,766), and runs each through the

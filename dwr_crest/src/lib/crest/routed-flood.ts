@@ -18,7 +18,7 @@
 
 import { ACFT, CFS, FT } from "./breach.ts";
 import { fillFlood } from "./fill.ts";
-import { breachPath, spreadVolume } from "./spread.ts";
+import { breachPath, SETTLE_SWEEPS, settlePools, spreadVolume } from "./spread.ts";
 import { type OutlineInputs, outlineInputs, traceChannel } from "./outline.ts";
 import { type RoutedSection, routeMuskingumCunge, sectionTable } from "./routing.ts";
 import { type Centerline, cutSections } from "./sections.ts";
@@ -41,6 +41,11 @@ export type RoutedFloodOptions = {
   router?: "mc" | "mct" | "auto";
   /** A cell is wet at this depth (m). Default 0.03 (~0.1 ft). */
   minDepthM?: number;
+  /**
+   * Spread only: sweeps of the water-surface settling that joins neighbouring stretches' pools into one sheet
+   * (spread.ts settlePools). Default SETTLE_SWEEPS; 0 leaves each stretch's pool as poured (the layer before 2026-11-05).
+   */
+  settleSweeps?: number;
   /** Cap the fill at the released breach volume instead of only flagging the over-spread. Default false. */
   volumeLimit?: boolean;
   /** Floor on the lateral decay slope (m/m); higher stops the sideways spread sooner. Default 0.0005. */
@@ -108,6 +113,10 @@ export type RoutedFloodResult = {
   arrivalHr?: Float32Array;
   /** Which way the routed surface was laid on the terrain. */
   method: "stage" | "spread";
+  /** Spread only: the cells the pools may settle over (spread.ts SpreadResult.ground), kept for settleRoutedFlood. */
+  ground?: Uint8Array;
+  /** Spread only: sweeps of settlePools applied to the layer (0 or absent: the pools as poured). */
+  settled?: number;
   centerline: Centerline;
   sections: RoutedSection[];
   stats: {
@@ -224,6 +233,7 @@ export async function buildRoutedFlood(
   let cappedStretches = 0;
   let unpouredM3 = 0;
   let demand: RoutedFloodResult["demand"];
+  let ground: Uint8Array | undefined;
   if (method === "spread") {
     const sp = spreadVolume(g, centerline, routed.sections, {
       minDepthM: opts.minDepthM ?? 0.03,
@@ -232,6 +242,7 @@ export async function buildRoutedFlood(
       // A stretch that runs out of ground is held at the routed stage + 1 ft and never above 2× the dam's height.
       maxLevelM: Number.isFinite(dam.heightFt) && dam.heightFt > 0 ? 2 * dam.heightFt * FT : undefined,
     });
+    ground = sp.ground;
     exhaustedStretches = sp.exhaustedStretches;
     cappedStretches = sp.cappedStretches;
     unpouredM3 = sp.unpouredM3;
@@ -312,7 +323,7 @@ export async function buildRoutedFlood(
     );
   const fillAcFt = volumeM3 / ACFT;
 
-  return {
+  const rf: RoutedFloodResult = {
     ok: true,
     bbox: g.bbox,
     width: g.width,
@@ -321,6 +332,7 @@ export async function buildRoutedFlood(
     wseM,
     ...(velocityFps ? { velocityFps, arrivalHr } : {}),
     method,
+    ...(ground ? { ground } : {}),
     centerline,
     sections: routed.sections,
     stats: {
@@ -346,4 +358,49 @@ export async function buildRoutedFlood(
     ...(demand ? { demand } : {}),
     notes,
   };
+  const sweeps = opts.settleSweeps ?? SETTLE_SWEEPS;
+  if (method === "spread" && sweeps > 0) await settleRoutedFlood(g, rf, { sweeps, minDepthM: opts.minDepthM, yieldFn: opts.yieldFn });
+  return rf;
+}
+
+/**
+ * Let a spread's pools settle into one sheet (spread.ts settlePools), in place: depth, velocity, arrival and WSE are
+ * rewritten and the flooded area and laid-down volume re-counted. The demand signal (water still travelling, the
+ * basin it stopped in, how far down it got) is the pour's and is left alone, so the reach loop (reach.ts) behaves the
+ * same with or without it; reach.ts builds its rounds unsettled and settles only the round it keeps.
+ */
+export async function settleRoutedFlood(
+  g: DemGrid,
+  rf: RoutedFloodResult,
+  opts: { sweeps?: number; minDepthM?: number; yieldFn?: () => Promise<void> } = {},
+): Promise<RoutedFloodResult> {
+  const sweeps = opts.sweeps ?? SETTLE_SWEEPS;
+  if (rf.method !== "spread" || !rf.ground || !(sweeps > 0) || rf.settled) return rf;
+  const N = rf.width * rf.height;
+  const before = rf.stats.floodedAc;
+  const { volume } = await settlePools(
+    g,
+    rf.ground,
+    { depth: rf.depthFt, velocity: rf.velocityFps, arrival: rf.arrivalHr },
+    { sweeps, minDepth: (opts.minDepthM ?? 0.03) / FT, zScale: 1 / FT, gravity: 9.80665 / FT, yieldFn: opts.yieldFn },
+  );
+  const midLat = (g.bbox[1] + g.bbox[3]) / 2;
+  const cellM2 = ((g.bbox[2] - g.bbox[0]) / g.width) * 111320 * Math.cos((midLat * Math.PI) / 180) * (((g.bbox[3] - g.bbox[1]) / g.height) * 110574);
+  let wet = 0;
+  for (let k = 0; k < N; k++) {
+    if (rf.depthFt[k] > 0) {
+      wet++;
+      rf.wseM[k] = g.z[k] + rf.depthFt[k] * FT;
+    } else rf.wseM[k] = NaN;
+  }
+  const floodedAc = (wet * cellM2) / 4046.8564224;
+  const fillAcFt = (volume * FT * cellM2) / ACFT;
+  rf.settled = sweeps;
+  rf.stats.floodedAc = Math.round(floodedAc * 10) / 10;
+  rf.stats.fillAcFt = Math.round(fillAcFt);
+  rf.stats.volumeRatio = rf.stats.releasedAcFt > 0 ? Math.round((fillAcFt / rf.stats.releasedAcFt) * 10) / 10 : 0;
+  rf.notes.push(
+    `The pools were let settle into one sheet (${sweeps} sweeps, water only moved, never added): ${before.toFixed(0)} ac as poured, ${floodedAc.toFixed(0)} ac settled.`,
+  );
+  return rf;
 }

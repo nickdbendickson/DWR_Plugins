@@ -53,7 +53,7 @@ import { CONFIDENCE_LABEL, triageDam } from "@/lib/crest/triage";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { demTieOffer, missingForNext, needsDemTie } from "@/lib/crest/nd-dams";
-import { activeDam, useDesk } from "@/lib/crest/store";
+import { activeDam, hydrateDesk, useDesk } from "@/lib/crest/store";
 import type {
   BreachMethod,
   DamGeometry,
@@ -108,7 +108,7 @@ export function Desk() {
   const [view, setView] = useState<"desk" | "batch">("desk");
 
   useEffect(() => {
-    void useDesk.persist.rehydrate();
+    void hydrateDesk();
     setReady(true);
     // The desktop's saved local DEM (if any) becomes the terrain for every read on the desk.
     void ensureDemSource();

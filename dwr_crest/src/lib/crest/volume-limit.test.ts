@@ -46,7 +46,7 @@ describe("volume soft limit: about 5× the release (Nick, 2026-11-03)", () => {
   it("the target and the trigger are 5× and 6×, and saved layers rebuild (trace version 6)", () => {
     assert.equal(VOLUME_TARGET_RATIO, 5);
     assert.equal(VOLUME_SHRINK_ABOVE, 6);
-    assert.equal(TRACE_VERSION, 7);
+    assert.equal(TRACE_VERSION, 8);
   });
 
   it("the outline GeoJSON carries the trace version it was built with", async () => {

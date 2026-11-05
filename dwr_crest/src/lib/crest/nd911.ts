@@ -568,11 +568,14 @@ export function nd911KmlPlacemarks(t: Nd911Table): string[] {
  * listed 911 points as Point features after the band polygons. With neither, the plain strip export.
  */
 export function exportFloodGeoJson(area: FloodStrip, plss: PlssTable | null, nd911: Nd911Table | null): string {
-  if (!plss && !nd911) return exportFloodStripGeoJson(area);
+  // A terrain layer's flood extent line (outline.ts extentOf) rides as a foreign member; GIS reads features only, so it
+  // goes out as one more feature (kind "flood_extent"), after the depth bands.
+  const { extent, ...rest } = area as FloodStrip & { extent?: unknown };
+  if (!plss && !nd911 && !extent) return exportFloodStripGeoJson(area);
   return exportFloodStripGeoJson({
-    ...area,
+    ...rest,
     properties: { ...area.properties, ...(plss ? plssProperties(plss) : {}), ...(nd911 ? nd911Properties(nd911) : {}) },
-    features: [...area.features, ...(nd911 ? nd911Features(nd911) : [])],
+    features: [...area.features, ...(extent ? [extent] : []), ...(nd911 ? nd911Features(nd911) : [])],
   } as unknown as FloodStrip);
 }
 
