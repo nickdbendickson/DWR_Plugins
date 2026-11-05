@@ -36,6 +36,7 @@ import urllib.parse
 import urllib.request
 
 from ..damsuite import gdalsafe as GS   # GDAL without switching its exception mode
+from . import proj_offline as PO        # 0.18.7: boxes when cdn.proj.org is unreachable
 from . import dem_zunit as ZU           # 0.17.50: the fallback DEM's unit, as the Runner reads it
 from .warp_opts import no_vshift        # 0.17.50: warps keep the values as stored
 
@@ -558,12 +559,16 @@ def _bounds_in(bounds_ll, dst):
     d = osr.SpatialReference()
     d.SetFromUserInput(dst)
     d.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    ct = osr.CoordinateTransformation(src, d)
     w, s, e, n = bounds_ll
-    pts = [ct.TransformPoint(w + (e - w) * i / 4.0, s + (n - s) * j / 4.0)[:2]
-           for i in range(5) for j in range(5)]
-    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-    return (min(xs), min(ys), max(xs), max(ys))
+
+    def corners():
+        ct = osr.CoordinateTransformation(src, d)
+        pts = [ct.TransformPoint(w + (e - w) * i / 4.0, s + (n - s) * j / 4.0)[:2]
+               for i in range(5) for j in range(5)]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    return PO.box(corners)          # 0.18.7: PROJ grid server unreachable -> network off
 
 
 def fallback_unit(path):
@@ -741,10 +746,15 @@ def box_5070_to_ll(box):
     dst = osr.SpatialReference()
     dst.ImportFromEPSG(4326)
     dst.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    ct = osr.CoordinateTransformation(src, dst)
     x0, y0, x1, y1 = box
-    pts = [ct.TransformPoint(x, y)[:2] for x in (x0, (x0 + x1) / 2, x1) for y in (y0, (y0 + y1) / 2, y1)]
-    return (min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts))
+
+    def corners():
+        ct = osr.CoordinateTransformation(src, dst)
+        pts = [ct.TransformPoint(x, y)[:2] for x in (x0, (x0 + x1) / 2, x1) for y in (y0, (y0 + y1) / 2, y1)]
+        return (min(p[0] for p in pts), min(p[1] for p in pts),
+                max(p[0] for p in pts), max(p[1] for p in pts))
+
+    return PO.box(corners)          # 0.18.7: PROJ grid server unreachable -> network off
 
 
 def point_box_ll(lon, lat, buffer_mi):

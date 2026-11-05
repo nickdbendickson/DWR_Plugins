@@ -8,7 +8,7 @@ import os
 
 from osgeo import gdal, osr
 
-from . import dem_zunit as ZU, nd_counties, terrain
+from . import dem_zunit as ZU, nd_counties, proj_offline as PO, terrain
 from .warp_opts import no_overviews, no_vshift
 
 
@@ -34,20 +34,29 @@ def county_names():
     return sorted(COUNTIES)
 
 
+def _corner_box(epsg, west, south, east, north):
+    """Bounding box of a lon/lat box in EPSG:epsg (0.18.7: PO.box retries with the PROJ network
+    off when the PROJ grid server cannot be reached)."""
+    def corners():
+        src = osr.SpatialReference()
+        src.ImportFromEPSG(4326)
+        src.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        dst = osr.SpatialReference()
+        dst.ImportFromEPSG(epsg)
+        dst.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        ct = osr.CoordinateTransformation(src, dst)
+        xs, ys = [], []
+        for lon, lat in ((west, south), (west, north), (east, south), (east, north)):
+            x, y, _z = ct.TransformPoint(lon, lat)
+            xs.append(x)
+            ys.append(y)
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    return PO.box(corners)
+
+
 def to_5070(west, south, east, north):
-    src = osr.SpatialReference()
-    src.ImportFromEPSG(4326)
-    src.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    dst = osr.SpatialReference()
-    dst.ImportFromEPSG(5070)
-    dst.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    ct = osr.CoordinateTransformation(src, dst)
-    xs, ys = [], []
-    for lon, lat in ((west, south), (west, north), (east, south), (east, north)):
-        x, y, _z = ct.TransformPoint(lon, lat)
-        xs.append(x)
-        ys.append(y)
-    return (min(xs), min(ys), max(xs), max(ys))
+    return _corner_box(5070, west, south, east, north)
 
 
 # When a downstream bearing is given, the box is shifted so the dam sits near the upstream edge
@@ -475,19 +484,7 @@ def ensure_index(cache_dir, feedback=None):
 
 
 def _box_2266(west, south, east, north):
-    src = osr.SpatialReference()
-    src.ImportFromEPSG(4326)
-    src.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    dst = osr.SpatialReference()
-    dst.ImportFromEPSG(2266)
-    dst.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    ct = osr.CoordinateTransformation(src, dst)
-    xs, ys = [], []
-    for lon, lat in ((west, south), (west, north), (east, south), (east, north)):
-        x, y, _z = ct.TransformPoint(lon, lat)
-        xs.append(x)
-        ys.append(y)
-    return (min(xs), min(ys), max(xs), max(ys))
+    return _corner_box(2266, west, south, east, north)
 
 
 # HTTPS (ported from nd_dam_screening 0.18.1): the statewide index and the tile zips are on the
