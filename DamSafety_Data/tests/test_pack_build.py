@@ -513,3 +513,16 @@ def test_hifld_provenance_by_checksum(tmp_path):
     for e in got:
         assert "Data Rescue Project copy" not in e["info"]["source"], e
         assert "not recorded" in e["info"]["source"], e
+
+
+def test_usgs_stream_crossings_in_barriers():
+    """1.5.5: the USGS Database of Stream Crossings is a pack layer, filed under barriers/."""
+    from DamSafety_Data.damsuite import gpkgpack as GP
+    reg = {e["name"]: e for e in PB.registry()}
+    e = reg["USGS_stream_crossings"]
+    assert e["kind"] == "arcgis" and e["group"] == "barriers", e
+    assert e["spec"]["url"] == PB.USGS_STREAM_CROSSINGS_URL
+    assert "stream_crossings/FeatureServer/0" in e["spec"]["url"]
+    assert "crossing_type" in e["spec"]["fields"]
+    assert "10.5066/P9YX6KTB" in e["info"]["source"]
+    assert GP.group_of("USGS_stream_crossings") == "barriers"
