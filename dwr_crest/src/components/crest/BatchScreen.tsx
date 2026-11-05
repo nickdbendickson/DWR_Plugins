@@ -34,7 +34,7 @@ import { TerrainSource } from "./TerrainSource";
 const ROWS_KEY = "crest-batch-v1";
 const btn = "inline-flex h-11 items-center rounded-sm border border-line bg-card px-4 text-sm text-ink disabled:opacity-50";
 const primary = "inline-flex h-11 items-center rounded-sm border border-water bg-water px-4 text-sm text-card disabled:opacity-50";
-const KINDS: StructureKind[] = ["nid", "dam", "dugout"];
+const KINDS: StructureKind[] = ["nid", "dam", "dugout", "unknown"];
 const BY: { id: Selection["by"]; label: string }[] = [
   { id: "pick", label: "Pick structures" },
   { id: "county", label: "County" },

@@ -8,8 +8,11 @@
   desk's own breach, inundation layer, 911 lookup and triage with an auto-derived record (crest from DWR NAVD 88 or
   3DEP at the point, direction from the 3DEP downhill). Results sort as a Runner worklist with a CSV and Open in desk.
   `npm run batch:dams` does the same from the command line, resumable, and reads a local DEM mosaic with `--dem`.
-  New bundle `nd_structures.json` (`npm run data:nd-structures`). Unknown Structures are not included yet: that DWR
-  layer is not on the DWR map service.
+  New bundle `nd_structures.json` (`npm run data:nd-structures`).
+- **DWR Unknown Structures in the batch and the DWR fill.** From Nick's DWR export (not on the map service). Most
+  (3,611 of 3,770) are already DWR Dams records under a new number, or NID dams: their UNK- number is now an alias that
+  finds that record (UNK-2400 is DWR-16431). The other 144 are listed as "DWR unknown structure", status Unknown
+  (on by default).
 - **Local DEM, DWR fill, map location and breach point on the desk.** The desktop app can use a local DEM file (e.g.
   the statewide 1 m VRT) for all terrain instead of 3DEP, chosen in a file dialog and remembered. The Record step can
   make a new record from any DWR dam or dugout, and a new dam's latitude and longitude can be set by clicking the map.

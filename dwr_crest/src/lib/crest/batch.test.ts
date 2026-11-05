@@ -283,12 +283,17 @@ describe("committed bundle", () => {
   it("loads, and lists NID dams, DWR dams and dugouts with HUC8 watersheds", async () => {
     const { structures } = await loadStructures();
     const kinds = new Set(structures.map((s) => s.kind));
-    assert.deepEqual([...kinds].sort(), ["dam", "dugout", "nid"]);
+    assert.deepEqual([...kinds].sort(), ["dam", "dugout", "nid", "unknown"]);
     assert.ok(structures.length > 10000);
     assert.equal(new Set(structures.map((s) => s.id)).size, structures.length, "ids are unique");
     const withHuc = structures.filter((s) => s.huc8 && /\(\d{8}\)$/.test(s.huc8)).length;
     assert.ok(withHuc / structures.length > 0.999);
     // ND00199 (Absaraka) is the NID entry, not a duplicate DWR one.
     assert.equal(structures.filter((s) => s.nid === "ND00199").length, 1);
+    // UNK-2400 (Nordell) is DWR-16431 now: found by its old number, not listed twice.
+    const nordell = selectStructures(structures, { by: "pick", ids: ["UNK-2400"], kinds: [], statuses: [] });
+    assert.deepEqual(nordell.map((s) => s.id), ["DWR-16431"]);
+    assert.match(nordell[0].label, /UNK-2400/);
+    assert.ok(!structures.some((s) => s.id === "UNK-2400"));
   });
 });

@@ -46,14 +46,23 @@ describe("buildStructures", () => {
       dam({ structure_: "6", status: "Breached", max_dam_he: "", max_pool_v: "0" }),
     ],
     dugouts: [dug({})],
+    unknown: [
+      // Same point, height and storage as DWR-1: DWR moved it into the Dams layer under a new number.
+      { structure_id: "9", status: "", county: "Cass", latitude: "46.2", longitude: "-97.5", max_dam_height: "12", max_pool_vol: "40", dam_name: "Owner Pond" },
+      // On the NID main dam (within 5 m).
+      { structure_id: "10", status: "", latitude: "46.98002", longitude: "-97.39", max_dam_height: "20", max_pool_vol: "100" },
+      // Nowhere else: listed as an unknown structure.
+      { structure_id: "11", status: "", county: "Cass", latitude: "46.3", longitude: "-97.5", max_dam_height: "8", max_pool_vol: "", year_built: "1960", purpose: "Livestock", owner_name: "J. Doe" },
+      { structure_id: "12", status: "Removed", latitude: "46.4", longitude: "-97.5" },
+    ],
   };
   const b = buildStructures(rows, nid, { huc8: huc8Lookup(WBD), pulledUtc: "2026-11-05T15:05:00Z" });
 
   it("keeps every other DWR dam and every dugout, drops NID main dams, removed / not built and unlocated records", async () => {
     const out = await b;
     const id = (r) => r[COLS.indexOf("id")];
-    assert.deepEqual(out.rows.map(id), ["DUG-7", "DWR-1", "DWR-6"]);
-    assert.deepEqual(out.source.counts, { dams: 2, dugouts: 1, droppedStatus: 2, noLocation: 1, nidMain: 1, noHuc8: 0 });
+    assert.deepEqual(out.rows.map(id), ["DUG-7", "DWR-1", "DWR-6", "UNK-11"]);
+    assert.deepEqual(out.source.counts, { dams: 2, dugouts: 1, unknown: 1, unknownAliased: 2, droppedStatus: 3, noLocation: 1, nidMain: 1, noHuc8: 0 });
     assert.ok(DROP_STATUS.has("Removed") && DROP_STATUS.has("Not Built"));
   });
 
@@ -76,6 +85,7 @@ describe("buildStructures", () => {
       hazard: "Low",
       purpose: "Livestock",
       huc8: "Maple (09020205)",
+      alias: "UNK-9",
     });
     const text = JSON.stringify(out);
     assert.ok(!text.includes("J. Doe") && !text.includes("Owner Pond") && !text.includes("Maple River"));
@@ -83,7 +93,20 @@ describe("buildStructures", () => {
     const six = Object.fromEntries(COLS.map((c, i) => [c, out.rows[2][i]]));
     assert.equal(six.heightFt, null);
     assert.equal(six.storageAcFt, null);
-    assert.deepEqual(out.nidHuc.rows, [["ND00199", "Maple (09020205)"]]);
+    assert.deepEqual(out.nidHuc.rows, [["ND00199", "Maple (09020205)", "UNK-10"]]);
+  });
+
+  it("lists an Unknown Structure that is not already a DWR or NID dam, status blank = Unknown", async () => {
+    const out = await b;
+    const r = Object.fromEntries(COLS.map((c, i) => [c, out.rows[3][i]]));
+    assert.equal(r.id, "UNK-11");
+    assert.equal(r.kind, "unknown");
+    assert.equal(r.status, "Unknown");
+    assert.equal(r.heightFt, 8);
+    assert.equal(r.storageAcFt, null);
+    assert.equal(r.year, 1960);
+    assert.equal(r.alias, null);
+    assert.match(out.source.attribution, /Unknown Structures/);
   });
 });
 

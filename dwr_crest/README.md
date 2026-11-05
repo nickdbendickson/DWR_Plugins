@@ -126,10 +126,15 @@ layer the flood-size gate picks, the 911 address points inside it (with 3DEP pad
 (`src/lib/crest/batch.ts`). The result is a Runner worklist, *Needs a Runner run* first, then *Uncertain*, then
 *Clearly trivial*, with a CSV and **Open in desk** on each row. It is a screen to order work, not a class.
 
-- **Pick by:** structures one by one (name, NID ID, `DWR-` or `DUG-` number), one or more counties, one or more USGS
-  HUC8 watersheds, or statewide. **Include** NID dams, DWR dams and DWR dugouts; **Status** filters the DWR records
-  (default: NID, Intact, Dugout, Pending, Under Construction; Breached, Location inconclusive, Submerged and
-  Inconclusive are listed but off).
+- **Pick by:** structures one by one (name, NID ID, `DWR-`, `DUG-` or `UNK-` number), one or more counties, one or
+  more USGS HUC8 watersheds, or statewide. **Include** NID dams, DWR dams, DWR dugouts and DWR unknown structures;
+  **Status** filters the DWR records (default: NID, Intact, Dugout, Pending, Under Construction, Unknown; Breached,
+  Location inconclusive, Submerged and Inconclusive are listed but off).
+- **DWR Unknown Structures** (from Nick's DWR export, 2026-11-05; that layer is not on the DWR map service): about
+  3,600 of the 3,770 sit on exactly the point of a DWR Dams record with the same height and storage under a new DWR
+  number (DWR has moved them into the Dams layer; e.g. UNK-2400 is DWR-16431), and six on an NID dam. Those are not
+  listed twice: the UNK- number is shown in brackets on that record and finds it. The other 144 are listed as unknown
+  structures.
 - **The record is auto-derived.** Height and storage come from the inventory (NID dams as the picker fills them; DWR
   `max_dam_he` / `max_pool_v`; dugout `max_height` / `max_storag`). The crest is the DWR NAVD 88 elevation where the
   picker would offer it, else the highest 3DEP cell within 30 m of the inventory point; streambed = crest − H; the
@@ -137,7 +142,7 @@ layer the flood-size gate picks, the 911 address points inside it (with 3DEP pad
   says so (*Batch record (auto-derived …)*) and its crest provenance is "DEM". Check the point, crest and direction
   before relying on a row.
 - **Needs data:** a structure with no height, storage or location is listed and skipped. Statewide (default filters)
-  that is about 4,300 of 9,600, mostly small DWR dams and dugouts with no height or storage on file.
+  that is about 4,400 of 9,700, mostly small DWR dams and dugouts with no height or storage on file.
 - **Scale:** about 4–25 s a structure, mostly the 3DEP download, two at a time. A county is minutes to under an hour;
   statewide (~5,300 runnable) is hours. Only the small result rows are kept in browser storage, so **Resume** works
   after a reload; the finished records (for Open in desk) stay in memory.

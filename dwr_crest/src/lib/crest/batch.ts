@@ -39,11 +39,12 @@ import type { DamRecord, GeoJSONFeature, Provenance, ScreenLevel } from "./types
 
 // ---------------------------------------------------------------- the structure list
 
-export type StructureKind = "nid" | "dam" | "dugout";
-export const KIND_LABEL: Record<StructureKind, string> = { nid: "NID dam", dam: "DWR dam", dugout: "DWR dugout" };
+export type StructureKind = "nid" | "dam" | "dugout" | "unknown";
+export const KIND_LABEL: Record<StructureKind, string> = { nid: "NID dam", dam: "DWR dam", dugout: "DWR dugout", unknown: "DWR unknown structure" };
 
 export type Structure = {
-  /** NID ID for NID dams, "DWR-<structure>" for DWR dams, "DUG-<structure>" for dugouts. */
+  /** NID ID for NID dams, "DWR-<structure>" for DWR dams, "DUG-<structure>" for dugouts, "UNK-<structure>" for DWR
+   * Unknown Structures that are not also in the Dams layer. */
   id: string;
   kind: StructureKind;
   label: string;
@@ -64,6 +65,9 @@ export type Structure = {
   purpose: string | null;
   /** USGS WBD HUC8 watershed, "Name (code)". */
   huc8: string | null;
+  /** Other numbers DWR has for the same structure, space-separated: the Unknown Structures ("UNK-9") that DWR has
+   * since moved into the Dams layer under a new number, or that sit on an NID dam. Searchable and pickable by. */
+  alias?: string | null;
 };
 
 type Table = { cols: string[]; rows: unknown[][] };
@@ -76,7 +80,7 @@ const decode = <T>(b: Table): T[] => b.rows.map((r) => Object.fromEntries(b.cols
  * structures bundle (every other DWR dam and every dugout).
  */
 export function makeStructures(nd: Pick<NdData, "dams" | "dwr">, bundle: StructuresBundle): Structure[] {
-  const huc = new Map(decode<{ nid: string; huc8: string | null }>(bundle.nidHuc).map((h) => [h.nid, h]));
+  const huc = new Map(decode<{ nid: string; huc8: string | null; alias?: string | null }>(bundle.nidHuc).map((h) => [h.nid, h]));
   const nid: Structure[] = nd.dams
     .filter((d) => d.source !== "DWR")
     .map((d) => {
@@ -101,13 +105,14 @@ export function makeStructures(nd: Pick<NdData, "dams" | "dwr">, bundle: Structu
         hazard: d.nidHazard ?? null,
         purpose: d.purpose,
         huc8: w?.huc8 ?? null,
+        alias: w?.alias ?? null,
       } satisfies Structure;
     });
-  type Row = Omit<Structure, "label" | "kind"> & { kind: "dam" | "dugout" };
-  const rest: Structure[] = decode<Row>(bundle).map((r) => ({
-    ...r,
-    label: `${r.id}${r.nid ? ` (${r.nid})` : ""}`,
-  }));
+  type Row = Omit<Structure, "label" | "kind"> & { kind: "dam" | "dugout" | "unknown" };
+  const rest: Structure[] = decode<Row>(bundle).map((r) => {
+    const also = [r.nid, ...(r.alias ? r.alias.split(" ") : [])].filter(Boolean);
+    return { ...r, label: `${r.id}${also.length ? ` (${also.join(", ")})` : ""}` };
+  });
   return [...nid, ...rest];
 }
 
@@ -127,8 +132,9 @@ export function loadStructures(): Promise<{ nd: NdData; structures: Structure[];
 
 // ---------------------------------------------------------------- selection
 
-/** DWR statuses that have an embankment standing to breach; the rest are listed but off by default. */
-export const DEFAULT_STATUSES = ["NID", "Intact", "Dugout", "Pending", "Under Construction"] as const;
+/** DWR statuses that have (or may have) an embankment standing to breach; the rest are listed but off by default.
+ * "Unknown" is the status of most DWR Unknown Structures (blank in DWR's table). */
+export const DEFAULT_STATUSES = ["NID", "Intact", "Dugout", "Pending", "Under Construction", "Unknown"] as const;
 
 export type Selection = {
   /** "pick": the ids ticked one by one; "county"/"watershed": every structure in the chosen ones; "state": all. */
@@ -147,8 +153,8 @@ export function selectStructures(all: Structure[], sel: Selection): Structure[] 
   const base = all.filter((s) => kinds.has(s.kind) && statuses.has(s.status));
   if (sel.by === "pick") {
     const ids = new Set(sel.ids ?? []);
-    // A ticked structure stays in even when a filter would drop it: the user asked for it by name.
-    return all.filter((s) => ids.has(s.id));
+    // A ticked structure stays in even when a filter would drop it: the user asked for it by name (or by its UNK- alias).
+    return all.filter((s) => ids.has(s.id) || (s.alias ? s.alias.split(" ").some((a) => ids.has(a)) : false));
   }
   if (sel.by === "county") {
     const c = new Set(sel.counties ?? []);
@@ -279,11 +285,11 @@ export function structureRecord(s: Structure, nd?: Pick<NdData, "byNid" | "dwr" 
       field,
       value,
       asOf,
-      note: s.kind === "dugout" ? "DWR Dugouts layer" : "DWR Dams layer",
+      note: s.kind === "dugout" ? "DWR Dugouts layer" : s.kind === "unknown" ? "DWR Unknown Structures (DWR export)" : "DWR Dams layer",
     });
     const provenance: Record<string, Provenance> = {
-      heightFt: prov(s.kind === "dugout" ? "max_height" : "max_dam_he", s.heightFt),
-      storageAcFt: prov(s.kind === "dugout" ? "max_storag" : "max_pool_v", s.storageAcFt),
+      heightFt: prov(s.kind === "dugout" ? "max_height" : s.kind === "unknown" ? "max_dam_height" : "max_dam_he", s.heightFt),
+      storageAcFt: prov(s.kind === "dugout" ? "max_storag" : s.kind === "unknown" ? "max_pool_vol" : "max_pool_v", s.storageAcFt),
     };
     dam = {
       ...base,

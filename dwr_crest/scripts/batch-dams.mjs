@@ -5,7 +5,7 @@
  * appended to a JSON-lines file, so a stopped run picks up where it left off when started again with the same --out.
  *
  *   node --experimental-strip-types scripts/batch-dams.mjs --out <dir> (--state | --county Cass[,Barnes] | --watershed "Maple" | --ids ND00199,DWR-4031)
- *        [--kinds nid,dam,dugout] [--statuses NID,Intact,Dugout,...] [--concurrency 2] [--limit N] [--list]
+ *        [--kinds nid,dam,dugout,unknown] [--statuses NID,Intact,Dugout,...] [--concurrency 2] [--limit N] [--list]
  *        [--dem /path/ND_1m_EPSG26914.vrt [--dem-feet] [--gdalwarp <path>]]
  *
  * --dem reads the terrain from a local raster (the statewide 1 m mosaic) through gdalwarp instead of the 3DEP service
@@ -24,7 +24,7 @@ import { localDemFetcher } from "./local-dem.mjs";
 import { DEFAULT_STATUSES, batchCsv, estimateSeconds, loadStructures, runBatch, selectStructures } from "../src/lib/crest/batch.ts";
 
 export function parseArgs(argv) {
-  const o = { kinds: ["nid", "dam", "dugout"], statuses: [...DEFAULT_STATUSES], concurrency: 2 };
+  const o = { kinds: ["nid", "dam", "dugout", "unknown"], statuses: [...DEFAULT_STATUSES], concurrency: 2 };
   const list = (v) => v.split(",").map((x) => x.trim()).filter(Boolean);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];

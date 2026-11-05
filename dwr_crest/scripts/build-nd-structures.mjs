@@ -8,6 +8,11 @@
  * The folder holds Dams.csv and Dugouts.csv: the full DWR Dams and Dugouts layers from the mapservice.dwr.nd.gov
  * download form (whichextent=all, srid=4269, shapefile), converted with `ogr2ogr -f CSV Dams.csv Dams.shp` (the
  * attribute table; latitude / longitude are fields), plus raw/SHA256SUMS.txt or SHA256SUMS.txt for the zips.
+ * Optionally Unknown.csv: DWR's Unknown Structures (not on the map service; Nick exported unknown_structures.gpkg
+ * from DWR's database, 2026-11-05), only the columns read here:
+ *   ogr2ogr -f CSV Unknown.csv unknown_structures.gpkg -sql "SELECT structure_id, national_id, status, county,
+ *     latitude, longitude, max_dam_height, max_pool_vol, max_pool_area, dam_length, year_built, fed_hazard_class,
+ *     purpose FROM unknown_structures"
  * Keep it in data-raw/ (git-ignored).
  *
  * What goes in (numbers, county, status, watershed names; never owner, name, designer, remark or permit fields):
@@ -15,6 +20,11 @@
  *   rows     every DWR Dams record that is NOT an NID main dam (the NID entry stands for it), and every DWR Dugouts
  *            record, keyed "DWR-<structure>" / "DUG-<structure>", except status Removed / Not Built and records with
  *            no location in North Dakota
+ *            Unknown Structures: most (about 3,600 of 3,770 in the 2026-11-05 export) sit on exactly the point of a
+ *            DWR Dams record with the same height and storage, under a new DWR number: the structure was moved into
+ *            the Dams layer (a few sit on an NID main dam, within 5 m). Those are not listed twice; the UNK- number becomes an alias on that record ("alias",
+ *            so a search for UNK-2 finds it; nidHuc "alias" for an NID dam). The rest are listed as kind "unknown", "UNK-<structure_id>", status
+ *            as DWR has it (blank = "Unknown").
  * Watersheds are USGS Watershed Boundary Dataset HUC8 units ("Name (code)"), found by point-in-polygon against the
  * WBD HUC8 polygons over North Dakota (fetched once and cached in the folder as wbd_huc8.geojson). DWR's own
  * hu_sub_bas names are NOT used: they mix two WBD vintages ("Maple" and "Maple River" for one basin), so a watershed
@@ -34,11 +44,11 @@ export const NID_BUNDLE = join(ROOT, "src/lib/crest/data/nd_dams.json");
 export const WBD_URL = "https://hydro.nationalmap.gov/arcgis/rest/services/wbd/MapServer";
 export const WBD_HUC8_QUERY = `${WBD_URL}/4/query?geometry=-104.2,45.9,-96.5,49.1&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=huc8,name&returnGeometry=true&outSR=4326&maxAllowableOffset=0.002&f=geojson`;
 export const ATTRIBUTION =
-  "Structures: North Dakota Department of Water Resources, Dams and Dugouts layers (mapservice.dwr.nd.gov), downloaded {date}. Provisional, provided 'as is'. Watersheds: USGS Watershed Boundary Dataset HUC8.";
+  "Structures: North Dakota Department of Water Resources, Dams and Dugouts layers (mapservice.dwr.nd.gov), downloaded {date}{unknown}. Provisional, provided 'as is'. Watersheds: USGS Watershed Boundary Dataset HUC8.";
 /** Statuses never listed: there is nothing standing to breach. */
 export const DROP_STATUS = new Set(["Removed", "Not Built"]);
-export const COLS = ["id", "kind", "nid", "status", "county", "lat", "lon", "heightFt", "storageAcFt", "areaAc", "lengthFt", "year", "hazard", "purpose", "huc8"];
-export const NID_HUC_COLS = ["nid", "huc8"];
+export const COLS = ["id", "kind", "nid", "status", "county", "lat", "lon", "heightFt", "storageAcFt", "areaAc", "lengthFt", "year", "hazard", "purpose", "huc8", "alias"];
+export const NID_HUC_COLS = ["nid", "huc8", "alias"];
 
 const numv = (v) => {
   if (v == null || String(v).trim() === "") return null;
@@ -90,7 +100,7 @@ export function huc8Lookup(geojson) {
  * The bundle from the DWR tables (arrays of CSV row objects), the NID main dams ([{ nid, lat, lon }]) and a HUC8 lookup
  * (opts.huc8: (lon, lat) => label or null; huc8Lookup).
  */
-export async function buildStructures({ dams, dugouts }, nid, opts = {}) {
+export async function buildStructures({ dams, dugouts, unknown = [] }, nid, opts = {}) {
   const mainIds = new Set(nid.map((d) => d.nid));
   const huc = opts.huc8 ?? (() => null);
   let noHuc = 0;
@@ -99,10 +109,12 @@ export async function buildStructures({ dams, dugouts }, nid, opts = {}) {
     if (!h) noHuc++;
     return h;
   };
-  const nidHuc = nid.map((d) => [d.nid, hucOf(d.lon, d.lat)]);
+  const nidHuc = nid.map((d) => [d.nid, hucOf(d.lon, d.lat), null]);
+  /** An Unknown Structure within this many metres of an NID main dam is that dam. */
+  const NID_SAME_M = 5;
 
   const rows = [];
-  const counts = { dams: 0, dugouts: 0, droppedStatus: 0, noLocation: 0, nidMain: 0 };
+  const counts = { dams: 0, dugouts: 0, unknown: 0, unknownAliased: 0, droppedStatus: 0, noLocation: 0, nidMain: 0 };
   const status = {};
   for (const r of dams) {
     const sid = Number(r.structure_);
@@ -171,25 +183,82 @@ export async function buildStructures({ dams, dugouts }, nid, opts = {}) {
       huc8: hucOf(lon, lat),
     });
   }
+  // Unknown Structures: an alias on the DWR record at the same point (same structure, new number), else a row.
+  const at = new Map();
+  for (const r of rows) {
+    const k = `${r.lat},${r.lon}`;
+    at.set(k, [...(at.get(k) ?? []), r]);
+  }
+  for (const r of unknown) {
+    const sid = Number(r.structure_id);
+    if (!sid) continue;
+    const st = txt(r.status) ?? "Unknown";
+    if (DROP_STATUS.has(st)) {
+      counts.droppedStatus++;
+      continue;
+    }
+    const lat = numv(r.latitude);
+    const lon = numv(r.longitude);
+    if (!inNd(lat, lon)) {
+      counts.noLocation++;
+      continue;
+    }
+    const h = r1(pos(r.max_dam_height));
+    const v = r1(pos(r.max_pool_vol));
+    const here = at.get(`${r5(lat)},${r5(lon)}`);
+    if (here?.length) {
+      // Several DWR records can share a point: take the one with the same height and storage, else the first.
+      const same = here.find((x) => x.heightFt === h && x.storageAcFt === v) ?? here.find((x) => x.storageAcFt === v) ?? here[0];
+      same.alias = same.alias ? `${same.alias} UNK-${sid}` : `UNK-${sid}`;
+      counts.unknownAliased++;
+      continue;
+    }
+    const kx = 111320 * Math.cos((lat * Math.PI) / 180);
+    const main = nid.findIndex((d) => d.lat != null && d.lon != null && Math.hypot((d.lat - lat) * 110574, (d.lon - lon) * kx) <= NID_SAME_M);
+    if (main >= 0) {
+      nidHuc[main][2] = nidHuc[main][2] ? `${nidHuc[main][2]} UNK-${sid}` : `UNK-${sid}`;
+      counts.unknownAliased++;
+      continue;
+    }
+    status[st] = (status[st] ?? 0) + 1;
+    counts.unknown++;
+    rows.push({
+      id: `UNK-${sid}`,
+      kind: "unknown",
+      nid: txt(r.national_id),
+      status: st,
+      county: txt(r.county),
+      lat: r5(lat),
+      lon: r5(lon),
+      heightFt: h,
+      storageAcFt: v,
+      areaAc: r1(pos(r.max_pool_area)),
+      lengthFt: r1(pos(r.dam_length)),
+      year: year(r.year_built),
+      hazard: txt(r.fed_hazard_class),
+      purpose: txt(r.purpose),
+      huc8: hucOf(lon, lat),
+    });
+  }
   rows.sort((a, b) => a.id.localeCompare(b.id, "en", { numeric: true }));
   const pulledUtc = opts.pulledUtc ?? new Date().toISOString().replace(/\.\d+Z$/, "Z");
   return {
     v: 1,
     source: {
       formUrl: FORM_URL,
-      layers: "Dams (layer 254, qlayer Dams) and Dugouts (layer 277, qlayer Dugouts), full data set",
+      layers: `Dams (layer 254, qlayer Dams) and Dugouts (layer 277, qlayer Dugouts), full data set${unknown.length ? "; Unknown Structures from DWR's database (export, not on the map service)" : ""}`,
       wbd: WBD_URL,
       pulledUtc,
       sha256: opts.sha256 ?? {},
-      records: { dams: dams.length, dugouts: dugouts.length },
+      records: { dams: dams.length, dugouts: dugouts.length, unknown: unknown.length },
       counts: { ...counts, noHuc8: noHuc },
       status: Object.fromEntries(Object.entries(status).sort(([a], [b]) => a.localeCompare(b))),
       excludedFields: EXCLUDED,
-      attribution: ATTRIBUTION.replace("{date}", pulledUtc.slice(0, 10)),
+      attribution: ATTRIBUTION.replace("{date}", pulledUtc.slice(0, 10)).replace("{unknown}", unknown.length ? ", and Unknown Structures (DWR export)" : ""),
     },
     nidHuc: { cols: NID_HUC_COLS, rows: nidHuc },
     cols: COLS,
-    rows: rows.map((r) => COLS.map((c) => r[c])),
+    rows: rows.map((r) => COLS.map((c) => r[c] ?? null)),
   };
 }
 
@@ -214,6 +283,8 @@ async function main(argv) {
   const damsFile = join(from, "Dams.csv");
   const damsCsv = readFileSync(damsFile, "utf8");
   const dugCsv = readFileSync(join(from, "Dugouts.csv"), "utf8");
+  const unkFile = join(from, "Unknown.csv");
+  const unkCsv = existsSync(unkFile) ? readFileSync(unkFile, "utf8") : null;
   const nb = JSON.parse(readFileSync(NID_BUNDLE, "utf8"));
   const ix = (c) => nb.cols.indexOf(c);
   const nid = nb.rows.map((r) => ({ nid: r[ix("nid")], lat: r[ix("lat")], lon: r[ix("lon")] }));
@@ -226,17 +297,17 @@ async function main(argv) {
   const wbdText = readFileSync(wbdFile, "utf8");
   const huc8 = huc8Lookup(JSON.parse(wbdText));
   const sha = (t) => createHash("sha256").update(t).digest("hex");
-  const bundle = await buildStructures({ dams: parseCsv(damsCsv).rows, dugouts: parseCsv(dugCsv).rows }, nid, {
+  const bundle = await buildStructures({ dams: parseCsv(damsCsv).rows, dugouts: parseCsv(dugCsv).rows, unknown: unkCsv ? parseCsv(unkCsv).rows : [] }, nid, {
     huc8,
     pulledUtc: arg("--pulled") ?? statSync(damsFile).mtime.toISOString().replace(/\.\d+Z$/, "Z"),
-    sha256: { ...(readSums(join(from, "raw", "SHA256SUMS.txt")) ?? readSums(join(from, "SHA256SUMS.txt")) ?? {}), "Dams.csv": sha(damsCsv), "Dugouts.csv": sha(dugCsv), "wbd_huc8.geojson": sha(wbdText) },
+    sha256: { ...(readSums(join(from, "raw", "SHA256SUMS.txt")) ?? readSums(join(from, "SHA256SUMS.txt")) ?? {}), "Dams.csv": sha(damsCsv), "Dugouts.csv": sha(dugCsv), ...(unkCsv ? { "Unknown.csv": sha(unkCsv) } : {}), "wbd_huc8.geojson": sha(wbdText) },
   });
   const out = arg("--out") ?? DEFAULT_OUT;
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, JSON.stringify(bundle));
   const s = bundle.source;
   console.log(
-    `[nd-structures] ${s.counts.dams} DWR dams + ${s.counts.dugouts} dugouts (skipped: ${s.counts.nidMain} NID main dams, ${s.counts.droppedStatus} removed/not built, ${s.counts.noLocation} no location); no HUC8 ${s.counts.noHuc8}; status ${JSON.stringify(s.status)} -> ${out}`,
+    `[nd-structures] ${s.counts.dams} DWR dams + ${s.counts.dugouts} dugouts + ${s.counts.unknown} unknown structures (${s.counts.unknownAliased} more are DWR or NID dams already, kept as aliases) (skipped: ${s.counts.nidMain} NID main dams, ${s.counts.droppedStatus} removed/not built, ${s.counts.noLocation} no location); no HUC8 ${s.counts.noHuc8}; status ${JSON.stringify(s.status)} -> ${out}`,
   );
 }
 

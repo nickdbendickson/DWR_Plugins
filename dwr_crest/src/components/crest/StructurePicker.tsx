@@ -1,6 +1,8 @@
 /**
- * Record step: "Fill from DWR dams / dugouts" (Nick, 2026-11-05). The NID picker above covers the NID main dams; this
- * one lists every other DWR dam and every DWR dugout from the batch screen's structure list (nd_structures.json) and
+ * Record step: "Fill from DWR dams / dugouts / unknown structures" (Nick, 2026-11-05). The NID picker above covers the
+ * NID main dams; this one lists every other DWR dam, every DWR dugout and the DWR Unknown Structures from the batch
+ * screen's structure list (nd_structures.json; an UNK- number DWR has since moved into the Dams layer finds that
+ * record, and the few that sit on an NID dam find the NID dam) and
  * makes a new record from one, the same way the batch screen does (batch.ts): height, storage, area and length from
  * DWR; the crest from the terrain at the point (3DEP, or the local DEM when one is chosen) (streambed = crest - H) and the dam line, reservoir and breach point from the
  * terrain, when the terrain service answers; otherwise the DWR numbers only, elevations blank.
@@ -22,7 +24,7 @@ export function StructurePicker() {
   const [data, setData] = useState<{ nd: NdData; structures: Structure[] } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [kind, setKind] = useState<"all" | "dam" | "dugout">("all");
+  const [kind, setKind] = useState<"all" | "dam" | "dugout" | "unknown">("all");
   const [picked, setPicked] = useState<Structure | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -34,11 +36,13 @@ export function StructurePicker() {
       .catch((e) => setErr((e as Error).message));
   }, [open, data]);
 
-  const list = useMemo(() => (data?.structures ?? []).filter((s) => s.kind !== "nid" && (kind === "all" || s.kind === kind)), [data, kind]);
+  const list = useMemo(() => (data?.structures ?? []).filter((s) => (s.kind !== "nid" || s.alias) && (kind === "all" || s.kind === kind || (kind === "unknown" && s.alias))), [data, kind]);
   const matches = useMemo(() => {
     const q = fold(query);
     if (!q) return [];
-    return list.filter((s) => fold(`${s.id} ${s.nid ?? ""} ${s.county ?? ""} ${s.huc8 ?? ""}`).includes(q)).slice(0, 30);
+    return list
+      .filter((s) => (s.kind === "nid" ? fold(s.alias ?? "").includes(q) : fold(`${s.label} ${s.county ?? ""} ${s.huc8 ?? ""}`).includes(q)))
+      .slice(0, 30);
   }, [list, query]);
 
   const make = async (s: Structure) => {
@@ -72,30 +76,31 @@ export function StructurePicker() {
   return (
     <div className="mt-3 rounded-md border border-line p-3" data-testid="structure-picker">
       <button type="button" className={btn} aria-expanded={open} onClick={() => setOpen(!open)}>
-        {open ? "Close DWR dams and dugouts" : "Fill from DWR dams, dugouts"}
+        {open ? "Close DWR dams, dugouts and unknown structures" : "Fill from DWR dams, dugouts, unknown structures"}
       </button>
       {open ? (
         <div className="mt-3 space-y-2">
           {err ? <p className="text-sm text-red-700">Could not load the DWR lists: {err}</p> : null}
-          {!data && !err ? <p className="text-sm text-muted">Loading the DWR dam and dugout lists…</p> : null}
+          {!data && !err ? <p className="text-sm text-muted">Loading the DWR dam, dugout and unknown structure lists…</p> : null}
           {data ? (
             <>
               <div className="flex flex-wrap items-end gap-2">
                 <label className="block min-w-0 flex-1 text-sm">
-                  <span className="text-muted">DWR number, NID ID, county or watershed</span>
+                  <span className="text-muted">DWR, DUG or UNK number, NID ID, county or watershed</span>
                   <input
                     className="mt-1 h-11 w-full rounded-sm border border-line bg-paper px-3"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="e.g. DWR-4031, DUG-130, Ward"
+                    placeholder="e.g. DWR-4031, DUG-130, UNK-2400, Ward"
                   />
                 </label>
                 <label className="block text-sm">
                   <span className="text-muted">Show</span>
                   <select className="mt-1 block h-11 rounded-sm border border-line bg-paper px-2" value={kind} onChange={(e) => setKind(e.target.value as typeof kind)}>
-                    <option value="all">DWR dams and dugouts</option>
+                    <option value="all">All DWR structures</option>
                     <option value="dam">DWR dams</option>
                     <option value="dugout">DWR dugouts</option>
+                    <option value="unknown">DWR unknown structures</option>
                   </select>
                 </label>
               </div>
@@ -113,7 +118,7 @@ export function StructurePicker() {
                   ))}
                 </ul>
               ) : query ? (
-                <p className="text-sm text-muted">No DWR dam or dugout matches.</p>
+                <p className="text-sm text-muted">No DWR dam, dugout or unknown structure matches.</p>
               ) : null}
               {picked ? (
                 <div className="rounded-sm bg-sand p-3 text-sm">
@@ -131,8 +136,8 @@ export function StructurePicker() {
                 </div>
               ) : null}
               <p className="text-xs text-muted">
-                DWR Unknown Structures are not listed yet: that layer is not on the DWR map service. DWR numbers and locations only; no owner or
-                dam names.
+                Most DWR Unknown Structures are now in the DWR Dams layer under a new number: their UNK- number finds that record (shown in
+                brackets). The rest are listed as unknown structures. DWR numbers and locations only; no owner or dam names.
               </p>
             </>
           ) : null}
