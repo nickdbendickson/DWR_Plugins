@@ -64,7 +64,8 @@ IDENTICAL_ACROSS_PLUGINS = {
     "scripts/build_lisflood_linux.sh": ("DamSafety_Runner", "DamSafety_Setup"),
     "scripts/patch_lisflood.py": ("DamSafety_Runner", "DamSafety_Setup"),
     # Data 1.5.0: the Hazard's pack engine, vendored so Data's "Build offline pack…" downloads
-    # exactly what the Hazard's build_nd_pack.py does (edit the Hazard copy, then copy it over)
+    # exactly what the Hazard's build_nd_pack.py does. Suite 1.18.6: build_nd_pack.py and
+    # dwr_files.py are shims over damsuite/packengine.py / dwrfiles.py (edit shared/damsuite/)
     "build_nd_pack.py": ("DamSafety_Hazard", "DamSafety_Data"),
     "constants.py": ("DamSafety_Hazard", "DamSafety_Data"),
     "osm_parse.py": ("DamSafety_Hazard", "DamSafety_Data"),

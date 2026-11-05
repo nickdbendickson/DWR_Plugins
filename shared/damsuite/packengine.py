@@ -1207,7 +1207,7 @@ def _reconcile(ctx, area, nhd_index, tag, fill_tag):
                       part)
     for key in hit:
         w.con.execute("DELETE FROM chunks WHERE name=? AND ckey=?", (name, key))
-    w.count = w.con.execute("SELECT COUNT(*) FROM {}".format(table)).fetchone()[0]
+    w._cur["n"] = w.con.execute("SELECT COUNT(*) FROM {}".format(table)).fetchone()[0]
     w.con.commit()
     return len(drop)
 

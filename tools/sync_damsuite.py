@@ -45,9 +45,12 @@ FULL_COPY_PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screenin
                      "DamSafety_Data")
 # a full-copy plugin carries every master module EXCEPT these (modules it has no use for);
 # a new master module with no exclusion propagates to every full copy.
+# suite 1.18.6: the pack builder (packengine + packfiles + dwrfiles) is vendored only where a pack
+# is built (Hazard, Data)
+_PACKBUILD = {"packengine.py", "packfiles.py", "dwrfiles.py"}
 EXCLUDE = {
-    "DamSafety_Runner": {"pack_convert.py"},
-    "DamSafety_Screening": {"pack_convert.py"},
+    "DamSafety_Runner": {"pack_convert.py"} | _PACKBUILD,
+    "DamSafety_Screening": {"pack_convert.py"} | _PACKBUILD,
 }
 FILES_NAME = "FILES.json"
 

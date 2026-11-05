@@ -3,7 +3,7 @@
 Classification Helper. Pure data - no QGIS imports needed here."""
 
 PLUGIN_NAME = "DamSafety Hazard"
-PLUGIN_VERSION = "2.23.5"
+PLUGIN_VERSION = "2.23.6"
 # 2.18.34: the window's banner - the wording the plugin already uses (README "WHAT IT DOES",
 # the submittal cover letter, the Runner's banner); no new authority is cited
 DISCLAIMER = ("Screening results under the ND Dam Safety Standards REG_05.2026 Sec. 5.2 and "
@@ -279,6 +279,9 @@ ARCGIS_MAX_PAGES = 200
 # v2.6: downloads run side by side - services, ArcGIS pages and NSI tiles.
 # At most this many HTTP requests are in flight at once (Overpass: 2).
 DOWNLOAD_WORKERS = 6
+# suite 1.18.6: the layer list of the shared pack builder (damsuite/packengine.py) - "dwr" (this
+# suite: NHD hydro, the one-file zip) or "nd" (the ND Dam Suite: 3DHP, SARP, a pack folder)
+PACK_LAYERS = "dwr"
 OVERPASS_WORKERS = 2
 DOWNLOAD_FOLDER_NAME = "_downloads"
 # ND GIS Hub "NDGISHUB SiteStructure Address Points" (NENA NG9-1-1 site /
