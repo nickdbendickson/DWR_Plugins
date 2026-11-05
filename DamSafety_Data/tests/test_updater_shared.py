@@ -30,8 +30,9 @@ def test_the_shims_are_the_shared_modules():
 
 
 def test_one_source_list_with_the_same_defaults():
-    assert list(sources.SOURCE_INFO) == ALL                    # no offline pack source here
-    assert sources.SOURCE_INFO == US.SOURCE_INFO
+    # 1.7.0: DamSafety Data adds its own offline pack source, in the same place as the ND one
+    assert list(sources.SOURCE_INFO) == ALL[:-1] + ["pack", "nsi_generator"]
+    assert {k: v for k, v in sources.SOURCE_INFO.items() if k != "pack"} == US.SOURCE_INFO
     on = {k for k, v in US.SOURCE_INFO.items() if v[2]}
     assert on == {"nsi", "microsoft", "osm", "osm_layers", "address_points"}
     nd = US.source_info(("pack", "the ND pack", True))
