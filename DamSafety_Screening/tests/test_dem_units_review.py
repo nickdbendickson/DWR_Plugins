@@ -254,6 +254,36 @@ def reused_local_dem_is_tagged_only_when_it_is_a_usgs_download():
 
 
 @register
+def area_box_works_when_the_proj_grid_server_is_unreachable():
+    # PROJ_NETWORK=ON with cdn.proj.org unreachable: PROJ refuses to build the transform. The
+    # boxes need no network grid, so they are retried with the network off (then restored).
+    real = osr.CoordinateTransformation
+    was = osr.GetPROJEnableNetwork()
+
+    def offline_server(a, b):
+        if osr.GetPROJEnableNetwork():
+            raise RuntimeError("PROJ network: cdn.proj.org unreachable")
+        return real(a, b)
+
+    ll = dd.COUNTIES["Burleigh"]
+    calls = (lambda: dd.to_5070(*ll), lambda: dd._box_2266(*ll),
+             lambda: lt._bounds_in(ll, "EPSG:26914"),       # the 1 m lidar VRT box
+             lambda: lt.box_5070_to_ll((1.0e5, 4.6e5, 1.2e5, 4.8e5)))   # a dam folder's domain
+    try:
+        osr.SetPROJEnableNetwork(False)
+        expect = [f() for f in calls]
+        osr.SetPROJEnableNetwork(True)
+        osr.CoordinateTransformation = offline_server
+        for f, want in zip(calls, expect):
+            got = f()
+            assert got == want, (got, want)
+            assert osr.GetPROJEnableNetwork(), "network setting not restored"
+    finally:
+        osr.CoordinateTransformation = real
+        osr.SetPROJEnableNetwork(was)
+
+
+@register
 def request_note_fits_a_county_and_the_state():
     burleigh = dd.to_5070(*dd.COUNTIES["Burleigh"])
     n, km = dd.imageserver_chunks(burleigh, 1)

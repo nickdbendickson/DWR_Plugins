@@ -47,9 +47,21 @@ def unit(p):
         ds = None
 
 
+
+def _ct(a, b):
+    """Fixture placement only: the transform is built with the PROJ network off, so a run with
+    PROJ_NETWORK=ON and no reachable grid server does not fail here."""
+    was = osr.GetPROJEnableNetwork()
+    osr.SetPROJEnableNetwork(False)
+    try:
+        return osr.CoordinateTransformation(a, b)
+    finally:
+        osr.SetPROJEnableNetwork(was)
+
+
 def main(work):
     ll = srs(4326)
-    a = osr.CoordinateTransformation(ll, srs(5070))
+    a = _ct(ll, srs(5070))
     dams = [a.TransformPoint(-97.50, 47.00)[:2], a.TransformPoint(-97.48, 47.01)[:2]]
     box = rdem.dams_box_5070(dams, 0.5)
     got = []
@@ -94,7 +106,7 @@ def main(work):
     print("OK 10 m: one EPSG:5070 GeoTIFF, band unit m, Runner reads metres, reused")
 
     # 1 m: two native tiles in UTM 14N, the 10 m underneath
-    u = osr.CoordinateTransformation(ll, srs(26914))
+    u = _ct(ll, srs(26914))
     tiles = os.path.join(work, "tiles")
     os.makedirs(tiles)
     ents = []

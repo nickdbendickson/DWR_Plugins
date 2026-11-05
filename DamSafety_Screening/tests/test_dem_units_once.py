@@ -60,7 +60,14 @@ def _to(x, y, src, dst):
     b.SetFromUserInput(dst)
     for s in (a, b):
         s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    return osr.CoordinateTransformation(a, b).TransformPoint(x, y)[:2]
+    # Fixture placement only: build the transform with the PROJ network off so a run with
+    # PROJ_NETWORK=ON and no reachable grid server does not fail here.
+    was = osr.GetPROJEnableNetwork()
+    osr.SetPROJEnableNetwork(False)
+    try:
+        return osr.CoordinateTransformation(a, b).TransformPoint(x, y)[:2]
+    finally:
+        osr.SetPROJEnableNetwork(was)
 
 
 def _ras(path, value, crs="EPSG:26914", box=(599900.0, 5199300.0, 600700.0, 5200100.0), n=80,
