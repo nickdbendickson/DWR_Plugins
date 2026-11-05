@@ -49,6 +49,11 @@ describe("volume soft limit: about 5× the release (Nick, 2026-11-03)", () => {
     assert.equal(TRACE_VERSION, 7);
   });
 
+  it("the outline GeoJSON carries the trace version it was built with", async () => {
+    const { outline } = await build(ND);
+    assert.equal(outline.properties.trace_version, TRACE_VERSION);
+  });
+
   it("inside the band (2.4× on the full ND00199 release) the outline is left as the desk lays it", async () => {
     const { stats, released } = await build(ND);
     const ratio = stats.laidAcFt! / released;

@@ -405,6 +405,8 @@ export type TerrainOutline = FloodStrip & {
     volume_limit?: string;
     /** "volume-limited, run the Runner" on releases under SMALL_RELEASE_ACFT. */
     volume_label?: string;
+    /** The trace version the outline was built with (TRACE_VERSION). */
+    trace_version?: number;
     /** Channel pits against the release (trace version 6 on): totals, where the release ran out, suspected crossings. */
     channel_pits?: { pits: number; storage_ac_ft: number; counted_ac_ft: number };
     /** Where the release ran out in a channel pit and the outline stops; null when it did not. */
@@ -1032,6 +1034,7 @@ export function polygonizeDepth(
       strip_area_ac: areaAc,
       outline_area_ac: areaAc,
       dem_source: DEM_SERVICE,
+      trace_version: TRACE_VERSION,
       dem_cell_m: r3(g.cellM),
       dem_width: W,
       dem_height: H,
@@ -1697,6 +1700,7 @@ async function buildOutlineImpl(
       strip_area_ac: outlineAc,
       outline_area_ac: outlineAc,
       dem_source: DEM_SERVICE,
+      trace_version: TRACE_VERSION,
       dem_cell_m: r3(cellM),
       dem_width: W,
       dem_height: H,
