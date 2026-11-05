@@ -252,9 +252,22 @@ class NDBreachRunnerDialog(QDialog):
         self.force_anuga.setToolTip("Run ANUGA after LISFLOOD-FP finds the extent, and take the "
                                     "final depth, velocity and arrival from ANUGA, even if Models "
                                     "is set to LISFLOOD-FP only.")
+        # 3.15.0: crest burn and the automatic finer grid (both on by default)
+        self.crest_burn = QCheckBox("Crest burn: keep road and rail embankments (1 m ground)")
+        self.crest_burn.setToolTip("Raise each model cell a road or railway crosses to the "
+                                   "highest 1 m ground inside it, so the embankment the cell "
+                                   "average flattens still holds water back on flat ground. "
+                                   "The 1 m ground is the statewide VRT set in Processing "
+                                   "options, the run's DEM when 2 m or finer, the suite data "
+                                   "folder's DEM, or USGS 3DEP 1 m downloaded once.")
+        self.grid_refine = QCheckBox("Finer grid automatically when the flood over-spreads")
+        self.grid_refine.setToolTip("When a run coarser than 10 m floods a wide, shallow area, "
+                                    "run it again on the same domain at 10 m and keep that as "
+                                    "the record, with a 5 m check run beside it.")
         for sp in (self.grid_m, self.simh, self.simmax):
             sp.valueChanged.connect(self._changed)
-        self.force_anuga.toggled.connect(self._changed)
+        for cb in (self.force_anuga, self.crest_burn, self.grid_refine):
+            cb.toggled.connect(self._changed)
         self.carve_combo = QComboBox()                       # v3.10.20
         for key, label in zip(pl.CARVE_CHOICES, ("Off", "Auto", "On")):
             self.carve_combo.addItem(label, key)
@@ -326,6 +339,8 @@ class NDBreachRunnerDialog(QDialog):
         grid2.addWidget(QLabel("Elevation datum:"), 5, 0)
         grid2.addWidget(self.datum_combo, 5, 1)
         grid2.addWidget(self.datum_label, 5, 2, 1, 3)
+        grid2.addWidget(self.crest_burn, 6, 0, 1, 4)
+        grid2.addWidget(self.grid_refine, 7, 0, 1, 4)
         grid2.setColumnStretch(4, 1)
         self.adv_section = Collapsible("Advanced", adv)
         body.addWidget(self.adv_section)
@@ -902,6 +917,10 @@ class NDBreachRunnerDialog(QDialog):
         dm = self.datum_combo.currentData() if hasattr(self, "datum_combo") else None
         if dm and dm != "auto":             # auto (the default) leaves the saved state as before
             out["elev_datum"] = dm
+        if not self.crest_burn.isChecked():     # on (the default) leaves the saved state as before
+            out["crest_burn"] = False
+        if not self.grid_refine.isChecked():    # on (the default) leaves the saved state as before
+            out["grid_refine"] = False
         return out
 
     def _apply(self, s):
@@ -927,6 +946,8 @@ class NDBreachRunnerDialog(QDialog):
         self.simh.setValue(float(s.get("simh", pl.DEFAULT_SETTINGS["simh"])))
         self.simmax.setValue(float(s.get("simmax", pl.DEFAULT_SETTINGS["simmax"])))
         self.force_anuga.setChecked(bool(s.get("force_anuga", False)))
+        self.crest_burn.setChecked(bool(s.get("crest_burn", True)))
+        self.grid_refine.setChecked(bool(s.get("grid_refine", True)))
         carve = str(s.get("reservoir_carve") or "off").lower()
         self.carve_combo.setCurrentIndex(pl.CARVE_CHOICES.index(carve)
                                          if carve in pl.CARVE_CHOICES else 0)

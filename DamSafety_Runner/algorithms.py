@@ -39,6 +39,7 @@ SET_BUILTIN = "NDBREACH_USE_BUILTIN"       # opt in to the built-in screening en
 SET_ANUGA = "NDBREACH_ANUGA_PYTHON"
 SET_THREADS = "NDBREACH_THREADS"
 SET_ALLOW_UNPATCHED = "NDBREACH_ALLOW_UNPATCHED"   # opt in to an unpatched LISFLOOD-FP build
+SET_CREST_DEM = "NDBREACH_CREST_BURN_DEM"         # 3.15.0: the 1 m DEM (VRT) the crest burn reads
 
 METHODS = [(m, brmod.METHOD_LABELS[m]) for m in brmod.METHODS]
 from .popup_logic import HECRAS_GMSH_TIP, HECRAS_CREST_TIP   # noqa: E402  v3.10.22
@@ -645,6 +646,22 @@ class _Base(QgsProcessingAlgorithm):
         self.addParameter(set_advanced(p))
         self._num("CELL", "Model cell size (m; 10 m = 32.8 ft default; on flat plains use 10 m, or 5 m finer/slower; avoid coarser than 10 m)",
                   10.0, minimum=0.5)
+        # 3.15.0: crest-burn terrain prep and the automatic finer grid (both on by default)
+        self._bool("CREST_BURN", "Crest burn: raise each model cell a road or railway crosses "
+                   "to the highest 1 m ground inside it, so embankments the cell average "
+                   "flattens still hold water back (needs the Roads / Railways layers; bridges "
+                   "and the main channel are left open; on by default)", True, advanced=True)
+        self._file("CREST_BURN_DEM", "Crest burn: 1 m DEM or VRT (empty = the provider "
+                   "setting, else the run's DEM when 2 m or finer, else the suite data "
+                   "folder's DEM, else USGS 3DEP 1 m downloaded into the terrain cache)",
+                   advanced=True)
+        self._bool("GRID_REFINE", "Finer grid automatically: when a run coarser than 10 m "
+                   "floods a wide, shallow area (the over-spread signature), run it again on "
+                   "the same domain at 10 m and keep that as the record (on by default)", True,
+                   advanced=True)
+        self._num("GRID_CHECK_CELL", "Finer grid automatically: also run this cell size on "
+                  "the same domain as a convergence check (m; 0 = no check; 5 m = 16.4 ft)",
+                  workflow.GRID_CHECK_CELL_M, minimum=0.0, advanced=True)
         self._num("MANNING", "Manning's n (where there is no n raster)", 0.06, minimum=0.005,
                   maximum=1.0)
         self.addParameter(QgsProcessingParameterRasterLayer(
@@ -873,6 +890,17 @@ class _Base(QgsProcessingAlgorithm):
             wm = self._fileparam(parameters, "WATER_MASK", context)
             if wm:
                 st.water_mask = wm
+        if self.parameterDefinition("CREST_BURN") is not None:         # 3.15.0
+            st.crest_burn = self.parameterAsBool(parameters, "CREST_BURN", context)
+            st.crest_burn_dem = (self._fileparam(parameters, "CREST_BURN_DEM", context) or
+                                 str(_setting(SET_CREST_DEM, "") or "")).strip()
+            st.grid_refine = self.parameterAsBool(parameters, "GRID_REFINE", context)
+            st.grid_check_cell_m = g("GRID_CHECK_CELL") or 0.0
+            try:
+                from .damsuite import suitedata as _SD
+                st.crest_burn_data_folder = _SD.data_folder() or ""
+            except Exception:                                    # noqa - the burn says why
+                pass
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0

@@ -403,7 +403,7 @@ def test_midcrest_edge_pick_flagged():
     # the Runner carries the flag (run_dam adds a REVIEW warning and report["crest_pick_review"])
     import inspect
     from nd_breach_runner.core import workflow
-    src = inspect.getsource(workflow.run_dam)
+    src = inspect.getsource(workflow._run_dam_once)      # 3.15.0: run_dam wraps it
     assert 'report["crest_pick_review"]' in src and '"REVIEW: Dam point: "' in src
 
 
