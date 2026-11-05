@@ -512,7 +512,7 @@ def _run_file(ctx, t, bbox, wk, refresh):
     w = ctx.writer
     w.begin(name, label, url, resume=False, signature="file|{}".format(path))
     try:
-        n, skipped = 0, 0
+        n = 0
         batch = []
         for f in read_vector(path, bbox, state=spec.get("state")):
             batch.append(f)
