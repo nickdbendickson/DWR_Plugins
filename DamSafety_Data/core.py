@@ -843,7 +843,6 @@ class ArcGISFeatureSource(Source):
         import time
         os.makedirs(staging_dir, exist_ok=True)
         out_ndjson = os.path.join(staging_dir, f"{self.layer_name}.ndjson")
-        out_geojson = os.path.join(staging_dir, f"{self.layer_name}.geojson")
         out_gpkg = os.path.join(staging_dir, f"{self.layer_name}.gpkg")
 
         feedback.log(f"{self.name}: querying ArcGIS FeatureServer")
