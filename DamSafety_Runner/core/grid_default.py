@@ -18,6 +18,9 @@ run is coarser than 10 m.
 
 The nd_hazard Runner also has a post-run grid-spread advisory (3.27.7) from the
 flood signature; this module is the pre-run / default side of the same finding.
+
+# CI note: warning text is advisory; synthetic valleys in unit tests
+# may classify as flat_section_plain when cell > 10 m.
 DamSafety Runner 3.14.7 does not yet ship that post-run advisory.
 """
 from __future__ import annotations
