@@ -314,7 +314,7 @@ class NDBreachRunnerDialog(QDialog):
         _grid_hint = QLabel("Default 10 m on flat section-road plains; "
                             "5 m (finer, slower) when you can afford the run time.")
         _grid_hint.setWordWrap(True)
-        _grid_hint.setStyleSheet("color: #555;")
+        _grid_hint.setStyleSheet("color: {};".format(TOKENS["muted"]))
         grid2.addWidget(_grid_hint, 1, 0, 1, 4)
         grid2.addWidget(QLabel("Longest simulated time (h):"), 2, 0)
         grid2.addWidget(self.simmax, 2, 1)
