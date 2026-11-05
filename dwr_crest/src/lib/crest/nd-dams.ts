@@ -170,12 +170,26 @@ export function makeNdData(nid: Bundle, dwr: Bundle | null): NdData {
 }
 
 let cache: Promise<NdData> | null = null;
-/** Load both bundles once (separate chunks; never part of the first paint). */
+/**
+ * Load both bundles once (separate chunks; never part of the first paint). Called only from an effect, so never
+ * during SSR.
+ *
+ * The `with { type: "json" }` import attribute is required by Node's native ESM loader (the unit tests call this) and
+ * accepted by Vite's production build, but Vite's dev server serves a dynamic `.json` import as a JS module, which the
+ * attribute then rejects with a MIME-type error ("Expected a JSON module script … responded with text/javascript").
+ * So drop the attribute under Vite dev only — the one environment that breaks — and keep it everywhere else. The
+ * `import.meta.env` guard is needed because `import.meta.env` is undefined under `node --test`.
+ */
 export function loadNdData(): Promise<NdData> {
-  cache ??= Promise.all([
-    import("./data/nd_dams.json", { with: { type: "json" } }),
-    import("./data/nd_dams_dwr.json", { with: { type: "json" } }),
-  ]).then(([n, d]) =>
+  const viteDev = typeof import.meta !== "undefined" && typeof import.meta.env !== "undefined" && import.meta.env.DEV === true;
+  cache ??= (
+    viteDev
+      ? Promise.all([import("./data/nd_dams.json"), import("./data/nd_dams_dwr.json")])
+      : Promise.all([
+          import("./data/nd_dams.json", { with: { type: "json" } }),
+          import("./data/nd_dams_dwr.json", { with: { type: "json" } }),
+        ])
+  ).then(([n, d]) =>
     makeNdData(((n as { default?: Bundle }).default ?? n) as Bundle, ((d as { default?: Bundle }).default ?? d) as Bundle),
   );
   return cache;
