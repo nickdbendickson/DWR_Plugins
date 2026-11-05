@@ -230,9 +230,17 @@ def a_warp_that_converted_the_values_is_not_read_by_its_band_unit():
         kept_unit = bool(_ds.GetRasterBand(1).GetUnitType())
         _ds = None
         if kept_unit:
-            msg = _stops(lambda: _gis(algs, tif, 0), "396.2 with units 'US survey feet' "
-                         "(detected: raster unit 'us survey foot')", "to Meters", "record is wrong")
-            assert "121 m" in msg, msg
+            # 3.14.7 (second GUI check 2026-11-04): the numbers come from the warped file. With
+            # no geoid grid the warp only converts ftUS to metres (396.2, read as ftUS = 121 m);
+            # with one (PROJ_NETWORK=ON on a machine that reaches cdn.proj.org, or the grid
+            # installed) it also makes the NAVD88 heights ellipsoidal, about -25 m in ND (370.7,
+            # 113 m). Either way the run must stop: that is what this test checks.
+            med = _med(_read(tif))
+            assert abs(med - 396.24) < 0.05 or 330.0 < med < 396.0, med
+            msg = _stops(lambda: _gis(algs, tif, 0), "{:.1f} with units 'US survey feet' "
+                         "(detected: raster unit 'us survey foot')".format(med), "to Meters",
+                         "record is wrong")
+            assert "{:.0f} m".format(med * US_FT) in msg, msg
         else:
             _stops(lambda: _gis(algs, tif, 0), "no elevation unit is recorded",
                    "Set 'DEM elevation units' to Meters or Feet")
