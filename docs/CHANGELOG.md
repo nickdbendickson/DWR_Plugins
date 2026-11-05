@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Runner 3.14.7: terrain-aware grid default on flat section-road plains.** A coarse DEM window around the dam is classified by relief (p95-p5 <= 25 m) and mean neighbour slope (<= 1%). Flat plains start at 10 m, with **5 m (finer, slower)** offered in the Advanced hint and CELL / grid_m tooltips; a pre-run WARNING fires when the cell is coarser than 10 m on a flat plain (report `terrain_grid`). Other terrain keeps the existing 10 m start; setting keys stay numeric metres. Evidence: DWR-2801 (Absaraka) Claude Runner pack vs DSS-WISE wet at >=0.5 ft scored CSI 0.36 / 0.43 / 0.57 at 20 / 10 / 5 m (Docs & QA compare; Nick "Do that"). Module `core/grid_default.py`; test `tests/test_grid_default.py`. RELEASE ndbreach 3.14.7; damsuite content otherwise unchanged (pin rewritten for versions.py).
+
 - **Runner 3.14.6 / Hazard 2.23.4 / Screening 0.18.6 / Setup 1.0.20 / Hazard Lite 0.1.4: GUI check fixes (GUI + test check of 2026-11-04 on main 395c277; Nick: "Yes").** RELEASE ndbreach 3.14.6, ndhazard 2.23.4, ndscreen 0.18.6; damsuite content otherwise unchanged (pin rewritten for versions.py).
   - **Runner window.** Minimum width 760 (was 820). `_fit_body_width` measured the frame around the body as window width minus the scroll area's viewport, before the first show, when the viewport still has its default size: about 340 px of "frame", so the window could not shrink below 829-867 px. It now adds the window margins and the vertical scroll bar to the body's minimum (about 40 px).
   - **Dam suite home** (`shared/ui/suite_home.py`, synced): no fixed 900 px minimum; `fit_window` opens it at 960 x 600 where the screen has room and lets it shrink to the screen, never below its button rows.
