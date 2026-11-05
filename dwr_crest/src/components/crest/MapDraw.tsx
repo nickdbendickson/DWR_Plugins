@@ -39,13 +39,44 @@ type Props = {
   /** Terrain outline from 3DEP (null: not built, see `outlineMessage`). */
   outline?: TerrainOutline | null;
   outlineMessage?: string | null;
+  /** Click-to-place: the next map click puts the breach or reservoir point there (replacing the old one). */
+  placing?: PointRole | null;
+  onPlaced?: () => void;
 };
+
+export type PointRole = "breach" | "reservoir";
 
 type GeoLayer = L.Layer & { toGeoJSON: () => GeoJSONFeature };
 
-function DrawControl({ geometry, lat, lon, onChange }: Props) {
+/**
+ * Which drawn marker is which: a marker that carries a role (placed by click or by "pick automatically") is that
+ * point; the others keep the old order (first unassigned marker = reservoir, second = breach).
+ */
+function pointRoles(layers: GeoLayer[]): Map<GeoLayer, PointRole> {
+  const out = new Map<GeoLayer, PointRole>();
+  const pts = layers.filter((l) => l.toGeoJSON().geometry.type === "Point");
+  for (const l of pts) {
+    const r = l.toGeoJSON().properties?.role;
+    if (r === "breach" || r === "reservoir") out.set(l, r);
+  }
+  const taken = new Set(out.values());
+  for (const l of pts) {
+    if (out.has(l)) continue;
+    const r: PointRole | null = !taken.has("reservoir") ? "reservoir" : !taken.has("breach") ? "breach" : null;
+    if (!r) continue;
+    out.set(l, r);
+    taken.add(r);
+  }
+  return out;
+}
+
+function DrawControl({ geometry, lat, lon, onChange, placing, onPlaced }: Props) {
   const map = useMap();
   const groupRef = useRef<L.FeatureGroup>(null);
+  const placingRef = useRef(placing ?? null);
+  placingRef.current = placing ?? null;
+  const placedRef = useRef(onPlaced);
+  placedRef.current = onPlaced;
   // The saved geometry seeds the layer once; later edits come from the map itself.
   // Re-running the effect on every save would re-add the same layers and controls.
   const initial = useRef({ geometry, lat, lon });
@@ -70,13 +101,21 @@ function DrawControl({ geometry, lat, lon, onChange }: Props) {
     });
     map.addControl(drawControl);
 
+    const layers = () => {
+      const all: GeoLayer[] = [];
+      group.eachLayer((l) => void all.push(l as GeoLayer));
+      return all;
+    };
+
     function save() {
       const next: DamGeometry = {};
+      const roles = pointRoles(layers());
       group.eachLayer((layer) => {
         const geo = (layer as GeoLayer).toGeoJSON();
         if (geo.geometry.type === "Point") {
-          if (!next.reservoirPoint) next.reservoirPoint = geo;
-          else next.breachPoint = geo;
+          const r = roles.get(layer as GeoLayer);
+          if (r === "reservoir") next.reservoirPoint = geo;
+          else if (r === "breach") next.breachPoint = geo;
         } else if (geo.geometry.type === "LineString") {
           next.damLine = geo;
         } else if (geo.geometry.type === "Polygon") {
@@ -92,6 +131,18 @@ function DrawControl({ geometry, lat, lon, onChange }: Props) {
     };
     const onEdited = () => save();
     const onDeleted = () => save();
+    // Click-to-place: the clicked spot becomes the breach (or reservoir) point, replacing the one there was.
+    const onClick = (e: L.LeafletMouseEvent) => {
+      const role = placingRef.current;
+      if (!role) return;
+      for (const [l, r] of pointRoles(layers())) if (r === role) group.removeLayer(l);
+      const m = L.marker(e.latlng) as L.Marker & { feature?: GeoJSON.Feature };
+      m.feature = { type: "Feature", properties: { role, source: "clicked on the map" }, geometry: { type: "Point", coordinates: [e.latlng.lng, e.latlng.lat] } };
+      group.addLayer(m);
+      save();
+      placedRef.current?.();
+    };
+    map.on("click", onClick);
 
     map.on(L.Draw.Event.CREATED, onCreated);
     map.on(L.Draw.Event.EDITED, onEdited);
@@ -120,6 +171,7 @@ function DrawControl({ geometry, lat, lon, onChange }: Props) {
       map.off(L.Draw.Event.CREATED, onCreated);
       map.off(L.Draw.Event.EDITED, onEdited);
       map.off(L.Draw.Event.DELETED, onDeleted);
+      map.off("click", onClick);
       group.clearLayers();
     };
   }, [map]);
@@ -458,6 +510,8 @@ export function MapDraw({
   nd911Message,
   outline,
   outlineMessage,
+  placing,
+  onPlaced,
 }: Props) {
   const view = initialView(geometry, lat, lon);
   const center: [number, number] = "center" in view ? view.center : ND_CENTER;
@@ -479,6 +533,7 @@ export function MapDraw({
         position: "relative",
         height: 480,
         width: "100%",
+        cursor: placing ? "crosshair" : undefined,
         borderRadius: 8,
         overflow: "hidden",
         border: "1px solid var(--border)",
@@ -520,7 +575,7 @@ export function MapDraw({
         <OutlineLayer outline={outline} on={outlineOn} />
         <PlssLayer rows={plss} on={plssOn} />
         <Nd911Layer pts={nd911} on={nd911On} against={outline ? "terrain outline" : "strip"} />
-        <DrawControl geometry={geometry} lat={lat} lon={lon} onChange={onChange} />
+        <DrawControl geometry={geometry} lat={lat} lon={lon} onChange={onChange} placing={placing} onPlaced={onPlaced} />
       </MapContainer>
     </div>
   );

@@ -661,7 +661,25 @@ type Fetch = (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boo
 /** Waits before retrying a 3DEP answer of 5xx (the service often answers 502 a few times, then serves the image). */
 export const DEM_RETRY_MS = [1500, 4000];
 
-export async function fetchDem(req: DemRequest, fetchFn: Fetch = fetch as unknown as Fetch, retryMs: number[] = DEM_RETRY_MS): Promise<DemGrid> {
+/** A terrain source used instead of 3DEP (the desktop's local DEM, dem-source.ts); null = 3DEP. */
+let demOverride: { fetch: (req: DemRequest) => Promise<DemGrid>; label: string } | null = null;
+
+export function setDemOverride(o: { fetch: (req: DemRequest) => Promise<DemGrid>; label: string } | null): void {
+  demOverride = o;
+}
+
+/** "3DEP", or the local DEM's label when one is in use. */
+export function demSourceLabel(): string {
+  return demOverride?.label ?? "3DEP";
+}
+
+export async function fetchDem(req: DemRequest, fetchFn?: Fetch, retryMs: number[] = DEM_RETRY_MS): Promise<DemGrid> {
+  // A caller that passes its own fetch (tests, scripts) always gets 3DEP through it.
+  if (!fetchFn && demOverride) return demOverride.fetch(req);
+  return fetch3dep(req, fetchFn ?? (fetch as unknown as Fetch), retryMs);
+}
+
+async function fetch3dep(req: DemRequest, fetchFn: Fetch, retryMs: number[]): Promise<DemGrid> {
   const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
   const timer = ctl ? setTimeout(() => ctl.abort(), 90_000) : null;
   try {

@@ -27,6 +27,8 @@
     "build:desktop": "node node_modules/vite/bin/vite.js build -c vite.desktop.config.ts",
     "data:nd-dams": "node scripts/build-nd-dams.mjs",
     "data:nd-dams-dwr": "node scripts/build-nd-dams-dwr.mjs",
+    "data:nd-structures": "node scripts/build-nd-structures.mjs",
+    "batch:dams": "node --experimental-strip-types scripts/batch-dams.mjs",
     "build:crest-html": "node node_modules/vite/bin/vite.js build -c vite.desktop.config.ts --mode singlefile",
     "test:desktop": "python3 crest-desktop/tests/test_smoke.py",
     "validate:crest": "node --experimental-strip-types scripts/validate-crest.mjs",

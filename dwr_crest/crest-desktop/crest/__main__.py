@@ -25,6 +25,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from crest import WEB_DIR_NAME
+from crest import localdem
 from crest.qgis_run import WorkFolderError, resolve_work, run_folder, run_layers, run_model, run_screening
 
 #: Fixed local port, so the desk's saved records (browser localStorage is per origin) survive a restart.
@@ -39,6 +40,9 @@ TITLE = "Crest — Dam Breach Desk"
 TOKEN_HEADER = "X-Crest-Token"
 API_TOKEN = secrets.token_urlsafe(32)
 _LOCAL_HOSTS = ("127.0.0.1", "localhost")
+
+#: crest-settings.json (last Save folder, the chosen local DEM). Set by main(); tests set it directly.
+SETTINGS_FILE: Path | None = None
 
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
@@ -215,6 +219,9 @@ class _Handler(SimpleHTTPRequestHandler):
             return
         if parsed.path.startswith("/api/") and not self._api_allowed():
             return
+        if parsed.path == "/api/dem":
+            self._send_dem(parse_qs(parsed.query))
+            return
         if parsed.path == "/api/job":
             job_id = (parse_qs(parsed.query).get("id") or [""])[0]
             found = job_snapshot(job_id)
@@ -286,6 +293,24 @@ class _Handler(SimpleHTTPRequestHandler):
         body = json.dumps(start_job(kind, dam, analysis, work, model, files, source, timeout))
         self._send(200, body.encode(), "application/json")
 
+    def _send_dem(self, query: dict) -> None:
+        """Terrain from the local DEM chosen in the app (localdem.py); 409 when none is chosen."""
+        src = localdem.read_dem_path(SETTINGS_FILE)
+        if not src:
+            self._send(409, b'{"error":"no local DEM chosen"}', "application/json")
+            return
+        try:
+            bbox, width, height, cell = localdem.parse_request(query)
+        except ValueError as exc:
+            self._send(400, json.dumps({"error": str(exc)}).encode(), "application/json")
+            return
+        try:
+            body = localdem.read_window(src, bbox, width, height, cell)
+        except Exception as exc:  # gdalwarp missing or failed: the desk shows the message
+            self._send(502, json.dumps({"error": str(exc)}).encode(), "application/json")
+            return
+        self._send(200, body, "application/octet-stream")
+
     def _send(self, code: int, body: bytes, content_type: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
@@ -333,6 +358,11 @@ def _save_dialog_type(webview_mod):
     return file_dialog.SAVE if file_dialog is not None else webview_mod.SAVE_DIALOG
 
 
+def _open_dialog_type(webview_mod):
+    file_dialog = getattr(webview_mod, "FileDialog", None)
+    return file_dialog.OPEN if file_dialog is not None else webview_mod.OPEN_DIALOG
+
+
 def _file_types(name: str) -> tuple[str, ...]:
     ext = Path(name).suffix.lower().lstrip(".")
     labels = {"csv": "CSV", "json": "JSON", "par": "LISFLOOD parameters", "bci": "LISFLOOD boundary", "bdy": "LISFLOOD hydrograph", "geojson": "GeoJSON", "kml": "KML", "pdf": "PDF", "png": "PNG image"}
@@ -372,6 +402,39 @@ class Api:
             self._settings_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
         except OSError:
             pass  # not worth failing an export over
+
+    def get_dem(self) -> dict:
+        """The local DEM the desk uses for terrain instead of 3DEP (None = 3DEP), and whether gdalwarp was found."""
+        return {"path": localdem.read_dem_path(self._settings_file), "gdalwarp": localdem.find_gdalwarp()}
+
+    def pick_dem(self) -> dict:
+        """Choose the DEM file (e.g. ND_1m_EPSG26914.vrt) in an Open dialog and remember it."""
+        import webview
+
+        window = self._window or (webview.windows[0] if webview.windows else None)
+        if window is None:
+            return {"error": "no window"}
+        current = localdem.read_dem_path(self._settings_file)
+        start = str(Path(current).parent) if current else str(Path.home())
+        types = ("DEM (*.vrt;*.tif;*.tiff;*.img)", "All files (*.*)")
+        try:
+            picked = window.create_file_dialog(_open_dialog_type(webview), directory=start, file_types=types)
+        except Exception:  # some backends reject the file_types filter
+            picked = window.create_file_dialog(_open_dialog_type(webview), directory=start)
+        if not picked:
+            return {"cancelled": True}
+        path = picked if isinstance(picked, str) else picked[0]
+        if Path(path).suffix.lower() not in localdem.DEM_SUFFIXES:
+            return {"error": f"Not a DEM file Crest reads ({', '.join(localdem.DEM_SUFFIXES)}): {path}"}
+        if self._settings_file:
+            localdem.write_dem_path(self._settings_file, path)
+        return {"path": path, "gdalwarp": localdem.find_gdalwarp()}
+
+    def clear_dem(self) -> dict:
+        """Back to USGS 3DEP."""
+        if self._settings_file:
+            localdem.write_dem_path(self._settings_file, None)
+        return {"path": None, "gdalwarp": localdem.find_gdalwarp()}
 
     def save_file(self, name: str, text: str) -> dict:
         import webview
@@ -512,7 +575,9 @@ def main() -> None:
             pass
         store = storage_dir()
         store.mkdir(parents=True, exist_ok=True)
-        api = Api(settings_file=store / "crest-settings.json")
+        global SETTINGS_FILE
+        SETTINGS_FILE = store / "crest-settings.json"
+        api = Api(settings_file=SETTINGS_FILE)
         api._window = webview.create_window(TITLE, url, js_api=api, width=1280, height=860, min_size=(760, 560))
         webview.start(private_mode=False, storage_path=str(store))
     except Exception as e:  # no GUI backend: use the system browser (downloads work there)

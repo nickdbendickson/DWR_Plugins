@@ -42,6 +42,7 @@ import {
   channelPitsNote,
   volumeLimitNote,
   SMALL_RELEASE_ACFT,
+  fetchDem,
   outlineInputs,
   outlineState,
   type OutlineState,
@@ -72,9 +73,19 @@ import { PaperReport } from "./PaperReport";
 import { Dashboard } from "./Dashboard";
 import { HybridSetup } from "./HybridSetup";
 import { ViewExport } from "./ViewExport";
+import { ClientOnly } from "./ClientOnly";
+import { StructurePicker } from "./StructurePicker";
+import { TerrainSource } from "./TerrainSource";
+import { ensureDemSource } from "@/lib/crest/dem-source";
+import type { PointRole } from "./MapDraw";
+import { autoBreachPoint } from "@/lib/crest/breach-point";
+import { CREST_SNAP_M, deriveFromDem, nearRequest } from "@/lib/crest/batch";
 
 // Leaflet touches `window` when it loads, so the map is a client-only chunk.
 const MapDraw = lazy(() => import("./MapDraw").then((m) => ({ default: m.MapDraw })));
+// The batch screen loads the structure lists (about 2 MB), so it is its own chunk, fetched only when opened.
+const LocationPicker = lazy(() => import("./LocationPicker").then((m) => ({ default: m.LocationPicker })));
+const BatchScreen = lazy(() => import("./BatchScreen").then((m) => ({ default: m.BatchScreen })));
 
 const LEVEL_CLASS: Record<ScreenLevel, string> = {
   High: "bg-amber text-card",
@@ -94,10 +105,13 @@ export function Desk() {
   const restore = useDesk((s) => s.restore);
   const addDam = useDesk((s) => s.addDam);
   const [ready, setReady] = useState(false);
+  const [view, setView] = useState<"desk" | "batch">("desk");
 
   useEffect(() => {
     void useDesk.persist.rehydrate();
     setReady(true);
+    // The desktop's saved local DEM (if any) becomes the terrain for every read on the desk.
+    void ensureDemSource();
   }, []);
 
   const dam = activeDam({ dams, activeId, step, setStep, select, update, add, addDam, restore });
@@ -121,9 +135,29 @@ export function Desk() {
             A standalone stand-in for the QGIS suite. Elevations, breach, and the map update as you edit.
             It does not run LISFLOOD, ANUGA, or HEC-RAS, and it does not assign an official hazard class.
           </p>
+          <div className="flex gap-2 sm:ml-auto" role="group" aria-label="View">
+            {(["desk", "batch"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                aria-pressed={view === v}
+                onClick={() => setView(v)}
+                className={"h-11 rounded-sm border px-4 text-sm " + (view === v ? "border-water bg-water text-card" : "border-line bg-card text-ink")}
+              >
+                {v === "desk" ? "One dam" : "Batch"}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
+      {view === "batch" ? (
+        <main className="mx-auto w-full max-w-6xl min-w-0 px-4 py-4">
+          <Suspense fallback={<p className="text-sm text-muted">Opening the batch screen…</p>}>
+            <BatchScreen onOpen={() => setView("desk")} />
+          </Suspense>
+        </main>
+      ) : (
       <div className="mx-auto grid w-full max-w-6xl min-w-0 gap-0 lg:grid-cols-[240px_minmax(0,1fr)]">
         <aside className="min-w-0 border-b border-line bg-card lg:border-r lg:border-b-0">
           <div className="flex items-center justify-between px-4 pt-4">
@@ -226,6 +260,7 @@ export function Desk() {
           <AboutData />
         </main>
       </div>
+      )}
       <footer className="border-t border-line bg-card">
         <div className="mx-auto max-w-6xl px-4 py-3 text-xs text-muted">
           <details>
@@ -290,6 +325,55 @@ function DemTiePanel({ dam }: { dam: DamRecord }) {
   );
 }
 
+/**
+ * Record step: set the dam's latitude and longitude by clicking a map (a new dam with no inventory point), and read
+ * the ground there from the terrain into the DEM crest field.
+ */
+function LocationPanel({ dam }: { dam: DamRecord }) {
+  const update = useDesk((s) => s.update);
+  const [open, setOpen] = useState(false);
+  const [ground, setGround] = useState<{ busy: boolean; msg: string | null }>({ busy: false, msg: null });
+  const has = Number.isFinite(dam.lat) && Number.isFinite(dam.lon);
+  const readGround = async () => {
+    setGround({ busy: true, msg: null });
+    try {
+      const g = await fetchDem(nearRequest(dam.lon!, dam.lat!, 0.3, 5));
+      const d = deriveFromDem(g, dam.lon!, dam.lat!);
+      if (!d) throw new Error("No terrain at this point.");
+      update({ demCrestFt: d.crestFt });
+      setGround({ busy: false, msg: `DEM crest set to ${d.crestFt.toFixed(1)} ft NAVD 88: the highest ground within ${CREST_SNAP_M} m of the point. Use it for the crest if the point is on the embankment top.` });
+    } catch (e) {
+      setGround({ busy: false, msg: (e as Error).message });
+    }
+  };
+  const btn = "inline-flex h-11 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50";
+  return (
+    <div className="mt-4" data-testid="location-panel">
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className={btn} aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? "Close the map" : has ? "Move the dam on the map" : "Pick the dam's location on the map"}
+        </button>
+        {has ? (
+          <button type="button" className={btn} disabled={ground.busy} onClick={() => void readGround()}>
+            {ground.busy ? "Reading the terrain…" : "Read the ground here (DEM crest)"}
+          </button>
+        ) : null}
+      </div>
+      {open ? (
+        <div className="mt-2">
+          <p className="mb-2 text-sm text-muted">Click the dam (the embankment top, near the old channel). Latitude and longitude update as you click.</p>
+          <ClientOnly fallback={<p className="text-sm text-muted">Loading the map…</p>}>
+            <Suspense fallback={<p className="text-sm text-muted">Loading the map…</p>}>
+              <LocationPicker lat={dam.lat} lon={dam.lon} onPick={(lat, lon) => update({ lat, lon })} />
+            </Suspense>
+          </ClientOnly>
+        </div>
+      ) : null}
+      {ground.msg ? <p className="mt-2 text-sm text-muted">{ground.msg}</p> : null}
+    </div>
+  );
+}
+
 function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
   const update = useDesk((s) => s.update);
   return (
@@ -298,6 +382,7 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         <h2 className="text-xl">Dam record</h2>
         <div className="mt-3">
           <NdDamPicker dam={dam} />
+          <StructurePicker />
         </div>
         <NidHazardLine dam={dam} />
         <p className="mt-2 text-sm text-muted">{result.datum.rule}</p>
@@ -365,6 +450,7 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
             />
           ) : null}
         </div>
+        <LocationPanel dam={dam} />
       </div>
       <aside className="rounded-md border border-line bg-sand p-4">
         <h3 className="text-lg">Tied to NAVD88</h3>
@@ -451,6 +537,21 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   const onGeometry = useCallback((geometry: DamGeometry) => update({ geometry }), [update]);
   const { strip, outline, ol, against, lookup, plss, nd911, basis } = useFloodAreas(dam, result);
   const view = useRef<HTMLElement>(null);
+  const [placing, setPlacing] = useState<PointRole | null>(null);
+  const onPlaced = useCallback(() => setPlacing(null), []);
+  // Bumped when geometry is set from outside the map (pick automatically), so the map reloads it.
+  const [mapRev, setMapRev] = useState(0);
+  const [auto, setAuto] = useState<{ busy: boolean; note: string | null; error: string | null }>({ busy: false, note: null, error: null });
+  const pickAuto = async () => {
+    setAuto({ busy: true, note: null, error: null });
+    const r = await autoBreachPoint(dam);
+    if (r.ok) {
+      update({ geometry: r.geometry });
+      setMapRev((v) => v + 1);
+      setAuto({ busy: false, note: r.note, error: null });
+    } else setAuto({ busy: false, note: null, error: r.reason });
+  };
+  const pointBtn = "inline-flex h-11 items-center rounded-sm border px-3 text-sm disabled:opacity-50";
   return (
     <section ref={view} className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -497,19 +598,43 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
       <div className="rounded-md border border-line bg-card p-4">
         <h3 className="text-lg">Dam line, points, and area of interest</h3>
         <p className="mt-1 text-sm text-muted">
-          Draw the dam line, the reservoir point (first marker), the breach point (second marker), and the area of
-          interest. They are saved on this dam record. A drawn area limits the schematic flood: the valley runs
+          Draw the dam line and the area of interest, and place the breach and reservoir points: click a button above the
+          map and then the spot, or let Crest pick the breach point from the terrain (where the ground at the downstream
+          toe is lowest along the dam line, the old channel crossing; with no dam line drawn, one is laid across the
+          downhill slope at the record's point). Markers drawn with the map's own marker tool still count in order
+          (first = reservoir, second = breach). They are saved on this dam record. A drawn area limits the schematic flood: the valley runs
           downstream from the breach (across the dam at the breach, away from the reservoir; a curved dam uses the
           segment nearest the breach, not the line from end to end), the reach stops where it
           leaves the drawn area, the wet area is clipped to it, and receptors outside it are unresolved (a house that
           would rank higher is still named). The strip is straight down that valley. It does not follow later bends
           in the stream. With no dam line or reservoir point, a drawn area around the breach is cut at its nearest edge, and one that does not contain the breach is not applied.
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2" data-testid="breach-point-tools">
+          <button type="button" className={`${pointBtn} border-water bg-water text-card`} disabled={auto.busy} onClick={() => void pickAuto()}>
+            {auto.busy ? "Reading the terrain…" : "Pick breach point automatically"}
+          </button>
+          {(["breach", "reservoir"] as const).map((r) => (
+            <button
+              key={r}
+              type="button"
+              aria-pressed={placing === r}
+              className={`${pointBtn} ${placing === r ? "border-amber bg-amber text-card" : "border-line bg-card text-ink"}`}
+              onClick={() => setPlacing(placing === r ? null : r)}
+            >
+              {placing === r ? `Click the map to place the ${r} point (cancel)` : `Click to place ${r} point`}
+            </button>
+          ))}
+        </div>
+        {auto.note ? <p className="mt-2 text-sm text-muted">{auto.note}</p> : null}
+        <TerrainSource />
+        {auto.error ? <p className="mt-2 text-sm text-red-700">{auto.error}</p> : null}
         <div className="mt-3">
           {mounted ? (
             <Suspense fallback={<p className="text-sm text-muted">Loading the map…</p>}>
               <MapDraw
-                key={dam.id}
+                key={`${dam.id}-${mapRev}`}
+                placing={placing}
+                onPlaced={onPlaced}
                 geometry={dam.geometry}
                 lat={dam.lat}
                 lon={dam.lon}

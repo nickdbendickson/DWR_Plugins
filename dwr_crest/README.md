@@ -20,6 +20,8 @@ needed is in [docs/accuracy-envelope.md](docs/accuracy-envelope.md).
 | `npm run test:desktop` | Headless smoke test of the desktop app (Python, no GUI). |
 | `npm run validate:crest -- --runner <dam folder or zip> --crest <flood.geojson> [--receptors <points.csv>]` | Scores a Crest flood layer (strip or terrain outline export) against a Breach Runner / LISFLOOD-FP run: recall, precision, CSI, area ratio, depth bias, and depth / velocity / arrival at receptors (`src/lib/crest/validation.ts`). Run by hand. |
 | `npm run data:nd-dams` | Rebuilds `src/lib/crest/data/nd_dams.json` from the NID (ND dam picker). Run only when asked. |
+| `npm run batch:dams -- --out <dir> (--state \| --county Cass \| --watershed 09020205 \| --ids ND00199,DWR-4031) [--dem <1 m mosaic .vrt>]` | Batch screen from the command line (see **Batch screen** below); resumes from `<dir>/batch.jsonl`. |
+| `npm run data:nd-structures -- --from data-raw/dwr_structures_<stamp>` | Rebuilds `src/lib/crest/data/nd_structures.json` (every DWR dam and dugout, with HUC8 watersheds) for the batch screen. Run only when asked. |
 | `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp>` | Rebuilds `src/lib/crest/data/nd_dams_dwr.json` from a folder of DWR Dams and Dugouts CSVs already converted to NAVD 88. Run only when asked. |
 
 ### Deploys and migrations
@@ -115,6 +117,63 @@ or if the dam count drops below 800 or more than 20% below the committed bundle,
 (a folder with `Dams_navd88.csv` and `Dugouts_navd88.csv`, converted to NAVD 88 by per-point VERTCON outside the app,
 plus `raw/` and `grids/` `SHA256SUMS.txt`; the build checks each NAVD 88 value against stated + shift and refuses a
 local value or a second conversion). `data-raw/` is git-ignored. Rebuild the desktop bundle and `Crest.html`
+afterwards.
+
+## Batch screen (many structures at once)
+
+**Batch** (top right) runs many structures through the same path one dam takes on the desk: the breach, the inundation
+layer the flood-size gate picks, the 911 address points inside it (with 3DEP pads), the screen and the triage
+(`src/lib/crest/batch.ts`). The result is a Runner worklist, *Needs a Runner run* first, then *Uncertain*, then
+*Clearly trivial*, with a CSV and **Open in desk** on each row. It is a screen to order work, not a class.
+
+- **Pick by:** structures one by one (name, NID ID, `DWR-` or `DUG-` number), one or more counties, one or more USGS
+  HUC8 watersheds, or statewide. **Include** NID dams, DWR dams and DWR dugouts; **Status** filters the DWR records
+  (default: NID, Intact, Dugout, Pending, Under Construction; Breached, Location inconclusive, Submerged and
+  Inconclusive are listed but off).
+- **The record is auto-derived.** Height and storage come from the inventory (NID dams as the picker fills them; DWR
+  `max_dam_he` / `max_pool_v`; dugout `max_height` / `max_storag`). The crest is the DWR NAVD 88 elevation where the
+  picker would offer it, else the highest 3DEP cell within 30 m of the inventory point; streambed = crest − H; the
+  downstream direction points at the lowest cell within 500 m, and a dam line is synthesized across it. The record
+  says so (*Batch record (auto-derived …)*) and its crest provenance is "DEM". Check the point, crest and direction
+  before relying on a row.
+- **Needs data:** a structure with no height, storage or location is listed and skipped. Statewide (default filters)
+  that is about 4,300 of 9,600, mostly small DWR dams and dugouts with no height or storage on file.
+- **Scale:** about 4–25 s a structure, mostly the 3DEP download, two at a time. A county is minutes to under an hour;
+  statewide (~5,300 runnable) is hours. Only the small result rows are kept in browser storage, so **Resume** works
+  after a reload; the finished records (for Open in desk) stay in memory.
+- **Command line:** `npm run batch:dams -- --out batch-out --state` runs the same thing in Node, appends each row to
+  `batch-out/batch.jsonl` (start it again to resume) and writes `batch-out/batch.csv`. `--list` prints the selection
+  and the time estimate. With `--dem /path/ND_1m_EPSG26914.vrt` the terrain comes from a local raster through
+  `gdalwarp` (on PATH, or QGIS's copy on macOS; `--gdalwarp <path>` to name it) instead of 3DEP: no per-dam download
+  (about 1.5 s a small dam instead of 7 s), and the crest is read on a 2 m grid, so it lands on the embankment top.
+  The VRT must be in metres (`--dem-feet` for a feet DEM); mosaic gaps are NoData. The 911 address points still come
+  from the ND GIS Hub.
+- **Local DEM in the desktop app:** under **Terrain** (Batch screen and the Flood step), *Use a local DEM file (.vrt,
+  .tif)…* opens a file dialog; pick e.g. `ND_1m_EPSG26914.vrt`. The choice is saved (`crest-settings.json`,
+  `dem_path`) and every terrain read on the desk then comes from it through `gdalwarp`, a window around each dam only
+  (`GET /api/dem`, `crest-desktop/crest/localdem.py`): the inundation layer, the batch, the breach point and the crest
+  read at a new dam. *Back to USGS 3DEP* undoes it. A web page cannot open a file by path, so the web desk stays on 3DEP.
+
+**Dam record helpers.**
+
+- **Fill from DWR dams, dugouts** (Record step, under the NID picker): search any DWR dam or dugout by number, county or
+  watershed and make a new record from it, the way the batch screen does (height, storage, area and length from DWR;
+  crest from the terrain at the point; dam line, reservoir and breach point from the terrain).
+- **Pick the dam's location on the map** (Record step): click the embankment to set latitude and longitude for a new
+  dam; *Read the ground here* sets the DEM crest from the highest ground within 30 m of the point.
+- **Breach point** (Flood step): *Pick breach point automatically* puts it where the ground at the downstream toe is
+  lowest along the dam line (the old channel crossing; a dam line and reservoir point are laid from the terrain when
+  missing, `src/lib/crest/breach-point.ts`), or *Click to place breach point* / *reservoir point* and click the map.
+
+**Data.** `src/lib/crest/data/nd_structures.json` holds every DWR Dams record that is not an NID main dam (the NID entry
+stands for it) and every DWR Dugouts record, keyed `DWR-<structure>` / `DUG-<structure>`, except status Removed / Not
+Built: numbers, county, status, DWR hazard and purpose, and the USGS WBD HUC8 watershed by point-in-polygon. It also
+gives each NID dam its HUC8. No owner, name, designer, remark or permit fields (DWR dams are labelled by number). DWR's
+own `hu_sub_bas` names are not used: they mix two WBD vintages ("Maple" and "Maple River"). Refresh only when asked:
+download Dams and Dugouts from the mapservice.dwr.nd.gov download form (*Full data set*, NAD83 geographic, shapefile),
+`ogr2ogr -f CSV Dams.csv Dams.shp` (and Dugouts), put both CSVs and a `SHA256SUMS.txt` for the zips in
+`data-raw/dwr_structures_<stamp>/`, then `npm run data:nd-structures -- --from data-raw/dwr_structures_<stamp> --pulled
+<UTC>` (it downloads the WBD HUC8 polygons once into that folder). Rebuild the desktop bundle and `Crest.html`
 afterwards.
 
 ## Judgment-zone homes (ND rule)
