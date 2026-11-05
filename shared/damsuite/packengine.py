@@ -100,7 +100,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request
 
-from . import dwrfiles as DF
 from . import hydro3dhp as H3
 from . import packfiles as PF
 from .netproxy import urlopen                   # QGIS's proxy setting applies (1.16.2)
@@ -152,6 +151,13 @@ def bound():
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILDER_VERSION = "1.4"
 NLCD_NAME = "NLCD_2021_landcover"
+
+
+def _df():
+    """damsuite.dwrfiles (the DWR GeoPackages / downloads), imported when first used: it needs
+    suite_fill, which the ND plugins do not vendor (they read the DWR files via packfiles)."""
+    from . import dwrfiles
+    return dwrfiles
 
 
 def _nsi_tile_deg():
@@ -2017,14 +2023,14 @@ def dwr_datasets(folder):
     """2.18.66: the DWR_* data sets of the GeoPackages in `folder` (the suite folder's layer
     rules, dwr_files.find_layers). A data set with no file is left out (and named)."""
     try:
-        found = DF.find_layers(os.path.abspath(folder))
-    except DF.DwrFileError as e:
+        found = _df().find_layers(os.path.abspath(folder))
+    except _df().DwrFileError as e:
         raise BuildError(str(e))
     out = []
-    for name, slot, label, what in DF.DATASETS:
+    for name, slot, label, what in _df().DATASETS:
         if name in found:
             path, layer = found[name]
-            out.append((name, label, DF.GROUP, "local_gpkg",
+            out.append((name, label, _df().GROUP, "local_gpkg",
                         {"path": path, "layer": layer, "slot": slot, "what": what}))
     if not out:
         raise BuildError("no ND DWR GeoPackage found in {} (DWR_Dams.gpkg, DWR_Dam_Lines.gpkg, "
@@ -2039,25 +2045,25 @@ def fetch_local_gpkg(ctx, spec):
     its layer, CRS and file date."""
     path, layer = spec["path"], spec["layer"]
     try:
-        feats, info = DF.read_layer(path, layer)
-    except DF.DwrFileError as e:
+        feats, info = _df().read_layer(path, layer)
+    except _df().DwrFileError as e:
         raise BuildError(str(e))
     ctx.sub(50, "{:,} features read".format(len(feats)))
-    ctx.writer.add(feats, DF.uid_of)
+    ctx.writer.add(feats, _df().uid_of)
     # kept as they are, but said: a feature wholly outside North Dakota (+ the pad) is most
     # likely a bad geometry in the source (DWR dugout structure 2163, point and polygon)
     x0, y0, x1, y1 = (ND_BBOX[0] - DEFAULT_PAD_DEG, ND_BBOX[1] - DEFAULT_PAD_DEG,
                       ND_BBOX[2] + DEFAULT_PAD_DEG, ND_BBOX[3] + DEFAULT_PAD_DEG)
     out = 0
     for f in feats:
-        b = DF.bbox_of(f.get("geometry"))
+        b = _df().bbox_of(f.get("geometry"))
         if b and (b[2] < x0 or b[0] > x1 or b[3] < y0 or b[1] > y1):
             out += 1
     extra = []
     if out:
         extra.append("{:,} wholly outside North Dakota (kept)".format(out))
     # 1.3: the file's own date (GeoPackage last change), not the day it was copied here
-    day, how = DF.source_date(path, layer)
+    day, how = _df().source_date(path, layer)
     ctx.source_date = (day, how)
     return "from {} layer {} (EPSG:{}{}, file dated {} ({}), {:,} rows{})".format(
         os.path.basename(path), layer, info["epsg"],
@@ -2111,7 +2117,7 @@ def dwr_extent(bbox=None):
     if bbox is None:
         box = DWR_FULL_EXTENT
     else:
-        proj, unit = DF._KNOWN[2266]
+        proj, unit = _df()._KNOWN[2266]
         w, s, e, n = (float(v) for v in bbox)
         pts = [proj.forward(x, y) for x in (w, e) for y in (s, n)]
         pts += [proj.forward((w + e) / 2.0, y) for y in (s, n)]    # the arc of the parallels
@@ -2440,7 +2446,7 @@ def _signature(kind, spec, bbox):
             spec.get("fields", "*"), spec.get("precision"), spec.get("tile_deg"),
             spec.get("tag"), f.get("url"), f.get("fields", "*"))
     if kind == "local_gpkg":
-        return "local_gpkg|{}|{}".format(spec.get("layer"), DF.file_date(spec["path"]))
+        return "local_gpkg|{}|{}".format(spec.get("layer"), _df().file_date(spec["path"]))
     if kind == "nsi":
         return "nsi|{}".format(_nsi_tile_deg())
     if kind == "osm":
