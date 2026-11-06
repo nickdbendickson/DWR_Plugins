@@ -55,7 +55,7 @@ PACK1 = "nd_offline_pack"
 WORK = "ND_Dam_Suite_Pack_build"
 MARK = "data_updater_build"                  # manifest key: this pack was built here (updatable)
 PROV_NAME = "provenance.json"                # work folder: what each layer was built from
-BUILDER = "DamSafety_Data pack_build 1.8.0"
+BUILDER = "DamSafety_Data pack_build 1.9.0"
 ND_BBOX = OP.ND_BBOX
 DEFAULT_PAD = OP.DEFAULT_PAD_DEG
 
@@ -434,6 +434,9 @@ def _build(p2, p1, wk, bbox, table, todo, want, refresh, workers, progress, log,
     BP._CANCEL.clear()
     # 1.8.0: shared by the two hydro layers (the 3DHP service test, the national file)
     hydro_state = {"out_parent": os.path.dirname(os.path.abspath(wk))}
+    # 1.9.0: shared by the OSM layers of one build (the Overpass test, the Geofabrik extract)
+    osm_state = {"out_parent": os.path.dirname(os.path.abspath(wk)),
+                 "needed": {t["name"] for t in vec if t["kind"] == "osm"}}
     try:
         for i, t in enumerate(vec):
             if cancel():
@@ -467,6 +470,8 @@ def _build(p2, p1, wk, bbox, table, todo, want, refresh, workers, progress, log,
                     got, prov[name] = _run_hydro(ctx, t, bbox, hydro_state)
                 elif kind == "abi":
                     got, prov[name] = _run_abi(ctx, t, bbox, wk, refresh)
+                elif kind == "osm":
+                    got, prov[name] = _run_osm(ctx, t, bbox, wk, refresh, osm_state)
                 else:
                     got = BP._run_one(ctx, name, label, kind, t["spec"], bbox)
                     if kind == "local_gpkg" and getattr(ctx, "source_date", None):
@@ -555,6 +560,205 @@ def _run_file(ctx, t, bbox, wk, refresh):
         w.fail(name, str(e))
         raise PackBuildError("{}: {}".format(os.path.basename(path), e))
     return w.finish("from {}".format(os.path.basename(path.replace("/vsizip/", ""))))
+
+
+# ---------------------------------------------------------------------- OSM --
+# 1.8.0: the OpenStreetMap pack layers (OSM_lifelines / _crossings / _campgrounds /
+# _trailer_parks / _places) come from the Overpass API, which answers HTTP 429 / 502 / 504 for a
+# state-sized job. The same five layers can be built from Geofabrik's North Dakota extract
+# (.osm.pbf, about 200 MB; damsuite.osm_layers, as the ND Data Updater does), from a different,
+# reliable server. When OSM layer files are already in an osm_layers/ folder they are read; else,
+# when Overpass fails a small test, the extract is downloaded once, the five GeoPackages are built
+# into osm_layers/ (kept for later builds and the ND Data Updater) and read from there.
+OSM_BUILD_AUTO = True                         # build from Geofabrik when Overpass fails its test
+OSM_BUILD_ENV = "NDSUITE_OSM_GEOFABRIK"       # "0" / "no" / "off": never build from Geofabrik
+OSM_DIR = "osm_layers"
+GEOFABRIK_PBF_URL = "https://download.geofabrik.de/north-america/us/north-dakota-latest.osm.pbf"
+OSM_PROBE_TIMEOUT_S = 60
+
+
+def _osm_build_auto():
+    v = os.environ.get(OSM_BUILD_ENV, "").strip().lower()
+    if v in ("0", "no", "off", "false"):
+        return False
+    if v in ("1", "yes", "on", "true"):
+        return True
+    return OSM_BUILD_AUTO
+
+
+def _osm_dirs(ctx, state):
+    """Where the OSM layer files are looked for (and built into: the first) - the suite data
+    folder's osm_layers/ (shared with the ND Data Updater), then osm_layers/ next to the pack."""
+    out = []
+    try:
+        from .damsuite import suitedata as SD
+        data = SD.data_folder()
+    except Exception:                                            # noqa: BLE001 - no setting
+        data = ""
+    if data:
+        out.append(os.path.join(data, OSM_DIR))
+    if state.get("out_parent"):
+        out.append(os.path.join(state["out_parent"], OSM_DIR))
+    seen = []
+    for d in out:
+        if d not in seen:
+            seen.append(d)
+    return seen
+
+
+def _scan_osm(dirs):
+    """{OSM_* layer name: file path} for the GeoPackages in dirs (the newest of a name wins)."""
+    found = {}
+    for d in dirs:
+        if not d or not os.path.isdir(d):
+            continue
+        for fn in os.listdir(d):
+            name = os.path.splitext(fn)[0]
+            if fn.lower().endswith(".gpkg") and name.startswith("OSM_"):
+                p = os.path.join(d, fn)
+                if name not in found or os.path.getmtime(p) > os.path.getmtime(found[name]):
+                    found[name] = p
+    return found
+
+
+def _overpass_down(ctx):
+    """"" when the Overpass API answers a tiny test query, else the short reason it did not."""
+    query = "[out:json][timeout:25];node(46.80,-100.80,46.81,-100.79);out count;"
+    ctx.log("  testing the Overpass API with one small query...")
+    t0 = time.time()
+    try:
+        req = urllib.request.Request(C.OVERPASS_URL, data=urllib.parse.urlencode(
+            {"data": query}).encode("utf-8"), headers={"User-Agent": BP._ua()})
+        with urllib.request.urlopen(req, timeout=OSM_PROBE_TIMEOUT_S) as r:
+            r.read()
+    except BP.BuildCancelled:
+        raise
+    except Exception as e:                                       # noqa: BLE001
+        why = BP._reason(e) if hasattr(BP, "_reason") else str(e)
+        ctx.log("  Overpass API: not answering ({}, {:.0f} s)".format(why, time.time() - t0))
+        return why or "no answer"
+    ctx.log("  Overpass API: answers ({:.0f} s)".format(time.time() - t0))
+    return ""
+
+
+def _osm_layer_files(ctx, state):
+    """{OSM_* name: file path} to read the layers from (or {} to read Overpass). Found once per
+    build (the layers share `state`); the Geofabrik extract is built when Overpass fails."""
+    if "files" in state:
+        return state["files"]
+    dirs = _osm_dirs(ctx, state)
+    found = _scan_osm(dirs)
+    needed = state.get("needed") or set()
+    missing = needed - set(found)
+    if found:
+        for n, p in sorted(found.items()):
+            if n in needed:
+                ctx.log("  OSM layer file found: {} - read instead of Overpass".format(p))
+    if not missing or not _osm_build_auto() or not dirs:
+        state["files"] = found
+        return found
+    why = _overpass_down(ctx)
+    if not why:                                      # Overpass answers: read the missing ones
+        state["files"] = found
+        return found
+    state["overpass_down"] = why
+    ctx.log("  the Overpass API is not answering ({}) - building the OSM layers from the "
+            "Geofabrik extract instead (set {}=0 to use Overpass anyway)".format(
+                why, OSM_BUILD_ENV))
+    target = next((d for d in dirs if os.path.isdir(d)), dirs[0])
+    try:
+        _build_osm_geofabrik(ctx, target)
+        found = _scan_osm(dirs)
+    except BP.BuildCancelled:
+        raise
+    except Exception as e:                           # noqa: BLE001 - Overpass instead
+        state["osm_error"] = str(e)
+        ctx.log("  OSM layers NOT built from Geofabrik ({}) - Overpass is tried instead".format(e))
+    state["files"] = found
+    return found
+
+
+def _build_osm_geofabrik(ctx, out_dir):
+    """Download the Geofabrik North Dakota .osm.pbf (resumable) and build the five OSM_*
+    GeoPackages into out_dir (damsuite.osm_layers). The pbf is removed afterwards."""
+    from .damsuite import osm_layers as OL
+    os.makedirs(out_dir, exist_ok=True)
+    pbf = os.path.join(out_dir, "north-dakota-latest.osm.pbf")
+    shown = [0.0]
+
+    def beat(got, total):
+        now = time.time()
+        if now - shown[0] < 2.0:
+            return
+        shown[0] = now
+        ctx.sub(30.0 * got / total if total else 15.0,
+                "downloading the Geofabrik extract: {:,} of {:,} MB".format(
+                    got >> 20, (total or 0) >> 20))
+    ctx.log("  downloading the Geofabrik North Dakota extract from {} into {}".format(
+        GEOFABRIK_PBF_URL.split("/")[2], out_dir))
+    BP._download_resume(GEOFABRIK_PBF_URL, pbf, max_age=0, refresh=True, beat=beat)
+    ctx.file_url = GEOFABRIK_PBF_URL
+    ctx.sub(35.0, "building the OSM layers from the extract (a few minutes)...")
+    counts = OL.build_layers(pbf, out_dir, tick=lambda n: BP._check_cancel(), say=ctx.log)
+    OL.write_summary(out_dir, counts, "", GEOFABRIK_PBF_URL)
+    try:
+        os.remove(pbf)
+    except OSError:
+        pass
+    ctx.log("  built: " + ", ".join("{} {:,}".format(k, v) for k, v in sorted(counts.items())))
+
+
+def _run_osm(ctx, t, bbox, wk, refresh, state):
+    """One OSM layer: from its Geofabrik file when there is one (built from the extract when the
+    Overpass API is down), else from the Overpass API as before. Returns (count, note)."""
+    name, label, spec = t["name"], t["label"], t["spec"]
+    files = _osm_layer_files(ctx, state)
+    path = files.get(name)
+    if path:
+        w = ctx.writer
+        w.begin(name, label, os.path.basename(path), resume=False,
+                signature="osm-file|{}|{}".format(os.path.basename(path), _round_osm_bbox(bbox)))
+        ctx.status, ctx.gaps = "complete", []
+        try:
+            n, batch = 0, []
+            for f in read_vector(path, bbox):
+                batch.append(f)
+                if len(batch) >= 2000:
+                    BP._check_cancel()
+                    w.add(batch, _osm_uid)
+                    n += len(batch)
+                    batch = []
+                    ctx.sub(50.0 + 49.0 * min(1.0, n / 5000.0), "{:,} features".format(n))
+            if batch:
+                w.add(batch, _osm_uid)
+        except BP.BuildCancelled:
+            w.fail(name, "interrupted")
+            raise
+        except Exception as e:                                   # noqa: BLE001 - say which
+            w.fail(name, str(e))
+            raise PackBuildError("{}: {}".format(os.path.basename(path), e))
+        cnt = w.finish("from the Geofabrik OSM extract ({})".format(os.path.basename(path)))
+        note = {"osm_source": "Geofabrik North Dakota extract", "osm_route": "geofabrik file",
+                "source_url": state.get("osm_url") or GEOFABRIK_PBF_URL,
+                "source_file": os.path.basename(path)}
+        if state.get("overpass_down"):
+            note["fallback_reason"] = ("the Overpass API was not answering ({}) - built from the "
+                                       "Geofabrik extract".format(state["overpass_down"]))
+        return cnt, note
+    n = BP._run_one(ctx, name, label, "osm", spec, bbox)
+    return n, {"osm_source": "Overpass API", "osm_route": "overpass", "source_url": C.OVERPASS_URL}
+
+
+def _round_osm_bbox(b):
+    return ",".join("{:.4f}".format(float(v)) for v in b)
+
+
+def _osm_uid(f):
+    p = f.get("properties") or {}
+    oid = p.get("osm_id")
+    if oid not in (None, ""):
+        return "osm:{}".format(oid)
+    return _uid(f)
 
 
 def _write_json(p, obj):
