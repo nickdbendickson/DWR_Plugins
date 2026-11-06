@@ -55,7 +55,7 @@ PACK1 = "nd_offline_pack"
 WORK = "ND_Dam_Suite_Pack_build"
 MARK = "data_updater_build"                  # manifest key: this pack was built here (updatable)
 PROV_NAME = "provenance.json"                # work folder: what each layer was built from
-BUILDER = "DamSafety_Data pack_build 1.7.0"
+BUILDER = "DamSafety_Data pack_build 1.8.0"
 ND_BBOX = OP.ND_BBOX
 DEFAULT_PAD = OP.DEFAULT_PAD_DEG
 
@@ -432,6 +432,8 @@ def _build(p2, p1, wk, bbox, table, todo, want, refresh, workers, progress, log,
     vec = [t for t in todo if t["kind"] not in ("nlcd", "none")]
     n = max(1, len(todo))
     BP._CANCEL.clear()
+    # 1.8.0: shared by the two hydro layers (the 3DHP service test, the national file)
+    hydro_state = {"out_parent": os.path.dirname(os.path.abspath(wk))}
     try:
         for i, t in enumerate(vec):
             if cancel():
@@ -462,7 +464,7 @@ def _build(p2, p1, wk, bbox, table, todo, want, refresh, workers, progress, log,
                     got = _run_file(ctx, t, bbox, wk, refresh)
                     prov[name] = _file_prov(t, getattr(ctx, "file_path", ""))
                 elif kind == "hydro":
-                    got, prov[name] = _run_hydro(ctx, t, bbox)
+                    got, prov[name] = _run_hydro(ctx, t, bbox, hydro_state)
                 elif kind == "abi":
                     got, prov[name] = _run_abi(ctx, t, bbox, wk, refresh)
                 else:
@@ -608,18 +610,301 @@ def _hydro_spec(spec):
                      "label": "NHD fill ({})".format(spec.get("which", "hydro"))}}
 
 
-def _run_hydro(ctx, t, bbox):
-    """3DHP flowlines / waterbodies under the NHD name (NHD fields added). 1.5.1: read area by
-    area - the 3DHP features read are kept and only the areas 3DHP cannot serve (ids not listed
-    after splitting the tile, HTTP 504 / time-outs; features not read) are filled from the NHD
-    service (one source per place, tile edges not doubled). Returns (count, note)."""
+def _run_hydro(ctx, t, bbox, state=None):
+    """3DHP flowlines / waterbodies under the NHD name (NHD fields added). Returns (count, note).
+
+    1.8.0: the 3DHP national file first. When a 3dhp/ folder (the suite data folder's, or the one
+    next to the pack) holds the National Map's 3DHP download, the layer is cut out of it - minutes,
+    and no web service. When there is no file and auto-download is on (the default), one small test
+    request is sent to the 3DHP web service; if it fails - the hydro.nationalmap.gov server
+    answering HTTP 504 / 502 or not at all, as it often does for a state-sized job - the national
+    file is downloaded (resumable, once; it is published yearly) and the layer cut from it.
+    Otherwise (a file is not needed, the service answers, or the download is off / failed) the web
+    service is read as before (1.5.1): area by area, the 3DHP features read kept and only the areas
+    3DHP cannot serve filled from NHD.
+
+    state: a dict shared by the hydro layers of one build (the test result and the file)."""
     from .damsuite import hydro3dhp as H
     name, label, spec = t["name"], t["label"], t["spec"]
     norm = H.normalise_flowline if spec["which"] == "flowlines" else H.normalise_waterbody
+    state = {} if state is None else state
     ctx.tiled = None
+    path = _hydro_national_file(ctx, spec, bbox, state)
+    if path:
+        n = _run_hydro_file(ctx, t, bbox, path)
+        note = _hydro_note(ctx.writer.con, name, norm, spec["url"], None, None)
+        note.update(hydro_source="3DHP", hydro_route="national file",
+                    source="USGS 3D Hydrography Program national file {} (NHD fields added)"
+                    .format(os.path.basename(path)),
+                    source_url=state.get("file_url") or os.path.basename(path))
+        if state.get("service_down"):
+            note["fallback_reason"] = ("the 3DHP web service was not answering ({}) - the "
+                                       "national file was used instead".format(state["service_down"]))
+        return n, note
     n = BP._run_one(ctx, name, label, "arcgis_tiled", _hydro_spec(spec), bbox)
-    return n, _hydro_note(ctx.writer.con, name, norm, spec["url"],
-                          getattr(ctx, "tiled", None), spec["fallback"]["url"])
+    note = _hydro_note(ctx.writer.con, name, norm, spec["url"], getattr(ctx, "tiled", None),
+                       spec["fallback"]["url"])
+    note["hydro_route"] = "web service"
+    return n, note
+
+
+# 1.8.0: the 3DHP national file (The National Map, published yearly: CONUS FileGDB zip, about
+# 12.5 GB). The hydro.nationalmap.gov web service often answers HTTP 504 / 502 for hours; the file
+# comes from the National Map's download store (prd-tnm.s3.amazonaws.com), a different server.
+HYDRO_FILE_AUTO = True                        # download it when the 3DHP service fails its test
+HYDRO_FILE_ENV = "NDSUITE_3DHP_DOWNLOAD"      # "0" / "no" / "off": never download it
+HYDRO_FILE_DIR = "3dhp"
+TNM_PRODUCTS_URL = "https://tnmaccess.nationalmap.gov/api/v1/products"
+TNM_3DHP_DATASET = "3D Hydrography Program (3DHP)"
+HYDRO_FILE_FALLBACK_URL = (
+    "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/3DHP/Annual/GDB/"
+    "3dhp_all_GDB_FY26_CONUS_20260112/3dhp_all_CONUS_20260112_GDB.zip")
+HYDRO_FILE_FALLBACK_BYTES = 12475034501
+HYDRO_FILE_MAX_AGE_S = 10 * 365 * 86400       # a whole file is kept (a newer one: delete it)
+HYDRO_PROBE_DEG = 0.1                          # the test request: one small box in the area
+HYDRO_PROBE_TRIES = 2
+DISK_MARGIN = 1 << 30                          # free space kept beside the download
+
+
+def _hydro_file_auto():
+    v = os.environ.get(HYDRO_FILE_ENV, "").strip().lower()
+    if v in ("0", "no", "off", "false"):
+        return False
+    if v in ("1", "yes", "on", "true"):
+        return True
+    return HYDRO_FILE_AUTO
+
+
+def _hydro_file_dirs(ctx, state):
+    """Where the national file is looked for (and the first is where it is downloaded): the suite
+    data folder's 3dhp/ (shared with the ND Data Updater), then the 3dhp/ next to the pack."""
+    out = []
+    try:
+        from .damsuite import suitedata as SD
+        data = SD.data_folder()
+    except Exception:                                            # noqa: BLE001 - no setting
+        data = ""
+    if data and os.path.isdir(data):
+        out.append(os.path.join(data, HYDRO_FILE_DIR))
+    if state.get("out_parent"):
+        out.append(os.path.join(state["out_parent"], HYDRO_FILE_DIR))
+    seen = []
+    for d in out:
+        if d not in seen:
+            seen.append(d)
+    return seen
+
+
+def _probe_down(ctx, url, bbox, what):
+    """"" when the layer at url lists the object ids of one small box in the middle of bbox, else
+    the short reason it did not (HTTP 504, timed out ...)."""
+    cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
+    h = HYDRO_PROBE_DEG / 2.0
+    box = (max(bbox[0], cx - h), max(bbox[1], cy - h), min(bbox[2], cx + h), min(bbox[3], cy + h))
+    ctx.log("  testing the {} service with one small area...".format(what))
+    t0 = time.time()
+    try:
+        BP.http_json(url.rstrip("/") + "/query", dict(BP._envelope(box), where="1=1",
+                                                       returnIdsOnly="true", f="json"),
+                     post=True, retries=HYDRO_PROBE_TRIES, what="{} test".format(what))
+    except BP.BuildCancelled:
+        raise
+    except BP._NET_ERRORS as e:
+        why = BP._reason(e)
+        ctx.log("  {} service: not answering ({}, {:.0f} s)".format(what, why, time.time() - t0))
+        return why or "no answer"
+    ctx.log("  {} service: answers ({:.0f} s)".format(what, time.time() - t0))
+    return ""
+
+
+def _newest_3dhp_product(log):
+    """(url, bytes) of the newest CONUS 3DHP FileGDB on The National Map (its products API); the
+    known FY26 file when the API does not answer."""
+    q = urllib.parse.urlencode({"datasets": TNM_3DHP_DATASET, "prodFormats": "FileGDB", "max": 50})
+    try:
+        req = urllib.request.Request(TNM_PRODUCTS_URL + "?" + q,
+                                     headers={"User-Agent": BP._ua()})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            items = json.loads(r.read().decode("utf-8")).get("items") or []
+    except Exception as e:                                       # noqa: BLE001 - fall back
+        log("  The National Map products list did not answer ({}) - using {}".format(
+            BP._short(e), os.path.basename(HYDRO_FILE_FALLBACK_URL)))
+        return HYDRO_FILE_FALLBACK_URL, HYDRO_FILE_FALLBACK_BYTES
+    best = None
+    for it in items:
+        url = str(it.get("downloadURL") or "")
+        title = str(it.get("title") or "")
+        if not url.lower().endswith(".zip") or "conus" not in (title + url).lower() or \
+                "gdb" not in url.lower():
+            continue
+        key = str(it.get("publicationDate") or it.get("lastUpdated") or url)
+        if best is None or key > best[0]:
+            best = (key, url, int(it.get("sizeInBytes") or 0))
+    if best is None:
+        return HYDRO_FILE_FALLBACK_URL, HYDRO_FILE_FALLBACK_BYTES
+    return best[1], best[2] or HYDRO_FILE_FALLBACK_BYTES
+
+
+def _hydro_national_file(ctx, spec, bbox, state):
+    """The 3DHP national file to cut the layer from, or "" (read the web service). The file is
+    looked for once per build (both hydro layers share `state`). When it is not there and
+    auto-download is on, the 3DHP service is tested once; if the test fails the file is
+    downloaded. Returns the file path, or "" to read the web service."""
+    if "file" in state:
+        return state["file"]
+    state["file"] = ""
+    dirs = _hydro_file_dirs(ctx, state)
+    found = BP.PF.scan_3dhp(dirs) if dirs else None
+    if found:
+        ctx.log("  3DHP national file found: {} - the layer is cut out of it".format(found))
+        state["file"] = found
+        return found
+    if not _hydro_file_auto():
+        return ""                                    # straight to the area-by-area web read
+    if not dirs:
+        return ""
+    why = _probe_down(ctx, spec["url"], bbox, "3DHP")
+    if not why:
+        return ""                                    # the service answers: read it area by area
+    state["service_down"] = why
+    ctx.log("  the 3DHP web service is not answering ({}) - getting the national file instead "
+            "(set {}=0 to read the service anyway)".format(why, HYDRO_FILE_ENV))
+    try:
+        state["file"] = _download_3dhp(ctx, dirs[0])
+        state["file_url"] = getattr(ctx, "file_url", None)
+    except BP.BuildCancelled:
+        raise
+    except Exception as e:                           # noqa: BLE001 - fall back to the service
+        state["file_error"] = str(e)
+        ctx.log("  3DHP national file NOT downloaded ({}) - the web service is read area by "
+                "area instead (3DHP where it answers, NHD elsewhere)".format(e))
+    return state["file"]
+
+
+def _download_3dhp(ctx, folder):
+    """The newest CONUS 3DHP FileGDB zip into folder (continued after a broken connection and in
+    a later build: <name>.zip.part). Returns its path."""
+    url, size = _newest_3dhp_product(ctx.log)
+    dest = os.path.join(folder, url.rstrip("/").split("/")[-1])
+    os.makedirs(folder, exist_ok=True)
+    part = dest + ".part"
+    have = os.path.getsize(part) if os.path.isfile(part) else 0
+    free = shutil.disk_usage(folder).free
+    if size and free < size - have + DISK_MARGIN:
+        raise PackBuildError("not enough disk space in {} for the 3DHP national file: {:.1f} GB "
+                             "needed, {:.1f} GB free".format(folder, (size - have) / 1e9,
+                                                             free / 1e9))
+    ctx.log("  downloading the 3DHP national file ({:.1f} GB{}) from {} into {} - once; it is "
+            "kept for later builds and the ND Data Updater".format(
+                size / 1e9, ", {:.1f} GB already there".format(have / 1e9) if have else "",
+                url.split("/")[2], folder))
+    shown = [0.0]
+
+    def beat(got, total):
+        now = time.time()
+        if now - shown[0] < 2.0:
+            return
+        shown[0] = now
+        total = total or size
+        ctx.sub(60.0 * got / total if total else 30.0,
+                "downloading the 3DHP national file: {:,} of {:,} MB".format(
+                    got >> 20, (total or 0) >> 20))
+    path, _now = BP._download_resume(url, dest, max_age=HYDRO_FILE_MAX_AGE_S, beat=beat)
+    ctx.file_url = url
+    return path
+
+
+def _run_hydro_file(ctx, t, bbox, path):
+    """The hydro layer cut out of the 3DHP national file (only the 3DHP fields the service read
+    keeps, lon / lat 2D). Returns the count."""
+    from .damsuite import hydro3dhp as H
+    name, label, spec = t["name"], t["label"], t["spec"]
+    flow = spec["which"] == "flowlines"
+    keep = set((H.FLOW_FIELDS if flow else H.WB_FIELDS).split(","))
+    w = ctx.writer
+    w.begin(name, label, os.path.basename(path), resume=False,
+            signature="3dhp-file|{}|{}".format(os.path.basename(path), _round_bbox(bbox)))
+    ctx.status, ctx.gaps = "complete", []
+    try:
+        n, batch = 0, []
+        for f in read_3dhp(path, "flowline" if flow else "waterbody", bbox, keep):
+            p = f["properties"]
+            p[HYDRO_SRC_FIELD] = "3DHP"
+            batch.append(f)
+            if len(batch) >= 2000:
+                BP._check_cancel()
+                w.add(batch, _uid_3dhp)
+                n += len(batch)
+                batch = []
+                ctx.sub(60.0 + 39.0 * min(1.0, n / 250000.0),
+                        "{:,} features cut from the national file".format(n))
+        if batch:
+            w.add(batch, _uid_3dhp)
+    except BP.BuildCancelled:
+        w.fail(name, "interrupted")
+        raise
+    except Exception as e:                                       # noqa: BLE001 - say which
+        w.fail(name, str(e))
+        raise PackBuildError("{}: {}".format(os.path.basename(path), e))
+    return w.finish("from the 3DHP national file {}".format(os.path.basename(path)))
+
+
+def _round_bbox(b):
+    return ",".join("{:.4f}".format(float(v)) for v in b)
+
+
+def _uid_3dhp(f):
+    p = f.get("properties") or {}
+    v = p.get("id3dhp")
+    return "3DHP:{}".format(v) if v not in (None, "") else None
+
+
+def read_3dhp(path, word, bbox, keep):
+    """GeoJSON features (lon / lat, 2D) of the national file's layer whose name holds `word`
+    (flowline / waterbody) that touch bbox; only the fields in keep (lower case names). The
+    zip is read in place; a spatial filter in the file's own system keeps it to the area."""
+    from osgeo import gdal, ogr, osr
+    gdal.UseExceptions()
+    PF = BP.PF
+    ds = ogr.Open(PF.open_path_3dhp(path))
+    if ds is None:
+        raise PackBuildError("{} could not be opened".format(path))
+    lyr = ds.GetLayerByName(PF._layer_name(path, word))
+    dst = osr.SpatialReference()
+    dst.ImportFromEPSG(4326)
+    dst.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    srs = lyr.GetSpatialRef()
+    tr = None
+    if srs is not None:
+        srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        if not srs.IsSame(dst):
+            tr = osr.CoordinateTransformation(srs, dst)
+        GP._spatial_filter(lyr, bbox, srs, dst, osr)
+    defn = lyr.GetLayerDefn()
+    fields = [(i, defn.GetFieldDefn(i).GetName()) for i in range(defn.GetFieldCount())]
+    fields = [(i, nm.lower()) for i, nm in fields if nm.lower() in keep]
+    for feat in lyr:
+        g = feat.GetGeometryRef()
+        if g is None or g.IsEmpty():
+            continue
+        g = g.Clone()
+        g.FlattenTo2D()
+        if g.GetGeometryType() in (ogr.wkbMultiCurve, ogr.wkbCompoundCurve):
+            g = ogr.ForceToMultiLineString(g)
+        elif g.GetGeometryType() in (ogr.wkbMultiSurface, ogr.wkbCurvePolygon):
+            g = ogr.ForceToMultiPolygon(g)
+        if tr is not None:
+            g.Transform(tr)
+        geom = json.loads(g.ExportToJson())
+        if not OP.intersects_rect(geom, bbox):
+            continue
+        props = {}
+        for i, nm in fields:
+            v = feat.GetField(i)
+            if isinstance(v, (datetime.date, datetime.datetime)):
+                v = v.isoformat()
+            props[nm] = v
+        yield {"type": "Feature", "geometry": geom, "properties": props}
 
 
 def _hydro_note(con, name, norm, url, rep=None, nhd_url=None):
