@@ -191,7 +191,7 @@ def run_hms(out_dir, hms_home=None, timeout=1800):
         raise ValueError("HEC-HMS folder not set (algorithm setting nd_pmp/hms_home or ND_PMP_HMS_HOME)")
     env = dict(os.environ)
     env.setdefault("DISPLAY", ":6")
-    p = subprocess.run([os.path.join(hms_home, "hec-hms.sh"), "-s", os.path.join(os.path.abspath(out_dir), "run_hms.py")],
+    p = subprocess.run([os.path.join(hms_home, "hec-hms.sh"), "-s", os.path.join(os.path.abspath(out_dir), "run_hms.py")],  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- fixed argv list, no shell; env is the inherited process env
                        cwd=out_dir, env=env, capture_output=True, text=True, timeout=timeout)
     peaks = []
     pk = os.path.join(out_dir, "hms_peaks.csv")
