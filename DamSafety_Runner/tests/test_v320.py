@@ -116,7 +116,11 @@ def stoprule_defaults_are_nd_dam_hazards_termination_defaults():
     # the checkpoint key of a default run is the 3.1.x key (resume keeps working); the
     # v3.4.0 settings (near-dam refine, solver) are left out while at their defaults too
     old = {k: v for k, v in st.as_dict().items() if k not in (
-        "resume", "eap_map", "dam_record", "lisflood_solver") and not k.startswith("class_stop")
+        "resume", "eap_map", "dam_record", "lisflood_solver",
+        # 3.15.0: where the 1 m crest ground comes from, and the grid-refine switches, never
+        # change one run's flood (the burn itself, crest_burn*, is on by default and in the key)
+        "crest_burn_http", "crest_burn_download", "crest_burn_data_folder",
+        "grid_refine", "grid_refine_cell_m", "grid_check_cell_m") and not k.startswith("class_stop")
         and k not in workflow._REFINE_KEYS}          # refine_lines (ANUGA, 3.0) stays
     assert workflow.key_settings(st) == old
     assert "refine_near" in workflow.key_settings(workflow.RunSettings(refine_near=True))

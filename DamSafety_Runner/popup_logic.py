@@ -581,6 +581,11 @@ def defaults(alg, dams_folder, dam_id, settings=None):
         if S.get("force_anuga"):
             p["FORCE_ANUGA"] = True
             p["TIER"] = 1
+        # 3.15.0: both are on in the tool itself; the window only passes a switch turned off
+        if not S.get("crest_burn", True):
+            p["CREST_BURN"] = False
+        if not S.get("grid_refine", True):
+            p["GRID_REFINE"] = False
         carve = str(S.get("reservoir_carve") or "off").strip().lower()
         if carve in CARVE_CHOICES and carve != "off":                    # v3.10.20
             p["RESERVOIR_CARVE"] = CARVE_CHOICES.index(carve)

@@ -208,6 +208,11 @@ MODEL_KEYS = {
     "arrival_contours_hr": ("arrival_contours_hr", ("nums",)),
     # 3.12.0: the datum of the dam elevations (algorithms.ELEV_DATUMS; core/vdatum_run.py)
     "elev_datum": ("elev_datum", ("enum", ("auto", "NAVD88", "NGVD29", "local"))),
+    # 3.15.0
+    "crest_burn": ("crest_burn", ("bool",)),
+    "crest_burn_dem": ("crest_burn_dem", ("path",)),
+    "grid_refine": ("grid_refine", ("bool",)),
+    "grid_check_cell_m": ("grid_check_cell_m", ("num", 0.0, None)),
 }
 SECTIONS = {
     "dem": {"path": ("path",), "z_units": ("enum", gdal_io.Z_CHOICES), "crs": ("str",),
@@ -457,7 +462,9 @@ TEMPLATE = {
         "threads": 0, "lisflood_exe": None, "anuga_python": None,
         "anuga_fine_area_m2": 100.0, "anuga_coarse_area_m2": 1000.0,
         "anuga_near_field_mi": 1.0, "anuga_buffer_m": 500.0,
-        "arrival_contours_hr": [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]},
+        "arrival_contours_hr": [0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
+        "crest_burn": True, "crest_burn_dem": None, "grid_refine": True,
+        "grid_check_cell_m": workflow.GRID_CHECK_CELL_M},
     "output": {
         "_help": "Each dam goes to <folder>/<Dam ID>/, as in the QGIS tools.",
         "folder": "dams", "keep_model_files": True, "products": True, "resume": False},
@@ -1058,10 +1065,17 @@ def build_settings(cfg, opts, need_models=True):
                 v = None                                   # 0 = automatic, as in QGIS
             if key == "arrival_contours_hr":
                 v = tuple(v)
+            if key == "crest_burn_dem":
+                v = v or ""
             if not hasattr(st, attr):
                 raise CliError("this version of the plugin has no run setting '{}'".format(attr))
             setattr(st, attr, v)
     st.manning_n = cfg.get("manning", "n", st.manning_n)
+    try:                                   # 3.15.0: where USGS 3DEP 1 m tiles are cached
+        st.crest_burn_data_folder = importlib.import_module(
+            PKG + ".damsuite.suitedata").data_folder() or ""
+    except Exception:                                          # noqa - the run says why
+        pass
     if getattr(opts, "threads", None) is not None:
         st.threads = opts.threads
     if getattr(opts, "elev_datum", None):                      # 3.12.0

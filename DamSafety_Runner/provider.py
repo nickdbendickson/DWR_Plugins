@@ -5,7 +5,7 @@ from qgis.core import QgsProcessingProvider
 from qgis.PyQt.QtGui import QIcon
 
 from .algorithms import (ALGORITHMS as ORIGINAL_ALGORITHMS, PROVIDER_ID, SET_ALLOW_UNPATCHED,
-                         SET_ANUGA, SET_BUILTIN, SET_LISFLOOD, SET_THREADS)
+                         SET_ANUGA, SET_BUILTIN, SET_LISFLOOD, SET_THREADS, SET_CREST_DEM)
 from .core import nd_data
 from . import popup_logic as pl
 from . import suite_settings_tools as ST
@@ -64,6 +64,11 @@ class Provider(QgsProcessingProvider):
                 "arrival-depth patch (arrival times then mark the first wetting, ~1 mm, NOT the "
                 "arrival depth, so warning times are unreliable; off by default)",
                 False, valuetype=Setting.BOOL))
+            # 3.15.0
+            ProcessingConfig.addSetting(Setting(
+                self.name(), SET_CREST_DEM, "Crest burn: 1 m DEM or VRT (e.g. the statewide ND "
+                "1 m VRT; empty = the run's DEM if 2 m or finer, else the suite data folder's "
+                "DEM, else USGS 3DEP 1 m)", "", valuetype=Setting.FILE))
             ProcessingConfig.readSettings()
         except Exception:   # settings are optional; parameters can carry the paths
             pass
@@ -73,7 +78,8 @@ class Provider(QgsProcessingProvider):
     def unload(self):
         try:
             from processing.core.ProcessingConfig import ProcessingConfig
-            for k in (SET_LISFLOOD, SET_ANUGA, SET_THREADS, SET_BUILTIN, SET_ALLOW_UNPATCHED):
+            for k in (SET_LISFLOOD, SET_ANUGA, SET_THREADS, SET_BUILTIN, SET_ALLOW_UNPATCHED,
+                      SET_CREST_DEM):
                 ProcessingConfig.removeSetting(k)
         except Exception:
             pass
