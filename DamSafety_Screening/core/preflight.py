@@ -371,7 +371,7 @@ def run_checks(work, settings, steps=None, env=None, n_dams=None):
         if missing:
             out.append(check(WARN, "DWR export fields", "not the standard 'Dams by Hazard Class' names: {} missing".format(
                 ", ".join(missing)), "Tool 1's field pickers can take other names."))
-    wb = layer("waterbodies", "Water bodies", any(k in steps for k in ("3", "16")), "polygon")
+    layer("waterbodies", "Water bodies", any(k in steps for k in ("3", "16")), "polygon")
     lines = layer("dam_lines", "DWR dam lines", "4" in steps, "line", any_of=(("structure_id", "structure_"),))
     if dwr is not None and lines is not None:
         ids = env.values(_slot(S, work, "dwr"), "structure_" if "structure_" in dwr["fields"] else "structure_id")
