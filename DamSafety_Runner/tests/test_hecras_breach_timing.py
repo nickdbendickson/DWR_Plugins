@@ -128,8 +128,8 @@ def hecras_timing_sunny_day_breach_starts_after_the_warm_up():
 
 @test
 def hecras_timing_plan_breach_mode_matches_the_plugin():
-    """The plugin's piping method routes a trapezoid that deepens from the crest, which is
-    HEC-RAS's overtopping mode; hec_breach_mode='failure_mode' keeps HEC's piping."""
+    """3.16.1: the plan defaults to HEC-RAS piping (Froehlich 2008);
+    hec_breach_mode='match_plugin' writes overtopping for the plugin's routed weir breach."""
     if p0._skip():
         return
     d = tempfile.mkdtemp()
@@ -137,11 +137,12 @@ def hecras_timing_plan_breach_mode_matches_the_plugin():
         p0._run(d)
         r = _build(d)
         g = _lines(os.path.join(d, "model", r["model"].name + ".p01"), "Breach Geom=")[0]
-        assert g.split(",")[5] == "False" and r["model"].breach["hec_mode"] == "overtopping", g
-        assert not any(n.startswith("Initial piping elevation") for n in r["notes"])
-        r2 = _build(d, hec_breach_mode="failure_mode")
+        assert g.split(",")[5] == "True" and g.split(",")[7] != "", g
+        assert r["model"].breach["hec_mode"] == "piping"
+        r2 = _build(d, hec_breach_mode="match_plugin")
         g2 = _lines(os.path.join(d, "model", r2["model"].name + ".p01"), "Breach Geom=")[0]
-        assert g2.split(",")[5] == "True" and g2.split(",")[7] != "", g2
+        assert g2.split(",")[5] == "False" and r2["model"].breach["hec_mode"] == "overtopping", g2
+        assert not any(n.startswith("Initial piping elevation") for n in r2["notes"])
         try:
             _build(d, hec_breach_mode="sometimes")
         except hm.HecRasModelError:
@@ -266,7 +267,7 @@ def hecras_timing_plugin_hydrograph_on_the_hec_breach():
         assert abs(max(q) - pr["peak_cfs"]) < 0.11 and float(rows[0][1]) == 0.25
         man = json.load(open(os.path.join(p["folder"], hp.MANIFEST)))
         assert man["breach_start"]["start_hr"] == 0.25 and man["failure_mode_in_plan"] == \
-            "overtopping" and man["plugin_reference"]["peak_cfs"] == pr["peak_cfs"]
+            "piping" and man["plugin_reference"]["peak_cfs"] == pr["peak_cfs"]
         assert man["tolerances"]["name"] == "default" and man["mesh_seeds"]["used"] == "grid"
         win = open(os.path.join(p["folder"], hp.README), encoding="utf-8").read()
         assert "breaches the dam at 0.25 h (a set time" in win
