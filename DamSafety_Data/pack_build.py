@@ -55,7 +55,7 @@ PACK1 = "nd_offline_pack"
 WORK = "ND_Dam_Suite_Pack_build"
 MARK = "data_updater_build"                  # manifest key: this pack was built here (updatable)
 PROV_NAME = "provenance.json"                # work folder: what each layer was built from
-BUILDER = "DamSafety_Data pack_build 1.5.5"
+BUILDER = "DamSafety_Data pack_build 1.7.0"
 ND_BBOX = OP.ND_BBOX
 DEFAULT_PAD = OP.DEFAULT_PAD_DEG
 
@@ -375,6 +375,48 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
             raise PackBuildError("unknown layer(s): " + ", ".join(sorted(bad)))
     todo = [t for t in table if want is None or t["name"] in want]
     os.makedirs(wk, exist_ok=True)
+    lock = _lock(wk, log)
+    try:
+        return _build(p2, p1, wk, bbox, table, todo, want, refresh, workers, progress, log,
+                      cancel, area)
+    finally:
+        try:
+            os.remove(lock)
+        except OSError:
+            pass
+
+
+LOCK_NAME = "build.lock"
+LOCK_STALE_S = 48 * 3600                     # a statewide build takes hours, not days
+
+
+def _lock(wk, log):
+    """1.7.0: one build of a folder at a time. The Build offline pack window and the updater's
+    pack refresh (packsource.py) both write here and run as background tasks, possibly in the
+    same QGIS process; the second one is refused (damsuite.updatecore's lock rules: a lock whose
+    process is gone is cleared)."""
+    from .damsuite import updatecore as UC
+    path = os.path.join(wk, LOCK_NAME)
+    what, why = UC.lock_decision(UC.read_lock(path), stale_seconds=LOCK_STALE_S)
+    if what == "clear":
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        log("Cleared the left-over lock {}: {}".format(path, why))
+    elif what == "refuse":
+        raise PackBuildError("Another build of this pack is running ({}). Wait for it to "
+                             "finish (QGIS task bar).".format(why.replace("update", "build")))
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise PackBuildError("Another build of this pack started at the same moment.")
+    os.write(fd, "{} {}".format(os.getpid(), time.strftime("%Y-%m-%dT%H:%M:%S")).encode())
+    os.close(fd)
+    return path
+
+
+def _build(p2, p1, wk, bbox, table, todo, want, refresh, workers, progress, log, cancel, area):
     db = os.path.join(wk, OP.DB_NAME)
     prov = _read_json(os.path.join(wk, PROV_NAME)) or {}
     log("Offline pack for {} - area {:.4f}, {:.4f} to {:.4f}, {:.4f} (lon / lat)".format(
@@ -457,7 +499,11 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
     progress(90.0, "Writing nd_offline_pack (format 1)\u2026")
     man1 = write_format1(db, p1, man1, infos, left, log)
     progress(93.0, "Writing ND_Dam_Suite_Pack (format 2)\u2026")
-    man2 = write_format2(os.path.join(p1, OP.DB_NAME), p2, man1, infos, left, refresh, log,
+    # 1.7.0: with `only`, "fetch again" rewrites those layers in format 2, not every layer
+    redo = refresh if not (refresh and want) else set(
+        n for t in todo for n in [t["name"]] + [c[0] for c in (t["spec"].get("choices") or ())
+                                                 if t["kind"] == "first_of"])
+    man2 = write_format2(os.path.join(p1, OP.DB_NAME), p2, man1, infos, left, redo, log,
                          cancel)
     nl = [t for t in todo if t["kind"] == "nlcd"]
     if nl:
@@ -901,13 +947,22 @@ def zip_format1(p1, out_zip, log=None):
 # ------------------------------------------------------------------ format 2 --
 def write_format2(src_db, p2, man1, infos, left, refresh, log, cancel):
     """ND_Dam_Suite_Pack from the format-1 file (gpkgpack.convert_v1); a layer already written
-    with the same date and count is kept."""
+    with the same date and count is kept. refresh: True (rewrite every layer) or a set of layer
+    names to rewrite (1.7.0)."""
     old = GP.read_manifest(p2) if os.path.isdir(p2) else None
     old = old if GP.is_gpkg_manifest(old) else {"datasets": {}}
+    if isinstance(refresh, (set, frozenset, list, tuple)):
+        names = set(refresh)
+
+        def redo(k):
+            return k in names
+    else:
+        def redo(k, _all=bool(refresh)):
+            return _all
     only = set()
     for k, v in man1["datasets"].items():
         o = old["datasets"].get(k) or {}
-        same = (not refresh and o.get("fetched") == v.get("fetched") and
+        same = (not redo(k) and o.get("fetched") == v.get("fetched") and
                 o.get("count") == v.get("count") and o.get("file") and
                 os.path.isfile(os.path.join(p2, *o["file"].split("/"))))
         if not same:
