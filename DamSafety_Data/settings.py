@@ -221,6 +221,28 @@ class Settings:
     def usa_structures_url(self, v):
         self._set("usa_structures_url", v.strip())
 
+    # 1.7.0: the offline pack source (packsource.py). The folder and the DWR / HIFLD folders are
+    # the ones the Build offline pack window used last (pack_dialog.py writes the same keys).
+    @property
+    def pack_out(self):
+        return self._get("pack_build_out", "", str)
+
+    @property
+    def pack_dwr_folder(self):
+        return self._get("pack_build_dwr", "", str)
+
+    @property
+    def pack_hifld_folder(self):
+        return self._get("pack_build_hifld", "", str)
+
+    @property
+    def pack_refresh_days(self):
+        return self._get("pack_refresh_days", 30, int)
+
+    @pack_refresh_days.setter
+    def pack_refresh_days(self, v):
+        self._set("pack_refresh_days", int(v))
+
     @property
     def last_auto_check(self):
         return self._get("last_auto_check", 0.0, float)
@@ -242,4 +264,8 @@ class Settings:
             "nsi_interval_days": self.nsi_interval_days,
             "nsi_mode": self.nsi_mode,
             "nsi_match_m": self.nsi_match_m,
+            "pack_out": self.pack_out,
+            "pack_refresh_days": self.pack_refresh_days,
+            "pack_dwr_folder": self.pack_dwr_folder,
+            "pack_hifld_folder": self.pack_hifld_folder,
         }

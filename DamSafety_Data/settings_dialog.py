@@ -10,7 +10,7 @@ from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
 
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox,
-    QHBoxLayout, QHeaderView, QLineEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem,
     QVBoxLayout,
 )
 
@@ -147,6 +147,22 @@ class SettingsDialog(QDialog):
                     lambda _i: self.nsi_match.setEnabled(self.nsi_mode.currentData() == "merged"))
                 self.nsi_match.setEnabled(settings.nsi_mode == "merged")
                 src_form.addRow("    Same structure within:", self.nsi_match)
+            if sid == "pack":
+                self.pack_days = QSpinBox()
+                self.pack_days.setRange(1, 365)
+                self.pack_days.setSuffix(" days")
+                self.pack_days.setValue(settings.pack_refresh_days)
+                self.pack_days.setToolTip("A pack layer older than this is fetched again; "
+                                          "newer layers are left alone.")
+                src_form.addRow("    Refresh layers older than:", self.pack_days)
+                where = settings.pack_out
+                self.pack_where = QLabel(
+                    "Pack folder: " + where if where else
+                    "No pack yet: build one with Build offline pack\u2026 first.")
+                self.pack_where.setWordWrap(True)
+                self.pack_where.setToolTip("The folder chosen in the Build offline pack "
+                                           "window; change it there.")
+                src_form.addRow("", self.pack_where)
             if sid == "usa_structures":
                 self.usa_url = QLineEdit(settings.usa_structures_url)
                 self.usa_url.setPlaceholderText("Paste the North Dakota download link from "
@@ -217,6 +233,7 @@ class SettingsDialog(QDialog):
         s.nsi_mode = self.nsi_mode.currentData()
         s.nsi_match_m = self.nsi_match.value()
         s.usa_structures_url = self.usa_url.text()
+        s.pack_refresh_days = self.pack_days.value()
         for sid, cb in self.enabled.items():
             s.set_enabled(sid, cb.isChecked())
 

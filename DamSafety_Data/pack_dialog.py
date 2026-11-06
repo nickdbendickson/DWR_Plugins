@@ -22,6 +22,9 @@ ENABLED = _first(lambda: Qt.ItemFlag.ItemIsEnabled, lambda: Qt.ItemIsEnabled)
 USER_ROLE = Qt.ItemDataRole.UserRole
 TAG = "DamSafety Data"
 SETTING = "nd_data_updater/pack_build_out"
+# 1.7.0: the DWR / HIFLD folders too, so the updater's pack refresh (packsource.py) uses them
+SETTING_DWR = "nd_data_updater/pack_build_dwr"
+SETTING_HIFLD = "nd_data_updater/pack_build_hifld"
 AREAS = (("All of North Dakota (the full pack; can take hours)", None),
          ("A small test box around Bismarck (minutes)", (-100.85, 46.75, -100.70, 46.85)),
          ("My own box (west, south, east, north in degrees)\u2026", "custom"))
@@ -113,13 +116,13 @@ class PackDialog(QDialog):
         g.addWidget(QLabel("Area:"), 1, 0)
         g.addWidget(self.area, 1, 1)
         g.addWidget(self.box, 2, 1)
-        self.dwr = QLineEdit()
+        self.dwr = QLineEdit(self._setting(SETTING_DWR, ""))
         self.dwr.setPlaceholderText("Optional: a folder of DWR GeoPackages (else downloaded "
                                     "from the DWR MapService)")
         g.addWidget(QLabel("DWR files:"), 3, 0)
         g.addWidget(self.dwr, 3, 1)
         g.addWidget(self._browse(self.dwr, folder=True), 3, 2)
-        self.hifld = QLineEdit()
+        self.hifld = QLineEdit(self._setting(SETTING_HIFLD, ""))
         self.hifld.setPlaceholderText("Optional: a folder of HIFLD files downloaded from DataLumos (else left out)")
         g.addWidget(QLabel("HIFLD files:"), 4, 0)
         g.addWidget(self.hifld, 4, 1)
@@ -229,7 +232,10 @@ class PackDialog(QDialog):
             return
         try:
             from qgis.core import QgsSettings
-            QgsSettings().setValue(SETTING, kw["out_parent"])
+            qs = QgsSettings()
+            qs.setValue(SETTING, kw["out_parent"])
+            qs.setValue(SETTING_DWR, kw["dwr_folder"] or "")
+            qs.setValue(SETTING_HIFLD, kw["hifld_folder"] or "")
         except Exception:                                        # noqa: BLE001
             pass
         self.text.clear()

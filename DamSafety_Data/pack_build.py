@@ -20,7 +20,10 @@ HPMS_ND_<year> kept next to NDDOT_traffic_counts for comparison; NHD_flowlines /
 filled from USGS 3DHP with NHD-style fields, read area by area (1.5.1: the NHD service fills
 only the areas 3DHP cannot serve, hydro_src says which on every feature); the SARP Aquatic
 Barrier Inventory as ABI_* (public API + national road-crossings download; removed / excluded
-barriers kept and flagged in barrier_status); ND DEQ layers as NDDEQ_* (landfills, source water protection areas). What each
+barriers kept and flagged in barrier_status); 1.5.5: USGS_stream_crossings (USGS Database of
+Stream Crossings, the modelled base of the unsurveyed crossings); ND DEQ layers as NDDEQ_*
+(landfills, source water protection areas); 1.5.8: the barrier and ND DEQ layers come from the
+shared list (packengine.shared_datasets, damsuite.abi), the same in the ND pack. What each
 layer was built from (file / URL, sha256, data version, terms) is kept in the work folder's
 provenance.json and copied into both manifests.
 
@@ -44,6 +47,7 @@ from . import build_nd_pack as BP
 from . import constants as C
 from . import dwr_files as DF
 from . import offline_pack as OP
+from .damsuite import abi as A
 from .damsuite import gpkgpack as GP
 
 PACK2 = GP.PACK_FOLDER                       # ND_Dam_Suite_Pack
@@ -51,11 +55,16 @@ PACK1 = "nd_offline_pack"
 WORK = "ND_Dam_Suite_Pack_build"
 MARK = "data_updater_build"                  # manifest key: this pack was built here (updatable)
 PROV_NAME = "provenance.json"                # work folder: what each layer was built from
-BUILDER = "DamSafety_Data pack_build 1.5.1"
+BUILDER = "DamSafety_Data pack_build 1.7.0"
 ND_BBOX = OP.ND_BBOX
 DEFAULT_PAD = OP.DEFAULT_PAD_DEG
 
 ND_COUNTIES_URL = "https://ndgishub.nd.gov/arcgis/rest/services/All_GovtBoundaries/MapServer/20"
+# 1.5.5: the USGS Database of Stream Crossings (Wieferich 2022, doi:10.5066/P9YX6KTB). 1.5.8: the
+# barrier and ND DEQ layers are defined once for both suites (packengine.shared_datasets,
+# damsuite.abi); the names below are kept for older callers.
+USGS_STREAM_CROSSINGS_URL = BP.USGS_STREAM_CROSSINGS_URL
+USGS_CROSSING_FIELDS = BP.USGS_CROSSING_FIELDS
 # HIFLD lifeline layers (1.5.0, PR #221): HIFLD Open is published on DataLumos / ICPSR (by the
 # Data Rescue Project, https://portal.datarescueproject.org/) and on hsdl.org. DataLumos
 # needs a (free) ICPSR login and its Terms of Use to download, so the builder cannot fetch them:
@@ -108,20 +117,7 @@ HIFLD_KNOWN = {
                             "points); the points are project 239262 - not confirmed which "
                             "download this file came from (sha256 recorded)"},
 }
-# ND Department of Environmental Quality layers published on the ND GIS Hub (public ArcGIS
-# REST; DEQ's own ArcGIS Online services hold no facility points). DEQ does not publish
-# wastewater / NDPDES facilities, public water system plants or intakes as GIS layers.
-NDDEQ_HUB = "https://ndgishub.nd.gov/arcgis/rest/services/All_Locations/MapServer/"
-NDDEQ = (
-    ("NDDEQ_landfills", "ND DEQ permitted landfills (Division of Waste Management)", 12,
-     "Selected landfills permitted in North Dakota; WasteType = the primary waste accepted"),
-    ("NDDEQ_source_water_protection_community", "ND DEQ source water protection areas - "
-     "community public water systems", 16, "Drinking-water source protection areas of "
-     "community public water systems (PWS_NAME, PWS_TYPE, PWS_SOURCE); intakes not published"),
-    ("NDDEQ_source_water_protection_noncommunity", "ND DEQ source water protection areas - "
-     "non-community public water systems", 17, "Drinking-water source protection areas of "
-     "non-community public water systems; intakes not published"),
-)
+NDDEQ_HUB, NDDEQ = BP.NDDEQ_HUB, BP.NDDEQ        # ND DEQ layers (shared list, packbuild 1.1)
 # 3DHP (USGS 3D Hydrography Program) in place of NHD: the pack keeps the names NHD_flowlines /
 # NHD_waterbodies (the Hazard format-1 reader, Setup's suite_fill and the Hazard / Runner
 # culvert tools ask for those names); the features are 3DHP with the NHD-style fields added
@@ -139,26 +135,9 @@ HYDRO_SRC_FIELD = "hydro_src"                 # 1.5.1: "3DHP" or "NHD" on every 
 HYDRO_TILE_DEG = 0.25
 HYDRO_SPLIT_DEPTH = 4                         # 0.25 degree -> 1/64 degree at the deepest
 HYDRO_CHUNK = 250                             # features per 3DHP request
-# SARP / NACC National Aquatic Barrier Inventory (https://tool.aquaticbarriers.org): the public
-# API (dams, surveyed small barriers: one state as CSV) and the national road-crossings download
-# (unsurveyed road / stream crossings are not in the public API)
-ABI_API = "https://tool.aquaticbarriers.org/api/v1/public"
-ABI_ROAD_ZIP = "https://tool.aquaticbarriers.org/downloads/national/road_crossings.zip"
-ABI_ROAD_MEMBER = "aquatic_barrier_ranks.csv"
-ABI = (
-    ("ABI_dams", "SARP Aquatic Barrier Inventory - dams (on- and off-network)",
-     {"mode": "api", "kind": "dams"}),
-    ("ABI_small_barriers_surveyed", "SARP Aquatic Barrier Inventory - surveyed road / stream "
-     "crossings (small barriers)", {"mode": "api", "kind": "barriers"}),
-    ("ABI_road_crossings_unsurveyed", "SARP Aquatic Barrier Inventory - unsurveyed road / "
-     "stream crossings", {"mode": "zip", "kind": "road_crossings"}),
-)
-ABI_STATE, ABI_STATE_NAME = "ND", "North Dakota"
-# every barrier is kept (removed / excluded ones too); barrier_status says which they are
-ABI_NOTE = ("barrier_status = present / removed / excluded / removed+excluded (from the "
-            "inventory's removed and excluded fields, both kept; removed: no longer a barrier, "
-            "yearremoved gives the year; excluded: left out of SARP's network analysis). "
-            "network = on-network / off-network.")
+# SARP / NACC National Aquatic Barrier Inventory: damsuite.abi (one definition for both suites)
+ABI_API, ABI_ROAD_ZIP, ABI_ROAD_MEMBER = A.ABI_API, A.ABI_ROAD_ZIP, A.ABI_ROAD_MEMBER
+ABI, ABI_STATE, ABI_STATE_NAME, ABI_NOTE = A.ABI, A.ABI_STATE, A.ABI_STATE_NAME, A.ABI_NOTE
 AADT_NOTE = ("AADT: both HPMS_ND_<year> (FHWA HPMS) and NDDOT_traffic_counts are in the pack, "
              "for comparison")
 # ND DWR MapService downloads (qlay = the layer NAME; SpatiaLite keeps the full field names)
@@ -210,6 +189,17 @@ def registry(dwr_folder=None, hifld_folder=None, nlcd_file=None):
         if n == "NDDOT_traffic_counts":
             out.append(_e(n, l, g, k, s, note=AADT_NOTE))
             continue
+        if k == "abi":                       # 1.5.8: the shared list (packengine)
+            out.append(_e(n, l, g, k, {"mode": s["mode"], "kind": s["kind"]},
+                          category="aquatic barrier", note=s["note"], source=s["source"]))
+            continue
+        if n == "USGS_stream_crossings":
+            out.append(_e(n, l, g, k, {x: s[x] for x in ("url", "fields", "precision")},
+                          category="aquatic barrier", source=s["source"]))
+            continue
+        if g == "nddeq":
+            out.append(_e(n, l, g, k, {"url": s["url"]}, note=s["note"], source=s["source"]))
+            continue
         if n in hydro:
             _n, label, group, which = hydro[n]
             flow = which == "flowlines"
@@ -240,16 +230,6 @@ def registry(dwr_folder=None, hifld_folder=None, nlcd_file=None):
                 "ICPSR login and its Terms of Use to download: download the GeoJSON or "
                 "shapefile zip from {} and put it in the HIFLD folder of the build "
                 "window".format(dl))))
-    for name, label, lid, note in NDDEQ:
-        out.append(_e(name, label, "nddeq", "arcgis", {"url": NDDEQ_HUB + str(lid)}, note=note,
-                      source="ND Department of Environmental Quality, via the ND GIS Hub "
-                             "(All_Locations layer {})".format(lid)))
-    for name, label, spec in ABI:
-        out.append(_e(name, label, "barriers", "abi", dict(spec), category="aquatic barrier",
-                      note=ABI_NOTE,
-                      source="SARP / NACC National Aquatic Barrier Inventory ({})".format(
-                          "public API" if spec["mode"] == "api" else
-                          "national road-crossings download")))
     local = {}
     if dwr_folder:
         try:
@@ -395,6 +375,48 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
             raise PackBuildError("unknown layer(s): " + ", ".join(sorted(bad)))
     todo = [t for t in table if want is None or t["name"] in want]
     os.makedirs(wk, exist_ok=True)
+    lock = _lock(wk, log)
+    try:
+        return _build(p2, p1, wk, bbox, table, todo, want, refresh, workers, progress, log,
+                      cancel, area)
+    finally:
+        try:
+            os.remove(lock)
+        except OSError:
+            pass
+
+
+LOCK_NAME = "build.lock"
+LOCK_STALE_S = 48 * 3600                     # a statewide build takes hours, not days
+
+
+def _lock(wk, log):
+    """1.7.0: one build of a folder at a time. The Build offline pack window and the updater's
+    pack refresh (packsource.py) both write here and run as background tasks, possibly in the
+    same QGIS process; the second one is refused (damsuite.updatecore's lock rules: a lock whose
+    process is gone is cleared)."""
+    from .damsuite import updatecore as UC
+    path = os.path.join(wk, LOCK_NAME)
+    what, why = UC.lock_decision(UC.read_lock(path), stale_seconds=LOCK_STALE_S)
+    if what == "clear":
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        log("Cleared the left-over lock {}: {}".format(path, why))
+    elif what == "refuse":
+        raise PackBuildError("Another build of this pack is running ({}). Wait for it to "
+                             "finish (QGIS task bar).".format(why.replace("update", "build")))
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise PackBuildError("Another build of this pack started at the same moment.")
+    os.write(fd, "{} {}".format(os.getpid(), time.strftime("%Y-%m-%dT%H:%M:%S")).encode())
+    os.close(fd)
+    return path
+
+
+def _build(p2, p1, wk, bbox, table, todo, want, refresh, workers, progress, log, cancel, area):
     db = os.path.join(wk, OP.DB_NAME)
     prov = _read_json(os.path.join(wk, PROV_NAME)) or {}
     log("Offline pack for {} - area {:.4f}, {:.4f} to {:.4f}, {:.4f} (lon / lat)".format(
@@ -477,7 +499,11 @@ def build(out_parent, only=None, bbox=None, refresh=False, dwr_folder=None, hifl
     progress(90.0, "Writing nd_offline_pack (format 1)\u2026")
     man1 = write_format1(db, p1, man1, infos, left, log)
     progress(93.0, "Writing ND_Dam_Suite_Pack (format 2)\u2026")
-    man2 = write_format2(os.path.join(p1, OP.DB_NAME), p2, man1, infos, left, refresh, log,
+    # 1.7.0: with `only`, "fetch again" rewrites those layers in format 2, not every layer
+    redo = refresh if not (refresh and want) else set(
+        n for t in todo for n in [t["name"]] + [c[0] for c in (t["spec"].get("choices") or ())
+                                                 if t["kind"] == "first_of"])
+    man2 = write_format2(os.path.join(p1, OP.DB_NAME), p2, man1, infos, left, redo, log,
                          cancel)
     nl = [t for t in todo if t["kind"] == "nlcd"]
     if nl:
@@ -673,152 +699,23 @@ def _download(url, dest, refresh, log, max_age=86400):
     return dest, True
 
 
-def _abi_meta(kind, dest, refresh, log):
-    """The public API's metadata (data_version, data_publish_date, citation, terms_of_use)."""
-    try:
-        p, _new = _download("{}/{}/metadata".format(ABI_API, kind),
-                            os.path.join(dest, "{}_metadata.json".format(kind)), refresh, log)
-        m = _read_json(p) or {}
-    except BP._NET_ERRORS + (OSError, ValueError) as e:
-        if log:
-            log("  ABI metadata not read ({})".format(e))
-        m = {}
-    return {k: m.get(k) for k in ("data_version", "data_publish_date", "citation",
-                                  "terms_of_use") if m.get(k)}
+def _dl(url, dest, refresh, log, max_age=86400):
+    return _download(url, dest, refresh, log, max_age=max_age)   # _download looked up per call
 
 
 def _readme_meta(text):
-    out = {}
-    for line in text.splitlines():
-        if line.startswith("Data version:"):
-            out["data_version"] = line.split(":", 1)[1].strip()
-        elif line.startswith("Data published:"):
-            out["data_publish_date"] = line.split(":", 1)[1].strip()
-    return out
+    return A.readme_meta(text)
 
 
 def abi_rows(t, dest, refresh=False, log=None):
-    """(header, rows, provenance) of one Aquatic Barrier Inventory layer for North Dakota.
-    api: <ABI_API>/<kind>/state?id=ND (CSV). zip: the national road-crossings download, its
-    North Dakota rows kept (cached as a small CSV) and only the unsurveyed ones (Surveyed =
-    'not likely'; 'yes' / 'likely' are the surveyed small barriers)."""
-    import csv
-    import io
-    spec = t["spec"]
-    kind = spec["kind"]
-    if spec["mode"] == "api":
-        url = "{}/{}/state?id={}".format(ABI_API, kind, ABI_STATE)
-        p, _new = _download(url, os.path.join(dest, "{}_{}.csv".format(kind, ABI_STATE)),
-                            refresh, log)
-        with open(p, encoding="utf-8", newline="") as f:
-            rd = csv.reader(f)
-            head = [h.strip().lower() for h in next(rd)]
-            rows = [r for r in rd if r]
-        prov = {"source_url": url, "source_sha256": _sha256(p),
-                "source_date": datetime.date.fromtimestamp(os.path.getmtime(p)).isoformat(),
-                "filter": "state = {} (public API)".format(ABI_STATE)}
-        prov.update(_abi_meta(kind, dest, refresh, log))
-        return head, rows, prov
-    zp, new = _download(ABI_ROAD_ZIP, os.path.join(dest, "road_crossings.zip"), refresh, log,
-                        max_age=7 * 86400)
-    cache = os.path.join(dest, "road_crossings_{}.csv".format(ABI_STATE))
-    with zipfile.ZipFile(zp) as z:
-        if new or refresh or not os.path.isfile(cache) or \
-                os.path.getmtime(cache) < os.path.getmtime(zp):
-            with z.open(ABI_ROAD_MEMBER) as raw, open(cache + ".part", "w", encoding="utf-8",
-                                                      newline="") as out:
-                lines = io.TextIOWrapper(raw, encoding="utf-8", newline="")
-                wr = csv.writer(out)
-                head = next(csv.reader([next(lines)]))
-                wr.writerow(head)
-                si = head.index("State")
-                key = '"{}"'.format(ABI_STATE_NAME)
-                # most of the 6 GB file is other states: a cheap text test first
-                for line in lines:
-                    if key in line:
-                        r = next(csv.reader([line]))
-                        if len(r) == len(head) and r[si] == ABI_STATE_NAME:
-                            wr.writerow(r)
-            os.replace(cache + ".part", cache)
-        meta = _readme_meta(z.read("README.txt").decode("utf-8", "replace"))
-        terms = z.read("TERMS_OF_USE.txt").decode("utf-8", "replace") \
-            if "TERMS_OF_USE.txt" in z.namelist() else ""
-    with open(cache, encoding="utf-8", newline="") as f:
-        rd = csv.reader(f)
-        head = [h.strip().lower() for h in next(rd)]
-        si = head.index("surveyed")
-        rows = [r for r in rd if r and r[si] == "not likely"]
-    prov = {"source_url": ABI_ROAD_ZIP, "source_sha256": _sha256(zp),
-            "source_file": "{} / {}".format(os.path.basename(zp), ABI_ROAD_MEMBER),
-            "source_date": datetime.date.fromtimestamp(os.path.getmtime(zp)).isoformat(),
-            "filter": "State = {}, Surveyed = 'not likely' (unsurveyed)".format(ABI_STATE_NAME)}
-    prov.update(meta)
-    if terms:
-        prov["terms_of_use"] = terms.split("By downloading", 1)[-1].split("For your", 1)[0]\
-            .strip()
-        prov["terms_of_use"] = "By downloading " + prov["terms_of_use"]
-        if "Citation:" in terms:
-            prov["citation"] = terms.split("Citation:", 1)[1].strip("-\n ").strip()
-    return head, rows, prov
+    """(header, rows, provenance) of one Aquatic Barrier Inventory layer for North Dakota
+    (damsuite.abi.abi_rows; the files go through _download)."""
+    return A.abi_rows(t["spec"], dest, _dl, refresh=refresh, log=log, errors=BP._NET_ERRORS)
 
 
-def _numeric_columns(head, rows):
-    """Columns whose every value is a number (no leading zero, so HUC codes stay text)."""
-    import re
-    num = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?([eE][-+]?\d+)?$")
-    out = set()
-    for i, h in enumerate(head):
-        vals = [r[i] for r in rows if i < len(r) and r[i] != ""]
-        if vals and all(num.match(v) for v in vals):
-            out.add(i)
-    return out
-
-
-def _yes(v):
-    return str(v).strip().lower() in ("yes", "true", "1", "y")
-
-
-def barrier_status(props):
-    """present / removed / excluded / removed+excluded from the inventory's removed and
-    excluded fields (any case; missing = no)."""
-    low = {k.lower(): v for k, v in props.items()}
-    flags = [k for k in ("removed", "excluded") if _yes(low.get(k))]
-    return "+".join(flags) if flags else "present"
-
-
-def abi_features(head, rows, bbox):
-    """Points (lon / lat) of the rows inside bbox, every column kept (numbers as numbers),
-    plus network = on-network / off-network (from hasnetwork / onnetwork) and barrier_status
-    (present / removed / excluded / removed+excluded; no row is dropped)."""
-    la, lo = head.index("lat"), head.index("lon")
-    nk = head.index("hasnetwork") if "hasnetwork" in head else \
-        head.index("onnetwork") if "onnetwork" in head else -1
-    nums = _numeric_columns(head, rows)
-    feats = []
-    for r in rows:
-        try:
-            x, y = float(r[lo]), float(r[la])
-        except (ValueError, IndexError):
-            continue
-        if not (bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]):
-            continue
-        props = {}
-        for i, h in enumerate(head):
-            if i in (la, lo) or i >= len(r):
-                continue
-            v = r[i]
-            if i in nums and v != "":
-                v = float(v) if any(c in v for c in ".eE") else int(v)
-            elif v == "":
-                v = None
-            props[h] = v
-        if nk >= 0:
-            on = str(r[nk]).strip().lower() in ("yes", "true", "1")
-            props["network"] = "on-network" if on else "off-network"
-        props["barrier_status"] = barrier_status(props)
-        feats.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [
-            round(x, 6), round(y, 6)]}, "properties": props})
-    return feats
+barrier_status = A.barrier_status
+abi_features = A.abi_features
+_numeric_columns = A.numeric_columns
 
 
 def _run_abi(ctx, t, bbox, wk, refresh):
@@ -830,24 +727,14 @@ def _run_abi(ctx, t, bbox, wk, refresh):
             signature="abi|{}|{}".format(prov.get("source_sha256"), prov.get("filter")))
     try:
         for i in range(0, len(feats), 2000):
-            w.add(feats[i:i + 2000], lambda f: "sarpid:{}".format(
-                f["properties"].get("sarpid") or id(f)))
+            w.add(feats[i:i + 2000], A.feature_uid)
             ctx.sub(50, "{:,} features".format(min(len(feats), i + 2000)))
     except Exception as e:
         w.fail(name, str(e))
         raise PackBuildError("{}: {}".format(name, e))
-    counts = {}
-    for f in feats:
-        p = f["properties"]
-        for k in ("network", "barrier_status"):
-            if k in p:
-                key = "{}={}".format(k, p[k])
-                counts[key] = counts.get(key, 0) + 1
-    prov["counts"] = counts
-    prov["network_field"] = ("network: on-network / off-network (from the inventory's "
-                             "hasnetwork / onnetwork); one layer, not two")
-    prov["flag_field"] = ("barrier_status: present / removed / excluded / removed+excluded "
-                          "(removed and excluded barriers are kept, not dropped)")
+    prov["counts"] = A.counts(feats)
+    prov["network_field"] = A.NETWORK_FIELD
+    prov["flag_field"] = A.FLAG_FIELD
     n = w.finish("{} (data version {})".format(prov.get("filter"), prov.get("data_version")))
     return n, prov
 
@@ -1060,13 +947,22 @@ def zip_format1(p1, out_zip, log=None):
 # ------------------------------------------------------------------ format 2 --
 def write_format2(src_db, p2, man1, infos, left, refresh, log, cancel):
     """ND_Dam_Suite_Pack from the format-1 file (gpkgpack.convert_v1); a layer already written
-    with the same date and count is kept."""
+    with the same date and count is kept. refresh: True (rewrite every layer) or a set of layer
+    names to rewrite (1.7.0)."""
     old = GP.read_manifest(p2) if os.path.isdir(p2) else None
     old = old if GP.is_gpkg_manifest(old) else {"datasets": {}}
+    if isinstance(refresh, (set, frozenset, list, tuple)):
+        names = set(refresh)
+
+        def redo(k):
+            return k in names
+    else:
+        def redo(k, _all=bool(refresh)):
+            return _all
     only = set()
     for k, v in man1["datasets"].items():
         o = old["datasets"].get(k) or {}
-        same = (not refresh and o.get("fetched") == v.get("fetched") and
+        same = (not redo(k) and o.get("fetched") == v.get("fetched") and
                 o.get("count") == v.get("count") and o.get("file") and
                 os.path.isfile(os.path.join(p2, *o["file"].split("/"))))
         if not same:

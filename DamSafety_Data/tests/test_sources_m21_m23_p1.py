@@ -2,7 +2,8 @@
 
 Runs without QGIS/GDAL: core.py imports only the standard library at module load time
 (the `from . import nsi_merge` calls live inside NsiApiSource, which these tests never build),
-so the module is loaded straight from its file path.
+so the module is loaded straight from its file path. Since suite 1.18.8 core.py is a shim over
+damsuite/updatecore.py (the engine both data updaters share), which is what is loaded.
 
 What each test pins:
   M21 - address_points (ArcGIS) and overture (Overture) now carry a min_check_interval_hours so
@@ -31,7 +32,7 @@ PLUGIN = os.path.dirname(HERE)
 
 def _load_core():
     spec = importlib.util.spec_from_file_location(
-        "damsafety_data_core_under_test", os.path.join(PLUGIN, "core.py"))
+        "damsafety_data_core_under_test", os.path.join(PLUGIN, "damsuite", "updatecore.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -42,7 +43,7 @@ core = _load_core()
 _TESTS = []
 
 
-def test(fn):
+def case(fn):
     _TESTS.append(fn)
     return fn
 
@@ -114,7 +115,7 @@ def _arcgis(**kw):
 # --------------------------------------------------------------------------- M21 / M22
 
 
-@test
+@case
 def test_sources_have_check_interval_and_layer_globs():
     ov = core.OvertureSource("overture", "Overture", "overture_buildings")
     assert ov.min_check_interval_hours > 0, "overture must have a check interval (M21)"
@@ -128,7 +129,7 @@ def test_sources_have_check_interval_and_layer_globs():
     assert ap.layer_globs == ("address_points.gpkg", "address_points.ndjson")
 
 
-@test
+@case
 def test_arcgis_remote_version_is_a_cheap_stable_signal():
     fb, _ = _feedback()
     http = _PagingHttp(total=5, last_edit=100)
@@ -142,7 +143,7 @@ def test_arcgis_remote_version_is_a_cheap_stable_signal():
     assert _arcgis().remote_version(_PagingHttp(total=5, last_edit=200), fb) != v1
 
 
-@test
+@case
 def test_arcgis_remote_version_propagates_network_error():
     fb, _ = _feedback()
     try:
@@ -153,7 +154,7 @@ def test_arcgis_remote_version_propagates_network_error():
         raise AssertionError("a network failure must propagate so the source is reported offline")
 
 
-@test
+@case
 def test_arcgis_fetch_returns_the_remote_version_so_a_later_check_is_current():
     fb, lines = _feedback()
     with tempfile.TemporaryDirectory() as d:
@@ -170,7 +171,7 @@ def test_arcgis_fetch_returns_the_remote_version_so_a_later_check_is_current():
                 or os.path.exists(os.path.join(staging, "address_points.ndjson")))
 
 
-@test
+@case
 def test_updater_skips_within_interval_and_reports_current_after():
     with tempfile.TemporaryDirectory() as d:
         clock = [1_000_000.0]
@@ -199,7 +200,7 @@ def test_updater_skips_within_interval_and_reports_current_after():
 # --------------------------------------------------------------------------- P1 (paging guard)
 
 
-@test
+@case
 def test_arcgis_fetch_stops_when_the_server_ignores_resultoffset():
     fb, _ = _feedback()
     with tempfile.TemporaryDirectory() as d:
@@ -219,7 +220,7 @@ def test_arcgis_fetch_stops_when_the_server_ignores_resultoffset():
             assert sum(1 for _ in f) == 3
 
 
-@test
+@case
 def test_normal_paging_still_completes():
     fb, lines = _feedback()
     with tempfile.TemporaryDirectory() as d:
@@ -241,7 +242,7 @@ def _dead_pid():
     return p.pid
 
 
-@test
+@case
 def test_pid_alive():
     assert core.pid_alive(os.getpid()) is True
     assert core.pid_alive(_dead_pid()) is False
@@ -249,7 +250,7 @@ def test_pid_alive():
     assert core.pid_alive("not a pid") is False
 
 
-@test
+@case
 def test_read_lock_reads_pid_and_age():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, core.LOCK_NAME)
@@ -263,7 +264,7 @@ def test_read_lock_reads_pid_and_age():
         assert core.read_lock(path)["pid"] is None
 
 
-@test
+@case
 def test_lock_decision_logic():
     assert core.lock_decision({})[0] == "free"
     assert core.lock_decision({"pid": 4242, "age": 10.0}, alive=lambda p: False)[0] == "clear"
@@ -279,7 +280,7 @@ def test_lock_decision_logic():
     assert core.lock_decision({"pid": os.getpid(), "age": 7 * 3600.0}, alive=lambda p: True)[0] == "clear"
 
 
-@test
+@case
 def test_updater_clears_a_stale_lock_and_says_so_once():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, core.LOCK_NAME)
@@ -293,7 +294,7 @@ def test_updater_clears_a_stale_lock_and_says_so_once():
         assert not os.path.exists(path)       # the run removed its own lock afterward
 
 
-@test
+@case
 def test_updater_refuses_while_a_live_run_holds_the_lock():
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
