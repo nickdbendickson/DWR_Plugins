@@ -27,6 +27,7 @@ from .core import (workflow, breach as brmod, flood as floodmod, impacts as impm
                    sensitivity as sensmod, cascade as cascmod, estimate as estmod,
                    outlets as outmod, damjson, stoprule, products as prodmod)
 from .core.lisflood import Cancelled, ModelError, check_lisflood
+from .core.lisflood import SOLVERS as lfmod_order, SOLVER_LABELS as lfmod_labels  # 3.16.0
 from .damsuite import structure_flags as sflags
 from .core.anuga_model import check_anuga
 from .core.units import FT, MILE, ARRIVAL_DEPTH_FT
@@ -39,6 +40,7 @@ SET_BUILTIN = "NDBREACH_USE_BUILTIN"       # opt in to the built-in screening en
 SET_ANUGA = "NDBREACH_ANUGA_PYTHON"
 SET_THREADS = "NDBREACH_THREADS"
 SET_ALLOW_UNPATCHED = "NDBREACH_ALLOW_UNPATCHED"   # opt in to an unpatched LISFLOOD-FP build
+SET_SOLVER = "NDBREACH_LISFLOOD_SOLVER"           # 3.16.0: default LISFLOOD-FP solver (text)
 SET_CREST_DEM = "NDBREACH_CREST_BURN_DEM"         # 3.15.0: the 1 m DEM (VRT) the crest burn reads
 
 METHODS = [(m, brmod.METHOD_LABELS[m]) for m in brmod.METHODS]
@@ -693,6 +695,17 @@ class _Base(QgsProcessingAlgorithm):
                   1.0, minimum=0.05, advanced=True)
         self._num("REFINE_CELL", "Near-dam refine: fine cell size (m; 0 = half the model cell; "
                   "10 m = 32.8 ft)", 0.0, minimum=0.0, advanced=True)
+        # 3.16.0: the main run's LISFLOOD-FP solver (ACC stays the default)
+        p = QgsProcessingParameterEnum(
+            "SOLVER", "LISFLOOD-FP solver (Default = the NDBREACH_LISFLOOD_SOLVER environment "
+            "variable, else the provider setting, else ACC)",
+            ["Default"] + [lfmod_labels[k] for k in lfmod_order], defaultValue=0, optional=True)
+        _set_help(p, "ACC (local inertial) is the default and the fastest. FV1, FV2 and MWDG2 "
+                  "solve the full shallow-water equations and are much slower (FV2 / MWDG2 about "
+                  "100 times ACC); FV2 and MWDG2 use the slope limiter. FV1 writes no maximum "
+                  "velocity or arrival time, so those come from an ACC run of the same domain. "
+                  "The ACC stability re-run and the near-dam refine apply to ACC runs only.")
+        self.addParameter(set_advanced(p))
         self._bool("STOP_RULE", "Class-stop rule: accept a shallow edge with no receptor beyond",
                    False, advanced=True,
                    help="Accept an edge where the flood's depth (or its rise over the no-breach "
@@ -903,6 +916,13 @@ class _Base(QgsProcessingAlgorithm):
                 st.crest_burn_data_folder = _SD.data_folder() or ""
             except Exception:                                    # noqa - the burn says why
                 pass
+        if self.parameterDefinition("SOLVER") is not None:             # 3.16.0
+            from .core import lisflood as _lf
+            i = self.parameterAsEnum(parameters, "SOLVER", context) or 0
+            if i > 0:
+                st.lisflood_solver = _lf.SOLVERS[i - 1]
+            elif not os.environ.get(_lf.SOLVER_ENV, "").strip():
+                st.lisflood_solver = _lf.solver_from_text(_setting(SET_SOLVER, ""))
         if self.parameterDefinition("REFINE_NEAR") is not None:        # v3.4.0
             st.refine_near = self.parameterAsBool(parameters, "REFINE_NEAR", context)
             st.refine_dist_mi = g("REFINE_DIST_MI") or 1.0

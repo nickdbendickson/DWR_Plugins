@@ -299,6 +299,16 @@ class RunSettings:
         # v3.4.0: LISFLOOD-FP floodplain solver keyword ("acceleration" everywhere by default;
         # "fv1" is what the near-dam refine uses for its fine run)
         self.lisflood_solver = lfmod.SOLVER_ACC
+        # 3.16.0: the main run's solver is a choice - ACC (default), FV1, FV2 or MWDG2. The
+        # NDBREACH_LISFLOOD_SOLVER environment variable sets the default for every run; the
+        # tools' Solver parameter and the CLI's model.lisflood_solver win over it. FV2 / MWDG2
+        # run with LISFLOOD-FP's slope limiter (limitslopes) unless lisflood_limit_slopes is off.
+        try:
+            self.lisflood_solver = lfmod.solver_from_env(lfmod.SOLVER_ACC)
+        except lfmod.ModelError as e:
+            self.lisflood_solver = lfmod.SOLVER_ACC   # run_dam warns (lisflood_solver_error)
+            self.lisflood_solver_error = str(e)
+        self.lisflood_limit_slopes = True
         # 3.15.1: a LISFLOOD-FP ACC run whose volume error is over lfmod.STABILITY_RETRY_PCT is run
         # again with lfmod.STABLE_THETA / STABLE_CFL, and every later run of the dam uses them
         # (on by default; NDBREACH_STABILITY_RETRY=0 turns it off). A run that balances is
@@ -452,8 +462,13 @@ def key_settings(st):
     if not getattr(st, "refine_near", False):
         for k in _REFINE_KEYS:
             d.pop(k, None)
+    d.pop("lisflood_solver_error", None)
     if getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) == lfmod.SOLVER_ACC:
         d.pop("lisflood_solver", None)
+    # 3.16.0: only FV2 / MWDG2 read the slope limiter; on (the default) it stays out of the key
+    if getattr(st, "lisflood_limit_slopes", True) or \
+            getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) not in lfmod.LIMIT_SLOPES_SOLVERS:
+        d.pop("lisflood_limit_slopes", None)
     # 3.15.1: the stability re-run never changes a run that balances, so it stays out of the key
     # while on (a 3.15.0 checkpoint resumes)
     if getattr(st, "lisflood_stability_retry", True):
@@ -1215,6 +1230,14 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     model_dir = os.path.join(out_folder, MODEL_FOLDER)
     os.makedirs(model_dir, exist_ok=True)
     warnings = []
+    if getattr(st, "lisflood_solver_error", ""):                       # 3.16.0
+        warnings.append("{} - the run uses ACC.".format(st.lisflood_solver_error))
+    if getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) != lfmod.SOLVER_ACC and \
+            lfmod.is_builtin(st.lisflood_exe):
+        warnings.append("The built-in engine has only the local-inertial (ACC) scheme, so the {} "
+                        "solver was not used; the run is ACC.".format(
+                            lfmod.SOLVER_SHORT.get(st.lisflood_solver, st.lisflood_solver)))
+        st.lisflood_solver = lfmod.SOLVER_ACC
     flood_mode = st.scenario == SCENARIO_FLOOD
     report = {"tool": "ND Dam Breach Runner " + VERSION,
               "run_started": datetime.datetime.now().isoformat(timespec="seconds"),
@@ -1775,15 +1798,18 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         init = terrain_src.initial_depth(bnds, cs) if has_ponds else None
         gl = gauge_list(bnds, gauges)
 
-        def settings():
+        def settings(solver=None):
+            solver = solver or getattr(st, "lisflood_solver", lfmod.SOLVER_ACC)
+            kw = stable_kw() if solver == getattr(st, "lisflood_solver", lfmod.SOLVER_ACC) \
+                else {"theta": lfmod.STABLE_THETA, "cfl": lfmod.STABLE_CFL}
             return lfmod.LisfloodSettings(
                 st.lisflood_exe, st.threads, st.manning_n, man, arrival_m,
                 sim_s, massint_s=st.gauge_massint_s if gl else 300.0,
                 initial_depth=init, gauges=gl, snapshot_s=snap,
-                extra_sources=extra_sources(sim_s),
-                solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
+                extra_sources=extra_sources(sim_s), solver=solver,
                 closed_edges=closed_edges(),
-                allow_unpatched=getattr(st, "allow_unpatched", False), **stable_kw())
+                allow_unpatched=getattr(st, "allow_unpatched", False),
+                limit_slopes=getattr(st, "lisflood_limit_slopes", True), **kw)
         lst = settings()
         wd = os.path.join(model_dir, "lisflood" + tag)
         if snap:        # snapshots of an earlier (smaller) run must not mix with these
@@ -1848,7 +1874,32 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                                      "theta": lfmod.STABLE_THETA,
                                                      "cfl": lfmod.STABLE_CFL,
                                                      "events": stability["events"]})
+        # 3.16.0: a solver that wrote no velocity / arrival (FV1) gets them from an ACC run of
+        # the same domain (stable ACC settings), in lisflood<tag>_acc
+        if lst.solver != lfmod.SOLVER_ACC and lfmod.needs_acc_fill(env):
+            alst = settings(lfmod.SOLVER_ACC)
+            awd = wd + "_acc"
+            log("{} wrote no maximum velocity or arrival time; running ACC on the same domain "
+                "for them.".format(lfmod.SOLVER_SHORT.get(lst.solver, lst.solver)))
+            apar = lfmod.write_inputs(awd, dem, inflow_xy, hyd, alst, inflow_line=inline)
+            runtime += lfmod.run(awd, apar, alst, prog, cancel, log)
+            _acc_fill(env, lfmod.read_results(awd, dem, alst, hyd), lst)
         return env, dem, init, runtime, wd, lst
+
+    def _acc_fill(env, aenv, lst):
+        info = lfmod.fill_from_acc(env, aenv, lst)
+        report["lisflood_velocity_from_acc"] = dict(
+            info, solver=lfmod.SOLVER_SHORT.get(lst.solver, lst.solver))
+        msg = ("The {} solver writes no maximum velocity or arrival time, so they come from an "
+               "ACC run of the same domain (depths are {}'s).".format(
+                   lfmod.SOLVER_SHORT.get(lst.solver, lst.solver),
+                   lfmod.SOLVER_SHORT.get(lst.solver, lst.solver)))
+        if info.get("velocity_cells_unfilled"):
+            msg += (" {:,} wet cell(s) had no ACC velocity within reach and read 0 ft/s; check "
+                    "them.".format(info["velocity_cells_unfilled"]))
+        if msg not in warnings:
+            warnings.append(msg)
+
 
     def load_lisflood(tag, hyd, bnds, sim_s):
         """Results of a finished run (resume)."""
@@ -1861,9 +1912,20 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                      initial_depth=init, gauges=gl,
                                      extra_sources=extra_sources(sim_s),
                                      solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
-                                     closed_edges=closed_edges(), **stable_kw())
-        return lfmod.read_results(os.path.join(model_dir, "lisflood" + tag), dem, lst, hyd), \
-            dem, init
+                                     closed_edges=closed_edges(),
+                                     limit_slopes=getattr(st, "lisflood_limit_slopes", True),
+                                     **stable_kw())
+        env = lfmod.read_results(os.path.join(model_dir, "lisflood" + tag), dem, lst, hyd)
+        awd = os.path.join(model_dir, "lisflood" + tag + "_acc")
+        if lst.solver != lfmod.SOLVER_ACC and lfmod.needs_acc_fill(env) and \
+                os.path.isdir(os.path.join(awd, "results")):
+            alst = lfmod.LisfloodSettings(
+                st.lisflood_exe, st.threads, st.manning_n, man, arrival_m, sim_s,
+                massint_s=st.gauge_massint_s if gl else 300.0, initial_depth=init, gauges=gl,
+                extra_sources=extra_sources(sim_s), solver=lfmod.SOLVER_ACC,
+                closed_edges=closed_edges(), theta=lfmod.STABLE_THETA, cfl=lfmod.STABLE_CFL)
+            _acc_fill(env, lfmod.read_results(awd, dem, alst, hyd), lst)
+        return env, dem, init
 
     # M5: a run on the built-in engine is a SCREENING approximation, not LISFLOOD-FP. Say so
     # prominently before anything runs, so the numbers are never mistaken for LISFLOOD-FP's.
@@ -2425,6 +2487,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
 
     summary = {
         "dam_id": dam.dam_id, "final_model": final_model,
+        "lisflood_solver": lfmod.SOLVER_SHORT.get(getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
+                                                  getattr(st, "lisflood_solver", "")),
         "peak_breach_cfs": round(hy.peak_cfs, 0), "breach_method": hy.method,
         "storage_at_failure_acft": hy.params.get("storage_at_failure_acft"),
         "flooded_acres": round(float(np.isfinite(d).sum()) * cell_ac, 1),
