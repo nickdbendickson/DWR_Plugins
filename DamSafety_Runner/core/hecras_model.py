@@ -1297,6 +1297,9 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             # 3.16.1: 'failure_mode' (HEC Piping, Froehlich 2008) is the default; 'match_plugin'
             # writes Overtopping for the plugin's routed (weir) methods
             "hec_breach_mode": "failure_mode",
+            # 3.16.2: Froehlich (2008) piping replaces the run's breach values ('overwrite');
+            # 'fill_missing' (opt-in) only fills what the run's method lacks
+            "breach_f2008": "overwrite",
             "warmup_hold": True,                # spillway: hold the pool during the warm-up
             "tolerances": "default",            # or 'tight', or a dict (TOLERANCES keys)
             "mesh_seeds": None,                 # None: NDBREACH_HECRAS_MESH_SEEDS, else 'grid'
@@ -2699,6 +2702,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     notes = []
     progress(2, "reading the run")
     hy, dam, params = hecras.load_run(dam_folder)
+    if o.get("breach_f2008"):                         # 3.16.2: overwrite (default) / fill_missing
+        params = dict(params, breach_f2008=o["breach_f2008"])
     model_dir = os.path.join(dam_folder, hecras.MODEL_FOLDER)
     with open(os.path.join(model_dir, hecras.RUN_REPORT_JSON), encoding="utf-8") as f:
         report = json.load(f)
