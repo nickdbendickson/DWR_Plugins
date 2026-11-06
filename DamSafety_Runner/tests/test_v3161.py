@@ -76,3 +76,27 @@ def hecras_breach_rows_keep_the_runs_own_values_and_pipe():
     assert "Froehlich (2008) piping" not in r
     assert abs(r["Initial piping elevation"]["value"] - (BED + 1.0)) < 1e-6
     assert r["Piping coefficient"]["value"] == 0.6
+
+
+@test
+def hecras_breach_vw_is_max_storage_and_curve_only_warns():
+    """Addendum: Vw is the given maximum storage; the elevation-volume curve is a check only.
+    Synthetic numbers."""
+    dam = br.DamData(dam_id="S1", dam_height_ft=20.0, storage_top_acft=400.0,
+                     top_of_dam_ft=1000.0)
+    a = hecras.froehlich_2008_piping_ft(dam, {}, 980.0)
+    b = hecras.froehlich_2008_piping_ft(dam, {"storage_at_failure_acft": 300.0}, 980.0)
+    assert a["vw_acft"] == b["vw_acft"] == 400.0 and a["avg_width_ft"] == b["avg_width_ft"]
+    assert a["curve_warning"] == "" and "-25 %" in b["curve_warning"], b
+    c = hecras.froehlich_2008_piping_ft(dam, {"storage_at_failure_acft": 390.0}, 980.0)
+    assert c["curve_warning"] == ""
+
+
+@test
+def hecras_breach_notes_the_navd88_shift():
+    """Synthetic VERTCON record: the note gives the shift; an unshifted NGVD29 run warns."""
+    rec = {"applied": True, "shift_ft": 1.25, "method": "VERTCON", "source_datum": "NGVD29"}
+    _, _, notes = _geom({"vertical_datum": rec})
+    assert any("NAVD88" in n and "+1.2500 ft" in n for n in notes), notes
+    _, _, notes = _geom({"vertical_datum": dict(rec, applied=False, method="none (x)")})
+    assert any(n.startswith("WARNING: the run's elevations were not shifted") for n in notes)

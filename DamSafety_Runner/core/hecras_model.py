@@ -950,6 +950,15 @@ def breach_values(dam, params, units, crest_length_u):
         notes.append("Breach: the run gives no failure mode; HEC-RAS Piping is the default.")
     if hecras.F08_AUTO in str(rows.get("Froehlich (2008) piping", {}).get("note", "")):
         notes.append("Breach: " + rows["Froehlich (2008) piping"]["note"])
+    vd = p.get("vertical_datum")
+    if isinstance(vd, dict):
+        if vd.get("applied"):
+            notes.append("Breach elevations are NAVD88: the given (DWR) values {:+.4f} ft "
+                         "({}).".format(float(vd.get("shift_ft") or 0.0),
+                                        vd.get("method") or "VERTCON"))
+        elif str(vd.get("source_datum") or "").upper() not in ("", "NAVD88"):
+            notes.append("WARNING: the run's elevations were not shifted to NAVD88 ({}); "
+                         "check the breach elevations.".format(vd.get("method") or "?"))
     trig = p.get("breach_trigger")
     if trig in ("peak", "wse", "time"):
         trig_ft = p.get("pool_at_breach_ft")

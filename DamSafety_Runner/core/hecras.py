@@ -368,29 +368,33 @@ def _num(v):
 
 PIPING_COEF = 0.5                     # HEC-RAS piping coefficient default
 F08_AUTO = "Froehlich (2008) piping, auto"
+VW_CURVE_TOL = 0.05                   # curve vs maximum storage: warn above 5 %
 
 
 def froehlich_2008_piping_ft(dam, params, bottom_ft):
-    """Froehlich (2008) piping breach (K0 1.0, z 0.7) from the run's storage at failure
-    (else the storage at the starting pool, else at the top of dam) and hb = top - bottom.
-    Returns {'avg_width_ft', 'tf_hr', 'z', 'vw_acft'} or None when it cannot be computed."""
+    """Froehlich (2008) piping breach (K0 1.0, z 0.7). Vw is the dam's maximum storage as
+    given (DWR's max storage: DamData.storage_top_acft) and hb = top - bottom, both from the
+    run's dam (NAVD88: the DWR value plus the run's VERTCON shift, core/vdatum_run.apply).
+    The elevation-volume curve is only a check: a storage at failure that differs from Vw by
+    more than VW_CURVE_TOL gives a warning ('curve_warning'). Returns {'avg_width_ft',
+    'tf_hr', 'z', 'vw_acft', 'curve_warning'} or None when it cannot be computed."""
     from . import breach
     p = dict(params or {})
     hb_ft = dam.top_of_dam_ft - bottom_ft
-    vw_acft = p.get("storage_at_failure_acft")
-    if vw_acft is None:
-        try:
-            wse0 = p.get("starting_wse_ft")
-            c = breach._common(dam, float(wse0) * FT if wse0 is not None else None)
-            vw_acft = c.vs / ACFT
-        except Exception:
-            vw_acft = dam.storage_top_acft
+    vw_acft = dam.storage_top_acft
     try:
         b_m, tf_s, z = breach.froehlich_2008(float(vw_acft) * ACFT, hb_ft * FT, "piping")
     except (TypeError, ValueError):
         return None
+    warn = ""
+    curve = p.get("storage_at_failure_acft")
+    if curve is not None and vw_acft and \
+            abs(float(curve) - float(vw_acft)) > VW_CURVE_TOL * float(vw_acft):
+        warn = ("Check: the elevation-volume curve gives {} ac-ft at the starting pool, "
+                "{:+.0f} % from the maximum storage {} ac-ft used as Vw.".format(
+                    _num(curve), 100.0 * (float(curve) / float(vw_acft) - 1.0), _num(vw_acft)))
     return {"avg_width_ft": b_m / FT, "tf_hr": tf_s / 3600.0, "z": z,
-            "vw_acft": round(float(vw_acft), 2)}
+            "vw_acft": round(float(vw_acft), 2), "curve_warning": warn}
 
 
 def breach_parameter_rows(dam, params, peak_cfs=None):
@@ -480,7 +484,8 @@ def breach_parameter_rows(dam, params, peak_cfs=None):
             "{}: Vw {} ac-ft, hb {:.2f} ft, K0 1.0, side slope 0.7, average width {} ft, "
             "formation time {} h; filled where the run's method gives none.".format(
                 F08_AUTO, _num(f08["vw_acft"]), hb, _num(f08["avg_width_ft"]),
-                _num(f08["tf_hr"])))
+                _num(f08["tf_hr"])) + (" " + f08["curve_warning"] if f08["curve_warning"]
+                                       else ""))
     if mode == "piping":
         cd = p.get("pipe_cd")
         add("Piping coefficient", float(cd) if cd is not None else PIPING_COEF, "",
@@ -582,6 +587,8 @@ def load_run(dam_folder, model_folder=MODEL_FOLDER):
     except breach.BreachInputError as e:
         raise HecRasError(str(e))
     params = dict(report["hydrograph"])
+    if report.get("vertical_datum") is not None:
+        params.setdefault("vertical_datum", report["vertical_datum"])  # NAVD88 record
     hy.method = params.get("method", hy.method)
     hy.params = params
     hy.t_ref_s = float(params.get("breach_initiation_hr") or 0.0) * 3600.0
