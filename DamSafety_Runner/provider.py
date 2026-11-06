@@ -65,9 +65,9 @@ class Provider(QgsProcessingProvider):
                 "arrival-depth patch (arrival times then mark the first wetting, ~1 mm, NOT the "
                 "arrival depth, so warning times are unreliable; off by default)",
                 False, valuetype=Setting.BOOL))
-            # 3.16.0: the default LISFLOOD-FP solver (ACC, FV1, FV2 or MWDG2; empty = ACC)
+            # 3.16.0: the default LISFLOOD-FP solver (ACC, FV2 or MWDG2; empty = ACC)
             ProcessingConfig.addSetting(Setting(
-                self.name(), SET_SOLVER, "Default LISFLOOD-FP solver: ACC, FV1, FV2 or MWDG2 "
+                self.name(), SET_SOLVER, "Default LISFLOOD-FP solver: ACC, FV2 or MWDG2 "
                 "(empty = ACC; the NDBREACH_LISFLOOD_SOLVER environment variable wins)", ""))
             # 3.15.0
             ProcessingConfig.addSetting(Setting(
