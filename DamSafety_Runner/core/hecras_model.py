@@ -942,8 +942,14 @@ def breach_values(dam, params, units, crest_length_u):
         tf = p.get("rise_time_hr") or 1.0
         notes.append("The breach method gives no formation time; {:.2f} h (the plugin's "
                      "hydrograph rise) was used.".format(tf))
-    mode = str(p.get("failure_mode") or "").lower()
+    # 3.16.1 (Nick, 2026-11-06): piping unless the run says overtopping (TR-60, a user
+    # hydrograph and older runs give no failure mode); Froehlich (2008) values fill the gaps
+    mode = str(p.get("failure_mode") or "piping").lower()
     piping = mode == "piping"
+    if not p.get("failure_mode"):
+        notes.append("Breach: the run gives no failure mode; HEC-RAS Piping is the default.")
+    if hecras.F08_AUTO in str(rows.get("Froehlich (2008) piping", {}).get("note", "")):
+        notes.append("Breach: " + rows["Froehlich (2008) piping"]["note"])
     trig = p.get("breach_trigger")
     if trig in ("peak", "wse", "time"):
         trig_ft = p.get("pool_at_breach_ft")
@@ -957,7 +963,7 @@ def breach_values(dam, params, units, crest_length_u):
     wse0_ft = p.get("starting_wse_ft") or brmod.starting_wse_ft(dam)[0]
     b = {"bottom_elev": units.from_ft(bottom_ft), "bottom_width": units.from_ft(width_ft),
          "left_slope": float(z), "right_slope": float(z), "formation_hr": float(tf),
-         "piping": piping, "piping_coef": float(p.get("pipe_cd") or 0.5),
+         "piping": piping, "piping_coef": float(p.get("pipe_cd") or hecras.PIPING_COEF),
          "piping_elev": None, "weir_coef": units.weir_coef(hecras.BREACH_WEIR_COEF),
          "trigger_wse": None}
     if piping:
@@ -1279,7 +1285,9 @@ DEFAULTS = {"side_buffer_ft": 1000.0, "end_buffer_ft": 2640.0, "cell_ft": 0.0,
             # v3.10.22 (see the constants above build_model's helpers)
             "breach_start": None,               # None: 'time' (sunny day), 'wse' (flood)
             "breach_warmup_hr": BREACH_WARMUP_HR,
-            "hec_breach_mode": "match_plugin",  # or 'failure_mode' (HEC Piping for piping)
+            # 3.16.1: 'failure_mode' (HEC Piping, Froehlich 2008) is the default; 'match_plugin'
+            # writes Overtopping for the plugin's routed (weir) methods
+            "hec_breach_mode": "failure_mode",
             "warmup_hold": True,                # spillway: hold the pool during the warm-up
             "tolerances": "default",            # or 'tight', or a dict (TOLERANCES keys)
             "mesh_seeds": None,                 # None: NDBREACH_HECRAS_MESH_SEEDS, else 'grid'
@@ -1890,9 +1898,9 @@ BREACH_SHAPE_NOTE = (
     "'piping with a pipe phase' method). HEC-RAS's 'Piping' failure mode in this plan starts "
     "as a pipe at the piping elevation that grows until the top collapses, then becomes the "
     "trapezoid; 'Overtopping' deepens from the top like the plugin. Expect the HEC-RAS peak and "
-    "its timing to differ from the plugin's. Since Runner 3.10.22 the plan uses Overtopping for "
-    "the plugin's routed (weir) methods so that the peaks compare (option hec_breach_mode; "
-    "Piping only for the pipe-phase method or when asked).")
+    "its timing to differ from the plugin's. Since Runner 3.16.1 the plan defaults to Piping "
+    "with Froehlich (2008) values (hec_breach_mode 'failure_mode'); hec_breach_mode "
+    "'match_plugin' writes Overtopping for the plugin's routed (weir) methods.")
 
 
 class HecRasSiteError(HecRasModelError):
@@ -3339,7 +3347,7 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     bvals, wse0_ft, trig_ft, bnotes = breach_values(dam, params, units, dam_len)
     notes += bnotes
     # v3.10.22: the HEC-RAS failure mode that opens the breach the way the plugin routed it
-    hmode = str(o.get("hec_breach_mode") or "match_plugin").strip().lower()
+    hmode = str(o.get("hec_breach_mode") or "failure_mode").strip().lower()
     if hmode not in HEC_BREACH_MODES:
         raise HecRasModelError("hec_breach_mode must be one of {} (got {!r})".format(
             ", ".join(HEC_BREACH_MODES), hmode))
@@ -4684,7 +4692,8 @@ def write_readme(path, m, info, notes, dam, params):
         "| Failure mode | {} | {} |".format(
             "Piping" if b["piping"] else "Overtopping",
             "the plugin's breach shape (hec_breach_mode match_plugin)"
-            if info.get("hec_breach_mode", "match_plugin") == "match_plugin" else "the run"),
+            if info.get("hec_breach_mode", "failure_mode") == "match_plugin" else
+            "the run (default piping, Froehlich 2008)"),
         "| Breach weir coefficient | {:g} | the plugin's breach weir (HEC-RAS default 2.6) |"
         .format(b["weir_coef"]),
         breach_start_row(b, info, L),
