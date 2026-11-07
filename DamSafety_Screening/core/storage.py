@@ -90,9 +90,14 @@ def above_pool_curve_guarded(dem, water_mask, pool, crest, cell, steps=20, guard
 
     stages = np.linspace(pool, crest, steps + 1)
     if guard:
-        _v0, n0, keep0 = at(pool)
+        # keep0 is the pool footprint: water cells plus ground at or below the pool connected to
+        # them. The strict `d < stage` test is empty at the pool (water is forced to exactly pool
+        # above), so use a tiny epsilon for this reference footprint only. The prism fires on the
+        # EDGE test alone: an area test here (n0 vs nw) fires spuriously whenever the mapped water
+        # polygon under-covers the DEM pool, under-stating storage.
+        keep0 = _pool_cells(d, water_mask, pool + 1e-6)
         nw = int(np.asarray(water_mask, bool).sum())
-        if nw > 0 and (n0 > LEAK_AREA * nw or (_touches_edge(keep0) and not _touches_edge(water_mask))):
+        if nw > 0 and _touches_edge(keep0) and not _touches_edge(water_mask):
             v_pool = float(((pool - d[water_mask]).clip(min=0)).sum() * area)
             curve = [(float(st), v_pool + nw * area * float(st - pool)) for st in stages]
             note = ("storage leak at the pool level ({:.1f} ft): above-pool volume is the "
@@ -103,7 +108,8 @@ def above_pool_curve_guarded(dem, water_mask, pool, crest, cell, steps=20, guard
     for k, stage in enumerate(stages):
         vol, n, keep = at(stage)
         if guard and k >= 1:
-            edge = _touches_edge(keep) and not _touches_edge(_pool_cells(d, water_mask, stages[k - 1]))
+            edge = _touches_edge(keep) and not _touches_edge(
+                _pool_cells(d, water_mask, stages[k - 1] + 1e-6))
             jump = False
             if k >= LEAK_MIN_STEP and len(curve) >= 2:
                 dv_prev = curve[-1][1] - curve[-2][1]
@@ -117,7 +123,7 @@ def above_pool_curve_guarded(dem, water_mask, pool, crest, cell, steps=20, guard
     if bad is None:
         return curve, None, ""
     lo, hi = float(stages[bad - 1]), float(stages[bad])
-    n_lo = cells[-1]
+    n_lo = max(cells[-1], int(np.asarray(water_mask, bool).sum()))
     for _i in range(10):
         mid = 0.5 * (lo + hi)
         _v, n, keep = at(mid)
