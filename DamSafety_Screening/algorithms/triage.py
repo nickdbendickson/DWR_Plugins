@@ -31,6 +31,26 @@ def _wanted(f, names, only, dam_id=None):
            cm.fval(f, names, "nid_id"))
     return any(str(i).strip().upper() in only for i in ids if i not in (None, ""))
 
+def _road_name(r):
+    """The road's name and ND NG9-1-1 SHIELD code (as tool 8's _rname), so a US / State
+    highway named only there ('HIGHWAY 23', 'US 2', SHIELD USHY / STHY) counts at least
+    Medium under 5.2.1.2(b) instead of being dropped as Low on a sub-500 AADT."""
+    try:
+        low = {n.lower(): n for n in r.fields().names()}
+    except Exception:                                    # noqa  (never fails the tool)
+        return ""
+    got = ""
+    for n in ("name", "fullname", "full_name", "road_name", "rte_name", "route_name"):
+        v = r[low[n]] if n in low else None
+        if v is not None and str(v) not in ("", "NULL"):
+            got = str(v)
+            break
+    sh = r[low["shield"]] if "shield" in low else None
+    if sh is not None and str(sh).strip().upper() in ("USHY", "STHY"):
+        got = (got + " " + str(sh).strip()).strip()
+    return got
+
+
 class _NoFlood(Exception):
     """A pond marked no_flood = YES by tool 16."""
 
@@ -316,7 +336,8 @@ class Triage(QgsProcessingAlgorithm):
                                 # low (AADT < 500, not interstate, not US / State) cannot raise the class; an
                                 # unknown AADT is assumed Medium there, so it counts here too
                                 rd = hz.nd_road("r", 1.0, aadt, str(r[f_rcls]) if f_rcls and r[f_rcls] else "",
-                                                sole_access=hz.nh.yes_no(r[f_sole]) is True if f_sole else False)
+                                                sole_access=hz.nh.yes_no(r[f_sole]) is True if f_sole else False,
+                                                name=_road_name(r))
                                 lvl = hz.nh.road_class(rd, hz.nh.Settings())[0]
                                 if lvl == "Low":
                                     continue            # cannot raise the class above Low
@@ -329,7 +350,8 @@ class Triage(QgsProcessingAlgorithm):
                             aadt = cm.fval(r, nms, faadt, float)
                             rd = hz.nd_road("r", 1.0, aadt,
                                             str(r[frcls]) if frcls and r[frcls] else "",
-                                            sole_access=hz.nh.yes_no(r[fsole]) is True if fsole else False)
+                                            sole_access=hz.nh.yes_no(r[fsole]) is True if fsole else False,
+                                            name=_road_name(r))
                             if hz.nh.road_class(rd, hz.nh.Settings())[0] == "Low":
                                 continue
                             gl = r.geometry(); gl.transform(ta); gl = gl.densifyByDistance(abs(gt[1]))
