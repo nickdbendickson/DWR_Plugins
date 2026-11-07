@@ -67,9 +67,14 @@ export async function main(argv, log = console.log) {
         .filter(Boolean)
         .map((l) => JSON.parse(l))
     : [];
-  const skip = new Set(rows.map((r) => r.id));
-  if (skip.size) log(`resuming: ${skip.size} already done`);
-  const writeCsv = () => writeFileSync(join(o.out, "batch.csv"), batchCsv(rows));
+  // Resume skips only dams that finished; a "failed" row (e.g. the 3DEP/911 service was down)
+  // is retried, not treated as done. batch.jsonl stays append-only; the CSV dedupes by id with
+  // the last row winning, so a retried dam's new row supersedes its old failed one.
+  const skip = new Set(rows.filter((r) => r.status !== "failed").map((r) => r.id));
+  const retry = rows.filter((r) => r.status === "failed").length;
+  if (skip.size || retry) log(`resuming: ${skip.size} already done, ${retry} failed will be retried`);
+  const writeCsv = () =>
+    writeFileSync(join(o.out, "batch.csv"), batchCsv([...new Map(rows.map((r) => [r.id, r])).values()]));
   const local = o.dem ? localDemFetcher(o.dem, { gdalwarp: o.gdalwarp, zFactor: o.demFeet ? 0.3048 : 1 }) : null;
   if (local) log(`terrain: ${o.dem} (local, through gdalwarp)`);
   await runBatch(sel, {

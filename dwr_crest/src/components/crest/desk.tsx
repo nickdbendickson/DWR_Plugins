@@ -336,10 +336,12 @@ function LocationPanel({ dam }: { dam: DamRecord }) {
   const has = Number.isFinite(dam.lat) && Number.isFinite(dam.lon);
   const readGround = async () => {
     setGround({ busy: true, msg: null });
+    const id = dam.id;
     try {
       const g = await fetchDem(nearRequest(dam.lon!, dam.lat!, 0.3, 5));
       const d = deriveFromDem(g, dam.lon!, dam.lat!);
       if (!d) throw new Error("No terrain at this point.");
+      if (useDesk.getState().activeId !== id) return setGround({ busy: false, msg: null });
       update({ demCrestFt: d.crestFt });
       setGround({ busy: false, msg: `DEM crest set to ${d.crestFt.toFixed(1)} ft NAVD 88: the highest ground within ${CREST_SNAP_M} m of the point. Use it for the crest if the point is on the embankment top.` });
     } catch (e) {
@@ -544,7 +546,9 @@ function FloodStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof 
   const [auto, setAuto] = useState<{ busy: boolean; note: string | null; error: string | null }>({ busy: false, note: null, error: null });
   const pickAuto = async () => {
     setAuto({ busy: true, note: null, error: null });
+    const id = dam.id;
     const r = await autoBreachPoint(dam);
+    if (useDesk.getState().activeId !== id) return setAuto({ busy: false, note: null, error: null });
     if (r.ok) {
       update({ geometry: r.geometry });
       setMapRev((v) => v + 1);
@@ -926,8 +930,10 @@ function PlssPanel({ lookup, plss, against, basis }: { lookup: FloodStrip | null
     if (!lookup) return;
     setBusy(true);
     setError(null);
+    const id = useDesk.getState().activeId;
     try {
-      update({ plss: await fetchPlss(lookup) });
+      const p = await fetchPlss(lookup);
+      if (useDesk.getState().activeId === id) update({ plss: p });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1032,8 +1038,9 @@ function Nd911Panel({
     if (!lookup || autoTried.current || !wantsNd911Lookup(dam, nd911)) return;
     autoTried.current = true;
     setBusy(true);
+    const id = dam.id;
     fetchNd911(lookup)
-      .then((c) => update({ nd911: c }))
+      .then((c) => { if (useDesk.getState().activeId === id) update({ nd911: c }); })
       .catch((e) => setError((e as Error).message))
       .finally(() => setBusy(false));
   }, [dam, nd911, lookup, update]);
@@ -1047,17 +1054,31 @@ function Nd911Panel({
     const todo = padPoints(dam).filter((p) => !padTried.current.has(p.id));
     if (todo.length === 0) return;
     todo.forEach((p) => padTried.current.add(p.id));
+    const id = dam.id;
     lookupPads(dam, result)
-      .then((receptors) => receptors && update({ receptors }))
-      .catch((e) => setError((e as Error).message));
+      .then((receptors) => {
+        // dam switched mid-read: do not write this dam's receptors onto whatever is active now,
+        // and drop the tried ids so the lookup runs again when this dam is active.
+        if (useDesk.getState().activeId !== id) {
+          todo.forEach((p) => padTried.current.delete(p.id));
+          return;
+        }
+        if (receptors) update({ receptors });
+      })
+      .catch((e) => {
+        todo.forEach((p) => padTried.current.delete(p.id));
+        setError((e as Error).message);
+      });
   }, [dam, result, update]);
   if (nd911.state === "none") return null;
   const lookUp = async () => {
     if (!lookup) return;
     setBusy(true);
     setError(null);
+    const id = dam.id;
     try {
-      update({ nd911: await fetchNd911(lookup) });
+      const c = await fetchNd911(lookup);
+      if (useDesk.getState().activeId === id) update({ nd911: c });
     } catch (e) {
       setError((e as Error).message);
     } finally {

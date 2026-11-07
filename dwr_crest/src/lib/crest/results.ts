@@ -127,7 +127,7 @@ export function rankSample(dam: DamRecord, seedIndex: number, s: ReceptorSample 
     aadt: seed.aadt,
     roadClass: seed.roadClass,
     habitable: seed.habitable,
-    judgmentAsProbable: dam.judgmentAsProbable ?? true,
+    judgmentAsProbable: dam.judgmentAsProbable ?? false,
   });
   const noVel = flooded && s.velocityFps == null && rank.zone != null;
   return {
@@ -207,7 +207,7 @@ export function analysisOfRecord(dam: DamRecord, result: Analysis): { result: An
       needsJudgment: k.judgment,
     };
   });
-  const screen = screenReceptors(receptors, dam.receptors, { judgmentAsProbable: dam.judgmentAsProbable ?? true });
+  const screen = screenReceptors(receptors, dam.receptors, { judgmentAsProbable: dam.judgmentAsProbable ?? false });
   screen.reasons = screen.reasons.filter((l) => !DESK_LINES.some((re) => re.test(l)));
   const st = ref.stats;
   screen.reasons.push(

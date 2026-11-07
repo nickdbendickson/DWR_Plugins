@@ -113,7 +113,8 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
     const c = new AbortController();
     ctl.current = c;
     setRunning(true);
-    let acc = resume ? rows.filter((r) => list.some((s) => s.id === r.id)) : [];
+    // Resume keeps finished rows only; a "failed" row is retried, not treated as done.
+    let acc = resume ? rows.filter((r) => r.status !== "failed" && list.some((s) => s.id === r.id)) : [];
     if (!resume) dams.current.clear();
     setRows(acc);
     const skip = new Set(acc.map((r) => r.id));
