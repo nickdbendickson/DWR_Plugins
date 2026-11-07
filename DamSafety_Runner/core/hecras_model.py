@@ -956,6 +956,10 @@ def breach_values(dam, params, units, crest_length_u):
             notes.append("Breach elevations are NAVD88: the given (DWR) values {:+.4f} ft "
                          "({}).".format(float(vd.get("shift_ft") or 0.0),
                                         vd.get("method") or "VERTCON"))
+        elif vd.get("local"):
+            # 3.16.4: a local-datum dam is tied to the DEM (NAVD88) instead of shifted
+            notes.append("Breach elevations: the dam's local datum was tied to the NAVD88 DEM "
+                         "({}).".format(vd.get("method") or "DEM tie"))
         elif str(vd.get("source_datum") or "").upper() not in ("", "NAVD88"):
             notes.append("WARNING: the run's elevations were not shifted to NAVD88 ({}); "
                          "check the breach elevations.".format(vd.get("method") or "?"))
@@ -2702,8 +2706,16 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
     notes = []
     progress(2, "reading the run")
     hy, dam, params = hecras.load_run(dam_folder)
-    if o.get("breach_f2008"):                         # 3.16.2: overwrite (default) / fill_missing
-        params = dict(params, breach_f2008=o["breach_f2008"])
+    # 3.16.2: Froehlich (2008) piping overwrites the run's breach values (default) or only
+    # fills what the run lacks; 3.16.4: with hec_breach_mode match_plugin and no explicit
+    # breach_f2008 option it only fills (match_plugin copies the plugin's breach; an
+    # Overtopping plan with piping widths and slopes would match neither)
+    f08 = (options or {}).get("breach_f2008")
+    if not f08:
+        f08 = (hecras.F08_FILL if str(o.get("hec_breach_mode") or "").strip().lower()
+               == "match_plugin" else o.get("breach_f2008"))
+    if f08:
+        params = dict(params, breach_f2008=f08)
     model_dir = os.path.join(dam_folder, hecras.MODEL_FOLDER)
     with open(os.path.join(model_dir, hecras.RUN_REPORT_JSON), encoding="utf-8") as f:
         report = json.load(f)
