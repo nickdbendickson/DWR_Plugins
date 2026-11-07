@@ -81,16 +81,15 @@ def hecras_breach_rows_keep_the_runs_own_values_and_pipe():
 
 @test
 def hecras_breach_vw_is_max_storage_and_curve_only_warns():
-    """Addendum: Vw is the given maximum storage; the elevation-volume curve is a check only.
-    Synthetic numbers."""
+    """Addendum: Vw of a sunny-day run is the given maximum storage; the elevation-volume
+    curve does not change it (3.16.4: no curve warning, breach.py notes a pool below the
+    crest). Synthetic numbers."""
     dam = br.DamData(dam_id="S1", dam_height_ft=20.0, storage_top_acft=400.0,
                      top_of_dam_ft=1000.0)
     a = hecras.froehlich_2008_piping_ft(dam, {}, 980.0)
     b = hecras.froehlich_2008_piping_ft(dam, {"storage_at_failure_acft": 300.0}, 980.0)
     assert a["vw_acft"] == b["vw_acft"] == 400.0 and a["avg_width_ft"] == b["avg_width_ft"]
-    assert a["curve_warning"] == "" and "-25 %" in b["curve_warning"], b
-    c = hecras.froehlich_2008_piping_ft(dam, {"storage_at_failure_acft": 390.0}, 980.0)
-    assert c["curve_warning"] == ""
+    assert a["curve_warning"] == b["curve_warning"] == ""
 
 
 @test
