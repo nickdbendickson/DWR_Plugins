@@ -2,11 +2,11 @@
 
 `.github/workflows/ci.yml` runs on every pull request and every push to `main`. The repository
 is public, so GitHub-hosted runner minutes are free. (`anuga-omp-scaling.yml` is a separate,
-manually started workflow.)
+manually started workflow; `release.yml` runs on a `v*` tag, see "Release" below.)
 
 | Job | What it runs | Time |
 |---|---|---|
-| `fast-checks` | `tools/ci_checks.py` (damsuite drift and pin, shared/ui drift, versions and changelogs vs `main`, files kept identical across plugins, zone and window colours, Qt6 enum spellings, compile, golden baseline), `tools/test_ci_checks.py`, the fingerprint nested-VRT test. No QGIS. | < 1 min |
+| `fast-checks` | `tools/ci_checks.py` (damsuite drift and pin, shared/ui drift, versions and changelogs vs `main`, the 12 KB cap on each `metadata.txt` `changelog=`, no template value in a metadata.txt, files kept identical across plugins, zone and window colours, Qt6 enum spellings, compile, golden baseline), `tools/test_ci_checks.py`, the fingerprint nested-VRT test. No QGIS. | < 1 min |
 | `plugin-suites` | Screening `run_all.py`, Runner fast suite, Hazard `run_all.py`, Hazard Lite, `tools/gui_lint.py`, the Runner wizard and batch-chain real-Qt scripts, pytest for suite dams and Setup, on QGIS from conda-forge. | 10-20 min |
 | `model-tests` | `python -m nd_breach_runner.tests.run_tests --models` on LISFLOOD-FP 8.3 built from the Zenodo source with `DamSafety_Runner/scripts/build_lisflood_linux.sh` (cached), and ANUGA 4.0.1 in its own conda env. | 10-17 min |
 
@@ -78,3 +78,62 @@ at `/home/user/nd_hazard` (or `ND_HAZARD_ROOT`); CI has no such checkout and ski
 
 An ANUGA env like CI's: `micromamba create -y -n anuga -c conda-forge python=3.12 anuga=4.0.1 scipy`.
 Tests that change `NDBREACH_*` variables must restore them (a leak once broke `--models`).
+
+## Changelogs: metadata.txt and docs/CHANGELOG.md
+
+QGIS's Plugin Manager parses and renders the whole `changelog=` value of every installed plugin,
+so the Runner's 149 KB / Hazard's 86 KB changelogs (2026-11-07) slowed it down for anyone with
+the suite installed. Each `metadata.txt` now keeps its newest entries only (about 7; the gate
+fails a `changelog=` over 12 KB) and the older entries live verbatim in `docs/CHANGELOG.md`
+under `## Archived metadata changelog — <plugin>`. The "no changelog entry of the base is
+missing" rule accepts an entry that left `metadata.txt` as long as its version string is still
+in `docs/CHANGELOG.md` (a bullet title such as `**Runner 3.10.53: ...**`, or a line of the
+plugin's archived section); an entry that is in neither still fails. To trim again: cut the
+oldest entries out of `changelog=` and paste them, unchanged and newest first, at the top of the
+plugin's archived section's code block (`tools/test_ci_checks.py` has the cases).
+
+## Release: GitHub Release + QGIS plugin repository
+
+`.github/workflows/release.yml` runs when a tag `v*` is pushed (`git tag v2026.11.07 && git push
+origin v2026.11.07`), and by hand from the Actions tab (then it makes a *draft* release named
+after the commit and publishes nothing to QGIS).
+
+| Job | What it does |
+|---|---|
+| `lisflood-linux` | `ubuntu-22.04`: downloads LISFLOOD-FP 8.3 from Zenodo (md5 and sha256 checked, the same file CI's `model-tests` builds), runs `DamSafety_Runner/scripts/build_lisflood_linux.sh` with `LISFLOOD_STATIC=1` (static libstdc++ / libgcc / libgomp; glibc 2.35 or newer at run time). |
+| `lisflood-macos` | `macos-14` (Apple Silicon): `DamSafety_Runner/scripts/build_lisflood_macos.sh` (Homebrew cmake + libomp), then `libomp.dylib` is copied next to the binary and the load command changed to `@executable_path/libomp.dylib` (`install_name_tool`, ad-hoc `codesign`) so it runs without Homebrew; checked by running `lisflood -version` with Homebrew's copy moved away. |
+| `lisflood-windows` | `ubuntu-latest`: `DamSafety_Runner/scripts/build_lisflood_windows_cross.sh` cross-compiles with `g++-mingw-w64-x86-64-posix`, `-static` (libgomp, winpthread, libstdc++ and libgcc inside the .exe; `objdump -p` confirms no such DLL is imported). The MinGW edits (`_aligned_malloc` / `_aligned_free`) are part of `scripts/patch_lisflood.py`, so the Linux and macOS builds get them too, guarded by `_WIN32`. |
+| `release` | `tools/build_release.py --runner-bin bin` zips the committed files of the tagged commit (no `tests/`, `__pycache__`, dotfiles), puts the three builds into the Runner zip under `DamSafety_Runner/bin/<platform>/` with a `README.txt`; attaches the zips, `SHA256SUMS`, each binary on its own (`lisflood-linux-x64`, `lisflood-windows-x64.exe`, `lisflood-macos-arm64.tar.gz`), the patched 8.3 source (`lisflood-8.3-ndbreach-source.zip`, the GPL-2.0 corresponding source) and `plugins.xml` to the GitHub Release (`softprops/action-gh-release`); writes `plugins.xml` with `tools/make_plugins_xml.py` and pushes it, with the plugin icons, to the root of the `gh-pages` branch (`peaceiris/actions-gh-pages`, `keep_files: true`, merged with the index already there). |
+
+The Runner finds a bundled build on its own (`core/lisflood.bundled_exe`:
+`bin/linux-x64/lisflood`, `bin/windows-x64/lisflood.exe`, `bin/macos-arm64/lisflood`,
+`bin/macos-x64/lisflood` if one is ever built) after every installed LISFLOOD-FP and after the
+suite / provider settings, never instead of them. `bin/` is git-ignored: the binaries exist only
+in the release assets. A failed LISFLOOD-FP job stops the release.
+
+**The QGIS plugin repository.** The index is served by GitHub Pages at
+`https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml`, and its `download_url`s point at
+the release assets. Two one-time steps for the repository owner:
+
+1. *Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch: `gh-pages`,
+   folder `/ (root)`*. The branch is created by the first tagged run; until Pages is on, the URL
+   answers 404 and QGIS reports the repository as unavailable (the release assets still install
+   from ZIP).
+2. Push the first `v*` tag.
+
+Users then add the URL under *Plugins → Manage and Install Plugins → Settings → Add…* (with *Show
+also experimental plugins* ticked) and get updates through the Plugin Manager. `plugins.xml`
+holds one `<pyqgis_plugin>` per zip with the fields the installer reads (`version`,
+`qgis_minimum_version` / `qgis_maximum_version`, `description`, `about`, `author_name`,
+`download_url`, `file_name`, `experimental`, `update_date`, `tracker`, `repository`, ...), filled
+from each `metadata.txt`; `tools/make_plugins_xml.py --merge` keeps the entries of plugins a later
+release does not rebuild. `tools/mac/make_plugin_zips.py` stays the Mac installer's zip builder
+(it keeps `.secrets.baseline` for a plugins.qgis.org upload; `tools/build_release.py` does not).
+
+Local dry run of the release pieces (no binaries, no upload):
+
+```bash
+python3 tools/build_release.py --out dist            # dist/DamSafety_*_<ver>.zip + SHA256SUMS
+python3 tools/make_plugins_xml.py --tag v0 --zips dist --out dist/plugins.xml
+LISFLOOD_STATIC=1 bash DamSafety_Runner/scripts/build_lisflood_linux.sh /tmp/LISFLOOD-FP-8.3/source /tmp/lf   # static Linux build
+```

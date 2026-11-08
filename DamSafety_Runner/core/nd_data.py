@@ -210,6 +210,16 @@ def lisflood_candidates():
     ]
     for p in pats:
         c += sorted(glob.glob(p))
+    # 3.16.11 (2026-11-07, release workflow): the LISFLOOD-FP the release zip carries in
+    # bin/<platform>/ comes after every installed build, so a build of the user's own wins. A
+    # checkout has no bin/ (None). Never the built-in engine: that stays an explicit choice (M5).
+    try:
+        from .lisflood import bundled_exe
+        bundled = bundled_exe()
+    except Exception:                                            # noqa: BLE001
+        bundled = None
+    if bundled:
+        c.append(bundled)
     seen, out = set(), []
     for p in c:
         if p and p not in seen and os.path.isfile(p) and os.access(p, os.X_OK):

@@ -108,6 +108,15 @@ try:
     check("Setup status dock: fits a {} px dock".format(DOCK_W),
           _sdock.widget().minimumSizeHint().width() <= DOCK_W,
           _sdock.widget().minimumSizeHint().width())
+    # Setup 1.0.21 (audit U6): a ▸ Log fold-out, collapsed until a build script runs; the build
+    # buttons are on except on Windows, where the tooltip says why (docs/gui-grammar.md)
+    check("Setup status dock: Log fold-out present and collapsed",
+          _sdock.log_section.title() == "Log" and not _sdock.log_section.is_expanded())
+    import os as _os
+    _b = _sdock.buttons["lisflood"]
+    check("Setup status dock: Build LISFLOOD-FP… on (off with a why-tooltip on Windows)",
+          _b.isEnabled() != (_os.name == "nt") and (_b.isEnabled() or "bash" in _b.toolTip()),
+          (_b.isEnabled(), _b.toolTip()))
 except ImportError as _e:                                       # pragma: no cover
     print("SKIP Setup status dock width ({})".format(_e))
 rdock.set_folder(_d)

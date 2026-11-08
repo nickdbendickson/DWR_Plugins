@@ -88,3 +88,32 @@ diff -ruN a/LISFLOOD-FP-8.3/source/pars.cpp b/LISFLOOD-FP-8.3/source/pars.cpp
  	if (read_numeric_param(param_name, line_number, param_value_ptr, "resettimeinit", &Parptr->reset_timeinit_time, verbose, mode))
  	{
  		Statesptr->reset_timeinit = ON;
+diff -ruN a/LISFLOOD-FP-8.3/source/utility.cpp b/LISFLOOD-FP-8.3/source/utility.cpp
+--- a/LISFLOOD-FP-8.3/source/utility.cpp
++++ b/LISFLOOD-FP-8.3/source/utility.cpp
+@@ -1,4 +1,7 @@
+ #include "utility.h"
++#ifdef _WIN32
++#include <malloc.h> // nd-breach-runner patch: MinGW
++#endif
+ 
+ static long total_allocated = 0;
+ static long total_legacy_allocated = 0;
+@@ -55,6 +58,8 @@
+ {
+ #if defined(_MSC_VER) || defined (__INTEL_COMPILER)
+ 	void* memory = _mm_malloc(size, 64);
++#elif defined(_WIN32)
++	void* memory = _aligned_malloc(size, 64); // nd-breach-runner patch: MinGW build
+ #else
+ 	void* memory = NULL;
+ 	posix_memalign(&memory, 64, size);
+@@ -82,6 +87,8 @@
+ {
+ #if defined(_MSC_VER) || defined (__INTEL_COMPILER)
+ 	_mm_free(*memory);
++#elif defined(_WIN32)
++	_aligned_free(*memory); // nd-breach-runner patch: MinGW build
+ #else
+ 	posix_memalign((void**)&memory, sizeof(float) * 100* 128, 64);
+ #endif
