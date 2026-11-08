@@ -281,23 +281,24 @@ Reporting only: the model, the rasters and the flood polygons don't change. Fiel
 - Partial results are kept as `<name>.p01.partial.hdf` and are never used as results.
 - `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s) sets the wait between SIGTERM and SIGKILL.
 
-## HEC-RAS: no time limit unless you set one (#137, Runner 3.10.48)
-**What changed.** Before Runner 3.10.48 the Runner stopped a HEC-RAS 2D run after a set wall-clock time even when you hadn't asked for a limit. It stopped the compute (RasUnsteady) at 3 times its own estimate, at least 2 h and at most 48 h, and each Wine preprocess step (terrain.exe, mesh.exe, drv.exe, Ras.exe -c) after 1,800 s. Long runs were killed before they finished. Now:
+## HEC-RAS: no time limit for a single run unless you set one; 12 h for unattended batches (#137, Runner 3.10.48; audit R6, Runner 3.16.7)
+**What changed.** Before Runner 3.10.48 the Runner stopped a HEC-RAS 2D run after a set wall-clock time even when you hadn't asked for a limit. It stopped the compute (RasUnsteady) at 3 times its own estimate, at least 2 h and at most 48 h, and each Wine preprocess step (terrain.exe, mesh.exe, drv.exe, Ras.exe -c) after 1,800 s. Long runs were killed before they finished. Since 3.10.48 a run has no limit unless you set one. Runner 3.16.7 (audit R6) adds one exception: an **unattended** run - *Run breach models for many dams* (the batch tool), the ndbreach CLI `batch` command and the *Batch chain* (its Runner stage and its Windows HEC-RAS launcher) - gets a **12 h wall-clock limit per RasUnsteady compute and per preprocess step** when `NDBREACH_HECRAS_TIMEOUT_S` gives none, so one dam that never finishes (a Wine dialog, a diverged solver) cannot hold the queue for ever. The longest calibrated compute (DWR-3161, 68,949 cells, 32 h simulated) takes about 3 h. A single interactive run (*Run breach model for one dam*, the CLI `run` command) keeps "no limit unless set".
 
-| `NDBREACH_HECRAS_TIMEOUT_S` | What happens |
-|---|---|
-| Not set, empty, `0`, or `none` / `off` / `no` / `unlimited` | **No time limit anywhere.** The compute and every preprocess step run until they finish. |
-| A positive number of seconds | That limit applies to the compute **and** to each preprocess step separately. When it's reached, the Runner sends SIGTERM, waits `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s), then sends SIGKILL. Partial results are kept as `<name>.p01.partial.hdf` and are never used. |
-| Anything else (text, a negative number, `inf`, `nan`) | Ignored, with a note in the log; no limit. |
+| `NDBREACH_HECRAS_TIMEOUT_S` | A single run | An unattended run (batch tool, CLI batch, chain) |
+|---|---|---|
+| Not set, empty or `0` | **No time limit anywhere.** The compute and every preprocess step run until they finish. | **12 h per compute and per preprocess step** (43,200 s), stopped the same way as an explicit limit. |
+| `none` / `off` / `no` / `unlimited` | No time limit. | No time limit (the words remove the 12 h default too). |
+| A positive number of seconds | That limit applies to the compute **and** to each preprocess step separately. When it's reached, the Runner sends SIGTERM, waits `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s), then sends SIGKILL. Partial results are kept as `<name>.p01.partial.hdf` and are never used. | The same number, in place of the 12 h default. |
+| Anything else (text, a negative number, `inf`, `nan`) | Ignored, with a note in the log; no limit. | Ignored, with a note in the log; the 12 h default applies. |
 
-The run-time estimate is still worked out and written to the log, but it no longer stops anything. The limit is measured on the wall clock, so time while the computer is paused counts.
+The run-time estimate is still worked out and written to the log, but it never stops anything by itself. The limit is measured on the wall clock, so time while the computer is paused counts.
 
-**Caution: a Wine dialog can now wait forever.** HEC-RAS's Ras.exe shows HEC's Terms and Conditions (TCU) dialog, and Wine doesn't remember that it was accepted. The Runner never clicks it for you. With no limit set, nothing stops a run that sits on that dialog. The only guard is your own TCU hook: point `NDBREACH_HECRAS_TCU_HOOK` at a script that accepts the dialog (for example with xdotool) if you have accepted HEC's terms. For unattended or overnight batches, also set a positive `NDBREACH_HECRAS_TIMEOUT_S` large enough for the longest run. Then a stuck step is stopped instead of holding the queue.
+**Caution: a Wine dialog can wait forever in a single run.** HEC-RAS's Ras.exe shows HEC's Terms and Conditions (TCU) dialog, and Wine doesn't remember that it was accepted. The Runner never clicks it for you. In a single run with no limit set, nothing stops a run that sits on that dialog. The only guard is your own TCU hook: point `NDBREACH_HECRAS_TCU_HOOK` at a script that accepts the dialog (for example with xdotool) if you have accepted HEC's terms. In an unattended run the 12 h default stops a stuck step (and the next dam starts); set a positive `NDBREACH_HECRAS_TIMEOUT_S` if your longest run needs more than 12 h, or `none` to wait without limit as before.
 
-**Known issue on current main.** With no limit set, if Ras.exe -c exits without writing its output, the error message can itself fail (a Python formatting error), and the real HEC-RAS error is hidden. If a HEC-RAS run fails right after "Ras.exe -c" with a `TypeError`, look in the plan's Compute Messages for the real cause.
+**Fixed (Runner 3.10.57).** With no limit set, if Ras.exe -c exited without writing its output, the error message itself failed (a Python `TypeError` formatting `None` as a number) and the real HEC-RAS error was hidden. Since 3.10.57 the message reads "with no time limit" and carries HEC-RAS's own Compute Messages (the real cause, ERROR lines first); a `TypeError` right after "Ras.exe -c" only happens on an older Runner, where the plan's Compute Messages hold the real cause.
 
 **Where to see the limit a run used.**
-- The Runner log: "HEC-RAS preprocess: wall-clock limit per step none [NDBREACH_HECRAS_TIMEOUT_S unset; no limit]" and "HEC-RAS compute: … wall-clock limit none […]".
+- The Runner log: "HEC-RAS preprocess: wall-clock limit per step none [NDBREACH_HECRAS_TIMEOUT_S unset (no limit)]" and "HEC-RAS compute: … wall-clock limit none […]"; in an unattended run "wall-clock limit per step 43200 s (12.0 h) [unattended batch default: NDBREACH_HECRAS_TIMEOUT_S unset; unattended default 43200 s (12.0 h) - set NDBREACH_HECRAS_TIMEOUT_S to change it, 'none' for no limit]". The batch tool and the chain also say so when the HEC-RAS stage starts.
 - `run_report.json` → `hecras_time_limit` (`limit_s`, `limit`, `how`, `estimate_s`, and `applies_to`: "the RasUnsteady compute and each Wine preprocess step"). It's also in `_hecras/hecras_stage.json`.
 - `run_report.md`: the "HEC-RAS wall-clock limit" row.
 

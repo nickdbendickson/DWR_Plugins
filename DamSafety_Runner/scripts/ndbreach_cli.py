@@ -188,6 +188,7 @@ MODEL_KEYS = {
     "cell_size_m": ("cell_size_m", ("num", 1.0, None)),
     "arrival_depth_ft": ("arrival_depth_ft", ("num", 0.01, None)),
     "edge_tolerance_ft": ("edge_tolerance_ft", ("num", 0.01, None)),
+    "outflow_extend_pct": ("outflow_extend_pct", ("num", 0.0, 100.0)),   # Grok audit 3.1
     "initial_length_mi": ("initial_length_mi", ("num", 0.25, None)),
     "half_width_mi": ("half_width_mi", ("num", 0.1, None)),
     "expand_step_mi": ("expand_step_mi", ("num", 0.1, None)),
@@ -467,7 +468,8 @@ TEMPLATE = {
                  "estimate when lisflood_rate - the cell-seconds per second `estimate` "
                  "measures - is given, else 24 h; the budget is max_iterations x that).",
         "tier": "lisflood", "cell_size_m": 10.0, "arrival_depth_ft": 0.1,
-        "edge_tolerance_ft": 1.0, "initial_length_mi": 5.0, "half_width_mi": 1.0,
+        "edge_tolerance_ft": 1.0, "outflow_extend_pct": workflow.OUTFLOW_WARN_PCT,
+        "initial_length_mi": 5.0, "half_width_mi": 1.0,
         "expand_step_mi": 3.0, "max_extent_mi": 20.0, "qa_maps": "inflow+depth",
         "qa_basemap": "auto", "qa_basemap_labels": True, "reservoir_carve": "off",
         "max_iterations": 6, "sim_time_hr": None,
@@ -1491,13 +1493,18 @@ def cmd_run(args):
     return 0
 
 
-def _hecras_stage(p, res, log):
+def _hecras_stage(p, res, log, unattended=False):
     """3.10.66: model.tier 'hecras' (LISFLOOD-FP then HEC-RAS 2D) runs the HEC-RAS 2D stage
-    after LISFLOOD-FP, as in QGIS (it was skipped). Raises workflow.HecRasStageError."""
+    after LISFLOOD-FP, as in QGIS (it was skipped). Raises workflow.HecRasStageError.
+    `unattended` (audit R6): the batch command - the HEC-RAS wall clock then defaults to
+    hecras_engine.BATCH_TIMEOUT_S (12 h) unless NDBREACH_HECRAS_TIMEOUT_S says otherwise."""
     if p.st.tier != workflow.TIER_HECRAS or not res.summary.get("breach_occurs", True):
         return
-    log("HEC-RAS 2D stage\u2026 (the LISFLOOD-FP rasters are kept as 'LISFLOOD-FP <name>')")
-    workflow.run_hecras_stage(p.folder, res, p.setup.writer, p.st, p.dam_xy, log)
+    log("HEC-RAS 2D stage\u2026 (the LISFLOOD-FP rasters are kept as 'LISFLOOD-FP <name>'{})"
+        .format("; unattended: a 12 h wall-clock limit per compute and preprocess step unless "
+                "NDBREACH_HECRAS_TIMEOUT_S says otherwise" if unattended else ""))
+    workflow.run_hecras_stage(p.folder, res, p.setup.writer, p.st, p.dam_xy, log,
+                              unattended=unattended)
 
 
 def cmd_hydrograph(args):
@@ -1839,7 +1846,7 @@ def cmd_batch(args):
                 say(note)
             res = workflow.run_dam(p.dam, p.dam_xy, p.st, p.setup.terrain, p.setup.writer,
                                    p.folder, None, pr.progress, pr.log, pr.cancel)
-            _hecras_stage(p, res, pr.log)
+            _hecras_stage(p, res, pr.log, unattended=True)       # audit R6
             s = res.summary
             if not s.get("breach_occurs", True):
                 out.update({"Status": "no breach",

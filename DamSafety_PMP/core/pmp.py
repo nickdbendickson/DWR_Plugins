@@ -17,13 +17,17 @@ from decimal import Decimal, ROUND_HALF_UP
 
 import numpy as np
 
+from . import gdalsafe as GS
+
 # audit P3-PMP (0.4.3): GDAL is imported lazily so the pure parts (dad_lookup, py2round,
 # py2round_array, storm_step, factor_arrays) and the light tests run without osgeo; anything
 # that opens data calls _require_gdal() first and stops with a plain message.
+# audit R3 (2026-11-07): no gdal.UseExceptions() / ogr.UseExceptions() at import - the call is
+# process-wide and this module loads with the plugin, so it switched GDAL's mode for QGIS and
+# every other plugin. The opens below go through core/gdalsafe.py, which raises the same
+# RuntimeError in both modes when GDAL returns None.
 try:
     from osgeo import gdal, ogr, osr
-    gdal.UseExceptions()
-    ogr.UseExceptions()
 except ImportError:                                  # pragma: no cover - no GDAL here
     gdal = ogr = osr = None
 
@@ -138,15 +142,17 @@ class _Sources:
 
 def list_storms(home, storm_type, src=None):
     """Equivalent of arcpy.ListFeatureClasses('', 'Point', stormType) in Storm_Adj_Factors.gdb."""
+    gdb = _gdb(home, "Storm_Adj_Factors.gdb")
     ds = src.open("Storm_Adj_Factors.gdb") if src is not None else \
-        gdal.OpenEx(_gdb(home, "Storm_Adj_Factors.gdb"), gdal.OF_VECTOR)
-    grp = ds.GetRootGroup().OpenGroup(storm_type)
+        GS.checked(gdal.OpenEx(gdb, gdal.OF_VECTOR), "opening " + gdb)
+    grp = GS.checked(ds.GetRootGroup(), "reading the groups of " + gdb).OpenGroup(storm_type)
+    grp = GS.checked(grp, "opening the group {} in {}".format(storm_type, gdb))
     return list(grp.GetVectorLayerNames())
 
 
 def read_dad(home, storm, src=None):
     """Return list of rows (dicts) in table order (OBJECTID order, as the arcpy SearchCursor would)."""
-    ds = src.open("DAD_Tables.gdb") if src is not None else ogr.Open(_gdb(home, "DAD_Tables.gdb"))
+    ds = src.open("DAD_Tables.gdb") if src is not None else GS.open_vector(_gdb(home, "DAD_Tables.gdb"))
     lyr = ds.GetLayerByName(storm)
     if lyr is None:
         return None
@@ -193,8 +199,8 @@ def _srs4326():
 
 def _open_basin(cfg):
     _require_gdal()
-    ds = ogr.Open(cfg.basin_path)
-    lyr = ds.GetLayerByName(cfg.basin_layer) if cfg.basin_layer else ds.GetLayer(0)
+    ds = GS.open_vector(cfg.basin_path)
+    lyr = GS.layer(ds, cfg.basin_layer, cfg.basin_path)
     if ogr.GT_Flatten(lyr.GetGeomType()) not in (ogr.wkbPolygon, ogr.wkbMultiPolygon):
         raise ValueError("Input basin must be a polygon layer")
     return ds, lyr
@@ -249,12 +255,13 @@ class Grid:
     """Vector_Grid cells + Grid_Points, held in memory (68,277 cells)."""
 
     def __init__(self, home):
-        ds = ogr.Open(_gdb(home, "Non_Storm_Data.gdb"))
+        gdb = _gdb(home, "Non_Storm_Data.gdb")
+        ds = GS.open_vector(gdb)
         self._ds = ds
-        self.vg = ds.GetLayerByName("Vector_Grid")
+        self.vg = GS.layer(ds, "Vector_Grid", gdb)
         self.vg_srs = self.vg.GetSpatialRef().Clone()
         self.vg_srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-        gp = ds.GetLayerByName("Grid_Points")
+        gp = GS.layer(ds, "Grid_Points", gdb)
         self.points = {}   # Id -> (x, y, fid order)
         order = []
         for f in gp:
@@ -330,9 +337,9 @@ class Grid:
 
 def read_storm_factors(home, storm, ids, bbox=None, src=None):
     """Return {Id: (TAF, TRANS)} for the selected point ids from Storm_Adj_Factors.gdb/<storm>."""
-    ds = src.open("Storm_Adj_Factors.gdb") if src is not None else \
-        ogr.Open(_gdb(home, "Storm_Adj_Factors.gdb"))
-    lyr = ds.GetLayerByName(storm)
+    gdb = _gdb(home, "Storm_Adj_Factors.gdb")
+    ds = src.open("Storm_Adj_Factors.gdb") if src is not None else GS.open_vector(gdb)
+    lyr = GS.layer(ds, storm, gdb)
     if bbox:
         lyr.SetSpatialFilterRect(*bbox)
     want = set(ids)
@@ -401,7 +408,8 @@ def basin_average(values_by_id, ids, grid, basin4326, weighted, subbasin_mode):
 # --------------------------------------------------------------------------- outputs
 def _write_points(path, layer_name, grid, ids, durs, pmp, drv):
     drv_ = ogr.GetDriverByName("GPKG")
-    ds = ogr.Open(path, 1) if os.path.exists(path) else drv_.CreateDataSource(path)
+    ds = GS.open_vector(path, update=True) if os.path.exists(path) \
+        else GS.checked(drv_.CreateDataSource(path), "creating " + path)
     if ds.GetLayerByName(layer_name) is not None:
         ds.DeleteLayer(layer_name)
     lyr = ds.CreateLayer(layer_name, _srs4326(), ogr.wkbPoint)
@@ -432,7 +440,8 @@ def _write_raster(path, grid, ids, values):
     arr = np.full((ny, nx), -9999.0, np.float32)
     for x, y, v in zip(xs, ys, values):
         arr[int(round((y1 - CELL / 2 - y) / CELL)), int(round((x - x0 - CELL / 2) / CELL))] = v
-    ds = gdal.GetDriverByName("GTiff").Create(path, nx, ny, 1, gdal.GDT_Float32, ["COMPRESS=DEFLATE"])
+    ds = GS.checked(gdal.GetDriverByName("GTiff").Create(path, nx, ny, 1, gdal.GDT_Float32,
+                                                         ["COMPRESS=DEFLATE"]), "creating " + path)
     ds.SetGeoTransform((x0, CELL, 0, y1, 0, -CELL))
     ds.SetProjection(_srs4326().ExportToWkt())
     b = ds.GetRasterBand(1); b.SetNoDataValue(-9999.0); b.WriteArray(arr)

@@ -2,7 +2,9 @@
 import numpy as np
 from osgeo import gdal, ogr, osr
 
-gdal.UseExceptions(); ogr.UseExceptions()
+from . import gdalsafe as GS
+
+# audit R3 (2026-11-07): no UseExceptions() at import (process-wide; see core/gdalsafe.py)
 WGS84 = osr.SpatialReference(); WGS84.ImportFromEPSG(4326)
 WGS84.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
 
@@ -12,13 +14,13 @@ def gdb_raster(gdb, name):
 
 
 def gdb_raster_names(gdb):
-    ds = gdal.Open(gdb)
+    ds = GS.open_raster(gdb)
     md = ds.GetMetadata("SUBDATASETS") or {}
     return sorted(v.rsplit(":", 1)[1] for k, v in md.items() if k.endswith("_NAME"))
 
 
 def read(path):
-    ds = gdal.Open(path)
+    ds = GS.open_raster(path)
     b = ds.GetRasterBand(1)
     a = b.ReadAsArray().astype("float64")
     nd = b.GetNoDataValue()
@@ -29,8 +31,8 @@ def read(path):
 
 def basin_wgs84(basin_path, layer=None):
     """Union of all basin polygons as an OGR geometry in WGS84 lon/lat."""
-    ds = ogr.Open(basin_path)
-    lyr = ds.GetLayerByName(layer) if layer else ds.GetLayer(0)
+    ds = GS.open_vector(basin_path)
+    lyr = GS.layer(ds, layer, basin_path)
     srs = lyr.GetSpatialRef()
     g = None
     for f in lyr:
@@ -87,8 +89,9 @@ def bilinear(a, gt, x, y):
 
 
 def write_tif(path, a, gt, nodata=-9999.0):
-    d = gdal.GetDriverByName("GTiff").Create(path, a.shape[1], a.shape[0], 1, gdal.GDT_Float32,
-                                             ["COMPRESS=DEFLATE"])
+    d = GS.checked(gdal.GetDriverByName("GTiff").Create(path, a.shape[1], a.shape[0], 1,
+                                                        gdal.GDT_Float32, ["COMPRESS=DEFLATE"]),
+                   "creating " + path)
     d.SetGeoTransform(gt); d.SetProjection(WGS84.ExportToWkt())
     b = d.GetRasterBand(1); b.SetNoDataValue(nodata)
     b.WriteArray(np.where(np.isnan(a), nodata, a)); d.FlushCache(); d = None

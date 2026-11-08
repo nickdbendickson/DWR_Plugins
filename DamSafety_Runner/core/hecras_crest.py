@@ -26,6 +26,8 @@ import math
 
 import numpy as np
 
+from .geom2d import cross2
+
 DAM_AXES = ("crest", "straight")
 BREACH_AT = ("auto", "toe", "lowest_crest", "inflow")
 TURN_MAX_DEG = 30.0          # the ridge is looked for within this angle of the heading
@@ -549,11 +551,12 @@ def _walk(sample, X0, tau0, max_len, step, toe, top, tol, prom, gap, wide=None):
                         # it settled: the line along the heading before that bend, through
                         # the points before it (the walk drifted onto a crest leaving the dam
                         # and bent where the two tops parted); else stop here
-                        k = [i for i in range(len(pts)) if abs(float(np.cross(
-                            t_ref, pts[i] - Q))) <= 0.5 * sep_min]
+                        # (audit R1: cross2, not np.cross, which numpy 2 refuses on 2-vectors)
+                        k = [i for i in range(len(pts)) if abs(cross2(
+                            t_ref, pts[i] - Q)) <= 0.5 * sep_min]
                         if not k and t_prev is not None:
-                            k = [i for i in range(t_prev[1]) if abs(float(np.cross(
-                                t_prev[0], pts[i] - Q))) <= 0.5 * sep_min]
+                            k = [i for i in range(t_prev[1]) if abs(cross2(
+                                t_prev[0], pts[i] - Q)) <= 0.5 * sep_min]
                         if k:
                             last_ok, since_gap = min(last_ok, k[-1]), None
                         break

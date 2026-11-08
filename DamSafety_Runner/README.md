@@ -248,10 +248,10 @@ face tables come from the terrain, so the crest is held there already.
 Read-only check: `python tools/check_dwr2801_anuga_crest.py BREACH_MODEL_FOLDER DEM_1M --out DIR`
 (mesh only, no solve).
 
-## HEC-RAS 2D compute: no wall-clock limit by default (3.10.48)
-With **Models = LISFLOOD-FP then HEC-RAS 2D**, the Linux RasUnsteady compute now runs until it finishes unless you set a limit.
+## HEC-RAS 2D compute: no wall-clock limit by default for a single run; 12 h unattended (3.10.48; audit R6, 3.16.7)
+With **Models = LISFLOOD-FP then HEC-RAS 2D**, the Linux RasUnsteady compute of a single run (*Run breach model for one dam*, the CLI `run`) runs until it finishes unless you set a limit. An unattended run - *Run breach models for many dams*, the CLI `batch`, the *Batch chain* (its Runner stage and its Windows HEC-RAS launcher) - gets a 12 h limit per compute and per preprocess step when the variable gives none (audit R6, 3.16.7: one dam that never finished held a queue for ever); `none` removes it, a positive number replaces it.
 
-- `NDBREACH_HECRAS_TIMEOUT_S` unset, empty or `0` (also `none` / `off`): **no limit anywhere**, neither on the compute nor on the Wine preprocess steps (terrain.exe, mesh.exe, drv.exe, Ras.exe -c; they had a 1,800 s cap each). 3.10.17-3.10.47 stopped the compute at max(2 h, 3 x the estimated run time), capped at 48 h, even with the variable unset, which killed long (72 h simulated, large-mesh) runs.
+- `NDBREACH_HECRAS_TIMEOUT_S` unset, empty or `0` (also `none` / `off`): **no limit anywhere** in a single run, neither on the compute nor on the Wine preprocess steps (terrain.exe, mesh.exe, drv.exe, Ras.exe -c; they had a 1,800 s cap each); in an unattended run unset / empty / `0` means the 12 h default and only `none` / `off` / `no` / `unlimited` means no limit. 3.10.17-3.10.47 stopped the compute at max(2 h, 3 x the estimated run time), capped at 48 h, even with the variable unset, which killed long (72 h simulated, large-mesh) runs.
 - A positive number of seconds: the compute AND each Wine preprocess step stop after that many seconds of wall-clock time (a paused VM counts), with SIGTERM to the process group, `NDBREACH_HECRAS_KILL_GRACE_S` (default 60 s), then SIGKILL, exactly as before.
 - Anything else (text, a negative number) is ignored, with a note in the log, and there is no limit.
 - Without a limit, a Wine dialog that waits for a click (HEC's Terms and Conditions prompt) stalls `Ras.exe -c` until someone deals with it. Set `NDBREACH_HECRAS_TCU_HOOK`, or a positive `NDBREACH_HECRAS_TIMEOUT_S`, for unattended batches on a new Wine prefix.

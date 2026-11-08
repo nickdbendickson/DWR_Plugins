@@ -16,6 +16,7 @@ import tempfile
 import numpy as np
 
 from nd_breach_runner.core import hecras_crest as hc
+from nd_breach_runner.core.geom2d import cross2
 from nd_breach_runner.tests.registry import test
 from nd_breach_runner.tests.test_hecras_crest import H, CW, TOP, _grid_sampler, _seg_dist
 
@@ -1258,7 +1259,7 @@ def hecras_crest_offcrest_build_model_a_road_along_the_valley_is_not_the_dam():
         cl = _local(r, r["model"].conn_line)
         P = Pw - (p0.X0, p0.Y0)
         u = (cl[-1] - cl[0]) / np.hypot(*(cl[-1] - cl[0]))
-        assert abs(float(np.cross(u, P - cl[0]))) < 2.0, (cl[[0, -1]], P)
+        assert abs(cross2(u, P - cl[0])) < 2.0, (cl[[0, -1]], P)
         assert abs(hc.angle_deg(u, (np.cos(np.radians(30.0)), np.sin(np.radians(30.0))))) < 2.0
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -2073,7 +2074,7 @@ def hecras_crest_offcrest_round4_ridge_and_section_edges():
                       300.0, crest_w=CW)
         E = tr["line"][-1]
         assert tr["ends"]["B"][0].startswith("a junction: another crest at its level"), tr
-        assert abs(float(np.cross(d2, E))) < 0.5 * CW + 2.5 and float(E @ d2) > 100.0, \
+        assert abs(cross2(d2, E)) < 0.5 * CW + 2.5 and float(E @ d2) > 100.0, \
             (side, E)
     # (e)
     tp = np.arange(0.0, 301.0, 5.0)
