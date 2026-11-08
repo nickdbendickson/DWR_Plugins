@@ -1959,7 +1959,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     lf_env, dem, init_grid = None, None, None
     lst, wd = None, None
     lf_span = (5.0, 60.0 if not has_base else 45.0)
-    start_it = len(iterations) + 1
+    start_it = state.get("next_it")        # H09: the domain-run number to resume at; the pass
+    if start_it is None:                    # count no longer tracks it (clock/refill passes append
+        start_it = len(iterations) + 1      # an entry without advancing `it`). Old checkpoints: fall back.
     saved_warn = state.get("warnings")
     if state.resumed and saved_warn:
         warnings += [w for w in saved_warn if w not in warnings]
@@ -2062,7 +2064,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                         if msg not in warnings:
                             warnings.append(msg)
                         state.save(iterations=iterations, next_bounds=list(bounds),
-                                   next_sim_time=sim_time, warnings=warnings, lisflood_done=False)
+                                   next_sim_time=sim_time, warnings=warnings, lisflood_done=False,
+                                   next_it=it)
                         continue
                     except Exception as ex:
                         hole_held = True
@@ -2186,12 +2189,20 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             log("Flood still moving inside the domain; extending the clock to {:.1f} h "
                 "without using a domain run.".format(sim_time / 3600.0))
             state.save(iterations=iterations, next_bounds=list(bounds), next_sim_time=sim_time,
-                       warnings=warnings, lisflood_done=False)
+                       warnings=warnings, lisflood_done=False, next_it=it)
             continue
         it += 1
         state.save(iterations=iterations, next_bounds=list(bounds), next_sim_time=sim_time,
-                   warnings=warnings, lisflood_done=False)
+                   warnings=warnings, lisflood_done=False, next_it=it)
         continue
+    if lf_env is None:
+        # H09: the while body never ran, so no result was produced - a desynced checkpoint
+        # (iterations recorded beyond max_iterations, next_it absent on an old resume). Fail
+        # loudly instead of writing lisflood_done=True with a never-simulated clock (which a
+        # later resume would load at the wrong footprint) and then hitting lf_env.gauges.
+        raise lfmod.ModelError(
+            "the checkpoint in {} is out of step with the run plan; delete {} "
+            "and run again".format(model_dir, STATE_FILE))
     state.save(iterations=iterations, lisflood_done=True, final_bounds=list(bounds),
                final_sim_time=sim_time, warnings=warnings)
     report["lisflood_runs"] = iterations
