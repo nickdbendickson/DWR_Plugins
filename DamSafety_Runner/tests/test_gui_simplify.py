@@ -164,3 +164,35 @@ def every_suite_plugin_adds_the_one_dam_suite_home_entry():
         assert "remove_suite_actions" in unload_calls, p
     home = open(os.path.join(REPO, "shared", "ui", "suite_home.py"), encoding="utf-8").read()
     assert 'SUITE_MENU = "Dam safety"' in home and '"NDSuiteHome"' in home
+
+
+@register
+def hazard_suite_tool_launchers_are_a_gear_submenu_not_buttons():
+    """Usability plan change 8 (2026-11-08): the Hazard Classify view's nine Dam suite tool
+    buttons (wider than the window; the whole tab scrolled sideways) are the gear's "Dam suite
+    tools" submenu. Hazard's window cannot be built without QGIS here: ast over suite_tab.py
+    and dialog.py."""
+    src = open(os.path.join(REPO, "DamSafety_Hazard", "suite_tab.py"), encoding="utf-8").read()
+    tree = ast.parse(src)
+    fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    assert "_build_suite_tools_menu" in fns and "_build_suite_group" in fns
+    calls_group = {n.func.attr for n in ast.walk(fns["_build_suite_group"])
+                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+    names_group = {n.id for n in ast.walk(fns["_build_suite_group"]) if isinstance(n, ast.Name)}
+    assert "QPushButton" in names_group                     # the dam.json… button stays
+    assert "QGridLayout" not in names_group                 # the 9-button grid does not
+    assert "setattr" not in calls_group                     # no suite_*_btn attributes
+    calls_menu = {n.func.attr for n in ast.walk(fns["_build_suite_tools_menu"])
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+    assert "addAction" in calls_menu and "TOOLS" in {
+        n.id for n in ast.walk(fns["_build_suite_tools_menu"]) if isinstance(n, ast.Name)}
+    assert "suite_tools_menu" in src and "suite_tool_actions" in src
+    dlg = open(os.path.join(REPO, "DamSafety_Hazard", "dialog.py"), encoding="utf-8").read()
+    assert "_build_suite_tools_menu(menu)" in dlg          # wired into the gear
+    # the busy set names the menu, not nine button attributes; TOOLS still has the nine
+    cls = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SuiteTabMixin"][0]
+    busy = [n for n in cls.body if isinstance(n, ast.Assign) and n.targets[0].id == "BUSY_WIDGETS_2100"][0]
+    busy_names = set(ast.literal_eval(busy.value))
+    assert busy_names == {"suite_gate_check", "suite_gate_stop_check", "suite_record_btn", "suite_tools_menu"}
+    tools = [n for n in tree.body if isinstance(n, ast.Assign) and n.targets[0].id == "TOOLS"][0]
+    assert len(ast.literal_eval(tools.value)) == 9

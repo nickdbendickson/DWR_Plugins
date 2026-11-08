@@ -98,9 +98,15 @@ def test_shell_no_project():
         assert d.windowTitle() == "DamSafety Hazard {}".format(PLUGIN_VERSION)
         assert _tab_texts(d) == ["Classify", "Results", "Review"]
         assert d.tab_widget.currentIndex() == 0 and d.action_area.isVisible()
+        # 2.23.17 (usability plan change 8): the nine Dam suite tool buttons are a submenu
         assert [a.text() for a in d.gear_menu.actions() if a.text()] == [
-            "Suite settings\u2026", "Documentation (README)\u2026", "Run self-test",
-            "Edit data sources\u2026"]
+            "Suite settings\u2026", "Documentation (README)\u2026", "Dam suite tools",
+            "Run self-test", "Edit data sources\u2026"]
+        assert [a.text() for a in d.suite_tools_menu.actions()] == [
+            "Model gate\u2026", "Class probability\u2026", "Quick creep screen\u2026",
+            "Rules comparison\u2026", "Chart sign-off\u2026", "Review a package\u2026",
+            "Culverts for the Runner\u2026", "Export for Screening\u2026", "Mark reviewed\u2026"]
+        assert not hasattr(d, "suite_gate_btn") and len(d.suite_tool_actions) == 9
         assert d.tab_widget.cornerWidget() is d.gear_btn
         assert any(lbl.text() == DISCLAIMER for lbl in d.findChildren(DLG.QLabel))
         assert not hasattr(d, "advanced_check") and not hasattr(d, "_advanced_groups")

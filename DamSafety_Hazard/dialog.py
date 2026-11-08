@@ -324,7 +324,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
     def _build_gear(self):
         self.gear_btn = QToolButton()
         self.gear_btn.setText("\u2699")
-        self.gear_btn.setToolTip("Suite settings, documentation, self-test, data sources")
+        self.gear_btn.setToolTip("Suite settings, documentation, the Dam suite tools, "
+                                 "self-test, data sources")
         self.gear_btn.setPopupMode(_enum(QToolButton, "ToolButtonPopupMode", "InstantPopup"))
         self.gear_btn.setAutoRaise(True)
         self.gear_btn.setStyleSheet("QToolButton {font-size: 18px; padding: 0 8px 2px 8px;}")
@@ -333,6 +334,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.settings_action.triggered.connect(lambda _c=False: self._open_suite_settings())
         self.readme_action = menu.addAction("Documentation (README)\u2026")
         self.readme_action.triggered.connect(lambda _c=False: self._open_readme())
+        menu.addSeparator()
+        menu.addMenu(self._build_suite_tools_menu(menu))    # 2.23.17: the Dam suite tools
         menu.addSeparator()
         self.selftest_action = menu.addAction("Run self-test")
         self.selftest_action.setToolTip("Runs the full pipeline on synthetic data in a "
