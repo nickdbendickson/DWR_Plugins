@@ -3803,6 +3803,34 @@ def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None):
     return hr
 
 
+# the run report of a finished run (REPORT_REL in damjson); written only after every pass is
+# done, so its presence tells a finished run from a cancelled one that left pass rasters
+RUN_REPORT_REL = os.path.join(MODEL_FOLDER, "run_report.json")
+
+
+def run_finished(folder):
+    """True only when the dam folder holds a FINISHED run, not merely a pass.
+
+    Every finished LISFLOOD-FP pass writes Depth/Velocity/Arrival (Max).tif under the final
+    names so a cancel does not lose work, but only a run that reaches the end writes the run
+    report. The queue's skip test and the window's results-ready test used to look at the depth
+    raster alone, so a dam cancelled in its second pass was reported "already run" and skipped,
+    with its first-pass rasters left as the result. Requiring the run report fixes that."""
+    if not folder:
+        return False
+    for k in ("depth", "velocity", "arrival"):
+        if not os.path.isfile(os.path.join(folder, FINAL_NAMES[k])):
+            return False
+    rep = os.path.join(folder, RUN_REPORT_REL)
+    if not os.path.isfile(rep):
+        return False
+    try:                                   # a report without run_finished is an interrupted run
+        with open(rep, encoding="utf-8") as fh:
+            return bool(json.load(fh).get("run_finished"))
+    except Exception:                      # unreadable report: the rasters are there, treat as done
+        return True
+
+
 def hecras_done(folder):
     """True when the dam folder holds a finished HEC-RAS 2D stage: _hecras/hecras_stage.json
     with its results HDF (a timed-out stage writes the file too, with status 'timeout' and no

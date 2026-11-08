@@ -1796,12 +1796,10 @@ def cmd_batch(args):
                 results.append(out)
                 continue
             out["Structure_Flag"] += " (run allowed)"
-        depth_names = (workflow.FINAL_NAMES["depth"],
-                       os.path.splitext(workflow.FINAL_NAMES["depth"])[0] + ".asc")
-        if skip_done and any(os.path.exists(os.path.join(folder, nm)) for nm in depth_names) \
+        if skip_done and workflow.run_finished(folder) \
                 and (cfg.get("model", "tier", workflow.TIER_LISFLOOD) != workflow.TIER_HECRAS
                      or workflow.hecras_done(folder)):
-            out.update({"Status": "skipped", "Message": "already has Depth (Max)"})
+            out.update({"Status": "skipped", "Message": "already run (finished)"})
             results.append(out)
             continue
         say("=== {} ({}/{})".format(dam_id, i + 1, len(rows)))
