@@ -28,6 +28,7 @@ from .core import (workflow, breach as brmod, flood as floodmod, impacts as impm
                    outlets as outmod, damjson, stoprule, products as prodmod)
 from .core.lisflood import Cancelled, ModelError, check_lisflood
 from .core.lisflood import MAIN_SOLVERS as lfmod_order, SOLVER_LABELS as lfmod_labels  # 3.16.0
+from .core import lisflood as lfmod_wall        # audit P2: the wall-clock limit defaults
 from .damsuite import structure_flags as sflags
 from .core.anuga_model import check_anuga
 from .core.units import FT, MILE, ARRIVAL_DEPTH_FT
@@ -732,6 +733,22 @@ class _Base(QgsProcessingAlgorithm):
         # Shown in the main dialog (not Advanced): it caps how far downstream the flood is followed.
         self._num("MAX_EXTENT_MI", "Largest domain side (mi)", DEFAULT_MAX_EXTENT_MI, minimum=1.0)
         self._num("MAX_RUNS", "Most LISFLOOD-FP runs", 6, minimum=1, integer=True, advanced=True)
+        # audit P2 (2026-11-07): wall-clock limits on the LISFLOOD-FP child and the growth loop
+        self._num("LISFLOOD_MAX_WALL_S", "LISFLOOD-FP: longest wall-clock time for one run (s; "
+                  "0 = automatic)", 0.0, minimum=0.0, advanced=True, help=(
+                      "The LISFLOOD-FP program is stopped and the run fails with a plain "
+                      "message when one run takes longer than this. 0 = automatic: {:g} x the "
+                      "run-time estimate when this computer's LISFLOOD-FP speed is known (the "
+                      "'Estimate the run time' tool measures it), else {:.0f} h. A collapsing "
+                      "time step (the solver gone unstable) is logged and warned about as the "
+                      "run goes.".format(lfmod_wall.WALL_ESTIMATE_FACTOR,
+                                         lfmod_wall.DEFAULT_MAX_WALL_S / 3600.0)))
+        self._num("LISFLOOD_MAX_TOTAL_WALL_S", "LISFLOOD-FP: wall-clock budget for all runs "
+                  "(s; 0 = automatic)", 0.0, minimum=0.0, advanced=True, help=(
+                      "The domain-growth loop (every run and clock extension together) stops "
+                      "with a plain message, keeping the last finished run's results, when its "
+                      "wall time has used this budget. 0 = automatic: 'Most LISFLOOD-FP runs' "
+                      "x the per-run limit."))
         self._num("DURATION_HR", "Simulation duration (hr), 0 = automatic", 0.0, minimum=0.0)
         self._num("DURATION_MAX_HR", "Longest simulated time (hr): the clock is lengthened "
                   "up to this while the flood is still moving", 96.0, minimum=1.0)
@@ -917,6 +934,9 @@ class _Base(QgsProcessingAlgorithm):
                 st.crest_burn_data_folder = _SD.data_folder() or ""
             except Exception:                                    # noqa - the burn says why
                 pass
+        if self.parameterDefinition("LISFLOOD_MAX_WALL_S") is not None:   # audit P2
+            st.max_wall_s = max(0.0, float(g("LISFLOOD_MAX_WALL_S") or 0.0))
+            st.max_total_wall_s = max(0.0, float(g("LISFLOOD_MAX_TOTAL_WALL_S") or 0.0))
         if self.parameterDefinition("SOLVER") is not None:             # 3.16.0
             from .core import lisflood as _lf
             i = self.parameterAsEnum(parameters, "SOLVER", context) or 0

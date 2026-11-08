@@ -216,6 +216,11 @@ MODEL_KEYS = {
     # 3.16.0: ACC (default), FV2, MWDG2 (any case); NDBREACH_LISFLOOD_SOLVER sets the default
     "lisflood_solver": ("lisflood_solver", ("str",)),
     "lisflood_limit_slopes": ("lisflood_limit_slopes", ("bool",)),
+    # audit P2 (3.16.9): wall-clock limits (s; 0 = automatic) and this computer's LISFLOOD-FP
+    # speed (cell-seconds per wall second, from `estimate`), which the automatic limit uses
+    "max_wall_s": ("max_wall_s", ("num", 0.0, None)),
+    "max_total_wall_s": ("max_total_wall_s", ("num", 0.0, None)),
+    "lisflood_rate": ("lisflood_rate", ("num", 0.0, None)),
 }
 SECTIONS = {
     "dem": {"path": ("path",), "z_units": ("enum", gdal_io.Z_CHOICES), "crs": ("str",),
@@ -456,7 +461,11 @@ TEMPLATE = {
                  "qa_basemap: auto | imagery | hillshade (under the QA maps: the aerial photo, "
                  "else the hillshade; default auto); qa_basemap_labels: street / town labels. "
                  "reservoir_carve: off | auto | on (carve the reservoir bottom from the storage "
-                 "curve where the LiDAR shows a water surface; default off).",
+                 "curve where the LiDAR shows a water surface; default off). max_wall_s / "
+                 "max_total_wall_s: wall-clock limit of one LISFLOOD-FP run / budget of the "
+                 "whole domain-growth loop, in seconds (0 = automatic: 6 x the run-time "
+                 "estimate when lisflood_rate - the cell-seconds per second `estimate` "
+                 "measures - is given, else 24 h; the budget is max_iterations x that).",
         "tier": "lisflood", "cell_size_m": 10.0, "arrival_depth_ft": 0.1,
         "edge_tolerance_ft": 1.0, "initial_length_mi": 5.0, "half_width_mi": 1.0,
         "expand_step_mi": 3.0, "max_extent_mi": 20.0, "qa_maps": "inflow+depth",
@@ -467,7 +476,8 @@ TEMPLATE = {
         "anuga_near_field_mi": 1.0, "anuga_buffer_m": 500.0,
         "arrival_contours_hr": [0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
         "crest_burn": True, "crest_burn_dem": None, "grid_refine": True,
-        "grid_check_cell_m": workflow.GRID_CHECK_CELL_M},
+        "grid_check_cell_m": workflow.GRID_CHECK_CELL_M,
+        "max_wall_s": 0.0, "max_total_wall_s": 0.0, "lisflood_rate": None},
     "output": {
         "_help": "Each dam goes to <folder>/<Dam ID>/, as in the QGIS tools.",
         "folder": "dams", "keep_model_files": True, "products": True, "resume": False},
@@ -1070,6 +1080,8 @@ def build_settings(cfg, opts, need_models=True):
                 v = tuple(v)
             if key == "crest_burn_dem":
                 v = v or ""
+            if key == "lisflood_rate" and not v:           # audit P2: 0 / null = unknown
+                v = None
             if key == "lisflood_solver":                   # 3.16.0
                 try:
                     v = workflow.lfmod.solver_from_text(v, st.lisflood_solver)
@@ -1543,6 +1555,11 @@ def cmd_estimate(args):
     est = estmod.estimate(plan, rate, p.st.tier == workflow.TIER_BOTH)
     for ln in estmod.describe(plan, est):
         say(ln)
+    # audit P2: the measured speed sets the automatic wall-clock limit of a run (6 x the
+    # estimate instead of 24 h) when the configuration carries it
+    say("LISFLOOD-FP speed on this computer: {:.0f} cell-seconds per second (set "
+        "model.lisflood_rate to this for an automatic wall-clock limit of {:g} x the "
+        "estimate).".format(rate, lfmod.WALL_ESTIMATE_FACTOR))
     return 0
 
 

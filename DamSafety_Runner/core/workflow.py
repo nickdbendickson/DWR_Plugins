@@ -316,6 +316,17 @@ class RunSettings:
         # never changed.
         self.lisflood_stability_retry = os.environ.get(
             "NDBREACH_STABILITY_RETRY", "1").strip() not in ("0", "false", "no", "off")
+        # Audit P2 (2026-11-07): wall-clock limits. max_wall_s is the longest one LISFLOOD-FP
+        # run may take (0 = automatic: lfmod.WALL_ESTIMATE_FACTOR x the run-time estimate when
+        # lisflood_rate - this computer's calibrate() speed - is known, else 24 h); on expiry the
+        # child is killed and the run stops with ModelError. max_total_wall_s is the budget of
+        # all the LISFLOOD-FP passes of the domain-growth loop together (0 = automatic:
+        # max_iterations x the per-run limit): when the next pass would start past it, the
+        # loop stops with a plain message instead of growing the domain again. Neither changes a
+        # run that finishes, so both stay out of the run key.
+        self.max_wall_s = _env_number("LISFLOOD_MAX_WALL_S", 0.0) or 0.0
+        self.max_total_wall_s = _env_number("LISFLOOD_MAX_TOTAL_WALL_S", 0.0) or 0.0
+        self.lisflood_rate = None
         # v3.4.0: near-dam refine (refine.py): when a receptor lies within refine_dist_mi of
         # the breach and the final rasters come from the ACC run, re-run that stretch on a
         # fine FV1 grid (refine_cell_m; 0 = half the main cell) and merge it in. Off by
@@ -436,9 +447,15 @@ class RunSettings:
                 if v in (None, ""):
                     continue             # v3.10.27: not set - the report stays as before
                 d[k] = v if isinstance(v, str) else "polygons ({})".format(len(v))
+            elif k in _WALL_KEYS and not v:
+                continue                 # audit P2: automatic - the report stays as before
             else:
                 d[k] = v
         return d
+
+
+# audit P2: the wall-clock limits and the measured speed never change a run that finishes
+_WALL_KEYS = ("max_wall_s", "max_total_wall_s", "lisflood_rate")
 
 
 _CLASS_STOP_KEYS = ("class_stop", "class_stop_threshold_ft", "class_stop_confirm",
@@ -526,7 +543,7 @@ def key_settings(st):
     # function and the data folder only say where the same 1 m ground comes from. The grid
     # refine settings never change one run (the refined runs carry their own cell size).
     for k in ("crest_burn_http", "crest_burn_download", "crest_burn_data_folder",
-              "grid_refine", "grid_refine_cell_m", "grid_check_cell_m"):
+              "grid_refine", "grid_refine_cell_m", "grid_check_cell_m", *_WALL_KEYS):
         d.pop(k, None)
     if not getattr(st, "crest_burn", False):
         for k in ("crest_burn", "crest_burn_dem", "crest_burn_lines"):
@@ -1832,6 +1849,35 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             return {"theta": lfmod.STABLE_THETA, "cfl": lfmod.STABLE_CFL}
         return {}
 
+    # audit P2: the wall-clock record of every LISFLOOD-FP pass (report["lisflood_wall"]) and the
+    # one warning when a pass's time step collapsed (the run itself goes on)
+    wall = report.setdefault("lisflood_wall", {"runs": [], "budget_s": None})
+    wall_t0 = time.time()
+
+    def _note_wall(lst, what):
+        ent = {"run": what, "limit_s": getattr(lst, "wall_limit_used", None)}
+        dc = getattr(lst, "dt_collapsed", None)
+        if dc:
+            ent["dt_collapsed_at_hr"] = round(dc[0] / 3600.0, 3)
+            ent["dt_collapsed_s"] = dc[1]
+            msg = ("LISFLOOD-FP's time step collapsed to {:.3g} s at {:.2f} h of {} (a sign the "
+                   "solver went unstable); check the volume error and the depth pattern near "
+                   "the deepest water.".format(dc[1], dc[0] / 3600.0, what))
+            if msg not in warnings:
+                warnings.append(msg)
+        wall["runs"].append(ent)
+
+    def wall_budget_s():
+        """The budget (s) of all LISFLOOD-FP passes of the growth loop together: the setting,
+        else max_iterations x the per-run limit the first pass ran under (the estimate-scaled
+        limit when this computer's speed is known, else 24 h)."""
+        v = float(getattr(st, "max_total_wall_s", 0.0) or 0.0)
+        if v > 0:
+            return v
+        first = (wall["runs"][0].get("limit_s") if wall["runs"] else None) or \
+            lfmod.wall_limit_s(getattr(st, "max_wall_s", 0.0))
+        return float(st.max_iterations) * float(first)
+
     def lisflood_run(tag, hyd, bnds, sim_s, prog, gauges=None, snap=None):
         dem = dem_for("lisflood", bnds, cs)
         man = manning_for(bnds, cs)
@@ -1847,7 +1893,10 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                 solver=getattr(st, "lisflood_solver", lfmod.SOLVER_ACC),
                 closed_edges=closed_edges(),
                 allow_unpatched=getattr(st, "allow_unpatched", False),
-                limit_slopes=getattr(st, "lisflood_limit_slopes", True), **stable_kw())
+                limit_slopes=getattr(st, "lisflood_limit_slopes", True),
+                max_wall_s=getattr(st, "max_wall_s", 0.0) or 0.0,          # audit P2
+                rate=getattr(st, "lisflood_rate", None) or lfmod.known_rate(st.lisflood_exe),
+                **stable_kw())
         lst = settings()
         wd = os.path.join(model_dir, "lisflood" + tag)
         if snap:        # snapshots of an earlier (smaller) run must not mix with these
@@ -1873,6 +1922,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             os.remove(marker)
         par = lfmod.write_inputs(wd, dem, inflow_xy, hyd, lst, inflow_line=inline)
         runtime = lfmod.run(wd, par, lst, prog, cancel, log)
+        _note_wall(lst, "lisflood" + tag)
         if getattr(lst, "unpatched_used", False):
             if lfmod.PATCH_MISSING_WARNING not in warnings:
                 warnings.append(lfmod.PATCH_MISSING_WARNING)
@@ -1889,6 +1939,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             lst = settings()
             par = lfmod.write_inputs(wd, dem, inflow_xy, hyd, lst, inflow_line=inline)
             runtime += lfmod.run(wd, par, lst, prog, cancel, log)
+            _note_wall(lst, "lisflood" + tag + " (stable re-run)")
             env = lfmod.read_results(wd, dem, lst, hyd)
             err2 = env.stats.get("max_volume_error_pct")
             ev = {"run": "lisflood" + tag, "error_pct": err, "stable_error_pct": err2,
@@ -2162,6 +2213,30 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if over and (w > max_extent or h > max_extent):
             stop_reason = "maximum extent ({:.0f} mi)".format(st.max_extent_mi)
             warnings.append(max_extent_warning(st.max_extent_mi, over))
+            break
+        # audit P2: the cumulative wall-clock budget of the growth loop. Every pass so far ran
+        # under its own limit; when their wall time together has used the budget, the next
+        # (larger or longer) pass is not started: this pass's results stand, labelled. Checked
+        # before the domain or the clock is changed, so the checkpoint names the domain run.
+        spent = time.time() - wall_t0
+        budget = wall_budget_s()
+        wall["budget_s"] = budget
+        wall["spent_s"] = round(spent, 1)
+        if spent >= budget:
+            stop_reason = "wall-clock budget"
+            warnings.append(
+                "Stopped after {} LISFLOOD-FP pass(es) and {:.1f} h of wall time, the budget "
+                "for the domain-growth loop ({:.1f} h = {}), with the flood {}. The results are "
+                "this pass's; the domain and clock were not extended again. Raise "
+                "'LISFLOOD-FP: wall-clock budget for all runs' (LISFLOOD_MAX_TOTAL_WALL_S; 0 = "
+                "automatic, Most LISFLOOD-FP runs x the per-run limit) to let it go on.".format(
+                    len(iterations), spent / 3600.0, budget / 3600.0,
+                    "the setting" if getattr(st, "max_total_wall_s", 0.0) else
+                    "{} runs x the per-run limit".format(st.max_iterations),
+                    "leaving through {} deeper than {:.1f} ft".format(
+                        ", ".join(over), st.edge_tolerance_ft) if over
+                    else "still moving inside the domain"))
+            log(warnings[-1])
             break
         if over:
             log("Flood leaves through {} deeper than {:.1f} ft; extending.".format(

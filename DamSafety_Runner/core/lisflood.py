@@ -117,6 +117,65 @@ STABLE_CFL = 0.5
 STABILITY_RETRY_PCT = 1.0
 STABILITY_MARKER = "stable_settings.json"
 
+# Audit P2 (2026-11-07): the LISFLOOD-FP child had no wall-clock limit, so a solver that hung or
+# collapsed its time step held QGIS's run for ever. Every run now has one: the setting
+# (LISFLOOD_MAX_WALL_S / model.max_wall_s; 0 = automatic) as given, else WALL_ESTIMATE_FACTOR x
+# the run-time estimate of core/estimate.py when this computer's speed is known (a calibrate()
+# rate on the run), else DEFAULT_MAX_WALL_S. The automatic limit is never under WALL_FLOOR_S.
+DEFAULT_MAX_WALL_S = 24 * 3600.0
+WALL_ESTIMATE_FACTOR = 6.0
+WALL_FLOOR_S = 3600.0
+WALL_SETTING_HINT = ("'LISFLOOD-FP: longest wall-clock time for one run' (LISFLOOD_MAX_WALL_S, "
+                     "the CLI's model.max_wall_s; 0 = automatic)")
+# CFL collapse detection: LISFLOOD-FP's time step is cfl x cell / sqrt(g x depth) (ACC), so a
+# step this short means water deeper than DT_COLLAPSE_DEPTH_M somewhere - numerical garbage on
+# a North Dakota flood (DWR-2865's checkerboarding made +567% water, 3.15.1). The run logs the
+# step each progress tick and warns ONCE when it falls below dt_collapse_s(); it never stops.
+DT_COLLAPSE_DEPTH_M = 100.0
+G_M_S2 = 9.80665
+
+
+def wall_limit_s(max_wall_s=None, cells=None, sim_time_s=None, cell_m=None, rate=None,
+                 cal_cell_m=10.0):
+    """The wall-clock limit (s) of one LISFLOOD-FP run: `max_wall_s` when it is a number over 0;
+    else WALL_ESTIMATE_FACTOR x core/estimate.seconds_for(...) when `rate` (cell-seconds per wall
+    second from calibrate()) and the run's size are known, at least WALL_FLOOR_S; else
+    DEFAULT_MAX_WALL_S. Always a positive number: no run is left without a limit."""
+    try:
+        v = float(max_wall_s or 0.0)
+    except (TypeError, ValueError):
+        v = 0.0
+    if v > 0:
+        return v
+    try:
+        if rate and cells and sim_time_s and cell_m:
+            from .estimate import seconds_for
+            one = seconds_for(float(cells), float(sim_time_s), float(cell_m), float(rate),
+                              cal_cell_m)
+            if one > 0 and math.isfinite(one):
+                return max(WALL_FLOOR_S, WALL_ESTIMATE_FACTOR * one)
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+    return DEFAULT_MAX_WALL_S
+
+
+def dt_collapse_s(cell_m, cfl=None):
+    """The time step below which a run is flagged: the CFL step of `cell_m` with
+    DT_COLLAPSE_DEPTH_M of water (cfl: the run's, else LISFLOOD-FP's own 0.7)."""
+    c = float(cfl) if cfl else 0.7
+    return c * float(cell_m) / math.sqrt(G_M_S2 * DT_COLLAPSE_DEPTH_M)
+
+
+def _wall_limit_text(limit_s, elapsed_s):
+    return ("LISFLOOD-FP ran for {:.2f} h of wall time, past this run's limit of {:.2f} h, and "
+            "was stopped. The limit is {} - automatic means {:g} x the run-time estimate when "
+            "this computer's LISFLOOD-FP speed is known (the Estimate tool / the CLI's "
+            "model.lisflood_rate), else {:.0f} h. If the run was healthy, raise the setting; if "
+            "the log shows the time step collapsing, the solver went unstable - try a coarser "
+            "cell or the ACC stable settings (theta 0.7, CFL 0.5).").format(
+                elapsed_s / 3600.0, limit_s / 3600.0, WALL_SETTING_HINT, WALL_ESTIMATE_FACTOR,
+                DEFAULT_MAX_WALL_S / 3600.0)
+
 # ---------------------------------------------------------------------------------------------
 # Built-in engine (M5, suite 1.14.1 parity). core/builtin_lisflood.py is the same local-inertial
 # equations in numpy, so a run works out of the box WITHOUT a LISFLOOD-FP binary. It is a
@@ -208,7 +267,7 @@ class LisfloodSettings:
                  initial_tstep_s=10.0, velocity_min_depth_m=0.03, extra_par=None,
                  initial_depth=None, gauges=None, snapshot_s=None, extra_sources=None,
                  solver=SOLVER_ACC, closed_edges=(), allow_unpatched=False, theta=1.0,
-                 cfl=None, limit_slopes=True):
+                 cfl=None, limit_slopes=True, max_wall_s=0.0, rate=None):
         if solver not in SOLVERS:
             raise ModelError("unknown LISFLOOD-FP solver '{}' (one of {})".format(
                 solver, ", ".join(SOLVERS)))
@@ -253,6 +312,13 @@ class LisfloodSettings:
         # locked-down Mac).
         self.allow_unpatched = allow_unpatched
         self.unpatched_used = False
+        # Audit P2: the wall-clock limit of this run (0 = automatic, see wall_limit_s) and this
+        # computer's calibrate() rate (cell-seconds per wall second; None = unknown), which the
+        # automatic limit scales from. _run fills wall_limit_used and dt_collapsed for the report.
+        self.max_wall_s = float(max_wall_s or 0.0)
+        self.rate = rate
+        self.wall_limit_used = None
+        self.dt_collapsed = None       # (t_s, tstep_s) at the first collapsed step, or None
 
 
 class Envelopes:
@@ -516,6 +582,46 @@ def _read_mass_rows(path):
     return np.asarray(rows, dtype=float).reshape(-1, 5)
 
 
+MASS_TAIL_BYTES = 4096      # the end of a .mass file read each progress tick (audit P4)
+
+
+def read_mass_tail(path, tail_bytes=MASS_TAIL_BYTES):
+    """The last COMPLETE data row of a LISFLOOD-FP .mass file while it is still being written:
+    {"time_s", "tstep_s", "min_tstep_s", "steps", "vol_m3", "qin_cms"} (the .mass columns 0, 1,
+    2, 3, 5, 6), or None when the file is missing, has no complete row yet, or the row cannot
+    be parsed. Only the last `tail_bytes` of the file are read (seek to max(0, size - tail)),
+    so the progress poll of a long run is a few kilobytes a second instead of the whole file
+    (audit P4, 2026-11-07: the run loop re-parsed every row of a multi-thousand-row file every
+    second). A trailing line without its newline is a partial write and is ignored; so is the
+    header. _read_mass_rows still parses the whole file once at the end of the run."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            start = max(0, size - int(tail_bytes))
+            f.seek(start)
+            chunk = f.read()
+    except (OSError, ValueError):
+        return None
+    if not chunk:
+        return None
+    text = chunk.decode("utf-8", errors="replace")
+    lines = text.split("\n")
+    if start > 0:
+        lines = lines[1:]          # the first piece is the tail of a row cut by the seek
+    if not text.endswith("\n"):
+        lines = lines[:-1]         # a row still being written
+    for line in reversed(lines):
+        p = line.split()
+        if len(p) < 7:
+            continue
+        try:
+            return {"time_s": float(p[0]), "tstep_s": float(p[1]), "min_tstep_s": float(p[2]),
+                    "steps": int(float(p[3])), "vol_m3": float(p[5]), "qin_cms": float(p[6])}
+        except ValueError:
+            continue               # the header, or a row the solver garbled
+    return None
+
+
 def _mass_summary(rows):
     """_read_mass's value from shared rows. The explicit loop reproduces the original exactly:
     sequential cum (left-to-right, not pairwise), qin_max/worst floored at 0.0 (so a negative Qin
@@ -575,6 +681,32 @@ def late_inflow(path, t_end_s, tol_cms=0.5):
     return _late_inflow(t, qi, t_end_s, tol_cms)
 
 
+def _par_grid_size(par):
+    """(cells, cell size m) of the DEM a .par file names (its ESRI ASCII header), or
+    (None, None) when it cannot be read. Used for the automatic wall-clock limit and the
+    collapsed-step threshold (audit P2); never for the hydraulics."""
+    try:
+        dem = None
+        with open(par, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                p = line.split()
+                if len(p) >= 2 and p[0].lower() == "demfile":
+                    dem = p[1]
+                    break
+        if not dem:
+            return None, None
+        path = dem if os.path.isabs(dem) else os.path.join(os.path.dirname(par), dem)
+        hdr = {}
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for _ in range(6):
+                p = f.readline().split()
+                if len(p) == 2:
+                    hdr[p[0].lower()] = float(p[1])
+        return int(hdr["ncols"]) * int(hdr["nrows"]), float(hdr["cellsize"])
+    except (OSError, KeyError, ValueError):
+        return None, None
+
+
 def _run_builtin(workdir, par, st, progress=None, cancel=None, log=None):
     """Run core/builtin_lisflood.py in-process (the numpy local-inertial engine). Writes
     lisflood.log whose first line is the engine name, and surfaces the mass error and the
@@ -631,7 +763,21 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
         env["OMP_NUM_THREADS"] = str(int(st.threads))
     log_path = os.path.join(workdir, "lisflood.log")
     mass = os.path.join(workdir, "results", name + ".mass")
+    # audit P2: the wall-clock limit of this run (from the setting, else the estimate, else 24 h)
+    # and the time step under which the solver has collapsed
+    ncells, cell_m = _par_grid_size(par)
+    limit_s = wall_limit_s(getattr(st, "max_wall_s", 0.0), ncells, st.sim_time_s, cell_m,
+                           getattr(st, "rate", None))
+    st.wall_limit_used = limit_s
+    collapse_s = dt_collapse_s(cell_m, getattr(st, "cfl", None)) if cell_m else None
+    st.dt_collapsed = None
+    if log:
+        log("LISFLOOD-FP wall-clock limit for this run: {:.1f} h{}".format(
+            limit_s / 3600.0, "" if getattr(st, "max_wall_s", 0.0) else " (automatic)"))
+    from .wallclock import Deadline
+    deadline = Deadline(limit_s, what="LISFLOOD-FP", log=log)
     t0 = time.time()
+    last_dt_log = -1e9
     with open(log_path, "w", encoding="utf-8") as logf:
         proc = subprocess.Popen([exe, "-v", os.path.basename(par)], cwd=workdir, env=env,
                                 stdout=logf, stderr=subprocess.STDOUT, **NO_WINDOW)
@@ -641,10 +787,39 @@ def _run(workdir, par, st, progress=None, cancel=None, log=None, name="run"):
                 proc.kill()
                 proc.wait()
                 raise Cancelled("cancelled")
-            if progress and os.path.exists(mass):
-                tt = _read_mass(mass)[0]   # (time is the first item)
+            if deadline.expired():
+                proc.kill()
+                proc.wait()
+                elapsed = deadline.elapsed()
+                logf.write("\nStopped by ND Dam Breach Runner: wall-clock limit {:.0f} s "
+                           "reached after {:.0f} s\n".format(limit_s, elapsed))
+                raise ModelError(_wall_limit_text(limit_s, elapsed))
+            row = read_mass_tail(mass) if (progress or log) else None   # the tail only (P4)
+            if row is None:
+                continue
+            tt = row["time_s"]
+            if progress:
                 progress(min(100.0, 100.0 * tt / st.sim_time_s),
-                         "LISFLOOD-FP t = {:.2f} h".format(tt / 3600.0))
+                         "LISFLOOD-FP t = {:.2f} h, dt {:.3g} s".format(tt / 3600.0,
+                                                                       row["tstep_s"]))
+            if log and time.time() - last_dt_log >= 60.0:     # the solver's own dt, once a minute
+                last_dt_log = time.time()
+                log("LISFLOOD-FP t = {:.2f} h: time step {:.4g} s (smallest so far {:.4g} s), "
+                    "{:,} steps".format(tt / 3600.0, row["tstep_s"], row["min_tstep_s"],
+                                        row["steps"]))
+            if (collapse_s and st.dt_collapsed is None and row["tstep_s"] > 0
+                    and row["tstep_s"] < collapse_s):
+                st.dt_collapsed = (tt, row["tstep_s"])
+                if log:
+                    log("WARNING: LISFLOOD-FP's time step collapsed to {:.4g} s at t = {:.2f} h "
+                        "(a {:g} m cell needs water over {:.0f} m deep for a step that short, "
+                        "CFL {:g}): the solver is probably unstable and this run may hit its "
+                        "{:.1f} h wall-clock limit. Check the volume error when it finishes; "
+                        "the ACC stable settings (theta {:g}, CFL {:g}) or a coarser cell "
+                        "usually cure it.".format(
+                            row["tstep_s"], tt / 3600.0, cell_m, DT_COLLAPSE_DEPTH_M,
+                            float(getattr(st, "cfl", None) or 0.7), limit_s / 3600.0,
+                            STABLE_THETA, STABLE_CFL))
     with open(log_path, errors="replace", encoding="utf-8") as f:
         logtxt = f.read()
     if proc.returncode != 0:
@@ -903,6 +1078,18 @@ def check_lisflood(exe, workdir, solver=SOLVER_ACC):
             "message": msg}
 
 
+RATES = {}       # audit P2: calibrate() rates of this session, by executable path
+
+
+def known_rate(exe):
+    """The calibrate() rate measured in this session for `exe` (cell-seconds per wall second),
+    or None. workflow.run_dam uses it for the automatic wall-clock limit when the run settings
+    carry no lisflood_rate (the Estimate tool or the wizard ran the test flood)."""
+    if not exe:
+        return None
+    return RATES.get(os.path.abspath(str(exe)))
+
+
 def calibrate(exe, workdir, threads=0, cell_m=10.0, sim_s=1800.0):
     """Time a synthetic breach flood to measure this computer's LISFLOOD-FP
     speed. Returns cell-seconds of simulation per wall second at `cell_m`
@@ -924,4 +1111,7 @@ def calibrate(exe, workdir, threads=0, cell_m=10.0, sim_s=1800.0):
         dt = time.time() - t0
     except Exception:
         return None
-    return nr * nc * sim_s / max(dt, 1e-3)
+    rate = nr * nc * sim_s / max(dt, 1e-3)
+    if exe:
+        RATES[os.path.abspath(str(exe))] = rate
+    return rate
