@@ -123,31 +123,35 @@ def hazard_leg(d, v, gt, structs):
     """{id: (zone or None when dry, depth ft, vel ft/s)} the Hazard way: fastsample cell
     selection of the outline + edge ring / point disc + ring, peak pair, table rule."""
     import importlib.util
-    path = os.path.join(REPO, "DamSafety_Hazard", "fastsample.py")
+    import re
+    import types
+    hz_dir = os.path.join(REPO, "DamSafety_Hazard")
+    path = os.path.join(hz_dir, "fastsample.py")
     if not os.path.isfile(path):
         raise RuntimeError("DamSafety_Hazard/fastsample.py not found")
-    # fastsample imports only numpy and constants.ONEPASS_MIN (constants needs damsuite):
-    # load the Hazard package's two pure modules by name without the plugin __init__
-    import types
-    pkg = sys.modules.get("_hz_parity_pkg")
-    if pkg is None:
+    # fastsample is numpy + the standard library; its one plugin import is constants.ONEPASS_MIN.
+    # The Hazard's constants.py reads the data-source file through QgsApplication at import
+    # (an _Any under the stub Qt other tests install), so it is NOT imported: a private package
+    # holds a constants stand-in, and the two footprint constants are read from its text.
+    const_src = open(os.path.join(hz_dir, "constants.py"), encoding="utf-8").read()
+    consts = {}
+    for name in ("OSM_EDGE_BUFFER_FT", "DEFAULT_POINT_RADIUS_FT", "ONEPASS_MIN"):
+        m = re.search(r"^{}\s*=\s*([0-9.]+)".format(name), const_src, re.M)
+        assert m, name
+        consts[name] = float(m.group(1))
+    FS = sys.modules.get("_hz_parity_pkg.fastsample")
+    if FS is None:
         pkg = types.ModuleType("_hz_parity_pkg")
-        pkg.__path__ = [os.path.join(REPO, "DamSafety_Hazard")]
+        pkg.__path__ = [hz_dir]
         sys.modules["_hz_parity_pkg"] = pkg
-        for name in ("damsuite", "constants", "fastsample"):
-            sub = os.path.join(REPO, "DamSafety_Hazard", name)
-            if os.path.isdir(sub):
-                spec = importlib.util.spec_from_file_location(
-                    "_hz_parity_pkg." + name, os.path.join(sub, "__init__.py"),
-                    submodule_search_locations=[sub])
-            else:
-                spec = importlib.util.spec_from_file_location("_hz_parity_pkg." + name,
-                                                              sub + ".py")
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules["_hz_parity_pkg." + name] = mod
-            spec.loader.exec_module(mod)
-    FS = sys.modules["_hz_parity_pkg.fastsample"]
-    C = sys.modules["_hz_parity_pkg.constants"]
+        cmod = types.ModuleType("_hz_parity_pkg.constants")
+        cmod.ONEPASS_MIN = int(consts["ONEPASS_MIN"])
+        sys.modules["_hz_parity_pkg.constants"] = cmod
+        spec = importlib.util.spec_from_file_location("_hz_parity_pkg.fastsample", path)
+        FS = importlib.util.module_from_spec(spec)
+        sys.modules["_hz_parity_pkg.fastsample"] = FS
+        spec.loader.exec_module(FS)
+    C = types.SimpleNamespace(**consts)
     assert C.OSM_EDGE_BUFFER_FT == nh.EDGE_RING_FT and \
         C.DEFAULT_POINT_RADIUS_FT == nh.POINT_RADIUS_FT, "the footprint constants drifted"
     out = {}
