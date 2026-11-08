@@ -810,7 +810,9 @@ class ClassificationTabMixin(object):
         self._log(">>> Hazard classification...")
         ok, msg = self._load_rasters()
         if not ok:
-            QMessageBox.critical(self, "Hazard Classification Error", msg)
+            # 2.23.17 (gui-grammar: checks in the CheckPanel, never a message box): the
+            # rasters that could not be opened block Classify until they are fixed
+            self._show_input_errors([msg])
             self._update_status("CLASSIFICATION FAILED: {}".format(msg), False)
             return
         ctx = QgsProject.instance().transformContext()
@@ -867,8 +869,7 @@ class ClassificationTabMixin(object):
                 self._log(outcome.traceback)
                 log_message(outcome.traceback, MSG_CRITICAL)
                 self._update_status("CLASSIFICATION FAILED: {}".format(outcome.error), False)
-                QMessageBox.critical(self, "Hazard Classification Error",
-                                     str(outcome.error) or repr(outcome.error))
+                self._show_view("Classify")           # 2.23.17: the red line and the log say it
                 return
             res = outcome.result
             try:
@@ -885,7 +886,7 @@ class ClassificationTabMixin(object):
                 self._log(tb)
                 log_message(tb, MSG_CRITICAL)
                 self._update_status("CLASSIFICATION FAILED: {}".format(e), False)
-                QMessageBox.critical(self, "Hazard Classification Error", str(e) or repr(e))
+                self._show_view("Classify")
                 return
             self._after_classification(res)
             if everything:
@@ -1120,7 +1121,8 @@ class ClassificationTabMixin(object):
             self._finish_progress()
             self._set_busy(False)
             log_message(traceback.format_exc(), MSG_CRITICAL)
-            QMessageBox.critical(self, "Creep watch", str(e) or repr(e))
+            self._log("!!! Creep watch failed: {}".format(e))
+            self._update_status("Creep watch failed: {}".format(e), False)   # 2.23.17: no pop-up
             return
         self._finish_progress()
         self._set_busy(False)
@@ -1128,8 +1130,7 @@ class ClassificationTabMixin(object):
         if info.get("text"):
             self._log(">>> Creep watch ran: " + info["text"])
         self._log(">>> Creep watch: {} - {}".format(text, paths["html"]))
-        self._update_status("Creep watch: " + text, True)
-        QMessageBox.information(self, "Creep watch", "{}\n\n{}".format(text, paths["html"]))
+        self._update_status("Creep watch: " + text, True)      # 2.23.17: the report opens; no pop-up
         self._open_path(paths["html"])
 
     def _make_submittal(self, *args):

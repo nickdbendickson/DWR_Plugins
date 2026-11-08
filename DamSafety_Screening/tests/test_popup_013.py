@@ -177,7 +177,11 @@ checks = dlg._preflight()
 assert dlg.preflight_label.text().startswith("Check: not ready") and "ND DWR dams" in dlg.preflight_text.toPlainText()
 assert any(c["title"] == "USGS 3DEP service" and c["detail"] == "stubbed" for c in checks)
 EVENTS["messages"].clear()
-assert dlg._run_chain(preflight=True) is False and EVENTS["messages"][-1][0] == "warning" and "Not ready" in EVENTS["messages"][-1][2]
+# 0.18.19: the check list is the shared CheckPanel (no "Not ready" pop-up); a FAIL blocks the button
+assert dlg._run_chain(preflight=True) is False and not EVENTS["messages"]
+assert dlg.check_panel.blocked and not dlg.run_all_btn.isEnabled() and dlg.check_panel.n_errors >= 1
+assert dlg.preflight_btn.text().startswith("Check inputs \u26a0")
+assert any("Not ready" in m for m in dlg.log_edit.lines)
 # with the layers given (files), the check passes to the question
 dwr = _gpkg.write(os.path.join(W, "dwr.gpkg"), {"dams": ("Point", [("structure_", "INTEGER"), ("dam_name", "TEXT"), ("max_dam_he", "REAL"),
                                                            ("normal_vol", "REAL"), ("max_pool_v", "REAL"), ("hazard_cla", "TEXT"), ("status", "TEXT")],

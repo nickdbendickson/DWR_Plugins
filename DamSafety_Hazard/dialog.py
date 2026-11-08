@@ -908,8 +908,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             log_message(tb, MSG_CRITICAL)
             self._finish_progress(force=True)
             self._set_busy(False)
-            self._update_status("FAILED: {}".format(e), False)
-            QMessageBox.critical(self, "Error", str(e) or repr(e))
+            self._update_status("FAILED: {}".format(e), False)   # 2.23.17: the red line, no pop-up
 
     def _cancel_task(self, *args):
         if self._task is not None:

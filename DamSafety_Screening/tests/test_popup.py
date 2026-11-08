@@ -694,14 +694,20 @@ assert [c[0] for c in calls] == ["1", "2", "3", "4", "5", "6", "7", "8", "10"] a
 assert dlg5.chain_btn.isEnabled() and not dlg5.chain_stop_btn.isEnabled() and dlg5.step_button["1"].isEnabled()
 assert dlg5.step_state["10"].text() == STATE_TEXT["done"] and "Nothing required is left" in dlg5.hint_label.text()
 assert any(">>> Step 5 - Breach parameters and hydrograph" in m for m in dlg5.log_edit.lines)
-assert dlg5._run_chain() is False and EVENTS["messages"][-1][2] == "Nothing to run: every required step is done."
+# 0.18.19 (gui-grammar "Checks: CheckPanel, never a message box"): a refusal is the red panel
+# next to the Run button, not a pop-up; Screen this county is blocked until the next check
+EVENTS["messages"].clear()
+assert dlg5._run_chain() is False and not EVENTS["messages"]
+assert dlg5.check_panel.blocked and dlg5.check_panel.n_errors == 1 and not dlg5.run_all_btn.isEnabled()
+assert any("Nothing to run: every required step is done." in m for m in dlg5.log_edit.lines)
 # a chain that fails: the window is usable again and says why
 W4 = new_work("w4k")
 dlg5.work_edit.setText(W4)
 dlg5._start_algorithm = make_start(fail_at="2")
 EVENTS["messages"].clear()
 assert dlg5._run_chain() is True and not dlg5.chain.active and not dlg5.chain.ok
-assert EVENTS["messages"][-1][0] == "warning" and "Step 2 (Cache terrain per dam) did not finish: boom" in EVENTS["messages"][-1][2]
+assert [m[0] for m in EVENTS["messages"]] == ["question"] and dlg5.check_panel.blocked   # the failure is in the red panel, no warning pop-up
+assert any("Step 2 (Cache terrain per dam) did not finish: boom" in m for m in dlg5.log_edit.lines)
 assert dlg5.chain_btn.isEnabled() and dlg5.step_button["2"].isEnabled()
 # the optional steps ticked in the window are saved and used (6 starts ticked: untick, re-tick)
 assert dlg5.chain_check["6"].isChecked() and wf.DEFAULT_SETTINGS["chain"] == ["6"]
@@ -717,7 +723,8 @@ dlg5._start_algorithm = make_start()
 del calls[:]
 EVENTS["messages"].clear()
 dlg5._run_chain()
-assert not calls and "Something required is empty" in EVENTS["messages"][-1][2]
+assert not calls and [m[0] for m in EVENTS["messages"]] == ["question"] and dlg5.check_panel.blocked
+assert any("Something required is empty" in m for m in dlg5.log_edit.lines)
 # a stop while a step runs
 W4 = new_work("w4m")
 dlg5.work_edit.setText(W4)

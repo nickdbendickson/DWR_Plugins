@@ -40,7 +40,8 @@ every item was exercised against the simulated QGIS (three flavours: 3.28, 3.40,
 
 - **Simple tab.** Work folder, what to screen (DWR dam inventory / ponds and dugouts / both), data
   package, terrain, flood engine, hazard criterion, settings file, preset; the steps in plain words
-  with their state; `Check before running`, `Run all`, `Run one dam...`. The 0.12 window is the
+  with their state; `Check inputs`, `Screen this county`, `One dam…` (0.18.19: the check list is the
+  red / amber panel above the buttons, never a pop-up). The 0.12 window is the
   `All steps` tab (a numbered button per tool). The built-in engine is the default now (no install).
 - **One settings file for the suite.** `damsuite_settings.xlsx` (or `.csv`): every engineer-chosen
   value of the tools of the three plugins in one table (plugin, tool, key, parameter, unit, value,
@@ -58,7 +59,7 @@ every item was exercised against the simulated QGIS (three flavours: 3.28, 3.40,
   in its label. New `_FT` parameters; the old metre parameters stay hidden and are still read, so a
   saved model or history from before 0.13 gives the same result. Starting values are round numbers
   in feet (e.g. toe search 200 ft instead of 60 m), so a run with defaults can differ slightly.
-- **Preflight check (tool 17, `Check before running`).** A few seconds: work folder and disk space,
+- **Preflight check (tool 17, `Check inputs`).** A few seconds: work folder and disk space,
   the USGS 3DEP service or the local DEM folder, the LISFLOOD-FP executable when that engine is
   chosen, the dam / water-body / dam-line / structures layers with their fields and CRS, dams without
   a dam line, the ACER TM 11 chart file, the Runner plugin for 7b, the settings file. OK / WARN /

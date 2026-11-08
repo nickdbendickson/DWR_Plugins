@@ -179,6 +179,32 @@ def check_window_colours(problems):
                         os.path.relpath(path, ROOT), n))
 
 
+def check_message_box_checks(problems):
+    """2026-11-08 (docs/gui-grammar.md "Checks: CheckPanel, never a message box"): no
+    QMessageBox.warning / .critical inside a run handler of a window file. The rule and its
+    file list live in tools/gui_lint.py (lifted out with ast: importing gui_lint boots QGIS);
+    tools/test_gui_lint.py tests the rule itself."""
+    import ast
+    import types
+    src = _read(os.path.join(ROOT, "tools", "gui_lint.py"))
+    tree = ast.parse(src)
+    keep = [n for n in tree.body if (isinstance(n, ast.FunctionDef) and n.name == "message_boxes_in_run_handlers")
+            or (isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
+                and n.targets[0].id in ("RUN_HANDLER_RE", "MESSAGE_BOX_KINDS", "LINT_WINDOW_FILES"))]
+    mod = types.ModuleType("gui_lint_rule")
+    mod.re = re
+    exec(compile(ast.Module(body=keep, type_ignores=[]), "gui_lint.py", "exec"), mod.__dict__)
+    for plugin in PLUGINS:
+        for f in mod.LINT_WINDOW_FILES:
+            path = os.path.join(ROOT, plugin, f)
+            if not os.path.isfile(path):
+                continue
+            for fn, kind, line in mod.message_boxes_in_run_handlers(_read(path), path):
+                _fail(problems, "{}/{}:{}: QMessageBox.{} inside the run handler {}() - a check "
+                                "belongs in the CheckPanel (docs/gui-grammar.md)".format(
+                                    plugin, f, line, kind, fn))
+
+
 def check_damsuite_pin(problems):
     """The committed shared pin (tools/damsuite_pin.json) still matches the master, so the master
     cannot be edited without regenerating the pin both forks vendor from."""
@@ -706,6 +732,7 @@ def main():
                      ("versions and changelogs vs main", check_against_base),
                      ("cross-plugin identical", check_cross_plugin_identical),
                      ("shared/ui drift", check_ui_drift), ("window colours", check_window_colours),
+                     ("message-box checks in run handlers", check_message_box_checks),
                      ("zone colours (REG_05.2026)", check_zone_colours),
                      ("fork parity", check_fork_parity),
                      ("qt6 enums", check_qt6_enums),

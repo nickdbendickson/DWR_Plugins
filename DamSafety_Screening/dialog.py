@@ -32,7 +32,7 @@ from .core import review as rv
 from .damsuite import settings as DS
 from .tokens import TOKENS
 from .tool_dialog import exec_tool_dialog
-from .ui_widgets import Collapsible, InfoBanner, StageStrip
+from .ui_widgets import CheckPanel, Collapsible, InfoBanner, StageStrip
 
 TITLE = "DamSafety Screening"
 SCOPE = "NDDamScreening"          # QgsProject entry scope
@@ -301,12 +301,22 @@ class NDDamScreeningDialog(QDialog):
         """The primary action at the bottom right, beside its siblings (docs/gui-grammar.md);
         shown on the Run tab, where its inputs are."""
         self.action_area = QWidget()
-        bar = QHBoxLayout(self.action_area)
-        bar.setContentsMargins(0, 0, 0, 0)
+        outer = QVBoxLayout(self.action_area)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
+        # 0.18.19 (docs/gui-grammar.md "Checks: CheckPanel, never a message box"): the check
+        # list and the "Not ready" / "nothing to run" refusals of Screen this county are the
+        # shared panel above the action bar; a red result blocks the primary button
+        self.check_panel = CheckPanel(self.preflight_btn, self.run_all_btn, action="screening")
+        self.check_panel.errors_fixed.connect(lambda _ok: self.refresh())
+        outer.addWidget(self.check_panel)
+        bar = QHBoxLayout()
         bar.addWidget(self.next_hint, 1)
+        bar.addWidget(self.preflight_btn)
         bar.addWidget(self.one_dam_btn)
         bar.addWidget(self.stop_btn)
         bar.addWidget(self.run_all_btn)
+        outer.addLayout(bar)
         return self.action_area
 
     def _on_tab_changed(self, index):
@@ -531,7 +541,9 @@ class NDDamScreeningDialog(QDialog):
         box.addWidget(self.apply_preset_btn)
         more.addLayout(box, mr, 1, 1, 2)
         self._more_grid = more
-        self.preflight_btn = QPushButton("Check before running")
+        self.preflight_btn = QPushButton("Check inputs")      # in the action bar (0.18.19)
+        self.preflight_btn.setToolTip("Runs the check list for the steps a county screen would "
+                                      "run; a FAIL blocks Screen this county until it is fixed.")
         self.preflight_btn.clicked.connect(lambda _c=False: self._preflight())
         self.continue_btn = QPushButton("Continue")
         self.continue_btn.setEnabled(False)
@@ -587,7 +599,7 @@ class NDDamScreeningDialog(QDialog):
         inner.addLayout(store)
         inner.addLayout(self._more_grid)
         extra = QHBoxLayout()
-        for b in (self.preflight_btn, self.selected_dams_btn, self.to_runner_btn,
+        for b in (self.selected_dams_btn, self.to_runner_btn,
                   self.handoff_runner_btn, self.handoff_hazard_btn):
             extra.addWidget(b)
         inner.addLayout(extra)
@@ -1701,6 +1713,9 @@ class NDDamScreeningDialog(QDialog):
         self.next_btn.setEnabled(bool(nxt) and not busy)
         for b in (self.chain_btn, self.run_all_btn, self.one_dam_btn, self.preflight_btn):
             b.setEnabled(have and not busy)
+        panel = getattr(self, "check_panel", None)
+        if panel is not None and panel.blocked:          # 0.18.19: red check results block Screen
+            self.run_all_btn.setEnabled(False)
         self.chain_stop_btn.setEnabled(busy)
         self.stop_btn.setEnabled(busy)
         cont = getattr(self, "continue_btn", None)
@@ -1820,7 +1835,34 @@ class NDDamScreeningDialog(QDialog):
         self.preflight_label.setText("Check: " + pf.summary(checks))
         for line in lines[:1]:
             self._log(line)
+        self._show_checks(checks)
         return checks
+
+    def _show_checks(self, checks, extra_errors=()):
+        """The check list in the shared CheckPanel: FAIL -> red (Screen this county blocked),
+        WARN -> amber rows, the rest folded into "N checks passed". `extra_errors`: refusals
+        of the run itself (no work folder, nothing to run), reported the same way."""
+        from .ui_widgets import ERROR, WARNING, OK
+        level = {pf.FAIL: ERROR, pf.WARN: WARNING}
+        results = [(ERROR, e) for e in extra_errors]
+        for c in checks or []:
+            lvl = level.get(c.get("status"), OK)
+            text = "{}: {}".format(c.get("title", ""), c.get("detail", ""))
+            if c.get("fix") and lvl != OK:
+                text += " \u2192 " + c["fix"]
+            results.append((lvl, text))
+        self.check_panel.set_results(results)
+
+    def _refuse_run(self, text):
+        """A county run that cannot start: the reason in the red panel (never a pop-up), the
+        log, and the Run tab in front so it is seen."""
+        self._show_checks([], extra_errors=[text])
+        self._log("!!! " + text)
+        try:
+            self.tabs.setCurrentIndex(0)
+        except Exception:                                        # noqa
+            pass
+        return False
 
     # ------------------------------------------------------------ run in order --
     def _yes(self):
@@ -1919,8 +1961,7 @@ class NDDamScreeningDialog(QDialog):
         first and a FAIL stops it."""
         work = self.work_edit.text().strip()
         if not work or not os.path.isdir(work):
-            QMessageBox.information(self, TITLE, "Choose a work folder first.")
-            return False
+            return self._refuse_run("Choose a work folder first.")
         if self.chain is not None and self.chain.active:
             return False
         S = self.settings()
@@ -1928,18 +1969,15 @@ class NDDamScreeningDialog(QDialog):
         # what would run, and which data it would run without
         first, problem = wf.chain_next(work, S, include, ())
         if first is None and problem:
-            QMessageBox.information(self, TITLE, "Nothing can run: " + problem + ".")
-            return False
+            return self._refuse_run("Nothing can run: " + problem + ".")
         steps_planned = wf.chain_plan(work, S, include)
         if not steps_planned:
-            QMessageBox.information(self, TITLE, "Nothing to run: every required step is done.")
-            return False
+            return self._refuse_run("Nothing to run: every required step is done.")
         if preflight:
             checks = self._preflight(steps=steps_planned, settings=S)
             if not pf.ready(checks):
-                QMessageBox.warning(self, TITLE, "Not ready: " + pf.summary(checks) +
-                                    "\n\nSee the check list on the Run tab and fix it first.")
-                return False
+                self._log("!!! Not ready: " + pf.summary(checks))
+                return False                   # the red panel says what to fix
         plan = ["{} - {}".format(st, wf.TITLE[st]) for st in steps_planned]
         notes = []
         for st in steps_planned:
@@ -1957,6 +1995,7 @@ class NDDamScreeningDialog(QDialog):
         self._one_dam = None
         self.chain = wf.Chain(work, self.settings, include, self._start_algorithm, log=self._log,
                               problems=self._chain_problems, on_end=self._chain_ended)
+        self.check_panel.clear()
         self.chain.begin()
         self.refresh()
         return True
@@ -1997,7 +2036,10 @@ class NDDamScreeningDialog(QDialog):
         self._one_dam = None
         self.refresh()
         if not ok:
-            QMessageBox.warning(self, TITLE, text)
+            # 0.18.19: the step that failed, in the red panel next to the Run button (the log
+            # has the detail); it clears on the next check or run
+            self._show_checks([], extra_errors=[text])
+            self._log("!!! " + text)
             return
         if one:
             dam_id, folder = one
@@ -2011,8 +2053,7 @@ class NDDamScreeningDialog(QDialog):
     def _run_one_dam(self, dam_id=None):
         work = self.work_edit.text().strip()
         if not work or not os.path.isdir(work):
-            QMessageBox.information(self, TITLE, "Choose a work folder first.")
-            return False
+            return self._refuse_run("Choose a work folder first.")
         if self.chain is not None and self.chain.active:
             return False
         S = self.settings()
@@ -2034,8 +2075,7 @@ class NDDamScreeningDialog(QDialog):
         try:
             os.makedirs(folder, exist_ok=True)
         except OSError as e:
-            QMessageBox.warning(self, TITLE, "The one-dam folder cannot be created: {}".format(e))
-            return False
+            return self._refuse_run("The one-dam folder cannot be created: {}".format(e))
         S1 = wf.one_dam_settings(S, work, dam_id)
         what = S.get("screen_what", 0)
         include = tuple(k for k in ("16", "18") if (k == "16" and what in (1, 2)) or (k == "18" and what == 2))
@@ -2043,8 +2083,7 @@ class NDDamScreeningDialog(QDialog):
             include = ("0",) + include
         plan = wf.chain_plan(folder, S1, include)
         if not plan:
-            QMessageBox.information(self, TITLE, "Nothing to run for {}: every step is done in {}.".format(dam_id, folder))
-            return False
+            return self._refuse_run("Nothing to run for {}: every step is done in {}.".format(dam_id, folder))
         text = "Run the whole chain for {} alone?\n\nFolder: {}\nSteps: {}\n\nThe quick screen (6) is skipped so " \
                "the flood is simulated; the result is a screening of one dam, not the batch.".format(
                    dam_id, folder, ", ".join(SG.plain(k, wf.TITLE[k]) for k in plan))
@@ -2067,15 +2106,13 @@ class NDDamScreeningDialog(QDialog):
         """Pick several dams and run the county chain for those dams only."""
         work = self.work_edit.text().strip()
         if not work or not os.path.isdir(work):
-            QMessageBox.information(self, TITLE, "Choose a work folder first.")
-            return False
+            return self._refuse_run("Choose a work folder first.")
         if self.chain is not None and self.chain.active:
             return False
         S = self.settings()
         choices = wf.dam_choices(work, S, self._read_rows)
         if not choices:
-            QMessageBox.information(self, TITLE, "No dams to pick. Run step 1 first, or fill the suite folder.")
-            return False
+            return self._refuse_run("No dams to pick. Run step 1 first, or fill the suite folder.")
         dlg = QDialog(self)
         dlg.setWindowTitle(TITLE)
         dlg.setMinimumWidth(420)
@@ -2109,8 +2146,7 @@ class NDDamScreeningDialog(QDialog):
             return False
         ids = [lst.item(i).data(getattr(Qt, "ItemDataRole", Qt).UserRole) for i in range(lst.count()) if lst.item(i).checkState() == getattr(Qt, 'CheckState', Qt).Checked]
         if not ids:
-            QMessageBox.information(self, TITLE, "No dams checked.")
-            return False
+            return self._refuse_run("No dams checked.")
         S1 = dict(S)
         S1["only_ids"] = ",".join(ids)
         what = S.get("screen_what", 0)
@@ -2119,8 +2155,7 @@ class NDDamScreeningDialog(QDialog):
             include = ("0",) + include
         plan = wf.chain_plan(work, S1, include)
         if not plan:
-            QMessageBox.information(self, TITLE, "Nothing to run: every step is done.")
-            return False
+            return self._refuse_run("Nothing to run: every step is done.")
         text = "Run the county chain for {} dams?\n\n{}\n\nSteps: {}".format(
             len(ids), ", ".join(ids[:8]) + ("\u2026" if len(ids) > 8 else ""),
             ", ".join(SG.plain(k, wf.TITLE[k]) for k in plan))

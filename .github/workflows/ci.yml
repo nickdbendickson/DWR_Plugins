@@ -39,6 +39,8 @@ jobs:
         run: python3 tools/ci_checks.py
       - name: ci_checks self-test (version bookkeeping gates)
         run: python3 tools/test_ci_checks.py
+      - name: gui_lint source rule self-test (no message-box checks in run handlers)
+        run: python3 tools/test_gui_lint.py
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
 

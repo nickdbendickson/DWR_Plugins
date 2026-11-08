@@ -6,7 +6,7 @@ manually started workflow.)
 
 | Job | What it runs | Time |
 |---|---|---|
-| `fast-checks` | `tools/ci_checks.py` (damsuite drift and pin, shared/ui drift, versions and changelogs vs `main`, files kept identical across plugins, zone and window colours, Qt6 enum spellings, compile, golden baseline), `tools/test_ci_checks.py`, the fingerprint nested-VRT test. No QGIS. | < 1 min |
+| `fast-checks` | `tools/ci_checks.py` (damsuite drift and pin, shared/ui drift, versions and changelogs vs `main`, files kept identical across plugins, zone and window colours, Qt6 enum spellings, no message-box checks in run handlers, compile, golden baseline), `tools/test_ci_checks.py`, `tools/test_gui_lint.py`, the fingerprint nested-VRT test. No QGIS. | < 1 min |
 | `plugin-suites` | Screening `run_all.py`, Runner fast suite, Hazard `run_all.py`, Hazard Lite, `tools/gui_lint.py`, the Runner wizard and batch-chain real-Qt scripts, pytest for suite dams and Setup, on QGIS from conda-forge. | 10-20 min |
 | `model-tests` | `python -m nd_breach_runner.tests.run_tests --models` on LISFLOOD-FP 8.3 built from the Zenodo source with `DamSafety_Runner/scripts/build_lisflood_linux.sh` (cached), and ANUGA 4.0.1 in its own conda env. | 10-17 min |
 
@@ -49,6 +49,7 @@ export QT_QPA_PLATFORM=offscreen
 git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 CI_BASE_REF=origin/main $PY tools/ci_checks.py
 $PY tools/test_ci_checks.py
+$PY tools/test_gui_lint.py
 $PY DamSafety_Hazard/tests/test_fingerprint_vrt.py
 
 # plugin-suites
