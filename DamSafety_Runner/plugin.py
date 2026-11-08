@@ -78,6 +78,11 @@ class NDBreachRunnerPlugin:
         self.action.triggered.connect(self.run_plugin)
         self.iface.addPluginToMenu(MENU, self.action)
         self.actions.append(self.action)
+        try:                              # 3.16.12: the home's one menu entry (suite_home)
+            from . import suite_home
+            suite_home.add_home_action(self, self.iface)
+        except Exception:                                        # noqa - never block the plugin
+            pass
 
 
     def show_results_dock(self, folder=None, *args):

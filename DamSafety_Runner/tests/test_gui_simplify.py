@@ -138,3 +138,29 @@ def chain_steps_and_self_tests_are_hidden_from_the_toolbox_but_still_run():
     inst = names["selftest"]()
     inst.initAlgorithm()
     assert RT.param_defs(inst)
+
+
+@register
+def every_suite_plugin_adds_the_one_dam_suite_home_entry():
+    """Usability plan change 4 (2026-11-08): the Dam suite home had no menu entry in any plugin
+    (Screening's helper was never called), so the front door was unreachable. Each of the three
+    plugins' initGui now calls suite_home.add_home_action, which adds the one "Dam suite home…"
+    entry of Plugins > Dam safety once per QGIS, and unload removes it (suite_actions). Hazard's
+    plugin.py cannot be imported without QGIS here, so this reads the three files with ast."""
+    for p in PLUGINS:
+        src = open(os.path.join(REPO, p, "plugin.py"), encoding="utf-8").read()
+        tree = ast.parse(src)
+        fns = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+        assert "run_home" in fns and "initGui" in fns and "unload" in fns, p
+        init_calls = {n.func.attr for n in ast.walk(fns["initGui"])
+                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        if p == "DamSafety_Screening":
+            init_calls |= {n.func.attr for n in ast.walk(fns["_add_suite_menu"])
+                           if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+            assert "_add_suite_menu" in init_calls, p
+        assert "add_home_action" in init_calls, (p, init_calls)
+        unload_calls = {n.func.attr for n in ast.walk(fns["unload"])
+                        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        assert "remove_suite_actions" in unload_calls, p
+    home = open(os.path.join(REPO, "shared", "ui", "suite_home.py"), encoding="utf-8").read()
+    assert 'SUITE_MENU = "Dam safety"' in home and '"NDSuiteHome"' in home

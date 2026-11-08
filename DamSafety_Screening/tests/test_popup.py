@@ -395,14 +395,15 @@ class Iface:
 iface = Iface()
 plug = pkg.classFactory(iface)
 plug.initGui()
-# one entry, Plugins > Dam safety > Screen a county... (the suite home and the suite settings
-# are opened from the suite's own windows, not from more menu entries)
-assert [m[0] for m in iface.menu] == ["Dam safety"] and plug.action is iface.menu[0][1]
-assert plug.home_action is None and plug.suite_actions == []
+# two entries under Plugins > Dam safety: Screen a county... and the one "Dam suite home…"
+# (0.18.19, usability plan: the home had no menu entry in any plugin before)
+assert [m[0] for m in iface.menu] == ["Dam safety", "Dam safety"] and plug.action is iface.menu[0][1]
+assert plug.home_action is None and plug.suite_actions == [iface.menu[1][1]]
+assert iface.menu[1][1].text() == "Dam suite home\u2026" and iface.menu[1][1].triggered._slots == [plug.run_home]
 assert plug.action.triggered._slots == [plug.run_plugin]
 assert plug.provider is not None                                       # the toolbox provider is still there
 plug.initGui()                                                          # a second initGui adds no second entry
-assert len(iface.menu) == 1
+assert len(iface.menu) == 2
 plug.action.triggered.emit()
 first = plug.dialog
 assert first is not None and first.isVisible()
@@ -806,7 +807,7 @@ assert "DamSafety Hazard is not enabled in this QGIS" in EVENTS["messages"][-1][
 # the plugin entry point: one window, re-created when destroyed
 plug_home = pkg.classFactory(Iface())
 plug_home.initGui()
-assert [m[0] for m in plug_home.iface.menu] == ["Dam safety"]
+assert [m[1].objectName() for m in plug_home.iface.menu] == ["NDDamScreeningAction", "NDSuiteHome"]
 h1 = plug_home.run_home()
 assert h1 is plug_home.home_dialog and h1.isVisible() and plug_home.run_home() is h1
 h1.deleteLater()

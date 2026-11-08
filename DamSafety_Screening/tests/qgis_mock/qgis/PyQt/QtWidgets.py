@@ -633,6 +633,18 @@ class _QAction(QWidget):
     def __init__(self, *a):
         super().__init__()
         self.triggered = _Signal()
+        # QAction(text, parent) / QAction(icon, text, parent): the label, for the menu tests
+        self._text = next((x for x in a if isinstance(x, str)), "")
+        self._object_name = ""
+
+    def text(self):
+        return self._text
+
+    def setObjectName(self, name):
+        self._object_name = str(name)
+
+    def objectName(self):
+        return self._object_name
 
 
 if not QT6:
