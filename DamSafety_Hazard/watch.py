@@ -643,14 +643,19 @@ def _unsupported_settings(cfg_over):
     folder / scenarios / output folder, a wrongly typed value) when they differ
     from what the worker would use (the default)."""
     cfg_over = cfg_over or {}
+    # 2.23.15: the window resolves the project's point layers before the watch task starts
+    # (the worker thread never scans the project); none found is written as [] - the same
+    # as a child's "auto" in its empty project, so it does not force the sequential mode
+    skip = {k for k, v in cfg_over.items() if k == "point_sources" and v == []}
     bad = {k for k, v in cfg_over.items()
-           if v is not None and not isinstance(v, (bool, int, float, str))}
+           if v is not None and not isinstance(v, (bool, int, float, str)) and k not in skip}
     try:
         from .pipeline import DEFAULTS
         from .processing_provider import worker_settings
         passed = worker_settings(cfg_over)
         for k, v in cfg_over.items():
-            if k in DEFAULTS and k not in passed and v is not None and k not in bad:
+            if k in DEFAULTS and k not in passed and v is not None and k not in bad \
+                    and k not in skip:
                 try:
                     same = v == DEFAULTS[k]
                 except Exception:

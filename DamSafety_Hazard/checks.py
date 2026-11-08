@@ -331,8 +331,9 @@ def check_services(urls, progress=None):
     from .constants import HTTP_USER_AGENT
     out = []
     # v2.6.1: offline data pack. v2.6.2: described from its manifest - a zip
-    # pack is not unpacked here (Check inputs runs on the main thread; the
-    # first unpack of a large pack would freeze QGIS)
+    # pack is not unpacked here (until 2.23.15 Check inputs ran on the main
+    # thread, where the first unpack of a large pack froze QGIS; the cheap
+    # manifest read is kept now that it runs in a task)
     pack, only = offline_config()
     if pack:
         from .offline_pack import describe
@@ -391,10 +392,25 @@ def service_list(cfg):
     return s
 
 
+def outline_text(lyr):
+    """What the check says about the building-outline layer (its file name, else its layer
+    name); "" for none. Main thread (the layer may be a project layer)."""
+    if lyr is None:
+        return ""
+    try:
+        return os.path.basename(lyr.source().split("|")[0]) or lyr.name()
+    except Exception:
+        return lyr.name() if hasattr(lyr, "name") else str(lyr)
+
+
 def check_all(paths, output_folder="", dam_folder="", cfg=None, services=False,
-              progress=None):
+              progress=None, outline=None):
     """All checks: rasters of the breach (and no-breach) scenario, the
-    building-outline file, optionally the services. [(level, text)]."""
+    building-outline file, optionally the services. [(level, text)].
+
+    2.23.15: `outline` - the building-outline description already found on the main
+    thread (outline_text(); "" for none), so the check can run in a QgsTask without
+    looking at the project. None (scripts, the Processing tools): found here."""
     from .osm_processing import get_osm_candidates
     cfg = cfg or {}
     out = check_rasters(paths.get("depth"), paths.get("vel"), paths.get("arr"),
@@ -410,13 +426,14 @@ def check_all(paths, output_folder="", dam_folder="", cfg=None, services=False,
         out.append((WARNING, "no arrival raster - no warning times, the EAP list is not "
                              "sorted by time"))
     if output_folder:
-        try:
-            outl = get_osm_candidates(output_folder, dam_folder)
-        except Exception:
-            outl = None
-        if outl is not None:
-            out.append((OK, "building outlines: {}".format(
-                os.path.basename(outl.source().split("|")[0]) or outl.name())))
+        if outline is None:
+            try:
+                outl = get_osm_candidates(output_folder, dam_folder)
+            except Exception:
+                outl = None
+            outline = outline_text(outl)
+        if outline:
+            out.append((OK, "building outlines: {}".format(outline)))
         elif cfg.get("download_usa_structures", True):
             out.append((OK, "no FEMA_Structures.gpkg yet - it will be downloaded"))
         else:

@@ -675,6 +675,16 @@ Nick's rule (10/30/2026): any house in the ACER judgment zone is labeled **mediu
 
 Example: DWR-4031 (Washek), 10 m toe run. House 16775's centroid is below the judgment line, but its northwest corner cell is in the judgment zone. The class of record is MEDIUM (Nick, Oct 30, 6:11 PM CDT: "Would be medium hazard and judgement call for engineer").
 
+## Hazard window: imports, Check inputs, creep watch and self-test no longer freeze QGIS (Hazard 2.23.15)
+
+Every long job of the Hazard window now runs in the background, the way Classify has since v2.6:
+
+- **Import HEC-RAS plan results** > Import, **Import DSS-WISE Lite results** > Import, **Check inputs** (with the download-service probes), **Creep watch…** and the gear menu's **Run self-test**.
+- While one works, QGIS stays usable (pan the canvas, open other panels); the window's own buttons and the options the job will apply at the end are greyed out until it finishes, and the progress bar's **Cancel** stops it at its next step. A cancelled import leaves the Setup boxes and the project as they were.
+- The result step (Setup boxes filled, layers added, the check panel, the self-test report box) comes when the job finishes. If you open another project while an import runs, the files are still written to the outputs folder but are not added to the new project; the log says so.
+- Check inputs with no network reports the services as not reachable after the usual network timeout, without freezing QGIS meanwhile.
+- The self-test's print-layout / PDF and Processing-provider checks run at the end on the main thread (a short pause while the bar sits at 99 %), the rest in the background.
+
 ## Offline runs use the Oct 29 offline pack
 
 Offline runs now use `offline_packs_20261029_full`. The older `offline_packs_20261021` pack no longer exists, so point any saved "Pack:" setting or script at the Oct 29 pack.
@@ -692,3 +702,4 @@ Offline runs now use `offline_packs_20261029_full`. The older `offline_packs_202
 - #213: by the PR, spec test 8 (Windows OSGeo4W 3.34 / macOS 3.40 behind a proxy) was not run, tests 4 and 5 used a synthetic Casselton fixture (not the DWR-2801, 3034 or 2865 results), and test 6 (the look against the review maps) was by eye only. The sample PNGs the PR names were never committed. CI has no matplotlib, so the Runner PNG checks skip there. That fast runs and ensemble members keep imagery off was checked in the Hazard code (`FAST_RUN_OFF`, `ensemble.py`); for the Runner only the ensemble cache key was checked. Hazard's "an offline pack means no web imagery" rule and the #210 bed floor default (off) are waiting for Nick, and so is whether the #212 1 m channel depth should decide fords.
 - Small oddity: Hazard's `report_imagery` default is True in `pipeline.DEFAULTS`, but two reads in `pipeline.py` fall back to False when the key is missing from the settings. Saved settings normally carry it; not tried in QGIS.
 - The installed copy of the plugins may lag behind main.
+- The Hazard 2.23.15 background-job section was checked in the source and the stub-QGIS tests only; no import, check or watch was run in a real QGIS for this guide (the PR lists the manual checks).
