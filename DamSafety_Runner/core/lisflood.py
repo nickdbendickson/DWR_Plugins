@@ -26,6 +26,10 @@ NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}   # CREATE_
 
 
 ARRIVAL_TOL_M = 0.001    # LISFLOOD-FP writes depth to 3 decimals
+# audit P3 (3.16.10): the dtype of the result grids read_results returns (depth, velocity,
+# arrival, WSE). The files hold 3 decimals from a single-precision solver; float32 keeps every
+# digit of them and halves the four full-domain arrays. Elevation grids stay float64.
+RESULT_DTYPE = np.float32
 
 # The line LISFLOOD-FP prints when it does not have the arrival-depth patch (it then ignores
 # the inittm_depth keyword and records arrival at the first wetting, about 1 mm).
@@ -881,32 +885,41 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
             if required:
                 raise ModelError("The flood model did not write {}".format(p))
             return None
-        g = Grid.read_asc(p)
+        # audit P3 (3.16.10): the result files are read as float32. LISFLOOD-FP writes them
+        # to 3 decimals (1 mm, 0.01 ft/s, 0.001 h) from its own single-precision arrays, so
+        # float32 (7 significant digits: 0.0001 m at a 500 m WSE) loses nothing the file has
+        # and halves the four full-domain arrays. Elevation grids stay float64 (grid.Grid).
+        g = Grid.read_asc(p, dtype=RESULT_DTYPE)
         a = g.data
-        a[a == g.nodata] = np.nan
+        a[a == RESULT_DTYPE(g.nodata)] = np.nan
         if a.shape != dem.data.shape:
             raise ModelError("{} has shape {} but the DEM is {}".format(p, a.shape,
                                                                         dem.data.shape))
         return a
 
+    f32 = RESULT_DTYPE
     hmax = load(".max")
     vmax = load(".maxVc", required=False)
     vmax_written = vmax is not None
     arr = load(".inittm", required=False)
     wse = load(".mxe", required=False)
     notes = []
-    hmax = np.where(np.isfinite(hmax), hmax, 0.0)
-    wet = hmax >= st.arrival_depth_m - ARRIVAL_TOL_M
+    hmax = np.where(np.isfinite(hmax), hmax, f32(0.0))
+    # the thresholds are compared in float64 (as before 3.16.10) so a cell at exactly the
+    # arrival depth is counted the same way the float64 read counted it
+    hmax64 = hmax.astype(np.float64)
+    wet = hmax64 >= st.arrival_depth_m - ARRIVAL_TOL_M
     if vmax is None:
         notes.append("The flood model wrote no maximum velocity (.maxVc).")
-        vmax = np.full(hmax.shape, np.nan)
-    vmax = np.where(np.isfinite(vmax) & (hmax >= st.velocity_min_depth_m), vmax, 0.0)
+        vmax = np.full(hmax.shape, np.nan, dtype=f32)
+    vmax = np.where(np.isfinite(vmax) & (hmax64 >= st.velocity_min_depth_m), vmax, f32(0.0))
     if arr is None:
-        arr = np.full(hmax.shape, np.nan)
-    arr = np.where(np.isfinite(arr) & (arr >= 0) & wet, arr, np.nan)
+        arr = np.full(hmax.shape, np.nan, dtype=f32)
+    arr = np.where(np.isfinite(arr) & (arr >= 0) & wet, arr, f32(np.nan))
     if wse is None:
-        wse = np.where(hmax > 0, dem.data + hmax, np.nan)
-    wse = np.where(hmax > 0, wse, np.nan)
+        # the DEM is float64: the sum is taken there and rounded once into float32
+        wse = np.where(hmax > 0, dem.data + hmax64, np.nan).astype(f32)
+    wse = np.where(hmax > 0, wse, f32(np.nan))
     mass_rows = _read_mass_rows(os.path.join(res, name + ".mass"))   # parse the .mass file once
     last_t, verr, vol, qin_max, worst = _mass_summary(mass_rows)
     injected = hydrograph.volume_until(last_t) or hydrograph.volume_m3
@@ -914,9 +927,9 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
     stats = {
         "cells": int(dem.data.size), "cell_size_m": dem.dx,
         "sim_time_hr": round(last_t / 3600.0, 2),
-        "max_depth_ft": round(float(np.nanmax(hmax)) / FT, 2),
+        "max_depth_ft": round(float(np.nanmax(hmax64)) / FT, 2),
         "max_velocity_fps": round(float(np.nanmax(vmax)) / FT, 2),
-        "flooded_acres": round(float((hmax >= st.arrival_depth_m).sum()) * dem.dx ** 2
+        "flooded_acres": round(float((hmax64 >= st.arrival_depth_m).sum()) * dem.dx ** 2
                                / ACRE, 1),
         "peak_inflow_cfs": round(qin_max / CFS, 0),
         # 3.13.2 (DWR-4031 toe10m): peak_inflow_cfs is the largest Qin at the .mass output
@@ -977,9 +990,9 @@ def read_results(workdir, dem, st, hydrograph, name="run"):
         notes.append("The flood model's mass-balance error is {}% of the injected volume (limit "
                      "1%); try a smaller cell size or initial time step.".format(
                          stats["max_volume_error_pct"]))
-    return Envelopes(dem.like(hmax, nodata=np.nan), dem.like(vmax, nodata=np.nan),
-                     dem.like(arr, nodata=np.nan), dem.like(wse, nodata=np.nan), stats, notes,
-                     read_gauges(workdir, st, name))
+    return Envelopes(dem.like(hmax, nodata=np.nan, dtype=f32), dem.like(vmax, nodata=np.nan, dtype=f32),
+                     dem.like(arr, nodata=np.nan, dtype=f32), dem.like(wse, nodata=np.nan, dtype=f32),
+                     stats, notes, read_gauges(workdir, st, name))
 
 
 def source_volume(src, t_end):
