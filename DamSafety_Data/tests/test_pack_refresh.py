@@ -12,13 +12,17 @@ import os
 
 import pytest
 
+# Register the pack-build `mocked` fixture without importing that name
+# (an import is unused, then redefined by each test parameter: ruff F811).
+pytest_plugins = ["DamSafety_Data.tests.test_pack_build"]
+
 pytest.importorskip("osgeo.gdal")
 
 from DamSafety_Data import core  # noqa: E402
 from DamSafety_Data import pack_build as PB  # noqa: E402
 from DamSafety_Data import packsource as PS  # noqa: E402
 from DamSafety_Data import sources  # noqa: E402
-from DamSafety_Data.tests.test_pack_build import BBOX, _build, mocked  # noqa: E402,F401
+from DamSafety_Data.tests.test_pack_build import BBOX, _build  # noqa: E402
 
 
 def _source(out, days_later=0, refresh_days=30):
