@@ -229,7 +229,8 @@ LINT_WINDOW_FILES = ("dialog.py", "wizard.py", "classify_tab.py", "review_tab.py
                      "dsswise_tab.py", "extras_tab.py", "extras290_tab.py", "rasimport_tab.py",
                      "suite_tab.py", "suite_settings_tab.py", "settings_dialog.py",
                      "pack_dialog.py", "imagery_dialog.py", "status_dock.py",
-                     "streamstats_dialog.py", "chain_dialog.py")
+                     "streamstats_dialog.py", "chain_dialog.py", "settings_tab.py",
+                     "results_tab.py")
 
 
 def message_boxes_in_run_handlers(source, filename="<window>"):

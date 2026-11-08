@@ -156,7 +156,9 @@ WINDOW_FILES = ("dialog.py", "wizard.py", "popup_logic.py", "settings_dialog.py"
                 "plugin.py", "suite_settings_tab.py", "classify_tab.py", "review_tab.py",
                 "facility_review_tab.py", "data_tab.py", "datafolder_tab.py", "dsswise_tab.py",
                 "extras_tab.py", "extras290_tab.py", "rasimport_tab.py", "suite_tab.py",
-                "ui_check_panel.py", "constants.py", "streamstats_dialog.py")
+                "ui_check_panel.py", "constants.py", "streamstats_dialog.py",
+                # 0.18.19: the Screening window's tab files
+                "settings_tab.py", "results_tab.py", "dialog_consts.py")
 HEX_RE = re.compile(r"#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9a-zA-Z])")
 
 
