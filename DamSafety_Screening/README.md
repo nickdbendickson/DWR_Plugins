@@ -302,7 +302,7 @@ them:
 
 ## Download DEM: USGS 3DEP 1 m lidar tiles (native) (0.17.29)
 
-Download DEM (`nddam:downloaddem`, also the window's **Download DEM…** button) has three sources:
+Download DEM (`nddam:downloaddem`, also the window's **Download DEM for this county…** button, which opens it with the county, the resolution and the DEM folder filled in) has three sources:
 
 | Source | What you get |
 |---|---|

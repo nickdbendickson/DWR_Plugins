@@ -148,6 +148,30 @@ assert dlg.screen_what() == 1 and dlg.chain_check["16"].isChecked() and dlg.sett
 assert g.value(("ndscreen", "findponds", "MAX_AC")) == 50 and DS.Settings.load(sf).window("ndscreen")["screen_what"] == 1
 dlg.screen_radio[0].setChecked(True)
 
+# ---------------------------------------------------------------- 4b. the county DEM button (0.18.19)
+# usability plan change 7: one button opens Download DEM with the county chosen above, the
+# resolution and the DEM folder filled in; source, a dam point or the state are chosen in the tool
+from qgis import processing as _proc  # noqa: E402
+idx = [dlg.inventory_county.itemText(i) for i in range(dlg.inventory_county.count())].index("Stark")
+assert idx > 0
+dlg.inventory_county.setCurrentIndex(idx)
+dlg.dem_out.setText("")
+dlg.dem_res.setCurrentIndex(1)
+n_dialogs = len(_proc.DIALOGS)
+dlg._open_dem_download()
+alg_id, p_dem = _proc.DIALOGS[-1]
+assert len(_proc.DIALOGS) == n_dialogs + 1 and alg_id == "nddam:downloaddem", _proc.DIALOGS[-1]
+from nd_dam_screening.core.dem_download import county_names as _cn  # noqa: E402
+assert p_dem["SCOPE"] == 1 and p_dem["SOURCE"] == 0 and _cn()[p_dem["COUNTY"]] == "Stark", p_dem
+assert p_dem["RES"] == 1 and p_dem["CELL"] == 1.0 and p_dem["OUT"] == os.path.join(W, "terrain"), p_dem
+assert dlg.dem_out.text() == os.path.join(W, "terrain") and dlg.terrain_source.currentIndex() == 1
+assert set(p_dem) == {"SOURCE", "RES", "SCOPE", "COUNTY", "CELL", "OUT"}    # the rest is the tool's
+dlg.inventory_county.setCurrentIndex(0)
+dlg.dem_res.setCurrentIndex(0)
+dlg.terrain_source.setCurrentIndex(0)                                          # back to 3DEP for the checks below
+for gone in ("dem_source", "dem_scope", "dem_point", "dem_county", "dem_ftp", "work_crs"):
+    assert gone not in vars(dlg), gone                                         # the 13-control box is gone
+
 # ---------------------------------------------------------------- 5. the preflight on the Simple tab
 checks = dlg._preflight()
 assert dlg.preflight_label.text().startswith("Check: not ready") and "ND DWR dams" in dlg.preflight_text.toPlainText()
