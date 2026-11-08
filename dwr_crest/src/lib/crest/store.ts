@@ -23,6 +23,76 @@ type DeskState = {
  * "The quota has been exceeded."). The heavy inundation layers no longer go here (outline-store.ts); if the light
  * records still don't fit, the edit stands in this tab and only the save is skipped.
  */
+/**
+ * Whether the desk is still being saved to this browser. Audit H16: a quota overflow (a big record, or an
+ * auto-fetched nd911 address cache) was only console.warn'd, so from then on every edit - a hazard-class override,
+ * receptors, elevations - lived in memory only and was lost on reload with no sign. The desk renders `blocked` so a
+ * desk that is no longer being saved says so instead of only logging.
+ */
+export const useSaveStatus = create<{ blocked: boolean; detail: string; stale: boolean }>(() => ({
+  blocked: false,
+  detail: "",
+  stale: false,
+}));
+
+function noteSave(blocked: boolean, detail = ""): void {
+  const cur = useSaveStatus.getState();
+  if (cur.blocked !== blocked || cur.detail !== detail) useSaveStatus.setState({ blocked, detail });
+}
+
+// --- Cross-tab safety (audit H17) --------------------------------------------
+// Two tabs on the desk each hold their own in-memory records. zustand persist writes the WHOLE partialized state on
+// every set(), so a tab holding a stale snapshot used to clobber a newer tab's save, and the next load's orphan GC
+// then deleted the dam and its IndexedDB layer the other tab had added. A bare storage-event rehydrate is NOT the fix
+// (it strips every outline and the sync subscriber then deletes the layers - verified). Instead, each desk save bumps
+// a monotonic counter in its own localStorage key; a tab that sees a NEWER counter from another tab stops saving (so
+// it never overwrites the newer desk) and asks the engineer to reload. No rehydrate, no new deletion, GC unchanged.
+const DESK_KEY = "crest-desk-v2";
+const SEQ_KEY = "crest-desk-seq";
+let mySeq = 0; // the save counter this tab last wrote or seeded
+let tabStale = false; // another tab has saved a newer desk; this tab must not overwrite it
+
+function readSeq(): number {
+  try {
+    return Number(globalThis.localStorage?.getItem(SEQ_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function bumpSeq(): void {
+  mySeq = readSeq() + 1;
+  try {
+    globalThis.localStorage?.setItem(SEQ_KEY, String(mySeq));
+  } catch {
+    /* the counter is best-effort; a failed desk save is already reported by setItem */
+  }
+}
+
+/** Another tab saved the desk. If its save is newer than this tab's, stop saving here so we never clobber it. */
+export function markOtherTabWrite(otherSeq: number): void {
+  if (otherSeq > mySeq && !tabStale) {
+    tabStale = true;
+    useSaveStatus.setState({ stale: true });
+  }
+}
+
+/** Watch other tabs' desk saves (storage event) and seed this tab's counter from what is stored now. Install once. */
+export function watchDeskWrites(): void {
+  mySeq = readSeq();
+  const g = globalThis as { addEventListener?: (t: string, cb: (e: { key: string | null; newValue: string | null }) => void) => void };
+  g.addEventListener?.("storage", (e) => {
+    if (e.key === SEQ_KEY) markOtherTabWrite(Number(e.newValue) || 0);
+  });
+}
+
+/** Test-only: reset the cross-tab counter and stale flag so one test's state does not leak into the next. */
+export function resetDeskSync(): void {
+  mySeq = 0;
+  tabStale = false;
+  useSaveStatus.setState({ blocked: false, detail: "", stale: false });
+}
+
 export const deskStorage: StateStorage = {
   getItem: (name) => {
     try {
@@ -32,10 +102,20 @@ export const deskStorage: StateStorage = {
     }
   },
   setItem: (name, value) => {
+    if (name === DESK_KEY && tabStale) {
+      // A newer desk from another tab is in localStorage; writing ours would overwrite it. Keep this tab's edit in
+      // memory only and leave the reload banner up, rather than lose the other tab's dam and its layer.
+      useSaveStatus.setState({ stale: true });
+      return;
+    }
     try {
       globalThis.localStorage?.setItem(name, value);
+      if (name === DESK_KEY) bumpSeq();
+      noteSave(false);
     } catch (e) {
-      console.warn(`Crest: could not save the desk in this browser (${(e as Error).message}).`);
+      const detail = (e as Error).message;
+      console.warn(`Crest: could not save the desk in this browser (${detail}).`);
+      noteSave(true, detail);
     }
   },
   removeItem: (name) => {
@@ -103,6 +183,7 @@ export function hydrateDesk(): Promise<void> {
   if (hydrating) return hydrating;
   hydrating = (async () => {
     await useDesk.persist.rehydrate();
+    watchDeskWrites(); // audit H17: seed this tab's save counter and watch other tabs, before the first save
     const kept = await loadOutlines();
     const dams = useDesk.getState().dams;
     const ids = new Set(dams.map((d) => d.id));

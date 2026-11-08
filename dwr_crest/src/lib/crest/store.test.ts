@@ -121,6 +121,91 @@ describe("desk storage: a big inundation layer never overflows localStorage (202
       useDesk.getState().restore();
     }
   });
+
+  it("flags the desk as no longer saved when a write overflows, and clears it on the next good save (audit H16)", async () => {
+    const { useDesk, useSaveStatus } = await import("./store.ts");
+    const g = globalThis as { localStorage?: unknown };
+    const had = g.localStorage;
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      // a localStorage whose setItem always throws (over quota): the save is skipped and the desk is flagged.
+      g.localStorage = { ...fake(), setItem: () => { throw Object.assign(new Error("The quota has been exceeded."), { name: "QuotaExceededError" }); } };
+      useDesk.getState().update({ name: "over quota" });
+      assert.equal(useSaveStatus.getState().blocked, true, "blocked after an overflow");
+      assert.match(useSaveStatus.getState().detail, /quota/i);
+      // a working localStorage: the next save succeeds and clears the flag, so the banner goes away.
+      g.localStorage = fake();
+      useDesk.getState().update({ name: "fits now" });
+      assert.equal(useSaveStatus.getState().blocked, false, "cleared after a good save");
+    } finally {
+      console.warn = warn;
+      g.localStorage = had;
+      useSaveStatus.setState({ blocked: false, detail: "" });
+      useDesk.getState().restore();
+    }
+  });
+});
+
+describe("desk storage: a stale tab never clobbers a newer tab's save (audit H17)", () => {
+  const fake = () => {
+    const m = new Map<string, string>();
+    return { m, getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k) };
+  };
+
+  it("a desk save bumps the shared cross-tab counter", async () => {
+    const { useDesk, resetDeskSync } = await import("./store.ts");
+    const g = globalThis as { localStorage?: unknown };
+    const had = g.localStorage;
+    const ls = fake();
+    g.localStorage = ls;
+    resetDeskSync();
+    try {
+      useDesk.getState().update({ name: "a" });
+      const s1 = Number(ls.m.get("crest-desk-seq"));
+      assert.ok(s1 >= 1, "counter bumped on a save");
+      useDesk.getState().update({ name: "b" });
+      assert.equal(Number(ls.m.get("crest-desk-seq")), s1 + 1, "counter bumps again on the next save");
+    } finally {
+      g.localStorage = had;
+      resetDeskSync();
+      useDesk.getState().restore();
+    }
+  });
+
+  it("stops saving (and flags the tab) when another tab saved a newer desk, leaving that save intact", async () => {
+    const { useDesk, useSaveStatus, markOtherTabWrite, resetDeskSync } = await import("./store.ts");
+    const g = globalThis as { localStorage?: unknown };
+    const had = g.localStorage;
+    const ls = fake();
+    g.localStorage = ls;
+    resetDeskSync();
+    try {
+      // the other tab's newer desk is already in localStorage
+      ls.m.set("crest-desk-v2", JSON.stringify({ state: { dams: [{ id: "other-tab-dam" }] } }));
+      ls.m.set("crest-desk-seq", "5");
+      markOtherTabWrite(5); // this tab (counter 0) sees the newer save
+      assert.equal(useSaveStatus.getState().stale, true, "flagged stale");
+      useDesk.getState().update({ name: "edit in the stale tab" }); // must not throw, must not clobber
+      assert.ok(useDesk.getState().dams.some((d) => d.name === "edit in the stale tab"), "the edit stands in memory");
+      assert.ok(ls.m.get("crest-desk-v2")!.includes("other-tab-dam"), "the newer tab's save is NOT overwritten");
+    } finally {
+      g.localStorage = had;
+      resetDeskSync();
+      useDesk.getState().restore();
+    }
+  });
+
+  it("an older or equal counter from another tab does not make the tab stale", async () => {
+    const { markOtherTabWrite, useSaveStatus, resetDeskSync } = await import("./store.ts");
+    resetDeskSync();
+    try {
+      markOtherTabWrite(0);
+      assert.equal(useSaveStatus.getState().stale, false);
+    } finally {
+      resetDeskSync();
+    }
+  });
 });
 
 describe("outlineSync: the layers kept in IndexedDB follow the desk", () => {

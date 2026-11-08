@@ -53,7 +53,7 @@ import { CONFIDENCE_LABEL, triageDam } from "@/lib/crest/triage";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { demTieOffer, missingForNext, needsDemTie } from "@/lib/crest/nd-dams";
-import { activeDam, hydrateDesk, useDesk } from "@/lib/crest/store";
+import { activeDam, hydrateDesk, useDesk, useSaveStatus } from "@/lib/crest/store";
 import type {
   BreachMethod,
   DamGeometry,
@@ -106,6 +106,8 @@ export function Desk() {
   const addDam = useDesk((s) => s.addDam);
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<"desk" | "batch">("desk");
+  const saveBlocked = useSaveStatus((s) => s.blocked);
+  const staleTab = useSaveStatus((s) => s.stale);
 
   useEffect(() => {
     void hydrateDesk();
@@ -120,6 +122,17 @@ export function Desk() {
 
   return (
     <div className="min-h-screen bg-paper text-ink">
+      {staleTab ? (
+        <div className="border-b border-line bg-card px-4 py-2 text-sm text-amber" role="alert" data-testid="stale-tab">
+          This desk was changed in another tab, so your edits here are no longer being saved. Reload to pick up the
+          latest, or your changes in this tab will be lost.
+        </div>
+      ) : saveBlocked ? (
+        <div className="border-b border-line bg-card px-4 py-2 text-sm text-amber" role="alert" data-testid="save-blocked">
+          This desk is over your browser&rsquo;s storage limit, so your latest edits are no longer being saved.
+          Export your work and reload, or remove a dam&rsquo;s terrain layer to free space.
+        </div>
+      ) : null}
       <header className="border-b border-line bg-card">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-4 py-4">
           <div className="flex items-center gap-3">

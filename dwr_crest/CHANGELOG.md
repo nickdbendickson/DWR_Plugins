@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-11-08
+
+- **The desk says when it is no longer being saved.** A localStorage overflow — a big record, or the auto-fetched
+  `nd911` address cache (the 911 panel fetches on mount, thousands of points over a town) — was only `console.warn`'d,
+  so from then on every edit (a hazard-class override, receptors, elevations) lived in memory only and was lost on
+  reload with no sign. `deskStorage.setItem` now records the failure on a `useSaveStatus` store and the desk shows a
+  banner, so a desk that is no longer being saved says so. No computed value changes. (audit H16, failure channel;
+  moving the `nd911` / `plss` caches out of localStorage into IndexedDB so the overflow cannot happen is a separate,
+  flagged follow-up.)
+- **A stale tab no longer clobbers a newer tab's saved desk.** Two tabs each hold their own records, and zustand
+  persist writes the whole desk on every edit, so a tab holding an old snapshot overwrote a newer tab's save and the
+  next load's orphan GC then deleted the dam and its IndexedDB layer the other tab had added. Each save now bumps a
+  monotonic counter (`crest-desk-seq`); a tab that sees a newer counter from another tab stops saving — so it never
+  overwrites the newer desk — and the desk asks the engineer to reload. No rehydrate, no new deletion path, and the
+  GC is unchanged (a bare storage-event rehydrate destroys every saved layer, and merge-on-write breaks `restore()` —
+  both verified). No computed value changes. (audit H17)
+
 ## 2026-11-07
 
 - **A judgment-zone home is Medium by rule on an imported run, not High.** `rankSample` and
