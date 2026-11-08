@@ -195,20 +195,41 @@ BUNDLED_DIR = os.path.join(os.path.dirname(HERE), "bin")
 BUILTIN_WORDS = ("builtin", "built-in", "built in", "internal")
 
 
-def bundled_exe():
-    """A LISFLOOD-FP bundled for this computer, or None. DamSafety ships no bin/ dir, so this is
-    normally None; kept for parity so a future bundled binary is picked up."""
+def bundled_platform(system=None, machine=None):
+    """The bin/<platform> folder name for this computer (or the given uname-style names), or
+    None when no build is made for it: windows-x64, linux-x64, macos-arm64, macos-x64.
+    3.16.11 (2026-11-07, release workflow): the GitHub release zip of the Runner carries
+    bin/linux-x64/lisflood, bin/windows-x64/lisflood.exe and bin/macos-arm64/lisflood (built
+    from LISFLOOD-FP 8.3 with scripts/patch_lisflood.py by .github/workflows/release.yml); a
+    checkout or a zip built by tools/build_release.py alone has no bin/ and this returns the
+    name all the same, bundled_exe() then finds no file."""
     import platform
-    import stat
-    mach = platform.machine().lower()
-    if mach not in ("x86_64", "amd64"):
-        return None
-    if os.name == "nt":
-        p = os.path.join(BUNDLED_DIR, "windows-x64", "lisflood.exe")
-    elif sys.platform.startswith("linux"):
-        p = os.path.join(BUNDLED_DIR, "linux-x64", "lisflood")
+    system = (system or ("windows" if os.name == "nt" else sys.platform)).lower()
+    mach = (machine or platform.machine()).lower()
+    if mach in ("x86_64", "amd64"):
+        arch = "x64"
+    elif mach in ("arm64", "aarch64"):
+        arch = "arm64"
     else:
         return None
+    if system.startswith("win"):
+        return "windows-x64" if arch == "x64" else None
+    if system.startswith("linux"):
+        return "linux-x64" if arch == "x64" else None
+    if system.startswith("darwin") or system.startswith("mac"):
+        return "macos-" + arch
+    return None
+
+
+def bundled_exe():
+    """The LISFLOOD-FP bundled with this plugin for this computer (bin/<platform>/, see
+    bundled_platform), or None: a plain checkout ships no bin/ dir, so this is None there. The
+    execute bit an install from ZIP drops is put back."""
+    import stat
+    plat = bundled_platform()
+    if plat is None:
+        return None
+    p = os.path.join(BUNDLED_DIR, plat, "lisflood.exe" if os.name == "nt" else "lisflood")
     if not os.path.isfile(p):
         return None
     if os.name != "nt" and not os.access(p, os.X_OK):

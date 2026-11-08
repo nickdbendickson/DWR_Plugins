@@ -6,3 +6,7 @@ __pycache__/
 *.gpkg
 *.asc
 symbology-style.db
+# LISFLOOD-FP builds the release workflow puts into the Runner zip, and the zips themselves
+DamSafety_Runner/bin/
+bin/
+dist/

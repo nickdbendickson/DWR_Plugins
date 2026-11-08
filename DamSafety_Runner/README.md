@@ -701,14 +701,23 @@ by unit tests on synthetic grids and by runs of the workflow with the LISFLOOD-F
 
 ### 1. The plugin
 
-Zip the `nd_breach_runner` folder (or use the zip you were given) and install it with
-*Plugins > Manage and Install Plugins > Install from ZIP*.
+From the DamSafety plugin repository (`https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml`,
+*Plugins > Manage and Install Plugins > Settings > Add…*, experimental plugins shown), or
+*Install from ZIP* with `DamSafety_Runner_<version>.zip` from the GitHub Release
+(https://github.com/nickdbendickson/dAmIt_Plugins/releases). The repository README has the
+install order of the whole suite.
 
 ### 2. LISFLOOD-FP (required)
 
 The plugin needs a LISFLOOD-FP 8.x build with a small patch that adds the
 `inittm_depth` keyword (arrival time at a depth threshold) and removes the Linux-only NUMA
-requirement so it builds on macOS.
+requirement so it builds on macOS (and, since 3.16.11, builds with MinGW-w64 for Windows).
+
+**Bundled (3.16.11).** The Runner zip of a GitHub Release carries that build of LISFLOOD-FP 8.3
+for Linux x64, Windows x64 and macOS Apple Silicon under `bin/<platform>/`
+(`core/lisflood.bundled_exe`); the Runner finds it on its own when no other LISFLOOD-FP is
+installed or set, so on those computers nothing below is needed. The GPL corresponding source is
+the release asset `lisflood-8.3-ndbreach-source.zip`. A zip built from a checkout has no `bin/`.
 
 1. Download the LISFLOOD-FP source from the official release (University of Bristol;
    v8.2 is on Zenodo).
@@ -716,17 +725,19 @@ requirement so it builds on macOS.
 3. Run:
 
    ```bash
-   cd nd_breach_runner/scripts
-   ./build_lisflood_macos.sh ~/Downloads/LISFLOOD-FP-8.2 ~/lisflood-fp
+   cd DamSafety_Runner/scripts
+   ./build_lisflood_macos.sh ~/Downloads/LISFLOOD-FP-8.3/source ~/lisflood-fp
    ```
 
    This installs `cmake` and `libomp` with Homebrew, applies the patch with
    `patch_lisflood.py` (safe to run twice), builds without NetCDF and copies the
    executable to `~/lisflood-fp/lisflood`.
 
-On Linux, run `python3 scripts/patch_lisflood.py <source>` and build with CMake as the
-LISFLOOD-FP instructions describe; on Windows, apply the same patch and build with Visual
-Studio.
+On Linux, `scripts/build_lisflood_linux.sh <source> <install folder>` (cmake, g++, python3;
+`LISFLOOD_STATIC=1` for a binary that runs on other distributions), or the *Build LISFLOOD-FP…*
+button of DamSafety Setup's Suite status dock. On Windows, cross-compile on Linux with
+`scripts/build_lisflood_windows_cross.sh` (MinGW-w64), or apply `scripts/patch_lisflood.py` and
+build with CMake and Visual Studio.
 
 ### 3. ANUGA (only for the ANUGA tier)
 
@@ -740,10 +751,11 @@ ANUGA runs in its own conda environment, not inside QGIS.
 
 The plugin looks for both in the usual places (`~/lisflood-fp*/build/lisflood`,
 `~/miniforge3/envs/anuga/bin/python`, and so on) and fills the provider settings on first
-load. *Plugins > ND Dam Breach Runner > Check the model installation* reports what it found,
+load. *Check the model installation* (the Runner window's Tools tab, or Processing Toolbox >
+DamSafety Runner) reports what it found,
 runs LISFLOOD-FP on a tiny channel, confirms the patch is active and imports ANUGA. Set the
-paths by hand in *Processing > Options > Providers > ND Dam Breach Runner* if it finds
-nothing.
+paths by hand in *Processing > Options > Providers > DamSafety Runner* (or DamSafety Setup's
+*Suite setup / status…*, whose value wins) if it finds nothing.
 
 ## Using it
 
