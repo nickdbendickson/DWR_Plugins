@@ -17,7 +17,7 @@ import numpy as np
 
 from nd_breach_runner.core import hecras_crest as hc
 from nd_breach_runner.core.geom2d import cross2
-from nd_breach_runner.tests.registry import test
+from nd_breach_runner.tests.registry import need_osgeo, test
 from nd_breach_runner.tests.test_hecras_crest import H, CW, TOP, _grid_sampler, _seg_dist
 
 
@@ -1300,6 +1300,7 @@ def hecras_crest_offcrest_build_model_your_dam_line_reframes_the_pool():
     """M2: a dam line of your own (DAM_LINE) along the crest with the dam point 30 m upstream
     on the pool and the inflow guessed 60 degrees off: the reservoir outline and the storage
     check are built from that line's frame, so the outline does not overlap the 2D area."""
+    need_osgeo()                      # a skip, not a failure, on a Python without GDAL
     from osgeo import ogr
     from nd_breach_runner.core import hecras_model as hm
     from nd_breach_runner.tests import test_hecras_p0 as p0

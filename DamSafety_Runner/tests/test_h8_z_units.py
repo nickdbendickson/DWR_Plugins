@@ -12,7 +12,7 @@ import numpy as np
 
 from nd_breach_runner.core import gdal_io
 from nd_breach_runner.core.units import FT
-from nd_breach_runner.tests.registry import test as register   # "test" would be collected by pytest
+from nd_breach_runner.tests.registry import need_osgeo, test as register   # "test" would be collected by pytest
 
 
 def _fake_osr(linear_units):
@@ -73,6 +73,7 @@ class _Stub:
 
 
 def _refused(path, median):
+    need_osgeo()                      # dem_zunit._srs reads the CRS with osgeo.osr (not stubbed)
     with _Stub(median=median, linear_units=FT):
         try:
             got = gdal_io.z_to_m_factor(path, gdal_io.Z_AUTO)
