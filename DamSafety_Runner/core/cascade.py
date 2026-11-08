@@ -214,8 +214,8 @@ def _combine(out, st, writer):
     # drawn on its TRUE ground. A dam that auto-refines to a finer cell than another run must not
     # be placed as if every run shared the first run's cell size (otherwise it is half-scale or
     # stretched 2x and the union is truncated). The base cell is the finest run cell, so no run
-    # loses resolution; each run is sampled nearest by cell centre, which reproduces the former
-    # whole-cell placement when the runs share a cell size.
+    # loses resolution; each base cell takes the run cell that contains its centre, which for runs
+    # that share a cell size (and so are grid-aligned here) is the former whole-cell placement.
     dx = min(r.grid.dx for _c, r, _o in runs)
     x0 = min(r.grid.x0 for _c, r, _o in runs)
     y0 = max(r.grid.y0 for _c, r, _o in runs)
@@ -231,7 +231,7 @@ def _combine(out, st, writer):
     by = y0 - (np.arange(ny) + 0.5) * dx
     for cd, r, off in runs:
         g = r.grid
-        # the source cell (nearest by centre) of this run under each base cell
+        # the run cell that contains each base cell's centre
         src_c = np.floor((bx - g.x0) / g.dx).astype(int)
         src_r = np.floor((g.y0 - by) / g.dx).astype(int)
         jj = np.where((src_c >= 0) & (src_c < g.nx))[0]
