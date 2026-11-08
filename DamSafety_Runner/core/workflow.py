@@ -94,6 +94,12 @@ QA_NAMES = {"depth": "hmax_ft.tif", "velocity": "vmax_fps.tif", "arrival": "arr_
 WET_M = 0.003          # a cell counts as flooded above 0.01 ft
 OUTFLOW_WARN_PCT = 5.0     # H08: warn when at least this share of the breach volume leaves the model
 MAX_SIM_S = 336 * 3600.0   # longest simulation the automatic duration will ask for
+# Grok audit 3.1 (3.16.8, signed off by Nick 2026-11-07; the ND Runner's 3.26.5 rule): the
+# domain grows on the H08 outflow too - once RunSettings.outflow_extend_pct (default
+# OUTFLOW_WARN_PCT) of the breach volume has left, an edge carrying at least
+# OUTFLOW_EDGE_SHARE of the leaving water (terrain.edge_flux_shares) moves out, even under
+# the edge tolerance
+OUTFLOW_EDGE_SHARE = 0.10
 STATE_FILE = "state.json"
 # 3.15.0 (ND Runner 3.27.7 / 3.28.0): a coarse model cell over a wide, shallow flood over-spreads
 # on flat terrain, because averaging fine terrain onto a big cell lowers road embankments and
@@ -140,6 +146,10 @@ class RunSettings:
         self.manning_scale = 1.0         # multiplies the Manning raster too (sensitivity)
         self.arrival_depth_ft = ARRIVAL_DEPTH_FT    # 0.1 ft since 3.10.53 (was 1 ft)
         self.edge_tolerance_ft = 1.0
+        # Grok audit 3.1 (3.16.8): once this % of the breach volume has left the model, the
+        # edges it leaves through also move out, however shallow (0 = off, the depth rule
+        # alone as before)
+        self.outflow_extend_pct = OUTFLOW_WARN_PCT
         self.initial_length_mi = 5.0
         self.half_width_mi = 1.0
         self.expand_step_mi = 3.0
@@ -2055,6 +2065,24 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             depth_eff = np.clip(depth_eff - np.nan_to_num(init_grid.data), 0.0, None)
         edges = terrain.edge_depths(depth_eff, dem.valid())
         over = [e for e in terrain.EDGES if edges[e] > tol_m]
+        # Grok audit 3.1 (3.16.8; ND 3.26.5): the depth rule alone let a wide sheet under the
+        # tolerance carry 36-40% of the breach volume out of the model at Absaraka (DWR-2801)
+        # with the domain never growing there. When outflow_extend_pct or more of the volume
+        # has left, every edge that carries a real share of it (and is wet past the arrival
+        # depth) moves out too.
+        leak = []
+        out_now = lf_env.stats.get("boundary_outflow_pct")
+        ext_pct = getattr(st, "outflow_extend_pct", 0.0) or 0.0
+        if plan is None and ext_pct > 0 and out_now is not None and out_now >= ext_pct:
+            shares = terrain.edge_flux_shares(depth_eff, dem.valid())
+            leak = [e for e in terrain.EDGES if e not in over and edges[e] > arrival_m
+                    and shares[e] >= OUTFLOW_EDGE_SHARE]
+            if leak:
+                log("{:.0f}% of the breach volume left the model; the water leaves through {} "
+                    "under {:g} ft, so {} moves out too.".format(
+                        out_now, ", ".join(leak), st.edge_tolerance_ft,
+                        "that edge" if len(leak) == 1 else "those edges"))
+                over = over + leak
         arr_max = float(np.nanmax(lf_env.arrival_hr.data)) if np.isfinite(
             lf_env.arrival_hr.data).any() else 0.0
         still_moving = arr_max > 0.9 * sim_time / 3600.0
@@ -2068,7 +2096,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                "cells": int(dem.data.size), "dem_coverage": round(cover, 4),
                "sim_time_hr": round(sim_time / 3600.0, 2), "runtime_min": round(runtime / 60, 1),
                "edge_max_depth_ft": {k: round(v / FT, 2) for k, v in edges.items()},
-               "edges_over_tolerance": over, "latest_arrival_hr": round(arr_max, 2),
+               "edges_over_tolerance": over, "edges_over_outflow": leak,
+               "latest_arrival_hr": round(arr_max, 2),
                "stats": lf_env.stats}
         iterations.append(rec)
         warnings += [n for n in lf_env.notes if n not in warnings]
@@ -2288,8 +2317,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     # H08: a wide shallow sheet can carry a large share of the breach volume off the model
     # through its edges while every edge stays under the depth tolerance, so the modelled flood
     # area and the downstream consequences are minimums. Surface the boundary outflow (Qout) and
-    # warn. (The domain-extension rule that would grow the model to catch it is a separate,
-    # sign-off change; this only makes the truncation visible.)
+    # warn. (Grok audit 3.1, 3.16.8: the domain-extension rule that grows the model to catch it
+    # is in the loop above - outflow_extend_pct; this names what still left at the end.)
     out_pct = lf_env.stats.get("boundary_outflow_pct")
     out_acft = lf_env.stats.get("boundary_outflow_acft")
     if out_pct is not None:
@@ -3618,6 +3647,9 @@ def render_report(r):
              "| Domain | {} x {} mi after {} run(s) of {} |".format(
                  s["domain_mi"][0], s["domain_mi"][1], s["lisflood_runs"],
                  r.get("flood_engine_short", "LISFLOOD-FP"))]
+    if r.get("boundary_outflow_pct") is not None:      # Grok audit 3.1 (3.16.8)
+        lines.append("| Breach volume that left the model | {:.0f}% ({:,.0f} ac-ft) |".format(
+            r["boundary_outflow_pct"], r.get("boundary_outflow_acft") or 0.0))
     from . import report_metrics as _rm
     lines += _rm.report_lines(s)        # v3.10.27 (#91); nothing for an older report
     if s.get("receptors_flooded"):
@@ -3719,11 +3751,16 @@ def render_report(r):
         r["inflow_point"]["xy"][0], r["inflow_point"]["xy"][1], r["inflow_point"]["how"]), "",
         "## Downstream extent (ND 5.1.1(f))", "",
         "Each run checks the deepest water on every domain edge. An edge deeper than {} ft "
-        "moves out by {} mi and the model runs again{}.".format(
+        "moves out by {} mi and the model runs again{}.{}".format(
             r["settings"]["edge_tolerance_ft"], r["settings"]["expand_step_mi"],
             "; with receptor layers an edge is left alone when no structure, road or rail lies "
             "in the flood's path within {} mi".format(r["settings"]["impact_look_ahead_mi"])
-            if r["settings"].get("receptors") else ""), "",
+            if r["settings"].get("receptors") else "",
+            # Grok audit 3.1 (3.16.8): the shallow-outflow rule, named in the report
+            " Once {}% of the breach volume has left the model, an edge the water leaves "
+            "through moves out too, however shallow (Grok audit 3.1 rule).".format(
+                r["settings"]["outflow_extend_pct"])
+            if r["settings"].get("outflow_extend_pct") else ""), "",
         "| Pass | Domain run | Size (mi) | Cells | Hours | Edge depth N/S/E/W (ft) | Over "
         "| Minutes |",
         "|---|---|---|---|---|---|---|---|"]
@@ -3880,16 +3917,25 @@ class HecRasStageError(Exception):
     LISFLOOD-FP results stay in the dam folder)."""
 
 
-def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None):
+def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattended=False):
     """3.10.66: the HEC-RAS 2D stage after workflow.run_dam (Models = LISFLOOD-FP then
     HEC-RAS 2D), shared by 'Run breach model for one dam', the batch and the ndbreach CLI
     (both used to skip it): runs hecras_engine.run_stage, puts its final rasters in `res.final`, adds its warnings and
     re-makes the run report from the final engine (workflow.adopt_final_engine). Raises
-    HecRasStageError with a message that says the LISFLOOD-FP results are kept."""
+    HecRasStageError with a message that says the LISFLOOD-FP results are kept.
+
+    audit R6 (3.16.7) `unattended`: True from the batch tool, the CLI batch and so the chain
+    (which runs ndbreach:batch): the HEC-RAS wall clock then defaults to
+    hecras_engine.BATCH_TIMEOUT_S (12 h) per compute and per preprocess step when
+    NDBREACH_HECRAS_TIMEOUT_S gives none, so one stuck dam cannot hold the queue for ever. A
+    single interactive run keeps no limit unless the variable is set."""
     if engine is None:
         from . import hecras_engine as engine
     try:
-        hr = engine.run_stage(folder, res.final, writer, st, log)
+        if unattended:
+            hr = engine.run_stage(folder, res.final, writer, st, log, unattended=True)
+        else:
+            hr = engine.run_stage(folder, res.final, writer, st, log)
     except engine.HecRasEngineError as e:
         raise HecRasStageError("HEC-RAS 2D stage failed (the LISFLOOD-FP results are in the "
                                "dam folder): {}".format(e))

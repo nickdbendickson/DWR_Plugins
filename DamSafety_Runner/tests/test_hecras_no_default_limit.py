@@ -253,7 +253,7 @@ class _PreFake:
         return dict(self.state)
 
 
-def _preprocess(env):
+def _preprocess(env, default_timeout=None):
     from nd_breach_runner.tests.test_hecras_engine import _FAKE_D
     t = tempfile.mkdtemp()
     f = _PreFake()
@@ -262,7 +262,7 @@ def _preprocess(env):
     logs = []
     try:
         he.preprocess(t, "M", d=_FAKE_D, env=env, terrain_tif="/x/t.tif", prj="/x/p.prj",
-                      log=logs.append)
+                      log=logs.append, default_timeout=default_timeout)
     finally:
         he._run, he.ras_compile, he.geometry_hdf_state = saved
         shutil.rmtree(t, ignore_errors=True)
@@ -323,3 +323,157 @@ def hecras_ras_compile_without_a_limit_waits_for_the_process():
         sp.Popen, sp.run, wc.Deadline = real_popen, real_run, real_deadline
         shutil.rmtree(t, ignore_errors=True)
     assert polls["n"] == 6, polls
+
+
+# ---------------------------------------------------------------- audit R6 (3.16.7) --
+# An unattended run (ndbreach:batch, the CLI batch, the chain) defaults to BATCH_TIMEOUT_S
+# (12 h) per compute and per preprocess step when NDBREACH_HECRAS_TIMEOUT_S gives none; a
+# single interactive run keeps 'no limit unless set'. The words 'none' / 'off' / 'no' /
+# 'unlimited' remove the unattended default too; an explicit number wins over it.
+
+@test
+def hecras_unattended_default_is_12_h_and_interactive_stays_unlimited():
+    assert he.BATCH_TIMEOUT_S == 12 * H
+    assert he.unattended_default(True) == he.BATCH_TIMEOUT_S
+    assert he.unattended_default(False) is None
+    for env in ({}, {he.ENV_TIMEOUT: ""}, {he.ENV_TIMEOUT: "0"}, {he.ENV_TIMEOUT: "soon"},
+                {he.ENV_TIMEOUT: "-60"}, {he.ENV_TIMEOUT: "nan"}):
+        # interactive: as before (3.10.48)
+        assert he.timeout_setting(env)[0] is None, env
+        assert he.compute_timeout(68949, 32.0, 3.0, env=env)[0] is None, env
+        # unattended: the 12 h default, and the note says so
+        to, note = he.timeout_setting(env, he.BATCH_TIMEOUT_S)
+        assert to == 12 * H and "unattended default 43200 s (12.0 h)" in note, (env, note)
+        assert he.ENV_TIMEOUT in note and "'none' for no limit" in note, note
+        t, est, how = he.compute_timeout(68949, 32.0, 3.0, env=env, default=he.BATCH_TIMEOUT_S)
+        assert t == 12 * H and est and how.startswith("unattended batch default: "), (env, how)
+    # the words that mean no limit remove the unattended default
+    for v in ("none", "off", "no", "unlimited", "NONE"):
+        to, note = he.timeout_setting({he.ENV_TIMEOUT: v}, he.BATCH_TIMEOUT_S)
+        assert to is None and "(no limit)" in note, (v, note)
+        assert he.compute_timeout(1, 1, 1, env={he.ENV_TIMEOUT: v},
+                                  default=he.BATCH_TIMEOUT_S)[2].startswith("no limit: ")
+    # an explicit number wins in both modes
+    for env in ({he.ENV_TIMEOUT: "900"}, {he.ENV_TIMEOUT: " 172800 "}):
+        want = float(env[he.ENV_TIMEOUT])
+        assert he.timeout_setting(env, he.BATCH_TIMEOUT_S)[0] == want
+        t, _e, how = he.compute_timeout(1, 1, 1, env=env, default=he.BATCH_TIMEOUT_S)
+        assert t == want and how.endswith("(explicit limit)"), how
+    # the report line reads the 'how' text unchanged
+    lim = he.limit_record(*he.compute_timeout(68949, 32.0, 3.0, env={}, default=he.BATCH_TIMEOUT_S))
+    assert lim["limit_s"] == 12 * H and lim["limit"] == "43200 s (12.0 h)", lim
+    line = workflow.hecras_time_limit_line(lim)
+    assert line.startswith("43200 s (12.0 h) (unattended batch default: ") and \
+        "estimated RasUnsteady time" in line, line
+
+
+@test
+def hecras_unattended_compute_stops_at_12_h_interactive_does_not():
+    """The hang (audit R6): a RasUnsteady that never finishes held an unattended queue for ever.
+    Unattended it is now stopped at 12 h of wall clock; a single run with no setting still waits."""
+    if os.name != "posix":
+        return
+    t = tempfile.mkdtemp()
+    try:
+        d = _project(t)
+        c = Clock()
+        p = FakePopen(c, run_s=None, step_s=H)            # never finishes
+        calls = []
+
+        def stop(proc, grace, log=None):
+            calls.append((proc, grace))
+            return {"sent": ["SIGTERM to the process group", "SIGKILL to the process group"],
+                    "exited_after": "SIGKILL", "returncode": -9}
+        real_popen, real_deadline, real_stop, real_wait = \
+            he.subprocess.Popen, wc.Deadline, wc.stop_group, wc.wait
+        he.subprocess.Popen = p
+        wc.Deadline = lambda timeout, what="", log=None, **kw: real_deadline(
+            timeout, what=what, log=log, wall=c.wall, mono=c.mono)
+        wc.wait = lambda proc, deadline, poll_s=1.0, sleep=None: real_wait(
+            proc, deadline, poll_s=poll_s, sleep=lambda s: None)
+        wc.stop_group = stop
+        logs, lim = [], {}
+        try:
+            he.compute(t, "M", d=d, env={}, log=logs.append, limit=lim,
+                       default_timeout=he.BATCH_TIMEOUT_S)
+            assert False, "expected HecRasTimeout"
+        except he.HecRasTimeout as err:
+            assert calls and calls[0][0] is p, calls
+            assert err.info["timeout_s"] == 12 * H, err.info
+            assert "unattended batch default" in err.info["timeout_how"], err.info
+            assert 12 * H <= err.info["wall_elapsed_s"] < 14 * H, err.info
+        finally:
+            he.subprocess.Popen, wc.Deadline, wc.stop_group, wc.wait = \
+                real_popen, real_deadline, real_stop, real_wait
+        start = [m for m in logs if m.startswith("HEC-RAS compute:")][0]
+        assert "wall-clock limit 43200 s (12.0 h)" in start and "unattended" in start, start
+        assert lim["limit_s"] == 12 * H and "unattended batch default" in lim["how"], lim
+        runlog = open(os.path.join(t, "linux_run", "run.log")).read()
+        assert "[ndbreach] TIMEOUT" in runlog, runlog
+        # the same run, interactive (no default): 60 h of wall clock, never stopped
+        p2 = FakePopen(c, run_s=60 * H, step_s=H)
+
+        def no_stop(*a, **k):
+            raise AssertionError("interactive: nothing may be stopped")
+        out, logs2, lim2, err2 = _compute(t, d, {}, c, p2, stop=no_stop)
+        assert err2 is None and out and lim2["limit_s"] is None, (err2, lim2)
+    finally:
+        shutil.rmtree(t, ignore_errors=True)
+
+
+@test
+def hecras_unattended_preprocess_steps_get_the_default_too():
+    tos, logs = _preprocess({}, default_timeout=he.BATCH_TIMEOUT_S)
+    assert len(tos) == 5 and all(t == 12 * H for _, t in tos), tos
+    line = [m for m in logs if m.startswith("HEC-RAS preprocess:")][0]
+    assert "wall-clock limit per step 43200 s (12.0 h)" in line, line
+    assert "unattended batch default" in line and "explicit limit" not in line, line
+    tos, logs = _preprocess({he.ENV_TIMEOUT: "none"}, default_timeout=he.BATCH_TIMEOUT_S)
+    assert all(t is None for _, t in tos), tos
+    tos, logs = _preprocess({he.ENV_TIMEOUT: "900"}, default_timeout=he.BATCH_TIMEOUT_S)
+    assert all(t == 900.0 for _, t in tos), tos
+    line = [m for m in logs if m.startswith("HEC-RAS preprocess:")][0]
+    assert "explicit limit" in line, line
+
+
+@test
+def hecras_unattended_flag_reaches_run_stage_from_the_shared_helper():
+    """workflow.run_hecras_stage(..., unattended=True) (the batch tool and the CLI batch) asks
+    the engine for the unattended default; without the flag (one interactive run) the engine's
+    signature is called as before."""
+    import types
+
+    class Eng(object):
+        class HecRasEngineError(Exception):
+            pass
+
+        def __init__(self):
+            self.calls = []
+
+        def run_stage(self, folder, final, writer, st, log, unattended=False):
+            self.calls.append(unattended)
+            return {"final": {}, "warnings": []}
+    old = workflow.adopt_final_engine
+    workflow.adopt_final_engine = lambda folder, name, st, xy, log: {"final_model": name}
+    try:
+        res = types.SimpleNamespace(final={}, warnings=[], summary={})
+        e = Eng()
+        workflow.run_hecras_stage("/tmp/x", res, None, workflow.RunSettings(), (0, 0), None,
+                                  engine=e, unattended=True)
+        workflow.run_hecras_stage("/tmp/x", res, None, workflow.RunSettings(), (0, 0), None,
+                                  engine=e)
+        assert e.calls == [True, False], e.calls
+    finally:
+        workflow.adopt_final_engine = old
+    # the Windows launcher reads the same words and default
+    from nd_breach_runner.core import hecras_windows as HW
+    assert HW.BATCH_TIMEOUT_S == he.BATCH_TIMEOUT_S
+    assert HW.timeout_s({}, default=HW.BATCH_TIMEOUT_S) == 12 * H
+    assert HW.timeout_s({}) is None
+    assert HW.timeout_s({HW.ENV_TIMEOUT: "none"}, default=HW.BATCH_TIMEOUT_S) is None
+    assert HW.timeout_s({HW.ENV_TIMEOUT: "0"}, default=HW.BATCH_TIMEOUT_S) == 12 * H
+    assert HW.timeout_s({HW.ENV_TIMEOUT: "900"}, default=HW.BATCH_TIMEOUT_S) == 900.0
+    logs = []
+    assert HW.timeout_s({HW.ENV_TIMEOUT: "1h"}, log=logs.append,
+                        default=HW.BATCH_TIMEOUT_S) == 12 * H
+    assert logs and "unattended default" in logs[0], logs

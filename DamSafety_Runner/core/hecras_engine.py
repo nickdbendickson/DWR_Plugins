@@ -51,11 +51,16 @@ Settings (environment variables, or the `env` dict of each function):
     NDBREACH_HECRAS_DISPLAY      X display for Wine (default :77; an Xvfb is NOT started here)
     NDBREACH_HECRAS_TCU_HOOK     optional, see above
     NDBREACH_HECRAS_TIMEOUT_S    wall-clock limit in s. Unset, empty or 0 (the default since
-                                 Runner 3.10.48): the RasUnsteady compute has NO limit and
-                                 runs until it finishes (it was max(2 h, 3 x the estimate)
-                                 capped at 48 h), and so does each Wine preprocess step
-                                 (no 1800 s cap either: NO limit anywhere; a waiting Wine
-                                 dialog then waits for ever, see NDBREACH_HECRAS_TCU_HOOK).
+                                 Runner 3.10.48): in an interactive run the RasUnsteady
+                                 compute has NO limit and runs until it finishes (it was
+                                 max(2 h, 3 x the estimate) capped at 48 h), and so does each
+                                 Wine preprocess step (no 1800 s cap either: NO limit
+                                 anywhere; a waiting Wine dialog then waits for ever, see
+                                 NDBREACH_HECRAS_TCU_HOOK). audit R6 (3.16.7): an UNATTENDED
+                                 run (the batch tool, the ndbreach CLI batch, the chain) uses
+                                 BATCH_TIMEOUT_S (12 h) per compute and per preprocess step
+                                 instead, so one stuck dam cannot hold a queue for ever;
+                                 'none' / 'off' / 'no' / 'unlimited' removes that limit too.
                                  A positive number limits the compute AND each preprocess
                                  step to it. Anything else (text, negative) is ignored with
                                  a note in the log. The limit is on the WALL clock
@@ -116,6 +121,13 @@ ENV_LINUX = "NDBREACH_HECRAS_LINUX_DIR"
 ENV_DISPLAY = "NDBREACH_HECRAS_DISPLAY"
 ENV_TCU = "NDBREACH_HECRAS_TCU_HOOK"
 ENV_TIMEOUT = "NDBREACH_HECRAS_TIMEOUT_S"
+# audit R6 (2026-11-07): the wall-clock limit of an UNATTENDED HEC-RAS run (ndbreach:batch, the
+# CLI batch, the chain's Runner stage and Windows launcher) when NDBREACH_HECRAS_TIMEOUT_S gives
+# none: 12 h per RasUnsteady compute and per Wine preprocess step. The longest calibrated
+# compute (DWR-3161, 68,949 cells, 32 h) is about 3 h; an unattended queue with no limit
+# stalled for ever on one dam (a Wine TCU dialog, a diverged solver). An interactive single run
+# keeps 'no limit unless set' (3.10.48).
+BATCH_TIMEOUT_S = 12 * 3600.0
 DRIVERS = ("terrain.exe", "mesh.exe", "drv.exe")
 WINDOWS_DEFAULT_SUB = os.path.join("drive_c", "HEC", "RAS66")
 INFLOW_BC_NAME = "Breach Inflow"
@@ -148,33 +160,56 @@ def _env(env):
     return os.environ if env is None else env
 
 
-def timeout_setting(env=None):
+NO_LIMIT_WORDS = ("none", "off", "no", "unlimited")
+
+
+def timeout_setting(env=None, default=None):
     """NDBREACH_HECRAS_TIMEOUT_S read once: (seconds or None, note). None = no explicit limit:
     the variable is unset, empty, 0 (also '0.0', 'none', 'off') or not a positive number; the
-    note then says which, and an invalid value is named so the log shows it was ignored."""
+    note then says which, and an invalid value is named so the log shows it was ignored.
+
+    audit R6 (2026-11-07) `default`: the limit an unattended run uses when the variable gives
+    none (BATCH_TIMEOUT_S from the batch / chain / CLI batch; None = no limit, the interactive
+    rule). Only the words 'none' / 'off' / 'no' / 'unlimited' remove it: unset, empty, 0 and
+    an invalid value all fall back to the default, and the note says so."""
     raw = _env(env).get(ENV_TIMEOUT)
     txt = "" if raw is None else str(raw).strip()
     if not txt:
-        return None, "{} unset".format(ENV_TIMEOUT)
-    if txt.lower() in ("none", "off", "no", "unlimited"):
+        return _default(default, "{} unset".format(ENV_TIMEOUT))
+    if txt.lower() in NO_LIMIT_WORDS:
         return None, "{}={} (no limit)".format(ENV_TIMEOUT, txt)
     try:
         v = float(txt)
     except ValueError:
-        return None, "{}={!r} is not a number; ignored (no limit)".format(ENV_TIMEOUT, txt)
+        return _default(default, "{}={!r} is not a number; ignored".format(ENV_TIMEOUT, txt))
     if v != v or v in (float("inf"),):
-        return None, "{}={!r} ignored (no limit)".format(ENV_TIMEOUT, txt)
+        return _default(default, "{}={!r} ignored".format(ENV_TIMEOUT, txt))
     if v == 0:
-        return None, "{}=0 (no limit)".format(ENV_TIMEOUT)
+        return _default(default, "{}=0".format(ENV_TIMEOUT))
     if v < 0:
-        return None, "{}={!r} is negative; ignored (no limit)".format(ENV_TIMEOUT, txt)
+        return _default(default, "{}={!r} is negative; ignored".format(ENV_TIMEOUT, txt))
     return v, "{}={:g}".format(ENV_TIMEOUT, v)
 
 
-def _timeout(env):
+def _default(default, why):
+    """(default limit, note) when NDBREACH_HECRAS_TIMEOUT_S gives none (audit R6)."""
+    if default is None:
+        return None, why + " (no limit)"
+    return float(default), ("{}; unattended default {} - set {} to change it, '{}' for no "
+                            "limit".format(why, _hm(default), ENV_TIMEOUT, NO_LIMIT_WORDS[0]))
+
+
+def unattended_default(unattended):
+    """The `default` for timeout_setting(): BATCH_TIMEOUT_S for an unattended run (the batch
+    tool, the CLI batch, the chain), None (no limit unless set) for an interactive one."""
+    return BATCH_TIMEOUT_S if unattended else None
+
+
+def _timeout(env, default=None):
     """Each Wine preprocess step's wall-clock limit: the explicit NDBREACH_HECRAS_TIMEOUT_S,
-    else None = no limit (3.10.48; it was 1800 s)."""
-    return timeout_setting(env)[0]
+    else `default` (audit R6: BATCH_TIMEOUT_S unattended), else None = no limit (3.10.48; it
+    was 1800 s)."""
+    return timeout_setting(env, default)[0]
 
 
 def _timeout_override(env):
@@ -205,16 +240,25 @@ def compute_estimate_s(cells, sim_hours, base_dt_s, k=COMPUTE_K_S):
     return float(k) * float(cells) * float(sim_hours) * 3600.0 / max(float(base_dt_s), 1e-3)
 
 
-def compute_timeout(cells, sim_hours, base_dt_s, env=None):
+def compute_timeout(cells, sim_hours, base_dt_s, env=None, default=None):
     """(timeout_s or None, estimate_s or None, how). The timeout is NDBREACH_HECRAS_TIMEOUT_S
-    when it is a positive number; otherwise None = no wall-clock limit (3.10.48: unset, empty,
-    0 or an invalid value; `how` says which). The estimate is only for the log."""
+    when it is a positive number; otherwise `default` (audit R6: BATCH_TIMEOUT_S for an
+    unattended run), otherwise None = no wall-clock limit (3.10.48: unset, empty, 0 or an
+    invalid value; `how` says which). The estimate is only for the log."""
     est = (compute_estimate_s(cells, sim_hours, base_dt_s)
            if cells and sim_hours and base_dt_s else None)
-    ov, note = timeout_setting(env)
-    if ov is not None:
-        return ov, est, "{} (explicit limit)".format(note)
-    return None, est, "no limit: " + note
+    ov, note = timeout_setting(env, default)
+    return ov, est, limit_how(ov, note)
+
+
+def limit_how(timeout, note):
+    """The 'how' text of a limit for the log and limit_record(): 'no limit: ...', '... (explicit
+    limit)' or, audit R6, 'unattended batch default: ...'."""
+    if timeout is None:
+        return "no limit: " + note
+    if "unattended default" in note:
+        return "unattended batch default: " + note
+    return "{} (explicit limit)".format(note)
 
 
 def limit_text(timeout):
@@ -1255,7 +1299,7 @@ STEPS = ("terrain", "geometry", "assoc", "props", "ras")
 
 
 def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=None,
-               terrain_tif=None, prj=None, mesh=None, log=None, poll_s=2.0):
+               terrain_tif=None, prj=None, mesh=None, log=None, poll_s=2.0, default_timeout=None):
     """Makes the run inputs <name>.p<plan>.tmp.hdf, .b<plan>, .x<plan> in `project_dir`
     (which must be inside the Wine prefix's drive_c, as the chain was proven there).
 
@@ -1277,9 +1321,9 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
     clear message even when the program exited 0. Returns {step: seconds}."""
     d = d or require(env)
     e = wine_env(d, env)
-    to, _note = timeout_setting(env)
+    to, _note = timeout_setting(env, default_timeout)      # audit R6: default_timeout unattended
     (log or (lambda m: None))("HEC-RAS preprocess: wall-clock limit per step {} [{}].".format(
-        limit_text(to), _note + (" (explicit limit)" if to is not None else "; no limit")))
+        limit_text(to), limit_how(to, _note)))
     W = lambda p: to_wine_path(p, d["prefix"])
     wdir = d["windows_dir"]
     nice = ["nice", "-n", "19"] if shutil.which("nice") else []
@@ -1652,11 +1696,12 @@ def record_limit(dam_folder, lim, log=None):
 
 
 def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=None,
-            limit=None):
+            limit=None, default_timeout=None):
     """Official Linux RasUnsteady on the preprocessed inputs; returns the results HDF path
     (<name>.p<plan>.hdf in work_dir, default <project>/linux_run). The wall-clock limit is
-    compute_timeout(): none unless NDBREACH_HECRAS_TIMEOUT_S is a positive number (3.10.48);
-    it is logged, and a dict passed as `limit` gets limit_record()."""
+    compute_timeout(): none unless NDBREACH_HECRAS_TIMEOUT_S is a positive number (3.10.48),
+    else `default_timeout` (audit R6: BATCH_TIMEOUT_S for an unattended run); it is logged,
+    and a dict passed as `limit` gets limit_record()."""
     d = d or require(env)
     log = log or (lambda m: None)
     work = work_dir or os.path.join(project_dir, "linux_run")
@@ -1674,7 +1719,8 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
     tmp = os.path.basename(ins[2])
     nice = ["nice", "-n", "19"] if shutil.which("nice") else []
     pt = plan_timing(project_dir, name, plan)
-    timeout, est, how = compute_timeout(pt["cells"], pt["sim_hours"], pt["base_dt_s"], env)
+    timeout, est, how = compute_timeout(pt["cells"], pt["sim_hours"], pt["base_dt_s"], env,
+                                        default_timeout)
     log("HEC-RAS compute: {} cells, {} h simulated, {} base step (adaptive Courant step "
         "governs); estimated RasUnsteady time {}; wall-clock limit {} [{}].".format(
             "{:,}".format(pt["cells"]) if pt["cells"] else "?",
@@ -2103,11 +2149,13 @@ def transformer(src_wkt, dst_wkt):
 LISFLOOD_PREFIX = "LISFLOOD-FP "
 
 
-def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
+def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None,
+              unattended=False):
     """After a LISFLOOD-FP run (workflow.run_dam with TIER_HECRAS): keeps its final rasters
     as 'LISFLOOD-FP <name>', builds, preprocesses and computes the HEC-RAS 2D model, and
     writes the HEC-RAS maxima under FINAL_NAMES on the same grid. Returns {'final': {kind:
-    path}, 'warnings': [...], 'hdf': path, 'project': folder}."""
+    path}, 'warnings': [...], 'hdf': path, 'project': folder}. `unattended` (audit R6): a
+    batch / chain / CLI-batch run, whose wall-clock limit defaults to BATCH_TIMEOUT_S."""
     from . import gdal_io
     log = log or (lambda m: None)
     # 3.10.84: an unknown depth basis (RunSettings.hecras_depth_basis or NDBREACH_HECRAS_
@@ -2135,11 +2183,12 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None):
         opts = dict(opts or {}, dam_axis="straight")
     r = write_project(dam_folder, proj, log=log, env=env, options=opts)   # NDBREACH_HECRAS_INFLOW_MODE
     name = r["model"].name
+    dflt = unattended_default(unattended)                  # audit R6
     times = preprocess(proj, name, d=d, env=env, terrain_tif=r["paths"]["terrain_tif"],
-                       prj=r["paths"]["projection"], log=log)
+                       prj=r["paths"]["projection"], log=log, default_timeout=dflt)
     lim = {}
     try:
-        hdf = compute(proj, name, d=d, env=env, log=log, limit=lim)
+        hdf = compute(proj, name, d=d, env=env, log=log, limit=lim, default_timeout=dflt)
     except HecRasTimeout as x:
         x.info = record_timeout(dam_folder, dict(x.info, project=proj), log=log)
         raise

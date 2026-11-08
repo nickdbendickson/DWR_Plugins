@@ -301,7 +301,10 @@ EVAL_KEYS = ("max_depth", "max_vel", "arrival", "zone_found", "zone_mobile", "zo
              # per-curve results for apply_type
              "reach_ft", "region_kind", "n_cells", "sampling", "cells_xy", "_types",
              # v2.8: per-cell depth / velocity kept for the sensitivity table
-             "_dv")
+             "_dv",
+             # audit R2 (2026-11-07): the evaluation error of a structure that raised, so the
+             # marker survives the stage A -> B snapshot and the evaluation cache
+             "eval_failed")
 # same consequence keys pipeline._snap keeps (incl. cut_off) so snapshot() is safe to use
 CONSEQ_KEYS = ("val_struct", "val_cont", "ff_depth", "damage_usd", "damage_basis",
                "damage_nonres_usd", "par_night", "par_day", "lol_night", "lol_day", "severity",

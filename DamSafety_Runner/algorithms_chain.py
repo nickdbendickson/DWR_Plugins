@@ -81,6 +81,15 @@ def hec_engine(platform=None, detect_windows=None):
                 "windows_launcher": False}
 
 
+def _hecras_limit_text():
+    """audit R6: the HEC-RAS wall-clock limit an unattended chain run gets, for the log."""
+    try:
+        from .core import hecras_engine as HE
+        return HE.limit_text(HE.timeout_setting(None, HE.BATCH_TIMEOUT_S)[0])
+    except Exception:                                            # noqa - a log line only
+        return "12 h"
+
+
 def versions():
     out = {}
     try:
@@ -280,7 +289,7 @@ class QgisOps(object):
                 from .core import hecras_windows as HW
 
                 def run(folder, log=None):
-                    return HW.run_plan(folder, log=log)
+                    return HW.run_plan(folder, log=log, unattended=True)   # audit R6: 12 h
             try:
                 self.log("{}: running HEC-RAS 6.6 (Windows launcher)".format(dam.dam_id))
                 r = run(pkg, log=self.log)
@@ -721,6 +730,16 @@ class ChainBatchAlgorithm(_Base):
                         "plan_hdf": str(dcv.get("HEC_PLAN_HDF") or "")}
             items.append(d)
         ops = QgisOps(context, feedback, spath, algs)
+        # audit R6 (2026-11-07): the chain is unattended - its Runner stage (ndbreach:batch)
+        # and Windows launcher cap each HEC-RAS compute / preprocess step at 12 h unless
+        # NDBREACH_HECRAS_TIMEOUT_S says otherwise, so one stuck dam cannot hold the queue
+        if any(d.mode in ("run_linux", "run_windows") for d in items):
+            feedback.pushInfo("HEC-RAS 2D runs in this chain are unattended: wall-clock limit "
+                              "{} per compute and per preprocess step ({})".format(
+                                  _hecras_limit_text(), "NDBREACH_HECRAS_TIMEOUT_S" if
+                                  (os.environ.get("NDBREACH_HECRAS_TIMEOUT_S") or "").strip()
+                                  else "the unattended default; set NDBREACH_HECRAS_TIMEOUT_S "
+                                  "to change it, 'none' for no limit"))
         rows, sp, mp = CH.run_batch(
             items, ops, out, keep_going=bool(cv.get("KEEP_GOING")),
             skip_done=bool(cv.get("SKIP_DONE")), log=feedback.pushInfo,

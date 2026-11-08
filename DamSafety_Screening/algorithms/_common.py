@@ -225,6 +225,22 @@ def lines_near(source, xy, radius, key_field=None):
     return out
 
 
+def mosaic_key(tiles):
+    """A short hash of the sorted tile list (path, size, modified time): the name of a mosaic
+    that is reused only while the local DEM folder holds exactly these files (Grok audit
+    2026-11-07 finding 3.2; as the ND copy's _common.mosaic_key)."""
+    import hashlib
+    h = hashlib.sha1()
+    for t in sorted(tiles):
+        try:
+            st = os.stat(t)
+            h.update("{}|{}|{}\n".format(os.path.abspath(t), st.st_size,
+                                         int(st.st_mtime)).encode("utf-8"))
+        except OSError:
+            h.update("{}|-\n".format(os.path.abspath(t)).encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
 class TerrainLoader:
     """Loads terrain for any extent at any cell size and conditions it.
 
@@ -235,17 +251,26 @@ class TerrainLoader:
     """
 
     def __init__(self, demdir, source="cache", local_folder=None, tmpdir=None,
-                 max_rise_m=8.0, max_len_m=150.0):
+                 max_rise_m=8.0, max_len_m=150.0, log=None):
         self.demdir, self.source, self.tmpdir = demdir, source, tmpdir
         self.max_rise, self.max_len = max_rise_m, max_len_m
         self.vrt = None
         if source == "local" and local_folder:
             tiles = terrain.list_local_tiles(local_folder)
             if tiles:
-                self.vrt = os.path.join(tmpdir or demdir, "_terrain_mosaic.vrt")
+                # Grok audit 2026-11-07 finding 3.2 (Screening 0.18.16): a bare gdal.BuildVRT
+                # dropped every tile in another CRS than the first one's and mosaicked feet
+                # beside metres; terrain_cache.local_mosaic (tool 2's repair) converts feet
+                # tiles and warps mixed CRSs to EPSG:5070. Named by the tile list, so a
+                # changed local DEM folder gets a new mosaic (the fixed name was reused
+                # whatever the folder then held). Storage can only go up on a mixed folder:
+                # the tiles that were silently missing are now terrain.
+                from .terrain_cache import local_mosaic
+                self.vrt = os.path.join(tmpdir or demdir,
+                                        "_terrain_mosaic_{}.vrt".format(mosaic_key(tiles)))
                 with _lock:
                     if not os.path.exists(self.vrt):
-                        GS.checked(gdal.BuildVRT(self.vrt, tiles), "building " + self.vrt)
+                        local_mosaic(tiles, self.vrt, log)
 
     def _cached(self, dam_id):
         p = os.path.join(self.demdir, f"dam_{dam_id}.tif") if self.demdir else None
