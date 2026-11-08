@@ -4,10 +4,13 @@ ND Dam Breach Runner, ND Dam Breach Screening).
 Pure Python 3.9+ standard library: no QGIS, no numpy, no Qt. Importable anywhere (gdalsafe
 imports osgeo only when one of its helpers is called).
 
-The master copy lives in the suite folder; each plugin carries a byte-identical copy as a
-sub-package (`<plugin>/damsuite/`) written by `sync_damsuite.py`, which also writes
-`damsuite/FILES.json` = {file name: sha256 of its bytes} for every .py file of the package.
-Never edit a vendored copy: edit the master and run the sync.
+DamSafety Core 1.0.0: this is the ONE copy, inside the DamSafety_Core plugin. Each other
+plugin's `damsuite/__init__.py` is a two-line shim (DamSafety_Core.alias.install) that makes
+`<plugin>.damsuite` this very package, so `from .damsuite import x` in a plugin returns these
+module objects and no second copy exists. `damsuite/FILES.json` = {file name: sha256 of its
+bytes} for every .py file here, written by `python3 tools/damsuite_files.py` (tools/ci_checks.py
+fails when it is stale). Until Core 1.0.0 the package was vendored byte-identically into each
+plugin by tools/sync_damsuite.py against a pin; both are retired.
 
 Modules:
   dam_record  one record per dam (<dam folder>/dam.json) shared by the three plugins

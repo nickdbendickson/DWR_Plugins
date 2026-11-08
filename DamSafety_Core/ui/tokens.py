@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Design tokens of the DamSafety windows: the one place a window colour is written.
 
-Canonical copy: shared/ui/tokens.py. Each plugin ships a byte-identical copy (the plugins are
-installed separately, so none imports another's); edit the canonical file and run
-tools/sync_ui.py, never a copy. tools/ci_checks.py fails the build on a stale copy, and the GUI
-lint fails on a #rrggbb colour in a window's style sheet that is not one of these.
+The one copy lives here, in the DamSafety Core plugin (DamSafety_Core/ui/tokens.py); each
+plugin's tokens.py is a three-line shim onto it (Core 1.0.0; until then tools/sync_ui.py kept
+byte-identical copies). tools/ci_checks.py fails the build when a shim is anything else, and the
+GUI lint fails on a #rrggbb colour in a window's style sheet that is not one of these.
 
 Scope: window styling (style sheets, rich-text labels). Map symbology, PDF / HTML reports and
 charts keep their own palettes (hazard-class colours are part of the product, not the chrome).

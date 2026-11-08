@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """The suite settings grid - one table of every engineer-chosen value, HEC-RAS style.
 
-Byte-identical in DamSafety Hazard, Runner and Screening. Canonical copy: shared/ui/suite_settings.py;
-edit it there and run tools/sync_ui.py (tools/ci_checks.py fails on a stale copy). Each plugin's popup
+One copy, in the DamSafety Core plugin (DamSafety_Core/ui/suite_settings.py); Hazard, Runner and
+Screening carry a three-line shim onto it (Core 1.0.0). Each plugin's popup
 shows it on its Settings tab: one sub-tab per family of parameters, rows = the parameters with
 their Value, Unit and Starting value, a Find box, "show only YOUR values" (the engineer-chosen
 thresholds), "show only changed", the description of the selected row, and Reset / Load / Save.
@@ -21,7 +21,7 @@ from qgis.PyQt.QtWidgets import (
     QTableWidget, QTableWidgetItem, QComboBox, QFileDialog, QMessageBox,
 )
 
-from .damsuite import settings as DS
+from ..damsuite import settings as DS
 from .tokens import TOKENS
 
 COLUMNS = ("#", "Parameter", "Value", "Unit", "Starting value")

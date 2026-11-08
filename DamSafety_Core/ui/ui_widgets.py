@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Shared window widgets of the DamSafety plugins (Runner, Screening, Hazard).
 
-Canonical copy: shared/ui/ui_widgets.py. Each plugin carries a byte-identical copy (the plugins
-are installed separately, so none imports another's); edit the canonical file, run
-tools/sync_ui.py and raise SHARED_VERSION. tools/ci_checks.py fails the build on a stale copy.
-Colours come from tokens.py (also synced); docs/gui-grammar.md says where each widget is used.
+The one copy lives here, in the DamSafety Core plugin (DamSafety_Core/ui/ui_widgets.py); each
+plugin's ui_widgets.py is a three-line shim onto it (Core 1.0.0; until then tools/sync_ui.py kept
+byte-identical copies). Raise SHARED_VERSION on a change. Colours come from tokens.py;
+docs/gui-grammar.md says where each widget is used.
 
     WrapLabel     a word-wrapped label that is never cut off
     InfoBanner    the muted disclaimer / context banner
