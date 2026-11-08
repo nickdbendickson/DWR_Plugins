@@ -92,6 +92,7 @@ INCREMENT_NAMES = {"depth": "Incremental Depth (Max).tif", "wse": "Incremental W
 QA_NAMES = {"depth": "hmax_ft.tif", "velocity": "vmax_fps.tif", "arrival": "arr_hr.tif",
             "wse": "wsemax_ft.tif"}
 WET_M = 0.003          # a cell counts as flooded above 0.01 ft
+OUTFLOW_WARN_PCT = 5.0     # H08: warn when at least this share of the breach volume leaves the model
 MAX_SIM_S = 336 * 3600.0   # longest simulation the automatic duration will ask for
 STATE_FILE = "state.json"
 # 3.15.0 (ND Runner 3.27.7 / 3.28.0): a coarse model cell over a wide, shallow flood over-spreads
@@ -2211,6 +2212,27 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             "reason": stop_reason,
             "detail": next((w for w in warnings if "still" in w.lower() or "cap" in w.lower() or "limit" in w.lower() or "hole" in w.lower()), stop_reason)
         }
+    # H08: a wide shallow sheet can carry a large share of the breach volume off the model
+    # through its edges while every edge stays under the depth tolerance, so the modelled flood
+    # area and the downstream consequences are minimums. Surface the boundary outflow (Qout) and
+    # warn. (The domain-extension rule that would grow the model to catch it is a separate,
+    # sign-off change; this only makes the truncation visible.)
+    out_pct = lf_env.stats.get("boundary_outflow_pct")
+    out_acft = lf_env.stats.get("boundary_outflow_acft")
+    if out_pct is not None:
+        report["boundary_outflow_pct"] = out_pct
+        report["boundary_outflow_acft"] = out_acft
+        if out_pct >= OUTFLOW_WARN_PCT:
+            msg = ("{:.0f}% of the breach volume ({:,.0f} ac-ft) left the model through its "
+                   "edges when the run stopped{}, so the flood area and the downstream "
+                   "consequences are minimums. Extend the model downstream (more runs, a "
+                   "larger step or a larger first domain), or confirm nothing that would "
+                   "change the classification lies beyond it."
+                   .format(out_pct, out_acft or 0.0,
+                           " ({})".format(report["cut_off"]["reason"])
+                           if report.get("cut_off") else ""))
+            if msg not in warnings:
+                warnings.append(msg)
     snap_npz = os.path.join(model_dir, "depth_snapshots.npz")
     if frames > 0 and lst is not None and lst.snapshot_s:
         try:
