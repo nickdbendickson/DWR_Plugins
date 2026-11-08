@@ -323,8 +323,9 @@ def _ranges(starts, counts):
 
 def arrival_days(ws_series, min_elev, threshold, chunk_rows=None):
     """First time index at which ws - min_elev > threshold, per cell (-1:
-    never). ws_series: (T, n) array."""
-    wet = (ws_series - min_elev[None, :]) > threshold
+    never). ws_series: (T, n) array (float32 from the HDF is fine: the
+    subtraction is done in float64, audit P6)."""
+    wet = (ws_series - np.asarray(min_elev, dtype=np.float64)[None, :]) > threshold
     anyw = wet.any(axis=0)
     first = np.argmax(wet, axis=0)
     return np.where(anyw, first, -1)
@@ -340,6 +341,11 @@ def read_area(h, area, is_si, breach_hr=0.0, arrival_ft=0.1, progress=None, seri
     xy = h.read(g + "/Cells Center Coordinate")
     n_all = xy.shape[0]
     n, ok_mask = _real_cells(h, area, n_all)
+    # audit P6 (2.23.14, 2026-11-07): HEC-RAS writes its results in single precision, so the
+    # per-cell water surface, velocity and time arrays are kept as float32 (half the memory on
+    # a multi-million-cell plan); the elevation arithmetic (wse - zmin, the wet test) is done
+    # in float64 on the raw reads first. x / y stay float64 (State Plane feet in the millions:
+    # float32 would move a cell centre by up to 0.25 ft) and so does the cell-id grid.
     zmin = h.read(g + "/Cells Minimum Elevation").astype(np.float64)[:n]
     mws = h.read(s + "/Maximum Water Surface").astype(np.float64)
     if mws.ndim != 2 or mws.shape[1] < n:
@@ -350,10 +356,11 @@ def read_area(h, area, is_si, breach_hr=0.0, arrival_ft=0.1, progress=None, seri
     out = {"x": xy[:n, 0].astype(np.float64), "y": xy[:n, 1].astype(np.float64)}
     wet = np.isfinite(wse) & np.isfinite(zmin) & (wse - zmin > 1e-4)
     out["zmin"] = zmin * k
-    out["wse"] = np.where(wet, wse * k, np.nan)
-    out["peak"] = np.where(wet, np.maximum(t_max * 24.0 - breach_hr, 0.0), np.nan)
+    out["wse"] = np.where(wet, wse * k, np.nan).astype(RESULT_DTYPE)
+    out["peak"] = np.where(wet, np.maximum(t_max * 24.0 - breach_hr, 0.0),
+                           np.nan).astype(RESULT_DTYPE)
     # velocity
-    vel = np.full(n, np.nan)
+    vel = np.full(n, np.nan, dtype=RESULT_DTYPE)
     fvp = s + "/Maximum Face Velocity"
     if h.has(fvp) and h.has(g + "/Cells Face and Orientation Info"):
         fv = h.read(fvp).astype(np.float64)
@@ -361,10 +368,10 @@ def read_area(h, area, is_si, breach_hr=0.0, arrival_ft=0.1, progress=None, seri
         info = h.read(g + "/Cells Face and Orientation Info")
         vals = h.read(g + "/Cells Face and Orientation Values")
         vel = cell_velocity(fv, info, vals, n) * k
-        vel = np.where(wet, vel, np.nan)
+        vel = np.where(wet, vel, np.nan).astype(RESULT_DTYPE)
     out["vel"] = vel
     # arrival from the time series
-    arr = np.full(n, np.nan)
+    arr = np.full(n, np.nan, dtype=RESULT_DTYPE)
     tsp = "{}/2D Flow Areas/{}/Water Surface".format(TSERIES, area)
     out["series"] = bool(h.has(tsp) and h.has(TSERIES + "/Time"))
     if out["series"] and series:
@@ -375,14 +382,16 @@ def read_area(h, area, is_si, breach_hr=0.0, arrival_ft=0.1, progress=None, seri
         first = np.full(n, -1, dtype=np.int64)
         for i0 in range(0, n, step):
             i1 = min(n, i0 + step)
-            ws = h.read(tsp, cols=(i0, i1)).astype(np.float64)
+            # the block of the series as HEC-RAS stores it (float32); arrival_days subtracts
+            # the float64 zmin, so the depth test is done in double as before
+            ws = h.read(tsp, cols=(i0, i1)).astype(RESULT_DTYPE)
             first[i0:i1] = arrival_days(ws, zmin[i0:i1], thr)
             if progress:
                 progress(100.0 * i1 / n, "{}: arrival times {} of {} cells".format(
                     area, i1, n))
         got = first >= 0
         arr[got] = np.maximum(times[first[got]] * 24.0 - breach_hr, 0.0)
-        arr = np.where(wet, arr, np.nan)
+        arr = np.where(wet, arr, np.nan).astype(RESULT_DTYPE)
     out["arr"] = arr
     out["n"] = n
     return out
@@ -408,6 +417,9 @@ def _spacing(xs, ys, h=None, area=None, n=None):
 # 2.18.61: "cid" = the cell's index over all areas (area offset + cell), gridded with the
 # values so each pixel knows the cell whose time series gives its arrival
 POINT_FIELDS = ("wse", "zmin", "vel", "peak", "cid")
+# audit P6 (2.23.14): the dtype of the per-cell result arrays (water surface, velocity, times)
+# and of the water-surface series blocks; HEC-RAS stores them in single precision
+RESULT_DTYPE = np.float32
 
 
 def _write_csv(path, cells):
@@ -438,8 +450,59 @@ def _open_points(tmp_base, cells, srs_wkt):
     except Exception:
         ds = None
     gpkg = tmp_base + ".gpkg"
-    _write_points(gpkg, cells, srs_wkt)
+    # audit P6 (2.23.14): the GeoPackage fallback is first tried as one gdal.VectorTranslate
+    # of the CSV (GDAL's own loop, no per-feature Python); the Python loop stays as the last
+    # resort for a GDAL whose CSV driver cannot read the points at all
+    if not _translate_points(csv_path, gpkg, cells, srs_wkt):
+        _write_points(gpkg, cells, srs_wkt)
     return gdal.OpenEx(gpkg, gdal.OF_VECTOR), "cells", [csv_path, gpkg]
+
+
+def _translate_points(csv_path, gpkg, cells, srs_wkt):
+    """The cell points as a GeoPackage layer 'cells' translated from the CSV by GDAL
+    (audit P6). True when the layer holds every cell with real fields; False (and no file)
+    when this GDAL could not do it, so _write_points takes over."""
+    from osgeo import gdal
+    try:
+        if os.path.exists(gpkg):
+            os.remove(gpkg)
+        src = gdal.OpenEx(csv_path, gdal.OF_VECTOR, open_options=[
+            "X_POSSIBLE_NAMES=x", "Y_POSSIBLE_NAMES=y", "AUTODETECT_TYPE=YES",
+            "KEEP_GEOM_COLUMNS=NO"])
+        if src is None or src.GetLayerCount() != 1:
+            return False
+        kw = dict(format="GPKG", layerName="cells", geometryType="POINT",
+                  layerCreationOptions=["GEOMETRY_NAME=geom"])
+        if srs_wkt:
+            kw["dstSRS"] = srs_wkt
+            kw["srcSRS"] = srs_wkt
+        out = gdal.VectorTranslate(gpkg, src, options=gdal.VectorTranslateOptions(**kw))
+        src = None
+        if out is None:
+            return False
+        lyr = out.GetLayerByName("cells")
+        ok = (lyr is not None and lyr.GetGeomType() != 0
+              and lyr.GetFeatureCount() == cells["x"].size)
+        if ok:
+            defn = lyr.GetLayerDefn()
+            names = {defn.GetFieldDefn(i).GetName().lower(): defn.GetFieldDefn(i).GetType()
+                     for i in range(defn.GetFieldCount())}
+            from osgeo import ogr
+            ok = all(f in names and names[f] in (ogr.OFTReal, ogr.OFTInteger,
+                                                  ogr.OFTInteger64) for f in POINT_FIELDS)
+        out = lyr = None
+        if not ok:
+            try:
+                os.remove(gpkg)
+            except OSError:
+                pass
+        return bool(ok)
+    except Exception:
+        try:
+            os.remove(gpkg)
+        except OSError:
+            pass
+        return False
 
 
 def _write_points(path, cells, srs_wkt):
@@ -748,7 +811,9 @@ def _arrival_from_series(h, areas, cid_path, ground_path, peak_path, folder, k, 
         step = max(1, int(4.0e7 // max(1, h.shape(tsp)[0])))
         chunks += [(tsp, g0, i0, min(n, i0 + step)) for i0 in range(0, n, step)]
     for ci, (tsp, g0, i0, i1) in enumerate(chunks):
-        ws = h.read(tsp, cols=(i0, i1)).astype(np.float64) * k
+        # audit P6: the block as HEC-RAS stores it (float32, x k in float32 too: a water
+        # surface of 2,000 ft keeps 0.0001 ft); _pixel_first_reach subtracts the float64 ground
+        ws = h.read(tsp, cols=(i0, i1)).astype(RESULT_DTYPE) * RESULT_DTYPE(k)
         lo, hi = g0 + i0, g0 + i1
         for y0 in range(0, hgt, rows):
             hh = min(rows, hgt - y0)
@@ -1537,7 +1602,8 @@ def _say_basis(say, plan_name, res, warn=True):
 
 # the conversion code whose source is part of the cache key
 _CODE_FUNCS = ("plan_info", "_real_cells", "cell_velocity", "_ranges", "arrival_days",
-               "read_area", "_spacing", "_write_csv", "_open_points", "_write_points", "_grid",
+               "read_area", "_spacing", "_write_csv", "_open_points", "_translate_points",
+               "_write_points", "_grid",
                "import_plan", "_finish", "_write_basis", "_pixel_first_reach",
                "_arrival_from_series", "_runner_candidates", "_same_plan", "find_runner_rasters",
                "_runner_files", "_import_runner", "_reexport_fresh")
