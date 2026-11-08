@@ -2,6 +2,24 @@
 
 This guide covers the behaviour added in PRs #9-#21, #23 and #27, plus #22, #30, #32, #38, #76, #84, #92, #93, #96, #131 (arrival depth), #132 (ANUGA threads), #137 (HEC-RAS time limit) and #126 (zone colours). Other merged PRs (#85-#90, #94, #100-#105, …) are listed in CHANGELOG.md only. The labels in quotes are the exact text in the code. For the full list of changes, see CHANGELOG.md.
 
+## Installing the plugins: DamSafety Core first (Core 1.0.0)
+
+The DamSafety plugins share one library plugin, **DamSafety Core**. Install it before (or
+together with) any other DamSafety plugin: in the Plugin Manager install the `DamSafety_Core`
+zip first, then the plugins you use (Setup, Data, Screening, Runner, Hazard, Hazard Lite, PMP).
+Each of them lists DamSafety Core under `plugin_dependencies`, so when you install one from a
+repository the Plugin Manager offers to install DamSafety Core with it. The Core adds one menu
+entry, *Plugins > Dam safety > About DamSafety Core…*, which shows its version and whether its
+files are intact; otherwise it does nothing on its own.
+
+- A plugin updated to this release without DamSafety Core does not load: the error names
+  "DamSafety Core". Install the Core and reload the plugin.
+- Keep the Core at the version released with the other plugins (one release set): a mixed set
+  is reported in each plugin's message log at start-up.
+- The Mac installer (`tools/mac/install_dwr_suite_mac.sh`) installs it first by itself.
+- Older releases (Hazard 2.23.x, Runner 3.16.x, Screening 0.18.x, Data 1.9.x, Setup 1.0.x) carry
+  their own copy of the shared code and do not need the Core.
+
 ## Standard work-folder layout (#18)
 The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker all create the same empty folders:
 

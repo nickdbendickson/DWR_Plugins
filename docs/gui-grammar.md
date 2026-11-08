@@ -9,12 +9,13 @@ style.
 
 - **Shared files.** The window widgets (`ui_widgets.py`), the colours (`tokens.py`), window
   sizing (`ui_fit.py`), the settings grid (`suite_settings*.py`), the map styles
-  (`suite_styles.py`) and the Dam suite home (`suite_home.py`) each have one canonical copy in
-  `shared/ui/`. The plugins install separately, so each ships its own copy. **Edit
-  `shared/ui/` only**, then run `python3 tools/sync_ui.py`. `tools/sync_ui.py` lists which
-  plugin carries which file.
-- **Fast CI check** (`tools/ci_checks.py`, no QGIS needed): every plugin copy must match
-  `shared/ui/`, and window code must not contain a `#rrggbb` colour outside `tokens.py`.
+  (`suite_styles.py`, QML in `ui/styles/`) and the Dam suite home (`suite_home.py`) live once,
+  in the DamSafety Core plugin: `DamSafety_Core/ui/`. A plugin's file of the same name is a
+  three-line shim onto it (`import sys; from DamSafety_Core.ui import x as _m;
+  sys.modules[__name__] = _m`). **Edit `DamSafety_Core/ui/` only.** `UI_SHIMS` in
+  `tools/ci_checks.py` lists which plugin carries which shim.
+- **Fast CI check** (`tools/ci_checks.py`, no QGIS needed): every plugin copy must be the
+  shim, and window code must not contain a `#rrggbb` colour outside `tokens.py`.
 - **GUI lint** (`tools/gui_lint.py`, real QGIS, offscreen): opens every window and checks the
   rules below. Run it as `QT_QPA_PLATFORM=offscreen <QGIS python> tools/gui_lint.py [shots_dir]`.
   Add a screenshots folder to see every window. One rule, no page scrolls sideways, needs a

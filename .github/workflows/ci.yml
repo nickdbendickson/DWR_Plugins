@@ -2,8 +2,9 @@ name: CI
 
 # Merge gate for the DamSafety plugin suite.
 #
-# fast-checks  — no QGIS/GDAL needed, fully deterministic, seconds to run (damsuite drift,
-#                version sanity, py_compile of every source, the built-in engine golden baseline).
+# fast-checks  — no QGIS/GDAL needed, fully deterministic, seconds to run (no vendored copy of
+#                the shared code, version sanity, py_compile of every source, the built-in engine
+#                golden baseline).
 # plugin-suites — the fuller per-plugin test suites. These need a real QGIS/GDAL (Hazard, Runner)
 #                and a numpy the vendored scipy supports, so the job provisions QGIS via conda.
 # model-tests  — the Runner's --models suite on a patched LISFLOOD-FP 8.3 and a conda ANUGA.
@@ -32,13 +33,17 @@ jobs:
         run: python -m pip install "numpy<2.3"
       - name: Fetch main (versions only go up, changelog entries of main kept)
         run: git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
-      - name: Fast checks (drift, pin, versions, version book vs main, compile, golden baseline)
+      - name: Fast checks (no vendored copy, versions, version book vs main, compile, golden baseline)
         env:
           QT_QPA_PLATFORM: offscreen
           CI_BASE_REF: origin/main
         run: python3 tools/ci_checks.py
       - name: ci_checks self-test (version bookkeeping gates)
         run: python3 tools/test_ci_checks.py
+      - name: DamSafety Core alias and shim tests (plain Python)
+        run: |
+          python3 DamSafety_Core/tests/test_alias.py
+          python3 DamSafety_Core/tests/test_ui_shim.py
       - name: Fingerprint nested-VRT regression (QGIS-free)
         run: python3 DamSafety_Hazard/tests/test_fingerprint_vrt.py
 

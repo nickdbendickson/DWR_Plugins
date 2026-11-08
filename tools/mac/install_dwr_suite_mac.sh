@@ -97,7 +97,8 @@ warn() { printf '\033[1;33mWARNING:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # the DamSafety plugin folder names (as each zip unpacks) — used to enable them
-DS_PLUGINS=(DamSafety_Setup DamSafety_Data DamSafety_Screening DamSafety_Runner \
+# DamSafety_Core first (Core 1.0.0): the others import its damsuite, so QGIS must load it first
+DS_PLUGINS=(DamSafety_Core DamSafety_Setup DamSafety_Data DamSafety_Screening DamSafety_Runner \
             DamSafety_Hazard DamSafety_HazardLite DamSafety_PMP)
 
 # ---------------------------------------------------------------------------
@@ -259,7 +260,13 @@ PLUGINS_DEST="$PROFILE_DIR/python/plugins"
 mkdir -p "$PLUGINS_DEST"
 shopt -s nullglob
 zips=("$PLUGIN_DIR"/*.zip)
-if [ "${#zips[@]}" -lt 5 ]; then
+# DamSafety_Core's zip first: the other plugins' damsuite/ folders are shims onto it (Core 1.0.0)
+core_zips=("$PLUGIN_DIR"/DamSafety_Core_*.zip)
+if [ "${#core_zips[@]}" -gt 0 ]; then
+  rest=(); for z in "${zips[@]}"; do case "$(basename "$z")" in DamSafety_Core_*) ;; *) rest+=("$z");; esac; done
+  zips=("${core_zips[@]}" "${rest[@]}")
+fi
+if [ "${#zips[@]}" -lt 6 ]; then
   # The DamSafety (DWR_Plugins) repo publishes no plugin zips, so there is no
   # GitHub self-heal as there is for the ND set — the zips must ship in this
   # package. Point DS_PLUGIN_DIR at them, or run from inside the full package.
@@ -287,6 +294,7 @@ for z in "${zips[@]}"; do
 done
 RUNNER_DIR="$PLUGINS_DEST/DamSafety_Runner"
 [ -d "$RUNNER_DIR" ] || die "DamSafety_Runner plugin did not unpack to $RUNNER_DIR"
+[ -d "$PLUGINS_DEST/DamSafety_Core" ] || die "DamSafety_Core plugin did not unpack to $PLUGINS_DEST/DamSafety_Core (every other DamSafety plugin imports it)"
 
 # ---------------------------------------------------------------------------
 # 4. LISFLOOD-FP — reuse an existing patched build, or compile the bundled 8.3

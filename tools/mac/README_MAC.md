@@ -10,7 +10,7 @@ QGIS profile called **damsafety**.
 | QGIS | 3.34 LTR (the newest 3.34.x on conda-forge; 3.34.6 when this was written), env `ndqgis`, numpy < 2 |
 | ANUGA + gmsh | ANUGA 4.0.1, gmsh 4.15, env `ndanuga` |
 | LISFLOOD-FP | 8.3, official source from Zenodo + the Runner's small patch, built on your Mac |
-| plugins | the zips in `plugins/` (named `<plugin>_<version>.zip`); the first line of `plugins/SHA256SUMS` names the DWR_Plugins commit they were built from |
+| plugins | the zips in `plugins/` (named `<plugin>_<version>.zip`), `DamSafety_Core` installed first (the other plugins import its shared code); the first line of `plugins/SHA256SUMS` names the DWR_Plugins commit they were built from |
 
 The package (`DWR_Mac_Setup`) is the `tools/mac` folder of DWR_Plugins with its `plugins/`
 folder filled by `python3 tools/mac/make_plugin_zips.py` (from the checked-out commit: committed

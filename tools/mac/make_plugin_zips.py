@@ -18,8 +18,9 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = subprocess.check_output(["git", "-C", HERE, "rev-parse", "--show-toplevel"], text=True).strip()
 OUT = os.path.join(HERE, "plugins")
-PLUGINS = ["DamSafety_Setup", "DamSafety_Data", "DamSafety_Screening", "DamSafety_Runner",
-           "DamSafety_Hazard", "DamSafety_HazardLite", "DamSafety_PMP"]
+# DamSafety_Core first: the others import it (Core 1.0.0), so it is installed first too
+PLUGINS = ["DamSafety_Core", "DamSafety_Setup", "DamSafety_Data", "DamSafety_Screening",
+           "DamSafety_Runner", "DamSafety_Hazard", "DamSafety_HazardLite", "DamSafety_PMP"]
 # plugins.qgis.org security-scan config files, kept at the plugin root next to metadata.txt
 SCAN_CONFIGS = (".secrets.baseline", ".bandit")
 FIXED = (2026, 1, 1, 0, 0, 0)  # fixed timestamps -> same files give the same zip

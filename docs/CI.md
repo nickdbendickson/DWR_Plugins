@@ -6,7 +6,7 @@ manually started workflow.)
 
 | Job | What it runs | Time |
 |---|---|---|
-| `fast-checks` | `tools/ci_checks.py` (damsuite drift and pin, shared/ui drift, versions and changelogs vs `main`, files kept identical across plugins, zone and window colours, Qt6 enum spellings, compile, golden baseline), `tools/test_ci_checks.py`, the fingerprint nested-VRT test. No QGIS. | < 1 min |
+| `fast-checks` | `tools/ci_checks.py` (no vendored copy of the shared code: every plugin's `damsuite/` and shared window file is a shim onto `DamSafety_Core`; versions and changelogs vs `main`, files kept identical across plugins, zone and window colours, Qt6 enum spellings, compile, golden baseline), `tools/test_ci_checks.py`, the DamSafety Core alias / shim tests, the fingerprint nested-VRT test. No QGIS. | < 1 min |
 | `plugin-suites` | Screening `run_all.py`, Runner fast suite, Hazard `run_all.py`, Hazard Lite, `tools/gui_lint.py`, the Runner wizard and batch-chain real-Qt scripts, pytest for suite dams and Setup, on QGIS from conda-forge. | 10-20 min |
 | `model-tests` | `python -m nd_breach_runner.tests.run_tests --models` on LISFLOOD-FP 8.3 built from the Zenodo source with `DamSafety_Runner/scripts/build_lisflood_linux.sh` (cached), and ANUGA 4.0.1 in its own conda env. | 10-17 min |
 
@@ -49,6 +49,8 @@ export QT_QPA_PLATFORM=offscreen
 git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 CI_BASE_REF=origin/main $PY tools/ci_checks.py
 $PY tools/test_ci_checks.py
+$PY DamSafety_Core/tests/test_alias.py
+$PY DamSafety_Core/tests/test_ui_shim.py
 $PY DamSafety_Hazard/tests/test_fingerprint_vrt.py
 
 # plugin-suites
@@ -72,6 +74,40 @@ NDBREACH_LISFLOOD="$HOME/lisflood-nd/lisflood" \
 NDBREACH_ANUGA_PYTHON=/path/to/anuga/env/bin/python \
   $PY -m nd_breach_runner.tests.run_tests --models
 ```
+
+## Developers: shared code lives in DamSafety_Core
+
+Since DamSafety Core 1.0.0 there is ONE copy of the code the plugins share:
+
+- `DamSafety_Core/damsuite/` - the `damsuite` package (dam records, the REG_05.2026 curve table,
+  the suite settings file, the offline pack reader and builder, the pre-solve gate, the version
+  checks between the plugins, ...). Edit it here. Every other plugin's `damsuite/` folder holds
+  only `__init__.py`, a two-line shim (`from DamSafety_Core import alias; alias.install(__name__)`)
+  after which `<Plugin>.damsuite` and `<Plugin>.damsuite.<module>` are the very module objects of
+  `DamSafety_Core.damsuite` (`DamSafety_Core/alias.py`, a `MetaPathFinder`). The plugins keep
+  their relative imports (`from .damsuite import x`, `from ..damsuite.x import y`).
+- `DamSafety_Core/ui/` - the shared window files (`tokens.py`, `ui_widgets.py`, `ui_fit.py`,
+  `suite_settings.py`, `suite_settings_tools.py`, `suite_styles.py`, `suite_home.py`,
+  `tool_dialog.py`) and `ui/styles/` (the QML layer styles). A plugin's copy of one of these
+  names is a three-line shim: `import sys; from DamSafety_Core.ui import x as _m;
+  sys.modules[__name__] = _m`. Setup's `suite_config.py` / `suite_fill.py` / `pack_convert.py`
+  are the same shim onto `DamSafety_Core.damsuite`.
+- `DamSafety_Core/damsuite/FILES.json` is the manifest `damsuite.selfcheck()` compares the
+  installed files with (each plugin logs a warning at start-up when they differ). After editing
+  anything under `DamSafety_Core/damsuite/`, run `python3 tools/damsuite_files.py`;
+  `tools/ci_checks.py` fails on a stale manifest, on a vendored file inside a plugin's
+  `damsuite/`, on a window file that is not the shim, and on a plugin whose `metadata.txt` lacks
+  `plugin_dependencies=DamSafety Core`.
+- Version bookkeeping: `DamSafety_Core/damsuite/versions.py` `RELEASE` must equal each plugin's
+  `metadata.txt` version (Hazard, Runner, Screening), as before; bump the Core's own version in
+  `DamSafety_Core/metadata.txt` when its content changes.
+- Retired: `tools/sync_damsuite.py`, `tools/damsuite_pin.json`, `tools/tag_damsuite_pin.sh`,
+  `tools/sync_ui.py`, `tools/test_sync_damsuite.py`, `shared/`. The nd_hazard fork (archived)
+  still vendors its own copies; the shared pin it mirrored is no longer produced.
+- Tests import the plugins as packages from the repo root, where `DamSafety_Core` is a sibling,
+  so the shims resolve. In a QGIS profile the same holds: every plugin folder sits in
+  `python/plugins/`. `DamSafety_Core/tests/test_alias.py` and `test_ui_shim.py` run in plain
+  Python.
 
 Locally `tools/ci_checks.py` also runs the cross-fork parity check when an nd_hazard checkout is
 at `/home/user/nd_hazard` (or `ND_HAZARD_ROOT`); CI has no such checkout and skips it.
