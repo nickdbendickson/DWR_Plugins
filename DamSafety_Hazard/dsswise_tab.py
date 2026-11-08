@@ -6,7 +6,6 @@ breach scenario on the Hazard Classification tab)."""
 
 import os
 import re
-import traceback
 
 from qgis.PyQt.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QWidget, QTableWidget, QTableWidgetItem,
@@ -19,7 +18,7 @@ from . import dsswise as DW
 from .ui_wrap import WrapCheckBox
 from .compat import MSG_CRITICAL, MSG_WARNING
 from .helpers import (
-    log_message, add_layer_to_project, plugin_group, dam_display_name, CancelledByUser,
+    log_message, add_layer_to_project, plugin_group, dam_display_name,
 )
 from .constants import GRP_DSSWISE
 from .styles import style_depth
@@ -182,7 +181,7 @@ class DssWiseTabMixin(object):
         return self._dsw_items, bad
 
     def _dsw_import(self, *args):
-        if not self._dsw_items:
+        if not self._dsw_items or getattr(self, "_busy", False):
             return
         items, bad = self._dsw_table_items()
         if bad:
@@ -191,24 +190,39 @@ class DssWiseTabMixin(object):
             return
         name = self._dsw_name()
         out = self._dsw_out()
-        self._set_busy(True)
-        self._progress = self._make_progress("Importing DSS-WISE Lite results\u2026")
-        try:
-            res = DW.convert(items, out, name=name, progress=self._progress_tick)
-        except CancelledByUser:
-            self._finish_progress()
-            self._set_busy(False)
-            self._update_status("DSS-WISE import cancelled", False)
-            self._log(">>> DSS-WISE Lite import cancelled")
-            return
-        except Exception as e:
-            self._finish_progress()
-            self._set_busy(False)
-            log_message(traceback.format_exc(), MSG_CRITICAL)
-            QMessageBox.critical(self, "DSS-WISE Lite", str(e) or repr(e))
-            return
-        self._finish_progress()
-        self._set_busy(False)
+        # 2.23.15 (audit): the raster conversion runs in a background task like the
+        # classification (QGIS stays usable; Cancel stops it at the next progress step);
+        # the Setup boxes, the scenario row and the layers wait for done(). The items are
+        # plain records read from the table here; the worker opens its own GDAL datasets.
+        # A layer of an earlier import of this package is taken out of the project first
+        # (it would keep the GeoTIFF locked on Windows; the worker cannot release it).
+        from .runner import release_folder
+        n = release_folder(out)
+        if n:
+            self._log(">>> {} layer(s) of the earlier import taken out of the project (the "
+                      "files are written again)".format(n))
+
+        def work(progress, log):
+            return DW.convert(items, out, name=name, progress=progress)
+
+        def done(outcome):
+            if outcome.cancelled:
+                self._update_status("DSS-WISE import cancelled", False)
+                self._log(">>> DSS-WISE Lite import cancelled")
+                return
+            if outcome.error is not None:
+                log_message(outcome.traceback, MSG_CRITICAL)
+                self._log(outcome.traceback)
+                self._update_status("DSS-WISE import FAILED: {}".format(outcome.error), False)
+                QMessageBox.critical(self, "DSS-WISE Lite",
+                                     str(outcome.error) or repr(outcome.error))
+                return
+            self._dsw_imported(name, out, outcome.result)
+        self._start_background("Importing DSS-WISE Lite results\u2026", work, done)
+
+    def _dsw_imported(self, name, out, res):
+        """Main-thread part of the DSS-WISE import: the Setup boxes, the scenario row, the
+        layers and the text."""
         p = res["paths"]
         if self.dsw_use_setup_check.isChecked():
             # fields the package has no raster for are cleared on purpose: keeping

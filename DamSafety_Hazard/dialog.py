@@ -813,8 +813,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             return self._progress
         prog = QProgressDialog(title, "Cancel", 0, 100, self)
         prog.setWindowTitle(PLUGIN_NAME)
-        # Modal (synchronous steps): blocks the plugin dialog and QGIS while
-        # the step pumps events. Background runs (v2.6) use a non-modal bar:
+        # Modal: the main-thread finish of a background run (_finish_deferred) and the
+        # Classify path's inline file checks. Background tasks (v2.6; since 2.23.15 every
+        # long job - imports, Check inputs, creep watch, self-test) use a non-modal bar:
         # QGIS stays usable, the dialog's buttons are disabled meanwhile.
         if modal:
             prog.setWindowModality(WINDOW_MODAL)
@@ -829,6 +830,9 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         return prog
 
     def _progress_tick(self, pct, message):
+        """Progress of a step on the main thread (_finish_deferred, the inline checks of
+        Classify): the bar is redrawn here, so processEvents stays - it is the only way
+        the bar and its Cancel button get painted while the main thread works."""
         if self._progress is None:
             return
         pct = min(max(float(pct), 0.0), 100.0)
@@ -964,6 +968,13 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         "review_save_btn", "review_rerun_btn", "sources_btn",
         "review_export_btn", "review_merge_btn", "series_btn",
         "dsw_scan_btn", "dsw_import_btn", "ras_scan_btn", "ras_import_btn",
+        # 2.23.15: the imports run in a task now - what they read at the end (the Setup /
+        # load / scenario choices, the plan options, the DSS-WISE table) must not change
+        # under them, nor the plan be re-pointed; the creep watch's worker count the same
+        "ras_use_plan_btn", "ras_use_setup_check", "ras_load_check", "ras_plan_edit",
+        "ras_dem_edit", "ras_breach_spin", "ras_arrival_spin", "ras_cell_spin",
+        "dsw_use_setup_check", "dsw_load_check", "dsw_add_scenario_check", "dsw_table",
+        "dsw_path_edit", "dsw_name_edit", "watch_workers_spin",
         "data_download_btn", "data_sources_btn", "open_data_btn",
         # v2.9
         "datafolder_edit", "datafolder_browse_btn", "datafolder_search_btn",
@@ -1010,13 +1021,40 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         cfg["one_d"] = self._one_d_selected()
         return cfg
 
-    def _run_checks(self, services):
-        from .checks import check_all, ERROR
-        # 2.18.35: rasters of another folder / dam fail the check (and block Classify)
+    def _check_job(self):
+        """2.23.15: everything the input check reads from the window and the project, taken
+        on the main thread: the raster paths, the choices, the ownership problems and the
+        building-outline layer (a project scan). The check itself (_check_work) then runs
+        in a task, or inline for Classify, without touching either."""
+        from .checks import ERROR, outline_text
+        from .osm_processing import get_osm_candidates
         own = [(ERROR, t) for t in self._raster_ownership_problems()]
-        return own + check_all(self._check_paths(), self.config_output_folder,
-                               self.config_dam_folder, self._check_cfg(), services=services,
-                               progress=self._progress_tick if services else None)
+        outline = ""
+        if self.config_output_folder:
+            try:
+                outline = outline_text(get_osm_candidates(self.config_output_folder,
+                                                          self.config_dam_folder))
+            except Exception:
+                outline = ""
+        return {"paths": self._check_paths(), "out": self.config_output_folder,
+                "dam": self.config_dam_folder, "cfg": self._check_cfg(), "own": own,
+                "outline": outline}
+
+    @staticmethod
+    def _check_work(job, services, progress=None):
+        """The input check from a _check_job: files and (with services) the network only -
+        safe in a worker thread. [(level, text)]."""
+        from .checks import check_all
+        return job["own"] + check_all(job["paths"], job["out"], job["dam"], job["cfg"],
+                                      services=services, progress=progress,
+                                      outline=job["outline"])
+
+    def _run_checks(self, services):
+        # 2.18.35: rasters of another folder / dam fail the check (and block Classify).
+        # Called inline by Classify (services=False: files only, a second); Check inputs
+        # with the service probes goes through _on_check_inputs's task (2.23.15)
+        return self._check_work(self._check_job(), services,
+                                progress=self._progress_tick if services else None)
 
     @staticmethod
     def _checks_html(results):
@@ -1033,15 +1071,15 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self._on_run_all()
 
     def _on_check_inputs(self, *args):
+        """Check inputs: the rasters, the outline file and the download services. 2.23.15
+        (audit): the check runs in a background task - the service probes wait on the
+        network (minutes with the cable out) and used to hold QGIS behind a modal bar -
+        and its results go to the check panel in the done callback. Returns the results
+        when the task ran at once (tests, headless), else None."""
         if self._busy:
-            return
-        self._set_busy(True)
+            return None
         try:
-            self._progress = self._make_progress("Checking inputs and data services\u2026")
-            results = self._run_checks(services=True)
-        except CancelledByUser:
-            self._log(">>> Input check cancelled")
-            return
+            job = self._check_job()               # main thread: window and project reads
         except Exception as e:
             tb = traceback.format_exc()
             self._log(tb)
@@ -1049,18 +1087,37 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             self._update_status("Input check FAILED: {}".format(e), False)
             QMessageBox.critical(self, "Check Inputs Error",
                                  "{}\n\nFull details are in the log area below.".format(e))
-            return
-        finally:
-            self._finish_progress()
-            self._set_busy(False)
-        for lvl, t in results:
-            self._log(">>> CHECK {}: {}".format(lvl, t))
-        # 2.18.36: the panel and the button badge show the counts; the status line no longer
-        # repeats them ("Input check: N error(s), M warning(s)")
-        self._clear_status()
-        # 2.18.32: the results are shown in the panel under the buttons (no pop-up)
-        self.check_panel.set_results(results)
-        return results
+            return None
+        got = []
+
+        def work(progress, log):
+            return self._check_work(job, True, progress=progress)
+
+        def done(outcome):
+            if outcome.cancelled:
+                self._log(">>> Input check cancelled")
+                return
+            if outcome.error is not None:
+                self._log(outcome.traceback)
+                log_message(outcome.traceback, MSG_CRITICAL)
+                self._update_status("Input check FAILED: {}".format(outcome.error), False)
+                QMessageBox.critical(self, "Check Inputs Error",
+                                     "{}\n\nFull details are in the log area below.".format(
+                                         outcome.error))
+                return
+            results = outcome.result
+            for lvl, t in results:
+                self._log(">>> CHECK {}: {}".format(lvl, t))
+            # 2.18.36: the panel and the button badge show the counts; the status line no
+            # longer repeats them ("Input check: N error(s), M warning(s)")
+            self._clear_status()
+            # 2.18.32: the results are shown in the panel under the buttons (no pop-up)
+            self.check_panel.set_results(results)
+            got.append(results)
+        # project_bound=False: the results describe the window's inputs, not the project
+        self._start_background("Checking inputs and data services\u2026", work, done,
+                               project_bound=False)
+        return got[0] if got else None
 
     def _on_run_all(self, *args):
         """Check inputs, then (v2.6, one background task) save the data sets
@@ -1097,27 +1154,35 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
 
     # ------------------------------------------------------------ SELF-TEST
     def _on_run_selftest(self):
+        """2.23.15 (audit): the self-test runs in a background task like the classification
+        (it IS the pipeline on synthetic data); its print-layout / PDF checks and the
+        message box follow on the main thread (selftest.finish_self_test)."""
         if self._busy:
             return
-        from .selftest import run_self_test
-        self._set_busy(True)
-        self._progress = self._make_progress("Running self-test\u2026")
-        try:
-            ok, lines = run_self_test(progress_cb=self._progress_tick)
-        except CancelledByUser:
-            self._update_status("Self-test cancelled", False)
-            return
-        except Exception:
-            ok, lines = False, ["Self-test crashed:"] + traceback.format_exc().splitlines()
-        finally:
-            self._finish_progress()
-            self._set_busy(False)
-        for line in lines:
-            self._log(line)
-            log_message(line, MSG_INFO if ok else MSG_WARNING)
-        self._update_status("Self-test {}".format("PASSED" if ok else "FAILED"), ok)
-        box = QMessageBox.information if ok else QMessageBox.warning
-        box(self, "Self-Test", "<br>".join(html.escape(line) for line in lines))
+        from .selftest import run_self_test, finish_self_test
+
+        def work(progress, log):
+            return run_self_test(progress_cb=progress, deferred=True)
+
+        def done(outcome):
+            if outcome.cancelled:
+                self._update_status("Self-test cancelled", False)
+                return
+            if outcome.error is not None:
+                ok, lines = False, ["Self-test crashed:"] + outcome.traceback.splitlines()
+            else:
+                try:
+                    ok, lines = finish_self_test(outcome.result)
+                except Exception:
+                    ok, lines = False, ["Self-test crashed:"] + \
+                        traceback.format_exc().splitlines()
+            for line in lines:
+                self._log(line)
+                log_message(line, MSG_INFO if ok else MSG_WARNING)
+            self._update_status("Self-test {}".format("PASSED" if ok else "FAILED"), ok)
+            box = QMessageBox.information if ok else QMessageBox.warning
+            box(self, "Self-Test", "<br>".join(html.escape(line) for line in lines))
+        self._start_background("Running self-test\u2026", work, done, project_bound=False)
 
     # ------------------------------------------------------------ SETTINGS --
     _SETTING_WIDGETS = (
