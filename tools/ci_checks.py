@@ -60,6 +60,10 @@ IDENTICAL_ACROSS_PLUGINS = {
     # Runner 3.10.89 / Screening 0.17.50: one rule for the elevation unit a DEM records (the
     # Runner's 'Detect from the raster' and what Download DEM tags)
     "core/dem_zunit.py": ("DamSafety_Runner", "DamSafety_Screening"),
+    # audit P1 (Runner 3.16.9 / Screening 0.18.17): ONE ND 5.2 / TM 11 classification module
+    # and chart file for both tools (the Screening's test_nd_hazard_adapter checks it too)
+    "core/nd_hazard.py": ("DamSafety_Runner", "DamSafety_Screening"),
+    "core/acer_tm11_charts.json": ("DamSafety_Runner", "DamSafety_Screening"),
     # audit R-H1: the Suite status dock's Linux LISFLOOD-FP build applies the same patch
     "scripts/build_lisflood_linux.sh": ("DamSafety_Runner", "DamSafety_Setup"),
     "scripts/patch_lisflood.py": ("DamSafety_Runner", "DamSafety_Setup"),
