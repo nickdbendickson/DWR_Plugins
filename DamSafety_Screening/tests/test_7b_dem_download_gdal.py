@@ -154,6 +154,30 @@ def main(work):
         lt.make_plan, lt.fetch = keep
     print("OK 1 m: native tiles VRT, band unit m, 10 m underneath, reused only when complete")
 
+    # H10: build_vrts mosaics ND LiDAR tiles that span CRSs (State Plane N / S for ASCII feet)
+    # instead of a bare BuildVRT that keeps the first tile's CRS and silently drops the rest -> a
+    # reservoir straddling a CRS boundary read understated storage.
+    mixd = os.path.join(work, "h10", "ASCII_Grids_ft")
+    os.makedirs(mixd)
+    tA = tif(os.path.join(mixd, "gftA.tif"), 2266, 1900000.0, 600000.0, 20, 20, 10.0, 2000.0)
+    tB = tif(os.path.join(mixd, "gftB.tif"), 2265, 1900000.0, 600000.0, 20, 20, 10.0, 3000.0)
+    bare = gdal.BuildVRT(os.path.join(work, "h10_bare.vrt"), [tA, tB])
+    nbare = len(bare.GetFileList())                         # a bare BuildVRT drops the minority-CRS tile
+    bare = None
+    mout = os.path.join(work, "h10_out")
+    os.makedirs(mout)
+    dd.build_vrts([tA, tB], mout)
+    ftv = gdal.Open(os.path.join(mout, "nd_lidar_ascii_ft.vrt"))
+    assert ftv is not None and len(ftv.GetFileList()) > nbare, "H10: a CRS-mismatched tile was dropped"
+    ftv = None
+    assert os.path.isdir(os.path.join(mout, "nd_lidar_ascii_ft_tiles")), "H10: the minority tile was not warped"
+    sout = os.path.join(work, "h10_one")
+    os.makedirs(sout)
+    tc = tif(os.path.join(sout, "gftC.tif"), 2266, 1900000.0, 600000.0, 20, 20, 10.0, 1000.0)
+    dd.build_vrts([tc], sout)
+    assert not os.path.isdir(os.path.join(sout, "nd_lidar_ascii_ft_tiles")), "H10: single-CRS must not warp"
+    print("OK H10: build_vrts keeps tiles across CRSs; single-CRS unchanged")
+
 
 if __name__ == "__main__":
     w = tempfile.mkdtemp(prefix="w7b_dem_gdal_")

@@ -92,6 +92,7 @@ INCREMENT_NAMES = {"depth": "Incremental Depth (Max).tif", "wse": "Incremental W
 QA_NAMES = {"depth": "hmax_ft.tif", "velocity": "vmax_fps.tif", "arrival": "arr_hr.tif",
             "wse": "wsemax_ft.tif"}
 WET_M = 0.003          # a cell counts as flooded above 0.01 ft
+OUTFLOW_WARN_PCT = 5.0     # H08: warn when at least this share of the breach volume leaves the model
 MAX_SIM_S = 336 * 3600.0   # longest simulation the automatic duration will ask for
 STATE_FILE = "state.json"
 # 3.15.0 (ND Runner 3.27.7 / 3.28.0): a coarse model cell over a wide, shallow flood over-spreads
@@ -1226,8 +1227,7 @@ def _write_refine_entry(res, entry):
         return
     rep["grid_refine"] = entry
     try:
-        with open(res.report_json, "w", encoding="utf-8") as f:
-            json.dump(rep, f, indent=2, default=_json_default)
+        _write_json(res.report_json, rep)
     except OSError:
         pass
 
@@ -1250,8 +1250,7 @@ def _amend_report(res, entry, texts):
     if res.summary is not None:
         rep["summary"] = res.summary
     try:
-        with open(res.report_json, "w", encoding="utf-8") as f:
-            json.dump(rep, f, indent=2, default=_json_default)
+        _write_json(res.report_json, rep)
         if getattr(res, "report_md", ""):
             with open(res.report_md, "w", encoding="utf-8") as f:
                 f.write(render_report(rep))
@@ -1959,7 +1958,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     lf_env, dem, init_grid = None, None, None
     lst, wd = None, None
     lf_span = (5.0, 60.0 if not has_base else 45.0)
-    start_it = len(iterations) + 1
+    start_it = state.get("next_it")        # H09: the domain-run number to resume at; the pass
+    if start_it is None:                    # count no longer tracks it (clock/refill passes append
+        start_it = len(iterations) + 1      # an entry without advancing `it`). Old checkpoints: fall back.
     saved_warn = state.get("warnings")
     if state.resumed and saved_warn:
         warnings += [w for w in saved_warn if w not in warnings]
@@ -2062,7 +2063,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                         if msg not in warnings:
                             warnings.append(msg)
                         state.save(iterations=iterations, next_bounds=list(bounds),
-                                   next_sim_time=sim_time, warnings=warnings, lisflood_done=False)
+                                   next_sim_time=sim_time, warnings=warnings, lisflood_done=False,
+                                   next_it=it)
                         continue
                     except Exception as ex:
                         hole_held = True
@@ -2186,12 +2188,20 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             log("Flood still moving inside the domain; extending the clock to {:.1f} h "
                 "without using a domain run.".format(sim_time / 3600.0))
             state.save(iterations=iterations, next_bounds=list(bounds), next_sim_time=sim_time,
-                       warnings=warnings, lisflood_done=False)
+                       warnings=warnings, lisflood_done=False, next_it=it)
             continue
         it += 1
         state.save(iterations=iterations, next_bounds=list(bounds), next_sim_time=sim_time,
-                   warnings=warnings, lisflood_done=False)
+                   warnings=warnings, lisflood_done=False, next_it=it)
         continue
+    if lf_env is None:
+        # H09: the while body never ran, so no result was produced - a desynced checkpoint
+        # (iterations recorded beyond max_iterations, next_it absent on an old resume). Fail
+        # loudly instead of writing lisflood_done=True with a never-simulated clock (which a
+        # later resume would load at the wrong footprint) and then hitting lf_env.gauges.
+        raise lfmod.ModelError(
+            "the checkpoint in {} is out of step with the run plan; delete {} "
+            "and run again".format(model_dir, STATE_FILE))
     state.save(iterations=iterations, lisflood_done=True, final_bounds=list(bounds),
                final_sim_time=sim_time, warnings=warnings)
     report["lisflood_runs"] = iterations
@@ -2200,6 +2210,27 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             "reason": stop_reason,
             "detail": next((w for w in warnings if "still" in w.lower() or "cap" in w.lower() or "limit" in w.lower() or "hole" in w.lower()), stop_reason)
         }
+    # H08: a wide shallow sheet can carry a large share of the breach volume off the model
+    # through its edges while every edge stays under the depth tolerance, so the modelled flood
+    # area and the downstream consequences are minimums. Surface the boundary outflow (Qout) and
+    # warn. (The domain-extension rule that would grow the model to catch it is a separate,
+    # sign-off change; this only makes the truncation visible.)
+    out_pct = lf_env.stats.get("boundary_outflow_pct")
+    out_acft = lf_env.stats.get("boundary_outflow_acft")
+    if out_pct is not None:
+        report["boundary_outflow_pct"] = out_pct
+        report["boundary_outflow_acft"] = out_acft
+        if out_pct >= OUTFLOW_WARN_PCT:
+            msg = ("{:.0f}% of the breach volume ({:,.0f} ac-ft) left the model through its "
+                   "edges when the run stopped{}, so the flood area and the downstream "
+                   "consequences are minimums. Extend the model downstream (more runs, a "
+                   "larger step or a larger first domain), or confirm nothing that would "
+                   "change the classification lies beyond it."
+                   .format(out_pct, out_acft or 0.0,
+                           " ({})".format(report["cut_off"]["reason"])
+                           if report.get("cut_off") else ""))
+            if msg not in warnings:
+                warnings.append(msg)
     snap_npz = os.path.join(model_dir, "depth_snapshots.npz")
     if frames > 0 and lst is not None and lst.snapshot_s:
         try:
@@ -2622,8 +2653,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     report["run_finished"] = datetime.datetime.now().isoformat(timespec="seconds")
     report["elapsed_min"] = round((time.time() - t_start) / 60.0, 1)
     res.report_json = os.path.join(model_dir, "run_report.json")
-    with open(res.report_json, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, default=_json_default)
+    _write_json(res.report_json, report)
     res.report_md = os.path.join(model_dir, "run_report.md")
     with open(res.report_md, "w", encoding="utf-8") as f:
         f.write(render_report(report))
@@ -2844,8 +2874,7 @@ def adopt_final_engine(out_folder, final_model, st=None, dam_xy=None, log=None):
     vec.update(res_ns.vectors)
     report.setdefault("outputs", {})["final"] = dict(paths)
     report["outputs"]["vectors"] = vec
-    with open(rp, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, default=_json_default)
+    _write_json(rp, report)
     with open(os.path.join(model_dir, "run_report.md"), "w", encoding="utf-8") as f:
         f.write(render_report(report))
     try:
@@ -3015,8 +3044,7 @@ def _write_no_breach(res, report, warnings, model_dir, hy_nb):
     if hy_nb is not None:
         hy_nb.to_csv(os.path.join(model_dir, "no_breach_hydrograph.csv"))
     res.report_json = os.path.join(model_dir, "run_report.json")
-    with open(res.report_json, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, default=_json_default)
+    _write_json(res.report_json, report)
     res.report_md = os.path.join(model_dir, "run_report.md")
     from . import damjson
     with open(res.report_md, "w", encoding="utf-8") as f:
@@ -3801,6 +3829,52 @@ def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None):
             "from its rasters ({}: {}); they still show the LISFLOOD-FP screening "
             "pass.".format(type(e).__name__, e))
     return hr
+
+
+# the run report of a finished run (REPORT_REL in damjson); written only after every pass is
+# done, so its presence tells a finished run from a cancelled one that left pass rasters
+RUN_REPORT_REL = os.path.join(MODEL_FOLDER, "run_report.json")
+
+
+def _write_json(path, obj):
+    """Replace `path` only after the whole document is on disk.
+
+    A plain open/write leaves a truncated file if the process is killed mid-dump.
+    run_finished() does not treat a truncated run_report.json as a finished run, so
+    a kill during the write must not replace a good report with a half file (and
+    must not leave a half file that an older skip test counted as done)."""
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, default=_json_default)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def run_finished(folder):
+    """True only when the dam folder holds a FINISHED run, not merely a pass.
+
+    Every finished LISFLOOD-FP pass writes Depth/Velocity/Arrival (Max).tif under the final
+    names so a cancel does not lose work, but only a run that reaches the end writes the run
+    report. The queue's skip test and the window's results-ready test used to look at the depth
+    raster alone, so a dam cancelled in its second pass was reported "already run" and skipped,
+    with its first-pass rasters left as the result. Requiring the run report fixes that."""
+    if not folder:
+        return False
+    for k in ("depth", "velocity", "arrival"):
+        if not os.path.isfile(os.path.join(folder, FINAL_NAMES[k])):
+            return False
+    rep = os.path.join(folder, RUN_REPORT_REL)
+    if not os.path.isfile(rep):
+        return False
+    try:                                   # a report without run_finished is an interrupted run
+        with open(rep, encoding="utf-8") as fh:
+            return bool(json.load(fh).get("run_finished"))
+    except Exception:                      # truncated or damaged: not finished, re-run
+        return False
 
 
 def hecras_done(folder):

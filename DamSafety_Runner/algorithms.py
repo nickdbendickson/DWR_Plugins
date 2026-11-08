@@ -2093,7 +2093,7 @@ class BatchAlgorithm(_Base):
         self.add_datum_param()
         self.add_feature_params()
         self.add_model_params()
-        self._bool("SKIP_DONE", "Skip dams whose folder already has 'Depth (Max).tif'", True)
+        self._bool("SKIP_DONE", "Skip dams whose folder already holds a finished run", True)
         self._bool("CLASSIFY", "Classify afterwards with the ND hazard plugin's batch tool "
                    "and merge the result", False)
         self._text("CLASS_ALG", "Classification batch algorithm ID (empty = ndhazard:batch)",
@@ -2185,9 +2185,9 @@ class BatchAlgorithm(_Base):
                 row.update({"Structure_Flag": sflags.note(flag) + " (run allowed)",
                             "Hazard_Of_Record": "{} ({})".format(flag.get("hazard"),
                                                                  flag.get("hazard_source"))})
-            if skip and os.path.exists(os.path.join(folder, workflow.FINAL_NAMES["depth"])) \
+            if skip and workflow.run_finished(folder) \
                     and (base_st.tier != workflow.TIER_HECRAS or hecras_done(folder)):
-                row.update({"Status": "skipped", "Message": "already has Depth (Max).tif" + (
+                row.update({"Status": "skipped", "Message": "already run (finished)" + (
                     " and _hecras/hecras_stage.json" if base_st.tier == workflow.TIER_HECRAS
                     else "")})
                 rows.append(row)
