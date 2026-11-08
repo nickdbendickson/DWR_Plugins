@@ -104,3 +104,37 @@ def per_run_parameters_stay_out_of_the_settings_grid():
     # the three plugins carry the same adapter (sync_ui)
     srcs = {open(os.path.join(REPO, p, "suite_settings_tools.py"), "rb").read() for p in PLUGINS}
     assert len(srcs) == 1 and b"PER_RUN_KEYS" in srcs.pop()
+
+
+@register
+def chain_steps_and_self_tests_are_hidden_from_the_toolbox_but_still_run():
+    """Usability plan change 3 (2026-11-08): FlagHideFromToolbox on the tools only another tool
+    or a window button runs; every tool stays registered and runnable."""
+    from qgis.core import Qgis
+    from nd_breach_runner import provider as prov, suite_settings_tools as RT
+    names = {RT.tool_name(c()): c for c in prov.ALGORITHMS}
+    assert prov.HIDDEN_FROM_TOOLBOX == {"selftest", "verification", "classify"}
+    assert set(prov.HIDDEN_FROM_TOOLBOX) <= set(names)          # all still registered
+    hidden = {n for n, c in names.items() if getattr(c, "_nd_hidden", False)}
+    assert hidden == set(prov.HIDDEN_FROM_TOOLBOX), hidden
+    # the fake QGIS has no such flag: flags() stays what the tool had (0), nothing breaks
+    assert RT.hide_from_toolbox_flag() == 0
+    assert names["selftest"]().flags() == names["rundam"]().flags() == 0
+    # a QGIS with the flag: the hidden tools carry it, the others do not (the fake's
+    # NoThreading is a string, so the tools with their own flags() get a number for the check)
+    from nd_breach_runner import compat, algorithms_tools as AT
+    Qgis.ProcessingAlgorithmFlag.HideFromToolbox = 1024
+    saved = compat.ALG_NO_THREADING, AT.ALG_NO_THREADING
+    compat.ALG_NO_THREADING = AT.ALG_NO_THREADING = 4
+    try:
+        assert RT.hide_from_toolbox_flag() == 1024
+        assert names["selftest"]().flags() & 1024 and names["classify"]().flags() & 1024
+        assert names["classify"]().flags() & 4                  # its own NoThreading kept
+        assert not (names["rundam"]().flags() & 1024)
+    finally:
+        del Qgis.ProcessingAlgorithmFlag.HideFromToolbox
+        compat.ALG_NO_THREADING, AT.ALG_NO_THREADING = saved
+    # the hidden tools still build their parameters (a hidden tool is a runnable tool)
+    inst = names["selftest"]()
+    inst.initAlgorithm()
+    assert RT.param_defs(inst)

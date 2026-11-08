@@ -1608,9 +1608,21 @@ class Provider(QgsProcessingProvider):
                     MarkReviewedAlgorithm]
         return classes
 
+    # 2.23.17 (usability plan change 3): the window-state hand-off the batch chain runs
+    # (savedamstate) is not a tool to pick from the toolbox - FlagHideFromToolbox; it stays
+    # runnable from the chain, models and qgis_process.
+    HIDDEN_FROM_TOOLBOX = frozenset(("savedamstate",))
+
     @classmethod
     def algorithm_classes(cls):
         """v2.13: every tool takes its parameter defaults from the suite settings file
         (suite_settings_tools.settings_aware); the grid groups them by the tool's own group."""
         from . import suite_settings_tools as ST
-        return [ST.settings_aware(c, SUITE_KEY, settings_group) for c in cls.original_classes()]
+        out = []
+        for c in cls.original_classes():
+            try:
+                hidden = c().name() in cls.HIDDEN_FROM_TOOLBOX
+            except Exception:                                    # noqa - a tool that needs more than this QGIS
+                hidden = False
+            out.append(ST.settings_aware(c, SUITE_KEY, settings_group, hidden=hidden))
+        return out
