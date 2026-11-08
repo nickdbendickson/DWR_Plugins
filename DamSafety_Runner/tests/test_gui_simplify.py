@@ -80,3 +80,27 @@ def data_plugin_opens_from_the_home_and_does_not_auto_download():
     assert "run_plugin" in names and "show_settings" in names
     st = open(os.path.join(REPO, "DamSafety_Data", "settings.py"), encoding="utf-8").read()
     assert 'self._get("auto_check", False, bool)' in st
+
+
+@register
+def per_run_parameters_stay_out_of_the_settings_grid():
+    """Usability plan change 2 (2026-11-08): the dam, scenario, reviewer and report-signature
+    parameters name one run and are not settings - they are left out of the catalog the three
+    settings grids show, while the engineer's thresholds stay in."""
+    from nd_breach_runner import provider as prov, popup_logic as pl, suite_settings_tools as RT
+    cat = RT.full_catalog(prov.ALGORITHMS, pl.PLUGIN_KEY, pl.settings_group, pl.TAB_ORDER)
+    keys = {(s.tool, s.key) for s in cat}
+    for gone in (("rundam", "DAM_ID"), ("rundam", "DAM_NAME"), ("products", "DAM_ID"),
+                 ("submittal", "TITLE"), ("submittal", "ENGINEER"), ("validationrecord", "APPROVAL")):
+        assert gone not in keys, gone
+    for kept in (("rundam", "INCR_FT"), ("rundam", "LISFLOOD_EXE"), ("rundam", "CONTOURS_HR")):
+        assert kept in keys, kept
+    assert "DAM_ID" in RT.PER_RUN_KEYS and "REVIEWER" in RT.PER_RUN_KEYS
+    # the tool dialogs still have them: the skip is the grid's, not the tool's
+    for c in prov.ALGORITHMS:
+        inst = RT.fresh(c)
+        if RT.tool_name(inst) == "rundam":
+            assert "DAM_ID" in {d["name"] for d in RT.param_defs(inst)}
+    # the three plugins carry the same adapter (sync_ui)
+    srcs = {open(os.path.join(REPO, p, "suite_settings_tools.py"), "rb").read() for p in PLUGINS}
+    assert len(srcs) == 1 and b"PER_RUN_KEYS" in srcs.pop()

@@ -109,13 +109,29 @@ def tool_name(alg):
     return _get(alg, "name", "") or ""
 
 
-def catalog_of(alg, plugin, group_of, tool=None):
+# 2026-11-08 (usability plan, change 2): parameters that name ONE run - the dam, the scenario,
+# the reviewer, a report's title and signatures - are not settings. They used to fill the grid
+# ("Dam id" three times on Hazard's Other tab) and a value saved there would have been applied
+# to every later run. They stay in the tool dialogs; the grid leaves them out.
+PER_RUN_KEYS = frozenset((
+    "DAM", "DAM_ID", "DAM_IDS", "DAM_NAME", "NID_ID", "SUBJECT_NID", "STRUCTURE_ID",
+    "SCENARIO_NAME", "PROJECT_FILE", "CLASSIFY_OPTIONS", "OUTPUT_HTML", "OUT_FILE",
+    "REVIEWER", "COMMENTS", "NOTES", "TITLE", "PROJECT", "ENGINEER", "FIRM",
+    "DIGITIZED_FROM", "DIGITIZED_BY", "CHECKED_BY", "DIGITIZED_ON", "FIG2_CALIBRATION",
+    "FIG3_CALIBRATION", "BASE_TIME", "REFERENCE_MODEL", "REFERENCE_VERSION", "REFERENCE_DESC",
+    "STUDY_TITLE", "STUDY_BY", "STUDY_DATE", "APPROVAL", "THIS_MODEL", "ACCEPTANCE",
+))
+
+
+def catalog_of(alg, plugin, group_of, tool=None, skip_keys=PER_RUN_KEYS):
     """Catalog entries of one tool instance (its CURRENT defaults are the entries' defaults, so
-    call it on a fresh, un-overlaid instance for the starting values)."""
+    call it on a fresh, un-overlaid instance for the starting values). Parameters named in
+    `skip_keys` (per-run values, PER_RUN_KEYS) are left out."""
     tool = tool or tool_name(alg)
     fam, _order = group_of(tool)
     return DS.catalog_from_definitions(plugin, tool, param_defs(alg), group=fam,
-                                       tool_title=_get(alg, "displayName", tool) or tool)
+                                       tool_title=_get(alg, "displayName", tool) or tool,
+                                       skip=skip_keys)
 
 
 def set_default(alg, name, value):
