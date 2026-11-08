@@ -86,6 +86,11 @@ def _bootstrap():
     name = "nd_breach_runner"
     mod = sys.modules.get(name)
     here = os.path.realpath(PLUGIN_DIR)
+    # Core 1.0.0: the plugin's damsuite is a shim onto the DamSafety_Core plugin, installed next
+    # to this one (python/plugins/, or the DWR_Plugins checkout): make its parent importable
+    parent = os.path.dirname(here)
+    if os.path.isdir(os.path.join(parent, "DamSafety_Core")) and parent not in sys.path:
+        sys.path.append(parent)
     if mod is not None and os.path.realpath(os.path.dirname(
             getattr(mod, "__file__", "") or "")) == here:
         return name

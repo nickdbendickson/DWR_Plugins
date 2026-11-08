@@ -19,8 +19,8 @@ plugin's constants and osm_parse and then IS this module (sys.modules alias), so
     build(out, ...)              the pack (folder of GeoPackages, or the one-file zip)
     main(argv)                   the command line (python build_nd_pack.py --help)
 
-Edit shared/damsuite/packengine.py in DWR_Plugins only, then run tools/sync_damsuite.py (and
---write-pin); the vendored copies are checked byte for byte.
+Edit DamSafety_Core/damsuite/packengine.py in DWR_Plugins only (Core 1.0.0: the one copy, in
+the DamSafety Core plugin; the plugins' damsuite packages are aliases of it).
 
 From the ND copy's text:
 Run on any computer with internet access - QGIS is NOT needed, any Python

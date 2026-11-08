@@ -5,10 +5,12 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Start here for the DamSafety plugins: choose the suite data folder, then continue in DamSafety Runner's dam wizard.
 about=Checks the suite data folder (the offline pack or a folder of layer files), fills empty plugin slots from it and hands the folder and its scan to DamSafety Runner's dam wizard, which picks the dam, the DEM and the run. Also the suite setup / status window and the status dock.
-version=1.0.20
+version=1.1.0
+plugin_dependencies=DamSafety Core
 icon=icon.svg
 category=Plugins
-changelog=1.0.20 - GUI check of 2026-11-04, Nick approved: the Suite status dock's four buttons sit two to a row, so the dock fits 420 px (needed 500). Test: DamSafety_Runner/tests/realqt_dock_area.py (2026-11-04)
+changelog=1.1.0 - DamSafety Core 1.0.0 - one shared damsuite (consolidation, 2026-11-08): this plugin no longer ships its own copy of the shared code. damsuite/ is a two-line shim onto the DamSafety Core plugin's damsuite package (DamSafety_Core/alias.py makes them the same module objects), and the shared window files (tokens, ui_widgets) are three-line shims onto DamSafety_Core/ui. The three-module mini damsuite (layout, suite_config) and the root suite_config.py / suite_fill.py / pack_convert.py are shims onto the Core's modules too. Install DamSafety Core first: metadata plugin_dependencies names it, so the QGIS Plugin Manager offers it when this plugin is installed. No tool, default or number changes.
+    1.0.20 - GUI check of 2026-11-04, Nick approved: the Suite status dock's four buttons sit two to a row, so the dock fits 420 px (needed 500). Test: DamSafety_Runner/tests/realqt_dock_area.py (2026-11-04)
     1.0.19 - Style A wizard polish (Crest build pack, 2026-11-02): the folder scan lists each layer with a green ✓ found or a red ✕ and what it is for ("required — the dam list comes from here", "optional — locates crests precisely", ...), then "✓ Enough to continue — missing layers only reduce detail." once the DWR dams are there; a wrapping step line shows the Start here… steps (✓ done, ▶ this page, ○ later); an installed Runner whose wizard fails to load, and a Dams folder that cannot be created, now show a message-bar note instead of passing silently. Test: tests/test_style_a.py.
     1.0.18 - QGIS 4: the Suite status dock is added with Qt.DockWidgetArea.LeftDockWidgetArea; PyQt6 refused the bare value and the plugin failed to load (full test 2026-10-30). Test: DamSafety_Runner/tests/test_dock_area_enum.py.
     1.0.17 - The suite folder scan (suite_fill, same as damsuite 1.18.3) finds the DWR dams / lines, the other DWR layers and NID in a format-1 offline pack (nd_offline_pack.sqlite), through an installed plugin's damsuite; format-2 packs and folders of files as before.

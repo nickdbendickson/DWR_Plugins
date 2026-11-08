@@ -1,7 +1,7 @@
 """Update engine of both data updaters (damsuite.updatecore, suite 1.18.8): the ND Data Updater
 (nd_hazard) and DamSafety Data (DWR_Plugins). Each plugin's core.py is a shim that IS this module
 (sys.modules alias), so `from <plugin> import core` and the tests work as before. Edit it in
-DWR_Plugins shared/damsuite only, then run tools/sync_damsuite.py.
+DWR_Plugins DamSafety_Core/damsuite only (Core 1.0.0: the one copy).
 
 Merged from both copies (1.18.8): DamSafety's own manifest name (structures_manifest.json, the
 older manifest.json read once), the lock fix for a fresh lock of this same process (refused, not
