@@ -991,6 +991,30 @@ def max_extent_warning(max_extent_mi, over):
             "before 2026-10) and re-run.".format(float(max_extent_mi or 0), ", ".join(over)))
 
 
+# The domain-growth loop stops for one of two caps while the flood is still leaving the model.
+# These name the two cap conditions so the loop and the tests read them the same way (a shallow
+# sheet on flat terrain - common on the ND plains - never self-terminates, so the cap, not the
+# flood, bounds the extent; the run report then carries cut_off + extent_is_minimum below).
+def hit_run_cap(it, max_iterations, over):
+    """The loop has used its last allowed domain run (max_iterations) and the flood is still
+    leaving (`over` is non-empty). A clock/duration extension is not counted as a run."""
+    return bool(over) and it == int(max_iterations)
+
+
+def hit_extent_cap(next_w_m, next_h_m, max_extent_m, over):
+    """The next domain would exceed the largest-domain cap (max_extent, in metres) and the flood
+    is still leaving."""
+    return bool(over) and (next_w_m > max_extent_m or next_h_m > max_extent_m)
+
+
+def extent_is_minimum(outflow_pct):
+    """True when OUTFLOW_WARN_PCT% or more of the breach volume is still leaving the model when
+    the run stops: the modelled flood area and the downstream consequences are then MINIMUMS, not
+    the full flood. Reported as report['extent_is_minimum'] beside report['cut_off'] so a reader
+    (or Grok Bot's re-baseline) keys off one field instead of parsing warnings."""
+    return outflow_pct is not None and outflow_pct >= OUTFLOW_WARN_PCT
+
+
 MIDCREST_FROM = "DEM at mid-crest (highest point across the dam line's midpoint, +-25 m)"
 
 
@@ -2230,7 +2254,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if still_moving and st.sim_time_hr and not over:
             # lengthen up to the cap instead of stopping on the first clock
             pass
-        if it == st.max_iterations and over:
+        if hit_run_cap(it, st.max_iterations, over):
             stop_reason = "domain-run limit"
             warnings.append(
                 "Stopped after {} domain runs with the flood leaving through {} deeper than "
@@ -2239,7 +2263,7 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
             break
         new_bounds = terrain.expand_bounds(bounds, over, step)
         w, h = terrain.bounds_size(new_bounds)
-        if over and (w > max_extent or h > max_extent):
+        if hit_extent_cap(w, h, max_extent, over):
             stop_reason = "maximum extent ({:.0f} mi)".format(st.max_extent_mi)
             warnings.append(max_extent_warning(st.max_extent_mi, over))
             break
@@ -2324,6 +2348,12 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     if out_pct is not None:
         report["boundary_outflow_pct"] = out_pct
         report["boundary_outflow_acft"] = out_acft
+        # First-class flag: the extent is a minimum when a significant share is still leaving at
+        # the stop. Tie it to the cut-off (if the loop halted at a run/extent/wall-clock cap) so
+        # a cap-truncated flood on flat terrain can't be read as the final answer.
+        report["extent_is_minimum"] = extent_is_minimum(out_pct)
+        if extent_is_minimum(out_pct) and report.get("cut_off"):
+            report["cut_off"]["outflow_pct_at_stop"] = out_pct
         if out_pct >= OUTFLOW_WARN_PCT:
             msg = ("{:.0f}% of the breach volume ({:,.0f} ac-ft) left the model through its "
                    "edges when the run stopped{}, so the flood area and the downstream "
