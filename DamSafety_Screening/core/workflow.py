@@ -169,7 +169,11 @@ DEFAULT_SETTINGS = {
     "settings_file": "",
     "screen_what": 0,         # 0 DWR dam inventory (1-4), 1 ponds and dugouts (16), 2 both
     "storage_choice": 0,      # 0 max, 1 normal, 2 larger of the two
-    "chain": [],              # optional steps the chain includes (CHAIN_OPTIONAL keys)
+    # optional steps the chain includes (CHAIN_OPTIONAL keys). 0.18.19 (usability plan, 2026-11-08):
+    # the quick screen (6) is on, as in the guide and five of the six presets - the window used to
+    # start with it off, so "Screen this county" gave every dam a full 2D flood. Untick "also the
+    # quick screen (6)" (or store chain = "" in the settings file) to simulate every dam.
+    "chain": ["6"],
     "reviewer": "",
 }
 # the window's choices that go to the settings file (not paths of this project / computer)

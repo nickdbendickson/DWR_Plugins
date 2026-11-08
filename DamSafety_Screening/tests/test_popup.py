@@ -687,7 +687,9 @@ assert "step 8: no railroads layer - it cannot affect the result" in EVENTS["mes
 assert "step 8: roads = my_roads.gpkg" in EVENTS["messages"][-1][2]    # restored from the project
 assert "Data the steps will use" in EVENTS["messages"][-1][2]
 assert dlg5._run_chain() is True
-assert [c[0] for c in calls] == ["1", "2", "3", "4", "5", "7", "8", "10"] and not dlg5.chain.active
+# 0.18.19 (usability plan): the window starts with the quick screen (6) on, as the guide and the
+# county preset do, so the county chain includes step 6 unless the box is unticked
+assert [c[0] for c in calls] == ["1", "2", "3", "4", "5", "6", "7", "8", "10"] and not dlg5.chain.active
 assert dlg5.chain_btn.isEnabled() and not dlg5.chain_stop_btn.isEnabled() and dlg5.step_button["1"].isEnabled()
 assert dlg5.step_state["10"].text() == STATE_TEXT["done"] and "Nothing required is left" in dlg5.hint_label.text()
 assert any(">>> Step 5 - Breach parameters and hydrograph" in m for m in dlg5.log_edit.lines)
@@ -700,7 +702,10 @@ EVENTS["messages"].clear()
 assert dlg5._run_chain() is True and not dlg5.chain.active and not dlg5.chain.ok
 assert EVENTS["messages"][-1][0] == "warning" and "Step 2 (Cache terrain per dam) did not finish: boom" in EVENTS["messages"][-1][2]
 assert dlg5.chain_btn.isEnabled() and dlg5.step_button["2"].isEnabled()
-# the optional steps ticked in the window are saved and used
+# the optional steps ticked in the window are saved and used (6 starts ticked: untick, re-tick)
+assert dlg5.chain_check["6"].isChecked() and wf.DEFAULT_SETTINGS["chain"] == ["6"]
+dlg5.chain_check["6"].setChecked(False)
+assert dlg5.settings()["chain"] == [] and json.loads(QgsProject.instance().readEntry("NDDamScreening", "state", "")[0])["chain"] == []
 dlg5.chain_check["6"].setChecked(True)
 assert dlg5.settings()["chain"] == ["6"] and json.loads(QgsProject.instance().readEntry("NDDamScreening", "state", "")[0])["chain"] == ["6"]
 # the checks of the tool's own required parameters stop a chain before it starts the tool

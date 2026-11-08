@@ -53,7 +53,7 @@ class Sensitivity(QgsProcessingAlgorithm):
                                      behavior=FILE_FOLDER))
         P(QgsProcessingParameterEnum("VARS", "Variants", [v[2] for v in VARIANTS], allowMultiple=True,
                                      defaultValue=list(range(len(VARIANTS)))))
-        P(QgsProcessingParameterEnum("ENGINE", "Flood engine", ENGINES, defaultValue=0))
+        P(QgsProcessingParameterEnum("ENGINE", "Flood engine", ENGINES, defaultValue=2))   # 0.18.19: built-in, as the window (usability plan)
         P(QgsProcessingParameterFile("EXE", "LISFLOOD-FP executable", behavior=FILE_FILE,
                                      optional=True))
         P(QgsProcessingParameterNumber("WORKERS", "Dams to run at the same time",

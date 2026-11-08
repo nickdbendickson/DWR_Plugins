@@ -369,7 +369,7 @@ class RunBreachSim(QgsProcessingAlgorithm):
         P(QgsProcessingParameterEnum("TSRC", "Terrain for larger clips", TERRAIN, defaultValue=1))
         P(QgsProcessingParameterFile("LOCAL", "Local DEM folder (if selected above)",
                                      behavior=FILE_FOLDER, optional=True))
-        P(QgsProcessingParameterEnum("ENGINE", "Flood engine", ENGINES, defaultValue=0))
+        P(QgsProcessingParameterEnum("ENGINE", "Flood engine", ENGINES, defaultValue=2))   # 0.18.19: built-in, as the window (usability plan)
         P(QgsProcessingParameterString("EXE", "LISFLOOD-FP executable (LISFLOOD engines only)",
                                      optional=True))
         P(QgsProcessingParameterEnum("SCEN", "Scenario", SCENARIOS, defaultValue=0))
