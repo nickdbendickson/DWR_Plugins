@@ -136,12 +136,14 @@ def rate_table_status(rates=None):
     if not rates:
         return False, ("No fatality rate table has been signed off, so loss of life is not "
                        "estimated. Population at risk, flood severity and warning time are "
-                       "reported instead. An engineer enters and signs a rate table in "
-                       "Suite settings > Loss of life.")
+                       "reported instead. An engineer supplies a signed rate table (the "
+                       "rates by severity and warning band, with signed_off_by and source) "
+                       "to the tool that estimates loss of life.")
     by = (rates.get("signed_off_by") or "").strip() if isinstance(rates, dict) else ""
     if not by:
         return False, ("A fatality rate table is present but nobody has signed it off; it is "
-                       "not used. Sign it off in Suite settings > Loss of life.")
+                       "not used. Fill in signed_off_by (the engineer's name) in the rate "
+                       "table file.")
     src = (rates.get("source") or "").strip()
     return True, "Fatality rates signed off by {}{}.".format(by, " (" + src + ")" if src else "")
 

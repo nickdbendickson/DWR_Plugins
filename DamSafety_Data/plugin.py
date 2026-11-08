@@ -14,7 +14,7 @@ from qgis.PyQt.QtGui import QDesktopServices, QIcon
 from . import core
 from .http_qgis import QgisHttp, gdal_merger
 from .qtcompat import MSG_INFO, MSG_WARNING, TASK_CAN_CANCEL, VECTOR_LAYER, QAction
-from .settings import Settings
+from .settings import Settings, auto_check_blocked
 from .settings_dialog import SettingsDialog
 from .sources import SOURCE_INFO, build_sources
 
@@ -196,6 +196,14 @@ class NdDataUpdaterPlugin:
         if not self.settings.auto_check or self.is_running():
             return
         if time.time() - self.settings.last_auto_check < self.settings.check_hours * 3600:
+            return
+        # 1.9.6: no automatic download until a folder is set (settings.auto_check_blocked)
+        folder, how, _notice = self.settings.resolve()
+        why = auto_check_blocked(how, folder)
+        if why:
+            if why not in self._logged:
+                self._logged.add(why)
+                log("Automatic update check skipped: " + why, MSG_INFO)
             return
         self.start_update(force=False, quiet=True)
 
