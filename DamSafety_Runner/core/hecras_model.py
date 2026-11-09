@@ -2273,7 +2273,14 @@ def add_spillway_notch(weir, s1, s2, crest, wall=0.25):
     el = np.array([b for _, b in weir], float)
     out = [(a, b) for a, b in weir if a < s1 - wall - 1e-9]
     lo = max(s1 - wall, 0.0)
-    out.append((round(lo, 2), round(float(np.interp(lo, st, el)), 2)))
+    # M20: only add the upstream interpolated-ground point when it is a distinct station below s1.
+    # When the spillway sits flush with the left end of the dam line (s1 - wall clamps to 0 and
+    # round(s1,2)==0.00), lo rounds to s1, so the old unconditional append + the strictly-
+    # increasing dedup dropped the notch's upstream wall (s1, crest) and HEC-RAS got a one-sided
+    # ramp instead of the rectangular notch spill_info / the README declare. (A flush notch has no
+    # upstream wall, exactly as the right-end case has no downstream wall.)
+    if round(lo, 2) < round(s1, 2):
+        out.append((round(lo, 2), round(float(np.interp(lo, st, el)), 2)))
     out += [(round(s1, 2), round(float(crest), 2)), (round(s2, 2), round(float(crest), 2))]
     hi = min(s2 + wall, float(st[-1]))
     out.append((round(hi, 2), round(float(np.interp(hi, st, el)), 2)))
