@@ -541,10 +541,13 @@ def breach_parameters(method, c, dam, ov):
             notes.append("Partial breach ({:.1f} ft deep vs the {:.0f} ft dam): the MLM "
                          "embankment cross-section is measured over the breach height, not the "
                          "full dam section.".format(hb / FT, dam.dam_height_ft))
-        # M15 width sanity: the MLM eroded-volume regression can return an average width wider
-        # than the embankment itself for a shallow partial breach - a sign it is outside its
-        # basis. Flag it; the value is still published (do not silently clamp a regulated number).
-        if dam.crest_length_ft and not ov.avg_width_ft and b / FT > dam.crest_length_ft:
+        # M15 width sanity: the breach-height cross-section can make the MLM eroded-volume
+        # regression return an average width wider than the embankment itself for a shallow
+        # PARTIAL breach - a sign it is outside its basis. Flag it only for a partial breach (so a
+        # full breach stays bit-identical, note included); the value is still published (do not
+        # silently clamp a regulated number).
+        if (dam.crest_length_ft and not ov.avg_width_ft and hb < dam.dam_height_ft * FT - 0.03
+                and b / FT > dam.crest_length_ft):
             notes.append("MLM average breach width {:.0f} ft exceeds the {:.0f} ft embankment "
                          "crest length - the eroded-volume regression is likely outside its "
                          "basis for this partial breach; verify.".format(

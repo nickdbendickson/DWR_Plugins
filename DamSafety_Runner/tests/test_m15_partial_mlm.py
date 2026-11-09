@@ -60,6 +60,11 @@ def m15_width_sanity_note_fires_only_above_crest_length():
     fired = lambda notes: any("exceeds the" in n and "crest length" in n for n in notes)
     assert fired(wide), wide
     assert not fired(ok), ok
+    # a FULL breach (not partial) never gets the sanity note, even if its width exceeds the crest
+    # length - so a full breach stays bit-identical and is never mislabelled "partial".
+    full = _mlm(_dam(crest_len=50.0), 1.0)                 # full breach, width > 50 ft crest
+    assert full[5][0].startswith("MacDonald"), full[5]    # it does compute an MLM width
+    assert not fired(full[5]), full[5]
 
 
 @test
