@@ -480,7 +480,8 @@ tr.hl-low td:first-child { border-left: 4px solid var(--green); }
    rules are untouched. The map takes at least half the viewport height (acceptance B1). */
 .dash-root { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--panel); margin-top: 12px; }
 .dash-root .dash-header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
-.dash-root .dash-brand { font-weight: 800; color: var(--teal-dark); }
+.dash-root .dash-brand { font-weight: 800; color: var(--teal-dark); display: inline-flex; align-items: center; gap: 6px; }
+.dash-root .dash-mark { width: 20px; height: 20px; flex: none; }
 .dash-root .chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--teal-light); color: var(--teal-dark); }
 .dash-root .chip.legacy { background: var(--amber-bg); color: var(--amber); }
 .dash-root .dash-search { margin-left: auto; border: 1px solid var(--border); border-radius: 7px; padding: 5px 10px; font-size: 12px; width: 180px; max-width: 100%; background: var(--panel); color: var(--ink); }

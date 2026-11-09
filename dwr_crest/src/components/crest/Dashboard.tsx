@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
 import { ClientOnly } from "./ClientOnly";
+import { DamitMark } from "./DamitMark";
 import { useOnline } from "./use-online";
 import { DEPTH_BANDS, floodStrip, type FloodStrip } from "@/lib/crest/floodstrip";
 import {
@@ -162,7 +163,9 @@ export function Dashboard({ dam, result: deskResult }: { dam: DamRecord; result:
   return (
     <section className="dash-root" data-testid="dashboard">
       <header className="dash-header">
-        <span className="dash-brand">▲ Crest</span>
+        <span className="dash-brand">
+          <DamitMark className="dash-mark" /> Crest
+        </span>
         <span className="chip">
           <b>Scenario:</b> Sunny-day breach · {dam.name}
         </span>

@@ -1,5 +1,6 @@
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, RotateCcw } from "lucide-react";
+import { DamitMark } from "./DamitMark";
 import { analyze, crestNavdLabel, INPUT_RANGE, inputRangeWarning, STEPS } from "@/lib/crest/engine";
 import { datumFlags, floodFlags, warningKey, type Warning } from "@/lib/crest/warnings";
 import { locationProblem } from "@/lib/crest/guided";
@@ -182,11 +183,11 @@ export function Desk() {
       <header className="border-b border-line bg-card">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-4 py-4">
           <div className="flex items-center gap-3">
-            <span className="flex size-10 items-center justify-center rounded-sm bg-water text-card">
-              <Droplets className="size-5" aria-hidden="true" />
-            </span>
+            <DamitMark className="size-10 shrink-0" />
             <div>
-              <p className="text-xs tracking-widest text-muted uppercase">Dam breach desk</p>
+              <p className="text-xs tracking-widest text-muted uppercase">
+                <span className="normal-case">DaMiT</span> · Dam breach desk
+              </p>
               <h1 className="text-2xl leading-none">Crest</h1>
             </div>
           </div>
