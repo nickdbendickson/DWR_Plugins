@@ -28,6 +28,7 @@ The rasters are synthetic numpy arrays (no GDAL): a 1 m grid in metres, so the S
 reads it as is and the Runner leg with unit_m = 1 (its depth / velocity arrays are ft and
 ft/s: the arrays hold those values; only the coordinates are metres).
 """
+import contextlib
 import math
 import os
 import sys
@@ -37,6 +38,29 @@ import numpy as np
 from nd_breach_runner.core import nd_hazard as nh
 from nd_breach_runner.damsuite import tm11_curves as tm
 from nd_breach_runner.tests.registry import test
+
+
+@contextlib.contextmanager
+def _isolated_imports():
+    """Run a block without letting its imports leak into sys.modules / sys.path (3.16.9).
+
+    runner_leg stubs Qt (test_ndhazard_tool._load_tool leaves a fake `qgis` package and the
+    gdal_io / gdalsafe / qgis_io modules imported under it), screening_leg imports the Screening
+    through its qgis_mock, and hazard_leg loads the Hazard's fastsample under a synthetic package.
+    Left in sys.modules, the fake-Qt / mock copies poison the GDAL tests that run after this file
+    in the same process (test_reservoir_carve), which read the real osgeo. Snapshot and restore
+    both so each leg's imports are undone; the legs return plain {id: (zone, depth, vel)} data,
+    so nothing used afterwards depends on the modules being kept."""
+    saved_mods = dict(sys.modules)
+    saved_path = list(sys.path)
+    try:
+        yield
+    finally:
+        for name in list(sys.modules):
+            if name not in saved_mods:
+                del sys.modules[name]
+        sys.modules.update(saved_mods)
+        sys.path[:] = saved_path
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -244,9 +268,12 @@ def classification_parity_hazard_runner_screening_same_zones():
     d, v = rasters()
     gt = (0.0, 1.0, 0.0, 60.0, 0.0, -1.0)
     structs = structures()
-    hz_r = hazard_leg(d, v, gt, structs)
-    rn_r = runner_leg(d, v, gt, structs)
-    sc_r = screening_leg(d, v, gt, structs)
+    # the three legs stub Qt / load mock osgeo and qgis; keep that out of sys.modules so it
+    # cannot poison the GDAL tests that run after this file (3.16.9)
+    with _isolated_imports():
+        hz_r = hazard_leg(d, v, gt, structs)
+        rn_r = runner_leg(d, v, gt, structs)
+        sc_r = screening_leg(d, v, gt, structs)
     problems = []
     for sid, _k, _g, _m, note in structs:
         h, r, s = hz_r[sid], rn_r[sid], sc_r[sid]
