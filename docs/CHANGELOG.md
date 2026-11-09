@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Hazard 2.23.20, Runner 3.16.16, Screening 0.18.22, Data 1.9.8: the owner's window-simplification plan (docs/Simplifying_the_four_plugin_windows.md, audit "usability windows").** RELEASE ndhazard 2.23.20 / ndbreach 3.16.16 / ndscreen 0.18.22; damsuite `loss.py` changed (two strings; the pin label must be bumped by the maintainer).
+- **Hazard 2.23.21, Runner 3.16.16, Screening 0.18.22, Data 1.9.8: the owner's window-simplification plan (docs/Simplifying_the_four_plugin_windows.md, audit "usability windows").** RELEASE ndhazard 2.23.21 / ndbreach 3.16.16 / ndscreen 0.18.22; damsuite `loss.py` changed (two strings; the pin label must be bumped by the maintainer).
   - **Found.** The plan is dated 2026-10-13 (release 1.22); checked against this main, changes 2 (YOUR values), 5 (Runner tabs), 6 (one Run in Hazard), 8 (result tools in ToolRows) and 9 (updater reads the suite folder) and the home's "Data…" dead end were already done; the rest were not (the status table is in the PR).
   - **Change (damsuite loss.py).** `rate_table_status()` told the engineer to sign the fatality rate table off in "Suite settings > Loss of life", a tab no window has; the two texts now say to supply a signed rate table (signed_off_by, source) to the loss-of-life tool. No number changes.
   - **Change (Data auto check).** `auto_check` was already off by default; it now also waits until a data folder is set (Data's own or the suite folder) or the default folder already holds downloads (`settings.auto_check_blocked`, logged once), so a fresh install never downloads into a folder the plugins do not read. A check started by hand is never blocked.

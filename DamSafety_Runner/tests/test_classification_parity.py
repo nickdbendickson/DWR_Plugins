@@ -26,7 +26,10 @@ Legs:
 
 The rasters are synthetic numpy arrays (no GDAL): a 1 m grid in metres, so the Screening leg
 reads it as is and the Runner leg with unit_m = 1 (its depth / velocity arrays are ft and
-ft/s: the arrays hold those values; only the coordinates are metres).
+ft/s: the arrays hold those values; only the coordinates are metres). They are float32, the
+dtype of the Float32 GeoTIFFs all three plugins read (and that DamSafety_Hazard/tests writes
+them to), so every leg sees the same stored values: a value meant to sit ON a boundary is set
+to a float32 at or above it, not rounded below it on the way to disk.
 """
 import contextlib
 import math
@@ -75,9 +78,9 @@ def rasters():
     """(depth ft, velocity ft/s) on a 60 x 60 grid of 1 m cells, x0 = 0, y_top = 60 (north up).
     The wet area is the block rows 10..39 x cols 10..39 (x 10..40, y 20..50) with a gentle
     gradient; outside it the depth is 0. Particular cells carry the values the structures below
-    are built around."""
-    d = np.zeros((60, 60))
-    v = np.zeros((60, 60))
+    are built around. float32 (see the module docstring)."""
+    d = np.zeros((60, 60), np.float32)
+    v = np.zeros((60, 60), np.float32)
     rr, cc = np.mgrid[0:60, 0:60]
     wet = (rr >= 10) & (rr < 40) & (cc >= 10) & (cc < 40)
     d[wet] = 1.0 + 0.05 * (cc[wet] - 10)               # 1.0 .. 2.45 ft, deeper to the east
@@ -85,13 +88,18 @@ def rasters():
     # a fast shallow cell next to a deep slow one (peak pair from different cells)
     d[20, 20], v[20, 20] = 3.0, 0.4
     d[20, 21], v[20, 21] = 0.3, 6.0
-    # a wet cell exactly 0.05 ft below the house high boundary at 1.0 ft/s (5.968 ft)
+    # a wet cell 0.05 ft below the house high boundary at 1.0 ft/s (5.968 ft); float32 stores
+    # 5.918000221, still 0.0499998 ft below
     d[30, 30], v[30, 30] = 5.918, 1.0
-    # a wet cell exactly ON the house judgment boundary at 1.0 ft/s (2.916 ft); the cells
-    # its 5 ft ring reaches are shallower and no faster, so the peak pair IS this cell
+    # a wet cell ON the house judgment boundary at 1.0 ft/s (2.916 ft); the cells its 5 ft ring
+    # reaches are shallower and no faster, so the peak pair IS this cell. float32 cannot hold
+    # 2.916: the nearest float32 is 2.9159998894 (1.1e-7 ft BELOW the line, low danger under
+    # the d >= line rule), so the cell holds the next float32 up, 2.9160001278 (1.3e-7 ft above
+    # the line) - on the line to the precision of the rasters, and judgment in every leg
     d[33:38, 10:15] = 1.0
     v[33:38, 10:15] = 1.0
-    d[35, 12], v[35, 12] = 2.916, 1.0
+    d[35, 12] = np.nextafter(np.float32(2.916), np.float32(np.inf))
+    v[35, 12] = 1.0
     # the only wet cells near the "3 ft outside the wet edge" structure: the block's west edge
     # (cols 10..) at rows 14..16 - its east wall at x = 9.0 m is 3 ft (0.914 m) from the wet
     # column's west face (x = 10) and 1.414 m from the nearest centre (10.5, ...)
@@ -119,12 +127,21 @@ def structures():
         ("outside_3ft", "polygon", sq(5.0, 43.5, 9.086, 46.5), False, "3 ft outside"),
         # a dry footprint more than the ring away: dry everywhere
         ("far", "polygon", sq(2.0, 52.0, 6.0, 55.0), False, "dry"),
-        # a point 7 m west of the wet block: its own cell is dry, the 25 ft disc (7.62 m)
-        # reaches the wet block - wet in Hazard, dry before in Runner / Screening
-        ("point_disc", "point", (3.5, 30.5), False, "point 7 m from the flood"),
+        # a point 6.7 m west of the wet block: its own cell is dry, the 25 ft disc (7.62 m)
+        # reaches the wet block - wet in Hazard, dry before in Runner / Screening.
+        # Both points sit 0.2 m west and 0.2 m south of a cell centre: at that offset no cell
+        # centre of a 1 m grid lies between the exact 7.62 m circle and the Hazard's GEOS
+        # 32-gon (buffer(reach, 8): up to 7.62 x (1 - cos(pi / 32)) = 0.0367 m inside the
+        # circle) - every centre is at least 0.054 m clear of that band - so the GEOS path
+        # (fast_sampling=False) and the exact circle (fastsample, Runner, Screening) select the
+        # same cells. At the former (3.5, 30.5) six centres sat in the gap and GEOS missed the
+        # peak-velocity cell (row 32, col 10: 0.92 instead of 0.94 ft/s).
+        ("point_disc", "point", (3.3, 30.3), False, "point 6.7 m from the flood"),
         # a point inside the flood: its 25 ft disc reads the deepest / fastest cells around it
-        # (depth 1.0 + 0.05 x (col - 10): about 2.1 ft at col 32, judgment on the mobile table)
-        ("point_in", "point", (32.5, 45.5), True, "mobile home point in the flood"),
+        # (depth 1.0 + 0.05 x (col - 10): about 2.1 ft at col 32, judgment on the mobile table).
+        # Off the cell centre as point_disc: at the former (32.5, 45.5) eight centres sat in
+        # the GEOS chord gap (none of them a peak, so its zone and values did not move)
+        ("point_in", "point", (32.3, 45.3), True, "mobile home point in the flood"),
     ]
 
 
@@ -241,7 +258,10 @@ def screening_leg(d, v, gt, structs):
         from nd_dam_screening.core import hazard as hz
     finally:
         sys.path.pop(0)
-    grid = hz.Grid(d * M_PER_FT, v * M_PER_FT, gt)      # the Screening's grids are m, m/s
+    # the Screening's grids are m, m/s; converted in float64 so the ft -> m -> ft round trip
+    # does not move a float32 value across a boundary (a Screening raster in metres is read as
+    # is; this conversion exists only because the fixture is in ft)
+    grid = hz.Grid(d.astype(np.float64) * M_PER_FT, v.astype(np.float64) * M_PER_FT, gt)
     charts = hz.load_ready_charts()
     out = {}
     for sid, kind, geom, mobile, _note in structs:
@@ -291,11 +311,12 @@ def classification_parity_hazard_runner_screening_same_zones():
                      "near_high": nh.ZONE_JUDGMENT, "on_line": nh.ZONE_JUDGMENT,
                      "outside_3ft": nh.ZONE_LOW, "far": None, "point_disc": nh.ZONE_LOW,
                      "point_in": nh.ZONE_JUDGMENT}, zones
-    # the structure 3 ft outside the wet edge and the point 7 m from it are WET through the
+    # the structure 3 ft outside the wet edge and the point 6.7 m from it are WET through the
     # ring / disc (as in the Hazard); the bare footprint / own cell was dry (pre-3.16.9 rule)
     bare_poly = nh.sample_footprint(d, v, 0.0, 60.0, 1.0, structs[4][2], 0.1)[0]
-    assert not (bare_poly or 0) > 0 and hz_r["outside_3ft"][1] == 2.2
-    assert nh.sample_point(d, v, 0.0, 60.0, 1.0, 3.5, 30.5)[0] == 0.0 and hz_r["point_disc"][0]
+    assert not (bare_poly or 0) > 0 and hz_r["outside_3ft"][1] == float(np.float32(2.2))
+    px, py = structs[6][2]
+    assert nh.sample_point(d, v, 0.0, 60.0, 1.0, px, py)[0] == 0.0 and hz_r["point_disc"][0]
     # 0.05 ft below the high boundary: the old polygon tolerance band made it HIGH in the
     # Runner / Screening; the table (Hazard) says JUDGMENT - the structure drops a zone, and
     # its finding is flagged near the high boundary instead
