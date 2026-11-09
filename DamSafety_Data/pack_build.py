@@ -1325,15 +1325,29 @@ def dwr_download(qlay, dest, refresh=False, log=None):
     return "/vsizip/{}/{}".format(zp, inner), "{} (qlay={})".format(DWR_URL, qlay)
 
 
-def _rewrite(con, name, fn):
-    """Apply fn(feature) -> feature to every row of data set `name` of the work db."""
+def _rewrite(con, name, fn, chunk=2000):
+    """Apply fn(feature) -> feature to every row of data set `name` of the work db.
+
+    M01: keyset-paginate by fid (INTEGER PRIMARY KEY; the UPDATE touches only feat, so the
+    key order is stable and every row is visited exactly once) and rewrite one chunk at a time,
+    instead of materialising the whole statewide layer and a second list of re-compressed blobs
+    at once (~1 GB inside QGIS on a statewide NHD build). Still one transaction - a single commit
+    at the end - so the rewrite stays all-or-nothing (finish() already marked the layer complete,
+    and a resumed build skips it, so a half-rewritten layer would be permanent). The stored bytes
+    and the per/units counts fn derives are bit-identical to the all-at-once form."""
     import zlib
     tbl = OP._table(name)
-    rows = con.execute("SELECT fid, feat FROM {}".format(tbl)).fetchall()
-    con.executemany("UPDATE {} SET feat=? WHERE fid=?".format(tbl), [
-        (zlib.compress(json.dumps(fn(json.loads(zlib.decompress(b).decode("utf-8"))),
-                                  separators=(",", ":")).encode("utf-8"), 6), fid)
-        for fid, b in rows])
+    last = -1
+    while True:
+        rows = con.execute("SELECT fid, feat FROM {} WHERE fid > ? ORDER BY fid "
+                           "LIMIT ?".format(tbl), (last, chunk)).fetchall()
+        if not rows:
+            break
+        con.executemany("UPDATE {} SET feat=? WHERE fid=?".format(tbl), [
+            (zlib.compress(json.dumps(fn(json.loads(zlib.decompress(b).decode("utf-8"))),
+                                      separators=(",", ":")).encode("utf-8"), 6), fid)
+            for fid, b in rows])
+        last = rows[-1][0]
     con.commit()
 
 
