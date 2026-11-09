@@ -1280,8 +1280,9 @@ def _write_refine_entry(res, entry):
     rep["grid_refine"] = entry
     try:
         _write_json(res.report_json, rep)
-    except OSError:
-        pass
+    except Exception as e:                       # noqa: BLE001 - L06: visible, not swallowed
+        res.warnings = list(res.warnings or []) + [
+            "grid-refine entry not written to {}: {}".format(res.report_json, e)]
 
 
 def _amend_report(res, entry, texts):
@@ -1302,12 +1303,16 @@ def _amend_report(res, entry, texts):
     if res.summary is not None:
         rep["summary"] = res.summary
     try:
+        # L06: render the markdown BEFORE opening either file (so a render_report KeyError never
+        # truncates run_report.md to zero length), then write both atomically; surface a named
+        # warning instead of swallowing, so a lost on-disk record does not pass as a clean run.
+        md = render_report(rep) if getattr(res, "report_md", "") else None
         _write_json(res.report_json, rep)
-        if getattr(res, "report_md", ""):
-            with open(res.report_md, "w", encoding="utf-8") as f:
-                f.write(render_report(rep))
-    except Exception:                                              # noqa - extras only
-        pass
+        if md is not None:
+            _write_text(res.report_md, md)
+    except Exception as e:                                         # noqa: BLE001 - extras only
+        res.warnings = list(res.warnings or []) + [
+            "run report not fully updated ({}): {}".format(res.report_json, e)]
 
 
 def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
@@ -3407,14 +3412,15 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     if toe_line is None:
         toe_line = getattr(dam, "crest_line_xy", None)
     half = terrain.POOL_HALF_M
-    pool_grid = pool = direction = None
+    pool_grid = pool = pmask = direction = None
     try:
         pool_grid = terrain_src.read((dam_xy[0] - half, dam_xy[1] - half,
                                       dam_xy[0] + half, dam_xy[1] + half), cell)
         # v3.12.10: with the shallow (hydro-flattened) pool against the dam line
-        pool = pool_grid.like(terrain.pool_mask(
-            pool_grid, h_m, dam_xy, top_m, getattr(dam, "crest_line_xy", None)).astype(float),
-            nodata=-1.0)
+        # L05: keep the raw mask so downstream_direction can reuse it (one priority_flood, not two)
+        pmask = terrain.pool_mask(pool_grid, h_m, dam_xy, top_m,
+                                  getattr(dam, "crest_line_xy", None))
+        pool = pool_grid.like(pmask.astype(float), nodata=-1.0)
     except Exception as e:                       # noqa: BLE001 - the pool is a refinement
         log("Pool behind the dam not found ({}); the inflow search uses the side test only."
             .format(e))
@@ -3426,7 +3432,7 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
             crest_xy = terrain.embankment_crest(local, dam_xy, h_m, top_m, max(rad, 400.0))[0]
         direction, how = terrain.downstream_direction(
             pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
-            crest_xy=crest_xy, top_m=top_m)
+            crest_xy=crest_xy, top_m=top_m, pool=pmask)      # L05: reuse the mask above
     except Exception as e:                       # noqa: BLE001
         direction, how = None, "downstream direction failed: {}".format(e)
     log("Downstream side of the crest: {}".format(
@@ -4006,11 +4012,39 @@ def _write_json(path, obj):
     if folder:
         os.makedirs(folder, exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=2, default=_json_default)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2, default=_json_default)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:                                   # L06: do not leave a half .tmp behind
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _write_text(path, text):
+    """Replace `path` with `text` only after the whole document is on disk (as _write_json),
+    so a kill or I/O error mid-write never leaves a truncated or zero-length file in place."""
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def run_finished(folder):
