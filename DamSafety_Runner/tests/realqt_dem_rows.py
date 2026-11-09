@@ -130,13 +130,17 @@ def test_dem_rows_keep_their_height_on_laptop_screens():
             with Screen(w, h):
                 d = _open(True, tab)
                 try:
-                    # 3.16.12 (usability plan change 7): one row - Resolution, the button, the
-                    # facts line (it was a 13-control grid)
+                    # 3.16.12 (usability plan change 7): Resolution and the button (it was a
+                    # 13-control grid); 3.17.1: the facts line is on its own row below them, so
+                    # it wraps at the box's width (beside the button it was clipped at 1280x800)
                     assert d.dem_download_btn.isEnabled(), "DEM download needs DamSafety Screening"
                     assert d.dem_section.body.isVisible()
                     short = [(_name(x), x.height(), _need(x)) for x in _rows(d) if x.height() < _need(x)]
                     assert not short, ((w, h, tab), short)
                     assert 3 <= len(_rows(d)) <= 5, len(_rows(d))
+                    assert d.dem_facts.parent() is d.dem_download_btn.parent() and \
+                        d.dem_facts.geometry().top() >= d.dem_download_btn.geometry().bottom(), \
+                        (d.dem_facts.geometry(), d.dem_download_btn.geometry())
                 finally:
                     _close(d)
 

@@ -612,8 +612,10 @@ class NDBreachRunnerDialog(QDialog):
         (source, county, state, ND LiDAR package) is made there. The Screening plugin provides
         the tool (nddam:downloaddem)."""
         box = QWidget()
-        row = QHBoxLayout(box)
-        row.setContentsMargins(16, 2, 2, 2)
+        col = QVBoxLayout(box)
+        col.setContentsMargins(16, 2, 2, 2)
+        row = QHBoxLayout()
+        col.addLayout(row)
         self.dem_res = QComboBox()
         self.dem_res.addItems(["10 m", "1 m"])
         self.dem_res.setToolTip("Local copy cell size. Output is EPSG:5070, metres, tiled GeoTIFF; "
@@ -627,10 +629,13 @@ class NDBreachRunnerDialog(QDialog):
         row.addWidget(QLabel("Resolution"))
         row.addWidget(self.dem_res)
         row.addWidget(self.dem_download_btn)
+        row.addStretch(1)
+        # 3.17.1: the facts line has its own row; beside Resolution and the button it wrapped
+        # into a label shorter than its text at 1280x800 on Qt5 (realqt_dem_rows.py).
         self.dem_facts = QLabel("")
         self.dem_facts.setWordWrap(True)
         self.dem_facts.setStyleSheet("color: {};".format(TOKENS["muted"]))
-        row.addWidget(self.dem_facts, 1)
+        col.addWidget(self.dem_facts)
         self.dem_res.currentIndexChanged.connect(lambda _i: self._dem_facts())
         if _load_dem_download() is None:
             self.dem_download_btn.setEnabled(False)

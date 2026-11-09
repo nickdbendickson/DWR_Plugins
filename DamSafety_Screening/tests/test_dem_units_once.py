@@ -278,12 +278,17 @@ def nd_dwr_facts_name_the_product_build_vrts_used():
 
 @register
 def the_window_says_imagine_metres_and_ascii_feet():
-    with open(os.path.join(os.path.dirname(HERE), "dialog.py"), encoding="utf-8") as fh:
+    # 0.19.1: the county DEM box moved to settings_tab.py (usability plan, change 7); its facts
+    # line keeps a short ND DWR units note (the Download DEM tool's help has the long form).
+    with open(os.path.join(os.path.dirname(HERE), "settings_tab.py"), encoding="utf-8") as fh:
         src = fh.read()
-    assert ("ND DWR LiDAR: DEM_Imagine .img in UTM metres (EPSG:26914 / 3721); ASCII_Grids_ft in "
-            "State \"\n                          \"Plane feet, converted.") in src
-    assert "ND LiDAR native: DEM_Imagine .img in UTM \"\n            \"metres; ASCII_Grids_ft" in src
-    assert "ND DWR LiDAR: feet, often EPSG:3721" not in src and "ND LiDAR native is feet" not in src
+    assert ("ND DWR LiDAR: DEM_Imagine .img in UTM metres; ASCII_Grids_ft in State Plane feet, "
+            "converted.") in src
+    assert "self.dem_facts = QLabel(" in src
+    for name in ("dialog.py", "settings_tab.py"):
+        with open(os.path.join(os.path.dirname(HERE), name), encoding="utf-8") as fh:
+            src = fh.read()
+        assert "ND DWR LiDAR: feet, often EPSG:3721" not in src and "ND LiDAR native is feet" not in src, name
 
 
 def main():

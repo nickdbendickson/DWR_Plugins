@@ -44,7 +44,7 @@ class EstimateRuntime(QgsProcessingAlgorithm):
         P(QgsProcessingParameterFeatureSource("DAMS", "Dams (output of tool 5 or tool 6)",
                                               [SRC_POINT]))
         P(QgsProcessingParameterEnum("SCEN", "Scenario", SCENARIOS, defaultValue=0))
-        P(QgsProcessingParameterEnum("ENGINE", "Flood engine (as tool 7)", ENGINES, defaultValue=2))   # 0.18.19: built-in, as the window (usability plan)
+        P(QgsProcessingParameterEnum("ENGINE", "Flood engine (as tool 7)", ENGINES, defaultValue=0))
         P(QgsProcessingParameterFile("DEMDIR", "Folder of cached dam DEMs (tool 2; for the clip size, optional)",
                                      behavior=FILE_FOLDER, optional=True))
         P(QgsProcessingParameterNumber("CELL", "Model cell size (m), 0 = automatic by reservoir size (as tool 7)",

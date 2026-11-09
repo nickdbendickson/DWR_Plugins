@@ -208,8 +208,11 @@ class SettingsTabMixin(object):
         grid.addWidget(QLabel("DEM folder"), 1, 0)
         grid.addWidget(self.dem_out, 1, 1)
         grid.addWidget(browse, 1, 2)
+        # 0.19.1 (Nick, 2026-11-09): the short ND DWR units note is back on the window; the
+        # Download DEM tool's help has the long form.
         self.dem_facts = QLabel("USGS 3DEP: EPSG:5070, metres, GeoTIFF; a county at 10 m is a few "
-                                "minutes, at 1 m hours.")
+                                "minutes, at 1 m hours. "
+                                "ND DWR LiDAR: DEM_Imagine .img in UTM metres; ASCII_Grids_ft in State Plane feet, converted.")
         self.dem_facts.setWordWrap(True)
         self.dem_facts.setStyleSheet(HINT_STYLE)
         grid.addWidget(self.dem_facts, 2, 0, 1, 3)
