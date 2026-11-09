@@ -512,13 +512,24 @@ def extra_criteria(nd, structs, res, cfg, total=False):
                                   ("" if len(camps) <= 4 else " and {} more".format(
                                       len(camps) - 4))))
     near = [s for s in structs if s.get("near") and s.get("habitable") == "Yes"]
+    # M11: a 2D scenario with no Vmax raster is zoned off the ACER curves at velocity 0 (the
+    # non-conservative fallback), but its 5.3(f) margins are never computed - Margin_High/Judg
+    # stay NULL - so the borderline rule (and the engineer's borderline_higher setting) is
+    # silently inert for it. Report that instead of "not met", which would imply 5.3(f) was
+    # evaluated and nothing was borderline. This only relabels the criteria row: the zones,
+    # classes, margins and counts are unchanged (the margins stay the honest NULLs they are).
+    v0_inert = (not cfg.get("one_d") and not near and any(
+        s.get("habitable") == "Yes" and s.get("zone") is not None
+        and s.get("max_vel") is None and s.get("margin_high") is None for s in structs))
     crit.append({"section": "5.3(f)", "criterion": "Borderline structures within {:g} ft of "
                  "the next boundary ({})".format(cfg.get("near_ft", 0.5),
                                                  "1D 2-ft rule" if cfg.get("one_d")
                                                  else "ACER curve"),
                  "found": "{}".format(len(near)),
-                 "result": "not met" if not near else "counted higher"
-                 if cfg.get("borderline_higher") else "Judgment"})
+                 "result": (("not evaluated - no Vmax raster for this scenario (borderline rule "
+                             "5.3(f) inert)" if v0_inert else "not met") if not near
+                            else "counted higher"
+                            if cfg.get("borderline_higher") else "Judgment")})
     # 2.22.1 (DWR-2801 house 4026, QA re-test of #241): 5.3(f) is cited only for
     # borderline structures that were actually moved to the higher class (the
     # borderline setting on, or a 1D structure counted higher). A structure merely
