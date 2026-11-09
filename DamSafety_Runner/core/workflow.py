@@ -31,6 +31,7 @@
 
 The GIS parts (reading the DEM, writing GeoTIFFs) come in through the
 `terrain` and `writer` objects so this module runs without QGIS."""
+import copy
 import datetime
 import hashlib
 import json
@@ -3051,6 +3052,10 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
     """What a run would model, without running any flood model: the breach
     hydrograph, the first domain and simulation time. Used for the run-time
     estimate."""
+    # H05: preview is a read-only estimate (run time / plan). Work on a copy so a crest it has to
+    # estimate for the hydrograph is never written back onto the caller's dam - otherwise the real
+    # run skips its own crest estimator and records the pre-flight guess as a surveyed crest.
+    dam = copy.copy(dam)
     warnings = []
     cs = st.cell_size_m
     if out_folder:
@@ -3069,7 +3074,10 @@ def preview(dam, dam_xy, st, terrain_src, inflow_xy=None, out_folder=None):
     if getattr(st, "proposed", None) and dam.top_of_dam_ft is None:
         dam.top_of_dam_ft = float(st.proposed["crest_m"]) / FT
     elif dam.top_of_dam_ft is None:
-        dam.top_of_dam_ft = float(np.nanmax(z[sel])) / FT
+        # H05: the suite crest rule (98th percentile of the DEM within 30 m), never the single
+        # highest cell (nanmax) - a nearby hill, road crown or spike reads the crest several feet
+        # high, which can let the dam route the PMF without overtopping and be dropped silently.
+        dam.top_of_dam_ft = float(np.nanpercentile(z[sel & np.isfinite(z)], 98)) / FT
     flood_mode = st.scenario == SCENARIO_FLOOD
     hy_nb = None
     if flood_mode:
