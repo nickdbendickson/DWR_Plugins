@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { MapContainer, TileLayer, FeatureGroup, LayersControl, useMap } from "react-leaflet";
 import L from "leaflet";
 import { extentLine } from "./extent-layer";
@@ -182,6 +182,31 @@ function DrawControl({ geometry, lat, lon, onChange, placing, onPlaced }: Props)
 }
 
 const STRIP_PANE = "crest-flood-strip";
+
+/**
+ * A legend toggle that works from the keyboard: a real button (Tab reaches it in legend order, Space/Enter flips it)
+ * with aria-pressed for the state and a drawn box for the eye. The old checkbox-in-a-label pairs had no focus ring
+ * over the map and read as "checkbox" without the layer's name on some readers.
+ */
+function LegendToggle({ on, setOn, label, children }: { on: boolean; setOn: (v: boolean) => void; label: string; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      className="crest-legend-toggle"
+      aria-pressed={on}
+      aria-label={label}
+      tabIndex={0}
+      onClick={() => setOn(!on)}
+      style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, background: "none", border: 0, padding: 0, font: "inherit", color: "inherit", cursor: "pointer", textAlign: "left", width: "100%" }}
+    >
+      <span
+        aria-hidden="true"
+        style={{ width: 12, height: 12, border: "1.5px solid #1f2a30", borderRadius: 2, background: on ? "#1f2a30" : "#fff", display: "inline-block", flex: "none" }}
+      />
+      {children}
+    </button>
+  );
+}
 
 /**
  * The flood strip as a read-only overlay: its own pane under the drawn shapes (overlayPane is 400) with pointer
@@ -407,6 +432,8 @@ function StripLegend({
   return (
     <div
       data-testid="flood-strip-legend"
+      role="group"
+      aria-label="Map layers"
       style={{
         position: "absolute",
         left: 8,
@@ -424,31 +451,29 @@ function StripLegend({
     >
       {strip ? (
         <>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600 }}>
-            <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} aria-label="Show the flood strip" />
-            Flood strip
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <LegendToggle on={on} setOn={setOn} label="Show the flood strip">
+              Flood strip
+            </LegendToggle>
             <button
               type="button"
+              className="crest-legend-toggle"
               onClick={onZoom}
-              style={{ marginLeft: "auto", fontWeight: 400, textDecoration: "underline", background: "none", border: 0, cursor: "pointer" }}
+              style={{ marginLeft: "auto", fontWeight: 400, textDecoration: "underline", background: "none", border: 0, cursor: "pointer", font: "inherit", color: "inherit", whiteSpace: "nowrap" }}
             >
               zoom to
             </button>
-          </label>
+          </div>
           <div style={{ marginTop: 2, color: "#5c5a52" }}>
             {FLOOD_STRIP_DISCLAIMER}.{showOutline && on ? " Dashed: the fallback under the terrain outline." : ""}
           </div>
           {outline ? (
             <>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, marginTop: 4 }}>
-                <input
-                  type="checkbox"
-                  checked={outlineOn}
-                  onChange={(e) => setOutlineOn(e.target.checked)}
-                  aria-label="Show the terrain outline"
-                />
-                Terrain outline (approximate)
-              </label>
+              <div style={{ marginTop: 4 }}>
+                <LegendToggle on={outlineOn} setOn={setOutlineOn} label="Show the terrain outline">
+                  Terrain outline (approximate)
+                </LegendToggle>
+              </div>
               <div data-testid="outline-legend-note" style={{ marginTop: 2, color: "#5c5a52" }}>
                 {OUTLINE_LABEL}; {outline.properties.outline_area_ac.toFixed(0)} ac.
               </div>
@@ -475,32 +500,22 @@ function StripLegend({
           ) : null}
           <div style={{ marginTop: 6, borderTop: "1px solid #e2dccf", paddingTop: 4 }}>
             {plss && plss.length > 0 ? (
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600 }}>
-                <input
-                  type="checkbox"
-                  checked={plssOn}
-                  onChange={(e) => setPlssOn(e.target.checked)}
-                  aria-label="Show the PLSS sections"
-                />
+              <LegendToggle on={plssOn} setOn={setPlssOn} label="Show the PLSS sections">
                 <span style={{ width: 14, height: 0, borderTop: "2px dashed #7a3b12", display: "inline-block" }} />
                 PLSS sections ({plss.length})
-              </label>
+              </LegendToggle>
             ) : (
               <div data-testid="plss-legend-note" style={{ color: "#5c5a52" }}>
                 {plssMessage ?? "PLSS sections: not looked up."}
               </div>
             )}
             {nd911 ? (
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 600, marginTop: 2 }}>
-                <input
-                  type="checkbox"
-                  checked={nd911On}
-                  onChange={(e) => setNd911On(e.target.checked)}
-                  aria-label="Show the 911 address points"
-                />
-                <span style={{ width: 9, height: 9, borderRadius: 9, background: ND911_IN, display: "inline-block" }} />
-                911 address points ({nd911.inside.length} inside of {nd911.inside.length + nd911.outside.length})
-              </label>
+              <div style={{ marginTop: 2 }}>
+                <LegendToggle on={nd911On} setOn={setNd911On} label="Show the 911 address points">
+                  <span style={{ width: 9, height: 9, borderRadius: 9, background: ND911_IN, display: "inline-block" }} />
+                  911 address points ({nd911.inside.length} inside of {nd911.inside.length + nd911.outside.length})
+                </LegendToggle>
+              </div>
             ) : (
               <div data-testid="nd911-legend-note" style={{ color: "#5c5a52" }}>
                 {nd911Message ?? "911 address points: not looked up."}

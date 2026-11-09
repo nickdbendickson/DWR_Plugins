@@ -7,7 +7,7 @@ import {
   hydrographSvg,
   PAPER_DISCLAIMER,
   PAPER_NOTICE,
-  paperFlags,
+  paperFlagsCoded,
   paperRows,
   receptorCsv,
   stampClass,
@@ -105,7 +105,7 @@ function PaperSheet({ dam, result, source, runWarnings = [], bundles, now = new 
   const level = result.screen.label;
   const wet = result.flood.receptors.filter((r) => r.flooded).length;
   const { rows, shown, total } = paperRows(result);
-  const flags = paperFlags(result, runWarnings);
+  const flags = paperFlagsCoded(result, runWarnings);
   const deepest = [...result.flood.receptors]
     .filter((r) => r.flooded)
     .sort((a, b) => b.depthFt - a.depthFt)[0];
@@ -180,8 +180,12 @@ function PaperSheet({ dam, result, source, runWarnings = [], bundles, now = new 
         <div className="notice notice--flags">
           <b>MODEL FLAGS CARRIED INTO THIS REPORT:</b>
           <ul>
-            {flags.map((f) => (
-              <li key={f}>{f}</li>
+            {flags.map((f, i) => (
+              <li key={`${f.code ?? "run"}-${i}`}>
+                {f.code ? <code>{f.code}</code> : null}
+                {f.code ? " " : ""}
+                {f.text}
+              </li>
             ))}
           </ul>
         </div>

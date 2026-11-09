@@ -1,7 +1,7 @@
-// vercel.json installs with `npm install --omit=dev`, then runs `npm run build:deploy`
-// (vite build + scripts/migrate.mjs). Anything the build tooling or the app imports
-// must be a runtime `dependency`, or the Vercel build fails while a local build
-// (with dev deps installed) passes.
+// vercel.json installs with `npm install --omit=dev`, then runs `npm run build` (vite build;
+// there is no database step). Anything the build tooling or the app imports must be a
+// runtime `dependency`, or the Vercel build fails while a local build (with dev deps
+// installed) passes.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -72,21 +72,16 @@ test("the import scanner sees multi-line, side-effect, dynamic and CSS imports, 
   );
 });
 
-test("vercel.json still installs without dev deps and builds with build:deploy", () => {
+test("vercel.json still installs without dev deps and builds with a plain vite build (no migration step)", () => {
   assert.match(vercel.installCommand, /--omit=dev/);
-  assert.equal(vercel.buildCommand, "npm run build:deploy");
-  assert.match(pkg.scripts["build:deploy"], /npm run build && npm run db:migrate/);
+  assert.equal(vercel.buildCommand, "npm run build");
+  assert.equal(pkg.scripts.build, "vite build");
+  for (const gone of ["build:deploy", "db:migrate", "check:auth", "preview:restart", "preview:stop"])
+    assert.equal(pkg.scripts[gone], undefined, `${gone} was removed with the template scaffolding`);
 });
 
-test("every package the build and migrate import is in dependencies, not devDependencies", () => {
-  const files = [
-    "vite.config.ts",
-    "scripts/migrate.mjs",
-    "scripts/with-app-env.mjs",
-    "scripts/app-env-plugin.mjs",
-    "scripts/grok-pwa-plugin.mjs",
-    "scripts/migration-plan.mjs",
-  ].map((f) => join(ROOT, f));
+test("every package the build imports is in dependencies, not devDependencies", () => {
+  const files = ["vite.config.ts", "vite.desktop.config.ts"].map((f) => join(ROOT, f));
   assert.deepEqual(missing(files), []);
   assert.ok(pkg.dependencies?.vite, "vite runs the build");
 });
@@ -98,4 +93,46 @@ test("every package the app imports at runtime under src/ is in dependencies, no
   for (const n of ["react", "leaflet", "@tanstack/react-router"])
     assert.ok(seen.has(n), `scanner found ${n}`);
   assert.deepEqual(missing(files), []);
+});
+
+test("no dependency is left over from the removed app-builder scaffolding (auth, database, forms)", () => {
+  const all = { ...pkg.dependencies, ...pkg.devDependencies };
+  for (const n of [
+    "@electric-sql/pglite",
+    "pg",
+    "@types/pg",
+    "kysely",
+    "better-auth",
+    "jose",
+    "@tanstack/react-query",
+    "react-hook-form",
+    "@hookform/resolvers",
+    "zod",
+    "playwright",
+  ])
+    assert.equal(all[n], undefined, `${n} is still listed`);
+  for (const n of Object.keys(all)) assert.ok(!n.startsWith("@radix-ui/"), `${n} is still listed`);
+});
+
+test("every package listed in dependencies is imported somewhere the build reaches (no dead weight)", () => {
+  // Build tooling and transitive peers that nothing imports by name but the build needs.
+  const tooling = new Set([
+    "@tailwindcss/vite",
+    "@tanstack/react-start",
+    "@tanstack/router-plugin",
+    "@vitejs/plugin-react",
+    "lightningcss",
+    "nitro",
+    "tailwindcss",
+    "typescript",
+    "vite",
+    "@types/leaflet",
+    "react-dom",
+  ]);
+  const seen = new Set(
+    [...appFiles(), join(ROOT, "vite.config.ts"), join(ROOT, "vite.desktop.config.ts")].flatMap((f) => [
+      ...imported(readFileSync(f, "utf8")),
+    ]),
+  );
+  for (const n of Object.keys(pkg.dependencies)) assert.ok(seen.has(n) || tooling.has(n), `${n} is in dependencies but nothing imports it`);
 });

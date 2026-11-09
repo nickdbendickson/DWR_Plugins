@@ -7,6 +7,7 @@ import {
   FLAG_STACK_MAX,
   guidedFlags,
   guidedSteps,
+  locationProblem,
   recordProblems,
   stackFlags,
   type StepState,
@@ -97,6 +98,14 @@ describe("Style C guided setup", () => {
       "Crest is not above the breach bottom",
     ]);
     assert.deepEqual(recordProblems(dam), []);
+  });
+
+  it("catches latitude and longitude swapped (a ND longitude in the latitude box) before range", () => {
+    assert.equal(locationProblem({ lat: 46.9, lon: -97.3 }), null);
+    assert.match(locationProblem({ lat: -97.3, lon: 46.9 })!, /look swapped/);
+    assert.match(recordProblems({ ...dam, lat: -97.3, lon: 46.9 }).join("; "), /look swapped/);
+    assert.match(locationProblem({ lat: 123, lon: -97 })!, /out of range/);
+    assert.match(locationProblem({ lat: undefined, lon: -97 })!, /No location/);
   });
 
   it("C2: no modal in the guided setup (no window.alert/confirm, no dialog)", () => {

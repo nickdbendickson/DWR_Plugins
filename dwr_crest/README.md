@@ -12,31 +12,57 @@ by both Vite configs from `scripts/crest-version.mjs`; `+local` without git or u
 version `engine_version` (`engine.ts ENGINE_VERSION`, bumped whenever `analyze()` changes its numbers). The terrain layer
 adds `trace_version` (`outline.ts TRACE_VERSION`).
 
-## Scripts
+## Start here
 
-| Script | What it does |
-|---|---|
-| `npm run dev` | Vite dev server on :8080 |
-| `npm run build` | Production build only (`vite build`). Never touches a database. |
-| `npm run build:deploy` | `npm run build && npm run db:migrate`. This is what Vercel runs (`buildCommand` in `vercel.json`). |
-| `npm run db:migrate` | Applies pending top-level `migrations/*.sql` to `DATABASE_URL` once each (recorded in `_migrations`); skips when `DATABASE_URL` is unset. |
-| `npm test`, `npm run typecheck`, `npm run lint` | Tests, `tsc --noEmit`, ESLint |
-| `npm run build:desktop` | Builds the desk into `crest-desktop/crest/web/` for the desktop app (committed; see below). |
-| `npm run build:crest-html` | Builds the same desk into the one-file `Crest.html` at the repo root (committed). |
-| `npm run test:desktop` | Headless smoke test of the desktop app (Python, no GUI). |
-| `npm run validate:crest -- --runner <dam folder or zip> --crest <flood.geojson> [--receptors <points.csv>]` | Scores a Crest flood layer (strip or terrain outline export) against a Breach Runner / LISFLOOD-FP run: recall, precision, CSI, area ratio, depth bias, and depth / velocity / arrival at receptors (`src/lib/crest/validation.ts`). Run by hand. |
-| `npm run data:nd-dams` | Rebuilds `src/lib/crest/data/nd_dams.json` from the NID (ND dam picker). Run only when asked. |
-| `npm run batch:dams -- --out <dir> (--state \| --county Cass \| --watershed 09020205 \| --ids ND00199,DWR-4031) [--dem <1 m mosaic .vrt>]` | Batch screen from the command line (see **Batch screen** below); resumes from `<dir>/batch.jsonl`. |
-| `npm run data:nd-structures -- --from data-raw/dwr_structures_<stamp>` | Rebuilds `src/lib/crest/data/nd_structures.json` (every DWR dam and dugout, with HUC8 watersheds) for the batch screen. Run only when asked. |
-| `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp>` | Rebuilds `src/lib/crest/data/nd_dams_dwr.json` from a folder of DWR Dams and Dugouts CSVs already converted to NAVD 88. Run only when asked. |
+**Three ways to run the same desk** (one `src/`, one engine; the records you enter autosave in the browser or app):
 
-### Deploys and migrations
+1. **`Crest.html`** — download the one file from the repo root and double-click it. No install, no server. (The QGIS
+   hand-off buttons on the Report step need the desktop app; everything else works.)
+2. **Desktop app** — `crest-desktop/`, `python run.py` (Python 3.10+, `pip install -r requirements.txt` once), or the
+   built `Crest.exe` / `Crest.app`. Same desk in a native window, plus the local-DEM option and the QGIS plugin hand-off.
+   See **Desktop app** below.
+3. **Web app** — the Vercel deploy of this repo (`npm run dev` on :8080 for a local copy). Same desk; nothing is stored
+   on the server.
 
-The production migration runs on every Vercel deploy through `vercel.json` → `buildCommand: npm run build:deploy`
-(`vercel build` uses the same setting). Until this change it was chained onto `npm run build` itself, so any local or
-CI build with `DATABASE_URL` set would migrate. If you deploy some other way, for example `npm run build` then
-`vercel deploy --prebuilt`, run `npm run db:migrate` as a separate step before switching traffic. Locally, without
-`DATABASE_URL`, the PGLite fallback applies the same files at startup (`src/lib/db.ts`).
+**The steps**, left to right across the top of the desk:
+
+- **Setup** — the guided rail (Record → Breach → Terrain layer → Review) with a live map; every field stays editable.
+- **Record** — the dam: fill it from the NID or DWR, or type it; crest, breach bottom and datum must be entered before
+  anything is computed.
+- **Breach** — the breach method and the routed hydrograph it gives.
+- **Flood** — draw the dam line, breach and reservoir points and a downstream area, build the terrain inundation layer,
+  and look up the 911 address points and PLSS sections it touches.
+- **Results** — import a LISFLOOD-FP or DSS-WISE run for this dam and compare it with the desk's layers.
+- **Dashboard** — the one-screen summary of the flood and its receptors.
+- **Screen** — the ND screening level (ACER TM 11 rules), with every reason listed.
+- **Report** — the printable sheet, the exports (GeoJSON, KML, CSV, `dam.json`, LISFLOOD package) and the QGIS hand-off.
+
+**What needs the network.** The desk runs offline once opened; these go out:
+
+- **Basemap tiles** (USGS The National Map, OpenStreetMap), whenever a map is on screen. Offline, the maps are blank but
+  the layers still draw.
+- **The terrain layer** (USGS 3DEP), **911 address points** (ND GIS Hub) and **PLSS sections** (BLM) — one request each,
+  only when you press the button, and the answer is saved with the dam so it shows offline from then on. The batch
+  screen makes the same 3DEP and 911 requests for every structure it runs.
+- **Google Fonts** — the web app only; `Crest.html` and the desktop app use the system font stack and load nothing from
+  a CDN.
+
+The NID / DWR dam lists and the DWR structure list are bundled and never fetched.
+
+**Warning codes.** Every review flag on the Record, Flood, Screen and Report views carries a code
+(`src/lib/crest/warnings.ts`), so a flag can be named in a report or a bug without quoting it. The text beside the code
+is unchanged from before the codes existed; no threshold moved.
+
+| Code | Means | Severity |
+|---|---|---|
+| W-D1 | Datum: an elevation could not be tied to NAVD 88 as stated (no DEM tie, NGVD 29 offset unknown or differing from VERTCON, a Local crest outside 0–300 ft, a streambed replaced by the toe, a DEM crest that disagrees with the tied crest). | warn; **stop** when the crest could not be tied (the screen holds at Review) |
+| W-V1 | Volume or input band: height, storage or length outside the desk range (clamped), a missing input replaced by its placeholder, a drawn area not applied, or the terrain layer's laid-down volume outside the 2–6× band of the released volume. | warn (info for a placeholder or an in-band volume line) |
+| W-R1 | Reach incomplete: the schematic flood is still wet where it leaves the drawn area, or the routed flood still reaches the terrain's edge with water to carry. | warn |
+| W-E1 | Extent probe failed: the saved terrain layer has no extent check, so the triage cannot give a confidence. | info |
+| W-P1 | Pad terrain failed: a 911 structure still sits on the channel bed (pad 0) because its ground height could not be read. | **stop** (the screen holds at Review) |
+| W-S1 | Layer stale: the saved terrain layer was built from other inputs or an older trace; build it again. | info |
+| W-H1 | NID height looks structural, not the breach head (see the NID picker). | warn |
+| W-H2 | H disagrees with crest minus breach bottom by more than the tolerance. | warn |
 
 ## Drawn area of interest (AOI)
 
@@ -70,8 +96,9 @@ warning asks you to check the drawing.
 ## Basemap
 
 The map uses key-free tiles: **USGS The National Map Topo** by default (public domain, with contours and streams),
-with USGS Imagery + Topo and OpenStreetMap in the layer switcher. Tiles are the desk's only network use. To use
-another XYZ tile server, set `VITE_CREST_TILE_URL` (with `{z}`, `{x}` and `{y}`) and `VITE_CREST_TILE_ATTRIBUTION` at
+with USGS Imagery + Topo and OpenStreetMap in the layer switcher. Tiles are the one thing the desk fetches without being
+asked; the terrain, 911 and PLSS lookups are on buttons and saved with the dam (see **Start here**), and the web app
+alone loads two Google Fonts. To use another XYZ tile server, set `VITE_CREST_TILE_URL` (with `{z}`, `{x}` and `{y}`) and `VITE_CREST_TILE_ATTRIBUTION` at
 build time; it becomes the default layer (`src/lib/crest/basemap.ts`). The desktop bundle and `Crest.html` pick it up
 when rebuilt with the variable set.
 
@@ -132,7 +159,12 @@ afterwards.
 **Batch** (top right) runs many structures through the same path one dam takes on the desk: the breach, the inundation
 layer the flood-size gate picks, the 911 address points inside it (with 3DEP pads), the screen and the triage
 (`src/lib/crest/batch.ts`). The result is a Runner worklist, *Needs a Runner run* first, then *Uncertain*, then
-*Clearly trivial*, with a CSV and **Open in desk** on each row. It is a screen to order work, not a class.
+*Clearly trivial*, with a CSV and **Open in desk** on each row. It is a screen to order work, not a class. The table
+sorts on any column (click the heading; a third click puts the worklist order back), filters on triage, county, id or
+name, keeps its header while you scroll, and copies a row's id in one click; on a phone the county, screen and released
+columns fold away (the CSV has them all). **Open in desk** selects the record already on the desk for that structure
+when there is one (an earlier open, or one made from the NID / DWR pickers) instead of adding a copy; a note on the desk
+says which it did, and that the terrain layer is rebuilt on the Flood step in one click.
 
 - **Pick by:** structures one by one (name, NID ID, `DWR-`, `DUG-` or `UNK-` number), one or more counties, one or
   more USGS HUC8 watersheds, or statewide. **Include** NID dams, DWR dams, DWR dugouts and DWR unknown structures;
@@ -155,9 +187,11 @@ layer the flood-size gate picks, the 911 address points inside it (with 3DEP pad
 - **Needs data:** a structure with no height, storage or location is listed and skipped. Statewide (default filters)
   that is about 4,400 of 9,700, mostly small DWR dams and dugouts with no height or storage on file.
 - **Scale:** about 4–25 s a structure, mostly the 3DEP download, one structure per spare core at a time (at most four;
-  the builds run in Web Workers, so the tab stays live). A county is minutes to under an hour; statewide (~5,300
-  runnable) is hours. Only the small result rows are kept in browser storage (IndexedDB), so **Resume** works after a
-  reload; the finished records (for Open in desk, without their terrain layer) stay in memory.
+  the builds run in Web Workers, so the tab stays live). The estimate starts from that prior (8 s a small structure,
+  25 s over 500 ac-ft) and, after three rows have run, uses the mean time of this run's rows per size class over what
+  is left, updating as rows finish. A county is minutes to under an hour; statewide (~5,300 runnable) is hours. Only
+  the small result rows are kept in browser storage (IndexedDB), so **Resume** works after a reload; the finished
+  records (for Open in desk, without their terrain layer) stay in memory.
 - **Command line:** `npm run batch:dams -- --out batch-out --state` runs the same thing in Node, appends each row to
   `batch-out/batch.jsonl` (one fsynced line per structure; start it again to resume, and a last line cut short by a
   kill is dropped with a warning and that structure runs again, while a corrupt line anywhere else stops the run and
@@ -217,9 +251,9 @@ hand. `npm test` fails while it is older than the sources, so rebuild and commit
 
 `crest-desktop/` opens the same Crest desk as the web app in a native window (pywebview). It is not a second
 engine: it shows the static build of the web desk in `crest-desktop/crest/web/`, which is committed, so you do
-not need Node to run it. Everything is bundled (Leaflet, leaflet-draw, icons, styles); only the basemap tiles
-need the network. Your work is saved on the computer (the same autosave as the browser). Export buttons open a
-Save dialog.
+not need Node to run it. Everything is bundled (Leaflet, leaflet-draw, icons, styles, no Google Fonts); the basemap
+tiles and the on-request terrain, 911 and PLSS lookups need the network, as on the web (**Start here**). Your work
+is saved on the computer (the same autosave as the browser). Export buttons open a Save dialog.
 
 Needs **Python 3.10 or newer** to open the desk (3.14 is fine). Building `Crest.app` still needs 3.10–3.12; PyInstaller fails on 3.13 and newer.
 
@@ -258,3 +292,24 @@ The Report step can hand the open dam to the QGIS plugins already installed on t
 - The Save dialog opens in the folder of the last export (remembered in `crest-settings.json` in the app's data folder).
 - `npm run test:desktop` is a headless smoke test: it serves the bundle the way the app does and checks the
   served engine on DWR-2801 (H 27.50 ft, V 1,615.5 ac-ft, SA 154.5 ac: 28,671 cfs) and that nothing loads from a CDN.
+
+#### Scripts
+
+| Script | What it does |
+|---|---|
+| `npm run dev` | Vite dev server on :8080 (the TanStack Start web app). |
+| `npm run build` | Production build of the web app (`vite build`, Nitro's Vercel preset). This is what Vercel runs (`buildCommand` in `vercel.json`); there is no database and no migration step. |
+| `npm test`, `npm run typecheck`, `npm run lint` | Tests (`scripts/**/*.test.mjs` and `src/lib/crest/*.test.ts`), `tsc --noEmit`, ESLint |
+| `npm run build:desktop` | Builds the desk into `crest-desktop/crest/web/` for the desktop app (committed; see above). |
+| `npm run build:crest-html` | Builds the same desk into the one-file `Crest.html` at the repo root (committed). |
+| `npm run test:desktop` | Headless smoke test of the desktop app (Python, no GUI). |
+| `npm run validate:crest -- --runner <dam folder or zip> --crest <flood.geojson> [--receptors <points.csv>]` | Scores a Crest flood layer (strip or terrain outline export) against a Breach Runner / LISFLOOD-FP run: recall, precision, CSI, area ratio, depth bias, and depth / velocity / arrival at receptors (`src/lib/crest/validation.ts`). Run by hand. |
+| `npm run data:nd-dams` | Rebuilds `src/lib/crest/data/nd_dams.json` from the NID (ND dam picker). Run only when asked. |
+| `npm run batch:dams -- --out <dir> (--state \| --county Cass \| --watershed 09020205 \| --ids ND00199,DWR-4031) [--dem <1 m mosaic .vrt>]` | Batch screen from the command line (see **Batch screen** above); resumes from `<dir>/batch.jsonl`. |
+| `npm run data:nd-structures -- --from data-raw/dwr_structures_<stamp>` | Rebuilds `src/lib/crest/data/nd_structures.json` (every DWR dam and dugout, with HUC8 watersheds) for the batch screen. Run only when asked. |
+| `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp>` | Rebuilds `src/lib/crest/data/nd_dams_dwr.json` from a folder of DWR Dams and Dugouts CSVs already converted to NAVD 88. Run only when asked. |
+
+The web app is a TanStack Start shell (`src/routes/__root.tsx`, one route) around the same `<Desk />` the desktop
+entry (`src/desktop/main.tsx`) renders; it has no server state. The app-builder scaffolding the repo started from
+(Better Auth, PGLite / Postgres migrations, the preview bridge and PWA install page, Radix / shadcn widgets) was never
+used by the desk and was removed on 2026-11-08; `npm install` after pulling that change refreshes `node_modules`.

@@ -6,6 +6,7 @@
 import { csvCell } from "./csv.ts";
 import { num } from "./format.ts";
 import type { Analysis, SeriesPoint } from "./types.ts";
+import { datumFlags, floodFlags } from "./warnings.ts";
 
 /** On every result surface and every printed sheet (brief rule 6). User-tested wording: keep it as written. */
 export const PAPER_DISCLAIMER = "Screening estimate — not an ND Dam Safety or ACER classification.";
@@ -103,6 +104,15 @@ export function receptorCsv(result: Analysis): string {
 /** Model flags carried into the report: the record's datum checks, the flood step's flags, the imported run's warnings. */
 export function paperFlags(result: Analysis, runWarnings: string[] = []): string[] {
   return [...result.datum.warnings, ...result.flood.warnings, ...runWarnings];
+}
+
+/** The same flags with their catalogue codes, for the printed sheet ("W-D1 · …"); a run's warnings carry no code. */
+export function paperFlagsCoded(result: Analysis, runWarnings: string[] = []): { code: string | null; text: string }[] {
+  return [
+    ...datumFlags(result).map((w) => ({ code: w.code as string | null, text: w.text })),
+    ...floodFlags(result).map((w) => ({ code: w.code as string | null, text: w.text })),
+    ...runWarnings.map((text) => ({ code: null, text })),
+  ];
 }
 
 /** "Medium" -> the stamp's class suffix; the stamp also carries the word, so it reads in grayscale. */

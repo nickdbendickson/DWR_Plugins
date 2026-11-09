@@ -1,6 +1,8 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { analyze } from "@/lib/crest/engine";
 import { DEPTH_BANDS, floodStrip } from "@/lib/crest/floodstrip";
+import { ROUTED_LABEL } from "@/lib/crest/inundation";
+import { OUTLINE_LABEL, outlineState } from "@/lib/crest/outline";
 import { isLargeFlood, RUNNER_SOURCE, runnerNeededText, runnerWorklist, worklistCsv } from "@/lib/crest/layer-of-record";
 import { CRS_DEFS, DIFF_BINS } from "@/lib/crest/raster-meta";
 import { results } from "@/lib/crest/results-client";
@@ -21,6 +23,7 @@ import { useDesk } from "@/lib/crest/store";
 import type { DamRecord, ResultSource } from "@/lib/crest/types";
 import { ClientOnly } from "./ClientOnly";
 import type { Bounds, MapPoint, Overlay } from "./ResultsMap";
+import { useOnline } from "./use-online";
 import { allChecks, dropRun, importRun, pickFiles, refFromRun } from "./results-flow";
 
 type Analysis = ReturnType<typeof analyze>;
@@ -253,6 +256,15 @@ function MapPanel({ dam, result, runs, ready }: { dam: DamRecord; result: Analys
   }, [recReady, recSource]);
   const [flip, setFlip] = useState(false);
   const desk = useMemo(() => floodStrip(dam, result).strip, [dam, result]);
+  // The saved terrain layer (routed flood or bathtub outline), the same way the guided setup reads it: only a layer
+  // built from the current inputs counts; a stale or missing one disables the mode with its reason.
+  const online = useOnline();
+  const terrain = useMemo(() => outlineState(dam, result, online), [dam, result, online]);
+  const terrainLayer = terrain.state === "ready" ? terrain.outline : null;
+  // The layer can go stale while this mode is showing it (an input edited on another step): fall back to the strip.
+  useEffect(() => {
+    if (mode === "terrain" && !terrainLayer) setMode("desk");
+  }, [mode, terrainLayer]);
   const rc = useMemo(() => resultsContext(dam, result), [dam, result]);
   const pair: [ResultSource, ResultSource] = flip ? ["dsswise", "lisflood"] : ["lisflood", "dsswise"];
   const [out, setOut] = useState<Rendered>({ overlays: [], fit: null });
@@ -260,6 +272,7 @@ function MapPanel({ dam, result, runs, ready }: { dam: DamRecord; result: Analys
   const dssSum = runs.dsswise?.summary;
   useEffect(() => {
     let live = true;
+    // "desk" and "terrain" draw vector layers, not rendered rasters: nothing to render here.
     const want = mode === "compare" ? (ready.length === 2 ? pair : null) : mode === "lisflood" || mode === "dsswise" ? (ready.includes(mode) ? [mode] : null) : null;
     if (!want) {
       setOut({ overlays: [], fit: null });
@@ -287,17 +300,18 @@ function MapPanel({ dam, result, runs, ready }: { dam: DamRecord; result: Analys
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, flip, ready.join(","), lisSum, dssSum, dam.id, rc]);
 
-  const deskFit = useMemo<Bounds | null>(() => {
-    if (!desk) return null;
+  const vector = mode === "terrain" ? terrainLayer : desk;
+  const vectorFit = useMemo<Bounds | null>(() => {
+    if (!vector) return null;
     let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
     const walk = (c: unknown): void => {
       if (Array.isArray(c) && typeof c[0] === "number") {
         w = Math.min(w, c[0] as number); e = Math.max(e, c[0] as number); s = Math.min(s, c[1] as number); n = Math.max(n, c[1] as number);
       } else if (Array.isArray(c)) c.forEach(walk);
     };
-    for (const f of desk.features) walk((f.geometry as { coordinates: unknown }).coordinates);
+    for (const f of vector.features) walk((f.geometry as { coordinates: unknown }).coordinates);
     return Number.isFinite(w) ? { west: w, south: s, east: e, north: n } : null;
-  }, [desk]);
+  }, [vector]);
 
   const points = useMemo<MapPoint[]>(() => {
     const pts: MapPoint[] = receptorPoints(dam, result).map((p: ResultPoint) => ({ id: p.id, name: p.name, lon: p.lon, lat: p.lat, color: "#facc15", kind: "receptor", note: p.placed }));
@@ -311,12 +325,17 @@ function MapPanel({ dam, result, runs, ready }: { dam: DamRecord; result: Analys
 
   const modes: { id: MapMode; label: string; disabled: boolean; title?: string }[] = [
     { id: "desk", label: "Desk strip", disabled: false },
-    { id: "terrain", label: "Terrain outline", disabled: true, title: "The terrain-following outline is on the swe/flood-outline branch; it shows here once both are merged." },
+    {
+      id: "terrain",
+      label: terrain.state === "ready" && terrain.layer === "routed" ? "Terrain layer (routed)" : "Terrain outline",
+      disabled: !terrainLayer,
+      title: terrain.state === "ready" ? undefined : terrain.message,
+    },
     { id: "lisflood", label: "LISFLOOD", disabled: !ready.includes("lisflood") },
     { id: "dsswise", label: "DSS-WISE", disabled: !ready.includes("dsswise") },
     { id: "compare", label: "Compare A−B", disabled: ready.length < 2 },
   ];
-  const showDesk = mode === "desk";
+  const showVector = mode === "desk" || mode === "terrain";
   return (
     <div className="rounded-md border border-line bg-card p-4" data-testid="results-map">
       <div className="flex flex-wrap items-center gap-2">
@@ -344,7 +363,7 @@ function MapPanel({ dam, result, runs, ready }: { dam: DamRecord; result: Analys
         <div className="min-w-0">
           <ClientOnly fallback={<p className="text-sm text-muted">Loading the map…</p>}>
             <Suspense fallback={<p className="text-sm text-muted">Loading the map…</p>}>
-              <ResultsMap overlays={showDesk ? [] : out.overlays} strip={showDesk ? desk : null} points={points} fit={showDesk ? deskFit : out.fit ?? deskFit} />
+              <ResultsMap overlays={showVector ? [] : out.overlays} strip={showVector ? vector : null} points={points} fit={showVector ? vectorFit : out.fit ?? vectorFit} />
             </Suspense>
           </ClientOnly>
         </div>
@@ -391,7 +410,9 @@ function MapPanel({ dam, result, runs, ready }: { dam: DamRecord; result: Analys
               <p className="mt-2 text-muted">
                 {mode === "desk"
                   ? "Desk strip: the schematic valley, not a mapped extent."
-                  : `${SOURCE_LABEL[mode as ResultSource] ?? ""} max depth, reprojected to the map for display (numbers use the full grid). Datum shifts NAD83→WGS84 (about 1 m) are not applied.`}
+                  : mode === "terrain"
+                    ? `${terrain.state === "ready" && terrain.layer === "routed" ? ROUTED_LABEL : OUTLINE_LABEL}. The layer saved with this dam on the Flood step${terrain.state === "ready" ? `, built ${new Date(terrain.builtAt).toLocaleDateString()}` : ""}.`
+                    : `${SOURCE_LABEL[mode as ResultSource] ?? ""} max depth, reprojected to the map for display (numbers use the full grid). Datum shifts NAD83→WGS84 (about 1 m) are not applied.`}
               </p>
             </>
           )}

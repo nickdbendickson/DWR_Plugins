@@ -248,6 +248,7 @@ export function FlagStack({ flags }: { flags: DashFlag[] }) {
       {shown.map((f) => (
         <span key={f.key} className={"flag-pill " + f.sev}>
           <span className="sr-only">{SEV_WORD[f.sev]}: </span>
+          {f.code ? <code style={{ marginRight: 4, opacity: 0.8 }}>{f.code}</code> : null}
           {f.text}
         </span>
       ))}

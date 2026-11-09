@@ -38,6 +38,7 @@ import {
 import { buildRoutedFloodReach, type ReachRound, reachStatus } from "./reach.ts";
 import { buildRoutedFlood, type RoutedFloodOptions, type RoutedFloodResult } from "./routed-flood.ts";
 import type { Analysis, DamRecord } from "./types.ts";
+import { warning, type Warning } from "./warnings.ts";
 
 import type { DemGrid, DemRequest, OutlineCache, OutlineStats, ReachSummary, RoutedSummary } from "./outline.ts";
 
@@ -70,6 +71,8 @@ export type VolumeCheck = {
   text: string;
   /** SMALL_RELEASE_LABEL ("volume-limited, run the Runner") when the release is under SMALL_RELEASE_ACFT, else null. */
   label: string | null;
+  /** The same text as a catalogue warning (W-V1; "warn" when amber, else "info"). */
+  flag: Warning;
 };
 
 /**
@@ -105,7 +108,7 @@ export function volumeCheck(
       : ratio > hi
         ? `${base} Above ${hi}×: the layer holds far more water than the breach releases, so its extent and depths are likely too big. Check against a model run.`
         : `${base} Below ${lo}×: the layer holds less water than a moving flood's envelope usually does, so its extent and depths may be too small. Check against a model run.`;
-  return { laidAcFt, releasedAcFt, ratio, warn, text, label };
+  return { laidAcFt, releasedAcFt, ratio, warn, text, label, flag: warning("W-V1", text, warn ? "warn" : "info") };
 }
 
 export type LayerChoice = {

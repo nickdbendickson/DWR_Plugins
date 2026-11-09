@@ -7,7 +7,7 @@
  * Resume banner; the finished records live in memory for "Open in desk" WITHOUT their terrain layer (it is rebuilt
  * on the desk in one click), so a long batch does not hold megabytes of GeoJSON per dam.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   BATCH_DISCLAIMER,
@@ -16,12 +16,12 @@ import {
   KIND_LABEL,
   batchCsv,
   batchCsvMeta,
-  estimateSeconds,
   facets,
   insertRow,
   loadStructures,
   missingData,
   runBatchInBrowser,
+  runningEstimate,
   selectStructures,
   sortRows,
   type BatchRow,
@@ -35,6 +35,7 @@ import { fold, type NdData } from "@/lib/crest/nd-dams";
 import { saveText } from "@/lib/crest/save";
 import { useDesk } from "@/lib/crest/store";
 import type { DamRecord } from "@/lib/crest/types";
+import { BatchTable } from "./BatchTable";
 import { TerrainSource } from "./TerrainSource";
 
 const btn = "inline-flex h-11 items-center rounded-sm border border-line bg-card px-4 text-sm text-ink disabled:opacity-50";
@@ -62,10 +63,11 @@ function takeOldRows(): BatchRow[] {
 }
 
 const fmtTime = (s: number) => (s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
-const num = (v: number | null | undefined, d = 0) => (v == null ? "—" : v.toLocaleString("en-US", { maximumFractionDigits: d }));
 
-export function BatchScreen({ onOpen }: { onOpen: () => void }) {
+export function BatchScreen({ onOpen }: { onOpen: (note?: string) => void }) {
   const addDam = useDesk((s) => s.addDam);
+  const deskDams = useDesk((s) => s.dams);
+  const selectDam = useDesk((s) => s.select);
   const [data, setData] = useState<{ nd: NdData; structures: Structure[]; source: Record<string, unknown> } | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [by, setBy] = useState<Selection["by"]>("county");
@@ -115,7 +117,9 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
   const sel: Selection = { by, ids, counties, watersheds, kinds, statuses };
   const list = useMemo(() => (data ? selectStructures(all, sel) : []), [data, by, ids, counties, watersheds, kinds, statuses]); // eslint-disable-line react-hooks/exhaustive-deps
   const ready = list.filter((s) => !missingData(s)).length;
-  const est = estimateSeconds(list) / lanes;
+  // The time estimate: the baseline prior (8 s small / 25 s large) until three rows of this run are timed, then the
+  // running mean of row.seconds, over what is still to run, `lanes` at a time (the worker pool). It updates with every finished row.
+  const est = useMemo(() => runningEstimate(rows, list.filter((s) => !rows.some((r) => r.id === s.id && r.status !== "failed")), lanes), [rows, list, lanes]);
   const scoped = useMemo(() => all.filter((s) => kinds.includes(s.kind)), [all, kinds]);
   const countyF = useMemo(() => facets(scoped.filter((s) => statuses.includes(s.status)), "county"), [scoped, statuses]);
   const hucF = useMemo(() => facets(scoped.filter((s) => statuses.includes(s.status)), "huc8"), [scoped, statuses]);
@@ -170,20 +174,40 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
     setProgress((p) => (p ? { ...p, status: c.signal.aborted ? "Stopped. Resume picks up where it left off." : "Done." } : p));
   };
 
-  const open = (id: string) => {
-    const d = dams.current.get(id);
-    if (!d) return;
-    // The kept record has no terrain layer (runBatchInBrowser dropped it): the desk rebuilds it in one click.
-    addDam({ ...d, id: `${d.id}-${Date.now().toString(36)}` });
-    onOpen();
-  };
+  const canOpen = useCallback((id: string) => dams.current.has(id), []);
+  const open = useCallback(
+    (id: string) => {
+      const d = dams.current.get(id);
+      if (!d) return;
+      // A record for this structure may already be on the desk (an earlier Open in desk, or one made from the NID /
+      // DWR pickers): select it instead of adding a copy on every click. The batch record's id ("batch-nd00199") and
+      // the structure id in its `nid` / `nidId` fields are what identify it.
+      const existing = deskDams.find((x) => x.nid === id || x.nidId === id || x.id === d.id || x.id.startsWith(`${d.id}-`));
+      if (existing) {
+        selectDam(existing.id);
+        onOpen(`Opened the record already on the desk for ${id} (${existing.name}); the batch run was not copied onto it. Its terrain layer is rebuilt on the Flood step in one click.`);
+        return;
+      }
+      // Without the terrain layer (runBatchInBrowser already drops it): it is rebuilt on the desk in one click.
+      const { outline: _outline, ...rest } = d;
+      void _outline;
+      addDam({ ...rest, id: `${d.id}-${Date.now().toString(36)}` });
+      onOpen(`New record from the batch for ${id}. Its terrain layer is rebuilt on the Flood step in one click.`);
+    },
+    [deskDams, selectDam, addDam, onOpen],
+  );
 
   const exportCsv = async () => {
     const r = await saveText(`crest-batch-${new Date().toISOString().slice(0, 10)}.csv`, batchCsv(rows, data ? batchCsvMeta(data) : {}), "text/csv");
     setSaved(r.status === "saved" ? (r.path ? `Saved to ${r.path}` : "Downloaded.") : r.status === "cancelled" ? null : `Not saved: ${r.message}`);
   };
 
-  if (loadErr) return <p className="text-sm text-red-700">Could not load the structure lists: {loadErr}</p>;
+  if (loadErr)
+    return (
+      <p className="text-sm text-red-700" role="alert">
+        Could not load the structure lists: {loadErr}
+      </p>
+    );
   if (!data) return <p className="text-sm text-muted">Loading the NID, DWR dam and dugout lists…</p>;
 
   const pane = "min-w-0 rounded-md border border-line bg-card p-4";
@@ -295,8 +319,9 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
         <div className="mt-4 rounded-sm bg-sand p-3 text-sm" data-testid="batch-summary">
           <p>
             <strong>{list.length.toLocaleString("en-US")}</strong> selected · {ready.toLocaleString("en-US")} ready to run ·{" "}
-            {(list.length - ready).toLocaleString("en-US")} need data (no height, storage or location) · about {fmtTime(est)} at{" "}
-            {lanes === 1 ? "one" : lanes === 2 ? "two" : lanes === 3 ? "three" : "four"} at a time.
+            {(list.length - ready).toLocaleString("en-US")} need data (no height, storage or location) · about {fmtTime(est.seconds)}
+            {running || rows.length ? " left" : ""} at {lanes === 1 ? "one" : lanes === 2 ? "two" : lanes === 3 ? "three" : "four"} at a time
+            {est.measured ? ` (from this run: ${Math.round(est.perSmallS)} s a small structure, ${Math.round(est.perLargeS)} s a large one)` : ""}.
           </p>
           {summary && !rows.length ? (
             <p className="mt-1 text-muted" data-testid="batch-resume-note">
@@ -362,60 +387,7 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
         <div className={pane}>
           <h3 className="text-lg">Results: Runner worklist first</h3>
           <p className="mt-1 text-xs text-muted">{BATCH_DISCLAIMER}</p>
-          <div className="mt-3 max-w-full overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left text-sm" data-testid="batch-results">
-              <thead className="text-xs text-muted">
-                <tr className="border-b border-line">
-                  <th className="py-2 pr-2">Structure</th>
-                  <th className="py-2 pr-2">County</th>
-                  <th className="py-2 pr-2">Triage</th>
-                  <th className="py-2 pr-2">Screen</th>
-                  <th className="py-2 pr-2 text-right">Released ac-ft</th>
-                  <th className="py-2 pr-2 text-right">Flooded ac</th>
-                  <th className="py-2 pr-2 text-right">Homes wet / in reach</th>
-                  <th className="py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((r) => (
-                  <tr key={r.id} className="border-b border-line align-top">
-                    <td className="py-2 pr-2">
-                      <span className="font-medium">{r.label}</span>
-                      <span className="block text-xs text-muted">
-                        {KIND_LABEL[r.kind]}
-                        {r.crestFrom ? ` · crest from ${r.crestFrom}` : ""}
-                      </span>
-                    </td>
-                    <td className="py-2 pr-2">{r.county ?? "—"}</td>
-                    <td className="py-2 pr-2">
-                      {r.triage ? (
-                        <>
-                          <span className={r.triage.recommendation === "needs-runner" ? "font-semibold text-amber" : ""}>{r.triage.label}</span>
-                          <span className="block text-xs text-muted">{r.triage.confidence} confidence</span>
-                        </>
-                      ) : (
-                        <span className="text-muted">{r.status === "needs-data" ? "Needs data" : "Failed"}</span>
-                      )}
-                      {r.reason ? <span className="block text-xs text-muted">{r.reason}</span> : null}
-                    </td>
-                    <td className="py-2 pr-2">{r.screenLabel ?? "—"}</td>
-                    <td className="py-2 pr-2 text-right">{num(r.releasedAcFt)}</td>
-                    <td className="py-2 pr-2 text-right">{num(r.floodedAc)}</td>
-                    <td className="py-2 pr-2 text-right">
-                      {r.structuresFlooded == null ? "—" : `${r.structuresFlooded} / ${r.structuresInside ?? "?"}`}
-                    </td>
-                    <td className="py-2">
-                      {dams.current.has(r.id) ? (
-                        <button type="button" className="inline-flex h-9 items-center rounded-sm border border-line bg-paper px-2 text-xs" onClick={() => open(r.id)}>
-                          Open in desk
-                        </button>
-                      ) : null}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <BatchTable rows={sorted} canOpen={canOpen} onOpen={open} />
         </div>
       ) : null}
     </section>

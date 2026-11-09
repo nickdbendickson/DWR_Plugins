@@ -1,4 +1,4 @@
 {
   "installCommand": "npm install --omit=dev --no-audit --no-fund",
-  "buildCommand": "npm run build:deploy"
+  "buildCommand": "npm run build"
 }

@@ -1,6 +1,7 @@
 import type { OutlineCache } from "./outline.ts";
 import type { Nd911Cache } from "./nd911.ts";
 import type { PlssCache } from "./plss.ts";
+import type { Warning } from "./warnings.ts";
 export type DatumName = "Local" | "NAVD88" | "NGVD29";
 export type FailureMode = "overtopping" | "piping";
 export type BreachMethod = "froehlich" | "macdonald" | "tr60";
@@ -194,7 +195,11 @@ export type Analysis = {
     streambedNavdFt: number | null;
     spillwayNavdFt: number | null;
     poolNavdFt: number | null;
+    /** The datum review flags as text (kept for every reader that expects strings; the same list as `flags`). */
     warnings: string[];
+    /** The same flags with their catalogue code and severity (warnings.ts). Optional only so hand-built test
+     * analyses need not carry it; `datumFlags()` fills it in from the text. */
+    flags?: Warning[];
   };
   breach: {
     label: string;
@@ -254,8 +259,10 @@ export type Analysis = {
       /** "Limited by drawn area: X km / Y ac", or why the AOI was not applied. */
       label: string;
     } | null;
-    /** Flood-step review flags (also listed in Things to check). */
+    /** Flood-step review flags (also listed in Things to check), as text. */
     warnings: string[];
+    /** The same flags with their catalogue code and severity (warnings.ts); see datum.flags. */
+    flags?: Warning[];
     velocityBasis: string;
     stations: { s: number; xKm: number; halfM: number; depthFt: number }[];
     receptors: {

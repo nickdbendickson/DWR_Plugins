@@ -6,6 +6,7 @@ import { bandFor, DEPTH_BANDS, floodStrip, type FloodStrip, type StripFeature } 
 import type { Bbox } from "./plss.ts";
 import type { Centerline } from "./sections.ts";
 import type { Analysis, DamRecord } from "./types.ts";
+import { warning, type Warning } from "./warnings.ts";
 
 /**
  * Terrain outline: a general inundation outline from USGS 3DEP terrain and the desk depths (Nick, 2026-10-30).
@@ -532,7 +533,7 @@ export type OutlineState =
       layer: "outline" | "routed";
       routed?: RoutedSummary;
     }
-  | { state: "build" | "offline"; message: string };
+  | { state: "build" | "offline"; message: string; /** W-S1 when a saved layer is stale (warnings.ts); absent when none was built. */ stale?: Warning };
 
 // ---- inputs and the DEM request -------------------------------------------------------------------------------
 
@@ -1987,7 +1988,8 @@ export function outlineState(dam: DamRecord, result: Analysis, online: boolean):
       : c.stats.traceStart
       ? "The desk inputs changed since the terrain outline was built."
       : "This terrain layer was built before the 2026-11-03 terrain fix (its terrain grid sat up to hundreds of metres off, so the traced channel could miss the flood).";
-    return online ? { state: "build", message: `${msg} Build it again.` } : { state: "offline", message: `${msg} ${OUTLINE_OFFLINE}` };
+    const stale = warning("W-S1", msg);
+    return online ? { state: "build", message: `${msg} Build it again.`, stale } : { state: "offline", message: `${msg} ${OUTLINE_OFFLINE}`, stale };
   }
   return online
     ? { state: "build", message: "The terrain outline is not built yet (one 3DEP terrain request)." }

@@ -11,6 +11,7 @@ import { missingForNext } from "./nd-dams.ts";
 import type { OutlineState } from "./outline.ts";
 import { num } from "./format.ts";
 import type { Analysis, DamRecord } from "./types.ts";
+import { datumFlags, floodFlags } from "./warnings.ts";
 
 export type GuidedKey = "record" | "breach" | "terrain" | "review";
 
@@ -35,6 +36,21 @@ export const GUIDED_LABEL: Record<GuidedKey, string> = {
   review: "Review results",
 };
 
+/**
+ * What is wrong with the record's latitude and longitude, or null: missing, out of range, or the two swapped (a
+ * latitude in North Dakota's longitude band, -104 to -96, and a longitude in its latitude band, 45 to 50 — the
+ * commonest entry slip). The classic Record step shows the same text under its fields (desk.tsx).
+ */
+export function locationProblem(dam: Pick<DamRecord, "lat" | "lon">): string | null {
+  if (dam.lat == null || dam.lon == null || !Number.isFinite(dam.lat) || !Number.isFinite(dam.lon))
+    return "No location: set latitude and longitude";
+  if (dam.lon >= 45 && dam.lon <= 50 && dam.lat <= -96 && dam.lat >= -104)
+    return "Latitude and longitude look swapped: in North Dakota latitude is about 46–49 and longitude about -97 to -104";
+  if (Math.abs(dam.lat) > 90 || Math.abs(dam.lon) > 180)
+    return "Location out of range: check latitude and longitude";
+  return null;
+}
+
 /** Problems that stop the record from giving a breach, worded for the step card. Empty when the record is usable. */
 export function recordProblems(dam: DamRecord): string[] {
   const out: string[] = [];
@@ -46,10 +62,8 @@ export function recordProblems(dam: DamRecord): string[] {
     dam.crestFt <= dam.streambedFt
   )
     out.push("Crest is not above the breach bottom");
-  if (dam.lat == null || dam.lon == null || !Number.isFinite(dam.lat) || !Number.isFinite(dam.lon))
-    out.push("No location: set latitude and longitude");
-  else if (Math.abs(dam.lat) > 90 || Math.abs(dam.lon) > 180)
-    out.push("Location out of range: check latitude and longitude");
+  const loc = locationProblem(dam);
+  if (loc) out.push(loc);
   return out;
 }
 
@@ -80,9 +94,10 @@ export function guidedSteps(
       label: GUIDED_LABEL.record,
       detail: [dam.name || "Unnamed dam", dam.nid].filter(Boolean).join(" · "),
       error: rec.length ? rec.join("; ") : undefined,
-      flags: result.datum.warnings.map((text, i) => ({
+      flags: datumFlags(result).map((w, i) => ({
         key: `datum-${i}`,
-        text,
+        text: w.text,
+        code: w.code,
         sev: "warning" as const,
       })),
     },
@@ -119,9 +134,10 @@ export function guidedSteps(
         ? `Desk screen ${result.screen.label}: open the dashboard`
         : "Build the terrain layer first, or review on the strip",
       flags: [
-        ...result.flood.warnings.map((text, i) => ({
+        ...floodFlags(result).map((w, i) => ({
           key: `flood-${i}`,
-          text,
+          text: w.text,
+          code: w.code,
           sev: "warning" as const,
         })),
       ],

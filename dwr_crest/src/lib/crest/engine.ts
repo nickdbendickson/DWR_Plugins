@@ -2,6 +2,7 @@ import { rankReceptor } from "./acer.ts";
 import { type AoiExtent, aoiExtent, downstreamDirection, fmtAc, fmtKm, hasAoi, readAoi } from "./aoi.ts";
 import { isGenericSeed } from "./samples.ts";
 import { vertconShiftFt } from "./vertcon_nd.ts";
+import { warning, warningTexts, type Warning } from "./warnings.ts";
 import { ACFT, ACRE, CFS, FT, froehlich1995Peak, froehlich2008, routedHydrograph, thin } from "./breach.ts";
 import type {
   Analysis,
@@ -52,20 +53,31 @@ function signed(n: number) {
   return `${n >= 0 ? "+" : "-"}${Math.abs(n).toFixed(2)}`;
 }
 
-/** Clamp an input to the desk range and say so, instead of clamping silently. */
-function bounded(warnings: string[], label: string, v: number, fallback: number, lo: number, hi: number, unit: string) {
-  if (!Number.isFinite(v)) {
-    warnings.push(`${label} is missing. Using ${fallback.toLocaleString("en-US")} ${unit} as a placeholder.`);
-    return fallback;
+/** The desk range of each breach input (ft, ac-ft, ft): outside it bounded() clamps and warns (W-V1). The Record
+ * step's number fields carry the same limits as min/max and show the field's own warning (desk.tsx inputRange). */
+export const INPUT_RANGE = {
+  heightFt: { lo: 4, hi: 200, fallback: 10, unit: "ft", label: "Height" },
+  storageAcFt: { lo: 1, hi: 500000, fallback: 10, unit: "ac-ft", label: "Storage" },
+  lengthFt: { lo: 40, hi: 20000, fallback: 100, unit: "ft", label: "Length" },
+} as const;
+
+/** The W-V1 text for one input, or null inside the range: the same sentence bounded() pushes, for the field's own tag. */
+export function inputRangeWarning(field: keyof typeof INPUT_RANGE, v: number): string | null {
+  const r = INPUT_RANGE[field];
+  if (!Number.isFinite(v)) return `${r.label} is missing. Using ${r.fallback.toLocaleString("en-US")} ${r.unit} as a placeholder.`;
+  if (v < r.lo || v > r.hi) {
+    const c = clamp(v, r.lo, r.hi);
+    return `${r.label} ${v.toLocaleString("en-US")} ${r.unit} is outside the desk range ${r.lo.toLocaleString("en-US")}–${r.hi.toLocaleString("en-US")} ${r.unit}. Using ${c.toLocaleString("en-US")} ${r.unit}.`;
   }
-  if (v < lo || v > hi) {
-    const c = clamp(v, lo, hi);
-    warnings.push(
-      `${label} ${v.toLocaleString("en-US")} ${unit} is outside the desk range ${lo.toLocaleString("en-US")}–${hi.toLocaleString("en-US")} ${unit}. Using ${c.toLocaleString("en-US")} ${unit}.`,
-    );
-    return c;
-  }
-  return v;
+  return null;
+}
+
+/** Clamp an input to the desk range and say so (W-V1), instead of clamping silently. */
+function bounded(warnings: Warning[], field: keyof typeof INPUT_RANGE, v: number) {
+  const r = INPUT_RANGE[field];
+  const text = inputRangeWarning(field, v);
+  if (text) warnings.push(warning("W-V1", text, Number.isFinite(v) ? "warn" : "info"));
+  return Number.isFinite(v) ? clamp(v, r.lo, r.hi) : r.fallback;
 }
 
 function pointOf(f: GeoJSONFeature | undefined): { lon: number; lat: number } | null {
@@ -219,6 +231,7 @@ function reviewMissingElevations(dam: DamRecord, missing: string): Analysis {
       spillwayNavdFt: null,
       poolNavdFt: null,
       warnings: [msg],
+      flags: [warning("W-D1", msg, "stop")],
     },
     breach: {
       label: METHOD_LABEL[dam.method],
@@ -246,6 +259,7 @@ function reviewMissingElevations(dam: DamRecord, missing: string): Analysis {
       reachSource: "wet",
       aoi: null,
       warnings: [],
+      flags: [],
       velocityBasis: "not run",
       stations: [],
       receptors: [],
@@ -265,10 +279,11 @@ function reviewMissingElevations(dam: DamRecord, missing: string): Analysis {
 export function analyze(dam: DamRecord): Analysis {
   const missing = elevationsMissing(dam);
   if (missing) return reviewMissingElevations(dam, missing);
-  const warnings: string[] = [];
-  const heightFt = bounded(warnings, "Height", dam.heightFt, 10, 4, 200, "ft");
-  const storage = bounded(warnings, "Storage", dam.storageAcFt, 10, 1, 500000, "ac-ft");
-  const lengthFt = bounded(warnings, "Length", dam.lengthFt, 100, 40, 20000, "ft");
+  // Every flag carries its catalogue code (warnings.ts); `warnings` below is the same list as text.
+  const warnings: Warning[] = [];
+  const heightFt = bounded(warnings, "heightFt", dam.heightFt);
+  const storage = bounded(warnings, "storageAcFt", dam.storageAcFt);
+  const lengthFt = bounded(warnings, "lengthFt", dam.lengthFt);
   const heightM = heightFt * FT;
   const volumeM3 = storage * ACFT;
 
@@ -287,7 +302,7 @@ export function analyze(dam: DamRecord): Analysis {
       rule = Number.isFinite(dem)
         ? "0–300 ft crest, but the DEM crest is outside 500–3,600 ft. Flagged for review."
         : "0–300 ft crest, but no DEM crest was entered to tie it. Flagged for review.";
-      warnings.push("No DEM tie. Crest left unconverted.");
+      warnings.push(warning("W-D1", "No DEM tie. Crest left unconverted.", "stop"));
       // Leave the crest genuinely unconverted — the stated local value, offset null — in BOTH the missing and the
       // out-of-band case. Keeping an out-of-band DEM value here (the old behaviour) made the "Crest left unconverted"
       // warning untrue and fed that discarded value into exports and reports; the Review hold only guards the screen.
@@ -305,7 +320,7 @@ export function analyze(dam: DamRecord): Analysis {
       offsetFt = manual;
       rule = `NGVD29 to NAVD88 by the offset you entered, ${signed(manual)} ft.`;
       if (grid != null && Math.abs(grid - manual) > 0.2) {
-        warnings.push(`Entered NGVD29 offset ${signed(manual)} ft differs from VERTCON here (${signed(grid)} ft).`);
+        warnings.push(warning("W-D1", `Entered NGVD29 offset ${signed(manual)} ft differs from VERTCON here (${signed(grid)} ft).`));
       }
     } else if (grid != null && loc) {
       offsetFt = grid;
@@ -313,12 +328,12 @@ export function analyze(dam: DamRecord): Analysis {
     } else {
       offsetFt = null;
       rule = "NGVD29 stated, but no location inside the ND VERTCON grid and no offset entered. Elevations left unconverted.";
-      warnings.push("NGVD29 offset unknown: enter the dam location or an offset. Elevations left in NGVD29.");
+      warnings.push(warning("W-D1", "NGVD29 offset unknown: enter the dam location or an offset. Elevations left in NGVD29."));
     }
     crestNavd += offsetFt ?? 0;
   } else if (dam.statedDatum === "Local" && !localCrest) {
     rule = "Marked Local, but the crest is outside 0–300 ft. Treated as NAVD88 and flagged.";
-    warnings.push("Stated datum Local does not match a 0–300 ft crest.");
+    warnings.push(warning("W-D1", "Stated datum Local does not match a 0–300 ft crest."));
     crestNavd = dam.crestFt;
   } else {
     crestNavd = dam.crestFt;
@@ -329,7 +344,10 @@ export function analyze(dam: DamRecord): Analysis {
   const demCrest = finite(dam.demCrestFt ?? NaN, NaN);
   if (!localCrest && Number.isFinite(demCrest) && Math.abs(demCrest - crestNavd) > 0.5) {
     warnings.push(
-      `DEM crest ${demCrest.toFixed(2)} ft differs from the tied crest ${crestNavd.toFixed(2)} ft NAVD88 by ${Math.abs(demCrest - crestNavd).toFixed(2)} ft. Check that the DEM crest is NAVD88 (an NGVD29 value differs by about the VERTCON shift).`,
+      warning(
+        "W-D1",
+        `DEM crest ${demCrest.toFixed(2)} ft differs from the tied crest ${crestNavd.toFixed(2)} ft NAVD88 by ${Math.abs(demCrest - crestNavd).toFixed(2)} ft. Check that the DEM crest is NAVD88 (an NGVD29 value differs by about the VERTCON shift).`,
+      ),
     );
   }
   const localRecord = localCrest && offsetFt != null;
@@ -342,7 +360,7 @@ export function analyze(dam: DamRecord): Analysis {
   const spill = tieValue("Spillway", dam.spillwayFt, offsetFt, crestNavd, localRecord);
   const pool = tieValue("Normal pool", dam.normalPoolFt, offsetFt, crestNavd, localRecord);
   for (const w of [bed.warning, spill.warning, pool.warning]) {
-    if (w) warnings.push(w);
+    if (w) warnings.push(warning("W-D1", w));
   }
 
   // Breach geometry (DamSafety_Runner core/breach.py _common): the reservoir bottom is the top of
@@ -425,7 +443,7 @@ export function analyze(dam: DamRecord): Analysis {
   let reachSource: Analysis["flood"]["reachSource"] = userReachKm > 0 ? "user" : "wet";
   const naturalLengthM = clamp(userReachKm > 0 ? userReachKm * 1000 : wetReachM, 500, MAX_REACH_KM * 1000);
   const depthAt = (xM: number) => maxDepthFt * Math.exp((-decay.k * xM) / baseM);
-  const floodWarnings: string[] = [];
+  const floodWarnings: Warning[] = [];
 
   // Drawn area of interest (Nick 2026-10-29; round 3 fixes). The schematic valley is laid along the
   // downstream direction from the record's geometry (aoi.ts downstreamDirection). The reach stops
@@ -437,7 +455,7 @@ export function analyze(dam: DamRecord): Analysis {
   let aoiOut: Analysis["flood"]["aoi"] = null;
   let aoi: AoiExtent | null = null;
   const notApplied = (w: string) => {
-    floodWarnings.push(w);
+    floodWarnings.push(warning("W-V1", w, "warn"));
     aoiOut = {
       applied: false,
       nearKm: 0,
@@ -464,7 +482,7 @@ export function analyze(dam: DamRecord): Analysis {
     const dir = loc && shape?.ok ? downstreamDirection(dam.geometry, loc) : null;
     if (shape && shape.ok && dir) {
       aoi = aoiExtent(shape, dir);
-      floodWarnings.push(...aoi.warnings);
+      floodWarnings.push(...aoi.warnings.map((w) => warning("W-V1", w, "warn")));
     }
     if (aoi?.unplacedReason) {
       // No direction and the breach outside the AOI: it cannot be placed, so it is not applied.
@@ -479,7 +497,11 @@ export function analyze(dam: DamRecord): Analysis {
       const maxDepthInsideFt = aoi.coversDownstream && aoi.nearM < lengthM ? depthAt(aoi.nearM) : 0;
       if (!aoi.breachInside && aoi.coversDownstream) {
         floodWarnings.push(
-          `The breach location is outside the drawn area; the valley enters it ${fmtKm(aoi.nearM)} downstream. Only the valley from there on is counted. The flood's max depth (${fmtFt(maxDepthFt)} ft) is at the breach, outside the drawn area; inside it the schematic depth peaks at ${fmtFt(maxDepthInsideFt)} ft.`,
+          warning(
+            "W-V1",
+            `The breach location is outside the drawn area; the valley enters it ${fmtKm(aoi.nearM)} downstream. Only the valley from there on is counted. The flood's max depth (${fmtFt(maxDepthFt)} ft) is at the breach, outside the drawn area; inside it the schematic depth peaks at ${fmtFt(maxDepthInsideFt)} ft.`,
+            "warn",
+          ),
         );
       }
       const edgeDepthFt = aoi.coversDownstream ? depthAt(aoi.farM) : 0;
@@ -491,7 +513,10 @@ export function analyze(dam: DamRecord): Analysis {
             ? `at the drawn area's nearest edge (${fmtKm(aoi.farM)} from the breach, direction unknown`
             : `where the valley leaves the drawn area (${fmtKm(aoi.farM)} downstream`;
         floodWarnings.push(
-          `The schematic flood is still ${fmtFt(edgeDepthFt)} ft deep ${where}; wet limit ${(wetReachM / 1000).toFixed(1)} km). The drawn area may be too small.`,
+          warning(
+            "W-R1",
+            `The schematic flood is still ${fmtFt(edgeDepthFt)} ft deep ${where}; wet limit ${(wetReachM / 1000).toFixed(1)} km). The drawn area may be too small.`,
+          ),
         );
       }
       aoiOut = {
@@ -726,7 +751,7 @@ export function analyze(dam: DamRecord): Analysis {
       screen.level = "Review";
     }
   }
-  if (warnings.some((w) => w.startsWith("No DEM tie"))) {
+  if (warnings.some((w) => w.text.startsWith("No DEM tie"))) {
     screen.level = "Review";
     screen.label = "Review (crest not tied)";
     screen.reasons.unshift("The crest could not be tied. Screening waits on a usable DEM crest.");
@@ -740,7 +765,8 @@ export function analyze(dam: DamRecord): Analysis {
       streambedNavdFt: bed.navd,
       spillwayNavdFt: spill.navd,
       poolNavdFt: pool.navd,
-      warnings,
+      warnings: warningTexts(warnings),
+      flags: warnings,
     },
     breach: {
       label: METHOD_LABEL[dam.method],
@@ -767,7 +793,8 @@ export function analyze(dam: DamRecord): Analysis {
       lengthM,
       reachSource,
       aoi: aoiOut,
-      warnings: floodWarnings,
+      warnings: warningTexts(floodWarnings),
+      flags: floodWarnings,
       velocityBasis: VELOCITY_BASIS,
       stations,
       receptors,

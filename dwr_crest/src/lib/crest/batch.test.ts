@@ -19,6 +19,7 @@ import {
   missingData,
   nearRequest,
   runBatch,
+  runningEstimate,
   runStructure,
   selectStructures,
   sortRows,
@@ -138,6 +139,28 @@ describe("structure list", () => {
     assert.equal(missingData(S({ heightFt: null, storageAcFt: null, lat: null })), "No location, height or storage in the inventory.");
     assert.equal(missingData(all[0]), null);
     assert.equal(estimateSeconds([all[0], all[2]]), 8);
+  });
+
+  it("time estimate: the prior until three rows are timed, then the running mean per size class, over what is left", () => {
+    const row = (id: string, seconds: number, storageAcFt: number, status: BatchRow["status"] = "done"): BatchRow =>
+      ({ id, kind: "dam", label: id, county: null, huc8: null, status, reason: null, heightFt: 20, storageAcFt, crestFt: null, crestFrom: null, bearingDeg: null, releasedAcFt: null, peakCfs: null, layer: null, floodedAc: null, screen: null, screenLabel: null, structuresInside: null, structuresFlooded: null, triage: null, seconds }) as BatchRow;
+    const small = [S({ id: "a" }), S({ id: "b" }), S({ id: "c" }), S({ id: "d" })];
+    const large = S({ id: "L", storageAcFt: 900 });
+    // Nothing timed: the prior, two lanes.
+    assert.deepEqual(runningEstimate([], [...small, large], 2), { seconds: (4 * 8 + 25) / 2, measured: false, perSmallS: 8, perLargeS: 25 });
+    // Two rows: still the prior (needs-data rows never count, they took no time).
+    assert.equal(runningEstimate([row("a", 3, 120), row("b", 5, 120), row("x", 0, 120, "needs-data")], small.slice(2), 2).measured, false);
+    // Three timed small rows at 3, 5, 4 s: 4 s a small structure; a large one borrows the mean scaled by the prior ratio.
+    const e = runningEstimate([row("a", 3, 120), row("b", 5, 120), row("c", 4, 120)], [small[3], large], 2);
+    assert.equal(e.measured, true);
+    assert.equal(e.perSmallS, 4);
+    assert.equal(Math.round(e.perLargeS * 100) / 100, Math.round(4 * (25 / 16.5) * 100) / 100);
+    assert.equal(e.seconds, (4 + e.perLargeS) / 2);
+    // A failed row took its time too and counts; a timed large row sets the large class directly.
+    const f = runningEstimate([row("a", 3, 120), row("b", 5, 120, "failed"), row("L", 40, 900)], [large], 1);
+    assert.equal(f.perLargeS, 40);
+    assert.equal(f.perSmallS, 4);
+    assert.equal(f.seconds, 40);
   });
 });
 

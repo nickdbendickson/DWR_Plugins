@@ -9,6 +9,7 @@ import type { OutlineState } from "./outline.ts";
 import type { Triage } from "./triage.ts";
 import { PAPER_DISCLAIMER } from "./paper.ts";
 import type { Analysis, ResultsOfRecord } from "./types.ts";
+import { datumFlags, floodFlags, type WarningCode } from "./warnings.ts";
 
 /** Design tokens (the same hex values as the :root variables in src/styles.css). */
 export const crest = {
@@ -44,7 +45,13 @@ export function flagSeverity(flag: {
   return "ok";
 }
 
-export type DashFlag = { key: string; text: string; sev: Exclude<Severity, "ok"> | "info" };
+export type DashFlag = {
+  key: string;
+  text: string;
+  sev: Exclude<Severity, "ok"> | "info";
+  /** Catalogue code (warnings.ts) when the flag came from the engine's datum or flood checks. */
+  code?: WarningCode;
+};
 
 /** The method behind the depth layer the dashboard shows. */
 export type DashMethod = "runner" | "model" | "routed" | "outline" | "strip-legacy";
@@ -148,10 +155,10 @@ export function dashboardFlags(
 }
 
 function finishFlags(out: DashFlag[], result: Analysis): DashFlag[] {
-  for (const [i, w] of result.datum.warnings.entries())
-    out.push({ key: `datum-${i}`, sev: "warning", text: w });
-  for (const [i, w] of result.flood.warnings.entries())
-    out.push({ key: `flood-${i}`, sev: "warning", text: w });
+  for (const [i, w] of datumFlags(result).entries())
+    out.push({ key: `datum-${i}`, sev: "warning", text: w.text, code: w.code });
+  for (const [i, w] of floodFlags(result).entries())
+    out.push({ key: `flood-${i}`, sev: "warning", text: w.text, code: w.code });
   const rank = { critical: 0, warning: 1, info: 2 } as const;
   const sorted = out.sort((a, b) => rank[a.sev] - rank[b.sev]);
   // Never more than one critical at a time: later criticals wait as warnings until the first is acknowledged.

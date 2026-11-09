@@ -5,8 +5,6 @@ screenshots/
 artifacts/
 attachments/
 AGENTS.md
-.grok/*
-!.grok/app-env.json
 *.log
 .env
 .env.*

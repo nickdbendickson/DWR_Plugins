@@ -2,6 +2,69 @@
 
 ## 2026-11-08
 
+- **README starts with how to run Crest.** The first user instruction sat at line 192, after the scripts table and
+  the deploy-migration notes. A **Start here** section now opens the README: the three ways to run the same desk
+  (`Crest.html`, the desktop app, the web app), the eight steps in a sentence each, and what needs the network: the
+  basemap tiles whenever a map shows; the terrain layer, the 911 points and the PLSS sections one request each on a
+  button, saved with the dam; Google Fonts on the web app only. The false "Tiles are the desk's only network use"
+  (`__root.tsx` loads two Google Fonts; `outline.ts`, `nd911.ts`, `plss.ts` and the dashboard hillshade all fetch) is
+  corrected there, in the Basemap and Desktop sections, in `vite.desktop.config.ts` and in the desktop smoke test's
+  wording. The scripts table moved under **For developers**.
+- **Warning codes.** Only the two NID height checks had codes (W-H1, W-H2); every other review flag was free text,
+  rendered with the text as its React key (two equal texts collided) and impossible to name in a report or a bug.
+  `src/lib/crest/warnings.ts` is the catalogue: `Warning = { code, severity: info | warn | stop, text }` with W-D1
+  (datum), W-V1 (volume / input band), W-R1 (reach incomplete), W-E1 (extent probe failed), W-P1 (pad terrain
+  failed), W-S1 (layer stale) beside W-H1 / W-H2. The engine's datum and flood checks, `volumeCheck`, the NID height
+  checks and `outlineState`'s stale message now carry codes; `Analysis.datum.flags` / `flood.flags` sit beside the
+  unchanged `warnings` string lists, and `warningText()` / `datumFlags()` / `floodFlags()` adapt either way, so every
+  consumer and test that expects strings still gets exactly the text it had. No threshold or wording moved. The
+  Record aside, the Flood flags, the guided-setup and dashboard pills and the paper report show the code before the
+  text with stable keys; the README lists the codes. Tests: `warnings.test.ts`.
+- **Record step validates what is typed.** The number fields took anything and the engine clamped silently to a
+  warning shown only on the Record aside. Height (4–200 ft), storage (1–500,000 ac-ft) and length (40–20,000 ft) now
+  carry `min` / `max` from the one `INPUT_RANGE` the engine clamps with, every number field has `inputMode="decimal"`
+  (the numeric keypad on a phone), and the field's own out-of-range text (the same W-V1 sentence) shows under the box
+  in amber with `aria-invalid`. Latitude and longitude carry their ranges, and the two swapped (a North Dakota
+  longitude in the latitude box) is caught under both fields and on the guided Record card (`guided.ts
+  locationProblem`, shared by `recordProblems`).
+- **Results: the "Terrain outline" map mode works.** It was permanently disabled with a note about a branch merged a
+  week ago. It now shows the layer saved with the dam (the routed flood or the bathtub outline, read with
+  `outlineState` the way the guided setup does, labelled accordingly), fits the map to it, and is disabled with the
+  layer's own reason ("not built yet", "inputs changed, build it again", offline) only when there is nothing current
+  to show; if the layer goes stale while showing, the map falls back to the desk strip.
+- **Batch table: sort, filter, sticky header, copy id, no 760 px floor.** The results table is its own component
+  (`BatchTable.tsx`, on `@tanstack/react-table`): every column sorts (triage, screen and status in worklist order,
+  numbers with blanks last; a third click restores the worklist order), one box filters on triage, county, id, name
+  or status, the header stays while the body scrolls, each row's id has a one-click copy, and the county, screen and
+  released columns fold away below the sm / md widths (the CSV has them all) so the table fits a phone. The default
+  order is still `sortRows`. The run loop in `BatchScreen.tsx` is untouched.
+- **Batch "Open in desk" no longer adds a record on every click.** It selects the record already on the desk for
+  that structure when there is one (an earlier open, or a record from the NID / DWR pickers, matched on the structure
+  id in `nid` / `nidId` or the batch record id) and only adds one when none exists; a dismissable note on the desk
+  says which it did and that the terrain layer is rebuilt on the Flood step in one click.
+- **Batch time estimate learns from the run.** It was the fixed 8 s / 25 s prior halved. `batch.ts runningEstimate`
+  keeps that prior until three rows of the run are timed, then uses the mean of `row.seconds` per size class (a class
+  with no timed row borrows the overall mean scaled by the prior ratio) over what is still to run, two at a time,
+  updating as rows finish; the summary line says the measured per-structure times once it has them.
+- **Accessibility basics.** The screen-level badge was colour alone: it now carries a glyph-and-letter mark (▲ H,
+  ■ M, ● L, ? R) and an `aria-label` with the level's meaning. The batch load error has `role="alert"`. The map
+  legend's layer toggles (flood strip, terrain outline, PLSS, 911) are real buttons with `aria-pressed`, in tab order,
+  with a visible focus ring over the tiles.
+- **Dead app-builder scaffolding removed.** `src/lib/{auth,app-data,multiplayer,og}`, `src/lib/db.ts`, the preview
+  bridge and path-prefix rewrite, `server/`, `migrations/`, `scripts/{migrate,migration-plan,preview*,brand-check,
+  sign-out-plan,check-auth-invariant,grok-*,browser-*,write-atomic,with-app-env,app-env-plugin}.mjs` and their tests,
+  `.grok/`, `public/__grok` and `public/og.jpg`: all imported only by `src/routes/__root.tsx` (AuthProvider, the
+  preview bridge) or by nothing, with `VITE_AUTH_ENABLED=false` and `deploy.database=false`. `__root.tsx` now renders
+  the desk alone; `vite.config.ts` is TanStack Start + Nitro (Vercel preset) with no plugins of its own; `npm run
+  build` is `vite build` and `vercel.json` runs it (no migration step; `build:deploy`, `db:migrate`, `check:auth`,
+  `preview:*` are gone). Dependencies dropped after a repo-wide import grep: `@electric-sql/pglite`, `pg`,
+  `@types/pg`, `kysely`, `better-auth`, `jose`, `@tanstack/react-query`, `react-hook-form`, `@hookform/resolvers`,
+  `zod`, `playwright`, every `@radix-ui/*`, `cmdk`, `vaul`, `sonner`, `react-day-picker`, `date-fns`, `recharts`,
+  `react-resizable-panels`, `class-variance-authority`, `tailwind-merge`, `clsx`, `tw-animate-css`. The
+  `package-lock.json` was pruned to the packages the remaining tree reaches (kept entries byte-identical, flags
+  recomputed); `npm install` after pulling confirms it. `build-deps.test.mjs` now also fails if a removed dependency
+  comes back or a listed one is imported by nothing. The SSR shell stays: TanStack Start is not a one-line swap for
+  a static SPA (the route tree, `Scripts` / `HeadContent` and the Nitro preset are wired through it).
 - **The inundation layer builds in a Web Worker, and can be cancelled.** On a 10 m terrain (ND00199's box is 1,090 ×
   996 cells) the build ran about 4.7 s on the main thread with 2 s stretches that never yielded (the volume spread, the
   polygoniser), so the page froze and a click on Cancel had nowhere to go. The trace, routing, spread, settle and

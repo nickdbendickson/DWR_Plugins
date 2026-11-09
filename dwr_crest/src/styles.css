@@ -294,6 +294,10 @@ body.field-mode {
 }
 .field input:focus { outline: 2px solid var(--teal); outline-offset: -1px; }
 
+/* Map legend toggles (MapDraw.tsx StripLegend): buttons over the map, so the keyboard focus ring must be drawn
+   explicitly or it vanishes against the tiles. */
+.crest-legend-toggle:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; border-radius: 3px; }
+
 .help {
   width: 15px;
   height: 15px;

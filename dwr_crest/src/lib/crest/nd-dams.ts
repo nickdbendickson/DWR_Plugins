@@ -19,6 +19,7 @@
  */
 import type { DamRecord, NidHazard, NidRef, Provenance } from "./types.ts";
 import { loadBundle } from "./data-bundle.ts";
+import type { Warning } from "./warnings.ts";
 
 export type NdDam = {
   nid: string;
@@ -471,7 +472,11 @@ export function unlinkPatch(): Partial<DamRecord> {
 
 // ---------------------------------------------------------------- height warnings
 
-export type HeightWarning = { id: "W-H1" | "W-H2"; text: string; useHeightFt?: number };
+/** W-H1 / W-H2 (warnings.ts catalogue): `id` is the code; `code`/`severity` make it a Warning too. */
+export type HeightWarning = Warning & { id: "W-H1" | "W-H2"; code: "W-H1" | "W-H2"; useHeightFt?: number };
+
+const heightWarning = (id: "W-H1" | "W-H2", text: string, useHeightFt?: number): HeightWarning =>
+  useHeightFt == null ? { id, code: id, severity: "warn", text } : { id, code: id, severity: "warn", text, useHeightFt };
 
 /**
  * W-H1, when the dam is picked. Unjoined dams (H = NID Height): NID Height above the NID Dam Height by more than
@@ -484,23 +489,23 @@ export function heightWarningOnPick(d: NdDam, dwr?: DwrDam): HeightWarning | nul
   if (nh == null) return null;
   if (h.src === "DWR") {
     if (nh - h.value > 1)
-      return {
-        id: "W-H1",
-        text: `NID Height ${nh} ft is more than 1 ft above the DWR dam height ${h.value} ft used for H. The NID value is often the structural height (from the foundation), which would overstate the breach head. Check H against the elevations once they are entered.`,
-      };
+      return heightWarning(
+        "W-H1",
+        `NID Height ${nh} ft is more than 1 ft above the DWR dam height ${h.value} ft used for H. The NID value is often the structural height (from the foundation), which would overstate the breach head. Check H against the elevations once they are entered.`,
+      );
     return null;
   }
   if (d.damHeightFt != null && nh - d.damHeightFt > 0.5)
-    return {
-      id: "W-H1",
-      text: `NID Height ${nh} ft is the largest of the NID's heights; the NID's Dam Height is ${d.damHeightFt} ft. H for breach is crest minus breach bottom, which may be closer to ${d.damHeightFt} ft.`,
-      useHeightFt: d.damHeightFt,
-    };
+    return heightWarning(
+      "W-H1",
+      `NID Height ${nh} ft is the largest of the NID's heights; the NID's Dam Height is ${d.damHeightFt} ft. H for breach is crest minus breach bottom, which may be closer to ${d.damHeightFt} ft.`,
+      d.damHeightFt,
+    );
   if (d.damHeightFt == null && d.structuralHeightFt != null && d.structuralHeightFt === nh)
-    return {
-      id: "W-H1",
-      text: `NID Height ${nh} ft equals the structural height and no dam height is reported; H may be overstated. Check it against the crest and breach bottom.`,
-    };
+    return heightWarning(
+      "W-H1",
+      `NID Height ${nh} ft equals the structural height and no dam height is reported; H may be overstated. Check it against the crest and breach bottom.`,
+    );
   return null;
 }
 
@@ -515,11 +520,11 @@ export function heightWarningOnElevations(dam: DamRecord): HeightWarning | null 
   const rounded = dam.provenance?.heightFt?.src === "NID" && dam.provenance.heightFt.value === dam.heightFt;
   const tol = Math.max(1, 0.05 * Math.abs(D)) + (rounded ? 0.5 : 0);
   if (Math.abs(D - dam.heightFt) <= tol) return null;
-  return {
-    id: "W-H2",
-    text: `Crest minus breach bottom is ${D.toFixed(2)} ft but H is ${dam.heightFt} ft (difference ${(D - dam.heightFt).toFixed(2)} ft, tolerance ${tol.toFixed(2)} ft). Check both; H drives the breach.`,
-    useHeightFt: Math.round(D * 100) / 100,
-  };
+  return heightWarning(
+    "W-H2",
+    `Crest minus breach bottom is ${D.toFixed(2)} ft but H is ${dam.heightFt} ft (difference ${(D - dam.heightFt).toFixed(2)} ft, tolerance ${tol.toFixed(2)} ft). Check both; H drives the breach.`,
+    Math.round(D * 100) / 100,
+  );
 }
 
 // ---------------------------------------------------------------- DWR card

@@ -1,7 +1,8 @@
 /**
  * Static build of the Crest desk for the desktop app (crest-desktop/). It is separate from vite.config.ts, so the web
  * deploy (TanStack Start + Nitro/Vercel) is unchanged. Output: crest-desktop/crest/web/ — plain files, relative paths,
- * Leaflet / leaflet-draw / marker icons bundled, no CDN. Only basemap tiles need the network.
+ * Leaflet / leaflet-draw / marker icons bundled, no CDN, no Google Fonts. Basemap tiles need the network, and so do the
+ * on-request lookups (3DEP terrain, 911 points, PLSS sections), each one request that is then saved with the dam.
  *
  * `--mode singlefile` (`npm run build:crest-html`) builds the same desk into ONE self-contained file, Crest.html at the
  * repo root (JS, CSS, Leaflet images and the favicon inlined), with the same source hashes in an HTML comment so

@@ -84,7 +84,8 @@ class BundleTests(unittest.TestCase):
         mapjs = "".join(p.read_text(encoding="utf-8") for p in (WEB / "assets").glob("*.js"))
         self.assertIn("leaflet", mapjs.lower(), "Leaflet is not bundled")
         self.assertIn("draw:created", mapjs, "leaflet-draw is not bundled")
-        self.assertTrue(any(h in mapjs for h in TILE_HOSTS), "basemap tiles expected to be the only network use")
+        # Tiles are the only thing fetched without being asked; the 3DEP, 911 and PLSS lookups are one request each, on a button.
+        self.assertTrue(any(h in mapjs for h in TILE_HOSTS), "basemap tile hosts expected in the bundle")
 
     def test_desk_imports_the_engine_module(self):
         engine = (WEB / "assets" / "engine.js").read_text(encoding="utf-8")

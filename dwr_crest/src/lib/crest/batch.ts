@@ -196,10 +196,39 @@ export function missingData(s: Structure): string | null {
 
 /**
  * Seconds a structure takes, from the four-dam baseline timed with scripts/triage-dams.mjs (2026-11-05): 4 s for a
- * small pool (DWR-3034) to 25 s for a large flood (DWR-2801), mostly the 3DEP fetch. Used only for the estimate.
+ * small pool (DWR-3034) to 25 s for a large flood (DWR-2801), mostly the 3DEP fetch. These are the PRIOR: once a run
+ * has timed a few structures, `runningEstimate` replaces them with the measured mean. Used only for the estimate.
  */
-export function estimateSeconds(list: Structure[]): number {
-  return list.reduce((t, s) => (missingData(s) ? t : t + ((s.storageAcFt ?? 0) >= 500 ? 25 : 8)), 0);
+export const ESTIMATE_PRIOR_S = { small: 8, large: 25, largeFromAcFt: 500 } as const;
+
+/** Rows timed before the running mean takes over from the prior. */
+export const ESTIMATE_MIN_ROWS = 3;
+
+export function estimateSeconds(list: Structure[], perStructure: ((s: Structure) => number) | null = null): number {
+  const prior = (s: Structure) => ((s.storageAcFt ?? 0) >= ESTIMATE_PRIOR_S.largeFromAcFt ? ESTIMATE_PRIOR_S.large : ESTIMATE_PRIOR_S.small);
+  return list.reduce((t, s) => (missingData(s) ? t : t + (perStructure ?? prior)(s)), 0);
+}
+
+/**
+ * The estimate for what is still to run, from the rows already timed: after ESTIMATE_MIN_ROWS finished rows (done or
+ * failed; needs-data rows took no time and are left out) the mean of their `seconds` stands in for the prior, split
+ * small/large the same way so a county of dugouts is not timed like a county of reservoirs when both have been seen.
+ * Fewer rows than that, or a class with none timed, keep the prior. `lanes` structures run side by side.
+ */
+export function runningEstimate(rows: readonly BatchRow[], remaining: Structure[], lanes: number): { seconds: number; measured: boolean; perSmallS: number; perLargeS: number } {
+  const timed = rows.filter((r) => r.status !== "needs-data" && Number.isFinite(r.seconds) && r.seconds > 0);
+  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const big = (r: { storageAcFt: number | null }) => (r.storageAcFt ?? 0) >= ESTIMATE_PRIOR_S.largeFromAcFt;
+  const measured = timed.length >= ESTIMATE_MIN_ROWS;
+  const small = timed.filter((r) => !big(r)).map((r) => r.seconds);
+  const large = timed.filter(big).map((r) => r.seconds);
+  // A class with no timed row borrows the overall mean scaled by the prior's ratio, so a first large dam is not
+  // estimated at 8 s because only small ones have run.
+  const all = measured ? mean(timed.map((r) => r.seconds)) : null;
+  const perSmallS = measured ? (small.length ? mean(small) : all! * (ESTIMATE_PRIOR_S.small / ((ESTIMATE_PRIOR_S.small + ESTIMATE_PRIOR_S.large) / 2))) : ESTIMATE_PRIOR_S.small;
+  const perLargeS = measured ? (large.length ? mean(large) : all! * (ESTIMATE_PRIOR_S.large / ((ESTIMATE_PRIOR_S.small + ESTIMATE_PRIOR_S.large) / 2))) : ESTIMATE_PRIOR_S.large;
+  const seconds = estimateSeconds(remaining, (s) => (big(s) ? perLargeS : perSmallS)) / Math.max(1, lanes);
+  return { seconds, measured, perSmallS, perLargeS };
 }
 
 /** Browser batches above this size get a warning and a pointer to scripts/batch-dams.mjs. */
