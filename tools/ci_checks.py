@@ -376,33 +376,6 @@ def changelog_md_entries(text):
     return out
 
 
-ARCHIVE_HEADING = "## Archived metadata changelog"
-
-
-def changelog_md_versions(text, plugin):
-    """The version strings docs/CHANGELOG.md names for `plugin`: in a bullet title ("Runner
-    3.10.53: ...", "Hazard 2.18.54 / Runner 3.14.5 ...") and in the plugin's archived metadata
-    section (every "    X.Y.Z - ..." / "X.Y.Z (..." entry line, with or without indent)."""
-    short = plugin.split("_", 1)[-1]                      # DamSafety_Runner -> Runner
-    out, in_archive = set(), False
-    for line in (text or "").splitlines():
-        if line.startswith("## "):
-            name = re.split(r"—|--|-", line[len(ARCHIVE_HEADING):], 1)[-1].strip()
-            in_archive = line.startswith(ARCHIVE_HEADING) and name in (plugin, short)
-        m = re.match(r"^- \*\*(.+?)\*\*", line)
-        if m:
-            title = m.group(1)
-            for mm in re.finditer(r"(?:^|[\s/,(])(?:Dam[Ss]afety[ _])?(\w+(?: Lite)?)\s+(\d+\.\d+\.\d+)",
-                                  title):
-                if mm.group(1).replace(" ", "") == short.replace(" ", ""):
-                    out.add(mm.group(2))
-        if in_archive:
-            mm = re.match(r"^\s*(\d+\.\d+\.\d+)\s*[-(]", line)
-            if mm:
-                out.add(mm.group(1))
-    return out
-
-
 def check_version_bookkeeping(problems, root=None):
     """RELEASE == metadata.txt version for each plugin it names (the one versions.py, in the
     Core); Hazard constants.PLUGIN_VERSION and README.txt line == its metadata.txt."""
@@ -482,8 +455,6 @@ def check_against_base(problems, root=None, ref=None):
               "changelog comparison (git fetch origin main)")
         return
     print("  comparing with " + ref)
-    md_path = os.path.join(root, "docs", "CHANGELOG.md")
-    md_text = _read(md_path) if os.path.isfile(md_path) else ""
     for plugin in PLUGINS:
         rel = plugin + "/metadata.txt"
         old = _git_show(root, ref, rel)
@@ -495,15 +466,10 @@ def check_against_base(problems, root=None, ref=None):
         if ov and nv and _ver_tuple(nv) < _ver_tuple(ov):
             _fail(problems, "{}: version {} is lower than {} on {} (versions only go up; "
                             "renumber above it)".format(plugin, nv, ov, ref))
-        # an entry may leave metadata.txt when its version is still named in docs/CHANGELOG.md
-        # (a bullet title or the plugin's archived metadata section), so changelogs can be trimmed
-        kept = set(changelog_versions(new)) | changelog_md_versions(md_text, plugin)
-        gone = [v for v in changelog_versions(old) if v not in kept]
+        gone = [v for v in changelog_versions(old) if v not in set(changelog_versions(new))]
         if gone:
-            _fail(problems, "{}: changelog entries on {} are missing: {} (keep them in "
-                            "metadata.txt or move them verbatim to docs/CHANGELOG.md "
-                            "'{} — {}')".format(plugin, ref, ", ".join(gone[:8]) +
-                            (" ..." if len(gone) > 8 else ""), ARCHIVE_HEADING, plugin))
+            _fail(problems, "{}: changelog entries on {} are missing: {}".format(
+                plugin, ref, ", ".join(gone[:8]) + (" ..." if len(gone) > 8 else "")))
     # the base may still carry versions.py at its pre-Core path (shared/damsuite/)
     old = _git_show(root, ref, CORE_VERSIONS.replace(os.sep, "/"))
     if old is None:

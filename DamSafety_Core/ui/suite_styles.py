@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""The suite's layer styles (QML in <plugin>/styles/), one look for the three plugins.
+"""The suite's layer styles (QML in DamSafety_Core/ui/styles/), one look for the three plugins.
 
-Byte-identical in DamSafety Hazard, Runner and Screening. Canonical copy: shared/ui/suite_styles.py;
-edit it there and run tools/sync_ui.py (tools/ci_checks.py fails on a stale copy). Pure Python except for the QGIS calls
+One copy, in the DamSafety Core plugin (DamSafety_Core/ui/suite_styles.py, with the QML files in
+DamSafety_Core/ui/styles/); Hazard, Runner and Screening carry a three-line shim onto it (Core
+1.0.0; the QML used to ship in each plugin's styles/). Pure Python except for the QGIS calls
 inside try blocks: a style that cannot be applied never fails a run.
 
     style_for_path(path)      -> QML file name for an output file, by its name / fields, or None

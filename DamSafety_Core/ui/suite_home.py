@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """The Dam suite home window - one view of a Dams folder for the three plugins.
 
-Byte-identical in DamSafety Hazard, Runner and Screening. Canonical copy: shared/ui/suite_home.py;
-edit it there and run tools/sync_ui.py (tools/ci_checks.py fails on a stale copy). Each plugin opens it
+One copy, in the DamSafety Core plugin (DamSafety_Core/ui/suite_home.py); Hazard, Runner and
+Screening carry a three-line shim onto it (Core 1.0.0). Each plugin opens it
 from its menu ("Dam suite home..."); whichever plugin opened it, the window is the same: every
 dam folder of a Dams folder with its dam.json state (screened / modelled / classified / reviewed),
 its class, the suite's next action (damsuite.suite_home / damsuite.dam_record.next_action) and the
@@ -22,8 +22,8 @@ from qgis.PyQt.QtWidgets import (
     QTableWidgetItem, QFileDialog, QMessageBox,
 )
 
-from .damsuite import suite_home as SH
-from .damsuite import versions as VS
+from ..damsuite import suite_home as SH
+from ..damsuite import versions as VS
 from .ui_fit import fit_window
 
 TITLE = "Dam suite home"
@@ -309,28 +309,25 @@ class SuiteHomeDialog(QDialog):
         import sys
         info = {"dams_folder": self.dams_edit.text().strip(), "errors": list(RECENT_ERRORS),
                 "python": sys.version.split()[0], "os": platform.platform()}
+        # Core 1.0.0: this module lives in DamSafety Core, so the plugin that opened the window
+        # is `opened_from` (its suite key), not the package this file sits in
+        key = self.opened_from or ""
+        info["plugin"] = VS.LABELS.get(key, key or (__package__ or "?"))
         try:
-            from .constants import PLUGIN_NAME, PLUGIN_VERSION
-            info["plugin"], info["plugin_version"] = PLUGIN_NAME, PLUGIN_VERSION
-        except Exception:                                        # noqa - Runner / Screening copies
-            info["plugin"] = __package__ or "?"
-            try:
-                md = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata.txt")
-                with open(md, encoding="utf-8", errors="replace") as fh:
-                    for line in fh:
-                        if line.startswith("name="):
-                            info["plugin"] = line.split("=", 1)[1].strip()
-                        elif line.startswith("version="):
-                            info["plugin_version"] = line.split("=", 1)[1].strip()
-            except Exception:                                    # noqa
-                pass
+            v = VS.installed(key) if key else None
+            if v:
+                info["plugin_version"] = v
+            elif key in VS.RELEASE:
+                info["plugin_version"] = VS.RELEASE[key] + " (release set)"
+        except Exception:                                        # noqa
+            pass
         try:
             from qgis.core import Qgis
             info["qgis"] = Qgis.QGIS_VERSION
         except Exception:                                        # noqa
             pass
         try:
-            from .damsuite import settings as DS
+            from ..damsuite import settings as DS
             info["settings_file"] = DS.current_path() or "(none)"
         except Exception:                                        # noqa
             pass

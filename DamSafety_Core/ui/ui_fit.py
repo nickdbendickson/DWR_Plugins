@@ -1,7 +1,7 @@
 """Keep a plugin window on the screen and scroll a long tab.
 
-Canonical copy: shared/ui/ui_fit.py (Hazard, Runner, Screening and Data ship byte-identical
-copies); edit it there and run tools/sync_ui.py."""
+The one copy lives here, in the DamSafety Core plugin (DamSafety_Core/ui/ui_fit.py); each
+plugin's ui_fit.py is a three-line shim onto it (Core 1.0.0)."""
 from qgis.PyQt.QtCore import Qt, QSize
 from qgis.PyQt import QtWidgets
 from qgis.PyQt.QtWidgets import QApplication, QScrollArea, QSizePolicy, QVBoxLayout, QWidget

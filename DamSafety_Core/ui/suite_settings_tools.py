@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """The suite settings file as the DEFAULTS of a plugin's Processing tools (no Qt).
 
-Byte-identical in DamSafety Hazard, Runner and Screening. Canonical copy: shared/ui/suite_settings_tools.py;
-edit it there and run tools/sync_ui.py (tools/ci_checks.py fails on a stale copy). damsuite.settings holds
+One copy, in the DamSafety Core plugin (DamSafety_Core/ui/suite_settings_tools.py); Hazard, Runner
+and Screening carry a three-line shim onto it (Core 1.0.0). damsuite.settings holds
 the file; this module is the QGIS-facing adapter: it reads a tool's parameter definitions into the
 pure catalog, and sets the file's values as the parameters' defaults when a tool is created
 (`settings_aware` wraps a tool class), so the Processing dialogs open with the engineer's values,
@@ -15,7 +15,7 @@ Each plugin gives: its suite key (ndscreen / ndbreach / ndhazard), a `group_of(t
 -> (tab name, order) for the grid, and optionally `toolbox_group(tool)` -> (group, group id) for
 the Processing toolbox.
 """
-from .damsuite import settings as DS
+from ..damsuite import settings as DS
 
 
 def _get(obj, name, default=None):

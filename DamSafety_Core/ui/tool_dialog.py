@@ -12,7 +12,8 @@ exec_tool_dialog makes the dialog a child window of the asking window and shows 
 exec_() alone, so it is modal and stays in front of that window. Otherwise it does what
 execAlgorithmDialog does.
 
-Edit shared/ui/tool_dialog.py only, then run tools/sync_ui.py.
+One copy, in the DamSafety Core plugin (DamSafety_Core/ui/tool_dialog.py); Hazard, Runner and
+Screening carry a three-line shim onto it (Core 1.0.0).
 """
 
 
