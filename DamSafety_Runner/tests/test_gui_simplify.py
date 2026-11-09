@@ -105,9 +105,11 @@ def per_run_parameters_stay_out_of_the_settings_grid():
         inst = RT.fresh(c)
         if RT.tool_name(inst) == "rundam":
             assert "DAM_ID" in {d["name"] for d in RT.param_defs(inst)}
-    # the three plugins carry the same adapter (sync_ui)
+    # Core 1.0.0: the three plugins carry the same three-line shim; PER_RUN_KEYS is in the Core copy
     srcs = {open(os.path.join(REPO, p, "suite_settings_tools.py"), "rb").read() for p in PLUGINS}
-    assert len(srcs) == 1 and b"PER_RUN_KEYS" in srcs.pop()
+    assert len(srcs) == 1 and b"from DamSafety_Core.ui import suite_settings_tools as _m" in srcs.pop()
+    core = open(os.path.join(REPO, "DamSafety_Core", "ui", "suite_settings_tools.py"), "rb").read()
+    assert b"PER_RUN_KEYS" in core
 
 
 @register
@@ -166,7 +168,7 @@ def every_suite_plugin_adds_the_one_dam_suite_home_entry():
         unload_calls = {n.func.attr for n in ast.walk(fns["unload"])
                         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
         assert "remove_suite_actions" in unload_calls, p
-    home = open(os.path.join(REPO, "shared", "ui", "suite_home.py"), encoding="utf-8").read()
+    home = open(os.path.join(REPO, "DamSafety_Core", "ui", "suite_home.py"), encoding="utf-8").read()
     assert 'SUITE_MENU = "Dam safety"' in home and '"NDSuiteHome"' in home
 
 
