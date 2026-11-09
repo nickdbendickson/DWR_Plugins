@@ -1,0 +1,158 @@
+"""damsuite - the shared package of the ND dam suite (ND Dam Hazard Classification Helper,
+ND Dam Breach Runner, ND Dam Breach Screening).
+
+Pure Python 3.9+ standard library: no QGIS, no numpy, no Qt. Importable anywhere (gdalsafe
+imports osgeo only when one of its helpers is called).
+
+DamSafety Core 1.0.0: this is the ONE copy, inside the DamSafety_Core plugin. Each other
+plugin's `damsuite/__init__.py` is a two-line shim (DamSafety_Core.alias.install) that makes
+`<plugin>.damsuite` this very package, so `from .damsuite import x` in a plugin returns these
+module objects and no second copy exists. `damsuite/FILES.json` = {file name: sha256 of its
+bytes} for every .py file here, written by `python3 tools/damsuite_files.py` (tools/ci_checks.py
+fails when it is stale). Until Core 1.0.0 the package was vendored byte-identically into each
+plugin by tools/sync_damsuite.py against a pin; both are retired.
+
+Modules:
+  dam_record  one record per dam (<dam folder>/dam.json) shared by the three plugins
+  versions    version checks between the plugins at start-up
+  chain       model -> classification fingerprint chain (raster digests vs the runner's
+              run_manifest.json)
+  tm11_curves the ND REG_05.2026 Fig. 5.1 / 5.2 depth-velocity flood danger curves (one
+              table for all three plugins, digitized by the engineer)
+  suite_home  one view of a Dams folder (next action per dam, which plugin) for the three
+              plugins' "Dam suite home" windows
+  gdalsafe    GDAL calls that behave the same with GDAL's exceptions on or off (1.3.0: the
+              plugins no longer switch that process-wide setting)
+  settings    the suite settings file (1.4.0): one table of every engineer-chosen value of the
+              three plugins, read as the tools' defaults and edited in the popups' grids
+  xlsx_lite   a dependency-free .xlsx writer / reader for that file (1.5.0: bounded read)
+  units       feet / acres / acre-feet <-> metres for the user-facing values (1.4.0)
+  suitedata   the suite data folder and Dams folder set once per computer (1.5.0)
+  services    the WMS / WMTS / WCS / ArcGIS REST servers, the user's own, and the data
+              source picked for each role (1.5.0)
+  terrain_cache  the shared terrain tile cache (1.5.0)
+  damdata     "Get data for this dam": <dam>/data/ and dam.json's data section, and the
+              autofill of tool inputs from it (1.5.0)
+  offline_pack  the statewide offline data pack reader / writer (moved from ND Dam Hazard,
+              1.5.0)
+  suitegpkg   EPSG:5070 projection and a pure-Python GeoPackage writer / reader (moved from
+              ND Dam Hazard, 1.5.0)
+  keepawake   keeps the computer from sleeping while a flood model runs, beside the solver
+              (1.8.0)
+  solvegate   checks before a flood solve starts: LISFLOOD-FP starts, the DEM covers the dam,
+              the hydrograph has a peak and a volume, a layer meets the study area (1.9.0)
+  gpkgpack    the offline pack as a folder with one GeoPackage per layer, manifest.json and
+              LAYERS.txt (pack format 2): writer and reader (1.10.0)
+  netproxy    the proxy set in QGIS, for the downloads that go through urllib (1.16.2)
+  structure_flags  flagged structures: records that are not a dam to breach (a road fill
+              over backwater, DWR-3161) with the hazard class of record (1.17.2)
+  packcheck   an offline data pack checked against its manifest.json on load: every layer
+              there, with its count, fields, geometry type and CRS; format 1 / 2 detection
+              (1.17.5)
+  vdatum      NGVD29 -> NAVD88 for dam elevations (VERTCON at the dam, offline): datum
+              detection, the shift and its record for the reports and dam.json (1.18.0)
+  vertcon_nd  NOAA's VERTCON grid clipped to North Dakota (public domain), read by vdatum
+              (1.18.0; written by tools/make_vertcon_nd.py)
+  packengine  the offline data pack builder of both suites (1.18.6, packbuild 1.1): each
+              plugin's build_nd_pack.py binds its constants and is this module
+  packfiles   the pack layers that come from files (DWR / HIFLD / 3DHP national file) (1.18.6)
+  dwrfiles    the ND DWR GeoPackages as pack data sets (--dwr-folder) (1.18.6)
+  abi         the SARP / NACC Aquatic Barrier Inventory layers of the pack (ABI_*) (1.18.7)
+  updatecore  the data updaters' engine (sources, staging, lock, manifest) (1.18.8)
+  updatesources  the data updaters' source list (1.18.8)
+  nsi_merge   NSI 2026 + 2022 merged into one inventory (1.18.8; was the updaters' own)
+  osm_layers  the five OSM_* pack layers from Geofabrik's .osm.pbf (1.18.8; was the ND Updater's)
+  midcrest    the dam point at mid-crest: the dam line's midpoint, then the highest DEM point
+              on the perpendicular profile (+-25 m), for Screening and the Runner (1.18.2)
+
+`selfcheck()` compares this package's files with FILES.json and returns a list of problems
+("missing: x.py", "changed: x.py", "unexpected file: x.py"); [] means the copy is intact.
+The comparison is on raw bytes (a CRLF conversion counts as a change).
+
+Nothing here has been run inside a real QGIS; the QGIS-facing part (versions.installed) is
+written defensively and returns None on any failure.
+"""
+import hashlib
+import json
+import os
+
+from . import chain, dam_record, gdalsafe, settings, suite_home, tm11_curves, units, versions, xlsx_lite   # noqa: F401,E501  (sub-modules, relative imports only)
+from . import offline_pack, suitegpkg, suitedata, services, terrain_cache, damdata   # noqa: F401,E501  (1.5.0)
+from . import keepawake   # noqa: F401  (1.8.0)
+from . import solvegate   # noqa: F401  (1.9.0)
+from . import gpkgpack   # noqa: F401  (1.10.0)
+from . import hydro3dhp   # noqa: F401  (1.15.0)
+from . import netproxy   # noqa: F401  (1.16.2)
+from . import structure_flags   # noqa: F401  (1.17.2)
+from . import packcheck   # noqa: F401  (1.17.5)
+from . import vdatum   # noqa: F401  (1.18.0; vertcon_nd is read on first use)
+from . import midcrest   # noqa: F401  (1.18.2)
+
+SUITE_VERSION = "1.18.9"   # 1.18.9: xlsx_lite 1.5.0 - read() is bounded (Excel's 1,048,576 rows / 16,384 columns, 2,000,000 cells per sheet table, 64 MB per unpacked part) and raises XlsxTooLarge (a ValueError) instead of building a giant table from a tiny file (security audit pass 3); 1.18.8: updatecore + updatesources (+ nsi_merge, osm_layers) - ONE data updater engine and source list for the ND Data Updater and DamSafety Data (both cores' fixes merged; Overture, ND 911 address points and the Geofabrik OSM pack layers in both; sources that update in place); 1.18.7: abi + packengine.shared_datasets - ONE list of the barrier and ND DEQ layers in both suites' packs (ABI_* from the Aquatic Barrier Inventory, engine kind abi; USGS_stream_crossings; NDDEQ_*), the ND names SARP_* answer as aliases (hydro3dhp.BARRIER_ALIASES in ALIASES); 1.18.6: packengine - ONE offline pack builder for both suites (the DamSafety build_nd_pack.py audit fixes + the ND folder pack / 3DHP / layer files / land cover / SARP download), with packfiles and dwrfiles; offline_pack.PackWriter gets the writer fixes (count, stage_started, features without geometry noted, whole-geometry uid); 1.18.5: connections - the suite's map services (services.BUILTIN + the user's) added once each as QGIS Browser connections (WMS/WMTS, XYZ Tiles, ArcGIS REST Servers) when a plugin starts, ndsuite/register_connections turns it off; services lists the USGS Database of Stream Crossings; 1.18.4: the unconditional local band is 0-500 ft (was 0-300): 301-500 ft is never VERTCON-shifted and is tied to the DEM whatever datum is stated; 1.18.3: format-1 offline packs (nd_offline_pack.sqlite) read by suitedata (pack_file / nlcd_raster / dwr_layers: data sets materialised once to a GeoPackage cache outside the pack, the NLCD raster from the manifest "rasters"; .gpkg is a raster extension) and suite_fill (DWR + NID slots from a format-1 pack; Setup's copy reaches suitedata through an installed plugin), offline_pack unpacks a zipped format-1 pack's rasters, damdata flood_zones claims no pack layer (no pack holds the FEMA flood zones); 1.18.2: 0-300 ft is always local, converted to NAVD88 by the DEM tie whatever datum is chosen (no override; Nick 2026-10-29), other_datum for ND-range values of a local dam, summary_lines REVIEW / UNCONVERTED lines (vdatum.is_local_elev: local_check's first unconditional test, plan(values=) makes the record local, convert_ft never shifts such a value; summary_lines lists DEM-derived values, local culvert inverts and the dam point move) + midcrest (dam point at mid-crest from the dam line and the DEM, shared by Screening and the Runner); 1.18.1: vdatum local datums - local_check (outside 500-3600 ft, > 50 ft from the DEM crest, a round 100 ft multiple > 10 ft from it), mode "local", plan/summary_lines for elevations taken from the DEM; 1.18.0: vdatum + vertcon_nd - NGVD29 -> NAVD88 (VERTCON, bundled ND grid, pyproj fallback) for dam elevations not stated as NAVD88; 1.17.7: ND DWR dugouts - suite_fill dugout_polygons / unknown / DWR export names, the format-2 pack's dwr/DWR_*.gpkg as a fallback for the DWR slots (an engineer's file wins), suitedata.dwr_layers drop-in first (pack=), damdata reads an engineer's dwr/ file before the pack; 1.17.6: packcheck never raises - a broken manifest.json or a cut-short GeoPackage is a FAILED / unreadable result, zipped format-2 packs against their zip listing, a UTF-8 BOM manifest is FAILED (folder and zip), the summary names pack-level problems, pack_signature (#171 follow-up); 1.17.5: packcheck (offline pack vs manifest.json on load), damdata logs it; 1.17.4: suitedata skips dem/lidar_1m (Screening 1 m tile cache, #105); 1.17.3: record.py, pack_convert fixes (#94); 1.17.2: structure_flags (flagged structures); 1.17.1: one canonical package
+FILES_NAME = "FILES.json"
+
+__all__ = ["SUITE_VERSION", "FILES_NAME", "selfcheck", "log_selfcheck", "package_files", "chain", "dam_record",
+           "gdalsafe", "settings", "suite_home", "tm11_curves", "units", "versions", "xlsx_lite",
+           "offline_pack", "suitegpkg", "suitedata", "services", "terrain_cache", "damdata",
+           "keepawake", "solvegate", "gpkgpack", "hydro3dhp", "netproxy", "structure_flags",
+           "packcheck", "vdatum", "midcrest"]
+
+
+def package_files(folder=None):
+    """{file name: sha256} of the .py files directly in the package folder (sorted)."""
+    folder = folder or os.path.dirname(os.path.abspath(__file__))
+    out = {}
+    for name in sorted(os.listdir(folder)):
+        p = os.path.join(folder, name)
+        if name.endswith(".py") and os.path.isfile(p):
+            with open(p, "rb") as f:
+                out[name] = hashlib.sha256(f.read()).hexdigest()
+    return out
+
+
+def selfcheck(folder=None):
+    """Problems of this package copy against its FILES.json; [] = OK.
+
+    `folder` defaults to this package's own folder (the optional argument is for tests)."""
+    folder = folder or os.path.dirname(os.path.abspath(__file__))
+    fpath = os.path.join(folder, FILES_NAME)
+    if not os.path.isfile(fpath):
+        return ["FILES.json missing"]
+    try:
+        with open(fpath, encoding="utf-8") as f:
+            expected = json.load(f)
+        if not isinstance(expected, dict):
+            raise ValueError("not a JSON object")
+    except (OSError, ValueError) as e:
+        return ["FILES.json unreadable: {}".format(e)]
+    actual = package_files(folder)
+    problems = []
+    for name in sorted(expected):
+        if name not in actual:
+            problems.append("missing: {}".format(name))
+        elif actual[name] != expected[name]:
+            problems.append("changed: {}".format(name))
+    for name in sorted(set(actual) - set(expected)):
+        problems.append("unexpected file: {}".format(name))
+    return problems
+
+
+def log_selfcheck(tag):
+    """Core 1.0.0: run selfcheck() at a plugin's start-up and write each problem to the QGIS
+    message log under `tag` (a hand-edited or half-updated DamSafety Core install reports
+    "changed: x.py"). Returns the problems; never raises, never blocks the start-up."""
+    try:
+        problems = selfcheck()
+    except Exception as e:                                       # noqa
+        problems = ["selfcheck failed: {}".format(e)]
+    if problems:
+        text = "DamSafety Core {} damsuite files differ from FILES.json: {}. Reinstall the " \
+               "DamSafety Core plugin.".format(SUITE_VERSION, "; ".join(problems))
+        try:
+            from qgis.core import Qgis, QgsMessageLog
+            QgsMessageLog.logMessage(text, tag, getattr(getattr(Qgis, "MessageLevel", Qgis),
+                                                        "Warning"))
+        except Exception:                                        # noqa - outside QGIS
+            import sys
+            sys.stderr.write("{}: {}\n".format(tag, text))
+    return problems
