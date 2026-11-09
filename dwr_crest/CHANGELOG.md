@@ -38,6 +38,19 @@
 
 ## 2026-11-05
 
+- **Auto-derived records aim the schematic strip down the traced channel (two-pass), not the first downhill.** A
+  record from the Batch screen or *New record from DWR* has no drawn dam line, so the line was laid across the
+  downhill: the lowest ground within 500 m of the inventory point. On DWR-2662 / ND00049 (Swan Buffalo Detention
+  Dam 8) that is 46° (the first ~1 km of Buffalo Creek), but the creek bends east and the straight strip ran off to
+  the north-east (strip CSI 0.00 against the Runner's LISFLOOD-FP run). The batch now traces the drainage with that
+  first line (`traceChannel`), then re-lays the synthesized line across the chord to the trace 4 km down the channel
+  (`aimAlongChannel` / `channelAim` in `batch.ts`; kept when the trace is under 1 km or turns under 5°). DWR-2662:
+  bearing 46° -> 84°, strip CSI 0.00 -> 0.10 (0.01 -> 0.13 at 1 ft), routed spread 0.29 -> 0.35 (0.26 -> 0.27), on
+  the local 1 m mosaic, piping. A drawn dam line is never changed. The strip is still straight: it does not follow
+  bends past the chord. One more terrain request per auto-derived structure. Tests: `batch.test.ts` (channelAim;
+  a DWR-2662-like valley that leaves north and bends east).
+- **New records default to piping** (Nick, 2026-11-05), the failure the Runner and the ND screening use; overtopping
+  stays one click away on the Breach step. `blankDam()` and every record built from it (NID, DWR, batch).
 - **Building a big inundation layer no longer fails with "The quota has been exceeded."** The desk saved its whole
   state, each dam's built layer included, to localStorage on every edit. A routed terrain flood is a large GeoJSON
   (ND00199 / DWR-2801: 5.2 MB), past Safari's ~5 MB per-site limit, so the save threw a QuotaExceededError out of the

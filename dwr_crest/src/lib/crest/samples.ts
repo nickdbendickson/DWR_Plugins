@@ -240,7 +240,8 @@ export function blankDam(): DamRecord {
     drainageMi2: 4,
     statedDatum: "Local",
     demCrestFt: 1550,
-    failureMode: "overtopping",
+    // Piping by default (Nick, 2026-11-05): the Runner's and the ND Dam Safety screening default.
+    failureMode: "piping",
     method: "froehlich",
     engine: "lisflood",
     receptors: valley("new"),

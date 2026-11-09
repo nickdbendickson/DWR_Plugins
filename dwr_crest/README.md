@@ -138,7 +138,10 @@ layer the flood-size gate picks, the 911 address points inside it (with 3DEP pad
 - **The record is auto-derived.** Height and storage come from the inventory (NID dams as the picker fills them; DWR
   `max_dam_he` / `max_pool_v`; dugout `max_height` / `max_storag`). The crest is the DWR NAVD 88 elevation where the
   picker would offer it, else the highest 3DEP cell within 30 m of the inventory point; streambed = crest − H; the
-  downstream direction points at the lowest cell within 500 m, and a dam line is synthesized across it. The record
+  downstream direction points at the lowest cell within 500 m, and a dam line is synthesized across it; then the
+  drainage is traced from the toe and the line is re-laid across the chord to the trace 4 km down the channel, so the
+  straight strip points down the valley the water takes (kept when the trace is under 1 km or turns under 5°). New
+  records default to piping. The record
   says so (*Batch record (auto-derived …)*) and its crest provenance is "DEM". Check the point, crest and direction
   before relying on a row.
 - **Needs data:** a structure with no height, storage or location is listed and skipped. Statewide (default filters)

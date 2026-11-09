@@ -9,7 +9,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 
-import { KIND_LABEL, deriveRecord, loadStructures, missingData, nearRequest, structureRecord, type Structure } from "@/lib/crest/batch";
+import { KIND_LABEL, aimAlongChannel, deriveRecord, loadStructures, missingData, nearRequest, structureRecord, type Structure } from "@/lib/crest/batch";
 import { autoBreachOn } from "@/lib/crest/breach-point";
 import { fold, type NdData } from "@/lib/crest/nd-dams";
 import { demSourceLabel, fetchDem } from "@/lib/crest/outline";
@@ -57,6 +57,8 @@ export function StructurePicker() {
         const r = deriveRecord(s, g, data?.nd, demSourceLabel() === "3DEP" ? "3DEP" : "local DEM");
         if (r.ok) {
           made = { ...r.dam, id };
+          // Same two-pass aim as the batch: the synthesized line down the traced channel.
+          made = (await aimAlongChannel(made, r.derived.u, (q) => fetchDem(q)).catch(() => ({ dam: made }))).dam;
           const b = autoBreachOn(made, g);
           if (b.ok) made = { ...made, geometry: b.geometry };
           msg = `New record from DWR. ${made.sampleNote ?? ""}`;

@@ -12,7 +12,10 @@
  *               exactly on the embankment top)
  *   streambed   crest - height
  *   direction   toward the lowest 3DEP cell within DOWNHILL_R_M of the point; the dam line is synthesized across it
- *               and the reservoir point stepped upstream
+ *               and the reservoir point stepped upstream. Then (aimAlongChannel) the drainage trace is followed from
+ *               the toe and the line is re-laid across the chord to the trace AIM_CHORD_M down the channel, so the
+ *               straight schematic strip points down the valley the water takes, not the first few hundred metres of
+ *               it (DWR-2662: downhill 46 deg, Buffalo Creek bends east, chord to 4 km 84 deg)
  * Every derived value is labelled on the record (provenance "DEM" / note), and the row says "auto-derived": it is a
  * screen to sort a worklist, never a class.
  *
@@ -32,7 +35,7 @@ import {
   storageFor,
   type NdData,
 } from "./nd-dams.ts";
-import { demRequest, demSourceLabel, fetchDem, lookupArea, outlineInputs, outlineState, type DemGrid, type DemRequest } from "./outline.ts";
+import { demRequest, demSourceLabel, fetchDem, lookupArea, outlineInputs, outlineState, traceChannel, type DemGrid, type DemRequest } from "./outline.ts";
 import { blankDam } from "./samples.ts";
 import { RECOMMENDATION_LABEL, RECOMMENDATION_ORDER, triageDam, type Triage } from "./triage.ts";
 import type { DamRecord, GeoJSONFeature, Provenance, ScreenLevel } from "./types.ts";
@@ -372,6 +375,57 @@ export function deriveRecord(
   return { ok: true, dam, derived: { crestFt: d.crestFt, crestFrom, bearingDeg, u: d.u } };
 }
 
+/** Distance down the traced channel (m) the strip is aimed at by aimAlongChannel. */
+export const AIM_CHORD_M = 4000;
+/** Shortest trace (m) worth re-aiming on; a shorter one keeps the downhill. */
+export const AIM_MIN_TRACE_M = 1000;
+/** Smallest change (degrees) that re-lays the line; below it the downhill is kept. */
+export const AIM_MIN_TURN_DEG = 5;
+
+export type ChannelAim = { u: [number, number]; bearingDeg: number; chordM: number; fromDeg: number };
+
+const bearingOf = (u: readonly [number, number] | readonly number[]) => Math.round((((Math.atan2(u[0], u[1]) * 180) / Math.PI + 360) % 360) * 10) / 10;
+
+/**
+ * The downstream direction along the drainage: the chord from the breach to the traced channel AIM_CHORD_M down it (or
+ * its end when shorter). Null when the trace cannot be built, is under AIM_MIN_TRACE_M, or turns less than
+ * AIM_MIN_TURN_DEG from `u` (the caller keeps the downhill). Pure on the trace; the DEM is the corridor the trace uses.
+ */
+export function channelAim(pts: { e: number; n: number; x: number }[], u: readonly [number, number]): ChannelAim | null {
+  if (pts.length < 2) return null;
+  const last = pts[pts.length - 1];
+  if (!(last.x >= AIM_MIN_TRACE_M)) return null;
+  const p = pts.find((q) => q.x >= AIM_CHORD_M) ?? last;
+  const L = Math.hypot(p.e, p.n);
+  if (!(L > 0)) return null;
+  const v: [number, number] = [p.e / L, p.n / L];
+  const turn = (Math.acos(Math.max(-1, Math.min(1, v[0] * u[0] + v[1] * u[1]))) * 180) / Math.PI;
+  if (turn < AIM_MIN_TURN_DEG) return null;
+  return { u: v, bearingDeg: bearingOf(v), chordM: Math.round(Math.min(p.x, AIM_CHORD_M)), fromDeg: bearingOf(u) };
+}
+
+/**
+ * Two-pass aim for an auto-derived record (synthesized dam line): trace the channel with the downhill line, then re-lay
+ * the line across the chord channelAim gives. A drawn line is never touched (the caller only passes derived records).
+ */
+export async function aimAlongChannel(
+  dam: DamRecord,
+  u: [number, number],
+  dem: (r: DemRequest) => Promise<DemGrid>,
+): Promise<{ dam: DamRecord; aim: ChannelAim | null }> {
+  const result = analyze(dam);
+  const io = outlineInputs(dam, result);
+  if (!io.ok || !Number.isFinite(dam.lon) || !Number.isFinite(dam.lat)) return { dam, aim: null };
+  const tr = await traceChannel(dam, result, await dem(demRequest(io.inputs)));
+  if (!tr.ok) return { dam, aim: null };
+  const aim = channelAim(tr.centerline.pts, u);
+  if (!aim) return { dam, aim: null };
+  const len = Number.isFinite(dam.lengthFt) && dam.lengthFt > 0 ? dam.lengthFt : 600;
+  const geometry = { ...dam.geometry, ...synthGeometry(dam.lon!, dam.lat!, aim.u, len) };
+  const note = ` Re-aimed along the traced channel: bearing ${aim.bearingDeg}° (chord to ${(aim.chordM / 1000).toFixed(1)} km down the channel), from the ${aim.fromDeg}° downhill.`;
+  return { dam: { ...dam, geometry, sampleNote: (dam.sampleNote ?? "") + note }, aim };
+}
+
 // ---------------------------------------------------------------- one structure
 
 export type BatchStatus = "done" | "needs-data" | "failed";
@@ -471,6 +525,10 @@ export async function runStructure(s: Structure, deps: BatchDeps = {}): Promise<
     const rec = deriveRecord(s, near, deps.nd, deps.demLabel ?? (local ? "local DEM" : "3DEP"));
     if (!rec.ok) return { row: emptyRow(s, "needs-data", rec.reason, secs()), dam: null };
     let dam = rec.dam;
+    // Second pass: aim the synthesized line down the traced channel (aimAlongChannel).
+    const aimed = await aimAlongChannel(dam, rec.derived.u, dem).catch(() => ({ dam, aim: null }));
+    dam = aimed.dam;
+    const bearingDeg = aimed.aim ? aimed.aim.bearingDeg : rec.derived.bearingDeg;
     let result = analyze(dam);
     if (result.screen.level === "Review" && !Number.isFinite(result.breach.peakCfs))
       return { row: { ...emptyRow(s, "failed", result.screen.reasons[0] ?? "The desk could not screen the record.", secs()) }, dam };
@@ -518,7 +576,7 @@ export async function runStructure(s: Structure, deps: BatchDeps = {}): Promise<
         ...emptyRow(s, "done", notes.length ? notes.join(" ") : null, secs()),
         crestFt: dam.crestFt,
         crestFrom: rec.derived.crestFrom,
-        bearingDeg: rec.derived.bearingDeg,
+        bearingDeg,
         releasedAcFt: Number.isFinite(result.breach.volumeAcFt) ? Math.round(result.breach.volumeAcFt * 10) / 10 : null,
         peakCfs: Number.isFinite(result.breach.peakCfs) ? Math.round(result.breach.peakCfs) : null,
         layer: built.ok ? built.layer : null,

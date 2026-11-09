@@ -511,8 +511,8 @@ function BreachStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
             label="Failure"
             value={dam.failureMode}
             options={[
+              ["piping", "Piping (default)"],
               ["overtopping", "Overtopping"],
-              ["piping", "Piping"],
             ]}
             onChange={(failureMode) => update({ failureMode: failureMode as FailureMode })}
           />
