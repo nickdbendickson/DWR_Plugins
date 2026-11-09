@@ -49,7 +49,7 @@ for sid, _k, _g, _m, note in structs:
 # table (not the polygon tolerance band) puts the 0.05 ft-below point in the judgment zone
 assert got["outside_3ft"][0] == nh.ZONE_LOW and got["point_disc"][0] == nh.ZONE_LOW
 assert got["near_high"][0] == nh.ZONE_JUDGMENT and got["far"][0] is None
-grid = hz.Grid(d * hz.M_PER_FT, v * hz.M_PER_FT, gt)
+grid = hz.Grid(d.astype("float64") * hz.M_PER_FT, v.astype("float64") * hz.M_PER_FT, gt)
 assert grid.sample("polygon", [list(structs[4][2])], 0.1)["depth_m"] == 0.0     # bare footprint
 assert grid.sample("point", [structs[6][2]], 0.1)["depth_m"] == 0.0            # own cell only
 assert problems == [], problems
