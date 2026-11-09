@@ -264,6 +264,12 @@ def mocked(tmp_path, monkeypatch):
     # 1.9.0: the OSM layers are mocked through _run_one here - keep the builder off the
     # Geofabrik build (no Overpass probe, no .osm.pbf download); its own tests cover that path.
     monkeypatch.setenv("NDSUITE_OSM_GEOFABRIK", "0")
+    # The 3DHP layers are mocked the same way - keep the builder off the national-file route too:
+    # with it on, every hydro build first sends a live test request to hydro.nationalmap.gov
+    # (and, when that fails, asks The National Map for the 12.5 GB file), so these tests waited
+    # on a USGS server and took minutes in CI. test_hydro_downloads_file_when_service_down and
+    # test_hydro_download_off_reads_service cover that route with the service mocked.
+    monkeypatch.setenv("NDSUITE_3DHP_DOWNLOAD", "0")
     return calls, _tif(str(tmp_path / "nlcd.tif"))
 
 

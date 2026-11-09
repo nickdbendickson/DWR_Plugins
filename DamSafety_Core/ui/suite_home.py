@@ -439,7 +439,10 @@ def point_window_at(dialog, key, dams_folder, row):
 
 
 # ------------------------------------------------------------ the suite menu --
-SUITE_MENU = "ND Dam Suite"
+# 2026-11-08 (usability plan, change 4): one Plugins menu. Every DamSafety plugin puts its
+# entries in "Dam safety"; the shared entries (the home) go there too, added once.
+SUITE_MENU = "Dam safety"
+HOME_ACTION = ("Dam suite home\u2026", "NDSuiteHome")   # (label, object name) of the one entry
 
 
 def _suite_menu_actions(iface):
@@ -456,8 +459,25 @@ def _suite_menu_actions(iface):
     return out
 
 
+def add_home_action(plugin, iface):
+    """The one "Dam suite home…" entry of Plugins > Dam safety, added by whichever of the three
+    plugins loads first (2026-11-08: until then no menu and no window opened the home at all).
+    Appended to plugin.suite_actions so unload removes it; returns the QAction or None."""
+    label, name = HOME_ACTION
+    for a in getattr(plugin, "suite_actions", None) or []:       # this plugin added it already
+        try:
+            if a.objectName() == name:
+                return None
+        except Exception:                                        # noqa
+            pass
+    action = add_suite_action(iface, label, name, plugin.run_home)
+    if action is not None:
+        plugin.suite_actions.append(action)
+    return action
+
+
 def add_suite_action(iface, label, object_name, slot):
-    """Add an entry to the shared Plugins > ND Dam Suite menu (1.4.0: one menu for the three
+    """Add an entry to the shared Plugins > Dam safety menu (1.4.0: one menu for the three
     plugins). An entry with the same object name that another plugin already added is not added
     again. Returns the QAction, or None when it exists already or cannot be made."""
     if iface is None:

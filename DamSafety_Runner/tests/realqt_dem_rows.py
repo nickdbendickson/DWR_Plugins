@@ -130,11 +130,17 @@ def test_dem_rows_keep_their_height_on_laptop_screens():
             with Screen(w, h):
                 d = _open(True, tab)
                 try:
-                    assert hasattr(d, "dem_source"), "DEM download section is the 'not available' stub"
+                    # 3.16.12 (usability plan change 7): Resolution and the button (it was a
+                    # 13-control grid); 3.17.2: the facts line is on its own row below them, so
+                    # it wraps at the box's width (beside the button it was clipped at 1280x800)
+                    assert d.dem_download_btn.isEnabled(), "DEM download needs DamSafety Screening"
                     assert d.dem_section.body.isVisible()
                     short = [(_name(x), x.height(), _need(x)) for x in _rows(d) if x.height() < _need(x)]
                     assert not short, ((w, h, tab), short)
-                    assert len(_rows(d)) >= 15, len(_rows(d))
+                    assert 3 <= len(_rows(d)) <= 5, len(_rows(d))
+                    assert d.dem_facts.parent() is d.dem_download_btn.parent() and \
+                        d.dem_facts.geometry().top() >= d.dem_download_btn.geometry().bottom(), \
+                        (d.dem_facts.geometry(), d.dem_download_btn.geometry())
                 finally:
                     _close(d)
 
@@ -193,38 +199,48 @@ def test_collapsed_window_has_no_scroll_and_tabs_get_the_room():
 
 
 def test_download_params_are_valid_for_the_real_tool():
-    """3.10.89: the Runner passed COUNTY as the county's name; the Processing enum takes an index,
-    so the tool dialog opened every county download as Adams (index 0). Real QGIS Processing
-    checks the parameters the window builds, for each source and area."""
+    """3.16.12 (usability plan change 7): the one button opens Download DEM with the dam's point
+    (dam.json), its ID, the resolution and the dam folder filled in; real QGIS Processing checks
+    the parameters the window builds, with and without a dam point."""
     import types
     from qgis.core import QgsProcessingContext
+    dr = importlib.import_module("DamSafety_Runner.damsuite.dam_record")
     S = importlib.import_module("DamSafety_Screening.algorithms.download_dem")
     alg = S.DownloadDem()
     alg.initAlgorithm()
-    names = list(importlib.import_module("DamSafety_Screening.core.dem_download").county_names())
     captured = []
     old_exec, old_proc = D.exec_tool_dialog, sys.modules.get("processing")
     D.exec_tool_dialog = lambda proc, alg_id, params, parent=None: captured.append((alg_id, dict(params))) or {}
     sys.modules["processing"] = types.ModuleType("processing")      # not opened: captured
     out = tempfile.mkdtemp(prefix="demparams_")
+    dams = os.path.join(out, "Dams")
+    os.makedirs(os.path.join(dams, "DWR-1"))
+    rec = dr.load(os.path.join(dams, "DWR-1"), create=True)
+    for k, v in (("dam_id", "DWR-1"), ("lon", -97.390918), ("lat", 46.984382)):
+        rec.set(k, v, "ndbreach", "3.16.12")
+    rec.save()
     try:
         with Screen(1280, 800):
             d = _open(True)
             try:
-                d.dem_out.setText(out)
-                d.dem_point.setText("-97.390918,46.984382")
-                for src, scope, county in ((0, 1, "Stark"), (1, 1, "Burleigh"), (2, 1, "Stark"),
-                                           (2, 0, "Adams"), (0, 0, "Cass")):
-                    d.dem_source.setCurrentIndex(src)
-                    d.dem_scope.setCurrentIndex(scope)
-                    d.dem_county.setCurrentText(county)
+                d.dams_edit.setText(dams)
+                d.dam_edit.setText("DWR-1")
+                d._changed()
+                for res in (0, 1):
+                    d.dem_res.setCurrentIndex(res)
                     d._open_dem_download()
                     alg_id, params = captured[-1]
                     ctx = QgsProcessingContext()
                     ok, msg = alg.checkParameterValues(params, ctx)
-                    assert alg_id == "nddam:downloaddem" and ok, (src, scope, county, msg, params)
-                    assert names[alg.parameterAsEnum(params, "COUNTY", ctx)] == county, (county, params)
-                    assert alg.parameterAsEnum(params, "SOURCE", ctx) == src
+                    assert alg_id == "nddam:downloaddem" and ok, (res, msg, params)
+                    assert params["DAM_POINT"] == "-97.390918,46.984382" and params["DAM_ID"] == "DWR-1"
+                    assert alg.parameterAsEnum(params, "RES", ctx) == res and params["SCOPE"] == 0
+                    assert params["OUT"] == os.path.join(dams, "DWR-1", "terrain")
+                d.dam_edit.setText("NEW")                       # no folder yet: the tool asks
+                d._changed()
+                d._open_dem_download()
+                alg_id, params = captured[-1]
+                assert "DAM_POINT" not in params and params["DAM_ID"] == "NEW" and "DAM_FOLDER" not in params
             finally:
                 _close(d)
     finally:

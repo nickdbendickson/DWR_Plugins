@@ -69,6 +69,9 @@ class QWidget(QObject):
     def setStyleSheet(self, s):
         self._style = s
 
+    def styleSheet(self):
+        return getattr(self, "_style", "") or ""
+
     def setVisible(self, v):
         self._visible = bool(v)
 
@@ -109,6 +112,12 @@ class QPushButton(QWidget):
         super().__init__()
         self._text = text
         self.clicked = _Signal()
+
+    def text(self):
+        return self._text
+
+    def setText(self, t):
+        self._text = t
 
     def click(self):
         if self._enabled:
@@ -604,6 +613,18 @@ class _QAction(QWidget):
     def __init__(self, *a):
         super().__init__()
         self.triggered = _Signal()
+        # QAction(text, parent) / QAction(icon, text, parent): the label, for the menu tests
+        self._text = next((x for x in a if isinstance(x, str)), "")
+        self._object_name = ""
+
+    def text(self):
+        return self._text
+
+    def setObjectName(self, name):
+        self._object_name = str(name)
+
+    def objectName(self):
+        return self._object_name
 
 
 if not QT6:
