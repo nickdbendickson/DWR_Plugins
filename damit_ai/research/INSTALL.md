@@ -84,6 +84,31 @@ damchain research ask "..."                    # same thing through damchain
 damresearch doctor                             # checks Ollama, both models, the library
 ```
 
+### Getting the ASDSO / FEMA reference set
+
+`fetch_asdso.py` downloads the reference documents that ASDSO (damsafety.org) publishes openly. That
+is about 49 PDFs and 0.5 GB: the FEMA / National Dam Safety Program guidelines and technical manuals
+(P-93, P-94, P-946, P-1025, 333, 484, P-1015, the filter manual, ...), the NDSP research-workshop
+reports (embankment dam failure analysis, predicting peak breach outflow, hydrology, spillways), and
+ASDSO's own guides and state reports. Each folder gets a `library.csv`, so citations read
+"FEMA P-946 (2013)", plus a `manifest.json` with URL, size and SHA-256 for every file.
+
+```zsh
+python3 fetch_asdso.py --dry-run          # see the list first
+python3 fetch_asdso.py                    # -> ~/DamResearch/library/asdso/ (about 1 minute; re-run fetches only new files)
+python3 fetch_asdso.py --search "dam breach" --search-pages 3
+                                          # also search ASDSO's reference database: every hit's citation and
+                                          # abstract go to asdso_references.csv; public PDFs are downloaded
+damresearch ingest
+```
+
+Members-only items, such as conference papers behind the ASDSO login, are never downloaded; only
+their citation is recorded. Files hosted on other sites are listed but fetched only with
+`--external`. The script waits between requests and follows robots.txt. The documents belong to
+their publishers. Many of these PDFs have pages with no text layer, either scans or figure pages.
+`damresearch list` shows which, and `damresearch ocr` (installer `--ocr`) makes the scanned ones
+searchable.
+
 Scanned PDFs (old agency reports often are) have no text layer, and `list` flags them. Install
 OCR with `zsh setup-dam-research.zsh --ocr`, then run `damresearch ocr`. That writes searchable
 copies to `library/_ocr/` and indexes them.
@@ -146,5 +171,6 @@ Delete the block between `# >>> dam-research` and `# <<< dam-research` in `~/.zs
 - `setup-dam-research.zsh`: installer
 - `damresearch.py`: the tool (stdlib + optional numpy / PyMuPDF)
 - `../lumo/tools/dam_chain.py` (in the zip: `damchain-1.4/dam_chain.py`): dam_chain 1.3 plus the `research` pass-through, nothing else changed
+- `fetch_asdso.py`: downloads the public ASDSO / FEMA reference set into the library
 - `READING-LIST.md`: a starter library of public dam-safety publications
 - `library.csv.example`: citation sidecar format

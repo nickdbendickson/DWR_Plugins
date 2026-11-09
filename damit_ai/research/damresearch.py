@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# damresearch.py v1.0 — local research assistant for dam-safety, dam-design and
+# damresearch.py v1.0.1 — local research assistant for dam-safety, dam-design and
 # flood-hazard publications. Runs on your Mac against Ollama; nothing leaves the machine.
 #
 # This is a RESEARCH ASSISTANT. Every statement it writes must be checked against
@@ -32,6 +32,8 @@
 #   DAMRESEARCH_THINK    1 = let the model reason before writing the report (slower)
 #   OLLAMA_URL           http://127.0.0.1:11434
 #
+# 1.0.1: reads library.csv in every sub-folder of the library (fetch_asdso.py writes one per folder).
+#
 # Stdlib only; numpy makes search fast, PyMuPDF gives printed page labels. PDF text
 # backends in order: PyMuPDF -> pdftotext -> pypdf.
 import os, sys, re, json, time, math, hashlib, sqlite3, argparse, subprocess, difflib, shutil
@@ -39,7 +41,7 @@ import urllib.request, urllib.error, unicodedata
 from array import array
 from datetime import datetime
 
-VERSION = "1.0"
+VERSION = "1.0.1"
 HOME = os.path.expanduser(os.environ.get("DAMRESEARCH_HOME", "~/DamResearch"))
 LIBRARY = os.path.join(HOME, "library")
 REPORTS = os.path.join(HOME, "reports")
@@ -463,15 +465,22 @@ def load_sidecar(paths):
     """library.csv next to the files: file,title,authors,year,org,number (any subset of columns)."""
     import csv
     out = {}
+    files = []
     for p in paths:
         p = os.path.abspath(os.path.expanduser(p))
-        f = os.path.join(p, "library.csv") if os.path.isdir(p) else None
-        if f and os.path.isfile(f):
-            with open(f, newline="", encoding="utf-8-sig") as fh:
-                for row in csv.DictReader(fh):
-                    name = (row.get("file") or "").strip()
-                    if name:
-                        out[os.path.basename(name)] = {k: (v or "").strip() for k, v in row.items() if k != "file"}
+        if not os.path.isdir(p):
+            continue
+        # every library.csv under the folder (fetch_asdso.py writes one per sub-folder)
+        for root, dirs, fs in os.walk(p):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+            if "library.csv" in fs:
+                files.append(os.path.join(root, "library.csv"))
+    for f in files:
+        with open(f, newline="", encoding="utf-8-sig") as fh:
+            for row in csv.DictReader(fh):
+                name = (row.get("file") or "").strip()
+                if name:
+                    out[os.path.basename(name)] = {k: (v or "").strip() for k, v in row.items() if k != "file"}
     return out
 
 
@@ -545,7 +554,9 @@ def ingest_one(db, path, h, side, n, total):
     meta = guess_meta(path, pages, md)
     if side:
         for k in ("title", "authors", "year", "org", "number"):
-            if side.get(k):
+            # a library.csv with an empty authors column means "cite the organisation", so it
+            # replaces whatever the PDF's own Author field says (often a typist's login)
+            if side.get(k) or (k == "authors" and k in side):
                 meta[k] = side[k]
         meta["meta_src"] = "library.csv"
     notext = [str(p) for p, _, t in pages if len(clean(t)) < MIN_PAGE_CHARS] if backend != "text" else []
