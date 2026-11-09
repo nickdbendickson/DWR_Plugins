@@ -45,7 +45,8 @@ from .osm_processing import (
 from .download import (
     fetch_nsi, fetch_arcgis_layer, fetch_nd_address_points, fetch_usa_structures, try_download,
     fetch_dams, fetch_osm_lifelines, fetch_nbi, fetch_osm_crossings, STALE_USED, PACK_USED,
-    fetch_osm_camps, fetch_osm_places, parallel_map, fetch_osm_trailer_parks, pack_has,
+    INCOMPLETE_USED, fetch_osm_camps, fetch_osm_places, parallel_map, fetch_osm_trailer_parks,
+    pack_has,
 )
 from .helpers import CancelledByUser
 from . import facilities as FAC
@@ -2360,6 +2361,7 @@ def _collect_inputs(run, clip):
     tick = run.tick
     del STALE_USED[:]                  # v2.4.1: earlier-day copies used this run
     del PACK_USED[:]                   # v2.6.1: data sets read from the offline pack
+    del INCOMPLETE_USED[:]             # H01: downloads cut short but used this run
     from .download import configure_tile_cache_from_cfg
     configure_tile_cache_from_cfg(cfg)     # v2.8: per-tile download cache (empties TILE_USED)
     _log_offline_mode(run)
@@ -2637,6 +2639,14 @@ def _collect_inputs(run, clip):
                 "({})".format(name, day, fname))
         run.sources.append("{}: service unavailable on this run - earlier download of {} "
                            "used ({})".format(name, day, fname))
+    for name, kept, reason in INCOMPLETE_USED:
+        run.log(">>> WARNING: {}: the download was cut short ({}) - only {} feature(s) kept; "
+                "the inventory may be incomplete, so the hazard class is a minimum and may be "
+                "higher. Re-run from a smaller study area for the full layer.".format(
+                    name, reason, kept))
+        run.sources.append("{}: download INCOMPLETE this run - {} feature(s) kept ({}); the "
+                           "inventory may be short of the study area, so treat the class as a "
+                           "minimum.".format(name, kept, reason))
     used = _used_inputs(cfg, got, loc)
     for line in pack_report_lines():
         run.log(line)

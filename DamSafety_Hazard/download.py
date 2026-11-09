@@ -524,11 +524,27 @@ def _cache_path(folder, name, extent):
         name, time.strftime("%Y%m%d"), digest))
 
 
+def _partial_path(path):
+    """H01: the sibling of a day-cache path under a _partial/ subfolder. A cut-short download is
+    written here so it is used for THIS run but never silently reused as complete: _todays_file
+    stats the canonical path (so it re-fetches next run), and _stale_cache / ensemble.
+    _seed_downloads only os.listdir the main folder, so neither serves or seeds it."""
+    folder, base = os.path.split(path)
+    sub = os.path.join(folder, "_partial")
+    os.makedirs(sub, exist_ok=True)
+    return os.path.join(sub, base)
+
+
 _CACHE_RE = re.compile(r"^(.*)_(\d{8})_([0-9a-f]{8})\.geojson$")
 # v2.4.1: downloads replaced by an older cached copy because the service
 # failed this run: [(name, "YYYY-MM-DD", file name)]. Cleared by the pipeline
 # at the start of every run and reported in the summary / run log.
 STALE_USED = []
+# H01: layers whose download was cut short (page limit, a service that will not page) but used
+# anyway this run: [(name, kept_count, reason)]. Cleared with STALE_USED at the start of every
+# run and reported into run.log / run.sources, so a truncated inventory is visible on the record
+# (log_message alone never reaches the report).
+INCOMPLETE_USED = []
 
 
 def _stale_cache(path):
@@ -1090,11 +1106,11 @@ class TileCache(object):
         return True
 
     # ---- the tile -----------------------------------------------------------
-    def _record(self, source, key, bbox, status, fetched, reason=""):
+    def _record(self, source, key, bbox, status, fetched, reason="", complete=True):
         age = max(0.0, (self.now() - fetched) / 86400.0)
         rec = {"source": source, "key": key, "bbox": tuple(bbox), "status": status,
                "fetched": fetched, "fetched_date": _date_of(fetched),
-               "age_days": round(age, 3), "reason": reason}
+               "age_days": round(age, 3), "reason": reason, "complete": complete}
         with _USED_LOCK:
             TILE_USED.append(rec)
         if self.on_tile is not None:
@@ -1155,7 +1171,8 @@ class TileCache(object):
                 self.write(source, url_key, bbox, feats, marker=marker, fetched=now)
                 if self.refresh:
                     self._refreshed.add(path)
-            return feats, self._record(label, source, bbox, "fetched", now, reason)
+            return feats, self._record(label, source, bbox, "fetched", now, reason,
+                                       complete=complete)
 
     # ---- housekeeping -------------------------------------------------------
     def purge(self, max_mb=None):
@@ -1650,19 +1667,23 @@ def _arcgis_features_tiled(cache, url, extent_4326, name, where, progress_cb):
     key = "{}|{}".format(url.rstrip("/"), where)
 
     def one(tile, progress_cb=None):
-        return cache.get(name, key, tile, lambda: _arcgis_collect(
+        feats, info = cache.get(name, key, tile, lambda: _arcgis_collect(
             url, tile, name, where, progress_cb, (oid_field, paged, size)),
-            marker=marker, label=name)[0]
+            marker=marker, label=name)
+        return feats, info.get("complete", True)
     got = parallel_map([(i, one, (t,), {}) for i, t in enumerate(tiles)],
                        progress_cb=progress_cb,
                        label="{}: {} tile(s)".format(name, len(tiles)))
-    lists = []
+    lists, complete = [], True
     for i in range(len(tiles)):
         ok, val = got[i]
         if not ok:
             raise val
-        lists.append(val)
-    return _merge_tile_features(lists, extent_4326)
+        feats_i, complete_i = val
+        lists.append(feats_i)
+        complete = complete and complete_i
+    # H01: the merged answer is complete only when every tile was (AND-reduce the per-tile flags)
+    return _merge_tile_features(lists, extent_4326), complete
 
 
 def _hydro3dhp():
@@ -1674,15 +1695,25 @@ def _fetch_arcgis_live(url, extent_4326, path, name, where, progress_cb):
     cache = active_tile_cache()
     if cache is not None:
         # v2.8.0: fixed-grid tiles, each read from / written to the tile cache
-        features = _arcgis_features_tiled(cache, url, extent_4326, name, where, progress_cb)
+        features, complete = _arcgis_features_tiled(cache, url, extent_4326, name, where,
+                                                    progress_cb)
     else:
-        features = _arcgis_collect(url, extent_4326, name, where, progress_cb)[0]
+        features, complete = _arcgis_collect(url, extent_4326, name, where, progress_cb)
     # 2.22.6: 3DHP flowlines / waterbodies also get the NHD properties (gnis_name, ftype ...)
     norm = _hydro3dhp().normaliser_for_url(url)
     if norm is not None:
         features = norm(features)
+    if not complete:
+        # H01: a cut-short answer must never become today's reusable day file (a later run would
+        # reuse it with no sign it was short). Keep it for THIS run under _partial/ - which
+        # _todays_file / _stale_cache / ensemble._seed_downloads never look in - so the next run
+        # re-fetches, and record it so the truncation reaches the run log and the data-source list.
+        path = _partial_path(path)
+        INCOMPLETE_USED.append((name, len(features),
+                                "the service returned fewer features than exist"))
     _write_fc(path, features)
-    log_message("{}: {} features downloaded".format(name, len(features)))
+    log_message("{}: {} features downloaded{}".format(
+        name, len(features), "" if complete else " (INCOMPLETE - the download was cut short)"))
     if not features:
         # nothing in the area is a valid answer ("no railroads here")
         return QgsVectorLayer("Point?crs=EPSG:4326", name, "memory"), 0, path

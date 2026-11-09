@@ -109,6 +109,12 @@ def main():
     d, v = P.rasters()
     gt = (0.0, 1.0, 0.0, 60.0, 0.0, -1.0)
     structs = P.structures()
+    # The plugin reads the float32 GeoTIFFs written below; sample the numpy reference leg from the
+    # SAME float32 values. Otherwise a fixture sitting exactly on a zone boundary disagrees for
+    # identical data: on_line's 2.916 ft is 2.9159998 in float32, just below the 2.916 ft judgment
+    # threshold, so a float64 reference reads 'judgment' while the float32 plugin reads 'low'. In
+    # production every leg (Hazard, Runner, Screening) reads float32 rasters and agrees.
+    d, v = d.astype(np.float32), v.astype(np.float32)
     expected = P.hazard_leg(d, v, gt, structs)             # the numpy leg (== Runner, Screening)
     tmp = tempfile.mkdtemp(prefix="parity_")
     fails = []
@@ -134,10 +140,22 @@ def main():
                 if zone != want_zone:
                     fails.append("{} fast={} ({}): Hazard plugin zone {} != {}".format(
                         sid, fast, note, zone, want_zone))
-                if want_d is not None and (abs(rec["max_depth"] - want_d) > 1e-4 or
-                                           abs(rec["max_vel"] - want_v) > 1e-4):
-                    fails.append("{} fast={}: {} ft / {} ft/s != {} / {}".format(
-                        sid, fast, rec["max_depth"], rec["max_vel"], want_d, want_v))
+                # Exact depth / velocity on the fast (fastsample, analytic-disc) path, which the
+                # reference leg mirrors. The default GEOS path differs from the analytic disc by the
+                # documented arc/chord gap of GEOS buffers (structures.evaluate_structures, v2.9):
+                # the buffer polygon lies INSIDE the true circle, so it reads a conservative SUBSET
+                # of the edge cells (point_disc: GEOS reaches 0.92 ft/s where the disc reaches
+                # 0.94). On the GEOS path require only that it did not read MORE than the analytic
+                # disc; the zone, checked above on both paths, is what must agree.
+                if want_d is not None:
+                    if fast:
+                        off = (abs(rec["max_depth"] - want_d) > 1e-4 or
+                               abs(rec["max_vel"] - want_v) > 1e-4)
+                    else:
+                        off = (rec["max_depth"] > want_d + 1e-4 or rec["max_vel"] > want_v + 1e-4)
+                    if off:
+                        fails.append("{} fast={}: {} ft / {} ft/s vs {} / {}".format(
+                            sid, fast, rec["max_depth"], rec["max_vel"], want_d, want_v))
                 print("{:4} {:12s} fast={!s:5} zone {!s:12} {} ft {} ft/s".format(
                     "ok" if not fails or not fails[-1].startswith(sid) else "FAIL", sid, fast,
                     zone, rec.get("max_depth"), rec.get("max_vel")))
