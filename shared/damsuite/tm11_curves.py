@@ -140,7 +140,10 @@ def zone(kind, depth_ft, velocity_fts):
     vmax, dmax = AXES[k]
     v = float(velocity_fts)
     d = float(depth_ft)
-    if v > vmax or d > dmax:
+    # M05: a cell beyond the velocity axis is high danger only if it holds water; a dry cell
+    # (depth <= 0) with a huge velocity is not a hazard. The depth-axis branch (d > dmax) is
+    # never dry, so it needs no guard. A dry, fast cell then falls through to LOW below.
+    if d > dmax or (v > vmax and d > 0):
         return HIGH
     lo, hi = thresholds(kind, max(0.0, v))
     if d >= hi:
