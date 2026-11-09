@@ -25,4 +25,4 @@ tags=dam,breach,flood,inundation,LISFLOOD-FP,ANUGA,North Dakota,dam safety,proce
 experimental=True
 deprecated=False
 hasProcessingProvider=yes
-icon=icon.svg
+icon=damit.svg
