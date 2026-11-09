@@ -14,7 +14,11 @@ deterministic, so they can gate every PR cheaply:
      vs main           — against the base branch (CI_BASE_REF, default origin/main; skipped with a
                         notice when it is not fetched): no plugin version is lower, and no
                         changelog entry of the base (metadata.txt changelog= versions,
-                        docs/CHANGELOG.md bullet titles and date sections) is missing
+                        docs/CHANGELOG.md bullet titles and date sections) is missing. A
+                        metadata.txt entry may move to docs/CHANGELOG.md (a bullet title or the
+                        "## Archived metadata changelog — <plugin>" section) as long as its
+                        version string is still there; changelog= over 12 KB fails (the Plugin
+                        Manager renders all of it for every installed plugin)
   3. compile          — py_compile every .py in the suite (catches a syntax error from a bad
                         merge across all plugins in seconds, without importing anything)
   4. shared/ui        — every plugin copy of the shared window files matches shared/ui/, and no
@@ -34,8 +38,10 @@ deterministic, so they can gate every PR cheaply:
                         Manager shows an empty changelog); an indented continuation line only
                         under changelog= / description= / about= (one after another key joins
                         that key's value: hasProcessingProvider= became 'yes' + a changelog
-                        entry and qgis_process skipped the provider); one PLUGIN_VERSION in
-                        Hazard's constants.py
+                        entry and qgis_process skipped the provider); no template value left
+                        (example.com / example.invalid, an empty repository= / tracker= /
+                        homepage=, author=Your Name); one PLUGIN_VERSION in Hazard's
+                        constants.py
 
 Exit non-zero on any failure. The heavier per-plugin suites (real QGIS / scipy / real engines)
 run in a separate CI job that provisions QGIS; this job is the always-on hard gate.
@@ -296,6 +302,52 @@ def changelog_md_entries(text):
     return out
 
 
+# 2026-11-07 (usability / release): QGIS's Plugin Manager parses and renders the whole changelog=
+# of every installed plugin, so the Runner's 149 KB / Hazard's 86 KB slowed it down. The newest
+# entries stay in metadata.txt; older ones go verbatim to docs/CHANGELOG.md ("## Archived metadata
+# changelog — <plugin>"), where check_against_base still finds them.
+CHANGELOG_MAX_BYTES = 12 * 1024
+ARCHIVE_HEADING = "## Archived metadata changelog"
+
+
+def changelog_bytes(text):
+    """Size in bytes (UTF-8) of a metadata.txt changelog= value, continuation lines included."""
+    out, inside = [], False
+    for line in (text or "").splitlines(True):
+        if line.startswith("changelog="):
+            inside = True
+            out.append(line[len("changelog="):])
+        elif inside and line.strip() and not line[0].isspace():
+            break
+        elif inside:
+            out.append(line)
+    return len("".join(out).encode("utf-8"))
+
+
+def changelog_md_versions(text, plugin):
+    """The version strings docs/CHANGELOG.md names for `plugin`: in a bullet title ("Runner
+    3.10.53: ...", "Hazard 2.18.54 / Runner 3.14.5 ...") and in the plugin's archived metadata
+    section (every "    X.Y.Z - ..." / "X.Y.Z (..." entry line, with or without indent)."""
+    short = plugin.split("_", 1)[-1]                      # DamSafety_Runner -> Runner
+    out, in_archive = set(), False
+    for line in (text or "").splitlines():
+        if line.startswith("## "):
+            name = re.split(r"—|--|-", line[len(ARCHIVE_HEADING):], 1)[-1].strip()
+            in_archive = line.startswith(ARCHIVE_HEADING) and name in (plugin, short)
+        m = re.match(r"^- \*\*(.+?)\*\*", line)
+        if m:
+            title = m.group(1)
+            for mm in re.finditer(r"(?:^|[\s/,(])(?:Dam[Ss]afety[ _])?(\w+(?: Lite)?)\s+(\d+\.\d+\.\d+)",
+                                  title):
+                if mm.group(1).replace(" ", "") == short.replace(" ", ""):
+                    out.add(mm.group(2))
+        if in_archive:
+            mm = re.match(r"^\s*(\d+\.\d+\.\d+)\s*[-(]", line)
+            if mm:
+                out.add(mm.group(1))
+    return out
+
+
 def check_version_bookkeeping(problems, root=None):
     """RELEASE == metadata.txt version for each plugin it names (shared master and every vendored
     copy); Hazard constants.PLUGIN_VERSION and README.txt line == its metadata.txt."""
@@ -349,6 +401,14 @@ def check_version_bookkeeping(problems, root=None):
             if cv and mv and _ver_tuple(cv[0]) > _ver_tuple(mv):
                 _fail(problems, "{}: changelog's newest entry {} is above version={}".format(
                     plugin, cv[0], mv))
+            n = changelog_bytes(text)
+            if n > CHANGELOG_MAX_BYTES:
+                _fail(problems, "{}: metadata.txt changelog= is {} KB (over {} KB; the Plugin "
+                                "Manager renders all of it for every installed plugin). Move the "
+                                "oldest entries verbatim to docs/CHANGELOG.md under '{} — {}' "
+                                "and keep the newest here".format(
+                                    plugin, n // 1024, CHANGELOG_MAX_BYTES // 1024,
+                                    ARCHIVE_HEADING, plugin))
 
 
 def _git_show(root, ref, rel):
@@ -374,7 +434,10 @@ def base_ref(root=None):
 
 def check_against_base(problems, root=None, ref=None):
     """No plugin version lower than on the base branch; no changelog entry of the base dropped
-    (metadata.txt changelog= versions, docs/CHANGELOG.md bullet titles and sections)."""
+    (metadata.txt changelog= versions, docs/CHANGELOG.md bullet titles and sections). An entry
+    may leave metadata.txt changelog= when its version is still named in docs/CHANGELOG.md
+    (a bullet title or the plugin's archived metadata section), so the changelogs can be trimmed
+    without losing anything."""
     root = root or ROOT
     ref = ref or base_ref(root)
     if not ref:
@@ -382,6 +445,8 @@ def check_against_base(problems, root=None, ref=None):
               "changelog comparison (git fetch origin main)")
         return
     print("  comparing with " + ref)
+    md_path = os.path.join(root, "docs", "CHANGELOG.md")
+    md_text = _read(md_path) if os.path.isfile(md_path) else ""
     for plugin in PLUGINS:
         rel = plugin + "/metadata.txt"
         old = _git_show(root, ref, rel)
@@ -393,10 +458,14 @@ def check_against_base(problems, root=None, ref=None):
         if ov and nv and _ver_tuple(nv) < _ver_tuple(ov):
             _fail(problems, "{}: version {} is lower than {} on {} (versions only go up; "
                             "renumber above it)".format(plugin, nv, ov, ref))
-        gone = [v for v in changelog_versions(old) if v not in set(changelog_versions(new))]
+        kept = set(changelog_versions(new)) | changelog_md_versions(md_text, plugin)
+        gone = [v for v in changelog_versions(old) if v not in kept]
         if gone:
-            _fail(problems, "{}: changelog entries on {} are missing: {}".format(
-                plugin, ref, ", ".join(gone[:8]) + (" ..." if len(gone) > 8 else "")))
+            _fail(problems, "{}: changelog entries on {} are missing: {} (keep them in "
+                            "metadata.txt or move them verbatim to docs/CHANGELOG.md '{} — "
+                            "{}')".format(plugin, ref, ", ".join(gone[:8]) +
+                                          (" ..." if len(gone) > 8 else ""),
+                                          ARCHIVE_HEADING, plugin))
     old = _git_show(root, ref, "shared/damsuite/versions.py")
     if old is not None:
         orel = release_dict(old)
@@ -681,6 +750,32 @@ def metadata_read_errors(text):
     return out
 
 
+REPO_URL = "https://github.com/nickdbendickson/dAmIt_Plugins"
+
+
+def metadata_placeholders(text):
+    """[message] for template values left in a metadata.txt (2026-11-07, usability / release):
+    an example.com / example.invalid address or link, an empty repository= / tracker= /
+    homepage=, or the Plugin Builder's 'Your Name'. The Plugin Manager shows these to the
+    user and plugins.xml copies them into the plugin repository."""
+    out = []
+    for key in ("repository", "tracker", "homepage"):
+        m = re.search(r"^{}[ \t]*=[ \t]*(.*)$".format(key), text or "", re.M)
+        if m is not None and not m.group(1).strip():
+            out.append("{}= is empty (use {})".format(key, REPO_URL))
+    for i, line in enumerate((text or "").splitlines(), 1):
+        if line.lstrip().startswith(("#", ";")) or line[:1].isspace():
+            continue                                   # a changelog line may quote anything
+        if re.match(r"^(changelog|about|description)\s*=", line, re.I):
+            continue                                   # prose keys may name an example address
+        low = line.lower()
+        if "example.com" in low or "example.invalid" in low:
+            out.append("line {}: placeholder address {}".format(i, line.strip()[:60]))
+        if re.match(r"^author\s*=\s*your name\s*$", low):
+            out.append("line {}: author=Your Name is the template's".format(i))
+    return out
+
+
 def check_metadata_format(problems, root=None):
     root = root or ROOT
     for plugin in PLUGINS:
@@ -694,6 +789,8 @@ def check_metadata_format(problems, root=None):
             _fail(problems, "{}/metadata.txt:{}: indented line after {}= joins its value "
                             "(only changelog / description / about continue): {}".format(
                                 plugin, i, key, line))
+        for msg in metadata_placeholders(text):
+            _fail(problems, "{}/metadata.txt: {}".format(plugin, msg))
     const = os.path.join(root, "DamSafety_Hazard", "constants.py")
     if os.path.isfile(const):
         n = len(re.findall(r"^PLUGIN_VERSION\s*=", _read(const), re.M))

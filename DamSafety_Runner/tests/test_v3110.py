@@ -78,10 +78,39 @@ def v3110_builtin_words_resolve_but_empty_stays_empty():
 
 @test
 def v3110_builtin_is_opt_in_not_auto_detected():
-    # DamSafety ships no bundled binary, and auto-detection never yields the built-in: it is
-    # reached only via the explicit 'builtin' keyword or the provider flag (algorithms.find_lisflood).
+    # A checkout ships no bundled binary (the release zip does), and auto-detection never yields
+    # the built-in: it is reached only via the explicit 'builtin' keyword or the provider flag
+    # (algorithms.find_lisflood).
     assert lf.bundled_exe() is None
     assert nd_data.detect_lisflood() != lf.BUILTIN_EXE
+
+
+@test
+def v31611_bundled_platform_names_the_release_folders():
+    # 3.16.11 (release workflow): bin/<platform>/ of the Runner zip, macOS included; other CPUs
+    # and Windows / Linux on arm get None (no build is made for them)
+    assert lf.bundled_platform("win32", "AMD64") == "windows-x64"
+    assert lf.bundled_platform("linux", "x86_64") == "linux-x64"
+    assert lf.bundled_platform("darwin", "arm64") == "macos-arm64"
+    assert lf.bundled_platform("darwin", "x86_64") == "macos-x64"
+    assert lf.bundled_platform("linux", "aarch64") is None
+    assert lf.bundled_platform("win32", "ARM64") is None
+    assert lf.bundled_platform() in ("windows-x64", "linux-x64", "macos-arm64", "macos-x64", None)
+    # a bundled build is found by lisflood_candidates after the installed ones, never first
+    saved = lf.bundled_exe
+    try:
+        lf.bundled_exe = lambda: "/bundled/bin/linux-x64/lisflood"
+        import shutil as _sh
+        real_isfile, real_access = os.path.isfile, os.access
+        os.path.isfile = lambda p: p == "/bundled/bin/linux-x64/lisflood" or real_isfile(p)
+        os.access = lambda p, m: True if p == "/bundled/bin/linux-x64/lisflood" else real_access(p, m)
+        try:
+            c = nd_data.lisflood_candidates()
+            assert c and c[-1] == "/bundled/bin/linux-x64/lisflood", c
+        finally:
+            os.path.isfile, os.access = real_isfile, real_access
+    finally:
+        lf.bundled_exe = saved
 
 
 # --- runs, conserves mass, names itself ------------------------------------------------------

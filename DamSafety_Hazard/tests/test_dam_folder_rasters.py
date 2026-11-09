@@ -40,6 +40,16 @@ def _pump(n=6):
         _app.processEvents()
 
 
+def _wait_idle(d, timeout_s=90):
+    """2.23.15: Check inputs runs in a QgsTask - pump until its done callback has run."""
+    import time
+    end = time.monotonic() + timeout_s
+    while d._busy and time.monotonic() < end:
+        _app.processEvents()
+        time.sleep(0.01)
+    assert not d._busy, "the background input check did not finish"
+
+
 def _raster(path, value):
     arr = np.full((30, 30), value, "float32")
     ds = gdal.GetDriverByName("GTiff").Create(path, 30, 30, 1, gdal.GDT_Float32)
@@ -205,6 +215,7 @@ def test_check_inputs_fails_and_classify_off_on_outside_raster():
         assert "outside the dam folder" in d.classify_btn.toolTip()
         with _NoPopups() as np_:
             d._on_check_inputs()
+            _wait_idle(d)
         assert not np_.calls, np_.calls
         assert d.check_panel.blocked and not d.classify_btn.isEnabled()
         ok, errors = d.validate_all_inputs()

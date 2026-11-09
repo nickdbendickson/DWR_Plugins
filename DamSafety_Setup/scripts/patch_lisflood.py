@@ -8,6 +8,10 @@
    first wetting. Four small edits.
 2. NUMA becomes optional on Linux and is skipped on macOS, so the code builds
    with Apple clang + Homebrew libomp.
+3. (3.16.11, 2026-11-07, release workflow; the same edits as the nd_hazard fork's
+   3.11.0) Aligned memory through _aligned_malloc / _aligned_free on Windows compilers
+   other than MSVC / Intel, so it builds with MinGW-w64 (posix_memalign does not exist
+   there). Guarded by _WIN32: the Linux and macOS builds are unchanged.
 
 Safe to run twice (already-applied edits are skipped). Stops with a clear
 message if the source does not look as expected. Line endings are kept."""
@@ -51,6 +55,23 @@ EDITS = [
      "\t\ttarget_compile_definitions(lisflood-base INTERFACE LISFLOOD_HAVE_NUMA=1)\n"
      "\tendif()\nendif()",
      "LISFLOOD_HAVE_NUMA"),
+    # 3.16.11: builds with MinGW-w64 (the Windows executable of the GitHub release is
+    # cross-compiled with it): aligned allocation through _aligned_malloc / _aligned_free.
+    ("utility.cpp",
+     '#include "utility.h"\n',
+     '#include "utility.h"\n#ifdef _WIN32\n#include <malloc.h> // nd-breach-runner patch: MinGW\n'
+     '#endif\n',
+     "<malloc.h> // nd-breach-runner"),
+    ("utility.cpp",
+     "\tvoid* memory = _mm_malloc(size, 64);\n#else",
+     "\tvoid* memory = _mm_malloc(size, 64);\n#elif defined(_WIN32)\n"
+     "\tvoid* memory = _aligned_malloc(size, 64); // nd-breach-runner patch: MinGW build\n#else",
+     "_aligned_malloc(size"),
+    ("utility.cpp",
+     "\t_mm_free(*memory);\n#else",
+     "\t_mm_free(*memory);\n#elif defined(_WIN32)\n"
+     "\t_aligned_free(*memory); // nd-breach-runner patch: MinGW build\n#else",
+     "_aligned_free(*memory)"),
 ]
 
 

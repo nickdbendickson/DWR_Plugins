@@ -14,7 +14,7 @@ from nd_breach_runner.core import hecras_breaklines as hb
 from nd_breach_runner.core import hecras_model as hm
 from nd_breach_runner.core import hecras_structures as hs
 from nd_breach_runner.core import structures as sm
-from nd_breach_runner.tests.registry import test
+from nd_breach_runner.tests.registry import need_osgeo, test
 
 EPSG = 2266                       # ND South, international ft (the model CRS and units)
 X0, Y0 = 2700000.0, 480000.0
@@ -25,6 +25,7 @@ FLOOR, ROAD, CHANNEL = 1000.0, 1006.0, 996.0
 
 
 def _gdal():
+    need_osgeo()                      # a skip, not a failure, on a Python without GDAL
     from osgeo import gdal, osr
     gdal.UseExceptions()
     return gdal, osr

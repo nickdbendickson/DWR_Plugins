@@ -35,6 +35,7 @@ from ..compat import (FIELD_ANY, FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, 
                       SRC_POLYGON, WKB_LINESTRING, WKB_POINT)
 from ..damsuite import gdalsafe as GS
 from . import _common as cm
+from .terrain_cache import local_mosaic
 from ..core import errors as er
 from .breach_direction import PT_FIELDS
 from .estimate_storage import NEW_FIELDS as STORAGE_FIELDS
@@ -396,8 +397,14 @@ class FindPonds(QgsProcessingAlgorithm):
             tiles = terrain.list_local_tiles(folder) if folder else []
             if not tiles:
                 raise QgsProcessingException("No DEM tiles found in the local DEM folder")
-            self._vrt = os.path.join(self._terrain, "_local_mosaic.vrt")
-            GS.checked(gdal.BuildVRT(self._vrt, tiles), "building " + self._vrt)
+            # Grok audit 2026-11-07 finding 3.2: feet tiles converted, mixed CRSs warped to
+            # EPSG:5070 (no tile dropped; a bare BuildVRT dropped them); named by the tile list
+            self._vrt = os.path.join(self._terrain,
+                                     "_local_mosaic_{}.vrt".format(cm.mosaic_key(tiles)))
+            try:
+                local_mosaic(tiles, self._vrt, feedback.pushInfo)
+            except RuntimeError as e:
+                raise QgsProcessingException(str(e))
 
         alb, wgs = cm.albers(), QgsCoordinateReferenceSystem("EPSG:4326")
         prj = QgsProject.instance()

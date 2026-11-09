@@ -1,0 +1,231 @@
+name: Release
+
+# Builds a GitHub Release of the seven DamSafety plugins and publishes the QGIS plugin
+# repository index (plugins.xml) to the gh-pages branch, so QGIS can install and update them
+# from https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml (docs/CI.md, "Release").
+#
+# Starts on a tag v* (git tag v2026.11.07 && git push origin v2026.11.07) or by hand (Actions >
+# Release > Run workflow; then the release is a draft named after the commit, for a look at the
+# assets without publishing anything to QGIS).
+#
+# Jobs
+#   lisflood-linux    LISFLOOD-FP 8.3 (Zenodo) + the Runner's patch, static libstdc++/libgomp
+#   lisflood-macos    the same on an Apple Silicon runner (macos-14), libomp bundled with an rpath
+#   lisflood-windows  the same cross-compiled with MinGW-w64 on ubuntu, fully static
+#   release           plugin zips (tools/build_release.py, the Runner zip carrying the three
+#                     binaries under DamSafety_Runner/bin/<platform>/), SHA256SUMS, the GitHub
+#                     Release, then plugins.xml onto gh-pages
+# A LISFLOOD-FP build that fails stops the release: the Runner zip must not ship without the
+# binaries the README promises. Nothing in bin/ is ever committed (.gitignore).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # create the release, push gh-pages
+
+env:
+  # LISFLOOD-FP 8.3, the official source (University of Bristol), Zenodo record 13121119
+  LISFLOOD_ZIP_URL: https://zenodo.org/api/records/13121119/files/LISFLOOD-FP-8.3.zip/content
+  LISFLOOD_ZIP_MD5: abaa2e41b58f6c7df4443274bf130d4a
+  LISFLOOD_ZIP_SHA256: f9ea2753482da1e730ba34645a2b9b773d05d0a401a3524f79825b76ec7a4e8d
+
+jobs:
+  lisflood-linux:
+    runs-on: ubuntu-22.04      # the oldest glibc GitHub offers (2.35): the binary runs there and newer
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify the LISFLOOD-FP 8.3 source
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o lisflood.zip "$LISFLOOD_ZIP_URL"
+          echo "$LISFLOOD_ZIP_MD5  lisflood.zip" | md5sum -c -
+          echo "$LISFLOOD_ZIP_SHA256  lisflood.zip" | sha256sum -c -
+          unzip -q lisflood.zip
+      - name: Build (patched, static libstdc++ / libgcc / libgomp)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q cmake g++
+          # LISFLOOD_STATIC=1: the Runner's own Linux build script links the runtime statically
+          LISFLOOD_STATIC=1 bash DamSafety_Runner/scripts/build_lisflood_linux.sh \
+            "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$RUNNER_TEMP/out"
+          ldd "$RUNNER_TEMP/out/lisflood"
+          "$RUNNER_TEMP/out/lisflood" -version | head -3
+          mkdir -p bin/linux-x64 && cp "$RUNNER_TEMP/out/lisflood" bin/linux-x64/lisflood
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lisflood-linux-x64
+          path: bin/linux-x64/lisflood
+          if-no-files-found: error
+
+  lisflood-macos:
+    runs-on: macos-14          # Apple Silicon (arm64)
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify the LISFLOOD-FP 8.3 source
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o lisflood.zip "$LISFLOOD_ZIP_URL"
+          echo "$LISFLOOD_ZIP_SHA256  lisflood.zip" | shasum -a 256 -c -
+          unzip -q lisflood.zip
+      - name: Build (patched; Homebrew cmake + libomp, libomp bundled next to the binary)
+        run: |
+          # the Runner's own macOS script: brew installs cmake and libomp, applies the patch,
+          # builds without NetCDF and copies the executable to the install folder
+          bash DamSafety_Runner/scripts/build_lisflood_macos.sh \
+            "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$RUNNER_TEMP/out"
+          mkdir -p bin/macos-arm64
+          cp "$RUNNER_TEMP/out/lisflood" bin/macos-arm64/lisflood
+          # the binary must run without Homebrew: ship libomp.dylib beside it and point the
+          # load command at @executable_path (the Runner's zip keeps both files in bin/macos-arm64/).
+          # OMP is the path the binary records (otool), e.g. /opt/homebrew/opt/libomp/lib/libomp.dylib
+          OMP="$(otool -L bin/macos-arm64/lisflood | awk '/libomp/ {print $1}' | head -1)"
+          test -n "$OMP" && test -f "$OMP"
+          cp "$OMP" bin/macos-arm64/libomp.dylib
+          chmod u+w bin/macos-arm64/libomp.dylib
+          install_name_tool -change "$OMP" @executable_path/libomp.dylib bin/macos-arm64/lisflood
+          install_name_tool -id @executable_path/libomp.dylib bin/macos-arm64/libomp.dylib
+          # ad-hoc signature (install_name_tool invalidates the old one; unsigned arm64 binaries do not start)
+          codesign --force --sign - bin/macos-arm64/libomp.dylib
+          codesign --force --sign - bin/macos-arm64/lisflood
+          otool -L bin/macos-arm64/lisflood
+          # runs with Homebrew's libomp moved away: @executable_path must resolve
+          mv "$OMP" "$OMP.hidden"
+          bin/macos-arm64/lisflood -version | head -3
+          mv "$OMP.hidden" "$OMP"
+          grep -aq inittm_depth bin/macos-arm64/lisflood
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lisflood-macos-arm64
+          path: bin/macos-arm64/
+          if-no-files-found: error
+
+  lisflood-windows:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify the LISFLOOD-FP 8.3 source
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o lisflood.zip "$LISFLOOD_ZIP_URL"
+          echo "$LISFLOOD_ZIP_MD5  lisflood.zip" | md5sum -c -
+          unzip -q lisflood.zip
+      - name: Cross-compile with MinGW-w64 (posix threads, -static)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q cmake g++-mingw-w64-x86-64-posix
+          bash DamSafety_Runner/scripts/build_lisflood_windows_cross.sh \
+            "$RUNNER_TEMP/LISFLOOD-FP-8.3/source" "$RUNNER_TEMP/out"
+          mkdir -p bin/windows-x64 && cp "$RUNNER_TEMP/out/lisflood.exe" bin/windows-x64/lisflood.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lisflood-windows-x64
+          path: bin/windows-x64/lisflood.exe
+          if-no-files-found: error
+
+  release:
+    needs: [lisflood-linux, lisflood-macos, lisflood-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # tools/build_release.py reads the tag's commit with git archive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Collect the LISFLOOD-FP builds
+        uses: actions/download-artifact@v4
+        with:
+          path: lisflood-bin
+      - name: Lay the binaries out as bin/<platform>/ and write bin/README.txt
+        run: |
+          # download-artifact puts each artifact in a folder named after it
+          mkdir -p bin/linux-x64 bin/windows-x64 bin/macos-arm64
+          cp lisflood-bin/lisflood-linux-x64/lisflood bin/linux-x64/lisflood
+          cp lisflood-bin/lisflood-windows-x64/lisflood.exe bin/windows-x64/lisflood.exe
+          cp lisflood-bin/lisflood-macos-arm64/* bin/macos-arm64/
+          chmod +x bin/linux-x64/lisflood bin/macos-arm64/lisflood
+          TAG="${GITHUB_REF_NAME}"
+          cat > bin/README.txt <<EOF
+          LISFLOOD-FP bundled with DamSafety Runner (release $TAG)
+          ===========================================================
+          linux-x64/lisflood        Linux x86-64 (glibc 2.35 or newer), static libstdc++ / libgomp
+          windows-x64/lisflood.exe  Windows 10/11 x64, no DLLs needed (MinGW-w64, static)
+          macos-arm64/lisflood      macOS on Apple Silicon, with libomp.dylib beside it
+          Source: LISFLOOD-FP 8.3 (University of Bristol, GPL-2.0), Zenodo record 13121119,
+          sha256 $LISFLOOD_ZIP_SHA256, with DamSafety_Runner/scripts/patch_lisflood.py applied
+          (the inittm_depth arrival-depth keyword, NUMA optional, MinGW aligned allocation). The
+          patched source of exactly these builds is the release asset lisflood-8.3-ndbreach-source.zip.
+          Built by .github/workflows/release.yml. The Runner finds these on its own when no
+          LISFLOOD-FP is installed (core/lisflood.bundled_exe); another build set in Processing >
+          Options > Providers > DamSafety Runner or in DamSafety Setup wins.
+          EOF
+          ls -laR bin
+      - name: Corresponding source (GPL-2.0), the 8.3 source with the patch applied
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 3 -o lisflood.zip "$LISFLOOD_ZIP_URL"
+          echo "$LISFLOOD_ZIP_SHA256  lisflood.zip" | sha256sum -c -
+          unzip -q lisflood.zip
+          python3 "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/patch_lisflood.py" LISFLOOD-FP-8.3/source
+          cp "$GITHUB_WORKSPACE/DamSafety_Runner/scripts/patch_lisflood.py" LISFLOOD-FP-8.3/
+          zip -qr "$GITHUB_WORKSPACE/dist-src.zip" LISFLOOD-FP-8.3
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          mv "$GITHUB_WORKSPACE/dist-src.zip" "$GITHUB_WORKSPACE/dist/lisflood-8.3-ndbreach-source.zip"
+      - name: Plugin zips + SHA256SUMS (committed files of the tagged commit)
+        run: |
+          python3 tools/build_release.py --ref "$GITHUB_SHA" --out dist --runner-bin bin
+          # the binaries as separate assets too, each with its sha256 beside the zips' in SHA256SUMS
+          cp bin/linux-x64/lisflood dist/lisflood-linux-x64
+          cp bin/windows-x64/lisflood.exe dist/lisflood-windows-x64.exe
+          tar -C bin/macos-arm64 -czf dist/lisflood-macos-arm64.tar.gz .
+          (cd dist && sha256sum lisflood-linux-x64 lisflood-windows-x64.exe lisflood-macos-arm64.tar.gz lisflood-8.3-ndbreach-source.zip >> SHA256SUMS)
+          cat dist/SHA256SUMS
+      - name: plugins.xml (merged with the one already on gh-pages, if any)
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if git fetch --no-tags origin gh-pages:gh-pages 2>/dev/null; then
+            git show gh-pages:plugins.xml > old-plugins.xml 2>/dev/null || true
+          fi
+          mkdir -p pages
+          MERGE=""
+          [ -s old-plugins.xml ] && MERGE="--merge old-plugins.xml"
+          python3 tools/make_plugins_xml.py --tag "$TAG" --zips dist --out pages/plugins.xml $MERGE
+          # plugin icons next to the index (QGIS shows them in the installer)
+          for p in DamSafety_*; do mkdir -p "pages/$p" && cp "$p/icon.svg" "pages/$p/icon.svg"; done
+          cp pages/plugins.xml dist/plugins.xml
+      - name: GitHub Release (a draft when started by hand)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.sha) }}
+          name: DamSafety ${{ github.ref_name }}
+          draft: ${{ github.ref_type != 'tag' }}
+          generate_release_notes: true
+          body: |
+            The seven DamSafety QGIS plugins (install order: Setup, Data, Runner, Hazard;
+            Screening, PMP and Hazard Lite optional). The Runner zip carries LISFLOOD-FP 8.3
+            with the arrival-depth patch for Linux x64, Windows x64 and macOS Apple Silicon
+            under `DamSafety_Runner/bin/`; the same binaries are attached on their own, with
+            `lisflood-8.3-ndbreach-source.zip` as the GPL corresponding source. `SHA256SUMS` lists
+            every file. QGIS plugin repository: https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml
+          files: |
+            dist/*.zip
+            dist/SHA256SUMS
+            dist/plugins.xml
+            dist/lisflood-linux-x64
+            dist/lisflood-windows-x64.exe
+            dist/lisflood-macos-arm64.tar.gz
+      - name: Publish plugins.xml to gh-pages (the QGIS plugin repository)
+        if: github.ref_type == 'tag'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./pages
+          keep_files: true
+          enable_jekyll: false
+          commit_message: "plugins.xml for ${{ github.ref_name }}"

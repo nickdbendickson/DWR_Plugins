@@ -33,6 +33,16 @@ def _pump(n=4):
         _app.processEvents()
 
 
+def _wait_idle(d, timeout_s=90):
+    """2.23.15: Check inputs runs in a QgsTask - pump until its done callback has run."""
+    import time
+    end = time.monotonic() + timeout_s
+    while d._busy and time.monotonic() < end:
+        _app.processEvents()
+        time.sleep(0.01)
+    assert not d._busy, "the background input check did not finish"
+
+
 def _raster(path, arr):
     ds = gdal.GetDriverByName("GTiff").Create(path, arr.shape[1], arr.shape[0], 1, gdal.GDT_Float32)
     ds.SetGeoTransform((600000, 10, 0, 5200000, 0, -10))
@@ -138,6 +148,7 @@ def test_dam_folder_autofill_and_errors_block_classify():
         assert d.output_folder_edit.text() == os.path.join(folder, "outputs")
         with _NoPopups() as np_:
             d._on_check_inputs()
+            _wait_idle(d)
         assert not np_.calls, np_.calls
         panel = d.check_panel
         assert panel.blocked and panel.isVisible() and not d.classify_btn.isEnabled()

@@ -14,9 +14,9 @@ from dataclasses import dataclass
 from heapq import nlargest
 
 import numpy as np
-from osgeo import ogr
 
 from .pmp import py2round, _gdb
+from . import gdalsafe as GS
 
 TYPE_LABEL = {"General": "general", "Local": "local", "CoolSeason": "cool-season"}
 TYPE_PREFIX = {"General": "GS", "Local": "LS", "CoolSeason": "CS"}
@@ -33,8 +33,9 @@ class Pattern:
 
 
 def read_table(home, name):
-    ds = ogr.Open(_gdb(home, "Non_Storm_Data.gdb"))
-    lyr = ds.GetLayerByName(name)
+    gdb = _gdb(home, "Non_Storm_Data.gdb")
+    ds = GS.open_vector(gdb)                     # audit R3: a missing table is named
+    lyr = GS.layer(ds, name, gdb)
     d = lyr.GetLayerDefn()
     cols = [d.GetFieldDefn(i).GetName() for i in range(d.GetFieldCount())]
     rows = [{c: f.GetField(c) for c in cols} for f in lyr]

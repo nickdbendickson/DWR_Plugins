@@ -99,6 +99,8 @@ def batch_algorithm_runs_the_hecras_stage():
         in batch
     one = src.split("class RunDamAlgorithm(", 1)[1].split("\nclass ", 1)[0]
     assert "hecras_tier_stage(folder, res, writer, st, dam_xy, fb.log)" in one
+    # audit R6: the batch is unattended (12 h default wall clock); the single run is not
+    assert "unattended=True" in batch and "unattended=True" not in one
 
 
 @test
@@ -125,5 +127,7 @@ def cli_runs_the_hecras_stage_for_tier_hecras():
         workflow.run_hecras_stage = old
         shutil.rmtree(d, ignore_errors=True)
     src = open(cli.__file__, encoding="utf-8").read()
-    assert src.count("_hecras_stage(p, res, pr.log)") == 2       # run and batch
+    # run (interactive, no limit unless set) and batch (audit R6: unattended, 12 h default)
+    assert src.count("_hecras_stage(p, res, pr.log)") == 1, src.count("_hecras_stage(p, res, pr.log)")
+    assert src.count("_hecras_stage(p, res, pr.log, unattended=True)") == 1
     assert "workflow.HecRasStageError) as e:" in src

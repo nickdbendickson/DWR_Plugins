@@ -39,8 +39,25 @@ from osgeo import gdal, ogr, osr
 
 from . import tm11
 
-gdal.UseExceptions()
-ogr.UseExceptions()
+# audit R3 (2026-11-07): no gdal.UseExceptions() / ogr.UseExceptions() at import. The call is
+# process-wide in the GDAL bindings QGIS ships, so a plugin that makes it when QGIS loads it
+# changes GDAL for QGIS and every other plugin (code written for the default mode checks
+# `if ds is None` and meets an exception instead; shared/damsuite/gdalsafe.py). The opens and
+# creates below go through _checked(), which raises the RuntimeError GDAL's exception mode
+# would raise, with GDAL's own message, when GDAL returns None - the same behaviour in both
+# modes, without touching the process setting.
+
+
+def _checked(result, what):
+    """`result` of gdal.Open / ogr.Open / Create / Warp; RuntimeError "<what> failed: <GDAL
+    message>" when it is None (the default GDAL mode), as the exception mode raises."""
+    if result is None:
+        try:
+            msg = (gdal.GetLastErrorMsg() or "").strip()
+        except Exception:                                    # noqa
+            msg = ""
+        raise RuntimeError("{} failed{}".format(what, ": " + msg if msg else ""))
+    return result
 
 
 
@@ -86,16 +103,17 @@ class Grid:
     """Depth and velocity maxima on one grid (velocity resampled onto depth's grid if needed)."""
 
     def __init__(self, depth_path, vel_path, metres=False):
-        ds = gdal.Open(depth_path)
+        ds = _checked(gdal.Open(depth_path), "opening the depth raster " + str(depth_path))
         self.gt = ds.GetGeoTransform()
         self.nx, self.ny = ds.RasterXSize, ds.RasterYSize
         self.srs = osr.SpatialReference(wkt=ds.GetProjection())
         self.srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
         self.depth = self._read(ds)
-        vs = gdal.Open(vel_path)
+        vs = _checked(gdal.Open(vel_path), "opening the velocity raster " + str(vel_path))
         if vs.GetGeoTransform() != self.gt or (vs.RasterXSize, vs.RasterYSize) != (self.nx, self.ny):
-            vs = gdal.Warp("", vs, format="MEM", outputBounds=self.bounds(), width=self.nx,
-                           height=self.ny, dstSRS=self.srs.ExportToWkt(), resampleAlg="near")
+            vs = _checked(gdal.Warp("", vs, format="MEM", outputBounds=self.bounds(), width=self.nx,
+                                    height=self.ny, dstSRS=self.srs.ExportToWkt(),
+                                    resampleAlg="near"), "resampling the velocity raster")
         self.vel = self._read(vs)
         if metres:
             self.depth *= FT
@@ -157,8 +175,10 @@ class Grid:
 # ------------------------------------------------------------------ vectors --
 def _open(path):
     path, _, name = path.partition("|layername=")
-    ds = ogr.Open(path)
+    ds = _checked(ogr.Open(path), "opening " + str(path))
     lyr = ds.GetLayerByName(name) if name else ds.GetLayer(0)
+    if lyr is None:
+        raise RuntimeError("no layer {} in {}".format(name or 0, path))
     return ds, lyr
 
 
@@ -312,7 +332,7 @@ class _Points:
     """A raster read at points of another CRS (nearest cell, small windows, nodata -> NaN)."""
 
     def __init__(self, path, srs, scale=1.0):
-        self.ds = gdal.Open(path)
+        self.ds = _checked(gdal.Open(path), "opening " + str(path))
         self.gt = self.ds.GetGeoTransform()
         self.band = self.ds.GetRasterBand(1)
         self.nd = self.band.GetNoDataValue()
@@ -675,7 +695,8 @@ def classify(structs, rds, rails, judgment_high=False):
 # ------------------------------------------------------------------ outputs --
 def _write_gpkg(path, name, srs, rows, geom_type, fields):
     drv = ogr.GetDriverByName("GPKG")
-    ds = drv.Open(path, 1) if os.path.exists(path) else drv.CreateDataSource(path)
+    ds = _checked(drv.Open(path, 1) if os.path.exists(path) else drv.CreateDataSource(path),
+                  "writing " + str(path))
     if ds.GetLayerByName(name):
         ds.DeleteLayer(name)
     lyr = ds.CreateLayer(name, srs, geom_type)

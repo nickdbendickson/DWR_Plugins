@@ -1937,8 +1937,14 @@ def _classify_and_write(run, cfg, state):
             nd = classify_nd(s_view, r_view, l_view, judgment_as_probable=nd_judge,
                              one_d=one_d,
                              roads_evaluated=inputs["roads_on"], rail_evaluated=inputs["rail_on"],
-                             structs_evaluated=inputs.get("structs_on", True))
+                             structs_evaluated=inputs.get("structs_on", True),
+                             structs_failed=int(res.get("structs_failed") or 0))  # audit R2
             tm11 = classify_tm11(s_view, r_view, judgment_as_probable=judge)
+            if nd.get("structs_failed"):                                   # audit R2
+                run.log(">>> WARNING: {}: ND classification {} is INCOMPLETE - {} structure(s) "
+                        "could not be evaluated and are not counted as dry; re-run or review "
+                        "them before the class is used".format(
+                            sc.name, nd["cls"].upper(), nd["structs_failed"]))
         except Exception as e:
             run.log(">>> ERROR: classification failed for {}: {}: {}".format(
                 sc.name, type(e).__name__, e))
@@ -1979,7 +1985,8 @@ def _classify_and_write(run, cfg, state):
                                judgment_as_probable=nd_judge,
                                one_d=one_d, roads_evaluated=inputs["roads_on"],
                                rail_evaluated=inputs["rail_on"],
-                               structs_evaluated=inputs.get("structs_on", True))
+                               structs_evaluated=inputs.get("structs_on", True),
+                               structs_failed=int(res.get("structs_failed") or 0))
             extra_criteria(nd_t, structs, res, cfg, total=True)
             res["nd_total"] = nd_t
             res["tm11_total"] = classify_tm11(structs, res["roads"], judgment_as_probable=judge)
@@ -3051,6 +3058,20 @@ def _run_scenario(run, sc, lyrs, structs, acrs, clip, inputs, cross_idx, tick, o
                             sample_area=cfg.get("sample_area") or "area",
                             keep_dv=bool(cfg.get("sensitivity")),
                             fast_sampling=bool(cfg.get("fast_sampling")))
+        # audit R2 (2026-11-07): a structure whose evaluation raised used to read as dry
+        # (max_depth None -> OUT_DRY) with only a QGIS-log warning; it is now OUT_FAILED,
+        # named in Notes, and the class is marked incomplete in stage B
+        failed = ST.evaluation_failures(structs)
+        res["structs_failed"] = len(failed)
+        if failed:
+            ids = ", ".join(str(r.get("id")) for r in failed[:8])
+            run.log(">>> WARNING: {}: {} structure(s) could not be evaluated (an error while "
+                    "sampling the flood at them) - they are NOT counted as dry: ND_Outcome "
+                    "'{}', Notes 'EVALUATION FAILED', and the ND classification is marked "
+                    "INCOMPLETE. Structure id(s): {}{}. First error: {}".format(
+                        sc.name, len(failed), ST.OUT_FAILED, ids,
+                        " and {} more".format(len(failed) - 8) if len(failed) > 8 else "",
+                        failed[0].get("eval_failed")))
         res["cell_size"] = (abs(samplers["depth"].gt[1]), abs(samplers["depth"].gt[5])) \
             if samplers["depth"].ok and samplers["depth"].gt else None
         # 2.22.1 (DWR-4031 toe10m): the depth grid's cell in metres, for report labels

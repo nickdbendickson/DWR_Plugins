@@ -390,11 +390,103 @@ def resolve_resample(explicit=None, environ=None):
     return DEFAULT_RESAMPLE, "default"
 
 
+DEM_CACHE_ENTRIES = 3      # audit P3: warped DEM windows kept per GdalTerrain
+
+
+class WarpCache:
+    """Audit P3 (2026-11-07): a small LRU of warped DEM windows, so the crest window, the inflow
+    window, the planning grid and the model domain are not re-warped from disk every time a
+    run asks for them (a run read the same window about six times: the terrain classifier,
+    the crest / toe reads, each growth pass, a clock extension, the resume load, ANUGA's bed).
+
+    Key: (bounds snapped to the cell, cell, resample method, z factor, source nodata), so a
+    window that differs by less than a cell in any edge still misses (it would warp onto other
+    cell centres). The source file is identified by (path, size, mtime) when the cache is
+    built; a change in any of them (another DEM, a rewritten VRT, a refilled tile) empties the
+    cache before the next read, so a stale window is never handed out. Entries are returned
+    as COPIES: the callers edit the array in place (lisflood.raise_crest, the crest burn,
+    conditioning), and a copy of a few million floats is far cheaper than the warp.
+
+    Pure Python / numpy: the warp itself is the `warp` callable the owner passes in."""
+
+    def __init__(self, warp, entries=DEM_CACHE_ENTRIES, stamp=None):
+        self.warp = warp                      # (bounds, cell) -> Grid
+        self.entries = max(0, int(entries))
+        self.stamp_fn = stamp or (lambda: None)
+        self.stamp = self.stamp_fn()
+        self.items = []                       # [(key, Grid)] most recent last
+        self.hits = self.misses = 0
+
+    @staticmethod
+    def key_of(bounds, cell, *extra):
+        c = float(cell)
+        xmin, ymin, xmax, ymax = (float(b) for b in bounds)
+        # the warp snaps the window to whole cells from (xmin, ymax): the same snap here
+        nx = int(round((xmax - xmin) / c))
+        ny = int(round((ymax - ymin) / c))
+        return (round(xmin, 6), round(ymax, 6), nx, ny, round(c, 6)) + tuple(extra)
+
+    def _fresh(self):
+        s = self.stamp_fn()
+        if s != self.stamp:
+            self.stamp = s
+            self.items = []
+
+    def get(self, bounds, cell, *extra):
+        """A copy of the cached Grid for this window, or None (the cache is checked for a
+        changed source first)."""
+        if self.entries <= 0:
+            return None
+        self._fresh()
+        key = self.key_of(bounds, cell, *extra)
+        for i, (k, g) in enumerate(self.items):
+            if k == key:
+                self.items.append(self.items.pop(i))         # most recently used last
+                self.hits += 1
+                return Grid(g.data.copy(), g.x0, g.y0, g.dx, g.nodata, g.crs_wkt)
+        self.misses += 1
+        return None
+
+    def put(self, bounds, cell, grid, *extra):
+        """Remember `grid` for this window (a copy; the caller keeps editing its own)."""
+        if self.entries <= 0:
+            return grid
+        key = self.key_of(bounds, cell, *extra)
+        self.items = [(k, g) for k, g in self.items if k != key]
+        self.items.append((key, Grid(grid.data.copy(), grid.x0, grid.y0, grid.dx, grid.nodata,
+                                     grid.crs_wkt)))
+        while len(self.items) > self.entries:
+            self.items.pop(0)
+        return grid
+
+    def read(self, bounds, cell, *extra):
+        """The window from the cache, else warped and remembered."""
+        g = self.get(bounds, cell, *extra)
+        if g is not None:
+            return g
+        g = self.warp(bounds, cell)
+        self.put(bounds, cell, g, *extra)
+        return g
+
+    def clear(self):
+        self.items = []
+
+
+def file_stamp(path):
+    """(path, size, mtime ns) of a file, or (path, None, None) when it cannot be read: what the
+    WarpCache watches for a changed source."""
+    try:
+        st = os.stat(path)
+        return (path, st.st_size, getattr(st, "st_mtime_ns", st.st_mtime))
+    except OSError:
+        return (path, None, None)
+
+
 class GdalTerrain:
     """terrain_src for workflow.run_dam."""
 
     def __init__(self, dem_path, work_srs, z_choice=Z_AUTO, manning_path=None,
-                 default_n=0.06, resample=None, manning_lut=None):
+                 default_n=0.06, resample=None, manning_lut=None, cache_entries=None):
         gdal, _ = _gdal()
         self.dem_path = _file(dem_path)   # 3.10.89: a QGIS 'x.tif|option:...' source
         self.work_srs = work_srs          # "EPSG:26914" or WKT
@@ -406,6 +498,10 @@ class GdalTerrain:
         self.resample, self.resample_source = resolve_resample(resample)
         ds = GS.open_raster(self.dem_path)
         self.src_nodata = ds.GetRasterBand(1).GetNoDataValue()
+        # audit P3: warped DEM windows, keyed by window / cell / method / z factor; a VRT's
+        # own stamp changes when it is rebuilt, which is what a refill or a new mosaic does
+        n = DEM_CACHE_ENTRIES if cache_entries is None else cache_entries
+        self.cache = WarpCache(self._warp_dem, n, stamp=lambda: file_stamp(self.dem_path))
 
     def _warp(self, path, bounds, cell, alg, src_nodata=None):
         gdal, _ = _gdal()
@@ -443,10 +539,16 @@ class GdalTerrain:
             return float(px * 111320.0 * max(math.cos(math.radians(lat)), 0.1))
         return float(px * (srs.GetLinearUnits() or 1.0))
 
-    def read(self, bounds, cell):
+    def _warp_dem(self, bounds, cell):
+        """The DEM window in metres (z_to_m applied once); what the cache stores."""
         g = self._warp(self.dem_path, bounds, cell, self.resample, self.src_nodata)
         g.data = g.data * self.z_to_m
         return g
+
+    def read(self, bounds, cell):
+        # audit P3: the cache key carries the method, the z factor and the source nodata too, so
+        # a GdalTerrain whose resample or unit is changed after a read never gets an old window
+        return self.cache.read(bounds, cell, self.resample, float(self.z_to_m), self.src_nodata)
 
     def manning(self, bounds, cell):
         if not self.manning_path:

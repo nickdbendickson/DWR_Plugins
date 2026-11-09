@@ -20,7 +20,9 @@ Order, each checked by its output (a plan .p##.hdf with unsteady results):
 
 Settings (environment):
     NDBREACH_HECRAS_WINDOWS_DIR   the HEC-RAS 6.6 folder (default: the usual install folders)
-    NDBREACH_HECRAS_TIMEOUT_S     wall-clock limit per program in s (unset/0 = none)
+    NDBREACH_HECRAS_TIMEOUT_S     wall-clock limit per program in s (unset/0 = none for a
+                                  single run; audit R6: an unattended run - the chain - uses
+                                  BATCH_TIMEOUT_S, 12 h, unless it is set; 'none' = no limit)
     NDBREACH_HECRAS_WIN_METHODS   'headless,com' (default), 'headless' or 'com'
     NDBREACH_HECRAS_OMP_STACKSIZE KMP_STACKSIZE / OMP_STACKSIZE for Ras.exe and RasUnsteady.exe
                                   (default 1g; a value already set is kept; 'off' = unset)
@@ -34,6 +36,8 @@ import time
 
 ENV_WINDIR = "NDBREACH_HECRAS_WINDOWS_DIR"
 ENV_TIMEOUT = "NDBREACH_HECRAS_TIMEOUT_S"
+BATCH_TIMEOUT_S = 12 * 3600.0       # audit R6: = hecras_engine.BATCH_TIMEOUT_S (no numpy here)
+NO_LIMIT_WORDS = ("none", "off", "no", "unlimited")
 ENV_METHODS = "NDBREACH_HECRAS_WIN_METHODS"
 PROG_ID = "RAS66.HECRASController"
 DEFAULT_DIRS = (r"C:\Program Files (x86)\HEC\HEC-RAS\6.6",
@@ -106,18 +110,24 @@ def methods(env=None, log=None):
     return got or METHODS
 
 
-def timeout_s(env=None, log=None):
+def timeout_s(env=None, log=None, default=None):
+    """NDBREACH_HECRAS_TIMEOUT_S in seconds, else `default` (audit R6: BATCH_TIMEOUT_S for an
+    unattended run, None = no limit for a single run); 'none' / 'off' / 'no' / 'unlimited'
+    is no limit even unattended."""
     raw = (_env(env).get(ENV_TIMEOUT) or "").strip()
     if not raw:
-        return None                                  # unset: no wall-clock limit
+        return default                               # unset: the default (None = no limit)
+    if raw.lower() in NO_LIMIT_WORDS:
+        return None
     try:
         v = float(raw)
     except ValueError:
         if log:                                      # a typo must not silently drop the limit
-            log("{}={!r} is not a number of seconds; ignoring it (no wall-clock limit)"
-                .format(ENV_TIMEOUT, raw))
-        return None
-    return v if v > 0 else None
+            log("{}={!r} is not a number of seconds; ignoring it ({})".format(
+                ENV_TIMEOUT, raw, "no wall-clock limit" if default is None else
+                "the unattended default {:.0f} s applies".format(default)))
+        return default
+    return v if v > 0 else default
 
 
 # ------------------------------------------------------------------ the project ----
@@ -441,9 +451,11 @@ def run_com(prj, plan_file, dispatch=None, check=None, log=None, timeout=None):
 
 
 def run_plan(folder, d=None, env=None, runner=_popen_run, dispatch=None, check=None,
-             log=None, clock=time.time):
+             log=None, clock=time.time, unattended=False):
     """Runs the first plan of the HEC-RAS project in `folder`. Returns {plan_hdf, method,
-    attempts, seconds}. Raises TerrainMissing (make the terrain first) or WindowsRunError."""
+    attempts, seconds}. Raises TerrainMissing (make the terrain first) or WindowsRunError.
+    `unattended` (audit R6): the chain's run - the wall-clock limit per program defaults to
+    BATCH_TIMEOUT_S (12 h) when NDBREACH_HECRAS_TIMEOUT_S gives none."""
     log = log or (lambda m: None)
     if check is None:
         from .chain import plan_has_results as check
@@ -463,7 +475,12 @@ def run_plan(folder, d=None, env=None, runner=_popen_run, dispatch=None, check=N
     if note:
         log(note)
     t0, attempts = clock(), []
-    to = timeout_s(env, log)
+    to = timeout_s(env, log, BATCH_TIMEOUT_S if unattended else None)
+    log("HEC-RAS 6.6 (Windows): wall-clock limit per program {}{}.".format(
+        "none" if to is None else "{:.0f} s ({:.1f} h)".format(to, to / 3600.0),
+        " (unattended default; set {} to change it, 'none' for no limit)".format(ENV_TIMEOUT)
+        if unattended and to == BATCH_TIMEOUT_S and not (_env(env).get(ENV_TIMEOUT) or "").strip()
+        else ""))
     for m in methods(env, log):
         try:
             if m == "headless":

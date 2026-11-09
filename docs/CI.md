@@ -2,20 +2,56 @@
 
 `.github/workflows/ci.yml` runs on every pull request and every push to `main`. The repository
 is public, so GitHub-hosted runner minutes are free. (`anuga-omp-scaling.yml` is a separate,
-manually started workflow.)
+manually started workflow; `release.yml` runs on a `v*` tag, see "Release" below.)
 
 | Job | What it runs | Time |
 |---|---|---|
-| `fast-checks` | `tools/ci_checks.py` (damsuite drift and pin, shared/ui drift, versions and changelogs vs `main`, files kept identical across plugins, zone and window colours, Qt6 enum spellings, compile, golden baseline), `tools/test_ci_checks.py`, the fingerprint nested-VRT test. No QGIS. | < 1 min |
-| `plugin-suites` | Screening `run_all.py`, Runner fast suite, Hazard `run_all.py`, Hazard Lite, `tools/gui_lint.py`, the Runner wizard and batch-chain real-Qt scripts, pytest for suite dams and Setup, on QGIS from conda-forge. | 10-20 min |
-| `model-tests` | `python -m nd_breach_runner.tests.run_tests --models` on LISFLOOD-FP 8.3 built from the Zenodo source with `DamSafety_Runner/scripts/build_lisflood_linux.sh` (cached), and ANUGA 4.0.1 in its own conda env. | 10-17 min |
+| `fast-checks` | `tools/ci_checks.py` (damsuite drift and pin, shared/ui drift, versions and changelogs vs `main`, the 12 KB cap on each `metadata.txt` `changelog=`, no template value in a metadata.txt, files kept identical across plugins, zone and window colours, Qt6 enum spellings, compile, golden baseline), `tools/test_ci_checks.py`, the fingerprint nested-VRT test, and the Runner fast suite (`python3 -m nd_breach_runner.tests.run_tests`, stub Qt) on **numpy 2** + scipy. No QGIS, no GDAL: the GDAL-backed Runner tests skip there (see below). | 3-4 min |
+| `plugin-suites` | Screening `run_all.py`, Runner fast suite, Hazard `run_all.py`, Hazard Lite, `tools/gui_lint.py` on a 1080p xvfb display (offscreen fallback), the Runner wizard and batch-chain real-Qt scripts, pytest for suite dams, Setup, Data and PMP, on the newest QGIS from conda-forge: **QGIS 4.x / Qt6 / numpy 2** (4.2.3, GDAL 3.13 in November 2026; nothing pinned). | 10-20 min |
+| `plugin-suites-ltr` | The same suites in the official `qgis/qgis:release-3_34` container (the job's `container:`): **QGIS 3.34 LTR / Qt5 / GDAL 3.4 / numpy 1.x** on Ubuntu 22.04's system `python3`, pytest and scipy from pip, nothing from conda. This is the line `metadata.txt`'s `qgisMinimumVersion=3.28` promises and what the owner runs on macOS. | 10-20 min |
+| `model-tests` | `python -m nd_breach_runner.tests.run_tests --models` on LISFLOOD-FP 8.3 built from the Zenodo source with `DamSafety_Runner/scripts/build_lisflood_linux.sh` (cached), and ANUGA 4.0.1 in its own conda env (QGIS from conda, `numpy<2`). | 10-17 min |
 
 Every job fails the run when it fails. A newer push to a PR cancels that PR's older run.
+
+## The matrix (audit CI matrix, 2026-11-07)
+
+Three legs now cover what users run: Qt5 + numpy 1 (`plugin-suites-ltr`, the LTR line), Qt6 +
+numpy 2 (`plugin-suites`, QGIS 4.x) and plain Python + numpy 2 without QGIS or GDAL
+(`fast-checks`). Before this, every job pinned `numpy<2` and conda's unpinned `qgis` resolved to
+4.x/Qt6 only, so neither the LTR the metadata promises nor numpy 2 was ever tested.
+
+* **numpy 2 legs are red until `claude/reliability-engine-guards` merges.** `np.cross` on
+  2-vectors raises under numpy 2 (`DamSafety_Runner/core/hecras_structures.py:212`,
+  `core/hecras_crest.py:552/555`), so the three `hecras_crest_offcrest_*` Runner tests
+  (`walk_stops_at_a_junction`, `round4_walk_and_pool_edges`, `round4_ridge_and_section_edges`)
+  fail on `fast-checks` and `plugin-suites` until that branch's fix lands. Nothing else is
+  expected to differ between the legs; a test that is red on one leg only is a real finding.
+* **GDAL tests skip without osgeo.** `DamSafety_Runner/tests/registry.py` has `Skip` and
+  `need_osgeo()`: a test (or the helper that builds its GeoTIFF) calls `need_osgeo()` first, the
+  harness prints `skip  <name> (no GDAL (osgeo) in this Python)` and counts it in the summary
+  (`N tests, F failed, S skipped`) instead of failing. On `fast-checks` 32 tests skip this way;
+  on the QGIS legs they all run. A new GDAL-backed Runner test must call `need_osgeo()`.
+* **GUI lint on a real display.** `docs/gui-grammar.md`'s "no page scrolls sideways" rule needs
+  a 1920x1080 screen (offscreen Qt is 800x600 and the rule returns early). Both suite legs first
+  probe `xvfb-run -s "-screen 0 1920x1080x24" env QT_QPA_PLATFORM=xcb` (apt `xvfb`; the LTR image
+  already ships it) and run `tools/gui_lint.py` there; if the probe fails the lint runs offscreen
+  as before and the step prints a warning annotation, so a broken xvfb never blocks a merge but
+  is visible in the run.
+* **The LTR image.** `qgis/qgis:release-3_34` is rebuilt by the QGIS project from the
+  `release-3_34` branch (`.docker/qgis.dockerfile`: `qgis3-build-deps` on Ubuntu 22.04, Qt5,
+  cmake prefix `/usr`, `PYTHONPATH` already points at `/usr/share/qgis/python`, xvfb and
+  supervisor installed, Python 3.10, numpy from pip, GDAL's bindings from apt `python3-gdal`,
+  which were built against numpy 1). The job pins `numpy<2` with pip so this stays the numpy 1
+  leg whatever numpy a rebuild of the image resolved, then adds scipy and pytest with pip and
+  `xvfb` with apt, nothing else. Should the tag be retired, point `image:` at a `final-3_34_*`
+  point-release tag (same layout) or at the next LTR (`release-3_40`).
 
 ## Making the checks required (repository owner)
 
 Settings > Rules > Rulesets > New branch ruleset: target the default branch, turn on
-"Require status checks to pass", and add `fast-checks`, `plugin-suites` and `model-tests`.
+"Require status checks to pass", and add `fast-checks`, `plugin-suites`, `plugin-suites-ltr` and
+`model-tests` (the Qt6 and the LTR legs are both required: a plugin that loads on one and not the
+other is a release blocker).
 Without a ruleset (or a classic branch protection rule) that requires them, GitHub lets a PR
 merge while its checks are red or have not run.
 
@@ -33,8 +69,10 @@ As it is, it runs fast-checks and every plugin-suites command except the last, w
 (not installed; the venv below adds it). model-tests also needs an ANUGA env from micromamba or
 conda, neither of which is installed; cmake and g++ for the LISFLOOD-FP build are. CI's conda
 `qgis` is not pinned and resolves QGIS 4.x on Qt6 (4.2.3 with GDAL 3.13 in October 2026), so a
-local pass on QGIS 3.34 is needed but not enough: the PR's own CI run is the Qt6 check. From the
-repository root:
+local pass on QGIS 3.34 is the `plugin-suites-ltr` leg; the PR's own CI run is the Qt6 and the
+numpy 2 check. The `plugin-suites-ltr` leg itself can be reproduced with Docker:
+`docker run --rm -v "$PWD":/w -w /w qgis/qgis:release-3_34 bash -c 'pip3 install -q "numpy<2" scipy pytest && QT_QPA_PLATFORM=offscreen python3 -m nd_breach_runner.tests.run_tests'`.
+From the repository root:
 
 ```bash
 # a venv that keeps the system QGIS, GDAL, numpy and scipy, plus pytest
@@ -56,7 +94,8 @@ $PY DamSafety_Screening/tests/run_all.py
 $PY -m nd_breach_runner.tests.run_tests      # nd_breach_runner/ is a shim beside DamSafety_Runner
 $PY DamSafety_Hazard/tests/run_all.py
 $PY DamSafety_HazardLite/tests/test_core.py
-$PY tools/gui_lint.py
+$PY tools/gui_lint.py                        # offscreen: all rules but "no sideways scroll"
+xvfb-run -a -s "-screen 0 1920x1080x24" env QT_QPA_PLATFORM=xcb $PY tools/gui_lint.py   # as CI
 $PY DamSafety_Runner/tests/realqt_wizard.py
 $PY DamSafety_Runner/tests/realqt_chain.py
 $PY -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_Runner/tests/suite_dams', 'DamSafety_Setup/tests']); sys.stdout.flush(); os._exit(int(rc))"
@@ -78,3 +117,62 @@ at `/home/user/nd_hazard` (or `ND_HAZARD_ROOT`); CI has no such checkout and ski
 
 An ANUGA env like CI's: `micromamba create -y -n anuga -c conda-forge python=3.12 anuga=4.0.1 scipy`.
 Tests that change `NDBREACH_*` variables must restore them (a leak once broke `--models`).
+
+## Changelogs: metadata.txt and docs/CHANGELOG.md
+
+QGIS's Plugin Manager parses and renders the whole `changelog=` value of every installed plugin,
+so the Runner's 149 KB / Hazard's 86 KB changelogs (2026-11-07) slowed it down for anyone with
+the suite installed. Each `metadata.txt` now keeps its newest entries only (about 7; the gate
+fails a `changelog=` over 12 KB) and the older entries live verbatim in `docs/CHANGELOG.md`
+under `## Archived metadata changelog — <plugin>`. The "no changelog entry of the base is
+missing" rule accepts an entry that left `metadata.txt` as long as its version string is still
+in `docs/CHANGELOG.md` (a bullet title such as `**Runner 3.10.53: ...**`, or a line of the
+plugin's archived section); an entry that is in neither still fails. To trim again: cut the
+oldest entries out of `changelog=` and paste them, unchanged and newest first, at the top of the
+plugin's archived section's code block (`tools/test_ci_checks.py` has the cases).
+
+## Release: GitHub Release + QGIS plugin repository
+
+`.github/workflows/release.yml` runs when a tag `v*` is pushed (`git tag v2026.11.07 && git push
+origin v2026.11.07`), and by hand from the Actions tab (then it makes a *draft* release named
+after the commit and publishes nothing to QGIS).
+
+| Job | What it does |
+|---|---|
+| `lisflood-linux` | `ubuntu-22.04`: downloads LISFLOOD-FP 8.3 from Zenodo (md5 and sha256 checked, the same file CI's `model-tests` builds), runs `DamSafety_Runner/scripts/build_lisflood_linux.sh` with `LISFLOOD_STATIC=1` (static libstdc++ / libgcc / libgomp; glibc 2.35 or newer at run time). |
+| `lisflood-macos` | `macos-14` (Apple Silicon): `DamSafety_Runner/scripts/build_lisflood_macos.sh` (Homebrew cmake + libomp), then `libomp.dylib` is copied next to the binary and the load command changed to `@executable_path/libomp.dylib` (`install_name_tool`, ad-hoc `codesign`) so it runs without Homebrew; checked by running `lisflood -version` with Homebrew's copy moved away. |
+| `lisflood-windows` | `ubuntu-latest`: `DamSafety_Runner/scripts/build_lisflood_windows_cross.sh` cross-compiles with `g++-mingw-w64-x86-64-posix`, `-static` (libgomp, winpthread, libstdc++ and libgcc inside the .exe; `objdump -p` confirms no such DLL is imported). The MinGW edits (`_aligned_malloc` / `_aligned_free`) are part of `scripts/patch_lisflood.py`, so the Linux and macOS builds get them too, guarded by `_WIN32`. |
+| `release` | `tools/build_release.py --runner-bin bin` zips the committed files of the tagged commit (no `tests/`, `__pycache__`, dotfiles), puts the three builds into the Runner zip under `DamSafety_Runner/bin/<platform>/` with a `README.txt`; attaches the zips, `SHA256SUMS`, each binary on its own (`lisflood-linux-x64`, `lisflood-windows-x64.exe`, `lisflood-macos-arm64.tar.gz`), the patched 8.3 source (`lisflood-8.3-ndbreach-source.zip`, the GPL-2.0 corresponding source) and `plugins.xml` to the GitHub Release (`softprops/action-gh-release`); writes `plugins.xml` with `tools/make_plugins_xml.py` and pushes it, with the plugin icons, to the root of the `gh-pages` branch (`peaceiris/actions-gh-pages`, `keep_files: true`, merged with the index already there). |
+
+The Runner finds a bundled build on its own (`core/lisflood.bundled_exe`:
+`bin/linux-x64/lisflood`, `bin/windows-x64/lisflood.exe`, `bin/macos-arm64/lisflood`,
+`bin/macos-x64/lisflood` if one is ever built) after every installed LISFLOOD-FP and after the
+suite / provider settings, never instead of them. `bin/` is git-ignored: the binaries exist only
+in the release assets. A failed LISFLOOD-FP job stops the release.
+
+**The QGIS plugin repository.** The index is served by GitHub Pages at
+`https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml`, and its `download_url`s point at
+the release assets. Two one-time steps for the repository owner:
+
+1. *Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch: `gh-pages`,
+   folder `/ (root)`*. The branch is created by the first tagged run; until Pages is on, the URL
+   answers 404 and QGIS reports the repository as unavailable (the release assets still install
+   from ZIP).
+2. Push the first `v*` tag.
+
+Users then add the URL under *Plugins → Manage and Install Plugins → Settings → Add…* (with *Show
+also experimental plugins* ticked) and get updates through the Plugin Manager. `plugins.xml`
+holds one `<pyqgis_plugin>` per zip with the fields the installer reads (`version`,
+`qgis_minimum_version` / `qgis_maximum_version`, `description`, `about`, `author_name`,
+`download_url`, `file_name`, `experimental`, `update_date`, `tracker`, `repository`, ...), filled
+from each `metadata.txt`; `tools/make_plugins_xml.py --merge` keeps the entries of plugins a later
+release does not rebuild. `tools/mac/make_plugin_zips.py` stays the Mac installer's zip builder
+(it keeps `.secrets.baseline` for a plugins.qgis.org upload; `tools/build_release.py` does not).
+
+Local dry run of the release pieces (no binaries, no upload):
+
+```bash
+python3 tools/build_release.py --out dist            # dist/DamSafety_*_<ver>.zip + SHA256SUMS
+python3 tools/make_plugins_xml.py --tag v0 --zips dist --out dist/plugins.xml
+LISFLOOD_STATIC=1 bash DamSafety_Runner/scripts/build_lisflood_linux.sh /tmp/LISFLOOD-FP-8.3/source /tmp/lf   # static Linux build
+```

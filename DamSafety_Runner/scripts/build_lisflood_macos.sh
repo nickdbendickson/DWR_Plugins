@@ -42,6 +42,6 @@ mkdir -p "$OUT"
 cp build-nd/lisflood "$OUT/lisflood"
 echo
 echo "Built: $OUT/lisflood"
-echo "In QGIS: Processing > Options > Providers > ND Dam Breach Runner >"
+echo "In QGIS: Processing > Options > Providers > DamSafety Runner >"
 echo "  LISFLOOD-FP executable = $OUT/lisflood"
 echo "Then run 'Check the model installation' from the plugin menu."

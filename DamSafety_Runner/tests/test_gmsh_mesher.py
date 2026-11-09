@@ -1,6 +1,8 @@
 """ANUGA_MESHER (core/gmsh_mesher.py, anuga_model gmsh path, anuga_worker external mesh).
 
-The default mesher must leave the ANUGA job file byte-identical to main; the
+The default mesher must leave the ANUGA job file identical to main - byte-identical
+between two runs in one env, and content-identical to main's pin across the numpy
+builds QGIS ships (the pin hashes the arrays, not np.savez's file framing); the
 gmsh mesher must join crossing lines, keep the quality gate (20 deg, 100 m2),
 tag every outer edge, and report why on failure or timeout (test_gmsh_gate.py:
 the strict / gmsh_or_default handling of that).
@@ -30,11 +32,16 @@ try:
 except Exception:
     HAVE_GMSH = False
 
-# sha256 of anuga_job.npz written by origin/main 89cb655 for _case() (default mesher),
-# with the built-in cell-edge outline tracer. terrain.mask_outline uses contourpy instead
-# when it is installed (the qgis334 env has it, venv_scipy does not), and that traces the
-# mesh polygons up to one cell differently, so the pin is checked with the tracer forced.
-MAIN_JOB_SHA256 = "78c4969f0a72a424c859367b052e224c51d85d7984a46acb964ff873e3f03511"
+# Canonical CONTENT digest (see _canon_job) of the anuga_job the default mesher builds for
+# _case(), pinned from origin/main 89cb655 with the built-in cell-edge outline tracer. It hashes
+# each array's dtype, shape and raw bytes - NOT the .npz file bytes - so it holds whatever numpy
+# build framed the file: the QGIS 3.34/Qt5 LTR container frames np.savez's .npy headers and zip
+# members differently from the main CI numpy, but writes the same arrays (audit CI matrix
+# 2026-11-07). The old file-byte pin (78c4969f...3511) matched only one numpy's framing and so
+# broke the LTR leg. terrain.mask_outline uses contourpy when installed (qgis334 has it,
+# venv_scipy does not), tracing the mesh polygons up to one cell differently, so the pin is
+# checked with the tracer forced.
+MAIN_JOB_SHA256 = "99dece2a77b64ec1afafb56b5910a180a4dcf0991fdd2c6bd145042611456c8d"
 
 
 def _case():
@@ -89,21 +96,39 @@ def anuga_default_mesher_job_file_is_byte_identical_to_main():
     assert _sha_threads0(c) == MAIN_JOB_SHA256, _sha_threads0(c)
 
 
+def _canon_job(d):
+    """A sha256 over the job's CONTENT - for each key (sorted) its dtype, shape and raw C-order
+    bytes - so it is identical whatever numpy build framed the .npz. np.savez's .npy headers and
+    zip framing differ between the numpy builds QGIS ships (the 3.34/Qt5 LTR container vs the
+    main CI numpy); the arrays do not. Pinning the arrays, not the framing, is what lets the pin
+    hold across numpy versions while still catching any real change to the job the mesher wrote.
+    dtype.str and tobytes() are stable across numpy 1.x/2.x for these plain f4/f8/i8/U dtypes on
+    64-bit little-endian."""
+    h = hashlib.sha256()
+    for k in sorted(d):
+        v = np.ascontiguousarray(d[k])
+        h.update(k.encode("utf-8")); h.update(b"\0")
+        h.update(v.dtype.str.encode("ascii")); h.update(b"\0")
+        h.update(repr(v.shape).encode("ascii")); h.update(b"\0")
+        h.update(v.tobytes(order="C")); h.update(b"\0")
+    return h.hexdigest()
+
+
 def _sha_threads0(p):
     """3.10.47: the job file carries the resolved ANUGA thread count (resolve_threads), where
-    main's pinned file had threads = 0. Everything else must stay byte-identical: the sha256
-    of the same file re-saved with threads = 0 (np.savez writes the keys in the same order)
-    and, since 3.10.55, without the 'edge_bc' key."""
+    main's pinned content had threads = 0. Everything else must match main's job content: the
+    canonical content hash (_canon_job) of the job with threads reset to 0 and, since 3.10.55,
+    without the 'edge_bc' key. Content, not file bytes, so the pin holds across the numpy builds
+    QGIS ships (audit CI matrix 2026-11-07: the LTR Qt5 numpy framed the same arrays into a
+    different .npz)."""
     with np.load(p) as z:
         d = {k: z[k] for k in z.files}
     assert int(d["threads"]) == AM.resolve_threads(0)[0] >= 1, d["threads"]
     d["threads"] = np.asarray(0, d["threads"].dtype)
     # 3.10.55: the job names its outer-edge condition ('outflow', the new default; main's
-    # pinned file had none and the worker used Transmissive_boundary); dropped for the pin
+    # pinned job had none and the worker used Transmissive_boundary); dropped for the pin
     assert str(d.pop("edge_bc")) == "outflow"
-    q = p + ".threads0.npz"
-    np.savez(q, **d)
-    return _sha(q)
+    return _canon_job(d)
 
 
 @test
