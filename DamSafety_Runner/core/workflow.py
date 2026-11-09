@@ -207,6 +207,8 @@ class RunSettings:
         self.anuga_checkpoint_min = _env_number("ANUGA_CHECKPOINT_MIN", None)
         self.anuga_checkpoint_steps = int(_env_number("ANUGA_CHECKPOINT_STEPS", 0))
         self.anuga_checkpoint_keep = int(_env_number("ANUGA_CHECKPOINT_KEEP", 2))
+        self.anuga_keep_fine_maxima = False
+        self.anuga_keep_fine_support = False
         self.anuga_partial_min = _env_number("ANUGA_PARTIAL_MIN", None)
         self.anuga_resume = _env_flag("ANUGA_RESUME")
         # 3.10.70: the ANUGA worker's read-only time-step diagnostic: 0 = off, N = a row of
@@ -2455,6 +2457,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         ast.checkpoint_min = getattr(st, "anuga_checkpoint_min", None)
         ast.checkpoint_steps = int(getattr(st, "anuga_checkpoint_steps", 0) or 0)
         ast.checkpoint_keep = int(getattr(st, "anuga_checkpoint_keep", 2) or 2)
+        ast.keep_fine_maxima = bool(getattr(st, "anuga_keep_fine_maxima", False))
+        ast.keep_fine_support = bool(getattr(st, "anuga_keep_fine_support", False))
         ast.partial_min = getattr(st, "anuga_partial_min", None)
         ast.resume = bool(getattr(st, "anuga_resume", False))
         ast.resume_with_run = bool(st.resume)
@@ -2491,6 +2495,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         state.save(anuga_done=True)
         report["anuga_runs"] = a_runs
         report["anuga_elevation_source"] = an_env.stats.get("elevation_source")
+        if an_env.stats.get("fine_maxima"):
+            report["anuga_fine_maxima"] = an_env.stats["fine_maxima"]
         if an_env.stats.get("culvert_inverts"):     # 3.10.71: culvert inverts / enquiry
             report["anuga_culvert_inverts"] = an_env.stats["culvert_inverts"]
         if an_env.stats.get("checkpoint"):          # only when checkpoints were on
