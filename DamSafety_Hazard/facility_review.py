@@ -692,7 +692,8 @@ def _rail_with_trains(rec, trains, dec):
     new["trains_source"] = "engineer review{}; automatic: {}".format(
         _who(dec), "unknown" if auto is None else "{:g} ({})".format(
             auto, rec.get("trains_source") or ""))
-    cls, basis, judge = LN.nd_rail_class(rec.get("passenger"), new["trains"])
+    # L01: the engineer typed this count on the review tab, so a 0 is a real 0.
+    cls, basis, judge = LN.nd_rail_class(rec.get("passenger"), new["trains"], confirmed=True)
     new["nd_class"], new["nd_basis"], new["nd_judgment"] = \
         cls, basis + " [trains/day set by engineer review]", judge
     return new
