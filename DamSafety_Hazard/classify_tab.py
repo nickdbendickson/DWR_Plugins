@@ -1142,7 +1142,10 @@ class ClassificationTabMixin(object):
             if info.get("text"):
                 self._log(">>> Creep watch ran: " + info["text"])
             self._log(">>> Creep watch: {} - {}".format(text, paths["html"]))
-            self._update_status("Creep watch: " + text, True)      # 2.23.17: the report opens; no pop-up
+            self._update_status("Creep watch: " + text, True)
+            # a success .information is allowed (it is not a check; the CheckPanel rule only
+            # bans .warning / .critical in run handlers), and it names the report that opens
+            QMessageBox.information(self, "Creep watch", "{}\n\n{}".format(text, paths["html"]))
             self._open_path(paths["html"])
         self._start_background("Hazard creep watch\u2026", work, done, project_bound=False)
 
