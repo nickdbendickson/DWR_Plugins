@@ -6,7 +6,8 @@ implemented in core/nd_hazard.py. nd_hazard.py and acer_tm11_charts.json are byt
 copies of the ND Dam Breach Runner's files - NEVER edit them here. This module only
   * wraps nd_hazard's attribute rules (habitability, mobile homes, interstate, passenger, AADT,
     trains a day) for tools 0, 6, 8 so every tool reads a layer the same way the runner does;
-  * samples the screening's rasters (metres, m/s) with nd_hazard's samplers;
+  * samples the screening's rasters (metres, m/s) with nd_hazard's samplers (0.18.17: habitable
+    structures over the Hazard plugin's footprint - outline + 5 ft edge ring, point disc);
   * builds nd_hazard receptors (ft, ft/s) and classifies (classify_nd);
   * keeps the COMPARISON-ONLY criteria (FEMA/Feinberg thresholds used by DSS-WISE HCOM, and a
     curve YOU supply). They are practice values, not the ND authority.
@@ -269,15 +270,37 @@ class Grid:
             return None
         return nh.sample_point(self.dv, None, self.x0, self.y_top, self.cell, x, y)[0]
 
-    def sample(self, kind, parts, wet_ft=0.1):
+    def sample(self, kind, parts, wet_ft=0.1, structure=False):
         """{depth_m, vel_ms, dv_m2s, x, y, how} for a feature's parts, or None when it is off
         the grid. kind: 'point' (parts = [(x, y)...]: the deepest point, the largest velocity of
         the wet points), 'polygon' (exterior
         rings: nd_hazard.sample_footprint per part; the deepest part, the largest velocity of
         the wet parts), 'line' (vertex lists: nd_hazard.sample_line_max per part, the deepest).
         dv_m2s = depth_m x vel_ms (peak depth x peak wet velocity), never the dv raster.
-        Velocity None = unknown."""
+        Velocity None = unknown.
+
+        structure (0.18.17, audit P1): a habitable structure is read over the DamSafety Hazard
+        plugin's sampling footprint - an outline plus its EDGE_RING_FT (5 ft) edge ring, a point
+        as the cells within POINT_RADIUS_FT + EDGE_RING_FT (25 ft) of it - so both plugins read
+        the same cells (the grid is metres: feet x M_PER_FT). More cells can only raise a zone.
+        Lifelines, dams and lines are read as before."""
         best = None
+        if kind == "point" and structure:
+            radius = (nh.POINT_RADIUS_FT + nh.EDGE_RING_FT) * M_PER_FT
+            vmax, wet_any = None, False
+            for x, y in parts:
+                d, v, how = nh.sample_disc(self.depth, self.vel, self.x0, self.y_top, self.cell,
+                                           x, y, radius, wet_ft, 1.0 / M_PER_FT)
+                if d is None:
+                    continue
+                if d / M_PER_FT >= wet_ft:
+                    wet_any = True
+                    if v is not None:
+                        vmax = v if vmax is None else max(vmax, v)
+                if best is None or d > best["depth_m"]:
+                    best = {"depth_m": d, "vel_ms": v, "x": x, "y": y,
+                            "how": "point structure: " + how}
+            return _peak_dv(best, vmax, wet_any)
         if kind == "point":
             # TM 11 practice (Nick, 2026-11-01, option C): a multipoint classifies on its
             # deepest point with the peak velocity over its wet points, even from different
@@ -299,9 +322,10 @@ class Grid:
             # the wet cells of all parts, even from different cells (reverts db9c665); dv is
             # that peak depth x peak velocity (_peak_dv)
             vmax, wet_any = None, False
+            edge = nh.EDGE_RING_FT * M_PER_FT if structure else 0.0
             for ring in parts:
                 d, v, how = nh.sample_footprint(self.depth, self.vel, self.x0, self.y_top,
-                                                self.cell, ring, wet_ft, 1.0 / M_PER_FT)
+                                                self.cell, ring, wet_ft, 1.0 / M_PER_FT, edge)
                 if d is None:
                     continue
                 cx = sum(p[0] for p in ring) / len(ring)
@@ -400,11 +424,13 @@ def _comparison_finding(s, criterion, rule_depth_m, curve, wet_ft):
 def classify_nd(structures=(), roads=(), railroads=(), method=nh.LETHALITY_CHARTS,
                 wet_m=DEFAULT_WET_M, rule_depth_ft=2.0, unknown_aadt=nh.MEDIUM, charts=None,
                 curve=None, lifelines=(), downstream_dams=(), unknown_trains=nh.MEDIUM,
-                judgment_zone_high=False):
+                judgment_zone_high=False, near_ft=nh.DEFAULT_NEAR_FT, borderline_higher=False):
     """Classify one dam through nd_hazard.classify.
 
     judgment_zone_high: the old option - a habitable structure in the ACER judgment zone counts
     as potentially lethal (HIGH). Off (default, Nick 10/30/2026): MEDIUM by rule.
+    near_ft / borderline_higher (0.18.17, audit P1): the Hazard plugin's borderline option with
+    its defaults (0.5 ft, off) - nd_hazard.Settings.
 
     structures: dicts {id, depth_m, vel_ms (None = unknown), dv_m2s, mobile, habitable, x, y};
     roads: dicts {id, depth_m, aadt, road_class, name, sole_access, x, y}; railroads: dicts
@@ -420,7 +446,8 @@ def classify_nd(structures=(), roads=(), railroads=(), method=nh.LETHALITY_CHART
     st = nh.Settings(lethality=method if method in nh.LETHALITY_METHODS else nh.LETHALITY_1D,
                      wet_ft=wet_ft, rule_depth_ft=float(rule_depth_ft),
                      unknown_aadt=unknown_aadt, unknown_trains=unknown_trains,
-                     judgment_zone_high=bool(judgment_zone_high)).validate()
+                     judgment_zone_high=bool(judgment_zone_high), near_ft=float(near_ft),
+                     borderline_higher=bool(borderline_higher)).validate()
     if method == nh.LETHALITY_CHARTS and (charts is None or not charts.ready):
         raise nh.ChartsNotDigitized(charts_not_digitized_message(charts))
     rd = [nd_road(r["id"], r["depth_m"], r.get("aadt"), r.get("road_class", ""), r.get("x"),
