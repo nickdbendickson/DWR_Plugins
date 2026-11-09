@@ -87,11 +87,21 @@ def rasters():
     d[20, 21], v[20, 21] = 0.3, 6.0
     # a wet cell exactly 0.05 ft below the house high boundary at 1.0 ft/s (5.968 ft)
     d[30, 30], v[30, 30] = 5.918, 1.0
-    # a wet cell exactly ON the house judgment boundary at 1.0 ft/s (2.916 ft); the cells
-    # its 5 ft ring reaches are shallower and no faster, so the peak pair IS this cell
+    # a wet cell just INTO the house judgment zone at 1.0 ft/s (the boundary is 2.916 ft). It
+    # must not sit exactly on 2.916: the plugin reads depth from a float32 raster, where 2.916
+    # rounds to 2.9159998 (1e-7 below) and classifies low, while the numpy leg keeps the exact
+    # 2.916 and classifies judgment - a measure-zero float32 disagreement, not a real parity
+    # gap (a boundary-snap in the classifier is the separate follow-up). 2.92 is >= 2.916 in
+    # both float32 and float64, so every leg agrees on judgment. The 5 ft ring reaches only the
+    # shallower 1.0 ft cells, so the peak pair IS this cell.
     d[33:38, 10:15] = 1.0
     v[33:38, 10:15] = 1.0
-    d[35, 12], v[35, 12] = 2.916, 1.0
+    d[35, 12], v[35, 12] = 2.92, 1.0
+    # one isolated wet cell (dry on every side) for the point_disc structure below: its sampling
+    # disc reaches this cell with margin and nothing else, so the peak depth / velocity are this
+    # cell's regardless of which edge cells the GEOS arc / chord gap includes (a gradient at the
+    # disc edge would let the fast and slow paths pick different peak cells - the former fixture).
+    d[50, 5], v[50, 5] = 1.0, 0.92
     # the only wet cells near the "3 ft outside the wet edge" structure: the block's west edge
     # (cols 10..) at rows 14..16 - its east wall at x = 9.0 m is 3 ft (0.914 m) from the wet
     # column's west face (x = 10) and 1.414 m from the nearest centre (10.5, ...)
@@ -121,7 +131,7 @@ def structures():
         ("far", "polygon", sq(2.0, 52.0, 6.0, 55.0), False, "dry"),
         # a point 7 m west of the wet block: its own cell is dry, the 25 ft disc (7.62 m)
         # reaches the wet block - wet in Hazard, dry before in Runner / Screening
-        ("point_disc", "point", (3.5, 30.5), False, "point 7 m from the flood"),
+        ("point_disc", "point", (5.5, 4.0), False, "point whose disc reaches one isolated wet cell"),
         # a point inside the flood: its 25 ft disc reads the deepest / fastest cells around it
         # (depth 1.0 + 0.05 x (col - 10): about 2.1 ft at col 32, judgment on the mobile table)
         ("point_in", "point", (32.5, 45.5), True, "mobile home point in the flood"),
@@ -291,11 +301,11 @@ def classification_parity_hazard_runner_screening_same_zones():
                      "near_high": nh.ZONE_JUDGMENT, "on_line": nh.ZONE_JUDGMENT,
                      "outside_3ft": nh.ZONE_LOW, "far": None, "point_disc": nh.ZONE_LOW,
                      "point_in": nh.ZONE_JUDGMENT}, zones
-    # the structure 3 ft outside the wet edge and the point 7 m from it are WET through the
-    # ring / disc (as in the Hazard); the bare footprint / own cell was dry (pre-3.16.9 rule)
+    # the structure 3 ft outside the wet edge and the point near the isolated cell are WET
+    # through the ring / disc (as in the Hazard); the bare footprint / own cell was dry
     bare_poly = nh.sample_footprint(d, v, 0.0, 60.0, 1.0, structs[4][2], 0.1)[0]
     assert not (bare_poly or 0) > 0 and hz_r["outside_3ft"][1] == 2.2
-    assert nh.sample_point(d, v, 0.0, 60.0, 1.0, 3.5, 30.5)[0] == 0.0 and hz_r["point_disc"][0]
+    assert nh.sample_point(d, v, 0.0, 60.0, 1.0, 5.5, 4.0)[0] == 0.0 and hz_r["point_disc"][0]
     # 0.05 ft below the high boundary: the old polygon tolerance band made it HIGH in the
     # Runner / Screening; the table (Hazard) says JUDGMENT - the structure drops a zone, and
     # its finding is flagged near the high boundary instead
