@@ -7,8 +7,9 @@ those colours at full opacity:
 
   * DamSafety_Hazard/helpers.py apply_acer11_style() (zone rasters), labels spelled JUDGMENT
   * DamSafety_Hazard/styles.py COLORS (structure points by ACER zone)
-  * {Hazard,Runner,Screening}/styles/acer_zones.qml (zone rasters, opacity 1)
-  * {Hazard,Runner,Screening}/styles/acer_zone_points.qml (structure points)
+  * DamSafety_Core/ui/styles/acer_zones.qml (zone rasters, opacity 1; Core 1.0.0: the one copy
+    the three plugins' suite_styles reads - it used to be <plugin>/styles/ in each)
+  * DamSafety_Core/ui/styles/acer_zone_points.qml (structure points)
   * DamSafety_Hazard/chartsign.py overlay_svg() (the low zone is filled too)
   * {Runner,Screening}/core/nd_hazard.py chart_svg() (ND Fig 5.1 / 5.2 review charts + legend)
   * DamSafety_Hazard/xlsx_zone_fill.py ZONE_FILLS_REG05 (XLSX zone cell fills, 2.18.51)
@@ -31,6 +32,8 @@ STD = {"high": "#EF9897", "judgment": "#F9F4A3", "low": "#C4E0AD"}
 OLD = ("#F44336", "#FFEB3B", "#4CAF50", "#FBE7B5", "#F4B6B0", "#E8F3E8",
        "244,67,54", "255,235,59", "76,175,80")
 PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening")
+# Core 1.0.0: the QML styles live once, in the Core plugin (a lone Hazard zip has no copy)
+STYLES = ("DamSafety_Core/ui",)
 
 
 def _rgb(hexcol):
@@ -69,9 +72,11 @@ def check_text(root=ROOT):
     for key in ("HIGH", "JUDGMENT", "LOW"):
         if not re.search(r'"{}": "{}"'.format(key, STD[key.lower()]), s, re.I):
             probs.append("styles.py COLORS[{!r}] is not {}".format(key, STD[key.lower()]))
-    for p in PLUGINS:
+    for p in STYLES:
         q = _read(root, p + "/styles/acer_zones.qml")
         if q is None:
+            if os.path.isdir(os.path.join(root, p)):
+                probs.append(p + "/styles/acer_zones.qml missing")
             continue
         m = re.search(r'<rasterrenderer[^>]*\sopacity="([0-9.]+)"', q)
         if not m or float(m.group(1)) != 1.0:
@@ -123,7 +128,7 @@ def check_text(root=ROOT):
         if STD[key].lower() not in body.lower():
             probs.append("chartsign.py overlay_svg lacks {} for {}".format(STD[key], key))
     for rel in (["DamSafety_Hazard/helpers.py", "DamSafety_Hazard/styles.py"] +
-                [p + "/styles/" + n for p in PLUGINS
+                [p + "/styles/" + n for p in STYLES
                  for n in ("acer_zones.qml", "acer_zone_points.qml")]):
         s = _read(root, rel)
         if s is None:

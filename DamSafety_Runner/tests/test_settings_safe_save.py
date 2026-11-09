@@ -28,20 +28,23 @@ def _file(d, values, ext=".csv"):
 
 @register
 def settings_copies_are_identical():
-    for name in ("damsuite/settings.py", "suite_settings.py"):
-        h = {hashlib.sha256(open(os.path.join(REPO, p, name), "rb").read()).hexdigest()
-             for p in ("DamSafety_Runner", "DamSafety_Screening", "DamSafety_Hazard")}
-        assert len(h) == 1, name
+    """Core 1.0.0: the three plugins' settings modules ARE the Core's (one object each)."""
+    import importlib
+    for name in ("damsuite.settings", "suite_settings"):
+        mods = {id(importlib.import_module(p + "." + name))
+                for p in ("DamSafety_Runner", "DamSafety_Screening", "DamSafety_Hazard")}
+        assert len(mods) == 1, name
 
 
 @register
 def ui_widgets_copies_are_identical():
-    """ui_widgets.py: the shared window widgets, one byte-identical copy per plugin (no plugin
-    imports another's), with SHARED_VERSION and only qgis.PyQt imports."""
-    texts = {p: open(os.path.join(REPO, p, "ui_widgets.py"), "rb").read()
-             for p in ("DamSafety_Runner", "DamSafety_Screening", "DamSafety_Hazard")}
-    assert len({hashlib.sha256(t).hexdigest() for t in texts.values()}) == 1, "ui_widgets.py copies differ"
-    t = texts["DamSafety_Runner"].decode("utf-8")
+    """ui_widgets.py: the shared window widgets, one module in DamSafety_Core/ui (the plugins
+    carry three-line shims onto it), with SHARED_VERSION and only qgis.PyQt imports."""
+    import importlib
+    mods = {id(importlib.import_module(p + ".ui_widgets"))
+            for p in ("DamSafety_Runner", "DamSafety_Screening", "DamSafety_Hazard")}
+    assert len(mods) == 1, "ui_widgets.py shims point at different modules"
+    t = open(os.path.join(REPO, "DamSafety_Core", "ui", "ui_widgets.py"), encoding="utf-8").read()
     assert "SHARED_VERSION = " in t
     assert "PyQt5" not in t and "PySide" not in t and "PyQt6" not in t
     assert "DamSafety_" not in t.split('"""', 2)[2], "a plugin-specific import in the shared file"
@@ -173,9 +176,10 @@ def settings_two_plugins_saving_at_once_lose_nothing():
         script = os.path.join(d, "writer.py")
         with open(script, "w") as fh:
             fh.write(_WRITER)
-        procs = [subprocess.Popen([sys.executable, script, os.path.join(REPO, plugin_dir, "damsuite"),
+        # Core 1.0.0: the two writers load the one damsuite (DamSafety_Core) as two processes
+        procs = [subprocess.Popen([sys.executable, script, os.path.join(REPO, "DamSafety_Core", "damsuite"),
                                    p, key, "25"])
-                 for plugin_dir, key in (("DamSafety_Runner", "ndbreach"), ("DamSafety_Screening", "ndscreen"))]
+                 for key in ("ndbreach", "ndscreen")]
         assert [q.wait(120) for q in procs] == [0, 0]
         v = DS.Settings.load(p).values
         for key in ("ndbreach", "ndscreen"):
