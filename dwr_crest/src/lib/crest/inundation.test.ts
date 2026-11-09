@@ -5,10 +5,11 @@ import { describe, it } from "node:test";
 import { gunzipSync } from "node:zlib";
 
 import { analyze } from "./engine.ts";
-import { buildInundation, GATE_VOLUME_ACFT, chooseInundationLayer } from "./inundation.ts";
+import { buildInundation, GATE_VOLUME_ACFT, chooseInundationLayer, probeExtent } from "./inundation.ts";
 import type { DemGrid } from "./outline.ts";
 import { outlineInputs, outlineState, polygonizeDepth } from "./outline.ts";
 import { SAMPLE_DAMS } from "./samples.ts";
+import { triageDam } from "./triage.ts";
 import type { Analysis } from "./types.ts";
 
 const withVolume = (volumeAcFt: number) => ({ breach: { volumeAcFt } }) as unknown as Analysis;
@@ -131,6 +132,41 @@ describe("buildInundation on ND00199 (30 m fixture, 1,609 ac-ft → routed)", ()
     assert.ok(e.wetAc > 0);
     assert.equal(typeof e.stoppedInBasin, "boolean");
     assert.equal(typeof e.reachedEdge, "boolean");
+  });
+
+  it("a probe that cannot be built says why: the layer carries extentError and the triage names it (never 'unchecked')", async () => {
+    const smallNd = { ...ND, storageAcFt: 120, surfaceAreaAc: 20 };
+    const res = analyze(smallNd);
+    // No outflow hydrograph: buildRoutedFlood refuses with its own reason, which the probe must pass on.
+    const noSeries = { ...res, breach: { ...res.breach, series: [] } } as Analysis;
+    const p = await probeExtent(smallNd, noSeries, DEM);
+    assert.equal(p.ok, false);
+    if (p.ok) return;
+    assert.match(p.error, /no outflow hydrograph/);
+    // A thrown error (a bad grid) is caught, logged and returned as the error, not swallowed.
+    const warned: string[] = [];
+    const orig = console.warn;
+    console.warn = (...a: unknown[]) => void warned.push(a.join(" "));
+    let thrown;
+    try {
+      thrown = await probeExtent(smallNd, res, { ...DEM, z: null as unknown as Float32Array });
+    } finally {
+      console.warn = orig;
+    }
+    assert.equal(thrown.ok, false);
+    assert.ok(warned.some((w) => /extent probe/.test(w)), warned.join("\n"));
+    // Through buildInundation: the outline is still built and saved, with the error on it, and the triage says so.
+    const r = await buildInundation(smallNd, noSeries, DEM);
+    assert.ok(r.ok, r.ok ? "" : r.reason);
+    if (!r.ok) return;
+    assert.equal(r.layer, "outline");
+    assert.equal(r.cache.stats.extent, undefined);
+    assert.match(r.cache.stats.extentError ?? "", /no outflow hydrograph/);
+    const withLayer = { ...smallNd, outline: r.cache };
+    // (ND00199 has flooded receptors, so the call itself is needs-runner; the point here is the confidence and its reason.)
+    const t = triageDam(withLayer, noSeries, outlineState(withLayer, noSeries, true));
+    assert.equal(t.confidence, "low");
+    assert.ok(t.reasons.some((x) => /routed-spread probe failed \(No routed flood: the breach has no outflow hydrograph\)/.test(x)), t.reasons.join("\n"));
   });
 
   it("still builds the stage fill when asked, and reads a saved stage-fill layer as stale", async () => {

@@ -29,14 +29,32 @@ import {
   shownCrest,
   shownSpillwayCrest,
 } from "@/lib/crest/nd-dams";
+import { deskBundles, staleBundleBanner } from "@/lib/crest/data-provenance";
 import { blankDam } from "@/lib/crest/samples";
 import { useDesk } from "@/lib/crest/store";
 import type { DamRecord } from "@/lib/crest/types";
 
 const MAX_OPTIONS = 60;
 
+/**
+ * Amber line when an inventory bundle is past BUNDLE_STALE_DAYS (data-provenance.ts). `now` is read once per mount, in
+ * an effect, so the server render and the first client render agree (no banner), as use-online.ts does for the clock.
+ */
+export function StaleBundleBanner({ data, className = "mt-2" }: { data: NdData | null; className?: string }) {
+  const [now, setNow] = useState<Date | null>(null);
+  useEffect(() => setNow(new Date()), []);
+  if (!data || !now) return null;
+  const text = staleBundleBanner(deskBundles({ nidFetchedUtc: data.nidSource.fetchedUtc, dwrPulledUtc: data.dwrSource?.pulledUtc ?? null }), now);
+  if (!text) return null;
+  return (
+    <p className={`${className} rounded-sm border border-amber bg-amber/10 p-2 text-xs text-amber`} role="status" data-testid="bundle-stale">
+      {text}
+    </p>
+  );
+}
+
 /** The bundles, loaded on first use. */
-function useNdData(enabled = true): { data: NdData | null; error: string | null } {
+export function useNdData(enabled = true): { data: NdData | null; error: string | null } {
   const [data, setData] = useState<NdData | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -206,6 +224,7 @@ export function NdDamPicker({ dam }: { dam: DamRecord }) {
           </div>
         </div>
       ) : null}
+      <StaleBundleBanner data={data} />
       <p className="mt-2 text-xs text-muted">
         {data ? data.nidSource.attribution : "Dam inventory data: U.S. Army Corps of Engineers, National Inventory of Dams."}
         {data?.dwrSource ? ` ${data.dwrSource.attribution}` : ""}
@@ -492,6 +511,7 @@ export function AboutData() {
         Crest is a desk screen for dam-breach studies. It does not assign an official hazard class. The ND dam list is an
         offline copy refreshed only on request.
       </p>
+      <StaleBundleBanner data={data} className="mt-1" />
       <p className="mt-1">{data?.nidSource.attribution ?? "Dam inventory data: U.S. Army Corps of Engineers, National Inventory of Dams."}</p>
       {data?.dwrSource ? <p className="mt-1">{data.dwrSource.attribution}</p> : null}
       {data?.dwrSource ? <p className="mt-1">{data.dwrSource.disclaimer}</p> : null}

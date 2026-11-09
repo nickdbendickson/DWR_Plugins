@@ -3,6 +3,7 @@
  * shows. The same sheet is printed (browser print / Save as PDF), so what is on screen is what is on paper. Pure
  * functions, no DOM: the component is src/components/crest/PaperReport.tsx.
  */
+import { csvCell } from "./csv.ts";
 import { num } from "./format.ts";
 import type { Analysis, SeriesPoint } from "./types.ts";
 
@@ -75,7 +76,6 @@ export function receptorCsv(result: Analysis): string {
     "Class",
     "Reason",
   ];
-  const q = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
   const lines = [head.join(",")];
   for (const r of [...result.flood.receptors].sort((a, b) => b.depthFt - a.depthFt)) {
     const p = row(r);
@@ -92,11 +92,11 @@ export function receptorCsv(result: Analysis): string {
         p.rating,
         r.rankReason,
       ]
-        .map((v) => q(String(v)))
+        .map((v) => csvCell(String(v)))
         .join(","),
     );
   }
-  lines.push(q(PAPER_DISCLAIMER));
+  lines.push(csvCell(PAPER_DISCLAIMER));
   return lines.join("\n") + "\n";
 }
 

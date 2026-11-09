@@ -2,6 +2,7 @@ import { WET_FT } from "./acer.ts";
 import { downstreamDirection, fromLocal, readAoi, ringArea, type Part, type XY } from "./aoi.ts";
 import { damLocation, ENGINE_VERSION } from "./engine.ts";
 import type { Analysis, DamRecord } from "./types.ts";
+import { CREST_VERSION } from "./version.ts";
 
 /**
  * Flood strip: the desk's schematic flood laid on the real map (Nick, 2026-10-30).
@@ -53,7 +54,10 @@ export type StripCommon = {
   dam_name: string;
   crest_navd88_ft: number;
   peak_cfs: number;
+  /** The method that made the depths: the desk engine's (engine.ts ENGINE_VERSION), or an imported run's label. */
   engine_version: string;
+  /** The Crest build that wrote the file (version.ts CREST_VERSION, "<version>+<git sha>"). */
+  crest_version: string;
 };
 
 export type StripFeature = {
@@ -262,6 +266,7 @@ export function floodStrip(dam: DamRecord, result: Analysis): FloodStripResult {
     crest_navd88_ft: r3(result.datum.crestNavdFt),
     peak_cfs: Math.round(result.breach.peakCfs),
     engine_version: ENGINE_VERSION,
+    crest_version: CREST_VERSION,
   };
   const toLonLat = (r: XY[]) => {
     const ring = r.map((p) => fromLocal(p, loc).map(r7) as [number, number]);
@@ -376,7 +381,7 @@ export function exportFloodStripKml(strip: FloodStrip, extra: string[] = [], pla
       ? `Terrain outline: ${p.strip_area_ac.toFixed(1)} ac (engine wet area ${p.engine_wet_area_ac.toFixed(1)} ac), desk max depth ${p.max_depth_ft.toFixed(2)} ft.`
       : `Schematic desk valley: max depth ${p.max_depth_ft.toFixed(2)} ft, wet strip ${p.wet_reach_km.toFixed(2)} km, ${p.strip_area_ac.toFixed(1)} ac${p.clipped_to_aoi ? ", clipped to the drawn area" : ""}.`,
     p.direction,
-    `Engine: ${p.engine_version}.`,
+    `Engine: ${p.engine_version}. Written by Crest ${p.crest_version}.`,
     ...extra,
   ].join("\n");
   const coords = (ring: number[][]) => ring.map(([lon, lat]) => `${lon},${lat}`).join(" ");

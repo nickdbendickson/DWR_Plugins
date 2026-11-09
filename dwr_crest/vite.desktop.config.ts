@@ -23,6 +23,7 @@ import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { crestVersion } from "./scripts/crest-version.mjs";
 
 const r = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const ROOT = r("./");
@@ -102,6 +103,9 @@ const desktop = defineConfig({
   root: r("./src/desktop"),
   base: "./",
   publicDir: false,
+  // Build version for the exports (src/lib/crest/version.ts): package.json version + git SHA of HEAD, never a
+  // timestamp, so the committed bundle and Crest.html stay reproducible from the same tree.
+  define: { __CREST_VERSION__: JSON.stringify(crestVersion()) },
   resolve: { alias: { "@": r("./src") } },
   plugins: [tailwindcss(), viteReact(), buildInfoPlugin()],
   build: {

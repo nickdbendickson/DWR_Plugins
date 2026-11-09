@@ -10,6 +10,7 @@
  *
  * Pure module: the desk, the Flood step's terrain panel, the Dashboard and the Results step read it.
  */
+import { csvCell } from "./csv.ts";
 import { GATE_VOLUME_ACFT } from "./inundation.ts";
 import type { OutlineState } from "./outline.ts";
 import { SOURCE_LABEL } from "./results.ts";
@@ -141,11 +142,6 @@ export function runnerWorklist(dams: DamRecord[], analyzeFn: (d: DamRecord) => A
   }
   return rows.sort((x, y) => y.releasedAcFt - x.releasedAcFt);
 }
-
-const csvCell = (v: string | number) => {
-  const s = String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
 
 /** The worklist as CSV, for handing to whoever runs the Runner. */
 export function worklistCsv(rows: WorklistRow[]): string {

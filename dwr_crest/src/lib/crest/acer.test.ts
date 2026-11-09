@@ -31,9 +31,23 @@ describe("ACER TM 11 zones (damsuite tm11_curves.zone)", () => {
     assert.equal(zone("house", 5.968, 0), "high");
   });
 
-  it("has no velocity-past-axis rule: 30 ft/s reads the 25 ft/s column", () => {
-    assert.equal(zone("house", 0.5, 30), "judgment");
+  it("a velocity past the chart's velocity axis is high, as tm11_curves.zone (house 25 ft/s, mobile 16 ft/s)", () => {
+    // Was asserted "judgment" until 2026-11-07: the port read 30 ft/s at the 25 ft/s column. The suite returns HIGH
+    // past either axis; a shallow fast flood is not safer than the chart's edge says.
+    assert.equal(zone("house", 0.5, 30), "high");
     assert.equal(zone("house", 0.8, 30), "high");
+    assert.equal(zone("house", 0.5, 25.01), "high");
+    assert.equal(zone("house", 0.5, 25), "judgment", "on the axis itself the last column still applies (v > vmax is strict)");
+    assert.equal(zone("mobile", 1.0, 16.5), "high");
+    assert.equal(zone("mobile", 1.0, 16), "low");
+    assert.equal(zone("mobile", 1.5, 16), "judgment");
+  });
+
+  it("the fix carries into the ND rank: a wet house or mobile home past the velocity axis screens High", () => {
+    assert.equal(rankReceptor({ kind: "house", depthFt: 0.5, velocityFps: 30 }).class, "High");
+    assert.equal(rankReceptor({ kind: "mobile", depthFt: 1.0, velocityFps: 20 }).class, "High");
+    // A dry receptor is still dry, whatever the velocity.
+    assert.equal(rankReceptor({ kind: "house", depthFt: 0.05, velocityFps: 30 }).class, null);
   });
 
   it("a depth past the chart's depth axis is high", () => {

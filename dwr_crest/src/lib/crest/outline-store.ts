@@ -36,19 +36,27 @@ function db(): Promise<IDBDatabase | null> {
   return opening;
 }
 
-function tx<T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T> | void): Promise<T | undefined> {
+type TxResult<T> = { ok: true; value: T | undefined } | { ok: false; error: string };
+
+/**
+ * One transaction. Never rejects: a missing IndexedDB, a failed open, an aborted transaction (quota, a closed
+ * database, a private window) all resolve { ok: false, error } so the caller can say what did NOT happen; the old code
+ * resolved undefined for every one of those and the desk went on saying "saved with this dam".
+ */
+function tx<T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T> | void): Promise<TxResult<T>> {
   return db().then(
     (d) =>
-      new Promise<T | undefined>((resolve) => {
-        if (!d) return resolve(undefined);
+      new Promise<TxResult<T>>((resolve) => {
+        if (!d) return resolve({ ok: false, error: "IndexedDB is not available in this browser" });
         try {
           const t = d.transaction(STORE, mode);
           const r = run(t.objectStore(STORE));
-          t.oncomplete = () => resolve(r ? r.result : undefined);
-          t.onerror = () => resolve(undefined);
-          t.onabort = () => resolve(undefined);
-        } catch {
-          resolve(undefined);
+          const err = () => resolve({ ok: false, error: t.error?.message ?? r?.error?.message ?? "the IndexedDB transaction failed" });
+          t.oncomplete = () => resolve({ ok: true, value: r ? r.result : undefined });
+          t.onerror = err;
+          t.onabort = err;
+        } catch (e) {
+          resolve({ ok: false, error: e instanceof Error ? e.message : String(e) });
         }
       }),
   );
@@ -59,16 +67,53 @@ export async function loadOutlines(): Promise<Map<string, OutlineCache>> {
   const out = new Map<string, OutlineCache>();
   const keys = await tx<IDBValidKey[]>("readonly", (s) => s.getAllKeys());
   const vals = await tx<OutlineCache[]>("readonly", (s) => s.getAll());
-  if (keys && vals && keys.length === vals.length) keys.forEach((k, i) => out.set(String(k), vals[i]));
+  if (!keys.ok || !vals.ok) {
+    const error = !keys.ok ? keys.error : !vals.ok ? vals.error : "";
+    // Node and a locked-down browser land here on every load; say so once, quietly, and run without saved layers.
+    if (!/not available/.test(error)) console.warn(`Crest: the saved inundation layers could not be read (${error}).`);
+    return out;
+  }
+  const k = keys.value ?? [];
+  const v = vals.value ?? [];
+  if (k.length === v.length) k.forEach((key, i) => out.set(String(key), v[i]));
   return out;
 }
 
-export function saveOutline(id: string, cache: OutlineCache): Promise<unknown> {
-  return tx("readwrite", (s) => s.put(cache, id));
+/** Why the last save or delete failed (for the desk's note), by dam id; cleared by the next success. */
+const failures = new Map<string, string>();
+const listeners = new Set<() => void>();
+
+/** The storage error for a dam's layer, or null when its last write succeeded (or none was tried). */
+export function outlineSaveError(id: string): string | null {
+  return failures.get(id) ?? null;
 }
 
-export function deleteOutline(id: string): Promise<unknown> {
-  return tx("readwrite", (s) => s.delete(id));
+/** Subscribe to save-failure changes (useSyncExternalStore). */
+export function onOutlineSaveChange(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => void listeners.delete(fn);
+}
+
+function setFailure(id: string, error: string | null) {
+  const had = failures.get(id) ?? null;
+  if (error) failures.set(id, error);
+  else failures.delete(id);
+  if (had !== error) for (const fn of listeners) fn();
+}
+
+/** Write a dam's layer. Resolves false, logs a warning and records the error (outlineSaveError) when it was NOT saved. */
+export async function saveOutline(id: string, cache: OutlineCache): Promise<boolean> {
+  const r = await tx("readwrite", (s) => s.put(cache, id));
+  if (!r.ok) console.warn(`Crest: the inundation layer of ${id} was not saved (${r.error}). It stays on the desk for this visit only.`);
+  setFailure(id, r.ok ? null : r.error);
+  return r.ok;
+}
+
+export async function deleteOutline(id: string): Promise<boolean> {
+  const r = await tx("readwrite", (s) => s.delete(id));
+  if (!r.ok) console.warn(`Crest: the saved inundation layer of ${id} could not be removed (${r.error}).`);
+  setFailure(id, null);
+  return r.ok;
 }
 
 /** A dam record without its inundation layer: what goes to localStorage. */
@@ -85,7 +130,7 @@ export function withoutOutline(d: DamRecord): DamRecord {
  * written again on every keystroke.
  */
 export function outlineSync(
-  io: { save: typeof saveOutline; remove: typeof deleteOutline } = { save: saveOutline, remove: deleteOutline },
+  io: { save: (id: string, cache: OutlineCache) => Promise<unknown>; remove: (id: string) => Promise<unknown> } = { save: saveOutline, remove: deleteOutline },
   /** Layers IndexedDB already holds, by dam id (not written again). */
   seed?: ReadonlyMap<string, OutlineCache>,
 ) {

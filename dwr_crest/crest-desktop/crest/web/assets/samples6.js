@@ -1,1 +1,1 @@
-import{N as e}from"./index.js";import{f as t}from"./samples5.js";var n=e(t(),1),r=`#0b3d6b`;function i(e,t){let i=e?.extent;return i?n.default.geoJSON(i,{pane:t,interactive:!1,style:()=>({color:r,weight:2,opacity:.95,fill:!1})}):null}export{i as t};
+import{P as e}from"./index.js";import{f as t}from"./samples5.js";var n=e(t(),1),r=`#0b3d6b`;function i(e,t){let i=e?.extent;return i?n.default.geoJSON(i,{pane:t,interactive:!1,style:()=>({color:r,weight:2,opacity:.95,fill:!1})}):null}export{i as t};

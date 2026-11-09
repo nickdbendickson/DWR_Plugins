@@ -26,10 +26,12 @@ import {
   type Structure,
   type StructuresBundle,
 } from "./batch.ts";
+import { ENGINE_VERSION } from "./engine.ts";
 import type { FloodStrip } from "./floodstrip.ts";
 import { nd911Bbox } from "./nd911.ts";
 import type { NdData } from "./nd-dams.ts";
 import type { DemGrid, DemRequest } from "./outline.ts";
+import { CREST_VERSION } from "./version.ts";
 
 const M_PER_DEG_LAT = 110574;
 const kx = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 180);
@@ -192,14 +194,24 @@ describe("one structure through the desk path", () => {
     assert.equal(row.screen, "Low");
   });
 
-  it("never calls a dam trivial when the 911 points could not be looked up", async () => {
+  it("never calls a dam trivial when the 911 lookup failed: structures unknown (null), at least uncertain, and the note says so", async () => {
     const fail = (async () => {
-      throw new Error("offline");
+      throw new Error("the ND GIS Hub service answered HTTP 502");
     }) as never;
     const { row } = await runStructure(S(), { fetchDem: fakeDem, fetchNd911: fail });
     assert.equal(row.status, "done");
-    assert.notEqual(row.triage?.recommendation, "trivial");
-    assert.match(row.reason ?? "", /911 address points not looked up/);
+    assert.ok(row.triage);
+    assert.notEqual(row.triage!.recommendation, "trivial");
+    assert.equal(row.structuresInside, null, "a failed lookup is unknown, never 0");
+    assert.equal(row.structuresFlooded, null);
+    assert.match(row.reason ?? "", /^911 lookup failed \(the ND GIS Hub service answered HTTP 502\); structures unknown\./);
+    // The same structure with the lookup working is trivial on this synthetic valley, so the downgrade is what held it.
+    const ok = await runStructure(S(), { fetchDem: fakeDem, fetchNd911: noNd911 });
+    assert.equal(ok.row.structuresInside, 0);
+    if (ok.row.triage?.recommendation === "trivial") {
+      assert.equal(row.triage!.recommendation, "uncertain");
+      assert.match(row.triage!.summary, /911 lookup failed/);
+    }
   });
 
   it("reports needs-data without fetching anything, and a terrain failure as failed", async () => {
@@ -273,13 +285,23 @@ describe("worklist order and CSV", () => {
     );
   });
 
-  it("writes the disclaimer, the header and one line per row", () => {
-    const csv = batchCsv(rows).trim().split("\n");
+  it("writes the disclaimer, the versions, the inventory ages, the header and one line per row", () => {
+    const now = new Date("2027-06-01T00:00:00Z");
+    const csv = batchCsv(rows, { nidFetchedUtc: "2026-10-29T21:56:00Z", dwrPulledUtc: "2026-10-30T14:31:02Z", structuresPulledUtc: null, now }).trim().split("\n");
     assert.match(csv[0], /^# Screening estimate/);
-    assert.equal(csv[1], BATCH_CSV_HEAD.join(","));
-    assert.equal(csv.length, 2 + rows.length);
-    assert.match(csv[2], /^R,DWR dam,R,Cass,/);
-    assert.match(csv[5], /needs-data/);
+    assert.equal(csv[1], `# Crest ${CREST_VERSION}; ${ENGINE_VERSION}. Written 2027-06-01.`);
+    assert.match(csv[2], /^# NID inventory pulled 2026-10-29 \(7 months old; stale, past 180 days: `npm run data:nd-dams` refreshes it\)$/);
+    assert.match(csv[3], /^# DWR dam values pulled 2026-10-30 \(6 months old; stale/);
+    assert.equal(csv[4], BATCH_CSV_HEAD.join(","));
+    assert.equal(csv.length, 5 + rows.length);
+    assert.match(csv[5], /^R,DWR dam,R,Cass,/);
+    assert.match(csv[8], /needs-data/);
+    // Without the bundle sources: the disclaimer and the version row only.
+    const bare = batchCsv(rows, { now }).trim().split("\n");
+    assert.equal(bare[2], BATCH_CSV_HEAD.join(","));
+    // A fresh inventory is not called stale.
+    const fresh = batchCsv(rows, { nidFetchedUtc: "2026-10-29T21:56:00Z", now: new Date("2026-11-07T00:00:00Z") }).trim().split("\n");
+    assert.equal(fresh[2], "# NID inventory pulled 2026-10-29 (8 days old)");
   });
 });
 

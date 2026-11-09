@@ -1,4 +1,5 @@
 import { downstreamDirection, fromLocal, ringArea, toLocal, type XY } from "./aoi.ts";
+import { csvCell } from "./csv.ts";
 import { damLocation } from "./engine.ts";
 import { clipToConvex, DEPTH_BANDS, exportFloodStripGeoJson, exportFloodStripKml, type FloodStrip } from "./floodstrip.ts";
 import type { DamRecord } from "./types.ts";
@@ -501,11 +502,6 @@ export function plssProperties(t: PlssTable) {
     })),
   };
 }
-
-const csvCell = (v: string | number) => {
-  const s = String(v);
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
 
 /** <root>_plss_sections.csv: one row per touched section, downstream order, with the source on every row. */
 export function exportPlssCsv(t: PlssTable): string {

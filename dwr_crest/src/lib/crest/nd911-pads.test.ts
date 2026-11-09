@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { analyze } from "./engine.ts";
-import { applyPads, computePads, demAt, FT_PER_M, sectionBedM } from "./nd911-pads.ts";
+import { applyPads, computePads, demAt, FT_PER_M, lookupPads, PAD_NO_TERRAIN_NOTE, padsToRetry, resetFailedPads, sectionBedM } from "./nd911-pads.ts";
 import type { DemGrid } from "./outline.ts";
 import { SAMPLE_DAMS } from "./samples.ts";
 import type { DamRecord } from "./types.ts";
@@ -87,10 +87,20 @@ describe("911 pads: ground at the point minus the channel bed at its station", (
     assert.ok(Math.abs(r.padFt - 11) <= 2.5, `clamped pad ${r.padFt} should be near the true 11 ft`);
   });
 
-  it("no terrain at the point: pad 0, flagged estimated", () => {
-    const [r] = computePads([{ id: "a", ...at(982, 120), distanceKm: 0.982 }], null, FRAME);
+  it("no terrain at the point (a NoData hole in a grid that came back): pad 0, flagged estimated, says no terrain", () => {
+    const g = grid((x, y) => x > 970 && x < 1000 && y > 100 && y < 140);
+    const [r] = computePads([{ id: "a", ...at(982, 120), distanceKm: 0.982 }], g, FRAME);
     assert.deepEqual([r.padFt, r.padSource], [0, "estimated"]);
-    assert.match(r.note, /pad estimated/);
+    assert.equal(r.note, PAD_NO_TERRAIN_NOTE);
+  });
+
+  it("the terrain REQUEST failed (502, timeout): pad 0, flagged estimated, but the note names the failure, not the ground", () => {
+    const [r] = computePads([{ id: "a", ...at(982, 120), distanceKm: 0.982 }], null, FRAME, { error: "The 3DEP terrain service answered 502." });
+    assert.deepEqual([r.padFt, r.padSource], [0, "estimated"]);
+    assert.match(r.note, /^pad estimated: terrain request failed \(The 3DEP terrain service answered 502\)/);
+    assert.doesNotMatch(r.note, /no terrain at the point/);
+    const [bare] = computePads([{ id: "a", ...at(982, 120), distanceKm: 0.982 }], null, FRAME);
+    assert.match(bare.note, /terrain request failed \(no reason given\)/);
   });
 
   it("no terrain across the section: bed from the dam's streambed along the fitted valley slope", () => {
@@ -137,6 +147,31 @@ describe("2801-like: channel depth 9.56 ft, house 11 ft above the bed", () => {
     const a = analyze(dam);
     assert.equal(a.screen.level, "Review");
     assert.match(a.screen.label, /pad estimated/);
-    assert.ok(a.screen.judgment.some((j) => /Pad estimated/.test(j)));
+    assert.ok(a.screen.judgment.some((j) => /Pad estimated/.test(j) && /no terrain at the point/.test(j)));
+  });
+
+  it("a pad estimated because the terrain request failed says so in the screen, not 'no terrain at the point'", async () => {
+    const nd911 = { source: "t", attribution: "t", fetchedAt: "", bbox: [-98, 46, -97, 48] as [number, number, number, number], fields: [], points: [{ nguid: "x", lon: -97.3252, lat: 46.9474 } as never] };
+    const dam: DamRecord = { ...base, nd911, receptors: [{ ...seed, padSource: undefined }] };
+    const result = analyze(dam);
+    const receptors = await lookupPads(dam, result, undefined, async () => {
+      throw new Error("The 3DEP terrain service answered 502.");
+    });
+    assert.ok(receptors);
+    const r = receptors![0];
+    assert.equal(r.padSource, "estimated");
+    assert.match(r.padNote ?? "", /terrain request failed \(The 3DEP terrain service answered 502\)/);
+    const a = analyze({ ...dam, receptors: receptors! });
+    assert.equal(a.screen.level, "Review");
+    const j = a.screen.judgment.find((x) => /Pad estimated/.test(x))!;
+    assert.match(j, /terrain request failed .*502.*look the pads up again/);
+    assert.doesNotMatch(j, /no terrain at the point/);
+    // The desk can reset exactly those seeds and read them again.
+    assert.deepEqual(padsToRetry(receptors!).map((x) => x.id), ["nd911-x"]);
+    const reset = resetFailedPads(receptors!);
+    assert.equal(reset[0].padSource, undefined);
+    assert.equal(padsToRetry(reset).length, 0);
+    const noData = applyPads(base.receptors, [{ id: "nd911-x", padFt: 0, padSource: "estimated", groundFt: null, bedFt: null, note: PAD_NO_TERRAIN_NOTE }]);
+    assert.equal(padsToRetry(noData).length, 0, "no terrain at the point is not retried");
   });
 });

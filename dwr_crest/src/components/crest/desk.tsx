@@ -1,7 +1,7 @@
-import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-react";
 import { analyze, crestNavdLabel, STEPS } from "@/lib/crest/engine";
-import { lookupPads, padPoints } from "@/lib/crest/nd911-pads";
+import { lookupPads, padPoints, padsToRetry, resetFailedPads } from "@/lib/crest/nd911-pads";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
 import { floodStrip, type FloodStrip } from "@/lib/crest/floodstrip";
 import {
@@ -53,6 +53,7 @@ import { CONFIDENCE_LABEL, triageDam } from "@/lib/crest/triage";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { demTieOffer, missingForNext, needsDemTie } from "@/lib/crest/nd-dams";
+import { onOutlineSaveChange, outlineSaveError } from "@/lib/crest/outline-store";
 import { activeDam, hydrateDesk, useDesk, useSaveStatus } from "@/lib/crest/store";
 import type {
   BreachMethod,
@@ -66,7 +67,7 @@ import type {
 } from "@/lib/crest/types";
 import { HydroChart, ValleyMap } from "./charts";
 import { useOnline } from "./use-online";
-import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel } from "./NdDamPicker";
+import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel, useNdData } from "./NdDamPicker";
 import { ResultsStep } from "./ResultsStep";
 import { useAnalysisOfRecord, useResultsSync, useStripOfRecord } from "./results-flow";
 import { PaperReport } from "./PaperReport";
@@ -712,6 +713,27 @@ function TerrainStep({
 
 const breathe = () => new Promise<void>((r) => setTimeout(r, 0));
 
+/** The IndexedDB error of this dam's last layer save, or null (outline-store.ts). Starts null, so SSR and the first client render agree. */
+function useOutlineSaveError(id: string): string | null {
+  return useSyncExternalStore(
+    onOutlineSaveChange,
+    () => outlineSaveError(id),
+    () => null,
+  );
+}
+
+/** "and saved with this dam", or the storage error when IndexedDB refused the layer. */
+function SavedNote({ id }: { id: string }) {
+  const err = useOutlineSaveError(id);
+  if (!err)
+    return <>and saved with this dam (the terrain itself is not kept).</>;
+  return (
+    <>
+      but <span className="text-amber" data-testid="outline-not-saved">layer not saved (storage error: {err}). It stays on the desk for this visit only; the browser may be out of storage or in a private window.</span>
+    </>
+  );
+}
+
 /**
  * The terrain outline: built on request from one 3DEP terrain request (about 3.5 MB for a 10 km reach), saved on the
  * dam so it shows offline. The build runs in short chunks so the page stays responsive.
@@ -879,8 +901,7 @@ function OutlinePanel({
           <p className="mt-1 text-xs text-muted" data-testid="outline-dem">
             Terrain: {s.dem.width} × {s.dem.height} cells at {num(s.dem.cellM, 0)} m (NAVD88); depth from Muskingum-Cunge
             routing of the breach hydrograph on DEM cross-sections and {routed.method === "spread" ? "a volume spread" : "a terrain fill"}, not a full 2-D hydraulic model. Built{" "}
-            {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} and saved with this dam (the terrain
-            itself is not kept). {DEM_ATTRIBUTION}
+            {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} <SavedNote id={dam.id} /> {DEM_ATTRIBUTION}
           </p>
         </>
       ) : s ? (
@@ -925,8 +946,7 @@ function OutlinePanel({
             {s.dem.missing ? ` ${s.dem.missing} cells missing,` : ""} {s.rings} rings after smoothing; {s.droppedPatches}{" "}
             patches under the minimum dropped, {s.filledHoles} holes filled. Water surface = the traced channel bed (pits
             filled) + the desk depth at that distance downstream; ground must be under it and connected to the channel.
-            Built {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} and saved with this dam (the
-            terrain itself is not kept). {DEM_ATTRIBUTION}
+            Built {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} <SavedNote id={dam.id} /> {DEM_ATTRIBUTION}
           </p>
         </>
       ) : null}
@@ -1107,10 +1127,25 @@ function Nd911Panel({
       receptors: dam.receptors.map((r) => (r.id === id ? { ...r, habitable: v === "" ? undefined : v === "yes" } : r)),
     });
   const notAdded = t ? t.rows.filter((r) => !r.added) : [];
+  // Pads left estimated because the terrain REQUEST failed (3DEP 502, timeout), as against no terrain at the point.
+  const padRetry = padsToRetry(dam.receptors);
+  const retryPads = () => {
+    padRetry.forEach((r) => padTried.current.delete(r.id));
+    update({ receptors: resetFailedPads(dam.receptors) });
+  };
   const btn = "inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50";
   const small = "inline-flex h-9 items-center rounded-sm border border-line bg-paper px-2 text-xs text-ink";
   return (
     <div className="rounded-md border border-line bg-card p-4" data-testid="nd911-panel">
+      {padRetry.length ? (
+        <p className="mb-2 text-sm text-amber" role="alert" data-testid="nd911-pad-retry">
+          The terrain request for {padRetry.length} structure{padRetry.length === 1 ? "'s" : "s'"} ground height failed ({padRetry[0].padNote?.replace(/^pad estimated: terrain request failed \((.*?)\);.*$/, "$1")}), so{" "}
+          {padRetry.length === 1 ? "it sits" : "they sit"} on the channel bed (pad 0) and the screen holds at Review. This is not "no terrain at the point".{" "}
+          <button type="button" className="underline" onClick={retryPads}>
+            Look the pads up again
+          </button>
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-lg">911 address points {t ? `inside the ${t.against}` : "near the strip"}</h3>
         {nd911.state !== "offline" ? (
@@ -1293,6 +1328,9 @@ function ScreenStep({ dam, result: deskResult }: { dam: DamRecord; result: Retur
 function ReportStep({ dam, result: deskResult }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
   const { result, ref, label } = useAnalysisOfRecord(dam, deskResult);
   const view = useRef<HTMLElement>(null);
+  // The inventory pull dates for the Report's age line, only for a record that came from the inventories.
+  const { data: nd } = useNdData(Boolean(dam.nidId || dam.nidRef));
+  const bundles = nd ? { nidFetchedUtc: nd.nidSource.fetchedUtc, dwrPulledUtc: nd.dwrSource?.pulledUtc ?? null } : undefined;
   return (
     <section ref={view} className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1322,7 +1360,7 @@ function ReportStep({ dam, result: deskResult }: { dam: DamRecord; result: Retur
         <ViewExport target={view} kind="report" dam={dam} result={result} />
       </div>
       <AoiNote flood={result.flood} />
-      <PaperReport dam={dam} result={result} source={label} runWarnings={ref?.warnings ?? []} />
+      <PaperReport dam={dam} result={result} source={label} runWarnings={ref?.warnings ?? []} bundles={bundles} />
       <ExportPanel dam={dam} result={result} desk={deskResult} />
       <PluginPanel dam={dam} result={result} />
       {dam.nidId ? <SourcesNote dam={dam} /> : null}

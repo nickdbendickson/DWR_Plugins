@@ -19,6 +19,55 @@
 
 ## 2026-11-07
 
+- **A flood faster than the ACER TM 11 chart's velocity axis is high danger, as in the suite.** `acer.ts zone()` read a
+  velocity past the chart's last column (house 25 ft/s, mobile home 16 ft/s) AT that column, so a shallow fast flood
+  screened judgment zone / Medium, and its header claimed the suite had no velocity-past-axis rule. The suite's
+  `tm11_curves.zone()` returns HIGH past either axis ("the figure does not say a faster or deeper flood is safer"),
+  and the Helper and the Runner screen with it. `zone()` now does the same. Direction: Medium → High for a wet house
+  shallower than 0.73 ft at more than 25 ft/s and a mobile home shallower than 1.86 ft at more than 16 ft/s; imported
+  LISFLOOD / HEC-RAS runs ranked on the desk now agree with the Helper and the Runner. `acer.test.ts` locked the wrong
+  result (`zone("house", 0.5, 30)` as "judgment") and is inverted. (Grok audit 2026-11-07, 3.3)
+- **Every export says which Crest wrote it.** A new build version `crest_version` = `<package.json version>+<short git
+  SHA>` (`version.ts`, injected by both Vite configs from `scripts/crest-version.mjs`; `+local` without git) is stamped
+  on the flood strip and terrain GeoJSON (collection and features) and KML, in `dam.json` (which carried no version at
+  all), as a comment row in the batch CSV and in the Report footer. `ENGINE_VERSION` stays the engine's own method
+  version, bumped to 2026.11.07 with a comment that it must move whenever `analyze()` changes its numbers; it had
+  stayed at 2026.10.30 through every numerics change while the terrain layer's `TRACE_VERSION` went 2 → 8. The
+  version is the committed version + the SHA of HEAD, never a timestamp, so the committed bundles stay reproducible.
+  package.json gains `"version": "0.1.0"`. Exports snapshots regenerated.
+- **Failures that were silent now say what did not happen.** (a) The terrain outline's extent probe swallowed every
+  error and the triage read "no extent check (built before it, or the probe could not be built)": the layer now carries
+  `stats.extentError` and the triage says "the routed-spread probe failed (<reason>)". (b) A 3DEP 502 or timeout
+  during the 911 pad lookup marked the pads "estimated" with the note "no terrain at the point", on the desk and in the
+  batch: the note and the screen's Review text now say "terrain request failed (<reason>), look the pads up again",
+  and the Flood step's 911 panel offers that retry; "no terrain at the point" is kept for a NoData hole in a grid that
+  came back. (c) A failed 911 lookup in the batch left `structures_inside` null but let the screen and triage run on
+  zero receptors; the row's note now reads "911 lookup failed (<reason>); structures unknown", `structures_flooded` is
+  null too, and the triage is forced to at least "Uncertain" with that reason (never "Clearly trivial"). (d) An
+  IndexedDB error while saving a dam's inundation layer resolved silently while the desk said "saved with this dam":
+  `saveOutline` now resolves false, warns, and the desk's terrain panel says "layer not saved (storage error: …)".
+- **The batch command line resumes from a `batch.jsonl` cut short by a kill.** A row appended as the process was killed
+  left a partial last line that `JSON.parse` threw on, so the next start crashed and the run could not resume. Rows are
+  now written as one fsynced line each, a cut-short last line is dropped with a warning (that structure runs again),
+  and a corrupt line anywhere else stops the run and names the line number. The CLI keeps every row in the file across
+  resumes while the desk's Resume keeps only the current selection; that difference is now documented in the code and
+  the README, not changed. New `scripts/batch-dams.test.mjs`.
+- **The desk notices a stale dam inventory.** The bundles record when they were pulled (2026-10-29 NID, 2026-10-30 DWR,
+  2026-11-05 structures) but nothing compared that to today. `data-provenance.ts bundleAge(now)`: past 180 days the
+  picker footer and About the dam data show an amber "Inventory is N months old; `npm run data:nd-dams` refreshes it"
+  line, the Report footer and the batch CSV's comment rows carry each bundle's pull date and age.
+- **Accuracy envelope brought up to the 2026-11-05 re-score and guarded.** `docs/accuracy-envelope.md` still showed the
+  2026-11-04 (34524e0) scores (2801 0.255 / 0.192) while the 11-05 settle (8bc4d20, PR #75) had re-scored them (2801
+  0.331 / 0.233, 2865 0.344 / 0.350, 3034 0.840 / 0.765, 4031 0.429 / 0.136, this changelog below); the trust map and the
+  LISFLOOD table now carry those, citing the entry and the commit (the per-cell recall / precision / bias detail is
+  marked as the 34524e0 measurement until re-measured). `triage.ts`'s module comment quoted older numbers still and is
+  fixed. The page now says "Scored on trace-version 8" and `outline.test.ts` fails with "re-score the envelope" when
+  `TRACE_VERSION` moves past that line.
+- **CSV cells can no longer open as spreadsheet formulas.** The six CSV writers (batch, PLSS, 911, Runner worklist,
+  triage, paper report) each had their own quoting and none neutralised a cell starting with `=`, `+`, `-` or `@`,
+  which Excel, LibreOffice and Sheets run as a formula; the 911 address fields and DWR text are third-party. One
+  `csv.ts csvCell` now prefixes such text with an apostrophe (a formatted number such as `-97.325185` is left alone)
+  and all six use it.
 - **A judgment-zone home is Medium by rule on an imported run, not High.** `rankSample` and
   `analysisOfRecord` defaulted `judgmentAsProbable` to `true`, so an imported run with the flag
   unset classed a habitable structure in the ACER judgment zone as High (probable loss of life),

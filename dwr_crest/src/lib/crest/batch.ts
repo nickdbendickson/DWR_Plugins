@@ -22,11 +22,13 @@
  * Crest is a SCREENING tool: a batch answers "which of these need a Runner run first", and a row's "open in desk"
  * hands the derived record to the desk for a closer look.
  */
-import { analyze } from "./engine.ts";
+import { csvCell } from "./csv.ts";
+import { bundleAgeLine, deskBundles } from "./data-provenance.ts";
+import { analyze, ENGINE_VERSION } from "./engine.ts";
 import { floodStrip } from "./floodstrip.ts";
 import { buildInundationReach } from "./inundation.ts";
 import { fetchNd911, nd911AutoPatch, nd911State } from "./nd911.ts";
-import { applyPads, computePads, padFrame, padPoints } from "./nd911-pads.ts";
+import { lookupPads } from "./nd911-pads.ts";
 import {
   applyDwrElevationsPatch,
   dwrElevationOffer,
@@ -39,6 +41,7 @@ import { demRequest, demSourceLabel, fetchDem, lookupArea, outlineInputs, outlin
 import { blankDam } from "./samples.ts";
 import { RECOMMENDATION_LABEL, RECOMMENDATION_ORDER, triageDam, type Triage } from "./triage.ts";
 import type { DamRecord, GeoJSONFeature, Provenance, ScreenLevel } from "./types.ts";
+import { CREST_VERSION } from "./version.ts";
 
 // ---------------------------------------------------------------- the structure list
 
@@ -498,16 +501,11 @@ const emptyRow = (s: Structure, status: BatchStatus, reason: string | null, seco
 
 /**
  * The desk's 911 pads (nd911-pads.ts lookupPads: ground at the point minus the channel bed at its station) on the
- * batch's terrain source, so a local DEM serves the pads too. A failed terrain read gives "estimated" pads, as on the desk.
+ * batch's terrain source, so a local DEM serves the pads too. A failed terrain read gives "estimated" pads whose notes
+ * say the request failed and why, as on the desk (never "no terrain at the point").
  */
 async function padsFor(dam: DamRecord, result: ReturnType<typeof analyze>, dem: (r: DemRequest) => Promise<DemGrid>) {
-  const f = padFrame(dam, result);
-  const points = padPoints(dam);
-  if (!f || points.length === 0) return dam.receptors;
-  const io = outlineInputs(dam, result);
-  let g: DemGrid | null = null;
-  if (io.ok) g = await dem(demRequest(io.inputs, 10, 1500)).catch(() => null);
-  return applyPads(dam.receptors, computePads(points, g, f));
+  return (await lookupPads(dam, result, undefined, dem)) ?? dam.receptors;
 }
 
 /** Run one structure through the desk's own path. Returns the row and the finished record (for "open in desk"). */
@@ -542,7 +540,9 @@ export async function runStructure(s: Structure, deps: BatchDeps = {}): Promise<
     const ol = outlineState(dam, result, true);
     const olGeo = ol.state === "ready" ? ol.outline : null;
     const area = olGeo ?? strip;
+    // structuresInside stays null unless the 911 lookup succeeded: a failed lookup is "unknown", never 0.
     let inside: number | null = null;
+    let lookupFailed: string | null = null;
     const notes: string[] = [];
     if (!built.ok) notes.push(`No terrain layer: ${built.reason}`);
     if (strip && area) {
@@ -560,13 +560,18 @@ export async function runStructure(s: Structure, deps: BatchDeps = {}): Promise<
         result = analyze(dam);
       } catch (e) {
         // No 911 points means nothing at stake is known: the triage then reads the dam as uncertain at best, never trivial.
-        notes.push(`911 address points not looked up (${(e as Error).message}); structures unknown.`);
+        lookupFailed = (e as Error).message;
+        notes.push(`911 lookup failed (${lookupFailed}); structures unknown.`);
       }
     }
     let tri = triageDam(dam, result, outlineState(dam, result, true));
     if (inside == null && tri.recommendation === "trivial") {
-      // No 911 list: nothing at stake is KNOWN, which is not the same as nothing at stake.
-      const why = "The 911 address points could not be looked up, so the structures in reach are unknown.";
+      // No 911 list (the lookup failed, or there was no area to look up in): nothing at stake is KNOWN, which is not
+      // the same as nothing at stake. The screen and triage ran on zero receptors, so "clearly trivial" is never
+      // allowed; the call is at least uncertain and says why.
+      const why = lookupFailed
+        ? `911 lookup failed (${lookupFailed}), so the structures in reach are unknown and the screen ran on none.`
+        : "The 911 address points could not be looked up, so the structures in reach are unknown.";
       tri = { ...tri, recommendation: "uncertain", label: RECOMMENDATION_LABEL.uncertain, reasons: [why, ...tri.reasons], summary: `${RECOMMENDATION_LABEL.uncertain} (${tri.confidence} confidence). ${why}` };
     }
     const routedAc = built.ok ? (built.cache.routed?.floodedAc ?? built.cache.stats.outlineAc) : null;
@@ -584,7 +589,8 @@ export async function runStructure(s: Structure, deps: BatchDeps = {}): Promise<
         screen: result.screen.level,
         screenLabel: result.screen.label,
         structuresInside: inside,
-        structuresFlooded: flooded,
+        // Flooded is unknown too when the points were never listed (the screen's receptors are the 911 seeds).
+        structuresFlooded: inside == null && lookupFailed ? null : flooded,
         triage: { recommendation: tri.recommendation, label: tri.label, confidence: tri.confidence, edgeShiftM: tri.edgeShiftM, summary: tri.summary },
       },
       dam,
@@ -643,12 +649,6 @@ export function sortRows(rows: BatchRow[]): BatchRow[] {
 
 export const BATCH_DISCLAIMER = "Screening estimate — not an ND Dam Safety or ACER classification. Batch records are auto-derived from the inventories and 3DEP.";
 
-const csvCell = (v: unknown) => {
-  if (v == null) return "";
-  const s = String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
-
 export const BATCH_CSV_HEAD = [
   "id",
   "kind",
@@ -674,7 +674,41 @@ export const BATCH_CSV_HEAD = [
   "note",
 ];
 
-export function batchCsv(rows: BatchRow[]): string {
+/** What the CSV's comment rows say about the run: the bundles' pull times and when the file was written. */
+export type BatchCsvMeta = {
+  /** Pull times of the inventories the rows came from (nd-dams.ts NdData sources, the structures bundle source). */
+  nidFetchedUtc?: string | null;
+  dwrPulledUtc?: string | null;
+  structuresPulledUtc?: string | null;
+  /** "Now" for the inventory age (injected so the tests and a resumed run are reproducible). */
+  now?: Date;
+};
+
+/** The CSV meta from what loadStructures() returns (the NID, DWR and structures bundle sources). */
+export function batchCsvMeta(d: { nd: Pick<NdData, "nidSource" | "dwrSource">; source: Record<string, unknown> }, now?: Date): BatchCsvMeta {
+  const pulled = d.source.pulledUtc;
+  return {
+    nidFetchedUtc: d.nd.nidSource?.fetchedUtc ?? null,
+    dwrPulledUtc: d.nd.dwrSource?.pulledUtc ?? null,
+    structuresPulledUtc: typeof pulled === "string" ? pulled : null,
+    ...(now ? { now } : {}),
+  };
+}
+
+/**
+ * The worklist CSV. Comment rows first ("# ..."): the disclaimer, the Crest build and engine versions that made the
+ * rows, and the age of each inventory bundle given in `meta`; then the header and one line per row.
+ */
+export function batchCsv(rows: BatchRow[], meta: BatchCsvMeta = {}): string {
+  const now = meta.now ?? new Date();
+  const ages = deskBundles({ nidFetchedUtc: meta.nidFetchedUtc, dwrPulledUtc: meta.dwrPulledUtc, structuresPulledUtc: meta.structuresPulledUtc })
+    .map((b) => bundleAgeLine(b, now))
+    .filter((l): l is string => l != null);
+  const head = [
+    `# ${BATCH_DISCLAIMER}`,
+    `# Crest ${CREST_VERSION}; ${ENGINE_VERSION}. Written ${now.toISOString().slice(0, 10)}.`,
+    ...ages.map((l) => `# ${l}`),
+  ];
   const lines = sortRows(rows).map((r) =>
     [
       r.id,
@@ -703,5 +737,5 @@ export function batchCsv(rows: BatchRow[]): string {
       .map(csvCell)
       .join(","),
   );
-  return [`# ${BATCH_DISCLAIMER}`, BATCH_CSV_HEAD.join(","), ...lines].join("\n") + "\n";
+  return [...head, BATCH_CSV_HEAD.join(","), ...lines].join("\n") + "\n";
 }

@@ -129,7 +129,7 @@ describe("results engine import", () => {
       type: "strip",
       key: "t:lisflood",
       ctx,
-      common: { disclaimer: "x", dam_id: "ND00199", dam_name: "t", crest_navd88_ft: 1, peak_cfs: 1, engine_version: "t" },
+      common: { disclaimer: "x", dam_id: "ND00199", dam_name: "t", crest_navd88_ft: 1, peak_cfs: 1, engine_version: "t", crest_version: "t" },
       direction: "",
     })) as { features: unknown[] } | null;
     assert.ok(strip && strip.features.length > 0);

@@ -10,6 +10,7 @@ import { nitro } from "nitro/vite";
 import { grokPwaPlugin } from "./scripts/grok-pwa-plugin.mjs";
 // @ts-expect-error JS plugin alongside the TS vite config
 import { appEnvPlugin } from "./scripts/app-env-plugin.mjs";
+import { crestVersion } from "./scripts/crest-version.mjs";
 import { isMigrationFile } from "./scripts/migration-plan.mjs";
 
 /** The files `src/lib/db.ts` globs — same directory, same non-recursive scope. */
@@ -146,6 +147,9 @@ function authPopupPlugin(): Plugin {
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
 export default defineConfig(({ command, isPreview }) => ({
+  // The build version every export is stamped with (src/lib/crest/version.ts): package.json version + git SHA of
+  // HEAD, the same for every build of the same tree. The desktop config defines the same constant.
+  define: { __CREST_VERSION__: JSON.stringify(crestVersion()) },
   server: {
     host: "0.0.0.0",
     port: 8080,

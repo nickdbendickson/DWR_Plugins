@@ -1,4 +1,5 @@
 import { downstreamDirection, toLocal, type XY } from "./aoi.ts";
+import { csvCell } from "./csv.ts";
 import { damLocation } from "./engine.ts";
 import { DEPTH_BANDS, exportFloodStripGeoJson, exportFloodStripKml, type FloodStrip } from "./floodstrip.ts";
 import { bboxContains, padBbox, plssKmlLines, plssProperties, stripBbox, type Bbox, type PlssTable } from "./plss.ts";
@@ -438,11 +439,6 @@ export function nd911AutoPatch(dam: DamRecord, state: Nd911State, result: Pick<A
 }
 
 // ---- exports ------------------------------------------------------------------------------------------------
-
-const csvCell = (v: string | number) => {
-  const s = String(v);
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
 
 /** <root>_911_address_points.csv: the points inside, downstream order, with the source on every row. */
 export function exportNd911Csv(t: Nd911Table, cache: Nd911Cache): string {

@@ -243,29 +243,43 @@ export async function buildInundation(
 
   const built = await buildOutline(dam, result, g, { yieldFn: opts.yieldFn });
   if (!built.ok) return { ok: false, reason: built.reason };
-  const extent = await probeExtent(dam, result, g, opts);
-  const cache = extent ? { ...built.cache, stats: { ...built.cache.stats, extent } } : built.cache;
+  const probe = await probeExtent(dam, result, g, opts);
+  // A failed probe is written on the layer as extentError, so the triage can say WHY there is no confidence instead
+  // of "unchecked" as if nothing had been tried.
+  const cache = probe.ok
+    ? { ...built.cache, stats: { ...built.cache.stats, extent: probe.extent } }
+    : { ...built.cache, stats: { ...built.cache.stats, extentError: probe.error } };
   return { ok: true, layer: "outline", choice, cache, fellBackToOutline: false };
 }
+
+export type ProbeResult = { ok: true; extent: ExtentSensitivity } | { ok: false; error: string };
 
 /**
  * The triage's terrain confidence for a dam whose layer is the terrain outline (triage.ts). The extent check was fit
  * on the routed volume spread, which follows the water and holds the released volume; the outline's bathtub footprint
  * does not, so its own fringe says little about the terrain. So a spread is built on the same terrain as a probe, its
- * edge sensitivity measured, and the spread itself thrown away: the outline stays the layer. null when the probe
- * cannot be built (the triage then reads the dam as uncertain).
+ * edge sensitivity measured, and the spread itself thrown away: the outline stays the layer. When the probe cannot be
+ * built (its own reason) or throws (a bug, or memory), the error is returned and logged, never swallowed: the triage
+ * then reads the dam as uncertain and says the probe failed and why.
  */
-export async function probeExtent(dam: DamRecord, result: Analysis, g: DemGrid, opts: RoutedFloodOptions = {}): Promise<ExtentSensitivity | null> {
+export async function probeExtent(dam: DamRecord, result: Analysis, g: DemGrid, opts: RoutedFloodOptions = {}): Promise<ProbeResult> {
   try {
     const probe = await buildRoutedFlood(dam, result, g, { ...opts, method: ROUTED_METHOD });
-    if (!probe.ok) return null;
-    return { ...extentSensitivity(g, probe.depthFt), basis: "routed-probe",
-      stoppedInBasin: probe.stats.stoppedInBasin,
-      volumeRatio: probe.stats.volumeRatio,
-      reachedEdge: probe.stats.reachedEdge && probe.stats.travellingAcFt > 0,
+    if (!probe.ok) return { ok: false, error: probe.reason };
+    return {
+      ok: true,
+      extent: {
+        ...extentSensitivity(g, probe.depthFt),
+        basis: "routed-probe",
+        stoppedInBasin: probe.stats.stoppedInBasin,
+        volumeRatio: probe.stats.volumeRatio,
+        reachedEdge: probe.stats.reachedEdge && probe.stats.travellingAcFt > 0,
+      },
     };
-  } catch {
-    return null;
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    console.warn(`Crest: the extent probe for ${dam.nid || dam.id} threw (${error}); the layer is saved without a confidence.`);
+    return { ok: false, error };
   }
 }
 

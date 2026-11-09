@@ -17,10 +17,13 @@ import type {
 const TIE_BAND = 100;
 
 /**
- * Desk engine version, carried in exports that describe engine output (the flood strip). Bump it when the schematic
- * valley, breach routing or datum rules change what the desk computes.
+ * Desk engine METHOD version, carried in every export beside the build version (version.ts CREST_VERSION) and mixed
+ * into the terrain layer's fingerprint (outline.ts outlineInputs), so a saved layer is rebuilt when the numerics
+ * change. It MUST change whenever analyze() changes its numbers: the breach equations, the hydrograph routing, the
+ * schematic valley (stations, half-width, depth), the receptor depth/velocity/arrival, the datum rules or the ACER
+ * ranking. A wording-only change does not move it. Date of the last numeric change, yyyy.mm.dd.
  */
-export const ENGINE_VERSION = "crest-desk-engine 2026.10.30";
+export const ENGINE_VERSION = "crest-desk-engine 2026.11.07";
 
 export const STEPS = [
   { id: "setup", label: "Guided setup" },
@@ -707,7 +710,15 @@ export function analyze(dam: DamRecord): Analysis {
     );
   }
   if (estPad.length > 0) {
-    const t = `Pad estimated for ${estPad.map((r) => r.name).join(", ")}: no terrain at the point, kept on the channel bed (pad 0). Enter the real pad height.`;
+    // Two reasons leave a pad estimated and they call for different things: a failed terrain request (3DEP 502, a
+    // timeout) means look the pads up again; no terrain at the point means enter the pad by hand. The seed's padNote
+    // says which (nd911-pads.ts); without one, the older "no terrain" wording stands.
+    const failed = estPad.filter((r) => /terrain request failed/.test(r.padNote ?? ""));
+    const noData = estPad.filter((r) => !failed.includes(r));
+    const why = failed.length
+      ? `the terrain request failed for ${failed.map((r) => r.name).join(", ")} (${failed[0].padNote!.replace(/^pad estimated: terrain request failed \((.*?)\);.*$/, "$1")}), so look the pads up again${noData.length ? `; no terrain at the point for ${noData.map((r) => r.name).join(", ")}, so enter that pad height` : ""}`
+      : "no terrain at the point, so enter the real pad height";
+    const t = `Pad estimated for ${estPad.map((r) => r.name).join(", ")}, kept on the channel bed (pad 0): ${why}.`;
     screen.judgment.push(t);
     if (screen.level !== "Review") {
       screen.reasons.unshift(`Held at Review: ${t}`);

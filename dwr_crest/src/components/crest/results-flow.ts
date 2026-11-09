@@ -6,6 +6,7 @@
 import { useEffect, useMemo } from "react";
 import type { analyze } from "@/lib/crest/engine";
 import { floodStrip, type FloodStrip, type StripCommon } from "@/lib/crest/floodstrip";
+import { CREST_VERSION } from "@/lib/crest/version";
 import { adoptRunAsRecord } from "@/lib/crest/layer-of-record";
 import type { InFile } from "@/lib/crest/raster-engine";
 import { wantFile } from "@/lib/crest/raster-meta";
@@ -106,6 +107,7 @@ function stripCommon(dam: DamRecord, result: Analysis, label: string): StripComm
     crest_navd88_ft: desk?.properties.crest_navd88_ft ?? Math.round(result.datum.crestNavdFt * 1000) / 1000,
     peak_cfs: Math.round(result.breach.peakCfs),
     engine_version: label,
+    crest_version: CREST_VERSION,
   };
 }
 

@@ -25,6 +25,7 @@ import {
   outlineState,
   parseBsq,
   pitsExcludedNote,
+  TRACE_VERSION,
   traceStartNote,
 } from "./outline.ts";
 import { bboxContains, type PlssCache, plssState, plssTable, stripBbox } from "./plss.ts";
@@ -62,6 +63,20 @@ const signedArea = (r: number[][]) => {
   for (let i = 0; i + 1 < r.length; i++) s += r[i][0] * r[i + 1][1] - r[i + 1][0] * r[i][1];
   return s / 2;
 };
+
+describe("accuracy envelope guard", () => {
+  it("docs/accuracy-envelope.md is scored on the code's trace version (else re-score the envelope)", () => {
+    const doc = readFileSync(new URL("../../../docs/accuracy-envelope.md", import.meta.url), "utf8");
+    const m = doc.match(/Scored on trace-version (\d+)/);
+    assert.ok(m, 'docs/accuracy-envelope.md needs a "Scored on trace-version N" line');
+    assert.equal(
+      Number(m![1]),
+      TRACE_VERSION,
+      `re-score the envelope: outline.ts TRACE_VERSION is ${TRACE_VERSION} but docs/accuracy-envelope.md was scored on trace-version ${m![1]}. ` +
+        "Run score-routed.mjs on the four baselines, update the tables and the line (see the page's \"Keeping this current\").",
+    );
+  });
+});
 
 describe("3DEP request", () => {
   it("ND00199 at 10 m: 1090 × 996 cells (4.3 MB of float32) over the corridor box plus the 500 m trace margin", () => {

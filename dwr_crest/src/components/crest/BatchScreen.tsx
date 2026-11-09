@@ -13,6 +13,7 @@ import {
   DEFAULT_STATUSES,
   KIND_LABEL,
   batchCsv,
+  batchCsvMeta,
   estimateSeconds,
   facets,
   loadStructures,
@@ -64,7 +65,7 @@ const num = (v: number | null | undefined, d = 0) => (v == null ? "—" : v.toLo
 
 export function BatchScreen({ onOpen }: { onOpen: () => void }) {
   const addDam = useDesk((s) => s.addDam);
-  const [data, setData] = useState<{ nd: NdData; structures: Structure[] } | null>(null);
+  const [data, setData] = useState<{ nd: NdData; structures: Structure[]; source: Record<string, unknown> } | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [by, setBy] = useState<Selection["by"]>("county");
   const [kinds, setKinds] = useState<StructureKind[]>(KINDS);
@@ -149,7 +150,7 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
   };
 
   const exportCsv = async () => {
-    const r = await saveText(`crest-batch-${new Date().toISOString().slice(0, 10)}.csv`, batchCsv(rows), "text/csv");
+    const r = await saveText(`crest-batch-${new Date().toISOString().slice(0, 10)}.csv`, batchCsv(rows, data ? batchCsvMeta(data) : {}), "text/csv");
     setSaved(r.status === "saved" ? (r.path ? `Saved to ${r.path}` : "Downloaded.") : r.status === "cancelled" ? null : `Not saved: ${r.message}`);
   };
 

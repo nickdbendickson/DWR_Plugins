@@ -1,4 +1,4 @@
-import { demRequest, fetchDem, corridorHalfM, outlineInputs, type DemGrid } from "./outline.ts";
+import { demRequest, fetchDem, corridorHalfM, outlineInputs, type DemGrid, type DemRequest } from "./outline.ts";
 import type { Analysis, DamRecord, ReceptorSeed } from "./types.ts";
 
 /**
@@ -11,6 +11,11 @@ import type { Analysis, DamRecord, ReceptorSeed } from "./types.ts";
  * slope: the dam's streambed, which keeps the pad small). If the ground at the point cannot be read, pad stays 0 and
  * the seed is marked "estimated" so the screen asks for review. The engine already screens depth = channel depth - pad,
  * clamped at 0, so a point above the water is dry.
+ *
+ * Two different things leave a pad estimated, and the note and the screen say which: "no terrain at the point" (the
+ * DEM came back but has no data there: outside the grid, a NoData hole) and "terrain request failed (<reason>)" (3DEP
+ * answered 502, timed out, or the local DEM read failed). The first is a fact about the ground; the second is a
+ * transient and the lookup should simply be run again, so it must not read as the first (Grok audit 2026-11-07).
  *
  * BED RECONCILIATION (Nick's 2026-11-03 methodology call): the pad's bed (the lowest DEM cell across the section) and
  * the bed the desk's channel depth is measured from (the schematic streambed lowered along the slope) must agree for
@@ -32,6 +37,14 @@ const CLAMP_EPS_FT = 0.05;
 
 export type PadPoint = { id: string; lon: number; lat: number; distanceKm: number };
 export type PadResult = { id: string; padFt: number; padSource: "dem" | "dem-slope" | "estimated"; groundFt: number | null; bedFt: number | null; note: string };
+
+/** Why the terrain for the pads could not be read: the thrown error's message (fetchDem's text names the service). */
+export type PadTerrainFailure = { error: string };
+
+/** The note for a seed whose pad stays estimated because the terrain request itself failed. */
+export const padRequestFailedNote = (error: string) => `pad estimated: terrain request failed (${error.replace(/\.$/, "")}); kept on the channel bed (pad 0). Look the pads up again.`;
+/** The note for a seed whose pad stays estimated because the terrain has no data at its point. */
+export const PAD_NO_TERRAIN_NOTE = "pad estimated: no terrain at the point; kept on the channel bed (pad 0)";
 
 /** Bilinear DEM (metres NAVD88) at lon/lat; null outside or on nodata. */
 export function demAt(g: DemGrid, lon: number, lat: number): number | null {
@@ -79,8 +92,12 @@ export function sectionBedM(g: DemGrid, f: Frame, xM: number): number | null {
   return best;
 }
 
-/** Pads for the points from a DEM grid (null grid = the lookup failed). */
-export function computePads(points: PadPoint[], g: DemGrid | null, f: Frame): PadResult[] {
+/**
+ * Pads for the points from a DEM grid. A null grid means the terrain request FAILED (not that the point has no
+ * terrain): pass the failure so the notes say "terrain request failed (<reason>)"; without it they say the request
+ * failed with no reason given.
+ */
+export function computePads(points: PadPoint[], g: DemGrid | null, f: Frame, failure?: PadTerrainFailure): PadResult[] {
   const rows = points.map((p) => {
     const ground = g ? demAt(g, p.lon, p.lat) : null;
     const bed = g ? sectionBedM(g, f, p.distanceKm * 1000) : null;
@@ -96,7 +113,14 @@ export function computePads(points: PadPoint[], g: DemGrid | null, f: Frame): Pa
   }
   return rows.map(({ p, groundFt, bedFt }): PadResult => {
     if (groundFt == null)
-      return { id: p.id, padFt: 0, padSource: "estimated", groundFt: null, bedFt, note: "pad estimated: no terrain at the point; kept on the channel bed (pad 0)" };
+      return {
+        id: p.id,
+        padFt: 0,
+        padSource: "estimated",
+        groundFt: null,
+        bedFt,
+        note: g ? PAD_NO_TERRAIN_NOTE : padRequestFailedNote(failure?.error ?? "no reason given"),
+      };
     if (bedFt != null) {
       // Reconcile the two beds (ASSUMPTION note above). The engine's channel depth is measured from the schematic
       // streambed (dam bed lowered along the fitted valley slope), so a DEM section bed that sits BELOW the schematic
@@ -133,6 +157,17 @@ export function padPoints(dam: DamRecord): PadPoint[] {
     });
 }
 
+/** The 911 seeds whose pad is estimated only because the terrain request failed: a retry can still read them. */
+export function padsToRetry(receptors: ReceptorSeed[]): ReceptorSeed[] {
+  return receptors.filter((r) => r.source === "nd911" && r.padSource === "estimated" && /terrain request failed/.test(r.padNote ?? ""));
+}
+
+/** Those seeds with the pad unset again, so padPoints lists them and the next lookupPads reads them. */
+export function resetFailedPads(receptors: ReceptorSeed[]): ReceptorSeed[] {
+  const retry = new Set(padsToRetry(receptors).map((r) => r.id));
+  return receptors.map((r) => (retry.has(r.id) ? { ...r, padSource: undefined, padNote: undefined } : r));
+}
+
 /** Receptors with the pads applied. */
 export function applyPads(receptors: ReceptorSeed[], pads: PadResult[]): ReceptorSeed[] {
   const by = new Map(pads.map((p) => [p.id, p]));
@@ -142,19 +177,31 @@ export function applyPads(receptors: ReceptorSeed[], pads: PadResult[]): Recepto
   });
 }
 
-/** Fetch 3DEP terrain for the outline corridor and compute the pads (a failed lookup gives "estimated" pads). */
-export async function lookupPads(dam: DamRecord, result: Analysis, fetchFn?: Parameters<typeof fetchDem>[1]): Promise<ReceptorSeed[] | null> {
+/**
+ * Fetch 3DEP terrain for the outline corridor and compute the pads. A failed terrain request still gives "estimated"
+ * pads (the screen holds at Review), but their notes carry the request's error ("terrain request failed (The 3DEP
+ * terrain service answered 502.)"), and the failure is logged, so a 502 or a timeout is never read as "no terrain at
+ * the point". `fetch` is the terrain fetch to use (the batch passes its own, a local DEM); default fetchDem.
+ */
+export async function lookupPads(
+  dam: DamRecord,
+  result: Analysis,
+  fetchFn?: Parameters<typeof fetchDem>[1],
+  fetch: (req: DemRequest) => Promise<DemGrid> = (req) => fetchDem(req, fetchFn),
+): Promise<ReceptorSeed[] | null> {
   const f = padFrame(dam, result);
   const points = padPoints(dam);
   if (!f || points.length === 0) return null;
   const io = outlineInputs(dam, result);
   let g: DemGrid | null = null;
+  let failure: PadTerrainFailure | undefined;
   if (io.ok) {
     try {
-      g = await fetchDem(demRequest(io.inputs, 10, 1500), fetchFn);
-    } catch {
-      g = null;
+      g = await fetch(demRequest(io.inputs, 10, 1500));
+    } catch (e) {
+      failure = { error: e instanceof Error ? e.message : String(e) };
+      console.warn(`Crest: the terrain for the 911 pads of ${dam.nid || dam.id} could not be read (${failure.error}); pads estimated.`);
     }
-  }
-  return applyPads(dam.receptors, computePads(points, g, f));
+  } else failure = { error: io.reason };
+  return applyPads(dam.receptors, computePads(points, g, f, failure));
 }

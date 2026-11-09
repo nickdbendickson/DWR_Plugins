@@ -2,9 +2,12 @@
  * and of the ND class rules in damsuite/classification.py (classify_nd).
  *
  * Zone rules follow tm11_curves.zone(): linear interpolation of the low and high boundaries at the
- * velocity (a velocity past the last chart column reads the last column), and a depth on a boundary
- * takes the higher zone. A depth past the chart's depth axis is high danger. There is no
- * velocity-past-axis rule: tm11_curves.zone() does not have one.
+ * velocity, a depth on a boundary takes the higher zone, and a point BEYOND EITHER chart axis is high
+ * danger ("the figure does not say a faster or deeper flood is safer"): a depth past the depth axis, or
+ * a velocity past the velocity axis (house 25 ft/s, mobile home 16 ft/s). Until 2026-11-07 this port
+ * read a velocity past the axis at the last chart column instead (and its header claimed the suite had
+ * no such rule, which was false), so a shallow fast flood screened judgment/Medium where the suite's
+ * Helper and Runner screen High (Grok audit 2026-11-07, 3.3).
  */
 
 import type { RoadClass } from "./types.ts";
@@ -54,12 +57,15 @@ export function thresholds(kind: ChartKind, velocityFps: number): [number, numbe
   return [interp(v, c.v, c.low), interp(v, c.v, c.high)];
 }
 
-/** "low", "judgment" or "high". A depth on a boundary takes the higher zone (ND 5.3). */
+/**
+ * "low", "judgment" or "high". A depth on a boundary takes the higher zone (ND 5.3); a point past either axis of the
+ * chart is high (tm11_curves.zone: `if v > vmax or d > dmax: return HIGH`).
+ */
 export function zone(kind: ChartKind, depthFt: number, velocityFps: number): Zone {
-  const [lo, hi] = thresholds(kind, velocityFps);
+  const [vmax, dmax] = AXES[kind];
   const d = depthFt;
-  const dmax = AXES[kind][1];
-  if (d > dmax) return "high"; // past the chart's depth axis
+  if (velocityFps > vmax || d > dmax) return "high"; // past the chart's velocity or depth axis
+  const [lo, hi] = thresholds(kind, velocityFps);
   if (d >= hi) return "high";
   if (d >= lo && d > 0) return "judgment";
   return "low";

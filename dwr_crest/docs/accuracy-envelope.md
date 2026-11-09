@@ -1,9 +1,13 @@
 # Crest accuracy envelope (trust map)
 
-**Scored 2026-11-04 on `main` 34524e0** (after #63 demand-driven reach + exhausted-stretch cap, and #67 spread ground
-beside each stretch + terrain-triggered MCT/MC router). Layer scored: the routed volume spread
-(`score-routed.mjs --spread`, reach on), the layer the desk builds for routed dams. Re-score when the spread, the reach,
-the router or a baseline record changes (see "Keeping this current").
+**Scored 2026-11-05 on `main` 8bc4d20** (PR #75: the routed spread's pools settle into one sheet, `spread.ts
+settlePools`; CHANGELOG 2026-11-05 "The routed flood draws as one sheet instead of a fan of wedges"), on top of #63
+(demand-driven reach + exhausted-stretch cap) and #67 (spread ground beside each stretch + terrain-triggered MCT/MC
+router). Layer scored: the routed volume spread (`score-routed.mjs --spread`, reach on), the layer the desk builds for
+routed dams. Re-score when the spread, the reach, the router or a baseline record changes (see "Keeping this current").
+
+Scored on trace-version 8 (`outline.ts TRACE_VERSION`; `outline.test.ts` fails with "re-score the envelope" when the
+code's trace version moves past this line without the tables being re-scored).
 
 Crest is a **screening** stand-in. The ND Breach Runner (LISFLOOD-FP 2-D) is the layer of record. This page says where
 a Crest footprint is good enough to screen with and where it is not, so nobody has to guess.
@@ -12,10 +16,10 @@ a Crest footprint is good enough to screen with and where it is not, so nobody h
 
 | Terrain class | How Crest's own run tells you | Baseline dam | CSI 0.1 ft | CSI 1 ft | Confidence | Use |
 |---|---|---|---|---|---|---|
-| **Confined valley or closed basin** | flood ends in a basin or is contained in 0 reach rounds; no incomplete alert | DWR-3034 Wachter Ranch 11 | 0.77 | **0.71** | **High** | Screen with Crest. Precision 96–97 %: what it floods, floods. |
-| **Incised valley, moderate release** | contained, no incomplete alert, not a basin | DWR-2865 Van Osting | 0.33 | **0.30** | **Medium** | Screen, but read the footprint as a *minimum*: recall 46–52 %, depth 1–2 ft shallow. A receptor just outside it is not cleared. |
-| **Tiny pool, thin sheet** (release ≲ 10 ac-ft) | release in ac-ft is small; contained in 0 rounds | DWR-4031 Ward County | 0.36 | **0.17** | **Extent medium, depth low** | Use for "is anything in reach". Do not use the depth: only 8 ac of the Runner's flood is ≥ 1 ft deep, so one-foot depths are noise both ways. |
-| **Flat multi-channel plain, large release** (2-D sheet flow) | **incomplete-downstream alert** (reach hit its round cap with water stranded at the edge) | DWR-2801 Swan Buffalo 12 (Absaraka) | 0.26 | **0.19** | **Low** | **Run the Runner.** Crest still floods 14–18 km down where the Runner is dry and the layer is incomplete, and the 2-D references disagree with each other too. Against all five references: 0.19–0.25 at 1 ft. |
+| **Confined valley or closed basin** | flood ends in a basin or is contained in 0 reach rounds; no incomplete alert | DWR-3034 Wachter Ranch 11 | 0.84 | **0.77** | **High** | Screen with Crest. What it floods, floods (precision 96–97 % before the settle; re-measure the per-cell table below on the next full score). |
+| **Incised valley, moderate release** | contained, no incomplete alert, not a basin | DWR-2865 Van Osting | 0.34 | **0.35** | **Medium** | Screen, but read the footprint as a *minimum*: recall about half, depth 1–2 ft shallow. A receptor just outside it is not cleared. |
+| **Tiny pool, thin sheet** (release ≲ 10 ac-ft) | release in ac-ft is small; contained in 0 rounds | DWR-4031 Ward County | 0.43 | **0.14** | **Extent medium, depth low** | Use for "is anything in reach". Do not use the depth: only 8 ac of the Runner's flood is ≥ 1 ft deep, so one-foot depths are noise both ways (the settle moved this one from 0.17 to 0.14 on those 8 ac). |
+| **Flat multi-channel plain, large release** (2-D sheet flow) | **incomplete-downstream alert** (reach hit its round cap with water stranded at the edge) | DWR-2801 Swan Buffalo 12 (Absaraka) | 0.33 | **0.23** | **Low** | **Run the Runner.** Crest still floods far downstream where the Runner is dry and the layer is incomplete, and the 2-D references disagree with each other too. Against all five references (before the settle): 0.19–0.25 at 1 ft. |
 
 CSI columns are against LISFLOOD-FP, the Runner. 2801 also has ANUGA and DSS-WISE references (below).
 
@@ -54,13 +58,27 @@ half of the model-to-model agreement (0.43–0.58). That gap is why the class is
 
 ## Scores behind the map
 
-All scores: `scripts/score-routed.mjs --spread --wet-ft <t>` on 34524e0, downstream of the breach only, cell by cell on
-the reference grid. Recall = share of the reference flood Crest caught; precision = share of Crest's flood that is
-right; area ratio = Crest acres / reference acres; bias = Crest − reference depth where both are wet.
+All scores: `scripts/score-routed.mjs --spread --wet-ft <t>`, downstream of the breach only, cell by cell on the
+reference grid. Recall = share of the reference flood Crest caught; precision = share of Crest's flood that is right;
+area ratio = Crest acres / reference acres; bias = Crest − reference depth where both are wet.
 
 ### Against LISFLOOD-FP (ND Breach Runner, `baseline-2026-11-01`, 20 m)
 
-| Dam | Wet ≥ | Ref ac | Crest ac | CSI | Recall | Precision | Area ratio | Depth bias |
+CSI on `main` 8bc4d20 (2026-11-05, after the settle, trace-version 8; the figures the CHANGELOG entry of that day
+reports), with the 34524e0 score (2026-11-04, before the settle) for the change:
+
+| Dam | CSI 0.1 ft | CSI 1 ft | Before the settle (34524e0), 0.1 / 1 ft |
+|---|---|---|---|
+| DWR-3034 | 0.840 | **0.765** | 0.765 / 0.714 |
+| DWR-2865 | 0.344 | **0.350** | 0.327 / 0.303 |
+| DWR-4031 | 0.429 | **0.136** | 0.362 / 0.165 (1 ft: 8 ac of reference, so a few cells swing it) |
+| DWR-2801 | 0.331 | **0.233** | 0.255 / 0.192 |
+
+No dam changed class. The per-cell detail below (recall, precision, area ratio, depth bias) is the 34524e0 score; the
+settle moves water, never adds it, so the area ratios and biases are expected to move little, but they have NOT been
+re-measured. Re-measure them with the next full score and replace this table.
+
+| Dam | Wet ≥ | Ref ac | Crest ac | CSI (34524e0) | Recall | Precision | Area ratio | Depth bias |
 |---|---|---|---|---|---|---|---|---|
 | DWR-3034 | 0.1 ft | 45 | 37 | 0.765 | 79 % | 97 % | 0.82 | −0.40 ft |
 | | 1 ft | 42 | 32 | **0.714** | 74 % | 96 % | 0.77 | −0.25 ft |
@@ -71,10 +89,12 @@ right; area ratio = Crest acres / reference acres; bias = Crest − reference de
 | DWR-2801 | 0.1 ft | 6,144 | 4,802 | 0.255 | 36 % | 46 % | 0.78 | +0.42 ft |
 | | 1 ft | 2,335 | 2,764 | **0.192** | 35 % | 30 % | 1.18 | +0.34 ft |
 
-Change from 6bb9869 (before #67), CSI 0.1 / 1 ft: 3034 0.701 / 0.633 → 0.765 / 0.714; 2865 0.295 / 0.311 → 0.327 /
-0.303; 4031 0.354 / 0.101 → 0.362 / 0.165; 2801 0.227 / 0.175 → 0.255 / 0.192. No dam changed class.
+Change from 6bb9869 (before #67) to 34524e0, CSI 0.1 / 1 ft: 3034 0.701 / 0.633 → 0.765 / 0.714; 2865 0.295 / 0.311 →
+0.327 / 0.303; 4031 0.354 / 0.101 → 0.362 / 0.165; 2801 0.227 / 0.175 → 0.255 / 0.192. No dam changed class.
 
 ### DWR-2801 against every reference on file
+
+Scored on 34524e0 (before the settle); only R1 has been re-scored since (0.331 / 0.233 on 8bc4d20, table above).
 
 | Reference | CSI 0.1 ft | CSI 1 ft | Notes |
 |---|---|---|---|
@@ -97,7 +117,7 @@ Two LISFLOOD-FP runs of 2801 exist and disagree: the 20 m baseline wets 6,948 ac
 
 - **Confined / basin (3034):** the valley walls or a road fill decide the footprint; a level-pool spread gets that
   right. Stable across thresholds.
-- **Incised, moderate (2865):** stable across thresholds (0.33/0.30) but recall is the weak side: Crest under-floods and
+- **Incised, moderate (2865):** stable across thresholds (0.34/0.35) but recall is the weak side: Crest under-floods and
   runs 1–2 ft shallow. Its record is a stand-in (crest read from 3DEP, synthesized dam line), so its depth bias is soft.
 - **Tiny pool (4031):** 6.9 ac-ft makes a 2.5 ft sheet. The extent at 0.1 ft is fair; at 1 ft there are only 8 ac to
   score, so a few cells swing the number. The TM 11 zone still agrees at 336 of 380 receptor points.
@@ -124,7 +144,9 @@ Two LISFLOOD-FP runs of 2801 exist and disagree: the 20 m baseline wets 6,948 ac
 ## Keeping this current
 
 Re-score all four dams at both thresholds whenever the spread, the reach, or a baseline record changes, and update the
-tables here in the same PR:
+tables here in the same PR. The guard: `outline.ts TRACE_VERSION` is bumped for every such change, and
+`outline.test.ts` reads the "Scored on trace-version N" line at the top of this page and fails ("re-score the envelope")
+when N is not the code's TRACE_VERSION, so the bump and the re-score land together:
 
 ```
 node --experimental-strip-types scripts/score-routed.mjs --dam <record.json> --runner <dam folder or reference tif> \
@@ -144,7 +166,7 @@ its reference, threshold, record, and scorer commit.
 
 | Item | Value |
 |---|---|
-| Scorer | `nickdbendickson/crest` `main` 34524e0, `score-routed.mjs --spread` (reach on) |
+| Scorer | `nickdbendickson/crest` `main` 8bc4d20 (CSI, 2026-11-05) and 34524e0 (per-cell detail, 2026-11-04), `score-routed.mjs --spread` (reach on) |
 | R1 LISFLOOD-FP 2801 | `baseline-2026-11-01/DWR-2801/Depth (Max).tif`, sha256 `e89a67b6…c64c8fe` |
 | R1b / R1c LISFLOOD-FP 2801 | `runner-convergence-2801-2026-11-03/rasters/raw10_54h_depth_ft.tif`, `raw5_24h_depth_ft.tif` (EPSG:26914) |
 | R3 DSS-WISE 2801 | `119062_Hmax_ft_upto_final.tif`, sha256 `25fd0d88…58ddc9a2` |

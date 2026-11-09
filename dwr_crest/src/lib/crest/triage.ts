@@ -7,9 +7,10 @@
  * rather than left to whoever reads the footprint.
  *
  * WHY EDGE SHIFT IS THE CONFIDENCE SIGNAL
- * The four-dam baseline (crest-inundation/csi-summary-2026-11-03, reach-2026-11-03) sorts on terrain: Crest matches the
- * Runner on a confined valley (DWR-3034, CSI 0.70) and not on the flat or thin-sheet floods (DWR-2801 Absaraka 0.23,
- * DWR-2865 0.30, DWR-4031 0.35), where even two refined 2-D models of 2801 agree only at CSI 0.35–0.46. What makes a
+ * The four-dam baseline sorts on terrain (docs/accuracy-envelope.md, scored 2026-11-05 on 8bc4d20, CSI at 0.1 ft /
+ * 1 ft against LISFLOOD-FP): Crest matches the Runner on a confined valley (DWR-3034, 0.84 / 0.77) and not on the
+ * flat or thin-sheet floods (DWR-2801 Absaraka 0.33 / 0.23, DWR-2865 0.34 / 0.35, DWR-4031 0.43 / 0.14), where even
+ * two refined 2-D models of 2801 agree only at CSI 0.34–0.49 at 0.1 ft. What makes a
  * footprint fragile is how much ground sits within a small rise of the flood surface: in a confined valley a foot of
  * extra (or missing) water moves the edge a cell or two up a steep bank; on a flat plain it moves the edge hundreds of
  * metres. Crest's depths are good to about a foot against the 2-D models (depth bias where both are wet: +1.0 ft on
@@ -23,13 +24,17 @@
  * a long edge for its area). On the baseline, built exactly as the desk builds them (scripts/triage-dams.mjs; 2801 on
  * its routed layer, the three small dams on the routed-spread probe beside their terrain outline):
  *
- *   DWR-3034  26 m   confined valley / basin   CSI 0.70 (1 ft 0.63)   -> high
- *   DWR-2801 127 m   flat multi-channel plain  CSI 0.23 (1 ft 0.18)   -> medium, then low: incomplete downstream
- *   DWR-4031 149 m   tiny pool, thin sheet     CSI 0.35 (1 ft 0.10)   -> medium (extent only; its depths are noise)
- *   DWR-2865 158 m   incised, moderate release CSI 0.30 (1 ft 0.31)   -> medium
+ *   DWR-3034  26 m   confined valley / basin   CSI 0.84 (1 ft 0.77)   -> high
+ *   DWR-2801 127 m   flat multi-channel plain  CSI 0.33 (1 ft 0.23)   -> medium, then low: incomplete downstream
+ *   DWR-4031 149 m   tiny pool, thin sheet     CSI 0.43 (1 ft 0.14)   -> medium (extent only; its depths are noise)
+ *   DWR-2865 158 m   incised, moderate release CSI 0.34 (1 ft 0.35)   -> medium
  *
- * The confidence words match the published accuracy envelope (crest-inundation/accuracy-envelope-2026-11-04, the
- * trust map): High = confined valley or closed basin, Medium = open or thin-sheet terrain where the footprint is a
+ * (Edge shifts measured 2026-11-04; CSI from the 2026-11-05 re-score after spread.ts settlePools, CHANGELOG that day.
+ * The CSI numbers here are for orientation; docs/accuracy-envelope.md is the record and is re-scored with every
+ * spread, reach or router change, TRACE_VERSION guarding it.)
+ *
+ * The confidence words match the published accuracy envelope (docs/accuracy-envelope.md, the trust map): High =
+ * confined valley or closed basin, Medium = open or thin-sheet terrain where the footprint is a
  * minimum, Low = the routed layer could not finish the flood downstream (its "one hard rule"), the flat sheet-flow
  * plain. Edge shift alone never says Low: four dams cannot place a second threshold, and the dams it would catch
  * already carry the incomplete-downstream alert or the large-flood gate.
@@ -42,6 +47,7 @@
  *   still rests on a model run or an engineer.
  * - High confidence is not a Runner result. It means Crest is a fair screen there, not that it is right.
  */
+import { csvCell } from "./csv.ts";
 import type { ExtentSensitivity } from "./extent.ts";
 import { GATE_VOLUME_ACFT, VOLUME_RATIO_BAND } from "./inundation.ts";
 import type { OutlineState } from "./outline.ts";
@@ -143,7 +149,9 @@ export function triageDam(dam: DamRecord, result: Analysis, outline: OutlineStat
   const hard: string[] = [];
   const soft: string[] = [];
   if (!ready) soft.push("No terrain layer is built yet, so there is no footprint to judge: build the inundation layer to triage this dam.");
-  else if (!ext) soft.push("The saved terrain layer has no extent check (built before it, or the routed probe could not be built): build it again for a confidence.");
+  else if (!ext && ready.stats.extentError)
+    soft.push(`The saved terrain layer has no extent check: the routed-spread probe failed (${ready.stats.extentError.replace(/\.$/, "")}). Check the dam point and the crest, then build it again for a confidence.`);
+  else if (!ext) soft.push("The saved terrain layer has no extent check (built before it): build it again for a confidence.");
   else soft.push(extentLine(ext));
 
   if (ready?.routed?.reach?.incomplete)
@@ -183,11 +191,6 @@ export function triageDam(dam: DamRecord, result: Analysis, outline: OutlineStat
     ]);
   return done("trivial", confidence, shift, ["Nothing is flooded in Crest's screen, on a complete footprint that holds up to a foot of depth error.", ...soft]);
 }
-
-const csvCell = (v: string | number) => {
-  const s = String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
 
 /** Order for sorting a list: what needs a Runner first, then what is uncertain, then what is trivial. */
 export const RECOMMENDATION_ORDER: Record<Recommendation, number> = { "needs-runner": 0, uncertain: 1, trivial: 2 };

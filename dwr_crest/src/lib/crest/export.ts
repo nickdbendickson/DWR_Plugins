@@ -1,5 +1,6 @@
-import { damLocation } from "./engine.ts";
+import { damLocation, ENGINE_VERSION } from "./engine.ts";
 import type { Analysis, DamRecord, SeriesPoint } from "./types.ts";
+import { CREST_VERSION } from "./version.ts";
 
 const CFS_PER_CMS = 35.3146667;
 
@@ -17,6 +18,10 @@ export function exportHydrographCsv(series: SeriesPoint[]): string {
 export function exportDamJson(dam: DamRecord, analysis: Analysis): string {
   const loc = damLocation(dam);
   const obj = {
+    // Which Crest wrote this (build "<version>+<git sha>") and which engine method made the numbers, so a dam.json on
+    // disk can be matched to a build and a method years on. The Runner and the Screening plugin ignore unknown keys.
+    crest_version: CREST_VERSION,
+    engine_version: ENGINE_VERSION,
     dam_id: dam.nid || dam.id,
     name: dam.name,
     height_ft: dam.heightFt,
