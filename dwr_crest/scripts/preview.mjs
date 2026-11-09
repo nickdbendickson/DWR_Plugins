@@ -283,7 +283,7 @@ async function waitForReady(failure) {
   while (Date.now() < deadline && failure() === null) {
     try {
       // Any HTTP response means the server is bound; a 404 is still ready.
-      await fetch(PREVIEW_URL, { signal: AbortSignal.timeout(2000) });
+      await fetch(PREVIEW_URL, { signal: AbortSignal.timeout(2000) }); // nosemgrep: typescript.react.security.react-insecure-request.react-insecure-request -- readiness probe of the local preview server
       return true;
     } catch {
       await sleep(250);

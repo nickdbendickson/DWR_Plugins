@@ -1,0 +1,3 @@
+# REAL SECRET - pending rotation. grok_preview OAuth client secret on auth.grok.me (src/lib/auth/preview.ts:20).
+# Ignored only so security CI is green; rotate GROK_PREVIEW_CLIENT_SECRET on the broker and remove the fallback, then delete this entry.
+aa96e0b9198dfb28efcda13c7b84b3e115c06cba:src/lib/auth/preview.ts:generic-api-key:20

@@ -1,0 +1,21 @@
+# better-auth 1.7 removes the OAuth APIs crest uses and moves the callback path; migration is deferred.
+# Triage (2026-11-06 audit): affected features are not used by crest. Revisit by ignoreUntil.
+[[IgnoredVulns]]
+id = "GHSA-965c-763c-88jm"
+ignoreUntil = 2027-02-01
+reason = "better-auth 1.7 migration pending; affected feature not used"
+
+[[IgnoredVulns]]
+id = "GHSA-q84f-53jg-9ppm"
+ignoreUntil = 2027-02-01
+reason = "better-auth 1.7 migration pending; affected feature not used"
+
+[[IgnoredVulns]]
+id = "GHSA-r4xp-prcw-77qf"
+ignoreUntil = 2027-02-01
+reason = "better-auth 1.7 migration pending; affected feature not used"
+
+[[IgnoredVulns]]
+id = "GHSA-44jh-23m7-hpcf"
+ignoreUntil = 2027-02-01
+reason = "better-auth / adapters 1.7 migration pending; low severity"
