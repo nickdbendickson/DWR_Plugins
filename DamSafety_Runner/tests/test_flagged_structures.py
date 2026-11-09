@@ -74,15 +74,16 @@ def flagged_structures_list_loads_and_finds_dwr3161_by_every_id():
 
 @test
 def flagged_structures_module_is_identical_in_the_three_plugins():
+    """Core 1.0.0: the three plugins' structure_flags ARE one module (DamSafety_Core)."""
+    import importlib
     here = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     root = os.path.dirname(here)
-    copies = [os.path.join(root, p, "damsuite", "structure_flags.py")
-              for p in ("DamSafety_Runner", "DamSafety_Hazard", "DamSafety_Screening")]
-    have = [c for c in copies if os.path.isfile(c)]
-    if len(have) < 3:
+    if not all(os.path.isdir(os.path.join(root, p))
+               for p in ("DamSafety_Hazard", "DamSafety_Screening", "DamSafety_Core")):
         return                                             # an installed single plugin
-    data = [open(c, "rb").read() for c in have]
-    assert data[0] == data[1] == data[2]
+    mods = {id(importlib.import_module(p + ".damsuite.structure_flags"))
+            for p in ("nd_breach_runner", "DamSafety_Hazard", "DamSafety_Screening")}
+    assert len(mods) == 1, mods
 
 
 def _algs():

@@ -10,7 +10,7 @@ The sideways-scroll rule needs a 1080p screen, so it runs only under the second 
 
 Exit 1 on any failure (one FAIL line each). With a folder argument it also saves a screenshot
 of every window. Opens no Processing dialog and runs nothing. The QGIS-free half of the rules
-(shared/ui drift, colour literals in window code) is in tools/ci_checks.py.
+(the window-file shims onto DamSafety_Core/ui, colour literals in window code) is in tools/ci_checks.py.
 """
 import os
 import re
@@ -21,8 +21,8 @@ import traceback
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools"))
-PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening", "DamSafety_Data",
-           "DamSafety_Setup", "DamSafety_HazardLite", "DamSafety_PMP")
+PLUGINS = ("DamSafety_Core", "DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening",
+           "DamSafety_Data", "DamSafety_Setup", "DamSafety_HazardLite", "DamSafety_PMP")
 
 # the plugins import as packages under their installed names, from a scratch folder
 ROOT = tempfile.mkdtemp(prefix="gui_lint_")
@@ -294,9 +294,9 @@ def opened(label, make):
 def main():
     rule_icons()
     rule_no_message_box_checks()
-    import sync_ui
-    for p in sync_ui.check(REPO):
-        fail("shared/ui", p)
+    import ci_checks                       # Core 1.0.0: the window files are shims onto the Core
+    for p in ci_checks.ui_shim_problems(REPO):
+        fail("DamSafety_Core/ui", p)
 
     from DamSafety_Hazard.dialog import NDDamHazardDialog
     haz = opened("Hazard main", lambda: NDDamHazardDialog(parent=None))

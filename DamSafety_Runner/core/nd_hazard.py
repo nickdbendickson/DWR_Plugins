@@ -88,8 +88,11 @@ def _load_tm11_curves():
     except (ImportError, ValueError):
         pass
     import importlib.util
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "damsuite", "tm11_curves.py")
+    plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(plugin, "damsuite", "tm11_curves.py")
+    if not os.path.exists(path):          # Core 1.0.0: the plugin's damsuite is a shim onto the
+        path = os.path.join(os.path.dirname(plugin),   # DamSafety_Core plugin, next to this one
+                            "DamSafety_Core", "damsuite", "tm11_curves.py")
     spec = importlib.util.spec_from_file_location("_nd_hazard_tm11_curves", path)
     tm = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tm)
