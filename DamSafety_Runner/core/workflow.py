@@ -1302,17 +1302,25 @@ def _amend_report(res, entry, texts):
     rep["warnings"] = list(rep.get("warnings") or []) + texts
     if res.summary is not None:
         rep["summary"] = res.summary
+    # L06: the JSON is the machine-readable record and does not depend on render_report, so write
+    # it first and on its own - a render_report failure must never block it (the pre-L06 code
+    # wrote the JSON, then rendered the markdown). Write atomically; surface a named warning
+    # instead of swallowing so a lost on-disk record does not pass as a clean run.
     try:
-        # L06: render the markdown BEFORE opening either file (so a render_report KeyError never
-        # truncates run_report.md to zero length), then write both atomically; surface a named
-        # warning instead of swallowing, so a lost on-disk record does not pass as a clean run.
-        md = render_report(rep) if getattr(res, "report_md", "") else None
         _write_json(res.report_json, rep)
-        if md is not None:
-            _write_text(res.report_md, md)
     except Exception as e:                                         # noqa: BLE001 - extras only
         res.warnings = list(res.warnings or []) + [
-            "run report not fully updated ({}): {}".format(res.report_json, e)]
+            "run report json not updated ({}): {}".format(res.report_json, e)]
+    # The markdown is rendered BEFORE its file is opened (so a render_report KeyError - it indexes
+    # rep["summary"]/["hydrograph"] directly - cannot truncate run_report.md to zero length) and
+    # written atomically; a render failure leaves the previous markdown intact and is reported.
+    if getattr(res, "report_md", ""):
+        try:
+            md = render_report(rep)
+            _write_text(res.report_md, md)
+        except Exception as e:                                     # noqa: BLE001 - extras only
+            res.warnings = list(res.warnings or []) + [
+                "run report markdown not updated ({}): {}".format(res.report_md, e)]
 
 
 def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,

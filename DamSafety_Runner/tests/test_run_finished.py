@@ -81,18 +81,19 @@ def write_text_is_atomic_and_leaves_no_tmp():
 
 
 @test
-def amend_report_renders_before_writing_and_surfaces_the_failure():
-    """3.16.16 (L06): _amend_report now renders the markdown BEFORE opening either file (so a
-    render_report failure cannot truncate run_report.md to zero length) and appends a named
-    warning to res.warnings instead of swallowing the error silently."""
+def amend_report_json_is_written_even_when_the_markdown_render_fails():
+    """3.16.17 (L06): _amend_report writes the machine-readable run_report.json FIRST and on its
+    own, so a render_report failure (it indexes rep["summary"]/["hydrograph"] directly) can never
+    block the grid_refine record - the pre-L06 behaviour, which test_crest_burn relies on. The
+    markdown is rendered before its file is opened (no zero-length run_report.md) and a render
+    failure leaves the prior markdown intact and is reported, not swallowed."""
     folder = tempfile.mkdtemp()
     model = os.path.join(folder, workflow.MODEL_FOLDER)
     os.makedirs(model)
     rep_json = os.path.join(model, "run_report.json")
     rep_md = os.path.join(model, "run_report.md")
-    json_payload = {"summary": {"peak_breach_cfs": 1000.0}, "warnings": []}
     with open(rep_json, "w", encoding="utf-8") as fh:
-        json.dump(json_payload, fh)
+        json.dump({"summary": {"peak_breach_cfs": 1000.0}, "warnings": []}, fh)
     workflow._write_text(rep_md, "PRIOR MARKDOWN")
 
     res = workflow.RunResult()
@@ -109,19 +110,21 @@ def amend_report_renders_before_writing_and_surfaces_the_failure():
     finally:
         workflow.render_report = real_render
 
-    # the prior markdown is not truncated, and the failure is visible (not swallowed)
+    # the JSON IS written (grid_refine persisted) despite the render failure; the prior markdown
+    # is not truncated; the markdown failure is surfaced, not swallowed; no stray .tmp.
+    assert json.load(open(rep_json, encoding="utf-8")).get("grid_refine") == entry, "json written"
     assert open(rep_md, encoding="utf-8").read() == "PRIOR MARKDOWN", "report_md not truncated"
-    assert any("not fully updated" in w for w in res.warnings), res.warnings
+    assert any("markdown not updated" in w for w in res.warnings), res.warnings
     assert not os.path.exists(rep_md + ".tmp") and not os.path.exists(rep_json + ".tmp")
 
-    # a normal amend writes both files atomically and leaves no .tmp
+    # a normal amend writes both files atomically, no warning, no .tmp
     workflow.render_report = lambda rep: "# ok\n"
     try:
         res.warnings = []
-        workflow._amend_report(res, entry, ["note"])
+        workflow._amend_report(res, dict(entry, coarse_cell_m=20.0), ["note"])
     finally:
         workflow.render_report = real_render
     assert open(rep_md, encoding="utf-8").read() == "# ok\n"
-    assert json.load(open(rep_json, encoding="utf-8")).get("grid_refine") == entry
+    assert json.load(open(rep_json, encoding="utf-8"))["grid_refine"]["coarse_cell_m"] == 20.0
     assert not os.path.exists(rep_md + ".tmp") and not os.path.exists(rep_json + ".tmp")
-    assert not any("not fully updated" in w for w in res.warnings), res.warnings
+    assert not any("not updated" in w for w in res.warnings), res.warnings
