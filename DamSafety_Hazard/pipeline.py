@@ -68,7 +68,7 @@ from .styles import style_by_field, set_map_tip, style_outline
 from .hazard import METHOD_MAXMAX, METHOD_LABEL
 from .scenarios import (
     ROLE_BREACH, order_for_run, restore, mark_structures_incremental, raster_reuse_problems,
-    line_baseline_depth, mark_lines_incremental, incremental_view, CONSEQ_KEYS,
+    line_baseline_depth, mark_lines_incremental, incremental_view, wet_habitable, CONSEQ_KEYS,
     SNAP_KEYS,
 )
 from .consequences import economic_estimate, life_loss_estimate, totals
@@ -682,7 +682,10 @@ def reusable_products(folder, key, sig, expected=None):
     if not paths:
         return None
     for name, p in paths.items():
-        if not p or _stamp(p) is None or _stamp(p) != files.get(p):
+        if not p:
+            return None
+        st = _stamp(p)                            # L02: hash once, not twice (no-cache digest)
+        if st is None or st != files.get(p):
             return None
         if expected is not None and not _same_file(p, expected.get(name)):
             return None
@@ -1814,8 +1817,8 @@ def _classify_and_write(run, cfg, state):
     inputs = state["inputs"]
     # what an earlier stage B left in the results is redone here
     for r in run.results.values():
-        for k in ("layers", "snap", "access", "incremental", "nd", "tm11", "conseq", "views",
-                  "nd_total", "tm11_total", "fac_charged", "fac_base_eval", "margin",
+        for k in ("layers", "snap", "access", "incremental", "nd", "tm11", "conseq", "wet_hab",
+                  "views", "nd_total", "tm11_total", "fac_charged", "fac_base_eval", "margin",
                   "future_geoms", "mapbook", "zone_rasters", "eap_bands", "eap_contours"):
             r.pop(k, None)
     # v2.9: the engineer's decisions on roads, rail, bridges / culverts and lifelines
@@ -1978,6 +1981,9 @@ def _classify_and_write(run, cfg, state):
         except Exception as e:                  # noqa - never fails the result
             run.log("300 ft no-building rule check: {}".format(e))
         res.update({"nd": nd, "tm11": tm11, "conseq": totals(s_view),
+                    # M06: record the flooded-habitable count now, while s_view still holds this
+                    # scenario's outcomes (comparison_rows runs after restore() rewrites them).
+                    "wet_hab": wet_habitable(s_view),
                     "views": (s_view, r_view, l_view)})
         res.pop("nd_total", None)
         res.pop("tm11_total", None)
@@ -2112,6 +2118,7 @@ def _classify_and_write(run, cfg, state):
             res["layers"][key] = show
     # v2.6: ACER zone rasters of the governing scenario (map product; the
     # Main Consolidation of 1.x - 2.5 wrote them to outputs/Consolidation)
+    from .hazard import ZONE_FILES              # M07: also used by the skip-path retire below
     zone_paths = {}
     if cfg.get("zone_rasters", True) and layers[gov.name].get("vel") is not None:
         run.tick(88, "ACER zone rasters\u2026")
@@ -2120,7 +2127,6 @@ def _classify_and_write(run, cfg, state):
             zsig = _product_sig([get_layer_path(layers[gov.name]["depth"]),
                                  get_layer_path(layers[gov.name]["vel"])],
                                 extra=repr(sorted(HAZARD_COEFFICIENTS.items())))
-            from .hazard import ZONE_FILES
             znormal = {k: os.path.join(d_class, f) for k, f in ZONE_FILES.items()}
             zone_paths = reusable_products(d_class, "zone_rasters", zsig, znormal)
             if zone_paths:
@@ -2146,6 +2152,15 @@ def _classify_and_write(run, cfg, state):
             run.log(">>> WARNING: ACER zone rasters not written: {}".format(e))
             zone_paths = {}
     governing["zone_rasters"] = zone_paths
+    # M07: a zone raster this run did NOT write (step unticked, no Vmax raster, generate raised,
+    # or a kind not produced this time - e.g. the vehicle curve) must not survive from an earlier
+    # run and be packaged as this classification's product (submittal globs Hazard_*.tif). The
+    # written kinds were retired in place above with keep=d_class; clear every other kind.
+    for _zk, _zf in ZONE_FILES.items():
+        if not zone_paths.get(_zk):
+            _retire_everywhere(out, os.path.splitext(_zf)[0], ("tif", "tif.aux.xml"))
+    if not zone_paths:
+        forget_products(d_class, "zone_rasters")
     if cfg["add_to_project"]:
         run.later(lambda: [_remove_layers_under(os.path.join(out, "ACER_" + sc.slug))
                            for sc in breaches])      # zone layers of the 2.0 - 2.5 methods
@@ -2330,10 +2345,18 @@ def _classify_and_write(run, cfg, state):
                          "again without 'quick' to refresh them")
         for n in notes:
             run.log(">>> WARNING: " + n)
+        # M08: _write_run_settings (the curve-table SHA-256 provenance + settings profile),
+        # _model_chain_step and _write_dam_record append to run.sources AFTER summary_lines
+        # already rendered the DATA SOURCES block, so those lines never reached the written
+        # summary. Mark the position and replay just the new ones into Hazard_Classification_
+        # Summary.txt (add_summary_source swallows every error, so it cannot fail the run).
+        n0 = len(run.sources)
         _write_run_settings(run, cfg, d_qa, written, state)
         if not cfg.get("ensemble_member"):
             _model_chain_step(run, cfg, written)               # v2.10 (item 13)
             _write_dam_record(run, cfg, res)                   # v2.10 (item 2)
+        for _src in run.sources[n0:]:
+            add_summary_source(paths.get("txt"), _src)
         if cfg["add_to_project"]:
             prune_empty_groups(plugin_group(dam_name))
         written.append(RUN_LOG)               # written when the run returns

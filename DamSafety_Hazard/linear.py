@@ -727,7 +727,8 @@ def trains_per_day(reader, attrs):
     return total + (sw or 0)
 
 
-def nd_rail_class(passenger, trains):
+def nd_rail_class(passenger, trains, confirmed=False):
+    """confirmed: `trains` was set by the engineer (a 0 is then a real 0)."""
     if passenger:
         return ND_HIGH, "active passenger line - probable loss of life", False
     if trains is not None and trains >= ND_RAIL_TRAINS_HIGH:
@@ -735,7 +736,9 @@ def nd_rail_class(passenger, trains):
             trains, ND_RAIL_TRAINS_HIGH), False
     # A stored 0 is usually a blank FRA field, not a counted timetable.
     # Any inundated line is still Medium (5.2.1.3); it is not a confirmed zero.
-    if trains is None or trains <= 0:
+    # L01: an engineer-confirmed count (confirmed=True) IS a real 0 - clear the
+    # advisory flag instead of overwriting the signed-off value with "unknown".
+    if trains is None or (trains <= 0 and not confirmed):
         return ND_MEDIUM, "railroad impacted; trains/day unknown - verify with railroad", True
     return ND_MEDIUM, "railroad impacted ({:.0f} trains/day)".format(trains), False
 

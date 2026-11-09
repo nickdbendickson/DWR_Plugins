@@ -1250,13 +1250,22 @@ def classify_values(d, v, low_curve, high_curve, v_max=None):
     thr = evaluate_polynomial(high_curve, vv)
     cls[d >= thr] = CLASS_HIGH
     if beyond is not None:
-        cls[beyond] = CLASS_HIGH
+        # M05: a cell above the chart's velocity range is high danger only if it holds water.
+        # Without the (d > 0) guard a dry cell (depth 0, from a validity-only mask on mismatched
+        # depth/velocity grids) was painted HIGH on the Hazard_*.tif zone maps - a red "HIGH
+        # DANGER ZONE" fringe on ground with no flood. Matches the judgment line's dry-cell guard.
+        cls[beyond & (d > 0)] = CLASS_HIGH
     return cls
 
 
 def classify_scalar(h, v, low_key, high_key):
     v_max = CURVE_V_MAX.get(low_key.split("_")[0])
     v = float(v)
+    # M05: a dry cell is LOW whatever the velocity - test depth before the above-range velocity
+    # rule, so this oracle (selftest.py / log_threshold_verification check the zone rasters
+    # against it) agrees with classify_values' dry-cell guard instead of returning HIGH at depth 0.
+    if h <= 0:
+        return CLASS_LOW
     if v_max is not None and v > v_max:
         return CLASS_HIGH
     v = max(v, 0.0)

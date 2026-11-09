@@ -2464,9 +2464,15 @@ def peak_pair(d, v, vel_ok):
     return dpk, np.array([float(pick.max()) if pick.size else 0.0])
 
 
-def _locations(xs, ys, d, v, a, dvv, vel_ok, zone_cls):
+def _locations(xs, ys, d, v, a, dvv, vel_ok, zone_cls, zone=None):
     """Where the governing values of a structure were read (analysis CRS):
-    {"depth": (x, y, value), "vel", "arr", "dv", "zone": (x, y, zone)}."""
+    {"depth": (x, y, value), "vel", "arr", "dv", "zone": (x, y, zone)}.
+    L03: `zone` is the record's own classified zone (min(zpk, per-cell min)); the QA point's
+    value is taken from it, not re-derived from the per-cell array (which was LOW for a
+    no-velocity run, and could differ from the cross-cell peak pair when a velocity raster was
+    present), while the position stays the deepest cell of the worst per-cell zone. apply_type
+    keeps this value in step with the published ACER_Zone through the ND 5.3(f) near-threshold
+    raise too, so the QA point matches the published zone in every mode."""
     loc = {}
     i = int(np.argmax(d))
     loc["depth"] = (float(xs[i]), float(ys[i]), float(d[i]))
@@ -2483,7 +2489,10 @@ def _locations(xs, ys, d, v, a, dvv, vel_ok, zone_cls):
         worst = zone_cls.min()
         cand = np.nonzero(zone_cls == worst)[0]
         n = int(cand[np.argmax(d[cand])])              # deepest cell of the worst zone
-        loc["zone"] = (float(xs[n]), float(ys[n]), float(worst))
+        # L03: value from the record's classified zone (agrees with the published ACER_Zone);
+        # position still the deepest cell of the worst per-cell zone.
+        loc["zone"] = (float(xs[n]), float(ys[n]),
+                       float(zone if zone is not None else worst))
     return loc
 
 
@@ -2723,6 +2732,12 @@ def apply_type(rec, one_d=False, near_ft=DEFAULT_NEAR_THRESHOLD_FT, borderline_h
                 "ND 5.3(f))".format(zone_label(rec["zone"]), rec["margin_high"]
                                     if rec["near"] == "High" else rec["margin_judg"])
             rec["zone"] = CLASS_HIGH if rec["near"] == "High" else CLASS_JUDGMENT
+            # L03: keep the 'Controlling ACER zone' QA point in step with the published zone
+            # through the 5.3(f) raise too (same position). Copy loc first - it is t["loc"], the
+            # shared per-type dict apply_type re-reads on every call, so it must not be mutated.
+            if rec.get("loc") and rec["loc"].get("zone"):
+                _x, _y, _ = rec["loc"]["zone"]
+                rec["loc"] = dict(rec["loc"], zone=(_x, _y, float(rec["zone"])))
     rec["outcome"] = structure_outcome(rec, one_d)
 
 
@@ -2731,7 +2746,11 @@ _RESET = {"max_depth": None, "max_vel": None, "arrival": None, "zone_found": Non
           "dv_max": None, "margin_high": None, "margin_judg": None, "near": "",
           "zone_note": "", "loc": None, "near_raised": False, "region": None,
           "reach_ft": None, "region_kind": "", "n_cells": 0, "sampling": "",
-          "cells_xy": None, "_types": None, "arrival_below": False, "snap_flip": None,
+          # M12: vel_unknown must reset per structure (it is set only inside the wet-cell loop,
+          # so a structure dry in this scenario kept an earlier scenario's True) and ride the
+          # snapshot (EVAL_KEYS) so the last breach's flags do not leak into every report
+          "cells_xy": None, "_types": None, "vel_unknown": False,
+          "arrival_below": False, "snap_flip": None,
           "eval_failed": None}                     # audit R2: the error text, else None
 
 
@@ -3098,7 +3117,7 @@ def evaluate_structures(structs, samplers, analysis_crs, transform_ctx, one_d=Fa
                 t = {"zone": min(zpk, int(zcls.min())), "has_vel": vel_ok, "margin_high": None,
                      "margin_judg": None, "loc": None}
                 try:
-                    t["loc"] = _locations(xs, ys, d, v, a, dvv, vel_ok, zcls)
+                    t["loc"] = _locations(xs, ys, d, v, a, dvv, vel_ok, zcls, zone=t["zone"])
                 except Exception as e:                       # never fails the structure
                     problems.log("structure {} sample locations: {}".format(rec["id"], e))
                 if vel_ok:

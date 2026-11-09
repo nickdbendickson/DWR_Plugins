@@ -412,6 +412,9 @@ def detect(env=None, platform=None, isfile=os.path.isfile, isdir=os.path.isdir,
         out["wine"] = which("wine") or ""
         if not out["wine"]:
             miss.append("wine (64-bit) on PATH")
+        elif not which("wineserver"):
+            # M19: wineserver ships with Wine; name it up front, not on the first compile.
+            miss.append("wineserver on PATH (part of the Wine install)")
         prefix = (e.get(ENV_PREFIX) or "").strip()
         if not prefix or not isdir(prefix):
             miss.append("{} = a Wine prefix with Windows HEC-RAS 6.6".format(ENV_PREFIX))
@@ -1548,10 +1551,19 @@ def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0, un
                 done = bool(after_exit())
                 break
     finally:
-        subprocess.run(["wineserver", "-k"], env=e, timeout=60, capture_output=True)
+        # M19: kill the children first and guard everything - a missing wineserver (deterministic
+        # FileNotFoundError) or a reap-race in p.kill() must not replace the pending compile error.
         for p in (proc, hook):
-            if p is not None and p.poll() is None:
-                p.kill()
+            try:
+                if p is not None and p.poll() is None:
+                    p.kill()
+            except Exception:
+                pass
+        try:
+            subprocess.run(["wineserver", "-k"], env=e, timeout=60, capture_output=True)
+        except Exception as _x:
+            log("WARNING: wineserver -k did not finish cleanly: {}: {}".format(
+                type(_x).__name__, _x))
     de = data_errors(project_dir, name, plan)
     if final and de:
         raise HecRasEngineError("Ras.exe -c reported HEC-RAS data errors ({}): {}".format(

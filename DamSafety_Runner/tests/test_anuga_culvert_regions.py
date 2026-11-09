@@ -76,3 +76,47 @@ def culvert_regions_never_cross_for_random_culvert_layouts():
             for q in polys[i + 1:]:
                 assert not _segments_cross(p, q)
                 assert not AM.convex_polygons_near(p, q, 0.0)
+
+
+def _restart_scan_reference(culverts, st):
+    """The pre-3.16.16 merge: redo the whole pairwise near-scan from scratch after every merge."""
+    import math
+    area = AM.culvert_area_m2(st)
+    gap = math.sqrt(4.0 * area / math.sqrt(3.0))
+    polys = []
+    for c in culverts:
+        r = max(3.0 * c["width"], 25.0)
+        for e in c["end_points"]:
+            polys.append(AM.octagon(e, r))
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(polys)):
+            for j in range(i + 1, len(polys)):
+                if AM.convex_polygons_near(polys[i], polys[j], gap):
+                    polys[i] = AM.convex_hull(np.vstack([polys[i], polys[j]]))
+                    del polys[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    return [{"poly": p.tolist(), "area": area} for p in polys]
+
+
+@test
+def culvert_regions_memoised_merge_is_bit_identical_to_the_restart_scan():
+    """3.16.16 (M14): the pairwise near-test is now memoised by a per-octagon serial (a merged
+    region gets a fresh serial; cache entries touching a retired serial are dropped) instead of
+    rescanning all pairs after every merge. The returned regions must stay bit-identical to the
+    old full-restart scan at every culvert count and density (dense clusters force many merges)."""
+    st = AM.AnugaSettings(sys.executable)
+    rng = np.random.default_rng(2026)
+    for n in (0, 1, 5, 12, 25, 40):
+        for spread in (120.0, 600.0, 2000.0):
+            cul = []
+            for _ in range(n):
+                x, y = rng.uniform(0, spread, 2)
+                L, a, w = rng.uniform(8, 90), rng.uniform(0, np.pi), rng.uniform(0.6, 8.0)
+                cul.append({"end_points": [[x, y], [x + L * np.cos(a), y + L * np.sin(a)]],
+                            "width": w})
+            assert AM.culvert_regions(cul, st) == _restart_scan_reference(cul, st), (n, spread)

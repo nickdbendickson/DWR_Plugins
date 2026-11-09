@@ -1882,7 +1882,7 @@ class NDDamScreeningDialog(QDialog):
         if cont is not None:
             plugin, label, why = ("", "Continue", "")
             if have and not busy:
-                plugin, label, why = wf.continue_target(work, self._selected_dam())
+                plugin, label, why = wf.continue_target(work, self.settings(), self._selected_dam())
             cont.setText(label or "Continue")
             cont.setToolTip(why)
             cont.setEnabled(bool(plugin) and not busy)
@@ -2398,6 +2398,17 @@ class NDDamScreeningDialog(QDialog):
         try:
             c = self.iface.mapCanvas().center() if self.iface is not None else None
             if c is not None:
+                # L11 companion: the prompt (and the tooltip) ask for 'x, y' in EPSG:5070 metres,
+                # so offer the canvas centre transformed into EPSG:5070 - it is in the canvas CRS
+                # (degrees or State Plane feet) otherwise. review.move_xy rejects a wrong-CRS point,
+                # but the offered default should already be in the asked-for CRS.
+                from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
+                                       QgsProject)
+                crs = self.iface.mapCanvas().mapSettings().destinationCrs()
+                tr = QgsCoordinateTransform(crs, QgsCoordinateReferenceSystem("EPSG:5070"),
+                                            QgsProject.instance())
+                if not tr.isShortCircuited():
+                    c = tr.transform(c)
                 start = "{:.1f}, {:.1f}".format(c.x(), c.y())
         except Exception:                                        # noqa
             start = ""
@@ -2428,17 +2439,25 @@ class NDDamScreeningDialog(QDialog):
         if lyr is None:
             return False
         try:
-            from qgis.core import QgsCoordinateTransform, QgsProject, QgsRectangle
+            from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
+                                   QgsProject, QgsRectangle)
             names = lyr.fields().names()
+            canvas_crs = self.iface.mapCanvas().mapSettings().destinationCrs()
+            alb = QgsCoordinateReferenceSystem("EPSG:5070")
             for f in lyr.getFeatures():
                 if "dam_id" in names and str(f["dam_id"]) == r["dam_id"]:
                     g = f.geometry()
-                    tr = QgsCoordinateTransform(lyr.crs(), self.iface.mapCanvas().mapSettings().destinationCrs(),
-                                                QgsProject.instance())
-                    g.transform(tr)
-                    p = g.centroid().asPoint()
+                    # L11: build the +-400 m window in EPSG:5070 (metres), then map it into the
+                    # canvas CRS. The old code added 400 raw canvas units to canvas coordinates:
+                    # 400 degrees on a lon/lat canvas (zoomed to the whole world) and 400 ftUS on
+                    # a State Plane one, never 400 m.
+                    p = QgsCoordinateTransform(lyr.crs(), alb, QgsProject.instance()).transform(
+                        g.centroid().asPoint())
                     half = 400.0
-                    self.iface.mapCanvas().setExtent(QgsRectangle(p.x() - half, p.y() - half, p.x() + half, p.y() + half))
+                    box = QgsRectangle(p.x() - half, p.y() - half, p.x() + half, p.y() + half)
+                    to_canvas = QgsCoordinateTransform(alb, canvas_crs, QgsProject.instance())
+                    self.iface.mapCanvas().setExtent(
+                        box if to_canvas.isShortCircuited() else to_canvas.transformBoundingBox(box))
                     self.iface.mapCanvas().refresh()
                     return True
         except Exception as e:                                   # noqa
@@ -2514,7 +2533,7 @@ class NDDamScreeningDialog(QDialog):
     def _continue(self):
         """Open the plugin dam.json says this dam needs next."""
         plugin, _label, why = wf.continue_target(
-            self.work_edit.text().strip(), self._selected_dam())
+            self.work_edit.text().strip(), self.settings(), self._selected_dam())
         if plugin == "runner":
             self._handoff_runner()
         elif plugin == "hazard":
