@@ -2468,10 +2468,11 @@ def _locations(xs, ys, d, v, a, dvv, vel_ok, zone_cls, zone=None):
     """Where the governing values of a structure were read (analysis CRS):
     {"depth": (x, y, value), "vel", "arr", "dv", "zone": (x, y, zone)}.
     L03: `zone` is the record's own classified zone (min(zpk, per-cell min)); the QA point's
-    value is taken from it so the 'Controlling ACER zone' layer agrees with the published
-    ACER_Zone in every mode, while the position stays the deepest cell of the worst per-cell
-    zone. The per-cell array alone was LOW for a no-velocity run (and could differ from the
-    cross-cell peak pair when a velocity raster was present)."""
+    value is taken from it, not re-derived from the per-cell array (which was LOW for a
+    no-velocity run, and could differ from the cross-cell peak pair when a velocity raster was
+    present), while the position stays the deepest cell of the worst per-cell zone. apply_type
+    keeps this value in step with the published ACER_Zone through the ND 5.3(f) near-threshold
+    raise too, so the QA point matches the published zone in every mode."""
     loc = {}
     i = int(np.argmax(d))
     loc["depth"] = (float(xs[i]), float(ys[i]), float(d[i]))
@@ -2731,6 +2732,12 @@ def apply_type(rec, one_d=False, near_ft=DEFAULT_NEAR_THRESHOLD_FT, borderline_h
                 "ND 5.3(f))".format(zone_label(rec["zone"]), rec["margin_high"]
                                     if rec["near"] == "High" else rec["margin_judg"])
             rec["zone"] = CLASS_HIGH if rec["near"] == "High" else CLASS_JUDGMENT
+            # L03: keep the 'Controlling ACER zone' QA point in step with the published zone
+            # through the 5.3(f) raise too (same position). Copy loc first - it is t["loc"], the
+            # shared per-type dict apply_type re-reads on every call, so it must not be mutated.
+            if rec.get("loc") and rec["loc"].get("zone"):
+                _x, _y, _ = rec["loc"]["zone"]
+                rec["loc"] = dict(rec["loc"], zone=(_x, _y, float(rec["zone"])))
     rec["outcome"] = structure_outcome(rec, one_d)
 
 
