@@ -13,6 +13,10 @@ import type { DamRecord } from "./types.ts";
 
 const DB = "crest-desk";
 const STORE = "outlines";
+/** Shared with batch-store.ts: version 2 adds its `batch-rows` store. Both open at this version and create both
+ *  stores, so whichever opens first upgrades the database for the other (a lower version would fail to open). */
+export const DESK_DB_VERSION = 2;
+export const DESK_DB_STORES = ["outlines", "batch-rows"] as const;
 
 let opening: Promise<IDBDatabase | null> | null = null;
 
@@ -22,9 +26,9 @@ function db(): Promise<IDBDatabase | null> {
     try {
       const idb = (globalThis as { indexedDB?: IDBFactory }).indexedDB;
       if (!idb) return resolve(null);
-      const req = idb.open(DB, 1);
+      const req = idb.open(DB, DESK_DB_VERSION);
       req.onupgradeneeded = () => {
-        if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE);
+        for (const name of DESK_DB_STORES) if (!req.result.objectStoreNames.contains(name)) req.result.createObjectStore(name);
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => resolve(null);

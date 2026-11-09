@@ -23,10 +23,12 @@
  * hands the derived record to the desk for a closer look.
  */
 import { csvCell } from "./csv.ts";
+import { loadBundle } from "./data-bundle.ts";
 import { bundleAgeLine, deskBundles } from "./data-provenance.ts";
 import { analyze, ENGINE_VERSION } from "./engine.ts";
 import { floodStrip } from "./floodstrip.ts";
-import { buildInundationReach } from "./inundation.ts";
+import { buildInundationReach, type InundationResult } from "./inundation.ts";
+import { makeInundationPool, type InundationPool } from "./inundation-client.ts";
 import { fetchNd911, nd911AutoPatch, nd911State } from "./nd911.ts";
 import { lookupPads } from "./nd911-pads.ts";
 import {
@@ -38,6 +40,7 @@ import {
   type NdData,
 } from "./nd-dams.ts";
 import { demRequest, demSourceLabel, fetchDem, lookupArea, outlineInputs, outlineState, traceChannel, type DemGrid, type DemRequest } from "./outline.ts";
+import { withoutOutline } from "./outline-store.ts";
 import { blankDam } from "./samples.ts";
 import { RECOMMENDATION_LABEL, RECOMMENDATION_ORDER, triageDam, type Triage } from "./triage.ts";
 import type { DamRecord, GeoJSONFeature, Provenance, ScreenLevel } from "./types.ts";
@@ -123,16 +126,13 @@ export function makeStructures(nd: Pick<NdData, "dams" | "dwr">, bundle: Structu
 }
 
 let cache: Promise<{ nd: NdData; structures: Structure[]; source: Record<string, unknown> }> | null = null;
-/** Load the bundles once (separate chunks, never part of the first paint). */
+/** Load the bundles once (separate chunks, never part of the first paint; packed inside the one-file Crest.html). */
 export function loadStructures(): Promise<{ nd: NdData; structures: Structure[]; source: Record<string, unknown> }> {
-  const viteDev = typeof import.meta !== "undefined" && typeof import.meta.env !== "undefined" && import.meta.env.DEV === true;
-  cache ??= Promise.all([
-    import("./nd-dams.ts").then((m) => m.loadNdData()),
-    viteDev ? import("./data/nd_structures.json") : import("./data/nd_structures.json", { with: { type: "json" } }),
-  ]).then(([nd, b]) => {
-    const bundle = ((b as { default?: StructuresBundle }).default ?? b) as StructuresBundle;
-    return { nd, structures: makeStructures(nd, bundle), source: bundle.source };
-  });
+  cache ??= Promise.all([import("./nd-dams.ts").then((m) => m.loadNdData()), loadBundle<StructuresBundle>("nd_structures")]).then(([nd, bundle]) => ({
+    nd,
+    structures: makeStructures(nd, bundle),
+    source: bundle.source,
+  }));
   return cache;
 }
 
@@ -472,6 +472,12 @@ export type BatchDeps = {
   demLabel?: Exclude<CrestFrom, "DWR">;
   onStatus?: (text: string) => void;
   yieldFn?: () => Promise<void>;
+  /**
+   * The inundation build (buildInundationReach in-thread by default). The browser batch hands each structure a worker
+   * from its pool (inundation-client.ts), so the trace, routing, spread and polygonisation run off the main thread;
+   * the record derivation, the 911 lookup and the pads stay here, as they are mostly waiting on the network.
+   */
+  build?: (dam: DamRecord, result: ReturnType<typeof analyze>, o: { onStatus: (t: string) => void }) => Promise<InundationResult>;
 };
 
 const emptyRow = (s: Structure, status: BatchStatus, reason: string | null, seconds = 0): BatchRow => ({
@@ -532,7 +538,10 @@ export async function runStructure(s: Structure, deps: BatchDeps = {}): Promise<
       return { row: { ...emptyRow(s, "failed", result.screen.reasons[0] ?? "The desk could not screen the record.", secs()) }, dam };
 
     deps.onStatus?.(`${s.id}: building the inundation layer…`);
-    const built = await buildInundationReach(dam, result, { fetch: dem, yieldFn: deps.yieldFn, onStatus: (t) => deps.onStatus?.(`${s.id}: ${t}`) });
+    const onStatus = (t: string) => deps.onStatus?.(`${s.id}: ${t}`);
+    const built = deps.build
+      ? await deps.build(dam, result, { onStatus })
+      : await buildInundationReach(dam, result, { fetch: dem, yieldFn: deps.yieldFn, onStatus });
     if (built.ok) dam = { ...dam, outline: built.cache };
 
     // 911 points inside the layer (or the strip when no layer could be built), added as receptors like a picked dam.
@@ -609,6 +618,11 @@ export type BatchOptions = BatchDeps & {
   /** Ids already done (resume): skipped. */
   skip?: Set<string>;
   onRow?: (row: BatchRow, dam: DamRecord | null, done: number, total: number) => void;
+  /**
+   * A pool of inundation workers to build on (the browser batch; see runBatchInBrowser). Each structure in flight
+   * takes one worker for its build and gives it back; `concurrency` is then the pool's size.
+   */
+  pool?: InundationPool | null;
 };
 
 /** Run a list, `concurrency` at a time, in list order; stops taking new work once `signal` aborts. */
@@ -617,17 +631,55 @@ export async function runBatch(list: Structure[], opts: BatchOptions = {}): Prom
   const rows: BatchRow[] = [];
   let next = 0;
   let done = 0;
+  const pool = opts.pool ?? null;
+  // With a pool, each structure's build runs on a pooled worker; the page's fetch serves it a local DEM when one is in
+  // use (the worker fetches 3DEP itself). A structure's own fetchDem (tests) also goes through the page.
+  const deps: BatchDeps = pool
+    ? {
+        ...opts,
+        build: async (dam, result, o) => {
+          const w = await pool.acquire();
+          try {
+            return await w.build(dam, result, { onStatus: o.onStatus, signal: opts.signal, fetch: opts.fetchDem });
+          } finally {
+            pool.release(w);
+          }
+        },
+      }
+    : opts;
   const worker = async () => {
     while (next < todo.length && !opts.signal?.aborted) {
       const s = todo[next++];
-      const { row, dam } = await runStructure(s, opts);
+      const { row, dam } = await runStructure(s, deps);
+      if (opts.signal?.aborted && row.status === "failed" && /cancelled/.test(row.reason ?? "")) break;
       rows.push(row);
       done++;
       opts.onRow?.(row, dam, done, todo.length);
     }
   };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(opts.concurrency ?? 2, todo.length || 1)) }, worker));
+  const lanes = Math.max(1, Math.min(opts.concurrency ?? (pool ? pool.size : 2), todo.length || 1));
+  await Promise.all(Array.from({ length: lanes }, worker));
   return rows;
+}
+
+/**
+ * The browser batch: runBatch on a pool of inundation workers sized to the machine (inundation-client.ts poolSize:
+ * one per spare core, at most 4), falling back to the in-thread two-lane batch where no worker can be made. The
+ * finished records come back without their inundation layer (it is rebuilt on "Open in desk" in one click), so a
+ * long batch does not keep 2–5 MB of GeoJSON per dam in memory.
+ */
+export async function runBatchInBrowser(list: Structure[], opts: Omit<BatchOptions, "pool"> = {}): Promise<BatchRow[]> {
+  const pool = await makeInundationPool(undefined, opts.fetchDem);
+  try {
+    return await runBatch(list, {
+      ...opts,
+      pool,
+      concurrency: opts.concurrency ?? (pool ? pool.size : 2),
+      onRow: opts.onRow ? (row, dam, done, total) => opts.onRow!(row, dam ? withoutOutline(dam) : dam, done, total) : undefined,
+    });
+  } finally {
+    pool?.terminateAll();
+  }
 }
 
 // ---------------------------------------------------------------- sorting and CSV
@@ -635,16 +687,38 @@ export async function runBatch(list: Structure[], opts: BatchOptions = {}): Prom
 const STATUS_ORDER: Record<BatchStatus, number> = { done: 0, "needs-data": 1, failed: 2 };
 const SCREEN_ORDER: Record<ScreenLevel, number> = { High: 0, Medium: 1, Review: 2, Low: 3 };
 
+/** The worklist comparator behind sortRows and insertRow. */
+export function compareRows(a: BatchRow, b: BatchRow): number {
+  return (
+    STATUS_ORDER[a.status] - STATUS_ORDER[b.status] ||
+    (a.triage && b.triage ? RECOMMENDATION_ORDER[a.triage.recommendation] - RECOMMENDATION_ORDER[b.triage.recommendation] : 0) ||
+    (a.screen && b.screen ? SCREEN_ORDER[a.screen] - SCREEN_ORDER[b.screen] : 0) ||
+    (b.releasedAcFt ?? -1) - (a.releasedAcFt ?? -1) ||
+    a.id.localeCompare(b.id, "en", { numeric: true })
+  );
+}
+
 /** Runner worklist order: needs-runner, uncertain, trivial; then screen level; then largest release. Not-run rows last. */
 export function sortRows(rows: BatchRow[]): BatchRow[] {
-  return [...rows].sort(
-    (a, b) =>
-      STATUS_ORDER[a.status] - STATUS_ORDER[b.status] ||
-      (a.triage && b.triage ? RECOMMENDATION_ORDER[a.triage.recommendation] - RECOMMENDATION_ORDER[b.triage.recommendation] : 0) ||
-      (a.screen && b.screen ? SCREEN_ORDER[a.screen] - SCREEN_ORDER[b.screen] : 0) ||
-      (b.releasedAcFt ?? -1) - (a.releasedAcFt ?? -1) ||
-      a.id.localeCompare(b.id, "en", { numeric: true }),
-  );
+  return [...rows].sort(compareRows);
+}
+
+/**
+ * `sorted` (already in sortRows order) with `row` put in its place: a new array, one binary search and one splice, so
+ * the batch screen keeps its running view ordered without re-sorting every row on every arrival. A row with the same
+ * id already in the list (a retried dam) is replaced.
+ */
+export function insertRow(sorted: BatchRow[], row: BatchRow): BatchRow[] {
+  const out = sorted.filter((r) => r.id !== row.id);
+  let lo = 0;
+  let hi = out.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (compareRows(out[mid], row) <= 0) lo = mid + 1;
+    else hi = mid;
+  }
+  out.splice(lo, 0, row);
+  return out;
 }
 
 export const BATCH_DISCLAIMER = "Screening estimate — not an ND Dam Safety or ACER classification. Batch records are auto-derived from the inventories and 3DEP.";

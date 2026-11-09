@@ -47,7 +47,8 @@ import {
   outlineState,
   type OutlineState,
 } from "@/lib/crest/outline";
-import { buildInundationReach, ROUTED_LABEL, volumeCheck } from "@/lib/crest/inundation";
+import { ROUTED_LABEL, volumeCheck } from "@/lib/crest/inundation";
+import { buildInundationInWorker, CANCELLED } from "@/lib/crest/inundation-client";
 import { layerOfRecord } from "@/lib/crest/layer-of-record";
 import { CONFIDENCE_LABEL, triageDam } from "@/lib/crest/triage";
 import { num } from "@/lib/crest/format";
@@ -736,7 +737,8 @@ function SavedNote({ id }: { id: string }) {
 
 /**
  * The terrain outline: built on request from one 3DEP terrain request (about 3.5 MB for a 10 km reach), saved on the
- * dam so it shows offline. The build runs in short chunks so the page stays responsive.
+ * dam so it shows offline. The build runs in a Web Worker (inundation-client.ts), so the page stays responsive and
+ * Cancel stops it; where no worker can be made it runs in-thread in short chunks, as before.
  */
 function OutlinePanel({
   dam,
@@ -753,25 +755,32 @@ function OutlinePanel({
   const update = useDesk((s) => s.update);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const building = useRef<AbortController | null>(null);
   useEffect(() => onStatus?.({ busy, error }), [busy, error, onStatus]);
+  // A build keeps running when the user moves to another step meanwhile; its result is still saved on its own dam
+  // (the activeId guard below drops it only if another dam is active by then). Only Cancel stops it.
   if (outline.state === "none") return null;
   const build = async () => {
     const io = outlineInputs(dam, result);
     if (!io.ok) return setError(io.reason);
     const id = dam.id;
     setError(null);
+    const ctl = new AbortController();
+    building.current = ctl;
     try {
       setBusy("Preparing the terrain request…");
-      const r = await buildInundationReach(dam, result, { yieldFn: breathe, onStatus: setBusy });
+      const r = await buildInundationInWorker(dam, result, { yieldFn: breathe, onStatus: setBusy, signal: ctl.signal });
       if (useDesk.getState().activeId !== id) return;
       if (r.ok) update({ outline: r.cache });
       else setError(r.reason);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error).message !== CANCELLED) setError((e as Error).message);
     } finally {
+      if (building.current === ctl) building.current = null;
       setBusy(null);
     }
   };
+  const cancel = () => building.current?.abort();
   const s = outline.state === "ready" ? outline.stats : null;
   const layer = outline.state === "ready" ? outline.layer : "outline";
   const rec = layerOfRecord(dam, result, outline);
@@ -813,6 +822,11 @@ function OutlinePanel({
           {outline.state !== "offline" ? (
             <button type="button" onClick={() => void build()} disabled={busy != null} className={btn}>
               {busy ? "Building…" : s ? "Build again" : "Build the inundation layer"}
+            </button>
+          ) : null}
+          {busy ? (
+            <button type="button" onClick={cancel} className={btn} data-testid="outline-cancel">
+              Cancel
             </button>
           ) : null}
           {dam.outline ? (

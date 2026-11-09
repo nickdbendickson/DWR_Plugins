@@ -154,9 +154,10 @@ layer the flood-size gate picks, the 911 address points inside it (with 3DEP pad
   before relying on a row.
 - **Needs data:** a structure with no height, storage or location is listed and skipped. Statewide (default filters)
   that is about 4,400 of 9,700, mostly small DWR dams and dugouts with no height or storage on file.
-- **Scale:** about 4–25 s a structure, mostly the 3DEP download, two at a time. A county is minutes to under an hour;
-  statewide (~5,300 runnable) is hours. Only the small result rows are kept in browser storage, so **Resume** works
-  after a reload; the finished records (for Open in desk) stay in memory.
+- **Scale:** about 4–25 s a structure, mostly the 3DEP download, one structure per spare core at a time (at most four;
+  the builds run in Web Workers, so the tab stays live). A county is minutes to under an hour; statewide (~5,300
+  runnable) is hours. Only the small result rows are kept in browser storage (IndexedDB), so **Resume** works after a
+  reload; the finished records (for Open in desk, without their terrain layer) stay in memory.
 - **Command line:** `npm run batch:dams -- --out batch-out --state` runs the same thing in Node, appends each row to
   `batch-out/batch.jsonl` (one fsynced line per structure; start it again to resume, and a last line cut short by a
   kill is dropped with a warning and that structure runs again, while a corrupt line anywhere else stops the run and

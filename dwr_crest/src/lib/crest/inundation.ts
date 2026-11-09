@@ -30,6 +30,7 @@ import {
   fetchDem,
   outlineInputs,
   polygonizeDepth,
+  polygonizeDepthAsync,
   SMALL_RELEASE_LABEL,
   smallRelease,
   VOLUME_TARGET_RATIO,
@@ -147,16 +148,19 @@ export type InundationResult =
   | { ok: false; reason: string };
 
 /** Build the OutlineCache for a routed flood: the polygonised bands, a synthesized OutlineStats, and the routed facts. */
-function routedCache(
+async function routedCache(
   dam: DamRecord,
   result: Analysis,
   g: DemGrid,
   routed: Extract<RoutedFloodResult, { ok: true }>,
   fingerprint: string,
   reach?: ReachSummary,
-): OutlineCache {
+  yieldFn?: () => Promise<void>,
+): Promise<OutlineCache> {
   const common = floodStrip(dam, result).strip!.properties;
-  const poly = polygonizeDepth(g, routed.depthFt, { common, label: ROUTED_LABEL, title: `${common.dam_id} routed terrain flood`, capFt: depthCapFt(dam.heightFt) });
+  const polyOpts = { common, label: ROUTED_LABEL, title: `${common.dam_id} routed terrain flood`, capFt: depthCapFt(dam.heightFt) };
+  // The in-thread build (a yield hook given) lets the page breathe between the polygoniser's passes.
+  const poly = yieldFn ? await polygonizeDepthAsync(g, routed.depthFt, polyOpts, yieldFn) : polygonizeDepth(g, routed.depthFt, polyOpts);
   const rings = poly.outline.features.reduce(
     (s, f) => s + (f.geometry.type === "Polygon" ? f.geometry.coordinates.length : f.geometry.coordinates.reduce((t, p) => t + p.length, 0)),
     0,
@@ -227,7 +231,7 @@ export async function buildInundation(
   if (choice.layer === "routed") {
     const routed = await buildRoutedFlood(dam, result, g, { method: ROUTED_METHOD, ...opts });
     if (routed.ok) {
-      return { ok: true, layer: "routed", choice, cache: routedCache(dam, result, g, routed, io.inputs.fingerprint), routed, fellBackToOutline: false };
+      return { ok: true, layer: "routed", choice, cache: await routedCache(dam, result, g, routed, io.inputs.fingerprint, undefined, opts.yieldFn), routed, fellBackToOutline: false };
     }
     // Routed was picked but could not be built; fall back to the outline so the desk still gets a layer.
     const built = await buildOutline(dam, result, g, { yieldFn: opts.yieldFn });
@@ -318,7 +322,7 @@ export async function buildInundationReach(dam: DamRecord, result: Analysis, opt
         ok: true,
         layer: "routed",
         choice,
-        cache: routedCache(dam, result, rb.grid, rb.routed, io.inputs.fingerprint, rb.reach),
+        cache: await routedCache(dam, result, rb.grid, rb.routed, io.inputs.fingerprint, rb.reach, opts.yieldFn),
         routed: rb.routed,
         fellBackToOutline: false,
       };

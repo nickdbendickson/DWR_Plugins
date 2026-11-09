@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { MapContainer, TileLayer, FeatureGroup, LayersControl, useMap } from "react-leaflet";
 import L from "leaflet";
 import { extentLine } from "./extent-layer";
+import { layerKey, mountFloodLayer } from "./flood-layer";
 import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
 import "leaflet-draw";
@@ -184,20 +185,24 @@ const STRIP_PANE = "crest-flood-strip";
 
 /**
  * The flood strip as a read-only overlay: its own pane under the drawn shapes (overlayPane is 400) with pointer
- * events off, so it never catches a click meant for drawing or editing. Rebuilt whenever the result changes.
+ * events off, so it never catches a click meant for drawing or editing. Rebuilt when the strip's content changes
+ * (layerKey), not when the result object is merely new; drawn on the shared canvas, simplified to the zoom.
  */
 function FloodStripLayer({ strip, on, dashed }: { strip: FloodStrip | null | undefined; on: boolean; dashed: boolean }) {
   const map = useMap();
+  const key = strip ? layerKey(strip) : "";
+  const ref = useRef(strip);
+  ref.current = strip;
   useEffect(() => {
     if (!map.getPane(STRIP_PANE)) {
       const pane = map.createPane(STRIP_PANE);
       pane.style.zIndex = "350";
       pane.style.pointerEvents = "none";
     }
-    if (!strip || !on) return;
-    const layer = L.geoJSON(strip as unknown as GeoJSON.FeatureCollection, {
+    const fc = ref.current;
+    if (!fc || !on) return;
+    const mounted = mountFloodLayer(map, fc, {
       pane: STRIP_PANE,
-      interactive: false,
       // Under a terrain outline the strip is only the fallback: a dashed edge and a faint fill.
       style: (f) =>
         dashed
@@ -208,44 +213,51 @@ function FloodStripLayer({ strip, on, dashed }: { strip: FloodStrip | null | und
               fillColor: (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf",
               fillOpacity: 0.45,
             },
-    }).addTo(map);
-    return () => {
-      layer.remove();
-    };
-  }, [map, strip, on, dashed]);
+    });
+    return () => mounted.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for the strip's content
+  }, [map, key, on, dashed]);
   return null;
 }
 
 const OUTLINE_PANE = "crest-terrain-outline";
 
-/** The terrain outline: depth-band fills with a thin edge, above the strip and under the PLSS lines, not interactive. */
+/**
+ * The terrain outline: depth-band fills with a thin edge, above the strip and under the PLSS lines, not interactive.
+ * Rebuilt when the layer's content changes (its trace version and band fingerprint, layerKey), not on every render
+ * that hands down the same layer as a new object; drawn on the shared canvas, simplified to the zoom.
+ */
 function OutlineLayer({ outline, on }: { outline: TerrainOutline | null | undefined; on: boolean }) {
   const map = useMap();
+  const key = outline ? layerKey(outline) : "";
+  const ref = useRef(outline);
+  ref.current = outline;
   useEffect(() => {
     if (!map.getPane(OUTLINE_PANE)) {
       const pane = map.createPane(OUTLINE_PANE);
       pane.style.zIndex = "355";
       pane.style.pointerEvents = "none";
     }
-    if (!outline || !on) return;
+    const fc = ref.current;
+    if (!fc || !on) return;
     // A layer built with the generalized extent line (trace version 8 on) draws the bands without their own edges and one
     // dark line around the flood (option 3 of the 2026-11-05 mock-up); an older saved layer keeps its band edges.
-    const extent = outline.extent;
-    const layer = L.geoJSON(outline as unknown as GeoJSON.FeatureCollection, {
+    const extent = fc.extent;
+    const mounted = mountFloodLayer(map, fc, {
       pane: OUTLINE_PANE,
-      interactive: false,
       attribution: DEM_ATTRIBUTION_SHORT,
       style: (f) => {
         const color = (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf";
         return { stroke: !extent, color, weight: 0.8, opacity: 0.9, fill: true, fillColor: color, fillOpacity: 0.55 };
       },
-    } as L.GeoJSONOptions).addTo(map);
-    const edge = extentLine(outline, OUTLINE_PANE)?.addTo(map) ?? null;
+    });
+    const edge = extentLine(fc, OUTLINE_PANE)?.addTo(map) ?? null;
     return () => {
-      layer.remove();
+      mounted.remove();
       edge?.remove();
     };
-  }, [map, outline, on]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for the outline's content
+  }, [map, key, on]);
   return null;
 }
 
@@ -568,6 +580,9 @@ export function MapDraw({
         ref={mapRef}
         center={center}
         zoom={"zoom" in view ? view.zoom : 10}
+        // Vector layers on canvas by default (the strip, the outline, the PLSS lines, the 911 points); the drawn shapes
+        // leaflet-draw edits stay SVG on their own renderer, as the plugin needs.
+        preferCanvas
         style={{ height: "100%", width: "100%" }}
       >
         <LayersControl position="topright">

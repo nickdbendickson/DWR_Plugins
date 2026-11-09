@@ -146,9 +146,42 @@ export type SpreadResult = {
 
 /**
  * Pour each stretch's peak storage as a level pool on its own ground. `sections` must come from routeMuskingumCunge
- * (they carry storeMaxM3, peakCms, tArrivalS, slopeStage).
+ * (they carry storeMaxM3, peakCms, tArrivalS, slopeStage). Synchronous; spreadVolumeAsync is the same pour letting
+ * the page breathe between its passes.
  */
 export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSection[], opts: SpreadOptions = {}): SpreadResult {
+  const gen = spreadVolumeSteps(g, line, sections, opts);
+  for (;;) {
+    const r = gen.next();
+    if (r.done) return r.value;
+  }
+}
+
+/**
+ * spreadVolume with a yield hook: the pour is one generator (spreadVolumeSteps) that pauses about every
+ * BREATHE_CELLS cells of work, so the in-thread fallback (no Web Worker) can hand the event loop back the way the
+ * outline's trace does. Same arithmetic in the same order, so the result is spreadVolume's, cell for cell.
+ */
+export async function spreadVolumeAsync(
+  g: DemGrid,
+  line: Centerline,
+  sections: RoutedSection[],
+  opts: SpreadOptions = {},
+  yieldFn?: () => Promise<void>,
+): Promise<SpreadResult> {
+  const gen = spreadVolumeSteps(g, line, sections, opts);
+  for (;;) {
+    const r = gen.next();
+    if (r.done) return r.value;
+    if (yieldFn) await yieldFn();
+  }
+}
+
+/** Cells of work between two pauses of the generator forms (about 10–30 ms of a pass on a laptop). */
+export const BREATHE_CELLS = 150_000;
+
+/** The pour, one pass at a time; see spreadVolume. */
+function* spreadVolumeSteps(g: DemGrid, line: Centerline, sections: RoutedSection[], opts: SpreadOptions = {}): Generator<void, SpreadResult> {
   const W = g.width;
   const H = g.height;
   const N = W * H;
@@ -257,6 +290,7 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
         seedOf[k] = sk;
       }
     };
+    const rowsPerBreath = Math.max(1, Math.floor(BREATHE_CELLS / (2 * W)));
     for (let sweep = 0; sweep < 2; sweep++) {
       for (let j = 0; j < H; j++) {
         for (let i = 0; i < W; i++) {
@@ -271,6 +305,7 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
           const k = j * W + i;
           if (valid(k)) take(k, i + 1, j);
         }
+        if (j % rowsPerBreath === rowsPerBreath - 1) yield;
       }
       for (let j = H - 1; j >= 0; j--) {
         for (let i = W - 1; i >= 0; i--) {
@@ -285,6 +320,7 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
           const k = j * W + i;
           if (valid(k)) take(k, i - 1, j);
         }
+        if (j % rowsPerBreath === rowsPerBreath - 1) yield;
       }
     }
     for (let k = 0; k < N; k++) {
@@ -311,10 +347,12 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
   const done = new Uint8Array(N);
   const DI = [1, -1, 0, 0, 1, 1, -1, -1];
   const DJ = [0, 0, 1, -1, 1, -1, 1, -1];
+  let popped = 0;
   while (heap.size > 0) {
     const c = heap.pop();
     if (done[c]) continue;
     done[c] = 1;
+    if (++popped % BREATHE_CELLS === 0) yield;
     const ci = c % W;
     const cj = (c - ci) / W;
     for (let t = 0; t < 8; t++) {
@@ -351,8 +389,10 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
         h2.push(k);
       }
     }
+    popped = 0;
     while (h2.size > 0) {
       const c = h2.pop();
+      if (++popped % BREATHE_CELLS === 0) yield;
       const ci = c % W;
       const cj = (c - ci) / W;
       for (let t = 0; t < 8; t++) {
@@ -417,6 +457,8 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
         basinStart.pop();
         continue;
       }
+      // Lowest ground first, once here, so poolBasin (which can run twice for one basin) never sorts again.
+      sortCellsBy(basinCells, from, basinCells.length, (k) => g.z[k]);
       basinCap.push(cap);
       // The basin acts at the first stretch whose channel enters it (channel cells are in trace order).
       const at = basinAtStretch.get(label[k0]) ?? [];
@@ -435,6 +477,23 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
   const order = new Int32Array(counts[nS]);
   const fillPos = counts.slice();
   for (let k = 0; k < N; k++) if (label[k] >= 0 && Number.isFinite(spill[k])) order[fillPos[label[k]]++] = k;
+  // One sort of the whole index, keyed (stretch, spill, height above bed): `order` is bucketed by stretch already
+  // (a stable counting sort), so sorting each bucket in place by (spill, hand) gives the same order the per-stretch
+  // `Array.from(subarray).sort(cmp)` gave, without a boxed copy and a comparator closure per stretch. Ties beyond
+  // (spill, hand) keep raster order, as before (the stable sort over a raster-ordered bucket).
+  yield;
+  {
+    const hand = new Float64Array(N);
+    for (let k = 0; k < N; k++) hand[k] = g.z[k] - bed[k];
+    const tmp = new Int32Array(order.length);
+    for (let j = 0; j + 1 < nS; j++) {
+      const a = counts[j];
+      const b = counts[j + 1];
+      if (b - a > 1) sortIndexRange(order, tmp, a, b, spill, hand);
+      if ((b - a) > BREATHE_CELLS / 4) yield;
+    }
+  }
+  yield;
 
   const depthM = new Float32Array(N);
   const wseOut = new Float32Array(N).fill(NaN);
@@ -451,27 +510,30 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
   let travelling = v0;
   let basinsFilled = 0;
   let stoppedIn: SpreadResult["stoppedIn"] = null;
+  let poured = 0;
   const sqrtOf = (s: number) => Math.sqrt(Math.max(s, 1e-6));
-  // Lay a level pool holding `vol` (m³) over a basin's cells, lowest ground first (still water: velocity 0).
+  // Lay a level pool holding `vol` (m³) over a basin's cells, lowest ground first (still water: velocity 0). The
+  // basin's cells were sorted lowest first when the basin was found (step 3c).
   const poolBasin = (id: number, vol: number, tArr: number) => {
-    const cells = basinCells.slice(basinStart[id], basinStart[id + 1]).sort((p, q) => g.z[p] - g.z[q]);
+    const c0 = basinStart[id];
+    const c1 = basinStart[id + 1];
     const target = vol / cellM2;
     let n = 0;
     let sumZ = 0;
-    let h = lvl[cells[0]];
-    for (let r = 0; r < cells.length; r++) {
+    let h = lvl[basinCells[c0]];
+    for (let r = c0; r < c1; r++) {
       n++;
-      sumZ += g.z[cells[r]];
-      const next = r + 1 < cells.length ? g.z[cells[r + 1]] : Infinity;
+      sumZ += g.z[basinCells[r]];
+      const next = r + 1 < c1 ? g.z[basinCells[r + 1]] : Infinity;
       const hh = (target + sumZ) / n;
       if (hh <= next) {
-        h = Math.min(hh, lvl[cells[0]]);
+        h = Math.min(hh, lvl[basinCells[c0]]);
         break;
       }
     }
     let area = 0;
-    for (let r = 0; r < n; r++) {
-      const k = cells[r];
+    for (let r = c0; r < c0 + n; r++) {
+      const k = basinCells[r];
       const d = h - g.z[k];
       if (d < minDepth) continue;
       area += cellM2;
@@ -515,8 +577,14 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     stretches++;
     slicesM3 += v;
     // Spill (connection) order, ties lowest ground first: every cell behind one saddle shares that saddle's spill
-    // height, and the water that tops it runs to the lowest of them first. (Ties used to keep raster order.)
-    const cells = Array.from(order.subarray(a, b)).sort((p, q) => spill[p] - spill[q] || g.z[p] - bed[p] - (g.z[q] - bed[q]));
+    // height, and the water that tops it runs to the lowest of them first. (Ties used to keep raster order.) The
+    // stretch's bucket of `order` was sorted that way above; this is a view of it, not a copy.
+    const cells = order.subarray(a, b);
+    poured += cells.length;
+    if (poured > BREATHE_CELLS) {
+      poured = 0;
+      yield;
+    }
     const target = v / cellM2; // m of depth summed over cells
     // Pour the slice as a static fill-and-spill from the channel. With the cells of spill height ≤ L all standing at
     // level L, the pool holds F(L) = Σ (L − ground). F rises steadily between saddles and jumps at a saddle by the
@@ -711,6 +779,21 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
 export const SETTLE_SWEEPS = 100;
 /** Fraction of the surface difference that crosses an edge in one sweep (≤ 0.25 keeps the explicit relaxation stable). */
 const SETTLE_RATE = 0.2;
+/**
+ * settlePools stops early once the largest transfer across any one edge in a sweep is under this fraction of the wet
+ * threshold (minDepth, in the layer's unit: 0.1 ft on the desk → 1e-4 ft a sweep). Water still moving that little
+ * cannot change a cell's band or wet state within the remaining sweeps (at most SETTLE_SWEEPS × 1e-4 ft = 0.01 ft),
+ * so the surface is taken as settled. The sweeps actually run are reported (SettleOutcome.sweepsRun).
+ */
+export const SETTLE_TOL_FRACTION = 1e-3;
+
+export type SettleOutcome = {
+  wetCells: number;
+  /** Σ depth over the wet cells (layer unit × cells). */
+  volume: number;
+  /** Sweeps actually run: `sweeps`, or fewer when the surface settled early (SETTLE_TOL_FRACTION). */
+  sweepsRun: number;
+};
 
 export type SettleLayer = {
   /** Depth per cell (0 where dry), in the layer's own length unit; changed in place. */
@@ -740,14 +823,16 @@ export async function settlePools(
   g: DemGrid,
   ground: Uint8Array,
   layer: SettleLayer,
-  opts: { sweeps: number; minDepth: number; zScale?: number; gravity?: number; yieldFn?: () => Promise<void> },
-): Promise<{ wetCells: number; volume: number }> {
+  opts: { sweeps: number; minDepth: number; zScale?: number; gravity?: number; yieldFn?: () => Promise<void>; tolerance?: number },
+): Promise<SettleOutcome> {
   const W = g.width;
   const H = g.height;
   const N = W * H;
   const sweeps = Math.max(0, Math.floor(opts.sweeps));
   const minDepth = opts.minDepth;
   const zs = opts.zScale ?? 1;
+  // Early exit (see SETTLE_TOL_FRACTION): a sweep whose largest edge transfer is under this ends the relaxation.
+  const tol = opts.tolerance ?? SETTLE_TOL_FRACTION * minDepth;
   const out = layer.depth;
   let i0 = W;
   let i1 = -1;
@@ -770,7 +855,7 @@ export async function settlePools(
         wetCells++;
         volume += out[k];
       }
-    return { wetCells, volume };
+    return { wetCells, volume, sweepsRun: 0 };
   }
   i0 = Math.max(0, i0 - sweeps);
   i1 = Math.min(W - 1, i1 + sweeps);
@@ -785,17 +870,43 @@ export async function settlePools(
   const delta = new Float64Array(N);
   const from = new Int32Array(N).fill(-1);
   const R = SETTLE_RATE;
+  // The wet span of each row (first and last column holding water, or that water was handed to). Two dry cells move
+  // nothing, so a sweep need only visit the cells that are wet or have a wet east / south neighbour: the span, one
+  // cell out, and the row above a wet row. Water moves at most a cell a sweep and the spans grow with every hand-over,
+  // so they stay a superset of the wet cells; the cells skipped are exactly the ones the full scan skipped by its own
+  // dry-dry test, so the arithmetic (and its order) is unchanged. On a 1,000 × 1,000 terrain the wet area is a tenth
+  // of the box or less, so a sweep costs a tenth of what the full-box scan did.
+  const lo = new Int32Array(H).fill(W);
+  const hi = new Int32Array(H).fill(-1);
+  let jLo = H;
+  let jHi = -1;
+  for (let j = j0; j <= j1; j++)
+    for (let i = i0; i <= i1; i++)
+      if (d[j * W + i] > 0) {
+        if (i < lo[j]) lo[j] = i;
+        if (i > hi[j]) hi[j] = i;
+        if (j < jLo) jLo = j;
+        if (j > jHi) jHi = j;
+      }
   const applyRow = (j: number) => {
-    for (let k = j * W + i0, e = j * W + i1; k <= e; k++) {
+    if (hi[j] < 0) return;
+    for (let k = j * W + lo[j], e = j * W + hi[j]; k <= e; k++) {
       if (delta[k] === 0) continue;
       d[k] = Math.max(0, d[k] + delta[k]);
       delta[k] = 0;
     }
   };
+  let sweepsRun = 0;
   for (let s = 0; s < sweeps; s++) {
-    for (let j = j0; j <= j1; j++) {
+    let maxQ = 0;
+    const jFrom = Math.max(j0, jLo - 1);
+    const jTo = Math.min(j1, jHi);
+    for (let j = jFrom; j <= jTo; j++) {
       const row = j * W;
-      for (let i = i0; i <= i1; i++) {
+      const below = j < j1 ? j + 1 : -1;
+      const iFrom = Math.max(i0, Math.min(lo[j] - 1, below >= 0 ? lo[below] : W));
+      const iTo = Math.min(i1, Math.max(hi[j], below >= 0 ? hi[below] : -1));
+      for (let i = iFrom; i <= iTo; i++) {
         const a = row + i;
         if (!ground[a]) continue;
         const da = d[a];
@@ -811,22 +922,42 @@ export async function settlePools(
             if (q > 0) {
               delta[a] -= q;
               delta[b] += q;
+              if (q > maxQ) maxQ = q;
               if (from[b] < 0 && !(db > 0)) from[b] = a;
+              // b joins its row's span (east: this row, column i + 1; south: the row below, column i).
+              if (t === 0) {
+                if (i + 1 > hi[j]) hi[j] = i + 1;
+              } else {
+                if (i < lo[j + 1]) lo[j + 1] = i;
+                if (i > hi[j + 1]) hi[j + 1] = i;
+                if (j + 1 > jHi) jHi = j + 1;
+              }
             }
           } else if (diff < 0) {
             const q = R * Math.min(-diff, db - minDepth);
             if (q > 0) {
               delta[b] -= q;
               delta[a] += q;
+              if (q > maxQ) maxQ = q;
               if (from[a] < 0 && !(da > 0)) from[a] = b;
+              if (i < lo[j]) lo[j] = i;
+              if (i > hi[j]) hi[j] = i;
+              if (j < jLo) jLo = j;
             }
           }
         }
       }
       // Row j-1 has had all its edges: apply its change now (the sweep reads the depths as they stood).
-      if (j > j0) applyRow(j - 1);
+      if (j > jFrom) applyRow(j - 1);
     }
-    applyRow(j1);
+    if (jTo >= jFrom) {
+      applyRow(jTo);
+      // The last row's south edges may have handed water to the row below it.
+      if (jTo + 1 <= j1) applyRow(jTo + 1);
+    }
+    sweepsRun++;
+    // Settled: nothing moved more than the tolerance anywhere this sweep, so the rest would move less still.
+    if (maxQ < tol) break;
     if (opts.yieldFn && s % 10 === 9) await opts.yieldFn();
   }
   // A newly wet cell takes the arrival and velocity of the pool that first reached it (chains are followed back).
@@ -869,7 +1000,7 @@ export async function settlePools(
         if (arr) arr[k] = NaN;
       }
     }
-  return { wetCells, volume };
+  return { wetCells, volume, sweepsRun };
 }
 
 /**
@@ -1005,6 +1136,78 @@ export function breachPath(
     pts.push({ e, n, x });
   }
   return { loc: { lon: loc.lon, lat: loc.lat }, pts };
+}
+
+/**
+ * Sort cells[from, to) in place by key(k), ascending, stable. A merge sort on a typed scratch: the Array sort it
+ * replaces boxed every index and called a closure per comparison.
+ */
+export function sortCellsBy(cells: number[], from: number, to: number, key: (k: number) => number): void {
+  const n = to - from;
+  if (n < 2) return;
+  const idx = new Int32Array(n);
+  for (let r = 0; r < n; r++) idx[r] = cells[from + r];
+  const keys = new Float64Array(n);
+  for (let r = 0; r < n; r++) keys[r] = key(idx[r]);
+  const ord = new Int32Array(n);
+  for (let r = 0; r < n; r++) ord[r] = r;
+  const tmp = new Int32Array(n);
+  mergeSortIdx(ord, tmp, 0, n, (p, q) => keys[p] - keys[q]);
+  for (let r = 0; r < n; r++) cells[from + r] = idx[ord[r]];
+}
+
+/**
+ * Sort order[a, b) in place by (primary[k], secondary[k]), ascending, stable (ties keep their order). `tmp` is scratch
+ * at least as long as `order`. Typed-array merge sort: no boxing, no closure per element, the same order the
+ * `Array.from(...).sort((p, q) => primary[p] - primary[q] || secondary[p] - secondary[q])` it replaces gave.
+ */
+export function sortIndexRange(order: Int32Array, tmp: Int32Array, a: number, b: number, primary: ArrayLike<number>, secondary: ArrayLike<number>): void {
+  if (b - a < 2) return;
+  const cmp = (p: number, q: number) => {
+    const d = primary[p] - primary[q];
+    // Infinity - Infinity is NaN; cells with an infinite spill never reach `order`, but keep the sort total anyway.
+    if (d !== 0 && d === d) return d;
+    return secondary[p] - secondary[q];
+  };
+  mergeSortIdx(order, tmp, a, b, cmp);
+}
+
+/** Stable bottom-up merge sort of arr[a, b) with `tmp` as scratch (same length as arr). */
+function mergeSortIdx(arr: Int32Array, tmp: Int32Array, a: number, b: number, cmp: (p: number, q: number) => number): void {
+  const n = b - a;
+  // Insertion sort for the short runs, then merge them: fast on the small stretches, O(n log n) on the big ones.
+  const RUN = 24;
+  for (let s = a; s < b; s += RUN) {
+    const e = Math.min(b, s + RUN);
+    for (let i = s + 1; i < e; i++) {
+      const v = arr[i];
+      let j = i - 1;
+      while (j >= s && cmp(arr[j], v) > 0) {
+        arr[j + 1] = arr[j];
+        j--;
+      }
+      arr[j + 1] = v;
+    }
+  }
+  if (n <= RUN) return;
+  let src = arr;
+  let dst = tmp;
+  for (let width = RUN; width < n; width *= 2) {
+    for (let s = a; s < b; s += 2 * width) {
+      const mid = Math.min(b, s + width);
+      const e = Math.min(b, s + 2 * width);
+      let i = s;
+      let j = mid;
+      let o = s;
+      while (i < mid && j < e) dst[o++] = cmp(src[j], src[i]) < 0 ? src[j++] : src[i++];
+      while (i < mid) dst[o++] = src[i++];
+      while (j < e) dst[o++] = src[j++];
+    }
+    const t = src;
+    src = dst;
+    dst = t;
+  }
+  if (src !== arr) for (let i = a; i < b; i++) arr[i] = src[i];
 }
 
 /** Douglas-Peucker simplification of a polyline (iterative), keeping the end points. */

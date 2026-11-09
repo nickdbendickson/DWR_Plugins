@@ -2,8 +2,10 @@
  * Batch screen: pick many structures (one by one, by county, by watershed, or statewide) and run each through the
  * desk's own build + triage (src/lib/crest/batch.ts). Results are a Runner worklist: needs-runner first.
  *
- * Only the small result rows are kept in browser storage (crest-batch-v1); the finished records, with their terrain
- * layers, live in memory for "Open in desk" and are not saved, so a large batch cannot fill the storage quota.
+ * The builds run on a pool of inundation workers (batch.ts runBatchInBrowser), so the tab stays live. Only the small
+ * result rows are kept, in IndexedDB in batches (batch-store.ts), with a two-number summary in localStorage for the
+ * Resume banner; the finished records live in memory for "Open in desk" WITHOUT their terrain layer (it is rebuilt
+ * on the desk in one click), so a long batch does not hold megabytes of GeoJSON per dam.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -16,9 +18,10 @@ import {
   batchCsvMeta,
   estimateSeconds,
   facets,
+  insertRow,
   loadStructures,
   missingData,
-  runBatch,
+  runBatchInBrowser,
   selectStructures,
   sortRows,
   type BatchRow,
@@ -26,13 +29,14 @@ import {
   type Structure,
   type StructureKind,
 } from "@/lib/crest/batch";
+import { BatchRowBuffer, clearBatchRows, clearBatchSummary, loadBatchRows, loadBatchSummary, saveBatchSummary } from "@/lib/crest/batch-store";
+import { poolSize } from "@/lib/crest/inundation-client";
 import { fold, type NdData } from "@/lib/crest/nd-dams";
 import { saveText } from "@/lib/crest/save";
 import { useDesk } from "@/lib/crest/store";
 import type { DamRecord } from "@/lib/crest/types";
 import { TerrainSource } from "./TerrainSource";
 
-const ROWS_KEY = "crest-batch-v1";
 const btn = "inline-flex h-11 items-center rounded-sm border border-line bg-card px-4 text-sm text-ink disabled:opacity-50";
 const primary = "inline-flex h-11 items-center rounded-sm border border-water bg-water px-4 text-sm text-card disabled:opacity-50";
 const KINDS: StructureKind[] = ["nid", "dam", "dugout", "unknown"];
@@ -43,20 +47,17 @@ const BY: { id: Selection["by"]; label: string }[] = [
   { id: "state", label: "Statewide" },
 ];
 
-function loadRows(): BatchRow[] {
+/** Rows the previous version kept in localStorage (crest-batch-v1): read once and moved to IndexedDB. */
+const OLD_ROWS_KEY = "crest-batch-v1";
+function takeOldRows(): BatchRow[] {
   try {
-    const raw = localStorage.getItem(ROWS_KEY);
-    const v = raw ? (JSON.parse(raw) as unknown) : null;
+    const raw = localStorage.getItem(OLD_ROWS_KEY);
+    if (!raw) return [];
+    localStorage.removeItem(OLD_ROWS_KEY);
+    const v = JSON.parse(raw) as unknown;
     return Array.isArray(v) ? (v as BatchRow[]) : [];
   } catch {
     return [];
-  }
-}
-function saveRows(rows: BatchRow[]) {
-  try {
-    localStorage.setItem(ROWS_KEY, JSON.stringify(rows));
-  } catch {
-    // Storage full or blocked: the rows stay on screen and in the CSV; nothing else depends on them being saved.
   }
 }
 
@@ -74,27 +75,47 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
   const [counties, setCounties] = useState<string[]>([]);
   const [watersheds, setWatersheds] = useState<string[]>([]);
   const [query, setQuery] = useState("");
-  const [rows, setRows] = useState<BatchRow[]>([]);
+  /** The rows in worklist order (sortRows); a new row is inserted in place, not re-sorted. */
+  const [sorted, setSorted] = useState<BatchRow[]>([]);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number; status: string } | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [summary] = useState(() => loadBatchSummary());
   const ctl = useRef<AbortController | null>(null);
+  /** Finished records for "Open in desk", without their inundation layer (runBatchInBrowser drops it). */
   const dams = useRef(new Map<string, DamRecord>());
+  const lanes = useMemo(() => poolSize(), []);
 
   useEffect(() => {
-    setRows(loadRows());
+    let live = true;
+    void (async () => {
+      const old = takeOldRows();
+      const kept = await loadBatchRows();
+      if (!live) return;
+      const all = sortRows([...kept, ...old.filter((r) => !kept.some((k) => k.id === r.id))]);
+      setSorted(all);
+      if (old.length) {
+        const buf = new BatchRowBuffer();
+        for (const r of old) buf.add(r);
+        await buf.flush();
+      }
+    })();
     loadStructures()
       .then((d) => setData(d))
       .catch((e) => setLoadErr((e as Error).message));
-    return () => ctl.current?.abort();
+    return () => {
+      live = false;
+      ctl.current?.abort();
+    };
   }, []);
+  const rows = sorted;
 
   const all = useMemo(() => data?.structures ?? [], [data]);
   const byId = useMemo(() => new Map(all.map((s) => [s.id, s])), [all]);
   const sel: Selection = { by, ids, counties, watersheds, kinds, statuses };
   const list = useMemo(() => (data ? selectStructures(all, sel) : []), [data, by, ids, counties, watersheds, kinds, statuses]); // eslint-disable-line react-hooks/exhaustive-deps
   const ready = list.filter((s) => !missingData(s)).length;
-  const est = estimateSeconds(list) / 2;
+  const est = estimateSeconds(list) / lanes;
   const scoped = useMemo(() => all.filter((s) => kinds.includes(s.kind)), [all, kinds]);
   const countyF = useMemo(() => facets(scoped.filter((s) => statuses.includes(s.status)), "county"), [scoped, statuses]);
   const hucF = useMemo(() => facets(scoped.filter((s) => statuses.includes(s.status)), "huc8"), [scoped, statuses]);
@@ -104,7 +125,6 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
     if (!q) return [];
     return all.filter((s) => fold(`${s.id} ${s.label} ${s.nid ?? ""} ${s.county ?? ""}`).includes(q)).slice(0, 40);
   }, [all, query]);
-  const sorted = useMemo(() => sortRows(rows), [rows]);
   const doneIds = useMemo(() => new Set(rows.map((r) => r.id)), [rows]);
 
   const toggle = (arr: string[], v: string, set: (a: string[]) => void) => set(arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
@@ -116,25 +136,36 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
     setRunning(true);
     // Resume keeps finished rows only; a "failed" row is retried, not treated as done.
     let acc = resume ? rows.filter((r) => r.status !== "failed" && list.some((s) => s.id === r.id)) : [];
-    if (!resume) dams.current.clear();
-    setRows(acc);
+    if (!resume) {
+      dams.current.clear();
+      await clearBatchRows();
+    } else if (acc.length !== rows.length) {
+      await clearBatchRows();
+      const keep = new BatchRowBuffer();
+      for (const r of acc) keep.add(r);
+      await keep.flush();
+    }
+    setSorted(sortRows(acc));
     const skip = new Set(acc.map((r) => r.id));
     setProgress({ done: 0, total: list.length - skip.size, status: "Starting…" });
-    await runBatch(list, {
+    // Rows go to IndexedDB in batches (every 10 rows or 2 s), never one JSON.stringify of the whole list per row.
+    const buf = new BatchRowBuffer();
+    await runBatchInBrowser(list, {
       nd: data.nd,
       signal: c.signal,
       skip,
-      concurrency: 2,
       yieldFn: () => new Promise((r) => setTimeout(r, 0)),
       onStatus: (t) => setProgress((p) => (p ? { ...p, status: t } : p)),
       onRow: (row, dam, done, total) => {
         if (dam) dams.current.set(row.id, dam);
         acc = [...acc, row];
-        setRows(acc);
-        saveRows(acc);
+        setSorted((prev) => insertRow(prev, row));
+        buf.add(row);
         setProgress({ done, total, status: `${row.id}: ${row.status === "done" ? row.triage?.label ?? "done" : row.reason}` });
       },
     });
+    await buf.flush();
+    saveBatchSummary(acc);
     setRunning(false);
     setProgress((p) => (p ? { ...p, status: c.signal.aborted ? "Stopped. Resume picks up where it left off." : "Done." } : p));
   };
@@ -142,10 +173,8 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
   const open = (id: string) => {
     const d = dams.current.get(id);
     if (!d) return;
-    // Without the terrain layer: it is rebuilt on the desk in one click, and saving it would fill the browser storage.
-    const { outline: _outline, ...rest } = d;
-    void _outline;
-    addDam({ ...rest, id: `${d.id}-${Date.now().toString(36)}` });
+    // The kept record has no terrain layer (runBatchInBrowser dropped it): the desk rebuilds it in one click.
+    addDam({ ...d, id: `${d.id}-${Date.now().toString(36)}` });
     onOpen();
   };
 
@@ -266,9 +295,14 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
         <div className="mt-4 rounded-sm bg-sand p-3 text-sm" data-testid="batch-summary">
           <p>
             <strong>{list.length.toLocaleString("en-US")}</strong> selected · {ready.toLocaleString("en-US")} ready to run ·{" "}
-            {(list.length - ready).toLocaleString("en-US")} need data (no height, storage or location) · about {fmtTime(est)} at two
-            at a time.
+            {(list.length - ready).toLocaleString("en-US")} need data (no height, storage or location) · about {fmtTime(est)} at{" "}
+            {lanes === 1 ? "one" : lanes === 2 ? "two" : lanes === 3 ? "three" : "four"} at a time.
           </p>
+          {summary && !rows.length ? (
+            <p className="mt-1 text-muted" data-testid="batch-resume-note">
+              A previous batch left {summary.rows.toLocaleString("en-US")} rows ({summary.done.toLocaleString("en-US")} done); they are loading from this browser's storage.
+            </p>
+          ) : null}
           {ready > BROWSER_BATCH_WARN ? (
             <p className="mt-1 text-amber">
               Large batch for a browser tab: keep the tab open, or run it from the command line, which resumes after a stop and can
@@ -301,8 +335,9 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
             className={btn}
             disabled={running || !rows.length}
             onClick={() => {
-              setRows([]);
-              saveRows([]);
+              setSorted([]);
+              void clearBatchRows();
+              clearBatchSummary();
               dams.current.clear();
               setProgress(null);
             }}

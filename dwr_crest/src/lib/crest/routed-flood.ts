@@ -18,7 +18,7 @@
 
 import { ACFT, CFS, FT } from "./breach.ts";
 import { fillFlood } from "./fill.ts";
-import { breachPath, SETTLE_SWEEPS, settlePools, spreadVolume } from "./spread.ts";
+import { breachPath, SETTLE_SWEEPS, settlePools, spreadVolume, spreadVolumeAsync } from "./spread.ts";
 import { type OutlineInputs, outlineInputs, traceChannel } from "./outline.ts";
 import { type RoutedSection, routeMuskingumCunge, sectionTable } from "./routing.ts";
 import { type Centerline, cutSections } from "./sections.ts";
@@ -235,13 +235,16 @@ export async function buildRoutedFlood(
   let demand: RoutedFloodResult["demand"];
   let ground: Uint8Array | undefined;
   if (method === "spread") {
-    const sp = spreadVolume(g, centerline, routed.sections, {
+    const spOpts = {
       minDepthM: opts.minDepthM ?? 0.03,
       releasedM3: releasedAcFt * ACFT,
       basins: opts.basins ?? true,
       // A stretch that runs out of ground is held at the routed stage + 1 ft and never above 2× the dam's height.
       maxLevelM: Number.isFinite(dam.heightFt) && dam.heightFt > 0 ? 2 * dam.heightFt * FT : undefined,
-    });
+    };
+    // With a yield hook (the in-thread build on the desk) the pour pauses between its passes; without one (a worker,
+    // Node) it runs straight through. Same result either way.
+    const sp = opts.yieldFn ? await spreadVolumeAsync(g, centerline, routed.sections, spOpts, opts.yieldFn) : spreadVolume(g, centerline, routed.sections, spOpts);
     ground = sp.ground;
     exhaustedStretches = sp.exhaustedStretches;
     cappedStretches = sp.cappedStretches;

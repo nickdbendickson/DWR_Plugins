@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { LayersControl, MapContainer, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import { extentLine } from "./extent-layer";
+import { layerKey, mountFloodLayer } from "./flood-layer";
 import "leaflet/dist/leaflet.css";
 import { basemaps } from "@/lib/crest/basemap";
 import { HILLSHADE_URL } from "@/lib/crest/dashboard";
@@ -45,15 +46,19 @@ function Fit({ fit }: { fit: Bounds | null }) {
   return null;
 }
 
+function ensurePane(map: L.Map) {
+  if (!map.getPane(PANE)) {
+    const pane = map.createPane(PANE);
+    pane.style.zIndex = "350";
+    pane.style.pointerEvents = "none";
+  }
+}
+
 /** Each toggle is its own Leaflet group, so turning one off never redraws another (acceptance B1). */
 function Group({ build, deps }: { build: (pane: string) => L.Layer | null; deps: unknown[] }) {
   const map = useMap();
   useEffect(() => {
-    if (!map.getPane(PANE)) {
-      const pane = map.createPane(PANE);
-      pane.style.zIndex = "350";
-      pane.style.pointerEvents = "none";
-    }
+    ensurePane(map);
     const layer = build(PANE);
     layer?.addTo(map);
     return () => {
@@ -64,9 +69,41 @@ function Group({ build, deps }: { build: (pane: string) => L.Layer | null; deps:
   return null;
 }
 
+/**
+ * The depth layer: the bands on the shared canvas, simplified to the zoom (flood-layer.ts), plus the extent line.
+ * Keyed on the layer's content, so the same layer re-derived as a new object is not redrawn.
+ */
+function DepthLayer({ depth }: { depth: FloodStrip | null }) {
+  const map = useMap();
+  const key = depth ? layerKey(depth) : "";
+  const ref = useRef(depth);
+  ref.current = depth;
+  useEffect(() => {
+    ensurePane(map);
+    const fc = ref.current;
+    if (!fc) return;
+    const mounted = mountFloodLayer(map, fc, {
+      pane: PANE,
+      style: (f) => ({
+        stroke: false,
+        fill: true,
+        fillColor: (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf",
+        fillOpacity: 0.6,
+      }),
+    });
+    const edge = extentLine(fc, PANE)?.addTo(map) ?? null;
+    return () => {
+      mounted.remove();
+      edge?.remove();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` stands for the layer's content
+  }, [map, key]);
+  return null;
+}
+
 export function DashboardMap({ depth, points, arrival, hillshade, overlays, fit }: Props) {
   return (
-    <MapContainer center={ND_CENTER} zoom={12} className="dash-leaflet" scrollWheelZoom>
+    <MapContainer center={ND_CENTER} zoom={12} className="dash-leaflet" scrollWheelZoom preferCanvas>
       <LayersControl position="topright">
         {LAYERS.map((b, i) => (
           <LayersControl.BaseLayer key={b.id} name={b.name} checked={i === 0}>
@@ -98,28 +135,7 @@ export function DashboardMap({ depth, points, arrival, hillshade, overlays, fit 
           return g;
         }}
       />
-      <Group
-        deps={[depth]}
-        build={(pane) =>
-          depth
-            ? L.featureGroup(
-                [
-                  L.geoJSON(depth as unknown as GeoJSON.FeatureCollection, {
-                    pane,
-                    interactive: false,
-                    style: (f) => ({
-                      stroke: false,
-                      fill: true,
-                      fillColor: (f?.properties as { color?: string } | undefined)?.color ?? "#2a7fbf",
-                      fillOpacity: 0.6,
-                    }),
-                  }),
-                  extentLine(depth, pane),
-                ].filter((l): l is L.Layer => l != null),
-              )
-            : null
-        }
-      />
+      <DepthLayer depth={depth} />
       <Group
         deps={[points]}
         build={() => {

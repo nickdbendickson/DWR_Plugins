@@ -66,12 +66,13 @@ describe("ND dam bundles", () => {
   });
 
   it("the picker modules never fetch: data comes by dynamic import only", () => {
-    for (const f of ["./nd-dams.ts", "../../components/crest/NdDamPicker.tsx"]) {
+    for (const f of ["./nd-dams.ts", "./data-bundle.ts", "../../components/crest/NdDamPicker.tsx"]) {
       const src = readFileSync(new URL(f, import.meta.url), "utf8").replace(/\/\/.*$|\/\*[\s\S]*?\*\//gm, "");
       assert.doesNotMatch(src, /\bfetch\s*\(|XMLHttpRequest|https?:\/\/[^"'\s]*\.json/, f);
     }
-    const src = readFileSync(new URL("./nd-dams.ts", import.meta.url), "utf8");
-    assert.match(src, /import\("\.\/data\/nd_dams\.json"/);
+    // nd-dams.ts loads through data-bundle.ts, which holds the dynamic JSON import (or the packed copy in Crest.html).
+    assert.match(readFileSync(new URL("./nd-dams.ts", import.meta.url), "utf8"), /loadBundle<Bundle>\("nd_dams"\)/);
+    assert.match(readFileSync(new URL("./data-bundle.ts", import.meta.url), "utf8"), /import\("\.\/data\/nd_dams\.json"/);
   });
 });
 

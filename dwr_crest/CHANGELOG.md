@@ -2,6 +2,36 @@
 
 ## 2026-11-08
 
+- **The inundation layer builds in a Web Worker, and can be cancelled.** On a 10 m terrain (ND00199's box is 1,090 ×
+  996 cells) the build ran about 4.7 s on the main thread with 2 s stretches that never yielded (the volume spread, the
+  polygoniser), so the page froze and a click on Cancel had nowhere to go. The trace, routing, spread, settle and
+  polygonisation now run in a dedicated worker (`src/lib/crest/inundation.worker.ts`, inlined into `Crest.html` the
+  way the results worker is), the status lines still arrive, and **Cancel** on the Terrain inundation panel stops the
+  build. Where a worker cannot start the build runs in-thread as before, now yielding inside the spread and the
+  polygoniser too. The layer itself is unchanged: the depth grid and the GeoJSON hash the same as before.
+- **Batch screen: a worker pool, and rows kept in IndexedDB.** The batch builds each structure's layer on a pool of
+  inundation workers sized to the machine (one per spare core, at most 4; the "at N at a time" estimate follows it),
+  so the tab stays live through a county. Result rows go to IndexedDB in one transaction every 10 rows or 2 s instead
+  of rewriting one localStorage string per row (a statewide run would have hit the ~5 MB quota); rows an older Crest
+  left in localStorage are moved across. The finished records kept for **Open in desk** no longer hold their terrain
+  layer (2–5 MB each; it is rebuilt on the desk in one click), and the running worklist is kept in order by inserting
+  each arriving row rather than re-sorting.
+- **Maps draw the terrain layers on canvas, simplified to the zoom.** A 10 m routed layer (six MultiPolygons, ~80,000
+  vertices) was drawn as SVG paths and rebuilt on every render that re-derived it. The Flood-step and dashboard maps
+  now draw a copy simplified to about half a pixel at the current zoom level on a Canvas renderer, re-simplify only
+  when the zoom level changes, and redraw only when the layer's content changes (`src/lib/crest/geo-simplify.ts`;
+  exports, areas and the 911 / PLSS lookups keep the exact rings).
+- **Faster passes in the engine, same numbers.** The spread sorts its cell index once (a typed-array merge sort) instead
+  of boxing and sorting every stretch's cells; the pool settling visits only the wet span of each row and stops early
+  once nothing moves more than 1e-4 ft in a sweep (`SETTLE_TOL_FRACTION`; it reports the sweeps it ran); the band
+  polygoniser traces every band's edges in one pass over the grid instead of six; the 3DEP response is read with one
+  typed-array copy instead of a DataView call per cell. The 30 m and 10 m ND00199 builds are bit-identical to before.
+- **`Crest.html` no longer parses the structure tables on open.** The three data bundles (2.2 MB of JSON, 1.64 MB of
+  it the batch's structure list) were flattened into the single file's one script and parsed on every open. They are
+  now packed gzip + base64 (about 450 KB; the file is about 1.7 MB smaller) and inflated with `DecompressionStream`
+  the first time the picker or the Batch view asks (with fflate's gunzip where a browser lacks that API); the web and
+  desktop builds keep them and `geotiff` as their own lazy chunks (`vite.desktop.config.ts`). Rebuild the desktop
+  bundle and `Crest.html`.
 - **The desk says when it is no longer being saved.** A localStorage overflow — a big record, or the auto-fetched
   `nd911` address cache (the 911 panel fetches on mount, thousands of points over a town) — was only `console.warn`'d,
   so from then on every edit (a hazard-class override, receptors, elevations) lived in memory only and was lost on
