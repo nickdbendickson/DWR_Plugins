@@ -287,8 +287,14 @@ def animation_from_the_workflow():
 def nested_run_hands_the_interface_flow_downstream():
     from nd_breach_runner.core import nested
     d = tempfile.mkdtemp()
+    # Both runs keep the shallow-outflow domain growth off (outflow_extend_pct=0): this test
+    # checks the nesting machinery, not that growth (which has its own test, run_grows_on_outflow).
+    # SyntheticTerrain is a flat plane, so the outflow growth never self-terminates there - the
+    # extent is bounded only by max_iterations and differs between the nested and plain paths,
+    # which would break the "extents agree closely" comparison below for a reason unrelated to
+    # the nesting it is meant to exercise.
     st = _settings(cell_size_m=25.0, initial_length_mi=4.0, half_width_mi=0.4, max_iterations=2,
-                   sim_time_hr=None)
+                   sim_time_hr=None, outflow_extend_pct=0.0)
     out = nested.run_nested(_dam(), (0.0, 0.0), st, SyntheticTerrain(), npy_writer,
                             os.path.join(d, "T1"), None, fine_cell_m=10.0, reach_mi=0.8,
                             fine_half_width_mi=0.2)
@@ -307,7 +313,7 @@ def nested_run_hands_the_interface_flow_downstream():
     # compare with a plain run at the coarse size: the flooded extents agree closely
     from nd_breach_runner.core import workflow
     st2 = _settings(cell_size_m=25.0, initial_length_mi=4.0, half_width_mi=0.4, max_iterations=2,
-                    sim_time_hr=None)
+                    sim_time_hr=None, outflow_extend_pct=0.0)
     plain = workflow.run_dam(_dam(), (0.0, 0.0), st2, SyntheticTerrain(), npy_writer,
                              os.path.join(d, "plain"))
     a, b = out.summary["flooded_acres"], plain.summary["flooded_acres"]

@@ -266,7 +266,7 @@ class NdDataUpdaterPlugin:
                             + ", ".join(r.name for r in missing) + ".")
         elif offline and not quiet:
             bar.pushInfo(LOG_TAG, "No internet connection. Using the local copies already "
-                                  "on this Mac.")
+                                  "on this computer.")
         if by_status.get("cancelled"):
             bar.pushInfo(LOG_TAG, "Update check cancelled. Local data was not changed.")
         if not quiet and not (updated or errors or offline or by_status.get("cancelled")):

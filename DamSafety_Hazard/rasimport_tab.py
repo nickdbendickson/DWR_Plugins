@@ -9,10 +9,12 @@ are made from it when the classification starts, in the background run,
 with this tab's options (_ras_plan_settings) and cached
 (rasimport.plan_to_rasters_cached in _ras_cache_root) - a re-run plan or
 changed options are picked up by the next run, and nothing blocks QGIS now.
-"Import" still writes rasters to look at first."""
+"Import" still writes rasters to look at first.
+
+2.23.15 (audit): "Import" runs in a background task too (_ras_import -> work in the task,
+_ras_imported on the main thread); QGIS stays usable and Cancel stops it."""
 
 import os
-import traceback
 
 from qgis.PyQt.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QWidget, QLineEdit, QTextEdit,
@@ -24,7 +26,7 @@ from . import rasimport as RI
 from .ui_wrap import WrapCheckBox
 from .compat import MSG_CRITICAL, MSG_WARNING
 from .helpers import (
-    log_message, add_layer_to_project, plugin_group, dam_display_name, CancelledByUser,
+    log_message, add_layer_to_project, plugin_group, dam_display_name,
 )
 from .constants import GRP_HYDRAULICS
 from .styles import style_depth
@@ -250,6 +252,8 @@ class RasImportTabMixin(object):
         self.ras_result_text.setPlainText("\n".join(text))
 
     def _ras_import(self, *args):
+        if getattr(self, "_busy", False):
+            return
         plan = self.ras_plan_edit.text().strip()
         if not plan or not os.path.isfile(plan):
             QMessageBox.warning(self, "HEC-RAS plan", "Select the plan results file (.hdf).")
@@ -259,28 +263,46 @@ class RasImportTabMixin(object):
             QMessageBox.warning(self, "HEC-RAS plan", "Terrain raster not found: " + dem)
             return
         out = self._ras_out()
-        self._set_busy(True)
-        self._progress = self._make_progress("Importing HEC-RAS plan results\u2026")
-        try:
-            res = RI.import_plan(plan, out, dem_path=dem,
-                                 cell_ft=float(self.ras_cell_spin.value()),
-                                 breach_hr=float(self.ras_breach_spin.value()),
-                                 arrival_ft=float(self.ras_arrival_spin.value()),
-                                 progress=self._progress_tick,
-                                 runner_dirs=[getattr(self, "config_dam_folder", "") or ""])
-        except CancelledByUser:
-            self._finish_progress()
-            self._set_busy(False)
-            self._update_status("HEC-RAS import cancelled", False)
-            return
-        except Exception as e:
-            self._finish_progress()
-            self._set_busy(False)
-            log_message(traceback.format_exc(), MSG_CRITICAL)
-            QMessageBox.critical(self, "HEC-RAS plan", str(e) or repr(e))
-            return
-        self._finish_progress()
-        self._set_busy(False)
+        # 2.23.15 (audit): the conversion - the whole HDF read, the cell GeoPackage, the
+        # gdal.Grid calls (minutes on a big plan) - runs in a background task like the
+        # classification; QGIS stays usable and Cancel stops it at the next progress step.
+        # Everything below that touches the project or the widgets waits for done().
+        # The options are read here, on the main thread; the worker gets plain values and
+        # makes its own GDAL objects. A layer of an earlier import of this plan is taken out
+        # of the project first (it would keep the GeoTIFF locked on Windows; the worker
+        # cannot release it).
+        from .runner import release_folder
+        n = release_folder(out)
+        if n:
+            self._log(">>> {} layer(s) of the earlier import taken out of the project (the "
+                      "files are written again)".format(n))
+        cell_ft = float(self.ras_cell_spin.value())
+        breach_hr = float(self.ras_breach_spin.value())
+        arrival_ft = float(self.ras_arrival_spin.value())
+        runner_dirs = [getattr(self, "config_dam_folder", "") or ""]
+
+        def work(progress, log):
+            return RI.import_plan(plan, out, dem_path=dem, cell_ft=cell_ft,
+                                  breach_hr=breach_hr, arrival_ft=arrival_ft,
+                                  progress=progress, runner_dirs=runner_dirs)
+
+        def done(outcome):
+            if outcome.cancelled:
+                self._update_status("HEC-RAS import cancelled", False)
+                self._log(">>> HEC-RAS plan import cancelled")
+                return
+            if outcome.error is not None:
+                log_message(outcome.traceback, MSG_CRITICAL)
+                self._log(outcome.traceback)
+                self._update_status("HEC-RAS import FAILED: {}".format(outcome.error), False)
+                QMessageBox.critical(self, "HEC-RAS plan",
+                                     str(outcome.error) or repr(outcome.error))
+                return
+            self._ras_imported(plan, out, outcome.result)
+        self._start_background("Importing HEC-RAS plan results\u2026", work, done)
+
+    def _ras_imported(self, plan, out, res):
+        """Main-thread part of the HEC-RAS import: the Setup boxes, the layers, the text."""
         p = res["paths"]
         name = "HEC-RAS " + RI.slug(plan)
         if self.ras_use_setup_check.isChecked():

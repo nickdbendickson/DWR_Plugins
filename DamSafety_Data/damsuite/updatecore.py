@@ -225,6 +225,102 @@ def file_hash(path, algorithm="md5"):
     return h.hexdigest()
 
 
+# audit R11 (2026-11-07): a download is checked against the free space of the folder it goes
+# to before it starts (a full disk used to surface as a bare OSError half way, or not at all
+# when the body was held in RAM), and is written to <file>.part, renamed when complete, so a
+# half-written file is never taken for a finished one.
+MIN_FREE_BYTES = 256 * 1024 * 1024          # headroom kept free whatever the download size
+EXTRACT_FACTOR = 2.0                        # a zip that is extracted needs about this much more
+
+
+def _mb(n):
+    return "{:,.0f} MB".format(float(n) / (1024.0 * 1024.0))
+
+
+def free_bytes(folder):
+    """Free bytes on the file system of `folder` (the nearest existing parent), or None when
+    it cannot be told (never raises)."""
+    path = os.path.abspath(folder or ".")
+    while path and not os.path.exists(path):
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    try:
+        return int(shutil.disk_usage(path).free)
+    except (OSError, ValueError):
+        return None
+
+
+def ensure_free_space(folder, need_bytes, what="the download"):
+    """UpdateError, in plain words, when `folder`'s file system has less than `need_bytes` +
+    MIN_FREE_BYTES free; the free space it found otherwise (None when unknown)."""
+    free = free_bytes(folder)
+    if free is None or need_bytes is None:
+        return free
+    need = int(need_bytes) + MIN_FREE_BYTES
+    if free < need:
+        raise UpdateError(
+            "Not enough disk space for {} in {}: {} free, about {} needed ({} for the data "
+            "plus {} kept free). Free some space or choose another data folder.".format(
+                what, folder, _mb(free), _mb(need), _mb(need_bytes), _mb(MIN_FREE_BYTES)))
+    return free
+
+
+def remote_size(http, url, feedback=None):
+    """The Content-Length the server announces for `url` (int), or None when it does not say
+    or the client has no head(); a failure here never stops the download."""
+    head = getattr(http, "head", None)
+    if head is None:
+        return None
+    try:
+        headers = head(url) or {}
+    except Cancelled:
+        raise
+    except Exception as e:                       # noqa: BLE001 - size is a courtesy
+        if feedback is not None:
+            feedback.log("size of {} not known before the download ({})".format(url, e))
+        return None
+    # a Range request answered with 206 gives the full size after the slash
+    rng = str(headers.get("content-range") or "")
+    if "/" in rng and rng.rsplit("/", 1)[1].strip().isdigit():
+        return int(rng.rsplit("/", 1)[1].strip())
+    size = str(headers.get("content-length") or "").strip()
+    return int(size) if size.isdigit() and int(size) > 1 else None
+
+
+def download_file(http, url, path, feedback, extract=False, what=None):
+    """http.download(url, ...) into `path` with the audit R11 guards: the free space of the
+    folder is checked against the announced size first (x EXTRACT_FACTOR for a zip that is
+    extracted there), the body goes to `path`.part and is renamed to `path` only when the
+    client returned without error, and a left-over .part is removed. Returns the size the
+    server announced (None when unknown)."""
+    folder = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(folder, exist_ok=True)
+    size = remote_size(http, url, feedback)
+    name = what or os.path.basename(path)
+    if size is not None:
+        need = int(size * (EXTRACT_FACTOR if extract else 1.0))
+        ensure_free_space(folder, need, "{} ({}{})".format(
+            name, _mb(size), ", extracted" if extract else ""))
+    part = path + ".part"
+    try:
+        http.download(url, part, feedback)
+        if not os.path.isfile(part):
+            raise UpdateError("the download of {} wrote nothing to {}".format(url, part))
+        if size is not None and os.path.getsize(part) != size:
+            raise NetworkError("download interrupted ({} of {} bytes)".format(
+                os.path.getsize(part), size))
+        os.replace(part, path)
+    finally:
+        try:
+            if os.path.exists(part):
+                os.remove(part)
+        except OSError:
+            pass
+    return size
+
+
 def extract_zip(zip_path, dest_dir, feedback):
     """Verify and extract a zip archive, rejecting entries that escape dest_dir."""
     try:
@@ -324,7 +420,9 @@ class HttpFileSource(Source):
         os.makedirs(staging_dir, exist_ok=True)
         path = os.path.join(staging_dir, self.filename)
         feedback.log(f"{self.name}: downloading {self.url}")
-        http.download(self.url, path, feedback)
+        download_file(http, self.url, path, feedback,           # audit R11: space, .part
+                      extract=self.extract and self.filename.lower().endswith(".zip"),
+                      what=self.name)
         feedback.check_cancelled()
         version = remote_version
         sha256 = file_hash(path, "sha256")
@@ -378,7 +476,7 @@ class GitHubRepoSource(Source):
         ref = remote_version[4:] if remote_version else self.branch
         url = f"https://codeload.github.com/{self.owner}/{self.repo}/zip/{ref}"
         zip_path = os.path.join(staging_dir, "source.zip")
-        http.download(url, zip_path, feedback)
+        download_file(http, url, zip_path, feedback, extract=True, what=self.name)  # audit R11
         sha256 = file_hash(zip_path, "sha256")
         feedback.log(f"{self.name}: SHA-256 of {url} is {sha256}")
         if self.zip_sha256 and self.commit and ref == self.commit and sha256 != self.zip_sha256:
@@ -430,7 +528,7 @@ class OsmLayersSource(Source):
         pbf = os.path.join(staging_dir, "north-dakota-latest.osm.pbf")
         feedback.log(f"{self.name}: downloading {self.URL}")
         feedback.set_range(0, 30)
-        http.download(self.URL, pbf, feedback)
+        download_file(http, self.URL, pbf, feedback, extract=True, what=self.name)  # audit R11
         feedback.check_cancelled()
         actual = "md5:" + file_hash(pbf, "md5")
         if remote_version and actual != remote_version:
@@ -708,6 +806,10 @@ class Updater:
         staging = os.path.join(self.data_dir, STAGING_NAME, f"{source.id}-{uuid.uuid4().hex[:8]}")
         try:
             feedback.check_cancelled()
+            # audit R11: the staging folder's file system must have room at all before a
+            # source starts (the per-download check knows the size; this one catches a full
+            # disk before the first request)
+            ensure_free_space(self.data_dir, 0, f"{source.name}")
             remote = source.remote_version(self.http, feedback)
             if (remote is not None and remote == entry.get("version") and have_local
                     and same_config):

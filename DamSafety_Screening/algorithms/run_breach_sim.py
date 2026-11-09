@@ -482,7 +482,7 @@ class RunBreachSim(QgsProcessingAlgorithm):
                                          "choose a built-in engine or give the executable.")
         os.makedirs(outdir, exist_ok=True)
         work = os.path.join(outdir, "_work"); os.makedirs(work, exist_ok=True)
-        loader = cm.TerrainLoader(demdir, tsrc, local, work)
+        loader = cm.TerrainLoader(demdir, tsrc, local, work, log=feedback.pushInfo)  # finding 3.2
         nlcd_src = nlcd.source() if nlcd is not None else None
 
         names = dams.fields().names()

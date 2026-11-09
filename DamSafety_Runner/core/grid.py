@@ -8,8 +8,12 @@ NODATA = -9999.0
 class Grid:
     """data[row, col], row 0 at the top. x0/y0 are the left and top edges."""
 
-    def __init__(self, data, x0, y0, dx, nodata=NODATA, crs_wkt=None):
-        self.data = np.asarray(data, dtype=np.float64)
+    def __init__(self, data, x0, y0, dx, nodata=NODATA, crs_wkt=None, dtype=np.float64):
+        # audit P3 (3.16.10): elevation grids stay float64 (the models subtract elevations, and
+        # 1 mm on a 500 m datum needs it); the model RESULT grids (depth, velocity, arrival,
+        # WSE: 0.001 m / 0.01 ft quantities written by LISFLOOD-FP in single precision) are
+        # built as float32 by lisflood.read_results - half the memory of a full-domain array
+        self.data = np.asarray(data, dtype=dtype)
         self.x0 = float(x0)
         self.y0 = float(y0)
         self.dx = float(dx)
@@ -38,9 +42,9 @@ class Grid:
     def yll(self):
         return self.y0 - self.ny * self.dx
 
-    def like(self, data, nodata=None):
+    def like(self, data, nodata=None, dtype=np.float64):
         return Grid(data, self.x0, self.y0, self.dx,
-                    self.nodata if nodata is None else nodata, self.crs_wkt)
+                    self.nodata if nodata is None else nodata, self.crs_wkt, dtype=dtype)
 
     def x_centers(self):
         return self.x0 + (np.arange(self.nx) + 0.5) * self.dx
@@ -105,7 +109,10 @@ class Grid:
         np.savetxt(path, a, fmt=fmt, header=header, comments="")
 
     @staticmethod
-    def read_asc(path, crs_wkt=None):
+    def read_asc(path, crs_wkt=None, dtype=np.float64):
+        """An ESRI ASCII grid. `dtype` (audit P3): float32 reads a LISFLOOD-FP result file
+        (3-decimal metres) straight into single precision; the default keeps elevations in
+        float64. The Grid's data has that dtype."""
         hdr = {}
         with open(path, encoding="utf-8") as f:
             for _ in range(6):
@@ -116,10 +123,11 @@ class Grid:
                     f.seek(pos)
                     break
                 hdr[parts[0].lower()] = float(parts[1])
-            data = np.loadtxt(f, ndmin=2)
+            data = np.loadtxt(f, ndmin=2, dtype=dtype)
         ny, nx = int(hdr["nrows"]), int(hdr["ncols"])
         data = data.reshape(ny, nx)
         dx = hdr["cellsize"]
         x0 = hdr.get("xllcorner", hdr.get("xllcenter", 0.0) - 0.5 * dx)
         yll = hdr.get("yllcorner", hdr.get("yllcenter", 0.0) - 0.5 * dx)
-        return Grid(data, x0, yll + ny * dx, dx, hdr.get("nodata_value", NODATA), crs_wkt)
+        return Grid(data, x0, yll + ny * dx, dx, hdr.get("nodata_value", NODATA), crs_wkt,
+                    dtype=dtype)

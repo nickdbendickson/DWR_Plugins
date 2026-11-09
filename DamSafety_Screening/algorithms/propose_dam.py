@@ -30,6 +30,7 @@ from ..compat import (FIELD_ANY, FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, 
 from ..damsuite import dam_record as dr
 from ..damsuite import gdalsafe as GS
 from . import _common as cm
+from .terrain_cache import local_mosaic
 from .breach_direction import PT_FIELDS
 from .estimate_storage import NEW_FIELDS as STORAGE_FIELDS
 from .prepare_dams import OUT_FIELDS as INVENTORY_FIELDS
@@ -166,8 +167,15 @@ class ProposeDam(QgsProcessingAlgorithm):
             tiles = terrain.list_local_tiles(folder) if folder else []
             if not tiles:
                 raise QgsProcessingException("No DEM tiles in the local DEM folder.")
-            vrt = os.path.join(tmp, "_local_mosaic.vrt")
-            GS.checked(gdal.BuildVRT(vrt, tiles), "building the local mosaic")
+            # Grok audit 2026-11-07 finding 3.2: feet tiles converted, mixed CRSs warped to
+            # EPSG:5070 (no tile dropped; a bare BuildVRT dropped them); built once per run
+            # and per tile list, not once per dam
+            vrt = os.path.join(tmp, "_local_mosaic_{}.vrt".format(cm.mosaic_key(tiles)))
+            if vrt not in self._mosaics:
+                try:
+                    self._mosaics[vrt] = local_mosaic(tiles, vrt, self._log)
+                except RuntimeError as e:
+                    raise QgsProcessingException(str(e))
             return vrt
         if kind == 2:
             path = self.parameterAsString(params, "RASTER", context)
@@ -177,6 +185,7 @@ class ProposeDam(QgsProcessingAlgorithm):
         return terrain.fetch_3dep(ext, cell, tmp, stem)
 
     def processAlgorithm(self, params, context, feedback):
+        self._mosaics, self._log = {}, feedback.pushInfo     # finding 3.2: _source's local mosaics
         lines = self.parameterAsSource(params, "LINE", context)
         if lines is None:
             raise QgsProcessingException("Draw the crest line first.")

@@ -443,7 +443,9 @@ def describe(emb, stor, upstream_given):
 def build(dem, gt, line, crest_m, crest_width_m, us_h, ds_h, upstream="left",
           upstream_given=False, steps=24):
     """Insert the embankment and measure the pool. The array passed in is not changed."""
-    before = np.array(dem, copy=False)
+    # audit R1 (2026-11-07): np.asarray, not np.array(copy=False), which numpy 2 refuses
+    # when a copy is needed (a list, a scalar); the same object comes back for an ndarray
+    before = np.asarray(dem)
     emb = insert_embankment(dem, gt, line, crest_m, crest_width_m, us_h, ds_h, upstream)
     if before is dem and np.shares_memory(emb["dem"], dem):
         raise ProposedError("internal: the embankment wrote onto the source DEM")

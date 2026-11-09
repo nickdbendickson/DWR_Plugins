@@ -1095,8 +1095,12 @@ class ClassificationTabMixin(object):
         return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
 
     def _run_watch(self, *args):
-        """v2.7: hazard-creep watch over a folder of dams (watch.py). Runs on
-        the main thread with a progress bar, like the other whole-folder steps."""
+        """v2.7: hazard-creep watch over a folder of dams (watch.py). 2.23.15 (audit): a
+        background task like the dams-in-series screen and the submittal package - the
+        watch is a batch classification (add_to_project off, no report, no layers), so
+        nothing in it needs the main thread; QGIS stays usable and Cancel ends the dams
+        still running (the worker processes too). One click, one run: the button is off
+        while it works (_BUSY_WIDGETS), so a second watch cannot start under the first."""
         if self._busy:
             return
         start = os.path.dirname(self.config_dam_folder.rstrip("/\\")) if getattr(
@@ -1106,32 +1110,41 @@ class ClassificationTabMixin(object):
         if not parent:
             return
         from . import watch as WT
-        self._set_busy(True)
-        self._progress = self._make_progress("Hazard creep watch\u2026")
+        from .processing import discover_project_layers
+        from .runner import detach_layers
+        workers = int(self.watch_workers_spin.value())
         info = {}
-        try:
-            rows, paths = WT.run_watch(parent, progress=self._progress_tick, log=self._log,
-                                       workers=int(self.watch_workers_spin.value()), info=info)
-        except CancelledByUser:
-            self._finish_progress()
-            self._set_busy(False)
-            self._update_status("Creep watch cancelled", False)
-            return
-        except Exception as e:
-            self._finish_progress()
-            self._set_busy(False)
-            log_message(traceback.format_exc(), MSG_CRITICAL)
-            self._log("!!! Creep watch failed: {}".format(e))
-            self._update_status("Creep watch failed: {}".format(e), False)   # 2.23.17: no pop-up
-            return
-        self._finish_progress()
-        self._set_busy(False)
-        text = WT.alerts_text(rows)
-        if info.get("text"):
-            self._log(">>> Creep watch ran: " + info["text"])
-        self._log(">>> Creep watch: {} - {}".format(text, paths["html"]))
-        self._update_status("Creep watch: " + text, True)      # 2.23.17: the report opens; no pop-up
-        self._open_path(paths["html"])
+        # the project's NSI / address point layers are an input of every dam's run (as
+        # before, when the watch ran on the main thread): found and copied here, so the
+        # worker never looks at the project. Layers in the settings mean the sequential
+        # mode (they cannot be handed to qgis_process workers); the watch says so.
+        found = discover_project_layers()
+        points = [(fam, lyr) for fam in ("NSI", "NDGISHUB") for lyr in found.get(fam, [])]
+        over = {"point_sources": detach_layers({"point_sources": points})["point_sources"]}
+
+        def work(progress, log):
+            return WT.run_watch(parent, over, progress=progress, log=log, workers=workers,
+                                info=info)
+
+        def done(outcome):
+            if outcome.cancelled:
+                self._update_status("Creep watch cancelled", False)
+                self._log(">>> Creep watch cancelled")
+                return
+            if outcome.error is not None:
+                log_message(outcome.traceback, MSG_CRITICAL)
+                self._log(outcome.traceback)
+                self._log("!!! Creep watch failed: {}".format(outcome.error))
+                self._update_status("Creep watch FAILED: {}".format(outcome.error), False)   # 2.23.17: no pop-up
+                return
+            rows, paths = outcome.result
+            text = WT.alerts_text(rows)
+            if info.get("text"):
+                self._log(">>> Creep watch ran: " + info["text"])
+            self._log(">>> Creep watch: {} - {}".format(text, paths["html"]))
+            self._update_status("Creep watch: " + text, True)      # 2.23.17: the report opens; no pop-up
+            self._open_path(paths["html"])
+        self._start_background("Hazard creep watch\u2026", work, done, project_bound=False)
 
     def _make_submittal(self, *args):
         """v2.7: bundle the last run's files for the reviewer (submittal.py)."""

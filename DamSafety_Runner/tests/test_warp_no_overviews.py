@@ -12,13 +12,14 @@ import tempfile
 
 import numpy as np
 
-from nd_breach_runner.tests.registry import test
+from nd_breach_runner.tests.registry import need_osgeo, test
 
 EPSG = 26914
 N = 400                    # 1 m cells per tile side
 
 
 def _gdal():
+    need_osgeo()                      # a skip, not a failure, on a Python without GDAL
     from osgeo import gdal, osr
     return gdal, osr
 

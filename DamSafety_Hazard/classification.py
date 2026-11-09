@@ -28,7 +28,7 @@ from .constants import (
     CLASS_JUDGMENT, vehicle_curve_available,
 )
 from .helpers import create_memory_layer, export_layer_to_formats, prepare_output_path
-from .structures import OUT_PROBABLE, OUT_JUDGMENT, OUT_ECONOMIC, TYPE_MOBILE
+from .structures import OUT_PROBABLE, OUT_JUDGMENT, OUT_ECONOMIC, OUT_FAILED, TYPE_MOBILE
 
 
 JUDGMENT_RULE_PREFIX = "MEDIUM - "     # 2.22.0: judgment-zone rule reason starts so
@@ -54,8 +54,26 @@ def _drop_low_reason(nd):
     nd["reasons"] = [r for r in nd["reasons"] if not r.startswith("LOW -")]
 
 
+def _failed_structures(structs, structs_failed):
+    """audit R2: the structures whose evaluation raised - the records marked eval_failed
+    (structures.evaluate_structures), or at least `structs_failed` when the caller counted
+    them itself (a view without the records)."""
+    marked = [s for s in structs or [] if s.get("eval_failed")]
+    return marked, max(len(marked), int(structs_failed or 0))
+
+
+def _incomplete(structs_evaluated, roads_evaluated, rail_evaluated, n_failed=0):
+    """The incomplete list the portfolio / history / summary show (classify_nd)."""
+    inc = [n for n, ok in (("structures", structs_evaluated), ("roads", roads_evaluated),
+                           ("railroads", rail_evaluated)) if not ok]
+    if n_failed and structs_evaluated:           # audit R2
+        inc.append("structures ({} could not be evaluated)".format(n_failed))
+    return inc
+
+
 def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
-                roads_evaluated=True, rail_evaluated=True, structs_evaluated=True):
+                roads_evaluated=True, rail_evaluated=True, structs_evaluated=True,
+                structs_failed=0):
     """Returns dict(cls, reasons[], judgment[], counts{}). v2.19.0: `structs_evaluated`
     False (no structure layer was given or downloaded) shows the structure rows as
     "not evaluated" instead of "not met" and marks the class incomplete.
@@ -63,7 +81,13 @@ def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
     2.22.0 (Nick, 10/30/2026): a habitable structure in the ACER judgment zone makes
     the dam MEDIUM by rule - not probable loss of life, not a provisional High.
     `judgment_as_probable` True is the old conservative option (judgment zone counted
-    as probable loss of life, HIGH); it is kept as a non-default option."""
+    as probable loss of life, HIGH); it is kept as a non-default option.
+
+    audit R2 (2026-11-07): a structure whose evaluation raised (rec["eval_failed"], outcome
+    OUT_FAILED; or `structs_failed` of them counted by the caller) is not a dry structure:
+    the class is marked incomplete ("structures (N could not be evaluated)"), a PROVISIONAL
+    reason line and a judgment item say so, and the criteria rows say "N not evaluated"."""
+    failed_recs, n_failed = _failed_structures(structs, structs_failed)
     # An empty inventory is not a Low dam. Low is only after structures,
     # roads and rail were actually tested.
     if not structs and not roads and not rails:
@@ -72,9 +96,8 @@ def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
                             "Low is used only after those layers are tested."],
                 "judgment": ["Load the suite folder or a structure layer and run again."],
                 "criteria": [], "struct_items": 0,
-                "incomplete": [n for n, ok in (("structures", structs_evaluated),
-                                               ("roads", roads_evaluated),
-                                               ("railroads", rail_evaluated)) if not ok],
+                "incomplete": _incomplete(structs_evaluated, roads_evaluated, rail_evaluated,
+                                          n_failed),
                 "counts": {"habitable_probable": 0, "habitable_judgment": 0,
                            "habitable_inundated": 0, "lifeline": 0,
                            "roads_high": 0, "roads_medium": 0, "rail": 0, "rail_high": 0,
@@ -181,6 +204,15 @@ def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
         judgment.append("No structure layer was evaluated (none given, none downloaded) - the "
                         "habitable-structure criteria (5.2.1.1, 5.2.2) were not applied, so "
                         "the class is a minimum and may be higher")
+    if n_failed and structs_evaluated:          # audit R2
+        hab_failed = sum(1 for s in failed_recs if s.get("habitable") in ("Yes", "Unverified"))
+        judgment.append("{} structure(s){} could not be evaluated (an error while sampling "
+                        "the flood at them: ND_Outcome '{}', Notes 'EVALUATION FAILED') - "
+                        "they are NOT counted as dry; the habitable-structure criteria "
+                        "(5.2.1.1, 5.2.2) are incomplete and the class is a minimum until "
+                        "they are re-run or reviewed".format(
+                            n_failed, " ({} habitable or unverified)".format(hab_failed)
+                            if failed_recs else "", OUT_FAILED))
     if not roads_evaluated:
         judgment.append("No road layer was evaluated - ND road criteria (5.2.1.2) not applied")
     if not rail_evaluated:
@@ -196,6 +228,10 @@ def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
                        "railroads affected" if structs_evaluated else
                        "LOW SO FAR - no roads (AADT >= 500 / highways) or railroads affected "
                        "in the layers given; habitable structures were NOT evaluated")
+    if n_failed and structs_evaluated:          # audit R2: never a clean class line
+        reasons.insert(0, PROVISIONAL_PREFIX + "{} structure(s) could not be evaluated and "
+                       "are not counted as dry; the class is incomplete (a minimum) until "
+                       "they are re-run or reviewed".format(n_failed))
 
     # ---- criteria table (report / summary): one row per ND 5.2 criterion ----
     def persons(items):
@@ -206,10 +242,13 @@ def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
     rail_other = [r for r in rails if r["nd_class"] != ND_HIGH]
     no_aadt = [r for r in roads if r.get("nd_judgment")]
     se = structs_evaluated
+    # audit R2: a structure row's count is a minimum when some structures could not be evaluated
+    nf = "; {} not evaluated".format(n_failed) if (n_failed and se) else ""
     crit = [
         ("5.2.1.1", "Probable loss of life - habitable structures {}".format(
             "with depth > 2 ft (1D model)" if one_d else "in the ACER high danger zone"),
-         "{} ({} persons)".format(len(probable), persons(probable)) if se else "not evaluated",
+         "{} ({} persons){}".format(len(probable), persons(probable), nf) if se
+         else "not evaluated",
          met(probable, ND_HIGH) if se else "?"),
         ("5.2.1.1", "Habitable structures in the ACER judgment zone",
          "not evaluated" if not se else
@@ -239,7 +278,7 @@ def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
          "{} stretch(es)".format(len(rail_other)) if rail_evaluated else "not evaluated",
          met(rail_other, ND_MEDIUM) if rail_evaluated else "?"),
         ("5.2.2", "Habitable structures inundated (economic loss)",
-         "{} ({} persons)".format(len(econ), persons(econ)) if se else "not evaluated",
+         "{} ({} persons){}".format(len(econ), persons(econ), nf) if se else "not evaluated",
          met(econ, ND_MEDIUM) if se else "?"),
         ("5.2.2", "Possible lifeline facilities inundated",
          "{}".format(len(lifeline)) if se else "not evaluated",
@@ -249,10 +288,10 @@ def classify_nd(structs, roads, rails, judgment_as_probable=False, one_d=False,
          met(unverified, "Judgment") if se else "?"),
     ]
     criteria = [{"section": a, "criterion": b, "found": c, "result": d} for a, b, c, d in crit]
-    incomplete = [n for n, ok in (("structures", structs_evaluated), ("roads", roads_evaluated),
-                                  ("railroads", rail_evaluated)) if not ok]
+    incomplete = _incomplete(structs_evaluated, roads_evaluated, rail_evaluated, n_failed)
     return {"cls": cls, "reasons": reasons, "judgment": judgment, "criteria": criteria,
             "struct_items": n_struct_items, "incomplete": incomplete,
+            "structs_failed": n_failed,         # audit R2
             "counts": {
                 "habitable_probable": len(probable), "habitable_judgment": len(judg),
                 "habitable_inundated": len(econ), "lifeline": len(lifeline),
@@ -784,6 +823,11 @@ def summary_lines(nd, tm11, structs, roads, rails, dam_name, sources, one_d, ext
             bits.append("incomplete: flood cut off ({})".format(reason))
         else:
             bits.append("incomplete: flood still advancing at the time cap")
+    # audit R2 (2026-11-07): a class with a layer not evaluated, or with structures whose
+    # evaluation failed, never reads as a clean class on the headline line (the same list
+    # the portfolio row and the run snapshot carry)
+    if nd.get("incomplete"):
+        bits.append("INCOMPLETE ({})".format(", ".join(str(x) for x in nd["incomplete"])))
     suffix = ("  |  " + "; ".join(bits)) if bits else ""
     L.append("ND HAZARD CLASSIFICATION (screening): {}{}".format(nd["cls"].upper(), suffix))
     L.append("  Basis: " + ND_POLICY_REF)

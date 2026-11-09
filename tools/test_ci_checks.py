@@ -47,7 +47,7 @@ def _w(root, rel, text):
         f.write(text)
 
 
-def _tree(root, hz="2.18.52", rn="3.10.53", hz_entries=("2.18.52", "2.18.51"),
+def _tree(root, hz="2.18.52", rn="3.10.53", hz_entries=("2.18.52", "2.18.51", "2.18.50"),
           rn_entries=("3.10.53", "3.10.52"), bullets=("- **Runner 3.10.53: arrival.** text",),
           const=None, readme=None, vendored=None):
     _w(root, "shared/damsuite/versions.py", VERSIONS % (hz, rn))
@@ -94,7 +94,7 @@ def _problems(root, ref="basemain"):
 def test_consistent_bump_passes():
     with Repo() as root:
         assert _problems(root) == [], _problems(root)
-        _tree(root, hz="2.18.54", hz_entries=("2.18.54", "2.18.52", "2.18.51"),
+        _tree(root, hz="2.18.54", hz_entries=("2.18.54", "2.18.52", "2.18.51", "2.18.50"),
               bullets=("- **Hazard 2.18.54: inventory.** t", "- **Runner 3.10.53: arrival.** text"))
         assert _problems(root) == [], _problems(root)
 
@@ -130,16 +130,107 @@ def test_version_lower_than_main_fails():
 
 def test_dropped_changelog_entries_fail():
     with Repo() as root:
-        # a merge that took the branch's side: main's 2.18.51 and 3.10.52 entries are gone
+        # a merge that took the branch's side: main's 2.18.50 and 3.10.52 entries are gone
+        # (2.18.51 is gone from metadata.txt too, but docs/CHANGELOG.md's base section names
+        # "Hazard 2.18.51", so since 2026-11-07 that one counts as kept)
         _tree(root, hz="2.18.53", rn="3.10.56", hz_entries=("2.18.53", "2.18.52"),
               rn_entries=("3.10.56", "3.10.53"), bullets=("- **Hazard 2.18.53: x.** t",))
         p = _problems(root)
-        assert any("DamSafety_Hazard: changelog entries on basemain are missing: 2.18.51" in x
-                   for x in p), p
+        assert any("DamSafety_Hazard: changelog entries on basemain are missing: 2.18.50" in x
+                   and "2.18.51" not in x for x in p), p
         assert any("DamSafety_Runner: changelog entries on basemain are missing: 3.10.52" in x
                    for x in p), p
         assert any("docs/CHANGELOG.md: 1 entr(ies)" in x and "Runner 3.10.53: arrival." in x
                    for x in p), p
+
+
+def test_trimmed_changelog_entries_live_on_in_changelog_md():
+    """2026-11-07 (usability / release): an entry may leave metadata.txt changelog= when its
+    version is still in docs/CHANGELOG.md - a bullet title or the plugin's archived section;
+    one in neither still fails, and a changelog= over 12 KB fails."""
+    with Repo() as root:
+        # main's Hazard 2.18.50 and Runner 3.10.52 leave metadata.txt ...
+        _tree(root, hz="2.18.53", rn="3.10.56", hz_entries=("2.18.53", "2.18.52"),
+              rn_entries=("3.10.56", "3.10.53"),
+              bullets=("- **Hazard 2.18.53: x.** t", "- **Runner 3.10.53: arrival.** text"))
+        p = _problems(root)
+        assert any("DamSafety_Hazard: changelog entries on basemain are missing: 2.18.50" in x
+                   for x in p), p
+        assert any("DamSafety_Runner: changelog entries on basemain are missing: 3.10.52" in x
+                   for x in p), p
+        # ... into the archived section (Hazard) and a bullet title (Runner): fine
+        md = C._read(os.path.join(root, "docs", "CHANGELOG.md"))
+        md += ("\n## Archived metadata changelog \u2014 DamSafety_Hazard\n\n```text\n"
+               "    2.18.50 - 2026-10-21 (x)\n      * y\n```\n")
+        md = md.replace("- **Runner 3.10.53: arrival.** text",
+                        "- **Runner 3.10.53: arrival.** text\n- **Hazard 2.18.52 / Runner 3.10.52: "
+                        "older.** t")
+        _w(root, "docs/CHANGELOG.md", md)
+        p = _problems(root)
+        assert not any("entries on basemain are missing" in x for x in p), p
+        # the Hazard section does not vouch for a Runner version
+        md2 = md.replace("Runner 3.10.52: older", "Runner 3.10.51: older").replace(
+            "    2.18.50 - 2026-10-21 (x)", "    2.18.50 - 2026-10-21 (x)\n    3.10.52 - z")
+        _w(root, "docs/CHANGELOG.md", md2)
+        p = _problems(root)
+        assert any("DamSafety_Runner: changelog entries on basemain are missing: 3.10.52" in x
+                   for x in p), p
+        assert not any("DamSafety_Hazard: changelog entries" in x for x in p), p
+    # the parsers on their own
+    md = ("# C\n## Unreleased\n- **Runner 3.14.6 / Hazard 2.23.4 / Screening 0.18.6 / Setup 1.0.20 / "
+          "Hazard Lite 0.1.4: GUI.** x\n- **Data 1.5.4: y.** z\n"
+          "## Archived metadata changelog \u2014 DamSafety_Runner\n\n```text\n3.10.1 (2026; a)\n"
+          "    3.10.0 - b\n```\n## Archived metadata changelog \u2014 DamSafety_Data\n```text\n"
+          "    1.0.0 - first\n```\n")
+    assert C.changelog_md_versions(md, "DamSafety_Runner") == {"3.14.6", "3.10.1", "3.10.0"}
+    assert C.changelog_md_versions(md, "DamSafety_Hazard") == {"2.23.4"}
+    assert C.changelog_md_versions(md, "DamSafety_HazardLite") == {"0.1.4"}
+    assert C.changelog_md_versions(md, "DamSafety_Setup") == {"1.0.20"}
+    assert C.changelog_md_versions(md, "DamSafety_Data") == {"1.5.4", "1.0.0"}
+    assert C.changelog_md_versions(md, "DamSafety_Screening") == {"0.18.6"}
+    # the size cap
+    assert C.changelog_bytes("[general]\nversion=1.0.0\nchangelog=1.0.0 - a\n    0.9.0 - b\ntags=x\n") == len(
+        "1.0.0 - a\n    0.9.0 - b\n")
+    root = tempfile.mkdtemp(prefix="cl_cap_")
+    try:
+        big = "1.0.0 - " + "x" * (C.CHANGELOG_MAX_BYTES + 10)
+        _w(root, "shared/damsuite/versions.py", VERSIONS % ("1.0.0", "1.0.0"))
+        _w(root, "DamSafety_Hazard/metadata.txt", HZ_META % ("1.0.0", "    " + big))
+        _w(root, "DamSafety_Runner/metadata.txt", RN_META % ("1.0.0", "1.0.0 - small"))
+        p = []
+        C.check_version_bookkeeping(p, root)
+        assert any("DamSafety_Hazard: metadata.txt changelog= is 12 KB (over 12 KB" in x
+                   and "Archived metadata changelog" in x for x in p), p
+        assert not any("DamSafety_Runner: metadata.txt changelog=" in x for x in p), p
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    # the real tree is under the cap everywhere
+    for plugin in C.PLUGINS:
+        text = C._read(os.path.join(C.ROOT, plugin, "metadata.txt"))
+        assert C.changelog_bytes(text) <= C.CHANGELOG_MAX_BYTES, (plugin, C.changelog_bytes(text))
+
+
+def test_metadata_placeholders():
+    good = "[general]\nname=X\nauthor=Nick Bendickson\nrepository=https://github.com/x/y\n" \
+           "tracker=https://github.com/x/y/issues\nchangelog=1.0.0 - see https://example.com\n"
+    assert C.metadata_placeholders(good) == [], C.metadata_placeholders(good)   # changelog may quote
+    bad = ("[general]\nname=X\nauthor=Your Name\nemail=you@example.com\n"
+           "repository=\ntracker=\nhomepage=https://example.com/x\n")
+    msgs = C.metadata_placeholders(bad)
+    text = "\n".join(msgs)
+    assert "repository= is empty" in text and "tracker= is empty" in text, msgs
+    assert "author=Your Name" in text and "you@example.com" in text and "example.com/x" in text
+    assert len(msgs) == 5, msgs
+    assert C.metadata_placeholders("[general]\nemail=none@example.invalid\n")
+    root = tempfile.mkdtemp(prefix="meta_ph_")
+    try:
+        _w(root, "DamSafety_Runner/metadata.txt", bad)
+        _w(root, "DamSafety_Hazard/metadata.txt", good)
+        p = []
+        C.check_metadata_format(p, root)
+        assert len(p) == 5 and all("DamSafety_Runner" in x for x in p), p
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_no_base_branch_is_a_notice_not_a_failure():
