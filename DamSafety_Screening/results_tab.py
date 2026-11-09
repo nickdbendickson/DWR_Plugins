@@ -125,7 +125,7 @@ class ResultsTabMixin(object):
     def _continue(self):
         """Open the plugin dam.json says this dam needs next."""
         plugin, _label, why = wf.continue_target(
-            self.work_edit.text().strip(), self._selected_dam())
+            self.work_edit.text().strip(), self.settings(), self._selected_dam())
         if plugin == "runner":
             self._handoff_runner()
         elif plugin == "hazard":

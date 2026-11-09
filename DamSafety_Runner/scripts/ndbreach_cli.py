@@ -1601,6 +1601,12 @@ def cmd_check(args):
             bad = bad or not ok
             lines.append(("OK " if ok else "PROBLEM ") + "LISFLOOD-FP ({}): {}".format(
                 exe, r["message"]))
+            if r["ok"] and not r.get("velocity"):       # M21: a build that writes no .maxVc
+                lines.append("PROBLEM LISFLOOD-FP ({}): the test run wrote no maximum velocity "
+                             "(.maxVc) - the ACER depth-velocity hazard needs it, and a run on "
+                             "this build would report velocity-driven HIGH cells as low. Use a "
+                             "patched build (scripts/build_lisflood_*.sh) or the built-in "
+                             "engine.".format(exe))
         if py:
             a = anmod.check_anuga(py, tmp)
             bad = bad or not a["ok"]

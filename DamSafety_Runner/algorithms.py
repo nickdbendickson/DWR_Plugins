@@ -2639,6 +2639,12 @@ class CheckAlgorithm(_Base):
                 r = check_lisflood(exe, os.path.join(tmp, "lisflood"))
                 lines.append(("OK " if r["ok"] and r.get("patched") else "PROBLEM ") +
                              "LISFLOOD-FP ({}): {}".format(exe, r["message"]))
+                if r["ok"] and not r.get("velocity"):       # M21: a build that writes no .maxVc
+                    lines.append("PROBLEM LISFLOOD-FP ({}): the test run wrote no maximum velocity "
+                                 "(.maxVc) - the ACER depth-velocity hazard needs it, and a run on "
+                                 "this build would report velocity-driven HIGH cells as low. Use a "
+                                 "patched build (scripts/build_lisflood_*.sh) or the built-in "
+                                 "engine.".format(exe))
             if py:
                 a = check_anuga(py, tmp)
                 lines.append(("OK " if a["ok"] else "PROBLEM ") +

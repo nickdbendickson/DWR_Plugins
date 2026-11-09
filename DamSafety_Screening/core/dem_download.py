@@ -650,8 +650,10 @@ def fetch_dwr_area(scope, county, out_dir, products, feedback=None, cache_dir=No
     os.makedirs(out_dir, exist_ok=True)
     ftp = _ftp() if transport == "ftp" else None
     try:
-        rasters = []
+        rasters, failed = [], []
         for i, tile in enumerate(tiles):
+            if getattr(feedback, "isCanceled", lambda: False)():
+                raise Cancelled("tile download cancelled after {} of {} tiles".format(i, len(tiles)))
             for product in products:
                 if product == "ASCII_Grids_ft":
                     remote = "/{}/{}/ASCII_Grids_ft/gft{}.zip".format(
@@ -669,7 +671,8 @@ def fetch_dwr_area(scope, county, out_dir, products, feedback=None, cache_dir=No
                             ftp.retrbinary("RETR " + remote, f.write)
                     else:
                         _https_get(HTTPS_ROOT + remote, local)
-                except Exception:
+                except Exception as e:                       # M23: record, do not skip silently
+                    failed.append("{} ({})".format(remote, e))
                     try:
                         os.remove(local)
                     except OSError:
@@ -680,11 +683,28 @@ def fetch_dwr_area(scope, county, out_dir, products, feedback=None, cache_dir=No
                 try:
                     with zipfile.ZipFile(local) as z:
                         _safe_extract(z, dest)
-                except (zipfile.BadZipFile, ValueError):
+                except zipfile.BadZipFile:
+                    failed.append("{} (not a zip - the host may have returned an error page)"
+                                  .format(remote))
+                    continue
+                except ValueError as e:
+                    failed.append("{} (unsafe zip: {})".format(remote, e))
                     continue
                 rasters += [os.path.join(root, fn) for root, _d, files in os.walk(dest)
                             for fn in files if fn.lower().endswith((".img", ".asc", ".grd", ".tif"))]
         _ftp_close(ftp)
+        # M23: a tile that could not be downloaded or unzipped used to be skipped with no message,
+        # so a county whose index no longer matches the host (or a captive-portal HTML error page)
+        # built a DEM with holes - tools 2 / 3 then clip / compute storage on a partial reservoir -
+        # or returned the never-written nd_lidar.vrt as if real. The ND QL2 path has no fallback
+        # DEM, so fail loudly on any missing tile instead of writing a holed surface.
+        if failed:
+            raise IOError("{} of {} QL2 tile download(s) failed, so a DEM with holes is not built: "
+                          "{}{}. Check the county lidar index against lidar.dwr.nd.gov.".format(
+                              len(failed), len(tiles) * len(products), "; ".join(failed[:20]),
+                              " ..." if len(failed) > 20 else ""))
+        if not rasters:
+            raise IOError("no QL2 raster was found in the downloaded tiles")
         return build_vrts(rasters, out_dir, feedback), len(tiles)
     finally:
         _ftp_close(ftp)

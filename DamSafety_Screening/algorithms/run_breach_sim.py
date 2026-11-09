@@ -230,23 +230,44 @@ def _write_flood_polygons(outdir, dam_id, scen, r):
         ds.SetGeoTransform(gt)
         ds.SetProjection("EPSG:5070")
         ds.GetRasterBand(1).WriteArray(mask.astype("uint8"))
+        srs = osr.SpatialReference(); srs.ImportFromEPSG(5070)
+        # M22: the GeoJSON write layer buffers features and supports neither GetNextFeature nor
+        # SetFeature, so the old in-place loop never ran, and gdal.Polygonize (iPixValField=0)
+        # wrote the pixel value "1" into the label field - every kind/class/within_hr came out
+        # "1" and dam_id was absent. Polygonize into an in-memory OGR layer (with a throwaway
+        # value field as the pixel sink), then build the output features with their real
+        # attributes set before writing, checking each CreateFeature.
+        mdrv = ogr.GetDriverByName("MEM") or ogr.GetDriverByName("Memory")
+        mds = mdrv.CreateDataSource("")
+        mlyr = mds.CreateLayer("poly", srs, ogr.wkbPolygon)
+        mlyr.CreateField(ogr.FieldDefn("v", ogr.OFTInteger))      # pixel-value sink for Polygonize
+        if gdal.Polygonize(ds.GetRasterBand(1), ds.GetRasterBand(1), mlyr, 0, [],
+                           callback=None) != 0:
+            raise RuntimeError("GDAL could not polygonize {}: {}".format(path, gdal.GetLastErrorMsg() or "unknown error"))
         vdrv = ogr.GetDriverByName("GeoJSON")
         if os.path.exists(path):
             vdrv.DeleteDataSource(path)
         vds = vdrv.CreateDataSource(path)
         if vds is None:
             raise RuntimeError("GDAL could not write {}: {}".format(path, gdal.GetLastErrorMsg() or "unknown error"))
-        srs = osr.SpatialReference(); srs.ImportFromEPSG(5070)
         lyr = vds.CreateLayer("flood", srs, ogr.wkbPolygon)
         lyr.CreateField(ogr.FieldDefn(field, ogr.OFTString))
         lyr.CreateField(ogr.FieldDefn("dam_id", ogr.OFTString))
-        if gdal.Polygonize(ds.GetRasterBand(1), ds.GetRasterBand(1), lyr, 0, [], callback=None) != 0:
-            raise RuntimeError("GDAL could not polygonize {}: {}".format(path, gdal.GetLastErrorMsg() or "unknown error"))
-        for feat in lyr:
-            feat.SetField(field, value)
-            feat.SetField("dam_id", dam_id)
-            lyr.SetFeature(feat)
+        defn = lyr.GetLayerDefn()
+        for mfeat in mlyr:
+            geom = mfeat.GetGeometryRef()
+            if geom is None:
+                continue
+            f = ogr.Feature(defn)
+            f.SetGeometry(geom.Clone())
+            f.SetField(field, value)
+            f.SetField("dam_id", dam_id)
+            if lyr.CreateFeature(f) != 0:
+                raise RuntimeError("GDAL could not write a feature to {}: {}".format(
+                    path, gdal.GetLastErrorMsg() or "unknown error"))
+            f = None
         vds = None
+        mds = None
 
     stem = os.path.join(outdir, "{}_{}".format(dam_id, scen))
     polygonize(wet, stem + "_extent.geojson", "kind", "extent")

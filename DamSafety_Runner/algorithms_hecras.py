@@ -334,8 +334,10 @@ class HecRasImportAlgorithm(_ToolBase):
                                                                      context)],
                   "arrival_depth_ft": self.parameterAsDouble(parameters, "ARRIVAL_FT", context),
                   "t0_hr": self.parameterAsDouble(parameters, "T0_HR", context)}
+            # M13: the import never reads mesh.fields (arrival), so skip computing it here; the
+            # published Arrival raster is built later by terrain_depth (**kw, want_arrival default).
             mesh = hecras.read_mesh(hdf, area=self._str(parameters, "AREA", context) or None,
-                                    **kw)
+                                    want_arrival=False, **kw)
             if like_grid is not None:
                 x0, ytop, dx, nx, ny = (like_grid.x0, like_grid.y0, like_grid.dx,
                                         like_grid.nx, like_grid.ny)

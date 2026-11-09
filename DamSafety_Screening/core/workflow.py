@@ -1003,18 +1003,22 @@ def dam_record_text(folder):
     return text
 
 
-def continue_target(work, dam_id):
+def continue_target(work, settings, dam_id):
     """(plugin, label, why) for Continue, from dam.json.
 
     plugin is "runner", "hazard", or "" (the button stays grey). A file whose
     name contains "depth" is not used: a baseline or an interim raster matches
     that test too. The next step is dam_record.next_action.
+
+    L10: resolve the dam-record path through dams_folder(work, settings) like every
+    other reader, so a chosen (non-default) "Dams folder" is honoured - the hardcoded
+    <work>/Dams left Continue grey with "no dam record yet" for a configured folder.
     """
     dam_id = str(dam_id or "").strip()
     if not work or not dam_id:
         return "", "Continue", ("Select a dam, or run one dam. Continue then opens "
                                 "the plugin that dam needs next.")
-    folder = os.path.join(work, "Dams", dam_id)
+    folder = os.path.join(dams_folder(work, settings or {}), dam_id)
     try:
         from ..damsuite import dam_record as DR
         rec = DR.load(folder) if os.path.isdir(folder) else None

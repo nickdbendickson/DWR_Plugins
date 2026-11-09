@@ -1157,7 +1157,7 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
         if cont is not None:
             plugin, label, why = ("", "Continue", "")
             if have and not busy:
-                plugin, label, why = wf.continue_target(work, self._selected_dam())
+                plugin, label, why = wf.continue_target(work, self.settings(), self._selected_dam())
             cont.setText(label or "Continue")
             cont.setToolTip(why)
             cont.setEnabled(bool(plugin) and not busy)

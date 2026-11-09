@@ -842,6 +842,10 @@ def suite_columns(row, folder, snap, log, parsed, screen_index=None, today=None)
     shadow = DR.DamRecord(folder)
     if rec is not None:
         shadow.status = [dict(s) for s in rec.status if isinstance(s, dict)]
+        # M09: carry extra too, else next_action's inventory_change branch (it reads
+        # record.extra["inventory_change"]) can never fire from the portfolio - a dam whose NID
+        # height changed shows "none" here while suite_tab / suite_home show "refresh".
+        shadow.extra = dict(rec.extra or {})
     derived = set()
 
     def derive(step, tool, version, result, when):

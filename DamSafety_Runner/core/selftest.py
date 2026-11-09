@@ -717,6 +717,12 @@ def check_lisflood_exe(exe, workdir):
     if not r.get("patched"):
         raise RuntimeError("{} runs but is not the patched build (no arrival-depth keyword): "
                            "{}".format(exe, r["message"]))
+    if not r.get("velocity"):                           # M21: pre-run refusal of a no-.maxVc build
+        raise RuntimeError("{} runs but wrote no maximum velocity (.maxVc); the ACER "
+                           "depth-velocity hazard needs it, so a run on this build would report "
+                           "velocity-driven HIGH cells as low. Use a patched build "
+                           "(scripts/build_lisflood_*.sh) or the built-in engine: {}"
+                           .format(exe, r["message"]))
     return "{}: {}".format(exe, r["message"])
 
 

@@ -373,6 +373,39 @@ def has_inventory_area_field(names):
 NO_CURVES = "no stage-storage curve folder (tool 3) was given"
 
 
+def _est_maxdep_m(attrs):
+    """Tool-3's below-pool reservoir depth est_maxdep_m (metres) from the dam attrs, or None.
+    Matched without regard to case, like inventory_max_area_m2."""
+    low = {str(k).lower(): k for k in (attrs or {})}
+    return _num(attrs.get(low["est_maxdep_m"])) if "est_maxdep_m" in low else None
+
+
+def _m24_shallow_note(curve_csv, crest_m, height_m, attrs):
+    """M24 (log-only interim): diagnostic text for a curve the SHALLOW_CURVE guard rejected.
+
+    It NEVER changes the decision (area_for_runner has already returned None); it only records,
+    in the AREA_AC source note that reaches the run log / dam.json / manifest, the quantities the
+    proposed basin-depth measure would use - the curve freeboard, tool-3's below-pool depth
+    est_maxdep_m, and 0.5 x height - and whether that measure would send the curve area. This lets
+    the frequency of dams the held numeric change (span + below-pool >= 0.5 h) would flip from
+    m=2.0 to a curve-derived exponent be measured on real runs before that change ships. Empty
+    unless the guard is the reason (span < 0.5 h)."""
+    try:
+        h = float(height_m) if height_m not in (None, "") else None
+    except (TypeError, ValueError):
+        h = None
+    span = curve_span_m(curve_csv, crest_m)
+    if not h or span is None or span >= SHALLOW_CURVE * h:
+        return ""
+    below = max(_est_maxdep_m(attrs) or 0.0, 0.0)
+    would_pass = (span + below) >= SHALLOW_CURVE * h
+    return (" [M24 measure: curve freeboard {:.1f} ft + tool-3 below-pool depth {:.1f} ft = "
+            "{:.1f} ft vs the {:.1f} ft guard (0.5 x {:.1f} ft dam); the proposed basin-depth "
+            "measure {} send the curve area at the top of dam]".format(
+                span / FT, below / FT, (span + below) / FT, SHALLOW_CURVE * h / FT, h / FT,
+                "WOULD" if would_pass else "would still not"))
+
+
 def surface_area_choice(curve_csv, crest_m, height_m, attrs, curves_given=True):
     """(area m2 or None, source, note) for the Runner's AREA_AC (0.17.46; 0.17.49: also with no
     curve folder).
@@ -386,11 +419,14 @@ def surface_area_choice(curve_csv, crest_m, height_m, attrs, curves_given=True):
         area, why = area_for_runner(curve_csv, crest_m, height_m)
         if area is not None and area > 0:
             return area, AREA_SRC_CURVE, ""
+        # M24 log-only interim: measure (do not change) the shallow-curve guard - see below.
+        m24 = _m24_shallow_note(curve_csv, crest_m, height_m, attrs)
         if not why:
             why = ("no stage-storage curve for this dam" if not curve_csv or not os.path.exists(curve_csv)
                    else "the stage-storage curve gives no usable area at the top of dam")
         else:
             why = why.replace("no surface area sent: ", "").split(" (the Runner assumes")[0]
+        why = why + m24
     else:
         why = NO_CURVES
     inv_m2, field = inventory_max_area_m2(attrs)

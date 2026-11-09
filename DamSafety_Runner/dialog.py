@@ -630,7 +630,7 @@ class NDBreachRunnerDialog(QDialog):
         row.addWidget(self.dem_res)
         row.addWidget(self.dem_download_btn)
         row.addStretch(1)
-        # 3.17.1: the facts line has its own row; beside Resolution and the button it wrapped
+        # 3.17.2: the facts line has its own row; beside Resolution and the button it wrapped
         # into a label shorter than its text at 1280x800 on Qt5 (realqt_dem_rows.py).
         self.dem_facts = QLabel("")
         self.dem_facts.setWordWrap(True)

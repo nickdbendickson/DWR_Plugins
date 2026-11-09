@@ -278,7 +278,7 @@ def nd_dwr_facts_name_the_product_build_vrts_used():
 
 @register
 def the_window_says_imagine_metres_and_ascii_feet():
-    # 0.19.1: the county DEM box moved to settings_tab.py (usability plan, change 7); its facts
+    # 0.19.2: the county DEM box moved to settings_tab.py (usability plan, change 7); its facts
     # line keeps a short ND DWR units note (the Download DEM tool's help has the long form).
     with open(os.path.join(os.path.dirname(HERE), "settings_tab.py"), encoding="utf-8") as fh:
         src = fh.read()
