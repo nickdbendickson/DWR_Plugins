@@ -30,7 +30,9 @@ import types
 import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PACK_CONVERT = os.path.join(os.path.dirname(HERE), "damsuite", "pack_convert.py")
+# Core 1.0.0: the one damsuite lives in the DamSafety_Core plugin beside this one
+PACK_CONVERT = os.path.join(os.path.dirname(os.path.dirname(HERE)), "DamSafety_Core", "damsuite",
+                            "pack_convert.py")
 
 _POINT = [-100.5, 47.5]
 _PROPS = {"name": "Test Dam", "nidid": "ND00123"}

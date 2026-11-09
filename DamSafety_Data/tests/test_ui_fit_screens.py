@@ -13,6 +13,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_DIR = os.path.dirname(HERE)
 ROOT = tempfile.mkdtemp(prefix="uifit_")
 os.symlink(PLUGIN_DIR, os.path.join(ROOT, PKG))      # import the plugin by its folder name only
+# Core 1.0.0: the plugin's damsuite and window files are shims onto DamSafety_Core, so it is
+# linked beside the plugin, as in a QGIS profile (DamSafety_Core/alias.py)
+os.symlink(os.path.join(os.path.dirname(PLUGIN_DIR), "DamSafety_Core"), os.path.join(ROOT, "DamSafety_Core"))
 sys.path.insert(0, ROOT)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """The ND DWR export files as offline-pack data sets. Since suite 1.18.6 this module IS
-damsuite/dwrfiles.py (sys.modules alias) - edit shared/damsuite/dwrfiles.py in DWR_Plugins."""
+damsuite/dwrfiles.py (sys.modules alias) - edit DamSafety_Core/damsuite/dwrfiles.py in DWR_Plugins."""
 import sys
 
 if __package__:

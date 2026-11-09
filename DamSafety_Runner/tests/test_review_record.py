@@ -151,7 +151,7 @@ def review_writer_is_referenced_by_no_run_or_classify_code():
     only by the readers (results_info.py, the dock's "review.json ignored" text)."""
     here = os.path.dirname(os.path.abspath(__file__))
     root = os.path.dirname(os.path.dirname(here))
-    plugins = [n for n in os.listdir(root) if n.startswith("DamSafety_") or n == "shared"]
+    plugins = [n for n in os.listdir(root) if n.startswith("DamSafety_")]    # Core 1.0.0: shared/ is gone
     bad = []
     for name in plugins:
         for dirpath, dirnames, files in os.walk(os.path.join(root, name)):

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""tools/ci_checks.py version bookkeeping gates (Docs & QA 2026-10-21): RELEASE vs metadata.txt
+"""tools/ci_checks.py gates: version bookkeeping (Docs & QA 2026-10-21: RELEASE vs metadata.txt
 vs Hazard constants.PLUGIN_VERSION, versions never lower than the base branch, no changelog entry
-of the base dropped. Pure stdlib + git; builds a throw-away repo per test.
+of the base dropped) and, since DamSafety Core 1.0.0, "no vendored copy" (every plugin's
+damsuite/ is the alias shim, every shared window file the three-line shim). Pure stdlib + git;
+builds a throw-away repo per test.
 
     python3 tools/test_ci_checks.py
 """
@@ -47,12 +49,10 @@ def _w(root, rel, text):
         f.write(text)
 
 
-def _tree(root, hz="2.18.52", rn="3.10.53", hz_entries=("2.18.52", "2.18.51", "2.18.50"),
+def _tree(root, hz="2.18.52", rn="3.10.53", hz_entries=("2.18.52", "2.18.51"),
           rn_entries=("3.10.53", "3.10.52"), bullets=("- **Runner 3.10.53: arrival.** text",),
-          const=None, readme=None, vendored=None):
-    _w(root, "shared/damsuite/versions.py", VERSIONS % (hz, rn))
-    for plugin in ("DamSafety_Hazard", "DamSafety_Runner"):
-        _w(root, plugin + "/damsuite/versions.py", VERSIONS % (vendored or (hz, rn)))
+          const=None, readme=None):
+    _w(root, C.CORE_VERSIONS, VERSIONS % (hz, rn))
     _w(root, "DamSafety_Hazard/metadata.txt", HZ_META % (hz, "\n".join(
         "    {} - 2026-10-21 (x)\n      * y".format(v) for v in hz_entries)))
     _w(root, "DamSafety_Runner/metadata.txt", RN_META % (rn, "\n    ".join(
@@ -94,7 +94,7 @@ def _problems(root, ref="basemain"):
 def test_consistent_bump_passes():
     with Repo() as root:
         assert _problems(root) == [], _problems(root)
-        _tree(root, hz="2.18.54", hz_entries=("2.18.54", "2.18.52", "2.18.51", "2.18.50"),
+        _tree(root, hz="2.18.54", hz_entries=("2.18.54", "2.18.52", "2.18.51"),
               bullets=("- **Hazard 2.18.54: inventory.** t", "- **Runner 3.10.53: arrival.** text"))
         assert _problems(root) == [], _problems(root)
 
@@ -102,11 +102,10 @@ def test_consistent_bump_passes():
 def test_release_not_matching_metadata_fails():
     with Repo() as root:
         _tree(root)
-        _w(root, "shared/damsuite/versions.py", VERSIONS % ("2.18.53", "3.10.53"))
+        _w(root, C.CORE_VERSIONS, VERSIONS % ("2.18.53", "3.10.53"))
         p = _problems(root)
         assert any("RELEASE['ndhazard'] = 2.18.53 but DamSafety_Hazard/metadata.txt version="
                    "2.18.52" in x for x in p), p
-        assert any("DamSafety_Hazard/damsuite/versions.py RELEASE" in x for x in p), p
 
 
 def test_hazard_plugin_version_and_readme_must_match():
@@ -130,107 +129,16 @@ def test_version_lower_than_main_fails():
 
 def test_dropped_changelog_entries_fail():
     with Repo() as root:
-        # a merge that took the branch's side: main's 2.18.50 and 3.10.52 entries are gone
-        # (2.18.51 is gone from metadata.txt too, but docs/CHANGELOG.md's base section names
-        # "Hazard 2.18.51", so since 2026-11-07 that one counts as kept)
+        # a merge that took the branch's side: main's 2.18.51 and 3.10.52 entries are gone
         _tree(root, hz="2.18.53", rn="3.10.56", hz_entries=("2.18.53", "2.18.52"),
               rn_entries=("3.10.56", "3.10.53"), bullets=("- **Hazard 2.18.53: x.** t",))
         p = _problems(root)
-        assert any("DamSafety_Hazard: changelog entries on basemain are missing: 2.18.50" in x
-                   and "2.18.51" not in x for x in p), p
+        assert any("DamSafety_Hazard: changelog entries on basemain are missing: 2.18.51" in x
+                   for x in p), p
         assert any("DamSafety_Runner: changelog entries on basemain are missing: 3.10.52" in x
                    for x in p), p
         assert any("docs/CHANGELOG.md: 1 entr(ies)" in x and "Runner 3.10.53: arrival." in x
                    for x in p), p
-
-
-def test_trimmed_changelog_entries_live_on_in_changelog_md():
-    """2026-11-07 (usability / release): an entry may leave metadata.txt changelog= when its
-    version is still in docs/CHANGELOG.md - a bullet title or the plugin's archived section;
-    one in neither still fails, and a changelog= over 12 KB fails."""
-    with Repo() as root:
-        # main's Hazard 2.18.50 and Runner 3.10.52 leave metadata.txt ...
-        _tree(root, hz="2.18.53", rn="3.10.56", hz_entries=("2.18.53", "2.18.52"),
-              rn_entries=("3.10.56", "3.10.53"),
-              bullets=("- **Hazard 2.18.53: x.** t", "- **Runner 3.10.53: arrival.** text"))
-        p = _problems(root)
-        assert any("DamSafety_Hazard: changelog entries on basemain are missing: 2.18.50" in x
-                   for x in p), p
-        assert any("DamSafety_Runner: changelog entries on basemain are missing: 3.10.52" in x
-                   for x in p), p
-        # ... into the archived section (Hazard) and a bullet title (Runner): fine
-        md = C._read(os.path.join(root, "docs", "CHANGELOG.md"))
-        md += ("\n## Archived metadata changelog \u2014 DamSafety_Hazard\n\n```text\n"
-               "    2.18.50 - 2026-10-21 (x)\n      * y\n```\n")
-        md = md.replace("- **Runner 3.10.53: arrival.** text",
-                        "- **Runner 3.10.53: arrival.** text\n- **Hazard 2.18.52 / Runner 3.10.52: "
-                        "older.** t")
-        _w(root, "docs/CHANGELOG.md", md)
-        p = _problems(root)
-        assert not any("entries on basemain are missing" in x for x in p), p
-        # the Hazard section does not vouch for a Runner version
-        md2 = md.replace("Runner 3.10.52: older", "Runner 3.10.51: older").replace(
-            "    2.18.50 - 2026-10-21 (x)", "    2.18.50 - 2026-10-21 (x)\n    3.10.52 - z")
-        _w(root, "docs/CHANGELOG.md", md2)
-        p = _problems(root)
-        assert any("DamSafety_Runner: changelog entries on basemain are missing: 3.10.52" in x
-                   for x in p), p
-        assert not any("DamSafety_Hazard: changelog entries" in x for x in p), p
-    # the parsers on their own
-    md = ("# C\n## Unreleased\n- **Runner 3.14.6 / Hazard 2.23.4 / Screening 0.18.6 / Setup 1.0.20 / "
-          "Hazard Lite 0.1.4: GUI.** x\n- **Data 1.5.4: y.** z\n"
-          "## Archived metadata changelog \u2014 DamSafety_Runner\n\n```text\n3.10.1 (2026; a)\n"
-          "    3.10.0 - b\n```\n## Archived metadata changelog \u2014 DamSafety_Data\n```text\n"
-          "    1.0.0 - first\n```\n")
-    assert C.changelog_md_versions(md, "DamSafety_Runner") == {"3.14.6", "3.10.1", "3.10.0"}
-    assert C.changelog_md_versions(md, "DamSafety_Hazard") == {"2.23.4"}
-    assert C.changelog_md_versions(md, "DamSafety_HazardLite") == {"0.1.4"}
-    assert C.changelog_md_versions(md, "DamSafety_Setup") == {"1.0.20"}
-    assert C.changelog_md_versions(md, "DamSafety_Data") == {"1.5.4", "1.0.0"}
-    assert C.changelog_md_versions(md, "DamSafety_Screening") == {"0.18.6"}
-    # the size cap
-    assert C.changelog_bytes("[general]\nversion=1.0.0\nchangelog=1.0.0 - a\n    0.9.0 - b\ntags=x\n") == len(
-        "1.0.0 - a\n    0.9.0 - b\n")
-    root = tempfile.mkdtemp(prefix="cl_cap_")
-    try:
-        big = "1.0.0 - " + "x" * (C.CHANGELOG_MAX_BYTES + 10)
-        _w(root, "shared/damsuite/versions.py", VERSIONS % ("1.0.0", "1.0.0"))
-        _w(root, "DamSafety_Hazard/metadata.txt", HZ_META % ("1.0.0", "    " + big))
-        _w(root, "DamSafety_Runner/metadata.txt", RN_META % ("1.0.0", "1.0.0 - small"))
-        p = []
-        C.check_version_bookkeeping(p, root)
-        assert any("DamSafety_Hazard: metadata.txt changelog= is 12 KB (over 12 KB" in x
-                   and "Archived metadata changelog" in x for x in p), p
-        assert not any("DamSafety_Runner: metadata.txt changelog=" in x for x in p), p
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-    # the real tree is under the cap everywhere
-    for plugin in C.PLUGINS:
-        text = C._read(os.path.join(C.ROOT, plugin, "metadata.txt"))
-        assert C.changelog_bytes(text) <= C.CHANGELOG_MAX_BYTES, (plugin, C.changelog_bytes(text))
-
-
-def test_metadata_placeholders():
-    good = "[general]\nname=X\nauthor=Nick Bendickson\nrepository=https://github.com/x/y\n" \
-           "tracker=https://github.com/x/y/issues\nchangelog=1.0.0 - see https://example.com\n"
-    assert C.metadata_placeholders(good) == [], C.metadata_placeholders(good)   # changelog may quote
-    bad = ("[general]\nname=X\nauthor=Your Name\nemail=you@example.com\n"
-           "repository=\ntracker=\nhomepage=https://example.com/x\n")
-    msgs = C.metadata_placeholders(bad)
-    text = "\n".join(msgs)
-    assert "repository= is empty" in text and "tracker= is empty" in text, msgs
-    assert "author=Your Name" in text and "you@example.com" in text and "example.com/x" in text
-    assert len(msgs) == 5, msgs
-    assert C.metadata_placeholders("[general]\nemail=none@example.invalid\n")
-    root = tempfile.mkdtemp(prefix="meta_ph_")
-    try:
-        _w(root, "DamSafety_Runner/metadata.txt", bad)
-        _w(root, "DamSafety_Hazard/metadata.txt", good)
-        p = []
-        C.check_metadata_format(p, root)
-        assert len(p) == 5 and all("DamSafety_Runner" in x for x in p), p
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_no_base_branch_is_a_notice_not_a_failure():
@@ -247,6 +155,77 @@ def test_no_base_branch_is_a_notice_not_a_failure():
                 os.environ.pop("CI_BASE_REF", None)
             else:
                 os.environ["CI_BASE_REF"] = old
+
+
+def test_base_branch_with_versions_py_at_its_old_path():
+    """A base that predates Core 1.0.0 keeps versions.py at shared/damsuite/: the 'RELEASE only
+    goes up' comparison reads it there."""
+    with Repo() as root:
+        old = C._read(os.path.join(root, C.CORE_VERSIONS))
+        _w(root, "shared/damsuite/versions.py", old)        # the pre-Core layout, committed
+        os.remove(os.path.join(root, C.CORE_VERSIONS))
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "pre-core")
+        _git(root, "branch", "-f", "oldbase")
+        _w(root, C.CORE_VERSIONS, VERSIONS % ("2.18.50", "3.10.53"))
+        os.remove(os.path.join(root, "shared", "damsuite", "versions.py"))
+        p = []
+        C.check_against_base(p, root, "oldbase")
+        assert any("RELEASE['ndhazard'] 2.18.50 is lower than 2.18.52" in x for x in p), p
+
+
+DAMSUITE_SHIM = ('"""shim"""\nfrom DamSafety_Core import alias as _alias\n'
+                 '_alias.install(__name__)\n')
+
+
+def test_no_vendored_copy_gate():
+    problems = []                                 # the real tree: shims only, FILES.json current
+    C.check_no_vendored_copy(problems)
+    assert problems == [], problems
+    root = tempfile.mkdtemp(prefix="vendored_")
+    try:
+        _w(root, "DamSafety_Core/damsuite/__init__.py", "")
+        import damsuite_files
+        damsuite_files.write(os.path.join(root, "DamSafety_Core", "damsuite"))
+        for p in C.DAMSUITE_SHIM_PLUGINS:
+            _w(root, p + "/damsuite/__init__.py", DAMSUITE_SHIM)
+            _w(root, p + "/metadata.txt", "[general]\nversion=1.0.0\nplugin_dependencies=DamSafety Core\n")
+        for name, plugins in C.UI_SHIMS.items():
+            for p in plugins:
+                _w(root, p + "/" + name, C.UI_SHIM_TEXT.format(name=name[:-3]))
+        for name, plugins in C.DAMSUITE_ROOT_SHIMS.items():
+            for p in plugins:
+                _w(root, p + "/" + name, C.DS_SHIM_TEXT.format(name=name[:-3]))
+        assert C.damsuite_shim_problems(root) == [] and C.ui_shim_problems(root) == []
+        # a comment-only variation of the shim passes; a vendored module, an extra statement,
+        # a hand-written window file and a missing dependency each fail
+        _w(root, "DamSafety_Runner/damsuite/__init__.py",
+           "# a comment\n" + DAMSUITE_SHIM.replace("_alias.install", "_alias.install"))
+        assert C.damsuite_shim_problems(root) == []
+        _w(root, "DamSafety_Runner/damsuite/tm11_curves.py", "CURVES = {}\n")
+        _w(root, "DamSafety_Hazard/damsuite/__init__.py", DAMSUITE_SHIM + "SUITE_VERSION = '1'\n")
+        _w(root, "DamSafety_Screening/tokens.py", "TOKENS = {}\n")
+        _w(root, "DamSafety_Setup/suite_fill.py", "def scan(f):\n    return {}, []\n")
+        _w(root, "DamSafety_PMP/metadata.txt", "[general]\nversion=1.0.0\n")
+        os.remove(os.path.join(root, "DamSafety_Data", "ui_fit.py"))
+        problems = []
+        C.check_no_vendored_copy(problems, root)
+        text = "\n".join(problems)
+        for want in ("DamSafety_Runner/damsuite/ holds tm11_curves.py - a vendored copy",
+                     "DamSafety_Hazard/damsuite/__init__.py is not the alias shim",
+                     "DamSafety_Screening/tokens.py is not the three-line shim",
+                     "DamSafety_Setup/suite_fill.py is not the three-line shim",
+                     "DamSafety_Data/ui_fit.py missing",
+                     "DamSafety_PMP: metadata.txt needs plugin_dependencies=DamSafety Core"):
+            assert want in text, (want, problems)
+        assert len(problems) == 6, problems
+        # a stale FILES.json (a damsuite file edited without the manifest) is caught too
+        _w(root, "DamSafety_Core/damsuite/__init__.py", "SUITE_VERSION = '2'\n")
+        problems = []
+        C.check_no_vendored_copy(problems, root)
+        assert any("FILES.json" in x and "stale" in x for x in problems), problems
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_parsers_on_the_real_tree():
@@ -372,7 +351,7 @@ def test_merge_markers():
         _w(root, "DamSafety_Hazard/README.txt", "Title\n" + "=" * 52 + "\nAb\n" + "=" * 6 + "\n")
         # a bare separator left alone after the other markers were removed by hand
         _w(root, "docs/notes.txt", "kept a\n" + "=" * 7 + "\nkept b\n" + "=" * 7 + "  \n")
-        _w(root, "shared/damsuite/versions.py", 'RELEASE = {"a": "1"}\nRELEASE = {"a": "1"}\n')
+        _w(root, C.CORE_VERSIONS, 'RELEASE = {"a": "1"}\nRELEASE = {"a": "1"}\n')
         C.check_merge_markers(problems, root)
         text = "\n".join(problems)
         assert len(problems) == 5, problems

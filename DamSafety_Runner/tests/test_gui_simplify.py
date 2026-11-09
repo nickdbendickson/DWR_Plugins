@@ -15,8 +15,10 @@ PLUGINS = ("DamSafety_Runner", "DamSafety_Screening", "DamSafety_Hazard")
 
 
 def _open_home_module(plugin_dir):
-    """suite_home.open_home and its helpers from one plugin's copy, without Qt."""
-    src = open(os.path.join(REPO, plugin_dir, "suite_home.py"), encoding="utf-8").read()
+    """suite_home.open_home and its helpers from the one copy (Core 1.0.0: each plugin's
+    suite_home.py is a shim onto DamSafety_Core/ui/suite_home.py), without Qt. Exercised once
+    per plugin as before: the registry in sys.modules is what makes the home window one."""
+    src = open(os.path.join(REPO, "DamSafety_Core", "ui", "suite_home.py"), encoding="utf-8").read()
     tree = ast.parse(src)
     keep = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ("_shared", "_alive", "open_home")]
     mod = types.ModuleType("home_" + plugin_dir)
@@ -65,11 +67,13 @@ def one_suite_home_for_all_three_plugins():
 
 @register
 def settings_grids_open_on_your_values_and_copies_are_identical():
+    # Core 1.0.0: one copy in DamSafety_Core/ui; each plugin's file is the three-line shim
     srcs = {open(os.path.join(REPO, p, "suite_settings.py"), "rb").read() for p in PLUGINS}
-    assert len(srcs) == 1
-    assert b"self.only_your.setChecked(True)" in srcs.pop()
+    assert len(srcs) == 1 and b"from DamSafety_Core.ui import suite_settings as _m" in srcs.pop()
+    core = open(os.path.join(REPO, "DamSafety_Core", "ui", "suite_settings.py"), "rb").read()
+    assert b"self.only_your.setChecked(True)" in core
     homes = {open(os.path.join(REPO, p, "suite_home.py"), "rb").read() for p in PLUGINS}
-    assert len(homes) == 1
+    assert len(homes) == 1 and b"from DamSafety_Core.ui import suite_home as _m" in homes.pop()
 
 
 @register

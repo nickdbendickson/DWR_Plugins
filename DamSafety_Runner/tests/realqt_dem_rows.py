@@ -18,6 +18,9 @@ PLUGIN_DIR = os.path.dirname(HERE)
 REPO = os.path.dirname(PLUGIN_DIR)
 ROOT = tempfile.mkdtemp(prefix="demrows_")
 os.symlink(PLUGIN_DIR, os.path.join(ROOT, "DamSafety_Runner"))
+# Core 1.0.0: the plugin's damsuite and window files are shims onto DamSafety_Core, so it is
+# linked beside the plugin, as in a QGIS profile (DamSafety_Core/alias.py)
+os.symlink(os.path.join(REPO, "DamSafety_Core"), os.path.join(ROOT, "DamSafety_Core"))
 # the DEM download code lives in DamSafety_Screening, next to the Runner. Look beside the path we
 # were started from and beside the real (symlink-resolved) plugin folder: a nd_breach_runner ->
 # DamSafety_Runner link outside the repo must still find it (3.10.83).
