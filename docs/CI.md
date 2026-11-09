@@ -6,16 +6,52 @@ manually started workflow; `release.yml` runs on a `v*` tag, see "Release" below
 
 | Job | What it runs | Time |
 |---|---|---|
-| `fast-checks` | `tools/ci_checks.py` (damsuite drift and pin, shared/ui drift, versions and changelogs vs `main`, the 12 KB cap on each `metadata.txt` `changelog=`, no template value in a metadata.txt, files kept identical across plugins, zone and window colours, Qt6 enum spellings, compile, golden baseline), `tools/test_ci_checks.py`, the fingerprint nested-VRT test. No QGIS. | < 1 min |
-| `plugin-suites` | Screening `run_all.py`, Runner fast suite, Hazard `run_all.py`, Hazard Lite, `tools/gui_lint.py`, the Runner wizard and batch-chain real-Qt scripts, pytest for suite dams and Setup, on QGIS from conda-forge. | 10-20 min |
-| `model-tests` | `python -m nd_breach_runner.tests.run_tests --models` on LISFLOOD-FP 8.3 built from the Zenodo source with `DamSafety_Runner/scripts/build_lisflood_linux.sh` (cached), and ANUGA 4.0.1 in its own conda env. | 10-17 min |
+| `fast-checks` | `tools/ci_checks.py` (damsuite drift and pin, shared/ui drift, versions and changelogs vs `main`, the 12 KB cap on each `metadata.txt` `changelog=`, no template value in a metadata.txt, files kept identical across plugins, zone and window colours, Qt6 enum spellings, compile, golden baseline), `tools/test_ci_checks.py`, the fingerprint nested-VRT test, and the Runner fast suite (`python3 -m nd_breach_runner.tests.run_tests`, stub Qt) on **numpy 2** + scipy. No QGIS, no GDAL: the GDAL-backed Runner tests skip there (see below). | 3-4 min |
+| `plugin-suites` | Screening `run_all.py`, Runner fast suite, Hazard `run_all.py`, Hazard Lite, `tools/gui_lint.py` on a 1080p xvfb display (offscreen fallback), the Runner wizard and batch-chain real-Qt scripts, pytest for suite dams, Setup, Data and PMP, on the newest QGIS from conda-forge: **QGIS 4.x / Qt6 / numpy 2** (4.2.3, GDAL 3.13 in November 2026; nothing pinned). | 10-20 min |
+| `plugin-suites-ltr` | The same suites in the official `qgis/qgis:release-3_34` container (the job's `container:`): **QGIS 3.34 LTR / Qt5 / GDAL 3.4 / numpy 1.x** on Ubuntu 22.04's system `python3`, pytest and scipy from pip, nothing from conda. This is the line `metadata.txt`'s `qgisMinimumVersion=3.28` promises and what the owner runs on macOS. | 10-20 min |
+| `model-tests` | `python -m nd_breach_runner.tests.run_tests --models` on LISFLOOD-FP 8.3 built from the Zenodo source with `DamSafety_Runner/scripts/build_lisflood_linux.sh` (cached), and ANUGA 4.0.1 in its own conda env (QGIS from conda, `numpy<2`). | 10-17 min |
 
 Every job fails the run when it fails. A newer push to a PR cancels that PR's older run.
+
+## The matrix (audit CI matrix, 2026-11-07)
+
+Three legs now cover what users run: Qt5 + numpy 1 (`plugin-suites-ltr`, the LTR line), Qt6 +
+numpy 2 (`plugin-suites`, QGIS 4.x) and plain Python + numpy 2 without QGIS or GDAL
+(`fast-checks`). Before this, every job pinned `numpy<2` and conda's unpinned `qgis` resolved to
+4.x/Qt6 only, so neither the LTR the metadata promises nor numpy 2 was ever tested.
+
+* **numpy 2 legs are red until `claude/reliability-engine-guards` merges.** `np.cross` on
+  2-vectors raises under numpy 2 (`DamSafety_Runner/core/hecras_structures.py:212`,
+  `core/hecras_crest.py:552/555`), so the three `hecras_crest_offcrest_*` Runner tests
+  (`walk_stops_at_a_junction`, `round4_walk_and_pool_edges`, `round4_ridge_and_section_edges`)
+  fail on `fast-checks` and `plugin-suites` until that branch's fix lands. Nothing else is
+  expected to differ between the legs; a test that is red on one leg only is a real finding.
+* **GDAL tests skip without osgeo.** `DamSafety_Runner/tests/registry.py` has `Skip` and
+  `need_osgeo()`: a test (or the helper that builds its GeoTIFF) calls `need_osgeo()` first, the
+  harness prints `skip  <name> (no GDAL (osgeo) in this Python)` and counts it in the summary
+  (`N tests, F failed, S skipped`) instead of failing. On `fast-checks` 32 tests skip this way;
+  on the QGIS legs they all run. A new GDAL-backed Runner test must call `need_osgeo()`.
+* **GUI lint on a real display.** `docs/gui-grammar.md`'s "no page scrolls sideways" rule needs
+  a 1920x1080 screen (offscreen Qt is 800x600 and the rule returns early). Both suite legs first
+  probe `xvfb-run -s "-screen 0 1920x1080x24" env QT_QPA_PLATFORM=xcb` (apt `xvfb`; the LTR image
+  already ships it) and run `tools/gui_lint.py` there; if the probe fails the lint runs offscreen
+  as before and the step prints a warning annotation, so a broken xvfb never blocks a merge but
+  is visible in the run.
+* **The LTR image.** `qgis/qgis:release-3_34` is rebuilt by the QGIS project from the
+  `release-3_34` branch (`.docker/qgis.dockerfile`: `qgis3-build-deps` on Ubuntu 22.04, Qt5,
+  cmake prefix `/usr`, `PYTHONPATH` already points at `/usr/share/qgis/python`, xvfb and
+  supervisor installed, Python 3.10, numpy from pip, GDAL's bindings from apt `python3-gdal`,
+  which were built against numpy 1). The job pins `numpy<2` with pip so this stays the numpy 1
+  leg whatever numpy a rebuild of the image resolved, then adds scipy and pytest with pip and
+  `xvfb` with apt, nothing else. Should the tag be retired, point `image:` at a `final-3_34_*`
+  point-release tag (same layout) or at the next LTR (`release-3_40`).
 
 ## Making the checks required (repository owner)
 
 Settings > Rules > Rulesets > New branch ruleset: target the default branch, turn on
-"Require status checks to pass", and add `fast-checks`, `plugin-suites` and `model-tests`.
+"Require status checks to pass", and add `fast-checks`, `plugin-suites`, `plugin-suites-ltr` and
+`model-tests` (the Qt6 and the LTR legs are both required: a plugin that loads on one and not the
+other is a release blocker).
 Without a ruleset (or a classic branch protection rule) that requires them, GitHub lets a PR
 merge while its checks are red or have not run.
 
@@ -33,8 +69,10 @@ As it is, it runs fast-checks and every plugin-suites command except the last, w
 (not installed; the venv below adds it). model-tests also needs an ANUGA env from micromamba or
 conda, neither of which is installed; cmake and g++ for the LISFLOOD-FP build are. CI's conda
 `qgis` is not pinned and resolves QGIS 4.x on Qt6 (4.2.3 with GDAL 3.13 in October 2026), so a
-local pass on QGIS 3.34 is needed but not enough: the PR's own CI run is the Qt6 check. From the
-repository root:
+local pass on QGIS 3.34 is the `plugin-suites-ltr` leg; the PR's own CI run is the Qt6 and the
+numpy 2 check. The `plugin-suites-ltr` leg itself can be reproduced with Docker:
+`docker run --rm -v "$PWD":/w -w /w qgis/qgis:release-3_34 bash -c 'pip3 install -q "numpy<2" scipy pytest && QT_QPA_PLATFORM=offscreen python3 -m nd_breach_runner.tests.run_tests'`.
+From the repository root:
 
 ```bash
 # a venv that keeps the system QGIS, GDAL, numpy and scipy, plus pytest
@@ -56,7 +94,8 @@ $PY DamSafety_Screening/tests/run_all.py
 $PY -m nd_breach_runner.tests.run_tests      # nd_breach_runner/ is a shim beside DamSafety_Runner
 $PY DamSafety_Hazard/tests/run_all.py
 $PY DamSafety_HazardLite/tests/test_core.py
-$PY tools/gui_lint.py
+$PY tools/gui_lint.py                        # offscreen: all rules but "no sideways scroll"
+xvfb-run -a -s "-screen 0 1920x1080x24" env QT_QPA_PLATFORM=xcb $PY tools/gui_lint.py   # as CI
 $PY DamSafety_Runner/tests/realqt_wizard.py
 $PY DamSafety_Runner/tests/realqt_chain.py
 $PY -c "import os, sys, pytest; rc = pytest.main(['-q', '-p', 'no:cacheprovider', 'DamSafety_Runner/tests/suite_dams', 'DamSafety_Setup/tests']); sys.stdout.flush(); os._exit(int(rc))"

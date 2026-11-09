@@ -492,7 +492,12 @@ def submittal_from_a_real_run_folder_has_all_sections():
                              project="Test Creek EAP", include_run_report=True,
                              created=__import__("datetime").datetime(2026, 9, 29, 12, 0, 0))
     res = R.build_submittal(folder, "", out, opt)
-    assert res.path == out and os.path.exists(out) and not res.warnings, res.warnings
+    # The one acceptable warning is a missing SVG converter: the fast-checks job runs this on
+    # plain python (no QGIS Qt SVG / cairosvg / rsvg / inkscape / LibreOffice), so figures are
+    # listed by file name instead of embedded - asserted in full below. Any OTHER warning, or
+    # this warning when a converter IS present, still fails the test.
+    ok_warn = not R.available_svg_backends() and all("SVG converter" in w for w in res.warnings)
+    assert res.path == out and os.path.exists(out) and (not res.warnings or ok_warn), res.warnings
     xml, names = _check_package(out)
     info = R.inspect_docx(out)
     titles = [t for _n, t in res.sections]

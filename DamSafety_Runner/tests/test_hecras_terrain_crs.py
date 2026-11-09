@@ -13,10 +13,11 @@ from nd_breach_runner.core import hecras_model as hm
 from nd_breach_runner.core import hecras_structures as hs
 from nd_breach_runner.core import hecras_terrain_crs as htc
 from nd_breach_runner.tests import test_hecras_structures as ths
-from nd_breach_runner.tests.registry import test
+from nd_breach_runner.tests.registry import need_osgeo, test
 
 
 def _osr():
+    need_osgeo()                      # a skip, not a failure, on a Python without GDAL
     from osgeo import gdal, osr
     gdal.UseExceptions()
     return gdal, osr
