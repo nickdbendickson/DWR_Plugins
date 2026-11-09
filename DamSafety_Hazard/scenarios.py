@@ -296,6 +296,9 @@ def raster_reuse_problems(scenarios, warnings=None):
 # ------------------------------------------------------------- incremental --
 EVAL_KEYS = ("max_depth", "max_vel", "arrival", "zone_found", "zone_mobile", "zone",
              "zone_mm", "vel_missing", "dv_max", "margin_high", "margin_judg", "near",
+             # M12 (2026-11-07): per-scenario review flags - without these in the snapshot the
+             # last breach's flags leaked into every scenario's notes / QA / judgment items
+             "vel_unknown", "arrival_below", "snap_flip",
              "zone_note", "outcome", "region", "loc", "near_raised",
              # v2.6: evaluation area and the cells read (Structure_Evaluation_Areas),
              # per-curve results for apply_type
@@ -605,6 +608,16 @@ COMPARE_COLS = ["Scenario", "Baseline", "ND class", "TM 11 class", "Lives in jeo
                 "Roads", "Rail"]
 
 
+def wet_habitable(s_view):
+    """M06: how many habitable structures this scenario's view counts as flooded, by OUTCOME
+    (not max_depth) - so a baseline's non-incremental records, cleared to OUT_DRY, are excluded.
+    One definition, used by the classification loop (stored as res["wet_hab"]) and by
+    comparison_rows, so the displayed count cannot drift from what the scenario actually held."""
+    from .structures import OUT_DRY
+    return sum(1 for s in (s_view or []) if s.get("habitable") == "Yes"
+               and s.get("outcome") not in (None, OUT_DRY))
+
+
 def comparison_rows(results, governing=None):
     """One row per breach scenario of a run's results (`res["results"]`), in
     the counting the classification used (with a baseline: only what the
@@ -617,12 +630,12 @@ def comparison_rows(results, governing=None):
         views = r.get("views") or ([], [], [])
         s_view, r_view, l_view = views
         c = r.get("conseq") or {}
-        from .structures import OUT_DRY
         inc = r.get("incremental") or {}
-        # SC.2: s_view already clears non-incremental to OUT_DRY but leaves max_depth;
-        # count by outcome so "flooded" means only what the breach adds
-        wet_hab = sum(1 for s in s_view if s.get("habitable") == "Yes"
-                      and s.get("outcome") not in (None, OUT_DRY))
+        # M06: use the count recorded while the records still held THIS scenario's outcomes
+        # (res["wet_hab"]); the stored s_view is a live view that restore() rewrites to the
+        # governing scenario's values before this runs, so re-deriving it here read the wrong
+        # scenario. Fall back to re-deriving for results from before this fix.
+        wet_hab = r["wet_hab"] if "wet_hab" in r else wet_habitable(s_view)
         out.append({"Scenario": name, "Baseline": inc.get("baseline") or "-",
                     "ND class": nd["cls"], "TM 11 class": tm["cls"],
                     "Lives in jeopardy": "{:.1f}".format(tm["lij"]),

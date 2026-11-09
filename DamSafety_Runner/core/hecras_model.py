@@ -715,6 +715,35 @@ def courant_lines(c, equation=EQ_SWE):
             "Computation Time Step Residence Courant={}".format(num(c.get("residence") or 0, 3))]
 
 
+def courant_precheck(o, sv):
+    """L04 (3.16.16): raise HecRasModelError if the adaptive-step Courant min/max pair - as it
+    will reach courant_lines() at m.courant - is invalid, BEFORE build_model writes any file.
+
+    hsol.settings() only validates the pair when BOTH halves are set explicitly; the max is
+    otherwise filled from the equation much later (build_model, at m.courant). So a courant_min
+    (or a time_step min) set alone slips through settings() and is not caught until courant_lines()
+    at plan-write time - after write_terrain and both breach cuts have run and are then discarded.
+    Only an explicit min can fail (a defaulted min is COURANT_MIN_RATIO x the max, always valid).
+    This mirrors courant_lines' own rule exactly (validated == courant_lines over the full solver
+    matrix: no false rejection), so it never blocks a build courant_lines would have accepted; it
+    only moves the identical error up front. No computed value changes."""
+    from . import hecras_solver as hsol
+    ts = dict(COURANT_DEFAULTS)
+    ts.update({k: v for k, v in (o.get("time_step") or {}).items() if v is not None})
+    ts = hsol.apply_courant(ts, sv)
+    if not (ts.get("adaptive") and sv["dt_mode"] != "fixed" and ts.get("min") is not None):
+        return
+    cour = o["courant"] or (1.0 if o["equation"] == EQ_SWE else 2.0)
+    cmax = float((ts["max"] if ts["max"] is not None else cour)
+                 or (1.0 if o["equation"] == EQ_SWE else 2.0))
+    if not 0 < float(ts["min"]) < 0.5 * cmax - 1e-12:
+        raise HecRasModelError(
+            "{} ({:g}) must be under half of the max Courant ({:g}, the {} target); set {} too, "
+            "or use e.g. {:g}".format(hsol.ENV["courant_min"], float(ts["min"]), cmax,
+                                      o["equation"], hsol.ENV["courant_max"],
+                                      COURANT_MIN_RATIO * cmax))
+
+
 def plan_text(m):
     eq = EQUATIONS[m.equation][0]
     tol = getattr(m, "tolerances", None) or TOLERANCES["default"]
@@ -2244,7 +2273,14 @@ def add_spillway_notch(weir, s1, s2, crest, wall=0.25):
     el = np.array([b for _, b in weir], float)
     out = [(a, b) for a, b in weir if a < s1 - wall - 1e-9]
     lo = max(s1 - wall, 0.0)
-    out.append((round(lo, 2), round(float(np.interp(lo, st, el)), 2)))
+    # M20: only add the upstream interpolated-ground point when it is a distinct station below s1.
+    # When the spillway sits flush with the left end of the dam line (s1 - wall clamps to 0 and
+    # round(s1,2)==0.00), lo rounds to s1, so the old unconditional append + the strictly-
+    # increasing dedup dropped the notch's upstream wall (s1, crest) and HEC-RAS got a one-sided
+    # ramp instead of the rectangular notch spill_info / the README declare. (A flush notch has no
+    # upstream wall, exactly as the right-end case has no downstream wall.)
+    if round(lo, 2) < round(s1, 2):
+        out.append((round(lo, 2), round(float(np.interp(lo, st, el)), 2)))
     out += [(round(s1, 2), round(float(crest), 2)), (round(s2, 2), round(float(crest), 2))]
     hi = min(s2 + wall, float(st[-1]))
     out.append((round(hi, 2), round(float(np.interp(hi, st, el)), 2)))
@@ -2748,6 +2784,8 @@ def build_model(dam_folder, out_folder=None, dem_path=None, crs=None, options=No
         sv = hsol.settings(o)                    # 3.10.85: raises on a bad value, before work
     except hsol.SolverSettingError as e:
         raise HecRasModelError(str(e))
+    courant_precheck(o, sv)                       # L04: reject a half-set Courant pair before any
+                                                  # file is written (see the function)
     dem_ds = GS.open_raster(dem_path)
     dem_wkt = dem_ds.GetProjection()
     dem_gt = dem_ds.GetGeoTransform()
