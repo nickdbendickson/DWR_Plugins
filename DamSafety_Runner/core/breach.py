@@ -528,6 +528,16 @@ def breach_parameters(method, c, dam, ov):
         src = "MacDonald & Langridge-Monopolis (1984), earthfill"
         notes.append("MacDonald & Langridge-Monopolis side slope taken as 1H:1V; override it "
                      "if the embankment differs.")
+        # M15 (disclosure): MLM divides the eroded volume by the embankment cross-section, which
+        # is taken over the FULL dam height. When the breach bottom is raised above the reservoir
+        # bottom (partial breach), hb/hw shrink but the area does not, so the average breach width
+        # is biased LOW. MLM is defined for a breach to the foundation; confirm with ND DWR.
+        if a_ft2 and hb < dam.dam_height_ft * FT - 0.03:
+            notes.append("Partial breach ({:.1f} ft deep vs the {:.0f} ft dam): the embankment "
+                         "cross-section is still the full dam section, so the MLM average breach "
+                         "width is biased LOW (MLM is defined for a breach to the foundation). "
+                         "Confirm the partial-breach basis with ND DWR.".format(
+                             hb / FT, dam.dam_height_ft))
     elif method == METHOD_VTG:
         b, tf, z = vtg_1990(c.vw, hw, ov.vtg_erodible)
         src = "Von Thun & Gillette (1990), {}".format("easily erodible" if ov.vtg_erodible
@@ -761,6 +771,15 @@ def tr60_hydrograph(dam, overrides=None, shape="triangular", wse0_m=None, wse0_r
         _, tr, _ = froehlich_2008(c.vw, top_m - bottom_m, "piping")
     tb = 2.0 * c.v_release / qp
     notes = list(c.notes)
+    # M15 (disclosure): TR-60's breach factor Br = Vs*Hw/A divides by the embankment cross-section,
+    # taken over the FULL dam height. A raised breach bottom (partial breach) shrinks Hw but not A,
+    # so the TR-60 peak and Br are biased LOW. TR-60 is defined for a breach to the foundation; the
+    # area is NOT re-measured over the breach depth without ND DWR sign-off.
+    if (top_m - bottom_m) < dam.dam_height_ft * FT - 0.03:
+        notes.append("Partial breach ({:.1f} ft deep vs the {:.0f} ft dam): the TR-60 breach "
+                     "factor Br and peak use the full dam cross-section, so both are biased LOW "
+                     "(TR-60 is defined for a breach to the foundation). Confirm the partial-breach "
+                     "basis with ND DWR.".format((top_m - bottom_m) / FT, dam.dam_height_ft))
     if tr >= tb:
         tr = 0.25 * tb
         notes.append("Rise time longer than the triangle base allowed by the volume; set to "
