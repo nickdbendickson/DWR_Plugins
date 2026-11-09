@@ -128,6 +128,11 @@ class SetupPlugin(object):
         self.action = None
 
     def initGui(self):
+        try:                          # Core 1.0.0: the shared package's files vs its FILES.json
+            from . import damsuite as _ds
+            _ds.log_selfcheck("DamSafety Setup")
+        except Exception:  # noqa: BLE001 - never block the plugin's start-up
+            pass
         self.action = QAction(_plugin_icon(), "Start here\u2026", self.iface.mainWindow())
         self.action.setObjectName("DamSafetySetupStartAction")
         self.action.triggered.connect(self.run)

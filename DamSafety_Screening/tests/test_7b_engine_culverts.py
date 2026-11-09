@@ -44,6 +44,8 @@ runner = os.path.join(os.path.dirname(os.path.realpath(PLUGIN)), "DamSafety_Runn
 if os.path.exists(os.path.join(runner, "tests", "fake_qgis.py")):
     tmp = tempfile.mkdtemp(prefix="rd7b_")
     os.symlink(runner, os.path.join(tmp, "nd_breach_runner"))
+    # Core 1.0.0: the Runner's damsuite is a shim onto DamSafety_Core, linked beside it
+    os.symlink(os.path.join(os.path.dirname(runner), "DamSafety_Core"), os.path.join(tmp, "DamSafety_Core"))
     code = r'''
 import json
 from nd_breach_runner.tests import fake_qgis; fake_qgis.install()

@@ -40,7 +40,7 @@ style.
 | Ampersands | Write `&&` in any tab or button text that contains `&`. A single `&` marks a keyboard shortcut, so "Review & QA" shows as "Review _QA". `suite_settings.tab_title()` does this for the settings tabs. |
 | Size | Every window must shrink to fit a 1080p screen. Long pages scroll (`ui_fit.wrap_tabs`), and a settings table shows its Value column without scrolling sideways. |
 | Colours | Only from `tokens.TOKENS`: red means blocking, amber a warning, green passed, grey inactive. `link` blue is for the active stage and text links only, never a button background. |
-| Plugin icon | Every plugin has an `icon.svg` (dam wedge plus water, with a mark for the tool) named by `icon=` in metadata.txt, and its menu entry uses it. |
+| Plugin icon | `icon=` in metadata.txt names `damit.svg`, the DaMiT suite mark (light colour mode, the same file in every plugin; sources in `docs/brand/`), which the Plugin Manager and `plugins.xml` show. Every plugin also keeps its own `icon.svg` (dam wedge plus water, with a mark for the tool) for its menu entry and Processing provider, so the tools stay apart in menus. |
 
 Map symbology, PDF and HTML reports, and charts keep their own palettes. Hazard-class colours
 belong to the product, not the window, so the colour rules don't apply to them.

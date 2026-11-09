@@ -82,6 +82,11 @@ class NdDataUpdaterPlugin:
             _conn.register_in_qgis(getattr(_vs, "CONNECTION_PREFIX", "Dam Suite"), self.iface)
         except Exception:  # noqa: BLE001 - never block the plugin's start-up
             pass
+        try:                          # Core 1.0.0: the shared package's files vs its FILES.json
+            from . import damsuite as _ds
+            _ds.log_selfcheck(LOG_TAG)
+        except Exception:  # noqa: BLE001
+            pass
         icon = QIcon(os.path.join(PLUGIN_DIR, "icon.svg"))
         win = self.iface.mainWindow()
         self.action_check = QAction(icon, "Check for updates now", win)

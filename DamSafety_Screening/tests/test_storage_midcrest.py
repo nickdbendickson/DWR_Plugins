@@ -9,6 +9,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "core"))
 sys.path.insert(0, os.path.join(HERE, ".."))
+sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))    # DamSafety_Core beside the plugin
 sys.path.insert(0, HERE)
 import _optional  # noqa: E402
 _optional.need("scipy", "below-pool volume")

@@ -14,6 +14,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RUNNER = os.path.dirname(HERE)
 ROOT = tempfile.mkdtemp()
 os.symlink(RUNNER, os.path.join(ROOT, "DamSafety_Runner"))
+# Core 1.0.0: the plugin's damsuite and window files are shims onto DamSafety_Core, so it is
+# linked beside the plugin, as in a QGIS profile (DamSafety_Core/alias.py)
+os.symlink(os.path.join(os.path.dirname(RUNNER), "DamSafety_Core"), os.path.join(ROOT, "DamSafety_Core"))
 if os.path.isdir(os.path.join(os.path.dirname(RUNNER), "DamSafety_Screening")):   # the DEM download
     os.symlink(os.path.join(os.path.dirname(RUNNER), "DamSafety_Screening"), os.path.join(ROOT, "DamSafety_Screening"))
 sys.path.insert(0, ROOT)

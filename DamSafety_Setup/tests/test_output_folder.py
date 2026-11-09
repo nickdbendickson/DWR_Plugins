@@ -12,10 +12,11 @@ if ROOT not in sys.path:
 
 
 def test_the_damsuite_copies_are_identical():
-    """suite_config.py is shared: every plugin's copy carries the same pack guard."""
-    paths = [os.path.join(ROOT, p, "damsuite", "suite_config.py")
-             for p in ("DamSafety_Setup", "DamSafety_Runner", "DamSafety_Screening",
-                       "DamSafety_Hazard")]
-    paths.append(os.path.join(ROOT, "DamSafety_Setup", "suite_config.py"))
-    texts = {open(p).read() for p in paths if os.path.isfile(p)}
-    assert len(texts) == 1 and "def in_suite_pack" in texts.pop()
+    """suite_config.py is shared: Core 1.0.0 makes every plugin's copy the one module."""
+    import importlib
+    mods = {id(importlib.import_module(name)) for name in (
+        "DamSafety_Setup.damsuite.suite_config", "DamSafety_Runner.damsuite.suite_config",
+        "DamSafety_Screening.damsuite.suite_config", "DamSafety_Hazard.damsuite.suite_config",
+        "DamSafety_Setup.suite_config", "DamSafety_Core.damsuite.suite_config")}
+    assert len(mods) == 1, mods
+    assert hasattr(importlib.import_module("DamSafety_Setup.suite_config"), "in_suite_pack")

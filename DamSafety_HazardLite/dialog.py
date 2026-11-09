@@ -2,7 +2,7 @@
 """DamSafety Hazard Lite window: the shared GUI grammar (docs/gui-grammar.md) over core.run().
 
 The banner, the ⚙ gear, the CheckPanel, the bold primary button beside Check inputs, and the
-▸ Log fold are the same widgets the other DamSafety windows use (shared/ui). One window, no tabs;
+▸ Log fold are the same widgets the other DamSafety windows use (DamSafety_Core/ui). One window, no tabs;
 the work is one tool. The Processing algorithm (plugin.py) stays, so the tool also runs headless.
 """
 import os
