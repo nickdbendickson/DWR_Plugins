@@ -381,6 +381,12 @@ class NDDamScreeningDialog(QDialog, SettingsTabMixin, ReviewTabMixin, ResultsTab
         overrides on the right."""
         w = QWidget()
         row = QHBoxLayout()
+        # GUI lint 2026-11-08 (1080p xvfb): the two columns' minimum widths plus the default
+        # layout gutters came to 950 px in a 940 px scroll viewport, so the Run page scrolled
+        # sideways and hid the right-hand step buttons. Tighten the outer margins and the gap
+        # between the columns - the columns keep their own internal padding - so the page fits.
+        row.setContentsMargins(2, 2, 2, 2)
+        row.setSpacing(6)
         row.addWidget(self._build_simple_tab(), 1)
         right = QGroupBox("Steps")
         v = QVBoxLayout()
