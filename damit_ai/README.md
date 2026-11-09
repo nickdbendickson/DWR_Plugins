@@ -35,7 +35,8 @@ plugin zip or CI job.
    source ~/.zshrc
    ```
    Then drop PDFs in `~/DamResearch/library`, or fetch the public ASDSO / FEMA reference set
-   (about 49 PDFs) with `python3 fetch_asdso.py`, and run `damresearch ingest`. After that:
+   (about 49 PDFs) with `python3 fetch_asdso.py` and 58 hazard-classification and dam-design sources
+   with `python3 fetch_asdso.py --catalog`, and run `damresearch ingest`. After that:
    `damresearch search | ask | research | chat ...`, also available as `damchain research ...`.
    Full guide, model and memory trade-offs: [`research/INSTALL.md`](research/INSTALL.md).
    Starter reading list: [`research/READING-LIST.md`](research/READING-LIST.md).
@@ -57,6 +58,6 @@ Embeddings: Lumo uses `nomic-embed-text`; dam-research uses `qwen3-embedding:0.6
   suite_check 1.0 and dam_chain 1.4. `suite_check.py` and `dam_chain.py` drive the ND and
   DamSafety plugin sets (QGIS profiles `nd` and `damsafety`). The DamIT plugins are not wired into
   them yet.
-- `research/` is damresearch 1.0.1, with fetch_asdso 1.0 (tested against damsafety.org on 2026-11-09: 48 of 49 files downloaded; the 49th is on damtoolbox.org, which the cloud workspace can't reach). The cloud workspace that built it could not download Ollama
+- `research/` is damresearch 1.0.1, with fetch_asdso 1.1 (tested against damsafety.org on 2026-11-09: 48 of 49 files downloaded; the 49th is on damtoolbox.org, which the cloud workspace can't reach. The `--catalog` sources were only partly tested: the cloud workspace reaches 2 of their 31 sites, so most catalog URLs are checked against search listings, not downloaded). The cloud workspace that built it could not download Ollama
   models, so it was tested end to end with a stand-in Ollama server and real PDFs. Answer quality
   with the real models has not been measured yet.

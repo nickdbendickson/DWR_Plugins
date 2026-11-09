@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# fetch_asdso.py v1.0 — download public dam-safety reference documents listed by ASDSO
-# (damsafety.org) into the damresearch library, with a citation for each file.
+# fetch_asdso.py v1.1 — download public dam-safety reference documents listed by ASDSO
+# (damsafety.org), plus a curated catalog of agency and state sources, into the damresearch library,
+# with a citation for each file.
 #
 #   python3 fetch_asdso.py                      # the ASDSO resource-center pages (default set)
 #   python3 fetch_asdso.py --dry-run            # list what would be downloaded
@@ -10,6 +11,12 @@
 #                                               # and downloads the ones with a public PDF
 #   python3 fetch_asdso.py --page https://damsafety.org/<page>   # any other ASDSO page with PDF links
 #   python3 fetch_asdso.py --out DIR            # default ~/DamResearch/library/asdso
+#   python3 fetch_asdso.py --catalog            # the curated catalog (reference_sources.json) instead:
+#                                               # hazard-classification sources (federal + state rules,
+#                                               # ND REG_05, TM-11, FEMA 333 ...) and dam-design references
+#                                               # (USBR, USACE, NRCS, NOAA HMR, FERC ...)
+#   python3 fetch_asdso.py --catalog hazard     # one group only (hazard | design)
+#   python3 fetch_asdso.py --catalog --asdso    # catalog and the ASDSO pages in one run
 #
 # Then index them:  damresearch ingest
 #
@@ -28,7 +35,7 @@ import os, re, sys, csv, json, time, hashlib, argparse, html
 import urllib.request, urllib.error, urllib.parse, urllib.robotparser
 from datetime import datetime, timezone
 
-VERSION = "1.0"
+VERSION = "1.1"
 SITE = "https://damsafety.org"
 UA = "damit-reference-fetch/%s (+research library; polite crawler)" % VERSION
 DEFAULT_PAGES = [
@@ -389,6 +396,199 @@ def parse_reference(page_html, url):
 
 # --------------------------------------------------------------------------- main
 
+# --------------------------------------------------------------------------- curated catalog
+
+CATALOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference_sources.json")
+
+
+def html_to_markdown(page_html, entry, url):
+    """A law / policy web page as plain text with a citation header, for damresearch (.md)."""
+    body = page_html
+    for tag in ("script", "style", "noscript", "nav", "header", "footer", "form", "svg"):
+        body = re.sub(r"<%s\b.*?</%s>" % (tag, tag), " ", body, flags=re.S | re.I)
+    m = re.search(r"<main\b.*?</main>", body, re.S | re.I) or re.search(r'id="(?:main-content|content|main)".*', body, re.S | re.I)
+    if m:
+        body = m.group(0)
+    body = re.sub(r"<h([1-4])[^>]*>(.*?)</h\1>", lambda h: "\n\n%s %s\n\n" % ("#" * min(3, int(h.group(1)) + 1),
+                  clean_text(h.group(2))), body, flags=re.S | re.I)
+    body = re.sub(r"<li[^>]*>", "\n- ", body, flags=re.I)
+    body = re.sub(r"</?(p|div|br|tr|table|section|article|blockquote|dd|dt)\b[^>]*>", "\n", body, flags=re.I)
+    body = re.sub(r"<[^>]+>", " ", body)
+    body = html.unescape(body).replace("\xa0", " ")
+    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in body.splitlines()]
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    head = ["# %s" % entry["title"], "",
+            "Source: %s" % url,
+            "Publisher: %s" % entry.get("org", ""),
+            "Retrieved: %s (web page saved as text by fetch_asdso.py; check the live page before citing)"
+            % datetime.now(timezone.utc).strftime("%Y-%m-%d"), ""]
+    if entry.get("number"):
+        head.insert(4, "Citation: %s" % entry["number"])
+    return "\n".join(head) + "\n" + text + "\n"
+
+
+def load_catalog(path):
+    with open(path, encoding="utf-8") as f:
+        cat = json.load(f)
+    return cat.get("groups", {})
+
+
+def _cite(entry, file_name, title=None):
+    return {"file": file_name, "title": title or entry["title"], "authors": entry.get("authors", ""),
+            "year": entry.get("year", ""), "org": entry.get("org", ""), "number": entry.get("number", "")}
+
+
+def fetch_catalog(fetcher, groups, wanted, out, args):
+    """Downloads the catalog groups into out/<group>/. Returns totals and the hosts that failed."""
+    total = {"new": 0, "have": 0, "skipped": 0, "failed": 0, "manual": 0}
+    bad_hosts = {}
+    man = load_manifest(out)
+    man["tool"] = "fetch_asdso.py --catalog"
+    for g in wanted:
+        entries = [e for e in groups.get(g, []) if not e.get("skip")]
+        folder = os.path.join(out, g)
+        os.makedirs(folder, exist_ok=True)
+        say("\n== catalog: %s (%d sources)  -> %s" % (g, len(entries), folder))
+        rows, report = [], []
+        for n, e in enumerate(entries, 1):
+            tag = "[%s %d/%d]" % (g, n, len(entries))
+            kind = e.get("kind", "pdf")
+            urls = [e["url"]] + list(e.get("alt", []))
+            status, got = "", ""
+            if kind == "manual":
+                say("%s get by hand: %s  (%s)" % (tag, e["title"][:80], e.get("note", e["url"])))
+                total["manual"] += 1
+                report.append(dict(e, status="get by hand", file=""))
+                continue
+            if args.dry_run:
+                say("%s would fetch (%s): %s  <- %s" % (tag, kind, e["title"][:80], e["url"]))
+                continue
+            if kind == "index":
+                c = fetch_catalog_index(fetcher, e, folder, man, args, tag, bad_hosts)
+                for k in ("new", "have", "failed", "skipped"):
+                    total[k] += c[k]
+                rows.extend(c["rows"])
+                report.append(dict(e, status="index: %d new, %d already here, %d failed" % (c["new"], c["have"], c["failed"]),
+                                   file=e["id"] + "/"))
+                continue
+            name = e["id"] + (".md" if kind == "html" else ".pdf")
+            dest = os.path.join(folder, name)
+            if os.path.isfile(dest) and man["files"].get(e["id"], {}).get("status") == "ok":
+                total["have"] += 1
+                rows.append(_cite(e, name))
+                report.append(dict(e, status="already here", file=name))
+                continue
+            for u in urls:
+                host = urllib.parse.urlsplit(u).hostname or u
+                if host in bad_hosts:
+                    status = "skipped: %s could not be reached earlier in this run" % host
+                    continue
+                if not fetcher.allowed(u):
+                    status = "robots.txt disallows"
+                    continue
+                try:
+                    if kind == "html":
+                        page = fetcher.text(u)
+                        md = html_to_markdown(page, e, u)
+                        if len(md) < 600:
+                            status = "page had almost no text"
+                            continue
+                        with open(dest, "w", encoding="utf-8") as f:
+                            f.write(md)
+                        status, size = "ok", len(md.encode("utf-8"))
+                    else:
+                        status, size = download(fetcher, u, dest)
+                except Exception as ex:
+                    status, size = "failed: %s" % ex, 0
+                    if not isinstance(ex, urllib.error.HTTPError):      # site unreachable, not a missing file
+                        bad_hosts.setdefault(host, str(ex)[:80])
+                if status == "ok":
+                    got = u
+                    break
+            entry = {"status": status, "title": e["title"], "page": "catalog:" + g, "url": got or e["url"],
+                     "file": os.path.join(g, name), "fetched": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+            if status == "ok":
+                entry.update(bytes=size, sha256=sha256_of(dest), number=e.get("number", ""), year=e.get("year", ""), org=e.get("org", ""))
+                rows.append(_cite(e, name))
+                total["new"] += 1
+                say("%s ok  %5.1f MB  %s" % (tag, size / 1e6, e["title"][:80]))
+            else:
+                total["failed"] += 1
+                say("%s %s: %s" % (tag, status, e["url"]))
+            man["files"][e["id"]] = entry
+            save_manifest(out, man)
+            report.append(dict(e, status=status, file=name if status == "ok" else ""))
+        if not args.dry_run:
+            if rows:
+                write_library_csv(folder, rows)
+            write_sources_csv(folder, report)
+    if not args.dry_run:
+        save_manifest(out, man)
+    return total, bad_hosts
+
+
+def fetch_catalog_index(fetcher, e, folder, man, args, tag, bad_hosts):
+    """kind=index: every file link on the page whose URL matches e['match'] goes to folder/<id>/."""
+    c = {"new": 0, "have": 0, "failed": 0, "skipped": 0, "rows": []}
+    sub = os.path.join(folder, e["id"])
+    host = urllib.parse.urlsplit(e["url"]).hostname or e["url"]
+    if host in bad_hosts:
+        say("%s skipped: %s could not be reached earlier in this run" % (tag, host))
+        c["failed"] += 1
+        return c
+    try:
+        if not fetcher.allowed(e["url"]):
+            say("%s robots.txt disallows: %s" % (tag, e["url"]))
+            c["skipped"] += 1
+            return c
+        links = file_links(fetcher.text(e["url"]), e["url"])
+    except Exception as ex:
+        if not isinstance(ex, urllib.error.HTTPError):
+            bad_hosts.setdefault(host, str(ex)[:80])
+        say("%s could not read the index page: %s" % (tag, ex))
+        c["failed"] += 1
+        return c
+    pat = re.compile(e.get("match") or ".")
+    links = {u: t for u, t in links.items() if pat.search(u) or pat.search(t or "")}
+    say("%s index %s: %d matching file(s)" % (tag, e["id"], len(links)))
+    os.makedirs(sub, exist_ok=True)
+    for u, t in sorted(links.items()):
+        name = safe_name(u)
+        dest = os.path.join(sub, name)
+        title = t if t and not GENERIC_TITLE.match(t) else guess_citation("", u, e.get("org", ""))["title"]
+        title = "%s: %s" % (e["title"], title) if title.lower() not in e["title"].lower() else title
+        if os.path.isfile(dest) and man["files"].get(u, {}).get("status") == "ok":
+            c["have"] += 1
+            c["rows"].append(_cite(e, os.path.join(e["id"], name), title))
+            continue
+        try:
+            status, size = download(fetcher, u, dest)
+        except Exception as ex:
+            status, size = "failed: %s" % ex, 0
+        entry = {"status": status, "title": title, "page": "catalog:" + e["id"], "file": os.path.relpath(dest, os.path.dirname(folder)),
+                 "fetched": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        if status == "ok":
+            entry.update(bytes=size, sha256=sha256_of(dest), org=e.get("org", ""))
+            c["rows"].append(_cite(e, os.path.join(e["id"], name), title))
+            c["new"] += 1
+            say("%s   ok  %5.1f MB  %s" % (tag, size / 1e6, title[:80]))
+        else:
+            c["failed"] += 1
+            say("%s   %s: %s" % (tag, status, u))
+        man["files"][u] = entry
+    return c
+
+
+def write_sources_csv(folder, report):
+    """sources.csv: every catalog entry with what happened, so gaps are visible (and the 'get by hand' list)."""
+    p = os.path.join(folder, "sources.csv")
+    with open(p, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["id", "status", "file", "title", "org", "number", "year", "url", "check", "note"])
+        w.writeheader()
+        for r in report:
+            w.writerow({k: r.get(k, "") for k in w.fieldnames})
+
+
 def main():
     ap = argparse.ArgumentParser(description="Download public ASDSO-listed dam-safety references into the damresearch library.")
     ap.add_argument("--out", default=os.path.join(os.path.expanduser(os.environ.get("DAMRESEARCH_HOME", "~/DamResearch")),
@@ -400,12 +600,42 @@ def main():
     ap.add_argument("--external", action="store_true", help="also download files hosted on other sites (fema.gov, ...)")
     ap.add_argument("--delay", type=float, default=1.5, help="seconds between requests (default 1.5)")
     ap.add_argument("--dry-run", action="store_true", help="list, download nothing")
+    ap.add_argument("--catalog", nargs="?", const="all", metavar="GROUPS",
+                    help="download the curated catalog (reference_sources.json) instead of the ASDSO pages: "
+                         "all (default), or a comma list of groups, e.g. hazard or design")
+    ap.add_argument("--catalog-file", default=CATALOG_FILE, help="catalog JSON (default: next to this script)")
+    ap.add_argument("--catalog-out", default=os.path.join(os.path.expanduser(os.environ.get("DAMRESEARCH_HOME", "~/DamResearch")),
+                                                           "library", "references"),
+                    help="folder for catalog downloads (default ~/DamResearch/library/references)")
+    ap.add_argument("--asdso", action="store_true", help="with --catalog: also run the ASDSO pages")
     ap.add_argument("--version", action="version", version=VERSION)
     args = ap.parse_args()
 
+    fetcher = Fetcher(args.delay)
+    if args.catalog:
+        groups = load_catalog(args.catalog_file)
+        wanted = list(groups) if args.catalog == "all" else [g.strip() for g in args.catalog.split(",") if g.strip()]
+        unknown = [g for g in wanted if g not in groups]
+        if unknown:
+            sys.exit("unknown catalog group(s): %s (have: %s)" % (", ".join(unknown), ", ".join(groups)))
+        cout = os.path.abspath(os.path.expanduser(args.catalog_out))
+        os.makedirs(cout, exist_ok=True)
+        t, bad = fetch_catalog(fetcher, groups, wanted, cout, args)
+        say("\nCatalog: %d new, %d already here, %d failed, %d to get by hand (see sources.csv).  Folder: %s"
+            % (t["new"], t["have"], t["failed"], t["manual"], cout))
+        if bad:
+            say("Sites that could not be reached (network block, site down or moved):")
+            for h, why in sorted(bad.items()):
+                say("  %-40s %s" % (h, why))
+        if not args.asdso:
+            args.no_default_pages = True
+        if not args.asdso and not args.page and not args.search:
+            if t["new"] and not args.dry_run:
+                say("Index them:  damresearch ingest")
+            return
+
     out = os.path.abspath(os.path.expanduser(args.out))
     os.makedirs(out, exist_ok=True)
-    fetcher = Fetcher(args.delay)
     man = load_manifest(out)
     pages = [] if args.no_default_pages else list(DEFAULT_PAGES)
     for u in args.page:

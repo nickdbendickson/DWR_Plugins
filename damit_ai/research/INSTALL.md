@@ -109,6 +109,40 @@ their publishers. Many of these PDFs have pages with no text layer, either scans
 `damresearch list` shows which, and `damresearch ocr` (installer `--ocr`) makes the scanned ones
 searchable.
 
+### Hazard-classification and dam-design sources (the catalog)
+
+`reference_sources.json` lists 58 more sources, and `fetch_asdso.py --catalog` downloads them into
+`~/DamResearch/library/references/<group>/`:
+
+- **hazard** (39): the sources cited in the "US Dam Hazard Classification" papers: FEMA 333 and P-919,
+  USBR ACER TM-11, DSO-99-06 and RCEM, NRCS TR-210-60, FERC Ch. 2, USFWS 361 FW 2, CRS R45981 and
+  R46946, ND REG_05.2026 and N.D.A.C. 89-08, NY TOGS 3.1.5, the Nebraska Classification of Dams,
+  Colorado 2 CCR 402-1 and its breach guidelines, and the CA, TX, AK, AZ, VA, RI and ID rules.
+- **design** (19): USBR Design of Small Dams, Design Standards 13 and 14, the USBR/USACE Best Practices
+  chapters, Wahl's breach-parameter review (DSO-98-004), USACE EM 1110-2-1420 / -2300 / -1902 / -1603 /
+  -1913 and ER 1110-2-1156, HEC TD-39 (HEC-RAS dam break), NOAA HMR 51 / 52 / 55A and Atlas 14 Vol. 8,
+  the FERC Engineering Guidelines, NY's dam design guidelines and TCEQ GI-364.
+
+```zsh
+python3 fetch_asdso.py --catalog --dry-run   # the list
+python3 fetch_asdso.py --catalog             # both groups (or --catalog hazard / --catalog design)
+damresearch ingest
+```
+
+PDFs are saved under the source's id (`usbr-acer-tm11.pdf`), and rules that exist only as web pages
+(state codes, USFWS policy) are saved as Markdown text with the source URL and date at the top.
+`kind: index` entries download every matching PDF on a page, such as all the Design Standards
+chapters. Each group folder gets `library.csv` (citations), `manifest.json` and `sources.csv`, which
+records what happened to every entry, including six sources with no stable public link to get by
+hand (for example the 1985 ND Dam Design Handbook). At the end the script names any site it could
+not reach.
+
+Each entry has a `check` field. `listed` means the URL came from a search listing of that exact file,
+`cited` means the papers named the host and file, and `pattern` means the URL follows the publisher's
+usual layout but was not seen. Agency sites move files, so expect a few failures; fix the `url` in the
+JSON (or add an `alt`) and re-run. Only new or failed sources are fetched again. Rules change: the
+saved text of a state code is a snapshot, so check the official code before relying on it.
+
 Scanned PDFs (old agency reports often are) have no text layer, and `list` flags them. Install
 OCR with `zsh setup-dam-research.zsh --ocr`, then run `damresearch ocr`. That writes searchable
 copies to `library/_ocr/` and indexes them.
@@ -171,6 +205,7 @@ Delete the block between `# >>> dam-research` and `# <<< dam-research` in `~/.zs
 - `setup-dam-research.zsh`: installer
 - `damresearch.py`: the tool (stdlib + optional numpy / PyMuPDF)
 - `../lumo/tools/dam_chain.py` (in the zip: `damchain-1.4/dam_chain.py`): dam_chain 1.3 plus the `research` pass-through, nothing else changed
-- `fetch_asdso.py`: downloads the public ASDSO / FEMA reference set into the library
+- `fetch_asdso.py`: downloads the public ASDSO / FEMA reference set, and with `--catalog` the sources in `reference_sources.json`
+- `reference_sources.json`: catalog of hazard-classification and dam-design sources (edit to add more)
 - `READING-LIST.md`: a starter library of public dam-safety publications
 - `library.csv.example`: citation sidecar format
