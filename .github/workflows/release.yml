@@ -1,6 +1,6 @@
 name: Release
 
-# Builds a GitHub Release of the seven DamSafety plugins and publishes the QGIS plugin
+# Builds a GitHub Release of the eight DamSafety plugins (DamSafety Core and the seven that need it) and publishes the QGIS plugin
 # repository index (plugins.xml) to the gh-pages branch, so QGIS can install and update them
 # from https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml (docs/CI.md, "Release").
 #
@@ -210,8 +210,8 @@ jobs:
           draft: ${{ github.ref_type != 'tag' }}
           generate_release_notes: true
           body: |
-            The seven DamSafety QGIS plugins (install order: Setup, Data, Runner, Hazard;
-            Screening, PMP and Hazard Lite optional). The Runner zip carries LISFLOOD-FP 8.3
+            The DamSafety QGIS plugins (install order: Core, Setup, Data, Runner, Hazard;
+            Screening, PMP and Hazard Lite optional; every plugin needs DamSafety Core). The Runner zip carries LISFLOOD-FP 8.3
             with the arrival-depth patch for Linux x64, Windows x64 and macOS Apple Silicon
             under `DamSafety_Runner/bin/`; the same binaries are attached on their own, with
             `lisflood-8.3-ndbreach-source.zip` as the GPL corresponding source. `SHA256SUMS` lists

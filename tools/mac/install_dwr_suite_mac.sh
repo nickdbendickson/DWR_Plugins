@@ -97,7 +97,7 @@ warn() { printf '\033[1;33mWARNING:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # the DamSafety plugin folder names (as each zip unpacks) — used to enable them
-DS_PLUGINS=(DamSafety_Setup DamSafety_Data DamSafety_Screening DamSafety_Runner \
+DS_PLUGINS=(DamSafety_Core DamSafety_Setup DamSafety_Data DamSafety_Screening DamSafety_Runner \
             DamSafety_Hazard DamSafety_HazardLite DamSafety_PMP)
 
 # ---------------------------------------------------------------------------
