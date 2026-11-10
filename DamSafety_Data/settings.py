@@ -145,6 +145,21 @@ def resolve_data_dir(explicit, suite, default=None):
     return default, "default", " ".join(notes)
 
 
+def auto_check_blocked(how, folder):
+    """Why an AUTOMATIC update check must not start, or "" when it may (1.9.6, usability plan
+    "Things that are broken": the updater used to start a multi-gigabyte download 20 s after
+    QGIS opened, into a default folder the plugins were not looking at). An automatic check
+    waits until a folder has been chosen - Data's own setting or the suite data folder - or the
+    default folder already holds downloads (then it only keeps them fresh). A check the
+    engineer starts by hand is never blocked by this."""
+    if how in ("explicit", "suite", "legacy"):
+        return ""
+    if has_downloads(folder):
+        return ""
+    return ("no data folder is set (choose the suite data folder with DamSafety Setup, or a "
+            "Data folder in Settings and status), so nothing is downloaded automatically")
+
+
 class Settings:
     def __init__(self, qsettings=None):
         self.s = qsettings if qsettings is not None else QgsSettings()

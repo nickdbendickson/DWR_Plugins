@@ -44,9 +44,15 @@ def _step_of(cls):
     return None
 
 
+# 0.18.19 (usability plan change 3): steps only the window or qgis_process runs - the self-test
+# (14), the headless chain (15) and the preflight (17, the window's "Check before running") -
+# leave the toolbox list (FlagHideFromToolbox); they stay runnable everywhere else.
+HIDDEN_FROM_TOOLBOX = frozenset(("14", "15", "17"))
+
 # 0.13: every tool takes its parameter defaults from the suite settings file and sits in the
 # "Screening steps" or "Advanced" group of the toolbox (algorithms/_settings.settings_aware)
-ALGORITHMS = tuple(ST.settings_aware(c, _step_of(c)) for c in ORIGINAL_ALGORITHMS)
+ALGORITHMS = tuple(ST.settings_aware(c, _step_of(c), hidden=_step_of(c) in HIDDEN_FROM_TOOLBOX)
+                   for c in ORIGINAL_ALGORITHMS)
 
 
 def _with_manifest(cls):

@@ -221,6 +221,57 @@ def check(label, win, top=True, close=True):
         win.grab().save(os.path.join(SHOTS, re.sub(r"\W+", "_", label).strip("_") + ".png"))
 
 
+# ------------------------------------------------------- the source rule (no Qt needed) ------
+RUN_HANDLER_RE = re.compile(r"^(_on_run|_run_|_launch_|_start_)")
+MESSAGE_BOX_KINDS = ("warning", "critical")
+LINT_WINDOW_FILES = ("dialog.py", "wizard.py", "classify_tab.py", "review_tab.py",
+                     "facility_review_tab.py", "data_tab.py", "datafolder_tab.py",
+                     "dsswise_tab.py", "extras_tab.py", "extras290_tab.py", "rasimport_tab.py",
+                     "suite_tab.py", "suite_settings_tab.py", "settings_dialog.py",
+                     "pack_dialog.py", "imagery_dialog.py", "status_dock.py",
+                     "streamstats_dialog.py", "chain_dialog.py", "settings_tab.py",
+                     "results_tab.py")
+
+
+def message_boxes_in_run_handlers(source, filename="<window>"):
+    """[(function, kind, line)] of every QMessageBox.warning / .critical call inside a run
+    handler (a method named _on_run*, _run_*, _launch_* or _start_*, or a function nested in
+    one) of one window file. docs/gui-grammar.md: "Checks: CheckPanel, never a message box" -
+    a run's pre-flight refusal belongs in the red panel next to the button it blocks. A
+    QMessageBox.question (a confirmation) and .information are not checks and are allowed.
+    Pure ast, so tools/ci_checks.py can run it without Qt."""
+    import ast
+    out = []
+    tree = ast.parse(source, filename)
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not RUN_HANDLER_RE.match(node.name):
+            continue
+        for sub in ast.walk(node):
+            if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+                    and isinstance(sub.func.value, ast.Name)
+                    and sub.func.value.id == "QMessageBox" and sub.func.attr in MESSAGE_BOX_KINDS):
+                out.append((node.name, sub.func.attr, sub.lineno))
+    return out
+
+
+def rule_no_message_box_checks(repo=REPO):
+    """The source rule over every window file of every plugin; one FAIL line per call."""
+    import ast  # noqa: F401 - the helper imports it; here for the reader
+    for p in PLUGINS:
+        for f in LINT_WINDOW_FILES:
+            path = os.path.join(repo, p, f)
+            if not os.path.isfile(path):
+                continue
+            with open(path, encoding="utf-8") as fh:
+                src = fh.read()
+            for fn, kind, line in message_boxes_in_run_handlers(src, path):
+                fail("{}/{}".format(p, f), "line {}: QMessageBox.{} inside the run handler {}() - "
+                     "a check belongs in the CheckPanel next to the button it blocks "
+                     "(docs/gui-grammar.md)".format(line, kind, fn))
+
+
 def rule_icons():
     for p in PLUGINS:
         with open(os.path.join(REPO, p, "metadata.txt"), encoding="utf-8") as f:
@@ -242,6 +293,7 @@ def opened(label, make):
 
 def main():
     rule_icons()
+    rule_no_message_box_checks()
     import ci_checks                       # Core 1.0.0: the window files are shims onto the Core
     for p in ci_checks.ui_shim_problems(REPO):
         fail("DamSafety_Core/ui", p)

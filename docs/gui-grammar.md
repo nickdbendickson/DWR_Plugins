@@ -16,7 +16,10 @@ style.
 - **Fast CI check** (`tools/ci_checks.py`, no QGIS needed): every plugin copy must match
   `shared/ui/`, and window code must not contain a `#rrggbb` colour outside `tokens.py`.
 - **GUI lint** (`tools/gui_lint.py`, real QGIS, offscreen): opens every window and checks the
-  rules below. Run it as `QT_QPA_PLATFORM=offscreen <QGIS python> tools/gui_lint.py [shots_dir]`.
+  rules below. Its one source rule - no `QMessageBox.warning` / `.critical` inside a run handler
+  (`_on_run*`, `_run_*`, `_launch_*`, `_start_*`) of a window file, because a check belongs in
+  the `CheckPanel` - needs no Qt and also runs in `tools/ci_checks.py`
+  (`tools/test_gui_lint.py` tests it). Run it as `QT_QPA_PLATFORM=offscreen <QGIS python> tools/gui_lint.py [shots_dir]`.
   Add a screenshots folder to see every window. One rule, no page scrolls sideways, needs a
   1080p screen (Qt5's offscreen screen is 800x600), so run it under a virtual display as well:
   `xvfb-run -s "-screen 0 1920x1080x24" env QT_QPA_PLATFORM=xcb <QGIS python> tools/gui_lint.py`.

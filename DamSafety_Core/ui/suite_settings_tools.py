@@ -109,13 +109,29 @@ def tool_name(alg):
     return _get(alg, "name", "") or ""
 
 
-def catalog_of(alg, plugin, group_of, tool=None):
+# 2026-11-08 (usability plan, change 2): parameters that name ONE run - the dam, the scenario,
+# the reviewer, a report's title and signatures - are not settings. They used to fill the grid
+# ("Dam id" three times on Hazard's Other tab) and a value saved there would have been applied
+# to every later run. They stay in the tool dialogs; the grid leaves them out.
+PER_RUN_KEYS = frozenset((
+    "DAM", "DAM_ID", "DAM_IDS", "DAM_NAME", "NID_ID", "SUBJECT_NID", "STRUCTURE_ID",
+    "SCENARIO_NAME", "PROJECT_FILE", "CLASSIFY_OPTIONS", "OUTPUT_HTML", "OUT_FILE",
+    "REVIEWER", "COMMENTS", "NOTES", "TITLE", "PROJECT", "ENGINEER", "FIRM",
+    "DIGITIZED_FROM", "DIGITIZED_BY", "CHECKED_BY", "DIGITIZED_ON", "FIG2_CALIBRATION",
+    "FIG3_CALIBRATION", "BASE_TIME", "REFERENCE_MODEL", "REFERENCE_VERSION", "REFERENCE_DESC",
+    "STUDY_TITLE", "STUDY_BY", "STUDY_DATE", "APPROVAL", "THIS_MODEL", "ACCEPTANCE",
+))
+
+
+def catalog_of(alg, plugin, group_of, tool=None, skip_keys=PER_RUN_KEYS):
     """Catalog entries of one tool instance (its CURRENT defaults are the entries' defaults, so
-    call it on a fresh, un-overlaid instance for the starting values)."""
+    call it on a fresh, un-overlaid instance for the starting values). Parameters named in
+    `skip_keys` (per-run values, PER_RUN_KEYS) are left out."""
     tool = tool or tool_name(alg)
     fam, _order = group_of(tool)
     return DS.catalog_from_definitions(plugin, tool, param_defs(alg), group=fam,
-                                       tool_title=_get(alg, "displayName", tool) or tool)
+                                       tool_title=_get(alg, "displayName", tool) or tool,
+                                       skip=skip_keys)
 
 
 def set_default(alg, name, value):
@@ -175,10 +191,32 @@ def _log_warning(text):
         pass
 
 
-def settings_aware(cls, plugin, group_of, toolbox_group=None, step=None):
+def hide_from_toolbox_flag():
+    """Qgis.ProcessingAlgorithmFlag.HideFromToolbox (QGIS 3.36+ / 4) or the legacy
+    QgsProcessingAlgorithm.FlagHideFromToolbox; 0 where neither exists (the test doubles). The
+    flag only takes a tool out of the toolbox list: it stays runnable from scripts, the Model
+    Designer, qgis_process and the windows' buttons."""
+    for get in (lambda: __import__("qgis.core", fromlist=["Qgis"]).Qgis.ProcessingAlgorithmFlag.HideFromToolbox,
+                lambda: __import__("qgis.core", fromlist=["QgsProcessingAlgorithm"])
+                .QgsProcessingAlgorithm.Flag.FlagHideFromToolbox,
+                lambda: __import__("qgis.core", fromlist=["QgsProcessingAlgorithm"])
+                .QgsProcessingAlgorithm.FlagHideFromToolbox):
+        try:
+            flag = get()
+        except Exception:                                        # noqa
+            continue
+        if flag is not None and not isinstance(flag, str):
+            return flag
+    return 0
+
+
+def settings_aware(cls, plugin, group_of, toolbox_group=None, step=None, hidden=False):
     """A subclass of a tool class whose instances take their parameter defaults from the settings
-    file; `toolbox_group` = (group, group id) puts it in that Processing group. `_nd_original` is
-    the class as written (its defaults are the 'starting values')."""
+    file; `toolbox_group` = (group, group id) puts it in that Processing group. `hidden=True`
+    (2026-11-08, usability plan change 3) adds FlagHideFromToolbox: a chain step, self-test or
+    internal hand-off that is only ever run by another tool or a window button leaves the
+    toolbox list but stays fully runnable (scripts, models, qgis_process, the windows).
+    `_nd_original` is the class as written (its defaults are the 'starting values')."""
     if getattr(cls, "_nd_original", None) is not None:
         return cls
 
@@ -212,7 +250,16 @@ def settings_aware(cls, plugin, group_of, toolbox_group=None, step=None):
 
     body = {"initAlgorithm": initAlgorithm, "createInstance": createInstance, "_nd_original": cls,
             "_nd_step": step, "__module__": cls.__module__, "__doc__": cls.__doc__,
-            "shortHelpString": shortHelpString, "processAlgorithm": processAlgorithm}
+            "shortHelpString": shortHelpString, "processAlgorithm": processAlgorithm,
+            "_nd_hidden": bool(hidden)}
+    if hidden:
+        def flags(self):
+            base = cls.flags(self) if hasattr(cls, "flags") else 0
+            try:
+                return base | hide_from_toolbox_flag()
+            except Exception:                                    # noqa - never stop a tool
+                return base
+        body["flags"] = flags
     if toolbox_group:
         body["group"] = lambda self: toolbox_group[0]
         body["groupId"] = lambda self: toolbox_group[1]

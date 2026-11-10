@@ -148,6 +148,15 @@ b = ST.settings_aware(RunBreachSim, "7")()
 b.initAlgorithm()
 assert b._params["CORRW_FT"].defaultValue == 3000 and [k for k, _p in b._nd_refused] == ["ENGINE"]
 assert b._params["ENGINE"].defaultValue == RunBreachSim()._params.get("ENGINE", b._params["ENGINE"]).defaultValue or True
+# Nick 2026-11-09: tools 7, 9 and 12 keep LISFLOOD-FP ACC (ENGINE 0) as the toolbox default; the
+# window (core/workflow) and tool 14 pass the built-in engine (2) themselves.
+from nd_dam_screening.algorithms.sensitivity import Sensitivity  # noqa: E402
+from nd_dam_screening.algorithms.estimate_runtime import EstimateRuntime  # noqa: E402
+for _cls in (RunBreachSim, Sensitivity, EstimateRuntime):
+    _t = _cls()
+    _t.initAlgorithm()
+    assert _t._params["ENGINE"].defaultValue == 0, (_cls.__name__, _t._params["ENGINE"].defaultValue)
+assert wf.DEFAULT_SETTINGS["chain"] == ["6"] and wf.DEFAULT_SETTINGS["engine"] == 2
 # the hidden metre twin is never in the catalog, the feet value is
 cat = ST.catalog_of(ST.fresh(FP), "findponds")
 keys = [s.key for s in cat]

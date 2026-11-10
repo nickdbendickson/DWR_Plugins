@@ -516,7 +516,13 @@ def popup_plugin_menu_entry_single_window_and_unload():
         first = iface.menu[0]
         assert first[0] == q.plugin.MENU and p.action is first[1]
         assert p.action.triggered._slots == [p.run_plugin]
-        assert len(iface.menu) == 1                                    # one menu entry: the single window
+        # 3.16.12: two entries, the window and the one "Dam suite home…" (usability plan: the home
+        # had no entry in any plugin), both under Dam safety; the home entry opens run_home
+        # ("&Dam safety" and "Dam safety" are the same QGIS menu: it strips the shortcut mark)
+        assert [m[0].replace("&", "") for m in iface.menu] == ["Dam safety", "Dam safety"]
+        home_a = iface.menu[1][1]
+        assert home_a.text() == "Dam suite home\u2026" and home_a.objectName() == "NDSuiteHome"
+        assert home_a.triggered._slots == [p.run_home] and p.suite_actions == [home_a]
         p.action.triggered.emit()
         w = p.dialog
         assert w is not None and w.isVisible()
@@ -585,7 +591,7 @@ def popup_adds_the_dams_results_styled_and_the_suite_home_opens():
             def messageBar(self): return types.SimpleNamespace(pushMessage=lambda *a, **k: None)
         p = q.plugin.NDBreachRunnerPlugin(Iface())
         p.initGui()
-        assert len(p.iface.menu) == 1                                  # single menu entry; the suite home opens from the window
+        assert [m[1].objectName() for m in p.iface.menu] == ["NDBreachRunnerAction", "NDSuiteHome"]
         h = p.run_home()
         assert h is p.home_dialog and h.isVisible() and "Opened from DamSafety Runner" in h.plugins_label.text()
         h.dams_edit.setText(dams)

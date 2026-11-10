@@ -810,7 +810,9 @@ class ClassificationTabMixin(object):
         self._log(">>> Hazard classification...")
         ok, msg = self._load_rasters()
         if not ok:
-            QMessageBox.critical(self, "Hazard Classification Error", msg)
+            # 2.23.17 (gui-grammar: checks in the CheckPanel, never a message box): the
+            # rasters that could not be opened block Classify until they are fixed
+            self._show_input_errors([msg])
             self._update_status("CLASSIFICATION FAILED: {}".format(msg), False)
             return
         ctx = QgsProject.instance().transformContext()
@@ -867,8 +869,7 @@ class ClassificationTabMixin(object):
                 self._log(outcome.traceback)
                 log_message(outcome.traceback, MSG_CRITICAL)
                 self._update_status("CLASSIFICATION FAILED: {}".format(outcome.error), False)
-                QMessageBox.critical(self, "Hazard Classification Error",
-                                     str(outcome.error) or repr(outcome.error))
+                self._show_view("Classify")           # 2.23.17: the red line and the log say it
                 return
             res = outcome.result
             try:
@@ -885,7 +886,7 @@ class ClassificationTabMixin(object):
                 self._log(tb)
                 log_message(tb, MSG_CRITICAL)
                 self._update_status("CLASSIFICATION FAILED: {}".format(e), False)
-                QMessageBox.critical(self, "Hazard Classification Error", str(e) or repr(e))
+                self._show_view("Classify")
                 return
             self._after_classification(res)
             if everything:
@@ -1133,9 +1134,8 @@ class ClassificationTabMixin(object):
             if outcome.error is not None:
                 log_message(outcome.traceback, MSG_CRITICAL)
                 self._log(outcome.traceback)
-                self._update_status("Creep watch FAILED: {}".format(outcome.error), False)
-                QMessageBox.critical(self, "Creep watch",
-                                     str(outcome.error) or repr(outcome.error))
+                self._log("!!! Creep watch failed: {}".format(outcome.error))
+                self._update_status("Creep watch FAILED: {}".format(outcome.error), False)   # 2.23.17: no pop-up
                 return
             rows, paths = outcome.result
             text = WT.alerts_text(rows)
@@ -1143,6 +1143,8 @@ class ClassificationTabMixin(object):
                 self._log(">>> Creep watch ran: " + info["text"])
             self._log(">>> Creep watch: {} - {}".format(text, paths["html"]))
             self._update_status("Creep watch: " + text, True)
+            # a success .information is allowed (it is not a check; the CheckPanel rule only
+            # bans .warning / .critical in run handlers), and it names the report that opens
             QMessageBox.information(self, "Creep watch", "{}\n\n{}".format(text, paths["html"]))
             self._open_path(paths["html"])
         self._start_background("Hazard creep watch\u2026", work, done, project_bound=False)

@@ -86,6 +86,12 @@ class NDdamHazardHelperPlugin(QObject):
 
         # Add to Plugins Menu
         self.iface.addPluginToMenu("Dam safety", self.action)
+        try:                              # 2.23.17: the home's one menu entry (suite_home)
+            from . import suite_home
+            self.suite_actions = getattr(self, "suite_actions", None) or []
+            suite_home.add_home_action(self, self.iface)
+        except Exception:                                        # noqa - never block the plugin
+            pass
 
         # Optional: Add to a custom toolbar (uncomment if you want a dedicated toolbar)
         # self.iface.addToolBarIcon(self.action)
