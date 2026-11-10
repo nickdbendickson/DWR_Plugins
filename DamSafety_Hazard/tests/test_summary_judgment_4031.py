@@ -36,13 +36,18 @@ def _structs(near=None):
     """Like DWR-4031: one judgment-zone house 0.053 ft past the ACER line (Struct_ID 9953
     in the toe-run folder, 2.111 ft at 6.95 ft/s), one more wet house (5.2.2) and one dry
     house cut off (5.2.1.2)."""
+    # max_vel / margin_high are set because the DWR-4031 toe-run had a velocity raster (the house
+    # is "2.111 ft at 6.95 ft/s" and its ACER margin is velocity-derived); a real with-velocity
+    # run populates both. Without them the M11 no-Vmax relabel (classification.extra_criteria)
+    # would treat this scenario as velocity-0 and the 5.3(f) row would read "not evaluated".
     j = {"id": 9953, "habitable": "Yes", "acer_type": HOUSE, "persons": 3,
          "zone": CLASS_JUDGMENT, "outcome": OUT_JUDGMENT, "margin_judg": -0.053,
-         "damage_usd": 60000.0, "max_depth": 2.11}
+         "margin_high": 3.86, "max_vel": 6.95, "damage_usd": 60000.0, "max_depth": 2.11}
     if near:
         j["near"] = near
     e = {"id": 2, "habitable": "Yes", "acer_type": HOUSE, "persons": 3, "zone": 3,
-         "outcome": OUT_ECONOMIC, "damage_usd": 43090.0, "max_depth": 0.8}
+         "outcome": OUT_ECONOMIC, "margin_high": 5.17, "max_vel": 1.5,
+         "damage_usd": 43090.0, "max_depth": 0.8}
     c = {"id": 7937, "habitable": "Yes", "acer_type": HOUSE, "persons": 3, "zone": None,
          "outcome": OUT_DRY, "cut_off": True}
     return [j, e, c]

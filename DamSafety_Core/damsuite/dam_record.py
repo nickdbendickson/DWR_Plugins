@@ -38,8 +38,9 @@ Other decisions:
     note). An unreadable dam_location.json, or one without a usable value, is ignored (ND Dam
     Hazard reports it itself).
     Nothing is written until save(). dam_id is never guessed from the folder name.
-  * save() is atomic (<path>.tmp then os.replace) and creates the folder when needed. It is
-    last-writer-wins: load, change and save promptly (do not hold a record over a long run).
+  * save() is atomic (a per-writer hidden <folder>/.<name>.<pid>_<tid>.tmp then os.replace) and
+    creates the folder when needed. It is last-writer-wins: load, change and save promptly (do
+    not hold a record over a long run).
   * next_action: "screen" only when there is no screened AND no modelled / classified status
     (a dam modelled or classified without the screening tool does not need screening). A
     screened result needs a model unless it says so otherwise: result["needs_model"] (bool)
@@ -51,6 +52,7 @@ import datetime
 import json
 import math
 import os
+import threading
 
 FILE_NAME = "dam.json"
 LEGACY_LOCATION = "dam_location.json"
@@ -261,7 +263,13 @@ class DamRecord:
         """Write dam.json atomically; returns its path."""
         os.makedirs(self.folder or ".", exist_ok=True)
         text = json.dumps(self.to_dict(), indent=1, ensure_ascii=False, default=str)
-        tmp = self.path + ".tmp"
+        # M25: stage to a per-writer hidden name (pid AND thread id) so two writers of the same
+        # dam.json - two suite processes, or a background classify thread racing the main thread -
+        # never share one .tmp and byte-mix each other's record into invalid JSON. Matches
+        # settings.save / terrain_cache._part_name. (Last-writer-wins across load->save is
+        # unchanged and intended; only the corruption is fixed.)
+        tmp = os.path.join(self.folder or ".", ".{}.{}_{}.tmp".format(
+            os.path.basename(self.path), os.getpid(), threading.get_ident()))
         try:
             with open(tmp, "w", encoding="utf-8", newline="\n") as f:
                 f.write(text + "\n")
