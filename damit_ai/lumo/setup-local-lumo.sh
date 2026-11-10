@@ -1,9 +1,11 @@
 #!/bin/zsh
 # ============================================================================
-# setup-local-lumo.sh v3.4 — local Ollama auditing for the dam suite (macOS)
+# setup-local-lumo.sh v3.5 — local Ollama auditing for the dam suite (macOS)
 #
-#   NO sudo · NO Homebrew. Prefers your existing conda (the nd-dam-suite one)
-#   for the Python side; falls back to downloading wheels only without conda.
+#   NO sudo · NO Homebrew. NO web downloads by the script itself (v3.5): Ollama
+#   comes from damit_ai/offline/ollama (sha256-checked) or a zip/dmg you download
+#   in a browser; the Python side is a conda env (bundled packages first). Only
+#   Ollama itself pulls the AI models.
 #
 # Fixes vs v3:
 #   - DMG install: the mount point was searched with `grep -B30 ... ^/Volumes/`,
@@ -26,9 +28,8 @@
 #   - Adds dam_chain.py: runs both plugin sets headless (self-tests, and
 #     Screening -> Runner -> Hazard for a list of dams).
 #
-# Managed Mac with Cortex XDR: a self-downloading script and an unsigned
-# binary run from your home folder are what EDR flags. Ask IT first; do not
-# try to get around it.
+# Managed Mac with Cortex XDR: an unsigned binary run from your home folder can
+# still be flagged. Ask IT first; do not try to get around it.
 #
 # Usage:
 #   zsh setup-local-lumo.sh                  # interactive
@@ -83,7 +84,7 @@ mkdir -p "$LOCAL_AI" "$OLLAMA_BIN_DIR" "$MODELS_DIR" "$PYLIBS_DIR" "$LOCAL_AI/re
 ok "~/local-ai ready"
 
 # ===========================================================================
-say "Step 2/9 — Ollama (download + install, no sudo)"
+say "Step 2/9 — Ollama (install, no sudo)"
 if [[ -x "$OLLAMA_EXE" ]]; then
   ok "Ollama already installed"
 else
@@ -98,16 +99,13 @@ else
       warn "bundled Ollama zip does not match its SHA256SUMS; ignoring it"
     fi
   fi
-  URL="https://ollama.com/download/Ollama-darwin.zip"
-  if [[ ! -f "$TMPDIR_L/Ollama.zip" ]]; then
-    say "Trying direct download: $URL"
-    curl -fL --connect-timeout 20 -o "$TMPDIR_L/Ollama.zip" "$URL" 2>/dev/null
-  fi
+  # No web download from this script (security tools flag download-then-run): without the
+  # bundled zip, you download Ollama yourself in a browser and the script picks it up.
   if [[ -f "$TMPDIR_L/Ollama.zip" ]] && is_zip "$TMPDIR_L/Ollama.zip"; then
-    ok "downloaded Ollama zip ($(du -h "$TMPDIR_L/Ollama.zip" | cut -f1))"
+    ok "Ollama zip ready ($(du -h "$TMPDIR_L/Ollama.zip" | cut -f1))"
   else
     rm -f "$TMPDIR_L/Ollama.zip"
-    warn "direct download failed or returned HTML — browser fallback"
+    warn "no bundled Ollama (damit_ai/offline/ollama) — using one you download in a browser"
     if [[ -f "$DOWNLOADS/Ollama-darwin.zip" ]]; then
       cp "$DOWNLOADS/Ollama-darwin.zip" "$TMPDIR_L/Ollama.zip"
     elif [[ -f "$DOWNLOADS/Ollama.dmg" || -f "$DOWNLOADS/ollama.dmg" ]]; then
@@ -297,77 +295,14 @@ else
   LUMO_PY="$(command -v python3)"; USE_PYLIBS=1
   PYVER=$("$LUMO_PY" -c 'import sys;print("%d%d" % sys.version_info[:2])')
   MYARCH=$(uname -m)
+  # No downloads here: PDF reading needs PyMuPDF or pypdf already importable (the conda env
+  # above has both; install_all.zsh / the bundled packages provide it).
   if PYTHONPATH="$PYLIBS_DIR" "$LUMO_PY" -c "import pymupdf" 2>/dev/null; then
     ok "PyMuPDF already importable"
+  elif PYTHONPATH="$PYLIBS_DIR" "$LUMO_PY" -c "import pypdf" 2>/dev/null; then
+    ok "pypdf already importable (PDFs read more slowly)"
   else
-    # An abi3 wheel tagged cpXY works on Python X.Y AND NEWER only. Pick the newest
-    # non-yanked release whose wheel's cpXY is <= this Python.
-    WHEEL_URL=$("$LUMO_PY" - "$MYARCH" "$PYVER" << 'PYEOF'
-import json, sys, re, urllib.request
-arch, mine = sys.argv[1], int(sys.argv[2])
-want_arch = "arm64" if arch == "arm64" else "x86_64"
-try:
-    data = json.load(urllib.request.urlopen("https://pypi.org/pypi/pymupdf/json", timeout=30))
-except Exception:
-    sys.exit(0)
-def verkey(v):
-    return tuple(int(x) for x in re.findall(r"\d+", v)[:4])
-releases = [v for v in data["releases"] if re.fullmatch(r"[\d.]+", v)]   # no rc/beta
-for ver in sorted(releases, key=verkey, reverse=True):
-    for f in data["releases"][ver]:
-        n = f["filename"]
-        if f.get("yanked") or not n.endswith(".whl") or "macosx" not in n or want_arch not in n:
-            continue
-        m = re.search(r"-cp(\d)(\d+)-(abi3|cp\d+)-", n)
-        if not m:
-            continue
-        tag = int(m.group(1) + m.group(2))
-        if (m.group(3) == "abi3" and tag <= mine) or (m.group(3) != "abi3" and tag == mine):
-            print(f["url"]); sys.exit(0)
-PYEOF
-)
-    if [[ -n "${WHEEL_URL:-}" ]]; then
-      ok "found: $(basename "$WHEEL_URL")"
-      if curl -fL --connect-timeout 20 -o "$TMPDIR_L/pymupdf.whl" "$WHEEL_URL" && ! is_html "$TMPDIR_L/pymupdf.whl"; then
-        UNPACK="$TMPDIR_L/pymupdf-unpack"; rm -rf "$UNPACK"; mkdir -p "$UNPACK"
-        if unzip -q "$TMPDIR_L/pymupdf.whl" -d "$UNPACK"; then
-          xattr -dr com.apple.quarantine "$UNPACK" 2>/dev/null || true
-          rm -rf "$PYLIBS_DIR/pymupdf" "$PYLIBS_DIR/fitz" "$PYLIBS_DIR"/pymupdf-*.dist-info
-          cp -R "$UNPACK"/pymupdf "$PYLIBS_DIR/" 2>/dev/null
-          [[ -d "$UNPACK/fitz" ]] && cp -R "$UNPACK/fitz" "$PYLIBS_DIR/"
-          cp -R "$UNPACK"/pymupdf-*.dist-info "$PYLIBS_DIR/" 2>/dev/null
-        fi
-      fi
-      if PYTHONPATH="$PYLIBS_DIR" "$LUMO_PY" -c "import pymupdf" 2>/dev/null; then
-        ok "PyMuPDF installed into ~/local-ai/pylibs"
-      else
-        warn "PyMuPDF wheel did not import — PDFs will use pypdf (below)"
-      fi
-    else
-      warn "no PyMuPDF wheel for Python ${PYVER:0:1}.${PYVER:1} on macOS ${MYARCH} — PDFs will use pypdf (below)"
-    fi
-  fi
-  # --- pypdf fallback (pure Python) ---
-  if ! PYTHONPATH="$PYLIBS_DIR" "$LUMO_PY" -c "import pypdf" 2>/dev/null; then
-    PYPDF_URL=$("$LUMO_PY" - << 'PYEOF'
-import json, urllib.request
-try:
-    data = json.load(urllib.request.urlopen("https://pypi.org/pypi/pypdf/json", timeout=30))
-    for f in data["urls"]:
-        if f["filename"].endswith(".whl") and "py3-none-any" in f["filename"]:
-            print(f["url"]); break
-except Exception as e:
-    import sys; print("pypdf lookup failed: %s" % e, file=sys.stderr)
-PYEOF
-)
-    if [[ -n "${PYPDF_URL:-}" ]] \
-       && curl -fsL --connect-timeout 20 -o "$TMPDIR_L/pypdf.whl" "$PYPDF_URL" \
-       && unzip -qo "$TMPDIR_L/pypdf.whl" -d "$PYLIBS_DIR" \
-       && PYTHONPATH="$PYLIBS_DIR" "$LUMO_PY" -c "import pypdf" 2>/dev/null; then
-      ok "pypdf fallback installed"
-    else
-      warn "pypdf not installed — code indexing works; PDFs will be skipped"
-    fi
+    warn "no PyMuPDF or pypdf — code indexing works; PDFs will be skipped (install conda and re-run)"
   fi
 fi
 
