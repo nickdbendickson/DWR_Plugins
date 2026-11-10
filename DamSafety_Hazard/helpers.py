@@ -691,6 +691,69 @@ def invert_geotransform(gt):
     return (i0, i1, i2, i3, i4, i5)
 
 
+# audit M04 (Hazard 2.24.4), SAFETY-NUM: the provider branch of RasterSampler._read reads the
+# block buffer in one go for these QGIS data types ONLY (keyed on int(block.dataType()); the
+# integers are the same in QgsRaster.DataType and Qgis.DataType). Anything else - ARGB32 /
+# ARGB32_Premultiplied image blocks from WMS / XYZ / some ArcGIS MapServer layers, CInt16 /
+# CInt32 / CFloat32 / CFloat64, an unknown type - goes through the per-cell loop, which
+# returns what it always did (all-NaN for image blocks). Never derive the type from
+# dataTypeSize(): it cannot tell Int32 from Float32.
+_BULK_DTYPES = {1: np.dtype("=u1"),    # Byte
+                14: np.dtype("=i1"),   # Int8 (QGIS >= 3.30)
+                2: np.dtype("=u2"),    # UInt16
+                3: np.dtype("=i2"),    # Int16
+                4: np.dtype("=u4"),    # UInt32
+                5: np.dtype("=i4"),    # Int32
+                6: np.dtype("=f4"),    # Float32
+                7: np.dtype("=f8")}    # Float64
+# qgsDoubleNear's default epsilon (4 * DBL_EPSILON), as QgsRasterBlock::isNoDataValue uses it
+_QGS_NEAR_EPS = 4 * np.finfo(np.float64).eps
+
+
+def _block_loop(block, w, h):
+    """The original per-cell read (NaN where block.isNoData)."""
+    out = np.empty((h, w), dtype=np.float64)
+    for r in range(h):
+        for c in range(w):
+            out[r, c] = np.nan if block.isNoData(r, c) else block.value(r, c)
+    return out
+
+
+def _block_bulk(block, w, h):
+    """The block as a float64 (h, w) array read from its buffer, bit-identical to
+    _block_loop, or None (the caller then runs the loop): a data type outside _BULK_DTYPES,
+    a no-data BITMAP (hasNoData without a no-data value), a buffer that is not exactly
+    h * w * itemsize bytes (an empty whole-block-nodata / failed-tile block), or any error.
+    No-data matches QgsRasterBlock::isNoData: NaN, or qgsDoubleNear(value, noDataValue)
+    (diff > -eps and diff <= eps, eps = 4 * DBL_EPSILON), for every whitelisted type."""
+    try:
+        dt = _BULK_DTYPES.get(int(block.dataType()))
+        if dt is None:
+            return None
+        has_nd = bool(block.hasNoData())
+        has_val = bool(block.hasNoDataValue())
+        if has_nd and not has_val:
+            return None                                  # bitmap: keep the loop
+        buf = bytes(block.data())
+        if len(buf) != h * w * dt.itemsize:
+            return None
+        arr = np.frombuffer(buf, dtype=dt)
+        if arr.size != h * w:
+            return None
+        out = arr.reshape(h, w).astype(np.float64)
+        if has_val:
+            nd = float(block.noDataValue())
+            with np.errstate(invalid="ignore", over="ignore"):
+                diff = out - nd
+                bad = (diff > -_QGS_NEAR_EPS) & (diff <= _QGS_NEAR_EPS)
+            if dt.kind == "f":
+                bad |= np.isnan(out)
+            out[bad] = np.nan
+        return out
+    except Exception:
+        return None
+
+
 class RasterSampler(object):
     """Fast, reusable reader for one raster band.
 
@@ -831,11 +894,10 @@ class RasterSampler(object):
         block = self._provider.block(1, rect, w, h)
         if block is None or not block.isValid():
             return None
-        out = np.empty((h, w), dtype=np.float64)
-        for r in range(h):
-            for c in range(w):
-                out[r, c] = np.nan if block.isNoData(r, c) else block.value(r, c)
-        return out
+        out = _block_bulk(block, w, h)          # audit M04: whitelisted dtypes only
+        if out is not None:
+            return out
+        return _block_loop(block, w, h)
 
     def _valid_mask(self, arr):
         with np.errstate(invalid="ignore"):
