@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# dam_chain.py v1.4 — run both dam-plugin sets headless from Terminal (macOS, conda), stdlib only.
+# dam_chain.py v1.5 — run both dam-plugin sets headless from Terminal (macOS, conda), stdlib only.
 #
 #   dam_chain.py setup                       one-time: batch profiles that point at your QGIS
 #                                            profiles "nd" and "damsafety", plugins enabled
@@ -26,6 +26,10 @@
 #                                            the literature research assistant (damresearch, a
 #                                            separate model and library from lumo); same as typing
 #                                            damresearch ...  (v1.4)
+#   dam_chain.py audit [--repo R] [--zips Z] [--lumo] [--golden --results D] ...
+#                                            local repo audit: release/packaging, security patterns,
+#                                            network hosts, optional Lumo diff review, golden runs.
+#                                            Report in ~/local-ai/reports (repo_audit.py, v1.5)
 #   dam_chain.py crest --set nd|dwr          open the Crest desk wired to that set: its Report-step
 #                                            buttons (dam folder, screening, flood model) run that
 #                                            set's plugins, in ~/CrestDams/<set>
@@ -52,7 +56,7 @@ SETS = {
            "needs": ["ndhazard:getdamdata", "ndhazard:suitechain", "nddam:runchain",
                      "ndbreach:rundam", "ndhazard:classify", "ndbreach:selftest", "nddam:selftest"]},
     "dwr": {"profile": "damsafety", "runner": "DamSafety_Runner",
-            "plugins": ["DamSafety_Setup", "DamSafety_Data", "DamSafety_Screening",
+            "plugins": ["DamSafety_Core", "DamSafety_Setup", "DamSafety_Data", "DamSafety_Screening",
                         "DamSafety_Runner", "DamSafety_Hazard", "DamSafety_HazardLite",
                         "DamSafety_PMP"],
             "needs": ["ndbreach:chainbatch", "nddam:runchain", "ndbreach:batch",
@@ -360,6 +364,13 @@ def cmd_plugins(args):
     rc, out = qp.plain("list")
     if not args.dry_run:
         have = set(re.findall(r"\b(\w+:\w+)\b", out))
+        # v1.5: `qgis_process list` leaves out tools hidden from the toolbox (the DamSafety
+        # self-tests, Screening's run-chain): ask for each one by id before calling it missing
+        for alg in spec["needs"]:
+            if alg not in have:
+                rc_h, _ = qp.plain("help", alg)
+                if rc_h == 0:
+                    have.add(alg)
         for alg in spec["needs"]:
             print("  %-4s %s" % ("ok" if alg in have else "MISSING", alg))
         providers = sorted({a.split(":")[0] for a in have if a.split(":")[0].startswith("nd")})
@@ -709,11 +720,23 @@ def research_passthrough(argv):
     os.execv(py, [py, tool] + argv)
 
 
+def audit_passthrough(argv):
+    """`damchain audit ...` -> repo_audit.py next to this file (or in ~/local-ai)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for tool in (os.path.join(here, "repo_audit.py"), os.path.expanduser("~/local-ai/repo_audit.py")):
+        if os.path.isfile(tool):
+            os.execv(sys.executable, [sys.executable, tool] + argv)
+    sys.exit("repo_audit.py is not installed next to dam_chain.py; rerun setup-local-lumo.sh")
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "research":
         research_passthrough(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "audit":
+        audit_passthrough(sys.argv[2:])
     ap = argparse.ArgumentParser(description="Run the ND and DamSafety dam plugins headless. "
-                                             "`research ...` runs the literature assistant (damresearch).")
+                                             "`research ...` runs the literature assistant (damresearch); "
+                                             "`audit ...` the local repo audit (audit --help).")
     ap.add_argument("--env", default="ndqgis", help="conda env with QGIS (default ndqgis)")
     ap.add_argument("--qgis-process", default="", help="path to qgis_process (default: found in the env)")
     ap.add_argument("--threads", type=int, default=1)

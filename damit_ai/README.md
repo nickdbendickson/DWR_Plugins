@@ -27,6 +27,25 @@ plugin zip or CI job.
    Commands: `lumo-start` (Ollama server, in its own tab), `lumo-chat`, `lumo-index`, `lumo-query`,
    `lumo-audit`, `damchain ...`.
 
+   **Repo audit:** `damchain audit --repo ~/path/to/DWR_Plugins` writes one report to
+   `~/local-ai/reports/audit_<repo>_<time>.md` (and `.json`). It checks:
+   1. release and packaging: runs the repo's own `tools/ci_checks.py`, every plugin's metadata
+      and its DamSafety Core dependency, release/install lists that leave a plugin out, and with
+      `--zips FOLDER` the built zips (one top folder, versions match the checkout);
+   2. security: built-in patterns (TLS checks off, curl into a shell, sudo, unpickling, eval,
+      tar extract, plain FTP, hard-coded secrets) plus bandit and ruff when they are installed
+      (never installed by the audit);
+   3. network: every host the code names, written to `hosts_<repo>.txt` for IT; with
+      `--allow-hosts FILE` any host not in the file is flagged;
+   4. `--lumo`: the local model reviews the diff against `origin/main`. Its findings are marked
+      UNVERIFIED (triage only; confirm each with a failing test);
+   5. golden runs: `damchain audit --golden-record --results ~/DamSafety/Dams --ids DWR-2801,DWR-4031`
+      saves those dams' run_report.json numbers as a baseline, and after a plugin update rerun the
+      dams and use `--golden` instead. Peak flow, flooded acres, depth, velocity, storage and arrival
+      time must stay within tolerance, and LISFLOOD-FP volume error must stay at 1 % or under.
+   Any HIGH finding gives exit code 1, so the audit can gate a merge. `--only release,security`
+   runs a subset.
+
 2. **dam-research (needs Ollama from step 1, or the Ollama app):**
    ```zsh
    cd damit_ai/research
@@ -69,9 +88,10 @@ Embeddings: Lumo uses `nomic-embed-text`; dam-research uses `qwen3-embedding:0.6
 
 ## Status
 
-- `lumo/` is setup-local-lumo.sh v3.3 (uses the bundled Ollama zip when present) with rag_index 2.4, rag_query 2.2, audit_plugin 1.3,
-  suite_check 1.0 and dam_chain 1.4 (now written by the installer itself; `lumo-chat` shows the
-  DaMiT banner). `suite_check.py` and `dam_chain.py` drive the ND and DamSafety plugin sets (QGIS
+- `lumo/` is setup-local-lumo.sh v3.6 (bundled Ollama and packages, no web downloads) with rag_index 2.4, rag_query 2.2, audit_plugin 1.3,
+  suite_check 1.0, dam_chain 1.5 and repo_audit 1.0 (all written by the installer itself; `lumo-chat` shows the
+  DaMiT banner). dam_chain 1.5 adds DamSafety Core to the DWR set and no longer reports the hidden
+  self-test / run-chain tools as MISSING (`qgis_process list` leaves them out). `suite_check.py` and `dam_chain.py` drive the ND and DamSafety plugin sets (QGIS
   profiles `nd` and `damsafety`). The DamIT plugins are not wired into them yet.
 - `research/` is damresearch 1.0.3, setup-dam-research 1.1 (bundled Ollama and packages), fetch_asdso 1.1, eval_damresearch 1.0 and first-run.zsh 1.0.
   fetch_asdso was tested against damsafety.org on 2026-11-09 (48 of 49 files downloaded; the 49th
