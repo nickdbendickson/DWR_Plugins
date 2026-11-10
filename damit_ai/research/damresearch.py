@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# damresearch.py v1.0.2 — local research assistant for dam-safety, dam-design and
+# damresearch.py v1.0.3 — local research assistant for dam-safety, dam-design and
 # flood-hazard publications. Runs on your Mac against Ollama; nothing leaves the machine.
 #
 # This is a RESEARCH ASSISTANT. Every statement it writes must be checked against
@@ -41,7 +41,7 @@ import urllib.request, urllib.error, unicodedata
 from array import array
 from datetime import datetime
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 HOME = os.path.expanduser(os.environ.get("DAMRESEARCH_HOME", "~/DamResearch"))
 LIBRARY = os.path.join(HOME, "library")
 REPORTS = os.path.join(HOME, "reports")
@@ -1229,13 +1229,17 @@ def cmd_remove(a):
     say("removed from the index (file left in place): %s" % p)
 
 
-def cmd_ocr(a):
-    # The launcher runs the env's python without activating the env, so put its bin (ocrmypdf,
-    # tesseract, ghostscript) on PATH first.
+def ocr_exe():
+    """ocrmypdf, looking in this Python's env first: the launcher runs the env's python without
+    activating the env, so its bin (ocrmypdf, tesseract, ghostscript) goes on PATH."""
     for envbin in (os.path.dirname(os.path.realpath(sys.executable)), os.path.dirname(sys.executable)):
         if envbin not in os.environ.get("PATH", "").split(os.pathsep):
             os.environ["PATH"] = envbin + os.pathsep + os.environ.get("PATH", "")
-    exe = shutil.which("ocrmypdf")
+    return shutil.which("ocrmypdf")
+
+
+def cmd_ocr(a):
+    exe = ocr_exe()
     if not exe:
         die("ocrmypdf is not installed. Re-run the installer with --ocr (adds ocrmypdf + tesseract to the "
             "ndresearch env), then run this again.")
@@ -1292,7 +1296,7 @@ def cmd_doctor(a):
         say("  PDF reader: PyMuPDF (printed page labels on)")
     except ImportError:
         say("  PDF reader: %s" % ("pdftotext" if shutil.which("pdftotext") else "pypdf/none"))
-    say("  OCR: %s" % ("ocrmypdf" if shutil.which("ocrmypdf") else "not installed (installer --ocr)"))
+    say("  OCR: %s" % ("ocrmypdf" if ocr_exe() else "not installed (installer --ocr)"))
     sys.exit(0 if ok else 1)
 
 

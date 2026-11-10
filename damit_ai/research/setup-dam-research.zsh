@@ -1,5 +1,5 @@
 #!/bin/zsh
-# setup-dam-research.zsh v1.0 — the dam-literature research assistant, next to (not inside) lumo.
+# setup-dam-research.zsh v1.1 — the dam-literature research assistant, next to (not inside) lumo.
 #
 #   * Ollama model "dam-research": a reasoning model chosen for this Mac's memory, with a
 #     citation-first system prompt. lumo is not touched.
@@ -54,6 +54,20 @@ for c in "$LOCAL_AI/bin/Ollama.app/Contents/Resources/ollama" "$(command -v olla
          "/Applications/Ollama.app/Contents/Resources/ollama"; do
   [[ -n "$c" && -x "$c" ]] && { OLLAMA="$c"; break; }
 done
+# Bundled Ollama (damit_ai/offline/ollama/Ollama-darwin.zip, checked against its SHA256SUMS): no download.
+OLLAMA_ZIP="$HERE/../offline/ollama/Ollama-darwin.zip"
+if [[ -z "$OLLAMA" && -f "$OLLAMA_ZIP" ]]; then
+  want=$(awk '$2 ~ /Ollama-darwin.zip$/ {print $1}' "$HERE/../offline/ollama/SHA256SUMS" 2>/dev/null)
+  got=$(shasum -a 256 "$OLLAMA_ZIP" | awk '{print $1}')
+  [[ -n "$want" && "$want" == "$got" ]] || die "bundled Ollama-darwin.zip does not match its SHA256SUMS; not installing it"
+  mkdir -p "$LOCAL_AI/bin"
+  T_O="$(mktemp -d)"; ( cd "$T_O" && /usr/bin/unzip -q "$OLLAMA_ZIP" ) || die "could not unzip the bundled Ollama"
+  [[ -d "$T_O/Ollama.app" ]] || die "bundled zip has no Ollama.app"
+  rm -rf "$LOCAL_AI/bin/Ollama.app"; mv "$T_O/Ollama.app" "$LOCAL_AI/bin/"; rm -rf "$T_O"
+  xattr -dr com.apple.quarantine "$LOCAL_AI/bin/Ollama.app" 2>/dev/null
+  OLLAMA="$LOCAL_AI/bin/Ollama.app/Contents/Resources/ollama"
+  [[ -x "$OLLAMA" ]] && ok "Ollama installed from the bundled, sha256-checked zip -> ~/local-ai/bin" || die "Ollama binary missing after unzip"
+fi
 [[ -n "$OLLAMA" ]] || die "Ollama not found. Install it first: zsh setup-local-lumo.sh (in the dam-suites package), or the app from https://ollama.com/download"
 ok "ollama: $OLLAMA"
 # Same model store as lumo, so a base model both use is downloaded once.
@@ -163,6 +177,27 @@ done
 PY=""
 if [[ -n "$CONDA" ]]; then
   ENVPATH=$("$CONDA" env list | awk -v n="$ENV_NAME" '$1==n {print $NF}')
+  # Bundled packages (damit_ai/offline/conda/<subdir>/ndresearch.txt + SHA256SUMS): the env, OCR
+  # included, is built from local files and nothing is downloaded.
+  SUBDIR=$("$CONDA" info --json 2>/dev/null | awk -F'"' '/"platform":/ {print $4; exit}')
+  PKG_DIR="$HERE/../offline/conda/${SUBDIR:-none}"; PKG_DIR="${PKG_DIR:A}"
+  if [[ -z "$ENVPATH" && -f "$PKG_DIR/ndresearch.txt" ]]; then
+    TMPX="$(mktemp "${TMPDIR:-/tmp}/ndresearch.XXXXXX")"; print "@EXPLICIT" > "$TMPX"; BAD=0
+    while read -r fn md5; do
+      [[ -z "$fn" || "$fn" == \#* ]] && continue
+      want="$(awk -v n="$fn" '$2==n{print $1}' "$PKG_DIR/SHA256SUMS")"
+      got="$(shasum -a 256 "$PKG_DIR/$fn" 2>/dev/null | awk '{print $1}')"
+      [[ -n "$want" && "$want" == "$got" ]] || { warn "bundled package missing or bad sha256: $fn"; BAD=1; break; }
+      print "file://${PKG_DIR// /%20}/$fn#$md5" >> "$TMPX"
+    done < "$PKG_DIR/ndresearch.txt"
+    if (( ! BAD )) && "$CONDA" create -y -n "$ENV_NAME" --offline --file "$TMPX"; then
+      ok "env '$ENV_NAME' built from the bundled packages ($SUBDIR, OCR included; nothing downloaded)"; OCR=0
+    else
+      warn "bundled packages did not install; trying conda-forge"
+    fi
+    rm -f "$TMPX"
+    ENVPATH=$("$CONDA" env list | awk -v n="$ENV_NAME" '$1==n {print $NF}')
+  fi
   if [[ -z "$ENVPATH" ]]; then
     "$CONDA" create -y -n "$ENV_NAME" -c conda-forge --override-channels python=3.12 numpy pymupdf pypdf \
       || warn "conda create failed — falling back to a venv"

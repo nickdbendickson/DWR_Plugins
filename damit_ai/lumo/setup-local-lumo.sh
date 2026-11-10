@@ -1,6 +1,6 @@
 #!/bin/zsh
 # ============================================================================
-# setup-local-lumo.sh v3.2 — local Ollama auditing for the dam suite (macOS)
+# setup-local-lumo.sh v3.3 — local Ollama auditing for the dam suite (macOS)
 #
 #   NO sudo · NO Homebrew. Prefers your existing conda (the nd-dam-suite one)
 #   for the Python side; falls back to downloading wheels only without conda.
@@ -87,9 +87,22 @@ say "Step 2/9 — Ollama (download + install, no sudo)"
 if [[ -x "$OLLAMA_EXE" ]]; then
   ok "Ollama already installed"
 else
+  # Bundled zip first (damit_ai/offline/ollama, checked against its SHA256SUMS): no download.
+  BUNDLED_OLLAMA="${0:A:h}/../offline/ollama/Ollama-darwin.zip"
+  if [[ -f "$BUNDLED_OLLAMA" ]]; then
+    want=$(awk '$2 ~ /Ollama-darwin.zip$/ {print $1}' "${BUNDLED_OLLAMA:h}/SHA256SUMS" 2>/dev/null)
+    got=$(shasum -a 256 "$BUNDLED_OLLAMA" | awk '{print $1}')
+    if [[ -n "$want" && "$want" == "$got" ]]; then
+      cp "$BUNDLED_OLLAMA" "$TMPDIR_L/Ollama.zip"; ok "using the bundled Ollama zip (sha256 checked)"
+    else
+      warn "bundled Ollama zip does not match its SHA256SUMS; ignoring it"
+    fi
+  fi
   URL="https://ollama.com/download/Ollama-darwin.zip"
-  say "Trying direct download: $URL"
-  curl -fL --connect-timeout 20 -o "$TMPDIR_L/Ollama.zip" "$URL" 2>/dev/null
+  if [[ ! -f "$TMPDIR_L/Ollama.zip" ]]; then
+    say "Trying direct download: $URL"
+    curl -fL --connect-timeout 20 -o "$TMPDIR_L/Ollama.zip" "$URL" 2>/dev/null
+  fi
   if [[ -f "$TMPDIR_L/Ollama.zip" ]] && is_zip "$TMPDIR_L/Ollama.zip"; then
     ok "downloaded Ollama zip ($(du -h "$TMPDIR_L/Ollama.zip" | cut -f1))"
   else

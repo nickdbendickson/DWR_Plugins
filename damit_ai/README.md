@@ -43,6 +43,19 @@ plugin zip or CI job.
    Full guide, model and memory trade-offs: [`research/INSTALL.md`](research/INSTALL.md).
    Starter reading list: [`research/READING-LIST.md`](research/READING-LIST.md).
 
+## Offline folder (nothing downloaded by the installers)
+
+The `damit_ai-offline` download adds `damit_ai/offline/` next to `lumo/` and `research/`:
+
+- `offline/ollama/Ollama-darwin.zip` + `SHA256SUMS`: Ollama for Mac, checked against Ollama's
+  published hash. Both installers use it, after checking the hash, instead of downloading Ollama.
+- `offline/conda/osx-arm64/` and `offline/conda/osx-64/`: every conda-forge package for the
+  `ndresearch` env (Python 3.12, numpy, PyMuPDF, pypdf, ocrmypdf, tesseract, ghostscript), with
+  `ndresearch.txt` and `SHA256SUMS`. `setup-dam-research.zsh` builds the env from these files with
+  `conda create --offline`, OCR included. It needs conda (the dam-suites package ships Miniforge).
+
+Models still come from Ollama's registry (`ollama pull`, 17 to 24 GB each). They are too big to bundle.
+
 ## Models by Mac
 
 | Mac | Lumo | dam-research |
@@ -56,11 +69,11 @@ Embeddings: Lumo uses `nomic-embed-text`; dam-research uses `qwen3-embedding:0.6
 
 ## Status
 
-- `lumo/` is setup-local-lumo.sh v3.2 with rag_index 2.4, rag_query 2.2, audit_plugin 1.3,
+- `lumo/` is setup-local-lumo.sh v3.3 (uses the bundled Ollama zip when present) with rag_index 2.4, rag_query 2.2, audit_plugin 1.3,
   suite_check 1.0 and dam_chain 1.4 (now written by the installer itself; `lumo-chat` shows the
   DaMiT banner). `suite_check.py` and `dam_chain.py` drive the ND and DamSafety plugin sets (QGIS
   profiles `nd` and `damsafety`). The DamIT plugins are not wired into them yet.
-- `research/` is damresearch 1.0.2, fetch_asdso 1.1, eval_damresearch 1.0 and first-run.zsh 1.0.
+- `research/` is damresearch 1.0.3, setup-dam-research 1.1 (bundled Ollama and packages), fetch_asdso 1.1, eval_damresearch 1.0 and first-run.zsh 1.0.
   fetch_asdso was tested against damsafety.org on 2026-11-09 (48 of 49 files downloaded; the 49th
   is on damtoolbox.org, which the cloud workspace can't reach). The `--catalog` sources were only
   partly tested: the cloud workspace reaches 2 of their 31 sites, so most catalog URLs were checked
