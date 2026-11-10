@@ -785,15 +785,23 @@ def tr60_hydrograph(dam, overrides=None, shape="triangular", wse0_m=None, wse0_r
         _, tr, _ = froehlich_2008(c.vw, top_m - bottom_m, "piping")
     tb = 2.0 * c.v_release / qp
     notes = list(c.notes)
-    # M15 (disclosure): TR-60's breach factor Br = Vs*Hw/A divides by the embankment cross-section,
-    # taken over the FULL dam height. A raised breach bottom (partial breach) shrinks Hw but not A,
-    # so the TR-60 peak and Br are biased LOW. TR-60 is defined for a breach to the foundation; the
-    # area is NOT re-measured over the breach depth without ND DWR sign-off.
+    # M15 (disclosure, corrected 2026-11-10 to NRCS TR-210-60): TR-60 DEFINES A (the Br = Vs*Hw/A
+    # denominator) as "the cross-sectional area of embankment at the assumed location of breach,
+    # usually the template section" - the dam's full design cross-section at the breach, a fixed
+    # geometric property, NOT re-measured over the breach depth. So the full-height A is the
+    # method-correct value, not a low bias (unlike MLM, whose A is the genuinely eroded breach
+    # cross-section); the reduced head Hw already lowers the partial-breach peak. TR-60's regression
+    # is calibrated for a breach to the foundation, so a raised-bottom breach is an application
+    # OUTSIDE its basis - an extrapolation, not an error to correct. A stays the full section.
     if (top_m - bottom_m) < dam.dam_height_ft * FT - 0.03:
-        notes.append("Partial breach ({:.1f} ft deep vs the {:.0f} ft dam): the TR-60 breach "
-                     "factor Br and peak use the full dam cross-section, so both are biased LOW "
-                     "(TR-60 is defined for a breach to the foundation). Confirm the partial-breach "
-                     "basis with ND DWR.".format((top_m - bottom_m) / FT, dam.dam_height_ft))
+        notes.append("Partial breach ({:.1f} ft deep vs the {:.0f} ft dam): TR-60 defines the "
+                     "breach factor Br = Vs*Hw/A with A the dam's template (full-height) cross-"
+                     "section at the breach - held at the full section by the method, not "
+                     "re-measured over the breach depth - while the reduced head Hw lowers the "
+                     "peak. TR-60 is calibrated for a breach to the foundation, so this partial "
+                     "breach is outside its basis; treat the TR-60 peak as an extrapolation and "
+                     "confirm the basis with ND DWR.".format((top_m - bottom_m) / FT,
+                                                             dam.dam_height_ft))
     if tr >= tb:
         tr = 0.25 * tb
         notes.append("Rise time longer than the triangle base allowed by the volume; set to "
