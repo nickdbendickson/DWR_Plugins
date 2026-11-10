@@ -317,12 +317,25 @@ def run_nested(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     progress(91, "merging")
     grid, fin = merge_results(fr.grid, fr.final_si, cr.grid, cr.final_si, ipoint, idir)
     out.grid, out.final_si = grid, fin
+    # M21: if the sub-runs' LISFLOOD build wrote no .maxVc (run_dam reports max_velocity_fps None),
+    # the merged velocity is all-NaN; omit the velocity product and report the maximum velocity as
+    # unavailable, as run_dam does, so the Hazard pre-flight refuses rather than classifying the
+    # nested flood off the v=0 ACER TM-11 curves.
+    no_velocity = (fr.summary.get("max_velocity_fps") is None
+                   or cr.summary.get("max_velocity_fps") is None)
     if fr.base_si is not None and cr.base_si is not None:
         _g, bas = merge_results(fr.grid, fr.base_si, cr.grid, cr.base_si, ipoint, idir)
         out.base_si = bas
     if base.write_final:
         for kind, arr in fin.items():
             p = os.path.join(out_folder, workflow.FINAL_NAMES[kind])
+            if kind == "velocity" and no_velocity:   # M21: omit the zeros/NaN velocity product
+                try:                                  # (and drop any stale copy) so the Hazard
+                    os.remove(p)                      # pre-flight refuses rather than reading it
+                except OSError:
+                    pass
+                out.final.pop("velocity", None)
+                continue
             writer(grid.like(workflow._to_us(kind, arr), np.nan), p)
             out.final[kind] = p
         if out.base_si is not None:
@@ -344,8 +357,9 @@ def run_nested(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
         "downstream)".format(fine_cell_m, st.cell_size_m),
         "flooded_acres": round(float(np.isfinite(d).sum()) * cell_ac, 1),
         "max_depth_ft": round(float(np.nanmax(d)) / FT, 2) if np.isfinite(d).any() else 0,
-        "max_velocity_fps": (round(float(np.nanmax(fin["velocity"])) / FT, 2)
-                             if np.isfinite(fin["velocity"]).any() else 0),
+        "max_velocity_fps": (None if no_velocity else
+                             (round(float(np.nanmax(fin["velocity"])) / FT, 2)
+                              if np.isfinite(fin["velocity"]).any() else 0)),
         "latest_arrival_hr": (round(float(np.nanmax(fin["arrival"])), 2)
                               if np.isfinite(fin["arrival"]).any() else None),
         "peak_breach_cfs": fr.summary.get("peak_breach_cfs"),
@@ -355,7 +369,8 @@ def run_nested(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
     try:                    # v3.10.27 (#91): reporting only
         from . import report_metrics
         out.summary.update(report_metrics.flood_metrics(
-            fin, grid, cell_ac, st.arrival_depth_ft * FT,
+            ({**fin, "velocity": None} if no_velocity else fin),
+            grid, cell_ac, st.arrival_depth_ft * FT,
             receptors=getattr(st, "receptors", None)))
     except Exception:       # noqa: BLE001
         pass
