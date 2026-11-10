@@ -743,6 +743,11 @@ def _block_bulk(block, w, h):
         out = arr.reshape(h, w).astype(np.float64)
         if has_val:
             nd = float(block.noDataValue())
+            if not math.isfinite(nd):
+                # a NaN / inf no-data value: QGIS versions disagree on how isNoData compares
+                # an infinite value (3.34: never no-data; 4.x: equal infinities are), so the
+                # per-cell loop decides, as before
+                return None
             with np.errstate(invalid="ignore", over="ignore"):
                 diff = out - nd
                 bad = (diff > -_QGS_NEAR_EPS) & (diff <= _QGS_NEAR_EPS)
