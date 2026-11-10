@@ -32,21 +32,25 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.dirname(HERE)
+# 0.18.19: the window is split by tab (dialog.py + settings_tab / review_tab / results_tab)
 DIALOG = os.path.join(PLUGIN, "dialog.py")
-
-SRC = open(DIALOG, encoding="utf-8").read()
-TREE = ast.parse(SRC)
+WINDOW_FILES = [os.path.join(PLUGIN, f) for f in ("dialog.py", "settings_tab.py", "review_tab.py",
+                                                  "results_tab.py")]
+SRCS = {f: open(f, encoding="utf-8").read() for f in WINDOW_FILES}
+TREES = {f: ast.parse(s) for f, s in SRCS.items()}
+SRC = SRCS[DIALOG]
 
 
 def _method_source(name):
-    """The exact source text of the top-level method `name` on the dialog class."""
-    best = None
-    for node in ast.walk(TREE):
-        if isinstance(node, ast.FunctionDef) and node.name == name:
-            if best is None or (node.end_lineno - node.lineno) < (best.end_lineno - best.lineno):
-                best = node
+    """The exact source text of the method `name` on the dialog class or its tab mixins."""
+    best, best_src = None, ""
+    for f, tree in TREES.items():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                if best is None or (node.end_lineno - node.lineno) < (best.end_lineno - best.lineno):
+                    best, best_src = node, SRCS[f]
     assert best is not None, "method not found: " + name
-    seg = ast.get_source_segment(SRC, best)
+    seg = ast.get_source_segment(best_src, best)
     assert seg, name
     return seg
 
@@ -85,7 +89,7 @@ assert "SelectionBehavior.SelectRows" in rev
 
 # the dead 'note if False else ...' branch is gone (it lived in refresh()).
 assert "note if False" not in SRC, "dead 'note if False else' expression still present"
-assert 'refresh' in {n.name for n in ast.walk(TREE) if isinstance(n, ast.FunctionDef)}
+assert "refresh" in {n.name for n in ast.walk(TREES[DIALOG]) if isinstance(n, ast.FunctionDef)}
 assert '(self.simple_note[cur].text() + " | " + extra).strip(" |")' in SRC, \
     "simplified simple-note expression not found"
 

@@ -23,10 +23,12 @@ def apply_file_defaults(alg, tool=None, settings=None):
     return T.apply_file_defaults(alg, PLUGIN, SG.family, tool, settings)
 
 
-def settings_aware(cls, step=None):
+def settings_aware(cls, step=None, hidden=False):
     """A Screening tool class that takes its defaults from the settings file and sits in the
-    'Screening steps' or 'Advanced' toolbox group."""
-    return T.settings_aware(cls, PLUGIN, SG.family, SG.group_for(step) if step else None, step)
+    'Screening steps' or 'Advanced' toolbox group; `hidden` takes it out of the toolbox list
+    (FlagHideFromToolbox; still runnable from the window, models and qgis_process)."""
+    return T.settings_aware(cls, PLUGIN, SG.family, SG.group_for(step) if step else None, step,
+                            hidden=hidden)
 
 
 def full_catalog(classes, plugin=PLUGIN):

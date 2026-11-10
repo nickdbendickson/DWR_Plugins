@@ -87,6 +87,7 @@ export QT_QPA_PLATFORM=offscreen
 git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 CI_BASE_REF=origin/main $PY tools/ci_checks.py
 $PY tools/test_ci_checks.py
+$PY tools/test_gui_lint.py
 $PY DamSafety_Hazard/tests/test_fingerprint_vrt.py
 
 # plugin-suites

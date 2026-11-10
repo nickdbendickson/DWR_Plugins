@@ -293,6 +293,14 @@ def test_qt6_enum_lint_clean_on_the_real_tree():
     assert hits == [], ["{}:{} {}".format(h[0], h[1], h[2]) for h in hits]
 
 
+def test_message_box_checks_rule_is_clean_on_the_real_tree():
+    """2026-11-08: no QMessageBox.warning / .critical in a run handler of a window file (the
+    rule itself is tested by tools/test_gui_lint.py)."""
+    problems = []
+    C.check_message_box_checks(problems)
+    assert problems == [], problems
+
+
 def test_qt6_metadata():
     problems = []                                 # every plugin of the real tree declares QGIS 4
     C.check_qt6_metadata(problems)
