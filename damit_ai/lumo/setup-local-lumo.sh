@@ -1,6 +1,6 @@
 #!/bin/zsh
 # ============================================================================
-# setup-local-lumo.sh v3.3 — local Ollama auditing for the dam suite (macOS)
+# setup-local-lumo.sh v3.4 — local Ollama auditing for the dam suite (macOS)
 #
 #   NO sudo · NO Homebrew. Prefers your existing conda (the nd-dam-suite one)
 #   for the Python side; falls back to downloading wheels only without conda.
@@ -260,6 +260,27 @@ if [[ -n "$CONDA" ]]; then
   ENVPATH=$("$CONDA" env list | awk -v n="$LUMO_ENV" '$1==n {print $NF}')
   if [[ -z "$ENVPATH" ]]; then
     # Separate small env: adding packages to ndqgis could make conda re-solve QGIS.
+    # Bundled packages first (damit_ai/offline/conda/<subdir>/, the same set dam-research uses:
+    # Python 3.12, PyMuPDF, pypdf, numpy): sha256-checked, installed with nothing downloaded.
+    SUBDIR=$("$CONDA" info --json 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("platform",""))' 2>/dev/null)
+    PKG_DIR="${0:A:h}/../offline/conda/${SUBDIR:-none}"; PKG_DIR="${PKG_DIR:A}"
+    if [[ -f "$PKG_DIR/ndresearch.txt" ]]; then
+      TMPX="$(mktemp "${TMPDIR:-/tmp}/ndlumo.XXXXXX")"; print "@EXPLICIT" > "$TMPX"; BAD=0
+      while read -r fn md5; do
+        [[ -z "$fn" || "$fn" == \#* || "$fn" == @* ]] && continue
+        want="$(awk -v n="$fn" '$2==n{print $1}' "$PKG_DIR/SHA256SUMS")"
+        got="$(shasum -a 256 "$PKG_DIR/$fn" 2>/dev/null | awk '{print $1}')"
+        [[ -n "$want" && "$want" == "$got" ]] || { warn "bundled package missing or bad sha256: $fn"; BAD=1; break; }
+        print "file://${PKG_DIR// /%20}/$fn#$md5" >> "$TMPX"
+      done < "$PKG_DIR/ndresearch.txt"
+      if (( ! BAD )) && "$CONDA" create -y -n "$LUMO_ENV" --offline --file "$TMPX"; then
+        ok "env $LUMO_ENV built from the bundled packages (nothing downloaded)"
+      else
+        warn "bundled env did not build — trying conda-forge"
+      fi
+      rm -f "$TMPX"
+    fi
+    "$CONDA" env list | awk '{print $1}' | grep -qx "$LUMO_ENV" || \
     "$CONDA" create -y -n "$LUMO_ENV" -c conda-forge --override-channels --strict-channel-priority \
         python=3.12 pymupdf pypdf numpy \
       || warn "conda create failed — falling back to wheels"
