@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# damresearch.py v1.0.1 — local research assistant for dam-safety, dam-design and
+# damresearch.py v1.0.2 — local research assistant for dam-safety, dam-design and
 # flood-hazard publications. Runs on your Mac against Ollama; nothing leaves the machine.
 #
 # This is a RESEARCH ASSISTANT. Every statement it writes must be checked against
@@ -41,7 +41,7 @@ import urllib.request, urllib.error, unicodedata
 from array import array
 from datetime import datetime
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 HOME = os.path.expanduser(os.environ.get("DAMRESEARCH_HOME", "~/DamResearch"))
 LIBRARY = os.path.join(HOME, "library")
 REPORTS = os.path.join(HOME, "reports")
@@ -74,6 +74,16 @@ def die(msg, code=1):
     print("damresearch: " + msg, file=sys.stderr)
     sys.exit(code)
 
+
+
+def damit_banner(subtitle=""):
+    """DaMiT wordmark for the terminal (brand kit colours); plain text when piped or NO_COLOR is set."""
+    if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+        return "DaMiT" + ("  " + subtitle if subtitle else "")
+    c = lambda rgb, s: "\x1b[1;38;2;%d;%d;%dm%s\x1b[0m" % (rgb + (s,))
+    teal, cream, amber = (48, 196, 200), (250, 250, 240), (244, 158, 24)
+    word = c(teal, "D") + c(cream, "a") + c(teal, "M") + c(amber, "iT")
+    return word + ("  \x1b[2m" + subtitle + "\x1b[0m" if subtitle else "") + "\n \x1b[38;2;31;188;188m~\x1b[0m"
 
 def say(msg):
     print(msg, flush=True)
@@ -1088,6 +1098,7 @@ def cmd_chat(a):
     db = connect()
     check_embed_model(db)
     idx = Index(db)
+    say(damit_banner("dam-research - literature assistant"))
     say("damresearch chat — cited answers from your library (%s). Blank line or Ctrl+D quits.\n"
         "Prefix a question with '!' for deep research.\n%s" % (CHAT_MODEL, BANNER))
     last_q, last_a = None, None
@@ -1219,6 +1230,11 @@ def cmd_remove(a):
 
 
 def cmd_ocr(a):
+    # The launcher runs the env's python without activating the env, so put its bin (ocrmypdf,
+    # tesseract, ghostscript) on PATH first.
+    for envbin in (os.path.dirname(os.path.realpath(sys.executable)), os.path.dirname(sys.executable)):
+        if envbin not in os.environ.get("PATH", "").split(os.pathsep):
+            os.environ["PATH"] = envbin + os.pathsep + os.environ.get("PATH", "")
     exe = shutil.which("ocrmypdf")
     if not exe:
         die("ocrmypdf is not installed. Re-run the installer with --ocr (adds ocrmypdf + tesseract to the "
@@ -1247,6 +1263,7 @@ def cmd_ocr(a):
 
 def cmd_doctor(a):
     ok = True
+    say(damit_banner("dam-research"))
     say("damresearch %s   home %s" % (VERSION, HOME))
     try:
         v = _get("/api/version").get("version")

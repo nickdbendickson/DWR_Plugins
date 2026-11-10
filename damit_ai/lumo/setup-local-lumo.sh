@@ -1,6 +1,6 @@
 #!/bin/zsh
 # ============================================================================
-# setup-local-lumo.sh v3.1 — local Ollama auditing for the dam suite (macOS)
+# setup-local-lumo.sh v3.2 — local Ollama auditing for the dam suite (macOS)
 #
 #   NO sudo · NO Homebrew. Prefers your existing conda (the nd-dam-suite one)
 #   for the Python side; falls back to downloading wheels only without conda.
@@ -1613,7 +1613,7 @@ SCRIPT_EOF_SUITE
 
   cat > "$LOCAL_AI/dam_chain.py" << 'SCRIPT_EOF_CHAIN'
 #!/usr/bin/env python3
-# dam_chain.py v1.1 — run both dam-plugin sets headless from Terminal (macOS, conda), stdlib only.
+# dam_chain.py v1.4 — run both dam-plugin sets headless from Terminal (macOS, conda), stdlib only.
 #
 #   dam_chain.py setup                       one-time: batch profiles that point at your QGIS
 #                                            profiles "nd" and "damsafety", plugins enabled
@@ -1625,9 +1625,21 @@ SCRIPT_EOF_SUITE
 #   dam_chain.py run --set nd  --dams-folder D --ids DWR-2801,DWR-4031
 #                                            per dam: Get data -> Screening -> Runner -> Hazard
 #                                            (ndhazard:getdamdata, then ndhazard:suitechain)
+#                                            --hi-res downloads a 1 m DEM (DEM_CELL_M=1).
+#                                            --triage asks the local Ollama model to explain a
+#                                            failed step (writes TRIAGE.txt next to the run log).
+#                                            Defaults can live in the environment (a --flag still wins):
+#                                              DAMCHAIN_GETDATA_PARAM, DAMCHAIN_BREACH_PARAM,
+#                                              DAMCHAIN_SCREEN_PARAM, DAMCHAIN_CLASSIFY_PARAM
+#                                            each a space-separated list of KEY=VALUE, e.g.
+#                                              export DAMCHAIN_GETDATA_PARAM="DEM_CELL_M=1 DEM_MI=15"
 #   dam_chain.py run --set dwr --dams LAYER --ids 2801,4031 --out D --dem DEM --screen-work W
 #                                            the DamSafety Runner's own list chain
 #                                            (ndbreach:chainbatch: Screening -> Runner -> Hazard)
+#   dam_chain.py research ask|research|search|ingest|chat|list ...
+#                                            the literature research assistant (damresearch, a
+#                                            separate model and library from lumo); same as typing
+#                                            damresearch ...  (v1.4)
 #   dam_chain.py crest --set nd|dwr          open the Crest desk wired to that set: its Report-step
 #                                            buttons (dam folder, screening, flood model) run that
 #                                            set's plugins, in ~/CrestDams/<set>
@@ -1635,13 +1647,18 @@ SCRIPT_EOF_SUITE
 # Every run goes through qgis_process in the conda env (ndqgis), with the set's own QGIS
 # profile, so ND and DamSafety never load together (they share Processing ids).
 # --dry-run prints the commands without running them. Logs: <dams folder>/_chain_logs/.
-import os, sys, re, csv, json, time, shutil, argparse, subprocess
+import os, sys, re, csv, json, time, shutil, argparse, subprocess, threading, urllib.request, urllib.error
 from datetime import datetime
 
 QGIS_PROFILES = os.path.expanduser(os.environ.get("DAMCHAIN_QGIS_PROFILES",
                                    "~/Library/Application Support/QGIS/QGIS3/profiles"))
 BATCH_ROOT = os.path.expanduser(os.environ.get("DAMCHAIN_BATCH_ROOT", "~/local-ai/qgis-batch"))
 CREST_DIR = os.path.expanduser(os.environ.get("DAMCHAIN_CREST_DIR", "~/local-ai/crest-desktop"))
+
+# Local Ollama triage (shared convention with suite_check.py / audit_plugin.py): optional, advisory.
+LUMO_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat"
+LUMO_MODEL = os.environ.get("LUMO_MODEL", "lumo")
+LUMO_NUM_CTX = int(os.environ.get("LUMO_NUM_CTX", "16384"))
 SETS = {
     "nd": {"profile": "nd", "runner": "nd_breach_runner",
            "plugins": ["ND_Dam_Hazard_Helper", "nd_breach_runner", "nd_dam_screening",
@@ -1697,6 +1714,7 @@ class QP:
 
     def __init__(self, args, set_name):
         self.dry = args.dry_run
+        self.quiet = getattr(args, "quiet", False)
         if self.dry:
             self.conda, self.prefix = shutil.which("conda") or "conda", "<%s>" % args.env
         else:
@@ -1717,25 +1735,73 @@ class QP:
     def argv(self, *qp_args):
         return [self.conda, "run", "--no-capture-output", "-n", self.envname, self.qp] + list(qp_args)
 
-    def run(self, alg, params, log_path, timeout=None):
-        """Returns (ok, results dict, last error lines)."""
+    @staticmethod
+    def _is_noise(t):
+        return (not t) or ("XDG_RUNTIME_DIR" in t) or t.startswith("Warning 1:") \
+            or t.startswith("QStandardPaths") or t.startswith("Warning:")
+
+    def run(self, alg, params, log_path, timeout=None, label=""):
+        """Returns (ok, results dict, last error lines). Streams the plugin's own progress lines
+        to the terminal (unless --quiet) with a heartbeat, so a long step never looks frozen."""
         cmd = self.argv("--json", "run", alg, "--") + ["%s=%s" % (k, v) for k, v in params.items()]
         shown = " ".join(_q(c) for c in cmd)
         if self.dry:
             print("  DRY  QGIS_CUSTOM_CONFIG_PATH=%s %s" % (_q(self.base), shown))
             return True, {}, ""
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        tag = label or alg
+        out_chunks, start, last, in_json = [], time.time(), [time.time()], [False]
         with open(log_path, "w", encoding="utf-8") as log:
             log.write("$ %s\n\n" % shown)
             log.flush()
             try:
-                p = subprocess.run(cmd, env=self.env, stdout=subprocess.PIPE, stderr=log, text=True,
-                                   timeout=timeout)
+                p = subprocess.Popen(cmd, env=self.env, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True, bufsize=1)
+            except OSError as e:
+                log.write("\n[LAUNCH FAILED] %s\n" % e)
+                return False, {}, str(e)
+
+            def pump_out():
+                for line in p.stdout:
+                    out_chunks.append(line)
+                    last[0] = time.time()
+                    t = line.strip()
+                    if t.startswith("{"):
+                        in_json[0] = True           # the --json result block begins; stop echoing
+                    if not self.quiet and not in_json[0] and not self._is_noise(t):
+                        sys.stdout.write("      %s\n" % t)
+                        sys.stdout.flush()
+
+            def pump_err():
+                for line in p.stderr:
+                    log.write(line)
+                    log.flush()
+
+            stop = threading.Event()
+
+            def beat():
+                while not stop.wait(20):
+                    if not self.quiet and time.time() - last[0] >= 18:
+                        sys.stdout.write("      ... %s running (%ds elapsed)\n"
+                                         % (tag, int(time.time() - start)))
+                        sys.stdout.flush()
+
+            threads = [threading.Thread(target=f, daemon=True) for f in (pump_out, pump_err, beat)]
+            for th in threads:
+                th.start()
+            try:
+                p.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
+                p.kill()
+                stop.set()
+                threads[0].join(2); threads[1].join(2)
                 log.write("\n[TIMEOUT]\n")
                 return False, {}, "timeout"
-            log.write("\n--- stdout ---\n" + (p.stdout or ""))
-        res = _json_results(p.stdout)
+            stop.set()
+            threads[0].join(2); threads[1].join(2)
+            out = "".join(out_chunks)
+            log.write("\n--- stdout ---\n" + (out or ""))
+        res = _json_results(out)
         if p.returncode == 0 and res.get("OK") is not False:
             return True, res, ""
         if p.returncode == 0:      # the algorithm finished but reports a failure (self-tests)
@@ -1745,8 +1811,7 @@ class QP:
             tail = []
             for l in fh.read().split("\n--- stdout ---")[0].splitlines():
                 l = l.strip()
-                if l and "XDG_RUNTIME_DIR" not in l and not l.startswith("Warning 1:") \
-                        and (not tail or tail[-1] != l):
+                if l and not self._is_noise(l) and (not tail or tail[-1] != l):
                     tail.append(l)
         return False, res, " | ".join(tail[-2:])
 
@@ -1776,6 +1841,63 @@ def _q(s):
     return s if re.fullmatch(r"[\w@%+=:,./-]+", s) else "'" + s.replace("'", "'\\''") + "'"
 
 
+def _lumo_chat(prompt, timeout=1800):
+    """Ask the local Ollama model once; return its text (thinking stripped). Raises on transport error."""
+    payload = {"model": LUMO_MODEL, "messages": [{"role": "user", "content": prompt}],
+               "stream": False, "think": True,
+               "options": {"temperature": 0.6, "top_p": 0.95, "top_k": 20,
+                           "num_ctx": LUMO_NUM_CTX, "num_predict": 4096}}
+    def _post(pl):
+        req = urllib.request.Request(LUMO_URL, data=json.dumps(pl).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    try:
+        out = _post(payload)
+    except urllib.error.HTTPError as e:
+        if e.code != 400:
+            raise
+        payload.pop("think")                       # some models reject the think flag
+        out = _post(payload)
+    txt = (out.get("message") or {}).get("content") or ""
+    return re.sub(r"<think>.*?</think>", "", txt, flags=re.S).strip()
+
+
+def triage_failure(step_name, err, log_path, out_dir):
+    """Send a failed step's log tail to the local model and append an advisory note to TRIAGE.txt.
+    Advisory only: the log is the fact. Never raises (a triage problem must not fail the run)."""
+    tail = ""
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            tail = "\n".join(fh.read().splitlines()[-150:])
+    except Exception:                                                        # noqa
+        tail = "(log not readable: %s)" % log_path
+    prompt = ("A dam-suite step failed while running headless in QGIS (qgis_process). In a few lines, "
+              "say (1) whether this is an ENVIRONMENT/DATA problem (no offline pack or chosen layers, "
+              "missing DEM, DEM no-data at the flood edge, LISFLOOD-FP/ANUGA missing, wrong DEM units, "
+              "network/proxy) or a CODE bug, (2) the most likely cause citing log lines, (3) the "
+              "smallest next check or fix. Do not invent anything you cannot see in the log; say UNSURE "
+              "when unsure.\n\nSTEP: %s\nERROR: %s\n\n=== LOG TAIL ===\n%s"
+              % (step_name, err or "(none)", tail))
+    print("   triage (%s): asking %s ..." % (step_name, LUMO_MODEL), flush=True)
+    try:
+        ans = _lumo_chat(prompt)
+    except Exception as e:                                                   # noqa
+        ans = ("TRIAGE UNAVAILABLE: could not reach Ollama at %s (%s). Start Ollama and pull the "
+               "model, or set OLLAMA_URL / LUMO_MODEL." % (LUMO_URL, e))
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "TRIAGE.txt")
+    block = ["", "=" * 72, "%s  STEP: %s" % (_stamp(), step_name),
+             "error: %s" % (err or "(none)"), "log:   %s" % log_path,
+             "model: %s (advisory; the log is the fact)" % LUMO_MODEL, "-" * 72, ans]
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write("\n".join(block) + "\n")
+    print("   triage -> %s" % path, flush=True)
+    for ln in ans.splitlines()[:6]:
+        print("      | " + ln, flush=True)
+    return path
+
+
 def parse_kv(items):
     out = {}
     for it in items or []:
@@ -1783,6 +1905,23 @@ def parse_kv(items):
             sys.exit("--param needs KEY=VALUE, got: %s" % it)
         k, v = it.split("=", 1)
         out[k.strip()] = v
+    return out
+
+
+def _env_kv(env_name):
+    """KEY=VALUE defaults from an environment variable, split on whitespace.
+    e.g.  export DAMCHAIN_BREACH_PARAM="CELL=10 MANNING=0.06"
+    """
+    raw = (os.environ.get(env_name) or "").strip()
+    return [tok for tok in re.split(r"\s+", raw) if tok] if raw else []
+
+
+def kv(items, env_name=None):
+    """parse_kv with environment defaults applied first; a --flag value overrides the env."""
+    out = {}
+    if env_name:
+        out.update(parse_kv(_env_kv(env_name)))
+    out.update(parse_kv(items))
     return out
 
 
@@ -1878,6 +2017,31 @@ def cmd_open(args):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def cmd_pack(args):
+    """Build / refresh the offline data pack with the ND Data Updater plugin, into the data folder.
+    The pack build (structures, roads, rail, 3DHP, ABI barriers, NLCD, counties ...) is a statewide, multi-
+    gigabyte download; it has no headless processing algorithm, so this opens QGIS to the Updater,
+    which creates the pack in the folder you point it at and tells the dam plugins to read it there."""
+    folder = os.path.expanduser(args.data_folder) if args.data_folder else "~/ND_Suite_Data"
+    bar = "=" * 72
+    print(bar)
+    print("Build the offline pack into:  %s" % folder)
+    print(bar)
+    print("QGIS is opening with the '%s' profile. In QGIS:" % (getattr(args, "profile", None) or SETS[args.set]["profile"]))
+    print("  1. Plugins menu > ND Data Updater > 'Settings and status...'.")
+    print("  2. Local data > 'Choose...' > %s  (the three dam plugins follow it)." % folder)
+    print("  3. Keep 'Offline pack for the ND dam plugins (all layers)' and")
+    print("     'Make the ND dam plugins read this pack' ticked; 3DHP on 'auto'.")
+    print("  4. Click 'Save and Check All Now'. Statewide, several GB, an hour or more the")
+    print("     first time; 'Rebuild Only Missing Layers' resumes an interrupted build.")
+    print("  The pack lands at %s/ND_Dam_Suite_Pack/; 'Offline pack and data folder...'" % folder)
+    print("  in the same menu shows it layer by layer. Every later run reads it offline.")
+    print(bar)
+    if getattr(args, "print_only", False):
+        return
+    cmd_open(args)
+
+
 def cmd_seed(args):
     """dam.json per CSV row. Columns: dam_id (required), name, lat, lon, height_ft, storage_acft,
     dam_length_ft, dwr_structure_id, nid_id, existing_hazard_class. Existing dam.json is kept."""
@@ -1936,11 +2100,14 @@ def run_nd(args):
     rows = []
     flags = {"SCREEN": str(not args.no_screen).lower(), "BREACH": str(not args.no_breach).lower(),
              "CLASSIFY": str(not args.no_classify).lower()}
+    _env = {"SCREEN_PARAMETERS": "DAMCHAIN_SCREEN_PARAM",
+            "BREACH_PARAMETERS": "DAMCHAIN_BREACH_PARAM",
+            "CLASSIFY_PARAMETERS": "DAMCHAIN_CLASSIFY_PARAM"}
     for k, items in (("SCREEN_PARAMETERS", args.screen_param), ("BREACH_PARAMETERS", args.breach_param),
                      ("CLASSIFY_PARAMETERS", args.classify_param)):
-        kv = parse_kv(items)
-        if kv:
-            flags[k] = json.dumps(kv)
+        kvv = kv(items, _env[k])
+        if kvv:
+            flags[k] = json.dumps(kvv)
     for n, did in enumerate(ids, 1):
         folder = os.path.join(dams, did)
         state_path = os.path.join(folder, "_chain_nd", "state.json")
@@ -1962,21 +2129,29 @@ def run_nd(args):
             gp = {"DAM_FOLDER": folder}
             if args.data_folder:
                 gp["DATA_FOLDER"] = os.path.expanduser(args.data_folder)
-            gp.update(parse_kv(args.getdata_param))
+            gp.update(kv(args.getdata_param, "DAMCHAIN_GETDATA_PARAM"))
+            if getattr(args, "hi_res", False) and "DEM_CELL_M" not in gp:
+                gp["DEM_CELL_M"] = "1"
             log = os.path.join(logs, "%s_1_getdamdata.log" % did)
-            ok, _r, err = qp.run("ndhazard:getdamdata", gp, log, timeout=args.timeout_min * 60)
+            ok, _r, err = qp.run("ndhazard:getdamdata", gp, log, timeout=args.timeout_min * 60,
+                                  label="get data for %s" % did)
             print("   get data: %s" % ("ok" if ok else "FAILED " + err))
             if not ok:
                 status = "failed: get data"
+                if getattr(args, "triage", False):
+                    triage_failure("get data (%s)" % did, err, log, logs)
         if status == "done":
             cp = dict(flags, DAM_FOLDER=folder)
             cp.update(parse_kv(args.param))
             log = os.path.join(logs, "%s_2_suitechain.log" % did)
-            ok, res, err = qp.run("ndhazard:suitechain", cp, log, timeout=args.timeout_min * 60)
+            ok, res, err = qp.run("ndhazard:suitechain", cp, log, timeout=args.timeout_min * 60,
+                                   label="screening/runner/hazard for %s" % did)
             nd_class = str(res.get("ND_CLASS") or "")
             print("   chain: %s" % (("ok, ND class %s" % (nd_class or "?")) if ok else "FAILED " + err))
             if not ok:
                 status = "failed: chain"
+                if getattr(args, "triage", False):
+                    triage_failure("chain (%s)" % did, err, log, logs)
         mins = "%.1f" % ((time.time() - t0) / 60)
         rows.append([did, status, nd_class, mins, log, err])
         if not args.dry_run:
@@ -2048,7 +2223,7 @@ def run_dwr(args):
         p["OVERRIDES_CSV"] = ov
     qp = QP(args, "dwr")
     log = os.path.join(logs, "chainbatch_%s.log" % _stamp())
-    ok, res, err = qp.run("ndbreach:chainbatch", p, log)
+    ok, res, err = qp.run("ndbreach:chainbatch", p, log, label="DamSafety chain")
     if args.dry_run:
         return
     counts = str(res.get("COUNTS") or "")
@@ -2059,6 +2234,8 @@ def run_dwr(args):
     print("log: %s" % log)
     if res.get("SUMMARY"):
         print("summary: %s" % res["SUMMARY"])
+    if not ok and getattr(args, "triage", False):
+        triage_failure("DamSafety chain", err or counts, log, os.path.dirname(log))
     sys.exit(0 if ok else 1)
 
 
@@ -2135,14 +2312,29 @@ def cmd_crest(args):
     sys.exit(subprocess.call([py, run_py], cwd=crest, env=full))
 
 
+def research_passthrough(argv):
+    """`damchain research ...` -> the damresearch tool, with its own Python (ndresearch env)."""
+    tool = os.path.expanduser(os.environ.get("DAMRESEARCH_TOOL", "~/local-ai/research/damresearch.py"))
+    py = os.path.expanduser(os.environ.get("DAMRESEARCH_PY", "") or "~/local-ai/research/python")
+    if not os.path.isfile(tool):
+        sys.exit("damresearch is not installed. Run: zsh setup-dam-research.zsh (from the dam-research folder)")
+    if not os.path.exists(py):
+        py = sys.executable
+    os.execv(py, [py, tool] + argv)
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Run the ND and DamSafety dam plugins headless.")
+    if len(sys.argv) > 1 and sys.argv[1] == "research":
+        research_passthrough(sys.argv[2:])
+    ap = argparse.ArgumentParser(description="Run the ND and DamSafety dam plugins headless. "
+                                             "`research ...` runs the literature assistant (damresearch).")
     ap.add_argument("--env", default="ndqgis", help="conda env with QGIS (default ndqgis)")
     ap.add_argument("--qgis-process", default="", help="path to qgis_process (default: found in the env)")
     ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--lisflood", default="~/nd-dam-suite/bin/lisflood",
                     help="LISFLOOD-FP binary (missing = the plugins' own choice / built-in engine)")
     ap.add_argument("--dry-run", action="store_true", help="print the commands, run nothing")
+    ap.add_argument("--quiet", action="store_true", help="don't stream each step's progress lines to the terminal (the full log is still written)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("setup")
@@ -2157,6 +2349,12 @@ def main():
     s = sub.add_parser("open")
     s.add_argument("--set", choices=SETS, required=True)
     s.add_argument("--profile", default="")
+
+    s = sub.add_parser("pack", help="build/refresh the offline data pack into the data folder (opens the Updater)")
+    s.add_argument("--set", choices=SETS, default="nd")
+    s.add_argument("--data-folder", default="", help="where the pack is built (default ~/ND_Suite_Data)")
+    s.add_argument("--profile", default="")
+    s.add_argument("--print-only", action="store_true", help="print the steps, do not open QGIS")
 
     s = sub.add_parser("crest", help="open the Crest desk wired to one plugin set")
     s.add_argument("--set", choices=SETS, required=True)
@@ -2178,10 +2376,17 @@ def main():
     s.add_argument("--redo", action="store_true", help="run dams again that finished before")
     s.add_argument("--stop-on-error", action="store_true")
     s.add_argument("--param", action="append", help="extra KEY=VALUE for the chain algorithm")
+    s.add_argument("--triage", action="store_true",
+                   help="on a failed step, send the log tail to the local Ollama model and write "
+                        "an advisory TRIAGE.txt next to the run log")
+    s.add_argument("--lumo-model", default="", help="Ollama model for --triage (default: $LUMO_MODEL or 'lumo')")
     g = s.add_argument_group("nd set (ndhazard:suitechain per dam folder)")
     g.add_argument("--dams-folder", default="", help="folder of <dam_id>/dam.json folders")
     g.add_argument("--data-folder", default="", help="suite data folder / offline pack for Get data")
     g.add_argument("--no-getdata", action="store_true")
+    g.add_argument("--hi-res", action="store_true",
+                   help="download a 1 m 3DEP DEM (DEM_CELL_M=1) unless --getdata-param sets it; "
+                        "pair with DEM_MI to bound the download")
     g.add_argument("--no-breach", action="store_true")
     g.add_argument("--no-classify", action="store_true")
     g.add_argument("--getdata-param", action="append",
@@ -2208,12 +2413,16 @@ def main():
     g.add_argument("--runner-param", action="append", help="KEY=VALUE for the Runner (ndbreach:batch)")
 
     args = ap.parse_args()
+    if getattr(args, "lumo_model", ""):
+        globals()["LUMO_MODEL"] = args.lumo_model
     if args.cmd == "setup":
         cmd_setup(args)
     elif args.cmd == "plugins":
         cmd_plugins(args)
     elif args.cmd == "open":
         cmd_open(args)
+    elif args.cmd == "pack":
+        cmd_pack(args)
     elif args.cmd == "seed":
         cmd_seed(args)
     elif args.cmd == "crest":
@@ -2234,7 +2443,7 @@ SCRIPT_EOF_CHAIN
   for f in rag_index rag_query audit_plugin suite_check dam_chain; do
     "$LUMO_PY" -m py_compile "$LOCAL_AI/$f.py" || die "$f.py did not compile"
   done
-  ok "rag_index 2.4, rag_query 2.2, audit_plugin 1.3, suite_check 1.0, dam_chain 1.0 written and compiled"
+  ok "rag_index 2.4, rag_query 2.2, audit_plugin 1.3, suite_check 1.0, dam_chain 1.4 written and compiled"
 else
   ok "script rewrite skipped (--skip-scripts)"
 fi
@@ -2257,7 +2466,11 @@ export STD_PDFS="\$HOME/Documents/Standards_PDFs"
 export OLLAMA_MODELS="\$HOME/local-ai/models"
 export LUMO_NUM_CTX=$NUM_CTX
 alias lumo-start="OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 \$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama serve"
-alias lumo-chat="\$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama run lumo"
+unalias lumo-chat 2>/dev/null
+function lumo-chat {
+  [[ -t 1 && -z "\$NO_COLOR" ]] && printf '\033[1;38;2;48;196;200mD\033[1;38;2;250;250;240ma\033[1;38;2;48;196;200mM\033[1;38;2;244;158;24miT\033[0m  \033[2mLumo - local triage\033[0m\n \033[38;2;31;188;188m~\033[0m\n'
+  \$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama run lumo "\$@"
+}
 alias lumo-ps="\$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama ps"
 alias lumo-index="$PYRUN \$HOME/local-ai/rag_index.py"
 alias lumo-query="$PYRUN \$HOME/local-ai/rag_query.py"

@@ -109,6 +109,31 @@ their publishers. Many of these PDFs have pages with no text layer, either scans
 `damresearch list` shows which, and `damresearch ocr` (installer `--ocr`) makes the scanned ones
 searchable.
 
+### First run and answer test
+
+`zsh first-run.zsh` does the whole first run: install (if needed), both downloads, `ingest`, `ocr`,
+then the answer test on two models chosen by memory (32 GB: `qwen3.6:27b` and `qwen3:30b-a3b`; 48 GB+:
+`qwen3.6:35b-a3b` and `qwen3.6:27b`; `--models "A B"` to choose). It ends with
+`~/Desktop/damresearch-first-run.zip`: the log, `sources.csv` for each catalog group, the library list
+and the scores with every answer. It holds no PDFs and no database. Expect 1 to 3 hours the first time,
+mostly model and PDF downloads.
+
+The test alone:
+
+```zsh
+python3 eval_damresearch.py --list                 # which test questions have their source indexed
+python3 eval_damresearch.py --model qwen3.6:27b    # score one model (default: the dam-research persona)
+```
+
+`eval/questions.json` has 16 questions whose answers were read off the PDF pages: FEMA 333 hazard
+definitions, Froehlich 1995 and 2008 breach constants from HEC TD-39, EAP exercise frequencies (P-64),
+the inundation-study downstream limit (P-946), filter criteria (FEMA filter manual) and the Pierce,
+Thornton and Abt (2010) peak-outflow work. One question checks that the tool says "not covered"
+instead of inventing numbers when ND REG_05.2026 is missing. A question passes only when every
+expected fact is in the answer **and** a quote the code checked comes from the right document and
+page (+/-1). Questions whose source is not indexed are skipped. Add your own questions in the same
+format; use questions you know the answer to.
+
 ### Hazard-classification and dam-design sources (the catalog)
 
 `reference_sources.json` lists 58 more sources, and `fetch_asdso.py --catalog` downloads them into
@@ -207,5 +232,7 @@ Delete the block between `# >>> dam-research` and `# <<< dam-research` in `~/.zs
 - `../lumo/tools/dam_chain.py` (in the zip: `damchain-1.4/dam_chain.py`): dam_chain 1.3 plus the `research` pass-through, nothing else changed
 - `fetch_asdso.py`: downloads the public ASDSO / FEMA reference set, and with `--catalog` the sources in `reference_sources.json`
 - `reference_sources.json`: catalog of hazard-classification and dam-design sources (edit to add more)
+- `first-run.zsh`: install, download, index, test and pack the results, in one command
+- `eval_damresearch.py` + `eval/questions.json`: the answer test
 - `READING-LIST.md`: a starter library of public dam-safety publications
 - `library.csv.example`: citation sidecar format
