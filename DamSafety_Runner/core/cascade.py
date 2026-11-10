@@ -209,6 +209,11 @@ def _combine(out, st, writer):
             and r.final_si is not None]
     if len(runs) < 2:
         return
+    # M21 follow-up: all sub-runs share one LISFLOOD binary, so velocity is all-or-none. When no
+    # run produced a maximum-velocity raster (final_si velocity all-NaN), the combined velocity is
+    # all zeros; omit the combined velocity product so a Hazard classification of the cascade
+    # output refuses rather than reading velocity 0 off the v=0 ACER TM-11 curves.
+    no_velocity = not any(np.isfinite(r.final_si["velocity"]).any() for _cd, r, _off in runs)
     g0 = runs[0][1].grid
     # H07 (cascade georef): the combined rasters span the union of every run's extent, each run
     # drawn on its TRUE ground. A dam that auto-refines to a finer cell than another run must not
@@ -252,6 +257,12 @@ def _combine(out, st, writer):
              "Cascade Velocity (Max).tif": np.where(wet, vel / FT, np.nan),
              "Cascade WSE (Max).tif": np.where(wet & np.isfinite(wse), wse / FT, np.nan),
              "Cascade Arrival Time.tif": np.where(np.isfinite(arr), arr, np.nan)}
+    if no_velocity:                 # M21 follow-up: no run wrote velocity -> omit the zeros product
+        del items["Cascade Velocity (Max).tif"]
+        try:
+            os.remove(os.path.join(out.folder, "Cascade Velocity (Max).tif"))
+        except OSError:
+            pass
     for name, a in items.items():
         p = os.path.join(out.folder, name)
         writer(base.like(a, np.nan), p)
