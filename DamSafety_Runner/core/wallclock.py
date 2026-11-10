@@ -16,7 +16,9 @@ Deadline        elapsed = max(wall elapsed, monotonic elapsed):
                   that is logged (and kept in Deadline.events) so the run log says why.
                 timeout_s=None (3.10.48): no limit; it never expires (the clock jumps are
                 still logged), so wait() simply waits for the process.
-wait()          polls a Popen until it exits or the Deadline expires (None).
+wait()          polls a Popen until it exits or the Deadline expires (None); with `cancel`
+                (audit M18, 3.17.7) a true cancel() stops the group (stop_group) and raises
+                lisflood.Cancelled.
 stop_group()    SIGTERM to the process group, `grace_s` (NDBREACH_HECRAS_KILL_GRACE_S, default
                 60 s) on the wall clock for it to exit, then SIGKILL. Returns what happened.
 run()           subprocess.run(capture_output=True, text=True) with a wall-clock timeout and
@@ -33,6 +35,7 @@ ENV_GRACE = "NDBREACH_HECRAS_KILL_GRACE_S"
 DEFAULT_GRACE_S = 60.0
 JUMP_MARGIN_S = 60.0
 AFTER_KILL_WAIT_S = 30.0
+CANCEL_POLL_S = 0.25          # audit M18: how often wait() reads a cancel callable
 
 
 def grace_s(env=None, default=DEFAULT_GRACE_S):
@@ -106,16 +109,40 @@ class Deadline:
                 "clock_jumps": list(self.events)}
 
 
-def wait(proc, deadline, poll_s=1.0, sleep=time.sleep):
-    """proc's return code, or None when `deadline` expired first (proc is left running)."""
+def _cancelled_error():
+    """The Runner's one cancel exception (lisflood.Cancelled, what workflow raises and every
+    caller already catches); imported here only when a cancel actually happens."""
+    try:
+        from .lisflood import Cancelled
+    except ImportError:                      # wallclock loaded on its own (no package)
+        class Cancelled(RuntimeError):
+            pass
+    return Cancelled
+
+
+def wait(proc, deadline, poll_s=1.0, sleep=time.sleep, cancel=None, grace=DEFAULT_GRACE_S,
+         log=None):
+    """proc's return code, or None when `deadline` expired first (proc is left running).
+
+    audit M18 (Runner 3.17.7): `cancel` (a callable, e.g. QgsProcessingFeedback.isCanceled or
+    the CLI's Ctrl-C flag) is polled in the same loop; when it returns true the process group
+    gets stop_group(proc, grace, log=log) and lisflood.Cancelled is raised. stop_group's own
+    two wait() calls pass no cancel, so a cancel cannot re-enter the stop it started. A
+    deadline of Deadline(None) never expires, so this loop serves the no-limit case too."""
     while True:
         rc = proc.poll()
         if rc is not None:
             return rc
+        if cancel is not None and cancel():
+            (log or (lambda m: None))("Cancel requested: stopping the process group.")
+            stop_group(proc, grace, log=log, poll_s=0.1)
+            raise _cancelled_error()("cancelled")
         left = deadline.remaining()
         if left <= 0.0:
             return None
-        sleep(max(0.01, min(poll_s, left)))
+        # with a cancel, look at least every CANCEL_POLL_S so Cancel acts within about a second
+        step = poll_s if cancel is None else min(poll_s, CANCEL_POLL_S)
+        sleep(max(0.01, min(step, left)))
 
 
 def _signal_group(proc, sig, killpg):
@@ -176,27 +203,28 @@ class Timeout(subprocess.TimeoutExpired):
 
 
 def run(cmd, cwd=None, env=None, timeout=None, grace=DEFAULT_GRACE_S, log=None, poll_s=0.5,
-        what=""):
+        what="", cancel=None):
     """subprocess.run(cmd, capture_output=True, text=True, errors='replace') with a wall-clock
     timeout; on expiry the process group gets stop_group() and Timeout is raised. Output goes
-    through temporary files (no pipe can fill up). OSError when it cannot start."""
+    through temporary files (no pipe can fill up). OSError when it cannot start.
+    audit M18: always the wait() poll loop (timeout=None is Deadline(None), which never
+    expires), so `cancel` is read with or without a limit; a cancel stops the group and raises
+    lisflood.Cancelled."""
     with tempfile.TemporaryFile() as o, tempfile.TemporaryFile() as e:
         # Windows: no console window for the child (CREATE_NO_WINDOW, as NO_WINDOW elsewhere)
         p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=o, stderr=e,
                              start_new_session=(os.name == "posix"),
                              creationflags=(0x08000000 if os.name == "nt" else 0))
-        rc = None
-        if timeout is None:
-            rc = p.wait()
-        else:
-            dl = Deadline(timeout, what=what, log=log)
-            rc = wait(p, dl, poll_s=poll_s)
-            if rc is None:
-                dl.elapsed()
-                stop = stop_group(p, grace, log=log)
-                o.seek(0)
-                raise Timeout(cmd, timeout, output=o.read().decode("utf-8", "replace"),
-                              stop=stop, deadline=dl.summary())
+        dl = Deadline(timeout, what=what, log=log)
+        rc = wait(p, dl, poll_s=poll_s,
+                  **({"cancel": cancel, "grace": grace, "log": log} if cancel is not None
+                     else {}))
+        if rc is None:
+            dl.elapsed()
+            stop = stop_group(p, grace, log=log)
+            o.seek(0)
+            raise Timeout(cmd, timeout, output=o.read().decode("utf-8", "replace"),
+                          stop=stop, deadline=dl.summary())
 
         def text(f):
             f.seek(0)
