@@ -191,12 +191,32 @@ def m18_feedback_cancel_stops_a_wine_step_without_a_limit():
         _kill_leftovers(p.pid)
 
 
+class _StandInFeedback(object):
+    """QgsProcessingFeedback's cancel API, for a suite run where an earlier test installed the
+    stub qgis package (tests/fake_qgis.py) - the cancel path under test is the same."""
+
+    def __init__(self):
+        self._c = False
+
+    def isCanceled(self):
+        return self._c
+
+    def cancel(self):
+        self._c = True
+
+    def pushInfo(self, m):
+        pass
+
+
 def _qgis_feedback():
     try:
         from qgis.core import QgsProcessingFeedback
+        fb = QgsProcessingFeedback()
     except Exception:
-        raise Skip("no QGIS in this Python")
-    return QgsProcessingFeedback()
+        return _StandInFeedback()
+    if not (callable(getattr(fb, "cancel", None)) and callable(getattr(fb, "isCanceled", None))):
+        return _StandInFeedback()                # the stub qgis of the fast suite
+    return fb
 
 
 @test
