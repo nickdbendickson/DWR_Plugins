@@ -1,6 +1,7 @@
 """What differs between DamSafety Finder and DamIT Finder: names, the Processing provider id and
 the hints about which layers to give. Every other file of the Finder is the same in both
-repositories (DamSafety_Finder/ in dAmIt_Plugins, damit_finder/ in damit)."""
+repositories (DamSafety_Finder/ in dAmIt_Plugins, damit_finder/ in damit) except the docstring
+of core/warp_opts.py (here byte-identical to the Runner's and Screening's) and the README."""
 NAME = "DamSafety Finder"
 PROVIDER_ID = "ndfind"
 KNOWN_EXAMPLES = ("from the offline pack: DWR dams, DWR dugouts, Unknown Structures, NID dams; for "

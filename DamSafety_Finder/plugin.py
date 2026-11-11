@@ -4,8 +4,8 @@
     ponds        Find ponds and dugouts in a water-body layer              finder.run_ponds
     crossings    Find road / rail x stream crossings (culverts)            finder.run_crossings
 
-The provider id and names come from brand.py (the only file that differs between DamSafety
-Finder and DamIT Finder). Input layers must be file-based (GeoPackage, shapefile, ...): the runs
+The provider id and names come from brand.py (the file that differs between DamSafety Finder
+and DamIT Finder). Input layers must be file-based (GeoPackage, shapefile, ...): the runs
 read them with OGR, outside QGIS's layer objects, and a layer's subset filter is not applied.
 """
 from qgis.core import (Qgis, QgsApplication, QgsCoordinateReferenceSystem, QgsProcessing,

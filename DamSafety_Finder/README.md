@@ -67,8 +67,7 @@ One GeoPackage per tool run (EPSG:5070 points, lat / lon fields) and a CSV besid
 `core/embankments.py`, `core/listed.py`, `core/crossings.py` (new), `core/ponds.py`,
 `core/storage.py`, `core/warp_opts.py` (byte-identical to Screening's, checked by
 `tools/ci_checks.py`), `finder.py` (the three runs on files: GDAL / OGR, no QGIS), `plugin.py`
-(the Processing tools), `brand.py` (the only file that differs from DamIT Finder in the damit
-repository).
+(the Processing tools), `brand.py` (what differs from DamIT Finder in the damit repository).
 
 Tests: `python -m unittest DamSafety_Finder.tests.test_core DamSafety_Finder.tests.test_finder
 DamSafety_Finder.tests.test_qgis` (synthetic terrain; the QGIS tests skip without QGIS).
