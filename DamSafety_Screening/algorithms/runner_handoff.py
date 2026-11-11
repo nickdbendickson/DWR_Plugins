@@ -586,6 +586,12 @@ class RunnerHandoff(QgsProcessingAlgorithm):
                         attrs, curves_given=bool(curves))
                     p, notes = ho.rundam_params(attrs, bmap[dam_id], cm.ALBERS, dem_value, folder,
                                                 cell, user_csv, area, user_idx, area_source=area_src)
+                    # M24: rundam_params may drop a stage-storage curve area whose implied exponent
+                    # exceeds the Runner's cap of 6; when it withholds AREA_AC the source is "none",
+                    # so rn_area_src / the tally / the manifest match what was sent and agree with
+                    # dam.json (which records surface_area_ac=null).
+                    if "AREA_AC" not in p:
+                        area_src = ho.AREA_SRC_NONE
                     p.update(dem_p)
                     notes = list(notes) + dem_notes
                     if anote:

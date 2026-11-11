@@ -1508,8 +1508,11 @@ def _hecras_stage(p, res, log, unattended=False):
     log("HEC-RAS 2D stage\u2026 (the LISFLOOD-FP rasters are kept as 'LISFLOOD-FP <name>'{})"
         .format("; unattended: a 12 h wall-clock limit per compute and preprocess step unless "
                 "NDBREACH_HECRAS_TIMEOUT_S says otherwise" if unattended else ""))
+    # audit M18 (3.17.7): Ctrl-C (CANCEL["flag"], _install_sigint) stops the Wine preprocess
+    # and RasUnsteady through wallclock.stop_group - start_new_session keeps the terminal's
+    # SIGINT away from them - and lfmod.Cancelled reaches the command's cancel exit (130)
     workflow.run_hecras_stage(p.folder, res, p.setup.writer, p.st, p.dam_xy, log,
-                              unattended=unattended)
+                              unattended=unattended, cancel=lambda: CANCEL["flag"])
 
 
 def cmd_hydrograph(args):

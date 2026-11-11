@@ -490,9 +490,13 @@ assert set(m["outputs"]) == {"OUT", "CURVES"} and m["outputs"]["CURVES"]["folder
 from nd_dam_screening.damsuite import chain as ch_  # noqa: E402
 assert ch_.digest_of(m) == m["manifest_sha256"]
 assert wf.changed_inputs(WM, "3") == [] and wf.changed_inputs(WM, "1") is None      # 1 has no manifest
-t_old = os.path.getmtime(src)
+t_old_ns = os.stat(src).st_mtime_ns
 open(src, "wb").write(b"version two")                     # same size, new content
-os.utime(src, (t_old, t_old))                              # and the OLD date
+os.utime(src, ns=(t_old_ns, t_old_ns))                     # and exactly the OLD date
+# Within one session the digest cache trusts (path, size, mtime); a later session (empty cache)
+# hashes the file again and must see the new content. Restoring the date through a float
+# (getmtime) used to change it by a few nanoseconds most of the time, so this passed by luck.
+ch_._cache.clear()
 assert wf.changed_inputs(WM, "3") == ["DAMS"]
 touch(WM, "2_terrain", "x.tif")
 rows = wf.statuses(WM, {})

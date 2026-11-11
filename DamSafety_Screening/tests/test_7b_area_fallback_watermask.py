@@ -57,7 +57,7 @@ assert note == ""
 # shallow curve + inventory value: the inventory's area
 a, src, note = ho.surface_area_choice(shallow, CREST, H, {"inv_maxa_m2": 12.5 * AC})
 assert src == ho.AREA_SRC_INVENTORY == "inventory_max_pool_area" and abs(a - 12.5 * AC) < 1e-6, (a, src)
-assert "12.5 ac from the inventory's maximum-pool area (inv_maxa_m2)" in note and "spans 4.0 ft" in note, note
+assert "12.5 ac from the inventory's maximum-pool area (inv_maxa_m2)" in note and "only 4.0 ft deep" in note, note
 # the DWR export's own fields kept on the layer are acres (gpkg and shapefile names, any case)
 for fld in ("max_pool_area", "MAX_POOL_A"):
     a, src, _ = ho.surface_area_choice(shallow, CREST, H, {fld: 7})
@@ -253,6 +253,27 @@ for d_, want in (("DWR-1", "stage_storage"), ("DWR-2", "inventory_max_pool_area"
     blob = json.dumps(js)
     assert "surface_area_source = " + want in blob, (d_, blob[:500])
 print("OK (tool 7b: curve / inventory / none, log, manifest extra, dam.json)")
+
+# M24 (0.19.3): a stage-storage curve whose area implies a storage-area exponent above the Runner's
+# cap of 6 is dropped in rundam_params; the recorded source is then "none" (matching dam.json), not
+# "stage_storage".
+curve(os.path.join("curves", "curve_M24.csv"), H)              # deep curve, area ~50000 m2
+m24row = {"dam_id": "M24", "height_m": H, "td_vw_m3": 40000.0, "hz_class": "High",
+          "est_crest_m": CREST, "inv_maxa_m2": None}            # m = 50000 x 8.23 / 40000 = 10.3 > 6
+m24dams = make_layer(FLDS, [(pt(0, 0), m24row)], "point", "dM24")
+m24bpts = make_layer([("dam_id", "string")], [(pt(0, 0), {"dam_id": "M24"})], "point", "bM24")
+sent.clear()
+fbm = QgsProcessingFeedback()
+algm = RunnerHandoff()
+DFM = os.path.join(W, "Dams_m24")
+algm.run_mock(dict(base, DAMS=ctx.add(m24dams), BPTS=ctx.add(m24bpts), DAMS_FOLDER=DFM), ctx, fbm)
+bym = {p["DAM_ID"]: p for p in sent}
+assert "AREA_AC" not in bym.get("M24", {}), bym                # over-cap curve area dropped
+assert algm.manifest_extra["surface_area_source"] == {"M24": "none"}, algm.manifest_extra
+assert any("cap of 6" in m for m in fbm.log), fbm.log
+jsm = json.dumps(json.load(open(os.path.join(DFM, "M24", "dam.json"))))
+assert "surface_area_source = stage_storage" not in jsm, jsm[:400]
+print("OK (M24: over-cap curve area dropped; source = none, matches dam.json)")
 
 # 0.17.49: no curve folder - the inventory area for dams that have one, none (warned) otherwise
 sent.clear()

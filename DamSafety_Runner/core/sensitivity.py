@@ -108,8 +108,10 @@ def receptor_maxima(receptors, grid, final_si):
     d = receptors.sample(grid, final_si["depth"])
     v = receptors.sample(grid, final_si["velocity"])
     dmax = float(np.nanmax(d)) / FT if np.isfinite(d).any() else 0.0
-    vmax = float(np.nanmax(v)) / FT if np.isfinite(v).any() else 0.0
-    return round(dmax, 2), round(vmax, 2)
+    # M21 follow-up: a build that wrote no .maxVc leaves velocity all-NaN; report the fastest
+    # water as None (unknown), not a falsely safe 0.
+    vmax = float(np.nanmax(v)) / FT if np.isfinite(v).any() else None
+    return round(dmax, 2), (round(vmax, 2) if vmax is not None else None)
 
 
 def preview_class(receptors, grid, final_si, wet_ft=0.1):
@@ -415,6 +417,10 @@ def run_sensitivity(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=
     # envelope on the shared grid (the cell-size run is on another grid: left out)
     progress(96, "envelope rasters")
     runs = [(c, r) for c, r in runs if c.group != GROUP_GRID]
+    # M21 follow-up: velocity is all-or-none across the sub-runs (one shared binary); when none
+    # wrote a maximum-velocity raster (final_si velocity all-NaN), omit the velocity envelope so a
+    # Hazard classification of it refuses rather than reading the zeros.
+    no_velocity = not any(np.isfinite(r.final_si["velocity"]).any() for _c, r in runs)
     grid = base.grid
     dep = np.stack([np.nan_to_num(r.final_si["depth"], nan=0.0) for _c, r in runs])
     vel = np.stack([np.nan_to_num(r.final_si["velocity"], nan=0.0) for _c, r in runs])
@@ -431,9 +437,15 @@ def run_sensitivity(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=
     put("Sensitivity Depth (Low).tif", lo, FT)
     put("Sensitivity Depth (Median).tif", med, FT)
     put("Sensitivity Depth (High).tif", hi, FT)
-    p = os.path.join(out.folder, "Sensitivity Velocity (Max).tif")
-    writer(grid.like(np.where(hi > 1e-4, vel.max(axis=0) / FT, np.nan), np.nan), p)
-    out.envelope["Sensitivity Velocity (Max).tif"] = p
+    if not no_velocity:
+        p = os.path.join(out.folder, "Sensitivity Velocity (Max).tif")
+        writer(grid.like(np.where(hi > 1e-4, vel.max(axis=0) / FT, np.nan), np.nan), p)
+        out.envelope["Sensitivity Velocity (Max).tif"] = p
+    else:                           # M21 follow-up: no run wrote velocity -> no zeros envelope
+        try:
+            os.remove(os.path.join(out.folder, "Sensitivity Velocity (Max).tif"))
+        except OSError:
+            pass
     earliest = arr.min(axis=0)
     p = os.path.join(out.folder, "Sensitivity Arrival (Earliest).tif")
     writer(grid.like(np.where(np.isfinite(earliest), earliest, np.nan), np.nan), p)

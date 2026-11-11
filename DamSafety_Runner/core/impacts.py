@@ -172,7 +172,12 @@ def summarize(rec, grid, final, arrival_m, dv_limit=DV_DANGER_FT2S):
         return {}, []
     inb = rec.in_bounds(grid.bounds)
     d = rec.sample(grid, final["depth"])
-    v = rec.sample(grid, final["velocity"])
+    # M21: a build that wrote no maximum-velocity raster passes velocity as None; sample it as
+    # all-NaN so velocity_fps is blank and the depth x velocity danger count is reported unknown
+    # (None), not a falsely safe 0, in the receptor summary and CSV.
+    vraw = final.get("velocity")
+    has_vel = vraw is not None
+    v = rec.sample(grid, vraw) if has_vel else np.full(d.shape, np.nan)
     a = rec.sample(grid, final["arrival"])
     wet = inb & np.isfinite(d) & (d >= arrival_m)
     dv = np.nan_to_num(d) / FT * np.nan_to_num(v) / FT
@@ -190,9 +195,9 @@ def summarize(rec, grid, final, arrival_m, dv_limit=DV_DANGER_FT2S):
             else round(float(rec.length_m[k & (d >= 1.0 * FT)].sum()) / 1000.0, 2),
             "depth_ge_3ft": int((k & (d >= 3.0 * FT)).sum()) if kind == KIND_STRUCTURE
             else round(float(rec.length_m[k & (d >= 3.0 * FT)].sum()) / 1000.0, 2),
-            "dv_ge_{:g}_ft2s".format(dv_limit): int((k & (dv >= dv_limit)).sum())
-            if kind == KIND_STRUCTURE
-            else round(float(rec.length_m[k & (dv >= dv_limit)].sum()) / 1000.0, 2),
+            "dv_ge_{:g}_ft2s".format(dv_limit): (None if not has_vel else
+                (int((k & (dv >= dv_limit)).sum()) if kind == KIND_STRUCTURE
+                 else round(float(rec.length_m[k & (dv >= dv_limit)].sum()) / 1000.0, 2))),
             "max_depth_ft": round(float(np.nanmax(d[k])) / FT, 2),
             "earliest_arrival_hr": (round(float(np.nanmin(a[k])), 2)
                                     if np.isfinite(a[k]).any() else None),

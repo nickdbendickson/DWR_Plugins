@@ -1592,10 +1592,15 @@ def write_7b(ctx, dam, r, folder):
     c = g.Centroid(); bxy = (c.GetX(), c.GetY())
     bnames = [bl.GetLayerDefn().GetFieldDefn(i).GetName() for i in range(bl.GetLayerDefn().GetFieldCount())]
     blen = b.GetField("crest_len_m") if "crest_len_m" in bnames else None
-    area, anote = ho.area_for_runner(os.path.join(w, "3_stage_storage", "curve_{}.csv".format(
-        dam)), attrs.get("est_crest_m"), attrs.get("height_m"))
+    # M24 (0.19.3): use the production entry point so the comparison reflects the tool-7b
+    # area decision exactly - the basin-depth shallow-curve guard, the recorded-area precedence
+    # and the storage-area-exponent sanity check, not the bare area_for_runner guard.
+    area, area_src, anote = ho.surface_area_choice(
+        os.path.join(w, "3_stage_storage", "curve_{}.csv".format(dam)),
+        attrs.get("est_crest_m"), attrs.get("height_m"), attrs,
+        curves_given=os.path.isdir(os.path.join(w, "3_stage_storage")))
     p, notes = ho.rundam_params(attrs, bxy, "EPSG:5070", r["DEM"], os.path.dirname(folder), None,
-                                None, area)
+                                None, area, area_source=area_src)
     if anote:
         notes = list(notes) + [anote]
     d_class = "hazard_cla" if "hazard_cla" in names else None
