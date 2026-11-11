@@ -19,6 +19,7 @@ from . import anuga_detach as detach   # 3.12.2: the worker runs detached from Q
 from .units import ARRIVAL_DEPTH_FT, FT
 from . import conditioning as cond
 from . import structures as structmod
+from . import model_terrain                 # 3.17.7
 from . import gmsh_mesher as gmshmod     # numpy only; gmsh is imported in build_mesh
 from . import anuga_dtdiag               # 3.10.70: numpy only (the worker's dt diagnostic)
 from . import anuga_crest as crestmod    # 3.10.91: road / rail crests held (numpy only)
@@ -1535,6 +1536,8 @@ def run(workdir, dem, flooded, inflow_xy, direction, inlet_width_m, hydrograph, 
         else:
             minfo["used"] = "gmsh"
             minfo["gmsh"] = mesh.get("stats", {})
+            if model_terrain.enabled(st):        # 3.17.7: the mesh as a GeoPackage for review
+                model_terrain.write_gmsh_mesh(mesh, dem, spec, workdir, log)
             minfo["reused"] = bool(mesh.get("reused"))     # 3.12.6
             mnote = msg
             if log:
