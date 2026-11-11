@@ -1005,7 +1005,9 @@ class BatchAlgorithm(_Base):
                 "found; falls back to one dam after another when it is missing, and says "
                 "so in MODE). TIMEOUT_MIN ends a worker that takes longer (that dam is "
                 "listed as failed). WORKERS = 1 (default) runs the dams one after another "
-                "in this session. BOUNDARY: the model edge check can use each dam folder's HEC-RAS "
+                "in this session; each dam's downloaded data stays in this session's memory "
+                "until QGIS closes, so use WORKERS > 1 for a long batch (each dam's memory is "
+                "released when its process ends). BOUNDARY: the model edge check can use each dam folder's HEC-RAS "
                 "2D flow area polygon (model_boundary_2d_area.gpkg, written by 'Import HEC-RAS "
                 "plan results'); a dam without the file gets the automatic check.")
 
@@ -1099,7 +1101,9 @@ class WatchAlgorithm(_Base):
                 "qgis_process child process (QGIS stays usable; needs qgis_process - set "
                 "ND_QGIS_PROCESS to its full path if it is not found; falls back to one dam "
                 "after another when it is missing). WORKERS = 1 (default) runs the dams one "
-                "after another in this session. Batch_Hazard_Classification.csv (the class "
+                "after another in this session; each dam's downloaded data stays in this "
+                "session's memory until QGIS closes, so use WORKERS > 1 for a long run. "
+                "Batch_Hazard_Classification.csv (the class "
                 "of every dam) is written as well.")
 
     def flags(self):
