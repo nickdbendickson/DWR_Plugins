@@ -10,19 +10,26 @@ candidate is new to the lists you gave, not necessarily to the Department.
 
 Install: needs DamSafety Core. Processing Toolbox → DamSafety Finder → Find structures.
 
-## The four tools
+## The tools
 
 | Tool | Input | Finds |
 |---|---|---|
-| `ndfind:embankments` Find fills across streams | bare-earth DEM, stream lines (3DHP / NHD flowlines), roads and railroads (optional) | Every fill that blocks a valley a stream line crosses: **dam** (holds water), **dry embankment** (a dry / detention dam, a levee, an unmapped crossing), **road fill (ponding)** (a road that holds water: the culvert is missing in the DEM, small or blocked), **road fill** |
+| `ndfind:embankments` Find fills across streams and draws | bare-earth DEM; stream lines (3DHP / NHD flowlines, optional); roads and railroads (optional) | Every fill that blocks a valley a stream line **or a draw traced from the DEM** crosses: **dam** (holds water), **dry embankment** (a dry / detention dam, a levee, an unmapped crossing), **road fill (ponding)** (a road that holds water: the culvert is missing in the DEM, small or blocked), **road fill**; where each pool gets out (**spillways**); **dug pits** anywhere; **raised ridges** (levees, dikes) on request; a **score** with a model from the sixth tool |
 | `ndfind:ponds` Find ponds and dugouts | water-body polygons (3DHP / NHD waterbodies, NWI, your own), DEM | **embankment pond**, **dugout** (natural depressions on request) - the pond engine of Screening tool 16 |
-| `ndfind:crossings` Find road and rail crossings of streams | roads, railroads, stream lines; the first tool's fills (optional) | Every crossing - the places a culvert or a bridge must be - with the fill there |
-| `ndfind:water` Find open water in aerial imagery | 4-band or colour-infrared imagery: an ND GIS Hub preset (2018 30 cm 4-band; 2017, 2019, 2020 NAIP colour-infrared), your own GeoTIFF / VRT, or any ArcGIS ImageServer address; mapped water bodies (optional) | Open-water outlines, each marked **mapped** or not: the pond outlines for the second tool when no layer has them |
+| `ndfind:crossings` Find road and rail crossings of streams | roads, railroads, stream lines; the first tool's fills, a DEM (optional) | Every crossing - the places a culvert or a bridge must be - with the fill there and, with a DEM, the drainage area and the round pipe the rational method asks for |
+| `ndfind:water` Find open water in aerial imagery | 4-band or colour-infrared imagery: an ND GIS Hub preset (2018 30 cm 4-band; 2017, 2019, 2020 NAIP colour-infrared), your own GeoTIFF / VRT, or any ArcGIS ImageServer address; mapped water bodies (optional) | Open-water outlines (one year, or the water of most of several years), each marked **mapped** or not: the pond outlines for the second tool when no layer has them |
+| `ndfind:osm` Extract dams, dikes and culverts from OpenStreetMap | an OpenStreetMap file (.osm.pbf, the Geofabrik extract) | `waterway=dam / weir`, `man_made=dyke / embankment`, `tunnel=culvert`, `ford=yes` as points: one more known-structure layer |
+| `ndfind:score` Score fills by how much they look like the listed dams | the `embankments` layers of one or more runs | A model learned from the fills already on a dam list, and every fill scored 0-1 with it (look at the high-scoring new ones first) |
 
 The first three take **Known structures** (any number of point, line or polygon layers: DWR dams, DWR
 dugouts, Unknown Structures, NID dams, NBI bridges, NDDOT bridges / centre-line pipes, USGS stream
 crossings, SARP / ABI crossings), a match distance (YOUR value; unsure up to twice it) and an
 optional extent. A known point anywhere inside a pond's outline makes that pond listed.
+
+DWR dam points are often at the quarter-quarter section, not on the embankment: on 10 southwest
+ND LiDAR tiles the nearest fill to an intact DWR dam was a median 194 m (640 ft) away, 68 % within
+300 m. With the DWR lists use about 1000 ft for fills (unsure up to twice it), and look at the
+"unsure" ones.
 
 ## How a fill is found (`core/embankments.py`)
 
@@ -40,13 +47,45 @@ optional extent. A known point anywhere inside a pond's outline makes that pond 
    counts as ground, so storage is above the water surface only). A pool reaching the analysis
    window is marked `open_pool` (storage is a minimum).
 5. A road / rail mask (the centrelines, 6 m either side) tells a road fill from a dam.
+6. **Spillway**: where the pool first gets out when the water rises a few centimetres above the
+   spill level (the middle of the shortest way out through the cells it floods). On the fill at
+   the line = it overtops there or has a notch / pipe there; beside it = an auxiliary spillway, a
+   saddle or the end of the fill. Layer `spillways`, and `spillway`, `spill_dist_ft`,
+   `spill_width_ft` on each fill.
+
+**Draws with no stream line** (`DRAIN_AC`, 10 acres; 0 = off; `core/terrain.py`). The DEM is read
+again at 10 m, the narrow raised features (fills, roads, embankments narrower than 60 m) are opened
+away, and flow is routed by a priority flood (each cell drains to the cell it was reached from, so
+a pit drains over its rim). Every draw that drains at least `DRAIN_AC` becomes a line and is walked
+exactly like a stream line; `line_source` says which kind of line found the fill. The tile pad is
+3 km so most of a draw's basin is in the tile.
+
+**Dug pits** (`DUGOUTS`, on; `core/ridges.py`). A pit below the DEM's grey closing by 120 m, at
+least 1 m deep, 150 m2 to 2 ha, filling at least 85 % of its smallest rectangle, no more than 8
+times as long as wide, with spoil (the upper quarter of the ground within 8 m at least 0.3 m above
+the ground 20-40 m out). Layer `dugouts` (depth below the rim / spoil tops, area, sides,
+rectangularity, spoil height, volume), checked against the known structures.
+
+**Raised ridges** (`RIDGES`, off; `core/ridges.py`). The DEM minus its grey opening by 60 m (what
+stands up and is narrower than that), at least 1 m high, at least 80 m long, 5 times as long as
+wide and straight (it fills at least 60 % of its smallest rectangle), off the road /
+rail mask widened to an embankment's base and not one of the fills already found. **dike / levee
+(holds water)** when a closed depression at least 0.3 m deep lies along it. A review list: farm
+pads, drain spoil banks, shelterbelt snow berms and natural ridges pass too (in the Absaraka box
+before the straightness and rail-base tests: 43 ridges, many rail beds and meander spurs).
+
+**Score** (`MODEL`; `core/score.py`). A logistic regression of the fills on a dam list against the
+other fills (height, crest height, net head, storage, pool area, length, flat pool, on a road, open
+pool, spillway beside): a ranking of the new fills by how much they look like listed dams, not a
+probability. DamSafety Finder ships `models/nd_fill_score_2026-11.json` (the default): learned on 10 southwest ND 1 m tiles, 680 fills, 141 listed, cross-validated AUC 0.84 - relearn it for your area with the sixth tool from runs over areas with many listed dams; the
+cross-validated AUC it reports says how well it ranks dams it has not seen.
 
 Fills closer than 60 m are one. The DEM is read in 5 km tiles with a pad, so a county runs in
 bounded memory. The elevation unit comes from the raster (feet are scaled); the warp reads the
 full-resolution cells and keeps the values as stored (`core/warp_opts.py`, as Screening).
 
-What it cannot find: a fill on a draw with no stream line (a whole-DEM search for raised ridges is
-the next step), a fill the DEM has been hydro-enforced through, a pond with no polygon (draw it from imagery with the fourth tool).
+What it cannot find: a fill the DEM has been hydro-enforced through (a culvert cut through it), a
+breached dam (correctly: it no longer blocks the valley), a pond with no polygon (draw it from imagery with the fourth tool).
 
 ## How open water is found (`core/water.py`)
 
@@ -62,7 +101,29 @@ dugouts* to ask the LiDAR whether each pool is held above the ground.
 An image service is downloaded for the extent only, in 2000-pixel GeoTIFF tiles kept beside the
 output (`<output>_imagery/`; a rerun reuses them). The ND GIS Hub's 2021-2024 statewide NAIP is
 natural colour only (no near-infrared band) and cannot be used. Imagery shows the day it was flown: a dry year misses ponds, a wet year adds flooded
-fields; try two years.
+fields. Pick several years: a cell is then water when it is water in at least `PERSIST` (half)
+of the images that cover it, so the ponds stay and a field flooded in one wet year goes
+(`wet_share`, `images` on each patch).
+
+## Ponds: NWI codes and dugout shape
+
+The ponds tool reads an NWI layer's wetland code (its `ATTRIBUTE` field, when no type field is
+given): a code ending in **x** (excavated) is a dug pit for the pond engine, **h** (diked /
+impounded) is noted when the LiDAR shows no embankment holding it (`nwi_modifier`). A natural
+depression whose outline fills at least `DUG_RECT` (85 %) of its smallest rectangle (and is at
+most 2 acres) is called a dugout: potholes are round or ragged, dug pits are rectangles
+(`rectangularity`).
+
+## Culvert size at a crossing (`core/crossings.py`)
+
+With a DEM the crossings tool reads the drainage area above each crossing (the same priority-flood
+routing at 10 m, the crossing snapped to the largest flow within 30 m) and its longest flow path,
+then: Kirpich time of concentration, rational-method peak Q = C i A for YOUR runoff coefficient C
+(0.35) and rainfall intensity i (2 in/hr: take it from NOAA Atlas 14 at the time of concentration
+and your return period), and the round pipe that carries Q flowing full at YOUR velocity (8 ft/s;
+`pipe_in`, `pipe_size`, or "box culvert / bridge"). An order of magnitude for screening: the
+rational method is meant for areas up to about 200 acres (flagged above that; use a regional
+regression, USGS StreamStats), and a basin longer than the DEM read is a minimum. Not a design.
 
 ## Outputs
 
@@ -75,6 +136,8 @@ One GeoPackage per tool run (EPSG:5070 points or polygons, lat / lon fields) and
   DWR-export dam records (`structure_id` = FIND-… / POND-…, `dam_name`, `max_dam_height`,
   `max_pool_vol`, `max_pool_area`, `status` = Candidate). DamSafety Screening tool 1 reads them
   (set its status filter to Candidate; their IDs become DWR-FIND-… / DWR-POND-…).
+* `spillways`, `dugouts`, `ridges`: points, as above; `osm_structures` from the OpenStreetMap
+  tool; `scored_fills` and `<output>_score_model.json` from the score tool.
 * `water`: open-water polygons (`water_id` WATER-…, `area_ac`, mean `ndwi`, `mapped`,
   `mapped_share`, lat / lon) and `<output>_water.csv`.
 * `<output>_hillshade.tif`: a hillshade lit from all round (`gdaldem hillshade -multidirectional`)
@@ -83,9 +146,9 @@ One GeoPackage per tool run (EPSG:5070 points or polygons, lat / lon fields) and
 
 ## Files
 
-`core/embankments.py`, `core/listed.py`, `core/crossings.py`, `core/water.py` (new), `core/ponds.py`,
+`core/embankments.py`, `core/listed.py`, `core/crossings.py`, `core/water.py`, `core/terrain.py`, `core/ridges.py`, `core/score.py` (new), `core/ponds.py`,
 `core/storage.py`, `core/warp_opts.py` (byte-identical to Screening's, checked by
-`tools/ci_checks.py`), `finder.py` (the four runs on files: GDAL / OGR, no QGIS), `plugin.py`
+`tools/ci_checks.py`), `finder.py` (the runs on files: GDAL / OGR, no QGIS), `plugin.py`
 (the Processing tools), `brand.py` (what differs from DamIT Finder in the damit repository).
 
 Tests: `python -m unittest DamSafety_Finder.tests.test_core DamSafety_Finder.tests.test_finder

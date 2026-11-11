@@ -10,6 +10,9 @@ import numpy as np
 from ..core import crossings as cx
 from ..core import embankments as em
 from ..core import listed as ls
+from ..core import ridges as rd
+from ..core import score as sc
+from ..core import terrain as tr
 from ..core import water as wt
 
 CELL = 3.0
@@ -109,6 +112,20 @@ class Embankments(unittest.TestCase):
         self.assertAlmostEqual(e.spill_m - e.toe_m, 2.0, delta=0.4)
         self.assertGreater(e.crest_m - e.spill_m, 1.0)
 
+    def test_spillway_is_found_at_the_low_end(self):
+        dem, y = valley()
+        _yy, x = np.mgrid[0:N, 0:N]
+        top = bed(200) + 4.0
+        fill = (np.abs(y - 200) <= 3)
+        dem = np.where(fill, np.maximum(dem, np.where(x < N // 2 - 20, top - 2.0, top)), dem)
+        e = em.find(dem, GT, [LINE])[0]
+        self.assertIsNotNone(e.spill_xy)
+        self.assertLess(e.spill_xy[0], XS - 20 * CELL + CELL)          # on the low (west) end
+        self.assertGreater(e.spill_dist_m, 30.0)
+        dem, road = scene()
+        dam = [f for f in em.find(dem, GT, [LINE], road_mask=road) if f.kind == em.K_DAM][0]
+        self.assertIsNotNone(dam.spill_xy)
+
     def test_nodata_breaks_the_walk(self):
         dem, road = scene()
         dem[:, :] = np.nan
@@ -164,6 +181,142 @@ class Crossings(unittest.TestCase):
 
 
 
+class Terrain(unittest.TestCase):
+    def test_drainage_follows_the_valley_and_area_grows(self):
+        dem, _y = valley()
+        rec, order, filled = tr.flow(dem)
+        area, length = tr.accumulate(rec, order, dem.shape, CELL)
+        self.assertEqual(len(order), N * N)
+        self.assertGreater(area[-2, N // 2], area[N // 2, N // 2])
+        lines = tr.drainage_lines(rec, area, GT, 20000.0)
+        main = max(lines, key=len)
+        xs = [p[0] for p in main[10:-10]]
+        self.assertLess(max(abs(x - (N // 2 + 0.5) * CELL) for x in xs), 2 * CELL)
+
+    def test_pit_is_filled_and_drains_over_its_rim(self):
+        dem, y = valley()
+        dem = add_fill(dem, y, 200, 4.0)
+        rec, order, filled = tr.flow(dem)
+        d = tr.depth(dem, filled)
+        # the pool would reach the top of the grid, 2.4 m above the bed at the fill: it drains out
+        # there before it gets over the 4 m fill
+        self.assertAlmostEqual(float(d[195, N // 2]), 200 * CELL * SLOPE - 5 * CELL * SLOPE, delta=0.05)
+        self.assertAlmostEqual(float(d[0, N // 2]), 0.0)
+        self.assertEqual(float(d[300, N // 2]), 0.0)
+
+    def test_lines_run_through_a_fill_when_opened(self):
+        dem, road = scene()
+        o = tr.open_ridges(dem, CELL, 60.0)
+        rec, order, _f = tr.flow(o)
+        area, _l = tr.accumulate(rec, order, dem.shape, CELL)
+        lines = tr.drainage_lines(rec, area, GT, 20000.0)
+        got = em.find(dem, GT, lines, road_mask=road)
+        self.assertEqual(sorted(e.kind for e in got), sorted([em.K_DAM, em.K_DRY, em.K_ROAD]))
+
+
+class Ridges(unittest.TestCase):
+    def flat(self, n=200):
+        return np.full((n, n), 100.0), (0.0, 1.0, 0.0, float(n), 0.0, -1.0)
+
+    def test_levee_holding_water(self):
+        z, gt = self.flat()
+        z[40:160, 98:104] = 102.0                          # a 2 m dike, 120 m long
+        depth = np.zeros(z.shape)
+        depth[40:160, 80:98] = 1.0                         # a pool on its west side
+        got = rd.find_ridges(z, gt, depth=depth)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["kind"], rd.K_LEVEE)
+        self.assertAlmostEqual(got[0]["length_m"], 120.0, delta=15.0)
+        self.assertEqual(rd.find_ridges(z, gt)[0]["kind"], rd.K_RIDGE)
+        self.assertEqual(rd.find_ridges(z, gt, exclude=[(100.0, 100.0)]), [])
+        road = np.zeros(z.shape, bool)
+        road[:, 96:106] = True
+        self.assertEqual(rd.find_ridges(z, gt, road_mask=road), [])
+
+    def test_round_hump_and_bend_are_not_ridges(self):
+        z, gt = self.flat()
+        r, c = np.mgrid[0:200, 0:200]
+        z[(r - 100) ** 2 + (c - 100) ** 2 < 15 ** 2] = 102.0
+        self.assertEqual(rd.find_ridges(z, gt), [])
+        z, gt = self.flat()
+        z[40:46, 40:160] = 102.0
+        z[40:160, 154:160] = 102.0                          # an L: fills little of its rectangle
+        self.assertEqual(rd.find_ridges(z, gt), [])
+
+    def test_dugout_with_spoil(self):
+        z, gt = self.flat()
+        z[60:72, 60:90] = 97.0                              # a 12 x 30 m pit, 3 m deep
+        z[54:60, 60:90] = z[72:78, 60:90] = 101.0           # spoil along the long sides
+        pp = rd.RidgeParams(dug_close_m=40.0)                # the test grid is small
+        got = rd.find_dugouts(z, gt, params=pp)
+        self.assertEqual(len(got), 1)
+        self.assertAlmostEqual(got[0]["depth_m"], 4.0, delta=0.3)       # below the spoil tops
+        self.assertGreater(got[0]["rect"], 0.9)
+        z[54:60, 60:90] = z[72:78, 60:90] = 100.0           # no spoil: a pit, not a dugout
+        self.assertEqual(rd.find_dugouts(z, gt, params=pp), [])
+        z, gt = self.flat()
+        r, c = np.mgrid[0:200, 0:200]
+        z[(r - 100) ** 2 / 400.0 + (c - 100) ** 2 / 100.0 < 1] = 98.0  # a pothole, ragged-free oval
+        z[((r - 100) ** 2 / 900.0 + (c - 100) ** 2 / 400.0 < 1) & (z == 100.0)] = 100.6
+        self.assertEqual(rd.find_dugouts(z, gt, params=pp), [])   # round: a pothole
+
+    def test_min_rect(self):
+        rr, cc = np.nonzero(np.ones((10, 30), bool))
+        a, lo, sh = rd.min_rect(rr, cc, 2.0)
+        self.assertAlmostEqual(a, 20 * 60, delta=1e-6)
+        self.assertEqual((lo, sh), (60.0, 20.0))
+
+
+class Score(unittest.TestCase):
+    def rows(self, n=60, seed=1):
+        rng = np.random.default_rng(seed)
+        out = []
+        for i in range(n):
+            dam = i % 3 == 0
+            out.append({"status": "listed" if dam else "new", "known_layer": "DWR dams" if dam else "",
+                        "height_ft": float(rng.normal(14 if dam else 7, 2)),
+                        "crest_height_ft": float(rng.normal(16 if dam else 8, 2)),
+                        "head_ft": float(rng.normal(6 if dam else 1, 1.5)), "valley_drop_ft": 0.5,
+                        "storage_af": float(rng.lognormal(3 if dam else 0.5, 0.7)),
+                        "area_ac": float(rng.lognormal(1 if dam else -1, 0.5)), "length_ft": 300.0,
+                        "pool": "yes" if dam and rng.random() < 0.6 else "no",
+                        "on_road": "no" if dam else ("yes" if rng.random() < 0.8 else "no"),
+                        "open_pool": "no", "spillway": "beside" if dam else "over"})
+        return out
+
+    def test_learns_and_ranks(self):
+        rows = self.rows()
+        m = sc.train(rows)
+        y = sc.labels(rows)
+        self.assertEqual(int(y.sum()), 20)
+        self.assertGreater(sc.ranked_auc(sc.score(m, self.rows(seed=2)), y), 0.9)
+        self.assertGreater(sc.score(m, [rows[0]])[0], sc.score(m, [rows[1]])[0])
+
+    def test_needs_examples(self):
+        rows = self.rows()[:4]
+        with self.assertRaises(ValueError):
+            sc.train(rows)
+
+    def test_round_trip(self):
+        import os
+        import tempfile
+        m = sc.train(self.rows())
+        p = os.path.join(tempfile.mkdtemp(), "m.json")
+        sc.save(m, p)
+        self.assertEqual(sc.load(p)["weights"], m["weights"])
+
+
+class Pipes(unittest.TestCase):
+    def test_rational_and_pipe(self):
+        from ..core import crossings as c
+        self.assertAlmostEqual(c.rational_cfs(0.35, 2.0, 100.0), 70.0)
+        d, size = c.pipe_for(70.0, 8.0)
+        self.assertAlmostEqual(d, 12 * math.sqrt(4 * 70 / (math.pi * 8)), places=6)
+        self.assertEqual(size, 42)
+        self.assertIsNone(c.pipe_for(5000.0, 8.0)[1])
+        self.assertAlmostEqual(c.kirpich_tc_min(1000.0, 0.01), 0.0078 * 1000 ** 0.77 * 0.01 ** -0.385)
+
+
 def image(n=300):
     """(green, nir) of a 1 m scene: land (NDWI -0.43), a round pond of 40 m radius at the centre,
     a 4 m wide ditch, a 20 m metal roof (NDWI +0.2 but bright in NIR) and one wet cell."""
@@ -206,6 +359,19 @@ class Water(unittest.TestCase):
         self.assertEqual(n, 2)                     # the roof is not dark in NIR
         _l, n = wt.water_patches(idx, 0.6, 1, 50, 0.0, None)
         self.assertEqual(n, 0)                     # the threshold is yours
+
+    def test_persistence_keeps_the_pond_drops_a_wet_year(self):
+        g, nir, pond = image()
+        g2, nir2 = g.copy(), nir.copy()
+        field = np.zeros(pond.shape, bool)
+        field[200:260, 150:280] = True                     # flooded in one year only
+        g2[field], nir2[field] = 60.0, 20.0
+        gt = (0, 1, 0, 300, 0, -1)
+        mean, share, _gt = wt.persistence([({2: g, 4: nir}, gt, 2, 4), ({2: g2, 4: nir2}, gt, 2, 4),
+                                           ({2: g, 4: nir}, gt, 2, 4)])
+        lab, n = wt.water_patches(share, 0.5, 1, 50, 10.0, None)
+        self.assertEqual(n, 1)
+        self.assertGreater((lab > 0)[pond].mean(), 0.97)
 
     def test_patch_stats(self):
         g, nir, pond = image()

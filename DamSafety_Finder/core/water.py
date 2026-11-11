@@ -83,6 +83,32 @@ def water_patches(index, threshold=0.15, open_px=1, min_px=50, min_width_px=0.0,
     return remap[lab], int(keep.sum())
 
 
+def persistence(reads, threshold=0.15, nir_frac=0.25):
+    """(mean NDWI, wet share, geotransform) of several images of one grid: reads = [({band:
+    array}, gt, green band, NIR band)]. The wet share of a cell is the share of the images with
+    data there in which it is water (NDWI >= threshold and dark in NIR); NaN where none has data."""
+    wet = cnt = idx_sum = None
+    gt = None
+    for bands, gtk, gb, nb in reads:
+        gt = gtk
+        idx = ndwi(bands[gb], bands[nb])
+        ok = np.isfinite(idx)
+        w = ok & (idx >= threshold)
+        if nir_frac:
+            w &= dark_in_nir(bands[nb], idx, nir_frac)
+        if wet is None:
+            wet = np.zeros(idx.shape)
+            cnt = np.zeros(idx.shape)
+            idx_sum = np.zeros(idx.shape)
+        wet += w
+        cnt += ok
+        idx_sum += np.where(ok, idx, 0.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        share = np.where(cnt > 0, wet / np.maximum(cnt, 1), np.nan)
+        mean = np.where(cnt > 0, idx_sum / np.maximum(cnt, 1), np.nan)
+    return mean, share, gt
+
+
 def patch_stats(labels, n, index, mapped=None):
     """Per patch 1..n: (cells, mean NDWI, share of its cells on a mapped water body) as arrays
     indexed by label (index 0 unused). `mapped` is a bool grid of the mapped water bodies."""

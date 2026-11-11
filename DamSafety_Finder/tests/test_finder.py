@@ -170,6 +170,72 @@ class Runs(unittest.TestCase):
         self.assertEqual(res["rows"][0]["status"], "new")
 
 
+    def test_dem_drainage_alone_finds_the_fills(self):
+        res = self.f.run_embankments(self.dem, None, self.out, roads=self.roads,
+                                     known=[(self.known, "DWR dams", None)], match_ft=200.0,
+                                     drainage_ac=2.0, drain_cell=6.0, hillshade=False, log=lambda *_: None)
+        kinds = sorted(r["kind"] for r in res["rows"])
+        self.assertEqual(kinds, ["dam", "dry embankment", "road fill"])
+        self.assertTrue(all(r["line_source"] == "DEM drainage" for r in res["rows"]))
+        ds = ogr.Open(self.out)
+        self.assertEqual(ds.GetLayerByName("spillways").GetFeatureCount(), 3)
+
+    def test_ridges_and_dugouts_layers(self):
+        res = self.f.run_embankments(self.dem, self.streams, self.out, roads=self.roads, ridges=True,
+                                     dugouts=True, hillshade=False, log=lambda *_: None)
+        ds = ogr.Open(self.out)
+        self.assertIsNotNone(ds.GetLayerByName("ridges"))
+        self.assertIsNotNone(ds.GetLayerByName("dugouts"))
+        # the three fills are fills, not also ridges
+        self.assertEqual(len(res["ridges"]), 0, res["ridges"])
+
+    def test_crossing_pipe_size(self):
+        res = self.f.run_crossings(self.roads, self.streams, self.out, dem=self.dem, drain_cell=6.0,
+                                   log=lambda *_: None)
+        r = res["rows"][0]
+        self.assertGreater(r["drainage_ac"], 10.0)
+        self.assertAlmostEqual(r["q_cfs"], 0.35 * 2.0 * r["drainage_ac"], delta=0.2)
+        self.assertTrue(r["pipe_size"].endswith("in round") or r["pipe_size"].startswith("box"))
+
+    def test_nwi_codes(self):
+        self.assertEqual(self.f.nwi_modifiers("PUBHx"), "x")
+        self.assertEqual(self.f.nwi_modifiers("L1UBHh"), "h")
+        self.assertEqual(self.f.nwi_modifiers("PEM1/SS1Cd"), "d")
+        self.assertEqual(self.f.nwi_modifiers("PEM1C"), "")
+        self.assertEqual(self.f.nwi_modifiers("excavated"), "")
+
+    def test_osm_structures(self):
+        osm = os.path.join(self.tmp, "t.osm")
+        with open(osm, "w") as fh:
+            fh.write('<?xml version="1.0" encoding="UTF-8"?><osm version="0.6">'
+                     '<node id="1" lat="47.0" lon="-97.4" version="1"><tag k="waterway" v="dam"/>'
+                     '<tag k="name" v="Test Dam"/></node>'
+                     '<node id="2" lat="47.001" lon="-97.401" version="1"/>'
+                     '<node id="3" lat="47.002" lon="-97.401" version="1"/>'
+                     '<node id="4" lat="47.03" lon="-97.42" version="1"><tag k="amenity" v="school"/></node>'
+                     '<way id="10" version="1"><nd ref="2"/><nd ref="3"/><tag k="tunnel" v="culvert"/>'
+                     '<tag k="waterway" v="stream"/></way></osm>')
+        src = self.f.osm_structures(osm, self.out, log=lambda *_: None)
+        rows = self.f.read_rows(src)
+        self.assertEqual(sorted(r["kind"] for r in rows), ["culvert", "dam"])
+        kn = self.f.read_known([src])
+        self.assertEqual(len(kn), 2)
+
+    def test_score_run(self):
+        from . import test_core as c
+        rows = c.Score().rows()
+        for i, r in enumerate(rows):
+            r.update({"x": X0 + 100.0 * i, "y": Y0, "find_id": "FIND-{}".format(i), "kind": "dam",
+                      "lat": 0.0, "lon": 0.0})
+        self.f.write_points(self.out, "embankments", self.f.EMB_FIELDS, rows)
+        res = self.f.run_score([self.out + "|layername=embankments"], os.path.join(self.tmp, "s.gpkg"),
+                               log=lambda *_: None)
+        self.assertGreater(res["cv_auc"], 0.8)
+        self.assertTrue(os.path.exists(res["model_path"]))
+        res2 = self.f.run_embankments(self.dem, self.streams, self.out, model=res["model_path"],
+                                      hillshade=False, log=lambda *_: None)
+        self.assertTrue(all(0.0 <= r["score"] <= 1.0 for r in res2["rows"]))
+
     # -------------------------------------------------------------------------------- water --
     def write_image(self, path, epsg=5070):
         g, nir, _pond = tc.image()
@@ -192,8 +258,19 @@ class Runs(unittest.TestCase):
 
     def test_water_from_a_file(self):
         img = self.write_image(os.path.join(self.tmp, "img.tif"))
-        res = self.f.run_water(img, self.out, cell=1.0, green_band=2, nir_band=4, log=lambda *_: None)
-        self.assertEqual(len(res["rows"]), 1, res["rows"])
+        logs = []
+        res = self.f.run_water(img, self.out, cell=1.0, green_band=2, nir_band=4, log=logs.append)
+        if len(res["rows"]) != 1:                     # say why (GDAL / numpy versions differ)
+            box = self.f._image_box(img)
+            bands, gt = self.f.read_bands(img, box, 1.0, (2, 4))
+            from ..core import water as wt
+            idx = wt.ndwi(bands[2], bands[4])
+            logs.append("box {} gt {} shape {} green {} nir {} ndwi>=0.15 {} dark {} patches {}".format(
+                box, gt, idx.shape, np.nanpercentile(bands[2], [1, 50, 99]),
+                np.nanpercentile(bands[4], [1, 50, 99]), int(np.nansum(idx >= 0.15)),
+                int(wt.dark_in_nir(bands[4], idx).sum()),
+                wt.water_patches(idx, 0.15, 1, 50, 10.0, wt.dark_in_nir(bands[4], idx))[1]))
+        self.assertEqual(len(res["rows"]), 1, "\n".join(str(x) for x in logs))
         r = res["rows"][0]
         self.assertAlmostEqual(r["area_ac"], math.pi * 40 ** 2 / 4046.8564224, delta=0.06)
         self.assertEqual(r["mapped"], "no")
@@ -246,6 +323,23 @@ class Runs(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.f.fetch_imageserver(url, box, 1.0, os.path.join(self.tmp, "bad"),
                                      opener=lambda u: b"<html>error</html>", log=lambda *_: None)
+
+    def test_water_several_years(self):
+        a = self.write_image(os.path.join(self.tmp, "a.tif"))
+        b = os.path.join(self.tmp, "b.tif")
+        self.write_image(b)
+        ds = gdal.Open(b, 1)                                  # year b: a flooded field as well
+        for band, v in ((2, 60), (4, 20)):
+            arr = ds.GetRasterBand(band).ReadAsArray()
+            arr[200:260, 150:280] = v
+            ds.GetRasterBand(band).WriteArray(arr)
+        ds = None
+        one = self.f.run_water(b, self.out, log=lambda *_: None)
+        self.assertEqual(len(one["rows"]), 2)
+        res = self.f.run_water([(a, 2, 4), (b, 2, 4), (a, 2, 4)], self.out, log=lambda *_: None)
+        self.assertEqual(len(res["rows"]), 1)
+        self.assertEqual(res["rows"][0]["images"], 3)
+        self.assertAlmostEqual(res["rows"][0]["wet_share"], 1.0, delta=0.05)
 
     def test_water_needs_a_nir_band(self):
         img = self.write_image(os.path.join(self.tmp, "img.tif"))

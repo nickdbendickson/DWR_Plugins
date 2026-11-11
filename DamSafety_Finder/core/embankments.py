@@ -27,6 +27,11 @@ WHAT IT LOOKS FOR
      (the LiDAR cannot see under water: a pool surface counts as ground). A pool that reaches the
      edge of the analysis window is marked "open" (its storage is a lower bound).
 
+  5. SPILLWAY: where the water first gets out at the spill level - the cells that join the pool
+     to the ground below when the water rises a few centimetres above it. On the fill on the
+     stream line = it overtops there (or a pipe / notch through the crest); beside it = an
+     auxiliary spillway, a saddle or the end of the fill. Its width is the length of that sill.
+
   A road or rail mask (rasterised road / rail centrelines, given by the caller) tells a road fill
   from an embankment with no road on it. Kinds:
     dam                    holds water (head) and no road / rail on it
@@ -102,6 +107,10 @@ class Embankment:
     notes: list = field(default_factory=list)
     toe_xy: tuple = None
     up_xy: tuple = None
+    spill_xy: tuple = None              # where the pool first gets out (the spillway / saddle)
+    spill_width_m: float = 0.0
+    spill_dist_m: float = 0.0           # from the crest point on the line
+    line_src: str = ""                  # set by the caller (stream line / DEM drainage)
 
 
 def _need_scipy():
@@ -235,6 +244,61 @@ def pool_at(win, u, level, cell):
     return vol, float(m.sum() * cell * cell), edge
 
 
+def _steps(seed, inside, limit):
+    """Steps (8-connected, through `inside` only) from the cells of `seed`; -1 = not reached."""
+    st = np.ones((3, 3), bool)
+    dist = np.full(seed.shape, -1, dtype=np.int32)
+    cur = ndi.binary_dilation(seed, structure=st) & inside
+    reached = cur.copy()
+    k = 1
+    while cur.any() and k <= limit:
+        dist[cur] = k
+        nxt = ndi.binary_dilation(cur, structure=st) & inside & ~reached
+        reached |= nxt
+        cur = nxt
+        k += 1
+    return dist
+
+
+def spill_point(win, u, d, spill, tol=0.02, limit=400):
+    """((row, col), sill width in cells) of where the pool of u at the `spill` level gets out to
+    the ground of d when the water rises a little (max(3 tol, 5 cm)) above it: the middle of the
+    shortest way from the pool to the ground below through the cells that rise floods; None when
+    the pool does not join d."""
+    g = np.where(np.isfinite(win), win, np.inf)
+    lo, _n = ndi.label(g < spill)
+    if lo[u] == 0:
+        return None
+    pool = lo == lo[u]
+    hi, _n = ndi.label(g < spill + max(3.0 * tol, 0.05))
+    if hi[u] == 0 or hi[u] != hi[d]:
+        return None
+    below = (lo == lo[d]) if lo[d] else np.zeros(g.shape, bool)
+    band = (hi == hi[u]) & ~pool & ~below
+    if not below.any():
+        below = np.zeros(g.shape, bool)
+        below[d] = True
+    if not band.any():
+        return None
+    br, bc = np.nonzero(band)
+    r0, r1 = max(0, br.min() - 1), min(g.shape[0], br.max() + 2)
+    c0, c1 = max(0, bc.min() - 1), min(g.shape[1], bc.max() + 2)
+    band, pool, below = band[r0:r1, c0:c1], pool[r0:r1, c0:c1], below[r0:r1, c0:c1]
+    dp = _steps(pool, band, limit)
+    db = _steps(below, band, limit)
+    ok = (dp > 0) & (db > 0)
+    if not ok.any():
+        return None
+    tot = np.where(ok, dp + db, np.iinfo(np.int32).max)
+    best = int(tot.min())
+    sill = ok & (tot <= best + 1) & (dp == 1)               # the pool's edge of the way out
+    if not sill.any():
+        sill = ok & (tot <= best + 1)
+    rr, cc = np.nonzero(sill)
+    k = int(np.argmin((rr - rr.mean()) ** 2 + (cc - cc.mean()) ** 2))
+    return (int(rr[k]) + r0, int(cc[k]) + c0), int(sill.sum())
+
+
 def flat_pool_area(win, u, up_level, flat_tol, cell):
     """(area m2, share of its rim that is lower) of the ground within flat_tol of up_level
     connected to u. A water surface in a hydro-flattened DEM is flat and every cell round it is
@@ -346,12 +410,22 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None):
                              "lower (height is a minimum)")
                 low = True
             x, y = cell_xy(gt, *rc)
+            sp = spill_point(win, u, d, spill, p.level_tol_m)
+            spill_xy, sw, sdist = None, 0.0, 0.0
+            if sp is not None:
+                spill_xy = cell_xy(gt, sp[0][0] + r0, sp[0][1] + c0)
+                sw = sp[1] * cell
+                sdist = math.hypot(spill_xy[0] - x, spill_xy[1] - y)
+                if sdist > 30.0:
+                    notes.append("the water gets out {:.0f} ft from the fill on the line (a "
+                                 "spillway, a saddle or the end of the fill)".format(sdist / FT))
             found.append(Embankment(
                 x=x, y=y, kind=kind, on_road=on_road, crest_m=crest, spill_m=spill, toe_m=toe,
                 up_m=up, height_m=height, crest_height_m=crest - toe, head_m=head, valley_drop_m=valley, len_m=(e - s) * cell, storage_m3=storage,
                 pool_area_m2=parea, pool=pool, open_pool=open_pool,
                 confidence="low" if low else "medium",
-                line=li, notes=notes, toe_xy=cell_xy(gt, *cells[kd]), up_xy=cell_xy(gt, *cells[ku])))
+                line=li, notes=notes, toe_xy=cell_xy(gt, *cells[kd]), up_xy=cell_xy(gt, *cells[ku]),
+                spill_xy=spill_xy, spill_width_m=sw, spill_dist_m=sdist))
     return dedupe(found, p.dedupe_m)
 
 

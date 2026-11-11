@@ -34,3 +34,10 @@ IMAGE_SERVICES = [
 WATER_HELP = ("Layers: the pack's 3DHP_waterbodies (or NHD / NWI) as the mapped water bodies. The "
               "'water' polygons with mapped = no are the ponds no layer has: give them to 'Find ponds "
               "and dugouts' as its water bodies to ask the LiDAR whether each is held above the ground.")
+OSM_HELP = ("Use the Geofabrik North Dakota extract the offline pack's OpenStreetMap step downloads "
+            "(north-dakota-latest.osm.pbf). The pack's OSM_crossings layer (culverts, fords, rail "
+            "bridges) can be given to the crossings tool as it is; this tool adds the dams, weirs and "
+            "dikes. Give the output to the other tools as a known-structure layer.")
+# The fill score model shipped with the plugin (core/score.py; learned from DWR-listed dams on
+# southwest ND LiDAR). The Find fills tool uses it when no other model is given.
+DEFAULT_MODEL = "models/nd_fill_score_2026-11.json"

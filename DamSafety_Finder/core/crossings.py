@@ -8,6 +8,13 @@ structure near it is a culvert nobody has on a list.
 
 Segments are put in a bucket grid so a county of roads against a county of streams is not every
 pair. Crossings closer than `dedupe_m` (a divided road, a line digitised twice) are one.
+
+EXPECTED PIPE SIZE (with a DEM): the drainage area above each crossing and its longest flow path
+(core/terrain.py), the Kirpich time of concentration, the rational-method peak flow Q = C i A for
+YOUR runoff coefficient C and rainfall intensity i (NOAA Atlas 14 at that duration and the design
+return period), and the round pipe that carries Q flowing full at YOUR velocity. An order of
+magnitude for screening - the rational method is meant for small areas (about 200 acres); above
+that use a regional regression (USGS StreamStats) - not a hydraulic design.
 """
 import math
 
@@ -88,3 +95,25 @@ def dedupe(rows, dist_m):
             keep.append(r)
             grid.setdefault((bx, by), []).append(r)
     return keep
+
+
+# --------------------------------------------------------------------- expected pipe size --
+PIPE_SIZES_IN = (18, 24, 30, 36, 42, 48, 54, 60, 66, 72, 84, 96, 108, 120)
+
+
+def kirpich_tc_min(length_ft, slope):
+    """Kirpich (1940) time of concentration, minutes: 0.0078 L^0.77 S^-0.385 (L ft, S ft/ft)."""
+    s = max(float(slope), 1e-4)
+    return 0.0078 * max(float(length_ft), 1.0) ** 0.77 * s ** -0.385
+
+
+def rational_cfs(c, intensity_in_hr, area_ac):
+    """Rational-method peak flow Q = C i A (cfs, with i in in/hr and A in acres)."""
+    return float(c) * float(intensity_in_hr) * float(area_ac)
+
+
+def pipe_for(q_cfs, v_fps):
+    """(diameter needed to carry q_cfs flowing full at v_fps, inches; the next standard round pipe
+    size, or None when even the largest is too small: a box culvert or a bridge)."""
+    d_in = 12.0 * math.sqrt(4.0 * max(q_cfs, 0.0) / (math.pi * max(v_fps, 0.1)))
+    return d_in, next((s for s in PIPE_SIZES_IN if s >= d_in), None)

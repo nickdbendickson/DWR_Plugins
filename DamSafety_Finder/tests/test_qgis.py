@@ -1,4 +1,4 @@
-"""The four Finder tools through processing.run in a real QGIS (offscreen), on the synthetic
+"""The Finder tools through processing.run in a real QGIS (offscreen), on the synthetic
 valley of test_finder.py. Skips without QGIS.
 
     QT_QPA_PLATFORM=offscreen python -m <plugin folder>.tests.test_qgis
@@ -54,7 +54,7 @@ class Tools(tf.Runs):
     def test_registered(self):
         reg = QgsApplication.processingRegistry()
         names = sorted(a.name() for a in reg.providerById(self.pid).algorithms())
-        self.assertEqual(names, ["crossings", "embankments", "ponds", "water"])
+        self.assertEqual(names, ["crossings", "embankments", "osm", "ponds", "score", "water"])
 
     def test_embankments_tool(self):
         from osgeo import ogr
@@ -77,7 +77,7 @@ class Tools(tf.Runs):
         from osgeo import ogr
         from .. import brand
         img = self.write_image(os.path.join(self.tmp, "img.tif"))
-        self.run_alg("water", {"SOURCE": len(brand.IMAGE_SERVICES), "IMAGE": img, "GREEN": 2, "NIR": 4,
+        self.run_alg("water", {"SOURCE": [len(brand.IMAGE_SERVICES)], "IMAGE": img, "GREEN": 2, "NIR": 4,
                                "MAPPED": self.pond_layer(), "OUT": self.out})
         ds = ogr.Open(self.out)
         f = ds.GetLayerByName("water").GetNextFeature()
@@ -86,7 +86,22 @@ class Tools(tf.Runs):
     def test_water_service_needs_an_extent(self):
         from qgis.core import QgsProcessingException
         with self.assertRaises(QgsProcessingException):
-            self.run_alg("water", {"SOURCE": 0, "OUT": self.out})
+            self.run_alg("water", {"SOURCE": [0], "OUT": self.out})
+
+    def test_embankments_tool_dem_only(self):
+        from osgeo import ogr
+        self.run_alg("embankments", {"DEM": self.dem, "ROADS": self.roads, "DRAIN_AC": 2.0,
+                                     "DUGOUTS": True, "RIDGES": True, "OUT": self.out, "HILLSHADE": False})
+        ds = ogr.Open(self.out)
+        self.assertEqual(ds.GetLayerByName("embankments").GetFeatureCount(), 3)
+
+    def test_crossings_tool_with_dem(self):
+        from osgeo import ogr
+        self.run_alg("crossings", {"ROADS": self.roads, "STREAMS": self.streams, "DEM": self.dem,
+                                   "OUT": self.out})
+        ds = ogr.Open(self.out)
+        f = ds.GetLayerByName("crossings").GetNextFeature()
+        self.assertGreater(f.GetField("drainage_ac"), 0)
 
     def test_memory_layer_is_refused(self):
         from qgis.core import QgsProcessingException, QgsVectorLayer

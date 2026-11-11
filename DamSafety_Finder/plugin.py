@@ -1,9 +1,11 @@
-"""QGIS side of the Finder: four Processing tools around finder.py (Finder 0.1).
+"""QGIS side of the Finder: six Processing tools around finder.py (Finder 0.1).
 
     embankments  Find fills across streams (dams, dry dams, road fills)   finder.run_embankments
     ponds        Find ponds and dugouts in a water-body layer              finder.run_ponds
     crossings    Find road / rail x stream crossings (culverts)            finder.run_crossings
     water        Find open water in aerial imagery (pond outlines)          finder.run_water
+    osm          Dams / dikes / culverts of an OpenStreetMap file           finder.osm_structures
+    score        Score fills by how much they look like the listed dams     finder.run_score
 
 The provider id and names come from brand.py (the file that differs between DamSafety Finder
 and DamIT Finder). Input layers must be file-based (GeoPackage, shapefile, ...): the runs
@@ -13,6 +15,7 @@ from qgis.core import (Qgis, QgsApplication, QgsCoordinateReferenceSystem, QgsPr
                        QgsProcessingAlgorithm, QgsProcessingException, QgsProcessingParameterBoolean,
                        QgsProcessingParameterString,
                        QgsProcessingParameterEnum, QgsProcessingParameterExtent,
+                       QgsProcessingParameterFile,
                        QgsProcessingParameterField, QgsProcessingParameterFileDestination,
                        QgsProcessingParameterMultipleLayers, QgsProcessingParameterNumber,
                        QgsProcessingParameterRasterLayer, QgsProcessingParameterVectorLayer,
@@ -149,7 +152,7 @@ class FindEmbankments(_Base):
         return "embankments"
 
     def displayName(self):
-        return "Find fills across streams (dams, dry dams, road fills)"
+        return "Find fills across streams and draws (dams, dry dams, road fills, dugouts)"
 
     def shortHelpString(self):
         return (em.__doc__.split("Every threshold")[0].strip().replace("\n\n", "<br><br>")
@@ -161,7 +164,8 @@ class FindEmbankments(_Base):
         self.addParameter(QgsProcessingParameterRasterLayer("DEM", "Bare-earth DEM (LiDAR; a file or a VRT)"))
         self.addParameter(QgsProcessingParameterEnum("Z_UNIT", "DEM elevation unit", Z_UNITS, defaultValue=0))
         self.addParameter(QgsProcessingParameterVectorLayer(
-            "STREAMS", "Stream lines (3DHP / NHD flowlines)", [SRC_LINE]))
+            "STREAMS", "Stream lines (3DHP / NHD flowlines; optional with the DEM drainage lines)",
+            [SRC_LINE], optional=True))
         self.addParameter(QgsProcessingParameterVectorLayer(
             "ROADS", "Road centrelines (optional: tells a road fill from a dam)", [SRC_LINE],
             optional=True))
@@ -177,6 +181,20 @@ class FindEmbankments(_Base):
         self._num("MAX_LEN_FT", "Longest fill along the stream (ft; YOUR value)", round(p.max_len_m / FT, 0), 10.0)
         self._num("TOE_FT", "Toe search distance below the fill (ft)", round(p.toe_search_m / FT, 0), 10.0)
         self._num("WINDOW_FT", "Half-width of the spill / storage window (ft)", round(p.window_m / FT, 0), 100.0)
+        self._num("DRAIN_AC", "Also walk every draw of the DEM draining at least (acres; 0 = only the "
+                  "stream lines; YOUR value)", 10.0, 0.0)
+        self.addParameter(QgsProcessingParameterBoolean(
+            "DUGOUTS", "Also look for dug pits (dugouts) anywhere in the DEM", True))
+        self.addParameter(QgsProcessingParameterBoolean(
+            "RIDGES", "Also look for raised ridges (levees, dikes, off-channel embankments) anywhere "
+            "in the DEM - a review list: farm pads, spoil banks and natural ridges pass too", False))
+        import os
+        dm = getattr(brand, "DEFAULT_MODEL", None)
+        dm = os.path.join(os.path.dirname(__file__), dm) if dm else None
+        self.addParameter(QgsProcessingParameterFile(
+            "MODEL", "Score model (optional; from 'Score fills by how much they look like the listed "
+            "dams'{})".format("; the one shipped was learned on southwest ND" if dm else ""),
+            extension="json", defaultValue=dm if dm and os.path.exists(dm) else None, optional=True))
         self.addParameter(QgsProcessingParameterBoolean(
             "HILLSHADE", "Also write a multi-direction hillshade for the review (<output>_hillshade.tif)", True))
         self.addParameter(QgsProcessingParameterFileDestination(
@@ -194,13 +212,17 @@ class FindEmbankments(_Base):
         out = self.parameterAsFileOutput(params, "OUT", context)
         try:
             res = finder.run_embankments(
-                _src(self, params, "DEM", context), _src(self, params, "STREAMS", context), out,
+                _src(self, params, "DEM", context), _src(self, params, "STREAMS", context, False) or None, out,
                 roads=_src(self, params, "ROADS", context, False) or None,
                 rails=_src(self, params, "RAILS", context, False) or None,
                 known=_known(self, params, context), bbox=_bbox(self, params, context),
                 cell=self.parameterAsDouble(params, "CELL", context), z_feet=_z(self, params, context),
                 params=p, match_ft=self.parameterAsDouble(params, "MATCH_FT", context),
                 hillshade=self.parameterAsBool(params, "HILLSHADE", context),
+                drainage_ac=self.parameterAsDouble(params, "DRAIN_AC", context),
+                dugouts=self.parameterAsBool(params, "DUGOUTS", context),
+                ridges=self.parameterAsBool(params, "RIDGES", context),
+                model=self.parameterAsFile(params, "MODEL", context) or None,
                 log=self._log(feedback), progress=feedback.setProgress, cancelled=feedback.isCanceled)
         except RuntimeError as e:
             raise QgsProcessingException(str(e))
@@ -209,6 +231,11 @@ class FindEmbankments(_Base):
             context.addLayerToLoadOnCompletion(
                 res["hillshade"], context.LayerDetails("Review hillshade", context.project(), "hillshade"))
         self._load(context, out, "embankments", "Fills across streams")
+        self._load(context, out, "spillways", "Where each pool gets out (spillways)")
+        if res.get("dugouts") is not None and self.parameterAsBool(params, "DUGOUTS", context):
+            self._load(context, out, "dugouts", "Dug pits (LiDAR)")
+        if self.parameterAsBool(params, "RIDGES", context):
+            self._load(context, out, "ridges", "Raised ridges (review)")
         self._load(context, out, "screening_dams", "Fills for screening (not listed)")
         return {"OUT": out}
 
@@ -245,6 +272,8 @@ class FindPonds(_Base):
         self._num("ARC", "Embankment pond when at least this much of the shore holds water (degrees; YOUR value)",
                   pp.min_arc_deg, 0.0)
         self._num("DEPTH_FT", "Greatest water depth to assume (ft; YOUR assumption)", round(pp.max_depth_m / FT, 1), 1.0)
+        self._num("DUG_RECT", "A depression whose outline fills this share of its smallest rectangle is "
+                  "a dugout (0-1; YOUR value)", 0.85, 0.0)
         self.addParameter(QgsProcessingParameterBoolean(
             "KEEP_DEP", "Also list natural depressions (prairie potholes)", False))
         self.addParameter(QgsProcessingParameterFileDestination(
@@ -267,6 +296,7 @@ class FindPonds(_Base):
                 min_ac=self.parameterAsDouble(params, "MIN_AC", context),
                 max_ac=self.parameterAsDouble(params, "MAX_AC", context),
                 keep_depressions=self.parameterAsBool(params, "KEEP_DEP", context),
+                dug_rect=self.parameterAsDouble(params, "DUG_RECT", context),
                 match_ft=self.parameterAsDouble(params, "MATCH_FT", context),
                 log=self._log(feedback), progress=feedback.setProgress, cancelled=feedback.isCanceled)
         except RuntimeError as e:
@@ -299,6 +329,13 @@ class FindCrossings(_Base):
         self.addParameter(QgsProcessingParameterVectorLayer(
             "FILLS", "Fills across streams from the first tool (optional: its 'embankments' layer)",
             [SRC_POINT], optional=True))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "DEM", "DEM for the drainage area and the expected pipe size (optional)", optional=True))
+        self.addParameter(QgsProcessingParameterEnum("Z_UNIT", "DEM elevation unit", Z_UNITS, defaultValue=0))
+        self._num("C", "Runoff coefficient C of the rational method (YOUR value)", 0.35, 0.0)
+        self._num("INTENSITY", "Rainfall intensity (in/hr; YOUR value: NOAA Atlas 14 at the time of "
+                  "concentration and your return period)", 2.0, 0.0)
+        self._num("V_FPS", "Velocity in a pipe flowing full (ft/s; YOUR value)", 8.0, 0.5)
         self.addParameter(QgsProcessingParameterFileDestination(
             "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
 
@@ -312,7 +349,11 @@ class FindCrossings(_Base):
                 known=_known(self, params, context),
                 rails=_src(self, params, "RAILS", context, False) or None,
                 bbox=_bbox(self, params, context), fills=_src(self, params, "FILLS", context, False) or None,
-                match_ft=self.parameterAsDouble(params, "MATCH_FT", context), log=self._log(feedback))
+                match_ft=self.parameterAsDouble(params, "MATCH_FT", context),
+                dem=_src(self, params, "DEM", context, False) or None, z_feet=_z(self, params, context),
+                c_runoff=self.parameterAsDouble(params, "C", context),
+                intensity_in_hr=self.parameterAsDouble(params, "INTENSITY", context),
+                v_fps=self.parameterAsDouble(params, "V_FPS", context), log=self._log(feedback))
         except RuntimeError as e:
             raise QgsProcessingException(str(e))
         self._report(feedback, res, "Road / rail x stream crossings")
@@ -336,7 +377,9 @@ class FindWater(_Base):
     def initAlgorithm(self, config=None):
         names = [s[0] for s in brand.IMAGE_SERVICES] + ["The image layer below",
                                                         "The image service address below"]
-        self.addParameter(QgsProcessingParameterEnum("SOURCE", "Imagery", names, defaultValue=0))
+        self.addParameter(QgsProcessingParameterEnum(
+            "SOURCE", "Imagery (pick several years to keep only the water of most of them)", names,
+            allowMultiple=True, defaultValue=[0]))
         self.addParameter(QgsProcessingParameterRasterLayer(
             "IMAGE", "Image layer (4-band or colour-infrared GeoTIFF / VRT; optional)", optional=True))
         self.addParameter(QgsProcessingParameterString(
@@ -356,32 +399,39 @@ class FindWater(_Base):
         self._num("MIN_AC", "Smallest water patch (acres; YOUR value)", 0.05, 0.0)
         self._num("MAX_AC", "Largest water patch (acres; 0 = no limit)", 0.0, 0.0)
         self._num("MIN_WIDTH", "Narrowest water patch (m; drops road and rail ditches)", 10.0, 0.0)
+        self._num("PERSIST", "With several years: water in at least this share of them (0-1; YOUR value)",
+                  0.5, 0.0)
         self.addParameter(QgsProcessingParameterFileDestination(
             "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
 
     def processAlgorithm(self, params, context, feedback):
         from . import finder
         self._feedback = feedback
-        k = self.parameterAsEnum(params, "SOURCE", context)
         green = self.parameterAsInt(params, "GREEN", context)
         nir = self.parameterAsInt(params, "NIR", context)
-        if k < len(brand.IMAGE_SERVICES):
-            _label, image, green, nir = brand.IMAGE_SERVICES[k]
-        elif k == len(brand.IMAGE_SERVICES):
-            image = _src(self, params, "IMAGE", context)
-        else:
-            image = (self.parameterAsString(params, "URL", context) or "").strip()
-            if not finder.is_service(image):
-                raise QgsProcessingException("give an image service address (https://.../ImageServer)")
+        images = []
+        for k in self.parameterAsEnums(params, "SOURCE", context) or [0]:
+            if k < len(brand.IMAGE_SERVICES):
+                _label, src, gb, nb = brand.IMAGE_SERVICES[k]
+                images.append((src, gb, nb))
+            elif k == len(brand.IMAGE_SERVICES):
+                images.append((_src(self, params, "IMAGE", context), green, nir))
+            else:
+                src = (self.parameterAsString(params, "URL", context) or "").strip()
+                if not finder.is_service(src):
+                    raise QgsProcessingException("give an image service address (https://.../ImageServer)")
+                images.append((src, green, nir))
         bbox = _bbox(self, params, context)
-        if finder.is_service(image) and bbox is None:
+        if any(finder.is_service(i[0]) for i in images) and bbox is None:
             raise QgsProcessingException("an image service needs 'Only this area': the state at 1 m is "
                                          "far too much to download")
         out = self.parameterAsFileOutput(params, "OUT", context)
         try:
             res = finder.run_water(
-                image, out, bbox=bbox, cell=self.parameterAsDouble(params, "CELL", context),
-                green_band=green, nir_band=nir,
+                images if len(images) > 1 else images[0][0], out, bbox=bbox,
+                cell=self.parameterAsDouble(params, "CELL", context),
+                green_band=images[0][1], nir_band=images[0][2],
+                persist=self.parameterAsDouble(params, "PERSIST", context),
                 threshold=self.parameterAsDouble(params, "THRESHOLD", context),
                 min_ac=self.parameterAsDouble(params, "MIN_AC", context),
                 max_ac=self.parameterAsDouble(params, "MAX_AC", context),
@@ -395,6 +445,85 @@ class FindWater(_Base):
             res["counts"]["water"], res["counts"]["unmapped"]))
         self._load(context, out, "water", "Open water (aerial imagery)")
         return {"OUT": out}
+
+
+class OsmStructures(_Base):
+    def name(self):
+        return "osm"
+
+    def displayName(self):
+        return "Extract dams, dikes and culverts from OpenStreetMap"
+
+    def shortHelpString(self):
+        from . import finder
+        return (finder.osm_structures.__doc__.strip().replace("\n\n", "<br><br>") + "<br><br>"
+                "Tags read: waterway=dam / weir, man_made=dyke / embankment, tunnel=culvert, ford=yes. "
+                + brand.OSM_HELP)
+
+    def initAlgorithm(self, config=None):
+        self.addParameter(QgsProcessingParameterFile(
+            "OSM", "OpenStreetMap file (.osm.pbf or .osm)", extension=""))
+        self.addParameter(QgsProcessingParameterExtent("EXTENT", "Only this area (empty = all of it)",
+                                                       optional=True))
+        self.addParameter(QgsProcessingParameterFileDestination(
+            "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
+
+    def processAlgorithm(self, params, context, feedback):
+        from . import finder
+        self._feedback = feedback
+        out = self.parameterAsFileOutput(params, "OUT", context)
+        try:
+            finder.osm_structures(self.parameterAsFile(params, "OSM", context), out,
+                                  bbox=_bbox(self, params, context), log=self._log(feedback))
+        except RuntimeError as e:
+            raise QgsProcessingException(str(e))
+        self._load(context, out, "osm_structures", "OpenStreetMap dams, dikes, culverts")
+        return {"OUT": out}
+
+
+class ScoreFills(_Base):
+    def name(self):
+        return "score"
+
+    def displayName(self):
+        return "Score fills by how much they look like the listed dams"
+
+    def shortHelpString(self):
+        from .core import score
+        return score.__doc__.strip().replace("\n\n", "<br><br>")
+
+    def initAlgorithm(self, config=None):
+        self.addParameter(QgsProcessingParameterMultipleLayers(
+            "FILLS", "'embankments' layers from 'Find fills' runs (more areas = a better model)", SRC_POINT))
+        self.addParameter(QgsProcessingParameterString(
+            "WORDS", "A fill is a listed dam when it is listed on a layer whose name holds (comma-separated)",
+            "dam"))
+        self.addParameter(QgsProcessingParameterFile(
+            "MODEL", "Use this score model instead of learning one (optional)", extension="json",
+            optional=True))
+        self.addParameter(QgsProcessingParameterFileDestination(
+            "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
+
+    def processAlgorithm(self, params, context, feedback):
+        from . import finder
+        self._feedback = feedback
+        out = self.parameterAsFileOutput(params, "OUT", context)
+        layers = []
+        for lyr in self.parameterAsLayerList(params, "FILLS", context) or []:
+            if lyr.providerType() != "ogr":
+                raise QgsProcessingException("{} is a '{}' layer: save it to a file first".format(
+                    lyr.name(), lyr.providerType()))
+            layers.append(lyr.source())
+        words = [w.strip() for w in (self.parameterAsString(params, "WORDS", context) or "dam").split(",")
+                 if w.strip()]
+        try:
+            res = finder.run_score(layers, out, positive_words=words or ["dam"],
+                                   model_in=self.parameterAsFile(params, "MODEL", context) or None,
+                                   log=self._log(feedback))
+        except RuntimeError as e:
+            raise QgsProcessingException(str(e))
+        self._load(context, out, "scored_fills", "Fills, scored")
+        return {"OUT": out, "MODEL": res.get("model_path")}
 
 
 class Provider(QgsProcessingProvider):
@@ -413,7 +542,7 @@ class Provider(QgsProcessingProvider):
         return QIcon(os.path.join(os.path.dirname(__file__), "icon.svg"))
 
     def loadAlgorithms(self):
-        for alg in (FindEmbankments(), FindPonds(), FindCrossings(), FindWater()):
+        for alg in (FindEmbankments(), FindPonds(), FindCrossings(), FindWater(), OsmStructures(), ScoreFills()):
             self.addAlgorithm(alg)
 
 
