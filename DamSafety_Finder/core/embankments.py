@@ -14,8 +14,11 @@ WHAT IT LOOKS FOR
      the toe below it (D) are still in separate pools of {ground < L}. Above L the water would get
      round or over the fill. A bank the line wanders onto is not a barrier: U and D join along the
      real channel at about the toe level, so its spill height is ~0 and it is dropped.
-  2. HEIGHT = spill level - toe (the ground the fill stands on, the lowest ground within the toe
-     search distance below it). Below `min_height_m` the hump is not reported.
+  2. HEIGHT = spill level - toe (the ground the fill stands on: the foot of its downstream face).
+     Below `min_height_m` the hump is not reported. CREST HEIGHT = the highest ground of the hump
+     on the stream line - toe: the fill's own height. A dam with a spillway at its normal pool has
+     a spill level at the pool and a crest height near its listed height (Absaraka, DWR-2801:
+     16.4 ft to the spill, 21.3 ft to the crest on the line, 27.5 ft listed from the streambed).
   3. HEAD = upstream level - toe, less the fall the valley itself makes over that distance (the
      slope of the line just above the hump). At least `min_head_m` - or a flat pool surface behind
      the fill (flat ground whose rim is all higher, as a hydro-flattened lake is) - means the fill
@@ -86,6 +89,7 @@ class Embankment:
     toe_m: float
     up_m: float                         # upstream level (ground or flat pool surface)
     height_m: float                     # spill - toe
+    crest_height_m: float               # crest on the line - toe (the fill's own height)
     head_m: float                       # up - toe
     valley_drop_m: float                # the valley's own fall from U to D (upstream slope)
     len_m: float                        # hump length along the line
@@ -344,7 +348,7 @@ def find(dem, gt, lines, road_mask=None, params=None, keep=None):
             x, y = cell_xy(gt, *rc)
             found.append(Embankment(
                 x=x, y=y, kind=kind, on_road=on_road, crest_m=crest, spill_m=spill, toe_m=toe,
-                up_m=up, height_m=height, head_m=head, valley_drop_m=valley, len_m=(e - s) * cell, storage_m3=storage,
+                up_m=up, height_m=height, crest_height_m=crest - toe, head_m=head, valley_drop_m=valley, len_m=(e - s) * cell, storage_m3=storage,
                 pool_area_m2=parea, pool=pool, open_pool=open_pool,
                 confidence="low" if low else "medium",
                 line=li, notes=notes, toe_xy=cell_xy(gt, *cells[kd]), up_xy=cell_xy(gt, *cells[ku])))

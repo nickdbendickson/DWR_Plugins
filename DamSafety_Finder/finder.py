@@ -292,13 +292,14 @@ SCREEN_FIELDS = [("structure_id", "str"), ("dam_name", "str"), ("max_dam_height"
 
 
 def screening_rows(rows, name_of):
-    """Candidates that are not listed, as DWR-style dam records (status 'Candidate')."""
+    """Candidates that are not listed, as DWR-style dam records (status 'Candidate'). The dam
+    height is the fill's crest height over its toe where there is one (a fill), else the height."""
     out = []
     for r in rows:
         if r["status"] == ls.LISTED or not r.get("height_ft"):
             continue
         out.append({"x": r["x"], "y": r["y"], "structure_id": r["find_id"], "dam_name": name_of(r),
-                    "max_dam_height": r.get("height_ft"), "max_pool_vol": r.get("storage_af"),
+                    "max_dam_height": r.get("crest_height_ft") or r.get("height_ft"), "max_pool_vol": r.get("storage_af"),
                     "max_pool_area": r.get("area_ac"), "status": "Candidate",
                     "finder_kind": r.get("kind"), "finder_status": r["status"],
                     "known_id": r.get("known_id"), "latitude": r.get("lat"), "longitude": r.get("lon")})
@@ -323,7 +324,7 @@ def _summary(rows, what):
 # ------------------------------------------------------------------------------ embankments --
 EMB_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("known_id", "str"),
               ("known_layer", "str"), ("known_ft", "float"), ("height_ft", "float"),
-              ("head_ft", "float"), ("valley_drop_ft", "float"), ("spill_ft", "float"),
+              ("crest_height_ft", "float"), ("head_ft", "float"), ("valley_drop_ft", "float"), ("spill_ft", "float"),
               ("crest_ft", "float"), ("toe_ft", "float"), ("length_ft", "float"),
               ("storage_af", "float"), ("area_ac", "float"), ("pool", "str"), ("open_pool", "str"),
               ("on_road", "str"), ("confidence", "str"), ("notes", "str"), ("lat", "float"),
@@ -396,7 +397,8 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
         rows.append({"x": e.x, "y": e.y, "find_id": find_id("FIND", e.x, e.y), "kind": e.kind,
                      "status": st["status"], "known_id": st["known_id"], "known_layer": st["known_src"],
                      "known_ft": None if st["known_m"] is None else round(st["known_m"] / FT, 0),
-                     "height_ft": round(e.height_m / FT, 1), "head_ft": round(e.head_m / FT, 1),
+                     "height_ft": round(e.height_m / FT, 1), "crest_height_ft": round(e.crest_height_m / FT, 1),
+                     "head_ft": round(e.head_m / FT, 1),
                      "valley_drop_ft": round(e.valley_drop_m / FT, 1),
                      "spill_ft": round(e.spill_m / FT, 2), "crest_ft": round(e.crest_m / FT, 2),
                      "toe_ft": round(e.toe_m / FT, 2), "length_ft": round(e.len_m / FT, 0),

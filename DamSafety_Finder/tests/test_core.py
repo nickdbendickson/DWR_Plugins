@@ -56,6 +56,7 @@ class Embankments(unittest.TestCase):
         self.assertEqual([e.kind for e in got], [em.K_DAM, em.K_DRY, em.K_ROAD])
         dam, dry, rd = got
         self.assertAlmostEqual(dam.height_m, 4.0, delta=0.3)
+        self.assertGreaterEqual(dam.crest_height_m, dam.height_m)
         self.assertTrue(dam.pool)
         self.assertGreater(dam.storage_m3, 50 * em.AF_M3)
         self.assertAlmostEqual(dry.height_m, 2.5, delta=0.3)
