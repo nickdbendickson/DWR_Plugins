@@ -41,6 +41,7 @@ import time
 
 import numpy as np
 
+from . import model_terrain                 # 3.17.7
 from . import breach as brmod
 from . import conditioning as cond
 from . import flood as floodmod
@@ -1971,6 +1972,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if not stability["on"] and os.path.exists(marker):
             os.remove(marker)
         par = lfmod.write_inputs(wd, dem, inflow_xy, hyd, lst, inflow_line=inline)
+        if model_terrain.enabled(st):            # 3.17.7: the grid this pass runs on
+            model_terrain.write_lisflood_terrain(dem, wd, log)
         runtime = lfmod.run(wd, par, lst, prog, cancel, log)
         _note_wall(lst, "lisflood" + tag)
         if getattr(lst, "unpatched_used", False):
@@ -2874,6 +2877,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                                  man)
     except Exception as e:      # the manifest is an extra; never lose the run for it
         warnings.append("Could not write the run manifest: {}: {}".format(type(e).__name__, e))
+    if model_terrain.enabled(st):                # 3.17.7: next to the results, for review
+        model_terrain.publish(model_dir, out_folder, log)
     if not st.keep_model_files:
         _clean(model_dir)
     progress(100, "done")
