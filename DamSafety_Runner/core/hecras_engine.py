@@ -913,12 +913,15 @@ def wine_env(d, env=None):
     return e
 
 
-def _run(cmd, cwd, env, timeout, what, ok=None, log=None):
+def _run(cmd, cwd, env, timeout, what, ok=None, log=None, cancel=None):
+    """audit M18 (3.17.7): `cancel` is polled while the Wine step runs (with or without a
+    limit); a cancel stops the process group (wallclock.stop_group) and raises
+    lisflood.Cancelled."""
     log = log or (lambda m: None)
     log("HEC-RAS: " + what)
     try:
         r = wallclock.run(cmd, cwd=cwd, env=env, timeout=timeout, grace=wallclock.grace_s(env),
-                          log=log, what=what)
+                          log=log, what=what, cancel=cancel)
     except subprocess.TimeoutExpired as x:
         stop = getattr(x, "stop", None) or {}
         raise HecRasEngineError("{} did not finish {} (wall clock){}".format(
@@ -1047,14 +1050,18 @@ def omp_stack_text(info):
 
 
 def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None,
-                deadline=None, stop=None, poll_s=2.0, preexec_fn=None):
+                deadline=None, stop=None, poll_s=2.0, preexec_fn=None, cancel=None):
     """RasUnsteady with its output going to `log_path` as it runs (watchable, appended, so the
     lines added here are never overwritten). The timeout is on the wall clock
     (wallclock.Deadline); timeout=None (3.10.48, the default) waits until RasUnsteady exits,
     with no limit. On a timeout, in this order: the timeout is written to run.log and
     log() (before anything that can fail), then the process group gets SIGTERM,
     NDBREACH_HECRAS_KILL_GRACE_S (default 60 s) to exit, then SIGKILL; HecRasTimeout is raised
-    with compute_timeout_message() and .info. `deadline` / `stop` are for the tests."""
+    with compute_timeout_message() and .info. `deadline` / `stop` are for the tests.
+    audit M18 (3.17.7): `cancel` (QGIS feedback / the CLI's Ctrl-C flag) is polled in the same
+    wallclock.wait loop; a cancel stops the process group through wallclock.stop_group (the
+    grace above), notes it in run.log and raises lisflood.Cancelled. No default limit is
+    added: the run stays unbounded unless NDBREACH_HECRAS_TIMEOUT_S is set."""
     log = log or (lambda m: None)
     what, ok = "Linux RasUnsteady", "Finished Unsteady Flow Simulation"
     log("HEC-RAS: " + what)
@@ -1068,7 +1075,15 @@ def _run_logged(cmd, cwd, env, timeout, log_path, sim_hours, estimate, log=None,
     except OSError as e:
         raise HecRasEngineError("{} could not start: {}".format(what, e))
     dl = (deadline or wallclock.Deadline)(timeout, what="RasUnsteady", log=log)
-    rc = wallclock.wait(p, dl, poll_s=poll_s)
+    try:
+        rc = wallclock.wait(p, dl, poll_s=poll_s,
+                            **({"cancel": cancel, "grace": grace, "log": log}
+                               if cancel is not None else {}))
+    except wallclock._cancelled_error():
+        _append(log_path, "[ndbreach] CANCELLED {}: cancel requested; the process group was "
+                "stopped (wallclock.stop_group).".format(
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+        raise
     if rc is None:
         elapsed = dl.elapsed()
         info = dict(dl.summary(), what=what, grace_s=grace, stop=None, stop_error=None)
@@ -1302,7 +1317,8 @@ STEPS = ("terrain", "geometry", "assoc", "props", "ras")
 
 
 def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=None,
-               terrain_tif=None, prj=None, mesh=None, log=None, poll_s=2.0, default_timeout=None):
+               terrain_tif=None, prj=None, mesh=None, log=None, poll_s=2.0, default_timeout=None,
+               cancel=None):
     """Makes the run inputs <name>.p<plan>.tmp.hdf, .b<plan>, .x<plan> in `project_dir`
     (which must be inside the Wine prefix's drive_c, as the chain was proven there).
 
@@ -1321,8 +1337,10 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
     'mesh' (mesh.exe; `mesh` = (area name, seeds csv path), on an existing geometry HDF).
     After every step the expected output is checked (geometry HDF with 2D cells > 0, terrain
     associated, property tables written, run inputs present) and a missing one fails with a
-    clear message even when the program exited 0. Returns {step: seconds}."""
+    clear message even when the program exited 0. Returns {step: seconds}.
+    audit M18 (3.17.7): `cancel` reaches every Wine step and Ras.exe -c (lisflood.Cancelled)."""
     d = d or require(env)
+    ck = {"cancel": cancel} if cancel is not None else {}   # audit M18 (fakes take none)
     e = wine_env(d, env)
     to, _note = timeout_setting(env, default_timeout)      # audit R6: default_timeout unattended
     (log or (lambda m: None))("HEC-RAS preprocess: wall-clock limit per step {} [{}].".format(
@@ -1344,7 +1362,7 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
             os.makedirs(os.path.dirname(terrain_hdf), exist_ok=True)
             _run(wine + [os.path.join(wdir, "terrain.exe"), W(wdir), W(prj), W(terrain_tif),
                          W(os.path.dirname(terrain_hdf)), "Terrain"], wdir, e, to,
-                 "terrain HDF (RasMapperLib, Wine)", ok="OK", log=log)
+                 "terrain HDF (RasMapperLib, Wine)", ok="OK", log=log, **ck)
             if not (os.path.isfile(terrain_hdf) and os.path.getsize(terrain_hdf) > 0):
                 raise HecRasEngineError("HEC-RAS terrain HDF: {} was not written although "
                                         "terrain.exe reported OK.".format(terrain_hdf))
@@ -1359,7 +1377,8 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
                                               os.path.basename(ghdf), st["cells"]))
             else:
                 ras_compile(project_dir, name, plan, d, e, to, log, poll_s,
-                            until=geometry_ready(ghdf), what="geometry HDF with the 2D mesh")
+                            until=geometry_ready(ghdf), what="geometry HDF with the 2D mesh",
+                            **ck)
             st = _require_geometry(ghdf, "geometry (Ras.exe -c pass 1)", **chk)
             (log or (lambda m: None))("HEC-RAS: geometry HDF with {:,} 2D cells".format(
                 st["cells"]))
@@ -1367,7 +1386,7 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
         elif s == "mesh":
             area, seeds = mesh
             _run(wine + [os.path.join(wdir, "mesh.exe"), W(ghdf), area, "csv", W(seeds)], wdir, e,
-                 to, "2D mesh (RasMapperLib, Wine)", log=log)
+                 to, "2D mesh (RasMapperLib, Wine)", log=log, **ck)
             _require_geometry(ghdf, "2D mesh (mesh.exe)", **chk)
         elif s == "complete":
             if not os.path.isfile(ghdf):
@@ -1377,21 +1396,24 @@ def preprocess(project_dir, name, plan="01", geom="01", d=None, env=None, steps=
                     .format(os.path.basename(ghdf)))
             _run(wine + [os.path.join(wdir, "drv.exe"), W(wdir), "complete", W(ghdf),
                          W(os.path.join(project_dir, name + ".rasmap"))], wdir, e, to,
-                 "geometry HDF from the text geometry (RasMapperLib, Wine)", ok="OK", log=log)
+                 "geometry HDF from the text geometry (RasMapperLib, Wine)", ok="OK", log=log,
+                 **ck)
             _require_geometry(ghdf, "geometry completion (drv.exe complete)", **chk)
         elif s == "assoc":
             _require_geometry(ghdf, "terrain association: input", **chk)
             _run(wine + [os.path.join(wdir, "drv.exe"), W(wdir), "assoc", W(ghdf), W(terrain_hdf)],
-                 wdir, e, to, "terrain association (RasMapperLib, Wine)", ok="OK", log=log)
+                 wdir, e, to, "terrain association (RasMapperLib, Wine)", ok="OK", log=log,
+                 **ck)
             _require_geometry(ghdf, "terrain association (drv.exe assoc)", need_terrain=True,
                               **chk)
         elif s == "props":
             _require_geometry(ghdf, "2D property tables: input", **chk)
             _run(wine + [os.path.join(wdir, "drv.exe"), W(wdir), "props", W(ghdf)], wdir, e, to,
-                 "2D property tables (RasMapperLib, Wine)", ok="tables complete", log=log)
+                 "2D property tables (RasMapperLib, Wine)", ok="tables complete", log=log,
+                 **ck)
             _require_geometry(ghdf, "2D property tables (drv.exe props)", need_props=True, **chk)
         elif s == "ras":
-            ras_compile(project_dir, name, plan, d, e, to, log, poll_s)
+            ras_compile(project_dir, name, plan, d, e, to, log, poll_s, **ck)
         else:
             raise HecRasEngineError("unknown preprocess step " + repr(s))
         times[s] = round(time.time() - t0, 1)
@@ -1494,10 +1516,13 @@ def geometry_ready(ghdf):
 
 
 def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0, until=None,
-                what=None):
+                what=None, cancel=None):
     """Ras.exe -c through a .bat (Wine mangles quoted arguments otherwise); stopped
     (wineserver -k) as soon as `until()` is true - by default: the run inputs exist and
-    RasUnsteady.exe has started. A HEC-RAS data-errors file is reported in the error."""
+    RasUnsteady.exe has started. A HEC-RAS data-errors file is reported in the error.
+    audit M18 (3.17.7): a true `cancel()` (e.g. while HEC's Terms and Conditions dialog
+    waits) raises lisflood.Cancelled; the finally below stops Ras.exe, the hook and
+    wineserver as on every other exit."""
     log = log or (lambda m: None)
     inputs_ok = (lambda: all(os.path.exists(p) and os.path.getsize(p) > 0
                              for p in run_inputs(project_dir, name, plan)))
@@ -1542,6 +1567,9 @@ def ras_compile(project_dir, name, plan, d, e, timeout, log=None, poll_s=2.0, un
                 raise HecRasEngineError("the TCU hook {} could not start: {}".format(tcu, x))
         while not dl.expired():
             time.sleep(max(0.01, min(poll_s, dl.remaining())))
+            if cancel is not None and cancel():
+                log("HEC-RAS: cancel requested; stopping Ras.exe -c.")
+                raise wallclock._cancelled_error()("cancelled")
             if until():
                 time.sleep(2.0 if final else 0.0)
                 done = True
@@ -1708,12 +1736,13 @@ def record_limit(dam_folder, lim, log=None):
 
 
 def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=None,
-            limit=None, default_timeout=None):
+            limit=None, default_timeout=None, cancel=None):
     """Official Linux RasUnsteady on the preprocessed inputs; returns the results HDF path
     (<name>.p<plan>.hdf in work_dir, default <project>/linux_run). The wall-clock limit is
     compute_timeout(): none unless NDBREACH_HECRAS_TIMEOUT_S is a positive number (3.10.48),
     else `default_timeout` (audit R6: BATCH_TIMEOUT_S for an unattended run); it is logged,
-    and a dict passed as `limit` gets limit_record()."""
+    and a dict passed as `limit` gets limit_record(). audit M18 (3.17.7): `cancel` stops
+    RasUnsteady (wallclock.stop_group) and raises lisflood.Cancelled."""
     d = d or require(env)
     log = log or (lambda m: None)
     work = work_dir or os.path.join(project_dir, "linux_run")
@@ -1756,7 +1785,8 @@ def compute(project_dir, name, plan="01", d=None, env=None, work_dir=None, log=N
     try:
         _run_logged(nice + [d["rasunsteady"], tmp, "x" + plan], work, e, timeout,
                     os.path.join(work, "run.log"), pt["sim_hours"], est, log=log,
-                    preexec_fn=raise_stack_limit if stack_target is not None else None)
+                    preexec_fn=raise_stack_limit if stack_target is not None else None,
+                    **({"cancel": cancel} if cancel is not None else {}))
     except HecRasTimeout as x:
         x.info.update(estimate_s=est, timeout_how=how, cells=pt["cells"],
                       sim_hours=pt["sim_hours"])
@@ -2162,12 +2192,14 @@ LISFLOOD_PREFIX = "LISFLOOD-FP "
 
 
 def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None,
-              unattended=False):
+              unattended=False, cancel=None):
     """After a LISFLOOD-FP run (workflow.run_dam with TIER_HECRAS): keeps its final rasters
     as 'LISFLOOD-FP <name>', builds, preprocesses and computes the HEC-RAS 2D model, and
     writes the HEC-RAS maxima under FINAL_NAMES on the same grid. Returns {'final': {kind:
     path}, 'warnings': [...], 'hdf': path, 'project': folder}. `unattended` (audit R6): a
-    batch / chain / CLI-batch run, whose wall-clock limit defaults to BATCH_TIMEOUT_S."""
+    batch / chain / CLI-batch run, whose wall-clock limit defaults to BATCH_TIMEOUT_S.
+    audit M18 (3.17.7): `cancel` (fb.cancel / the CLI's Ctrl-C flag) reaches the Wine
+    preprocess and RasUnsteady; a cancel raises lisflood.Cancelled."""
     from . import gdal_io
     log = log or (lambda m: None)
     # 3.10.84: an unknown depth basis (RunSettings.hecras_depth_basis or NDBREACH_HECRAS_
@@ -2196,11 +2228,13 @@ def run_stage(dam_folder, final_paths, writer, st, log=None, env=None, d=None,
     r = write_project(dam_folder, proj, log=log, env=env, options=opts)   # NDBREACH_HECRAS_INFLOW_MODE
     name = r["model"].name
     dflt = unattended_default(unattended)                  # audit R6
+    ck = {"cancel": cancel} if cancel is not None else {}   # audit M18
     times = preprocess(proj, name, d=d, env=env, terrain_tif=r["paths"]["terrain_tif"],
-                       prj=r["paths"]["projection"], log=log, default_timeout=dflt)
+                       prj=r["paths"]["projection"], log=log, default_timeout=dflt, **ck)
     lim = {}
     try:
-        hdf = compute(proj, name, d=d, env=env, log=log, limit=lim, default_timeout=dflt)
+        hdf = compute(proj, name, d=d, env=env, log=log, limit=lim, default_timeout=dflt,
+                      **ck)
     except HecRasTimeout as x:
         x.info = record_timeout(dam_folder, dict(x.info, project=proj), log=log)
         raise

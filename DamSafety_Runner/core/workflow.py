@@ -4023,7 +4023,8 @@ class HecRasStageError(Exception):
     LISFLOOD-FP results stay in the dam folder)."""
 
 
-def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattended=False):
+def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattended=False, *,
+                     cancel=None):
     """3.10.66: the HEC-RAS 2D stage after workflow.run_dam (Models = LISFLOOD-FP then
     HEC-RAS 2D), shared by 'Run breach model for one dam', the batch and the ndbreach CLI
     (both used to skip it): runs hecras_engine.run_stage, puts its final rasters in `res.final`, adds its warnings and
@@ -4034,14 +4035,21 @@ def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattend
     (which runs ndbreach:batch): the HEC-RAS wall clock then defaults to
     hecras_engine.BATCH_TIMEOUT_S (12 h) per compute and per preprocess step when
     NDBREACH_HECRAS_TIMEOUT_S gives none, so one stuck dam cannot hold the queue for ever. A
-    single interactive run keeps no limit unless the variable is set."""
+    single interactive run keeps no limit unless the variable is set.
+
+    audit M18 (3.17.7) `cancel` (keyword-only; `engine` stays the 7th positional): a callable
+    (fb.cancel in QGIS, the Ctrl-C flag in the CLI) handed to hecras_engine.run_stage, which
+    polls it during the Wine preprocess and RasUnsteady; a cancel stops the process group and
+    raises lfmod.Cancelled (not a HecRasStageError) for the caller's existing cancel path.
+    No default wall-clock limit is added (the 3.10.48 decision stands)."""
     if engine is None:
         from . import hecras_engine as engine
+    kw = {"cancel": cancel} if cancel is not None else {}
     try:
         if unattended:
-            hr = engine.run_stage(folder, res.final, writer, st, log, unattended=True)
+            hr = engine.run_stage(folder, res.final, writer, st, log, unattended=True, **kw)
         else:
-            hr = engine.run_stage(folder, res.final, writer, st, log)
+            hr = engine.run_stage(folder, res.final, writer, st, log, **kw)
     except engine.HecRasEngineError as e:
         raise HecRasStageError("HEC-RAS 2D stage failed (the LISFLOOD-FP results are in the "
                                "dam folder): {}".format(e))

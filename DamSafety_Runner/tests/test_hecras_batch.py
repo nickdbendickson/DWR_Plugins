@@ -98,7 +98,13 @@ def batch_algorithm_runs_the_hecras_stage():
     assert "except HecRasTierError as e:\n                        raise QgsProcessingException" \
         in batch
     one = src.split("class RunDamAlgorithm(", 1)[1].split("\nclass ", 1)[0]
-    assert "hecras_tier_stage(folder, res, writer, st, dam_xy, fb.log)" in one
+    # audit M18: the single run hands Cancel to the HEC-RAS stage and turns a Cancelled into
+    # a clean "Cancelled" (hecras_tier_stage sits outside run_dam's try)
+    assert "hecras_tier_stage(folder, res, writer, st, dam_xy, fb.log, cancel=fb.cancel)" in one
+    i_stage = one.index("hecras_tier_stage(folder, res, writer, st, dam_xy, fb.log")
+    tail = one[i_stage:i_stage + 400]
+    assert tail.index("except Cancelled:") < tail.index("except HecRasTierError")
+    assert "unattended=True, cancel=fb.cancel)" in batch
     # audit R6: the batch is unattended (12 h default wall clock); the single run is not
     assert "unattended=True" in batch and "unattended=True" not in one
 

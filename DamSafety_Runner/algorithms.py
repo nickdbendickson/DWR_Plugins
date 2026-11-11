@@ -1888,8 +1888,10 @@ class RunDamAlgorithm(_Base):
             feedback.pushWarning("Models = LISFLOOD-FP then HEC-RAS 2D: the final rasters come "
                                  "from HEC-RAS 2D; the LISFLOOD-FP ones are kept as "
                                  "'LISFLOOD-FP \u2026'.")
-            try:
-                hecras_tier_stage(folder, res, writer, st, dam_xy, fb.log)
+            try:                                     # audit M18: Cancel stops HEC-RAS too
+                hecras_tier_stage(folder, res, writer, st, dam_xy, fb.log, cancel=fb.cancel)
+            except Cancelled:
+                raise QgsProcessingException("Cancelled")
             except HecRasTierError as e:
                 raise QgsProcessingException(str(e))
         for w in res.warnings:
@@ -2307,7 +2309,7 @@ class BatchAlgorithm(_Base):
                                           dam_id, _hecras_batch_limit_text()))
                     try:                                 # audit R6: unattended -> 12 h default
                         hecras_tier_stage(folder, res, writer, st, (xy.x(), xy.y()), fb.log,
-                                          unattended=True)
+                                          unattended=True, cancel=fb.cancel)   # audit M18
                     except HecRasTierError as e:
                         raise QgsProcessingException(str(e))
                 s = res.summary
