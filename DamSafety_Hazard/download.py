@@ -333,6 +333,23 @@ def _prime_ellipsoids(*acronyms):
 # study area" (the dam is then classified Low from nothing). The jobs hand layers back, so each layer is
 # re-created here, in the calling thread, from its file (memory layers are copied) before anyone uses it.
 _ORPHANS = []      # worker-thread layers: kept alive so Python never deletes them from the wrong thread
+# audit M02 (2.24.5), interim and diagnostic only: _ORPHANS is never trimmed or freed here (freeing a
+# parked layer from another thread touches the ended worker thread's PROJ state - a crash risk worse
+# than the memory it holds). Every ORPHANS_LOG_EVERY parked layers one line is logged, so a long
+# one-after-another batch that runs out of memory says why. WORKERS > 1 avoids it: each dam runs in
+# its own qgis_process child and its parked layers end with it.
+ORPHANS_LOG_EVERY = 500
+
+
+def _note_orphans(n):
+    """Logs once each time the parked-layer count reaches a multiple of ORPHANS_LOG_EVERY."""
+    if n <= 0 or n % ORPHANS_LOG_EVERY:
+        return
+    log_message("{} parked worker-thread layers are held in memory in this QGIS session (each "
+                "keeps its downloaded features; they cannot be freed safely - see download.py "
+                "_ORPHANS). A long batch with WORKERS = 1 keeps adding to them; use WORKERS > 1 "
+                "(each dam in its own process) or restart QGIS between long batches."
+                .format(n), MSG_WARNING)
 
 
 def _adopt_layer(lyr):
@@ -357,6 +374,10 @@ def _adopt_layer(lyr):
             if not new.crs().isValid():
                 new.setCrs(QgsCoordinateReferenceSystem(authid))
         _ORPHANS.append(lyr)
+        try:
+            _note_orphans(len(_ORPHANS))             # audit M02: diagnostic only, frees nothing
+        except Exception:
+            pass
         return new
     except Exception:
         return lyr
