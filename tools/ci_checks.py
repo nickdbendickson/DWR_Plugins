@@ -52,7 +52,8 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGINS = ("DamSafety_Hazard", "DamSafety_Runner", "DamSafety_Screening",
-           "DamSafety_Data", "DamSafety_Setup", "DamSafety_PMP", "DamSafety_HazardLite")
+           "DamSafety_Data", "DamSafety_Setup", "DamSafety_PMP", "DamSafety_HazardLite",
+           "DamSafety_Finder")
 CORE = "DamSafety_Core"                       # the one copy of the shared code (Core 1.0.0)
 CORE_VERSIONS = os.path.join(CORE, "damsuite", "versions.py")
 # plugins whose damsuite/ is the shim onto the Core (Setup's used to be a three-module mini copy)
@@ -83,7 +84,11 @@ DAMSUITE_SHIM_CODE = ("from DamSafety_Core import alias as _alias", "_alias.inst
 IDENTICAL_ACROSS_PLUGINS = {
     "crest_rule.py": ("DamSafety_Runner", "DamSafety_Screening"),  # one top-of-dam number for both
     # Runner 3.10.43 / Screening 0.17.35: gdal.Warp without the source overviews (-ovr NONE)
-    "core/warp_opts.py": ("DamSafety_Runner", "DamSafety_Screening"),
+    "core/warp_opts.py": ("DamSafety_Runner", "DamSafety_Screening", "DamSafety_Finder"),
+    # Finder 0.1.0: the pond engine of Screening tool 16, so a pond is classed the same way by
+    # the tool that finds it and the tool that screens it
+    "core/ponds.py": ("DamSafety_Screening", "DamSafety_Finder"),
+    "core/storage.py": ("DamSafety_Screening", "DamSafety_Finder"),
     # Runner 3.10.89 / Screening 0.17.50: one rule for the elevation unit a DEM records (the
     # Runner's 'Detect from the raster' and what Download DEM tags)
     "core/dem_zunit.py": ("DamSafety_Runner", "DamSafety_Screening"),

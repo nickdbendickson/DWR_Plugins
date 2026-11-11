@@ -1,0 +1,173 @@
+"""Finder runs on files (GDAL / OGR + numpy + scipy; no QGIS): a synthetic valley written as a
+GeoTIFF with a dam, a dry embankment and a road fill, stream / road / known-structure layers in
+another CRS, and the three runs end to end.
+
+    python -m <plugin folder>.tests.test_finder
+"""
+import os
+import shutil
+import tempfile
+import unittest
+
+import numpy as np
+
+try:
+    from osgeo import gdal, ogr, osr
+except ImportError:                                   # pragma: no cover
+    gdal = None
+
+from . import test_core as tc
+
+X0, Y0 = 100000.0, 2700000.0                          # EPSG:5070 origin of the synthetic grid
+
+
+def srs(epsg):
+    s = osr.SpatialReference()
+    s.ImportFromEPSG(epsg)
+    if hasattr(s, "SetAxisMappingStrategy"):
+        s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    return s
+
+
+def write_dem(path, dem, feet=False):
+    drv = gdal.GetDriverByName("GTiff")
+    ds = drv.Create(path, dem.shape[1], dem.shape[0], 1, gdal.GDT_Float32)
+    ds.SetGeoTransform((X0, tc.CELL, 0.0, Y0 + dem.shape[0] * tc.CELL, 0.0, -tc.CELL))
+    ds.SetProjection(srs(5070).ExportToWkt())
+    b = ds.GetRasterBand(1)
+    b.SetNoDataValue(-9999.0)
+    b.WriteArray(np.where(np.isfinite(dem), dem / (0.3048 if feet else 1.0), -9999.0))
+    if feet:
+        b.SetUnitType("ft")
+    ds = None
+
+
+def write_layer(path, name, geoms, epsg=4326, fields=()):
+    """geoms: [(wkt in EPSG:5070, {field: value})]; written in `epsg`."""
+    drv = ogr.GetDriverByName("GPKG")
+    ds = ogr.Open(path, 1) if os.path.exists(path) else drv.CreateDataSource(path)
+    lyr = ds.CreateLayer(name, srs(epsg), ogr.wkbUnknown)
+    for f in fields:
+        lyr.CreateField(ogr.FieldDefn(f, ogr.OFTString))
+    ct = osr.CoordinateTransformation(srs(5070), srs(epsg))
+    for wkt, attrs in geoms:
+        g = ogr.CreateGeometryFromWkt(wkt)
+        g.Transform(ct)
+        f = ogr.Feature(lyr.GetLayerDefn())
+        f.SetGeometry(g)
+        for k, v in attrs.items():
+            f.SetField(k, v)
+        lyr.CreateFeature(f)
+    ds = None
+    return "{}|layername={}".format(path, name)
+
+
+def gx(col):
+    return X0 + col
+
+
+def gy(row_from_top_m):
+    return Y0 + tc.N * tc.CELL - row_from_top_m
+
+
+def row_y(row):
+    return gy((row + 0.5) * tc.CELL)
+
+
+@unittest.skipIf(gdal is None, "no GDAL (osgeo) in this Python")
+class Runs(unittest.TestCase):
+    def setUp(self):
+        from .. import finder
+        self.f = finder
+        self.tmp = tempfile.mkdtemp(prefix="finder_")
+        dem, _road = tc.scene()
+        self.dem = os.path.join(self.tmp, "dem.tif")
+        write_dem(self.dem, dem)
+        self.vec = os.path.join(self.tmp, "in.gpkg")
+        x = gx(tc.XS)
+        self.streams = write_layer(self.vec, "streams", [
+            ("LINESTRING ({} {}, {} {})".format(x, gy(1.0), x, gy(tc.N * tc.CELL - 1.0)), {})])
+        self.roads = write_layer(self.vec, "roads", [
+            ("LINESTRING ({} {}, {} {})".format(gx(0), row_y(320), gx(tc.N * tc.CELL), row_y(320)), {})],
+            epsg=26914)
+        # the dry embankment is on the DWR list (60 ft off), the dam (590 ft away) is not; an NBI
+        # culvert at the road
+        self.known = write_layer(self.vec, "dwr_dams", [
+            ("POINT ({} {})".format(x + 18.0, row_y(260)), {"structure_id": "4031"})],
+            fields=("structure_id",))
+        self.culverts = write_layer(self.vec, "nbi", [
+            ("POINT ({} {})".format(x + 10.0, row_y(320)), {"STRUCTURE_NUMBER_008": "9117181"})],
+            fields=("STRUCTURE_NUMBER_008",))
+        self.out = os.path.join(self.tmp, "out.gpkg")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def emb(self, **kw):
+        return self.f.run_embankments(self.dem, self.streams, self.out, roads=self.roads,
+                                      known=[(self.known, "DWR dams", None)], match_ft=200.0,
+                                      log=lambda *_: None, **kw)
+
+    def test_embankments(self):
+        res = self.emb()
+        by = {r["kind"]: r for r in res["rows"]}
+        self.assertEqual(set(by), {"dam", "dry embankment", "road fill"})
+        self.assertEqual(by["dam"]["status"], "new")
+        self.assertEqual(by["dry embankment"]["status"], "listed")
+        self.assertEqual(by["dry embankment"]["known_id"], "4031")
+        self.assertAlmostEqual(by["dam"]["height_ft"], 4.0 / 0.3048, delta=1.0)
+        self.assertEqual(by["road fill"]["on_road"], "yes")
+        self.assertTrue(os.path.exists(res["csv"]))
+        ds = ogr.Open(self.out)
+        self.assertEqual(ds.GetLayerByName("embankments").GetFeatureCount(), 3)
+        # Screening hand-off: the dam (new); the road fill holds no water; the listed one is left out
+        sd = ds.GetLayerByName("screening_dams")
+        self.assertEqual(sd.GetFeatureCount(), 1)
+        f = sd.GetNextFeature()
+        self.assertEqual(f.GetField("status"), "Candidate")
+        self.assertTrue(f.GetField("structure_id").startswith("FIND-"))
+        self.assertGreater(f.GetField("max_pool_vol"), 50.0)
+        hs = gdal.Open(res["hillshade"])
+        self.assertEqual(hs.GetRasterBand(1).DataType, gdal.GDT_Byte)
+        self.assertGreater(hs.GetRasterBand(1).ComputeRasterMinMax(False)[1], 0)
+
+    def test_tiles_give_the_same_answer(self):
+        one = sorted((r["find_id"], r["kind"]) for r in self.emb()["rows"])
+        many = sorted((r["find_id"], r["kind"]) for r in self.emb(tile_m=300.0, hillshade=False)["rows"])
+        self.assertEqual(one, many)
+
+    def test_dem_in_feet(self):
+        dem, _r = tc.scene()
+        write_dem(self.dem, dem, feet=True)
+        by = {r["kind"]: r for r in self.emb()["rows"]}
+        self.assertAlmostEqual(by["dam"]["height_ft"], 4.0 / 0.3048, delta=1.0)
+
+    def test_ponds(self):
+        pool = tc.bed(200) + 3.0
+        dem, _r = tc.scene()
+        cols = np.where(np.abs(dem[150] - pool) < 1e-6)[0]          # the flat pool on row 150
+        x0, x1 = gx(cols.min() * tc.CELL), gx((cols.max() + 1) * tc.CELL)
+        y0, y1 = row_y(196) - 1.5, row_y(150)
+        wkt = "POLYGON (({a} {c}, {b} {c}, {b} {d}, {a} {d}, {a} {c}))".format(a=x0, b=x1, c=y0, d=y1)
+        wb = write_layer(self.vec, "waterbodies", [(wkt, {"ftype": "LakePond"})], fields=("ftype",))
+        res = self.f.run_ponds(wb, self.dem, self.out, known=[self.known], cell=3.0, max_ac=0,
+                               type_field="ftype", log=lambda *_: None)
+        self.assertEqual(len(res["rows"]), 1, res)
+        r = res["rows"][0]
+        self.assertEqual(r["kind"], "embankment pond")
+        self.assertEqual(r["status"], "new")
+        self.assertTrue(r["find_id"].startswith("POND-"))
+
+    def test_crossings_with_fills(self):
+        self.emb()
+        res = self.f.run_crossings(self.roads, self.streams, self.out, known=[self.culverts],
+                                   fills=self.out + "|layername=embankments", log=lambda *_: None)
+        self.assertEqual(len(res["rows"]), 1)
+        r = res["rows"][0]
+        self.assertEqual((r["status"], r["known_id"], r["fill_kind"]), ("listed", "9117181", "road fill"))
+        res = self.f.run_crossings(self.roads, self.streams, self.out, log=lambda *_: None)
+        self.assertEqual(res["rows"][0]["status"], "new")
+
+
+if __name__ == "__main__":
+    unittest.main()

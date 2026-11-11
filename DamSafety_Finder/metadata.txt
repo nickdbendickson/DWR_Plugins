@@ -1,0 +1,21 @@
+[general]
+name=DamSafety Finder
+qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
+supportsQt6=True
+description=Finds dams, dry dams, road fills, ponds, dugouts and road / rail stream crossings in LiDAR and hydrography that are not on the DWR, NID or bridge / culvert lists.
+about=Three Processing tools (Processing Toolbox > DamSafety Finder > Find structures). Fills across streams: walks the 3DHP / NHD flowlines over a bare-earth DEM and reports every fill that blocks the valley (spill level, height, head, storage, pool), as a dam, dry embankment or road fill. Ponds and dugouts: the Screening tool 16 pond engine over a water-body layer. Crossings: every road / rail x stream crossing, the places a culvert or bridge must be. Every candidate is checked against the known-structure layers you give (DWR dams, dugouts, Unknown Structures, NID, NBI, NDDOT, USGS / SARP crossings): listed, unsure or new. The not-listed dams and ponds are also written as DWR-style dam records (status Candidate) that DamSafety Screening tool 1 reads. Screening aid: check every candidate against an aerial image; the Department makes the determination.
+version=0.1.0
+plugin_dependencies=DamSafety Core
+icon=damit.svg
+author=N.D. Bendickson
+repository=https://github.com/nickdbendickson/dAmIt_Plugins
+tracker=https://github.com/nickdbendickson/dAmIt_Plugins/issues
+homepage=https://github.com/nickdbendickson/dAmIt_Plugins
+category=Analysis
+tags=dam,dam safety,lidar,culvert,pond,processing
+experimental=True
+hasProcessingProvider=yes
+changelog=
+    0.1.0 - 2026-11-11
+      * First version (Nick, 2026-11-11: find dams, ponds and culverts that are not listed). Three Processing tools: Find fills across streams (core/embankments.py, new), Find ponds and dugouts (core/ponds.py + core/storage.py, the Screening tool 16 engine, kept identical by tools/ci_checks.py), Find road and rail crossings of streams (core/crossings.py). Listed / unsure / new against the known-structure layers (core/listed.py). Multi-direction review hillshade. Tests: tests/test_core.py (synthetic terrain), tests/test_finder.py (GDAL end to end), tests/test_qgis.py (real QGIS, the three tools through processing.run).

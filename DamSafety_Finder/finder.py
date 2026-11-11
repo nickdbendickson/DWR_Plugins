@@ -1,0 +1,611 @@
+"""Finder runs on files: GDAL / OGR + numpy, no QGIS (Finder 0.1).
+
+The Processing tools (plugin.py) only gather their parameters and call these three functions, so
+the same runs work from a script or qgis_process and are tested without QGIS:
+
+    run_embankments(dem, streams, out, ...)   fills across streams in the DEM (core/embankments.py)
+    run_ponds(waterbodies, dem, out, ...)     embankment ponds and dugouts (core/ponds.py)
+    run_crossings(roads, streams, out, ...)   road / rail x stream crossings (core/crossings.py)
+
+Each writes a GeoPackage (EPSG:5070 points, plus lon / lat fields) and a CSV beside it, and
+checks every candidate against the known-structure layers given (core/listed.py): status
+listed / unsure / new, with the nearest known id, its layer and the distance.
+A layer argument is a path, optionally "path|layername=name". Distances and heights are written
+in feet, storage in acre-feet, areas in acres (the US practice); the engine works in metres.
+
+GDAL's exception mode is never switched (it is process-wide in QGIS): every call is checked.
+"""
+import csv
+import math
+import os
+import time
+import zlib
+
+import numpy as np
+from osgeo import gdal, ogr, osr
+
+from .core import crossings as cx
+from .core import embankments as em
+from .core import listed as ls
+from .core import ponds as pd
+from .core import warp_opts as wo
+
+WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
+FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
+VERSION = "0.1.0"
+
+
+# ------------------------------------------------------------------------------------- GDAL --
+def _checked(res, what):
+    if res is None:
+        msg = (gdal.GetLastErrorMsg() or "").strip()
+        raise RuntimeError("{} failed{}".format(what, ": " + msg if msg else ""))
+    return res
+
+
+def _srs(epsg):
+    s = osr.SpatialReference()
+    s.ImportFromEPSG(int(epsg))
+    if hasattr(s, "SetAxisMappingStrategy"):
+        s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    return s
+
+
+def _split(src):
+    path, _, rest = str(src).partition("|")
+    layer = None
+    for part in rest.split("|"):
+        if part.startswith("layername="):
+            layer = part[len("layername="):]
+    return path, layer
+
+
+def open_layer(src):
+    """(datasource, layer) of 'path' or 'path|layername=name' (the first layer when no name)."""
+    path, name = _split(src)
+    try:
+        ds = ogr.Open(path, 0)
+    except RuntimeError as e:
+        raise RuntimeError("OGR cannot open {}: {}".format(path, e)) from None
+    _checked(ds, "opening {}".format(path))
+    lyr = ds.GetLayerByName(name) if name else ds.GetLayer(0)
+    _checked(lyr, "layer {} of {}".format(name or 0, path))
+    return ds, lyr
+
+
+def _transform(lyr, dst):
+    src = lyr.GetSpatialRef()
+    if src is None:
+        raise RuntimeError("layer {} has no CRS".format(lyr.GetName()))
+    src = src.Clone()
+    if hasattr(src, "SetAxisMappingStrategy"):
+        src.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    return osr.CoordinateTransformation(src, dst)
+
+
+def _parts(geom):
+    """Flat list of single geometries of a (multi / collection) geometry."""
+    n = geom.GetGeometryCount()
+    t = ogr.GT_Flatten(geom.GetGeometryType())
+    if t in (ogr.wkbMultiLineString, ogr.wkbMultiPolygon, ogr.wkbMultiPoint, ogr.wkbGeometryCollection):
+        out = []
+        for i in range(n):
+            out.extend(_parts(geom.GetGeometryRef(i)))
+        return out
+    return [geom]
+
+
+def read_lines(src, bbox=None):
+    """[[(x, y), ...]] in EPSG:5070 of every line part of a layer; bbox (xmin, ymin, xmax, ymax in
+    EPSG:5070) keeps the lines whose box meets it."""
+    if not src:
+        return []
+    ds, lyr = open_layer(src)
+    ct = _transform(lyr, _srs(WORK_EPSG))
+    out = []
+    for f in lyr:
+        g = f.GetGeometryRef()
+        if g is None:
+            continue
+        g = g.Clone()
+        g.Transform(ct)
+        for p in _parts(g):
+            if ogr.GT_Flatten(p.GetGeometryType()) != ogr.wkbLineString:
+                continue
+            pts = [(p.GetX(i), p.GetY(i)) for i in range(p.GetPointCount())]
+            if len(pts) < 2:
+                continue
+            if bbox is not None:
+                xs, ys = [q[0] for q in pts], [q[1] for q in pts]
+                if max(xs) < bbox[0] or min(xs) > bbox[2] or max(ys) < bbox[1] or min(ys) > bbox[3]:
+                    continue
+            out.append(pts)
+    ds = None
+    return out
+
+
+def _id_of(f, id_field):
+    names = [f.GetFieldDefnRef(i).GetName() for i in range(f.GetFieldCount())]
+    want = [id_field] if id_field else []
+    want += ["structure_id", "structure_", "nidid", "nid_id", "dam_id", "federal_id", "STRUCTURE_NUMBER_008",
+             "BRIDGE_ID", "id", "ID", "name"]
+    low = {n.lower(): n for n in names}
+    for w in want:
+        n = low.get(str(w).lower())
+        if n is not None and f.GetField(n) not in (None, ""):
+            return str(f.GetField(n))
+    return "fid {}".format(f.GetFID())
+
+
+def read_known(layers):
+    """core.listed.Known of every feature of the known-structure layers: [(src, label, id field)]
+    or plain paths. Points as they are; lines and polygons by their centroid (a DWR dam line)."""
+    pts = []
+    dst = _srs(WORK_EPSG)
+    for item in layers or []:
+        if isinstance(item, (tuple, list)):
+            src, label, idf = (list(item) + [None, None])[:3]
+        else:
+            src, label, idf = item, None, None
+        if not src:
+            continue
+        ds, lyr = open_layer(src)
+        label = label or lyr.GetName()
+        ct = _transform(lyr, dst)
+        for f in lyr:
+            g = f.GetGeometryRef()
+            if g is None:
+                continue
+            g = g.Clone()
+            g.Transform(ct)
+            c = g if ogr.GT_Flatten(g.GetGeometryType()) == ogr.wkbPoint else g.Centroid()
+            if c is None or c.IsEmpty():
+                continue
+            pts.append((c.GetX(), c.GetY(), _id_of(f, idf), label))
+        ds = None
+    return ls.Known(pts)
+
+
+def dem_in_feet(dem):
+    """True when the DEM's band records feet as its unit ('ft', 'foot', 'US survey foot')."""
+    ds = _checked(gdal.Open(str(dem)), "opening the DEM {}".format(dem))
+    unit = (ds.GetRasterBand(1).GetUnitType() or "").strip().lower()
+    return unit in ("ft", "foot", "feet", "us survey foot", "us_survey_foot", "ftus", "us-ft")
+
+
+def warp_dem(dem, ext, cell, z_feet=None):
+    """(array m, NaN = no data; geotransform) of the DEM over ext (EPSG:5070) at cell metres,
+    averaged from the full-resolution cells (no overviews), values as stored (no vertical shift).
+    z_feet None = from the band's unit (metres when it records none)."""
+    if z_feet is None:
+        z_feet = dem_in_feet(dem)
+    n_x = max(1, int(math.ceil((ext[2] - ext[0]) / cell)))
+    n_y = max(1, int(math.ceil((ext[3] - ext[1]) / cell)))
+    ds = _checked(gdal.Open(str(dem)), "opening the DEM {}".format(dem))
+    nod = ds.GetRasterBand(1).GetNoDataValue()
+    opts = dict(format="MEM", dstSRS="EPSG:{}".format(WORK_EPSG),
+                outputBounds=(ext[0], ext[1], ext[0] + n_x * cell, ext[1] + n_y * cell),
+                width=n_x, height=n_y, resampleAlg="average", dstNodata=-9999.0,
+                outputType=gdal.GDT_Float32)
+    if nod is not None:
+        opts["srcNodata"] = nod
+    wo.no_vshift(gdal, wo.no_overviews(gdal, opts))
+    out = _checked(gdal.Warp("", ds, **opts), "warping the DEM")
+    a = out.GetRasterBand(1).ReadAsArray().astype("float64")
+    a[(a <= -9998.0) | ~np.isfinite(a)] = np.nan
+    if z_feet:
+        a *= FT
+    return a, out.GetGeoTransform()
+
+
+def write_hillshade(dem, ext, cell, path, z_feet=None, max_cells=400e6):
+    """A multi-direction hillshade (gdaldem hillshade -multidirectional) of the DEM over ext
+    (EPSG:5070) at cell metres, as a compressed Byte GeoTIFF: the review layer under the
+    candidates (a fill parallel to a single sun direction does not show; light from all round
+    shows every embankment and pond rim). Streams through a warped VRT, so a county does not
+    have to fit in memory. None (nothing written) when it would exceed max_cells."""
+    if z_feet is None:
+        z_feet = dem_in_feet(dem)
+    n_x = int(math.ceil((ext[2] - ext[0]) / cell))
+    n_y = int(math.ceil((ext[3] - ext[1]) / cell))
+    if n_x * n_y > max_cells:
+        return None
+    src = _checked(gdal.Open(str(dem)), "opening the DEM {}".format(dem))
+    opts = dict(format="VRT", dstSRS="EPSG:{}".format(WORK_EPSG),
+                outputBounds=(ext[0], ext[1], ext[0] + n_x * cell, ext[1] + n_y * cell),
+                width=n_x, height=n_y, resampleAlg="average", outputType=gdal.GDT_Float32)
+    wo.no_vshift(gdal, wo.no_overviews(gdal, opts))
+    vrt = path + ".src.vrt"
+    _checked(gdal.Warp(vrt, src, **opts), "warping the DEM for the hillshade")
+    try:
+        hs = gdal.DEMProcessing(path, vrt, "hillshade", multiDirectional=True,
+                                zFactor=FT if z_feet else 1.0, computeEdges=True,
+                                creationOptions=["COMPRESS=DEFLATE", "TILED=YES"])
+        _checked(hs, "the hillshade")
+        hs = None
+    finally:
+        try:
+            os.remove(vrt)
+        except OSError:
+            pass
+    return path
+
+
+def layer_extent(lines):
+    """Box of the lines, 1 m larger on each side (a straight north-south line has a box)."""
+    xs = [p[0] for ln in lines for p in ln]
+    ys = [p[1] for ln in lines for p in ln]
+    return (min(xs) - 1.0, min(ys) - 1.0, max(xs) + 1.0, max(ys) + 1.0)
+
+
+def _lonlat(x, y, ct):
+    p = ct.TransformPoint(x, y)
+    return p[0], p[1]
+
+
+# ---------------------------------------------------------------------------------- writing --
+def write_points(path, layer, fields, rows, epsg=WORK_EPSG, overwrite=True):
+    """A point layer of rows (dicts with 'x', 'y' in epsg) in a GeoPackage; fields [(name, type)]
+    with type 'str' / 'float' / 'int'."""
+    drv = _checked(ogr.GetDriverByName("GPKG"), "the GeoPackage driver")
+    ds = ogr.Open(path, 1) if os.path.exists(path) else drv.CreateDataSource(path)
+    _checked(ds, "opening {} for writing".format(path))
+    if ds.GetLayerByName(layer) is not None and overwrite:
+        for i in range(ds.GetLayerCount()):
+            if ds.GetLayer(i).GetName() == layer:
+                ds.DeleteLayer(i)
+                break
+    lyr = _checked(ds.CreateLayer(layer, _srs(epsg), ogr.wkbPoint), "creating layer {}".format(layer))
+    kinds = {"str": ogr.OFTString, "float": ogr.OFTReal, "int": ogr.OFTInteger}
+    for name, t in fields:
+        lyr.CreateField(ogr.FieldDefn(name, kinds[t]))
+    ds.StartTransaction()
+    for r in rows:
+        f = ogr.Feature(lyr.GetLayerDefn())
+        for name, t in fields:
+            v = r.get(name)
+            if v is None or (isinstance(v, float) and not math.isfinite(v)):
+                continue
+            f.SetField(name, {"str": str, "float": float, "int": int}[t](v))
+        g = ogr.Geometry(ogr.wkbPoint)
+        g.AddPoint_2D(float(r["x"]), float(r["y"]))
+        f.SetGeometry(g)
+        lyr.CreateFeature(f)
+    ds.CommitTransaction()
+    ds = None
+
+
+def write_csv(path, fields, rows):
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow([n for n, _ in fields])
+        for r in rows:
+            w.writerow(["" if r.get(n) is None else r.get(n) for n, _ in fields])
+
+
+# Screening hand-off: the DWR export field names DamSafety Screening tool 1 reads
+# (structure_id, dam_name, max_dam_height ft, max_pool_vol ac-ft, max_pool_area ac, status).
+SCREEN_FIELDS = [("structure_id", "str"), ("dam_name", "str"), ("max_dam_height", "float"),
+                 ("max_pool_vol", "float"), ("max_pool_area", "float"), ("status", "str"),
+                 ("finder_kind", "str"), ("finder_status", "str"), ("known_id", "str"),
+                 ("latitude", "float"), ("longitude", "float")]
+
+
+def screening_rows(rows, name_of):
+    """Candidates that are not listed, as DWR-style dam records (status 'Candidate')."""
+    out = []
+    for r in rows:
+        if r["status"] == ls.LISTED or not r.get("height_ft"):
+            continue
+        out.append({"x": r["x"], "y": r["y"], "structure_id": r["find_id"], "dam_name": name_of(r),
+                    "max_dam_height": r.get("height_ft"), "max_pool_vol": r.get("storage_af"),
+                    "max_pool_area": r.get("area_ac"), "status": "Candidate",
+                    "finder_kind": r.get("kind"), "finder_status": r["status"],
+                    "known_id": r.get("known_id"), "latitude": r.get("lat"), "longitude": r.get("lon")})
+    return out
+
+
+def find_id(prefix, x, y):
+    """Stable id from the point rounded to 1 m (the same structure keeps its id between runs)."""
+    return "{}-{:08X}".format(prefix, zlib.crc32("{:.0f},{:.0f}".format(x, y).encode("ascii")) & 0xFFFFFFFF)
+
+
+def _noop(*_a, **_k):
+    return False
+
+
+def _summary(rows, what):
+    c = ls.status_counts(rows)
+    return "{} {}: {} new, {} unsure, {} already listed".format(len(rows), what, c[ls.NEW], c[ls.UNSURE],
+                                                              c[ls.LISTED])
+
+
+# ------------------------------------------------------------------------------ embankments --
+EMB_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("known_id", "str"),
+              ("known_layer", "str"), ("known_ft", "float"), ("height_ft", "float"),
+              ("head_ft", "float"), ("valley_drop_ft", "float"), ("spill_ft", "float"),
+              ("crest_ft", "float"), ("toe_ft", "float"), ("length_ft", "float"),
+              ("storage_af", "float"), ("area_ac", "float"), ("pool", "str"), ("open_pool", "str"),
+              ("on_road", "str"), ("confidence", "str"), ("notes", "str"), ("lat", "float"),
+              ("lon", "float")]
+
+
+def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, bbox=None, cell=3.0,
+                    z_feet=None, params=None, match_ft=500.0, unsure_factor=2.0, tile_m=5000.0,
+                    road_buffer_m=6.0, hillshade=True, log=print, progress=None, cancelled=None):
+    """Fills across the stream lines in the DEM, checked against the known structures, and (with
+    `hillshade`) a multi-direction hillshade of the area beside the GeoPackage for the review.
+    Returns {'rows', 'counts', 'gpkg', 'csv', 'hillshade', ...}."""
+    p = params or em.FinderParams()
+    progress = progress or _noop
+    cancelled = cancelled or _noop
+    lines = read_lines(streams, bbox)
+    if not lines:
+        raise RuntimeError("no stream lines in the area")
+    ext = bbox or layer_extent(lines)
+    road_lines = read_lines(roads, None) + read_lines(rails, None) if (roads or rails) else []
+    kn = read_known(known)
+    log("{} stream line(s), {} road / rail line(s), {} known structure(s)".format(
+        len(lines), len(road_lines), len(kn)))
+    pad = p.window_m + p.toe_search_m + p.max_len_m + 2 * cell
+    tiles = []
+    x = ext[0]
+    while x < ext[2]:
+        y = ext[1]
+        while y < ext[3]:
+            tiles.append((x, y, min(x + tile_m, ext[2]), min(y + tile_m, ext[3])))
+            y += tile_m
+        x += tile_m
+    found, t0 = [], time.time()
+    for ti, core_box in enumerate(tiles):
+        if cancelled():
+            break
+        box = (core_box[0] - pad, core_box[1] - pad, core_box[2] + pad, core_box[3] + pad)
+        tl = [ln for ln in lines if _meets(ln, box)]
+        if not tl:
+            continue
+        z, gt = warp_dem(dem, box, cell, z_feet)
+        if not np.isfinite(z).any():
+            log("tile {}/{}: no DEM data".format(ti + 1, len(tiles)))
+            continue
+        rmask = None
+        if road_lines:
+            rmask = np.zeros(z.shape, bool)
+            for ln in road_lines:
+                if _meets(ln, box):
+                    for r, c in em.line_cells(ln, gt, z.shape):
+                        rmask[r, c] = True
+            k = max(1, int(round(road_buffer_m / cell)))
+            from scipy import ndimage as ndi
+            rmask = ndi.binary_dilation(rmask, iterations=k)
+
+        def keep(xx, yy, b=core_box):
+            return b[0] <= xx < b[2] and b[1] <= yy < b[3]
+
+        got = em.find(z, gt, tl, road_mask=rmask, params=p, keep=keep)
+        found.extend(got)
+        log("tile {}/{}: {} line(s), {} fill(s) ({:.0f} s)".format(ti + 1, len(tiles), len(tl), len(got),
+                                                                  time.time() - t0))
+        progress(100.0 * (ti + 1) / len(tiles))
+    found = em.dedupe(found, p.dedupe_m)
+    ll = osr.CoordinateTransformation(_srs(WORK_EPSG), _srs(4326))
+    rows = []
+    for e in found:
+        st = ls.check(e.x, e.y, kn, match_ft * FT, unsure_factor)
+        lon, lat = _lonlat(e.x, e.y, ll)
+        rows.append({"x": e.x, "y": e.y, "find_id": find_id("FIND", e.x, e.y), "kind": e.kind,
+                     "status": st["status"], "known_id": st["known_id"], "known_layer": st["known_src"],
+                     "known_ft": None if st["known_m"] is None else round(st["known_m"] / FT, 0),
+                     "height_ft": round(e.height_m / FT, 1), "head_ft": round(e.head_m / FT, 1),
+                     "valley_drop_ft": round(e.valley_drop_m / FT, 1),
+                     "spill_ft": round(e.spill_m / FT, 2), "crest_ft": round(e.crest_m / FT, 2),
+                     "toe_ft": round(e.toe_m / FT, 2), "length_ft": round(e.len_m / FT, 0),
+                     "storage_af": round(e.storage_m3 / AF_M3, 2), "area_ac": round(e.pool_area_m2 / AC_M2, 2),
+                     "pool": "yes" if e.pool else "no", "open_pool": "yes" if e.open_pool else "no",
+                     "on_road": "yes" if e.on_road else "no", "confidence": e.confidence,
+                     "notes": "; ".join(e.notes), "lat": round(lat, 6), "lon": round(lon, 6)})
+    rows.sort(key=lambda r: ({"new": 0, "unsure": 1, "listed": 2}[r["status"]], -r["height_ft"]))
+    out_csv = os.path.splitext(out_gpkg)[0] + "_embankments.csv"
+    write_points(out_gpkg, "embankments", EMB_FIELDS, rows)
+    write_csv(out_csv, EMB_FIELDS, rows)
+    dams = screening_rows([r for r in rows if r["kind"] in (em.K_DAM, em.K_DRY, em.K_ROAD_POND)],
+                          lambda r: "{} ({})".format(r["kind"], r["find_id"]))
+    write_points(out_gpkg, "screening_dams", SCREEN_FIELDS, dams, epsg=WORK_EPSG)
+    counts = {"kinds": em.kind_counts(found), "status": ls.status_counts(rows)}
+    log(_summary(rows, "fill(s) across streams"))
+    hs = None
+    if hillshade and not cancelled():
+        w = p.window_m if bbox is None else 0.0             # the stream box plus the search window
+        hs = write_hillshade(dem, (ext[0] - w, ext[1] - w, ext[2] + w, ext[3] + w), cell,
+                             os.path.splitext(out_gpkg)[0] + "_hillshade.tif", z_feet)
+        log("review hillshade (light from all round): {}".format(
+            hs or "not written - the area is too large at this cell size; make one per county"))
+    return {"rows": rows, "counts": counts, "gpkg": out_gpkg, "csv": out_csv, "screening": len(dams),
+            "hillshade": hs, "cancelled": bool(cancelled())}
+
+
+def _meets(line, box):
+    xs = [q[0] for q in line]
+    ys = [q[1] for q in line]
+    return not (max(xs) < box[0] or min(xs) > box[2] or max(ys) < box[1] or min(ys) > box[3])
+
+
+# ------------------------------------------------------------------------------------ ponds --
+POND_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("known_id", "str"),
+               ("known_layer", "str"), ("known_ft", "float"), ("wb_id", "str"), ("wb_type", "str"),
+               ("height_ft", "float"), ("head_ft", "float"), ("freeboard_ft", "float"),
+               ("arc_deg", "float"), ("storage_af", "float"), ("above_grade_af", "float"),
+               ("area_ac", "float"), ("no_flood", "str"), ("pool_method", "str"),
+               ("confidence", "str"), ("notes", "str"), ("lat", "float"), ("lon", "float")]
+
+
+def _rings(geom):
+    """[[outer, hole, ...], ...] of a (multi)polygon, as lists of (x, y)."""
+    polys = []
+    for p in _parts(geom):
+        if ogr.GT_Flatten(p.GetGeometryType()) != ogr.wkbPolygon:
+            continue
+        rings = []
+        for i in range(p.GetGeometryCount()):
+            r = p.GetGeometryRef(i)
+            rings.append([(r.GetX(k), r.GetY(k)) for k in range(r.GetPointCount())])
+        if rings:
+            polys.append(rings)
+    return polys
+
+
+def _rasterize(polys, gt, shape):
+    """Bool grid of the cells whose centre is in any polygon (vectorised even-odd rule)."""
+    h, w = shape
+    xs = gt[0] + (np.arange(w) + 0.5) * gt[1]
+    ys = gt[3] + (np.arange(h) + 0.5) * gt[5]
+    X, Y = np.meshgrid(xs, ys)
+    out = np.zeros(shape, bool)
+    for rings in polys:
+        inside = np.zeros(shape, bool)
+        for ring in rings:
+            r = np.asarray(ring, float)
+            x0, y0 = r[:, 0], r[:, 1]
+            x1, y1 = np.roll(x0, -1), np.roll(y0, -1)
+            for a, b, c, d in zip(x0, y0, x1, y1):
+                if b == d:
+                    continue
+                m = (b > Y) != (d > Y)
+                xc = a + (Y - b) * (c - a) / (d - b)
+                inside ^= m & (X < xc)
+        out |= inside
+    return out
+
+
+def run_ponds(waterbodies, dem, out_gpkg, known=None, bbox=None, cell=2.0, z_feet=None, params=None,
+              id_field=None, type_field=None, dug_words=("excavat", "dugout", "pit"),
+              min_ac=0.1, max_ac=50.0, keep_depressions=False, match_ft=300.0, unsure_factor=2.0,
+              log=print, progress=None, cancelled=None):
+    """Every water-body polygon classed by core/ponds.py (embankment pond / dugout / natural
+    depression) and checked against the known structures. Returns {'rows', 'counts', ...}."""
+    p = params or pd.PondParams()
+    progress = progress or _noop
+    cancelled = cancelled or _noop
+    kn = read_known(known)
+    ds, lyr = open_layer(waterbodies)
+    ct = _transform(lyr, _srs(WORK_EPSG))
+    ll = osr.CoordinateTransformation(_srs(WORK_EPSG), _srs(4326))
+    feats = []
+    for f in lyr:
+        g = f.GetGeometryRef()
+        if g is None:
+            continue
+        g = g.Clone()
+        g.Transform(ct)
+        area = g.GetArea() / AC_M2
+        if area < min_ac or (max_ac and area > max_ac):
+            continue
+        env = g.GetEnvelope()                                      # (xmin, xmax, ymin, ymax)
+        if bbox is not None and (env[1] < bbox[0] or env[0] > bbox[2] or env[3] < bbox[1] or env[2] > bbox[3]):
+            continue
+        c = g.PointOnSurface()
+        wb_id = str(f.GetField(id_field)) if id_field else str(f.GetFID())
+        wb_type = str(f.GetField(type_field) or "") if type_field else ""
+        feats.append((wb_id, wb_type, _rings(g), env, (c.GetX(), c.GetY()), area))
+    ds = None
+    log("{} water bod(ies) between {:g} and {:g} ac, {} known structure(s)".format(
+        len(feats), min_ac, max_ac or float("inf"), len(kn)))
+    rows, results, failed = [], [], 0
+    pad = p.ring_m + 4 * cell
+    for i, (wb_id, wb_type, polys, env, (px, py), area) in enumerate(feats):
+        if cancelled():
+            break
+        box = (env[0] - pad, env[2] - pad, env[1] + pad, env[3] + pad)
+        try:
+            z, gt = warp_dem(dem, box, cell, z_feet)
+            water = _rasterize(polys, gt, z.shape)
+            hint = any(w in wb_type.lower() for w in dug_words) if wb_type else False
+            res = pd.analyze_pond(z, water, cell, params=p, excavated_hint=hint)
+        except (RuntimeError, ValueError) as e:
+            failed += 1
+            log("water body {}: {}".format(wb_id, e))
+            continue
+        if res.pond_type == pd.T_DEPRESSION and not keep_depressions:
+            continue
+        results.append(res)
+        st = ls.check(px, py, kn, match_ft * FT, unsure_factor, polygons=polys)
+        lon, lat = _lonlat(px, py, ll)
+        rows.append({"x": px, "y": py, "find_id": find_id("POND", px, py), "kind": res.pond_type,
+                     "status": st["status"], "known_id": st["known_id"], "known_layer": st["known_src"],
+                     "known_ft": None if st["known_m"] is None else round(st["known_m"] / FT, 0),
+                     "wb_id": wb_id, "wb_type": wb_type,
+                     "height_ft": round(res.height_m / FT, 1) if not res.no_flood else None,
+                     "head_ft": round(res.head_m / FT, 1), "freeboard_ft": round(res.freeboard_m / FT, 1),
+                     "arc_deg": round(res.arc_deg, 0), "storage_af": round(res.total_m3 / AF_M3, 2),
+                     "above_grade_af": round(res.above_grade_m3 / AF_M3, 2), "area_ac": round(area, 2),
+                     "no_flood": "yes" if res.no_flood else "no", "pool_method": res.pool_method,
+                     "confidence": res.confidence, "notes": "; ".join(res.notes + (
+                         [res.no_flood_reason] if res.no_flood_reason else [])),
+                     "lat": round(lat, 6), "lon": round(lon, 6)})
+        progress(100.0 * (i + 1) / max(1, len(feats)))
+    rows.sort(key=lambda r: ({"new": 0, "unsure": 1, "listed": 2}[r["status"]], -(r["storage_af"] or 0)))
+    out_csv = os.path.splitext(out_gpkg)[0] + "_ponds.csv"
+    write_points(out_gpkg, "ponds", POND_FIELDS, rows)
+    write_csv(out_csv, POND_FIELDS, rows)
+    dams = screening_rows([r for r in rows if r["no_flood"] == "no"],
+                          lambda r: "{} {}".format(r["kind"], r["wb_id"]))
+    write_points(out_gpkg, "screening_ponds", SCREEN_FIELDS, dams)
+    log(_summary(rows, "pond(s) and dugout(s)") + (" ({} failed)".format(failed) if failed else ""))
+    return {"rows": rows, "counts": {"kinds": pd.type_counts(results), "status": ls.status_counts(rows)},
+            "gpkg": out_gpkg, "csv": out_csv, "failed": failed, "screening": len(dams),
+            "cancelled": bool(cancelled())}
+
+
+# -------------------------------------------------------------------------------- crossings --
+CROSS_FIELDS = [("find_id", "str"), ("status", "str"), ("known_id", "str"), ("known_layer", "str"),
+                ("known_ft", "float"), ("angle_deg", "float"), ("fill_kind", "str"),
+                ("fill_height_ft", "float"), ("lat", "float"), ("lon", "float")]
+
+
+def run_crossings(roads, streams, out_gpkg, known=None, rails=None, bbox=None, fills=None,
+                  match_ft=250.0, unsure_factor=2.0, fill_ft=200.0, log=print):
+    """Every road / rail x stream crossing, checked against the known bridges / culverts /
+    crossings. `fills`: an embankments layer from run_embankments; the nearest fill within fill_ft
+    is copied (a 'road fill (ponding)' there = the culvert is missing in the DEM, small or
+    blocked). Returns {'rows', 'counts', ...}."""
+    sl = read_lines(streams, bbox)
+    rl = read_lines(roads, bbox) + (read_lines(rails, bbox) if rails else [])
+    kn = read_known(known)
+    hits = cx.find(rl, sl)
+    fk = None
+    if fills:
+        ds, lyr = open_layer(fills)
+        ct = _transform(lyr, _srs(WORK_EPSG))
+        pts = []
+        for f in lyr:
+            g = f.GetGeometryRef().Clone()
+            g.Transform(ct)
+            pts.append((g.GetX(), g.GetY(), "{}|{}".format(f.GetField("kind"), f.GetField("height_ft")), "fill"))
+        ds = None
+        fk = ls.Known(pts)
+    ll = osr.CoordinateTransformation(_srs(WORK_EPSG), _srs(4326))
+    rows = []
+    for h in hits:
+        st = ls.check(h["x"], h["y"], kn, match_ft * FT, unsure_factor)
+        lon, lat = _lonlat(h["x"], h["y"], ll)
+        row = {"x": h["x"], "y": h["y"], "find_id": find_id("XING", h["x"], h["y"]), "status": st["status"],
+               "known_id": st["known_id"], "known_layer": st["known_src"],
+               "known_ft": None if st["known_m"] is None else round(st["known_m"] / FT, 0),
+               "angle_deg": h["angle"], "lat": round(lat, 6), "lon": round(lon, 6)}
+        if fk is not None:
+            near = fk.near(h["x"], h["y"], fill_ft * FT)
+            if near:
+                kind, _, hft = fk.pts[near[0][1]][2].partition("|")
+                row["fill_kind"] = kind
+                try:
+                    row["fill_height_ft"] = float(hft)
+                except ValueError:
+                    pass
+        rows.append(row)
+    rows.sort(key=lambda r: {"new": 0, "unsure": 1, "listed": 2}[r["status"]])
+    out_csv = os.path.splitext(out_gpkg)[0] + "_crossings.csv"
+    write_points(out_gpkg, "crossings", CROSS_FIELDS, rows)
+    write_csv(out_csv, CROSS_FIELDS, rows)
+    log("{} stream line(s), {} road / rail line(s), {} known structure(s)".format(len(sl), len(rl), len(kn)))
+    log(_summary(rows, "road / rail x stream crossing(s)"))
+    return {"rows": rows, "counts": {"status": ls.status_counts(rows)}, "gpkg": out_gpkg, "csv": out_csv}
