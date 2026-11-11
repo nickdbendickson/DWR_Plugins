@@ -1,8 +1,9 @@
-"""QGIS side of the Finder: three Processing tools around finder.py (Finder 0.1).
+"""QGIS side of the Finder: four Processing tools around finder.py (Finder 0.1).
 
     embankments  Find fills across streams (dams, dry dams, road fills)   finder.run_embankments
     ponds        Find ponds and dugouts in a water-body layer              finder.run_ponds
     crossings    Find road / rail x stream crossings (culverts)            finder.run_crossings
+    water        Find open water in aerial imagery (pond outlines)          finder.run_water
 
 The provider id and names come from brand.py (the file that differs between DamSafety Finder
 and DamIT Finder). Input layers must be file-based (GeoPackage, shapefile, ...): the runs
@@ -10,6 +11,7 @@ read them with OGR, outside QGIS's layer objects, and a layer's subset filter is
 """
 from qgis.core import (Qgis, QgsApplication, QgsCoordinateReferenceSystem, QgsProcessing,
                        QgsProcessingAlgorithm, QgsProcessingException, QgsProcessingParameterBoolean,
+                       QgsProcessingParameterString,
                        QgsProcessingParameterEnum, QgsProcessingParameterExtent,
                        QgsProcessingParameterField, QgsProcessingParameterFileDestination,
                        QgsProcessingParameterMultipleLayers, QgsProcessingParameterNumber,
@@ -36,6 +38,9 @@ def _first(*getters):
     raise AttributeError("no spelling of this QGIS enum")
 
 
+INTEGER = _first(lambda: Qgis.ProcessingNumberParameterType.Integer,
+                 lambda: QgsProcessingParameterNumber.Type.Integer,
+                 lambda: QgsProcessingParameterNumber.Integer)
 DOUBLE = _first(lambda: Qgis.ProcessingNumberParameterType.Double,
                 lambda: QgsProcessingParameterNumber.Type.Double,
                 lambda: QgsProcessingParameterNumber.Double)
@@ -315,6 +320,83 @@ class FindCrossings(_Base):
         return {"OUT": out}
 
 
+class FindWater(_Base):
+    def name(self):
+        return "water"
+
+    def displayName(self):
+        return "Find open water in aerial imagery (pond outlines)"
+
+    def shortHelpString(self):
+        from .core import water
+        return (water.__doc__.strip().replace("\n\n", "<br><br>") + "<br><br>" + brand.WATER_HELP
+                + "<br><br>An image service is downloaded for the extent only (tiles are kept beside "
+                "the output and reused). Every threshold is YOUR value.")
+
+    def initAlgorithm(self, config=None):
+        names = [s[0] for s in brand.IMAGE_SERVICES] + ["The image layer below",
+                                                        "The image service address below"]
+        self.addParameter(QgsProcessingParameterEnum("SOURCE", "Imagery", names, defaultValue=0))
+        self.addParameter(QgsProcessingParameterRasterLayer(
+            "IMAGE", "Image layer (4-band or colour-infrared GeoTIFF / VRT; optional)", optional=True))
+        self.addParameter(QgsProcessingParameterString(
+            "URL", "Image service address (ArcGIS .../ImageServer; optional)", optional=True))
+        self.addParameter(QgsProcessingParameterNumber(
+            "GREEN", "Green band of the layer / address (a preset knows its own)", INTEGER, 2, minValue=1))
+        self.addParameter(QgsProcessingParameterNumber(
+            "NIR", "Near-infrared band of the layer / address (a preset knows its own)", INTEGER, 4, minValue=1))
+        self.addParameter(QgsProcessingParameterExtent(
+            "EXTENT", "Only this area (needed for an image service)", optional=True))
+        self.addParameter(QgsProcessingParameterVectorLayer(
+            "MAPPED", "Mapped water bodies (3DHP / NHD waterbodies, NWI; optional)", [SRC_POLYGON],
+            optional=True))
+        self._num("CELL", "Analysis cell size (m)", 1.0, 0.1)
+        self._num("THRESHOLD", "Water when NDWI is at least (YOUR value; check it on a known pond)", 0.15, -1.0)
+        self._num("NIR_FRAC", "and the near-infrared is at most this share of the land's (0 = no test)", 0.25, 0.0)
+        self._num("MIN_AC", "Smallest water patch (acres; YOUR value)", 0.05, 0.0)
+        self._num("MAX_AC", "Largest water patch (acres; 0 = no limit)", 0.0, 0.0)
+        self._num("MIN_WIDTH", "Narrowest water patch (m; drops road and rail ditches)", 10.0, 0.0)
+        self.addParameter(QgsProcessingParameterFileDestination(
+            "OUT", "Output GeoPackage", "GeoPackage (*.gpkg)"))
+
+    def processAlgorithm(self, params, context, feedback):
+        from . import finder
+        self._feedback = feedback
+        k = self.parameterAsEnum(params, "SOURCE", context)
+        green = self.parameterAsInt(params, "GREEN", context)
+        nir = self.parameterAsInt(params, "NIR", context)
+        if k < len(brand.IMAGE_SERVICES):
+            _label, image, green, nir = brand.IMAGE_SERVICES[k]
+        elif k == len(brand.IMAGE_SERVICES):
+            image = _src(self, params, "IMAGE", context)
+        else:
+            image = (self.parameterAsString(params, "URL", context) or "").strip()
+            if not finder.is_service(image):
+                raise QgsProcessingException("give an image service address (https://.../ImageServer)")
+        bbox = _bbox(self, params, context)
+        if finder.is_service(image) and bbox is None:
+            raise QgsProcessingException("an image service needs 'Only this area': the state at 1 m is "
+                                         "far too much to download")
+        out = self.parameterAsFileOutput(params, "OUT", context)
+        try:
+            res = finder.run_water(
+                image, out, bbox=bbox, cell=self.parameterAsDouble(params, "CELL", context),
+                green_band=green, nir_band=nir,
+                threshold=self.parameterAsDouble(params, "THRESHOLD", context),
+                min_ac=self.parameterAsDouble(params, "MIN_AC", context),
+                max_ac=self.parameterAsDouble(params, "MAX_AC", context),
+                min_width_m=self.parameterAsDouble(params, "MIN_WIDTH", context),
+                nir_frac=self.parameterAsDouble(params, "NIR_FRAC", context),
+                mapped=_src(self, params, "MAPPED", context, False) or None,
+                log=self._log(feedback), progress=feedback.setProgress, cancelled=feedback.isCanceled)
+        except RuntimeError as e:
+            raise QgsProcessingException(str(e))
+        feedback.pushInfo("Open water: {} patch(es), {} not on the mapped water bodies".format(
+            res["counts"]["water"], res["counts"]["unmapped"]))
+        self._load(context, out, "water", "Open water (aerial imagery)")
+        return {"OUT": out}
+
+
 class Provider(QgsProcessingProvider):
     def id(self):
         return brand.PROVIDER_ID
@@ -331,7 +413,7 @@ class Provider(QgsProcessingProvider):
         return QIcon(os.path.join(os.path.dirname(__file__), "icon.svg"))
 
     def loadAlgorithms(self):
-        for alg in (FindEmbankments(), FindPonds(), FindCrossings()):
+        for alg in (FindEmbankments(), FindPonds(), FindCrossings(), FindWater()):
             self.addAlgorithm(alg)
 
 

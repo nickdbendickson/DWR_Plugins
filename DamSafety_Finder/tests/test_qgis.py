@@ -1,4 +1,4 @@
-"""The three Finder tools through processing.run in a real QGIS (offscreen), on the synthetic
+"""The four Finder tools through processing.run in a real QGIS (offscreen), on the synthetic
 valley of test_finder.py. Skips without QGIS.
 
     QT_QPA_PLATFORM=offscreen python -m <plugin folder>.tests.test_qgis
@@ -54,7 +54,7 @@ class Tools(tf.Runs):
     def test_registered(self):
         reg = QgsApplication.processingRegistry()
         names = sorted(a.name() for a in reg.providerById(self.pid).algorithms())
-        self.assertEqual(names, ["crossings", "embankments", "ponds"])
+        self.assertEqual(names, ["crossings", "embankments", "ponds", "water"])
 
     def test_embankments_tool(self):
         from osgeo import ogr
@@ -72,6 +72,21 @@ class Tools(tf.Runs):
         ds = ogr.Open(self.out)
         f = ds.GetLayerByName("crossings").GetNextFeature()
         self.assertEqual(f.GetField("status"), "listed")
+
+    def test_water_tool(self):
+        from osgeo import ogr
+        from .. import brand
+        img = self.write_image(os.path.join(self.tmp, "img.tif"))
+        self.run_alg("water", {"SOURCE": len(brand.IMAGE_SERVICES), "IMAGE": img, "GREEN": 2, "NIR": 4,
+                               "MAPPED": self.pond_layer(), "OUT": self.out})
+        ds = ogr.Open(self.out)
+        f = ds.GetLayerByName("water").GetNextFeature()
+        self.assertEqual(f.GetField("mapped"), "yes")
+
+    def test_water_service_needs_an_extent(self):
+        from qgis.core import QgsProcessingException
+        with self.assertRaises(QgsProcessingException):
+            self.run_alg("water", {"SOURCE": 0, "OUT": self.out})
 
     def test_memory_layer_is_refused(self):
         from qgis.core import QgsProcessingException, QgsVectorLayer

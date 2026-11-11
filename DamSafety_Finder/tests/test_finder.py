@@ -4,6 +4,7 @@ another CRS, and the three runs end to end.
 
     python -m <plugin folder>.tests.test_finder
 """
+import math
 import os
 import shutil
 import tempfile
@@ -167,6 +168,89 @@ class Runs(unittest.TestCase):
         self.assertEqual((r["status"], r["known_id"], r["fill_kind"]), ("listed", "9117181", "road fill"))
         res = self.f.run_crossings(self.roads, self.streams, self.out, log=lambda *_: None)
         self.assertEqual(res["rows"][0]["status"], "new")
+
+
+    # -------------------------------------------------------------------------------- water --
+    def write_image(self, path, epsg=5070):
+        g, nir, _pond = tc.image()
+        drv = gdal.GetDriverByName("GTiff")
+        ds = drv.Create(path, g.shape[1], g.shape[0], 4, gdal.GDT_Byte)
+        ds.SetGeoTransform((X0, 1.0, 0.0, Y0 + g.shape[0], 0.0, -1.0))
+        ds.SetProjection(srs(epsg).ExportToWkt())
+        for b, a in zip((1, 2, 3, 4), (g, g, g, nir)):
+            ds.GetRasterBand(b).WriteArray(a.astype(np.uint8))
+        ds = None
+        return path
+
+    def pond_layer(self, half=False):
+        # a mapped water body over the north half of the pond (half=True) or all of it
+        cx, cy = X0 + 150.0, Y0 + 150.0
+        y0 = cy if half else cy - 45.0
+        wkt = "POLYGON (({a} {c}, {b} {c}, {b} {d}, {a} {d}, {a} {c}))".format(
+            a=cx - 45.0, b=cx + 45.0, c=y0, d=cy + 45.0)
+        return write_layer(self.vec, "wb_half" if half else "wb", [(wkt, {})])
+
+    def test_water_from_a_file(self):
+        img = self.write_image(os.path.join(self.tmp, "img.tif"))
+        res = self.f.run_water(img, self.out, cell=1.0, green_band=2, nir_band=4, log=lambda *_: None)
+        self.assertEqual(len(res["rows"]), 1, res["rows"])
+        r = res["rows"][0]
+        self.assertAlmostEqual(r["area_ac"], math.pi * 40 ** 2 / 4046.8564224, delta=0.06)
+        self.assertEqual(r["mapped"], "no")
+        self.assertTrue(r["water_id"].startswith("WATER-"))
+        ds = ogr.Open(self.out)
+        self.assertEqual(ds.GetLayerByName("water").GetFeatureCount(), 1)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "out_water.csv")))
+
+    def test_water_mapped_and_small_tiles(self):
+        img = self.write_image(os.path.join(self.tmp, "img.tif"))
+        res = self.f.run_water(img, self.out, cell=1.0, mapped=self.pond_layer(), tile_m=100.0,
+                               log=lambda *_: None)
+        self.assertEqual([r["mapped"] for r in res["rows"]], ["yes"])  # once, across 9 tiles
+        res = self.f.run_water(img, self.out, cell=1.0, mapped=self.pond_layer(half=True),
+                               log=lambda *_: None)
+        self.assertAlmostEqual(res["rows"][0]["mapped_share"], 0.5, delta=0.06)
+
+    def test_water_from_an_image_service(self):
+        import urllib.parse
+        img = self.write_image(os.path.join(self.tmp, "img.tif"))
+        asked = []
+
+        def opener(url):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            asked.append(url)
+            self.assertTrue(url.startswith("https://example.test/ImageServer/exportImage?"))
+            x0, y0, x1, y1 = (float(v) for v in q["bbox"][0].split(","))
+            w, h = (int(v) for v in q["size"][0].split(","))
+            mem = "/vsimem/tile_{}.tif".format(len(asked))
+            gdal.Translate(mem, img, projWin=[x0, y1, x1, y0], width=w, height=h)
+            f = gdal.VSIFOpenL(mem, "rb")
+            gdal.VSIFSeekL(f, 0, 2)
+            size = gdal.VSIFTellL(f)
+            gdal.VSIFSeekL(f, 0, 0)
+            data = gdal.VSIFReadL(1, size, f)
+            gdal.VSIFCloseL(f)
+            gdal.Unlink(mem)
+            return data
+
+        box = (X0, Y0, X0 + 300.0, Y0 + 300.0)
+        url = "https://example.test/ImageServer"
+        with self.assertRaises(RuntimeError):
+            self.f.run_water(url, self.out, opener=opener, log=lambda *_: None)   # no extent
+        res = self.f.run_water(url, self.out, bbox=box, cell=1.0, opener=opener, log=lambda *_: None)
+        self.assertEqual(len(res["rows"]), 1)
+        n = len(asked)
+        self.assertGreater(n, 0)
+        self.f.run_water(url, self.out, bbox=box, cell=1.0, opener=opener, log=lambda *_: None)
+        self.assertEqual(len(asked), n)            # the tiles are kept and reused
+        with self.assertRaises(RuntimeError):
+            self.f.fetch_imageserver(url, box, 1.0, os.path.join(self.tmp, "bad"),
+                                     opener=lambda u: b"<html>error</html>", log=lambda *_: None)
+
+    def test_water_needs_a_nir_band(self):
+        img = self.write_image(os.path.join(self.tmp, "img.tif"))
+        with self.assertRaises(RuntimeError):
+            self.f.run_water(img, self.out, nir_band=5, log=lambda *_: None)
 
 
 if __name__ == "__main__":

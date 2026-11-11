@@ -6,6 +6,8 @@ the same runs work from a script or qgis_process and are tested without QGIS:
     run_embankments(dem, streams, out, ...)   fills across streams in the DEM (core/embankments.py)
     run_ponds(waterbodies, dem, out, ...)     embankment ponds and dugouts (core/ponds.py)
     run_crossings(roads, streams, out, ...)   road / rail x stream crossings (core/crossings.py)
+    run_water(image, out, ...)                open water in aerial imagery (core/water.py): the
+                                              pond outlines for run_ponds no hydrography layer has
 
 Each writes a GeoPackage (EPSG:5070 points, plus lon / lat fields) and a CSV beside it, and
 checks every candidate against the known-structure layers given (core/listed.py): status
@@ -29,6 +31,7 @@ from .core import embankments as em
 from .core import listed as ls
 from .core import ponds as pd
 from .core import warp_opts as wo
+from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
@@ -611,3 +614,231 @@ def run_crossings(roads, streams, out_gpkg, known=None, rails=None, bbox=None, f
     log("{} stream line(s), {} road / rail line(s), {} known structure(s)".format(len(sl), len(rl), len(kn)))
     log(_summary(rows, "road / rail x stream crossing(s)"))
     return {"rows": rows, "counts": {"status": ls.status_counts(rows)}, "gpkg": out_gpkg, "csv": out_csv}
+
+
+# ------------------------------------------------------------------------------------ water --
+WATER_FIELDS = [("water_id", "str"), ("area_ac", "float"), ("ndwi", "float"), ("mapped", "str"),
+                ("mapped_share", "float"), ("lat", "float"), ("lon", "float")]
+
+
+def is_service(src):
+    s = str(src or "").strip().lower()
+    return s.startswith("http://") or s.startswith("https://")
+
+
+def fetch_imageserver(url, ext, cell, folder, tile_px=2000, log=print, opener=None):
+    """Download an ArcGIS ImageServer (exportImage) over ext (EPSG:5070) at cell metres as
+    GeoTIFF tiles in folder (2000 px: the ND GIS Hub image services answer 500 to 3000 px);
+    returns a VRT of them. `url` is the service address
+    (.../ImageServer). Tiles already there are reused (a rerun resumes). urllib honours the
+    proxy environment; `opener(url) -> bytes` replaces it in tests."""
+    import urllib.parse
+    import urllib.request
+    base = url.rstrip("/")
+    if base.lower().endswith("/exportimage"):
+        base = base[: -len("/exportImage")]
+    os.makedirs(folder, exist_ok=True)
+    step = tile_px * cell
+    paths = []
+    x = ext[0]
+    while x < ext[2]:
+        y = ext[1]
+        while y < ext[3]:
+            x1, y1 = min(x + step, ext[2]), min(y + step, ext[3])
+            w = max(1, int(round((x1 - x) / cell)))
+            h = max(1, int(round((y1 - y) / cell)))
+            path = os.path.join(folder, "img_{:.0f}_{:.0f}_{:g}.tif".format(x, y, cell))
+            if not os.path.exists(path):
+                q = urllib.parse.urlencode({
+                    "bbox": "{},{},{},{}".format(x, y, x + w * cell, y + h * cell), "bboxSR": WORK_EPSG,
+                    "imageSR": WORK_EPSG, "size": "{},{}".format(w, h), "format": "tiff",
+                    "interpolation": "RSP_BilinearInterpolation", "f": "image"})
+                req = base + "/exportImage?" + q
+                if opener is not None:
+                    data = opener(req)
+                else:
+                    try:
+                        with urllib.request.urlopen(req, timeout=300) as r:
+                            data = r.read()
+                    except Exception as e:                       # HTTPError, URLError, timeout
+                        raise RuntimeError("the image service refused {}: {}".format(req, e)) from None
+                if not data[:4] in (b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+"):
+                    raise RuntimeError("the image service did not return a GeoTIFF for {}: {}".format(
+                        req, data[:200]))
+                with open(path + ".part", "wb") as fh:
+                    fh.write(data)
+                os.replace(path + ".part", path)
+                log("image tile {} ({} x {} px)".format(os.path.basename(path), w, h))
+            paths.append(path)
+            y += step
+        x += step
+    vrt = os.path.join(folder, "image.vrt")
+    _checked(gdal.BuildVRT(vrt, paths), "mosaicking the image tiles")
+    return vrt
+
+
+def read_bands(image, ext, cell, bands):
+    """{band number: array} of a raster over ext (EPSG:5070) at cell metres (averaged)."""
+    n_x = max(1, int(math.ceil((ext[2] - ext[0]) / cell)))
+    n_y = max(1, int(math.ceil((ext[3] - ext[1]) / cell)))
+    ds = _checked(gdal.Open(str(image)), "opening the image {}".format(image))
+    if max(bands) > ds.RasterCount:
+        raise RuntimeError("the image has {} band(s); band {} was asked for (a near-infrared band "
+                           "is needed: 4-band or colour-infrared imagery)".format(ds.RasterCount, max(bands)))
+    opts = dict(format="MEM", dstSRS="EPSG:{}".format(WORK_EPSG),
+                outputBounds=(ext[0], ext[1], ext[0] + n_x * cell, ext[1] + n_y * cell),
+                width=n_x, height=n_y, resampleAlg="average", outputType=gdal.GDT_Float32,
+                dstNodata=-9999.0)
+    wo.no_vshift(gdal, wo.no_overviews(gdal, opts))
+    out = _checked(gdal.Warp("", ds, **opts), "warping the image")
+    res = {}
+    for b in bands:
+        a = out.GetRasterBand(b).ReadAsArray().astype("float64")
+        a[a <= -9998.0] = np.nan
+        res[b] = a
+    return res, out.GetGeoTransform()
+
+
+def _image_box(image):
+    ds = _checked(gdal.Open(str(image)), "opening the image {}".format(image))
+    gt = ds.GetGeoTransform()
+    x0, y1 = gt[0], gt[3]
+    x1, y0 = x0 + ds.RasterXSize * gt[1], y1 + ds.RasterYSize * gt[5]
+    s = osr.SpatialReference()
+    s.ImportFromWkt(ds.GetProjection())
+    if hasattr(s, "SetAxisMappingStrategy"):
+        s.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    ct = osr.CoordinateTransformation(s, _srs(WORK_EPSG))
+    pts = [ct.TransformPoint(x, y)[:2] for x in (x0, x1) for y in (y0, y1)]
+    return (min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts))
+
+
+def _mapped_polys(src, box):
+    if not src:
+        return []
+    ds, lyr = open_layer(src)
+    ct = _transform(lyr, _srs(WORK_EPSG))
+    out = []
+    for f in lyr:
+        g = f.GetGeometryRef()
+        if g is None:
+            continue
+        g = g.Clone()
+        g.Transform(ct)
+        e = g.GetEnvelope()
+        if e[1] < box[0] or e[0] > box[2] or e[3] < box[1] or e[2] > box[3]:
+            continue
+        out.extend(_rings(g))
+    ds = None
+    return out
+
+
+def run_water(image, out_gpkg, bbox=None, cell=1.0, green_band=2, nir_band=4, threshold=0.15,
+              open_px=1, min_ac=0.05, max_ac=0.0, min_width_m=10.0, nir_frac=0.25, mapped=None, tile_m=4000.0, log=print,
+              progress=None, cancelled=None, opener=None):
+    """Open-water polygons from 4-band / colour-infrared imagery: a raster file (or VRT) or an
+    ArcGIS ImageServer address (then bbox is required; tiles are cached beside the output).
+    `mapped`: a water-body layer (3DHP / NHD / NWI); each patch gets mapped = yes when at least
+    half of it lies on a mapped water body. Writes layer 'water' (polygons, EPSG:5070) and a CSV.
+    Returns {'rows', 'counts', 'gpkg', 'csv'}."""
+    progress = progress or _noop
+    cancelled = cancelled or _noop
+    if is_service(image):
+        if bbox is None:
+            raise RuntimeError("an image service needs an extent (Only this area)")
+        folder = os.path.splitext(out_gpkg)[0] + "_imagery"
+        log("downloading imagery from {} at {:g} m into {}".format(image, cell, folder))
+        image = fetch_imageserver(image, bbox, cell, folder, log=log, opener=opener)
+    ext = bbox or _image_box(image)
+    min_px = max(1, int(round(min_ac * AC_M2 / (cell * cell))))
+    ll = osr.CoordinateTransformation(_srs(WORK_EPSG), _srs(4326))
+    drv = _checked(ogr.GetDriverByName("GPKG"), "the GeoPackage driver")
+    ds = ogr.Open(out_gpkg, 1) if os.path.exists(out_gpkg) else drv.CreateDataSource(out_gpkg)
+    _checked(ds, "opening {} for writing".format(out_gpkg))
+    for i in range(ds.GetLayerCount()):
+        if ds.GetLayer(i).GetName() == "water":
+            ds.DeleteLayer(i)
+            break
+    lyr = ds.CreateLayer("water", _srs(WORK_EPSG), ogr.wkbMultiPolygon)
+    kinds = {"str": ogr.OFTString, "float": ogr.OFTReal}
+    for name, t in WATER_FIELDS:
+        lyr.CreateField(ogr.FieldDefn(name, kinds[t]))
+    tiles = []
+    x = ext[0]
+    while x < ext[2]:
+        y = ext[1]
+        while y < ext[3]:
+            tiles.append((x, y, min(x + tile_m, ext[2]), min(y + tile_m, ext[3])))
+            y += tile_m
+        x += tile_m
+    rows = []
+    mem = ogr.GetDriverByName("Memory") or ogr.GetDriverByName("MEM")      # GDAL < / >= 3.11
+    for ti, core in enumerate(tiles):
+        if cancelled():
+            break
+        pad = 300.0                                 # a pond across a tile edge is whole in one tile
+        box = (core[0] - pad, core[1] - pad, core[2] + pad, core[3] + pad)
+        bands, gt = read_bands(image, box, cell, (green_band, nir_band))
+        idx = wt.ndwi(bands[green_band], bands[nir_band])
+        dark = wt.dark_in_nir(bands[nir_band], idx, nir_frac) if nir_frac else None
+        lab, n = wt.water_patches(idx, threshold, open_px, min_px, min_width_m / cell, dark)
+        if n == 0:
+            continue
+        polys = _mapped_polys(mapped, box)
+        mmask = _rasterize(polys, gt, lab.shape) if polys else None
+        cells, mean, share = wt.patch_stats(lab, n, idx, mmask)
+        # keep a patch in the tile whose core holds its first cell (row-major): each once
+        first = np.full(n + 1, -1, dtype=np.int64)
+        flat = lab.ravel()
+        nz = np.nonzero(flat)[0]
+        first_idx = np.unique(flat[nz], return_index=True)
+        first[first_idx[0]] = nz[first_idx[1]]
+        src = gdal.GetDriverByName("MEM").Create("", lab.shape[1], lab.shape[0], 1, gdal.GDT_Int32)
+        src.SetGeoTransform(gt)
+        src.SetProjection(_srs(WORK_EPSG).ExportToWkt())
+        src.GetRasterBand(1).WriteArray(lab)
+        mds = mem.CreateDataSource("p")
+        ml = mds.CreateLayer("p", _srs(WORK_EPSG), ogr.wkbPolygon)
+        ml.CreateField(ogr.FieldDefn("lab", ogr.OFTInteger))
+        band = src.GetRasterBand(1)
+        gdal.Polygonize(band, band, ml, 0, [], callback=None)
+        geoms = {}
+        for f in ml:
+            k = f.GetField("lab")
+            g = f.GetGeometryRef().Clone()
+            if k in geoms:
+                geoms[k] = geoms[k].Union(g)
+            else:
+                geoms[k] = g
+        for k, g in geoms.items():
+            if k <= 0:
+                continue
+            r, c = divmod(int(first[k]), lab.shape[1])
+            fx, fy = gt[0] + (c + 0.5) * gt[1], gt[3] + (r + 0.5) * gt[5]
+            if not (core[0] <= fx < core[2] and core[1] <= fy < core[3]):
+                continue
+            area = cells[k] * cell * cell / AC_M2
+            if max_ac and area > max_ac:
+                continue
+            pt = g.PointOnSurface()
+            lon, lat = _lonlat(pt.GetX(), pt.GetY(), ll)
+            row = {"water_id": find_id("WATER", pt.GetX(), pt.GetY()), "area_ac": round(area, 3),
+                   "ndwi": round(float(mean[k]), 3), "mapped": "yes" if share[k] >= 0.5 else "no",
+                   "mapped_share": round(float(share[k]), 2), "lat": round(lat, 6), "lon": round(lon, 6)}
+            f = ogr.Feature(lyr.GetLayerDefn())
+            for name, _t in WATER_FIELDS:
+                f.SetField(name, row[name])
+            f.SetGeometry(ogr.ForceToMultiPolygon(g))
+            lyr.CreateFeature(f)
+            rows.append(row)
+        mds = None
+        log("tile {}/{}: {} water patch(es)".format(ti + 1, len(tiles), n))
+        progress(100.0 * (ti + 1) / len(tiles))
+    ds = None
+    out_csv = os.path.splitext(out_gpkg)[0] + "_water.csv"
+    write_csv(out_csv, WATER_FIELDS, rows)
+    unm = sum(1 for r in rows if r["mapped"] == "no")
+    log("{} open-water patch(es) of {:g} ac or more: {} not on the water-body layer{}".format(
+        len(rows), min_ac, unm, "" if mapped else " (no water-body layer given)"))
+    return {"rows": rows, "counts": {"water": len(rows), "unmapped": unm}, "gpkg": out_gpkg,
+            "csv": out_csv, "image": image}

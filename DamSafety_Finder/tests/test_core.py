@@ -10,6 +10,7 @@ import numpy as np
 from ..core import crossings as cx
 from ..core import embankments as em
 from ..core import listed as ls
+from ..core import water as wt
 
 CELL = 3.0
 N = 400
@@ -160,6 +161,62 @@ class Crossings(unittest.TestCase):
         got = cx.find(roads, streams)
         self.assertEqual(len(got), 1)
         self.assertAlmostEqual(math.hypot(got[0]["x"], got[0]["y"]), 0.0, places=6)
+
+
+
+def image(n=300):
+    """(green, nir) of a 1 m scene: land (NDWI -0.43), a round pond of 40 m radius at the centre,
+    a 4 m wide ditch, a 20 m metal roof (NDWI +0.2 but bright in NIR) and one wet cell."""
+    g = np.full((n, n), 80.0)
+    nir = np.full((n, n), 200.0)
+    r, c = np.mgrid[0:n, 0:n]
+    pond = (r - n / 2) ** 2 + (c - n / 2) ** 2 <= 40 ** 2
+    ditch = (r >= 20) & (r < 24) & (c >= 20) & (c < 280)
+    roof = (r >= 250) & (r < 270) & (c >= 30) & (c < 50)
+    for m in (pond, ditch):
+        g[m], nir[m] = 60.0, 20.0
+    g[roof], nir[roof] = 150.0, 100.0
+    g[5, 280], nir[5, 280] = 60.0, 20.0
+    return g, nir, pond
+
+
+class Water(unittest.TestCase):
+    def test_ndwi(self):
+        out = wt.ndwi([60.0, 0.0, np.nan], [20.0, 0.0, 5.0])
+        self.assertAlmostEqual(out[0], 0.5)
+        self.assertTrue(np.isnan(out[1]) and np.isnan(out[2]))
+
+    def test_only_the_pond_is_water(self):
+        g, nir, pond = image()
+        idx = wt.ndwi(g, nir)
+        dark = wt.dark_in_nir(nir, idx, 0.25)
+        lab, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, dark)
+        self.assertEqual(n, 1)
+        self.assertGreater((lab > 0)[pond].mean(), 0.97)
+        self.assertEqual(int((lab > 0)[~pond].sum()), 0)
+
+    def test_each_filter_does_its_part(self):
+        g, nir, _pond = image()
+        idx = wt.ndwi(g, nir)
+        _l, n = wt.water_patches(idx, 0.15, 1, 50, 0.0, None)
+        self.assertEqual(n, 3)                     # pond, ditch, roof (the lone cell is opened away)
+        _l, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, None)
+        self.assertEqual(n, 2)                     # the ditch is too narrow
+        _l, n = wt.water_patches(idx, 0.15, 1, 50, 0.0, wt.dark_in_nir(nir, idx, 0.25))
+        self.assertEqual(n, 2)                     # the roof is not dark in NIR
+        _l, n = wt.water_patches(idx, 0.6, 1, 50, 0.0, None)
+        self.assertEqual(n, 0)                     # the threshold is yours
+
+    def test_patch_stats(self):
+        g, nir, pond = image()
+        idx = wt.ndwi(g, nir)
+        lab, n = wt.water_patches(idx, 0.15, 1, 50, 10.0, wt.dark_in_nir(nir, idx))
+        mapped = np.zeros(pond.shape, bool)
+        mapped[: pond.shape[0] // 2] = True
+        cells, mean, share = wt.patch_stats(lab, n, idx, mapped)
+        self.assertAlmostEqual(mean[1], 0.5, places=6)
+        self.assertAlmostEqual(share[1], 0.5, delta=0.05)
+        self.assertEqual(cells[1], (lab == 1).sum())
 
 
 if __name__ == "__main__":

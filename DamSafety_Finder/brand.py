@@ -21,3 +21,16 @@ CROSS_HELP = ("Known structures for crossings: NBI bridges (pack NBI_bridges; it
               "NDDOT bridge inventory, NDDOT centre-line pipes, USGS_stream_crossings, SARP / ABI road "
               "crossings. The Runner's culvert guesses (CULVERT_BURN_GUESSES) use the same road x "
               "stream idea per dam; this tool lists them for a county or the state.")
+# Image services with a near-infrared band for the water outlines: (label, ImageServer address,
+# green band, near-infrared band). The ND GIS Hub 2021-2024 statewide NAIP is natural colour only
+# (no near-infrared), so it cannot be used. Colour-infrared services are NIR, red, green.
+_HUB = "https://ndgishub.nd.gov/arcgis/rest/services/Imagery/{}/ImageServer"
+IMAGE_SERVICES = [
+    ("ND GIS Hub 2018 aerial, 30 cm, 4-band (Jul-Oct 2018)", _HUB.format("AerialImage_ND_2018_30cm"), 2, 4),
+    ("ND GIS Hub 2020 NAIP colour-infrared, 60 cm", _HUB.format("AerialImage_ND_2020_CIR"), 3, 1),
+    ("ND GIS Hub 2019 NAIP colour-infrared, 60 cm", _HUB.format("AerialImage_ND_2019_CIR"), 3, 1),
+    ("ND GIS Hub 2017 NAIP colour-infrared, 60 cm", _HUB.format("AerialImage_ND_2017_CIR"), 3, 1),
+]
+WATER_HELP = ("Layers: the pack's 3DHP_waterbodies (or NHD / NWI) as the mapped water bodies. The "
+              "'water' polygons with mapped = no are the ponds no layer has: give them to 'Find ponds "
+              "and dugouts' as its water bodies to ask the LiDAR whether each is held above the ground.")
