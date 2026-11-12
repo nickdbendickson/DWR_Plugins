@@ -121,6 +121,13 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE"
           python DamSafety_HazardLite/tests/test_core.py
+      - name: Finder (synthetic terrain, GDAL runs, the three tools in real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          python -m unittest -v DamSafety_Finder.tests.test_core DamSafety_Finder.tests.test_finder DamSafety_Finder.tests.test_qgis
       - name: GUI lint on a 1080p display (xvfb, all rules incl. no sideways scroll)
         if: ${{ !cancelled() && steps.provision.outcome == 'success' && steps.xvfb.outcome == 'success' }}
         env:
@@ -208,6 +215,11 @@ jobs:
       - name: Hazard Lite (GDAL + numpy)
         if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
         run: python3 DamSafety_HazardLite/tests/test_core.py
+      - name: Finder (synthetic terrain, GDAL runs, the three tools in real QGIS)
+        if: ${{ !cancelled() && steps.provision.outcome == 'success' }}
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 -m unittest -v DamSafety_Finder.tests.test_core DamSafety_Finder.tests.test_finder DamSafety_Finder.tests.test_qgis
       - name: Xvfb probe for the 1080p GUI lint
         # xvfb ships in the image (the apt line above makes sure); the probe checks that Qt5's
         # xcb plugin sees the 1920x1080 virtual screen, else the lint runs offscreen below

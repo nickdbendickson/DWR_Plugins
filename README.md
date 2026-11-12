@@ -1,6 +1,6 @@
 # DamSafety plugins for QGIS
 
-Seven QGIS plugins (QGIS 3.28 LTR and later, QGIS 4 / Qt6 included) for dam-break hazard
+Eight QGIS plugins (QGIS 3.28 LTR and later, QGIS 4 / Qt6 included) for dam-break hazard
 classification under the North Dakota Dam Safety Standards (REG_05.2026) and USBR ACER TM 11.
 They install separately and work together through a shared suite data folder.
 
@@ -13,8 +13,9 @@ They install separately and work together through a shared suite data folder.
 | DamSafety Screening | `DamSafety_Screening` | Batch screening of North Dakota dams, and of ponds and dugouts found in a water-body layer with LiDAR: inventory prep, terrain caching, storage estimation, breach hydrographs, quick triage, 2D flood simulation, hazard classification and hand-off of chosen dams to the Runner. Output is for prioritization only. |
 | DamSafety PMP (prototype) | `DamSafety_PMP` | Internal prototype port of the North Dakota statewide PMP Evaluation Tool (AWA, 2021) to QGIS Processing, plus a StreamStats basin tool. Not validated against ArcGIS; the PMP study data is not included. |
 | DamSafety Hazard Lite | `DamSafety_HazardLite` | One Processing tool: hmax / vmax at 911-addressed structures, roads (NDDOT AADT) and railroads, and the ND REG_05.2026 Section 5.2 hazard class, from breach depth and velocity rasters. Screening aid. |
+| DamSafety Finder | `DamSafety_Finder` | Finds structures that are not on the lists: fills across streams in the LiDAR (dams, dry dams, road fills), ponds and dugouts in a water-body layer, and road / rail stream crossings (culverts). Each is marked listed, unsure or new against the DWR, NID and bridge / culvert layers you give; the not-listed dams and ponds are also written for Screening tool 1. Screening aid. |
 
-Install order: **Setup → Data → Runner → Hazard**. Screening, PMP and Hazard Lite are optional
+Install order: **Setup → Data → Runner → Hazard**. Screening, PMP, Hazard Lite and Finder are optional
 and can be added at any time. Each plugin checks the versions of the others it works with at
 start-up (`shared/damsuite/versions.py`) and says what it needs.
 
@@ -28,7 +29,7 @@ the URL
 
     https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml
 
-Tick *Show also experimental plugins* (Runner, Screening, PMP and Hazard Lite are marked
+Tick *Show also experimental plugins* (Runner, Screening, PMP, Hazard Lite and Finder are marked
 experimental), then install the plugins from the *All* / *Not installed* list in the order above.
 The index is written by the release workflow (`.github/workflows/release.yml`) at every `v*` tag
 and points at the zips of that GitHub Release. It exists once the first release has run and the
