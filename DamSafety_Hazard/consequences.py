@@ -50,7 +50,7 @@ GRAHAM_RATES = {
     (SEV_HIGH, WARN_NONE, None): (0.75, 0.30, 1.00),
     # Graham applies the High rates to the people REMAINING after warning; this tool has
     # no defined evacuated/remaining quantity, so they are applied to the full PAR
-    # (conservative). See CN.2 in plugin_analysis/audit3_lumo_verification.md.
+    # (conservative). See CN.2 in plugin_analysis/audit3_pierre_verification.md.
     (SEV_HIGH, WARN_15_60, None): (0.75, 0.30, 1.00),
     (SEV_HIGH, WARN_60, None): (0.75, 0.30, 1.00),
     (SEV_MEDIUM, WARN_NONE, None): (0.15, 0.03, 0.35),
@@ -153,7 +153,7 @@ def economic_estimate(rec, curves=None):
         if fh is None:
             bases.add("foundation height unknown (0 ft used)")
     rec["ff_depth"] = max(ffs) if ffs else None
-    if curve_applied:          # Lumo v1.7: a flag, not the label text
+    if curve_applied:          # Pierre v1.7: a flag, not the label text
         rec["damage_usd"] = total
     if nonres_used:
         rec["damage_nonres_usd"] = nonres

@@ -14,10 +14,11 @@ Install: needs DamSafety Core. Processing Toolbox → DamSafety Finder → Find 
 
 | Tool | Input | Finds |
 |---|---|---|
-| `ndfind:embankments` Find fills across streams and draws | bare-earth DEM; stream lines (3DHP / NHD flowlines, optional); roads and railroads (optional) | Every fill that blocks a valley a stream line **or a draw traced from the DEM** crosses: **dam** (holds water), **dry embankment** (a dry / detention dam, a levee, an unmapped crossing), **road fill (ponding)** (a road that holds water: the culvert is missing in the DEM, small or blocked), **road fill**, **long fill (road, rail, canal or levee)** (no road / rail in the layers, but the raised fill runs on 600 m or more: a highway, rail grade, canal bank or levee the layers miss); a **dike that holds water beside a channel** (a dam built along a stream, not across it); where each pool gets out (**spillways**); **dug pits** anywhere; **raised ridges** (levees, dikes) on request; a **score** with a model from the sixth tool |
-| `ndfind:ponds` Find ponds and dugouts | water-body polygons (3DHP / NHD waterbodies, NWI, your own), DEM | **embankment pond**, **dugout** (natural depressions on request) - the pond engine of Screening tool 16 |
+| `ndfind:embankments` Find fills across streams and draws | bare-earth DEM; stream lines (3DHP / NHD flowlines, optional); roads and railroads (optional) | Every fill that blocks a valley a stream line **or a draw traced from the DEM** crosses: **dam** (holds water), **dry embankment** (a dry / detention dam, a levee, an unmapped crossing), **road fill (ponding)** (a road that holds water: the culvert is missing in the DEM, small or blocked), **road fill**, **long fill (road, rail, canal or levee)** (no road / rail in the layers, but the raised fill runs on 600 m or more: a highway, rail grade, canal bank or levee the layers miss); a **dike that holds water beside a channel** (a dam built along a stream, not across it); where each pool gets out (**spillways**); **dug pits** anywhere; **raised ridges** (levees, dikes) on request; a **score** with a model from the score tool |
+| `ndfind:ponds` Find ponds and dugouts | water-body polygons (3DHP / NHD waterbodies, NWI, your own), DEM; optionally the class-9 water-surface mosaic (`water_elev.vrt`) to set each pool level from the LiDAR water | **embankment pond**, **dugout** (natural depressions on request) - the pond engine of Screening tool 16 |
 | `ndfind:crossings` Find road and rail crossings of streams | roads, railroads, stream lines; the first tool's fills, a DEM (optional) | Every crossing - the places a culvert or a bridge must be - with the fill there and, with a DEM, the drainage area and the round pipe the rational method asks for |
 | `ndfind:water` Find open water in aerial imagery | 4-band or colour-infrared imagery: an ND GIS Hub preset (2018 30 cm 4-band; 2017, 2019, 2020 NAIP colour-infrared), your own GeoTIFF / VRT, or any ArcGIS ImageServer address; **or** a classified LiDAR tile / folder (.las/.laz, ASPRS class 9 = water), **or** a prebuilt class-9 water-count raster / VRT (the statewide LiDAR water mosaic); mapped water bodies, buildings / streets (both optional) | Open-water outlines (one year, or the water of most of several years), each marked **mapped** or not (cast shadows and, with a buildings / streets layer, roofs and pavement in town are left out): the pond outlines for the second tool when no layer has them |
+| `ndfind:water_mosaic` Build a class-9 water mosaic from LiDAR tiles | a classified LiDAR tile or a folder of them (.las/.laz, ASPRS class 9); the water classes, their EPSG (only if the files carry none) and the cell size | `water_count.vrt` (class-9 points per cell) and `water_elev.vrt` (their mean elevation, the pond water surface), in North Dakota's UTM 14N (EPSG:26914): build once, then give the count VRT to the open-water tool as its **prebuilt class-9 water-count raster** |
 | `ndfind:osm` Extract dams, dikes and culverts from OpenStreetMap | an OpenStreetMap file (.osm.pbf, the Geofabrik extract) | `waterway=dam / weir`, `man_made=dyke / embankment`, `tunnel=culvert`, `ford=yes` as points: one more known-structure layer |
 | `ndfind:score` Score fills by how much they look like the listed dams | the `embankments` layers of one or more runs | A model learned from the fills already on a dam list, and every fill scored 0-1 with it (look at the high-scoring new ones first) |
 
@@ -98,7 +99,7 @@ helps (5 of the 10 top-ranked dam / dry fills are real dams, 9 of the top 20, AU
 5 and 0.64 with long fills left in); the length input itself adds little to the score. Most
 not-listed fills are still not dams: review them.
 Road fills not listed average 0.02, not-listed dams 0.20; 94 of 3,855 not-listed fills score 0.5
-or more, all of them dams. Relearn it for your area with the sixth tool from runs over areas with many listed dams; the
+or more, all of them dams. Relearn it for your area with the score tool from runs over areas with many listed dams; the
 cross-validated AUC it reports says how well it ranks dams it has not seen.
 
 Fills closer than 60 m are one. The DEM is read in 5 km tiles with a pad, so a county runs in
@@ -147,6 +148,15 @@ is water where its count is at least `WATER_COUNT_MIN`. This is the scalable pat
 LAS for a whole state is far too much, so you pre-rasterise it once and the tool reads the raster
 (its nodata, and the -999999 LiDAR nodata, read as no water). Imagery, a raw-LAS folder and this
 mosaic are three alternative sources for the one tool.
+
+The mosaic itself is built by the **Build a class-9 water mosaic from LiDAR tiles**
+(`ndfind:water_mosaic`) tool: point it at a folder of classified tiles and it writes, per tile, a
+water-count GeoTIFF (class-9 points per cell) and a mean-elevation GeoTIFF (the pond water
+surface), then a `water_count.vrt` / `water_elev.vrt` over them in the regional metric grid (North
+Dakota's UTM 14N here; CONUS Albers in the U.S.-wide DamIT build). Every tile snaps to one global
+grid so the VRT has no seams, and the builder reuses `core/lidar` so it launches no outside
+process. Build the mosaic once, then feed `water_count.vrt` to the open-water tool above; the
+mean-elevation mosaic is the pond starting level for a later *Find ponds* / Runner step.
 
 An image service is downloaded for the extent only, in 2000-pixel GeoTIFF tiles kept beside the
 output (`<output>_imagery/`; a rerun reuses them). The ND GIS Hub's 2021-2024 statewide NAIP is

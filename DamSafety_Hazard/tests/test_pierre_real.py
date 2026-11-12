@@ -1,6 +1,6 @@
-"""Lumo vReal.6–9 / SX / FP / SC / FA / CL / EX / FS / EV fixes (Hazard 2.18.22).
+"""Pierre vReal.6–9 / SX / FP / SC / FA / CL / EX / FS / EV fixes (Hazard 2.18.22).
 
-    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_lumo_real.py
+    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_pierre_real.py
 """
 import os
 import sys

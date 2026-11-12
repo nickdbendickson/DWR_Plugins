@@ -4,7 +4,7 @@
 #
 #   repo_audit.py --repo ~/src/DWR_Plugins                       # checks 1-4
 #   repo_audit.py --repo ~/src/DWR_Plugins --zips ~/dam-suites-mac-2026-11-10/plugins/dwr
-#   repo_audit.py --repo ~/src/DWR_Plugins --lumo                # + Lumo reviews the diff vs main
+#   repo_audit.py --repo ~/src/DWR_Plugins --pierre                # + Pierre reviews the diff vs main
 #   repo_audit.py --golden-record --results ~/DamSafety/Dams --ids DWR-2801,DWR-2865,DWR-4031
 #   repo_audit.py --golden        --results ~/DamSafety/Dams     # compare with that baseline
 #
@@ -21,7 +21,7 @@
 #                downloads saved with no checksum anywhere in the file
 #   3. network   every host the code names, with the files (an allowlist for IT; with
 #                --allow-hosts FILE, hosts not on the list are MED)
-#   4. lumo      (--lumo) the local model reviews the changed lines vs --base; TRIAGE ONLY: a
+#   4. pierre      (--pierre) the local model reviews the changed lines vs --base; TRIAGE ONLY: a
 #                finding is real only when a failing test shows it
 #   5. golden    (--golden-record / --golden) Runner results of dams you trust vs a later run:
 #                peak breach cfs, flooded acres, max depth, max velocity, storage at failure,
@@ -35,7 +35,7 @@ from datetime import datetime
 REPORTS = os.path.expanduser(os.environ.get("DAMAUDIT_REPORTS", "~/local-ai/reports"))
 GOLDEN_DIR = os.path.expanduser(os.environ.get("DAMAUDIT_GOLDEN", "~/local-ai/golden"))
 OLLAMA = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
-LUMO_MODEL = os.environ.get("LUMO_MODEL", "lumo")
+PIERRE_MODEL = os.environ.get("PIERRE_MODEL", "pierre")
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "dist", "build", ".venv", "venv", ".mypy_cache",
              ".pytest_cache", ".ruff_cache", "offline", "lisflood-src"}
 CODE_EXT = (".py", ".sh", ".zsh", ".command", ".bash")
@@ -278,7 +278,7 @@ def find_tool(name):
     p = shutil.which(name)
     if p:
         return [p]
-    for env in ("ndlumo", "ndresearch", "ndqgis"):
+    for env in ("ndpierre", "ndresearch", "ndqgis"):
         for base in ("~/miniconda3", "~/miniforge3", "~/miniconda", "~/anaconda3"):
             cand = os.path.expanduser("%s/envs/%s/bin/%s" % (base, env, name))
             if os.path.isfile(cand):
@@ -308,7 +308,7 @@ def run_linters(root, rep):
                     "bandit %s: %s" % (x.get("test_id"), x.get("issue_text")))
         rep.note("security", "bandit: %d findings (high -> MED, medium -> LOW, low -> INFO)" % len(res))
     else:
-        rep.note("security", "bandit not installed (optional; e.g. into the ndlumo env from the conda-forge "
+        rep.note("security", "bandit not installed (optional; e.g. into the ndpierre env from the conda-forge "
                              "channel when you have one), built-in patterns only")
     ruff = find_tool("ruff")
     if ruff:
@@ -370,7 +370,7 @@ def network_inventory(root, rep, allow_file=None, out_hosts=None):
     return hosts
 
 
-# ------------------------------------------------------------------ 4. lumo diff review
+# ------------------------------------------------------------------ 4. pierre diff review
 def ollama_up():
     try:
         with urllib.request.urlopen(OLLAMA + "/api/version", timeout=3):
@@ -384,11 +384,11 @@ def git(root, *args):
     return r.returncode, r.stdout
 
 
-def lumo_review(root, rep, base, max_files=25):
+def pierre_review(root, rep, base, max_files=25):
     rc, _ = git(root, "rev-parse", "--verify", base)
     if rc:
         base = "HEAD~1"
-        rep.note("lumo", "base not found; reviewing the last commit (HEAD~1..HEAD)")
+        rep.note("pierre", "base not found; reviewing the last commit (HEAD~1..HEAD)")
     rc, names = git(root, "diff", "--name-only", "%s...HEAD" % base)
     if rc:
         rc, names = git(root, "diff", "--name-only", base)
@@ -396,10 +396,10 @@ def lumo_review(root, rep, base, max_files=25):
     files = [f for f in dict.fromkeys((names + wt).split()) if f.endswith((".py",) + WEB_EXT)
              and not is_test(f) and os.path.isfile(os.path.join(root, f))]
     if not files:
-        rep.note("lumo", "no changed source files vs %s" % base)
+        rep.note("pierre", "no changed source files vs %s" % base)
         return
     if not ollama_up():
-        rep.note("lumo", "Ollama is not running at %s (lumo-start), review skipped" % OLLAMA)
+        rep.note("pierre", "Ollama is not running at %s (pierre-start), review skipped" % OLLAMA)
         return
     for f in files[:max_files]:
         rc, diff = git(root, "diff", "-U12", base, "--", f)
@@ -411,24 +411,24 @@ def lumo_review(root, rep, base, max_files=25):
                   "{\"findings\":[{\"line\":N,\"problem\":\"...\",\"test\":\"...\"}]}. If nothing is wrong "
                   "reply {\"findings\":[]}. Do not invent code that is not in the diff.\n\n%s"
                   % (f, diff[:14000]))
-        body = json.dumps({"model": LUMO_MODEL, "messages": [{"role": "user", "content": prompt}],
+        body = json.dumps({"model": PIERRE_MODEL, "messages": [{"role": "user", "content": prompt}],
                            "stream": False, "think": False, "format": "json",
-                           "options": {"num_ctx": int(os.environ.get("LUMO_NUM_CTX", "16384"))}}).encode()
+                           "options": {"num_ctx": int(os.environ.get("PIERRE_NUM_CTX", "16384"))}}).encode()
         try:
             req = urllib.request.Request(OLLAMA + "/api/chat", data=body, headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=600) as r:
                 txt = json.load(r).get("message", {}).get("content", "")
             found = json.loads(re.sub(r"<think>.*?</think>", "", txt, flags=re.S)).get("findings", [])
         except Exception as e:   # noqa: BLE001
-            rep.note("lumo", "%s: model call failed (%s)" % (f, e))
+            rep.note("pierre", "%s: model call failed (%s)" % (f, e))
             continue
         for x in found[:8]:
-            rep.add("INFO", "lumo", "%s:%s" % (f, x.get("line", "?")),
+            rep.add("INFO", "pierre", "%s:%s" % (f, x.get("line", "?")),
                     "UNVERIFIED (model): %s\n    test that would show it: %s"
                     % (str(x.get("problem", ""))[:400], str(x.get("test", ""))[:300]))
-        rep.note("lumo", "%s: %d finding(s)" % (f, len(found)))
+        rep.note("pierre", "%s: %d finding(s)" % (f, len(found)))
     if len(files) > max_files:
-        rep.note("lumo", "%d more changed files not reviewed (--lumo-max)" % (len(files) - max_files))
+        rep.note("pierre", "%d more changed files not reviewed (--pierre-max)" % (len(files) - max_files))
 
 
 # ------------------------------------------------------------------ 5. golden runs
@@ -554,8 +554,8 @@ def write_report(rep, root, args, started):
          "%s. %s. HIGH %d, MED %d, LOW %d, INFO %d. %.1f min." % (
              datetime.now().strftime("%Y-%m-%d %H:%M"), head or "golden runs", count["HIGH"], count["MED"],
              count["LOW"], count["INFO"], (time.time() - started) / 60), "",
-         "HIGH fails the audit. Lumo findings are UNVERIFIED until a failing test shows them.", ""]
-    for check in ("release", "security", "lint", "network", "lumo", "golden"):
+         "HIGH fails the audit. Pierre findings are UNVERIFIED until a failing test shows them.", ""]
+    for check in ("release", "security", "lint", "network", "pierre", "golden"):
         sel = [x for x in items if x["check"] == check]
         if not sel and check not in rep.notes:
             continue
@@ -582,13 +582,13 @@ def write_report(rep, root, args, started):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Local audit report for a dam-suite repo.")
     ap.add_argument("--repo", default="", help="the repo checkout to audit")
-    ap.add_argument("--only", default="", help="comma list of release,security,network,lumo")
+    ap.add_argument("--only", default="", help="comma list of release,security,network,pierre")
     ap.add_argument("--zips", default="", help="folder of built plugin zips to check against the repo")
     ap.add_argument("--no-gate", action="store_true", help="do not run the repo's tools/ci_checks.py")
     ap.add_argument("--allow-hosts", default="", help="file of allowed hosts (one per line)")
-    ap.add_argument("--lumo", action="store_true", help="have the local model review the diff (triage only)")
-    ap.add_argument("--base", default="origin/main", help="diff base for --lumo (default origin/main)")
-    ap.add_argument("--lumo-max", type=int, default=25, help="most changed files to send the model")
+    ap.add_argument("--pierre", action="store_true", help="have the local model review the diff (triage only)")
+    ap.add_argument("--base", default="origin/main", help="diff base for --pierre (default origin/main)")
+    ap.add_argument("--pierre-max", type=int, default=25, help="most changed files to send the model")
     g = ap.add_argument_group("golden runs")
     g.add_argument("--golden-record", action="store_true", help="record the results under --results as the baseline")
     g.add_argument("--golden", action="store_true", help="compare the results under --results with the baseline")
@@ -602,8 +602,8 @@ def main(argv=None):
     rep = Report()
     root = os.path.abspath(os.path.expanduser(a.repo)) if a.repo else ""
     only = set(x.strip() for x in a.only.split(",") if x.strip()) or {"release", "security", "network"}
-    if a.lumo:
-        only.add("lumo")
+    if a.pierre:
+        only.add("pierre")
     if root:
         if not os.path.isdir(root):
             sys.exit("no such folder: %s" % root)
@@ -619,9 +619,9 @@ def main(argv=None):
             hosts_file = os.path.join(REPORTS, "hosts_%s.txt" % os.path.basename(root))
             hosts = network_inventory(root, rep, a.allow_hosts or None, hosts_file)
             rep.note("release", "network: %d hosts named; list for IT: %s" % (len(hosts), hosts_file))
-        if "lumo" in only:
-            say("4/4 Lumo review of the changes vs %s ..." % a.base)
-            lumo_review(root, rep, a.base, a.lumo_max)
+        if "pierre" in only:
+            say("4/4 Pierre review of the changes vs %s ..." % a.base)
+            pierre_review(root, rep, a.base, a.pierre_max)
     if a.golden or a.golden_record:
         if not a.results:
             ap.error("--golden/--golden-record need --results")

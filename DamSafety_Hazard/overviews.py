@@ -157,7 +157,7 @@ def build_overviews(path, resampling="NEAREST", min_size=DEFAULT_MIN_SIZE, level
 def build_overviews_status(path, resampling="NEAREST", min_size=DEFAULT_MIN_SIZE, levels=None,
                     external=True, compress="DEFLATE", progress=None):
     """Build overviews for the raster file `path`. Returns (status, text): status ST_BUILT, ST_NOT_NEEDED, ST_FAILED or
-    ST_CANCELLED (Lumo v1.8: callers test the status, not the wording).
+    ST_CANCELLED (Pierre v1.8: callers test the status, not the wording).
 
     resampling: GDAL method - NEAREST or MODE for class rasters (zones,
     bands), AVERAGE for continuous values. levels: factors, else

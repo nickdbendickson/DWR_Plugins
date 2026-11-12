@@ -1,6 +1,6 @@
-"""Lumo vReal.16 EV.4 / EAP contours / hhmm (Hazard 2.18.27).
+"""Pierre vReal.16 EV.4 / EAP contours / hhmm (Hazard 2.18.27).
 
-    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_lumo_real16.py
+    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_pierre_real16.py
 """
 import os
 import sys
