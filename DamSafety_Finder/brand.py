@@ -38,6 +38,6 @@ OSM_HELP = ("Use the Geofabrik North Dakota extract the offline pack's OpenStree
             "(north-dakota-latest.osm.pbf). The pack's OSM_crossings layer (culverts, fords, rail "
             "bridges) can be given to the crossings tool as it is; this tool adds the dams, weirs and "
             "dikes. Give the output to the other tools as a known-structure layer.")
-# The fill score model shipped with the plugin (core/score.py; learned from DWR-listed dams on
-# southwest ND LiDAR). The Find fills tool uses it when no other model is given.
-DEFAULT_MODEL = "models/nd_fill_score_2026-11.json"
+# The fill score model shipped with the plugin (core/score.py; learned from listed dams on USGS 1 m
+# LiDAR in 7 ND regions). The Find fills tool uses it when no other model is given.
+DEFAULT_MODEL = "models/nd_fill_score_statewide_2026-11.json"

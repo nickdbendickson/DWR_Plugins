@@ -1,0 +1,100 @@
+{
+ "kind": "finder-fill-score",
+ "version": 1,
+ "features": [
+  "log_height",
+  "log_crest_height",
+  "net_head",
+  "log_storage",
+  "log_area",
+  "log_length",
+  "pool",
+  "on_road",
+  "open_pool",
+  "spill_beside"
+ ],
+ "mean": [
+  2.279918794075785,
+  2.5008172573107568,
+  1.3188143176733784,
+  2.080502416586079,
+  1.4140085600429015,
+  4.906296548869713,
+  0.24563758389261744,
+  0.2975391498881432,
+  0.053467561521252795,
+  0.4993288590604027
+ ],
+ "std": [
+  0.4217546119909606,
+  0.4293193263348849,
+  5.0487034620631865,
+  1.864402955692133,
+  1.371593782393733,
+  0.9292784239291991,
+  0.43046458770961915,
+  0.4571756819560535,
+  0.22496395574896672,
+  0.4999995495696401
+ ],
+ "weights": [
+  -2.493081126821731,
+  -0.0236865394083093,
+  0.32137205929344964,
+  0.13191476899822138,
+  0.584808564288761,
+  0.0485497988097848,
+  -0.8202714564492651,
+  0.4871195540680315,
+  -0.8311359683586532,
+  -0.30033556146478635,
+  0.3578264204004288
+ ],
+ "positive_words": [
+  "dam"
+ ],
+ "n_listed": 615,
+ "n_other": 3855,
+ "raw_min": -6.791738581985584,
+ "raw_max": 2.4717054032656343,
+ "note": "statewide: 4470 fills from 66 USGS 1 m tiles in 7 ND regions; listed = on a dam layer within 300 ft (fills listed 300-1000 ft away left out)",
+ "cv_auc": 0.822,
+ "regions": {
+  "central_south": {
+   "fills": 755,
+   "listed": 113,
+   "auc_held_out": 0.85
+  },
+  "coteau_north": {
+   "fills": 437,
+   "listed": 18,
+   "auc_held_out": 0.794
+  },
+  "drift_north": {
+   "fills": 421,
+   "listed": 40,
+   "auc_held_out": 0.707
+  },
+  "drift_south": {
+   "fills": 641,
+   "listed": 41,
+   "auc_held_out": 0.829
+  },
+  "northwest": {
+   "fills": 495,
+   "listed": 114,
+   "auc_held_out": 0.814
+  },
+  "red_river": {
+   "fills": 572,
+   "listed": 27,
+   "auc_held_out": 0.832
+  },
+  "southwest": {
+   "fills": 1149,
+   "listed": 262,
+   "auc_held_out": 0.81
+  }
+ },
+ "trained": "2026-11-12"
+}

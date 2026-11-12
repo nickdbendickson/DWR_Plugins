@@ -77,7 +77,15 @@ before the straightness and rail-base tests: 43 ridges, many rail beds and meand
 **Score** (`MODEL`; `core/score.py`). A logistic regression of the fills on a dam list against the
 other fills (height, crest height, net head, storage, pool area, length, flat pool, on a road, open
 pool, spillway beside): a ranking of the new fills by how much they look like listed dams, not a
-probability. DamSafety Finder ships `models/nd_fill_score_2026-11.json` (the default): learned on 10 southwest ND 1 m tiles, 680 fills, 141 listed, cross-validated AUC 0.84 - relearn it for your area with the sixth tool from runs over areas with many listed dams; the
+probability. DamSafety Finder ships `models/nd_fill_score_statewide_2026-11.json` (the default),
+learned 2026-11-12 on 66 USGS 1 m tiles in 7 ND regions (Red River Valley, drift prairie north and
+south, Coteau north, central south, northwest, southwest): 4,470 fills, 615 listed on a dam layer
+within 300 ft (fills listed 300-1000 ft away were left out as unclear). Cross-validated AUC 0.82;
+each region held out and scored by a model learned on the other six: Red River 0.83, drift north
+0.71, drift south 0.83, Coteau north 0.79, central south 0.85, northwest 0.81, southwest 0.81 (the
+first, southwest-only model held out the same way: 0.80, 0.69, 0.79, 0.68, 0.83, 0.80, 0.84).
+Road fills not listed average 0.02, not-listed dams 0.20; 94 of 3,855 not-listed fills score 0.5
+or more, all of them dams. Relearn it for your area with the sixth tool from runs over areas with many listed dams; the
 cross-validated AUC it reports says how well it ranks dams it has not seen.
 
 Fills closer than 60 m are one. The DEM is read in 5 km tiles with a pad, so a county runs in
