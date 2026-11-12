@@ -1,4 +1,4 @@
-ND Dam Hazard Classification Helper - Version 2.24.6
+ND Dam Hazard Classification Helper - Version 2.24.7
 ====================================================
 
 WHAT IT DOES
@@ -943,9 +943,17 @@ NEW IN 1.3.0 - HAZARD CLASSIFICATION TAB
   classification by lives in jeopardy, with the reasons and a list of
   items that need engineering judgment.
 - Outputs: Habitable_Structures, Roads_Inundated, Rail_Inundated
-  (GPKG/CSV/XLSX, styled in the project) and
-  Hazard_Classification_Summary (TXT/XLSX/CSV). Downloads are cached in
-  outputs/_downloads with the date.
+  (GPKG/CSV/XLSX, styled in the project),
+  Hazard_Classification_Summary (TXT/XLSX/CSV), and (2.24.7)
+  ND_DV_Habitable.png / .csv in outputs/Classification: the wet
+  habitable structures on the ND depth-velocity charts (Fig. 5.1 /
+  5.2), peak depth vs peak velocity. Only ND 911 address points are
+  plotted as habitable until an engineer reviews a structure in the
+  Hazard Review tab (reviewed-habitable non-911 points use a distinct
+  marker; other wet non-911 structures are a count in a note). Written
+  for Runner, Screening and imported (e.g. DSS-WISE) rasters, labelled
+  by source; also a page in the PDF report. The ND / TM 11 class is
+  unchanged. Downloads are cached in outputs/_downloads with the date.
 
 ND CRITERIA APPLIED (REG_05.2026, effective 04/01/2026, Section 5.2)
 - HIGH: any habitable structure in the high danger zone of Figs 5.1/5.2

@@ -55,6 +55,11 @@ GROUPS = [
         ("Hazard_Classification_Report*.pdf", "Hazard classification report (PDF)", True),
         ("Hazard_Classification_Summary.txt", "Classification summary (text)", False),
         ("Hazard_Classification_Summary.xlsx", "Classification summary (table)", False),
+        (SUBDIR_CLASSIFICATION + "/ND_DV_Habitable*.png",
+         "Habitable structures on the ND depth-velocity charts (911 points until reviewed)",
+         False),
+        (SUBDIR_CLASSIFICATION + "/ND_DV_Habitable*.csv",
+         "Habitable structures plotted on the ND depth-velocity chart", False),
     ]),
     ("02_Method_and_record", [
         ("Hazard_Classification_Run_Log.txt",

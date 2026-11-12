@@ -2080,6 +2080,28 @@ def _classify_and_write(run, cfg, state):
                            style=lambda l, f=field: style_by_field(l, f), maptip=key,
                            path=paths.get("gpkg"))
             res["layers"][key] = show
+        # 2.24.7: habitable-only ND depth-velocity chart (911 points until reviewed).
+        # A chart problem never fails the classify run.
+        try:
+            from . import dvchart as DVC
+            dam_id = cfg.get("dam_id") or ""
+            if not dam_id:
+                folder = cfg.get("dam_folder") or ""
+                dam_id = os.path.basename(os.path.normpath(folder)) if folder else ""
+            chart = DVC.write_for_run(
+                structs, d_class, scenario=sc, dam_id=dam_id, dam_name=dam_name,
+                source_override=cfg.get("dv_chart_source_label") or "",
+                suffix=suffix, log=lambda m: run.log(m),
+                no_velocity=not bool(sc.velocity))
+            res["dv_chart"] = chart
+            if chart.get("csv"):
+                written.append(os.path.relpath(chart["csv"], out))
+            if chart.get("png"):
+                written.append(os.path.relpath(chart["png"], out))
+            if chart.get("note"):
+                run.log(">>> NOTE: " + chart["note"])
+        except Exception as e:                # noqa: BLE001 - a chart must never fail a run
+            run.log("depth-velocity chart failed ({}: {})".format(type(e).__name__, e))
         if _eap_on(cfg, "list"):
             _eap_maps(run, sc, suffix, dam_name, written, visible=sc is gov)
         else:
@@ -2298,6 +2320,24 @@ def _classify_and_write(run, cfg, state):
             extra["datum"] = datum_lines(out, cfg.get("dam_folder") or "")
         except Exception:
             pass
+        # 2.24.7: pointer to the habitable-structure depth-velocity chart
+        _charts = [run.results[s.name].get("dv_chart") for s in breaches
+                   if run.results.get(s.name, {}).get("dv_chart")]
+        _clines = []
+        for ch in _charts:
+            if not ch:
+                continue
+            bit = ch.get("title") or ch.get("text") or ""
+            if ch.get("png"):
+                bit = (bit + " - " if bit else "") + os.path.basename(ch["png"])
+            elif ch.get("csv"):
+                bit = (bit + " - " if bit else "") + os.path.basename(ch["csv"])
+            if ch.get("note"):
+                bit = (bit + " (" if bit else "") + ch["note"] + (")" if bit else "")
+            if bit:
+                _clines.append(bit)
+        if _clines:
+            extra["dv_chart"] = _clines
         lines = summary_lines(governing["nd"], governing["tm11"], s_view, r_view, l_view,
                               dam_name, run.sources, one_d, extra=extra)
         paths = write_summary(out, lines, governing["nd"], governing["tm11"], run.ctx)
@@ -2318,6 +2358,7 @@ def _classify_and_write(run, cfg, state):
                     hydraulics_group=plugin_group(dam_name, GRP_HYDRAULICS)
                     if cfg["add_to_project"] else None,
                     imagery=bool(cfg.get("report_imagery", False)), info=rep_info,
+                    dv_chart=governing.get("dv_chart"),
                     basemap=basemap_options(cfg, gov))
                 if rep_info.get("imagery_note"):
                     run.log(">>> " + str(rep_info["imagery_note"]))
