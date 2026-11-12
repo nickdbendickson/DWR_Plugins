@@ -366,6 +366,11 @@ def _scale_lines(lines, fd, fv, opts, vehicle, changes=None, label="", kind="Roa
         with np.errstate(invalid="ignore"):
             nr["max_depth"] = float(np.nanmax(d)) if d.size and np.isfinite(d).any() \
                 else r.get("max_depth")
+        # M10: scale the grid depth too - mark_lines_incremental's depth branch tests
+        # grid_max_depth (not max_depth), so without this the road/rail incremental flag was
+        # frozen against the unscaled baseline and never flipped with the factor. Baseline unscaled.
+        if r.get("grid_max_depth") is not None:
+            nr["grid_max_depth"] = float(r["grid_max_depth"]) * fd
         if scale_veh:
             vz = _vehicle_zone(d, v)
             nr["vehicle_zone"] = vz

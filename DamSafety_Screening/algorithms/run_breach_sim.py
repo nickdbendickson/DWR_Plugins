@@ -15,6 +15,7 @@ from ..core import solver_io as sio, runner as rn, gridutil as gu
 from ..core.proposed import PHRASE as PROPOSED_PHRASE
 from . import _common as cm
 from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, GEOM_POLYGON, NUM_DOUBLE, NUM_INT, SRC_LINE, SRC_POINT, SRC_POLYGON)
+from ._common import UnitAlgorithm
 
 NEW_FIELDS = [("scenario", FT_STRING), ("sim_status", FT_STRING),
               ("sim_engine", FT_STRING), ("sim_cell_m", FT_DOUBLE),
@@ -230,23 +231,44 @@ def _write_flood_polygons(outdir, dam_id, scen, r):
         ds.SetGeoTransform(gt)
         ds.SetProjection("EPSG:5070")
         ds.GetRasterBand(1).WriteArray(mask.astype("uint8"))
+        srs = osr.SpatialReference(); srs.ImportFromEPSG(5070)
+        # M22: the GeoJSON write layer buffers features and supports neither GetNextFeature nor
+        # SetFeature, so the old in-place loop never ran, and gdal.Polygonize (iPixValField=0)
+        # wrote the pixel value "1" into the label field - every kind/class/within_hr came out
+        # "1" and dam_id was absent. Polygonize into an in-memory OGR layer (with a throwaway
+        # value field as the pixel sink), then build the output features with their real
+        # attributes set before writing, checking each CreateFeature.
+        mdrv = ogr.GetDriverByName("MEM") or ogr.GetDriverByName("Memory")
+        mds = mdrv.CreateDataSource("")
+        mlyr = mds.CreateLayer("poly", srs, ogr.wkbPolygon)
+        mlyr.CreateField(ogr.FieldDefn("v", ogr.OFTInteger))      # pixel-value sink for Polygonize
+        if gdal.Polygonize(ds.GetRasterBand(1), ds.GetRasterBand(1), mlyr, 0, [],
+                           callback=None) != 0:
+            raise RuntimeError("GDAL could not polygonize {}: {}".format(path, gdal.GetLastErrorMsg() or "unknown error"))
         vdrv = ogr.GetDriverByName("GeoJSON")
         if os.path.exists(path):
             vdrv.DeleteDataSource(path)
         vds = vdrv.CreateDataSource(path)
         if vds is None:
             raise RuntimeError("GDAL could not write {}: {}".format(path, gdal.GetLastErrorMsg() or "unknown error"))
-        srs = osr.SpatialReference(); srs.ImportFromEPSG(5070)
         lyr = vds.CreateLayer("flood", srs, ogr.wkbPolygon)
         lyr.CreateField(ogr.FieldDefn(field, ogr.OFTString))
         lyr.CreateField(ogr.FieldDefn("dam_id", ogr.OFTString))
-        if gdal.Polygonize(ds.GetRasterBand(1), ds.GetRasterBand(1), lyr, 0, [], callback=None) != 0:
-            raise RuntimeError("GDAL could not polygonize {}: {}".format(path, gdal.GetLastErrorMsg() or "unknown error"))
-        for feat in lyr:
-            feat.SetField(field, value)
-            feat.SetField("dam_id", dam_id)
-            lyr.SetFeature(feat)
+        defn = lyr.GetLayerDefn()
+        for mfeat in mlyr:
+            geom = mfeat.GetGeometryRef()
+            if geom is None:
+                continue
+            f = ogr.Feature(defn)
+            f.SetGeometry(geom.Clone())
+            f.SetField(field, value)
+            f.SetField("dam_id", dam_id)
+            if lyr.CreateFeature(f) != 0:
+                raise RuntimeError("GDAL could not write a feature to {}: {}".format(
+                    path, gdal.GetLastErrorMsg() or "unknown error"))
+            f = None
         vds = None
+        mds = None
 
     stem = os.path.join(outdir, "{}_{}".format(dam_id, scen))
     polygonize(wet, stem + "_extent.geojson", "kind", "extent")
@@ -308,7 +330,7 @@ def _write_us_rasters(outdir, dam_id, r):
     return dest if wrote else None
 
 
-class RunBreachSim(QgsProcessingAlgorithm):
+class RunBreachSim(UnitAlgorithm):
     def name(self): return "runbreachsim"
     def displayName(self): return "7 - Run breach flood simulations"
     def group(self): return "Dam screening"
@@ -394,6 +416,8 @@ class RunBreachSim(QgsProcessingAlgorithm):
         P(QgsProcessingParameterFeatureSource("DAMLINES", "DWR dam lines (protect from cuts; cascade; "
                                               "reservoir-in-grid)", [SRC_LINE],
                                               optional=True))
+        P(QgsProcessingParameterFeatureSource("PROTECT", "More fills to leave uncut (points, lines or polygons; e.g. the Finder's screening_dams)",
+                                              [SRC_POINT, SRC_LINE, SRC_POLYGON], optional=True))
         P(QgsProcessingParameterField("LID", "Dam lines: structure ID field", defaultValue="structure_id",
                                       parentLayerParameterName="DAMLINES", optional=True))
         P(QgsProcessingParameterEnum("CASCADE", "Downstream dams reached by the flood",
@@ -450,6 +474,7 @@ class RunBreachSim(QgsProcessingAlgorithm):
         streams = self.parameterAsSource(params, "STREAMS", context)
         roadcut = self.parameterAsSource(params, "ROADCUT", context)
         damlines = self.parameterAsSource(params, "DAMLINES", context)
+        keep = self.parameterAsSource(params, "PROTECT", context)
         lid = self.parameterAsString(params, "LID", context) or None
         cascade = ["off", "flag", "breach"][self.parameterAsEnum(params, "CASCADE", context)]
         nlcd = self.parameterAsRasterLayer(params, "NLCD", context)
@@ -555,6 +580,7 @@ class RunBreachSim(QgsProcessingAlgorithm):
                             for _, arrs in dl for a in arrs), key=lambda x: x[0])
                 if best[0] < 300: own = best[1]
             protect = [o["line_xy"] for o in others] + ([own] if own is not None else [])
+            protect += cm.protect_near(keep, bxy, reach)         # 0.19.4: Finder dams, not cut
             pool = get(f, "est_pool_m", float)
             v_below = None
             if curves and pool is not None:

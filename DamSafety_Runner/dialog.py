@@ -140,6 +140,11 @@ class NDBreachRunnerDialog(QDialog):
 
     def __init__(self, parent=None, iface=None):
         super().__init__(parent)
+        try:            # Core 1.1.0: the suite's display units (SI or US) in this window
+            from DamSafety_Core.ui.unit_widgets import watch_window as _watch_units
+            _watch_units(self)
+        except Exception:                                         # noqa - Core older than 1.1.0
+            pass
         self.iface = iface
         self._loading = True
         self.setWindowTitle("{} {}".format(TITLE, plugin_version()).strip())
@@ -604,184 +609,89 @@ class NDBreachRunnerDialog(QDialog):
         return scroll
 
     def _dem_download_box(self):
-        try:
-            dd = _load_dem_download()
-            if dd is None:
-                raise ImportError("screening")
-        except Exception:
-            box = QWidget()
-            lay = QVBoxLayout()
-            lay.addWidget(QLabel("DEM download needs DamSafety Screening. It could not be imported."))
-            box.setLayout(lay)
-            return Collapsible("Download a DEM (not available)", box)
+        """3.16.12 (usability plan, change 7): one button, "Download DEM for this dam…", with the
+        resolution beside it. The 13-control box (source, area, resolution, format ticks, dam
+        point, county, folder, two buttons) passed twelve values to the DEM tool and then opened
+        that tool's own full dialog anyway; now the tool's dialog opens with the dam's point
+        (dam.json), its ID, the resolution and the dam folder filled in, and every other choice
+        (source, county, state, ND LiDAR package) is made there. The Screening plugin provides
+        the tool (nddam:downloaddem)."""
         box = QWidget()
-        grid = QGridLayout()
-        grid.setContentsMargins(16, 2, 2, 2)
-        self.dem_source = QComboBox()
-        # 3.10.88: the third entry is the Download DEM tool's SOURCE 2 (Screening 0.17.29+), the
-        # 10 km 1 m lidar project tiles; "USGS 3DEP" is the ImageServer (1.2 km chunks at 1 m).
-        self.dem_source.addItems(["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)",
-                                  DEM_SOURCE_TNM])
-        self.dem_source.setToolTip(
-            "USGS 3DEP: the ImageServer, resampled to 10 m or 1 m and cut into 1,200 px export "
-            "chunks (at 1 m a 10 mi buffer is 729 chunks of 1.2 km - not lidar tiles). "
-            "{}: the 10 km 1 m lidar tiles themselves (about 270 MB each); the tool lists "
-            "them first, tick 'download the listed tiles' to fetch them.".format(DEM_SOURCE_TNM))
-        self.dem_ftp = QLineEdit()
-        self.dem_ftp.setPlaceholderText("ftp://lidarftp.swc.nd.gov/temp/<id>")
-        self.dem_ascii = QCheckBox("ASCII_Grids_ft")
-        self.dem_ascii.setChecked(True)
-        self.dem_imagine = QCheckBox("DEM_Imagine")
-        self.dem_imagine.setChecked(True)
-        self.work_crs = QComboBox()
-        self.work_crs.addItems(["Keep source CRS", "EPSG:5070 metres", "EPSG:26914 UTM 14N metres",
-                                "EPSG:2265 ND North feet", "EPSG:2266 ND South feet"])
-        self.work_crs.setToolTip("3DEP is metres in EPSG:5070. QL2 Imagine is metres in UTM. "
-                                 "ASCII_Grids_ft is feet. Pick the CRS the model should use; "
-                                 "the download is warped to it.")
-        self.dem_scope = QComboBox()
-        self.dem_scope.addItems(["Dam", "County", "State"])
-        self.dem_point = QLineEdit()
-        self.dem_point.setPlaceholderText("longitude,latitude")
-        self.dem_buffer = QDoubleSpinBox()
-        self.dem_buffer.setRange(1.0, 50.0)
-        self.dem_buffer.setValue(10.0)
-        self.dem_buffer.setSuffix(" mi")
-        self.dem_county = QComboBox()
-        self.dem_county.addItems(dd.county_names())
+        col = QVBoxLayout(box)
+        col.setContentsMargins(16, 2, 2, 2)
+        row = QHBoxLayout()
+        col.addLayout(row)
         self.dem_res = QComboBox()
         self.dem_res.addItems(["10 m", "1 m"])
-        self.dem_res.setToolTip("Local copy cell size. Output is EPSG:5070, metres, tiled GeoTIFF.")
+        self.dem_res.setToolTip("Local copy cell size. Output is EPSG:5070, metres, tiled GeoTIFF; "
+                                "at 1 m a 10 mi buffer is 729 export requests of 1.2 km.")
+        self.dem_download_btn = QPushButton("Download DEM for this dam…")
+        self.dem_download_btn.setToolTip(
+            "Opens Download DEM (DamSafety Screening) with this dam's point from dam.json, its ID, "
+            "the resolution and the dam folder filled in. USGS 3DEP by default; pick ND DWR LiDAR, "
+            "the native 1 m tiles, a county or the state in the tool.")
+        self.dem_download_btn.clicked.connect(lambda _c=False: self._open_dem_download())
+        row.addWidget(QLabel("Resolution"))
+        row.addWidget(self.dem_res)
+        row.addWidget(self.dem_download_btn)
+        row.addStretch(1)
+        # 3.17.2: the facts line has its own row; beside Resolution and the button it wrapped
+        # into a label shorter than its text at 1280x800 on Qt5 (realqt_dem_rows.py).
         self.dem_facts = QLabel("")
         self.dem_facts.setWordWrap(True)
-        self.dem_source.currentIndexChanged.connect(lambda _i: self._dem_facts())
+        self.dem_facts.setStyleSheet("color: {};".format(TOKENS["muted"]))
+        col.addWidget(self.dem_facts)
         self.dem_res.currentIndexChanged.connect(lambda _i: self._dem_facts())
-        self.dem_buffer.valueChanged.connect(lambda _v: self._dem_facts())
-        self.dem_scope.currentIndexChanged.connect(lambda _i: self._dem_facts())
+        if _load_dem_download() is None:
+            self.dem_download_btn.setEnabled(False)
+            self.dem_download_btn.setToolTip("DEM download needs DamSafety Screening (it provides "
+                                             "the Download DEM tool). It could not be imported.")
         self._dem_facts()
-        self.dem_out = QLineEdit()
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(self._browse_dem_folder)
-        counties = QPushButton("Counties on the map")
-        counties.clicked.connect(self._show_counties)
-        go = QPushButton("Download DEM…")
-        go.clicked.connect(self._open_dem_download)
-        grid.addWidget(QLabel("Source"), 0, 0)
-        grid.addWidget(self.dem_source, 0, 1)
-        grid.addWidget(self.dem_ascii, 0, 2)
-        grid.addWidget(self.dem_imagine, 0, 3)
-        grid.addWidget(QLabel("ND LiDAR path"), 1, 0)
-        grid.addWidget(self.dem_ftp, 1, 1, 1, 3)
-        grid.addWidget(QLabel("Area"), 2, 0)
-        grid.addWidget(self.dem_scope, 2, 1)
-        grid.addWidget(QLabel("Dam point"), 3, 0)
-        grid.addWidget(self.dem_point, 3, 1)
-        grid.addWidget(self.dem_buffer, 3, 2)
-        grid.addWidget(QLabel("County"), 4, 0)
-        grid.addWidget(self.dem_county, 4, 1)
-        grid.addWidget(QLabel("Resolution"), 4, 2)
-        grid.addWidget(self.dem_res, 4, 3)
-        grid.addWidget(QLabel("Folder"), 5, 0)
-        grid.addWidget(self.dem_out, 5, 1)
-        grid.addWidget(browse, 5, 2)
-        grid.addWidget(go, 5, 3)
-        grid.addWidget(QLabel("Work CRS"), 6, 0)
-        grid.addWidget(self.work_crs, 6, 1)
-        grid.addWidget(counties, 6, 2, 1, 2)
-        grid.addWidget(self.dem_facts, 7, 0, 1, 4)
-        box.setLayout(grid)
-        return Collapsible("Download a DEM (USGS 3DEP, ND DWR LiDAR or 1 m lidar tiles)", box)
+        return Collapsible("Download a DEM", box)
 
     def _dem_facts(self):
-        self.dem_facts.setText(dem_facts_text(
-            self.dem_source.currentIndex(), 10 if self.dem_res.currentIndex() == 0 else 1,
-            float(self.dem_buffer.value()), self.dem_scope.currentIndex()))
+        self.dem_facts.setText(dem_facts_text(0, 10 if self.dem_res.currentIndex() == 0 else 1,
+                                              10.0, 0))
 
-    def _browse_dem_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "DEM folder", self.dem_out.text())
-        if folder:
-            self.dem_out.setText(folder)
-
-
-    def _work_crs(self):
-        text = self.work_crs.currentText()
-        return "" if text.startswith("Keep") else text.split()[0]
-
-    def _show_counties(self):
-        from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsPointXY,
-                               QgsProject, QgsFillSymbol, QgsSingleSymbolRenderer)
-        dd = _load_dem_download()
-        if dd is None:
-            raise ImportError("screening")
-        layer = QgsVectorLayer("Polygon?crs=EPSG:4326&field=county:string",
-                               "ND counties (download clips)", "memory")
-        prov = layer.dataProvider()
-        feats = []
-        for name, ring in dd.county_features():
-            f = QgsFeature(layer.fields())
-            f.setAttribute("county", name)
-            f.setGeometry(QgsGeometry.fromPolygonXY([[QgsPointXY(x, y) for x, y in ring]]))
-            feats.append(f)
-        prov.addFeatures(feats)
-        layer.updateExtents()
+    def _dem_point(self):
+        """'lon,lat' of the dam from dam.json ('' when the folder has no record or point)."""
+        folder = self.folder()
+        if not folder or not os.path.isdir(folder):
+            return ""
         try:
-            sym = QgsFillSymbol.createSimple({"color": "0,80,160,40", "outline_color": "0,60,120",
-                                              "outline_width": "0.6"})
-            layer.setRenderer(QgsSingleSymbolRenderer(sym))
-        except Exception:
-            pass
-        QgsProject.instance().addMapLayer(layer)
-        try:
-            layer.selectionChanged.connect(lambda *_a: self._county_from_map(layer))
-        except Exception:
-            pass
-        canvas = getattr(self.iface, "mapCanvas", lambda: None)()
-        if canvas is not None:
-            canvas.setExtent(layer.extent())
-            canvas.refresh()
-        self.log_edit.append("County clips are on the map. Select one and the county list follows it.")
-
-    def _county_from_map(self, layer):
-        names = [f["county"] for f in layer.selectedFeatures()]
-        if not names:
-            return
-        self.dem_source.setCurrentIndex(1)
-        self.dem_scope.setCurrentIndex(1)
-        self.dem_county.setCurrentText(names[0])
+            from .damsuite import dam_record as DR
+            rec = DR.load(folder)
+            lon, lat = rec.get("lon"), rec.get("lat")
+            if lon is None or lat is None:
+                return ""
+            return "{:.6f},{:.6f}".format(float(lon), float(lat))
+        except Exception:                                        # noqa - no point: the tool asks
+            return ""
 
     def _open_dem_download(self):
+        """The Download DEM tool's own dialog for this dam (the window runs nothing itself)."""
         import processing
-        folder = self.dem_out.text().strip()
+        s = self.settings()
+        folder = self.folder()
+        point = self._dem_point()
         if not folder:
-            QMessageBox.warning(self, TITLE, "Choose a folder for the DEM.")
-            return
-        if self.dem_scope.currentIndex() == 2 and self.dem_source.currentIndex() == 2:
-            # 3.10.89: the tool refuses the native 1 m tiles for the state; say so before asking
-            QMessageBox.warning(self, TITLE, dem_facts_text(2, 1, 10.0, 2))
-            return
-        if self.dem_scope.currentIndex() == 2:
-            n = QMessageBox.question(self, TITLE, "A statewide DEM is tiled and can take a long time. Continue?")
-            if n != getattr(QMessageBox, 'StandardButton', QMessageBox).Yes:
-                return
-        # 3.10.89: COUNTY is the Processing enum's index, as Screening's window passes it - the
-        # tool dialog turned the county's name into index 0 (Adams) for every county
-        dd = _load_dem_download()
-        names = list(dd.county_names()) if dd is not None else []
-        county = self.dem_county.currentText()
-        exec_tool_dialog(processing, "nddam:downloaddem", {
-            "SOURCE": self.dem_source.currentIndex(),        # 2 = native 1 m lidar tiles (TNM)
-            "SCOPE": self.dem_scope.currentIndex(),
-            "DAM_POINT": self.dem_point.text().strip(),
-            "BUFFER_MI": float(self.dem_buffer.value()),
-            "COUNTY": names.index(county) if county in names else 0,
-            "RES": self.dem_res.currentIndex(),
-            "CELL": 10.0 if self.dem_res.currentIndex() == 0 else 1.0,
-            "DWR_PATH": self.dem_ftp.text().strip(),
-            "ASCII_FT": self.dem_ascii.isChecked(),
-            "IMAGINE": self.dem_imagine.isChecked(),
-            "WORK_CRS": self._work_crs(),
-            "OUT": folder,
-        }, parent=self)
+            self._log("Download DEM: no dam chosen - the tool opens empty (set the Dams folder "
+                      "and the dam ID to fill it in)")
+        elif not point:
+            self._log("Download DEM: {} has no dam point in dam.json - give the point or a "
+                      "county in the tool".format(s["dam_id"]))
+        res = self.dem_res.currentIndex()
+        params = {"SOURCE": 0, "SCOPE": 0, "RES": res, "CELL": 10.0 if res == 0 else 1.0,
+                  "BUFFER_MI": 10.0}
+        if point:
+            params["DAM_POINT"] = point
+        if s["dam_id"]:
+            params["DAM_ID"] = s["dam_id"]
+        if folder:
+            params["OUT"] = os.path.join(folder, "terrain")   # the tool makes it
+            if os.path.isdir(folder):
+                params["DAM_FOLDER"] = folder                 # the 1 m tiles read its bounds
+        exec_tool_dialog(processing, "nddam:downloaddem", params, parent=self)
 
     # --------------------------------------------------- the settings window --
     def _build_settings_widget(self):

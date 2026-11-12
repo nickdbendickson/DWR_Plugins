@@ -19,8 +19,16 @@ def _tool_name(cls):
         return ""
 
 
+# 3.16.12 (usability plan change 3): tools nobody runs by hand from the toolbox - the self-test,
+# the analytic verification suite and the hand-off to DamSafety Hazard (the window's Results
+# button opens it) - carry FlagHideFromToolbox. Still runnable from scripts, models,
+# qgis_process and the window; only the toolbox list shrinks.
+HIDDEN_FROM_TOOLBOX = frozenset(("selftest", "verification", "classify"))
+
 # 3.5: every tool takes its parameter defaults from the suite settings file (suite_settings_tools)
-ALGORITHMS = tuple(ST.settings_aware(c, pl.PLUGIN_KEY, pl.settings_group) for c in ORIGINAL_ALGORITHMS)
+ALGORITHMS = tuple(ST.settings_aware(c, pl.PLUGIN_KEY, pl.settings_group,
+                                     hidden=_tool_name(c) in HIDDEN_FROM_TOOLBOX)
+                   for c in ORIGINAL_ALGORITHMS)
 
 ICON = os.path.join(os.path.dirname(__file__), "icon.svg")
 

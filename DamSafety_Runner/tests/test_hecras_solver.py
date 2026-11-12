@@ -401,3 +401,82 @@ def hecras_solver_structure_coefficients_from_the_settings():
         assert p0.unknown_keywords(g) == set()
     finally:
         shutil.rmtree(d)
+
+
+@test
+def courant_precheck_matches_courant_lines_without_false_rejection():
+    """3.16.16 (L04): hecras_model.courant_precheck() must raise exactly when courant_lines()
+    would at plan-write time, and NEVER when it would not (that would block a valid build). It
+    moves that identical error up front, before build_model writes the terrain GeoTIFF and cuts
+    the breach channel. Replays the real writer sequence (COURANT_DEFAULTS -> time_step option ->
+    apply_courant -> fill max/min -> time_step) against the pre-check over the solver matrix."""
+    import itertools
+
+    def writer_raises(o, sv):
+        ts = dict(hm.COURANT_DEFAULTS)
+        ts.update({k: v for k, v in (o.get("time_step") or {}).items() if v is not None})
+        ts = hs.apply_courant(ts, sv)
+        cour = o["courant"] or (1.0 if o["equation"] == hm.EQ_SWE else 2.0)
+        if ts["max"] is None:
+            ts["max"] = cour
+        if ts["min"] is None:
+            ts["min"] = round(hm.COURANT_MIN_RATIO * float(ts["max"]), 4)
+        _, _, ts, _ = hs.time_step(3.0, sv, lambda dt: (dt, "lab"), ts)
+        try:
+            hm.courant_lines(ts, o["equation"])
+            return False
+        except hm.HecRasModelError:
+            return True
+
+    def precheck_raises(o, sv):
+        try:
+            hm.courant_precheck(o, sv)
+            return False
+        except hm.HecRasModelError:
+            return True
+
+    fired = reached = 0
+    for eq, cour, tstep, cmax, cmin, adap, dtm in itertools.product(
+            [hm.EQ_SWE, hm.EQ_DWE], [None, 0.5, 1.0, 2.0, 3.0],
+            [None, {"min": 0.6}, {"max": 1.0, "min": 0.3}, {"min": 1.0}, {"max": 2.0},
+             {"min": 0.9, "max": 2.0}, {"min": 0.2}],
+            [None, 0.5, 1.0, 2.0, 5.0], [None, 0.01, 0.3, 0.5, 1.0, 2.0, 2.5],
+            ["on", "off"], ["cap", "fixed", "courant"]):
+        solver = {"adaptive": adap, "dt_mode": dtm}
+        if cmax is not None:
+            solver["courant_max"] = cmax
+        if cmin is not None:
+            solver["courant_min"] = cmin
+        try:
+            sv = hs.settings({"solver": solver})
+        except hs.SolverSettingError:
+            continue                      # settings() rejects it up front; never reaches build
+        o = {"courant": cour, "equation": eq, "time_step": tstep}
+        w, p = writer_raises(o, sv), precheck_raises(o, sv)
+        assert not (p and not w), ("FALSE REJECTION", o, solver)
+        assert p == w, ("precheck disagrees with courant_lines", o, solver, p, w)
+        reached += 1
+        fired += int(p)
+    assert reached > 1000 and fired > 100, (reached, fired)
+
+
+@test
+def courant_precheck_catches_min_set_alone_at_build_time():
+    """The concrete DWR-case: NDBREACH_HECRAS_COURANT_MIN=1.0 with no max passes hsol.settings()
+    (SWE max defaults to 1.0 only later), so without the pre-check the whole model is built and
+    then courant_lines() raises. courant_precheck raises the same error straight away."""
+    sv = hs.settings({"solver": {"courant_min": 1.0}})     # no courant_max -> gap in settings()
+    o = {"courant": None, "equation": hm.EQ_SWE, "time_step": None}
+    try:
+        hm.courant_precheck(o, sv)
+    except hm.HecRasModelError as e:
+        assert "COURANT_MIN" in str(e) and "half" in str(e), str(e)
+    else:
+        raise AssertionError("courant_precheck did not catch courant_min=1.0 set alone")
+    # the same setting with the matching max is accepted (no false rejection)
+    sv2 = hs.settings({"solver": {"courant_min": 1.0, "courant_max": 3.0}})
+    hm.courant_precheck(o, sv2)             # must not raise
+    # and off / fixed step builds stay buildable with min set alone
+    for extra in ({"adaptive": "off"}, {"dt_mode": "fixed"}):
+        sv3 = hs.settings({"solver": dict({"courant_min": 1.0}, **extra)})
+        hm.courant_precheck(o, sv3)        # must not raise

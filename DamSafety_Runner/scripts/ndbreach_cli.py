@@ -86,6 +86,11 @@ def _bootstrap():
     name = "nd_breach_runner"
     mod = sys.modules.get(name)
     here = os.path.realpath(PLUGIN_DIR)
+    # Core 1.0.0: the plugin's damsuite is a shim onto the DamSafety_Core plugin, installed next
+    # to this one (python/plugins/, or the DWR_Plugins checkout): make its parent importable
+    parent = os.path.dirname(here)
+    if os.path.isdir(os.path.join(parent, "DamSafety_Core")) and parent not in sys.path:
+        sys.path.append(parent)
     if mod is not None and os.path.realpath(os.path.dirname(
             getattr(mod, "__file__", "") or "")) == here:
         return name
@@ -1503,8 +1508,11 @@ def _hecras_stage(p, res, log, unattended=False):
     log("HEC-RAS 2D stage\u2026 (the LISFLOOD-FP rasters are kept as 'LISFLOOD-FP <name>'{})"
         .format("; unattended: a 12 h wall-clock limit per compute and preprocess step unless "
                 "NDBREACH_HECRAS_TIMEOUT_S says otherwise" if unattended else ""))
+    # audit M18 (3.17.7): Ctrl-C (CANCEL["flag"], _install_sigint) stops the Wine preprocess
+    # and RasUnsteady through wallclock.stop_group - start_new_session keeps the terminal's
+    # SIGINT away from them - and lfmod.Cancelled reaches the command's cancel exit (130)
     workflow.run_hecras_stage(p.folder, res, p.setup.writer, p.st, p.dam_xy, log,
-                              unattended=unattended)
+                              unattended=unattended, cancel=lambda: CANCEL["flag"])
 
 
 def cmd_hydrograph(args):
@@ -1596,6 +1604,12 @@ def cmd_check(args):
             bad = bad or not ok
             lines.append(("OK " if ok else "PROBLEM ") + "LISFLOOD-FP ({}): {}".format(
                 exe, r["message"]))
+            if r["ok"] and not r.get("velocity"):       # M21: a build that writes no .maxVc
+                lines.append("PROBLEM LISFLOOD-FP ({}): the test run wrote no maximum velocity "
+                             "(.maxVc) - the ACER depth-velocity hazard needs it, and a run on "
+                             "this build would report velocity-driven HIGH cells as low. Use a "
+                             "patched build (scripts/build_lisflood_*.sh) or the built-in "
+                             "engine.".format(exe))
         if py:
             a = anmod.check_anuga(py, tmp)
             bad = bad or not a["ok"]

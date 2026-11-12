@@ -22,6 +22,7 @@ from ..core.more_layers import pick, layer_name
 from . import _common as cm
 from ..damsuite import structure_flags as SF
 from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_INT, FT_STRING, NUM_DOUBLE, SRC_LINE, SRC_POINT, SRC_POLYGON, WKB_POINT)
+from ._common import UnitAlgorithm
 
 NEW = [("hz_class", FT_STRING), ("hz_conf", FT_STRING),
        ("hz_reason", FT_STRING), ("n_bldg_wet", FT_INT),
@@ -36,7 +37,7 @@ NEW = [("hz_class", FT_STRING), ("hz_conf", FT_STRING),
 CRIT_LABELS = [hz.METHOD_LABELS[m] for m in hz.METHODS]
 
 
-class HazardClassification(QgsProcessingAlgorithm):
+class HazardClassification(UnitAlgorithm):
     def name(self): return "hazardclassification"
     def displayName(self): return "8 - Hazard classification"
     def group(self): return "Dam screening"
@@ -446,7 +447,7 @@ class HazardClassification(QgsProcessingAlgorithm):
                 if bld is not None:
                     for b in feats(bld, fb):
                         kind, parts = cm.albers_parts(b, tb)
-                        s = grid.sample(kind, parts, wet_ft) if parts else None
+                        s = grid.sample(kind, parts, wet_ft, structure=True) if parts else None
                         if not s or s["depth_m"] < mind:
                             continue
                         hab = hz.is_habitable(b[occ] if occ else None, b[prim] if prim else None,
@@ -460,7 +461,7 @@ class HazardClassification(QgsProcessingAlgorithm):
                 for src, tfm, fback, occ_f, prim_f, hab_f, mob_f, prefix in extra_bld:
                     for b in feats(src, fback):
                         kind, parts = cm.albers_parts(b, tfm)
-                        s = grid.sample(kind, parts, wet_ft) if parts else None
+                        s = grid.sample(kind, parts, wet_ft, structure=True) if parts else None
                         if not s or s["depth_m"] < mind:
                             continue
                         hab = hz.is_habitable(b[occ_f] if occ_f else None, b[prim_f] if prim_f else None,

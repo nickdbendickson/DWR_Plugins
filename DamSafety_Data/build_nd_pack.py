@@ -10,8 +10,8 @@ are the engine's. Run it as before - QGIS is NOT needed:
     python build_nd_pack.py --help
     python build_nd_pack.py --list
 
-Never edit the builder here: edit shared/damsuite/packengine.py in DWR_Plugins and run
-tools/sync_damsuite.py.
+Never edit the builder here: edit DamSafety_Core/damsuite/packengine.py in DWR_Plugins (Core
+1.0.0: one copy, in the DamSafety Core plugin).
 """
 import os
 import sys
@@ -26,6 +26,10 @@ else:                                # run as a script: the plugin folder is bes
     _HERE = os.path.dirname(os.path.abspath(__file__))
     if _HERE not in sys.path:
         sys.path.insert(0, _HERE)
+    # Core 1.0.0: damsuite is the DamSafety_Core plugin next to this one (python/plugins/, or
+    # the DWR_Plugins checkout), reached through this plugin's damsuite/ shim
+    if os.path.dirname(_HERE) not in sys.path:
+        sys.path.insert(1, os.path.dirname(_HERE))
     import constants as _C           # noqa: E402  (no QGIS imports needed)
     import osm_parse as _O           # noqa: E402
     from damsuite import packengine as _E   # noqa: E402

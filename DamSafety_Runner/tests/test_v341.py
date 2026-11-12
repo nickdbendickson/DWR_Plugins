@@ -59,7 +59,7 @@ def v341_hazard_sampling_nan_and_empty():
     assert nh.sample_footprint(d, v, 0.0, 0.0, 10.0, [])[:2] == (None, None)
     assert nh.sample_footprint(d, v, 0.0, 0.0, 10.0, [(float("nan"), 1.0)])[:2] == (None, None)
     dd, vv, how = nh.sample_footprint(d, v, 0.0, 0.0, 10.0, [(5, -5), (35, -5), (35, -35), (5, -35)])
-    assert dd == 1.0 and vv == 2.0 and "cells inside" in how
+    assert dd == 1.0 and vv == 2.0 and "cells in the footprint" in how
 
 
 @test

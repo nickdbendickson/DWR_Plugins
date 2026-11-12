@@ -1,6 +1,6 @@
 name: Release
 
-# Builds a GitHub Release of the seven DamSafety plugins and publishes the QGIS plugin
+# Builds a GitHub Release of the eight DamSafety plugins (DamSafety Core and the seven that need it) and publishes the QGIS plugin
 # repository index (plugins.xml) to the gh-pages branch, so QGIS can install and update them
 # from https://nickdbendickson.github.io/dAmIt_Plugins/plugins.xml (docs/CI.md, "Release").
 #
@@ -196,7 +196,11 @@ jobs:
           [ -s old-plugins.xml ] && MERGE="--merge old-plugins.xml"
           python3 tools/make_plugins_xml.py --tag "$TAG" --zips dist --out pages/plugins.xml $MERGE
           # plugin icons next to the index (QGIS shows them in the installer)
-          for p in DamSafety_*; do mkdir -p "pages/$p" && cp "$p/icon.svg" "pages/$p/icon.svg"; done
+          # (the file named by icon= in metadata.txt: damit.svg, the DaMiT suite mark)
+          for p in DamSafety_*; do
+            icon=$(sed -n 's/^icon=//p' "$p/metadata.txt" | head -n1 | tr -d '\r ')
+            mkdir -p "pages/$p" && cp "$p/${icon:-icon.svg}" "pages/$p/"
+          done
           cp pages/plugins.xml dist/plugins.xml
       - name: GitHub Release (a draft when started by hand)
         uses: softprops/action-gh-release@v2
@@ -206,8 +210,8 @@ jobs:
           draft: ${{ github.ref_type != 'tag' }}
           generate_release_notes: true
           body: |
-            The seven DamSafety QGIS plugins (install order: Setup, Data, Runner, Hazard;
-            Screening, PMP and Hazard Lite optional). The Runner zip carries LISFLOOD-FP 8.3
+            The DamSafety QGIS plugins (install order: Core, Setup, Data, Runner, Hazard;
+            Screening, PMP and Hazard Lite optional; every plugin needs DamSafety Core). The Runner zip carries LISFLOOD-FP 8.3
             with the arrival-depth patch for Linux x64, Windows x64 and macOS Apple Silicon
             under `DamSafety_Runner/bin/`; the same binaries are attached on their own, with
             `lisflood-8.3-ndbreach-source.zip` as the GPL corresponding source. `SHA256SUMS` lists

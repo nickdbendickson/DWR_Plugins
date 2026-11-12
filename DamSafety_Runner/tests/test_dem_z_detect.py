@@ -177,36 +177,39 @@ def dem_facts_count_imageserver_chunks_and_offer_the_native_1m_tiles():
         st = D.dem_facts_text(2, 1, 10.0, 2)
         assert "not offered for the whole state" in st and "10 km GeoTIFFs" not in st, st
         dlg = D.NDBreachRunnerDialog()
-        # 3.10.89: vars(), not hasattr() - the fake QWidget answers every attribute name
-        if "dem_source" not in vars(dlg):
-            print("SKIP the window part (DamSafety Screening not importable here)")
-            return
-        items = [dlg.dem_source.itemText(i) for i in range(dlg.dem_source.count())]
-        assert items == ["USGS 3DEP", "ND DWR LiDAR (lidar.dwr.nd.gov)", D.DEM_SOURCE_TNM], items
-        dlg.dem_source.setCurrentIndex(0)
+        # 3.16.12 (usability plan change 7): one button and a resolution; the facts line says
+        # what a 3DEP dam download at that resolution is
         dlg.dem_res.setCurrentIndex(1)
         assert "729 export requests" in dlg.dem_facts.text(), dlg.dem_facts.text()
-        dlg.dem_source.setCurrentIndex(2)
-        assert "10 km GeoTIFFs" in dlg.dem_facts.text(), dlg.dem_facts.text()
+        dlg.dem_res.setCurrentIndex(0)
+        assert "cell 10 m" in dlg.dem_facts.text(), dlg.dem_facts.text()
         d = tempfile.mkdtemp(prefix="demdl_")
         try:
-            dlg.dem_out.setText(d)
-            dlg.dem_point.setText("-97.390918,46.984382")
+            from nd_breach_runner.damsuite import dam_record as dr
+            os.makedirs(os.path.join(d, "DWR-1"))
+            rec = dr.load(os.path.join(d, "DWR-1"), create=True)
+            rec.set("dam_id", "DWR-1", "ndbreach", "3.16.12")
+            rec.set("lon", -97.390918, "ndbreach", "3.16.12")
+            rec.set("lat", 46.984382, "ndbreach", "3.16.12")
+            rec.save()
+            dlg.dams_edit.setText(d)
+            dlg.dam_edit.setText("DWR-1")
+            dlg._changed()
+            dlg.dem_res.setCurrentIndex(1)
             dlg._open_dem_download()
             alg, p = q.proc.DIALOGS[-1]
-            assert alg == "nddam:downloaddem" and p["SOURCE"] == 2 and p["BUFFER_MI"] == 10.0, p
-            # 3.10.89: COUNTY is the enum index (a name became index 0, Adams, in the tool dialog)
-            names = [dlg.dem_county.itemText(i) for i in range(dlg.dem_county.count())]
-            assert "Stark" in names and names[0] != "Stark", names[:3]
-            dlg.dem_scope.setCurrentIndex(1)
-            dlg.dem_county.setCurrentIndex(names.index("Stark"))
+            # the tool opens on USGS 3DEP for the dam's point, at the resolution chosen, into
+            # <dam folder>/terrain; source, county and state are chosen in the tool itself
+            assert alg == "nddam:downloaddem" and p["SOURCE"] == 0 and p["SCOPE"] == 0, p
+            assert p["DAM_POINT"] == "-97.390918,46.984382" and p["DAM_ID"] == "DWR-1", p
+            assert p["RES"] == 1 and p["CELL"] == 1.0 and p["BUFFER_MI"] == 10.0, p
+            assert p["OUT"] == os.path.join(d, "DWR-1", "terrain") and p["DAM_FOLDER"] == os.path.join(d, "DWR-1")
+            # a dam with no record yet: no point and no folder sent, the tool asks for them
+            dlg.dam_edit.setText("NEW")
+            dlg._changed()
             dlg._open_dem_download()
             p = q.proc.DIALOGS[-1][1]
-            assert isinstance(p["COUNTY"], int) and names[p["COUNTY"]] == "Stark", p["COUNTY"]
-            # SOURCE 2 for the whole state: refused here, before the tool is opened
-            n = len(q.proc.DIALOGS)
-            dlg.dem_scope.setCurrentIndex(2)
-            dlg._open_dem_download()
-            assert len(q.proc.DIALOGS) == n, q.proc.DIALOGS[-1]
+            assert "DAM_POINT" not in p and "DAM_FOLDER" not in p and p["DAM_ID"] == "NEW", p
+            assert p["OUT"] == os.path.join(d, "NEW", "terrain")
         finally:
             shutil.rmtree(d, ignore_errors=True)

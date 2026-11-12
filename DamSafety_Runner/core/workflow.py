@@ -41,6 +41,7 @@ import time
 
 import numpy as np
 
+from . import model_terrain                 # 3.17.7
 from . import breach as brmod
 from . import conditioning as cond
 from . import flood as floodmod
@@ -816,6 +817,8 @@ def _write_pass_products(out_folder, dem, env, arrival_m, writer, it):
         return np.asarray(getattr(obj, "data", obj), float)
 
     depth, vel, arr = grid(env.depth), grid(getattr(env, "velocity", None)), grid(getattr(env, "arrival", None))
+    if not (getattr(env, "stats", {}) or {}).get("velocity_written", True):
+        vel = None          # M21: the build wrote no .maxVc - emit no zeros-velocity pass product
     names = {"depth": "Depth (Max).tif", "velocity": "Velocity (Max).tif", "arrival": "Arrival Time.tif"}
     show = {}
     if depth is not None:
@@ -1282,8 +1285,9 @@ def _write_refine_entry(res, entry):
     rep["grid_refine"] = entry
     try:
         _write_json(res.report_json, rep)
-    except OSError:
-        pass
+    except Exception as e:                       # noqa: BLE001 - L06: visible, not swallowed
+        res.warnings = list(res.warnings or []) + [
+            "grid-refine entry not written to {}: {}".format(res.report_json, e)]
 
 
 def _amend_report(res, entry, texts):
@@ -1303,13 +1307,25 @@ def _amend_report(res, entry, texts):
     rep["warnings"] = list(rep.get("warnings") or []) + texts
     if res.summary is not None:
         rep["summary"] = res.summary
+    # L06: the JSON is the machine-readable record and does not depend on render_report, so write
+    # it first and on its own - a render_report failure must never block it (the pre-L06 code
+    # wrote the JSON, then rendered the markdown). Write atomically; surface a named warning
+    # instead of swallowing so a lost on-disk record does not pass as a clean run.
     try:
         _write_json(res.report_json, rep)
-        if getattr(res, "report_md", ""):
-            with open(res.report_md, "w", encoding="utf-8") as f:
-                f.write(render_report(rep))
-    except Exception:                                              # noqa - extras only
-        pass
+    except Exception as e:                                         # noqa: BLE001 - extras only
+        res.warnings = list(res.warnings or []) + [
+            "run report json not updated ({}): {}".format(res.report_json, e)]
+    # The markdown is rendered BEFORE its file is opened (so a render_report KeyError - it indexes
+    # rep["summary"]/["hydrograph"] directly - cannot truncate run_report.md to zero length) and
+    # written atomically; a render failure leaves the previous markdown intact and is reported.
+    if getattr(res, "report_md", ""):
+        try:
+            md = render_report(rep)
+            _write_text(res.report_md, md)
+        except Exception as e:                                     # noqa: BLE001 - extras only
+            res.warnings = list(res.warnings or []) + [
+                "run report markdown not updated ({}): {}".format(res.report_md, e)]
 
 
 def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=None,
@@ -1958,6 +1974,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         if not stability["on"] and os.path.exists(marker):
             os.remove(marker)
         par = lfmod.write_inputs(wd, dem, inflow_xy, hyd, lst, inflow_line=inline)
+        if model_terrain.enabled(st):            # 3.17.7: the grid this pass runs on
+            model_terrain.write_lisflood_terrain(dem, wd, log)
         runtime = lfmod.run(wd, par, lst, prog, cancel, log)
         _note_wall(lst, "lisflood" + tag)
         if getattr(lst, "unpatched_used", False):
@@ -2394,9 +2412,21 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
 
     def write_qa(tag, env, model, init):
         fa = _final_arrays(env, arrival_m, t_ref_hr, init)
+        # M21: a build that wrote no .maxVc must not leave a zeros velocity QA raster in the model
+        # folder either - the Hazard plugin autodetects _breach_model/*_vmax_fps.tif as the velocity
+        # raster, which would satisfy its pre-flight and defeat the defence. Skip (and drop any
+        # stale copy of) the velocity QA raster for such an env; depth / arrival / wse are kept.
+        env_no_vel = not (getattr(env, "stats", {}) or {}).get("velocity_written", True)
         res.qa.setdefault(model, {})
         for kind, arr in fa.items():
             p = os.path.join(model_dir, "{}{}_{}".format(model, tag, QA_NAMES[kind]))
+            if kind == "velocity" and env_no_vel:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+                res.qa[model].pop("baseline_velocity" if tag else "velocity", None)
+                continue
             writer(dem.like(_to_us(kind, arr), np.nan), p)
             res.qa[model]["baseline_" + kind if tag else kind] = p
         return fa
@@ -2551,6 +2581,23 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                     "never changed"}
     # --- v3.4.0: near-dam refine on a fine FV1 grid -----------------------------------------
     fin = final_arrays
+    # M21 (product-write defence, signed off 2026-11-10): a LISFLOOD-FP build that wrote no
+    # maximum-velocity raster (.maxVc) leaves env.velocity an all-zeros grid (read_results), which
+    # would be published as velocity 0 and class velocity-driven shallow-fast cells LOW off the
+    # v=0 ACER TM-11 curves. Instead omit the velocity product and report the maximum velocity as
+    # unavailable (None), so the downstream Hazard pre-flight refuses (a loud stop beats a silent
+    # under-classification). No shipped engine triggers it: the built-in engine always writes
+    # .maxVc and ANUGA always has velocity, and the flag defaults True; only a non-conforming
+    # user-supplied LISFLOOD-FP binary does. The mid-run hard-stop is deliberately NOT added.
+    no_velocity = not getattr(final_env, "stats", {}).get("velocity_written", True)
+    if no_velocity:
+        vmsg = ("The flood model produced no maximum-velocity raster (.maxVc), so the velocity "
+                "product is omitted and the maximum velocity is reported as unavailable; the "
+                "hazard classification will require a velocity raster or the depth-only (1D) "
+                "criterion.")
+        if vmsg not in warnings:
+            warnings.append(vmsg)
+            log(vmsg)
     if getattr(st, "refine_near", False):
         from . import refine as refmod
         decision = refmod.decide(st, final_model, st.receptors, st.structures, dam_xy)
@@ -2609,6 +2656,14 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                     pass
         for kind, arr in fin.items():
             p = os.path.join(out_folder, FINAL_NAMES[kind])
+            if kind == "velocity" and no_velocity:   # M21: omit the velocity product (and drop
+                for stale in (p, os.path.join(out_folder, "Velocity Polygons.geojson")):
+                    try:                              # any stale pass / prior copy) so the Hazard
+                        os.remove(stale)              # pre-flight refuses a zeros velocity grid
+                    except OSError:
+                        pass
+                res.final.pop("velocity", None)
+                continue
             writer(dem.like(_to_us(kind, arr), np.nan), p)
             res.final[kind] = p
     incr = None
@@ -2652,13 +2707,20 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         except Exception as e:
             warnings.append("Could not render the animation: {}: {}".format(type(e).__name__, e))
     if st.keep_arrays:
-        res.final_si = fin
+        # M21: when the build wrote no .maxVc, store velocity as all-NaN (not the zeros grid) so the
+        # keep_arrays consumers (sensitivity preview, cascade, probabilistic, nested) treat it as
+        # absent - the ND 5.2 preview then passes velocity None into nd_hazard and fails closed
+        # rather than classifying off the v=0 ACER TM-11 curves.
+        res.final_si = ({**fin, "velocity": np.full_like(fin["velocity"], np.nan)}
+                        if no_velocity else fin)
     d = fin["depth"]
     cell_ac = dem.dx ** 2 / 4046.8564224
 
     # --- receptors -----------------------------------------------------------------------
     if st.receptors is not None and len(st.receptors):
-        rsum, rrows = impmod.summarize(st.receptors, dem, fin, arrival_m)
+        rsum, rrows = impmod.summarize(st.receptors, dem,
+                                       ({**fin, "velocity": None} if no_velocity else fin),
+                                       arrival_m)
         report["receptors"] = rsum
         res.receptor_csv = os.path.join(model_dir, "receptors_flooded.csv")
         impmod.write_rows(res.receptor_csv, rrows)
@@ -2681,8 +2743,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
         "flooded_acres": round(float(np.isfinite(d).sum()) * cell_ac, 1),
         "flooded_acres_over_arrival_depth": round(float((d >= arrival_m).sum()) * cell_ac, 1),
         "max_depth_ft": round(float(np.nanmax(d)) / FT, 2) if np.isfinite(d).any() else 0,
-        "max_velocity_fps": (round(float(np.nanmax(fin["velocity"])) / FT, 2)
-                             if np.isfinite(fin["velocity"]).any() else 0),
+        "max_velocity_fps": (None if no_velocity else
+                             (round(float(np.nanmax(fin["velocity"])) / FT, 2)
+                              if np.isfinite(fin["velocity"]).any() else 0)),
         "latest_arrival_hr": (round(float(np.nanmax(fin["arrival"])), 2)
                               if np.isfinite(fin["arrival"]).any() else None),
         "lisflood_runs": len(iterations),
@@ -2693,7 +2756,9 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
     if "receptors" in report:
         summary["receptors_flooded"] = report["receptors"].get("receptors_flooded")
     # v3.10.27 (#91): depth-threshold areas, representative velocities, water-body mask
-    water_mask = _report_metrics(summary, report, st, dem, fin, cell_ac, arrival_m, out_folder,
+    water_mask = _report_metrics(summary, report, st, dem,
+                                 ({**fin, "velocity": None} if no_velocity else fin),
+                                 cell_ac, arrival_m, out_folder,
                                  getattr(writer, "work_srs", None), warnings, log)
     if report.get("anuga_mesh"):
         summary["anuga_mesher"] = report["anuga_mesh"]["used"]
@@ -2818,6 +2883,8 @@ def _run_dam_once(dam, dam_xy, st, terrain_src, writer, out_folder, inflow_xy=No
                                                  man)
     except Exception as e:      # the manifest is an extra; never lose the run for it
         warnings.append("Could not write the run manifest: {}: {}".format(type(e).__name__, e))
+    if model_terrain.enabled(st):                # 3.17.7: next to the results, for review
+        model_terrain.publish(model_dir, out_folder, log)
     if not st.keep_model_files:
         _clean(model_dir)
     progress(100, "done")
@@ -2848,7 +2915,7 @@ def final_summary(fin, cell_ac, arrival_m, base=None, final_model=None, grid=Non
             "flooded_acres_over_arrival_depth": round(float((d >= arrival_m).sum()) * cell_ac, 1),
             "max_depth_ft": round(float(np.nanmax(d)) / FT, 2) if np.isfinite(d).any() else 0,
             "max_velocity_fps": (round(float(np.nanmax(v)) / FT, 2) if np.isfinite(v).any()
-                                 else 0),
+                                 else None),   # M21: absent velocity -> None, not a false 0
             "latest_arrival_hr": (round(float(np.nanmax(a)), 2) if np.isfinite(a).any()
                                   else None)})
     if grid is not None:
@@ -3413,14 +3480,15 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
     if toe_line is None:
         toe_line = getattr(dam, "crest_line_xy", None)
     half = terrain.POOL_HALF_M
-    pool_grid = pool = direction = None
+    pool_grid = pool = pmask = direction = None
     try:
         pool_grid = terrain_src.read((dam_xy[0] - half, dam_xy[1] - half,
                                       dam_xy[0] + half, dam_xy[1] + half), cell)
         # v3.12.10: with the shallow (hydro-flattened) pool against the dam line
-        pool = pool_grid.like(terrain.pool_mask(
-            pool_grid, h_m, dam_xy, top_m, getattr(dam, "crest_line_xy", None)).astype(float),
-            nodata=-1.0)
+        # L05: keep the raw mask so downstream_direction can reuse it (one priority_flood, not two)
+        pmask = terrain.pool_mask(pool_grid, h_m, dam_xy, top_m,
+                                  getattr(dam, "crest_line_xy", None))
+        pool = pool_grid.like(pmask.astype(float), nodata=-1.0)
     except Exception as e:                       # noqa: BLE001 - the pool is a refinement
         log("Pool behind the dam not found ({}); the inflow search uses the side test only."
             .format(e))
@@ -3432,7 +3500,7 @@ def _downstream_inflow(terrain_src, local, dam, dam_xy, h_m, top_m, rad, cell, w
             crest_xy = terrain.embankment_crest(local, dam_xy, h_m, top_m, max(rad, 400.0))[0]
         direction, how = terrain.downstream_direction(
             pool_grid, dam_xy, h_m, crest_line=getattr(dam, "crest_line_xy", None),
-            crest_xy=crest_xy, top_m=top_m)
+            crest_xy=crest_xy, top_m=top_m, pool=pmask)      # L05: reuse the mask above
     except Exception as e:                       # noqa: BLE001
         direction, how = None, "downstream direction failed: {}".format(e)
     log("Downstream side of the crest: {}".format(
@@ -3953,6 +4021,23 @@ def render_report(r):
     lines += ["", "Units: {}.".format(s["units"]),
               "These rasters are the input for the ND hazard classification; this tool does "
               "not classify the dam.", ""]
+    return _display_units_md("\n".join(lines))
+
+
+def _display_units_md(md):
+    """Core 1.1.0: under the suite's SI display units the report text is converted (pipe tables
+    column by column, quantities in the text) and says so; run_report.json, the rasters and the
+    CSVs keep US units. Under US, or with an older Core, `md` comes back unchanged."""
+    try:
+        from ..damsuite import display_units as DU
+    except Exception:                                             # noqa - Core older than 1.1.0
+        return md
+    if DU.system() != DU.SI:
+        return md
+    out = DU.convert_markdown(md)
+    lines = out.split("\n")
+    lines = [ln for ln in lines if not ln.startswith("Units: ")]
+    lines.insert(min(2, len(lines)), DU.report_note() + "\n")
     return "\n".join(lines)
 
 
@@ -3961,7 +4046,8 @@ class HecRasStageError(Exception):
     LISFLOOD-FP results stay in the dam folder)."""
 
 
-def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattended=False):
+def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattended=False, *,
+                     cancel=None):
     """3.10.66: the HEC-RAS 2D stage after workflow.run_dam (Models = LISFLOOD-FP then
     HEC-RAS 2D), shared by 'Run breach model for one dam', the batch and the ndbreach CLI
     (both used to skip it): runs hecras_engine.run_stage, puts its final rasters in `res.final`, adds its warnings and
@@ -3972,14 +4058,21 @@ def run_hecras_stage(folder, res, writer, st, dam_xy, log, engine=None, unattend
     (which runs ndbreach:batch): the HEC-RAS wall clock then defaults to
     hecras_engine.BATCH_TIMEOUT_S (12 h) per compute and per preprocess step when
     NDBREACH_HECRAS_TIMEOUT_S gives none, so one stuck dam cannot hold the queue for ever. A
-    single interactive run keeps no limit unless the variable is set."""
+    single interactive run keeps no limit unless the variable is set.
+
+    audit M18 (3.17.7) `cancel` (keyword-only; `engine` stays the 7th positional): a callable
+    (fb.cancel in QGIS, the Ctrl-C flag in the CLI) handed to hecras_engine.run_stage, which
+    polls it during the Wine preprocess and RasUnsteady; a cancel stops the process group and
+    raises lfmod.Cancelled (not a HecRasStageError) for the caller's existing cancel path.
+    No default wall-clock limit is added (the 3.10.48 decision stands)."""
     if engine is None:
         from . import hecras_engine as engine
+    kw = {"cancel": cancel} if cancel is not None else {}
     try:
         if unattended:
-            hr = engine.run_stage(folder, res.final, writer, st, log, unattended=True)
+            hr = engine.run_stage(folder, res.final, writer, st, log, unattended=True, **kw)
         else:
-            hr = engine.run_stage(folder, res.final, writer, st, log)
+            hr = engine.run_stage(folder, res.final, writer, st, log, **kw)
     except engine.HecRasEngineError as e:
         raise HecRasStageError("HEC-RAS 2D stage failed (the LISFLOOD-FP results are in the "
                                "dam folder): {}".format(e))
@@ -4012,11 +4105,39 @@ def _write_json(path, obj):
     if folder:
         os.makedirs(folder, exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=2, default=_json_default)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2, default=_json_default)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:                                   # L06: do not leave a half .tmp behind
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _write_text(path, text):
+    """Replace `path` with `text` only after the whole document is on disk (as _write_json),
+    so a kill or I/O error mid-write never leaves a truncated or zero-length file in place."""
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def run_finished(folder):

@@ -441,16 +441,13 @@ class ExtrasTabMixin(object):
             if outcome.error is not None:
                 self._log(outcome.traceback)
                 log_message(outcome.traceback, MSG_CRITICAL)
-                QMessageBox.warning(self, "Dams in series", str(outcome.error))
                 self._update_status("Dams in series screen failed: {}".format(outcome.error),
-                                    False)
+                                    False)                   # 2.23.17: the status line, no pop-up
                 return
             res, paths = outcome.result
             lines = SER.summary_lines(res)
             for line in lines:
                 self._log(">>> " + line)
             self._update_status("Dams in series: " + (lines[0] if lines else "done"), True)
-            QMessageBox.information(self, "Dams in series", "\n".join(lines[:14]) + "\n\n" +
-                                    paths.get("html", ""))
-            self._open_path(paths.get("html"))
+            self._open_path(paths.get("html"))                 # 2.23.17: the report opens; no pop-up
         self._start_background("Dams in series screen\u2026", work, done, project_bound=False)

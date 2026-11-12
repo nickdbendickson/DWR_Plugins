@@ -4,7 +4,7 @@ OpenMP runtime's own thread count (DamSafety_Runner/core/omp_probe.py) and a sha
 final stage; fails when the results differ or the runtime runs another count.
 Run it in an ANUGA environment: python tools/anuga_omp_bench.py   (NOT on the shared box
 while models run: it is a real, if short, ANUGA run)."""
-import hashlib, json, os, subprocess, sys, time
+import json, os, subprocess, sys
 
 CHILD = r'''
 import hashlib, json, os, sys, time

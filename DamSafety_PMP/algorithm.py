@@ -18,7 +18,14 @@ def _durs(s):
     return [("%02d" % int(x)) for x in s.replace(";", ",").replace(" ", ",").split(",") if x.strip()]
 
 
-class NDPMPAlgorithm(QgsProcessingAlgorithm):
+try:            # Core 1.1.0: number inputs in the chosen display unit system (SI or US)
+    from DamSafety_Core.ui.unit_widgets import UnitParamsMixin as _UnitParams
+except Exception:                                                 # noqa - Core older than 1.1.0
+    class _UnitParams(object):
+        pass
+
+
+class NDPMPAlgorithm(_UnitParams, QgsProcessingAlgorithm):
     BASIN, HOME, OUT = "BASIN", "DATA_HOME", "OUTPUT_FOLDER"
     LOC, GEN, COOL = "LOCAL_DURATIONS", "GENERAL_DURATIONS", "COOL_DURATIONS"
     USEAREA, AREA, WEIGHTED, SUBFIELD = "USE_BASIN_AREA", "CUSTOM_AREA", "WEIGHTED", "SUBBASIN_FIELD"

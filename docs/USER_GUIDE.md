@@ -22,6 +22,21 @@ The Screening window, run_chain, the 7b hand-off and Setup's Dams-folder picker 
 - **Inflow side check (#84, Runner 3.10.18+):** the inflow point is always picked on the downstream side of the dam. Check `inflow_point.side_check` in `run_report.json`. If the trace from the inflow runs back over the dam point, or the inflow is behind the dam or on the upstream side of the crest, the first warning reads **"CHECK THE DAM POINT"**. Fix the dam point or give the dam line before trusting the run.
 - **Road-fill warning (#84):** if a road from the receptor road layer is within 30 m of the dam point and no DWR dam line (`DAM_LINES`) was given, the Runner warns that the embankment in the DEM may be the road's fill (`dam_point_checks` in `run_report.json`).
 
+## Grid size (CELL) on flat plains (Runner 3.14.7)
+**What it does.** Before a run the Runner looks at a coarse DEM window about 4 km across centred on the dam (`SAMPLE_HALF_M` = 2000 m). The ground counts as a **flat section-road plain** (`flat_section_plain`) when both hold:
+- relief (95th minus 5th percentile elevation) is **25 m or less**, and
+- mean slope is **1% or less**.
+
+**What you see.**
+- The default cell stays **10 m** (it already was).
+- On a flat plain, a cell **coarser than 10 m** gets a **WARNING before the run starts**: coarse cells average road embankments and ditches away and over-predict the flooded area.
+- **5 m** is offered in the Advanced tab hint and the CELL tooltip as the finer, slower choice.
+- The check **never changes your cell**. It only warns. The result is written to `run_report.json["terrain_grid"]`.
+
+**Why.** On DWR-2801 (Absaraka), the flooded area against DSS-WISE (≥0.5 ft) scored CSI 0.36 / 0.43 / 0.57 at 20 / 10 / 5 m. Absaraka measures 21.2 m relief and 0.94% slope, so a 20 or 30 m cell now warns.
+
+**Limits.** No section-road check yet: relief and slope only. Absaraka's slope sits close to the 1% limit.
+
 ## Arrival depth: 0.1 ft by default (#131; Runner 3.10.53, Hazard 2.18.52)
 **What it is.** The arrival depth is how deep the water has to get at a spot before the Runner says the flood has "arrived" there. The arrival time in `Arrival Time.tif` is the first time the depth goes above it, in hours after the breach starts. Since Runner 3.10.53 the default is **0.1 ft**. Before, it was **1 ft**.
 
@@ -64,7 +79,7 @@ Compare like with like. Use the fixed-depth areas (`flooded_acres_ge_0_1ft`, `_g
 Several windows can share one settings file safely. A window that opens without changing anything doesn't rewrite the file. If a save reports that the file can't be read, fix or restore it from `<name>.bak` (or use "Save as" to replace it on purpose) instead of deleting it. A leftover `<name>.lock` from a crashed QGIS clears itself after 30 s.
 
 ## Shallow-basin storage guard (#13)
-If tool 3 warns that a basin is shallow (bed-to-crest depth under 0.5 × dam height), the mapped water body isn't the reservoir, and the inventory curve (storage ∝ depth²) is used instead. For such a dam tool 7b sends the DWR inventory's maximum-pool area (`inv_maxa_m2`, DWR `max_pool_area`) as the Runner's AREA_AC when the inventory has one (Screening 0.17.46; also when no curve folder is given, 0.17.49), else it withholds AREA_AC. The hand-off notes (`rn_inputs`, `rn_area_src`) record which area was sent, or why none was.
+If tool 3 warns that a basin is shallow (bed-to-crest depth under 0.5 × dam height), the mapped water body isn't the reservoir, and the inventory curve (storage ∝ depth²) is used instead. For such a dam tool 7b sends the DWR inventory's maximum-pool area (`inv_maxa_m2`, DWR `max_pool_area`) as the Runner's AREA_AC when the inventory has one (Screening 0.17.46; also when no curve folder is given, 0.17.49), else it withholds AREA_AC. The hand-off notes (`rn_inputs`, `rn_area_src`) record which area was sent, or why none was. (Screening 0.19.3, audit M24: tool 7b measures the curve's freeboard **plus** tool 3's estimated below-pool depth against 0.5 × dam height, so a wet dam with a small freeboard but a deep basin now sends the stage-storage curve area — and its lower routed peak — instead of falling back to storage ∝ depth². A curve kept only by that below-pool depth still defers to the DWR-recorded maximum-pool area, and a curve area implying a storage-area exponent above the Runner's cap of 6 is not sent.)
 
 ## How-to: force undetermined dams through tool 7b
 In tool 7b, the "Dams to send" (`WHICH`) parameter has these options:

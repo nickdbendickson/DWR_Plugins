@@ -13,7 +13,14 @@ D = QgsProcessingParameterNumber.Double
 SETTING_WBT = "nd_pmp/whitebox_tools"
 
 
-class PotholeStorageAlgorithm(QgsProcessingAlgorithm):
+try:            # Core 1.1.0: number inputs in the chosen display unit system (SI or US)
+    from DamSafety_Core.ui.unit_widgets import UnitParamsMixin as _UnitParams
+except Exception:                                                 # noqa - Core older than 1.1.0
+    class _UnitParams(object):
+        pass
+
+
+class PotholeStorageAlgorithm(_UnitParams, QgsProcessingAlgorithm):
     def name(self): return "pothole_storage"
     def displayName(self): return "Pothole (depression) storage & contributing area"
     def createInstance(self): return PotholeStorageAlgorithm()

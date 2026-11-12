@@ -1,5 +1,5 @@
-"""Write shared/damsuite/vertcon_nd.py: NOAA's VERTCON NGVD29 -> NAVD88 grid clipped to North
-Dakota, embedded as text (tools/sync_damsuite.py copies only .py files into the plugins).
+"""Write DamSafety_Core/damsuite/vertcon_nd.py: NOAA's VERTCON NGVD29 -> NAVD88 grid clipped to
+North Dakota, embedded as text (a .py module: the one damsuite package ships in the Core plugin).
 
 Source (public domain, "Derived from work by NOAA"):
     https://cdn.proj.org/us_noaa_vertconc.tif   (PROJ-data; VERTCON 2.x, converted from NGS's
@@ -12,7 +12,7 @@ The ND clip (nodes lon -104.60 .. -95.95, lat 45.45 .. 49.55; 174 x 83 nodes):
 (-projwin takes the outer edges of the half-cell around the nodes; the .asc header gives
 xllcorner -104.625, yllcorner 45.425, cellsize 0.05.)
 
-    python3 tools/make_vertcon_nd.py nd.asc            (then tools/sync_damsuite.py)
+    python3 tools/make_vertcon_nd.py nd.asc            (then tools/damsuite_files.py)
 
 The values are stored as int16 tenths of a millimetre (round-off <= 0.05 mm), zlib + base64."""
 import base64
@@ -22,7 +22,7 @@ import sys
 import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT = os.path.join(ROOT, "shared", "damsuite", "vertcon_nd.py")
+OUT = os.path.join(ROOT, "DamSafety_Core", "damsuite", "vertcon_nd.py")
 SCALE = 10000          # stored units per metre (0.1 mm)
 
 HEAD = '''"""NOAA VERTCON NGVD29 -> NAVD88 vertical offsets for North Dakota (damsuite 1.18.0).

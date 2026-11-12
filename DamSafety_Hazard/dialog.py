@@ -62,6 +62,11 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
                         DssWiseTabMixin, RasImportTabMixin):
     def __init__(self, parent=None):
         super().__init__(parent)
+        try:            # Core 1.1.0: the suite's display units (SI or US) in this window
+            from DamSafety_Core.ui.unit_widgets import watch_window as _watch_units
+            _watch_units(self)
+        except Exception:                                         # noqa - Core older than 1.1.0
+            pass
         self.config_dam_folder = ""
         self.config_output_folder = ""
         self._rasters = {}
@@ -324,7 +329,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
     def _build_gear(self):
         self.gear_btn = QToolButton()
         self.gear_btn.setText("\u2699")
-        self.gear_btn.setToolTip("Suite settings, documentation, self-test, data sources")
+        self.gear_btn.setToolTip("Suite settings, documentation, the Dam suite tools, "
+                                 "self-test, data sources")
         self.gear_btn.setPopupMode(_enum(QToolButton, "ToolButtonPopupMode", "InstantPopup"))
         self.gear_btn.setAutoRaise(True)
         self.gear_btn.setStyleSheet("QToolButton {font-size: 18px; padding: 0 8px 2px 8px;}")
@@ -333,6 +339,8 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
         self.settings_action.triggered.connect(lambda _c=False: self._open_suite_settings())
         self.readme_action = menu.addAction("Documentation (README)\u2026")
         self.readme_action.triggered.connect(lambda _c=False: self._open_readme())
+        menu.addSeparator()
+        menu.addMenu(self._build_suite_tools_menu(menu))    # 2.23.17: the Dam suite tools
         menu.addSeparator()
         self.selftest_action = menu.addAction("Run self-test")
         self.selftest_action.setToolTip("Runs the full pipeline on synthetic data in a "
@@ -909,8 +917,7 @@ class NDDamHazardDialog(QDialog, DataTabMixin, DataFolderTabMixin, Classificatio
             log_message(tb, MSG_CRITICAL)
             self._finish_progress(force=True)
             self._set_busy(False)
-            self._update_status("FAILED: {}".format(e), False)
-            QMessageBox.critical(self, "Error", str(e) or repr(e))
+            self._update_status("FAILED: {}".format(e), False)   # 2.23.17: the red line, no pop-up
 
     def _cancel_task(self, *args):
         if self._task is not None:

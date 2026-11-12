@@ -5,8 +5,10 @@ houses built on foundations = ND Figure 5.1; Figure 3, mobile homes = ND Figure 
 
 ONE module for both plugins. nd_breach_runner and nd_dam_screening each carry an identical
 copy of this file and of `acer_tm11_charts.json` next to it, so a dam gets the same class
-from either tool. Only the standard library and numpy are used; no QGIS, no GDAL, no
-package-relative imports. Keep the copies identical (MODULE_VERSION and the tests check it).
+from either tool. Only the standard library, numpy and the vendored damsuite.tm11_curves are
+used (loaded by file when this module is read on its own, as the Hazard's chartsign does); no
+QGIS, no GDAL. Keep the copies identical (MODULE_VERSION, tools/ci_checks.py
+IDENTICAL_ACROSS_PLUGINS and the tests check it).
 
 What the policy says and how it is applied here (section numbers are the policy's):
 
@@ -33,8 +35,15 @@ What the policy says and how it is applied here (section numbers are the policy'
   zone is MEDIUM by rule - not potentially lethal, not probable loss of life. The old reading
   (the judgment zone is borderline, 5.3, so it counts as potentially lethal, HIGH) is kept as
   the option Settings.judgment_zone_high, off by default.
-* 5.3 Borderline -> the higher class: a point within the digitizing tolerance of a higher zone
-  takes that zone; a point beyond the chart's axes takes the high danger zone.
+* 5.3 Borderline (module 1.4.0, audit P1 2026-11-08, matching DamSafety_Hazard, the classifier
+  of record): the zone comes from the suite's one digitized REG_05.2026 table
+  (damsuite.tm11_curves.zone: a depth ON a boundary takes the higher zone, a point beyond the
+  chart's axes takes the high danger zone). A structure within Settings.near_ft (0.5 ft, the
+  Hazard's DEFAULT_NEAR_THRESHOLD_FT) below the next boundary is flagged as near it; with
+  Settings.borderline_higher (off by default, as in the Hazard) it is moved into that zone.
+  Until 1.3.0 a point within 0.01 of each axis (about 0.10 ft / 0.25 ft/s on the house chart) of
+  a higher zone's polygon was put INTO that zone; that rule gave some structures a higher zone
+  than the Hazard did on the same rasters. It is kept as DangerChart.polygon_zone for comparison.
   Missing data (AADT, trains a day) is listed as a data gap, with the assumption used.
 * 5.3 Cascading: at least as high as a downstream dam whose failure this dam could cause.
 * 5.3 No allowance for evacuation or emergency action (none is made anywhere here).
@@ -42,6 +51,14 @@ What the policy says and how it is applied here (section numbers are the policy'
 "Any depth" needs a small numerical tolerance for model noise: `wet_ft` (default 0.1 ft).
 Depth and velocity at a structure are the maxima at its location; they may occur at
 different times, so the chart point is an upper bound (conservative).
+
+Sampling footprint (1.4.0, audit P1, matching DamSafety_Hazard structures.evaluate_structures):
+a building outline is read over the cells whose centre lies in the outline OR within
+EDGE_RING_FT (5 ft, the Hazard's OSM_EDGE_BUFFER_FT) of its wall - the outline plus its edge
+ring; a point structure over the cells within POINT_RADIUS_FT (20 ft, the Hazard's
+DEFAULT_POINT_RADIUS_FT) + EDGE_RING_FT of the point. More cells read than the bare footprint,
+so a zone can only rise, never fall, against the pre-1.4.0 samplers. The callers convert the
+feet to the grid's units (metres or State Plane feet).
 
 The chart boundaries are polygons in (velocity ft/s, depth ft) digitized from the figures and
 stored in `acer_tm11_charts.json` with the engineer who digitized and signed them off (one
@@ -58,7 +75,33 @@ import re
 from dataclasses import dataclass, field, asdict
 from typing import List, Optional
 
-MODULE_VERSION = "1.3.0"
+
+def _load_tm11_curves():
+    """damsuite.tm11_curves - the suite's one digitized REG_05.2026 table (1.4.0, audit P1).
+    The package-relative import when this module is part of a plugin; otherwise (the Hazard's
+    chartsign / tests load this file on its own, Screening tests put core/ on sys.path) the
+    vendored file next to this module's core/ folder, by path. tm11_curves is pure standard
+    library with no relative imports, so a by-file load is the same module."""
+    try:
+        from ..damsuite import tm11_curves as tm
+        return tm
+    except (ImportError, ValueError):
+        pass
+    import importlib.util
+    plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(plugin, "damsuite", "tm11_curves.py")
+    if not os.path.exists(path):          # Core 1.0.0: the plugin's damsuite is a shim onto the
+        path = os.path.join(os.path.dirname(plugin),   # DamSafety_Core plugin, next to this one
+                            "DamSafety_Core", "damsuite", "tm11_curves.py")
+    spec = importlib.util.spec_from_file_location("_nd_hazard_tm11_curves", path)
+    tm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tm)
+    return tm
+
+
+TM11 = _load_tm11_curves()
+
+MODULE_VERSION = "1.4.0"
 POLICY = "North Dakota Dam Safety Standards Policy REG_05.2026, Sections 5.2 and 5.3"
 CHART_REFERENCE = ("Reclamation (1988), ACER Technical Memorandum No. 11, Downstream Hazard "
                    "Classification Guidelines: Fig. 2 houses built on foundations (ND Fig. 5.1), "
@@ -92,6 +135,11 @@ CHART_MOBILE = "mobile"
 
 M_PER_FT = 0.3048
 MIN_WET_FT = 0.01
+# 1.4.0 (audit P1): the Hazard's sampling footprint - structures.evaluate_structures reads the
+# outline grown by constants.OSM_EDGE_BUFFER_FT, a point structure as a disc of
+# constants.DEFAULT_POINT_RADIUS_FT grown by the same ring
+EDGE_RING_FT = 5.0
+POINT_RADIUS_FT = 20.0
 
 
 class ChartsNotDigitized(ValueError):
@@ -135,11 +183,20 @@ def _dist_to_polygon(x, y, poly, sx, sy):
     return best
 
 
+_TM11_ZONES = {TM11.LOW: ZONE_LOW, TM11.JUDGMENT: ZONE_JUDGMENT, TM11.HIGH: ZONE_HIGH}
+# the Hazard's borderline option (constants.DEFAULT_NEAR_THRESHOLD_FT, pipeline DEFAULTS
+# borderline_higher False): a structure this far (ft of depth) below the next boundary is
+# "near" it; only with borderline_higher is it moved into that zone (ND 5.3(f))
+DEFAULT_NEAR_FT = 0.5
+
+
 @dataclass
 class DangerChart:
     """One depth-velocity flood danger chart. Polygons are lists of [velocity_fts, depth_ft]
     covering the high danger zone and the judgment zone; the rest of the chart is low
-    danger."""
+    danger. 1.4.0: the polygons draw the review figures (chart_svg) and are validated against
+    the axes; the zone itself comes from the suite's digitized table (damsuite.tm11_curves),
+    the rule DamSafety_Hazard classifies with, so the three plugins agree on every (d, v)."""
     key: str
     title: str
     figure: str
@@ -147,7 +204,7 @@ class DangerChart:
     d_max_ft: float
     high: list
     judgment: list
-    tolerance: float = 0.01          # digitizing tolerance, share of each axis range
+    tolerance: float = 0.01          # read and written for the file format; unused since 1.4.0
 
     def validate(self):
         for name, poly in (("high", self.high), ("judgment", self.judgment)):
@@ -163,15 +220,84 @@ class DangerChart:
             raise ValueError("chart '{}': axis maxima must be positive".format(self.key))
         return self
 
+    @property
+    def table_kind(self):
+        """The damsuite.tm11_curves table this chart stands for ('house' / 'mobile')."""
+        try:
+            return TM11.kind_of(self.key)
+        except KeyError:
+            raise ValueError("chart '{}' is not one of the REG_05.2026 figures (house / mobile): "
+                             "no digitized table to classify with".format(self.key))
+
+    def _beyond(self, d, v):
+        if d > self.d_max_ft or v > self.v_max_fts:
+            return "beyond the chart ({:.1f} ft, {:.1f} ft/s; axes to {:g} ft, {:g} ft/s): " \
+                   "taken as high danger".format(d, v, self.d_max_ft, self.v_max_fts)
+        return ""
+
     def zone(self, depth_ft, vel_fts):
-        """(zone, note). Beyond the axes -> high danger; within the digitizing tolerance of
-        a higher zone -> that zone (ND 5.3: borderline takes the higher class)."""
+        """(zone, note): the zone of the suite's digitized REG_05.2026 table
+        (damsuite.tm11_curves.zone - a depth on a boundary takes the higher zone, ND 5.3), the
+        rule DamSafety_Hazard classifies with (helpers.classify_values). Beyond the axes ->
+        high danger, said in the note. 1.4.0 (audit P1): replaces the polygon test with its
+        0.01-of-each-axis tolerance band (polygon_zone), which put a point up to about 0.10 ft
+        below a boundary into the higher zone and so disagreed with the Hazard."""
         d = max(0.0, float(depth_ft))
         v = max(0.0, float(vel_fts))
-        if d > self.d_max_ft or v > self.v_max_fts:
-            return ZONE_HIGH, "beyond the chart ({:.1f} ft, {:.1f} ft/s; axes to {:g} ft, {:g} " \
-                              "ft/s): taken as high danger".format(d, v, self.d_max_ft,
-                                                                   self.v_max_fts)
+        note = self._beyond(d, v)
+        if note:
+            return ZONE_HIGH, note
+        return _TM11_ZONES[TM11.zone(self.table_kind, d, v)], ""
+
+    def margins(self, depth_ft, vel_fts):
+        """(ft still missing to the high boundary, ft to the judgment boundary) at the velocity
+        read on the table (clipped to the axis, as DamSafety_Hazard hazard.zone_margins does);
+        <= 0 when that boundary is reached."""
+        d = max(0.0, float(depth_ft))
+        v = min(max(0.0, float(vel_fts)), self.v_max_fts)
+        lo, hi = TM11.thresholds(self.table_kind, v)
+        return hi - d, lo - d
+
+    def near(self, depth_ft, vel_fts, near_ft=DEFAULT_NEAR_FT):
+        """(zone, note, next zone or '', margin ft or None): zone() and, when the point is
+        within near_ft of depth BELOW the next boundary (0 < margin <= near_ft), that boundary's
+        zone - the Hazard's near-threshold flag (structures.apply_type: Near_Threshold). A point
+        beyond the axes is high danger and never near."""
+        z, note = self.zone(depth_ft, vel_fts)
+        if note or not near_ft or near_ft <= 0:
+            return z, note, "", None
+        mh, mj = self.margins(depth_ft, vel_fts)
+        if z == ZONE_JUDGMENT and 0 < mh <= near_ft:
+            return z, note, ZONE_HIGH, mh
+        if z == ZONE_LOW and 0 < mj <= near_ft:
+            return z, note, ZONE_JUDGMENT, mj
+        return z, note, "", None
+
+    def table_mismatch_ft(self):
+        """The largest depth (ft) by which a vertex of this chart's polygons lies off the
+        digitized table's boundaries (the high polygon's and the judgment polygon's vertices
+        against the nearer of the two curves at their velocity; the closing corners on the axes
+        left out). 0 for the shipped chart file; a chart file of other polygons is drawn as
+        given but classified on the table, and classify() notes the difference."""
+        worst = 0.0
+        k = self.table_kind
+        for poly in (self.high, self.judgment):
+            for v, d in poly:
+                if d >= self.d_max_ft - 1e-9 or v > self.v_max_fts + 1e-9:
+                    continue                                 # a corner on the top / right axis
+                lo, hi = TM11.thresholds(k, v)
+                worst = max(worst, min(abs(d - lo), abs(d - hi)))
+        return worst
+
+    def polygon_zone(self, depth_ft, vel_fts):
+        """The rule of 1.0.0 - 1.3.0 (comparison only): the digitized polygons, a point within
+        `tolerance` of each axis of a higher zone's edge counted in that zone. Not used for
+        classification since 1.4.0."""
+        d = max(0.0, float(depth_ft))
+        v = max(0.0, float(vel_fts))
+        note = self._beyond(d, v)
+        if note:
+            return ZONE_HIGH, note
         sx, sy = self.v_max_fts, self.d_max_ft
         if _point_in_polygon(v, d, self.high):
             return ZONE_HIGH, ""
@@ -346,6 +472,12 @@ class Settings:
     # 1.3.0 (Nick): a habitable structure in the ACER judgment zone is MEDIUM by rule. True is
     # the old option: the judgment zone counts as potentially lethal (HIGH, 5.3 borderline).
     judgment_zone_high: bool = False
+    # 1.4.0 (audit P1): the Hazard's borderline option, same defaults (DEFAULT_NEAR_THRESHOLD_FT
+    # 0.5 ft, borderline_higher off). A structure within near_ft of depth below the next zone
+    # boundary is flagged "near" it (Finding.near, a note); only with borderline_higher is it
+    # moved into that zone (ND 5.3(f)) and counted borderline. 0 turns the flag off.
+    near_ft: float = DEFAULT_NEAR_FT
+    borderline_higher: bool = False
 
     def validate(self):
         if self.lethality not in LETHALITY_METHODS:
@@ -354,6 +486,9 @@ class Settings:
             raise ValueError("the wet depth must be at least {:g} ft (a dry cell reads 0 ft, so 0 "
                              "would count every structure and road as inundated) and the rule "
                              "depth positive".format(MIN_WET_FT))
+        if not (float(self.near_ft) >= 0):
+            raise ValueError("the near-threshold distance must be 0 (off) or a positive depth "
+                             "in ft")
         for v in (self.unknown_aadt, self.unknown_trains):
             if v not in RANK:
                 raise ValueError("unknown class '{}'".format(v))
@@ -520,48 +655,120 @@ def _inside_mask(xs, ys, ring):
     return inside
 
 
-def sample_footprint(depth, vel, x0, y_top, cell, ring, wet_ft=0.1, to_ft=1.0):
-    """A structure polygon (exterior ring [(x, y), ...]): (depth at the deepest cell whose
-    centre is inside, the maximum velocity over the wet cells inside, how). TM 11 practice
-    (Nick, 2026-11-01, option C): the peak depth and the peak velocity are classified
-    together even when they come from different cells (reverts db9c665's same-cell pairing).
-    A footprint with no cell centre inside uses the cell under its centroid. Depth units
-    follow the arrays; `to_ft` converts them to ft for the wet test."""
+def _edge_mask(xs, ys, ring, edge):
+    """True where (xs, ys) lies within `edge` of the ring's boundary (exact point-to-segment
+    distance, every edge of the closed ring) - the cells of the edge ring. The Hazard builds
+    the same band with GEOS buffer(edge, 8), whose chords lie inside the arcs at convex
+    corners (fastsample.geos_arc_gap: 0.0048 x edge, 7 mm at 5 ft); otherwise the same cells."""
     import numpy as np
+    near = np.zeros(xs.shape, bool)
+    if not edge or edge <= 0:
+        return near
+    e2 = float(edge) ** 2
+    n = len(ring)
+    for i in range(n):
+        ax, ay = ring[i]
+        bx, by = ring[(i + 1) % n]
+        dx, dy = bx - ax, by - ay
+        L2 = dx * dx + dy * dy
+        if L2 == 0:
+            d2 = (xs - ax) ** 2 + (ys - ay) ** 2
+        else:
+            t = np.clip(((xs - ax) * dx + (ys - ay) * dy) / L2, 0.0, 1.0)
+            d2 = (xs - (ax + t * dx)) ** 2 + (ys - (ay + t * dy)) ** 2
+        near |= d2 <= e2
+    return near
+
+
+def _cells_window(depth, x0, y_top, cell, xmin, ymin, xmax, ymax):
+    """(r0, r1, c0, c1, xs, ys) of the cells whose centre can lie in the box; None when the
+    box misses the grid."""
+    import numpy as np
+    c0 = max(0, int(math.floor((xmin - x0) / cell)))
+    c1 = min(depth.shape[1] - 1, int(math.floor((xmax - x0) / cell)))
+    r0 = max(0, int(math.floor((y_top - ymax) / cell)))
+    r1 = min(depth.shape[0] - 1, int(math.floor((y_top - ymin) / cell)))
+    if c0 > c1 or r0 > r1:
+        return None
+    cc, rr = np.meshgrid(np.arange(c0, c1 + 1), np.arange(r0, r1 + 1))
+    return r0, r1, c0, c1, x0 + (cc + 0.5) * cell, y_top - (rr + 0.5) * cell
+
+
+def _peak_of_cells(depth, vel, r0, r1, c0, c1, m):
+    """(peak depth, peak velocity over the wet cells, n) of the masked cells of the window.
+    TM 11 practice (Nick, 2026-11-01, option C): the peak depth and the peak velocity are
+    classified together even when they come from different cells. The classifying velocity is
+    the peak over ALL wet (d > 0) cells, matching DamSafety_Hazard structures.peak_pair; the
+    wet_ft floor is not applied here so Runner/Screening agree with Hazard (H07)."""
+    import numpy as np
+    d = np.asarray(depth[r0:r1 + 1, c0:c1 + 1], float)[m]
+    d = np.where(np.isfinite(d), d, -np.inf)
+    k = int(np.argmax(d))
+    dmax = float(d[k]) if np.isfinite(d[k]) else None
+    vmax = None
+    if vel is not None:
+        v = np.asarray(vel[r0:r1 + 1, c0:c1 + 1], float)[m]
+        wet = np.isfinite(d) & (d > 0) & np.isfinite(v)
+        if wet.any():
+            vmax = float(v[wet].max())
+        elif dmax is not None and np.isfinite(v[k]):
+            vmax = float(v[k])
+    return dmax, vmax, int(m.sum())
+
+
+def sample_footprint(depth, vel, x0, y_top, cell, ring, wet_ft=0.1, to_ft=1.0, edge=0.0):
+    """A structure polygon (exterior ring [(x, y), ...]): (depth at the deepest cell whose
+    centre is inside the outline or within `edge` (grid units) of its wall, the maximum
+    velocity over the wet cells of that area, how). 1.4.0 (audit P1): `edge` is the Hazard's
+    edge ring (EDGE_RING_FT in the grid's units); 0 reads the bare footprint, the rule before
+    1.4.0. A footprint with no cell centre in the area uses the cell under its centroid. Depth
+    units follow the arrays; `to_ft` converts them to ft for the wet test."""
     ring = [p for p in (ring or ()) if math.isfinite(p[0]) and math.isfinite(p[1])]
     if not ring:                         # 3.4.1 / 0.11.1: empty or all-NaN ring: no sample
         return None, None, "footprint has no valid vertex"
+    edge = max(0.0, float(edge or 0.0))
     xs_ = [p[0] for p in ring]
     ys_ = [p[1] for p in ring]
-    c0 = max(0, int(math.floor((min(xs_) - x0) / cell)))
-    c1 = min(depth.shape[1] - 1, int(math.floor((max(xs_) - x0) / cell)))
-    r0 = max(0, int(math.floor((y_top - max(ys_)) / cell)))
-    r1 = min(depth.shape[0] - 1, int(math.floor((y_top - min(ys_)) / cell)))
-    if c0 <= c1 and r0 <= r1:
-        cc, rr = np.meshgrid(np.arange(c0, c1 + 1), np.arange(r0, r1 + 1))
-        xs = x0 + (cc + 0.5) * cell
-        ys = y_top - (rr + 0.5) * cell
+    win = _cells_window(depth, x0, y_top, cell, min(xs_) - edge, min(ys_) - edge,
+                        max(xs_) + edge, max(ys_) + edge)
+    if win is not None:
+        r0, r1, c0, c1, xs, ys = win
         m = _inside_mask(xs, ys, ring)
+        if edge > 0:
+            m |= _edge_mask(xs, ys, ring, edge)
         if m.any():
-            d = np.asarray(depth[r0:r1 + 1, c0:c1 + 1], float)[m]
-            d = np.where(np.isfinite(d), d, -np.inf)
-            k = int(np.argmax(d))
-            dmax = float(d[k]) if np.isfinite(d[k]) else None
-            vmax = None
-            if vel is not None:
-                v = np.asarray(vel[r0:r1 + 1, c0:c1 + 1], float)[m]
-                # option C: the classifying velocity is the peak over ALL wet (d > 0) cells,
-                # matching DamSafety_Hazard structures.peak_pair; the wet_ft floor is not applied
-                # here so Runner/Screening agree with Hazard on the same rasters (H07).
-                wet = np.isfinite(d) & (d > 0) & np.isfinite(v)
-                if wet.any():
-                    vmax = float(v[wet].max())
-                elif dmax is not None and np.isfinite(v[k]):
-                    vmax = float(v[k])
-            return dmax, vmax, "deepest of {} cells inside".format(int(m.sum()))
+            dmax, vmax, n = _peak_of_cells(depth, vel, r0, r1, c0, c1, m)
+            return dmax, vmax, "deepest of {} cells in the footprint{}".format(
+                n, " + {:g} ft edge ring".format(edge * to_ft) if edge > 0 else "")
     cx, cy = sum(xs_) / len(xs_), sum(ys_) / len(ys_)
     d, v = sample_point(depth, vel, x0, y_top, cell, cx, cy)
     return d, v, "no cell centre inside: cell under the centroid"
+
+
+def sample_disc(depth, vel, x0, y_top, cell, x, y, radius, wet_ft=0.1, to_ft=1.0):
+    """A point structure as the Hazard reads it: (peak depth, peak velocity over the wet
+    cells, how) of the cells whose centre lies within `radius` (grid units: the assumed
+    footprint POINT_RADIUS_FT plus the EDGE_RING_FT ring, converted by the caller) of the
+    point; the cell under the point when no cell centre is that close. (None, None, how)
+    off the grid."""
+    try:
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return None, None, "point has no valid coordinate"
+    except TypeError:
+        return None, None, "point has no valid coordinate"
+    radius = max(0.0, float(radius or 0.0))
+    if radius > 0:
+        win = _cells_window(depth, x0, y_top, cell, x - radius, y - radius, x + radius,
+                            y + radius)
+        if win is not None:
+            r0, r1, c0, c1, xs, ys = win
+            m = (xs - x) ** 2 + (ys - y) ** 2 <= radius ** 2
+            if m.any():
+                dmax, vmax, n = _peak_of_cells(depth, vel, r0, r1, c0, c1, m)
+                return dmax, vmax, "deepest of {} cells within {:g} ft of the point".format(
+                    n, radius * to_ft)
+    d, v = sample_point(depth, vel, x0, y_top, cell, x, y)
+    return d, v, "point"
 
 
 def sample_line_max(depth, x0, y_top, cell, vertices):
@@ -597,6 +804,10 @@ class Finding:
     x: Optional[float] = None
     y: Optional[float] = None
     gap: str = ""
+    # 1.4.0: the next zone when the point is within Settings.near_ft below its boundary (the
+    # Hazard's Near_Threshold), '' otherwise; the depth still missing to that boundary
+    near: str = ""
+    margin_ft: Optional[float] = None
 
     @property
     def danger_zone(self):
@@ -717,12 +928,25 @@ def structure_finding(s, st, charts=None):
                        borderline=True, gap="structure {}: no velocity at its location; "
                        "counted potentially lethal".format(s.id),
                        **dict(kw, vel_fts=None))
-    zone, note = ch.zone(s.depth_ft, s.vel_fts)
+    # 1.4.0 (audit P1): the table zone with the Hazard's near-threshold flag and borderline
+    # option, not a tolerance band around the digitized polygons
+    zone, note, near, margin = ch.near(s.depth_ft, s.vel_fts, st.near_ft)
+    borderline = bool(note)
+    if near:
+        kw.update(near=near, margin_ft=round(float(margin), 2))
+        if st.borderline_higher:
+            note = "moved from the {} ({:.2f} ft below the {} boundary, ND 5.3(f))".format(
+                ZONE_NAMES[zone].lower(), margin, ZONE_NAMES[near].lower())
+            zone, borderline = near, True
+        else:
+            note = "within {:g} ft of the {} boundary ({:.2f} ft below it; not moved - the " \
+                   "borderline option is off)".format(st.near_ft, ZONE_NAMES[near].lower(),
+                                                      margin)
     fig = "Fig. 5.2" if s.mobile else "Fig. 5.1"
     pt = "{:.1f} ft at {:.1f} ft/s".format(s.depth_ft, s.vel_fts)
     if zone == ZONE_HIGH:
         return Finding(HIGH, "5.2.1.1 " + fig, reason="{} in the high danger zone ({}){}".format(
-            what, pt, "; " + note if note else ""), zone=zone, borderline=bool(note), **kw)
+            what, pt, "; " + note if note else ""), zone=zone, borderline=borderline, **kw)
     if zone == ZONE_JUDGMENT:
         if st.judgment_zone_high:            # the old option
             return Finding(HIGH, "5.2.1.1 " + fig + ", 5.3", reason="{} in the judgment zone "
@@ -733,9 +957,9 @@ def structure_finding(s, st, charts=None):
         return Finding(MEDIUM, "5.2.1.1 " + fig, reason="{} in the judgment zone ({}): classed "
                        "MEDIUM by rule (judgment-zone houses are Medium, not probable loss of "
                        "life){}".format(what, pt, "; " + note if note else ""), zone=zone,
-                       **kw)
-    return Finding(MEDIUM, "5.2.2", reason="{} inundated, low danger zone ({}): economic loss"
-                   .format(what, pt), zone=zone, **kw)
+                       borderline=borderline, **kw)
+    return Finding(MEDIUM, "5.2.2", reason="{} inundated, low danger zone ({}): economic loss{}"
+                   .format(what, pt, "; " + note if note else ""), zone=zone, **kw)
 
 
 def classify(structures=(), roads=(), railroads=(), lifelines=(), downstream_dams=(),
@@ -748,8 +972,8 @@ def classify(structures=(), roads=(), railroads=(), lifelines=(), downstream_dam
         charts.chart(False)                  # raises ChartsNotDigitized with the reason
     findings, gaps, notes = [], [], []
     counts = {"structures_wet": 0, "habitable_wet": 0, "habitable_lethal": 0,
-              "judgment_zone": 0, "roads_overtopped": 0, "railroads_overtopped": 0,
-              "lifelines_wet": 0, "downstream_dams": 0}
+              "judgment_zone": 0, "near_boundary": 0, "roads_overtopped": 0,
+              "railroads_overtopped": 0, "lifelines_wet": 0, "downstream_dams": 0}
     for s in structures:
         f = structure_finding(s, st, charts)
         if f is None:
@@ -764,6 +988,8 @@ def classify(structures=(), roads=(), railroads=(), lifelines=(), downstream_dam
                 counts["habitable_lethal"] += 1
             if f.zone == ZONE_JUDGMENT:
                 counts["judgment_zone"] += 1
+            if f.near:
+                counts["near_boundary"] += 1
     for r in roads:
         if _dry(r.max_depth_ft, st.wet_ft):
             continue
@@ -821,6 +1047,28 @@ def classify(structures=(), roads=(), railroads=(), lifelines=(), downstream_dam
     if st.lethality == LETHALITY_CHARTS:
         notes.append("Chart points use the maximum depth and the maximum velocity at each "
                      "structure, which may not occur together: an upper bound.")
+        # 1.4.0 (audit P1): which zone rule applied, for the record
+        if not st.near_ft or st.near_ft <= 0:
+            near_txt = "Near-boundary flag off."
+        elif st.borderline_higher:
+            near_txt = ("Structures within {:g} ft below the next boundary were moved into it "
+                        "(borderline option on, ND 5.3(f)): {}.".format(st.near_ft,
+                                                                        counts["near_boundary"]))
+        else:
+            near_txt = ("Structures within {:g} ft below the next boundary are noted, not moved "
+                        "(borderline option off, as in the Hazard): {}.".format(
+                            st.near_ft, counts["near_boundary"]))
+        notes.append("Zone rule: the digitized REG_05.2026 table (damsuite.tm11_curves, SHA-256 "
+                     "{}), a depth on a boundary takes the higher zone - the rule of the "
+                     "DamSafety Hazard plugin, the classifier of record; no tolerance band around "
+                     "the chart polygons. {}".format(TM11.table_sha256()[:12], near_txt))
+        off = max([ch.table_mismatch_ft() for ch in charts.charts.values()
+                   if ch.key in (CHART_HOUSE, CHART_MOBILE)] or [0.0])
+        if off > TM11.STATED_ACCURACY_FT:
+            notes.append("The chart file's zone polygons lie up to {:.2f} ft off the digitized "
+                         "table (more than its stated accuracy of {:g} ft): they are drawn in "
+                         "the review figures as given, but the table decides every zone."
+                         .format(off, TM11.STATED_ACCURACY_FT))
     if st.lethality == LETHALITY_ALL_WET:
         notes.append("No depth-velocity chart was used: every inundated habitable structure "
                      "was counted as potentially lethal. This over-classifies; use the charts.")
@@ -883,7 +1131,7 @@ def markdown(c, dam_id="", title="Hazard classification"):
 
 
 FINDING_COLUMNS = ["level", "section", "kind", "id", "reason", "zone", "danger_zone",
-                   "borderline", "depth_ft", "vel_fts", "x", "y"]
+                   "borderline", "near", "margin_ft", "depth_ft", "vel_fts", "x", "y"]
 
 
 def finding_rows(c):

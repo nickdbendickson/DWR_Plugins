@@ -70,6 +70,11 @@ class NDdamHazardHelperPlugin(QObject):
             _conn.register_in_qgis(getattr(_vs, "CONNECTION_PREFIX", "Dam Suite"), self.iface)
         except Exception:  # noqa: BLE001 - never block the plugin's start-up
             pass
+        try:                          # Core 1.0.0: the shared package's files vs its FILES.json
+            from . import damsuite as _ds
+            _ds.log_selfcheck("DamSafety Hazard")
+        except Exception:  # noqa: BLE001
+            pass
         self.initProcessing()
         # Try to load an icon; if missing, use a blank icon
         icon_path = os.path.join(os.path.dirname(__file__), "icon.svg")
@@ -81,6 +86,12 @@ class NDdamHazardHelperPlugin(QObject):
 
         # Add to Plugins Menu
         self.iface.addPluginToMenu("Dam safety", self.action)
+        try:                              # 2.23.17: the home's one menu entry (suite_home)
+            from . import suite_home
+            self.suite_actions = getattr(self, "suite_actions", None) or []
+            suite_home.add_home_action(self, self.iface)
+        except Exception:                                        # noqa - never block the plugin
+            pass
 
         # Optional: Add to a custom toolbar (uncomment if you want a dedicated toolbar)
         # self.iface.addToolBarIcon(self.action)

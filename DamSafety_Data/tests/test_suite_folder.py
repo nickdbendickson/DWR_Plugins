@@ -253,6 +253,33 @@ def old_manifest_is_read_once_and_never_rewritten():
         assert up.load_manifest()["nsi"] == {"version": "v1"}    # new file wins from now on
 
 
+@register
+def automatic_check_waits_for_a_folder():
+    """1.9.6 (usability plan): no automatic download until a data folder is set, or the default
+    folder already holds downloads; an explicit or suite folder is never blocked."""
+    with Env() as e:
+        st, q = e.settings()
+        folder, how, _n = st.resolve()
+        assert how == "default" and S.auto_check_blocked(how, folder)
+        _download(e.default)                              # old downloads: keep them fresh
+        folder, how, _n = st.resolve()
+        assert how == "default" and S.auto_check_blocked(how, folder) == ""
+    with Env() as e:
+        st, q = e.settings()
+        q.values[S.SUITE_KEY] = e.suite
+        folder, how, _n = st.resolve()
+        assert how == "suite" and S.auto_check_blocked(how, folder) == ""
+        st2, _q2 = e.settings(data_dir=os.path.join(e.root, "mine"))
+        folder, how, _n = st2.resolve()
+        assert how == "explicit" and S.auto_check_blocked(how, folder) == ""
+    # the plugin's timer slot reads the same rule (ast: no QGIS here)
+    import ast
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugin.py"),
+               encoding="utf-8").read()
+    fn = [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "auto_check"][0]
+    assert "auto_check_blocked" in ast.dump(fn)
+
+
 def main():
     failed = 0
     for t in TESTS:

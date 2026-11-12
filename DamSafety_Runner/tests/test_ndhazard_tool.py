@@ -367,22 +367,49 @@ def ndhazard_tool_polygon_footprints_usa_structures():
         p = _find(js, "structure", "P")
         assert p["level"] == "Medium" and p["zone"] == nh.ZONE_JUDGMENT
         assert p["depth_ft"] == 2.0 and p["vel_fts"] == 9.0 and (p["x"], p["y"]) == (15.0, 65.0)
-        # Q is a mobile home: 1.5 ft at 1 ft/s is judgment on the mobile chart
+        # Q is a mobile home: 1.5 ft at 1 ft/s is low danger on the mobile TABLE (judgment from
+        # 1.905 ft; nd_hazard 1.4.0 classifies on the table, not the test file's polygons), and
+        # within the Hazard's 0.5 ft near-threshold of the judgment boundary (noted, not moved)
         q = _find(js, "structure", "Q")
-        assert q["level"] == "Medium" and "Fig. 5.2" in q["section"] and "mobile" in q["reason"]
+        assert q["level"] == "Medium" and q["zone"] == nh.ZONE_LOW and "mobile" in q["reason"]
+        assert q["near"] == nh.ZONE_JUDGMENT and q["margin_ft"] == 0.41 and "not moved" in \
+            q["reason"]
+        assert js["counts"]["near_boundary"] == 1
         # the old option: the judgment zone counts as potentially lethal -> High
         res, ctx, fb = _run(an, fq, {"DAM_FOLDER": h.folder, "STRUCTURES": src,
                                      "CHART_FILE": cf, "JUDGMENT_HIGH": True})
         js = json.load(open(res["JSON"]))
         assert js["settings"]["judgment_zone_high"] is True
         assert _find(js, "structure", "P")["level"] == "High"
+        assert _find(js, "structure", "Q")["level"] == "Medium"             # low danger zone
+        # 3.16.9: the Hazard's borderline option moves Q into the judgment zone (5.3(f)); with
+        # the old judgment-zone option too it is High
+        res, ctx, fb = _run(an, fq, {"DAM_FOLDER": h.folder, "STRUCTURES": src,
+                                     "CHART_FILE": cf, "BORDERLINE_HIGHER": True})
+        js = json.load(open(res["JSON"]))
+        q = _find(js, "structure", "Q")
+        assert q["zone"] == nh.ZONE_JUDGMENT and q["level"] == "Medium" and q["borderline"]
+        assert "moved from the low danger zone" in q["reason"]
+        assert js["settings"]["borderline_higher"] is True and js["settings"]["near_ft"] == 0.5
+        assert any("Zone rule" in n and "were moved" in n for n in js["notes"])
+        res, ctx, fb = _run(an, fq, {"DAM_FOLDER": h.folder, "STRUCTURES": src,
+                                     "CHART_FILE": cf, "BORDERLINE_HIGHER": True,
+                                     "JUDGMENT_HIGH": True})
+        js = json.load(open(res["JSON"]))
         assert _find(js, "structure", "Q")["level"] == "High"
+        res, ctx, fb = _run(an, fq, {"DAM_FOLDER": h.folder, "STRUCTURES": src,
+                                     "CHART_FILE": cf, "JUDGMENT_HIGH": True})
+        js = json.load(open(res["JSON"]))
         gj = json.load(open(res["GEOJSON"]))
         gp = next(f for f in gj["features"] if f["properties"]["id"] == "P")
         assert gp["properties"]["vel_at_max_depth_fts"] == 0.5
         assert gp["properties"]["sampled"].startswith("polygon: deepest of 2 cell(s)")
         gq = next(f for f in gj["features"] if f["properties"]["id"] == "Q")
-        assert gq["properties"]["mobile"] is True and "centroid" in gq["properties"]["sampled"]
+        # 3.16.9: Q (3 x 3 m, no cell centre inside) reaches the centre of its cell (45, 65)
+        # through the 5 ft (1.524 m) edge ring, 1.41 m from its corner - the Hazard reads the
+        # same cell; before 3.16.9 it fell back to the cell under its centroid (the same cell)
+        assert gq["properties"]["mobile"] is True and "edge ring" in gq["properties"]["sampled"]
+        assert gp["properties"]["sampled"].endswith("in the footprint + 5 ft edge ring")
         mob = open(os.path.join(h.folder, an.OUTPUT_NAMES["svg_mobile"])).read()
         house = open(os.path.join(h.folder, an.OUTPUT_NAMES["svg_house"])).read()
         assert mob.count("<circle") == 1 and house.count("<circle") == 1

@@ -341,7 +341,14 @@ def _srs_text(crs):
     return a if a.upper().startswith(("EPSG:", "ESRI:", "IGNF:")) else crs.toWkt()
 
 
-class _Base(QgsProcessingAlgorithm):
+try:            # Core 1.1.0: number inputs in the chosen display unit system (SI or US)
+    from DamSafety_Core.ui.unit_widgets import UnitParamsMixin as _UnitParams
+except Exception:                                                 # noqa - Core older than 1.1.0
+    class _UnitParams(object):
+        pass
+
+
+class _Base(_UnitParams, QgsProcessingAlgorithm):
     def group(self):
         return "Dam breach modelling"
 
@@ -1896,8 +1903,10 @@ class RunDamAlgorithm(_Base):
             feedback.pushWarning("Models = LISFLOOD-FP then HEC-RAS 2D: the final rasters come "
                                  "from HEC-RAS 2D; the LISFLOOD-FP ones are kept as "
                                  "'LISFLOOD-FP \u2026'.")
-            try:
-                hecras_tier_stage(folder, res, writer, st, dam_xy, fb.log)
+            try:                                     # audit M18: Cancel stops HEC-RAS too
+                hecras_tier_stage(folder, res, writer, st, dam_xy, fb.log, cancel=fb.cancel)
+            except Cancelled:
+                raise QgsProcessingException("Cancelled")
             except HecRasTierError as e:
                 raise QgsProcessingException(str(e))
         for w in res.warnings:
@@ -2315,7 +2324,7 @@ class BatchAlgorithm(_Base):
                                           dam_id, _hecras_batch_limit_text()))
                     try:                                 # audit R6: unattended -> 12 h default
                         hecras_tier_stage(folder, res, writer, st, (xy.x(), xy.y()), fb.log,
-                                          unattended=True)
+                                          unattended=True, cancel=fb.cancel)   # audit M18
                     except HecRasTierError as e:
                         raise QgsProcessingException(str(e))
                 s = res.summary
@@ -2647,6 +2656,12 @@ class CheckAlgorithm(_Base):
                 r = check_lisflood(exe, os.path.join(tmp, "lisflood"))
                 lines.append(("OK " if r["ok"] and r.get("patched") else "PROBLEM ") +
                              "LISFLOOD-FP ({}): {}".format(exe, r["message"]))
+                if r["ok"] and not r.get("velocity"):       # M21: a build that writes no .maxVc
+                    lines.append("PROBLEM LISFLOOD-FP ({}): the test run wrote no maximum velocity "
+                                 "(.maxVc) - the ACER depth-velocity hazard needs it, and a run on "
+                                 "this build would report velocity-driven HIGH cells as low. Use a "
+                                 "patched build (scripts/build_lisflood_*.sh) or the built-in "
+                                 "engine.".format(exe))
             if py:
                 a = check_anuga(py, tmp)
                 lines.append(("OK " if a["ok"] else "PROBLEM ") +

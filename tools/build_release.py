@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the release zips of the seven DamSafety plugins (what .github/workflows/release.yml
+"""Build the release zips of the eight DamSafety plugins (DamSafety Core + the seven that need it) (what .github/workflows/release.yml
 uploads to the GitHub Release and plugins.xml points at), on any OS with git and Python 3.
 
     python3 tools/build_release.py --out dist                      (HEAD; zips are git-ignored)
@@ -20,14 +20,14 @@ import hashlib
 import io
 import os
 import subprocess
-import sys
 import tarfile
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-PLUGINS = ["DamSafety_Setup", "DamSafety_Data", "DamSafety_Runner", "DamSafety_Hazard",
-           "DamSafety_Screening", "DamSafety_PMP", "DamSafety_HazardLite"]
+PLUGINS = ["DamSafety_Core", "DamSafety_Setup", "DamSafety_Data", "DamSafety_Runner", "DamSafety_Hazard",
+           "DamSafety_Screening", "DamSafety_PMP", "DamSafety_HazardLite",
+           "DamSafety_Finder"]
 FIXED = (2026, 1, 1, 0, 0, 0)                      # fixed timestamps -> reproducible zips
 BIN_PLATFORMS = ("linux-x64", "windows-x64", "macos-arm64", "macos-x64")
 

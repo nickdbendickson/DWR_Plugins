@@ -5,8 +5,10 @@ def _install_transform_guard():
     try:
         import importlib.util
         import os
+        # Core 1.0.0: damsuite lives in the DamSafety_Core plugin beside this one
+        here = os.path.dirname(os.path.abspath(__file__))
         spec = importlib.util.spec_from_file_location(
-            "_nd_transformguard", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+            "_nd_transformguard", os.path.join(os.path.dirname(here), "DamSafety_Core",
                                                "damsuite", "transformguard.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)

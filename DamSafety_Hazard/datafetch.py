@@ -36,7 +36,7 @@ from .compat import MSG_WARNING
 from .download import (
     fetch_nsi, fetch_nd_address_points, fetch_usa_structures, fetch_osm_camps,
     fetch_arcgis_layer, fetch_dams, fetch_osm_lifelines, fetch_nbi, fetch_osm_crossings,
-    fetch_osm_places, try_download, STALE_USED, PACK_USED, pack_has,
+    fetch_osm_places, try_download, STALE_USED, PACK_USED, INCOMPLETE_USED, pack_has,
     configure_tile_cache_from_cfg, tile_cache_report_lines,
 )
 from .extent import distance_xy_in_crs
@@ -402,6 +402,7 @@ def download_data(cfg, clip, depth_layer, output_folder, dam_folder="", progress
                 add_layer_to_project(saved, base, visibility=False, group=group)
     del STALE_USED[:]
     del PACK_USED[:]
+    del INCOMPLETE_USED[:]             # H01: downloads cut short but used this run
     # v2.8.0: per-tile download cache from cfg (data_cache_folder, data_max_age_days,
     # refresh_data, data_cache_max_mb); off when data_cache_folder is absent / empty
     configure_tile_cache_from_cfg(cfg)
@@ -461,6 +462,10 @@ def download_data(cfg, clip, depth_layer, output_folder, dam_folder="", progress
     for name, day, fname in STALE_USED:
         log(">>> WARNING: {}: the service did not answer - the download of {} was used "
             "({})".format(name, day, fname))
+    for name, kept, reason in INCOMPLETE_USED:
+        log(">>> WARNING: {}: the download was cut short ({}) - only {} feature(s) kept; the "
+            "inventory may be incomplete. Re-run from a smaller study area for the full "
+            "layer.".format(name, reason, kept))
     for line in tile_cache_report_lines():
         log(line)
     from .pipeline import pack_report_lines
