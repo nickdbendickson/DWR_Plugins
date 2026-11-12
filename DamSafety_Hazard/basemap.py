@@ -220,7 +220,7 @@ def offline_only():
     """True when the plugin must not ask the internet: the 'offline only'
     setting, an offline pack configured, or ND_DAM_SUITE / ND_DAM_OFFLINE set
     (the same no-download rule the pipeline applies to the layer downloads).
-    Lumo v1.6: the imagery probe used to go out in suite / offline-pack mode
+    Pierre v1.6: the imagery probe used to go out in suite / offline-pack mode
     and could block up to PROBE_TIMEOUT_MS on a hung service."""
     if suite_offline():
         return True

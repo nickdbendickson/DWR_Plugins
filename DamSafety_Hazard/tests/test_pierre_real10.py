@@ -1,6 +1,6 @@
-"""Lumo vReal.10 / vReal.11 fixes (Hazard 2.18.22).
+"""Pierre vReal.10 / vReal.11 fixes (Hazard 2.18.22).
 
-    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_lumo_real10.py
+    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_pierre_real10.py
 """
 import hashlib
 import json

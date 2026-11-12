@@ -38,7 +38,7 @@ def parse_factors(text):
     return out or None
 
 
-FACTOR_LOW, FACTOR_HIGH = 0.5, 2.0       # a factor outside this band is warned (Lumo v1.8)
+FACTOR_LOW, FACTOR_HIGH = 0.5, 2.0       # a factor outside this band is warned (Pierre v1.8)
 _COMMA_DECIMAL_RE = re.compile(r"^0,\d+$")       # "0,8": 0 is never a factor -> decimal comma
 _COMMA_PAIR_RE = re.compile(r"^\d+,\d+$")       # "1,2": a list, or 1.2 with a decimal comma?
 

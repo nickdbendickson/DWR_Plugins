@@ -16,7 +16,7 @@
 #   - Stage name is per collection, so two indexers cannot clobber each other.
 import os, sys, json, sqlite3, argparse, subprocess, urllib.request, urllib.error, time, re
 
-DB = os.path.expanduser(os.environ.get("LUMO_DB", "~/local-ai/knowledge.db"))
+DB = os.path.expanduser(os.environ.get("PIERRE_DB", "~/local-ai/knowledge.db"))
 EMBED_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/embed"
 EMBED_MODEL = "nomic-embed-text"
 DOC_PREFIX = "search_document: "

@@ -1,6 +1,6 @@
-"""Lumo vReal.15 DF.1/DF.2/DF.5, WE.1/WE.3 (Hazard 2.18.26).
+"""Pierre vReal.15 DF.1/DF.2/DF.5, WE.1/WE.3 (Hazard 2.18.26).
 
-    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_lumo_real15.py
+    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_pierre_real15.py
 """
 import builtins
 import os

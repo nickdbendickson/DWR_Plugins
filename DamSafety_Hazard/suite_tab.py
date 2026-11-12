@@ -86,7 +86,7 @@ def _newest_package(out_folder):
 
 def package_staleness(out_folder, package):
     """Warning text when `package` (a submittal zip) is older than the outputs' latest run
-    (QA/Last_Run_Snapshot.json), else '' (Lumo 2.23.1)."""
+    (QA/Last_Run_Snapshot.json), else '' (Pierre 2.23.1)."""
     if not package:
         return ""
     snap = os.path.join(out_folder, "QA", "Last_Run_Snapshot.json")

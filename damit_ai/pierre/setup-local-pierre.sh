@@ -1,6 +1,6 @@
 #!/bin/zsh
 # ============================================================================
-# setup-local-lumo.sh v3.6 — local Ollama auditing for the dam suite (macOS)
+# setup-local-pierre.sh v3.6 — local Ollama auditing for the dam suite (macOS)
 #
 #   NO sudo · NO Homebrew. NO web downloads by the script itself (v3.5): Ollama
 #   comes from damit_ai/offline/ollama (sha256-checked) or a zip/dmg you download
@@ -32,10 +32,10 @@
 # still be flagged. Ask IT first; do not try to get around it.
 #
 # Usage:
-#   zsh setup-local-lumo.sh                  # interactive
-#   zsh setup-local-lumo.sh --small          # force qwen3:14b (qwen3:8b on an Intel Mac)
-#   zsh setup-local-lumo.sh --model NAME     # any Ollama model tag
-#   zsh setup-local-lumo.sh --skip-scripts   # don't rewrite the Python tools
+#   zsh setup-local-pierre.sh                  # interactive
+#   zsh setup-local-pierre.sh --small          # force qwen3:14b (qwen3:8b on an Intel Mac)
+#   zsh setup-local-pierre.sh --model NAME     # any Ollama model tag
+#   zsh setup-local-pierre.sh --skip-scripts   # don't rewrite the Python tools
 # ============================================================================
 
 set -u
@@ -48,7 +48,7 @@ DOWNLOADS="$HOME/Downloads"
 TMPDIR_L="$(mktemp -d)"
 ZSHRC="$HOME/.zshrc"
 MARKER="# ---- Local AI (no-sudo install) ----"
-LUMO_ENV="ndlumo"
+PIERRE_ENV="ndpierre"
 
 SMALL_MODEL=0; REWRITE_SCRIPTS=1; FORCE_MODEL=""
 while (( $# )); do
@@ -175,8 +175,8 @@ if [[ "$(uname -m)" == "arm64" || "$(sysctl -n sysctl.proc_translated 2>/dev/nul
 else
   CPU_KIND=intel
   ok "Intel Mac ($CPU_NAME, $CPU_CORES cores), ${RAM_GB} GB RAM: Ollama runs on the CPU (the graphics card is not used)"
-  warn "expect a few minutes per audit window; use lumo-audit --static-only for whole repos and the model"
-  warn "pass on --changed main or single files. 'lumo-ps' shows 100% CPU here, which is expected."
+  warn "expect a few minutes per audit window; use pierre-audit --static-only for whole repos and the model"
+  warn "pass on --changed main or single files. 'pierre-ps' shows 100% CPU here, which is expected."
 fi
 MACOS_MAJOR=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
 [[ -n "$MACOS_MAJOR" ]] && (( MACOS_MAJOR < 14 )) && warn "macOS $(sw_vers -productVersion): current Ollama needs macOS 14 (Sonoma) or newer"
@@ -200,7 +200,7 @@ else
 fi
 # Apple Silicon: context sized so weights + KV cache fit the GPU's share of memory (ollama ps → 100% GPU).
 # Intel: memory is not the limit, reading the prompt on the CPU is, so a 16k window keeps each audit
-# window to a few minutes (override: LUMO_NUM_CTX=24576 in ~/.zshrc).
+# window to a few minutes (override: PIERRE_NUM_CTX=24576 in ~/.zshrc).
 if [[ "$CPU_KIND" == intel ]]; then NUM_CTX=$(( RAM_GB >= 32 ? 16384 : 12288 ))
 elif (( RAM_GB >= 64 )); then NUM_CTX=32768
 elif (( RAM_GB >= 32 )); then NUM_CTX=24576
@@ -211,14 +211,14 @@ ok "chat model: $CHAT_MODEL (num_ctx $NUM_CTX)"
 ok "nomic-embed-text present"
 
 # ===========================================================================
-say "Step 4/9 — 'lumo' persona"
+say "Step 4/9 — 'pierre' persona"
 cat > "$LOCAL_AI/Modelfile" << EOF
 FROM $CHAT_MODEL
 PARAMETER num_ctx $NUM_CTX
 PARAMETER temperature 0.6
 PARAMETER top_p 0.95
 PARAMETER top_k 20
-SYSTEM """You are Lumo-Lite, a fully local assistant for dam-safety engineering
+SYSTEM """You are Pierre-Lite, a fully local assistant for dam-safety engineering
 work on this machine. Domain and working style:
 
 DOMAIN:
@@ -243,19 +243,19 @@ CHARACTERISTICS:
 - When uncertain, say UNSURE plainly instead of guessing.
 - Never recommend destructive operations without a backup (ZIP first) and a dry-run mode."""
 EOF
-"$OLLAMA" create lumo -f "$LOCAL_AI/Modelfile" >/dev/null || die "persona creation failed"
-ok "'lumo' persona created (num_ctx $NUM_CTX)"
+"$OLLAMA" create pierre -f "$LOCAL_AI/Modelfile" >/dev/null || die "persona creation failed"
+ok "'pierre' persona created (num_ctx $NUM_CTX)"
 
 # ===========================================================================
-say "Step 5/9 — Python for the tools (conda env '$LUMO_ENV' preferred)"
+say "Step 5/9 — Python for the tools (conda env '$PIERRE_ENV' preferred)"
 CONDA=""
 for c in "${CONDA_EXE:-}" "$(command -v conda 2>/dev/null)" "$HOME/miniconda3/bin/conda" "$HOME/miniconda/bin/conda" "$HOME/miniforge3/bin/conda"; do
   [[ -n "$c" && -x "$c" ]] && { CONDA="$c"; break; }
 done
-LUMO_PY=""; USE_PYLIBS=0
+PIERRE_PY=""; USE_PYLIBS=0
 if [[ -n "$CONDA" ]]; then
   ok "conda: $CONDA"
-  ENVPATH=$("$CONDA" env list | awk -v n="$LUMO_ENV" '$1==n {print $NF}')
+  ENVPATH=$("$CONDA" env list | awk -v n="$PIERRE_ENV" '$1==n {print $NF}')
   if [[ -z "$ENVPATH" ]]; then
     # Separate small env: adding packages to ndqgis could make conda re-solve QGIS.
     # Bundled packages first (damit_ai/offline/conda/<subdir>/, the same set dam-research uses:
@@ -263,7 +263,7 @@ if [[ -n "$CONDA" ]]; then
     SUBDIR=$("$CONDA" info --json 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin).get("platform",""))' 2>/dev/null)
     PKG_DIR="${0:A:h}/../offline/conda/${SUBDIR:-none}"; PKG_DIR="${PKG_DIR:A}"
     if [[ -f "$PKG_DIR/ndresearch.txt" ]]; then
-      TMPX="$(mktemp "${TMPDIR:-/tmp}/ndlumo.XXXXXX")"; print "@EXPLICIT" > "$TMPX"; BAD=0
+      TMPX="$(mktemp "${TMPDIR:-/tmp}/ndpierre.XXXXXX")"; print "@EXPLICIT" > "$TMPX"; BAD=0
       while read -r fn md5; do
         [[ -z "$fn" || "$fn" == \#* || "$fn" == @* ]] && continue
         want="$(awk -v n="$fn" '$2==n{print $1}' "$PKG_DIR/SHA256SUMS")"
@@ -271,35 +271,35 @@ if [[ -n "$CONDA" ]]; then
         [[ -n "$want" && "$want" == "$got" ]] || { warn "bundled package missing or bad sha256: $fn"; BAD=1; break; }
         print "file://${PKG_DIR// /%20}/$fn#$md5" >> "$TMPX"
       done < "$PKG_DIR/ndresearch.txt"
-      if (( ! BAD )) && "$CONDA" create -y -n "$LUMO_ENV" --offline --file "$TMPX"; then
-        ok "env $LUMO_ENV built from the bundled packages (nothing downloaded)"
+      if (( ! BAD )) && "$CONDA" create -y -n "$PIERRE_ENV" --offline --file "$TMPX"; then
+        ok "env $PIERRE_ENV built from the bundled packages (nothing downloaded)"
       else
         warn "bundled env did not build — trying conda-forge"
       fi
       rm -f "$TMPX"
     fi
-    "$CONDA" env list | awk '{print $1}' | grep -qx "$LUMO_ENV" || \
-    "$CONDA" create -y -n "$LUMO_ENV" -c conda-forge --override-channels --strict-channel-priority \
+    "$CONDA" env list | awk '{print $1}' | grep -qx "$PIERRE_ENV" || \
+    "$CONDA" create -y -n "$PIERRE_ENV" -c conda-forge --override-channels --strict-channel-priority \
         python=3.12 pymupdf pypdf numpy \
       || warn "conda create failed — falling back to wheels"
-    ENVPATH=$("$CONDA" env list | awk -v n="$LUMO_ENV" '$1==n {print $NF}')
+    ENVPATH=$("$CONDA" env list | awk -v n="$PIERRE_ENV" '$1==n {print $NF}')
   fi
-  [[ -n "$ENVPATH" && -x "$ENVPATH/bin/python" ]] && LUMO_PY="$ENVPATH/bin/python"
+  [[ -n "$ENVPATH" && -x "$ENVPATH/bin/python" ]] && PIERRE_PY="$ENVPATH/bin/python"
 fi
 
-if [[ -n "$LUMO_PY" ]]; then
-  ok "tools will use $LUMO_PY"
+if [[ -n "$PIERRE_PY" ]]; then
+  ok "tools will use $PIERRE_PY"
 else
   warn "no conda env — using python3 + wheels in ~/local-ai/pylibs"
   have python3 || die "python3 not found (xcode-select --install provides one)"
-  LUMO_PY="$(command -v python3)"; USE_PYLIBS=1
-  PYVER=$("$LUMO_PY" -c 'import sys;print("%d%d" % sys.version_info[:2])')
+  PIERRE_PY="$(command -v python3)"; USE_PYLIBS=1
+  PYVER=$("$PIERRE_PY" -c 'import sys;print("%d%d" % sys.version_info[:2])')
   MYARCH=$(uname -m)
   # No downloads here: PDF reading needs PyMuPDF or pypdf already importable (the conda env
   # above has both; install_all.zsh / the bundled packages provide it).
-  if PYTHONPATH="$PYLIBS_DIR" "$LUMO_PY" -c "import pymupdf" 2>/dev/null; then
+  if PYTHONPATH="$PYLIBS_DIR" "$PIERRE_PY" -c "import pymupdf" 2>/dev/null; then
     ok "PyMuPDF already importable"
-  elif PYTHONPATH="$PYLIBS_DIR" "$LUMO_PY" -c "import pypdf" 2>/dev/null; then
+  elif PYTHONPATH="$PYLIBS_DIR" "$PIERRE_PY" -c "import pypdf" 2>/dev/null; then
     ok "pypdf already importable (PDFs read more slowly)"
   else
     warn "no PyMuPDF or pypdf — code indexing works; PDFs will be skipped (install conda and re-run)"
@@ -328,7 +328,7 @@ if [[ $REWRITE_SCRIPTS -eq 1 ]]; then
 #   - Stage name is per collection, so two indexers cannot clobber each other.
 import os, sys, json, sqlite3, argparse, subprocess, urllib.request, urllib.error, time, re
 
-DB = os.path.expanduser(os.environ.get("LUMO_DB", "~/local-ai/knowledge.db"))
+DB = os.path.expanduser(os.environ.get("PIERRE_DB", "~/local-ai/knowledge.db"))
 EMBED_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/embed"
 EMBED_MODEL = "nomic-embed-text"
 DOC_PREFIX = "search_document: "
@@ -672,12 +672,12 @@ SCRIPT_EOF_RAG_INDEX
 #   - qwen3 "thinking" is streamed separately and kept out of the answer.
 import os, sys, json, sqlite3, urllib.request, urllib.error, math, argparse
 
-DB = os.path.expanduser(os.environ.get("LUMO_DB", "~/local-ai/knowledge.db"))
+DB = os.path.expanduser(os.environ.get("PIERRE_DB", "~/local-ai/knowledge.db"))
 BASE = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 EMBED_MODEL = "nomic-embed-text"
 QUERY_PREFIX = "search_query: "
-CHAT_MODEL = os.environ.get("LUMO_MODEL", "lumo")
-NUM_CTX = int(os.environ.get("LUMO_NUM_CTX", "16384"))
+CHAT_MODEL = os.environ.get("PIERRE_MODEL", "pierre")
+NUM_CTX = int(os.environ.get("PIERRE_NUM_CTX", "16384"))
 TOP_K = 10
 try:
     import numpy as np
@@ -842,10 +842,10 @@ SCRIPT_EOF_RAG_QUERY
 import os, sys, re, ast, json, sqlite3, argparse, subprocess, urllib.request, urllib.error
 from datetime import datetime
 
-DB = os.path.expanduser(os.environ.get("LUMO_DB", "~/local-ai/knowledge.db"))
+DB = os.path.expanduser(os.environ.get("PIERRE_DB", "~/local-ai/knowledge.db"))
 CHAT_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat"
-MODEL = os.environ.get("LUMO_MODEL", "lumo")
-NUM_CTX = int(os.environ.get("LUMO_NUM_CTX", "16384"))
+MODEL = os.environ.get("PIERRE_MODEL", "pierre")
+NUM_CTX = int(os.environ.get("PIERRE_NUM_CTX", "16384"))
 OUT_RESERVE_TOKENS = 6144       # thinking + answer
 PROMPT_TOKENS = 900             # the audit instructions themselves
 CHARS_PER_TOKEN = 3.0           # conservative for Python source
@@ -1287,8 +1287,8 @@ import os, sys, re, json, shutil, argparse, subprocess, time, urllib.request, ur
 from datetime import datetime
 
 CHAT_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat"
-MODEL = os.environ.get("LUMO_MODEL", "lumo")
-NUM_CTX = int(os.environ.get("LUMO_NUM_CTX", "16384"))
+MODEL = os.environ.get("PIERRE_MODEL", "pierre")
+NUM_CTX = int(os.environ.get("PIERRE_NUM_CTX", "16384"))
 REPORT_DIR = os.path.expanduser("~/local-ai/reports")
 DEFAULT_LISFLOOD = os.path.expanduser("~/nd-dam-suite/bin/lisflood")   # built by the Mac installer
 
@@ -1607,11 +1607,11 @@ SCRIPT_EOF_SUITE
 #                                            (ndbreach:chainbatch: Screening -> Runner -> Hazard)
 #   dam_chain.py research ask|research|search|ingest|chat|list ...
 #                                            the literature research assistant (damresearch, a
-#                                            separate model and library from lumo); same as typing
+#                                            separate model and library from pierre); same as typing
 #                                            damresearch ...  (v1.4)
-#   dam_chain.py audit [--repo R] [--zips Z] [--lumo] [--golden --results D] ...
+#   dam_chain.py audit [--repo R] [--zips Z] [--pierre] [--golden --results D] ...
 #                                            local repo audit: release/packaging, security patterns,
-#                                            network hosts, optional Lumo diff review, golden runs.
+#                                            network hosts, optional Pierre diff review, golden runs.
 #                                            Report in ~/local-ai/reports (repo_audit.py, v1.5)
 #   dam_chain.py crest --set nd|dwr          open the Crest desk wired to that set: its Report-step
 #                                            buttons (dam folder, screening, flood model) run that
@@ -1629,9 +1629,9 @@ BATCH_ROOT = os.path.expanduser(os.environ.get("DAMCHAIN_BATCH_ROOT", "~/local-a
 CREST_DIR = os.path.expanduser(os.environ.get("DAMCHAIN_CREST_DIR", "~/local-ai/crest-desktop"))
 
 # Local Ollama triage (shared convention with suite_check.py / audit_plugin.py): optional, advisory.
-LUMO_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat"
-LUMO_MODEL = os.environ.get("LUMO_MODEL", "lumo")
-LUMO_NUM_CTX = int(os.environ.get("LUMO_NUM_CTX", "16384"))
+PIERRE_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat"
+PIERRE_MODEL = os.environ.get("PIERRE_MODEL", "pierre")
+PIERRE_NUM_CTX = int(os.environ.get("PIERRE_NUM_CTX", "16384"))
 SETS = {
     "nd": {"profile": "nd", "runner": "nd_breach_runner",
            "plugins": ["ND_Dam_Hazard_Helper", "nd_breach_runner", "nd_dam_screening",
@@ -1840,14 +1840,14 @@ def _q(s):
     return s if re.fullmatch(r"[\w@%+=:,./-]+", s) else "'" + s.replace("'", "'\\''") + "'"
 
 
-def _lumo_chat(prompt, timeout=1800):
+def _pierre_chat(prompt, timeout=1800):
     """Ask the local Ollama model once; return its text (thinking stripped). Raises on transport error."""
-    payload = {"model": LUMO_MODEL, "messages": [{"role": "user", "content": prompt}],
+    payload = {"model": PIERRE_MODEL, "messages": [{"role": "user", "content": prompt}],
                "stream": False, "think": True,
                "options": {"temperature": 0.6, "top_p": 0.95, "top_k": 20,
-                           "num_ctx": LUMO_NUM_CTX, "num_predict": 4096}}
+                           "num_ctx": PIERRE_NUM_CTX, "num_predict": 4096}}
     def _post(pl):
-        req = urllib.request.Request(LUMO_URL, data=json.dumps(pl).encode(),
+        req = urllib.request.Request(PIERRE_URL, data=json.dumps(pl).encode(),
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())
@@ -1878,17 +1878,17 @@ def triage_failure(step_name, err, log_path, out_dir):
               "smallest next check or fix. Do not invent anything you cannot see in the log; say UNSURE "
               "when unsure.\n\nSTEP: %s\nERROR: %s\n\n=== LOG TAIL ===\n%s"
               % (step_name, err or "(none)", tail))
-    print("   triage (%s): asking %s ..." % (step_name, LUMO_MODEL), flush=True)
+    print("   triage (%s): asking %s ..." % (step_name, PIERRE_MODEL), flush=True)
     try:
-        ans = _lumo_chat(prompt)
+        ans = _pierre_chat(prompt)
     except Exception as e:                                                   # noqa
         ans = ("TRIAGE UNAVAILABLE: could not reach Ollama at %s (%s). Start Ollama and pull the "
-               "model, or set OLLAMA_URL / LUMO_MODEL." % (LUMO_URL, e))
+               "model, or set OLLAMA_URL / PIERRE_MODEL." % (PIERRE_URL, e))
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "TRIAGE.txt")
     block = ["", "=" * 72, "%s  STEP: %s" % (_stamp(), step_name),
              "error: %s" % (err or "(none)"), "log:   %s" % log_path,
-             "model: %s (advisory; the log is the fact)" % LUMO_MODEL, "-" * 72, ans]
+             "model: %s (advisory; the log is the fact)" % PIERRE_MODEL, "-" * 72, ans]
     with open(path, "a", encoding="utf-8") as fh:
         fh.write("\n".join(block) + "\n")
     print("   triage -> %s" % path, flush=True)
@@ -2343,7 +2343,7 @@ def audit_passthrough(argv):
     for tool in (os.path.join(here, "repo_audit.py"), os.path.expanduser("~/local-ai/repo_audit.py")):
         if os.path.isfile(tool):
             os.execv(sys.executable, [sys.executable, tool] + argv)
-    sys.exit("repo_audit.py is not installed next to dam_chain.py; rerun setup-local-lumo.sh")
+    sys.exit("repo_audit.py is not installed next to dam_chain.py; rerun setup-local-pierre.sh")
 
 
 def main():
@@ -2405,7 +2405,7 @@ def main():
     s.add_argument("--triage", action="store_true",
                    help="on a failed step, send the log tail to the local Ollama model and write "
                         "an advisory TRIAGE.txt next to the run log")
-    s.add_argument("--lumo-model", default="", help="Ollama model for --triage (default: $LUMO_MODEL or 'lumo')")
+    s.add_argument("--pierre-model", default="", help="Ollama model for --triage (default: $PIERRE_MODEL or 'pierre')")
     g = s.add_argument_group("nd set (ndhazard:suitechain per dam folder)")
     g.add_argument("--dams-folder", default="", help="folder of <dam_id>/dam.json folders")
     g.add_argument("--data-folder", default="", help="suite data folder / offline pack for Get data")
@@ -2439,8 +2439,8 @@ def main():
     g.add_argument("--runner-param", action="append", help="KEY=VALUE for the Runner (ndbreach:batch)")
 
     args = ap.parse_args()
-    if getattr(args, "lumo_model", ""):
-        globals()["LUMO_MODEL"] = args.lumo_model
+    if getattr(args, "pierre_model", ""):
+        globals()["PIERRE_MODEL"] = args.pierre_model
     if args.cmd == "setup":
         cmd_setup(args)
     elif args.cmd == "plugins":
@@ -2472,7 +2472,7 @@ SCRIPT_EOF_CHAIN
 #
 #   repo_audit.py --repo ~/src/DWR_Plugins                       # checks 1-4
 #   repo_audit.py --repo ~/src/DWR_Plugins --zips ~/dam-suites-mac-2026-11-10/plugins/dwr
-#   repo_audit.py --repo ~/src/DWR_Plugins --lumo                # + Lumo reviews the diff vs main
+#   repo_audit.py --repo ~/src/DWR_Plugins --pierre                # + Pierre reviews the diff vs main
 #   repo_audit.py --golden-record --results ~/DamSafety/Dams --ids DWR-2801,DWR-2865,DWR-4031
 #   repo_audit.py --golden        --results ~/DamSafety/Dams     # compare with that baseline
 #
@@ -2489,7 +2489,7 @@ SCRIPT_EOF_CHAIN
 #                downloads saved with no checksum anywhere in the file
 #   3. network   every host the code names, with the files (an allowlist for IT; with
 #                --allow-hosts FILE, hosts not on the list are MED)
-#   4. lumo      (--lumo) the local model reviews the changed lines vs --base; TRIAGE ONLY: a
+#   4. pierre      (--pierre) the local model reviews the changed lines vs --base; TRIAGE ONLY: a
 #                finding is real only when a failing test shows it
 #   5. golden    (--golden-record / --golden) Runner results of dams you trust vs a later run:
 #                peak breach cfs, flooded acres, max depth, max velocity, storage at failure,
@@ -2503,7 +2503,7 @@ from datetime import datetime
 REPORTS = os.path.expanduser(os.environ.get("DAMAUDIT_REPORTS", "~/local-ai/reports"))
 GOLDEN_DIR = os.path.expanduser(os.environ.get("DAMAUDIT_GOLDEN", "~/local-ai/golden"))
 OLLAMA = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
-LUMO_MODEL = os.environ.get("LUMO_MODEL", "lumo")
+PIERRE_MODEL = os.environ.get("PIERRE_MODEL", "pierre")
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "dist", "build", ".venv", "venv", ".mypy_cache",
              ".pytest_cache", ".ruff_cache", "offline", "lisflood-src"}
 CODE_EXT = (".py", ".sh", ".zsh", ".command", ".bash")
@@ -2746,7 +2746,7 @@ def find_tool(name):
     p = shutil.which(name)
     if p:
         return [p]
-    for env in ("ndlumo", "ndresearch", "ndqgis"):
+    for env in ("ndpierre", "ndresearch", "ndqgis"):
         for base in ("~/miniconda3", "~/miniforge3", "~/miniconda", "~/anaconda3"):
             cand = os.path.expanduser("%s/envs/%s/bin/%s" % (base, env, name))
             if os.path.isfile(cand):
@@ -2776,7 +2776,7 @@ def run_linters(root, rep):
                     "bandit %s: %s" % (x.get("test_id"), x.get("issue_text")))
         rep.note("security", "bandit: %d findings (high -> MED, medium -> LOW, low -> INFO)" % len(res))
     else:
-        rep.note("security", "bandit not installed (optional; e.g. into the ndlumo env from the conda-forge "
+        rep.note("security", "bandit not installed (optional; e.g. into the ndpierre env from the conda-forge "
                              "channel when you have one), built-in patterns only")
     ruff = find_tool("ruff")
     if ruff:
@@ -2838,7 +2838,7 @@ def network_inventory(root, rep, allow_file=None, out_hosts=None):
     return hosts
 
 
-# ------------------------------------------------------------------ 4. lumo diff review
+# ------------------------------------------------------------------ 4. pierre diff review
 def ollama_up():
     try:
         with urllib.request.urlopen(OLLAMA + "/api/version", timeout=3):
@@ -2852,11 +2852,11 @@ def git(root, *args):
     return r.returncode, r.stdout
 
 
-def lumo_review(root, rep, base, max_files=25):
+def pierre_review(root, rep, base, max_files=25):
     rc, _ = git(root, "rev-parse", "--verify", base)
     if rc:
         base = "HEAD~1"
-        rep.note("lumo", "base not found; reviewing the last commit (HEAD~1..HEAD)")
+        rep.note("pierre", "base not found; reviewing the last commit (HEAD~1..HEAD)")
     rc, names = git(root, "diff", "--name-only", "%s...HEAD" % base)
     if rc:
         rc, names = git(root, "diff", "--name-only", base)
@@ -2864,10 +2864,10 @@ def lumo_review(root, rep, base, max_files=25):
     files = [f for f in dict.fromkeys((names + wt).split()) if f.endswith((".py",) + WEB_EXT)
              and not is_test(f) and os.path.isfile(os.path.join(root, f))]
     if not files:
-        rep.note("lumo", "no changed source files vs %s" % base)
+        rep.note("pierre", "no changed source files vs %s" % base)
         return
     if not ollama_up():
-        rep.note("lumo", "Ollama is not running at %s (lumo-start), review skipped" % OLLAMA)
+        rep.note("pierre", "Ollama is not running at %s (pierre-start), review skipped" % OLLAMA)
         return
     for f in files[:max_files]:
         rc, diff = git(root, "diff", "-U12", base, "--", f)
@@ -2879,24 +2879,24 @@ def lumo_review(root, rep, base, max_files=25):
                   "{\"findings\":[{\"line\":N,\"problem\":\"...\",\"test\":\"...\"}]}. If nothing is wrong "
                   "reply {\"findings\":[]}. Do not invent code that is not in the diff.\n\n%s"
                   % (f, diff[:14000]))
-        body = json.dumps({"model": LUMO_MODEL, "messages": [{"role": "user", "content": prompt}],
+        body = json.dumps({"model": PIERRE_MODEL, "messages": [{"role": "user", "content": prompt}],
                            "stream": False, "think": False, "format": "json",
-                           "options": {"num_ctx": int(os.environ.get("LUMO_NUM_CTX", "16384"))}}).encode()
+                           "options": {"num_ctx": int(os.environ.get("PIERRE_NUM_CTX", "16384"))}}).encode()
         try:
             req = urllib.request.Request(OLLAMA + "/api/chat", data=body, headers={"Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=600) as r:
                 txt = json.load(r).get("message", {}).get("content", "")
             found = json.loads(re.sub(r"<think>.*?</think>", "", txt, flags=re.S)).get("findings", [])
         except Exception as e:   # noqa: BLE001
-            rep.note("lumo", "%s: model call failed (%s)" % (f, e))
+            rep.note("pierre", "%s: model call failed (%s)" % (f, e))
             continue
         for x in found[:8]:
-            rep.add("INFO", "lumo", "%s:%s" % (f, x.get("line", "?")),
+            rep.add("INFO", "pierre", "%s:%s" % (f, x.get("line", "?")),
                     "UNVERIFIED (model): %s\n    test that would show it: %s"
                     % (str(x.get("problem", ""))[:400], str(x.get("test", ""))[:300]))
-        rep.note("lumo", "%s: %d finding(s)" % (f, len(found)))
+        rep.note("pierre", "%s: %d finding(s)" % (f, len(found)))
     if len(files) > max_files:
-        rep.note("lumo", "%d more changed files not reviewed (--lumo-max)" % (len(files) - max_files))
+        rep.note("pierre", "%d more changed files not reviewed (--pierre-max)" % (len(files) - max_files))
 
 
 # ------------------------------------------------------------------ 5. golden runs
@@ -3022,8 +3022,8 @@ def write_report(rep, root, args, started):
          "%s. %s. HIGH %d, MED %d, LOW %d, INFO %d. %.1f min." % (
              datetime.now().strftime("%Y-%m-%d %H:%M"), head or "golden runs", count["HIGH"], count["MED"],
              count["LOW"], count["INFO"], (time.time() - started) / 60), "",
-         "HIGH fails the audit. Lumo findings are UNVERIFIED until a failing test shows them.", ""]
-    for check in ("release", "security", "lint", "network", "lumo", "golden"):
+         "HIGH fails the audit. Pierre findings are UNVERIFIED until a failing test shows them.", ""]
+    for check in ("release", "security", "lint", "network", "pierre", "golden"):
         sel = [x for x in items if x["check"] == check]
         if not sel and check not in rep.notes:
             continue
@@ -3050,13 +3050,13 @@ def write_report(rep, root, args, started):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Local audit report for a dam-suite repo.")
     ap.add_argument("--repo", default="", help="the repo checkout to audit")
-    ap.add_argument("--only", default="", help="comma list of release,security,network,lumo")
+    ap.add_argument("--only", default="", help="comma list of release,security,network,pierre")
     ap.add_argument("--zips", default="", help="folder of built plugin zips to check against the repo")
     ap.add_argument("--no-gate", action="store_true", help="do not run the repo's tools/ci_checks.py")
     ap.add_argument("--allow-hosts", default="", help="file of allowed hosts (one per line)")
-    ap.add_argument("--lumo", action="store_true", help="have the local model review the diff (triage only)")
-    ap.add_argument("--base", default="origin/main", help="diff base for --lumo (default origin/main)")
-    ap.add_argument("--lumo-max", type=int, default=25, help="most changed files to send the model")
+    ap.add_argument("--pierre", action="store_true", help="have the local model review the diff (triage only)")
+    ap.add_argument("--base", default="origin/main", help="diff base for --pierre (default origin/main)")
+    ap.add_argument("--pierre-max", type=int, default=25, help="most changed files to send the model")
     g = ap.add_argument_group("golden runs")
     g.add_argument("--golden-record", action="store_true", help="record the results under --results as the baseline")
     g.add_argument("--golden", action="store_true", help="compare the results under --results with the baseline")
@@ -3070,8 +3070,8 @@ def main(argv=None):
     rep = Report()
     root = os.path.abspath(os.path.expanduser(a.repo)) if a.repo else ""
     only = set(x.strip() for x in a.only.split(",") if x.strip()) or {"release", "security", "network"}
-    if a.lumo:
-        only.add("lumo")
+    if a.pierre:
+        only.add("pierre")
     if root:
         if not os.path.isdir(root):
             sys.exit("no such folder: %s" % root)
@@ -3087,9 +3087,9 @@ def main(argv=None):
             hosts_file = os.path.join(REPORTS, "hosts_%s.txt" % os.path.basename(root))
             hosts = network_inventory(root, rep, a.allow_hosts or None, hosts_file)
             rep.note("release", "network: %d hosts named; list for IT: %s" % (len(hosts), hosts_file))
-        if "lumo" in only:
-            say("4/4 Lumo review of the changes vs %s ..." % a.base)
-            lumo_review(root, rep, a.base, a.lumo_max)
+        if "pierre" in only:
+            say("4/4 Pierre review of the changes vs %s ..." % a.base)
+            pierre_review(root, rep, a.base, a.pierre_max)
     if a.golden or a.golden_record:
         if not a.results:
             ap.error("--golden/--golden-record need --results")
@@ -3113,7 +3113,7 @@ SCRIPT_EOF_REPOAUDIT
 
   chmod +x "$LOCAL_AI"/rag_index.py "$LOCAL_AI"/rag_query.py "$LOCAL_AI"/audit_plugin.py "$LOCAL_AI"/suite_check.py "$LOCAL_AI"/dam_chain.py "$LOCAL_AI"/repo_audit.py
   for f in rag_index rag_query audit_plugin suite_check dam_chain repo_audit; do
-    "$LUMO_PY" -m py_compile "$LOCAL_AI/$f.py" || die "$f.py did not compile"
+    "$PIERRE_PY" -m py_compile "$LOCAL_AI/$f.py" || die "$f.py did not compile"
   done
   ok "rag_index 2.4, rag_query 2.2, audit_plugin 1.3, suite_check 1.0, dam_chain 1.5.1, repo_audit 1.0 written and compiled"
 else
@@ -3123,11 +3123,11 @@ fi
 # ===========================================================================
 say "Step 7/9 — Shell config (~/.zshrc)"
 if grep -qF "$MARKER" "$ZSHRC" 2>/dev/null; then
-  cp "$ZSHRC" "$ZSHRC.bak-lumo"
+  cp "$ZSHRC" "$ZSHRC.bak-pierre"
   /usr/bin/sed -i '' "/^$MARKER\$/,/^# ---- end local AI ----\$/d" "$ZSHRC"
 fi
-PYRUN="$LUMO_PY"
-(( USE_PYLIBS )) && PYRUN="env PYTHONPATH=\$HOME/local-ai/pylibs $LUMO_PY"
+PYRUN="$PIERRE_PY"
+(( USE_PYLIBS )) && PYRUN="env PYTHONPATH=\$HOME/local-ai/pylibs $PIERRE_PY"
 cat >> "$ZSHRC" << EOF
 $MARKER
 # Edit these four paths to where your clones and PDFs really are.
@@ -3136,22 +3136,22 @@ export DWR_REPO="\$HOME/Documents/DWR_Plugins"
 export CREST_REPO="\$HOME/Documents/DSHazard/crest"
 export STD_PDFS="\$HOME/Documents/Standards_PDFs"
 export OLLAMA_MODELS="\$HOME/local-ai/models"
-export LUMO_NUM_CTX=$NUM_CTX
-alias lumo-start="OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 \$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama serve"
-unalias lumo-chat 2>/dev/null
-function lumo-chat {
-  [[ -t 1 && -z "\$NO_COLOR" ]] && printf '\033[1;38;2;48;196;200mD\033[1;38;2;250;250;240ma\033[1;38;2;48;196;200mM\033[1;38;2;244;158;24miT\033[0m  \033[2mLumo - local triage\033[0m\n \033[38;2;31;188;188m~\033[0m\n'
-  \$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama run lumo "\$@"
+export PIERRE_NUM_CTX=$NUM_CTX
+alias pierre-start="OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 \$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama serve"
+unalias pierre-chat 2>/dev/null
+function pierre-chat {
+  [[ -t 1 && -z "\$NO_COLOR" ]] && printf '\033[1;38;2;48;196;200mD\033[1;38;2;250;250;240ma\033[1;38;2;48;196;200mM\033[1;38;2;244;158;24miT\033[0m  \033[2mPierre - local triage\033[0m\n \033[38;2;31;188;188m~\033[0m\n'
+  \$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama run pierre "\$@"
 }
-alias lumo-ps="\$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama ps"
-alias lumo-index="$PYRUN \$HOME/local-ai/rag_index.py"
-alias lumo-query="$PYRUN \$HOME/local-ai/rag_query.py"
-alias lumo-audit="$PYRUN \$HOME/local-ai/audit_plugin.py"
-alias lumo-test="$PYRUN \$HOME/local-ai/suite_check.py"
+alias pierre-ps="\$HOME/local-ai/bin/Ollama.app/Contents/Resources/ollama ps"
+alias pierre-index="$PYRUN \$HOME/local-ai/rag_index.py"
+alias pierre-query="$PYRUN \$HOME/local-ai/rag_query.py"
+alias pierre-audit="$PYRUN \$HOME/local-ai/audit_plugin.py"
+alias pierre-test="$PYRUN \$HOME/local-ai/suite_check.py"
 alias damchain="$PYRUN \$HOME/local-ai/dam_chain.py"
-alias lumo-std="$PYRUN \$HOME/local-ai/rag_query.py -c standards"
-alias lumo-hazard="$PYRUN \$HOME/local-ai/rag_query.py -c nd_hazard"
-alias lumo-reindex-all='lumo-index -c nd_hazard "\$ND_REPO" && lumo-index -c dwr_plugins "\$DWR_REPO" && lumo-index -c crest "\$CREST_REPO" && lumo-index -c standards "\$STD_PDFS"'
+alias pierre-std="$PYRUN \$HOME/local-ai/rag_query.py -c standards"
+alias pierre-hazard="$PYRUN \$HOME/local-ai/rag_query.py -c nd_hazard"
+alias pierre-reindex-all='pierre-index -c nd_hazard "\$ND_REPO" && pierre-index -c dwr_plugins "\$DWR_REPO" && pierre-index -c crest "\$CREST_REPO" && pierre-index -c standards "\$STD_PDFS"'
 # ---- end local AI ----
 EOF
 ok "aliases written (run: source ~/.zshrc, then edit ND_REPO/DWR_REPO/CREST_REPO/STD_PDFS)"
@@ -3161,7 +3161,7 @@ say "Step 8/9 — Housekeeping"
 rm -rf "$TMPDIR_L"
 if [[ -n "${SERVE_PID:-}" ]]; then
   warn "the setup-time server is still running (PID $SERVE_PID, log $SERVE_LOG)."
-  warn "'kill $SERVE_PID' when done, then use 'lumo-start' in its own terminal tab."
+  warn "'kill $SERVE_PID' when done, then use 'pierre-start' in its own terminal tab."
 fi
 
 # ===========================================================================
@@ -3172,7 +3172,7 @@ check "Ollama binary"              "[[ -x '$OLLAMA_EXE' ]]"
 check "Server responding"          "curl -sf http://127.0.0.1:11434/api/version"
 check "Chat model pulled"          "'$OLLAMA' list | grep -q '^$CHAT_MODEL'"
 check "nomic-embed-text pulled"    "'$OLLAMA' list | grep -q '^nomic-embed-text'"
-check "'lumo' persona"             "'$OLLAMA' list | grep -q '^lumo'"
+check "'pierre' persona"             "'$OLLAMA' list | grep -q '^pierre'"
 check "rag_index.py on disk"       "[[ -f '$LOCAL_AI/rag_index.py' ]]"
 check "rag_query.py on disk"       "[[ -f '$LOCAL_AI/rag_query.py' ]]"
 check "audit_plugin.py on disk"    "[[ -f '$LOCAL_AI/audit_plugin.py' ]]"
@@ -3180,8 +3180,8 @@ check "suite_check.py on disk"     "[[ -f '$LOCAL_AI/suite_check.py' ]]"
 check "dam_chain.py on disk"       "[[ -f '$LOCAL_AI/dam_chain.py' ]]"
 check "zshrc block"                "grep -qF '$MARKER' '$ZSHRC'"
 # PDF support is optional: report it, don't fail on it.
-if PYTHONPATH="$PYLIBS_DIR" "$LUMO_PY" -c 'import pymupdf' 2>/dev/null; then ok "PDF text: PyMuPDF"
-elif PYTHONPATH="$PYLIBS_DIR" "$LUMO_PY" -c 'import pypdf' 2>/dev/null; then ok "PDF text: pypdf (slower, fine)"
+if PYTHONPATH="$PYLIBS_DIR" "$PIERRE_PY" -c 'import pymupdf' 2>/dev/null; then ok "PDF text: PyMuPDF"
+elif PYTHONPATH="$PYLIBS_DIR" "$PIERRE_PY" -c 'import pypdf' 2>/dev/null; then ok "PDF text: pypdf (slower, fine)"
 else warn "PDF text: none — PDFs will be skipped when indexing"; fi
 echo ""
 if [[ $PASS -eq $TOTAL ]]; then
@@ -3190,10 +3190,10 @@ if [[ $PASS -eq $TOTAL ]]; then
 
 NEXT:
   source ~/.zshrc                       # then fix ND_REPO etc. in ~/.zshrc if needed
-  lumo-start                            # in its own terminal tab
-  lumo-audit -p "$ND_REPO" --static-only                 # exact checks, seconds
-  lumo-audit -p "$ND_REPO" --changed origin/main         # model review of what you changed
-  lumo-test nd --repo "$ND_REPO" --triage                # plugin tests in ndqgis + failure notes
+  pierre-start                            # in its own terminal tab
+  pierre-audit -p "$ND_REPO" --static-only                 # exact checks, seconds
+  pierre-audit -p "$ND_REPO" --changed origin/main         # model review of what you changed
+  pierre-test nd --repo "$ND_REPO" --triage                # plugin tests in ndqgis + failure notes
 NEXT
 else
   printf '\033[1;33m%s/%s passed — fix failures, re-run (completed steps auto-skip).\033[0m\n' "$PASS" "$TOTAL"
