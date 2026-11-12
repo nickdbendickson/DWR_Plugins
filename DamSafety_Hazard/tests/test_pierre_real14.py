@@ -1,6 +1,6 @@
-"""Lumo vReal.14 FF.1/FF.2/FF.4, PH.1, EX.8, TP.1 (Hazard 2.18.25).
+"""Pierre vReal.14 FF.1/FF.2/FF.4, PH.1, EX.8, TP.1 (Hazard 2.18.25).
 
-    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_lumo_real14.py
+    QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_pierre_real14.py
 """
 import json
 import os

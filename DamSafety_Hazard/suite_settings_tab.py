@@ -48,7 +48,7 @@ class SuiteSettingsTabMixin(object):
         row.addWidget(b)
         row.addWidget(n)
         lay.addLayout(row)
-        # status area: save failures, a refused file, a catalog that did not load (Lumo 2.7.1/2.7.3/2.7.5)
+        # status area: save failures, a refused file, a catalog that did not load (Pierre 2.7.1/2.7.3/2.7.5)
         self.suite_settings_status = QLabel("")
         self.suite_settings_status.setWordWrap(True)
         try:
@@ -118,7 +118,7 @@ class SuiteSettingsTabMixin(object):
             self._suite_status("")
             return False
         if not os.path.isfile(p):
-            # Lumo 2.7.5: never make a missing file current - the grid still holds the old file's
+            # Pierre 2.7.5: never make a missing file current - the grid still holds the old file's
             # values and the next edit would autosave them into the typed path
             self.suite_settings_file_edit.setText(old)
             msg = "The settings file does not exist: {}. Still using {}.".format(p, old or "(none)")
@@ -176,7 +176,7 @@ class SuiteSettingsTabMixin(object):
         if not p:
             return False
         if p != (getattr(self, "_suite_loaded_path", None) or ""):
-            # Lumo 2.7.5: the box and the grid disagree - never write one file's values into another
+            # Pierre 2.7.5: the box and the grid disagree - never write one file's values into another
             self._suite_status("Not saved: the grid shows {} but the box says {}. Press Enter in the "
                                "box or choose the file again.".format(
                                    getattr(self, "_suite_loaded_path", "") or "(none)", p))

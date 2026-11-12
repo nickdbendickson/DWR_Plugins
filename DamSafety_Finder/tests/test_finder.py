@@ -30,11 +30,12 @@ def srs(epsg):
     return s
 
 
-def write_dem(path, dem, feet=False, tag=True):
+def write_dem(path, dem, feet=False, tag=True, srs_epsg=5070):
     drv = gdal.GetDriverByName("GTiff")
     ds = drv.Create(path, dem.shape[1], dem.shape[0], 1, gdal.GDT_Float32)
     ds.SetGeoTransform((X0, tc.CELL, 0.0, Y0 + dem.shape[0] * tc.CELL, 0.0, -tc.CELL))
-    ds.SetProjection(srs(5070).ExportToWkt())
+    if srs_epsg is not None:
+        ds.SetProjection(srs(srs_epsg).ExportToWkt())
     b = ds.GetRasterBand(1)
     b.SetNoDataValue(-9999.0)
     b.WriteArray(np.where(np.isfinite(dem), dem / (0.3048 if feet else 1.0), -9999.0))
@@ -134,6 +135,16 @@ class Runs(unittest.TestCase):
         self.assertEqual(info["match_ft"], "200.0")
         self.assertEqual(info["cancelled"], "False")
         self.assertIn("min_height_m=", info["params"])
+        self.assertTrue(any(k.startswith("sha256_") for k in info), info)
+        f = ds.GetLayerByName("embankments").GetNextFeature()
+        # rewind: at least one is_new field is yes or no
+        ds2 = ogr.Open(self.out)
+        vals = []
+        lyr = ds2.GetLayerByName("embankments")
+        for feat in lyr:
+            vals.append(feat.GetField("is_new"))
+        self.assertTrue(vals and all(v in ("yes", "no") for v in vals), vals)
+        self.assertIn("yes", vals)
         hs = gdal.Open(res["hillshade"])
         self.assertEqual(hs.GetRasterBand(1).DataType, gdal.GDT_Byte)
         self.assertGreater(hs.GetRasterBand(1).ComputeRasterMinMax(False)[1], 0)
@@ -151,11 +162,12 @@ class Runs(unittest.TestCase):
 
     def test_a_dem_with_no_unit_is_refused(self):
         dem, _road = tc.scene()
+        # EPSG:5070, no Z tag: the horizontal CRS unit is metres (with a confirm warning)
         bare = os.path.join(self.tmp, "bare.tif")
         write_dem(bare, dem, tag=False)
-        with self.assertRaises(RuntimeError) as cm:
-            self.f.run_embankments(bare, self.streams, self.out, log=lambda *_: None)
-        self.assertIn("DEM elevation unit", str(cm.exception))
+        in_feet, how = self.f.dem_unit(bare)
+        self.assertFalse(in_feet)
+        self.assertIn("horizontal CRS", how)
         # the same values with the unit chosen: run, and the choice is logged
         logs = []
         self.f.run_embankments(bare, self.streams, self.out, z_feet=False, hillshade=False, log=logs.append)
@@ -173,6 +185,18 @@ class Runs(unittest.TestCase):
         logs = []
         self.f.check_dem_unit(nd, False, logs.append)
         self.assertFalse(any("WARNING" in str(m) for m in logs), logs)
+        # no CRS and an ambiguous typical value (800 fits metres and feet): still refused
+        none = os.path.join(self.tmp, "nogeo.tif")
+        write_dem(none, np.full((20, 20), 1200.0), tag=False, srs_epsg=None)
+        with self.assertRaises(RuntimeError) as cm:
+            self.f.dem_unit(none)
+        self.assertIn("DEM elevation unit", str(cm.exception))
+        # value heuristic: 2,000 looks like feet
+        ftish = os.path.join(self.tmp, "ftish.tif")
+        write_dem(ftish, np.full((20, 20), 2000.0), tag=False, srs_epsg=None)
+        in_feet, how = self.f.dem_unit(ftish)
+        self.assertTrue(in_feet)
+        self.assertIn("looks like feet", how)
 
     def test_cancel_stops_and_says_so(self):
         calls = []
@@ -202,6 +226,28 @@ class Runs(unittest.TestCase):
         self.assertEqual(r["kind"], "embankment pond")
         self.assertEqual(r["status"], "new")
         self.assertTrue(r["find_id"].startswith("POND-"))
+
+    def test_ponds_pool_from_the_water_elev_mosaic(self):
+        pool = tc.bed(200) + 3.0
+        dem, _r = tc.scene()
+        cols = np.where(np.abs(dem[150] - pool) < 1e-6)[0]
+        x0, x1 = gx(cols.min() * tc.CELL), gx((cols.max() + 1) * tc.CELL)
+        y0, y1 = row_y(196) - 1.5, row_y(150)
+        wkt = "POLYGON (({a} {c}, {b} {c}, {b} {d}, {a} {d}, {a} {c}))".format(a=x0, b=x1, c=y0, d=y1)
+        wb = write_layer(self.vec, "waterbodies", [(wkt, {"ftype": "LakePond"})], fields=("ftype",))
+        # a class-9 water-surface mosaic over the whole scene at a known elevation
+        we = os.path.join(self.tmp, "water_elev.tif")
+        from osgeo import gdal
+        g = gdal.Open(self.dem)
+        arr = np.full((g.RasterYSize, g.RasterXSize), pool + 0.4, np.float32)   # 0.4 m above the DEM pool
+        drv = gdal.GetDriverByName("GTiff")
+        ods = drv.Create(we, g.RasterXSize, g.RasterYSize, 1, gdal.GDT_Float32)
+        ods.SetGeoTransform(g.GetGeoTransform()); ods.SetProjection(g.GetProjection())
+        ob = ods.GetRasterBand(1); ob.WriteArray(arr); ob.SetNoDataValue(-999999.0); ods = None
+        res = self.f.run_ponds(wb, self.dem, self.out, cell=3.0, max_ac=0, type_field="ftype",
+                               water_elev=we, log=lambda *_: None)
+        self.assertEqual(len(res["rows"]), 1, res)
+        self.assertIn("measured LiDAR water surface", res["rows"][0]["pool_method"])
 
     def test_crossings_with_fills(self):
         self.emb()
@@ -360,6 +406,43 @@ class Runs(unittest.TestCase):
         res = self.f.run_water(None, self.out, water_raster=path, water_count_min=5, cell=1.0,
                                min_ac=0.02, min_width_m=3.0, log=lambda *_: None)
         self.assertEqual(len(res["rows"]), 0)
+
+    def test_build_water_mosaic_round_trip(self):
+        # two LAS tiles, each with a 40 m water block at a known z; build the mosaic, then read it
+        # back through run_water's WATER_RASTER path - the builder's output must feed the reader.
+        mdir = os.path.join(self.tmp, "mosaic")
+        tiles = []
+        for i, (cx, cy, zz) in enumerate([(X0 + 150, Y0 + 150, 300.0), (X0 + 450, Y0 + 150, 310.0)]):
+            # points at cell centres (+0.5) so each lands unambiguously in one 1 m cell
+            wx, wy = np.meshgrid(np.arange(cx - 19.5, cx + 20, 1.0), np.arange(cy - 19.5, cy + 20, 1.0))
+            gx = np.linspace(cx - 140, cx + 140, 60)
+            gy = np.full(60, cy - 140.0)
+            x = np.concatenate([wx.ravel(), gx])
+            y = np.concatenate([wy.ravel(), gy])
+            z = np.concatenate([np.full(wx.size, zz), np.full(60, 999.0)])
+            cls = np.concatenate([np.full(wx.size, 9, np.uint8), np.full(60, 2, np.uint8)])
+            p = os.path.join(self.tmp, "m{}.las".format(i))
+            tc.write_las(p, x, y, cls, z=z)
+            tiles.append(p)
+        res = self.f.build_water_mosaic(tiles, mdir, cell=1.0, mosaic_epsg=5070, src_epsg=5070,
+                                        log=lambda *_: None)
+        self.assertEqual(res["n_wet_tiles"], 2)
+        self.assertTrue(os.path.exists(res["count_vrt"]))
+        self.assertTrue(os.path.exists(res["elev_vrt"]))
+        # the count mosaic holds the water cells (count 1 each)
+        cds = gdal.Open(res["count_vrt"])
+        ca = cds.GetRasterBand(1).ReadAsArray()
+        self.assertEqual(int((ca == 1).sum()), 2 * 40 * 40)   # both 40 x 40 blocks
+        # the elevation mosaic carries the mean water z (nodata -999999 off the water)
+        eds = gdal.Open(res["elev_vrt"])
+        ea = eds.GetRasterBand(1).ReadAsArray()
+        wet = ea[ea > -999998]
+        self.assertTrue(np.all((wet >= 299.9) & (wet <= 310.1)))
+        cds = eds = None
+        # the reader finds both ponds from the count mosaic
+        r2 = self.f.run_water(None, self.out, water_raster=res["count_vrt"], cell=1.0, min_ac=0.02,
+                              min_width_m=3.0, log=lambda *_: None)
+        self.assertEqual(len(r2["rows"]), 2)
 
     def test_water_mapped_and_small_tiles(self):
         img = self.write_image(os.path.join(self.tmp, "img.tif"))

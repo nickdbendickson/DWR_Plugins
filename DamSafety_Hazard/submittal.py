@@ -55,11 +55,19 @@ GROUPS = [
         ("Hazard_Classification_Report*.pdf", "Hazard classification report (PDF)", True),
         ("Hazard_Classification_Summary.txt", "Classification summary (text)", False),
         ("Hazard_Classification_Summary.xlsx", "Classification summary (table)", False),
+        (SUBDIR_CLASSIFICATION + "/ND_DV_Habitable*.png",
+         "Habitable structures on the ND depth-velocity charts (911 points until reviewed)",
+         False),
+        (SUBDIR_CLASSIFICATION + "/ND_DV_Habitable*.csv",
+         "Habitable structures plotted on the ND depth-velocity chart", False),
+        (SUBDIR_CLASSIFICATION + "/ND_DV_Habitable_unverified*.csv",
+         "Worklist of unverified (non-911, not yet reviewed) wet structures", False),
     ]),
     ("02_Method_and_record", [
         ("Hazard_Classification_Run_Log.txt",
          "Run log: settings, data sources, warnings, timings", False),
         ("Structure_Review_Decisions.csv", "Engineer's structure review decisions", False),
+        ("habitable_review.json", "Engineer's habitability reviews (ndhazard:reviewhabitable)", False),
         ("Facility_Review_Decisions.csv",
          "Engineer's road / rail / crossing / lifeline review decisions (v2.9)", False),
         (SUBDIR_QA + "/Changes_Since_Last_Run.csv", "What changed since the previous run", False),
@@ -413,7 +421,7 @@ def build(out_folder, dam_name=None, zip_it=True, include_gis=False, dest_root=N
         enclosures = [r["Description"] for r in rows if r["Path"].startswith(
             ("01_Report", "04_EAP")) or "Review_Decisions" in r["Path"]
             or "Run_Log" in r["Path"]]
-        missing = missing_items(rows, data_missing)       # Lumo 2.27.2: named in the letter
+        missing = missing_items(rows, data_missing)       # Pierre 2.27.2: named in the letter
         if any(m.startswith("results tables") for m in missing):
             warnings.append("no results tables were packaged")                # SB.1
         with open(os.path.join(folder, COVER_NAME), "w", encoding="utf-8", newline="") as fh:

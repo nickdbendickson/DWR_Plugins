@@ -1,6 +1,6 @@
 # damresearch: local research assistant for dam-safety literature
 
-A second local AI that sits next to `lumo`. Lumo triages code; `damresearch` reads your library
+A second local AI that sits next to `pierre`. Pierre triages code; `damresearch` reads your library
 of dam-safety, dam-design and flood-hazard publications and answers with citations to the
 document and page. It runs on your Mac through Ollama, so nothing leaves the machine.
 
@@ -11,14 +11,14 @@ document and page. It runs on your Mac through Ollama, so nothing leaves the mac
 
 ## What gets installed
 
-| Piece | Name | Kept apart from lumo by |
+| Piece | Name | Kept apart from pierre by |
 |---|---|---|
-| Chat model | `dam-research` (Ollama persona, citation-first system prompt) | own name; lumo's `lumo` persona is untouched |
-| Embedding model | `qwen3-embedding:0.6b` (falls back to `nomic-embed-text`) | own model; lumo keeps `nomic-embed-text` |
-| Library database | `~/DamResearch/research.db` | lumo uses `~/local-ai/knowledge.db` |
+| Chat model | `dam-research` (Ollama persona, citation-first system prompt) | own name; pierre's `pierre` persona is untouched |
+| Embedding model | `qwen3-embedding:0.6b` (falls back to `nomic-embed-text`) | own model; pierre keeps `nomic-embed-text` |
+| Library database | `~/DamResearch/research.db` | pierre uses `~/local-ai/knowledge.db` |
 | Drop folder | `~/DamResearch/library/` | |
 | Reports | `~/DamResearch/reports/` | |
-| Python | conda env `ndresearch` (Python 3.12, numpy, PyMuPDF) | never touches `ndqgis` or `ndlumo` |
+| Python | conda env `ndresearch` (Python 3.12, numpy, PyMuPDF) | never touches `ndqgis` or `ndpierre` |
 | Commands | `damresearch ...`, `research-chat`, and `damchain research ...` | |
 
 ## Which model, and the memory trade-offs
@@ -28,7 +28,7 @@ The installer picks from the Mac's memory and processor; the first model that do
 | Mac | Model | Download | Context | Notes |
 |---|---|---|---|---|
 | Apple Silicon, 48 GB or more | `qwen3.6:35b-a3b` | ~24 GB | 32K | Best quality. Mixture-of-experts (3B active), so it is fast. Needs a recent Ollama; falls back to `qwen3:30b-a3b`. |
-| Apple Silicon, 32 GB | `qwen3:30b-a3b` | ~19 GB (already there if lumo uses it) | 24K | Shares weights with lumo, so no extra download. `--big` tries qwen3.6 anyway, but ~24 GB on 32 GB means part of it runs on the CPU, which is slower. |
+| Apple Silicon, 32 GB | `qwen3:30b-a3b` | ~19 GB (already there if pierre uses it) | 24K | Shares weights with pierre, so no extra download. `--big` tries qwen3.6 anyway, but ~24 GB on 32 GB means part of it runs on the CPU, which is slower. |
 | Apple Silicon, 24 GB | `qwen3:14b` | ~9 GB | 12K | |
 | Apple Silicon, 16 GB | `qwen3:8b` | ~5 GB | 12K | Fine for `search` and `ask`; deep research reports are thinner. |
 | Intel iMac i9, 64 GB (CPU only) | `qwen3.6:35b-a3b` | ~24 GB | 24K | Ollama can't use the Radeon, so a mixture-of-experts model is the only fast option on the CPU. Thinking is off by default. |
@@ -44,7 +44,7 @@ tag is missing.
 
 ## Install
 
-You need Ollama, which `setup-local-lumo.sh` / `install_all.zsh` already installed in
+You need Ollama, which `setup-local-pierre.sh` / `install_all.zsh` already installed in
 `~/local-ai/bin`, or the Ollama app. Conda is optional; without it a venv is used.
 
 ```zsh
@@ -63,7 +63,7 @@ edited the file, it is left alone; use `damresearch` directly.
 ## Use
 
 ```zsh
-lumo-start                                     # Ollama server in its own tab (same as for lumo)
+pierre-start                                     # Ollama server in its own tab (same as for pierre)
 
 # 1. Build the library: drop PDFs (sub-folders fine) into ~/DamResearch/library, then
 damresearch ingest                             # re-run any time; only new/changed files are read
@@ -229,7 +229,7 @@ Delete the block between `# >>> dam-research` and `# <<< dam-research` in `~/.zs
 
 - `setup-dam-research.zsh`: installer
 - `damresearch.py`: the tool (stdlib + optional numpy / PyMuPDF)
-- `../lumo/tools/dam_chain.py` (in the zip: `damchain-1.4/dam_chain.py`): dam_chain 1.3 plus the `research` pass-through, nothing else changed
+- `../pierre/tools/dam_chain.py` (in the zip: `damchain-1.4/dam_chain.py`): dam_chain 1.3 plus the `research` pass-through, nothing else changed
 - `fetch_asdso.py`: downloads the public ASDSO / FEMA reference set, and with `--catalog` the sources in `reference_sources.json`
 - `reference_sources.json`: catalog of hazard-classification and dam-design sources (edit to add more)
 - `first-run.zsh`: install, download, index, test and pack the results, in one command
