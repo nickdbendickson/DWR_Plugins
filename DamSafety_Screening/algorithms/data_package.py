@@ -12,6 +12,7 @@ from ..core import hazard as hz
 from ..core import package as pk
 from . import _common as cm
 from ..compat import (FT_DOUBLE, FT_INT, FT_STRING, GEOM_POINT, SRC_LINE, SRC_POINT, SRC_POLYGON, WKB_POINT, WRITER_NO_ERROR, WRITER_OVERWRITE_FILE, WRITER_OVERWRITE_LAYER)
+from ._common import UnitAlgorithm
 
 # (input key, package layer): an input left empty is taken from the package
 SLOTS = (("FLOW", "flowlines"), ("WB", "waterbodies"), ("DAML", "dam_lines"),
@@ -23,7 +24,7 @@ PKG_FIELDS = {"BLD": {"OCC": "occ_cls", "PRIM": "prim_occ"},
               "RAIL": {"PAX": "passenger", "TRAINS": "trains_day"}}
 
 
-class DataPackage(QgsProcessingAlgorithm):
+class DataPackage(UnitAlgorithm):
     def name(self): return "datapackage"
     def displayName(self): return "0 - Build offline data package"
     def group(self): return "Dam screening"

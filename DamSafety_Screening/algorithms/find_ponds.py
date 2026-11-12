@@ -40,6 +40,7 @@ from ..core import errors as er
 from .breach_direction import PT_FIELDS
 from .estimate_storage import NEW_FIELDS as STORAGE_FIELDS
 from .prepare_dams import OUT_FIELDS as INVENTORY_FIELDS
+from ._common import UnitAlgorithm
 
 AC_M2 = 4046.8564224
 AF_M3 = pd.AF_M3
@@ -177,7 +178,7 @@ def heartbeat(i, n, analysed, written, failed, elapsed):
     return "water body {} of {}: {} analysed, {} written, {} failed ({:.1f} s each){}".format(
         i, n, analysed, written, failed, each, left)
 
-class FindPonds(QgsProcessingAlgorithm):
+class FindPonds(UnitAlgorithm):
     def name(self): return "findponds"
     def displayName(self): return "16 - Find ponds and dugouts"
     def group(self): return "Dam screening"

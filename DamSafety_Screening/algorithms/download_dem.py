@@ -20,9 +20,10 @@ from ..core import dem_download as dd
 from ..core import dem_names as dn
 from ..core import lidar_tnm as lt
 from ..core.tile_workdir import tile_workdir
+from ._common import UnitAlgorithm
 
 
-class DownloadDem(QgsProcessingAlgorithm):
+class DownloadDem(UnitAlgorithm):
     def name(self):
         return "downloaddem"
 

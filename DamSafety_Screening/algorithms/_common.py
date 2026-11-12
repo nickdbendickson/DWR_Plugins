@@ -14,6 +14,20 @@ from ..damsuite import gdalsafe as GS
 from ..damsuite import structure_flags as SF
 from ..damsuite import midcrest as MC
 
+from qgis.core import QgsProcessingAlgorithm  # noqa: E402
+
+
+try:            # Core 1.1.0: number inputs in the chosen display unit system (SI or US)
+    from DamSafety_Core.ui.unit_widgets import UnitParamsMixin as _UnitParams
+except Exception:                                                 # noqa - Core older than 1.1.0
+    class _UnitParams(object):
+        pass
+
+
+class UnitAlgorithm(_UnitParams, QgsProcessingAlgorithm):
+    """QgsProcessingAlgorithm whose number inputs follow the suite's display units (Core 1.1.0)."""
+
+
 ALBERS = "EPSG:5070"
 FT = 0.3048                      # metres per foot (user-facing depths are in feet since 0.11)
 # 0.11.1: no gdal.UseExceptions() - it is process-wide (QGIS and the other plugins); GDAL

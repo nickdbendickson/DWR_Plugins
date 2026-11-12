@@ -17,6 +17,7 @@ from ..compat import (FILE_FOLDER, FT_DOUBLE, FT_STRING, NUM_DOUBLE, SRC_LINE, S
 from . import _common as cm
 from ..core import errors as er
 from ..damsuite import gdalsafe as GS
+from ._common import UnitAlgorithm
 
 NEW_FIELDS = [("est_pool_m", FT_DOUBLE), ("est_crest_m", FT_DOUBLE),
               ("est_area_m2", FT_DOUBLE), ("est_below_m3", FT_DOUBLE),
@@ -40,7 +41,7 @@ def _storage_choice(alg, params, context):
     return alg.parameterAsEnum(params, "STORAGE_CHOICE", context)
 
 
-class EstimateStorage(QgsProcessingAlgorithm):
+class EstimateStorage(UnitAlgorithm):
     DAMS, WB, DEMDIR, SEARCH, SHAPE, OUT, CURVES = ("DAMS", "WB", "DEMDIR", "SEARCH",
                                                     "SHAPE", "OUT", "CURVES")
     STORAGE_CHOICE = "STORAGE_CHOICE"      # 0.17.27: the window's storage choice (0 Max)
