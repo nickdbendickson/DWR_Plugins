@@ -220,7 +220,14 @@ def _report_traceback(feedback):
         pass
 
 
-class _Base(QgsProcessingAlgorithm):
+try:            # Core 1.1.0: number inputs in the chosen display unit system (SI or US)
+    from DamSafety_Core.ui.unit_widgets import UnitParamsMixin as _UnitParams
+except Exception:                                                 # noqa - Core older than 1.1.0
+    class _UnitParams(object):
+        pass
+
+
+class _Base(_UnitParams, QgsProcessingAlgorithm):
     def group(self):
         return "Dam hazard classification"
 
