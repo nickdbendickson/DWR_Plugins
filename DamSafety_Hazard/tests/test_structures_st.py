@@ -1,4 +1,4 @@
-"""ST.1–ST.8 structure inventory fixes (Lumo structures audit).
+"""ST.1–ST.8 structure inventory fixes (Pierre structures audit).
 
     QT_QPA_PLATFORM=offscreen python3 DamSafety_Hazard/tests/test_structures_st.py
 

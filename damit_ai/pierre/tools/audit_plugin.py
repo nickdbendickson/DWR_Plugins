@@ -27,10 +27,10 @@
 import os, sys, re, ast, json, sqlite3, argparse, subprocess, urllib.request, urllib.error
 from datetime import datetime
 
-DB = os.path.expanduser(os.environ.get("LUMO_DB", "~/local-ai/knowledge.db"))
+DB = os.path.expanduser(os.environ.get("PIERRE_DB", "~/local-ai/knowledge.db"))
 CHAT_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/chat"
-MODEL = os.environ.get("LUMO_MODEL", "lumo")
-NUM_CTX = int(os.environ.get("LUMO_NUM_CTX", "16384"))
+MODEL = os.environ.get("PIERRE_MODEL", "pierre")
+NUM_CTX = int(os.environ.get("PIERRE_NUM_CTX", "16384"))
 OUT_RESERVE_TOKENS = 6144       # thinking + answer
 PROMPT_TOKENS = 900             # the audit instructions themselves
 CHARS_PER_TOKEN = 3.0           # conservative for Python source

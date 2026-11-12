@@ -195,7 +195,7 @@ def access_analysis(road_layer, structs, depth_sampler, analysis_crs, transform_
             back = QgsCoordinateTransform(clip.crs, road_layer.crs(), transform_ctx)
             req.setFilterRect(big if back.isShortCircuited() else back.transformBoundingBox(big))
         except Exception as e:
-            # Lumo v1.6: no filter means every road feature is read (slower, same result)
+            # Pierre v1.6: no filter means every road feature is read (slower, same result)
             log_message("Road layer '{}': area filter not applied, reading all features "
                         "({})".format(road_layer.name(), e))
 

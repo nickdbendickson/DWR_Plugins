@@ -197,7 +197,8 @@ def _rim_toe(row, near_k, bw, face_deg):
     return float(row[k0]), float(row[k1]), k0, k1, still_falling
 
 
-def analyze_pond(dem, water, cell, params=None, other=None, excavated_hint=False, dwr_dugout=""):
+def analyze_pond(dem, water, cell, params=None, other=None, excavated_hint=False, dwr_dugout="",
+                 pool_override=None):
     """Analyse one water body. `dem` (m, NaN = no data) and `water` (bool) share a grid whose cell
     is `cell` m; the window must reach `params.ring_m` beyond the water. `other` marks other water
     bodies (left out of the ground statistics). `excavated_hint`: the layer's own attribute says
@@ -215,11 +216,18 @@ def analyze_pond(dem, water, cell, params=None, other=None, excavated_hint=False
     other = None if other is None else (np.asarray(other, bool) & ~water)
     notes = []
 
-    pool, pool_how, spread = estimate_pool(dem, water, p.flat_tol_m)
-    conf_low = "shoreline" in pool_how
-    if conf_low:
-        notes.append("pool read from the shoreline (the DEM water surface is not flat, spread "
-                     "{:.2f} m): +-0.3 m or more".format(spread))
+    if pool_override is not None and np.isfinite(pool_override):
+        # a pool elevation measured straight from the classified LiDAR water surface (the class-9
+        # water_elev mosaic), rather than inferred from the DEM / shoreline: the surface the water
+        # class already found, so there is no flat-vs-shoreline guess.
+        pool, pool_how, spread = float(pool_override), "measured LiDAR water surface (class-9 mosaic)", 0.0
+        conf_low = False
+    else:
+        pool, pool_how, spread = estimate_pool(dem, water, p.flat_tol_m)
+        conf_low = "shoreline" in pool_how
+        if conf_low:
+            notes.append("pool read from the shoreline (the DEM water surface is not flat, spread "
+                         "{:.2f} m): +-0.3 m or more".format(spread))
     area = float(water.sum() * cell * cell)
 
     rws, cls = np.nonzero(water)

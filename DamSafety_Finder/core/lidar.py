@@ -103,11 +103,13 @@ def _read_wkt_vlr(buf, hdr):
     return None
 
 
-def read_points(path, classes=None):
+def read_points(path, classes=None, with_z=False):
     """x, y (float arrays, LAS units) and classification (uint8) of an uncompressed LAS file, plus
     the header dict (with a 'wkt' key: the CRS WKT if the file carries one). `classes` (a set of
-    ASPRS class numbers) keeps only those points, read before scaling for speed. Raises
-    `LasCompressedError` for a LAZ file and `LasError` for anything not a readable LAS."""
+    ASPRS class numbers) keeps only those points, read before scaling for speed. With `with_z` the
+    z array is returned too (x, y, z, cls, hdr), used by the water-mosaic builder for the mean
+    water surface. Raises `LasCompressedError` for a LAZ file and `LasError` for anything not a
+    readable LAS."""
     with open(path, "rb") as fh:
         buf = fh.read()
     hdr = _read_header(buf)
@@ -119,20 +121,23 @@ def read_points(path, classes=None):
         n = max(0, (len(buf) - start) // rec)
         end = start + n * rec
     co = hdr["class_offset"]
-    dt = np.dtype({"names": ["X", "Y", "C"], "formats": ["<i4", "<i4", "u1"],
-                   "offsets": [0, 4, co], "itemsize": rec})
+    dt = np.dtype({"names": ["X", "Y", "Z", "C"], "formats": ["<i4", "<i4", "<i4", "u1"],
+                   "offsets": [0, 4, 8, co], "itemsize": rec})
     pts = np.frombuffer(buf[start:end], dtype=dt, count=n)
     cls = pts["C"].astype(np.uint8)
     if hdr["format"] < 6:
         cls = cls & 0x1F                 # low 5 bits are the class in formats 0-5
-    xi, yi = pts["X"], pts["Y"]
+    xi, yi, zi = pts["X"], pts["Y"], pts["Z"]
     if classes is not None:
         keep = np.isin(cls, np.asarray(list(classes), dtype=np.uint8))
-        xi, yi, cls = xi[keep], yi[keep], cls[keep]
-    sx, sy = hdr["scale"][0], hdr["scale"][1]
-    ox, oy = hdr["offset"][0], hdr["offset"][1]
+        xi, yi, zi, cls = xi[keep], yi[keep], zi[keep], cls[keep]
+    sx, sy, sz = hdr["scale"]
+    ox, oy, oz = hdr["offset"]
     x = xi.astype(np.float64) * sx + ox
     y = yi.astype(np.float64) * sy + oy
+    if with_z:
+        z = zi.astype(np.float64) * sz + oz
+        return x, y, z, cls, hdr
     return x, y, cls, hdr
 
 
@@ -174,6 +179,40 @@ def point_grid(x, y, cls, classes, gt, shape, min_pts=1):
     return out.reshape(ny, nx)
 
 
+def rasterize_counts(x, y, z, cls, classes, gt, shape):
+    """Per-cell water-point **count** and **mean elevation** from classified points already in the
+    grid's CRS - the two bands the statewide water mosaic is built from. Returns (count, meanz):
+    `count` is an int32 grid of how many points whose class is in `classes` fall in each cell;
+    `meanz` is a float grid of the mean z of those points, NaN where the count is 0. `gt` is a
+    top-left-origin geotransform, `shape` is (rows, cols). Pure numpy - the testable core.
+
+    The water-count mosaic feeds the open-water tool's WATER_RASTER input (a cell is water where
+    the count clears a threshold); the mean-elevation mosaic is the pond water surface for a later
+    FindPonds / Runner step."""
+    ny, nx = int(shape[0]), int(shape[1])
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    z = np.asarray(z, float)
+    cls = np.asarray(cls)
+    col = np.floor((x - gt[0]) / gt[1]).astype(np.int64)
+    row = np.floor((y - gt[3]) / gt[5]).astype(np.int64)      # gt[5] < 0
+    inside = (col >= 0) & (col < nx) & (row >= 0) & (row < ny)
+    if cls.size:
+        want = np.isin(cls, np.asarray(list(classes), dtype=cls.dtype))
+    else:
+        want = np.zeros(0, bool)
+    keep = inside & want if want.size else np.zeros(x.shape, bool)
+    flat = (row[keep] * nx + col[keep]) if keep.any() else np.zeros(0, np.int64)
+    count = np.zeros(ny * nx, np.int64)
+    zsum = np.zeros(ny * nx, np.float64)
+    if flat.size:
+        np.add.at(count, flat, 1)
+        np.add.at(zsum, flat, z[keep])
+    with np.errstate(invalid="ignore", divide="ignore"):
+        meanz = np.where(count > 0, zsum / np.maximum(count, 1), np.nan)
+    return count.astype(np.int32).reshape(ny, nx), meanz.reshape(ny, nx)
+
+
 def _reproject(x, y, src_wkt, src_epsg, dst_epsg):
     """Transform x, y into dst_epsg. Source CRS from `src_wkt` (a WKT string) or `src_epsg`; when
     neither is given the points are assumed already in dst_epsg. Needs GDAL/OSR."""
@@ -197,8 +236,9 @@ def _reproject(x, y, src_wkt, src_epsg, dst_epsg):
     return arr[:, 0], arr[:, 1]
 
 
-def _points_via_laspy(path, classes):
-    """x, y, classification, crs-wkt using laspy (reads LAZ too), or None if laspy is absent."""
+def _points_via_laspy(path, classes, with_z=False):
+    """x, y, classification, crs-wkt using laspy (reads LAZ too), or None if laspy is absent. With
+    `with_z` the z array is inserted (x, y, z, cls, wkt)."""
     try:
         import laspy
     except Exception:
@@ -207,15 +247,20 @@ def _points_via_laspy(path, classes):
     cls = np.asarray(las.classification, np.uint8)
     x = np.asarray(las.x, float)
     y = np.asarray(las.y, float)
+    z = np.asarray(las.z, float) if with_z else None
     if classes is not None:
         keep = np.isin(cls, np.asarray(list(classes), np.uint8))
         x, y, cls = x[keep], y[keep], cls[keep]
+        if with_z:
+            z = z[keep]
     wkt = None
     try:
         crs = las.header.parse_crs()
         wkt = crs.to_wkt() if crs is not None else None
     except Exception:
         wkt = None
+    if with_z:
+        return x, y, z, cls, wkt
     return x, y, cls, wkt
 
 
@@ -236,6 +281,22 @@ def water_grid(path, box, cell, work_epsg=5070, classes=(WATER_CLASS,), min_pts=
     x, y, cls, hdr = read_points(path, set(classes))
     x, y = _reproject(x, y, hdr.get("wkt"), src_epsg, work_epsg)
     return point_grid(x, y, cls, classes, gt, (ny, nx), min_pts), gt
+
+
+def tile_points(path, work_epsg=5070, classes=(WATER_CLASS,), src_epsg=None):
+    """x, y, z, classification of one LAS/LAZ tile, reprojected into `work_epsg` - the points the
+    water-mosaic builder rasterises. Reads with laspy (LAS and LAZ), else the pure-numpy reader
+    (uncompressed LAS only). `src_epsg` names the tile's CRS when the file carries none."""
+    got = _points_via_laspy(path, set(classes), with_z=True)
+    if got is not None:
+        x, y, z, cls, wkt = got
+    elif str(path).lower().endswith(".laz"):
+        raise LasError("{} is a LAZ (compressed) file; install laspy to read it".format(path))
+    else:
+        x, y, z, cls, hdr = read_points(path, set(classes), with_z=True)
+        wkt = hdr.get("wkt")
+    x, y = _reproject(x, y, wkt, src_epsg, work_epsg)
+    return x, y, z, cls
 
 
 def _header_bounds(path):

@@ -75,14 +75,22 @@ assert cm.protect_near(None, dam_xy, 3000) == []
 # a road fill from the Finder is never protected (Screening cuts it to open the culvert)
 kinds = make_layer([("finder_kind", "string")],
                    [(QgsGeometry.fromPointXY(QgsPointXY(*dam_xy)), {"finder_kind": "dam"}),
+                    (QgsGeometry.fromPointXY(QgsPointXY(*dam_xy)), {"finder_kind": "dry embankment"}),
                     (QgsGeometry.fromPointXY(QgsPointXY(sx, gt[3] - 151 * cell)), {"finder_kind": "road fill (ponding)"}),
-                    (QgsGeometry.fromPointXY(QgsPointXY(sx, gt[3] - 151 * cell)), {"finder_kind": "road fill"})], "point")
+                    (QgsGeometry.fromPointXY(QgsPointXY(sx, gt[3] - 151 * cell)), {"finder_kind": "road fill"}),
+                    (QgsGeometry.fromPointXY(QgsPointXY(sx, gt[3] - 151 * cell)), {"finder_kind": "long fill (road, rail, canal or levee)"})], "point")
 got = cm.protect_near(kinds, dam_xy, 3000)
 assert len(got) == 2, len(got)                      # only the dam's cross
 cond, info = hc.breach_barriers(dem, [stream], gt, protect=prot_of(got))
 assert info["cuts"] == 1 and info["skipped_protected"] == 1, info
 assert cond[151, col] < dem[151, col] - 3.0         # the road is still cut
+assert cm.is_dam_kind("dam") and cm.is_dam_kind("dike / levee (holds water)")
+assert not cm.is_dam_kind("dry embankment") and not cm.is_dam_kind("road fill")
 assert cm.is_road_fill("road fill") and cm.is_road_fill("Rail fill") and not cm.is_road_fill("dry embankment")
+# a channel-side dike that holds water is also protected
+dike = make_layer([("kind", "string")],
+                  [(QgsGeometry.fromPointXY(QgsPointXY(*dam_xy)), {"kind": "dike / levee (holds water)"})], "point")
+assert len(cm.protect_near(dike, dam_xy, 3000)) == 2
 print("OK protect_near: points, lines, polygons")
 
 # ---- the window passes the Finder layer to steps 6, 7 and 9, and nowhere else

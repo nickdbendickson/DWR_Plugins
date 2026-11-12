@@ -161,7 +161,9 @@ def review_writer_is_referenced_by_no_run_or_classify_code():
                     continue
                 path = os.path.join(dirpath, f)
                 text = open(path, encoding="utf-8", errors="replace").read()
-                if "sign_off_review" in text or (re.search(r"review\.json", text) and
+                # review.json as a whole name (not habitable_review.json, which classify
+                # may read; only ndhazard:reviewhabitable writes that file).
+                if "sign_off_review" in text or (re.search(r"(?<![\w.-])review\.json", text) and
                                                  f not in ("results_info.py", "results_dock.py")):
                     bad.append(os.path.relpath(path, root))
     assert not bad, bad
