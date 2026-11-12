@@ -39,7 +39,7 @@ from .core import water as wt
 
 WORK_EPSG = 5070                     # CONUS Albers equal area: metres, areas true
 FT, AF_M3, AC_M2 = 0.3048, 1233.4818375, 4046.8564224
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 # ------------------------------------------------------------------------------------- GDAL --
@@ -462,7 +462,7 @@ def _summary(rows, what):
 EMB_FIELDS = [("find_id", "str"), ("kind", "str"), ("status", "str"), ("known_id", "str"),
               ("known_layer", "str"), ("known_ft", "float"), ("height_ft", "float"),
               ("crest_height_ft", "float"), ("head_ft", "float"), ("valley_drop_ft", "float"), ("spill_ft", "float"),
-              ("crest_ft", "float"), ("toe_ft", "float"), ("length_ft", "float"),
+              ("crest_ft", "float"), ("toe_ft", "float"), ("length_ft", "float"), ("ridge_len_ft", "float"),
               ("storage_af", "float"), ("area_ac", "float"), ("pool", "str"), ("open_pool", "str"),
               ("on_road", "str"), ("line_source", "str"), ("spillway", "str"),
               ("spill_dist_ft", "float"), ("spill_width_ft", "float"), ("score", "float"),
@@ -595,6 +595,7 @@ def run_embankments(dem, streams, out_gpkg, roads=None, rails=None, known=None, 
                      "valley_drop_ft": round(e.valley_drop_m / FT, 1),
                      "spill_ft": round(e.spill_m / FT, 2), "crest_ft": round(e.crest_m / FT, 2),
                      "toe_ft": round(e.toe_m / FT, 2), "length_ft": round(e.len_m / FT, 0),
+                     "ridge_len_ft": round(e.ridge_len_m / FT, 0),
                      "storage_af": round(e.storage_m3 / AF_M3, 2), "area_ac": round(e.pool_area_m2 / AC_M2, 2),
                      "pool": "yes" if e.pool else "no", "open_pool": "yes" if e.open_pool else "no",
                      "on_road": "yes" if e.on_road else "no", "line_source": e.line_src or LINE_STREAM,

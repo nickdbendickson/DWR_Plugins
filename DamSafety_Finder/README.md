@@ -14,7 +14,7 @@ Install: needs DamSafety Core. Processing Toolbox → DamSafety Finder → Find 
 
 | Tool | Input | Finds |
 |---|---|---|
-| `ndfind:embankments` Find fills across streams and draws | bare-earth DEM; stream lines (3DHP / NHD flowlines, optional); roads and railroads (optional) | Every fill that blocks a valley a stream line **or a draw traced from the DEM** crosses: **dam** (holds water), **dry embankment** (a dry / detention dam, a levee, an unmapped crossing), **road fill (ponding)** (a road that holds water: the culvert is missing in the DEM, small or blocked), **road fill**; where each pool gets out (**spillways**); **dug pits** anywhere; **raised ridges** (levees, dikes) on request; a **score** with a model from the sixth tool |
+| `ndfind:embankments` Find fills across streams and draws | bare-earth DEM; stream lines (3DHP / NHD flowlines, optional); roads and railroads (optional) | Every fill that blocks a valley a stream line **or a draw traced from the DEM** crosses: **dam** (holds water), **dry embankment** (a dry / detention dam, a levee, an unmapped crossing), **road fill (ponding)** (a road that holds water: the culvert is missing in the DEM, small or blocked), **road fill**, **long fill (road, rail, canal or levee)** (no road / rail in the layers, but the raised fill runs on 600 m or more: a highway, rail grade, canal bank or levee the layers miss); where each pool gets out (**spillways**); **dug pits** anywhere; **raised ridges** (levees, dikes) on request; a **score** with a model from the sixth tool |
 | `ndfind:ponds` Find ponds and dugouts | water-body polygons (3DHP / NHD waterbodies, NWI, your own), DEM | **embankment pond**, **dugout** (natural depressions on request) - the pond engine of Screening tool 16 |
 | `ndfind:crossings` Find road and rail crossings of streams | roads, railroads, stream lines; the first tool's fills, a DEM (optional) | Every crossing - the places a culvert or a bridge must be - with the fill there and, with a DEM, the drainage area and the round pipe the rational method asks for |
 | `ndfind:water` Find open water in aerial imagery | 4-band or colour-infrared imagery: an ND GIS Hub preset (2018 30 cm 4-band; 2017, 2019, 2020 NAIP colour-infrared), your own GeoTIFF / VRT, or any ArcGIS ImageServer address; mapped water bodies (optional) | Open-water outlines (one year, or the water of most of several years), each marked **mapped** or not: the pond outlines for the second tool when no layer has them |
@@ -47,6 +47,12 @@ ND LiDAR tiles the nearest fill to an intact DWR dam was a median 194 m (640 ft)
    counts as ground, so storage is above the water surface only). A pool reaching the analysis
    window is marked `open_pool` (storage is a minimum).
 5. A road / rail mask (the centrelines, 6 m either side) tells a road fill from a dam.
+   A fill on no road layer whose **raised ground runs on** (`ridge_len_ft`: the cells standing
+   more than max(0.5 m, 30 % of the crest height) above a 75 m grey opening of the ground, joined
+   to the crest, measured along their long axis within 600 m) for `long_fill_m` (600 m) or more
+   is a **long fill**: a farm dam ends on the valley sides. Added in 0.3.0 after a Wells County
+   review (2026-11-12): the top-scored "dams" were canal banks and a divided highway missing from
+   the road layers; every dam the reviewer confirmed was under 400 m.
 6. **Spillway**: where the pool first gets out when the water rises a few centimetres above the
    spill level (the middle of the shortest way out through the cells it floods). On the fill at
    the line = it overtops there or has a notch / pipe there; beside it = an auxiliary spillway, a
@@ -76,7 +82,7 @@ before the straightness and rail-base tests: 43 ridges, many rail beds and meand
 
 **Score** (`MODEL`; `core/score.py`). A logistic regression of the fills on a dam list against the
 other fills (height, crest height, net head, storage, pool area, length, flat pool, on a road, open
-pool, spillway beside): a ranking of the new fills by how much they look like listed dams, not a
+pool, spillway beside, length of the raised fill): a ranking of the new fills by how much they look like listed dams, not a
 probability. DamSafety Finder ships `models/nd_fill_score_statewide_2026-11.json` (the default),
 learned 2026-11-12 on 66 USGS 1 m tiles in 7 ND regions (Red River Valley, drift prairie north and
 south, Coteau north, central south, northwest, southwest): 4,470 fills, 615 listed on a dam layer
@@ -84,6 +90,13 @@ within 300 ft (fills listed 300-1000 ft away were left out as unclear). Cross-va
 each region held out and scored by a model learned on the other six: Red River 0.83, drift north
 0.71, drift south 0.83, Coteau north 0.79, central south 0.85, northwest 0.81, southwest 0.81 (the
 first, southwest-only model held out the same way: 0.80, 0.69, 0.79, 0.68, 0.83, 0.80, 0.84).
+Relearned for 0.3.0 with the raised-fill length on the same tiles (held out: Red River 0.84,
+drift north 0.71, drift south 0.83, Coteau north 0.79, central south 0.85, northwest 0.82,
+southwest 0.81) plus Wells County, with the 12 dams a reviewer confirmed from the 2018 aerial
+counted as dams. Checked on those Wells marks before they were added: the long-fill kind is what
+helps (5 of the 10 top-ranked dam / dry fills are real dams, 9 of the top 20, AUC 0.71, against 4,
+5 and 0.64 with long fills left in); the length input itself adds little to the score. Most
+not-listed fills are still not dams: review them.
 Road fills not listed average 0.02, not-listed dams 0.20; 94 of 3,855 not-listed fills score 0.5
 or more, all of them dams. Relearn it for your area with the sixth tool from runs over areas with many listed dams; the
 cross-validated AUC it reports says how well it ranks dams it has not seen.
