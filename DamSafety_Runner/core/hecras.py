@@ -36,8 +36,10 @@ and matching names case-insensitively, see `discover`). Paths are examples only:
 The result datasets can have fewer cells than the geometry (RAS adds ghost cells beyond the
 real ones): the first N cells are used, N being the length of Maximum Water Surface.
 Units come from the 'Units' attribute on the dataset, its groups or the file root ('Units
-System'); the default, when none is found, is US customary. Everything returned is US ft,
-ft/s and hours.
+System'). Nothing recorded is an error, not US customary: an SI water surface read as feet
+is about 3.28 times too shallow. A caller that knows the model CRS may pass units_fallback
+('us' or 'si'); an explicit units= still wins. 'cms' is SI and 'cfs' is US. Everything
+returned is US ft, ft/s and hours.
 """
 import csv
 import math
@@ -184,7 +186,7 @@ def datum_check(ground_ft, cmin_ft, mask=None, environ=None):
     dz = g[ok] - c[ok]
     med, p05 = float(np.median(dz)), float(np.percentile(dz, 5))
     mc = float(np.median(c[ok]))
-    ratio = float(np.median(g[ok]) / mc) if abs(mc) >= 100.0 else None
+    ratio = float(np.median(g[ok]) / mc) if abs(mc) >= 1.0 else None
     rec.update(median_ft=round(med, 3), p05_ft=round(p05, 3),
                ratio=None if ratio is None else round(ratio, 4))
     head = ("TERRAIN DATUM/UNIT MISMATCH: the terrain is {:+.2f} ft (median) from the HEC-RAS "
@@ -439,10 +441,10 @@ def breach_parameter_rows(dam, params, peak_cfs=None):
     mode_given = bool(p.get("failure_mode"))
     mode = str(p.get("failure_mode") or "piping").lower()
     f08 = None
-    # 3.16.2 (Nick, 2026-11-06 1:17 PM): Froehlich (2008) piping always overwrites the run's
-    # width / side slopes / formation time (also MLM or Froehlich 1995 values);
-    # breach_f2008 = 'fill_missing' (opt-in) only fills what the run lacks
-    policy = str(p.get("breach_f2008") or F08_OVERWRITE).strip().lower()
+    # 3.17.10: breach_f2008 defaults to 'fill_missing' (keep a finished MLM / Von Thun /
+    # Froehlich 1995 opening). 'overwrite' still replaces width / side slopes / formation
+    # time with Froehlich (2008) piping.
+    policy = str(p.get("breach_f2008") or F08_FILL).strip().lower()
     if policy not in F08_POLICIES:
         raise HecRasError("breach_f2008 must be one of {} (got {!r})".format(
             ", ".join(F08_POLICIES), policy))
@@ -754,9 +756,10 @@ class Catalog:
 def parse_units(text):
     """'us' for ft / US Customary, 'si' for m / SI Metric, else None."""
     toks = set(re.findall(r"[a-z]+", str(text).lower()))
-    if toks & {"si", "metric", "m", "meter", "meters", "metre", "metres", "ms"}:
+    if toks & {"si", "metric", "m", "meter", "meters", "metre", "metres", "ms", "cms"}:
         return "si"
-    if toks & {"us", "ft", "feet", "foot", "customary", "english", "imperial", "fps", "usft"}:
+    if toks & {"us", "ft", "feet", "foot", "customary", "english", "imperial", "fps", "usft",
+               "cfs"}:
         return "us"
     return None
 
@@ -989,12 +992,36 @@ def _unit_factor(u):
     return 1.0 / FT if u == "si" else 1.0
 
 
+def project_units(wkt):
+    """'us' or 'si' from a projected CRS linear unit, or None when it is not feet or metres.
+
+    Used as units_fallback when a plan HDF records no Units attribute. The CRS the model
+    was built in is the unit HEC-RAS stored, so a State Plane feet plan is not read as
+    metres and a UTM plan is not read as feet."""
+    if not wkt:
+        return None
+    try:
+        from . import gdal_io
+        lin = gdal_io.linear_unit_m(wkt)
+    except Exception:                                    # noqa - no GDAL: the caller must pass units
+        return None
+    if lin is None:
+        return None
+    if abs(lin - 1.0) < 1e-6:
+        return "si"
+    if abs(lin - FT) < 1e-4 or abs(lin - (1200.0 / 3937.0)) < 1e-6:
+        return "us"
+    return None
+
+
 def read_mesh(hdf, area=None, units=None, arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_hr=0.0, wet_ft=0.01,
-              want_arrival=True):
+              want_arrival=True, units_fallback=None):
     """The maximum results of a 2D flow area as a Mesh (fields depth, wse, velocity,
     arrival in ft, ft, ft/s, hours; time_of_max in hours when the file has it).
 
-    units: None to read them from the file (default US when absent), 'us' or 'si'.
+    units: None to read them from the file, 'us' or 'si' to force one. units_fallback
+    ('us' or 'si') is used only when the file records no units attribute (the model CRS).
+    With neither, a missing attribute raises HecRasError instead of assuming US customary.
     Cells drier than `wet_ft` are NaN in every field. Arrival is the first time the depth
     reaches `arrival_depth_ft` (interpolated between output steps) minus `t0_hr`, from the
     Water Surface time series; without it there is no arrival.
@@ -1005,12 +1032,13 @@ def read_mesh(hdf, area=None, units=None, arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_
     each grid cell; this per-cell depth stays for cell diagnostics and as its fallback."""
     f, close = _open_hdf(hdf)
     try:
-        return _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival)
+        return _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival,
+                          units_fallback)
     finally:
         close()
 
 
-def _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival):
+def _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival, units_fallback=None):
     cat = Catalog(f)
     lay = discover(cat, area)
     notes = list(lay["notes"])
@@ -1020,10 +1048,15 @@ def _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, want_arrival):
         if units in ("us", "si"):
             return units
         u = cat.units_of(item[0])
+        if u is None and units_fallback in ("us", "si"):
+            notes.append("No units attribute found for {}; using the model coordinate system "
+                         "({}).".format(what, "SI" if units_fallback == "si" else "US customary"))
+            return units_fallback
         if u is None:
-            notes.append("No units attribute found for {}; taken as US customary. Pass "
-                         "units='si' if the model was in metric.".format(what))
-            return "us"
+            raise HecRasError("No units attribute found for {} (the dataset, its groups, or "
+                              "the file root). Refusing to assume US customary: an SI model "
+                              "would be published about 3.28 times too shallow. Pass units='us' "
+                              "or units='si'.".format(what))
         return u
 
     wse_raw, t_max_raw = _values(_read(lay["max_wse"][1]))
@@ -1400,7 +1433,7 @@ FIELD_NAMES = ("depth", "wse", "velocity", "arrival", "time_of_max")
 # 3.10.92: the terrain basis is the default again, with a datum/unit check
 def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
                   arrival_depth_ft=ARRIVAL_DEPTH_FT, t0_hr=0.0, wet_ft=0.01, to_grid_xy=None,
-                  want_arrival=True, reach=0.75, basis=None, fine=None):
+                  want_arrival=True, reach=0.75, basis=None, fine=None, units_fallback=None):
     """The HEC-RAS maxima on a regular grid with depth from the terrain under each GRID cell.
 
     `terrain_ft` (ny, nx): the ground (ft) of each grid cell, e.g. the run's fine terrain
@@ -1452,7 +1485,7 @@ def terrain_depth(hdf, x0, ytop, dx, nx, ny, terrain_ft, area=None, units=None,
         raise HecRasError("the '{}' depth basis needs the fine terrain".format(basis))
     f, close = _open_hdf(hdf)
     try:
-        mesh = _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, False)
+        mesh = _read_mesh(f, area, units, arrival_depth_ft, t0_hr, wet_ft, False, units_fallback)
         if to_grid_xy is not None:
             xy = np.asarray(to_grid_xy(np.column_stack([mesh.x, mesh.y])), dtype=float)
             mesh.x, mesh.y = xy[:, 0], xy[:, 1]
