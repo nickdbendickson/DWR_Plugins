@@ -277,7 +277,7 @@ jobs:
           echo "NDBREACH_ANUGA_PYTHON=$(micromamba run -n anuga python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
       - name: Cache the patched LISFLOOD-FP
         id: lisflood-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/lisflood-nd
           key: lisflood-8.3-${{ runner.os }}-${{ hashFiles('DamSafety_Runner/scripts/patch_lisflood.py', 'DamSafety_Runner/scripts/build_lisflood_linux.sh') }}
